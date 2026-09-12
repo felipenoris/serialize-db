@@ -102,9 +102,13 @@ like to explore what `pyarrow` has to offer, based on
 
 # Guidelines
 
+- when you need to edit files in this repo, do it in a new branch prefixed with `claude/` and open a PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
+
 ## Tools installed in the current environment
 
 - `uv`.
+
+- `gh`
 
 - `cargo`
 
@@ -123,7 +127,15 @@ intentional exception (English, for AI-assistant tooling).
 
 ## `REFERENCES.md`
 
+Organize in this file all the websites you access to search for information.
 
+## Chat
+
+Chat with user in Portuguese (Brazil). Mark your answers with tags [guess], [uncertain] when you are not confident.
+
+Challenge the user with questions when you find that the user is proposing something bad or wrong or when you have a better idea.
+
+Be direct and sucint.
 
 ## Writing style
 
@@ -159,4 +171,4 @@ are never cut; the words around them are.
 
 # Claude Memory
 
-Use this section to store you memory for this project. Use a "size budget" of 10KB for this file.
+Use this section to store you memory for this project. Use a "size budget" of 50KB for this file.
