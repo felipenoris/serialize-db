@@ -49,14 +49,16 @@ A equipe informou em 2026-09-13:
   compactados.
 - A execução lê dados só do mês anterior e do mês corrente. Etapas intermediárias leem o mês corrente
   de tabelas que a própria execução publica.
-- A base tem 1 ano de histórico.
+- A base tem 1 ano de histórico, e os meses antigos permanecem nela.
 - O ambiente não limita o tipo de instância, e o EBS de um espaço do SageMaker Unified Studio vai até
   1000 GB.
-- O Redshift do ambiente é Serverless.
+- O Redshift do ambiente é Serverless e é acessado pelo `redshift_connector`. A Data API não está
+  habilitada.
 
 Consequências para o plano:
 
-- Com meses de volume parecido, a base atual tem cerca de 360 GB compactados.
+- Com meses de volume parecido, a base atual tem cerca de 360 GB compactados e cresce cerca de 30 GB por
+  mês.
 
 - Arquivos de 512 MB, o tamanho alvo padrão da compactação do Glue, dividem um mês em cerca de 60
   arquivos. O `UNLOAD` usa `MAXFILESIZE` igual ao tamanho alvo, em vez do padrão de 6,2 GB.
@@ -567,23 +569,26 @@ reescrever os meses gravados pelo `UNLOAD`.
 
 ### Conexão com o Redshift Serverless
 
-A biblioteca compila o SQL com o `sqlalchemy-redshift` e o executa por um de dois caminhos:
+A biblioteca compila o SQL com o `sqlalchemy-redshift` e o executa pelo `redshift_connector`, o caminho
+que a equipe usa. A Data API ainda não está habilitada no ambiente e fica como alternativa:
 
 | Caminho | Requisitos e limites |
 | --- | --- |
 | `redshift_connector` com autenticação IAM (`iam=True`, `serverless_work_group`) | Conexão de rede com o workgroup. A partir do JupyterLab, o Redshift precisa estar na VPC do projeto. |
 | Redshift Data API (`boto3`, cliente `redshift-data`) | Chamadas HTTPS à API da AWS. Consultas de até 24 horas, resultado de até 500 MB após compressão gzip e retido por 24 horas, comando de até 200 KB. Com identidade IAM, o usuário do banco deriva da identidade, e a chamada exige `redshift-serverless:GetCredentials`. |
 
-O sandbox em tabelas comuns funciona com os dois caminhos, porque não depende da sessão. Resultados
-grandes saem por `UNLOAD` nos dois casos.
+- Sessões ociosas do Serverless terminam depois de 1 hora. A biblioteca reabre a conexão quando a
+  sessão cai, e o sandbox em tabelas comuns sobrevive à reconexão.
+- Resultados grandes saem por `UNLOAD` nos dois caminhos.
 
 ### Leitura das tabelas Iceberg
 
 - O Redshift monta o Glue Data Catalog automaticamente como `awsdatacatalog`, em nós RG e RA3 e no
   Serverless. O acesso exige `GRANT USAGE ON DATABASE awsdatacatalog`, login com identidade IAM e nomes
   em três partes, sem `search_path`.
-- Um esquema externo `CREATE EXTERNAL SCHEMA ... FROM DATA CATALOG` com `IAM_ROLE` permite nomes em
-  duas partes.
+- Um esquema externo `CREATE EXTERNAL SCHEMA ... FROM DATA CATALOG` com o ARN de um papel em `IAM_ROLE`
+  permite nomes em duas partes. O Redshift acessa o catálogo com esse papel, então o esquema externo
+  também atende conexões com login por usuário e senha.
 - Com Lake Formation, o Redshift precisa de um papel IAM com acesso ao catálogo ou de identidade
   federada, sem encadeamento de papéis.
 - O Redshift poda partições e arquivos. A documentação não diz se um filtro em `data_ref` poda
@@ -596,8 +601,9 @@ grandes saem por `UNLOAD` nos dois casos.
   `DISTKEY`, `SORTKEY` e a política de restrições.
 - A cota conta tabelas comuns, views materializadas e as cópias por nó de tabelas com distribuição
   `ALL`, e é verificada no commit. Uma transação que a excede é desfeita.
-- O isolamento `SNAPSHOT` é o padrão no Serverless. Execuções não compartilham tabelas no Redshift,
-  então não geram conflitos de escrita entre si.
+- O isolamento `SNAPSHOT` é o padrão no Serverless. Nele, transações concorrentes que alteram linhas
+  diferentes da mesma tabela confirmam juntas; no `SERIALIZABLE`, uma delas é cancelada com o erro 1023.
+  Execuções não compartilham tabelas no Redshift, então não geram conflitos de escrita entre si.
 - Identificadores têm até 127 bytes, o que limita o tamanho de `<id>`.
 
 ### Carga de DataFrames com COPY
@@ -776,7 +782,7 @@ a compilação.
 - O pipeline monta `select()` a partir dos modelos, como hoje. `execucao.consultar(consulta)` compila
   com o dialeto do backend e executa na conexão nativa.
 - No DuckDB, o resultado sai em Arrow direto da conexão.
-- No Redshift, resultados pequenos saem pelo cursor do `redshift_connector` ou pela Data API.
+- No Redshift, resultados pequenos saem pelo cursor do `redshift_connector`.
   Resultados grandes saem por `UNLOAD` para Parquet no prefixo de staging e leitura com
   `pyarrow.dataset`. Se a consulta tiver `LIMIT` no `SELECT` externo, a biblioteca a envolve numa
   subconsulta. O limite entre os dois caminhos é configurável, e o driver ADBC entra no benchmark como
@@ -888,7 +894,7 @@ class Backend(Protocol):
    - publicação de um mês com `delete` e `add_files`, com arquivos do `COPY` do DuckDB e do `UNLOAD`:
      tipos, obrigatoriedade de colunas, estatísticas e remoção só nos metadados;
    - leitura pelo DuckDB (`ENDPOINT_TYPE 'glue'` e `AT (VERSION => ...)`) e pelo Redshift
-     (`awsdatacatalog`), com poda por mês;
+     (`awsdatacatalog` com login IAM, ou esquema externo com `IAM_ROLE`), com poda por mês;
    - leitura de coluna renomeada pelos dois motores, em arquivos com e sem field IDs;
    - duas publicações simultâneas, em meses diferentes e no mesmo mês;
    - otimizadores do Glue ativos na tabela de teste.
@@ -896,8 +902,8 @@ class Backend(Protocol):
    validação e testes com `SqlCatalog`.
 3. Backend DuckDB: sandbox, montagem, inserção, auditoria e exportação. A fase termina com a medição do
    tempo até o pipeline começar.
-4. Backend Redshift Serverless: conexão pelo `redshift_connector` ou pela Data API, esquema por
-   execução, montagem pelo `awsdatacatalog`, `COPY` de DataFrames, `UNLOAD` e limpeza de esquemas.
+4. Backend Redshift Serverless: conexão pelo `redshift_connector`, esquema por execução, montagem pelo
+   `awsdatacatalog`, `COPY` de DataFrames, `UNLOAD` e limpeza de esquemas.
 5. Pipelines separados: substituição de tabelas de domínio e correção de meses.
 6. Evolução de esquema: Alembic sobre o PyIceberg e reescrita de meses.
 7. Adoção do dataset atual: criar as tabelas Iceberg a partir dos modelos e registrar os arquivos
@@ -908,9 +914,8 @@ class Backend(Protocol):
 
 ## Questões em aberto
 
-- O histórico de 1 ano é uma janela móvel, com remoção dos meses mais antigos, ou a idade atual da base?
-  Uma janela móvel exige uma rotina que remove o mês mais antigo das tabelas permanentes.
-- O workgroup do Redshift Serverless fica na VPC do projeto? Sem essa rede, a biblioteca usa a Data API.
+- A conexão atual do `redshift_connector` usa autenticação IAM ou usuário e senha? O `awsdatacatalog`
+  exige login com identidade IAM; sem ele, a leitura usa um esquema externo com `IAM_ROLE`.
 - Leitores fora dos pipelines, como usuários do Athena, precisam de consistência entre tabelas durante
   uma publicação?
 - Os modelos usam `Text`, `String` sem tamanho, `JSON`, `Uuid`, `LargeBinary` ou `ARRAY`?
