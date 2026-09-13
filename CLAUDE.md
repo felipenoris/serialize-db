@@ -97,7 +97,7 @@ like to explore what `pyarrow` has to offer, based on
 
 # Guidelines
 
-- when you need to edit files in this repo, do it in a new branch prefixed with `claude/` and open a PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
+- when you need to edit files in this repo, do it in a new branch prefixed with `claude/` and open a PR. While a PR you opened is still open, every new commit goes to that PR's branch; do not open another branch or PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
 
 ## Project
 
@@ -191,9 +191,9 @@ are never cut; the words around them are.
 Use this section to store you memory for this project. Use a "size budget" of 50KB for this file.
 
 - `docs/plano-de-implementacao.md` holds the research (sources checked 2026-09-12 and 2026-09-13)
-  and the implementation plan. <https://github.com/felipenoris/serialize-db/pull/1> adds it;
+  and the implementation plan. It is under review in
   <https://github.com/felipenoris/serialize-db/pull/2> (branch `claude/revisa-plano-implementacao`,
-  based on the PR #1 branch) revises it. Its direction: Iceberg v2 tables in the Glue Data Catalog
+  base `main`). PR #1 is closed, and PR #2 contains its commit. The plan's direction: Iceberg v2 tables in the Glue Data Catalog
   as the source of truth, one sandbox per run (Redshift schema `execucao_<id>`, or the DuckDB process
   database), month publication through a PyIceberg transaction with `delete` and `add_files`, and a
   proof of concept in the real environment as the first phase.
