@@ -223,6 +223,12 @@ Use this section to store you memory for this project. Use a "size budget" of 50
     database user, not an IAM identity.
   - The SMUS project has an associated Glue database, visible in `awsdatacatalog`, where the team can
     create tables.
-- Questions still open with the user: who administers the datashare producer (the per-run schema
-  sandbox needs `CREATE` on the database), and whether the project workgroup has a default IAM role
-  with access to the project S3 path for `COPY` and `UNLOAD`.
+- Redshift diagnostics run by the user on 2026-09-13: the secret session user is `admin`; the
+  workgroup has the local database `dev` and the shared database; `default_iam_role()` is `none`;
+  `data_catalog_auto_mount` is `on`; `CREATE SCHEMA` in the shared database fails with "Permission
+  denied on producer". The plan therefore puts the Redshift sandbox in `dev`. The project Glue
+  database path follows `s3://<domain bucket>/<domain id>/<project id>/dev/data/catalogs/`.
+- The GitHub repository is public. Keep AWS account IDs, bucket names, role names, domain and project
+  IDs, and database names shared by the user out of committed files; use placeholders.
+- Questions still open with the user: who can associate an IAM role with the project workgroup's
+  namespace for `COPY` and `UNLOAD`, and whether the pipeline reads data stored in the shared database.
