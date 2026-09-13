@@ -204,6 +204,11 @@ Use this section to store you memory for this project. Use a "size budget" of 50
   - The pipeline knows in advance which partitions it reads. The user's original design creates
     per-run processing tables named with a run prefix, runs the pipeline on them, and publishes to
     the permanent tables at the end.
-- Questions still open with the user: whether a main-pipeline run produces a whole month or a single
-  date, whether runs overlap, whether the Glue databases are under Lake Formation and the project
-  role writes to S3 directly, and the dataset volume.
+- User answers given on 2026-09-13, second round:
+  - A main-pipeline run produces the whole month, and each run processes one specific month.
+  - The user does not know whether the Glue databases are under Lake Formation; the plan's proof of
+    concept checks it with AWS CLI commands.
+  - The volume is about 30 GB compressed per processing month.
+- Questions still open with the user: whether the 30 GB is what a run produces or reads, how many
+  previous months a run reads, how many months of history exist, and which instance and EBS size the
+  SageMaker Unified Studio space can use.
