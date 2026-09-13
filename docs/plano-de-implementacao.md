@@ -43,18 +43,24 @@ pipeline lê. Este plano trata das duas.
 
 ## Volume de dados
 
-A equipe informou em 2026-09-13 um volume de cerca de 30 GB compactados por mês de processamento. Cada
-execução do pipeline principal processa um único mês e o produz inteiro. Consequências para o plano:
+A equipe informou em 2026-09-13:
+
+- Cada execução do pipeline principal processa um único mês e produz cerca de 30 GB de dados
+  compactados.
+- A execução lê dados só do mês anterior e do mês corrente.
+- O ambiente não limita o tipo de instância, e o EBS de um espaço do SageMaker Unified Studio vai até
+  1000 GB.
+
+Consequências para o plano:
 
 - Arquivos de 512 MB, o tamanho alvo padrão da compactação do Glue, dividem um mês em cerca de 60
   arquivos. O `UNLOAD` usa `MAXFILESIZE` igual ao tamanho alvo, em vez do padrão de 6,2 GB.
 - Reexecutar um mês mantém os arquivos substituídos no S3 até a retenção de snapshots expirá-los, 5 dias
   por padrão.
-- O sandbox do DuckDB guarda no disco do espaço o mês de saída e as entradas copiadas, e o EBS do espaço
-  vai até 100 GB. Meses de entrada montados por referência não ocupam esse disco.
-- A prova de conceito mede o pico de disco e de memória de um mês no DuckDB. Se o pico passar do limite
-  do espaço, o pipeline principal usa o Redshift, e o DuckDB fica com os pipelines de domínio e de
-  correção e com os testes.
+- O sandbox recebe no máximo dois meses de cada tabela particionada, além das tabelas de domínio. A
+  cópia é a montagem padrão nos dois backends.
+- O sandbox do DuckDB guarda o mês de saída e as entradas copiadas no disco do espaço. A prova de
+  conceito mede o pico de disco e de memória de um mês e escolhe a instância e o tamanho do EBS.
 
 ## Boas práticas de ETL aplicáveis
 
@@ -96,20 +102,22 @@ chama esse uso de "modelos como contrato".
 
 ### Execução no SageMaker Unified Studio
 
-- Espaços JupyterLab e Code Editor rodam numa instância EC2 escolhida pelo usuário, com volume EBS de
-  16 GB a 100 GB. O administrador limita o tamanho pelo parâmetro `maxEbsVolumeSize` do blueprint
-  Tooling. O volume sobrevive a paradas da instância, e um EFS pode ser anexado ao espaço.
+- Espaços JupyterLab e Code Editor rodam numa instância EC2 escolhida pelo usuário. O administrador
+  limita o volume EBS do espaço pelo parâmetro `maxEbsVolumeSize` do blueprint Tooling; no ambiente do
+  projeto, o limite é 1000 GB. O volume sobrevive a paradas da instância, e um EFS pode ser anexado ao
+  espaço.
 - O JupyterLab para depois de 60 minutos ocioso, por padrão.
 - Execuções agendadas de notebooks rodam em outra instância, com tempo limite padrão de 60 minutos, e
   não enxergam arquivos locais da sessão interativa. Workflows do Airflow (MWAA Serverless ou
-  provisionado) definem instância e tempo limite por etapa.
+  provisionado) definem instância e tempo limite por etapa. A documentação consultada não informa o
+  disco disponível nessas execuções.
 - O código roda com o papel IAM do projeto, compartilhado pelos membros. Buckets fora do projeto são
   liberados por políticas IAM ou de bucket, o Glue por permissões do Lake Formation, e workgroups do
   Athena e recursos do Redshift existentes por tags do projeto.
 - Consultas ao Redshift a partir do JupyterLab exigem o Redshift na VPC do projeto.
 
 O sandbox do DuckDB cabe na memória da instância mais o EBS do espaço, ou num EFS anexado. A seção
-[Volume de dados](#volume-de-dados) compara esse limite com o tamanho de um mês.
+[Volume de dados](#volume-de-dados) traz o tamanho de um mês.
 
 ### Permissões
 
@@ -357,8 +365,8 @@ ou a declara como saída, e toda leitura dessa tabela usa esse snapshot.
 - O Redshift lê sempre o snapshot atual. Depois da cópia, a biblioteca compara o snapshot atual com o
   fixado e repete a cópia se um commit intermediário alterou os meses copiados.
 - Tabelas de domínio são montadas inteiras.
-- No DuckDB, a cópia vale para tabelas de domínio e para meses lidos muitas vezes. Os demais meses de
-  entrada são montados por referência, para poupar o disco do espaço.
+- Uma execução lê só o mês anterior e o corrente, então a cópia é o padrão nos dois backends. No DuckDB,
+  a referência serve a entradas grandes lidas uma única vez.
 - Uma tabela de saída não recebe cópia dos meses que a execução publica, exceto nos pipelines de
   correção.
 
@@ -854,8 +862,8 @@ class Backend(Protocol):
      [Diagnóstico do Lake Formation](#diagnóstico-do-lake-formation);
    - criação da tabela v2 pelo `GlueCatalog` e permissões do papel do projeto, do Redshift e dos
      otimizadores do Glue;
-   - pico de disco e de memória de um mês de cerca de 30 GB no sandbox do DuckDB, comparado com o tempo
-     do mesmo mês no Redshift;
+   - pico de disco e de memória de um mês de cerca de 30 GB no sandbox do DuckDB, tempo do mesmo mês no
+     Redshift e disco disponível ao DuckDB em execuções agendadas;
    - publicação de um mês com `delete` e `add_files`, com arquivos do `COPY` do DuckDB e do `UNLOAD`:
      tipos, obrigatoriedade de colunas, estatísticas e remoção só nos metadados;
    - leitura pelo DuckDB (`ENDPOINT_TYPE 'glue'` e `AT (VERSION => ...)`) e pelo Redshift
@@ -879,9 +887,9 @@ class Backend(Protocol):
 
 ## Questões em aberto
 
-- Os 30 GB compactados por mês são o que uma execução produz ou o que ela lê? Quantos meses anteriores
-  uma execução lê, e quantos meses de histórico a base tem?
-- Qual instância e qual tamanho de EBS o espaço do SageMaker Unified Studio pode usar?
+- Quantos meses de histórico a base tem? A resposta dimensiona a adoção do dataset atual.
+- Quando a execução lê o mês corrente, ela lê alguma tabela que ela mesma publica? Nesse caso, a
+  reexecução de um mês dependeria do resultado anterior e deixaria de ser idempotente.
 - O Redshift é Serverless ou provisionado, e fica na VPC do projeto?
 - Leitores fora dos pipelines, como usuários do Athena, precisam de consistência entre tabelas durante
   uma publicação?
