@@ -230,5 +230,8 @@ Use this section to store you memory for this project. Use a "size budget" of 50
   database path follows `s3://<domain bucket>/<domain id>/<project id>/dev/data/catalogs/`.
 - The GitHub repository is public. Keep AWS account IDs, bucket names, role names, domain and project
   IDs, and database names shared by the user out of committed files; use placeholders.
-- Questions still open with the user: who can associate an IAM role with the project workgroup's
-  namespace for `COPY` and `UNLOAD`, and whether the pipeline reads data stored in the shared database.
+- Questions still open with the user: who administers the account and the workgroup namespace (to
+  associate an IAM role for `COPY`/`UNLOAD` and to create the Glue optimizer role), whether the project
+  can create a separate Glue database for tests, and whether the pipeline reads data stored in the
+  shared database. Without those roles, the plan falls back to `CREDENTIALS` with the project role's
+  temporary credentials, the ADBC driver, and library-run table maintenance.
