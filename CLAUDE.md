@@ -217,5 +217,12 @@ Use this section to store you memory for this project. Use a "size budget" of 50
 - User answers given on 2026-09-13, fourth round:
   - Old months stay in the base; the history is not a rolling window.
   - The team connects to Redshift only through `redshift_connector`; the Data API is not enabled.
-- Question still open with the user: whether the current `redshift_connector` login uses IAM
-  authentication, which `awsdatacatalog` requires.
+- User answers given on 2026-09-13, fifth round:
+  - The team writes to a Redshift database (and can create tables) that reaches the SMUS project
+    through a datashare; the connection uses an AWS Secrets Manager secret, so the session runs as a
+    database user, not an IAM identity.
+  - The SMUS project has an associated Glue database, visible in `awsdatacatalog`, where the team can
+    create tables.
+- Questions still open with the user: who administers the datashare producer (the per-run schema
+  sandbox needs `CREATE` on the database), and whether the project workgroup has a default IAM role
+  with access to the project S3 path for `COPY` and `UNLOAD`.
