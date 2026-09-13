@@ -369,6 +369,7 @@ Novidades e blog:
 
 - <https://github.com/Mause/duckdb_engine>
 - <https://pypi.org/project/sqlalchemy-redshift/>
+- <https://github.com/aws/amazon-redshift-python-driver>
 - <https://aws-sdk-pandas.readthedocs.io/en/stable/stubs/awswrangler.redshift.copy.html>
 - <https://adbc-drivers.org/drivers/redshift/>
 

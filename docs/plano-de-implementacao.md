@@ -47,11 +47,16 @@ A equipe informou em 2026-09-13:
 
 - Cada execução do pipeline principal processa um único mês e produz cerca de 30 GB de dados
   compactados.
-- A execução lê dados só do mês anterior e do mês corrente.
+- A execução lê dados só do mês anterior e do mês corrente. Etapas intermediárias leem o mês corrente
+  de tabelas que a própria execução publica.
+- A base tem 1 ano de histórico.
 - O ambiente não limita o tipo de instância, e o EBS de um espaço do SageMaker Unified Studio vai até
   1000 GB.
+- O Redshift do ambiente é Serverless.
 
 Consequências para o plano:
+
+- Com meses de volume parecido, a base atual tem cerca de 360 GB compactados.
 
 - Arquivos de 512 MB, o tamanho alvo padrão da compactação do Glue, dividem um mês em cerca de 60
   arquivos. O `UNLOAD` usa `MAXFILESIZE` igual ao tamanho alvo, em vez do padrão de 6,2 GB.
@@ -97,7 +102,7 @@ chama esse uso de "modelos como contrato".
 | S3 | Guarda dados e metadados das tabelas Iceberg e a área de staging. |
 | AWS Glue Data Catalog | Catálogo das tabelas permanentes e otimizadores de manutenção. |
 | Lake Formation | Permissões do catálogo nas bases sob seu controle. |
-| Redshift | Backend de execução; lê as tabelas Iceberg pelo catálogo montado `awsdatacatalog`. |
+| Redshift Serverless | Backend de execução; lê as tabelas Iceberg pelo catálogo montado `awsdatacatalog`. |
 | Athena | Consultas ad hoc às tabelas permanentes e manutenção sob demanda. |
 
 ### Execução no SageMaker Unified Studio
@@ -114,7 +119,8 @@ chama esse uso de "modelos como contrato".
 - O código roda com o papel IAM do projeto, compartilhado pelos membros. Buckets fora do projeto são
   liberados por políticas IAM ou de bucket, o Glue por permissões do Lake Formation, e workgroups do
   Athena e recursos do Redshift existentes por tags do projeto.
-- Consultas ao Redshift a partir do JupyterLab exigem o Redshift na VPC do projeto.
+- Consultas ao Redshift a partir do JupyterLab exigem o Redshift na VPC do projeto. A Data API dispensa
+  essa rede; ver [Conexão com o Redshift Serverless](#conexão-com-o-redshift-serverless).
 
 O sandbox do DuckDB cabe na memória da instância mais o EBS do espaço, ou num EFS anexado. A seção
 [Volume de dados](#volume-de-dados) traz o tamanho de um mês.
@@ -374,6 +380,9 @@ ou a declara como saída, e toda leitura dessa tabela usa esse snapshot.
 
 - `declarar_saida` cria no sandbox as tabelas de saída que ainda não existem e registra os meses
   publicados.
+- Etapas intermediárias leem, no sandbox, o mês que a própria execução grava. A tabela de saída começa
+  vazia nesse mês, então uma reexecução não lê o resultado publicado da execução anterior e continua
+  idempotente.
 - A auditoria roda no sandbox, com consultas geradas a partir do modelo: linhas por mês, nulos em
   colunas `NOT NULL`, unicidade da chave primária, tamanho em bytes de `VARCHAR(n)` e linhas fora dos
   meses declarados.
@@ -556,6 +565,18 @@ reescrever os meses gravados pelo `UNLOAD`.
 
 ## Redshift
 
+### Conexão com o Redshift Serverless
+
+A biblioteca compila o SQL com o `sqlalchemy-redshift` e o executa por um de dois caminhos:
+
+| Caminho | Requisitos e limites |
+| --- | --- |
+| `redshift_connector` com autenticação IAM (`iam=True`, `serverless_work_group`) | Conexão de rede com o workgroup. A partir do JupyterLab, o Redshift precisa estar na VPC do projeto. |
+| Redshift Data API (`boto3`, cliente `redshift-data`) | Chamadas HTTPS à API da AWS. Consultas de até 24 horas, resultado de até 500 MB após compressão gzip e retido por 24 horas, comando de até 200 KB. Com identidade IAM, o usuário do banco deriva da identidade, e a chamada exige `redshift-serverless:GetCredentials`. |
+
+O sandbox em tabelas comuns funciona com os dois caminhos, porque não depende da sessão. Resultados
+grandes saem por `UNLOAD` nos dois casos.
+
 ### Leitura das tabelas Iceberg
 
 - O Redshift monta o Glue Data Catalog automaticamente como `awsdatacatalog`, em nós RG e RA3 e no
@@ -575,9 +596,8 @@ reescrever os meses gravados pelo `UNLOAD`.
   `DISTKEY`, `SORTKEY` e a política de restrições.
 - A cota conta tabelas comuns, views materializadas e as cópias por nó de tabelas com distribuição
   `ALL`, e é verificada no commit. Uma transação que a excede é desfeita.
-- O isolamento `SNAPSHOT` é o padrão no Serverless e em clusters provisionados criados ou restaurados
-  desde 2024-05-22. Execuções não compartilham tabelas no Redshift, então não geram conflitos de
-  escrita entre si.
+- O isolamento `SNAPSHOT` é o padrão no Serverless. Execuções não compartilham tabelas no Redshift,
+  então não geram conflitos de escrita entre si.
 - Identificadores têm até 127 bytes, o que limita o tamanho de `<id>`.
 
 ### Carga de DataFrames com COPY
@@ -756,10 +776,11 @@ a compilação.
 - O pipeline monta `select()` a partir dos modelos, como hoje. `execucao.consultar(consulta)` compila
   com o dialeto do backend e executa na conexão nativa.
 - No DuckDB, o resultado sai em Arrow direto da conexão.
-- No Redshift, resultados pequenos saem pelo cursor do `redshift_connector`. Resultados grandes saem
-  por `UNLOAD` para Parquet no prefixo de staging e leitura com `pyarrow.dataset`. Se a consulta tiver
-  `LIMIT` no `SELECT` externo, a biblioteca a envolve numa subconsulta. O limite entre os dois caminhos
-  é configurável, e o driver ADBC entra no benchmark como terceira opção.
+- No Redshift, resultados pequenos saem pelo cursor do `redshift_connector` ou pela Data API.
+  Resultados grandes saem por `UNLOAD` para Parquet no prefixo de staging e leitura com
+  `pyarrow.dataset`. Se a consulta tiver `LIMIT` no `SELECT` externo, a biblioteca a envolve numa
+  subconsulta. O limite entre os dois caminhos é configurável, e o driver ADBC entra no benchmark como
+  terceira opção.
 - A biblioteca expõe um `Engine` para código do pipeline que já usa `pandas.read_sql`.
 - No Redshift, `execution_options(schema_translate_map={None: "execucao_<id>"})` aponta os modelos para
   o sandbox sem alterá-los. No DuckDB, as tabelas do sandbox ficam no esquema padrão.
@@ -875,8 +896,8 @@ class Backend(Protocol):
    validação e testes com `SqlCatalog`.
 3. Backend DuckDB: sandbox, montagem, inserção, auditoria e exportação. A fase termina com a medição do
    tempo até o pipeline começar.
-4. Backend Redshift: esquema por execução, montagem pelo `awsdatacatalog`, `COPY` de DataFrames,
-   `UNLOAD` e limpeza de esquemas.
+4. Backend Redshift Serverless: conexão pelo `redshift_connector` ou pela Data API, esquema por
+   execução, montagem pelo `awsdatacatalog`, `COPY` de DataFrames, `UNLOAD` e limpeza de esquemas.
 5. Pipelines separados: substituição de tabelas de domínio e correção de meses.
 6. Evolução de esquema: Alembic sobre o PyIceberg e reescrita de meses.
 7. Adoção do dataset atual: criar as tabelas Iceberg a partir dos modelos e registrar os arquivos
@@ -887,10 +908,9 @@ class Backend(Protocol):
 
 ## Questões em aberto
 
-- Quantos meses de histórico a base tem? A resposta dimensiona a adoção do dataset atual.
-- Quando a execução lê o mês corrente, ela lê alguma tabela que ela mesma publica? Nesse caso, a
-  reexecução de um mês dependeria do resultado anterior e deixaria de ser idempotente.
-- O Redshift é Serverless ou provisionado, e fica na VPC do projeto?
+- O histórico de 1 ano é uma janela móvel, com remoção dos meses mais antigos, ou a idade atual da base?
+  Uma janela móvel exige uma rotina que remove o mês mais antigo das tabelas permanentes.
+- O workgroup do Redshift Serverless fica na VPC do projeto? Sem essa rede, a biblioteca usa a Data API.
 - Leitores fora dos pipelines, como usuários do Athena, precisam de consistência entre tabelas durante
   uma publicação?
 - Os modelos usam `Text`, `String` sem tamanho, `JSON`, `Uuid`, `LargeBinary` ou `ARRAY`?
@@ -1004,6 +1024,7 @@ Python:
 
 - [duckdb_engine](https://github.com/Mause/duckdb_engine)
 - [sqlalchemy-redshift](https://pypi.org/project/sqlalchemy-redshift/)
+- [Amazon Redshift Python connector](https://github.com/aws/amazon-redshift-python-driver)
 - [awswrangler.redshift.copy](https://aws-sdk-pandas.readthedocs.io/en/stable/stubs/awswrangler.redshift.copy.html)
 - [ADBC Driver for Amazon Redshift](https://adbc-drivers.org/drivers/redshift/)
 - [etl-cookbook-tutorial](https://github.com/felipenoris/etl-cookbook-tutorial)
