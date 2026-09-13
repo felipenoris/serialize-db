@@ -5,12 +5,6 @@ Do not edit this section. You're free to edit all other sections of this file.
 
 These are the instructions written by the user.
 
-- This repo is a Python library.
-
-- Use `uv` to manage python version and dependencies.
-
-- Use python version 3.13.
-
 ## Motivation
 
 I have another project that implements an ETL pipeline based on a relational database.
@@ -78,6 +72,7 @@ these columnar database technologies usually do not rely on primary keys, foreig
 or constraints.
 
     - DuckDB: enforces constraints, but at a performance cost;
+
     - Redshift: constraints are informational only.
 
 - Pipeline structure:
@@ -104,6 +99,18 @@ like to explore what `pyarrow` has to offer, based on
 
 - when you need to edit files in this repo, do it in a new branch prefixed with `claude/` and open a PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
 
+## Project
+
+- This repo is a Python library.
+
+- Use `uv` to manage python version and dependencies.
+
+- Use python version 3.13.
+
+- use `pytest` to write tests.
+
+- use [`pdoc`](https://pdoc.dev/) to generate documentation as static HTML format.
+
 ## Tools installed in the current environment
 
 - `uv`.
@@ -115,6 +122,16 @@ like to explore what `pyarrow` has to offer, based on
 ## Target Environment
 
 - Linux ubuntu, amd64.
+
+- AWS SageMaker Unified Studio
+
+- S3
+
+- AWS Glue Data Catalog
+
+- Athena workroup
+
+- Redshift (read/write permissions)
 
 ## Language convention (important)
 
@@ -172,3 +189,8 @@ are never cut; the words around them are.
 # Claude Memory
 
 Use this section to store you memory for this project. Use a "size budget" of 50KB for this file.
+
+- `docs/plano-de-implementacao.md` holds the best-practice research (sources checked 2026-09-12)
+  and the implementation plan: Parquet dataset with a versioned manifest, selective mounting,
+  constraint policy per backend, Arrow as the in-memory boundary. It is under review in
+  <https://github.com/felipenoris/serialize-db/pull/1>.
