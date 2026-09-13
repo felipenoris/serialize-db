@@ -67,6 +67,70 @@ Documentação:
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api.html>
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/sagemaker-unified-studio.html>
 
+Compartilhamento de dados (datashare), autorização e permissões:
+
+- <https://docs.aws.amazon.com/redshift/latest/dg/datashare-overview.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/datashare-creation.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/datashare-considerations.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/considerations-datashare-general.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/considerations-datashare-reads-writes.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/considerations-datashare-datalake.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/lake-formation-considerations.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/getting-started-datashare-writes.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/connect-database-console-writes.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/multi-warehouse-writes-sql-statements.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/multi-warehouse-writes-sql-statements-unsupported.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-producer-new.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-consumer-new.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-producer-existing.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-consumer-existing.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-creating-datashare.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-adding-datashare.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-authorizing.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-associating.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-creating-database.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-granting.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-querying.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/writes-managing-permissions.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/permissions-datashares.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/t_scoped-permissions.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/database-direct-connect.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/cross-database_usage.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/cross-database_limitation.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/cross-database_example.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/federated-permissions-considerations.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/glue-irc-federated-catalogs.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/querying-s3Tables.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c-spectrum-external-schemas.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_USE_command.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_Privileges.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_GRANT.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_GRANT-usage-notes.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_GRANT-examples.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_TRUNCATE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_COPY.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-authorization.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_DEFAULT_IAM_ROLE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SHOW_DATASHARES.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SHOW_DATABASES.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SHOW_GRANTS.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_DESC_DATASHARE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_DATASHARES.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_DATASHARE_OBJECTS.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_DATASHARE_CONSUMERS.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_DATASHARE_PRIVILEGES.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_REDSHIFT_DATABASES.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_ALL_SCHEMAS.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_DATABASE_PRIVILEGES.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_SCHEMA_PRIVILEGES.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_RELATION_PRIVILEGES.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/query-editor-v2-connecting.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/authorization-fas-spectrum.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/default-iam-role.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/copy-unload-iam-role.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-secrets.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-access.html>
+
 Novidades, blog e base de conhecimento:
 
 - <https://aws.amazon.com/about-aws/whats-new/2022/05/amazon-redshift-snapshot-isolation-level-support-concurrent-transactions/>
@@ -84,6 +148,10 @@ Novidades, blog e base de conhecimento:
 - <https://aws.amazon.com/blogs/big-data/10-best-practices-for-amazon-redshift-spectrum/>
 - <https://aws.amazon.com/blogs/big-data/build-an-analytics-pipeline-that-is-resilient-to-schema-changes-using-amazon-redshift-spectrum/>
 - <https://repost.aws/knowledge-center/redshift-spectrum-data-errors>
+- <https://aws.amazon.com/about-aws/whats-new/2023/11/amazon-redshift-multi-data-warehouse-writes-data-sharing-preview/>
+- <https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-redshift-multi-data-warehouse-through-data-sharing/>
+- <https://aws.amazon.com/blogs/big-data/improve-your-etl-performance-using-multiple-redshift-warehouses-for-writes/>
+- <https://aws.amazon.com/blogs/big-data/develop-a-business-chargeback-model-within-your-organization-using-amazon-redshift-multi-warehouse-writes/>
 
 ## DuckDB
 
@@ -320,6 +388,42 @@ Guia do usuário:
 - <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/service-quotas.html>
 - <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/release-notes.html>
 - <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/troubleshooting-issues.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/grant-access-to-redshift-asset.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/grant-access-to-glue-asset.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/approve-reject-subscription-request.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/data-s3-publish.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/data.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/data-source-glue.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/catalog-iam-use-case-glue-tables-discoverable.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/concepts.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/gs-sql.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/python-library.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/project.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/connections.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/connection-data.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/connection-clients.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/secrets.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/using-client-config.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/accessing-metadata.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/jupyterlab-data-sharing-across-compute.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/sql-query.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/sql-query-write-run.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/connect-data-sources.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/data-connections.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/connecting-new-data-source.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/jupyterlab-sql-spark.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/notebooks-spark-connect.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/removing-compute-redshift.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/query-with-jdbc.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/byoi-how-to.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/byoi-launch-custom-image.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/sagemaker-xgboost-recipe.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/sagemaker-train-models.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/create-monitor-training-jobs.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/sagemaker-deploy-models.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/sagemaker-pipelines.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/strands-agents.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/gs-ml.html>
 
 Guia do administrador e outras documentações:
 
@@ -337,6 +441,27 @@ Guia do administrador e outras documentações:
 - <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/security-iam-awsmanpol-SageMakerStudioProjectUserRolePolicy.html>
 - <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/security-iam-awsmanpol-SageMakerStudioUserIAMDefaultExecutionPolicy.html>
 - <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/quotas.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/all-capabilities.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/sql-analytics.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/blueprints.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/custom-blueprint.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/AmazonSageMakerManageAccess.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/security-iam-awsmanpol-SageMakerStudioProjectProvisioningRolePolicy.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/setup-projects-iam-based-domains.html>
+- <https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/data-onboarding.html>
+- <https://docs.aws.amazon.com/aws-managed-policy/latest/reference/SageMakerStudioProjectProvisioningRolePolicy.html>
+- <https://docs.aws.amazon.com/aws-managed-policy/latest/reference/SageMakerStudioProjectUserRolePolicy.html>
+- <https://docs.aws.amazon.com/datazone/latest/userguide/grant-access-to-redshift-asset.html>
+- <https://docs.aws.amazon.com/datazone/latest/userguide/working-with-blueprints.html>
+- <https://docs.aws.amazon.com/datazone/latest/userguide/hybrid-mode.html>
+- <https://docs.aws.amazon.com/next-generation-sagemaker/latest/userguide/upload-query.html>
+- <https://docs.aws.amazon.com/sagemaker-lakehouse-architecture/latest/userguide/lakehouse-add-new-database.html>
+- <https://docs.aws.amazon.com/sagemaker-lakehouse-architecture/latest/userguide/onboarding-data-sagemaker-lakehouse.html>
+- <https://docs.aws.amazon.com/sagemaker-lakehouse-architecture/latest/userguide/s3-data-lakes.html>
+- <https://docs.aws.amazon.com/sagemaker-lakehouse-architecture/latest/userguide/lakehouse-upload-data.html>
+- <https://docs.aws.amazon.com/sagemaker-lakehouse-architecture/latest/userguide/lakehouse-data-connection.html>
+- <https://docs.aws.amazon.com/sagemaker-lakehouse-architecture/latest/userguide/lakehouse-create-connection.html>
+- <https://docs.aws.amazon.com/sagemaker-lakehouse-architecture/latest/userguide/rms-integration.html>
 - <https://docs.aws.amazon.com/next-generation-sagemaker/latest/userguide/getting-started-sagemaker-gdc-s3.html>
 - <https://docs.aws.amazon.com/sagemaker-lakehouse-architecture/latest/userguide/lakehouse-add-catalog.html>
 - <https://docs.aws.amazon.com/sagemaker-lakehouse-architecture/latest/userguide/lakehouse-how.html>
@@ -359,6 +484,9 @@ Novidades e blog:
 - <https://aws.amazon.com/blogs/big-data/connect-share-and-query-where-your-data-sits-using-amazon-sagemaker-unified-studio/>
 - <https://aws.amazon.com/blogs/big-data/foundational-blocks-of-amazon-sagemaker-unified-studio-an-admins-guide-to-implement-unified-access-to-all-your-data-analytics-and-ai/>
 - <https://aws.amazon.com/blogs/big-data/scaling-fine-grained-access-control-for-enterprise-lakehouse-using-sagemaker-unified-studio-and-aws-lake-formation/>
+- <https://aws.amazon.com/blogs/big-data/govern-amazon-redshift-data-across-accounts-with-sagemaker-unified-studio/>
+- <https://aws.amazon.com/blogs/big-data/tailor-amazon-sagemaker-unified-studio-project-environments-to-your-needs-using-custom-blueprints/>
+- <https://aws.amazon.com/about-aws/whats-new/2026/01/sagemaker-unified-studio-adds-cross-region-iam/>
 
 ## Amazon S3
 

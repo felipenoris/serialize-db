@@ -27,8 +27,11 @@ leitura e escrita. As fontes estão no fim do documento e em [REFERENCES.md](../
 7. O Apache Arrow é o formato de troca em memória. O SQLAlchemy compila as consultas com o dialeto do
    backend, e `schema_translate_map` aponta os modelos para o sandbox.
 8. Uma prova de conceito no ambiente real vem antes da implementação. Ela cobre as permissões do Lake
-   Formation, o commit de arquivos gravados pelo DuckDB e pelo `UNLOAD` e a leitura das mesmas tabelas
-   pelos dois motores.
+   Formation e do banco Redshift recebido por datashare, o commit de arquivos gravados pelo DuckDB e pelo
+   `UNLOAD` e a leitura das mesmas tabelas pelos dois motores.
+9. O DuckDB é o primeiro backend. No Redshift do projeto, `CREATE SCHEMA`, `UNLOAD` e a leitura do
+   catálogo dependem do datashare e do papel do workgroup, e só a prova de conceito confirma esses
+   pontos.
 
 ## Custo da reconstrução atual
 
@@ -52,14 +55,11 @@ A equipe informou em 2026-09-13:
 - A base tem 1 ano de histórico, e os meses antigos permanecem nela.
 - O ambiente não limita o tipo de instância, e o EBS de um espaço do SageMaker Unified Studio vai até
   1000 GB.
-- O Redshift do ambiente é Serverless e é acessado pelo `redshift_connector`. A Data API não está
-  habilitada.
 
 Consequências para o plano:
 
 - Com meses de volume parecido, a base atual tem cerca de 360 GB compactados e cresce cerca de 30 GB por
   mês.
-
 - Arquivos de 512 MB, o tamanho alvo padrão da compactação do Glue, dividem um mês em cerca de 60
   arquivos. O `UNLOAD` usa `MAXFILESIZE` igual ao tamanho alvo, em vez do padrão de 6,2 GB.
 - Reexecutar um mês mantém os arquivos substituídos no S3 até a retenção de snapshots expirá-los, 5 dias
@@ -104,7 +104,7 @@ chama esse uso de "modelos como contrato".
 | S3 | Guarda dados e metadados das tabelas Iceberg e a área de staging. |
 | AWS Glue Data Catalog | Catálogo das tabelas permanentes e otimizadores de manutenção. |
 | Lake Formation | Permissões do catálogo nas bases sob seu controle. |
-| Redshift Serverless | Backend de execução; lê as tabelas Iceberg pelo catálogo montado `awsdatacatalog`. |
+| Redshift Serverless | Backend de execução, sobre um banco recebido por datashare. |
 | Athena | Consultas ad hoc às tabelas permanentes e manutenção sob demanda. |
 
 ### Execução no SageMaker Unified Studio
@@ -127,6 +127,33 @@ chama esse uso de "modelos como contrato".
 O sandbox do DuckDB cabe na memória da instância mais o EBS do espaço, ou num EFS anexado. A seção
 [Volume de dados](#volume-de-dados) traz o tamanho de um mês.
 
+### Recursos do projeto
+
+A equipe informou em 2026-09-13 os recursos que o projeto usa:
+
+- **Base do Glue:** o projeto tem uma base do Glue associada, visível no `awsdatacatalog`, na qual a
+  equipe cria tabelas. O SageMaker Unified Studio nomeia essa base como `glue_db_<id do ambiente>`, ou
+  com o nome dado na criação do projeto, e a guarda no caminho S3 do projeto,
+  `<bucket>/<id do domínio>/<id do projeto>/<escopo>/`. As tabelas permanentes ficam nessa base.
+- **Redshift:** o workgroup é Serverless. A equipe grava num banco que chega ao projeto por um datashare,
+  pode criar tabelas nele e se conecta pelo `redshift_connector` com um segredo do AWS Secrets Manager. A
+  Data API não está habilitada.
+
+Consequências para o plano:
+
+- A política gerenciada do papel do projeto só libera leitura e escrita de objetos em
+  `<bucket do domínio>/<id do domínio>/<id do projeto>/*`. Os locais das tabelas Iceberg e o prefixo de
+  staging ficam dentro desse caminho.
+- O segredo guarda o usuário e a senha de um usuário do banco, e a sessão roda como esse usuário, não
+  como identidade IAM. O `awsdatacatalog` exige identidade IAM, então não deve funcionar nessa conexão;
+  o diagnóstico em [Banco compartilhado por datashare](#banco-compartilhado-por-datashare) confirma.
+- A biblioteca `sagemaker_studio` expõe o papel do projeto (`Project().iam_role`), o caminho S3 da base
+  do Glue (`proj.s3.datalake_consumer_glue_db`) e as conexões do projeto (`proj.connection("<nome>")`,
+  com `.secret` e `.physical_endpoints`). A biblioteca lê essas informações em vez de pedir
+  configuração manual.
+- A documentação não informa as permissões do Lake Formation que o projeto recebe na base, nem se
+  clientes externos como PyIceberg e DuckDB criam tabelas Iceberg nela. A prova de conceito verifica.
+
 ### Permissões
 
 - **Papel do projeto:** o PyIceberg cria e publica tabelas com `glue:GetTable`, `glue:CreateTable` e
@@ -136,8 +163,12 @@ O sandbox do DuckDB cabe na memória da instância mais o EBS do espaço, ou num
   pela API do S3, e PyIceberg e DuckDB usam as credenciais do papel. Issues da extensão `iceberg` do
   DuckDB citam também `glue:GetIcebergTableMetadata` e a configuração do Lake Formation que libera
   acesso completo a motores externos.
-- **Papel IAM do Redshift:** o papel precisa de acesso ao catálogo e de escrita no prefixo de dados das
-  tabelas, para o `UNLOAD`.
+- **Papel IAM do Redshift:** `COPY` e `UNLOAD` usam um papel associado ao workgroup, e
+  `IAM_ROLE default` usa o papel padrão, que `SELECT default_iam_role();` mostra. O papel precisa ler o
+  staging e gravar no destino do `UNLOAD`, dentro do caminho S3 do projeto. Se um superusuário revogou
+  `ASSUMEROLE` de `PUBLIC`, o usuário do banco precisa de `GRANT ASSUMEROLE ... FOR COPY, UNLOAD`. Um
+  esquema externo sobre o Glue exige ainda, no Lake Formation, `DESCRIBE` na base e `SELECT` e
+  `DESCRIBE` nas tabelas.
 - **Papel dos otimizadores do Glue:** o papel confia em `glue.amazonaws.com` e tem `s3:GetObject`,
   `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket`, `glue:GetTable`, `glue:UpdateTable` e acesso ao
   CloudWatch Logs. Sem concessão a `IAM_ALLOWED_PRINCIPALS`, ele também precisa de
@@ -334,7 +365,7 @@ no sandbox, e a publicação é o único caminho até as tabelas permanentes.
 
 | Aspecto | Redshift | DuckDB |
 | --- | --- | --- |
-| Sandbox | Esquema `execucao_<id>` com tabelas comuns. | Banco DuckDB do processo, em memória ou em arquivo local. |
+| Sandbox | Esquema `execucao_<id>` com tabelas comuns, ou prefixo nos nomes das tabelas se o datashare não permitir `CREATE SCHEMA`. | Banco DuckDB do processo, em memória ou em arquivo local. |
 | Nomes das tabelas | Os dos modelos, via `schema_translate_map`. | Os dos modelos. |
 | Execuções concorrentes | Um esquema por execução. | Um processo por execução. |
 | Limpeza | `DROP SCHEMA execucao_<id> CASCADE`. | Fim do processo ou remoção do arquivo. |
@@ -366,7 +397,7 @@ ou a declara como saída, e toda leitura dessa tabela usa esse snapshot.
 
 | Montagem | DuckDB | Redshift |
 | --- | --- | --- |
-| Cópia (padrão) | `INSERT INTO <tabela> BY NAME SELECT ... FROM glue.<banco>.<tabela> AT (VERSION => <snapshot>)` com o filtro dos meses. | `INSERT INTO execucao_<id>.<tabela> SELECT ... FROM awsdatacatalog.<banco>.<tabela>` com o filtro dos meses. |
+| Cópia (padrão) | `INSERT INTO <tabela> BY NAME SELECT ... FROM glue.<banco>.<tabela> AT (VERSION => <snapshot>)` com o filtro dos meses. | `INSERT INTO execucao_<id>.<tabela> SELECT ... FROM <esquema externo>.<tabela>` com o filtro dos meses. Sem acesso do Redshift ao catálogo, `COPY` de arquivos que o DuckDB grava no staging a partir do snapshot fixado, com as colunas na ordem do modelo. |
 | Referência | View sobre a tabela no snapshot fixado; nenhum dado é copiado. | Indisponível: o Redshift não consulta snapshots anteriores. |
 
 - As tabelas do sandbox usam o DDL do modelo, não a inferência do motor.
@@ -570,16 +601,46 @@ reescrever os meses gravados pelo `UNLOAD`.
 ### Conexão com o Redshift Serverless
 
 A biblioteca compila o SQL com o `sqlalchemy-redshift` e o executa pelo `redshift_connector`, o caminho
-que a equipe usa. A Data API ainda não está habilitada no ambiente e fica como alternativa:
+que a equipe usa, com o usuário e a senha do segredo do Secrets Manager. A Data API ainda não está
+habilitada no ambiente e fica como alternativa:
 
 | Caminho | Requisitos e limites |
 | --- | --- |
-| `redshift_connector` com autenticação IAM (`iam=True`, `serverless_work_group`) | Conexão de rede com o workgroup. A partir do JupyterLab, o Redshift precisa estar na VPC do projeto. |
+| `redshift_connector` | Conexão de rede com o workgroup; a partir do JupyterLab, o Redshift precisa estar na VPC do projeto. Com o segredo, a sessão roda como usuário do banco. Com autenticação IAM (`iam=True`, `serverless_work_group`), roda como identidade IAM e acessa o `awsdatacatalog`. |
 | Redshift Data API (`boto3`, cliente `redshift-data`) | Chamadas HTTPS à API da AWS. Consultas de até 24 horas, resultado de até 500 MB após compressão gzip e retido por 24 horas, comando de até 200 KB. Com identidade IAM, o usuário do banco deriva da identidade, e a chamada exige `redshift-serverless:GetCredentials`. |
 
 - Sessões ociosas do Serverless terminam depois de 1 hora. A biblioteca reabre a conexão quando a
   sessão cai, e o sandbox em tabelas comuns sobrevive à reconexão.
 - Resultados grandes saem por `UNLOAD` nos dois caminhos.
+
+### Banco compartilhado por datashare
+
+Desde 2024-11-26, um consumidor grava em bancos recebidos por datashare, em workgroups Serverless e em
+clusters RA3 e RG, quando o produtor concede escrita. Regras da documentação e consequências:
+
+| Regra da documentação | Consequência para a biblioteca |
+| --- | --- |
+| `CREATE SCHEMA`, `DROP SCHEMA`, `CREATE TABLE`, `CREATE TABLE AS`, `DROP TABLE`, `TRUNCATE`, `INSERT`, `UPDATE`, `DELETE`, `MERGE` e `COPY` são suportados. `CREATE VIEW` e views materializadas não são. | O sandbox não cria views no Redshift. |
+| Criar esquemas exige a permissão `CREATE` no banco. Nenhuma página mostra essa concessão a um datashare. | A prova de conceito testa `CREATE SCHEMA` no banco compartilhado. |
+| O `COPY` é suportado sem a opção `COMPUPDATE`. | A biblioteca não passa `COMPUPDATE` ao `COPY`. |
+| Uma transação grava num único banco. Transações com vários comandos de escrita exigem conexão direta ao banco compartilhado ou `USE`; com nomes em três partes, não funcionam. | A sessão executa `USE <banco>` antes da primeira transação. O `USE` redefine o `search_path`, e o `schema_translate_map` qualifica os nomes com o esquema do sandbox. |
+| A documentação de escrita por datashare não cobre `UNLOAD`, tabelas temporárias nem `DISTKEY`, `SORTKEY` e `ENCODE`. | A prova de conceito testa os três no banco compartilhado. |
+
+Sem permissão para `CREATE SCHEMA`, o sandbox usa um esquema fixo com o prefixo da execução no nome de
+cada tabela. O `schema_translate_map` só troca esquemas, e o SQLAlchemy não traz tradução de nomes de
+tabelas, então a biblioteca precisaria reescrever os nomes na compilação. Pedir ao produtor a permissão
+`CREATE` no banco evita esse caminho.
+
+Diagnóstico pelo SQL, na conexão da equipe:
+
+| Comando | O que mostra |
+| --- | --- |
+| `SELECT current_user;` | Usuário do banco da sessão. |
+| `SELECT database_name, database_type, database_isolation_level FROM svv_redshift_databases;` | Bancos acessíveis, locais ou compartilhados, e o nível de isolamento de cada um. |
+| `SELECT database_name, schema_name, schema_type FROM svv_all_schemas;` | Esquemas locais, externos e compartilhados; usuários comuns só veem os próprios dados. |
+| `SHOW GRANTS FOR <usuario> FROM DATABASE <banco>;` | Permissões do usuário no banco compartilhado. |
+| `SELECT default_iam_role();` | Papel IAM padrão, usado por `IAM_ROLE default` no `COPY` e no `UNLOAD`. |
+| `SHOW data_catalog_auto_mount;` | Se o `awsdatacatalog` está montado no workgroup. |
 
 ### Leitura das tabelas Iceberg
 
@@ -594,13 +655,18 @@ que a equipe usa. A Data API ainda não está habilitada no ambiente e fica como
 - O Redshift poda partições e arquivos. A documentação não diz se um filtro em `data_ref` poda
   partições `month(data_ref)`; a prova de conceito mede.
 - O Redshift não consulta snapshots anteriores. Cada consulta vê um snapshot consistente.
+- A conexão da equipe usa o segredo, então a leitura depende de um esquema externo com o papel do
+  workgroup. Esse esquema fica num banco local, e a documentação não cobre uma transação que lê dele e
+  grava no banco compartilhado. Sem esse caminho, a montagem usa `COPY` de arquivos gravados pelo DuckDB
+  no staging.
 
 ### Sandbox no Redshift
 
-- A execução cria `execucao_<id>` com `CREATE SCHEMA ... QUOTA` e as tabelas pelo DDL do modelo, com
-  `DISTKEY`, `SORTKEY` e a política de restrições.
-- A cota conta tabelas comuns, views materializadas e as cópias por nó de tabelas com distribuição
-  `ALL`, e é verificada no commit. Uma transação que a excede é desfeita.
+- A execução cria `execucao_<id>` com `CREATE SCHEMA`, se o datashare permitir, e as tabelas pelo DDL
+  do modelo, com `DISTKEY`, `SORTKEY` e a política de restrições.
+- `CREATE SCHEMA ... QUOTA` limita o espaço do sandbox. A cota conta tabelas comuns, views materializadas
+  e as cópias por nó de tabelas com distribuição `ALL`, e é verificada no commit. Uma transação que a
+  excede é desfeita.
 - O isolamento `SNAPSHOT` é o padrão no Serverless. Nele, transações concorrentes que alteram linhas
   diferentes da mesma tabela confirmam juntas; no `SERIALIZABLE`, uma delas é cancelada com o erro 1023.
   Execuções não compartilham tabelas no Redshift, então não geram conflitos de escrita entre si.
@@ -661,6 +727,10 @@ saem pela remoção de órfãos do Glue.
 A documentação do `UNLOAD` não informa os tipos físicos Parquet de `TIMESTAMP` e `DECIMAL`, a
 obrigatoriedade das colunas nem a presença de estatísticas de mínimo e máximo. Os três afetam o
 `add_files`, e a prova de conceito verifica.
+
+A documentação de escrita por datashare também não cobre `UNLOAD` de tabelas do banco compartilhado. Se
+ele falhar na prova de conceito, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o
+pyarrow.
 
 ### Escrita direta em Iceberg pelo Redshift
 
@@ -884,17 +954,20 @@ class Backend(Protocol):
 
 ## Roteiro de implementação
 
-1. Prova de conceito no SageMaker Unified Studio, com uma tabela de teste numa base do Glue:
+1. Prova de conceito no SageMaker Unified Studio, com uma tabela de teste na base do Glue do projeto:
    - situação da base e do local S3 no Lake Formation, com os comandos de
      [Diagnóstico do Lake Formation](#diagnóstico-do-lake-formation);
-   - criação da tabela v2 pelo `GlueCatalog` e permissões do papel do projeto, do Redshift e dos
+   - criação da tabela v2 pelo `GlueCatalog` com o papel do projeto, e permissões do Redshift e dos
      otimizadores do Glue;
+   - diagnóstico do Redshift com os comandos de
+     [Banco compartilhado por datashare](#banco-compartilhado-por-datashare), e testes de
+     `CREATE SCHEMA`, `COPY`, `UNLOAD`, tabelas temporárias e `DISTKEY`/`SORTKEY` no banco compartilhado;
    - pico de disco e de memória de um mês de cerca de 30 GB no sandbox do DuckDB, tempo do mesmo mês no
      Redshift e disco disponível ao DuckDB em execuções agendadas;
    - publicação de um mês com `delete` e `add_files`, com arquivos do `COPY` do DuckDB e do `UNLOAD`:
      tipos, obrigatoriedade de colunas, estatísticas e remoção só nos metadados;
-   - leitura pelo DuckDB (`ENDPOINT_TYPE 'glue'` e `AT (VERSION => ...)`) e pelo Redshift
-     (`awsdatacatalog` com login IAM, ou esquema externo com `IAM_ROLE`), com poda por mês;
+   - leitura pelo DuckDB (`ENDPOINT_TYPE 'glue'` e `AT (VERSION => ...)`) e pelo Redshift (esquema
+     externo com `IAM_ROLE`, ou `COPY` do staging), com poda por mês;
    - leitura de coluna renomeada pelos dois motores, em arquivos com e sem field IDs;
    - duas publicações simultâneas, em meses diferentes e no mesmo mês;
    - otimizadores do Glue ativos na tabela de teste.
@@ -902,8 +975,9 @@ class Backend(Protocol):
    validação e testes com `SqlCatalog`.
 3. Backend DuckDB: sandbox, montagem, inserção, auditoria e exportação. A fase termina com a medição do
    tempo até o pipeline começar.
-4. Backend Redshift Serverless: conexão pelo `redshift_connector`, esquema por execução, montagem pelo
-   `awsdatacatalog`, `COPY` de DataFrames, `UNLOAD` e limpeza de esquemas.
+4. Backend Redshift Serverless, no formato que a prova de conceito validar para o banco compartilhado:
+   conexão pelo `redshift_connector` com o segredo, sandbox por esquema ou por prefixo, montagem por
+   esquema externo ou por `COPY` do staging, `COPY` de DataFrames, exportação e limpeza.
 5. Pipelines separados: substituição de tabelas de domínio e correção de meses.
 6. Evolução de esquema: Alembic sobre o PyIceberg e reescrita de meses.
 7. Adoção do dataset atual: criar as tabelas Iceberg a partir dos modelos e registrar os arquivos
@@ -914,8 +988,10 @@ class Backend(Protocol):
 
 ## Questões em aberto
 
-- A conexão atual do `redshift_connector` usa autenticação IAM ou usuário e senha? O `awsdatacatalog`
-  exige login com identidade IAM; sem ele, a leitura usa um esquema externo com `IAM_ROLE`.
+- Quem administra o Redshift que produz o datashare? O sandbox por esquema depende de ele conceder
+  `CREATE` no banco ao datashare.
+- O workgroup do projeto tem um papel IAM padrão com acesso ao caminho S3 do projeto? `COPY` e `UNLOAD`
+  dependem desse papel.
 - Leitores fora dos pipelines, como usuários do Athena, precisam de consistência entre tabelas durante
   uma publicação?
 - Os modelos usam `Text`, `String` sem tamanho, `JSON`, `Uuid`, `LargeBinary` ou `ARRAY`?
@@ -938,6 +1014,20 @@ Redshift:
 - [Names and identifiers](https://docs.aws.amazon.com/redshift/latest/dg/r_names.html)
 - [Quotas and limits in Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/mgmt/amazon-redshift-limits.html)
 - [Using the Amazon Redshift Data API](https://docs.aws.amazon.com/redshift/latest/mgmt/data-api.html)
+- [Storing database credentials in AWS Secrets Manager](https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-secrets.html)
+- [Amazon Redshift multi-data warehouse writes through data sharing is now generally available](https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-redshift-multi-data-warehouse-through-data-sharing/)
+- [Considerations for data sharing reads and writes in Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/considerations-datashare-reads-writes.html)
+- [Supported SQL statements for data sharing writes on consumers](https://docs.aws.amazon.com/redshift/latest/dg/multi-warehouse-writes-sql-statements.html)
+- [Unsupported SQL statements for data sharing writes on consumers](https://docs.aws.amazon.com/redshift/latest/dg/multi-warehouse-writes-sql-statements-unsupported.html)
+- [USE](https://docs.aws.amazon.com/redshift/latest/dg/r_USE_command.html)
+- [SVV_REDSHIFT_DATABASES](https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_REDSHIFT_DATABASES.html)
+- [SVV_ALL_SCHEMAS](https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_ALL_SCHEMAS.html)
+- [SHOW GRANTS](https://docs.aws.amazon.com/redshift/latest/dg/r_SHOW_GRANTS.html)
+- [DEFAULT_IAM_ROLE](https://docs.aws.amazon.com/redshift/latest/dg/r_DEFAULT_IAM_ROLE.html)
+- [COPY: Authorization parameters](https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-authorization.html)
+- [GRANT: Usage notes](https://docs.aws.amazon.com/redshift/latest/dg/r_GRANT-usage-notes.html)
+- [CREATE EXTERNAL SCHEMA](https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_EXTERNAL_SCHEMA.html)
+- [Querying AWS Glue IRC federated catalogs with Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/glue-irc-federated-catalogs.html)
 - [Isolation levels in Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/c_serial_isolation.html)
 - [Amazon Redshift announces Snapshot Isolation as the default for new cluster creates and restores](https://aws.amazon.com/about-aws/whats-new/2024/05/amazon-redshift-snapshot-isolation-provisioned-clusters/)
 - [Using Apache Iceberg tables with Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/querying-iceberg.html)
@@ -1024,6 +1114,13 @@ SageMaker Unified Studio:
 - [Access control patterns](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/security-accesss-control-patterns.html)
 - [Configure Lake Formation permissions for Amazon SageMaker Unified Studio](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/lake-formation-permissions-for-amazon-sagemaker-unified-studio.html)
 - [Gaining access to Amazon Redshift resources](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/compute-prerequisite-redshift.html)
+- [Connecting to Amazon Redshift](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/connecting-amazon-redshift.html)
+- [Amazon SageMaker Unified Studio terminology and concepts](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/concepts.html)
+- [S3 Path](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/s3-path.html)
+- [Using Amazon SageMaker Unified Studio Library for Python](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/python-library.html)
+- [Connections](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/connections.html)
+- [SageMakerStudioProjectUserRolePolicy](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/SageMakerStudioProjectUserRolePolicy.html)
+- [Connect, share, and query where your data sits using Amazon SageMaker Unified Studio](https://aws.amazon.com/blogs/big-data/connect-share-and-query-where-your-data-sits-using-amazon-sagemaker-unified-studio/)
 
 Python:
 
