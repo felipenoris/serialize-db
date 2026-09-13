@@ -104,7 +104,7 @@ chama esse uso de "modelos como contrato".
 | S3 | Guarda dados e metadados das tabelas Iceberg e a área de staging. |
 | AWS Glue Data Catalog | Catálogo das tabelas permanentes e otimizadores de manutenção. |
 | Lake Formation | Permissões do catálogo nas bases sob seu controle. |
-| Redshift Serverless | Backend de execução, sobre um banco recebido por datashare. |
+| Redshift Serverless | Backend de execução, com o sandbox no banco local do workgroup. |
 | Athena | Consultas ad hoc às tabelas permanentes e manutenção sob demanda. |
 
 ### Execução no SageMaker Unified Studio
@@ -152,7 +152,9 @@ Consequências para o plano:
 - A biblioteca `sagemaker_studio` expõe o papel do projeto (`Project().iam_role`), o caminho S3 da base
   do Glue (`proj.s3.datalake_consumer_glue_db`) e as conexões do projeto (`proj.connection("<nome>")`,
   com `.secret` e `.physical_endpoints`). A biblioteca lê essas informações em vez de pedir
-  configuração manual.
+  configuração manual; fora do SageMaker Unified Studio, a configuração vem de variáveis de ambiente.
+- O repositório do serialize-db é público. Identificadores do ambiente (conta, bucket, papéis, domínio,
+  projeto e bancos) ficam fora do código, dos testes e da documentação.
 - A documentação não informa as permissões do Lake Formation que o projeto recebe na base, nem se
   clientes externos como PyIceberg e DuckDB criam tabelas Iceberg nela. A prova de conceito verifica.
 
@@ -165,10 +167,10 @@ Consequências para o plano:
   pela API do S3, e PyIceberg e DuckDB usam as credenciais do papel. Issues da extensão `iceberg` do
   DuckDB citam também `glue:GetIcebergTableMetadata` e a configuração do Lake Formation que libera
   acesso completo a motores externos.
-- **Papel IAM do Redshift:** `COPY` e `UNLOAD` usam um papel associado ao workgroup, e
-  `IAM_ROLE default` usa o papel padrão, que `SELECT default_iam_role();` mostra; o workgroup do projeto
-  não tem papel padrão. O papel precisa ler o
-  staging e gravar no destino do `UNLOAD`, dentro do caminho S3 do projeto. Se um superusuário revogou
+- **Papel IAM do Redshift:** `COPY` e `UNLOAD` usam um papel associado ao namespace do workgroup, e
+  `IAM_ROLE default` usa o papel padrão, que `SELECT default_iam_role();` mostra; o namespace do projeto
+  não tem papel padrão. O papel precisa ler o staging e gravar no destino do `UNLOAD`, dentro do caminho
+  S3 do projeto. Se um superusuário revogou
   `ASSUMEROLE` de `PUBLIC`, o usuário do banco precisa de `GRANT ASSUMEROLE ... FOR COPY, UNLOAD`. Um
   esquema externo sobre o Glue exige ainda, no Lake Formation, `DESCRIBE` na base e `SELECT` e
   `DESCRIBE` nas tabelas.
@@ -235,9 +237,9 @@ A biblioteca cria cada tabela com o `GlueCatalog` do PyIceberg, a partir do mode
   colunas nos arquivos do DuckDB e do `UNLOAD` não foi verificada. O `NOT NULL` fica no DDL do sandbox
   e na auditoria.
 - **Partição:** `month(data_ref)` nas tabelas particionadas. Tabelas de domínio ficam sem partição.
-- **Local:** um prefixo exclusivo por tabela, `s3://<bucket>/<prefixo>/<banco>/<tabela>/`. A remoção de
-  arquivos órfãos do Glue varre o local da tabela, e locais sobrepostos permitem que ela apague
-  arquivos de outra tabela.
+- **Local:** um prefixo exclusivo por tabela, `<caminho da base do Glue>/<tabela>/`, dentro do caminho S3
+  do projeto. A remoção de arquivos órfãos varre o local da tabela, e locais sobrepostos permitem que ela
+  apague arquivos de outra tabela. O staging fica fora dos locais das tabelas.
 - **Propriedades:** `serialize_db.revisao_esquema` com a revisão do Alembic,
   `write.target-file-size-bytes` com o tamanho alvo dos arquivos e `commit.retry.num-retries`.
 - **Catálogo:** o `GlueCatalog` grava o arquivo de metadados no S3 e chama `UpdateTable` com
@@ -304,8 +306,8 @@ Comportamento do PyIceberg 0.12.0 nessa transação:
 - Com o isolamento serializável padrão do `delete`, arquivos que atendem ao filtro e que um commit
   concorrente adicionou ou removeu geram `ValidationException`.
 - Duas execuções que publicam meses diferentes da mesma tabela concluem a publicação, e a segunda
-  repete o commit. Duas que publicam o mesmo mês ao mesmo tempo terminam com uma falha. Se a segunda só começar a
-  publicar depois do commit da primeira, o passo 3 detecta a colisão.
+  repete o commit. Duas que publicam o mesmo mês ao mesmo tempo terminam com uma falha. Se a segunda só
+  começar a publicar depois do commit da primeira, o passo 3 detecta a colisão.
 - Arquivos de exclusão de linha criados em paralelo conflitam mesmo em outras partições, segundo um
   comentário no código do PyIceberg. O Athena grava `MERGE`, `UPDATE` e `DELETE` como arquivos de
   exclusão de posição.
@@ -342,6 +344,20 @@ O PyIceberg só expira snapshots nos metadados (`expire_snapshots`, sem apagar a
   gravação e o commit.
 - O Athena oferece a mesma manutenção sob demanda, com `OPTIMIZE ... REWRITE DATA USING BIN_PACK` e
   `VACUUM`. Sem `s3:DeleteObject`, o `VACUUM` informa sucesso e não apaga nada.
+
+Os otimizadores exigem um papel IAM que confie em `glue.amazonaws.com`, e criar esse papel costuma
+depender do administrador da conta. Sem ele, a biblioteca faz a manutenção com o papel do projeto, num
+comando explícito:
+
+- `expire_snapshots` do PyIceberg remove dos metadados os snapshots mais antigos que a retenção
+  configurada, que precisa ser maior que a execução mais longa.
+- A biblioteca lista os arquivos sob `data/` no local da tabela e apaga os que nenhum snapshot restante
+  referencia (`tabela.inspect.all_files()`) e que têm mais dias que um limite configurado. O limite
+  protege arquivos de publicações em andamento.
+- Com arquivos de 512 MB por mês, a compactação raramente é necessária.
+
+Cada reexecução de um mês deixa cerca de 30 GB de arquivos substituídos, que ocupam o S3 até essa
+limpeza.
 
 ### Alternativa sem Iceberg
 
@@ -404,8 +420,9 @@ ou a declara como saída, e toda leitura dessa tabela usa esse snapshot.
 | Referência | View sobre a tabela no snapshot fixado; nenhum dado é copiado. | Indisponível: o Redshift não consulta snapshots anteriores. |
 
 - As tabelas do sandbox usam o DDL do modelo, não a inferência do motor.
-- O Redshift lê sempre o snapshot atual. Depois da cópia, a biblioteca compara o snapshot atual com o
-  fixado e repete a cópia se um commit intermediário alterou os meses copiados.
+- Na leitura pelo `awsdatacatalog`, o Redshift lê sempre o snapshot atual. Depois da cópia, a biblioteca
+  compara o snapshot atual com o fixado e repete a cópia se um commit intermediário alterou os meses
+  copiados. O `COPY` do staging já parte de arquivos do snapshot fixado.
 - Tabelas de domínio são montadas inteiras.
 - Uma execução lê só o mês anterior e o corrente, então a cópia é o padrão nos dois backends. No DuckDB,
   a referência serve a entradas grandes lidas uma única vez.
@@ -669,8 +686,11 @@ Desenho do backend Redshift que decorre desses resultados:
   namespace associa o papel com `update-namespace`, e os parâmetros `--iam-roles` e
   `--default-iam-role-arn` só mudam juntos. Um `UNLOAD` pequeno com o ARN do papel do projeto testa se
   ele já está associado. A alternativa sem administrador são credenciais temporárias do papel do projeto
-  em `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` e `SESSION_TOKEN`; a AWS recomenda fortemente a autenticação
-  por papel, e as credenciais ficam em texto no comando.
+  no parâmetro `CREDENTIALS`, no formato `aws_access_key_id=...;aws_secret_access_key=...;token=...`, o
+  único que o `COPY` de Parquet aceita. A AWS recomenda fortemente a autenticação por papel, e as
+  credenciais ficam em texto no comando, então a biblioteca não registra esse SQL em log. Sem nenhum
+  acesso do Redshift ao S3, o driver ADBC carrega e extrai dados em Arrow pela conexão, com desempenho a
+  medir.
 - **Leitura das tabelas Iceberg:** uma conexão do `redshift_connector` com autenticação IAM e o papel do
   projeto entra como `IAMR:<papel>` e lê o `awsdatacatalog`. Para isso, o `admin` concede a esse
   usuário `USAGE` no `awsdatacatalog` e `CREATE` no `dev`, e o Lake Formation libera a base do Glue ao
@@ -711,12 +731,14 @@ A documentação do Redshift recomenda `COPY` para cargas e `INSERT` com várias
 `COPY` não é possível. O `INSERT` grande da biblioteca atual vira este fluxo:
 
 1. Converter o DataFrame numa tabela Arrow com o esquema do modelo (cast seguro).
-2. Gravar Parquet em `s3://<bucket>/<prefixo>/staging/<id_execucao>/<tabela>/`, fora dos locais das
+2. Gravar Parquet em `<caminho S3 do projeto>/staging/<id_execucao>/<tabela>/`, fora dos locais das
    tabelas Iceberg.
-3. `COPY execucao_<id>.<tabela> FROM '<manifesto>' IAM_ROLE '<arn>' FORMAT AS PARQUET MANIFEST`.
+3. `COPY execucao_<id>.<tabela> FROM '<manifesto>' IAM_ROLE '<arn>' FORMAT AS PARQUET MANIFEST`, ou com
+   `CREDENTIALS` enquanto o namespace não tiver papel associado.
 4. Comparar `pg_last_copy_count()` com o número de linhas enviadas.
 
-Uma regra de ciclo de vida do S3 apaga o prefixo de staging.
+A biblioteca apaga o staging da execução ao terminar, e a rotina de limpeza remove o staging de execuções
+que falharam. Uma regra de ciclo de vida no bucket do domínio dependeria do administrador.
 
 Implementações existentes servem de referência ou dependência:
 
@@ -753,17 +775,17 @@ Comportamento do `UNLOAD ... FORMAT AS PARQUET` segundo a documentação:
 Sugestão: um `UNLOAD` por mês, sem `PARTITION BY`, com destino
 `<local da tabela>/data/<mes>/<id_execucao>_`, `MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho alvo
 da tabela. O `SELECT` lista as colunas na ordem do modelo, com casts para os tipos do contrato e
-`ORDER BY` pela chave de ordenação. A biblioteca confere o manifesto do `UNLOAD` e os
-rodapés dos arquivos antes da publicação. `CLEANPATH` não é usado: arquivos de execuções abortadas
-saem pela remoção de órfãos do Glue.
+`ORDER BY` pela chave de ordenação. A biblioteca confere o manifesto do `UNLOAD` e os rodapés dos
+arquivos antes da publicação. `CLEANPATH` não é usado: arquivos de execuções abortadas saem pela remoção
+de órfãos, do Glue ou da biblioteca.
 
 A documentação do `UNLOAD` não informa os tipos físicos Parquet de `TIMESTAMP` e `DECIMAL`, a
 obrigatoriedade das colunas nem a presença de estatísticas de mínimo e máximo. Os três afetam o
 `add_files`, e a prova de conceito verifica.
 
-A documentação de escrita por datashare também não cobre `UNLOAD` de tabelas do banco compartilhado. Se
-ele falhar na prova de conceito, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o
-pyarrow.
+O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem acesso do
+Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o pyarrow e o
+papel do projeto.
 
 ### Escrita direta em Iceberg pelo Redshift
 
@@ -887,7 +909,7 @@ a compilação.
 - No DuckDB, o resultado sai em Arrow direto da conexão.
 - No Redshift, resultados pequenos saem pelo cursor do `redshift_connector`.
   Resultados grandes saem por `UNLOAD` para Parquet no prefixo de staging e leitura com
-  `pyarrow.dataset`. Se a consulta tiver `LIMIT` no `SELECT` externo, a biblioteca a envolve numa
+  `pyarrow.dataset`, ou pelo driver ADBC quando o Redshift não acessa o S3. Se a consulta tiver `LIMIT` no `SELECT` externo, a biblioteca a envolve numa
   subconsulta. O limite entre os dois caminhos é configurável, e o driver ADBC entra no benchmark como
   terceira opção.
 - A biblioteca expõe um `Engine` para código do pipeline que já usa `pandas.read_sql`.
@@ -910,7 +932,7 @@ a compilação.
 ```text
 src/serialize_db/
   contrato/        mapeamento de tipos, esquemas Arrow e Iceberg, auditorias
-  catalogo/        GlueCatalog, snapshots fixados, publicação e validação de meses
+  catalogo/        GlueCatalog, snapshots fixados, publicação e validação de meses, manutenção
   backends/
     base.py        protocolo Backend
     duckdb.py
@@ -921,8 +943,8 @@ src/serialize_db/
 ```
 
 Dependências sugeridas no `pyproject.toml`: `sqlalchemy`, `pyarrow` e `pyiceberg[glue]>=0.12` na base;
-extras `duckdb` (`duckdb`, `duckdb-engine`), `redshift` (`sqlalchemy-redshift`, `redshift-connector`)
-e `migracoes` (`alembic`).
+extras `duckdb` (`duckdb`, `duckdb-engine`), `redshift` (`sqlalchemy-redshift`, `redshift-connector`),
+`sagemaker` (`sagemaker-studio`, versão 1.1.33 em 2026-09-13) e `migracoes` (`alembic`).
 
 ### API
 
@@ -934,8 +956,8 @@ catalogo = Catalogo.glue(banco="<banco>", regiao="<regiao>")
 backend = BackendDuckDB(memory_limit="48GB", temp_directory="<diretório no EBS>")
 
 with Execucao(catalogo, backend, metadata=Base.metadata) as execucao:
-    execucao.montar(Operacao, meses=["2026-06", "2026-07", "2026-08"])
-    execucao.montar(HistoricoPrecos, meses=["2026-08"], referencia=True)
+    execucao.montar(Operacao, meses=["2026-08"])
+    execucao.montar(Movimento, meses=["2026-09"], referencia=True)
     execucao.montar(Cliente)
     execucao.declarar_saida(Operacao, meses=["2026-09"])
 
@@ -979,9 +1001,11 @@ class Backend(Protocol):
 - Testes de concorrência: duas publicações em meses diferentes terminam; duas no mesmo mês terminam
   com uma falha; uma entrada alterada durante a execução gera aviso ou erro.
 - Testes de snapshot do DDL e das consultas compiladas para o Redshift, sem rede.
-- Testes de integração com o marcador `aws`, ignorados sem credenciais, contra uma base do Glue, um
-  prefixo do S3 e um workgroup do Redshift dedicados. Eles cobrem `UNLOAD` com `add_files`, leitura
-  pelo `awsdatacatalog` e pela extensão `iceberg` do DuckDB, e permissões do Lake Formation.
+- Testes de integração com o marcador `aws`, ignorados sem credenciais, rodam no SageMaker Unified
+  Studio contra uma base do Glue de testes, um prefixo de testes no caminho S3 do projeto e esquemas de
+  teste no banco local do Redshift. Eles cobrem `UNLOAD` com `add_files`, leitura pelo `awsdatacatalog`
+  e pela extensão `iceberg` do DuckDB, e permissões do Lake Formation. A configuração vem do
+  `sagemaker_studio` ou de variáveis de ambiente, sem identificadores do ambiente no repositório.
 - Benchmark do tempo até o pipeline começar e do tempo de um mês completo, por backend, com dados
   reais. A linha de base é a importação de cerca de 7 horas no PostgreSQL.
 
@@ -1003,7 +1027,9 @@ class Backend(Protocol):
      (`awsdatacatalog` pela conexão IAM, ou `COPY` do staging), com poda por mês;
    - leitura de coluna renomeada pelos dois motores, em arquivos com e sem field IDs;
    - duas publicações simultâneas, em meses diferentes e no mesmo mês;
-   - otimizadores do Glue ativos na tabela de teste.
+   - otimizadores do Glue ativos na tabela de teste, ou a manutenção pela biblioteca se o papel dos
+     otimizadores não puder ser criado;
+   - criação de uma base do Glue de testes pelo projeto, separada da base das tabelas permanentes.
 2. Contrato e catálogo: tipos, esquemas Arrow e Iceberg, criação de tabelas, publicação de meses com
    validação e testes com `SqlCatalog`.
 3. Backend DuckDB: sandbox, montagem, inserção, auditoria e exportação. A fase termina com a medição do
@@ -1021,8 +1047,9 @@ class Backend(Protocol):
 
 ## Questões em aberto
 
-- Quem administra o namespace do workgroup do projeto e pode associar a ele um papel IAM com acesso ao
-  caminho S3 do projeto? Hoje o namespace não tem papel padrão.
+- Quem administra a conta e o namespace do workgroup do projeto? Duas ações dependem dessa pessoa:
+  associar ao namespace um papel IAM com acesso ao caminho S3 do projeto, e criar o papel dos
+  otimizadores do Glue.
 - O pipeline precisa ler dados que estão no banco compartilhado?
 - Leitores fora dos pipelines, como usuários do Athena, precisam de consistência entre tabelas durante
   uma publicação?

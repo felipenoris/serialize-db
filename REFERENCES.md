@@ -518,3 +518,4 @@ API JSON do PyPI, consultada para versões e datas de lançamento:
 - <https://pypi.org/pypi/pandas/json>
 - <https://pypi.org/pypi/polars/json>
 - <https://pypi.org/pypi/boto3/json>
+- <https://pypi.org/pypi/sagemaker-studio/json>
