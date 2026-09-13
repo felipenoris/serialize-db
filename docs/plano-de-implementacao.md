@@ -13,9 +13,9 @@ leitura e escrita. As fontes estão no fim do documento e em [REFERENCES.md](../
 2. Cada execução do pipeline trabalha num sandbox: um esquema próprio no Redshift ou um banco DuckDB do
    processo. O sandbox recebe só as partições que o pipeline declara ler, no snapshot fixado pela
    execução.
-3. O pipeline principal grava meses inteiros no sandbox. A publicação audita os meses, grava os arquivos
-   Parquet e troca os meses na tabela permanente com um commit do PyIceberg por tabela. Reexecutar um
-   mês substitui a partição.
+3. Cada execução do pipeline principal processa um único mês e o grava inteiro no sandbox. A publicação
+   audita o mês, grava os arquivos Parquet e troca o mês na tabela permanente com um commit do PyIceberg
+   por tabela. Reexecutar um mês substitui a partição.
 4. Correções em meses antigos e alterações em tabelas de domínio rodam em pipelines separados, com a
    mesma primitiva: reescrever no sandbox o mês, ou a tabela de domínio inteira, e substituir. Nenhum
    pipeline altera linhas isoladas nas tabelas permanentes.
@@ -40,6 +40,21 @@ A reconstrução atual leva cerca de 7 horas antes de o pipeline começar. O cus
 
 Trocar o banco resolve a primeira causa. A segunda exige mudar o protocolo: carregar só o que o
 pipeline lê. Este plano trata das duas.
+
+## Volume de dados
+
+A equipe informou em 2026-09-13 um volume de cerca de 30 GB compactados por mês de processamento. Cada
+execução do pipeline principal processa um único mês e o produz inteiro. Consequências para o plano:
+
+- Arquivos de 512 MB, o tamanho alvo padrão da compactação do Glue, dividem um mês em cerca de 60
+  arquivos. O `UNLOAD` usa `MAXFILESIZE` igual ao tamanho alvo, em vez do padrão de 6,2 GB.
+- Reexecutar um mês mantém os arquivos substituídos no S3 até a retenção de snapshots expirá-los, 5 dias
+  por padrão.
+- O sandbox do DuckDB guarda no disco do espaço o mês de saída e as entradas copiadas, e o EBS do espaço
+  vai até 100 GB. Meses de entrada montados por referência não ocupam esse disco.
+- A prova de conceito mede o pico de disco e de memória de um mês no DuckDB. Se o pico passar do limite
+  do espaço, o pipeline principal usa o Redshift, e o DuckDB fica com os pipelines de domínio e de
+  correção e com os testes.
 
 ## Boas práticas de ETL aplicáveis
 
@@ -93,8 +108,8 @@ chama esse uso de "modelos como contrato".
   Athena e recursos do Redshift existentes por tags do projeto.
 - Consultas ao Redshift a partir do JupyterLab exigem o Redshift na VPC do projeto.
 
-O sandbox do DuckDB cabe na memória da instância mais o EBS do espaço, ou num EFS anexado. Pipelines
-que não cabem nesse limite usam o backend Redshift.
+O sandbox do DuckDB cabe na memória da instância mais o EBS do espaço, ou num EFS anexado. A seção
+[Volume de dados](#volume-de-dados) compara esse limite com o tamanho de um mês.
 
 ### Permissões
 
@@ -112,6 +127,24 @@ que não cabem nesse limite usam o backend Redshift.
   CloudWatch Logs. Sem concessão a `IAM_ALLOWED_PRINCIPALS`, ele também precisa de
   `lakeformation:GetDataAccess` e das permissões `ALTER`, `DESCRIBE`, `INSERT` e `DELETE` na tabela.
   Quem ativa o otimizador precisa de `iam:PassRole`.
+
+### Diagnóstico do Lake Formation
+
+A equipe ainda não sabe se as bases do Glue do projeto estão sob o Lake Formation. Estes comandos da AWS
+CLI respondem, desde que o papel tenha as ações `lakeformation:GetDataLakeSettings`,
+`lakeformation:ListResources`, `lakeformation:ListPermissions` e
+`lakeformation:ListLakeFormationOptIns`:
+
+| Comando | O que mostra |
+| --- | --- |
+| `aws lakeformation get-data-lake-settings` | `CreateDatabaseDefaultPermissions` e `CreateTableDefaultPermissions`. Uma concessão a `IAM_ALLOWED_PRINCIPALS` nesses campos deixa bases e tabelas novas sob controle só de IAM. |
+| `aws lakeformation list-resources` | Locais S3 registrados no Lake Formation e o campo `HybridAccessEnabled` de cada um. |
+| `aws lakeformation list-permissions --resource '{"Database": {"Name": "<banco>"}}'` | Permissões concedidas na base, incluindo a concessão a `IAM_ALLOWED_PRINCIPALS`. |
+| `aws lakeformation list-lake-formation-opt-ins --resource '{"Database": {"Name": "<banco>"}}'` | Principals do IAM que aderiram ao Lake Formation no modo de acesso híbrido. |
+
+Uma base com concessão a `IAM_ALLOWED_PRINCIPALS` e local S3 não registrado fica sob controle só de IAM.
+Nesse caso, as permissões do Lake Formation listadas acima não se aplicam, e o acesso aos dados depende
+de políticas IAM e de bucket.
 
 ## Estrutura do pipeline
 
@@ -324,6 +357,8 @@ ou a declara como saída, e toda leitura dessa tabela usa esse snapshot.
 - O Redshift lê sempre o snapshot atual. Depois da cópia, a biblioteca compara o snapshot atual com o
   fixado e repete a cópia se um commit intermediário alterou os meses copiados.
 - Tabelas de domínio são montadas inteiras.
+- No DuckDB, a cópia vale para tabelas de domínio e para meses lidos muitas vezes. Os demais meses de
+  entrada são montados por referência, para poupar o disco do espaço.
 - Uma tabela de saída não recebe cópia dos meses que a execução publica, exceto nos pipelines de
   correção.
 
@@ -357,8 +392,8 @@ O sandbox de uma execução abortada fica disponível para inspeção até a rot
 
 ### Pipeline principal
 
-O pipeline principal só cria meses e pode substituir um mês existente numa reexecução. Ele lê as
-tabelas de domínio no snapshot fixado e nunca as altera.
+Cada execução do pipeline principal processa um único mês e o produz inteiro. Uma reexecução substitui
+o mês. O pipeline lê as tabelas de domínio no snapshot fixado e nunca as altera.
 
 ### Correções em meses antigos
 
@@ -582,9 +617,10 @@ Comportamento do `UNLOAD ... FORMAT AS PARQUET` segundo a documentação:
 - `MANIFEST VERBOSE` lista os arquivos, os nomes e tipos das colunas e as linhas por arquivo.
 - Colunas `VARBYTE`, `GEOMETRY` e `HLLSKETCH` só saem em texto ou CSV.
 
-Sugestão: um `UNLOAD` por mês, sem `PARTITION BY`, com destino `<local da tabela>/data/<mes>/<id_execucao>_`
-e `MANIFEST VERBOSE`. O `SELECT` lista as colunas na ordem do modelo, com casts para os tipos do
-contrato e `ORDER BY` pela chave de ordenação. A biblioteca confere o manifesto do `UNLOAD` e os
+Sugestão: um `UNLOAD` por mês, sem `PARTITION BY`, com destino
+`<local da tabela>/data/<mes>/<id_execucao>_`, `MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho alvo
+da tabela. O `SELECT` lista as colunas na ordem do modelo, com casts para os tipos do contrato e
+`ORDER BY` pela chave de ordenação. A biblioteca confere o manifesto do `UNLOAD` e os
 rodapés dos arquivos antes da publicação. `CLEANPATH` não é usado: arquivos de execuções abortadas
 saem pela remoção de órfãos do Glue.
 
@@ -808,14 +844,18 @@ class Backend(Protocol):
 - Testes de integração com o marcador `aws`, ignorados sem credenciais, contra uma base do Glue, um
   prefixo do S3 e um workgroup do Redshift dedicados. Eles cobrem `UNLOAD` com `add_files`, leitura
   pelo `awsdatacatalog` e pela extensão `iceberg` do DuckDB, e permissões do Lake Formation.
-- Benchmark do tempo até o pipeline começar, por backend, com dados reais. A linha de base é a
-  importação de cerca de 7 horas no PostgreSQL.
+- Benchmark do tempo até o pipeline começar e do tempo de um mês completo, por backend, com dados
+  reais. A linha de base é a importação de cerca de 7 horas no PostgreSQL.
 
 ## Roteiro de implementação
 
 1. Prova de conceito no SageMaker Unified Studio, com uma tabela de teste numa base do Glue:
+   - situação da base e do local S3 no Lake Formation, com os comandos de
+     [Diagnóstico do Lake Formation](#diagnóstico-do-lake-formation);
    - criação da tabela v2 pelo `GlueCatalog` e permissões do papel do projeto, do Redshift e dos
      otimizadores do Glue;
+   - pico de disco e de memória de um mês de cerca de 30 GB no sandbox do DuckDB, comparado com o tempo
+     do mesmo mês no Redshift;
    - publicação de um mês com `delete` e `add_files`, com arquivos do `COPY` do DuckDB e do `UNLOAD`:
      tipos, obrigatoriedade de colunas, estatísticas e remoção só nos metadados;
    - leitura pelo DuckDB (`ENDPOINT_TYPE 'glue'` e `AT (VERSION => ...)`) e pelo Redshift
@@ -839,13 +879,9 @@ class Backend(Protocol):
 
 ## Questões em aberto
 
-- Qual o volume do dataset: tamanho total, maiores tabelas, linhas por mês?
-- Uma execução do pipeline principal produz o mês inteiro ou só uma data dentro do mês? No segundo caso,
-  a unidade de substituição é a data, e a publicação precisa de outra estratégia.
-- O pipeline principal roda para meses diferentes ao mesmo tempo? Pipelines de correção e de domínio
-  rodam junto com ele?
-- As bases do Glue do projeto estão sob permissões do Lake Formation? O papel do projeto grava direto no
-  S3 das tabelas?
+- Os 30 GB compactados por mês são o que uma execução produz ou o que ela lê? Quantos meses anteriores
+  uma execução lê, e quantos meses de histórico a base tem?
+- Qual instância e qual tamanho de EBS o espaço do SageMaker Unified Studio pode usar?
 - O Redshift é Serverless ou provisionado, e fica na VPC do projeto?
 - Leitores fora dos pipelines, como usuários do Athena, precisam de consistência entre tabelas durante
   uma publicação?
@@ -943,6 +979,7 @@ AWS Glue, Athena e Lake Formation:
 - [Underlying data access control](https://docs.aws.amazon.com/lake-formation/latest/dg/access-control-underlying-data.html)
 - [Application integration for full table access](https://docs.aws.amazon.com/lake-formation/latest/dg/full-table-credential-vending.html)
 - [Hybrid access mode](https://docs.aws.amazon.com/lake-formation/latest/dg/hybrid-access-mode.html)
+- [AWS CLI: lakeformation](https://docs.aws.amazon.com/cli/latest/reference/lakeformation/index.html)
 
 SageMaker Unified Studio:
 

@@ -275,6 +275,12 @@ Extensão `iceberg` no GitHub:
 - <https://docs.aws.amazon.com/lake-formation/latest/dg/using-cred-vending.html>
 - <https://docs.aws.amazon.com/lake-formation/latest/dg/how-vending-works.html>
 - <https://docs.aws.amazon.com/lake-formation/latest/dg/RSPC-lf.html>
+- <https://docs.aws.amazon.com/cli/latest/reference/lakeformation/index.html>
+- <https://docs.aws.amazon.com/cli/latest/reference/lakeformation/get-data-lake-settings.html>
+- <https://docs.aws.amazon.com/cli/latest/reference/lakeformation/list-resources.html>
+- <https://docs.aws.amazon.com/cli/latest/reference/lakeformation/describe-resource.html>
+- <https://docs.aws.amazon.com/cli/latest/reference/lakeformation/list-permissions.html>
+- <https://docs.aws.amazon.com/cli/latest/reference/lakeformation/list-lake-formation-opt-ins.html>
 - <https://aws.amazon.com/blogs/big-data/access-amazon-s3-data-files-directly-using-aws-lake-formation-permissions/>
 - <https://aws.amazon.com/blogs/big-data/amazon-datazone-announces-integration-with-aws-lake-formation-hybrid-access-mode-for-the-aws-glue-data-catalog/>
 
