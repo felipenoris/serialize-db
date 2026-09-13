@@ -190,7 +190,20 @@ are never cut; the words around them are.
 
 Use this section to store you memory for this project. Use a "size budget" of 50KB for this file.
 
-- `docs/plano-de-implementacao.md` holds the best-practice research (sources checked 2026-09-12)
-  and the implementation plan: Parquet dataset with a versioned manifest, selective mounting,
-  constraint policy per backend, Arrow as the in-memory boundary. It is under review in
-  <https://github.com/felipenoris/serialize-db/pull/1>.
+- `docs/plano-de-implementacao.md` holds the research (sources checked 2026-09-12 and 2026-09-13)
+  and the implementation plan. <https://github.com/felipenoris/serialize-db/pull/1> adds it;
+  <https://github.com/felipenoris/serialize-db/pull/2> (branch `claude/revisa-plano-implementacao`,
+  based on the PR #1 branch) revises it. Its direction: Iceberg v2 tables in the Glue Data Catalog
+  as the source of truth, one sandbox per run (Redshift schema `execucao_<id>`, or the DuckDB process
+  database), month publication through a PyIceberg transaction with `delete` and `add_files`, and a
+  proof of concept in the real environment as the first phase.
+- User answers given on 2026-09-13:
+  - The environment has the AWS Glue Data Catalog.
+  - The main pipeline only creates month partitions (`YYYY-MM`) and may replace an existing month
+    when re-run. Updates to old partitions and changes to domain tables run in separate pipelines.
+  - The pipeline knows in advance which partitions it reads. The user's original design creates
+    per-run processing tables named with a run prefix, runs the pipeline on them, and publishes to
+    the permanent tables at the end.
+- Questions still open with the user: whether a main-pipeline run produces a whole month or a single
+  date, whether runs overlap, whether the Glue databases are under Lake Formation and the project
+  role writes to S3 directly, and the dataset volume.
