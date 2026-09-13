@@ -111,6 +111,9 @@ Compartilhamento de dados (datashare), autorização e permissões:
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_COPY.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-authorization.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_DEFAULT_IAM_ROLE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_USER_INFO.html>
+- <https://docs.aws.amazon.com/cli/latest/reference/redshift-serverless/get-namespace.html>
+- <https://docs.aws.amazon.com/cli/latest/reference/redshift-serverless/update-namespace.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_SHOW_DATASHARES.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_SHOW_DATABASES.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_SHOW_GRANTS.html>
