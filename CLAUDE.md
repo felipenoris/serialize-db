@@ -210,6 +210,9 @@ Use this section to store you memory for this project. Use a "size budget" of 50
     concept checks it with AWS CLI commands.
   - A run produces about 30 GB compressed and reads data only from the previous or the current month.
   - The environment has no instance-type limit, and a space's EBS volume goes up to 1000 GB.
-- Questions still open with the user: how many months of history exist, whether a run reads a table
-  it also publishes for the current month, and whether Redshift is Serverless or provisioned and sits
-  in the project VPC.
+- User answers given on 2026-09-13, third round:
+  - The base has 1 year of history.
+  - Intermediate pipeline steps read the current month of tables the same run publishes.
+  - Redshift is Serverless.
+- Questions still open with the user: whether the 1-year history is a rolling window, and whether the
+  Redshift Serverless workgroup sits in the project VPC.
