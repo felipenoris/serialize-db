@@ -214,5 +214,8 @@ Use this section to store you memory for this project. Use a "size budget" of 50
   - The base has 1 year of history.
   - Intermediate pipeline steps read the current month of tables the same run publishes.
   - Redshift is Serverless.
-- Questions still open with the user: whether the 1-year history is a rolling window, and whether the
-  Redshift Serverless workgroup sits in the project VPC.
+- User answers given on 2026-09-13, fourth round:
+  - Old months stay in the base; the history is not a rolling window.
+  - The team connects to Redshift only through `redshift_connector`; the Data API is not enabled.
+- Question still open with the user: whether the current `redshift_connector` login uses IAM
+  authentication, which `awsdatacatalog` requires.
