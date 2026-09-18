@@ -86,7 +86,7 @@ like to explore what `pyarrow` has to offer, based on
 
 - S3 (project bucket)
 
-- Redshift: read/write permissions do a single schema
+- Redshift: read/write permissions to a single schema
 
 ## Language convention (important)
 
