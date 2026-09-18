@@ -1,0 +1,86 @@
+# Esquema a partir dos modelos ORM
+
+Gerar o DDL a partir dos modelos. O DDL gerado cobre as tabelas do sandbox no DuckDB e no
+Redshift e o esquema Iceberg. As vantagens do DDL manual, revisão explícita e opções físicas, vêm de
+dois mecanismos:
+
+- Opções físicas no próprio modelo, num espaço de nomes da biblioteca em `Table.info`. A chave de
+  ordenação vira `SORTKEY` no Redshift e `ORDER BY` na gravação dos arquivos.
+- Arquivos `.sql` com o DDL gerado por backend e um JSON com o esquema Iceberg, versionados no
+  repositório do pipeline e comparados por um teste. Uma mudança no modelo aparece no diff.
+
+```python
+class Operacao(Base):
+    __tablename__ = "operacoes"
+    __table_args__ = {
+        "info": {
+            "serialize_db": {
+                "particionamento": {"coluna": "data_ref", "transformacao": "month"},
+                "chave_ordenacao": ["data_ref", "id_operacao"],
+                "redshift": {"diststyle": "KEY", "distkey": "id_cliente"},
+            }
+        }
+    }
+
+    id_operacao: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    data_ref: Mapped[date] = mapped_column(primary_key=True)
+    id_cliente: Mapped[int] = mapped_column(BigInteger)
+    valor: Mapped[Decimal] = mapped_column(Numeric(18, 2))
+    descricao: Mapped[str | None] = mapped_column(String(200))
+```
+
+O `sqlalchemy-redshift` aceita `redshift_diststyle`, `redshift_distkey`, `redshift_sortkey` e
+`redshift_interleaved_sortkey` como argumentos de `Table`. Guardar as opções em `info` mantém os
+modelos neutros quando o dialeto do Redshift não está instalado.
+
+## Política de restrições
+
+| Restrição | Sandbox DuckDB | Sandbox Redshift | Tabela Iceberg |
+| --- | --- | --- | --- |
+| `NOT NULL` | Declarada. | Declarada e aplicada pelo banco. | Campo opcional; a auditoria verifica. |
+| `PRIMARY KEY`, `UNIQUE` | Omitida; a auditoria verifica os meses novos. | Declarada quando auditada; informativa. | Não declarada. |
+| `FOREIGN KEY` | Omitida; auditoria opcional. | Declarada quando auditada; informativa. | Não declarada. |
+
+Unicidade, chave primária e chave estrangeira são informativas no Redshift. O planejador usa essas
+chaves para decorrelacionar subconsultas, ordenar e eliminar joins, e supõe que elas são válidas. Com
+chaves inválidas, consultas retornam resultados errados; a documentação cita um `SELECT DISTINCT` que
+devolve duplicatas. `NOT NULL` é aplicado. Tabelas Iceberg no Redshift não aceitam restrições.
+
+A medição publicada na documentação do DuckDB, com 554 milhões de linhas, justifica omitir chaves no
+DuckDB:
+
+| Operação | Tempo |
+| --- | --- |
+| Carga com chave primária | 461,6 s |
+| Carga sem chave primária | 121,0 s |
+| Criação da chave primária após a carga | 242,0 s |
+
+A documentação recomenda não declarar restrições no DuckDB, exceto para garantir integridade. Índices
+ART precisam caber em memória durante a criação.
+
+## Tipos no contrato
+
+| SQLAlchemy | Arrow | Iceberg | DuckDB | Redshift | Observação |
+| --- | --- | --- | --- | --- | --- |
+| `SmallInteger` | `int16` | `int` | `SMALLINT` | `SMALLINT` | O Iceberg não tem inteiro de 16 bits; a gravação converte para `int32`. |
+| `Integer` | `int32` | `int` | `INTEGER` | `INTEGER` | |
+| `BigInteger` | `int64` | `long` | `BIGINT` | `BIGINT` | Tipos sem sinal do Arrow e do DuckDB ficam fora do contrato. |
+| `Boolean` | `bool` | `boolean` | `BOOLEAN` | `BOOLEAN` | |
+| `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Descarregar e recarregar pelo Redshift pode perder precisão. |
+| `Numeric(p, s)` | `decimal128(p, s)` | `decimal(p, s)` | `DECIMAL(p, s)` | `DECIMAL(p, s)` | `p` até 38. |
+| `String(n)` | `string` | `string` | `VARCHAR` | `VARCHAR(n)` | `n` em bytes no Redshift; auditoria de tamanho. |
+| `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | `TEXT` no Redshift vira `VARCHAR(256)`. |
+| `Date` | `date32` | `date` | `DATE` | `DATE` | |
+| `DateTime` | `timestamp[us]` | `timestamp` | `TIMESTAMP` | `TIMESTAMP` | Cast explícito de nanossegundos (padrão do pandas) para microssegundos; o `add_files` rejeita nanossegundos. O Athena lê com precisão de milissegundos. |
+| `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamptz` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Gravar sempre em UTC; o `UNLOAD` descarta o fuso. |
+| `Uuid` | `string` | `string` | `VARCHAR` | `VARCHAR(36)` | O Redshift não tem tipo UUID. |
+| `JSON`, `LargeBinary`, `ARRAY`, `Interval` | | | | | Fora do contrato até haver um caso de uso. |
+
+## Portabilidade de SQL entre DuckDB e Redshift
+
+- As consultas usam construções do SQLAlchemy, não SQL em texto.
+- Funções com nomes ou semânticas diferentes nos dois bancos ganham uma regra `@compiles` por dialeto.
+  A lista sai do código atual do pipeline.
+- O DuckDB aceita construções do PostgreSQL ausentes no Redshift, como arrays e `ON CONFLICT`. Uma
+  consulta que roda no DuckDB pode falhar no Redshift, então as consultas do pipeline precisam de
+  testes de integração no Redshift com uma amostra pequena.
