@@ -5,51 +5,6 @@ Do not edit this section. You're free to edit all other sections of this file.
 
 These are the instructions written by the user.
 
-- This repo is a Python library.
-
-- Use `uv` to manage python version and dependencies.
-
-- Use python version 3.13.
-
-## Motivation
-
-I have another project that implements an ETL pipeline based on a relational database.
-That project builds on a base Python package that provides routines to import and
-export data in Parquet format, and it uses SQLAlchemy's ORM for database schema
-management.
-
-The pipeline works as follows:
-
-1 - A previous version of the database is persisted in Parquet format, together with
-a JSON schema file, in a folder.
-
-2 - The pipeline first rebuilds the relational database from scratch: it reads the
-JSON schema, creates the empty tables, and then imports all Parquet files into the
-database.
-
-3 - The pipeline runs, producing a few new partitions in a few tables.
-
-4 - The pipeline then decides which Parquet files should be exported incrementally.
-
-The original idea was to use the model defined with SQLAlchemy ORM as the single
-source of truth for the database schema. The project also uses Alembic for schema
-versioning.
-
-Although each table maps to a Python class, instances of these classes are never
-created, for performance reasons: the model classes serve only to build the database
-schema and to generate SELECT statements. All data input and output goes through
-dataframes, both when querying the database and when inserting into it.
-
-The major drawback is performance, and it comes from the relational database: as a
-prerequisite to running the pipeline, the database must be rebuilt from scratch from
-the Parquet files. The machine it runs on will eventually run out of volume space.
-Because it relies on a relational database (PostgreSQL), importing the data from
-Parquet into the database takes about 7 hours before the pipeline can even start —
-even though the pipeline does not depend on all the data, only on a few partitions.
-
-More recently, we experimented with DuckDB and Amazon Redshift: with both, ingesting
-the whole database takes only a few minutes.
-
 ## Project Goals
 
 The goal of this project is to implement a Python library to replace the one described
@@ -78,6 +33,7 @@ these columnar database technologies usually do not rely on primary keys, foreig
 or constraints.
 
     - DuckDB: enforces constraints, but at a performance cost;
+
     - Redshift: constraints are informational only.
 
 - Pipeline structure:
@@ -102,7 +58,19 @@ like to explore what `pyarrow` has to offer, based on
 
 # Guidelines
 
-- when you need to edit files in this repo, do it in a new branch prefixed with `claude/` and open a PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
+- when you need to edit files in this repo, do it in a new branch prefixed with `claude/` and open a PR. While a PR you opened is still open, every new commit goes to that PR's branch; do not open another branch or PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
+
+## Project
+
+- This repo is a Python library.
+
+- Use `uv` to manage python version and dependencies.
+
+- Use python version 3.13.
+
+- use `pytest` to write tests.
+
+- use [`pdoc`](https://pdoc.dev/) to generate documentation as static HTML format.
 
 ## Tools installed in the current environment
 
@@ -112,18 +80,22 @@ like to explore what `pyarrow` has to offer, based on
 
 - `cargo`
 
-## Target Environment
+## AWS (Target Environment)
 
-- Linux ubuntu, amd64.
+- SageMaker Unified Studio (Linux ubuntu, amd64)
+
+- S3 (project bucket)
+
+- Redshift: read/write permissions do a single schema
 
 ## Language convention (important)
 
 **All prose in this repo is Brazilian Portuguese (pt-BR)**: README files,
 code comments, docstrings, printed output, test messages, and shell-script
 comments. When editing or adding content, **keep writing in pt-BR** to match.
-Identifiers (variable/function names) are a mix of English and Portuguese —
-follow the convention of the file you are editing. This `CLAUDE.md` is the one
-intentional exception (English, for AI-assistant tooling).
+Identifiers (variable/function names) are in English.
+
+This `CLAUDE.md` is in English, for AI-assistant tooling.
 
 ## `REFERENCES.md`
 
