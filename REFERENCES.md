@@ -519,3 +519,140 @@ API JSON do PyPI, consultada para versões e datas de lançamento:
 - <https://pypi.org/pypi/polars/json>
 - <https://pypi.org/pypi/boto3/json>
 - <https://pypi.org/pypi/sagemaker-studio/json>
+
+## Fontes
+
+Redshift:
+
+- [Table constraints](https://docs.aws.amazon.com/redshift/latest/dg/t_Defining_constraints.html)
+- [Define primary key and foreign key constraints](https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-defining-constraints.html)
+- [Query performance tuning](https://docs.aws.amazon.com/redshift/latest/dg/c-optimizing-query-performance.html)
+- [Best practices for loading data](https://docs.aws.amazon.com/redshift/latest/dg/c_loading-data-best-practices.html)
+- [COPY from columnar data formats](https://docs.aws.amazon.com/redshift/latest/dg/copy-usage_notes-copy-from-columnar.html)
+- [UNLOAD](https://docs.aws.amazon.com/redshift/latest/dg/r_UNLOAD.html)
+- [Character types](https://docs.aws.amazon.com/redshift/latest/dg/r_Character_types.html)
+- [CREATE TABLE](https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_TABLE_NEW.html)
+- [CREATE SCHEMA](https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_SCHEMA.html)
+- [DROP SCHEMA](https://docs.aws.amazon.com/redshift/latest/dg/r_DROP_SCHEMA.html)
+- [Names and identifiers](https://docs.aws.amazon.com/redshift/latest/dg/r_names.html)
+- [Quotas and limits in Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/mgmt/amazon-redshift-limits.html)
+- [Using the Amazon Redshift Data API](https://docs.aws.amazon.com/redshift/latest/mgmt/data-api.html)
+- [Storing database credentials in AWS Secrets Manager](https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-secrets.html)
+- [Amazon Redshift multi-data warehouse writes through data sharing is now generally available](https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-redshift-multi-data-warehouse-through-data-sharing/)
+- [Considerations for data sharing reads and writes in Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/considerations-datashare-reads-writes.html)
+- [Supported SQL statements for data sharing writes on consumers](https://docs.aws.amazon.com/redshift/latest/dg/multi-warehouse-writes-sql-statements.html)
+- [Unsupported SQL statements for data sharing writes on consumers](https://docs.aws.amazon.com/redshift/latest/dg/multi-warehouse-writes-sql-statements-unsupported.html)
+- [USE](https://docs.aws.amazon.com/redshift/latest/dg/r_USE_command.html)
+- [SVV_REDSHIFT_DATABASES](https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_REDSHIFT_DATABASES.html)
+- [SVV_ALL_SCHEMAS](https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_ALL_SCHEMAS.html)
+- [SHOW GRANTS](https://docs.aws.amazon.com/redshift/latest/dg/r_SHOW_GRANTS.html)
+- [DEFAULT_IAM_ROLE](https://docs.aws.amazon.com/redshift/latest/dg/r_DEFAULT_IAM_ROLE.html)
+- [SVV_USER_INFO](https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_USER_INFO.html)
+- [AWS CLI: redshift-serverless get-namespace](https://docs.aws.amazon.com/cli/latest/reference/redshift-serverless/get-namespace.html)
+- [AWS CLI: redshift-serverless update-namespace](https://docs.aws.amazon.com/cli/latest/reference/redshift-serverless/update-namespace.html)
+- [COPY: Authorization parameters](https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-authorization.html)
+- [GRANT: Usage notes](https://docs.aws.amazon.com/redshift/latest/dg/r_GRANT-usage-notes.html)
+- [CREATE EXTERNAL SCHEMA](https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_EXTERNAL_SCHEMA.html)
+- [Querying AWS Glue IRC federated catalogs with Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/glue-irc-federated-catalogs.html)
+- [Isolation levels in Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/c_serial_isolation.html)
+- [Amazon Redshift announces Snapshot Isolation as the default for new cluster creates and restores](https://aws.amazon.com/about-aws/whats-new/2024/05/amazon-redshift-snapshot-isolation-provisioned-clusters/)
+- [Using Apache Iceberg tables with Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/querying-iceberg.html)
+- [Referencing Iceberg tables in Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/referencing-iceberg-tables.html)
+- [Querying the AWS Glue Data Catalog](https://docs.aws.amazon.com/redshift/latest/mgmt/query-editor-v2-glue.html)
+- [Redshift Spectrum and AWS Lake Formation](https://docs.aws.amazon.com/redshift/latest/dg/spectrum-lake-formation.html)
+- [Iceberg: SQL commands](https://docs.aws.amazon.com/redshift/latest/dg/iceberg-writes-sql-syntax.html)
+- [Iceberg: Transaction semantics](https://docs.aws.amazon.com/redshift/latest/dg/iceberg-writes-transaction-semantics.html)
+- [Iceberg: Altering table definitions](https://docs.aws.amazon.com/redshift/latest/dg/iceberg-alter-table.html)
+- [Apache Iceberg v3 features in Amazon Redshift](https://docs.aws.amazon.com/redshift/latest/dg/iceberg-v3-features.html)
+- [Amazon Redshift now supports writing to Apache Iceberg tables](https://aws.amazon.com/about-aws/whats-new/2025/11/aws-redshift-iceberg-writes-m1)
+- [Amazon Redshift supports UPDATE, DELETE, MERGE for Apache Iceberg tables](https://aws.amazon.com/about-aws/whats-new/2026/04/redshift-update-delete-merge-iceberg-tables/)
+- [Amazon Redshift adds ALTER TABLE for Iceberg tables](https://aws.amazon.com/about-aws/whats-new/2026/05/amazon-redshift-alter-table-iceberg/)
+- [Amazon Redshift now supports Apache Iceberg v3 tables](https://aws.amazon.com/about-aws/whats-new/2026/08/amazon-redshift-supports-apache-iceberg-v3/)
+- [Achieve 2x faster data lake query performance with Apache Iceberg on Amazon Redshift](https://aws.amazon.com/blogs/big-data/achieve-2x-faster-data-lake-query-performance-with-apache-iceberg-on-amazon-redshift/)
+- [CREATE EXTERNAL TABLE](https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_EXTERNAL_TABLE.html)
+
+DuckDB:
+
+- [Schema performance: constraints](https://duckdb.org/docs/lts/guides/performance/schema#constraints)
+- [Indexes](https://duckdb.org/docs/current/sql/indexes.html)
+- [Text types](https://duckdb.org/docs/current/sql/data_types/text.html)
+- [Parquet tips](https://duckdb.org/docs/current/data/parquet/tips.html)
+- [Reading and Writing Parquet Files](https://duckdb.org/docs/current/data/parquet/overview.html)
+- [COPY Statement](https://duckdb.org/docs/current/sql/statements/copy.html)
+- [Import from Apache Arrow](https://duckdb.org/docs/current/guides/python/import_arrow.html)
+- [Concurrency](https://duckdb.org/docs/current/connect/concurrency.html)
+- [Iceberg extension](https://duckdb.org/docs/current/core_extensions/iceberg/overview.html)
+- [Iceberg catalogs](https://duckdb.org/docs/current/core_extensions/iceberg/catalogs.html)
+- [Writing to Iceberg](https://duckdb.org/docs/current/core_extensions/iceberg/writing_to_iceberg.html)
+- [Iceberg Options](https://duckdb.org/docs/current/core_extensions/iceberg/iceberg_options.html)
+- [Writes in DuckDB-Iceberg](https://duckdb.org/2025/11/28/iceberg-writes-in-duckdb.html)
+- [New DuckDB-Iceberg Features in v1.5.3](https://duckdb.org/2026/05/29/new-iceberg-features.html)
+- Issues da extensão `iceberg`: [#660](https://github.com/duckdb/duckdb-iceberg/issues/660),
+  [#786](https://github.com/duckdb/duckdb-iceberg/issues/786),
+  [#995](https://github.com/duckdb/duckdb-iceberg/issues/995),
+  [#1162](https://github.com/duckdb/duckdb-iceberg/issues/1162),
+  [#1290](https://github.com/duckdb/duckdb-iceberg/issues/1290),
+  [#1369](https://github.com/duckdb/duckdb-iceberg/issues/1369),
+  [#454](https://github.com/duckdb/duckdb-iceberg/issues/454),
+  [#810](https://github.com/duckdb/duckdb-iceberg/issues/810)
+- [DuckLake](https://ducklake.select/)
+
+PyIceberg:
+
+- [API](https://py.iceberg.apache.org/api/)
+- [Configuration](https://py.iceberg.apache.org/configuration/)
+- [Código-fonte na versão 0.12.0](https://github.com/apache/iceberg-python/tree/pyiceberg-0.12.0)
+- [PR #3320: Add commit retry and concurrency validation for writes](https://github.com/apache/iceberg-python/pull/3320)
+- [Issue #3008: Retry Behavior for SigV4Adapter in REST Catalog](https://github.com/apache/iceberg-python/issues/3008)
+- [Issue #1551: Support writing V3 tables](https://github.com/apache/iceberg-python/issues/1551)
+
+AWS Glue, Athena e Lake Formation:
+
+- [Optimizing Iceberg tables](https://docs.aws.amazon.com/glue/latest/dg/table-optimizers.html)
+- [Compaction optimization](https://docs.aws.amazon.com/glue/latest/dg/compaction-management.html)
+- [Snapshot retention optimization](https://docs.aws.amazon.com/glue/latest/dg/snapshot-retention-management.html)
+- [Deleting orphan files](https://docs.aws.amazon.com/glue/latest/dg/orphan-file-deletion.html)
+- [Table optimization prerequisites](https://docs.aws.amazon.com/glue/latest/dg/optimization-prerequisites.html)
+- [Connecting to the Data Catalog using AWS Glue Iceberg REST endpoint](https://docs.aws.amazon.com/glue/latest/dg/connect-glu-iceberg-rest.html)
+- [Considerations and limitations when using AWS Glue Iceberg REST Catalog APIs](https://docs.aws.amazon.com/glue/latest/dg/limitation-glue-iceberg-rest-api.html)
+- [UpdatePartition](https://docs.aws.amazon.com/glue/latest/webapi/API_UpdatePartition.html)
+- [BatchUpdatePartition](https://docs.aws.amazon.com/glue/latest/webapi/API_BatchUpdatePartition.html)
+- [AWS Glue endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/glue.html)
+- [AWS Glue Pricing](https://aws.amazon.com/glue/pricing/)
+- [Manage concurrent write conflicts in Apache Iceberg on the AWS Glue Data Catalog](https://aws.amazon.com/blogs/big-data/manage-concurrent-write-conflicts-in-apache-iceberg-on-the-aws-glue-data-catalog/)
+- [Query Apache Iceberg tables](https://docs.aws.amazon.com/athena/latest/ug/querying-iceberg.html)
+- [Update Iceberg table data](https://docs.aws.amazon.com/athena/latest/ug/querying-iceberg-updating-iceberg-table-data.html)
+- [OPTIMIZE](https://docs.aws.amazon.com/athena/latest/ug/optimize-statement.html)
+- [VACUUM](https://docs.aws.amazon.com/athena/latest/ug/vacuum-statement.html)
+- [Creating Apache Iceberg tables](https://docs.aws.amazon.com/lake-formation/latest/dg/creating-iceberg-tables.html)
+- [Underlying data access control](https://docs.aws.amazon.com/lake-formation/latest/dg/access-control-underlying-data.html)
+- [Application integration for full table access](https://docs.aws.amazon.com/lake-formation/latest/dg/full-table-credential-vending.html)
+- [Hybrid access mode](https://docs.aws.amazon.com/lake-formation/latest/dg/hybrid-access-mode.html)
+- [AWS CLI: lakeformation](https://docs.aws.amazon.com/cli/latest/reference/lakeformation/index.html)
+
+SageMaker Unified Studio:
+
+- [Code spaces in Identity Center domains](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/code-spaces-idc.html)
+- [Manage Tooling blueprint parameters](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/manage-tooling-blueprint.html)
+- [Using the JupyterLab IDE in Amazon SageMaker Unified Studio](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/jupyterlab.html)
+- [Schedule and automate notebook runs](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/notebooks-schedule-runs.html)
+- [Using workflows in Amazon SageMaker Unified Studio](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/workflow-orchestration.html)
+- [Access control patterns](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/adminguide/security-accesss-control-patterns.html)
+- [Configure Lake Formation permissions for Amazon SageMaker Unified Studio](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/lake-formation-permissions-for-amazon-sagemaker-unified-studio.html)
+- [Gaining access to Amazon Redshift resources](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/compute-prerequisite-redshift.html)
+- [Connecting to Amazon Redshift](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/connecting-amazon-redshift.html)
+- [Amazon SageMaker Unified Studio terminology and concepts](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/concepts.html)
+- [S3 Path](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/s3-path.html)
+- [Using Amazon SageMaker Unified Studio Library for Python](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/python-library.html)
+- [Connections](https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/connections.html)
+- [SageMakerStudioProjectUserRolePolicy](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/SageMakerStudioProjectUserRolePolicy.html)
+- [Connect, share, and query where your data sits using Amazon SageMaker Unified Studio](https://aws.amazon.com/blogs/big-data/connect-share-and-query-where-your-data-sits-using-amazon-sagemaker-unified-studio/)
+
+Python:
+
+- [duckdb_engine](https://github.com/Mause/duckdb_engine)
+- [sqlalchemy-redshift](https://pypi.org/project/sqlalchemy-redshift/)
+- [Amazon Redshift Python connector](https://github.com/aws/amazon-redshift-python-driver)
+- [awswrangler.redshift.copy](https://aws-sdk-pandas.readthedocs.io/en/stable/stubs/awswrangler.redshift.copy.html)
+- [ADBC Driver for Amazon Redshift](https://adbc-drivers.org/drivers/redshift/)
+- [etl-cookbook-tutorial](https://github.com/felipenoris/etl-cookbook-tutorial)

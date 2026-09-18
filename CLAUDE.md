@@ -5,45 +5,6 @@ Do not edit this section. You're free to edit all other sections of this file.
 
 These are the instructions written by the user.
 
-## Motivation
-
-I have another project that implements an ETL pipeline based on a relational database.
-That project builds on a base Python package that provides routines to import and
-export data in Parquet format, and it uses SQLAlchemy's ORM for database schema
-management.
-
-The pipeline works as follows:
-
-1 - A previous version of the database is persisted in Parquet format, together with
-a JSON schema file, in a folder.
-
-2 - The pipeline first rebuilds the relational database from scratch: it reads the
-JSON schema, creates the empty tables, and then imports all Parquet files into the
-database.
-
-3 - The pipeline runs, producing a few new partitions in a few tables.
-
-4 - The pipeline then decides which Parquet files should be exported incrementally.
-
-The original idea was to use the model defined with SQLAlchemy ORM as the single
-source of truth for the database schema. The project also uses Alembic for schema
-versioning.
-
-Although each table maps to a Python class, instances of these classes are never
-created, for performance reasons: the model classes serve only to build the database
-schema and to generate SELECT statements. All data input and output goes through
-dataframes, both when querying the database and when inserting into it.
-
-The major drawback is performance, and it comes from the relational database: as a
-prerequisite to running the pipeline, the database must be rebuilt from scratch from
-the Parquet files. The machine it runs on will eventually run out of volume space.
-Because it relies on a relational database (PostgreSQL), importing the data from
-Parquet into the database takes about 7 hours before the pipeline can even start —
-even though the pipeline does not depend on all the data, only on a few partitions.
-
-More recently, we experimented with DuckDB and Amazon Redshift: with both, ingesting
-the whole database takes only a few minutes.
-
 ## Project Goals
 
 The goal of this project is to implement a Python library to replace the one described
@@ -119,28 +80,22 @@ like to explore what `pyarrow` has to offer, based on
 
 - `cargo`
 
-## Target Environment
+## AWS (Target Environment)
 
-- Linux ubuntu, amd64.
+- SageMaker Unified Studio (Linux ubuntu, amd64)
 
-- AWS SageMaker Unified Studio
+- S3 (project bucket)
 
-- S3
-
-- AWS Glue Data Catalog
-
-- Athena workroup
-
-- Redshift (read/write permissions)
+- Redshift: read/write permissions do a single schema
 
 ## Language convention (important)
 
 **All prose in this repo is Brazilian Portuguese (pt-BR)**: README files,
 code comments, docstrings, printed output, test messages, and shell-script
 comments. When editing or adding content, **keep writing in pt-BR** to match.
-Identifiers (variable/function names) are a mix of English and Portuguese —
-follow the convention of the file you are editing. This `CLAUDE.md` is the one
-intentional exception (English, for AI-assistant tooling).
+Identifiers (variable/function names) are in English.
+
+This `CLAUDE.md` is in English, for AI-assistant tooling.
 
 ## `REFERENCES.md`
 
@@ -189,49 +144,3 @@ are never cut; the words around them are.
 # Claude Memory
 
 Use this section to store you memory for this project. Use a "size budget" of 50KB for this file.
-
-- `docs/plano-de-implementacao.md` holds the research (sources checked 2026-09-12 and 2026-09-13)
-  and the implementation plan. It is under review in
-  <https://github.com/felipenoris/serialize-db/pull/2> (branch `claude/revisa-plano-implementacao`,
-  base `main`). PR #1 is closed, and PR #2 contains its commit. The plan's direction: Iceberg v2 tables in the Glue Data Catalog
-  as the source of truth, one sandbox per run (Redshift schema `execucao_<id>`, or the DuckDB process
-  database), month publication through a PyIceberg transaction with `delete` and `add_files`, and a
-  proof of concept in the real environment as the first phase.
-- User answers given on 2026-09-13:
-  - The environment has the AWS Glue Data Catalog.
-  - The main pipeline only creates month partitions (`YYYY-MM`) and may replace an existing month
-    when re-run. Updates to old partitions and changes to domain tables run in separate pipelines.
-  - The pipeline knows in advance which partitions it reads. The user's original design creates
-    per-run processing tables named with a run prefix, runs the pipeline on them, and publishes to
-    the permanent tables at the end.
-- User answers given on 2026-09-13, second round:
-  - A main-pipeline run produces the whole month, and each run processes one specific month.
-  - The user does not know whether the Glue databases are under Lake Formation; the plan's proof of
-    concept checks it with AWS CLI commands.
-  - A run produces about 30 GB compressed and reads data only from the previous or the current month.
-  - The environment has no instance-type limit, and a space's EBS volume goes up to 1000 GB.
-- User answers given on 2026-09-13, third round:
-  - The base has 1 year of history.
-  - Intermediate pipeline steps read the current month of tables the same run publishes.
-  - Redshift is Serverless.
-- User answers given on 2026-09-13, fourth round:
-  - Old months stay in the base; the history is not a rolling window.
-  - The team connects to Redshift only through `redshift_connector`; the Data API is not enabled.
-- User answers given on 2026-09-13, fifth round:
-  - The team writes to a Redshift database (and can create tables) that reaches the SMUS project
-    through a datashare; the connection uses an AWS Secrets Manager secret, so the session runs as a
-    database user, not an IAM identity.
-  - The SMUS project has an associated Glue database, visible in `awsdatacatalog`, where the team can
-    create tables.
-- Redshift diagnostics run by the user on 2026-09-13: the secret session user is `admin`; the
-  workgroup has the local database `dev` and the shared database; `default_iam_role()` is `none`;
-  `data_catalog_auto_mount` is `on`; `CREATE SCHEMA` in the shared database fails with "Permission
-  denied on producer". The plan therefore puts the Redshift sandbox in `dev`. The project Glue
-  database path follows `s3://<domain bucket>/<domain id>/<project id>/dev/data/catalogs/`.
-- The GitHub repository is public. Keep AWS account IDs, bucket names, role names, domain and project
-  IDs, and database names shared by the user out of committed files; use placeholders.
-- Questions still open with the user: who administers the account and the workgroup namespace (to
-  associate an IAM role for `COPY`/`UNLOAD` and to create the Glue optimizer role), whether the project
-  can create a separate Glue database for tests, and whether the pipeline reads data stored in the
-  shared database. Without those roles, the plan falls back to `CREDENTIALS` with the project role's
-  temporary credentials, the ADBC driver, and library-run table maintenance.
