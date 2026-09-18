@@ -10,20 +10,21 @@ These are the instructions written by the user.
 - A core feature is the ability to import and export the database in Parquet format,
 ideally incrementally.
 
-- Parquet is the source of truth.
-
-- Pipeline execution engine will be: DuckDB or Redshift. Must support both.
-
 - Use SQLAlchemy ORM for modeling the database schema.
 
 - Support schema migration. Alembic is an option.
 
-Still open:
+- Parquet is the source of truth.
 
-- Whether the database schema should be generated from the SQLAlchemy ORM models, or
-whether hand-written DDL statements would be a better solution for performance reasons:
-these columnar database technologies usually do not rely on primary keys, foreign keys,
-or constraints.
+- Pipeline execution engine will be: DuckDB or Redshift. Must support both.
+
+- Data will be published on Redshift for clients.
+
+- Project has access to a single Redshift schema in the current state. We could use a prefix on table names to implement a namespace, to separate production/development/pipeline execution.
+
+- Parquet/DuckDB/Redshift are column-based, with small focus on table constraints:
+
+    - Parquet: isolates data for a single table, with no contepts of primary key, foreign key, autoincrement columns. 
 
     - DuckDB: enforces constraints, but at a performance cost;
 
