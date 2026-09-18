@@ -1,11 +1,38 @@
 # Referências
 
 Este arquivo lista os sites consultados na pesquisa do
-[plano de implementação](docs/plano-de-implementacao.md), agrupados por assunto.
+[plano de implementação](docs/plano-de-implementacao.md) e do
+[documento sobre arquivos Parquet](docs/parquet.md), agrupados por assunto.
 
 ## Projetos de referência
 
 - <https://github.com/felipenoris/etl-cookbook-tutorial>
+
+## Formato Parquet
+
+Especificação, no repositório `apache/parquet-format`:
+
+- <https://github.com/apache/parquet-format/blob/master/README.md>
+- <https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift>
+- <https://github.com/apache/parquet-format/blob/master/PageIndex.md>
+- <https://github.com/apache/parquet-format/blob/master/BloomFilter.md>
+- <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
+- <https://github.com/apache/parquet-format/blob/master/Encodings.md>
+- <https://github.com/apache/parquet-format/blob/master/Compression.md>
+- <https://github.com/apache/parquet-format/blob/master/Encryption.md>
+- <https://github.com/apache/parquet-format/blob/master/Geospatial.md>
+- <https://github.com/apache/parquet-format/blob/master/CHANGES.md>
+
+Site do projeto:
+
+- <https://parquet.apache.org/docs/file-format/implementationstatus/>
+
+Artigos:
+
+- <https://arrow.apache.org/blog/2022/12/26/querying-parquet-with-millisecond-latency/>
+- <https://www.influxdata.com/blog/using-parquets-bloom-filters/>
+- <https://pydantic.dev/articles/bloom-filter-folding-parquet-logfire>
+- <https://arxiv.org/abs/2304.05028>
 
 ## Amazon Redshift
 
@@ -38,6 +65,16 @@ Documentação:
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_write_readwrite.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_Serializable_isolation_example.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_serial_isolation-serializable-isolation-troubleshooting.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-format.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-load.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-column-mapping.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-source-s3.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-conversion.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_COPY_command_examples.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c-using-spectrum.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_STL_LOAD_ERRORS.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/SYS_LOAD_ERROR_DETAIL.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/ingest-super.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/cm_chap_ConfigurationRef.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/querying-iceberg.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/querying-iceberg-supported-data-types.html>
@@ -179,6 +216,19 @@ Documentação:
 - <https://duckdb.org/docs/current/core_extensions/iceberg/iceberg_functions.html>
 - <https://duckdb.org/docs/current/core_extensions/iceberg/troubleshooting.html>
 - <https://ducklake.select/>
+- <https://duckdb.org/docs/current/data/parquet/metadata.html>
+- <https://duckdb.org/docs/current/data/parquet/encryption.html>
+- <https://duckdb.org/docs/current/data/partitioning/hive_partitioning.html>
+- <https://duckdb.org/docs/current/data/multiple_files/overview.html>
+- <https://duckdb.org/docs/current/sql/statements/insert.html>
+- <https://duckdb.org/docs/current/sql/statements/create_table.html>
+- <https://duckdb.org/docs/current/guides/performance/file_formats.html>
+- <https://duckdb.org/docs/current/guides/performance/indexing.html>
+- <https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads.html>
+- <https://duckdb.org/docs/current/guides/performance/join_operations.html>
+- <https://duckdb.org/docs/current/guides/file_formats/parquet_import.html>
+- <https://duckdb.org/docs/current/guides/file_formats/parquet_export.html>
+- <https://duckdb.org/docs/current/configuration/overview.html>
 
 Blog:
 
@@ -199,6 +249,14 @@ Blog:
 - <https://duckdb.org/2026/07/22/announcing-duckdb-155.html>
 - <https://duckdb.org/2026/08/17/duckdb-20-highlights.html>
 - <https://duckdb.org/2026/09/02/try-duckdb-20-alpha.html>
+- <https://duckdb.org/2021/06/25/querying-parquet.html>
+- <https://duckdb.org/2025/01/22/parquet-encodings.html>
+- <https://duckdb.org/2025/02/05/announcing-duckdb-120.html>
+- <https://duckdb.org/2025/03/07/parquet-bloom-filters-in-duckdb.html>
+
+Repositório `duckdb` no GitHub:
+
+- <https://github.com/duckdb/duckdb/issues/2755>
 
 Extensão `iceberg` no GitHub:
 
@@ -246,6 +304,13 @@ Extensão `iceberg` no GitHub:
 - <https://github.com/duckdb/duckdb-iceberg/pull/1256>
 - <https://github.com/duckdb/duckdb-iceberg/pull/1310>
 - <https://github.com/duckdb/duckdb-iceberg/pull/1351>
+
+## PyArrow
+
+- <https://arrow.apache.org/docs/python/parquet.html>
+- <https://arrow.apache.org/docs/python/dataset.html>
+- <https://github.com/apache/arrow/tree/main/docs/source/python/parquet>: fonte das páginas
+  `parquet.rst`, `parquet_datasets.rst`, `parquet_type_handling.rst` e `parquet_encryption.rst`
 
 ## PyIceberg
 

@@ -24,7 +24,7 @@ ideally incrementally.
 
 - Parquet/DuckDB/Redshift are column-based, with small focus on table constraints:
 
-    - Parquet: isolates data for a single table, with no contepts of primary key, foreign key, autoincrement columns. 
+    - Parquet: isolates data for a single table, with no contepts of primary key, foreign key, autoincrement columns. Parquet metadata must be 
 
     - DuckDB: enforces constraints, but at a performance cost;
 
@@ -76,7 +76,7 @@ like to explore what `pyarrow` has to offer, based on
 
 ## git
 
-When you need to edit files in this repo, do it in a new branch prefixed with `claude/` and open a PR. While a PR you opened is still open, every new commit goes to that PR's branch; do not open another branch or PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
+When you need to commit in this repo, do it in a new branch prefixed with `claude/` and open a PR. While a PR you opened is still open, every new commit goes to that PR's branch; do not open another branch or PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
 
 ## AWS (Target Environment)
 
@@ -138,6 +138,10 @@ are never cut; the words around them are.
    decision file already records. One short sentence beats a chain of clauses joined by dashes.
 9. **Shorter is the goal; a fact removed is a defect.** When a cut would drop a measurement, an
    identifier or a verdict, keep the sentence.
+
+## `prompts.md`
+
+Never read the file `prompts.md`.
 
 # Claude Memory
 
