@@ -7,23 +7,16 @@ These are the instructions written by the user.
 
 ## Project Goals
 
-The goal of this project is to implement a Python library to replace the one described
-in the previous section.
-
-What is settled:
-
-- The new package will not use PostgreSQL as the relational database backing the ETL
-pipeline.
-
-- Available technologies: Redshift, DuckDB, Parquet.
-
-- I would like to support both Redshift and DuckDB as replacements for PostgreSQL.
-
 - A core feature is the ability to import and export the database in Parquet format,
 ideally incrementally.
 
-- The new package must support SQLAlchemy ORM for modeling the database schema, since
-all the pipeline logic depends on it.
+- Parquet is the source of truth.
+
+- Pipeline execution engine will be: DuckDB or Redshift. Must support both.
+
+- Use SQLAlchemy ORM for modeling the database schema.
+
+- Support schema migration. Alembic is an option.
 
 Still open:
 
@@ -58,8 +51,6 @@ like to explore what `pyarrow` has to offer, based on
 
 # Guidelines
 
-- when you need to edit files in this repo, do it in a new branch prefixed with `claude/` and open a PR. While a PR you opened is still open, every new commit goes to that PR's branch; do not open another branch or PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
-
 ## Project
 
 - This repo is a Python library.
@@ -79,6 +70,12 @@ like to explore what `pyarrow` has to offer, based on
 - `gh`
 
 - `cargo`
+
+- `git`
+
+## git
+
+When you need to edit files in this repo, do it in a new branch prefixed with `claude/` and open a PR. While a PR you opened is still open, every new commit goes to that PR's branch; do not open another branch or PR. Submit your commits incrementally. The user will merge when needed. After merge, sync the local repo copy to the `main` branch (sometimes the user will do that for you).
 
 ## AWS (Target Environment)
 
