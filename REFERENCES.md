@@ -1,11 +1,39 @@
 # Referências
 
 Este arquivo lista os sites consultados na pesquisa do
-[plano de implementação](docs/plano-de-implementacao.md), agrupados por assunto.
+plano de implementação e dos documentos sobre
+[arquivos Parquet](docs/parquet.md), [DuckDB](docs/duckdb.md), [Redshift](docs/redshift.md) e
+[SQLAlchemy](docs/sqlalchemy.md), agrupados por assunto.
 
 ## Projetos de referência
 
 - <https://github.com/felipenoris/etl-cookbook-tutorial>
+
+## Formato Parquet
+
+Especificação, no repositório `apache/parquet-format`:
+
+- <https://github.com/apache/parquet-format/blob/master/README.md>
+- <https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift>
+- <https://github.com/apache/parquet-format/blob/master/PageIndex.md>
+- <https://github.com/apache/parquet-format/blob/master/BloomFilter.md>
+- <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
+- <https://github.com/apache/parquet-format/blob/master/Encodings.md>
+- <https://github.com/apache/parquet-format/blob/master/Compression.md>
+- <https://github.com/apache/parquet-format/blob/master/Encryption.md>
+- <https://github.com/apache/parquet-format/blob/master/Geospatial.md>
+- <https://github.com/apache/parquet-format/blob/master/CHANGES.md>
+
+Site do projeto:
+
+- <https://parquet.apache.org/docs/file-format/implementationstatus/>
+
+Artigos:
+
+- <https://arrow.apache.org/blog/2022/12/26/querying-parquet-with-millisecond-latency/>
+- <https://www.influxdata.com/blog/using-parquets-bloom-filters/>
+- <https://pydantic.dev/articles/bloom-filter-folding-parquet-logfire>
+- <https://arxiv.org/abs/2304.05028>
 
 ## Amazon Redshift
 
@@ -38,6 +66,16 @@ Documentação:
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_write_readwrite.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_Serializable_isolation_example.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_serial_isolation-serializable-isolation-troubleshooting.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-format.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-load.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-column-mapping.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-source-s3.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-conversion.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_COPY_command_examples.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c-using-spectrum.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_STL_LOAD_ERRORS.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/SYS_LOAD_ERROR_DETAIL.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/ingest-super.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/cm_chap_ConfigurationRef.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/querying-iceberg.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/querying-iceberg-supported-data-types.html>
@@ -134,6 +172,66 @@ Compartilhamento de dados (datashare), autorização e permissões:
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-secrets.html>
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-access.html>
 
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_columnar_storage_disk_mem_mgmnt.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_redshift-and-postgres-sql.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_redshift-sql-implementated-differently.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_unsupported-postgresql-features.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_unsupported-postgresql-datatypes.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_unsupported-postgresql-functions.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_Supported_data_types.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_Numeric_types201.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_Datetime_types.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_Boolean_type.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SUPER_type.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/super-overview.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/query-super.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/limitations-super.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/json-functions.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/JSON_PARSE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/JSON_SERIALIZE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/JSON_EXTRACT_PATH_TEXT.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_TABLE_AS.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_DROP_TABLE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_COMMENT.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/t_Sorting_data.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/t_Distributing_data.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_choosing_dist_sort.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-sort-key.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-best-dist-key.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_Compression_encodings.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_Loading_tables_auto_compress.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_ANALYZE_COMPRESSION.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SELECT_synopsis.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_INSERT_30.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_UPDATE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_DELETE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_MERGE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-single-copy-command.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-use-multiple-files.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-multi-row-inserts.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-sort-key-order.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/t_Loading_tables_with_the_COPY_command.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/t_Loading_data.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/t_loading-tables-from-s3.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_VACUUM_command.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/t_Reclaiming_storage_space202.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_ANALYZE.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/t_Analyzing_tables.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c-query-performance.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_designing-queries-best-practices.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_data_redistribution.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c-query-planning.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_EXPLAIN.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c-the-query-plan.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/t_Creating_tables.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/PG_LAST_COPY_COUNT.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_TABLE_INFO.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_ALTER_TABLE_RECOMMENDATIONS.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/python-redshift-driver.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/python-connect-examples.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/python-configuration-options.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/python-api-reference.html>
+
 Novidades, blog e base de conhecimento:
 
 - <https://aws.amazon.com/about-aws/whats-new/2022/05/amazon-redshift-snapshot-isolation-level-support-concurrent-transactions/>
@@ -179,6 +277,84 @@ Documentação:
 - <https://duckdb.org/docs/current/core_extensions/iceberg/iceberg_functions.html>
 - <https://duckdb.org/docs/current/core_extensions/iceberg/troubleshooting.html>
 - <https://ducklake.select/>
+- <https://duckdb.org/docs/current/data/parquet/metadata.html>
+- <https://duckdb.org/docs/current/data/parquet/encryption.html>
+- <https://duckdb.org/docs/current/data/partitioning/hive_partitioning.html>
+- <https://duckdb.org/docs/current/data/multiple_files/overview.html>
+- <https://duckdb.org/docs/current/sql/statements/insert.html>
+- <https://duckdb.org/docs/current/sql/statements/create_table.html>
+- <https://duckdb.org/docs/current/guides/performance/file_formats.html>
+- <https://duckdb.org/docs/current/guides/performance/indexing.html>
+- <https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads.html>
+- <https://duckdb.org/docs/current/guides/performance/join_operations.html>
+- <https://duckdb.org/docs/current/guides/file_formats/parquet_import.html>
+- <https://duckdb.org/docs/current/guides/file_formats/parquet_export.html>
+- <https://duckdb.org/docs/current/configuration/overview.html>
+
+- <https://duckdb.org/docs/current/internals/overview.html>
+- <https://duckdb.org/docs/current/internals/storage.html>
+- <https://duckdb.org/docs/current/internals/vector.html>
+- <https://duckdb.org/docs/current/sql/data_types/overview.html>
+- <https://duckdb.org/docs/current/sql/data_types/numeric.html>
+- <https://duckdb.org/docs/current/sql/data_types/timestamp.html>
+- <https://duckdb.org/docs/current/sql/data_types/typecasting.html>
+- <https://duckdb.org/docs/current/sql/data_types/nulls.html>
+- <https://duckdb.org/docs/current/data/json/overview.html>
+- <https://duckdb.org/docs/current/data/json/json_type.html>
+- <https://duckdb.org/docs/current/data/json/json_functions.html>
+- <https://duckdb.org/docs/current/data/json/loading_json.html>
+- <https://duckdb.org/docs/current/data/json/creating_json.html>
+- <https://duckdb.org/docs/current/data/json/caveats.html>
+- <https://duckdb.org/docs/current/data/json/sql_to_and_from_json.html>
+- <https://duckdb.org/docs/current/sql/constraints.html>
+- <https://duckdb.org/docs/current/sql/statements/drop.html>
+- <https://duckdb.org/docs/current/sql/statements/comment_on.html>
+- <https://duckdb.org/docs/current/sql/statements/create_index.html>
+- <https://duckdb.org/docs/current/sql/statements/create_sequence.html>
+- <https://duckdb.org/docs/current/sql/statements/select.html>
+- <https://duckdb.org/docs/current/sql/statements/update.html>
+- <https://duckdb.org/docs/current/sql/statements/delete.html>
+- <https://duckdb.org/docs/current/sql/statements/merge_into.html>
+- <https://duckdb.org/docs/current/sql/statements/transactions.html>
+- <https://duckdb.org/docs/current/sql/statements/checkpoint.html>
+- <https://duckdb.org/docs/current/sql/statements/vacuum.html>
+- <https://duckdb.org/docs/current/sql/statements/analyze.html>
+- <https://duckdb.org/docs/current/sql/dialect/postgresql_compatibility.html>
+- <https://duckdb.org/docs/current/sql/dialect/friendly_sql.html>
+- <https://duckdb.org/docs/current/sql/dialect/indexing.html>
+- <https://duckdb.org/docs/current/sql/dialect/order_preservation.html>
+- <https://duckdb.org/docs/current/sql/dialect/sql_quirks.html>
+- <https://duckdb.org/docs/current/clients/python/overview.html>
+- <https://duckdb.org/docs/current/clients/python/data_ingestion.html>
+- <https://duckdb.org/docs/current/clients/python/conversion.html>
+- <https://duckdb.org/docs/current/clients/python/dbapi.html>
+- <https://duckdb.org/docs/current/clients/python/relational_api.html>
+- <https://duckdb.org/docs/current/clients/python/types.html>
+- <https://duckdb.org/docs/current/clients/python/known_issues.html>
+- <https://duckdb.org/docs/current/guides/python/import_pandas.html>
+- <https://duckdb.org/docs/current/guides/python/export_pandas.html>
+- <https://duckdb.org/docs/current/guides/python/export_arrow.html>
+- <https://duckdb.org/docs/current/guides/python/sql_on_pandas.html>
+- <https://duckdb.org/docs/current/guides/python/sql_on_arrow.html>
+- <https://duckdb.org/docs/current/guides/python/polars.html>
+- <https://duckdb.org/docs/current/guides/python/multiple_threads.html>
+- <https://duckdb.org/docs/current/guides/python/execute_sql.html>
+- <https://duckdb.org/docs/current/guides/performance/overview.html>
+- <https://duckdb.org/docs/current/guides/performance/import.html>
+- <https://duckdb.org/docs/current/guides/performance/schema.html>
+- <https://duckdb.org/docs/current/guides/performance/environment.html>
+- <https://duckdb.org/docs/current/guides/performance/my_workload_is_slow.html>
+- <https://duckdb.org/docs/current/guides/performance/working_with_huge_databases.html>
+- <https://duckdb.org/docs/current/guides/performance/oom.html>
+- <https://duckdb.org/docs/current/guides/performance/benchmarks.html>
+- <https://duckdb.org/docs/current/data/overview.html>
+- <https://duckdb.org/docs/current/data/insert.html>
+- <https://duckdb.org/docs/current/data/appender.html>
+- <https://duckdb.org/docs/current/data/data_sources.html>
+- <https://duckdb.org/docs/current/connect/overview.html>
+- <https://duckdb.org/docs/current/guides/sql_features/merge.html>
+- <https://duckdb.org/docs/current/operations_manual/footprint_of_duckdb/reclaiming_space.html>
+- <https://github.com/duckdb/duckdb-web/tree/main/docs/current>: fonte em Markdown das páginas acima
 
 Blog:
 
@@ -199,6 +375,14 @@ Blog:
 - <https://duckdb.org/2026/07/22/announcing-duckdb-155.html>
 - <https://duckdb.org/2026/08/17/duckdb-20-highlights.html>
 - <https://duckdb.org/2026/09/02/try-duckdb-20-alpha.html>
+- <https://duckdb.org/2021/06/25/querying-parquet.html>
+- <https://duckdb.org/2025/01/22/parquet-encodings.html>
+- <https://duckdb.org/2025/02/05/announcing-duckdb-120.html>
+- <https://duckdb.org/2025/03/07/parquet-bloom-filters-in-duckdb.html>
+
+Repositório `duckdb` no GitHub:
+
+- <https://github.com/duckdb/duckdb/issues/2755>
 
 Extensão `iceberg` no GitHub:
 
@@ -246,6 +430,92 @@ Extensão `iceberg` no GitHub:
 - <https://github.com/duckdb/duckdb-iceberg/pull/1256>
 - <https://github.com/duckdb/duckdb-iceberg/pull/1310>
 - <https://github.com/duckdb/duckdb-iceberg/pull/1351>
+
+## PyArrow
+
+- <https://arrow.apache.org/docs/python/parquet.html>
+- <https://arrow.apache.org/docs/python/dataset.html>
+- <https://github.com/apache/arrow/tree/main/docs/source/python/parquet>: fonte das páginas
+  `parquet.rst`, `parquet_datasets.rst`, `parquet_type_handling.rst` e `parquet_encryption.rst`
+
+## SQLAlchemy
+
+Documentação da versão 2.0:
+
+- <https://docs.sqlalchemy.org/en/20/core/metadata.html>
+- <https://docs.sqlalchemy.org/en/20/core/reflection.html>
+- <https://docs.sqlalchemy.org/en/20/core/ddl.html>
+- <https://docs.sqlalchemy.org/en/20/core/constraints.html>
+- <https://docs.sqlalchemy.org/en/20/core/defaults.html>
+- <https://docs.sqlalchemy.org/en/20/core/type_basics.html>
+- <https://docs.sqlalchemy.org/en/20/core/custom_types.html>
+- <https://docs.sqlalchemy.org/en/20/core/compiler.html>
+- <https://docs.sqlalchemy.org/en/20/core/dml.html>
+- <https://docs.sqlalchemy.org/en/20/core/connections.html>
+- <https://docs.sqlalchemy.org/en/20/core/engines.html>
+- <https://docs.sqlalchemy.org/en/20/core/event.html>
+- <https://docs.sqlalchemy.org/en/20/core/events.html>
+- <https://docs.sqlalchemy.org/en/20/core/inspection.html>
+- <https://docs.sqlalchemy.org/en/20/core/schema.html>
+- <https://docs.sqlalchemy.org/en/20/tutorial/metadata.html>
+- <https://docs.sqlalchemy.org/en/20/tutorial/data_insert.html>
+- <https://docs.sqlalchemy.org/en/20/tutorial/data_select.html>
+- <https://docs.sqlalchemy.org/en/20/tutorial/data_update.html>
+- <https://docs.sqlalchemy.org/en/20/tutorial/orm_data_manipulation.html>
+- <https://docs.sqlalchemy.org/en/20/tutorial/dbapi_transactions.html>
+- <https://docs.sqlalchemy.org/en/20/tutorial/engine.html>
+- <https://docs.sqlalchemy.org/en/20/orm/declarative_tables.html>
+- <https://docs.sqlalchemy.org/en/20/orm/declarative_config.html>
+- <https://docs.sqlalchemy.org/en/20/orm/declarative_styles.html>
+- <https://docs.sqlalchemy.org/en/20/orm/declarative_mixins.html>
+- <https://docs.sqlalchemy.org/en/20/orm/mapping_styles.html>
+- <https://docs.sqlalchemy.org/en/20/orm/mapping_api.html>
+- <https://docs.sqlalchemy.org/en/20/orm/mapped_attributes.html>
+- <https://docs.sqlalchemy.org/en/20/orm/dataclasses.html>
+- <https://docs.sqlalchemy.org/en/20/orm/queryguide/dml.html>
+- <https://docs.sqlalchemy.org/en/20/orm/queryguide/select.html>
+- <https://docs.sqlalchemy.org/en/20/orm/persistence_techniques.html>
+- <https://docs.sqlalchemy.org/en/20/orm/session_basics.html>
+- <https://docs.sqlalchemy.org/en/20/orm/quickstart.html>
+- <https://docs.sqlalchemy.org/en/20/orm/basic_relationships.html>
+- <https://docs.sqlalchemy.org/en/20/faq/performance.html>
+- <https://docs.sqlalchemy.org/en/20/dialects/index.html>
+- <https://docs.sqlalchemy.org/en/20/dialects/postgresql.html>
+- <https://docs.sqlalchemy.org/en/20/orm/relationship_persistence.html>
+
+Dialeto do Redshift, no repositório `sqlalchemy-redshift/sqlalchemy-redshift`:
+
+- <https://github.com/sqlalchemy-redshift/sqlalchemy-redshift/blob/main/README.rst>
+- <https://github.com/sqlalchemy-redshift/sqlalchemy-redshift/blob/main/CHANGES.rst>
+- <https://github.com/sqlalchemy-redshift/sqlalchemy-redshift/blob/main/docs/ddl-compiler.rst>
+- <https://github.com/sqlalchemy-redshift/sqlalchemy-redshift/blob/main/docs/commands.rst>
+- <https://github.com/sqlalchemy-redshift/sqlalchemy-redshift/blob/main/sqlalchemy_redshift/dialect.py>
+- <https://github.com/sqlalchemy-redshift/sqlalchemy-redshift/blob/main/sqlalchemy_redshift/ddl.py>
+- <https://github.com/sqlalchemy-redshift/sqlalchemy-redshift/blob/main/sqlalchemy_redshift/commands.py>
+- <https://sqlalchemy-redshift.readthedocs.io/en/latest/>
+
+Dialeto do DuckDB, no repositório `Mause/duckdb_engine`:
+
+- <https://github.com/Mause/duckdb_engine/blob/main/README.md>
+- <https://github.com/Mause/duckdb_engine/blob/main/duckdb_engine/__init__.py>
+- <https://github.com/Mause/duckdb_engine/blob/main/duckdb_engine/datatypes.py>
+- <https://github.com/Mause/duckdb_engine/blob/main/duckdb_engine/config.py>
+
+## pandas
+
+- <https://pandas.pydata.org/docs/reference/api/pandas.read_sql.html>
+- <https://pandas.pydata.org/docs/reference/api/pandas.read_sql_query.html>
+- <https://pandas.pydata.org/docs/reference/api/pandas.read_sql_table.html>
+- <https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.to_sql.html>
+- <https://pandas.pydata.org/docs/reference/api/pandas.ArrowDtype.html>
+- <https://pandas.pydata.org/docs/user_guide/pyarrow.html>
+
+## PostgreSQL
+
+Semântica de restrições adiáveis, herdada pelos dialetos do DuckDB e do Redshift:
+
+- <https://www.postgresql.org/docs/current/sql-createtable.html>
+- <https://www.postgresql.org/docs/current/sql-set-constraints.html>
 
 ## PyIceberg
 
@@ -503,6 +773,15 @@ Novidades e blog:
 - <https://github.com/aws/amazon-redshift-python-driver>
 - <https://aws-sdk-pandas.readthedocs.io/en/stable/stubs/awswrangler.redshift.copy.html>
 - <https://adbc-drivers.org/drivers/redshift/>
+
+- <https://github.com/aws/amazon-redshift-python-driver/blob/master/README.rst>
+- <https://github.com/aws/amazon-redshift-python-driver/blob/master/redshift_connector/cursor.py>
+- <https://github.com/aws/amazon-redshift-python-driver/blob/master/CHANGELOG.md>
+- <https://github.com/aws/aws-sdk-pandas/blob/main/awswrangler/redshift/_write.py>
+- <https://github.com/aws/aws-sdk-pandas/blob/main/awswrangler/redshift/_read.py>
+- <https://github.com/aws/aws-sdk-pandas/blob/main/awswrangler/redshift/_utils.py>
+- <https://github.com/aws/aws-sdk-pandas/blob/main/awswrangler/redshift/_connect.py>
+- <https://github.com/aws/aws-sdk-pandas/blob/main/awswrangler/_data_types.py>
 
 API JSON do PyPI, consultada para versões e datas de lançamento:
 
