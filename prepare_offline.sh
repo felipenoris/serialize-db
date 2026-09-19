@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Deixa a pasta do projeto autossuficiente para rodar o pacote e os testes num ambiente sem internet.
 #
-# Roda num computador com internet, da mesma plataforma do destino (Linux x86_64). Cria na raiz do
+# Roda num computador com internet. A pasta só serve ao destino quando preparada na mesma plataforma
+# (Linux x86_64 para o SageMaker); em outra plataforma, fica pronta para uso local. Cria na raiz do
 # projeto tudo o que o pacote e os testes precisam em execução:
 #
 #   .python/   interpretador Python gerenciado pelo uv, na versão de .python-version
@@ -29,12 +30,24 @@ rm -rf .venv
 # Resolve e instala o pacote, as dependências de execução e todos os grupos (dev inclusive).
 uv sync --all-groups
 
-# O uv cria links absolutos: .venv/bin/python para o interpretador e .python/cpython-3.13-... para a
-# pasta da versão completa. Links relativos sobrevivem à mudança de caminho da pasta (o `home` de
-# pyvenv.cfg fica desatualizado, e o Python não depende dele quando o link resolve).
-version_dir="$(basename "$(ls -d .python/cpython-3.*.*-linux-x86_64-gnu | head -n 1)")"
+# O uv cria links absolutos: .venv/bin/python para o interpretador e .python/cpython-3.13-<plataforma>
+# para a pasta da versão completa. Links relativos sobrevivem à mudança de caminho da pasta (o `home` de
+# pyvenv.cfg fica desatualizado, e o Python não depende dele quando o link resolve). A pasta da versão
+# completa é a que não é link, em qualquer plataforma; sem ela o script para, em vez de deixar um
+# .venv/bin/python que aponta para o nada.
+version_dir=""
+for candidate in .python/cpython-3.*.*-*; do
+    if [ -d "$candidate" ] && [ ! -L "$candidate" ]; then
+        version_dir="$(basename "$candidate")"
+        break
+    fi
+done
+if [ -z "$version_dir" ]; then
+    echo "prepare_offline.sh: nenhum interpretador em .python/; o uv sync não instalou o Python gerenciado" >&2
+    exit 1
+fi
 ln -sfn "../../.python/$version_dir/bin/python3" .venv/bin/python
-for link in .python/cpython-*-linux-x86_64-gnu; do
+for link in .python/cpython-*; do
     if [ -L "$link" ]; then
         ln -sfn "$version_dir" "$link"
     fi
