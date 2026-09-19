@@ -542,8 +542,9 @@ volta num DataFrame; `unload_to_files` só descarrega.
 - `ANALYZE COMPRESSION` numa amostra real antes de fixar codificações (o `COMPUPDATE` do `COPY` não
   vale para Parquet); `RAW` nas colunas de chave de ordenação, para que a poda por blocos não fique
   mais lenta que a leitura das demais colunas.
-- Evitar `DECIMAL` acima de 19 dígitos e `VARCHAR` maiores que o necessário: colunas largas aumentam
-  a memória por linha nos joins e nos resultados intermediários.
+- Evitar `DECIMAL` acima de 19 dígitos e `VARCHAR` maiores que o necessário: os de 128 bits ocupam o
+  dobro em disco e tornam as consultas mais lentas, e a referência do `CREATE TABLE` alerta para o
+  limite de largura de linha nos resultados intermediários das cargas e das consultas.
 - Manutenção fora do horário de carga: `VACUUM` e `ALTER TABLE` de chaves não rodam juntos.
 
 ### Organização das tabelas para filtros por chave e joins
