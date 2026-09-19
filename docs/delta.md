@@ -682,11 +682,11 @@ con.sql(f"""
 """)                                             # mes=2026-02/data_0.parquet, um por mês, 0,071 s
 
 # Um COPY por mês limita a memória, é reexecutável e aceita as opções de parquet.md.
-for (mes,) in con.sql(f"SELECT DISTINCT mes FROM delta_scan('{uri}') ORDER BY mes").fetchall():
-    Path(f"export_c/mes={mes}").mkdir(parents=True, exist_ok=True)
+for (month,) in con.sql(f"SELECT DISTINCT mes FROM delta_scan('{uri}') ORDER BY mes").fetchall():
+    Path(f"export_c/mes={month}").mkdir(parents=True, exist_ok=True)
     con.sql(f"""
-        COPY (SELECT * EXCLUDE (mes) FROM delta_scan('{uri}') WHERE mes = '{mes}')
-        TO 'export_c/mes={mes}/data_0.parquet' (FORMAT parquet)
+        COPY (SELECT * EXCLUDE (mes) FROM delta_scan('{uri}') WHERE mes = '{month}')
+        TO 'export_c/mes={month}/data_0.parquet' (FORMAT parquet)
     """)                                         # 14 meses em 0,171 s
 ```
 
