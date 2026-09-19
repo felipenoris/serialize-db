@@ -54,8 +54,10 @@ perfis de `~/.aws/config`:
   0.32.x. A página "Writing to S3 with a locking provider" da documentação ainda descreve o DynamoDB
   como obrigatório e `AWS_S3_ALLOW_UNSAFE_RENAME` como saída, e está defasada em relação à 1.6.0.
 - As credenciais vêm de variáveis de ambiente, de `storage_options` ou dos metadados da instância; a
-  documentação afirma que o escritor não usa o `boto3` e não lê `~/.aws/config`. A origem das
-  credenciais no SageMaker Unified Studio fica para a prova de conceito.
+  documentação afirma que o escritor não usa o `boto3` e não lê `~/.aws/config`. No espaço do
+  SageMaker Unified Studio o escritor encontra as credenciais do contêiner do projeto; uma falha
+  com 403 no início da verificação, contornada com `NO_PROXY` em maiúsculas, não se repetiu, e os
+  detalhes estão em [`delta.md`](delta.md).
 - `write_deltalake(data, mode=..., partition_by=..., predicate=..., schema_mode=...)` aceita tabela
   PyArrow, DataFrame pandas ou iterador de `RecordBatch`; `mode="overwrite"` com `predicate` substitui
   só as linhas que casam com o predicado e rejeita dados fora dele; `schema_mode="merge"` acrescenta
@@ -506,7 +508,8 @@ e a saída do Delta para pastas Parquet está em [`delta.md`](delta.md).
 - O log só tem caminhos relativos: o banco inteiro pode ser copiado; nada é registrado por URI
   absoluta.
 - O delta-rs não lê `~/.aws/config`; as credenciais vêm de ambiente, contêiner, IMDS ou
-  `storage_options`, e o S3 precisa das permissões listadas em [`delta.md`](delta.md).
+  `storage_options`, e o S3 precisa das permissões listadas em [`delta.md`](delta.md). No SageMaker
+  Unified Studio a cadeia padrão funciona; a biblioteca exporta `NO_PROXY` por precaução.
 - Um campo JSON é `string` no Delta e texto nos arquivos; `JSON` no DuckDB e `SUPER` no Redshift são
   tipos do motor, aplicados na leitura e na carga ([`schema.md`](schema.md)).
 - SQLGlot transpila funções, não garante suporte; os testes de integração no Redshift continuam.
@@ -529,7 +532,9 @@ marcados, com uma amostra pequena.
 | 8. Operação | Snapshots do banco na periodicidade do processo, `vacuum` mensal com `keep_versions`, compactação antes do snapshot, cópia profunda anual; documentação com `pdoc`; monitoração por `history()`. | Runbook escrito e testes de manutenção passando. |
 
 As etapas 1 e 2 não dependem da AWS e começam antes da etapa 0 terminar; a etapa 3 fecha um
-pipeline completo em disco local; a etapa 4 é a única que exige o cluster.
+pipeline completo em disco local; a etapa 4 é a única que exige o cluster. Os itens de S3 da etapa 0
+foram verificados em 2026-09-19 no espaço do projeto; os itens de Redshift aguardam uma conexão
+Redshift no projeto, que o ambiente ainda não tem.
 A modelagem da biblioteca, com as primitivas de cada módulo e o fluxo de cada caso de uso, está em
 [`serialize-db.md`](serialize-db.md).
 
@@ -598,12 +603,34 @@ intermediárias entre snapshots do banco saem no `vacuum` mensal.
   tabela publicada no Redshift, sem esperar o column mapping do delta-rs. Para tabela que não cabe na
   máquina, a reescrita é o `COPY` do DuckDB mais `create_write_transaction` ([`delta.md`](delta.md)).
 
-## Prova de conceito pendente no S3 e no Redshift
+## Prova de conceito no S3 e no Redshift
 
-- Credenciais do delta-rs dentro do espaço do SageMaker Unified Studio. Se o escritor não as
-  encontrar, a biblioteca passa em `storage_options` as credenciais que o `boto3` resolve
-  (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) e renova o token de sessão.
-- `write_deltalake` no bucket do projeto e `delta_scan` com um secret S3 `credential_chain` no DuckDB.
+Verificado em 2026-09-19 no espaço do SageMaker Unified Studio do projeto, contra o bucket do projeto
+na mesma região, com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1 por `uv run --with`
+(`UV_PYTHON_DOWNLOADS=automatic`, porque o `uv` do espaço não baixa Python por padrão):
+
+- Credenciais do delta-rs: o escritor encontra as credenciais do contêiner do projeto pela cadeia
+  padrão. Uma falha com 403 na chamada de credenciais, no início da verificação, foi contornada com
+  `NO_PROXY` em maiúsculas e depois não se repetiu com o ambiente como encontrado. O caminho por
+  `storage_options` com as credenciais do `boto3` funciona e fica como reserva. O DuckDB
+  (`credential_chain`) e o `boto3` nunca falharam.
+- `write_deltalake` no bucket do projeto (`overwrite` particionado e `append` por commit condicional),
+  `DeltaTable`, `vacuum(dry_run=False)` e `delta_scan` com secret `credential_chain` no DuckDB, com a
+  criptografia SSE-KMS padrão do bucket aplicada sem opção alguma. Tipos lidos pelo DuckDB:
+  `BIGINT`, `INTEGER`, `DECIMAL(18,2)`, `TIMESTAMP` (de `timestamp_ntz`) e `VARCHAR`.
+- Put condicional pelo `boto3` no mesmo bucket: `IfNoneMatch='*'` e `IfMatch=<etag>` aceitos, e a
+  repetição de cada um devolve `PreconditionFailed` 412.
+- Tempo do `delta_scan` no S3: a tabela em [`delta.md`](delta.md); cada consulta pontual por
+  `delta_scan` custa cerca de 0,3 s, o que fixa `CREATE TABLE AS` para as tabelas consultadas mais de
+  uma vez.
+
+Os itens acima são a suíte `tests/test_s3_proof_of_concept.py`, que roda com
+`SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest` em qualquer ambiente com um bucket e
+imprime o relatório de fatos e medições no fim da sessão; sem a raiz, os testes são pulados.
+
+Pendente, porque o projeto ainda não tem conexão Redshift (nenhum cluster ou workgroup serverless
+visível ao papel do projeto):
+
 - `COPY ... MANIFEST` de arquivos do Delta: `DECIMAL` em `INT64`, `timestamp_ntz` em `INT64` de
   microssegundos, lista de colunas e `FILLRECORD` para arquivos anteriores a uma coluna nova.
 - `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE` seguido de `create_write_transaction`, e a leitura
