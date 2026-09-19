@@ -563,6 +563,9 @@ Especificação do catálogo REST do Iceberg (namespaces e commit de várias tab
 2026-09-19:
 
 - <https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml>
+- <https://iceberg.apache.org/spec/>
+- <https://github.com/apache/iceberg/blob/main/format/spec.md>
+- <https://github.com/apache/iceberg-python> (`pyiceberg/catalog/__init__.py` e `pyiceberg/catalog/rest/__init__.py`)
 
 ## AWS Glue Data Catalog
 
@@ -895,6 +898,15 @@ Implementações do protocolo (delta-spark, delta-rs, Delta Kernel) e uso sem Sp
 - <https://github.com/delta-io/delta-rs/issues/4657>
 - <https://github.com/delta-io/delta-kernel-rs>
 - <https://github.com/duckdb/duckdb-delta>
+
+Interoperabilidade entre Delta e Iceberg (UniForm, XTable, convergência dos formatos), consultada em
+2026-09-19:
+
+- <https://docs.delta.io/latest/delta-uniform.html>
+- <https://xtable.apache.org/>
+- <https://xtable.apache.org/docs/how-to>
+- <https://www.databricks.com/blog/databricks-tabular>
+- <https://www.databricks.com/company/newsroom/press-releases/databricks-agrees-acquire-tabular-company-founded-original-creators-apache-iceberg> (404 em 2026-09-19)
 
 ## DuckLake
 

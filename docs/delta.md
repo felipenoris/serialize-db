@@ -155,6 +155,7 @@ de renomear de forma atômica, o que o S3 não tem.
 | Estatísticas por arquivo | JSON na ação `add`. | Colunas dos manifests Avro. |
 | Exclusão por linha | Vetores de exclusão (recurso opcional). | Delete files por posição ou igualdade. |
 | Concorrência | Otimista, por conflito no log. | Otimista, por conflito no catálogo. |
+| Conjunto de tabelas e transação entre tabelas | Nenhum no formato: o esquema é de uma tabela, na ação `metaData`, e o commit é de uma tabela; agrupar é papel de um catálogo externo, ou da pasta e do `MetaData` do SQLAlchemy. | Esquema por tabela no `metadata.json`; o catálogo, que a especificação exige, tem namespaces de vários níveis, e o catálogo REST commita várias tabelas de uma vez em `POST /v1/{prefix}/transactions/commit`. |
 | Escritor Python | `deltalake` (delta-rs). | PyIceberg, com o extra `pyiceberg-core` para transformações de partição. |
 | DuckDB | Leitura, poda, viagem no tempo e `INSERT INTO`. | Leitura pelo caminho do `metadata.json`; escrita só com catálogo REST. |
 | Redshift | Só por `COPY` dos arquivos, ou Spectrum via manifesto simbólico e Glue. | Só por `COPY` dos arquivos, ou Spectrum via Glue e Lake Formation. |

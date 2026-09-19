@@ -218,6 +218,7 @@ do S3.
 | Substituição idempotente do mês | `overwrite` com `predicate`. | `DELETE` e `INSERT` numa transação. | `overwrite` com filtro. | Trocar a lista do mês. |
 | `NOT NULL` e `CHECK` na escrita | Aplicados pelo escritor. | `NOT NULL` aplicado. | Campos `required`. | Só no Arrow. |
 | Evolução de esquema | Adicionar coluna; renomear e remover dependem de column mapping, incompleto no delta-rs. | Adicionar, remover, renomear, promover tipo. | Completa. | Manual por `field_id`. |
+| Conjunto de tabelas e transação entre tabelas | Nenhum no formato: esquema e commit são de uma tabela; o conjunto vive no `MetaData` do SQLAlchemy e nas versões que a biblioteca registra em cada commit. | Schemas com tabelas no catálogo SQL e transação ACID sobre todos eles; o snapshot é do catálogo inteiro. | Namespaces no catálogo; o commit de várias tabelas existe no catálogo REST, não no PyIceberg com SQLite. | Nenhum; o manifesto próprio teria de cobrir o conjunto. |
 | Coluna de partição dentro do arquivo | Não. | Sim. | Sim. | Escolha da biblioteca. |
 | Maturidade | Protocolo de 2019; leitores em Spark, Athena, Polars, DataFusion, DuckDB, dlt. | Especificação 1.0 de 2026-04; leitores DuckDB e MotherDuck. | Amplo; registrável no Glue depois por `register_table`. | Só a biblioteca. |
 
