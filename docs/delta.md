@@ -255,7 +255,10 @@ dias é seguro. Transições de classe de armazenamento só no prefixo `arquivo/
 Criptografia: SSE-S3 é transparente. SSE-KMS exige as permissões de KMS nos dois papéis e, quando a
 política do bucket exige uma chave específica, as opções `aws_server_side_encryption` (`AES256`,
 `aws:kms`, `aws:kms:dsse`), `aws_sse_kms_key_id` e `aws_sse_bucket_key_enabled` em
-`storage_options`; no DuckDB a chave vai na opção `KMS_KEY_ID` do secret S3 (não verificado).
+`storage_options`; no DuckDB a chave vai na opção `KMS_KEY_ID` do secret S3 (não verificado). Quando a
+chave é apenas o padrão do bucket, nenhuma opção é necessária: no bucket do projeto (SSE-KMS com
+bucket key) o delta-rs, o DuckDB e o `boto3` gravaram e leram sem configuração, e cada objeto saiu
+com a chave do projeto.
 
 Região e endpoint: `AWS_REGION` é obrigatória para o delta-rs; `AWS_ENDPOINT_URL` só para serviços
 compatíveis. Se o espaço do SageMaker chega ao S3 por um endpoint de VPC e a política do bucket
@@ -265,10 +268,27 @@ caminho de rede.
 Requisições: um `PutObject` por commit em `_delta_log/` e dezenas de `GET` por leitura, longe dos
 limites por prefixo. O custo é por requisição, o que reforça arquivos grandes e checkpoints em dia.
 
-Verificação na prova de conceito, na ordem em que cada permissão é exercida: `DeltaTable(uri)`
+Verificado em 2026-09-19 no espaço do SageMaker Unified Studio do projeto, com o papel do projeto
+(`datazone_usr_role_...`) e o bucket do projeto, sob o prefixo `dev/` do projeto: `DeltaTable(uri)`
 (`ListBucket` e `GetObject`), `write_deltalake` (`PutObject` condicional e multipart),
-`vacuum(dry_run=False)` (`DeleteObject`), `delta_scan` com um secret `credential_chain` no DuckDB,
-`COPY ... MANIFEST` pelo papel do Redshift e `UNLOAD` no prefixo da tabela.
+`vacuum(dry_run=False)` (`DeleteObject`) e `delta_scan` com um secret `credential_chain` no DuckDB.
+`GetBucketVersioning` e `ListAllMyBuckets` são negados ao papel, o que não afeta a biblioteca.
+`COPY ... MANIFEST` pelo papel do Redshift e `UNLOAD` no prefixo da tabela aguardam uma conexão
+Redshift no projeto.
+
+Credenciais no SageMaker Unified Studio: o espaço fornece as credenciais do papel do projeto pelo
+endpoint de contêiner (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, método `container-role` no `boto3`),
+e o espaço sai para a internet por um proxy HTTP (`HTTP_PROXY`, `HTTPS_PROXY` e `no_proxy` em
+minúsculas, que lista o endpoint de credenciais e os serviços da AWS). O delta-rs encontra o endpoint
+de contêiner, mas seu cliente HTTP lê apenas `NO_PROXY` em maiúsculas: sem ela, a chamada de
+credenciais passa pelo proxy e falha com `Non-success status from HTTP credential provider`
+(`StatusCode(403)`), e `write_deltalake` aborta. Com `NO_PROXY` igual a `no_proxy` (ou com
+`AWS_CONTAINER_CREDENTIALS_FULL_URI`), a cadeia padrão funciona, sem `storage_options`. A
+alternativa sem tocar no ambiente é passar em `storage_options` as credenciais temporárias que o
+`boto3` resolve (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`),
+renovando-as a cada abertura da tabela, porque expiram. O DuckDB com `PROVIDER credential_chain`
+e o `boto3` não sofrem do problema. A biblioteca exporta `NO_PROXY` a partir de `no_proxy` ao
+iniciar, quando só a minúscula existe, e mantém o caminho por `storage_options` como reserva.
 
 ## Tipos suportados
 
@@ -906,8 +926,9 @@ O que as medições sustentam:
   consultas pontuais foram dez vezes mais rápidas na tabela, e no S3 cada `delta_scan` refaz
   requisições), joins repetidos com a mesma tabela grande, e quando o pipeline precisa de índice ou
   ordenação física. A regra prática: `CREATE TABLE AS` com o filtro de meses para as tabelas de
-  fato do pipeline, view para as dimensões e para leituras únicas. A medição no S3 é a que decide,
-  e fica para a prova de conceito.
+  fato do pipeline, view para as dimensões e para leituras únicas. A medição no S3, abaixo, confirma
+  a regra: uma consulta pontual por `delta_scan` custa cerca de 0,3 s no S3 e menos de 1 ms na
+  tabela materializada, e materializar os 300.000 registros custou o mesmo que uma agregação.
 - Um arquivo por mês por tabela basta enquanto o mês couber em um ou dois arquivos de 100 MB a 1 GB,
   que é a faixa que o DuckDB e o Redshift preferem. `optimize.compact(partition_filters=...)` junta
   arquivos pequenos de um mês; `optimize.z_order(["id_cliente"])` reordena dentro do mês quando os
@@ -917,6 +938,33 @@ O que as medições sustentam:
 - `PIN_SNAPSHOT` e uma única `DeltaTable` por tabela e execução evitam reler o log a cada consulta.
 - No S3, o custo dominante é o número de requisições: poucos arquivos grandes, checkpoints em dia e
   `delta.checkpointInterval` baixo o bastante para o log entre checkpoints ficar curto.
+
+Medições no S3, em 2026-09-19, do espaço do SageMaker Unified Studio (4 threads) para o bucket do
+projeto na mesma região, com 300.010 linhas em dois meses, 7,6 MB em três arquivos, deltalake 1.6.4
+e DuckDB 1.5.5; os tempos medem a latência do S3 e o custo de reler o log, não CPU:
+
+| Operação | Tempo |
+| --- | --- |
+| `write_deltalake` de 300.000 linhas, `overwrite` particionado por `mes` | 1,1 s |
+| `write_deltalake` de 10 linhas, `append` (um commit condicional) | 0,5 s |
+| `to_pyarrow_table` da tabela inteira pelo delta-rs | 0,44 s |
+| Agregação por `delta_scan`, primeira leitura | 0,77 s |
+| A mesma agregação, leituras seguintes | 0,3 s |
+| A mesma agregação com filtro por `mes` (`Scanning Files: 1/3`) | 0,28 s |
+| A mesma agregação por `read_parquet` com glob e partição Hive | 0,06 s |
+| Materializar a tabela inteira com `CREATE TABLE AS` de `delta_scan` | 0,29 s |
+| A mesma agregação na tabela materializada | 0,002 s |
+| 20 consultas pontuais (`id_operacao`): `delta_scan` | 6,0 s |
+| As mesmas com filtro por `mes` | 6,1 s |
+| As mesmas por `ATTACH ... (PIN_SNAPSHOT true)` | 3,1 s |
+| As mesmas por `read_parquet` com glob | 1,3 s |
+| As mesmas na tabela materializada | 0,013 s |
+| `vacuum(dry_run=False)` de cinco arquivos | 0,56 s |
+
+Cada `delta_scan` no S3 relê o log antes de ler os dados, e é isso que separa os 0,3 s por consulta
+pontual dos 0,065 s do `read_parquet`; `PIN_SNAPSHOT` corta a releitura pela metade, não a elimina.
+A ingestão no motor DuckDB fica então em dois modos: `CREATE TABLE AS` com filtro de meses para toda
+tabela que o pipeline consulta mais de uma vez, view por `delta_scan` para leitura única.
 
 ## Manutenção e retenção
 

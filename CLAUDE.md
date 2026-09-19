@@ -154,7 +154,7 @@ matching group.
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, SQL generation from a statement for both dialects (`compile`, dialect objects and their paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`) with self-contained examples, the `Numeric` float conversion of both dialects, what the Redshift dialect, the DuckDB dialect and Parquet files each support, and the role of each part of SQLAlchemy in the project: the verdict per part, the recommendation without the compatibility premise (own contract with Arrow as the canonical form, hand-written SQL validated by SQLGlot) and the gradual replacement of runtime dialect compilation by generated SQL text (`param`, `prefixed`, `render`, `write_sql_files`, `execute`) with the compiler behaviours the generation works around. |
 | `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), the protocol implementations (delta-spark, delta-rs, Delta Kernel) with the delta-rs gaps and their effect on the pipeline, S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules with the measured rewrite for rename and drop (one commit, the memory of the two paths, the partial-overwrite trap) and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the export of the current snapshot back to Parquet folders by month (copy by the log versus rewrite, with the measurements), the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
-| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, kept for compatibility with the pipeline and replaced gradually at runtime by generated SQL text, no Alembic) with the reasons and the maturity assessment of Delta against Iceberg with the re-evaluation trigger, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
+| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, kept for compatibility with the pipeline and replaced gradually at runtime by generated SQL text, no Alembic) with the reasons and the maturity assessment of Delta against Iceberg with the re-evaluation trigger, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept on S3 and Redshift: the S3 items verified on 2026-09-19 from the SageMaker space, the Redshift items pending a connection. It records the local proof of concept of 2026-09-19. |
 | `docs/serialize-db.md` | The library's modeling: the features, the library's own metadata (commit keys `serialize_db_execution_id`, `serialize_db_input_versions`, `serialize_db_snapshot`; `_serialize_db/snapshots.json`; `serialize_db_publications`), the primitives of each module (`contract`, `sql`, `delta`, `engine.duckdb`, `engine.redshift`, `execution`) with the proposed signatures, and the flow of each use case (initial load, monthly run on DuckDB and on Redshift, publication to clients, month correction, schema evolution, database snapshot and maintenance, export to Parquet folders, copy and development environment, replacement of the runtime dialect by generated SQL). |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
@@ -201,7 +201,11 @@ Each fact below is detailed in the file named at the end of its line.
   atomic commits, and it answers the open question in `docs/guia.md`. `docs/estrategia.md`
 - `deltalake` 1.6.0 (2026-05-19) removed the DynamoDB lock store; S3 conditional put is the default
   commit mode. The delta-rs docs page on S3 locking is stale. The writer does not read
-  `~/.aws/config`; credentials on SageMaker are a proof-of-concept item. `docs/estrategia.md`
+  `~/.aws/config`. In the SageMaker Unified Studio space it finds the container credentials only
+  with `NO_PROXY` in upper case (the space sets only `no_proxy`, and the delta-rs HTTP client sends
+  the credential call through the proxy, which answers 403); `storage_options` with the `boto3`
+  credentials is the fallback. DuckDB `credential_chain` and `boto3` need no change.
+  `docs/delta.md`, `docs/estrategia.md`
 - Delta data files do not contain the partition column (it lives in the `add` action), so a
   partition key must derive from a column in the file for Redshift `COPY`. DuckLake keeps identity
   and source columns inside the files. `docs/estrategia.md`
@@ -244,8 +248,11 @@ Each fact below is detailed in the file named at the end of its line.
   (`Scanning Files: 0/12`). `docs/delta.md`
 - On local disk, 3,000,000 rows in 12 files: `delta_scan` aggregates in 0.010 s against 0.006 s for
   `read_parquet` and 0.007 s for a materialized table; 20 point queries took 0.05 s through
-  `delta_scan` and under 0.01 s on a table. Materialize only tables queried repeatedly; S3 numbers
-  are pending. `docs/delta.md`
+  `delta_scan` and under 0.01 s on a table. On S3 from the SageMaker space (300,010 rows, 3 files):
+  `delta_scan` aggregates in 0.3 s (0.77 s cold) against 0.06 s for `read_parquet` and 0.002 s on a
+  materialized table, which took 0.29 s to build; 20 point queries took 6.0 s through `delta_scan`,
+  3.1 s through `ATTACH ... PIN_SNAPSHOT`, 1.3 s through `read_parquet` and 0.013 s on a table.
+  Each `delta_scan` rereads the log. Materialize every table queried more than once. `docs/delta.md`
 - delta-rs log cleanup is automatic at checkpoint time and removes log files older than
   `delta.logRetentionDuration` (30 days by default): with `interval 0 days` version 0 became
   unreadable after five commits. `vacuum(keep_versions=[...])` preserves the files of chosen
@@ -379,9 +386,11 @@ No library code exists beyond the models: `pyproject.toml` declares no dependenc
   `schema/<tabela>.delta.json`, `.duckdb.sql` and `.redshift.sql` files compared by a test, the
   `serialize_db.sql` primitives with the generated `sql/<nome>.duckdb.sql` and `.redshift.sql` files
   compared by a test, then the Delta layer functions the stage table lists.
-- Stage 0, the proof of concept on AWS, needs the user's SageMaker space, bucket and Redshift role
-  and settles the pending questions below. Stage 4, the Redshift engine, is the only one that needs
-  the cluster.
+- Stage 0, the proof of concept on AWS: the S3 items (delta-rs credentials, `write_deltalake`,
+  `delta_scan`, `vacuum`, conditional put, S3 timings) were verified on 2026-09-19 from the
+  SageMaker space and are recorded in `docs/delta.md` and `docs/estrategia.md`. The Redshift items
+  wait for a Redshift connection in the project, which the environment does not have yet (the user
+  confirmed on 2026-09-19). Stage 4, the Redshift engine, is the only one that needs the cluster.
 - The proposed API (`Database`, `Execution` with `ingest`, `audit`, `publish`, `publish_redshift`,
   `previous_months`, `sandbox`; modules `contract`, `sql`, `delta`, `engine.duckdb`,
   `engine.redshift`, `execution`) was accepted with PR #5, is laid out primitive by primitive in
@@ -426,16 +435,46 @@ duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 and redshift_connector 2.1.16. T
 rows of `operacoes` with the columns `id_operacao`, `data_ref`, `id_cliente`, `valor` and
 `descricao`. The Redshift statements were compiled only; nothing ran against a cluster.
 
-The proof of concept in `docs/estrategia.md` ran on 2026-09-19 on macOS arm64 with Python 3.13,
+The S3 proof of concept ran on 2026-09-19 inside the SageMaker Unified Studio space (see the
+environment section below) with Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5 and PyArrow 25.0.1
+through `UV_PYTHON_DOWNLOADS=automatic uv run --no-project --python 3.13 --with ...` and
+`NO_PROXY="$no_proxy"` exported; the same scripts also passed on the space's system Python 3.12.13
+with deltalake 1.5.0 and DuckDB 1.5.4. The test table is left at
+`s3://awsds-sandbox-smus-projects/dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/dev/serialize-db-poc/operacoes`
+and can be deleted.
+
+The local proof of concept in `docs/estrategia.md` ran on 2026-09-19 on macOS arm64 with Python 3.13,
 deltalake 1.6.4, DuckDB 1.5.5 with the `delta`, `ducklake` and `iceberg` extensions (ducklake
 `d8a1881e`, metadata version 1.0), PyIceberg 0.12.0 with the `sql-sqlite` and `pyiceberg-core`
 extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through `uv run --with` in the scratchpad, with 11 DuckDB
 threads and the files in the page cache. Nothing ran against S3 or Redshift. The Python examples
 added to every document on 2026-09-19 ran under the same pinned versions.
 
+## The SageMaker Unified Studio environment, as observed on 2026-09-19
+
+- Domain `dzd-d8yrvx1ko7im6o`, project `eighth-experimentation` (`avhvbqn37ty7m8`), account
+  892278726726, region `us-west-2`, space `my-code-v4` (Code Editor, 4 vCPUs). The `sagemaker_studio`
+  package's `Project()` gives `iam_role`, `kms_key_arn`, `s3.root` and `connections`.
+- Credentials: the container endpoint (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`; `boto3` reports
+  `container-role`) assumes `datazone_usr_role_avhvbqn37ty7m8_5hkjdsy3umpi1c`. `~/.aws/config` has a
+  `default` profile with `credential_source = EcsContainer` and a `DomainExecutionRoleCreds` profile.
+- Project bucket `awsds-sandbox-smus-projects`, prefix `dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/`: `dev/`
+  is the working area (`s3.root`), `shared/` is the s3fs mount at `$HOME/shared`. SSE-KMS by default
+  with bucket key and the project KMS key. The role cannot `ListAllMyBuckets` or
+  `GetBucketVersioning`. A second S3 connection, `sandbox-lake.s3`, points at
+  `s3://awsds-sandbox-lake/sso-group-data-scientists/` through S3 Access Grants.
+- Connections: S3, Athena, Glue Spark, Spark Connect, Lakehouse and workflows. No Redshift
+  connection, cluster or serverless workgroup.
+- Network: outbound HTTP goes through `proxy.awsds.internal:3128`; only lower-case `no_proxy` is
+  set. `uv` reaches PyPI through the proxy but downloads Python only with
+  `UV_PYTHON_DOWNLOADS=automatic`. System Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0,
+  DuckDB 1.5.4, PyArrow 21.0.0 and redshift_connector 2.1.10 preinstalled.
+- `git` has no GitHub credential and `gh` is absent: commits stay local until the user pushes.
+
 ## Questions the official documentation does not answer
 
-The documents mark these as pending the proof of concept.
+The documents mark these as pending the proof of concept. All of them need Redshift, which the
+project does not have yet; the S3 questions were answered on 2026-09-19.
 
 - Whether `COPY` from Parquet accepts a column list. `awswrangler` emits
   `COPY tabela (colunas) ... FORMAT AS PARQUET`, while the `COPY` reference describes the column list
@@ -449,8 +488,6 @@ The documents mark these as pending the proof of concept.
   that registers `UNLOAD` files in the Delta log (`register_file` in `docs/delta.md`).
 - Whether `FILLRECORD` lets `COPY` from Parquet load older files that lack columns appended later
   to the schema, which both Delta and DuckLake produce on evolution.
-- Which credential sources the delta-rs writer finds inside a SageMaker Unified Studio space.
-
 One gap is already understood and needs a decision rather than a test: `sqlalchemy-redshift` compiles
 `Text` as `TEXT`, which Redshift stores as `VARCHAR(256)`, so the `VARCHAR(65535)` of the contract
 needs `String(65535)` or a `@compiles(Text, "redshift")` rule.
