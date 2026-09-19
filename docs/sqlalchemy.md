@@ -409,6 +409,386 @@ tabela, e `fetch_arrow_table()` e `fetch_record_batch()` estão obsoletos em fav
 `to_arrow_table()` e `to_arrow_reader()`. O leitor é consumido antes de qualquer outro comando na
 mesma conexão, inclusive o commit do fim do bloco; depois disso ele devolve zero lotes, sem erro.
 
+## SQL gerado a partir de um comando
+
+Todo comando do SQLAlchemy, DDL ou DML, vira texto por `compile()`, sem abrir conexão. O resultado
+é um `Compiled`: `str(compiled)` é o SQL, `compiled.params` traz os valores dos parâmetros e
+`compiled.positiontup` a ordem deles nos dialetos posicionais. É assim que os documentos mostram
+comandos do Redshift sem cluster e que uma depuração confere o texto que o DuckDB recebe. Os
+exemplos desta seção são autocontidos e rodaram com SQLAlchemy 2.0.54, duckdb_engine 0.17.0,
+sqlalchemy-redshift 1.0.0, redshift_connector 2.1.16 e DuckDB 1.5.5, por
+`uv run --no-project --python 3.13 --with ...`.
+
+### Dialetos e estilos de parâmetro
+
+| Dialeto passado a `compile()` | Marcador | `positiontup` | Quando usar |
+| --- | --- | --- | --- |
+| Nenhum (`str(stmt)` ou `stmt.compile()`) | `:mes_1` | `None` | SQL genérico do dialeto padrão; renderiza construções que um banco pode não ter. |
+| `duckdb_engine.Dialect()` | `%(mes_1)s` | `None` | Sintaxe do DuckDB sem engine; o marcador não é o da execução. |
+| `create_engine("duckdb:///:memory:").dialect`, ou `stmt.compile(engine)` | `$1` | lista | O que o DuckDB recebe: o `paramstyle` `numeric_dollar` só é definido quando o engine carrega o DBAPI. |
+| `RedshiftDialect_redshift_connector()` | `%s` | lista | O que o `redshift_connector` envia (`paramstyle` `format`). |
+| `create_mock_engine(url, executor).dialect` | o do engine real | | DDL completo de `create_all` sem conexão. |
+
+`compile_kwargs={"literal_binds": True}` embute os valores no texto, para ler ou colar num cliente
+SQL. A documentação restringe o recurso a tipos simples e avisa que a conversão não é segura contra
+entrada não confiável: o texto com valores embutidos é para depuração, não para execução.
+
+### DDL por dialeto
+
+```python
+"""Gera o DDL de um modelo para o DuckDB e para o Redshift, sem conexão com banco."""
+import datetime as dt
+import decimal
+
+import duckdb_engine
+import sqlalchemy as sa
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.schema import AddConstraint, CreateTable, DropConstraint, DropTable, SetColumnComment, SetTableComment
+from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Operacao(Base):
+    __tablename__ = "operacoes"
+    __table_args__ = (
+        sa.PrimaryKeyConstraint("id_operacao", "data_ref", name="operacoes_pk"),
+        sa.CheckConstraint("valor >= 0", name="ck_operacoes_valor"),
+        {"comment": "Operações do mês"},
+    )
+    id_operacao: Mapped[int] = mapped_column(sa.BigInteger, autoincrement=False)
+    data_ref: Mapped[dt.date]
+    id_cliente: Mapped[int] = mapped_column(sa.BigInteger, comment="Chave do cliente")
+    valor: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(18, 2))
+    descricao: Mapped[str | None] = mapped_column(sa.String(200))
+    mes: Mapped[str] = mapped_column(sa.String(7))
+
+
+DIALECTS = {"duckdb": duckdb_engine.Dialect(), "redshift": RedshiftDialect_redshift_connector()}
+
+
+def sql(command, dialect_name: str) -> str:
+    """Texto SQL de um comando no dialeto pedido, com os valores embutidos."""
+    compiled = command.compile(dialect=DIALECTS[dialect_name], compile_kwargs={"literal_binds": True})
+    return str(compiled).strip()
+
+
+table = Operacao.__table__
+check = next(c for c in table.constraints if isinstance(c, sa.CheckConstraint))
+for name in DIALECTS:
+    print(f"-- {name}")
+    print(sql(CreateTable(table, if_not_exists=True), name))
+    print(sql(SetTableComment(table), name))
+    print(sql(SetColumnComment(table.c.id_cliente), name))
+    print(sql(DropConstraint(check), name))
+    print(sql(AddConstraint(check), name))
+    print(sql(DropTable(table, if_exists=True), name))
+```
+
+Saída:
+
+```
+-- duckdb
+CREATE TABLE IF NOT EXISTS operacoes (
+    id_operacao BIGINT NOT NULL,
+    data_ref DATE NOT NULL,
+    id_cliente BIGINT NOT NULL,
+    valor NUMERIC(18, 2) NOT NULL,
+    descricao VARCHAR(200),
+    mes VARCHAR(7) NOT NULL,
+    CONSTRAINT operacoes_pk PRIMARY KEY (id_operacao, data_ref),
+    CONSTRAINT ck_operacoes_valor CHECK (valor >= 0)
+)
+COMMENT ON TABLE operacoes IS 'Operações do mês'
+COMMENT ON COLUMN operacoes.id_cliente IS 'Chave do cliente'
+ALTER TABLE operacoes DROP CONSTRAINT ck_operacoes_valor
+ALTER TABLE operacoes ADD CONSTRAINT ck_operacoes_valor CHECK (valor >= 0)
+DROP TABLE IF EXISTS operacoes
+-- redshift
+CREATE TABLE IF NOT EXISTS operacoes (
+    id_operacao BIGINT NOT NULL,
+    data_ref DATE NOT NULL,
+    id_cliente BIGINT NOT NULL,
+    valor NUMERIC(18, 2) NOT NULL,
+    descricao VARCHAR(200),
+    mes VARCHAR(7) NOT NULL,
+    CONSTRAINT operacoes_pk PRIMARY KEY (id_operacao, data_ref)
+)
+COMMENT ON TABLE operacoes IS 'Operações do mês'
+COMMENT ON COLUMN operacoes.id_cliente IS 'Chave do cliente'
+ALTER TABLE operacoes DROP CONSTRAINT ck_operacoes_valor
+ALTER TABLE operacoes ADD CONSTRAINT ck_operacoes_valor CHECK (valor >= 0)
+DROP TABLE IF EXISTS operacoes
+```
+
+O `CREATE TABLE` do dialeto do Redshift omite o `CHECK`, mas `AddConstraint` do mesmo
+`CheckConstraint` gera o `ALTER TABLE ... ADD CONSTRAINT ... CHECK`, que o Redshift recusaria: a
+compilação confere o que o dialeto sabe renderizar, não o que o servidor aceita.
+`if_not_exists=True` e `if_exists=True` entram no texto dos dois dialetos.
+
+### Sequência completa do create_all
+
+`create_mock_engine` cria um engine que entrega cada comando a uma função em vez de executá-lo.
+`metadata.create_all` e `drop_all` passam por ele na ordem de dependência, com `COMMENT ON` e
+`CREATE INDEX` em comandos separados; `checkfirst=False` é obrigatório, porque o engine simulado não
+consulta o catálogo.
+
+```python
+"""Imprime a sequência completa de DDL que create_all emitiria, por dialeto, com um engine simulado."""
+import sqlalchemy as sa
+
+metadata = sa.MetaData()
+operations = sa.Table(
+    "operacoes", metadata,
+    sa.Column("id_operacao", sa.BigInteger, primary_key=True, autoincrement=False),
+    sa.Column("data_ref", sa.Date, primary_key=True),
+    sa.Column("id_cliente", sa.BigInteger, nullable=False, comment="Chave do cliente"),
+    sa.Column("valor", sa.Numeric(18, 2), nullable=False),
+    sa.Column("descricao", sa.String(200)),
+    sa.Column("mes", sa.String(7), nullable=False),
+    comment="Operações do mês",
+)
+sa.Index("ix_operacoes_mes", operations.c.mes)
+
+for url in ("duckdb://", "redshift+redshift_connector://"):
+    def dump(command, *multiparams, **params):
+        print(str(command.compile(dialect=mock.dialect)).strip() + ";")
+    mock = sa.create_mock_engine(url, dump)
+    print(f"-- {url}")
+    metadata.create_all(mock, checkfirst=False)
+    metadata.drop_all(mock, checkfirst=False)
+```
+
+Saída:
+
+```
+-- duckdb://
+CREATE TABLE operacoes (
+    id_operacao BIGINT NOT NULL,
+    data_ref DATE NOT NULL,
+    id_cliente BIGINT NOT NULL,
+    valor NUMERIC(18, 2) NOT NULL,
+    descricao VARCHAR(200),
+    mes VARCHAR(7) NOT NULL,
+    PRIMARY KEY (id_operacao, data_ref)
+);
+CREATE INDEX ix_operacoes_mes ON operacoes (mes);
+COMMENT ON TABLE operacoes IS 'Operações do mês';
+COMMENT ON COLUMN operacoes.id_cliente IS 'Chave do cliente';
+DROP TABLE operacoes;
+-- redshift+redshift_connector://
+CREATE TABLE operacoes (
+    id_operacao BIGINT NOT NULL,
+    data_ref DATE NOT NULL,
+    id_cliente BIGINT NOT NULL,
+    valor NUMERIC(18, 2) NOT NULL,
+    descricao VARCHAR(200),
+    mes VARCHAR(7) NOT NULL,
+    PRIMARY KEY (id_operacao, data_ref)
+);
+CREATE INDEX ix_operacoes_mes ON operacoes (mes);
+COMMENT ON TABLE operacoes IS 'Operações do mês';
+COMMENT ON COLUMN operacoes.id_cliente IS 'Chave do cliente';
+DROP TABLE operacoes;
+```
+
+O `CREATE INDEX` sai também para o Redshift, que não tem índices. `Index(...).ddl_if(dialect="duckdb")`
+e `CheckConstraint(...).ddl_if(dialect="duckdb")` restringem o comando a um dialeto: com os dois, o
+`create_all` simulado do Redshift emitiu só o `CREATE TABLE` com a chave primária.
+
+### INSERT, UPDATE, DELETE e SELECT por dialeto
+
+```python
+"""Gera o SQL de insert, update, delete e select para o DuckDB e para o Redshift, com e sem valores embutidos."""
+import datetime as dt
+import decimal
+
+import duckdb_engine
+import sqlalchemy as sa
+from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
+
+metadata = sa.MetaData()
+operations = sa.Table(
+    "operacoes", metadata,
+    sa.Column("id_operacao", sa.BigInteger, primary_key=True, autoincrement=False),
+    sa.Column("data_ref", sa.Date, primary_key=True),
+    sa.Column("id_cliente", sa.BigInteger, nullable=False),
+    sa.Column("valor", sa.Numeric(18, 2), nullable=False),
+    sa.Column("descricao", sa.String(200)),
+    sa.Column("mes", sa.String(7), nullable=False),
+)
+staging = operations.to_metadata(sa.MetaData(), name="staging_operacoes")
+
+DIALECTS = {"duckdb": duckdb_engine.Dialect(), "redshift": RedshiftDialect_redshift_connector()}
+
+
+def show(title: str, command, **compile_kwargs) -> None:
+    """Imprime o comando compilado em cada dialeto; sem literal_binds, imprime também os parâmetros."""
+    print(f"== {title}")
+    for name, dialect in DIALECTS.items():
+        compiled = command.compile(dialect=dialect, compile_kwargs=compile_kwargs)
+        print(f"-- {name}: {' '.join(str(compiled).split())}")
+        if not compile_kwargs.get("literal_binds"):
+            print(f"   params={compiled.params} positiontup={compiled.positiontup}")
+
+
+row = {"id_operacao": 1, "data_ref": dt.date(2026, 8, 1), "id_cliente": 100,
+       "valor": decimal.Decimal("10.50"), "descricao": None, "mes": "2026-08"}
+row2 = {**row, "id_operacao": 2, "valor": decimal.Decimal("4.25"), "descricao": "estorno"}
+
+show("insert de uma linha", sa.insert(operations).values(**row))
+show("insert de uma linha, valores embutidos", sa.insert(operations).values(**row), literal_binds=True)
+show("insert multi-linha", sa.insert(operations).values([row, row2]), literal_binds=True)
+show("insert para executemany (valores só na execução)", sa.insert(operations))
+show("insert ... select", sa.insert(operations).from_select(
+    list(operations.columns.keys()), sa.select(staging).where(staging.c.mes == "2026-08")), literal_binds=True)
+show("update", sa.update(operations).where(operations.c.id_operacao == 1).values(descricao="ajustada"), literal_binds=True)
+show("delete", sa.delete(operations).where(operations.c.mes == "2026-08"), literal_binds=True)
+query = (sa.select(operations.c.id_cliente, sa.func.sum(operations.c.valor).label("total"))
+         .where(operations.c.mes == "2026-08").group_by(operations.c.id_cliente).order_by(operations.c.id_cliente))
+show("select com agregação", query, literal_binds=True)
+in_query = sa.select(operations.c.id_operacao).where(operations.c.id_cliente.in_([100, 200]))
+show("select com IN, compilação normal", in_query)
+show("select com IN, render_postcompile", in_query, render_postcompile=True)
+show("select com IN, valores embutidos", in_query, literal_binds=True)
+raw = sa.text("SELECT count(*) FROM operacoes WHERE data_ref >= :start").bindparams(start=dt.date(2026, 8, 1))
+show("text com bindparams", raw)
+show("text com bindparams, valores embutidos", raw, literal_binds=True)
+print("== sem dialeto: str(query)")
+print(" ".join(str(query).split()))
+```
+
+Saída:
+
+```
+== insert de uma linha
+-- duckdb: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (%(id_operacao)s, %(data_ref)s, %(id_cliente)s, %(valor)s, %(descricao)s, %(mes)s)
+   params={'id_operacao': 1, 'data_ref': datetime.date(2026, 8, 1), 'id_cliente': 100, 'valor': Decimal('10.50'), 'descricao': None, 'mes': '2026-08'} positiontup=None
+-- redshift: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (%s, %s, %s, %s, %s, %s)
+   params={'id_operacao': 1, 'data_ref': datetime.date(2026, 8, 1), 'id_cliente': 100, 'valor': Decimal('10.50'), 'descricao': None, 'mes': '2026-08'} positiontup=['id_operacao', 'data_ref', 'id_cliente', 'valor', 'descricao', 'mes']
+== insert de uma linha, valores embutidos
+-- duckdb: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (1, '2026-08-01', 100, 10.50, NULL, '2026-08')
+-- redshift: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (1, '2026-08-01', 100, 10.50, NULL, '2026-08')
+== insert multi-linha
+-- duckdb: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (1, '2026-08-01', 100, 10.50, NULL, '2026-08'), (2, '2026-08-01', 100, 4.25, 'estorno', '2026-08')
+-- redshift: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (1, '2026-08-01', 100, 10.50, NULL, '2026-08'), (2, '2026-08-01', 100, 4.25, 'estorno', '2026-08')
+== insert para executemany (valores só na execução)
+-- duckdb: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (%(id_operacao)s, %(data_ref)s, %(id_cliente)s, %(valor)s, %(descricao)s, %(mes)s)
+   params={'id_operacao': None, 'data_ref': None, 'id_cliente': None, 'valor': None, 'descricao': None, 'mes': None} positiontup=None
+-- redshift: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (%s, %s, %s, %s, %s, %s)
+   params={'id_operacao': None, 'data_ref': None, 'id_cliente': None, 'valor': None, 'descricao': None, 'mes': None} positiontup=['id_operacao', 'data_ref', 'id_cliente', 'valor', 'descricao', 'mes']
+== insert ... select
+-- duckdb: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) SELECT staging_operacoes.id_operacao, staging_operacoes.data_ref, staging_operacoes.id_cliente, staging_operacoes.valor, staging_operacoes.descricao, staging_operacoes.mes FROM staging_operacoes WHERE staging_operacoes.mes = '2026-08'
+-- redshift: INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) SELECT staging_operacoes.id_operacao, staging_operacoes.data_ref, staging_operacoes.id_cliente, staging_operacoes.valor, staging_operacoes.descricao, staging_operacoes.mes FROM staging_operacoes WHERE staging_operacoes.mes = '2026-08'
+== update
+-- duckdb: UPDATE operacoes SET descricao='ajustada' WHERE operacoes.id_operacao = 1
+-- redshift: UPDATE operacoes SET descricao='ajustada' WHERE operacoes.id_operacao = 1
+== delete
+-- duckdb: DELETE FROM operacoes WHERE operacoes.mes = '2026-08'
+-- redshift: DELETE FROM operacoes WHERE operacoes.mes = '2026-08'
+== select com agregação
+-- duckdb: SELECT operacoes.id_cliente, sum(operacoes.valor) AS total FROM operacoes WHERE operacoes.mes = '2026-08' GROUP BY operacoes.id_cliente ORDER BY operacoes.id_cliente
+-- redshift: SELECT operacoes.id_cliente, sum(operacoes.valor) AS total FROM operacoes WHERE operacoes.mes = '2026-08' GROUP BY operacoes.id_cliente ORDER BY operacoes.id_cliente
+== select com IN, compilação normal
+-- duckdb: SELECT operacoes.id_operacao FROM operacoes WHERE operacoes.id_cliente IN (__[POSTCOMPILE_id_cliente_1])
+   params={'id_cliente_1': [100, 200]} positiontup=None
+-- redshift: SELECT operacoes.id_operacao FROM operacoes WHERE operacoes.id_cliente IN (__[POSTCOMPILE_id_cliente_1])
+   params={'id_cliente_1': [100, 200]} positiontup=['id_cliente_1']
+== select com IN, render_postcompile
+-- duckdb: SELECT operacoes.id_operacao FROM operacoes WHERE operacoes.id_cliente IN (%(id_cliente_1_1)s, %(id_cliente_1_2)s)
+   params={'id_cliente_1_1': 100, 'id_cliente_1_2': 200} positiontup=None
+-- redshift: SELECT operacoes.id_operacao FROM operacoes WHERE operacoes.id_cliente IN (%s, %s)
+   params={'id_cliente_1_1': 100, 'id_cliente_1_2': 200} positiontup=['id_cliente_1_1', 'id_cliente_1_2']
+== select com IN, valores embutidos
+-- duckdb: SELECT operacoes.id_operacao FROM operacoes WHERE operacoes.id_cliente IN (100, 200)
+-- redshift: SELECT operacoes.id_operacao FROM operacoes WHERE operacoes.id_cliente IN (100, 200)
+== text com bindparams
+-- duckdb: SELECT count(*) FROM operacoes WHERE data_ref >= %(start)s
+   params={'start': datetime.date(2026, 8, 1)} positiontup=None
+-- redshift: SELECT count(*) FROM operacoes WHERE data_ref >= %s
+   params={'start': datetime.date(2026, 8, 1)} positiontup=['start']
+== text com bindparams, valores embutidos
+-- duckdb: SELECT count(*) FROM operacoes WHERE data_ref >= '2026-08-01'
+-- redshift: SELECT count(*) FROM operacoes WHERE data_ref >= '2026-08-01'
+== sem dialeto: str(query)
+SELECT operacoes.id_cliente, sum(operacoes.valor) AS total FROM operacoes WHERE operacoes.mes = :mes_1 GROUP BY operacoes.id_cliente ORDER BY operacoes.id_cliente
+```
+
+O que a saída mostra:
+
+- Com `literal_binds`, o texto é o mesmo nos dois dialetos para esses comandos. As diferenças entre
+  os bancos estão em construções específicas (`RETURNING`, `ON CONFLICT`, `LIMIT` compilado como
+  literal no dialeto do Redshift), tratadas na
+  [seção de statements](#statements-de-insert-update-delete-e-select) e na
+  [seção de suporte](#suporte-a-redshift-duckdb-e-arquivos-parquet).
+- `insert(operations)` sem `values` é o comando do `executemany`: um marcador por coluna e `params`
+  todos `None`. Os valores só existem na execução, e o log do engine, abaixo, é o lugar de vê-los.
+- `IN` com lista compila como `__[POSTCOMPILE_id_cliente_1]`, um marcador expandido na execução.
+  `render_postcompile=True` mostra a expansão com um parâmetro por item; `literal_binds` liga
+  `render_postcompile` sozinho.
+- `text(...).bindparams(...)` também aceita `literal_binds`. A documentação registra que um
+  `bindparam()` sem valor não pode ser embutido.
+- `str(query)` sem dialeto usa `:mes_1`, o estilo do dialeto padrão.
+
+### O SQL executado de fato
+
+`create_engine(..., echo=True)` registra cada comando enviado, com os parâmetros e as reescritas do
+próprio SQLAlchemy, como o `insertmanyvalues` que junta as linhas do `executemany` num só `INSERT`:
+
+```python
+"""Mostra o SQL executado de fato por um engine DuckDB em memória, com echo=True e com compile(bind=engine)."""
+import datetime as dt
+import decimal
+
+import sqlalchemy as sa
+
+metadata = sa.MetaData()
+operations = sa.Table(
+    "operacoes", metadata,
+    sa.Column("id_operacao", sa.BigInteger, primary_key=True, autoincrement=False),
+    sa.Column("valor", sa.Numeric(18, 2), nullable=False),
+    sa.Column("mes", sa.String(7), nullable=False),
+)
+engine = sa.create_engine("duckdb:///:memory:", echo=True)
+metadata.create_all(engine)
+query = sa.select(sa.func.sum(operations.c.valor)).where(operations.c.mes == "2026-08")
+print("compile(bind=engine):", query.compile(engine), query.compile(engine).params)
+with engine.begin() as conn:
+    conn.execute(sa.insert(operations), [{"id_operacao": 1, "valor": decimal.Decimal("10.50"), "mes": "2026-08"},
+                                         {"id_operacao": 2, "valor": decimal.Decimal("4.25"), "mes": "2026-08"}])
+    print("total:", conn.execute(query).scalar())
+```
+
+Saída, sem os comandos de criação da tabela e sem os horários:
+
+```
+compile(bind=engine): SELECT sum(operacoes.valor) AS sum_1
+FROM operacoes
+WHERE operacoes.mes = $1 {'mes_1': '2026-08'}
+INFO sqlalchemy.engine.Engine INSERT INTO operacoes (id_operacao, valor, mes) VALUES ($1, $2, $3), ($4, $5, $6)
+INFO sqlalchemy.engine.Engine [dialect duckdb+duckdb_engine does not support caching 0.00004s (insertmanyvalues) 1/1 (unordered)] (1, 10.5, '2026-08', 2, 4.25, '2026-08')
+INFO sqlalchemy.engine.Engine SELECT sum(operacoes.valor) AS sum_1
+FROM operacoes
+WHERE operacoes.mes = $1
+INFO sqlalchemy.engine.Engine [dialect duckdb+duckdb_engine does not support caching 0.00004s] ('2026-08',)
+total: 14.75
+```
+
+Os parâmetros do log mostram `10.5` e `4.25`, não `Decimal('10.50')`: o `duckdb_engine` e o dialeto
+do Redshift declaram `supports_native_decimal = False`, então `Numeric` recebe o processador de
+entrada `to_float` e o de saída `DecimalResultProcessor`, que formata um `float`. O texto compilado
+com `literal_binds` conserva o decimal (`10.50`), mas a execução com parâmetros passa por `float`
+nos dois sentidos. Medido no DuckDB com `Numeric(18, 2)`: até 15 dígitos significativos o valor volta
+igual; `99999999999999.99` (16 dígitos) foi gravado como `99999999999999.98`; `999999999999999.99`
+(17) virou `1000000000000000.00`; `9999999999999999.99` (18) falhou no `INSERT` com
+`Could not cast value 10000000000000000.000000 to DECIMAL(18,2)`. O mesmo valor de 18 dígitos
+gravado pela tabela Arrow registrada na conexão bruta ficou exato, e lido pelo Core voltou como
+`10000000000000000.00`. Acima de 15 dígitos, a escrita e a leitura no DuckDB passam pelo Arrow
+([seção de suporte](#duckdb)); no Redshift, `COPY` e `UNLOAD` por Parquet não passam pelo dialeto, e
+o `insert(Modelo).values(lista)` de lotes pequenos envia `float` pelos parâmetros.
+
 ## ORM: modelos e DDL
 
 ### Mapeamento declarativo
@@ -666,6 +1046,7 @@ contrato:
 | --- | --- |
 | DDL | `redshift_diststyle`, `redshift_distkey`, `redshift_sortkey`, `redshift_interleaved_sortkey` na tabela; `redshift_encode`, `redshift_distkey`, `redshift_sortkey`, `redshift_identity` na coluna. `PRIMARY KEY`, `UNIQUE` e `FOREIGN KEY` saem no DDL e são informativas no banco. |
 | Tipos | `Numeric(18, 2)` vira `NUMERIC(18, 2)`; `String(n)` vira `VARCHAR(n)`, com `n` em bytes; `String()` sem comprimento vira `VARCHAR`, que o Redshift trata como `VARCHAR(256)`. O dialeto compila `Text` como `TEXT`, também `VARCHAR(256)` no Redshift, então o `VARCHAR(65535)` da tabela do contrato exige `String(65535)` ou uma regra `@compiles(Text, "redshift")`. `JSON` compila como `JSON`, que o Redshift não tem; o contrato usa `JSON().with_variant(SUPER(), "redshift")`, que compila `SUPER` ([campos JSON](schema.md)). |
+| Precisão de `Numeric` | O dialeto declara `supports_native_decimal = False`: parâmetros `Decimal` viram `float` na ida (`to_float`) e os resultados voltam por `float`, exato até 15 dígitos significativos. `COPY` e `UNLOAD` por Parquet não passam pelo dialeto ([medição](#o-sql-executado-de-fato)). |
 | Importação | `CopyCommand(Table, ...)` gera o `COPY ... FORMAT AS PARQUET MANIFEST` a partir do `Table` do modelo; a validação do esquema acontece no Arrow, antes do Parquet. |
 | Exportação | `UnloadFromSelect(select(Modelo)...)` gera o `UNLOAD` da consulta do modelo. |
 | Inserção pelo ORM | Volumes pequenos com `insert(Modelo).values(lista)` em lotes; o bulk insert do ORM cai no `executemany` linha a linha do `redshift_connector`. |
@@ -684,6 +1065,7 @@ detalhes; o resumo para o contrato:
 | Importação | `INSERT INTO tabela BY NAME SELECT * FROM entrada` com a tabela Arrow registrada na conexão bruta (`conn.connection.dbapi_connection.register`), porque variáveis Python não são visíveis pelo engine. Volumes pequenos pelo bulk insert do ORM (0,98 s para 50.000 linhas, 0,77 s com `render_nulls=True`). |
 | Exportação | `COPY (...) TO 'arquivo.parquet'` em `text()`, com a consulta do modelo compilada com `literal_binds`. |
 | Leitura | `pd.read_sql` com `coerce_float=False` para `Decimal`; ou o SQL compilado executado pela conexão DuckDB com `to_arrow_table()` para manter `decimal128` e `date32`. |
+| Precisão de `Numeric` | `supports_native_decimal = False`: `insert` e `select` pelo engine passam `Decimal` por `float` nos dois sentidos, exato até 15 dígitos significativos; 16 dígitos perdem o último centavo e 18 falham no `INSERT`. A tabela Arrow registrada na conexão bruta e `to_arrow_table()` conservam `decimal128(18, 2)` ([medição](#o-sql-executado-de-fato)). |
 | Transações | Banco em memória com `SingletonThreadPool`: conexões abertas sem fechar deixam transações pendentes. |
 
 ### Arquivos Parquet
@@ -776,4 +1158,7 @@ def check(model, path: str) -> None:
 - Documentação do pandas sobre `read_sql` e `to_sql`: <https://pandas.pydata.org/docs/>.
 - Documentação do PyArrow: <https://arrow.apache.org/docs/python/>.
 - Tutorial de referência do projeto: <https://github.com/felipenoris/etl-cookbook-tutorial>.
+- FAQ do SQLAlchemy sobre renderizar expressões como texto (`literal_binds`, `render_postcompile`):
+  <https://docs.sqlalchemy.org/en/20/faq/sqlexpressions.html>; `create_mock_engine` na página de
+  conexões: <https://docs.sqlalchemy.org/en/20/core/connections.html>.
 - Lista completa das páginas consultadas: [REFERENCES.md](../REFERENCES.md).

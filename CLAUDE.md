@@ -152,7 +152,7 @@ matching group.
 | `docs/parquet.md` | Parquet file layout and every metadata structure (`FileMetaData`, schema, row group, `ColumnMetaData`, page index, Bloom filters, page headers, key-value pairs, size and geospatial statistics, encryption, summary files), inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
-| `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
+| `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, SQL generation from a statement for both dialects (`compile`, dialect objects and their paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`) with self-contained examples, the `Numeric` float conversion of both dialects, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
 | `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
 | `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, no Alembic) with the reasons, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
@@ -278,6 +278,17 @@ Each fact below is detailed in the file named at the end of its line.
   `decimal(p,s)`, `string`, `date`, `timestamp_ntz` (naive) and `timestamp` (UTC); a naive timestamp
   column raises the protocol to reader 3 / writer 7 with the `timestampNtz` feature, which DuckDB
   reads as `TIMESTAMP`. `docs/schema.md`, `docs/estrategia.md`
+- `compile()` needs the right dialect object: `duckdb_engine.Dialect()` renders `%(name)s`, the
+  dialect of a created engine renders `$1` (`numeric_dollar`, set when the engine loads the DBAPI)
+  and `RedshiftDialect_redshift_connector()` renders `%s` with `positiontup`. The Redshift
+  `CREATE TABLE` compiler drops `CHECK`, but `AddConstraint` and `CREATE INDEX` still render, so
+  `ddl_if(dialect="duckdb")` gates them; `create_mock_engine` dumps the whole `create_all` sequence
+  with `checkfirst=False`. `docs/sqlalchemy.md`
+- Both dialects declare `supports_native_decimal = False`: `Numeric` parameters go through
+  `to_float` and results through a float-formatting `DecimalResultProcessor`. Through duckdb_engine,
+  `Numeric(18, 2)` is exact up to 15 significant digits, 16 digits lose the last cent, 17 round to
+  10^15 and 18 fail the `INSERT`; the Arrow path keeps 18 digits and `literal_binds` text keeps the
+  decimal. `docs/sqlalchemy.md`
 
 ## The pipeline outside this repository
 
