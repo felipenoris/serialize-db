@@ -65,15 +65,28 @@ da mesma plataforma (Linux x86_64), e copiada inteira.
 No computador com internet, dentro da pasta do projeto:
 
 ```
-tests/prepare_offline.sh
+./prepare_offline.sh
 ```
 
-O script instala o Python 3.13 em `.python/`, as dependências em `.venv/` e as extensões do DuckDB
-em `.duckdb/`, tudo dentro da pasta do projeto, e troca o link `.venv/bin/python` por um link
-relativo, para a pasta funcionar em qualquer caminho. As três pastas estão no `.gitignore`.
+O script cria na raiz do projeto tudo o que o pacote e os testes precisam em execução: o Python
+3.13 em `.python/`, o pacote com as dependências de execução e as de todos os grupos do
+`pyproject.toml` em `.venv/`, e as extensões do DuckDB (`httpfs`, `delta`, `aws`) em `.duckdb/`. Ele
+recria a `.venv/` a cada execução, resolve as dependências na hora (o `uv.lock` não é versionado) e
+troca os links absolutos que o `uv` cria por links relativos, para a pasta funcionar em qualquer
+caminho. As três pastas estão no `.gitignore`. Rode o script de novo sempre que uma dependência
+mudar; se a dependência nova estiver fora do `pyproject.toml` (extensão do DuckDB, versão do Python),
+acrescente-a ao script antes.
 
-Empacotar preservando os links simbólicos (copiar arquivo a arquivo por uma pasta montada do S3 os
-perde):
+Empacotar preservando os links simbólicos. No `zip`, a opção `-y` guarda os links como links; sem
+ela, o `zip` copia o interpretador para dentro de `.venv/bin/` e a pasta só funciona no mesmo
+caminho da origem. Copiar arquivo a arquivo por uma pasta montada do S3 também perde os links.
+
+```
+cd ..
+zip -ry serialize-db.zip serialize-db -x 'serialize-db/.git/*'
+```
+
+ou, com `tar`:
 
 ```
 tar czf serialize-db.tgz --exclude=serialize-db/.git -C .. serialize-db
@@ -88,5 +101,6 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python -m pytest
 
 Não é preciso `uv` nem rede além do S3: o Python, as bibliotecas e as extensões vêm da pasta. Os
 comandos de `.venv/bin/` (como `pytest`) guardam o caminho original no cabeçalho, por isso a chamada
-é `python -m pytest`. A receita foi verificada extraindo o pacote em outro caminho e rodando a suíte
-com os proxies apontados para uma porta fechada.
+é `python -m pytest`; o pacote roda do mesmo jeito, com `.venv/bin/python -m serialize_db` ou
+`.venv/bin/python -c "import serialize_db"`. A receita foi verificada extraindo o pacote em outro
+caminho e rodando a suíte com os proxies apontados para uma porta fechada.

@@ -5,7 +5,7 @@ encontra, a escrita e a leitura no bucket, o put condicional, o ``vacuum`` e o t
 As medições vão para o relatório impresso no fim da sessão (``conftest.py``).
 
 Num ambiente sem internet, as extensões ``httpfs``, ``delta`` e ``aws`` do DuckDB precisam estar na
-pasta de extensões (``.duckdb/`` do repositório, preparada por ``tests/prepare_offline.sh``, ou a
+pasta de extensões (``.duckdb/`` do repositório, preparada por ``prepare_offline.sh``, ou a
 pasta padrão do DuckDB); sem isso os testes que as usam são pulados.
 """
 

@@ -10,7 +10,7 @@ Variáveis de ambiente lidas:
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos criados no S3 depois da sessão.
 - ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é gravado.
 - ``SERIALIZE_DB_DUCKDB_EXTENSIONS``: pasta de extensões do DuckDB; sem ela, ``.duckdb/`` na raiz do
-  repositório quando existir (criada por ``tests/prepare_offline.sh``), senão o padrão do DuckDB.
+  repositório quando existir (criada por ``prepare_offline.sh``), senão o padrão do DuckDB.
 """
 
 from __future__ import annotations
