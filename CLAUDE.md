@@ -148,6 +148,7 @@ matching group.
 | --- | --- |
 | `README.md` | Initialization with `uv init --python 3.13`, dependencies (`uv sync --group dev`), the two test suites (local folder and S3), the rule that each root variable authorizes the writes under it, and their environment variables, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target environment without internet: managed Python in `.python/`, the package with its runtime dependencies and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages in `pyproject.toml` are picked up by `uv sync`, but a new DuckDB extension, a Python version change or any other runtime asset must be added to the script by hand, and the user reruns it before packing the folder. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
+| `diagnose_aws.py` | Read-only diagnostic for the target environment (`.venv/bin/python diagnose_aws.py s3://bucket/prefix`): environment variables, the region as `boto3` and delta-rs resolve it, DNS of the endpoints, credentials, a listing of `<root>/serialize-db-poc/` by `boto3`, delta-rs and DuckDB, and STS, each with short timeouts; the summary says whether the S3 suite needs maintenance for that environment. Its facts are in the README section "Diagnóstico do ambiente AWS". |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Delta, DuckDB and Redshift, and SQL portability between the two engines. It ends with the JSON field treatment per layer (model `JSON().with_variant(SUPER(), "redshift")`, Arrow `json_` extension, Delta `string`, DuckDB `JSON`, Redshift `SUPER` via `JSON_PARSE`). |
 | `docs/parquet.md` | Parquet file layout and every metadata structure (`FileMetaData`, schema, row group, `ColumnMetaData`, page index, Bloom filters, page headers, key-value pairs, size and geospatial statistics, encryption, summary files), inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -331,6 +332,13 @@ Each fact below is detailed in the file named at the end of its line.
   DuckDB runs the text with `$name` and a dict; `redshift_connector` with
   `cursor.paramstyle = "named"`. The Redshift dialect derives from `PGDialect` and compiles
   `DISTINCT ON`, `ON CONFLICT DO NOTHING` and array subscripts without error. `docs/sqlalchemy.md`
+- botocore 1.43.98 reads `AWS_DEFAULT_REGION` or the profile, never `AWS_REGION`, and without a
+  region uses the global endpoint `s3.amazonaws.com`, which a regional VPC endpoint does not serve;
+  delta-rs reads both variables and without either queries IMDS and falls back to `us-east-1`. The S3
+  suite copies the `boto3` region into `AWS_REGION` one way only, so an environment with only
+  `AWS_REGION` and no `~/.aws/config` needs maintenance; `test_boto3_credential_source` needs STS
+  (60 s per attempt, 5 attempts by default). On a dead network delta-rs gives up in 10 s with
+  `max_retries=1` and `retry_timeout=10s` in `storage_options` (59 s without). `README.md`
 
 ## The pipeline outside this repository
 
@@ -379,9 +387,13 @@ branch `claude/sql-gerado-por-dialeto`, merged the same day) records the SQLAlch
 the gradual replacement of the runtime dialect by generated SQL text. PR #11
 (2026-09-19, branch `claude/prova-de-conceito-s3`, merged the same day) records the S3 proof of
 concept, adds the pytest suite and the offline recipe. PR #12 (2026-09-19, branch
-`claude/prova-de-conceito-local`) makes each suite run only under an explicitly configured root,
-adds the local-folder proof of concept and fixes the interpreter lookup in `prepare_offline.sh`. While PR #12
-is open, new commits go there. `gh` is authenticated in the space since 2026-09-19.
+`claude/prova-de-conceito-local`, merged the same day) makes each suite run only under an explicitly
+configured root, adds the local-folder proof of concept and fixes the interpreter lookup in
+`prepare_offline.sh`. PR #13 (2026-09-19, branch `claude/diagnostico-aws`) adds `diagnose_aws.py`,
+written because the target environment may have no proxy and only an S3 VPC endpoint; the S3 suite
+still needs the maintenance the diagnostic names (region normalization, STS optional, endpoint URL
+to the DuckDB secret) if that environment confirms it. While PR #13 is open, new commits go there.
+`gh` is authenticated in the space since 2026-09-19.
 
 No library code exists beyond the models: `pyproject.toml` declares no runtime dependencies. The
 `dev` dependency group pins pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1 and boto3, and
