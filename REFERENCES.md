@@ -260,6 +260,12 @@ Consultadas para a estratégia de implementação:
 - <https://docs.aws.amazon.com/redshift/latest/dg/c-spectrum-external-tables.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_TRY_CAST.html>
 
+Delta Lake no Redshift Spectrum (tabelas de manifesto simbólico), consultado em 2026-09-19:
+
+- <https://docs.aws.amazon.com/redshift/latest/dg/c-spectrum-external-tables.html>
+- <https://aws.amazon.com/blogs/big-data/introducing-native-delta-lake-table-support-with-aws-glue-crawlers>
+- <https://aws.amazon.com/about-aws/whats-new/2022/12/aws-glue-crawlers-support-delta-lake-tables>
+
 ## DuckDB
 
 Documentação:
@@ -445,6 +451,11 @@ Extensões `delta`, `iceberg` e `ducklake`, e `ATTACH` remoto:
 - <https://duckdb.org/docs/current/sql/statements/attach.html>
 - <https://duckdb.org/2026/04/13/announcing-duckdb-152>
 
+Escrita particionada (`COPY ... PARTITION_BY`), consultada em 2026-09-19:
+
+- <https://duckdb.org/docs/stable/data/partitioning/partitioned_writes>
+- <https://duckdb.org/docs/current/data/partitioning/partitioned_writes.html>
+
 ## PyArrow
 
 - <https://arrow.apache.org/docs/python/parquet.html>
@@ -559,6 +570,14 @@ Consultadas para a estratégia de implementação:
 - <https://py.iceberg.apache.org/api/>
 - <https://dlthub.com/docs/dlt-ecosystem/destinations/iceberg>
 
+Especificação do catálogo REST do Iceberg (namespaces e commit de várias tabelas), consultada em
+2026-09-19:
+
+- <https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml>
+- <https://iceberg.apache.org/spec/>
+- <https://github.com/apache/iceberg/blob/main/format/spec.md>
+- <https://github.com/apache/iceberg-python> (`pyiceberg/catalog/__init__.py` e `pyiceberg/catalog/rest/__init__.py`)
+
 ## AWS Glue Data Catalog
 
 - <https://docs.aws.amazon.com/glue/latest/dg/table-optimizers.html>
@@ -598,6 +617,10 @@ Consultadas para a estratégia de implementação:
 - <https://aws.amazon.com/blogs/big-data/zero-copy-access-to-apache-iceberg-tables-in-amazon-s3-from-salesforce-data-360-using-the-iceberg-rest-endpoint-from-aws-glue-data-catalog/>
 - <https://aws.amazon.com/blogs/big-data/break-down-data-silos-and-seamlessly-query-iceberg-tables-in-amazon-sagemaker-from-snowflake/>
 - <https://aws.amazon.com/blogs/big-data/accelerate-lightweight-analytics-using-pyiceberg-with-aws-lambda-and-an-aws-glue-iceberg-rest-endpoint/>
+
+Crawler de tabelas Delta Lake (tabelas nativas e de manifesto simbólico), consultado em 2026-09-19:
+
+- <https://docs.aws.amazon.com/glue/latest/dg/crawler-delta-lake.html>
 
 ## Amazon Athena
 
@@ -891,6 +914,15 @@ Implementações do protocolo (delta-spark, delta-rs, Delta Kernel) e uso sem Sp
 - <https://github.com/delta-io/delta-kernel-rs>
 - <https://github.com/duckdb/duckdb-delta>
 
+Interoperabilidade entre Delta e Iceberg (UniForm, XTable, convergência dos formatos), consultada em
+2026-09-19:
+
+- <https://docs.delta.io/latest/delta-uniform.html>
+- <https://xtable.apache.org/>
+- <https://xtable.apache.org/docs/how-to>
+- <https://www.databricks.com/blog/databricks-tabular>
+- <https://www.databricks.com/company/newsroom/press-releases/databricks-agrees-acquire-tabular-company-founded-original-creators-apache-iceberg> (404 em 2026-09-19)
+
 ## DuckLake
 
 - <https://ducklake.select/docs/stable/>
@@ -909,9 +941,20 @@ Implementações do protocolo (delta-spark, delta-rs, Delta Kernel) e uso sem Sp
 - <https://motherduck.com/blog/announcing-ducklake-1-0-on-motherduck/>
 - <https://dlthub.com/docs/dlt-ecosystem/destinations/ducklake>
 
+Manifesto do DuckLake (transações entre tabelas e schemas como grupos de tabelas), consultado em
+2026-09-19:
+
+- <https://ducklake.select/manifesto/>
+
 ## Hudi
 
 - <https://github.com/apache/hudi-rs/blob/main/README.md>
+
+## Apache Hive
+
+Leitura de Parquet por nome e a propriedade `parquet.column.index.access`, consultada em 2026-09-19:
+
+- <https://cwiki.apache.org/confluence/display/Hive/Parquet>
 
 ## SQLGlot, SQLMesh, dbt, Ibis e dlt
 

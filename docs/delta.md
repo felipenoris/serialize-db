@@ -95,6 +95,38 @@ json.loads(pathlib.Path("cad_operacoes/_delta_log/_last_checkpoint").read_text()
 # {'version': 6, 'size': 8, 'sizeInBytes': ..., 'numOfAddFiles': 5}
 ```
 
+### Metadados próprios da biblioteca
+
+Dois sentidos de snapshot convivem neste documento. O snapshot da tabela é o estado de uma tabela
+numa versão do log, o que `DeltaTable(uri, version=v)` carrega. O snapshot do banco é o conjunto
+`{tabela: versão}` de todas as tabelas num instante escolhido, que o Delta não tem e a biblioteca
+registra; a chave gravada é `serialize_db_snapshot`, com o prefixo da biblioteca para não colidir
+com as chaves do Delta e de outros escritores.
+
+O log de cada tabela guarda tudo o que é da tabela: os arquivos de cada versão, o esquema de cada
+versão com os comentários de coluna, as estatísticas por arquivo e os metadados que a biblioteca
+grava em cada commit (`id_execucao`, as versões lidas e, quando houver, `serialize_db_snapshot`). O
+modelo SQLAlchemy dá o DDL e os tipos do contrato atual, e a reconciliação de "Evolução de esquema"
+garante que ele e o esquema atual do log são o mesmo. A biblioteca não guarda cópia de esquema, lista
+de arquivos nem estatísticas.
+
+O que ela guarda por conta própria fica em `_serialize_db/`, na raiz do ambiente, ao lado das pastas
+das tabelas: `snapshots.json`, com
+`{"snapshots": {"2026T3": {"cad_lancamentos": 143, "cad_contratos": 88}}}`. O sublinhado inicial
+deixa a pasta fora dos globs `mes=*` e dos leitores no estilo Hive, que ignoram nomes com esse
+prefixo. Os nomes de tabela são relativos, sem URI, para a realocação de "Realocação e cópia do
+banco" continuar valendo. A escrita é atômica, com `IfMatch` no S3, a mesma primitiva do log, e só a
+biblioteca escreve. O arquivo é a fonte primária e o log é a reconstrução: a marca
+`serialize_db_snapshot` vive no `commitInfo`, que não entra nos checkpoints e some do log quando a
+limpeza passa de `delta.logRetentionDuration`. O segundo registro próprio é a tabela
+`serialize_db_publicacoes` no Redshift, que fica lá por ser transacional com a carga.
+
+Exportar as tabelas de um snapshot usa cada fonte no seu papel. O snapshot atual dispensa metadado
+próprio: `get_add_actions()` lista os arquivos, e o DDL sai do modelo. Um snapshot do banco antigo
+lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
+`DeltaTable(uri, version=v).get_add_actions()` e tira o DDL do esquema daquela versão,
+`DeltaTable(uri, version=v).schema()`, não do modelo de hoje, que pode ter ganhado colunas depois.
+
 ### Diferenças para o PostgreSQL
 
 - Não há atualização no lugar. Toda escrita cria arquivos novos e um commit; `UPDATE`, `DELETE` e
@@ -102,8 +134,16 @@ json.loads(pathlib.Path("cad_operacoes/_delta_log/_last_checkpoint").read_text()
   reescreveu um arquivo de dez linhas: `num_added_files: 1, num_removed_files: 1, num_copied_rows: 9`).
 - Não há índices, chaves primárias, únicas nem estrangeiras. O que existe é `NOT NULL` e `CHECK`,
   aplicados pelo escritor, e as estatísticas por arquivo, que fazem o papel do índice na leitura.
+- Não há banco nem schema como conjunto de tabelas. O esquema do Delta é a lista de colunas de uma
+  tabela, na ação `metaData` do log dela, e o formato não sabe quais tabelas formam o banco. A pasta
+  com uma subpasta por tabela agrupa os arquivos, e o `MetaData` do SQLAlchemy é o único lugar que
+  declara o conjunto e as relações entre as tabelas, por isso é o contrato. Nos documentos, "esquema
+  da tabela" é o das colunas e "contrato de esquema" é o do conjunto; no DuckDB e no Redshift, schema
+  é o namespace que agrupa tabelas.
 - Não há transação entre tabelas. Cada tabela tem o próprio log, e um commit é atômico numa tabela.
-  A consistência entre tabelas de uma execução vem das versões registradas pela biblioteca.
+  Uma execução que publica várias tabelas faz um commit por tabela. A biblioteca fixa a versão de
+  cada tabela lida no início, grava `id_execucao` e essas versões em cada commit, e quem precisa de
+  um estado coerente entre tabelas lê esse conjunto de versões, não a última de cada uma.
 - Não há sessão nem bloqueio. O controle de concorrência é otimista: o commit falha se outro escritor
   mudou o que a transação leu, e cabe ao escritor refazer a operação.
 - O esquema está no log, versionado junto com os dados. Uma leitura de versão antiga usa o esquema
@@ -147,6 +187,7 @@ de renomear de forma atômica, o que o S3 não tem.
 | Estatísticas por arquivo | JSON na ação `add`. | Colunas dos manifests Avro. |
 | Exclusão por linha | Vetores de exclusão (recurso opcional). | Delete files por posição ou igualdade. |
 | Concorrência | Otimista, por conflito no log. | Otimista, por conflito no catálogo. |
+| Conjunto de tabelas e transação entre tabelas | Nenhum no formato: o esquema é de uma tabela, na ação `metaData`, e o commit é de uma tabela; agrupar é papel de um catálogo externo, ou da pasta e do `MetaData` do SQLAlchemy. | Esquema por tabela no `metadata.json`; o catálogo, que a especificação exige, tem namespaces de vários níveis, e o catálogo REST commita várias tabelas de uma vez em `POST /v1/{prefix}/transactions/commit`. |
 | Escritor Python | `deltalake` (delta-rs). | PyIceberg, com o extra `pyiceberg-core` para transformações de partição. |
 | DuckDB | Leitura, poda, viagem no tempo e `INSERT INTO`. | Leitura pelo caminho do `metadata.json`; escrita só com catálogo REST. |
 | Redshift | Só por `COPY` dos arquivos, ou Spectrum via manifesto simbólico e Glue. | Só por `COPY` dos arquivos, ou Spectrum via Glue e Lake Formation. |
@@ -197,8 +238,9 @@ tabela, criar objetos com put-if-absent e, na manutenção, apagar. O resto é c
 dos papéis.
 
 Layout: um prefixo por ambiente e por tabela, `s3://<bucket>/<caminho do projeto>/delta/<ambiente>/<tabela>/`.
-Só a biblioteca escreve sob o prefixo de uma tabela; o staging do `COPY`, os manifestos de publicação
-e as cópias de fechamento ficam em prefixos próprios (`staging/`, `publicacao/`, `arquivo/`).
+Só a biblioteca escreve sob o prefixo de uma tabela e sob `_serialize_db/`, o controle da biblioteca
+na raiz do ambiente; o staging do `COPY`, os manifestos de publicação e as cópias de snapshots do
+banco ficam em prefixos próprios (`staging/`, `publicacao/`, `arquivo/`).
 
 Permissões do papel que executa o pipeline (delta-rs, DuckDB e `boto3` usam o mesmo):
 
@@ -392,7 +434,7 @@ Regras da derivação:
 | Propriedade | Efeito | Valor sugerido |
 | --- | --- | --- |
 | `delta.logRetentionDuration` | Idade mínima dos arquivos de log que `cleanup_metadata` preserva; limita a viagem no tempo. | `interval 3650 days`, para manter o histórico. |
-| `delta.deletedFileRetentionDuration` | Idade mínima que `vacuum` exige antes de apagar um arquivo removido; limita `restore` e a viagem no tempo das versões comuns. | `interval 400 days`; os fechamentos são protegidos por `keep_versions`. |
+| `delta.deletedFileRetentionDuration` | Idade mínima que `vacuum` exige antes de apagar um arquivo removido; limita `restore` e a viagem no tempo das versões comuns. | `interval 400 days`; os snapshots do banco são protegidos por `keep_versions`. |
 | `delta.checkpointInterval` | Commits entre checkpoints automáticos. | `10`. |
 | `delta.appendOnly` | Recusa `delete`, `update` e `overwrite`. | Não usar: a substituição do mês é um `overwrite`. |
 | `delta.enableDeletionVectors` | Exclusões por vetor em vez de reescrita. | Não habilitar: os arquivos deixariam de ser carregáveis pelo `COPY`. |
@@ -596,6 +638,120 @@ Uma exportação para outro layout (um arquivo por mês com `FIELD_IDS` e `KV_ME
 um `COPY (SELECT ... FROM delta_scan(uri) WHERE ...) TO ...` do DuckDB, com as opções de
 [`parquet.md`](parquet.md).
 
+## Exportação do snapshot para pastas Parquet por mês
+
+Sair do Delta e voltar às pastas Parquet por mês, como as que o Hive lê no HDFS, é exportar o
+snapshot atual: as partições de todos os meses, na versão atual, sem o log. O histórico de versões
+fica para trás; um snapshot do banco que precise sobreviver é exportado à parte, tabela a tabela,
+a partir de `DeltaTable(uri, version=v)`, como em "Snapshots do banco". Uma tabela particionada por
+dia segue o mesmo caminho, com a coluna de partição diária no lugar de `mes`.
+
+Copiar a pasta da tabela não serve. Ela guarda todos os arquivos já gravados, inclusive os que
+commits posteriores tiraram do snapshot (meses substituídos, arquivos reescritos por `update`,
+`delete` e `merge`, arquivos pequenos compactados pelo `optimize`), até que o `vacuum` os apague;
+guarda o `_delta_log/`, cujos checkpoints também são Parquet; e, se os recursos estivessem
+habilitados, guardaria arquivos de change data feed e de vetores de exclusão. Na verificação abaixo,
+uma tabela com 20 commits tinha 20 arquivos de dados no disco para 14 no snapshot, e a leitura da
+pasta inteira devolveu 330.000 linhas a mais.
+
+O que decide entre copiar e reescrever é o esquema dos arquivos vivos. Cada arquivo tem o esquema da
+época em que foi gravado: depois de um `ADD COLUMN`, os arquivos anteriores não têm a coluna, e só os
+meses reescritos depois passam a tê-la (4 de 14 na verificação). O Delta preenche nulo na leitura;
+fora dele, isso fica a cargo do leitor. Leitores por nome preenchem nulo: o Hive por padrão
+(`parquet.column.index.access=false`), o Spark e o DuckDB com `union_by_name`. Leitores posicionais,
+como o `COPY` do Redshift, não. Sem `union_by_name`, o DuckDB toma o esquema do primeiro arquivo do
+glob, e as colunas que só existem em arquivos posteriores somem em silêncio. Mudança de tipo não
+deixa arquivo heterogêneo, porque só acontece por reescrita da tabela inteira. Column mapping deixaria
+os nomes físicos `col-<uuid>` nos arquivos; o projeto não o habilita.
+
+Copiar pelo log é a opção que não lê dados. A lista `get_add_actions()` do snapshot dá o caminho
+relativo de cada arquivo vivo, já no layout Hive `mes=2026-02/part-....parquet`, e o valor da
+partição. Copiar exatamente esses arquivos, sem o log, produz a pasta por mês; no S3 é um
+`CopyObject` por arquivo, sem baixar. O `path` da ação `add` é uma URI, decodificada com `unquote`
+antes de usar.
+
+```python
+import shutil
+from pathlib import Path
+from urllib.parse import unquote
+
+import pyarrow as pa
+from deltalake import DeltaTable
+
+def copy_snapshot(dt: DeltaTable, dest: Path) -> int:
+    root = Path(dt.table_uri.removeprefix("file://"))
+    actions = pa.table(dt.get_add_actions(flatten=True)).to_pylist()
+    for action in actions:
+        relative = unquote(action["path"])       # mes=2026-02/part-....parquet
+        target = dest / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / relative, target)    # no S3: copy_object(Bucket, Key, CopySource), sem baixar
+    return len(actions)
+
+dt = DeltaTable(uri)
+copy_snapshot(dt, Path("export_a"))              # 14 arquivos em 0,014 s
+```
+
+Os arquivos saem como o delta-rs os gravou: sem a coluna de partição dentro, `DECIMAL(18, 2)` como
+`INT64`, colunas não anuláveis `required`, com estatísticas. O Hive deriva `mes` do diretório e
+precisa da tabela declarada com todas as colunas atuais e de `MSCK REPAIR TABLE` ou
+`ALTER TABLE ... ADD PARTITION` para enxergar as pastas. A cópia serve quando os leitores são por
+nome, ou quando nenhum `ADD COLUMN` aconteceu desde a última reescrita de todos os meses.
+
+Reescrever pelo snapshot é a opção que normaliza. O DuckDB lê o snapshot por `delta_scan` e grava as
+pastas com um `COPY` particionado: cada arquivo sai com o esquema atual, as colunas acrescentadas
+preenchidas com nulo nos meses antigos, as linhas excluídas ausentes e um arquivo por mês. Sem
+`WRITE_PARTITION_COLUMNS`, a coluna de partição fica fora dos arquivos, como o Hive e o Spark esperam
+de uma pasta particionada. No S3, `delta_scan('s3://...')` e `COPY ... TO 's3://...'` usam o mesmo
+secret, e as opções de sobrescrita não apagam prefixos: o destino é limpo antes.
+
+```python
+import duckdb
+
+con = duckdb.connect()
+con.sql(f"""
+    COPY (SELECT * FROM delta_scan('{uri}'))
+    TO 'export_b' (FORMAT parquet, PARTITION_BY (mes), OVERWRITE_OR_IGNORE)
+""")                                             # mes=2026-02/data_0.parquet, um por mês, 0,071 s
+
+# Um COPY por mês limita a memória, é reexecutável e aceita as opções de parquet.md.
+for (month,) in con.sql(f"SELECT DISTINCT mes FROM delta_scan('{uri}') ORDER BY mes").fetchall():
+    Path(f"export_c/mes={month}").mkdir(parents=True, exist_ok=True)
+    con.sql(f"""
+        COPY (SELECT * EXCLUDE (mes) FROM delta_scan('{uri}') WHERE mes = '{month}')
+        TO 'export_c/mes={month}/data_0.parquet' (FORMAT parquet)
+    """)                                         # 14 meses em 0,171 s
+```
+
+Sem o DuckDB, o PyArrow faz o mesmo a partir do dataset do delta-rs, e grava `DECIMAL` como
+`FIXED_LEN_BYTE_ARRAY`:
+
+```python
+import pyarrow.dataset as ds
+
+ds.write_dataset(
+    dt.to_pyarrow_dataset(), "export_d", format="parquet",
+    partitioning=ds.partitioning(pa.schema([("mes", pa.string())]), flavor="hive"),
+    existing_data_behavior="delete_matching",
+)                                                # mes=2026-02/part-0.parquet, 0,097 s
+```
+
+Verificação com 1.329.900 linhas em 14 meses depois de 20 commits (12 appends, substituição de um
+mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends pequenos e
+`optimize.compact`), com checkpoint gravado:
+
+| Verificação | Resultado |
+| --- | --- |
+| Arquivos de dados no disco e no snapshot | 20 no disco, 14 no snapshot; `vacuum(dry_run=True)` listou os 6 a mais. |
+| `read_parquet('tabela/mes=*/*.parquet')` | 1.659.900 linhas, 330.000 além do snapshot: o mês substituído, os arquivos anteriores ao `update` e ao `delete` e os três pequenos compactados. |
+| `read_parquet('tabela/**/*.parquet', union_by_name=true)` | Leu também o checkpoint de `_delta_log/` e somou suas 22 linhas sem erro. |
+| Arquivos vivos com a coluna acrescentada | 4 de 14: o mês novo e os três reescritos depois do `ADD COLUMN`. |
+| Cópia pelo log | 14 arquivos em 0,014 s; lida com `union_by_name=true`, contagem, soma e nulos iguais aos do `delta_scan`. Sem `union_by_name`, o DuckDB toma o esquema do primeiro arquivo do glob e omite a coluna nova quando ele não a tem. |
+| `COPY ... PARTITION_BY (mes)` do DuckDB, 11 threads | 14 arquivos `data_0.parquet`, um por mês, em 0,071 s; sem `mes` dentro dos arquivos; `WRITE_PARTITION_COLUMNS true` o inclui; lida sem `union_by_name`, igual ao `delta_scan`. |
+| Um `COPY` por mês | 14 arquivos em 0,171 s; igual ao `delta_scan`. |
+| `pyarrow.dataset.write_dataset` a partir de `to_pyarrow_dataset()` | 14 arquivos `part-0.parquet` em 0,097 s; sem `mes` dentro; igual ao `delta_scan`. |
+| Tipo físico de `valor` | `INT64` no delta-rs e no DuckDB; `FIXED_LEN_BYTE_ARRAY` no PyArrow. |
+
 ## Pipeline com o Delta como fonte da verdade
 
 1. **Início da execução.** A biblioteca abre cada tabela de entrada e registra
@@ -618,10 +774,11 @@ um `COPY (SELECT ... FROM delta_scan(uri) WHERE ...) TO ...` do DuckDB, com as o
    `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e é idempotente; um conflito de
    commit no mesmo mês significa outra execução publicando a mesma tabela, e a execução aborta.
 6. **Publicação no Redshift para clientes.** A diferença entre a versão publicada e a atual (ações
-   `add` novas) diz quais meses recarregar: numa transação, `DELETE` do mês e `COPY ... MANIFEST`
-   dos arquivos novos; a versão publicada fica numa tabela de controle.
+   `add` novas) diz quais meses recarregar: `DELETE` do mês e `COPY ... MANIFEST` dos arquivos novos,
+   para todas as tabelas da execução numa única transação, o que dá aos clientes a atomicidade entre
+   tabelas que o Delta não tem; a versão publicada de cada tabela fica numa tabela de controle.
 7. **Manutenção.** `optimize.compact` nos meses com muitos arquivos pequenos e `vacuum` com
-   `keep_versions` dos fechamentos, como descrito em "Manutenção e retenção".
+   `keep_versions` dos snapshots do banco, como descrito em "Manutenção e retenção".
 
 ## Manipulação a partir do DuckDB
 
@@ -696,7 +853,8 @@ COMMIT;
 A tabela de staging existe porque a coluna de partição não está nos arquivos e o `COPY` só lê o
 conteúdo deles; se a lista de colunas no `COPY` de Parquet funcionar (pendente), a staging some. A
 publicação incremental compara as ações `add` da versão publicada com as da atual e recarrega só os
-meses que mudaram; a versão publicada fica numa tabela de controle
+meses que mudaram, de todas as tabelas da execução numa única transação; a versão publicada de cada
+tabela fica numa tabela de controle
 (`serialize_db_publicacoes(tabela, versao_delta, id_execucao, publicado_em)`).
 
 Escrita de volta, quando o sandbox é o Redshift:
@@ -788,34 +946,36 @@ dias, toda versão mais velha que isso fica ilegível no checkpoint seguinte, in
 `PostCommitHookProperties(cleanup_expired_logs=False)` a desliga numa escrita. Como o log custa
 quilobytes por commit, a tabela do contrato o mantém por `interval 3650 days`.
 
-### Fotos históricas da base
+### Snapshots do banco
 
-O pipeline mensal cria uma versão por tabela a cada execução. Um fechamento trimestral é o conjunto
-das versões de cada tabela depois da execução de fechamento; a política é guardá-las por prazo longo
-e descartar, para trimestres antigos, as versões intermediárias do trimestre. O Delta não tem tags
-nem branches (o Iceberg tem, com retenção própria); a foto é um número de versão por tabela, e os
-mecanismos são estes:
+O pipeline mensal cria uma versão por tabela a cada execução. Um snapshot do banco é o conjunto das
+versões de cada tabela num instante escolhido, registrado pela biblioteca porque o Delta não tem
+snapshot de banco, só de tabela; a periodicidade é de quem o marca, por exemplo o fim de cada
+trimestre. A política é guardar essas versões por prazo longo e descartar as intermediárias entre um
+snapshot e outro. O Delta não tem tags nem branches (o Iceberg tem, com retenção própria); o
+snapshot do banco é um número de versão por tabela, e os mecanismos são estes:
 
-1. **Marcar o fechamento.** A execução de fechamento grava `custom_metadata={"fechamento": "2026T1"}`
-   em cada commit, e a biblioteca registra `{fechamento: {tabela: versão}}` num arquivo de controle
-   no bucket. O histórico também acha a versão (`[h for h in dt.history() if h.get("fechamento")]`
-   devolveu `(2, '2026T1')`), mas o arquivo de controle dispensa varrer o log.
-2. **Descartar o que está entre fechamentos.** `vacuum` com a retenção das versões comuns e
-   `keep_versions` com as versões de fechamento. Verificado com o fechamento na versão 2 e duas
+1. **Marcar o snapshot.** A execução marcada grava `custom_metadata={"serialize_db_snapshot": "2026T1"}`
+   em cada commit, e a biblioteca registra `{snapshot: {tabela: versão}}` em
+   `_serialize_db/snapshots.json`, descrito em "Metadados próprios da biblioteca". O histórico
+   também acha a versão (`[h for h in dt.history() if h.get("serialize_db_snapshot")]` devolveu
+   `(2, '2026T1')`), mas o arquivo de controle dispensa varrer o log.
+2. **Descartar o que está entre snapshots.** `vacuum` com a retenção das versões comuns e
+   `keep_versions` com as versões dos snapshots. Verificado com o snapshot na versão 2 e duas
    correções posteriores de fevereiro: o dry run sem `keep_versions` listou dois arquivos; com
    `keep_versions=[2]` listou um, o que só a versão 3 referenciava. Depois do `vacuum`, a versão 2
    leu os três meses corretos, a versão 3 falhou por arquivo ausente, e as versões 4 e atual leram.
-3. **Custo.** Um fechamento guardado custa só os arquivos que as execuções seguintes substituíram,
+3. **Custo.** Um snapshot guardado custa só os arquivos que as execuções seguintes substituíram,
    os meses corrigidos depois dele, não uma cópia da tabela. `optimize.compact` e `z_order` depois
-   de um fechamento reescrevem arquivos que o fechamento continua referenciando e dobram esses meses;
-   a compactação roda antes do fechamento.
-4. **Ler um fechamento.** `DeltaTable(uri, version=v)` no delta-rs; `delta_scan(uri, version := v)` ou
+   de um snapshot reescrevem arquivos que ele continua referenciando e dobram esses meses; a
+   compactação roda antes do snapshot.
+4. **Ler um snapshot.** `DeltaTable(uri, version=v)` no delta-rs; `delta_scan(uri, version := v)` ou
    `ATTACH ... (VERSION v)` no DuckDB; um manifesto de `COPY` gerado de
    `DeltaTable(uri, version=v).get_add_actions()` no Redshift. `load_as_version(datetime)` acha a
    versão vigente num instante pelo `timestamp` dos commits.
-5. **Voltar a um fechamento.** `dt.restore(v)` torna o fechamento o estado atual num commit novo,
-   sem apagar as versões posteriores (verificado com `restore(2)` seguido de `restore(5)`).
-6. **Arquivar por prazo mais longo.** Uma cópia profunda do fechamento numa pasta de arquivo,
+5. **Voltar a um snapshot.** `dt.restore(v)` torna a versão do snapshot o estado atual num commit
+   novo, sem apagar as versões posteriores (verificado com `restore(2)` seguido de `restore(5)`).
+6. **Arquivar por prazo mais longo.** Uma cópia profunda do snapshot numa pasta de arquivo,
    `write_deltalake("s3://bucket/arquivo/2026T1/cad_operacoes",
    DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader(), mode="overwrite",
    partition_by=["mes"])`, cria uma tabela independente na versão 0 (verificado: três arquivos, as
@@ -827,30 +987,29 @@ mecanismos são estes:
 import json
 from deltalake import DeltaTable
 
-# O arquivo de controle mapeia fechamento -> {tabela: versão}; o vacuum preserva essas versões.
-def vacuum_keeping_closings(dt: DeltaTable, control: dict, table: str, retention_hours: int = 24 * 400,
-                           apply: bool = False) -> list[str]:
-    versions = sorted({v[table] for v in control["fechamentos"].values() if table in v})
+# O arquivo de controle mapeia snapshot -> {tabela: versão}; o vacuum preserva essas versões.
+def vacuum_keeping_snapshots(dt: DeltaTable, control: dict, table: str, retention_hours: int = 24 * 400,
+                             apply: bool = False) -> list[str]:
+    versions = sorted({v[table] for v in control["snapshots"].values() if table in v})
     return dt.vacuum(retention_hours=retention_hours, enforce_retention_duration=False,
                      dry_run=not apply, keep_versions=versions)
 
-control = json.load(open("controle.json"))   # {"fechamentos": {"2026T1": {"cad_operacoes": 2, ...}}}
-vacuum_keeping_closings(DeltaTable("cad_operacoes"), control, "cad_operacoes")   # lista sem apagar
+control = json.load(open("_serialize_db/snapshots.json"))   # {"snapshots": {"2026T1": {"cad_operacoes": 2, ...}}}
+vacuum_keeping_snapshots(DeltaTable("cad_operacoes"), control, "cad_operacoes")   # lista sem apagar
 ```
 
 Configuração que decorre disso: `delta.logRetentionDuration` em `interval 3650 days`;
 `delta.deletedFileRetentionDuration` na janela das versões comuns, por exemplo `interval 400 days`,
 que cobre uma reexecução de qualquer mês do ano anterior; e o `vacuum` mensal com `keep_versions`
-lido do arquivo de controle. Uma tabela nova de fechamento entra na lista no mesmo commit que a
-marca.
+lido do arquivo de controle. Uma tabela nova entra no snapshot no mesmo commit que a marca.
 
 | Quando | O quê |
 | --- | --- |
 | A cada execução | Checkpoint automático; `custom_metadata` com `id_execucao` e as versões lidas. |
-| Fechamento trimestral | `custom_metadata={"fechamento": ...}` nos commits e a entrada no arquivo de controle. |
-| Mensal | `vacuum(dry_run=True, keep_versions=fechamentos)` revisado e depois executado; `full=True` de tempos em tempos para os órfãos. |
-| Antes de um fechamento | `optimize.compact` nos meses com arquivos pequenos. |
-| Anual | Cópia profunda dos fechamentos mais velhos que o prazo da tabela viva para a pasta de arquivo, e retirada de `keep_versions`. |
+| Snapshot do banco, na periodicidade do processo | `custom_metadata={"serialize_db_snapshot": ...}` nos commits e a entrada em `_serialize_db/snapshots.json`. |
+| Mensal | `vacuum(dry_run=True, keep_versions=snapshots)` revisado e depois executado; `full=True` de tempos em tempos para os órfãos. |
+| Antes de um snapshot | `optimize.compact` nos meses com arquivos pequenos. |
+| Anual | Cópia profunda dos snapshots mais velhos que o prazo da tabela viva para a pasta de arquivo, e retirada de `keep_versions`. |
 | Nunca em produção | `vacuum` com `enforce_retention_duration=False` sem `keep_versions` calculado. |
 
 ## Realocação e cópia do banco
@@ -937,6 +1096,8 @@ Implementações do protocolo e uso sem Spark:
 DuckDB:
 
 - <https://duckdb.org/docs/current/core_extensions/delta.html>
+- <https://duckdb.org/docs/current/data/partitioning/partitioned_writes.html>
+- <https://cwiki.apache.org/confluence/display/Hive/Parquet>
 - <https://duckdb.org/docs/current/core_extensions/iceberg/overview.html>
 
 Iceberg e Redshift:
