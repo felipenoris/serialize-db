@@ -218,6 +218,11 @@ Each fact below is detailed in the file named at the end of its line.
   refuses a retention below the table's deleted-file retention (168 h by default) unless
   `enforce_retention_duration=False`. Alembic has no role with Delta as the source of truth: a
   reconcile step applies additive schema diffs and refuses destructive ones. `docs/estrategia.md`
+- delta-rs `alter.add_columns` accepts a `nullable=False` column on a table with data and leaves it
+  null in every row, and `append` casts incoming data to the table type (int32, double and string
+  into `long` were accepted; decimal(20,4) into decimal(18,2) refused) without changing the table;
+  type changes need `mode="overwrite"` with `schema_mode="overwrite"`. The reconcile step must refuse
+  NOT NULL additions and the Arrow cast must enforce types before writing. `docs/estrategia.md`
 - PyIceberg 0.12.0 with a SQLite `sql` catalog writes Iceberg without a service: hidden partition by
   `month(data_ref)`, `overwrite` with a filter, rename and add columns, `add_files`; the catalog
   holds one row per table in a 20 KB file. DuckDB `iceberg_scan` needs the `metadata.json` path,

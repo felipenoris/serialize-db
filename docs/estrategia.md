@@ -91,6 +91,10 @@ Verificado localmente:
 | `restore(1)` | Nova versão 5 com os arquivos e o esquema da versão 1; operação `RESTORE` no histórico. |
 | `vacuum(retention_hours=0, dry_run=True)` | Recusado: `minimum retention for vacuum is configured to be greater than 168 hours`; com `enforce_retention_duration=False`, o dry run listou três arquivos. |
 | `convert_to_deltalake(uri, partition_by=..., partition_strategy="hive")` | Existe na API para registrar um diretório Parquet no lugar, sem reescrever; não foi testado. |
+| `alter.add_columns` com campo `nullable=False` numa tabela com 220.000 linhas | Aceito, operação `ADD COLUMN`; a coluna lê nula em todas as linhas, e o `append` seguinte de dados lidos da própria tabela falha com `declared as non-nullable but contains null values`. |
+| `alter.drop_column_not_null` | Aceito; operação `CHANGE COLUMN`, só metadados. |
+| `append` com `id_cliente` em `int32`, `double` ou `string` numa coluna `long` | Aceito com e sem `schema_mode="merge"`: os dados são convertidos para o tipo da tabela, que não muda. `decimal(20, 4)` numa coluna `decimal(18, 2)`: `SchemaMismatchError: Cannot cast`. |
+| `mode="overwrite"` com `schema_mode="overwrite"` e `id_cliente` em `double` | Aceito; a tabela inteira é reescrita e a coluna passa a `double`. |
 
 ### DuckLake
 
@@ -330,9 +334,14 @@ o esquema derivado do contrato, com nulidade, comentários de coluna em `metadat
 partição, nome, descrição e propriedades, e `mode="ignore"` torna a criação idempotente. As tabelas do
 sandbox são recriadas a cada execução a partir do contrato. A evolução das tabelas permanentes é uma
 reconciliação entre o contrato e o esquema atual da tabela: uma diferença aditiva (coluna nova
-anulável ou com padrão) é aplicada por `alter.add_columns` ou `schema_mode="merge"`; uma diferença
-destrutiva (renomear, remover, estreitar tipo) exige reescrever a tabela com
-`schema_mode="overwrite"`, e a biblioteca recusa aplicá-la sem essa ordem explícita. As tabelas
+anulável) é aplicada por `alter.add_columns` ou `schema_mode="merge"`, as linhas existentes leem nulo
+nela, e um valor para elas é um `update` com predicado; uma diferença destrutiva (renomear, remover,
+mudar tipo) exige reescrever a tabela com `schema_mode="overwrite"`, e a biblioteca recusa aplicá-la
+sem essa ordem explícita. Duas regras ficam na biblioteca porque o delta-rs não as impõe: coluna nova
+`NOT NULL` é recusada em tabela com dados, já que o `add_columns` a aceita e deixa a tabela
+inconsistente; e a verificação de tipos acontece no cast seguro para o esquema Arrow do contrato,
+antes da gravação, porque o `append` converte os dados para o tipo da tabela em vez de acusar a
+diferença. As tabelas
 publicadas no Redshift seguem o mesmo diff: `ALTER TABLE ADD COLUMN` no caso aditivo, recriação e
 recarga no destrutivo. A viagem no tempo não é migração: ela lê uma versão antiga com o esquema
 daquela versão, e `restore` volta dados e esquema a uma versão anterior como um commit novo. O alcance
