@@ -24,5 +24,6 @@ chama esse uso de "modelos como contrato".
 ### Commit atômico nos metadados
 
 O S3 não renomeia diretórios de forma atômica, e listar um prefixo mistura arquivos antigos, novos e
-parciais. Em aberto: como garantir atualização segura dos metadados?
+parciais. A escrita condicional do S3 (`If-None-Match`, `If-Match`) e o log do Delta Lake, que a usa,
+respondem a pergunta em [estrategia.md](estrategia.md).
 

@@ -136,8 +136,9 @@ Use this section to store your memory for this project. Keep this file within a 
 Read the file listed here before researching its subject again. Each document names the pages it
 came from, and `REFERENCES.md` collects every URL consulted so far, grouped by subject: Parquet
 format, Redshift, DuckDB, PyArrow, SQLAlchemy, pandas, PyIceberg, Glue Data Catalog, Athena, Lake
-Formation, SageMaker Unified Studio, S3 and Python packages. New research appends to the matching
-group.
+Formation, SageMaker Unified Studio, S3, Python packages, Delta Lake, DuckLake, Hudi, SQL tooling
+(SQLGlot, SQLMesh, dbt, Ibis, dlt), data-contract tools and Rust/PyO3. New research appends to the
+matching group.
 
 | File | Subject |
 | --- | --- |
@@ -148,6 +149,7 @@ group.
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
+| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the recommendation (Delta Lake plus SQLAlchemy Core) and the pending decisions. It records the local proof of concept of 2026-09-19. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
 `docs/duckdb.md` and `docs/redshift.md` share a section order: data organization and the differences
@@ -186,6 +188,30 @@ Each fact below is detailed in the file named at the end of its line.
 - Constraints cost on load and do not help queries in either engine: a DuckDB load of 300,000 rows
   went from 0.008 s to 0.073 s with a composite primary key, and Redshift keys are informational.
   `docs/schema.md`, `docs/duckdb.md`
+- S3 `PutObject` accepts `IfNoneMatch='*'` (since 2024-08-20) and `IfMatch=<etag>` (since
+  2024-11-25); failures return 412, conflicts 409. This is the primitive a table format needs for
+  atomic commits, and it answers the open question in `docs/guia.md`. `docs/estrategia.md`
+- `deltalake` 1.6.0 (2026-05-19) removed the DynamoDB lock store; S3 conditional put is the default
+  commit mode. The delta-rs docs page on S3 locking is stale. The writer does not read
+  `~/.aws/config`; credentials on SageMaker are a proof-of-concept item. `docs/estrategia.md`
+- Delta data files do not contain the partition column (it lives in the `add` action), so a
+  partition key must derive from a column in the file for Redshift `COPY`. DuckLake keeps identity
+  and source columns inside the files. `docs/estrategia.md`
+- delta-rs, DuckLake and DuckDB all write `DECIMAL(18, 2)` as `INT64`; PyArrow writes
+  `FIXED_LEN_BYTE_ARRAY`. The pending Redshift `COPY` test covers all three. `docs/estrategia.md`
+- DuckLake inlines inserts of up to 10 rows into the catalog by default (`DATA_INLINING_ROW_LIMIT`),
+  producing no Parquet file; a 10-row insert in the proof of concept wrote nothing to the data path.
+  Publishing to Redshift requires inlining off or a flush. `docs/estrategia.md`
+- A DuckLake catalog file served over HTTP attaches read-only with `ATTACH 'ducklake:http://...'`;
+  a SQLite catalog on S3 is unsupported by design. Without PostgreSQL the model is one writer at a
+  time, with the catalog file moved by the library. `docs/estrategia.md`
+- `DeltaTable.create_write_transaction` with `AddAction` registers Parquet files written by others
+  (the `UNLOAD` path); `ducklake_add_data_files` does the same for DuckLake, but failed on a table
+  partitioned by `year()`/`month()` in the proof of concept. `docs/estrategia.md`
+- SQLGlot transpiles function names and syntax between DuckDB and Redshift but passes through
+  constructs the target lacks (`INSERT ... BY NAME`, `list_aggregate`) and turned DuckDB
+  `VARCHAR(200)` into Redshift `VARCHAR(MAX)`; Redshift integration tests remain necessary.
+  `docs/estrategia.md`
 
 ## The state of the code
 
@@ -216,6 +242,11 @@ duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 and redshift_connector 2.1.16. T
 rows of `operacoes` with the columns `id_operacao`, `data_ref`, `id_cliente`, `valor` and
 `descricao`. The Redshift statements were compiled only; nothing ran against a cluster.
 
+The proof of concept in `docs/estrategia.md` ran on 2026-09-19 on macOS arm64 with Python 3.13,
+deltalake 1.6.4, DuckDB 1.5.5 with the `delta` and `ducklake` extensions (ducklake `d8a1881e`,
+metadata version 1.0), PyArrow 25.0.1 and SQLGlot 30.18.0, through `uv run --with` in the
+scratchpad. Nothing ran against S3 or Redshift.
+
 ## Questions the official documentation does not answer
 
 The documents mark these as pending the proof of concept.
@@ -229,6 +260,9 @@ The documents mark these as pending the proof of concept.
 - Whether Redshift Spectrum maps plain Parquet columns by name or by position.
 - The physical types `UNLOAD` writes for `TIMESTAMP` and `DECIMAL`, whether its columns are
   required, and whether it writes minimum and maximum statistics. The three affect `add_files`.
+- Whether `FILLRECORD` lets `COPY` from Parquet load older files that lack columns appended later
+  to the schema, which both Delta and DuckLake produce on evolution.
+- Which credential sources the delta-rs writer finds inside a SageMaker Unified Studio space.
 
 One gap is already understood and needs a decision rather than a test: `sqlalchemy-redshift` compiles
 `Text` as `TEXT`, which Redshift stores as `VARCHAR(256)`, so the `VARCHAR(65535)` of the contract
