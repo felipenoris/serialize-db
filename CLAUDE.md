@@ -326,6 +326,8 @@ and SQLAlchemy documents), PR #4 (`docs/estrategia.md`, `docs/delta.md`, Python 
 document, JSON treatment, S3 requirements, implementation stages) and PR #5 (identifier convention).
 The user merges each PR and syncs `main`; the next unit of work starts on a new `claude/` branch.
 PR #7 (protocol implementations section in `docs/delta.md`) was merged on 2026-09-19.
+PR #8 (2026-09-19, branch `claude/delta-consistencia-tabelas`) rewrites the cross-table consistency
+sentence and the single-transaction Redshift publication; while it is open, new commits go there.
 
 No library code exists beyond the models: `pyproject.toml` declares no dependencies and there is no
 `tests/` directory. The next work follows the stage table in `docs/estrategia.md`:
