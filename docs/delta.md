@@ -457,10 +457,36 @@ o delta-rs faz e o que a biblioteca precisa impor:
 | Adicionar coluna `NOT NULL` | `add_columns` com `nullable=False`. | Aceito numa tabela com 220.000 linhas; a coluna lê nula em todas, e o `append` seguinte de dados lidos da própria tabela falha com `declared as non-nullable but contains null values`. | Recusada em tabela com dados. |
 | Relaxar `NOT NULL` | `dt.alter.drop_column_not_null("coluna")`, commit `CHANGE COLUMN`. | Só metadados. | Aplicada automaticamente. |
 | Mudar tipo | `write_deltalake(mode="overwrite", schema_mode="overwrite")` com a tabela inteira. | O `append` converte os dados para o tipo da tabela em vez de mudá-lo: `int32`, `double` e `string` entraram numa coluna `long`. Só a reescrita mudou `long` para `double`. | Só por ordem explícita de reescrita. A verificação de tipos é o cast seguro para o esquema Arrow do contrato, antes de gravar. |
-| Renomear ou remover coluna | Column mapping (`drop_columns` no PR 4732, aberto). | Sem column mapping, só reescrevendo a tabela. | Só por ordem explícita de reescrita. |
+| Renomear ou remover coluna | Reescrita da tabela inteira com o esquema novo, num commit: `write_deltalake(mode="overwrite", schema_mode="overwrite")`, ou `COPY ... PARTITION_BY` do DuckDB mais `create_write_transaction(mode="overwrite", schema=...)`. Só por metadados exigiria column mapping, que o delta-rs não grava (`drop_columns` no PR 4732, aberto). | O commit leva `remove` de todos os arquivos vivos, `add` dos novos e `metaData`; a versão anterior lê com o esquema antigo. Com `predicate` de um mês, o delta-rs aceita e troca o esquema da tabela toda. | Só por ordem explícita de reescrita, sem predicado. |
 | Restrição `CHECK` | `add_constraint`, `drop_constraint`. | Commit `ADD CONSTRAINT`; propriedade `delta.constraints.<nome>`. | Aplicada automaticamente. |
 | Colunas de partição | Não há alteração; exige recriar a tabela. | | Só por ordem explícita. |
 | Recursos de protocolo | `dt.alter.add_feature(...)` ou implícito (`timestampNtz`). | Sobe `minReaderVersion` e `minWriterVersion`. | Só recursos que o DuckDB lê. |
+
+A reescrita que renomeia ou remove coluna foi medida numa tabela de doze meses, `valor` renomeada
+para `valor_bruto` e `descricao` removida. O `write_deltalake` alimentado pelo `RecordBatchReader`
+de `to_pyarrow_dataset().scanner(columns={...})` cresceu em memória com a tabela. O
+`COPY (SELECT id_operacao, data_ref, valor AS valor_bruto, mes FROM delta_scan(uri)) TO uri
+(FORMAT parquet, PARTITION_BY (mes), APPEND, FILENAME_PATTERN 'part-{uuid}', RETURN_STATS)` do
+DuckDB, registrado por `create_write_transaction(actions, mode="overwrite", schema=novo,
+partition_by=["mes"])`, produziu o mesmo commit, `remove` de 12, `add` de 12 e `metaData`, com
+memória constante; é o caminho para uma tabela que não cabe na máquina. Os dois leitores leram os
+doze meses com `valor_bruto` preenchida, e a versão anterior continuou lendo `valor` e `descricao`.
+Os arquivos antigos ficam no disco até o `vacuum` (25 arquivos para 12 no snapshot), e um snapshot
+do banco preso por `keep_versions` os mantém.
+
+| Caminho | 12 arquivos, 135 MB, 12.000.000 linhas | 12 arquivos, 269 MB, 24.000.000 linhas |
+| --- | --- | --- |
+| `write_deltalake(reader, mode="overwrite", schema_mode="overwrite")` | 0,3 s, RSS máximo 1.140 MB | 0,7 s, RSS máximo 1.960 MB |
+| `COPY ... (RETURN_STATS)` mais `create_write_transaction` | 0,4 s, RSS máximo 581 MB | 0,6 s, RSS máximo 605 MB |
+
+Reescrever um mês por vez não serve. `write_deltalake(mode="overwrite", schema_mode="overwrite",
+predicate="mes = '2026-02'")` foi aceito com um `add`, um `remove` e um `metaData`, e os outros onze
+meses passaram a ler `valor_bruto` como nulo no delta-rs e no DuckDB, com os valores ainda dentro
+dos arquivos sob o nome antigo; o `restore` da versão anterior desfez. A biblioteca recusa
+`predicate` junto com `schema_mode="overwrite"`. O `dt.alter` do delta-rs 1.6.4 oferece
+`add_columns`, `add_constraint`, `add_feature`, `drop_column_not_null`, `drop_constraint`,
+`set_column_metadata`, `set_table_description`, `set_table_name` e `set_table_properties`; não há
+`rename_column` nem `drop_columns`.
 
 A reconciliação é o comando da biblioteca que substitui a migração: compara `arrow_schema(Table)`
 com `dt.schema()`, aplica o diff aditivo, recusa o destrutivo com a instrução de reescrita, e repete
