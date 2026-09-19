@@ -138,18 +138,42 @@ anexam o catálogo no S3 só de leitura, sem cópia local. O modelo é de um esc
 
 ### Iceberg sem serviço de catálogo
 
-O PyIceberg 0.12.0 tem catálogos `rest`, `sql` (`sqlite:///...` ou PostgreSQL), `in-memory` (sem
-acesso concorrente, fora de produção), `hive`, `glue` e `dynamodb`. `StaticTable.from_metadata` abre
-uma tabela pelo arquivo de metadados, só para leitura, e `add_files` registra Parquet existentes por
-`field_id` ou por name mapping. A extensão `iceberg` do DuckDB lê por `iceberg_scan` apontando para os
-metadados, sem catálogo e só de leitura; a escrita exige um catálogo REST anexado;
+O Iceberg exige um catálogo porque cada commit gera um novo `metadata.json`, e o ponteiro para o
+atual é trocado de forma atômica fora dos arquivos da tabela. Sem serviço, o ponteiro cabe num
+catálogo em arquivo: o PyIceberg 0.12.0 tem o catálogo `sql`, que com `sqlite:///caminho` guarda uma
+linha por tabela (`metadata_location` e `previous_metadata_location`) e nada mais; o arquivo do teste
+tem 20.480 bytes. Os demais catálogos são `rest`, `in-memory` (sem acesso concorrente, fora de
+produção), `hive`, `glue` e `dynamodb`, e a configuração `py-catalog-impl` carrega uma implementação
+própria da classe `Catalog`, que tem 23 métodos abstratos. `StaticTable.from_metadata` lê uma tabela
+pelo arquivo de metadados, sem catálogo e só para leitura. A extensão `iceberg` do DuckDB lê por
+`iceberg_scan`, sem catálogo e só de leitura; a escrita pelo DuckDB exige um catálogo REST anexado;
 `iceberg_to_ducklake` copia os metadados de um catálogo Iceberg para um DuckLake. A `dlt` grava
 Iceberg com um catálogo SQLite em memória por tabela. O Redshift lê Iceberg só por esquema externo no
-Glue ou no Lake Formation.
+Glue ou no Lake Formation, e o catálogo Glue do PyIceberg registra uma tabela existente com
+`register_table(identificador, metadata_location)`.
 
-Sem catálogo, o Iceberg tem o mesmo problema do DuckLake, o arquivo de catálogo, e menos suporte de
-escrita no DuckDB. O caminho com Glue foi o plano anterior (PR 2) e depende de permissões que o
-projeto não tem.
+Verificado localmente com PyIceberg 0.12.0 (extras `sql-sqlite` e `pyiceberg-core`) e a extensão
+`iceberg` do DuckDB 1.5.5:
+
+| Verificação | Resultado |
+| --- | --- |
+| Tabela particionada por `month(data_ref)` e `append` de dois meses | Um arquivo por mês em `data/data_ref_month=2026-01/`; a coluna `data_ref` fica dentro do arquivo, e nenhuma coluna `mes` existe. |
+| `overwrite(dados, overwrite_filter=...)` de fevereiro | Um commit com dois snapshots (`delete` e `append`); o arquivo antigo de fevereiro saiu do snapshot atual. |
+| `append` sem o extra `pyiceberg-core` | `ImportError` na transformação de partição; o extra traz a implementação em Rust. |
+| `update_schema()` com `rename_column` e `add_column` | Esquema com `field_id` de 1 a 6; o arquivo antigo mantém o nome `descricao`, e o DuckDB mostra `descr`. |
+| Arquivo Parquet gravado pelo PyIceberg | `PARQUET:field_id` em cada coluna; `DECIMAL(18, 2)` como `INT64`; um row group para 100.000 linhas. |
+| `add_files` com um arquivo gravado pelo PyArrow | Registrado sem cópia; o DuckDB lê as 5.000 linhas do mês 3. |
+| `iceberg_scan` no DuckDB | Lê com os tipos corretos quando recebe o caminho do `metadata.json`. Sem o caminho falha: o PyIceberg não grava `version-hint.text`, e a adivinhação de versão do DuckDB procura `v<N>.metadata.json`, enquanto o PyIceberg nomeia `<N>-<uuid>.metadata.json`. |
+| `StaticTable.from_metadata` com filtro de fevereiro | 120.000 linhas, sem catálogo. |
+| Metadados de cinco commits | Cinco `metadata.json` e nove Avro, 49.721 bytes. |
+
+O custo do Iceberg sem serviço é o mesmo do DuckLake: o arquivo do catálogo é movido pela biblioteca
+(baixar com o ETag, anexar, subir com `IfMatch`), com um escritor por vez, e o DuckDB recebe da
+biblioteca o caminho do `metadata.json`. Um catálogo próprio que guarde o ponteiro num objeto do S3
+trocado com `IfMatch` dispensaria o SQLite e aceitaria vários escritores, ao preço de implementar a
+classe `Catalog`. O que o Iceberg dá em troca: partição oculta por `month(data_ref)`, evolução
+completa de esquema, `add_files` e a tabela registrável no Glue mais tarde sem conversão, com o
+Redshift passando a lê-la por esquema externo. O caminho com Glue foi o plano anterior (PR 2).
 
 ### Hudi e Lance
 
@@ -167,20 +191,20 @@ do S3.
 
 ### Comparação para os requisitos do projeto
 
-| Requisito | Delta Lake (delta-rs) | DuckLake (catálogo em arquivo) | Iceberg sem catálogo | Hive com manifesto próprio |
+| Requisito | Delta Lake (delta-rs) | DuckLake (catálogo em arquivo) | Iceberg (catálogo SQLite em arquivo) | Hive com manifesto próprio |
 | --- | --- | --- | --- | --- |
-| Serviço externo | Nenhum. | Nenhum; PostgreSQL só para vários escritores. | Nenhum; REST para escrever pelo DuckDB. | Nenhum. |
+| Serviço externo | Nenhum. | Nenhum; PostgreSQL só para vários escritores. | Nenhum; REST só para escrever pelo DuckDB. | Nenhum. |
 | Commit atômico no S3 | Nativo, put-if-absent no log. | Upload do catálogo com `IfMatch`, feito pela biblioteca. | Upload do catálogo, feito pela biblioteca. | Ponteiro com `IfMatch`, feito pela biblioteca. |
-| Vários escritores | Sim. | Não. | Não. | Não. |
-| Leitura no DuckDB | `delta_scan`, poda por partição e estatísticas, viagem no tempo. | Tabela nativa; catálogo no S3 só de leitura. | `iceberg_scan`, só leitura. | `read_parquet` com lista de arquivos. |
+| Vários escritores | Sim. | Não. | Não; sim com um catálogo próprio de ponteiro no S3. | Não. |
+| Leitura no DuckDB | `delta_scan`, poda por partição e estatísticas, viagem no tempo. | Tabela nativa; catálogo no S3 só de leitura. | `iceberg_scan` com o caminho do `metadata.json` vindo do catálogo; só leitura. | `read_parquet` com lista de arquivos. |
 | Escrita a partir do DuckDB | Arrow para `write_deltalake`; `INSERT INTO` só append. | `INSERT`, `DELETE`, `ALTER` nativos. | PyIceberg com Arrow. | `COPY ... TO` mais manifesto. |
-| Carga no Redshift | `COPY ... MANIFEST` da lista de `file_uris`. | `COPY ... MANIFEST` de `ducklake_data_file`. | `COPY ... MANIFEST` dos manifestos Avro. | `COPY ... MANIFEST`. |
+| Carga no Redshift | `COPY ... MANIFEST` da lista de `file_uris`. | `COPY ... MANIFEST` de `ducklake_data_file`. | `COPY ... MANIFEST` da lista de `plan_files()`. | `COPY ... MANIFEST`. |
 | Registro de arquivos do `UNLOAD` | `create_write_transaction`. | `ducklake_add_data_files`. | `add_files`. | Entrada no manifesto. |
 | Substituição idempotente do mês | `overwrite` com `predicate`. | `DELETE` e `INSERT` numa transação. | `overwrite` com filtro. | Trocar a lista do mês. |
 | `NOT NULL` e `CHECK` na escrita | Aplicados pelo escritor. | `NOT NULL` aplicado. | Campos `required`. | Só no Arrow. |
 | Evolução de esquema | Adicionar coluna; renomear e remover dependem de column mapping, incompleto no delta-rs. | Adicionar, remover, renomear, promover tipo. | Completa. | Manual por `field_id`. |
 | Coluna de partição dentro do arquivo | Não. | Sim. | Sim. | Escolha da biblioteca. |
-| Maturidade | Protocolo de 2019; leitores em Spark, Athena, Polars, DataFusion, DuckDB, dlt. | Especificação 1.0 de 2026-04; leitores DuckDB e MotherDuck. | Amplo, mas sem catálogo perde os escritores. | Só a biblioteca. |
+| Maturidade | Protocolo de 2019; leitores em Spark, Athena, Polars, DataFusion, DuckDB, dlt. | Especificação 1.0 de 2026-04; leitores DuckDB e MotherDuck. | Amplo; registrável no Glue depois por `register_table`. | Só a biblioteca. |
 
 ## Caminho para o Redshift com qualquer camada
 
@@ -356,14 +380,21 @@ leitores menor, permanece. O SQLMesh e o dbt saem, porque o pipeline é majorita
 e não transformações SQL. A troca do SQLAlchemy por SQLGlot puro exige reescrever as consultas sem
 ganho de portabilidade, porque os dois exigem os mesmos testes no Redshift.
 
+O Iceberg com catálogo SQLite é a alternativa que troca a ausência de código próprio do Delta pela
+sincronização do arquivo do catálogo. Ela passa a ser a escolha se houver perspectiva de o Glue ou o
+S3 Tables serem habilitados durante a vida do projeto: a tabela é registrada por `register_table` sem
+conversão, e o Redshift passa a lê-la por esquema externo. Sem essa perspectiva, o Delta permanece.
+
 ## Decisões
 
 - O pipeline é majoritariamente lógica Python. O SQLAlchemy define o modelo de dados (DDL) e gera os
   statements de `insert` e `select` que leem e escrevem DataFrames; nenhuma classe ORM é instanciada.
   Consequência: o SQLAlchemy permanece como metadados do contrato e Core; SQLMesh e dbt saem; a
   entrada e a saída de DataFrames passam por Arrow, com `COPY` no Redshift.
-- O Iceberg está excluído porque não há serviço habilitado para ele. Consequência: a camada de tabela
-  não pode depender de catálogo, e o Delta Lake com escrita condicional do S3 atende.
+- Não há serviço de catálogo habilitado para o projeto. Consequência: a camada de tabela não pode
+  depender de um serviço. O Delta atende sem código próprio; o Iceberg atende com o catálogo SQLite
+  em arquivo movido pela biblioteca, o mesmo custo do DuckLake. A escolha entre os dois depende de
+  haver ou não perspectiva de o Glue ou o S3 Tables serem habilitados durante a vida do projeto.
 - Execuções de desenvolvimento e de produção gravam tabelas separadas. Consequência: um caminho Delta
   por ambiente (`s3://<bucket>/<ambiente>/<tabela>/`) e o prefixo por ambiente no esquema do
   Redshift; a concorrência que resta é entre reexecuções do mesmo ambiente, que o log do Delta

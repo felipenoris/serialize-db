@@ -212,6 +212,11 @@ Each fact below is detailed in the file named at the end of its line.
   constructs the target lacks (`INSERT ... BY NAME`, `list_aggregate`) and turned DuckDB
   `VARCHAR(200)` into Redshift `VARCHAR(MAX)`; Redshift integration tests remain necessary.
   `docs/estrategia.md`
+- PyIceberg 0.12.0 with a SQLite `sql` catalog writes Iceberg without a service: hidden partition by
+  `month(data_ref)`, `overwrite` with a filter, rename and add columns, `add_files`; the catalog
+  holds one row per table in a 20 KB file. DuckDB `iceberg_scan` needs the `metadata.json` path,
+  because PyIceberg writes no `version-hint.text` and names metadata `<N>-<uuid>.metadata.json`.
+  Partition transforms on write need the `pyiceberg-core` extra. `docs/estrategia.md`
 - delta-rs maps the contract types from Arrow as `short`, `integer`, `long`, `boolean`, `double`,
   `decimal(p,s)`, `string`, `date`, `timestamp_ntz` (naive) and `timestamp` (UTC); a naive timestamp
   column raises the protocol to reader 3 / writer 7 with the `timestampNtz` feature, which DuckDB
@@ -221,8 +226,9 @@ Each fact below is detailed in the file named at the end of its line.
 
 Facts stated by the user, not visible in the code: the pipeline is mostly Python logic; SQLAlchemy is
 used only for the declarative models (DDL) and for Core `select` and `insert` statements that move
-DataFrames, never for ORM instances; Iceberg is excluded because no service that supports it is
-enabled; development and production runs write separate tables; renaming or dropping columns is
+DataFrames, never for ORM instances; no catalog service is enabled, which excludes Iceberg on Glue
+(Iceberg with a SQLite catalog file moved by the library is the documented alternative if Glue or
+S3 Tables may be enabled later); development and production runs write separate tables; renaming or dropping columns is
 rare. The decision recorded in `docs/estrategia.md` follows from them: Delta Lake through `deltalake`
 as the table layer, SQLAlchemy kept as contract metadata and Core, DataFrames moved through Arrow,
 SQLMesh, dbt and DuckLake not adopted.
@@ -257,9 +263,9 @@ rows of `operacoes` with the columns `id_operacao`, `data_ref`, `id_cliente`, `v
 `descricao`. The Redshift statements were compiled only; nothing ran against a cluster.
 
 The proof of concept in `docs/estrategia.md` ran on 2026-09-19 on macOS arm64 with Python 3.13,
-deltalake 1.6.4, DuckDB 1.5.5 with the `delta` and `ducklake` extensions (ducklake `d8a1881e`,
-metadata version 1.0), PyArrow 25.0.1 and SQLGlot 30.18.0, through `uv run --with` in the
-scratchpad. Nothing ran against S3 or Redshift.
+deltalake 1.6.4, DuckDB 1.5.5 with the `delta`, `ducklake` and `iceberg` extensions (ducklake
+`d8a1881e`, metadata version 1.0), PyIceberg 0.12.0 with the `sql-sqlite` and `pyiceberg-core`
+extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through `uv run --with` in the scratchpad. Nothing ran against S3 or Redshift.
 
 ## Questions the official documentation does not answer
 
