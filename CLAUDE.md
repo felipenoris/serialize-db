@@ -153,7 +153,7 @@ matching group.
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, SQL generation from a statement for both dialects (`compile`, dialect objects and their paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`) with self-contained examples, the `Numeric` float conversion of both dialects, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
-| `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), the protocol implementations (delta-spark, delta-rs, Delta Kernel) with the delta-rs gaps and their effect on the pipeline, S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the export of the current snapshot back to Parquet folders by month (copy by the log versus rewrite, with the measurements), the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
+| `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), the protocol implementations (delta-spark, delta-rs, Delta Kernel) with the delta-rs gaps and their effect on the pipeline, S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), the library's own metadata (`_serialize_db/snapshots.json`, commit keys, what stays in the log), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the export of the current snapshot back to Parquet folders by month (copy by the log versus rewrite, with the measurements), the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
 | `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, no Alembic) with the reasons and the maturity assessment of Delta against Iceberg with the re-evaluation trigger, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
@@ -248,7 +248,7 @@ Each fact below is detailed in the file named at the end of its line.
 - delta-rs log cleanup is automatic at checkpoint time and removes log files older than
   `delta.logRetentionDuration` (30 days by default): with `interval 0 days` version 0 became
   unreadable after five commits. `vacuum(keep_versions=[...])` preserves the files of chosen
-  versions (quarterly closings) while removing those of intermediate versions; `full=True` also
+  versions (database snapshots) while removing those of intermediate versions; `full=True` also
   lists orphan files. A deep copy of a version is `write_deltalake(destino,
   DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader())`. `docs/delta.md`
 - A JSON field is `sa.JSON().with_variant(SUPER(), "redshift")` in the model (DDL `JSON` on DuckDB,
@@ -304,6 +304,13 @@ Each fact below is detailed in the file named at the end of its line.
   rewriting with DuckDB `COPY (SELECT * FROM delta_scan(...)) TO ... (PARTITION_BY (mes))`, which
   gave one `data_0.parquet` per month with 11 threads and keeps the partition column out of the
   files unless `WRITE_PARTITION_COLUMNS true`. `docs/delta.md`
+- A database snapshot is the library's `{table: version}` set, marked on demand; the user renamed
+  it from `fechamento` on 2026-09-19, and the periodicity (quarterly in the examples) is the
+  process's choice. Commit key `serialize_db_snapshot`, control file `_serialize_db/snapshots.json`
+  at the environment root, written with `IfMatch`, reconstructible from `history()` only while the
+  log lasts because `commitInfo` is not in checkpoints. The library stores no schema, file list or
+  statistics; the DDL of an old snapshot comes from that version's Delta schema, not from the
+  current model. `docs/delta.md`
 
 ## The pipeline outside this repository
 
@@ -323,7 +330,7 @@ column mixins (`Operacao`, `Lancamento`, `Rastreio`) keep Portuguese names: they
 artifacts, like tables and columns. Python variables, functions, parameters, modules, the proposed
 API (`Database`, `Execution`, `ingest`, `audit`, `publish`) and the keys of `Table.info["serialize_db"]`
 (`partition_by`, `sort_key`, `redshift`) are English. Keys stored with the data stay Portuguese: Delta
-commit metadata (`id_execucao`, `fechamento`) and the closings control file (`fechamentos`). SQL
+commit metadata (`id_execucao`, `serialize_db_snapshot`) and the control file `_serialize_db/snapshots.json` (`snapshots`), with `snapshot` as an accepted loanword. SQL
 placeholders in prose (`COPY (consulta) TO ...`) and staging table names (`staging_<tabela>`) count as
 database identifiers.
 
