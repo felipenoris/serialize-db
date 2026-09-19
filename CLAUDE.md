@@ -148,7 +148,7 @@ matching group.
 | --- | --- |
 | `README.md` | Initialization with `uv init --python 3.13`. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
-| `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info`, constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Iceberg, DuckDB and Redshift, and SQL portability between the two engines. It ends with the JSON field treatment per layer (model `JSON().with_variant(SUPER(), "redshift")`, Arrow `json_` extension, Delta `string`, DuckDB `JSON`, Redshift `SUPER` via `JSON_PARSE`). |
+| `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Delta, DuckDB and Redshift, and SQL portability between the two engines. It ends with the JSON field treatment per layer (model `JSON().with_variant(SUPER(), "redshift")`, Arrow `json_` extension, Delta `string`, DuckDB `JSON`, Redshift `SUPER` via `JSON_PARSE`). |
 | `docs/parquet.md` | Parquet file layout and every metadata structure (`FileMetaData`, schema, row group, `ColumnMetaData`, page index, Bloom filters, page headers, key-value pairs, size and geospatial statistics, encryption, summary files), inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
@@ -301,6 +301,38 @@ commit metadata (`id_execucao`, `fechamento`) and the closings control file (`fe
 placeholders in prose (`COPY (consulta) TO ...`) and staging table names (`staging_<tabela>`) count as
 database identifiers.
 
+## Where the work stands
+
+Documentation is complete as of 2026-09-19 and merged on `main` by the user: PR #3 (DuckDB, Redshift
+and SQLAlchemy documents), PR #4 (`docs/estrategia.md`, `docs/delta.md`, Python examples in every
+document, JSON treatment, S3 requirements, implementation stages) and PR #5 (identifier convention).
+The user merges each PR and syncs `main`; the next unit of work starts on a new `claude/` branch.
+
+No library code exists beyond the models: `pyproject.toml` declares no dependencies and there is no
+`tests/` directory. The next work follows the stage table in `docs/estrategia.md`:
+
+- Stage 1, `serialize_db.contract`, and stage 2, `serialize_db.delta`, run on local folders and are
+  the natural next session: fix the models (importable `Base`, `Numeric(18, 2)`,
+  `autoincrement=False`, no `DEFERRABLE`, column `mes`, comments, `Table.info["serialize_db"]`),
+  then `arrow_schema`, `delta_schema`, `ddl(dialect)` and the generated `schema/<tabela>.delta.json`,
+  `.duckdb.sql` and `.redshift.sql` files compared by a test, then the Delta layer functions the
+  stage table lists.
+- Stage 0, the proof of concept on AWS, needs the user's SageMaker space, bucket and Redshift role
+  and settles the pending questions below. Stage 4, the Redshift engine, is the only one that needs
+  the cluster.
+- The proposed API (`Database`, `Execution` with `ingest`, `audit`, `publish`, `publish_redshift`,
+  `previous_months`, `sandbox`; modules `contract`, `delta`, `engine.duckdb`, `engine.redshift`,
+  `execution`) was accepted with PR #5 and is not code yet.
+
+Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
+--python 3.13 --with "deltalake==1.6.4" --with "duckdb==1.5.5" --with "pyarrow==25.0.1" ...` with
+the versions listed under the environment section; the scripts were not kept, the documents are the
+record, and the Redshift statements were compiled only. New examples are checked against the
+identifier convention by tokenizing the Python blocks: only `NAME` tokens are candidates, and
+strings, attribute access after `.`, `name: Mapped[...]` annotations and keyword arguments of
+`.values(...)` and of model constructors are column names. The Portuguese names left after that
+check are columns, ORM classes and the loanwords `sandbox` and `staging`.
+
 ## The state of the code
 
 `src/serialize_db/model/` holds three modules of declarative models: `model_base_contabil.py`
@@ -321,8 +353,6 @@ SQLAlchemy emits and discards the clause (`create_all` passes; the column-level 
 `PRIMARY KEY ... DEFERRABLE` fail with `Constraint not implemented!`), and the Redshift
 `CREATE TABLE` syntax has no such clause. The clause goes away anyway (`docs/sqlalchemy.md`).
 
-`REFERENCES.md` links `docs/plano-de-implementacao.md`, which is not in the repository.
-
 ## Environment of the measurements
 
 The examples in `docs/parquet.md`, `docs/duckdb.md` and `docs/sqlalchemy.md` ran on 2026-09-18 with
@@ -335,7 +365,8 @@ The proof of concept in `docs/estrategia.md` ran on 2026-09-19 on macOS arm64 wi
 deltalake 1.6.4, DuckDB 1.5.5 with the `delta`, `ducklake` and `iceberg` extensions (ducklake
 `d8a1881e`, metadata version 1.0), PyIceberg 0.12.0 with the `sql-sqlite` and `pyiceberg-core`
 extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through `uv run --with` in the scratchpad, with 11 DuckDB
-threads and the files in the page cache. Nothing ran against S3 or Redshift.
+threads and the files in the page cache. Nothing ran against S3 or Redshift. The Python examples
+added to every document on 2026-09-19 ran under the same pinned versions.
 
 ## Questions the official documentation does not answer
 
@@ -349,7 +380,8 @@ The documents mark these as pending the proof of concept.
 - What `COPY` from Parquet does when a string exceeds the target `VARCHAR`: truncate or abort.
 - Whether Redshift Spectrum maps plain Parquet columns by name or by position.
 - The physical types `UNLOAD` writes for `TIMESTAMP` and `DECIMAL`, whether its columns are
-  required, and whether it writes minimum and maximum statistics. The three affect `add_files`.
+  required, and whether it writes minimum and maximum statistics. The three affect the `AddAction`
+  that registers `UNLOAD` files in the Delta log (`register_file` in `docs/delta.md`).
 - Whether `FILLRECORD` lets `COPY` from Parquet load older files that lack columns appended later
   to the schema, which both Delta and DuckLake produce on evolution.
 - Which credential sources the delta-rs writer finds inside a SageMaker Unified Studio space.
