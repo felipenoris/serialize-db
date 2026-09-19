@@ -7,42 +7,32 @@ These are the instructions written by the user.
 
 ## Project Goals
 
+The main goal is to build a library that takes as input a database stored as a set of Parquet files, ingests the necessary files into DuckDB or Redshift while enforcing a schema, runs a pipeline on this data, and exports the updated database back to Parquet files, ideally incrementally. Only the data required by the pipeline will be ingested, since the full database may not fit on the local machine (in RAM or on disk). DuckDB or Redshift is used as a sandbox to generate new data, and a tool to perform complex queries.
+
+- The source of the truth of this database lives in those parquet files.
+
+- But the set of parquet files conform to a schema.
+
 - A core feature is the ability to import and export the database in Parquet format,
 ideally incrementally.
 
-- Use SQLAlchemy ORM for modeling the database schema.
+- Use SQLAlchemy with ORM for modeling the database schema using Python.
 
 - Support schema migration. Alembic is an option.
-
-- Parquet is the source of truth.
 
 - Pipeline execution engine will be: DuckDB or Redshift. Must support both.
 
 - Data will be published on Redshift for clients.
 
-- Project has access to a single Redshift schema in the current state. We could use a prefix on table names to implement a namespace, to separate production/development/pipeline execution.
+- The project has access to a single Redshift schema. We could use a prefix on table names to implement a namespace, to separate production/development/pipeline execution.
 
 - Parquet/DuckDB/Redshift are column-based, with small focus on table constraints:
 
-    - Parquet: isolates data for a single table, with no contepts of primary key, foreign key, autoincrement columns. Parquet metadata must be 
+  - Parquet: isolates data for a single table, with no contepts of primary key, foreign key, autoincrement columns. Parquet metadata must be 
 
-    - DuckDB: enforces constraints, but at a performance cost;
+  - DuckDB: enforces constraints, but at a performance cost;
 
-    - Redshift: constraints are informational only.
-
-- Pipeline structure:
-
-    - Option 1: Parquet files are the single source of truth (how it works today). The
-    relational database is always rebuilt from scratch, and the pipeline exports new
-    Parquet partitions.
-
-    - Option 2: Parquet files are just backups. The new database (Redshift/DuckDB) is
-    the single source of truth and periodically exports its state to Parquet files.
-
-- In the previous version, new data was inserted into the relational database with a
-single large `INSERT` statement. With the new technology this may change. I would also
-like to explore what `pyarrow` has to offer, based on
-<https://github.com/felipenoris/etl-cookbook-tutorial>.
+  - Redshift: constraints are informational only.
 
 ## References
 
