@@ -74,7 +74,25 @@ ART precisam caber em memória durante a criação.
 | `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | Cast explícito de nanossegundos (padrão do pandas) para microssegundos; o delta-rs aceita nanossegundos e grava microssegundos em silêncio. `timestamp_ntz` exige o recurso `timestampNtz` (leitor 3, escritor 7), que o delta-rs habilita ao gravar e o DuckDB lê como `TIMESTAMP`. |
 | `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Gravar sempre em UTC; o `timestamp` do Delta é ajustado a UTC, e um fuso diferente entra como o mesmo instante. O `UNLOAD` descarta o fuso. |
 | `Uuid` | `string` | `string` | `VARCHAR` | `VARCHAR(36)` | O Redshift não tem tipo UUID. |
-| `JSON`, `LargeBinary`, `ARRAY`, `Interval` | | | | | Fora do contrato até haver um caso de uso. |
+| `JSON().with_variant(SUPER(), "redshift")` | `string` (ou a extensão `arrow.json`) | `string` | `JSON` | `SUPER` | Texto JSON é a forma de troca; a validação é do DuckDB na carga e do `JSON_PARSE` no Redshift. Detalhes na seção seguinte. |
+| `LargeBinary`, `ARRAY`, `Interval` | | | | | Fora do contrato até haver um caso de uso. |
+
+### Campos JSON
+
+Um campo JSON guarda um documento sem esquema fixo; chaves com esquema fixo viram colunas. O
+tratamento em cada camada, verificado em 2026-09-19:
+
+| Camada | Tipo | Comportamento |
+| --- | --- | --- |
+| Modelo | `sa.JSON().with_variant(SUPER(), "redshift")`, com `SUPER` de `sqlalchemy_redshift.dialect`. | O DDL compila `JSON` no DuckDB e `SUPER` no Redshift; `isinstance(tipo, sa.JSON)` continua verdadeiro, e `tipo_arrow` o reconhece. |
+| Arrow | `pa.json_(pa.string())`, extensão `arrow.json`, ou `pa.string()`. | Um `dict` do pandas vira `struct`; a biblioteca serializa com `json.dumps` antes do cast. O Arrow não valida o texto. |
+| Delta | `string`, com `ARROW:extension:name = arrow.json` nos metadados do campo quando o esquema Arrow traz a extensão. | O delta-rs grava o arquivo com o tipo lógico `String`; `schema().to_arrow()` devolve `string` simples. |
+| Parquet | `BYTE_ARRAY` com tipo lógico `JSON` quando gravado pelo PyArrow ou pelo DuckDB, `String` quando gravado pelo delta-rs. | Os dois entram na mesma tabela Delta e são lidos pelos dois leitores. |
+| DuckDB | `JSON` nas tabelas do sandbox; `VARCHAR` no `delta_scan`. | `::JSON` valida na materialização (`Malformed JSON` para texto inválido); `->>`, `json_extract` e `json_valid` funcionam sobre `VARCHAR`; a saída em Arrow volta como `string`. |
+| Redshift | `SUPER`. | A staging recebe `VARCHAR(65535)` e o `INSERT ... SELECT` aplica `JSON_PARSE`; o `UNLOAD` devolve texto com `JSON_SERIALIZE`. Documentos acima de 65.535 bytes dependem do `COPY` direto em `SUPER`, pendente da prova de conceito. |
+
+A auditoria confere `json_valid` no DuckDB antes de publicar, porque nem o Arrow nem o Delta validam
+o texto.
 
 ## Portabilidade de SQL entre DuckDB e Redshift
 

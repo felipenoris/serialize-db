@@ -44,6 +44,22 @@ trabalho, column chunk para I/O e página para codificação e compressão. Um l
 intervalos de bytes. Num object store como o S3 isso vira duas requisições de metadados e uma
 requisição por intervalo de dados.
 
+Os 8 bytes finais bastam para localizar o rodapé:
+
+```python
+# O leitor começa pelos 8 bytes finais: tamanho do rodapé e número mágico; depois lê o FileMetaData inteiro.
+import struct
+import pyarrow.parquet as pq
+
+with open("operacoes.parquet", "rb") as f:
+    f.seek(-8, 2)
+    tamanho_rodape, magico = struct.unpack("<i4s", f.read(8))
+    f.seek(-8 - tamanho_rodape, 2)
+    rodape = f.read(tamanho_rodape)  # FileMetaData em Thrift compacto, ainda sem decodificar
+print(magico, tamanho_rodape == pq.read_metadata("operacoes.parquet").serialized_size)
+# b'PAR1' True
+```
+
 Recuperação de erros, segundo a especificação: rodapé corrompido perde o arquivo; `ColumnMetaData`
 corrompido perde o column chunk; cabeçalho de página corrompido perde as páginas seguintes do chunk.
 Row groups menores tornam o arquivo mais resiliente.
@@ -76,6 +92,26 @@ PyArrow grava `version` 2 (exibido como `format_version 2.6`) e o DuckDB grava 1
 cresce com row groups × colunas, e um leitor o decodifica inteiro antes de ler qualquer dado, o que
 pesa em arquivos com milhares de row groups ou colunas.
 
+Nos exemplos em Python deste documento, `tabela` é a tabela Arrow do mês com as cinco colunas do
+contrato, `esquema` é o esquema dela (`esquema_arrow` de [sqlalchemy.md](sqlalchemy.md), sem a coluna
+de partição `mes`, que fica no diretório), `tabela_mes` acrescenta `mes` derivada de `data_ref`
+(`pc.strftime(tabela["data_ref"], "%Y-%m")`) e `con` é a conexão DuckDB do sandbox com a tabela
+`operacoes`. Eles rodaram em 2026-09-19 com PyArrow 25.0.1, DuckDB 1.5.5 e deltalake 1.6.4, sobre
+uma amostra com a mesma forma do arquivo de exemplo.
+
+```python
+# Grava o mês com o esquema do contrato e lê os campos do FileMetaData que o PyArrow expõe.
+import pyarrow.parquet as pq
+
+pq.write_table(tabela, "operacoes.parquet", version="2.6", compression="zstd", row_group_size=100_000)
+md = pq.read_metadata("operacoes.parquet")
+print(md.created_by, md.format_version, md.num_rows, md.num_row_groups)
+# parquet-cpp-arrow version 25.0.1 2.6 300000 3
+pq.write_table(tabela, "operacoes_v1.parquet", version="1.0")
+print(pq.read_metadata("operacoes_v1.parquet").format_version)
+# 1.0
+```
+
 ### Schema
 
 O esquema é uma lista de `SchemaElement` em ordem de profundidade. Nós internos (grupos) têm
@@ -90,7 +126,7 @@ ligam às folhas por `path_in_schema`.
 | `name` | Nome do campo. |
 | `num_children` | Filhos de um grupo. |
 | `converted_type`, `scale`, `precision` | Anotações antigas, mantidas para leitores anteriores ao `logicalType`. |
-| `field_id` | Identificador estável do campo, independente do nome e da posição. O Iceberg e o parâmetro `schema` do DuckDB dependem dele. |
+| `field_id` | Identificador estável do campo, independente do nome e da posição. O Iceberg, o Delta com column mapping e o parâmetro `schema` do DuckDB dependem dele; o PyArrow o grava a partir do metadado de campo `PARQUET:field_id`. |
 | `logicalType` | Anotação que diz como interpretar o tipo físico: `STRING`, `MAP`, `LIST`, `ENUM`, `DECIMAL(scale, precision)`, `DATE`, `TIME(unit, isAdjustedToUTC)`, `TIMESTAMP(unit, isAdjustedToUTC)`, `INTEGER(bitWidth, isSigned)`, `UNKNOWN` (sempre nulo), `JSON`, `BSON`, `UUID`, `FLOAT16`, `VARIANT`, `GEOMETRY`, `GEOGRAPHY`, `FILE`. |
 
 O conjunto de tipos físicos é mínimo de propósito: não existe `INT16` porque um `INT32` com uma boa
@@ -112,6 +148,33 @@ e o DuckDB grava `optional` em toda coluna, inclusive as declaradas `NOT NULL` n
 na versão 1.5.5). Um contrato de esquema que dependa de `REQUIRED` no Parquet não pode ser produzido
 pelo DuckDB.
 
+Os três pontos se decidem no esquema Arrow e nas opções de gravação:
+
+```python
+# Obrigatoriedade, field_id e tipo físico do DECIMAL vêm do esquema Arrow e das opções de gravação.
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+esquema = pa.schema([
+    pa.field(c.name, tipo_arrow(c.type), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
+    for i, c in enumerate(Operacao.__table__.columns, start=1)
+    if c.name != "mes"
+])
+pq.write_table(tabela.cast(esquema), "operacoes.parquet", store_decimal_as_integer=True)
+print(pq.ParquetFile("operacoes.parquet").schema)
+# required int64 field_id=1 id_operacao;
+# ...
+# required int64 field_id=4 valor (Decimal(precision=18, scale=2));
+# optional binary field_id=5 descricao (String);
+print(pq.read_schema("operacoes.parquet").field("valor"))
+# pyarrow.Field<valor: decimal128(18, 2) not null>
+```
+
+`nullable=False` vira `required`. O metadado de campo `PARQUET:field_id` vira `field_id`; um metadado
+com outra chave (`field_id`, por exemplo) é ignorado, e o arquivo sai com `field_id=-1`.
+`store_decimal_as_integer=True` grava o `DECIMAL(18, 2)` como `INT64`, como o DuckDB, e o esquema
+Arrow lido de volta é `decimal128(18, 2)` nos dois tipos físicos.
+
 Esquema do arquivo de exemplo gravado pelo PyArrow, na notação do `parquet-cpp`:
 
 ```text
@@ -122,6 +185,22 @@ required group field_id=-1 schema {
   required fixed_len_byte_array(8) field_id=4 valor (Decimal(precision=18, scale=2));
   optional binary field_id=5 descricao (String);
 }
+```
+
+O tipo lógico `JSON` anota um `BYTE_ARRAY` com texto JSON. O PyArrow o grava para a extensão
+`arrow.json` (`pa.json_(pa.string())`), o DuckDB o grava para colunas `JSON` e lê as duas formas como
+`JSON`; um leitor que não conhece a anotação vê texto UTF-8. O delta-rs grava a mesma coluna como
+`String`, e a tabela Delta aceita arquivos das duas formas ([campos JSON](schema.md)).
+
+```python
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+# A extensão arrow.json vira o tipo lógico JSON no rodapé; o DuckDB lê a coluna como JSON.
+docs = pa.array(['{"origem": "A"}', None], pa.string()).cast(pa.json_(pa.string()))
+pq.write_table(pa.table({"meta": docs}), "eventos.parquet")
+pq.ParquetFile("eventos.parquet").schema.column(0).logical_type            # JSON
+con.sql("DESCRIBE SELECT * FROM 'eventos.parquet'").fetchall()[0][1]      # 'JSON'
 ```
 
 ### Row group
@@ -148,6 +227,28 @@ O row group é a unidade de poda por estatísticas e de paralelismo na leitura. 
 `sorting_columns` é gravado pelo PyArrow quando se passa `sorting_columns` (o gravador não ordena
 nem confere) e não é gravado pelo DuckDB (o arquivo do exemplo saiu com a lista vazia). A página de
 status de implementação marca o DuckDB como leitor desse campo.
+
+Em streaming, cada lote vira um row group:
+
+```python
+# Um row group por lote: o ParquetWriter fecha um row group a cada write_batch, sem materializar o mês.
+import pyarrow.parquet as pq
+
+leitor = con.execute("""
+    SELECT id_operacao, data_ref, id_cliente, valor, descricao
+    FROM operacoes WHERE mes = '2026-08' ORDER BY data_ref, id_operacao
+""").to_arrow_reader(100_000)
+caminho = "operacoes/mes=2026-08/exec_abc123.parquet"
+with pq.ParquetWriter(caminho, esquema, compression="zstd") as escritor:
+    for lote in leitor:
+        escritor.write_batch(lote.cast(esquema))  # o DuckDB entrega todo campo anulável; o cast aplica o contrato
+md = pq.read_metadata(caminho)
+print([md.row_group(i).num_rows for i in range(md.num_row_groups)])
+```
+
+Sem o cast, o `ParquetWriter` recusa o lote com `Table schema does not match schema used to create
+file`, porque o DuckDB entrega todo campo como anulável. `fetch_record_batch` está obsoleto no DuckDB
+1.5.5; `to_arrow_reader` o substitui.
 
 ### ColumnMetaData
 
@@ -198,6 +299,43 @@ flutuante (recomendada, porque `TYPE_ORDER` é ambígua para NaN e para -0 e +0)
 As estatísticas do chunk são a base da poda de row groups: se `max_value < literal` ou
 `min_value > literal`, o row group inteiro é pulado.
 
+As mesmas estatísticas alimentam a ação `add` do Delta quando um arquivo gravado fora do delta-rs
+entra no log ([delta.md](delta.md), ingestão):
+
+```python
+# Estatísticas da ação add do Delta a partir do rodapé: mínimo, máximo e nulos agregados por coluna.
+import decimal
+from datetime import date
+import pyarrow.parquet as pq
+
+def valor_json(v):
+    """O delta-rs grava DECIMAL como número JSON e DATE como texto ISO nas estatísticas."""
+    if isinstance(v, decimal.Decimal):
+        return float(v)
+    return v.isoformat() if isinstance(v, date) else v
+
+def estatisticas_delta(caminho: str) -> dict:
+    md = pq.read_metadata(caminho)
+    minimos, maximos, nulos = {}, {}, {}
+    for i in range(md.num_row_groups):
+        rg = md.row_group(i)
+        for j in range(rg.num_columns):
+            coluna = rg.column(j)
+            s, nome = coluna.statistics, coluna.path_in_schema
+            nulos[nome] = nulos.get(nome, 0) + s.null_count
+            if s.has_min_max:
+                minimos[nome] = min(minimos.get(nome, s.min), s.min)
+                maximos[nome] = max(maximos.get(nome, s.max), s.max)
+    return {"numRecords": md.num_rows,
+            "minValues": {k: valor_json(v) for k, v in minimos.items()},
+            "maxValues": {k: valor_json(v) for k, v in maximos.items()},
+            "nullCount": nulos}
+```
+
+O dicionário é o argumento `estatisticas` de `registrar_arquivo` em [delta.md](delta.md). Com um
+arquivo de agosto registrado assim, `dt.file_uris(file_pruning_predicate="data_ref >= '2026-09-15'")`
+devolveu lista vazia, e `mes = '2026-08'` devolveu só esse arquivo.
+
 ### Page index
 
 O page index resolve um problema da versão original do formato: as estatísticas por página ficavam no
@@ -225,6 +363,19 @@ Suporte (página de status de implementação do Parquet e verificação local):
 | DuckDB 1.5.5 | Não (o arquivo gravado saiu sem `ColumnIndex` nem `OffsetIndex`). | Lê a estrutura, mas não poda páginas. |
 | parquet-java (Spark), arrow-rs (DataFusion), arrow-go | Sim. | Sim, com poda de páginas. |
 | Redshift | Não documentado. | Não documentado. |
+
+```python
+# O page index entra por opção do gravador; o rodapé diz se cada column chunk tem as duas estruturas.
+import pyarrow.parquet as pq
+
+pq.write_table(tabela, "operacoes.parquet", row_group_size=100_000, write_page_index=True)
+coluna = pq.read_metadata("operacoes.parquet").row_group(0).column(1)
+print(coluna.path_in_schema, coluna.has_column_index, coluna.has_offset_index)
+# data_ref True True
+```
+
+O `pyarrow.parquet` 25.0.1 não tem função que devolva o conteúdo do `ColumnIndex` ou do
+`OffsetIndex`; em Python, o rodapé só informa que eles existem.
 
 ### Bloom filters
 
@@ -280,6 +431,25 @@ No exemplo, o DuckDB gravou filtros para `data_ref` (144 bytes por row group) e 
 `descricao`, gravadas em `PLAIN`. O PyArrow, com `{'id_cliente': {'ndv': 5000, 'fpp': 0.01}}`,
 gravou 8.209 bytes por row group.
 
+```python
+# O filtro é pedido por coluna na gravação; o rodapé guarda offset e comprimento, e o DuckDB o consulta.
+import duckdb
+import pyarrow.parquet as pq
+
+pq.write_table(tabela, "operacoes.parquet", row_group_size=100_000,
+               bloom_filter_options={"id_cliente": {"ndv": 5_000, "fpp": 0.01}})
+md = pq.read_metadata("operacoes.parquet")
+for i in range(md.num_row_groups):
+    coluna = md.row_group(i).column(2)
+    print(i, coluna.path_in_schema, coluna.bloom_filter_offset, coluna.bloom_filter_length)
+# 0 id_cliente 6813051 8209
+print(duckdb.sql("""
+    SELECT row_group_id, bloom_filter_excludes
+    FROM parquet_bloom_probe('operacoes.parquet', 'id_cliente', 99999)
+""").fetchall())
+# [(0, True), (1, True), (2, True)]
+```
+
 ### Page headers
 
 Toda página começa com um `PageHeader`, e o resto do conteúdo depende do tipo:
@@ -316,6 +486,26 @@ valor em fluxos para comprimir melhor ponto flutuante e, desde a 2.11, inteiros 
 `BIT_PACKED` são obsoletas. Com `PARQUET_VERSION 'V2'` o DuckDB gravou `DELTA_BINARY_PACKED`,
 `RLE_DICTIONARY` e `DELTA_LENGTH_BYTE_ARRAY` e o arquivo do exemplo caiu de 3.288.592 para
 2.926.309 bytes (11 % menor, com zstd nos dois).
+
+```python
+# Dicionário e codificação são escolhidos por coluna na gravação e aparecem em `encodings` do column chunk.
+import pyarrow.parquet as pq
+
+pq.write_table(tabela, "operacoes.parquet", data_page_version="2.0", data_page_size=256 * 1024,
+               max_rows_per_page=10_000, use_dictionary=["data_ref", "id_cliente"],
+               column_encoding={"id_operacao": "DELTA_BINARY_PACKED", "descricao": "DELTA_LENGTH_BYTE_ARRAY"})
+rg = pq.read_metadata("operacoes.parquet").row_group(0)
+for j in range(rg.num_columns):
+    coluna = rg.column(j)
+    print(coluna.path_in_schema, coluna.encodings, coluna.has_dictionary_page)
+# id_operacao ('RLE', 'DELTA_BINARY_PACKED') False
+# data_ref ('PLAIN', 'RLE', 'RLE_DICTIONARY') True
+```
+
+`column_encoding` exige a coluna fora de `use_dictionary` (`To use 'column_encoding' set
+'use_dictionary' to False`). O DuckDB 1.5.5 leu esse arquivo inteiro. Com `valor` em
+`BYTE_STREAM_SPLIT`, que o PyArrow grava e lê sobre `FIXED_LEN_BYTE_ARRAY`, o DuckDB recusou a leitura
+com `BYTE_STREAM_SPLIT encoding is only supported for FLOAT or DOUBLE data`.
 
 ### Outros metadados
 
@@ -359,6 +549,31 @@ Arquivos de sumário `_metadata` e `_common_metadata`: convenção do Spark e do
 especificação. São arquivos Parquet só com rodapé; `_common_metadata` traz o esquema do conjunto e
 `_metadata` traz os row groups de todos os arquivos, com `ColumnChunk.file_path` apontando para cada
 um. O PyArrow monta os dois com `metadata_collector` e `write_metadata`. O DuckDB não os lê.
+
+```python
+# Chaves próprias no esquema Arrow voltam no rodapé ao lado de ARROW:schema; os sumários saem de metadata_collector.
+import pyarrow.parquet as pq
+
+com_metadados = tabela.replace_schema_metadata({"serialize_db_version": "0.1.0", "id_execucao": "abc123"})
+pq.write_table(com_metadados, "operacoes.parquet")
+print(pq.read_metadata("operacoes.parquet").metadata.keys())
+# dict_keys([b'ARROW:schema', b'id_execucao', b'serialize_db_version'])
+with pq.ParquetWriter("operacoes_2.parquet", tabela.schema) as escritor:
+    escritor.write_table(tabela)
+    escritor.add_key_value_metadata({"linhas": str(tabela.num_rows)})  # valor conhecido só no fim da gravação
+
+coletor = []
+pq.write_to_dataset(tabela_mes, "operacoes", partition_cols=["mes"], metadata_collector=coletor)
+esquema_dados = coletor[0].schema.to_arrow_schema()  # o esquema dos arquivos, sem a coluna de partição
+pq.write_metadata(esquema_dados, "operacoes/_common_metadata")
+pq.write_metadata(esquema_dados, "operacoes/_metadata", metadata_collector=coletor)
+print(pq.read_metadata("operacoes/_metadata").row_group(0).column(0).file_path)
+# mes=2026-01/597c7a1e1007448aa9114740c3c1a836-0.parquet
+```
+
+Com `store_schema=False` o PyArrow deixa de gravar também as chaves próprias, e `metadata` volta
+`None`. `write_metadata` exige o esquema dos arquivos: com o esquema de `tabela_mes`, que inclui
+`mes`, ele falha com `AppendRowGroups requires equal schemas`.
 
 Ordem das colunas (`column_orders`) e `sorting_columns` estão descritos nas seções
 [FileMetaData](#filemetadata) e [Row group](#row-group). A especificação reserva o campo Thrift 32767
@@ -609,9 +824,31 @@ Leitura particionada:
 | Redshift Spectrum | `CREATE EXTERNAL TABLE ... PARTITIONED BY (mes CHAR(7)) STORED AS PARQUET LOCATION 's3://.../'` e `ALTER TABLE ... ADD PARTITION (mes='2026-03') LOCATION 's3://.../mes=2026-03/'` (até 100 partições por comando com o Glue), ou um catálogo Glue que já conheça as partições. |
 | Redshift `COPY` | Não interpreta diretórios: um prefixo carrega todos os arquivos abaixo dele. Para carregar um mês, o `FROM` aponta para o diretório do mês ou para um manifesto. |
 
+As duas tabelas, em Python:
+
+```python
+# Gravação Hive por mês, com substituição idempotente da partição, e leitura que poda pelo diretório.
+import pyarrow as pa
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
+from datetime import date
+
+pq.write_to_dataset(tabela_mes, "operacoes", partition_cols=["mes"],
+                    basename_template="exec_abc123_{i}.parquet", existing_data_behavior="delete_matching")
+print(pq.read_schema("operacoes/mes=2026-08/exec_abc123_0.parquet").names)
+# ['id_operacao', 'data_ref', 'id_cliente', 'valor', 'descricao']: a coluna mes ficou no diretório
+particao = ds.partitioning(pa.schema([("mes", pa.string())]), flavor="hive")
+conjunto = ds.dataset("operacoes", format="parquet", partitioning=particao)
+print([f.path for f in conjunto.get_fragments(filter=ds.field("mes") == "2026-03")])
+# ['operacoes/mes=2026-03/exec_abc123_0.parquet']
+agosto = conjunto.to_table(columns=["id_operacao", "data_ref", "valor"],
+                           filter=(ds.field("mes") == "2026-08") & (ds.field("data_ref") >= date(2026, 8, 15)))
+```
+
 Além do Hive há o particionamento oculto do Iceberg (a transformação, como `month(data_ref)`, fica
-nos metadados da tabela, e os arquivos não precisam de diretórios `chave=valor`), tratado no plano de
-implementação, e o particionamento dentro do arquivo, que são os row groups ordenados. As duas camadas
+nos metadados da tabela, e os arquivos não precisam de diretórios `chave=valor`), o particionamento do
+Delta, que usa diretórios Hive com os valores registrados no log e sem a coluna dentro do arquivo
+([delta.md](delta.md)), e o particionamento dentro do arquivo, que são os row groups ordenados. As duas camadas
 se combinam: o diretório elimina meses, e as estatísticas dos row groups eliminam faixas dentro do
 mês.
 
@@ -701,6 +938,21 @@ Intervalos em colunas temporais. Partição por mês e ordenação por data dent
 `BETWEEN` em duas camadas. A documentação do DuckDB mediu uma coluna `DATETIME` ordenada contra a
 mesma coluna desordenada: 1,3 GB contra 3,3 GB de armazenamento e 0,6 s contra 0,9 s de consulta. A
 ordem melhora tanto a poda quanto a compressão.
+
+```python
+# Poda de row groups pelas estatísticas de data_ref, visível em split_by_row_group, e leitura só do que passa.
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
+from datetime import date
+
+agosto = (ds.field("data_ref") >= date(2026, 8, 1)) & (ds.field("data_ref") < date(2026, 9, 1))
+fragmento = next(ds.dataset("operacoes.parquet", format="parquet").get_fragments())
+print([rg.id for parte in fragmento.split_by_row_group(filter=agosto) for rg in parte.row_groups])
+# [2]: só o terceiro row group tem data_ref em agosto; os outros dois não são lidos
+print(len(fragmento.split_by_row_group(filter=ds.field("id_cliente") == 4242)))
+# 3: coluna aleatória, min e max cobrem o valor em todos os row groups
+t = pq.read_table("operacoes.parquet", columns=["id_operacao", "data_ref", "valor"], filters=agosto)
+```
 
 Colunas de baixa cardinalidade (status, tipo, moeda). Dicionário e RLE comprimem bem, e o DuckDB grava
 filtro Bloom para elas: no exemplo do blog do DuckDB, 10 valores distintos em 100 milhões de linhas
@@ -793,8 +1045,8 @@ flutuante (o blog do DuckDB mediu `range(1e9)` de 3,7 GB para 1,3 MB), mas o Duc
 confirmar que o Redshift lê o arquivo: o Spectrum documenta suporte ao Parquet v1, e o `UNLOAD`
 grava v1.
 
-Tipos. O tipo mais estreito que cabe nos dados, `TIMESTAMP` em microssegundos (o Iceberg rejeita
-nanossegundos e o `INT96` é obsoleto), `DECIMAL` como inteiro quando o leitor aceita
+Tipos. O tipo mais estreito que cabe nos dados, `TIMESTAMP` em microssegundos (o Delta grava
+microssegundos e converte os nanossegundos do pandas em silêncio; o `INT96` é obsoleto), `DECIMAL` como inteiro quando o leitor aceita
 (`store_decimal_as_integer` no PyArrow; o DuckDB já grava assim) e strings com dicionário. O
 [contrato de tipos](schema.md) já fixa isso.
 
@@ -812,6 +1064,29 @@ os ganhos vêm de menos arquivos, colunas certas e filtros que podem. O DuckDB t
 Evolução de esquema. `field_id` estável por coluna, colunas novas só em arquivos novos, sem renomear.
 O DuckDB lê conjuntos heterogêneos com `union_by_name = true` (colunas ausentes viram `NULL`, com
 mais memória) ou com o parâmetro `schema` por `field_id`; o PyArrow com `schema=` no dataset.
+
+As opções desta seção numa gravação em streaming a partir do sandbox:
+
+```python
+# Corte de arquivos e de row groups por linhas, com zstd, page index e checksum, a partir de um leitor em streaming.
+import pyarrow as pa
+import pyarrow.dataset as ds
+
+leitor = con.execute("""
+    SELECT id_operacao, data_ref, id_cliente, valor, descricao
+    FROM operacoes WHERE mes = '2026-08' ORDER BY data_ref, id_operacao
+""").to_arrow_reader(100_000)
+lotes = pa.RecordBatchReader.from_batches(esquema, (lote.cast(esquema) for lote in leitor))
+opcoes = ds.ParquetFileFormat().make_write_options(compression="zstd", write_page_index=True,
+                                                   write_page_checksum=True)
+ds.write_dataset(lotes, "operacoes/mes=2026-08", format="parquet", file_options=opcoes,
+                 basename_template="exec_abc123_{i}.parquet", existing_data_behavior="delete_matching",
+                 max_rows_per_file=1_000_000, min_rows_per_group=100_000, max_rows_per_group=100_000)
+```
+
+`write_dataset` não aceita `schema` junto com um `RecordBatchReader` (`Cannot specify a schema when
+providing a RecordBatchReader`); o contrato entra pelo leitor montado com `from_batches`, e o
+`required` das colunas `NOT NULL` chega ao arquivo.
 
 ## Importação e exportação de Parquet no DuckDB
 
@@ -861,6 +1136,35 @@ WHERE e.data_type IS DISTINCT FROM a.column_type
    OR e.ordinal_position IS DISTINCT FROM a.ordinal_position;
 -- vazio quando o arquivo casa com a tabela
 ```
+
+Em Python, a conferência lê só o rodapé e compara nomes, ordem e tipos com o contrato. `NOT NULL`
+fica para a tabela, porque o arquivo do DuckDB marca toda coluna como `optional`:
+
+```python
+# Conferência do arquivo contra o contrato antes da carga (nomes, ordem e tipos, sem ler dados) e carga por nome.
+import pyarrow.parquet as pq
+import sqlalchemy as sa
+
+def conferir_arquivo(contrato: sa.Table, caminho: str, particao: str = "mes") -> None:
+    esperado = [c for c in esquema_arrow(contrato) if c.name != particao]  # a partição fica no diretório
+    lido = pq.read_schema(caminho)
+    if lido.names != [c.name for c in esperado]:
+        raise ValueError(f"colunas do arquivo {lido.names}, contrato {[c.name for c in esperado]}")
+    for campo in esperado:
+        if lido.field(campo.name).type != campo.type:
+            raise ValueError(f"{campo.name}: arquivo {lido.field(campo.name).type}, contrato {campo.type}")
+
+conferir_arquivo(Operacao.__table__, "operacoes/mes=2026-08/exec_abc123_0.parquet")
+con.execute("""
+    INSERT INTO operacoes BY NAME
+    SELECT * FROM read_parquet('operacoes/mes=2026-08/*.parquet',
+                               hive_partitioning = true, hive_types = {'mes': VARCHAR})
+""")
+```
+
+A comparação é pelo tipo lógico: `pq.read_schema` devolve `decimal128(18, 2)` tanto para o
+`FIXED_LEN_BYTE_ARRAY` do PyArrow quanto para o `INT64` do DuckDB. Um arquivo com `valor` em `DOUBLE`
+falha com `valor: arquivo double, contrato decimal128(18, 2)`.
 
 Leitura pelo `field_id`, que torna a carga independente de nome e posição e aplica o tipo pedido:
 
@@ -950,6 +1254,24 @@ da consulta, nulos onde o modelo permite, `min` e `max` dentro do mês) sem reab
 segunda verificação lê `parquet_schema` do arquivo gravado e compara `type`, `logical_type`,
 `field_id` e a ordem com o esperado, do mesmo modo que a consulta de verificação da importação.
 
+```python
+# Auditoria da exportação sobre a linha que RETURN_STATS devolve, sem reabrir o arquivo.
+from datetime import date
+
+nome, linhas, bytes_arquivo, bytes_rodape, colunas, _ = con.execute(comando_copy).fetchone()
+colunas = {coluna.strip('"'): e for coluna, e in colunas.items()}  # as chaves vêm entre aspas; os valores são texto
+esperado = con.execute("SELECT count(*) FROM operacoes WHERE mes = '2026-08'").fetchone()[0]
+assert linhas == esperado, f"gravadas {linhas}, consultadas {esperado}"
+for obrigatoria in ("id_operacao", "data_ref", "id_cliente", "valor"):
+    assert colunas[obrigatoria]["null_count"] == "0", obrigatoria
+assert date(2026, 8, 1) <= date.fromisoformat(colunas["data_ref"]["min"])
+assert date.fromisoformat(colunas["data_ref"]["max"]) < date(2026, 9, 1)
+```
+
+`comando_copy` é o `COPY` acima como string. `column_statistics` chega como
+`MAP(VARCHAR, MAP(VARCHAR, VARCHAR))`: as chaves são os nomes das colunas entre aspas e todos os
+valores são texto, inclusive `null_count`.
+
 ## Importação e exportação de Parquet no Redshift
 
 O Redshift oferece três caminhos: `COPY` carrega arquivos do S3 numa tabela; `UNLOAD` grava o
@@ -991,6 +1313,28 @@ Regras da documentação para `COPY` de formatos colunares:
   comando falhar quando o arquivo falta. O `UNLOAD ... MANIFEST` gera um manifesto compatível.
 - `STATUPDATE ON` atualiza as estatísticas do otimizador depois da carga; por padrão isso só ocorre
   em tabela vazia.
+
+O manifesto sai da lista de arquivos do snapshot Delta ([delta.md](delta.md), exportação):
+
+```python
+# O manifesto do COPY sai da lista de arquivos do snapshot Delta; content_length é obrigatório em cada entrada.
+import json
+import pyarrow as pa
+from deltalake import DeltaTable
+
+dt = DeltaTable("s3://bucket/operacoes/", storage_options=opcoes_s3)  # credenciais conforme delta.md
+acoes = pa.table(dt.get_add_actions(flatten=True)).to_pylist()  # get_add_actions devolve uma tabela arro3
+raiz = dt.table_uri.rstrip("/")
+manifesto = {"entries": [
+    {"url": f"{raiz}/{acao['path']}", "mandatory": True, "meta": {"content_length": acao["size_bytes"]}}
+    for acao in acoes if acao["partition.mes"] == "2026-08"
+]}
+json.dumps(manifesto)  # vai para s3://bucket/staging/abc123/operacoes/manifest
+```
+
+Sobre uma tabela local com um arquivo de agosto registrado, o manifesto saiu com uma entrada,
+`mandatory: true` e `content_length` igual ao `size` da ação `add`; nada rodou contra o S3 nem contra
+o Redshift.
 
 O esquema definido é o DDL da tabela de destino (`CREATE TABLE` com tipos, `NOT NULL` e as chaves
 informativas). O que o Redshift garante e o que não garante:
@@ -1101,5 +1445,5 @@ Regras da documentação:
 
 Os dados do Spectrum não passam pelas verificações de `NOT NULL` nem de tipos na leitura além da
 compatibilidade acima; a tabela externa é um contrato de leitura. Para publicar os dados com o
-esquema verificado, o caminho é `COPY` da seção anterior, ou uma tabela Iceberg no catálogo, tratada
-no plano de implementação.
+esquema verificado, o caminho é o `COPY` da seção anterior, com o manifesto montado a partir dos arquivos
+da tabela Delta ([delta.md](delta.md)).

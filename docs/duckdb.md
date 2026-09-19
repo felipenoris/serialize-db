@@ -44,7 +44,7 @@ Três pontos do modelo de escrita afetam o pipeline:
 
 - Um processo escreve por vez. Dentro do processo, várias conexões podem escrever ao mesmo tempo com
   MVCC e controle otimista: appends nunca conflitam, e duas transações que alteram a mesma linha fazem
-  a segunda falhar com `Transaction conflict`. Outros processos só abrem o arquivo em modo
+  a segunda falhar com `TransactionContext Error: Conflict on update!`. Outros processos só abrem o arquivo em modo
   `READ_ONLY`; a escrita por vários processos passa pelo protocolo Quack, em beta na 1.5.2, ou pelo
   formato DuckLake.
 - O isolamento é por snapshot (leituras repetíveis). Uma transação enxerga o estado do início dela.
@@ -122,8 +122,9 @@ Tipos aninhados: `LIST` (`INTEGER[]`), `ARRAY` de tamanho fixo (`INTEGER[3]`), `
 profundidade. A atualização de um valor aninhado é reescrita como
 remoção e inserção.
 
-A conversão de objetos Python segue regras fixas: `int` tenta `BIGINT`, depois `INTEGER`, `UBIGINT`,
-`UINTEGER` e `DOUBLE`; `float` vira `DOUBLE`; `decimal.Decimal` vira `DECIMAL`; `datetime.datetime`
+A conversão de objetos Python segue regras fixas: `int` vira o menor inteiro em que cabe (`typeof(?)`
+devolveu `INTEGER` para `1` e `BIGINT` para `2**40`), com `UBIGINT` e `DOUBLE` para o que não cabe em
+`BIGINT`; `float` vira `DOUBLE`; `decimal.Decimal` vira `DECIMAL`; `datetime.datetime`
 vira `TIMESTAMP` ou `TIMESTAMPTZ` conforme tenha `tzinfo`; `dict` vira `STRUCT` ou `MAP`. Colunas
 `object` do pandas passam por uma fase de análise que amostra 1.000 valores para escolher o tipo; a
 opção `pandas_analyze_sample` muda o tamanho da amostra.
@@ -176,6 +177,37 @@ amostra, com valores até `99999.99`, foi inferida como `DECIMAL(7, 2)`, e um va
 posterior falharia no cast. A conversão para Arrow com o esquema do contrato antes do `INSERT` fixa o
 tipo e foi 25 vezes mais rápida na medição da seção de ingestão.
 
+A inferência e a correção aparecem numa ida e volta pelo Arrow, com o `esquema_arrow` de
+[sqlalchemy.md](sqlalchemy.md) e o modelo `Operacao` da seção sobre SQLAlchemy:
+
+```python
+# Coluna object de Decimal: tipo inferido pela amostra contra tipo fixado pelo esquema do contrato.
+from datetime import date
+from decimal import Decimal
+import duckdb, pandas as pd, pyarrow as pa
+
+con = duckdb.connect()
+con.execute("CREATE TABLE operacoes (id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL, "
+            "id_cliente BIGINT NOT NULL, valor DECIMAL(18, 2) NOT NULL, descricao VARCHAR)")
+df = pd.DataFrame({"id_operacao": [1, 2], "data_ref": [date(2026, 8, 1), date(2026, 8, 2)],
+                   "id_cliente": [10, 20], "valor": [Decimal("10.50"), Decimal("99999.99")],
+                   "descricao": ["a", None]})
+con.sql("DESCRIBE SELECT valor FROM df").fetchone()[1]         # 'DECIMAL(7,2)', inferido da amostra
+
+entrada = pa.Table.from_pandas(df, schema=esquema_arrow(Operacao.__table__), preserve_index=False)
+con.sql("DESCRIBE SELECT valor FROM entrada").fetchone()[1]    # 'DECIMAL(18,2)', fixado pelo contrato
+con.execute("INSERT INTO operacoes BY NAME SELECT * FROM entrada")
+
+volta = con.execute("SELECT * FROM operacoes ORDER BY id_operacao").to_arrow_table()
+volta.schema.field("valor").type, volta.schema.field("data_ref").type   # decimal128(18, 2), date32[day]
+volta.to_pandas(types_mapper=pd.ArrowDtype)["valor"].tolist() == df["valor"].tolist()   # True
+```
+
+Um lote posterior com `123456.78` na tabela inferida como `DECIMAL(7,2)` falha com `Conversion Error:
+Casting value "123456.78" to type DECIMAL(7,2) failed: value is out of range!`. O cast do Arrow barra
+`1.005` antes de qualquer arredondamento pelo DuckDB, com `Rescaling Decimal value would cause data
+loss`.
+
 ### JSON
 
 A extensão `json` vem na distribuição e carrega sozinha no primeiro uso. O tipo lógico `JSON` é
@@ -196,10 +228,36 @@ JSON usam índice a partir de zero; listas e arrays SQL começam em um. `read_js
 o esquema; `COPY (...) TO 'arquivo.json'` grava.
 
 Na ida e volta com pandas, uma coluna de strings com JSON serializado entra direto na coluna `JSON`;
-uma coluna de `dict` vira `STRUCT` e precisa do cast `doc::JSON` no `INSERT ... SELECT`; a leitura
-devolve `string` no Arrow e `str` no pandas. O contrato deixa `JSON` de fora
-([tipos no contrato](schema.md)); quando um caso de uso surgir, a escolha é entre uma coluna `JSON`
-com views de extração e um `STRUCT` de chaves fixas, mais rápido de filtrar.
+uma coluna de `dict` vira `STRUCT` e também entra, com conversão implícita no `INSERT ... SELECT`
+(`{"a":1,"b":{"c":[1,2]}}` foi gravado sem cast); a leitura devolve `string` no Arrow e `str` no
+pandas. Chaves com esquema fixo viram colunas do modelo, mais rápidas de filtrar; a coluna `JSON` fica
+para o documento sem esquema fixo.
+
+No contrato ([campos JSON](schema.md)), a coluna é `sa.JSON().with_variant(SUPER(), "redshift")`, que
+compila `JSON` no DuckDB, e o texto JSON é a forma de troca. O DuckDB é o único ponto da cadeia que
+valida: `::JSON` recusa texto malformado (`Malformed JSON at byte 1`), enquanto o Arrow e o Delta
+aceitam qualquer texto. Uma tabela Arrow com a extensão `arrow.json` é vista como `JSON` ao ser
+registrada; o `delta_scan` mostra `VARCHAR`, e `->>`, `json_extract` e `json_valid` funcionam sobre
+ele; a saída em Arrow volta como `string`, sem a extensão.
+
+```python
+import json
+import duckdb
+import pyarrow as pa
+
+# Documentos serializados entram como arrow.json; o DuckDB valida ao materializar e extrai campos.
+documentos = [{"origem": "sistema A", "tags": ["x"]}, None]
+textos = pa.array([json.dumps(d) if d is not None else None for d in documentos], pa.string())
+entrada = pa.table({"id_evento": pa.array([1, 2], pa.int64()), "meta": textos.cast(pa.json_(pa.string()))})
+con = duckdb.connect()
+con.register("entrada", entrada)
+con.sql("DESCRIBE SELECT * FROM entrada").fetchall()[1][1]                        # 'JSON'
+con.execute("CREATE TABLE eventos (id_evento BIGINT, meta JSON)")
+con.execute("INSERT INTO eventos BY NAME SELECT * FROM entrada")
+con.sql("SELECT id_evento, meta->>'origem' AS origem, json_valid(meta) AS valido FROM eventos").fetchall()
+# [(1, 'sistema A', True), (2, None, None)]
+con.sql("SELECT meta FROM eventos").to_arrow_table().schema.field("meta").type     # string
+```
 
 ## DDL
 
@@ -231,6 +289,42 @@ Variantes documentadas:
 - Colunas geradas: `two_x AS (2 * x)`, apenas `VIRTUAL`.
 - Sequências como chave: `CREATE SEQUENCE id_seq START 1;` e
   `id INTEGER PRIMARY KEY DEFAULT nextval('id_seq')`.
+
+O DDL do sandbox sai do contrato SQLAlchemy, sem chaves pela política de restrições, compilado pelo
+dialeto `duckdb_engine` e executado na conexão DuckDB:
+
+```python
+# DDL do sandbox derivado do contrato: sem chaves, com comentários, compilado pelo duckdb_engine.
+import duckdb, duckdb_engine, sqlalchemy as sa
+from sqlalchemy.schema import CreateTable, SetColumnComment, SetTableComment
+
+def tabela_sandbox(tabela: sa.Table) -> sa.Table:
+    """Cópia sem PRIMARY KEY, UNIQUE e FOREIGN KEY, conforme a política de restrições do sandbox."""
+    colunas = (sa.Column(c.name, c.type, nullable=c.nullable, comment=c.comment) for c in tabela.columns)
+    return sa.Table(tabela.name, sa.MetaData(), *colunas, comment=tabela.comment)
+
+def criar_tabela(con: duckdb.DuckDBPyConnection, tabela: sa.Table) -> None:
+    copia = tabela_sandbox(tabela)
+    comandos = [CreateTable(copia, if_not_exists=True),
+                *([SetTableComment(copia)] if copia.comment else []),
+                *(SetColumnComment(c) for c in copia.columns if c.comment)]
+    for comando in comandos:
+        con.execute(str(comando.compile(dialect=duckdb_engine.Dialect())))
+
+con = duckdb.connect()
+criar_tabela(con, Operacao.__table__)
+con.sql("SELECT sql FROM duckdb_tables() WHERE table_name = 'operacoes'").fetchone()[0]
+# 'CREATE TABLE operacoes(id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL, id_cliente BIGINT NOT NULL,
+#  valor DECIMAL(18,2) NOT NULL, descricao VARCHAR);'
+con.sql("SELECT column_name, comment FROM duckdb_columns() WHERE comment IS NOT NULL").fetchall()
+# [('id_cliente', 'Chave do cliente')]
+```
+
+`CreateTable` compila `NUMERIC(18, 2)` e `VARCHAR(200)`, que o catálogo guarda como `DECIMAL(18,2)` e
+`VARCHAR`, e não emite `COMMENT ON`; `SetTableComment` e `SetColumnComment` entram à parte. A tabela
+do contrato com `PRIMARY KEY (id_operacao, data_ref)` compila e executa do mesmo modo; uma chave
+`Integer` de uma coluna precisa de `autoincrement=False`, senão sai como `SERIAL`. O modelo
+`Operacao` e o caso do `SERIAL` estão na seção sobre SQLAlchemy.
 
 ### ALTER TABLE
 
@@ -425,6 +519,34 @@ COMMIT;
 Na API Python, `con.begin()`, `con.commit()` e `con.rollback()` fazem o mesmo; sem `begin()`, cada
 comando é sua própria transação. Vários comandos numa única string executam numa transação implícita.
 
+Com a coluna `mes` do contrato, a substituição vira uma função que confere o lote antes de
+confirmar:
+
+```python
+# Substituição de um mês: DELETE e INSERT numa transação, desfeita se a conferência do lote falhar.
+def substituir_mes(con: duckdb.DuckDBPyConnection, mes: str, entrada: pa.Table) -> None:
+    con.register("entrada", entrada)
+    con.begin()
+    try:
+        con.execute("DELETE FROM operacoes WHERE mes = ?", [mes])
+        con.execute("INSERT INTO operacoes BY NAME SELECT * FROM entrada")
+        (fora,) = con.execute("SELECT count(*) FROM operacoes "
+                              "WHERE mes = ? AND strftime(data_ref, '%Y-%m') <> mes", [mes]).fetchone()
+        if fora:
+            raise ValueError(f"{fora} linhas com data_ref fora do mês {mes}")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.unregister("entrada")
+```
+
+O `rollback()` desfaz o `DELETE` e o `INSERT`: no teste local, um lote com `data_ref` de setembro
+marcado como `2026-08` levantou `ValueError: 1 linhas com data_ref fora do mês 2026-08` e a tabela
+ficou como estava. `register` dá nome SQL à tabela Arrow e `unregister` o remove ao fim, com ou sem
+erro.
+
 ## Ingestão de dados
 
 A documentação ordena as formas de importar: um scanner de extensão quando a fonte é MySQL,
@@ -471,6 +593,37 @@ false` libera o DuckDB para reordenar e reduz a memória; `memory_limit` (padrã
 `threads` limitam o uso; `temp_directory` recebe o transbordo. O DuckDB paraleliza a leitura por row
 group e entre arquivos.
 
+A fonte da verdade é a tabela Delta ([delta.md](delta.md)), e o sandbox recebe só os meses da
+execução:
+
+```python
+# Meses da tabela Delta carregados no sandbox: snapshot fixado, filtro por partição e tabela local.
+import duckdb
+
+uri = "s3://bucket/prod/cad_operacoes"                 # ou o caminho de uma pasta local
+con = duckdb.connect("sandbox.duckdb")
+con.execute("INSTALL delta; LOAD delta;")
+con.execute(f"ATTACH '{uri}' AS fonte (TYPE delta, PIN_SNAPSHOT true)")
+con.execute("CREATE TABLE operacoes AS SELECT * FROM fonte WHERE mes IN ('2026-07', '2026-08')")
+con.sql("SELECT mes, count(*), min(data_ref), max(data_ref) FROM operacoes GROUP BY 1 ORDER BY 1").fetchall()
+# [('2026-07', 101091, datetime.date(2026, 7, 1), datetime.date(2026, 7, 31)),
+#  ('2026-08', 101079, datetime.date(2026, 8, 1), datetime.date(2026, 8, 31))]
+
+# Versão antiga lida sem anexar; a URI entra como parâmetro da função de tabela.
+con.execute("SELECT count(*) FROM delta_scan(?, version := 1) WHERE mes = '2026-08'", [uri]).fetchone()
+```
+
+O exemplo rodou sobre uma cópia local da tabela, com a amostra de 300.000 linhas em três meses. O
+`CREATE TABLE ... AS` traz a coluna de partição `mes` como coluna comum e todas as colunas como
+anuláveis; a nulidade fica com o esquema Delta e com a auditoria. `PIN_SNAPSHOT true` fixa a versão
+lida: um commit externo depois do `ATTACH` não mudou a contagem de `fonte`, e um `delta_scan` novo já
+viu a linha nova. O filtro por `mes` poda as partições (`Scanning Files: 1/4` no `EXPLAIN ANALYZE` do
+teste). Para URIs `s3://`, `CREATE SECRET (TYPE s3, PROVIDER credential_chain)` antes do `ATTACH` usa
+as credenciais da sessão. O caminho de volta, do sandbox para o Delta, é
+`write_deltalake(uri, con.execute(consulta).to_arrow_reader(50_000), mode="overwrite",
+predicate="mes = '2026-08'")`; `fetch_record_batch` está depreciado na 1.5.5 em favor de
+`to_arrow_reader`.
+
 ## Exportação para Parquet
 
 O `COPY ... TO` grava Parquet com escritor paralelo. As opções relevantes ao projeto, detalhadas no
@@ -510,6 +663,38 @@ A API relacional oferece o atalho `con.sql(consulta).write_parquet('arquivo.parq
 [gravação com ordenação](parquet.md) pela chave de ordenação melhora a compressão e a poda por
 estatísticas na leitura.
 
+Em Python, o `RETURN_STATS` devolve uma linha por arquivo gravado, e `column_statistics` chega como
+dicionário de dicionários de texto:
+
+```python
+# Conferência do arquivo exportado pelo RETURN_STATS: nulos em colunas NOT NULL e intervalo do mês.
+import os
+
+def exportar_mes(con: duckdb.DuckDBPyConnection, mes: str, pasta: str) -> dict[str, dict[str, str]]:
+    destino = f"{pasta}/mes={mes}/exec_abc123.parquet"
+    os.makedirs(os.path.dirname(destino), exist_ok=True)         # o COPY não cria a pasta
+    (linha,) = con.execute(f"""
+        COPY (SELECT id_operacao, data_ref, id_cliente, valor, descricao FROM operacoes
+              WHERE mes = ? ORDER BY data_ref, id_operacao)
+        TO '{destino}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000, RETURN_STATS)""", [mes]).fetchall()
+    estatisticas = linha[4]      # filename, count, file_size_bytes, footer_size_bytes, column_statistics, partition_keys
+    colunas = {nome.strip('"'): valores for nome, valores in estatisticas.items()}   # as chaves vêm entre aspas
+    for nome in ("id_operacao", "data_ref", "id_cliente", "valor"):
+        if colunas[nome]["null_count"] != "0":
+            raise ValueError(f"{nome}: {colunas[nome]['null_count']} nulos em coluna NOT NULL")
+    if not (colunas["data_ref"]["min"][:7] == mes == colunas["data_ref"]["max"][:7]):
+        raise ValueError(f"data_ref fora do mês {mes}: {colunas['data_ref']['min']} a {colunas['data_ref']['max']}")
+    return colunas
+
+exportar_mes(con, "2026-08", "operacoes")["valor"]
+# {'column_size_bytes': '264685', 'max': '99994.51', 'min': '0.04', 'null_count': '0', 'num_values': '149991'}
+```
+
+Os valores `min`, `max`, `null_count`, `num_values` e `column_size_bytes` são strings, inclusive para
+`DECIMAL` e `DATE` (`'2026-08-01'` a `'2026-08-31'` para `data_ref`). O `?` do mês é aceito dentro da
+consulta do `COPY`. Os mesmos valores alimentam a `AddAction` do registro do arquivo na tabela Delta
+([delta.md](delta.md)).
+
 ## Recomendações de performance
 
 ### Ingestão
@@ -529,6 +714,30 @@ estatísticas na leitura.
   para 50 a 60 % da RAM e desligar `preserve_insertion_order`.
 - Disco: SSD ou NVMe; EBS serve; a documentação desaconselha o formato nativo em modo leitura e
   escrita sobre NFS e SMB.
+
+Os limites entram na abertura da conexão ou por `SET`:
+
+```python
+# Memória, threads e pasta de transbordo definidos na abertura da conexão e conferidos no catálogo.
+import duckdb
+
+con = duckdb.connect("sandbox.duckdb", config={
+    "memory_limit": "8GB",                    # 50 a 60 % da RAM quando a memória falta
+    "threads": 4,                             # 1 a 4 GB por thread
+    "temp_directory": "sandbox_tmp",          # transbordo das operações maiores que a memória
+    "preserve_insertion_order": False,        # libera o reordenamento e reduz a memória
+})
+con.sql("SELECT name, value FROM duckdb_settings() WHERE name IN "
+        "('memory_limit', 'threads', 'temp_directory', 'preserve_insertion_order') ORDER BY name").fetchall()
+# [('memory_limit', '7.4 GiB'), ('preserve_insertion_order', 'false'), ('temp_directory', 'sandbox_tmp'), ('threads', '4')]
+con.execute("SET threads = 2; SET memory_limit = '4GB'")     # ajuste em tempo de execução
+con.sql("SELECT current_setting('threads'), current_setting('memory_limit')").fetchone()   # (2, '3.7 GiB')
+```
+
+Sem `temp_directory`, um banco em arquivo transborda para `<arquivo>.tmp` ao lado dele e um banco em
+memória para `.tmp` no diretório corrente; `max_temp_directory_size` limita o transbordo a 90 % do
+espaço livre do disco por padrão. `8GB` aparece como `7.4 GiB` porque o limite é lido em bytes
+decimais e exibido em unidades binárias.
 
 ### Organização das tabelas para filtros por chave e joins
 

@@ -144,13 +144,13 @@ matching group.
 | --- | --- |
 | `README.md` | Initialization with `uv init --python 3.13`. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
-| `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info`, constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Iceberg, DuckDB and Redshift, and SQL portability between the two engines. |
+| `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info`, constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Iceberg, DuckDB and Redshift, and SQL portability between the two engines. It ends with the JSON field treatment per layer (model `JSON().with_variant(SUPER(), "redshift")`, Arrow `json_` extension, Delta `string`, DuckDB `JSON`, Redshift `SUPER` via `JSON_PARSE`). |
 | `docs/parquet.md` | Parquet file layout and every metadata structure (`FileMetaData`, schema, row group, `ColumnMetaData`, page index, Bloom filters, page headers, key-value pairs, size and geospatial statistics, encryption, summary files), inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
-| `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), supported types, table creation from the SQLAlchemy model, schema evolution rules and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
-| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the recommendation (Delta Lake plus SQLAlchemy Core), the decisions taken with the user and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
+| `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
+| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, no Alembic) with the reasons, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execucao` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
@@ -247,6 +247,24 @@ Each fact below is detailed in the file named at the end of its line.
   versions (quarterly closings) while removing those of intermediate versions; `full=True` also
   lists orphan files. A deep copy of a version is `write_deltalake(destino,
   DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader())`. `docs/delta.md`
+- A JSON field is `sa.JSON().with_variant(SUPER(), "redshift")` in the model (DDL `JSON` on DuckDB,
+  `SUPER` on Redshift), `pa.json_(pa.string())` or `string` in Arrow, `string` in Delta (the
+  extension name is kept in field metadata), `JSON` logical type in Parquet written by PyArrow or
+  DuckDB and `String` when written by delta-rs; DuckDB reads `delta_scan` JSON as `VARCHAR` and
+  validates only on `::JSON`; Arrow and Delta never validate. `docs/schema.md`, `docs/delta.md`
+- S3 needs for Delta: `ListBucket` (prefix), `GetObject`, `PutObject` (commits use
+  `If-None-Match: *`, no extra IAM action; `object_store` defaults `aws_conditional_put` to
+  `etag`), `DeleteObject` for vacuum, KMS actions only with SSE-KMS; no lifecycle expiration under
+  table prefixes; versioning and Object Lock unnecessary. SSE keys in `storage_options`:
+  `aws_server_side_encryption`, `aws_sse_kms_key_id`, `aws_sse_bucket_key_enabled`. `docs/delta.md`
+- DuckDB 1.5.5 Python API: `.arrow()` returns a `RecordBatchReader`, and `fetch_record_batch()` /
+  `fetch_arrow_table()` are deprecated in favour of `to_arrow_reader()` / `to_arrow_table()`; the
+  reader is invalidated by any other command on the same connection. `pa.Table.from_pylist` wants
+  dicts: tuples give an all-null table without error. Only the field metadata key
+  `PARQUET:field_id` produces Parquet field ids. DuckDB cannot read `BYTE_STREAM_SPLIT` on a
+  DECIMAL column written by PyArrow. `DeltaTable.alter.add_columns` needs `deltalake.schema.Field`,
+  not `pyarrow.Field`. A pandas `dict` column enters a DuckDB `JSON` column without a cast.
+  `docs/duckdb.md`, `docs/parquet.md`, `docs/redshift.md`, `docs/sqlalchemy.md`
 - PyIceberg 0.12.0 with a SQLite `sql` catalog writes Iceberg without a service: hidden partition by
   `month(data_ref)`, `overwrite` with a filter, rename and add columns, `add_files`; the catalog
   holds one row per table in a 20 KB file. DuckDB `iceberg_scan` needs the `metadata.json` path,
@@ -283,9 +301,10 @@ not have. Only `model_base_contabil.py` declares `Base`. The models carry no dia
 expects `Numeric(18, 2)`. Their single-column integer primary keys keep the default `autoincrement`,
 which duckdb_engine renders as `SERIAL` and DuckDB rejects with `Type with name SERIAL does not
 exist!`; `autoincrement=False` avoids it. Foreign keys are declared `deferrable=True, initially='DEFERRED'`, which
-both dialects render as `DEFERRABLE INITIALLY DEFERRED`: DuckDB rejects that DDL with
-`Constraint not implemented!`, and the Redshift `CREATE TABLE` syntax has no such clause
-(`docs/sqlalchemy.md`, section on deferrable constraints).
+both dialects render as `DEFERRABLE INITIALLY DEFERRED`: DuckDB 1.5.5 accepts the table-level form
+SQLAlchemy emits and discards the clause (`create_all` passes; the column-level form and
+`PRIMARY KEY ... DEFERRABLE` fail with `Constraint not implemented!`), and the Redshift
+`CREATE TABLE` syntax has no such clause. The clause goes away anyway (`docs/sqlalchemy.md`).
 
 `REFERENCES.md` links `docs/plano-de-implementacao.md`, which is not in the repository.
 

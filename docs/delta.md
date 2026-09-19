@@ -57,6 +57,19 @@ Cada commit é um arquivo JSON nomeado pela versão com 20 dígitos, com uma aç
 | `remove` | `path`, `deletionTimestamp`, `partitionValues`, `size`. | Em cada arquivo que sai; o arquivo físico permanece até o `vacuum`. |
 | `txn` | `appId`, `version`, `lastUpdated`. | Quando a biblioteca registra uma transação de aplicação. |
 
+```python
+import json, pathlib
+from deltalake import DeltaTable
+
+# Ações de um commit lidas do log; no S3, history() e get_add_actions() dão o mesmo sem listar arquivos.
+def acoes_do_commit(raiz: str, versao: int) -> list[str]:
+    caminho = pathlib.Path(raiz, "_delta_log", f"{versao:020d}.json")
+    return [next(iter(json.loads(linha))) for linha in caminho.read_text().splitlines()]
+
+acoes_do_commit("cad_operacoes", 3)                 # ['commitInfo', 'remove', 'add']
+DeltaTable("cad_operacoes").history(1)[0]["operationParameters"]   # {'mode': 'Overwrite', 'predicate': "mes = '2026-02'", ...}
+```
+
 O arquivo que sai numa substituição não é apagado: a ação `remove` o retira do snapshot, e a viagem
 no tempo continua a enxergá-lo até o `vacuum`. Os valores de partição ficam na ação `add`, não dentro
 do arquivo de dados: o Parquet gravado pelo delta-rs para `mes=2026-02` tem cinco colunas, sem `mes`.
@@ -70,6 +83,17 @@ lê só os JSON posteriores. O delta-rs grava o checkpoint a cada `delta.checkpo
 (com o valor 5, o checkpoint apareceu na versão 4, a quinta) e sob demanda por
 `DeltaTable.create_checkpoint()`. `cleanup_metadata()` apaga arquivos de log anteriores ao último
 checkpoint e mais velhos que `delta.logRetentionDuration`.
+
+```python
+import json, pathlib
+from deltalake import DeltaTable
+
+dt = DeltaTable("cad_operacoes")
+dt.create_checkpoint()                       # checkpoint da versão atual, fora do intervalo automático
+dt.cleanup_metadata()                        # só apaga o que delta.logRetentionDuration permite
+json.loads(pathlib.Path("cad_operacoes/_delta_log/_last_checkpoint").read_text())
+# {'version': 6, 'size': 8, 'sizeInBytes': ..., 'numOfAddFiles': 5}
+```
 
 ### Diferenças para o PostgreSQL
 
@@ -129,6 +153,70 @@ de renomear de forma atômica, o que o S3 não tem.
 | Serviços da AWS | Athena lê; Glue cataloga por crawler; S3 Tables não. | Glue, Athena, Redshift Spectrum, S3 Tables e Lake Formation são nativos. |
 | Conversão entre os dois | Apache XTable converte metadados nos dois sentidos; o Databricks tem o UniForm. | O mesmo. |
 
+## Requisitos do S3
+
+O Delta exige do S3 o que o protocolo exige de qualquer armazenamento: listar e ler a pasta da
+tabela, criar objetos com put-if-absent e, na manutenção, apagar. O resto é configuração do bucket e
+dos papéis.
+
+Layout: um prefixo por ambiente e por tabela, `s3://<bucket>/<caminho do projeto>/delta/<ambiente>/<tabela>/`.
+Só a biblioteca escreve sob o prefixo de uma tabela; o staging do `COPY`, os manifestos de publicação
+e as cópias de fechamento ficam em prefixos próprios (`staging/`, `publicacao/`, `arquivo/`).
+
+Permissões do papel que executa o pipeline (delta-rs, DuckDB e `boto3` usam o mesmo):
+
+| Ação IAM | Uso |
+| --- | --- |
+| `s3:ListBucket`, com `s3:prefix` restrito ao caminho do projeto | Listar `_delta_log/` para achar a versão atual e os checkpoints; listar os dados no `vacuum` com `full=True`. |
+| `s3:GetObject` | Ler log, checkpoints e arquivos de dados. |
+| `s3:PutObject` | O commit é um `PutObject` com `If-None-Match: *`; arquivos de dados, checkpoints e `_last_checkpoint` são `PutObject` comuns. Arquivos grandes sobem por multipart, que usa a mesma ação mais `s3:AbortMultipartUpload` para a limpeza. |
+| `s3:DeleteObject` | `vacuum`, `cleanup_metadata` e a remoção do staging. O `object_store` apaga em lote (`DeleteObjects`); `aws_disable_bulk_delete` desliga. |
+| `kms:Decrypt`, `kms:Encrypt`, `kms:GenerateDataKey` | Só quando o bucket usa SSE-KMS. |
+
+O papel do Redshift precisa de `s3:GetObject` e `s3:ListBucket` para o `COPY` (manifesto e arquivos) e
+de `s3:PutObject` para o `UNLOAD` no prefixo da tabela. A política do bucket não pode bloquear as
+URLs pré-assinadas do `COPY` (`s3:signatureAge` de pelo menos 3.600.000 ms, em
+[`parquet.md`](parquet.md)), e o bucket fica na região do namespace do Redshift.
+
+Escrita condicional: nenhuma ação IAM adicional. O `object_store` usa `aws_conditional_put` igual a
+`etag` por padrão, e o S3 aceita `If-None-Match` e `If-Match` em `PutObject` e
+`CompleteMultipartUpload`. Uma política de bucket pode exigir o cabeçalho com a chave de condição
+`s3:if-none-match` (`"Null": {"s3:if-none-match": "false"}`), com a exceção
+`s3:ObjectCreationOperation` para as etapas do multipart, que não aceitam cabeçalhos condicionais.
+Com essa política, `CopyObject` para o prefixo falha (403 sem o cabeçalho, 501 com ele). Ela é
+opcional e só faz sentido restrita a `*/_delta_log/*`, para barrar escritores que não sejam Delta.
+
+Consistência: o S3 dá leitura e listagem consistentes após a escrita, e o protocolo depende disso
+para enxergar o commit recém-criado. Nada a configurar.
+
+Versionamento e Object Lock: não são necessários. Com versionamento ligado, cada arquivo que o
+`vacuum` apaga vira versão não corrente e continua cobrando; uma regra de ciclo de vida que expire
+versões não correntes resolve. Object Lock em modo de retenção impede o `vacuum` de apagar; o commit
+nunca sobrescreve um objeto, então não é afetado.
+
+Ciclo de vida: nenhuma regra de expiração sob os prefixos das tabelas, porque apagar um arquivo
+referenciado corrompe a tabela e a viagem no tempo. Abortar multipart incompleto depois de alguns
+dias é seguro. Transições de classe de armazenamento só no prefixo `arquivo/`; Intelligent-Tiering
+é seguro porque não apaga.
+
+Criptografia: SSE-S3 é transparente. SSE-KMS exige as permissões de KMS nos dois papéis e, quando a
+política do bucket exige uma chave específica, as opções `aws_server_side_encryption` (`AES256`,
+`aws:kms`, `aws:kms:dsse`), `aws_sse_kms_key_id` e `aws_sse_bucket_key_enabled` em
+`storage_options`; no DuckDB a chave vai na opção `KMS_KEY_ID` do secret S3 (não verificado).
+
+Região e endpoint: `AWS_REGION` é obrigatória para o delta-rs; `AWS_ENDPOINT_URL` só para serviços
+compatíveis. Se o espaço do SageMaker chega ao S3 por um endpoint de VPC e a política do bucket
+condiciona `aws:SourceVpce`, os três clientes passam pelo mesmo endpoint; o Redshift usa o próprio
+caminho de rede.
+
+Requisições: um `PutObject` por commit em `_delta_log/` e dezenas de `GET` por leitura, longe dos
+limites por prefixo. O custo é por requisição, o que reforça arquivos grandes e checkpoints em dia.
+
+Verificação na prova de conceito, na ordem em que cada permissão é exercida: `DeltaTable(uri)`
+(`ListBucket` e `GetObject`), `write_deltalake` (`PutObject` condicional e multipart),
+`vacuum(dry_run=False)` (`DeleteObject`), `delta_scan` com um secret `credential_chain` no DuckDB,
+`COPY ... MANIFEST` pelo papel do Redshift e `UNLOAD` no prefixo da tabela.
+
 ## Tipos suportados
 
 Tipos primitivos do protocolo: `boolean`, `byte`, `short`, `integer`, `long`, `float`, `double`,
@@ -161,9 +249,32 @@ em `DECIMAL(38,2)`.
 
 ### JSON e VARIANT
 
-Não há tipo JSON. Um documento entra como `string`, e o DuckDB o interpreta com as funções de JSON na
-leitura. O tipo `variant` existe no protocolo recente e o DuckDB o lê; a escrita pelo delta-rs não foi
-verificada. Fora do contrato até haver caso de uso, como nos outros bancos.
+Não há tipo JSON. Um documento entra como `string`; quando o esquema Arrow traz a extensão
+`arrow.json` (`pa.json_(pa.string())`), o campo Delta continua `string` e guarda
+`ARROW:extension:name = arrow.json` nos metadados, e `schema().to_arrow()` devolve `string` simples.
+O delta-rs grava o arquivo com o tipo lógico `String`; um arquivo do PyArrow ou do DuckDB com o tipo
+lógico `JSON`, registrado por `create_write_transaction`, é lido pelos dois leitores na mesma tabela.
+O `delta_scan` mostra `VARCHAR`, e `->>`, `json_extract` e `json_valid` funcionam sobre ele. Nem o
+Arrow nem o Delta validam o texto: a validação é do `::JSON` do DuckDB na materialização e do
+`JSON_PARSE` do Redshift na carga, e a auditoria roda `json_valid` antes de publicar. O tratamento
+por camada está em [`schema.md`](schema.md).
+
+```python
+import json
+import pyarrow as pa
+from deltalake import write_deltalake
+
+# Serializa os documentos antes do cast: um dict do pandas viraria struct.
+documentos = [{"origem": "sistema A", "tags": ["x"]}, None]
+coluna = pa.array([json.dumps(d) if d is not None else None for d in documentos], pa.string())
+dados = pa.table({"id_evento": pa.array([1, 2], pa.int64()), "meta": coluna.cast(pa.json_(pa.string()))})
+write_deltalake("eventos", dados, mode="append")
+
+con.sql("SELECT id_evento, meta->>'origem' AS origem, json_valid(meta) AS valido FROM delta_scan('eventos')")
+```
+
+O tipo `variant` existe no protocolo recente e o DuckDB o lê; a escrita pelo delta-rs não foi
+verificada. Fora do contrato até haver caso de uso.
 
 ### Datas e timestamps
 
@@ -192,13 +303,13 @@ ficam em `Table.info["serialize_db"]`, como [`schema.md`](schema.md) propõe:
 import pyarrow as pa
 import sqlalchemy as sa
 from deltalake import DeltaTable
+from serialize_db.contrato import esquema_arrow   # docs/sqlalchemy.md: tipos, nulidade e PARQUET:field_id
 
-def esquema_arrow(tabela: sa.Table) -> pa.Schema:
-    """Esquema Arrow do contrato; tipo_arrow está em docs/sqlalchemy.md."""
+def esquema_delta(modelo) -> pa.Schema:
+    """Esquema Arrow do contrato com o comentário de cada coluna nos metadados do campo."""
     return pa.schema([
-        pa.field(c.name, tipo_arrow(c.type), nullable=c.nullable,
-                 metadata={"comment": c.comment} if c.comment else None)
-        for c in tabela.columns
+        campo.with_metadata({**campo.metadata, "comment": coluna.comment}) if coluna.comment else campo
+        for campo, coluna in zip(esquema_arrow(modelo), modelo.__table__.columns)
     ])
 
 PROPRIEDADES = {
@@ -207,10 +318,11 @@ PROPRIEDADES = {
     "delta.checkpointInterval": "10",
 }
 
-def criar_tabela_delta(tabela: sa.Table, uri: str, storage_options: dict[str, str] | None = None) -> DeltaTable:
+def criar_tabela_delta(modelo, uri: str, storage_options: dict[str, str] | None = None) -> DeltaTable:
+    tabela = modelo.__table__
     opcoes = tabela.info.get("serialize_db", {})
     dt = DeltaTable.create(
-        uri, esquema_arrow(tabela), mode="ignore",
+        uri, esquema_delta(modelo), mode="ignore",
         partition_by=opcoes.get("particao", []),
         name=tabela.name, description=tabela.comment,
         configuration=PROPRIEDADES, storage_options=storage_options,
@@ -404,7 +516,7 @@ Comportamentos verificados:
 Caminhos para dentro de uma tabela Delta, do mais ao menos comum no pipeline:
 
 1. Arrow em memória ou em streaming. `write_deltalake` aceita um `RecordBatchReader`, e o DuckDB
-   produz um com `con.execute(sql).fetch_record_batch(50_000)`: 200.000 linhas geradas pelo DuckDB
+   produz um com `con.execute(sql).to_arrow_reader(50_000)`: 200.000 linhas geradas pelo DuckDB
    entraram num único arquivo sem materializar a tabela em Python. O cast seguro para o esquema do
    contrato acontece na consulta do DuckDB ou em `Table.cast(esquema, safe=True)`.
 2. Arquivos gravados por outro escritor, registrados sem cópia por `create_write_transaction`:
@@ -535,10 +647,12 @@ def manifesto(dt: DeltaTable, meses: set[str]) -> bytes:
 ```sql
 BEGIN;
 DELETE FROM prod_cad_operacoes WHERE mes = '2026-08';
-TRUNCATE prod_cad_operacoes_stage;                                       -- sem a coluna mes
-COPY prod_cad_operacoes_stage FROM 's3://bucket/publicacao/exec-42/cad_operacoes/2026-08.manifest'
+CREATE TEMPORARY TABLE stage_cad_operacoes (                             -- sem a coluna mes
+    id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL, id_cliente BIGINT NOT NULL,
+    valor NUMERIC(18, 2) NOT NULL, descricao VARCHAR(200));
+COPY stage_cad_operacoes FROM 's3://bucket/publicacao/exec-42/cad_operacoes/2026-08.manifest'
     IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST;
-INSERT INTO prod_cad_operacoes SELECT *, '2026-08' FROM prod_cad_operacoes_stage;
+INSERT INTO prod_cad_operacoes SELECT *, '2026-08' FROM stage_cad_operacoes;
 COMMIT;
 ```
 
@@ -672,6 +786,21 @@ mecanismos são estes:
    regra de ciclo de vida para classe de armazenamento mais barata, o que a tabela viva não pode,
    porque seus arquivos são compartilhados entre versões.
 
+```python
+import json
+from deltalake import DeltaTable
+
+# O arquivo de controle mapeia fechamento -> {tabela: versão}; o vacuum preserva essas versões.
+def vacuum_com_fechamentos(dt: DeltaTable, controle: dict, tabela: str, retencao_horas: int = 24 * 400,
+                           executar: bool = False) -> list[str]:
+    versoes = sorted({v[tabela] for v in controle["fechamentos"].values() if tabela in v})
+    return dt.vacuum(retention_hours=retencao_horas, enforce_retention_duration=False,
+                     dry_run=not executar, keep_versions=versoes)
+
+controle = json.load(open("controle.json"))   # {"fechamentos": {"2026T1": {"cad_operacoes": 2, ...}}}
+vacuum_com_fechamentos(DeltaTable("cad_operacoes"), controle, "cad_operacoes")   # lista sem apagar
+```
+
 Configuração que decorre disso: `delta.logRetentionDuration` em `interval 3650 days`;
 `delta.deletedFileRetentionDuration` na janela das versões comuns, por exemplo `interval 400 days`,
 que cobre uma reexecução de qualquer mês do ano anterior; e o `vacuum` mensal com `keep_versions`
@@ -708,6 +837,15 @@ registra caminhos relativos. E a cópia leva `_delta_log/` inteira, inclusive `_
 cópia só dos Parquet perde a tabela. Com `aws s3 sync` ou `cp --recursive` entre prefixos, a
 estrutura relativa se mantém.
 
+```bash
+aws s3 sync s3://bucket/projeto/delta/prod/ s3://bucket/copias/2026-09-19/prod/
+```
+
+```python
+# A cópia abre onde estiver, com a mesma versão; nenhum caminho precisa ser reescrito.
+DeltaTable("s3://bucket/copias/2026-09-19/prod/cad_operacoes").version()
+```
+
 O Iceberg é o contraste: `metadata.json` guarda o `location` da tabela, e os manifests guardam o
 `file_path` absoluto de cada arquivo (`file:/...` no teste com PyIceberg). Mover a pasta exige
 reescrever os metadados ou um leitor tolerante, como a opção `allow_moved_paths` do DuckDB.
@@ -720,7 +858,7 @@ Delta é o DuckDB ou o Redshift, cada um com o dialeto de [`sqlalchemy.md`](sqla
 
 - Leitura: uma view com o nome da tabela do modelo sobre `delta_scan(uri, version := v)` no DuckDB,
   e o `select()` Core compilado pelo `duckdb_engine` roda sem mudança; o resultado sai em Arrow pela
-  conexão DuckDB (`.arrow()` ou `.fetch_record_batch()`), preservando `decimal128` e `date32`. No
+  conexão DuckDB (`to_arrow_table()` ou `to_arrow_reader()`), preservando `decimal128` e `date32`. No
   Redshift, a tabela do sandbox carregada por `COPY` é uma tabela comum.
 - Escrita: o `select()` que produz o mês é compilado com `literal_binds`, executado pelo DuckDB como
   `RecordBatchReader` e entregue a `write_deltalake`; nenhuma linha passa por `executemany`.
@@ -741,6 +879,8 @@ Delta Lake e delta-rs:
 - <https://github.com/delta-io/delta-rs/pull/4732>
 - <https://github.com/delta-io/delta-rs/issues/3936>
 - <https://docs.rs/object_store/latest/object_store/aws/struct.AmazonS3Builder.html>
+- <https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html>
+- <https://docs.rs/object_store/latest/src/object_store/aws/builder.rs.html>
 
 DuckDB:
 
@@ -760,3 +900,5 @@ S3:
 - <https://aws.amazon.com/about-aws/whats-new/2024/08/amazon-s3-conditional-writes>
 - <https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-s3-functionality-conditional-writes>
 - <https://docs.aws.amazon.com/boto3/latest/reference/services/s3/client/put_object.html>
+- <https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes-enforce.html>
+- <https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-s3-enforcement-conditional-write-operations-general-purpose-buckets/>

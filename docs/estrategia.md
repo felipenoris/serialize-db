@@ -258,7 +258,7 @@ que é a convenção do Delta, e o `MANIFEST VERBOSE` traz `content_length` e `r
 O estado atual. Os dois dialetos existem (`sqlalchemy-redshift` 1.0.0 e `duckdb_engine` 0.17.0, este
 sem lançamento desde 2025-03-29) e seus limites estão em [`sqlalchemy.md`](sqlalchemy.md),
 [`duckdb.md`](duckdb.md) e [`redshift.md`](redshift.md): sem cache de statements, `executemany` linha
-a linha no Redshift, `SERIAL` e `DEFERRABLE` rejeitados pelo DuckDB, `TEXT` como `VARCHAR(256)`,
+a linha no Redshift, `SERIAL` rejeitado e `DEFERRABLE` descartado pelo DuckDB, `TEXT` como `VARCHAR(256)`,
 `RETURNING` emitido pelo ORM. Nenhum deles impede o uso do Core para `SELECT` e `INSERT ... SELECT`, e
 o `Table` do modelo continua uma boa fonte do contrato (esquema Arrow, DDL dos dois bancos e, agora,
 o esquema Delta ou DuckLake).
@@ -406,7 +406,7 @@ A camada de tabela é o Delta Lake por `deltalake`, sobre o Parquet no S3, e o S
 como camada de SQL do pipeline, no uso que ele já tem: os modelos declarativos definem o `Table` de cada
 tabela, e statements Core de `select` e `insert` movem DataFrames; o pipeline não instancia classes ORM.
 O que muda é o caminho dos DataFrames, que passa por Arrow: no DuckDB, `INSERT ... BY NAME SELECT *
-FROM <tabela Arrow>` na escrita e `.arrow()` na leitura; no Redshift, Parquet no S3 mais
+FROM <tabela Arrow>` na escrita e `to_arrow_reader()` na leitura; no Redshift, Parquet no S3 mais
 `COPY ... MANIFEST` na escrita e ADBC ou `UNLOAD` na leitura. O `insert(...)` executado com listas de
 linhas sai, porque no Redshift ele vira uma ida ao servidor por linha. A biblioteca fica com estas
 partes:
@@ -446,6 +446,91 @@ forem habilitados durante a vida do projeto: a tabela seria registrada por `regi
 conversão, e o Redshift passaria a lê-la por esquema externo. A diferença de fundo entre os dois
 formatos, o ponteiro da versão atual implícito no log do Delta e trocado no catálogo do Iceberg,
 está em [`delta.md`](delta.md).
+
+## Lições que orientam as etapas
+
+- O Delta guarda a coluna de partição só na ação `add`; o arquivo de dados não a tem. O Redshift a
+  recebe por uma tabela de staging sem `mes` e `INSERT ... SELECT *, '<mes>'`, ou por lista de
+  colunas no `COPY`, se a prova de conceito a confirmar ([`delta.md`](delta.md)).
+- `DECIMAL(18, 2)` sai como `INT64` do delta-rs e do DuckDB; o `COPY` desse tipo físico é o primeiro
+  item da prova de conceito no Redshift.
+- O delta-rs não impõe duas regras de evolução: coluna `NOT NULL` nova em tabela com dados e
+  conversão silenciosa de tipos no `append`. A reconciliação da biblioteca as impõe, e o Alembic sai.
+- O log é limpo automaticamente no checkpoint, com `delta.logRetentionDuration` de 30 dias por
+  padrão; a tabela do contrato nasce com dez anos de log, e `keep_versions` protege os fechamentos.
+- Dois `overwrite` do mesmo mês conflitam (`CommitFailedError`); meses diferentes e `append` entram.
+  Uma execução por ambiente por vez basta, e o conflito é o sinal de que houve duas.
+- A ação `txn` não impede repetição; a idempotência é do `overwrite` por mês.
+- O `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de partição dentro do arquivo; a
+  biblioteca escreve por um único caminho, delta-rs ou `COPY ... (RETURN_STATS)` mais
+  `create_write_transaction`.
+- Ler no lugar custa o mesmo que ler Parquet solto; materializar no DuckDB é decisão por tabela.
+- O log só tem caminhos relativos: o banco inteiro pode ser copiado; nada é registrado por URI
+  absoluta.
+- O delta-rs não lê `~/.aws/config`; as credenciais vêm de ambiente, contêiner, IMDS ou
+  `storage_options`, e o S3 precisa das permissões listadas em [`delta.md`](delta.md).
+- Um campo JSON é `string` no Delta e texto nos arquivos; `JSON` no DuckDB e `SUPER` no Redshift são
+  tipos do motor, aplicados na leitura e na carga ([`schema.md`](schema.md)).
+- SQLGlot transpila funções, não garante suporte; os testes de integração no Redshift continuam.
+
+## Etapas de implementação
+
+Cada etapa entrega um módulo testável em pastas locais; o Redshift entra em testes de integração
+marcados, com uma amostra pequena.
+
+| Etapa | Entrega | Critério de aceite |
+| --- | --- | --- |
+| 0. Prova de conceito na AWS | Credenciais do delta-rs no SageMaker; `write_deltalake` e `delta_scan` no bucket do projeto; `COPY ... MANIFEST` com `DECIMAL` em `INT64`, `FILLRECORD` e lista de colunas; `UNLOAD ... PARTITION BY` mais registro; tempo do `delta_scan` no S3. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
+| 1. Contrato | `serialize_db.contrato`: modelos corrigidos (`Base` importável, `Numeric(18, 2)`, `autoincrement=False`, sem `DEFERRABLE`, coluna `mes`, comentários, `Table.info["serialize_db"]`); `esquema_arrow`, `esquema_delta`, `ddl(dialeto)`; `schema/<tabela>.delta.json`, `.duckdb.sql` e `.redshift.sql` gerados e comparados por teste. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar os arquivos. |
+| 2. Camada Delta | `serialize_db.delta`: `criar_tabela`, `abrir(uri, versao)`, `publicar_mes(uri, mes, reader)`, `registrar_arquivos`, `reconciliar(tabela, uri)`, `manifesto_copy(uri, versao, meses)`, `diff_versoes`, `marcar_fechamento`, `vacuum_com_fechamentos`, `copia_profunda`. | Testes em pastas locais cobrem substituição do mês, conflito, reconciliação aditiva e destrutiva, `keep_versions` e realocação. |
+| 3. Motor DuckDB | `serialize_db.motor.duckdb`: conexão com `config`, secrets e extensões; `ingerir(tabela, meses, materializar)` com views pelo nome do modelo e versão fixa; `consultar(select)` devolvendo `RecordBatchReader`; `exportar_mes`; `auditar`. | O pipeline de exemplo roda em memória sobre um Delta local. |
+| 4. Motor Redshift | `serialize_db.motor.redshift`: conexão `redshift_connector`; sandbox com prefixo `exec_<id>_`; `ingerir` por `COPY ... MANIFEST` com staging; `consultar` (multi-row `INSERT` para volumes pequenos, ADBC ou `UNLOAD` para leitura); `exportar_mes` por `UNLOAD ... PARTITION BY` mais registro; limpeza do sandbox. | SQL compilado coberto por testes; integração com amostra num cluster. |
+| 5. Execução | `serialize_db.execucao`: `Execucao(banco, motor, meses)` com o ciclo abrir, ingerir, executar, auditar, publicar, encerrar; metadados de commit; log; CLI `serialize-db executar`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
+| 6. Carga inicial | Script de migração dos Parquet atuais para o Delta, por tabela e por mês, com cast para o contrato e relatório de contagens e somas; corte de leitura para o Delta. | Contagens e somas por mês iguais entre origem e Delta. |
+| 7. Publicação para clientes | Tabelas `prod_*` no Redshift; `diff_versoes` gera `DELETE` e `COPY` por mês; tabela de controle `serialize_db_publicacoes`. | Um mês alterado recarrega só esse mês. |
+| 8. Operação | Fechamentos trimestrais, `vacuum` mensal com `keep_versions`, compactação antes do fechamento, cópia profunda anual; documentação com `pdoc`; monitoração por `history()`. | Runbook escrito e testes de manutenção passando. |
+
+As etapas 1 e 2 não dependem da AWS e começam antes da etapa 0 terminar; a etapa 3 fecha um
+pipeline completo em disco local; a etapa 4 é a única que exige o cluster.
+
+## Pipeline de atualização mensal
+
+Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, mês de referência
+`2026-08`. As entradas são `cad_lancamentos` (os doze meses até 2026-08), `cad_contratos`,
+`cad_operacoes`, `rel_contrato_operacao` e as tabelas `dom_*`; a saída ilustrativa é
+`cad_lancamentos` do banco projetado, mês 2026-08. Os números de versão são ilustrativos.
+
+| Etapa | O que acontece | Artefatos |
+| --- | --- | --- |
+| 1. Abertura | Lê o arquivo de controle (fechamentos, versões publicadas); abre cada tabela de entrada e registra a versão. | `versoes = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
+| 2. Ingestão | DuckDB: `ATTACH ... (TYPE delta, VERSION 143)` e views com os nomes dos modelos; `cad_lancamentos` materializada com `WHERE mes BETWEEN '2025-09' AND '2026-08'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos desses meses em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
+| 3. Execução | O pipeline roda statements Core e lógica Python sobre o sandbox; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, mês 2026-08. |
+| 4. Auditoria | Contagem, nulos, unicidade da chave, `mes = strftime(data_ref, '%Y-%m')`, limites de tipo, totais de controle. | Relatório da execução; reprovação encerra sem tocar o Delta. |
+| 5. Publicação no Delta | `write_deltalake(uri_projetado, reader, mode="overwrite", predicate="mes = '2026-08'")` com `custom_metadata={"id_execucao": ..., "versoes_lidas": ...}`; do Redshift, `UNLOAD ... PARTITION BY (mes)` mais `create_write_transaction`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `mes=2026-08/`. |
+| 6. Publicação no Redshift | `diff_versoes(57, 58)` aponta o mês 2026-08; `DELETE` do mês, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08'`; controle atualizado. | `prod_cad_lancamentos_projetados` com o mês novo; `serialize_db_publicacoes` em 58. |
+| 7. Fechamento | Só na execução de fechamento trimestral: `custom_metadata={"fechamento": "2026T3"}` e entrada no arquivo de controle. | Versões do fechamento protegidas por `keep_versions`. |
+| 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
+
+A API que a etapa 5 propõe, não implementada:
+
+```python
+from serialize_db import Banco, Execucao
+from pipeline import calcular_projecoes
+from pipeline.modelos import Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
+
+banco = Banco("s3://bucket/projeto/delta", ambiente="prod")
+with Execucao(banco, motor="duckdb", mes="2026-08", id_execucao="exec-2026-09-05") as ex:
+    ex.ingerir(Lancamento, meses=ex.meses_anteriores(12), materializar=True)
+    ex.ingerir(Contrato, Operacao, RelContratoOperacao)           # views sobre a versão fixada
+    calcular_projecoes(ex.sandbox)                                # statements Core e Python
+    ex.auditar(LancamentoProjetado, meses=["2026-08"])
+    ex.publicar(LancamentoProjetado, meses=["2026-08"])           # overwrite por mês, metadados
+    ex.publicar_redshift(LancamentoProjetado)                     # só os meses alterados
+```
+
+Uma reexecução com o mesmo `id_execucao` repete os `overwrite` dos mesmos meses e produz o mesmo
+snapshot. Uma execução de correção de um mês antigo é a mesma chamada com outro `mes`; as versões
+intermediárias entre fechamentos saem no `vacuum` mensal.
 
 ## Decisões
 

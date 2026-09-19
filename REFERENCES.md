@@ -792,6 +792,8 @@ Escritas condicionais (`If-None-Match`, `If-Match`):
 - <https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-s3-conditional-write-functionality-copy-operations>
 - <https://aws.amazon.com/blogs/storage/building-multi-writer-applications-on-amazon-s3-using-native-controls/>
 - <https://docs.aws.amazon.com/boto3/latest/reference/services/s3/client/put_object.html>
+- <https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes-enforce.html>
+- <https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-s3-enforcement-conditional-write-operations-general-purpose-buckets/>
 
 ## Pacotes Python
 
@@ -926,6 +928,8 @@ Documentação do delta-rs e repositórios:
 - <https://docs.rs/object_store/latest/object_store/enum.PutMode.html>
 - <https://docs.rs/object_store/latest/object_store/aws/enum.S3ConditionalPut.html>
 - <https://docs.rs/object_store/latest/object_store/aws/struct.AmazonS3Builder.html>
+- <https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html>
+- <https://docs.rs/object_store/latest/src/object_store/aws/builder.rs.html>
 
 ## Fontes
 

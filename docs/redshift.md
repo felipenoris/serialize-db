@@ -25,6 +25,21 @@ um cluster; os itens marcados como pendentes dependem da prova de conceito.
 | `SELECT * FROM sys_load_error_detail ORDER BY start_time DESC LIMIT 20;` | Erros de carga, inclusive em workgroups serverless; `stl_load_errors` cobre só clusters provisionados. |
 | `EXPLAIN <consulta>;` | Plano de execução, com os rótulos de redistribuição `DS_DIST_*`. |
 
+A biblioteca consulta `pg_last_copy_count()` e `sys_load_error_detail` depois de cada `COPY`, na
+mesma conexão. A função não rodou nesta sessão:
+
+```python
+import sqlalchemy as sa
+
+# Depois de um COPY, na mesma conexão: linhas carregadas e os erros de carga mais recentes.
+def diagnostico_da_carga(conn: sa.Connection) -> tuple[int, list[dict]]:
+    carregadas = conn.execute(sa.text("SELECT pg_last_copy_count()")).scalar_one()
+    erros = conn.execute(sa.text(
+        "SELECT * FROM sys_load_error_detail ORDER BY start_time DESC LIMIT 20"
+    )).mappings().all()
+    return carregadas, [dict(erro) for erro in erros]
+```
+
 ## Organização dos dados
 
 ### Armazenamento colunar e processamento paralelo
@@ -112,6 +127,46 @@ arredondado; uma string que representa um número ou uma data converte para o ti
 `VARCHAR` com multibyte não é comparável a `CHAR`. A correspondência com os tipos do contrato está
 na [tabela de tipos](schema.md).
 
+O tipo que o dialeto `sqlalchemy-redshift` emite no DDL para cada tipo do contrato, compilado nesta
+sessão. `dialeto` e `sql()` servem aos exemplos seguintes deste documento:
+
+```python
+import sqlalchemy as sa
+from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
+
+# Tipo emitido no DDL para cada tipo do contrato.
+dialeto = RedshiftDialect_redshift_connector()
+
+def sql(comando) -> str:
+    return str(comando.compile(dialect=dialeto, compile_kwargs={"literal_binds": True}))
+
+for tipo in [sa.BigInteger(), sa.Numeric(18, 2), sa.Double(), sa.String(200), sa.String(65535), sa.Text(),
+             sa.Date(), sa.DateTime(), sa.DateTime(timezone=True), sa.Boolean(), sa.Uuid(), sa.JSON(),
+             sa.LargeBinary()]:
+    print(f"{tipo!r:32} {tipo.compile(dialect=dialeto)}")
+```
+
+```text
+BigInteger()                     BIGINT
+Numeric(precision=18, scale=2)   NUMERIC(18, 2)
+Double()                         DOUBLE PRECISION
+String(length=200)               VARCHAR(200)
+String(length=65535)             VARCHAR(65535)
+Text()                           TEXT
+Date()                           DATE
+DateTime()                       TIMESTAMP WITHOUT TIME ZONE
+DateTime(timezone=True)          TIMESTAMP WITH TIME ZONE
+Boolean()                        BOOLEAN
+Uuid()                           UUID
+JSON()                           JSON
+LargeBinary()                    BYTEA
+```
+
+`Text` sai como `TEXT`, que a tabela de diferenças registra como `VARCHAR(256)`; o `VARCHAR(65535)`
+do contrato exige `String(65535)`. `Uuid`, `JSON` e `LargeBinary` compilam para `UUID`, `JSON` e
+`BYTEA`, tipos que a mesma tabela lista como ausentes: o dialeto não os rejeita na compilação, e o
+`VARCHAR(36)` do contrato para `Uuid` exige `String(36)` ou uma regra `@compiles`.
+
 ### DECIMAL com escala fixa
 
 `DECIMAL(precisao, escala)` guarda até 38 dígitos; a precisão padrão é 18 e a escala padrão é 0. A
@@ -137,6 +192,33 @@ A carga por `COPY` de Parquet exige um `DECIMAL` do arquivo compatível com a co
 [documento sobre Parquet](parquet.md) registra que a tabela de correspondência de tipos físicos do
 Parquet para o `COPY` fica pendente da prova de conceito.
 
+A conferência de escala e precisão acontece no Arrow, antes do `COPY`, com os valores das regras
+acima:
+
+```python
+from decimal import Decimal
+import pyarrow as pa, pyarrow.compute as pc
+
+# Escala e precisão conferidas no Arrow, antes do COPY, com os valores das regras de carga.
+valores = pa.array([Decimal("4323.8951"), Decimal("20.259")])         # inferido como decimal128(8, 4)
+try:
+    valores.cast(pa.decimal128(18, 2))
+except pa.ArrowInvalid as erro:
+    print(erro)                                          # Rescaling Decimal value would cause data loss
+print(valores.cast(pa.decimal128(18, 2), safe=False).to_pylist())   # [4323.89, 20.25]: trunca
+print(pc.round(valores, 2).cast(pa.decimal128(18, 2)).to_pylist())  # [4323.90, 20.26]: os valores da carga
+try:
+    pa.array([Decimal("1000.00")], pa.decimal128(6, 2)).cast(pa.decimal128(5, 2))
+except pa.ArrowInvalid as erro:
+    print(erro)                                          # Decimal value does not fit in precision 5
+```
+
+O cast seguro rejeita a perda de escala e o estouro de precisão; `pa.Table.from_pandas(df,
+schema=esquema)` falha com a mesma mensagem numa coluna `object` de `Decimal`. `safe=False` trunca e
+diverge do arredondamento da carga; `pc.round` antes do cast reproduz os valores documentados. A
+biblioteca rejeita o lote ou arredonda de forma explícita; nos dois casos, o valor que chega ao
+`COPY` já tem a escala da coluna.
+
 ### JSON e o tipo SUPER
 
 O Redshift não tem tipo `JSON`. As opções são:
@@ -160,9 +242,33 @@ frequentes, materializar os atributos em views materializadas com colunas conven
 
 No `awswrangler`, colunas Arrow de tipo `list`, `struct` e `map` viram `SUPER` na criação da tabela,
 e a opção `serialize_to_json` acrescenta `SERIALIZETOJSON` ao `COPY` de Parquet. No
-`sqlalchemy-redshift`, o tipo `SUPER` existe para modelos e reflexão. O contrato deixa `JSON` de
-fora até haver um caso de uso; quando houver, a coluna é `SUPER` no Redshift e `JSON` no DuckDB, com
-o texto JSON como forma de troca.
+`sqlalchemy-redshift`, o tipo `SUPER` existe para modelos e reflexão.
+
+No contrato ([campos JSON](schema.md)), a coluna é `sa.JSON().with_variant(SUPER(), "redshift")`: o
+dialeto compila `SUPER` no `CREATE TABLE`, e o `duckdb_engine` compila `JSON`. Os arquivos do Delta
+trazem o documento como texto; a carga passa pela staging `VARCHAR(65535)` e o `INSERT ... SELECT`
+aplica `JSON_PARSE`; a exportação devolve texto com `JSON_SERIALIZE`. Se o `COPY` de Parquet carrega
+o texto diretamente numa coluna `SUPER`, e o que acontece com documentos acima de 65.535 bytes, fica
+pendente da prova de conceito.
+
+```python
+import sqlalchemy as sa
+from sqlalchemy.schema import CreateTable
+from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector, SUPER
+
+# JSON no contrato: SUPER no Redshift, texto nos arquivos, JSON_PARSE na carga e JSON_SERIALIZE na saída.
+eventos = sa.Table("eventos", sa.MetaData(),
+                   sa.Column("id_evento", sa.BigInteger, primary_key=True, autoincrement=False),
+                   sa.Column("meta", sa.JSON().with_variant(SUPER(), "redshift")))
+print(CreateTable(eventos).compile(dialect=RedshiftDialect_redshift_connector()))
+# CREATE TABLE eventos (id_evento BIGINT NOT NULL, meta SUPER, PRIMARY KEY (id_evento))
+
+carga = """INSERT INTO prod_eventos (id_evento, meta, mes)
+SELECT id_evento, JSON_PARSE(meta), '2026-08' FROM stage_eventos"""
+exportacao = """UNLOAD ('SELECT id_evento, JSON_SERIALIZE(meta) AS meta, mes FROM exec_42_eventos')
+TO 's3://bucket/prod/eventos/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
+FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE"""
+```
 
 ## DDL
 
@@ -218,6 +324,25 @@ Pontos da referência:
   codificação `RAW`. Um nome iniciado por `#` cria uma tabela temporária.
 - Limites: 127 bytes por nome, 1.600 colunas, cota de tabelas por tipo de nó.
 
+As tabelas do sandbox recebem o prefixo da execução no nome, dentro do único esquema. O `Table` do
+modelo `Operacao` da seção sobre o suporte a SQLAlchemy, renomeado, gera o DDL:
+
+```python
+import sqlalchemy as sa
+from sqlalchemy.schema import CreateTable
+
+# DDL de uma tabela do sandbox: o Table do modelo renomeado com o prefixo da execução.
+def ddl_sandbox(modelo, prefixo: str) -> str:
+    tabela = modelo.__table__.to_metadata(sa.MetaData(), name=f"{prefixo}_{modelo.__tablename__}")
+    return str(CreateTable(tabela, if_not_exists=True).compile(dialect=dialeto))
+
+print(ddl_sandbox(Operacao, "exec_abc123"))
+```
+
+`to_metadata` copia colunas, restrições, comentários e os argumentos `redshift_*`. A saída é o
+`CREATE TABLE IF NOT EXISTS exec_abc123_operacoes (...) DISTSTYLE KEY DISTKEY (id_cliente) SORTKEY
+(data_ref, id_operacao)` compilado na seção sobre o modelo, com o nome novo e `IF NOT EXISTS`.
+
 ### ALTER TABLE
 
 ```sql
@@ -252,6 +377,38 @@ Regras da referência:
   `information_schema.table_constraints`.
 - Combinações num só comando reduzem o tempo: `ALTER SORTKEY (...), ALTER DISTKEY coluna`.
 
+O SQLAlchemy não tem construto para `ADD COLUMN`. Sem Alembic, a biblioteca monta esse comando com a
+especificação de coluna do compilador do dialeto, que rende `DEFAULT` e `ENCODE`, usa os construtos
+do Core para restrições e `sa.DDL` para as demais cláusulas:
+
+```python
+import sqlalchemy as sa
+from sqlalchemy.schema import AddConstraint, DropConstraint
+
+# ADD COLUMN com a especificação de coluna do compilador do dialeto; ADD e DROP CONSTRAINT do Core.
+compilador = dialeto.ddl_compiler(dialeto, None)
+moeda = sa.Column("moeda", sa.String(3), server_default="BRL", redshift_encode="bytedict")
+print(f"ALTER TABLE operacoes ADD COLUMN {compilador.get_column_specification(moeda)}")
+chave = Operacao.__table__.primary_key
+print(AddConstraint(chave).compile(dialect=dialeto))
+print(DropConstraint(chave).compile(dialect=dialeto))
+print(sa.DDL("ALTER TABLE %(table)s ALTER COLUMN descricao TYPE VARCHAR(400)")
+      .against(Operacao.__table__).compile(dialect=dialeto))
+```
+
+```sql
+ALTER TABLE operacoes ADD COLUMN moeda VARCHAR(3) DEFAULT 'BRL' ENCODE bytedict
+ALTER TABLE operacoes ADD CONSTRAINT operacoes_pk PRIMARY KEY (id_operacao, data_ref)
+ALTER TABLE operacoes DROP CONSTRAINT operacoes_pk
+ALTER TABLE operacoes ALTER COLUMN descricao TYPE VARCHAR(400)
+```
+
+A saída supõe `metadata = sa.MetaData(naming_convention={"pk": "%(table_name)s_pk"})` na classe
+`Base`, que também leva o nome ao `CREATE TABLE` (`CONSTRAINT operacoes_pk PRIMARY KEY (...)`). Sem
+nome na chave, `AddConstraint` emite `ADD PRIMARY KEY (id_operacao, data_ref)` e `DropConstraint`
+falha na compilação: `Can't emit DROP CONSTRAINT for constraint PrimaryKeyConstraint(...); it has no
+name`.
+
 ### DROP TABLE
 
 ```sql
@@ -263,6 +420,9 @@ DROP TABLE staging_a, staging_b;
 há views dependentes; `CASCADE` remove as views, exceto as criadas com `WITH NO SCHEMA BINDING`. A
 referência traz a consulta em `pg_depend` que lista os dependentes. `DROP TABLE` de uma tabela
 externa não roda dentro de transação.
+
+`DropTable(tabela, if_exists=True)` do SQLAlchemy compila para `DROP TABLE IF EXISTS <nome>`; o
+construto não tem parâmetro para `CASCADE`, que entra por `sa.DDL`.
 
 ### Chaves, restrições e índices
 
@@ -288,6 +448,26 @@ SELECT col_description('public.operacoes'::regclass, 3);
 `pg_description`. Só o superusuário ou o dono do objeto comenta. Tabelas externas, colunas externas
 e colunas de views de ligação tardia não aceitam comentários.
 
+Os atributos `comment` do modelo geram os mesmos comandos. O dialeto declara `supports_comments =
+True` e `inline_comments = False`, e `create_all` num `create_mock_engine` emitiu o `COMMENT ON
+TABLE` e o `COMMENT ON COLUMN` logo depois do `CREATE TABLE`:
+
+```python
+from sqlalchemy.schema import SetTableComment, SetColumnComment
+
+# COMMENT ON gerado dos atributos comment do modelo.
+print(SetTableComment(Operacao.__table__).compile(dialect=dialeto))
+print(SetColumnComment(Operacao.__table__.c.id_cliente).compile(dialect=dialeto))
+```
+
+```sql
+COMMENT ON TABLE operacoes IS 'Operações do mês'
+COMMENT ON COLUMN operacoes.id_cliente IS 'Chave do cliente'
+```
+
+O modelo leva `__table_args__ = {"comment": "Operações do mês", ...}` e
+`id_cliente: Mapped[int] = mapped_column(BigInteger, comment="Chave do cliente")`.
+
 ## SELECT, INSERT, UPDATE e DELETE
 
 Todo comando tem 16 MB no máximo. Os dados de entrada e saída do pipeline são DataFrames pandas com
@@ -306,9 +486,46 @@ as colunas não agregadas. A saída pelo `redshift_connector` chega em tuplas Py
 `cursor.fetch_dataframe()` monta um DataFrame a partir das tuplas, com nomes em minúsculas e tipos
 inferidos pelo pandas (`Decimal` e `date` ficam em colunas `object`), e `cursor.fetch_numpy_array()`
 devolve um array. Um DataFrame com os tipos do contrato sai de
-`pa.Table.from_pylist(cursor.fetchall(), schema=esquema)` seguido de
+tuplas convertidas em dicionários por nome de coluna,
+`pa.Table.from_pylist([dict(zip(nomes, linha)) for linha in cursor.fetchall()], schema=esquema)`, seguido de
 `to_pandas(types_mapper=pd.ArrowDtype)`; `Decimal` e `date` das tuplas entram em `decimal128` e
 `date32` sem conversão para `float`. Volumes grandes saem por `UNLOAD` e voltam pelo leitor Parquet.
+
+O caminho pelas tuplas, com a consulta compilada e o esquema Arrow do modelo (`esquema_arrow` em
+[sqlalchemy.md](sqlalchemy.md)):
+
+```python
+import datetime as dt
+from decimal import Decimal
+import pandas as pd, pyarrow as pa, sqlalchemy as sa
+from sqlalchemy import select
+
+# Do select do contrato ao DataFrame com os tipos do contrato, a partir das tuplas do redshift_connector.
+consulta = (select(Operacao).where(Operacao.mes == "2026-08")
+            .order_by(Operacao.data_ref, Operacao.id_operacao).limit(10))
+print(sql(consulta))    # SELECT operacoes.id_operacao, ... WHERE operacoes.mes = '2026-08' ORDER BY ... LIMIT 10
+
+def para_dataframe(linhas: list[tuple], consulta: sa.Select, esquema: pa.Schema) -> pd.DataFrame:
+    nomes = list(consulta.selected_columns.keys())
+    dados = pa.Table.from_pylist([dict(zip(nomes, linha)) for linha in linhas], schema=esquema)
+    return dados.to_pandas(types_mapper=pd.ArrowDtype)
+
+linhas = [(1, dt.date(2026, 8, 1), 100, Decimal("10.50"), "op-1", "2026-08")]   # forma de cursor.fetchall()
+print(para_dataframe(linhas, consulta, esquema_arrow(Operacao)).dtypes)
+```
+
+```text
+id_operacao                int64[pyarrow]
+data_ref             date32[day][pyarrow]
+id_cliente                 int64[pyarrow]
+valor          decimal128(18, 2)[pyarrow]
+descricao                 string[pyarrow]
+mes                       string[pyarrow]
+```
+
+`from_pylist` espera dicionários: com as tuplas diretamente, `pa.Table.from_pylist(linhas,
+schema=esquema)` devolveu nesta sessão uma tabela só de nulos, sem erro, e a conversão por nome é
+obrigatória.
 
 ### INSERT
 
@@ -325,6 +542,31 @@ e um `DECIMAL` com escala maior é arredondado. `INSERT INTO ... SELECT` e `CREA
 formas rápidas quando os dados já estão no banco. Um `INSERT` sem lista de colunas segue a ordem do
 `CREATE TABLE`; com menos valores que colunas, as primeiras `n` colunas recebem os valores. Colunas
 `IDENTITY` recebem `DEFAULT` ou um valor explícito quando são `GENERATED BY DEFAULT`.
+
+O mesmo comando a partir do modelo, um `INSERT` por lote:
+
+```python
+from sqlalchemy import insert
+
+# Um único INSERT de várias linhas a partir do modelo.
+lote = [
+    {"id_operacao": 1, "data_ref": dt.date(2026, 8, 1), "id_cliente": 100, "valor": Decimal("10.50"),
+     "descricao": "op-1", "mes": "2026-08"},
+    {"id_operacao": 2, "data_ref": dt.date(2026, 8, 1), "id_cliente": 101, "valor": Decimal("20.00"),
+     "descricao": None, "mes": "2026-08"},
+]
+comando = insert(Operacao).values(lote)
+print(comando.compile(dialect=dialeto))   # com parâmetros
+print(sql(comando))                        # com os valores embutidos
+```
+
+```sql
+INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (%s, %s, %s, %s, %s, %s), (%s, %s, %s, %s, %s, %s)
+INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes) VALUES (1, '2026-08-01', 100, 10.50, 'op-1', '2026-08'), (2, '2026-08-01', 101, 20.00, NULL, '2026-08')
+```
+
+`None` vira `NULL`, e o `Decimal` embutido sai com a escala do valor. O tamanho do lote respeita os
+16 MB por comando; a seção sobre a ingestão de um DataFrame, adiante, mostra o laço por lotes.
 
 ### UPDATE, DELETE e MERGE
 
@@ -363,6 +605,43 @@ Regras:
 - Depois de `INSERT`, `UPDATE` ou `DELETE` de muitas linhas: `VACUUM` e `ANALYZE`, ou esperar as
   rotinas automáticas.
 
+Os três comandos a partir do `Table` do modelo. `UPDATE ... FROM` e `DELETE ... USING` saem do Core,
+que move a segunda tabela do `WHERE` para essas cláusulas; o `MERGE` não tem construto e sai de um
+texto montado com as colunas do `Table`:
+
+```python
+import sqlalchemy as sa
+
+# UPDATE ... FROM e DELETE ... USING pelo Core; MERGE por texto montado com as colunas do Table.
+alvo = Operacao.__table__
+staging = sa.Table("staging_operacoes", sa.MetaData(), *[sa.Column(c.name, c.type) for c in alvo.columns])
+chaves = ["id_operacao", "data_ref"]
+juncao = sa.and_(*[alvo.c[chave] == staging.c[chave] for chave in chaves])
+print(sql(sa.update(alvo).values(descricao=staging.c.descricao).where(juncao)))
+print(sql(sa.delete(alvo).where(juncao)))
+
+def merge_sql(alvo: sa.Table, fonte: sa.Table, chaves: list[str]) -> str:
+    colunas = list(alvo.columns.keys())
+    condicao = " AND ".join(f"{alvo.name}.{c} = s.{c}" for c in chaves)
+    atualiza = ", ".join(f"{c} = s.{c}" for c in colunas if c not in chaves)
+    return (f"MERGE INTO {alvo.name} USING {fonte.name} s ON {condicao}\n"
+            f"    WHEN MATCHED THEN UPDATE SET {atualiza}\n"
+            f"    WHEN NOT MATCHED THEN INSERT VALUES ({', '.join('s.' + c for c in colunas)})")
+
+print(merge_sql(alvo, staging, chaves))
+```
+
+```sql
+UPDATE operacoes SET descricao=staging_operacoes.descricao FROM staging_operacoes WHERE operacoes.id_operacao = staging_operacoes.id_operacao AND operacoes.data_ref = staging_operacoes.data_ref
+DELETE FROM operacoes USING staging_operacoes WHERE operacoes.id_operacao = staging_operacoes.id_operacao AND operacoes.data_ref = staging_operacoes.data_ref
+MERGE INTO operacoes USING staging_operacoes s ON operacoes.id_operacao = s.id_operacao AND operacoes.data_ref = s.data_ref
+    WHEN MATCHED THEN UPDATE SET id_cliente = s.id_cliente, valor = s.valor, descricao = s.descricao, mes = s.mes
+    WHEN NOT MATCHED THEN INSERT VALUES (s.id_operacao, s.data_ref, s.id_cliente, s.valor, s.descricao, s.mes)
+```
+
+O texto do `MERGE` roda por `conn.execute(sa.text(...))`. O `INSERT VALUES` sem lista de colunas
+segue a ordem do `Table`, que é a ordem da staging criada a partir dele.
+
 O `redshift_connector` segue o DB-API: `autocommit` desligado por padrão, `conn.commit()` fecha a
 transação, `cursor.paramstyle` aceita `qmark`, `numeric`, `named`, `format` (padrão) e `pyformat`.
 `cursor.executemany` executa o comando uma vez por conjunto de parâmetros, com uma ida ao servidor
@@ -397,8 +676,8 @@ Regras do `COPY` que valem para o pipeline:
 O fluxo do projeto substitui o `INSERT` grande da biblioteca atual:
 
 1. Converter o DataFrame numa tabela Arrow com o esquema do modelo (cast seguro).
-2. Gravar Parquet em `<caminho S3 do projeto>/staging/<id_execucao>/<tabela>/`, fora dos locais das
-   tabelas Iceberg, com o pyarrow.
+2. Gravar Parquet em `<caminho S3 do projeto>/staging/<id_execucao>/<tabela>/`, fora das pastas das
+   tabelas Delta, com o pyarrow.
 3. `COPY execucao_<id>.<tabela> FROM '<manifesto>' IAM_ROLE '<arn>' FORMAT AS PARQUET MANIFEST`, ou
    com `IAM_ROLE 'SESSION'` numa conexão federada por IAM enquanto o namespace não tiver papel
    associado; `SESSION` usa as permissões da identidade da sessão no S3 e não combina com outro
@@ -462,12 +741,65 @@ Arrow e merece um benchmark contra o fluxo acima.
 | Regra da documentação | Consequência para a biblioteca |
 | --- | --- |
 | Colunas são associadas por posição, e a quantidade precisa coincidir com a tabela. | A ordem das colunas no Parquet é a ordem do modelo. Os dois derivam do mesmo `Table`. |
-| Só existem as colunas gravadas no arquivo. | Colunas de partição ficam dentro do arquivo. |
+| Só existem as colunas gravadas no arquivo. | A coluna de partição `mes` não está nos arquivos do Delta: a carga passa por uma staging sem `mes` e por `INSERT ... SELECT ..., '<mes>'` ([delta.md](delta.md)). |
 | Parâmetros aceitos: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `STATUPDATE`, `MANIFEST`, `EXPLICIT_IDS`. `MAXERROR`, `NOLOAD` e `COMPUPDATE` não são aceitos, e não há compressão automática. | O primeiro erro aborta o `COPY`. A validação acontece antes, no Arrow. |
 | `MANIFEST` é aceito. | O `COPY` carrega exatamente os arquivos gravados pela biblioteca. |
 | O bucket precisa estar na mesma região do Redshift. | Configuração da infraestrutura. |
 | O `COPY` de Parquet usa URLs pré-assinadas válidas por 1 hora. | Políticas IAM do bucket não podem bloquear URLs pré-assinadas. |
 | O `COPY` grava `NULL` em coluna `NOT NULL` só se o arquivo trouxer `NULL`; a falha aborta a carga. | `NOT NULL` do modelo é a última barreira; a auditoria no Arrow vem antes. |
+
+Com o Delta Lake como fonte da verdade ([delta.md](delta.md)), os arquivos de dados não trazem a
+coluna de partição `mes`, e o `COPY` lê só o conteúdo dos arquivos, por posição. A carga de um mês
+passa por uma staging temporária sem `mes`, criada a partir do mesmo `Table`, e o
+`INSERT ... SELECT` acrescenta o literal do mês:
+
+```python
+import pyarrow as pa, pyarrow.compute as pc
+import sqlalchemy as sa
+from deltalake import DeltaTable
+from sqlalchemy.schema import CreateTable
+
+# Manifesto do mês a partir das ações add do Delta e a transação que substitui o mês na publicação.
+def manifesto_do_mes(delta: DeltaTable, mes: str) -> tuple[dict, int]:
+    acoes = pa.table(delta.get_add_actions(flatten=True)).filter(pc.field("partition.mes") == mes)
+    raiz = delta.table_uri.rstrip("/")
+    entradas = [{"url": f"{raiz}/{caminho}", "mandatory": True, "meta": {"content_length": tamanho}}
+                for caminho, tamanho in zip(acoes["path"].to_pylist(), acoes["size_bytes"].to_pylist())]
+    return {"entries": entradas}, pc.sum(acoes["num_records"]).as_py()
+
+destino = Operacao.__table__.to_metadata(sa.MetaData(), name="prod_operacoes")
+staging = sa.Table("prod_operacoes_stage", destino.metadata,
+                   *[sa.Column(c.name, c.type, nullable=c.nullable) for c in destino.columns if c.name != "mes"],
+                   prefixes=["TEMPORARY"])
+transacao = [
+    sa.delete(destino).where(destino.c.mes == "2026-08"),
+    CreateTable(staging),
+    sa.text("COPY prod_operacoes_stage FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest' "
+            "IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST"),
+    sa.insert(destino).from_select(list(destino.columns.keys()),
+                                   sa.select(*staging.c, sa.literal("2026-08", sa.String(7)).label("mes"))),
+]
+```
+
+Numa tabela Delta local com dois meses, `manifesto_do_mes` devolveu a única entrada de `2026-08`,
+com `content_length` igual ao `size_bytes` da ação `add`, e o total de `num_records` do mês, que é o
+valor a comparar com `pg_last_copy_count()` antes do `commit`. Os quatro comandos vão numa transação
+(`engine.begin()`) e compilam para:
+
+```sql
+DELETE FROM prod_operacoes WHERE prod_operacoes.mes = '2026-08'
+CREATE TEMPORARY TABLE prod_operacoes_stage (id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL,
+    id_cliente BIGINT NOT NULL, valor NUMERIC(18, 2) NOT NULL, descricao VARCHAR(200))
+COPY prod_operacoes_stage FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest'
+    IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST
+INSERT INTO prod_operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes)
+    SELECT prod_operacoes_stage.id_operacao, prod_operacoes_stage.data_ref, prod_operacoes_stage.id_cliente,
+        prod_operacoes_stage.valor, prod_operacoes_stage.descricao, '2026-08' AS mes FROM prod_operacoes_stage
+```
+
+A staging temporária dispensa a codificação e as restrições do modelo: tabelas temporárias recebem
+`RAW`, e a auditoria acontece no destino. Se a lista de colunas no `COPY` de Parquet funcionar
+(pendente), a staging some.
 
 ## Exportação para Parquet
 
@@ -507,21 +839,87 @@ Comportamento do `UNLOAD ... FORMAT AS PARQUET` segundo a documentação:
 - O Parquet é até 2 vezes mais rápido de descarregar e ocupa até 6 vezes menos espaço no S3 que
   texto.
 
-Sugestão: um `UNLOAD` por mês, sem `PARTITION BY`, com destino `<local da
-tabela>/data/<mes>/<id_execucao>_`, `MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho alvo da
-tabela. O `SELECT` lista as colunas na ordem do modelo, com casts para os tipos do contrato e `ORDER
-BY` pela chave de ordenação. A biblioteca confere o manifesto do `UNLOAD` e os rodapés dos arquivos
-antes da publicação. `CLEANPATH` não é usado: arquivos de execuções abortadas saem pela remoção de
-órfãos, do Glue ou da biblioteca.
+O `UNLOAD` do projeto grava um mês por comando, com `PARTITION BY (mes)` na pasta da tabela Delta,
+`MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho alvo da tabela. O `SELECT` lista as colunas na
+ordem do modelo, com casts para os tipos do contrato e `ORDER BY` pela chave de ordenação. A
+biblioteca confere o manifesto do `UNLOAD` e os rodapés dos arquivos antes de registrá-los no log do
+Delta. `CLEANPATH` não é usado: arquivos de execuções abortadas ficam fora do log e saem pelo `vacuum`.
 
 A documentação do `UNLOAD` não informa os tipos físicos Parquet de `TIMESTAMP` e `DECIMAL`, a
 obrigatoriedade das colunas nem a presença de estatísticas de mínimo e máximo. Os três afetam o
-`add_files`, e a prova de conceito verifica.
+registro dos arquivos no log do Delta e a poda por estatísticas, e a prova de conceito verifica.
 
 O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem
 acesso do Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o
 pyarrow e o papel do projeto. O `awswrangler.redshift.unload` executa o `UNLOAD` e lê os arquivos de
 volta num DataFrame; `unload_to_files` só descarrega.
+
+Com o Delta como fonte da verdade ([delta.md](delta.md)), o `UNLOAD` grava com `PARTITION BY (mes)`
+na pasta da tabela, e a biblioteca registra os arquivos no log do Delta depois de conferir o
+manifesto verboso. Uma amostra do manifesto, reduzida aos campos que a biblioteca lê, no leiaute que
+a documentação descreve (URL, `content_length` e `record_count` por entrada, `schema.elements` com
+nome e tipo, total em `meta`):
+
+```json
+{
+  "entries": [
+    {"url": "s3://bucket/prod/operacoes/mes=2026-08/0000_part_00.parquet",
+     "meta": {"content_length": 33554432, "record_count": 180000}},
+    {"url": "s3://bucket/prod/operacoes/mes=2026-08/0001_part_00.parquet",
+     "meta": {"content_length": 22369621, "record_count": 120000}}
+  ],
+  "schema": {"elements": [
+    {"name": "id_operacao", "type": {"base": "bigint"}},
+    {"name": "data_ref", "type": {"base": "date"}},
+    {"name": "id_cliente", "type": {"base": "bigint"}},
+    {"name": "valor", "type": {"base": "numeric", "precision": 18, "scale": 2}},
+    {"name": "descricao", "type": {"base": "character varying", "byte_length": 200}}
+  ]},
+  "meta": {"content_length": 55924053, "record_count": 300000}
+}
+```
+
+O comando sai do mesmo `select` do contrato, com as aspas internas duplicadas, e a conferência lê a
+amostra acima como `amostra`:
+
+```python
+import json
+import sqlalchemy as sa
+
+# UNLOAD do mês montado do select do contrato; conferência do manifesto verboso antes de registrar os arquivos.
+consulta = (sa.select(Operacao.__table__).where(Operacao.mes == "2026-08")
+            .order_by(Operacao.data_ref, Operacao.id_operacao))
+interna = sql(consulta).replace("'", "''")
+unload = (f"UNLOAD ('{interna}')\n"
+          "TO 's3://bucket/prod/operacoes/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'\n"
+          "FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE")
+
+def conferir_manifesto(manifesto: dict, colunas_esperadas: list[str]) -> int:
+    colunas = [elemento["name"] for elemento in manifesto["schema"]["elements"]]
+    if colunas != colunas_esperadas:
+        raise ValueError(f"colunas do UNLOAD {colunas} diferem do modelo {colunas_esperadas}")
+    por_arquivo = sum(entrada["meta"]["record_count"] for entrada in manifesto["entries"])
+    if por_arquivo != manifesto["meta"]["record_count"]:
+        raise ValueError("soma das linhas por arquivo difere do total do manifesto")
+    return por_arquivo
+
+sem_particao = [c.name for c in Operacao.__table__.columns if c.name != "mes"]
+print(conferir_manifesto(json.loads(amostra), sem_particao))     # 300000
+```
+
+`unload` vale:
+
+```sql
+UNLOAD ('SELECT operacoes.id_operacao, operacoes.data_ref, operacoes.id_cliente, operacoes.valor, operacoes.descricao, operacoes.mes
+FROM operacoes
+WHERE operacoes.mes = ''2026-08'' ORDER BY operacoes.data_ref, operacoes.id_operacao')
+TO 's3://bucket/prod/operacoes/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
+FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE
+```
+
+Os nomes de tipo da amostra e a presença da coluna de partição em `schema` sob `PARTITION BY` não
+foram verificados; por isso a lista esperada é um parâmetro. `UnloadFromSelect` do dialeto não tem
+`PARTITION BY` nem `VERBOSE`, e o comando fica em texto.
 
 ## Recomendações de performance
 

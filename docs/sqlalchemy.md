@@ -9,7 +9,8 @@ comportamento com Redshift, DuckDB e Parquet.
 
 As afirmações vêm da documentação oficial da versão 2.0, consultada em 2026-09-18. Os exemplos foram
 executados com SQLAlchemy 2.0.54, duckdb_engine 0.17.0 sobre DuckDB 1.5.5 e sqlalchemy-redshift 1.0.0;
-os comandos do Redshift foram apenas compilados, sem conexão a um cluster.
+os comandos do Redshift foram apenas compilados, sem conexão a um cluster. Os exemplos com Arrow e
+Delta Lake rodaram em 2026-09-19 com PyArrow 25.0.1 e deltalake 1.6.4.
 
 ## Esquema, metadata e reflexão
 
@@ -44,7 +45,7 @@ do DuckDB), `String(200)` vira `VARCHAR(200)` nos dois, e o catálogo do DuckDB 
 comprimento. Os tipos específicos ficam em `sqlalchemy.dialects.<dialeto>` e nos dialetos externos
 (`sqlalchemy_redshift.dialect.SUPER`, `TIMESTAMPTZ`). `tipo.with_variant(outro, "dialeto")` troca o
 tipo num dialeto só. A [tabela de tipos do contrato](schema.md) fixa a correspondência com Arrow,
-Iceberg, DuckDB e Redshift.
+Delta, DuckDB e Redshift.
 
 Restrições e índices são objetos: `PrimaryKeyConstraint`, `ForeignKey` na coluna ou
 `ForeignKeyConstraint` na tabela, `UniqueConstraint`, `CheckConstraint`, `Index`. Desde a versão
@@ -93,13 +94,13 @@ Nos bancos do projeto a cláusula não tem efeito útil:
 
 | Banco | Comportamento verificado |
 | --- | --- |
-| DuckDB 1.5.5 | `DEFERRABLE`, `NOT DEFERRABLE` e `INITIALLY` em `PRIMARY KEY`, `UNIQUE` e `FOREIGN KEY` falham com `Constraint not implemented!`; `SET CONSTRAINTS` é erro de sintaxe; `ALTER TABLE ... ADD CONSTRAINT` falha com `No support for that ALTER TABLE option yet!`, então `use_alter=True` também derruba o `create_all`. |
+| DuckDB 1.5.5 | Na forma de restrição de tabela que o SQLAlchemy emite (`FOREIGN KEY (...) REFERENCES ... DEFERRABLE INITIALLY DEFERRED`, `UNIQUE (...) DEFERRABLE ...`), a cláusula é aceita e descartada: `duckdb_constraints()` mostra a chave sem ela, e a verificação é imediata. Na forma de coluna (`a_id BIGINT REFERENCES a (id) DEFERRABLE ...`) e em `PRIMARY KEY ... DEFERRABLE`, falha com `Constraint not implemented!`; `SET CONSTRAINTS` é erro de sintaxe; `ALTER TABLE ... ADD CONSTRAINT` falha com `No support for that ALTER TABLE option yet!`, então `use_alter=True` também derruba o `create_all`. |
 | Redshift | A sintaxe do `CREATE TABLE` não tem `DEFERRABLE` nem `INITIALLY`, e chaves primárias, únicas e estrangeiras são informativas, nunca verificadas. Se o parser aceita e ignora a cláusula fica pendente da prova de conceito. |
 
 Os modelos em `src/serialize_db/model/` declaram `deferrable=True, initially='DEFERRED'` em todas as
 chaves estrangeiras de `model_base_contabil.py` e `model_base_gerencial.py`, inclusive nas compostas,
-e em nenhuma de `model_db_projetado.py`. Com isso, o `create_all` falha no DuckDB na primeira dessas
-tabelas. A [política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
+e em nenhuma de `model_db_projetado.py`. No DuckDB o `create_all` passa, porque a cláusula é
+descartada; no Redshift ela não existe. A [política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
 estrangeiras ficam de fora e a auditoria verifica a integridade referencial com o mês inteiro
 carregado, antes da publicação, que é a verificação adiada feita pelo próprio pipeline; no Redshift a
 chave é declarada só quando auditada, sem `deferrable`.
@@ -143,6 +144,47 @@ event.listen(
 )
 ```
 
+A tabela do Delta Lake, a fonte da verdade do projeto ([`delta.md`](delta.md)), nasce sem DDL em SQL.
+`DeltaTable.create` recebe o esquema Arrow derivado do modelo (`esquema_arrow`, definida na seção
+sobre arquivos Parquet, aplicada ao modelo `Operacao` da seção sobre o mapeamento declarativo), e os
+metadados do modelo chegam à tabela: `Table.name` vira o nome, `Table.comment` vira a descrição e os
+metadados de campo do Arrow, como o `comment` da coluna, ficam no esquema Delta. A coluna de partição
+`mes` é uma coluna comum do modelo. No S3, o URI `s3://...` acompanha `storage_options`.
+
+```python
+# Cria a tabela Delta a partir do modelo: esquema Arrow do contrato, comentários, partição e descrição.
+import pyarrow as pa
+from deltalake import DeltaTable
+
+table = Operacao.__table__
+schema = pa.schema([
+    field.with_metadata({**field.metadata, "comment": column.comment}) if column.comment else field
+    for field, column in zip(esquema_arrow(Operacao), table.columns)
+])
+delta_table = DeltaTable.create(
+    "lago/operacoes", schema, mode="ignore", partition_by=["mes"],
+    name=table.name, description=table.comment,
+    configuration={"delta.checkpointInterval": "10"},
+)
+print(delta_table.version(), delta_table.metadata().name, delta_table.metadata().partition_columns)
+print(pa.schema(delta_table.schema().to_arrow()).field("id_cliente").metadata)
+```
+
+Saída:
+
+```
+0 operacoes ['mes']
+{b'PARQUET:field_id': b'3', b'comment': b'Chave do cliente'}
+```
+
+`mode="ignore"` torna a criação idempotente: a segunda chamada devolveu a mesma versão 0.
+`delta_table.schema().to_arrow()` devolve um esquema arro3, que `pa.schema` converte; comparado ao
+esquema enviado com `check_metadata=True`, ele é igual. Uma `CheckConstraint` do modelo entra com
+`delta_table.alter.add_constraint({nome: sqltext})` e é gravada como `delta.constraints.<nome>`
+(`valor >= 0` foi gravada como `valor >= '0'::decimal(18, 2)`). Na reconciliação de esquema descrita
+em `delta.md`, `delta_table.alter.add_columns` exige `deltalake.schema.Field`; um `pyarrow.Field` é
+recusado com `'Field' object is not an instance of 'Field'`.
+
 ### Reflexão
 
 `Table("operacoes", metadata, autoload_with=engine)` lê colunas, tipos, nulidade, chaves e
@@ -159,6 +201,46 @@ devolve vazio e índices não são refletidos, embora a função `duckdb_constra
 chave; colunas, tipos e comentários voltam corretos. A comparação entre o modelo e o banco, uma das
 auditorias do projeto, precisa de uma consulta ao catálogo para as chaves no DuckDB.
 
+A auditoria compara os tipos pela correspondência Arrow (`tipo_arrow`, definida na seção sobre
+arquivos Parquet), o que ignora o comprimento de `String(n)` que o catálogo do DuckDB descarta, e
+busca a chave no catálogo:
+
+```python
+# Compara a tabela refletida do DuckDB com o contrato; a chave vem do catálogo, não da reflexão.
+from sqlalchemy import MetaData, Table, create_engine, inspect, text
+
+engine = create_engine("duckdb:///:memory:")
+metadata.create_all(engine)
+reflected = Table("operacoes", MetaData(), autoload_with=engine)
+mismatches = []
+for c in operacoes.columns:
+    r = reflected.columns.get(c.name)
+    if r is None:
+        mismatches.append(f"{c.name}: ausente no banco")
+    elif tipo_arrow(r.type) != tipo_arrow(c.type) or r.nullable != c.nullable:
+        mismatches.append(f"{c.name}: banco {r.type}, contrato {c.type}")
+mismatches += [f"{c.name}: fora do contrato" for c in reflected.columns if c.name not in operacoes.columns]
+print(mismatches)
+print(inspect(engine).get_pk_constraint("operacoes"))
+with engine.connect() as conn:
+    print(conn.execute(text(
+        "SELECT constraint_column_names FROM duckdb_constraints() "
+        "WHERE table_name = 'operacoes' AND constraint_type = 'PRIMARY KEY'"
+    )).scalar())
+```
+
+Saída:
+
+```
+[]
+{'name': None, 'constrained_columns': []}
+['id_operacao', 'data_ref']
+```
+
+Depois de `ALTER TABLE operacoes ALTER COLUMN valor TYPE DOUBLE` e de
+`ALTER TABLE operacoes ADD COLUMN canal VARCHAR`, a lista passou a
+`['valor: banco FLOAT, contrato NUMERIC(18, 2)', 'canal: fora do contrato']`.
+
 ### Customização do comportamento
 
 | Mecanismo | Uso |
@@ -174,6 +256,48 @@ auditorias do projeto, precisa de uma consulta ao catálogo para as chaves no Du
 | Eventos | `DDLEvents` (`before_create`), `ConnectionEvents` (`before_cursor_execute`), `PoolEvents.connect` para configurar cada conexão nova (`SET search_path`, `SET memory_limit`). |
 | `Sequence`, `Identity`, `server_default`, `FetchedValue`, `Computed` | Geração de valores no servidor, descrita na seção do ORM. |
 | `create_engine(..., use_insertmanyvalues=False, insertmanyvalues_page_size=...)` | Controle do modo de inserção em lote. |
+
+Uma função com nome diferente nos dois bancos, como a que deriva `mes` de `data_ref`, é um
+`FunctionElement` com uma regra `@compiles` por dialeto. O mesmo `select` compila para cada banco; o
+DuckDB não tem `to_char` (`Catalog Error: Scalar Function with name to_char does not exist!`):
+
+```python
+# Uma função por dialeto: strftime no DuckDB, to_char no Redshift, escolhida na compilação.
+from sqlalchemy import String, select
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.functions import FunctionElement
+
+class month_of(FunctionElement):
+    """Mês 'AAAA-MM' de uma data; cada banco tem a própria função de formatação."""
+    type = String(7)
+    name = "month_of"
+    inherit_cache = True
+
+@compiles(month_of, "duckdb")
+def _month_of_duckdb(element, compiler, **kw):
+    return f"strftime({compiler.process(element.clauses, **kw)}, '%Y-%m')"
+
+@compiles(month_of, "redshift")
+def _month_of_redshift(element, compiler, **kw):
+    return f"to_char({compiler.process(element.clauses, **kw)}, 'YYYY-MM')"
+
+stmt = select(operacoes.c.id_operacao, month_of(operacoes.c.data_ref).label("mes"))
+print(stmt.compile(dialect=duckdb_engine.Dialect()))
+print(stmt.compile(dialect=RedshiftDialect_redshift_connector()))
+```
+
+Saída:
+
+```
+SELECT operacoes.id_operacao, strftime(operacoes.data_ref, '%Y-%m') AS mes
+FROM operacoes
+SELECT operacoes.id_operacao, to_char(operacoes.data_ref, 'YYYY-MM') AS mes
+FROM operacoes
+```
+
+Executado pelo engine do DuckDB, o `select` devolveu `'2026-08'` para `data_ref = 2026-08-01`. Sem
+regra para o dialeto em uso, a compilação falha com `UnsupportedCompilationError` (`construct has no
+default compilation handler`), o que denuncia um backend não previsto.
 
 ## Statements de insert, update, delete e select
 
@@ -237,6 +361,54 @@ Regras que importam:
   converte `Decimal` em `float`. `DataFrame.to_sql` gera `INSERT` por `executemany`, com
   `method="multi"` para um `VALUES` de várias linhas.
 
+O mesmo `select` serve aos dois bancos. Compilado com `literal_binds`, o texto é idêntico nos dois
+dialetos; no DuckDB, a conexão bruta por trás do engine executa o texto e devolve Arrow, que preserva
+o decimal:
+
+```python
+# O mesmo select compilado para os dois dialetos e executado no DuckDB com resultado em Arrow.
+import duckdb_engine
+from sqlalchemy import create_engine
+from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
+
+sql_duckdb = str(consulta.compile(dialect=duckdb_engine.Dialect(), compile_kwargs={"literal_binds": True}))
+sql_redshift = str(consulta.compile(dialect=RedshiftDialect_redshift_connector(), compile_kwargs={"literal_binds": True}))
+assert sql_duckdb == sql_redshift
+print(sql_duckdb)
+
+linhas = [
+    {"id_operacao": 1, "data_ref": date(2026, 8, 1), "id_cliente": 100, "valor": Decimal("10.50"), "descricao": None},
+    {"id_operacao": 2, "data_ref": date(2026, 8, 2), "id_cliente": 100, "valor": Decimal("4.25"), "descricao": "estorno"},
+    {"id_operacao": 3, "data_ref": date(2026, 8, 9), "id_cliente": 200, "valor": Decimal("7.00"), "descricao": None},
+]
+engine = create_engine("duckdb:///:memory:")
+metadata.create_all(engine)
+with engine.begin() as conn:
+    conn.execute(insert(operacoes), linhas)
+    raw = conn.connection.dbapi_connection                    # conexão DuckDB por trás do engine
+    table = raw.sql(sql_duckdb).to_arrow_table()              # pyarrow.Table
+    batches = list(raw.sql(sql_duckdb).to_arrow_reader(1))    # RecordBatchReader, consumido antes de outro comando
+print(table.schema)
+print(table.to_pylist(), [b.num_rows for b in batches])
+```
+
+Saída:
+
+```
+SELECT operacoes.id_cliente, sum(operacoes.valor) AS total
+FROM operacoes
+WHERE operacoes.data_ref >= '2026-08-01' GROUP BY operacoes.id_cliente ORDER BY operacoes.id_cliente
+id_cliente: int64
+total: decimal128(38, 2)
+[{'id_cliente': 100, 'total': Decimal('14.75')}, {'id_cliente': 200, 'total': Decimal('7.00')}] [1, 1]
+```
+
+A soma de `DECIMAL(18, 2)` sai como `decimal128(38, 2)`; o cast para o esquema do contrato acontece
+antes de gravar. No DuckDB 1.5.5, `arrow()` da relação devolve um `RecordBatchReader`, não uma
+tabela, e `fetch_arrow_table()` e `fetch_record_batch()` estão obsoletos em favor de
+`to_arrow_table()` e `to_arrow_reader()`. O leitor é consumido antes de qualquer outro comando na
+mesma conexão, inclusive o commit do fim do bloco; depois disso ele devolve zero lotes, sem erro.
+
 ## ORM: modelos e DDL
 
 ### Mapeamento declarativo
@@ -280,6 +452,7 @@ class Operacao(Rastreio, Base):
     id_cliente: Mapped[int] = mapped_column(comment="Chave do cliente", info={"serialize_db": {"pii": False}})
     valor: Mapped[Valor]
     descricao: Mapped[str | None] = mapped_column(String(200))
+    mes: Mapped[str] = mapped_column(String(7), comment="Mês de data_ref no formato AAAA-MM")
 ```
 
 - `DeclarativeBase` cria a `MetaData` e o `registry`; `__tablename__` e as anotações `Mapped[...]`
@@ -329,7 +502,7 @@ from sqlalchemy.orm import Session
 
 with Session(engine) as session:
     session.add(Operacao(id_operacao=1, data_ref=dt.date(2026, 8, 1), id_cliente=100,
-                         valor=decimal.Decimal("10.50"), id_execucao="abc123"))
+                         valor=decimal.Decimal("10.50"), mes="2026-08", id_execucao="abc123"))
     session.commit()
 
     op = session.get(Operacao, (1, dt.date(2026, 8, 1)))
@@ -378,6 +551,51 @@ with Session(engine) as session:
   SQLite. O Redshift não tem `ON CONFLICT`; o caminho é `MERGE` em `text()`.
 - Os métodos `bulk_insert_mappings` e `bulk_update_mappings` são a forma legada dos mesmos recursos.
 
+O lote da biblioteca não passa pelo `executemany` em nenhum dos dois bancos. No DuckDB, o lote é uma
+tabela Arrow com o esquema do contrato, registrada na conexão bruta; no Redshift, um `INSERT` de
+várias linhas compilado do mesmo modelo:
+
+```python
+# Lote sem executemany: tabela Arrow registrada no DuckDB; um INSERT de várias linhas no Redshift.
+import pyarrow as pa
+from sqlalchemy import create_engine, text
+
+registros = [
+    {"id_operacao": 1, "data_ref": dt.date(2026, 8, 1), "id_cliente": 100, "valor": decimal.Decimal("10.50"), "id_execucao": "abc123"},
+    {"id_operacao": 2, "data_ref": dt.date(2026, 8, 2), "id_cliente": 100, "valor": decimal.Decimal("4.25"), "id_execucao": "abc123"},
+]
+for r in registros:
+    r["mes"] = r["data_ref"].strftime("%Y-%m")               # coluna de partição, derivada antes de gravar
+batch = pa.Table.from_pylist(registros, schema=esquema_arrow(Operacao))   # chaves ausentes viram nulo
+
+engine = create_engine("duckdb:///:memory:")
+Base.metadata.create_all(engine)
+with engine.begin() as conn:
+    raw = conn.connection.dbapi_connection
+    raw.register("batch", batch)                              # visível só pela conexão bruta
+    conn.execute(text("INSERT INTO operacoes BY NAME SELECT * FROM batch"))
+    raw.unregister("batch")
+    print(conn.execute(select(func.count()).select_from(Operacao)).scalar())
+
+stmt = insert(Operacao).values(registros)                     # um comando, sem paginação
+print(stmt.compile(dialect=RedshiftDialect_redshift_connector(), compile_kwargs={"literal_binds": True}))
+```
+
+Saída:
+
+```
+2
+INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, mes, id_execucao) VALUES (1, '2026-08-01', 100, 10.50, '2026-08', 'abc123'), (2, '2026-08-02', 100, 4.25, '2026-08', 'abc123')
+```
+
+`pa.Table.from_pylist` com o esquema do contrato recusa um valor fora do tipo: um `Decimal` de 19
+dígitos em `decimal128(18, 2)` falha com
+`Decimal type with precision 19 does not fit into precision inferred from first array element: 18`, e
+um texto em `int64` falha com `Could not convert 'x' with type str`. Um nulo em campo não anulável
+passa pela construção da tabela Arrow e é recusado pelo `NOT NULL` da tabela na carga
+(`Constraint Error: NOT NULL constraint failed: operacoes.id_cliente`). O registro vale até o
+`unregister`: depois dele, o mesmo `INSERT` falha com `Catalog Error: Table with name batch does not exist!`.
+
 ### Chaves geradas no servidor
 
 Uma coluna inteira única na chave primária tem `autoincrement="auto"`: cada dialeto emite o seu
@@ -407,6 +625,35 @@ nos dois bancos: no DuckDB o `autoincrement` padrão vira `SERIAL`, tipo que o b
 único mecanismo é a sequência; no Redshift o `IDENTITY` gera valores com saltos, sem ordem garantida
 e sem `RETURNING` para recuperá-los.
 
+O DDL compilado mostra a diferença entre os dois modos:
+
+```python
+# Chave gerada no cliente: sem SERIAL no DuckDB nem IDENTITY no Redshift, e o INSERT não precisa de RETURNING.
+from sqlalchemy import BigInteger, Column, MetaData, Table
+from sqlalchemy.schema import CreateTable
+
+md = MetaData()
+server_key = Table("t_servidor", md, Column("id", BigInteger, primary_key=True))
+client_key = Table("t_cliente", md, Column("id", BigInteger, primary_key=True, autoincrement=False))
+for table in (server_key, client_key):
+    print(str(CreateTable(table).compile(dialect=duckdb_engine.Dialect())).strip())
+    print(str(CreateTable(table).compile(dialect=RedshiftDialect_redshift_connector())).strip())
+
+stmt = insert(Operacao).values(id_operacao=1, data_ref=dt.date(2026, 8, 1), id_cliente=100,
+                               valor=decimal.Decimal("10.50"), mes="2026-08", id_execucao="abc123")
+print(stmt.compile(dialect=RedshiftDialect_redshift_connector()))
+```
+
+Com o `autoincrement` padrão, `t_servidor` sai com `id BIGSERIAL NOT NULL` no duckdb_engine, tipo
+que o DuckDB não tem, e com `id BIGINT NOT NULL` no dialeto do Redshift, sem `IDENTITY`. Com
+`autoincrement=False`, `t_cliente` sai com `id BIGINT NOT NULL` nos dois. O `INSERT` de `Operacao`
+compilado para o Redshift lista as colunas informadas, com `id_operacao` vindo do cliente, e não tem
+`RETURNING`:
+
+```
+INSERT INTO operacoes (id_operacao, data_ref, id_cliente, valor, mes, id_execucao) VALUES (%s, %s, %s, %s, %s, %s)
+```
+
 ## Suporte a Redshift, DuckDB e arquivos Parquet
 
 ### Redshift
@@ -418,7 +665,7 @@ contrato:
 | Tema | Comportamento |
 | --- | --- |
 | DDL | `redshift_diststyle`, `redshift_distkey`, `redshift_sortkey`, `redshift_interleaved_sortkey` na tabela; `redshift_encode`, `redshift_distkey`, `redshift_sortkey`, `redshift_identity` na coluna. `PRIMARY KEY`, `UNIQUE` e `FOREIGN KEY` saem no DDL e são informativas no banco. |
-| Tipos | `Numeric(18, 2)` vira `NUMERIC(18, 2)`; `String(n)` vira `VARCHAR(n)`, com `n` em bytes; `String()` sem comprimento vira `VARCHAR`, que o Redshift trata como `VARCHAR(256)`. O dialeto compila `Text` como `TEXT`, também `VARCHAR(256)` no Redshift, então o `VARCHAR(65535)` da tabela do contrato exige `String(65535)` ou uma regra `@compiles(Text, "redshift")`. `JSON` não existe; `SUPER` vem do dialeto. |
+| Tipos | `Numeric(18, 2)` vira `NUMERIC(18, 2)`; `String(n)` vira `VARCHAR(n)`, com `n` em bytes; `String()` sem comprimento vira `VARCHAR`, que o Redshift trata como `VARCHAR(256)`. O dialeto compila `Text` como `TEXT`, também `VARCHAR(256)` no Redshift, então o `VARCHAR(65535)` da tabela do contrato exige `String(65535)` ou uma regra `@compiles(Text, "redshift")`. `JSON` compila como `JSON`, que o Redshift não tem; o contrato usa `JSON().with_variant(SUPER(), "redshift")`, que compila `SUPER` ([campos JSON](schema.md)). |
 | Importação | `CopyCommand(Table, ...)` gera o `COPY ... FORMAT AS PARQUET MANIFEST` a partir do `Table` do modelo; a validação do esquema acontece no Arrow, antes do Parquet. |
 | Exportação | `UnloadFromSelect(select(Modelo)...)` gera o `UNLOAD` da consulta do modelo. |
 | Inserção pelo ORM | Volumes pequenos com `insert(Modelo).values(lista)` em lotes; o bulk insert do ORM cai no `executemany` linha a linha do `redshift_connector`. |
@@ -432,7 +679,7 @@ detalhes; o resumo para o contrato:
 
 | Tema | Comportamento |
 | --- | --- |
-| DDL | `create_all` funciona com chaves, `NOT NULL`, comentários e sequências; `Identity`, restrições `DEFERRABLE` e `use_alter` falham; `String(n)` perde o comprimento. Uma chave primária `Integer` de uma coluna com o `autoincrement` padrão sai como `SERIAL` e falha com `Type with name SERIAL does not exist!`, então as chaves do cliente levam `autoincrement=False`. Restrições ficam fora pela política do projeto (`ddl_if(dialect="redshift")`). |
+| DDL | `create_all` funciona com chaves, `NOT NULL`, comentários e sequências; `Identity` e `use_alter` falham, e `DEFERRABLE` é descartado nas restrições de tabela; `String(n)` perde o comprimento. Uma chave primária `Integer` de uma coluna com o `autoincrement` padrão sai como `SERIAL` e falha com `Type with name SERIAL does not exist!`, então as chaves do cliente levam `autoincrement=False`. Restrições ficam fora pela política do projeto (`ddl_if(dialect="redshift")`). |
 | Reflexão | Colunas e comentários sim; chave primária e índices não. |
 | Importação | `INSERT INTO tabela BY NAME SELECT * FROM entrada` com a tabela Arrow registrada na conexão bruta (`conn.connection.dbapi_connection.register`), porque variáveis Python não são visíveis pelo engine. Volumes pequenos pelo bulk insert do ORM (0,98 s para 50.000 linhas, 0,77 s com `render_nulls=True`). |
 | Exportação | `COPY (...) TO 'arquivo.parquet'` em `text()`, com a consulta do modelo compilada com `literal_binds`. |
@@ -472,11 +719,13 @@ def tipo_arrow(tipo: t.TypeEngine) -> pa.DataType:
             return pa.timestamp("us")
         case t.Uuid():
             return pa.string()
+        case t.JSON():
+            return pa.json_(pa.string())
     raise TypeError(f"tipo sem correspondência Arrow: {tipo!r}")
 
 def esquema_arrow(modelo) -> pa.Schema:
     return pa.schema([
-        pa.field(c.name, tipo_arrow(c.type), nullable=c.nullable, metadata={"field_id": str(i)})
+        pa.field(c.name, tipo_arrow(c.type), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
         for i, c in enumerate(modelo.__table__.columns, start=1)
     ])
 
@@ -494,7 +743,10 @@ def conferir(modelo, caminho: str) -> None:
 ```
 
 - A ordem dos casos importa: `BigInteger` e `SmallInteger` são subclasses de `Integer`, e `Float` é
-  subclasse de `Numeric`. `Text` cai em `String`. Um `Numeric()` sem precisão e escala, que é o que o
+  subclasse de `Numeric`. `Text` cai em `String`. `JSON` vira a extensão `arrow.json`, texto com anotação; o
+  `with_variant(SUPER(), "redshift")` do contrato não muda o tipo genérico, e `isinstance(tipo, t.JSON)`
+  continua verdadeiro. O metadado `PARQUET:field_id` é o que o PyArrow grava como `field_id` no Parquet;
+  a chave `field_id` sem prefixo não gera nada. Um `Numeric()` sem precisão e escala, que é o que o
   mapa de tipos padrão dá a `Mapped[decimal.Decimal]`, cai no erro final; o mapa do modelo ou o
   `Annotated` precisa fixar `Numeric(18, 2)`.
 - `pa.Table.from_pandas(..., schema=..., safe=True)` falha quando um valor não cabe no tipo (inteiro
