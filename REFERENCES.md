@@ -260,6 +260,12 @@ Consultadas para a estratégia de implementação:
 - <https://docs.aws.amazon.com/redshift/latest/dg/c-spectrum-external-tables.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_TRY_CAST.html>
 
+Delta Lake no Redshift Spectrum (tabelas de manifesto simbólico), consultado em 2026-09-19:
+
+- <https://docs.aws.amazon.com/redshift/latest/dg/c-spectrum-external-tables.html>
+- <https://aws.amazon.com/blogs/big-data/introducing-native-delta-lake-table-support-with-aws-glue-crawlers>
+- <https://aws.amazon.com/about-aws/whats-new/2022/12/aws-glue-crawlers-support-delta-lake-tables>
+
 ## DuckDB
 
 Documentação:
@@ -611,6 +617,10 @@ Especificação do catálogo REST do Iceberg (namespaces e commit de várias tab
 - <https://aws.amazon.com/blogs/big-data/zero-copy-access-to-apache-iceberg-tables-in-amazon-s3-from-salesforce-data-360-using-the-iceberg-rest-endpoint-from-aws-glue-data-catalog/>
 - <https://aws.amazon.com/blogs/big-data/break-down-data-silos-and-seamlessly-query-iceberg-tables-in-amazon-sagemaker-from-snowflake/>
 - <https://aws.amazon.com/blogs/big-data/accelerate-lightweight-analytics-using-pyiceberg-with-aws-lambda-and-an-aws-glue-iceberg-rest-endpoint/>
+
+Crawler de tabelas Delta Lake (tabelas nativas e de manifesto simbólico), consultado em 2026-09-19:
+
+- <https://docs.aws.amazon.com/glue/latest/dg/crawler-delta-lake.html>
 
 ## Amazon Athena
 
