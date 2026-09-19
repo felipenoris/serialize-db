@@ -60,10 +60,12 @@ o que uma sessão grava é `.pytest_cache/` na raiz do repositório, do próprio
 ## Diagnóstico do ambiente AWS
 
 ```
-.venv/bin/python diagnose_aws.py s3://bucket/prefixo
+.venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo
 ```
 
-Só leitura: nada é gravado no bucket. O script imprime, cada um com timeout curto e o tempo gasto, as
+Só leitura: nada é gravado no bucket. O resultado sai no terminal e em
+`probes/output/diagnose_aws_<data-hora>.txt`, pasta fora do git, para ser colado na conversa com o
+assistente. O script imprime, cada um com timeout curto e o tempo gasto, as versões, as
 variáveis de ambiente, a região como o `boto3` e o delta-rs a resolvem, o DNS dos endpoints (IP
 privado indica endpoint VPC de interface com DNS privado; IP público, gateway endpoint ou internet),
 as credenciais do `boto3`, a listagem de `<raiz>/serialize-db-poc/` pelo `boto3`, pelo delta-rs e

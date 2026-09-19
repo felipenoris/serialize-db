@@ -2,9 +2,11 @@
 
 Uso, no ambiente destino, com a raiz que a suíte usaria:
 
-    .venv/bin/python diagnose_aws.py s3://bucket/prefixo
+    .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo
 
-Cada verificação imprime uma linha com o resultado, o detalhe e o tempo, sempre com timeouts curtos:
+O resultado sai no terminal e em ``probes/output/diagnose_aws_<data-hora>.txt``, pasta fora do git,
+para ser colado na conversa com o assistente. Cada verificação imprime uma linha com o resultado, o
+detalhe e o tempo, sempre com timeouts curtos:
 variáveis de ambiente, região como o ``boto3`` e o delta-rs a resolvem, DNS dos endpoints, credenciais,
 listagem de ``<raiz>/serialize-db-poc/`` pelo ``boto3``, pelo delta-rs e pelo DuckDB, e o STS. O
 resumo final diz se a suíte precisa de manutenção para o ambiente: região que o ``boto3`` não lê, STS
@@ -17,6 +19,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import platform
 import socket
 import subprocess
 import sys
@@ -26,6 +29,35 @@ from pathlib import Path
 
 PROBE_TIMEOUT = 60  # segundos de espera por subprocesso do delta-rs e do DuckDB
 PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
+
+
+class Tee:
+    """Escreve ao mesmo tempo no terminal e no arquivo de saída, linha a linha."""
+
+    def __init__(self, path: Path) -> None:
+        self.file = path.open("w", encoding="utf-8")
+        self.terminal = sys.stdout
+
+    def write(self, text: str) -> int:
+        self.terminal.write(text)
+        self.file.write(text)
+        self.file.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        self.terminal.flush()
+        self.file.flush()
+
+
+def show_versions(root: str) -> None:
+    import boto3
+    import botocore
+    import deltalake
+    import duckdb
+
+    print(f"== diagnóstico de {root} em {time.strftime('%Y-%m-%d %H:%M:%S %z')}")
+    print(f"  {platform.platform()}; python {platform.python_version()}")
+    print(f"  boto3 {boto3.__version__}; botocore {botocore.__version__}; deltalake {deltalake.__version__}; duckdb {duckdb.__version__}")
 
 
 def report(status: str, label: str, detail: str, started: float | None = None) -> None:
@@ -154,7 +186,7 @@ def run_probe(label: str, code: str, arguments: list[str], on_success: Callable[
     return True
 
 
-DELTA_PROBE = """
+DELTA_PROBE = r"""
 import json, re, sys
 from deltalake import DeltaTable
 uri, options = sys.argv[1], json.loads(sys.argv[2])
@@ -175,7 +207,7 @@ def check_delta_rs(root: str, options: dict[str, str], label: str) -> bool:
     return run_probe(label, DELTA_PROBE, [uri, json.dumps(options)], lambda out: f"listou o prefixo (tabela existe: {out})")
 
 
-DUCKDB_PROBE = """
+DUCKDB_PROBE = r"""
 import sys, duckdb
 root, region, directory, endpoint = sys.argv[1:5]
 config = {"autoinstall_known_extensions": False, "autoload_known_extensions": False}
@@ -200,7 +232,7 @@ def duckdb_extension_directory() -> str:
     configured = os.environ.get("SERIALIZE_DB_DUCKDB_EXTENSIONS")
     if configured:
         return configured
-    local = Path(__file__).resolve().parent / ".duckdb"
+    local = Path(__file__).resolve().parent.parent / ".duckdb"
     return str(local) if local.is_dir() else ""
 
 
@@ -213,12 +245,25 @@ def check_duckdb(root: str, region: str | None, endpoint: str) -> bool:
 def main(argv: list[str]) -> int:
     root = (argv[1] if len(argv) > 1 else os.environ.get("SERIALIZE_DB_TEST_S3_ROOT", "")).rstrip("/")
     if not root.startswith("s3://"):
-        print("uso: .venv/bin/python diagnose_aws.py s3://bucket/prefixo", file=sys.stderr)
+        print("uso: .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo", file=sys.stderr)
         return 2
+    output = Path(__file__).resolve().parent / "output"
+    output.mkdir(exist_ok=True)
+    path = output / f"diagnose_aws_{time.strftime('%Y%m%d-%H%M%S')}.txt"
+    sys.stdout = Tee(path)
+    try:
+        return diagnose(root)
+    finally:
+        sys.stdout = sys.__stdout__
+        print(f"resultado gravado em {path}")
+
+
+def diagnose(root: str) -> int:
     bucket, _, prefix = root.removeprefix("s3://").partition("/")
     endpoint_url = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL") or ""
     endpoint_host = endpoint_url.removeprefix("https://").removeprefix("http://").rstrip("/")
 
+    show_versions(root)
     show_environment()
     boto3_region, delta_region = resolve_regions()
     region = boto3_region or delta_region

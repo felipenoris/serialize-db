@@ -6,3 +6,4 @@ prompts.md
 .pytest_cache
 .python
 .duckdb
+probes/output
