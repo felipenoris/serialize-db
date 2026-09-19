@@ -146,7 +146,7 @@ matching group.
 
 | File | Subject |
 | --- | --- |
-| `README.md` | Initialization with `uv init --python 3.13`. |
+| `README.md` | Initialization with `uv init --python 3.13`, dependencies (`uv sync --group dev`), the test suite and its environment variables, the delta-rs credentials and proxy note, and the offline recipe (`tests/prepare_offline.sh`, tar, `.venv/bin/python -m pytest`). |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Delta, DuckDB and Redshift, and SQL portability between the two engines. It ends with the JSON field treatment per layer (model `JSON().with_variant(SUPER(), "redshift")`, Arrow `json_` extension, Delta `string`, DuckDB `JSON`, Redshift `SUPER` via `JSON_PARSE`). |
 | `docs/parquet.md` | Parquet file layout and every metadata structure (`FileMetaData`, schema, row group, `ColumnMetaData`, page index, Bloom filters, page headers, key-value pairs, size and geospatial statistics, encryption, summary files), inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -387,8 +387,14 @@ No library code exists beyond the models: `pyproject.toml` declares no runtime d
 `tests/conftest.py` export `NO_PROXY`, set `AWS_REGION`, create `serialize-db-poc/<id>/` under the
 root, delete it at the end unless `SERIALIZE_DB_TEST_KEEP` is set, and print a report of facts and
 timings, also written to `SERIALIZE_DB_TEST_REPORT` as JSON). It exists so the same proof of concept
-runs in the target environment, which has restricted internet: DuckDB `httpfs` and `delta` must be
-preinstalled there. The next work follows the stage table in `docs/estrategia.md`:
+runs in the target environment, which has no internet. `tests/prepare_offline.sh` makes the project
+folder self-contained on a machine with internet: managed Python in `.python/` (`UV_PYTHON_INSTALL_DIR`,
+`UV_MANAGED_PYTHON=1`), `.venv/` with `--link-mode copy` and a relative `.venv/bin/python` link
+(the folder then works at any path; `uv sync` ignores `UV_VENV_RELOCATABLE`, and the `.venv/bin/*`
+scripts keep absolute shebangs, hence `python -m pytest`), and DuckDB `httpfs`, `delta` and `aws` in
+`.duckdb/` (`extension_directory`, picked up by `conftest.py`). Verified on 2026-09-19 by extracting
+the tar at another path and running the suite with dead proxies and an empty `HOME`: 10 passed. The
+next work follows the stage table in `docs/estrategia.md`:
 
 - Stage 1, `serialize_db.contract`, and stage 2, `serialize_db.delta`, run on local folders and are
   the natural next session: fix the models (importable `Base`, `Numeric(18, 2)`,

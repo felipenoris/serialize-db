@@ -4,9 +4,9 @@ Cada teste responde a um item da etapa 0 em ``docs/estrategia.md``: as credencia
 encontra, a escrita e a leitura no bucket, o put condicional, o ``vacuum`` e o tempo do ``delta_scan``.
 As medições vão para o relatório impresso no fim da sessão (``conftest.py``).
 
-Num ambiente com internet restrita, as extensões ``httpfs`` e ``delta`` do DuckDB precisam estar no
-diretório de extensões (``~/.duckdb/extensions/<versão>/<plataforma>/``) ou num repositório interno
-apontado por ``SET custom_extension_repository``; sem isso os testes que as usam são pulados.
+Num ambiente sem internet, as extensões ``httpfs``, ``delta`` e ``aws`` do DuckDB precisam estar na
+pasta de extensões (``.duckdb/`` do repositório, preparada por ``tests/prepare_offline.sh``, ou a
+pasta padrão do DuckDB); sem isso os testes que as usam são pulados.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import pyarrow as pa
 import pytest
 from deltalake import DeltaTable, write_deltalake
 
-from conftest import REPORT, S3Location, record
+from conftest import REPORT, S3Location, duckdb_extension_directory, record
 
 pytestmark = pytest.mark.s3
 
@@ -75,8 +75,10 @@ def table_uri(s3_location: S3Location, sample_table: pa.Table) -> str:
 @pytest.fixture(scope="session")
 def duckdb_connection() -> duckdb.DuckDBPyConnection:
     """Conexão com ``httpfs`` e ``delta`` carregadas e um secret S3 pela cadeia de credenciais."""
-    connection = duckdb.connect()
-    for extension in ("httpfs", "delta"):
+    directory = duckdb_extension_directory()
+    connection = duckdb.connect(config={"extension_directory": directory} if directory else {})
+    record("duckdb.extension_directory", directory or "(padrão)")
+    for extension in ("httpfs", "delta", "aws"):
         try:
             connection.execute(f"LOAD {extension}")
         except duckdb.Error:

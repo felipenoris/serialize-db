@@ -9,6 +9,8 @@ Variáveis de ambiente lidas:
 - ``SERIALIZE_DB_TEST_S3_ROOT``: raiz sob a qual os testes criam ``serialize-db-poc/<id>/``.
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos criados no S3 depois da sessão.
 - ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é gravado.
+- ``SERIALIZE_DB_DUCKDB_EXTENSIONS``: pasta de extensões do DuckDB; sem ela, ``.duckdb/`` na raiz do
+  repositório quando existir (criada por ``tests/prepare_offline.sh``), senão o padrão do DuckDB.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from pathlib import Path
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
@@ -42,6 +45,15 @@ def _s3_root_from_environment() -> str | None:
         return str(Project().s3.root).rstrip("/")
     except Exception:  # noqa: BLE001 - qualquer falha do SDK significa "sem raiz"
         return None
+
+
+def duckdb_extension_directory() -> str | None:
+    """Pasta de extensões do DuckDB configurada, ou ``None`` para o padrão do DuckDB."""
+    configured = os.environ.get("SERIALIZE_DB_DUCKDB_EXTENSIONS")
+    if configured:
+        return configured
+    local = Path(__file__).resolve().parent.parent / ".duckdb"
+    return str(local) if local.is_dir() else None
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

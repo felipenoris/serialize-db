@@ -4,3 +4,5 @@ prompts.md
 **/.DS_Store
 .venv
 .pytest_cache
+.python
+.duckdb
