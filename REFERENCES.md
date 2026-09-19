@@ -2,8 +2,9 @@
 
 Este arquivo lista os sites consultados na pesquisa do
 plano de implementação e dos documentos sobre
-[arquivos Parquet](docs/parquet.md), [DuckDB](docs/duckdb.md), [Redshift](docs/redshift.md) e
-[SQLAlchemy](docs/sqlalchemy.md), agrupados por assunto.
+[arquivos Parquet](docs/parquet.md), [DuckDB](docs/duckdb.md), [Redshift](docs/redshift.md),
+[SQLAlchemy](docs/sqlalchemy.md), [Delta Lake](docs/delta.md) e a
+[estratégia de implementação](docs/estrategia.md), agrupados por assunto.
 
 ## Projetos de referência
 
@@ -254,6 +255,11 @@ Novidades, blog e base de conhecimento:
 - <https://aws.amazon.com/blogs/big-data/improve-your-etl-performance-using-multiple-redshift-warehouses-for-writes/>
 - <https://aws.amazon.com/blogs/big-data/develop-a-business-chargeback-model-within-your-organization-using-amazon-redshift-multi-warehouse-writes/>
 
+Consultadas para a estratégia de implementação:
+
+- <https://docs.aws.amazon.com/redshift/latest/dg/c-spectrum-external-tables.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_TRY_CAST.html>
+
 ## DuckDB
 
 Documentação:
@@ -431,6 +437,14 @@ Extensão `iceberg` no GitHub:
 - <https://github.com/duckdb/duckdb-iceberg/pull/1310>
 - <https://github.com/duckdb/duckdb-iceberg/pull/1351>
 
+Extensões `delta`, `iceberg` e `ducklake`, e `ATTACH` remoto:
+
+- <https://duckdb.org/docs/current/core_extensions/delta.html>
+- <https://duckdb.org/docs/current/core_extensions/iceberg/overview.html>
+- <https://duckdb.org/docs/current/core_extensions/ducklake>
+- <https://duckdb.org/docs/current/sql/statements/attach.html>
+- <https://duckdb.org/2026/04/13/announcing-duckdb-152>
+
 ## PyArrow
 
 - <https://arrow.apache.org/docs/python/parquet.html>
@@ -538,6 +552,11 @@ Semântica de restrições adiáveis, herdada pelos dialetos do DuckDB e do Reds
 - <https://github.com/apache/iceberg-python/issues/3556>
 - <https://github.com/apache/iceberg-python/pull/1925>
 - <https://github.com/apache/iceberg-python/pull/3320>
+
+Consultadas para a estratégia de implementação:
+
+- <https://py.iceberg.apache.org/api/>
+- <https://dlthub.com/docs/dlt-ecosystem/destinations/iceberg>
 
 ## AWS Glue Data Catalog
 
@@ -766,6 +785,16 @@ Novidades e blog:
 - <https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-s3-functionality-conditional-writes>
 - <https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html>
 
+Escritas condicionais (`If-None-Match`, `If-Match`):
+
+- <https://aws.amazon.com/about-aws/whats-new/2024/08/amazon-s3-conditional-writes>
+- <https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-s3-functionality-conditional-writes>
+- <https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-s3-conditional-write-functionality-copy-operations>
+- <https://aws.amazon.com/blogs/storage/building-multi-writer-applications-on-amazon-s3-using-native-controls/>
+- <https://docs.aws.amazon.com/boto3/latest/reference/services/s3/client/put_object.html>
+- <https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes-enforce.html>
+- <https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-s3-enforcement-conditional-write-operations-general-purpose-buckets/>
+
 ## Pacotes Python
 
 - <https://github.com/Mause/duckdb_engine>
@@ -798,6 +827,109 @@ API JSON do PyPI, consultada para versões e datas de lançamento:
 - <https://pypi.org/pypi/polars/json>
 - <https://pypi.org/pypi/boto3/json>
 - <https://pypi.org/pypi/sagemaker-studio/json>
+
+API JSON do PyPI, consultada em 2026-09-19 para a estratégia de implementação:
+
+- <https://pypi.org/pypi/deltalake/json>, <https://pypi.org/pypi/deltalake/1.0.0/json>
+- <https://pypi.org/pypi/duckdb/1.5.2/json>
+- <https://pypi.org/pypi/sqlglot/json>, <https://pypi.org/pypi/sqlmesh/json>,
+  <https://pypi.org/pypi/sqlmesh/0.236.2/json>
+- <https://pypi.org/pypi/dbt-core/json>, <https://pypi.org/pypi/dbt-duckdb/json>,
+  <https://pypi.org/pypi/dbt-redshift/json>
+- <https://pypi.org/pypi/datafusion/json>, <https://pypi.org/pypi/ibis-framework/json>,
+  <https://pypi.org/pypi/narwhals/json>, <https://pypi.org/pypi/daft/json>
+- <https://pypi.org/pypi/pandera/json>, <https://pypi.org/pypi/patito/json>,
+  <https://pypi.org/pypi/pydantic/json>, <https://pypi.org/pypi/great-expectations/json>,
+  <https://pypi.org/pypi/datacontract-cli/json>
+- <https://pypi.org/pypi/lancedb/json>, <https://pypi.org/pypi/pylance/json>,
+  <https://pypi.org/pypi/hudi/json>, <https://pypi.org/pypi/ducklake/json>
+- <https://pypi.org/pypi/maturin/json>, <https://pypi.org/pypi/sqlmodel/json>,
+  <https://pypi.org/pypi/pypika/json>, <https://pypi.org/pypi/dlt/json>,
+  <https://pypi.org/pypi/dagster/json>, <https://pypi.org/pypi/prefect/json>
+
+API do crates.io (`https://crates.io/api/v1/crates/<crate>`), consultada em 2026-09-19 para
+`object_store`, `parquet`, `arrow`, `pyo3`, `pyo3-arrow`, `deltalake`, `delta_kernel`, `duckdb`,
+`datafusion`, `hudi`, `iceberg`, `lance`, `maturin`, `sqlparser` e `polars`.
+
+## Delta Lake
+
+Documentação do delta-rs e repositórios:
+
+- <https://delta-io.github.io/delta-rs/usage/writing/>
+- <https://delta-io.github.io/delta-rs/usage/writing/writing-to-s3-with-locking-provider/>
+- <https://delta-io.github.io/delta-rs/integrations/object-storage/s3/>
+- <https://delta-io.github.io/delta-rs/integrations/object-storage/s3-like/>
+- <https://delta-io.github.io/delta-rs/integrations/object-storage/hdfs/>
+- <https://delta-io.github.io/delta-rs/api/delta_table/>
+- <https://delta-io.github.io/delta-rs/api/delta_table/delta_table_alterer/>
+- <https://github.com/delta-io/delta-rs/releases>
+- <https://github.com/delta-io/delta-rs/discussions/4482>
+- <https://github.com/delta-io/delta-rs/issues/4464>
+- <https://github.com/delta-io/delta-rs/issues/2843>
+- <https://github.com/delta-io/delta-rs/pull/4732>
+- <https://github.com/delta-io/delta-rs/issues/3936>
+- <https://github.com/delta-io/delta/blob/master/PROTOCOL.md>
+- <https://docs.pola.rs/api/python/stable/reference/api/polars.DataFrame.write_delta.html>
+- <https://docs.pola.rs/user-guide/io/hive/>
+- <https://dlthub.com/docs/dlt-ecosystem/destinations/delta-iceberg>
+
+## DuckLake
+
+- <https://ducklake.select/docs/stable/>
+- <https://ducklake.select/docs/stable/duckdb/introduction>
+- <https://ducklake.select/docs/stable/duckdb/usage/connecting>
+- <https://ducklake.select/docs/stable/duckdb/usage/choosing_a_catalog_database>
+- <https://ducklake.select/docs/stable/duckdb/usage/schema_evolution>
+- <https://ducklake.select/docs/stable/duckdb/metadata/adding_files>
+- <https://ducklake.select/docs/stable/duckdb/advanced_features/partitioning>
+- <https://ducklake.select/docs/stable/duckdb/advanced_features/conflict_resolution>
+- <https://ducklake.select/docs/stable/duckdb/advanced_features/data_inlining>
+- <https://ducklake.select/docs/stable/specification/tables/ducklake_data_file>
+- <https://ducklake.select/2026/04/13/ducklake-10/>
+- <https://github.com/duckdb/ducklake/pull/175>
+- <https://github.com/duckdb/ducklake/discussions/519>
+- <https://motherduck.com/blog/announcing-ducklake-1-0-on-motherduck/>
+- <https://dlthub.com/docs/dlt-ecosystem/destinations/ducklake>
+
+## Hudi
+
+- <https://github.com/apache/hudi-rs/blob/main/README.md>
+
+## SQLGlot, SQLMesh, dbt, Ibis e dlt
+
+- <https://github.com/tobymao/sqlglot/blob/main/README.md>
+- <https://sqlmesh.readthedocs.io/en/stable/guides/configuration/>
+- <https://sqlmesh.readthedocs.io/en/stable/reference/configuration/>
+- <https://sqlmesh.readthedocs.io/en/stable/integrations/engines/redshift/>
+- <https://sqlmesh.readthedocs.io/en/stable/concepts/models/python_models/>
+- <https://github.com/TobikoData/sqlmesh/blob/main/sqlmesh/core/engine_adapter/base.py>
+- <https://github.com/TobikoData/sqlmesh/blob/main/sqlmesh/core/engine_adapter/redshift.py>
+- <https://github.com/duckdb/dbt-duckdb/blob/master/README.md>
+- <https://docs.getdbt.com/docs/build/python-models>
+- <https://ibis-project.org/support_matrix>
+- <https://dlthub.com/docs/dlt-ecosystem/destinations/redshift>
+- <https://datafusion.apache.org/python/>
+
+## Contrato de dados, auditoria e migração
+
+- <https://pandera.readthedocs.io/en/stable/>
+- <https://github.com/datacontract/datacontract-cli/blob/main/README.md>
+- <https://docs.soda.io/reference/data-source-reference-for-soda-core>
+- <https://github.com/sodadata/soda-core>
+- <https://atlasgo.io/features>
+- <https://atlasgo.io/guides/redshift>
+- <https://atlasgo.io/blog/2024/05/21/atlas-v-0-23>
+
+## Rust e PyO3
+
+- <https://docs.astral.sh/uv/concepts/build-backend/>
+- <https://docs.astral.sh/uv/concepts/projects/init/>
+- <https://docs.rs/pyo3-arrow/latest/pyo3_arrow/>
+- <https://docs.rs/object_store/latest/object_store/enum.PutMode.html>
+- <https://docs.rs/object_store/latest/object_store/aws/enum.S3ConditionalPut.html>
+- <https://docs.rs/object_store/latest/object_store/aws/struct.AmazonS3Builder.html>
+- <https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html>
+- <https://docs.rs/object_store/latest/src/object_store/aws/builder.rs.html>
 
 ## Fontes
 

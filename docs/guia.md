@@ -18,11 +18,12 @@ execução sem alterar as tabelas permanentes. O [sandbox da execução](#sandbo
 ### Contrato de esquema
 
 O esquema vive num único lugar, os modelos ORM, e dele derivam o DDL, o esquema Arrow, o esquema
-Iceberg e as auditorias. O [etl-cookbook-tutorial](https://github.com/felipenoris/etl-cookbook-tutorial)
+Delta e as auditorias. O [etl-cookbook-tutorial](https://github.com/felipenoris/etl-cookbook-tutorial)
 chama esse uso de "modelos como contrato".
 
 ### Commit atômico nos metadados
 
 O S3 não renomeia diretórios de forma atômica, e listar um prefixo mistura arquivos antigos, novos e
-parciais. Em aberto: como garantir atualização segura dos metadados?
+parciais. A escrita condicional do S3 (`If-None-Match`, `If-Match`) e o log do Delta Lake, que a usa,
+respondem a pergunta em [estrategia.md](estrategia.md).
 
