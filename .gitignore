@@ -2,3 +2,5 @@ uv.lock
 **/__pycache__
 prompts.md
 **/.DS_Store
+.venv
+.pytest_cache

@@ -201,10 +201,11 @@ Each fact below is detailed in the file named at the end of its line.
   atomic commits, and it answers the open question in `docs/guia.md`. `docs/estrategia.md`
 - `deltalake` 1.6.0 (2026-05-19) removed the DynamoDB lock store; S3 conditional put is the default
   commit mode. The delta-rs docs page on S3 locking is stale. The writer does not read
-  `~/.aws/config`. In the SageMaker Unified Studio space it finds the container credentials only
-  with `NO_PROXY` in upper case (the space sets only `no_proxy`, and the delta-rs HTTP client sends
-  the credential call through the proxy, which answers 403); `storage_options` with the `boto3`
-  credentials is the fallback. DuckDB `credential_chain` and `boto3` need no change.
+  `~/.aws/config`. In the SageMaker Unified Studio space it finds the container credentials through
+  the default chain. Early in the 2026-09-19 session the credential call failed with 403 as found
+  and passed with `NO_PROXY` exported; minutes later the environment as found passed with every
+  interpreter and version, and the cause was not isolated. The library exports `NO_PROXY` as a
+  precaution and keeps `storage_options` with the `boto3` credentials as the fallback.
   `docs/delta.md`, `docs/estrategia.md`
 - Delta data files do not contain the partition column (it lives in the `add` action), so a
   partition key must derive from a column in the file for Redshift `COPY`. DuckLake keeps identity
@@ -373,11 +374,21 @@ PR #7 (protocol implementations section in `docs/delta.md`) was merged on 2026-0
 (cross-table consistency, single-transaction publication, database snapshot naming) was merged on
 2026-09-19. PR #9 (2026-09-19, branch `claude/modelagem-biblioteca`, merged the same day) records
 the rename/drop rewrite in `docs/delta.md` and creates `docs/serialize-db.md`. PR #10 (2026-09-19,
-branch `claude/sql-gerado-por-dialeto`) records the SQLAlchemy assessment and the gradual
-replacement of the runtime dialect by generated SQL text; while it is open, new commits go there.
+branch `claude/sql-gerado-por-dialeto`, merged the same day) records the SQLAlchemy assessment and
+the gradual replacement of the runtime dialect by generated SQL text. Branch
+`claude/prova-de-conceito-s3` (2026-09-19) records the S3 proof of concept and adds the pytest
+suite; it was rebased onto `main` after PR #10, so the copy the user pushed earlier needs a
+force-with-lease push. While its PR is open, new commits go there.
 
-No library code exists beyond the models: `pyproject.toml` declares no dependencies and there is no
-`tests/` directory. The next work follows the stage table in `docs/estrategia.md`:
+No library code exists beyond the models: `pyproject.toml` declares no runtime dependencies. The
+`dev` dependency group pins pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1 and boto3, and
+`tests/test_s3_proof_of_concept.py` is the S3 proof of concept as a pytest suite
+(`SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefix uv run pytest`; skipped without a root; fixtures in
+`tests/conftest.py` export `NO_PROXY`, set `AWS_REGION`, create `serialize-db-poc/<id>/` under the
+root, delete it at the end unless `SERIALIZE_DB_TEST_KEEP` is set, and print a report of facts and
+timings, also written to `SERIALIZE_DB_TEST_REPORT` as JSON). It exists so the same proof of concept
+runs in the target environment, which has restricted internet: DuckDB `httpfs` and `delta` must be
+preinstalled there. The next work follows the stage table in `docs/estrategia.md`:
 
 - Stage 1, `serialize_db.contract`, and stage 2, `serialize_db.delta`, run on local folders and are
   the natural next session: fix the models (importable `Base`, `Numeric(18, 2)`,
@@ -439,9 +450,8 @@ The S3 proof of concept ran on 2026-09-19 inside the SageMaker Unified Studio sp
 environment section below) with Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5 and PyArrow 25.0.1
 through `UV_PYTHON_DOWNLOADS=automatic uv run --no-project --python 3.13 --with ...` and
 `NO_PROXY="$no_proxy"` exported; the same scripts also passed on the space's system Python 3.12.13
-with deltalake 1.5.0 and DuckDB 1.5.4. The test table is left at
-`s3://awsds-sandbox-smus-projects/dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/dev/serialize-db-poc/operacoes`
-and can be deleted.
+with deltalake 1.5.0 and DuckDB 1.5.4, and then as the pytest suite (10 passed in 27 s). The
+scratch objects were deleted afterwards; the suite cleans up its own prefix.
 
 The local proof of concept in `docs/estrategia.md` ran on 2026-09-19 on macOS arm64 with Python 3.13,
 deltalake 1.6.4, DuckDB 1.5.5 with the `delta`, `ducklake` and `iceberg` extensions (ducklake
@@ -469,7 +479,10 @@ added to every document on 2026-09-19 ran under the same pinned versions.
   set. `uv` reaches PyPI through the proxy but downloads Python only with
   `UV_PYTHON_DOWNLOADS=automatic`. System Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0,
   DuckDB 1.5.4, PyArrow 21.0.0 and redshift_connector 2.1.10 preinstalled.
-- `git` has no GitHub credential and `gh` is absent: commits stay local until the user pushes.
+- `git` has no GitHub credential and `gh` is absent: `fetch` from the public repository works,
+  commits stay local until the user pushes.
+- `uv sync` needs `UV_PYTHON_DOWNLOADS=automatic` to fetch Python 3.13; the venv lands in `.venv`
+  (ignored). `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored, which is harmless.
 
 ## Questions the official documentation does not answer
 

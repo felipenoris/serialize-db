@@ -55,9 +55,9 @@ perfis de `~/.aws/config`:
   como obrigatório e `AWS_S3_ALLOW_UNSAFE_RENAME` como saída, e está defasada em relação à 1.6.0.
 - As credenciais vêm de variáveis de ambiente, de `storage_options` ou dos metadados da instância; a
   documentação afirma que o escritor não usa o `boto3` e não lê `~/.aws/config`. No espaço do
-  SageMaker Unified Studio o escritor encontra as credenciais do contêiner do projeto, desde que
-  `NO_PROXY` em maiúsculas exista (o espaço define só `no_proxy`, e o cliente HTTP do delta-rs
-  manda a chamada de credenciais pelo proxy sem ela); os detalhes estão em [`delta.md`](delta.md).
+  SageMaker Unified Studio o escritor encontra as credenciais do contêiner do projeto; uma falha
+  com 403 no início da verificação, contornada com `NO_PROXY` em maiúsculas, não se repetiu, e os
+  detalhes estão em [`delta.md`](delta.md).
 - `write_deltalake(data, mode=..., partition_by=..., predicate=..., schema_mode=...)` aceita tabela
   PyArrow, DataFrame pandas ou iterador de `RecordBatch`; `mode="overwrite"` com `predicate` substitui
   só as linhas que casam com o predicado e rejeita dados fora dele; `schema_mode="merge"` acrescenta
@@ -509,7 +509,7 @@ e a saída do Delta para pastas Parquet está em [`delta.md`](delta.md).
   absoluta.
 - O delta-rs não lê `~/.aws/config`; as credenciais vêm de ambiente, contêiner, IMDS ou
   `storage_options`, e o S3 precisa das permissões listadas em [`delta.md`](delta.md). No SageMaker
-  Unified Studio a cadeia padrão exige `NO_PROXY` em maiúsculas; a biblioteca a exporta.
+  Unified Studio a cadeia padrão funciona; a biblioteca exporta `NO_PROXY` por precaução.
 - Um campo JSON é `string` no Delta e texto nos arquivos; `JSON` no DuckDB e `SUPER` no Redshift são
   tipos do motor, aplicados na leitura e na carga ([`schema.md`](schema.md)).
 - SQLGlot transpila funções, não garante suporte; os testes de integração no Redshift continuam.
@@ -609,10 +609,11 @@ Verificado em 2026-09-19 no espaço do SageMaker Unified Studio do projeto, cont
 na mesma região, com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1 por `uv run --with`
 (`UV_PYTHON_DOWNLOADS=automatic`, porque o `uv` do espaço não baixa Python por padrão):
 
-- Credenciais do delta-rs: o escritor encontra as credenciais do contêiner do projeto quando
-  `NO_PROXY` em maiúsculas repete `no_proxy`; sem isso a chamada de credenciais vai ao proxy do espaço
-  e falha com 403. O caminho por `storage_options` com as credenciais do `boto3` funciona e fica como
-  reserva. O DuckDB (`credential_chain`) e o `boto3` não precisam do ajuste.
+- Credenciais do delta-rs: o escritor encontra as credenciais do contêiner do projeto pela cadeia
+  padrão. Uma falha com 403 na chamada de credenciais, no início da verificação, foi contornada com
+  `NO_PROXY` em maiúsculas e depois não se repetiu com o ambiente como encontrado. O caminho por
+  `storage_options` com as credenciais do `boto3` funciona e fica como reserva. O DuckDB
+  (`credential_chain`) e o `boto3` nunca falharam.
 - `write_deltalake` no bucket do projeto (`overwrite` particionado e `append` por commit condicional),
   `DeltaTable`, `vacuum(dry_run=False)` e `delta_scan` com secret `credential_chain` no DuckDB, com a
   criptografia SSE-KMS padrão do bucket aplicada sem opção alguma. Tipos lidos pelo DuckDB:
@@ -622,6 +623,10 @@ na mesma região, com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1 por `uv run
 - Tempo do `delta_scan` no S3: a tabela em [`delta.md`](delta.md); cada consulta pontual por
   `delta_scan` custa cerca de 0,3 s, o que fixa `CREATE TABLE AS` para as tabelas consultadas mais de
   uma vez.
+
+Os itens acima são a suíte `tests/test_s3_proof_of_concept.py`, que roda com
+`SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest` em qualquer ambiente com um bucket e
+imprime o relatório de fatos e medições no fim da sessão; sem a raiz, os testes são pulados.
 
 Pendente, porque o projeto ainda não tem conexão Redshift (nenhum cluster ou workgroup serverless
 visível ao papel do projeto):

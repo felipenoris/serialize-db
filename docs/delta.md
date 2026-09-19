@@ -280,15 +280,18 @@ Credenciais no SageMaker Unified Studio: o espaço fornece as credenciais do pap
 endpoint de contêiner (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, método `container-role` no `boto3`),
 e o espaço sai para a internet por um proxy HTTP (`HTTP_PROXY`, `HTTPS_PROXY` e `no_proxy` em
 minúsculas, que lista o endpoint de credenciais e os serviços da AWS). O delta-rs encontra o endpoint
-de contêiner, mas seu cliente HTTP lê apenas `NO_PROXY` em maiúsculas: sem ela, a chamada de
-credenciais passa pelo proxy e falha com `Non-success status from HTTP credential provider`
-(`StatusCode(403)`), e `write_deltalake` aborta. Com `NO_PROXY` igual a `no_proxy` (ou com
-`AWS_CONTAINER_CREDENTIALS_FULL_URI`), a cadeia padrão funciona, sem `storage_options`. A
-alternativa sem tocar no ambiente é passar em `storage_options` as credenciais temporárias que o
-`boto3` resolve (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`),
-renovando-as a cada abertura da tabela, porque expiram. O DuckDB com `PROVIDER credential_chain`
-e o `boto3` não sofrem do problema. A biblioteca exporta `NO_PROXY` a partir de `no_proxy` ao
-iniciar, quando só a minúscula existe, e mantém o caminho por `storage_options` como reserva.
+de contêiner e abre a tabela pela cadeia padrão, sem `storage_options`. No início da sessão de
+verificação, porém, a chamada de credenciais falhou com `Non-success status from HTTP credential
+provider` (`StatusCode(403)`) com o ambiente como encontrado, e passou com `NO_PROXY` igual a
+`no_proxy`, com `AWS_CONTAINER_CREDENTIALS_FULL_URI` ou sem as variáveis de proxy; minutos depois o
+ambiente como encontrado passou a funcionar com deltalake 1.5.0 e 1.6.4 e com os dois
+interpretadores, e a falha não voltou. A causa não ficou isolada (uma resposta do proxy é a
+hipótese), e o teste `test_delta_rs_credential_chain` em `tests/` registra o resultado de cada
+variante no ambiente onde roda. Por precaução, a biblioteca exporta `NO_PROXY` a partir de
+`no_proxy` ao iniciar, quando só a minúscula existe, e mantém como reserva as credenciais
+temporárias que o `boto3` resolve, passadas em `storage_options` (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`) e renovadas a cada abertura da tabela,
+porque expiram. O DuckDB com `PROVIDER credential_chain` e o `boto3` nunca falharam.
 
 ## Tipos suportados
 

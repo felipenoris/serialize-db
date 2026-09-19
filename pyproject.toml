@@ -12,6 +12,20 @@ dependencies = []
 [project.scripts]
 serialize-db = "serialize_db:main"
 
+[dependency-groups]
+# Versões fixadas nas usadas pelos exemplos em docs/ e pela prova de conceito.
+dev = [
+    "boto3>=1.40",
+    "deltalake==1.6.4",
+    "duckdb==1.5.5",
+    "pyarrow==25.0.1",
+    "pytest>=8.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["s3: exige um bucket S3 e credenciais da AWS"]
+
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"
