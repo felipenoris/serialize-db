@@ -1,8 +1,8 @@
 """Prova de conceito da camada Delta numa pasta local, o segundo armazenamento da biblioteca.
 
-A pasta vem de ``SERIALIZE_DB_TEST_LOCAL_ROOT`` ou da pasta temporária do pytest, e nada aqui toca a
-AWS: a suíte roda em qualquer ambiente e valida o Python, o delta-rs, o DuckDB e as extensões antes
-da suíte no S3. Os testes comuns aos dois armazenamentos vêm de ``delta_proof_of_concept.py``; os
+A suíte escreve só sob a pasta informada em ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e nada aqui toca a AWS:
+ela roda em qualquer ambiente e valida o Python, o delta-rs, o DuckDB e as extensões antes da suíte
+no S3. Os testes comuns aos dois armazenamentos vêm de ``delta_proof_of_concept.py``; os
 deste módulo cobrem o que só faz sentido em disco: a primitiva do commit atômico e o conflito entre
 escritores, os caminhos relativos do log com a realocação da pasta, e a abertura sem variáveis AWS.
 
@@ -111,19 +111,21 @@ class TestLocalProofOfConcept(DeltaProofOfConcept):
         assert count == ROWS + APPENDED_ROWS
 
     @pytest.mark.usefixtures("duckdb_connection")
-    def test_opens_without_aws_environment(self, table_uri: str, tmp_path: Path) -> None:
+    def test_opens_without_aws_environment(self, storage: LocalLocation, table_uri: str) -> None:
         """Sem variáveis ``AWS_*``, sem proxy e sem ``~/.aws``, o delta-rs e o DuckDB abrem a tabela.
 
-        O subprocesso recebe a pasta de extensões do DuckDB resolvida aqui, porque o ``HOME`` vazio
-        esconde a pasta padrão.
+        O ``HOME`` do subprocesso é uma pasta vazia da sessão; ele recebe a pasta de extensões do DuckDB
+        resolvida aqui, porque esse ``HOME`` esconde a pasta padrão.
         """
+        home = Path(storage.child("empty_home"))
+        home.mkdir()
         directory = duckdb_extension_directory() or str(Path.home() / ".duckdb" / "extensions")
         probe = "\n".join(
             [
                 "import duckdb",
                 "from deltalake import DeltaTable",
                 f"print(DeltaTable({table_uri!r}).version())",
-                f"connection = duckdb.connect(config={{'extension_directory': {directory!r}}})",
+                f"connection = duckdb.connect(config={{'extension_directory': {directory!r}, 'autoinstall_known_extensions': False}})",
                 "connection.execute('LOAD delta')",
                 f"print(connection.execute(\"SELECT count(*) FROM delta_scan('{table_uri}')\").fetchone()[0])",
             ]
@@ -132,7 +134,7 @@ class TestLocalProofOfConcept(DeltaProofOfConcept):
         environment = {
             name: value for name, value in os.environ.items() if not name.startswith("AWS_") and name.upper() not in proxies
         }
-        environment["HOME"] = str(tmp_path)
+        environment["HOME"] = str(home)
         completed = subprocess.run([sys.executable, "-c", probe], env=environment, capture_output=True, text=True, timeout=120)
         assert completed.returncode == 0, completed.stderr
         assert completed.stdout.split() == ["1", str(ROWS + APPENDED_ROWS)]

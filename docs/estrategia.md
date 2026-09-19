@@ -626,10 +626,11 @@ na mesma região, com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1 por `uv run
 
 Os itens acima são a suíte `tests/test_s3_proof_of_concept.py`, que roda com
 `SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest` em qualquer ambiente com um bucket e
-imprime o relatório de fatos e medições no fim da sessão; sem raiz, sem credenciais da AWS ou sem
-acesso ao bucket, os testes são pulados com o motivo no relatório. A mesma prova de conceito roda
-numa pasta local, o outro armazenamento da biblioteca, em `tests/test_local_proof_of_concept.py`,
-sem AWS: os testes comuns aos dois armazenamentos ficam em `tests/delta_proof_of_concept.py`, e a
+imprime o relatório de fatos e medições no fim da sessão. A variável é a autorização para escrever
+sob o prefixo: sem ela os testes são pulados, e com ela falta de credencial ou de acesso é falha. A
+mesma prova de conceito roda numa pasta local, o outro armazenamento da biblioteca, em
+`tests/test_local_proof_of_concept.py`, sob a pasta de `SERIALIZE_DB_TEST_LOCAL_ROOT` e sem AWS: os
+testes comuns aos dois armazenamentos ficam em `tests/delta_proof_of_concept.py`, e a
 suíte local acrescenta o commit atômico em disco (dois escritores abertos na mesma versão: o segundo
 `overwrite` do mesmo mês falha com `CommitFailedError`; meses diferentes e `append` mais `append`
 comitam os dois), os caminhos relativos do log com a realocação da pasta e a abertura sem variáveis

@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import decimal
 import functools
+import os
 import re
 import time
 from collections.abc import Callable, Iterable
@@ -71,18 +72,31 @@ def write_sample_table(storage: Storage) -> str:
 
 
 def connect_duckdb(extensions: Iterable[str]) -> duckdb.DuckDBPyConnection:
-    """Conexão com ``extensions`` carregadas da pasta configurada; pula o teste quando uma falta e não há internet."""
+    """Conexão com ``extensions`` carregadas da pasta de extensões.
+
+    A suíte instala uma extensão que falta só na pasta informada em ``SERIALIZE_DB_DUCKDB_EXTENSIONS``,
+    e uma instalação que falha ali é falha; sem a variável, a extensão que falta pula o teste. A
+    instalação automática do DuckDB fica desligada: com ela, o ``LOAD`` de uma extensão conhecida a
+    baixaria para a pasta de extensões sem aviso.
+    """
     directory = duckdb_extension_directory()
-    connection = duckdb.connect(config={"extension_directory": directory} if directory else {})
+    config: dict[str, object] = {"autoinstall_known_extensions": False, "autoload_known_extensions": False}
+    if directory:
+        config["extension_directory"] = directory
+    connection = duckdb.connect(config=config)
     record("duckdb.extension_directory", directory or "(padrão)")
+    may_install = bool(os.environ.get("SERIALIZE_DB_DUCKDB_EXTENSIONS"))
     for extension in extensions:
         try:
             connection.execute(f"LOAD {extension}")
-        except duckdb.Error:
-            try:
-                connection.execute(f"INSTALL {extension}; LOAD {extension}")
-            except duckdb.Error as error:
-                pytest.skip(f"extensão {extension} do DuckDB indisponível sem internet: {error}")
+        except duckdb.Error as error:
+            if not may_install:
+                pytest.skip(
+                    f"extensão {extension} do DuckDB não instalada em {directory or '(padrão)'}: informe "
+                    f"SERIALIZE_DB_DUCKDB_EXTENSIONS para a suíte instalá-la, ou rode prepare_offline.sh "
+                    f"({str(error).splitlines()[0]})"
+                )
+            connection.execute(f"INSTALL {extension}; LOAD {extension}")
     record("duckdb.version", duckdb.__version__)
     record("duckdb.threads", connection.execute("SELECT current_setting('threads')").fetchone()[0])
     return connection

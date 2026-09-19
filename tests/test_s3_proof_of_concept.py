@@ -5,8 +5,8 @@ encontra, a escrita e a leitura no bucket, o put condicional, o ``vacuum`` e o t
 Os testes comuns aos dois armazenamentos vêm de ``delta_proof_of_concept.py``; os deste módulo cobrem
 o que só existe no S3: a origem das credenciais, a cadeia de credenciais do delta-rs e sua reserva, o
 put condicional e a criptografia dos arquivos. As medições vão para o relatório impresso no fim da
-sessão (``conftest.py``). Sem raiz S3, sem credenciais da AWS ou sem acesso ao bucket, a suíte é
-pulada com o motivo no relatório.
+sessão (``conftest.py``). A suíte escreve só sob a raiz informada em ``SERIALIZE_DB_TEST_S3_ROOT``:
+sem ela é pulada, e com ela falta de credencial ou de acesso ao bucket é falha.
 
 Num ambiente sem internet, as extensões ``httpfs``, ``delta`` e ``aws`` do DuckDB precisam estar na
 pasta de extensões (``.duckdb/`` do repositório, preparada por ``prepare_offline.sh``, ou a
@@ -56,6 +56,7 @@ def duckdb_connection(storage: S3Location) -> duckdb.DuckDBPyConnection:
 class TestS3ProofOfConcept(DeltaProofOfConcept):
     """Os testes comuns sobre o bucket mais os próprios do S3."""
 
+    @pytest.mark.usefixtures("storage")
     def test_boto3_credential_source(self) -> None:
         """Registra de onde o ``boto3`` obtém as credenciais e qual identidade assume."""
         session = boto3.Session()

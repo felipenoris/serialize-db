@@ -1,27 +1,28 @@
 """Configuração compartilhada dos testes.
 
 As provas de conceito da camada Delta rodam sobre os dois tipos de armazenamento que a biblioteca
-suporta: uma pasta local (``test_local_proof_of_concept.py``), disponível em qualquer ambiente, e um
-bucket S3 (``test_s3_proof_of_concept.py``), que exige uma raiz configurada, credenciais da AWS e
-acesso ao bucket. Os testes marcados com ``s3`` são pulados quando qualquer dessas condições falta, e
-o motivo vai para o relatório da sessão. A raiz S3 vem, nesta ordem, de ``SERIALIZE_DB_TEST_S3_ROOT``
-(``s3://bucket/prefixo``) ou de ``sagemaker_studio.Project().s3.root`` dentro de um espaço do
-SageMaker Unified Studio.
+suporta: uma pasta local (``test_local_proof_of_concept.py``) e um bucket S3
+(``test_s3_proof_of_concept.py``). Cada suíte escreve só sob a raiz que o usuário informa na sua
+variável de ambiente, e a variável é a autorização: sem ela a suíte é pulada, com o motivo no
+relatório da sessão, e ``pytest`` sem variável alguma não executa nenhum teste que grave arquivos.
+Com a raiz informada, o que impede a escrita é falha: pasta local inexistente, ou raiz S3 sem
+credencial ou sem acesso.
 
 Variáveis de ambiente lidas:
 
-- ``SERIALIZE_DB_TEST_S3_ROOT``: raiz S3 sob a qual os testes criam ``serialize-db-poc/<id>/``.
-- ``SERIALIZE_DB_TEST_LOCAL_ROOT``: pasta sob a qual os testes criam ``serialize-db-poc/<id>/``; sem
-  ela, a pasta temporária da sessão do pytest.
+- ``SERIALIZE_DB_TEST_LOCAL_ROOT``: pasta existente sob a qual a suíte local cria
+  ``serialize-db-poc/<id>/``.
+- ``SERIALIZE_DB_TEST_S3_ROOT``: raiz ``s3://bucket/prefixo`` sob a qual a suíte S3 cria
+  ``serialize-db-poc/<id>/``.
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos e as pastas criados depois da sessão.
 - ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é gravado.
-- ``SERIALIZE_DB_DUCKDB_EXTENSIONS``: pasta de extensões do DuckDB; sem ela, ``.duckdb/`` na raiz do
-  repositório quando existir (criada por ``prepare_offline.sh``), senão o padrão do DuckDB.
+- ``SERIALIZE_DB_DUCKDB_EXTENSIONS``: pasta de extensões do DuckDB, a única onde a suíte instala as
+  que faltam; sem ela, ``.duckdb/`` na raiz do repositório quando existir (criada por
+  ``prepare_offline.sh``), senão o padrão do DuckDB, e nada é instalado.
 """
 
 from __future__ import annotations
 
-import functools
 import json
 import os
 import shutil
@@ -49,6 +50,37 @@ def duckdb_extension_directory() -> str | None:
         return configured
     local = Path(__file__).resolve().parent.parent / ".duckdb"
     return str(local) if local.is_dir() else None
+
+
+def local_root() -> Path | None:
+    """Raiz da suíte local, de ``SERIALIZE_DB_TEST_LOCAL_ROOT``, ou ``None`` quando não informada."""
+    configured = os.environ.get("SERIALIZE_DB_TEST_LOCAL_ROOT")
+    return Path(configured).expanduser().resolve() if configured else None
+
+
+def s3_root() -> str | None:
+    """Raiz da suíte S3, de ``SERIALIZE_DB_TEST_S3_ROOT``, ou ``None`` quando não informada."""
+    configured = os.environ.get("SERIALIZE_DB_TEST_S3_ROOT")
+    return configured.rstrip("/") if configured else None
+
+
+SKIP_REASONS = {
+    "local": "SERIALIZE_DB_TEST_LOCAL_ROOT não informada: a suíte local só escreve sob a pasta que ela indica",
+    "s3": "SERIALIZE_DB_TEST_S3_ROOT não informada: a suíte S3 só escreve sob o prefixo que ela indica",
+}
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Pula cada suíte cuja raiz não foi informada; roda depois da seleção por ``-m``."""
+    missing = {"local": local_root() is None, "s3": s3_root() is None}
+    for marker, reason in SKIP_REASONS.items():
+        selected = [item for item in items if marker in item.keywords]
+        if not selected or not missing[marker]:
+            continue
+        record(f"{marker}.skipped", reason)
+        for item in selected:
+            item.add_marker(pytest.mark.skip(reason=reason))
 
 
 @dataclass(kw_only=True)
@@ -116,38 +148,12 @@ class LocalLocation(Storage):
         return sorted(str(file) for file in folder.rglob("*.parquet") if "_delta_log" not in file.relative_to(folder).parts)
 
 
-@dataclass(frozen=True)
-class S3Availability:
-    """Raiz S3 utilizável pela sessão, ou o motivo de os testes ``s3`` serem pulados."""
+def require_s3_access(root: str) -> None:
+    """Reprova a sessão quando a raiz informada não está acessível.
 
-    root: str | None = None
-    reason: str | None = None
-
-
-def _s3_root_from_environment() -> str | None:
-    root = os.environ.get("SERIALIZE_DB_TEST_S3_ROOT")
-    if root:
-        return root.rstrip("/")
-    try:
-        from sagemaker_studio import Project  # só existe dentro do espaço do SageMaker
-    except ImportError:
-        return None
-    try:
-        return str(Project().s3.root).rstrip("/")
-    except Exception:  # noqa: BLE001 - qualquer falha do SDK significa "sem raiz"
-        return None
-
-
-@functools.cache
-def s3_availability() -> S3Availability:
-    """Verifica uma vez por sessão a raiz, as credenciais e o acesso ao prefixo dos testes.
-
-    A sondagem lista um objeto sob ``<raiz>/serialize-db-poc/`` com tempos curtos: sem rede, o
-    ``boto3`` esperaria 60 s por tentativa.
+    Confere as credenciais do ``boto3`` e lista um objeto sob ``<raiz>/serialize-db-poc/`` com tempos
+    curtos: sem rede, o ``boto3`` esperaria 60 s por tentativa, e o delta-rs tem as próprias esperas.
     """
-    root = _s3_root_from_environment()
-    if not root:
-        return S3Availability(reason="sem raiz S3: defina SERIALIZE_DB_TEST_S3_ROOT ou rode num espaço do SageMaker")
     import boto3
     import botocore.config
 
@@ -156,27 +162,11 @@ def s3_availability() -> S3Availability:
     try:
         session = boto3.Session()
         if session.get_credentials() is None:
-            return S3Availability(reason="sem credenciais da AWS: o boto3 não encontrou papel, variáveis AWS_* nem perfil")
+            pytest.fail(f"{root} informada, mas o boto3 não encontrou credenciais (papel, variáveis AWS_* ou perfil)", pytrace=False)
         client = session.client("s3", config=config)
         client.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/serialize-db-poc/".lstrip("/"), MaxKeys=1)
     except Exception as error:  # noqa: BLE001 - falha de rede, de credencial ou de permissão
-        return S3Availability(reason=f"sem acesso a {root}: {type(error).__name__}: {error}")
-    return S3Availability(root=root)
-
-
-@pytest.hookimpl(trylast=True)
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Pula os testes ``s3`` quando falta raiz, credencial ou acesso; a sondagem só roda se algum foi selecionado."""
-    if not any("s3" in item.keywords for item in items):
-        return
-    availability = s3_availability()
-    if availability.root:
-        return
-    record("s3.skipped", availability.reason)
-    skip = pytest.mark.skip(reason=availability.reason)
-    for item in items:
-        if "s3" in item.keywords:
-            item.add_marker(skip)
+        pytest.fail(f"{root} informada, mas sem acesso: {type(error).__name__}: {error}", pytrace=False)
 
 
 @pytest.fixture(scope="session")
@@ -207,11 +197,12 @@ def proxy_environment() -> Iterator[dict[str, str | None]]:
 
 @pytest.fixture(scope="session")
 def s3_location(proxy_environment: dict[str, str | None]) -> Iterator[S3Location]:
-    """Prefixo ``serialize-db-poc/<id>/`` sob a raiz configurada, apagado no fim da sessão."""
+    """Prefixo ``serialize-db-poc/<id>/`` sob a raiz informada, apagado no fim da sessão."""
     import boto3
 
-    root = s3_availability().root
-    assert root, "raiz S3 não disponível"
+    root = s3_root()
+    assert root, "SERIALIZE_DB_TEST_S3_ROOT não informada"
+    require_s3_access(root)
     bucket, _, prefix = root.removeprefix("s3://").partition("/")
     session_id = uuid.uuid4().hex[:8]
     location = S3Location(
@@ -233,10 +224,12 @@ def s3_location(proxy_environment: dict[str, str | None]) -> Iterator[S3Location
 
 
 @pytest.fixture(scope="session")
-def local_location(tmp_path_factory: pytest.TempPathFactory) -> Iterator[LocalLocation]:
-    """Pasta ``serialize-db-poc/<id>/`` sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` ou sob a pasta temporária do pytest, apagada no fim da sessão."""
-    configured = os.environ.get("SERIALIZE_DB_TEST_LOCAL_ROOT")
-    root = Path(configured).expanduser().resolve() if configured else tmp_path_factory.getbasetemp()
+def local_location() -> Iterator[LocalLocation]:
+    """Pasta ``serialize-db-poc/<id>/`` sob a raiz informada, que precisa existir, apagada no fim da sessão."""
+    root = local_root()
+    assert root, "SERIALIZE_DB_TEST_LOCAL_ROOT não informada"
+    if not root.is_dir():
+        pytest.fail(f"SERIALIZE_DB_TEST_LOCAL_ROOT aponta para uma pasta inexistente: {root}", pytrace=False)
     location = LocalLocation(
         path=root / "serialize-db-poc" / uuid.uuid4().hex[:8],
         keep=bool(os.environ.get("SERIALIZE_DB_TEST_KEEP")),

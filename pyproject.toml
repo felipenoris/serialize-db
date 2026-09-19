@@ -25,8 +25,8 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "local: roda numa pasta local, sem AWS",
-    "s3: exige uma raiz S3, credenciais da AWS e acesso ao bucket",
+    "local: escreve sob SERIALIZE_DB_TEST_LOCAL_ROOT; pulado sem ela",
+    "s3: escreve sob SERIALIZE_DB_TEST_S3_ROOT; pulado sem ela, falha sem acesso",
 ]
 
 [build-system]

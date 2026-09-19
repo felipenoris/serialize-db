@@ -18,7 +18,7 @@ está configurado para não baixar o Python, como no SageMaker Unified Studio.
 # Testes
 
 ```
-uv run pytest
+SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest
 ```
 
 Duas suítes provam a camada Delta (etapa 0 de `docs/estrategia.md`), uma por tipo de armazenamento
@@ -28,33 +28,34 @@ partição, os tempos de consulta e o `vacuum`; cada suíte acrescenta os testes
 armazenamento. As duas criam `serialize-db-poc/<id>/` sob a raiz, apagam essa pasta no fim da sessão
 e imprimem um relatório com os fatos e as medições, com as chaves prefixadas por `local.` ou `s3.`.
 
+Cada suíte escreve só sob a raiz que a sua variável de ambiente informa, e a variável é a
+autorização: sem ela a suíte é pulada, com o motivo no relatório e em `pytest -rs`, e `uv run pytest`
+sem variável alguma não executa nenhum teste que grave arquivos. Com a raiz informada, o que impede
+a escrita é falha: pasta local inexistente, ou raiz S3 sem credencial ou sem acesso, reprovada por
+uma sondagem com tempos curtos (cerca de 11 s com um proxy que não responde) antes de o delta-rs
+tentar. `-m local` e `-m s3` selecionam uma suíte.
+
 | Suíte | Marcador | Raiz | Testes próprios |
 | --- | --- | --- | --- |
-| `tests/test_local_proof_of_concept.py` | `local` | `SERIALIZE_DB_TEST_LOCAL_ROOT`; sem ela, a pasta temporária do pytest. Roda em qualquer ambiente, sem AWS. | Commit atômico em disco e conflito entre escritores na mesma versão, caminhos relativos do log e realocação da pasta, abertura sem variáveis `AWS_*`. |
-| `tests/test_s3_proof_of_concept.py` | `s3` | `SERIALIZE_DB_TEST_S3_ROOT` (`s3://bucket/prefixo`); dentro de um espaço do SageMaker Unified Studio, `sagemaker_studio.Project().s3.root`. | Origem das credenciais, cadeia de credenciais do delta-rs e sua reserva, put condicional, criptografia dos arquivos. |
-
-A suíte S3 é pulada, com o motivo no relatório e em `pytest -rs`, quando falta a raiz, quando o
-`boto3` não encontra credenciais ou quando listar `<raiz>/serialize-db-poc/` falha (rede, credencial
-vencida, permissão). A sondagem usa tempos curtos: com um proxy que não responde, ela desiste em
-cerca de 11 s. `uv run pytest -m local` roda só a pasta local, sem sondar o S3; `-m s3` roda só o
-bucket.
+| `tests/test_local_proof_of_concept.py` | `local` | `SERIALIZE_DB_TEST_LOCAL_ROOT`, uma pasta existente. Roda em qualquer ambiente, sem AWS. | Commit atômico em disco e conflito entre escritores na mesma versão, caminhos relativos do log e realocação da pasta, abertura sem variáveis `AWS_*`. |
+| `tests/test_s3_proof_of_concept.py` | `s3` | `SERIALIZE_DB_TEST_S3_ROOT`, `s3://bucket/prefixo`. | Origem das credenciais, cadeia de credenciais do delta-rs e sua reserva, put condicional, criptografia dos arquivos. |
 
 Variáveis de ambiente:
 
 | Variável | Efeito |
 | --- | --- |
-| `SERIALIZE_DB_TEST_LOCAL_ROOT` | Pasta sob a qual a suíte local cria `serialize-db-poc/<id>/`. Sem ela, a pasta temporária da sessão do pytest. |
-| `SERIALIZE_DB_TEST_S3_ROOT` | Raiz `s3://bucket/prefixo` da suíte S3. Dentro de um espaço do SageMaker Unified Studio, o padrão é `sagemaker_studio.Project().s3.root`. |
+| `SERIALIZE_DB_TEST_LOCAL_ROOT` | Pasta existente sob a qual a suíte local cria `serialize-db-poc/<id>/`. Sem ela, a suíte local é pulada. |
+| `SERIALIZE_DB_TEST_S3_ROOT` | Raiz `s3://bucket/prefixo` sob a qual a suíte S3 cria `serialize-db-poc/<id>/`. Sem ela, a suíte S3 é pulada. |
 | `SERIALIZE_DB_TEST_KEEP` | Qualquer valor mantém a pasta e os objetos criados pela sessão. |
 | `SERIALIZE_DB_TEST_REPORT` | Caminho de um JSON onde o relatório da sessão é gravado, além de impresso. |
-| `SERIALIZE_DB_DUCKDB_EXTENSIONS` | Pasta de extensões do DuckDB. Sem ela, `.duckdb/` na raiz do repositório quando existir; senão a pasta padrão do DuckDB. |
+| `SERIALIZE_DB_DUCKDB_EXTENSIONS` | Pasta de extensões do DuckDB, a única onde a suíte instala as que faltam. Sem ela, `.duckdb/` na raiz do repositório quando existir, senão a pasta padrão do DuckDB, e nada é instalado: o teste cuja extensão falta é pulado. A instalação automática do DuckDB, que no `LOAD` baixaria a extensão para `~/.duckdb` sem aviso, fica desligada. |
 | `AWS_REGION` | Região do bucket. Sem ela, a suíte S3 usa a região que o `boto3` resolve. |
 
 A suíte S3 precisa de credenciais da AWS que o `boto3` encontre (papel do contêiner ou da instância,
 variáveis `AWS_*` ou perfil), das permissões `s3:ListBucket`, `s3:GetObject`, `s3:PutObject` e
 `s3:DeleteObject` sob o prefixo (e as de KMS quando o bucket usa SSE-KMS), e das extensões `httpfs`,
-`delta` e `aws` do DuckDB, que o DuckDB baixa no primeiro uso quando há internet. A suíte local
-precisa só da extensão `delta`.
+`delta` e `aws` do DuckDB. A suíte local precisa só da extensão `delta`. Fora das raízes informadas,
+o que uma sessão grava é `.pytest_cache/` na raiz do repositório, do próprio pytest.
 
 ## Credenciais do delta-rs e proxy
 
@@ -105,7 +106,7 @@ No ambiente de destino, depois de extrair o pacote em qualquer caminho:
 ```
 tar xzf serialize-db.tar.gz
 cd serialize-db
-.venv/bin/python -m pytest
+SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente .venv/bin/python -m pytest
 ```
 
 A suíte local roda sem S3 e valida a pasta preparada; com `SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo`

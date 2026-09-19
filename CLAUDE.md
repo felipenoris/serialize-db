@@ -146,7 +146,7 @@ matching group.
 
 | File | Subject |
 | --- | --- |
-| `README.md` | Initialization with `uv init --python 3.13`, dependencies (`uv sync --group dev`), the two test suites (local folder and S3) with the skip rules and their environment variables, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
+| `README.md` | Initialization with `uv init --python 3.13`, dependencies (`uv sync --group dev`), the two test suites (local folder and S3), the rule that each root variable authorizes the writes under it, and their environment variables, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target environment without internet: managed Python in `.python/`, the package with its runtime dependencies and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages in `pyproject.toml` are picked up by `uv sync`, but a new DuckDB extension, a Python version change or any other runtime asset must be added to the script by hand, and the user reruns it before packing the folder. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Delta, DuckDB and Redshift, and SQL portability between the two engines. It ends with the JSON field treatment per layer (model `JSON().with_variant(SUPER(), "redshift")`, Arrow `json_` extension, Delta `string`, DuckDB `JSON`, Redshift `SUPER` via `JSON_PARSE`). |
@@ -379,8 +379,8 @@ branch `claude/sql-gerado-por-dialeto`, merged the same day) records the SQLAlch
 the gradual replacement of the runtime dialect by generated SQL text. PR #11
 (2026-09-19, branch `claude/prova-de-conceito-s3`, merged the same day) records the S3 proof of
 concept, adds the pytest suite and the offline recipe. PR #12 (2026-09-19, branch
-`claude/prova-de-conceito-local`) makes the S3 suite skip without an AWS environment, adds the
-local-folder proof of concept and fixes the interpreter lookup in `prepare_offline.sh`. While PR #12
+`claude/prova-de-conceito-local`) makes each suite run only under an explicitly configured root,
+adds the local-folder proof of concept and fixes the interpreter lookup in `prepare_offline.sh`. While PR #12
 is open, new commits go there. `gh` is authenticated in the space since 2026-09-19.
 
 No library code exists beyond the models: `pyproject.toml` declares no runtime dependencies. The
@@ -388,17 +388,23 @@ No library code exists beyond the models: `pyproject.toml` declares no runtime d
 the tests are the proof of concept of the Delta layer on both storages:
 `tests/delta_proof_of_concept.py` holds the class `DeltaProofOfConcept` with the tests common to
 both (write and open, `delta_scan` types and partition pruning, query timings, `vacuum`);
-`tests/test_local_proof_of_concept.py` (marker `local`, root from `SERIALIZE_DB_TEST_LOCAL_ROOT` or
-pytest's temp folder, no AWS; adds the atomic commit on disk with the writer conflict, relative log
+`tests/test_local_proof_of_concept.py` (marker `local`, root from `SERIALIZE_DB_TEST_LOCAL_ROOT`, an
+existing folder, no AWS; adds the atomic commit on disk with the writer conflict, relative log
 paths with folder relocation, and opening without `AWS_*` variables) and
-`tests/test_s3_proof_of_concept.py` (marker `s3`, root from `SERIALIZE_DB_TEST_S3_ROOT` or the
-SageMaker project; adds credentials, conditional put and encryption) inherit it with their own
-`storage`, `table_uri` and `duckdb_connection` fixtures. `tests/conftest.py` skips the `s3` tests
-with the reason in the report when the root, the `boto3` credentials or a listing of
-`<root>/serialize-db-poc/` is missing (short timeouts: 11 s with a silent proxy; no probe when no
-`s3` test is selected), exports `NO_PROXY`, sets `AWS_REGION`, creates `serialize-db-poc/<id>/`
-under each root, deletes it at the end unless `SERIALIZE_DB_TEST_KEEP` is set, and prints the report
-(keys prefixed `local.` or `s3.`), also written to `SERIALIZE_DB_TEST_REPORT` as JSON. The suites
+`tests/test_s3_proof_of_concept.py` (marker `s3`, root from `SERIALIZE_DB_TEST_S3_ROOT`; adds
+credentials, conditional put and encryption) inherit it with their own `storage`, `table_uri` and
+`duckdb_connection` fixtures. Each root variable is the write authorization (user rule of
+2026-09-19): `tests/conftest.py` skips a suite whose variable is unset, with the reason in the
+report, so `uv run pytest` with no variables runs no test that writes files; with the variable set,
+whatever prevents the write fails the session (local root missing; S3 root without `boto3`
+credentials or failing a short-timeout listing of `<root>/serialize-db-poc/`, 11 s with a silent
+proxy). The S3 root is never inferred from the SageMaker project. DuckDB extensions are installed
+only into `SERIALIZE_DB_DUCKDB_EXTENSIONS`, with DuckDB's `autoinstall_known_extensions` off because
+`LOAD` of a known extension otherwise downloads it into `~/.duckdb` without notice; a missing
+extension otherwise skips the test. The fixtures export `NO_PROXY`, set `AWS_REGION`, create
+`serialize-db-poc/<id>/` under each root, delete it at the end unless `SERIALIZE_DB_TEST_KEEP` is
+set, and print the report (keys prefixed `local.` or `s3.`), also written to
+`SERIALIZE_DB_TEST_REPORT` as JSON. The suites
 exist so the same proof of concept runs in the target environment, which has no internet; the local
 suite validates the prepared folder there without S3. `prepare_offline.sh`, at the repository
 root, makes the project folder self-contained on a machine with internet: managed Python in
