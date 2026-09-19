@@ -155,7 +155,7 @@ matching group.
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, SQL generation from a statement for both dialects (`compile`, dialect objects and their paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`) with self-contained examples, the `Numeric` float conversion of both dialects, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
 | `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), the protocol implementations (delta-spark, delta-rs, Delta Kernel) with the delta-rs gaps and their effect on the pipeline, S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules with the measured rewrite for rename and drop (one commit, the memory of the two paths, the partial-overwrite trap) and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the export of the current snapshot back to Parquet folders by month (copy by the log versus rewrite, with the measurements), the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
 | `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, no Alembic) with the reasons and the maturity assessment of Delta against Iceberg with the re-evaluation trigger, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
-| `docs/serialize-db.md` | The library's modeling: the features, the library's own metadata (commit keys `execution_id`, `input_versions`, `serialize_db_snapshot`; `_serialize_db/snapshots.json`; `serialize_db_publications`), the primitives of each module (`contract`, `delta`, `engine.duckdb`, `engine.redshift`, `execution`) with the proposed signatures, and the flow of each use case (initial load, monthly run on DuckDB and on Redshift, publication to clients, month correction, schema evolution, database snapshot and maintenance, export to Parquet folders, copy and development environment). |
+| `docs/serialize-db.md` | The library's modeling: the features, the library's own metadata (commit keys `serialize_db_execution_id`, `serialize_db_input_versions`, `serialize_db_snapshot`; `_serialize_db/snapshots.json`; `serialize_db_publications`), the primitives of each module (`contract`, `delta`, `engine.duckdb`, `engine.redshift`, `execution`) with the proposed signatures, and the flow of each use case (initial load, monthly run on DuckDB and on Redshift, publication to clients, month correction, schema evolution, database snapshot and maintenance, export to Parquet folders, copy and development environment). |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
@@ -331,14 +331,15 @@ The convention above was applied to every example in `docs/` on 2026-09-19. ORM 
 column mixins (`Operacao`, `Lancamento`, `Rastreio`) keep Portuguese names: they are data-model
 artifacts, like tables and columns. Python variables, functions, parameters, modules, the proposed
 API (`Database`, `Execution`, `ingest`, `audit`, `publish`) and the keys of `Table.info["serialize_db"]`
-(`partition_by`, `sort_key`, `redshift`) are English. The library's own metadata is English, a user
-decision of 2026-09-19: the commit keys
-`execution_id`, `input_versions` and `serialize_db_snapshot`, the control file
-`_serialize_db/snapshots.json` (`snapshots`), the Redshift control table
-`serialize_db_publications(table_name, delta_version, execution_id, published_at)` and the Parquet
-footer keys `serialize_db_version` and `execution_id`, with `snapshot` as an accepted loanword in
-prose. Data tables and columns stay Portuguese, including the `id_execucao` column of the `Rastreio`
-mixin in `docs/sqlalchemy.md`. SQL
+(`partition_by`, `sort_key`, `redshift`) are English. The library's own metadata is English (user decisions of 2026-09-19). A key that lives under
+`_serialize_db/` carries no prefix (`snapshots` in `_serialize_db/snapshots.json`); everything else the
+library writes carries the `serialize_db_` prefix: the commit keys `serialize_db_execution_id`,
+`serialize_db_input_versions` and `serialize_db_snapshot`, the Parquet footer keys `serialize_db_version`
+and `serialize_db_execution_id`, and the Redshift control table
+`serialize_db_publications(table_name, delta_version, execution_id, published_at)`, whose columns stay
+unprefixed because the table name is the namespace. `snapshot` is an accepted loanword in prose. Data
+tables and columns stay Portuguese, including the `id_execucao` column of the `Rastreio` mixin in
+`docs/sqlalchemy.md`. SQL
 placeholders in prose (`COPY (consulta) TO ...`) and staging table names (`staging_<tabela>`) count as
 database identifiers.
 

@@ -115,9 +115,9 @@ própria, os metadados de cada commit, `_serialize_db/snapshots.json` e a tabela
   é o namespace que agrupa tabelas.
 - Não há transação entre tabelas. Cada tabela tem o próprio log, e um commit é atômico numa tabela.
   Uma execução que publica várias tabelas faz um commit por tabela. A biblioteca fixa a versão de
-  cada tabela lida no início, grava `execution_id` e essas versões (`input_versions`) em cada
-  commit, e quem precisa de um estado coerente entre tabelas lê esse conjunto de versões, não a
-  última de cada uma.
+  cada tabela lida no início, grava `serialize_db_execution_id` e essas versões
+  (`serialize_db_input_versions`) em cada commit, e quem precisa de um estado coerente entre
+  tabelas lê esse conjunto de versões, não a última de cada uma.
 - Não há sessão nem bloqueio. O controle de concorrência é otimista: o commit falha se outro escritor
   mudou o que a transação leu, e cabe ao escritor refazer a operação.
 - O esquema está no log, versionado junto com os dados. Uma leitura de versão antiga usa o esquema
@@ -503,14 +503,15 @@ from deltalake import write_deltalake
 from deltalake.transaction import CommitProperties, Transaction
 
 props = CommitProperties(
-    custom_metadata={"execution_id": "exec-42", "input_versions": '{"cad_operacoes": 3}'},
+    custom_metadata={"serialize_db_execution_id": "exec-42",
+                     "serialize_db_input_versions": '{"cad_operacoes": 3}'},
     app_transactions=[Transaction(app_id="pipeline", version=42)],
 )
 write_deltalake(uri, data, mode="overwrite", predicate="mes = '2026-08'", commit_properties=props)
 
 dt = DeltaTable(uri)
-dt.history(1)[0]["execution_id"]       # 'exec-42'
-dt.transaction_version("pipeline")     # 42
+dt.history(1)[0]["serialize_db_execution_id"]  # 'exec-42'
+dt.transaction_version("pipeline")             # 42
 ```
 
 Os metadados personalizados aparecem no `commitInfo` e voltam em `history()`. A ação `txn` registra a
@@ -768,11 +769,12 @@ mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends 
 4. **Auditoria.** Contagens, nulos, unicidade de chaves, `mes` igual a `strftime(data_ref, '%Y-%m')`,
    limites de tipo, no motor.
 5. **Publicação.** Por tabela e por mês: do DuckDB, `write_deltalake(mode="overwrite",
-   predicate="mes = ...")` com o `RecordBatchReader` da consulta, ou `COPY ... TO` na subpasta do mês
-   mais `create_write_transaction`; do Redshift, `UNLOAD ... PARTITION BY (mes)` na pasta da tabela
-   mais `create_write_transaction`. Cada commit leva `execution_id` e `input_versions` em
-   `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e é idempotente; um conflito de
-   commit no mesmo mês significa outra execução publicando a mesma tabela, e a execução aborta.
+   predicate="mes = ...")` com o `RecordBatchReader` da consulta, ou `COPY ... TO` na subpasta do
+   mês mais `create_write_transaction`; do Redshift, `UNLOAD ... PARTITION BY (mes)` na pasta da
+   tabela mais `create_write_transaction`. Cada commit leva `serialize_db_execution_id` e
+   `serialize_db_input_versions` em `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e
+   é idempotente; um conflito de commit no mesmo mês significa outra execução publicando a mesma
+   tabela, e a execução aborta.
 6. **Publicação no Redshift para clientes.** A diferença entre a versão publicada e a atual (ações
    `add` novas) diz quais meses recarregar: `DELETE` do mês e `COPY ... MANIFEST` dos arquivos novos,
    para todas as tabelas da execução numa única transação, o que dá aos clientes a atomicidade entre
@@ -1005,7 +1007,7 @@ lido do arquivo de controle. Uma tabela nova entra no snapshot no mesmo commit q
 
 | Quando | O quê |
 | --- | --- |
-| A cada execução | Checkpoint automático; `custom_metadata` com `execution_id` e `input_versions`. |
+| A cada execução | Checkpoint automático; `custom_metadata` com `serialize_db_execution_id` e `serialize_db_input_versions`. |
 | Snapshot do banco, na periodicidade do processo | `custom_metadata={"serialize_db_snapshot": ...}` nos commits e a entrada em `_serialize_db/snapshots.json`. |
 | Mensal | `vacuum(dry_run=True, keep_versions=snapshots)` revisado e depois executado; `full=True` de tempos em tempos para os órfãos. |
 | Antes de um snapshot | `optimize.compact` nos meses com arquivos pequenos. |
