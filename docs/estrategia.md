@@ -85,6 +85,7 @@ Verificado localmente:
 | `delta_scan` no DuckDB | Tipos preservados (`DECIMAL(18,2)`); todas as colunas aparecem anuláveis; `EXPLAIN` mostra o filtro `mes='2026-02'` empurrado ao scan. |
 | Viagem no tempo no DuckDB | `delta_scan(caminho, version := 0)` e `ATTACH ... (TYPE delta)` com `AT (VERSION => 0)` funcionam; `delta_scan(...) AT (...)` não. |
 | `create_write_transaction` com um arquivo gravado pelo PyArrow em `mes=2026-04/` | Versão 4 criada; o DuckDB lê o arquivo registrado. |
+| Tipos do contrato gravados de um esquema Arrow | `int16` vira `short`, `int32` `integer`, `int64` `long`, `bool` `boolean`, `float64` `double`, `decimal128(18, 2)` `decimal(18,2)`, `string` `string`, `date32` `date`, `timestamp[us]` `timestamp_ntz`, `timestamp[us, tz=UTC]` `timestamp`. A coluna `timestamp_ntz` eleva o protocolo a leitor 3 e escritor 7 com o recurso `timestampNtz`. Um `timestamp[ns]` é aceito e gravado em microssegundos; um fuso `America/Sao_Paulo` é aceito e lido como o mesmo instante. O DuckDB lê `SMALLINT`, `INTEGER`, `BIGINT`, `BOOLEAN`, `DOUBLE`, `DECIMAL(18,2)`, `VARCHAR`, `DATE`, `TIMESTAMP` e `TIMESTAMP WITH TIME ZONE`. A tabela de tipos de [`schema.md`](schema.md) traz a coluna Delta. |
 
 ### DuckLake
 
@@ -324,7 +325,13 @@ ou CI, e acompanhar as mudanças de API do `pyo3`.
 ## Recomendação
 
 Adotar o Delta Lake por `deltalake` como camada de tabela sobre o Parquet no S3, e manter o SQLAlchemy
-Core como camada de SQL do pipeline. A biblioteca fica com estas partes:
+como camada de SQL do pipeline, no uso que ele já tem: os modelos declarativos definem o `Table` de cada
+tabela, e statements Core de `select` e `insert` movem DataFrames; o pipeline não instancia classes ORM.
+O que muda é o caminho dos DataFrames, que passa por Arrow: no DuckDB, `INSERT ... BY NAME SELECT *
+FROM <tabela Arrow>` na escrita e `.arrow()` na leitura; no Redshift, Parquet no S3 mais
+`COPY ... MANIFEST` na escrita e ADBC ou `UNLOAD` na leitura. O `insert(...)` executado com listas de
+linhas sai, porque no Redshift ele vira uma ida ao servidor por linha. A biblioteca fica com estas
+partes:
 
 1. Contrato: modelos SQLAlchemy com metadados físicos em `Table.info`, dos quais derivam o esquema
    Arrow, o esquema Delta e o DDL do sandbox.
@@ -342,24 +349,39 @@ O que sai: o ORM para cargas linha a linha, as chaves estrangeiras `DEFERRABLE`,
 manifestos próprios e a pergunta em aberto do commit atômico. O que fica opcional: Alembic, SQLGlot
 como teste de compatibilidade.
 
-O DuckLake é a alternativa se o pipeline for centrado no DuckDB e precisar renomear ou remover colunas
-com frequência. O preço é o modelo de um escritor por vez, com o catálogo movido pela biblioteca, o
-inlining desligado e um ecossistema de leitores menor. Trocar o SQLAlchemy pelo SQLMesh só faz sentido
-se o pipeline for majoritariamente SQL e aceitar um banco de estado; a troca por SQLGlot puro exige
-reescrever as consultas sem ganho de portabilidade, porque os dois exigem os mesmos testes no Redshift.
+O DuckLake fica como alternativa documentada, não adotada: suas vantagens, renomear e remover colunas
+sem reescrever dados e a tabela nativa no DuckDB, não pesam num pipeline que raramente renomeia
+colunas, e seu preço, o catálogo movido pela biblioteca, o inlining desligado e um ecossistema de
+leitores menor, permanece. O SQLMesh e o dbt saem, porque o pipeline é majoritariamente lógica Python
+e não transformações SQL. A troca do SQLAlchemy por SQLGlot puro exige reescrever as consultas sem
+ganho de portabilidade, porque os dois exigem os mesmos testes no Redshift.
 
-## Decisões pendentes
+## Decisões
 
-- A proporção entre transformações SQL e lógica Python linha a linha no pipeline atual decide se o
-  SQLMesh entra na conversa e quanto do SQLAlchemy permanece.
-- Se execuções de desenvolvimento e de produção gravam as mesmas tabelas ao mesmo tempo, o DuckLake
-  sai.
-- Se renomear ou remover colunas é frequente, o Delta impõe evolução só por adição até o column
-  mapping amadurecer no delta-rs.
-- Se a exclusão do Iceberg vem da falta de permissão no Glue, o Delta é a escolha; se vem de política,
-  a mesma política precisa aceitar o `_delta_log` no bucket do projeto.
-- Prova de conceito no S3 e no Redshift: credenciais do delta-rs no SageMaker; `COPY` de `DECIMAL` em
-  `INT64`; `FILLRECORD` com Parquet; lista de colunas no `COPY` de Parquet.
+- O pipeline é majoritariamente lógica Python. O SQLAlchemy define o modelo de dados (DDL) e gera os
+  statements de `insert` e `select` que leem e escrevem DataFrames; nenhuma classe ORM é instanciada.
+  Consequência: o SQLAlchemy permanece como metadados do contrato e Core; SQLMesh e dbt saem; a
+  entrada e a saída de DataFrames passam por Arrow, com `COPY` no Redshift.
+- O Iceberg está excluído porque não há serviço habilitado para ele. Consequência: a camada de tabela
+  não pode depender de catálogo, e o Delta Lake com escrita condicional do S3 atende.
+- Execuções de desenvolvimento e de produção gravam tabelas separadas. Consequência: um caminho Delta
+  por ambiente (`s3://<bucket>/<ambiente>/<tabela>/`) e o prefixo por ambiente no esquema do
+  Redshift; a concorrência que resta é entre reexecuções do mesmo ambiente, que o log do Delta
+  serializa.
+- Renomear ou remover colunas é raro. Consequência: a evolução de esquema é por adição
+  (`schema_mode="merge"`); o caso raro reescreve a tabela com `schema_mode="overwrite"` e recria a
+  tabela publicada no Redshift, sem esperar o column mapping do delta-rs.
+
+## Prova de conceito pendente no S3 e no Redshift
+
+- Credenciais do delta-rs dentro do espaço do SageMaker Unified Studio. Se o escritor não as
+  encontrar, a biblioteca passa em `storage_options` as credenciais que o `boto3` resolve
+  (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) e renova o token de sessão.
+- `write_deltalake` no bucket do projeto e `delta_scan` com um secret S3 `credential_chain` no DuckDB.
+- `COPY ... MANIFEST` de arquivos do Delta: `DECIMAL` em `INT64`, `timestamp_ntz` em `INT64` de
+  microssegundos, lista de colunas e `FILLRECORD` para arquivos anteriores a uma coluna nova.
+- `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE` seguido de `create_write_transaction`, e a leitura
+  do resultado pelo DuckDB.
 
 ## Referências
 

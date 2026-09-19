@@ -149,7 +149,7 @@ matching group.
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
-| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the recommendation (Delta Lake plus SQLAlchemy Core) and the pending decisions. It records the local proof of concept of 2026-09-19. |
+| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the recommendation (Delta Lake plus SQLAlchemy Core), the decisions taken with the user and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
 `docs/duckdb.md` and `docs/redshift.md` share a section order: data organization and the differences
@@ -212,6 +212,20 @@ Each fact below is detailed in the file named at the end of its line.
   constructs the target lacks (`INSERT ... BY NAME`, `list_aggregate`) and turned DuckDB
   `VARCHAR(200)` into Redshift `VARCHAR(MAX)`; Redshift integration tests remain necessary.
   `docs/estrategia.md`
+- delta-rs maps the contract types from Arrow as `short`, `integer`, `long`, `boolean`, `double`,
+  `decimal(p,s)`, `string`, `date`, `timestamp_ntz` (naive) and `timestamp` (UTC); a naive timestamp
+  column raises the protocol to reader 3 / writer 7 with the `timestampNtz` feature, which DuckDB
+  reads as `TIMESTAMP`. `docs/schema.md`, `docs/estrategia.md`
+
+## The pipeline outside this repository
+
+Facts stated by the user, not visible in the code: the pipeline is mostly Python logic; SQLAlchemy is
+used only for the declarative models (DDL) and for Core `select` and `insert` statements that move
+DataFrames, never for ORM instances; Iceberg is excluded because no service that supports it is
+enabled; development and production runs write separate tables; renaming or dropping columns is
+rare. The decision recorded in `docs/estrategia.md` follows from them: Delta Lake through `deltalake`
+as the table layer, SQLAlchemy kept as contract metadata and Core, DataFrames moved through Arrow,
+SQLMesh, dbt and DuckLake not adopted.
 
 ## The state of the code
 

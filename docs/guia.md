@@ -18,7 +18,7 @@ execução sem alterar as tabelas permanentes. O [sandbox da execução](#sandbo
 ### Contrato de esquema
 
 O esquema vive num único lugar, os modelos ORM, e dele derivam o DDL, o esquema Arrow, o esquema
-Iceberg e as auditorias. O [etl-cookbook-tutorial](https://github.com/felipenoris/etl-cookbook-tutorial)
+Delta e as auditorias. O [etl-cookbook-tutorial](https://github.com/felipenoris/etl-cookbook-tutorial)
 chama esse uso de "modelos como contrato".
 
 ### Commit atômico nos metadados
