@@ -1,24 +1,666 @@
 # DuckDB
 
-## Sandbox, inserção e exportação
+O DuckDB é um banco analítico embutido no processo Python, sem servidor. Este documento descreve como
+ele organiza os dados, os tipos que interessam ao contrato, o DDL, a manipulação de dados com pandas e
+Arrow, a ingestão em volume, a exportação para Parquet, as recomendações de performance e o suporte a
+SQLAlchemy. O papel do DuckDB no projeto é o [sandbox da execução](guia.md), um banco em memória ou
+num arquivo local que recebe os dados novos, roda as auditorias e exporta os meses aprovados. Com
+`memory_limit`, as operações maiores que a memória vão para `temp_directory`, no EBS do espaço.
 
-- O sandbox é um banco em memória ou num arquivo local. Com `memory_limit`, operações maiores que a
-  memória vão para `temp_directory`, no EBS do espaço.
-- O DuckDB lê tabelas Arrow sem cópia. `INSERT INTO <tabela> BY NAME SELECT * FROM entrada`, com
-  `entrada` registrada na conexão, associa as colunas por nome. DataFrames pandas e polars são
-  convertidos para Arrow com o esquema do modelo antes da inserção, o que evita surpresas de dtype como
-  inteiros com nulos convertidos para float.
-- A exportação usa o writer paralelo do DuckDB. `FILE_SIZE_BYTES` divide o mês em vários arquivos, e
-  `FIELD_IDS` grava os field IDs da tabela Iceberg:
+As afirmações sobre comportamento vêm da documentação oficial. Os exemplos e as medições foram
+executados em 2026-09-18 com DuckDB 1.5.5, pandas 3.0.6, pyarrow 25.0.1, polars 1.44.2, SQLAlchemy
+2.0.54 e duckdb_engine 0.17.0, sobre a mesma amostra do [documento sobre Parquet](parquet.md):
+300.000 linhas da tabela `operacoes`, com as colunas `id_operacao`, `data_ref`, `id_cliente`, `valor`
+e `descricao`.
+
+## Organização dos dados
+
+### Armazenamento colunar em row groups
+
+Um banco DuckDB é um único arquivo. O cabeçalho traz os bytes mágicos `DUCK` e o número da versão de
+armazenamento. As versões 1.0 a 1.5 gravam por padrão a versão de armazenamento 64, legível desde o
+DuckDB 1.0.0; a opção `storage_compatibility_version` (ou `ATTACH ... (STORAGE_VERSION 'latest')`)
+habilita formatos mais novos, que versões anteriores não leem. A leitura de arquivos antigos por
+versões novas é garantida; a leitura de arquivos novos por versões antigas não.
+
+Cada tabela é dividida em row groups de 122.880 linhas, o mesmo conceito dos row groups do Parquet.
+Dentro do row group, cada coluna fica em segmentos próprios, comprimidos com algoritmos leves
+(constante, RLE, bit packing, frame of reference, dicionário, FSST para strings, ALP para ponto
+flutuante, Zstd). A compressão só se aplica a bancos persistentes; um banco em memória fica sem
+compressão, exceto quando aberto com `ATTACH ':memory:' AS db (COMPRESS)`. A documentação estima que
+100 GB de CSV ocupam cerca de 25 GB num arquivo DuckDB, e 100 GB de Parquet, cerca de 120 GB.
+
+Dois índices existem sem que ninguém os peça:
+
+- Um zonemap (mínimo e máximo por row group) para toda coluna de tipo simples. Um filtro
+  `WHERE data_ref = DATE '2026-08-15'` pula os row groups cujo intervalo não contém a data.
+- Uma árvore ART para cada `PRIMARY KEY`, `UNIQUE` e `FOREIGN KEY`. A ART garante a restrição e serve
+  a filtros muito seletivos; ela não acelera joins nem agregações.
+
+A execução é vetorizada: os operadores processam vetores de 2.048 valores, e o paralelismo começa no
+row group. Uma consulta usa `k` threads apenas se varre ao menos `k × 122.880` linhas.
+
+Três pontos do modelo de escrita afetam o pipeline:
+
+- Um processo escreve por vez. Dentro do processo, várias conexões podem escrever ao mesmo tempo com
+  MVCC e controle otimista: appends nunca conflitam, e duas transações que alteram a mesma linha fazem
+  a segunda falhar com `Transaction conflict`. Outros processos só abrem o arquivo em modo
+  `READ_ONLY`.
+- O isolamento é por snapshot (leituras repetíveis). Uma transação enxerga o estado do início dela.
+- `DELETE` e `UPDATE` apenas marcam linhas. O espaço volta a ser usado depois de um `CHECKPOINT`; o
+  arquivo nunca encolhe sozinho, e `VACUUM` só recalcula estatísticas.
+
+### Diferenças para o PostgreSQL
+
+O dialeto SQL do DuckDB segue o PostgreSQL, com o parser derivado dele. As diferenças que importam ao
+projeto:
+
+| Aspecto | PostgreSQL | DuckDB |
+| --- | --- | --- |
+| Arquitetura | Servidor, armazenamento por linha, muitos escritores concorrentes. | Biblioteca no processo, armazenamento colunar, um processo escritor. |
+| Índices | B-tree é a ferramenta central de performance. | Zonemaps automáticos; ART só para restrições e filtros com seletividade abaixo de 0,1 %. |
+| Chaves e restrições | Aplicadas, custo baixo. | Aplicadas, mas a carga com chave primária de 554 milhões de linhas levou 461,6 s contra 121,0 s sem chave. |
+| Autoincremento | `SERIAL`, `IDENTITY`. | Só `CREATE SEQUENCE` com `DEFAULT nextval(...)`. `GENERATED ... AS IDENTITY` falha com `Constraint not implemented!` (testado na 1.5.5). |
+| `ALTER TABLE` | `ADD CONSTRAINT`, `DROP CONSTRAINT`. | Sem `ADD`/`DROP CONSTRAINT`; `ADD PRIMARY KEY` existe. Colunas com índice não podem ser removidas nem mudar de tipo. |
+| `VACUUM` | Recupera espaço e atualiza estatísticas. | Só estatísticas. |
+| Divisão de inteiros | `1 / 2` é `0`. | `1 / 2` é `0.5`; `1 // 2` é `0`. |
+| Identificadores | Sem aspas viram minúsculas; com aspas preservam maiúsculas. | Insensíveis a maiúsculas em qualquer caso, com a grafia preservada. |
+| Igualdade com cast implícito | `'1.1' = 1` é erro. | `'1.1' = 1` é verdadeiro. |
+| `UPDATE` em coluna indexada | Atualiza no lugar. | Reescrito como `DELETE` mais `INSERT`, verificado por blocos de 2.048 linhas. |
+| Inserção linha a linha | Adequada. | Prejudicial; a documentação pede lotes acima de algumas linhas. |
+| Tipos | Arrays, `JSON`, `UUID`. | `LIST`, `ARRAY`, `STRUCT`, `MAP`, `UNION`, `JSON` (extensão), `UUID`, inteiros sem sinal, `HUGEINT`. |
+| Comprimento de `VARCHAR(n)` | Aplicado. | Ignorado; `VARCHAR(200)` vira `VARCHAR`. |
+| Expressões regulares | `~` faz busca parcial, `~*` existe. | `~` exige casamento completo; `~*` não existe. |
+
+A opção `SET preserve_identifier_case = false` reproduz a conversão para minúsculas do PostgreSQL. A
+extensão `postgres` lê tabelas do PostgreSQL diretamente.
+
+### Efeitos nas formas de manipular os dados
+
+Na entrada, o caminho rápido é um comando por lote: `INSERT INTO ... SELECT` a partir de uma tabela
+Arrow, de um DataFrame ou de arquivos Parquet e CSV. Chaves e índices, quando necessários, entram
+depois da carga. Um laço de `INSERT` com uma linha por comando é a forma mais lenta, e a documentação
+pede que ele rode ao menos dentro de `BEGIN TRANSACTION` e `COMMIT`, porque cada commit faz `fsync`.
+
+Na saída, o resultado vai para Arrow sem cópia, com os tipos preservados. A conversão direta para
+pandas com `df()` troca `DECIMAL` por `float64` e `DATE` por `datetime64[us]`; o caminho Arrow, com
+`to_arrow_table()` e `to_pandas(types_mapper=pd.ArrowDtype)`, mantém `decimal128(18, 2)` e
+`date32`. A exportação de arquivos usa `COPY ... TO`.
+
+Nas alterações, a unidade de trabalho é o mês: `DELETE` do mês e `INSERT` do mês novo numa transação,
+ou `CREATE OR REPLACE TABLE ... AS`. `MERGE INTO` cobre o caso de alterar linhas por chave. Muitos
+`UPDATE` pequenos são o padrão a evitar.
+
+## Tipos suportados
+
+Tipos de uso geral, com os apelidos aceitos:
+
+| Tipo | Apelidos | Descrição |
+| --- | --- | --- |
+| `BOOLEAN` | `BOOL`, `LOGICAL` | Lógico. |
+| `TINYINT`, `SMALLINT`, `INTEGER`, `BIGINT` | `INT1`, `INT2`/`SHORT`, `INT4`/`INT`/`SIGNED`, `INT8`/`LONG` | Inteiros com sinal de 1, 2, 4 e 8 bytes. |
+| `HUGEINT` | | Inteiro com sinal de 16 bytes. |
+| `UTINYINT`, `USMALLINT`, `UINTEGER`, `UBIGINT`, `UHUGEINT` | | Inteiros sem sinal. Fora do contrato: Arrow e Redshift não os têm da mesma forma. |
+| `FLOAT` | `FLOAT4`, `REAL` | Ponto flutuante de 4 bytes. |
+| `DOUBLE` | `FLOAT8` | Ponto flutuante de 8 bytes. |
+| `DECIMAL(p, s)` | `NUMERIC(p, s)` | Decimal exato; padrão `DECIMAL(18, 3)`. |
+| `VARCHAR` | `CHAR`, `BPCHAR`, `TEXT`, `STRING` | String; o comprimento declarado não tem efeito. |
+| `BLOB` | `BYTEA`, `BINARY`, `VARBINARY` | Binário. |
+| `DATE` | | Data. |
+| `TIME` | | Hora sem fuso. |
+| `TIMESTAMP` | `DATETIME` | Data e hora sem fuso, microssegundos. |
+| `TIMESTAMP WITH TIME ZONE` | `TIMESTAMPTZ` | Data e hora com fuso, exibida no fuso da sessão. |
+| `INTERVAL` | | Intervalo. |
+| `UUID` | | Identificador universal. |
+| `JSON` | | JSON pela extensão `json`. |
+| `BIT`, `BIGNUM`, `VARIANT` | `BITSTRING` | Bits, inteiro de tamanho variável, valor semiestruturado. |
+
+Tipos aninhados: `LIST` (`INTEGER[]`), `ARRAY` de tamanho fixo (`INTEGER[3]`), `STRUCT`, `MAP` e
+`UNION`, aninháveis em qualquer profundidade. A atualização de um valor aninhado é reescrita como
+remoção e inserção.
+
+A conversão de objetos Python segue regras fixas: `int` tenta `BIGINT`, depois `INTEGER`, `UBIGINT`,
+`UINTEGER` e `DOUBLE`; `float` vira `DOUBLE`; `decimal.Decimal` vira `DECIMAL`; `datetime.datetime`
+vira `TIMESTAMP` ou `TIMESTAMPTZ` conforme tenha `tzinfo`; `dict` vira `STRUCT` ou `MAP`. Colunas
+`object` do pandas passam por uma fase de análise que amostra 1.000 valores para escolher o tipo; a
+opção `pandas_analyze_sample` muda o tamanho da amostra.
+
+### DECIMAL com escala fixa
+
+`DECIMAL(largura, escala)` guarda um decimal exato. A largura vai de 1 a 38, a escala de 0 à largura,
+e um `DECIMAL` sem parâmetros é `DECIMAL(18, 3)`, não um decimal livre como no PostgreSQL. A
+representação interna depende da largura:
+
+| Largura | Inteiro interno | Bytes |
+| --- | --- | --- |
+| 1 a 4 | `INT16` | 2 |
+| 5 a 9 | `INT32` | 4 |
+| 10 a 18 | `INT64` | 8 |
+| 19 a 38 | `INT128` | 16 |
+
+A documentação recomenda largura até 18: a aritmética em `INT128` é muito mais cara. `DECIMAL(18, 2)`,
+o tipo do contrato para valores contábeis, cabe em 8 bytes e corresponde ao `decimal128(18, 2)` do
+Arrow.
+
+Regras aritméticas, verificadas na 1.5.5:
+
+| Expressão | Tipo do resultado | Valor |
+| --- | --- | --- |
+| `1.10 + 2.20` | `DECIMAL(4, 2)` | `3.30` |
+| `x * y` com `x`, `y` `DECIMAL(18, 2)` | `DECIMAL(18, 4)` | exato |
+| `sum(x)` com `x` `DECIMAL(18, 2)` | `DECIMAL(38, 2)` | exato |
+| `avg(x)` com `x` `DECIMAL(18, 2)` | `DOUBLE` | aproximado |
+| `10::DECIMAL(18, 2) / 3` | `DOUBLE` | `3.3333333333333335` |
+
+Soma, subtração e multiplicação ampliam o tipo para manter o resultado exato, e falham quando a
+largura passaria de 38. Divisão e média saem em `DOUBLE`; um valor contábil derivado delas precisa de
+`round(..., 2)::DECIMAL(18, 2)` explícito.
+
+Conversões para a escala da coluna arredondam, e estouros de largura são erro:
+
+| Operação | Resultado |
+| --- | --- |
+| `1.005::DECIMAL(18, 2)` e `'1.005'::DECIMAL(18, 2)` | `1.01` |
+| `1.005::DOUBLE::DECIMAL(18, 2)` | `1.00`, porque o binário de 1.005 fica abaixo de 1.005. |
+| `2.675::DOUBLE::DECIMAL(18, 2)` | `2.68` |
+| `INSERT` de `1.2345::DECIMAL(18, 4)` em `DECIMAL(18, 2)` | `1.23` |
+| `INSERT` de `decimal128(18, 3)` do Arrow em `DECIMAL(18, 2)` | Arredondado. |
+| `INSERT` de coluna `float64` do pandas em `DECIMAL(18, 2)` | `1.005` vira `1.00`. |
+| `INSERT` de `99999999999999999.99` em `DECIMAL(18, 2)` | `Conversion Error: ... value is out of range!` |
+
+Uma coluna `object` do pandas com `decimal.Decimal` recebe o tipo pela amostra: a coluna `valor` da
+amostra, com valores até `99999.99`, foi inferida como `DECIMAL(7, 2)`, e um valor maior num lote
+posterior falharia no cast. A conversão para Arrow com o esquema do contrato antes do `INSERT` fixa o
+tipo e foi 25 vezes mais rápida na medição da seção de ingestão.
+
+### JSON
+
+A extensão `json` vem na distribuição e carrega sozinha no primeiro uso. O tipo lógico `JSON` é
+fisicamente um `VARCHAR` validado: `'unquoted'::JSON` falha com `Malformed JSON`, espaços e ordem das
+chaves contam na comparação de igualdade, e chaves duplicadas são aceitas. Qualquer tipo converte para
+`JSON` e volta: `'{"duck": 42}'::JSON::STRUCT(duck INTEGER)`, `{duck: 42}::JSON`.
+
+Extração e criação:
+
+```sql
+CREATE TABLE eventos (id INTEGER, doc JSON);
+INSERT INTO eventos VALUES (1, '{"a": 1, "b": {"c": [1, 2, 3]}}');
+SELECT doc->>'a', json_extract(doc, '$.b.c[1]'), json_type(doc), json_structure(doc) FROM eventos;
+```
+
+A consulta acima devolve `1`, `2`, `OBJECT` e `{"a":"UBIGINT","b":{"c":["UBIGINT"]}}`. Os caminhos
+JSON usam índice a partir de zero; listas e arrays SQL começam em um. `read_json` lê arquivos e infere
+o esquema; `COPY (...) TO 'arquivo.json'` grava.
+
+Na ida e volta com pandas, uma coluna de strings com JSON serializado entra direto na coluna `JSON`;
+uma coluna de `dict` vira `STRUCT` e precisa do cast `doc::JSON` no `INSERT ... SELECT`; a leitura
+devolve `string` no Arrow e `str` no pandas. O contrato deixa `JSON` de fora
+([tipos no contrato](schema.md)); quando um caso de uso surgir, a escolha é entre uma coluna `JSON`
+com views de extração e um `STRUCT` de chaves fixas, mais rápido de filtrar.
+
+## DDL
+
+### CREATE TABLE
+
+```sql
+CREATE TABLE operacoes (
+    id_operacao BIGINT NOT NULL,
+    data_ref DATE NOT NULL,
+    id_cliente BIGINT NOT NULL,
+    valor DECIMAL(18, 2) NOT NULL,
+    descricao VARCHAR,
+    PRIMARY KEY (id_operacao, data_ref)
+);
+COMMENT ON TABLE operacoes IS 'Operações do mês';
+```
+
+Variantes documentadas:
+
+- `CREATE OR REPLACE TABLE` remove e recria; `CREATE TABLE IF NOT EXISTS` não altera a existente.
+- `CREATE TEMP TABLE` cria no esquema `temp.main`, visível só à conexão, em memória, com
+  transbordo para `temp_directory` quando configurado.
+- `CREATE TABLE ... AS SELECT` (CTAS) cria a partir de qualquer consulta, inclusive de um DataFrame ou
+  de um arquivo: `CREATE TABLE operacoes AS FROM 'operacoes.parquet'`. O CTAS copia nomes e tipos e
+  não aceita restrições; `AS FROM outra WITH NO DATA` copia só o esquema.
+- Colunas aceitam `DEFAULT`, `NOT NULL`, `CHECK (expr)`, `UNIQUE`, `PRIMARY KEY` e
+  `REFERENCES tabela (coluna)`. Chaves estrangeiras não aceitam `ON DELETE CASCADE` e não podem ser
+  autorreferentes na inserção.
+- Colunas geradas: `two_x AS (2 * x)`, apenas `VIRTUAL`.
+- Sequências como chave: `CREATE SEQUENCE id_seq START 1;` e
+  `id INTEGER PRIMARY KEY DEFAULT nextval('id_seq')`.
+
+### ALTER TABLE
+
+```sql
+ALTER TABLE operacoes ADD COLUMN moeda VARCHAR DEFAULT 'BRL';
+ALTER TABLE operacoes RENAME COLUMN descricao TO historico;
+ALTER TABLE operacoes ALTER COLUMN historico SET DEFAULT '';
+ALTER TABLE operacoes ALTER COLUMN moeda SET NOT NULL;
+ALTER TABLE operacoes ALTER id_cliente TYPE INTEGER;
+ALTER TABLE operacoes ALTER data_ref SET DATA TYPE VARCHAR USING strftime(data_ref, '%Y-%m-%d');
+ALTER TABLE operacoes DROP COLUMN moeda;
+ALTER TABLE operacoes ADD PRIMARY KEY (id_operacao, data_ref);
+ALTER TABLE operacoes RENAME TO operacoes_antigas;
+```
+
+Limites: `ADD CONSTRAINT` e `DROP CONSTRAINT` não existem; colunas com índice (inclusive o índice de
+`PRIMARY KEY` e `UNIQUE`) não podem ser removidas nem mudar de tipo, e um `CHECK` sobre várias colunas
+bloqueia a remoção delas; a mudança de tipo falha se a coluna já conteve um valor inconvertível, mesmo
+apagado, e o contorno é `CREATE OR REPLACE TABLE tbl AS FROM tbl`; renomear não atualiza views. As
+alterações são transacionais e podem ser revertidas com `ROLLBACK`. A versão 1.5 acrescentou
+`ALTER TABLE ... SET ('opcao' = 'valor')` e `RESET` para opções de catálogos.
+
+### DROP TABLE
+
+```sql
+DROP TABLE IF EXISTS operacoes_antigas;
+DROP SCHEMA execucao_abc123 CASCADE;
+```
+
+`RESTRICT`, o padrão, recusa remover um objeto com dependentes rastreados (esquema com tabelas,
+sequências, tipos, views); `CASCADE` remove todos. Views não são rastreadas: uma view sobre tabela
+removida fica inválida e falha na consulta. O espaço da tabela vira blocos livres do arquivo, visíveis
+em `PRAGMA database_size`; o arquivo não diminui. Para encolher, o caminho é copiar o banco para um
+arquivo novo com `COPY FROM DATABASE origem TO destino` ou exportar e importar.
+
+### Índices, chaves e restrições
+
+Os zonemaps existem para todas as colunas de tipos simples e tornam a ordenação por coluna de filtro
+a otimização principal (seção de performance). A ART é o único índice explícito:
+
+```sql
+CREATE INDEX idx_cliente ON operacoes (id_cliente);
+CREATE UNIQUE INDEX idx_operacao ON operacoes (id_operacao);
+DROP INDEX idx_cliente;
+```
+
+Regras da documentação:
+
+- Só índices de uma coluna sem expressão servem a index scans, usados em igualdade e `IN (...)` quando
+  a seletividade estimada fica abaixo de `MAX(2048, 0,1 % das linhas)`; filtros dinâmicos de joins
+  também entram nesses scans.
+- A memória dos índices não é gerenciada pelo buffer manager; o índice precisa caber em memória na
+  criação e permanece carregado até um `DETACH`/`ATTACH`.
+- Um índice, explícito ou de chave, deve ser criado depois da carga.
+
+A [política de restrições](schema.md) do projeto omite `PRIMARY KEY`, `UNIQUE` e `FOREIGN KEY` no
+sandbox e verifica unicidade na auditoria. A medição desta sessão confirma o custo: a carga de
+300.000 linhas via Arrow levou 0,008 s sem chave e 0,073 s com `PRIMARY KEY (id_operacao, data_ref)`.
+
+Restrições existentes se comportam como no PostgreSQL, com dois limites: um `UPDATE` que passa por
+chave é verificado bloco a bloco, e `UPDATE my_table SET i = i + 1` numa tabela com 3.000 chaves
+sequenciais falha com `Duplicate key "i: 2048"`; uma tabela com chave estrangeira pode acusar violação
+ao atualizar um valor aninhado na tabela referenciada. O contorno documentado é `DELETE ... RETURNING`
+seguido de `INSERT` na mesma transação.
+
+### Documentação do esquema
+
+`COMMENT ON` segue a sintaxe do PostgreSQL para tabelas, colunas, views, índices, sequências, tipos e
+macros; `IS NULL` remove o comentário:
+
+```sql
+COMMENT ON TABLE operacoes IS 'Operações do mês';
+COMMENT ON COLUMN operacoes.id_cliente IS 'Chave do cliente';
+SELECT table_name, comment FROM duckdb_tables() WHERE comment IS NOT NULL;
+SELECT column_name, comment FROM duckdb_columns() WHERE table_name = 'operacoes';
+```
+
+Limites documentados: não há comentários em esquemas e bancos, nem em objetos com dependências, como
+uma tabela com índice. No teste, a tabela com chave primária composta aceitou o comentário de tabela
+e de coluna. A definição completa da tabela sai de `duckdb_tables().sql`:
+
+```text
+CREATE TABLE operacoes(id_operacao BIGINT, data_ref DATE, id_cliente BIGINT NOT NULL,
+    valor DECIMAL(18,2) NOT NULL, descricao VARCHAR, PRIMARY KEY(id_operacao, data_ref));
+```
+
+## SELECT, INSERT, UPDATE e DELETE
+
+A conexão Python (`duckdb.connect()`) enxerga DataFrames pandas e polars, tabelas, datasets,
+scanners e `RecordBatchReader` do Arrow pelo nome da variável Python, como se fossem tabelas
+(replacement scan). Objetos guardados em dicionários ou atributos entram com
+`con.register('nome', objeto)`. A precedência é: objetos registrados, tabelas e views do banco,
+variáveis Python. `SET python_enable_replacements = false` desliga a busca por variáveis. Esses
+objetos são só de leitura: `INSERT` e `UPDATE` sobre um DataFrame não existem.
+
+### SELECT com saída em Arrow e pandas
+
+```python
+import duckdb, pandas as pd
+
+con = duckdb.connect("sandbox.duckdb")
+res = con.execute("SELECT * FROM operacoes WHERE data_ref >= ? ORDER BY data_ref", [date(2026, 8, 1)])
+tabela = res.to_arrow_table()                      # decimal128(18, 2), date32, int64, string
+df = tabela.to_pandas(types_mapper=pd.ArrowDtype)  # mantém decimal128 e date32
+```
+
+Formas de saída, com o tempo para 300.000 linhas:
+
+| Chamada | Tipos de `valor` e `data_ref` | Tempo |
+| --- | --- | --- |
+| `to_arrow_table()` | `decimal128(18, 2)`, `date32[day]` | 0,005 s |
+| `to_arrow_reader(tamanho_lote)` | Os mesmos, em lotes. | |
+| `df()` | `float64`, `datetime64[us]` | 0,020 s |
+| `to_arrow_table().to_pandas(types_mapper=pd.ArrowDtype)` | `decimal128(18, 2)[pyarrow]`, `date32[day][pyarrow]` | 0,005 s mais menos de 0,001 s |
+| `pl()` | `Decimal(18, 2)`, `Date` | 0,086 s |
+| `fetchall()`, `fetchone()` | `decimal.Decimal`, `datetime.date` | |
+
+`df()` é o caminho a evitar para valores contábeis. `fetchnumpy()` devolve arrays mascarados e
+`fetch_df_chunk()` devolve o resultado em pedaços de 2.048 linhas vezes um multiplicador.
+
+Parâmetros: `?` posicional, `$1` numerado e reutilizável, `$nome` nomeado com um dicionário. A API
+relacional (`con.sql(...)`, `con.table('operacoes').filter(...)`) monta consultas preguiçosas e
+compõe relações por nome.
+
+### INSERT
+
+```python
+import pyarrow as pa
+
+entrada = pa.Table.from_pandas(df, schema=esquema_do_contrato, preserve_index=False)
+con.execute("INSERT INTO operacoes BY NAME SELECT * FROM entrada")
+con.append("operacoes", df, by_name=True)          # equivalente sem SQL
+```
+
+`INSERT INTO ... BY NAME` associa colunas pelo nome, aceita colunas faltantes (preenchidas com
+`DEFAULT` ou `NULL`) e rejeita nomes desconhecidos; o padrão `BY POSITION` segue a ordem da tabela.
+Valores de tipo diferente sofrem conversão automática, inclusive de `VARCHAR` para número, então a
+conferência de tipos precisa acontecer no Arrow, antes do comando.
+
+Conflitos em chave primária ou `UNIQUE`:
+
+```sql
+INSERT OR IGNORE INTO operacoes BY NAME SELECT * FROM entrada;
+INSERT INTO operacoes BY NAME SELECT * FROM entrada
+    ON CONFLICT (id_operacao, data_ref) DO UPDATE SET valor = EXCLUDED.valor, descricao = EXCLUDED.descricao;
+INSERT OR REPLACE INTO operacoes BY NAME SELECT * FROM entrada;
+```
+
+`RETURNING *` devolve as linhas inseridas, útil com sequências e colunas geradas.
+
+`MERGE INTO` faz o mesmo sem exigir chave, com condição livre e ações condicionais:
+
+```sql
+MERGE INTO operacoes
+    USING entrada USING (id_operacao, data_ref)
+    WHEN MATCHED AND operacoes.valor <> entrada.valor THEN UPDATE SET valor = entrada.valor
+    WHEN NOT MATCHED THEN INSERT BY NAME
+    WHEN NOT MATCHED BY SOURCE AND operacoes.data_ref >= DATE '2026-08-01' THEN DELETE
+    RETURNING merge_action, *;
+```
+
+### UPDATE e DELETE
+
+```sql
+UPDATE operacoes SET descricao = correcoes.descricao
+    FROM correcoes WHERE operacoes.id_operacao = correcoes.id_operacao;
+DELETE FROM operacoes USING cancelamentos WHERE operacoes.id_operacao = cancelamentos.id_operacao;
+DELETE FROM operacoes WHERE data_ref < DATE '2020-01-01' RETURNING id_operacao;
+TRUNCATE operacoes;
+```
+
+`UPDATE ... FROM` e `DELETE ... USING` aceitam um DataFrame registrado como fonte, o que transforma uma
+lista de correções num único comando em lote. A substituição de um mês inteiro, unidade de escrita
+do projeto, é uma transação:
+
+```sql
+BEGIN TRANSACTION;
+DELETE FROM operacoes WHERE data_ref >= DATE '2026-08-01' AND data_ref < DATE '2026-09-01';
+INSERT INTO operacoes BY NAME SELECT * FROM entrada;
+COMMIT;
+```
+
+Na API Python, `con.begin()`, `con.commit()` e `con.rollback()` fazem o mesmo; sem `begin()`, cada
+comando é sua própria transação. Vários comandos numa única string executam numa transação implícita.
+
+## Ingestão de dados
+
+A documentação ordena as formas de importar: um scanner de extensão quando a fonte é MySQL,
+PostgreSQL, SQLite ou ODBC; senão, exportar da fonte para Parquet ou CSV e carregar com o leitor
+nativo; senão, o appender, disponível em C, C++, Go, Java e Rust, não em Python. Laços de `INSERT`
+ficam para volumes abaixo de 100.000 linhas, e `executemany` não deve ser usado para volume.
+
+Medições de carga de uma tabela sem chave, em memória, com os dados já em Python (menor de três
+execuções; as linhas com 50.000 linhas usam os métodos lentos):
+
+| Método | Linhas | Tempo |
+| --- | --- | --- |
+| `INSERT INTO t SELECT * FROM tabela_arrow` | 300.000 | 0,008 s |
+| `INSERT INTO t BY NAME SELECT * FROM df` com dtypes pyarrow | 300.000 | 0,008 s |
+| `con.append('t', df)` | 300.000 | 0,008 s |
+| `CREATE TABLE t AS SELECT * FROM tabela_arrow` | 300.000 | 0,008 s |
+| `INSERT INTO t SELECT * FROM tabela_arrow` com chave primária composta | 300.000 | 0,073 s |
+| `INSERT INTO t SELECT * FROM tabela_arrow` em banco em arquivo, mais `CHECKPOINT` | 300.000 | 0,060 s |
+| `pyarrow.parquet.write_table` (zstd) mais `INSERT ... SELECT FROM read_parquet(...)` | 300.000 | 0,072 s |
+| `INSERT INTO t BY NAME SELECT * FROM df` com colunas `object` (`Decimal`, `date`) | 300.000 | 0,202 s |
+| SQLAlchemy Core, `conn.execute(insert(t), lista_de_dicts)` via duckdb_engine | 50.000 | 0,671 s |
+| `pandas.DataFrame.to_sql` padrão via duckdb_engine | 50.000 | 0,753 s |
+| `pandas.DataFrame.to_sql(method="multi", chunksize=5000)` | 50.000 | 1,993 s |
+| `con.executemany` dentro de `BEGIN`/`COMMIT` | 50.000 | 4,391 s |
+| `con.executemany` com autocommit | 50.000 | 5,224 s |
+
+O arquivo com as 300.000 linhas ocupou 3.420.160 bytes após o `CHECKPOINT`.
+
+A forma mais performática de ingerir um DataFrame pandas numa sessão Python é, portanto:
+
+1. Converter o DataFrame numa tabela Arrow com o esquema do contrato (`pa.Table.from_pandas` com
+   `schema=` ou `table.cast(schema, safe=True)`), o que fixa `decimal128(18, 2)` e `date32`, rejeita
+   valores fora do tipo e evita a análise por amostra das colunas `object`. O cast também corrige as
+   surpresas de dtype do pandas com backend numpy, como uma coluna de inteiros com nulos que vira
+   `float64`.
+2. Executar `INSERT INTO tabela BY NAME SELECT * FROM tabela_arrow`, ou `con.append`, num único
+   comando. Com vários lotes, envolver em `BEGIN`/`COMMIT`.
+3. Criar chaves ou índices, se forem necessários, depois da carga.
+
+Para volumes maiores que a memória, os dados passam por Parquet: `SET preserve_insertion_order =
+false` libera o DuckDB para reordenar e reduz a memória; `memory_limit` (padrão 80 % da RAM) e
+`threads` limitam o uso; `temp_directory` recebe o transbordo. O DuckDB divide automaticamente os
+arquivos de entrada em lotes e paraleliza a leitura por row group.
+
+## Exportação para Parquet
+
+O `COPY ... TO` grava Parquet com escritor paralelo. As opções relevantes ao projeto, detalhadas no
+[documento sobre Parquet](parquet.md):
 
 ```sql
 COPY (
-    SELECT <colunas com cast> FROM <tabela> WHERE <mês> ORDER BY <chave de ordenação>
-) TO '<local da tabela>/data/<mes>/<id_execucao>' (
+    SELECT id_operacao, data_ref, id_cliente, valor, descricao
+    FROM operacoes
+    WHERE data_ref >= DATE '2026-08-01' AND data_ref < DATE '2026-09-01'
+    ORDER BY data_ref, id_operacao
+) TO 'operacoes/mes=2026-08/exec_abc123.parquet' (
     FORMAT parquet,
     COMPRESSION zstd,
-    FILE_SIZE_BYTES '<tamanho alvo>',
-    FIELD_IDS {<coluna>: <field ID>}
+    ROW_GROUP_SIZE 100_000,
+    FIELD_IDS {id_operacao: 1, data_ref: 2, id_cliente: 3, valor: 4, descricao: 5},
+    KV_METADATA {serialize_db_version: '0.1.0', id_execucao: 'abc123'},
+    RETURN_STATS
 );
 ```
 
+- `FILE_SIZE_BYTES` divide a saída em vários arquivos de tamanho alvo, e `PER_THREAD_OUTPUT` grava
+  um arquivo por thread; `PARTITION_BY` produz pastas Hive, com `WRITE_PARTITION_COLUMNS` para manter
+  as colunas de partição dentro dos arquivos.
+- `OVERWRITE_OR_IGNORE`, `OVERWRITE` e `APPEND` controlam a escrita sobre pastas existentes;
+  `FILENAME_PATTERN '{uuid}'` evita colisões de nome.
+- `RETURN_STATS` devolve, por arquivo, contagem de linhas, tamanho e estatísticas por coluna, base
+  para a conferência antes da publicação.
+- `WRITE_BLOOM_FILTER` (padrão verdadeiro) grava filtros Bloom para colunas codificadas por
+  dicionário; `PARQUET_VERSION V2` habilita as codificações mais novas.
+- O escritor da versão 1.5.5 declara todas as colunas como `optional`, mesmo `NOT NULL`, grava
+  `DECIMAL(18, 2)` como `INT64` e não grava page index. O leitor de outros sistemas recebe essas
+  propriedades; a conferência de `NOT NULL` fica na auditoria.
+
+A API relacional oferece o atalho `con.sql(consulta).write_parquet('arquivo.parquet')`. A
+[gravação com ordenação](parquet.md) pela chave de ordenação melhora a compressão e a poda por
+estatísticas na leitura.
+
+## Recomendações de performance
+
+### Ingestão
+
+- Tipos corretos: colunas de data como `DATE` ou `TIMESTAMP`, chaves como `BIGINT`. Na medição da
+  documentação, `DATETIME` em vez de `VARCHAR` reduziu o armazenamento de 5,2 GB para 3,3 GB e o tempo
+  da agregação de 3,9 s para 0,9 s; um join em `BIGINT` foi 1,8 vezes mais rápido que o mesmo join em
+  `VARCHAR`.
+- Sem chaves nem índices na carga; criá-los depois, se a integridade exigir.
+- Um comando por lote, a partir de Arrow ou Parquet; laços dentro de transação.
+- Bancos persistentes usam compressão e podem ser mais rápidos que bancos em memória: a consulta 1 do
+  TPC-H (fator 30) levou 4,22 s num banco em memória sem compressão, 0,55 s com `COMPRESS` e 0,56 s
+  em arquivo.
+- Uma conexão reutilizada; abrir e fechar a cada consulta descarta caches de dados e metadados.
+- Memória: mínimo de 125 MB por thread; recomendação de 1 a 4 GB por thread (1 a 2 GB para
+  agregações, 3 a 4 GB para joins); com falta de memória, reduzir `threads`, baixar `memory_limit`
+  para 50 a 60 % da RAM e desligar `preserve_insertion_order`.
+- Disco: SSD ou NVMe; EBS serve; a documentação desaconselha o formato nativo em modo leitura e
+  escrita sobre NFS e SMB.
+
+### Organização das tabelas para filtros por chave e joins
+
+- Ordenar os dados pelas colunas de filtro na carga. A ordenação alimenta os zonemaps: no exemplo da
+  documentação, a coluna de timestamps ordenada ocupou 1,3 GB em vez de 3,3 GB e a consulta caiu de
+  0,9 s para 0,6 s. Para a tabela `operacoes`, a ordem `data_ref, id_operacao` da chave de ordenação
+  do contrato serve aos filtros por mês e por identificador.
+- Chaves inteiras crescentes em vez de `UUID` para filtros seletivos: um `UUID` fora de ordem obriga a
+  varrer muitos row groups.
+- Filtros de igualdade e `IN` sobre uma coluna com ART e seletividade muito alta usam index scan;
+  para os demais, os zonemaps bastam.
+- Joins: o DuckDB usa hash join com filtros dinâmicos empurrados ao scan da tabela maior; índices e
+  chaves não mudam o plano. O otimizador reordena joins por custo com estatísticas das tabelas e dos
+  arquivos Parquet. Para forçar uma ordem, `SET disabled_optimizers = 'join_order,build_side_probe_side'`
+  ou tabelas temporárias intermediárias.
+- Colunas de join com o mesmo tipo exato nas duas tabelas (`BIGINT` com `BIGINT`), sem cast.
+- Row groups de 100.000 a 1.000.000 de linhas e arquivos de 100 MB a 10 GB ao ler Parquet; em
+  arquivos remotos, selecionar colunas, filtrar e aumentar `threads` para 2 a 5 vezes o número de
+  núcleos, porque a E/S é síncrona por thread.
+- `EXPLAIN ANALYZE` mostra o plano e o tempo por operador; sinais de problema são nested loop joins,
+  filtros aplicados depois do scan e cardinalidades explodindo nos joins.
+
+### Diferenças de abordagem em relação a bancos relacionais tradicionais
+
+Num banco relacional de linha, a performance vem de índices, de transações curtas e de atualizações
+pontuais. No DuckDB, ela vem da ordenação física dos dados, dos tipos, do tamanho dos lotes e da
+memória disponível. Não há tuning de índices para joins, não há `VACUUM` para recuperar espaço, e as
+tabelas se comportam melhor quando reconstruídas ou substituídas por partição do que quando
+atualizadas linha a linha. O único processo escritor e o controle otimista de concorrência
+dispensam bloqueios, mas exigem reexecutar a transação em caso de conflito. As restrições existem,
+porém custam na carga e não ajudam nas consultas, o que inverte a prática habitual de declarar todas
+as chaves.
+
+## Suporte a SQLAlchemy
+
+O dialeto é o pacote `duckdb_engine` (versão 0.17.0), derivado do dialeto PostgreSQL com psycopg2 do
+SQLAlchemy. Ele não consta da lista de dialetos externos da documentação do SQLAlchemy. A URL é
+`duckdb:///:memory:` ou `duckdb:///caminho/sandbox.duckdb`; `connect_args={"config": {...}}` passa
+as opções do DuckDB, e `preload_extensions` e `register_filesystems` carregam extensões e sistemas de
+arquivos `fsspec`.
+
+Comportamentos verificados com SQLAlchemy 2.0.54 e duckdb_engine 0.17.0:
+
+| Aspecto | Comportamento |
+| --- | --- |
+| Cache de comandos | `supports_statement_cache = False`; cada execução recompila o SQL. |
+| `rowcount` | Sempre `-1` em `INSERT`, `UPDATE` e `DELETE`. |
+| Tipos no DDL | `Numeric(18, 2)` vira `DECIMAL(18,2)`; `String(200)` vira `VARCHAR`; `JSON` cria coluna `JSON` e converte `dict` na ida e na volta. |
+| Comentários | `Table.comment` e `Column.comment` geram `COMMENT ON` no `create_all`. |
+| Reflexão | Colunas, tipos, nulidade e comentários voltam por `inspect(engine)`; `get_pk_constraint` devolve vazio e índices não são refletidos, embora `duckdb_constraints()` liste a chave. |
+| `Identity()` | Gera `GENERATED BY DEFAULT AS IDENTITY`, que o DuckDB rejeita. `Sequence('nome')` na coluna funciona e devolve o valor gerado ao ORM. |
+| `postgresql.insert(...).on_conflict_do_update` | Compila e executa. |
+| Banco em memória | O pool é `SingletonThreadPool`: uma conexão aberta sem fechar mantém uma transação, e o próximo `engine.begin()` falha com `cannot start a transaction within a transaction`. |
+| Replacement scans | Variáveis Python não são visíveis ao executar pelo engine; o DataFrame precisa de `register` na conexão bruta. |
+| `pandas.read_sql` | `coerce_float=True` (padrão) converte `Decimal` em `float`; `dtype_backend="pyarrow"` devolve `double[pyarrow]` para `DECIMAL` e `string[pyarrow]` para `DATE`; `coerce_float=False` devolve `Decimal` e `date` em colunas `object`. |
+
+### Modelo, DDL e consulta que devolve um DataFrame
+
+```python
+import datetime as dt, decimal
+import pandas as pd
+import sqlalchemy as sa
+from sqlalchemy import BigInteger, Numeric, String, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class Operacao(Base):
+    __tablename__ = "operacoes"
+    __table_args__ = {"comment": "Operações do mês"}
+    id_operacao: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    data_ref: Mapped[dt.date] = mapped_column(primary_key=True)
+    id_cliente: Mapped[int] = mapped_column(BigInteger, comment="Chave do cliente")
+    valor: Mapped[decimal.Decimal] = mapped_column(Numeric(18, 2))
+    descricao: Mapped[str | None] = mapped_column(String(200))
+
+engine = sa.create_engine("duckdb:///sandbox.duckdb", connect_args={"config": {"memory_limit": "4GB"}})
+Base.metadata.create_all(engine)
+
+consulta = select(Operacao).where(Operacao.data_ref >= dt.date(2026, 8, 1)).order_by(Operacao.id_operacao)
+
+# Caminho pandas puro: Decimal e date preservados como objetos Python.
+df = pd.read_sql(consulta, engine, coerce_float=False)
+
+# Caminho Arrow: SQL compilado pelo SQLAlchemy, executado pela conexão DuckDB.
+with engine.connect() as conn:
+    compilado = consulta.compile(dialect=engine.dialect)
+    parametros = [compilado.params[nome] for nome in compilado.positiontup]
+    con = conn.connection.dbapi_connection
+    tabela = con.execute(str(compilado), parametros).to_arrow_table()
+df = tabela.to_pandas(types_mapper=pd.ArrowDtype)   # decimal128(18, 2)[pyarrow], date32[day][pyarrow]
+```
+
+O dialeto usa `paramstyle = "numeric_dollar"`, então o SQL compilado traz `$1`, `$2` e a conexão
+DuckDB aceita a lista de parâmetros na ordem de `positiontup`. `compile_kwargs={"literal_binds": True}`
+gera o SQL com os valores embutidos, útil para `con.sql(...)` e para registrar a consulta numa view.
+
+### Ingestão de um DataFrame numa tabela definida pelo ORM
+
+```python
+import pyarrow as pa
+from sqlalchemy import insert
+from sqlalchemy.orm import Session
+
+def esquema_arrow(modelo) -> pa.Schema:
+    """Esquema Arrow derivado das colunas do modelo (tabela de tipos em docs/schema.md)."""
+    ...
+
+def ingerir(engine, modelo, df: pd.DataFrame) -> None:
+    tabela = pa.Table.from_pandas(df, schema=esquema_arrow(modelo), preserve_index=False)
+    with engine.begin() as conn:
+        con = conn.connection.dbapi_connection
+        con.register("entrada", tabela)
+        conn.execute(sa.text(f"INSERT INTO {modelo.__tablename__} BY NAME SELECT * FROM entrada"))
+        con.unregister("entrada")
+
+# Volumes pequenos, sem passar por Arrow: bulk insert do ORM (0,67 s para 50.000 linhas).
+with Session(engine) as session:
+    session.execute(insert(Operacao), df.to_dict("records"))
+    session.commit()
+```
+
+`pandas.DataFrame.to_sql(nome, engine, if_exists="append", index=False)` também funciona (0,75 s
+para 50.000 linhas), com `method=None`; `method="multi"` foi mais lento. O bulk insert do ORM aceita
+dicionários com chaves diferentes e `insert(Operacao).returning(Operacao)` devolve os objetos.
+
+Migrações com Alembic exigem registrar a implementação do dialeto:
+
+```python
+from alembic.ddl.impl import DefaultImpl
+
+class AlembicDuckDBImpl(DefaultImpl):
+    __dialect__ = "duckdb"
+```
+
+## Referências
+
+- Documentação do DuckDB, versão 1.5: <https://duckdb.org/docs/current/>. Páginas usadas: formato
+  de armazenamento, vetores, tipos de dados (visão geral, numéricos, texto, JSON), instruções
+  `CREATE TABLE`, `ALTER TABLE`, `DROP`, `COMMENT ON`, `CREATE INDEX`, `CREATE SEQUENCE`, `INSERT`,
+  `UPDATE`, `DELETE`, `MERGE INTO`, transações, concorrência, restrições, índices, compatibilidade com
+  PostgreSQL, guias de performance (esquema, indexação, joins, ajuste de cargas, ambiente, memória),
+  guias do cliente Python (ingestão, conversão, pandas, Arrow, polars, DB-API, tipos) e `COPY`.
+- Documentação do SQLAlchemy 2.0: <https://docs.sqlalchemy.org/en/20/>.
+- Repositório do dialeto `duckdb_engine`: <https://github.com/Mause/duckdb_engine>.
+- Documentação do pandas sobre `read_sql`, `to_sql` e o backend pyarrow: <https://pandas.pydata.org/docs/>.
+- Documentação do PyArrow: <https://arrow.apache.org/docs/python/>.
+- Tutorial de referência do projeto: <https://github.com/felipenoris/etl-cookbook-tutorial>.
+- Lista completa das páginas consultadas: [REFERENCES.md](../REFERENCES.md).
