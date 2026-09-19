@@ -325,8 +325,7 @@ Documentation is complete as of 2026-09-19 and merged on `main` by the user: PR 
 and SQLAlchemy documents), PR #4 (`docs/estrategia.md`, `docs/delta.md`, Python examples in every
 document, JSON treatment, S3 requirements, implementation stages) and PR #5 (identifier convention).
 The user merges each PR and syncs `main`; the next unit of work starts on a new `claude/` branch.
-PR #7 (2026-09-19, branch `claude/delta-implementacoes`) adds the protocol implementations section
-to `docs/delta.md` and awaits merge; while it is open, new commits go to that branch.
+PR #7 (protocol implementations section in `docs/delta.md`) was merged on 2026-09-19.
 
 No library code exists beyond the models: `pyproject.toml` declares no dependencies and there is no
 `tests/` directory. The next work follows the stage table in `docs/estrategia.md`:

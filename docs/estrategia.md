@@ -487,7 +487,7 @@ marcados, com uma amostra pequena.
 | 4. Motor Redshift | `serialize_db.engine.redshift`: conexão `redshift_connector`; sandbox com prefixo `exec_<id>_`; `ingest` por `COPY ... MANIFEST` com staging; `query` (multi-row `INSERT` para volumes pequenos, ADBC ou `UNLOAD` para leitura); `export_month` por `UNLOAD ... PARTITION BY` mais registro; limpeza do sandbox. | SQL compilado coberto por testes; integração com amostra num cluster. |
 | 5. Execução | `serialize_db.execution`: `Execution(db, engine, months)` com o ciclo abrir, ingerir, executar, auditar, publicar, encerrar; metadados de commit; log; CLI `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
 | 6. Carga inicial | Script de migração dos Parquet atuais para o Delta, por tabela e por mês, com cast para o contrato e relatório de contagens e somas; corte de leitura para o Delta. | Contagens e somas por mês iguais entre origem e Delta. |
-| 7. Publicação para clientes | Tabelas `prod_*` no Redshift; `version_diff` gera `DELETE` e `COPY` por mês; tabela de controle `serialize_db_publicacoes`. | Um mês alterado recarrega só esse mês. |
+| 7. Publicação para clientes | Tabelas `prod_*` no Redshift; `version_diff` gera `DELETE` e `COPY` por mês, de todas as tabelas da execução numa única transação; tabela de controle `serialize_db_publicacoes`. | Um mês alterado recarrega só esse mês. |
 | 8. Operação | Fechamentos trimestrais, `vacuum` mensal com `keep_versions`, compactação antes do fechamento, cópia profunda anual; documentação com `pdoc`; monitoração por `history()`. | Runbook escrito e testes de manutenção passando. |
 
 As etapas 1 e 2 não dependem da AWS e começam antes da etapa 0 terminar; a etapa 3 fecha um

@@ -103,7 +103,9 @@ json.loads(pathlib.Path("cad_operacoes/_delta_log/_last_checkpoint").read_text()
 - Não há índices, chaves primárias, únicas nem estrangeiras. O que existe é `NOT NULL` e `CHECK`,
   aplicados pelo escritor, e as estatísticas por arquivo, que fazem o papel do índice na leitura.
 - Não há transação entre tabelas. Cada tabela tem o próprio log, e um commit é atômico numa tabela.
-  A consistência entre tabelas de uma execução vem das versões registradas pela biblioteca.
+  Uma execução que publica várias tabelas faz um commit por tabela. A biblioteca fixa a versão de
+  cada tabela lida no início, grava `id_execucao` e essas versões em cada commit, e quem precisa de
+  um estado coerente entre tabelas lê esse conjunto de versões, não a última de cada uma.
 - Não há sessão nem bloqueio. O controle de concorrência é otimista: o commit falha se outro escritor
   mudou o que a transação leu, e cabe ao escritor refazer a operação.
 - O esquema está no log, versionado junto com os dados. Uma leitura de versão antiga usa o esquema
@@ -618,8 +620,9 @@ um `COPY (SELECT ... FROM delta_scan(uri) WHERE ...) TO ...` do DuckDB, com as o
    `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e é idempotente; um conflito de
    commit no mesmo mês significa outra execução publicando a mesma tabela, e a execução aborta.
 6. **Publicação no Redshift para clientes.** A diferença entre a versão publicada e a atual (ações
-   `add` novas) diz quais meses recarregar: numa transação, `DELETE` do mês e `COPY ... MANIFEST`
-   dos arquivos novos; a versão publicada fica numa tabela de controle.
+   `add` novas) diz quais meses recarregar: `DELETE` do mês e `COPY ... MANIFEST` dos arquivos novos,
+   para todas as tabelas da execução numa única transação, o que dá aos clientes a atomicidade entre
+   tabelas que o Delta não tem; a versão publicada de cada tabela fica numa tabela de controle.
 7. **Manutenção.** `optimize.compact` nos meses com muitos arquivos pequenos e `vacuum` com
    `keep_versions` dos fechamentos, como descrito em "Manutenção e retenção".
 
@@ -696,7 +699,8 @@ COMMIT;
 A tabela de staging existe porque a coluna de partição não está nos arquivos e o `COPY` só lê o
 conteúdo deles; se a lista de colunas no `COPY` de Parquet funcionar (pendente), a staging some. A
 publicação incremental compara as ações `add` da versão publicada com as da atual e recarrega só os
-meses que mudaram; a versão publicada fica numa tabela de controle
+meses que mudaram, de todas as tabelas da execução numa única transação; a versão publicada de cada
+tabela fica numa tabela de controle
 (`serialize_db_publicacoes(tabela, versao_delta, id_execucao, publicado_em)`).
 
 Escrita de volta, quando o sandbox é o Redshift:
