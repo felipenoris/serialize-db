@@ -8,9 +8,9 @@
 #   .venv/     o pacote, suas dependências e as de todos os grupos do pyproject.toml (pytest etc.)
 #   .duckdb/   extensões do DuckDB que o pacote e os testes carregam
 #
-# Todos os links dentro dessas pastas são relativos: a pasta inteira pode ser copiada (zip -ry ou tar,
-# que preservam links) para qualquer caminho do destino e usada com `.venv/bin/python`, sem uv e sem
-# rede. Revise este script quando surgir uma dependência nova fora do pyproject.toml (extensão do
+# Todos os links dentro dessas pastas são relativos: a pasta inteira pode ser levada num .tar.gz
+# (que preserva links e permissões) para qualquer caminho do destino e usada com `.venv/bin/python`,
+# sem uv e sem rede. Revise este script quando surgir uma dependência nova fora do pyproject.toml (extensão do
 # DuckDB, versão do Python, binário); os pacotes Python entram sozinhos pelo `uv sync`.
 set -euo pipefail
 

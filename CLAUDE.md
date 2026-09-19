@@ -146,7 +146,7 @@ matching group.
 
 | File | Subject |
 | --- | --- |
-| `README.md` | Initialization with `uv init --python 3.13`, dependencies (`uv sync --group dev`), the test suite and its environment variables, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `zip -ry` or tar, `.venv/bin/python -m pytest`). |
+| `README.md` | Initialization with `uv init --python 3.13`, dependencies (`uv sync --group dev`), the test suite and its environment variables, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target environment without internet: managed Python in `.python/`, the package with its runtime dependencies and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages in `pyproject.toml` are picked up by `uv sync`, but a new DuckDB extension, a Python version change or any other runtime asset must be added to the script by hand, and the user reruns it before packing the folder. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Delta, DuckDB and Redshift, and SQL portability between the two engines. It ends with the JSON field treatment per layer (model `JSON().with_variant(SUPER(), "redshift")`, Arrow `json_` extension, Delta `string`, DuckDB `JSON`, Redshift `SUPER` via `JSON_PARSE`). |
@@ -396,7 +396,8 @@ with `--link-mode copy`, the absolute links uv creates (`.venv/bin/python` and t
 `uv sync` ignores `UV_VENV_RELOCATABLE`, and the `.venv/bin/*` scripts keep absolute shebangs, hence
 `python -m pytest`), and DuckDB `httpfs`, `delta` and `aws` in `.duckdb/` (`extension_directory`,
 picked up by `conftest.py`). The script lists the DuckDB extensions by hand: a new one must be added
-there (see the repository index). Verified on 2026-09-19 by extracting the archive at another path
+there (see the repository index). The user transfers the folder as `.tar.gz`, never zip, to keep links and
+permissions. Verified on 2026-09-19 by extracting the archive at another path
 and running the suite with dead proxies and an empty `HOME`: 10 passed. The next work follows the
 stage table in `docs/estrategia.md`:
 

@@ -77,24 +77,18 @@ caminho. As três pastas estão no `.gitignore`. Rode o script de novo sempre qu
 mudar; se a dependência nova estiver fora do `pyproject.toml` (extensão do DuckDB, versão do Python),
 acrescente-a ao script antes.
 
-Empacotar preservando os links simbólicos. No `zip`, a opção `-y` guarda os links como links; sem
-ela, o `zip` copia o interpretador para dentro de `.venv/bin/` e a pasta só funciona no mesmo
-caminho da origem. Copiar arquivo a arquivo por uma pasta montada do S3 também perde os links.
+Empacotar com `tar`, que preserva os links simbólicos, as permissões e os demais metadados do
+sistema de arquivos. Copiar arquivo a arquivo por uma pasta montada do S3 perde os links, e sem eles
+`.venv/bin/python` só funciona no caminho de origem.
 
 ```
-cd ..
-zip -ry serialize-db.zip serialize-db -x 'serialize-db/.git/*'
-```
-
-ou, com `tar`:
-
-```
-tar czf serialize-db.tgz --exclude=serialize-db/.git -C .. serialize-db
+tar czf serialize-db.tar.gz --exclude=serialize-db/.git -C .. serialize-db
 ```
 
 No ambiente de destino, depois de extrair o pacote em qualquer caminho:
 
 ```
+tar xzf serialize-db.tar.gz
 cd serialize-db
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python -m pytest
 ```
