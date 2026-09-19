@@ -212,6 +212,12 @@ Each fact below is detailed in the file named at the end of its line.
   constructs the target lacks (`INSERT ... BY NAME`, `list_aggregate`) and turned DuckDB
   `VARCHAR(200)` into Redshift `VARCHAR(MAX)`; Redshift integration tests remain necessary.
   `docs/estrategia.md`
+- `DeltaTable.create` takes the contract schema with nullability, column comments in field
+  metadata, partition columns and table properties; `mode="ignore"` makes it idempotent. Time travel
+  reads a version with that version's schema, `restore` re-commits an older version, and `vacuum`
+  refuses a retention below the table's deleted-file retention (168 h by default) unless
+  `enforce_retention_duration=False`. Alembic has no role with Delta as the source of truth: a
+  reconcile step applies additive schema diffs and refuses destructive ones. `docs/estrategia.md`
 - PyIceberg 0.12.0 with a SQLite `sql` catalog writes Iceberg without a service: hidden partition by
   `month(data_ref)`, `overwrite` with a filter, rename and add columns, `add_files`; the catalog
   holds one row per table in a 20 KB file. DuckDB `iceberg_scan` needs the `metadata.json` path,

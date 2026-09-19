@@ -86,6 +86,11 @@ Verificado localmente:
 | Viagem no tempo no DuckDB | `delta_scan(caminho, version := 0)` e `ATTACH ... (TYPE delta)` com `AT (VERSION => 0)` funcionam; `delta_scan(...) AT (...)` não. |
 | `create_write_transaction` com um arquivo gravado pelo PyArrow em `mes=2026-04/` | Versão 4 criada; o DuckDB lê o arquivo registrado. |
 | Tipos do contrato gravados de um esquema Arrow | `int16` vira `short`, `int32` `integer`, `int64` `long`, `bool` `boolean`, `float64` `double`, `decimal128(18, 2)` `decimal(18,2)`, `string` `string`, `date32` `date`, `timestamp[us]` `timestamp_ntz`, `timestamp[us, tz=UTC]` `timestamp`. A coluna `timestamp_ntz` eleva o protocolo a leitor 3 e escritor 7 com o recurso `timestampNtz`. Um `timestamp[ns]` é aceito e gravado em microssegundos; um fuso `America/Sao_Paulo` é aceito e lido como o mesmo instante. O DuckDB lê `SMALLINT`, `INTEGER`, `BIGINT`, `BOOLEAN`, `DOUBLE`, `DECIMAL(18,2)`, `VARCHAR`, `DATE`, `TIMESTAMP` e `TIMESTAMP WITH TIME ZONE`. A tabela de tipos de [`schema.md`](schema.md) traz a coluna Delta. |
+| `DeltaTable.create(esquema, partition_by=..., name=..., description=..., configuration=...)` | Commit `CREATE TABLE` na versão 0 com nulidade, comentários de coluna em `metadata`, nome, descrição e as propriedades `delta.logRetentionDuration` e `delta.deletedFileRetentionDuration`; `mode="ignore"` repete a chamada sem criar versão nova. |
+| Esquema na viagem no tempo | `delta_scan(caminho, version := 0)` mostra as seis colunas da versão 0; a versão atual mostra sete. |
+| `restore(1)` | Nova versão 5 com os arquivos e o esquema da versão 1; operação `RESTORE` no histórico. |
+| `vacuum(retention_hours=0, dry_run=True)` | Recusado: `minimum retention for vacuum is configured to be greater than 168 hours`; com `enforce_retention_duration=False`, o dry run listou três arquivos. |
+| `convert_to_deltalake(uri, partition_by=..., partition_strategy="hive")` | Existe na API para registrar um diretório Parquet no lugar, sem reescrever; não foi testado. |
 
 ### DuckLake
 
@@ -320,12 +325,22 @@ polars, PyArrow e Ibis com `DataFrameModel`; Soda Core roda checks SodaCL em Red
 `datacontract-cli` 1.2.0 exporta um contrato (Open Data Contract Standard) para DDL de Redshift e
 DuckDB, dbt e SodaCL e testa contra DuckDB sobre arquivos no S3 e contra Redshift.
 
-A migração de esquema muda de natureza. As tabelas do sandbox são recriadas a cada execução a partir
-do contrato. A evolução das tabelas permanentes fica no formato: `schema_mode="merge"` e `alter` no
-Delta, `ALTER TABLE` no DuckLake. As tabelas publicadas no Redshift recebem `ALTER TABLE ADD COLUMN` ou
-são recarregadas. O Alembic 1.20.0 continua possível (o dialeto do Redshift traz a implementação; o
-DuckDB precisa do `DefaultImpl` de [`duckdb.md`](duckdb.md)), mas passa a ser opcional. O Atlas cobre
-o Redshift só no plano pago e não cobre o DuckDB.
+A migração de esquema muda de natureza. A tabela Delta não tem DDL em SQL: `DeltaTable.create` recebe
+o esquema derivado do contrato, com nulidade, comentários de coluna em `metadata`, colunas de
+partição, nome, descrição e propriedades, e `mode="ignore"` torna a criação idempotente. As tabelas do
+sandbox são recriadas a cada execução a partir do contrato. A evolução das tabelas permanentes é uma
+reconciliação entre o contrato e o esquema atual da tabela: uma diferença aditiva (coluna nova
+anulável ou com padrão) é aplicada por `alter.add_columns` ou `schema_mode="merge"`; uma diferença
+destrutiva (renomear, remover, estreitar tipo) exige reescrever a tabela com
+`schema_mode="overwrite"`, e a biblioteca recusa aplicá-la sem essa ordem explícita. As tabelas
+publicadas no Redshift seguem o mesmo diff: `ALTER TABLE ADD COLUMN` no caso aditivo, recriação e
+recarga no destrutivo. A viagem no tempo não é migração: ela lê uma versão antiga com o esquema
+daquela versão, e `restore` volta dados e esquema a uma versão anterior como um commit novo. O alcance
+é limitado por `delta.logRetentionDuration` e `delta.deletedFileRetentionDuration`, e `vacuum` recusa
+uma retenção abaixo da configurada (168 horas por padrão) sem `enforce_retention_duration=False`. O
+que o Alembic dava, o histórico revisável e o diff entre modelo e banco, vem do arquivo de esquema
+gerado e versionado no repositório ([`schema.md`](schema.md)) e do histórico do Delta. O Alembic sai.
+O Atlas cobre o Redshift só no plano pago e não cobre o DuckDB.
 
 ## Rust e PyO3
 
@@ -369,9 +384,15 @@ partes:
 5. Publicação no Redshift para clientes: `COPY ... MANIFEST` incremental por diferença de versões,
    numa transação com `DELETE` do mês.
 
+A carga inicial dos Parquet existentes é uma passagem por tabela e por mês: leitura pelo DuckDB ou pelo
+PyArrow com cast para o contrato (os modelos atuais usam `Double` onde o contrato pede
+`Numeric(18, 2)`) e `write_deltalake(mode="append")` em lotes de `RecordBatch`, sem a tabela inteira
+na memória. `convert_to_deltalake` registra os arquivos no lugar, sem reescrever, e só serve quando
+eles já têm os tipos, a ordem de colunas e o layout Hive do contrato.
+
 O que sai: o ORM para cargas linha a linha, as chaves estrangeiras `DEFERRABLE`, o `Identity`, os
-manifestos próprios e a pergunta em aberto do commit atômico. O que fica opcional: Alembic, SQLGlot
-como teste de compatibilidade.
+manifestos próprios, a pergunta em aberto do commit atômico e o Alembic, substituído pela
+reconciliação do esquema. O que fica opcional: SQLGlot como teste de compatibilidade.
 
 O DuckLake fica como alternativa documentada, não adotada: suas vantagens, renomear e remover colunas
 sem reescrever dados e a tabela nativa no DuckDB, não pesam num pipeline que raramente renomeia
