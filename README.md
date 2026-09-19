@@ -57,6 +57,36 @@ variáveis `AWS_*` ou perfil), das permissões `s3:ListBucket`, `s3:GetObject`, 
 `delta` e `aws` do DuckDB. A suíte local precisa só da extensão `delta`. Fora das raízes informadas,
 o que uma sessão grava é `.pytest_cache/` na raiz do repositório, do próprio pytest.
 
+## Diagnóstico do ambiente AWS
+
+```
+.venv/bin/python diagnose_aws.py s3://bucket/prefixo
+```
+
+Só leitura: nada é gravado no bucket. O script imprime, cada um com timeout curto e o tempo gasto, as
+variáveis de ambiente, a região como o `boto3` e o delta-rs a resolvem, o DNS dos endpoints (IP
+privado indica endpoint VPC de interface com DNS privado; IP público, gateway endpoint ou internet),
+as credenciais do `boto3`, a listagem de `<raiz>/serialize-db-poc/` pelo `boto3`, pelo delta-rs e
+pelo DuckDB, e o STS. O resumo diz o que a suíte S3 exige do ambiente e se ela precisa de
+manutenção:
+
+- **Região.** O botocore lê `AWS_DEFAULT_REGION` ou o perfil, não `AWS_REGION`, e sem região usa o
+  endpoint global `s3.amazonaws.com`, que um endpoint VPC regional não atende. O delta-rs lê
+  `AWS_REGION` e `AWS_DEFAULT_REGION`; sem nenhuma, consulta o IMDS e cai em `us-east-1`. A suíte
+  copia a região do `boto3` para `AWS_REGION`, num sentido só: um ambiente com apenas `AWS_REGION` e
+  sem `~/.aws/config` precisa de manutenção.
+- **STS.** `test_boto3_credential_source` chama `get_caller_identity`; um ambiente só com endpoint
+  VPC do S3 não alcança o STS, e o teste falharia depois dos 60 s por tentativa e 5 tentativas do
+  botocore. O diagnóstico distingue "o serviço respondeu com erro" de "sem resposta": só o segundo
+  pede manutenção.
+- **Proxy.** Nada na suíte exige proxy; sem as variáveis, nada a fazer.
+- **Endpoint.** Com `AWS_ENDPOINT_URL`, o `boto3` e o delta-rs o usam, e a suíte não o passa ao
+  secret do DuckDB.
+
+O código de saída é 0 quando os três clientes listam o prefixo e o STS responde. Sem rede, o
+diagnóstico inteiro leva um minuto e meio: o `boto3` desiste em 11 s, o delta-rs em 10 s
+(`max_retries` e `retry_timeout` em `storage_options`) e o DuckDB no teto de 60 s do subprocesso.
+
 ## Credenciais do delta-rs e proxy
 
 O `deltalake` (delta-rs) tem cliente HTTP próprio, em Rust, e não usa o `boto3`: busca as
