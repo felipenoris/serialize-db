@@ -146,3 +146,101 @@ Never read the file `prompts.md`.
 # Claude Memory
 
 Use this section to store you memory for this project. Use a "size budget" of 50KB for this file.
+
+## Repository index
+
+Read the file listed here before researching its subject again. Each document names the pages it
+came from, and `REFERENCES.md` collects every URL consulted so far, grouped by subject: Parquet
+format, Redshift, DuckDB, PyArrow, SQLAlchemy, pandas, PyIceberg, Glue Data Catalog, Athena, Lake
+Formation, SageMaker Unified Studio, S3 and Python packages. New research appends to the matching
+group.
+
+| File | Subject |
+| --- | --- |
+| `README.md` | Initialization with `uv init --python 3.13`. |
+| `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
+| `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info`, constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Iceberg, DuckDB and Redshift, and SQL portability between the two engines. |
+| `docs/parquet.md` | Parquet file layout and every metadata structure (`FileMetaData`, schema, row group, `ColumnMetaData`, page index, Bloom filters, page headers, key-value pairs, size and geospatial statistics, encryption, summary files), inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
+| `docs/duckdb.md` | DuckDB as the execution sandbox. |
+| `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
+| `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, Core statements, the ORM for DDL and for DML, keys generated on the server, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
+| `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
+
+`docs/duckdb.md` and `docs/redshift.md` share a section order: data organization and the differences
+from PostgreSQL, supported types with `DECIMAL` and JSON, DDL, `SELECT`/`INSERT`/`UPDATE`/`DELETE`,
+ingestion, export to Parquet, performance recommendations, SQLAlchemy support, references.
+
+## What the documents establish
+
+The load-bearing facts, each detailed in the file named at the end of the line.
+
+- Arrow is the ingestion path for both engines. Loading 300,000 rows into DuckDB from an Arrow table
+  took 0.008 s, against 5.2 s for 50,000 rows through `executemany`. `docs/duckdb.md`
+- A pandas column of `object` holding `Decimal` gets its DuckDB type from a sample of 1,000 values:
+  the sample column became `DECIMAL(7, 2)`, which a larger value in a later batch would reject.
+  Casting to Arrow with the contract schema first fixes the type. `docs/duckdb.md`
+- `pandas.read_sql` turns `Decimal` into `float` unless `coerce_float=False`, and
+  `dtype_backend="pyarrow"` returns `double` for `DECIMAL` and `string` for `DATE`. Only the Arrow
+  path preserves `decimal128(18, 2)` and `date32`. `docs/duckdb.md`
+- With `redshift_connector`, `executemany` makes one round trip per row, and the dialect does not
+  rewrite it into a multi-row `VALUES`. Volume goes through Parquet on S3 and `COPY`; small batches
+  go through `insert(Modelo).values(lista)`. `docs/redshift.md`
+- The generic `Identity()` disappears from the Redshift DDL, and DuckDB rejects it outright. Business
+  keys generated on the client avoid the problem on both. `docs/sqlalchemy.md`
+- A `@compiles(CreateTable, "redshift")` hook that reads `Table.info` produced the same
+  `DISTSTYLE KEY DISTKEY (...) SORTKEY (...)` as the `redshift_*` arguments, which keeps the models
+  importable without the dialect installed. `docs/redshift.md`
+- `duckdb_engine` reflects columns, types and comments, but not primary keys or indexes; variables
+  in the Python scope are invisible to queries issued through the engine, so a DataFrame needs
+  `register` on the raw connection. `docs/duckdb.md`
+- The DuckDB Parquet writer marks every column `optional`, even `NOT NULL`, writes `DECIMAL(18, 2)`
+  as `INT64` and writes no page index. PyArrow writes `required` and `FIXED_LEN_BYTE_ARRAY(8)`.
+  `docs/parquet.md`
+- `COPY ... FROM` in DuckDB is positional and casts convertible types in silence, so type
+  enforcement belongs on the metadata, before the load. `docs/parquet.md`
+- Constraints cost on load and do not help queries in either engine: a DuckDB load of 300,000 rows
+  went from 0.008 s to 0.073 s with a composite primary key, and Redshift keys are informational.
+  `docs/schema.md`
+
+## The state of the code
+
+`src/serialize_db/model/` holds three modules of declarative models: `model_base_contabil.py`
+(`dom_veiculos`, `dom_hierarquias_contas`, `cad_contas`, `rel_contas_hierarquias`,
+`cad_lancamentos`), `model_base_gerencial.py` (`dom_mensuracoes`, `dom_segmentos`, `dom_negocios`,
+`cad_operacoes`, `rel_contrato_operacao`, `cad_contratos`, `cad_lancamentos`) and
+`model_db_projetado.py` (`cad_contratos`, `cad_aliquotas`).
+
+Two of them fail to import: `model_base_gerencial.py` runs `from lib_base_contabil import Base` and
+`model_db_projetado.py` runs `from lib_base_gerencial import Base`, module names the repository does
+not have. Only `model_base_contabil.py` declares `Base`. The models carry no dialect options and no
+`info` dictionaries, which `docs/schema.md` proposes, and they use `Double` where the contract
+expects `Numeric(18, 2)`. Foreign keys are declared `deferrable=True, initially='DEFERRED'`, which
+neither DuckDB nor Redshift honors.
+
+`REFERENCES.md` links `docs/plano-de-implementacao.md`, which is not in the repository.
+
+## Environment of the measurements
+
+The examples in `docs/parquet.md`, `docs/duckdb.md` and `docs/sqlalchemy.md` ran on 2026-09-18 with
+Python 3.13, DuckDB 1.5.5, PyArrow 25.0.1, pandas 3.0.6, polars 1.44.2, SQLAlchemy 2.0.54,
+duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 and redshift_connector 2.1.16. The sample is 300,000
+rows of `operacoes` with the columns `id_operacao`, `data_ref`, `id_cliente`, `valor` and
+`descricao`. The Redshift statements were compiled only; nothing ran against a cluster.
+
+## Questions the official documentation does not answer
+
+The documents mark these as pending the proof of concept.
+
+- Whether `COPY` from Parquet accepts a column list. `awswrangler` emits
+  `COPY tabela (colunas) ... FORMAT AS PARQUET`, while the `COPY` reference describes the column list
+  only for flat files.
+- The correspondence between Parquet physical types and Redshift columns in `COPY`, in particular
+  `TIMESTAMP` as `INT64` in microseconds and the physical type of `DECIMAL`.
+- What `COPY` from Parquet does when a string exceeds the target `VARCHAR`: truncate or abort.
+- Whether Redshift Spectrum maps plain Parquet columns by name or by position.
+- The physical types `UNLOAD` writes for `TIMESTAMP` and `DECIMAL`, whether its columns are
+  required, and whether it writes minimum and maximum statistics. The three affect `add_files`.
+
+One gap is already understood and needs a decision rather than a test: `sqlalchemy-redshift` compiles
+`Text` as `TEXT`, which Redshift stores as `VARCHAR(256)`, so the `VARCHAR(65535)` of the contract
+needs `String(65535)` or a `@compiles(Text, "redshift")` rule.
