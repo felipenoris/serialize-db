@@ -466,6 +466,7 @@ Documentação da versão 2.0:
 - <https://docs.sqlalchemy.org/en/20/core/compiler.html>
 - <https://docs.sqlalchemy.org/en/20/core/dml.html>
 - <https://docs.sqlalchemy.org/en/20/core/connections.html>
+- <https://docs.sqlalchemy.org/en/20/faq/sqlexpressions.html>
 - <https://docs.sqlalchemy.org/en/20/core/engines.html>
 - <https://docs.sqlalchemy.org/en/20/core/event.html>
 - <https://docs.sqlalchemy.org/en/20/core/events.html>
