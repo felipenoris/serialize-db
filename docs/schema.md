@@ -97,7 +97,9 @@ o texto.
 
 ## Portabilidade de SQL entre DuckDB e Redshift
 
-- As consultas usam construções do SQLAlchemy, não SQL em texto.
+- As consultas nascem como construções do SQLAlchemy, e o texto SQL gerado por dialeto substitui,
+  uma interação por vez, a compilação pelo dialeto em tempo de execução
+  ([`sqlalchemy.md`](sqlalchemy.md)).
 - Funções com nomes ou semânticas diferentes nos dois bancos ganham uma regra `@compiles` por dialeto.
   A lista sai do código atual do pipeline.
 - O DuckDB aceita construções do PostgreSQL ausentes no Redshift, como arrays e `ON CONFLICT`. Uma
