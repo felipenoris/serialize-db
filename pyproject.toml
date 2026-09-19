@@ -24,7 +24,10 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["s3: exige um bucket S3 e credenciais da AWS"]
+markers = [
+    "local: roda numa pasta local, sem AWS",
+    "s3: exige uma raiz S3, credenciais da AWS e acesso ao bucket",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
