@@ -39,9 +39,9 @@ operacoes = Table(
 
 Os tipos genéricos (`Integer`, `BigInteger`, `Numeric(precisao, escala)`, `String(n)`, `Text`,
 `Boolean`, `Date`, `DateTime(timezone=...)`, `Uuid`, `JSON`, `LargeBinary`) são traduzidos por cada
-dialeto na compilação: `Numeric(18, 2)` vira `NUMERIC(18, 2)` no Redshift e no DuckDB (`DECIMAL(18,2)`
-no catálogo do DuckDB), `String(200)` vira `VARCHAR(200)` no Redshift e `VARCHAR` no DuckDB. Os tipos
-específicos ficam em `sqlalchemy.dialects.<dialeto>` e nos dialetos externos
+dialeto na compilação: `Numeric(18, 2)` vira `NUMERIC(18, 2)` nos dois (`DECIMAL(18,2)` no catálogo
+do DuckDB), `String(200)` vira `VARCHAR(200)` nos dois, e o catálogo do DuckDB descarta o
+comprimento. Os tipos específicos ficam em `sqlalchemy.dialects.<dialeto>` e nos dialetos externos
 (`sqlalchemy_redshift.dialect.SUPER`, `TIMESTAMPTZ`). `tipo.with_variant(outro, "dialeto")` troca o
 tipo num dialeto só. A [tabela de tipos do contrato](schema.md) fixa a correspondência com Arrow,
 Iceberg, DuckDB e Redshift.
@@ -54,6 +54,55 @@ Restrições e índices são objetos: `PrimaryKeyConstraint`, `ForeignKey` na co
 ```python
 PrimaryKeyConstraint("id_operacao", "data_ref").ddl_if(dialect="redshift")
 ```
+
+### Restrições adiáveis
+
+Uma restrição comum é verificada ao fim de cada comando. `DEFERRABLE` permite adiar a verificação
+para o fim da transação; `NOT DEFERRABLE`, o padrão, proíbe o adiamento. Entre as adiáveis,
+`INITIALLY IMMEDIATE`, o padrão, verifica após cada comando, e `INITIALLY DEFERRED` verifica só no
+commit; `SET CONSTRAINTS {ALL | nome} {DEFERRED | IMMEDIATE}` muda o modo dentro da transação, e a
+mudança para `IMMEDIATE` verifica na hora o que estava pendente. No PostgreSQL, só `UNIQUE`,
+`PRIMARY KEY`, `EXCLUDE` e `FOREIGN KEY` aceitam a cláusula; `NOT NULL` e `CHECK` são sempre
+imediatas, e uma restrição adiável não serve de árbitro em `INSERT ... ON CONFLICT`.
+
+O adiamento serve a linhas que se referem a linhas ainda não gravadas na mesma transação: uma tabela
+de ligação carregada antes das tabelas que ela referencia, duas linhas que apontam uma para a outra,
+uma hierarquia em que pai e filho entram no mesmo lote, ou a troca de dois valores únicos entre
+linhas. A restrição vale no commit, não a cada comando.
+
+No SQLAlchemy, `deferrable` (booleano) e `initially` (texto) existem em `ForeignKey` e em todas as
+classes de restrição (`ForeignKeyConstraint`, `PrimaryKeyConstraint`, `UniqueConstraint`,
+`CheckConstraint`) e só produzem DDL; o banco decide quais restrições aceitam a cláusula. A
+declaração
+
+```python
+ForeignKey("cad_contas.id_conta", deferrable=True, initially="DEFERRED")
+```
+
+compila, nos dois dialetos do projeto, para
+`FOREIGN KEY(id_conta) REFERENCES cad_contas (id_conta) DEFERRABLE INITIALLY DEFERRED`. A unidade de
+trabalho do ORM não muda com a cláusula: ela continua ordenando os `INSERT` pelas dependências entre
+tabelas, e o `SET CONSTRAINTS` fica a cargo da aplicação, em `text()`. Para os ciclos que o
+adiamento costuma resolver, o SQLAlchemy tem mecanismos próprios: `use_alter=True` na
+`ForeignKeyConstraint` emite a restrição por `ALTER TABLE ... ADD CONSTRAINT` depois das duas tabelas
+(e exige `name` para o `DROP`), e `relationship(..., post_update=True)` grava as duas linhas com
+`INSERT` e fecha a ligação com um `UPDATE`, na tabela com chave para si mesma ou em duas tabelas que
+se referenciam.
+
+Nos bancos do projeto a cláusula não tem efeito útil:
+
+| Banco | Comportamento verificado |
+| --- | --- |
+| DuckDB 1.5.5 | `DEFERRABLE`, `NOT DEFERRABLE` e `INITIALLY` em `PRIMARY KEY`, `UNIQUE` e `FOREIGN KEY` falham com `Constraint not implemented!`; `SET CONSTRAINTS` é erro de sintaxe; `ALTER TABLE ... ADD CONSTRAINT` falha com `No support for that ALTER TABLE option yet!`, então `use_alter=True` também derruba o `create_all`. |
+| Redshift | A sintaxe do `CREATE TABLE` não tem `DEFERRABLE` nem `INITIALLY`, e chaves primárias, únicas e estrangeiras são informativas, nunca verificadas. Se o parser aceita e ignora a cláusula fica pendente da prova de conceito. |
+
+Os modelos em `src/serialize_db/model/` declaram `deferrable=True, initially='DEFERRED'` em todas as
+chaves estrangeiras de `model_base_contabil.py` e `model_base_gerencial.py`, inclusive nas compostas,
+e em nenhuma de `model_db_projetado.py`. Com isso, o `create_all` falha no DuckDB na primeira dessas
+tabelas. A [política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
+estrangeiras ficam de fora e a auditoria verifica a integridade referencial com o mês inteiro
+carregado, antes da publicação, que é a verificação adiada feita pelo próprio pipeline; no Redshift a
+chave é declarada só quando auditada, sem `deferrable`.
 
 O nome do esquema vai em `Table.schema` ou em `MetaData(schema=...)`; `BLANK_SCHEMA` exclui uma tabela
 do padrão. A opção de execução `schema_translate_map` troca nomes de esquema por conexão, útil quando
@@ -80,10 +129,10 @@ sql_redshift = str(CreateTable(operacoes).compile(dialect=RedshiftDialect_redshi
 sql_duckdb = str(CreateTable(operacoes).compile(dialect=duckdb_engine.Dialect()))
 ```
 
-Os construtores de DDL (`CreateTable`, `DropTable`, `CreateSequence`, `CreateIndex`, `SetTableComment`)
-são `ExecutableDDLElement` e aceitam `execute_if(dialect=..., callable_=...)`. Os eventos
-`before_create`, `after_create`, `before_drop` e `after_drop` de `MetaData` e `Table` recebem a
-conexão e permitem emitir DDL adicional:
+Os construtores de DDL (`CreateTable`, `DropTable`, `CreateSequence`, `CreateIndex`,
+`SetTableComment`) são `ExecutableDDLElement` e aceitam `execute_if(dialect=..., callable_=...)`. Os
+eventos `before_create`, `after_create`, `before_drop` e `after_drop` de `MetaData` e `Table`
+recebem a conexão e permitem emitir DDL adicional:
 
 ```python
 from sqlalchemy import event, DDL
@@ -118,7 +167,7 @@ auditorias do projeto, precisa de uma consulta ao catálogo para as chaves no Du
 | `Table.comment`, `Column.comment` | Emitidos como `COMMENT ON` pelos dialetos que suportam comentários; refletidos de volta. |
 | `Column.key`, `Column.doc` | Nome alternativo no Python e documentação interna, sem efeito no banco. |
 | `MetaData(naming_convention=...)` | Nomes determinísticos de restrições e índices (`"pk": "%(table_name)s_pk"`). |
-| Argumentos `<dialeto>_<opcao>` | Opções de DDL por dialeto (`redshift_sortkey`, `postgresql_partition_by`). O SQLAlchemy valida cada argumento contra o dialeto registrado e recusa os desconhecidos, então o dialeto precisa estar instalado. |
+| Argumentos `<dialeto>_<opcao>` | Opções de DDL por dialeto (`redshift_sortkey`, `postgresql_partition_by`). Com o dialeto instalado, um argumento que ele não aceita é `ArgumentError`; sem o dialeto, o argumento é aceito com o aviso `Can't validate argument` e não produz DDL. |
 | `Table.implicit_returning=False` | Desliga `RETURNING` para a tabela, para backends com gatilhos ou sem suporte. |
 | `TypeDecorator` | Tipo derivado com `process_bind_param` e `process_result_value`; `cache_ok = True` para participar do cache de compilação. Serve, por exemplo, para forçar UTC em `DateTime` ou serializar JSON. |
 | `@compiles(Construto, "dialeto")` | Troca a compilação de um tipo, de um comando ou de um DDL num dialeto. Exemplo: [gancho que aplica `Table.info` ao `CREATE TABLE` do Redshift](redshift.md). |
@@ -129,6 +178,8 @@ auditorias do projeto, precisa de uma consulta ao catálogo para as chaves no Du
 ## Statements de insert, update, delete e select
 
 ```python
+from datetime import date
+from decimal import Decimal
 from sqlalchemy import insert, select, update, delete, func, text
 
 stmt = insert(operacoes).values(id_operacao=1, data_ref=date(2026, 8, 1), id_cliente=100, valor=Decimal("10.50"))
@@ -165,18 +216,21 @@ Regras que importam:
 
 - O `executemany` com lista de dicionários usa apenas as chaves do primeiro dicionário para montar o
   `VALUES`; dicionários heterogêneos são recurso do ORM.
-- O recurso `insertmanyvalues` reescreve o `executemany` em comandos `INSERT ... VALUES (...), (...)`
-  com até 1.000 linhas por comando (`insertmanyvalues_page_size`) e até 32.700 parâmetros. Ele é
-  usado sempre que há `RETURNING` e, sem `RETURNING`, apenas nos dialetos com
-  `use_insertmanyvalues_wo_returning` verdadeiro: psycopg2, duckdb_engine e o dialeto do Redshift com
-  psycopg2 sim; o dialeto do Redshift com `redshift_connector` não, e nele o `executemany` vira uma ida
-  ao servidor por linha.
+- O recurso `insertmanyvalues` reescreve o `executemany` em comandos `INSERT ... VALUES (...),
+  (...)` com até 1.000 linhas por comando (`insertmanyvalues_page_size`) e até 32.700 parâmetros.
+  Ele é usado sempre que há `RETURNING` e, sem `RETURNING`, apenas nos dialetos com
+  `use_insertmanyvalues_wo_returning` verdadeiro: psycopg2, duckdb_engine e o dialeto do Redshift
+  com psycopg2 sim; o dialeto do Redshift com `redshift_connector` não, e nele o `executemany` vira
+  uma ida ao servidor por linha.
 - `insert(...).values(lista)` gera um único comando com todas as linhas, sem paginação; o limite é o
   do banco (16 MB por comando no Redshift).
-- `insert(...).returning(...)` e `update(...).returning(...)` existem em PostgreSQL, SQLite, MariaDB,
-  Oracle, SQL Server e DuckDB; o Redshift não tem `RETURNING`.
+- `insert(...).returning(...)` existe em todos os dialetos incluídos, exceto MySQL, e no DuckDB;
+  `update(...).returning(...)` também, exceto no MariaDB. O Redshift não tem `RETURNING`, mas o
+  dialeto herda `insert_returning = True` do PostgreSQL e o emite quando há valores gerados no
+  servidor; `Table.implicit_returning = False` desliga.
 - `stmt.compile(dialect=..., compile_kwargs={"literal_binds": True})` embute os valores no SQL; a
-  compilação normal produz o estilo de parâmetro do dialeto (`$1` no duckdb_engine, `%s` no Redshift).
+  compilação normal produz o estilo de parâmetro do dialeto (`$1` no duckdb_engine ligado a um
+  engine, `%s` no Redshift).
 - `Result` oferece `all()`, `first()`, `scalar()`, `scalars()`, `mappings()` e `partitions(n)` para
   consumir em pedaços; `rowcount` depende do dialeto e é `-1` no duckdb_engine.
 - `pd.read_sql(consulta, engine)` aceita o `select` do SQLAlchemy; `coerce_float=True`, o padrão,
@@ -190,7 +244,8 @@ Regras que importam:
 ```python
 import datetime as dt, decimal
 from typing import Annotated
-from sqlalchemy import BigInteger, Numeric, String, MetaData
+import sqlalchemy as sa
+from sqlalchemy import BigInteger, MetaData, Numeric, PrimaryKeyConstraint, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, declared_attr
 
 Valor = Annotated[decimal.Decimal, mapped_column(Numeric(18, 2))]
@@ -232,8 +287,9 @@ class Operacao(Rastreio, Base):
   `Mapped[str | None]` é `NULL`, `Mapped[str]` é `NOT NULL`, `primary_key=True` implica `NOT NULL`;
   `mapped_column(nullable=...)` prevalece.
 - `type_annotation_map` na classe base troca a tabela padrão de tipos (`int` para `Integer`, `str`
-  para `String()`, `Decimal` para `Numeric()` sem precisão, `datetime` para `DateTime()` sem fuso). O
-  contrato exige `BigInteger`, `Numeric(18, 2)` e `TIMESTAMP` com fuso, então o mapa é parte do modelo.
+  para `String()`, `Decimal` para `Numeric()` sem precisão, `datetime` para `DateTime()` sem fuso).
+  O contrato exige `BigInteger`, `Numeric(18, 2)` e `TIMESTAMP` com fuso, então o mapa é parte do
+  modelo.
 - `Annotated` com `mapped_column` define tipos reutilizáveis, como `Valor` acima.
 - `__table_args__` aceita um dicionário ou uma tupla de restrições com o dicionário no fim; nele
   entram `schema`, `comment`, `info`, `implicit_returning` e os argumentos de dialeto.
@@ -259,9 +315,9 @@ mapper = inspect(Operacao)             # Mapper: mapper.columns, mapper.attrs, m
 ```
 
 Ganchos `@compiles(CreateTable, "redshift")` e eventos `before_create` leem `Table.info` e produzem
-o DDL específico do banco, o que dispensa os argumentos `redshift_*` no modelo e mantém os modelos
-importáveis sem o dialeto instalado. `comment` documenta o esquema no próprio banco; `doc` fica só
-no Python.
+o DDL específico do banco, o que dispensa os argumentos `redshift_*` no modelo e o aviso que eles
+geram sem o dialeto instalado. `comment` documenta o esquema no próprio banco; `doc` fica só no
+Python.
 
 ## ORM: insert, update, delete e select
 
@@ -272,7 +328,8 @@ from sqlalchemy import select, insert, update, delete
 from sqlalchemy.orm import Session
 
 with Session(engine) as session:
-    session.add(Operacao(id_operacao=1, data_ref=dt.date(2026, 8, 1), id_cliente=100, valor=Decimal("10.50")))
+    session.add(Operacao(id_operacao=1, data_ref=dt.date(2026, 8, 1), id_cliente=100,
+                         valor=decimal.Decimal("10.50"), id_execucao="abc123"))
     session.commit()
 
     op = session.get(Operacao, (1, dt.date(2026, 8, 1)))
@@ -280,6 +337,7 @@ with Session(engine) as session:
     pares = session.execute(select(Operacao.id_operacao, Operacao.valor)).all()
 
     op.descricao = "ajustada"          # UPDATE no flush
+    session.commit()
     session.delete(op)                 # DELETE no flush
     session.commit()
 ```
@@ -307,13 +365,13 @@ with Session(engine) as session:
   diferentes, agrupa-os por conjunto de chaves e emite um `INSERT` por grupo; linhas com `None`
   também viram grupos separados, para que `DEFAULT` do servidor se aplique, e `render_nulls=True`
   mantém tudo num lote. As chaves são os nomes dos atributos, não das colunas.
-- `insert(Modelo).returning(Modelo)` devolve objetos; `sort_by_parameter_order=True` garante a
-  ordem dos retornos em relação à entrada, ao custo de inserções uma a uma em backends sem forma
-  ordenada.
+- `insert(Modelo).returning(Modelo)` devolve objetos; `sort_by_parameter_order=True` garante a ordem
+  dos retornos em relação à entrada, ao custo de inserções uma a uma quando a chave é gerada no
+  servidor e o backend não tem forma ordenada; com chaves geradas no cliente o lote se mantém.
 - `insert(Modelo).values(lista)` desliga o modo bulk e gera um único comando; é a forma para
   expressões SQL por linha e para upserts.
-- `update(Modelo)` com lista de dicionários atualiza por chave primária; `update(...).where(...)`
-  e `delete(...).where(...)` são comandos em lote, com `synchronize_session` (`auto`, `evaluate`,
+- `update(Modelo)` com lista de dicionários atualiza por chave primária; `update(...).where(...)` e
+  `delete(...).where(...)` são comandos em lote, com `synchronize_session` (`auto`, `evaluate`,
   `fetch`, `False`) decidindo como os objetos na sessão são atualizados.
 - Upserts usam o construtor `insert` do dialeto: `sqlalchemy.dialects.postgresql.insert(...).
   on_conflict_do_update(index_elements=[...], set_={...})` (aceito pelo DuckDB) e o equivalente do
@@ -323,28 +381,31 @@ with Session(engine) as session:
 ### Chaves geradas no servidor
 
 Uma coluna inteira única na chave primária tem `autoincrement="auto"`: cada dialeto emite o seu
-mecanismo no DDL (`SERIAL` no PostgreSQL, `IDENTITY` no SQL Server, `AUTOINCREMENT` no SQLite) e o
-ORM recupera o valor após o `INSERT` por `RETURNING`, quando o backend suporta, ou por
-`cursor.lastrowid`. Com `RETURNING` e `insertmanyvalues`, muitos objetos entram num comando só, e o
-SQLAlchemy usa uma coluna sentinela (a própria chave ou uma coluna marcada com
-`insert_sentinel=True`) para casar os valores devolvidos com os objetos.
+mecanismo no DDL (`SERIAL` no PostgreSQL, `IDENTITY` no SQL Server, `AUTO_INCREMENT` no MySQL; no
+SQLite a coluna `INTEGER PRIMARY KEY` já é o rowid) e o ORM recupera o valor após o `INSERT` por
+`RETURNING`, quando o backend suporta, ou por `cursor.lastrowid`. Com `RETURNING` e
+`insertmanyvalues`, muitos objetos entram num comando só, e o SQLAlchemy usa uma coluna sentinela (a
+própria chave ou uma coluna marcada com `insert_sentinel=True`) para casar os valores devolvidos com
+os objetos.
 
 Construtores explícitos:
 
 | Construtor | DDL | Comportamento |
 | --- | --- | --- |
 | `Identity(start=1, increment=1)` | `GENERATED BY DEFAULT AS IDENTITY` | PostgreSQL 10+, Oracle, SQL Server. Ignorado por dialetos sem suporte; o DuckDB rejeita o DDL; o dialeto do Redshift o omite em silêncio. |
-| `Sequence("nome", start=1)` | `CREATE SEQUENCE` e `nextval('nome')` no `INSERT` | PostgreSQL, Oracle, SQL Server, MariaDB e DuckDB. O Redshift não tem sequências. |
-| `server_default=func.now()` | `DEFAULT now()` | Valor do servidor; com `eager_defaults="auto"` o ORM o busca por `RETURNING` no `INSERT`. |
+| `Sequence("nome", start=1)` | `CREATE SEQUENCE` e `nextval('nome')` no `INSERT` | PostgreSQL, Oracle, SQL Server, MariaDB e DuckDB. O Redshift não tem sequências, mas o dialeto declara suporte e o `create_all` emite o `CREATE SEQUENCE`, que o servidor não aceita. |
+| `server_default=func.now()` | `DEFAULT now()` (`DEFAULT SYSDATE` no dialeto do Redshift) | Valor do servidor; com `eager_defaults="auto"` o ORM o busca por `RETURNING` no `INSERT` quando o dialeto declara suporte. |
 | `server_default=FetchedValue()` | nenhum | Marca um valor gerado por gatilho ou regra externa, para o ORM buscar. |
 | `Computed("expr")` | `GENERATED ALWAYS AS` | Coluna calculada. |
 
-Sem `RETURNING`, o ORM busca valores não chave num `SELECT` por linha após o `flush`, o que a
-documentação classifica como pouco performante; chaves primárias geradas no servidor precisam de
-`RETURNING` ou de `lastrowid`. Os modelos do projeto usam chaves de negócio geradas no cliente
-(`autoincrement=False`), o que evita o problema nos dois bancos: no DuckDB o único mecanismo é a
-sequência, e no Redshift o `IDENTITY` gera valores com saltos, sem ordem garantida e sem `RETURNING`
-para recuperá-los.
+Sem `RETURNING`, com `eager_defaults="auto"`, os valores não chave gerados no servidor ficam
+expirados e são buscados num `SELECT` no primeiro acesso; com `eager_defaults=True`, o ORM emite um
+`SELECT` por linha logo após o `INSERT`, o que a documentação classifica como pouco performante.
+Chaves primárias geradas no servidor precisam de `RETURNING` ou de `lastrowid`. Os modelos do
+projeto usam chaves de negócio geradas no cliente (`autoincrement=False`), o que evita o problema
+nos dois bancos: no DuckDB o `autoincrement` padrão vira `SERIAL`, tipo que o banco não tem, e o
+único mecanismo é a sequência; no Redshift o `IDENTITY` gera valores com saltos, sem ordem garantida
+e sem `RETURNING` para recuperá-los.
 
 ## Suporte a Redshift, DuckDB e arquivos Parquet
 
@@ -361,7 +422,7 @@ contrato:
 | Importação | `CopyCommand(Table, ...)` gera o `COPY ... FORMAT AS PARQUET MANIFEST` a partir do `Table` do modelo; a validação do esquema acontece no Arrow, antes do Parquet. |
 | Exportação | `UnloadFromSelect(select(Modelo)...)` gera o `UNLOAD` da consulta do modelo. |
 | Inserção pelo ORM | Volumes pequenos com `insert(Modelo).values(lista)` em lotes; o bulk insert do ORM cai no `executemany` linha a linha do `redshift_connector`. |
-| Chaves | Nenhuma geração no servidor recuperável; chaves de negócio no cliente. |
+| Chaves | Nenhuma geração no servidor recuperável; chaves de negócio no cliente. Um `server_default` exige `__table_args__ = {"implicit_returning": False}`, senão o ORM emite `RETURNING`. |
 
 ### DuckDB
 
@@ -371,9 +432,9 @@ detalhes; o resumo para o contrato:
 
 | Tema | Comportamento |
 | --- | --- |
-| DDL | `create_all` funciona com chaves, `NOT NULL`, comentários e sequências; `Identity` falha; `String(n)` perde o comprimento. Restrições ficam fora pela política do projeto (`ddl_if(dialect="redshift")`). |
+| DDL | `create_all` funciona com chaves, `NOT NULL`, comentários e sequências; `Identity`, restrições `DEFERRABLE` e `use_alter` falham; `String(n)` perde o comprimento. Uma chave primária `Integer` de uma coluna com o `autoincrement` padrão sai como `SERIAL` e falha com `Type with name SERIAL does not exist!`, então as chaves do cliente levam `autoincrement=False`. Restrições ficam fora pela política do projeto (`ddl_if(dialect="redshift")`). |
 | Reflexão | Colunas e comentários sim; chave primária e índices não. |
-| Importação | `INSERT INTO tabela BY NAME SELECT * FROM entrada` com a tabela Arrow registrada na conexão bruta (`conn.connection.dbapi_connection.register`), porque variáveis Python não são visíveis pelo engine. Volumes pequenos pelo bulk insert do ORM (0,67 s para 50.000 linhas). |
+| Importação | `INSERT INTO tabela BY NAME SELECT * FROM entrada` com a tabela Arrow registrada na conexão bruta (`conn.connection.dbapi_connection.register`), porque variáveis Python não são visíveis pelo engine. Volumes pequenos pelo bulk insert do ORM (0,98 s para 50.000 linhas, 0,77 s com `render_nulls=True`). |
 | Exportação | `COPY (...) TO 'arquivo.parquet'` em `text()`, com a consulta do modelo compilada com `literal_binds`. |
 | Leitura | `pd.read_sql` com `coerce_float=False` para `Decimal`; ou o SQL compilado executado pela conexão DuckDB com `to_arrow_table()` para manter `decimal128` e `date32`. |
 | Transações | Banco em memória com `SingletonThreadPool`: conexões abertas sem fechar deixam transações pendentes. |
@@ -399,7 +460,7 @@ def tipo_arrow(tipo: t.TypeEngine) -> pa.DataType:
             return pa.bool_()
         case t.Float():
             return pa.float64()
-        case t.Numeric(precision=p, scale=s):
+        case t.Numeric(precision=int() as p, scale=int() as s):
             return pa.decimal128(p, s)
         case t.String():
             return pa.string()
@@ -433,7 +494,9 @@ def conferir(modelo, caminho: str) -> None:
 ```
 
 - A ordem dos casos importa: `BigInteger` e `SmallInteger` são subclasses de `Integer`, e `Float` é
-  subclasse de `Numeric`. `Text` cai em `String`.
+  subclasse de `Numeric`. `Text` cai em `String`. Um `Numeric()` sem precisão e escala, que é o que o
+  mapa de tipos padrão dá a `Mapped[decimal.Decimal]`, cai no erro final; o mapa do modelo ou o
+  `Annotated` precisa fixar `Numeric(18, 2)`.
 - `pa.Table.from_pandas(..., schema=..., safe=True)` falha quando um valor não cabe no tipo (inteiro
   fora do intervalo, decimal com mais dígitos que a precisão, nulo em campo não anulável), o que é a
   verificação de contrato antes de gravar.

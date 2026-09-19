@@ -163,7 +163,7 @@ group.
 | `docs/parquet.md` | Parquet file layout and every metadata structure (`FileMetaData`, schema, row group, `ColumnMetaData`, page index, Bloom filters, page headers, key-value pairs, size and geospatial statistics, encryption, summary files), inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
-| `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, Core statements, the ORM for DDL and for DML, keys generated on the server, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
+| `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
 `docs/duckdb.md` and `docs/redshift.md` share a section order: data organization and the differences
@@ -188,8 +188,9 @@ The load-bearing facts, each detailed in the file named at the end of the line.
 - The generic `Identity()` disappears from the Redshift DDL, and DuckDB rejects it outright. Business
   keys generated on the client avoid the problem on both. `docs/sqlalchemy.md`
 - A `@compiles(CreateTable, "redshift")` hook that reads `Table.info` produced the same
-  `DISTSTYLE KEY DISTKEY (...) SORTKEY (...)` as the `redshift_*` arguments, which keeps the models
-  importable without the dialect installed. `docs/redshift.md`
+  `DISTSTYLE KEY DISTKEY (...) SORTKEY (...)` as the `redshift_*` arguments. Without the dialect
+  installed, `redshift_*` arguments are accepted with a `Can't validate argument` warning; with it
+  installed, unknown ones raise `ArgumentError`. `docs/redshift.md`
 - `duckdb_engine` reflects columns, types and comments, but not primary keys or indexes; variables
   in the Python scope are invisible to queries issued through the engine, so a DataFrame needs
   `register` on the raw connection. `docs/duckdb.md`
@@ -200,7 +201,7 @@ The load-bearing facts, each detailed in the file named at the end of the line.
   enforcement belongs on the metadata, before the load. `docs/parquet.md`
 - Constraints cost on load and do not help queries in either engine: a DuckDB load of 300,000 rows
   went from 0.008 s to 0.073 s with a composite primary key, and Redshift keys are informational.
-  `docs/schema.md`
+  `docs/schema.md`, `docs/duckdb.md`
 
 ## The state of the code
 
@@ -214,8 +215,12 @@ Two of them fail to import: `model_base_gerencial.py` runs `from lib_base_contab
 `model_db_projetado.py` runs `from lib_base_gerencial import Base`, module names the repository does
 not have. Only `model_base_contabil.py` declares `Base`. The models carry no dialect options and no
 `info` dictionaries, which `docs/schema.md` proposes, and they use `Double` where the contract
-expects `Numeric(18, 2)`. Foreign keys are declared `deferrable=True, initially='DEFERRED'`, which
-neither DuckDB nor Redshift honors.
+expects `Numeric(18, 2)`. Their single-column integer primary keys keep the default `autoincrement`,
+which duckdb_engine renders as `SERIAL` and DuckDB rejects with `Type with name SERIAL does not
+exist!`; `autoincrement=False` avoids it. Foreign keys are declared `deferrable=True, initially='DEFERRED'`, which
+both dialects render as `DEFERRABLE INITIALLY DEFERRED`: DuckDB rejects that DDL with
+`Constraint not implemented!`, and the Redshift `CREATE TABLE` syntax has no such clause
+(`docs/sqlalchemy.md`, section on deferrable constraints).
 
 `REFERENCES.md` links `docs/plano-de-implementacao.md`, which is not in the repository.
 

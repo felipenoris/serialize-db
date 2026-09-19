@@ -20,7 +20,7 @@ um cluster; os itens marcados como pendentes dependem da prova de conceito.
 | `SELECT default_iam_role();` | Papel IAM padrão, usado por `IAM_ROLE default` no `COPY` e no `UNLOAD`. |
 | `SHOW data_catalog_auto_mount;` | Se o `awsdatacatalog` está montado no workgroup. |
 | `SELECT "table", diststyle, sortkey1, unsorted, stats_off, tbl_rows, skew_rows, vacuum_sort_benefit FROM svv_table_info WHERE schema = '<esquema>';` | Estilo de distribuição, chave de ordenação, fração não ordenada, estatísticas desatualizadas, linhas, assimetria e ganho estimado de um `VACUUM SORT`. |
-| `SELECT * FROM svv_alter_table_recommendations;` | Recomendações do Advisor para chaves de distribuição e ordenação. |
+| `SELECT * FROM svv_alter_table_recommendations;` | Recomendações do Advisor para chaves de distribuição e ordenação; visível só a superusuários. |
 | `SELECT pg_last_copy_count();` | Linhas carregadas pelo último `COPY` da sessão; `0` quando a carga falhou. |
 | `SELECT * FROM sys_load_error_detail ORDER BY start_time DESC LIMIT 20;` | Erros de carga, inclusive em workgroups serverless; `stl_load_errors` cobre só clusters provisionados. |
 | `EXPLAIN <consulta>;` | Plano de execução, com os rótulos de redistribuição `DS_DIST_*`. |
@@ -41,7 +41,7 @@ distribuição (`AUTO`, `EVEN`, `KEY`, `ALL`), e dentro de cada slice ficam orde
 ordenação. Cada bloco guarda os valores mínimo e máximo; um predicado por intervalo sobre a chave de
 ordenação pula os blocos fora do intervalo. Numa tabela com cinco anos ordenados por data, um filtro
 de um mês evita até 98 % dos blocos. Nas consultas, o otimizador redistribui linhas entre nós para
-joins e agregações, e essa redistribuição costuma ser a parte mais cara do plano.
+joins e agregações, e essa redistribuição pode responder por parte substancial do custo do plano.
 
 A primeira execução de uma consulta inclui a compilação; as seguintes usam o cache de código, local e
 remoto. Medições comparam sempre a segunda execução.
@@ -59,10 +59,10 @@ que elementos com o mesmo nome podem ter semântica diferente. O que muda para o
 | Tipos ausentes | | Arrays, `JSON`, `UUID`, `BYTEA`, tipos compostos e enumerados. `SUPER` cobre dados semiestruturados, `VARBYTE` cobre binários. |
 | `CHECK` | Aplicado. | Não suportado. |
 | `ALTER TABLE` | Geral. | Uma coluna por `ADD COLUMN`; `ALTER COLUMN TYPE` só muda o tamanho de `VARCHAR`; alterações de chaves e codificação por cláusulas próprias. |
-| `VACUUM` | Recupera espaço. | O padrão é `VACUUM FULL`: recupera espaço e reordena; roda sozinho em segundo plano. |
+| `VACUUM` | Recupera espaço. | O padrão do comando é `VACUUM FULL`, que recupera espaço e reordena; a ordenação automática e o `VACUUM DELETE` rodam sozinhos em segundo plano. |
 | `TRUNCATE` | Transacional. | Faz commit da transação corrente. |
 | Particionamento, tablespaces, herança, triggers, `VALUES` como tabela | Existem. | Não existem. |
-| Isolamento | Read committed por padrão. | Serializável por padrão, com snapshot isolation opcional por banco; o segundo de dois escritores conflitantes é abortado. |
+| Isolamento | Read committed por padrão. | Snapshot isolation por padrão em clusters e workgroups novos, com o nível serializável como opção; sob o serializável, o segundo de dois escritores conflitantes é abortado. |
 | Comprimento de `VARCHAR(n)` | Caracteres. | Bytes; um caractere UTF-8 pode ocupar até 4 bytes. `TEXT` vira `VARCHAR(256)`. |
 | Espaços finais | Significativos. | Ignorados na comparação de `VARCHAR`. |
 | Tamanho de comando | Sem limite prático. | 16 MB por comando SQL; 4 MB por linha de entrada no `COPY`. |
@@ -73,10 +73,11 @@ que elementos com o mesmo nome podem ter semântica diferente. O que muda para o
 ### Efeitos nas formas de manipular os dados
 
 Na entrada, o `COPY` a partir do S3 é o caminho recomendado: ele carrega em paralelo pelas slices,
-divide arquivos de 128 MB ou mais em pedaços e aplica compressão automática. `INSERT` de uma linha
-por comando é "proibitivamente lento" nas palavras da documentação; quando o `COPY` não é possível, o
-`INSERT` de várias linhas num único comando é a alternativa. Alterações em lote passam por uma tabela
-de staging e por `MERGE`, ou por `DELETE` mais `INSERT`, nunca por `UPDATE` linha a linha.
+divide arquivos de 128 MB ou mais em pedaços e, nos formatos de texto, aplica compressão automática.
+`INSERT` de uma linha por comando é "proibitivamente lento" nas palavras da documentação; quando o
+`COPY` não é possível, o `INSERT` de várias linhas num único comando é a alternativa. Alterações em
+lote passam por uma tabela de staging e por `MERGE`, ou por `DELETE` mais `INSERT`, nunca por
+`UPDATE` linha a linha.
 
 Na saída, o `UNLOAD` grava Parquet no S3 em paralelo, um ou mais arquivos por slice. Consultas que
 voltam pela conexão do cliente chegam linha a linha pelo protocolo do PostgreSQL, sem formato
@@ -117,7 +118,8 @@ na [tabela de tipos](schema.md).
 representação depende da precisão: até 19 dígitos, inteiro de 8 bytes; de 20 a 38, inteiro de 16
 bytes, que ocupa o dobro em disco e torna as consultas mais lentas. A documentação pede que a precisão
 máxima não seja atribuída sem necessidade. `DECIMAL(18, 2)`, o tipo do contrato para valores
-contábeis, fica em 8 bytes nos dois bancos e no Arrow (`decimal128(18, 2)`).
+contábeis, fica em 8 bytes nos dois bancos; o `decimal128(18, 2)` do Arrow, que o representa nos
+arquivos e na memória, ocupa 16 bytes por valor.
 
 Regras de carga documentadas:
 
@@ -139,8 +141,8 @@ Parquet para o `COPY` fica pendente da prova de conceito.
 
 O Redshift não tem tipo `JSON`. As opções são:
 
-- Guardar o texto num `VARCHAR` e usar as funções textuais (`JSON_EXTRACT_PATH_TEXT`,
-  `JSON_PARSE`). A documentação desaconselha: cada consulta reanalisa o texto e o formato não usa o
+- Guardar o texto num `VARCHAR` e usar as funções textuais (`JSON_EXTRACT_PATH_TEXT` e afins). A
+  documentação desaconselha: cada consulta reanalisa o texto e o formato não usa o
   armazenamento colunar.
 - Guardar num `SUPER`, o tipo recomendado. `JSON_PARSE(texto)` converte na inserção
   (`INSERT INTO t VALUES (JSON_PARSE('{"a": 1}'))`), e `JSON_SERIALIZE(valor)` devolve o texto. O
@@ -152,9 +154,9 @@ O Redshift não tem tipo `JSON`. As opções são:
 Limites do `SUPER`: 16 MB por valor, profundidade de 1.000 níveis, strings de até 16.000.000 bytes,
 sem uso como chave de distribuição ou de ordenação, sem atualização parcial, sem right join ou full
 outer join sobre a coluna, sem cast de datas para `SUPER` (o inverso funciona). Um `SUPER` com
-objeto ou array vira `NULL` ao ser convertido para `VARCHAR`; `JSON_SERIALIZE` é a conversão correta. A
-documentação recomenda `enable_case_sensitive_super_attribute = true` e, para consultas frequentes,
-materializar os atributos em views materializadas com colunas convencionais.
+objeto ou array vira `NULL` ao ser convertido para `VARCHAR`; `JSON_SERIALIZE` é a conversão
+correta. A documentação recomenda `enable_case_sensitive_super_attribute = true` e, para consultas
+frequentes, materializar os atributos em views materializadas com colunas convencionais.
 
 No `awswrangler`, colunas Arrow de tipo `list`, `struct` e `map` viram `SUPER` na criação da tabela,
 e a opção `serialize_to_json` acrescenta `SERIALIZETOJSON` ao `COPY` de Parquet. No
@@ -240,7 +242,8 @@ Regras da referência:
   documentação diz o contrário (troca de codificação mantém a tabela consultável).
 - `ADD COLUMN` aceita uma coluna por comando, e a coluna nova não pode ser chave de distribuição, de
   ordenação, `UNIQUE`, `PRIMARY KEY`, `REFERENCES` nem identidade.
-- `ALTER COLUMN TYPE` só aumenta o tamanho de um `VARCHAR`, fora de transação, e não aceita colunas
+- `ALTER COLUMN TYPE` só muda o tamanho de um `VARCHAR`, sem descer abaixo do maior valor
+  existente, fora de transação, e não aceita colunas
   com `DEFAULT`, com chaves, nem com codificações `BYTEDICT`, `RUNLENGTH`, `TEXT255` e `TEXT32K`.
 - `ALTER DISTKEY`, `ALTER DISTSTYLE` e `ALTER SORTKEY` não rodam junto com `VACUUM`, não valem para
   tabelas temporárias nem com chave interleaved, e retiram a tabela da otimização automática quando
@@ -298,10 +301,11 @@ backend pyarrow ou tabelas Arrow; a conexão de referência é o `redshift_conne
 [ UNION | INTERSECT | EXCEPT ... ] [ ORDER BY ... ] [ LIMIT n | ALL ] [ OFFSET n ]
 ```
 
-`QUALIFY` filtra funções de janela, `EXCLUDE` retira colunas do `*`, `GROUP BY ALL` agrupa por todas as
-colunas não agregadas. A saída pelo `redshift_connector` chega em tuplas Python:
-`cursor.fetch_dataframe()` monta um DataFrame com colunas `object` e nomes em minúsculas, e
-`cursor.fetch_numpy_array()` devolve um array. Um DataFrame com os tipos do contrato sai de
+`QUALIFY` filtra funções de janela, `EXCLUDE` retira colunas do `*`, `GROUP BY ALL` agrupa por todas
+as colunas não agregadas. A saída pelo `redshift_connector` chega em tuplas Python:
+`cursor.fetch_dataframe()` monta um DataFrame a partir das tuplas, com nomes em minúsculas e tipos
+inferidos pelo pandas (`Decimal` e `date` ficam em colunas `object`), e `cursor.fetch_numpy_array()`
+devolve um array. Um DataFrame com os tipos do contrato sai de
 `pa.Table.from_pylist(cursor.fetchall(), schema=esquema)` seguido de
 `to_pandas(types_mapper=pd.ArrowDtype)`; `Decimal` e `date` das tuplas entram em `decimal128` e
 `date32` sem conversão para `float`. Volumes grandes saem por `UNLOAD` e voltam pelo leitor Parquet.
@@ -369,7 +373,7 @@ por linha.
 Ordem de preferência da documentação:
 
 1. `COPY` de arquivos no S3, com um único comando por tabela: `COPY` paralelos sobre a mesma tabela
-   são serializados e exigem `VACUUM` depois.
+   são serializados e, em tabelas com chave de ordenação, exigem `VACUUM` depois.
 2. `INSERT INTO ... SELECT` a partir de tabelas externas do Spectrum ou de tabelas locais.
 3. `INSERT` de várias linhas por comando.
 4. `INSERT` de uma linha por comando.
@@ -382,11 +386,13 @@ Regras do `COPY` que valem para o pipeline:
   slices.
 - `MANIFEST` carrega exatamente os arquivos listados; um manifesto de Parquet exige
   `meta.content_length` por entrada.
-- `NOLOAD` valida sem carregar; `STATUPDATE ON` força o `ANALYZE`; `COMPUPDATE ON` escolhe a
-  codificação numa tabela vazia com codificação `RAW`, a partir de uma amostra de 100.000 linhas por
-  slice.
+- `STATUPDATE ON` força o `ANALYZE` depois da carga. `NOLOAD`, que valida sem carregar, e
+  `COMPUPDATE ON`, que escolhe a codificação numa tabela vazia a partir de uma amostra de 100.000
+  linhas por slice, valem para os formatos de texto e ficam fora do `COPY` de Parquet, que também
+  não aplica compressão automática.
 - `pg_last_copy_count()` devolve as linhas carregadas; `sys_load_error_detail` guarda os erros.
-- Cargas em ordem da chave de ordenação, ao fim da tabela, ficam ordenadas sem `VACUUM`.
+- Cargas em ordem da chave de ordenação, ao fim da tabela, ficam ordenadas sem `VACUUM`, quando o
+  `COPY` não é grande o bastante para disparar certas otimizações de carga.
 
 O fluxo do projeto substitui o `INSERT` grande da biblioteca atual:
 
@@ -394,21 +400,30 @@ O fluxo do projeto substitui o `INSERT` grande da biblioteca atual:
 2. Gravar Parquet em `<caminho S3 do projeto>/staging/<id_execucao>/<tabela>/`, fora dos locais das
    tabelas Iceberg, com o pyarrow.
 3. `COPY execucao_<id>.<tabela> FROM '<manifesto>' IAM_ROLE '<arn>' FORMAT AS PARQUET MANIFEST`, ou
-   com `CREDENTIALS` enquanto o namespace não tiver papel associado.
+   com `IAM_ROLE 'SESSION'` numa conexão federada por IAM enquanto o namespace não tiver papel
+   associado; `SESSION` usa as permissões da identidade da sessão no S3 e não combina com outro
+   método.
 4. Comparar `pg_last_copy_count()` com o número de linhas enviadas e então `commit`.
 
 ```python
+import json
 import boto3, pyarrow as pa, pyarrow.parquet as pq, redshift_connector
 
 def carregar(conn: redshift_connector.Connection, df, esquema: pa.Schema, tabela: str, s3_prefixo: str, papel: str) -> int:
     dados = pa.Table.from_pandas(df, schema=esquema, preserve_index=False)
-    caminho = f"{s3_prefixo}/{tabela}/parte-0.parquet"
-    bucket, chave = caminho.removeprefix("s3://").split("/", 1)
+    s3 = boto3.client("s3")
+    bucket, prefixo = s3_prefixo.removeprefix("s3://").split("/", 1)
     buf = pa.BufferOutputStream()
     pq.write_table(dados, buf, compression="snappy")
-    boto3.client("s3").put_object(Bucket=bucket, Key=chave, Body=buf.getvalue().to_pybytes())
+    corpo = buf.getvalue().to_pybytes()
+    arquivo = f"{prefixo}/{tabela}/parte-0.parquet"
+    s3.put_object(Bucket=bucket, Key=arquivo, Body=corpo)
+    manifesto = {"entries": [{"url": f"s3://{bucket}/{arquivo}", "mandatory": True,
+                              "meta": {"content_length": len(corpo)}}]}
+    s3.put_object(Bucket=bucket, Key=f"{prefixo}/{tabela}/manifest", Body=json.dumps(manifesto).encode())
     with conn.cursor() as cur:
-        cur.execute(f"COPY {tabela} FROM '{s3_prefixo}/{tabela}/' IAM_ROLE '{papel}' FORMAT AS PARQUET")
+        cur.execute(f"COPY {tabela} FROM 's3://{bucket}/{prefixo}/{tabela}/manifest' "
+                    f"IAM_ROLE '{papel}' FORMAT AS PARQUET MANIFEST")
         cur.execute("SELECT pg_last_copy_count()")
         carregadas = cur.fetchone()[0]
     if carregadas != dados.num_rows:
@@ -448,7 +463,7 @@ Arrow e merece um benchmark contra o fluxo acima.
 | --- | --- |
 | Colunas são associadas por posição, e a quantidade precisa coincidir com a tabela. | A ordem das colunas no Parquet é a ordem do modelo. Os dois derivam do mesmo `Table`. |
 | Só existem as colunas gravadas no arquivo. | Colunas de partição ficam dentro do arquivo. |
-| Parâmetros aceitos: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `CREDENTIALS`, `STATUPDATE`, `MANIFEST`, `EXPLICIT_IDS`. `MAXERROR` não é aceito. | O primeiro erro aborta o `COPY`. A validação acontece antes, no Arrow. |
+| Parâmetros aceitos: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `STATUPDATE`, `MANIFEST`, `EXPLICIT_IDS`. `MAXERROR`, `NOLOAD` e `COMPUPDATE` não são aceitos, e não há compressão automática. | O primeiro erro aborta o `COPY`. A validação acontece antes, no Arrow. |
 | `MANIFEST` é aceito. | O `COPY` carrega exatamente os arquivos gravados pela biblioteca. |
 | O bucket precisa estar na mesma região do Redshift. | Configuração da infraestrutura. |
 | O `COPY` de Parquet usa URLs pré-assinadas válidas por 1 hora. | Políticas IAM do bucket não podem bloquear URLs pré-assinadas. |
@@ -492,40 +507,41 @@ Comportamento do `UNLOAD ... FORMAT AS PARQUET` segundo a documentação:
 - O Parquet é até 2 vezes mais rápido de descarregar e ocupa até 6 vezes menos espaço no S3 que
   texto.
 
-Sugestão: um `UNLOAD` por mês, sem `PARTITION BY`, com destino
-`<local da tabela>/data/<mes>/<id_execucao>_`, `MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho alvo
-da tabela. O `SELECT` lista as colunas na ordem do modelo, com casts para os tipos do contrato e
-`ORDER BY` pela chave de ordenação. A biblioteca confere o manifesto do `UNLOAD` e os rodapés dos
-arquivos antes da publicação. `CLEANPATH` não é usado: arquivos de execuções abortadas saem pela remoção
-de órfãos, do Glue ou da biblioteca.
+Sugestão: um `UNLOAD` por mês, sem `PARTITION BY`, com destino `<local da
+tabela>/data/<mes>/<id_execucao>_`, `MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho alvo da
+tabela. O `SELECT` lista as colunas na ordem do modelo, com casts para os tipos do contrato e `ORDER
+BY` pela chave de ordenação. A biblioteca confere o manifesto do `UNLOAD` e os rodapés dos arquivos
+antes da publicação. `CLEANPATH` não é usado: arquivos de execuções abortadas saem pela remoção de
+órfãos, do Glue ou da biblioteca.
 
 A documentação do `UNLOAD` não informa os tipos físicos Parquet de `TIMESTAMP` e `DECIMAL`, a
 obrigatoriedade das colunas nem a presença de estatísticas de mínimo e máximo. Os três afetam o
 `add_files`, e a prova de conceito verifica.
 
-O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem acesso do
-Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o pyarrow e o
-papel do projeto. O `awswrangler.redshift.unload` executa o `UNLOAD` e lê os arquivos de volta num
-DataFrame; `unload_to_files` só descarrega.
+O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem
+acesso do Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o
+pyarrow e o papel do projeto. O `awswrangler.redshift.unload` executa o `UNLOAD` e lê os arquivos de
+volta num DataFrame; `unload_to_files` só descarrega.
 
 ## Recomendações de performance
 
 ### Ingestão
 
-- Um `COPY` por tabela, com arquivos divisíveis (Parquet a partir de 128 MB) ou vários arquivos de
-  1 MB a 1 GB em quantidade múltipla das slices.
-- Compressão nos arquivos de entrada para reduzir o tempo de envio ao S3; o Parquet já vem comprimido
-  por row group.
-- Carga em ordem da chave de ordenação e ao fim da tabela, para dispensar o `VACUUM`; tabelas por
-  período com view `UNION ALL` para descartar meses antigos por `DROP TABLE`.
-- Merge por tabela de staging: `DELETE ... USING` seguido de `INSERT ... SELECT` quando todas as colunas
-  mudam, `UPDATE` e `INSERT` separados quando poucas linhas da staging participam.
+- Um `COPY` por tabela, com arquivos divisíveis (Parquet a partir de 128 MB) ou vários arquivos de 1
+  MB a 1 GB em quantidade múltipla das slices.
+- Compressão nos arquivos de entrada para reduzir o tempo de envio ao S3; o Parquet já vem
+  comprimido por row group.
+- Carga em ordem da chave de ordenação e ao fim da tabela, para dispensar o `VACUUM` nas cargas que
+  não disparam as otimizações de carga; tabelas por período com view `UNION ALL` para descartar
+  meses antigos por `DROP TABLE`.
+- Merge por tabela de staging: `DELETE ... USING` seguido de `INSERT ... SELECT` quando todas as
+  colunas mudam, `UPDATE` e `INSERT` separados quando poucas linhas da staging participam.
 - `VACUUM` e `ANALYZE` manuais depois de cargas grandes, ou confiar nas rotinas automáticas
-  (`vacuum_sort_benefit` e `stats_off` em `svv_table_info` dizem quando vale a pena). `VACUUM` pula a
-  ordenação quando mais de 95 % da tabela já está ordenada.
-- `COMPUPDATE ON` ou `ANALYZE COMPRESSION` numa amostra real antes de fixar codificações; `RAW` nas
-  colunas de chave de ordenação, para que a poda por blocos não fique mais lenta que a leitura das
-  demais colunas.
+  (`vacuum_sort_benefit` e `stats_off` em `svv_table_info` dizem quando vale a pena). `VACUUM` pula
+  a ordenação quando mais de 95 % da tabela já está ordenada.
+- `ANALYZE COMPRESSION` numa amostra real antes de fixar codificações (o `COMPUPDATE` do `COPY` não
+  vale para Parquet); `RAW` nas colunas de chave de ordenação, para que a poda por blocos não fique
+  mais lenta que a leitura das demais colunas.
 - Evitar `DECIMAL` acima de 19 dígitos e `VARCHAR` maiores que o necessário: colunas largas aumentam
   a memória por linha nos joins e nos resultados intermediários.
 - Manutenção fora do horário de carga: `VACUUM` e `ALTER TABLE` de chaves não rodam juntos.
@@ -537,8 +553,9 @@ pela chave primária quando a tabela cresce e a `EVEN` quando nenhuma coluna ser
 recomenda `AUTO`. `EVEN` distribui em rodízio e serve a tabelas que não participam de joins. `KEY`
 coloca as linhas com o mesmo valor da coluna `DISTKEY` na mesma slice, o que colocaliza joins entre
 tabelas distribuídas pela mesma coluna. `ALL` copia a tabela inteira para todos os nós, multiplica o
-armazenamento, encarece cargas e serve a tabelas de dimensão pequenas ou pouco alteradas que não
-podem ser colocalizadas.
+armazenamento, encarece cargas e serve a tabelas de dimensão pouco alteradas que não podem ser
+colocalizadas; para tabelas pequenas o ganho é insignificante, porque redistribuí-las numa consulta
+custa pouco.
 
 **Escolha da chave de distribuição.** Distribuir a tabela fato e a maior dimensão pela coluna do
 join entre elas (`DISTKEY` na chave primária da dimensão e na chave estrangeira do fato); só um join
@@ -551,11 +568,11 @@ tabela de vendas distribuída por data concentra um filtro de um mês em poucas 
 por prefixo, a `GROUP BY` e a merge joins; o benefício cai quando as consultas usam só as colunas
 secundárias. A chave interleaved dá peso igual a cada coluna (até 8), serve a filtros por qualquer
 subconjunto, custa mais na carga e no `VACUUM REINDEX`, e não deve incluir colunas monotônicas. A
-documentação recomenda compound para tabelas atualizadas regularmente e `SORTKEY AUTO` quando não há
-padrão claro. Com dados recentes consultados com frequência, a coluna de tempo lidera a chave; com
-joins frequentes, a coluna do join como chave de ordenação e de distribuição habilita o sort merge
-join sem fase de ordenação. Para `operacoes`, `COMPOUND SORTKEY (data_ref, id_operacao)` atende aos
-filtros por mês e à publicação por período.
+documentação recomenda criar as tabelas com `SORTKEY AUTO` e, ao escolher a chave, compound para
+tabelas atualizadas regularmente com `INSERT`, `UPDATE` ou `DELETE`. Com dados recentes consultados
+com frequência, a coluna de tempo lidera a chave; com joins frequentes, a coluna do join como chave
+de ordenação e de distribuição habilita o sort merge join sem fase de ordenação. Para `operacoes`,
+`COMPOUND SORTKEY (data_ref, id_operacao)` atende aos filtros por mês e à publicação por período.
 
 **Leitura do plano.** `EXPLAIN` mostra, em cada join, como as linhas se moveram:
 
@@ -564,7 +581,7 @@ filtros por mês e à publicação por período.
 | `DS_DIST_NONE` | Slices já colocalizadas. | Bom. |
 | `DS_DIST_ALL_NONE` | Tabela interna em `ALL`. | Bom. |
 | `DS_DIST_INNER` | Tabela interna redistribuída. | Custo alto; distribuir a interna pela coluna do join. |
-| `DS_DIST_OUTER` | Tabela externa redistribuída. | Custo alto. |
+| `DS_DIST_OUTER` | Tabela externa redistribuída. | Sem avaliação na documentação. |
 | `DS_BCAST_INNER` | Tabela interna transmitida a todos os nós. | Ruim; as tabelas não estão unidas pela chave de distribuição. |
 | `DS_DIST_ALL_INNER` | Tabela interna inteira numa única slice, porque a externa é `ALL`. | Ruim; execução serial. |
 | `DS_DIST_BOTH` | As duas redistribuídas. | Ruim. |
@@ -581,10 +598,11 @@ cerca de 200 linhas; comparação em vez de `LIKE`, e `LIKE` em vez de `SIMILAR 
 O ajuste de um banco relacional de linha passa por índices, transações curtas e atualizações
 pontuais. No Redshift, ele passa pela distribuição e pela ordenação física, pela codificação e pelo
 tamanho dos lotes. As chaves declaradas não protegem os dados, mas mudam os planos; a integridade é
-responsabilidade da carga. As escritas concorrentes são serializáveis, e a segunda transação
-conflitante é abortada, o que favorece um escritor por tabela. Os comandos têm limite de 16 MB, o que
-exclui `INSERT` gigantes. E o custo de `UPDATE` e `DELETE` inclui a reordenação e a recuperação de
-espaço posteriores, motivo para substituir partições por período em vez de alterá-las.
+responsabilidade da carga. As escritas concorrentes seguem snapshot isolation por padrão ou o nível
+serializável, que aborta a segunda transação conflitante; os dois favorecem um escritor por tabela.
+Os comandos têm limite de 16 MB, o que exclui `INSERT` gigantes. E o custo de `UPDATE` e `DELETE`
+inclui a reordenação e a recuperação de espaço posteriores, motivo para substituir partições por
+período em vez de alterá-las.
 
 ## Suporte a SQLAlchemy
 
@@ -614,9 +632,10 @@ código do dialeto:
 | `Sequence()` | `create_all` emitiria `CREATE SEQUENCE`, que o Redshift não suporta. |
 | Tipos próprios | `TIMESTAMPTZ`, `TIMETZ`, `SUPER`, `GEOMETRY`, `HLLSKETCH`, importados de `sqlalchemy_redshift.dialect`. |
 | Reflexão | Colunas, chaves, comentários e as opções de distribuição e ordenação por `inspect(engine).get_table_options(nome)`. |
-| Comandos | `CopyCommand`, `UnloadFromSelect`, `AlterTableAppendCommand`, `CreateMaterializedView`, `RefreshMaterializedView`, em `sqlalchemy_redshift.commands`. |
+| Comandos | `CopyCommand`, `UnloadFromSelect`, `AlterTableAppendCommand` e `RefreshMaterializedView` em `sqlalchemy_redshift.commands`; `CreateMaterializedView` e `DropMaterializedView` em `sqlalchemy_redshift.ddl`. |
 | `executemany` sem `RETURNING` | Com `redshift_connector`, `use_insertmanyvalues_wo_returning = False`: o SQLAlchemy chama `cursor.executemany`, que executa uma ida por linha. Com `psycopg2`, o SQLAlchemy reescreve em `INSERT ... VALUES (...), (...)` em lotes de até 1.000 linhas. |
 | `postgresql.insert(...).on_conflict_do_update` | Compila, mas o Redshift não tem `ON CONFLICT`; o upsert é `MERGE` por texto. |
+| `RETURNING` | O dialeto herda `insert_returning = True` do PostgreSQL: um modelo com `server_default` ou chave gerada no servidor faz o ORM emitir `INSERT ... RETURNING`, que o Redshift não tem. `__table_args__ = {"implicit_returning": False}` desliga o recurso na tabela. |
 
 ### Parâmetros específicos do Redshift no modelo
 
@@ -646,7 +665,7 @@ class Operacao(Base):
 print(CreateTable(Operacao.__table__).compile(dialect=RedshiftDialect_redshift_connector()))
 ```
 
-Saída compilada nesta sessão:
+Saída compilada:
 
 ```sql
 CREATE TABLE operacoes (
@@ -664,10 +683,11 @@ id_cliente)`; `sortkey` e `interleaved_sortkey` juntos são erro, assim como `DI
 `DISTKEY` ou `DISTSTYLE KEY` sem `DISTKEY`. `redshift_distkey=True` e `redshift_sortkey=True` numa
 coluna geram a forma `coluna BIGINT DISTKEY SORTKEY`.
 
-Os argumentos `redshift_*` só são aceitos com o dialeto instalado: o SQLAlchemy valida cada argumento
-de dialeto contra o dialeto registrado e recusa os desconhecidos. Para manter os modelos neutros, o
-projeto guarda as opções em `Table.info` ([esquema a partir dos modelos](schema.md)) e as aplica na
-compilação do DDL com um gancho do compilador, testado nesta sessão:
+Com o dialeto instalado, o SQLAlchemy valida os argumentos `redshift_*` e rejeita os que o dialeto
+não aceita (`ArgumentError`); sem o dialeto, cada argumento entra com o aviso `Can't validate
+argument` e não gera DDL. Para manter os modelos neutros, o projeto guarda as opções em `Table.info`
+([esquema a partir dos modelos](schema.md)) e as aplica na compilação do DDL com um gancho do
+compilador, verificado com o dialeto 1.0.0:
 
 ```python
 from sqlalchemy.ext.compiler import compiles
@@ -724,7 +744,7 @@ with engine.begin() as conn:
     conn.execute(unload)
 ```
 
-O comando compilado nesta sessão, com os valores embutidos:
+O comando compilado, com os valores embutidos:
 
 ```sql
 UNLOAD ('SELECT operacoes.id_operacao, operacoes.data_ref, operacoes.id_cliente, operacoes.valor,
@@ -736,6 +756,7 @@ CREDENTIALS 'aws_iam_role=arn:aws:iam::123456789012:role/papel' MANIFEST FORMAT 
 ### Ingestão de um DataFrame numa tabela definida pelo ORM
 
 ```python
+import sqlalchemy as sa
 from sqlalchemy import insert
 from sqlalchemy.orm import Session
 from sqlalchemy_redshift.commands import CopyCommand, Format
@@ -758,10 +779,13 @@ with Session(engine) as session:
 ```
 
 `CopyCommand` compila para `COPY operacoes FROM 's3://.../manifest' WITH CREDENTIALS AS
-'aws_iam_role=arn:...' FORMAT AS PARQUET MANIFEST` e exige um ARN com conta de 12 dígitos. O
-`insert(...).values(lista)` gera um único `INSERT ... VALUES (...), (...)`, o multi-row insert da
-documentação, dentro do limite de 16 MB por comando; `session.execute(insert(Operacao), lista)`, o
-bulk insert do ORM, cairia no `executemany` linha a linha do `redshift_connector`.
+'aws_iam_role=arn:...' FORMAT AS PARQUET MANIFEST` e exige um ARN com conta de 12 dígitos. A forma
+`CREDENTIALS 'aws_iam_role=...'`, que `CopyCommand` e `UnloadFromSelect` emitem, não consta da
+referência atual do `COPY` nem da do `UNLOAD`, que documentam só `IAM_ROLE`; se o servidor ainda a
+aceita fica pendente da prova de conceito. O `insert(...).values(lista)` gera um único `INSERT ...
+VALUES (...), (...)`, o multi-row insert da documentação, dentro do limite de 16 MB por comando;
+`session.execute(insert(Operacao), lista)`, o bulk insert do ORM, cairia no `executemany` linha a
+linha do `redshift_connector`.
 
 ## Referências
 

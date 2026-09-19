@@ -1,7 +1,7 @@
 # Referências
 
 Este arquivo lista os sites consultados na pesquisa do
-[plano de implementação](docs/plano-de-implementacao.md) e dos documentos sobre
+plano de implementação e dos documentos sobre
 [arquivos Parquet](docs/parquet.md), [DuckDB](docs/duckdb.md), [Redshift](docs/redshift.md) e
 [SQLAlchemy](docs/sqlalchemy.md), agrupados por assunto.
 
@@ -353,6 +353,7 @@ Documentação:
 - <https://duckdb.org/docs/current/data/data_sources.html>
 - <https://duckdb.org/docs/current/connect/overview.html>
 - <https://duckdb.org/docs/current/guides/sql_features/merge.html>
+- <https://duckdb.org/docs/current/operations_manual/footprint_of_duckdb/reclaiming_space.html>
 - <https://github.com/duckdb/duckdb-web/tree/main/docs/current>: fonte em Markdown das páginas acima
 
 Blog:
@@ -480,6 +481,7 @@ Documentação da versão 2.0:
 - <https://docs.sqlalchemy.org/en/20/faq/performance.html>
 - <https://docs.sqlalchemy.org/en/20/dialects/index.html>
 - <https://docs.sqlalchemy.org/en/20/dialects/postgresql.html>
+- <https://docs.sqlalchemy.org/en/20/orm/relationship_persistence.html>
 
 Dialeto do Redshift, no repositório `sqlalchemy-redshift/sqlalchemy-redshift`:
 
@@ -507,6 +509,13 @@ Dialeto do DuckDB, no repositório `Mause/duckdb_engine`:
 - <https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.to_sql.html>
 - <https://pandas.pydata.org/docs/reference/api/pandas.ArrowDtype.html>
 - <https://pandas.pydata.org/docs/user_guide/pyarrow.html>
+
+## PostgreSQL
+
+Semântica de restrições adiáveis, herdada pelos dialetos do DuckDB e do Redshift:
+
+- <https://www.postgresql.org/docs/current/sql-createtable.html>
+- <https://www.postgresql.org/docs/current/sql-set-constraints.html>
 
 ## PyIceberg
 
