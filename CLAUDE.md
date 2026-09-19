@@ -376,9 +376,9 @@ PR #7 (protocol implementations section in `docs/delta.md`) was merged on 2026-0
 the rename/drop rewrite in `docs/delta.md` and creates `docs/serialize-db.md`. PR #10 (2026-09-19,
 branch `claude/sql-gerado-por-dialeto`, merged the same day) records the SQLAlchemy assessment and
 the gradual replacement of the runtime dialect by generated SQL text. Branch
-`claude/prova-de-conceito-s3` (2026-09-19) records the S3 proof of concept and adds the pytest
-suite; it was rebased onto `main` after PR #10, so the copy the user pushed earlier needs a
-force-with-lease push. While its PR is open, new commits go there.
+`claude/prova-de-conceito-s3` (2026-09-19, PR #11) records the S3 proof of concept, adds the pytest
+suite and the offline recipe; it was rebased onto `main` after PR #10 and force-pushed by the user.
+While PR #11 is open, new commits go there. `gh` is authenticated in the space since 2026-09-19.
 
 No library code exists beyond the models: `pyproject.toml` declares no runtime dependencies. The
 `dev` dependency group pins pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1 and boto3, and
@@ -485,8 +485,7 @@ added to every document on 2026-09-19 ran under the same pinned versions.
   set. `uv` reaches PyPI through the proxy but downloads Python only with
   `UV_PYTHON_DOWNLOADS=automatic`. System Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0,
   DuckDB 1.5.4, PyArrow 21.0.0 and redshift_connector 2.1.10 preinstalled.
-- `git` has no GitHub credential and `gh` is absent: `fetch` from the public repository works,
-  commits stay local until the user pushes.
+- `gh` is installed and authenticated as the user, and `git push` over HTTPS works through it.
 - `uv sync` needs `UV_PYTHON_DOWNLOADS=automatic` to fetch Python 3.13; the venv lands in `.venv`
   (ignored). `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored, which is harmless.
 
