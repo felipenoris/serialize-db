@@ -640,7 +640,7 @@ COPY (
     COMPRESSION zstd,
     ROW_GROUP_SIZE 100_000,
     FIELD_IDS {id_operacao: 1, data_ref: 2, id_cliente: 3, valor: 4, descricao: 5},
-    KV_METADATA {serialize_db_version: '0.1.0', id_execucao: 'abc123'},
+    KV_METADATA {serialize_db_version: '0.1.0', execution_id: 'abc123'},
     RETURN_STATS
 );
 ```

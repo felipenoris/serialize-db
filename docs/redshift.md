@@ -676,7 +676,7 @@ Regras do `COPY` que valem para o pipeline:
 O fluxo do projeto substitui o `INSERT` grande da biblioteca atual:
 
 1. Converter o DataFrame numa tabela Arrow com o esquema do modelo (cast seguro).
-2. Gravar Parquet em `<caminho S3 do projeto>/staging/<id_execucao>/<tabela>/`, fora das pastas das
+2. Gravar Parquet em `<caminho S3 do projeto>/staging/<execution_id>/<tabela>/`, fora das pastas das
    tabelas Delta, com o pyarrow.
 3. `COPY execucao_<id>.<tabela> FROM '<manifesto>' IAM_ROLE '<arn>' FORMAT AS PARQUET MANIFEST`, ou
    com `IAM_ROLE 'SESSION'` numa conexão federada por IAM enquanto o namespace não tiver papel

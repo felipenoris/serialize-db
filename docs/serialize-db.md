@@ -24,7 +24,7 @@ do Delta, em [`delta.md`](delta.md); os motores, em [`duckdb.md`](duckdb.md) e
   que o pipeline usa: views ou tabelas materializadas no DuckDB, `COPY ... MANIFEST` no Redshift.
 - **Execução com sandbox, auditoria e publicação.** O pipeline roda num sandbox por execução. A
   auditoria reprova sem tocar o Delta. A publicação substitui meses inteiros, um commit por tabela,
-  com `id_execucao` e as versões lidas nos metadados. A reexecução é idempotente, e o conflito entre
+  com `execution_id` e `input_versions` nos metadados. A reexecução é idempotente, e o conflito entre
   duas execuções do mesmo ambiente aborta a segunda.
 - **Publicação para clientes no Redshift.** A diferença entre a versão publicada e a atual diz quais
   meses recarregar. Todas as tabelas da execução entram numa única transação, e a tabela de controle
@@ -48,11 +48,13 @@ Dois sentidos de snapshot convivem nos documentos. O snapshot da tabela é o est
 numa versão do log, o que `DeltaTable(uri, version=v)` carrega. O snapshot do banco é o conjunto
 `{tabela: versão}` de todas as tabelas num instante escolhido, que o Delta não tem e a biblioteca
 registra; a chave gravada é `serialize_db_snapshot`, com o prefixo da biblioteca para não colidir
-com as chaves do Delta e de outros escritores.
+com as chaves do Delta e de outros escritores. Os metadados próprios têm nomes em inglês, como os
+identificadores do código, inclusive a tabela de controle no Redshift e suas colunas; as tabelas e
+colunas do banco de dados continuam em português.
 
 O log de cada tabela guarda tudo o que é da tabela: os arquivos de cada versão, o esquema de cada
 versão com os comentários de coluna, as estatísticas por arquivo e os metadados que a biblioteca
-grava em cada commit (`id_execucao`, as versões lidas e, quando houver, `serialize_db_snapshot`). O
+grava em cada commit (`execution_id`, `input_versions` e, quando houver, `serialize_db_snapshot`). O
 modelo SQLAlchemy dá o DDL e os tipos do contrato atual, e a reconciliação descrita em
 [`delta.md`](delta.md), seção "Evolução de esquema", garante que ele e o esquema atual do log são o
 mesmo. A biblioteca não guarda cópia de esquema, lista de arquivos nem estatísticas.
@@ -66,7 +68,7 @@ prefixo. Os nomes de tabela são relativos, sem URI, para a realocação descrit
 com `IfMatch` no S3, a mesma primitiva do log, e só a biblioteca escreve. O arquivo é a fonte
 primária e o log é a reconstrução: a marca `serialize_db_snapshot` vive no `commitInfo`, que não
 entra nos checkpoints e some do log quando a limpeza passa de `delta.logRetentionDuration`. O
-segundo registro próprio é a tabela `serialize_db_publicacoes` no Redshift, que fica lá por ser
+segundo registro próprio é a tabela `serialize_db_publications` no Redshift, que fica lá por ser
 transacional com a carga.
 
 Exportar as tabelas de um snapshot usa cada fonte no seu papel. O snapshot atual dispensa metadado
@@ -77,9 +79,9 @@ lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
 
 | Registro | Onde | Conteúdo | Quem grava |
 | --- | --- | --- | --- |
-| Metadados de commit | `commitInfo` de cada commit da biblioteca. | `id_execucao`; `versoes_lidas`, o JSON `{tabela: versão}` fixado na abertura da execução; `serialize_db_snapshot` só na execução que marca um snapshot. | `publish_month` e `register_files`, por `CommitProperties(custom_metadata=...)`. |
+| Metadados de commit | `commitInfo` de cada commit da biblioteca. | `execution_id`; `input_versions`, o JSON `{tabela: versão}` das versões lidas, fixado na abertura da execução; `serialize_db_snapshot` só na execução que marca um snapshot. | `publish_month` e `register_files`, por `CommitProperties(custom_metadata=...)`. |
 | Arquivo de controle | `<ambiente>/_serialize_db/snapshots.json`. | `{"snapshots": {nome: {tabela: versão}}}`, com todas as tabelas do ambiente, lidas ou gravadas. | `snapshot`, com `IfMatch`. |
-| Tabela de controle | `serialize_db_publicacoes(tabela, versao_delta, id_execucao, publicado_em)` no esquema do Redshift; `tabela` leva o prefixo do ambiente, como `prod_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga. |
+| Tabela de controle | `serialize_db_publications(table_name, delta_version, execution_id, published_at)` no esquema do Redshift; `table_name` leva o prefixo do ambiente, como `prod_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga. |
 
 O registro durável de uma execução é o `commitInfo` das tabelas que ela gravou; o relatório da
 auditoria e o resumo da execução vão para o log do processo, não para `_serialize_db/`.
@@ -126,7 +128,7 @@ Os dois motores têm a mesma interface, e a execução não sabe qual está por 
 
 | Primitiva | DuckDB | Redshift |
 | --- | --- | --- |
-| `connect(config)` | Banco em arquivo `/tmp/<id_execucao>.duckdb`, extensão `delta`, secret S3 `credential_chain`, threads e limite de memória. | `redshift_connector` e o papel IAM do `COPY` e do `UNLOAD`. |
+| `connect(config)` | Banco em arquivo `/tmp/<execution_id>.duckdb`, extensão `delta`, secret S3 `credential_chain`, threads e limite de memória. | `redshift_connector` e o papel IAM do `COPY` e do `UNLOAD`. |
 | `ingest(table, uri, version, months, materialize)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou `CREATE TABLE ... AS SELECT ... WHERE mes IN (...)` quando `materialize=True`. | `COPY ... MANIFEST` dos arquivos desses meses numa staging sem `mes` e `INSERT ... SELECT *, '<mes>'` em `exec_<id>_<tabela>`, criada por `ddl(table, "redshift")`. |
 | `query(select)` | O statement Core compilado para o dialeto, executado, devolvendo um `reader` por `to_arrow_reader()`. | O mesmo statement compilado para o Redshift; leitura por ADBC ou `UNLOAD`. |
 | `load(table, reader)` | `INSERT ... BY NAME SELECT * FROM <tabela Arrow>` numa tabela do sandbox. | Parquet em `staging/` mais `COPY`; `insert(Modelo).values(lista)` só para volumes pequenos. |
@@ -144,10 +146,10 @@ Os dois motores têm a mesma interface, e a execução não sabe qual está por 
 | `run.ingest(*tables, months=None, materialize=False)` | `ingest` do motor para cada tabela, na versão fixada; sem `months`, a tabela inteira. |
 | `run.sandbox` | A conexão do motor, onde o pipeline roda statements Core e lógica Python. |
 | `run.audit(table, months)` | `audit` do motor; a reprovação encerra a execução sem tocar o Delta. |
-| `run.publish(table, months)` | `reconcile`, depois `export_month` e `publish_month` por mês, com `id_execucao` e `versoes_lidas`; atualiza `versions[table]`. |
-| `run.publish_redshift(*tables)` | `version_diff` de cada tabela contra `serialize_db_publicacoes` e a carga dos meses alterados numa única transação. |
+| `run.publish(table, months)` | `reconcile`, depois `export_month` e `publish_month` por mês, com `execution_id` e `input_versions`; atualiza `versions[table]`. |
+| `run.publish_redshift(*tables)` | `version_diff` de cada tabela contra `serialize_db_publications` e a carga dos meses alterados numa única transação. |
 | `run.snapshot(name)` | Marca a execução: `serialize_db_snapshot` nos commits e `snapshot(root, name, versions)` no encerramento. |
-| `serialize-db run` | A mesma execução pela linha de comando: ambiente, motor, mês, `id_execucao` e o módulo do pipeline. |
+| `serialize-db run` | A mesma execução pela linha de comando: ambiente, motor, mês, `execution_id` e o módulo do pipeline. |
 
 ```python
 from serialize_db import Database, Execution
@@ -193,12 +195,12 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`estrateg
    materializa as tabelas consultadas muitas vezes com os meses pedidos.
 3. O pipeline roda em `run.sandbox`; os intermediários ficam no sandbox, não no Delta.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
-5. `run.publish` reconcilia o esquema, substitui cada mês num commit com `id_execucao` e
-   `versoes_lidas`, e avança `versions[table]`. Um `CommitFailedError` no mesmo mês significa outra
+5. `run.publish` reconcilia o esquema, substitui cada mês num commit com `execution_id` e
+   `input_versions`, e avança `versions[table]`. Um `CommitFailedError` no mesmo mês significa outra
    execução publicando a mesma tabela, e a execução aborta.
 6. `run.publish_redshift` carrega os meses alterados de todas as tabelas numa transação.
 7. No encerramento, o sandbox é descartado e o resumo vai para o log. Repetir a execução com o
-   mesmo `id_execucao` repete os mesmos `overwrite` e produz o mesmo snapshot.
+   mesmo `execution_id` repete os mesmos `overwrite` e produz o mesmo snapshot.
 
 ### Execução no Redshift
 
@@ -223,18 +225,18 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
 As tabelas publicadas têm o prefixo do ambiente e são derivadas do Delta; nada é escrito nelas por
 outro caminho.
 
-1. `version_diff` compara, para cada tabela, a versão em `serialize_db_publicacoes` com a versão
+1. `version_diff` compara, para cada tabela, a versão em `serialize_db_publications` com a versão
    atual e devolve os meses com arquivos novos. Na primeira publicação, todos os meses.
 2. A reconciliação repete no Redshift o diff aditivo do Delta, `ALTER TABLE ADD COLUMN` no fim da
    tabela, porque o `COPY` é posicional; um diff destrutivo recria a tabela e recarrega tudo.
 3. Numa única transação, para cada tabela e mês: `DELETE` do mês, `COPY ... MANIFEST` na staging,
-   `INSERT ... SELECT *, '<mes>'` e a linha de `serialize_db_publicacoes`. A transação dá aos
+   `INSERT ... SELECT *, '<mes>'` e a linha de `serialize_db_publications`. A transação dá aos
    clientes a atomicidade entre tabelas que o Delta não tem.
 4. Uma execução de correção publica só o mês corrigido.
 
 ### Correção de um mês
 
-1. A mesma `Execution`, com o mês a corrigir e um `id_execucao` novo.
+1. A mesma `Execution`, com o mês a corrigir e um `execution_id` novo.
 2. `run.publish` substitui o mês nas tabelas afetadas; a versão anterior continua legível até o
    `vacuum`, dentro dos 400 dias de retenção.
 3. `run.publish_redshift` recarrega só esse mês.

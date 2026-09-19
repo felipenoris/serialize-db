@@ -515,7 +515,7 @@ marcados, com uma amostra pequena.
 | 4. Motor Redshift | `serialize_db.engine.redshift`: conexão `redshift_connector`; sandbox com prefixo `exec_<id>_`; `ingest` por `COPY ... MANIFEST` com staging; `query` (multi-row `INSERT` para volumes pequenos, ADBC ou `UNLOAD` para leitura); `export_month` por `UNLOAD ... PARTITION BY` mais registro; limpeza do sandbox. | SQL compilado coberto por testes; integração com amostra num cluster. |
 | 5. Execução | `serialize_db.execution`: `Execution(db, engine, months)` com o ciclo abrir, ingerir, executar, auditar, publicar, encerrar; metadados de commit; log; CLI `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
 | 6. Carga inicial | Script de migração dos Parquet atuais para o Delta, por tabela e por mês, com cast para o contrato e relatório de contagens e somas; corte de leitura para o Delta. | Contagens e somas por mês iguais entre origem e Delta. |
-| 7. Publicação para clientes | Tabelas `prod_*` no Redshift; `version_diff` gera `DELETE` e `COPY` por mês, de todas as tabelas da execução numa única transação; tabela de controle `serialize_db_publicacoes`. | Um mês alterado recarrega só esse mês. |
+| 7. Publicação para clientes | Tabelas `prod_*` no Redshift; `version_diff` gera `DELETE` e `COPY` por mês, de todas as tabelas da execução numa única transação; tabela de controle `serialize_db_publications`. | Um mês alterado recarrega só esse mês. |
 | 8. Operação | Snapshots do banco na periodicidade do processo, `vacuum` mensal com `keep_versions`, compactação antes do snapshot, cópia profunda anual; documentação com `pdoc`; monitoração por `history()`. | Runbook escrito e testes de manutenção passando. |
 
 As etapas 1 e 2 não dependem da AWS e começam antes da etapa 0 terminar; a etapa 3 fecha um
@@ -532,12 +532,12 @@ Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, mê
 
 | Etapa | O que acontece | Artefatos |
 | --- | --- | --- |
-| 1. Abertura | Lê `_serialize_db/snapshots.json` e `serialize_db_publicacoes`; abre cada tabela de entrada e registra a versão. | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
+| 1. Abertura | Lê `_serialize_db/snapshots.json` e `serialize_db_publications`; abre cada tabela de entrada e registra a versão. | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
 | 2. Ingestão | DuckDB: `ATTACH ... (TYPE delta, VERSION 143)` e views com os nomes dos modelos; `cad_lancamentos` materializada com `WHERE mes BETWEEN '2025-09' AND '2026-08'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos desses meses em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
 | 3. Execução | O pipeline roda statements Core e lógica Python sobre o sandbox; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, mês 2026-08. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave, `mes = strftime(data_ref, '%Y-%m')`, limites de tipo, totais de controle. | Relatório da execução; reprovação encerra sem tocar o Delta. |
-| 5. Publicação no Delta | `write_deltalake(projected_uri, reader, mode="overwrite", predicate="mes = '2026-08'")` com `custom_metadata={"id_execucao": ..., "versoes_lidas": ...}`; do Redshift, `UNLOAD ... PARTITION BY (mes)` mais `create_write_transaction`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `mes=2026-08/`. |
-| 6. Publicação no Redshift | `version_diff(57, 58)` aponta o mês 2026-08; `DELETE` do mês, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08'`; controle atualizado. | `prod_cad_lancamentos_projetados` com o mês novo; `serialize_db_publicacoes` em 58. |
+| 5. Publicação no Delta | `write_deltalake(projected_uri, reader, mode="overwrite", predicate="mes = '2026-08'")` com `custom_metadata={"execution_id": ..., "input_versions": ...}`; do Redshift, `UNLOAD ... PARTITION BY (mes)` mais `create_write_transaction`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `mes=2026-08/`. |
+| 6. Publicação no Redshift | `version_diff(57, 58)` aponta o mês 2026-08; `DELETE` do mês, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08'`; controle atualizado. | `prod_cad_lancamentos_projetados` com o mês novo; `serialize_db_publications` em 58. |
 | 7. Snapshot do banco | Só na execução marcada como snapshot, por exemplo a do fim do trimestre: `custom_metadata={"serialize_db_snapshot": "2026T3"}` e entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
 
@@ -558,7 +558,7 @@ with Execution(db, engine="duckdb", month="2026-08", execution_id="exec-2026-09-
     run.publish_redshift(LancamentoProjetado)                        # só os meses alterados
 ```
 
-Uma reexecução com o mesmo `id_execucao` repete os `overwrite` dos mesmos meses e produz o mesmo
+Uma reexecução com o mesmo `execution_id` repete os `overwrite` dos mesmos meses e produz o mesmo
 snapshot. Uma execução de correção de um mês antigo é a mesma chamada com outro `mes`; as versões
 intermediárias entre snapshots do banco saem no `vacuum` mensal.
 
