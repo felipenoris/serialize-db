@@ -448,6 +448,33 @@ conversão, e o Redshift passaria a lê-la por esquema externo. A diferença de 
 formatos, o ponteiro da versão atual implícito no log do Delta e trocado no catálogo do Iceberg,
 está em [`delta.md`](delta.md).
 
+### Maturidade do Delta e o gatilho de reavaliação
+
+O Delta não é uma escolha defasada, e a avaliação de 2026-09-19 registra por quê. O delta-spark
+4.4.0 é de 2026-08-20, o deltalake 1.6.4 de 2026-09-18, e o protocolo continua ganhando recursos
+(`catalogManaged`, `clustering`, `rowTracking`, `variantType`). O Iceberg virou o padrão neutro de
+intercâmbio, adotado por S3 Tables, Athena, Redshift, Glue, Snowflake e BigQuery, e os dois formatos
+convergem em vez de se substituir: a Databricks, ao comprar a Tabular em junho de 2024, declarou a
+meta de um padrão único em vários anos, e a versão 3 da especificação do Iceberg incorporou vetores
+de exclusão, variant, linhagem de linha e valores padrão, enquanto a versão 4, em rascunho, traz
+caminhos relativos nos metadados, tudo já existente no Delta. Para um projeto novo com catálogo e
+vários fornecedores, o Iceberg seria a escolha. Aqui a conta inverte: o Iceberg sem catálogo está
+fora da especificação, que exige a troca atômica do ponteiro no catálogo, e o escritor Python sem
+JVM é mais completo no delta-rs (`merge`, `update`, `delete`, `optimize`, `restore`, `vacuum`,
+constraints) do que no PyIceberg (append, overwrite com filtro, delete, upsert). O risco a observar é
+o recurso `catalogManaged`, que move o commit para um catálogo, o modelo do Iceberg; o commit por
+arquivo continua no protocolo e é o que o delta-rs usa.
+
+A decisão é reversível porque os dados são Parquet comum com `data_ref` dentro dos arquivos: um
+Iceberg particionado por `month(data_ref)` os registra com `add_files` sem reescrever, e o Apache
+XTable converte os metadados Delta em Iceberg sem tocar nos dados, num jar Java sem Spark. O UniForm
+não serve: exige Spark e column mapping, que troca os nomes físicos das colunas e quebra o `COPY` do
+Redshift, e é somente leitura para clientes Iceberg. As regras que mantêm a saída aberta já estão nas
+etapas: sem vetores de exclusão, sem column mapping, um único escritor, caminhos relativos. O gatilho
+de reavaliação é a disponibilidade do Glue, do S3 Tables ou de um catálogo acessível ao Redshift;
+nesse dia a tabela de "Comparação para os requisitos do projeto" é refeita com o Iceberg registrável,
+e a saída do Delta para pastas Parquet está em [`delta.md`](delta.md).
+
 ## Lições que orientam as etapas
 
 - O Delta guarda a coluna de partição só na ação `add`; o arquivo de dados não a tem. O Redshift a

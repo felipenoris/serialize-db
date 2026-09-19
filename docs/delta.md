@@ -605,6 +605,120 @@ Uma exportação para outro layout (um arquivo por mês com `FIELD_IDS` e `KV_ME
 um `COPY (SELECT ... FROM delta_scan(uri) WHERE ...) TO ...` do DuckDB, com as opções de
 [`parquet.md`](parquet.md).
 
+## Exportação do snapshot para pastas Parquet por mês
+
+Sair do Delta e voltar às pastas Parquet por mês, como as que o Hive lê no HDFS, é exportar o
+snapshot atual: as partições de todos os meses, na versão atual, sem o log. O histórico de versões
+fica para trás; um fechamento que precise sobreviver é exportado à parte, a partir de
+`DeltaTable(uri, version=v)`, como em "Fotos históricas da base". Uma tabela particionada por dia
+segue o mesmo caminho, com a coluna de partição diária no lugar de `mes`.
+
+Copiar a pasta da tabela não serve. Ela guarda todos os arquivos já gravados, inclusive os que
+commits posteriores tiraram do snapshot (meses substituídos, arquivos reescritos por `update`,
+`delete` e `merge`, arquivos pequenos compactados pelo `optimize`), até que o `vacuum` os apague;
+guarda o `_delta_log/`, cujos checkpoints também são Parquet; e, se os recursos estivessem
+habilitados, guardaria arquivos de change data feed e de vetores de exclusão. Na verificação abaixo,
+uma tabela com 20 commits tinha 20 arquivos de dados no disco para 14 no snapshot, e a leitura da
+pasta inteira devolveu 330.000 linhas a mais.
+
+O que decide entre copiar e reescrever é o esquema dos arquivos vivos. Cada arquivo tem o esquema da
+época em que foi gravado: depois de um `ADD COLUMN`, os arquivos anteriores não têm a coluna, e só os
+meses reescritos depois passam a tê-la (4 de 14 na verificação). O Delta preenche nulo na leitura;
+fora dele, isso fica a cargo do leitor. Leitores por nome preenchem nulo: o Hive por padrão
+(`parquet.column.index.access=false`), o Spark e o DuckDB com `union_by_name`. Leitores posicionais,
+como o `COPY` do Redshift, não. Sem `union_by_name`, o DuckDB toma o esquema do primeiro arquivo do
+glob, e as colunas que só existem em arquivos posteriores somem em silêncio. Mudança de tipo não
+deixa arquivo heterogêneo, porque só acontece por reescrita da tabela inteira. Column mapping deixaria
+os nomes físicos `col-<uuid>` nos arquivos; o projeto não o habilita.
+
+Copiar pelo log é a opção que não lê dados. A lista `get_add_actions()` do snapshot dá o caminho
+relativo de cada arquivo vivo, já no layout Hive `mes=2026-02/part-....parquet`, e o valor da
+partição. Copiar exatamente esses arquivos, sem o log, produz a pasta por mês; no S3 é um
+`CopyObject` por arquivo, sem baixar. O `path` da ação `add` é uma URI, decodificada com `unquote`
+antes de usar.
+
+```python
+import shutil
+from pathlib import Path
+from urllib.parse import unquote
+
+import pyarrow as pa
+from deltalake import DeltaTable
+
+def copy_snapshot(dt: DeltaTable, dest: Path) -> int:
+    root = Path(dt.table_uri.removeprefix("file://"))
+    actions = pa.table(dt.get_add_actions(flatten=True)).to_pylist()
+    for action in actions:
+        relative = unquote(action["path"])       # mes=2026-02/part-....parquet
+        target = dest / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / relative, target)    # no S3: copy_object(Bucket, Key, CopySource), sem baixar
+    return len(actions)
+
+dt = DeltaTable(uri)
+copy_snapshot(dt, Path("export_a"))              # 14 arquivos em 0,014 s
+```
+
+Os arquivos saem como o delta-rs os gravou: sem a coluna de partição dentro, `DECIMAL(18, 2)` como
+`INT64`, colunas não anuláveis `required`, com estatísticas. O Hive deriva `mes` do diretório e
+precisa da tabela declarada com todas as colunas atuais e de `MSCK REPAIR TABLE` ou
+`ALTER TABLE ... ADD PARTITION` para enxergar as pastas. A cópia serve quando os leitores são por
+nome, ou quando nenhum `ADD COLUMN` aconteceu desde a última reescrita de todos os meses.
+
+Reescrever pelo snapshot é a opção que normaliza. O DuckDB lê o snapshot por `delta_scan` e grava as
+pastas com um `COPY` particionado: cada arquivo sai com o esquema atual, as colunas acrescentadas
+preenchidas com nulo nos meses antigos, as linhas excluídas ausentes e um arquivo por mês. Sem
+`WRITE_PARTITION_COLUMNS`, a coluna de partição fica fora dos arquivos, como o Hive e o Spark esperam
+de uma pasta particionada. No S3, `delta_scan('s3://...')` e `COPY ... TO 's3://...'` usam o mesmo
+secret, e as opções de sobrescrita não apagam prefixos: o destino é limpo antes.
+
+```python
+import duckdb
+
+con = duckdb.connect()
+con.sql(f"""
+    COPY (SELECT * FROM delta_scan('{uri}'))
+    TO 'export_b' (FORMAT parquet, PARTITION_BY (mes), OVERWRITE_OR_IGNORE)
+""")                                             # mes=2026-02/data_0.parquet, um por mês, 0,071 s
+
+# Um COPY por mês limita a memória, é reexecutável e aceita as opções de parquet.md.
+for (mes,) in con.sql(f"SELECT DISTINCT mes FROM delta_scan('{uri}') ORDER BY mes").fetchall():
+    Path(f"export_c/mes={mes}").mkdir(parents=True, exist_ok=True)
+    con.sql(f"""
+        COPY (SELECT * EXCLUDE (mes) FROM delta_scan('{uri}') WHERE mes = '{mes}')
+        TO 'export_c/mes={mes}/data_0.parquet' (FORMAT parquet)
+    """)                                         # 14 meses em 0,171 s
+```
+
+Sem o DuckDB, o PyArrow faz o mesmo a partir do dataset do delta-rs, e grava `DECIMAL` como
+`FIXED_LEN_BYTE_ARRAY`:
+
+```python
+import pyarrow.dataset as ds
+
+ds.write_dataset(
+    dt.to_pyarrow_dataset(), "export_d", format="parquet",
+    partitioning=ds.partitioning(pa.schema([("mes", pa.string())]), flavor="hive"),
+    existing_data_behavior="delete_matching",
+)                                                # mes=2026-02/part-0.parquet, 0,097 s
+```
+
+Verificação com 1.329.900 linhas em 14 meses depois de 20 commits (12 appends, substituição de um
+mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends pequenos e
+`optimize.compact`), com checkpoint gravado:
+
+| Verificação | Resultado |
+| --- | --- |
+| Arquivos de dados no disco e no snapshot | 20 no disco, 14 no snapshot; `vacuum(dry_run=True)` listou os 6 a mais. |
+| `read_parquet('tabela/mes=*/*.parquet')` | 1.659.900 linhas, 330.000 além do snapshot: o mês substituído, os arquivos anteriores ao `update` e ao `delete` e os três pequenos compactados. |
+| `read_parquet('tabela/**/*.parquet', union_by_name=true)` | Leu também o checkpoint de `_delta_log/` e somou suas 22 linhas sem erro. |
+| Arquivos vivos com a coluna acrescentada | 4 de 14: o mês novo e os três reescritos depois do `ADD COLUMN`. |
+| Cópia pelo log | 14 arquivos em 0,014 s; lida com `union_by_name=true`, contagem, soma e nulos iguais aos do `delta_scan`. Sem `union_by_name`, o DuckDB toma o esquema do primeiro arquivo do glob e omite a coluna nova quando ele não a tem. |
+| `COPY ... PARTITION_BY (mes)` do DuckDB, 11 threads | 14 arquivos `data_0.parquet`, um por mês, em 0,071 s; sem `mes` dentro dos arquivos; `WRITE_PARTITION_COLUMNS true` o inclui; lida sem `union_by_name`, igual ao `delta_scan`. |
+| Um `COPY` por mês | 14 arquivos em 0,171 s; igual ao `delta_scan`. |
+| `pyarrow.dataset.write_dataset` a partir de `to_pyarrow_dataset()` | 14 arquivos `part-0.parquet` em 0,097 s; sem `mes` dentro; igual ao `delta_scan`. |
+| Tipo físico de `valor` | `INT64` no delta-rs e no DuckDB; `FIXED_LEN_BYTE_ARRAY` no PyArrow. |
+
 ## Pipeline com o Delta como fonte da verdade
 
 1. **Início da execução.** A biblioteca abre cada tabela de entrada e registra
@@ -948,6 +1062,8 @@ Implementações do protocolo e uso sem Spark:
 DuckDB:
 
 - <https://duckdb.org/docs/current/core_extensions/delta.html>
+- <https://duckdb.org/docs/current/data/partitioning/partitioned_writes.html>
+- <https://cwiki.apache.org/confluence/display/Hive/Parquet>
 - <https://duckdb.org/docs/current/core_extensions/iceberg/overview.html>
 
 Iceberg e Redshift:

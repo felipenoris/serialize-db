@@ -445,6 +445,11 @@ Extensões `delta`, `iceberg` e `ducklake`, e `ATTACH` remoto:
 - <https://duckdb.org/docs/current/sql/statements/attach.html>
 - <https://duckdb.org/2026/04/13/announcing-duckdb-152>
 
+Escrita particionada (`COPY ... PARTITION_BY`), consultada em 2026-09-19:
+
+- <https://duckdb.org/docs/stable/data/partitioning/partitioned_writes>
+- <https://duckdb.org/docs/current/data/partitioning/partitioned_writes.html>
+
 ## PyArrow
 
 - <https://arrow.apache.org/docs/python/parquet.html>
@@ -934,6 +939,12 @@ Manifesto do DuckLake (transações entre tabelas e schemas como grupos de tabel
 ## Hudi
 
 - <https://github.com/apache/hudi-rs/blob/main/README.md>
+
+## Apache Hive
+
+Leitura de Parquet por nome e a propriedade `parquet.column.index.access`, consultada em 2026-09-19:
+
+- <https://cwiki.apache.org/confluence/display/Hive/Parquet>
 
 ## SQLGlot, SQLMesh, dbt, Ibis e dlt
 
