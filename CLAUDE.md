@@ -149,12 +149,15 @@ matching group.
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
+| `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), supported types, table creation from the SQLAlchemy model, schema evolution rules and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
 | `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the recommendation (Delta Lake plus SQLAlchemy Core), the decisions taken with the user and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
-`docs/duckdb.md` and `docs/redshift.md` share a section order: data organization and the differences
-from PostgreSQL, supported types with `DECIMAL` and JSON, DDL, `SELECT`/`INSERT`/`UPDATE`/`DELETE`,
-ingestion, export to Parquet, performance recommendations, SQLAlchemy support, references.
+`docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
+the differences from PostgreSQL, supported types with `DECIMAL` and JSON, DDL,
+`SELECT`/`INSERT`/`UPDATE`/`DELETE`, ingestion, export to Parquet, performance recommendations,
+SQLAlchemy support, references. `docs/delta.md` adds schema evolution, transactions, the pipeline,
+DuckDB and Redshift access, and relocation.
 
 ## What the documents establish
 
@@ -223,6 +226,27 @@ Each fact below is detailed in the file named at the end of its line.
   into `long` were accepted; decimal(20,4) into decimal(18,2) refused) without changing the table;
   type changes need `mode="overwrite"` with `schema_mode="overwrite"`. The reconcile step must refuse
   NOT NULL additions and the Arrow cast must enforce types before writing. `docs/estrategia.md`
+- Two delta-rs writers on the same version: append plus append both commit; overwrite of the same
+  month fails with `CommitFailedError`; overwrites of different months both commit. App
+  transactions (`Transaction(app_id, version)`) are recorded but not enforced: a repeated write with
+  the same version was accepted. `docs/delta.md`
+- `add`/`remove` paths are relative to the table folder: a copied folder opened at the same version
+  with the same rows in delta-rs and DuckDB, history and time travel intact. Never register files
+  by absolute URI. Iceberg manifests store absolute paths. `docs/delta.md`
+- DuckDB `INSERT INTO` an attached Delta table works (commitInfo shows `UNKNOWN`) but writes the
+  partition column inside the file, unlike delta-rs; mixing writers breaks positional `COPY`.
+  `COPY ... (RETURN_STATS)` plus `AddAction` with stats gives files that both readers prune
+  (`Scanning Files: 0/12`). `docs/delta.md`
+- On local disk, 3,000,000 rows in 12 files: `delta_scan` aggregates in 0.010 s against 0.006 s for
+  `read_parquet` and 0.007 s for a materialized table; 20 point queries took 0.05 s through
+  `delta_scan` and under 0.01 s on a table. Materialize only tables queried repeatedly; S3 numbers
+  are pending. `docs/delta.md`
+- delta-rs log cleanup is automatic at checkpoint time and removes log files older than
+  `delta.logRetentionDuration` (30 days by default): with `interval 0 days` version 0 became
+  unreadable after five commits. `vacuum(keep_versions=[...])` preserves the files of chosen
+  versions (quarterly closings) while removing those of intermediate versions; `full=True` also
+  lists orphan files. A deep copy of a version is `write_deltalake(destino,
+  DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader())`. `docs/delta.md`
 - PyIceberg 0.12.0 with a SQLite `sql` catalog writes Iceberg without a service: hidden partition by
   `month(data_ref)`, `overwrite` with a filter, rename and add columns, `add_files`; the catalog
   holds one row per table in a 20 KB file. DuckDB `iceberg_scan` needs the `metadata.json` path,
@@ -276,7 +300,8 @@ rows of `operacoes` with the columns `id_operacao`, `data_ref`, `id_cliente`, `v
 The proof of concept in `docs/estrategia.md` ran on 2026-09-19 on macOS arm64 with Python 3.13,
 deltalake 1.6.4, DuckDB 1.5.5 with the `delta`, `ducklake` and `iceberg` extensions (ducklake
 `d8a1881e`, metadata version 1.0), PyIceberg 0.12.0 with the `sql-sqlite` and `pyiceberg-core`
-extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through `uv run --with` in the scratchpad. Nothing ran against S3 or Redshift.
+extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through `uv run --with` in the scratchpad, with 11 DuckDB
+threads and the files in the page cache. Nothing ran against S3 or Redshift.
 
 ## Questions the official documentation does not answer
 

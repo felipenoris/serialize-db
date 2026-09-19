@@ -3,8 +3,8 @@
 Este arquivo lista os sites consultados na pesquisa do
 plano de implementação e dos documentos sobre
 [arquivos Parquet](docs/parquet.md), [DuckDB](docs/duckdb.md), [Redshift](docs/redshift.md),
-[SQLAlchemy](docs/sqlalchemy.md) e a [estratégia de implementação](docs/estrategia.md), agrupados
-por assunto.
+[SQLAlchemy](docs/sqlalchemy.md), [Delta Lake](docs/delta.md) e a
+[estratégia de implementação](docs/estrategia.md), agrupados por assunto.
 
 ## Projetos de referência
 

@@ -1,8 +1,10 @@
 # Estratégia de implementação
 
-Este documento avalia como implementar a biblioteca sem reescrever um formato de tabela: qual camada
-gerencia os arquivos Parquet no S3 sem um serviço de catálogo, qual camada gera o SQL que roda no
-DuckDB e no Redshift, e se uma extensão em Rust com PyO3 compensa. As fontes estão em
+Este documento registra a escolha das camadas da biblioteca e as razões: qual camada gerencia os
+arquivos Parquet no S3 sem um serviço de catálogo, qual camada gera o SQL que roda no DuckDB e no
+Redshift, e se uma extensão em Rust com PyO3 compensa. A decisão é o Delta Lake pelo pacote
+`deltalake` como fonte da verdade, o SQLAlchemy mantido como contrato e Core, e a migração de esquema
+sem Alembic; o uso do Delta está em [`delta.md`](delta.md). As fontes estão em
 [`REFERENCES.md`](../REFERENCES.md). As verificações locais rodaram em 2026-09-19 com Python 3.13,
 deltalake 1.6.4, DuckDB 1.5.5 com as extensões `delta` e `ducklake`, PyArrow 25.0.1 e SQLGlot 30.18.0,
 num macOS arm64; nada rodou contra o S3 nem contra um cluster Redshift.
@@ -40,7 +42,11 @@ armazenamento só exclusão mútua na criação do arquivo de versão, isto é, 
 partição ficam na ação `add`, não nos arquivos de dados.
 
 O `deltalake` (pacote Python do delta-rs, versão 1.6.4 de 2026-09-18) escreve e lê esse log sem
-serviço externo:
+serviço externo. Ele grava em disco local, S3 e compatíveis (MinIO, R2), Azure, GCS, HDFS, LakeFS e,
+por OpenDAL, outros; a exigência para vários escritores é o put-if-absent, que o S3 tem desde 2024.
+Toda requisição ao S3 é assinada, e o cliente do delta-rs busca as credenciais em variáveis de
+ambiente, credenciais de contêiner, web identity, metadados da instância ou `storage_options`, não em
+perfis de `~/.aws/config`:
 
 - Desde a versão 1.6.0 (2026-05-19) o `S3DynamoDbLogStore` foi removido, e a escrita condicional do
   S3 é o modo padrão de commit no S3. A discussão 4482 do repositório orienta a retirar
@@ -351,6 +357,30 @@ que o Alembic dava, o histórico revisável e o diff entre modelo e banco, vem d
 gerado e versionado no repositório ([`schema.md`](schema.md)) e do histórico do Delta. O Alembic sai.
 O Atlas cobre o Redshift só no plano pago e não cobre o DuckDB.
 
+## Por que o Alembic sai
+
+O Alembic resolvia um problema que o desenho com Delta não tem: aplicar mudanças de esquema a um
+banco que é a única cópia dos dados, com histórico dos scripts e caminho de volta. Quatro razões o
+retiram da biblioteca:
+
+1. A tabela do lago não tem DDL em SQL a migrar. O esquema é criado do modelo por
+   `DeltaTable.create`, e cada mudança é um commit de `metaData` no log, versionado junto com os
+   dados; uma versão antiga é lida com o esquema daquela versão.
+2. As outras cópias são derivadas. As tabelas do sandbox são recriadas a cada execução, e as
+   publicadas no Redshift são recarregadas do Delta; um erro de esquema se corrige recarregando ou
+   com `restore`, não com um script de downgrade.
+3. As regras de evolução precisam viver na biblioteca de qualquer modo, porque o delta-rs não as
+   impõe: `add_columns` aceita uma coluna `NOT NULL` numa tabela com dados e a deixa nula em todas as
+   linhas, e o `append` converte os dados para o tipo da tabela em vez de acusar a diferença. A
+   reconciliação que aplica o diff aditivo e recusa o destrutivo é um único mecanismo; o Alembic
+   seria um segundo para o mesmo diff.
+4. O suporte do Alembic aos dois dialetos já era fraco: o DuckDB exige um `DefaultImpl` próprio, e o
+   Redshift executa `executemany` linha a linha.
+
+O que se perde é a migração de dados escrita em SQL, como um backfill; no pipeline isso é uma
+reexecução dos meses afetados ou um `update` com predicado no Delta. A correspondência recurso a
+recurso está em [`delta.md`](delta.md).
+
 ## Rust e PyO3
 
 A cadeia de ferramentas existe e é simples de adotar: `uv init --build-backend maturin` gera
@@ -370,9 +400,9 @@ contrato a contrato, ou quando for preciso um log store fora do que o delta-rs o
 construir wheels para Linux amd64 (SageMaker) a partir do macOS, com `maturin` e compilação cruzada
 ou CI, e acompanhar as mudanças de API do `pyo3`.
 
-## Recomendação
+## Decisão
 
-Adotar o Delta Lake por `deltalake` como camada de tabela sobre o Parquet no S3, e manter o SQLAlchemy
+A camada de tabela é o Delta Lake por `deltalake`, sobre o Parquet no S3, e o SQLAlchemy permanece
 como camada de SQL do pipeline, no uso que ele já tem: os modelos declarativos definem o `Table` de cada
 tabela, e statements Core de `select` e `insert` movem DataFrames; o pipeline não instancia classes ORM.
 O que muda é o caminho dos DataFrames, que passa por Arrow: no DuckDB, `INSERT ... BY NAME SELECT *
@@ -410,10 +440,12 @@ leitores menor, permanece. O SQLMesh e o dbt saem, porque o pipeline é majorita
 e não transformações SQL. A troca do SQLAlchemy por SQLGlot puro exige reescrever as consultas sem
 ganho de portabilidade, porque os dois exigem os mesmos testes no Redshift.
 
-O Iceberg com catálogo SQLite é a alternativa que troca a ausência de código próprio do Delta pela
-sincronização do arquivo do catálogo. Ela passa a ser a escolha se houver perspectiva de o Glue ou o
-S3 Tables serem habilitados durante a vida do projeto: a tabela é registrada por `register_table` sem
-conversão, e o Redshift passa a lê-la por esquema externo. Sem essa perspectiva, o Delta permanece.
+O Iceberg com catálogo SQLite fica documentado como a alternativa que troca a ausência de código
+próprio do Delta pela sincronização do arquivo do catálogo. Ela volta à mesa se o Glue ou o S3 Tables
+forem habilitados durante a vida do projeto: a tabela seria registrada por `register_table` sem
+conversão, e o Redshift passaria a lê-la por esquema externo. A diferença de fundo entre os dois
+formatos, o ponteiro da versão atual implícito no log do Delta e trocado no catálogo do Iceberg,
+está em [`delta.md`](delta.md).
 
 ## Decisões
 
@@ -422,9 +454,13 @@ conversão, e o Redshift passa a lê-la por esquema externo. Sem essa perspectiv
   Consequência: o SQLAlchemy permanece como metadados do contrato e Core; SQLMesh e dbt saem; a
   entrada e a saída de DataFrames passam por Arrow, com `COPY` no Redshift.
 - Não há serviço de catálogo habilitado para o projeto. Consequência: a camada de tabela não pode
-  depender de um serviço. O Delta atende sem código próprio; o Iceberg atende com o catálogo SQLite
-  em arquivo movido pela biblioteca, o mesmo custo do DuckLake. A escolha entre os dois depende de
-  haver ou não perspectiva de o Glue ou o S3 Tables serem habilitados durante a vida do projeto.
+  depender de um serviço. O Delta atende sem código próprio; o Iceberg atenderia com o catálogo
+  SQLite em arquivo movido pela biblioteca, o mesmo custo do DuckLake. A escolha recaiu sobre o
+  Delta; o Iceberg fica documentado para o caso de o Glue ou o S3 Tables serem habilitados.
+- O Delta é a fonte da verdade depois da carga inicial dos Parquet atuais. Consequência: o esquema de
+  cada tabela continua definido no modelo SQLAlchemy, e dele a biblioteca cria a tabela Delta por
+  `DeltaTable.create`, sem DDL em SQL; a evolução de esquema e o histórico ficam no log, e o Alembic
+  sai pelas razões da seção seguinte.
 - Execuções de desenvolvimento e de produção gravam tabelas separadas. Consequência: um caminho Delta
   por ambiente (`s3://<bucket>/<ambiente>/<tabela>/`) e o prefixo por ambiente no esquema do
   Redshift; a concorrência que resta é entre reexecuções do mesmo ambiente, que o log do Delta
