@@ -559,6 +559,11 @@ Consultadas para a estratégia de implementação:
 - <https://py.iceberg.apache.org/api/>
 - <https://dlthub.com/docs/dlt-ecosystem/destinations/iceberg>
 
+Especificação do catálogo REST do Iceberg (namespaces e commit de várias tabelas), consultada em
+2026-09-19:
+
+- <https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml>
+
 ## AWS Glue Data Catalog
 
 - <https://docs.aws.amazon.com/glue/latest/dg/table-optimizers.html>
@@ -908,6 +913,11 @@ Implementações do protocolo (delta-spark, delta-rs, Delta Kernel) e uso sem Sp
 - <https://github.com/duckdb/ducklake/discussions/519>
 - <https://motherduck.com/blog/announcing-ducklake-1-0-on-motherduck/>
 - <https://dlthub.com/docs/dlt-ecosystem/destinations/ducklake>
+
+Manifesto do DuckLake (transações entre tabelas e schemas como grupos de tabelas), consultado em
+2026-09-19:
+
+- <https://ducklake.select/manifesto/>
 
 ## Hudi
 

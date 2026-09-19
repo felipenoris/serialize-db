@@ -102,6 +102,12 @@ json.loads(pathlib.Path("cad_operacoes/_delta_log/_last_checkpoint").read_text()
   reescreveu um arquivo de dez linhas: `num_added_files: 1, num_removed_files: 1, num_copied_rows: 9`).
 - Não há índices, chaves primárias, únicas nem estrangeiras. O que existe é `NOT NULL` e `CHECK`,
   aplicados pelo escritor, e as estatísticas por arquivo, que fazem o papel do índice na leitura.
+- Não há banco nem schema como conjunto de tabelas. O esquema do Delta é a lista de colunas de uma
+  tabela, na ação `metaData` do log dela, e o formato não sabe quais tabelas formam o banco. A pasta
+  com uma subpasta por tabela agrupa os arquivos, e o `MetaData` do SQLAlchemy é o único lugar que
+  declara o conjunto e as relações entre as tabelas, por isso é o contrato. Nos documentos, "esquema
+  da tabela" é o das colunas e "contrato de esquema" é o do conjunto; no DuckDB e no Redshift, schema
+  é o namespace que agrupa tabelas.
 - Não há transação entre tabelas. Cada tabela tem o próprio log, e um commit é atômico numa tabela.
   Uma execução que publica várias tabelas faz um commit por tabela. A biblioteca fixa a versão de
   cada tabela lida no início, grava `id_execucao` e essas versões em cada commit, e quem precisa de
