@@ -554,10 +554,10 @@ um. O PyArrow monta os dois com `metadata_collector` e `write_metadata`. O DuckD
 # Chaves próprias no esquema Arrow voltam no rodapé ao lado de ARROW:schema; os sumários saem de metadata_collector.
 import pyarrow.parquet as pq
 
-table_with_metadata = table.replace_schema_metadata({"serialize_db_version": "0.1.0", "id_execucao": "abc123"})
+table_with_metadata = table.replace_schema_metadata({"serialize_db_version": "0.1.0", "serialize_db_execution_id": "abc123"})
 pq.write_table(table_with_metadata, "operacoes.parquet")
 print(pq.read_metadata("operacoes.parquet").metadata.keys())
-# dict_keys([b'ARROW:schema', b'id_execucao', b'serialize_db_version'])
+# dict_keys([b'ARROW:schema', b'serialize_db_execution_id', b'serialize_db_version'])
 with pq.ParquetWriter("operacoes_2.parquet", table.schema) as writer:
     writer.write_table(table)
     writer.add_key_value_metadata({"linhas": str(table.num_rows)})  # valor conhecido só no fim da gravação
@@ -653,8 +653,8 @@ cobre `1` a `5000` em todos. Os valores de `BLOB` de `parquet_kv_metadata` preci
 ```sql
 SELECT key::VARCHAR AS key, value::VARCHAR AS value
 FROM parquet_kv_metadata('operacoes_duckdb.parquet');
--- serialize_db_version │ 0.1.0
--- id_execucao          │ abc123
+-- serialize_db_version      │ 0.1.0
+-- serialize_db_execution_id │ abc123
 ```
 
 ```sql
@@ -1241,7 +1241,7 @@ COPY (
     COMPRESSION zstd,
     ROW_GROUP_SIZE 100_000,
     FIELD_IDS {id_operacao: 1, data_ref: 2, id_cliente: 3, valor: 4, descricao: 5},
-    KV_METADATA {serialize_db_version: '0.1.0', id_execucao: 'abc123'},
+    KV_METADATA {serialize_db_version: '0.1.0', serialize_db_execution_id: 'abc123'},
     RETURN_STATS
 );
 ```

@@ -95,37 +95,10 @@ json.loads(pathlib.Path("cad_operacoes/_delta_log/_last_checkpoint").read_text()
 # {'version': 6, 'size': 8, 'sizeInBytes': ..., 'numOfAddFiles': 5}
 ```
 
-### Metadados próprios da biblioteca
-
-Dois sentidos de snapshot convivem neste documento. O snapshot da tabela é o estado de uma tabela
-numa versão do log, o que `DeltaTable(uri, version=v)` carrega. O snapshot do banco é o conjunto
-`{tabela: versão}` de todas as tabelas num instante escolhido, que o Delta não tem e a biblioteca
-registra; a chave gravada é `serialize_db_snapshot`, com o prefixo da biblioteca para não colidir
-com as chaves do Delta e de outros escritores.
-
-O log de cada tabela guarda tudo o que é da tabela: os arquivos de cada versão, o esquema de cada
-versão com os comentários de coluna, as estatísticas por arquivo e os metadados que a biblioteca
-grava em cada commit (`id_execucao`, as versões lidas e, quando houver, `serialize_db_snapshot`). O
-modelo SQLAlchemy dá o DDL e os tipos do contrato atual, e a reconciliação de "Evolução de esquema"
-garante que ele e o esquema atual do log são o mesmo. A biblioteca não guarda cópia de esquema, lista
-de arquivos nem estatísticas.
-
-O que ela guarda por conta própria fica em `_serialize_db/`, na raiz do ambiente, ao lado das pastas
-das tabelas: `snapshots.json`, com
-`{"snapshots": {"2026T3": {"cad_lancamentos": 143, "cad_contratos": 88}}}`. O sublinhado inicial
-deixa a pasta fora dos globs `mes=*` e dos leitores no estilo Hive, que ignoram nomes com esse
-prefixo. Os nomes de tabela são relativos, sem URI, para a realocação de "Realocação e cópia do
-banco" continuar valendo. A escrita é atômica, com `IfMatch` no S3, a mesma primitiva do log, e só a
-biblioteca escreve. O arquivo é a fonte primária e o log é a reconstrução: a marca
-`serialize_db_snapshot` vive no `commitInfo`, que não entra nos checkpoints e some do log quando a
-limpeza passa de `delta.logRetentionDuration`. O segundo registro próprio é a tabela
-`serialize_db_publicacoes` no Redshift, que fica lá por ser transacional com a carga.
-
-Exportar as tabelas de um snapshot usa cada fonte no seu papel. O snapshot atual dispensa metadado
-próprio: `get_add_actions()` lista os arquivos, e o DDL sai do modelo. Um snapshot do banco antigo
-lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
-`DeltaTable(uri, version=v).get_add_actions()` e tira o DDL do esquema daquela versão,
-`DeltaTable(uri, version=v).schema()`, não do modelo de hoje, que pode ter ganhado colunas depois.
+Nos documentos, "snapshot da tabela" é esse estado de uma versão, e "snapshot do banco" é o conjunto
+`{tabela: versão}` que a biblioteca registra fora do log. O que a biblioteca guarda por conta
+própria, os metadados de cada commit, `_serialize_db/snapshots.json` e a tabela
+`serialize_db_publications`, está em [`serialize-db.md`](serialize-db.md).
 
 ### Diferenças para o PostgreSQL
 
@@ -142,8 +115,9 @@ lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
   é o namespace que agrupa tabelas.
 - Não há transação entre tabelas. Cada tabela tem o próprio log, e um commit é atômico numa tabela.
   Uma execução que publica várias tabelas faz um commit por tabela. A biblioteca fixa a versão de
-  cada tabela lida no início, grava `id_execucao` e essas versões em cada commit, e quem precisa de
-  um estado coerente entre tabelas lê esse conjunto de versões, não a última de cada uma.
+  cada tabela lida no início, grava `serialize_db_execution_id` e essas versões
+  (`serialize_db_input_versions`) em cada commit, e quem precisa de um estado coerente entre
+  tabelas lê esse conjunto de versões, não a última de cada uma.
 - Não há sessão nem bloqueio. O controle de concorrência é otimista: o commit falha se outro escritor
   mudou o que a transação leu, e cabe ao escritor refazer a operação.
 - O esquema está no log, versionado junto com os dados. Uma leitura de versão antiga usa o esquema
@@ -457,10 +431,36 @@ o delta-rs faz e o que a biblioteca precisa impor:
 | Adicionar coluna `NOT NULL` | `add_columns` com `nullable=False`. | Aceito numa tabela com 220.000 linhas; a coluna lê nula em todas, e o `append` seguinte de dados lidos da própria tabela falha com `declared as non-nullable but contains null values`. | Recusada em tabela com dados. |
 | Relaxar `NOT NULL` | `dt.alter.drop_column_not_null("coluna")`, commit `CHANGE COLUMN`. | Só metadados. | Aplicada automaticamente. |
 | Mudar tipo | `write_deltalake(mode="overwrite", schema_mode="overwrite")` com a tabela inteira. | O `append` converte os dados para o tipo da tabela em vez de mudá-lo: `int32`, `double` e `string` entraram numa coluna `long`. Só a reescrita mudou `long` para `double`. | Só por ordem explícita de reescrita. A verificação de tipos é o cast seguro para o esquema Arrow do contrato, antes de gravar. |
-| Renomear ou remover coluna | Column mapping (`drop_columns` no PR 4732, aberto). | Sem column mapping, só reescrevendo a tabela. | Só por ordem explícita de reescrita. |
+| Renomear ou remover coluna | Reescrita da tabela inteira com o esquema novo, num commit: `write_deltalake(mode="overwrite", schema_mode="overwrite")`, ou `COPY ... PARTITION_BY` do DuckDB mais `create_write_transaction(mode="overwrite", schema=...)`. Só por metadados exigiria column mapping, que o delta-rs não grava (`drop_columns` no PR 4732, aberto). | O commit leva `remove` de todos os arquivos vivos, `add` dos novos e `metaData`; a versão anterior lê com o esquema antigo. Com `predicate` de um mês, o delta-rs aceita e troca o esquema da tabela toda. | Só por ordem explícita de reescrita, sem predicado. |
 | Restrição `CHECK` | `add_constraint`, `drop_constraint`. | Commit `ADD CONSTRAINT`; propriedade `delta.constraints.<nome>`. | Aplicada automaticamente. |
 | Colunas de partição | Não há alteração; exige recriar a tabela. | | Só por ordem explícita. |
 | Recursos de protocolo | `dt.alter.add_feature(...)` ou implícito (`timestampNtz`). | Sobe `minReaderVersion` e `minWriterVersion`. | Só recursos que o DuckDB lê. |
+
+A reescrita que renomeia ou remove coluna foi medida numa tabela de doze meses, `valor` renomeada
+para `valor_bruto` e `descricao` removida. O `write_deltalake` alimentado pelo `RecordBatchReader`
+de `to_pyarrow_dataset().scanner(columns={...})` cresceu em memória com a tabela. O
+`COPY (SELECT id_operacao, data_ref, valor AS valor_bruto, mes FROM delta_scan(uri)) TO uri
+(FORMAT parquet, PARTITION_BY (mes), APPEND, FILENAME_PATTERN 'part-{uuid}', RETURN_STATS)` do
+DuckDB, registrado por `create_write_transaction(actions, mode="overwrite", schema=novo,
+partition_by=["mes"])`, produziu o mesmo commit, `remove` de 12, `add` de 12 e `metaData`, com
+memória constante; é o caminho para uma tabela que não cabe na máquina. Os dois leitores leram os
+doze meses com `valor_bruto` preenchida, e a versão anterior continuou lendo `valor` e `descricao`.
+Os arquivos antigos ficam no disco até o `vacuum` (25 arquivos para 12 no snapshot), e um snapshot
+do banco preso por `keep_versions` os mantém.
+
+| Caminho | 12 arquivos, 135 MB, 12.000.000 linhas | 12 arquivos, 269 MB, 24.000.000 linhas |
+| --- | --- | --- |
+| `write_deltalake(reader, mode="overwrite", schema_mode="overwrite")` | 0,3 s, RSS máximo 1.140 MB | 0,7 s, RSS máximo 1.960 MB |
+| `COPY ... (RETURN_STATS)` mais `create_write_transaction` | 0,4 s, RSS máximo 581 MB | 0,6 s, RSS máximo 605 MB |
+
+Reescrever um mês por vez não serve. `write_deltalake(mode="overwrite", schema_mode="overwrite",
+predicate="mes = '2026-02'")` foi aceito com um `add`, um `remove` e um `metaData`, e os outros onze
+meses passaram a ler `valor_bruto` como nulo no delta-rs e no DuckDB, com os valores ainda dentro
+dos arquivos sob o nome antigo; o `restore` da versão anterior desfez. A biblioteca recusa
+`predicate` junto com `schema_mode="overwrite"`. O `dt.alter` do delta-rs 1.6.4 oferece
+`add_columns`, `add_constraint`, `add_feature`, `drop_column_not_null`, `drop_constraint`,
+`set_column_metadata`, `set_table_description`, `set_table_name` e `set_table_properties`; não há
+`rename_column` nem `drop_columns`.
 
 A reconciliação é o comando da biblioteca que substitui a migração: compara `arrow_schema(Table)`
 com `dt.schema()`, aplica o diff aditivo, recusa o destrutivo com a instrução de reescrita, e repete
@@ -503,14 +503,15 @@ from deltalake import write_deltalake
 from deltalake.transaction import CommitProperties, Transaction
 
 props = CommitProperties(
-    custom_metadata={"id_execucao": "exec-42", "versao_lida": "3"},
+    custom_metadata={"serialize_db_execution_id": "exec-42",
+                     "serialize_db_input_versions": '{"cad_operacoes": 3}'},
     app_transactions=[Transaction(app_id="pipeline", version=42)],
 )
 write_deltalake(uri, data, mode="overwrite", predicate="mes = '2026-08'", commit_properties=props)
 
 dt = DeltaTable(uri)
-dt.history(1)[0]["id_execucao"]        # 'exec-42'
-dt.transaction_version("pipeline")     # 42
+dt.history(1)[0]["serialize_db_execution_id"]  # 'exec-42'
+dt.transaction_version("pipeline")             # 42
 ```
 
 Os metadados personalizados aparecem no `commitInfo` e voltam em `history()`. A ação `txn` registra a
@@ -768,11 +769,12 @@ mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends 
 4. **Auditoria.** Contagens, nulos, unicidade de chaves, `mes` igual a `strftime(data_ref, '%Y-%m')`,
    limites de tipo, no motor.
 5. **Publicação.** Por tabela e por mês: do DuckDB, `write_deltalake(mode="overwrite",
-   predicate="mes = ...")` com o `RecordBatchReader` da consulta, ou `COPY ... TO` na subpasta do mês
-   mais `create_write_transaction`; do Redshift, `UNLOAD ... PARTITION BY (mes)` na pasta da tabela
-   mais `create_write_transaction`. Cada commit leva `id_execucao` e as versões lidas em
-   `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e é idempotente; um conflito de
-   commit no mesmo mês significa outra execução publicando a mesma tabela, e a execução aborta.
+   predicate="mes = ...")` com o `RecordBatchReader` da consulta, ou `COPY ... TO` na subpasta do
+   mês mais `create_write_transaction`; do Redshift, `UNLOAD ... PARTITION BY (mes)` na pasta da
+   tabela mais `create_write_transaction`. Cada commit leva `serialize_db_execution_id` e
+   `serialize_db_input_versions` em `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e
+   é idempotente; um conflito de commit no mesmo mês significa outra execução publicando a mesma
+   tabela, e a execução aborta.
 6. **Publicação no Redshift para clientes.** A diferença entre a versão publicada e a atual (ações
    `add` novas) diz quais meses recarregar: `DELETE` do mês e `COPY ... MANIFEST` dos arquivos novos,
    para todas as tabelas da execução numa única transação, o que dá aos clientes a atomicidade entre
@@ -855,7 +857,7 @@ conteúdo deles; se a lista de colunas no `COPY` de Parquet funcionar (pendente)
 publicação incremental compara as ações `add` da versão publicada com as da atual e recarrega só os
 meses que mudaram, de todas as tabelas da execução numa única transação; a versão publicada de cada
 tabela fica numa tabela de controle
-(`serialize_db_publicacoes(tabela, versao_delta, id_execucao, publicado_em)`).
+(`serialize_db_publications(table_name, delta_version, execution_id, published_at)`).
 
 Escrita de volta, quando o sandbox é o Redshift:
 
@@ -957,7 +959,7 @@ snapshot do banco é um número de versão por tabela, e os mecanismos são este
 
 1. **Marcar o snapshot.** A execução marcada grava `custom_metadata={"serialize_db_snapshot": "2026T1"}`
    em cada commit, e a biblioteca registra `{snapshot: {tabela: versão}}` em
-   `_serialize_db/snapshots.json`, descrito em "Metadados próprios da biblioteca". O histórico
+   `_serialize_db/snapshots.json`, descrito em [`serialize-db.md`](serialize-db.md). O histórico
    também acha a versão (`[h for h in dt.history() if h.get("serialize_db_snapshot")]` devolveu
    `(2, '2026T1')`), mas o arquivo de controle dispensa varrer o log.
 2. **Descartar o que está entre snapshots.** `vacuum` com a retenção das versões comuns e
@@ -1005,7 +1007,7 @@ lido do arquivo de controle. Uma tabela nova entra no snapshot no mesmo commit q
 
 | Quando | O quê |
 | --- | --- |
-| A cada execução | Checkpoint automático; `custom_metadata` com `id_execucao` e as versões lidas. |
+| A cada execução | Checkpoint automático; `custom_metadata` com `serialize_db_execution_id` e `serialize_db_input_versions`. |
 | Snapshot do banco, na periodicidade do processo | `custom_metadata={"serialize_db_snapshot": ...}` nos commits e a entrada em `_serialize_db/snapshots.json`. |
 | Mensal | `vacuum(dry_run=True, keep_versions=snapshots)` revisado e depois executado; `full=True` de tempos em tempos para os órfãos. |
 | Antes de um snapshot | `optimize.compact` nos meses com arquivos pequenos. |
