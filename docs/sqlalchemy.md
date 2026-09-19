@@ -25,7 +25,7 @@ cada `Column` recebe nome, tipo e opções (`primary_key`, `nullable`, `default`
 from sqlalchemy import MetaData, Table, Column, BigInteger, Date, Numeric, String, PrimaryKeyConstraint
 
 metadata = MetaData()
-operacoes = Table(
+operations = Table(
     "operacoes", metadata,
     Column("id_operacao", BigInteger, nullable=False),
     Column("data_ref", Date, nullable=False),
@@ -34,7 +34,7 @@ operacoes = Table(
     Column("descricao", String(200)),
     PrimaryKeyConstraint("id_operacao", "data_ref", name="operacoes_pk"),
     comment="Operações do mês",
-    info={"serialize_db": {"chave_ordenacao": ["data_ref", "id_operacao"]}},
+    info={"serialize_db": {"sort_key": ["data_ref", "id_operacao"]}},
 )
 ```
 
@@ -43,7 +43,7 @@ Os tipos genéricos (`Integer`, `BigInteger`, `Numeric(precisao, escala)`, `Stri
 dialeto na compilação: `Numeric(18, 2)` vira `NUMERIC(18, 2)` nos dois (`DECIMAL(18,2)` no catálogo
 do DuckDB), `String(200)` vira `VARCHAR(200)` nos dois, e o catálogo do DuckDB descarta o
 comprimento. Os tipos específicos ficam em `sqlalchemy.dialects.<dialeto>` e nos dialetos externos
-(`sqlalchemy_redshift.dialect.SUPER`, `TIMESTAMPTZ`). `tipo.with_variant(outro, "dialeto")` troca o
+(`sqlalchemy_redshift.dialect.SUPER`, `TIMESTAMPTZ`). `type_.with_variant(other_type, "<dialeto>")` troca o
 tipo num dialeto só. A [tabela de tipos do contrato](schema.md) fixa a correspondência com Arrow,
 Delta, DuckDB e Redshift.
 
@@ -126,8 +126,8 @@ from sqlalchemy.schema import CreateTable
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 import duckdb_engine
 
-sql_redshift = str(CreateTable(operacoes).compile(dialect=RedshiftDialect_redshift_connector()))
-sql_duckdb = str(CreateTable(operacoes).compile(dialect=duckdb_engine.Dialect()))
+sql_redshift = str(CreateTable(operations).compile(dialect=RedshiftDialect_redshift_connector()))
+sql_duckdb = str(CreateTable(operations).compile(dialect=duckdb_engine.Dialect()))
 ```
 
 Os construtores de DDL (`CreateTable`, `DropTable`, `CreateSequence`, `CreateIndex`,
@@ -139,13 +139,13 @@ recebem a conexão e permitem emitir DDL adicional:
 from sqlalchemy import event, DDL
 
 event.listen(
-    operacoes, "after_create",
+    operations, "after_create",
     DDL("COMMENT ON TABLE operacoes IS 'Operações do mês'").execute_if(dialect="redshift"),
 )
 ```
 
 A tabela do Delta Lake, a fonte da verdade do projeto ([`delta.md`](delta.md)), nasce sem DDL em SQL.
-`DeltaTable.create` recebe o esquema Arrow derivado do modelo (`esquema_arrow`, definida na seção
+`DeltaTable.create` recebe o esquema Arrow derivado do modelo (`arrow_schema`, definida na seção
 sobre arquivos Parquet, aplicada ao modelo `Operacao` da seção sobre o mapeamento declarativo), e os
 metadados do modelo chegam à tabela: `Table.name` vira o nome, `Table.comment` vira a descrição e os
 metadados de campo do Arrow, como o `comment` da coluna, ficam no esquema Delta. A coluna de partição
@@ -159,7 +159,7 @@ from deltalake import DeltaTable
 table = Operacao.__table__
 schema = pa.schema([
     field.with_metadata({**field.metadata, "comment": column.comment}) if column.comment else field
-    for field, column in zip(esquema_arrow(Operacao), table.columns)
+    for field, column in zip(arrow_schema(Operacao), table.columns)
 ])
 delta_table = DeltaTable.create(
     "lago/operacoes", schema, mode="ignore", partition_by=["mes"],
@@ -201,7 +201,7 @@ devolve vazio e índices não são refletidos, embora a função `duckdb_constra
 chave; colunas, tipos e comentários voltam corretos. A comparação entre o modelo e o banco, uma das
 auditorias do projeto, precisa de uma consulta ao catálogo para as chaves no DuckDB.
 
-A auditoria compara os tipos pela correspondência Arrow (`tipo_arrow`, definida na seção sobre
+A auditoria compara os tipos pela correspondência Arrow (`arrow_type`, definida na seção sobre
 arquivos Parquet), o que ignora o comprimento de `String(n)` que o catálogo do DuckDB descarta, e
 busca a chave no catálogo:
 
@@ -213,13 +213,13 @@ engine = create_engine("duckdb:///:memory:")
 metadata.create_all(engine)
 reflected = Table("operacoes", MetaData(), autoload_with=engine)
 mismatches = []
-for c in operacoes.columns:
+for c in operations.columns:
     r = reflected.columns.get(c.name)
     if r is None:
         mismatches.append(f"{c.name}: ausente no banco")
-    elif tipo_arrow(r.type) != tipo_arrow(c.type) or r.nullable != c.nullable:
+    elif arrow_type(r.type) != arrow_type(c.type) or r.nullable != c.nullable:
         mismatches.append(f"{c.name}: banco {r.type}, contrato {c.type}")
-mismatches += [f"{c.name}: fora do contrato" for c in reflected.columns if c.name not in operacoes.columns]
+mismatches += [f"{c.name}: fora do contrato" for c in reflected.columns if c.name not in operations.columns]
 print(mismatches)
 print(inspect(engine).get_pk_constraint("operacoes"))
 with engine.connect() as conn:
@@ -252,7 +252,7 @@ Depois de `ALTER TABLE operacoes ALTER COLUMN valor TYPE DOUBLE` e de
 | Argumentos `<dialeto>_<opcao>` | Opções de DDL por dialeto (`redshift_sortkey`, `postgresql_partition_by`). Com o dialeto instalado, um argumento que ele não aceita é `ArgumentError`; sem o dialeto, o argumento é aceito com o aviso `Can't validate argument` e não produz DDL. |
 | `Table.implicit_returning=False` | Desliga `RETURNING` para a tabela, para backends com gatilhos ou sem suporte. |
 | `TypeDecorator` | Tipo derivado com `process_bind_param` e `process_result_value`; `cache_ok = True` para participar do cache de compilação. Serve, por exemplo, para forçar UTC em `DateTime` ou serializar JSON. |
-| `@compiles(Construto, "dialeto")` | Troca a compilação de um tipo, de um comando ou de um DDL num dialeto. Exemplo: [gancho que aplica `Table.info` ao `CREATE TABLE` do Redshift](redshift.md). |
+| `@compiles(Construct, "<dialeto>")` | Troca a compilação de um tipo, de um comando ou de um DDL num dialeto. Exemplo: [gancho que aplica `Table.info` ao `CREATE TABLE` do Redshift](redshift.md). |
 | Eventos | `DDLEvents` (`before_create`), `ConnectionEvents` (`before_cursor_execute`), `PoolEvents.connect` para configurar cada conexão nova (`SET search_path`, `SET memory_limit`). |
 | `Sequence`, `Identity`, `server_default`, `FetchedValue`, `Computed` | Geração de valores no servidor, descrita na seção do ORM. |
 | `create_engine(..., use_insertmanyvalues=False, insertmanyvalues_page_size=...)` | Controle do modo de inserção em lote. |
@@ -281,7 +281,7 @@ def _month_of_duckdb(element, compiler, **kw):
 def _month_of_redshift(element, compiler, **kw):
     return f"to_char({compiler.process(element.clauses, **kw)}, 'YYYY-MM')"
 
-stmt = select(operacoes.c.id_operacao, month_of(operacoes.c.data_ref).label("mes"))
+stmt = select(operations.c.id_operacao, month_of(operations.c.data_ref).label("mes"))
 print(stmt.compile(dialect=duckdb_engine.Dialect()))
 print(stmt.compile(dialect=RedshiftDialect_redshift_connector()))
 ```
@@ -306,33 +306,33 @@ from datetime import date
 from decimal import Decimal
 from sqlalchemy import insert, select, update, delete, func, text
 
-stmt = insert(operacoes).values(id_operacao=1, data_ref=date(2026, 8, 1), id_cliente=100, valor=Decimal("10.50"))
-lote = insert(operacoes)                          # executemany com lista de dicionários
-varias = insert(operacoes).values([linha1, linha2])   # um comando com várias linhas
-copia = insert(operacoes).from_select(["id_operacao", "data_ref", "id_cliente", "valor", "descricao"],
+stmt = insert(operations).values(id_operacao=1, data_ref=date(2026, 8, 1), id_cliente=100, valor=Decimal("10.50"))
+batch = insert(operations)                          # executemany com lista de dicionários
+multi_row = insert(operations).values([row1, row2])   # um comando com várias linhas
+copy_stmt = insert(operations).from_select(["id_operacao", "data_ref", "id_cliente", "valor", "descricao"],
                                       select(staging))
-consulta = (
-    select(operacoes.c.id_cliente, func.sum(operacoes.c.valor).label("total"))
-    .where(operacoes.c.data_ref >= date(2026, 8, 1))
-    .group_by(operacoes.c.id_cliente)
-    .order_by(operacoes.c.id_cliente)
+query = (
+    select(operations.c.id_cliente, func.sum(operations.c.valor).label("total"))
+    .where(operations.c.data_ref >= date(2026, 8, 1))
+    .group_by(operations.c.id_cliente)
+    .order_by(operations.c.id_cliente)
 )
-ajuste = update(operacoes).where(operacoes.c.id_operacao == 1).values(descricao="ajustada")
-remocao = delete(operacoes).where(operacoes.c.data_ref < date(2020, 1, 1))
-bruto = text("SELECT count(*) FROM operacoes WHERE data_ref >= :inicio").bindparams(inicio=date(2026, 8, 1))
+adjustment = update(operations).where(operations.c.id_operacao == 1).values(descricao="ajustada")
+removal = delete(operations).where(operations.c.data_ref < date(2020, 1, 1))
+raw_stmt = text("SELECT count(*) FROM operacoes WHERE data_ref >= :start").bindparams(start=date(2026, 8, 1))
 ```
 
 Execução:
 
 ```python
 with engine.begin() as conn:                      # transação com commit no fim do bloco
-    conn.execute(lote, [linha1, linha2, linha3])
-    resultado = conn.execute(consulta)
-    linhas = resultado.mappings().all()           # dicionários por linha
-    total = conn.execute(bruto).scalar()
+    conn.execute(batch, [row1, row2, row3])
+    result = conn.execute(query)
+    rows = result.mappings().all()           # dicionários por linha
+    total = conn.execute(raw_stmt).scalar()
 
 with engine.connect() as conn:                    # commit explícito, "commit as you go"
-    conn.execute(ajuste)
+    conn.execute(adjustment)
     conn.commit()
 ```
 
@@ -357,7 +357,7 @@ Regras que importam:
   engine, `%s` no Redshift).
 - `Result` oferece `all()`, `first()`, `scalar()`, `scalars()`, `mappings()` e `partitions(n)` para
   consumir em pedaços; `rowcount` depende do dialeto e é `-1` no duckdb_engine.
-- `pd.read_sql(consulta, engine)` aceita o `select` do SQLAlchemy; `coerce_float=True`, o padrão,
+- `pd.read_sql(query, engine)` aceita o `select` do SQLAlchemy; `coerce_float=True`, o padrão,
   converte `Decimal` em `float`. `DataFrame.to_sql` gera `INSERT` por `executemany`, com
   `method="multi"` para um `VALUES` de várias linhas.
 
@@ -371,12 +371,12 @@ import duckdb_engine
 from sqlalchemy import create_engine
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
-sql_duckdb = str(consulta.compile(dialect=duckdb_engine.Dialect(), compile_kwargs={"literal_binds": True}))
-sql_redshift = str(consulta.compile(dialect=RedshiftDialect_redshift_connector(), compile_kwargs={"literal_binds": True}))
+sql_duckdb = str(query.compile(dialect=duckdb_engine.Dialect(), compile_kwargs={"literal_binds": True}))
+sql_redshift = str(query.compile(dialect=RedshiftDialect_redshift_connector(), compile_kwargs={"literal_binds": True}))
 assert sql_duckdb == sql_redshift
 print(sql_duckdb)
 
-linhas = [
+rows = [
     {"id_operacao": 1, "data_ref": date(2026, 8, 1), "id_cliente": 100, "valor": Decimal("10.50"), "descricao": None},
     {"id_operacao": 2, "data_ref": date(2026, 8, 2), "id_cliente": 100, "valor": Decimal("4.25"), "descricao": "estorno"},
     {"id_operacao": 3, "data_ref": date(2026, 8, 9), "id_cliente": 200, "valor": Decimal("7.00"), "descricao": None},
@@ -384,7 +384,7 @@ linhas = [
 engine = create_engine("duckdb:///:memory:")
 metadata.create_all(engine)
 with engine.begin() as conn:
-    conn.execute(insert(operacoes), linhas)
+    conn.execute(insert(operations), rows)
     raw = conn.connection.dbapi_connection                    # conexão DuckDB por trás do engine
     table = raw.sql(sql_duckdb).to_arrow_table()              # pyarrow.Table
     batches = list(raw.sql(sql_duckdb).to_arrow_reader(1))    # RecordBatchReader, consumido antes de outro comando
@@ -420,7 +420,7 @@ import sqlalchemy as sa
 from sqlalchemy import BigInteger, MetaData, Numeric, PrimaryKeyConstraint, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, declared_attr
 
-Valor = Annotated[decimal.Decimal, mapped_column(Numeric(18, 2))]
+Amount = Annotated[decimal.Decimal, mapped_column(Numeric(18, 2))]
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention={"pk": "%(table_name)s_pk"})
@@ -442,15 +442,15 @@ class Operacao(Rastreio, Base):
         PrimaryKeyConstraint("id_operacao", "data_ref").ddl_if(dialect="redshift"),
         {
             "comment": "Operações do mês",
-            "info": {"serialize_db": {"particionamento": {"coluna": "data_ref", "transformacao": "month"},
-                                      "chave_ordenacao": ["data_ref", "id_operacao"],
+            "info": {"serialize_db": {"partition_by": ["mes"],
+                                      "sort_key": ["data_ref", "id_operacao"],
                                       "redshift": {"diststyle": "KEY", "distkey": "id_cliente"}}},
         },
     )
     id_operacao: Mapped[int] = mapped_column(autoincrement=False)
     data_ref: Mapped[dt.date]
     id_cliente: Mapped[int] = mapped_column(comment="Chave do cliente", info={"serialize_db": {"pii": False}})
-    valor: Mapped[Valor]
+    valor: Mapped[Amount]
     descricao: Mapped[str | None] = mapped_column(String(200))
     mes: Mapped[str] = mapped_column(String(7), comment="Mês de data_ref no formato AAAA-MM")
 ```
@@ -463,13 +463,13 @@ class Operacao(Rastreio, Base):
   para `String()`, `Decimal` para `Numeric()` sem precisão, `datetime` para `DateTime()` sem fuso).
   O contrato exige `BigInteger`, `Numeric(18, 2)` e `TIMESTAMP` com fuso, então o mapa é parte do
   modelo.
-- `Annotated` com `mapped_column` define tipos reutilizáveis, como `Valor` acima.
+- `Annotated` com `mapped_column` define tipos reutilizáveis, como `Amount` acima.
 - `__table_args__` aceita um dicionário ou uma tupla de restrições com o dicionário no fim; nele
   entram `schema`, `comment`, `info`, `implicit_returning` e os argumentos de dialeto.
 - `__mapper_args__` configura o `Mapper`: `primary_key` para mapear uma view sem chave,
   `version_id_col`, `eager_defaults`, `polymorphic_on`.
 - `MappedAsDataclass` transforma as classes em dataclasses com `__init__`, `__repr__` e `__eq__`
-  gerados. O mapeamento imperativo (`registry.map_imperatively(Classe, tabela)`) mapeia uma `Table`
+  gerados. O mapeamento imperativo (`registry.map_imperatively(Model, table)`) mapeia uma `Table`
   existente, e o híbrido usa `__table__` no lugar de `__tablename__`.
 
 ### Metadados da aplicação no modelo
@@ -481,9 +481,9 @@ eventos de DDL e a inspeção:
 ```python
 from sqlalchemy import inspect
 
-opcoes = Operacao.__table__.info["serialize_db"]
-for coluna in Operacao.__table__.columns:
-    print(coluna.name, coluna.type, coluna.nullable, coluna.comment, coluna.info)
+options = Operacao.__table__.info["serialize_db"]
+for column in Operacao.__table__.columns:
+    print(column.name, column.type, column.nullable, column.comment, column.info)
 mapper = inspect(Operacao)             # Mapper: mapper.columns, mapper.attrs, mapper.primary_key
 ```
 
@@ -506,8 +506,8 @@ with Session(engine) as session:
     session.commit()
 
     op = session.get(Operacao, (1, dt.date(2026, 8, 1)))
-    lista = session.scalars(select(Operacao).where(Operacao.id_cliente == 100)).all()
-    pares = session.execute(select(Operacao.id_operacao, Operacao.valor)).all()
+    objects = session.scalars(select(Operacao).where(Operacao.id_cliente == 100)).all()
+    pairs = session.execute(select(Operacao.id_operacao, Operacao.valor)).all()
 
     op.descricao = "ajustada"          # UPDATE no flush
     session.commit()
@@ -524,9 +524,9 @@ sessão.
 
 ```python
 with Session(engine) as session:
-    session.execute(insert(Operacao), registros)                         # bulk insert
-    novos = session.scalars(insert(Operacao).returning(Operacao), registros).all()
-    session.execute(insert(Operacao).execution_options(render_nulls=True), registros)
+    session.execute(insert(Operacao), records)                         # bulk insert
+    inserted = session.scalars(insert(Operacao).returning(Operacao), records).all()
+    session.execute(insert(Operacao).execution_options(render_nulls=True), records)
     session.execute(update(Operacao), [{"id_operacao": 1, "data_ref": d, "descricao": "x"}])   # por chave
     session.execute(update(Operacao).where(Operacao.data_ref < d).values(descricao=None),
                     execution_options={"synchronize_session": "fetch"})
@@ -560,24 +560,24 @@ várias linhas compilado do mesmo modelo:
 import pyarrow as pa
 from sqlalchemy import create_engine, text
 
-registros = [
+records = [
     {"id_operacao": 1, "data_ref": dt.date(2026, 8, 1), "id_cliente": 100, "valor": decimal.Decimal("10.50"), "id_execucao": "abc123"},
     {"id_operacao": 2, "data_ref": dt.date(2026, 8, 2), "id_cliente": 100, "valor": decimal.Decimal("4.25"), "id_execucao": "abc123"},
 ]
-for r in registros:
+for r in records:
     r["mes"] = r["data_ref"].strftime("%Y-%m")               # coluna de partição, derivada antes de gravar
-batch = pa.Table.from_pylist(registros, schema=esquema_arrow(Operacao))   # chaves ausentes viram nulo
+batch = pa.Table.from_pylist(records, schema=arrow_schema(Operacao))   # chaves ausentes viram nulo
 
 engine = create_engine("duckdb:///:memory:")
 Base.metadata.create_all(engine)
 with engine.begin() as conn:
     raw = conn.connection.dbapi_connection
-    raw.register("batch", batch)                              # visível só pela conexão bruta
-    conn.execute(text("INSERT INTO operacoes BY NAME SELECT * FROM batch"))
-    raw.unregister("batch")
+    raw.register("lote", batch)                              # visível só pela conexão bruta
+    conn.execute(text("INSERT INTO operacoes BY NAME SELECT * FROM lote"))
+    raw.unregister("lote")
     print(conn.execute(select(func.count()).select_from(Operacao)).scalar())
 
-stmt = insert(Operacao).values(registros)                     # um comando, sem paginação
+stmt = insert(Operacao).values(records)                     # um comando, sem paginação
 print(stmt.compile(dialect=RedshiftDialect_redshift_connector(), compile_kwargs={"literal_binds": True}))
 ```
 
@@ -695,8 +695,8 @@ correspondência de tipos, e a aplicação do esquema acontece no Arrow, na escr
 import pyarrow as pa, pyarrow.parquet as pq
 from sqlalchemy import types as t
 
-def tipo_arrow(tipo: t.TypeEngine) -> pa.DataType:
-    match tipo:
+def arrow_type(sa_type: t.TypeEngine) -> pa.DataType:
+    match sa_type:
         case t.SmallInteger():
             return pa.int16()
         case t.BigInteger():
@@ -721,30 +721,30 @@ def tipo_arrow(tipo: t.TypeEngine) -> pa.DataType:
             return pa.string()
         case t.JSON():
             return pa.json_(pa.string())
-    raise TypeError(f"tipo sem correspondência Arrow: {tipo!r}")
+    raise TypeError(f"tipo sem correspondência Arrow: {sa_type!r}")
 
-def esquema_arrow(modelo) -> pa.Schema:
+def arrow_schema(model) -> pa.Schema:
     return pa.schema([
-        pa.field(c.name, tipo_arrow(c.type), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
-        for i, c in enumerate(modelo.__table__.columns, start=1)
+        pa.field(c.name, arrow_type(c.type), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
+        for i, c in enumerate(model.__table__.columns, start=1)
     ])
 
-def gravar(modelo, df, caminho: str) -> None:
-    esquema = esquema_arrow(modelo)
-    tabela = pa.Table.from_pandas(df, schema=esquema, preserve_index=False, safe=True)
-    pq.write_table(tabela, caminho, compression="zstd", row_group_size=100_000)
+def write_parquet(model, df, path: str) -> None:
+    schema = arrow_schema(model)
+    table = pa.Table.from_pandas(df, schema=schema, preserve_index=False, safe=True)
+    pq.write_table(table, path, compression="zstd", row_group_size=100_000)
 
-def conferir(modelo, caminho: str) -> None:
-    esperado, lido = esquema_arrow(modelo), pq.read_schema(caminho)
-    for campo in esperado:
-        campo_lido = lido.field(campo.name)
-        if campo_lido.type != campo.type or (not campo.nullable and campo_lido.nullable):
-            raise ValueError(f"{campo.name}: arquivo {campo_lido}, modelo {campo}")
+def check(model, path: str) -> None:
+    expected, actual = arrow_schema(model), pq.read_schema(path)
+    for field in expected:
+        actual_field = actual.field(field.name)
+        if actual_field.type != field.type or (not field.nullable and actual_field.nullable):
+            raise ValueError(f"{field.name}: arquivo {actual_field}, modelo {field}")
 ```
 
 - A ordem dos casos importa: `BigInteger` e `SmallInteger` são subclasses de `Integer`, e `Float` é
   subclasse de `Numeric`. `Text` cai em `String`. `JSON` vira a extensão `arrow.json`, texto com anotação; o
-  `with_variant(SUPER(), "redshift")` do contrato não muda o tipo genérico, e `isinstance(tipo, t.JSON)`
+  `with_variant(SUPER(), "redshift")` do contrato não muda o tipo genérico, e `isinstance(sa_type, t.JSON)`
   continua verdadeiro. O metadado `PARQUET:field_id` é o que o PyArrow grava como `field_id` no Parquet;
   a chave `field_id` sem prefixo não gera nada. Um `Numeric()` sem precisão e escala, que é o que o
   mapa de tipos padrão dá a `Mapped[decimal.Decimal]`, cai no erro final; o mapa do modelo ou o

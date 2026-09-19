@@ -32,12 +32,12 @@ mesma conexão. A função não rodou nesta sessão:
 import sqlalchemy as sa
 
 # Depois de um COPY, na mesma conexão: linhas carregadas e os erros de carga mais recentes.
-def diagnostico_da_carga(conn: sa.Connection) -> tuple[int, list[dict]]:
-    carregadas = conn.execute(sa.text("SELECT pg_last_copy_count()")).scalar_one()
-    erros = conn.execute(sa.text(
+def load_diagnostics(conn: sa.Connection) -> tuple[int, list[dict]]:
+    loaded = conn.execute(sa.text("SELECT pg_last_copy_count()")).scalar_one()
+    errors = conn.execute(sa.text(
         "SELECT * FROM sys_load_error_detail ORDER BY start_time DESC LIMIT 20"
     )).mappings().all()
-    return carregadas, [dict(erro) for erro in erros]
+    return loaded, [dict(error) for error in errors]
 ```
 
 ## Organização dos dados
@@ -128,22 +128,22 @@ arredondado; uma string que representa um número ou uma data converte para o ti
 na [tabela de tipos](schema.md).
 
 O tipo que o dialeto `sqlalchemy-redshift` emite no DDL para cada tipo do contrato, compilado nesta
-sessão. `dialeto` e `sql()` servem aos exemplos seguintes deste documento:
+sessão. `dialect` e `sql()` servem aos exemplos seguintes deste documento:
 
 ```python
 import sqlalchemy as sa
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
 # Tipo emitido no DDL para cada tipo do contrato.
-dialeto = RedshiftDialect_redshift_connector()
+dialect = RedshiftDialect_redshift_connector()
 
-def sql(comando) -> str:
-    return str(comando.compile(dialect=dialeto, compile_kwargs={"literal_binds": True}))
+def sql(command) -> str:
+    return str(command.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
 
-for tipo in [sa.BigInteger(), sa.Numeric(18, 2), sa.Double(), sa.String(200), sa.String(65535), sa.Text(),
+for sa_type in [sa.BigInteger(), sa.Numeric(18, 2), sa.Double(), sa.String(200), sa.String(65535), sa.Text(),
              sa.Date(), sa.DateTime(), sa.DateTime(timezone=True), sa.Boolean(), sa.Uuid(), sa.JSON(),
              sa.LargeBinary()]:
-    print(f"{tipo!r:32} {tipo.compile(dialect=dialeto)}")
+    print(f"{sa_type!r:32} {sa_type.compile(dialect=dialect)}")
 ```
 
 ```text
@@ -200,17 +200,17 @@ from decimal import Decimal
 import pyarrow as pa, pyarrow.compute as pc
 
 # Escala e precisão conferidas no Arrow, antes do COPY, com os valores das regras de carga.
-valores = pa.array([Decimal("4323.8951"), Decimal("20.259")])         # inferido como decimal128(8, 4)
+values = pa.array([Decimal("4323.8951"), Decimal("20.259")])         # inferido como decimal128(8, 4)
 try:
-    valores.cast(pa.decimal128(18, 2))
-except pa.ArrowInvalid as erro:
-    print(erro)                                          # Rescaling Decimal value would cause data loss
-print(valores.cast(pa.decimal128(18, 2), safe=False).to_pylist())   # [4323.89, 20.25]: trunca
-print(pc.round(valores, 2).cast(pa.decimal128(18, 2)).to_pylist())  # [4323.90, 20.26]: os valores da carga
+    values.cast(pa.decimal128(18, 2))
+except pa.ArrowInvalid as error:
+    print(error)                                          # Rescaling Decimal value would cause data loss
+print(values.cast(pa.decimal128(18, 2), safe=False).to_pylist())   # [4323.89, 20.25]: trunca
+print(pc.round(values, 2).cast(pa.decimal128(18, 2)).to_pylist())  # [4323.90, 20.26]: os valores da carga
 try:
     pa.array([Decimal("1000.00")], pa.decimal128(6, 2)).cast(pa.decimal128(5, 2))
-except pa.ArrowInvalid as erro:
-    print(erro)                                          # Decimal value does not fit in precision 5
+except pa.ArrowInvalid as error:
+    print(error)                                          # Decimal value does not fit in precision 5
 ```
 
 O cast seguro rejeita a perda de escala e o estouro de precisão; `pa.Table.from_pandas(df,
@@ -257,15 +257,15 @@ from sqlalchemy.schema import CreateTable
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector, SUPER
 
 # JSON no contrato: SUPER no Redshift, texto nos arquivos, JSON_PARSE na carga e JSON_SERIALIZE na saída.
-eventos = sa.Table("eventos", sa.MetaData(),
+events = sa.Table("eventos", sa.MetaData(),
                    sa.Column("id_evento", sa.BigInteger, primary_key=True, autoincrement=False),
                    sa.Column("meta", sa.JSON().with_variant(SUPER(), "redshift")))
-print(CreateTable(eventos).compile(dialect=RedshiftDialect_redshift_connector()))
+print(CreateTable(events).compile(dialect=RedshiftDialect_redshift_connector()))
 # CREATE TABLE eventos (id_evento BIGINT NOT NULL, meta SUPER, PRIMARY KEY (id_evento))
 
-carga = """INSERT INTO prod_eventos (id_evento, meta, mes)
-SELECT id_evento, JSON_PARSE(meta), '2026-08' FROM stage_eventos"""
-exportacao = """UNLOAD ('SELECT id_evento, JSON_SERIALIZE(meta) AS meta, mes FROM exec_42_eventos')
+load_sql = """INSERT INTO prod_eventos (id_evento, meta, mes)
+SELECT id_evento, JSON_PARSE(meta), '2026-08' FROM staging_eventos"""
+unload_sql = """UNLOAD ('SELECT id_evento, JSON_SERIALIZE(meta) AS meta, mes FROM exec_42_eventos')
 TO 's3://bucket/prod/eventos/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
 FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE"""
 ```
@@ -332,9 +332,9 @@ import sqlalchemy as sa
 from sqlalchemy.schema import CreateTable
 
 # DDL de uma tabela do sandbox: o Table do modelo renomeado com o prefixo da execução.
-def ddl_sandbox(modelo, prefixo: str) -> str:
-    tabela = modelo.__table__.to_metadata(sa.MetaData(), name=f"{prefixo}_{modelo.__tablename__}")
-    return str(CreateTable(tabela, if_not_exists=True).compile(dialect=dialeto))
+def ddl_sandbox(model, prefix: str) -> str:
+    table = model.__table__.to_metadata(sa.MetaData(), name=f"{prefix}_{model.__tablename__}")
+    return str(CreateTable(table, if_not_exists=True).compile(dialect=dialect))
 
 print(ddl_sandbox(Operacao, "exec_abc123"))
 ```
@@ -386,14 +386,14 @@ import sqlalchemy as sa
 from sqlalchemy.schema import AddConstraint, DropConstraint
 
 # ADD COLUMN com a especificação de coluna do compilador do dialeto; ADD e DROP CONSTRAINT do Core.
-compilador = dialeto.ddl_compiler(dialeto, None)
-moeda = sa.Column("moeda", sa.String(3), server_default="BRL", redshift_encode="bytedict")
-print(f"ALTER TABLE operacoes ADD COLUMN {compilador.get_column_specification(moeda)}")
-chave = Operacao.__table__.primary_key
-print(AddConstraint(chave).compile(dialect=dialeto))
-print(DropConstraint(chave).compile(dialect=dialeto))
+compiler = dialect.ddl_compiler(dialect, None)
+currency = sa.Column("moeda", sa.String(3), server_default="BRL", redshift_encode="bytedict")
+print(f"ALTER TABLE operacoes ADD COLUMN {compiler.get_column_specification(currency)}")
+pk = Operacao.__table__.primary_key
+print(AddConstraint(pk).compile(dialect=dialect))
+print(DropConstraint(pk).compile(dialect=dialect))
 print(sa.DDL("ALTER TABLE %(table)s ALTER COLUMN descricao TYPE VARCHAR(400)")
-      .against(Operacao.__table__).compile(dialect=dialeto))
+      .against(Operacao.__table__).compile(dialect=dialect))
 ```
 
 ```sql
@@ -421,7 +421,7 @@ há views dependentes; `CASCADE` remove as views, exceto as criadas com `WITH NO
 referência traz a consulta em `pg_depend` que lista os dependentes. `DROP TABLE` de uma tabela
 externa não roda dentro de transação.
 
-`DropTable(tabela, if_exists=True)` do SQLAlchemy compila para `DROP TABLE IF EXISTS <nome>`; o
+`DropTable(table, if_exists=True)` do SQLAlchemy compila para `DROP TABLE IF EXISTS <nome>`; o
 construto não tem parâmetro para `CASCADE`, que entra por `sa.DDL`.
 
 ### Chaves, restrições e índices
@@ -456,8 +456,8 @@ TABLE` e o `COMMENT ON COLUMN` logo depois do `CREATE TABLE`:
 from sqlalchemy.schema import SetTableComment, SetColumnComment
 
 # COMMENT ON gerado dos atributos comment do modelo.
-print(SetTableComment(Operacao.__table__).compile(dialect=dialeto))
-print(SetColumnComment(Operacao.__table__.c.id_cliente).compile(dialect=dialeto))
+print(SetTableComment(Operacao.__table__).compile(dialect=dialect))
+print(SetColumnComment(Operacao.__table__.c.id_cliente).compile(dialect=dialect))
 ```
 
 ```sql
@@ -487,11 +487,11 @@ as colunas não agregadas. A saída pelo `redshift_connector` chega em tuplas Py
 inferidos pelo pandas (`Decimal` e `date` ficam em colunas `object`), e `cursor.fetch_numpy_array()`
 devolve um array. Um DataFrame com os tipos do contrato sai de
 tuplas convertidas em dicionários por nome de coluna,
-`pa.Table.from_pylist([dict(zip(nomes, linha)) for linha in cursor.fetchall()], schema=esquema)`, seguido de
+`pa.Table.from_pylist([dict(zip(names, row)) for row in cursor.fetchall()], schema=schema)`, seguido de
 `to_pandas(types_mapper=pd.ArrowDtype)`; `Decimal` e `date` das tuplas entram em `decimal128` e
 `date32` sem conversão para `float`. Volumes grandes saem por `UNLOAD` e voltam pelo leitor Parquet.
 
-O caminho pelas tuplas, com a consulta compilada e o esquema Arrow do modelo (`esquema_arrow` em
+O caminho pelas tuplas, com a consulta compilada e o esquema Arrow do modelo (`arrow_schema` em
 [sqlalchemy.md](sqlalchemy.md)):
 
 ```python
@@ -501,17 +501,17 @@ import pandas as pd, pyarrow as pa, sqlalchemy as sa
 from sqlalchemy import select
 
 # Do select do contrato ao DataFrame com os tipos do contrato, a partir das tuplas do redshift_connector.
-consulta = (select(Operacao).where(Operacao.mes == "2026-08")
+query = (select(Operacao).where(Operacao.mes == "2026-08")
             .order_by(Operacao.data_ref, Operacao.id_operacao).limit(10))
-print(sql(consulta))    # SELECT operacoes.id_operacao, ... WHERE operacoes.mes = '2026-08' ORDER BY ... LIMIT 10
+print(sql(query))    # SELECT operacoes.id_operacao, ... WHERE operacoes.mes = '2026-08' ORDER BY ... LIMIT 10
 
-def para_dataframe(linhas: list[tuple], consulta: sa.Select, esquema: pa.Schema) -> pd.DataFrame:
-    nomes = list(consulta.selected_columns.keys())
-    dados = pa.Table.from_pylist([dict(zip(nomes, linha)) for linha in linhas], schema=esquema)
-    return dados.to_pandas(types_mapper=pd.ArrowDtype)
+def to_dataframe(rows: list[tuple], query: sa.Select, schema: pa.Schema) -> pd.DataFrame:
+    names = list(query.selected_columns.keys())
+    data = pa.Table.from_pylist([dict(zip(names, row)) for row in rows], schema=schema)
+    return data.to_pandas(types_mapper=pd.ArrowDtype)
 
-linhas = [(1, dt.date(2026, 8, 1), 100, Decimal("10.50"), "op-1", "2026-08")]   # forma de cursor.fetchall()
-print(para_dataframe(linhas, consulta, esquema_arrow(Operacao)).dtypes)
+rows = [(1, dt.date(2026, 8, 1), 100, Decimal("10.50"), "op-1", "2026-08")]   # forma de cursor.fetchall()
+print(to_dataframe(rows, query, arrow_schema(Operacao)).dtypes)
 ```
 
 ```text
@@ -549,15 +549,15 @@ O mesmo comando a partir do modelo, um `INSERT` por lote:
 from sqlalchemy import insert
 
 # Um único INSERT de várias linhas a partir do modelo.
-lote = [
+batch = [
     {"id_operacao": 1, "data_ref": dt.date(2026, 8, 1), "id_cliente": 100, "valor": Decimal("10.50"),
      "descricao": "op-1", "mes": "2026-08"},
     {"id_operacao": 2, "data_ref": dt.date(2026, 8, 1), "id_cliente": 101, "valor": Decimal("20.00"),
      "descricao": None, "mes": "2026-08"},
 ]
-comando = insert(Operacao).values(lote)
-print(comando.compile(dialect=dialeto))   # com parâmetros
-print(sql(comando))                        # com os valores embutidos
+command = insert(Operacao).values(batch)
+print(command.compile(dialect=dialect))   # com parâmetros
+print(sql(command))                        # com os valores embutidos
 ```
 
 ```sql
@@ -613,22 +613,22 @@ texto montado com as colunas do `Table`:
 import sqlalchemy as sa
 
 # UPDATE ... FROM e DELETE ... USING pelo Core; MERGE por texto montado com as colunas do Table.
-alvo = Operacao.__table__
-staging = sa.Table("staging_operacoes", sa.MetaData(), *[sa.Column(c.name, c.type) for c in alvo.columns])
-chaves = ["id_operacao", "data_ref"]
-juncao = sa.and_(*[alvo.c[chave] == staging.c[chave] for chave in chaves])
-print(sql(sa.update(alvo).values(descricao=staging.c.descricao).where(juncao)))
-print(sql(sa.delete(alvo).where(juncao)))
+target = Operacao.__table__
+staging = sa.Table("staging_operacoes", sa.MetaData(), *[sa.Column(c.name, c.type) for c in target.columns])
+keys = ["id_operacao", "data_ref"]
+join_condition = sa.and_(*[target.c[key] == staging.c[key] for key in keys])
+print(sql(sa.update(target).values(descricao=staging.c.descricao).where(join_condition)))
+print(sql(sa.delete(target).where(join_condition)))
 
-def merge_sql(alvo: sa.Table, fonte: sa.Table, chaves: list[str]) -> str:
-    colunas = list(alvo.columns.keys())
-    condicao = " AND ".join(f"{alvo.name}.{c} = s.{c}" for c in chaves)
-    atualiza = ", ".join(f"{c} = s.{c}" for c in colunas if c not in chaves)
-    return (f"MERGE INTO {alvo.name} USING {fonte.name} s ON {condicao}\n"
-            f"    WHEN MATCHED THEN UPDATE SET {atualiza}\n"
-            f"    WHEN NOT MATCHED THEN INSERT VALUES ({', '.join('s.' + c for c in colunas)})")
+def merge_sql(target: sa.Table, source: sa.Table, keys: list[str]) -> str:
+    columns = list(target.columns.keys())
+    condition = " AND ".join(f"{target.name}.{c} = s.{c}" for c in keys)
+    set_clause = ", ".join(f"{c} = s.{c}" for c in columns if c not in keys)
+    return (f"MERGE INTO {target.name} USING {source.name} s ON {condition}\n"
+            f"    WHEN MATCHED THEN UPDATE SET {set_clause}\n"
+            f"    WHEN NOT MATCHED THEN INSERT VALUES ({', '.join('s.' + c for c in columns)})")
 
-print(merge_sql(alvo, staging, chaves))
+print(merge_sql(target, staging, keys))
 ```
 
 ```sql
@@ -688,28 +688,28 @@ O fluxo do projeto substitui o `INSERT` grande da biblioteca atual:
 import json
 import boto3, pyarrow as pa, pyarrow.parquet as pq, redshift_connector
 
-def carregar(conn: redshift_connector.Connection, df, esquema: pa.Schema, tabela: str, s3_prefixo: str, papel: str) -> int:
-    dados = pa.Table.from_pandas(df, schema=esquema, preserve_index=False)
+def load(conn: redshift_connector.Connection, df, schema: pa.Schema, table: str, s3_prefix: str, role: str) -> int:
+    data = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
     s3 = boto3.client("s3")
-    bucket, prefixo = s3_prefixo.removeprefix("s3://").split("/", 1)
+    bucket, prefix = s3_prefix.removeprefix("s3://").split("/", 1)
     buf = pa.BufferOutputStream()
-    pq.write_table(dados, buf, compression="snappy")
-    corpo = buf.getvalue().to_pybytes()
-    arquivo = f"{prefixo}/{tabela}/parte-0.parquet"
-    s3.put_object(Bucket=bucket, Key=arquivo, Body=corpo)
-    manifesto = {"entries": [{"url": f"s3://{bucket}/{arquivo}", "mandatory": True,
-                              "meta": {"content_length": len(corpo)}}]}
-    s3.put_object(Bucket=bucket, Key=f"{prefixo}/{tabela}/manifest", Body=json.dumps(manifesto).encode())
+    pq.write_table(data, buf, compression="snappy")
+    body = buf.getvalue().to_pybytes()
+    file_key = f"{prefix}/{table}/parte-0.parquet"
+    s3.put_object(Bucket=bucket, Key=file_key, Body=body)
+    manifest = {"entries": [{"url": f"s3://{bucket}/{file_key}", "mandatory": True,
+                              "meta": {"content_length": len(body)}}]}
+    s3.put_object(Bucket=bucket, Key=f"{prefix}/{table}/manifest", Body=json.dumps(manifest).encode())
     with conn.cursor() as cur:
-        cur.execute(f"COPY {tabela} FROM 's3://{bucket}/{prefixo}/{tabela}/manifest' "
-                    f"IAM_ROLE '{papel}' FORMAT AS PARQUET MANIFEST")
+        cur.execute(f"COPY {table} FROM 's3://{bucket}/{prefix}/{table}/manifest' "
+                    f"IAM_ROLE '{role}' FORMAT AS PARQUET MANIFEST")
         cur.execute("SELECT pg_last_copy_count()")
-        carregadas = cur.fetchone()[0]
-    if carregadas != dados.num_rows:
+        loaded = cur.fetchone()[0]
+    if loaded != data.num_rows:
         conn.rollback()
-        raise RuntimeError(f"COPY carregou {carregadas} de {dados.num_rows} linhas")
+        raise RuntimeError(f"COPY carregou {loaded} de {data.num_rows} linhas")
     conn.commit()
-    return carregadas
+    return loaded
 ```
 
 Um arquivo por lote basta abaixo de 128 MB; acima disso, vários arquivos de tamanho parecido
@@ -721,8 +721,8 @@ Os métodos do `redshift_connector` para DataFrames não substituem esse fluxo:
 
 | Método | O que faz | Custo |
 | --- | --- | --- |
-| `cursor.write_dataframe(df, tabela)` | `INSERT INTO tabela VALUES (%s, ...)` via `executemany`, sem lista de colunas. | Uma ida ao servidor por linha. |
-| `cursor.insert_data_bulk(arquivo_csv, tabela, indices, colunas, delimitador, batch_size)` | Lê um CSV local e emite `INSERT ... VALUES` com `batch_size` linhas por comando. | Uma ida por lote; o padrão de `batch_size` é 1. |
+| `cursor.write_dataframe(df, table)` | `INSERT INTO tabela VALUES (%s, ...)` via `executemany`, sem lista de colunas. | Uma ida ao servidor por linha. |
+| `cursor.insert_data_bulk(filename, table_name, parameter_indices, column_names, delimiter, batch_size)` | Lê um CSV local e emite `INSERT ... VALUES` com `batch_size` linhas por comando. | Uma ida por lote; o padrão de `batch_size` é 1. |
 | `cursor.executemany(sql, parametros)` | Laço de `execute`. | Uma ida por linha. |
 
 O `awswrangler.redshift.copy` implementa o fluxo Parquet mais `COPY` (`max_rows_by_file` de
@@ -760,41 +760,41 @@ from deltalake import DeltaTable
 from sqlalchemy.schema import CreateTable
 
 # Manifesto do mês a partir das ações add do Delta e a transação que substitui o mês na publicação.
-def manifesto_do_mes(delta: DeltaTable, mes: str) -> tuple[dict, int]:
-    acoes = pa.table(delta.get_add_actions(flatten=True)).filter(pc.field("partition.mes") == mes)
-    raiz = delta.table_uri.rstrip("/")
-    entradas = [{"url": f"{raiz}/{caminho}", "mandatory": True, "meta": {"content_length": tamanho}}
-                for caminho, tamanho in zip(acoes["path"].to_pylist(), acoes["size_bytes"].to_pylist())]
-    return {"entries": entradas}, pc.sum(acoes["num_records"]).as_py()
+def month_manifest(dt: DeltaTable, month: str) -> tuple[dict, int]:
+    actions = pa.table(dt.get_add_actions(flatten=True)).filter(pc.field("partition.mes") == month)
+    root = dt.table_uri.rstrip("/")
+    entries = [{"url": f"{root}/{path}", "mandatory": True, "meta": {"content_length": size}}
+                for path, size in zip(actions["path"].to_pylist(), actions["size_bytes"].to_pylist())]
+    return {"entries": entries}, pc.sum(actions["num_records"]).as_py()
 
-destino = Operacao.__table__.to_metadata(sa.MetaData(), name="prod_operacoes")
-staging = sa.Table("prod_operacoes_stage", destino.metadata,
-                   *[sa.Column(c.name, c.type, nullable=c.nullable) for c in destino.columns if c.name != "mes"],
+destination = Operacao.__table__.to_metadata(sa.MetaData(), name="prod_operacoes")
+staging = sa.Table("prod_operacoes_staging", destination.metadata,
+                   *[sa.Column(c.name, c.type, nullable=c.nullable) for c in destination.columns if c.name != "mes"],
                    prefixes=["TEMPORARY"])
-transacao = [
-    sa.delete(destino).where(destino.c.mes == "2026-08"),
+transaction = [
+    sa.delete(destination).where(destination.c.mes == "2026-08"),
     CreateTable(staging),
-    sa.text("COPY prod_operacoes_stage FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest' "
+    sa.text("COPY prod_operacoes_staging FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest' "
             "IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST"),
-    sa.insert(destino).from_select(list(destino.columns.keys()),
+    sa.insert(destination).from_select(list(destination.columns.keys()),
                                    sa.select(*staging.c, sa.literal("2026-08", sa.String(7)).label("mes"))),
 ]
 ```
 
-Numa tabela Delta local com dois meses, `manifesto_do_mes` devolveu a única entrada de `2026-08`,
+Numa tabela Delta local com dois meses, `month_manifest` devolveu a única entrada de `2026-08`,
 com `content_length` igual ao `size_bytes` da ação `add`, e o total de `num_records` do mês, que é o
 valor a comparar com `pg_last_copy_count()` antes do `commit`. Os quatro comandos vão numa transação
 (`engine.begin()`) e compilam para:
 
 ```sql
 DELETE FROM prod_operacoes WHERE prod_operacoes.mes = '2026-08'
-CREATE TEMPORARY TABLE prod_operacoes_stage (id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL,
+CREATE TEMPORARY TABLE prod_operacoes_staging (id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL,
     id_cliente BIGINT NOT NULL, valor NUMERIC(18, 2) NOT NULL, descricao VARCHAR(200))
-COPY prod_operacoes_stage FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest'
+COPY prod_operacoes_staging FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest'
     IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST
 INSERT INTO prod_operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes)
-    SELECT prod_operacoes_stage.id_operacao, prod_operacoes_stage.data_ref, prod_operacoes_stage.id_cliente,
-        prod_operacoes_stage.valor, prod_operacoes_stage.descricao, '2026-08' AS mes FROM prod_operacoes_stage
+    SELECT prod_operacoes_staging.id_operacao, prod_operacoes_staging.data_ref, prod_operacoes_staging.id_cliente,
+        prod_operacoes_staging.valor, prod_operacoes_staging.descricao, '2026-08' AS mes FROM prod_operacoes_staging
 ```
 
 A staging temporária dispensa a codificação e as restrições do modelo: tabelas temporárias recebem
@@ -887,24 +887,24 @@ import json
 import sqlalchemy as sa
 
 # UNLOAD do mês montado do select do contrato; conferência do manifesto verboso antes de registrar os arquivos.
-consulta = (sa.select(Operacao.__table__).where(Operacao.mes == "2026-08")
+query = (sa.select(Operacao.__table__).where(Operacao.mes == "2026-08")
             .order_by(Operacao.data_ref, Operacao.id_operacao))
-interna = sql(consulta).replace("'", "''")
-unload = (f"UNLOAD ('{interna}')\n"
+inner_sql = sql(query).replace("'", "''")
+unload = (f"UNLOAD ('{inner_sql}')\n"
           "TO 's3://bucket/prod/operacoes/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'\n"
           "FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE")
 
-def conferir_manifesto(manifesto: dict, colunas_esperadas: list[str]) -> int:
-    colunas = [elemento["name"] for elemento in manifesto["schema"]["elements"]]
-    if colunas != colunas_esperadas:
-        raise ValueError(f"colunas do UNLOAD {colunas} diferem do modelo {colunas_esperadas}")
-    por_arquivo = sum(entrada["meta"]["record_count"] for entrada in manifesto["entries"])
-    if por_arquivo != manifesto["meta"]["record_count"]:
+def check_manifest(manifest: dict, expected_columns: list[str]) -> int:
+    columns = [element["name"] for element in manifest["schema"]["elements"]]
+    if columns != expected_columns:
+        raise ValueError(f"colunas do UNLOAD {columns} diferem do modelo {expected_columns}")
+    per_file = sum(entry["meta"]["record_count"] for entry in manifest["entries"])
+    if per_file != manifest["meta"]["record_count"]:
         raise ValueError("soma das linhas por arquivo difere do total do manifesto")
-    return por_arquivo
+    return per_file
 
-sem_particao = [c.name for c in Operacao.__table__.columns if c.name != "mes"]
-print(conferir_manifesto(json.loads(amostra), sem_particao))     # 300000
+without_partition = [c.name for c in Operacao.__table__.columns if c.name != "mes"]
+print(check_manifest(json.loads(sample), without_partition))     # 300000
 ```
 
 `unload` vale:
@@ -1030,7 +1030,7 @@ código do dialeto:
 | `Identity()` genérico | Ignorado no DDL: a coluna sai como `BIGINT NOT NULL`, sem `IDENTITY`. Só `redshift_identity` gera `IDENTITY(1,1)`. |
 | `Sequence()` | `create_all` emitiria `CREATE SEQUENCE`, que o Redshift não suporta. |
 | Tipos próprios | `TIMESTAMPTZ`, `TIMETZ`, `SUPER`, `GEOMETRY`, `HLLSKETCH`, importados de `sqlalchemy_redshift.dialect`. |
-| Reflexão | Colunas, chaves, comentários e as opções de distribuição e ordenação por `inspect(engine).get_table_options(nome)`. |
+| Reflexão | Colunas, chaves, comentários e as opções de distribuição e ordenação por `inspect(engine).get_table_options(table_name)`. |
 | Comandos | `CopyCommand`, `UnloadFromSelect`, `AlterTableAppendCommand` e `RefreshMaterializedView` em `sqlalchemy_redshift.commands`; `CreateMaterializedView` e `DropMaterializedView` em `sqlalchemy_redshift.ddl`. |
 | `executemany` sem `RETURNING` | Com `redshift_connector`, `use_insertmanyvalues_wo_returning = False`: o SQLAlchemy chama `cursor.executemany`, que executa uma ida por linha. Com `psycopg2`, o SQLAlchemy reescreve em `INSERT ... VALUES (...), (...)` em lotes de até 1.000 linhas. |
 | `postgresql.insert(...).on_conflict_do_update` | Compila, mas o Redshift não tem `ON CONFLICT`; o upsert é `MERGE` por texto. |
@@ -1096,18 +1096,18 @@ from sqlalchemy_redshift.ddl import get_table_attributes
 @compiles(CreateTable, "redshift")
 def create_table_redshift(element, compiler, **kw):
     ddl = compiler.visit_create_table(element, **kw)
-    opcoes = element.element.info.get("serialize_db", {})
-    redshift = opcoes.get("redshift", {})
-    atributos = get_table_attributes(
+    options = element.element.info.get("serialize_db", {})
+    redshift = options.get("redshift", {})
+    attributes = get_table_attributes(
         compiler.preparer,
         diststyle=redshift.get("diststyle"),
         distkey=redshift.get("distkey"),
-        sortkey=opcoes.get("chave_ordenacao"),
+        sortkey=options.get("sort_key"),
     )
-    return ddl.rstrip() + atributos + "\n"
+    return ddl.rstrip() + attributes + "\n"
 ```
 
-Com `__table_args__ = {"info": {"serialize_db": {"chave_ordenacao": ["data_ref", "id_operacao"],
+Com `__table_args__ = {"info": {"serialize_db": {"sort_key": ["data_ref", "id_operacao"],
 "redshift": {"diststyle": "KEY", "distkey": "id_cliente"}}}}`, a compilação para o dialeto Redshift
 produziu o mesmo `DISTSTYLE KEY DISTKEY (id_cliente) SORTKEY (data_ref, id_operacao)`, e a compilação
 para o DuckDB não foi afetada.
@@ -1118,24 +1118,24 @@ para o DuckDB não foi afetada.
 import pandas as pd
 from sqlalchemy import select
 
-consulta = (
+query = (
     select(Operacao)
     .where(Operacao.data_ref >= dt.date(2026, 8, 1), Operacao.data_ref < dt.date(2026, 9, 1))
     .order_by(Operacao.data_ref, Operacao.id_operacao)
 )
-df = pd.read_sql(consulta, engine, coerce_float=False)   # Decimal e date como objetos
+df = pd.read_sql(query, engine, coerce_float=False)   # Decimal e date como objetos
 ```
 
 `pd.read_sql` com `coerce_float=True` (padrão) converte `Decimal` em `float`. Um DataFrame com os
-tipos do contrato sai de `pa.Table.from_pandas(df, schema=esquema)` ou, sem pandas no meio, de
-`session.execute(consulta).all()` seguido de `pa.Table.from_pylist([dict(r._mapping) for r in linhas],
+tipos do contrato sai de `pa.Table.from_pandas(df, schema=schema)` ou, sem pandas no meio, de
+`session.execute(query).all()` seguido de `pa.Table.from_pylist([dict(r._mapping) for r in linhas],
 schema=esquema)`. Para meses inteiros, `UnloadFromSelect` gera o `UNLOAD` a partir da mesma consulta:
 
 ```python
 from sqlalchemy_redshift.commands import UnloadFromSelect, Format
 
 unload = UnloadFromSelect(
-    consulta, unload_location="s3://bucket/operacoes/data/2026-08/abc123_",
+    query, unload_location="s3://bucket/operacoes/data/2026-08/abc123_",
     iam_role_arns="arn:aws:iam::123456789012:role/papel", format=Format.parquet,
     manifest=True, max_file_size=256 * 1024 * 1024,
 )
@@ -1161,19 +1161,19 @@ from sqlalchemy.orm import Session
 from sqlalchemy_redshift.commands import CopyCommand, Format
 
 # Volume: Parquet no S3 e COPY, gerado a partir do Table do modelo.
-copia = CopyCommand(
+copy_cmd = CopyCommand(
     Operacao.__table__, data_location="s3://bucket/staging/abc123/operacoes/manifest",
     iam_role_arns="arn:aws:iam::123456789012:role/papel", format=Format.parquet, manifest=True,
 )
 with engine.begin() as conn:
-    conn.execute(copia)
-    carregadas = conn.execute(sa.text("SELECT pg_last_copy_count()")).scalar()
+    conn.execute(copy_cmd)
+    loaded = conn.execute(sa.text("SELECT pg_last_copy_count()")).scalar()
 
 # Volumes pequenos: um INSERT de várias linhas por lote, sem passar por executemany.
-registros = df.to_dict("records")
+records = df.to_dict("records")
 with Session(engine) as session:
-    for inicio in range(0, len(registros), 500):
-        session.execute(insert(Operacao).values(registros[inicio:inicio + 500]))
+    for start in range(0, len(records), 500):
+        session.execute(insert(Operacao).values(records[start:start + 500]))
     session.commit()
 ```
 

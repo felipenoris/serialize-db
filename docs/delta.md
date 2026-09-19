@@ -62,11 +62,11 @@ import json, pathlib
 from deltalake import DeltaTable
 
 # Ações de um commit lidas do log; no S3, history() e get_add_actions() dão o mesmo sem listar arquivos.
-def acoes_do_commit(raiz: str, versao: int) -> list[str]:
-    caminho = pathlib.Path(raiz, "_delta_log", f"{versao:020d}.json")
-    return [next(iter(json.loads(linha))) for linha in caminho.read_text().splitlines()]
+def commit_actions(root: str, version: int) -> list[str]:
+    path = pathlib.Path(root, "_delta_log", f"{version:020d}.json")
+    return [next(iter(json.loads(row))) for row in path.read_text().splitlines()]
 
-acoes_do_commit("cad_operacoes", 3)                 # ['commitInfo', 'remove', 'add']
+commit_actions("cad_operacoes", 3)                 # ['commitInfo', 'remove', 'add']
 DeltaTable("cad_operacoes").history(1)[0]["operationParameters"]   # {'mode': 'Overwrite', 'predicate': "mes = '2026-02'", ...}
 ```
 
@@ -265,10 +265,10 @@ import pyarrow as pa
 from deltalake import write_deltalake
 
 # Serializa os documentos antes do cast: um dict do pandas viraria struct.
-documentos = [{"origem": "sistema A", "tags": ["x"]}, None]
-coluna = pa.array([json.dumps(d) if d is not None else None for d in documentos], pa.string())
-dados = pa.table({"id_evento": pa.array([1, 2], pa.int64()), "meta": coluna.cast(pa.json_(pa.string()))})
-write_deltalake("eventos", dados, mode="append")
+documents = [{"origem": "sistema A", "tags": ["x"]}, None]
+column = pa.array([json.dumps(d) if d is not None else None for d in documents], pa.string())
+data = pa.table({"id_evento": pa.array([1, 2], pa.int64()), "meta": column.cast(pa.json_(pa.string()))})
+write_deltalake("eventos", data, mode="append")
 
 con.sql("SELECT id_evento, meta->>'origem' AS origem, json_valid(meta) AS valido FROM delta_scan('eventos')")
 ```
@@ -303,35 +303,35 @@ ficam em `Table.info["serialize_db"]`, como [`schema.md`](schema.md) propõe:
 import pyarrow as pa
 import sqlalchemy as sa
 from deltalake import DeltaTable
-from serialize_db.contrato import esquema_arrow   # docs/sqlalchemy.md: tipos, nulidade e PARQUET:field_id
+from serialize_db.contract import arrow_schema   # docs/sqlalchemy.md: tipos, nulidade e PARQUET:field_id
 
-def esquema_delta(modelo) -> pa.Schema:
+def delta_schema(model) -> pa.Schema:
     """Esquema Arrow do contrato com o comentário de cada coluna nos metadados do campo."""
     return pa.schema([
-        campo.with_metadata({**campo.metadata, "comment": coluna.comment}) if coluna.comment else campo
-        for campo, coluna in zip(esquema_arrow(modelo), modelo.__table__.columns)
+        field.with_metadata({**field.metadata, "comment": column.comment}) if column.comment else field
+        for field, column in zip(arrow_schema(model), model.__table__.columns)
     ])
 
-PROPRIEDADES = {
+PROPERTIES = {
     "delta.logRetentionDuration": "interval 3650 days",
     "delta.deletedFileRetentionDuration": "interval 3650 days",
     "delta.checkpointInterval": "10",
 }
 
-def criar_tabela_delta(modelo, uri: str, storage_options: dict[str, str] | None = None) -> DeltaTable:
-    tabela = modelo.__table__
-    opcoes = tabela.info.get("serialize_db", {})
+def create_delta_table(model, uri: str, storage_options: dict[str, str] | None = None) -> DeltaTable:
+    table = model.__table__
+    options = table.info.get("serialize_db", {})
     dt = DeltaTable.create(
-        uri, esquema_delta(modelo), mode="ignore",
-        partition_by=opcoes.get("particao", []),
-        name=tabela.name, description=tabela.comment,
-        configuration=PROPRIEDADES, storage_options=storage_options,
+        uri, delta_schema(model), mode="ignore",
+        partition_by=options.get("partition_by", []),
+        name=table.name, description=table.comment,
+        configuration=PROPERTIES, storage_options=storage_options,
     )
-    existentes = {k.removeprefix("delta.constraints.") for k in dt.metadata().configuration
+    existing = {k.removeprefix("delta.constraints.") for k in dt.metadata().configuration
                   if k.startswith("delta.constraints.")}
-    for restricao in tabela.constraints:
-        if isinstance(restricao, sa.CheckConstraint) and restricao.name not in existentes:
-            dt.alter.add_constraint({restricao.name: str(restricao.sqltext)})
+    for constraint in table.constraints:
+        if isinstance(constraint, sa.CheckConstraint) and constraint.name not in existing:
+            dt.alter.add_constraint({constraint.name: str(constraint.sqltext)})
     return dt
 ```
 
@@ -383,7 +383,7 @@ o delta-rs faz e o que a biblioteca precisa impor:
 | Colunas de partição | Não há alteração; exige recriar a tabela. | | Só por ordem explícita. |
 | Recursos de protocolo | `dt.alter.add_feature(...)` ou implícito (`timestampNtz`). | Sobe `minReaderVersion` e `minWriterVersion`. | Só recursos que o DuckDB lê. |
 
-A reconciliação é o comando da biblioteca que substitui a migração: compara `esquema_arrow(Table)`
+A reconciliação é o comando da biblioteca que substitui a migração: compara `arrow_schema(Table)`
 com `dt.schema()`, aplica o diff aditivo, recusa o destrutivo com a instrução de reescrita, e repete
 o mesmo diff nas tabelas publicadas no Redshift (`ALTER TABLE ADD COLUMN`, que acrescenta no fim, ou
 recriação e recarga). A ordem das colunas no Redshift segue a ordem do esquema Delta, porque o `COPY`
@@ -394,9 +394,9 @@ colunas, pendente da prova de conceito.
 
 | Recurso do Alembic | Equivalente com o Delta como fonte da verdade |
 | --- | --- |
-| `revision --autogenerate`, diff entre modelo e banco | Reconciliação: `esquema_arrow(Table)` contra `dt.schema()`. |
+| `revision --autogenerate`, diff entre modelo e banco | Reconciliação: `arrow_schema(Table)` contra `dt.schema()`. |
 | `upgrade head` | Aplicação do diff aditivo (`add_columns`, `add_constraint`, `drop_column_not_null`); o destrutivo exige reescrita explícita. |
-| `downgrade` | `dt.restore(versao)`, que volta esquema e dados juntos, dentro da retenção. |
+| `downgrade` | `dt.restore(version)`, que volta esquema e dados juntos, dentro da retenção. |
 | Tabela `alembic_version` | A versão do log e o `commitInfo` de cada mudança (`ADD COLUMN`, `CHANGE COLUMN`, `RESTORE`). |
 | Scripts revisados no PR | `schema/<tabela>.delta.json` gerado do modelo e versionado; o diff aparece no PR. |
 | Migração de dados em SQL | `update` com predicado no Delta, ou reexecução dos meses afetados. |
@@ -427,7 +427,7 @@ props = CommitProperties(
     custom_metadata={"id_execucao": "exec-42", "versao_lida": "3"},
     app_transactions=[Transaction(app_id="pipeline", version=42)],
 )
-write_deltalake(uri, dados, mode="overwrite", predicate="mes = '2026-08'", commit_properties=props)
+write_deltalake(uri, data, mode="overwrite", predicate="mes = '2026-08'", commit_properties=props)
 
 dt = DeltaTable(uri)
 dt.history(1)[0]["id_execucao"]        # 'exec-42'
@@ -471,27 +471,27 @@ O delta-rs opera com tabelas Arrow (PyArrow, pandas, Polars pelo PyCapsule) e co
 import pyarrow as pa
 from deltalake import DeltaTable, write_deltalake
 
-opcoes = {"AWS_REGION": "sa-east-1"}          # credenciais: ambiente, IMDS, contêiner ou explícitas
+options = {"AWS_REGION": "sa-east-1"}          # credenciais: ambiente, IMDS, contêiner ou explícitas
 uri = "s3://bucket/prod/cad_operacoes"
 
 # INSERT: acrescenta arquivos; o esquema Arrow precisa casar com o da tabela.
-write_deltalake(uri, dados, mode="append", storage_options=opcoes)
+write_deltalake(uri, data, mode="append", storage_options=options)
 
 # Substituição do mês: remove os arquivos do predicado e acrescenta os novos, num commit.
-write_deltalake(uri, dados_do_mes, mode="overwrite", predicate="mes = '2026-08'", storage_options=opcoes)
+write_deltalake(uri, month_data, mode="overwrite", predicate="mes = '2026-08'", storage_options=options)
 
 # SELECT com poda por partição e por estatísticas, projeção e versão.
-dt = DeltaTable(uri, storage_options=opcoes)
-agosto = dt.to_pyarrow_table(filters=[("mes", "=", "2026-08")], columns=["id_operacao", "valor"])
-conjunto = dt.to_pyarrow_dataset()             # para registrar no DuckDB ou varrer em lotes
-antigo = DeltaTable(uri, version=12, storage_options=opcoes)
+dt = DeltaTable(uri, storage_options=options)
+august = dt.to_pyarrow_table(filters=[("mes", "=", "2026-08")], columns=["id_operacao", "valor"])
+dataset = dt.to_pyarrow_dataset()             # para registrar no DuckDB ou varrer em lotes
+previous = DeltaTable(uri, version=12, storage_options=options)
 
 # UPDATE e DELETE por predicado: reescrevem os arquivos atingidos.
 dt.update(predicate="mes = '2026-08' AND id_operacao = 42", updates={"descricao": "'corrigido'"})
 dt.delete(predicate="mes = '2026-08' AND id_cliente = 7")
 
 # MERGE (upsert) a partir de uma tabela Arrow.
-(dt.merge(source=fonte, predicate="t.id_operacao = s.id_operacao AND t.mes = s.mes",
+(dt.merge(source=source, predicate="t.id_operacao = s.id_operacao AND t.mes = s.mes",
           source_alias="s", target_alias="t")
    .when_matched_update_all()
    .when_not_matched_insert_all()
@@ -518,18 +518,18 @@ Caminhos para dentro de uma tabela Delta, do mais ao menos comum no pipeline:
 1. Arrow em memória ou em streaming. `write_deltalake` aceita um `RecordBatchReader`, e o DuckDB
    produz um com `con.execute(sql).to_arrow_reader(50_000)`: 200.000 linhas geradas pelo DuckDB
    entraram num único arquivo sem materializar a tabela em Python. O cast seguro para o esquema do
-   contrato acontece na consulta do DuckDB ou em `Table.cast(esquema, safe=True)`.
+   contrato acontece na consulta do DuckDB ou em `Table.cast(schema, safe=True)`.
 2. Arquivos gravados por outro escritor, registrados sem cópia por `create_write_transaction`:
 
 ```python
 import json, time
 from deltalake.transaction import AddAction
 
-def registrar_arquivo(dt: DeltaTable, caminho_relativo: str, tamanho: int, mes: str, estatisticas: dict) -> None:
-    acao = AddAction(path=caminho_relativo, size=tamanho, partition_values={"mes": mes},
+def register_file(dt: DeltaTable, relative_path: str, size: int, month: str, stats: dict) -> None:
+    action = AddAction(path=relative_path, size=size, partition_values={"mes": month},
                      modification_time=int(time.time() * 1000), data_change=True,
-                     stats=json.dumps(estatisticas))
-    dt.create_write_transaction([acao], mode="append", schema=dt.schema(), partition_by=["mes"])
+                     stats=json.dumps(stats))
+    dt.create_write_transaction([action], mode="append", schema=dt.schema(), partition_by=["mes"])
 ```
 
    O arquivo precisa estar dentro da pasta da tabela, na subpasta da partição, sem a coluna de
@@ -562,7 +562,7 @@ um `COPY (SELECT ... FROM delta_scan(uri) WHERE ...) TO ...` do DuckDB, com as o
 ## Pipeline com o Delta como fonte da verdade
 
 1. **Início da execução.** A biblioteca abre cada tabela de entrada e registra
-   `versoes[tabela] = dt.version()`. Toda leitura da execução usa essas versões, o que dá uma visão
+   `versions[table] = dt.version()`. Toda leitura da execução usa essas versões, o que dá uma visão
    consistente entre tabelas mesmo que outra execução publique no meio.
 2. **Ingestão seletiva no motor.** No DuckDB, `ATTACH uri AS t (TYPE delta, VERSION v)` ou uma view
    sobre `delta_scan(uri, version := v)`, com o nome que o modelo espera; os filtros de mês do
@@ -635,24 +635,24 @@ Carga de uma tabela do sandbox ou de publicação:
 ```python
 import json
 
-def manifesto(dt: DeltaTable, meses: set[str]) -> bytes:
-    raiz = dt.table_uri.rstrip("/")
-    acoes = pa.table(dt.get_add_actions(flatten=True)).to_pylist()
+def manifest(dt: DeltaTable, months: set[str]) -> bytes:
+    root = dt.table_uri.rstrip("/")
+    actions = pa.table(dt.get_add_actions(flatten=True)).to_pylist()
     return json.dumps({"entries": [
-        {"url": f"{raiz}/{a['path']}", "mandatory": True, "meta": {"content_length": a["size_bytes"]}}
-        for a in acoes if a["partition.mes"] in meses
+        {"url": f"{root}/{a['path']}", "mandatory": True, "meta": {"content_length": a["size_bytes"]}}
+        for a in actions if a["partition.mes"] in months
     ]}).encode()
 ```
 
 ```sql
 BEGIN;
 DELETE FROM prod_cad_operacoes WHERE mes = '2026-08';
-CREATE TEMPORARY TABLE stage_cad_operacoes (                             -- sem a coluna mes
+CREATE TEMPORARY TABLE staging_cad_operacoes (                             -- sem a coluna mes
     id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL, id_cliente BIGINT NOT NULL,
     valor NUMERIC(18, 2) NOT NULL, descricao VARCHAR(200));
-COPY stage_cad_operacoes FROM 's3://bucket/publicacao/exec-42/cad_operacoes/2026-08.manifest'
+COPY staging_cad_operacoes FROM 's3://bucket/publicacao/exec-42/cad_operacoes/2026-08.manifest'
     IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST;
-INSERT INTO prod_cad_operacoes SELECT *, '2026-08' FROM stage_cad_operacoes;
+INSERT INTO prod_cad_operacoes SELECT *, '2026-08' FROM staging_cad_operacoes;
 COMMIT;
 ```
 
@@ -791,14 +791,14 @@ import json
 from deltalake import DeltaTable
 
 # O arquivo de controle mapeia fechamento -> {tabela: versão}; o vacuum preserva essas versões.
-def vacuum_com_fechamentos(dt: DeltaTable, controle: dict, tabela: str, retencao_horas: int = 24 * 400,
-                           executar: bool = False) -> list[str]:
-    versoes = sorted({v[tabela] for v in controle["fechamentos"].values() if tabela in v})
-    return dt.vacuum(retention_hours=retencao_horas, enforce_retention_duration=False,
-                     dry_run=not executar, keep_versions=versoes)
+def vacuum_keeping_closings(dt: DeltaTable, control: dict, table: str, retention_hours: int = 24 * 400,
+                           apply: bool = False) -> list[str]:
+    versions = sorted({v[table] for v in control["fechamentos"].values() if table in v})
+    return dt.vacuum(retention_hours=retention_hours, enforce_retention_duration=False,
+                     dry_run=not apply, keep_versions=versions)
 
-controle = json.load(open("controle.json"))   # {"fechamentos": {"2026T1": {"cad_operacoes": 2, ...}}}
-vacuum_com_fechamentos(DeltaTable("cad_operacoes"), controle, "cad_operacoes")   # lista sem apagar
+control = json.load(open("controle.json"))   # {"fechamentos": {"2026T1": {"cad_operacoes": 2, ...}}}
+vacuum_keeping_closings(DeltaTable("cad_operacoes"), control, "cad_operacoes")   # lista sem apagar
 ```
 
 Configuração que decorre disso: `delta.logRetentionDuration` em `interval 3650 days`;

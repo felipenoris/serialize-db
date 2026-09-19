@@ -76,7 +76,11 @@ When you need to commit in this repo, do it on a new branch prefixed with `claud
 
 ## Language convention (important)
 
-All prose in this repo is **Brazilian Portuguese (pt-BR)**: README files, code comments, docstrings, printed output, test messages, and shell-script comments. When editing or adding content, keep writing in pt-BR to match. Identifiers (variable and function names) are in English.
+All prose in this repo is **Brazilian Portuguese (pt-BR)**: README files, code comments, docstrings, printed output, test messages, and shell-script comments. When editing or adding content, keep writing in pt-BR to match.
+
+Database identifiers (schema names, table names, column names) are in Brazilian Portuguese (pt-BR).
+
+Code identifiers (variable and function names) are in English.
 
 This `CLAUDE.md` is in English, for AI-assistant tooling.
 
@@ -150,7 +154,7 @@ matching group.
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
 | `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
-| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, no Alembic) with the reasons, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execucao` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
+| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, no Alembic) with the reasons, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
@@ -285,6 +289,17 @@ S3 Tables may be enabled later); development and production runs write separate 
 rare. The decision recorded in `docs/estrategia.md` follows from them: Delta Lake through `deltalake`
 as the table layer, SQLAlchemy kept as contract metadata and Core, DataFrames moved through Arrow,
 SQLMesh, dbt and DuckLake not adopted.
+
+## Naming decisions applied to the documents
+
+The convention above was applied to every example in `docs/` on 2026-09-19. ORM model classes and
+column mixins (`Operacao`, `Lancamento`, `Rastreio`) keep Portuguese names: they are data-model
+artifacts, like tables and columns. Python variables, functions, parameters, modules, the proposed
+API (`Database`, `Execution`, `ingest`, `audit`, `publish`) and the keys of `Table.info["serialize_db"]`
+(`partition_by`, `sort_key`, `redshift`) are English. Keys stored with the data stay Portuguese: Delta
+commit metadata (`id_execucao`, `fechamento`) and the closings control file (`fechamentos`). SQL
+placeholders in prose (`COPY (consulta) TO ...`) and staging table names (`staging_<tabela>`) count as
+database identifiers.
 
 ## The state of the code
 
