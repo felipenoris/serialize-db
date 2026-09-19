@@ -857,6 +857,7 @@ Documentação do delta-rs e repositórios:
 - <https://delta-io.github.io/delta-rs/usage/writing/writing-to-s3-with-locking-provider/>
 - <https://delta-io.github.io/delta-rs/integrations/object-storage/s3/>
 - <https://delta-io.github.io/delta-rs/integrations/object-storage/s3-like/>
+- <https://delta-io.github.io/delta-rs/integrations/object-storage/hdfs/>
 - <https://delta-io.github.io/delta-rs/api/delta_table/>
 - <https://delta-io.github.io/delta-rs/api/delta_table/delta_table_alterer/>
 - <https://github.com/delta-io/delta-rs/releases>
@@ -924,6 +925,7 @@ Documentação do delta-rs e repositórios:
 - <https://docs.rs/pyo3-arrow/latest/pyo3_arrow/>
 - <https://docs.rs/object_store/latest/object_store/enum.PutMode.html>
 - <https://docs.rs/object_store/latest/object_store/aws/enum.S3ConditionalPut.html>
+- <https://docs.rs/object_store/latest/object_store/aws/struct.AmazonS3Builder.html>
 
 ## Fontes
 
