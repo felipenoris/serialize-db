@@ -56,7 +56,7 @@ perfis de `~/.aws/config`:
 - As credenciais vêm de variáveis de ambiente, de `storage_options` ou dos metadados da instância; a
   documentação afirma que o escritor não usa o `boto3` e não lê `~/.aws/config`. A origem das
   credenciais no SageMaker Unified Studio fica para a prova de conceito.
-- `write_deltalake(dados, mode=..., partition_by=..., predicate=..., schema_mode=...)` aceita tabela
+- `write_deltalake(data, mode=..., partition_by=..., predicate=..., schema_mode=...)` aceita tabela
   PyArrow, DataFrame pandas ou iterador de `RecordBatch`; `mode="overwrite"` com `predicate` substitui
   só as linhas que casam com o predicado e rejeita dados fora dele; `schema_mode="merge"` acrescenta
   colunas. O Polars grava com `DataFrame.write_delta`, sobre a mesma biblioteca.
@@ -92,7 +92,7 @@ Verificado localmente:
 | Viagem no tempo no DuckDB | `delta_scan(caminho, version := 0)` e `ATTACH ... (TYPE delta)` com `AT (VERSION => 0)` funcionam; `delta_scan(...) AT (...)` não. |
 | `create_write_transaction` com um arquivo gravado pelo PyArrow em `mes=2026-04/` | Versão 4 criada; o DuckDB lê o arquivo registrado. |
 | Tipos do contrato gravados de um esquema Arrow | `int16` vira `short`, `int32` `integer`, `int64` `long`, `bool` `boolean`, `float64` `double`, `decimal128(18, 2)` `decimal(18,2)`, `string` `string`, `date32` `date`, `timestamp[us]` `timestamp_ntz`, `timestamp[us, tz=UTC]` `timestamp`. A coluna `timestamp_ntz` eleva o protocolo a leitor 3 e escritor 7 com o recurso `timestampNtz`. Um `timestamp[ns]` é aceito e gravado em microssegundos; um fuso `America/Sao_Paulo` é aceito e lido como o mesmo instante. O DuckDB lê `SMALLINT`, `INTEGER`, `BIGINT`, `BOOLEAN`, `DOUBLE`, `DECIMAL(18,2)`, `VARCHAR`, `DATE`, `TIMESTAMP` e `TIMESTAMP WITH TIME ZONE`. A tabela de tipos de [`schema.md`](schema.md) traz a coluna Delta. |
-| `DeltaTable.create(esquema, partition_by=..., name=..., description=..., configuration=...)` | Commit `CREATE TABLE` na versão 0 com nulidade, comentários de coluna em `metadata`, nome, descrição e as propriedades `delta.logRetentionDuration` e `delta.deletedFileRetentionDuration`; `mode="ignore"` repete a chamada sem criar versão nova. |
+| `DeltaTable.create(schema, partition_by=..., name=..., description=..., configuration=...)` | Commit `CREATE TABLE` na versão 0 com nulidade, comentários de coluna em `metadata`, nome, descrição e as propriedades `delta.logRetentionDuration` e `delta.deletedFileRetentionDuration`; `mode="ignore"` repete a chamada sem criar versão nova. |
 | Esquema na viagem no tempo | `delta_scan(caminho, version := 0)` mostra as seis colunas da versão 0; a versão atual mostra sete. |
 | `restore(1)` | Nova versão 5 com os arquivos e o esquema da versão 1; operação `RESTORE` no histórico. |
 | `vacuum(retention_hours=0, dry_run=True)` | Recusado: `minimum retention for vacuum is configured to be greater than 168 hours`; com `enforce_retention_duration=False`, o dry run listou três arquivos. |
@@ -173,7 +173,7 @@ Verificado localmente com PyIceberg 0.12.0 (extras `sql-sqlite` e `pyiceberg-cor
 | Verificação | Resultado |
 | --- | --- |
 | Tabela particionada por `month(data_ref)` e `append` de dois meses | Um arquivo por mês em `data/data_ref_month=2026-01/`; a coluna `data_ref` fica dentro do arquivo, e nenhuma coluna `mes` existe. |
-| `overwrite(dados, overwrite_filter=...)` de fevereiro | Um commit com dois snapshots (`delete` e `append`); o arquivo antigo de fevereiro saiu do snapshot atual. |
+| `overwrite(data, overwrite_filter=...)` de fevereiro | Um commit com dois snapshots (`delete` e `append`); o arquivo antigo de fevereiro saiu do snapshot atual. |
 | `append` sem o extra `pyiceberg-core` | `ImportError` na transformação de partição; o extra traz a implementação em Rust. |
 | `update_schema()` com `rename_column` e `add_column` | Esquema com `field_id` de 1 a 6; o arquivo antigo mantém o nome `descricao`, e o DuckDB mostra `descr`. |
 | Arquivo Parquet gravado pelo PyIceberg | `PARQUET:field_id` em cada coluna; `DECIMAL(18, 2)` como `INT64`; um row group para 100.000 linhas. |
@@ -481,13 +481,13 @@ marcados, com uma amostra pequena.
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
 | 0. Prova de conceito na AWS | Credenciais do delta-rs no SageMaker; `write_deltalake` e `delta_scan` no bucket do projeto; `COPY ... MANIFEST` com `DECIMAL` em `INT64`, `FILLRECORD` e lista de colunas; `UNLOAD ... PARTITION BY` mais registro; tempo do `delta_scan` no S3. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
-| 1. Contrato | `serialize_db.contrato`: modelos corrigidos (`Base` importável, `Numeric(18, 2)`, `autoincrement=False`, sem `DEFERRABLE`, coluna `mes`, comentários, `Table.info["serialize_db"]`); `esquema_arrow`, `esquema_delta`, `ddl(dialeto)`; `schema/<tabela>.delta.json`, `.duckdb.sql` e `.redshift.sql` gerados e comparados por teste. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar os arquivos. |
-| 2. Camada Delta | `serialize_db.delta`: `criar_tabela`, `abrir(uri, versao)`, `publicar_mes(uri, mes, reader)`, `registrar_arquivos`, `reconciliar(tabela, uri)`, `manifesto_copy(uri, versao, meses)`, `diff_versoes`, `marcar_fechamento`, `vacuum_com_fechamentos`, `copia_profunda`. | Testes em pastas locais cobrem substituição do mês, conflito, reconciliação aditiva e destrutiva, `keep_versions` e realocação. |
-| 3. Motor DuckDB | `serialize_db.motor.duckdb`: conexão com `config`, secrets e extensões; `ingerir(tabela, meses, materializar)` com views pelo nome do modelo e versão fixa; `consultar(select)` devolvendo `RecordBatchReader`; `exportar_mes`; `auditar`. | O pipeline de exemplo roda em memória sobre um Delta local. |
-| 4. Motor Redshift | `serialize_db.motor.redshift`: conexão `redshift_connector`; sandbox com prefixo `exec_<id>_`; `ingerir` por `COPY ... MANIFEST` com staging; `consultar` (multi-row `INSERT` para volumes pequenos, ADBC ou `UNLOAD` para leitura); `exportar_mes` por `UNLOAD ... PARTITION BY` mais registro; limpeza do sandbox. | SQL compilado coberto por testes; integração com amostra num cluster. |
-| 5. Execução | `serialize_db.execucao`: `Execucao(banco, motor, meses)` com o ciclo abrir, ingerir, executar, auditar, publicar, encerrar; metadados de commit; log; CLI `serialize-db executar`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
+| 1. Contrato | `serialize_db.contract`: modelos corrigidos (`Base` importável, `Numeric(18, 2)`, `autoincrement=False`, sem `DEFERRABLE`, coluna `mes`, comentários, `Table.info["serialize_db"]`); `arrow_schema`, `delta_schema`, `ddl(dialect)`; `schema/<tabela>.delta.json`, `.duckdb.sql` e `.redshift.sql` gerados e comparados por teste. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar os arquivos. |
+| 2. Camada Delta | `serialize_db.delta`: `create_table`, `open(uri, version)`, `publish_month(uri, month, reader)`, `register_files`, `reconcile(table, uri)`, `copy_manifest(uri, version, months)`, `version_diff`, `mark_closing`, `vacuum_keeping_closings`, `deep_copy`. | Testes em pastas locais cobrem substituição do mês, conflito, reconciliação aditiva e destrutiva, `keep_versions` e realocação. |
+| 3. Motor DuckDB | `serialize_db.engine.duckdb`: conexão com `config`, secrets e extensões; `ingest(table, months, materialize)` com views pelo nome do modelo e versão fixa; `query(select)` devolvendo `RecordBatchReader`; `export_month`; `audit`. | O pipeline de exemplo roda em memória sobre um Delta local. |
+| 4. Motor Redshift | `serialize_db.engine.redshift`: conexão `redshift_connector`; sandbox com prefixo `exec_<id>_`; `ingest` por `COPY ... MANIFEST` com staging; `query` (multi-row `INSERT` para volumes pequenos, ADBC ou `UNLOAD` para leitura); `export_month` por `UNLOAD ... PARTITION BY` mais registro; limpeza do sandbox. | SQL compilado coberto por testes; integração com amostra num cluster. |
+| 5. Execução | `serialize_db.execution`: `Execution(db, engine, months)` com o ciclo abrir, ingerir, executar, auditar, publicar, encerrar; metadados de commit; log; CLI `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
 | 6. Carga inicial | Script de migração dos Parquet atuais para o Delta, por tabela e por mês, com cast para o contrato e relatório de contagens e somas; corte de leitura para o Delta. | Contagens e somas por mês iguais entre origem e Delta. |
-| 7. Publicação para clientes | Tabelas `prod_*` no Redshift; `diff_versoes` gera `DELETE` e `COPY` por mês; tabela de controle `serialize_db_publicacoes`. | Um mês alterado recarrega só esse mês. |
+| 7. Publicação para clientes | Tabelas `prod_*` no Redshift; `version_diff` gera `DELETE` e `COPY` por mês; tabela de controle `serialize_db_publicacoes`. | Um mês alterado recarrega só esse mês. |
 | 8. Operação | Fechamentos trimestrais, `vacuum` mensal com `keep_versions`, compactação antes do fechamento, cópia profunda anual; documentação com `pdoc`; monitoração por `history()`. | Runbook escrito e testes de manutenção passando. |
 
 As etapas 1 e 2 não dependem da AWS e começam antes da etapa 0 terminar; a etapa 3 fecha um
@@ -502,30 +502,30 @@ Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, mê
 
 | Etapa | O que acontece | Artefatos |
 | --- | --- | --- |
-| 1. Abertura | Lê o arquivo de controle (fechamentos, versões publicadas); abre cada tabela de entrada e registra a versão. | `versoes = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
+| 1. Abertura | Lê o arquivo de controle (fechamentos, versões publicadas); abre cada tabela de entrada e registra a versão. | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
 | 2. Ingestão | DuckDB: `ATTACH ... (TYPE delta, VERSION 143)` e views com os nomes dos modelos; `cad_lancamentos` materializada com `WHERE mes BETWEEN '2025-09' AND '2026-08'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos desses meses em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
 | 3. Execução | O pipeline roda statements Core e lógica Python sobre o sandbox; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, mês 2026-08. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave, `mes = strftime(data_ref, '%Y-%m')`, limites de tipo, totais de controle. | Relatório da execução; reprovação encerra sem tocar o Delta. |
-| 5. Publicação no Delta | `write_deltalake(uri_projetado, reader, mode="overwrite", predicate="mes = '2026-08'")` com `custom_metadata={"id_execucao": ..., "versoes_lidas": ...}`; do Redshift, `UNLOAD ... PARTITION BY (mes)` mais `create_write_transaction`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `mes=2026-08/`. |
-| 6. Publicação no Redshift | `diff_versoes(57, 58)` aponta o mês 2026-08; `DELETE` do mês, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08'`; controle atualizado. | `prod_cad_lancamentos_projetados` com o mês novo; `serialize_db_publicacoes` em 58. |
+| 5. Publicação no Delta | `write_deltalake(projected_uri, reader, mode="overwrite", predicate="mes = '2026-08'")` com `custom_metadata={"id_execucao": ..., "versoes_lidas": ...}`; do Redshift, `UNLOAD ... PARTITION BY (mes)` mais `create_write_transaction`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `mes=2026-08/`. |
+| 6. Publicação no Redshift | `version_diff(57, 58)` aponta o mês 2026-08; `DELETE` do mês, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08'`; controle atualizado. | `prod_cad_lancamentos_projetados` com o mês novo; `serialize_db_publicacoes` em 58. |
 | 7. Fechamento | Só na execução de fechamento trimestral: `custom_metadata={"fechamento": "2026T3"}` e entrada no arquivo de controle. | Versões do fechamento protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
 
 A API que a etapa 5 propõe, não implementada:
 
 ```python
-from serialize_db import Banco, Execucao
-from pipeline import calcular_projecoes
-from pipeline.modelos import Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
+from serialize_db import Database, Execution
+from pipeline import compute_projections
+from pipeline.models import Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
 
-banco = Banco("s3://bucket/projeto/delta", ambiente="prod")
-with Execucao(banco, motor="duckdb", mes="2026-08", id_execucao="exec-2026-09-05") as ex:
-    ex.ingerir(Lancamento, meses=ex.meses_anteriores(12), materializar=True)
-    ex.ingerir(Contrato, Operacao, RelContratoOperacao)           # views sobre a versão fixada
-    calcular_projecoes(ex.sandbox)                                # statements Core e Python
-    ex.auditar(LancamentoProjetado, meses=["2026-08"])
-    ex.publicar(LancamentoProjetado, meses=["2026-08"])           # overwrite por mês, metadados
-    ex.publicar_redshift(LancamentoProjetado)                     # só os meses alterados
+db = Database("s3://bucket/projeto/delta", environment="prod")
+with Execution(db, engine="duckdb", month="2026-08", execution_id="exec-2026-09-05") as run:
+    run.ingest(Lancamento, months=run.previous_months(12), materialize=True)
+    run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada
+    compute_projections(run.sandbox)                                 # statements Core e Python
+    run.audit(LancamentoProjetado, months=["2026-08"])
+    run.publish(LancamentoProjetado, months=["2026-08"])             # overwrite por mês, metadados
+    run.publish_redshift(LancamentoProjetado)                        # só os meses alterados
 ```
 
 Uma reexecução com o mesmo `id_execucao` repete os `overwrite` dos mesmos meses e produz o mesmo

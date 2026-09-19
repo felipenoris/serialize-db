@@ -15,8 +15,8 @@ class Operacao(Base):
     __table_args__ = {
         "info": {
             "serialize_db": {
-                "particionamento": {"coluna": "data_ref", "transformacao": "month"},
-                "chave_ordenacao": ["data_ref", "id_operacao"],
+                "partition_by": ["mes"],
+                "sort_key": ["data_ref", "id_operacao"],
                 "redshift": {"diststyle": "KEY", "distkey": "id_cliente"},
             }
         }
@@ -27,6 +27,7 @@ class Operacao(Base):
     id_cliente: Mapped[int] = mapped_column(BigInteger)
     valor: Mapped[Decimal] = mapped_column(Numeric(18, 2))
     descricao: Mapped[str | None] = mapped_column(String(200))
+    mes: Mapped[str] = mapped_column(String(7))
 ```
 
 O `sqlalchemy-redshift` aceita `redshift_diststyle`, `redshift_distkey`, `redshift_sortkey` e
@@ -84,7 +85,7 @@ tratamento em cada camada, verificado em 2026-09-19:
 
 | Camada | Tipo | Comportamento |
 | --- | --- | --- |
-| Modelo | `sa.JSON().with_variant(SUPER(), "redshift")`, com `SUPER` de `sqlalchemy_redshift.dialect`. | O DDL compila `JSON` no DuckDB e `SUPER` no Redshift; `isinstance(tipo, sa.JSON)` continua verdadeiro, e `tipo_arrow` o reconhece. |
+| Modelo | `sa.JSON().with_variant(SUPER(), "redshift")`, com `SUPER` de `sqlalchemy_redshift.dialect`. | O DDL compila `JSON` no DuckDB e `SUPER` no Redshift; `isinstance(sa_type, sa.JSON)` continua verdadeiro, e `arrow_type` o reconhece. |
 | Arrow | `pa.json_(pa.string())`, extensão `arrow.json`, ou `pa.string()`. | Um `dict` do pandas vira `struct`; a biblioteca serializa com `json.dumps` antes do cast. O Arrow não valida o texto. |
 | Delta | `string`, com `ARROW:extension:name = arrow.json` nos metadados do campo quando o esquema Arrow traz a extensão. | O delta-rs grava o arquivo com o tipo lógico `String`; `schema().to_arrow()` devolve `string` simples. |
 | Parquet | `BYTE_ARRAY` com tipo lógico `JSON` quando gravado pelo PyArrow ou pelo DuckDB, `String` quando gravado pelo delta-rs. | Os dois entram na mesma tabela Delta e são lidos pelos dois leitores. |

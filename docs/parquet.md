@@ -53,10 +53,10 @@ import pyarrow.parquet as pq
 
 with open("operacoes.parquet", "rb") as f:
     f.seek(-8, 2)
-    tamanho_rodape, magico = struct.unpack("<i4s", f.read(8))
-    f.seek(-8 - tamanho_rodape, 2)
-    rodape = f.read(tamanho_rodape)  # FileMetaData em Thrift compacto, ainda sem decodificar
-print(magico, tamanho_rodape == pq.read_metadata("operacoes.parquet").serialized_size)
+    footer_size, magic = struct.unpack("<i4s", f.read(8))
+    f.seek(-8 - footer_size, 2)
+    footer = f.read(footer_size)  # FileMetaData em Thrift compacto, ainda sem decodificar
+print(magic, footer_size == pq.read_metadata("operacoes.parquet").serialized_size)
 # b'PAR1' True
 ```
 
@@ -93,7 +93,7 @@ cresce com row groups × colunas, e um leitor o decodifica inteiro antes de ler 
 pesa em arquivos com milhares de row groups ou colunas.
 
 Nos exemplos em Python deste documento, `tabela` é a tabela Arrow do mês com as cinco colunas do
-contrato, `esquema` é o esquema dela (`esquema_arrow` de [sqlalchemy.md](sqlalchemy.md), sem a coluna
+contrato, `esquema` é o esquema dela (`arrow_schema` de [sqlalchemy.md](sqlalchemy.md), sem a coluna
 de partição `mes`, que fica no diretório), `tabela_mes` acrescenta `mes` derivada de `data_ref`
 (`pc.strftime(tabela["data_ref"], "%Y-%m")`) e `con` é a conexão DuckDB do sandbox com a tabela
 `operacoes`. Eles rodaram em 2026-09-19 com PyArrow 25.0.1, DuckDB 1.5.5 e deltalake 1.6.4, sobre
@@ -103,11 +103,11 @@ uma amostra com a mesma forma do arquivo de exemplo.
 # Grava o mês com o esquema do contrato e lê os campos do FileMetaData que o PyArrow expõe.
 import pyarrow.parquet as pq
 
-pq.write_table(tabela, "operacoes.parquet", version="2.6", compression="zstd", row_group_size=100_000)
+pq.write_table(table, "operacoes.parquet", version="2.6", compression="zstd", row_group_size=100_000)
 md = pq.read_metadata("operacoes.parquet")
 print(md.created_by, md.format_version, md.num_rows, md.num_row_groups)
 # parquet-cpp-arrow version 25.0.1 2.6 300000 3
-pq.write_table(tabela, "operacoes_v1.parquet", version="1.0")
+pq.write_table(table, "operacoes_v1.parquet", version="1.0")
 print(pq.read_metadata("operacoes_v1.parquet").format_version)
 # 1.0
 ```
@@ -155,12 +155,12 @@ Os três pontos se decidem no esquema Arrow e nas opções de gravação:
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-esquema = pa.schema([
-    pa.field(c.name, tipo_arrow(c.type), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
+schema = pa.schema([
+    pa.field(c.name, arrow_type(c.type), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
     for i, c in enumerate(Operacao.__table__.columns, start=1)
     if c.name != "mes"
 ])
-pq.write_table(tabela.cast(esquema), "operacoes.parquet", store_decimal_as_integer=True)
+pq.write_table(table.cast(schema), "operacoes.parquet", store_decimal_as_integer=True)
 print(pq.ParquetFile("operacoes.parquet").schema)
 # required int64 field_id=1 id_operacao;
 # ...
@@ -234,15 +234,15 @@ Em streaming, cada lote vira um row group:
 # Um row group por lote: o ParquetWriter fecha um row group a cada write_batch, sem materializar o mês.
 import pyarrow.parquet as pq
 
-leitor = con.execute("""
+reader = con.execute("""
     SELECT id_operacao, data_ref, id_cliente, valor, descricao
     FROM operacoes WHERE mes = '2026-08' ORDER BY data_ref, id_operacao
 """).to_arrow_reader(100_000)
-caminho = "operacoes/mes=2026-08/exec_abc123.parquet"
-with pq.ParquetWriter(caminho, esquema, compression="zstd") as escritor:
-    for lote in leitor:
-        escritor.write_batch(lote.cast(esquema))  # o DuckDB entrega todo campo anulável; o cast aplica o contrato
-md = pq.read_metadata(caminho)
+path = "operacoes/mes=2026-08/exec_abc123.parquet"
+with pq.ParquetWriter(path, schema, compression="zstd") as writer:
+    for batch in reader:
+        writer.write_batch(batch.cast(schema))  # o DuckDB entrega todo campo anulável; o cast aplica o contrato
+md = pq.read_metadata(path)
 print([md.row_group(i).num_rows for i in range(md.num_row_groups)])
 ```
 
@@ -308,31 +308,31 @@ import decimal
 from datetime import date
 import pyarrow.parquet as pq
 
-def valor_json(v):
+def json_value(v):
     """O delta-rs grava DECIMAL como número JSON e DATE como texto ISO nas estatísticas."""
     if isinstance(v, decimal.Decimal):
         return float(v)
     return v.isoformat() if isinstance(v, date) else v
 
-def estatisticas_delta(caminho: str) -> dict:
-    md = pq.read_metadata(caminho)
-    minimos, maximos, nulos = {}, {}, {}
+def delta_stats(path: str) -> dict:
+    md = pq.read_metadata(path)
+    min_values, max_values, null_counts = {}, {}, {}
     for i in range(md.num_row_groups):
         rg = md.row_group(i)
         for j in range(rg.num_columns):
-            coluna = rg.column(j)
-            s, nome = coluna.statistics, coluna.path_in_schema
-            nulos[nome] = nulos.get(nome, 0) + s.null_count
+            column = rg.column(j)
+            s, name = column.statistics, column.path_in_schema
+            null_counts[name] = null_counts.get(name, 0) + s.null_count
             if s.has_min_max:
-                minimos[nome] = min(minimos.get(nome, s.min), s.min)
-                maximos[nome] = max(maximos.get(nome, s.max), s.max)
+                min_values[name] = min(min_values.get(name, s.min), s.min)
+                max_values[name] = max(max_values.get(name, s.max), s.max)
     return {"numRecords": md.num_rows,
-            "minValues": {k: valor_json(v) for k, v in minimos.items()},
-            "maxValues": {k: valor_json(v) for k, v in maximos.items()},
-            "nullCount": nulos}
+            "minValues": {k: json_value(v) for k, v in min_values.items()},
+            "maxValues": {k: json_value(v) for k, v in max_values.items()},
+            "nullCount": null_counts}
 ```
 
-O dicionário é o argumento `estatisticas` de `registrar_arquivo` em [delta.md](delta.md). Com um
+O dicionário é o argumento `stats` de `register_file` em [delta.md](delta.md). Com um
 arquivo de agosto registrado assim, `dt.file_uris(file_pruning_predicate="data_ref >= '2026-09-15'")`
 devolveu lista vazia, e `mes = '2026-08'` devolveu só esse arquivo.
 
@@ -368,9 +368,9 @@ Suporte (página de status de implementação do Parquet e verificação local):
 # O page index entra por opção do gravador; o rodapé diz se cada column chunk tem as duas estruturas.
 import pyarrow.parquet as pq
 
-pq.write_table(tabela, "operacoes.parquet", row_group_size=100_000, write_page_index=True)
-coluna = pq.read_metadata("operacoes.parquet").row_group(0).column(1)
-print(coluna.path_in_schema, coluna.has_column_index, coluna.has_offset_index)
+pq.write_table(table, "operacoes.parquet", row_group_size=100_000, write_page_index=True)
+column = pq.read_metadata("operacoes.parquet").row_group(0).column(1)
+print(column.path_in_schema, column.has_column_index, column.has_offset_index)
 # data_ref True True
 ```
 
@@ -436,12 +436,12 @@ gravou 8.209 bytes por row group.
 import duckdb
 import pyarrow.parquet as pq
 
-pq.write_table(tabela, "operacoes.parquet", row_group_size=100_000,
+pq.write_table(table, "operacoes.parquet", row_group_size=100_000,
                bloom_filter_options={"id_cliente": {"ndv": 5_000, "fpp": 0.01}})
 md = pq.read_metadata("operacoes.parquet")
 for i in range(md.num_row_groups):
-    coluna = md.row_group(i).column(2)
-    print(i, coluna.path_in_schema, coluna.bloom_filter_offset, coluna.bloom_filter_length)
+    column = md.row_group(i).column(2)
+    print(i, column.path_in_schema, column.bloom_filter_offset, column.bloom_filter_length)
 # 0 id_cliente 6813051 8209
 print(duckdb.sql("""
     SELECT row_group_id, bloom_filter_excludes
@@ -491,13 +491,13 @@ valor em fluxos para comprimir melhor ponto flutuante e, desde a 2.11, inteiros 
 # Dicionário e codificação são escolhidos por coluna na gravação e aparecem em `encodings` do column chunk.
 import pyarrow.parquet as pq
 
-pq.write_table(tabela, "operacoes.parquet", data_page_version="2.0", data_page_size=256 * 1024,
+pq.write_table(table, "operacoes.parquet", data_page_version="2.0", data_page_size=256 * 1024,
                max_rows_per_page=10_000, use_dictionary=["data_ref", "id_cliente"],
                column_encoding={"id_operacao": "DELTA_BINARY_PACKED", "descricao": "DELTA_LENGTH_BYTE_ARRAY"})
 rg = pq.read_metadata("operacoes.parquet").row_group(0)
 for j in range(rg.num_columns):
-    coluna = rg.column(j)
-    print(coluna.path_in_schema, coluna.encodings, coluna.has_dictionary_page)
+    column = rg.column(j)
+    print(column.path_in_schema, column.encodings, column.has_dictionary_page)
 # id_operacao ('RLE', 'DELTA_BINARY_PACKED') False
 # data_ref ('PLAIN', 'RLE', 'RLE_DICTIONARY') True
 ```
@@ -554,19 +554,19 @@ um. O PyArrow monta os dois com `metadata_collector` e `write_metadata`. O DuckD
 # Chaves próprias no esquema Arrow voltam no rodapé ao lado de ARROW:schema; os sumários saem de metadata_collector.
 import pyarrow.parquet as pq
 
-com_metadados = tabela.replace_schema_metadata({"serialize_db_version": "0.1.0", "id_execucao": "abc123"})
-pq.write_table(com_metadados, "operacoes.parquet")
+table_with_metadata = table.replace_schema_metadata({"serialize_db_version": "0.1.0", "id_execucao": "abc123"})
+pq.write_table(table_with_metadata, "operacoes.parquet")
 print(pq.read_metadata("operacoes.parquet").metadata.keys())
 # dict_keys([b'ARROW:schema', b'id_execucao', b'serialize_db_version'])
-with pq.ParquetWriter("operacoes_2.parquet", tabela.schema) as escritor:
-    escritor.write_table(tabela)
-    escritor.add_key_value_metadata({"linhas": str(tabela.num_rows)})  # valor conhecido só no fim da gravação
+with pq.ParquetWriter("operacoes_2.parquet", table.schema) as writer:
+    writer.write_table(table)
+    writer.add_key_value_metadata({"linhas": str(table.num_rows)})  # valor conhecido só no fim da gravação
 
-coletor = []
-pq.write_to_dataset(tabela_mes, "operacoes", partition_cols=["mes"], metadata_collector=coletor)
-esquema_dados = coletor[0].schema.to_arrow_schema()  # o esquema dos arquivos, sem a coluna de partição
-pq.write_metadata(esquema_dados, "operacoes/_common_metadata")
-pq.write_metadata(esquema_dados, "operacoes/_metadata", metadata_collector=coletor)
+collector = []
+pq.write_to_dataset(month_table, "operacoes", partition_cols=["mes"], metadata_collector=collector)
+data_schema = collector[0].schema.to_arrow_schema()  # o esquema dos arquivos, sem a coluna de partição
+pq.write_metadata(data_schema, "operacoes/_common_metadata")
+pq.write_metadata(data_schema, "operacoes/_metadata", metadata_collector=collector)
 print(pq.read_metadata("operacoes/_metadata").row_group(0).column(0).file_path)
 # mes=2026-01/597c7a1e1007448aa9114740c3c1a836-0.parquet
 ```
@@ -833,15 +833,15 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from datetime import date
 
-pq.write_to_dataset(tabela_mes, "operacoes", partition_cols=["mes"],
+pq.write_to_dataset(month_table, "operacoes", partition_cols=["mes"],
                     basename_template="exec_abc123_{i}.parquet", existing_data_behavior="delete_matching")
 print(pq.read_schema("operacoes/mes=2026-08/exec_abc123_0.parquet").names)
 # ['id_operacao', 'data_ref', 'id_cliente', 'valor', 'descricao']: a coluna mes ficou no diretório
-particao = ds.partitioning(pa.schema([("mes", pa.string())]), flavor="hive")
-conjunto = ds.dataset("operacoes", format="parquet", partitioning=particao)
-print([f.path for f in conjunto.get_fragments(filter=ds.field("mes") == "2026-03")])
+partitioning = ds.partitioning(pa.schema([("mes", pa.string())]), flavor="hive")
+dataset = ds.dataset("operacoes", format="parquet", partitioning=partitioning)
+print([f.path for f in dataset.get_fragments(filter=ds.field("mes") == "2026-03")])
 # ['operacoes/mes=2026-03/exec_abc123_0.parquet']
-agosto = conjunto.to_table(columns=["id_operacao", "data_ref", "valor"],
+august = dataset.to_table(columns=["id_operacao", "data_ref", "valor"],
                            filter=(ds.field("mes") == "2026-08") & (ds.field("data_ref") >= date(2026, 8, 15)))
 ```
 
@@ -881,7 +881,7 @@ sequencial, que permite pular todos os row groups menos um, com um UUID aleatór
 todos. No arquivo de exemplo, ordenado por `data_ref, id_operacao`, o filtro por agosto leu 1 dos 3
 row groups (a consulta sobre `parquet_metadata` na seção de inspeção mostra os dois pulados), enquanto
 `id_cliente`, aleatória, tem `1` a `5000` em todos. Com chave composta, a segunda coluna só poda
-dentro de faixas da primeira; a `chave_ordenacao` de [schema.md](schema.md) (`data_ref`,
+dentro de faixas da primeira; a `sort_key` de [schema.md](schema.md) (`data_ref`,
 `id_operacao`) é esse caso.
 
 ```sql
@@ -891,7 +891,7 @@ TO 'operacoes/mes=2026-08/exec_abc123.parquet' (FORMAT parquet, ROW_GROUP_SIZE 1
 
 ```python
 t = t.sort_by([("data_ref", "ascending"), ("id_operacao", "ascending")])
-pq.write_table(t, caminho, row_group_size=100_000,
+pq.write_table(t, path, row_group_size=100_000,
                sorting_columns=pq.SortingColumn.from_ordering(t.schema, [("data_ref", "ascending"), ("id_operacao", "ascending")]))
 ```
 
@@ -906,7 +906,7 @@ id_cliente = 99999` virou `EMPTY_RESULT` no plano do DuckDB sem ler dados, e `pa
 confirmou a exclusão dos 3 row groups.
 
 ```python
-pq.write_table(t, caminho, bloom_filter_options={"id_cliente": {"ndv": 5_000, "fpp": 0.01}})
+pq.write_table(t, path, bloom_filter_options={"id_cliente": {"ndv": 5_000, "fpp": 0.01}})
 ```
 
 Tamanho do row group. Row groups menores podam com mais precisão e paralelizam mais, mas cada um
@@ -945,13 +945,13 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from datetime import date
 
-agosto = (ds.field("data_ref") >= date(2026, 8, 1)) & (ds.field("data_ref") < date(2026, 9, 1))
-fragmento = next(ds.dataset("operacoes.parquet", format="parquet").get_fragments())
-print([rg.id for parte in fragmento.split_by_row_group(filter=agosto) for rg in parte.row_groups])
+august = (ds.field("data_ref") >= date(2026, 8, 1)) & (ds.field("data_ref") < date(2026, 9, 1))
+fragment = next(ds.dataset("operacoes.parquet", format="parquet").get_fragments())
+print([rg.id for part in fragment.split_by_row_group(filter=august) for rg in part.row_groups])
 # [2]: só o terceiro row group tem data_ref em agosto; os outros dois não são lidos
-print(len(fragmento.split_by_row_group(filter=ds.field("id_cliente") == 4242)))
+print(len(fragment.split_by_row_group(filter=ds.field("id_cliente") == 4242)))
 # 3: coluna aleatória, min e max cobrem o valor em todos os row groups
-t = pq.read_table("operacoes.parquet", columns=["id_operacao", "data_ref", "valor"], filters=agosto)
+t = pq.read_table("operacoes.parquet", columns=["id_operacao", "data_ref", "valor"], filters=august)
 ```
 
 Colunas de baixa cardinalidade (status, tipo, moeda). Dicionário e RLE comprimem bem, e o DuckDB grava
@@ -1072,14 +1072,14 @@ As opções desta seção numa gravação em streaming a partir do sandbox:
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-leitor = con.execute("""
+reader = con.execute("""
     SELECT id_operacao, data_ref, id_cliente, valor, descricao
     FROM operacoes WHERE mes = '2026-08' ORDER BY data_ref, id_operacao
 """).to_arrow_reader(100_000)
-lotes = pa.RecordBatchReader.from_batches(esquema, (lote.cast(esquema) for lote in leitor))
-opcoes = ds.ParquetFileFormat().make_write_options(compression="zstd", write_page_index=True,
+batches = pa.RecordBatchReader.from_batches(schema, (batch.cast(schema) for batch in reader))
+options = ds.ParquetFileFormat().make_write_options(compression="zstd", write_page_index=True,
                                                    write_page_checksum=True)
-ds.write_dataset(lotes, "operacoes/mes=2026-08", format="parquet", file_options=opcoes,
+ds.write_dataset(batches, "operacoes/mes=2026-08", format="parquet", file_options=options,
                  basename_template="exec_abc123_{i}.parquet", existing_data_behavior="delete_matching",
                  max_rows_per_file=1_000_000, min_rows_per_group=100_000, max_rows_per_group=100_000)
 ```
@@ -1145,16 +1145,16 @@ fica para a tabela, porque o arquivo do DuckDB marca toda coluna como `optional`
 import pyarrow.parquet as pq
 import sqlalchemy as sa
 
-def conferir_arquivo(contrato: sa.Table, caminho: str, particao: str = "mes") -> None:
-    esperado = [c for c in esquema_arrow(contrato) if c.name != particao]  # a partição fica no diretório
-    lido = pq.read_schema(caminho)
-    if lido.names != [c.name for c in esperado]:
-        raise ValueError(f"colunas do arquivo {lido.names}, contrato {[c.name for c in esperado]}")
-    for campo in esperado:
-        if lido.field(campo.name).type != campo.type:
-            raise ValueError(f"{campo.name}: arquivo {lido.field(campo.name).type}, contrato {campo.type}")
+def check_file(contract: sa.Table, path: str, partition_column: str = "mes") -> None:
+    expected = [c for c in arrow_schema(contract) if c.name != partition_column]  # a partição fica no diretório
+    actual = pq.read_schema(path)
+    if actual.names != [c.name for c in expected]:
+        raise ValueError(f"colunas do arquivo {actual.names}, contrato {[c.name for c in expected]}")
+    for field in expected:
+        if actual.field(field.name).type != field.type:
+            raise ValueError(f"{field.name}: arquivo {actual.field(field.name).type}, contrato {field.type}")
 
-conferir_arquivo(Operacao.__table__, "operacoes/mes=2026-08/exec_abc123_0.parquet")
+check_file(Operacao.__table__, "operacoes/mes=2026-08/exec_abc123_0.parquet")
 con.execute("""
     INSERT INTO operacoes BY NAME
     SELECT * FROM read_parquet('operacoes/mes=2026-08/*.parquet',
@@ -1258,14 +1258,14 @@ segunda verificação lê `parquet_schema` do arquivo gravado e compara `type`, 
 # Auditoria da exportação sobre a linha que RETURN_STATS devolve, sem reabrir o arquivo.
 from datetime import date
 
-nome, linhas, bytes_arquivo, bytes_rodape, colunas, _ = con.execute(comando_copy).fetchone()
-colunas = {coluna.strip('"'): e for coluna, e in colunas.items()}  # as chaves vêm entre aspas; os valores são texto
-esperado = con.execute("SELECT count(*) FROM operacoes WHERE mes = '2026-08'").fetchone()[0]
-assert linhas == esperado, f"gravadas {linhas}, consultadas {esperado}"
-for obrigatoria in ("id_operacao", "data_ref", "id_cliente", "valor"):
-    assert colunas[obrigatoria]["null_count"] == "0", obrigatoria
-assert date(2026, 8, 1) <= date.fromisoformat(colunas["data_ref"]["min"])
-assert date.fromisoformat(colunas["data_ref"]["max"]) < date(2026, 9, 1)
+name, rows, file_bytes, footer_bytes, columns, _ = con.execute(copy_command).fetchone()
+columns = {column.strip('"'): stats for column, stats in columns.items()}  # as chaves vêm entre aspas; os valores são texto
+expected = con.execute("SELECT count(*) FROM operacoes WHERE mes = '2026-08'").fetchone()[0]
+assert rows == expected, f"gravadas {rows}, consultadas {expected}"
+for required in ("id_operacao", "data_ref", "id_cliente", "valor"):
+    assert columns[required]["null_count"] == "0", required
+assert date(2026, 8, 1) <= date.fromisoformat(columns["data_ref"]["min"])
+assert date.fromisoformat(columns["data_ref"]["max"]) < date(2026, 9, 1)
 ```
 
 `comando_copy` é o `COPY` acima como string. `column_statistics` chega como
@@ -1322,14 +1322,14 @@ import json
 import pyarrow as pa
 from deltalake import DeltaTable
 
-dt = DeltaTable("s3://bucket/operacoes/", storage_options=opcoes_s3)  # credenciais conforme delta.md
-acoes = pa.table(dt.get_add_actions(flatten=True)).to_pylist()  # get_add_actions devolve uma tabela arro3
-raiz = dt.table_uri.rstrip("/")
-manifesto = {"entries": [
-    {"url": f"{raiz}/{acao['path']}", "mandatory": True, "meta": {"content_length": acao["size_bytes"]}}
-    for acao in acoes if acao["partition.mes"] == "2026-08"
+dt = DeltaTable("s3://bucket/operacoes/", storage_options=s3_options)  # credenciais conforme delta.md
+actions = pa.table(dt.get_add_actions(flatten=True)).to_pylist()  # get_add_actions devolve uma tabela arro3
+root = dt.table_uri.rstrip("/")
+manifest = {"entries": [
+    {"url": f"{root}/{action['path']}", "mandatory": True, "meta": {"content_length": action["size_bytes"]}}
+    for action in actions if action["partition.mes"] == "2026-08"
 ]}
-json.dumps(manifesto)  # vai para s3://bucket/staging/abc123/operacoes/manifest
+json.dumps(manifest)  # vai para s3://bucket/staging/abc123/operacoes/manifest
 ```
 
 Sobre uma tabela local com um arquivo de agosto registrado, o manifesto saiu com uma entrada,

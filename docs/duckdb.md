@@ -177,7 +177,7 @@ amostra, com valores até `99999.99`, foi inferida como `DECIMAL(7, 2)`, e um va
 posterior falharia no cast. A conversão para Arrow com o esquema do contrato antes do `INSERT` fixa o
 tipo e foi 25 vezes mais rápida na medição da seção de ingestão.
 
-A inferência e a correção aparecem numa ida e volta pelo Arrow, com o `esquema_arrow` de
+A inferência e a correção aparecem numa ida e volta pelo Arrow, com o `arrow_schema` de
 [sqlalchemy.md](sqlalchemy.md) e o modelo `Operacao` da seção sobre SQLAlchemy:
 
 ```python
@@ -194,13 +194,13 @@ df = pd.DataFrame({"id_operacao": [1, 2], "data_ref": [date(2026, 8, 1), date(20
                    "descricao": ["a", None]})
 con.sql("DESCRIBE SELECT valor FROM df").fetchone()[1]         # 'DECIMAL(7,2)', inferido da amostra
 
-entrada = pa.Table.from_pandas(df, schema=esquema_arrow(Operacao.__table__), preserve_index=False)
+incoming = pa.Table.from_pandas(df, schema=arrow_schema(Operacao.__table__), preserve_index=False)
 con.sql("DESCRIBE SELECT valor FROM entrada").fetchone()[1]    # 'DECIMAL(18,2)', fixado pelo contrato
 con.execute("INSERT INTO operacoes BY NAME SELECT * FROM entrada")
 
-volta = con.execute("SELECT * FROM operacoes ORDER BY id_operacao").to_arrow_table()
-volta.schema.field("valor").type, volta.schema.field("data_ref").type   # decimal128(18, 2), date32[day]
-volta.to_pandas(types_mapper=pd.ArrowDtype)["valor"].tolist() == df["valor"].tolist()   # True
+returned = con.execute("SELECT * FROM operacoes ORDER BY id_operacao").to_arrow_table()
+returned.schema.field("valor").type, returned.schema.field("data_ref").type   # decimal128(18, 2), date32[day]
+returned.to_pandas(types_mapper=pd.ArrowDtype)["valor"].tolist() == df["valor"].tolist()   # True
 ```
 
 Um lote posterior com `123456.78` na tabela inferida como `DECIMAL(7,2)` falha com `Conversion Error:
@@ -246,11 +246,11 @@ import duckdb
 import pyarrow as pa
 
 # Documentos serializados entram como arrow.json; o DuckDB valida ao materializar e extrai campos.
-documentos = [{"origem": "sistema A", "tags": ["x"]}, None]
-textos = pa.array([json.dumps(d) if d is not None else None for d in documentos], pa.string())
-entrada = pa.table({"id_evento": pa.array([1, 2], pa.int64()), "meta": textos.cast(pa.json_(pa.string()))})
+documents = [{"origem": "sistema A", "tags": ["x"]}, None]
+texts = pa.array([json.dumps(d) if d is not None else None for d in documents], pa.string())
+incoming = pa.table({"id_evento": pa.array([1, 2], pa.int64()), "meta": texts.cast(pa.json_(pa.string()))})
 con = duckdb.connect()
-con.register("entrada", entrada)
+con.register("entrada", incoming)
 con.sql("DESCRIBE SELECT * FROM entrada").fetchall()[1][1]                        # 'JSON'
 con.execute("CREATE TABLE eventos (id_evento BIGINT, meta JSON)")
 con.execute("INSERT INTO eventos BY NAME SELECT * FROM entrada")
@@ -298,21 +298,21 @@ dialeto `duckdb_engine` e executado na conexão DuckDB:
 import duckdb, duckdb_engine, sqlalchemy as sa
 from sqlalchemy.schema import CreateTable, SetColumnComment, SetTableComment
 
-def tabela_sandbox(tabela: sa.Table) -> sa.Table:
+def sandbox_table(table: sa.Table) -> sa.Table:
     """Cópia sem PRIMARY KEY, UNIQUE e FOREIGN KEY, conforme a política de restrições do sandbox."""
-    colunas = (sa.Column(c.name, c.type, nullable=c.nullable, comment=c.comment) for c in tabela.columns)
-    return sa.Table(tabela.name, sa.MetaData(), *colunas, comment=tabela.comment)
+    columns = (sa.Column(c.name, c.type, nullable=c.nullable, comment=c.comment) for c in table.columns)
+    return sa.Table(table.name, sa.MetaData(), *columns, comment=table.comment)
 
-def criar_tabela(con: duckdb.DuckDBPyConnection, tabela: sa.Table) -> None:
-    copia = tabela_sandbox(tabela)
-    comandos = [CreateTable(copia, if_not_exists=True),
-                *([SetTableComment(copia)] if copia.comment else []),
-                *(SetColumnComment(c) for c in copia.columns if c.comment)]
-    for comando in comandos:
-        con.execute(str(comando.compile(dialect=duckdb_engine.Dialect())))
+def create_table(con: duckdb.DuckDBPyConnection, table: sa.Table) -> None:
+    sandbox_copy = sandbox_table(table)
+    commands = [CreateTable(sandbox_copy, if_not_exists=True),
+                *([SetTableComment(sandbox_copy)] if sandbox_copy.comment else []),
+                *(SetColumnComment(c) for c in sandbox_copy.columns if c.comment)]
+    for command in commands:
+        con.execute(str(command.compile(dialect=duckdb_engine.Dialect())))
 
 con = duckdb.connect()
-criar_tabela(con, Operacao.__table__)
+create_table(con, Operacao.__table__)
 con.sql("SELECT sql FROM duckdb_tables() WHERE table_name = 'operacoes'").fetchone()[0]
 # 'CREATE TABLE operacoes(id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL, id_cliente BIGINT NOT NULL,
 #  valor DECIMAL(18,2) NOT NULL, descricao VARCHAR);'
@@ -421,7 +421,7 @@ CREATE TABLE operacoes(id_operacao BIGINT, data_ref DATE, id_cliente BIGINT NOT 
 A conexão Python (`duckdb.connect()`) enxerga DataFrames pandas e polars, tabelas, datasets,
 scanners e `RecordBatchReader` do Arrow pelo nome da variável Python, como se fossem tabelas
 (replacement scan). Objetos guardados em dicionários ou atributos entram com
-`con.register('nome', objeto)`. A precedência é: objetos registrados, tabelas e views do banco,
+`con.register('nome', obj)`. A precedência é: objetos registrados, tabelas e views do banco,
 variáveis Python. `SET python_enable_replacements = false` desliga a busca por variáveis. Esses
 objetos são só de leitura: `INSERT` e `UPDATE` sobre um DataFrame não existem.
 
@@ -432,9 +432,9 @@ from datetime import date
 import duckdb, pandas as pd
 
 con = duckdb.connect("sandbox.duckdb")
-res = con.execute("SELECT * FROM operacoes WHERE data_ref >= ? ORDER BY data_ref", [date(2026, 8, 1)])
-tabela = res.to_arrow_table()                      # decimal128(18, 2), date32, int64, string
-df = tabela.to_pandas(types_mapper=pd.ArrowDtype)  # mantém decimal128 e date32
+result = con.execute("SELECT * FROM operacoes WHERE data_ref >= ? ORDER BY data_ref", [date(2026, 8, 1)])
+table = result.to_arrow_table()                      # decimal128(18, 2), date32, int64, string
+df = table.to_pandas(types_mapper=pd.ArrowDtype)  # mantém decimal128 e date32
 ```
 
 Formas de saída, com o tempo de uma execução para 300.000 linhas:
@@ -460,7 +460,7 @@ compõe relações por nome.
 ```python
 import pyarrow as pa
 
-entrada = pa.Table.from_pandas(df, schema=esquema_do_contrato, preserve_index=False)
+incoming = pa.Table.from_pandas(df, schema=contract_schema, preserve_index=False)
 con.execute("INSERT INTO operacoes BY NAME SELECT * FROM entrada")
 con.append("operacoes", df, by_name=True)          # equivalente sem SQL
 ```
@@ -524,16 +524,16 @@ confirmar:
 
 ```python
 # Substituição de um mês: DELETE e INSERT numa transação, desfeita se a conferência do lote falhar.
-def substituir_mes(con: duckdb.DuckDBPyConnection, mes: str, entrada: pa.Table) -> None:
-    con.register("entrada", entrada)
+def replace_month(con: duckdb.DuckDBPyConnection, month: str, incoming: pa.Table) -> None:
+    con.register("entrada", incoming)
     con.begin()
     try:
-        con.execute("DELETE FROM operacoes WHERE mes = ?", [mes])
+        con.execute("DELETE FROM operacoes WHERE mes = ?", [month])
         con.execute("INSERT INTO operacoes BY NAME SELECT * FROM entrada")
-        (fora,) = con.execute("SELECT count(*) FROM operacoes "
-                              "WHERE mes = ? AND strftime(data_ref, '%Y-%m') <> mes", [mes]).fetchone()
-        if fora:
-            raise ValueError(f"{fora} linhas com data_ref fora do mês {mes}")
+        (outside,) = con.execute("SELECT count(*) FROM operacoes "
+                              "WHERE mes = ? AND strftime(data_ref, '%Y-%m') <> mes", [month]).fetchone()
+        if outside:
+            raise ValueError(f"{outside} linhas com data_ref fora do mês {month}")
         con.commit()
     except Exception:
         con.rollback()
@@ -659,7 +659,7 @@ COPY (
   [documento sobre Parquet](parquet.md). O leitor de outros sistemas recebe essas propriedades; a
   conferência de `NOT NULL` fica na auditoria.
 
-A API relacional oferece o atalho `con.sql(consulta).write_parquet('arquivo.parquet')`. A
+A API relacional oferece o atalho `con.sql(query).write_parquet('arquivo.parquet')`. A
 [gravação com ordenação](parquet.md) pela chave de ordenação melhora a compressão e a poda por
 estatísticas na leitura.
 
@@ -670,23 +670,23 @@ dicionário de dicionários de texto:
 # Conferência do arquivo exportado pelo RETURN_STATS: nulos em colunas NOT NULL e intervalo do mês.
 import os
 
-def exportar_mes(con: duckdb.DuckDBPyConnection, mes: str, pasta: str) -> dict[str, dict[str, str]]:
-    destino = f"{pasta}/mes={mes}/exec_abc123.parquet"
-    os.makedirs(os.path.dirname(destino), exist_ok=True)         # o COPY não cria a pasta
-    (linha,) = con.execute(f"""
+def export_month(con: duckdb.DuckDBPyConnection, month: str, folder: str) -> dict[str, dict[str, str]]:
+    destination = f"{folder}/mes={month}/exec_abc123.parquet"
+    os.makedirs(os.path.dirname(destination), exist_ok=True)         # o COPY não cria a pasta
+    (row,) = con.execute(f"""
         COPY (SELECT id_operacao, data_ref, id_cliente, valor, descricao FROM operacoes
               WHERE mes = ? ORDER BY data_ref, id_operacao)
-        TO '{destino}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000, RETURN_STATS)""", [mes]).fetchall()
-    estatisticas = linha[4]      # filename, count, file_size_bytes, footer_size_bytes, column_statistics, partition_keys
-    colunas = {nome.strip('"'): valores for nome, valores in estatisticas.items()}   # as chaves vêm entre aspas
-    for nome in ("id_operacao", "data_ref", "id_cliente", "valor"):
-        if colunas[nome]["null_count"] != "0":
-            raise ValueError(f"{nome}: {colunas[nome]['null_count']} nulos em coluna NOT NULL")
-    if not (colunas["data_ref"]["min"][:7] == mes == colunas["data_ref"]["max"][:7]):
-        raise ValueError(f"data_ref fora do mês {mes}: {colunas['data_ref']['min']} a {colunas['data_ref']['max']}")
-    return colunas
+        TO '{destination}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000, RETURN_STATS)""", [month]).fetchall()
+    stats = row[4]      # filename, count, file_size_bytes, footer_size_bytes, column_statistics, partition_keys
+    columns = {name.strip('"'): values for name, values in stats.items()}   # as chaves vêm entre aspas
+    for name in ("id_operacao", "data_ref", "id_cliente", "valor"):
+        if columns[name]["null_count"] != "0":
+            raise ValueError(f"{name}: {columns[name]['null_count']} nulos em coluna NOT NULL")
+    if not (columns["data_ref"]["min"][:7] == month == columns["data_ref"]["max"][:7]):
+        raise ValueError(f"data_ref fora do mês {month}: {columns['data_ref']['min']} a {columns['data_ref']['max']}")
+    return columns
 
-exportar_mes(con, "2026-08", "operacoes")["valor"]
+export_month(con, "2026-08", "operacoes")["valor"]
 # {'column_size_bytes': '264685', 'max': '99994.51', 'min': '0.04', 'null_count': '0', 'num_values': '149991'}
 ```
 
@@ -818,18 +818,18 @@ class Operacao(Base):
 engine = sa.create_engine("duckdb:///sandbox.duckdb", connect_args={"config": {"memory_limit": "4GB"}})
 Base.metadata.create_all(engine)
 
-consulta = select(Operacao).where(Operacao.data_ref >= dt.date(2026, 8, 1)).order_by(Operacao.id_operacao)
+query = select(Operacao).where(Operacao.data_ref >= dt.date(2026, 8, 1)).order_by(Operacao.id_operacao)
 
 # Caminho pandas puro: Decimal e date preservados como objetos Python.
-df = pd.read_sql(consulta, engine, coerce_float=False)
+df = pd.read_sql(query, engine, coerce_float=False)
 
 # Caminho Arrow: SQL compilado pelo SQLAlchemy, executado pela conexão DuckDB.
 with engine.connect() as conn:
-    compilado = consulta.compile(dialect=engine.dialect)
-    parametros = [compilado.params[nome] for nome in compilado.positiontup]
+    compiled = query.compile(dialect=engine.dialect)
+    parameters = [compiled.params[name] for name in compiled.positiontup]
     con = conn.connection.dbapi_connection
-    tabela = con.execute(str(compilado), parametros).to_arrow_table()
-df = tabela.to_pandas(types_mapper=pd.ArrowDtype)   # decimal128(18, 2)[pyarrow], date32[day][pyarrow]
+    table = con.execute(str(compiled), parameters).to_arrow_table()
+df = table.to_pandas(types_mapper=pd.ArrowDtype)   # decimal128(18, 2)[pyarrow], date32[day][pyarrow]
 ```
 
 O dialeto ligado ao engine usa `paramstyle = "numeric_dollar"` (um `duckdb_engine.Dialect()` avulso
@@ -844,16 +844,16 @@ import pyarrow as pa
 from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
-def esquema_arrow(modelo) -> pa.Schema:
+def arrow_schema(model) -> pa.Schema:
     """Esquema Arrow derivado das colunas do modelo; implementação em docs/sqlalchemy.md."""
     ...
 
-def ingerir(engine, modelo, df: pd.DataFrame) -> None:
-    tabela = pa.Table.from_pandas(df, schema=esquema_arrow(modelo), preserve_index=False)
+def ingest(engine, model, df: pd.DataFrame) -> None:
+    table = pa.Table.from_pandas(df, schema=arrow_schema(model), preserve_index=False)
     with engine.begin() as conn:
         con = conn.connection.dbapi_connection
-        con.register("entrada", tabela)
-        conn.execute(sa.text(f"INSERT INTO {modelo.__tablename__} BY NAME SELECT * FROM entrada"))
+        con.register("entrada", table)
+        conn.execute(sa.text(f"INSERT INTO {model.__tablename__} BY NAME SELECT * FROM entrada"))
         con.unregister("entrada")
 
 # Volumes pequenos, sem passar por Arrow: bulk insert do ORM (0,98 s para 50.000 linhas; 0,77 s com render_nulls=True).
