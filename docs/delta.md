@@ -95,37 +95,10 @@ json.loads(pathlib.Path("cad_operacoes/_delta_log/_last_checkpoint").read_text()
 # {'version': 6, 'size': 8, 'sizeInBytes': ..., 'numOfAddFiles': 5}
 ```
 
-### Metadados próprios da biblioteca
-
-Dois sentidos de snapshot convivem neste documento. O snapshot da tabela é o estado de uma tabela
-numa versão do log, o que `DeltaTable(uri, version=v)` carrega. O snapshot do banco é o conjunto
-`{tabela: versão}` de todas as tabelas num instante escolhido, que o Delta não tem e a biblioteca
-registra; a chave gravada é `serialize_db_snapshot`, com o prefixo da biblioteca para não colidir
-com as chaves do Delta e de outros escritores.
-
-O log de cada tabela guarda tudo o que é da tabela: os arquivos de cada versão, o esquema de cada
-versão com os comentários de coluna, as estatísticas por arquivo e os metadados que a biblioteca
-grava em cada commit (`id_execucao`, as versões lidas e, quando houver, `serialize_db_snapshot`). O
-modelo SQLAlchemy dá o DDL e os tipos do contrato atual, e a reconciliação de "Evolução de esquema"
-garante que ele e o esquema atual do log são o mesmo. A biblioteca não guarda cópia de esquema, lista
-de arquivos nem estatísticas.
-
-O que ela guarda por conta própria fica em `_serialize_db/`, na raiz do ambiente, ao lado das pastas
-das tabelas: `snapshots.json`, com
-`{"snapshots": {"2026T3": {"cad_lancamentos": 143, "cad_contratos": 88}}}`. O sublinhado inicial
-deixa a pasta fora dos globs `mes=*` e dos leitores no estilo Hive, que ignoram nomes com esse
-prefixo. Os nomes de tabela são relativos, sem URI, para a realocação de "Realocação e cópia do
-banco" continuar valendo. A escrita é atômica, com `IfMatch` no S3, a mesma primitiva do log, e só a
-biblioteca escreve. O arquivo é a fonte primária e o log é a reconstrução: a marca
-`serialize_db_snapshot` vive no `commitInfo`, que não entra nos checkpoints e some do log quando a
-limpeza passa de `delta.logRetentionDuration`. O segundo registro próprio é a tabela
-`serialize_db_publicacoes` no Redshift, que fica lá por ser transacional com a carga.
-
-Exportar as tabelas de um snapshot usa cada fonte no seu papel. O snapshot atual dispensa metadado
-próprio: `get_add_actions()` lista os arquivos, e o DDL sai do modelo. Um snapshot do banco antigo
-lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
-`DeltaTable(uri, version=v).get_add_actions()` e tira o DDL do esquema daquela versão,
-`DeltaTable(uri, version=v).schema()`, não do modelo de hoje, que pode ter ganhado colunas depois.
+Nos documentos, "snapshot da tabela" é esse estado de uma versão, e "snapshot do banco" é o conjunto
+`{tabela: versão}` que a biblioteca registra fora do log. O que a biblioteca guarda por conta
+própria, os metadados de cada commit, `_serialize_db/snapshots.json` e a tabela
+`serialize_db_publicacoes`, está em [`serialize-db.md`](serialize-db.md).
 
 ### Diferenças para o PostgreSQL
 
@@ -983,7 +956,7 @@ snapshot do banco é um número de versão por tabela, e os mecanismos são este
 
 1. **Marcar o snapshot.** A execução marcada grava `custom_metadata={"serialize_db_snapshot": "2026T1"}`
    em cada commit, e a biblioteca registra `{snapshot: {tabela: versão}}` em
-   `_serialize_db/snapshots.json`, descrito em "Metadados próprios da biblioteca". O histórico
+   `_serialize_db/snapshots.json`, descrito em [`serialize-db.md`](serialize-db.md). O histórico
    também acha a versão (`[h for h in dt.history() if h.get("serialize_db_snapshot")]` devolveu
    `(2, '2026T1')`), mas o arquivo de controle dispensa varrer o log.
 2. **Descartar o que está entre snapshots.** `vacuum` com a retenção das versões comuns e

@@ -510,7 +510,7 @@ marcados, com uma amostra pequena.
 | --- | --- | --- |
 | 0. Prova de conceito na AWS | Credenciais do delta-rs no SageMaker; `write_deltalake` e `delta_scan` no bucket do projeto; `COPY ... MANIFEST` com `DECIMAL` em `INT64`, `FILLRECORD` e lista de colunas; `UNLOAD ... PARTITION BY` mais registro; tempo do `delta_scan` no S3. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
 | 1. Contrato | `serialize_db.contract`: modelos corrigidos (`Base` importável, `Numeric(18, 2)`, `autoincrement=False`, sem `DEFERRABLE`, coluna `mes`, comentários, `Table.info["serialize_db"]`); `arrow_schema`, `delta_schema`, `ddl(dialect)`; `schema/<tabela>.delta.json`, `.duckdb.sql` e `.redshift.sql` gerados e comparados por teste. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar os arquivos. |
-| 2. Camada Delta | `serialize_db.delta`: `create_table`, `open(uri, version)`, `publish_month(uri, month, reader)`, `register_files`, `reconcile(table, uri)`, `copy_manifest(uri, version, months)`, `version_diff`, `snapshot`, `vacuum_keeping_snapshots`, `deep_copy`. | Testes em pastas locais cobrem substituição do mês, conflito, reconciliação aditiva e destrutiva, `keep_versions` e realocação. |
+| 2. Camada Delta | `serialize_db.delta`: `create_table`, `open(uri, version)`, `publish_month(uri, month, reader)`, `register_files`, `reconcile(uri, table)`, `rewrite(uri, table)`, `copy_manifest(uri, version, months)`, `version_diff`, `snapshot`, `vacuum_keeping_snapshots`, `compact`, `deep_copy`, `export_snapshot`. | Testes em pastas locais cobrem substituição do mês, conflito, reconciliação aditiva e destrutiva, reescrita num commit sem predicado, `keep_versions`, exportação por mês e realocação. |
 | 3. Motor DuckDB | `serialize_db.engine.duckdb`: conexão com `config`, secrets e extensões; `ingest(table, months, materialize)` com views pelo nome do modelo e versão fixa; `query(select)` devolvendo `RecordBatchReader`; `export_month`; `audit`. | O pipeline de exemplo roda em memória sobre um Delta local. |
 | 4. Motor Redshift | `serialize_db.engine.redshift`: conexão `redshift_connector`; sandbox com prefixo `exec_<id>_`; `ingest` por `COPY ... MANIFEST` com staging; `query` (multi-row `INSERT` para volumes pequenos, ADBC ou `UNLOAD` para leitura); `export_month` por `UNLOAD ... PARTITION BY` mais registro; limpeza do sandbox. | SQL compilado coberto por testes; integração com amostra num cluster. |
 | 5. Execução | `serialize_db.execution`: `Execution(db, engine, months)` com o ciclo abrir, ingerir, executar, auditar, publicar, encerrar; metadados de commit; log; CLI `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
@@ -520,6 +520,8 @@ marcados, com uma amostra pequena.
 
 As etapas 1 e 2 não dependem da AWS e começam antes da etapa 0 terminar; a etapa 3 fecha um
 pipeline completo em disco local; a etapa 4 é a única que exige o cluster.
+A modelagem da biblioteca, com as primitivas de cada módulo e o fluxo de cada caso de uso, está em
+[`serialize-db.md`](serialize-db.md).
 
 ## Pipeline de atualização mensal
 
@@ -579,8 +581,9 @@ intermediárias entre snapshots do banco saem no `vacuum` mensal.
   Redshift; a concorrência que resta é entre reexecuções do mesmo ambiente, que o log do Delta
   serializa.
 - Renomear ou remover colunas é raro. Consequência: a evolução de esquema é por adição
-  (`schema_mode="merge"`); o caso raro reescreve a tabela com `schema_mode="overwrite"` e recria a
-  tabela publicada no Redshift, sem esperar o column mapping do delta-rs.
+  (`schema_mode="merge"`); o caso raro reescreve a tabela inteira num commit, sem predicado, e recria a
+  tabela publicada no Redshift, sem esperar o column mapping do delta-rs. Para tabela que não cabe na
+  máquina, a reescrita é o `COPY` do DuckDB mais `create_write_transaction` ([`delta.md`](delta.md)).
 
 ## Prova de conceito pendente no S3 e no Redshift
 
