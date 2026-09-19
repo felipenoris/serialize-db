@@ -5,7 +5,9 @@ duas partes: o Core, com `MetaData`, `Table`, `Column`, os tipos e os construtor
 ORM, com as classes mapeadas e a `Session`. Os modelos ORM são o [contrato de esquema](guia.md) do
 projeto: deles derivam o DDL do DuckDB e do Redshift, o esquema Arrow dos arquivos Parquet e as
 auditorias. Este documento resume os conceitos usados pela biblioteca, as opções de customização e o
-comportamento com Redshift, DuckDB e Parquet.
+comportamento com Redshift, DuckDB e Parquet. A seção [Papel do SQLAlchemy na
+biblioteca](#papel-do-sqlalchemy-na-biblioteca) registra o que cada parte entrega ao projeto e a
+substituição gradual do dialeto em tempo de execução pelo texto SQL gerado.
 
 As afirmações vêm da documentação oficial da versão 2.0, consultada em 2026-09-18. Os exemplos foram
 executados com SQLAlchemy 2.0.54, duckdb_engine 0.17.0 sobre DuckDB 1.5.5 e sqlalchemy-redshift 1.0.0;
@@ -1141,6 +1143,189 @@ def check(model, path: str) -> None:
   `CREATE VIEW operacoes AS SELECT * FROM read_parquet('operacoes/**/*.parquet')` e o modelo mapeado
   sobre a view (`__mapper_args__ = {"primary_key": [...]}` quando a view não declara chave). O
   [documento sobre Parquet](parquet.md) descreve os metadados e as opções de leitura.
+
+## Papel do SQLAlchemy na biblioteca
+
+O SQLAlchemy está no projeto por compatibilidade com o pipeline existente: os modelos declarativos
+definem cada tabela, e statements Core de `select` e `insert` movem DataFrames. As subseções
+seguintes registram o que cada parte da biblioteca entrega ao projeto, a recomendação sem essa
+premissa e a substituição gradual do dialeto em tempo de execução, que é o caminho adotado.
+
+### O que cada parte entrega
+
+| Parte | Uso no projeto | Veredito |
+| --- | --- | --- |
+| Engine, cursor e processadores de resultado | Fora do caminho dos dados por decisão: os dados passam por Arrow, Parquet, `COPY` e `UNLOAD`. Pelo DBAPI, `Numeric` passa por `float` nos dois sentidos e perde o último centavo a partir de 16 dígitos ([medição](#o-sql-executado-de-fato)); `executemany` custa uma ida ao servidor por linha no Redshift. | A maior parte da biblioteca não é usada, e não deve ser. |
+| DDL pelos dialetos externos | Funciona com remendos: `Identity` some no Redshift e é rejeitado pelo DuckDB, `Text` vira `VARCHAR(256)`, `CHECK` cai no `CREATE TABLE` do Redshift enquanto `AddConstraint` e `CREATE INDEX` ainda saem, `DEFERRABLE` é descartado, `DISTKEY` e `SORTKEY` exigem argumentos do dialeto ou um hook `@compiles`, e JSON exige `with_variant`. Os dois dialetos são projetos de terceiros, e `duckdb_engine` está sem lançamento desde 2025-03-29. | O DDL do projeto é `CREATE TABLE` com tipos, `NOT NULL` e opções físicas, e a tabela de tipos de [`schema.md`](schema.md) é a especificação de um renderizador de poucas dezenas de linhas por destino. O SQLAlchemy não conhece Arrow nem Delta; metade do mapeamento é escrita à mão de qualquer forma. |
+| Statements Core | O ponto forte do Core é compor consultas dinamicamente e compilar por dialeto. As consultas de um pipeline mensal têm forma fixa, parametrizada pelo mês, e são analíticas: janela e CTE o Core tem, e `QUALIFY`, `PIVOT` e `ASOF JOIN` caem em `text()`. O dialeto do Redshift deriva de `PGDialect` e compila sem erro `DISTINCT ON`, `ON CONFLICT DO NOTHING` e o índice de array `tags[1]`, que o Redshift não tem. | A portabilidade é a mesma do SQLGlot, e nenhum dos dois sabe o que o Redshift não suporta: os testes de integração no Redshift são obrigatórios nos dois casos ([`estrategia.md`](estrategia.md)). |
+| Modelos declarativos | A declaração de cada tabela, com o tipo Python em `Mapped[]`, os comentários e `Table.info["serialize_db"]`; já existem para as tabelas do pipeline. | A parte que fica: o contrato de esquema, do qual a biblioteca deriva o esquema Arrow, o esquema Delta e o DDL. |
+
+### Recomendação sem a compatibilidade com o pipeline
+
+O SQLAlchemy 2.0 não é uma biblioteca defasada. Ele tem a forma errada para este projeto: um ORM
+transacional cuja camada de execução o desenho contorna, com dois dialetos de terceiros para
+motores analíticos. Sem o código existente, a biblioteca ficaria assim:
+
+- O contrato numa declaração própria, com o esquema Arrow como forma canônica: o Delta o recebe em
+  `DeltaTable.create`, o DuckDB mapeia Arrow nativamente, e o Redshift ganha um renderizador de DDL
+  a partir da tabela de tipos. As opções físicas ficam em metadados da biblioteca, como hoje.
+  Nenhum dialeto de terceiros, nenhum `@compiles`.
+- As consultas em SQL escrito à mão, um arquivo por consulta, no dialeto do DuckDB, que roda local
+  nos testes. O SQLGlot entra como ferramenta, não como DSL: `qualify` contra o esquema do contrato
+  acusa coluna inexistente no teste, a única garantia que o Core dava sobre texto; transpila para o
+  Redshift; reescreve os nós de tabela para aplicar o prefixo do ambiente; e um teste acusa
+  construções só do DuckDB. A consulta rara que precisa de composição dinâmica usa o construtor do
+  SQLGlot, que gera o mesmo `SELECT` nos dois dialetos ([`estrategia.md`](estrategia.md)).
+- Os parâmetros de execução são o mês e o prefixo. O DuckDB recebe `$nome` com um dicionário, e o
+  `redshift_connector` recebe `:nome` com `cursor.paramstyle = "named"` ([`redshift.md`](redshift.md)).
+- Ibis, a resposta moderna para consulta portável em Python, não tem backend Redshift; SQLMesh e dbt
+  assumem a orquestração inteira. Sobra o SQLGlot.
+- Testes nos dois motores, já obrigatórios com o SQLAlchemy.
+
+Com o pipeline existente, os modelos ficam como contrato, porque existem e são legíveis, e o Core
+fica para o `SELECT` e o `INSERT ... SELECT` já escritos. O SQLAlchemy vira ferramenta de tempo de
+geração: produz o DDL e o texto SQL de cada dialeto, e nenhum dado passa pelo engine. Consulta nova
+e complexa pode nascer em texto validado por SQLGlot desde já; as duas formas convivem, porque o
+produto das duas é uma string executada pelo DuckDB ou pelo `redshift_connector`.
+
+### Substituição gradual do dialeto em tempo de execução
+
+O pipeline compila hoje cada statement Core pelo dialeto a cada execução. A biblioteca passa a gerar
+o texto SQL de cada dialeto, e a substituição acontece uma interação com o banco por vez: o texto
+gerado entra no repositório do pipeline, revisado no diff; um teste o compara com uma nova geração
+enquanto o statement Core existir; e a chamada que compilava o statement passa a executar o texto.
+No fim, o SQLAlchemy fica nos modelos e na geração, e `duckdb_engine` e `sqlalchemy-redshift` deixam
+de ser dependências de execução. As primitivas, propostas em [`serialize-db.md`](serialize-db.md):
+
+| Primitiva | O que faz |
+| --- | --- |
+| `param(name, type_)` | Parâmetro de execução: `literal_column(":nome")`, que atravessa `literal_binds` e chega ao texto como `:nome`. |
+| `prefixed(statement, metadata, prefix)` | Troca cada tabela do contrato num statement pronto pela cópia com o prefixo do sandbox, por `replacement_traverse`; o sentinela `{prefix}` sai sem aspas com `quoted_name(quote=False)`. |
+| `render(statement, dialect, metadata, prefix)` | Texto do dialeto com as constantes embutidas e os parâmetros como `:nome`; um `bindparam` sem valor é erro. |
+| `write_sql_files(statements, metadata, directory)` | `sql/<nome>.duckdb.sql` e `sql/<nome>.redshift.sql`, comparados por teste como os arquivos de esquema. |
+| `execute(sql, params)` nos motores | Substitui `{prefix}`, adapta `:nome` (`$nome` no DuckDB, `paramstyle = "named"` no `redshift_connector`) e executa. |
+
+Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 com SQLAlchemy
+2.0.54, duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 e DuckDB 1.5.5:
+
+- Um dialeto avulso usa `pyformat` (`duckdb_engine.Dialect()`) ou `format`
+  (`RedshiftDialect_redshift_connector()`), e com eles `literal_binds` dobra o `%` dos literais:
+  `LIKE 'A%'` sai `LIKE 'A%%'` e `strftime(data_ref, '%Y-%m')` sai `'%%Y-%%m'`. O texto está certo
+  como comando com parâmetros do DBAPI e errado como SQL. `Dialect(paramstyle="named")` desliga a
+  dobra nos dois dialetos.
+- `bindparam("mes")` sem valor e `text("mes = :mes")` não falham sob `literal_binds`: viram
+  `mes = NULL`, com um `SAWarning`. `render` transforma o aviso em erro.
+- Um nome de tabela com `{` é citado, `"{prefix}cad_operacoes"`; `quoted_name(..., quote=False)` o
+  deixa sem aspas nos dois dialetos.
+
+```python
+"""Renderiza um select do Core como texto de cada dialeto: constantes embutidas, mês como parâmetro, prefixo do sandbox como sentinela; executa o texto no DuckDB."""
+import decimal
+import re
+import warnings
+
+import duckdb
+import duckdb_engine
+import sqlalchemy as sa
+from sqlalchemy.exc import SAWarning
+from sqlalchemy.sql import quoted_name
+from sqlalchemy.sql.visitors import replacement_traverse
+from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
+
+metadata = sa.MetaData()
+operations = sa.Table(
+    "cad_operacoes", metadata,
+    sa.Column("id_operacao", sa.BigInteger, primary_key=True, autoincrement=False),
+    sa.Column("id_cliente", sa.BigInteger, nullable=False),
+    sa.Column("valor", sa.Numeric(18, 2), nullable=False),
+    sa.Column("mes", sa.String(7), nullable=False),
+)
+clients = sa.Table(
+    "cad_clientes", metadata,
+    sa.Column("id_cliente", sa.BigInteger, primary_key=True, autoincrement=False),
+    sa.Column("nome", sa.String(200), nullable=False),
+    sa.Column("mes", sa.String(7), nullable=False),
+)
+DIALECTS = {"duckdb": duckdb_engine.Dialect(paramstyle="named"),
+            "redshift": RedshiftDialect_redshift_connector(paramstyle="named")}
+
+
+def param(name, type_=None):
+    """Parâmetro de execução: o texto :nome atravessa literal_binds e é resolvido na execução."""
+    return sa.literal_column(f":{name}", type_=type_)
+
+
+def prefixed(statement, metadata, prefix="{prefix}"):
+    """Troca cada tabela do contrato pela cópia com o prefixo do sandbox; o sentinela sai sem aspas."""
+    copies = {t: t.to_metadata(sa.MetaData(), name=quoted_name(f"{prefix}{t.name}", quote=False))
+              for t in metadata.tables.values()}
+
+    def replace(element):
+        if isinstance(element, sa.Table):
+            return copies.get(element)
+        if isinstance(element, sa.Column) and element.table in copies:
+            return copies[element.table].c[element.name]
+        return None
+
+    return replacement_traverse(statement, {}, replace)
+
+
+def render(statement, dialect, metadata, prefix="{prefix}"):
+    """Texto do dialeto com as constantes embutidas; um bindparam sem valor viraria NULL, então é erro."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", SAWarning)
+        compiled = prefixed(statement, metadata, prefix).compile(
+            dialect=DIALECTS[dialect], compile_kwargs={"literal_binds": True})
+    return str(compiled)
+
+
+query = (
+    sa.select(clients.c.nome, sa.func.sum(operations.c.valor).label("total"))
+    .join_from(operations, clients, operations.c.id_cliente == clients.c.id_cliente)
+    .where(operations.c.mes == param("mes", sa.String(7)), operations.c.valor > decimal.Decimal("100.00"),
+           clients.c.nome.like("A%"))
+    .group_by(clients.c.nome).order_by(clients.c.nome)
+)
+texts = {dialect: render(query, dialect, metadata) for dialect in DIALECTS}
+print(f"-- duckdb\n{texts['duckdb']}\n")
+print("-- redshift:", "o mesmo texto" if texts["redshift"] == texts["duckdb"] else texts["redshift"], "\n")
+try:
+    render(sa.select(operations.c.id_cliente).where(operations.c.mes == sa.bindparam("mes")), "duckdb", metadata)
+except SAWarning as e:
+    print("bindparam sem valor:", str(e).split(";")[0], "\n")
+
+con = duckdb.connect()
+con.execute("CREATE TABLE exec_42_cad_operacoes (id_operacao BIGINT, id_cliente BIGINT, valor DECIMAL(18,2), mes VARCHAR)")
+con.execute("CREATE TABLE exec_42_cad_clientes (id_cliente BIGINT, nome VARCHAR, mes VARCHAR)")
+con.execute("INSERT INTO exec_42_cad_operacoes VALUES (1, 7, 150.00, '2026-08'), (2, 7, 50.00, '2026-08'), (3, 9, 200.00, '2026-07'), (4, 9, 120.00, '2026-08')")
+con.execute("INSERT INTO exec_42_cad_clientes VALUES (7, 'Alfa', '2026-08'), (9, 'Beta', '2026-08')")
+params = {"mes": "2026-08"}
+sql = re.sub(rf"(?<!:):({'|'.join(params)})\b", r"$\1", render(query, "duckdb", metadata, prefix="exec_42_"))
+print(sql, "\n")
+print(con.execute(sql, params).fetchall())
+```
+
+Saída:
+
+```
+-- duckdb
+SELECT {prefix}cad_clientes.nome, sum({prefix}cad_operacoes.valor) AS total
+FROM {prefix}cad_operacoes JOIN {prefix}cad_clientes ON {prefix}cad_operacoes.id_cliente = {prefix}cad_clientes.id_cliente
+WHERE {prefix}cad_operacoes.mes = :mes AND {prefix}cad_operacoes.valor > 100.00 AND {prefix}cad_clientes.nome LIKE 'A%' GROUP BY {prefix}cad_clientes.nome ORDER BY {prefix}cad_clientes.nome
+
+-- redshift: o mesmo texto
+
+bindparam sem valor: Bound parameter 'mes' rendering literal NULL in a SQL expression
+
+SELECT exec_42_cad_clientes.nome, sum(exec_42_cad_operacoes.valor) AS total
+FROM exec_42_cad_operacoes JOIN exec_42_cad_clientes ON exec_42_cad_operacoes.id_cliente = exec_42_cad_clientes.id_cliente
+WHERE exec_42_cad_operacoes.mes = $mes AND exec_42_cad_operacoes.valor > 100.00 AND exec_42_cad_clientes.nome LIKE 'A%' GROUP BY exec_42_cad_clientes.nome ORDER BY exec_42_cad_clientes.nome
+
+[('Alfa', Decimal('150.00'))]
+```
+
+No Redshift, o mesmo texto roda com `cursor.paramstyle = "named"` e o dicionário de parâmetros; o
+exemplo foi compilado, não executado num cluster.
 
 ## Referências
 

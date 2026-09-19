@@ -264,6 +264,14 @@ a linha no Redshift, `SERIAL` rejeitado e `DEFERRABLE` descartado pelo DuckDB, `
 o `Table` do modelo continua uma boa fonte do contrato (esquema Arrow, DDL dos dois bancos e, agora,
 o esquema Delta ou DuckLake).
 
+A substituição gradual do dialeto em tempo de execução está decidida: a biblioteca gera o texto SQL
+de cada dialeto a partir dos statements Core (`param`, `prefixed`, `render`, `write_sql_files`), o
+texto entra versionado no repositório do pipeline, e cada chamada que compilava um statement passa a
+executar o texto gerado, uma interação com o banco por vez. Ao fim, o SQLAlchemy fica nos modelos e
+na geração, e os dois dialetos deixam de ser dependências de execução. O que cada parte do
+SQLAlchemy entrega ao projeto, a recomendação sem a compatibilidade com o pipeline e os
+comportamentos do compilador que a geração contorna estão em [`sqlalchemy.md`](sqlalchemy.md).
+
 ### SQLGlot
 
 O SQLGlot 30.18.0 é analisador, transpilador e construtor de SQL com DuckDB e Redshift entre os
@@ -434,12 +442,14 @@ O que sai: o ORM para cargas linha a linha, as chaves estrangeiras `DEFERRABLE`,
 manifestos próprios, a pergunta em aberto do commit atômico e o Alembic, substituído pela
 reconciliação do esquema. O que fica opcional: SQLGlot como teste de compatibilidade.
 
-O DuckLake fica como alternativa documentada, não adotada: suas vantagens, renomear e remover colunas
-sem reescrever dados e a tabela nativa no DuckDB, não pesam num pipeline que raramente renomeia
-colunas, e seu preço, o catálogo movido pela biblioteca, o inlining desligado e um ecossistema de
-leitores menor, permanece. O SQLMesh e o dbt saem, porque o pipeline é majoritariamente lógica Python
-e não transformações SQL. A troca do SQLAlchemy por SQLGlot puro exige reescrever as consultas sem
-ganho de portabilidade, porque os dois exigem os mesmos testes no Redshift.
+O DuckLake fica como alternativa documentada, não adotada: suas vantagens, renomear e remover
+colunas sem reescrever dados e a tabela nativa no DuckDB, não pesam num pipeline que raramente
+renomeia colunas, e seu preço, o catálogo movido pela biblioteca, o inlining desligado e um
+ecossistema de leitores menor, permanece. O SQLMesh e o dbt saem, porque o pipeline é
+majoritariamente lógica Python e não transformações SQL. A troca do SQLAlchemy por SQLGlot puro
+exige reescrever as consultas sem ganho de portabilidade, porque os dois exigem os mesmos testes no
+Redshift. A saída do SQLAlchemy da execução é gradual, pelo texto gerado por dialeto, sem reescrever
+consulta ([`sqlalchemy.md`](sqlalchemy.md)).
 
 O Iceberg com catálogo SQLite fica documentado como a alternativa que troca a ausência de código
 próprio do Delta pela sincronização do arquivo do catálogo. Ela volta à mesa se o Glue ou o S3 Tables
@@ -509,10 +519,10 @@ marcados, com uma amostra pequena.
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
 | 0. Prova de conceito na AWS | Credenciais do delta-rs no SageMaker; `write_deltalake` e `delta_scan` no bucket do projeto; `COPY ... MANIFEST` com `DECIMAL` em `INT64`, `FILLRECORD` e lista de colunas; `UNLOAD ... PARTITION BY` mais registro; tempo do `delta_scan` no S3. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
-| 1. Contrato | `serialize_db.contract`: modelos corrigidos (`Base` importável, `Numeric(18, 2)`, `autoincrement=False`, sem `DEFERRABLE`, coluna `mes`, comentários, `Table.info["serialize_db"]`); `arrow_schema`, `delta_schema`, `ddl(dialect)`; `schema/<tabela>.delta.json`, `.duckdb.sql` e `.redshift.sql` gerados e comparados por teste. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar os arquivos. |
+| 1. Contrato | `serialize_db.contract`: modelos corrigidos (`Base` importável, `Numeric(18, 2)`, `autoincrement=False`, sem `DEFERRABLE`, coluna `mes`, comentários, `Table.info["serialize_db"]`); `arrow_schema`, `delta_schema`, `ddl(dialect)`; `schema/<tabela>.delta.json`, `.duckdb.sql` e `.redshift.sql` gerados e comparados por teste; `serialize_db.sql`: `param`, `prefixed`, `render(statement, dialect)` e `write_sql_files`, com `sql/<nome>.duckdb.sql` e `.redshift.sql` gerados e comparados por teste. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar os arquivos; o texto gerado de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`. |
 | 2. Camada Delta | `serialize_db.delta`: `create_table`, `open(uri, version)`, `publish_month(uri, month, reader)`, `register_files`, `reconcile(uri, table)`, `rewrite(uri, table)`, `copy_manifest(uri, version, months)`, `version_diff`, `snapshot`, `vacuum_keeping_snapshots`, `compact`, `deep_copy`, `export_snapshot`. | Testes em pastas locais cobrem substituição do mês, conflito, reconciliação aditiva e destrutiva, reescrita num commit sem predicado, `keep_versions`, exportação por mês e realocação. |
-| 3. Motor DuckDB | `serialize_db.engine.duckdb`: conexão com `config`, secrets e extensões; `ingest(table, months, materialize)` com views pelo nome do modelo e versão fixa; `query(select)` devolvendo `RecordBatchReader`; `export_month`; `audit`. | O pipeline de exemplo roda em memória sobre um Delta local. |
-| 4. Motor Redshift | `serialize_db.engine.redshift`: conexão `redshift_connector`; sandbox com prefixo `exec_<id>_`; `ingest` por `COPY ... MANIFEST` com staging; `query` (multi-row `INSERT` para volumes pequenos, ADBC ou `UNLOAD` para leitura); `export_month` por `UNLOAD ... PARTITION BY` mais registro; limpeza do sandbox. | SQL compilado coberto por testes; integração com amostra num cluster. |
+| 3. Motor DuckDB | `serialize_db.engine.duckdb`: conexão com `config`, secrets e extensões; `ingest(table, months, materialize)` com views pelo nome do modelo e versão fixa; `query(statement)` e `execute(sql, params)` devolvendo `RecordBatchReader`; `export_month`; `audit`. | O pipeline de exemplo roda em memória sobre um Delta local. |
+| 4. Motor Redshift | `serialize_db.engine.redshift`: conexão `redshift_connector`; sandbox com prefixo `exec_<id>_`; `ingest` por `COPY ... MANIFEST` com staging; `query` e `execute(sql, params)` com `paramstyle = "named"` (multi-row `INSERT` para volumes pequenos, ADBC ou `UNLOAD` para leitura); `export_month` por `UNLOAD ... PARTITION BY` mais registro; limpeza do sandbox. | SQL compilado coberto por testes; integração com amostra num cluster. |
 | 5. Execução | `serialize_db.execution`: `Execution(db, engine, months)` com o ciclo abrir, ingerir, executar, auditar, publicar, encerrar; metadados de commit; log; CLI `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
 | 6. Carga inicial | Script de migração dos Parquet atuais para o Delta, por tabela e por mês, com cast para o contrato e relatório de contagens e somas; corte de leitura para o Delta. | Contagens e somas por mês iguais entre origem e Delta. |
 | 7. Publicação para clientes | Tabelas `prod_*` no Redshift; `version_diff` gera `DELETE` e `COPY` por mês, de todas as tabelas da execução numa única transação; tabela de controle `serialize_db_publications`. | Um mês alterado recarrega só esse mês. |
@@ -564,10 +574,13 @@ intermediárias entre snapshots do banco saem no `vacuum` mensal.
 
 ## Decisões
 
-- O pipeline é majoritariamente lógica Python. O SQLAlchemy define o modelo de dados (DDL) e gera os
-  statements de `insert` e `select` que leem e escrevem DataFrames; nenhuma classe ORM é instanciada.
-  Consequência: o SQLAlchemy permanece como metadados do contrato e Core; SQLMesh e dbt saem; a
-  entrada e a saída de DataFrames passam por Arrow, com `COPY` no Redshift.
+- O pipeline é majoritariamente lógica Python. O SQLAlchemy define o modelo de dados (DDL) e gera
+  os statements de `insert` e `select` que leem e escrevem DataFrames; nenhuma classe ORM é
+  instanciada. Consequência: o SQLAlchemy permanece como metadados do contrato e Core; SQLMesh e dbt
+  saem; a entrada e a saída de DataFrames passam por Arrow, com `COPY` no Redshift. O SQLAlchemy
+  está no projeto por compatibilidade com esse código; a compilação pelo dialeto em tempo de
+  execução é substituída gradualmente pelo texto SQL gerado por dialeto, e o SQLAlchemy termina nos
+  modelos e na geração ([`sqlalchemy.md`](sqlalchemy.md)).
 - Não há serviço de catálogo habilitado para o projeto. Consequência: a camada de tabela não pode
   depender de um serviço. O Delta atende sem código próprio; o Iceberg atenderia com o catálogo
   SQLite em arquivo movido pela biblioteca, o mesmo custo do DuckLake. A escolha recaiu sobre o

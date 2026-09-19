@@ -152,10 +152,10 @@ matching group.
 | `docs/parquet.md` | Parquet file layout and every metadata structure (`FileMetaData`, schema, row group, `ColumnMetaData`, page index, Bloom filters, page headers, key-value pairs, size and geospatial statistics, encryption, summary files), inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
-| `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, SQL generation from a statement for both dialects (`compile`, dialect objects and their paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`) with self-contained examples, the `Numeric` float conversion of both dialects, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
+| `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, SQL generation from a statement for both dialects (`compile`, dialect objects and their paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`) with self-contained examples, the `Numeric` float conversion of both dialects, what the Redshift dialect, the DuckDB dialect and Parquet files each support, and the role of each part of SQLAlchemy in the project: the verdict per part, the recommendation without the compatibility premise (own contract with Arrow as the canonical form, hand-written SQL validated by SQLGlot) and the gradual replacement of runtime dialect compilation by generated SQL text (`param`, `prefixed`, `render`, `write_sql_files`, `execute`) with the compiler behaviours the generation works around. |
 | `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), the protocol implementations (delta-spark, delta-rs, Delta Kernel) with the delta-rs gaps and their effect on the pipeline, S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules with the measured rewrite for rename and drop (one commit, the memory of the two paths, the partial-overwrite trap) and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the export of the current snapshot back to Parquet folders by month (copy by the log versus rewrite, with the measurements), the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
-| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, no Alembic) with the reasons and the maturity assessment of Delta against Iceberg with the re-evaluation trigger, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
-| `docs/serialize-db.md` | The library's modeling: the features, the library's own metadata (commit keys `serialize_db_execution_id`, `serialize_db_input_versions`, `serialize_db_snapshot`; `_serialize_db/snapshots.json`; `serialize_db_publications`), the primitives of each module (`contract`, `delta`, `engine.duckdb`, `engine.redshift`, `execution`) with the proposed signatures, and the flow of each use case (initial load, monthly run on DuckDB and on Redshift, publication to clients, month correction, schema evolution, database snapshot and maintenance, export to Parquet folders, copy and development environment). |
+| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, kept for compatibility with the pipeline and replaced gradually at runtime by generated SQL text, no Alembic) with the reasons and the maturity assessment of Delta against Iceberg with the re-evaluation trigger, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
+| `docs/serialize-db.md` | The library's modeling: the features, the library's own metadata (commit keys `serialize_db_execution_id`, `serialize_db_input_versions`, `serialize_db_snapshot`; `_serialize_db/snapshots.json`; `serialize_db_publications`), the primitives of each module (`contract`, `sql`, `delta`, `engine.duckdb`, `engine.redshift`, `execution`) with the proposed signatures, and the flow of each use case (initial load, monthly run on DuckDB and on Redshift, publication to clients, month correction, schema evolution, database snapshot and maintenance, export to Parquet folders, copy and development environment, replacement of the runtime dialect by generated SQL). |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
@@ -313,17 +313,30 @@ Each fact below is detailed in the file named at the end of its line.
   statistics; the DDL of an old snapshot comes from that version's Delta schema, not from the
   current model. `docs/serialize-db.md`, `docs/delta.md`
 - Renaming or dropping a column with delta-rs 1.6.4 is a rewrite of every live file in one commit (`remove` of all, `add` of all, `metaData`); `dt.alter` has no `rename_column` or `drop_columns`. `write_deltalake(reader, mode="overwrite", schema_mode="overwrite")` held 1,140 MB RSS for 135 MB of Parquet and 1,960 MB for 269 MB; DuckDB `COPY ... PARTITION_BY ... RETURN_STATS` plus `create_write_transaction(mode="overwrite", schema=new)` gave the same commit at a flat 600 MB. `schema_mode="overwrite"` with a `predicate` is accepted and switches the schema of the whole table, so the other months read the renamed column as null; the library refuses the combination. `docs/delta.md`
+- `literal_column(":mes")` survives `literal_binds` in both dialects and is the execution parameter
+  of generated SQL; `bindparam("mes")` without a value and `text("mes = :mes")` render `mes = NULL`
+  with a `SAWarning` instead of failing. Stand-alone dialect instances (`pyformat`, `format`) double
+  `%` in literals under `literal_binds` (`LIKE 'A%'` becomes `'A%%'`); `Dialect(paramstyle="named")`
+  does not. A table name with `{` is quoted unless `quoted_name(quote=False)`;
+  `replacement_traverse` swaps the contract tables of a finished statement for prefixed copies.
+  DuckDB runs the text with `$name` and a dict; `redshift_connector` with
+  `cursor.paramstyle = "named"`. The Redshift dialect derives from `PGDialect` and compiles
+  `DISTINCT ON`, `ON CONFLICT DO NOTHING` and array subscripts without error. `docs/sqlalchemy.md`
 
 ## The pipeline outside this repository
 
-Facts stated by the user, not visible in the code: the pipeline is mostly Python logic; SQLAlchemy is
-used only for the declarative models (DDL) and for Core `select` and `insert` statements that move
-DataFrames, never for ORM instances; no catalog service is enabled, which excludes Iceberg on Glue
-(Iceberg with a SQLite catalog file moved by the library is the documented alternative if Glue or
-S3 Tables may be enabled later); development and production runs write separate tables; renaming or dropping columns is
-rare. The decision recorded in `docs/estrategia.md` follows from them: Delta Lake through `deltalake`
-as the table layer, SQLAlchemy kept as contract metadata and Core, DataFrames moved through Arrow,
-SQLMesh, dbt and DuckLake not adopted.
+Facts stated by the user, not visible in the code: the pipeline is mostly Python logic; SQLAlchemy
+is used only for the declarative models (DDL) and for Core `select` and `insert` statements that
+move DataFrames, never for ORM instances; no catalog service is enabled, which excludes Iceberg on
+Glue (Iceberg with a SQLite catalog file moved by the library is the documented alternative if Glue
+or S3 Tables may be enabled later); development and production runs write separate tables; renaming
+or dropping columns is rare. The decision recorded in `docs/estrategia.md` follows from them: Delta
+Lake through `deltalake` as the table layer, SQLAlchemy kept as contract metadata and Core,
+DataFrames moved through Arrow, SQLMesh, dbt and DuckLake not adopted. SQLAlchemy is in the project
+for compatibility with that code (user statement of 2026-09-19); the same day the user decided that
+runtime compilation by the dialect is replaced gradually by generated SQL text per dialect, one
+database interaction at a time, so SQLAlchemy ends in the models and in generation and
+`duckdb_engine` and `sqlalchemy-redshift` leave the runtime dependencies.
 
 ## Naming decisions applied to the documents
 
@@ -349,10 +362,12 @@ Documentation is complete as of 2026-09-19 and merged on `main` by the user: PR 
 and SQLAlchemy documents), PR #4 (`docs/estrategia.md`, `docs/delta.md`, Python examples in every
 document, JSON treatment, S3 requirements, implementation stages) and PR #5 (identifier convention).
 The user merges each PR and syncs `main`; the next unit of work starts on a new `claude/` branch.
-PR #7 (protocol implementations section in `docs/delta.md`) was merged on 2026-09-19.
-PR #8 (cross-table consistency, single-transaction publication, database snapshot naming) was merged
-on 2026-09-19. PR #9 (2026-09-19, branch `claude/modelagem-biblioteca`) records the rename/drop
-rewrite in `docs/delta.md` and creates `docs/serialize-db.md`; while it is open, new commits go there.
+PR #7 (protocol implementations section in `docs/delta.md`) was merged on 2026-09-19. PR #8
+(cross-table consistency, single-transaction publication, database snapshot naming) was merged on
+2026-09-19. PR #9 (2026-09-19, branch `claude/modelagem-biblioteca`, merged the same day) records
+the rename/drop rewrite in `docs/delta.md` and creates `docs/serialize-db.md`. PR #10 (2026-09-19,
+branch `claude/sql-gerado-por-dialeto`) records the SQLAlchemy assessment and the gradual
+replacement of the runtime dialect by generated SQL text; while it is open, new commits go there.
 
 No library code exists beyond the models: `pyproject.toml` declares no dependencies and there is no
 `tests/` directory. The next work follows the stage table in `docs/estrategia.md`:
@@ -360,16 +375,19 @@ No library code exists beyond the models: `pyproject.toml` declares no dependenc
 - Stage 1, `serialize_db.contract`, and stage 2, `serialize_db.delta`, run on local folders and are
   the natural next session: fix the models (importable `Base`, `Numeric(18, 2)`,
   `autoincrement=False`, no `DEFERRABLE`, column `mes`, comments, `Table.info["serialize_db"]`),
-  then `arrow_schema`, `delta_schema`, `ddl(dialect)` and the generated `schema/<tabela>.delta.json`,
-  `.duckdb.sql` and `.redshift.sql` files compared by a test, then the Delta layer functions the
-  stage table lists.
+  then `arrow_schema`, `delta_schema`, `ddl(dialect)` and the generated
+  `schema/<tabela>.delta.json`, `.duckdb.sql` and `.redshift.sql` files compared by a test, the
+  `serialize_db.sql` primitives with the generated `sql/<nome>.duckdb.sql` and `.redshift.sql` files
+  compared by a test, then the Delta layer functions the stage table lists.
 - Stage 0, the proof of concept on AWS, needs the user's SageMaker space, bucket and Redshift role
   and settles the pending questions below. Stage 4, the Redshift engine, is the only one that needs
   the cluster.
 - The proposed API (`Database`, `Execution` with `ingest`, `audit`, `publish`, `publish_redshift`,
-  `previous_months`, `sandbox`; modules `contract`, `delta`, `engine.duckdb`, `engine.redshift`,
-  `execution`) was accepted with PR #5, is laid out primitive by primitive in `docs/serialize-db.md`,
-  and is not code yet.
+  `previous_months`, `sandbox`; modules `contract`, `sql`, `delta`, `engine.duckdb`,
+  `engine.redshift`, `execution`) was accepted with PR #5, is laid out primitive by primitive in
+  `docs/serialize-db.md`, and is not code yet; the `sql` module (`param`, `prefixed`, `render`,
+  `write_sql_files`) and the engines' `execute(sql, params)` were added on 2026-09-19 for the
+  gradual replacement.
 
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
 --python 3.13 --with "deltalake==1.6.4" --with "duckdb==1.5.5" --with "pyarrow==25.0.1" ...` with
