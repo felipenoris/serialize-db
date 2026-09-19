@@ -874,6 +874,23 @@ Documentação do delta-rs e repositórios:
 - <https://docs.pola.rs/user-guide/io/hive/>
 - <https://dlthub.com/docs/dlt-ecosystem/destinations/delta-iceberg>
 
+Implementações do protocolo (delta-spark, delta-rs, Delta Kernel) e uso sem Spark, consultadas em
+2026-09-19:
+
+- <https://delta.io/learn/getting-started/>
+- <https://delta.io/blog/delta-lake-without-spark/>
+- <https://delta.io/integrations/>
+- <https://docs.delta.io/latest/delta-storage.html>
+- <https://pypi.org/project/delta-spark/>
+- <https://delta-io.github.io/delta-rs/>
+- <https://delta-io.github.io/delta-rs/feature-table/>
+- <https://github.com/delta-io/delta-rs> (`README.md`, `Cargo.toml` e `crates/core/Cargo.toml`)
+- <https://github.com/delta-io/delta-rs/issues/4512>
+- <https://github.com/delta-io/delta-rs/issues/4613>
+- <https://github.com/delta-io/delta-rs/issues/4657>
+- <https://github.com/delta-io/delta-kernel-rs>
+- <https://github.com/duckdb/duckdb-delta>
+
 ## DuckLake
 
 - <https://ducklake.select/docs/stable/>

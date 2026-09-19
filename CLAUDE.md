@@ -153,7 +153,7 @@ matching group.
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, SQL generation from a statement for both dialects (`compile`, dialect objects and their paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`) with self-contained examples, the `Numeric` float conversion of both dialects, and what the Redshift dialect, the DuckDB dialect and Parquet files each support. |
-| `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
+| `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), the protocol implementations (delta-spark, delta-rs, Delta Kernel) with the delta-rs gaps and their effect on the pipeline, S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
 | `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, no Alembic) with the reasons, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept still pending on S3 and Redshift. It records the local proof of concept of 2026-09-19. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
@@ -289,6 +289,13 @@ Each fact below is detailed in the file named at the end of its line.
   `Numeric(18, 2)` is exact up to 15 significant digits, 16 digits lose the last cent, 17 round to
   10^15 and 18 fail the `INSERT`; the Arrow path keeps 18 digits and `literal_binds` text keeps the
   decimal. `docs/sqlalchemy.md`
+- `deltalake` is the Delta project's native Rust implementation, not the reference one:
+  `delta-spark` (JVM, `import delta`, 4.4.0 of 2026-08-20) gets protocol features first. delta-rs
+  1.6.4 reads but does not write deletion vectors (issue 4512 open), has no `rename_column` (drop is
+  PR 4732, column mapping on write is issue 3936), no identity columns and no symlink manifest, while
+  its S3 conditional-put commits need no DynamoDB, which delta-spark still documents. Redshift `COPY`
+  reads the raw files, so deletion vectors and column mapping stay off with any writer; DuckDB reads
+  through `delta-kernel-rs`, and delta-rs `main` pins the fork `buoyant_kernel`. `docs/delta.md`
 
 ## The pipeline outside this repository
 

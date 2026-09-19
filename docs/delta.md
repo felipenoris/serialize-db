@@ -153,6 +153,43 @@ de renomear de forma atômica, o que o S3 não tem.
 | Serviços da AWS | Athena lê; Glue cataloga por crawler; S3 Tables não. | Glue, Athena, Redshift Spectrum, S3 Tables e Lake Formation são nativos. |
 | Conversão entre os dois | Apache XTable converte metadados nos dois sentidos; o Databricks tem o UniForm. | O mesmo. |
 
+## Implementações do protocolo
+
+O Delta Lake é um protocolo, o `PROTOCOL.md` do repositório `delta-io/delta`, e três implementações
+interessam ao projeto. Uma tabela gravada por uma delas é lida pelas outras enquanto as table features
+habilitadas estiverem no suporte de cada leitor.
+
+| Implementação | O que é | Papel no projeto |
+| --- | --- | --- |
+| `delta-spark`, importado como `delta` | Implementação de referência, em Scala sobre a JVM, no repositório `delta-io/delta`. A versão 4.4.0 é de 2026-08-20 e exige `pyspark` e uma `SparkSession`. O tutorial "Getting started" do delta.io usa `configure_spark_with_delta_pip` e `delta.tables`: os exemplos não rodam sem Spark; as tabelas que eles produzem são lidas por qualquer implementação. | Nenhum: o Spark está excluído do projeto. |
+| `deltalake`, o delta-rs | Reimplementação nativa do protocolo em Rust com bindings Python, sem JVM, no repositório `delta-io/delta-rs`, da mesma organização. O site delta.io a apresenta no artigo "Delta Lake without Spark" como o caminho para pandas, Polars, DuckDB, Dask, Daft e DataFusion, e a lista em Integrations como "Delta Rust API". | Escritor da biblioteca: log, commits, registro de arquivos e manutenção. |
+| Delta Kernel, o `delta-kernel-rs` | Biblioteca em Rust e C do projeto Delta para conectores lerem e gravarem sem reimplementar o protocolo. A extensão `delta` do DuckDB é construída sobre ela, com leitura e append cego. O delta-rs também depende de um kernel, mas do fork `buoyant_kernel`, fixado por revisão em `buoyant-data/delta-kernel-rs` no `main` de 2026-09-19. | Leitor do DuckDB, por `delta_scan` e `ATTACH`. |
+
+O delta-spark recebe os recursos novos do protocolo primeiro. A tabela compara o que o delta-rs 1.6.4
+faz, conferido em 2026-09-19 na tabela de recursos da documentação e nos issues do repositório, com o
+efeito no pipeline:
+
+| Recurso do protocolo | delta-spark | delta-rs | Efeito no pipeline |
+| --- | --- | --- | --- |
+| Vetores de exclusão (`deletionVectors`) | Grava e lê. | Lê; a gravação é o issue 4512, aberto. `delete`, `update` e `merge` reescrevem os arquivos atingidos. | O `COPY` do Redshift lê os arquivos sem o log e ignoraria as exclusões; o pipeline não habilita o recurso com nenhuma biblioteca. A substituição do mês inteiro já é copy-on-write. |
+| Column mapping (`columnMapping`) | Renomeia e remove colunas sem reescrever. | A tabela de recursos marca o escritor v5, mas não há `rename_column`, `drop_columns` está no PR 4732, aberto, e habilitar o recurso pela escrita é o issue 3936, aberto. | Os nomes físicos das colunas viram `col-<uuid>` nos arquivos Parquet e quebrariam o `COPY`; renomear e remover é reescrever a tabela, aceito porque são raros. |
+| Identity columns (`identityColumns`) | Sim. | Não. | As chaves de negócio são geradas no cliente. |
+| Generated columns (`generatedColumns`) | Sim. | Sim. | `mes` é calculado antes da gravação. |
+| Change data feed, `CHECK` constraints, invariantes, append-only, `timestampNtz` | Sim. | Sim. | `timestampNtz` e as constraints estão em uso; o change data feed não. |
+| Clustering (`clustering`), row tracking, in-commit timestamps, checkpoint V2, UniForm (`icebergCompatV1` e `icebergCompatV2`), `catalogManaged`, `allowColumnDefaults` | Sim. | Ausentes da tabela de recursos. | Não usados: a partição mensal e `optimize.z_order` cobrem a organização física. |
+| `GENERATE symlink_format_manifest`, o manifesto que o Spectrum lê | Sim. | Não consta das operações. | O manifesto do `COPY` é construído de `get_add_actions()`, na seção de Redshift. |
+| `merge`, `update` e `delete` | Distribuídos no cluster. | Num único processo, por DataFusion. | O DML roda no DuckDB ou no Redshift; o delta-rs registra os arquivos resultantes. |
+| Escrita concorrente no S3 | Um único driver Spark, ou o `S3DynamoDBLogStore` para mais de um cluster, segundo a documentação de armazenamento. | Put condicional do S3 desde a 1.6.0, sem DynamoDB. | O delta-rs está à frente; é a primitiva da seção de transações. |
+
+Sem Spark o pipeline não perde recurso nem velocidade. No desenho deste documento o delta-rs só lê e
+grava o log e registra arquivos; o cálculo é do DuckDB ou do Redshift, e a seção de performance mede
+a leitura por `delta_scan` a milissegundos da leitura direta do Parquet. O Spark ganharia só ao
+distribuir o cálculo num cluster, e o caso dos dados maiores que a máquina é atendido ingerindo só as
+partições necessárias ou executando no Redshift. O risco fica no caminho de escrita: um escritor Spark
+ou Databricks que habilite vetores de exclusão nas mesmas tabelas invalida o `COPY` do Redshift e
+expõe o delta-rs aos bugs abertos de leitura desse recurso, os issues 4613 e 4657. Por isso a
+biblioteca é o único escritor, regra registrada em [`estrategia.md`](estrategia.md).
+
 ## Requisitos do S3
 
 O Delta exige do S3 o que o protocolo exige de qualquer armazenamento: listar e ler a pasta da
@@ -881,6 +918,21 @@ Delta Lake e delta-rs:
 - <https://docs.rs/object_store/latest/object_store/aws/struct.AmazonS3Builder.html>
 - <https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html>
 - <https://docs.rs/object_store/latest/src/object_store/aws/builder.rs.html>
+
+Implementações do protocolo e uso sem Spark:
+
+- <https://delta.io/learn/getting-started/>
+- <https://delta.io/blog/delta-lake-without-spark/>
+- <https://delta.io/integrations/>
+- <https://docs.delta.io/latest/delta-storage.html>
+- <https://pypi.org/project/delta-spark/>
+- <https://delta-io.github.io/delta-rs/feature-table/>
+- <https://github.com/delta-io/delta-rs> (`README.md`, `Cargo.toml` e `crates/core/Cargo.toml`)
+- <https://github.com/delta-io/delta-rs/issues/4512>
+- <https://github.com/delta-io/delta-rs/issues/4613>
+- <https://github.com/delta-io/delta-rs/issues/4657>
+- <https://github.com/delta-io/delta-kernel-rs>
+- <https://github.com/duckdb/duckdb-delta>
 
 DuckDB:
 
