@@ -58,8 +58,9 @@ comando que a autoriza e o que ela grava.
 | `test_pyarrow.py` | O esquema com metadados e `field_id`, `from_pylist`, o cast seguro, o `RecordBatchReader`; o `ParquetWriter` por lote e o rodapé, o mesmo conteúdo gravado pelo DuckDB, o dataset Hive, a leitura por lotes com `filters` e o pandas com tipos Arrow. | Nenhum; os três últimos, `local`. |
 | `test_deltalake.py` | `DeltaTable.create` idempotente, os modos de escrita e o predicado, a evolução de esquema e o `update`, a viagem no tempo e o `restore`, as ações `add` e a `AddAction`, o `vacuum` com `keep_versions`, o dataset Arrow e a cópia profunda, o log; `is_deltatable` e `drop_column_not_null`, a view do DuckDB presa a uma versão e o leitor Arrow no `write_deltalake`, a reescrita pelo `COPY` particionado registrada com estatísticas, a diferença de versões, a compactação e o checkpoint, a exportação por cópia dos arquivos, a carga inicial de pastas Parquet. | `local`. |
 | `test_stdlib.py` | A biblioteca padrão nos papéis do plano: aritmética de meses, identificadores de execução e de sandbox, `Protocol` e `dataclass`, o gerenciador de contexto que descarta o sandbox na falha, `importlib` para `modulo:funcao`, `argparse`, `logging`, `os.environ` com `monkeypatch`, `json`, `urllib.parse` e `pathlib`, `itertools` e `collections`, `decimal`, `difflib`; a criação exclusiva, a substituição atômica e a impressão digital de um arquivo. | Nenhum; o último, `local`. |
-| `delta.py`, `test_local.py`, `test_s3.py` | A prova de conceito da camada Delta nos dois armazenamentos: a escrita e a leitura pelo delta-rs, o `delta_scan` com os tipos do contrato e a poda de partição, os tempos de consulta, o `vacuum`; em disco, o commit atômico e o conflito entre escritores, a realocação da pasta, a abertura sem variáveis `AWS_*`; no bucket, a origem das credenciais, a cadeia do delta-rs e sua reserva, o put condicional, a criptografia, listar, copiar e apagar pelo `boto3`. | `local` e `s3`. |
+| `poc_delta.py`, `test_local.py`, `test_s3.py` | A prova de conceito da camada Delta nos dois armazenamentos: a escrita e a leitura pelo delta-rs, o `delta_scan` com os tipos do contrato e a poda de partição, os tempos de consulta, o `vacuum`; em disco, o commit atômico e o conflito entre escritores, a realocação da pasta, a abertura sem variáveis `AWS_*`; no bucket, a origem das credenciais, a cadeia do delta-rs e sua reserva, o put condicional, a criptografia, listar, copiar e apagar pelo `boto3`. | `local` e `s3`. |
 | `test_redshift.py` | Os itens da etapa 0 que esperam uma conexão: a sessão e o `paramstyle` nomeado, o DDL do SQLAlchemy, o `COPY ... MANIFEST` de arquivos do delta-rs (`DECIMAL` em `INT64`, `timestamp_ntz`, lista de colunas, `FILLRECORD`), o `VARCHAR` excedido, o `SUPER`, o `UNLOAD ... PARTITION BY` registrado no Delta e lido pelo DuckDB. Escrito antes de haver conexão; ainda não rodou. | `redshift` e `s3`. |
+| `test_probes.py` (em `tests/`) | As funções puras dos probes, sem rede: a classificação dos erros do `boto3`, os rótulos de DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o inventário do bucket (tabelas Delta, sessões da suíte, versões não correntes), o versionamento pela amostra, o Object Lock, o ciclo de vida, a montagem de `~/shared`, o formato das tabelas do Glue e os parâmetros da conexão Redshift. | Nenhum. |
 
 Cada suíte escreve só onde a sua variável autoriza, e a variável é a autorização: sem ela a suíte é
 pulada, com o motivo no relatório e em `pytest -rs`, e `uv run pytest` sem variável alguma não
@@ -70,6 +71,11 @@ tentar), Redshift sem conexão. `-m local`, `-m s3` e `-m redshift` selecionam u
 criam `serialize-db-poc/<id>/` sob a raiz ou tabelas `serialize_db_poc_<id>_*` no esquema, apagam
 tudo no fim da sessão e imprimem um relatório com os fatos e as medições, com as chaves prefixadas
 pelo alvo (`local.`, `s3.`, `redshift.`) ou pela biblioteca (`duckdb.`, `sqlalchemy.`, `pyarrow.`).
+O relatório abre com a sessão (`session.`: início, plataforma, Python, versões, marcadores e, no
+fim, a contagem de testes por resultado e a duração) e registra a limpeza de cada raiz
+(`local.cleanup`, `s3.cleanup`), para dizer sozinho se a suíte passou e o que ficou. Num bucket
+versionado, cada objeto que a limpeza apaga vira versão não corrente, invisível à listagem e cobrada
+até uma regra `NoncurrentVersionExpiration`; `probes/bucket.py` (`BK-14`) conta o acumulado.
 
 Variáveis de ambiente:
 
@@ -101,12 +107,15 @@ o que uma sessão grava é `.pytest_cache/` na raiz do repositório, do próprio
 
 Scripts só de leitura, em [`probes/`](probes/README.md), que fotografam o que o ambiente oferece à
 biblioteca: o espaço do SageMaker visto de dentro (credenciais, região, projeto, rede, máquina,
-Python e DuckDB), o bucket sob a raiz (configuração, ciclo de vida, inventário e tabelas Delta, as permissões do papel
-pela simulação de política do IAM, a chave KMS, a política do bucket), o acesso que a suíte S3
-exige, o Redshift (conexão, papel IAM do `COPY` e seu alcance sobre a raiz, Data API, sessão,
-privilégios, configurações e o diagnóstico de um `COPY` reprovado) e os serviços de catálogo. Cada um imprime o relatório e o grava em `probes/output/`, pasta fora do git,
-para ser colado na conversa com o assistente, com seções numeradas, cada chamada ecoada acima do
-resultado ou do erro, a tabela de checagens e a seção final de chamadas que falharam.
+Python e DuckDB), o bucket sob a raiz (configuração, ciclo de vida, inventário, tabelas Delta e
+versões não correntes, as permissões do papel pela simulação de política do IAM, a chave KMS, a
+política do bucket), o acesso que a suíte S3 exige, o Redshift (conexão, papel IAM do `COPY` e seu
+alcance sobre a raiz, Data API, sessão, privilégios, configurações e o diagnóstico de um `COPY`
+reprovado) e os serviços de catálogo. Cada um imprime o relatório e o grava em `probes/output/`,
+pasta fora do git, para ser colado na conversa com o assistente, com seções numeradas, cada chamada
+ecoada acima do resultado ou do erro, a tabela de checagens e a seção final de chamadas que
+falharam. O JSON de `SERIALIZE_DB_TEST_REPORT` (seção Testes) acompanha os relatórios dos probes na
+conversa.
 
 O argumento `s3://bucket/prefixo` é a raiz que a suíte S3 recebe em `SERIALIZE_DB_TEST_S3_ROOT`,
 variável que o substitui quando ele falta: `bucket.py` inventaria o que há sob ela,

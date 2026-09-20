@@ -1,6 +1,7 @@
 """Configuração compartilhada dos testes.
 
-``tests/`` recebe os testes do pacote ``serialize_db``; ``tests/proof_of_concept/`` recebe as provas
+``tests/`` recebe os testes do pacote ``serialize_db`` e os das funções puras dos probes
+(``test_probes.py``); ``tests/proof_of_concept/`` recebe as provas
 de conceito e os testes das bibliotecas externas (delta-rs, DuckDB, PyArrow, SQLAlchemy, boto3,
 redshift_connector), que também servem de material de estudo das APIs que a biblioteca usa. As
 provas de conceito da camada Delta rodam sobre os dois tipos de armazenamento que a biblioteca
@@ -26,6 +27,9 @@ Variáveis de ambiente lidas:
   (sem ela, ``IAM_ROLE default``).
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos, as pastas e as tabelas criados.
 - ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é gravado.
+  O relatório abre com a sessão (``session.``: início, plataforma, Python, versões, marcadores e,
+  no fim, a contagem por resultado e a duração) e registra a limpeza de cada raiz
+  (``local.cleanup``, ``s3.cleanup``), para dizer sozinho se a suíte passou e o que ficou.
 - ``SERIALIZE_DB_DUCKDB_EXTENSIONS``: pasta de extensões do DuckDB, a única onde a suíte instala as
   que faltam; sem ela, ``.duckdb/`` na raiz do repositório quando existir (criada por
   ``prepare_offline.sh``), senão o padrão do DuckDB, e nada é instalado.
@@ -33,12 +37,16 @@ Variáveis de ambiente lidas:
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import os
+import platform
 import shutil
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
 
@@ -47,10 +55,34 @@ import pytest
 # Fatos e medições coletados pelos testes; impressos no fim da sessão e gravados em JSON.
 REPORT: dict[str, object] = {}
 
+# As versões que o relatório cita: as que as medições dependem.
+SESSION_PACKAGES = ("deltalake", "duckdb", "pyarrow", "boto3", "sqlalchemy", "pandas", "pytest")
+SESSION = {"started": time.time()}
+
 
 def record(key: str, value: object) -> None:
     """Registra um fato ou uma medição no relatório da sessão."""
     REPORT[key] = value
+
+
+def now_utc() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Abre o relatório com a sessão: quando, onde, com que versões e com que seleção ela roda."""
+    versions = []
+    for name in SESSION_PACKAGES:
+        try:
+            versions.append(f"{name} {importlib.metadata.version(name)}")
+        except importlib.metadata.PackageNotFoundError:
+            versions.append(f"{name} ausente")
+    SESSION["started"] = time.time()
+    record("session.started_at", now_utc())
+    record("session.platform", platform.platform())
+    record("session.python", platform.python_version())
+    record("session.packages", ", ".join(versions))
+    record("session.markers", session.config.option.markexpr or "(todos)")
 
 
 def duckdb_extension_directory() -> str | None:
@@ -273,15 +305,21 @@ def s3_location(proxy_environment: dict[str, str | None]) -> Iterator[S3Location
     yield location
 
     if location.keep:
+        record("s3.cleanup", f"mantida por SERIALIZE_DB_TEST_KEEP: {location.uri}")
         return
 
     # Limpeza: lista o prefixo da sessão página a página e apaga até 1.000 chaves por chamada.
     s3 = boto3.client("s3")
     paginator = s3.get_paginator("list_objects_v2")
+    deleted = 0
     for page in paginator.paginate(Bucket=location.bucket, Prefix=location.prefix + "/"):
         keys = [{"Key": item["Key"]} for item in page.get("Contents", [])]
         if keys:
             s3.delete_objects(Bucket=location.bucket, Delete={"Objects": keys, "Quiet": True})
+            deleted += len(keys)
+    # Num bucket versionado a exclusão só cria marcadores: os objetos viram versões não correntes, cobradas até uma regra de ciclo de vida.
+    versioned = "; no bucket versionado cada um vira versão não corrente até uma regra NoncurrentVersionExpiration" if REPORT.get("s3.versioned") else ""
+    record("s3.cleanup", f"{deleted} objeto(s) apagado(s) sob {location.uri}{versioned}")
 
 
 @pytest.fixture(scope="session")
@@ -303,8 +341,11 @@ def local_location() -> Iterator[LocalLocation]:
 
     yield location
 
-    if not location.keep:
+    if location.keep:
+        record("local.cleanup", f"mantida por SERIALIZE_DB_TEST_KEEP: {location.uri}")
+    else:
         shutil.rmtree(location.path, ignore_errors=True)
+        record("local.cleanup", f"apagada: {location.uri}")
 
 
 @dataclass(kw_only=True)
@@ -422,8 +463,11 @@ def redshift_session() -> Iterator[RedshiftSession]:
 
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     """Imprime o relatório da sessão, as instruções das suítes puladas e grava o JSON de ``SERIALIZE_DB_TEST_REPORT``."""
-    if not REPORT:
-        return
+    # O resultado entra no relatório: sem ele o JSON não diz se a suíte passou nem se a limpeza rodou.
+    stats = terminalreporter.stats
+    record("session.outcome", ", ".join(f"{len(stats.get(name, []))} {name}" for name in ("passed", "failed", "error", "skipped")))
+    record("session.finished_at", now_utc())
+    record("session.duration_s", round(time.time() - SESSION["started"], 1))
 
     # As medições e os fatos coletados; as chaves ``<suíte>.skipped`` ficam fora, porque a seção seguinte as explica.
     measurements = {key: value for key, value in REPORT.items() if not key.endswith(".skipped")}

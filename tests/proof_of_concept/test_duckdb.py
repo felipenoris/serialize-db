@@ -5,7 +5,7 @@ comando seguinte, o tipo ``DECIMAL`` inferido de uma amostra do pandas contra o 
 Arrow, JSON, e o custo do ``executemany`` contra a carga por Arrow. Sob a raiz local (marcador
 ``local``): ``COPY ... TO`` com ``RETURN_STATS`` e o esquema físico do Parquet gravado, o ``COPY``
 particionado por mês e um banco em arquivo com pasta de transbordo. O ``delta_scan`` está em
-``delta.py``.
+``poc_delta.py``.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import pyarrow as pa
 import pytest
 
 from conftest import LocalLocation, record
-from delta import MONTHS, ROWS, sample_table
+from poc_delta import MONTHS, ROWS, sample_table
 
 
 @pytest.fixture
