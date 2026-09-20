@@ -43,6 +43,13 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   pipelines (declaração do usuário de 2026-09-20), e a regra apoia-se na hipótese, medida na seção
   seguinte, de que a conversão é barata: 2,3 ms sem cópia para 300.000 linhas. O pandas não entra
   nas dependências de execução.
+- **O Redshift do ambiente alvo é serverless, e o esquema do projeto vem de um datashare**
+  (decisão do usuário de 2026-09-20). A conexão é a credencial temporária do workgroup
+  ([`../examples/redshift_native.py`](../examples/redshift_native.py), executado lá), e toda tabela
+  é citada por nome em três partes `datalake_rw_shared.sbx_aco_decon.<tabela>`. A escrita segue o
+  que um datashare aceita, com `COPY ... COMPUPDATE OFF` e transação explícita
+  ([`redshift.md`](redshift.md)). A Data API fica fora da biblioteca: ela devolve `DECIMAL` e data e
+  hora como texto e limita o resultado a 500 MB, o que não serve à troca de `pa.Table`.
 - **Nenhum serviço de catálogo está habilitado.** A camada de tabela não depende de serviço, e o
   Delta atende sem código próprio. O Iceberg com catálogo em arquivo fica documentado em
   `estrategia.md` e volta à mesa se o Glue ou o S3 Tables forem habilitados; `probes/catalog.py`

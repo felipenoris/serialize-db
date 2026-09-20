@@ -23,8 +23,10 @@ Variáveis de ambiente lidas:
   ``serialize-db-poc/<id>/``.
 - ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``: esquema do Redshift onde a suíte cria as tabelas
   ``serialize_db_poc_<id>_*``. A conexão vem de ``SERIALIZE_DB_REDSHIFT_*`` (as variáveis de
-  ``probes/redshift.py``), e o papel do ``COPY`` e do ``UNLOAD`` de ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``
-  (sem ela, ``IAM_ROLE default``).
+  ``probes/redshift.py``), o banco do datashare que guarda o esquema de
+  ``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE`` (com ela, toda tabela é citada por nome em três partes e
+  o ``COPY`` leva ``COMPUPDATE OFF``) e o papel do ``COPY`` e do ``UNLOAD`` de
+  ``SERIALIZE_DB_REDSHIFT_IAM_ROLE`` (sem ela, ``IAM_ROLE default``).
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos, as pastas e as tabelas criados.
 - ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é gravado.
   O relatório abre com a sessão (``session.``: início, plataforma, Python, versões, marcadores e,
@@ -132,12 +134,13 @@ USAGE = {
         "encontre e das extensões httpfs, delta e aws do DuckDB",
     ),
     "redshift": (
-        "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=esquema SERIALIZE_DB_REDSHIFT_DATABASE=banco SERIALIZE_DB_REDSHIFT_HOST=host "
-        "SERIALIZE_DB_REDSHIFT_USER=usuario SERIALIZE_DB_REDSHIFT_PASSWORD=senha SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo "
-        "uv run pytest -m redshift",
-        "cria só tabelas serialize_db_poc_<id>_* no esquema e as apaga no fim; SERIALIZE_DB_REDSHIFT_WORKGROUP ou "
-        "_CLUSTER no lugar de host, usuário e senha para autenticação por IAM; SERIALIZE_DB_REDSHIFT_IAM_ROLE para o "
-        "COPY e o UNLOAD (sem ela, IAM_ROLE default)",
+        "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=esquema SERIALIZE_DB_REDSHIFT_WORKGROUP=workgroup "
+        "SERIALIZE_DB_REDSHIFT_DATABASE=banco SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=banco_do_datashare "
+        "SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest -m redshift",
+        "cria só tabelas serialize_db_poc_<id>_* no esquema e as apaga no fim; com _WORKGROUP a credencial é "
+        "temporária (redshift-serverless:GetWorkgroup e GetCredentials, examples/redshift_native.py), e _HOST com "
+        "_USER e _PASSWORD, ou _CLUSTER, são os outros caminhos; _SHARE_DATABASE quando o esquema vem de um "
+        "datashare; SERIALIZE_DB_REDSHIFT_IAM_ROLE para o COPY e o UNLOAD (sem ela, IAM_ROLE default)",
     ),
 }
 
@@ -360,6 +363,7 @@ class RedshiftSession:
     schema: str
     iam_role: str
     session_id: str
+    share_database: str | None = None
     keep: bool = False
     created: list[str] = field(default_factory=list)
 
@@ -370,8 +374,21 @@ class RedshiftSession:
         return name
 
     def qualified(self, name: str) -> str:
-        """``esquema.tabela``, como o SQL a cita."""
-        return f"{self.schema}.{name}"
+        """O nome como o SQL o cita: ``banco.esquema.tabela`` quando o esquema vem de um datashare, ``esquema.tabela`` quando é local."""
+        parts = [part for part in (self.share_database, self.schema, name) if part]
+        return ".".join(parts)
+
+    def schema_prefix(self) -> str:
+        """O nome qualificado sem a tabela: ``banco.esquema`` ou ``esquema``, o que o ``MetaData`` do SQLAlchemy recebe."""
+        return self.qualified("").rstrip(".")
+
+    def copy_options(self) -> str:
+        """As opções que o ``COPY`` precisa neste destino: num banco de datashare, ``COMPUPDATE OFF``.
+
+        A escrita num datashare aceita o ``COPY`` só sem ``COMPUPDATE``; num esquema local a
+        cláusula é dispensável e fica de fora do texto comparado pelos testes da etapa 5.
+        """
+        return " COMPUPDATE OFF" if self.share_database else ""
 
     def iam_role_clause(self) -> str:
         """A cláusula do ``COPY`` e do ``UNLOAD``: o papel configurado ou o padrão do cluster."""
@@ -389,10 +406,14 @@ class RedshiftSession:
 
 
 def connect_redshift() -> tuple[str, object]:
-    """Abre a conexão pelas variáveis ``SERIALIZE_DB_REDSHIFT_*``: por senha, ou por IAM num workgroup ou num cluster.
+    """Abre a conexão pelas variáveis ``SERIALIZE_DB_REDSHIFT_*`` e devolve o método e a conexão.
 
-    A mesma resolução de ``probes/redshift.py``; a autenticação por IAM pede a região e pode criar
-    o usuário do banco.
+    Com ``_WORKGROUP``, o endereço vem de ``get_workgroup`` e o par usuário e senha de
+    ``get_credentials``: o caminho de ``examples/redshift_native.py``, executado no ambiente alvo.
+    Com ``_HOST``, ``_USER`` e ``_PASSWORD``, a conexão é direta; com ``_CLUSTER``, o
+    ``redshift_connector`` faz a autenticação por IAM. A mesma resolução de ``probes/redshift.py``.
+    Cada chamada pede a sua credencial, que dura no máximo uma hora, e a credencial derivada da
+    identidade IAM cria o usuário do banco quando ele ainda não existe.
     """
     import redshift_connector
 
@@ -417,14 +438,26 @@ def connect_redshift() -> tuple[str, object]:
         return "senha", connection
 
     if variable("WORKGROUP"):
-        connection = redshift_connector.connect(iam=True, is_serverless=True, serverless_work_group=variable("WORKGROUP"), region=region, **common)
-        return "IAM serverless", connection
+        import boto3
+
+        serverless = boto3.client("redshift-serverless", region_name=region)
+        endpoint = serverless.get_workgroup(workgroupName=variable("WORKGROUP"))["workgroup"]["endpoint"]
+        credentials = serverless.get_credentials(workgroupName=variable("WORKGROUP"), dbName=database, durationSeconds=3600)
+        connection = redshift_connector.connect(
+            host=variable("HOST") or endpoint["address"],
+            port=int(variable("PORT") or endpoint["port"]),
+            user=credentials["dbUser"],
+            password=credentials["dbPassword"],
+            ssl=True,
+            **common,
+        )
+        return "credencial temporária do workgroup", connection
 
     if variable("CLUSTER"):
         connection = redshift_connector.connect(iam=True, cluster_identifier=variable("CLUSTER"), db_user=variable("USER"), region=region, **common)
         return "IAM cluster", connection
 
-    raise RuntimeError("faltam parâmetros: host, usuário e senha, ou cluster ou workgroup para autenticação por IAM")
+    raise RuntimeError("faltam parâmetros: host, usuário e senha, ou workgroup ou cluster para a credencial temporária")
 
 
 @pytest.fixture(scope="session")
@@ -447,10 +480,11 @@ def redshift_session() -> Iterator[RedshiftSession]:
         schema=schema,
         iam_role=os.environ.get("SERIALIZE_DB_REDSHIFT_IAM_ROLE") or "default",
         session_id=uuid.uuid4().hex[:8],
+        share_database=os.environ.get("SERIALIZE_DB_REDSHIFT_SHARE_DATABASE") or None,
         keep=bool(os.environ.get("SERIALIZE_DB_TEST_KEEP")),
     )
     record("redshift.connection_method", method)
-    record("redshift.schema", schema)
+    record("redshift.schema", session.qualified("<tabela>"))
 
     yield session
 

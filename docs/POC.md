@@ -96,9 +96,10 @@ listar buckets nem de ler o versionamento; `storage_options()` resolve as creden
 chamada, porque uma emissão dura uma hora e a reserva com credenciais fixas expiraria numa execução
 longa ([etapa 3](PLAN-STAGE-3.md)); o motor DuckDB fixa `temp_directory` numa pasta com espaço
 conferido, porque o padrão é relativo à pasta corrente ([etapa 4](PLAN-STAGE-4.md)); a
-[etapa 5](PLAN-STAGE-5.md) conecta por senha por padrão e trata a autenticação por IAM e a Data
-API como opcionais, porque dependem das APIs do Redshift, sem endpoint VPC no laboratório
-(`RS-14`); e o `vacuum` num bucket versionado só libera espaço com a regra
+[etapa 5](PLAN-STAGE-5.md) nasceu conectando por senha, porque a autenticação por IAM e a Data API
+dependem das APIs do Redshift, sem endpoint VPC no laboratório (`RS-14`) — decisão revista em
+2026-09-20 pelos exemplos do ambiente alvo, que conectam pela credencial temporária do workgroup
+(seção seguinte); e o `vacuum` num bucket versionado só libera espaço com a regra
 `NoncurrentVersionExpiration`, que o papel não lê e `BK-14` mede pelo acumulado
 ([etapa 9](PLAN-STAGE-9.md)).
 
@@ -110,9 +111,54 @@ atende; o delta-rs lê as duas variáveis e sem nenhuma cai em `us-east-1`, igno
 perfil; sem variáveis de proxy ele alcança o endpoint de credenciais diretamente (variante
 `proxy_unset`), e a exportação de `NO_PROXY` não muda nada; o STS pode estar inalcançável; nenhuma
 extensão do DuckDB pode ser baixada. A biblioteca normaliza a
-região nos dois sentidos, não chama o STS e carrega as extensões só da pasta configurada. Se as APIs
-do Redshift também não tiverem endpoint lá, resta a conexão por senha na porta 5439, que não passa
-por elas (`RS-14`).
+região nos dois sentidos, não chama o STS e carrega as extensões só da pasta configurada. A conexão do ambiente alvo pede
+`redshift-serverless:GetWorkgroup` e `GetCredentials` antes da porta 5439: se essas APIs não tiverem
+endpoint VPC lá, o que `RS-14` mede, resta a conexão por senha, que não passa por elas.
+
+## O que os exemplos de conexão com o Redshift mostraram
+
+Em 2026-09-20 o usuário executou no ambiente alvo dois scripts de conexão, guardados como foram
+executados em [`../examples/`](../examples/): um pela Data API e outro pelo protocolo nativo. Os
+dois terminaram com sucesso, e o relatório de execução não foi transcrito: o que eles fixam são os
+parâmetros do ambiente e os caminhos que funcionam, não medições.
+
+O ambiente alvo não é o laboratório lido nas seções acima. A região é `sa-east-1`, o Redshift é
+serverless no workgroup `controladoria-wg`, a conexão é no banco `dev`, e o esquema do projeto é
+`sbx_aco_decon` no banco `datalake_rw_shared`, citado por nome em três partes
+`datalake_rw_shared.sbx_aco_decon.<tabela>`. O laboratório de `us-west-2` não tem Redshift nenhum.
+
+O caminho nativo é `redshift-serverless:GetWorkgroup` para o endereço e a porta,
+`redshift-serverless:GetCredentials` para o par usuário e senha derivado da identidade IAM, e
+`redshift_connector.connect` com esse par. Não há senha guardada, a credencial dura no máximo uma
+hora e o usuário do banco sai da role. O caminho pela Data API é assíncrono, `ExecuteStatement`,
+`DescribeStatement` até o estado final e `GetStatementResult` paginado, e devolve cada célula como
+um dicionário de um item, com `DECIMAL` e data e hora em texto.
+
+Consequências no plano, nesta mesma unidade de trabalho:
+
+- A [etapa 5](PLAN-STAGE-5.md) conecta pela credencial temporária do workgroup, e não por senha,
+  que era o padrão escrito quando o projeto ainda não tinha Redshift; o IAM interno do
+  `redshift_connector` fica de reserva.
+- A Data API fica fora da biblioteca, por decisão do usuário de 2026-09-20: ela perde o tipo do
+  contrato e limita o resultado a 500 MB. Ela continua no probe (`RS-10`), na suíte e nos exemplos,
+  como prova de que existe caminho sem a porta 5439.
+- Toda tabela do Redshift é citada por nome em três partes. No SQLAlchemy, o esquema com ponto só
+  atravessa com `quoted_name(..., quote=False)`, medido em 2026-09-20
+  ([`sqlalchemy.md`](sqlalchemy.md)).
+- A escrita num banco de datashare é restrita: `COPY` só sem `COMPUPDATE`, escrita num banco só por
+  transação, sem `VIEW`, e `UNLOAD` fora da lista de comandos suportados ([`redshift.md`](redshift.md)).
+  A [etapa 8](PLAN-STAGE-8.md) passou a emitir `COMPUPDATE OFF` e a abrir a transação com `BEGIN`
+  explícito.
+- `probes/redshift.py` ganhou `RS-15` (credencial temporária), `RS-16` (o banco do esquema, local ou
+  de datashare) e `RS-17` (os três requisitos da escrita num datashare: patch 186, isolamento de
+  snapshot e 64 slices), e `RS-10` passou a rodar o ciclo completo da Data API com `select 1`.
+- A suíte `tests/proof_of_concept/test_redshift.py` conecta pelo caminho testado, cita as tabelas
+  por três partes, acrescenta `COMPUPDATE OFF` a cada `COPY` e ganhou um teste do banco do esquema e
+  um do ciclo da Data API.
+
+O que os exemplos não respondem, e o probe e a suíte respondem na primeira execução: se o produtor
+concedeu escrita no datashare, se o consumidor atende aos três requisitos, se o `UNLOAD` de uma
+tabela do datashare é aceito, e qual papel IAM o `COPY` usa ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
 ## O que a leitura da base de origem mostrou
 

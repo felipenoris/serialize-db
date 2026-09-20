@@ -210,7 +210,7 @@ def project(report: Report) -> None:
         if "REDSHIFT" in str(item.get("type", "")).upper():
             report.line(f"conexão {item.get('name')}:\n{pretty(item, limit=80)}\n")
 
-    # SP-4: o projeto foi lido; SP-5: a etapa 5 do plano espera uma conexão Redshift no projeto.
+    # SP-4: o projeto foi lido; SP-5: a conexão Redshift do projeto, o atalho para as variáveis da etapa 5.
     summary = ", ".join(f"{item.get('name')} ({item.get('type')})" for item in connections) or "nenhuma"
     report.ok("SP-4", "projeto do SageMaker", f"{data.get('name')}; conexões: {summary}")
 
@@ -218,7 +218,7 @@ def project(report: Report) -> None:
     if redshift:
         report.ok("SP-5", "conexão Redshift no projeto", ", ".join(redshift))
     else:
-        report.note("SP-5", "conexão Redshift no projeto", "nenhuma: a etapa 5 espera uma")
+        report.note("SP-5", "conexão Redshift no projeto", "nenhuma: a etapa 5 conecta pelas variáveis SERIALIZE_DB_REDSHIFT_*, e a conexão do projeto é só um atalho para elas")
 
 
 def network(report: Report) -> None:

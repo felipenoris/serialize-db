@@ -467,6 +467,72 @@ def test_cluster_and_workgroup_rows_have_one_row_per_resource() -> None:
     assert len(rows) == 2 and rows[1][:4] == ["wg", "AVAILABLE", "b:5439", "ns"]
 
 
+def test_qualified_uses_three_parts_when_the_schema_comes_from_a_datashare() -> None:
+    """O nome da tabela no SQL: três partes com o banco do datashare, duas sem ele, uma sem esquema."""
+    assert redshift.Target(share_database="datalake_rw_shared", schema="sbx_aco_decon").qualified("t") == "datalake_rw_shared.sbx_aco_decon.t"
+    assert redshift.Target(database="dev", schema="publico").qualified("t") == "publico.t"
+    assert redshift.Target(database="dev").qualified("t") == "t"
+
+    # O banco do esquema é o do datashare quando há um, e o da conexão quando não há.
+    assert redshift.Target(database="dev", share_database="share").schema_database() == "share"
+    assert redshift.Target(database="dev").schema_database() == "dev"
+
+
+def test_column_value_and_matching_rows_read_by_column_name() -> None:
+    """As visões ``svv_all_*`` são lidas pelo nome da coluna; uma coluna ausente vale ``None`` e não derruba a leitura."""
+    found = (
+        ["database_name", "schema_name", "schema_type"],
+        [("dev", "public", "local"), ("datalake_rw_shared", "sbx_aco_decon", "shared"), ("dev", "sbx_aco_decon", "local")],
+    )
+    assert redshift.column_value(found[0], found[1][1], "schema_type") == "shared"
+    assert redshift.column_value(found[0], found[1][1], "coluna_que_a_visao_nao_tem") is None
+
+    # O filtro casa sem diferenciar maiúsculas e aceita mais de uma coluna.
+    assert len(redshift.matching_rows(found, schema_name="SBX_ACO_DECON")) == 2
+    assert redshift.matching_rows(found, database_name="datalake_rw_shared", schema_name="sbx_aco_decon") == [found[1][1]]
+    assert redshift.matching_rows(found, schema_name="ausente") == []
+
+
+def test_version_tuple_reads_the_patch_from_the_version_string() -> None:
+    """O patch sai de ``version()`` como tupla, que a comparação de RS-17 usa."""
+    assert redshift.version_tuple("PostgreSQL 8.0.2 on ..., Redshift 1.0.78890") == (1, 0, 78890)
+    assert redshift.version_tuple("sem patch") is None
+
+
+def test_datashare_write_verdict_separates_unmet_from_unread() -> None:
+    """Um requisito não atendido reprova; um requisito não lido vira ``note``, porque leitura negada não é requisito reprovado."""
+    status, text = redshift.datashare_write_verdict((1, 0, 78890), "serverless", "Snapshot Isolation", 128)
+    assert status == "ok" and "atende" in text and "não atende" not in text
+
+    # Patch anterior ao 186: a escrita no datashare é recusada pelo servidor.
+    status, text = redshift.datashare_write_verdict((1, 0, 70000), "serverless", "Snapshot Isolation", 128)
+    assert status == "fail" and "não atende" in text
+
+    # Isolamento serializável e slices de menos também reprovam.
+    assert redshift.datashare_write_verdict((1, 0, 78890), "serverless", "Serializable", 128)[0] == "fail"
+    assert redshift.datashare_write_verdict((1, 0, 78890), "serverless", "Snapshot Isolation", 32)[0] == "fail"
+
+    # O que não foi lido não reprova sozinho, e o texto diz qual requisito ficou sem leitura.
+    status, text = redshift.datashare_write_verdict(None, "serverless", None, None)
+    assert status == "note" and text.count("não lido") == 3
+
+    # O provisionado tem patch mínimo próprio: o mesmo número reprova num e passa no outro.
+    assert redshift.datashare_write_verdict((1, 0, 78885), "serverless", "Snapshot Isolation", 64)[0] == "fail"
+    assert redshift.datashare_write_verdict((1, 0, 78885), "provisionado", "Snapshot Isolation", 64)[0] == "ok"
+
+
+def test_data_api_row_decodes_cells_of_one_item() -> None:
+    """Cada célula da Data API é um dicionário de um item; ``isNull`` vira ``None``, e o resto vem como está."""
+    record = [{"stringValue": "a"}, {"longValue": 1}, {"isNull": True}, {"doubleValue": 1.5}]
+    assert redshift.data_api_row(record) == ["a", 1, None, 1.5]
+
+
+def test_credential_summary_keeps_the_password_out_of_the_report() -> None:
+    """O resumo da credencial temporária mostra usuário e expiração; a senha nunca entra no relatório."""
+    summary = redshift.credential_summary({"dbUser": "IAMR:papel", "dbPassword": "segredo", "expiration": "2026-09-20 05:00"})
+    assert "IAMR:papel" in summary and "2026-09-20 05:00" in summary and "segredo" not in summary
+
+
 def test_diagnose_suite_environment_exports_no_proxy_when_absent_or_empty() -> None:
     """O diagnóstico repete o delta-rs com o que a suíte exporta: ``NO_PROXY`` de ``no_proxy`` quando ausente ou vazia, e nada nos demais casos."""
     assert diagnose_aws.suite_environment({"no_proxy": "169.254.170.2,localhost"}) == {"NO_PROXY": "169.254.170.2,localhost"}

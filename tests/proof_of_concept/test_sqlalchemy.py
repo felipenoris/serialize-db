@@ -382,6 +382,30 @@ def test_generated_sql_text_per_dialect() -> None:
     assert con.execute(sql, params).fetchall() == [("Alfa", decimal.Decimal("150.00"))]
 
 
+def test_three_part_name_needs_quoted_name_without_quotes() -> None:
+    """Um esquema ``banco.esquema``, o do datashare do ambiente alvo, só sai sem aspas com ``quoted_name(quote=False)``.
+
+    O ``IdentifierPreparer`` cita qualquer identificador com caractere fora do permitido, e o ponto
+    é um deles: o esquema em texto simples vira um nome só, entre aspas. O DDL e o DML da
+    [etapa 5](../../docs/PLAN-STAGE-5.md) precisam do nome em três partes inteiro.
+    """
+    dialect = RedshiftDialect_redshift_connector()
+
+    def table(schema: object) -> sa.Table:
+        return sa.Table("operacoes", sa.MetaData(schema=schema), sa.Column("id_operacao", sa.BigInteger, nullable=False))
+
+    # O esquema com ponto em texto simples: um identificador só, entre aspas.
+    plain = normalized(str(CreateTable(table("datalake_rw_shared.sbx_aco_decon")).compile(dialect=dialect)))
+    assert plain.startswith('CREATE TABLE "datalake_rw_shared.sbx_aco_decon".operacoes')
+
+    # Com quote=False o ponto atravessa, no DDL e no DML.
+    name = quoted_name("datalake_rw_shared.sbx_aco_decon", False)
+    assert normalized(str(CreateTable(table(name)).compile(dialect=dialect))).startswith("CREATE TABLE datalake_rw_shared.sbx_aco_decon.operacoes")
+    assert "FROM datalake_rw_shared.sbx_aco_decon.operacoes" in normalized(str(sa.select(table(name)).compile(dialect=dialect)))
+    insert = sa.insert(table(name)).values([{"id_operacao": 1}])
+    assert normalized(str(insert.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))).startswith("INSERT INTO datalake_rw_shared.sbx_aco_decon.operacoes")
+
+
 def test_redshift_dialect_compiles_dml() -> None:
     """O DML compila para o Redshift sem cluster: um ``INSERT`` de várias linhas com ``%s`` e o ``select`` do contrato."""
     dialect = RedshiftDialect_redshift_connector()
