@@ -444,9 +444,10 @@ table names (`staging_<tabela>`) count as database identifiers.
 
 The state of the project, the decisions, the stages with their primitives and the order of work are
 in `docs/PLAN.md` (pt-BR, 2026-09-19); read it before planning a session. What the plan does not
-record: PRs #3 to #12 were merged by the user, who syncs `main`; PR #13 (branch
-`claude/diagnostico-aws`) is open and carries the probes, the plan, the test layout and the study
-suites, and every new commit goes there until it merges; `gh` is authenticated in the space since
+record: PRs #3 to #13 were merged by the user, who syncs `main`; PR #14 (branch
+`claude/readme-comandos-testes`, the README command of each test suite) was opened on 2026-09-19
+and may have merged since, so `gh pr list --state open` at the start of a session says whether new
+commits go to that branch or to a new `claude/` branch; `gh` is authenticated in the space since
 2026-09-19. The next session starts stage 1 (`serialize_db.schema`) and stage 2 (`serialize_db.sql`)
 on local folders.
 
