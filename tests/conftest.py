@@ -152,8 +152,8 @@ USAGE = {
         "SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest -m redshift",
         "cria só tabelas serialize_db_poc_<id>_* no esquema e as apaga no fim; com _WORKGROUP a credencial é "
         "temporária (redshift-serverless:GetWorkgroup e GetCredentials, examples/redshift_native.py), e _HOST com "
-        "_USER e _PASSWORD, ou _CLUSTER, são os outros caminhos; _SHARE_DATABASE quando o esquema vem de um "
-        "datashare; SERIALIZE_DB_REDSHIFT_IAM_ROLE para o COPY e o UNLOAD (sem ela, IAM_ROLE default)",
+        "_USER e _PASSWORD é o par informado na mesma chamada; _SHARE_DATABASE quando o esquema vem de um "
+        "datashare (USE); SERIALIZE_DB_REDSHIFT_IAM_ROLE para o COPY e o UNLOAD (sem ela, as credenciais de quem chama)",
     ),
 }
 
@@ -435,10 +435,16 @@ def connect_redshift() -> tuple[str, object]:
 
     Com ``_WORKGROUP``, o endereço vem de ``get_workgroup`` e o par usuário e senha de
     ``get_credentials``: o caminho de ``examples/redshift_native.py``, executado no ambiente alvo.
-    Com ``_HOST``, ``_USER`` e ``_PASSWORD``, a conexão é direta; com ``_CLUSTER``, o
-    ``redshift_connector`` faz a autenticação por IAM. A mesma resolução de ``probes/redshift.py``.
-    Cada chamada pede a sua credencial, que dura no máximo uma hora, e a credencial derivada da
-    identidade IAM cria o usuário do banco quando ele ainda não existe.
+    Com ``_HOST``, ``_USER`` e ``_PASSWORD``, o par informado entra na mesma chamada. O IAM interno do
+    ``redshift_connector`` e o cluster provisionado não são caminhos da suíte: ninguém os executou no
+    ambiente alvo, que não tem cluster. A mesma resolução de ``probes/redshift.py``. Cada chamada pede
+    a sua credencial, que dura no máximo uma hora, e a credencial derivada da identidade IAM cria o
+    usuário do banco quando ele ainda não existe.
+
+    A conexão vai sem ``timeout``: no ``redshift_connector`` ele é o tempo limite do socket, para
+    conectar e para ler, e um ``COPY`` ou um ``UNLOAD`` dura mais que qualquer espera razoável; 10 s
+    abortaram uma visão de sistema no ambiente alvo (2026-09-20). Uma rede morta aparece como o tempo
+    limite do sistema, não como um teste reprovado no meio de uma carga.
     """
     import redshift_connector
 
@@ -449,7 +455,7 @@ def connect_redshift() -> tuple[str, object]:
     if not database:
         raise RuntimeError("SERIALIZE_DB_REDSHIFT_DATABASE não informada")
 
-    common: dict[str, object] = {"database": database, "timeout": 10}
+    common: dict[str, object] = {"database": database}
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
         import boto3
@@ -470,10 +476,8 @@ def connect_redshift() -> tuple[str, object]:
         return method, connection
 
     if variable("HOST") and variable("USER") and variable("PASSWORD"):
-        connection = redshift_connector.connect(
-            host=variable("HOST"), port=int(variable("PORT") or 5439), user=variable("USER"), password=variable("PASSWORD"), ssl=True, **common
-        )
-        return with_share_database(connection, "senha")
+        connection = redshift_connector.connect(host=variable("HOST"), port=int(variable("PORT") or 5439), user=variable("USER"), password=variable("PASSWORD"), **common)
+        return with_share_database(connection, "par informado")
 
     if variable("WORKGROUP"):
         import boto3
@@ -486,16 +490,11 @@ def connect_redshift() -> tuple[str, object]:
             port=int(variable("PORT") or endpoint["port"]),
             user=credentials["dbUser"],
             password=credentials["dbPassword"],
-            ssl=True,
             **common,
         )
         return with_share_database(connection, "credencial temporária do workgroup")
 
-    if variable("CLUSTER"):
-        connection = redshift_connector.connect(iam=True, cluster_identifier=variable("CLUSTER"), db_user=variable("USER"), region=region, **common)
-        return with_share_database(connection, "IAM cluster")
-
-    raise RuntimeError("faltam parâmetros: host, usuário e senha, ou workgroup ou cluster para a credencial temporária")
+    raise RuntimeError("faltam parâmetros: SERIALIZE_DB_REDSHIFT_WORKGROUP para a credencial temporária, ou _HOST, _USER e _PASSWORD")
 
 
 @pytest.fixture(scope="session")

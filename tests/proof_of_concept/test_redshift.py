@@ -412,17 +412,15 @@ def test_data_api_runs_the_statement_and_pages_the_result(redshift_session: Reds
     5439; o que ele mostra é por que a troca de dados da biblioteca não passa por aqui.
     """
     workgroup = os.environ.get("SERIALIZE_DB_REDSHIFT_WORKGROUP")
-    cluster = os.environ.get("SERIALIZE_DB_REDSHIFT_CLUSTER")
-    if not (workgroup or cluster):
-        pytest.skip("a Data API precisa de SERIALIZE_DB_REDSHIFT_WORKGROUP ou de _CLUSTER")
+    if not workgroup:
+        pytest.skip("a Data API precisa de SERIALIZE_DB_REDSHIFT_WORKGROUP")
 
     session = redshift_session
     name = session.table("data_api")
     session.execute(f"CREATE TABLE {session.qualified(name)} (id BIGINT NOT NULL, valor DECIMAL(18,2), texto VARCHAR(20))")
     session.execute(f"INSERT INTO {session.qualified(name)} VALUES (1, 10.25, 'a'), (2, NULL, NULL)")
 
-    parameters = {"Database": os.environ["SERIALIZE_DB_REDSHIFT_DATABASE"]}
-    parameters.update({"WorkgroupName": workgroup} if workgroup else {"ClusterIdentifier": cluster, "DbUser": os.environ.get("SERIALIZE_DB_REDSHIFT_USER", "")})
+    parameters = {"Database": os.environ["SERIALIZE_DB_REDSHIFT_DATABASE"], "WorkgroupName": workgroup}
     client = boto3.client("redshift-data", region_name=os.environ.get("AWS_REGION") or boto3.Session().region_name)
 
     # 1. Dispara: a chamada volta na hora, com o identificador do statement.

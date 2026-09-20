@@ -166,7 +166,7 @@ research appends to the matching group.
 | `README.md` | `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with one command per suite, the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and why the folder is prepared for the target without internet, with the procedure itself in the `prepare_offline.sh` header. |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. Its header is the operating procedure: how to run it, the proxy variables and the pack and unpack commands, which moved out of `README.md` on 2026-09-20. The extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`, the probes' own function, because DuckDB refuses an address with the credentials inside it. |
 | `examples/` | The three scripts the user ran in the target environment on 2026-09-20, kept as run: `redshift_native.py` (`GetWorkgroup` for the endpoint, `GetCredentials` for a temporary user and password, `redshift_connector.connect`), `redshift_data_api.py` (the async Data API cycle) and `redshift_copy_unload.py` (`USE` into the datashare database, `CREATE TABLE`, `COPY` of a Parquet prefix and `UNLOAD`, all with the caller's credentials in the statement text). They fix the target: region `sa-east-1`, serverless workgroup `controladoria-wg`, connection database `dev`, project schema `sbx_aco_decon` in the datashare database `datalake_rw_shared`, cited by the three-part name. Only what ran in the target goes in this folder, with its literal values; the probe, the suite and stage 5 repeat these calls. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`, which details each check: `space.py` (credentials and expiry, region, project connections, network, machine with temp space, open-file limit and the `~/shared` mount by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` by presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (settings, lifecycle, inventory with each Delta table's files, commits and last object, the S3 suite's leftover sessions `BK-13`, non-current versions and delete markers `BK-14`, versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM simulation or by what the run proved, KMS key, bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict, own format; delta-rs as found and as the suite with `NO_PROXY` exported; DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection parsed as a dict, JDBC URL and secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, the configured workgroup read directly by `GetWorkgroup`, VPC endpoints of the Redshift APIs `RS-14`, the full Data API cycle with `select 1` `RS-10`, the temporary workgroup credential `RS-15`, the database holding the project schema, local or datashare `RS-16`, the three datashare-write requirements `RS-17`, session privileges with a branch for a shared schema, settings, load-error views, external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), `parquet_source.py` (the initial load's source base, one folder per table, taking the root as an argument: the table folders and the non-Parquet files, per table the files, bytes, rows, partitions and how many distinct schemas, the majority schema with Arrow type, nullability, physical and logical type and `field_id`, the schema divergences between files column by column with every divergent file named, the partition columns with their values and whether they are also inside the files, per column the rows, nulls, minimum, maximum and distinct summed from the footers, the row groups, compression, encoding, writer and footer metadata, and with `--sample N` the cardinality and text length the footer does not hold; it reads the footer of every file of every partition and never a data page without `--sample`), over `probelib.py`: DNS, TCP and internet results are readings, never failed calls, and a failed call leaves `report.last_reason` for the check that interprets it; `duckdb_proxy` splits the proxy address from the credentials for every DuckDB session (`prepare_offline.sh` uses it too) and `hide_credentials` keeps the embedded password out of a report meant to be pasted into the conversation. `sagemaker-studio` stays out of the project (it drags unpinned `deltalake`, `duckdb` and `pandas`; a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. Each probe is one function per report section with a docstring naming its checks, a commented block per check and `render_*` helpers; `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`, which details each check: `space.py` (credentials and expiry, region, project connections, network, machine with temp space, open-file limit and the `~/shared` mount by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` by presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (settings, lifecycle, inventory with each Delta table's files, commits and last object, the S3 suite's leftover sessions `BK-13`, non-current versions and delete markers `BK-14`, versioning from a sample's `VersionId` when the API is denied, the role's permissions by IAM simulation or by what the run proved, KMS key, bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict, own format; delta-rs as found and as the suite with `NO_PROXY` exported; DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection parsed as a dict; the connection repeats `examples/redshift_native.py`, a given user/password pair the only alternative; `RS-1` to `RS-19`, from the configuration to the IAM simulation of the identity the library sends to S3, with the session readings before the `USE` into the datashare database, checked by `current_database()` as `RS-19`, and the schema readings after it), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), `parquet_source.py` (the initial load's source base, one folder per table, root as argument: per table the files, bytes, rows, partitions and distinct schemas, the majority schema with Arrow, physical and logical types and `field_id`, the divergences between files with every divergent file named, the partition columns and whether they are also inside the files, per-column statistics summed from the footers, row groups, compression, encoding and writer; `--sample N` reads what the footer does not hold, and without it no data page is read), over `probelib.py`: DNS, TCP and internet results are readings, never failed calls, and a failed call leaves `report.last_reason` for the check that interprets it; `duckdb_proxy` splits the proxy address from the credentials for every DuckDB session (`prepare_offline.sh` uses it too) and `hide_credentials` keeps the embedded password out of a report meant to be pasted into the conversation; the probes import `sagemaker-studio` from the system interpreter (see the unpinned-packages lesson); `probes/README.md` fixes a probe's structure, and `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
 | `docs/readings/` | The probe reports that back a statement in `docs/POC.md`, kept as they came out, indexed by `docs/readings/README.md`: the two target-environment Redshift readings of 2026-09-20 (20:37 and 20:43). `probes/output/` stays out of git. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
@@ -321,8 +321,7 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   temporary credential, turned every table name into three parts, added `COMPUPDATE OFF` to every
   `COPY`, and moved the Data API out of the library. Keep such a script verbatim in `examples/`,
   with its literal values, and make the probe and the suite repeat its calls instead of a variant
-  nobody executed. The script also names what it does not answer: whether the producer granted
-  write, and whether `UNLOAD` works there, went to `docs/OPEN_QUESTIONS.md`.
+  nobody executed. What the script does not answer goes to `docs/OPEN_QUESTIONS.md`.
 - **Each tool in a script reads the proxy its own way** (2026-09-20). `prepare_offline.sh` got
   through `uv sync` and died on the DuckDB `INSTALL` with the same `HTTP_PROXY`: `uv` accepts
   `http://user:password@host:port`, DuckDB refuses it and reads only the uppercase spelling.
@@ -347,6 +346,11 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   another order went through `RecordBatchReader.from_batches(schema, ...)` and DuckDB's `arrow_scan`
   without an error and came out with the bytes swapped. Cast every batch to the declared schema
   before it enters a reader; a probe that feeds a deliberately wrong batch is the check.
+- **A session-state change inside a probe splits its readings** (2026-09-20). `USE` landed mid-section in
+  the Redshift probe, and `has_database_privilege(current_database())` after it silently read the
+  datashare database instead of the connection's: nothing failed, the value meant something else. Put every reading of the pre-change state before
+  the change, confirm the change with a query (`current_database()`), and run after it only what
+  needs the new state.
 
 ## What the documents establish
 
@@ -576,6 +580,11 @@ Each fact is detailed in the file named at the end of its line.
   `GetStatementResult`), one-item dicts per cell, `DECIMAL` and timestamps as text, 500 MB per
   result, 24 h retention, 200 KB per statement, a session that dies with the statement unless
   `SessionKeepAliveSeconds` keeps it. It stays out of the library (user decision of 2026-09-20).
+  `redshift_connector.connect(timeout=)` is the socket timeout for connecting and reading, applied
+  once: 10 s killed `sys_load_error_detail` in the target and the socket never served again; the
+  probe uses 30 s over system views, the suite and the library connect without one because a `COPY`
+  outlives any read timeout; `ssl=True` is the default. The driver's internal IAM (`iam=True`) and
+  `GetClusterCredentials` are out: nobody ran them in the target, which has no cluster.
   `examples/`, `docs/redshift.md`, `docs/POC.md`
 - The project schema `sbx_aco_decon` lives in the datashare database `datalake_rw_shared` (user
   decision of 2026-09-20), and writing into it works, proved that day by
@@ -598,9 +607,9 @@ Each fact is detailed in the file named at the end of its line.
   the Data API work without internet; version `1.0.436211`; `datalake_rw_shared` is `shared` from the
   datashare `controladoria_rw_datashare` (producer account 390403891846) with isolation `UNKNOWN`,
   and `sbx_aco_decon` exists only there. The namespace has no IAM role, default or attached, so
-  `COPY` and `UNLOAD` over S3 cannot run until an administrator attaches one — the project's one
-  blocker. `has_database_privilege(dev, CREATE)` is false and `TEMP` true, so the execution sandbox
-  is either a temporary table or the datashare itself. `stv_slices` and `stl_load_errors` are denied
+  `IAM_ROLE` is unusable and `COPY`/`UNLOAD` carry the caller's credentials.
+  `has_database_privilege(dev, CREATE)` is false and `TEMP` true, so the execution sandbox is either
+  a temporary table or the datashare itself. `stv_slices` and `stl_load_errors` are denied
   to a regular user (42501) while `sys_load_error_detail` answers; `pg_settings` on serverless lists
   neither `timezone` nor `enable_case_sensitive_identifier`, which `SHOW` returns. `docs/POC.md`,
   `docs/OPEN_QUESTIONS.md`
@@ -677,7 +686,7 @@ problematic; the dev base's orphans are ignored and the test base is consistent,
 `meta_update_status` are ignored; `schema.json` at the source root is the previous library's schema
 control in SQLAlchemy-reflection form, not Arrow. On 2026-09-20 the user also fixed the Redshift
 target: the library's tables live in `datalake_rw_shared.sbx_aco_decon`, the datashare database, so
-every name has three parts and the datashare write rules apply; and the Data API is not a connection
+the connection runs `USE` there and the datashare write rules apply; and the Data API is not a connection
 path of the library, only a probe check, a suite test and an example.
 
 ## Naming decisions applied to the documents
@@ -716,10 +725,10 @@ stage 2 (`serialize_db.sql`) on local folders. The source base was read on 2026-
 `data_str` and `data_base_str`, `chunk_<n>` files, `INT96` timestamps), and the premises of
 `docs/PLAN.md` the user's decisions of that day; the plan's unit is the partition
 (`publish_partition`, `partitions=`, `Execution(partition=...)`), never the month. The Redshift
-connectivity was fixed on 2026-09-20 from two scripts the user ran in the target (`examples/`): the
+connectivity was fixed on 2026-09-20 from the scripts the user ran in the target (`examples/`): the
 probe, `tests/conftest.py` and the Redshift suite follow them, and `docs/PLAN-STAGE-5.md` and
-`docs/PLAN-STAGE-8.md` carry the consequences. Running `probes/redshift.py` in the target is what
-closes the datashare questions of `docs/OPEN_QUESTIONS.md`.
+`docs/PLAN-STAGE-8.md` carry the consequences. The next `probes/redshift.py` run in the target checks
+the `USE` (`RS-19`) and what `has_schema_privilege` answers after it (`docs/OPEN_QUESTIONS.md`).
 
 The client boundary was revised on 2026-09-20 to streaming `pa.RecordBatch` (`stream` with a
 prefetch thread on its own cursor, `loader` with a write-behind thread inserting batch by batch in
@@ -749,10 +758,9 @@ over `source_db_projetado.py`, the fictitious source base of 2026-09-20), `tests
 `tests/test_probes.py` and `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
 both storages, the study suites (commented step by step as learning material, listed per stage in
 `docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
-last-run counts (110 pass and 60 skip with no variable, 148 and 22 with the local root, 2026-09-20):
+last-run counts (112 pass and 60 skip with no variable, 150 and 22 with the local root, 2026-09-20):
 the `tests/` row of the repository table in `docs/CURRENT_STATE.md` and `README.md`. The 11 s
-listing failure behind a silent proxy is in `README.md`, the `autoinstall_known_extensions` rule in the
-lessons above; `test_delta_rs_credential_chain` runs five variants.
+listing failure behind a silent proxy is in `README.md`; `test_delta_rs_credential_chain` runs five variants.
 
 The suites exist so the same proof of concept runs in the target, without internet; the local suite
 validates the prepared folder there (verified 2026-09-19: extracted at another path with dead proxies
