@@ -3,13 +3,20 @@
 Cada teste exercita uma parte: a criação idempotente a partir de um esquema, os modos de escrita e a
 substituição por predicado, a evolução de esquema e o ``update`` com predicado, a viagem no tempo e
 o ``restore``, as ações do log e o registro de um arquivo gravado por outro programa, o ``vacuum``
-com ``keep_versions``, a leitura por dataset Arrow e o conteúdo do log. Os comportamentos estão
+com ``keep_versions``, a leitura por dataset Arrow e o conteúdo do log. Os testes seguintes cobrem
+as primitivas das etapas 3, 4, 7 e 9 de ``docs/PLAN.md`` sobre o DuckDB: a view presa a uma versão e
+o leitor Arrow que alimenta o ``write_deltalake``, a reescrita da tabela pelo ``COPY`` particionado
+registrada num commit com estatísticas, a diferença de versões, a compactação e o checkpoint, a
+exportação por cópia dos arquivos e a carga inicial de pastas Parquet. Os comportamentos estão
 descritos em ``docs/delta.md``; aqui eles viram asserções.
 """
 
 from __future__ import annotations
 
+import decimal
 import json
+import re
+import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -19,7 +26,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
-from deltalake import CommitProperties, DeltaTable, write_deltalake
+from deltalake import CommitProperties, DeltaTable, Schema, write_deltalake
 from deltalake.exceptions import DeltaError, SchemaMismatchError
 from deltalake.schema import Field, PrimitiveType
 from deltalake.transaction import AddAction
@@ -272,3 +279,216 @@ def test_log_files(folder: Callable[[str], str], two_months: pa.Table) -> None:
     assert sorted(add["partitionValues"]["mes"] for add in adds) == list(MONTHS)
     assert all(json.loads(add["stats"])["numRecords"] == 500 for add in adds)
     assert all(not add["path"].startswith("/") for add in adds)
+
+
+def test_is_deltatable_and_drop_column_not_null(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """``is_deltatable`` distingue pasta vazia de tabela; ``drop_column_not_null`` relaxa a nulidade só nos metadados."""
+    uri = folder("nullability")
+    assert not DeltaTable.is_deltatable(uri)
+
+    strict = pa.schema([pa.field(field.name, field.type, nullable=field.name == "descricao") for field in two_months.schema])
+    DeltaTable.create(uri, strict, partition_by=["mes"])
+    write_deltalake(uri, two_months, mode="append")
+    assert DeltaTable.is_deltatable(uri)
+
+    # A coluna deixa de ser obrigatória num commit de metadados; os dados não são tocados.
+    table = DeltaTable(uri)
+    table.alter.drop_column_not_null("id_cliente")
+
+    changed = DeltaTable(uri)
+    assert pa.schema(changed.schema()).field("id_cliente").nullable
+    assert changed.version() == 2 and len(changed.file_uris()) == 2
+    assert changed.history()[0]["operation"] in ("CHANGE COLUMN", "DROP COLUMN NOT NULL", "UPDATE COLUMN NULLABILITY")
+
+
+def test_duckdb_view_pins_version_and_reader_feeds_write(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """Uma view sobre ``delta_scan(uri, version := v)`` lê sempre ``v``; o leitor Arrow do DuckDB entra no ``write_deltalake``."""
+    source = folder("source")
+    write_deltalake(source, two_months, mode="append", partition_by=["mes"])
+
+    con = connect_duckdb(("delta",))
+    con.execute(f"CREATE VIEW pinned AS SELECT * FROM delta_scan('{source}', version := 0)")
+    con.execute(f"CREATE VIEW current AS SELECT * FROM delta_scan('{source}')")
+
+    # Um commit novo não muda a view presa à versão 0; a view sem versão relê o log a cada consulta.
+    write_deltalake(source, two_months.slice(0, 10), mode="append")
+    assert con.execute("SELECT count(*) FROM pinned").fetchone()[0] == 1000
+    assert con.execute("SELECT count(*) FROM current").fetchone()[0] == 1010
+
+    # export_month: o resultado de uma consulta sai em lotes e substitui o mês na tabela publicada.
+    target = folder("target")
+    write_deltalake(target, two_months, mode="append", partition_by=["mes"])
+    reader = con.execute(f"SELECT * FROM pinned WHERE mes = '{MONTHS[1]}'").to_arrow_reader()
+    write_deltalake(target, reader, mode="overwrite", predicate=f"mes = '{MONTHS[1]}'")
+
+    published = DeltaTable(target)
+    assert published.version() == 1 and published.to_pyarrow_table().num_rows == 1000
+    assert MONTHS[1] in published.history()[0]["operationParameters"]["predicate"]
+    con.close()
+
+
+def add_actions_from_return_stats(rows: list[dict], table_uri: str, integer_columns: tuple[str, ...], decimal_columns: tuple[str, ...]) -> list[AddAction]:
+    """Uma ``AddAction`` por linha de ``RETURN_STATS``: caminho relativo, tamanho, partição e estatísticas tipadas."""
+    actions = []
+    for row in rows:
+        statistics = {name.strip('"'): values for name, values in row["column_statistics"].items()}
+        minimum, maximum, nulls = {}, {}, {}
+        for column, values in statistics.items():
+            if column in integer_columns:
+                minimum[column], maximum[column] = int(values["min"]), int(values["max"])
+            elif column in decimal_columns:
+                minimum[column], maximum[column] = float(values["min"]), float(values["max"])
+            else:
+                continue
+            nulls[column] = int(values["null_count"])
+
+        actions.append(
+            AddAction(
+                path=row["filename"].removeprefix(f"{table_uri}/"),
+                size=row["file_size_bytes"],
+                partition_values=dict(row["partition_keys"]),
+                modification_time=int(time.time() * 1000),
+                data_change=True,
+                stats=json.dumps({"numRecords": row["count"], "minValues": minimum, "maxValues": maximum, "nullCount": nulls}),
+            )
+        )
+
+    return actions
+
+
+def test_rewrite_by_duckdb_copy_registered_with_stats(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """A tabela inteira reescrita pelo ``COPY`` particionado do DuckDB e registrada num commit ``overwrite`` com estatísticas."""
+    uri = folder("rewrite")
+    write_deltalake(uri, two_months, mode="append", partition_by=["mes"])
+
+    # O DuckDB grava os arquivos novos dentro da pasta da tabela, um por partição, com nome próprio e as estatísticas.
+    con = connect_duckdb(("delta",))
+    cursor = con.execute(
+        f"COPY (SELECT id_operacao, mes, data_ref, id_cliente, valor, descricao AS descricao_nova FROM delta_scan('{uri}')) "
+        f"TO '{uri}' (FORMAT parquet, PARTITION_BY (mes), APPEND true, FILENAME_PATTERN 'rewrite_{{uuid}}', RETURN_STATS)"
+    )
+    columns = [column[0] for column in cursor.description]
+    rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    assert sorted(row["partition_keys"]["mes"] for row in rows) == list(MONTHS)
+
+    # Um único commit troca todos os arquivos e o esquema: a coluna renomeada entra, a antiga sai.
+    actions = add_actions_from_return_stats(rows, uri, ("id_operacao", "id_cliente"), ("valor",))
+    new_schema = pa.schema([field if field.name != "descricao" else pa.field("descricao_nova", pa.string()) for field in two_months.schema])
+    DeltaTable(uri).create_write_transaction(actions, mode="overwrite", schema=new_schema, partition_by=["mes"])
+
+    rewritten = DeltaTable(uri)
+    assert rewritten.version() == 1 and len(rewritten.file_uris()) == 2
+    assert [field.name for field in rewritten.schema().fields][-1] == "descricao_nova"
+    assert rewritten.to_pyarrow_table().num_rows == 1000
+
+    # As estatísticas registradas deixam o DuckDB pular os arquivos: nenhum id acima do máximo.
+    plan = con.execute(f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}') WHERE id_operacao > {ROWS}").fetchone()[1]
+    scanned = re.search(r"Scanning Files: (\d+)/(\d+)", plan)
+    assert scanned and scanned.group(1) == "0"
+    con.close()
+
+
+def months_between_versions(uri: str, published: int, current: int) -> set[str]:
+    """Os meses com arquivos que a versão ``current`` tem e a ``published`` não tinha: o que a publicação recarrega."""
+    def paths(version: int) -> set[str]:
+        return set(DeltaTable(uri, version=version).get_add_actions().column("path").to_pylist())
+
+    return {path.split("/")[0].removeprefix("mes=") for path in paths(current) - paths(published)}
+
+
+def test_version_diff(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """A diferença entre duas versões, pelas ações ``add``, aponta os meses a recarregar no Redshift."""
+    uri = folder("diff")
+    february = two_months.filter(pc.field("mes") == MONTHS[1])
+
+    write_deltalake(uri, two_months, mode="append", partition_by=["mes"])  # versão 0
+    write_deltalake(uri, february, mode="overwrite", predicate=f"mes = '{MONTHS[1]}'")  # versão 1
+    write_deltalake(uri, two_months.slice(0, 10), mode="append")  # versão 2: dez linhas de janeiro
+
+    assert months_between_versions(uri, 0, 1) == {MONTHS[1]}
+    assert months_between_versions(uri, 1, 2) == {MONTHS[0]}
+    assert months_between_versions(uri, 0, 2) == set(MONTHS)
+    assert months_between_versions(uri, 2, 2) == set()
+
+
+def test_compact_and_checkpoint(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """``optimize.compact`` junta os arquivos pequenos de um mês; ``create_checkpoint`` grava o resumo do log."""
+    uri = folder("compact")
+    write_deltalake(uri, two_months, mode="append", partition_by=["mes"])
+    for _ in range(4):
+        write_deltalake(uri, two_months.slice(600, 5), mode="append")  # cinco linhas de fevereiro por commit
+
+    table = DeltaTable(uri)
+    assert len(table.file_uris()) == 6
+
+    # A compactação é um commit que remove os arquivos pequenos da partição e acrescenta um só.
+    metrics = table.optimize.compact(partition_filters=[("mes", "=", MONTHS[1])])
+    assert (metrics["numFilesAdded"], metrics["numFilesRemoved"]) == (1, 5)
+    compacted = DeltaTable(uri)
+    assert len(compacted.file_uris()) == 2 and compacted.to_pyarrow_table().num_rows == 1020
+
+    # O checkpoint materializa o estado em Parquet e aponta para ele em _last_checkpoint.
+    compacted.create_checkpoint()
+    log = Path(uri) / "_delta_log"
+    last = json.loads((log / "_last_checkpoint").read_text(encoding="utf-8"))
+    assert last["version"] == compacted.version()
+    assert (log / f"{last['version']:020d}.checkpoint.parquet").exists()
+    assert DeltaTable(uri, version=0).to_pyarrow_table().num_rows == 1000  # o log anterior continua legível
+
+
+def test_export_snapshot_by_copying_files(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """``export_snapshot(mode="copy")``: os arquivos que o log lista, copiados no layout ``mes=.../``, sem ler dados."""
+    uri = folder("export")
+    february = two_months.filter(pc.field("mes") == MONTHS[1])
+    write_deltalake(uri, two_months, mode="append", partition_by=["mes"])
+    write_deltalake(uri, february, mode="overwrite", predicate=f"mes = '{MONTHS[1]}'")
+
+    # A pasta tem três arquivos de dados; o snapshot atual lista dois.
+    on_disk = [path for path in Path(uri).rglob("*.parquet") if "_delta_log" not in path.parts]
+    listed = DeltaTable(uri).get_add_actions().column("path").to_pylist()
+    assert len(on_disk) == 3 and len(listed) == 2
+
+    destination = Path(folder("exported"))
+    for relative in listed:
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(Path(uri) / relative, target)
+
+    con = connect_duckdb(("delta",))
+    count = con.execute(f"SELECT count(*) FROM read_parquet('{destination}/*/*.parquet', hive_partitioning = true)").fetchone()[0]
+    assert count == 1000
+    con.close()
+
+
+def test_initial_load_from_parquet_folders(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """A carga inicial: cada pasta ``mes=.../`` de Parquet entra por mês, com o cast para o contrato, e recomeça de onde parou."""
+    # A origem tem valor em DOUBLE, como os modelos atuais; o contrato pede DECIMAL(18, 2).
+    source_table = two_months.set_column(two_months.schema.get_field_index("valor"), "valor", two_months.column("valor").cast(pa.float64()))
+    source = Path(folder("source_parquet"))
+    pq.write_to_dataset(source_table, source, partition_cols=["mes"])
+
+    uri = folder("loaded")
+    Schema.from_arrow(two_months.schema)  # o esquema Delta derivado do Arrow, o mesmo que create_table usa
+    DeltaTable.create(uri, two_months.schema, partition_by=["mes"])
+    con = connect_duckdb(("delta",))
+
+    def load_missing_months() -> list[str]:
+        loaded = set(DeltaTable(uri).get_add_actions(flatten=True).column("partition.mes").to_pylist())
+        pending = [month for month in MONTHS if month not in loaded]
+        for month in pending:
+            reader = con.execute(
+                f"SELECT id_operacao, mes, data_ref, id_cliente, valor::DECIMAL(18, 2) AS valor, descricao "
+                f"FROM read_parquet('{source}/mes={month}/*.parquet', hive_partitioning = true)"
+            ).to_arrow_reader()
+            write_deltalake(uri, reader, mode="overwrite", predicate=f"mes = '{month}'")
+        return pending
+
+    assert load_missing_months() == list(MONTHS)
+    assert load_missing_months() == []  # a segunda passagem não tem o que carregar
+
+    # O relatório: contagem e soma por mês iguais entre a origem e o Delta.
+    report = f"SELECT mes, count(*), sum(valor::DECIMAL(18, 2)) FROM read_parquet('{source}/*/*.parquet', hive_partitioning = true) GROUP BY mes ORDER BY mes"
+    loaded = f"SELECT mes, count(*), sum(valor) FROM delta_scan('{uri}') GROUP BY mes ORDER BY mes"
+    assert con.execute(report).fetchall() == con.execute(loaded).fetchall()
+    assert pa.schema(DeltaTable(uri).schema()).field("valor").type == pa.decimal128(18, 2)
+    con.close()

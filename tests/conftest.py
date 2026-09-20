@@ -87,6 +87,28 @@ SKIP_REASONS = {
     "redshift": "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA não informada: a suíte Redshift só cria tabelas no esquema que ela indica",
 }
 
+# Como autorizar cada suíte; impresso no fim da sessão quando ela foi pulada. Não é um erro: sem a
+# variável a suíte não tem onde escrever, e o usuário decide se e onde ela escreve.
+USAGE = {
+    "local": (
+        "SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest -m local",
+        "grava só em serialize-db-poc/<id>/ sob essa pasta e a apaga no fim; nenhum acesso à AWS",
+    ),
+    "s3": (
+        "SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest -m s3",
+        "grava só em serialize-db-poc/<id>/ sob o prefixo e o apaga no fim; precisa de credenciais que o boto3 "
+        "encontre e das extensões httpfs, delta e aws do DuckDB",
+    ),
+    "redshift": (
+        "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=esquema SERIALIZE_DB_REDSHIFT_DATABASE=banco SERIALIZE_DB_REDSHIFT_HOST=host "
+        "SERIALIZE_DB_REDSHIFT_USER=usuario SERIALIZE_DB_REDSHIFT_PASSWORD=senha SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo "
+        "uv run pytest -m redshift",
+        "cria só tabelas serialize_db_poc_<id>_* no esquema e as apaga no fim; SERIALIZE_DB_REDSHIFT_WORKGROUP ou "
+        "_CLUSTER no lugar de host, usuário e senha para autenticação por IAM; SERIALIZE_DB_REDSHIFT_IAM_ROLE para o "
+        "COPY e o UNLOAD (sem ela, IAM_ROLE default)",
+    ),
+}
+
 
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -399,14 +421,30 @@ def redshift_session() -> Iterator[RedshiftSession]:
 
 
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
-    """Imprime o relatório da sessão e o grava em JSON quando ``SERIALIZE_DB_TEST_REPORT`` aponta um arquivo."""
+    """Imprime o relatório da sessão, as instruções das suítes puladas e grava o JSON de ``SERIALIZE_DB_TEST_REPORT``."""
     if not REPORT:
         return
 
-    terminalreporter.section("relatório da prova de conceito")
-    width = max(len(key) for key in REPORT)
-    for key, value in REPORT.items():
-        terminalreporter.write_line(f"{key.ljust(width)}  {value}")
+    # As medições e os fatos coletados; as chaves ``<suíte>.skipped`` ficam fora, porque a seção seguinte as explica.
+    measurements = {key: value for key, value in REPORT.items() if not key.endswith(".skipped")}
+    if measurements:
+        terminalreporter.section("relatório da prova de conceito")
+        width = max(len(key) for key in measurements)
+        for key, value in measurements.items():
+            terminalreporter.write_line(f"{key.ljust(width)}  {value}")
+
+    # Instruções, não erro: cada suíte pulada mostra a variável que a autoriza e o que ela grava.
+    skipped = [marker for marker in USAGE if f"{marker}.skipped" in REPORT]
+    if skipped:
+        terminalreporter.section("suítes não executadas: como autorizá-las", sep="-")
+        terminalreporter.write_line("Cada suíte grava só onde a sua variável de ambiente autoriza; sem a variável ela é pulada.")
+        for marker in skipped:
+            command, note = USAGE[marker]
+            terminalreporter.write_line(f"  {marker}:")
+            terminalreporter.write_line(f"    {command}")
+            terminalreporter.write_line(f"    {note}.")
+        terminalreporter.write_line("  Na pasta preparada sem internet, `.venv/bin/python -m pytest` no lugar de `uv run pytest`;")
+        terminalreporter.write_line("  as variáveis estão descritas em README.md, seção Testes.")
 
     path = os.environ.get("SERIALIZE_DB_TEST_REPORT")
     if path:

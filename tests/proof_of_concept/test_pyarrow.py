@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 import duckdb
+import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
@@ -157,3 +158,28 @@ def test_hive_partitioned_dataset(local_location: LocalLocation) -> None:
     dataset = ds.dataset(root, partitioning="hive")
     assert dataset.schema.field("mes").type == pa.string()
     assert dataset.to_table(filter=ds.field("mes") == MONTHS[1]).num_rows == 1000
+
+
+@pytest.mark.local
+def test_parquet_streaming_read_filters_and_pandas(local_location: LocalLocation) -> None:
+    """``iter_batches`` lê por lotes sem carregar o arquivo; ``filters`` e ``columns`` reduzem a leitura; pandas recebe tipos Arrow."""
+    folder = Path(local_location.child("pyarrow"))
+    folder.mkdir(exist_ok=True)
+    path = folder / "leitura.parquet"
+
+    two_months = sample_table().slice(ROWS // 2 - 1000, 2000)
+    pq.write_table(two_months, path, row_group_size=500)
+
+    # Cada lote é um RecordBatch; o arquivo inteiro nunca fica na memória de uma vez.
+    parquet = pq.ParquetFile(path)
+    assert parquet.metadata.num_row_groups == 4
+    assert [batch.num_rows for batch in parquet.iter_batches(batch_size=800)] == [800, 800, 400]
+
+    # filters é empurrado aos row groups pelas estatísticas; columns lê só as colunas pedidas.
+    february = pq.read_table(path, filters=[("mes", "=", MONTHS[1])], columns=["id_operacao", "valor"])
+    assert february.num_rows == 1000 and february.column_names == ["id_operacao", "valor"]
+
+    # A conversão para pandas com types_mapper preserva decimal e date como tipos Arrow do pandas.
+    frame = february.to_pandas(types_mapper=pd.ArrowDtype)
+    assert str(frame["valor"].dtype) == "decimal128(18, 2)[pyarrow]"
+    assert frame["valor"].iloc[0] == two_months.column("valor")[1000].as_py()

@@ -233,3 +233,33 @@ def test_database_file_and_temp_directory(local_location: LocalLocation) -> None
     again = duckdb.connect(str(database), read_only=True)
     assert again.execute("SELECT count(*) FROM trabalho").fetchone()[0] == 1000
     again.close()
+
+
+def test_audit_queries(con: duckdb.DuckDBPyConnection) -> None:
+    """As consultas da auditoria acham cada defeito de um mês: chave repetida, nulo, ``mes`` errado, JSON inválido, texto longo."""
+    con.execute("CREATE TABLE lancamentos (id BIGINT, data_ref DATE, mes VARCHAR, valor DECIMAL(18,2), meta VARCHAR, descricao VARCHAR)")
+    con.execute(
+        """
+        INSERT INTO lancamentos VALUES
+            (1, '2026-08-01', '2026-08', 10.00, '{"ok": true}', 'a'),
+            (1, '2026-08-02', '2026-08', 20.00, NULL, 'b'),
+            (2, '2026-08-03', '2026-08', NULL, '{invalido', 'c'),
+            (3, '2026-07-31', '2026-08', 5.00, NULL, repeat('x', 201))
+        """
+    )
+
+    duplicates = con.execute("SELECT id, count(*) FROM lancamentos GROUP BY id HAVING count(*) > 1").fetchall()
+    assert duplicates == [(1, 2)]
+
+    # count(*) FILTER conta os defeitos numa passagem só; o total de controle acompanha.
+    row = con.execute(
+        """
+        SELECT count(*) FILTER (WHERE valor IS NULL),
+               count(*) FILTER (WHERE mes <> strftime(data_ref, '%Y-%m')),
+               count(*) FILTER (WHERE meta IS NOT NULL AND NOT json_valid(meta)),
+               count(*) FILTER (WHERE length(descricao) > 200),
+               sum(valor)
+        FROM lancamentos
+        """
+    ).fetchone()
+    assert row == (1, 1, 1, 1, decimal.Decimal("35.00"))

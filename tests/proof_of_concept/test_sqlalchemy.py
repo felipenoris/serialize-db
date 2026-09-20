@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import difflib
+import json
 import re
 import warnings
 from collections.abc import Iterator
@@ -24,6 +26,7 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 import sqlalchemy as sa
+from deltalake import Schema as DeltaSchema
 from sqlalchemy.exc import SAWarning
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -395,3 +398,99 @@ def test_redshift_dialect_compiles_dml() -> None:
 
     delete = sa.delete(operations).where(operations.c.id_cliente == clients.c.id_cliente)
     assert "USING cad_clientes" in normalized(str(delete.compile(dialect=dialect)))
+
+
+ARROW_TYPES: dict[type, pa.DataType] = {
+    sa.SmallInteger: pa.int16(),
+    sa.Integer: pa.int32(),
+    sa.BigInteger: pa.int64(),
+    sa.Boolean: pa.bool_(),
+    sa.Double: pa.float64(),
+    sa.Date: pa.date32(),
+    sa.String: pa.string(),
+    sa.Text: pa.string(),
+    sa.Uuid: pa.string(),
+    sa.JSON: pa.string(),
+}
+
+
+def arrow_type(column: sa.Column) -> pa.DataType:
+    """O tipo Arrow de uma coluna do contrato; ``Numeric`` e ``DateTime`` carregam parâmetros, os demais vêm da tabela."""
+    kind = column.type
+    if isinstance(kind, sa.Numeric) and not isinstance(kind, sa.Float):
+        return pa.decimal128(kind.precision or 18, kind.scale or 0)
+    if isinstance(kind, sa.DateTime):
+        return pa.timestamp("us", tz="UTC" if kind.timezone else None)
+
+    # A ordem importa: BigInteger e SmallInteger derivam de Integer, e Text de String.
+    for sa_type in (sa.BigInteger, sa.SmallInteger, sa.Integer, sa.Boolean, sa.Double, sa.Date, sa.Text, sa.Uuid, sa.JSON, sa.String):
+        if isinstance(kind, sa_type):
+            return ARROW_TYPES[sa_type]
+
+    raise TypeError(f"{column.name}: tipo fora do contrato: {kind!r}")
+
+
+def arrow_schema(table: sa.Table) -> pa.Schema:
+    """O esquema Arrow do ``Table``: tipos do contrato, nulidade, comentário e ``PARQUET:field_id`` por campo."""
+    fields = []
+    for index, column in enumerate(table.columns, start=1):
+        metadata = {"PARQUET:field_id": str(index)}
+        if column.comment:
+            metadata["comment"] = column.comment
+        fields.append(pa.field(column.name, arrow_type(column), nullable=column.nullable, metadata=metadata))
+
+    return pa.schema(fields, metadata={"serialize_db_table": table.name})
+
+
+def test_arrow_and_delta_schema_from_table() -> None:
+    """Do ``Table`` saem o esquema Arrow e, dele, o esquema Delta em JSON: a etapa 1 sem gravar nada."""
+    schema = arrow_schema(Operacao.__table__)
+
+    assert schema.field("id_operacao").type == pa.int64() and not schema.field("id_operacao").nullable
+    assert schema.field("valor").type == pa.decimal128(18, 2)
+    assert schema.field("data_ref").type == pa.date32()
+    assert schema.field("descricao").nullable and schema.field("meta").type == pa.string()
+    assert schema.field("id_cliente").metadata[b"comment"] == b"Chave do cliente"
+    assert schema.field("mes").metadata[b"PARQUET:field_id"] == b"7"
+
+    # O delta-rs deriva o esquema Delta do Arrow; to_json é o conteúdo de schema/<tabela>.delta.json.
+    delta = DeltaSchema.from_arrow(schema)
+    fields = {field["name"]: field for field in json.loads(delta.to_json())["fields"]}
+    assert fields["id_operacao"]["type"] == "long" and fields["valor"]["type"] == "decimal(18,2)"
+    assert fields["data_ref"]["type"] == "date" and fields["meta"]["type"] == "string"
+    assert fields["id_cliente"]["metadata"]["comment"] == "Chave do cliente"
+    assert fields["id_operacao"]["nullable"] is False
+
+    # Um DateTime sem fuso vira timestamp_ntz; com fuso, timestamp.
+    stamped = sa.Table("carimbos", sa.MetaData(), sa.Column("local", sa.DateTime), sa.Column("utc", sa.DateTime(timezone=True)))
+    kinds = {field["name"]: field["type"] for field in json.loads(DeltaSchema.from_arrow(arrow_schema(stamped)).to_json())["fields"]}
+    assert kinds == {"local": "timestamp_ntz", "utc": "timestamp"}
+
+
+def test_sandbox_copy_of_table_and_schema_files_diff() -> None:
+    """``to_metadata`` dá a cópia com prefixo e esquema para o sandbox; os arquivos gerados são comparados por ``difflib``."""
+    table = Operacao.__table__
+
+    # A cópia renomeada e qualificada é o que o motor Redshift cria por execução.
+    sandbox = table.to_metadata(sa.MetaData(schema="projeto"), name="exec_42_cad_operacoes")
+    ddl = normalized(str(CreateTable(sandbox).compile(dialect=DIALECTS["redshift"])))
+    assert ddl.startswith("CREATE TABLE projeto.exec_42_cad_operacoes (")
+    assert sandbox.c.valor.type.scale == 2 and sandbox.info == table.info
+
+    # schema/<tabela>.<dialeto>.sql versionado contra o regenerado depois de uma coluna nova.
+    def schema_files(source: sa.Table) -> dict[str, str]:
+        return {
+            f"{source.name}.duckdb.sql": str(CreateTable(source).compile(dialect=DIALECTS["duckdb"])),
+            f"{source.name}.redshift.sql": str(CreateTable(source).compile(dialect=DIALECTS["redshift"])),
+            f"{source.name}.delta.json": DeltaSchema.from_arrow(arrow_schema(source)).to_json(),
+        }
+
+    versioned = schema_files(table)
+    evolved = table.to_metadata(sa.MetaData())
+    evolved.append_column(sa.Column("canal", sa.String(20), comment="Origem do lançamento"))
+    regenerated = schema_files(evolved)
+
+    assert set(versioned) == set(regenerated)
+    diff = list(difflib.unified_diff(versioned["cad_operacoes.duckdb.sql"].splitlines(), regenerated["cad_operacoes.duckdb.sql"].splitlines(), lineterm=""))
+    assert any(line.startswith("+") and "canal VARCHAR(20)" in line for line in diff)
+    assert "canal" in regenerated["cad_operacoes.delta.json"] and "canal" not in versioned["cad_operacoes.delta.json"]
