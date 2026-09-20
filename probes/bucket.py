@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probelib import Report, answered, describe_error, dns_rows, pretty, region, short_config, tabulate  # noqa: E402
+from probelib import Report, answered, describe_error, dns_rows, error_code, pretty, region, short_config, tabulate  # noqa: E402
 
 MAX_PAGES = 20  # 20.000 objetos
 MAX_SECONDS = 30
@@ -59,7 +59,7 @@ def bucket_settings(report: Report, client, bucket: str, resolved: str | None) -
         render=lambda found: pretty({key: value for key, value in found.get("ResponseMetadata", {}).get("HTTPHeaders", {}).items() if key in ("x-amz-bucket-region", "x-amz-bucket-arn", "x-amz-access-point-alias")}),
     )
     if head is None:
-        report.fail("BK-1", "bucket acessível", f"{bucket}: head_bucket falhou; ver a seção final")
+        report.fail("BK-1", "bucket acessível", f"{bucket}: {report.last_reason}; ver a seção final")
     else:
         report.ok("BK-1", "bucket acessível", bucket)
         bucket_region = head.get("ResponseMetadata", {}).get("HTTPHeaders", {}).get("x-amz-bucket-region")
@@ -83,7 +83,26 @@ def bucket_settings(report: Report, client, bucket: str, resolved: str | None) -
         default = rules[0].get("ApplyServerSideEncryptionByDefault", {}) if rules else {}
         report.note("BK-5", "criptografia padrão", f"{default.get('SSEAlgorithm', 'nenhuma')} {default.get('KMSMasterKeyID', '')}".strip() + f"; bucket key {rules[0].get('BucketKeyEnabled') if rules else '-'}")
         kms_key = default.get("KMSMasterKeyID") or None
-    report.call("s3.get_object_lock_configuration()", lambda: client.get_object_lock_configuration(Bucket=bucket))
+    # Sem Object Lock o serviço responde ObjectLockConfigurationNotFoundError: a ausência é uma leitura, não uma chamada falhada.
+    def object_lock() -> dict:
+        try:
+            return client.get_object_lock_configuration(Bucket=bucket).get("ObjectLockConfiguration", {})
+        except Exception as error:
+            if error_code(error) == "ObjectLockConfigurationNotFoundError":
+                return {}
+            raise
+
+    lock = report.call("s3.get_object_lock_configuration()", object_lock, render=lambda found: pretty(found) if found else "(sem Object Lock)")
+    if lock is None:
+        report.note("BK-12", "Object Lock", f"não lido: {report.last_reason}")
+    elif lock.get("ObjectLockEnabled") != "Enabled":
+        report.note("BK-12", "Object Lock", "desativado")
+    else:
+        retention = lock.get("Rule", {}).get("DefaultRetention", {})
+        amount = retention.get("Days") or retention.get("Years")
+        unit = ("dia" if retention.get("Days") else "ano") + ("" if amount == 1 else "s")
+        period = f"retenção padrão {retention.get('Mode')} por {amount} {unit}" if retention else "sem retenção padrão"
+        report.note("BK-12", "Object Lock", f"ativo, {period}; uma versão retida não pode ser apagada, e o vacuum só deixa marcadores de exclusão até o fim da retenção")
     report.call("s3.get_public_access_block()", lambda: client.get_public_access_block(Bucket=bucket))
     report.call("s3.get_bucket_ownership_controls()", lambda: client.get_bucket_ownership_controls(Bucket=bucket))
     return kms_key, status, versioning_reason
@@ -101,9 +120,9 @@ def versioning_check(report: Report, status: str | None, why: str, sample: dict 
     elif status is not None:
         report.note("BK-4", "versionamento", f"{status}; o Delta não precisa dele")
     elif version_id and version_id != "null":
-        report.note("BK-4", "versionamento", f"API {why}, e a amostra tem VersionId: ativo; {consequence}")
+        report.note("BK-4", "versionamento", f"pela API, {why}; a amostra tem VersionId: ativo; {consequence}")
     else:
-        report.note("BK-4", "versionamento", f"não lido: API {why}, e nenhuma amostra com VersionId")
+        report.note("BK-4", "versionamento", f"não lido: pela API, {why}, e nenhuma amostra com VersionId")
 
 
 def lifecycle(report: Report, client, bucket: str, prefix: str) -> None:
@@ -120,7 +139,7 @@ def lifecycle(report: Report, client, bucket: str, prefix: str) -> None:
 
     found = report.call("s3.get_bucket_lifecycle_configuration()", rules)
     if found is None:
-        report.note("BK-3", "expiração sob a raiz", f"regras não lidas ({report.last_reason}); confirme com quem administra o bucket")
+        report.note("BK-3", "expiração sob a raiz", f"regras não lidas: {report.last_reason}; confirme com quem administra o bucket")
         return
     reaching = []
     for rule in found:
@@ -182,7 +201,7 @@ def inventory(report: Report, client, bucket: str, prefix: str) -> dict[str, Any
 
     proven: dict[str, Any] = {"listed": False, "sample": None}
     if report.call(f"s3.list_objects_v2(Bucket={bucket!r}, Prefix={listing_prefix!r})", scan, render=str) is None:
-        report.fail("BK-6", "listagem sob a raiz", f"falhou ({report.last_reason}); ver a seção final")
+        report.fail("BK-6", "listagem sob a raiz", f"{report.last_reason}; ver a seção final")
         return proven
     proven["listed"] = True
     rows = [["pasta", "objetos", "bytes", "GiB"]]
@@ -295,7 +314,7 @@ def policy_and_uploads(report: Report, client, bucket: str, prefix: str) -> None
 
     policy = report.call("s3.get_bucket_policy()", document, render=lambda found: pretty(found, limit=60) if found else "(o bucket não tem política)")
     if policy is None:
-        report.note("BK-10", "política do bucket", f"não lida ({report.last_reason}); um Deny condicionado a cabeçalho de criptografia ou a TLS valeria para o delta-rs e o DuckDB")
+        report.note("BK-10", "política do bucket", f"não lida: {report.last_reason}; um Deny condicionado a cabeçalho de criptografia ou a TLS valeria para o delta-rs e o DuckDB")
     elif not policy:
         report.note("BK-10", "política do bucket", "nenhuma")
     else:
@@ -313,7 +332,7 @@ def policy_and_uploads(report: Report, client, bucket: str, prefix: str) -> None
         count = len(uploads.get("Uploads", []))
         report.note("BK-11", "uploads multipart incompletos sob a raiz", f"{count}: sobras de escritas interrompidas custam até uma regra AbortIncompleteMultipartUpload" if count else "nenhum")
     else:
-        report.note("BK-11", "uploads multipart incompletos sob a raiz", f"não lidos ({report.last_reason}); as sobras de escritas interrompidas só uma regra AbortIncompleteMultipartUpload limpa")
+        report.note("BK-11", "uploads multipart incompletos sob a raiz", f"não lidos: {report.last_reason}; as sobras de escritas interrompidas só uma regra AbortIncompleteMultipartUpload limpa")
 
 
 def main(argv: list[str]) -> int:

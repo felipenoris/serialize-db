@@ -144,6 +144,7 @@ def apis(report: Report, target: Target) -> None:
     resolved = region()
     config = short_config()
     clusters = report.call("redshift.describe_clusters()", lambda: boto3.client("redshift", region_name=resolved, config=config).describe_clusters(), render=None)
+    clusters_reason = report.last_reason if clusters is None else None
     if clusters is not None:
         rows = [["cluster", "estado", "endpoint", "banco", "versão", "nós", "papel IAM padrão", "papéis IAM", "vpc", "roteamento VPC", "público", "criptografado"]]
         for cluster in clusters.get("Clusters", []):
@@ -156,6 +157,7 @@ def apis(report: Report, target: Target) -> None:
             ])
         report.table(rows if len(rows) > 1 else [["(nenhum cluster provisionado visível)"]])
     workgroups = report.call("redshift-serverless.list_workgroups()", lambda: boto3.client("redshift-serverless", region_name=resolved, config=config).list_workgroups(), render=None)
+    workgroups_reason = report.last_reason if workgroups is None else None
     namespaces: dict[str, dict] = {}
     if workgroups is not None:
         rows = [["workgroup", "estado", "endpoint", "namespace", "capacidade", "público", "roteamento VPC"]]
@@ -169,20 +171,22 @@ def apis(report: Report, target: Target) -> None:
             if namespace:
                 namespaces[name] = namespace
                 report.table([["namespace", "banco", "papel IAM padrão", "papéis IAM", "chave KMS"], [namespace.get("namespaceName"), namespace.get("dbName"), namespace.get("defaultIamRoleArn") or "-", ", ".join(namespace.get("iamRoles", [])) or "-", namespace.get("kmsKeyId") or "-"]])
-    answered = clusters is not None or workgroups is not None
-    if answered:
+    missing = [f"{api}: {why}" for api, why in (("redshift", clusters_reason), ("redshift-serverless", workgroups_reason)) if why]
+    if not missing:
         report.ok("RS-2", "APIs do Redshift", "responderam")
     else:
-        report.note("RS-2", "APIs do Redshift", f"{report.last_reason}: a autenticação por IAM depende delas; ver a seção final")
+        report.note("RS-2", "APIs do Redshift", "; ".join(missing) + "; a autenticação por IAM depende delas; ver a seção final")
     roles = [cluster.get("DefaultIamRoleArn") for cluster in (clusters or {}).get("Clusters", [])] + [namespace.get("defaultIamRoleArn") for namespace in namespaces.values()]
     roles = [role for role in roles if role]
     target.roles = roles
     if roles:
         report.ok("RS-6", "papel IAM padrão para COPY e UNLOAD", ", ".join(roles))
-    elif answered and ((clusters or {}).get("Clusters") or (workgroups or {}).get("workgroups")):
+    elif (clusters or {}).get("Clusters") or (workgroups or {}).get("workgroups"):
         report.fail("RS-6", "papel IAM padrão para COPY e UNLOAD", "nenhum cluster ou workgroup tem papel padrão: o COPY precisará de IAM_ROLE explícito")
+    elif not missing:
+        report.note("RS-6", "papel IAM padrão para COPY e UNLOAD", "nenhum cluster ou workgroup visível: nada a ler")
     else:
-        report.note("RS-6", "papel IAM padrão para COPY e UNLOAD", "não lido")
+        report.note("RS-6", "papel IAM padrão para COPY e UNLOAD", "não lido: " + "; ".join(missing))
     if target.source == "nada":
         names = [cluster.get("ClusterIdentifier") for cluster in (clusters or {}).get("Clusters", [])] + [workgroup.get("workgroupName") for workgroup in (workgroups or {}).get("workgroups", [])]
         if names:
@@ -206,7 +210,7 @@ def network(report: Report, target: Target) -> None:
     names = [f"{service}.{resolved}.amazonaws.com" for service in SERVICES] if resolved else []
     if target.host:
         names.append(target.host)
-    rows, private = dns_rows(names, public="público: só pela internet ou pelo proxy")
+    rows, private = dns_rows(names)
     report.table([["nome", "endereços", "tipo"], *rows])
     # Sem internet, as APIs só respondem por endpoint VPC de interface; a porta 5439 do cluster fica dentro da VPC.
     api_names = names[: len(SERVICES)]
