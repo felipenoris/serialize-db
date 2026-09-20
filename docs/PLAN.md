@@ -127,7 +127,7 @@ O que a sondagem fixa em `cast`:
 | `docs/` | Completa: `parquet.md`, `duckdb.md`, `redshift.md`, `sqlalchemy.md`, `schema.md`, `delta.md`, `guia.md`, `estrategia.md`, `serialize-db.md` e este plano. Todo bloco Python dos documentos rodou com as versões fixadas em `pyproject.toml`; os comandos do Redshift foram compilados, não executados. |
 | `tests/model/` | O modelo de referência: os modelos do pipeline (`model_base_contabil.py`, `model_base_gerencial.py` e `model_db_projetado.py`), movidos do pacote para os testes em 2026-09-20. Ele faz o papel da biblioteca cliente: os testes o entregam à API do pacote como um pipeline entregaria os seus modelos, e o pacote não contém modelo algum. Dois não importam (`from lib_base_contabil import Base` e `from lib_base_gerencial import Base`, módulos que o repositório não tem). Os modelos usam `Double` onde o contrato pede `Numeric(18, 2)`, deixam o `autoincrement` padrão nas chaves inteiras (o `duckdb_engine` emite `SERIAL`, que o DuckDB rejeita), declaram chaves estrangeiras `DEFERRABLE INITIALLY DEFERRED` (o DuckDB descarta a cláusula, o Redshift não a tem) e não têm a coluna `mes`, comentários nem `Table.info["serialize_db"]`. A etapa 1 os corrige. |
 | `src/serialize_db/__init__.py` | Só o `main` de exemplo do `uv init`; o pacote não tem outro módulo. `pyproject.toml` não declara dependência de execução; o grupo `dev` fixa pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, boto3, redshift-connector, SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0 e pandas 3.0.6. |
-| `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda; `test_probes.py` testa as funções puras dos probes com respostas fabricadas, sem rede. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`poc_delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas e da stdlib (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`, `test_concurrency.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Cada etapa abaixo lista as provas de conceito que exercitam as suas APIs. Sem variável, 68 testes passam e 52 são pulados; com a raiz local, 102 passam e 18 são pulados (2026-09-20, macOS). No espaço, em 2026-09-20, uma sessão com a raiz local e a raiz S3 gravou o JSON de `SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, sem a contagem por resultado nem o registro da limpeza, que o relatório passou a ter (`session.`, `local.cleanup`, `s3.cleanup`); a execução das 04:52 UTC, após as correções desta sessão, registrou 104 testes passados e 7 pulados em 35 s e a limpeza das duas raízes; sem variável, 63 passam e 48 são pulados. |
+| `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda; `test_probes.py` testa as funções puras dos probes com respostas fabricadas, sem rede. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`poc_delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas e da stdlib (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`, `test_concurrency.py`, `test_parallel.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Cada etapa abaixo lista as provas de conceito que exercitam as suas APIs. Sem variável, 71 testes passam e 57 são pulados; com a raiz local, 109 passam e 19 são pulados (2026-09-20, macOS). No espaço, em 2026-09-20, uma sessão com a raiz local e a raiz S3 gravou o JSON de `SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, sem a contagem por resultado nem o registro da limpeza, que o relatório passou a ter (`session.`, `local.cleanup`, `s3.cleanup`); a execução das 04:52 UTC, após as correções desta sessão, registrou 104 testes passados e 7 pulados em 35 s e a limpeza das duas raízes; sem variável, 63 passam e 48 são pulados. |
 | `probes/` | Leituras do ambiente, só de leitura: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` e `catalog.py` sobre `probelib.py`, com o resultado em `probes/output/` para colar na conversa. Quatro execuções no laboratório em 2026-09-20, sem Redshift, corrigiram a leitura das conexões, as leituras de rede, o rótulo dos IPs públicos, a montagem de `~/shared` e o Object Lock, acrescentaram por tabela Delta os arquivos, commits e último objeto, as sessões da suíte S3 e as versões não correntes sob a raiz, e a quarta isolou o 403 do delta-rs (`NO_PROXY` vazia) e fez `diagnose_aws.py` rodar o delta-rs como encontrado e como a suíte; o ambiente de destino ainda não foi lido. |
 | `prepare_offline.sh` | Deixa a pasta autossuficiente para o destino sem internet (`.python/`, `.venv/`, `.duckdb/`); verificado extraindo o pacote em outro caminho e rodando a suíte local com proxies mortos. |
 
@@ -253,6 +253,12 @@ por elas (`RS-14`).
   como `VARCHAR(256)`. A etapa 1 emite `VARCHAR(65535)` por uma regra `@compiles(Text, "redshift")`
   em `ddl`, em vez de exigir `String(65535)` nos modelos; a escolha ainda não foi confirmada pelo
   usuário.
+- **Barreira por tabela.** Um cliente que dispara `load` numa thread e esquece o `result()` lê o
+  estado anterior em silêncio, porque o DuckDB não espera. A guarda: `load` marca a tabela em voo,
+  e `query` e `execute` esperam as tabelas em voo que o statement referencia, tiradas por
+  `find_tables` do statement Core ou do sentinela `{prefix}` do texto gerado
+  (`test_parallel.py::test_table_barrier_delays_the_read_until_the_load_lands`). Fica fora das
+  etapas até existir um pipeline paralelo real.
 
 ## Regras que as etapas obedecem
 
@@ -310,6 +316,33 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   uma, e nenhuma primitiva pública recebe ou devolve DataFrame, lista de linhas ou instância ORM;
   os `RecordBatchReader` ficam nas primitivas internas, e a conexão não roda outro comando enquanto
   um leitor é consumido (seção "A troca de dados com o código cliente").
+- A API é síncrona: toda primitiva bloqueia até o efeito estar visível para a chamada seguinte, de
+  qualquer thread, com autocommit por comando nos dois motores, e nenhuma é `async`, porque nenhum
+  dos quatro drivers tem API assíncrona em Python. O paralelismo é do código cliente, com
+  `concurrent.futures`, e `Future.result()` expressa a dependência entre um `load` e a leitura que o
+  segue; a biblioteca não tem scheduler nem grafo de tarefas. O DuckDB, o delta-rs e o PyArrow
+  liberam o GIL no trabalho nativo, então threads bastam, e uma extensão em Rust não entra por
+  paralelismo (`test_concurrency.py`, `serialize-db.md`, seção "Paralelismo").
+- O motor guarda uma conexão por thread: `duckdb` e `redshift_connector` declaram `threadsafety` 1,
+  uma conexão DuckDB compartilhada entrega a uma thread o resultado da outra sem erro, um banco em
+  memória só é compartilhado por `cursor()` da conexão que o abriu, um segundo `connect(arquivo)`
+  com outra configuração ou `read_only` é recusado, e `threads` é da instância. Cada thread recebe
+  um `cursor()` do DuckDB ou uma conexão Redshift num `threading.local`, criados no primeiro uso e
+  fechados em `cleanup`; `run.sandbox.connection` expõe a conexão crua da thread; o estado mutável
+  de `Execution` fica sob lock; o cliente não cria conexão para o sandbox, e a biblioteca não cria
+  `Engine` do SQLAlchemy (`test_concurrency.py`, `test_parallel.py`).
+- Uma chamada nativa que solta e retoma o GIL ao lado de uma thread em Python puro espera o
+  intervalo de troca a cada retomada: 200 `os.stat` levaram 0,3 s contra 0,2 ms, e o
+  `import pyarrow.dataset` que `pq.read_table` faz na primeira chamada levou 15 s contra 0,19 s. A
+  biblioteca importa seus módulos na abertura, e o cliente não roda laços Python puros ao lado das
+  threads da biblioteca que fazem chamadas curtas, como o `redshift_connector` lendo pelo socket e o
+  `boto3`; `sys.setswitchinterval` é o ajuste (`test_concurrency.py`).
+- As chaves inteiras vêm de `run.next_ids(table, n)`: faixas contíguas sob lock, a partir de
+  `max_key + 1` na versão fixada, lido de `max.<coluna>` das ações `add` e pela varredura da coluna
+  quando um arquivo não tem a estatística; a tabela vazia começa em 1. Os ids de uma reexecução
+  diferem, e a unicidade continua na auditoria; `publish` confere que a versão da tabela ainda é a
+  fixada e aborta com `ExecutionConflict`, para que duas execuções abertas na mesma versão não
+  publiquem a mesma faixa (`test_parallel.py`).
 
 ## Organização do pacote
 
@@ -467,6 +500,7 @@ dialect)` como teste de que o texto do Redshift analisa. Provas de conceito:
 | --- | --- |
 | `create_table(uri, table)` | `DeltaTable.create(mode="ignore")` com `delta_schema`, `partition_by`, nome, descrição e as propriedades `delta.logRetentionDuration = interval 3650 days` e `delta.deletedFileRetentionDuration = interval 400 days`; sem vetores de exclusão nem column mapping. |
 | `open(uri, version=None)` | A `DeltaTable` numa versão; a execução abre cada tabela uma vez e guarda a versão. |
+| `max_key(dt, column)` | O maior valor de `column` na versão carregada: o máximo de `max.<coluna>` de `get_add_actions(flatten=True)`, sem ler dados, ou a varredura da coluna quando um arquivo não tem a estatística; 0 na tabela vazia. O início de `run.next_ids`. |
 | `commit_metadata(execution_id, input_versions, snapshot=None)` | O dicionário de `CommitProperties(custom_metadata=...)`: `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`. |
 | `publish_month(uri, month, data, metadata)` | `write_deltalake(mode="overwrite", predicate="mes = '<mes>'")` de `data` já passado por `cast`; `CommitFailedError` sobe como `ExecutionConflict`. |
 | `register_files(uri, files, months, metadata)` | `create_write_transaction(mode="overwrite", partition_filters=...)` com uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. |
@@ -493,7 +527,9 @@ condicional do arquivo de controle. Provas de conceito: `test_stdlib.py` (`test_
 idempotente, predicado e nulidade, evolução com `drop_column_not_null` (recebe o nome da coluna),
 `restore`, `AddAction`, `vacuum`, `version_diff`, compactação e checkpoint, exportação por cópia e a
 reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do DuckDB registrada num
-commit `overwrite` com esquema novo e estatísticas tipadas, que o DuckDB usa para podar.
+commit `overwrite` com esquema novo e estatísticas tipadas, que o DuckDB usa para podar;
+`test_parallel.py` (quatro tabelas lidas em paralelo, escritas em paralelo por tabela e por mês da
+mesma tabela com o conflito no mesmo mês, e `max_key` pelas estatísticas com a varredura de reserva).
 
 ### Etapa 4: `audit` e motor DuckDB
 
@@ -538,11 +574,11 @@ registra a verificação como não executada.
 
 | Primitiva | DuckDB |
 | --- | --- |
-| `connect(config)` | Banco em arquivo `<pasta temporária>/<execution_id>.duckdb` ou em memória; `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS` (ou `.duckdb/` da pasta preparada), `autoinstall_known_extensions` e `autoload_known_extensions` desligados; `storage.duckdb_setup`; `threads`, `memory_limit`, `temp_directory` e `preserve_insertion_order = false`; `temp_directory` sempre explícito, com o espaço livre conferido e registrado no log, porque o padrão `.tmp` é relativo à pasta corrente. |
+| `connect(config)` | Banco em arquivo `<pasta temporária>/<execution_id>.duckdb` ou em memória; `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS` (ou `.duckdb/` da pasta preparada), `autoinstall_known_extensions` e `autoload_known_extensions` desligados; `storage.duckdb_setup`; `threads`, `memory_limit`, `temp_directory` e `preserve_insertion_order = false`; `temp_directory` sempre explícito, com o espaço livre conferido e registrado no log, porque o padrão `.tmp` é relativo à pasta corrente; uma conexão por thread, o `cursor()` da raiz guardado num `threading.local` no primeiro uso e fechado em `cleanup`, e `connection` devolve a da thread. |
 | `ingest(table, uri, version, months=None, materialize=False)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou `CREATE TABLE ... AS SELECT ... FROM delta_scan(...) WHERE mes IN (...)` com `materialize=True`. |
 | `query(statement, **params)` | O statement Core compilado para o dialeto, com as tabelas do contrato trocadas pelas do sandbox por `sql.prefixed`, e executado na conexão crua, sem `Session`; o resultado é a `pa.Table` de `to_arrow_table()`, com os tipos do motor (`decimal128(18, 2)`, `date32`, JSON como `string`). |
 | `execute(sql, params)` | O texto gerado por `render` ou escrito pelo pipeline: `{prefix}` vira vazio, `:nome` vira `$nome` por `sql.bind`, e o resultado volta como `pa.Table` por `to_arrow_table()`; um comando sem resultado devolve a tabela `Count` ou `Success` do DuckDB. |
-| `load(table, data)` | `cast(data, table)` e `INSERT ... BY NAME SELECT * FROM <tabela Arrow registrada>` numa tabela do sandbox criada por `ddl(table, "duckdb")`; `data` é uma `pa.Table`, e outro tipo é recusado com a mensagem que aponta `pa.Table.from_pandas`. |
+| `load(table, data)` | `cast(data, table)` e `INSERT ... BY NAME SELECT * FROM <tabela Arrow registrada>` (o registro vale só na conexão da thread, e sai na mesma chamada) numa tabela do sandbox criada por `ddl(table, "duckdb")`; `data` é uma `pa.Table`, e outro tipo é recusado com a mensagem que aponta `pa.Table.from_pandas`. |
 | `audit(table, months, **opcoes)` | Roda o texto de `audit.audit_sql(table, "duckdb")` — `json_valid` e `strftime(data_ref, '%Y-%m')` são as funções do dialeto — e monta o `AuditReport`; a comparação com os demais meses sai de `delta_scan` na versão fixada, e `passed` falso interrompe a execução. |
 | `export_month(table, month)` | O `RecordBatchReader` do mês, passado por `cast`, para `publish_month`, sem outro comando na conexão até o fim da escrita; ou `COPY ... TO '<uri>/mes=<mes>/<execution_id>.parquet' (FORMAT parquet, RETURN_STATS)` mais `register_files` para a tabela que não cabe na memória. |
 | `cleanup()` | Fecha a conexão e apaga o arquivo do banco e a pasta de transbordo. |
@@ -565,7 +601,9 @@ com `RETURN_STATS` e particionado, banco em arquivo, `test_audit_queries`), `poc
 `test_stdlib.py::test_engine_protocol_and_config_dataclass` e `test_concurrency.py` (o GIL liberado
 pelo DuckDB, pelo delta-rs e pelo PyArrow, um `cursor()` por thread, a conexão compartilhada que troca os
 resultados das threads, o arquivo do DuckDB recusado com outra configuração, dois comandos em dois cursores,
-o intervalo de troca do GIL pago por cada retomada ao lado de uma thread Python ocupada).
+o intervalo de troca do GIL pago por cada retomada ao lado de uma thread Python ocupada) e
+`test_parallel.py` (o motor com um cursor por thread, a ingestão de quatro tabelas por `delta_scan` em
+paralelo, cargas Arrow e `COPY ... TO` em paralelo).
 
 ### Etapa 5: motor Redshift
 
@@ -578,7 +616,7 @@ precisam das APIs do Redshift, sem endpoint VPC no laboratório (`RS-14`), e fic
 
 | Primitiva | Redshift |
 | --- | --- |
-| `connect(config)` | `redshift_connector.connect` com `timeout`; `search_path` no esquema; `cursor.paramstyle = "named"`. |
+| `connect(config)` | `redshift_connector.connect` com `timeout`; `search_path` no esquema; `cursor.paramstyle = "named"`; uma conexão por thread num `threading.local`, aberta no primeiro uso e fechada em `cleanup`, e `connection` devolve a da thread. |
 | `ingest(table, uri, version, months=None, materialize=True)` | `copy_manifest` dos arquivos desses meses, `COPY ... FORMAT AS PARQUET MANIFEST IAM_ROLE ...` numa staging sem `mes` criada por `ddl`, e `INSERT INTO exec_<id>_<tabela> SELECT *, '<mes>'`; `JSON_PARSE` nas colunas `SUPER`. |
 | `query(statement, **params)` | O statement compilado para o Redshift e executado na conexão crua; o resultado é uma `pa.Table` montada das tuplas do cursor com o esquema do statement (`from_pylist` de dicionários por nome), ou por `UNLOAD` acima de um limite de linhas. |
 | `execute(sql, params)` | `{prefix}` vira `exec_<id>_`, o texto roda com o dicionário, e o resultado volta como `pa.Table`, vazia para um comando sem resultado. |
@@ -597,6 +635,9 @@ nomeado, DDL, `COPY ... MANIFEST`, lista de colunas e `FILLRECORD`, `VARCHAR`, `
 `test_sandbox_copy_of_table_and_schema_files_diff`) e `test_stdlib.py::test_execution_identifiers`
 (o prefixo do sandbox).
 
+Paralelismo: `test_redshift.py::test_parallel_copy_and_unload_on_two_connections`, dois `COPY` e dois
+`UNLOAD` em tabelas distintas, uma conexão por thread, limitados pelas slots do WLM.
+
 ### Etapa 6: execução e linha de comando
 
 `serialize_db.execution` é o ciclo de uma execução; `serialize_db.cli` o expõe.
@@ -604,28 +645,32 @@ nomeado, DDL, `COPY ... MANIFEST`, lista de colunas e `FILLRECORD`, `VARCHAR`, `
 | Primitiva | O que faz |
 | --- | --- |
 | `Database(root, environment, metadata, storage_options=None)` | A raiz do banco, o ambiente (`prod`, `dev`) e o `MetaData` dos modelos; `uri(table)` é `<root>/<ambiente>/<tabela>/`, mais o arquivo de controle e os prefixos `staging/`, `publicacao/` e `arquivo/`; chama `prepare_environment` e cria `Storage.for_uri(root)`. |
-| `Execution(db, engine, month, execution_id)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox; na saída descarta o sandbox e grava o resumo no log. |
+| `Execution(db, engine, month, execution_id)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox; na saída descarta o sandbox e grava o resumo no log. As primitivas podem ser chamadas de qualquer thread, cada uma na conexão da sua thread, e o estado mutável (`versions`, auditorias aprovadas, o alocador) fica sob lock. |
 | `run.previous_months(n)` | Os `n` meses até `run.month`, inclusive. |
-| `run.ingest(*tables, months=None, materialize=False)` | `engine.ingest` de cada tabela na versão fixada; sem `months`, a tabela inteira. |
-| `run.sandbox` | O motor, onde o pipeline chama `query`, `execute` e `load`: `pa.Table` na saída dos dois primeiros e na entrada do último. |
+| `run.ingest(*tables, months=None, materialize=False, max_workers=1)` | `engine.ingest` de cada tabela na versão fixada, num `ThreadPoolExecutor(max_workers)` quando `max_workers > 1`, cada tarefa na conexão da sua thread; sem `months`, a tabela inteira. O ganho é no S3, onde a latência domina; em disco local o pool da instância já usa os núcleos. |
+| `run.sandbox` | O motor, onde o pipeline chama `query`, `execute` e `load`: `pa.Table` na saída dos dois primeiros e na entrada do último, de qualquer thread; `run.sandbox.connection` é a conexão crua da thread, para o que as primitivas não cobrem. |
+| `run.next_ids(table, n)` | Um `range` de `n` inteiros contíguos, sob lock, a partir de `max_key(chave) + 1` na versão fixada da tabela, lido uma vez por tabela; as faixas de threads paralelas não se sobrepõem, e os ids de uma reexecução diferem. |
 | `run.audit(table, months, foreign_keys=False, key_scope=None)` | `engine.audit`; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta, e o relatório, com o SQL de cada verificação, vai para o log. |
-| `run.publish(table, months, audit=True)` | Exige a auditoria aprovada dessa tabela nesses meses na própria execução, e `audit=False` dispensa a exigência e fica no log; depois `create_table` se não existir, `reconcile`, `export_month` e `publish_month` por mês com `commit_metadata`; avança `versions[table]`. |
-| `run.publish_redshift(*tables)` | A publicação da etapa 8. |
+| `run.publish(*tables, months, audit=True, max_workers=1)` | Exige a auditoria aprovada de cada tabela nesses meses na própria execução, e `audit=False` dispensa a exigência e fica no log; confere que a versão atual de cada tabela é a fixada e aborta com `ExecutionConflict` quando outra execução a avançou; depois `create_table` se não existir, `reconcile`, `export_month` e `publish_month` por mês com `commit_metadata`, tabela a tabela num `ThreadPoolExecutor(max_workers)`: na primeira falha as tarefas em curso terminam, as não iniciadas são canceladas, e a exceção lista o resultado de cada tabela, porque os commits feitos ficam; avança `versions[table]` sob lock. O padrão 1 vem da memória por escrita (`delta.md`). |
+| `run.publish_redshift(*tables, max_workers=1)` | A publicação da etapa 8, uma conexão por tabela em paralelo, limitada pelas slots do WLM. |
 | `run.snapshot(name)` | Marca a execução: `serialize_db_snapshot` nos commits e `snapshot(root, name, versions)` no encerramento. |
 | `serialize-db run` | `--root`, `--environment`, `--engine`, `--month`, `--execution-id` e `modulo:funcao` do pipeline, que recebe `run`; código de saída 0, 1 na reprovação da auditoria, 2 no conflito. |
 | `serialize-db audit` | `--table`, `--months`, `--foreign-keys` e `--key-scope`; com `--sql` imprime o texto das verificações do dialeto escolhido e não abre conexão nem armazenamento, e `--write <pasta>` grava os arquivos das duas variantes. Sem `--sql`, roda a auditoria sobre a versão publicada e imprime o relatório. |
 
 O log é o `logging` padrão com um resumo por execução: identificador, mês, versões lidas, versões
 gravadas e tempo por passo. Testes: `tests/test_execution.py` sob a raiz local com o motor DuckDB:
-a reexecução com o mesmo `execution_id` produz o mesmo estado; a auditoria reprovada deixa a versão
-da tabela como estava; de duas execuções publicando o mesmo mês, a segunda aborta com
-`ExecutionConflict`. Provas de conceito: `test_stdlib.py` (`test_month_arithmetic`,
+a reexecução com o mesmo `execution_id` produz as mesmas linhas, com ids que podem diferir;
+`next_ids` de duas threads devolve faixas disjuntas; a auditoria reprovada deixa a versão da tabela
+como estava; de duas execuções publicando o mesmo mês, a segunda aborta com `ExecutionConflict`, e
+também a que publica uma tabela cuja versão avançou desde a abertura; `ingest` e `publish` com
+`max_workers=2` dão o mesmo resultado que com 1. Provas de conceito: `test_stdlib.py` (`test_month_arithmetic`,
 `test_execution_identifiers`, `test_context_manager_cleans_up_on_failure`,
 `test_entry_point_by_import_string`, `test_command_line_parsing`, `test_execution_log`,
 `test_prepare_environment`, `test_json_control_file_and_commit_metadata`) e
 `test_deltalake.py::test_time_travel_and_restore` (os metadados de commit no histórico) e
 `test_concurrency.py` (os leitores Delta presos à versão carregada durante um `append`, as faixas de
-identificadores de um contador sob `Lock`).
+identificadores de um contador sob `Lock`) e `test_parallel.py` (o pool que termina o que está em
+curso e cancela o resto, a barreira por tabela, `max_key` pelas estatísticas).
 
 ### Etapa 7: carga inicial
 
@@ -725,6 +770,7 @@ with Execution(db, engine="duckdb", month="2026-08", execution_id="exec-2026-09-
     entries = run.sandbox.query(select(Lancamento).where(Lancamento.mes == "2026-08"))   # pa.Table
     frame = entries.to_pandas(types_mapper=pd.ArrowDtype)            # sem cópia; decimal128 e date32 mantidos
     projected = project(frame)                                       # lógica Python; devolve um DataFrame
+    projected["id_lancamento"] = run.next_ids(LancamentoProjetado, len(projected))   # faixa contígua, sob lock
     run.sandbox.load(LancamentoProjetado, pa.Table.from_pandas(projected, preserve_index=False))
     run.audit(LancamentoProjetado, months=["2026-08"])               # exigida por publish
     run.publish(LancamentoProjetado, months=["2026-08"])             # overwrite por mês, metadados
@@ -735,8 +781,8 @@ O DataFrame que `project` devolve mantém os dtypes `ArrowDtype` de `frame`, e `
 devolve ao Arrow sem cópia; uma coluna calculada em `float64` chega como `double`, e `load` a recusa
 numa coluna `Numeric` enquanto houver valor fora da escala, até o pipeline arredondar.
 
-Uma reexecução com o mesmo `execution_id` repete os `overwrite` dos mesmos meses e produz o mesmo
-estado. Uma correção de um mês antigo é a mesma chamada com outro `month` e um `execution_id` novo:
+Uma reexecução com o mesmo `execution_id` repete os `overwrite` dos mesmos meses e produz as mesmas
+linhas; os ids podem diferir, porque `next_ids` recomeça do máximo da versão fixada. Uma correção de um mês antigo é a mesma chamada com outro `month` e um `execution_id` novo:
 `publish_redshift` recarrega só esse mês, e as versões intermediárias entre snapshots do banco saem
 no `vacuum` mensal. A execução no Redshift é o mesmo ciclo com `engine="redshift"`: o sandbox são as
 tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a publicação sai por `UNLOAD` mais

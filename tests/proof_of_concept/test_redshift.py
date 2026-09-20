@@ -5,8 +5,9 @@ e arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``; sem uma das duas é pulada, e com 
 conexão é falha. Os testes exercitam o ``redshift_connector`` (sessão, ``paramstyle`` nomeado), o
 DDL compilado pelo SQLAlchemy, o ``COPY ... MANIFEST`` de arquivos gravados pelo delta-rs (o
 ``DECIMAL`` em ``INT64``, o ``timestamp_ntz``, a lista de colunas e o ``FILLRECORD``), o ``VARCHAR``
-excedido, o ``SUPER`` e o ``UNLOAD ... PARTITION BY`` registrado no Delta e lido pelo DuckDB. Os
-resultados que a documentação não fixa vão para o relatório da sessão em vez de virarem asserções.
+excedido, o ``SUPER``, o ``UNLOAD ... PARTITION BY`` registrado no Delta e lido pelo DuckDB, e o ``COPY``
+e o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por thread. Os resultados que a documentação
+não fixa vão para o relatório da sessão em vez de virarem asserções.
 
 A suíte foi escrita antes de o projeto ter uma conexão Redshift e ainda não rodou contra um cluster.
 """
@@ -19,6 +20,7 @@ import io
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import boto3
 import duckdb
@@ -31,7 +33,7 @@ from deltalake.transaction import AddAction
 from sqlalchemy.schema import CreateTable
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
-from conftest import RedshiftSession, S3Location, record
+from conftest import RedshiftSession, S3Location, connect_redshift, record
 from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
 
 pytestmark = [pytest.mark.redshift, pytest.mark.s3]
@@ -309,3 +311,66 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
 
     record("redshift.unload.delta_rs_read", outcome(lambda: DeltaTable(destination).to_pyarrow_table()))
     assert duckdb_connection.execute(f"SELECT count(*) FROM delta_scan('{destination}')").fetchone()[0] == 6
+
+
+def test_parallel_copy_and_unload_on_two_connections(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
+    """Duas tabelas carregadas por ``COPY ... MANIFEST`` e descarregadas por ``UNLOAD`` em paralelo, uma conexão por thread.
+
+    O ``redshift_connector`` declara ``threadsafety`` 1: a conexão da sessão não é compartilhada
+    entre threads, e cada tarefa abre a sua pela mesma resolução de ``connect_redshift``. O motor da
+    biblioteca guarda essa conexão num ``threading.local``.
+    """
+    session = redshift_session
+    two_months = sample_table().slice(ROWS // 2 - 500, 1000)
+    uris = [s3_location.child(f"redshift/paralelo_{k}") for k in range(2)]
+    for uri in uris:
+        write_deltalake(uri, two_months, mode="overwrite", partition_by=["mes"])
+    manifests = [write_manifest(s3_location, f"redshift/manifest_paralelo_{k}.json", DeltaTable(uri)) for k, uri in enumerate(uris)]
+    targets = [session.table(f"paralelo_{k}") for k in range(2)]
+    for target in targets:
+        session.execute(ddl(contract_table(target, session.schema)))
+
+    def on_own_connection(sql: str, count_from: str | None = None) -> int:
+        _, connection = connect_redshift()
+        connection.autocommit = True
+        try:
+            cursor = connection.cursor()
+            cursor.execute(sql)
+            if count_from is None:
+                return 0
+            cursor.execute(f"select count(*) from {count_from}")
+            return cursor.fetchone()[0]
+        finally:
+            connection.close()
+
+    # 1. Dois COPY em paralelo, em tabelas distintas: cada um numa conexão, limitados pelas slots do WLM.
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        counts = list(
+            pool.map(
+                lambda k: on_own_connection(
+                    f"COPY {session.qualified(targets[k])} FROM '{manifests[k]}' {session.iam_role_clause()} FORMAT AS PARQUET MANIFEST",
+                    session.qualified(targets[k]),
+                ),
+                range(2),
+            )
+        )
+    record("redshift.parallel.copy_two_tables", f"{time.perf_counter() - started:.1f} s")
+    assert counts == [1000, 1000]
+
+    # 2. Dois UNLOAD em paralelo, para prefixos distintos.
+    destinations = [s3_location.child(f"redshift/unload_paralelo_{k}") for k in range(2)]
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(
+            pool.map(
+                lambda k: on_own_connection(
+                    f"UNLOAD ('select * from {session.qualified(targets[k])}') TO '{destinations[k]}/' {session.iam_role_clause()} FORMAT PARQUET"
+                ),
+                range(2),
+            )
+        )
+    record("redshift.parallel.unload_two_tables", f"{time.perf_counter() - started:.1f} s")
+    for destination in destinations:
+        files = s3_location.data_files(destination)
+        assert files and sum(pq.read_metadata(file).num_rows for file in files) == 1000
