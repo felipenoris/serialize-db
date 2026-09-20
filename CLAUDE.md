@@ -452,9 +452,10 @@ runtime compilation by the dialect is replaced gradually by generated SQL text p
 database interaction at a time, so SQLAlchemy ends in the models and in generation and
 `duckdb_engine` and `sqlalchemy-redshift` leave the runtime dependencies. On 2026-09-20 the user fixed
 the exchange type with client code: a `pa.Table` in both directions (`load` receives one; `query` and
-`execute` return one), never an ORM instance, a row list or a DataFrame; pandas is the users'
-preferred format, and the rule rests on the conversion being cheap, which the probe of that day
-measured (`docs/PLAN.md`, section "A troca de dados com o código cliente").
+`execute` return one), never an ORM instance, a row list or a DataFrame; the pipelines run pandas
+with the pyarrow backend (user statement of 2026-09-20), so `types_mapper=pd.ArrowDtype` is their
+native form, and the rule rests on the conversion being cheap, which the probe of that day measured
+(`docs/PLAN.md`, section "A troca de dados com o código cliente").
 
 ## Naming decisions applied to the documents
 

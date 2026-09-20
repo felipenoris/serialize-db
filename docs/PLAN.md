@@ -33,9 +33,10 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   grava passa uma `pa.Table` a `load`; quem lê passa um statement Core ou um texto SQL a `query` ou
   a `execute` e recebe uma `pa.Table`. Nenhuma instância ORM, lista de linhas ou DataFrame atravessa
   a fronteira: `query` compila o statement pelo dialeto e o executa na conexão crua, sem `Session`,
-  e `select(Lancamento)` é aceito como statement Core. O pandas é o formato preferido de quem usa a
-  biblioteca, e a regra apoia-se na hipótese, medida na seção seguinte, de que a conversão é
-  barata: 2,3 ms sem cópia para 300.000 linhas. O pandas não entra nas dependências de execução.
+  e `select(Lancamento)` é aceito como statement Core. O pandas com backend pyarrow é o formato dos
+  pipelines (declaração do usuário de 2026-09-20), e a regra apoia-se na hipótese, medida na seção
+  seguinte, de que a conversão é barata: 2,3 ms sem cópia para 300.000 linhas. O pandas não entra
+  nas dependências de execução.
 - **Nenhum serviço de catálogo está habilitado.** A camada de tabela não depende de serviço, e o
   Delta atende sem código próprio. O Iceberg com catálogo em arquivo fica documentado em
   `estrategia.md` e volta à mesa se o Glue ou o S3 Tables forem habilitados; `probes/catalog.py`
