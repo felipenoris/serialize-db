@@ -88,6 +88,23 @@ This `CLAUDE.md` is in English, for AI-assistant tooling.
 
 Record in this file every website you visit when searching for information.
 
+## The documents that track the work
+
+The documents under `docs/` that record where the project stands are updated by the unit of work
+that changes what they describe, in the same commit:
+
+- **`docs/CURRENT_STATE.md`** holds the state of the implementation: the situation of each stage and
+  what each artifact of the repository contains. Update it when a stage advances, a module is
+  written, a suite's pass and skip counts change, or an artifact appears or leaves.
+- **`docs/POC.md`** holds what the proofs of concept, the test suites and the probes showed, with
+  the date of each measurement. Add the finding when a probe runs, a suite runs in a new
+  environment, or an experiment answers a question. A finding that contradicts `docs/PLAN.md` or a
+  stage file triggers the revision of that file in the same unit of work, and the report names the
+  files the revision changed.
+- **`docs/OPEN_QUESTIONS.md`** holds the pending items, the doubts and the decisions waiting on the
+  user. Add an item when the work finds a question it cannot close; remove it when the answer lands
+  in the document that owns it, and name that document in the report.
+
 ## Chat
 
 Chat with the user in Brazilian Portuguese. Tag your answers with [guess] or [uncertain] when you are not confident.
@@ -133,7 +150,7 @@ Never read the contents of the `secrets` folder.
 
 # Claude Memory
 
-Use this section to store your memory for this project. Keep this file within a size budget of 50 KB.
+Use this section to store your memory for this project. Keep this file within a size budget of 75 KB.
 
 ## Repository index
 
@@ -156,8 +173,11 @@ research appends to the matching group.
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine; it opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection, deferrable constraints, Core and ORM for DDL and DML, server-generated keys, SQL generation per dialect (`compile`, dialect objects and paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`), the `Numeric` float conversion, what each dialect and Parquet support, the verdict per part, the recommendation without the compatibility premise (own contract with Arrow as canonical form, hand-written SQL validated by SQLGlot) and the gradual replacement of runtime compilation by generated SQL text (`param`, `prefixed`, `render`, `write_sql_files`, `execute`). |
 | `docs/delta.md` | Delta Lake as the source of truth: folder layout and log actions, Delta versus Iceberg, the implementations (delta-spark, delta-rs, Delta Kernel) and the delta-rs gaps, S3 requirements, types and JSON, table creation from the model, schema evolution with the measured rename/drop rewrite and what replaces Alembic, transactions, conflicts and restore, DML, ingestion and export back to Parquet folders by month, pipeline steps, DuckDB and Redshift access, performance measurements, relocation and SQLAlchemy support. |
-| `docs/PLAN.md` | The plan (pt-BR): the decisions with the premises behind them, the `pa.Table` boundary with client code and the measured pandas conversion, the state of the project (repository, verified proof of concept, environment readings, pending items), the rules every stage obeys, the package layout with dependencies, configuration and test policy, the table of stages 0 to 9 with delivery and acceptance criterion and the index of the stage files, the monthly pipeline with the `Execution` API, and the order of work. |
+| `docs/PLAN.md` | The plan (pt-BR): the decisions with the premises behind them, the `pa.Table` boundary with client code and the measured pandas conversion, the rules every stage obeys, the package layout with dependencies, configuration and test policy, the table of stages 0 to 9 with delivery and acceptance criterion and the index of the stage files, the monthly pipeline with the `Execution` API, and the order of work. |
 | `docs/PLAN-STAGE-0.md` to `docs/PLAN-STAGE-9.md` | One file per stage, indexed in `docs/PLAN.md`: the module and its primitives with signature and behavior (`schema`, `sql`, `storage` and `delta`, `audit` and `engine.duckdb`, `engine.redshift`, `execution` and `cli`, `load`, the Redshift publication, the operation routines), the tests, the dependencies and the proofs of concept that exercise each API; stage 0 holds the Redshift items of the proof of concept and the probes that precede any stage on AWS. |
+| `docs/CURRENT_STATE.md` | Where the implementation stands (pt-BR): the situation of each stage, and the repository artifact by artifact, including the reference model's defects and each suite's last pass and skip counts. |
+| `docs/POC.md` | What each run showed (pt-BR): the S3 proof of concept in the SageMaker space with its timings, the local one, the delta-rs credential variants and the isolated `NO_PROXY` 403, and the probe readings of the space, each with its consequence in the plan. |
+| `docs/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): the Redshift connection the proof of concept waits for, non-current versions, the one-hour credentials, the S3 suite's maintenance, the `Text` rule awaiting the user, the table barrier, and the Redshift questions the official documentation does not answer. |
 | `docs/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service (Delta via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and the maturity assessment of Delta against Iceberg with the re-evaluation trigger. |
 | `docs/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `docs/PLAN-STAGE-<n>.md`. |
 | `tests/model/` | The reference model: the declarative ORM models of the accounting, management and projection tables, moved out of the package on 2026-09-20. The tests hand it to the package API as a client library would hand its own models; the package holds no model. |
@@ -217,7 +237,7 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   one; a fact removed is a defect.
 - **A change the user did not ask for is named in the report.** Moving the primitives out of
   `docs/serialize-db.md` followed from the plan request and was flagged as such; the `Text` rule
-  proposed in `docs/PLAN.md` is marked as awaiting the user's confirmation.
+  proposed in `docs/OPEN_QUESTIONS.md` is marked as awaiting the user's confirmation.
 - **API details learned by running live in `tests/proof_of_concept/`, not here**:
   `schema_mode="merge"` for an append with fewer columns than the evolved table, the normalized
   `CHECK` expression, `filters=` instead of the deprecated `partitions=`, `pa.schema(dt.schema())`
@@ -248,6 +268,12 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   spun at 100% CPU until killed. A two-thread speedup depends on the free cores and on the DuckDB
   `threads` of the instance, so it is recorded; the assertion is the loop rate near zero when the GIL
   is held.
+- **A section moved between files carries its deixis with it** (2026-09-20). The backticked-span
+  and number check passes on "este plano", "Cada etapa abaixo" and "após as correções desta
+  sessão", because the words survive the move; only reading the moved text finds them, and the
+  second of the three had been stale since the previous split. After moving a block, grep it for
+  "abaixo", "acima", "este", "desta" and "seção", and turn each reference that now crosses files
+  into a link.
 
 ## What the documents establish
 
@@ -501,9 +527,10 @@ table names (`staging_<tabela>`) count as database identifiers.
 
 ## Where the work stands
 
-The state of the project, the decisions, the table of stages and the order of work are in
-`docs/PLAN.md` (pt-BR, 2026-09-20), and the primitives of each stage in `docs/PLAN-STAGE-<n>.md`;
-read them before planning a session. The next session starts stage 1 (`serialize_db.schema`) and
+The decisions, the table of stages and the order of work are in `docs/PLAN.md` (pt-BR), the
+primitives of each stage in `docs/PLAN-STAGE-<n>.md`, and where the implementation stands in
+`docs/CURRENT_STATE.md` (2026-09-20), beside `docs/POC.md` and `docs/OPEN_QUESTIONS.md`; read
+them before planning a session. The next session starts stage 1 (`serialize_db.schema`) and
 stage 2 (`serialize_db.sql`) on local folders.
 
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
@@ -519,14 +546,14 @@ check are columns, ORM classes and the loanwords `sandbox` and `staging`.
 `pyproject.toml` declares no runtime dependencies and pins the `dev` group (SQLAlchemy, duckdb-engine,
 sqlalchemy-redshift and pandas were added on 2026-09-19 for the study suites; `prepare_offline.sh`
 must be rerun). The reference model in `tests/model/` and its defects are
-listed in `docs/PLAN.md` under the state of the repository; the `DEFERRABLE` and `SERIAL` behavior of
+listed in `docs/CURRENT_STATE.md` under the repository; the `DEFERRABLE` and `SERIAL` behavior of
 each dialect is in `docs/sqlalchemy.md` and `docs/duckdb.md`.
 
 Test layout (user decision of 2026-09-19): `tests/` holds the package tests (none yet), `tests/model/`,
 `tests/test_probes.py` and `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
 both storages, the study suites (commented step by step as learning material, listed per stage in
 `docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
-last-run counts: the `tests/` row of the repository table in `docs/PLAN.md` and `README.md`. The 11 s
+last-run counts: the `tests/` row of the repository table in `docs/CURRENT_STATE.md` and `README.md`. The 11 s
 listing failure behind a silent proxy is in `README.md`, the `autoinstall_known_extensions` rule in the
 lessons above; `test_delta_rs_credential_chain` runs five variants.
 
@@ -544,7 +571,7 @@ duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 and redshift_connector 2.1.16, o
 300,000 rows of `operacoes` (`poc_delta.sample_table`); the Redshift statements were compiled only. The S3 proof of concept of 2026-09-19 in
 the space (Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, `NO_PROXY="$no_proxy"`
 exported) is recorded in
-`docs/PLAN.md`. The local proof of concept in `docs/estrategia.md` ran on
+`docs/POC.md`. The local proof of concept in `docs/estrategia.md` ran on
 2026-09-19 on macOS arm64 with Python 3.13, deltalake 1.6.4, DuckDB 1.5.5 with the `delta`,
 `ducklake` and `iceberg` extensions (ducklake `d8a1881e`, metadata version 1.0), PyIceberg 0.12.0
 with the `sql-sqlite` and `pyiceberg-core` extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through
@@ -575,7 +602,7 @@ the same pinned versions.
   probe run of 2026-09-20 found no `gh` on the PATH and the 03:44 and 04:40 runs found `/usr/bin/gh`
   (with `/usr/local/bin/aws` and no `duckdb` CLI), so check for it before relying on it.
 - Probe readings of 2026-09-20 in the same space (four runs, the last at 04:40 UTC) are recorded in
-  `docs/PLAN.md` under the environment readings and the proof of concept. Facts only here: IMDS
+  `docs/POC.md`. Facts only here: IMDS
   answers `EINVAL`; the 03:43 UTC pytest session (both roots) passed the three delta-rs credential
   variants of that time; the
   prepared `.venv` lacked five `dev` packages until `uv sync --group dev`; `~/shared` resolves to
@@ -586,17 +613,6 @@ the same pinned versions.
   and no internet (user statement of 2026-09-20).
 ## Questions the official documentation does not answer
 
-All of them need Redshift, which the project does not have yet, and `tests/proof_of_concept/test_redshift.py`
-holds one test per question; the S3 questions were answered on 2026-09-19. Whether `COPY` from Parquet
-accepts a column list (`awswrangler` emits `COPY tabela (colunas) ... FORMAT AS PARQUET`; the reference
-describes the list only for flat files); the correspondence between Parquet physical types and Redshift
-columns in `COPY`, in particular `TIMESTAMP` as `INT64` in microseconds and the physical type of `DECIMAL`;
-whether `COPY` truncates or aborts on a string longer than the target `VARCHAR`; whether Spectrum maps
-plain Parquet columns by name or by position; the physical types `UNLOAD` writes for `TIMESTAMP` and
-`DECIMAL`, whether its columns are required and whether it writes min/max statistics (the three affect
-the `AddAction` of `register_file` in `docs/delta.md`); whether `FILLRECORD` lets `COPY` load older
-files that lack columns appended later, which Delta and DuckLake produce on evolution.
-
-One gap needs a decision rather than a test: `sqlalchemy-redshift` compiles `Text` as `TEXT`, which
-Redshift stores as `VARCHAR(256)`, so the `VARCHAR(65535)` of the contract needs `String(65535)` or a
-`@compiles(Text, "redshift")` rule.
+`docs/OPEN_QUESTIONS.md` holds them and `docs/PLAN-STAGE-0.md` groups them by command; all need
+the Redshift connection, and `tests/proof_of_concept/test_redshift.py` holds one test per
+question. The S3 ones were answered on 2026-09-19.

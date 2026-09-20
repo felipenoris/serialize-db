@@ -1,15 +1,18 @@
 # Plano de implementação
 
-Este documento registra o que a biblioteca é e como ela chega lá: as decisões, o estado do projeto,
-as etapas de implementação e o pipeline de atualização mensal. O plano de cada etapa, com as
-primitivas do módulo, os testes e as provas de conceito que o exercitam, está num arquivo próprio,
-de [`PLAN-STAGE-0.md`](PLAN-STAGE-0.md) a [`PLAN-STAGE-9.md`](PLAN-STAGE-9.md), que a seção
-"Etapas" indexa. As razões das decisões e as comparações entre ferramentas estão em
-[`estrategia.md`](estrategia.md); o comportamento verificado do Delta, em [`delta.md`](delta.md); os
-motores, em [`duckdb.md`](duckdb.md) e [`redshift.md`](redshift.md); o esquema a partir dos modelos,
-em [`schema.md`](schema.md) e [`sqlalchemy.md`](sqlalchemy.md); as funcionalidades, os metadados
-próprios e o fluxo de cada caso de uso, em [`serialize-db.md`](serialize-db.md). O estado descrito
-aqui é o de 2026-09-20.
+Este documento registra o que a biblioteca é e como ela chega lá: as decisões, as regras que as
+etapas obedecem, a organização do pacote, as etapas de implementação e o pipeline de atualização
+mensal. O plano de cada etapa, com as primitivas do módulo, os testes e as provas de conceito que o
+exercitam, está num arquivo próprio, de [`PLAN-STAGE-0.md`](PLAN-STAGE-0.md) a
+[`PLAN-STAGE-9.md`](PLAN-STAGE-9.md), que a seção "Etapas" indexa. O estado da implementação está
+em [`CURRENT_STATE.md`](CURRENT_STATE.md); o resultado das provas de conceito, das suítes e dos
+probes, em [`POC.md`](POC.md); as pendências e as decisões em aberto, em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). As razões das decisões e as comparações entre ferramentas
+estão em [`estrategia.md`](estrategia.md); o comportamento verificado do Delta, em
+[`delta.md`](delta.md); os motores, em [`duckdb.md`](duckdb.md) e [`redshift.md`](redshift.md); o
+esquema a partir dos modelos, em [`schema.md`](schema.md) e [`sqlalchemy.md`](sqlalchemy.md); as
+funcionalidades, os metadados próprios e o fluxo de cada caso de uso, em
+[`serialize-db.md`](serialize-db.md).
 
 ## Decisões
 
@@ -123,145 +126,10 @@ O que a sondagem fixa em `cast`:
 
 ## Estado do projeto
 
-### O repositório
-
-| Artefato | Estado |
-| --- | --- |
-| `docs/` | Completa: `parquet.md`, `duckdb.md`, `redshift.md`, `sqlalchemy.md`, `schema.md`, `delta.md`, `guia.md`, `estrategia.md`, `serialize-db.md` e este plano. Todo bloco Python dos documentos rodou com as versões fixadas em `pyproject.toml`; os comandos do Redshift foram compilados, não executados. |
-| `tests/model/` | O modelo de referência: os modelos do pipeline (`model_base_contabil.py`, `model_base_gerencial.py` e `model_db_projetado.py`), movidos do pacote para os testes em 2026-09-20. Ele faz o papel da biblioteca cliente: os testes o entregam à API do pacote como um pipeline entregaria os seus modelos, e o pacote não contém modelo algum. Dois não importam (`from lib_base_contabil import Base` e `from lib_base_gerencial import Base`, módulos que o repositório não tem). Os modelos usam `Double` onde o contrato pede `Numeric(18, 2)`, deixam o `autoincrement` padrão nas chaves inteiras (o `duckdb_engine` emite `SERIAL`, que o DuckDB rejeita), declaram chaves estrangeiras `DEFERRABLE INITIALLY DEFERRED` (o DuckDB descarta a cláusula, o Redshift não a tem) e não têm a coluna `mes`, comentários nem `Table.info["serialize_db"]`. A etapa 1 os corrige. |
-| `src/serialize_db/__init__.py` | Só o `main` de exemplo do `uv init`; o pacote não tem outro módulo. `pyproject.toml` não declara dependência de execução; o grupo `dev` fixa pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, boto3, redshift-connector, SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0 e pandas 3.0.6. |
-| `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda; `test_probes.py` testa as funções puras dos probes com respostas fabricadas, sem rede. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`poc_delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas e da stdlib (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`, `test_concurrency.py`, `test_parallel.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Cada etapa abaixo lista as provas de conceito que exercitam as suas APIs. Sem variável, 71 testes passam e 57 são pulados; com a raiz local, 109 passam e 19 são pulados (2026-09-20, macOS). No espaço, em 2026-09-20, uma sessão com a raiz local e a raiz S3 gravou o JSON de `SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, sem a contagem por resultado nem o registro da limpeza, que o relatório passou a ter (`session.`, `local.cleanup`, `s3.cleanup`); a execução das 04:52 UTC, após as correções desta sessão, registrou 104 testes passados e 7 pulados em 35 s e a limpeza das duas raízes; sem variável, 63 passam e 48 são pulados. |
-| `probes/` | Leituras do ambiente, só de leitura: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` e `catalog.py` sobre `probelib.py`, com o resultado em `probes/output/` para colar na conversa. Quatro execuções no laboratório em 2026-09-20, sem Redshift, corrigiram a leitura das conexões, as leituras de rede, o rótulo dos IPs públicos, a montagem de `~/shared` e o Object Lock, acrescentaram por tabela Delta os arquivos, commits e último objeto, as sessões da suíte S3 e as versões não correntes sob a raiz, e a quarta isolou o 403 do delta-rs (`NO_PROXY` vazia) e fez `diagnose_aws.py` rodar o delta-rs como encontrado e como a suíte; o ambiente de destino ainda não foi lido. |
-| `prepare_offline.sh` | Deixa a pasta autossuficiente para o destino sem internet (`.python/`, `.venv/`, `.duckdb/`); verificado extraindo o pacote em outro caminho e rodando a suíte local com proxies mortos. |
-
-### O que a prova de conceito verificou
-
-Em 2026-09-19, no espaço do SageMaker Unified Studio do projeto, contra o bucket do projeto na
-mesma região, com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1 (a suíte
-`tests/proof_of_concept/test_s3.py`, 10 testes em 27 s):
-
-- O delta-rs encontra as credenciais do contêiner do projeto pela cadeia padrão. Uma falha 403 na
-  chamada de credenciais, no início da verificação, foi contornada com `NO_PROXY` em maiúsculas; a
-  causa ficou isolada em 2026-09-20 (abaixo). As credenciais do `boto3` em `storage_options`
-  funcionam e ficam como reserva. O DuckDB (`credential_chain`) e o `boto3` nunca falharam.
-- `write_deltalake` (`overwrite` particionado e `append` por commit condicional), `DeltaTable`,
-  `vacuum` e `delta_scan` no bucket, com a criptografia SSE-KMS padrão do bucket aplicada sem opção
-  alguma. O DuckDB lê `BIGINT`, `INTEGER`, `DECIMAL(18,2)`, `TIMESTAMP` (de `timestamp_ntz`) e
-  `VARCHAR`.
-- Put condicional pelo `boto3`: `IfNoneMatch='*'` e `IfMatch=<etag>` aceitos; a repetição de cada
-  um devolve `PreconditionFailed` 412.
-- Tempos no S3 (300.010 linhas, 3 arquivos): agregação por `delta_scan` em 0,3 s (0,77 s fria),
-  `read_parquet` 0,06 s, tabela materializada 0,002 s (0,29 s para criar); 20 consultas pontuais em
-  6,0 s por `delta_scan`, 3,1 s por `ATTACH ... PIN_SNAPSHOT`, 1,3 s por `read_parquet` e 0,013 s
-  na tabela. Toda tabela consultada mais de uma vez é materializada.
-
-Em 2026-09-20, no mesmo espaço, com `NO_PROXY` já presente no ambiente, a sessão inteira (suítes
-local e S3) gravou o relatório JSON: as três variantes da cadeia de credenciais do delta-rs passaram
-(ambiente como encontrado, `NO_PROXY` exportada, proxies retirados); no bucket, 20 consultas
-pontuais em 5,5 s por `delta_scan`, 3,0 s por `ATTACH ... PIN_SNAPSHOT`, 1,2 s por `read_parquet` e
-0,017 s na tabela materializada, agregação em 0,40 s fria e 0,26 s quente, `overwrite` em 0,64 s,
-`append` em 0,42 s e `vacuum` em 0,45 s; na pasta local do espaço, as mesmas 20 consultas em 0,31 s
-por `delta_scan`, 0,25 s por `ATTACH`, 0,19 s por `read_parquet` e 0,016 s na tabela. A regra de
-materializar vale nos dois armazenamentos, e no S3 a diferença é de 300 vezes. O `executemany` de
-5.000 linhas levou 2,9 s contra 0,002 s por Arrow.
-
-Na quarta execução de 2026-09-20 (04:41 UTC, 103 testes passados e 7 pulados em 34 s, num shell
-aberto pela extensão do Claude Code, onde `NO_PROXY` existe vazia), `diagnose_aws.py` reproduziu o
-403 do delta-rs e isolou a causa: o cliente HTTP do delta-rs lê `HTTP_PROXY` e `HTTPS_PROXY` nas
-duas grafias, mas lê `NO_PROXY` e, só quando ela está ausente, `no_proxy`; vazia, ela anula as
-exceções e a chamada ao endpoint de credenciais vai pelo proxy. Com `NO_PROXY` ausente, exportada de
-`no_proxy` ou reduzida a `169.254.170.2`, ou sem as variáveis de proxy, a chamada passa. A variante
-`as_found` do teste removia `NO_PROXY` em vez de devolvê-la ao valor encontrado, e por isso passava;
-o teste agora registra cinco variantes (`as_found`, `no_proxy_exported`, `no_proxy_absent`,
-`no_proxy_empty`, `proxy_unset`) e `environment.no_proxy_as_found`, e o probe roda o delta-rs como
-encontrado e como a suíte. Sem `AWS_REGION` nem `AWS_DEFAULT_REGION`, o delta-rs foi a
-`us-east-1` apesar de `region = us-west-2` no perfil `default`; com `HOME` vazio e `AWS_REGION`,
-abriu a tabela: o perfil serve à cadeia de credenciais, não à região. A limpeza da suíte S3 ficou
-confirmada: `s3.cleanup` registrou 15
-objetos apagados, e `bucket.py` só encontrou a sessão mantida por `SERIALIZE_DB_TEST_KEEP` pela
-execução anterior.
-
-Na pasta local, em macOS e no pacote extraído em outro caminho: o commit atômico em disco (dois
-escritores na mesma versão: o segundo `overwrite` do mesmo mês falha com `CommitFailedError`; meses
-diferentes e `append` mais `append` comitam os dois), os caminhos relativos do log com a realocação
-da pasta e a abertura sem variáveis `AWS_*`. Os comportamentos do delta-rs que as etapas assumem
-(substituição por predicado, `schema_mode`, `add_columns`, cast no `append`, `restore`, `vacuum`,
-`keep_versions`, exportação por mês) foram verificados localmente e estão em `delta.md`.
-
-### O que as leituras do ambiente mostraram
-
-O espaço do SageMaker Unified Studio, lido em 2026-09-19 e quatro vezes em 2026-09-20 pelos probes:
-credenciais pelo endpoint do contêiner (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`), emitidas por
-cerca de uma hora (a expiração 04:19:03 UTC foi lida às 03:23 e às 03:44) e renovadas pelo endpoint;
-região `us-west-2` em `AWS_REGION` e `AWS_DEFAULT_REGION`; saída para a rede por
-`proxy.awsds.internal:3128`, com `no_proxy` sempre presente e `NO_PROXY` dependente do shell: igual
-a `no_proxy` num terminal do Code Editor (03:23 e 03:44 de 2026-09-20), vazia num shell aberto pela
-extensão do Claude Code (04:40; a leitura de 2026-09-19, "só a minúscula", não distinguia vazia de
-ausente); IMDS bloqueado; `pypi.org` e `github.com` não resolvem, e o `uv` alcança o PyPI
-pelo proxy; endpoints VPC de interface para STS, Glue, Athena, KMS, Secrets Manager, DataZone, Lake
-Formation e S3 Tables, e nenhum para `redshift`, `redshift-serverless` e `redshift-data`, que
-resolvem para IP público; 4 vCPUs, 15,4 GiB, 61 GiB livres em `HOME` e 37 GiB em `/tmp`, `ulimit -n`
-99999; `~/shared` é um link para a montagem `fuse.s3fs` (`rw`) do prefixo `shared/` do bucket; o
-DuckDB nasce com 4 threads, `memory_limit` 12,3 GiB e `temp_directory` `.tmp`, relativo à pasta
-corrente. O bucket do projeto é versionado (pela amostra com `VersionId`), com SSE-KMS pela chave do
-projeto e bucket key, SSE-C bloqueado e acesso público bloqueado; o papel não lista buckets
-(`ListAllMyBuckets`), não lê versionamento, ciclo de vida, política, propriedade, Object Lock nem
-uploads incompletos, não simula políticas nem descreve a chave, e a suíte S3 provou listar, ler,
-gravar, copiar e apagar sob a raiz e a chave KMS pela escrita. Conexões do projeto: IAM, três S3
-(`dev/`, `shared/` e o lake), Athena, Glue Spark, Spark Connect, Lakehouse e workflows; nenhuma
-conexão, cluster ou workgroup Redshift. O Glue tem o banco `mydatabase` com uma tabela Parquet, o
-Athena três workgroups, e o Lake Formation e o S3 Tables negam: o gatilho de reavaliação de
-`estrategia.md` não disparou. O Python do sistema é 3.12 com deltalake 1.5.0, DuckDB 1.5.4, SQLGlot
-28.10.1 e awswrangler 3.17.0.
-
-Consequências no plano: a biblioteca exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula
-está ausente ou vazia, e não depende de
-listar buckets nem de ler o versionamento; `storage_options()` resolve as credenciais de novo a cada
-chamada, porque uma emissão dura uma hora e a reserva com credenciais fixas expiraria numa execução
-longa (etapa 3); o motor DuckDB fixa `temp_directory` numa pasta com espaço conferido, porque o
-padrão é relativo à pasta corrente (etapa 4); a etapa 5 conecta por senha por padrão e trata a
-autenticação por IAM e a Data API como opcionais, porque dependem das APIs do Redshift, sem endpoint
-VPC no laboratório (`RS-14`); e o `vacuum` num bucket versionado só libera espaço com a regra
-`NoncurrentVersionExpiration`, que o papel não lê e `BK-14` mede pelo acumulado (etapa 9).
-
-O ambiente definitivo não tem internet e pode não ter proxy, só um endpoint VPC do S3 (declaração do
-usuário de 2026-09-19). Consequências, ainda não confirmadas por uma leitura de
-`probes/diagnose_aws.py` nesse ambiente: o botocore lê `AWS_DEFAULT_REGION` ou o perfil, nunca
-`AWS_REGION`, e sem região usa o endpoint global `s3.amazonaws.com`, que o endpoint VPC regional não
-atende; o delta-rs lê as duas variáveis e sem nenhuma cai em `us-east-1`, ignorando a região do
-perfil; sem variáveis de proxy ele alcança o endpoint de credenciais diretamente (variante
-`proxy_unset`), e a exportação de `NO_PROXY` não muda nada; o STS pode estar inalcançável; nenhuma
-extensão do DuckDB pode ser baixada. A biblioteca normaliza a
-região nos dois sentidos, não chama o STS e carrega as extensões só da pasta configurada. Se as APIs
-do Redshift também não tiverem endpoint lá, resta a conexão por senha na porta 5439, que não passa
-por elas (`RS-14`).
-
-### Pendências
-
-- **Redshift.** A prova de conceito espera uma conexão no projeto; os itens estão na etapa 0. A
-  primeira leitura de `probes/redshift.py` fixa como a etapa 5 conecta (senha ou IAM, cluster ou
-  serverless) e qual papel o `COPY` usa; no laboratório as APIs do Redshift não têm endpoint VPC
-  (`RS-14`), então a etapa 5 nasce com a conexão por senha e trata IAM e Data API como opcionais.
-- **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
-  (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
-  conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
-  `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket.
-- **Credenciais de uma hora.** Nenhuma execução mais longa que uma emissão rodou ainda; a etapa 3
-  renova `storage_options` a cada chamada, e a primeira execução longa no espaço confirma que o
-  delta-rs e o `boto3` renovam pela cadeia padrão.
-- **Manutenção da suíte S3.** Se `diagnose_aws.py` confirmar o cenário sem proxy: exportar
-  `AWS_DEFAULT_REGION` a partir de `AWS_REGION`, tornar a chamada ao STS opcional com espera curta e
-  passar `AWS_ENDPOINT_URL` ao secret do DuckDB. A etapa 3 implementa o mesmo na biblioteca.
-- **`Text` no Redshift.** O `sqlalchemy-redshift` compila `Text` como `TEXT`, que o Redshift guarda
-  como `VARCHAR(256)`. A etapa 1 emite `VARCHAR(65535)` por uma regra `@compiles(Text, "redshift")`
-  em `ddl`, em vez de exigir `String(65535)` nos modelos; a escolha ainda não foi confirmada pelo
-  usuário.
-- **Barreira por tabela.** Um cliente que dispara `load` numa thread e esquece o `result()` lê o
-  estado anterior em silêncio, porque o DuckDB não espera. A guarda: `load` marca a tabela em voo,
-  e `query` e `execute` esperam as tabelas em voo que o statement referencia, tiradas por
-  `find_tables` do statement Core ou do sentinela `{prefix}` do texto gerado
-  (`test_parallel.py::test_table_barrier_delays_the_read_until_the_load_lands`). Fica fora das
-  etapas até existir um pipeline paralelo real.
+O estado da implementação, com a situação de cada etapa e o que cada artefato do repositório contém,
+está em [`CURRENT_STATE.md`](CURRENT_STATE.md). O resultado das provas de conceito, das suítes e dos
+probes, com as consequências no plano, está em [`POC.md`](POC.md). As pendências e as decisões em
+aberto estão em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
 
 ## Regras que as etapas obedecem
 
