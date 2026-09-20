@@ -160,6 +160,71 @@ O que os exemplos não respondem, e o probe e a suíte respondem na primeira exe
 concedeu escrita no datashare, se o consumidor atende aos três requisitos, se o `UNLOAD` de uma
 tabela do datashare é aceito, e qual papel IAM o `COPY` usa ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
+## O que a leitura do Redshift do ambiente alvo mostrou
+
+Em 2026-09-20, às 20:37 UTC, `probes/redshift.py` rodou no ambiente alvo (Linux x86_64, Python
+3.13.15) com as variáveis do workgroup. Os relatórios estão em
+[`readings/`](readings/): a leitura das 20:37 e a repetição das 20:43 com a raiz S3 informada, que
+mudou duas linhas. Os números abaixo saem deles.
+
+**O que respondeu.** Workgroup `controladoria-wg` no namespace `controladoria-ns`, conta
+138071776059, capacidade base 8, sem acesso público e com roteamento VPC melhorado; nenhum cluster
+provisionado. Os três endpoints regionais do Redshift e o host do workgroup resolvem para IP privado
+(`10.100.x.x`): o ambiente alvo tem endpoint VPC de interface para todos, e `RS-14` passou, o que
+responde a dúvida que a leitura do laboratório deixou — a credencial temporária e a Data API
+funcionam ali sem internet. A porta 5439 abriu em 0,00 s. A credencial temporária saiu para o
+usuário `IAMR:user-533cbaba-...@3hpfa7636y4qor`, válida por uma hora, e a sessão abriu com ela. O
+ciclo da Data API devolveu `select 1` em 23 ms. A versão é `1.0.436211`, muito acima do patch 186
+que a escrita em datashare exige. `SUPER` e `JSON_PARSE` respondem.
+
+**O esquema e o banco.** `svv_redshift_databases` mostra `dev` local com isolamento de snapshot e
+`datalake_rw_shared` do tipo `shared`, vindo do datashare `controladoria_rw_datashare` da conta
+produtora 390403891846, com isolamento `UNKNOWN`. `svv_all_schemas` põe `sbx_aco_decon` só nesse
+banco, tipo `shared`: o nome em três partes está confirmado, e `RS-16` passou. `svv_all_tables`
+lista três tabelas lá (`teste`, `teste3`, `new_table`), nenhuma com o prefixo da biblioteca, então a
+sessão lê o esquema. A ACL do banco compartilhado nomeia só a role administrativa do SSO, não a
+identidade da sessão.
+
+**O que bloqueia.** O namespace não tem papel IAM padrão nem papel IAM associado: `COPY` e `UNLOAD`
+sobre o S3 não rodam até o administrador associar um, porque o Redshift só aceita papel associado ao
+namespace, com ou sem ARN explícito. `RS-6` reprova por isso, e é a pendência de
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) com dono fora do projeto.
+
+**O que a sessão pode e não pode.** `has_database_privilege(dev, CREATE)` é falso e `TEMP` é
+verdadeiro, e o usuário não é superusuário nem cria banco: o sandbox de execução não pode ser uma
+tabela comum em `dev`, e restam a tabela temporária e o próprio datashare, se o produtor tiver
+concedido `CREATE`. Os esquemas locais visíveis são só `catalog_history` e `public`, ambos de
+`rdsdb`.
+
+**O que a sessão não consegue ler.** `stv_slices` e `stl_load_errors` são negadas a um usuário comum
+(SQLSTATE 42501): o requisito de 64 slices da escrita em datashare não é verificável daqui, e a
+visão de erros de carga dos clusters provisionados também não. `pg_settings` do serverless não
+trouxe `timezone` nem `enable_case_sensitive_identifier`, que só `SHOW` responde.
+
+**O diagnóstico de um `COPY` reprovado existe.** Na leitura das 20:37, `sys_load_error_detail`
+estourou o tempo limite de 10 s e derrubou a conexão; na repetição das 20:43, com a raiz S3
+informada, ela respondeu `0` em 1,5 s, e `svv_external_schemas` respondeu `0` logo depois
+([`readings/redshift-2026-09-20-2043.txt`](readings/redshift-2026-09-20-2043.txt)). A visão é
+legível, o primeiro tempo limite era o defeito do probe, e a etapa 5 lê o motivo de uma carga
+recusada na própria sessão por `sys_load_error_detail`, nunca por `stl_load_errors`.
+
+**Os defeitos do probe que esta execução expôs**, corrigidos na mesma unidade de trabalho:
+
+- `RS-17` reprovava com o isolamento `UNKNOWN` do banco compartilhado. O isolamento exigido é o do
+  banco que recebe a escrita, que fica no produtor, e o consumidor não o enxerga: `UNKNOWN` passou a
+  ser leitura ausente, e a checagem sai como `note`.
+- O tempo limite de leitura derruba o socket do `redshift_connector`, e as consultas seguintes
+  devolviam `cannot read from timed out object`, um erro que não explica nada — foi ele que fez a
+  primeira leitura declarar `svv_external_schemas` ilegível, quando a conexão é que tinha caído. A
+  primeira perda passou a ser registrada, e as leituras seguintes dizem que a conexão caiu; a espera
+  subiu de 10 s para 30 s.
+- Cinco chamadas cuja falha é leitura do ambiente (o pacote `sagemaker_studio` fora de um espaço, as
+  visões de sistema negadas a um usuário comum) entravam na seção final e no código de saída, que
+  existem para o que precisa de manutenção. `Report.call` ganhou `expected=True`, que as imprime como
+  `-- SEM RESULTADO` e as mantém fora da contagem.
+- `RS-6` dizia só "nenhum papel padrão". Passou a separar o papel padrão, que `IAM_ROLE default`
+  usa, do papel apenas associado, que serve por ARN, do caso do ambiente alvo, nenhum dos dois.
+
 ## O que a leitura da base de origem mostrou
 
 Em 2026-09-20, `probes/parquet_source.py --sample 2000` leu a base de desenvolvimento

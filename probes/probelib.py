@@ -4,7 +4,9 @@ Um probe fotografa o ambiente sem alterá-lo. O relatório sai no terminal e em
 ``probes/output/<nome>_<data-hora>.txt``, pasta fora do git, para ser colado na conversa com o
 assistente: um cabeçalho com data, plataforma e interpretador; seções numeradas; cada chamada
 ecoada acima do seu resultado ou do seu erro, que também vai para a seção final "Chamadas que
-falharam", para um bloco vazio nunca significar "negado"; identificadores reaproveitados como
+falharam", para um bloco vazio nunca significar "negado", a menos que a chamada seja marcada
+``expected``, quando a falha é leitura (a visão negada a um usuário comum) e sai como
+``-- SEM RESULTADO``; identificadores reaproveitados como
 ``NOME=valor``; tabelas alinhadas; e a tabela de checagens, ``fail`` primeiro, depois ``note``,
 depois ``pass``. Códigos de saída: 0 quando toda checagem passou, 1 quando alguma chamada
 falhou, 2 quando alguma checagem reprovou.
@@ -154,6 +156,32 @@ def reason(error: BaseException) -> str:
     if unanswered(error):
         return f"sem resposta ({type(error).__name__})"
     return f"erro local ({type(error).__name__})"
+
+
+def s3_root(argv: list[str]) -> tuple[str, str]:
+    """A raiz ``s3://bucket/prefixo`` que um probe fotografa, e de onde ela veio.
+
+    A ordem é o argumento da linha de comando, ``SERIALIZE_DB_ROOT`` (a raiz da biblioteca, onde ela
+    escreveria) e ``SERIALIZE_DB_TEST_S3_ROOT`` (a autorização da suíte S3, que costuma apontar para
+    o mesmo lugar). Uma ``SERIALIZE_DB_ROOT`` de pasta local é ignorada, porque estes probes leem S3.
+    Devolve ``("", "nada")`` quando nenhuma das três diz onde olhar.
+    """
+    candidates = [
+        (argv[1] if len(argv) > 1 else "", "argumento"),
+        (os.environ.get("SERIALIZE_DB_ROOT", ""), "SERIALIZE_DB_ROOT"),
+        (os.environ.get("SERIALIZE_DB_TEST_S3_ROOT", ""), "SERIALIZE_DB_TEST_S3_ROOT"),
+    ]
+    for value, source in candidates:
+        if value.startswith("s3://"):
+            return value.rstrip("/"), source
+        if value and source == "argumento":
+            return value.rstrip("/"), source  # um argumento errado é dito pelo probe, não ignorado em silêncio
+
+    return "", "nada"
+
+
+# A frase que um probe imprime quando nenhuma das três origens diz onde olhar.
+NO_ROOT = "sem raiz: informe s3://bucket/prefixo como argumento, em SERIALIZE_DB_ROOT ou em SERIALIZE_DB_TEST_S3_ROOT"
 
 
 def region() -> str | None:
@@ -426,12 +454,17 @@ class Report:
         print(tabulate(rows))
         print()
 
-    def call(self, label: str, action: Callable[[], T], render: Callable[[Any], str] | None = pretty) -> T | None:
+    def call(self, label: str, action: Callable[[], T], render: Callable[[Any], str] | None = pretty, expected: bool = False) -> T | None:
         """Ecoa ``label``, executa ``action`` e imprime o resultado ou o erro; a falha vai para a seção final.
 
         Devolve o resultado de ``action``, ou ``None`` quando ela levantou exceção; nesse caso
         ``last_reason`` guarda o motivo curto para a checagem que interpreta a falha. ``render``
         transforma o resultado em texto (``pretty`` por padrão; ``None`` não imprime nada).
+
+        ``expected=True`` marca a chamada cuja falha é leitura, não defeito: a visão de sistema
+        negada a um usuário comum, o pacote ausente fora de um espaço. Ela aparece no lugar e deixa
+        ``last_reason`` para a checagem que a interpreta, mas fica fora da seção final e do código de
+        saída, que existem para o que precisa de manutenção.
         """
         print(f"$ {label}")
         started = time.perf_counter()
@@ -440,8 +473,10 @@ class Report:
         except Exception as error:  # noqa: BLE001 - toda falha é diagnóstico
             detail = describe_error(error)
             self.last_reason = reason(error)
-            print(f"!! FALHOU ({time.perf_counter() - started:.1f} s): {detail}\n")
-            self.failures.append((label, detail))
+            marker = "-- SEM RESULTADO" if expected else "!! FALHOU"
+            print(f"{marker} ({time.perf_counter() - started:.1f} s): {detail}\n")
+            if not expected:
+                self.failures.append((label, detail))
             return None
 
         elapsed = time.perf_counter() - started

@@ -130,6 +130,8 @@ conversa.
 
 O argumento `s3://bucket/prefixo` é a raiz que a suíte S3 recebe em `SERIALIZE_DB_TEST_S3_ROOT`,
 variável que o substitui quando ele falta: `bucket.py` inventaria o que há sob ela,
+A raiz S3 de `bucket.py`, `diagnose_aws.py` e `redshift.py` vem do argumento, de `SERIALIZE_DB_ROOT`
+ou de `SERIALIZE_DB_TEST_S3_ROOT`, nessa ordem.
 `diagnose_aws.py` lista `<raiz>/serialize-db-poc/` como a suíte faz e `redshift.py` simula o papel
 do `COPY` sobre ela; nenhum probe cria pasta ou objeto. No espaço do SageMaker, a raiz é a área de
 trabalho `dev/` do projeto, que `space.py` imprime como `s3_root` na seção do projeto, ou uma

@@ -516,6 +516,11 @@ def test_datashare_write_verdict_separates_unmet_from_unread() -> None:
     status, text = redshift.datashare_write_verdict(None, "serverless", None, None)
     assert status == "note" and text.count("não lido") == 3
 
+    # O isolamento de um banco de datashare vem UNKNOWN (leitura do ambiente alvo, 2026-09-20): é
+    # ausência de leitura, porque o banco que recebe a escrita fica no produtor, e não reprovação.
+    status, text = redshift.datashare_write_verdict((1, 0, 436211), "serverless", "UNKNOWN", None)
+    assert status == "note" and "isolamento (UNKNOWN, do banco do produtor): não lido" in text
+
     # O provisionado tem patch mínimo próprio: o mesmo número reprova num e passa no outro.
     assert redshift.datashare_write_verdict((1, 0, 78885), "serverless", "Snapshot Isolation", 64)[0] == "fail"
     assert redshift.datashare_write_verdict((1, 0, 78885), "provisionado", "Snapshot Isolation", 64)[0] == "ok"
@@ -531,6 +536,39 @@ def test_credential_summary_keeps_the_password_out_of_the_report() -> None:
     """O resumo da credencial temporária mostra usuário e expiração; a senha nunca entra no relatório."""
     summary = redshift.credential_summary({"dbUser": "IAMR:papel", "dbPassword": "segredo", "expiration": "2026-09-20 05:00"})
     assert "IAMR:papel" in summary and "2026-09-20 05:00" in summary and "segredo" not in summary
+
+
+def test_s3_root_prefers_the_argument_then_the_library_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A raiz que um probe fotografa: o argumento, depois ``SERIALIZE_DB_ROOT``, depois a autorização da suíte."""
+    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
+    monkeypatch.delenv("SERIALIZE_DB_TEST_S3_ROOT", raising=False)
+    assert probelib.s3_root(["probe.py", "s3://bucket/prefixo/"]) == ("s3://bucket/prefixo", "argumento")
+    assert probelib.s3_root(["probe.py"]) == ("", "nada")
+
+    # A raiz da biblioteca vem antes da autorização da suíte, que é só conveniência.
+    monkeypatch.setenv("SERIALIZE_DB_ROOT", "s3://bucket/biblioteca")
+    monkeypatch.setenv("SERIALIZE_DB_TEST_S3_ROOT", "s3://bucket/suite")
+    assert probelib.s3_root(["probe.py"]) == ("s3://bucket/biblioteca", "SERIALIZE_DB_ROOT")
+    assert probelib.s3_root(["probe.py", "s3://outro/raiz"]) == ("s3://outro/raiz", "argumento")
+
+    # Uma raiz local da biblioteca não serve a estes probes, que leem S3: a autorização da suíte responde.
+    monkeypatch.setenv("SERIALIZE_DB_ROOT", "/pasta/local")
+    assert probelib.s3_root(["probe.py"]) == ("s3://bucket/suite", "SERIALIZE_DB_TEST_S3_ROOT")
+
+    # Um argumento que não é s3:// volta como veio, para o probe dizer o que está errado.
+    assert probelib.s3_root(["probe.py", "/pasta"]) == ("/pasta", "argumento")
+
+
+def test_iam_roles_separate_the_default_from_the_ones_merely_attached() -> None:
+    """``RS-6``: o papel padrão serve a ``IAM_ROLE default``; um associado serve por ARN; sem nenhum, o ``COPY`` não alcança o S3."""
+    clusters = {"Clusters": [{"DefaultIamRoleArn": "arn:padrao", "IamRoles": [{"IamRoleArn": "arn:padrao"}, {"IamRoleArn": "arn:outro"}]}]}
+    assert redshift.iam_roles(clusters, {}) == (["arn:padrao"], ["arn:outro"])
+
+    # O namespace serverless do ambiente alvo: sem padrão e sem associado.
+    assert redshift.iam_roles(None, {"ns": {"defaultIamRoleArn": None, "iamRoles": []}}) == ([], [])
+
+    # Associado sem padrão: IAM_ROLE default não resolve, e o ARN precisa ser informado.
+    assert redshift.iam_roles(None, {"ns": {"iamRoles": ["arn:associado"]}}) == ([], ["arn:associado"])
 
 
 def test_diagnose_suite_environment_exports_no_proxy_when_absent_or_empty() -> None:

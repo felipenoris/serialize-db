@@ -4,8 +4,8 @@ Uso:
 
     .venv/bin/python probes/redshift.py [s3://bucket/prefixo]
 
-A raiz S3, pelo argumento ou por ``SERIALIZE_DB_TEST_S3_ROOT``, serve à simulação do papel do
-``COPY`` e do ``UNLOAD`` sobre ela.
+A raiz S3, pelo argumento, por ``SERIALIZE_DB_ROOT`` ou por ``SERIALIZE_DB_TEST_S3_ROOT``
+(``probelib.s3_root``), serve à simulação do papel do ``COPY`` e do ``UNLOAD`` sobre ela.
 
 Só leitura: conecta e consulta visões de sistema, sem criar, alterar ou apagar nada no banco. Uma
 credencial derivada da identidade IAM (``GetCredentials``, ``GetClusterCredentials``) cria o usuário
@@ -32,7 +32,7 @@ Cada seção é uma função, na ordem acima, que documenta as checagens que emi
 recebem, e a seção 2 acrescenta a ele os papéis IAM padrão que a seção 5 simula. ``main`` chama as
 seções uma a uma, e uma seção que quebra não cala as outras.
 
-Variáveis: ``SERIALIZE_DB_REDSHIFT_HOST``, ``_PORT`` (5439), ``_DATABASE`` (banco da conexão),
+Variáveis, todas com o prefixo do projeto: ``SERIALIZE_DB_REDSHIFT_HOST``, ``_PORT`` (5439), ``_DATABASE`` (banco da conexão),
 ``_SHARE_DATABASE`` (banco do datashare que guarda o esquema do projeto, quando não é o da conexão),
 ``_USER``, ``_PASSWORD``, ``_CLUSTER`` (identificador do cluster, autenticação IAM), ``_WORKGROUP``
 (serverless, autenticação IAM), ``_SCHEMA`` (esquema do projeto), ``_IAM_ROLE`` (o papel do ``COPY``
@@ -192,7 +192,9 @@ def configuration(report: Report) -> Target:
         target.source = "variáveis"
 
     # As conexões do projeto, uma linha cada; a conexão Redshift escolhida é a de SERIALIZE_DB_REDSHIFT_CONNECTION ou a única.
-    result = report.call("sagemaker_studio.Project().connections", probelib.project_snapshot, render=lambda found: f"lido com {found[1]}")
+    # A conexão do projeto é um atalho para as variáveis: fora de um espaço do Studio, o pacote não
+    # existe e a leitura falha, o que é leitura do ambiente e não defeito a corrigir.
+    result = report.call("sagemaker_studio.Project().connections", probelib.project_snapshot, render=lambda found: f"lido com {found[1]}", expected=True)
     if result is not None:
         data, _ = result
         connections = data.get("connections", [])
@@ -270,6 +272,26 @@ def workgroup_rows(workgroups: dict) -> list[list[object]]:
     return rows
 
 
+def iam_roles(clusters: dict | None, namespaces: dict[str, dict]) -> tuple[list[str], list[str]]:
+    """Os papéis IAM do ``COPY`` e do ``UNLOAD``: os padrão e todos os associados, sem repetição.
+
+    Um papel só serve ao ``COPY`` quando está associado ao cluster ou ao namespace, e o padrão é o
+    que ``IAM_ROLE default`` usa. Sem nenhum associado, nem um ARN explícito funciona, e é isso que
+    ``RS-6`` separa.
+    """
+    defaults, attached = [], []
+    for cluster in (clusters or {}).get("Clusters", []):
+        defaults.append(cluster.get("DefaultIamRoleArn"))
+        attached += [role.get("IamRoleArn") for role in cluster.get("IamRoles", [])]
+    for namespace in namespaces.values():
+        defaults.append(namespace.get("defaultIamRoleArn"))
+        attached += list(namespace.get("iamRoles", []))
+
+    defaults = [role for role in defaults if role]
+    attached = [role for role in attached if role and role not in defaults]
+    return list(dict.fromkeys(defaults)), list(dict.fromkeys(attached))
+
+
 def data_api_row(record: list[dict]) -> list[object]:
     """Uma linha da Data API: cada célula é um dicionário de um item, e ``isNull`` vira ``None``."""
     return [None if cell.get("isNull") else next(iter(cell.values())) for cell in record]
@@ -306,7 +328,7 @@ def data_api_select(client: object, parameters: dict, sql: str, timeout: float =
 
 
 def apis(report: Report, target: Target) -> None:
-    """Seção 2: ``RS-2`` (as APIs respondem), ``RS-6`` (papel IAM padrão para ``COPY`` e ``UNLOAD``) e ``RS-10`` (Data API)."""
+    """Seção 2: ``RS-2`` (as APIs respondem), ``RS-6`` (papel IAM associado para ``COPY`` e ``UNLOAD``) e ``RS-10`` (Data API)."""
     import boto3
 
     report.h1("APIs do Redshift")
@@ -376,18 +398,23 @@ def apis(report: Report, target: Target) -> None:
     else:
         report.note("RS-2", "APIs do Redshift", "; ".join(missing) + "; a autenticação por IAM depende delas; ver a seção final")
 
-    # RS-6: sem papel padrão, o COPY precisa de IAM_ROLE explícito; sem cluster nem workgroup, nada a ler.
-    roles = [cluster.get("DefaultIamRoleArn") for cluster in (clusters or {}).get("Clusters", [])] + [namespace.get("defaultIamRoleArn") for namespace in namespaces.values()]
-    roles = [role for role in roles if role]
-    target.roles = roles
-    if roles:
-        report.ok("RS-6", "papel IAM padrão para COPY e UNLOAD", ", ".join(roles))
-    elif (clusters or {}).get("Clusters") or (workgroups or {}).get("workgroups"):
-        report.fail("RS-6", "papel IAM padrão para COPY e UNLOAD", "nenhum cluster ou workgroup tem papel padrão: o COPY precisará de IAM_ROLE explícito")
+    # RS-6: o COPY e o UNLOAD só usam papel associado ao cluster ou ao namespace. Com papel padrão,
+    # IAM_ROLE default basta; com papéis associados e sem padrão, SERIALIZE_DB_REDSHIFT_IAM_ROLE tem
+    # que nomear um; sem nenhum associado, nem um ARN explícito funciona, e quem associa é o
+    # administrador do namespace.
+    defaults, attached = iam_roles(clusters, namespaces)
+    target.roles = defaults + attached
+    visible = bool((clusters or {}).get("Clusters") or (workgroups or {}).get("workgroups") or namespaces)
+    if defaults:
+        report.ok("RS-6", "papel IAM para COPY e UNLOAD", f"padrão: {', '.join(defaults)}" + (f"; associados: {', '.join(attached)}" if attached else ""))
+    elif attached:
+        report.note("RS-6", "papel IAM para COPY e UNLOAD", f"sem papel padrão; associados: {', '.join(attached)}; informe um deles em SERIALIZE_DB_REDSHIFT_IAM_ROLE, porque IAM_ROLE default não resolve")
+    elif visible:
+        report.fail("RS-6", "papel IAM para COPY e UNLOAD", "nenhum papel associado ao cluster ou ao namespace: o COPY e o UNLOAD sobre o S3 não rodam até o administrador associar um")
     elif not missing:
-        report.note("RS-6", "papel IAM padrão para COPY e UNLOAD", "nenhum cluster ou workgroup visível: nada a ler")
+        report.note("RS-6", "papel IAM para COPY e UNLOAD", "nenhum cluster ou workgroup visível: nada a ler")
     else:
-        report.note("RS-6", "papel IAM padrão para COPY e UNLOAD", "não lido: " + "; ".join(missing))
+        report.note("RS-6", "papel IAM para COPY e UNLOAD", "não lido: " + "; ".join(missing))
 
     # Sem configuração, os nomes visíveis dizem ao leitor o que informar para conectar por IAM.
     if target.source == "nada":
@@ -493,16 +520,20 @@ def datashare_write_verdict(version: tuple[int, ...] | None, kind: str, isolatio
 
     Devolve ``("ok" | "fail" | "note", texto)``, um requisito por trecho. Um requisito que a sessão
     não leu entra como ``não lido`` e não reprova sozinho: leitura negada não é requisito reprovado.
+    O isolamento exigido é o do banco que recebe a escrita, que fica no produtor: num banco de
+    datashare a coluna vem ``UNKNOWN`` (leitura de 2026-09-20), e isso é ausência de leitura, não
+    isolamento serializável.
     """
     minimum = DATASHARE_WRITE_VERSION.get(kind, DATASHARE_WRITE_VERSION["serverless"])
+    known_isolation = None if isolation is None or str(isolation).strip().lower() in ("", "unknown") else str(isolation)
     checks: list[tuple[str, bool | None]] = [
         (
             f"patch {'.'.join(str(part) for part in version)} contra {'.'.join(str(part) for part in minimum)} ({kind})" if version else "patch",
             None if version is None else version >= minimum,
         ),
         (
-            f"isolamento {isolation}" if isolation else "isolamento",
-            None if isolation is None else DATASHARE_WRITE_ISOLATION in str(isolation).lower(),
+            f"isolamento {known_isolation}" if known_isolation else f"isolamento ({isolation or 'sem leitura'}, do banco do produtor)",
+            None if known_isolation is None else DATASHARE_WRITE_ISOLATION in known_isolation.lower(),
         ),
         (
             f"{slices} slices contra {DATASHARE_WRITE_SLICES}" if slices is not None else "slices",
@@ -562,7 +593,9 @@ def session(report: Report, target: Target) -> None:
     # workgroup é o caminho testado no ambiente alvo; o IAM do redshift_connector, que pede a mesma
     # API por dentro, fica de reserva para quando ela não responde ou o endereço é desconhecido.
     def connect() -> tuple[str, object]:
-        common = {"database": target.database, "timeout": 10}
+        # O timeout do redshift_connector vale para conectar e para ler: 10 s abortaram
+        # sys_load_error_detail no ambiente alvo (2026-09-20), e a conexão não voltou a servir.
+        common = {"database": target.database, "timeout": 30}
         if target.host and target.user and target.password:
             label = "credencial temporária do workgroup" if temporary else "senha"
             return label, redshift_connector.connect(host=target.host, port=target.port, user=target.user, password=target.password, ssl=True, **common)
@@ -581,10 +614,21 @@ def session(report: Report, target: Target) -> None:
     created_user = method.startswith("IAM") or method.startswith("credencial")
     report.ok("RS-4", "sessão", f"aberta por {method}" + ("; a credencial derivada da identidade IAM pode ter criado o usuário do banco" if created_user else ""))
 
+    # Um tempo limite de leitura fecha o socket do redshift_connector, e toda consulta seguinte
+    # devolveria "cannot read from timed out object": a primeira perda é registrada, e as demais
+    # leituras dizem que a conexão caiu em vez de repetir um erro que não explica nada.
+    lost: list[str] = []
+
     def query(sql: str, params: tuple = ()) -> tuple[list[str], list[tuple]]:
+        if lost:
+            raise RuntimeError(f"conexão perdida em {lost[0]}; as leituras seguintes não rodam")
         cursor = connection.cursor()
-        cursor.execute(sql, params)
-        rows = cursor.fetchall()
+        try:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        except OSError:  # TimeoutError é OSError: o socket não volta a servir
+            lost.append(" ".join(sql.split())[:60])
+            raise
         return [column[0] for column in cursor.description or []], rows
 
     # A versão: o patch (1.0.NNNNN) diz quais recursos existem: MERGE, SUPER, o COPY de Parquet com
@@ -652,7 +696,7 @@ def session(report: Report, target: Target) -> None:
     else:
         rows = matching_rows(databases, database_name=schema_database) if databases and schema_database else []
         isolation = column_value(databases[0], rows[0], "database_isolation_level") if databases and rows else None
-        slices = report.call("select count(*) from stv_slices", lambda: query("select count(*) from stv_slices"), render=render_rows)
+        slices = report.call("select count(*) from stv_slices", lambda: query("select count(*) from stv_slices"), render=render_rows, expected=True)
         status, verdict = datashare_write_verdict(
             patch,
             "serverless" if target.workgroup else "provisionado",
@@ -725,6 +769,9 @@ def session(report: Report, target: Target) -> None:
         lambda: query("select name, setting from pg_settings where name in ('datestyle', 'timezone', 'statement_timeout', 'search_path', 'enable_case_sensitive_identifier', 'wlm_query_slot_count') order by 1"),
         render=render_rows,
     )
+    # pg_settings do serverless não trouxe timezone nem enable_case_sensitive_identifier (leitura de
+    # 2026-09-20); SHOW responde pelas duas, e a segunda decide como os identificadores são citados.
+    report.call("show enable_case_sensitive_identifier", lambda: query("show enable_case_sensitive_identifier"), render=render_rows, expected=True)
     report.call("pg_user do usuário atual", lambda: query("select usename, usesuper, usecreatedb from pg_user where usename = current_user"), render=render_rows)
 
     # RS-9: CREATE no banco permite um esquema externo; TEMP permite a staging temporária.
@@ -741,17 +788,19 @@ def session(report: Report, target: Target) -> None:
 
     # RS-12: um COPY reprovado explica o motivo em stl_load_errors (ou sys_load_error_detail); sem leitura, o diagnóstico
     # depende do administrador.
-    errors = report.call("stl_load_errors dos últimos 30 dias", lambda: query("select count(*) from stl_load_errors where starttime > dateadd(day, -30, getdate())"), render=render_rows)
+    errors = report.call("stl_load_errors dos últimos 30 dias", lambda: query("select count(*) from stl_load_errors where starttime > dateadd(day, -30, getdate())"), render=render_rows, expected=True)
     if errors is not None:
         report.note("RS-12", "diagnóstico do COPY", f"stl_load_errors legível: {errors[1][0][0]} erro(s) de carga em 30 dias")
     else:
-        detail = report.call("sys_load_error_detail dos últimos 30 dias", lambda: query("select count(*) from sys_load_error_detail where start_time > dateadd(day, -30, getdate())"), render=render_rows)
+        detail = report.call("sys_load_error_detail dos últimos 30 dias", lambda: query("select count(*) from sys_load_error_detail where start_time > dateadd(day, -30, getdate())"), render=render_rows, expected=True)
         report.note("RS-12", "diagnóstico do COPY", "sys_load_error_detail legível" if detail is not None else "nem stl_load_errors nem sys_load_error_detail legíveis: o motivo de um COPY reprovado virá do administrador")
 
     # RS-13: a biblioteca não usa esquemas externos; a contagem mostra se o Glue chegou ao Redshift.
-    external = report.call("svv_external_schemas", lambda: query("select count(*) from svv_external_schemas"), render=render_rows)
+    external = report.call("svv_external_schemas", lambda: query("select count(*) from svv_external_schemas"), render=render_rows, expected=True)
     if external is not None:
         report.note("RS-13", "esquemas externos (Spectrum)", f"{external[1][0][0]} no banco; a biblioteca não os usa, e a contagem mostra se o Glue chegou ao Redshift")
+    else:
+        report.note("RS-13", "esquemas externos (Spectrum)", f"não lidos: {report.last_reason}")
 
     connection.close()
 
@@ -765,14 +814,15 @@ def copy_role(report: Report, target: Target) -> None:
     import boto3
 
     report.h1("Papel do COPY e do UNLOAD sobre a raiz S3")
-    root = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("SERIALIZE_DB_TEST_S3_ROOT", "")).rstrip("/")
+    root, source = probelib.s3_root(sys.argv)
     if not root.startswith("s3://"):
-        report.line("sem raiz: informe s3://bucket/prefixo como argumento ou em SERIALIZE_DB_TEST_S3_ROOT")
-        report.note("RS-11", "papel do COPY sobre a raiz", "sem raiz: informe s3://bucket/prefixo como argumento ou em SERIALIZE_DB_TEST_S3_ROOT")
+        report.line(probelib.NO_ROOT)
+        report.note("RS-11", "papel do COPY sobre a raiz", probelib.NO_ROOT)
         return
+    report.value("S3_ROOT", f"{root} (por {source})")
     if not target.roles:
-        report.line("sem papel padrão conhecido (RS-6): nada a simular")
-        report.note("RS-11", "papel do COPY sobre a raiz", "sem papel padrão conhecido (RS-6): o COPY precisará de IAM_ROLE explícito, e a suíte Redshift é o teste")
+        report.line("nenhum papel associado conhecido (RS-6): nada a simular")
+        report.note("RS-11", "papel do COPY sobre a raiz", "nenhum papel associado conhecido (RS-6): sem ele o COPY não alcança o S3, e a simulação não tem o que avaliar")
         return
 
     # Uma simulação por papel: ListBucket no bucket, GetObject e PutObject sob a raiz.

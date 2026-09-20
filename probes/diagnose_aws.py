@@ -349,9 +349,9 @@ def check_duckdb(root: str, region: str | None, endpoint: str) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    root = (argv[1] if len(argv) > 1 else os.environ.get("SERIALIZE_DB_TEST_S3_ROOT", "")).rstrip("/")
+    root, _ = probelib.s3_root(argv)
     if not root.startswith("s3://"):
-        print("uso: .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo", file=sys.stderr)
+        print(f"uso: .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo\n{probelib.NO_ROOT}", file=sys.stderr)
         return 2
 
     output = Path(__file__).resolve().parent / "output"

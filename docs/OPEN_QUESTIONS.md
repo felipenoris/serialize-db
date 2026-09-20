@@ -6,11 +6,21 @@ resposta entra no documento que a guarda, e a saída nomeia esse documento. O pl
 [`PLAN.md`](PLAN.md), o estado da implementação em [`CURRENT_STATE.md`](CURRENT_STATE.md) e o que já
 foi medido em [`POC.md`](POC.md).
 
+- **Papel IAM para o `COPY` e o `UNLOAD`.** O namespace `controladoria-ns` não tem papel IAM
+  padrão nem papel associado (leitura de 2026-09-20, `RS-6`), e o Redshift só usa papel associado ao
+  namespace, com ou sem ARN explícito: enquanto isso não mudar, nenhum `COPY` do S3 e nenhum
+  `UNLOAD` rodam, o que bloqueia as etapas [5](PLAN-STAGE-5.md) e [8](PLAN-STAGE-8.md). É pedido
+  para quem administra o namespace: associar um papel com `s3:ListBucket`, `GetObject` e `PutObject`
+  sob a raiz do projeto, e de preferência torná-lo o padrão. Depois disso, `RS-6` e `RS-11` medem.
 - **Escrita no banco do datashare.** O esquema do projeto é `sbx_aco_decon` no banco
-  `datalake_rw_shared` (decisão do usuário de 2026-09-20), e um objeto de datashare só aceita
-  escrita quando o produtor concede `INSERT` e `CREATE` ao datashare. Ninguém criou uma tabela lá
-  ainda: `RS-17` lê os três requisitos do consumidor (patch 186, isolamento de snapshot, 64 slices)
-  e `test_schema_location_and_three_part_name` cria, insere e lê pelo nome em três partes. A
+  `datalake_rw_shared`, do datashare `controladoria_rw_datashare` (leitura de 2026-09-20), e um
+  objeto de datashare só aceita escrita quando o produtor concede `INSERT` e `CREATE`. A sessão lê o
+  esquema (três tabelas em `svv_all_tables`), mas a ACL do banco nomeia só a role administrativa do
+  SSO, e ninguém criou tabela lá pela biblioteca. Dos três requisitos do consumidor, a leitura fecha
+  um: o patch `1.0.436211` atende. O isolamento do banco que recebe a escrita fica no produtor e
+  chega como `UNKNOWN`, e `stv_slices` é negada a um usuário comum, então os 64 slices não são
+  verificáveis daqui — a capacidade base do workgroup é 8 RPU. Quem responde é
+  `test_schema_location_and_three_part_name`, que cria, insere e lê pelo nome em três partes; a
   resposta entra em [`redshift.md`](redshift.md), e uma recusa muda a [etapa 8](PLAN-STAGE-8.md).
 - **`UNLOAD` a partir de uma tabela do datashare.** A documentação lista os comandos que a escrita
   num datashare aceita e o `UNLOAD` não está entre eles, sem dizer que ele é recusado. O
@@ -18,11 +28,11 @@ foi medido em [`POC.md`](POC.md).
   `test_unload_partition_by_and_register` registra o resultado e pula o resto quando o esquema vem
   de um datashare.
 - **Onde ficam as tabelas de execução.** O sandbox `exec_<id>_*` da [etapa 4](PLAN-STAGE-4.md) e as
-  stagings do `COPY` herdam as restrições do datashare se nascerem lá. As alternativas são o banco
-  local da conexão (precisa de `CREATE` no banco, `RS-9`) e tabelas temporárias (precisa de `TEMP`,
-  `RS-9`), e a primeira leitura de `probes/redshift.py` no ambiente alvo decide.
-- **O papel IAM do `COPY` e do `UNLOAD`.** `RS-6` lê o papel padrão do workgroup e `RS-11` simula o
-  alcance dele sobre a raiz S3; sem papel padrão, `SERIALIZE_DB_REDSHIFT_IAM_ROLE` tem que nomear um.
+  stagings do `COPY` herdam as restrições do datashare se nascerem lá. A leitura de 2026-09-20
+  eliminou uma das alternativas: `has_database_privilege(dev, CREATE)` é falso, então o banco local
+  da conexão não recebe tabela nenhuma. Restam a tabela temporária (`TEMP` é verdadeiro) e o próprio
+  datashare, se o produtor tiver concedido `CREATE`. A tabela temporária custa o sandbox morrer com
+  a sessão, o que a [etapa 5](PLAN-STAGE-5.md) precisa acomodar se for o caminho.
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
   conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com

@@ -24,7 +24,7 @@ e os itens marcados como pendentes dependem da prova de conceito.
 | `SELECT "table", diststyle, sortkey1, unsorted, stats_off, tbl_rows, skew_rows, vacuum_sort_benefit FROM svv_table_info WHERE schema = '<esquema>';` | Estilo de distribuição, chave de ordenação, fração não ordenada, estatísticas desatualizadas, linhas, assimetria e ganho estimado de um `VACUUM SORT`. |
 | `SELECT * FROM svv_alter_table_recommendations;` | Recomendações do Advisor para chaves de distribuição e ordenação; visível só a superusuários. |
 | `SELECT pg_last_copy_count();` | Linhas carregadas pelo último `COPY` da sessão; `0` quando a carga falhou. |
-| `SELECT * FROM sys_load_error_detail ORDER BY start_time DESC LIMIT 20;` | Erros de carga, inclusive em workgroups serverless; `stl_load_errors` cobre só clusters provisionados. |
+| `SELECT * FROM sys_load_error_detail ORDER BY start_time DESC LIMIT 20;` | Erros de carga, inclusive em workgroups serverless; `stl_load_errors` cobre só clusters provisionados e é negada a um usuário comum no ambiente alvo (SQLSTATE 42501, leitura de 2026-09-20), assim como `stv_slices`. |
 | `EXPLAIN <consulta>;` | Plano de execução, com os rótulos de redistribuição `DS_DIST_*`. |
 
 A biblioteca consulta `pg_last_copy_count()` e `sys_load_error_detail` depois de cada `COPY`, na
@@ -119,6 +119,14 @@ O que o Redshift aceita escrever num datashare, e o que ele não lista:
 - `TRUNCATE` numa tabela remota é transacional, ao contrário do `TRUNCATE` local, que confirma
   sozinho.
 - O consumidor não altera nem apaga o datashare, e não põe um objeto dele em outro datashare.
+
+O que o ambiente alvo respondeu a esses requisitos, lido em 2026-09-20 por `probes/redshift.py`
+([`POC.md`](POC.md), [`readings/`](readings/)): o patch `1.0.436211` atende; o isolamento do banco
+que recebe a escrita fica no produtor e chega ao consumidor como `UNKNOWN`; `stv_slices` é negada a
+um usuário comum, então os 64 slices não são verificáveis pela sessão. Nenhum papel IAM está
+associado ao namespace, o que impede qualquer `COPY` ou `UNLOAD` sobre o S3 até que o administrador
+associe um. `has_database_privilege(dev, CREATE)` é falso e `TEMP` é verdadeiro. `pg_settings` do
+serverless não lista `timezone` nem `enable_case_sensitive_identifier`, que `SHOW` responde.
 
 A lista dos comandos recusados acrescenta três que o projeto precisa conhecer: uma referência a
 objeto que não seja o nome em três partes, quando a sessão não está conectada ao banco

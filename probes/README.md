@@ -10,7 +10,13 @@ colado na conversa com o assistente. O formato segue os scripts de leitura de
 seções numeradas, cada chamada ecoada acima do seu resultado ou do seu erro, identificadores
 reaproveitados como `NOME=valor`, a tabela de checagens (`fail` primeiro, depois `note`, depois
 `pass`) e a seção final "Chamadas que falharam", para um bloco vazio nunca significar "negado".
+Uma chamada marcada `expected` sai como `-- SEM RESULTADO` e fica fora dessa seção e do código de
+saída: a visão de sistema negada a um usuário comum e o pacote ausente fora de um espaço são leitura
+do ambiente, não defeito a corrigir.
 Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma checagem reprovou.
+
+Um relatório que sustenta uma afirmação de `docs/POC.md` é guardado em `docs/readings/`, indexado
+por [`docs/readings/README.md`](../docs/readings/README.md); `output/` fica fora do git.
 
 ```
 .venv/bin/python probes/space.py
@@ -55,9 +61,24 @@ fixa, e numa instalação de teste rebaixou o `duckdb` para 1.5.1.
 | `SERIALIZE_DB_REDSHIFT_SCHEMA` | Esquema do projeto, para os privilégios `USAGE` e `CREATE` e a lista de tabelas. |
 | `SERIALIZE_DB_REDSHIFT_IAM_ROLE` | Papel do `COPY` e do `UNLOAD` na suíte de testes; sem ela, `IAM_ROLE default`. O probe só o lista. |
 | `SERIALIZE_DB_REDSHIFT_CONNECTION` | Nome da conexão Redshift do projeto; sem ela, a única conexão Redshift, se houver. As variáveis têm precedência sobre a conexão. |
-| argumento `s3://bucket/prefixo`, ou `SERIALIZE_DB_TEST_S3_ROOT` | A raiz sobre a qual o papel padrão do `COPY` e do `UNLOAD` é simulado (`RS-11`). |
+| argumento `s3://bucket/prefixo`, `SERIALIZE_DB_ROOT` ou `SERIALIZE_DB_TEST_S3_ROOT` | A raiz sobre a qual o papel do `COPY` e do `UNLOAD` é simulado (`RS-11`), nessa ordem de precedência. |
 
 Sem variável e sem conexão no projeto, o script lista o que as APIs mostram e não conecta.
+
+## Nomenclatura das variáveis
+
+Toda variável que o projeto exige começa com `SERIALIZE_DB_`: `SERIALIZE_DB_ROOT` e as demais da
+biblioteca ([`PLAN.md`](../docs/PLAN.md)), `SERIALIZE_DB_REDSHIFT_*` para a conexão,
+`SERIALIZE_DB_TEST_*` para a autorização de cada suíte e `SERIALIZE_DB_DUCKDB_EXTENSIONS`. As
+variáveis sem prefixo que os probes leem são padrões de terceiros, lidos por quem os define e não
+pelo projeto: `AWS_REGION` e `AWS_DEFAULT_REGION` (botocore e delta-rs), `AWS_ENDPOINT_URL*`,
+`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `HTTP_PROXY`, `HTTPS_PROXY` e `NO_PROXY` nas duas grafias.
+Renomeá-las quebraria as bibliotecas que as consultam, então elas ficam como estão.
+
+A raiz S3 que um probe fotografa sai de `probelib.s3_root`, na ordem argumento, `SERIALIZE_DB_ROOT`
+(a raiz da biblioteca, onde ela escreveria) e `SERIALIZE_DB_TEST_S3_ROOT` (a autorização da suíte
+S3, que costuma apontar para o mesmo lugar). Uma `SERIALIZE_DB_ROOT` de pasta local é ignorada por
+estes probes, que leem S3.
 
 ## Onde está a resposta
 
@@ -85,7 +106,7 @@ Sem variável e sem conexão no projeto, o script lista o que as APIs mostram e 
 | Quanto o versionamento já acumulou sob a raiz (versões não correntes e marcadores de exclusão)? | `bucket.py`, `BK-14` |
 | As credenciais expiram? Quanto disco a pasta temporária do sandbox tem, e quantos arquivos um processo pode abrir? | `space.py`, seções 1 e 4 |
 | Como o ambiente expõe o Redshift, e o que falta para conectar? | `redshift.py`, `RS-1` e seção 2 |
-| O cluster ou o workgroup tem papel IAM padrão para `COPY` e `UNLOAD`? | `redshift.py`, `RS-6` |
+| O cluster ou o workgroup tem papel IAM para `COPY` e `UNLOAD`, padrão ou associado? | `redshift.py`, `RS-6` |
 | A sessão abre, e o papel tem `USAGE` e `CREATE` no esquema? | `redshift.py`, `RS-4` e `RS-5` |
 | A credencial temporária do workgroup é emitida, para qual usuário e até quando? | `redshift.py`, `RS-15` |
 | O esquema do projeto está no banco da conexão ou num banco de datashare, e qual é o nome em três partes? | `redshift.py`, `RS-16` |
