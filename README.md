@@ -44,7 +44,10 @@ uv run pytest -m redshift
 ```
 
 `SERIALIZE_DB_REDSHIFT_HOST` com `_USER` e `_PASSWORD`, ou `SERIALIZE_DB_REDSHIFT_CLUSTER`, são os
-outros caminhos de conexão.
+outros caminhos de conexão, e `SERIALIZE_DB_REDSHIFT_IAM_ROLE` nomeia o papel do `COPY` e do
+`UNLOAD` quando o workgroup não tem um padrão. A suíte cria as tabelas no esquema de
+`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, a autorização; o probe lê o esquema do projeto em
+`SERIALIZE_DB_REDSHIFT_SCHEMA`.
 
 As três variáveis de autorização se somam: informadas juntas, `uv run pytest` sem `-m` roda tudo.
 
@@ -95,7 +98,7 @@ Variáveis de ambiente:
 | `SERIALIZE_DB_TEST_KEEP` | Qualquer valor mantém a pasta, os objetos e as tabelas criados pela sessão. |
 | `SERIALIZE_DB_TEST_REPORT` | Caminho de um JSON onde o relatório da sessão é gravado, além de impresso. |
 | `SERIALIZE_DB_DUCKDB_EXTENSIONS` | Pasta de extensões do DuckDB, a única onde a suíte instala as que faltam. Sem ela, `.duckdb/` na raiz do repositório quando existir, senão a pasta padrão do DuckDB, e nada é instalado: o teste cuja extensão falta é pulado. A instalação automática do DuckDB, que no `LOAD` baixaria a extensão para `~/.duckdb` sem aviso, fica desligada. |
-| `AWS_REGION` | Região do bucket. Sem ela, a suíte S3 usa a região que o `boto3` resolve. |
+| `AWS_REGION`, `AWS_DEFAULT_REGION` | Região do bucket e do workgroup. Sem elas, as suítes usam a região que o `boto3` resolve, e o botocore só lê `AWS_DEFAULT_REGION` ou o perfil: sem uma das duas, a suíte Redshift procura o workgroup na região errada. |
 
 A suíte S3 precisa de credenciais da AWS que o `boto3` encontre (papel do contêiner ou da instância,
 variáveis `AWS_*` ou perfil), das permissões `s3:ListBucket`, `s3:GetObject`, `s3:PutObject` e
@@ -128,17 +131,32 @@ ecoada acima do resultado ou do erro, a tabela de checagens e a seção final de
 falharam. O JSON de `SERIALIZE_DB_TEST_REPORT` (seção Testes) acompanha os relatórios dos probes na
 conversa.
 
-O argumento `s3://bucket/prefixo` é a raiz que a suíte S3 recebe em `SERIALIZE_DB_TEST_S3_ROOT`,
-variável que o substitui quando ele falta: `bucket.py` inventaria o que há sob ela,
-A raiz S3 de `bucket.py`, `diagnose_aws.py` e `redshift.py` vem do argumento, de `SERIALIZE_DB_ROOT`
-ou de `SERIALIZE_DB_TEST_S3_ROOT`, nessa ordem.
-`diagnose_aws.py` lista `<raiz>/serialize-db-poc/` como a suíte faz e `redshift.py` simula o papel
-do `COPY` sobre ela; nenhum probe cria pasta ou objeto. No espaço do SageMaker, a raiz é a área de
-trabalho `dev/` do projeto, que `space.py` imprime como `s3_root` na seção do projeto, ou uma
-subpasta dela reservada aos testes. Fora disso os probes precisam só das credenciais e da região que
-o `boto3` resolve, presentes no espaço; `redshift.py` conecta pelas variáveis
-`SERIALIZE_DB_REDSHIFT_*` ou pela conexão Redshift do projeto, e sem elas registra as seções da
-sessão como `note`.
+O argumento `s3://bucket/prefixo` é a raiz que o probe fotografa; sem ele valem
+`SERIALIZE_DB_ROOT`, a raiz da biblioteca, e `SERIALIZE_DB_TEST_S3_ROOT`, a autorização da suíte S3,
+nessa ordem. `bucket.py` inventaria o que há sob ela, `diagnose_aws.py` lista
+`<raiz>/serialize-db-poc/` como a suíte faz e `redshift.py` simula sobre ela o papel do `COPY`;
+nenhum probe cria pasta ou objeto. No espaço do SageMaker, a raiz é a área de trabalho `dev/` do
+projeto, que `space.py` imprime como `s3_root` na seção do projeto, ou uma subpasta dela reservada
+aos testes. Fora disso os probes precisam só das credenciais e da região que o `boto3` resolve,
+presentes no espaço.
+
+`redshift.py` conecta pelas variáveis `SERIALIZE_DB_REDSHIFT_*`, cuja tabela está em
+[`probes/README.md`](probes/README.md), ou pela conexão Redshift do projeto; sem elas, registra as
+seções da sessão como `note`. No ambiente alvo, com a raiz S3 do projeto no lugar do exemplo:
+
+```
+export AWS_DEFAULT_REGION=sa-east-1
+export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
+export SERIALIZE_DB_REDSHIFT_DATABASE=dev
+export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
+export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
+.venv/bin/python probes/redshift.py s3://bucket/prefixo
+```
+
+`AWS_DEFAULT_REGION` é a variável que o botocore lê; sem ela e sem perfil, as APIs do Redshift são
+procuradas na região errada. `SERIALIZE_DB_REDSHIFT_SCHEMA` é o esquema do projeto, que o probe lê,
+e `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` é a autorização da suíte, que diz onde ela pode criar tabelas:
+apontam para o mesmo esquema, com significados diferentes.
 
 Os fatos que `diagnose_aws.py` usa no seu resumo:
 
