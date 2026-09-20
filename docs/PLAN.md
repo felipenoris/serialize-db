@@ -59,7 +59,7 @@ manifestos próprios e o Alembic. O SQLGlot fica opcional, como teste de compati
 | `docs/` | Completa: `parquet.md`, `duckdb.md`, `redshift.md`, `sqlalchemy.md`, `schema.md`, `delta.md`, `guia.md`, `estrategia.md`, `serialize-db.md` e este plano. Todo bloco Python dos documentos rodou com as versões fixadas em `pyproject.toml`; os comandos do Redshift foram compilados, não executados. |
 | `src/serialize_db/model/` | Os modelos do pipeline, a primeira instância do contrato e o material dos testes: `model_base_contabil.py`, `model_base_gerencial.py` e `model_db_projetado.py`. Dois não importam (`from lib_base_contabil import Base` e `from lib_base_gerencial import Base`, módulos que o repositório não tem). Os modelos usam `Double` onde o contrato pede `Numeric(18, 2)`, deixam o `autoincrement` padrão nas chaves inteiras (o `duckdb_engine` emite `SERIAL`, que o DuckDB rejeita), declaram chaves estrangeiras `DEFERRABLE INITIALLY DEFERRED` (o DuckDB descarta a cláusula, o Redshift não a tem) e não têm a coluna `mes`, comentários nem `Table.info["serialize_db"]`. A etapa 1 os corrige. |
 | `src/serialize_db/__init__.py` | Só o `main` de exemplo do `uv init`. `pyproject.toml` não declara dependência de execução; o grupo `dev` fixa pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, boto3, redshift-connector, SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0 e pandas 3.0.6. |
-| `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Sem variável, 18 testes passam e 39 são pulados; com a raiz local, 39 passam e 18 são pulados (2026-09-19, macOS). |
+| `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas e da stdlib (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Cada etapa abaixo lista as provas de conceito que exercitam as suas APIs. Sem variável, 34 testes passam e 48 são pulados; com a raiz local, 64 passam e 18 são pulados (2026-09-19, macOS). |
 | `probes/` | Leituras do ambiente, só de leitura: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` e `catalog.py` sobre `probelib.py`, com o resultado em `probes/output/` para colar na conversa. Validados aqui só nos caminhos de falha; nenhum resultado do ambiente de destino foi lido ainda. |
 | `prepare_offline.sh` | Deixa a pasta autossuficiente para o destino sem internet (`.python/`, `.venv/`, `.duckdb/`); verificado extraindo o pacote em outro caminho e rodando a suíte local com proxies mortos. |
 
@@ -135,9 +135,11 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - O delta-rs não impõe duas regras de evolução: `add_columns` aceita coluna `NOT NULL` em tabela
   com dados e a deixa nula, e o `append` converte os dados para o tipo da tabela em vez de acusar a
   diferença. `reconcile` recusa a primeira, e `cast` aplica os tipos antes de gravar (`delta.md`).
-- O log é limpo no checkpoint com `delta.logRetentionDuration` de 30 dias por padrão; a tabela
-  nasce com `interval 3650 days`, `delta.deletedFileRetentionDuration` fica em `interval 400 days`,
-  e `keep_versions` protege os snapshots do banco (`delta.md`).
+- O log é limpo no checkpoint com `delta.logRetentionDuration` de 30 dias por padrão (`delta.md`;
+  uma sondagem de 2026-09-19 com `interval 0 days`, seis commits e um checkpoint manteve a versão 0
+  legível, então a limpeza não vira asserção); a tabela nasce com `interval 3650 days`,
+  `delta.deletedFileRetentionDuration` fica em `interval 400 days`, e `keep_versions` protege os
+  snapshots do banco.
 - Dois `overwrite` do mesmo mês conflitam (`CommitFailedError`); meses diferentes e `append`
   entram. Uma execução por ambiente por vez, e o conflito é o sinal de que houve duas; a ação `txn`
   não impede repetição, e a idempotência é do `overwrite` por mês (`delta.md`).
@@ -193,7 +195,8 @@ padrão; nenhum arquivo de configuração.
 Testes: `tests/` na raiz testa o pacote, um módulo de teste por módulo do pacote;
 `tests/proof_of_concept/` guarda as provas de conceito e os testes das bibliotecas externas,
 comentados passo a passo porque também são o material de estudo das APIs. Um teste que não grava (esquema, renderização, DuckDB em memória) roda sem variável; um teste que
-grava usa a fixture `local_location`, sob `SERIALIZE_DB_TEST_LOCAL_ROOT`, e é pulado sem ela; o
+grava usa a fixture `local_location`, sob `SERIALIZE_DB_TEST_LOCAL_ROOT`, e é pulado sem ela, e o
+fim da sessão imprime, sem erro, o comando que autoriza cada suíte pulada e o que ela grava; o
 marcador `s3` repete no bucket os testes que dependem do armazenamento, sob
 `SERIALIZE_DB_TEST_S3_ROOT`; o marcador `redshift` roda só com `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`,
 o esquema onde a suíte pode criar tabelas `serialize_db_test_<id>_*`, e conecta pelas variáveis
@@ -263,7 +266,12 @@ comentários de tabela e de coluna, e `Table.info["serialize_db"]` com `partitio
 Testes: `tests/test_schema.py`, sem gravar, sobre os modelos do projeto e sobre um modelo de teste
 com todos os tipos; `create_all` no DuckDB em memória com o DDL de cada modelo; o diff dos arquivos
 `schema/` versionados; `write_schema_files` sob a raiz local. Dependências: `sqlalchemy`, `pyarrow`,
-`deltalake`, `duckdb`, `duckdb-engine` e `sqlalchemy-redshift`.
+`deltalake`, `duckdb`, `duckdb-engine` e `sqlalchemy-redshift`. Provas de conceito:
+`test_sqlalchemy.py` (`test_declarative_model_exposes_table`, `test_ddl_per_dialect`,
+`test_create_all_and_reflection`, `test_arrow_and_delta_schema_from_table`, com o mapa de tipos e
+`Schema.from_arrow().to_json()`, `test_sandbox_copy_of_table_and_schema_files_diff`),
+`test_pyarrow.py` (`test_schema_metadata_and_from_pylist`, `test_safe_cast_refuses_data_loss`) e
+`test_stdlib.py` (`test_generated_files_diff`, `test_decimal_totals`).
 
 ### Etapa 2: `sql`
 
@@ -283,7 +291,9 @@ substituição gradual da compilação em tempo de execução descrita em `sqlal
 Testes: `tests/test_sql.py`, sem gravar: o statement de `sqlalchemy.md` (parâmetro, `%` em literal,
 prefixo) renderizado nos dois dialetos e executado no DuckDB em memória com `$mes`; `bindparam` sem
 valor e parâmetro faltante como erros; o diff de `sql/`. Opcional: `sqlglot.parse_one(texto,
-dialect)` como teste de que o texto do Redshift analisa.
+dialect)` como teste de que o texto do Redshift analisa. Provas de conceito:
+`test_sqlalchemy.py` (`test_generated_sql_text_per_dialect`, `test_redshift_dialect_compiles_dml`) e
+`test_stdlib.py::test_generated_files_diff`.
 
 ### Etapa 3: `storage` e `delta`
 
@@ -325,7 +335,15 @@ Testes: `tests/test_storage.py` e `tests/test_delta.py` sob a raiz local, com os
 bucket por `-m s3`: substituição do mês e idempotência, conflito entre dois escritores,
 reconciliação aditiva e recusa da destrutiva, `rewrite` num commit sem predicado com a versão
 anterior legível, `keep_versions`, `export_snapshot` nos dois modos, realocação da pasta e a escrita
-condicional do arquivo de controle.
+condicional do arquivo de controle. Provas de conceito: `test_stdlib.py` (`test_storage_uris`,
+`test_exclusive_create_atomic_replace_and_fingerprint`, `test_json_control_file_and_commit_metadata`,
+`test_group_log_actions_by_month`, `test_prepare_environment`), `test_s3.py` (`test_conditional_put`,
+`test_boto3_list_copy_delete`, `test_delta_rs_storage_options_fallback`), `test_local.py`
+(`test_commit_is_atomic_on_disk`, `test_folder_relocates`) e `test_deltalake.py` inteiro: criação
+idempotente, predicado e nulidade, evolução com `drop_column_not_null` (recebe o nome da coluna),
+`restore`, `AddAction`, `vacuum`, `version_diff`, compactação e checkpoint, exportação por cópia e a
+reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do DuckDB registrada num
+commit `overwrite` com esquema novo e estatísticas tipadas, que o DuckDB usa para podar.
 
 ### Etapa 4: motor DuckDB
 
@@ -346,7 +364,13 @@ condicional do arquivo de controle.
 Testes: `tests/test_engine_duckdb.py` sob a raiz local: o pipeline de exemplo (doze meses
 materializados e dimensões em view, um `select` com `join`, auditoria, exportação do mês) sobre um
 Delta local criado no teste; auditoria que reprova um mês com chave duplicada; `execute` com `%`
-em literal.
+em literal. Provas de conceito: `test_duckdb.py` (configuração, Arrow na entrada e na saída, o
+leitor esvaziado pelo comando seguinte, `DECIMAL`, JSON, `executemany`, `COPY` com `RETURN_STATS`
+e particionado, banco em arquivo, `test_audit_queries`), `delta.py` (`delta_scan`, poda, tempos,
+`ATTACH ... PIN_SNAPSHOT`), `test_deltalake.py::test_duckdb_view_pins_version_and_reader_feeds_write`
+(a view presa a `version := v` e o `to_arrow_reader()` no `write_deltalake` com predicado),
+`test_sqlalchemy.py::test_arrow_path_on_raw_connection` e
+`test_stdlib.py::test_engine_protocol_and_config_dataclass`.
 
 ### Etapa 5: motor Redshift
 
@@ -370,7 +394,11 @@ O identificador de execução entra no nome do sandbox normalizado para `[a-z0-9
 127 bytes de um identificador do Redshift. Testes: `tests/test_engine_redshift.py` compara o SQL
 gerado (`COPY`, `INSERT ... SELECT`, `UNLOAD`, DDL da staging) com texto esperado, sem cluster; os
 testes marcados `redshift` rodam a mesma sequência com uma amostra no esquema autorizado, depois do
-`test_redshift.py` da etapa 0.
+`test_redshift.py` da etapa 0. Provas de conceito: `test_redshift.py` (sessão e `paramstyle`
+nomeado, DDL, `COPY ... MANIFEST`, lista de colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`),
+`test_sqlalchemy.py` (`test_redshift_dialect_compiles_dml`,
+`test_sandbox_copy_of_table_and_schema_files_diff`) e `test_stdlib.py::test_execution_identifiers`
+(o prefixo do sandbox).
 
 ### Etapa 6: execução e linha de comando
 
@@ -393,7 +421,11 @@ O log é o `logging` padrão com um resumo por execução: identificador, mês, 
 gravadas e tempo por passo. Testes: `tests/test_execution.py` sob a raiz local com o motor DuckDB:
 a reexecução com o mesmo `execution_id` produz o mesmo estado; a auditoria reprovada deixa a versão
 da tabela como estava; de duas execuções publicando o mesmo mês, a segunda aborta com
-`ExecutionConflict`.
+`ExecutionConflict`. Provas de conceito: `test_stdlib.py` (`test_month_arithmetic`,
+`test_execution_identifiers`, `test_context_manager_cleans_up_on_failure`,
+`test_entry_point_by_import_string`, `test_command_line_parsing`, `test_execution_log`,
+`test_prepare_environment`, `test_json_control_file_and_commit_metadata`) e
+`test_deltalake.py::test_time_travel_and_restore` (os metadados de commit no histórico).
 
 ### Etapa 7: carga inicial
 
@@ -410,7 +442,12 @@ A migração dos Parquet atuais para o Delta, uma passagem por tabela e por mês
 tipos, a ordem de colunas e o layout Hive do contrato; não foi testado e não é o caminho padrão.
 Depois da carga os leitores abrem o Delta, e as pastas de origem ficam como cópia até a primeira
 publicação no Redshift. Testes: `tests/test_load.py` com Parquet gerados no teste sob a raiz local,
-incluindo uma origem em `Double` e uma carga interrompida.
+incluindo uma origem em `Double` e uma carga interrompida. Provas de conceito:
+`test_deltalake.py::test_initial_load_from_parquet_folders` (o cast na consulta do DuckDB, o mês
+por `overwrite` com predicado, a retomada pelos meses já presentes e o relatório de contagens e
+somas), `test_pyarrow.py` (`test_hive_partitioned_dataset`,
+`test_parquet_streaming_read_filters_and_pandas`) e
+`test_duckdb.py::test_decimal_from_pandas_sample_versus_arrow_schema`.
 
 ### Etapa 8: publicação para clientes
 
@@ -425,7 +462,9 @@ escrito nelas por outro caminho.
 | `serialize-db publish` | A publicação fora de uma execução, por exemplo depois de uma correção. |
 
 Testes: o SQL da transação comparado com texto esperado, sem cluster; integração marcada
-`redshift`.
+`redshift`. Provas de conceito: `test_deltalake.py::test_version_diff`,
+`test_stdlib.py::test_group_log_actions_by_month` e `test_redshift.py::test_copy_manifest_from_delta_files`
+(a transação da publicação repete o `COPY` na staging e o `INSERT` com o mês).
 
 ### Etapa 9: operação
 
@@ -443,7 +482,10 @@ As primitivas são as da etapa 3; a etapa entrega a rotina e a documentação.
 A documentação da API sai do `pdoc`; o runbook lista cada rotina com o comando, o que conferir
 antes e o que esperar depois. Testes: `tests/test_operation.py` sob a raiz local: `vacuum` com
 `keep_versions` preserva a versão do snapshot e remove a intermediária; `compact` antes do snapshot;
-`deep_copy` com as mesmas somas.
+`deep_copy` com as mesmas somas. Provas de conceito: `test_deltalake.py`
+(`test_vacuum_with_keep_versions`, `test_compact_and_checkpoint`, `test_dataset_reader_and_deep_copy`,
+`test_export_snapshot_by_copying_files`, `test_log_files`) e
+`test_stdlib.py::test_exclusive_create_atomic_replace_and_fingerprint` (o arquivo de controle).
 
 ## Pipeline de atualização mensal
 

@@ -148,7 +148,7 @@ research appends to the matching group.
 | --- | --- |
 | `README.md` | `uv init --python 3.13`, `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md` in the shape of the `aws/` scripts of felipenoris/AWS-DataScience: `space.py` (the space from inside), `bucket.py` (the bucket under the root), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection, clusters and workgroups with the default IAM role for `COPY`, the session), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md` in the shape of the `aws/` scripts of felipenoris/AWS-DataScience: `space.py` (the space from inside: credentials and their expiry, region, project, network, machine with temp-folder space and open-file limit, pinned and optional packages, DuckDB extensions), `bucket.py` (the bucket under the root: settings, lifecycle, inventory, the role's permissions by IAM policy simulation, the KMS key, the bucket policy, incomplete uploads), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, the Data API, the session with database privileges, settings, load-error views and external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -178,8 +178,9 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   the DuckDB Arrow reader returns zero rows after another command instead of raising;
   `read_parquet` on a single file under `mes=.../` adds `mes` by Hive auto-detection, so a file's
   real columns come from `parquet_schema`; the `DECIMAL` inferred from a pandas column came from all
-  the values, not a sample. Run a ten-line probe first, assert the observed value, and record the
-  rest in the session report.
+  the values, not a sample; the log cleanup with `delta.logRetentionDuration = interval 0 days` did
+  not happen after six commits and a checkpoint. Run a ten-line probe first, assert the observed
+  value, and record the rest in the session report.
 - **A claim of "writes nothing" or "needs nothing" is verified in a stripped environment**
   (2026-09-19). The `LOAD` of a known DuckDB extension downloaded it into `~/.duckdb`, found only
   by running with an empty `HOME`; the same kind of run found the dangling `.venv/bin/python`.
@@ -201,7 +202,9 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   `SERIALIZE_DB_TEST_LOCAL_ROOT` set to the scratchpad, both green; `py_compile` on an edited probe;
   `git status` clean of stray files.
 - **Git and shell traps.** After `git mv`, `git add` of the old path aborts a `&&` chain; add the
-  new path. In zsh, `--include=*.md` needs quotes. A Bash result above about 50 KB is saved to a
+  new path. In zsh, `--include=*.md` needs quotes, and an unquoted `$command` is not word-split: a command
+  held in a variable runs as one word (a probe loop silently ran nothing on 2026-09-19); write
+  the command out or use `${=command}`. A Bash result above about 50 KB is saved to a
   file instead of shown; read a long document in `sed -n` ranges.
 - **A subprocess probe prints its own one-line error.** A DuckDB error inside a subprocess showed
   only `^`; the probe catches the exception and prints `Type: message` to stderr. Probe code held
@@ -468,19 +471,21 @@ each dialect is in `docs/sqlalchemy.md` and `docs/duckdb.md`.
 Test layout (user decision of 2026-09-19): `tests/` holds the package tests, none yet, and
 `tests/conftest.py` the authorization rule and the fixtures of the three targets;
 `tests/proof_of_concept/` holds the proof of concept of the Delta layer on both storages (`delta.py`,
-`test_local.py`, `test_s3.py`), the study suites of the external libraries (`test_sqlalchemy.py`,
-`test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`), commented step by step because they are
-also the learning material for future maintainers, and `test_redshift.py`, the stage-0 Redshift
+`test_local.py`, `test_s3.py`), the study suites of the external libraries and of the stdlib (`test_sqlalchemy.py`,
+`test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`), commented step by step
+because they are also the learning material for future maintainers and listed per stage in
+`docs/PLAN.md`, and `test_redshift.py`, the stage-0 Redshift
 items, written before any connection existed and never run against a cluster. User rule of
 2026-09-19: each authorization variable (`SERIALIZE_DB_TEST_LOCAL_ROOT`, `SERIALIZE_DB_TEST_S3_ROOT`,
 `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`) enables the writes under it, so `uv run pytest` with no
-variables runs only the tests that write nothing, and with the variable set whatever prevents the
-write fails the session (local root missing; S3 root without `boto3` credentials or failing a
+variables runs only the tests that write nothing and ends by printing, as instructions and not as
+errors, the command that authorizes each skipped suite (user request of 2026-09-19), and with the
+variable set whatever prevents the write fails the session (local root missing; S3 root without `boto3` credentials or failing a
 short-timeout listing, 11 s with a silent proxy; Redshift without a connection); the S3 root is never
 inferred from the SageMaker project; DuckDB extensions are installed only into
 `SERIALIZE_DB_DUCKDB_EXTENSIONS`, with `autoinstall_known_extensions` off because `LOAD` of a known
 extension otherwise downloads it into `~/.duckdb` without notice. Verified on 2026-09-19 on macOS: no
-variables, 18 passed and 39 skipped; local root, 39 passed and 18 skipped. The S3 suite passed in the
+variables, 34 passed and 48 skipped; local root, 64 passed and 18 skipped. The S3 suite passed in the
 space the same day (10 passed in 27 s) before the boto3 list, copy and delete test was added.
 
 The suites exist so the same proof of concept runs in the target environment, which has no internet;

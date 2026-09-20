@@ -26,15 +26,17 @@ SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest
 de `docs/PLAN.md`). `tests/proof_of_concept/` recebe as provas de conceito e os testes das bibliotecas
 externas: cada módulo exercita a parte da API que a biblioteca usa, com comentários passo a passo, e
 é o material de estudo de quem dá manutenção na biblioteca. Os testes que não gravam nada
-(SQLAlchemy, DuckDB em memória, PyArrow em memória) rodam sempre; os demais só onde o usuário
-autoriza, pelas variáveis abaixo.
+(SQLAlchemy, DuckDB em memória, PyArrow em memória, a stdlib) rodam sempre; os demais só onde o
+usuário autoriza, pelas variáveis abaixo. Uma suíte pulada não é erro: o fim da sessão imprime o
+comando que a autoriza e o que ela grava.
 
 | Módulo | O que exercita | Marcador |
 | --- | --- | --- |
 | `test_sqlalchemy.py` | O modelo declarativo como `Table`, o DDL por dialeto com as opções físicas de `Table.info`, `create_all` no DuckDB em memória, `insert` e `select` do Core, o caminho Arrow na conexão bruta, a reflexão, a precisão do `Numeric`, `pandas.read_sql`, o texto SQL gerado por dialeto com parâmetro e prefixo, o DML compilado para o Redshift. | Nenhum. |
-| `test_duckdb.py` | A configuração da conexão, Arrow na entrada e na saída, o leitor esvaziado pelo comando seguinte, o `DECIMAL` inferido do pandas contra o esquema Arrow, JSON, `executemany` contra Arrow; `COPY ... TO` com `RETURN_STATS`, o `COPY` particionado por mês, o banco em arquivo. | Nenhum; os três últimos, `local`. |
-| `test_pyarrow.py` | O esquema com metadados e `field_id`, `from_pylist`, o cast seguro, o `RecordBatchReader`; o `ParquetWriter` por lote e o rodapé, o mesmo conteúdo gravado pelo DuckDB, o dataset Hive. | Nenhum; os dois últimos, `local`. |
-| `test_deltalake.py` | `DeltaTable.create` idempotente, os modos de escrita e o predicado, a evolução de esquema e o `update`, a viagem no tempo e o `restore`, as ações `add` e a `AddAction`, o `vacuum` com `keep_versions`, o dataset Arrow e a cópia profunda, o log. | `local`. |
+| `test_duckdb.py` | A configuração da conexão, Arrow na entrada e na saída, o leitor esvaziado pelo comando seguinte, o `DECIMAL` inferido do pandas contra o esquema Arrow, JSON, `executemany` contra Arrow, as consultas da auditoria; `COPY ... TO` com `RETURN_STATS`, o `COPY` particionado por mês, o banco em arquivo. | Nenhum; os três últimos, `local`. |
+| `test_pyarrow.py` | O esquema com metadados e `field_id`, `from_pylist`, o cast seguro, o `RecordBatchReader`; o `ParquetWriter` por lote e o rodapé, o mesmo conteúdo gravado pelo DuckDB, o dataset Hive, a leitura por lotes com `filters` e o pandas com tipos Arrow. | Nenhum; os três últimos, `local`. |
+| `test_deltalake.py` | `DeltaTable.create` idempotente, os modos de escrita e o predicado, a evolução de esquema e o `update`, a viagem no tempo e o `restore`, as ações `add` e a `AddAction`, o `vacuum` com `keep_versions`, o dataset Arrow e a cópia profunda, o log; `is_deltatable` e `drop_column_not_null`, a view do DuckDB presa a uma versão e o leitor Arrow no `write_deltalake`, a reescrita pelo `COPY` particionado registrada com estatísticas, a diferença de versões, a compactação e o checkpoint, a exportação por cópia dos arquivos, a carga inicial de pastas Parquet. | `local`. |
+| `test_stdlib.py` | A biblioteca padrão nos papéis do plano: aritmética de meses, identificadores de execução e de sandbox, `Protocol` e `dataclass`, o gerenciador de contexto que descarta o sandbox na falha, `importlib` para `modulo:funcao`, `argparse`, `logging`, `os.environ` com `monkeypatch`, `json`, `urllib.parse` e `pathlib`, `itertools` e `collections`, `decimal`, `difflib`; a criação exclusiva, a substituição atômica e a impressão digital de um arquivo. | Nenhum; o último, `local`. |
 | `delta.py`, `test_local.py`, `test_s3.py` | A prova de conceito da camada Delta nos dois armazenamentos: a escrita e a leitura pelo delta-rs, o `delta_scan` com os tipos do contrato e a poda de partição, os tempos de consulta, o `vacuum`; em disco, o commit atômico e o conflito entre escritores, a realocação da pasta, a abertura sem variáveis `AWS_*`; no bucket, a origem das credenciais, a cadeia do delta-rs e sua reserva, o put condicional, a criptografia, listar, copiar e apagar pelo `boto3`. | `local` e `s3`. |
 | `test_redshift.py` | Os itens da etapa 0 que esperam uma conexão: a sessão e o `paramstyle` nomeado, o DDL do SQLAlchemy, o `COPY ... MANIFEST` de arquivos do delta-rs (`DECIMAL` em `INT64`, `timestamp_ntz`, lista de colunas, `FILLRECORD`), o `VARCHAR` excedido, o `SUPER`, o `UNLOAD ... PARTITION BY` registrado no Delta e lido pelo DuckDB. Escrito antes de haver conexão; ainda não rodou. | `redshift` e `s3`. |
 
@@ -72,15 +74,16 @@ o que uma sessão grava é `.pytest_cache/` na raiz do repositório, do próprio
 .venv/bin/python probes/space.py
 .venv/bin/python probes/bucket.py s3://bucket/prefixo
 .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo
-.venv/bin/python probes/redshift.py
+.venv/bin/python probes/redshift.py s3://bucket/prefixo
 .venv/bin/python probes/catalog.py
 ```
 
 Scripts só de leitura, em [`probes/`](probes/README.md), que fotografam o que o ambiente oferece à
 biblioteca: o espaço do SageMaker visto de dentro (credenciais, região, projeto, rede, máquina,
-Python e DuckDB), o bucket sob a raiz (configuração, ciclo de vida, inventário e tabelas Delta), o
-acesso que a suíte S3 exige, o Redshift (conexão, papel IAM do `COPY`, sessão e privilégios) e os
-serviços de catálogo. Cada um imprime o relatório e o grava em `probes/output/`, pasta fora do git,
+Python e DuckDB), o bucket sob a raiz (configuração, ciclo de vida, inventário e tabelas Delta, as permissões do papel
+pela simulação de política do IAM, a chave KMS, a política do bucket), o acesso que a suíte S3
+exige, o Redshift (conexão, papel IAM do `COPY` e seu alcance sobre a raiz, Data API, sessão,
+privilégios, configurações e o diagnóstico de um `COPY` reprovado) e os serviços de catálogo. Cada um imprime o relatório e o grava em `probes/output/`, pasta fora do git,
 para ser colado na conversa com o assistente, com seções numeradas, cada chamada ecoada acima do
 resultado ou do erro, a tabela de checagens e a seção final de chamadas que falharam.
 
