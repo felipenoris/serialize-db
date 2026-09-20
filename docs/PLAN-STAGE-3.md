@@ -13,7 +13,7 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 | `read_text(path)`, `write_text(path, text, if_match=None, if_none_match=False)` | Escrita condicional: `IfMatch` e `IfNoneMatch` no S3 (412 vira `ConflictError`); `O_EXCL` e `os.replace` na pasta local. É a escrita de `_serialize_db/snapshots.json`. |
 | `copy(source, destination)` | `CopyObject` no S3, `shutil.copy2` na pasta local; a exportação sem ler dados. |
 | `storage_options()` | As opções do delta-rs: região, `AWS_ENDPOINT_URL`, `max_retries`, `retry_timeout`, `timeout`, as chaves de SSE quando configuradas, e as credenciais do `boto3` só na reserva; resolvidas a cada chamada, nunca guardadas, porque as credenciais do contêiner duram cerca de uma hora. |
-| `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REGION` e `ENDPOINT`; só `LOAD delta` na pasta local. |
+| `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REGION` e `ENDPOINT`; só `LOAD delta` na pasta local. Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password` a partir de `HTTP_PROXY`, `username` e `password`, como `probelib.duckdb_proxy` faz nos probes: o DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3, não só o download de extensão ([`POC.md`](POC.md)). |
 | `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou vazia, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
 
 `serialize_db.delta` é a camada de tabela; `uri` é a pasta da tabela, `table` o `Table` do modelo,
@@ -25,21 +25,21 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 | `open(uri, version=None)` | A `DeltaTable` numa versão; a execução abre cada tabela uma vez e guarda a versão. |
 | `max_key(dt, column)` | O maior valor de `column` na versão carregada: o máximo de `max.<coluna>` de `get_add_actions(flatten=True)`, sem ler dados, ou a varredura da coluna quando um arquivo não tem a estatística; 0 na tabela vazia. O início de `run.next_ids`. |
 | `commit_metadata(execution_id, input_versions, snapshot=None)` | O dicionário de `CommitProperties(custom_metadata=...)`: `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`. |
-| `publish_month(uri, month, data, metadata)` | `write_deltalake(mode="overwrite", predicate="mes = '<mes>'")` de `data` já passado por `cast`; `CommitFailedError` sobe como `ExecutionConflict`. |
-| `register_files(uri, files, months, metadata)` | `create_write_transaction(mode="overwrite", partition_filters=...)` com uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. |
+| `publish_partition(uri, value, data, metadata)` | `write_deltalake(mode="overwrite", predicate="<coluna de partição> = '<valor>'")` de `data` já passado por `cast`; `value=None` numa tabela sem partição substitui a tabela inteira; `CommitFailedError` sobe como `ExecutionConflict`. |
+| `register_files(uri, files, partitions, metadata)` | `create_write_transaction(mode="overwrite", partition_filters=...)` com uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. |
 | `schema_diff(table, dt)` | O `SchemaDiff` entre `arrow_schema(table)` e `dt.schema()`: coluna nova anulável, `NOT NULL` relaxado e `CHECK` são aditivos; coluna `NOT NULL` nova em tabela com dados, renomeação, remoção e mudança de tipo são destrutivos. |
 | `reconcile(uri, table)` | Aplica o diff aditivo (`add_columns`, `drop_column_not_null`, `add_constraint`) e recusa o destrutivo com a mensagem que aponta `rewrite`. |
-| `rewrite(uri, table)` | A tabela inteira com o esquema do contrato num único commit e sem predicado: `COPY ... PARTITION_BY (mes) ... RETURN_STATS` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. |
-| `copy_manifest(uri, version, months, destination)` | O manifesto do `COPY` do Redshift (`url` e `meta.content_length` de `get_add_actions()`), gravado sob `publicacao/`. |
-| `version_diff(uri, published, current)` | Os meses com ações `add` entre as duas versões. |
+| `rewrite(uri, table)` | A tabela inteira com o esquema do contrato num único commit e sem predicado: `COPY ... PARTITION_BY (<coluna de partição>) ... RETURN_STATS` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. |
+| `copy_manifest(uri, version, partitions, destination)` | O manifesto do `COPY` do Redshift (`url` e `meta.content_length` de `get_add_actions()`), gravado sob `publicacao/`. |
+| `version_diff(uri, published, current)` | As partições com ações `add` entre as duas versões. |
 | `snapshot(root, name, versions)` | A entrada `{name: versions}` em `_serialize_db/snapshots.json`, gravada com `write_text(if_match=...)`. |
 | `vacuum_keeping_snapshots(uri, control, retention_hours=9600, apply=False)` | `vacuum` com `keep_versions` das versões do arquivo de controle; lista por padrão e apaga com `apply=True`. |
-| `compact(uri, months)` | `optimize.compact` dos meses com arquivos pequenos, antes de um snapshot. |
+| `compact(uri, partitions)` | `optimize.compact` das partições com arquivos pequenos, antes de um snapshot. |
 | `deep_copy(uri, version, destination)` | Tabela nova na versão 0 com os dados de uma versão, para a pasta de arquivo. |
-| `export_snapshot(uri, destination, version=None, mode="copy")` | Pastas `mes=.../` sem o log: `copy` copia os arquivos que o log lista; `rewrite` reescreve pelo `COPY` particionado do DuckDB. |
+| `export_snapshot(uri, destination, version=None, mode="copy")` | Pastas `<coluna de partição>=<valor>/` sem o log: `copy` copia os arquivos que o log lista; `rewrite` reescreve pelo `COPY` particionado do DuckDB. |
 
 Testes: `tests/test_storage.py` e `tests/test_delta.py` sob a raiz local, com os mesmos casos no
-bucket por `-m s3`: substituição do mês e idempotência, conflito entre dois escritores,
+bucket por `-m s3`: substituição da partição e idempotência, conflito entre dois escritores,
 reconciliação aditiva e recusa da destrutiva, `rewrite` num commit sem predicado com a versão
 anterior legível, `keep_versions`, `export_snapshot` nos dois modos, realocação da pasta e a escrita
 condicional do arquivo de controle. Provas de conceito: `test_stdlib.py` (`test_storage_uris`,

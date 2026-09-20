@@ -11,6 +11,7 @@ devolve ``sys.stdout`` ao pytest no fim. Nenhum teste grava fora de ``tmp_path``
 from __future__ import annotations
 
 import contextlib
+import io
 import datetime as dt
 import os
 import sys
@@ -166,6 +167,58 @@ def test_environment_rows_show_presence_for_secrets_and_collapse_equal_twins(mon
     assert rows["AWS_SECRET_ACCESS_KEY"] == "definida"
     assert rows["AWS_PROFILE"] == "(ausente)"
     assert rows["HTTP_PROXY"] == "(vazia)"
+
+
+def test_duckdb_proxy_splits_the_address_from_the_credentials() -> None:
+    """O endereço vai sem as credenciais, e o usuário e a senha em configurações à parte, sem URL-encode."""
+    proxy = probelib.duckdb_proxy({"HTTP_PROXY": "http://usuario:se%40nha@proxy01.exemplo.net:8080"})
+    assert proxy.settings == {"http_proxy": "proxy01.exemplo.net:8080", "http_proxy_username": "usuario", "http_proxy_password": "se@nha"}
+    assert proxy.reading == "proxy01.exemplo.net:8080, com usuário e senha"
+
+    # username e password ganham das credenciais embutidas no endereço.
+    proxy = probelib.duckdb_proxy({"HTTP_PROXY": "http://outro:errada@proxy01.exemplo.net:8080", "username": "usuario", "password": "se@nha"})
+    assert proxy.settings["http_proxy_username"] == "usuario"
+    assert proxy.settings["http_proxy_password"] == "se@nha"
+
+    # Sem credenciais em lugar algum, só o endereço; o esquema é opcional e a porta, também.
+    assert probelib.duckdb_proxy({"HTTP_PROXY": "proxy01.exemplo.net:8080"}).settings == {"http_proxy": "proxy01.exemplo.net:8080"}
+    assert probelib.duckdb_proxy({"HTTP_PROXY": "http://proxy01.exemplo.net"}).settings == {"http_proxy": "proxy01.exemplo.net"}
+
+
+def test_duckdb_proxy_reads_only_the_variable_duckdb_reads() -> None:
+    """Sem ``HTTP_PROXY`` nada é configurado: as demais grafias, que o DuckDB ignora, entram na leitura."""
+    assert probelib.duckdb_proxy({}) == probelib.DuckDBProxy({}, "sem proxy no ambiente")
+
+    proxy = probelib.duckdb_proxy({"http_proxy": "http://p:3128", "https_proxy": "http://p:3128", "HTTP_PROXY": ""})
+    assert proxy.settings == {}
+    assert proxy.reading == "sem HTTP_PROXY; o DuckDB ignora http_proxy, https_proxy"
+
+    # Um endereço sem host, ou com porta que não é número, vira leitura; a senha não aparece nela.
+    for url in ("http://", "http://usuario:se%40nha@:8080", "http://usuario:se%40nha@proxy01.exemplo.net:porta"):
+        proxy = probelib.duckdb_proxy({"HTTP_PROXY": url})
+        assert proxy.settings == {}
+        assert proxy.reading.startswith("HTTP_PROXY sem host: ")
+        assert "se%40nha" not in proxy.reading
+
+
+def test_hide_credentials_keeps_the_address_and_drops_the_userinfo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """O relatório é colado na conversa: o endereço fica legível e o usuário e a senha somem."""
+    assert probelib.hide_credentials("http://usuario:se%40nha@proxy01.exemplo.net:8080") == "http://***@proxy01.exemplo.net:8080"
+    assert probelib.hide_credentials("proxy01.exemplo.net:8080") == "proxy01.exemplo.net:8080"
+    assert probelib.hide_credentials("") == ""
+
+    # environment_rows e o relatório do diagnose_aws usam a mesma regra em toda variável de proxy.
+    monkeypatch.setenv("HTTP_PROXY", "http://usuario:se%40nha@proxy01.exemplo.net:8080")
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    assert dict(probelib.environment_rows(["HTTP_PROXY", "AWS_REGION"])) == {
+        "HTTP_PROXY": "http://***@proxy01.exemplo.net:8080",
+        "AWS_REGION": "us-west-2",
+    }
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        diagnose_aws.show_environment()
+    assert "http://***@proxy01.exemplo.net:8080" in printed.getvalue()
+    assert "se%40nha" not in printed.getvalue()
 
 
 def test_find_values_and_connection_rows() -> None:

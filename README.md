@@ -63,6 +63,7 @@ comando que a autoriza e o que ela grava.
 | `poc_delta.py`, `test_local.py`, `test_s3.py` | A prova de conceito da camada Delta nos dois armazenamentos: a escrita e a leitura pelo delta-rs, o `delta_scan` com os tipos do contrato e a poda de partição, os tempos de consulta, o `vacuum`; em disco, o commit atômico e o conflito entre escritores, a realocação da pasta, a abertura sem variáveis `AWS_*`; no bucket, a origem das credenciais, a cadeia do delta-rs e sua reserva, o put condicional, a criptografia, listar, copiar e apagar pelo `boto3`. | `local` e `s3`. |
 | `test_redshift.py` | Os itens da etapa 0 que esperam uma conexão: a sessão e o `paramstyle` nomeado, o DDL do SQLAlchemy, o `COPY ... MANIFEST` de arquivos do delta-rs (`DECIMAL` em `INT64`, `timestamp_ntz`, lista de colunas, `FILLRECORD`), o `VARCHAR` excedido, o `SUPER`, o `UNLOAD ... PARTITION BY` registrado no Delta e lido pelo DuckDB, dois `COPY` e dois `UNLOAD` em paralelo numa conexão por thread. Escrito antes de haver conexão; ainda não rodou. | `redshift` e `s3`. |
 | `test_probes.py` (em `tests/`) | As funções puras dos probes, sem rede: a classificação dos erros do `boto3`, os rótulos de DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o inventário do bucket (tabelas Delta, sessões da suíte, versões não correntes), o versionamento pela amostra, o Object Lock, o ciclo de vida, a montagem de `~/shared`, o formato das tabelas do Glue e os parâmetros da conexão Redshift. | Nenhum. |
+| `test_source_db_projetado.py` (em `tests/`) | A base Parquet de origem fictícia de `source_db_projetado.py`, gravada na pasta temporária do pytest com a estrutura que `probes/parquet_source.py` leu na base de desenvolvimento em 2026-09-20: as 14 tabelas com as colunas, os tipos e a nulidade da seção 3 do relatório, as partições Hive por `data_str` e `data_base_str` com o valor só no caminho, os chunks numerados sem zeros à esquerda, o layout físico (um row group, SNAPPY, formato 1.0, `INT96` sem estatística, a chave `pandas`), os valores que a carga inicial trata, a leitura pelo DuckDB e pelo PyArrow, a consistência com as chaves do modelo de referência, a relação N×N de `rel_contrato_operacao` com `fator_rateio` somando 1 por operação, e o `schema.json` real da biblioteca anterior. É o material do teste da carga inicial. | Nenhum. |
 
 Cada suíte escreve só onde a sua variável autoriza, e a variável é a autorização: sem ela a suíte é
 pulada, com o motivo no relatório e em `pytest -rs`, e `uv run pytest` sem variável alguma não
@@ -169,14 +170,10 @@ biblioteca, as credenciais do `boto3` em `storage_options`, funciona.
 ## Ambiente sem internet
 
 O ambiente de destino não instala nada: a pasta do projeto é preparada num computador com internet,
-da mesma plataforma (Linux x86_64), e copiada inteira. Em outra plataforma o script roda do mesmo
-jeito e deixa a pasta pronta para uso local, mas ela não serve ao destino.
-
-No computador com internet, dentro da pasta do projeto:
-
-```
-./prepare_offline.sh
-```
+da mesma plataforma (Linux x86_64), por `./prepare_offline.sh`, e copiada inteira. Em outra
+plataforma o script roda do mesmo jeito e deixa a pasta pronta para uso local, mas ela não serve ao
+destino. O cabeçalho de `prepare_offline.sh` traz o procedimento: como rodá-lo, as variáveis de
+ambiente do proxy e os comandos de empacotar com `tar` e extrair no destino.
 
 O script cria na raiz do projeto tudo o que o pacote e os testes precisam em execução: o Python
 3.13 em `.python/`, o pacote com as dependências de execução e as de todos os grupos do
@@ -187,27 +184,13 @@ caminho. As três pastas estão no `.gitignore`. Rode o script de novo sempre qu
 mudar; se a dependência nova estiver fora do `pyproject.toml` (extensão do DuckDB, versão do Python),
 acrescente-a ao script antes.
 
-Empacotar com `tar`, que preserva os links simbólicos, as permissões e os demais metadados do
-sistema de arquivos. Copiar arquivo a arquivo por uma pasta montada do S3 perde os links, e sem eles
-`.venv/bin/python` só funciona no caminho de origem.
+Atrás de um proxy com autenticação, o `uv` lê `HTTP_PROXY` com as credenciais embutidas, mas o
+DuckDB recusa esse endereço (`Failed to parse http_proxy ... into a host and port`) e precisa do
+usuário e da senha à parte: o script os lê das variáveis `username` e `password` e os passa em
+`http_proxy_username` e `http_proxy_password`.
 
-```
-tar czf serialize-db.tar.gz --exclude=serialize-db/.git -C .. serialize-db
-```
-
-No ambiente de destino, depois de extrair o pacote em qualquer caminho:
-
-```
-tar xzf serialize-db.tar.gz
-cd serialize-db
-SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente .venv/bin/python -m pytest
-```
-
-A suíte local roda sem S3 e valida a pasta preparada; com
+No destino, a suíte local roda sem S3 e valida a pasta preparada; com
 `SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo` a suíte S3 roda também, e a do Redshift com as
 variáveis da seção Testes. Não é preciso `uv` nem rede além do S3 e do Redshift: o Python, as
-bibliotecas e as extensões vêm da pasta. Os comandos de `.venv/bin/` (como `pytest`) guardam o
-caminho original no cabeçalho, por isso a chamada é `python -m pytest`; o pacote roda do mesmo
-jeito, com `.venv/bin/python -m serialize_db` ou `.venv/bin/python -c "import serialize_db"`. A
-receita foi verificada extraindo o pacote em outro caminho e rodando a suíte com os proxies
-apontados para uma porta fechada.
+bibliotecas e as extensões vêm da pasta. A receita foi verificada extraindo o pacote em outro
+caminho e rodando a suíte com os proxies apontados para uma porta fechada.

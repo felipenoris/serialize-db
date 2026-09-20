@@ -8,10 +8,10 @@ As primitivas são as da [etapa 3](PLAN-STAGE-3.md); a etapa entrega a rotina e 
 | Rotina | Quando | Comando |
 | --- | --- | --- |
 | Snapshot do banco | Na periodicidade do processo, por exemplo o fim do trimestre. | `run.snapshot("2026T3")` na execução marcada. |
-| Compactação | Antes de um snapshot, nunca depois. | `serialize-db compact --months ...`. |
+| Compactação | Antes de um snapshot, nunca depois. | `serialize-db compact --partitions ...`. |
 | `vacuum` | Mensal: lista com `keep_versions` do arquivo de controle, revisada, depois aplicada; `--full` de tempos em tempos para os órfãos. Num bucket versionado o espaço só é liberado pela regra `NoncurrentVersionExpiration`; `probes/bucket.py` (`BK-14`) mostra o acumulado. | `serialize-db vacuum [--apply] [--full]`. |
 | Arquivo | Anual: `deep_copy` dos snapshots mais velhos que o prazo da tabela viva para `arquivo/<nome>/<tabela>/`, a entrada sai de `snapshots.json`, a pasta recebe a regra de ciclo de vida. | `serialize-db archive <nome>`. |
-| Exportação | Sob demanda: pastas Parquet por mês de um snapshot, `copy` ou `rewrite`. | `serialize-db export`. |
+| Exportação | Sob demanda: pastas Parquet por partição de um snapshot, `copy` ou `rewrite`. | `serialize-db export`. |
 | Auditoria avulsa | Depois de uma correção, e quando o SQL de uma verificação precisa ser lido. | `serialize-db audit --table ... [--sql]`. |
 | Monitoração | `history()` de cada tabela com os metadados da biblioteca. | `serialize-db history`. |
 

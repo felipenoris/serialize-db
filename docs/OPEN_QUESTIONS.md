@@ -32,6 +32,9 @@ foi medido em [`POC.md`](POC.md).
   `find_tables` do statement Core ou do sentinela `{prefix}` do texto gerado
   (`test_parallel.py::test_table_barrier_delays_the_read_until_the_load_lands`). Fica fora das
   etapas até existir um pipeline paralelo real.
+- **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
+  linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
+  RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)).
 
 ## O que a documentação oficial do Redshift não responde
 

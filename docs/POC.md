@@ -113,3 +113,117 @@ extensão do DuckDB pode ser baixada. A biblioteca normaliza a
 região nos dois sentidos, não chama o STS e carrega as extensões só da pasta configurada. Se as APIs
 do Redshift também não tiverem endpoint lá, resta a conexão por senha na porta 5439, que não passa
 por elas (`RS-14`).
+
+## O que a leitura da base de origem mostrou
+
+Em 2026-09-20, `probes/parquet_source.py --sample 2000` leu a base de desenvolvimento
+`db_projetado` (`/mnt/bndes_grupos_bases_analise_financeira/databases/dsv/db_projetado`, Linux,
+Python 3.13.15, o `.venv` do projeto): 14 pastas de tabela, 205 arquivos, 3.757.237.689 bytes,
+187.340.644 linhas, `schema.json` solto na raiz, nenhum arquivo ilegível, nenhuma chamada falhada e
+nenhuma checagem reprovada. Todo arquivo de cada tabela tem o mesmo esquema (`PQ-3`), cada tabela
+usa um só estilo e uma só profundidade de partição (`PQ-4`), a coluna de partição nunca está dentro
+do arquivo (`PQ-5`), e 7 das 78 colunas têm arquivo sem mínimo e máximo (`PQ-6`): os dois
+`timestamp` em `INT96`, `meta` e `data_fim_validade`, inteiramente nulas, e `data_assinatura`,
+`id_negocio` e `departamento` nos arquivos em que estão inteiramente nulas.
+
+O layout: as dez tabelas sem partição (`alembic_version`, `cad_aliquotas`, `cad_contas`, as cinco
+`dom_*`, `meta_update_status`, `rel_contas_hierarquias`) têm um único `chunk_0.parquet` na raiz da
+tabela; `cad_contratos` (8 arquivos, 6,5 milhões de linhas), `cad_operacoes` (13, 11,0 milhões) e
+`rel_contrato_operacao` (30, 27,9 milhões) são Hive por `data_str` com os valores `2026-02-28`,
+`2026-03-31` e `2026-06-30`, e `cad_lancamentos` (144 arquivos, 141,9 milhões de linhas, 2,83 GB) é
+Hive por `data_base_str` com `2026-01-31` a mais; o valor do caminho é igual a `data`, ou a
+`data_base`, em toda linha da partição, e `meta_update_status` registra cada carga com a partição
+em JSON (`{"data_base": {"__type__": "date", "value": "2026-01-31"}}`). Os arquivos têm até
+1.000.000 de linhas num row group, `chunk_<n>` sem zeros à esquerda, SNAPPY, `PLAIN` e `RLE` sem
+dicionário, `parquet-cpp-arrow`, formato 1.0, a chave `pandas` no rodapé e nenhum `field_id`. Os
+seis tipos: `int32` (30 colunas), `string` (23), `date32` (10), `double` (10), `bool` (3) e
+`timestamp[ns]` em `INT96` (2).
+
+O modelo de referência de `tests/model/` bate com os arquivos: as 12 tabelas, as colunas na mesma
+ordem, os tipos da tabela de `schema.md` e a nulidade, exceto sete colunas de `cad_contratos`
+anuláveis nos arquivos e `NOT NULL` no modelo, sem nulo nos dados; `alembic_version` e
+`meta_update_status` só existem na origem. Os valores: `valor` de `cad_lancamentos` vai de
+`-11.846.195.394,628` a `11.846.195.394,628`, com três casas; `fator` de `cad_aliquotas` tem cinco
+(`0,59895`); `id_lancamento` chega a 1.113.599.996 em `int32` com 141,9 milhões de linhas (ids
+esparsos) e `id_rel_contrato_operacao` a 556.941.030; `data` de `cad_lancamentos` vai até
+`2026-12-31` enquanto `data_base` para em `2026-06-30`; `data_assinatura` é nula em 53,9% das
+linhas, `id_negocio` em 59,8%, `meta` em todas; `id_veiculo` é sempre 1 e `id_mensuracao` sempre 2;
+seis colunas `double` têm `-0.0` como mínimo; `cad_lancamentos.contrato` tem `desemb-999`, acima do
+máximo de `cad_contratos.contrato`, e a partição `data_base` 2026-01-31 não tem `cad_contratos`
+dessa data, então a chave estrangeira do modelo tem órfãos; `rel_contrato_operacao.contrato` tem
+mínimo abaixo do de `cad_contratos`.
+
+A sondagem do mesmo dia (macOS, PyArrow 25.0.1, DuckDB 1.5.5): o PyArrow lê o `INT96` como
+`timestamp[ns]` e mantém a parte sub-microssegundo; `coerce_int96_timestamp_unit="us"` e o
+`TIMESTAMP` do DuckDB a truncam em silêncio; `cast(safe=True)` de `[ns]` para `[us]` recusa quando
+ela não é zero; o `INT96` não tem estatística; o formato 1.0 sem `INT96` recusa nanossegundos
+(`would lose data`); as codificações da origem saem de `use_dictionary=False`, `version="1.0"` e
+`use_deprecated_int96_timestamps=True`. O `read_parquet` do DuckDB com `hive_partitioning=true`
+converte `data_str` a `DATE` (`hive_types_autocast`); o dataset do PyArrow a mantém `string`.
+`tests/source_db_projetado.py` reproduz a estrutura em 64 arquivos e 425 KB, e o probe rodado sobre
+ela imprime a seção 3 idêntica à da base real.
+
+O `schema.json` da raiz, colado pelo usuário em 2026-09-20, é o controle de esquema da biblioteca
+anterior no formato da reflexão do SQLAlchemy: por tabela, as colunas com tipo (`INTEGER`,
+`VARCHAR`, `DATE`, `BOOLEAN`, `DOUBLE_PRECISION`, `TIMESTAMP`), nulidade e chave primária, as chaves
+estrangeiras, os índices e as restrições de unicidade. A nulidade dos arquivos é a dele, inclusive
+nas sete colunas de `cad_contratos`; as chaves estrangeiras compostas do modelo de referência
+(`cad_contratos` para `rel_contrato_operacao`, `rel_contrato_operacao` para `cad_operacoes`,
+`cad_lancamentos` para `cad_contratos`) não constam nele, o que explica os órfãos; os índices e as
+restrições de unicidade são os do modelo. `tests/source_db_projetado_schema.json` é a cópia, e
+`tests/test_source_db_projetado.py` confere que as colunas, os tipos e a nulidade dele são os dos
+arquivos.
+
+Consequências no plano, pelas decisões do usuário de 2026-09-20 registradas nas premissas de
+[`PLAN.md`](PLAN.md): a partição é por data em texto `AAAA-MM-DD`, declarada pelo modelo com a
+coluna de data de que deriva, e o vocabulário de mês do plano virou partição
+([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md) a [`PLAN-STAGE-9.md`](PLAN-STAGE-9.md),
+[`serialize-db.md`](serialize-db.md), [`schema.md`](schema.md)); as colunas numéricas continuam
+`Double`, sem arredondamento, com `Numeric(18, 2)` como melhoria futura; as chaves passam a
+`int64`; o `timestamp` `INT96` vira `INT64` de microssegundos; a nulidade é a do modelo; as
+inconsistências da base de desenvolvimento são ignoradas, e a base fictícia é consistente, com a
+relação N×N de `rel_contrato_operacao` e `fator_rateio` somando 1 por operação. A memória por
+partição de `cad_lancamentos` continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que o proxy com autenticação mostrou
+
+Em 2026-09-20, `prepare_offline.sh` parou na instalação das extensões do DuckDB, na rede
+corporativa do usuário, com `InvalidInputException: Failed to parse http_proxy
+'http://<usuário>:<senha>@proxy01.bndes.net:8080' into a host and port`. Uma sonda no scratchpad
+com DuckDB 1.5.5 (macOS arm64, um proxy de mentira em `127.0.0.1` que registra o pedido e responde
+407) mediu o comportamento:
+
+- O DuckDB tem três configurações de proxy, `http_proxy`, `http_proxy_username` e
+  `http_proxy_password`, e nenhuma equivalente a `NO_PROXY`. A descrição de `http_proxy` em
+  `duckdb_settings()` é "HTTP proxy host (defaults to the HTTP_PROXY environment variable when
+  unset)": só a grafia maiúscula é lida, e a minúscula sozinha não tem efeito nenhum.
+- O valor lido do ambiente não aparece em `duckdb_settings()`, que mostra `''`; ele é interpretado
+  na hora do pedido HTTP, e é aí que o endereço com credenciais embutidas é recusado.
+- `SET http_proxy` sobrepõe a variável de ambiente e aceita `host:porta` e `http://host:porta`, as
+  duas formas com o mesmo resultado. Com `http_proxy_username` e `http_proxy_password`, o pedido
+  chega ao proxy com `Proxy-Authorization: Basic` sobre `usuário:senha` sem URL-encode.
+
+Uma segunda sonda, no mesmo dia, mediu o alcance do erro e o que o DuckDB lê:
+
+- O erro não é do download de extensão: um `glob('s3://.../**')` pelo `httpfs`, com as extensões já
+  em disco, falha com a mesma `InvalidInputException`. Toda chamada HTTP do DuckDB passa por ali.
+- O DuckDB ignora `HTTPS_PROXY` e a grafia minúscula: com só uma delas, e com o mesmo endereço com
+  credenciais, o pedido saiu direto, sem erro e sem proxy.
+
+A separação é de `probelib.duckdb_proxy`, usada pelo `prepare_offline.sh`, por `probes/space.py` e
+pelo subprocesso de `probes/diagnose_aws.py`: tira o usuário e a senha do endereço, lê-os das
+variáveis `username` e `password` e, sem elas, usa os embutidos com URL-decode. Ela lê só
+`HTTP_PROXY`, a variável e a grafia que o DuckDB lê, porque as configurações não têm exceção
+equivalente a `NO_PROXY` e tirar o endereço de outra variável mandaria ao proxy o tráfego que hoje
+sai direto; as demais grafias presentes entram na leitura do relatório. As sondas exercitaram
+credenciais nas variáveis, só embutidas, ausentes, endereço sem esquema, endereço sem host e
+ambiente sem proxy, e a execução do script sem proxy instalou `httpfs`, `delta` e `aws`.
+
+A mesma leitura achou um vazamento nos relatórios: `environment_rows` do `probelib` e
+`show_environment` do `diagnose_aws` imprimiam `HTTP_PROXY` inteiro, com a senha embutida, num
+arquivo feito para ser colado na conversa. `hide_credentials` troca o usuário e a senha por `***` em
+toda variável de proxy.
+
+O procedimento de uso, as variáveis e os comandos de empacotar e extrair passaram para o cabeçalho
+do script, e a seção "Ambiente sem internet" do `README.md` aponta para ele. A etapa 3 aplica a
+mesma separação em `duckdb_setup` ([`PLAN-STAGE-3.md`](PLAN-STAGE-3.md)).

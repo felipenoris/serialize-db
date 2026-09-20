@@ -163,9 +163,9 @@ research appends to the matching group.
 
 | File | Subject |
 | --- | --- |
-| `README.md` | `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with one command per suite, the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
-| `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`, which details each check: `space.py` (credentials and expiry, region, project connections, network, machine with temp space, open-file limit and the `~/shared` mount by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` by presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (settings, lifecycle, inventory with each Delta table's files, commits and last object, the S3 suite's leftover sessions `BK-13`, non-current versions and delete markers `BK-14`, versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM simulation or by what the run proved, KMS key, bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict, own format; delta-rs as found and as the suite with `NO_PROXY` exported; DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection parsed as a dict, JDBC URL and secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, VPC endpoints of the Redshift APIs `RS-14`, Data API, session privileges, settings, load-error views, external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), `parquet_source.py` (the initial load's source base, one folder per table, taking the root as an argument: the table folders and the non-Parquet files, per table the files, bytes, rows, partitions and how many distinct schemas, the majority schema with Arrow type, nullability, physical and logical type and `field_id`, the schema divergences between files column by column with every divergent file named, the partition columns with their values and whether they are also inside the files, per column the rows, nulls, minimum, maximum and distinct summed from the footers, the row groups, compression, encoding, writer and footer metadata, and with `--sample N` the cardinality and text length the footer does not hold; it reads the footer of every file of every partition and never a data page without `--sample`), over `probelib.py`: DNS, TCP and internet results are readings, never failed calls, and a failed call leaves `report.last_reason` for the check that interprets it. `sagemaker-studio` stays out of the project (it drags unpinned `deltalake`, `duckdb` and `pandas`; a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. Each probe is one function per report section with a docstring naming its checks, a commented block per check and `render_*` helpers; `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
+| `README.md` | `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with one command per suite, the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and why the folder is prepared for the target without internet, with the procedure itself in the `prepare_offline.sh` header. |
+| `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. Its header is the operating procedure: how to run it, the proxy variables and the pack and unpack commands, which moved out of `README.md` on 2026-09-20. The extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`, the probes' own function, because DuckDB refuses an address with the credentials inside it. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`, which details each check: `space.py` (credentials and expiry, region, project connections, network, machine with temp space, open-file limit and the `~/shared` mount by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` by presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (settings, lifecycle, inventory with each Delta table's files, commits and last object, the S3 suite's leftover sessions `BK-13`, non-current versions and delete markers `BK-14`, versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM simulation or by what the run proved, KMS key, bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict, own format; delta-rs as found and as the suite with `NO_PROXY` exported; DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection parsed as a dict, JDBC URL and secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, VPC endpoints of the Redshift APIs `RS-14`, Data API, session privileges, settings, load-error views, external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), `parquet_source.py` (the initial load's source base, one folder per table, taking the root as an argument: the table folders and the non-Parquet files, per table the files, bytes, rows, partitions and how many distinct schemas, the majority schema with Arrow type, nullability, physical and logical type and `field_id`, the schema divergences between files column by column with every divergent file named, the partition columns with their values and whether they are also inside the files, per column the rows, nulls, minimum, maximum and distinct summed from the footers, the row groups, compression, encoding, writer and footer metadata, and with `--sample N` the cardinality and text length the footer does not hold; it reads the footer of every file of every partition and never a data page without `--sample`), over `probelib.py`: DNS, TCP and internet results are readings, never failed calls, and a failed call leaves `report.last_reason` for the check that interprets it; `duckdb_proxy` splits the proxy address from the credentials for every DuckDB session (`prepare_offline.sh` uses it too) and `hide_credentials` keeps the embedded password out of a report meant to be pasted into the conversation. `sagemaker-studio` stays out of the project (it drags unpinned `deltalake`, `duckdb` and `pandas`; a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. Each probe is one function per report section with a docstring naming its checks, a commented block per check and `render_*` helpers; `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -181,6 +181,7 @@ research appends to the matching group.
 | `docs/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service (Delta via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and the maturity assessment of Delta against Iceberg with the re-evaluation trigger. |
 | `docs/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `docs/PLAN-STAGE-<n>.md`. |
 | `tests/model/` | The reference model: the declarative ORM models of the accounting, management and projection tables, moved out of the package on 2026-09-20. The tests hand it to the package API as a client library would hand its own models; the package holds no model. |
+| `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado` with the structure `probes/parquet_source.py` read in the dev base on 2026-09-20: the 14 tables with the read columns, types and nullability (12 match the reference model; `alembic_version` and `meta_update_status` are outside it), Hive partitions by `data_str` and `data_base_str` whose value lives only in the path and equals `data` or `data_base`, `chunk_<n>` files without zero padding, one row group, SNAPPY without dictionary, format 1.0, `INT96` timestamps without statistics, the `pandas` footer key, the real `schema.json` of the previous library at the root (`source_db_projetado_schema.json`), and the values the load handles (`valor` with three decimals, `fator` with five, `id_lancamento` up to 1,113,599,996). The data is consistent with the reference model (unique keys, every foreign key satisfied, the four dates in every partitioned table, the N×N `rel_contrato_operacao` with dyadic `fator_rateio` summing to 1 per operation). `write_source(root)` returns the files and row counts; `tests/test_source_db_projetado.py` checks the written files against the transcribed section 3 of the report, the model's keys and the schema control. The material of the stage 7 test. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
 the differences from PostgreSQL, supported types with `DECIMAL` and JSON, DDL,
@@ -283,6 +284,25 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   without a Parquet file, a file with no rows. A fixture without defects exercises no verdict, and
   that first run also showed four rendering defects, among them a `Timestamp` logical type whose
   full text made the schema table unreadable.
+- **A fixture that reproduces a reading is verified by the reading instrument** (2026-09-20).
+  `tests/source_db_projetado.py` was checked by running `probes/parquet_source.py` on it and diffing
+  section 3 against the real report (identical), and the test transcribes that section as the
+  expected value. A hand-written footer check failed first: `FileMetaData.metadata` carries
+  `ARROW:schema`, which the Arrow schema metadata the probe reads does not. Read the file the way
+  the instrument reads it, and assert in its vocabulary.
+- **The writer's own control file explains a difference before a hypothesis does** (2026-09-20).
+  Seven `cad_contratos` columns nullable in the files and `NOT NULL` in the model came from the
+  previous library's `schema.json`, the SQLAlchemy reflection of the source database, which also
+  lacked the model's composite foreign keys; one reply from the user closed two open questions.
+  Ask for the metadata beside the data before listing hypotheses about it.
+- **Each tool in a script reads the proxy its own way** (2026-09-20). `prepare_offline.sh` got
+  through `uv sync` and died on the DuckDB `INSTALL` with the same `HTTP_PROXY`: `uv` accepts
+  `http://user:password@host:port`, DuckDB refuses it and reads only the uppercase spelling.
+  The probe that settles it is a socket on `127.0.0.1` that logs the request and answers 407:
+  it shows the address parsed, which host the request went to, and whether
+  `Proxy-Authorization` carried the credentials — none of which the error message says. Feed it
+  a password with a character that URL-encoding changes (`se@nha` as `se%40nha`), so a decoded
+  and an undecoded credential give different base64.
 
 ## What the documents establish
 
@@ -395,6 +415,17 @@ Each fact is detailed in the file named at the end of its line.
   `etag`), `DeleteObject` for vacuum, KMS actions only with SSE-KMS; no lifecycle expiration under
   table prefixes; versioning and Object Lock unnecessary. SSE keys in `storage_options`:
   `aws_server_side_encryption`, `aws_sse_kms_key_id`, `aws_sse_bucket_key_enabled`. `docs/delta.md`
+- DuckDB has `http_proxy`, `http_proxy_username` and `http_proxy_password` and nothing like
+  `NO_PROXY`; it reads only the uppercase `HTTP_PROXY` (the lowercase spelling alone does
+  nothing), parses it at request time, not at `SET` time, and refuses an address with the
+  credentials inside it (`Failed to parse http_proxy ... into a host and port`), which is how a
+  corporate proxy usually reaches the environment. `SET http_proxy` overrides the variable and
+  takes `host:port` or `http://host:port`; the password goes in without URL-encode and reaches
+  the proxy as `Proxy-Authorization: Basic`. The error covers every DuckDB HTTP call, an `httpfs` S3
+  `glob` included, not only an extension download. `probelib.duckdb_proxy` does the split for the
+  probes and for `prepare_offline.sh`, reading only `HTTP_PROXY`, because taking the address from a
+  spelling DuckDB ignores would send through the proxy the traffic that goes direct today; stage 3
+  does the same in `duckdb_setup`. `docs/POC.md`
 - DuckDB 1.5.5 Python API: `.arrow()` returns a `RecordBatchReader`, and `fetch_record_batch()` /
   `fetch_arrow_table()` are deprecated in favour of `to_arrow_reader()` / `to_arrow_table()`; the
   reader returns no further rows, without error, after any other command on the same connection. `pa.Table.from_pylist` wants
@@ -493,6 +524,18 @@ Each fact is detailed in the file named at the end of its line.
   `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import everything
   at startup and keep hot pure-Python loops out of the library's threads. The rules of `docs/PLAN.md`
   record the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
+- The source base (dev, 2026-09-20): 14 tables, 205 files, 3.76 GB, 187,340,644 rows, written by
+  pandas through parquet-cpp-arrow with format 1.0, no dictionary, `INT96` timestamps and the
+  `pandas` footer key; Hive partitions `data_str=<YYYY-MM-DD>` (`data_base_str` for
+  `cad_lancamentos`) whose value is a month end, lives only in the path and equals `data` or
+  `data_base` in every row; up to 36 `chunk_<n>.parquet` files of 1,000,000 rows and one row group
+  per partition, not zero-padded. PyArrow reads `INT96` as `timestamp[ns]` without min/max;
+  `coerce_int96_timestamp_unit="us"` and DuckDB's `TIMESTAMP` truncate silently and the safe cast
+  refuses a non-zero sub-microsecond part; DuckDB `hive_partitioning=true` casts `data_str` to
+  `DATE` unless `hive_types_autocast=false`, and a PyArrow dataset keeps it `string`. The 12 model
+  tables match the files in columns, order, types and nullability except seven `cad_contratos`
+  columns nullable in the files and `NOT NULL` in the model with no null in the data. `docs/POC.md`,
+  `docs/PLAN-STAGE-7.md`, `tests/source_db_projetado.py`
 
 ## The pipeline outside this repository
 
@@ -514,7 +557,17 @@ with the pyarrow backend (user statement of 2026-09-20), so `types_mapper=pd.Arr
 native form, and the rule rests on the conversion being cheap, which the probe of that day measured
 (`docs/PLAN.md`, section "A troca de dados com o código cliente"). The same day the user moved the
 models to `tests/model/` as the reference model: the tests hand it to the package API as a client
-library would, and the package holds no model.
+library would, and the package holds no model. After the source base was read (2026-09-20) the user
+decided: partition by date as text `AAAA-MM-DD` like the reference base, the column and its date
+source declared by the client's model (`partition_by`, `partition_source`), so the library's unit is
+the partition and never the month; every numeric column stays `Double`, with no rounding and no
+fixed-precision `Numeric` (the package supports `Numeric`, and moving `valor` to `Numeric(18, 2)` is
+a future improvement); integer keys become `int64` in the Delta; `INT96` timestamps become `INT64`
+and their precision does not matter; nullability follows the model until the migration proves it
+problematic; the dev base's orphans are ignored and the test base is consistent, with the N×N
+`rel_contrato_operacao` whose `fator_rateio` sums to 1 per operation; `alembic_version` and
+`meta_update_status` are ignored; `schema.json` at the source root is the previous library's schema
+control in SQLAlchemy-reflection form, not Arrow.
 
 ## Naming decisions applied to the documents
 
@@ -522,7 +575,7 @@ The convention was applied to every example in `docs/` on 2026-09-19. ORM model 
 mixins (`Operacao`, `Lancamento`, `Rastreio`) keep Portuguese names: they are data-model artifacts,
 like tables and columns. Python variables, functions, parameters, modules, the proposed API
 (`Database`, `Execution`, `ingest`, `audit`, `publish`) and the keys of `Table.info["serialize_db"]`
-(`partition_by`, `sort_key`, `redshift`) are English. The library's own metadata is English (user
+(`partition_by`, `partition_source`, `sort_key`, `redshift`) are English. The library's own metadata is English (user
 decisions of 2026-09-19). A key that lives under `_serialize_db/` carries no prefix (`snapshots` in
 `_serialize_db/snapshots.json`); everything else the library writes carries the `serialize_db_`
 prefix: the commit keys `serialize_db_execution_id`, `serialize_db_input_versions` and
@@ -540,7 +593,11 @@ The decisions, the table of stages and the order of work are in `docs/PLAN.md` (
 primitives of each stage in `docs/PLAN-STAGE-<n>.md`, and where the implementation stands in
 `docs/CURRENT_STATE.md` (2026-09-20), beside `docs/POC.md` and `docs/OPEN_QUESTIONS.md`; read
 them before planning a session. The next session starts stage 1 (`serialize_db.schema`) and
-stage 2 (`serialize_db.sql`) on local folders.
+stage 2 (`serialize_db.sql`) on local folders. The source base was read on 2026-09-20:
+`docs/POC.md` holds the reading, `docs/PLAN-STAGE-7.md` the layout the load reads (Hive by
+`data_str` and `data_base_str`, `chunk_<n>` files, `INT96` timestamps), and the premises of
+`docs/PLAN.md` the user's decisions of that day; the plan's unit is the partition
+(`publish_partition`, `partitions=`, `Execution(partition=...)`), never the month.
 
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
 --python 3.13 --with "deltalake==1.6.4" --with "duckdb==1.5.5" --with "pyarrow==25.0.1" ...`; the
@@ -558,7 +615,8 @@ must be rerun). The reference model in `tests/model/` and its defects are
 listed in `docs/CURRENT_STATE.md` under the repository; the `DEFERRABLE` and `SERIAL` behavior of
 each dialect is in `docs/sqlalchemy.md` and `docs/duckdb.md`.
 
-Test layout (user decision of 2026-09-19): `tests/` holds the package tests (none yet), `tests/model/`,
+Test layout (user decision of 2026-09-19): `tests/` holds the package tests (`test_source_db_projetado.py`
+over `source_db_projetado.py`, the fictitious source base of 2026-09-20), `tests/model/`,
 `tests/test_probes.py` and `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
 both storages, the study suites (commented step by step as learning material, listed per stage in
 `docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and

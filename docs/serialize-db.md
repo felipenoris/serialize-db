@@ -2,7 +2,7 @@
 
 A biblioteca mantém um banco analítico como um conjunto de tabelas Delta Lake em pastas, no S3 do
 projeto ou em disco local, com os modelos SQLAlchemy como contrato de esquema. Ela leva ao DuckDB ou
-ao Redshift só os meses que uma execução do pipeline precisa, publica o resultado de volta no Delta
+ao Redshift só as partições que uma execução do pipeline precisa, publica o resultado de volta no Delta
 e carrega no Redshift as tabelas que os clientes consultam. Este documento reúne a modelagem: o que
 a biblioteca faz, os metadados que ela mantém, as primitivas de cada módulo e o fluxo de cada caso
 de uso. As razões do desenho estão em [`estrategia.md`](estrategia.md); o comportamento verificado
@@ -16,17 +16,17 @@ módulo, em `PLAN-STAGE-<n>.md`.
 
 - **Contrato de esquema a partir dos modelos.** Os modelos declarativos do SQLAlchemy definem cada
   tabela, e deles a biblioteca deriva o esquema Arrow, o esquema Delta e o DDL do sandbox nos dois
-  motores. As opções físicas, partição por `mes`, chave de ordenação e distribuição no Redshift,
-  ficam em `Table.info["serialize_db"]`. Os arquivos de esquema gerados são versionados no
+  motores. As opções físicas, a coluna de partição com a data de que ela deriva, chave de ordenação e
+  distribuição no Redshift, ficam em `Table.info["serialize_db"]`. Os arquivos de esquema gerados são versionados no
   repositório do pipeline e comparados por teste.
 - **SQL gerado por dialeto.** Cada statement Core do pipeline vira texto SQL do DuckDB e do
-  Redshift, com as constantes embutidas, o mês como parâmetro `:mes` e o prefixo do sandbox como
-  sentinela. O texto gerado é versionado no repositório do pipeline e substitui, uma interação por
+  Redshift, com as constantes embutidas, a partição como parâmetro nomeado e o prefixo do sandbox
+  como sentinela. O texto gerado é versionado no repositório do pipeline e substitui, uma interação por
   vez, a compilação pelo dialeto em tempo de execução ([`sqlalchemy.md`](sqlalchemy.md)).
 - **Banco em tabelas Delta.** Uma pasta por ambiente e uma subpasta por tabela. A biblioteca cria
   cada tabela a partir do contrato, de forma idempotente, e reconcilia o esquema da tabela com o
   modelo: o diff aditivo é aplicado, o destrutivo exige a reescrita explícita.
-- **Ingestão seletiva.** Cada execução fixa a versão de cada tabela lida e leva ao motor só os meses
+- **Ingestão seletiva.** Cada execução fixa a versão de cada tabela lida e leva ao motor só as partições
   que o pipeline usa: views ou tabelas materializadas no DuckDB, `COPY ... MANIFEST` no Redshift.
 - **Paralelismo pelo código cliente.** A API é síncrona e as primitivas podem ser chamadas de
   qualquer thread, cada uma na conexão da sua thread; o cliente paraleliza com `concurrent.futures`,
@@ -37,17 +37,17 @@ módulo, em `PLAN-STAGE-<n>.md`.
   derivadas dos próprios modelos, e o texto SQL de cada verificação pode ser impresso ou gravado,
   para depuração.
 - **Execução com sandbox, auditoria e publicação.** O pipeline roda num sandbox por execução. A
-  auditoria reprova sem tocar o Delta, e a publicação a exige aprovada. A publicação substitui meses inteiros, um commit por tabela,
+  auditoria reprova sem tocar o Delta, e a publicação a exige aprovada. A publicação substitui partições inteiras, um commit por partição,
   com `serialize_db_execution_id` e `serialize_db_input_versions` nos metadados. A reexecução é
   idempotente, e o conflito entre duas execuções do mesmo ambiente aborta a segunda.
 - **Publicação para clientes no Redshift.** A diferença entre a versão publicada e a atual diz quais
-  meses recarregar. Todas as tabelas da execução entram numa única transação, e a tabela de controle
+  partições recarregar. Todas as tabelas da execução entram numa única transação, e a tabela de controle
   guarda a versão publicada de cada uma.
 - **Snapshots do banco e manutenção.** O conjunto `{tabela: versão}` marcado na periodicidade do
   processo, o `vacuum` que preserva essas versões, a compactação antes do snapshot e a cópia
   profunda para a pasta de arquivo.
 - **Entrada e saída em Parquet.** A carga inicial dos Parquet atuais e a exportação de um snapshot
-  para pastas Parquet por mês, para o Hive ou para sair do Delta.
+  para pastas Parquet por partição, para o Hive ou para sair do Delta.
 - **Linha de comando e documentação.** `serialize-db run` executa o pipeline, e o `pdoc` gera a
   documentação da API.
 
@@ -85,7 +85,7 @@ estatísticas.
 O que ela guarda por conta própria fica em `_serialize_db/`, na raiz do ambiente, ao lado das pastas
 das tabelas: `snapshots.json`, com
 `{"snapshots": {"2026T3": {"cad_lancamentos": 143, "cad_contratos": 88}}}`. O sublinhado inicial
-deixa a pasta fora dos globs `mes=*` e dos leitores no estilo Hive, que ignoram nomes com esse
+deixa a pasta fora dos globs `<coluna>=*` e dos leitores no estilo Hive, que ignoram nomes com esse
 prefixo. Os nomes de tabela são relativos, sem URI, para a realocação descrita em
 [`delta.md`](delta.md), seção "Realocação e cópia do banco", continuar valendo. A escrita é atômica,
 com `IfMatch` no S3, a mesma primitiva do log, e só a biblioteca escreve. O arquivo é a fonte
@@ -102,7 +102,7 @@ lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
 
 | Registro | Onde | Conteúdo | Quem grava |
 | --- | --- | --- | --- |
-| Metadados de commit | `commitInfo` de cada commit da biblioteca. | `serialize_db_execution_id`; `serialize_db_input_versions`, o JSON `{tabela: versão}` das versões lidas, fixado na abertura da execução; `serialize_db_snapshot` só na execução que marca um snapshot. | `publish_month` e `register_files`, por `CommitProperties(custom_metadata=...)`. |
+| Metadados de commit | `commitInfo` de cada commit da biblioteca. | `serialize_db_execution_id`; `serialize_db_input_versions`, o JSON `{tabela: versão}` das versões lidas, fixado na abertura da execução; `serialize_db_snapshot` só na execução que marca um snapshot. | `publish_partition` e `register_files`, por `CommitProperties(custom_metadata=...)`. |
 | Arquivo de controle | `<ambiente>/_serialize_db/snapshots.json`. | `{"snapshots": {nome: {tabela: versão}}}`, com todas as tabelas do ambiente, lidas ou gravadas. | `snapshot`, com `IfMatch`. |
 | Tabela de controle | `serialize_db_publications(table_name, delta_version, execution_id, published_at)` no esquema do Redshift; `table_name` leva o prefixo do ambiente, como `prod_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga. |
 
@@ -121,21 +121,24 @@ internas; `run` é a `Execution` aberta, e `run.sandbox` o motor onde o pipeline
 
 ### Carga inicial dos Parquet atuais
 
-Uma passagem por tabela e por mês, reexecutável, que termina com os leitores apontados para o Delta.
+Uma passagem por tabela e por partição, reexecutável, que termina com os leitores apontados para o
+Delta. A origem é a base de `data_str=<AAAA-MM-DD>/chunk_<n>.parquet` lida em 2026-09-20
+([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)).
 
 1. `create_table(uri, table)` para cada modelo, na pasta do ambiente.
-2. Para cada mês, o DuckDB ou o PyArrow lê os Parquet do mês, `pc.round(x, 2)` leva os `Double` da
-   origem à escala do contrato (os modelos atuais usam `Double` onde o contrato pede
-   `Numeric(18, 2)`), `cast` converte para o contrato e `publish_month` grava o mês em lotes, sem a
-   tabela inteira na memória. Uma carga interrompida recomeça do mês seguinte
-   ao último publicado.
-3. O relatório compara contagens e somas por mês entre a origem e o Delta; a carga só termina
+2. Para cada partição da origem, o DuckDB ou o PyArrow lê os Parquet da pasta, a coluna de partição
+   recebe o valor do caminho, as chaves passam de `int32` a `int64`, o `timestamp` `INT96` é
+   truncado a microssegundos, as colunas `double` entram como estão, `cast` converte para o
+   contrato e `publish_partition` grava a partição em lotes, sem a tabela inteira na memória. Uma
+   carga interrompida recomeça da partição seguinte à última publicada.
+3. O relatório compara contagens e somas por partição entre a origem e o Delta; a carga só termina
    quando os dois coincidem.
 4. Os leitores passam a abrir o Delta, e as pastas de origem ficam como cópia até a primeira
    publicação no Redshift.
 
-`convert_to_deltalake` registra os arquivos no lugar, sem reescrever, só quando eles já têm os
-tipos, a ordem de colunas e o layout Hive do contrato; não foi testado.
+`alembic_version`, `meta_update_status` e `schema.json` ficam fora da carga. `convert_to_deltalake`
+registra os arquivos no lugar, sem reescrever, só quando eles já têm os tipos, a ordem de colunas e
+o layout Hive do contrato; a origem tem o layout e não os tipos, e ele não é o caminho.
 
 ### Execução mensal no DuckDB
 
@@ -144,16 +147,16 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
 1. `Execution` abre cada tabela de entrada e fixa `versions`; toda leitura da execução usa essas
    versões, mesmo que outra execução publique no meio.
 2. `run.ingest` cria as views com os nomes dos modelos sobre `delta_scan` na versão fixada, e
-   materializa as tabelas consultadas muitas vezes com os meses pedidos.
+   materializa as tabelas consultadas muitas vezes com as partições pedidas.
 3. O pipeline roda em `run.sandbox`; o que sai para o Python sai como `pa.Table` por `query` ou
    `execute` e volta por `load`; os intermediários ficam no sandbox, não no Delta.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
-5. `run.publish` reconcilia o esquema, substitui cada mês num commit com
+5. `run.publish` reconcilia o esquema, substitui cada partição num commit com
    `serialize_db_execution_id` e `serialize_db_input_versions`, e avança `versions[table]`. Um
-   `CommitFailedError` no mesmo mês significa outra execução publicando a mesma tabela, e a
+   `CommitFailedError` na mesma partição significa outra execução publicando a mesma tabela, e a
    execução aborta; ela também aborta quando a versão da tabela avançou desde a abertura, para que
    duas execuções abertas na mesma versão não publiquem a mesma faixa de identificadores.
-6. `run.publish_redshift` carrega os meses alterados de todas as tabelas numa transação.
+6. `run.publish_redshift` carrega as partições alteradas de todas as tabelas numa transação.
 7. No encerramento, o sandbox é descartado e o resumo vai para o log. Repetir a execução com o
    mesmo `execution_id` repete os mesmos `overwrite` e produz as mesmas linhas; os identificadores
    podem diferir, porque `run.next_ids` recomeça do máximo da versão fixada.
@@ -163,14 +166,14 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
 O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
 
 1. O sandbox são tabelas `exec_<id>_<tabela>` no esquema único, criadas pelo DDL do contrato.
-2. `run.ingest` monta o manifesto dos arquivos dos meses pedidos, na versão fixada, e carrega por
-   `COPY ... MANIFEST` na staging sem `mes`, seguido de `INSERT ... SELECT *, '<mes>'`. A carga de
+2. `run.ingest` monta o manifesto dos arquivos das partições pedidas, na versão fixada, e carrega por
+   `COPY ... MANIFEST` na staging sem a coluna de partição, seguido de `INSERT ... SELECT *, '<valor>'`. A carga de
    arquivos anteriores a uma coluna nova depende de `FILLRECORD` ou de lista de colunas, pendente da
    prova de conceito.
 3. O pipeline roda os mesmos statements Core, compilados para o Redshift; as tabelas Arrow entram
    por Parquet em `staging/` mais `COPY`, e saem das tuplas do cursor, por ADBC ou por `UNLOAD`.
 4. `run.audit` roda as mesmas consultas no Redshift.
-5. `run.publish` grava cada mês por `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE` na pasta da
+5. `run.publish` grava cada partição por `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE` na pasta da
    tabela e registra os arquivos por `register_files`, com estatísticas do rodapé Parquet; os dados
    não passam pela máquina local.
 6. `run.publish_redshift` carrega as tabelas `prod_*` a partir do Delta, pelo mesmo caminho da
@@ -182,20 +185,20 @@ As tabelas publicadas têm o prefixo do ambiente e são derivadas do Delta; nada
 outro caminho.
 
 1. `version_diff` compara, para cada tabela, a versão em `serialize_db_publications` com a versão
-   atual e devolve os meses com arquivos novos. Na primeira publicação, todos os meses.
+   atual e devolve as partições com arquivos novos. Na primeira publicação, todas as partições.
 2. A reconciliação repete no Redshift o diff aditivo do Delta, `ALTER TABLE ADD COLUMN` no fim da
    tabela, porque o `COPY` é posicional; um diff destrutivo recria a tabela e recarrega tudo.
-3. Numa única transação, para cada tabela e mês: `DELETE` do mês, `COPY ... MANIFEST` na staging,
-   `INSERT ... SELECT *, '<mes>'` e a linha de `serialize_db_publications`. A transação dá aos
+3. Numa única transação, para cada tabela e partição: `DELETE` da partição, `COPY ... MANIFEST` na
+   staging, `INSERT ... SELECT *, '<valor>'` e a linha de `serialize_db_publications`. A transação dá aos
    clientes a atomicidade entre tabelas que o Delta não tem.
-4. Uma execução de correção publica só o mês corrigido.
+4. Uma execução de correção publica só a partição corrigida.
 
-### Correção de um mês
+### Correção de uma partição
 
-1. A mesma `Execution`, com o mês a corrigir e um `execution_id` novo.
-2. `run.publish` substitui o mês nas tabelas afetadas; a versão anterior continua legível até o
+1. A mesma `Execution`, com a partição a corrigir e um `execution_id` novo.
+2. `run.publish` substitui a partição nas tabelas afetadas; a versão anterior continua legível até o
    `vacuum`, dentro dos 400 dias de retenção.
-3. `run.publish_redshift` recarrega só esse mês.
+3. `run.publish_redshift` recarrega só essa partição.
 4. As versões intermediárias entre snapshots do banco saem no `vacuum` mensal.
 
 ### Evolução do esquema
@@ -208,8 +211,8 @@ outro caminho.
    do `update`.
 4. Renomear, remover ou mudar o tipo de uma coluna é recusado pela reconciliação, e só entra por
    `rewrite`, uma ordem explícita fora da execução mensal: a tabela inteira num commit, sem
-   predicado, porque o `overwrite` de um mês com `schema_mode="overwrite"` troca o esquema da tabela
-   toda e deixa os outros meses lendo nulo ([`delta.md`](delta.md), seção "Evolução de esquema").
+   predicado, porque o `overwrite` de uma partição com `schema_mode="overwrite"` troca o esquema da
+   tabela toda e deixa as outras partições lendo nulo ([`delta.md`](delta.md), seção "Evolução de esquema").
    A versão anterior continua lendo com o esquema antigo.
 5. As tabelas publicadas seguem o mesmo diff: `ADD COLUMN` no caso aditivo, recriação e recarga no
    destrutivo.
@@ -232,14 +235,14 @@ outro caminho.
    `arquivo/<nome>/<tabela>/`, a entrada sai de `snapshots.json`, e a pasta de arquivo recebe a
    regra de ciclo de vida para a classe de armazenamento mais barata.
 
-### Exportação para pastas Parquet por mês
+### Exportação para pastas Parquet por partição
 
 Para publicar no Hive ou para sair do Delta.
 
 1. O snapshot atual usa `export_snapshot(uri, destination)`: `mode="copy"` copia os arquivos que
-   `get_add_actions()` lista, já no layout `mes=.../part-....parquet`, sem ler dados; no S3, um
+   `get_add_actions()` lista, já no layout `<coluna>=<valor>/part-....parquet`, sem ler dados; no S3, um
    `CopyObject` por arquivo. Serve quando os leitores casam colunas por nome ou quando nenhum
-   `ADD COLUMN` aconteceu desde a última reescrita de todos os meses.
+   `ADD COLUMN` aconteceu desde a última reescrita de todas as partições.
 2. `mode="rewrite"` normaliza: o DuckDB lê por `delta_scan` e grava um `COPY` particionado, com
    todos os arquivos no esquema atual e a coluna de partição fora deles.
 3. Um snapshot do banco antigo exporta cada tabela na versão de `snapshots.json`, com o DDL tirado
@@ -260,11 +263,11 @@ Para publicar no Hive ou para sair do Delta.
 ### Substituição do dialeto em tempo de execução
 
 1. O pipeline escolhe uma interação com o banco: um statement Core que hoje é compilado pelo
-   dialeto a cada execução, com o mês como `param("mes")`.
+   dialeto a cada execução, com a partição como parâmetro (`param("mes")` no exemplo de `sqlalchemy.md`).
 2. `write_sql_files({"total_por_cliente": statement}, metadata, "sql/")` grava
    `sql/total_por_cliente.duckdb.sql` e `.redshift.sql`, com as constantes embutidas, `:mes` e o
    sentinela `{prefix}`; os arquivos entram no repositório do pipeline e no diff da revisão.
-3. A chamada troca `run.sandbox.query(statement)` por `run.sandbox.execute(sql, {"mes": run.month})`,
+3. A chamada troca `run.sandbox.query(statement)` por `run.sandbox.execute(sql, {"mes": run.partition})`,
    com o texto lido do arquivo; o motor substitui o prefixo e adapta os parâmetros.
 4. Enquanto o statement Core existir, o teste que regenera os arquivos e os compara com os
    versionados acusa uma mudança de modelo. Quando o statement sair, o texto é a fonte, mantido à
@@ -313,13 +316,13 @@ cenário em `test_parallel.py` e em `test_redshift.py`.
 
 ### Escritas em paralelo
 
-- **Publicação no Delta.** `run.publish(*tables, months, max_workers=n)` grava as tabelas em paralelo:
-  cada tabela tem o seu log, e meses distintos da mesma tabela entram em commits distintos. O limite é
+- **Publicação no Delta.** `run.publish(*tables, partitions, max_workers=n)` grava as tabelas em paralelo:
+  cada tabela tem o seu log, e partições distintas da mesma tabela entram em commits distintos. O limite é
   a memória por escrita, não a CPU: o padrão é 1, e as tabelas grandes saem pelo `COPY` do DuckDB
   mais `create_write_transaction`, com memória constante. Na primeira falha, as tarefas em curso
   terminam, as não iniciadas são canceladas, e a exceção lista o resultado por tabela; os commits
   feitos ficam, porque o Delta não tem transação entre tabelas, e a reexecução repete só o que faltou.
-  Dois escritores no mesmo mês da mesma tabela conflitam: o segundo recebe `ExecutionConflict`, e é o
+  Dois escritores na mesma partição da mesma tabela conflitam: o segundo recebe `ExecutionConflict`, e é o
   sinal de duas execuções no mesmo ambiente.
 - **Escritas no motor com dependências.** Um passo posterior que lê o que um passo anterior gravou
   espera o `Future` desse passo; a dependência é do fluxo de controle do cliente, não da biblioteca.
@@ -332,21 +335,21 @@ cenário em `test_parallel.py` e em `test_redshift.py`.
 ```python
 from concurrent.futures import ThreadPoolExecutor
 
-with Execution(db, engine="duckdb", month="2026-08", execution_id="exec-2026-09-05") as run:
-    run.ingest(Lancamento, Contrato, Operacao, RelContratoOperacao, months=run.previous_months(12), max_workers=4)
+with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2026-09-05") as run:
+    run.ingest(Lancamento, Contrato, Operacao, RelContratoOperacao, partitions=run.previous_partitions(Lancamento, 12), max_workers=4)
 
     with ThreadPoolExecutor(max_workers=2) as pool:                 # dois passos independentes
-        saldos = pool.submit(run.sandbox.execute, SALDOS_SQL, {"mes": run.month})     # grava {prefix}saldos
-        limites = pool.submit(run.sandbox.execute, LIMITES_SQL, {"mes": run.month})   # grava {prefix}limites
+        saldos = pool.submit(run.sandbox.execute, SALDOS_SQL, {"data_base_str": run.partition})     # grava {prefix}saldos
+        limites = pool.submit(run.sandbox.execute, LIMITES_SQL, {"data_base_str": run.partition})   # grava {prefix}limites
         saldos.result()                                              # a leitura abaixo depende dos dois
         limites.result()
 
-    projected = run.sandbox.query(select(Saldo).where(Saldo.mes == run.month))   # já vê saldos e limites
+    projected = run.sandbox.query(select(Saldo).where(Saldo.data_base_str == run.partition))   # já vê saldos e limites
     frame = projected.to_pandas(types_mapper=pd.ArrowDtype)
     frame["id_lancamento"] = run.next_ids(LancamentoProjetado, len(frame))       # faixa contígua, sob lock
     run.sandbox.load(LancamentoProjetado, pa.Table.from_pandas(frame, preserve_index=False))
-    run.audit(LancamentoProjetado, months=[run.month])
-    run.publish(LancamentoProjetado, Saldo, months=[run.month], max_workers=2)   # duas tabelas, dois logs
+    run.audit(LancamentoProjetado, partitions=[run.partition])
+    run.publish(LancamentoProjetado, Saldo, partitions=[run.partition], max_workers=2)   # duas tabelas, dois logs
 ```
 
 ### Identificadores
