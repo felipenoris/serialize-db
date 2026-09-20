@@ -113,7 +113,7 @@ def project(report: Report) -> None:
     if redshift:
         report.ok("SP-5", "conexão Redshift no projeto", ", ".join(redshift))
     else:
-        report.note("SP-5", "conexão Redshift no projeto", "nenhuma: a etapa 4 espera uma")
+        report.note("SP-5", "conexão Redshift no projeto", "nenhuma: a etapa 5 espera uma")
 
 
 def network(report: Report) -> None:

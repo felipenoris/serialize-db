@@ -1,6 +1,8 @@
 # Esquema a partir dos modelos ORM
 
-Gerar o DDL a partir dos modelos. O DDL gerado cobre as tabelas do sandbox no DuckDB e no
+O esquema das tabelas vive nos modelos ORM, e o módulo `serialize_db.schema`, etapa 1 de
+[`PLAN.md`](PLAN.md), deriva deles o esquema Arrow, o esquema Delta e o DDL de cada motor. Gerar o DDL a
+partir dos modelos. O DDL gerado cobre as tabelas do sandbox no DuckDB e no
 Redshift. As vantagens do DDL manual, revisão explícita e opções físicas, vêm de
 dois mecanismos:
 
