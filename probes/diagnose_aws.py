@@ -78,7 +78,11 @@ def describe(error: BaseException) -> str:
 def show_environment() -> None:
     print("== variáveis de ambiente")
     for name in ("AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3", *PROXY_VARIABLES):
-        print(f"  {name} = {os.environ.get(name, '(ausente)')}")
+        value = os.environ.get(name)
+        # As minúsculas de proxy repetem as maiúsculas quando iguais: o valor sai uma vez.
+        if value is not None and name != name.upper() and value == os.environ.get(name.upper()):
+            value = f"(igual a {name.upper()})"
+        print(f"  {name} = {value if value is not None else '(ausente)'}")
     for name in (
         "AWS_ACCESS_KEY_ID",
         "AWS_SESSION_TOKEN",
@@ -117,7 +121,9 @@ def check_dns(bucket: str, region: str | None) -> None:
             report("falha", f"DNS {name}", str(error), started)
             continue
         private = all(ipaddress.ip_address(address).is_private for address in addresses)
-        kind = "IP privado: endpoint VPC de interface com DNS privado" if private else "IP público: gateway endpoint ou internet"
+        # Só o S3 e o DynamoDB têm gateway endpoint; os demais nomes públicos dependem da internet ou do proxy.
+        gateway = name.split(".")[0] in ("s3", "dynamodb") or name.split(".")[1:2] in (["s3"], ["dynamodb"])
+        kind = "IP privado: endpoint VPC de interface com DNS privado" if private else "IP público: gateway endpoint ou internet" if gateway else "IP público: só pela internet ou pelo proxy"
         report("ok", f"DNS {name}", f"{', '.join(addresses)} ({kind})", started)
 
 

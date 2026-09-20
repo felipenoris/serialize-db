@@ -140,7 +140,17 @@ def tcp_probe(host: str, port: int, timeout: float = 5) -> str:
         return f"não conectou: {error}"
 
 
-def dns_rows(names: Iterable[str], public: str = "público: gateway endpoint ou internet") -> tuple[list[list[str]], dict[str, bool | None]]:
+GATEWAY_SERVICES = ("s3", "dynamodb")
+
+
+def public_label(name: str) -> str:
+    """Tipo de um nome que resolve para IP público: só o S3 e o DynamoDB têm gateway endpoint; os demais dependem da internet ou do proxy."""
+    labels = name.lower().split(".")
+    gateway = labels[0] in GATEWAY_SERVICES or (len(labels) > 1 and labels[1] in GATEWAY_SERVICES)
+    return "público: gateway endpoint ou internet" if gateway else "público: só pela internet ou pelo proxy"
+
+
+def dns_rows(names: Iterable[str]) -> tuple[list[list[str]], dict[str, bool | None]]:
     """Linhas da tabela de DNS e, por nome, se resolveu para IP privado; ``None`` quando não resolve.
 
     Um nome que não resolve é uma leitura, não uma chamada falhada: sem internet, ``pypi.org`` não resolve.
@@ -155,7 +165,7 @@ def dns_rows(names: Iterable[str], public: str = "público: gateway endpoint ou 
             private_by_name[name] = None
             continue
         shown = ", ".join(addresses[:4]) + (" ..." if len(addresses) > 4 else "")
-        rows.append([name, shown, "privado: endpoint VPC de interface com DNS privado" if private else public])
+        rows.append([name, shown, "privado: endpoint VPC de interface com DNS privado" if private else public_label(name)])
         private_by_name[name] = private
     return rows, private_by_name
 
@@ -201,11 +211,14 @@ def run_python(code: str, arguments: list[str], timeout: float, executable: str 
 
 def environment_rows(names: Iterable[str]) -> list[list[str]]:
     """Linhas ``nome, valor`` das variáveis; as que parecem segredo mostram só presença."""
+    names = list(names)
     rows = []
     for name in names:
         value = os.environ.get(name)
         if value is None:
             rows.append([name, "(ausente)"])
+        elif name != name.upper() and name.upper() in names and value == os.environ.get(name.upper()):
+            rows.append([name, f"(igual a {name.upper()})"])
         elif SECRET_PATTERN.search(name) or name in ("AWS_ACCESS_KEY_ID",):
             rows.append([name, "definida"])
         else:

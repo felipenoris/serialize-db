@@ -38,7 +38,7 @@ def network(report: Report, resolved: str | None) -> None:
     if not resolved:
         report.line("sem região, sem endpoints a resolver")
         return
-    rows, _ = dns_rows([f"{service}.{resolved}.amazonaws.com" for service in SERVICES], public="público: só pela internet ou pelo proxy")
+    rows, _ = dns_rows([f"{service}.{resolved}.amazonaws.com" for service in SERVICES])
     report.table([["nome", "endereços", "tipo"], *rows])
 
 

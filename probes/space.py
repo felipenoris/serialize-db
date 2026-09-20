@@ -183,6 +183,31 @@ def network(report: Report) -> None:
     report.note("SP-7", "internet", "alcançável" if answer and answer.startswith("HTTP") else "inalcançável: esperado no ambiente destino")
 
 
+def mount_state(path: Path) -> str:
+    """``montada`` com o tipo de sistema de arquivos de ``/proc/mounts``, ou ``existe, sem montagem``.
+
+    Segue o link simbólico antes de perguntar, porque ``os.path.ismount`` responde False a um link.
+    """
+    if not path.exists():
+        return "ausente"
+    real = Path(os.path.realpath(path))
+    origin = f" (link para {real})" if real != path else ""
+    kinds: dict[str, str] = {}
+    try:
+        with open("/proc/mounts", encoding="utf-8") as mounts:
+            for entry in mounts:
+                fields = entry.split()
+                if len(fields) >= 3:
+                    kinds[fields[1]] = fields[2]
+    except OSError:
+        pass
+    if str(real) in kinds:
+        return f"montada, tipo {kinds[str(real)]}{origin}"
+    if os.path.ismount(real):
+        return f"montada{origin}"
+    return f"existe, sem montagem{origin}"
+
+
 def machine(report: Report) -> None:
     report.h1("Máquina")
     rows: list[list[object]] = [["item", "valor"], ["plataforma", platform.platform()], ["cpus", os.cpu_count()]]
@@ -201,8 +226,7 @@ def machine(report: Report) -> None:
         rows.append(["arquivos abertos por processo (ulimit -n)", f"{soft} (máximo {hard}); o DuckDB abre um descritor por arquivo Parquet lido"])
     except (ImportError, ValueError, OSError):
         rows.append(["arquivos abertos por processo", "não lido"])
-    shared = Path.home() / "shared"
-    rows.append(["~/shared", ("montada" if os.path.ismount(shared) else "existe, sem montagem") if shared.exists() else "ausente"])
+    rows.append(["~/shared", mount_state(Path.home() / "shared")])
     for tool in ("uv", "git", "gh", "aws", "duckdb"):
         rows.append([f"comando {tool}", shutil.which(tool) or "ausente"])
     report.table(rows)
