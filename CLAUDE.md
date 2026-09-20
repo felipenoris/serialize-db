@@ -598,7 +598,7 @@ Each fact is detailed in the file named at the end of its line.
   (`1.0.78890` serverless), snapshot isolation on the producer's database and 64 slices; it accepts
   `CREATE`/`DROP`/`SHOW TABLE`, CTAS, `ALTER TABLE ADD`/`DROP COLUMN`, `RENAME`, `TRUNCATE`
   (transactional there), `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE` and `COPY` with no
-  `COMPUPDATE` clause, writes one database per transaction and creates no views. `svv_all_schemas`,
+  `COMPUPDATE` clause (the Parquet `COPY` rejects it), writes one database per transaction and creates no views. `svv_all_schemas`,
   `svv_all_tables` and `svv_redshift_databases` cross databases; `has_schema_privilege` and
   `svv_table_info` see only the session's. `docs/POC.md`, `docs/redshift.md`
 - The target's Redshift, read on 2026-09-20 (`docs/readings/`): workgroup `controladoria-wg`,

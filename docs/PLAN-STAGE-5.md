@@ -38,7 +38,8 @@ tem papel associado, e `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` e `SESSION_TOKEN` da
 tem, que é o caso do ambiente alvo. As credenciais expiram, então a cláusula é montada por comando,
 nunca guardada; e **nenhum texto que a carregue vai para log, para o relatório ou para arquivo**. As
 restrições da escrita num datashare estão em [`redshift.md`](redshift.md); o `COPY` roda sem
-cláusula `COMPUPDATE` alguma. O motivo de um `COPY` recusado está em `sys_load_error_detail`, que a
+cláusula `COMPUPDATE` alguma, e o de Parquet nem a aceita: a codificação das colunas vem do DDL ou de
+`ENCODE AUTO`, e `ANALYZE COMPRESSION` numa amostra real é o que a fixa. O motivo de um `COPY` recusado está em `sys_load_error_detail`, que a
 sessão lê no ambiente alvo (2026-09-20); `stl_load_errors` cobre só clusters provisionados e é negada
 a um usuário comum.
 

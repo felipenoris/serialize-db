@@ -12,10 +12,6 @@ foi medido em [`POC.md`](POC.md).
   `export_partition` da [etapa 5](PLAN-STAGE-5.md) precisa é `PARTITION BY (<coluna>) MANIFEST
   VERBOSE`, que ninguém exercitou lá; `test_unload_partition_by_and_register` registra o resultado e
   pula o resto quando a recusa vem do datashare.
-- **`COMPUPDATE` explícito no `COPY` de um datashare.** O `COPY` sem cláusula alguma passou, e é o
-  que a biblioteca emite. Se `COMPUPDATE OFF` explícito é aceito, ou se a frase da documentação
-  ("`COPY` sem `COMPUPDATE`") quer dizer que a análise de compressão precisa estar desligada, nenhum
-  teste respondeu.
 - **Onde ficam as tabelas de execução.** O sandbox `exec_<id>_*` da [etapa 4](PLAN-STAGE-4.md) e as
   stagings do `COPY` nascem no banco do datashare, onde o `CREATE TABLE` passou, e herdam as
   restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária

@@ -260,7 +260,9 @@ cláusula de credencial antes de gravar o relatório da sessão.
 **O `COPY` sem cláusula `COMPUPDATE` é o que funciona.** A documentação lista "`COPY` sem
 `COMPUPDATE`" entre os comandos que a escrita num datashare aceita, e eu tinha lido isso como
 "emitir `COMPUPDATE OFF`". O comando que passou não tem cláusula alguma, e a suíte e as etapas 5 e 8
-passaram a emiti-lo assim. Se `COMPUPDATE OFF` explícito também é aceito, ninguém testou.
+passaram a emiti-lo assim. Não há `COMPUPDATE OFF` a testar: o `COPY` de Parquet não aceita o
+parâmetro nem aplica compressão automática ([`redshift.md`](redshift.md), "Regras do COPY para
+Parquet"), e a regra do datashare está satisfeita por construção.
 
 Duas leituras menores que o script deixou: o `COPY` lê um prefixo de pasta Parquet direto, sem
 manifesto, e converte `int32` da origem para a coluna `BIGINT` do contrato; e o DDL de `cad_contas`

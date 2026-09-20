@@ -119,9 +119,11 @@ O que o Redshift aceita escrever num datashare, e o que ele não lista:
 - DDL: `CREATE`/`DROP SCHEMA`, `CREATE`/`DROP`/`SHOW TABLE`, `CREATE TABLE ... AS`, `ALTER TABLE
   ADD`/`DROP COLUMN`, `ALTER TABLE RENAME`, `ALTER SCHEMA RENAME`, `TRUNCATE`, `BEGIN` e `COMMIT`.
 - DML: `SELECT`, `INSERT`, `INSERT INTO SELECT`, `UPDATE`, `DELETE`, `MERGE` e **`COPY` sem
-  `COMPUPDATE`**. A biblioteca emite o `COPY` sem cláusula `COMPUPDATE` alguma, que é o que passou
-  no ambiente alvo em 2026-09-20; se a frase da documentação exige `COMPUPDATE OFF` explícito,
-  ninguém testou, e a leitura literal é a que funciona.
+  `COMPUPDATE`**. `COMPUPDATE` é a compressão automática do `COPY`, que numa tabela vazia troca a
+  codificação das colunas a partir de uma amostra; o `COPY` de Parquet não aceita o parâmetro e não
+  aplica compressão automática (seção "Regras do COPY para Parquet"), então o da biblioteca satisfaz
+  a regra por construção, e foi assim, sem cláusula alguma, que ele passou no ambiente alvo em
+  2026-09-20. A codificação das colunas vem do DDL ou de `ENCODE AUTO`.
 - `UNLOAD` não está na lista dos comandos suportados nem na dos recusados, e passou no ambiente alvo
   a partir de uma tabela do datashare (`FORMAT AS PARQUET`, sem `PARTITION BY`). O que falta medir é
   `PARTITION BY ... MANIFEST VERBOSE`.
