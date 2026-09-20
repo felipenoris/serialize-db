@@ -11,7 +11,8 @@ foi medido em [`POC.md`](POC.md).
   e a documentação não o lista nem entre os comandos aceitos nem entre os recusados. O que o
   `export_partition` da [etapa 5](PLAN-STAGE-5.md) precisa é `PARTITION BY (<coluna>) MANIFEST
   VERBOSE`, que ninguém exercitou lá; `test_unload_partition_by_and_register` registra o resultado e
-  pula o resto quando a recusa vem do datashare.
+  pula o resto quando a recusa vem do datashare. Não é bloqueio: a etapa 5 nomeia a alternativa, um
+  `UNLOAD` por partição, que é o comando que já passou.
 - **Onde ficam as tabelas de execução.** O sandbox `exec_<id>_*` da [etapa 4](PLAN-STAGE-4.md) e as
   stagings do `COPY` nascem no banco do datashare, onde o `CREATE TABLE` passou, e herdam as
   restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária
@@ -76,4 +77,6 @@ respondidas em 2026-09-19 ([`POC.md`](POC.md)). A [etapa 0](PLAN-STAGE-0.md) as 
 - Se o `FILLRECORD` deixa o `COPY` carregar arquivos antigos, sem as colunas acrescentadas depois,
   que a evolução do Delta e do DuckLake produz.
 - Se o `COPY ... MANIFEST FORMAT AS PARQUET` numa tabela de datashare se comporta como numa tabela
-  local: o `COPY` de um prefixo de pasta passou em 2026-09-20, o de um manifesto ainda não.
+  local: o `COPY` de um prefixo de pasta passou em 2026-09-20, o de um manifesto ainda não. A
+  [etapa 8](PLAN-STAGE-8.md) nomeia a alternativa, copiar os arquivos da versão para um prefixo e
+  carregá-lo.

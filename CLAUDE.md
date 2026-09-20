@@ -297,13 +297,14 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   previous library's `schema.json`, the SQLAlchemy reflection of the source database, which also
   lacked the model's composite foreign keys; one reply from the user closed two open questions.
   Ask for the metadata beside the data before listing hypotheses about it.
-- **A documented phrase is read two ways until something runs** (2026-09-20). "COPY without
-  COMPUPDATE", in the datashare write list, became "emit `COMPUPDATE OFF`" in the suite and in two
-  stage files; the script that ran in the target carries no `COMPUPDATE` clause at all, and passed.
-  The same script turned three open questions into facts (the producer's grant, `UNLOAD`, the IAM
-  role) and one blocker into a non-blocker, because credentials in the statement replace an attached
-  role. When a rule comes from prose rather than from a run, write the plainest reading, mark the
-  other one in `docs/OPEN_QUESTIONS.md`, and let the first execution settle it.
+- **A documented phrase is read two ways until something runs, and the answer may already be in the
+  repo** (2026-09-20). "COPY without COMPUPDATE", in the datashare write list, became "emit
+  `COMPUPDATE OFF`" in the suite and in two stage files; the script that ran in the target carries
+  no `COMPUPDATE` clause, and passed. The question left open after it was answered two documents
+  away, by this repo's own table of Parquet `COPY` rules: that `COPY` rejects the parameter. Write
+  the plainest reading, mark the other in `docs/OPEN_QUESTIONS.md`, and grep the repository before
+  calling a question open. A changed fact is then grepped in tables and lists too: `README.md`
+  promised `IAM_ROLE default` two PRs after its prose said the caller's credentials.
 - **A probe's verdict is a hypothesis until the environment answers, and one repetition separates
   the transient from the permanent** (2026-09-20). The first Redshift run in the target failed
   `RS-17` on an isolation level of `UNKNOWN`, which is the consumer not seeing the producer's
@@ -318,10 +319,9 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   and run the probe twice before writing a consequence into a plan.
 - **A script the user ran in the target outranks a plan written without one** (2026-09-20). Two
   connection scripts from the target replaced the plan's default (password) with the workgroup's
-  temporary credential, turned every table name into three parts, added `COMPUPDATE OFF` to every
-  `COPY`, and moved the Data API out of the library. Keep such a script verbatim in `examples/`,
-  with its literal values, and make the probe and the suite repeat its calls instead of a variant
-  nobody executed. What the script does not answer goes to `docs/OPEN_QUESTIONS.md`.
+  temporary credential and moved the Data API out of the library. Keep such a script verbatim in
+  `examples/`, with its literal values, and make the probe and the suite repeat its calls instead of
+  a variant nobody executed. What it does not answer goes to `docs/OPEN_QUESTIONS.md`.
 - **Each tool in a script reads the proxy its own way** (2026-09-20). `prepare_offline.sh` got
   through `uv sync` and died on the DuckDB `INSTALL` with the same `HTTP_PROXY`: `uv` accepts
   `http://user:password@host:port`, DuckDB refuses it and reads only the uppercase spelling.

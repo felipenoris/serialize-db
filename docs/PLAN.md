@@ -1,10 +1,11 @@
 # Plano de implementação
 
 Este documento registra o que a biblioteca é e como ela chega lá: as decisões, a troca de dados com
-o código cliente, as regras que as etapas obedecem, a organização do pacote, as etapas de implementação e o pipeline de atualização
-mensal. O plano de cada etapa, com as primitivas do módulo, os testes e as provas de conceito que o
-exercitam, está num arquivo próprio, de [`PLAN-STAGE-0.md`](PLAN-STAGE-0.md) a
-[`PLAN-STAGE-9.md`](PLAN-STAGE-9.md), que a seção "Etapas" indexa. O estado da implementação, com
+o código cliente, as regras que as etapas obedecem, a organização do pacote, as etapas de
+implementação e o pipeline de atualização mensal. O plano de cada etapa, com as primitivas do
+módulo, os testes e as provas de conceito que o exercitam, está num arquivo próprio, de
+[`PLAN-STAGE-0.md`](PLAN-STAGE-0.md) a [`PLAN-STAGE-9.md`](PLAN-STAGE-9.md), que a seção "Etapas"
+indexa. O estado da implementação, com
 a situação de cada etapa e o que cada artefato contém, está em
 [`CURRENT_STATE.md`](CURRENT_STATE.md); o resultado das provas de conceito, das suítes e dos probes,
 com as consequências no plano, em [`POC.md`](POC.md); as pendências e as decisões em aberto, em
@@ -104,8 +105,9 @@ Os dados cruzam a fronteira da biblioteca em lotes `pyarrow.RecordBatch`, nos do
 lotes (decisão do usuário de 2026-09-20). O cliente trabalha no lote atual enquanto a biblioteca lê
 o seguinte ou grava o anterior, cada primitiva numa thread auxiliar com uma fila limitada. O pandas
 com backend pyarrow é o formato dos pipelines (declaração do usuário de 2026-09-20), e a regra
-apoia-se na conversão barata, medida na subseção "A conversão para o pandas": 2,3 ms sem cópia para
-300.000 linhas, 1,4 ms para um lote de 100.000; o pandas não entra nas dependências de execução. Por motor: no DuckDB, a saída por
+apoia-se na conversão barata, medida na subseção "A conversão para o pandas": 2,3 ms sem cópia
+para 300.000 linhas, 1,4 ms para um lote de 100.000; o pandas não entra nas dependências de
+execução. Por motor: no DuckDB, a saída por
 `to_arrow_reader()` e a entrada por um `INSERT ... BY NAME` por lote numa transação; no Redshift, a
 saída pelas tuplas de `fetchmany` ou por `UNLOAD` e a entrada por Parquet no S3 mais
 `COPY ... MANIFEST`.
@@ -361,7 +363,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.engine` | 4 e 5 | O protocolo `Engine` e os motores `duckdb` e `redshift`, com a mesma interface. |
 | `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução. |
 | `serialize_db.load` | 7 | A carga inicial dos Parquet atuais. |
-| `serialize_db.cli` | 6 a 9 | `serialize-db run`, `schema`, `sql`, `audit`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`. |
+| `serialize_db.cli` | 1 a 9 | `serialize-db run`, `schema`, `sql`, `audit`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`: cada subcomando entra com a etapa que entrega a primitiva por trás dele (`schema` na 1, `sql` na 2), e a etapa 6 monta o `run` e o despacho comum. |
 
 Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`, `deltalake`, `duckdb`,
 `pyarrow` e `boto3`, nas versões fixadas pelos documentos, mais `duckdb-engine` e
@@ -402,7 +404,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |
 | 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação da partição. | O pipeline de exemplo roda em memória sobre um Delta local; a auditoria reprova a chave repetida entre a partição nova e uma já publicada. |
-| 5. Motor Redshift | O mesmo protocolo com sandbox `exec_<id>_`, `COPY ... MANIFEST` e `UNLOAD`. | SQL gerado coberto por testes sem cluster; integração com amostra, marcador `redshift`. |
+| 5. Motor Redshift | O mesmo protocolo com sandbox `exec_<id>_`, `COPY ... MANIFEST` e `UNLOAD`. | SQL gerado coberto por testes sem conexão; integração com amostra, marcador `redshift`. |
 | 6. Execução e linha de comando | `Database`, `Execution`, `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
 | 7. Carga inicial | Migração dos Parquet atuais por tabela e por partição, com relatório. | Contagens e somas por partição iguais entre origem e Delta. |
 | 8. Publicação para clientes | Tabelas `<ambiente>_*` no Redshift, `version_diff`, transação única, `serialize_db_publications`. | Uma partição alterada recarrega só essa partição. |
