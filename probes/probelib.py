@@ -8,6 +8,22 @@ falharam", para um bloco vazio nunca significar "negado"; identificadores reapro
 ``NOME=valor``; tabelas alinhadas; e a tabela de checagens, ``fail`` primeiro, depois ``note``,
 depois ``pass``. Códigos de saída: 0 quando toda checagem passou, 1 quando alguma chamada
 falhou, 2 quando alguma checagem reprovou.
+
+O arquivo se organiza assim:
+
+- as constantes de caminhos e de variáveis;
+- ``Tee``, que duplica a saída no terminal e no arquivo;
+- a classificação dos erros do ``boto3`` (``answered``, ``unanswered``, ``error_code``,
+  ``describe_error``, ``reason``): "o serviço respondeu com erro" e "sem resposta" são verdictos
+  diferentes, e só o segundo pede manutenção da rede;
+- as leituras de rede (``resolve``, ``tcp_open``, ``tcp_probe``, ``public_label``, ``dns_rows``),
+  que nunca contam como chamada falhada;
+- a formatação (``mask``, ``pretty``, ``tabulate``, ``environment_rows``), com os segredos
+  mascarados;
+- ``Report``, o relatório em construção;
+- a leitura do projeto do SageMaker Unified Studio por ``sagemaker_studio`` num subprocesso
+  (``PROJECT_PROBE``, ``python_candidates``, ``project_snapshot``) e as funções que tornam as
+  conexões legíveis (``find_values``, ``connection_rows``).
 """
 
 from __future__ import annotations
@@ -27,10 +43,18 @@ from typing import Any, TypeVar
 
 T = TypeVar("T")
 
+# Onde o relatório é gravado (pasta fora do git) e a raiz do repositório, para ler pyproject.toml e .duckdb/.
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Uma chave com um destes nomes tem o valor trocado por *** na saída; a variável só mostra presença.
 SECRET_PATTERN = re.compile(r"secret|password|token|credential|private", re.IGNORECASE)
+
+# As variáveis de proxy nas duas grafias: o delta-rs lê só as maiúsculas, e o espaço define as duas.
 PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
+
+# Só o S3 e o DynamoDB têm gateway endpoint; um IP público de outro serviço depende da internet ou do proxy.
+GATEWAY_SERVICES = ("s3", "dynamodb")
 
 
 class Tee:
@@ -54,11 +78,19 @@ class Tee:
         self.file.close()
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Erros do boto3: o serviço respondeu, não respondeu, ou o erro é local
+
+
 def short_config(connect: float = 5, read: float = 15, attempts: int = 2) -> Any:
     """``botocore.config.Config`` com esperas curtas: sem rede, o padrão do boto3 é 60 s por tentativa."""
     import botocore.config
 
-    return botocore.config.Config(connect_timeout=connect, read_timeout=read, retries={"total_max_attempts": attempts, "mode": "standard"})
+    return botocore.config.Config(
+        connect_timeout=connect,
+        read_timeout=read,
+        retries={"total_max_attempts": attempts, "mode": "standard"},
+    )
 
 
 def answered(error: BaseException) -> bool:
@@ -67,6 +99,7 @@ def answered(error: BaseException) -> bool:
         import botocore.exceptions
     except ImportError:
         return False
+
     return isinstance(error, botocore.exceptions.ClientError)
 
 
@@ -76,8 +109,11 @@ def unanswered(error: BaseException) -> bool:
         import botocore.exceptions
     except ImportError:
         return False
+
     if not isinstance(error, botocore.exceptions.BotoCoreError):
         return False
+
+    # O botocore não tem uma classe única para "sem resposta"; o nome da exceção diz a causa.
     name = type(error).__name__
     return any(word in name for word in ("Timeout", "Connection", "Endpoint", "SSL", "Proxy"))
 
@@ -91,7 +127,9 @@ def error_code(error: BaseException) -> str | None:
 
 def describe_error(error: BaseException) -> str:
     """Erro numa linha; para o boto3, diz se o serviço respondeu com erro, se não houve resposta ou se o erro é local."""
+    # Sem códigos de cor do terminal e sem quebras de linha, cortado para caber na seção final.
     text = re.sub(r"\x1b\[[0-9;]*m", "", " ".join(str(error).split()))[:300]
+
     if answered(error):
         return f"o serviço respondeu com erro: {type(error).__name__}: {text}"
     if unanswered(error):
@@ -119,10 +157,15 @@ def region() -> str | None:
     return boto3.Session().region_name or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Rede: DNS e TCP como leituras, nunca como chamadas falhadas
+
+
 def resolve(name: str, port: int = 443) -> tuple[list[str], bool]:
     """Endereços IP de ``name`` e se todos são privados (endpoint VPC de interface com DNS privado)."""
     addresses = sorted({info[4][0] for info in socket.getaddrinfo(name, port, type=socket.SOCK_STREAM)})
-    return addresses, bool(addresses) and all(ipaddress.ip_address(address).is_private for address in addresses)
+    private = bool(addresses) and all(ipaddress.ip_address(address).is_private for address in addresses)
+    return addresses, private
 
 
 def tcp_open(host: str, port: int, timeout: float = 5) -> float:
@@ -140,11 +183,9 @@ def tcp_probe(host: str, port: int, timeout: float = 5) -> str:
         return f"não conectou: {error}"
 
 
-GATEWAY_SERVICES = ("s3", "dynamodb")
-
-
 def public_label(name: str) -> str:
     """Tipo de um nome que resolve para IP público: só o S3 e o DynamoDB têm gateway endpoint; os demais dependem da internet ou do proxy."""
+    # O serviço é o primeiro rótulo (s3.us-west-2...) ou o segundo (bucket.s3.us-west-2...).
     labels = name.lower().split(".")
     gateway = labels[0] in GATEWAY_SERVICES or (len(labels) > 1 and labels[1] in GATEWAY_SERVICES)
     return "público: gateway endpoint ou internet" if gateway else "público: só pela internet ou pelo proxy"
@@ -157,6 +198,7 @@ def dns_rows(names: Iterable[str]) -> tuple[list[list[str]], dict[str, bool | No
     """
     rows: list[list[str]] = []
     private_by_name: dict[str, bool | None] = {}
+
     for name in names:
         try:
             addresses, private = resolve(name)
@@ -164,16 +206,27 @@ def dns_rows(names: Iterable[str]) -> tuple[list[list[str]], dict[str, bool | No
             rows.append([name, f"não resolve: {error}", "-"])
             private_by_name[name] = None
             continue
+
+        # Até quatro endereços por linha; um endpoint regional do S3 resolve para oito.
         shown = ", ".join(addresses[:4]) + (" ..." if len(addresses) > 4 else "")
-        rows.append([name, shown, "privado: endpoint VPC de interface com DNS privado" if private else public_label(name)])
+        kind = "privado: endpoint VPC de interface com DNS privado" if private else public_label(name)
+        rows.append([name, shown, kind])
         private_by_name[name] = private
+
     return rows, private_by_name
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Formatação: JSON legível, tabelas alinhadas e segredos mascarados
 
 
 def mask(data: Any) -> Any:
     """Cópia de ``data`` com os valores das chaves que parecem segredo trocados por ``***``."""
     if isinstance(data, dict):
-        return {key: ("***" if isinstance(key, str) and SECRET_PATTERN.search(key) and value else mask(value)) for key, value in data.items()}
+        return {
+            key: ("***" if isinstance(key, str) and SECRET_PATTERN.search(key) and value else mask(value))
+            for key, value in data.items()
+        }
     if isinstance(data, (list, tuple)):
         return [mask(value) for value in data]
     return data
@@ -183,6 +236,7 @@ def pretty(data: Any, limit: int = 120) -> str:
     """JSON legível de uma resposta, sem ``ResponseMetadata`` e sem segredos, cortado em ``limit`` linhas."""
     if isinstance(data, dict):
         data = {key: value for key, value in data.items() if key != "ResponseMetadata"}
+
     lines = json.dumps(mask(data), indent=2, ensure_ascii=False, default=str).splitlines()
     if len(lines) > limit:
         lines = lines[:limit] + [f"... ({len(lines) - limit} linhas omitidas)"]
@@ -191,22 +245,34 @@ def pretty(data: Any, limit: int = 120) -> str:
 
 def tabulate(rows: Iterable[Iterable[Any] | str]) -> str:
     """Alinha linhas como ``column -t -s $'\\t'``, com ``-`` na célula vazia."""
+    # Cada linha vira uma lista de células; uma linha dada como texto é dividida por tabulação.
     split: list[list[str]] = []
     for row in rows:
         fields = row.split("\t") if isinstance(row, str) else [str(cell) for cell in row]
         fields = [field if field != "" else "-" for field in fields]
         if fields:
             split.append(fields)
+
+    # A largura de cada coluna é a da célula mais larga; a última coluna não recebe preenchimento.
     widths: dict[int, int] = {}
     for fields in split:
         for index, cell in enumerate(fields):
             widths[index] = max(widths.get(index, 0), len(cell))
-    return "\n".join("".join(cell.ljust(widths[index] + 2) for index, cell in enumerate(fields[:-1])) + fields[-1] for fields in split)
+
+    return "\n".join(
+        "".join(cell.ljust(widths[index] + 2) for index, cell in enumerate(fields[:-1])) + fields[-1]
+        for fields in split
+    )
 
 
 def run_python(code: str, arguments: list[str], timeout: float, executable: str | None = None) -> subprocess.CompletedProcess[str]:
     """Roda ``code`` num subprocesso Python com espera limitada."""
-    return subprocess.run([executable or sys.executable, "-c", code, *arguments], capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(
+        [executable or sys.executable, "-c", code, *arguments],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def environment_rows(names: Iterable[str]) -> list[list[str]]:
@@ -218,6 +284,7 @@ def environment_rows(names: Iterable[str]) -> list[list[str]]:
         if value is None:
             rows.append([name, "(ausente)"])
         elif name != name.upper() and name.upper() in names and value == os.environ.get(name.upper()):
+            # A minúscula igual à maiúscula (no_proxy e NO_PROXY) sai uma vez; a lista tem 1.500 caracteres.
             rows.append([name, f"(igual a {name.upper()})"])
         elif SECRET_PATTERN.search(name) or name in ("AWS_ACCESS_KEY_ID",):
             rows.append([name, "definida"])
@@ -226,8 +293,17 @@ def environment_rows(names: Iterable[str]) -> list[list[str]]:
     return rows
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# O relatório
+
+
 class Report:
-    """Um relatório em construção: escreve no terminal e no arquivo, acumula checagens e falhas."""
+    """Um relatório em construção: escreve no terminal e no arquivo, acumula checagens e falhas.
+
+    Um probe cria um ``Report``, abre seções com ``h1``, ecoa cada chamada com ``call``, registra
+    checagens com ``ok``, ``fail`` e ``note`` e termina com ``finish``, que imprime a tabela de
+    checagens, a seção final de falhas e devolve o código de saída.
+    """
 
     def __init__(self, name: str, subject: str) -> None:
         OUTPUT_DIR.mkdir(exist_ok=True)
@@ -237,6 +313,8 @@ class Report:
         self.failures: list[tuple[str, str]] = []
         self.last_reason = "sem falha"  # motivo curto da última chamada que falhou, para a checagem que a interpreta
         self.section_number = 0
+
+        # Tudo o que o probe imprime vai para o terminal e para o arquivo; finish() desfaz o desvio.
         sys.stdout = self.tee
         print("=" * 80)
         print(f"{name}: {subject}")
@@ -245,13 +323,16 @@ class Report:
         print("=" * 80)
 
     def h1(self, title: str) -> None:
+        """Abre uma seção numerada."""
         self.section_number += 1
         print(f"\n\n{'#' * 80}\n# {self.section_number}. {title}\n{'#' * 80}\n")
 
     def h2(self, title: str) -> None:
+        """Abre uma subseção, sem número."""
         print(f"\n--- {title} ---\n")
 
     def line(self, text: str = "") -> None:
+        """Uma linha de texto livre."""
         print(text)
 
     def value(self, name: str, value: object) -> None:
@@ -259,11 +340,17 @@ class Report:
         print(f"{name}={value}")
 
     def table(self, rows: Iterable[Iterable[Any] | str]) -> None:
+        """Uma tabela alinhada, com a primeira linha como cabeçalho, seguida de uma linha em branco."""
         print(tabulate(rows))
         print()
 
     def call(self, label: str, action: Callable[[], T], render: Callable[[Any], str] | None = pretty) -> T | None:
-        """Ecoa ``label``, executa ``action`` e imprime o resultado ou o erro; a falha vai para a seção final."""
+        """Ecoa ``label``, executa ``action`` e imprime o resultado ou o erro; a falha vai para a seção final.
+
+        Devolve o resultado de ``action``, ou ``None`` quando ela levantou exceção; nesse caso
+        ``last_reason`` guarda o motivo curto para a checagem que interpreta a falha. ``render``
+        transforma o resultado em texto (``pretty`` por padrão; ``None`` não imprime nada).
+        """
         print(f"$ {label}")
         started = time.perf_counter()
         try:
@@ -274,6 +361,7 @@ class Report:
             print(f"!! FALHOU ({time.perf_counter() - started:.1f} s): {detail}\n")
             self.failures.append((label, detail))
             return None
+
         elapsed = time.perf_counter() - started
         if render is not None:
             text = render(result)
@@ -282,12 +370,15 @@ class Report:
         return result
 
     def ok(self, check_id: str, what: str, detail: str) -> None:
+        """Checagem aprovada."""
         self.checks.append(("pass", check_id, what, detail))
 
     def fail(self, check_id: str, what: str, detail: str) -> None:
+        """Checagem reprovada: algo que impede a biblioteca; leva o código de saída a 2."""
         self.checks.append(("fail", check_id, what, detail))
 
     def note(self, check_id: str, what: str, detail: str) -> None:
+        """Leitura registrada sem verdicto: o ausente, o negado, o que só a próxima etapa decide."""
         self.checks.append(("note", check_id, what, detail))
 
     def finish(self) -> int:
@@ -297,6 +388,7 @@ class Report:
         for kind in ("fail", "note", "pass"):
             rows += [list(check) for check in self.checks if check[0] == kind]
         self.table(rows)
+
         self.h1("Chamadas que falharam")
         if self.failures:
             print("Cada entrada é uma chamada cujo resultado falta acima; um bloco vazio em outro lugar significa que a chamada passou e não devolveu nada.\n")
@@ -304,15 +396,23 @@ class Report:
                 print(f"- {label}\n  {detail}")
         else:
             print("Nenhuma. Toda chamada deste relatório passou.")
+
         failed_checks = sum(1 for check in self.checks if check[0] == "fail")
         code = 2 if failed_checks else 1 if self.failures else 0
         print(f"\ncódigo de saída {code}: {failed_checks} checagem(ns) reprovada(s), {len(self.failures)} chamada(s) falhada(s)")
-        sys.stdout = sys.__stdout__
+
+        # Devolve o stdout que o construtor desviou; no probe é o terminal, no pytest o capture.
+        sys.stdout = self.tee.terminal
         self.tee.close()
         print(f"resultado gravado em {self.path}")
         return code
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# O projeto do SageMaker Unified Studio, lido por sagemaker_studio num subprocesso
+
+# O pacote sagemaker_studio não entra no venv do projeto (arrasta versões sem fixação); o probe o procura em cada
+# interpretador candidato e roda este programa nele. A saída é um JSON com o projeto e uma linha por conexão.
 PROJECT_PROBE = r"""
 import ast, json, sys
 from sagemaker_studio import Project
@@ -406,8 +506,10 @@ def project_snapshot(timeout: float = 90) -> tuple[dict[str, Any], str]:
         completed = run_python(PROJECT_PROBE, [], timeout, executable)
         if completed.returncode == 0:
             return json.loads(completed.stdout), executable
+
         last_line = (completed.stderr.strip().splitlines() or ["(sem saída de erro)"])[-1]
         errors.append(f"{executable}: {last_line[:200]}")
+
     raise RuntimeError("; ".join(errors))
 
 
@@ -430,6 +532,7 @@ def find_values(data: Any, names: Iterable[str]) -> dict[str, Any]:
     return found
 
 
+# O dado que distingue uma conexão na tabela, na ordem de preferência: URI S3, workgroup, banco, URL JDBC, host.
 CONNECTION_DETAILS = ("s3_uri", "workgroup_name", "database_name", "jdbc_url", "host", "glue_version")
 
 
@@ -439,9 +542,13 @@ def connection_rows(connections: Iterable[dict[str, Any]]) -> list[list[str]]:
     for item in connections:
         endpoints = item.get("physical_endpoints") or []
         shown = "; ".join(f"{endpoint.get('host')}:{endpoint.get('port')}" for endpoint in endpoints if endpoint.get("host")) or "-"
+
+        # O detalhe vem dos dados da conexão; sem eles, do nome da conexão Glue do endpoint; sem nada, o erro da leitura.
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
         detail = next((f"{key}={data[key]}" for key in CONNECTION_DETAILS if data.get(key)), None)
-        detail = detail or next((f"glue_connection_name={endpoint['glue_connection_name']}" for endpoint in endpoints if endpoint.get("glue_connection_name")), None)
+        detail = detail or next(
+            (f"glue_connection_name={endpoint['glue_connection_name']}" for endpoint in endpoints if endpoint.get("glue_connection_name")),
+            None,
+        )
         rows.append([str(item.get("name")), str(item.get("type")), shown, detail or item.get("data_error") or "-"])
     return rows
-

@@ -16,6 +16,10 @@ Só leitura. O relatório sai no terminal e em ``probes/output/catalog_<data-hor
 4. Lake Formation: locais registrados.
 5. S3 Tables: table buckets.
 
+Cada seção é uma função, na ordem acima, que documenta as checagens que emite (``CT-1`` a
+``CT-6``); ``main`` as chama uma a uma, e uma seção que quebra não cala as outras. Uma negação é
+leitura (``note``): o papel do projeto não ter o serviço é a resposta esperada hoje.
+
 Chamadas: ``glue:GetDatabases``, ``GetTables``, ``GetCatalogs``; ``athena:ListWorkGroups``,
 ``GetWorkGroup``; ``lakeformation:ListResources``; ``s3tables:ListTableBuckets``. Nada é criado.
 Códigos de saída: 0 checagens ok, 1 alguma chamada falhou, 2 alguma checagem reprovou.
@@ -29,11 +33,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from probelib import Report, describe_error, dns_rows, pretty, region, short_config  # noqa: E402
 
+# Os serviços cujo endpoint regional a seção de rede resolve.
 SERVICES = ("glue", "athena", "lakeformation", "s3tables")
+
+# Quantos bancos do Glue têm as tabelas listadas, e quantos workgroups do Athena são detalhados.
 MAX_DATABASES = 5
+MAX_WORKGROUPS = 3
+
+
+def summary(items: list[dict], keys: tuple[str, ...]) -> str:
+    """JSON legível de uma lista de respostas, só com as chaves pedidas."""
+    return pretty([{key: item.get(key) for key in keys} for item in items])
 
 
 def network(report: Report, resolved: str | None) -> None:
+    """Seção 1, rede: o DNS de cada serviço, como leitura."""
     report.h1("Rede")
     if not resolved:
         report.line("sem região, sem endpoints a resolver")
@@ -43,6 +57,7 @@ def network(report: Report, resolved: str | None) -> None:
 
 
 def table_format(table: dict) -> str:
+    """O formato de uma tabela do Glue: Iceberg, Delta ou Parquet pelos parâmetros e pelo descritor; senão a classificação."""
     parameters = table.get("Parameters", {})
     descriptor = table.get("StorageDescriptor", {})
     if parameters.get("table_type", "").upper() == "ICEBERG":
@@ -55,28 +70,47 @@ def table_format(table: dict) -> str:
 
 
 def glue(report: Report, resolved: str | None) -> None:
+    """Seção 2, Glue: ``CT-1`` (responde), ``CT-2`` (tabelas por formato) e ``CT-6`` (catálogos federados)."""
     import boto3
 
     report.h1("Glue")
     client = boto3.client("glue", region_name=resolved, config=short_config())
-    databases = report.call("glue.get_databases(MaxResults=50)", lambda: client.get_databases(MaxResults=50).get("DatabaseList", []), render=lambda found: pretty([{key: item.get(key) for key in ("Name", "LocationUri", "CatalogId", "CreateTime")} for item in found]))
+
+    # CT-1: os bancos visíveis ao papel; a negação é a leitura esperada sem catálogo habilitado.
+    databases = report.call(
+        "glue.get_databases(MaxResults=50)",
+        lambda: client.get_databases(MaxResults=50).get("DatabaseList", []),
+        render=lambda found: summary(found, ("Name", "LocationUri", "CatalogId", "CreateTime")),
+    )
     if databases is None:
         report.note("CT-1", "Glue", f"não lido: {report.last_reason}; sem catálogo Glue para o papel do projeto")
         report.note("CT-2", "tabelas Iceberg no Glue", "não lidas")
     else:
         report.ok("CT-1", "Glue", f"respondeu com {len(databases)} banco(s)")
+
+        # CT-2: as tabelas dos primeiros bancos, com o formato; uma tabela Iceberg é o gatilho de reavaliação.
         formats: dict[str, int] = {}
         rows = [["banco", "tabela", "formato", "local"]]
         for database in databases[:MAX_DATABASES]:
             name = database["Name"]
-            tables = report.call(f"glue.get_tables(DatabaseName={name!r}, MaxResults=50)", lambda n=name: client.get_tables(DatabaseName=n, MaxResults=50).get("TableList", []), render=lambda found: f"{len(found)} tabela(s)")
+            tables = report.call(
+                f"glue.get_tables(DatabaseName={name!r}, MaxResults=50)",
+                lambda n=name: client.get_tables(DatabaseName=n, MaxResults=50).get("TableList", []),
+                render=lambda found: f"{len(found)} tabela(s)",
+            )
             for table in tables or []:
                 kind = table_format(table)
                 formats[kind] = formats.get(kind, 0) + 1
                 rows.append([name, table.get("Name"), kind, table.get("StorageDescriptor", {}).get("Location", "-")])
         report.table(rows if len(rows) > 1 else [["(nenhuma tabela nos primeiros bancos)"]])
         report.note("CT-2", "tabelas por formato no Glue", ", ".join(f"{kind}: {count}" for kind, count in sorted(formats.items())) or "nenhuma")
-    catalogs = report.call("glue.get_catalogs()", lambda: client.get_catalogs().get("CatalogList", []), render=lambda found: pretty([{key: item.get(key) for key in ("Name", "CatalogId", "CatalogType", "ResourceArn")} for item in found]))
+
+    # CT-6: um catálogo federado (Lakehouse) ligaria o Glue ao Redshift ou a outro catálogo.
+    catalogs = report.call(
+        "glue.get_catalogs()",
+        lambda: client.get_catalogs().get("CatalogList", []),
+        render=lambda found: summary(found, ("Name", "CatalogId", "CatalogType", "ResourceArn")),
+    )
     if catalogs is None:
         report.note("CT-6", "catálogos federados do Glue (Lakehouse)", "não lidos")
     else:
@@ -84,29 +118,50 @@ def glue(report: Report, resolved: str | None) -> None:
 
 
 def athena(report: Report, resolved: str | None) -> None:
+    """Seção 3, Athena: ``CT-3`` (responde) e o local de resultados dos primeiros workgroups."""
     import boto3
 
     report.h1("Athena")
     client = boto3.client("athena", region_name=resolved, config=short_config())
-    groups = report.call("athena.list_work_groups()", lambda: client.list_work_groups().get("WorkGroups", []), render=lambda found: pretty([{key: item.get(key) for key in ("Name", "State", "EngineVersion")} for item in found]))
+
+    groups = report.call(
+        "athena.list_work_groups()",
+        lambda: client.list_work_groups().get("WorkGroups", []),
+        render=lambda found: summary(found, ("Name", "State", "EngineVersion")),
+    )
     if groups is None:
         report.note("CT-3", "Athena", f"não lido: {report.last_reason}")
         return
     report.ok("CT-3", "Athena", f"respondeu com {len(groups)} workgroup(s)")
-    for group in groups[:3]:
+
+    # O local de resultados de cada workgroup diz onde uma consulta do Athena gravaria; o GetWorkGroup pode ser negado.
+    def render_group(found: dict) -> str:
+        configuration = found.get("Configuration", {})
+        return pretty({key: configuration.get(key) for key in ("ResultConfiguration", "EnforceWorkGroupConfiguration", "EngineVersion", "BytesScannedCutoffPerQuery")})
+
+    for group in groups[:MAX_WORKGROUPS]:
         name = group.get("Name")
-        details = report.call(f"athena.get_work_group(WorkGroup={name!r})", lambda n=name: client.get_work_group(WorkGroup=n).get("WorkGroup", {}), render=lambda found: pretty({key: found.get("Configuration", {}).get(key) for key in ("ResultConfiguration", "EnforceWorkGroupConfiguration", "EngineVersion", "BytesScannedCutoffPerQuery")}))
+        details = report.call(
+            f"athena.get_work_group(WorkGroup={name!r})",
+            lambda n=name: client.get_work_group(WorkGroup=n).get("WorkGroup", {}),
+            render=render_group,
+        )
         if details is not None:
             location = details.get("Configuration", {}).get("ResultConfiguration", {}).get("OutputLocation")
             report.value(f"ATHENA_RESULTS_{name}", location or "(sem local de resultados)")
 
 
 def lake_formation(report: Report, resolved: str | None) -> None:
+    """Seção 4, Lake Formation: ``CT-4``, os locais registrados, ou a negação."""
     import boto3
 
     report.h1("Lake Formation")
     client = boto3.client("lakeformation", region_name=resolved, config=short_config())
-    resources = report.call("lakeformation.list_resources()", lambda: client.list_resources().get("ResourceInfoList", []), render=lambda found: pretty([{key: item.get(key) for key in ("ResourceArn", "RoleArn", "HybridAccessEnabled", "LastModified")} for item in found]))
+    resources = report.call(
+        "lakeformation.list_resources()",
+        lambda: client.list_resources().get("ResourceInfoList", []),
+        render=lambda found: summary(found, ("ResourceArn", "RoleArn", "HybridAccessEnabled", "LastModified")),
+    )
     if resources is None:
         report.note("CT-4", "Lake Formation", f"não lido: {report.last_reason}")
     else:
@@ -114,10 +169,15 @@ def lake_formation(report: Report, resolved: str | None) -> None:
 
 
 def s3_tables(report: Report, resolved: str | None) -> None:
+    """Seção 5, S3 Tables: ``CT-5``, os table buckets, ou a negação; um table bucket é o gatilho de reavaliação."""
     import boto3
 
     report.h1("S3 Tables")
-    buckets = report.call("s3tables.list_table_buckets()", lambda: boto3.client("s3tables", region_name=resolved, config=short_config()).list_table_buckets().get("tableBuckets", []), render=lambda found: pretty([{key: item.get(key) for key in ("name", "arn", "createdAt")} for item in found]))
+    buckets = report.call(
+        "s3tables.list_table_buckets()",
+        lambda: boto3.client("s3tables", region_name=resolved, config=short_config()).list_table_buckets().get("tableBuckets", []),
+        render=lambda found: summary(found, ("name", "arn", "createdAt")),
+    )
     if buckets is None:
         report.note("CT-5", "S3 Tables", f"não lido: {report.last_reason}")
     else:

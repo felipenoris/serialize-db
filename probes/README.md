@@ -100,4 +100,11 @@ Sem variável e sem conexão no projeto, o script lista o que as APIs mostram e 
 - Checagens com prefixo próprio de duas letras (`SP`, `BK`, `RS`, `CT`), `note` para o ausente e
   `fail` para o que impede a biblioteca.
 - Uma seção que quebra não cala as outras: `main` captura a exceção e a registra como falha.
+- Uma função por seção, na ordem do relatório, com docstring que nomeia a seção e as checagens que
+  ela emite; dentro dela, um bloco por checagem, precedido do comentário que diz a regra aplicada e
+  o que a negação significa. Um `render` que não cabe numa linha vira função nomeada
+  (`render_head_bucket`, `render_rows`), com docstring dizendo quais campos mostra.
+- `tests/test_probes.py` testa as funções puras dos probes com respostas fabricadas, sem rede: uma
+  função nova que decide algo sobre o que leu ganha um caso lá, e
+  `uv run pytest tests/test_probes.py` roda em segundos.
 - Acrescente a linha na tabela dos scripts e as perguntas na tabela acima.

@@ -1,6 +1,7 @@
 """Configuração compartilhada dos testes.
 
-``tests/`` recebe os testes do pacote ``serialize_db``; ``tests/proof_of_concept/`` recebe as provas
+``tests/`` recebe os testes do pacote ``serialize_db`` e os das funções puras dos probes
+(``test_probes.py``); ``tests/proof_of_concept/`` recebe as provas
 de conceito e os testes das bibliotecas externas (delta-rs, DuckDB, PyArrow, SQLAlchemy, boto3,
 redshift_connector), que também servem de material de estudo das APIs que a biblioteca usa. As
 provas de conceito da camada Delta rodam sobre os dois tipos de armazenamento que a biblioteca
