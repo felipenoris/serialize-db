@@ -1,4 +1,4 @@
-"""A biblioteca padrão do Python nos papéis que as etapas de ``docs/PLAN.md`` lhe dão.
+"""A biblioteca padrão do Python nos papéis que as etapas (``docs/PLAN-STAGE-<n>.md``) lhe dão.
 
 Sem gravar arquivo: a aritmética de meses (``datetime``, ``calendar``), os identificadores de
 execução e de sandbox (``uuid``, ``re``), o protocolo do motor e as configurações

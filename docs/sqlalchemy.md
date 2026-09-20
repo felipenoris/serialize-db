@@ -1197,7 +1197,8 @@ o texto SQL de cada dialeto, e a substituição acontece uma interação com o b
 gerado entra no repositório do pipeline, revisado no diff; um teste o compara com uma nova geração
 enquanto o statement Core existir; e a chamada que compilava o statement passa a executar o texto.
 No fim, o SQLAlchemy fica nos modelos e na geração, e `duckdb_engine` e `sqlalchemy-redshift` deixam
-de ser dependências de execução. As primitivas, especificadas na etapa 2 de [`PLAN.md`](PLAN.md):
+de ser dependências de execução. As primitivas, especificadas na etapa 2 do plano
+([`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)):
 
 | Primitiva | O que faz |
 | --- | --- |

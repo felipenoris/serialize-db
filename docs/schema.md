@@ -1,8 +1,8 @@
 # Esquema a partir dos modelos ORM
 
-O esquema das tabelas vive nos modelos ORM, e o módulo `serialize_db.schema`, etapa 1 de
-[`PLAN.md`](PLAN.md), deriva deles o esquema Arrow, o esquema Delta e o DDL de cada motor. Gerar o DDL a
-partir dos modelos. O DDL gerado cobre as tabelas do sandbox no DuckDB e no
+O esquema das tabelas vive nos modelos ORM, e o módulo `serialize_db.schema`, etapa 1 do plano
+([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md)), deriva deles o esquema Arrow, o esquema Delta e o DDL de
+cada motor. Gerar o DDL a partir dos modelos. O DDL gerado cobre as tabelas do sandbox no DuckDB e no
 Redshift. As vantagens do DDL manual, revisão explícita e opções físicas, vêm de
 dois mecanismos:
 
@@ -56,7 +56,7 @@ Uma chave cujas colunas não incluem a coluna de partição é conferida na tabe
 meses da execução, porque unicidade dentro do mês não é unicidade. A chave estrangeira é conferida
 sob pedido, porque a tabela referenciada pode não estar no sandbox: só o que o pipeline usa é
 ingerido. O texto SQL de cada verificação é gerado por dialeto e pode ser impresso ou gravado, para
-depurar o comando e para o diff. As primitivas estão em `PLAN.md`.
+depurar o comando e para o diff. As primitivas estão em `PLAN-STAGE-4.md`.
 
 A medição publicada na documentação do DuckDB, com 554 milhões de linhas, justifica omitir chaves no
 DuckDB:

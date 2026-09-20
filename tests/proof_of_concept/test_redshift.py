@@ -1,4 +1,4 @@
-"""Prova de conceito no Redshift: os itens da etapa 0 de ``docs/PLAN.md`` que esperam uma conexão.
+"""Prova de conceito no Redshift: os itens de ``docs/PLAN-STAGE-0.md`` que esperam uma conexão.
 
 A suíte cria tabelas ``serialize_db_poc_<id>_*`` no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``
 e arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``; sem uma das duas é pulada, e com elas a falta de

@@ -163,7 +163,7 @@ class Storage:
 
     As subclasses fixam ``name``, o prefixo das chaves do relatório, e resolvem URIs e listagens no
     seu armazenamento; os testes comuns aos dois tipos usam só esta interface. É a mesma divisão que
-    ``serialize_db.storage`` faz na biblioteca (``docs/PLAN.md``, etapa 3).
+    ``serialize_db.storage`` faz na biblioteca (``docs/PLAN-STAGE-3.md``).
     """
 
     name: ClassVar[str]

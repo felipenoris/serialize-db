@@ -8,8 +8,9 @@ a biblioteca faz, os metadados que ela mantém, as primitivas de cada módulo e 
 de uso. As razões do desenho estão em [`estrategia.md`](estrategia.md); o comportamento verificado
 do Delta, em [`delta.md`](delta.md); os motores, em [`duckdb.md`](duckdb.md) e
 [`redshift.md`](redshift.md); o contrato, em [`schema.md`](schema.md) e
-[`sqlalchemy.md`](sqlalchemy.md); as práticas de ETL que o desenho segue, em [`guia.md`](guia.md); as etapas de implementação e as
-primitivas de cada módulo, em [`PLAN.md`](PLAN.md).
+[`sqlalchemy.md`](sqlalchemy.md); as práticas de ETL que o desenho segue, em [`guia.md`](guia.md); as
+etapas de implementação, em [`PLAN.md`](PLAN.md), e o plano de cada etapa, com as primitivas do
+módulo, em `PLAN-STAGE-<n>.md`.
 
 ## Funcionalidades
 
@@ -54,8 +55,8 @@ Os módulos são `serialize_db.schema`, `serialize_db.sql`, `serialize_db.storag
 `serialize_db.engine.duckdb`, `serialize_db.engine.redshift` e `serialize_db.execution`; o pacote não
 contém modelos, que vêm da biblioteca cliente. O modelo de referência em `tests/model/` é a
 primeira instância do contrato e o material dos testes, que o entregam à API como um pipeline
-entregaria os seus modelos. As etapas de implementação, com as primitivas e o critério de aceite de cada uma, estão em
-[`PLAN.md`](PLAN.md).
+entregaria os seus modelos. As etapas de implementação, com o critério de aceite de cada uma, estão
+em [`PLAN.md`](PLAN.md), e as primitivas de cada etapa, em `PLAN-STAGE-<n>.md`.
 
 ## Metadados próprios da biblioteca
 
@@ -110,11 +111,11 @@ auditoria e o resumo da execução vão para o log do processo, não para `_seri
 
 ## Primitivas
 
-As primitivas de cada módulo, com assinatura, comportamento e testes, estão em [`PLAN.md`](PLAN.md),
-etapa a etapa; os fluxos abaixo as citam pelo nome. `table` é sempre um `Table` do SQLAlchemy,
-obtido do modelo; `uri` é a pasta da tabela Delta; `data` é uma `pa.Table`, o tipo que o código cliente
-entrega e recebe, ou um `RecordBatchReader` nas primitivas internas; `run` é a `Execution` aberta, e
-`run.sandbox` o motor onde o pipeline roda.
+As primitivas de cada módulo, com assinatura, comportamento e testes, estão em `PLAN-STAGE-<n>.md`,
+um arquivo por etapa, que [`PLAN.md`](PLAN.md) indexa; os fluxos abaixo as citam pelo nome. `table`
+é sempre um `Table` do SQLAlchemy, obtido do modelo; `uri` é a pasta da tabela Delta; `data` é uma
+`pa.Table`, o tipo que o código cliente entrega e recebe, ou um `RecordBatchReader` nas primitivas
+internas; `run` é a `Execution` aberta, e `run.sandbox` o motor onde o pipeline roda.
 
 ## Fluxos de uso
 
