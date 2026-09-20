@@ -1,7 +1,7 @@
 [project]
 name = "serialize-db"
 version = "0.1.0"
-description = "Add your description here"
+description = "Banco analítico em tabelas Delta Lake, com DuckDB e Redshift como motores e o Redshift como destino de publicação"
 readme = "README.md"
 authors = [
     { name = "Felipe Noronha", email = "felipenoris@gmail.com" }
@@ -18,8 +18,13 @@ dev = [
     "boto3>=1.40",
     "deltalake==1.6.4",
     "duckdb==1.5.5",
+    "duckdb-engine==0.17.0",
+    "pandas==3.0.6",
     "pyarrow==25.0.1",
     "pytest>=8.4",
+    "redshift-connector>=2.1",
+    "sqlalchemy==2.0.54",
+    "sqlalchemy-redshift==1.0.0",
 ]
 
 [tool.pytest.ini_options]
@@ -27,6 +32,7 @@ testpaths = ["tests"]
 markers = [
     "local: escreve sob SERIALIZE_DB_TEST_LOCAL_ROOT; pulado sem ela",
     "s3: escreve sob SERIALIZE_DB_TEST_S3_ROOT; pulado sem ela, falha sem acesso",
+    "redshift: cria tabelas no esquema SERIALIZE_DB_TEST_REDSHIFT_SCHEMA; pulado sem ela, falha sem conexão",
 ]
 
 [build-system]

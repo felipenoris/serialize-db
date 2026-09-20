@@ -8,7 +8,8 @@ a biblioteca faz, os metadados que ela mantém, as primitivas de cada módulo e 
 de uso. As razões do desenho estão em [`estrategia.md`](estrategia.md); o comportamento verificado
 do Delta, em [`delta.md`](delta.md); os motores, em [`duckdb.md`](duckdb.md) e
 [`redshift.md`](redshift.md); o contrato, em [`schema.md`](schema.md) e
-[`sqlalchemy.md`](sqlalchemy.md); as práticas de ETL que o desenho segue, em [`guia.md`](guia.md).
+[`sqlalchemy.md`](sqlalchemy.md); as práticas de ETL que o desenho segue, em [`guia.md`](guia.md); as etapas de implementação e as
+primitivas de cada módulo, em [`PLAN.md`](PLAN.md).
 
 ## Funcionalidades
 
@@ -41,11 +42,11 @@ do Delta, em [`delta.md`](delta.md); os motores, em [`duckdb.md`](duckdb.md) e
 - **Linha de comando e documentação.** `serialize-db run` executa o pipeline, e o `pdoc` gera a
   documentação da API.
 
-Os módulos são `serialize_db.contract`, `serialize_db.sql`, `serialize_db.delta`,
+Os módulos são `serialize_db.schema`, `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`,
 `serialize_db.engine.duckdb`, `serialize_db.engine.redshift` e `serialize_db.execution`. Os modelos
 do projeto em `src/serialize_db/model/` são a primeira instância do contrato e o material dos
-testes. As etapas de implementação, com o critério de aceite de cada uma, estão em
-[`estrategia.md`](estrategia.md).
+testes. As etapas de implementação, com as primitivas e o critério de aceite de cada uma, estão em
+[`PLAN.md`](PLAN.md).
 
 ## Metadados próprios da biblioteca
 
@@ -100,96 +101,10 @@ auditoria e o resumo da execução vão para o log do processo, não para `_seri
 
 ## Primitivas
 
-As assinaturas abaixo são a proposta das etapas de [`estrategia.md`](estrategia.md), não código.
-Cada primitiva é testável em pastas locais, com o Redshift em testes de integração marcados.
-`table` é sempre um `Table` do SQLAlchemy, obtido do modelo; `uri` é a pasta da tabela Delta;
-`reader` é um `RecordBatchReader` do Arrow.
-
-### Contrato (`serialize_db.contract`)
-
-| Primitiva | O que faz |
-| --- | --- |
-| `arrow_schema(table)` | Esquema Arrow do `Table`: tipos do contrato, nulidade, comentários de coluna em metadados de campo e a marca de campo JSON. |
-| `delta_schema(table)` | Esquema Delta derivado do Arrow: `decimal(18,2)`, `timestamp_ntz`, `string` para JSON, comentários preservados. |
-| `ddl(table, dialect)` | `CREATE TABLE` para `duckdb` ou `redshift`, com `SORTKEY`, `DISTSTYLE` e `DISTKEY` de `Table.info["serialize_db"]`, sem `DEFERRABLE`, sem `Identity` e com `CHECK` só no DuckDB. |
-| `table_options(table)` | As chaves `partition_by`, `sort_key` e `redshift` de `Table.info["serialize_db"]`, com os padrões da biblioteca. |
-| `cast(reader, table)` | Cast seguro de um `reader` para `arrow_schema(table)`, lote a lote; recusa perda de precisão, texto acima do tamanho e nulo em coluna `NOT NULL`. |
-| `write_schema_files(metadata, directory)` | Gera `schema/<tabela>.delta.json`, `.duckdb.sql` e `.redshift.sql`; um teste compara os arquivos gerados com os versionados. |
-
-### SQL por dialeto (`serialize_db.sql`)
-
-O módulo gera o texto SQL de cada dialeto a partir de um statement Core, para a substituição gradual
-da compilação em tempo de execução ([`sqlalchemy.md`](sqlalchemy.md)).
-
-| Primitiva | O que faz |
-| --- | --- |
-| `param(name, type_=None)` | Parâmetro de execução: `literal_column(":nome")`, que atravessa `literal_binds` e chega ao texto como `:nome`. |
-| `prefixed(statement, metadata, prefix="{prefix}")` | Troca cada tabela do contrato num statement pronto pela cópia com o prefixo do sandbox, por `replacement_traverse`; o sentinela sai sem aspas. |
-| `render(statement, dialect, metadata, prefix="{prefix}")` | Texto de `duckdb` ou `redshift` com as constantes embutidas e os parâmetros como `:nome`, compilado com `paramstyle="named"` para não dobrar o `%` dos literais; um `bindparam` sem valor é erro, porque o compilador o renderiza como `NULL`. |
-| `write_sql_files(statements, metadata, directory)` | `sql/<nome>.duckdb.sql` e `sql/<nome>.redshift.sql` de um dicionário `{nome: statement}`; um teste compara os arquivos gerados com os versionados, como `write_schema_files`. |
-
-### Camada Delta (`serialize_db.delta`)
-
-| Primitiva | O que faz |
-| --- | --- |
-| `create_table(uri, table)` | `DeltaTable.create(mode="ignore")` com o esquema, a partição, os comentários e as propriedades do contrato (`delta.logRetentionDuration` de 3650 dias, `delta.deletedFileRetentionDuration` de 400 dias, sem vetores de exclusão nem column mapping). |
-| `open(uri, version=None)` | A `DeltaTable` numa versão; a execução abre cada tabela uma vez e guarda a versão. |
-| `publish_month(uri, month, reader, metadata)` | `write_deltalake(mode="overwrite", predicate="mes = '<mes>'")` com `CommitProperties(custom_metadata=metadata)`; um `CommitFailedError` sobe como conflito de execução. |
-| `register_files(uri, files, months, metadata)` | `create_write_transaction(mode="overwrite", partition_filters=...)` com uma `AddAction` por arquivo, caminho relativo à pasta da tabela e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. |
-| `reconcile(uri, table)` | Diff entre `arrow_schema(table)` e `dt.schema()`: aplica coluna anulável nova, `drop_column_not_null` e `CHECK`; recusa coluna `NOT NULL` em tabela com dados e todo diff destrutivo, apontando `rewrite`. |
-| `rewrite(uri, table)` | Reescrita da tabela inteira com o esquema do contrato, num único commit e sem predicado: `COPY ... PARTITION_BY (mes)` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. |
-| `copy_manifest(uri, version, months)` | Manifesto do `COPY` do Redshift a partir de `get_add_actions()` da versão, gravado em `publicacao/`. |
-| `version_diff(uri, published, current)` | Meses com ações `add` entre as duas versões, os que a publicação recarrega. |
-| `snapshot(root, name, versions)` | Grava a entrada `{name: versions}` em `_serialize_db/snapshots.json` com `IfMatch`. |
-| `vacuum_keeping_snapshots(uri, control, retention_hours, apply)` | `vacuum` com `keep_versions` das versões do arquivo de controle; lista por padrão e apaga com `apply=True`. |
-| `compact(uri, months)` | `optimize.compact` dos meses com arquivos pequenos, antes de um snapshot. |
-| `deep_copy(uri, version, destination)` | Tabela nova, na versão 0, com os dados de uma versão, para a pasta de arquivo. |
-| `export_snapshot(uri, destination, version=None, mode="copy")` | Pastas Parquet por mês sem o log: `copy` copia os arquivos que o log lista, `rewrite` reescreve pelo `COPY` particionado do DuckDB. |
-
-### Motores (`serialize_db.engine.duckdb` e `serialize_db.engine.redshift`)
-
-Os dois motores têm a mesma interface, e a execução não sabe qual está por trás.
-
-| Primitiva | DuckDB | Redshift |
-| --- | --- | --- |
-| `connect(config)` | Banco em arquivo `/tmp/<execution_id>.duckdb`, extensão `delta`, secret S3 `credential_chain`, threads e limite de memória. | `redshift_connector` e o papel IAM do `COPY` e do `UNLOAD`. |
-| `ingest(table, uri, version, months, materialize)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou `CREATE TABLE ... AS SELECT ... WHERE mes IN (...)` quando `materialize=True`. | `COPY ... MANIFEST` dos arquivos desses meses numa staging sem `mes` e `INSERT ... SELECT *, '<mes>'` em `exec_<id>_<tabela>`, criada por `ddl(table, "redshift")`. |
-| `query(statement)` | O statement Core compilado para o dialeto, executado, devolvendo um `reader` por `to_arrow_reader()`. | O mesmo statement compilado para o Redshift; leitura por ADBC ou `UNLOAD`. |
-| `execute(sql, params)` | O texto gerado por `render`: `{prefix}` vira vazio, porque as tabelas do sandbox têm o nome do modelo, `:nome` vira `$nome` para cada chave de `params`, e o resultado volta por `to_arrow_reader()`. | `{prefix}` vira `exec_<id>_` e o texto roda com `cursor.paramstyle = "named"`. |
-| `load(table, reader)` | `INSERT ... BY NAME SELECT * FROM <tabela Arrow>` numa tabela do sandbox. | Parquet em `staging/` mais `COPY`; `insert(Modelo).values(lista)` só para volumes pequenos. |
-| `audit(table, months)` | Contagem, nulos, unicidade da chave, `mes = strftime(data_ref, '%Y-%m')`, limites de tipo e totais de controle, por consulta. | As mesmas consultas, compiladas para o Redshift. |
-| `export_month(table, month)` | `reader` do mês para `publish_month`, ou `COPY ... TO` na subpasta do mês com `RETURN_STATS` mais `register_files`. | `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE` na pasta da tabela mais `register_files`, com estatísticas do rodapé Parquet. |
-| `cleanup()` | Apaga o arquivo do banco. | `DROP TABLE` de `exec_<id>_*` e do staging. |
-
-### Execução (`serialize_db.execution`)
-
-| Primitiva | O que faz |
-| --- | --- |
-| `Database(root, environment, metadata, storage_options)` | Raiz do banco, ambiente (`prod`, `dev`), `MetaData` dos modelos e credenciais; resolve `uri(table)` como `<root>/<ambiente>/<tabela>/`, o arquivo de controle e os prefixos `staging/`, `publicacao/` e `arquivo/`. |
-| `Execution(db, engine, month, execution_id)` | Gerenciador de contexto de uma execução: abre as tabelas e fixa `versions`, cria o sandbox, e no fim descarta o sandbox e grava o resumo no log. |
-| `run.previous_months(n)` | Os `n` meses até o mês da execução, inclusive. |
-| `run.ingest(*tables, months=None, materialize=False)` | `ingest` do motor para cada tabela, na versão fixada; sem `months`, a tabela inteira. |
-| `run.sandbox` | A conexão do motor, onde o pipeline roda statements Core, o texto gerado por `render` e lógica Python. |
-| `run.audit(table, months)` | `audit` do motor; a reprovação encerra a execução sem tocar o Delta. |
-| `run.publish(table, months)` | `reconcile`, depois `export_month` e `publish_month` por mês, com `serialize_db_execution_id` e `serialize_db_input_versions`; atualiza `versions[table]`. |
-| `run.publish_redshift(*tables)` | `version_diff` de cada tabela contra `serialize_db_publications` e a carga dos meses alterados numa única transação. |
-| `run.snapshot(name)` | Marca a execução: `serialize_db_snapshot` nos commits e `snapshot(root, name, versions)` no encerramento. |
-| `serialize-db run` | A mesma execução pela linha de comando: ambiente, motor, mês, `execution_id` e o módulo do pipeline. |
-
-```python
-from serialize_db import Database, Execution
-from pipeline import compute_projections
-from pipeline.models import Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
-
-db = Database("s3://bucket/projeto/delta", environment="prod")
-with Execution(db, engine="duckdb", month="2026-08", execution_id="exec-2026-09-05") as run:
-    run.ingest(Lancamento, months=run.previous_months(12), materialize=True)
-    run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada
-    compute_projections(run.sandbox)                                 # statements Core e Python
-    run.audit(LancamentoProjetado, months=["2026-08"])
-    run.publish(LancamentoProjetado, months=["2026-08"])             # overwrite por mês, metadados
-    run.publish_redshift(LancamentoProjetado)                        # só os meses alterados
-```
+As primitivas de cada módulo, com assinatura, comportamento e testes, estão em [`PLAN.md`](PLAN.md),
+etapa a etapa; os fluxos abaixo as citam pelo nome. `table` é sempre um `Table` do SQLAlchemy,
+obtido do modelo; `uri` é a pasta da tabela Delta; `reader` é um `RecordBatchReader` do Arrow; `run`
+é a `Execution` aberta, e `run.sandbox` o motor onde o pipeline roda.
 
 ## Fluxos de uso
 
@@ -212,7 +127,7 @@ tipos, a ordem de colunas e o layout Hive do contrato; não foi testado.
 
 ### Execução mensal no DuckDB
 
-O exemplo ilustrado, com versões e artefatos de cada passo, está em [`estrategia.md`](estrategia.md).
+O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`](PLAN.md).
 
 1. `Execution` abre cada tabela de entrada e fixa `versions`; toda leitura da execução usa essas
    versões, mesmo que outra execução publique no meio.

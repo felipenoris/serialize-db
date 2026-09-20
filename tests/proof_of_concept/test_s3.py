@@ -1,16 +1,17 @@
 """Prova de conceito da camada Delta no S3, executável em qualquer ambiente com um bucket.
 
-Cada teste responde a um item da etapa 0 em ``docs/estrategia.md``: as credenciais que o delta-rs
+Cada teste responde a um item da etapa 0 em ``docs/PLAN.md``: as credenciais que o delta-rs
 encontra, a escrita e a leitura no bucket, o put condicional, o ``vacuum`` e o tempo do ``delta_scan``.
-Os testes comuns aos dois armazenamentos vêm de ``delta_proof_of_concept.py``; os deste módulo cobrem
-o que só existe no S3: a origem das credenciais, a cadeia de credenciais do delta-rs e sua reserva, o
-put condicional e a criptografia dos arquivos. As medições vão para o relatório impresso no fim da
-sessão (``conftest.py``). A suíte escreve só sob a raiz informada em ``SERIALIZE_DB_TEST_S3_ROOT``:
-sem ela é pulada, e com ela falta de credencial ou de acesso ao bucket é falha.
+Os testes comuns aos dois armazenamentos vêm de ``delta.py``; os deste módulo cobrem o que só existe
+no S3: a origem das credenciais, a cadeia de credenciais do delta-rs e sua reserva, o put condicional,
+a criptografia dos arquivos e as chamadas do ``boto3`` que a biblioteca usa (listar, copiar, apagar).
+As medições vão para o relatório impresso no fim da sessão (``conftest.py``). A suíte escreve só sob
+a raiz informada em ``SERIALIZE_DB_TEST_S3_ROOT``: sem ela é pulada, e com ela falta de credencial ou
+de acesso ao bucket é falha.
 
 Num ambiente sem internet, as extensões ``httpfs``, ``delta`` e ``aws`` do DuckDB precisam estar na
-pasta de extensões (``.duckdb/`` do repositório, preparada por ``prepare_offline.sh``, ou a
-pasta padrão do DuckDB); sem isso os testes que as usam são pulados.
+pasta de extensões (``.duckdb/`` do repositório, preparada por ``prepare_offline.sh``, ou a pasta
+padrão do DuckDB); sem isso os testes que as usam são pulados.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ import pytest
 from deltalake import DeltaTable, write_deltalake
 
 from conftest import S3Location, record
-from delta_proof_of_concept import DeltaProofOfConcept, connect_duckdb, write_sample_table
+from delta import DeltaProofOfConcept, connect_duckdb, write_sample_table
 
 pytestmark = pytest.mark.s3
 
@@ -48,8 +49,11 @@ def table_uri(storage: S3Location) -> str:
 def duckdb_connection(storage: S3Location) -> duckdb.DuckDBPyConnection:
     """Conexão com ``httpfs``, ``delta`` e ``aws`` carregadas e um secret S3 pela cadeia de credenciais."""
     connection = connect_duckdb(("httpfs", "delta", "aws"))
+
+    # O secret credential_chain usa a mesma resolução do SDK da AWS (ambiente, contêiner, perfil, IMDS).
     region = os.environ.get("AWS_REGION", "")
     connection.execute(f"CREATE SECRET poc (TYPE s3, PROVIDER credential_chain, REGION '{region}')")
+
     return connection
 
 
@@ -60,9 +64,14 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
     def test_boto3_credential_source(self) -> None:
         """Registra de onde o ``boto3`` obtém as credenciais e qual identidade assume."""
         session = boto3.Session()
+
+        # get_credentials percorre a cadeia (variáveis, contêiner, perfil, IMDS) e diz qual método respondeu.
         credentials = session.get_credentials()
         assert credentials is not None, "boto3 não encontrou credenciais"
+
+        # O STS devolve o ARN do papel assumido; num ambiente só com endpoint VPC do S3 esta chamada não responde.
         identity = session.client("sts").get_caller_identity()
+
         record("credentials.boto3_method", credentials.method)
         record("credentials.identity_arn", identity["Arn"])
         record("credentials.container_relative_uri", bool(os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")))
@@ -77,12 +86,15 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         """
         uri = storage.child("credential_probe")
         write_deltalake(uri, pa.table({"id": pa.array([1], pa.int64())}), mode="overwrite")
+
+        # O programa do subprocesso só abre a tabela; o que muda entre as variantes é o ambiente.
         probe = f"from deltalake import DeltaTable; print(DeltaTable({uri!r}).version())"
         variants: dict[str, dict[str, str | None]] = {
             "as_found": {"NO_PROXY": None} if os.environ.get("no_proxy") else {},
             "no_proxy_exported": {},
             "proxy_unset": {name: None for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")},
         }
+
         results: dict[str, str] = {}
         for name, changes in variants.items():
             environment = dict(os.environ)
@@ -91,14 +103,17 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
                     environment.pop(key, None)
                 else:
                     environment[key] = value
+
             completed = subprocess.run([sys.executable, "-c", probe], env=environment, capture_output=True, text=True, timeout=120)
             last_line = (completed.stderr.strip().splitlines() or ["(sem saída de erro)"])[-1]
             results[name] = "ok" if completed.returncode == 0 else last_line[:160]
             record(f"credentials.delta_rs.{name}", results[name])
+
         assert results["no_proxy_exported"] == "ok", results
 
     def test_delta_rs_storage_options_fallback(self, storage: S3Location) -> None:
         """As credenciais temporárias do ``boto3`` em ``storage_options`` são a reserva da biblioteca."""
+        # get_frozen_credentials fixa o trio chave, segredo e token no instante da chamada.
         frozen = boto3.Session().get_credentials().get_frozen_credentials()
         options = {
             "AWS_ACCESS_KEY_ID": frozen.access_key,
@@ -107,6 +122,8 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         }
         if frozen.token:
             options["AWS_SESSION_TOKEN"] = frozen.token
+
+        # storage_options vai para o cliente de objetos do delta-rs, sem passar pela cadeia padrão.
         uri = storage.child("storage_options_probe")
         write_deltalake(uri, pa.table({"id": pa.array([1], pa.int64())}), mode="overwrite", storage_options=options)
         assert DeltaTable(uri, storage_options=options).version() == 0
@@ -115,14 +132,20 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         """``If-None-Match`` e ``If-Match`` no bucket: a primitiva do commit do Delta."""
         s3 = boto3.client("s3")
         key = f"{storage.prefix}/conditional.txt"
+
+        # IfNoneMatch='*' cria o objeto só se ele não existe; a repetição devolve 412 PreconditionFailed.
         first = s3.put_object(Bucket=storage.bucket, Key=key, Body=b"v1", IfNoneMatch="*")
         with pytest.raises(botocore.exceptions.ClientError) as duplicate:
             s3.put_object(Bucket=storage.bucket, Key=key, Body=b"v2", IfNoneMatch="*")
         assert duplicate.value.response["Error"]["Code"] == "PreconditionFailed"
+
+        # IfMatch=<etag> substitui só se a versão atual é a esperada; um ETag velho devolve o mesmo 412.
         s3.put_object(Bucket=storage.bucket, Key=key, Body=b"v3", IfMatch=first["ETag"])
         with pytest.raises(botocore.exceptions.ClientError) as stale:
             s3.put_object(Bucket=storage.bucket, Key=key, Body=b"v4", IfMatch=first["ETag"])
         assert stale.value.response["Error"]["Code"] == "PreconditionFailed"
+
+        # head_object lê os metadados sem baixar o corpo: criptografia, chave KMS e versionamento.
         head = s3.head_object(Bucket=storage.bucket, Key=key)
         storage.record("server_side_encryption", head.get("ServerSideEncryption"))
         storage.record("sse_kms_key_id", head.get("SSEKMSKeyId"))
@@ -133,5 +156,29 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         """Os arquivos do delta-rs recebem a criptografia padrão do bucket sem opção alguma."""
         key = DeltaTable(table_uri).file_uris()[0].removeprefix(f"s3://{storage.bucket}/")
         head = boto3.client("s3").head_object(Bucket=storage.bucket, Key=key)
+
         record("delta.data_file_encryption", head.get("ServerSideEncryption"))
         assert head.get("ServerSideEncryption") in (None, "AES256", "aws:kms", "aws:kms:dsse")
+
+    def test_boto3_list_copy_delete(self, storage: S3Location, table_uri: str) -> None:
+        """Listar, copiar e apagar objetos: o que ``export_snapshot(mode="copy")`` e a limpeza fazem no S3."""
+        s3 = boto3.client("s3")
+        source_prefix = table_uri.removeprefix(f"s3://{storage.bucket}/")
+        target_prefix = f"{storage.prefix}/exported"
+
+        # O paginador entrega as chaves em páginas de até 1.000; o filtro deixa só os arquivos de dados.
+        pages = s3.get_paginator("list_objects_v2").paginate(Bucket=storage.bucket, Prefix=source_prefix + "/")
+        data_keys = [item["Key"] for page in pages for item in page.get("Contents", []) if item["Key"].endswith(".parquet")]
+        assert data_keys == [uri.removeprefix(f"s3://{storage.bucket}/") for uri in storage.data_files(table_uri)]
+
+        # copy_object copia dentro do serviço, sem baixar os dados; o layout mes=.../ é preservado.
+        for key in data_keys:
+            relative = key.removeprefix(source_prefix + "/")
+            s3.copy_object(Bucket=storage.bucket, Key=f"{target_prefix}/{relative}", CopySource={"Bucket": storage.bucket, "Key": key})
+
+        copied = s3.list_objects_v2(Bucket=storage.bucket, Prefix=target_prefix + "/")
+        assert len(copied.get("Contents", [])) == len(data_keys)
+
+        # delete_objects apaga até 1.000 chaves por chamada; Quiet omite as chaves apagadas da resposta.
+        s3.delete_objects(Bucket=storage.bucket, Delete={"Objects": [{"Key": item["Key"]} for item in copied["Contents"]], "Quiet": True})
+        assert "Contents" not in s3.list_objects_v2(Bucket=storage.bucket, Prefix=target_prefix + "/")

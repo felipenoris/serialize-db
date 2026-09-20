@@ -1128,3 +1128,7 @@ Python:
 - [awswrangler.redshift.copy](https://aws-sdk-pandas.readthedocs.io/en/stable/stubs/awswrangler.redshift.copy.html)
 - [ADBC Driver for Amazon Redshift](https://adbc-drivers.org/drivers/redshift/)
 - [etl-cookbook-tutorial](https://github.com/felipenoris/etl-cookbook-tutorial)
+
+## Repositórios consultados
+
+- <https://github.com/felipenoris/AWS-DataScience> (2026-09-19): a pasta `aws/` (`INDEX.md`, `awslib/report.py`, `awslib/context.py`, `studio.py`, `probes/README.md`), o formato dos scripts de leitura que `probes/` deste repositório reproduz: só leitura, seções numeradas, chamada ecoada acima do resultado, identificadores `NOME=valor`, checagens `pass`/`fail`/`note` e a seção final de chamadas que falharam.

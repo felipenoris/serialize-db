@@ -1,13 +1,20 @@
 # Estratégia de implementação
 
-Este documento registra a escolha das camadas da biblioteca e as razões: qual camada gerencia os
-arquivos Parquet no S3 sem um serviço de catálogo, qual camada gera o SQL que roda no DuckDB e no
-Redshift, e se uma extensão em Rust com PyO3 compensa. A decisão é o Delta Lake pelo pacote
-`deltalake` como fonte da verdade, o SQLAlchemy mantido como contrato e Core, e a migração de esquema
-sem Alembic; o uso do Delta está em [`delta.md`](delta.md). As fontes estão em
-[`REFERENCES.md`](../REFERENCES.md). As verificações locais rodaram em 2026-09-19 com Python 3.13,
-deltalake 1.6.4, DuckDB 1.5.5 com as extensões `delta` e `ducklake`, PyArrow 25.0.1 e SQLGlot 30.18.0,
-num macOS arm64; nada rodou contra o S3 nem contra um cluster Redshift.
+Este documento registra as razões da escolha das camadas da biblioteca e as comparações entre as
+ferramentas candidatas: qual camada gerencia os arquivos Parquet no S3 sem um serviço de catálogo,
+qual camada gera o SQL que roda no DuckDB e no Redshift, o que substitui a migração de esquema e se
+uma extensão em Rust com PyO3 compensa. A decisão que sai daqui, o estado do projeto, as etapas e o
+pipeline mensal estão em [`PLAN.md`](PLAN.md); o uso do Delta, em [`delta.md`](delta.md). As fontes
+estão em [`REFERENCES.md`](../REFERENCES.md). As verificações locais deste documento rodaram em
+2026-09-19 com Python 3.13, deltalake 1.6.4, DuckDB 1.5.5 com as extensões `delta` e `ducklake`,
+PyArrow 25.0.1 e SQLGlot 30.18.0, num macOS arm64; a prova de conceito no S3, feita no espaço do
+projeto, está em `PLAN.md`.
+
+As premissas, declaradas pelo usuário, contra as quais as ferramentas foram comparadas: o pipeline é
+majoritariamente lógica Python, com o SQLAlchemy só nos modelos declarativos e em statements Core
+que movem DataFrames; nenhum serviço de catálogo está habilitado; o projeto tem um único esquema no
+Redshift; as execuções de desenvolvimento e de produção gravam tabelas separadas; renomear ou
+remover colunas é raro; os Parquet são a fonte da verdade; o ambiente de destino não tem internet.
 
 ## O que um formato de tabela faz pela biblioteca
 
@@ -411,54 +418,48 @@ contrato a contrato, ou quando for preciso um log store fora do que o delta-rs o
 construir wheels para Linux amd64 (SageMaker) a partir do macOS, com `maturin` e compilação cruzada
 ou CI, e acompanhar as mudanças de API do `pyo3`.
 
-## Decisão
+## Escolha das camadas
 
-A camada de tabela é o Delta Lake por `deltalake`, sobre o Parquet no S3, e o SQLAlchemy permanece
-como camada de SQL do pipeline, no uso que ele já tem: os modelos declarativos definem o `Table` de cada
-tabela, e statements Core de `select` e `insert` movem DataFrames; o pipeline não instancia classes ORM.
-O que muda é o caminho dos DataFrames, que passa por Arrow: no DuckDB, `INSERT ... BY NAME SELECT *
-FROM <tabela Arrow>` na escrita e `to_arrow_reader()` na leitura; no Redshift, Parquet no S3 mais
-`COPY ... MANIFEST` na escrita e ADBC ou `UNLOAD` na leitura. O `insert(...)` executado com listas de
-linhas sai, porque no Redshift ele vira uma ida ao servidor por linha. A biblioteca fica com estas
-partes:
+A comparação leva ao Delta Lake por `deltalake` como camada de tabela e ao SQLAlchemy nos modelos e
+no Core, com o texto SQL gerado por dialeto substituindo a compilação em tempo de execução; a
+decisão, com as consequências de cada premissa e as partes da biblioteca, está em
+[`PLAN.md`](PLAN.md). As razões:
 
-1. Contrato: modelos SQLAlchemy com metadados físicos em `Table.info`, dos quais derivam o esquema
-   Arrow, o esquema Delta e o DDL do sandbox.
-2. Ingestão seletiva: no DuckDB, `delta_scan` com filtros de partição, por view ou por
-   `CREATE TABLE AS` dos meses necessários; no Redshift, `COPY ... MANIFEST` dos arquivos desses meses.
-3. Sandbox por execução: tabelas com prefixo no esquema único do Redshift ou banco DuckDB local, como
-   já documentado.
-4. Publicação: `write_deltalake(mode="overwrite", predicate="mes = ...")` com os dados do DuckDB em
-   Arrow, ou `UNLOAD ... PARTITION BY` e `create_write_transaction` a partir do Redshift; auditoria por
-   consulta antes do commit; `vacuum` e `optimize` como manutenção.
-5. Publicação no Redshift para clientes: `COPY ... MANIFEST` incremental por diferença de versões,
-   numa transação com `DELETE` do mês.
-
-A carga inicial dos Parquet existentes é uma passagem por tabela e por mês: leitura pelo DuckDB ou pelo
-PyArrow com cast para o contrato (os modelos atuais usam `Double` onde o contrato pede
-`Numeric(18, 2)`) e `write_deltalake(mode="append")` em lotes de `RecordBatch`, sem a tabela inteira
-na memória. `convert_to_deltalake` registra os arquivos no lugar, sem reescrever, e só serve quando
-eles já têm os tipos, a ordem de colunas e o layout Hive do contrato.
-
-O que sai: o ORM para cargas linha a linha, as chaves estrangeiras `DEFERRABLE`, o `Identity`, os
-manifestos próprios, a pergunta em aberto do commit atômico e o Alembic, substituído pela
-reconciliação do esquema. O que fica opcional: SQLGlot como teste de compatibilidade.
-
-O DuckLake fica como alternativa documentada, não adotada: suas vantagens, renomear e remover
-colunas sem reescrever dados e a tabela nativa no DuckDB, não pesam num pipeline que raramente
-renomeia colunas, e seu preço, o catálogo movido pela biblioteca, o inlining desligado e um
-ecossistema de leitores menor, permanece. O SQLMesh e o dbt saem, porque o pipeline é
-majoritariamente lógica Python e não transformações SQL. A troca do SQLAlchemy por SQLGlot puro
-exige reescrever as consultas sem ganho de portabilidade, porque os dois exigem os mesmos testes no
-Redshift. A saída do SQLAlchemy da execução é gradual, pelo texto gerado por dialeto, sem reescrever
-consulta ([`sqlalchemy.md`](sqlalchemy.md)).
-
-O Iceberg com catálogo SQLite fica documentado como a alternativa que troca a ausência de código
-próprio do Delta pela sincronização do arquivo do catálogo. Ela volta à mesa se o Glue ou o S3 Tables
-forem habilitados durante a vida do projeto: a tabela seria registrada por `register_table` sem
-conversão, e o Redshift passaria a lê-la por esquema externo. A diferença de fundo entre os dois
-formatos, o ponteiro da versão atual implícito no log do Delta e trocado no catálogo do Iceberg,
-está em [`delta.md`](delta.md).
+- **Delta Lake.** É o único formato sem serviço que atende com código pronto: o commit atômico é o
+  put-if-absent do S3, nativo no log; vários escritores; `delta_scan` no DuckDB com poda por
+  partição e por estatísticas e viagem no tempo; `overwrite` com predicado para a substituição
+  idempotente do mês; `NOT NULL` e `CHECK` aplicados pelo escritor; `create_write_transaction` para
+  registrar os arquivos do `UNLOAD`; e o escritor Python mais completo sem JVM (`merge`, `update`,
+  `delete`, `optimize`, `restore`, `vacuum`, constraints). O que falta, renomear e remover colunas
+  sem reescrever, pesa pouco num pipeline que raramente o faz.
+- **DuckLake**, não adotado: suas vantagens, renomear e remover colunas sem reescrever dados e a
+  tabela nativa no DuckDB, não pesam aqui, e seu preço permanece: o catálogo em arquivo movido pela
+  biblioteca, com um escritor por vez, o inlining desligado antes de publicar e um ecossistema de
+  leitores menor.
+- **Iceberg com catálogo SQLite**, documentado como a alternativa que troca a ausência de código
+  próprio do Delta pela sincronização do arquivo do catálogo. Volta à mesa se o Glue ou o S3 Tables
+  forem habilitados: a tabela seria registrada por `register_table` sem conversão, e o Redshift
+  passaria a lê-la por esquema externo. A diferença de fundo entre os dois formatos, o ponteiro da
+  versão atual implícito no log do Delta e trocado no catálogo do Iceberg, está em
+  [`delta.md`](delta.md).
+- **Diretórios Hive com manifesto próprio**, não adotado: reimplementa o que o delta-rs faz com a
+  mesma primitiva do S3.
+- **SQLAlchemy Core** permanece porque o pipeline já o usa nos modelos e em `select` e `insert`, e
+  o `Table` do modelo é a fonte do esquema Arrow, do esquema Delta e do DDL dos dois motores. O que
+  muda é o caminho dos DataFrames, que passa por Arrow, e a compilação em tempo de execução, que o
+  texto gerado por dialeto substitui uma interação por vez ([`sqlalchemy.md`](sqlalchemy.md)). O
+  `insert(...)` executado com listas de linhas sai, porque no Redshift ele vira uma ida ao servidor
+  por linha.
+- **SQLGlot puro** no lugar do SQLAlchemy exigiria reescrever as consultas sem ganho de
+  portabilidade, porque os dois exigem os mesmos testes no Redshift; o SQLGlot fica opcional, como
+  teste de compatibilidade.
+- **SQLMesh e dbt** saem, porque o pipeline é majoritariamente lógica Python e não transformações
+  SQL; o SQLMesh ainda assumiria a orquestração, o estado e os nomes das tabelas, que são o sandbox
+  da biblioteca.
+- **Alembic** sai pelas razões da seção "Por que o Alembic sai": a reconciliação entre o modelo e
+  o log é o único mecanismo de evolução.
+- **Rust com PyO3** só quando um perfil mostrar um laço Python quente que nem SQL nem Polars
+  expressam (seção "Rust e PyO3").
 
 ### Maturidade do Delta e o gatilho de reavaliação
 
@@ -486,163 +487,6 @@ etapas: sem vetores de exclusão, sem column mapping, um único escritor, caminh
 de reavaliação é a disponibilidade do Glue, do S3 Tables ou de um catálogo acessível ao Redshift;
 nesse dia a tabela de "Comparação para os requisitos do projeto" é refeita com o Iceberg registrável,
 e a saída do Delta para pastas Parquet está em [`delta.md`](delta.md).
-
-## Lições que orientam as etapas
-
-- O Delta guarda a coluna de partição só na ação `add`; o arquivo de dados não a tem. O Redshift a
-  recebe por uma tabela de staging sem `mes` e `INSERT ... SELECT *, '<mes>'`, ou por lista de
-  colunas no `COPY`, se a prova de conceito a confirmar ([`delta.md`](delta.md)).
-- `DECIMAL(18, 2)` sai como `INT64` do delta-rs e do DuckDB; o `COPY` desse tipo físico é o primeiro
-  item da prova de conceito no Redshift.
-- O delta-rs não impõe duas regras de evolução: coluna `NOT NULL` nova em tabela com dados e
-  conversão silenciosa de tipos no `append`. A reconciliação da biblioteca as impõe, e o Alembic sai.
-- O log é limpo automaticamente no checkpoint, com `delta.logRetentionDuration` de 30 dias por
-  padrão; a tabela do contrato nasce com dez anos de log, e `keep_versions` protege os snapshots do banco.
-- Dois `overwrite` do mesmo mês conflitam (`CommitFailedError`); meses diferentes e `append` entram.
-  Uma execução por ambiente por vez basta, e o conflito é o sinal de que houve duas.
-- A ação `txn` não impede repetição; a idempotência é do `overwrite` por mês.
-- O `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de partição dentro do arquivo; a
-  biblioteca escreve por um único caminho, delta-rs ou `COPY ... (RETURN_STATS)` mais
-  `create_write_transaction`.
-- Ler no lugar custa o mesmo que ler Parquet solto; materializar no DuckDB é decisão por tabela.
-- O log só tem caminhos relativos: o banco inteiro pode ser copiado; nada é registrado por URI
-  absoluta.
-- O delta-rs não lê `~/.aws/config`; as credenciais vêm de ambiente, contêiner, IMDS ou
-  `storage_options`, e o S3 precisa das permissões listadas em [`delta.md`](delta.md). No SageMaker
-  Unified Studio a cadeia padrão funciona; a biblioteca exporta `NO_PROXY` por precaução.
-- Um campo JSON é `string` no Delta e texto nos arquivos; `JSON` no DuckDB e `SUPER` no Redshift são
-  tipos do motor, aplicados na leitura e na carga ([`schema.md`](schema.md)).
-- SQLGlot transpila funções, não garante suporte; os testes de integração no Redshift continuam.
-
-## Etapas de implementação
-
-Cada etapa entrega um módulo testável em pastas locais; o Redshift entra em testes de integração
-marcados, com uma amostra pequena.
-
-| Etapa | Entrega | Critério de aceite |
-| --- | --- | --- |
-| 0. Prova de conceito na AWS | Credenciais do delta-rs no SageMaker; `write_deltalake` e `delta_scan` no bucket do projeto; `COPY ... MANIFEST` com `DECIMAL` em `INT64`, `FILLRECORD` e lista de colunas; `UNLOAD ... PARTITION BY` mais registro; tempo do `delta_scan` no S3. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
-| 1. Contrato | `serialize_db.contract`: modelos corrigidos (`Base` importável, `Numeric(18, 2)`, `autoincrement=False`, sem `DEFERRABLE`, coluna `mes`, comentários, `Table.info["serialize_db"]`); `arrow_schema`, `delta_schema`, `ddl(dialect)`; `schema/<tabela>.delta.json`, `.duckdb.sql` e `.redshift.sql` gerados e comparados por teste; `serialize_db.sql`: `param`, `prefixed`, `render(statement, dialect)` e `write_sql_files`, com `sql/<nome>.duckdb.sql` e `.redshift.sql` gerados e comparados por teste. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar os arquivos; o texto gerado de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`. |
-| 2. Camada Delta | `serialize_db.delta`: `create_table`, `open(uri, version)`, `publish_month(uri, month, reader)`, `register_files`, `reconcile(uri, table)`, `rewrite(uri, table)`, `copy_manifest(uri, version, months)`, `version_diff`, `snapshot`, `vacuum_keeping_snapshots`, `compact`, `deep_copy`, `export_snapshot`. | Testes em pastas locais cobrem substituição do mês, conflito, reconciliação aditiva e destrutiva, reescrita num commit sem predicado, `keep_versions`, exportação por mês e realocação. |
-| 3. Motor DuckDB | `serialize_db.engine.duckdb`: conexão com `config`, secrets e extensões; `ingest(table, months, materialize)` com views pelo nome do modelo e versão fixa; `query(statement)` e `execute(sql, params)` devolvendo `RecordBatchReader`; `export_month`; `audit`. | O pipeline de exemplo roda em memória sobre um Delta local. |
-| 4. Motor Redshift | `serialize_db.engine.redshift`: conexão `redshift_connector`; sandbox com prefixo `exec_<id>_`; `ingest` por `COPY ... MANIFEST` com staging; `query` e `execute(sql, params)` com `paramstyle = "named"` (multi-row `INSERT` para volumes pequenos, ADBC ou `UNLOAD` para leitura); `export_month` por `UNLOAD ... PARTITION BY` mais registro; limpeza do sandbox. | SQL compilado coberto por testes; integração com amostra num cluster. |
-| 5. Execução | `serialize_db.execution`: `Execution(db, engine, months)` com o ciclo abrir, ingerir, executar, auditar, publicar, encerrar; metadados de commit; log; CLI `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
-| 6. Carga inicial | Script de migração dos Parquet atuais para o Delta, por tabela e por mês, com cast para o contrato e relatório de contagens e somas; corte de leitura para o Delta. | Contagens e somas por mês iguais entre origem e Delta. |
-| 7. Publicação para clientes | Tabelas `prod_*` no Redshift; `version_diff` gera `DELETE` e `COPY` por mês, de todas as tabelas da execução numa única transação; tabela de controle `serialize_db_publications`. | Um mês alterado recarrega só esse mês. |
-| 8. Operação | Snapshots do banco na periodicidade do processo, `vacuum` mensal com `keep_versions`, compactação antes do snapshot, cópia profunda anual; documentação com `pdoc`; monitoração por `history()`. | Runbook escrito e testes de manutenção passando. |
-
-As etapas 1 e 2 não dependem da AWS e começam antes da etapa 0 terminar; a etapa 3 fecha um
-pipeline completo em disco local; a etapa 4 é a única que exige o cluster. Os itens de S3 da etapa 0
-foram verificados em 2026-09-19 no espaço do projeto; os itens de Redshift aguardam uma conexão
-Redshift no projeto, que o ambiente ainda não tem.
-A modelagem da biblioteca, com as primitivas de cada módulo e o fluxo de cada caso de uso, está em
-[`serialize-db.md`](serialize-db.md).
-
-## Pipeline de atualização mensal
-
-Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, mês de referência
-`2026-08`. As entradas são `cad_lancamentos` (os doze meses até 2026-08), `cad_contratos`,
-`cad_operacoes`, `rel_contrato_operacao` e as tabelas `dom_*`; a saída ilustrativa é
-`cad_lancamentos` do banco projetado, mês 2026-08. Os números de versão são ilustrativos.
-
-| Etapa | O que acontece | Artefatos |
-| --- | --- | --- |
-| 1. Abertura | Lê `_serialize_db/snapshots.json` e `serialize_db_publications`; abre cada tabela de entrada e registra a versão. | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
-| 2. Ingestão | DuckDB: `ATTACH ... (TYPE delta, VERSION 143)` e views com os nomes dos modelos; `cad_lancamentos` materializada com `WHERE mes BETWEEN '2025-09' AND '2026-08'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos desses meses em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
-| 3. Execução | O pipeline roda statements Core e lógica Python sobre o sandbox; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, mês 2026-08. |
-| 4. Auditoria | Contagem, nulos, unicidade da chave, `mes = strftime(data_ref, '%Y-%m')`, limites de tipo, totais de controle. | Relatório da execução; reprovação encerra sem tocar o Delta. |
-| 5. Publicação no Delta | `write_deltalake(projected_uri, reader, mode="overwrite", predicate="mes = '2026-08'")` com `custom_metadata={"serialize_db_execution_id": ..., "serialize_db_input_versions": ...}`; do Redshift, `UNLOAD ... PARTITION BY (mes)` mais `create_write_transaction`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `mes=2026-08/`. |
-| 6. Publicação no Redshift | `version_diff(57, 58)` aponta o mês 2026-08; `DELETE` do mês, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08'`; controle atualizado. | `prod_cad_lancamentos_projetados` com o mês novo; `serialize_db_publications` em 58. |
-| 7. Snapshot do banco | Só na execução marcada como snapshot, por exemplo a do fim do trimestre: `custom_metadata={"serialize_db_snapshot": "2026T3"}` e entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
-| 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
-
-A API que a etapa 5 propõe, não implementada:
-
-```python
-from serialize_db import Database, Execution
-from pipeline import compute_projections
-from pipeline.models import Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
-
-db = Database("s3://bucket/projeto/delta", environment="prod")
-with Execution(db, engine="duckdb", month="2026-08", execution_id="exec-2026-09-05") as run:
-    run.ingest(Lancamento, months=run.previous_months(12), materialize=True)
-    run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada
-    compute_projections(run.sandbox)                                 # statements Core e Python
-    run.audit(LancamentoProjetado, months=["2026-08"])
-    run.publish(LancamentoProjetado, months=["2026-08"])             # overwrite por mês, metadados
-    run.publish_redshift(LancamentoProjetado)                        # só os meses alterados
-```
-
-Uma reexecução com o mesmo `execution_id` repete os `overwrite` dos mesmos meses e produz o mesmo
-snapshot. Uma execução de correção de um mês antigo é a mesma chamada com outro `mes`; as versões
-intermediárias entre snapshots do banco saem no `vacuum` mensal.
-
-## Decisões
-
-- O pipeline é majoritariamente lógica Python. O SQLAlchemy define o modelo de dados (DDL) e gera
-  os statements de `insert` e `select` que leem e escrevem DataFrames; nenhuma classe ORM é
-  instanciada. Consequência: o SQLAlchemy permanece como metadados do contrato e Core; SQLMesh e dbt
-  saem; a entrada e a saída de DataFrames passam por Arrow, com `COPY` no Redshift. O SQLAlchemy
-  está no projeto por compatibilidade com esse código; a compilação pelo dialeto em tempo de
-  execução é substituída gradualmente pelo texto SQL gerado por dialeto, e o SQLAlchemy termina nos
-  modelos e na geração ([`sqlalchemy.md`](sqlalchemy.md)).
-- Não há serviço de catálogo habilitado para o projeto. Consequência: a camada de tabela não pode
-  depender de um serviço. O Delta atende sem código próprio; o Iceberg atenderia com o catálogo
-  SQLite em arquivo movido pela biblioteca, o mesmo custo do DuckLake. A escolha recaiu sobre o
-  Delta; o Iceberg fica documentado para o caso de o Glue ou o S3 Tables serem habilitados.
-- O Delta é a fonte da verdade depois da carga inicial dos Parquet atuais. Consequência: o esquema de
-  cada tabela continua definido no modelo SQLAlchemy, e dele a biblioteca cria a tabela Delta por
-  `DeltaTable.create`, sem DDL em SQL; a evolução de esquema e o histórico ficam no log, e o Alembic
-  sai pelas razões da seção seguinte.
-- Execuções de desenvolvimento e de produção gravam tabelas separadas. Consequência: um caminho Delta
-  por ambiente (`s3://<bucket>/<ambiente>/<tabela>/`) e o prefixo por ambiente no esquema do
-  Redshift; a concorrência que resta é entre reexecuções do mesmo ambiente, que o log do Delta
-  serializa.
-- Renomear ou remover colunas é raro. Consequência: a evolução de esquema é por adição
-  (`schema_mode="merge"`); o caso raro reescreve a tabela inteira num commit, sem predicado, e recria a
-  tabela publicada no Redshift, sem esperar o column mapping do delta-rs. Para tabela que não cabe na
-  máquina, a reescrita é o `COPY` do DuckDB mais `create_write_transaction` ([`delta.md`](delta.md)).
-
-## Prova de conceito no S3 e no Redshift
-
-Verificado em 2026-09-19 no espaço do SageMaker Unified Studio do projeto, contra o bucket do projeto
-na mesma região, com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1 por `uv run --with`
-(`UV_PYTHON_DOWNLOADS=automatic`, porque o `uv` do espaço não baixa Python por padrão):
-
-- Credenciais do delta-rs: o escritor encontra as credenciais do contêiner do projeto pela cadeia
-  padrão. Uma falha com 403 na chamada de credenciais, no início da verificação, foi contornada com
-  `NO_PROXY` em maiúsculas e depois não se repetiu com o ambiente como encontrado. O caminho por
-  `storage_options` com as credenciais do `boto3` funciona e fica como reserva. O DuckDB
-  (`credential_chain`) e o `boto3` nunca falharam.
-- `write_deltalake` no bucket do projeto (`overwrite` particionado e `append` por commit condicional),
-  `DeltaTable`, `vacuum(dry_run=False)` e `delta_scan` com secret `credential_chain` no DuckDB, com a
-  criptografia SSE-KMS padrão do bucket aplicada sem opção alguma. Tipos lidos pelo DuckDB:
-  `BIGINT`, `INTEGER`, `DECIMAL(18,2)`, `TIMESTAMP` (de `timestamp_ntz`) e `VARCHAR`.
-- Put condicional pelo `boto3` no mesmo bucket: `IfNoneMatch='*'` e `IfMatch=<etag>` aceitos, e a
-  repetição de cada um devolve `PreconditionFailed` 412.
-- Tempo do `delta_scan` no S3: a tabela em [`delta.md`](delta.md); cada consulta pontual por
-  `delta_scan` custa cerca de 0,3 s, o que fixa `CREATE TABLE AS` para as tabelas consultadas mais de
-  uma vez.
-
-Os itens acima são a suíte `tests/test_s3_proof_of_concept.py`, que roda com
-`SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest` em qualquer ambiente com um bucket e
-imprime o relatório de fatos e medições no fim da sessão. A variável é a autorização para escrever
-sob o prefixo: sem ela os testes são pulados, e com ela falta de credencial ou de acesso é falha. A
-mesma prova de conceito roda numa pasta local, o outro armazenamento da biblioteca, em
-`tests/test_local_proof_of_concept.py`, sob a pasta de `SERIALIZE_DB_TEST_LOCAL_ROOT` e sem AWS: os
-testes comuns aos dois armazenamentos ficam em `tests/delta_proof_of_concept.py`, e a
-suíte local acrescenta o commit atômico em disco (dois escritores abertos na mesma versão: o segundo
-`overwrite` do mesmo mês falha com `CommitFailedError`; meses diferentes e `append` mais `append`
-comitam os dois), os caminhos relativos do log com a realocação da pasta e a abertura sem variáveis
-`AWS_*`.
-
-Pendente, porque o projeto ainda não tem conexão Redshift (nenhum cluster ou workgroup serverless
-visível ao papel do projeto):
-
-- `COPY ... MANIFEST` de arquivos do Delta: `DECIMAL` em `INT64`, `timestamp_ntz` em `INT64` de
-  microssegundos, lista de colunas e `FILLRECORD` para arquivos anteriores a uma coluna nova.
-- `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE` seguido de `create_write_transaction`, e a leitura
-  do resultado pelo DuckDB.
 
 ## Referências
 

@@ -141,22 +141,24 @@ Read the file listed here before researching its subject again. Each document na
 came from, and `REFERENCES.md` collects every URL consulted so far, grouped by subject: Parquet
 format, Redshift, DuckDB, PyArrow, SQLAlchemy, pandas, PyIceberg, Glue Data Catalog, Athena, Lake
 Formation, SageMaker Unified Studio, S3, Python packages, Delta Lake, DuckLake, Hudi, SQL tooling
-(SQLGlot, SQLMesh, dbt, Ibis, dlt), data-contract tools and Rust/PyO3. New research appends to the
-matching group.
+(SQLGlot, SQLMesh, dbt, Ibis, dlt), data-contract tools, Rust/PyO3 and consulted repositories. New
+research appends to the matching group.
 
 | File | Subject |
 | --- | --- |
-| `README.md` | Initialization with `uv init --python 3.13`, dependencies (`uv sync --group dev`), the two test suites (local folder and S3), the rule that each root variable authorizes the writes under it, and their environment variables, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
-| `prepare_offline.sh` | Makes the project folder self-contained for the target environment without internet: managed Python in `.python/`, the package with its runtime dependencies and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages in `pyproject.toml` are picked up by `uv sync`, but a new DuckDB extension, a Python version change or any other runtime asset must be added to the script by hand, and the user reruns it before packing the folder. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
+| `README.md` | `uv init --python 3.13`, `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
+| `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md` in the shape of the `aws/` scripts of felipenoris/AWS-DataScience: `space.py` (the space from inside: credentials and their expiry, region, project, network, machine with temp-folder space and open-file limit, pinned and optional packages, DuckDB extensions), `bucket.py` (the bucket under the root: settings, lifecycle, inventory, the role's permissions by IAM policy simulation, the KMS key, the bucket policy, incomplete uploads), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, the Data API, the session with database privileges, settings, load-error views and external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
-| `docs/schema.md` | DDL generated from the ORM models, physical options carried in `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table that maps SQLAlchemy to Arrow, Delta, DuckDB and Redshift, and SQL portability between the two engines. It ends with the JSON field treatment per layer (model `JSON().with_variant(SUPER(), "redshift")`, Arrow `json_` extension, Delta `string`, DuckDB `JSON`, Redshift `SUPER` via `JSON_PARSE`). |
-| `docs/parquet.md` | Parquet file layout and every metadata structure (`FileMetaData`, schema, row group, `ColumnMetaData`, page index, Bloom filters, page headers, key-value pairs, size and geospatial statistics, encryption, summary files), inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
+| `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
+| `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
 | `docs/duckdb.md` | DuckDB as the execution sandbox. |
-| `docs/redshift.md` | Redshift as the publication database and the second execution engine. It opens with the diagnostic queries for a session. |
-| `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection and customization, deferrable constraints, Core statements, the ORM for DDL and for DML, keys generated on the server, SQL generation from a statement for both dialects (`compile`, dialect objects and their paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`) with self-contained examples, the `Numeric` float conversion of both dialects, what the Redshift dialect, the DuckDB dialect and Parquet files each support, and the role of each part of SQLAlchemy in the project: the verdict per part, the recommendation without the compatibility premise (own contract with Arrow as the canonical form, hand-written SQL validated by SQLGlot) and the gradual replacement of runtime dialect compilation by generated SQL text (`param`, `prefixed`, `render`, `write_sql_files`, `execute`) with the compiler behaviours the generation works around. |
-| `docs/delta.md` | Delta Lake as the source of truth: table folder layout and log actions, Delta versus Iceberg (where the current-version pointer lives), the protocol implementations (delta-spark, delta-rs, Delta Kernel) with the delta-rs gaps and their effect on the pipeline, S3 requirements (IAM actions, conditional-write enforcement, versioning, lifecycle, SSE-KMS options), supported types and JSON handling, table creation from the SQLAlchemy model, schema evolution rules with the measured rewrite for rename and drop (one commit, the memory of the two paths, the partial-overwrite trap) and what replaces Alembic, transactions, conflicts and restore, DML through delta-rs, ingestion and export, the export of the current snapshot back to Parquet folders by month (copy by the log versus rewrite, with the measurements), the pipeline steps, DuckDB and Redshift access, performance measurements, relocation of the whole folder (relative paths) and SQLAlchemy support. |
-| `docs/estrategia.md` | Table layer over Parquet without a catalog service (Delta Lake via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) compared against the project's requirements, the Redshift path by `COPY ... MANIFEST` and its rules, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, the Rust/PyO3 assessment, the decision (Delta Lake plus SQLAlchemy Core, kept for compatibility with the pipeline and replaced gradually at runtime by generated SQL text, no Alembic) with the reasons and the maturity assessment of Delta against Iceberg with the re-evaluation trigger, the lessons that drive the work, the implementation stages with acceptance criteria, the illustrated monthly pipeline with the proposed `Execution` API, and the proof of concept on S3 and Redshift: the S3 items verified on 2026-09-19 from the SageMaker space, the Redshift items pending a connection. It records the local proof of concept of 2026-09-19. |
-| `docs/serialize-db.md` | The library's modeling: the features, the library's own metadata (commit keys `serialize_db_execution_id`, `serialize_db_input_versions`, `serialize_db_snapshot`; `_serialize_db/snapshots.json`; `serialize_db_publications`), the primitives of each module (`contract`, `sql`, `delta`, `engine.duckdb`, `engine.redshift`, `execution`) with the proposed signatures, and the flow of each use case (initial load, monthly run on DuckDB and on Redshift, publication to clients, month correction, schema evolution, database snapshot and maintenance, export to Parquet folders, copy and development environment, replacement of the runtime dialect by generated SQL). |
+| `docs/redshift.md` | Redshift as the publication database and the second execution engine; it opens with the diagnostic queries for a session. |
+| `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection, deferrable constraints, Core and ORM for DDL and DML, server-generated keys, SQL generation per dialect (`compile`, dialect objects and paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`), the `Numeric` float conversion, what each dialect and Parquet support, the verdict per part, the recommendation without the compatibility premise (own contract with Arrow as canonical form, hand-written SQL validated by SQLGlot) and the gradual replacement of runtime compilation by generated SQL text (`param`, `prefixed`, `render`, `write_sql_files`, `execute`). |
+| `docs/delta.md` | Delta Lake as the source of truth: folder layout and log actions, Delta versus Iceberg, the implementations (delta-spark, delta-rs, Delta Kernel) and the delta-rs gaps, S3 requirements, types and JSON, table creation from the model, schema evolution with the measured rename/drop rewrite and what replaces Alembic, transactions, conflicts and restore, DML, ingestion and export back to Parquet folders by month, pipeline steps, DuckDB and Redshift access, performance measurements, relocation and SQLAlchemy support. |
+| `docs/PLAN.md` | The plan (pt-BR): the decisions with the premises behind them, the state of the project (repository, verified proof of concept, environment readings, pending items), the rules every stage obeys, the package layout with dependencies, configuration and test policy, the stages 0 to 9 with the primitives of each module (`schema`, `sql`, `storage`, `delta`, `engine.duckdb`, `engine.redshift`, `execution`, `load`, `cli`), the monthly pipeline with the `Execution` API, and the order of work. |
+| `docs/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service (Delta via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and the maturity assessment of Delta against Iceberg with the re-evaluation trigger. |
+| `docs/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`) and the flow of each use case; the primitives live in `docs/PLAN.md`. |
 | `src/serialize_db/model/` | Declarative ORM models of the accounting, management and projection tables. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
@@ -165,32 +167,92 @@ the differences from PostgreSQL, supported types with `DECIMAL` and JSON, DDL,
 SQLAlchemy support, references. `docs/delta.md` adds schema evolution, transactions, the pipeline,
 DuckDB and Redshift access, and relocation.
 
+## Lessons learned
+
+Process lessons from the sessions so far, kept so the same mistake is not paid twice; the
+technical facts stay in the list below and in the study suites. A lesson is added at the end of a
+unit of work when a mistake cost a retry or a verification changed the plan, with its date.
+
+- **A documented behavior becomes a test assertion only after a probe reproduces it**
+  (2026-09-19). Three claims taken from `docs/duckdb.md` and `docs/delta.md` failed as assertions:
+  the DuckDB Arrow reader returns zero rows after another command instead of raising;
+  `read_parquet` on a single file under `mes=.../` adds `mes` by Hive auto-detection, so a file's
+  real columns come from `parquet_schema`; the `DECIMAL` inferred from a pandas column came from all
+  the values, not a sample; the log cleanup with `delta.logRetentionDuration = interval 0 days` did
+  not happen after six commits and a checkpoint. Run a ten-line probe first, assert the observed
+  value, and record the rest in the session report.
+- **A claim of "writes nothing" or "needs nothing" is verified in a stripped environment**
+  (2026-09-19). The `LOAD` of a known DuckDB extension downloaded it into `~/.duckdb`, found only
+  by running with an empty `HOME`; the same kind of run found the dangling `.venv/bin/python`.
+  Strip `AWS_*` and the proxy variables, point proxies at a closed port, give the subprocess an
+  empty `HOME`.
+- **A script that resolves paths by pattern runs on both platforms before it is trusted**
+  (2026-09-19). `prepare_offline.sh` had a Linux-only glob and left the macOS venv broken without
+  an error; now it stops when the pattern matches nothing. macOS has no `timeout` command: time a
+  subprocess from Python.
+- **Nothing unpinned enters the project venv** (2026-09-19). Installing `sagemaker-studio`
+  downgraded duckdb to 1.5.1. Try a package in a scratch venv, read the versions after any install
+  (`probes/space.py` SP-9 does it), and restore with `uv sync --group dev`.
+- **The pytest layout has no `__init__.py`.** The root `tests/conftest.py` is imported as
+  `conftest` and its folder lands on `sys.path`, so `from conftest import ...` and
+  `from delta import ...` work inside `tests/proof_of_concept/`; test-module basenames must stay
+  unique across `tests/` and `tests/proof_of_concept/` (a future `tests/test_local.py` would collide
+  with the proof of concept).
+- **Before a commit**: `uv run pytest` with no variables and again with
+  `SERIALIZE_DB_TEST_LOCAL_ROOT` set to the scratchpad, both green; `py_compile` on an edited probe;
+  `git status` clean of stray files.
+- **Git and shell traps.** After `git mv`, `git add` of the old path aborts a `&&` chain; add the
+  new path. In zsh, `--include=*.md` needs quotes, and an unquoted `$command` is not word-split: a command
+  held in a variable runs as one word (a probe loop silently ran nothing on 2026-09-19); write
+  the command out or use `${=command}`. A Bash result above about 50 KB is saved to a
+  file instead of shown; read a long document in `sed -n` ranges.
+- **A subprocess probe prints its own one-line error.** A DuckDB error inside a subprocess showed
+  only `^`; the probe catches the exception and prints `Type: message` to stderr. Probe code held
+  in a Python string is a raw string, or `\[` raises a `SyntaxWarning`. "The service answered with
+  an error" and "no response" are different verdicts: only the second means the network needs
+  maintenance.
+- **Restructuring a document is a scripted splice followed by checks** (2026-09-19). Split on
+  heading markers with a Python script, then list the headings, grep for references to the removed
+  sections and for stale identifiers across the repository, and test every `](...md)` link target.
+  Trimming this file used the same idea: list the backticked spans and numbers of the old text
+  missing from the new one and review each; a fact removed is a defect.
+- **A change the user did not ask for is named in the report.** Moving the primitives out of
+  `docs/serialize-db.md` followed from the plan request and was flagged as such; the `Text` rule
+  proposed in `docs/PLAN.md` is marked as awaiting the user's confirmation.
+- **API details learned by running live in `tests/proof_of_concept/`, not here**:
+  `schema_mode="merge"` for an append with fewer columns than the evolved table, the normalized
+  `CHECK` expression, `filters=` instead of the deprecated `partitions=`, `pa.schema(dt.schema())`
+  through the PyCapsule interface, `partition.mes` and `size_bytes` in
+  `get_add_actions(flatten=True)`, SUPER binds rendered as `json_parse(%s)`. Read the study suite
+  of a library before writing code against its API.
+
 ## What the documents establish
 
-Each fact below is detailed in the file named at the end of its line.
+Each fact is detailed in the file named at the end of its line.
 
-- Arrow is the ingestion path for both engines. Loading 300,000 rows into DuckDB from an Arrow table
-  took 0.008 s, against 5.2 s for 50,000 rows through `executemany`. `docs/duckdb.md`
-- A pandas column of `object` holding `Decimal` gets its DuckDB type from a sample of 1,000 values:
-  the sample column became `DECIMAL(7, 2)`, which a larger value in a later batch would reject.
-  Casting to Arrow with the contract schema first fixes the type. `docs/duckdb.md`
+- Arrow is the ingestion path for both engines: 300,000 rows into DuckDB from an Arrow table took
+  0.008 s, against 5.2 s for 50,000 rows through `executemany`. `docs/duckdb.md`
+- A pandas `object` column of `Decimal` gets its DuckDB type from the values present, not from the
+  contract (`docs/duckdb.md` reports a 1,000-value sample giving `DECIMAL(7, 2)`; on 2026-09-19 a
+  5,001-row column with the large value last gave `DECIMAL(11,2)` and materialized); casting to Arrow
+  with the contract schema first fixes the type. `docs/duckdb.md`, `tests/proof_of_concept/test_duckdb.py`
 - `pandas.read_sql` turns `Decimal` into `float` unless `coerce_float=False`, and
-  `dtype_backend="pyarrow"` returns `double` for `DECIMAL` and `string` for `DATE`. Only the Arrow
+  `dtype_backend="pyarrow"` returns `double` for `DECIMAL` and `string` for `DATE`; only the Arrow
   path preserves `decimal128(18, 2)` and `date32`. `docs/duckdb.md`
-- With `redshift_connector`, `executemany` makes one round trip per row, and the dialect does not
-  rewrite it into a multi-row `VALUES`. Bulk loads go through Parquet on S3 and `COPY`; small batches
-  go through `insert(Modelo).values(lista)`. `docs/redshift.md`
-- The generic `Identity()` disappears from the Redshift DDL, and DuckDB rejects it outright. Business
-  keys generated on the client avoid the problem on both. `docs/sqlalchemy.md`
-- A `@compiles(CreateTable, "redshift")` hook that reads `Table.info` produced the same
+- With `redshift_connector`, `executemany` makes one round trip per row and the dialect does not
+  rewrite it into a multi-row `VALUES`: bulk loads go through Parquet on S3 and `COPY`, small batches
+  through `insert(Modelo).values(lista)`. `docs/redshift.md`
+- The generic `Identity()` disappears from the Redshift DDL, and DuckDB rejects it; business keys
+  generated on the client avoid the problem on both. `docs/sqlalchemy.md`
+- A `@compiles(CreateTable, "redshift")` hook reading `Table.info` produced the same
   `DISTSTYLE KEY DISTKEY (...) SORTKEY (...)` as the `redshift_*` arguments. Without the dialect
-  installed, `redshift_*` arguments are accepted with a `Can't validate argument` warning; with it
-  installed, unknown ones raise `ArgumentError`. `docs/redshift.md`
-- `duckdb_engine` reflects columns, types and comments, but not primary keys or indexes; variables
-  in the Python scope are invisible to queries issued through the engine, so a DataFrame needs
-  `register` on the raw connection. `docs/duckdb.md`
+  installed, `redshift_*` arguments are accepted with a `Can't validate argument` warning; with it,
+  unknown ones raise `ArgumentError`. `docs/redshift.md`
+- `duckdb_engine` reflects columns, types and comments, not primary keys or indexes; Python-scope
+  variables are invisible to queries through the engine, so a DataFrame needs `register` on the raw
+  connection. `docs/duckdb.md`
 - The DuckDB Parquet writer marks every column `optional`, even `NOT NULL`, writes `DECIMAL(18, 2)`
-  as `INT64` and writes no page index. PyArrow writes `required` and `FIXED_LEN_BYTE_ARRAY(8)`.
+  as `INT64` and writes no page index; PyArrow writes `required` and `FIXED_LEN_BYTE_ARRAY(8)`.
   `docs/parquet.md`
 - `COPY ... FROM` in DuckDB is positional and silently casts convertible types, so type
   enforcement belongs on the metadata, before the load. `docs/parquet.md`
@@ -201,27 +263,26 @@ Each fact below is detailed in the file named at the end of its line.
   2024-11-25); failures return 412, conflicts 409. This is the primitive a table format needs for
   atomic commits, and it answers the open question in `docs/guia.md`. `docs/estrategia.md`
 - `deltalake` 1.6.0 (2026-05-19) removed the DynamoDB lock store; S3 conditional put is the default
-  commit mode. The delta-rs docs page on S3 locking is stale. The writer does not read
-  `~/.aws/config`. In the SageMaker Unified Studio space it finds the container credentials through
-  the default chain. Early in the 2026-09-19 session the credential call failed with 403 as found
-  and passed with `NO_PROXY` exported; minutes later the environment as found passed with every
-  interpreter and version, and the cause was not isolated. The library exports `NO_PROXY` as a
-  precaution and keeps `storage_options` with the `boto3` credentials as the fallback.
-  `docs/delta.md`, `docs/estrategia.md`
+  commit mode, and the delta-rs docs page on S3 locking is stale. The writer does not read
+  `~/.aws/config`. In the SageMaker space it finds the container credentials through the default
+  chain; early in the 2026-09-19 session the credential call failed with 403 as found and passed with
+  `NO_PROXY` exported, minutes later the environment as found passed with every interpreter and
+  version, and the cause was not isolated. The library exports `NO_PROXY` as a precaution and keeps
+  `storage_options` with the `boto3` credentials as the fallback. `docs/delta.md`, `docs/estrategia.md`
 - Delta data files do not contain the partition column (it lives in the `add` action), so a
-  partition key must derive from a column in the file for Redshift `COPY`. DuckLake keeps identity
+  partition key must derive from a column in the file for Redshift `COPY`; DuckLake keeps identity
   and source columns inside the files. `docs/estrategia.md`
 - delta-rs, DuckLake and DuckDB all write `DECIMAL(18, 2)` as `INT64`; PyArrow writes
   `FIXED_LEN_BYTE_ARRAY`. The pending Redshift `COPY` test covers all three. `docs/estrategia.md`
 - DuckLake inlines inserts of up to 10 rows into the catalog by default (`DATA_INLINING_ROW_LIMIT`),
-  producing no Parquet file; a 10-row insert in the proof of concept wrote nothing to the data path.
-  Publishing to Redshift requires inlining off or a flush. `docs/estrategia.md`
+  producing no Parquet file (a 10-row insert wrote nothing to the data path); publishing to Redshift
+  requires inlining off or a flush. `docs/estrategia.md`
 - A DuckLake catalog file served over HTTP attaches read-only with `ATTACH 'ducklake:http://...'`;
-  a SQLite catalog on S3 is unsupported by design. Without PostgreSQL the model is one writer at a
+  a SQLite catalog on S3 is unsupported by design; without PostgreSQL the model is one writer at a
   time, with the catalog file moved by the library. `docs/estrategia.md`
 - `DeltaTable.create_write_transaction` with `AddAction` registers Parquet files written by others
-  (the `UNLOAD` path); `ducklake_add_data_files` does the same for DuckLake, but failed on a table
-  partitioned by `year()`/`month()` in the proof of concept. `docs/estrategia.md`
+  (the `UNLOAD` path); `ducklake_add_data_files` does the same for DuckLake but failed on a table
+  partitioned by `year()`/`month()`. `docs/estrategia.md`
 - SQLGlot transpiles function names and syntax between DuckDB and Redshift but passes through
   constructs the target lacks (`INSERT ... BY NAME`, `list_aggregate`) and turned DuckDB
   `VARCHAR(200)` into Redshift `VARCHAR(MAX)`; Redshift integration tests remain necessary.
@@ -233,17 +294,17 @@ Each fact below is detailed in the file named at the end of its line.
   `enforce_retention_duration=False`. Alembic has no role with Delta as the source of truth: a
   reconcile step applies additive schema diffs and refuses destructive ones. `docs/estrategia.md`
 - delta-rs `alter.add_columns` accepts a `nullable=False` column on a table with data and leaves it
-  null in every row, and `append` casts incoming data to the table type (int32, double and string
-  into `long` were accepted; decimal(20,4) into decimal(18,2) refused) without changing the table;
-  type changes need `mode="overwrite"` with `schema_mode="overwrite"`. The reconcile step must refuse
-  NOT NULL additions and the Arrow cast must enforce types before writing. `docs/estrategia.md`
+  null in every row; `append` casts incoming data to the table type (int32, double and string into
+  `long` accepted, decimal(20,4) into decimal(18,2) refused) without changing the table; type changes
+  need `mode="overwrite"` with `schema_mode="overwrite"`. The reconcile step must refuse NOT NULL
+  additions, and the Arrow cast must enforce types before writing. `docs/estrategia.md`
 - Two delta-rs writers on the same version: append plus append both commit; overwrite of the same
-  month fails with `CommitFailedError`; overwrites of different months both commit. App
-  transactions (`Transaction(app_id, version)`) are recorded but not enforced: a repeated write with
-  the same version was accepted. `docs/delta.md`
+  month fails with `CommitFailedError`; overwrites of different months both commit. App transactions
+  (`Transaction(app_id, version)`) are recorded but not enforced: a repeated write with the same
+  version was accepted. `docs/delta.md`
 - `add`/`remove` paths are relative to the table folder: a copied folder opened at the same version
   with the same rows in delta-rs and DuckDB, history and time travel intact. Never register files
-  by absolute URI. Iceberg manifests store absolute paths. `docs/delta.md`
+  by absolute URI; Iceberg manifests store absolute paths. `docs/delta.md`
 - DuckDB `INSERT INTO` an attached Delta table works (commitInfo shows `UNKNOWN`) but writes the
   partition column inside the file, unlike delta-rs; mixing writers breaks positional `COPY`.
   `COPY ... (RETURN_STATS)` plus `AddAction` with stats gives files that both readers prune
@@ -254,7 +315,7 @@ Each fact below is detailed in the file named at the end of its line.
   `delta_scan` aggregates in 0.3 s (0.77 s cold) against 0.06 s for `read_parquet` and 0.002 s on a
   materialized table, which took 0.29 s to build; 20 point queries took 6.0 s through `delta_scan`,
   3.1 s through `ATTACH ... PIN_SNAPSHOT`, 1.3 s through `read_parquet` and 0.013 s on a table.
-  Each `delta_scan` rereads the log. Materialize every table queried more than once. `docs/delta.md`
+  Each `delta_scan` rereads the log: materialize every table queried more than once. `docs/delta.md`
 - delta-rs log cleanup is automatic at checkpoint time and removes log files older than
   `delta.logRetentionDuration` (30 days by default): with `interval 0 days` version 0 became
   unreadable after five commits. `vacuum(keep_versions=[...])` preserves the files of chosen
@@ -263,7 +324,7 @@ Each fact below is detailed in the file named at the end of its line.
   DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader())`. `docs/delta.md`
 - A JSON field is `sa.JSON().with_variant(SUPER(), "redshift")` in the model (DDL `JSON` on DuckDB,
   `SUPER` on Redshift), `pa.json_(pa.string())` or `string` in Arrow, `string` in Delta (the
-  extension name is kept in field metadata), `JSON` logical type in Parquet written by PyArrow or
+  extension name kept in field metadata), `JSON` logical type in Parquet written by PyArrow or
   DuckDB and `String` when written by delta-rs; DuckDB reads `delta_scan` JSON as `VARCHAR` and
   validates only on `::JSON`; Arrow and Delta never validate. `docs/schema.md`, `docs/delta.md`
 - S3 needs for Delta: `ListBucket` (prefix), `GetObject`, `PutObject` (commits use
@@ -273,7 +334,7 @@ Each fact below is detailed in the file named at the end of its line.
   `aws_server_side_encryption`, `aws_sse_kms_key_id`, `aws_sse_bucket_key_enabled`. `docs/delta.md`
 - DuckDB 1.5.5 Python API: `.arrow()` returns a `RecordBatchReader`, and `fetch_record_batch()` /
   `fetch_arrow_table()` are deprecated in favour of `to_arrow_reader()` / `to_arrow_table()`; the
-  reader is invalidated by any other command on the same connection. `pa.Table.from_pylist` wants
+  reader returns no further rows, without error, after any other command on the same connection. `pa.Table.from_pylist` wants
   dicts: tuples give an all-null table without error. Only the field metadata key
   `PARQUET:field_id` produces Parquet field ids. DuckDB cannot read `BYTE_STREAM_SPLIT` on a
   DECIMAL column written by PyArrow. `DeltaTable.alter.add_columns` needs `deltalake.schema.Field`,
@@ -321,7 +382,14 @@ Each fact below is detailed in the file named at the end of its line.
   log lasts because `commitInfo` is not in checkpoints. The library stores no schema, file list or
   statistics; the DDL of an old snapshot comes from that version's Delta schema, not from the
   current model. `docs/serialize-db.md`, `docs/delta.md`
-- Renaming or dropping a column with delta-rs 1.6.4 is a rewrite of every live file in one commit (`remove` of all, `add` of all, `metaData`); `dt.alter` has no `rename_column` or `drop_columns`. `write_deltalake(reader, mode="overwrite", schema_mode="overwrite")` held 1,140 MB RSS for 135 MB of Parquet and 1,960 MB for 269 MB; DuckDB `COPY ... PARTITION_BY ... RETURN_STATS` plus `create_write_transaction(mode="overwrite", schema=new)` gave the same commit at a flat 600 MB. `schema_mode="overwrite"` with a `predicate` is accepted and switches the schema of the whole table, so the other months read the renamed column as null; the library refuses the combination. `docs/delta.md`
+- Renaming or dropping a column with delta-rs 1.6.4 is a rewrite of every live file in one commit
+  (`remove` of all, `add` of all, `metaData`); `dt.alter` has no `rename_column` or `drop_columns`.
+  `write_deltalake(reader, mode="overwrite", schema_mode="overwrite")` held 1,140 MB RSS for 135 MB
+  of Parquet and 1,960 MB for 269 MB; DuckDB `COPY ... PARTITION_BY ... RETURN_STATS` plus
+  `create_write_transaction(mode="overwrite", schema=new)` gave the same commit at a flat 600 MB.
+  `schema_mode="overwrite"` with a `predicate` is accepted and switches the schema of the whole
+  table, so the other months read the renamed column as null; the library refuses the combination.
+  `docs/delta.md`
 - `literal_column(":mes")` survives `literal_binds` in both dialects and is the execution parameter
   of generated SQL; `bindparam("mes")` without a value and `text("mes = :mes")` render `mes = NULL`
   with a `SAWarning` instead of failing. Stand-alone dialect instances (`pyformat`, `format`) double
@@ -331,6 +399,13 @@ Each fact below is detailed in the file named at the end of its line.
   DuckDB runs the text with `$name` and a dict; `redshift_connector` with
   `cursor.paramstyle = "named"`. The Redshift dialect derives from `PGDialect` and compiles
   `DISTINCT ON`, `ON CONFLICT DO NOTHING` and array subscripts without error. `docs/sqlalchemy.md`
+- botocore 1.43.98 reads `AWS_DEFAULT_REGION` or the profile, never `AWS_REGION`, and without a
+  region uses the global endpoint `s3.amazonaws.com`, which a regional VPC endpoint does not serve;
+  delta-rs reads both variables and without either queries IMDS and falls back to `us-east-1`. The S3
+  suite copies the `boto3` region into `AWS_REGION` one way only, so an environment with only
+  `AWS_REGION` and no `~/.aws/config` needs maintenance; `test_boto3_credential_source` needs STS
+  (60 s per attempt, 5 attempts by default). On a dead network delta-rs gives up in 10 s with
+  `max_retries=1` and `retry_timeout=10s` in `storage_options` (59 s without). `README.md`
 
 ## The pipeline outside this repository
 
@@ -339,106 +414,41 @@ is used only for the declarative models (DDL) and for Core `select` and `insert`
 move DataFrames, never for ORM instances; no catalog service is enabled, which excludes Iceberg on
 Glue (Iceberg with a SQLite catalog file moved by the library is the documented alternative if Glue
 or S3 Tables may be enabled later); development and production runs write separate tables; renaming
-or dropping columns is rare. The decision recorded in `docs/estrategia.md` follows from them: Delta
-Lake through `deltalake` as the table layer, SQLAlchemy kept as contract metadata and Core,
-DataFrames moved through Arrow, SQLMesh, dbt and DuckLake not adopted. SQLAlchemy is in the project
-for compatibility with that code (user statement of 2026-09-19); the same day the user decided that
+or dropping columns is rare. The decision in `docs/PLAN.md`, with the rationale in `docs/estrategia.md`, follows from them: Delta Lake
+through `deltalake` as the table layer, SQLAlchemy kept as contract metadata and Core, DataFrames
+moved through Arrow, SQLMesh, dbt and DuckLake not adopted. SQLAlchemy is in the project for
+compatibility with that code (user statement of 2026-09-19); the same day the user decided that
 runtime compilation by the dialect is replaced gradually by generated SQL text per dialect, one
 database interaction at a time, so SQLAlchemy ends in the models and in generation and
 `duckdb_engine` and `sqlalchemy-redshift` leave the runtime dependencies.
 
 ## Naming decisions applied to the documents
 
-The convention above was applied to every example in `docs/` on 2026-09-19. ORM model classes and
-column mixins (`Operacao`, `Lancamento`, `Rastreio`) keep Portuguese names: they are data-model
-artifacts, like tables and columns. Python variables, functions, parameters, modules, the proposed
-API (`Database`, `Execution`, `ingest`, `audit`, `publish`) and the keys of `Table.info["serialize_db"]`
-(`partition_by`, `sort_key`, `redshift`) are English. The library's own metadata is English (user decisions of 2026-09-19). A key that lives under
-`_serialize_db/` carries no prefix (`snapshots` in `_serialize_db/snapshots.json`); everything else the
-library writes carries the `serialize_db_` prefix: the commit keys `serialize_db_execution_id`,
-`serialize_db_input_versions` and `serialize_db_snapshot`, the Parquet footer keys `serialize_db_version`
-and `serialize_db_execution_id`, and the Redshift control table
-`serialize_db_publications(table_name, delta_version, execution_id, published_at)`, whose columns stay
-unprefixed because the table name is the namespace. `snapshot` is an accepted loanword in prose. Data
-tables and columns stay Portuguese, including the `id_execucao` column of the `Rastreio` mixin in
-`docs/sqlalchemy.md`. SQL
-placeholders in prose (`COPY (consulta) TO ...`) and staging table names (`staging_<tabela>`) count as
-database identifiers.
+The convention was applied to every example in `docs/` on 2026-09-19. ORM model classes and column
+mixins (`Operacao`, `Lancamento`, `Rastreio`) keep Portuguese names: they are data-model artifacts,
+like tables and columns. Python variables, functions, parameters, modules, the proposed API
+(`Database`, `Execution`, `ingest`, `audit`, `publish`) and the keys of `Table.info["serialize_db"]`
+(`partition_by`, `sort_key`, `redshift`) are English. The library's own metadata is English (user
+decisions of 2026-09-19). A key that lives under `_serialize_db/` carries no prefix (`snapshots` in
+`_serialize_db/snapshots.json`); everything else the library writes carries the `serialize_db_`
+prefix: the commit keys `serialize_db_execution_id`, `serialize_db_input_versions` and
+`serialize_db_snapshot`, the Parquet footer keys `serialize_db_version` and
+`serialize_db_execution_id`, and the Redshift control table
+`serialize_db_publications(table_name, delta_version, execution_id, published_at)`, whose columns
+stay unprefixed because the table name is the namespace. `snapshot` is an accepted loanword in
+prose. Data tables and columns stay Portuguese, including the `id_execucao` column of the `Rastreio`
+mixin in `docs/sqlalchemy.md`. SQL placeholders in prose (`COPY (consulta) TO ...`) and staging
+table names (`staging_<tabela>`) count as database identifiers.
 
 ## Where the work stands
 
-Documentation is complete as of 2026-09-19 and merged on `main` by the user: PR #3 (DuckDB, Redshift
-and SQLAlchemy documents), PR #4 (`docs/estrategia.md`, `docs/delta.md`, Python examples in every
-document, JSON treatment, S3 requirements, implementation stages) and PR #5 (identifier convention).
-The user merges each PR and syncs `main`; the next unit of work starts on a new `claude/` branch.
-PR #7 (protocol implementations section in `docs/delta.md`) was merged on 2026-09-19. PR #8
-(cross-table consistency, single-transaction publication, database snapshot naming) was merged on
-2026-09-19. PR #9 (2026-09-19, branch `claude/modelagem-biblioteca`, merged the same day) records
-the rename/drop rewrite in `docs/delta.md` and creates `docs/serialize-db.md`. PR #10 (2026-09-19,
-branch `claude/sql-gerado-por-dialeto`, merged the same day) records the SQLAlchemy assessment and
-the gradual replacement of the runtime dialect by generated SQL text. PR #11
-(2026-09-19, branch `claude/prova-de-conceito-s3`, merged the same day) records the S3 proof of
-concept, adds the pytest suite and the offline recipe. PR #12 (2026-09-19, branch
-`claude/prova-de-conceito-local`) makes each suite run only under an explicitly configured root,
-adds the local-folder proof of concept and fixes the interpreter lookup in `prepare_offline.sh`. While PR #12
-is open, new commits go there. `gh` is authenticated in the space since 2026-09-19.
-
-No library code exists beyond the models: `pyproject.toml` declares no runtime dependencies. The
-`dev` dependency group pins pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1 and boto3, and
-the tests are the proof of concept of the Delta layer on both storages:
-`tests/delta_proof_of_concept.py` holds the class `DeltaProofOfConcept` with the tests common to
-both (write and open, `delta_scan` types and partition pruning, query timings, `vacuum`);
-`tests/test_local_proof_of_concept.py` (marker `local`, root from `SERIALIZE_DB_TEST_LOCAL_ROOT`, an
-existing folder, no AWS; adds the atomic commit on disk with the writer conflict, relative log
-paths with folder relocation, and opening without `AWS_*` variables) and
-`tests/test_s3_proof_of_concept.py` (marker `s3`, root from `SERIALIZE_DB_TEST_S3_ROOT`; adds
-credentials, conditional put and encryption) inherit it with their own `storage`, `table_uri` and
-`duckdb_connection` fixtures. Each root variable is the write authorization (user rule of
-2026-09-19): `tests/conftest.py` skips a suite whose variable is unset, with the reason in the
-report, so `uv run pytest` with no variables runs no test that writes files; with the variable set,
-whatever prevents the write fails the session (local root missing; S3 root without `boto3`
-credentials or failing a short-timeout listing of `<root>/serialize-db-poc/`, 11 s with a silent
-proxy). The S3 root is never inferred from the SageMaker project. DuckDB extensions are installed
-only into `SERIALIZE_DB_DUCKDB_EXTENSIONS`, with DuckDB's `autoinstall_known_extensions` off because
-`LOAD` of a known extension otherwise downloads it into `~/.duckdb` without notice; a missing
-extension otherwise skips the test. The fixtures export `NO_PROXY`, set `AWS_REGION`, create
-`serialize-db-poc/<id>/` under each root, delete it at the end unless `SERIALIZE_DB_TEST_KEEP` is
-set, and print the report (keys prefixed `local.` or `s3.`), also written to
-`SERIALIZE_DB_TEST_REPORT` as JSON. The suites
-exist so the same proof of concept runs in the target environment, which has no internet; the local
-suite validates the prepared folder there without S3. `prepare_offline.sh`, at the repository
-root, makes the project folder self-contained on a machine with internet: managed Python in
-`.python/` (`UV_PYTHON_INSTALL_DIR`, `UV_MANAGED_PYTHON=1`), `.venv/` from `uv sync --all-groups`
-with `--link-mode copy`, the absolute links uv creates (`.venv/bin/python` and the
-`.python/cpython-3.13-...` alias) replaced by relative ones (the folder then works at any path;
-`uv sync` ignores `UV_VENV_RELOCATABLE`, and the `.venv/bin/*` scripts keep absolute shebangs, hence
-`python -m pytest`), and DuckDB `httpfs`, `delta` and `aws` in `.duckdb/` (`extension_directory`,
-picked up by `conftest.py`). The script lists the DuckDB extensions by hand: a new one must be added
-there (see the repository index). The user transfers the folder as `.tar.gz`, never zip, to keep links and
-permissions. Verified on 2026-09-19 by extracting the archive at another path
-and running the suite with dead proxies and an empty `HOME`: 10 passed. On macOS the script had left
-`.venv/bin/python` pointing nowhere (Linux-only glob); after the fix of PR #12 it ran there and the
-local suite passed through `.venv/bin/python -m pytest` with dead proxies (8 passed, 10 skipped). The next work follows the
-stage table in `docs/estrategia.md`:
-
-- Stage 1, `serialize_db.contract`, and stage 2, `serialize_db.delta`, run on local folders and are
-  the natural next session: fix the models (importable `Base`, `Numeric(18, 2)`,
-  `autoincrement=False`, no `DEFERRABLE`, column `mes`, comments, `Table.info["serialize_db"]`),
-  then `arrow_schema`, `delta_schema`, `ddl(dialect)` and the generated
-  `schema/<tabela>.delta.json`, `.duckdb.sql` and `.redshift.sql` files compared by a test, the
-  `serialize_db.sql` primitives with the generated `sql/<nome>.duckdb.sql` and `.redshift.sql` files
-  compared by a test, then the Delta layer functions the stage table lists.
-- Stage 0, the proof of concept on AWS: the S3 items (delta-rs credentials, `write_deltalake`,
-  `delta_scan`, `vacuum`, conditional put, S3 timings) were verified on 2026-09-19 from the
-  SageMaker space and are recorded in `docs/delta.md` and `docs/estrategia.md`. The Redshift items
-  wait for a Redshift connection in the project, which the environment does not have yet (the user
-  confirmed on 2026-09-19). Stage 4, the Redshift engine, is the only one that needs the cluster.
-- The proposed API (`Database`, `Execution` with `ingest`, `audit`, `publish`, `publish_redshift`,
-  `previous_months`, `sandbox`; modules `contract`, `sql`, `delta`, `engine.duckdb`,
-  `engine.redshift`, `execution`) was accepted with PR #5, is laid out primitive by primitive in
-  `docs/serialize-db.md`, and is not code yet; the `sql` module (`param`, `prefixed`, `render`,
-  `write_sql_files`) and the engines' `execute(sql, params)` were added on 2026-09-19 for the
-  gradual replacement.
+The state of the project, the decisions, the stages with their primitives and the order of work are
+in `docs/PLAN.md` (pt-BR, 2026-09-19); read it before planning a session. What the plan does not
+record: PRs #3 to #12 were merged by the user, who syncs `main`; PR #13 (branch
+`claude/diagnostico-aws`) is open and carries the probes, the plan, the test layout and the study
+suites, and every new commit goes there until it merges; `gh` is authenticated in the space since
+2026-09-19. The next session starts stage 1 (`serialize_db.schema`) and stage 2 (`serialize_db.sql`)
+on local folders.
 
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
 --python 3.13 --with "deltalake==1.6.4" --with "duckdb==1.5.5" --with "pyarrow==25.0.1" ...` with
@@ -451,45 +461,59 @@ check are columns, ORM classes and the loanwords `sandbox` and `staging`.
 
 ## The state of the code
 
-`src/serialize_db/model/` holds three modules of declarative models: `model_base_contabil.py`
-(`dom_veiculos`, `dom_hierarquias_contas`, `cad_contas`, `rel_contas_hierarquias`,
-`cad_lancamentos`), `model_base_gerencial.py` (`dom_mensuracoes`, `dom_segmentos`, `dom_negocios`,
-`cad_operacoes`, `rel_contrato_operacao`, `cad_contratos`, `cad_lancamentos`) and
-`model_db_projetado.py` (`cad_contratos`, `cad_aliquotas`).
+`pyproject.toml` declares no runtime dependencies; the `dev` group pins pytest, deltalake 1.6.4,
+DuckDB 1.5.5, PyArrow 25.0.1, boto3, redshift-connector, SQLAlchemy 2.0.54, duckdb-engine 0.17.0,
+sqlalchemy-redshift 1.0.0 and pandas 3.0.6 (the last four added on 2026-09-19 for the study suites;
+`prepare_offline.sh` must be rerun). The models in `src/serialize_db/model/` and their defects are
+listed in `docs/PLAN.md` under the state of the repository; the `DEFERRABLE` and `SERIAL` behavior of
+each dialect is in `docs/sqlalchemy.md` and `docs/duckdb.md`.
 
-Two of them fail to import: `model_base_gerencial.py` runs `from lib_base_contabil import Base` and
-`model_db_projetado.py` runs `from lib_base_gerencial import Base`, module names the repository does
-not have. Only `model_base_contabil.py` declares `Base`. The models carry no dialect options and no
-`info` dictionaries, which `docs/schema.md` proposes, and they use `Double` where the contract
-expects `Numeric(18, 2)`. Their single-column integer primary keys keep the default `autoincrement`,
-which duckdb_engine renders as `SERIAL` and DuckDB rejects with `Type with name SERIAL does not
-exist!`; `autoincrement=False` avoids it. Foreign keys are declared `deferrable=True, initially='DEFERRED'`, which
-both dialects render as `DEFERRABLE INITIALLY DEFERRED`: DuckDB 1.5.5 accepts the table-level form
-SQLAlchemy emits and discards the clause (`create_all` passes; the column-level form and
-`PRIMARY KEY ... DEFERRABLE` fail with `Constraint not implemented!`), and the Redshift
-`CREATE TABLE` syntax has no such clause. The clause goes away anyway (`docs/sqlalchemy.md`).
+Test layout (user decision of 2026-09-19): `tests/` holds the package tests, none yet, and
+`tests/conftest.py` the authorization rule and the fixtures of the three targets;
+`tests/proof_of_concept/` holds the proof of concept of the Delta layer on both storages (`delta.py`,
+`test_local.py`, `test_s3.py`), the study suites of the external libraries and of the stdlib (`test_sqlalchemy.py`,
+`test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`), commented step by step
+because they are also the learning material for future maintainers and listed per stage in
+`docs/PLAN.md`, and `test_redshift.py`, the stage-0 Redshift
+items, written before any connection existed and never run against a cluster. User rule of
+2026-09-19: each authorization variable (`SERIALIZE_DB_TEST_LOCAL_ROOT`, `SERIALIZE_DB_TEST_S3_ROOT`,
+`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`) enables the writes under it, so `uv run pytest` with no
+variables runs only the tests that write nothing and ends by printing, as instructions and not as
+errors, the command that authorizes each skipped suite (user request of 2026-09-19), and with the
+variable set whatever prevents the write fails the session (local root missing; S3 root without `boto3` credentials or failing a
+short-timeout listing, 11 s with a silent proxy; Redshift without a connection); the S3 root is never
+inferred from the SageMaker project; DuckDB extensions are installed only into
+`SERIALIZE_DB_DUCKDB_EXTENSIONS`, with `autoinstall_known_extensions` off because `LOAD` of a known
+extension otherwise downloads it into `~/.duckdb` without notice. Verified on 2026-09-19 on macOS: no
+variables, 34 passed and 48 skipped; local root, 64 passed and 18 skipped. The S3 suite passed in the
+space the same day (10 passed in 27 s) before the boto3 list, copy and delete test was added.
+
+The suites exist so the same proof of concept runs in the target environment, which has no internet;
+the local suite validates the prepared folder there without S3. Verified on 2026-09-19: the archive
+extracted at another path and run with dead proxies and an empty `HOME`, 10 passed; on macOS the
+script had left `.venv/bin/python` pointing nowhere (Linux-only glob), and after the fix of PR #12 the
+local suite passed there through `.venv/bin/python -m pytest` with dead proxies. The folder travels
+as `.tar.gz`, never zip, to keep links and permissions; `uv sync` ignores `UV_VENV_RELOCATABLE`, and
+the `.venv/bin/*` scripts keep absolute shebangs, hence `python -m pytest`.
 
 ## Environment of the measurements
 
 The examples in `docs/parquet.md`, `docs/duckdb.md` and `docs/sqlalchemy.md` ran on 2026-09-18 with
 Python 3.13, DuckDB 1.5.5, PyArrow 25.0.1, pandas 3.0.6, polars 1.44.2, SQLAlchemy 2.0.54,
-duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 and redshift_connector 2.1.16. The sample is 300,000
-rows of `operacoes` with the columns `id_operacao`, `data_ref`, `id_cliente`, `valor` and
-`descricao`. The Redshift statements were compiled only; nothing ran against a cluster.
-
-The S3 proof of concept ran on 2026-09-19 inside the SageMaker Unified Studio space (see the
-environment section below) with Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5 and PyArrow 25.0.1
-through `UV_PYTHON_DOWNLOADS=automatic uv run --no-project --python 3.13 --with ...` and
-`NO_PROXY="$no_proxy"` exported; the same scripts also passed on the space's system Python 3.12.13
-with deltalake 1.5.0 and DuckDB 1.5.4, and then as the pytest suite (10 passed in 27 s). The
-scratch objects were deleted afterwards; the suite cleans up its own prefix.
-
-The local proof of concept in `docs/estrategia.md` ran on 2026-09-19 on macOS arm64 with Python 3.13,
-deltalake 1.6.4, DuckDB 1.5.5 with the `delta`, `ducklake` and `iceberg` extensions (ducklake
-`d8a1881e`, metadata version 1.0), PyIceberg 0.12.0 with the `sql-sqlite` and `pyiceberg-core`
-extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through `uv run --with` in the scratchpad, with 11 DuckDB
-threads and the files in the page cache. Nothing ran against S3 or Redshift. The Python examples
-added to every document on 2026-09-19 ran under the same pinned versions.
+duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 and redshift_connector 2.1.16, on a sample of
+300,000 rows of `operacoes` with the columns `id_operacao`, `data_ref`, `id_cliente`, `valor` and
+`descricao`; the Redshift statements were compiled only. The S3 proof of concept ran on 2026-09-19
+inside the SageMaker Unified Studio space with Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5 and
+PyArrow 25.0.1 through `UV_PYTHON_DOWNLOADS=automatic uv run --no-project --python 3.13 --with ...`
+and `NO_PROXY="$no_proxy"` exported; the same scripts also passed on the space's system Python
+3.12.13 with deltalake 1.5.0 and DuckDB 1.5.4, and then as the pytest suite (10 passed in 27 s); the
+scratch objects were deleted afterwards. The local proof of concept in `docs/estrategia.md` ran on
+2026-09-19 on macOS arm64 with Python 3.13, deltalake 1.6.4, DuckDB 1.5.5 with the `delta`,
+`ducklake` and `iceberg` extensions (ducklake `d8a1881e`, metadata version 1.0), PyIceberg 0.12.0
+with the `sql-sqlite` and `pyiceberg-core` extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through
+`uv run --with` in the scratchpad, with 11 DuckDB threads and the files in the page cache; nothing
+ran against S3 or Redshift, and the Python examples added to every document on 2026-09-19 ran under
+the same pinned versions.
 
 ## The SageMaker Unified Studio environment, as observed on 2026-09-19
 
@@ -508,18 +532,18 @@ added to every document on 2026-09-19 ran under the same pinned versions.
   connection, cluster or serverless workgroup.
 - Network: outbound HTTP goes through `proxy.awsds.internal:3128`; only lower-case `no_proxy` is
   set. `uv` reaches PyPI through the proxy but downloads Python only with
-  `UV_PYTHON_DOWNLOADS=automatic`. System Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0,
-  DuckDB 1.5.4, PyArrow 21.0.0 and redshift_connector 2.1.10 preinstalled.
+  `UV_PYTHON_DOWNLOADS=automatic`; `uv sync` needs it to fetch Python 3.13, the venv lands in `.venv`
+  (ignored), and `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored, which is harmless. System
+  Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0, DuckDB 1.5.4, PyArrow 21.0.0 and
+  redshift_connector 2.1.10 preinstalled.
 - `gh` is installed and authenticated as the user, and `git push` over HTTPS works through it.
-- `uv sync` needs `UV_PYTHON_DOWNLOADS=automatic` to fetch Python 3.13; the venv lands in `.venv`
-  (ignored). `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored, which is harmless.
 
 ## Questions the official documentation does not answer
 
 The documents mark these as pending the proof of concept. All of them need Redshift, which the
 project does not have yet; the S3 questions were answered on 2026-09-19.
 
-- Whether `COPY` from Parquet accepts a column list. `awswrangler` emits
+- Whether `COPY` from Parquet accepts a column list: `awswrangler` emits
   `COPY tabela (colunas) ... FORMAT AS PARQUET`, while the `COPY` reference describes the column list
   only for flat files.
 - The correspondence between Parquet physical types and Redshift columns in `COPY`, in particular
@@ -527,10 +551,11 @@ project does not have yet; the S3 questions were answered on 2026-09-19.
 - What `COPY` from Parquet does when a string exceeds the target `VARCHAR`: truncate or abort.
 - Whether Redshift Spectrum maps plain Parquet columns by name or by position.
 - The physical types `UNLOAD` writes for `TIMESTAMP` and `DECIMAL`, whether its columns are
-  required, and whether it writes minimum and maximum statistics. The three affect the `AddAction`
+  required, and whether it writes minimum and maximum statistics; the three affect the `AddAction`
   that registers `UNLOAD` files in the Delta log (`register_file` in `docs/delta.md`).
 - Whether `FILLRECORD` lets `COPY` from Parquet load older files that lack columns appended later
   to the schema, which both Delta and DuckLake produce on evolution.
-One gap is already understood and needs a decision rather than a test: `sqlalchemy-redshift` compiles
-`Text` as `TEXT`, which Redshift stores as `VARCHAR(256)`, so the `VARCHAR(65535)` of the contract
-needs `String(65535)` or a `@compiles(Text, "redshift")` rule.
+
+One gap needs a decision rather than a test: `sqlalchemy-redshift` compiles `Text` as `TEXT`, which
+Redshift stores as `VARCHAR(256)`, so the `VARCHAR(65535)` of the contract needs `String(65535)` or a
+`@compiles(Text, "redshift")` rule.
