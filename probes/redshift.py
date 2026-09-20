@@ -410,7 +410,7 @@ def apis(report: Report, target: Target) -> None:
     elif attached:
         report.note("RS-6", "papel IAM para COPY e UNLOAD", f"sem papel padrão; associados: {', '.join(attached)}; informe um deles em SERIALIZE_DB_REDSHIFT_IAM_ROLE, porque IAM_ROLE default não resolve")
     elif visible:
-        report.fail("RS-6", "papel IAM para COPY e UNLOAD", "nenhum papel associado ao cluster ou ao namespace: o COPY e o UNLOAD sobre o S3 não rodam até o administrador associar um")
+        report.note("RS-6", "papel IAM para COPY e UNLOAD", "nenhum papel associado ao cluster ou ao namespace: o COPY e o UNLOAD levam ACCESS_KEY_ID, SECRET_ACCESS_KEY e SESSION_TOKEN de quem chama, o caminho de examples/redshift_copy_unload.py, e RS-11 simula essa identidade")
     elif not missing:
         report.note("RS-6", "papel IAM para COPY e UNLOAD", "nenhum cluster ou workgroup visível: nada a ler")
     else:
@@ -652,6 +652,7 @@ def session(report: Report, target: Target) -> None:
     schema = target.schema
     schema_kind: str | None = None
     schema_database: str | None = None
+    used_share = False  # o USE trouxe o esquema do datashare para dentro da sessão
     if not schema:
         report.note("RS-16", "banco do esquema do projeto", "sem SERIALIZE_DB_REDSHIFT_SCHEMA")
     else:
@@ -686,6 +687,16 @@ def session(report: Report, target: Target) -> None:
                 report.line(f"SERIALIZE_DB_REDSHIFT_SHARE_DATABASE ausente; a leitura diz {schema_database}")
             report.value("REDSHIFT_TABLE_NAME", target.qualified("<tabela>"))
 
+            # USE troca o banco da sessão, e só dela: a partir daqui o nome em duas partes vale, e
+            # has_schema_privilege alcança o esquema, que passou a ser local à sessão
+            # (examples/redshift_copy_unload.py). Nada é criado, alterado nem apagado.
+            if schema_kind.lower() == "shared" and schema_database:
+                used = report.call(f"use {schema_database}", lambda: query(f"USE {schema_database}"), render=lambda _: "banco da sessão trocado")
+                if used is not None:
+                    used_share = True
+                    target.database = schema_database
+                    report.value("REDSHIFT_CURRENT_DATABASE", schema_database)
+
     # RS-17: escrever num banco de datashare exige o patch 186 (1.0.78890 no serverless, 1.0.78881 no
     # provisionado), isolamento de snapshot no banco que recebe a escrita e 64 slices ou mais no
     # consumidor. Sem um deles, o CREATE, o COPY e o INSERT da publicação são recusados.
@@ -706,13 +717,15 @@ def session(report: Report, target: Target) -> None:
         getattr(report, status)("RS-17", "escrita no banco do datashare", verdict)
 
     # RS-5 e RS-8: no esquema do projeto, USAGE e CREATE, e quantas tabelas já têm o prefixo da
-    # biblioteca. has_schema_privilege e svv_table_info só enxergam o banco local: num esquema de
-    # datashare quem concede é o produtor, e a lista de tabelas vem de svv_all_tables.
+    # biblioteca. has_schema_privilege e svv_table_info enxergam o banco da sessão: com o USE, o
+    # esquema do datashare passou a ser esse banco; sem ele, a lista vem de svv_all_tables e quem
+    # concede os privilégios é o produtor.
+    distant = bool(schema_kind) and schema_kind.lower() == "shared" and not used_share
     if not schema:
         report.note("RS-5", "privilégios no esquema", "sem SERIALIZE_DB_REDSHIFT_SCHEMA")
         report.note("RS-8", "tabelas com o prefixo da biblioteca no esquema", "sem SERIALIZE_DB_REDSHIFT_SCHEMA")
     else:
-        if schema_kind and schema_kind.lower() == "shared":
+        if distant:
             report.note(
                 "RS-5",
                 "privilégios no esquema",
@@ -749,7 +762,7 @@ def session(report: Report, target: Target) -> None:
             )
             names = [str(row[0]) for row in found[1]] if found else []
 
-        where = f"{schema_database}.{schema}" if schema_kind and schema_kind.lower() == "shared" else schema
+        where = f"{schema_database}.{schema}" if distant else schema
         if found is None:
             report.note("RS-8", "tabelas com o prefixo da biblioteca no esquema", f"não lidas: {report.last_reason}")
         else:
@@ -813,17 +826,41 @@ def copy_role(report: Report, target: Target) -> None:
     """Seção 5: ``RS-11``, se o papel padrão do ``COPY`` e do ``UNLOAD`` alcança a raiz S3 informada, pela simulação de política do IAM."""
     import boto3
 
-    report.h1("Papel do COPY e do UNLOAD sobre a raiz S3")
+    report.h1("Alcance do COPY e do UNLOAD sobre a raiz S3")
+
+    # RS-18: sem papel associado, o COPY leva as credenciais da sessão no texto do comando. Elas
+    # expiram, e um comando montado antes da renovação falha; a biblioteca as pede a cada comando.
+    frozen = report.call(
+        "boto3.Session().get_credentials().get_frozen_credentials()",
+        lambda: boto3.Session().get_credentials().get_frozen_credentials(),
+        render=lambda found: f"chave {found.access_key[:4]}…, token {'presente' if found.token else 'ausente'}",
+    )
+    if frozen is None:
+        report.fail("RS-18", "credenciais de quem chama", f"{report.last_reason}: sem elas o COPY e o UNLOAD só rodam com papel IAM associado")
+    elif not frozen.token:
+        report.note("RS-18", "credenciais de quem chama", "credenciais sem SESSION_TOKEN: o COPY dispensa a cláusula, e elas não expiram sozinhas")
+    else:
+        report.ok("RS-18", "credenciais de quem chama", "chave, segredo e SESSION_TOKEN presentes: o COPY e o UNLOAD os levam no texto do comando, que nunca vai para log")
     root, source = probelib.s3_root(sys.argv)
     if not root.startswith("s3://"):
         report.line(probelib.NO_ROOT)
-        report.note("RS-11", "papel do COPY sobre a raiz", probelib.NO_ROOT)
+        report.note("RS-11", "alcance do COPY sobre a raiz", probelib.NO_ROOT)
         return
     report.value("S3_ROOT", f"{root} (por {source})")
-    if not target.roles:
-        report.line("nenhum papel associado conhecido (RS-6): nada a simular")
-        report.note("RS-11", "papel do COPY sobre a raiz", "nenhum papel associado conhecido (RS-6): sem ele o COPY não alcança o S3, e a simulação não tem o que avaliar")
-        return
+    # Sem papel associado ao namespace, quem alcança o S3 é a identidade da sessão, cujas credenciais
+    # o COPY carrega no texto do comando: é ela que a simulação avalia.
+    principals = list(target.roles)
+    if not principals:
+        caller = report.call(
+            "sts.get_caller_identity()",
+            lambda: boto3.client("sts", config=short_config(5, 10, 1)).get_caller_identity(),
+            render=lambda found: found.get("Arn", ""),
+        )
+        if caller:
+            principals = [probelib.principal_arn(caller["Arn"])]
+        else:
+            report.note("RS-11", "alcance do COPY sobre a raiz", f"sem papel associado (RS-6) e sem identidade do STS ({report.last_reason}): nada a simular")
+            return
 
     # Uma simulação por papel: ListBucket no bucket, GetObject e PutObject sob a raiz.
     bucket, _, prefix = root.removeprefix("s3://").partition("/")
@@ -833,20 +870,20 @@ def copy_role(report: Report, target: Target) -> None:
     def render_decisions(found: dict) -> str:
         return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])
 
-    for role in target.roles:
+    for role in principals:
         found = report.call(
             f"iam.simulate_principal_policy({role}: ListBucket, GetObject, PutObject em {root})",
             lambda r=role: iam.simulate_principal_policy(PolicySourceArn=r, ActionNames=COPY_ACTIONS, ResourceArns=resources),
             render=render_decisions,
         )
         if found is None:
-            report.note("RS-11", "papel do COPY sobre a raiz", f"{role}: simulação {report.last_reason}; o primeiro COPY da suíte Redshift é o teste")
+            report.note("RS-11", "alcance do COPY sobre a raiz", f"{role}: simulação {report.last_reason}; o primeiro COPY da suíte Redshift é o teste")
             continue
         denied = [item["EvalActionName"] for item in found.get("EvaluationResults", []) if item["EvalDecision"] != "allowed"]
         if denied:
-            report.fail("RS-11", "papel do COPY sobre a raiz", f"{role}: {', '.join(denied)} negadas sob {root}")
+            report.fail("RS-11", "alcance do COPY sobre a raiz", f"{role}: {', '.join(denied)} negadas sob {root}")
         else:
-            report.ok("RS-11", "papel do COPY sobre a raiz", f"{role}: ListBucket, GetObject e PutObject sob {root}")
+            report.ok("RS-11", "alcance do COPY sobre a raiz", f"{role}: ListBucket, GetObject e PutObject sob {root}")
 
 
 # ---------------------------------------------------------------------------------------------------------------

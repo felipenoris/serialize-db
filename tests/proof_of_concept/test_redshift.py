@@ -4,12 +4,14 @@ A suíte cria tabelas ``serialize_db_poc_<id>_*`` no esquema de ``SERIALIZE_DB_T
 e arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``; sem uma das duas é pulada, e com elas a falta de
 conexão é falha. A conexão é a de ``examples/redshift_native.py``, o caminho executado no ambiente
 alvo: endereço e credencial temporária do workgroup serverless. Com
-``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE``, o esquema vem de um datashare, toda tabela é citada por
-nome em três partes e o ``COPY`` leva ``COMPUPDATE OFF``, a única forma que a escrita num datashare
-aceita.
+``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE``, cada conexão roda ``USE <banco>`` e as tabelas são citadas
+por ``esquema.tabela``, como em ``examples/redshift_copy_unload.py``; o nome em três partes fica
+para quem está conectado a outro banco, como a Data API. O ``COPY`` e o ``UNLOAD`` levam o papel IAM
+configurado ou, sem ele, as credenciais da sessão ``boto3``, porque o namespace do ambiente alvo não
+tem papel associado.
 
 Os testes exercitam o ``redshift_connector`` (sessão, ``paramstyle`` nomeado), o banco do esquema e
-o ida e volta pelo nome em três partes, o DDL compilado pelo SQLAlchemy, o ``COPY ... MANIFEST`` de
+o ida e volta depois do ``USE``, o DDL compilado pelo SQLAlchemy, o ``COPY ... MANIFEST`` de
 arquivos gravados pelo delta-rs (o ``DECIMAL`` em ``INT64``, o ``timestamp_ntz``, a lista de colunas
 e o ``FILLRECORD``), o ``VARCHAR`` excedido, o ``SUPER``, o ``UNLOAD ... PARTITION BY`` registrado no
 Delta e lido pelo DuckDB, a Data API pelo ciclo de ``examples/redshift_data_api.py``, e o ``COPY`` e
@@ -164,9 +166,15 @@ def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession
     assert table.column("dia")[4].as_py() == dt.date(2026, 8, 5)
 
 
-def test_schema_location_and_three_part_name(redshift_session: RedshiftSession) -> None:
-    """Em que banco está o esquema do projeto, o que a escrita num datashare exige, e o ida e volta pelo nome em três partes."""
+def test_schema_location_and_use_of_the_share_database(redshift_session: RedshiftSession) -> None:
+    """Em que banco está o esquema do projeto, o que o ``USE`` mudou na sessão, e o ida e volta por ``esquema.tabela``."""
     session = redshift_session
+
+    # 0. O USE de connect_redshift trocou o banco da sessão: é o que faz o nome em duas partes valer.
+    current = session.execute("select current_database()")[0][0]
+    record("redshift.current_database", current)
+    if session.share_database:
+        assert current == session.share_database, f"USE {session.share_database} não trocou o banco: {current}"
 
     # 1. Os bancos que a sessão enxerga: o tipo diz local ou shared, e o isolamento precisa ser de
     # snapshot no banco que recebe escrita vinda de outro warehouse.
@@ -183,12 +191,13 @@ def test_schema_location_and_three_part_name(redshift_session: RedshiftSession) 
     record("redshift.slices", reading(lambda: session.execute("select count(*) from stv_slices")[0][0]))
 
     # 4. O ida e volta pelo nome que a biblioteca escreve: criar, inserir e ler.
-    name = session.table("tres_partes")
+    name = session.table("nome_da_sessao")
     session.execute(f"CREATE TABLE {session.qualified(name)} (id BIGINT NOT NULL, texto VARCHAR(20))")
     session.execute(f"INSERT INTO {session.qualified(name)} VALUES (1, 'a')")
     row = session.execute(f"select id, texto from {session.qualified(name)}")[0]
     assert (row[0], row[1]) == (1, "a")
-    record("redshift.three_part_name", session.qualified(name))
+    record("redshift.table_name", session.qualified(name))
+    record("redshift.fully_qualified_name", session.fully_qualified(name))
 
 
 def test_sqlalchemy_ddl_creates_table(redshift_session: RedshiftSession) -> None:
@@ -229,7 +238,7 @@ def test_copy_manifest_from_delta_files(redshift_session: RedshiftSession, s3_lo
     for month in MONTHS:
         manifest = write_manifest(s3_location, f"redshift/manifest_{month}.json", table, month)
         session.execute(f"TRUNCATE {session.qualified(staging)}")
-        session.execute(f"COPY {session.qualified(staging)} FROM '{manifest}' {session.iam_role_clause()} FORMAT AS PARQUET MANIFEST{session.copy_options()}")
+        session.execute(f"COPY {session.qualified(staging)} FROM '{manifest}' {session.credentials_clause()} FORMAT AS PARQUET MANIFEST")
         session.execute(f"INSERT INTO {session.qualified(target)} SELECT s.*, '{month}' FROM {session.qualified(staging)} s")
 
     # 4. Contagem, soma do DECIMAL e o timestamp mínimo batem com a amostra.
@@ -252,13 +261,12 @@ def test_copy_column_list_and_fillrecord(redshift_session: RedshiftSession, s3_l
     target = session.table("evoluida")
     session.execute(ddl(contract_table(target, session.schema_prefix(), extra=True)))
     qualified = session.qualified(target)
-    role = session.iam_role_clause()
+    credentials = session.credentials_clause()
 
-    options = session.copy_options()
     attempts = {
-        "positional": f"COPY {qualified} FROM '{manifest}' {role} FORMAT AS PARQUET MANIFEST{options}",
-        "column_list": f"COPY {qualified} (id_operacao, data_ref, id_cliente, valor, descricao) FROM '{manifest}' {role} FORMAT AS PARQUET MANIFEST{options}",
-        "fillrecord": f"COPY {qualified} FROM '{manifest}' {role} FORMAT AS PARQUET MANIFEST FILLRECORD{options}",
+        "positional": f"COPY {qualified} FROM '{manifest}' {credentials} FORMAT AS PARQUET MANIFEST",
+        "column_list": f"COPY {qualified} (id_operacao, data_ref, id_cliente, valor, descricao) FROM '{manifest}' {credentials} FORMAT AS PARQUET MANIFEST",
+        "fillrecord": f"COPY {qualified} FROM '{manifest}' {credentials} FORMAT AS PARQUET MANIFEST FILLRECORD",
     }
 
     results = {}
@@ -284,7 +292,7 @@ def test_copy_varchar_overflow(redshift_session: RedshiftSession, s3_location: S
 
     target = session.table("texto_longo")
     session.execute(ddl(contract_table(target, session.schema_prefix())))
-    result = outcome(lambda: session.execute(f"COPY {session.qualified(target)} FROM '{manifest}' {session.iam_role_clause()} FORMAT AS PARQUET MANIFEST{session.copy_options()}"))
+    result = outcome(lambda: session.execute(f"COPY {session.qualified(target)} FROM '{manifest}' {session.credentials_clause()} FORMAT AS PARQUET MANIFEST"))
 
     if result == "ok":
         result = f"ok: comprimento gravado = {session.execute(f'select max(len(descricao)) from {session.qualified(target)}')[0][0]}"
@@ -338,15 +346,16 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     select = f"select id_operacao, data_ref, id_cliente, valor, descricao, mes from {session.qualified(name)}"
     unload = outcome(
         lambda: session.execute(
-            f"UNLOAD ('{select}') TO '{destination}/' {session.iam_role_clause()} FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE ALLOWOVERWRITE"
+            f"UNLOAD ('{select}') TO '{destination}/' {session.credentials_clause()} FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE ALLOWOVERWRITE"
         )
     )
     record("redshift.unload.partition_by", unload)
 
-    # O UNLOAD não está entre os comandos que a documentação lista para a escrita num datashare: com o
-    # esquema vindo de um datashare, a recusa é a resposta da pergunta, e a exportação sai pelo Delta.
+    # O UNLOAD simples de uma tabela do datashare passou no ambiente alvo
+    # (examples/redshift_copy_unload.py); o que este teste acrescenta é PARTITION BY MANIFEST VERBOSE,
+    # que a documentação não lista. A recusa dele é a resposta da pergunta, não defeito da suíte.
     if unload != "ok" and session.share_database:
-        pytest.skip(f"UNLOAD recusado no datashare {session.share_database}: {unload}")
+        pytest.skip(f"UNLOAD ... PARTITION BY recusado no datashare {session.share_database}: {unload}")
     assert unload == "ok", unload
 
     s3 = boto3.client("s3")
@@ -417,7 +426,8 @@ def test_data_api_runs_the_statement_and_pages_the_result(redshift_session: Reds
     client = boto3.client("redshift-data", region_name=os.environ.get("AWS_REGION") or boto3.Session().region_name)
 
     # 1. Dispara: a chamada volta na hora, com o identificador do statement.
-    statement = client.execute_statement(Sql=f"select id, valor, texto from {session.qualified(name)} order by id", **parameters)["Id"]
+    # A Data API abre a sessão dela no banco de Database, sem o USE desta conexão: nome em três partes.
+    statement = client.execute_statement(Sql=f"select id, valor, texto from {session.fully_qualified(name)} order by id", **parameters)["Id"]
 
     # 2. Espera o estado final; sem espera não há resultado para pedir.
     deadline = time.perf_counter() + 60
@@ -480,7 +490,7 @@ def test_parallel_copy_and_unload_on_two_connections(redshift_session: RedshiftS
         counts = list(
             pool.map(
                 lambda k: on_own_connection(
-                    f"COPY {session.qualified(targets[k])} FROM '{manifests[k]}' {session.iam_role_clause()} FORMAT AS PARQUET MANIFEST{session.copy_options()}",
+                    f"COPY {session.qualified(targets[k])} FROM '{manifests[k]}' {session.credentials_clause()} FORMAT AS PARQUET MANIFEST",
                     session.qualified(targets[k]),
                 ),
                 range(2),
@@ -496,7 +506,7 @@ def test_parallel_copy_and_unload_on_two_connections(redshift_session: RedshiftS
         list(
             pool.map(
                 lambda k: on_own_connection(
-                    f"UNLOAD ('select * from {session.qualified(targets[k])}') TO '{destinations[k]}/' {session.iam_role_clause()} FORMAT PARQUET"
+                    f"UNLOAD ('select * from {session.qualified(targets[k])}') TO '{destinations[k]}/' {session.credentials_clause()} FORMAT PARQUET"
                 ),
                 range(2),
             )

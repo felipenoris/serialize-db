@@ -406,15 +406,6 @@ def inventory(report: Report, client, bucket: str, prefix: str) -> dict[str, Any
 # Seção 4: as permissões do papel
 
 
-def principal_arn(caller_arn: str) -> str:
-    """O ARN que a simulação de política aceita: o papel por trás de um assumed-role, ou o próprio usuário."""
-    if ":assumed-role/" in caller_arn:
-        account = caller_arn.split(":")[4]
-        role = caller_arn.split(":assumed-role/")[1].split("/")[0]
-        return f"arn:aws:iam::{account}:role/{role}"
-    return caller_arn
-
-
 def decisions(found: dict) -> str:
     """A tabela ação, decisão de uma simulação de política."""
     return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])
@@ -436,7 +427,7 @@ def permissions(report: Report, bucket: str, prefix: str, resolved: str | None, 
     if not caller:
         report.note("BK-8", "permissões sob a raiz", "identidade não lida: sem o STS não há simulação; a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) é o teste")
         return
-    principal = principal_arn(caller["Arn"])
+    principal = probelib.principal_arn(caller["Arn"])
     report.value("PRINCIPAL", principal)
 
     # Uma simulação para o bucket (ListBucket) e outra para os objetos sob a raiz.

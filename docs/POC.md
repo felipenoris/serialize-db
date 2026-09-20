@@ -147,14 +147,15 @@ Consequências no plano, nesta mesma unidade de trabalho:
   ([`sqlalchemy.md`](sqlalchemy.md)).
 - A escrita num banco de datashare é restrita: `COPY` só sem `COMPUPDATE`, escrita num banco só por
   transação, sem `VIEW`, e `UNLOAD` fora da lista de comandos suportados ([`redshift.md`](redshift.md)).
-  A [etapa 8](PLAN-STAGE-8.md) passou a emitir `COMPUPDATE OFF` e a abrir a transação com `BEGIN`
-  explícito.
+  A [etapa 8](PLAN-STAGE-8.md) abre a transação com `BEGIN` explícito. A leitura de "`COPY` sem
+  `COMPUPDATE`" como "emitir `COMPUPDATE OFF`" durou até o experimento de `COPY` e `UNLOAD` da seção
+  adiante, que passou sem cláusula alguma.
 - `probes/redshift.py` ganhou `RS-15` (credencial temporária), `RS-16` (o banco do esquema, local ou
   de datashare) e `RS-17` (os três requisitos da escrita num datashare: patch 186, isolamento de
   snapshot e 64 slices), e `RS-10` passou a rodar o ciclo completo da Data API com `select 1`.
-- A suíte `tests/proof_of_concept/test_redshift.py` conecta pelo caminho testado, cita as tabelas
-  por três partes, acrescenta `COMPUPDATE OFF` a cada `COPY` e ganhou um teste do banco do esquema e
-  um do ciclo da Data API.
+- A suíte `tests/proof_of_concept/test_redshift.py` conecta pelo caminho testado e ganhou um teste
+  do banco do esquema e um do ciclo da Data API. O nome em três partes e o `COMPUPDATE OFF` que ela
+  passou a emitir cederam lugar, na seção adiante, ao `USE` e ao `COPY` sem cláusula.
 
 O que os exemplos não respondem, e o probe e a suíte respondem na primeira execução: se o produtor
 concedeu escrita no datashare, se o consumidor atende aos três requisitos, se o `UNLOAD` de uma
@@ -224,6 +225,46 @@ recusada na própria sessão por `sys_load_error_detail`, nunca por `stl_load_er
   `-- SEM RESULTADO` e as mantém fora da contagem.
 - `RS-6` dizia só "nenhum papel padrão". Passou a separar o papel padrão, que `IAM_ROLE default`
   usa, do papel apenas associado, que serve por ARN, do caso do ambiente alvo, nenhum dos dois.
+
+## O que o experimento de `COPY` e `UNLOAD` no datashare mostrou
+
+Em 2026-09-20 o usuário executou no ambiente alvo um terceiro script, guardado em
+[`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py): ele conecta pela
+credencial temporária, troca o banco da sessão, cria `cad_contas` no esquema do datashare, carrega
+por `COPY` a pasta Parquet da base de origem, lê o resultado e descarrega por `UNLOAD`. Passou
+inteiro, e com isso fecha três questões que estavam abertas.
+
+**O produtor concedeu escrita.** `CREATE TABLE`, `COPY`, `SELECT` e `UNLOAD` passaram em
+`sbx_aco_decon`. A pergunta sobre o `GRANT` do produtor sai de
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) respondida, e com ela a dúvida sobre os requisitos do
+consumidor: o patch atende, e o isolamento e os slices, que a sessão não consegue ler, não
+impediram a escrita.
+
+**`USE <banco>` troca o banco da sessão.** Depois dele, `esquema.tabela` basta, e foi assim que o
+`CREATE`, o `COPY` e o `UNLOAD` rodaram. A restrição documentada, de que só o nome em três partes
+vale, se aplica a quem não está conectado ao banco compartilhado. O nome em três partes continua
+valendo para quem abre a sessão em outro banco, como a Data API. A [etapa 5](PLAN-STAGE-5.md)
+passou a rodar o `USE` em `connect`, e `qualified` voltou a duas partes.
+
+**O `COPY` e o `UNLOAD` levam as credenciais de quem chama**, por `ACCESS_KEY_ID`,
+`SECRET_ACCESS_KEY` e `SESSION_TOKEN`, em vez de `IAM_ROLE`. Isso destrava o ambiente alvo sem
+depender de ninguém: o namespace não tem papel IAM associado, e sem papel associado nem um ARN
+explícito funciona, mas a identidade da sessão alcança o S3. O bloqueio que `RS-6` reprovava deixa
+de ser bloqueio, e a checagem virou `note`; `RS-11` passou a simular a identidade de quem chama
+quando não há papel associado, e `RS-18` lê se essas credenciais existem e se têm `SESSION_TOKEN`.
+Como elas expiram em cerca de uma hora, a cláusula é montada por comando, e como o texto do comando
+carrega segredo, ele não entra em log, em relatório nem em arquivo: `tests/conftest.py` mascara toda
+cláusula de credencial antes de gravar o relatório da sessão.
+
+**O `COPY` sem cláusula `COMPUPDATE` é o que funciona.** A documentação lista "`COPY` sem
+`COMPUPDATE`" entre os comandos que a escrita num datashare aceita, e eu tinha lido isso como
+"emitir `COMPUPDATE OFF`". O comando que passou não tem cláusula alguma, e a suíte e as etapas 5 e 8
+passaram a emiti-lo assim. Se `COMPUPDATE OFF` explícito também é aceito, ninguém testou.
+
+Duas leituras menores que o script deixou: o `COPY` lê um prefixo de pasta Parquet direto, sem
+manifesto, e converte `int32` da origem para a coluna `BIGINT` do contrato; e o DDL de `cad_contas`
+gerado do esquema da base de origem ([`../tests/source_db_projetado.py`](../tests/source_db_projetado.py))
+foi aceito como está, com chave primária e unicidade informativas e `DISTSTYLE ALL`.
 
 ## O que a leitura da base de origem mostrou
 
