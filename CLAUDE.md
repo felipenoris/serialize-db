@@ -167,6 +167,62 @@ the differences from PostgreSQL, supported types with `DECIMAL` and JSON, DDL,
 SQLAlchemy support, references. `docs/delta.md` adds schema evolution, transactions, the pipeline,
 DuckDB and Redshift access, and relocation.
 
+## Lessons learned
+
+Process lessons from the sessions so far, kept so the same mistake is not paid twice; the
+technical facts stay in the list below and in the study suites. A lesson is added at the end of a
+unit of work when a mistake cost a retry or a verification changed the plan, with its date.
+
+- **A documented behavior becomes a test assertion only after a probe reproduces it**
+  (2026-09-19). Three claims taken from `docs/duckdb.md` and `docs/delta.md` failed as assertions:
+  the DuckDB Arrow reader returns zero rows after another command instead of raising;
+  `read_parquet` on a single file under `mes=.../` adds `mes` by Hive auto-detection, so a file's
+  real columns come from `parquet_schema`; the `DECIMAL` inferred from a pandas column came from all
+  the values, not a sample. Run a ten-line probe first, assert the observed value, and record the
+  rest in the session report.
+- **A claim of "writes nothing" or "needs nothing" is verified in a stripped environment**
+  (2026-09-19). The `LOAD` of a known DuckDB extension downloaded it into `~/.duckdb`, found only
+  by running with an empty `HOME`; the same kind of run found the dangling `.venv/bin/python`.
+  Strip `AWS_*` and the proxy variables, point proxies at a closed port, give the subprocess an
+  empty `HOME`.
+- **A script that resolves paths by pattern runs on both platforms before it is trusted**
+  (2026-09-19). `prepare_offline.sh` had a Linux-only glob and left the macOS venv broken without
+  an error; now it stops when the pattern matches nothing. macOS has no `timeout` command: time a
+  subprocess from Python.
+- **Nothing unpinned enters the project venv** (2026-09-19). Installing `sagemaker-studio`
+  downgraded duckdb to 1.5.1. Try a package in a scratch venv, read the versions after any install
+  (`probes/space.py` SP-9 does it), and restore with `uv sync --group dev`.
+- **The pytest layout has no `__init__.py`.** The root `tests/conftest.py` is imported as
+  `conftest` and its folder lands on `sys.path`, so `from conftest import ...` and
+  `from delta import ...` work inside `tests/proof_of_concept/`; test-module basenames must stay
+  unique across `tests/` and `tests/proof_of_concept/` (a future `tests/test_local.py` would collide
+  with the proof of concept).
+- **Before a commit**: `uv run pytest` with no variables and again with
+  `SERIALIZE_DB_TEST_LOCAL_ROOT` set to the scratchpad, both green; `py_compile` on an edited probe;
+  `git status` clean of stray files.
+- **Git and shell traps.** After `git mv`, `git add` of the old path aborts a `&&` chain; add the
+  new path. In zsh, `--include=*.md` needs quotes. A Bash result above about 50 KB is saved to a
+  file instead of shown; read a long document in `sed -n` ranges.
+- **A subprocess probe prints its own one-line error.** A DuckDB error inside a subprocess showed
+  only `^`; the probe catches the exception and prints `Type: message` to stderr. Probe code held
+  in a Python string is a raw string, or `\[` raises a `SyntaxWarning`. "The service answered with
+  an error" and "no response" are different verdicts: only the second means the network needs
+  maintenance.
+- **Restructuring a document is a scripted splice followed by checks** (2026-09-19). Split on
+  heading markers with a Python script, then list the headings, grep for references to the removed
+  sections and for stale identifiers across the repository, and test every `](...md)` link target.
+  Trimming this file used the same idea: list the backticked spans and numbers of the old text
+  missing from the new one and review each; a fact removed is a defect.
+- **A change the user did not ask for is named in the report.** Moving the primitives out of
+  `docs/serialize-db.md` followed from the plan request and was flagged as such; the `Text` rule
+  proposed in `docs/PLAN.md` is marked as awaiting the user's confirmation.
+- **API details learned by running live in `tests/proof_of_concept/`, not here**:
+  `schema_mode="merge"` for an append with fewer columns than the evolved table, the normalized
+  `CHECK` expression, `filters=` instead of the deprecated `partitions=`, `pa.schema(dt.schema())`
+  through the PyCapsule interface, `partition.mes` and `size_bytes` in
+  `get_add_actions(flatten=True)`, SUPER binds rendered as `json_parse(%s)`. Read the study suite
+  of a library before writing code against its API.
+
 ## What the documents establish
 
 Each fact is detailed in the file named at the end of its line.
