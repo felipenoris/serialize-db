@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import probelib  # noqa: E402
 from probelib import Report, describe_error, dns_rows, error_code, pretty, region, short_config, tabulate  # noqa: E402
 
 # Limites das listagens: uma raiz com o banco inteiro pode ter centenas de milhares de objetos.
@@ -554,9 +555,9 @@ def policy_and_uploads(report: Report, client, bucket: str, prefix: str) -> None
 
 
 def main(argv: list[str]) -> int:
-    root = (argv[1] if len(argv) > 1 else os.environ.get("SERIALIZE_DB_TEST_S3_ROOT", "")).rstrip("/")
+    root, source = probelib.s3_root(argv)
     if not root.startswith("s3://"):
-        print("uso: .venv/bin/python probes/bucket.py s3://bucket/prefixo", file=sys.stderr)
+        print(f"uso: .venv/bin/python probes/bucket.py s3://bucket/prefixo\n{probelib.NO_ROOT}", file=sys.stderr)
         return 2
     import boto3
 

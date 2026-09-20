@@ -167,6 +167,7 @@ research appends to the matching group.
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. Its header is the operating procedure: how to run it, the proxy variables and the pack and unpack commands, which moved out of `README.md` on 2026-09-20. The extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`, the probes' own function, because DuckDB refuses an address with the credentials inside it. |
 | `examples/` | The two Redshift connection scripts the user ran in the target environment on 2026-09-20, kept as run: `redshift_native.py` (`GetWorkgroup` for the endpoint, `GetCredentials` for a temporary user and password, `redshift_connector.connect`) and `redshift_data_api.py` (the async Data API cycle). They fix the target: region `sa-east-1`, serverless workgroup `controladoria-wg`, connection database `dev`, project schema `sbx_aco_decon` in the datashare database `datalake_rw_shared`, cited by the three-part name. Only what ran in the target goes in this folder, with its literal values; the probe, the suite and stage 5 repeat these calls. |
 | `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`, which details each check: `space.py` (credentials and expiry, region, project connections, network, machine with temp space, open-file limit and the `~/shared` mount by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` by presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (settings, lifecycle, inventory with each Delta table's files, commits and last object, the S3 suite's leftover sessions `BK-13`, non-current versions and delete markers `BK-14`, versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM simulation or by what the run proved, KMS key, bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict, own format; delta-rs as found and as the suite with `NO_PROXY` exported; DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection parsed as a dict, JDBC URL and secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, the configured workgroup read directly by `GetWorkgroup`, VPC endpoints of the Redshift APIs `RS-14`, the full Data API cycle with `select 1` `RS-10`, the temporary workgroup credential `RS-15`, the database holding the project schema, local or datashare `RS-16`, the three datashare-write requirements `RS-17`, session privileges with a branch for a shared schema, settings, load-error views, external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), `parquet_source.py` (the initial load's source base, one folder per table, taking the root as an argument: the table folders and the non-Parquet files, per table the files, bytes, rows, partitions and how many distinct schemas, the majority schema with Arrow type, nullability, physical and logical type and `field_id`, the schema divergences between files column by column with every divergent file named, the partition columns with their values and whether they are also inside the files, per column the rows, nulls, minimum, maximum and distinct summed from the footers, the row groups, compression, encoding, writer and footer metadata, and with `--sample N` the cardinality and text length the footer does not hold; it reads the footer of every file of every partition and never a data page without `--sample`), over `probelib.py`: DNS, TCP and internet results are readings, never failed calls, and a failed call leaves `report.last_reason` for the check that interprets it; `duckdb_proxy` splits the proxy address from the credentials for every DuckDB session (`prepare_offline.sh` uses it too) and `hide_credentials` keeps the embedded password out of a report meant to be pasted into the conversation. `sagemaker-studio` stays out of the project (it drags unpinned `deltalake`, `duckdb` and `pandas`; a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. Each probe is one function per report section with a docstring naming its checks, a commented block per check and `render_*` helpers; `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
+| `docs/readings/` | The probe reports that back a statement in `docs/POC.md`, kept as they came out, indexed by `docs/readings/README.md`: the two target-environment Redshift readings of 2026-09-20 (20:37 and 20:43). `probes/output/` stays out of git. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -296,6 +297,18 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   previous library's `schema.json`, the SQLAlchemy reflection of the source database, which also
   lacked the model's composite foreign keys; one reply from the user closed two open questions.
   Ask for the metadata beside the data before listing hypotheses about it.
+- **A probe's verdict is a hypothesis until the environment answers, and one repetition separates
+  the transient from the permanent** (2026-09-20). The first Redshift run in the target failed
+  `RS-17` on an isolation level of `UNKNOWN`, which is the consumer not seeing the producer's
+  database, not serializable isolation; it declared `svv_external_schemas` unreadable when a 10 s
+  read timeout had actually killed the socket, and every later query inherited
+  `cannot read from timed out object`; and it counted five expected absences (the package missing
+  outside a space, system views denied to a regular user) as failed calls, which is what the exit
+  code is for. The repetition six minutes later answered `sys_load_error_detail` in 1.5 s and
+  `svv_external_schemas` too, which turned "the administrator will have to read the load errors"
+  into "the view is readable". Read a value the reading cannot produce as unread, treat an expected
+  absence as a reading (`Report.call(expected=True)`), stop the section when the connection dies,
+  and run the probe twice before writing a consequence into a plan.
 - **A script the user ran in the target outranks a plan written without one** (2026-09-20). Two
   connection scripts from the target replaced the plan's default (password) with the workgroup's
   temporary credential, turned every table name into three parts, added `COMPUPDATE OFF` to every
@@ -552,6 +565,18 @@ Each fact is detailed in the file named at the end of its line.
   supported nor the unsupported list. `has_schema_privilege` and `svv_table_info` see only the local
   database: `svv_all_schemas`, `svv_all_tables` and `svv_redshift_databases` cross them.
   `docs/redshift.md`, `docs/OPEN_QUESTIONS.md`
+- The target's Redshift, read on 2026-09-20 (`docs/readings/`): workgroup `controladoria-wg`,
+  namespace `controladoria-ns`, account 138071776059, base capacity 8, no provisioned cluster; the
+  three Redshift APIs and the workgroup host resolve to private IPs, so the temporary credential and
+  the Data API work without internet; version `1.0.436211`; `datalake_rw_shared` is `shared` from the
+  datashare `controladoria_rw_datashare` (producer account 390403891846) with isolation `UNKNOWN`,
+  and `sbx_aco_decon` exists only there. The namespace has no IAM role, default or attached, so
+  `COPY` and `UNLOAD` over S3 cannot run until an administrator attaches one — the project's one
+  blocker. `has_database_privilege(dev, CREATE)` is false and `TEMP` true, so the execution sandbox
+  is either a temporary table or the datashare itself. `stv_slices` and `stl_load_errors` are denied
+  to a regular user (42501) while `sys_load_error_detail` answers; `pg_settings` on serverless lists
+  neither `timezone` nor `enable_case_sensitive_identifier`, which `SHOW` returns. `docs/POC.md`,
+  `docs/OPEN_QUESTIONS.md`
 - A SQLAlchemy schema with a dot is one quoted identifier (`"db.schema".tabela`);
   `MetaData(schema=quoted_name("db.schema", False))` renders the three-part name in DDL, `select`
   and `insert` (2026-09-20, Redshift dialect). `docs/sqlalchemy.md`,
@@ -618,7 +643,14 @@ prefix: the commit keys `serialize_db_execution_id`, `serialize_db_input_version
 `serialize_db_execution_id`, and the Redshift control table
 `serialize_db_publications(table_name, delta_version, execution_id, published_at)`, whose columns
 stay unprefixed because the table name is the namespace. `snapshot` is an accepted loanword in
-prose. Data tables and columns stay Portuguese, including the `id_execucao` column of the `Rastreio`
+prose. Every variable the project requires starts with `SERIALIZE_DB_` (`SERIALIZE_DB_ROOT` and the
+library's own, `SERIALIZE_DB_REDSHIFT_*`, `SERIALIZE_DB_TEST_*`, `SERIALIZE_DB_DUCKDB_EXTENSIONS`);
+the unprefixed ones the probes and the suites read are third-party standards (`AWS_REGION`,
+`AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL*`, `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, the proxy
+variables in both spellings), read by the libraries that define them, and renaming them would break
+those libraries. The S3 root a probe photographs comes from `probelib.s3_root`: the argument, then
+`SERIALIZE_DB_ROOT`, then `SERIALIZE_DB_TEST_S3_ROOT` (user question of 2026-09-20; `S3_TMP_PATH` is
+the space's, not the project's, and nothing in the repository reads it). Data tables and columns stay Portuguese, including the `id_execucao` column of the `Rastreio`
 mixin in `docs/sqlalchemy.md`. SQL placeholders in prose (`COPY (consulta) TO ...`) and staging
 table names (`staging_<tabela>`) count as database identifiers.
 
@@ -659,7 +691,7 @@ over `source_db_projetado.py`, the fictitious source base of 2026-09-20), `tests
 `tests/test_probes.py` and `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
 both storages, the study suites (commented step by step as learning material, listed per stage in
 `docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
-last-run counts (100 pass and 59 skip with no variable, 138 and 21 with the local root, 2026-09-20):
+last-run counts (102 pass and 59 skip with no variable, 140 and 21 with the local root, 2026-09-20):
 the `tests/` row of the repository table in `docs/CURRENT_STATE.md` and `README.md`. The 11 s
 listing failure behind a silent proxy is in `README.md`, the `autoinstall_known_extensions` rule in the
 lessons above; `test_delta_rs_credential_chain` runs five variants.
