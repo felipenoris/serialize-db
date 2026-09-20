@@ -282,6 +282,7 @@ Documentação:
 - <https://duckdb.org/docs/current/guides/python/import_arrow.html>
 - <https://duckdb.org/docs/current/connect/concurrency.html>
 - <https://duckdb.org/docs/current/core_extensions/aws.html>
+- <https://duckdb.org/docs/current/core_extensions/httpfs/https.html>
 - <https://duckdb.org/docs/current/core_extensions/iceberg/overview.html>
 - <https://duckdb.org/docs/current/core_extensions/iceberg/catalogs.html>
 - <https://duckdb.org/docs/current/core_extensions/iceberg/writing_to_iceberg.html>

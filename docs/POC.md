@@ -184,3 +184,29 @@ coluna de data de que deriva, e o vocabulário de mês do plano virou partição
 inconsistências da base de desenvolvimento são ignoradas, e a base fictícia é consistente, com a
 relação N×N de `rel_contrato_operacao` e `fator_rateio` somando 1 por operação. A memória por
 partição de `cad_lancamentos` continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que o proxy com autenticação mostrou
+
+Em 2026-09-20, `prepare_offline.sh` parou na instalação das extensões do DuckDB, na rede
+corporativa do usuário, com `InvalidInputException: Failed to parse http_proxy
+'http://<usuário>:<senha>@proxy01.bndes.net:8080' into a host and port`. Uma sonda no scratchpad
+com DuckDB 1.5.5 (macOS arm64, um proxy de mentira em `127.0.0.1` que registra o pedido e responde
+407) mediu o comportamento:
+
+- O DuckDB tem três configurações de proxy, `http_proxy`, `http_proxy_username` e
+  `http_proxy_password`, e nenhuma equivalente a `NO_PROXY`. A descrição de `http_proxy` em
+  `duckdb_settings()` é "HTTP proxy host (defaults to the HTTP_PROXY environment variable when
+  unset)": só a grafia maiúscula é lida, e a minúscula sozinha não tem efeito nenhum.
+- O valor lido do ambiente não aparece em `duckdb_settings()`, que mostra `''`; ele é interpretado
+  na hora do pedido HTTP, e é aí que o endereço com credenciais embutidas é recusado.
+- `SET http_proxy` sobrepõe a variável de ambiente e aceita `host:porta` e `http://host:porta`, as
+  duas formas com o mesmo resultado. Com `http_proxy_username` e `http_proxy_password`, o pedido
+  chega ao proxy com `Proxy-Authorization: Basic` sobre `usuário:senha` sem URL-encode.
+
+Por isso o bloco das extensões de `prepare_offline.sh` separa o endereço das credenciais: tira o
+usuário e a senha do endereço, lê-os das variáveis `username` e `password` e, sem elas, usa os
+embutidos em `HTTP_PROXY` com URL-decode. As seis variantes exercidas na sonda (credenciais nas
+variáveis, só embutidas, ausentes, endereço sem esquema, endereço sem host e ambiente sem proxy)
+deram o pedido esperado, e a execução do script sem proxy instalou `httpfs`, `delta` e `aws`. O
+procedimento de uso, as variáveis e os comandos de empacotar e extrair passaram para o cabeçalho do
+script, e a seção "Ambiente sem internet" do `README.md` aponta para ele.

@@ -170,14 +170,10 @@ biblioteca, as credenciais do `boto3` em `storage_options`, funciona.
 ## Ambiente sem internet
 
 O ambiente de destino não instala nada: a pasta do projeto é preparada num computador com internet,
-da mesma plataforma (Linux x86_64), e copiada inteira. Em outra plataforma o script roda do mesmo
-jeito e deixa a pasta pronta para uso local, mas ela não serve ao destino.
-
-No computador com internet, dentro da pasta do projeto:
-
-```
-./prepare_offline.sh
-```
+da mesma plataforma (Linux x86_64), por `./prepare_offline.sh`, e copiada inteira. Em outra
+plataforma o script roda do mesmo jeito e deixa a pasta pronta para uso local, mas ela não serve ao
+destino. O cabeçalho de `prepare_offline.sh` traz o procedimento: como rodá-lo, as variáveis de
+ambiente do proxy e os comandos de empacotar com `tar` e extrair no destino.
 
 O script cria na raiz do projeto tudo o que o pacote e os testes precisam em execução: o Python
 3.13 em `.python/`, o pacote com as dependências de execução e as de todos os grupos do
@@ -188,27 +184,13 @@ caminho. As três pastas estão no `.gitignore`. Rode o script de novo sempre qu
 mudar; se a dependência nova estiver fora do `pyproject.toml` (extensão do DuckDB, versão do Python),
 acrescente-a ao script antes.
 
-Empacotar com `tar`, que preserva os links simbólicos, as permissões e os demais metadados do
-sistema de arquivos. Copiar arquivo a arquivo por uma pasta montada do S3 perde os links, e sem eles
-`.venv/bin/python` só funciona no caminho de origem.
+Atrás de um proxy com autenticação, o `uv` lê `HTTP_PROXY` com as credenciais embutidas, mas o
+DuckDB recusa esse endereço (`Failed to parse http_proxy ... into a host and port`) e precisa do
+usuário e da senha à parte: o script os lê das variáveis `username` e `password` e os passa em
+`http_proxy_username` e `http_proxy_password`.
 
-```
-tar czf serialize-db.tar.gz --exclude=serialize-db/.git -C .. serialize-db
-```
-
-No ambiente de destino, depois de extrair o pacote em qualquer caminho:
-
-```
-tar xzf serialize-db.tar.gz
-cd serialize-db
-SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente .venv/bin/python -m pytest
-```
-
-A suíte local roda sem S3 e valida a pasta preparada; com
+No destino, a suíte local roda sem S3 e valida a pasta preparada; com
 `SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo` a suíte S3 roda também, e a do Redshift com as
 variáveis da seção Testes. Não é preciso `uv` nem rede além do S3 e do Redshift: o Python, as
-bibliotecas e as extensões vêm da pasta. Os comandos de `.venv/bin/` (como `pytest`) guardam o
-caminho original no cabeçalho, por isso a chamada é `python -m pytest`; o pacote roda do mesmo
-jeito, com `.venv/bin/python -m serialize_db` ou `.venv/bin/python -c "import serialize_db"`. A
-receita foi verificada extraindo o pacote em outro caminho e rodando a suíte com os proxies
-apontados para uma porta fechada.
+bibliotecas e as extensões vêm da pasta. A receita foi verificada extraindo o pacote em outro
+caminho e rodando a suíte com os proxies apontados para uma porta fechada.
