@@ -148,7 +148,7 @@ research appends to the matching group.
 | --- | --- |
 | `README.md` | `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with one command per suite, the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`: `space.py` (the space from inside: credentials and their expiry with the time left, region, project with one row per connection, network, machine with temp-folder space, open-file limit and the `~/shared` mount state by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` checked for presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (the bucket under the root: settings, lifecycle, inventory with each Delta table's data files, commits and last object, the S3 suite's leftover sessions (`BK-13`) and the non-current versions and delete markers the versioning accumulated (`BK-14`), versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM policy simulation or what the run itself proved, the KMS key, the bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format; delta-rs as found and, with `NO_PROXY` absent or empty beside `no_proxy`, as the suite with it exported; the DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection with its data parsed as a dict, JDBC URL and credentials secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, whether the Redshift APIs have VPC endpoints (`RS-14`), the Data API, the session with database privileges, settings, load-error views and external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`, where DNS, TCP and internet results are readings in the tables, never failed calls, and each failed call leaves `report.last_reason` for the check that interprets it. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. Each probe is one function per report section, with a docstring naming the checks it emits, a commented block per check and named `render_*` helpers; `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`, which details each check: `space.py` (credentials and expiry, region, project connections, network, machine with temp space, open-file limit and the `~/shared` mount by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` by presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (settings, lifecycle, inventory with each Delta table's files, commits and last object, the S3 suite's leftover sessions `BK-13`, non-current versions and delete markers `BK-14`, versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM simulation or by what the run proved, KMS key, bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict, own format; delta-rs as found and as the suite with `NO_PROXY` exported; DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection parsed as a dict, JDBC URL and secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, VPC endpoints of the Redshift APIs `RS-14`, Data API, session privileges, settings, load-error views, external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`: DNS, TCP and internet results are readings, never failed calls, and a failed call leaves `report.last_reason` for the check that interprets it. `sagemaker-studio` stays out of the project (it drags unpinned `deltalake`, `duckdb` and `pandas`; a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. Each probe is one function per report section with a docstring naming its checks, a commented block per check and `render_*` helpers; `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -158,7 +158,7 @@ research appends to the matching group.
 | `docs/delta.md` | Delta Lake as the source of truth: folder layout and log actions, Delta versus Iceberg, the implementations (delta-spark, delta-rs, Delta Kernel) and the delta-rs gaps, S3 requirements, types and JSON, table creation from the model, schema evolution with the measured rename/drop rewrite and what replaces Alembic, transactions, conflicts and restore, DML, ingestion and export back to Parquet folders by month, pipeline steps, DuckDB and Redshift access, performance measurements, relocation and SQLAlchemy support. |
 | `docs/PLAN.md` | The plan (pt-BR): the decisions with the premises behind them, the `pa.Table` boundary with client code and the measured pandas conversion, the state of the project (repository, verified proof of concept, environment readings, pending items), the rules every stage obeys, the package layout with dependencies, configuration and test policy, the stages 0 to 9 with the primitives of each module (`schema`, `sql`, `storage`, `delta`, `audit`, `engine.duckdb`, `engine.redshift`, `execution`, `load`, `cli`), the monthly pipeline with the `Execution` API, and the order of work. |
 | `docs/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service (Delta via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and the maturity assessment of Delta against Iceberg with the re-evaluation trigger. |
-| `docs/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`) and the flow of each use case; the primitives live in `docs/PLAN.md`. |
+| `docs/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `docs/PLAN.md`. |
 | `tests/model/` | The reference model: the declarative ORM models of the accounting, management and projection tables, moved out of the package on 2026-09-20. The tests hand it to the package API as a client library would hand its own models; the package holds no model. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
@@ -242,6 +242,11 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   (`1.24`) and `2.675` (`2.67`) showed the cast rounds the binary value, which changed the `cast` rule
   from refusing every `double` to refusing the ones outside the scale. Pick values whose outcomes
   differ per hypothesis before wording a rule.
+- **A probe's helper thread stops in `finally`; a speedup is a reading** (2026-09-20). The first
+  GIL probe raised on a column name (`range(n)` exposes `range`, not `i`), skipped `stop.set()` and
+  spun at 100% CPU until killed. A two-thread speedup depends on the free cores and on the DuckDB
+  `threads` of the instance, so it is recorded; the assertion is the loop rate near zero when the GIL
+  is held.
 
 ## What the documents establish
 
@@ -438,6 +443,20 @@ Each fact is detailed in the file named at the end of its line.
   `AWS_REGION` and no `~/.aws/config` needs maintenance; `test_boto3_credential_source` needs STS
   (60 s per attempt, 5 attempts by default). On a dead network delta-rs gives up in 10 s with
   `max_retries=1` and `retry_timeout=10s` in `storage_options` (59 s without). `README.md`
+- `duckdb` and `redshift_connector` declare DB-API `threadsafety` 1: threads share the module, never a
+  connection. DuckDB, delta-rs and PyArrow release the GIL during native work (a Python loop in
+  another thread kept 94% to 101% of its rate, 2026-09-20, macOS), so `ThreadPoolExecutor` gives real
+  parallelism without Rust: two `write_deltalake` into distinct tables took 0.10 s in two threads
+  against 0.21 s in sequence. A DuckDB connection shared by two threads hands one thread the other's
+  result without error; `con.cursor()` per thread shares the database, two in-memory `connect()` are
+  separate databases, a second `connect(path)` with another config or `read_only` raises
+  `ConnectionException`, and `threads` belongs to the instance, not the cursor. Delta readers keep
+  the version they loaded while an `append` commits. A native call that releases and reacquires the GIL
+  beside a thread running pure Python waits the switch interval per reacquisition: 200 `os.stat` took
+  0.3 s against 0.2 ms alone (0.035 s with `sys.setswitchinterval(0.0005)`), and the lazy
+  `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import everything
+  at startup and keep hot pure-Python loops out of the library's threads. The rules of `docs/PLAN.md`
+  record the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
 
 ## The pipeline outside this repository
 
@@ -482,8 +501,7 @@ table names (`staging_<tabela>`) count as database identifiers.
 ## Where the work stands
 
 The state of the project, the decisions, the stages with their primitives and the order of work are
-in `docs/PLAN.md` (pt-BR, 2026-09-20); read it before planning a session, and `gh pr list --state
-open` says whether commits go to an open PR's branch or to a new `claude/` branch. The next
+in `docs/PLAN.md` (pt-BR, 2026-09-20); read it before planning a session. The next
 session starts stage 1 (`serialize_db.schema`) and stage 2 (`serialize_db.sql`) on local folders.
 
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
@@ -502,16 +520,13 @@ must be rerun). The reference model in `tests/model/` and its defects are
 listed in `docs/PLAN.md` under the state of the repository; the `DEFERRABLE` and `SERIAL` behavior of
 each dialect is in `docs/sqlalchemy.md` and `docs/duckdb.md`.
 
-Test layout (user decision of 2026-09-19): `tests/` holds the package tests (none yet), `tests/model/` (the reference model), `tests/test_probes.py`
-and `tests/conftest.py` (the authorization rule and the fixtures of the three targets);
-`tests/proof_of_concept/` holds the proof of concept of the Delta layer on both storages, the study
-suites of the external libraries and of the stdlib, commented step by step as the learning material
-of future maintainers and listed per stage in `docs/PLAN.md`, and `test_redshift.py`, never run
-against a cluster. The files, the authorization variables and the counts of the last runs are in the
-`tests/` row of the repository table in `docs/PLAN.md` and in `README.md`. Facts only here: a silent
-proxy makes the S3 root's short-timeout listing fail after 11 s; `autoinstall_known_extensions` is
-off because `LOAD` of a known extension otherwise downloads it into `~/.duckdb` without notice;
-`test_delta_rs_credential_chain` runs five variants.
+Test layout (user decision of 2026-09-19): `tests/` holds the package tests (none yet), `tests/model/`,
+`tests/test_probes.py` and `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
+both storages, the study suites (commented step by step as learning material, listed per stage in
+`docs/PLAN.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
+last-run counts: the `tests/` row of the repository table in `docs/PLAN.md` and `README.md`. The 11 s
+listing failure behind a silent proxy is in `README.md`, the `autoinstall_known_extensions` rule in the
+lessons above; `test_delta_rs_credential_chain` runs five variants.
 
 The suites exist so the same proof of concept runs in the target, without internet; the local suite
 validates the prepared folder there (verified 2026-09-19: extracted at another path with dead proxies
@@ -524,10 +539,9 @@ and an empty `HOME`, 10 passed; on macOS after the glob fix of PR #12). `uv sync
 The examples in `docs/parquet.md`, `docs/duckdb.md` and `docs/sqlalchemy.md` ran on 2026-09-18 with
 Python 3.13, DuckDB 1.5.5, PyArrow 25.0.1, pandas 3.0.6, polars 1.44.2, SQLAlchemy 2.0.54,
 duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 and redshift_connector 2.1.16, on a sample of
-300,000 rows of `operacoes` with the columns `id_operacao`, `data_ref`, `id_cliente`, `valor` and
-`descricao`; the Redshift statements were compiled only. The S3 proof of concept of 2026-09-19 in
+300,000 rows of `operacoes` (`poc_delta.sample_table`); the Redshift statements were compiled only. The S3 proof of concept of 2026-09-19 in
 the space (Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, `NO_PROXY="$no_proxy"`
-exported; also the system Python 3.12.13 with deltalake 1.5.0 and DuckDB 1.5.4) is recorded in
+exported) is recorded in
 `docs/PLAN.md`. The local proof of concept in `docs/estrategia.md` ran on
 2026-09-19 on macOS arm64 with Python 3.13, deltalake 1.6.4, DuckDB 1.5.5 with the `delta`,
 `ducklake` and `iceberg` extensions (ducklake `d8a1881e`, metadata version 1.0), PyIceberg 0.12.0
@@ -570,21 +584,16 @@ the same pinned versions.
   and no internet (user statement of 2026-09-20).
 ## Questions the official documentation does not answer
 
-The documents mark these as pending the proof of concept. All of them need Redshift, which the
-project does not have yet; the S3 questions were answered on 2026-09-19.
-
-- Whether `COPY` from Parquet accepts a column list: `awswrangler` emits
-  `COPY tabela (colunas) ... FORMAT AS PARQUET`, while the `COPY` reference describes the column list
-  only for flat files.
-- The correspondence between Parquet physical types and Redshift columns in `COPY`, in particular
-  `TIMESTAMP` as `INT64` in microseconds and the physical type of `DECIMAL`.
-- What `COPY` from Parquet does when a string exceeds the target `VARCHAR`: truncate or abort.
-- Whether Redshift Spectrum maps plain Parquet columns by name or by position.
-- The physical types `UNLOAD` writes for `TIMESTAMP` and `DECIMAL`, whether its columns are
-  required, and whether it writes minimum and maximum statistics; the three affect the `AddAction`
-  that registers `UNLOAD` files in the Delta log (`register_file` in `docs/delta.md`).
-- Whether `FILLRECORD` lets `COPY` from Parquet load older files that lack columns appended later
-  to the schema, which both Delta and DuckLake produce on evolution.
+All of them need Redshift, which the project does not have yet, and `tests/proof_of_concept/test_redshift.py`
+holds one test per question; the S3 questions were answered on 2026-09-19. Whether `COPY` from Parquet
+accepts a column list (`awswrangler` emits `COPY tabela (colunas) ... FORMAT AS PARQUET`; the reference
+describes the list only for flat files); the correspondence between Parquet physical types and Redshift
+columns in `COPY`, in particular `TIMESTAMP` as `INT64` in microseconds and the physical type of `DECIMAL`;
+whether `COPY` truncates or aborts on a string longer than the target `VARCHAR`; whether Spectrum maps
+plain Parquet columns by name or by position; the physical types `UNLOAD` writes for `TIMESTAMP` and
+`DECIMAL`, whether its columns are required and whether it writes min/max statistics (the three affect
+the `AddAction` of `register_file` in `docs/delta.md`); whether `FILLRECORD` lets `COPY` load older
+files that lack columns appended later, which Delta and DuckLake produce on evolution.
 
 One gap needs a decision rather than a test: `sqlalchemy-redshift` compiles `Text` as `TEXT`, which
 Redshift stores as `VARCHAR(256)`, so the `VARCHAR(65535)` of the contract needs `String(65535)` or a
