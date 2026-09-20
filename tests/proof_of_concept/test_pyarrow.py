@@ -23,7 +23,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from conftest import LocalLocation, record
-from delta import MONTHS, ROWS, sample_table
+from poc_delta import MONTHS, ROWS, sample_table
 
 
 def contract_schema() -> pa.Schema:

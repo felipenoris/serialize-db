@@ -32,7 +32,7 @@ from sqlalchemy.schema import CreateTable
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
 from conftest import RedshiftSession, S3Location, record
-from delta import MONTHS, ROWS, connect_duckdb, sample_table
+from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
 
 pytestmark = [pytest.mark.redshift, pytest.mark.s3]
 

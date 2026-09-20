@@ -2,7 +2,7 @@
 
 A suíte escreve só sob a pasta informada em ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e nada aqui toca a AWS:
 ela roda em qualquer ambiente e valida o Python, o delta-rs, o DuckDB e as extensões antes da suíte
-no S3. Os testes comuns aos dois armazenamentos vêm de ``delta.py``; os deste módulo cobrem o que só
+no S3. Os testes comuns aos dois armazenamentos vêm de ``poc_delta.py``; os deste módulo cobrem o que só
 faz sentido em disco: a primitiva do commit atômico e o conflito entre escritores, os caminhos
 relativos do log com a realocação da pasta, e a abertura sem variáveis AWS.
 
@@ -25,7 +25,7 @@ from deltalake import DeltaTable, write_deltalake
 from deltalake.exceptions import CommitFailedError
 
 from conftest import LocalLocation, duckdb_extension_directory
-from delta import (
+from poc_delta import (
     APPENDED_ROWS,
     MONTHS,
     ROWS,

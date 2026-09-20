@@ -32,7 +32,7 @@ from deltalake.schema import Field, PrimitiveType
 from deltalake.transaction import AddAction
 
 from conftest import LocalLocation
-from delta import MONTHS, ROWS, connect_duckdb, sample_table
+from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
 
 pytestmark = pytest.mark.local
 

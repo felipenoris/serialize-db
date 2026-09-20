@@ -2,7 +2,7 @@
 
 Cada teste responde a um item da etapa 0 em ``docs/PLAN.md``: as credenciais que o delta-rs
 encontra, a escrita e a leitura no bucket, o put condicional, o ``vacuum`` e o tempo do ``delta_scan``.
-Os testes comuns aos dois armazenamentos vêm de ``delta.py``; os deste módulo cobrem o que só existe
+Os testes comuns aos dois armazenamentos vêm de ``poc_delta.py``; os deste módulo cobrem o que só existe
 no S3: a origem das credenciais, a cadeia de credenciais do delta-rs e sua reserva, o put condicional,
 a criptografia dos arquivos e as chamadas do ``boto3`` que a biblioteca usa (listar, copiar, apagar).
 As medições vão para o relatório impresso no fim da sessão (``conftest.py``). A suíte escreve só sob
@@ -28,7 +28,7 @@ import pytest
 from deltalake import DeltaTable, write_deltalake
 
 from conftest import S3Location, record
-from delta import DeltaProofOfConcept, connect_duckdb, write_sample_table
+from poc_delta import DeltaProofOfConcept, connect_duckdb, write_sample_table
 
 pytestmark = pytest.mark.s3
 
