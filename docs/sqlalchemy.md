@@ -99,7 +99,7 @@ Nos bancos do projeto a cláusula não tem efeito útil:
 | DuckDB 1.5.5 | Na forma de restrição de tabela que o SQLAlchemy emite (`FOREIGN KEY (...) REFERENCES ... DEFERRABLE INITIALLY DEFERRED`, `UNIQUE (...) DEFERRABLE ...`), a cláusula é aceita e descartada: `duckdb_constraints()` mostra a chave sem ela, e a verificação é imediata. Na forma de coluna (`a_id BIGINT REFERENCES a (id) DEFERRABLE ...`) e em `PRIMARY KEY ... DEFERRABLE`, falha com `Constraint not implemented!`; `SET CONSTRAINTS` é erro de sintaxe; `ALTER TABLE ... ADD CONSTRAINT` falha com `No support for that ALTER TABLE option yet!`, então `use_alter=True` também derruba o `create_all`. |
 | Redshift | A sintaxe do `CREATE TABLE` não tem `DEFERRABLE` nem `INITIALLY`, e chaves primárias, únicas e estrangeiras são informativas, nunca verificadas. Se o parser aceita e ignora a cláusula fica pendente da prova de conceito. |
 
-Os modelos em `src/serialize_db/model/` declaram `deferrable=True, initially='DEFERRED'` em todas as
+Os modelos de referência em `tests/model/` declaram `deferrable=True, initially='DEFERRED'` em todas as
 chaves estrangeiras de `model_base_contabil.py` e `model_base_gerencial.py`, inclusive nas compostas,
 e em nenhuma de `model_db_projetado.py`. No DuckDB o `create_all` passa, porque a cláusula é
 descartada; no Redshift ela não existe. A [política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
@@ -1105,7 +1105,7 @@ def arrow_type(sa_type: t.TypeEngine) -> pa.DataType:
         case t.Uuid():
             return pa.string()
         case t.JSON():
-            return pa.json_(pa.string())
+            return pa.string()
     raise TypeError(f"tipo sem correspondência Arrow: {sa_type!r}")
 
 def arrow_schema(model) -> pa.Schema:
@@ -1128,9 +1128,10 @@ def check(model, path: str) -> None:
 ```
 
 - A ordem dos casos importa: `BigInteger` e `SmallInteger` são subclasses de `Integer`, e `Float` é
-  subclasse de `Numeric`. `Text` cai em `String`. `JSON` vira a extensão `arrow.json`, texto com anotação; o
-  `with_variant(SUPER(), "redshift")` do contrato não muda o tipo genérico, e `isinstance(sa_type, t.JSON)`
-  continua verdadeiro. O metadado `PARQUET:field_id` é o que o PyArrow grava como `field_id` no Parquet;
+  subclasse de `Numeric`. `Text` cai em `String`. `JSON` vira `string`, texto sem anotação: a extensão `arrow.json`
+  ficou fora do contrato em 2026-09-20, porque o dtype dela no pandas não tem os kernels de `.str` e
+  nenhum motor a devolve; o `with_variant(SUPER(), "redshift")` do contrato não muda o tipo genérico,
+  e `isinstance(sa_type, t.JSON)` continua verdadeiro. O metadado `PARQUET:field_id` é o que o PyArrow grava como `field_id` no Parquet;
   a chave `field_id` sem prefixo não gera nada. Um `Numeric()` sem precisão e escala, que é o que o
   mapa de tipos padrão dá a `Mapped[decimal.Decimal]`, cai no erro final; o mapa do modelo ou o
   `Annotated` precisa fixar `Numeric(18, 2)`.

@@ -79,6 +79,74 @@ def test_safe_cast_refuses_data_loss() -> None:
     lengths = pc.utf8_length(pa.array(["ok", "x" * 201]))
     assert pc.max(lengths).as_py() == 201
 
+    # double para decimal arredonda o valor binário exato (2,675 é 2,67499...) sem acusar a perda, mesmo com
+    # safe=True; o valor representável na escala é o que pc.round devolve igual, e pc.round difere do cast em 2,675.
+    floats = pa.array([1.236, 2.675, 1234.56, 0.29])
+    assert [str(value) for value in floats.cast(pa.decimal128(18, 2))] == ["1.24", "2.67", "1234.56", "0.29"]
+    assert pc.equal(pc.round(floats, 2), floats).to_pylist() == [False, False, True, True]
+    assert [str(value) for value in pc.round(floats, 2)] == ["1.24", "2.68", "1234.56", "0.29"]
+
+    # timestamp para date descarta a hora sem erro; a ida e volta acusa.
+    stamps = pa.array([dt.datetime(2026, 8, 1, 12, 30), dt.datetime(2026, 8, 2)], pa.timestamp("us"))
+    assert pc.equal(stamps.cast(pa.date32()).cast(pa.timestamp("us")), stamps).to_pylist() == [False, True]
+
+    # Table.cast recusa nulo em campo não anulável e exige os mesmos nomes na mesma ordem; inteiro em
+    # decimal128(18, 2) pede precisão 21 e passa por (21, 2).
+    with pytest.raises(ValueError, match="non-nullable"):
+        pa.table({"n": pa.array([1, None], pa.int64())}).cast(pa.schema([pa.field("n", pa.int64(), nullable=False)]))
+    with pytest.raises(ValueError, match="field names"):
+        pa.table({"b": [1], "a": [2]}).cast(pa.schema([("a", pa.int64()), ("b", pa.int64())]))
+    with pytest.raises(pa.ArrowInvalid):
+        pa.array([1]).cast(pa.decimal128(18, 2))
+    assert pa.array([1]).cast(pa.decimal128(21, 2)).cast(pa.decimal128(18, 2)).to_pylist() == [decimal.Decimal("1.00")]
+
+    # Uma coluna de dicts vira struct com a união das chaves, e um dict não entra em string: JSON chega serializado.
+    documents = pa.Table.from_pandas(pd.DataFrame({"atributos": [{"k": 1}, {"k": 2, "x": "y"}]}), preserve_index=False)
+    assert documents.column("atributos").to_pylist() == [{"k": 1, "x": None}, {"k": 2, "x": "y"}]
+    with pytest.raises(pa.ArrowTypeError):
+        pa.array([{"k": 1}], pa.string())
+
+
+def test_arrow_table_round_trips_through_pandas_without_copy() -> None:
+    """``to_pandas(types_mapper=pd.ArrowDtype)`` e ``from_pandas`` compartilham os buffers e mantêm os tipos do contrato; o backend numpy os perde."""
+    schema = pa.schema([
+        pa.field("id_operacao", pa.int64(), nullable=False),
+        pa.field("data_ref", pa.date32(), nullable=False),
+        pa.field("valor", pa.decimal128(18, 2), nullable=False),
+        pa.field("descricao", pa.string()),
+    ])
+    table = pa.table({
+        "id_operacao": [1, 2],
+        "data_ref": [dt.date(2026, 8, 1), dt.date(2026, 8, 2)],
+        "valor": [decimal.Decimal("10.50"), decimal.Decimal("99999.99")],
+        "descricao": ["a", None],
+    }, schema=schema)
+
+    def addresses(column: pa.ChunkedArray) -> set[int]:
+        return {buffer.address for chunk in column.chunks for buffer in chunk.buffers() if buffer is not None}
+
+    # A ida com ArrowDtype não copia: os buffers do DataFrame são os da tabela, e os tipos são os do contrato.
+    frame = table.to_pandas(types_mapper=pd.ArrowDtype)
+    assert [str(dtype) for dtype in frame.dtypes] == ["int64[pyarrow]", "date32[day][pyarrow]", "decimal128(18, 2)[pyarrow]", "string[pyarrow]"]
+    assert addresses(frame["valor"].array._pa_array) == addresses(table.column("valor"))
+
+    # A volta também não copia; todo campo volta anulável, e o cast seguro devolve o esquema do contrato.
+    back = pa.Table.from_pandas(frame, preserve_index=False)
+    assert back.schema.types == schema.types and all(field.nullable for field in back.schema)
+    assert addresses(back.column("valor")) == addresses(table.column("valor"))
+    assert back.cast(schema).schema == schema
+
+    # O backend numpy troca decimal e date por objetos Python e um inteiro com nulo por float64.
+    default = table.to_pandas()
+    assert [str(dtype) for dtype in default.dtypes] == ["int64", "object", "object", "str"]
+    assert isinstance(default["valor"].iloc[0], decimal.Decimal)
+    assert str(pa.table({"n": pa.array([1, None], pa.int64())}).to_pandas()["n"].dtype) == "float64"
+
+    # A aritmética sobre decimal128[pyarrow] fica em decimal; um float no meio leva a double.
+    assert str((frame["valor"] * decimal.Decimal("1.1")).dtype) == "decimal128(21, 3)[pyarrow]"
+    assert str((frame["valor"] * 1.1).dtype) == "double[pyarrow]"
+    assert frame["valor"].sum() == decimal.Decimal("100010.49")
+
 
 def test_record_batch_reader_is_consumed_once() -> None:
     """O ``RecordBatchReader`` entrega cada lote uma vez, de uma lista ou de um gerador, sem materializar o todo."""
