@@ -179,7 +179,7 @@ research appends to the matching group.
 | `docs/PLAN-STAGE-0.md` to `docs/PLAN-STAGE-9.md` | One file per stage, indexed in `docs/PLAN.md`: the module and its primitives with signature and behavior (`schema`, `sql`, `storage` and `delta`, `audit` and `engine.duckdb`, `engine.redshift`, `execution` and `cli`, `load`, the Redshift publication, the operation routines), the tests, the dependencies and the proofs of concept that exercise each API; stage 0 holds the Redshift items of the proof of concept and the probes that precede any stage on AWS. |
 | `docs/CURRENT_STATE.md` | Where the implementation stands (pt-BR): the situation of each stage, and the repository artifact by artifact, including the reference model's defects and each suite's last pass and skip counts. |
 | `docs/POC.md` | What each run showed (pt-BR): the S3 proof of concept in the SageMaker space with its timings, the local one, the delta-rs credential variants and the isolated `NO_PROXY` 403, and the probe readings of the space, each with its consequence in the plan. |
-| `docs/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): the Redshift connection the proof of concept waits for, non-current versions, the one-hour credentials, the S3 suite's maintenance, the `Text` rule awaiting the user, the table barrier, and the Redshift questions the official documentation does not answer. |
+| `docs/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): one item per pending question, with the run or the decision that will close it, plus the Redshift questions the official documentation does not answer; a closed item leaves the file when its answer lands in the owning document. |
 | `docs/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service (Delta via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and the maturity assessment of Delta against Iceberg with the re-evaluation trigger. |
 | `docs/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `docs/PLAN-STAGE-<n>.md`. |
 | `tests/model/` | The reference model: the declarative ORM models of the accounting, management and projection tables, moved out of the package on 2026-09-20. The tests hand it to the package API as a client library would hand its own models; the package holds no model. |
@@ -348,7 +348,7 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   before it enters a reader; a probe that feeds a deliberately wrong batch is the check.
 - **A session-state change inside a probe splits its readings** (2026-09-20). `USE` landed mid-section in
   the Redshift probe, and `has_database_privilege(current_database())` after it silently read the
-  datashare database instead of the connection's: nothing failed, the value meant something else. Put every reading of the pre-change state before
+  datashare database instead of the connection's, and nothing failed. Put every reading of the pre-change state before
   the change, confirm the change with a query (`current_database()`), and run after it only what
   needs the new state.
 
@@ -570,8 +570,8 @@ Each fact is detailed in the file named at the end of its line.
   beside a thread running pure Python waits the switch interval per reacquisition: 200 `os.stat` took
   0.3 s against 0.2 ms alone (0.035 s with `sys.setswitchinterval(0.0005)`), and the lazy
   `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import everything
-  at startup and keep hot pure-Python loops out of the library's threads. The rules of `docs/PLAN.md`
-  record the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
+  at startup and keep hot pure-Python loops out of the library's threads. `docs/PLAN.md`, section "A troca de dados com o
+  código cliente", records the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
 - The target's Redshift is serverless (`controladoria-wg`, `sa-east-1`), and the connection is the
   workgroup's temporary credential: `GetWorkgroup` for the endpoint, `GetCredentials` for a user
   `IAMR:<role>` and a password lasting 900 s by default and 3600 s at most, then
@@ -598,7 +598,7 @@ Each fact is detailed in the file named at the end of its line.
   (`1.0.78890` serverless), snapshot isolation on the producer's database and 64 slices; it accepts
   `CREATE`/`DROP`/`SHOW TABLE`, CTAS, `ALTER TABLE ADD`/`DROP COLUMN`, `RENAME`, `TRUNCATE`
   (transactional there), `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE` and `COPY` with no
-  `COMPUPDATE` clause, writes one database per transaction and creates no views. `svv_all_schemas`,
+  `COMPUPDATE` clause (the Parquet `COPY` rejects it), writes one database per transaction and creates no views. `svv_all_schemas`,
   `svv_all_tables` and `svv_redshift_databases` cross databases; `has_schema_privilege` and
   `svv_table_info` see only the session's. `docs/POC.md`, `docs/redshift.md`
 - The target's Redshift, read on 2026-09-20 (`docs/readings/`): workgroup `controladoria-wg`,

@@ -38,7 +38,10 @@ tem papel associado, e `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` e `SESSION_TOKEN` da
 tem, que é o caso do ambiente alvo. As credenciais expiram, então a cláusula é montada por comando,
 nunca guardada; e **nenhum texto que a carregue vai para log, para o relatório ou para arquivo**. As
 restrições da escrita num datashare estão em [`redshift.md`](redshift.md); o `COPY` roda sem
-cláusula `COMPUPDATE` alguma.
+cláusula `COMPUPDATE` alguma, e o de Parquet nem a aceita: a codificação das colunas vem do DDL ou de
+`ENCODE AUTO`, e `ANALYZE COMPRESSION` numa amostra real é o que a fixa. O motivo de um `COPY` recusado está em `sys_load_error_detail`, que a
+sessão lê no ambiente alvo (2026-09-20); `stl_load_errors` cobre só clusters provisionados e é negada
+a um usuário comum.
 
 | Primitiva | Redshift |
 | --- | --- |
@@ -55,8 +58,10 @@ cláusula `COMPUPDATE` alguma.
 
 O identificador de execução entra no nome do sandbox normalizado para `[a-z0-9_]`, dentro dos
 127 bytes de um identificador do Redshift. Onde as tabelas `exec_<id>_*` nascem quando o esquema vem
-de um datashare é questão em aberto: no próprio datashare, no banco local da conexão ou em tabelas
-temporárias, conforme `RS-9` e `RS-17` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+de um datashare é questão em aberto entre o próprio datashare, onde o `CREATE TABLE` passou, e as
+tabelas temporárias do banco da conexão, que morrem com a sessão; o banco local saiu das alternativas
+em 2026-09-20, porque `has_database_privilege(dev, CREATE)` é falso e `TEMP` é verdadeiro (`RS-9`,
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
 Testes: `tests/test_engine_redshift.py` compara o SQL
 gerado (`COPY`, `INSERT ... SELECT`, `UNLOAD`, DDL da staging) com texto esperado, sem cluster; os

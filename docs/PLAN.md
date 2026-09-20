@@ -1,12 +1,13 @@
 # Plano de implementação
 
-Este documento registra o que a biblioteca é e como ela chega lá: as decisões, as regras que as
-etapas obedecem, a organização do pacote, as etapas de implementação e o pipeline de atualização
+Este documento registra o que a biblioteca é e como ela chega lá: as decisões, a troca de dados com
+o código cliente, as regras que as etapas obedecem, a organização do pacote, as etapas de implementação e o pipeline de atualização
 mensal. O plano de cada etapa, com as primitivas do módulo, os testes e as provas de conceito que o
 exercitam, está num arquivo próprio, de [`PLAN-STAGE-0.md`](PLAN-STAGE-0.md) a
-[`PLAN-STAGE-9.md`](PLAN-STAGE-9.md), que a seção "Etapas" indexa. O estado da implementação está
-em [`CURRENT_STATE.md`](CURRENT_STATE.md); o resultado das provas de conceito, das suítes e dos
-probes, em [`POC.md`](POC.md); as pendências e as decisões em aberto, em
+[`PLAN-STAGE-9.md`](PLAN-STAGE-9.md), que a seção "Etapas" indexa. O estado da implementação, com
+a situação de cada etapa e o que cada artefato contém, está em
+[`CURRENT_STATE.md`](CURRENT_STATE.md); o resultado das provas de conceito, das suítes e dos probes,
+com as consequências no plano, em [`POC.md`](POC.md); as pendências e as decisões em aberto, em
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). As razões das decisões e as comparações entre ferramentas
 estão em [`estrategia.md`](estrategia.md); o comportamento verificado do Delta, em
 [`delta.md`](delta.md); os motores, em [`duckdb.md`](duckdb.md) e [`redshift.md`](redshift.md); o
@@ -24,11 +25,9 @@ DDL, porque o Parquet não as tem, o DuckDB as cobra na carga e o Redshift só a
 aplica é a auditoria da execução, com consultas derivadas dos mesmos modelos, e a reprovação impede
 a publicação. Os statements Core do pipeline continuam válidos, e o texto SQL gerado por dialeto os
 substitui, uma interação com o banco por vez, até o SQLAlchemy terminar nos modelos e na geração.
-Os dados cruzam a fronteira da biblioteca em lotes `pyarrow.RecordBatch`, nos dois sentidos, e a
-`pyarrow.Table` é a forma conveniente do que cabe na memória: no DuckDB, `to_arrow_reader()` e um
-`INSERT ... BY NAME` por lote numa transação; no Redshift, Parquet no S3 mais `COPY ... MANIFEST` e
-as tuplas de `fetchmany` ou `UNLOAD`. A evolução do esquema é uma reconciliação entre o
-modelo e o log da tabela, sem Alembic.
+Os dados cruzam a fronteira da biblioteca em lotes `pyarrow.RecordBatch` (seção "A troca de dados
+com o código cliente"). A evolução do esquema é uma reconciliação entre o modelo e o log da tabela,
+sem Alembic.
 
 As premissas, declaradas pelo usuário, e o que cada uma fixa:
 
@@ -37,26 +36,19 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   Core; o SQLMesh e o dbt saem; o `insert(...)` com listas de linhas sai, porque no Redshift ele
   vira uma ida ao servidor por linha.
 - **A troca de dados com o código cliente é por streaming de `pyarrow.RecordBatch`, nos dois
-  sentidos, e a `pyarrow.Table` é aceita e devolvida por conveniência** (decisão de 2026-09-20). Quem
-  lê pede `stream` e recebe os lotes de um statement Core ou de um texto SQL, ou pede `query` ou
-  `execute` e recebe a `pa.Table` que `stream` montou; quem grava empurra lotes num `loader`, ou
-  entrega uma `pa.Table`, um `RecordBatch` ou um iterável de lotes a `load`, que os passa ao mesmo
-  `loader`. O cliente trabalha no lote atual enquanto a biblioteca lê o seguinte ou grava o anterior,
-  cada primitiva numa thread auxiliar com uma fila limitada. Nenhuma instância ORM, lista de linhas
-  ou DataFrame atravessa a fronteira: `query` compila o statement pelo dialeto e o executa na conexão
-  crua, sem `Session`, e `select(Lancamento)` é aceito como statement Core. O pandas com backend
-  pyarrow é o formato dos pipelines (declaração do usuário de 2026-09-20), e a regra apoia-se na
-  hipótese, medida na seção seguinte, de que a conversão é barata: 2,3 ms sem cópia para 300.000
-  linhas, 1,4 ms para um lote de 100.000. O pandas não entra nas dependências de execução.
+  sentidos, e a `pyarrow.Table` é aceita e devolvida por conveniência** (decisão de 2026-09-20); o
+  pandas com backend pyarrow é o formato dos pipelines (declaração do usuário de 2026-09-20). A
+  seção "A troca de dados com o código cliente" fixa a API, as medições e as regras.
 - **O Redshift do ambiente alvo é serverless, e o esquema do projeto vem de um datashare**
   (decisão do usuário de 2026-09-20). A conexão é a credencial temporária do workgroup
   ([`../examples/redshift_native.py`](../examples/redshift_native.py), executado lá), e nenhum
   outro caminho de autenticação entra na biblioteca sem ter rodado no ambiente alvo. A conexão roda
   `USE datalake_rw_shared` e cita `sbx_aco_decon.<tabela>`; o nome em três partes fica para uma
   sessão aberta em outro banco, como a Data API. A escrita segue o que um datashare aceita, com o
-  `COPY` sem cláusula `COMPUPDATE` e transação explícita ([`redshift.md`](redshift.md)). A Data API
-  fica fora da biblioteca: ela devolve `DECIMAL` e data e hora como texto e limita o resultado a
-  500 MB, o que não serve à troca de lotes Arrow.
+  `COPY` sem cláusula `COMPUPDATE` e transação explícita, e o `COPY` e o `UNLOAD` alcançam o S3
+  pelas credenciais de quem chama, porque o namespace não tem papel IAM associado
+  ([`redshift.md`](redshift.md)). A Data API fica fora da biblioteca: ela devolve `DECIMAL` e data e
+  hora como texto e limita o resultado a 500 MB, o que não serve à troca de lotes Arrow.
 - **Nenhum serviço de catálogo está habilitado.** A camada de tabela não depende de serviço, e o
   Delta atende sem código próprio. O Iceberg com catálogo em arquivo fica documentado em
   `estrategia.md` e volta à mesa se o Glue ou o S3 Tables forem habilitados; `probes/catalog.py`
@@ -101,28 +93,46 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
 As partes da biblioteca: o esquema a partir dos modelos; o SQL gerado por dialeto; a camada Delta
 sobre os dois armazenamentos; a ingestão seletiva e o sandbox por execução em cada motor; a execução
 com auditoria e publicação; a publicação para clientes no Redshift; a carga inicial dos Parquet
-atuais; a operação (snapshots do banco, `vacuum`, compactação, arquivo). O que sai do desenho
-anterior: o ORM para cargas linha a linha, as chaves estrangeiras `DEFERRABLE`, o `Identity`, os
-manifestos próprios e o Alembic. O SQLGlot fica opcional, como teste de compatibilidade.
+atuais; a operação (snapshots do banco, `vacuum`, compactação, arquivo). Fora da biblioteca ficam o
+ORM para cargas linha a linha, as chaves estrangeiras `DEFERRABLE`, o `Identity`, os manifestos
+próprios e o Alembic; o SQLGlot fica opcional, como teste de compatibilidade.
 
-### A troca de dados com o código cliente
+## A troca de dados com o código cliente
 
-A fronteira da biblioteca é o lote `pyarrow.RecordBatch`, e a `pyarrow.Table` é a forma conveniente
-do que cabe na memória, redirecionada para a mesma API de lotes. O pipeline lê com
-`run.sandbox.stream(statement_ou_texto, params, batch_size, prefetch)`, que devolve um `BatchStream`
-(iterável de `RecordBatch` com `schema`, `read_next_batch`, `read_all`, `close`, gerenciador de
-contexto e `__arrow_c_stream__`), ou com `run.sandbox.query(statement)` e
+Os dados cruzam a fronteira da biblioteca em lotes `pyarrow.RecordBatch`, nos dois sentidos, e a
+`pyarrow.Table` é a forma conveniente do que cabe na memória, redirecionada para a mesma API de
+lotes (decisão do usuário de 2026-09-20). O cliente trabalha no lote atual enquanto a biblioteca lê
+o seguinte ou grava o anterior, cada primitiva numa thread auxiliar com uma fila limitada. O pandas
+com backend pyarrow é o formato dos pipelines (declaração do usuário de 2026-09-20), e a regra
+apoia-se na conversão barata, medida na subseção "A conversão para o pandas": 2,3 ms sem cópia para
+300.000 linhas, 1,4 ms para um lote de 100.000; o pandas não entra nas dependências de execução. Por motor: no DuckDB, a saída por
+`to_arrow_reader()` e a entrada por um `INSERT ... BY NAME` por lote numa transação; no Redshift, a
+saída pelas tuplas de `fetchmany` ou por `UNLOAD` e a entrada por Parquet no S3 mais
+`COPY ... MANIFEST`.
+
+### A API
+
+O pipeline lê com `run.sandbox.stream(statement_ou_texto, params, batch_size, prefetch)`, que
+devolve um `BatchStream` (iterável de `RecordBatch` com `schema`, `read_next_batch`, `read_all`,
+`close`, gerenciador de contexto e `__arrow_c_stream__`), ou com `run.sandbox.query(statement)` e
 `run.sandbox.execute(texto, params)`, que devolvem a `pa.Table` de `stream(...).read_all()`; grava
 com `with run.sandbox.loader(Modelo) as loader: loader.write(lote)`, ou com
 `run.sandbox.load(Modelo, data)`, que aceita `pa.Table`, `RecordBatch`, `RecordBatchReader` ou
-iterável de lotes e os passa ao mesmo `loader`. O caminho de um resultado até o Delta é `loader` ou
-`load`, `audit` e `publish`. Nenhuma primitiva pública recebe ou devolve um DataFrame, uma lista de
-linhas ou uma instância ORM; a mensagem que recusa um DataFrame aponta `pa.Table.from_pandas` e
-`pa.RecordBatch.from_pandas`. Dentro da biblioteca, o que não cabe na memória corre por
-`RecordBatchReader` (`export_partition` para `publish_partition`, `rewrite`, a carga inicial), cada
-um no seu cursor.
+iterável de lotes e os passa ao mesmo `loader`. `query` compila o statement pelo dialeto e o executa
+na conexão crua, sem `Session`, e `select(Lancamento)` é aceito como statement Core. A forma por
+tabela serve ao que cabe na memória e à lógica que precisa de todas as linhas: `query(statement)`
+devolve a `pa.Table`, `to_pandas(types_mapper=pd.ArrowDtype)` a leva ao pandas, e
+`load(Modelo, pa.Table.from_pandas(frame, preserve_index=False))` grava. O caminho de um resultado
+até o Delta é `loader` ou `load`, `audit` e `publish`. Nenhuma primitiva pública recebe ou devolve
+um DataFrame, uma lista de linhas ou uma instância ORM; a mensagem que recusa um DataFrame aponta
+`pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. Dentro da biblioteca, o que não cabe na
+memória corre por `RecordBatchReader` (`export_partition` para `publish_partition`, `rewrite`, a
+carga inicial), cada um no seu cursor. O exemplo de uso, `stream` e `loader` dentro de uma
+execução, está na seção "Pipeline de atualização mensal".
 
-O que a sondagem de 2026-09-20 (macOS arm64, DuckDB 1.5.5 com `threads = 2`, PyArrow 25.0.1, pandas
+### O que a sondagem fixou em cada primitiva
+
+A sondagem de 2026-09-20 (macOS arm64, DuckDB 1.5.5 com `threads = 2`, PyArrow 25.0.1, pandas
 3.0.6; as asserções em `test_duckdb.py`, `test_pyarrow.py` e `test_parallel.py`, e a leitura em
 [`POC.md`](POC.md)) fixou em cada primitiva:
 
@@ -161,22 +171,22 @@ O que a sondagem de 2026-09-20 (macOS arm64, DuckDB 1.5.5 com `threads = 2`, PyA
   trabalho em pandas, `loader`) sobre 3.000.000 de linhas levou 0,127 s, contra 0,178 s lote a lote
   sem threads e 0,131 s pela tabela inteira.
 - **O `INSERT` único sobre um leitor alimentado por gerador Python não é o caminho**, embora seja um
-  comando só e atômico (a falha do gerador no lote 20 deixou a tabela como estava): o `arrow_scan`
+  comando só e atômico (a falha do gerador no lote 20 deixou a tabela como estava). O `arrow_scan`
   do DuckDB puxa o fluxo por uma thread de leitura antecipada do Arrow (`BackgroundGenerator`, lida
-  na pilha nativa), que chama o gerador em outra thread, tinha puxado de 5 a 15 lotes quando o
-  comando falhou no primeiro, chegou a 10 ou 20 depois da falha e parou ali: um buffer que a fila da
-  biblioteca não controla, e uma thread que, ainda chamando Python na saída do processo, o pendurou
-  no destrutor do pool de threads do Arrow. Vale para qualquer gerador Python entregue ao `register`
-  do DuckDB, e é por isso que `BatchStream.__arrow_c_stream__` serve ao `write_deltalake` e ao
-  `RecordBatchReader.from_stream`, não ao `register`.
+  na pilha nativa), que chama o gerador em outra thread: ela tinha puxado de 5 a 15 lotes quando o
+  comando falhou no primeiro, chegou a 10 ou 20 depois da falha e parou ali. Esse buffer a fila da
+  biblioteca não controla, e essa thread, ainda chamando Python na saída do processo, pendurou o
+  processo no destrutor do pool de threads do Arrow. O mesmo vale para qualquer gerador Python
+  entregue ao `register` do DuckDB, e é por isso que `BatchStream.__arrow_c_stream__` serve ao
+  `write_deltalake` e ao `RecordBatchReader.from_stream`, não ao `register`.
 - **O `cast` por lote é barreira de segurança, não só de contrato.** `RecordBatchReader.from_batches`
-  não confere cada lote contra o esquema declarado: `read_next_batch` devolve o lote como veio, só
-  `read_all` acusa `Schema at index 0 was different`, e o `arrow_scan` do DuckDB lê os buffers pelo
+  não confere cada lote contra o esquema declarado: `read_next_batch` devolve o lote como veio, e só
+  `read_all` acusa `Schema at index 0 was different`. O `arrow_scan` do DuckDB lê os buffers pelo
   esquema declarado, então um lote com as colunas em outra ordem entrou sem erro com os bytes
   trocados (`(1, 1.0)` lido como `(4607182418800017408, 5e-324)`); uma coluna a mais ou a menos falha
-  com `ArrowArray struct has 3 children, expected 2`. A nulidade do esquema Arrow não é conferida
-  pelo DuckDB; a coluna `NOT NULL` do DuckDB é (`ConstraintException`). `RecordBatch.cast` recusa o
-  que `Table.cast` recusa: nulo em campo `nullable=False`, nomes fora de ordem e escala perdida.
+  com `ArrowArray struct has 3 children, expected 2`. O DuckDB não confere a nulidade do esquema
+  Arrow; a coluna `NOT NULL` do DuckDB ele confere (`ConstraintException`). `RecordBatch.cast` recusa
+  o que `Table.cast` recusa: nulo em campo `nullable=False`, nomes fora de ordem e escala perdida.
 - **As conversões do lote não copiam**: `to_batches(max_chunksize=100_000)` de 300.000 linhas em
   0,04 ms e `Table.from_batches` em 0,003 ms sobre os mesmos buffers;
   `RecordBatch.to_pandas(types_mapper=pd.ArrowDtype)` de 100.000 linhas em 1,4 ms e
@@ -193,6 +203,8 @@ O que a sondagem de 2026-09-20 (macOS arm64, DuckDB 1.5.5 com `threads = 2`, PyA
   entra antes dele. Se o `redshift_connector` materializa o resultado no `execute` ou o lê do socket
   no `fetchmany` decide se `stream` limita a memória sem `UNLOAD`
   ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+### A conversão para o pandas
 
 A hipótese da regra, de que converter para pandas é barato, foi medida em 2026-09-20 em macOS arm64
 com pandas 3.0.6, PyArrow 25.0.1 e DuckDB 1.5.5, sobre 300.000 linhas de `operacoes` com sete
@@ -212,6 +224,8 @@ A aritmética do pandas sobre `decimal128[pyarrow]` fica em decimal: `sum` em 1,
 `merge` preserva os dtypes. Sobre `object` de `Decimal`, `sum` levou 14,3 ms. `round(2)` mantém a
 escala do dtype, e o cast seguro para `decimal128(18, 2)` então aceita; sem o `round`, recusa com
 `Rescaling Decimal value would cause data loss`.
+
+### O `cast` por lote
 
 O que a sondagem fixa em `cast`:
 
@@ -239,13 +253,29 @@ O que a sondagem fixa em `cast`:
   `list` e `map` numa coluna JSON.
 - `large_string` vira `string`; `timestamp[ns]` vira `[us]` quando a parte perdida é zero e é
   recusado quando não é.
+- Uma coluna calculada no pandas em `float64` chega como `double`: `loader.write` e `load` a recusam
+  numa coluna `Numeric` enquanto houver valor fora da escala, até o pipeline arredondar; nas colunas
+  `Double` do modelo de referência (decisão de 2026-09-20) ela entra como chega. O DataFrame que a
+  lógica do cliente devolve mantém os dtypes `ArrowDtype` do lote, e `from_pandas` os devolve ao
+  Arrow sem cópia.
 
-## Estado do projeto
+### O paralelismo do cliente e as threads da biblioteca
 
-O estado da implementação, com a situação de cada etapa e o que cada artefato do repositório contém,
-está em [`CURRENT_STATE.md`](CURRENT_STATE.md). O resultado das provas de conceito, das suítes e dos
-probes, com as consequências no plano, está em [`POC.md`](POC.md). As pendências e as decisões em
-aberto estão em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+- A API é síncrona: toda primitiva bloqueia até o efeito estar visível para a chamada seguinte, de
+  qualquer thread, com autocommit por comando nos dois motores, e nenhuma é `async`, porque nenhum
+  dos drivers (`duckdb`, `deltalake`, `redshift_connector`, `boto3`) tem API assíncrona em Python. O
+  paralelismo é do código cliente, com `concurrent.futures`, e `Future.result()` expressa a
+  dependência entre um `load` e a leitura que o segue; a biblioteca não tem scheduler nem grafo de
+  tarefas, e as suas threads são os pools de `ingest`, `publish` e `publish_redshift` e a auxiliar de
+  cada `stream` e de cada `loader`, com fila limitada e encerrada no `close`. O DuckDB, o delta-rs e
+  o PyArrow liberam o GIL no trabalho nativo, então threads bastam, e uma extensão em Rust não entra
+  por paralelismo (`test_concurrency.py`, `serialize-db.md`, seção "Paralelismo").
+- Uma chamada nativa que solta e retoma o GIL ao lado de uma thread em Python puro espera o
+  intervalo de troca a cada retomada: 200 `os.stat` levaram 0,3 s contra 0,2 ms, e o
+  `import pyarrow.dataset` que `pq.read_table` faz na primeira chamada levou 15 s contra 0,19 s. A
+  biblioteca importa seus módulos na abertura, e o cliente não roda laços Python puros ao lado das
+  threads da biblioteca que fazem chamadas curtas, como o `redshift_connector` lendo pelo socket e o
+  `boto3`; `sys.setswitchinterval` é o ajuste (`test_concurrency.py`).
 
 ## Regras que as etapas obedecem
 
@@ -271,9 +301,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - A biblioteca escreve por um único caminho, delta-rs ou `COPY ... (RETURN_STATS)` mais
   `create_write_transaction`: o `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de
   partição dentro do arquivo e quebraria o `COPY` posicional (`delta.md`).
-- Sem vetores de exclusão, sem column mapping, sem `Identity`, caminhos relativos no log e nunca
-  um arquivo registrado por URI absoluta: as regras que mantêm o `COPY` do Redshift lendo os
-  arquivos e a saída do Delta aberta (`delta.md`, `estrategia.md`).
+- As regras que mantêm o `COPY` do Redshift lendo os arquivos e a saída do Delta aberta: sem vetores
+  de exclusão, sem column mapping, sem `Identity`, caminhos relativos no log e nunca um arquivo
+  registrado por URI absoluta (`delta.md`, `estrategia.md`).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
   consultada mais de uma vez é materializada no DuckDB (`delta.md`).
 - O delta-rs não lê a região de `~/.aws/config`: com `region = us-west-2` no perfil `default` e
@@ -300,38 +330,18 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - O pacote `sagemaker-studio` fica fora do projeto: arrasta `deltalake`, `duckdb` e `pandas` sem
   versão fixa, e numa instalação de teste rebaixou o `duckdb` para 1.5.1. A raiz do banco é
   configuração explícita, nunca inferida do projeto (`probes/README.md`).
-- A fronteira com o código cliente é o lote `pa.RecordBatch`, com a `pa.Table` como conveniência:
-  `stream` e `loader` são as primitivas, `query`, `execute` e `load` as suas formas por tabela, e
-  nenhuma primitiva pública recebe ou devolve DataFrame, lista de linhas ou instância ORM. Cada
-  stream e cada loader roda num cursor próprio, com uma thread auxiliar e uma fila limitada; todo
-  lote passa por `cast` antes de chegar ao DuckDB, porque o `arrow_scan` lê os buffers pelo esquema
-  declarado sem conferir o lote; e um gerador Python nunca é entregue ao `register` do DuckDB, cuja
-  leitura antecipada puxa lotes fora do controle da fila e continua depois de o comando terminar
-  (seção "A troca de dados com o código cliente").
-- A API é síncrona: toda primitiva bloqueia até o efeito estar visível para a chamada seguinte, de
-  qualquer thread, com autocommit por comando nos dois motores, e nenhuma é `async`, porque nenhum
-  dos quatro drivers tem API assíncrona em Python. O paralelismo é do código cliente, com
-  `concurrent.futures`, e `Future.result()` expressa a dependência entre um `load` e a leitura que o
-  segue; a biblioteca não tem scheduler nem grafo de tarefas, e as suas threads são os pools de
-  `ingest`, `publish` e `publish_redshift` e a auxiliar de cada `stream` e de cada `loader`, com fila
-  limitada e encerrada no `close`. O DuckDB, o delta-rs e o PyArrow
-  liberam o GIL no trabalho nativo, então threads bastam, e uma extensão em Rust não entra por
-  paralelismo (`test_concurrency.py`, `serialize-db.md`, seção "Paralelismo").
+- A troca de dados com o código cliente obedece à seção "A troca de dados com o código cliente":
+  lotes com `cast` em cada um, nenhum gerador Python entregue ao `register` do DuckDB, API síncrona
+  com o paralelismo do lado do cliente, e nenhum laço Python puro ao lado das threads da biblioteca.
 - O motor guarda uma conexão por thread: `duckdb` e `redshift_connector` declaram `threadsafety` 1,
   uma conexão DuckDB compartilhada entrega a uma thread o resultado da outra sem erro, um banco em
   memória só é compartilhado por `cursor()` da conexão que o abriu, um segundo `connect(arquivo)`
   com outra configuração ou `read_only` é recusado, e `threads` é da instância. Cada thread recebe
   um `cursor()` do DuckDB ou uma conexão Redshift num `threading.local`, criados no primeiro uso e
   fechados em `cleanup`, e cada `stream` e cada `loader` abre um cursor próprio, fechado no `close`,
-  que deixa o da thread do cliente livre; `run.sandbox.connection` expõe a conexão crua da thread; o estado mutável
-  de `Execution` fica sob lock; o cliente não cria conexão para o sandbox, e a biblioteca não cria
-  `Engine` do SQLAlchemy (`test_concurrency.py`, `test_parallel.py`).
-- Uma chamada nativa que solta e retoma o GIL ao lado de uma thread em Python puro espera o
-  intervalo de troca a cada retomada: 200 `os.stat` levaram 0,3 s contra 0,2 ms, e o
-  `import pyarrow.dataset` que `pq.read_table` faz na primeira chamada levou 15 s contra 0,19 s. A
-  biblioteca importa seus módulos na abertura, e o cliente não roda laços Python puros ao lado das
-  threads da biblioteca que fazem chamadas curtas, como o `redshift_connector` lendo pelo socket e o
-  `boto3`; `sys.setswitchinterval` é o ajuste (`test_concurrency.py`).
+  que deixa o da thread do cliente livre; `run.sandbox.connection` expõe a conexão crua da thread; o
+  estado mutável de `Execution` fica sob lock; o cliente não cria conexão para o sandbox, e a
+  biblioteca não cria `Engine` do SQLAlchemy (`test_concurrency.py`, `test_parallel.py`).
 - As chaves inteiras vêm de `run.next_ids(table, n)`: faixas contíguas sob lock, a partir de
   `max_key + 1` na versão fixada, lido de `max.<coluna>` das ações `add` e pela varredura da coluna
   quando um arquivo não tem a estatística; a tabela vazia começa em 1. Os ids de uma reexecução
@@ -355,11 +365,11 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`, `deltalake`, `duckdb`,
 `pyarrow` e `boto3`, nas versões fixadas pelos documentos, mais `duckdb-engine` e
-`sqlalchemy-redshift` enquanto houver compilação em tempo de execução (hoje só no grupo `dev`, para
-as suítes de estudo); `redshift-connector` entra no extra `redshift`, e `sqlglot` no grupo `dev`; o pandas
-fica no grupo `dev`, para o teste do ciclo com `ArrowDtype`, porque a biblioteca não o importa.
-`prepare_offline.sh` passa a instalar os extras
-(`--all-extras`) e é rodado de novo a cada mudança.
+`sqlalchemy-redshift`, que saem do grupo `dev` das suítes de estudo para as de execução enquanto
+houver compilação em tempo de execução; `redshift-connector` entra no extra `redshift`, e `sqlglot`
+no grupo `dev`; o pandas fica no grupo `dev`, para o teste do ciclo com `ArrowDtype`, porque a
+biblioteca não o importa. `prepare_offline.sh` passa a instalar os extras (`--all-extras`) e é rodado
+de novo a cada mudança.
 
 Configuração: argumentos explícitos de `Database` e da linha de comando, com as variáveis
 `SERIALIZE_DB_ROOT`, `SERIALIZE_DB_ENVIRONMENT`, `SERIALIZE_DB_ENGINE`,
@@ -370,15 +380,15 @@ Testes: `tests/` na raiz testa o pacote, um módulo de teste por módulo do paco
 `tests/proof_of_concept/` guarda as provas de conceito e os testes das bibliotecas externas,
 comentados passo a passo porque também são o material de estudo das APIs; `tests/model/` é o modelo
 de referência, que faz o papel da biblioteca cliente: os testes do pacote o entregam à API como um
-pipeline entregaria os seus modelos. Um teste que não grava (esquema, renderização, DuckDB em memória) roda sem variável; um teste que
-grava usa a fixture `local_location`, sob `SERIALIZE_DB_TEST_LOCAL_ROOT`, e é pulado sem ela, e o
-fim da sessão imprime, sem erro, o comando que autoriza cada suíte pulada e o que ela grava; o
-marcador `s3` repete no bucket os testes que dependem do armazenamento, sob
-`SERIALIZE_DB_TEST_S3_ROOT`; o marcador `redshift` roda só com `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`,
-o esquema onde a suíte pode criar tabelas `serialize_db_test_<id>_*`, e conecta pelas variáveis
-`SERIALIZE_DB_REDSHIFT_*`. Os arquivos gerados do modelo de referência (`tests/model/schema/` e
-`tests/model/sql/`, o que um pipeline versionaria na raiz do seu repositório) são comparados por
-teste com uma geração nova, sem gravar.
+pipeline entregaria os seus modelos. Um teste que não grava (esquema, renderização, DuckDB em
+memória) roda sem variável. Um teste que grava usa a fixture `local_location`, sob
+`SERIALIZE_DB_TEST_LOCAL_ROOT`, e é pulado sem ela; o fim da sessão imprime, sem erro, o comando que
+autoriza cada suíte pulada e o que ela grava. O marcador `s3` repete no bucket os testes que dependem
+do armazenamento, sob `SERIALIZE_DB_TEST_S3_ROOT`; o marcador `redshift` roda só com
+`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, o esquema onde a suíte pode criar tabelas
+`serialize_db_test_<id>_*`, e conecta pelas variáveis `SERIALIZE_DB_REDSHIFT_*`. Os arquivos gerados
+do modelo de referência (`tests/model/schema/` e `tests/model/sql/`, o que um pipeline versionaria na
+raiz do seu repositório) são comparados por teste com uma geração nova, sem gravar.
 
 ## Etapas
 
@@ -387,7 +397,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
-| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado, Redshift pendente. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
+| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão e a escrita no datashare provadas por `examples/`, e a suíte pendente. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
 | 1. `schema` | Modelo de referência corrigido; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo de referência. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |
@@ -416,9 +426,9 @@ arquivo próprio:
 
 Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, partição de referência
 `2026-08-31` (`data_base_str`). As entradas são `cad_lancamentos` (as doze partições até
-2026-08-31), `cad_contratos`,
-`cad_operacoes`, `rel_contrato_operacao` e as tabelas `dom_*`; a saída ilustrativa é
-`cad_lancamentos` do banco projetado, partição 2026-08-31. Os números de versão são ilustrativos.
+2026-08-31), `cad_contratos`, `cad_operacoes`, `rel_contrato_operacao` e as tabelas `dom_*`; a saída
+ilustrativa é `cad_lancamentos` do banco projetado, partição 2026-08-31. Os números de versão são
+ilustrativos.
 
 | Passo | O que acontece | Artefatos |
 | --- | --- | --- |
@@ -431,7 +441,7 @@ Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, par
 | 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
 
-A API da etapa 6, ainda não implementada:
+A API da etapa 6:
 
 ```python
 import pandas as pd
@@ -459,22 +469,15 @@ with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2
     run.publish_redshift(LancamentoProjetado)                        # só as partições alteradas
 ```
 
-A forma por tabela, para o que cabe na memória e para a lógica que precisa de todas as linhas:
-`entries = run.sandbox.query(statement)` devolve a `pa.Table`, `frame = entries.to_pandas(types_mapper=pd.ArrowDtype)`
-a leva ao pandas, e `run.sandbox.load(LancamentoProjetado, pa.Table.from_pandas(projected, preserve_index=False))`
-grava; as duas formas passam pela mesma API de lotes.
+O passo 3 usa a API da seção "A troca de dados com o código cliente": o exemplo mostra `stream` e
+`loader`, e `query` e `load` são a forma por tabela.
 
-O DataFrame que `project` devolve mantém os dtypes `ArrowDtype` de `frame`, e `from_pandas` os
-devolve ao Arrow sem cópia; uma coluna calculada em `float64` chega como `double`, e `loader.write` e
-`load` a recusam numa coluna `Numeric` enquanto houver valor fora da escala, até o pipeline
-arredondar; no modelo de referência as colunas numéricas são `Double` (decisão de 2026-09-20), e as
-duas a aceitam como chega.
-
-Uma reexecução com o mesmo `execution_id` repete os `overwrite` das mesmas partições e produz as mesmas
-linhas; os ids podem diferir, porque `next_ids` recomeça do máximo da versão fixada. Uma correção de uma partição antiga é a mesma chamada com outra `partition` e um `execution_id` novo:
-`publish_redshift` recarrega só essa partição, e as versões intermediárias entre snapshots do banco saem
-no `vacuum` mensal. A execução no Redshift é o mesmo ciclo com `engine="redshift"`: o sandbox são as
-tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a publicação sai por `UNLOAD` mais
+Uma reexecução com o mesmo `execution_id` repete os `overwrite` das mesmas partições e produz as
+mesmas linhas; os ids podem diferir, porque `next_ids` recomeça do máximo da versão fixada. Uma
+correção de uma partição antiga é a mesma chamada com outra `partition` e um `execution_id` novo:
+`publish_redshift` recarrega só essa partição, e as versões intermediárias entre snapshots do banco
+saem no `vacuum` mensal. A execução no Redshift é o mesmo ciclo com `engine="redshift"`: o sandbox
+são as tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a publicação sai por `UNLOAD` mais
 `register_files`, sem passar pela máquina local.
 
 ## Ordem do trabalho
@@ -483,9 +486,10 @@ tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a publicação sai 
    `schema/` e `sql/` versionados em `tests/model/`.
 2. Etapa 3, depois 4 e 6: um pipeline completo em disco local, o critério de aceite da etapa 6
    sobre o motor DuckDB.
-3. Em paralelo, no ambiente de destino: os probes (no laboratório rodaram três vezes em 2026-09-20,
-   e as suítes local e S3 uma vez); a manutenção da suíte S3 se confirmada;
-   `tests/proof_of_concept/` e os testes `-m s3` das etapas 3 e 4 no bucket.
-4. Quando `probes/redshift.py` mostrar a conexão: o `test_redshift.py` da etapa 0, depois as etapas
-   5 e 8.
+3. Em paralelo, no ambiente alvo: os probes, que rodaram no laboratório em 2026-09-20 com as suítes
+   local e S3, e dos quais `redshift.py` rodou no ambiente alvo no mesmo dia ([`POC.md`](POC.md)); a
+   manutenção da suíte S3 se confirmada; `tests/proof_of_concept/` e os testes `-m s3` das etapas 3
+   e 4 no bucket.
+4. Com a conexão mostrada por `probes/redshift.py` e por `examples/` em 2026-09-20: o
+   `test_redshift.py` da etapa 0 no ambiente alvo, depois as etapas 5 e 8.
 5. Etapa 7 quando os Parquet de origem estiverem acessíveis; etapa 9 por último, com o runbook.

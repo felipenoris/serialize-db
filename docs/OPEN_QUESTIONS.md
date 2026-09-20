@@ -12,10 +12,6 @@ foi medido em [`POC.md`](POC.md).
   `export_partition` da [etapa 5](PLAN-STAGE-5.md) precisa é `PARTITION BY (<coluna>) MANIFEST
   VERBOSE`, que ninguém exercitou lá; `test_unload_partition_by_and_register` registra o resultado e
   pula o resto quando a recusa vem do datashare.
-- **`COMPUPDATE` explícito no `COPY` de um datashare.** O `COPY` sem cláusula alguma passou, e é o
-  que a biblioteca emite. Se `COMPUPDATE OFF` explícito é aceito, ou se a frase da documentação
-  ("`COPY` sem `COMPUPDATE`") quer dizer que a análise de compressão precisa estar desligada, nenhum
-  teste respondeu.
 - **Onde ficam as tabelas de execução.** O sandbox `exec_<id>_*` da [etapa 4](PLAN-STAGE-4.md) e as
   stagings do `COPY` nascem no banco do datashare, onde o `CREATE TABLE` passou, e herdam as
   restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária
@@ -65,7 +61,7 @@ foi medido em [`POC.md`](POC.md).
 Todas dependem de uma execução da suíte contra o Redshift do ambiente alvo, que ainda não houve; o
 caminho de conexão está fixado desde 2026-09-20 ([`../examples/`](../examples/)), e
 `tests/proof_of_concept/test_redshift.py` tem um teste por pergunta. As perguntas de S3 foram
-respondidas em 2026-09-19. A [etapa 0](PLAN-STAGE-0.md) as agrupa por comando.
+respondidas em 2026-09-19 ([`POC.md`](POC.md)). A [etapa 0](PLAN-STAGE-0.md) as agrupa por comando.
 
 - Se o `COPY` de Parquet aceita lista de colunas: o `awswrangler` emite
   `COPY tabela (colunas) ... FORMAT AS PARQUET`, e a referência descreve a lista só para arquivos
