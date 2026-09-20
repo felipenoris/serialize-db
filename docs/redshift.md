@@ -1,12 +1,14 @@
 # Redshift
 
 O Amazon Redshift é o banco de publicação do projeto e uma das duas engines de execução do pipeline.
-Este documento descreve como ele organiza os dados, os tipos que interessam ao contrato, o DDL, a
-manipulação de dados com pandas e Arrow, a ingestão em volume, a exportação para Parquet, as
-recomendações de performance e o suporte a SQLAlchemy. As afirmações vêm da documentação oficial,
-consultada em 2026-09-18, e do código dos pacotes `redshift_connector` 2.1.16, `sqlalchemy-redshift`
-1.0.0 e `awswrangler` 3.17.1. Os exemplos de SQLAlchemy foram compilados nesta sessão sem conexão a
-um cluster; os itens marcados como pendentes dependem da prova de conceito.
+Este documento descreve a conectividade do ambiente alvo, como ele organiza os dados, os tipos que
+interessam ao contrato, o DDL, a manipulação de dados com pandas e Arrow, a ingestão em volume, a
+exportação para Parquet, as recomendações de performance e o suporte a SQLAlchemy. As afirmações vêm
+da documentação oficial, consultada em 2026-09-18 e, na seção de conectividade, em 2026-09-20, e do
+código dos pacotes `redshift_connector` 2.1.16, `sqlalchemy-redshift` 1.0.0 e `awswrangler` 3.17.1.
+Os dois caminhos de conexão rodaram no ambiente alvo em 2026-09-20 e estão em
+[`../examples/`](../examples/); os exemplos de SQLAlchemy foram compilados sem conexão a um cluster,
+e os itens marcados como pendentes dependem da prova de conceito.
 
 ## Comandos utilitários para diagnóstico
 
@@ -39,6 +41,91 @@ def load_diagnostics(conn: sa.Connection) -> tuple[int, list[dict]]:
     )).mappings().all()
     return loaded, [dict(error) for error in errors]
 ```
+
+## Conectividade no ambiente alvo
+
+O ambiente alvo expõe um workgroup serverless, e o esquema do projeto vem de um datashare. Os dois
+caminhos de conexão estão em [`../examples/`](../examples/), como foram executados lá em 2026-09-20;
+o que eles mostraram está em [`POC.md`](POC.md), e `probes/redshift.py` repete as mesmas chamadas.
+
+### Credencial temporária do workgroup
+
+`redshift-serverless:GetWorkgroup` devolve o endereço e a porta do endpoint, e
+`redshift-serverless:GetCredentials` devolve o par usuário e senha derivado da identidade IAM de
+quem chama ([`../examples/redshift_native.py`](../examples/redshift_native.py)). Não há senha
+guardada em lugar nenhum.
+
+- O usuário sai como `IAMR:<papel>` para uma role e `IAM:<usuário>` para um usuário IAM, é criado no
+  banco quando ainda não existe e entra em `PUBLIC`: os `GRANT` do esquema precisam alcançá-lo.
+- A senha dura 900 segundos por padrão e 3600 no máximo (`durationSeconds`). Uma execução mais longa
+  que a emissão precisa de uma conexão nova, e é por isso que a biblioteca pede a credencial a cada
+  conexão em vez de guardá-la.
+- `dbName` é opcional; informando-o, a política IAM precisa permitir o recurso `dbname` daquele banco.
+- O `redshift_connector` faz o mesmo por dentro com `iam=True, is_serverless=True,
+  serverless_work_group=...`, e fica como reserva: o caminho explícito é o que foi executado, e o
+  erro dele diz qual das duas chamadas falhou.
+
+### Data API
+
+A Data API executa SQL por HTTPS, sem a porta 5439, e é assíncrona: `ExecuteStatement` devolve o
+identificador na hora, `DescribeStatement` é consultado até o estado ser `FINISHED`, `FAILED` ou
+`ABORTED`, e `GetStatementResult` devolve o resultado paginado
+([`../examples/redshift_data_api.py`](../examples/redshift_data_api.py)). Ela serve a comandos e a
+diagnóstico; a troca de dados da biblioteca não passa por ela:
+
+- Cada célula é um dicionário de um item (`stringValue`, `longValue`, `doubleValue`, `booleanValue`,
+  `blobValue`) ou `{"isNull": true}`. `DECIMAL` chega como texto, e data e hora também: o tipo do
+  contrato se perde no caminho.
+- O resultado morre em 24 horas e para em 500 MB depois da compressão; o statement vai até 200 KB e
+  a consulta até 24 horas. O máximo é 500 consultas ativas e 500 sessões por warehouse.
+- `WaitTimeSeconds` faz a chamada esperar até 30 segundos pelo fim, no lugar de um laço de consultas.
+- A sessão morre com o statement, a não ser que `SessionKeepAliveSeconds` a mantenha (24 horas no
+  máximo) e as chamadas seguintes levem o `SessionId`: sem isso não há tabela temporária entre um
+  comando e o outro, e uma sessão roda um statement por vez.
+- `BatchExecuteStatement` roda os comandos em série, numa transação por padrão (`ExecutionMode`
+  `TRANSACTION`) ou um a um com `AUTO_COMMIT`.
+
+### O esquema do projeto num banco de datashare
+
+O esquema do projeto está num banco de datashare, e toda tabela é citada por nome em três partes,
+`banco.esquema.tabela`, a partir do banco local da conexão. `svv_redshift_databases` diz o tipo de
+cada banco (`local` ou `shared`) e o nível de isolamento; `svv_all_schemas` diz em que banco está
+cada esquema. `has_schema_privilege` e `svv_table_info` só enxergam o banco local: num esquema
+compartilhado, quem concede `USAGE` e `CREATE` é o produtor, e a lista de tabelas vem de
+`svv_all_tables`.
+
+Os objetos de um datashare só aceitam escrita quando o produtor concede `INSERT`, `CREATE` e os
+demais privilégios ao datashare, e o consumidor precisa atender três requisitos:
+
+| Requisito | Onde ler |
+| --- | --- |
+| Patch 186: `1.0.78890` ou maior no serverless, `1.0.78881` no provisionado | `select version()` |
+| Isolamento de snapshot no banco que recebe a escrita | `svv_redshift_databases.database_isolation_level` |
+| 64 slices ou mais no consumidor | `select count(*) from stv_slices` |
+
+O que o Redshift aceita escrever num datashare, e o que ele não lista:
+
+- DDL: `CREATE`/`DROP SCHEMA`, `CREATE`/`DROP`/`SHOW TABLE`, `CREATE TABLE ... AS`, `ALTER TABLE
+  ADD`/`DROP COLUMN`, `ALTER TABLE RENAME`, `ALTER SCHEMA RENAME`, `TRUNCATE`, `BEGIN` e `COMMIT`.
+- DML: `SELECT`, `INSERT`, `INSERT INTO SELECT`, `UPDATE`, `DELETE`, `MERGE` e **`COPY` sem
+  `COMPUPDATE`**. A biblioteca emite `COPY ... COMPUPDATE OFF` sempre que o destino está num
+  datashare.
+- `UNLOAD` não está na lista dos comandos suportados, e `docs/PLAN-STAGE-8.md` trata a exportação a
+  partir de uma tabela publicada como pergunta em aberto até a suíte rodar.
+- A escrita de uma transação vai para um banco só, e um comando múltiplo fora de um bloco de
+  transação não é aceito: a transação da publicação abre com `BEGIN` explícito, e a tabela de
+  controle mora no mesmo banco das tabelas publicadas.
+- `VIEW` e `MATERIALIZED VIEW` não podem ser criadas, alteradas nem apagadas num banco de datashare.
+- `TRUNCATE` numa tabela remota é transacional, ao contrário do `TRUNCATE` local, que confirma
+  sozinho.
+- O consumidor não altera nem apaga o datashare, e não põe um objeto dele em outro datashare.
+
+A lista dos comandos recusados acrescenta três que o projeto precisa conhecer: uma referência a
+objeto que não seja o nome em três partes, quando a sessão não está conectada ao banco
+compartilhado; a escrita numa tabela com chave de ordenação intercalada, que o projeto não usa (o
+`sort_key` de `Table.info` é composto); e `UPDATE`, `INSERT` ou `COPY` em coluna de identidade
+quando o consumidor tem mais slices que o produtor, que o projeto também não usa, porque as chaves
+são geradas no cliente. O `UNLOAD` não aparece em nenhuma das duas listas.
 
 ## Organização dos dados
 

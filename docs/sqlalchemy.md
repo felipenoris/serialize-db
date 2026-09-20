@@ -1220,6 +1220,14 @@ Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 
   `mes = NULL`, com um `SAWarning`. `render` transforma o aviso em erro.
 - Um nome de tabela com `{` é citado, `"{prefix}cad_operacoes"`; `quoted_name(..., quote=False)` o
   deixa sem aspas nos dois dialetos.
+- Um esquema `banco.esquema`, o nome em três partes do datashare do ambiente alvo, cai na mesma
+  regra: `MetaData(schema="datalake_rw_shared.sbx_aco_decon")` compila
+  `CREATE TABLE "datalake_rw_shared.sbx_aco_decon".operacoes`, um identificador só entre aspas, e
+  `MetaData(schema=quoted_name("datalake_rw_shared.sbx_aco_decon", False))` compila
+  `datalake_rw_shared.sbx_aco_decon.operacoes` no DDL, no `select` e no `insert` (medido em
+  2026-09-20 com o dialeto do Redshift, `test_sqlalchemy.py::test_three_part_name_needs_quoted_name_without_quotes`).
+  O dialeto do SQL Server quebra um esquema com ponto em partes; o do Redshift, derivado do
+  PostgreSQL, não.
 
 ```python
 """Renderiza um select do Core como texto de cada dialeto: constantes embutidas, mês como parâmetro, prefixo do sandbox como sentinela; executa o texto no DuckDB."""

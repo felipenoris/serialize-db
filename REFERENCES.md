@@ -173,6 +173,17 @@ Compartilhamento de dados (datashare), autorização e permissões:
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-secrets.html>
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-access.html>
 
+Conectividade do ambiente alvo (credencial temporária do workgroup, ciclo da Data API, escrita num
+banco de datashare), consultadas em 2026-09-20 a partir dos exemplos de `examples/`:
+
+- <https://docs.aws.amazon.com/redshift-serverless/latest/APIReference/API_GetCredentials.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/data-sharing-intro.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/considerations-datashare-reads-writes.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/multi-warehouse-writes-sql-statements.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/multi-warehouse-writes-sql-statements-unsupported.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_REDSHIFT_DATABASES.html>
+
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_columnar_storage_disk_mem_mgmnt.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_redshift-and-postgres-sql.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_redshift-sql-implementated-differently.html>
