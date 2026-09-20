@@ -274,6 +274,15 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   second of the three had been stale since the previous split. After moving a block, grep it for
   "abaixo", "acima", "este", "desta" and "seção", and turn each reference that now crosses files
   into a link.
+- **A read-only claim over the user's data is proved by a copy and a `diff -r`** (2026-09-20).
+  Reading the probe's code for write calls proves only what the reader thought to look for. Copy the
+  fixture, run against the copy's source, diff the two afterwards, and grep the probe for `open(`,
+  `write`, `mkdir`, `unlink`, `remove` and `rmtree` as the second reading. Build the fixture with the
+  defects the tool must find, one per table: a column added in one month, a type changed between
+  partitions, a partition column also written inside the file, a mixed partition depth, a folder
+  without a Parquet file, a file with no rows. A fixture without defects exercises no verdict, and
+  that first run also showed four rendering defects, among them a `Timestamp` logical type whose
+  full text made the schema table unreadable.
 
 ## What the documents establish
 
