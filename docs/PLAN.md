@@ -6,19 +6,21 @@ razões das decisões e as comparações entre ferramentas estão em [`estrategi
 comportamento verificado do Delta, em [`delta.md`](delta.md); os motores, em [`duckdb.md`](duckdb.md)
 e [`redshift.md`](redshift.md); o esquema a partir dos modelos, em [`schema.md`](schema.md) e
 [`sqlalchemy.md`](sqlalchemy.md); as funcionalidades, os metadados próprios e o fluxo de cada caso de
-uso, em [`serialize-db.md`](serialize-db.md). O estado descrito aqui é o de 2026-09-19.
+uso, em [`serialize-db.md`](serialize-db.md). O estado descrito aqui é o de 2026-09-20.
 
 ## Decisões
 
 A biblioteca mantém um banco analítico como tabelas Delta Lake, gravadas e lidas pelo pacote
 `deltalake` (delta-rs) sobre Parquet, no bucket do projeto ou numa pasta local. Os modelos
-declarativos do SQLAlchemy são o contrato de esquema: deles saem o esquema Arrow, o esquema Delta e o
-DDL do sandbox nos dois motores. Os statements Core do pipeline continuam válidos, e o texto SQL
-gerado por dialeto os substitui, uma interação com o banco por vez, até o SQLAlchemy terminar nos
-modelos e na geração. DataFrames entram e saem por Arrow: no DuckDB,
-`INSERT ... BY NAME SELECT * FROM <tabela Arrow>` e `to_arrow_reader()`; no Redshift, Parquet no S3
-mais `COPY ... MANIFEST` e ADBC ou `UNLOAD`. A evolução do esquema é uma reconciliação entre o
-modelo e o log da tabela, sem Alembic.
+declarativos do SQLAlchemy são o contrato de esquema: deles saem o esquema Arrow, o esquema Delta e
+o DDL do sandbox nos dois motores. Chave primária, unicidade e chave estrangeira não entram nesse
+DDL, porque o Parquet não as tem, o DuckDB as cobra na carga e o Redshift só as registra: quem as
+aplica é a auditoria da execução, com consultas derivadas dos mesmos modelos, e a reprovação impede
+a publicação. Os statements Core do pipeline continuam válidos, e o texto SQL gerado por dialeto os
+substitui, uma interação com o banco por vez, até o SQLAlchemy terminar nos modelos e na geração.
+DataFrames entram e saem por Arrow: no DuckDB, `INSERT ... BY NAME SELECT * FROM <tabela Arrow>` e
+`to_arrow_reader()`; no Redshift, Parquet no S3 mais `COPY ... MANIFEST` e ADBC ou `UNLOAD`. A
+evolução do esquema é uma reconciliação entre o modelo e o log da tabela, sem Alembic.
 
 As premissas, declaradas pelo usuário, e o que cada uma fixa:
 
@@ -176,10 +178,11 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.sql` | 2 | O texto SQL por dialeto a partir de statements Core: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos atrás de uma interface: URIs, leitura e escrita condicional, cópia, listagem, `storage_options` e o secret do DuckDB. |
 | `serialize_db.delta` | 3 | A camada Delta: criação, publicação por mês, registro de arquivos, reconciliação, reescrita, manifesto, diferença de versões, snapshots, `vacuum`, compactação, cópia profunda, exportação. |
+| `serialize_db.audit` | 4 | As verificações derivadas do contrato: chaves, nulos, limites de tipo, JSON e totais; o texto SQL por dialeto e o `AuditReport`. |
 | `serialize_db.engine` | 4 e 5 | O protocolo `Engine` e os motores `duckdb` e `redshift`, com a mesma interface. |
 | `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução. |
 | `serialize_db.load` | 7 | A carga inicial dos Parquet atuais. |
-| `serialize_db.cli` | 6 a 9 | `serialize-db run`, `schema`, `sql`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`. |
+| `serialize_db.cli` | 6 a 9 | `serialize-db run`, `schema`, `sql`, `audit`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`. |
 
 Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`, `deltalake`, `duckdb`,
 `pyarrow` e `boto3`, nas versões fixadas pelos documentos, mais `duckdb-engine` e
@@ -214,7 +217,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | 1. `schema` | Modelos corrigidos; esquema Arrow, Delta e DDL; cast; arquivos `schema/`. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição do mês, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por mês e realocação; os mesmos no bucket com `-m s3`. |
-| 4. Motor DuckDB | Conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação do mês. | O pipeline de exemplo roda em memória sobre um Delta local. |
+| 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação do mês. | O pipeline de exemplo roda em memória sobre um Delta local; a auditoria reprova a chave repetida entre o mês novo e um mês já publicado. |
 | 5. Motor Redshift | O mesmo protocolo com sandbox `exec_<id>_`, `COPY ... MANIFEST` e `UNLOAD`. | SQL gerado coberto por testes sem cluster; integração com amostra, marcador `redshift`. |
 | 6. Execução e linha de comando | `Database`, `Execution`, `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
 | 7. Carga inicial | Migração dos Parquet atuais por tabela e por mês, com relatório. | Contagens e somas por mês iguais entre origem e Delta. |
@@ -257,9 +260,9 @@ comentários de tabela e de coluna, e `Table.info["serialize_db"]` com `partitio
 | `arrow_schema(table)` | O `pa.Schema` do `Table`: os tipos da tabela de `schema.md`, a nulidade, o comentário de cada coluna em `metadata` do campo, `PARQUET:field_id` e a marca `arrow.json` nos campos JSON. |
 | `delta_schema(table)` | O `deltalake.Schema` derivado do Arrow: `decimal(18,2)`, `timestamp_ntz` para `DateTime` sem fuso e `timestamp` para o com fuso, `string` para JSON e UUID, comentários preservados. |
 | `ddl(table, dialect, prefix="")` | `CREATE TABLE` para `duckdb` ou `redshift`: sem `DEFERRABLE` nem `Identity`, `CHECK` só no DuckDB, chaves só quando `table_options` as pede, `SORTKEY`, `DISTSTYLE` e `DISTKEY` no Redshift, `Text` como `VARCHAR(65535)`, `Uuid` como `VARCHAR(36)`, `JSON` como `SUPER`; `prefix` renomeia a tabela para o sandbox. |
-| `table_options(table)` | O `TableOptions` (`partition_by`, `sort_key`, `redshift`, `keys`) lido de `Table.info["serialize_db"]` com os padrões da biblioteca: partição por `mes` quando a coluna existe, nenhuma chave declarada. |
+| `table_options(table)` | O `TableOptions` (`partition_by`, `sort_key`, `redshift`, `keys`) lido de `Table.info["serialize_db"]` com os padrões da biblioteca: partição por `mes` quando a coluna existe e as chaves do próprio modelo, `table.primary_key` e os `UniqueConstraint`; `keys` só acrescenta uma chave de negócio ou exclui uma delas, sempre de forma explícita. |
 | `cast(reader, table)` | O `RecordBatchReader` convertido lote a lote para `arrow_schema(table)` com `safe=True`: serializa `dict` em JSON, leva timestamps a microssegundos e UTC, recusa perda de precisão, texto acima de `String(n)` e nulo em coluna `NOT NULL`. |
-| `check_models(metadata)` | A lista de violações do contrato nos modelos: tipo fora da tabela de tipos, `Double` em coluna monetária, `autoincrement` em chave inteira, `DEFERRABLE`, `Identity`, tabela particionada sem `mes`, coluna sem comentário. Vazia nos modelos corrigidos. |
+| `check_models(metadata)` | A lista de violações do contrato nos modelos: tipo fora da tabela de tipos, `Double` em coluna monetária, `autoincrement` em chave inteira, `DEFERRABLE`, `Identity`, tabela particionada sem `mes`, tabela sem chave primária e sem `keys`, coluna sem comentário. Vazia nos modelos corrigidos. |
 | `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória. |
 | `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory`; `serialize-db schema write` grava e `serialize-db schema check` compara sem gravar. |
 
@@ -345,10 +348,44 @@ idempotente, predicado e nulidade, evolução com `drop_column_not_null` (recebe
 reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do DuckDB registrada num
 commit `overwrite` com esquema novo e estatísticas tipadas, que o DuckDB usa para podar.
 
-### Etapa 4: motor DuckDB
+### Etapa 4: `audit` e motor DuckDB
 
-`serialize_db.engine` declara o protocolo `Engine`; a execução não sabe qual motor está por trás.
+`serialize_db.audit` monta as verificações a partir do contrato e não sabe qual motor as roda;
+`serialize_db.engine` declara o protocolo `Engine`, que a execução também não conhece, e
 `serialize_db.engine.duckdb` o implementa.
+
+Chave primária, unicidade e chave estrangeira ficam fora do DDL dos dois sandboxes (`schema.md`), e
+a auditoria é onde elas são aplicadas. Cada verificação sai do `Table`, sem declaração adicional no
+modelo:
+
+| Verificação | De onde sai | Escopo |
+| --- | --- | --- |
+| Nulo em coluna `NOT NULL` | `column.nullable` | Os meses da execução. |
+| Chave repetida | `table.primary_key` e os `UniqueConstraint`, mais o que `keys` acrescenta | Os meses da execução quando as colunas da chave incluem a coluna de partição; a tabela inteira quando não incluem. |
+| Órfão de chave estrangeira | `table.foreign_keys` | Só com `foreign_keys=True`; a tabela referenciada entra na versão fixada pela execução. |
+| `mes` fora de `data_ref` | a coluna de partição de `table_options` | Os meses da execução. |
+| Texto acima de `String(n)` e valor fora do `Numeric(18, 2)` | os tipos de `schema.md` | Os meses da execução. |
+| Documento JSON inválido | as colunas JSON, que nem o Arrow nem o Delta validam | Os meses da execução. |
+| Totais de controle | as colunas `Numeric` | Os meses da execução. |
+
+Uma chave primária não é mensal: conferi-la só nos meses da execução não é unicidade. Quando as
+colunas da chave não incluem a coluna de partição, a verificação compara o sandbox com os demais
+meses da versão fixada — `delta_scan(uri, version := v) WHERE mes NOT IN (...)` no DuckDB, uma
+staging só com as colunas da chave, carregada por `COPY ... MANIFEST`, no Redshift. Custa uma
+passagem nas colunas da chave da tabela inteira; `key_scope="month"` a reduz aos meses da execução,
+e a escolha entra no relatório.
+
+A chave estrangeira precisa da tabela referenciada, e só o que o pipeline usa é ingerido:
+`foreign_keys=True` ingere a coluna referenciada das tabelas que faltarem no sandbox, na versão
+fixada, e o anti-join roda contra ela. Sem o argumento, órfão nenhum é procurado, e o relatório
+registra a verificação como não executada.
+
+| Primitiva | O que faz |
+| --- | --- |
+| `checks(table, months=None, foreign_keys=False, key_scope=None)` | A lista de `Check` (nome, statement Core, o que reprova): os defeitos de linha num `count(*) FILTER` por coluna na mesma passagem, uma consulta por chave e uma por chave estrangeira. |
+| `audit_sql(table, dialect, **opcoes)` | `{nome: texto}` por `sql.render`, sem conexão e sem motor: o SQL que a auditoria vai rodar, para depuração. |
+| `audit_files(metadata, **opcoes)` e `write_audit_files(metadata, directory, **opcoes)` | `{"<tabela>.audit.duckdb.sql": ..., "<tabela>.audit.redshift.sql": ...}` em memória e gravados, como os arquivos de `schema` e de `sql`; versionar a pasta é opcional e faz um modelo alterado aparecer no diff. |
+| `AuditReport` | Por verificação: nome, o SQL rodado, a contagem de defeitos, uma amostra das linhas reprovadas e o veredito; `passed` é a conjunção, e `report.sql()` devolve o texto de todas. |
 
 | Primitiva | DuckDB |
 | --- | --- |
@@ -357,17 +394,21 @@ commit `overwrite` com esquema novo e estatísticas tipadas, que o DuckDB usa pa
 | `query(statement)` | O statement Core compilado para o dialeto e executado; o resultado por `to_arrow_reader()`. |
 | `execute(sql, params)` | O texto gerado por `render`: `{prefix}` vira vazio, `:nome` vira `$nome` por `sql.bind`, e o resultado volta por `to_arrow_reader()`. |
 | `load(table, reader)` | `INSERT ... BY NAME SELECT * FROM <tabela Arrow>` numa tabela do sandbox criada por `ddl(table, "duckdb")`. |
-| `audit(table, months)` | O `AuditReport` por consulta: contagem, nulos em `NOT NULL`, unicidade das chaves de `table_options`, `mes = strftime(data_ref, '%Y-%m')`, limites de tipo, `json_valid` e totais de controle; `passed` falso interrompe a execução. |
+| `audit(table, months, **opcoes)` | Roda o texto de `audit.audit_sql(table, "duckdb")` — `json_valid` e `strftime(data_ref, '%Y-%m')` são as funções do dialeto — e monta o `AuditReport`; a comparação com os demais meses sai de `delta_scan` na versão fixada, e `passed` falso interrompe a execução. |
 | `export_month(table, month)` | O `reader` do mês, passado por `cast`, para `publish_month`; ou `COPY ... TO '<uri>/mes=<mes>/<execution_id>.parquet' (FORMAT parquet, RETURN_STATS)` mais `register_files` para a tabela que não cabe na memória. |
 | `cleanup()` | Fecha a conexão e apaga o arquivo do banco e a pasta de transbordo. |
 
-Testes: `tests/test_engine_duckdb.py` sob a raiz local: o pipeline de exemplo (doze meses
+Testes: `tests/test_audit.py`, sem gravar: o texto de cada verificação nos dois dialetos, o diff dos
+arquivos gerados, a chave lida do `primary_key` do modelo e o escopo escolhido pelas colunas da
+chave. `tests/test_engine_duckdb.py` sob a raiz local: o pipeline de exemplo (doze meses
 materializados e dimensões em view, um `select` com `join`, auditoria, exportação do mês) sobre um
-Delta local criado no teste; auditoria que reprova um mês com chave duplicada; `execute` com `%`
-em literal. Provas de conceito: `test_duckdb.py` (configuração, Arrow na entrada e na saída, o
-leitor esvaziado pelo comando seguinte, `DECIMAL`, JSON, `executemany`, `COPY` com `RETURN_STATS`
-e particionado, banco em arquivo, `test_audit_queries`), `delta.py` (`delta_scan`, poda, tempos,
-`ATTACH ... PIN_SNAPSHOT`), `test_deltalake.py::test_duckdb_view_pins_version_and_reader_feeds_write`
+Delta local criado no teste; auditoria que reprova a chave repetida dentro do mês e a repetida
+contra um mês já publicado, e o órfão de chave estrangeira com a tabela referenciada fora do
+sandbox; `execute` com `%` em literal. Provas de conceito: `test_duckdb.py` (configuração, Arrow na
+entrada e na saída, o leitor esvaziado pelo comando seguinte, `DECIMAL`, JSON, `executemany`, `COPY`
+com `RETURN_STATS` e particionado, banco em arquivo, `test_audit_queries`), `delta.py`
+(`delta_scan`, poda, tempos, `ATTACH ... PIN_SNAPSHOT`),
+`test_deltalake.py::test_duckdb_view_pins_version_and_reader_feeds_write`
 (a view presa a `version := v` e o `to_arrow_reader()` no `write_deltalake` com predicado),
 `test_sqlalchemy.py::test_arrow_path_on_raw_connection` e
 `test_stdlib.py::test_engine_protocol_and_config_dataclass`.
@@ -386,7 +427,7 @@ senha (`host`, `port`, `database`, `user`, `password`) ou IAM (`cluster` ou `wor
 | `query(statement)` | O statement compilado para o Redshift; o resultado em Arrow a partir das tuplas com o esquema do statement, ou por `UNLOAD` acima de um limite de linhas. |
 | `execute(sql, params)` | `{prefix}` vira `exec_<id>_`, e o texto roda com o dicionário. |
 | `load(table, reader)` | Parquet em `staging/<execution_id>/` pelo PyArrow mais `COPY`; `insert(...).values(lista)` numa única ida para lotes pequenos. |
-| `audit(table, months)` | As mesmas consultas, compiladas para o Redshift. |
+| `audit(table, months, **opcoes)` | O mesmo texto compilado para o Redshift; os demais meses e a tabela referenciada entram em stagings só com as colunas da chave, por `COPY ... MANIFEST`. |
 | `export_month(table, month)` | `UNLOAD ('<select do contrato>') TO '<uri>/' PARTITION BY (mes) FORMAT PARQUET MANIFEST VERBOSE` mais `register_files` com as estatísticas do rodapé Parquet. |
 | `cleanup()` | `DROP TABLE` de `exec_<id>_*` e da staging; os objetos de `staging/<execution_id>/` apagados. |
 
@@ -411,11 +452,12 @@ nomeado, DDL, `COPY ... MANIFEST`, lista de colunas e `FILLRECORD`, `VARCHAR`, `
 | `run.previous_months(n)` | Os `n` meses até `run.month`, inclusive. |
 | `run.ingest(*tables, months=None, materialize=False)` | `engine.ingest` de cada tabela na versão fixada; sem `months`, a tabela inteira. |
 | `run.sandbox` | O motor, onde o pipeline chama `query`, `execute` e `load`. |
-| `run.audit(table, months)` | `engine.audit`; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta. |
-| `run.publish(table, months)` | `create_table` se não existir, `reconcile`, depois `export_month` e `publish_month` por mês com `commit_metadata`; avança `versions[table]`. |
+| `run.audit(table, months, foreign_keys=False, key_scope=None)` | `engine.audit`; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta, e o relatório, com o SQL de cada verificação, vai para o log. |
+| `run.publish(table, months, audit=True)` | Exige a auditoria aprovada dessa tabela nesses meses na própria execução, e `audit=False` dispensa a exigência e fica no log; depois `create_table` se não existir, `reconcile`, `export_month` e `publish_month` por mês com `commit_metadata`; avança `versions[table]`. |
 | `run.publish_redshift(*tables)` | A publicação da etapa 8. |
 | `run.snapshot(name)` | Marca a execução: `serialize_db_snapshot` nos commits e `snapshot(root, name, versions)` no encerramento. |
 | `serialize-db run` | `--root`, `--environment`, `--engine`, `--month`, `--execution-id` e `modulo:funcao` do pipeline, que recebe `run`; código de saída 0, 1 na reprovação da auditoria, 2 no conflito. |
+| `serialize-db audit` | `--table`, `--months`, `--foreign-keys` e `--key-scope`; com `--sql` imprime o texto das verificações do dialeto escolhido e não abre conexão nem armazenamento, e `--write <pasta>` grava os arquivos das duas variantes. Sem `--sql`, roda a auditoria sobre a versão publicada e imprime o relatório. |
 
 O log é o `logging` padrão com um resumo por execução: identificador, mês, versões lidas, versões
 gravadas e tempo por passo. Testes: `tests/test_execution.py` sob a raiz local com o motor DuckDB:
@@ -477,6 +519,7 @@ As primitivas são as da etapa 3; a etapa entrega a rotina e a documentação.
 | `vacuum` | Mensal: lista com `keep_versions` do arquivo de controle, revisada, depois aplicada; `--full` de tempos em tempos para os órfãos. | `serialize-db vacuum [--apply] [--full]`. |
 | Arquivo | Anual: `deep_copy` dos snapshots mais velhos que o prazo da tabela viva para `arquivo/<nome>/<tabela>/`, a entrada sai de `snapshots.json`, a pasta recebe a regra de ciclo de vida. | `serialize-db archive <nome>`. |
 | Exportação | Sob demanda: pastas Parquet por mês de um snapshot, `copy` ou `rewrite`. | `serialize-db export`. |
+| Auditoria avulsa | Depois de uma correção, e quando o SQL de uma verificação precisa ser lido. | `serialize-db audit --table ... [--sql]`. |
 | Monitoração | `history()` de cada tabela com os metadados da biblioteca. | `serialize-db history`. |
 
 A documentação da API sai do `pdoc`; o runbook lista cada rotina com o comando, o que conferir
@@ -499,7 +542,7 @@ Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, mê
 | 1. Abertura | Lê `_serialize_db/snapshots.json` e `serialize_db_publications`; abre cada tabela de entrada e registra a versão. | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
 | 2. Ingestão | DuckDB: views com os nomes dos modelos sobre `delta_scan(uri, version := 143)`; `cad_lancamentos` materializada com `WHERE mes BETWEEN '2025-09' AND '2026-08'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos desses meses em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
 | 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, mês 2026-08. |
-| 4. Auditoria | Contagem, nulos, unicidade da chave, `mes = strftime(data_ref, '%Y-%m')`, limites de tipo, `json_valid`, totais de controle. | Relatório da execução; reprovação encerra sem tocar o Delta. |
+| 4. Auditoria | Contagem, nulos, unicidade da chave contra os demais meses da versão 57, `mes = strftime(data_ref, '%Y-%m')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
 | 5. Publicação no Delta | `reconcile` e `publish_month(uri, "2026-08", reader, commit_metadata(...))`; do Redshift, `UNLOAD ... PARTITION BY (mes)` mais `register_files`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `mes=2026-08/`. |
 | 6. Publicação no Redshift | `version_diff(57, 58)` aponta o mês 2026-08; `DELETE` do mês, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08'`; controle atualizado. | `prod_cad_lancamentos_projetados` com o mês novo; `serialize_db_publications` em 58. |
 | 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
@@ -517,7 +560,7 @@ with Execution(db, engine="duckdb", month="2026-08", execution_id="exec-2026-09-
     run.ingest(Lancamento, months=run.previous_months(12), materialize=True)
     run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada
     compute_projections(run.sandbox)                                 # statements Core, texto gerado e Python
-    run.audit(LancamentoProjetado, months=["2026-08"])
+    run.audit(LancamentoProjetado, months=["2026-08"])               # exigida por publish
     run.publish(LancamentoProjetado, months=["2026-08"])             # overwrite por mês, metadados
     run.publish_redshift(LancamentoProjetado)                        # só os meses alterados
 ```

@@ -1,6 +1,6 @@
 uv.lock
 **/__pycache__
-prompts.md
+secrets/
 **/.DS_Store
 .venv
 .pytest_cache

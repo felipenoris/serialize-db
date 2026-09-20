@@ -13,7 +13,8 @@ Só leitura. O relatório sai no terminal e em ``probes/output/space_<data-hora>
 3. Rede: variáveis de proxy, DNS dos endpoints regionais (IP privado indica endpoint VPC de
    interface com DNS privado), TCP até o S3 regional e até o proxy, e a internet por HTTPS.
 4. Máquina: CPUs, memória, disco, a pasta compartilhada e os comandos disponíveis.
-5. Python e pacotes: este interpretador e o do sistema, com as versões dos pacotes do projeto.
+5. Python e pacotes: este interpretador e o do sistema, com as versões dos pacotes do projeto,
+   conferidas contra o grupo ``dev`` de ``pyproject.toml``.
 6. DuckDB: versão, plataforma, threads, memória e as extensões que carregam da pasta configurada,
    com a instalação automática desligada.
 
@@ -27,16 +28,18 @@ import importlib.metadata
 import json
 import os
 import platform
+import re
 import shutil
 import sys
 import tempfile
+import tomllib
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probelib  # noqa: E402
-from probelib import Report, describe_error, environment_rows, pretty, region, resolve, run_python, short_config, tcp_open  # noqa: E402
+from probelib import Report, connection_rows, describe_error, dns_rows, environment_rows, pretty, region, run_python, short_config, tcp_open, tcp_probe  # noqa: E402
 
 # Os pacotes lidos em cada interpretador: os fixados pelo projeto, os que a suíte de estudo usa, os opcionais
 # das etapas seguintes (ADBC para leitura do Redshift, SQLGlot para conferir SQL, pdoc para a documentação) e os
@@ -45,10 +48,6 @@ PACKAGES = (
     "deltalake", "duckdb", "pyarrow", "boto3", "botocore", "redshift_connector", "sqlalchemy", "duckdb_engine",
     "sqlalchemy_redshift", "pandas", "sqlglot", "adbc_driver_postgresql", "pdoc", "sagemaker_studio", "awswrangler", "pytest",
 )
-PINNED = {
-    "deltalake": "1.6.4", "duckdb": "1.5.5", "pyarrow": "25.0.1", "sqlalchemy": "2.0.54", "duckdb_engine": "0.17.0",
-    "sqlalchemy_redshift": "1.0.0", "pandas": "3.0.6",
-}
 ENDPOINT_SERVICES = ("s3", "sts", "redshift", "redshift-serverless", "redshift-data", "glue", "athena", "kms", "secretsmanager", "sagemaker", "datazone")
 EXTENSIONS = ("httpfs", "delta", "aws", "parquet", "json")
 VERSIONS_PROBE = r"""
@@ -73,6 +72,18 @@ def package_version(name: str) -> str | None:
         except importlib.metadata.PackageNotFoundError:
             pass
     return None
+
+
+def dev_requirements() -> dict[str, str | None]:
+    """Os pacotes do grupo ``dev`` de ``pyproject.toml`` pelo nome de importação, com a versão quando ela é ``==``."""
+    with open(probelib.REPO_ROOT / "pyproject.toml", "rb") as handle:
+        entries = tomllib.load(handle).get("dependency-groups", {}).get("dev", [])
+    found: dict[str, str | None] = {}
+    for entry in entries:
+        match = re.match(r"\s*([A-Za-z0-9_.-]+)\s*(?:==\s*([^\s;,]+))?", entry) if isinstance(entry, str) else None
+        if match:
+            found[match.group(1).lower().replace("-", "_")] = match.group(2)
+    return found
 
 
 def identity(report: Report) -> None:
@@ -100,9 +111,10 @@ def identity(report: Report) -> None:
         report.fail("SP-2", "região do boto3", f"nenhuma; só {resolved} em AWS_REGION, que o botocore ignora: defina AWS_DEFAULT_REGION")
     else:
         report.fail("SP-2", "região", "nenhuma variável nem perfil a define")
+    # Os dois endereços link-local são leituras: o espaço bloqueia o IMDS, e o endpoint do contêiner só existe com a variável.
     if os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"):
-        report.call("tcp 169.254.170.2:80 (endpoint de credenciais do contêiner)", lambda: tcp_open("169.254.170.2", 80, 2), render=lambda seconds: f"conectou em {seconds:.2f} s")
-    report.call("tcp 169.254.169.254:80 (IMDS)", lambda: tcp_open("169.254.169.254", 80, 2), render=lambda seconds: f"conectou em {seconds:.2f} s")
+        report.call("tcp 169.254.170.2:80 (endpoint de credenciais do contêiner)", lambda: tcp_probe("169.254.170.2", 80, 2), render=str)
+    report.call("tcp 169.254.169.254:80 (IMDS)", lambda: tcp_probe("169.254.169.254", 80, 2), render=str)
     caller = report.call("sts.get_caller_identity()", lambda: session.client("sts", region_name=resolved, config=short_config(5, 10, 1)).get_caller_identity())
     if caller:
         report.ok("SP-3", "identidade pelo STS", caller["Arn"])
@@ -112,7 +124,7 @@ def identity(report: Report) -> None:
 
 def project(report: Report) -> None:
     report.h1("Projeto do SageMaker Unified Studio")
-    result = report.call("sagemaker_studio.Project() (neste interpretador ou no do sistema)", probelib.project_snapshot, render=lambda found: f"lido com {found[1]}\n{pretty(found[0], limit=200)}")
+    result = report.call("sagemaker_studio.Project() (neste interpretador ou no do sistema)", probelib.project_snapshot, render=lambda found: f"lido com {found[1]}")
     if result is None:
         report.note("SP-4", "projeto do SageMaker", "não lido: fora de um espaço ou sem o pacote sagemaker_studio")
         report.note("SP-5", "conexão Redshift no projeto", "não lida")
@@ -121,6 +133,11 @@ def project(report: Report) -> None:
     for key in ("name", "id", "domain_id", "iam_role", "kms_key_arn", "s3_root"):
         report.value(f"PROJECT_{key.upper()}", data.get(key))
     connections = data.get("connections", [])
+    # Uma linha por conexão; os dados completos só das conexões Redshift, que a etapa 5 usa.
+    report.table([["conexão", "tipo", "endpoint", "detalhe"], *connection_rows(connections)] if connections else [["(nenhuma conexão no projeto)"]])
+    for item in connections:
+        if "REDSHIFT" in str(item.get("type", "")).upper():
+            report.line(f"conexão {item.get('name')}:\n{pretty(item, limit=80)}\n")
     report.ok("SP-4", "projeto do SageMaker", f"{data.get('name')}; conexões: " + (", ".join(f"{item.get('name')} ({item.get('type')})" for item in connections) or "nenhuma"))
     redshift = [item.get("name") for item in connections if "REDSHIFT" in str(item.get("type", "")).upper()]
     if redshift:
@@ -135,16 +152,8 @@ def network(report: Report) -> None:
     resolved = region()
     names = [f"{service}.{resolved}.amazonaws.com" for service in ENDPOINT_SERVICES] if resolved else []
     names += ["s3.amazonaws.com", "pypi.org", "github.com"]
-    rows = [["nome", "endereços", "tipo"]]
-    for name in names:
-        try:
-            addresses, private = resolve(name)
-            shown = ", ".join(addresses[:4]) + (" ..." if len(addresses) > 4 else "")
-            rows.append([name, shown, "privado: endpoint VPC de interface com DNS privado" if private else "público: gateway endpoint ou internet"])
-        except OSError as error:
-            rows.append([name, f"não resolve: {error}", "-"])
-            report.failures.append((f"dns {name}", describe_error(error)))
-    report.table(rows)
+    rows, _ = dns_rows(names)
+    report.table([["nome", "endereços", "tipo"], *rows])
     if resolved:
         host = f"s3.{resolved}.amazonaws.com"
         opened = report.call(f"tcp {host}:443", lambda: tcp_open(host, 443, 5), render=lambda seconds: f"conectou em {seconds:.2f} s")
@@ -159,15 +168,19 @@ def network(report: Report) -> None:
         parsed = urllib.parse.urlparse(proxy if "://" in proxy else f"http://{proxy}")
         if parsed.hostname:
             port = parsed.port or 3128
-            report.call(f"tcp {parsed.hostname}:{port} (proxy)", lambda: tcp_open(parsed.hostname or "", port, 5), render=lambda seconds: f"conectou em {seconds:.2f} s")
+            report.call(f"tcp {parsed.hostname}:{port} (proxy)", lambda: tcp_probe(parsed.hostname or "", port, 5), render=str)
 
-    def internet() -> int:
+    # A internet é uma leitura, não uma chamada que falha: o ambiente destino não a tem.
+    def internet() -> str:
         request = urllib.request.Request("https://pypi.org/simple/", method="HEAD")
-        with urllib.request.urlopen(request, timeout=5) as response:
-            return response.status
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return f"HTTP {response.status}"
+        except Exception as error:  # noqa: BLE001 - o erro é a leitura
+            return f"sem resposta: {describe_error(error)}"
 
-    status = report.call("HEAD https://pypi.org/simple/ (pelo proxy do ambiente, se houver)", internet, render=lambda code: f"HTTP {code}")
-    report.note("SP-7", "internet", "alcançável" if status else "inalcançável: esperado no ambiente destino")
+    answer = report.call("HEAD https://pypi.org/simple/ (pelo proxy do ambiente, se houver)", internet, render=str)
+    report.note("SP-7", "internet", "alcançável" if answer and answer.startswith("HTTP") else "inalcançável: esperado no ambiente destino")
 
 
 def machine(report: Report) -> None:
@@ -214,11 +227,14 @@ def python_packages(report: Report) -> None:
         report.ok("SP-8", "Python 3.13 neste interpretador", str(here["version"]))
     else:
         report.fail("SP-8", "Python 3.13 neste interpretador", f"{here['version']}: o projeto fixa 3.13")
-    wrong = [f"{name} {here.get(name) or 'ausente'} (esperado {version})" for name, version in PINNED.items() if here.get(name) != version]
+    # O grupo dev de pyproject.toml é a referência: cada pacote presente, e na versão fixada quando ela é ``==``.
+    requirements = dev_requirements()
+    installed = {name: here[name] if name in here else package_version(name) for name in requirements}
+    wrong = [f"{name} ausente" if installed[name] is None else f"{name} {installed[name]} (esperado {version})" for name, version in requirements.items() if installed[name] is None or (version and installed[name] != version)]
     if wrong:
-        report.fail("SP-9", "versões fixadas pelo projeto", "; ".join(wrong))
+        report.fail("SP-9", "grupo dev do pyproject neste interpretador", "; ".join(wrong) + "; rode uv sync --group dev, ou prepare_offline.sh de novo, na pasta do projeto")
     else:
-        report.ok("SP-9", "versões fixadas pelo projeto", ", ".join(f"{name} {version}" for name, version in PINNED.items()))
+        report.ok("SP-9", "grupo dev do pyproject neste interpretador", ", ".join(f"{name} {installed[name]}" for name in requirements))
 
 
 def duckdb_section(report: Report) -> None:

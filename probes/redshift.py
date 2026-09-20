@@ -33,14 +33,16 @@ saída: 0 checagens ok, 1 alguma chamada falhou, 2 alguma checagem reprovou.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probelib  # noqa: E402
-from probelib import Report, describe_error, environment_rows, find_values, pretty, region, resolve, short_config, tabulate, tcp_open  # noqa: E402
+from probelib import Report, connection_rows, describe_error, dns_rows, environment_rows, find_values, pretty, region, short_config, tabulate, tcp_open  # noqa: E402
 
 VARIABLES = ("HOST", "PORT", "DATABASE", "USER", "PASSWORD", "CLUSTER", "WORKGROUP", "SCHEMA", "CONNECTION")
 SERVICES = ("redshift", "redshift-serverless", "redshift-data")
@@ -86,7 +88,7 @@ def configuration(report: Report) -> Target:
     if result is not None:
         data, _ = result
         connections = data.get("connections", [])
-        report.table([["conexão", "tipo", "endpoints"], *[[item.get("name"), item.get("type"), "; ".join(f"{endpoint.get('host')}:{endpoint.get('port')}" for endpoint in item.get("physical_endpoints", [])) or "-"] for item in connections]])
+        report.table([["conexão", "tipo", "endpoint", "detalhe"], *connection_rows(connections)] if connections else [["(nenhuma conexão no projeto)"]])
         redshift = [item for item in connections if "REDSHIFT" in str(item.get("type", "")).upper()]
         wanted = variable("CONNECTION")
         if wanted:
@@ -95,16 +97,33 @@ def configuration(report: Report) -> Target:
             chosen = redshift[0] if len(redshift) == 1 else None
         if chosen:
             report.line(pretty(chosen, limit=80))
-            found = find_values(chosen, ("host", "port", "database_name", "databaseName", "workgroupName", "clusterName", "db_user", "dbUser", "username"))
+            # Os dados da conexão chegam como dicionário (probelib.PROJECT_PROBE); as chaves variam entre snake_case e
+            # camelCase, e a URL JDBC traz host, porta e banco quando os campos diretos faltam.
+            found = find_values(chosen, ("host", "port", "database_name", "databaseName", "workgroup_name", "workgroupName", "cluster_name", "clusterName", "cluster_identifier", "clusterIdentifier", "db_user", "dbUser", "username", "password", "jdbc_url", "jdbcUrl", "secret_arn", "secretArn"))
+            jdbc = re.match(r"jdbc:redshift\w*://([^:/]+):(\d+)/([^?;]+)", str(found.get("jdbc_url") or found.get("jdbcUrl") or ""))
             if target.source == "nada":
                 endpoint = (chosen.get("physical_endpoints") or [{}])[0]
-                target.host = endpoint.get("host") or found.get("host")
-                target.port = int(endpoint.get("port") or found.get("port") or target.port)
-                target.database = target.database or found.get("database_name") or found.get("databaseName")
-                target.workgroup = found.get("workgroupName")
-                target.cluster = found.get("clusterName")
+                target.host = endpoint.get("host") or found.get("host") or (jdbc.group(1) if jdbc else None)
+                target.port = int(endpoint.get("port") or found.get("port") or (jdbc.group(2) if jdbc else target.port))
+                target.database = target.database or found.get("database_name") or found.get("databaseName") or (jdbc.group(3) if jdbc else None)
+                target.workgroup = found.get("workgroup_name") or found.get("workgroupName")
+                target.cluster = found.get("cluster_name") or found.get("clusterName") or found.get("cluster_identifier") or found.get("clusterIdentifier")
                 target.user = target.user or found.get("db_user") or found.get("dbUser") or found.get("username")
+                target.password = target.password or found.get("password")
                 target.source = f"conexão {chosen.get('name')} do projeto"
+                # A conexão criada no Studio guarda usuário e senha num secret; ler o secret é uma leitura, e a senha não é impressa.
+                secret = found.get("secret_arn") or found.get("secretArn")
+                if secret and not target.password:
+                    import boto3
+
+                    credentials = report.call(
+                        f"secretsmanager.get_secret_value(SecretId={secret!r})",
+                        lambda: json.loads(boto3.client("secretsmanager", region_name=region(), config=short_config()).get_secret_value(SecretId=secret)["SecretString"]),
+                        render=lambda loaded: f"chaves: {', '.join(sorted(loaded))}",
+                    )
+                    if credentials:
+                        target.user = credentials.get("username") or credentials.get("user") or target.user
+                        target.password = credentials.get("password") or target.password
         elif len(redshift) > 1:
             report.line(f"{len(redshift)} conexões Redshift no projeto; informe SERIALIZE_DB_REDSHIFT_CONNECTION")
         elif not redshift:
@@ -154,7 +173,7 @@ def apis(report: Report, target: Target) -> None:
     if answered:
         report.ok("RS-2", "APIs do Redshift", "responderam")
     else:
-        report.note("RS-2", "APIs do Redshift", "sem resposta ou negadas: a autenticação por IAM depende delas; ver a seção final")
+        report.note("RS-2", "APIs do Redshift", f"{report.last_reason}: a autenticação por IAM depende delas; ver a seção final")
     roles = [cluster.get("DefaultIamRoleArn") for cluster in (clusters or {}).get("Clusters", [])] + [namespace.get("defaultIamRoleArn") for namespace in namespaces.values()]
     roles = [role for role in roles if role]
     target.roles = roles
@@ -176,7 +195,7 @@ def apis(report: Report, target: Target) -> None:
         else:
             call = lambda: data.list_databases(ClusterIdentifier=target.cluster, Database=target.database, DbUser=target.user)  # noqa: E731
         listed = report.call("redshift-data.list_databases(...)", call, render=lambda found: ", ".join(found.get("Databases", [])) or "(nenhum banco listado)")
-        report.note("RS-10", "Data API", "responde: caminho alternativo por HTTPS, sem a porta 5439" if listed is not None else "sem resposta ou negada; ver a seção final")
+        report.note("RS-10", "Data API", "responde: caminho alternativo por HTTPS, sem a porta 5439" if listed is not None else f"{report.last_reason}; ver a seção final")
     else:
         report.note("RS-10", "Data API", "não testada: precisa de SERIALIZE_DB_REDSHIFT_DATABASE e de _WORKGROUP, ou de _CLUSTER com _USER")
 
@@ -187,15 +206,15 @@ def network(report: Report, target: Target) -> None:
     names = [f"{service}.{resolved}.amazonaws.com" for service in SERVICES] if resolved else []
     if target.host:
         names.append(target.host)
-    rows = [["nome", "endereços", "tipo"]]
-    for name in names:
-        try:
-            addresses, private = resolve(name)
-            rows.append([name, ", ".join(addresses[:4]), "privado: endpoint VPC de interface com DNS privado" if private else "público"])
-        except OSError as error:
-            rows.append([name, f"não resolve: {error}", "-"])
-            report.failures.append((f"dns {name}", describe_error(error)))
-    report.table(rows)
+    rows, private = dns_rows(names, public="público: só pela internet ou pelo proxy")
+    report.table([["nome", "endereços", "tipo"], *rows])
+    # Sem internet, as APIs só respondem por endpoint VPC de interface; a porta 5439 do cluster fica dentro da VPC.
+    api_names = names[: len(SERVICES)]
+    public_names = [name for name in api_names if not private.get(name)]
+    if api_names and not public_names:
+        report.ok("RS-14", "APIs do Redshift sem internet", "endpoints VPC de interface: a autenticação por IAM e a Data API funcionam sem internet")
+    elif api_names:
+        report.note("RS-14", "APIs do Redshift sem internet", f"sem endpoint VPC: {', '.join(public_names)}; sem internet ou proxy, a autenticação por IAM (GetClusterCredentials, GetCredentials) e a Data API não respondem, e resta a conexão por senha na porta 5439")
     if target.host:
         opened = report.call(f"tcp {target.host}:{target.port}", lambda: tcp_open(target.host or "", target.port, 5), render=lambda seconds: f"conectou em {seconds:.2f} s")
         if opened is None:
@@ -209,9 +228,11 @@ def network(report: Report, target: Target) -> None:
 def session(report: Report, target: Target) -> None:
     report.h1("Sessão")
     if target.source == "nada":
+        report.line("sem configuração, nada a conectar (RS-1)")
         report.note("RS-4", "sessão", "sem configuração, nada a conectar")
         return
     if not target.database:
+        report.line("sem banco: informe SERIALIZE_DB_REDSHIFT_DATABASE")
         report.fail("RS-4", "sessão", "sem banco: informe SERIALIZE_DB_REDSHIFT_DATABASE")
         return
     import redshift_connector
@@ -315,9 +336,11 @@ def copy_role(report: Report, target: Target) -> None:
     report.h1("Papel do COPY e do UNLOAD sobre a raiz S3")
     root = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("SERIALIZE_DB_TEST_S3_ROOT", "")).rstrip("/")
     if not root.startswith("s3://"):
+        report.line("sem raiz: informe s3://bucket/prefixo como argumento ou em SERIALIZE_DB_TEST_S3_ROOT")
         report.note("RS-11", "papel do COPY sobre a raiz", "sem raiz: informe s3://bucket/prefixo como argumento ou em SERIALIZE_DB_TEST_S3_ROOT")
         return
     if not target.roles:
+        report.line("sem papel padrão conhecido (RS-6): nada a simular")
         report.note("RS-11", "papel do COPY sobre a raiz", "sem papel padrão conhecido (RS-6): o COPY precisará de IAM_ROLE explícito, e a suíte Redshift é o teste")
         return
     bucket, _, prefix = root.removeprefix("s3://").partition("/")
@@ -330,7 +353,7 @@ def copy_role(report: Report, target: Target) -> None:
             render=lambda found: tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]]),
         )
         if found is None:
-            report.note("RS-11", "papel do COPY sobre a raiz", f"{role}: simulação negada ou sem resposta; o primeiro COPY da suíte Redshift é o teste")
+            report.note("RS-11", "papel do COPY sobre a raiz", f"{role}: simulação {report.last_reason}; o primeiro COPY da suíte Redshift é o teste")
             continue
         denied = [item["EvalActionName"] for item in found.get("EvaluationResults", []) if item["EvalDecision"] != "allowed"]
         if denied:

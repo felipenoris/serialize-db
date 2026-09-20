@@ -18,9 +18,30 @@ está configurado para não baixar o Python, como no SageMaker Unified Studio.
 
 # Testes
 
+Os testes sem marcador e a suíte `local` rodam sem a AWS:
+
 ```
 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest
 ```
+
+A suíte `s3` precisa de credenciais que o `boto3` encontre:
+
+```
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest -m s3
+```
+
+A suíte `redshift` também grava no S3 e por isso recebe as duas raízes;
+`SERIALIZE_DB_REDSHIFT_WORKGROUP` ou `SERIALIZE_DB_REDSHIFT_CLUSTER` no lugar de host, usuário e
+senha autentica por IAM:
+
+```
+SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=esquema SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo \
+SERIALIZE_DB_REDSHIFT_DATABASE=banco SERIALIZE_DB_REDSHIFT_HOST=host \
+SERIALIZE_DB_REDSHIFT_USER=usuario SERIALIZE_DB_REDSHIFT_PASSWORD=senha \
+uv run pytest -m redshift
+```
+
+As três variáveis de autorização se somam: informadas juntas, `uv run pytest` sem `-m` roda tudo.
 
 `tests/` na raiz recebe os testes do pacote `serialize_db`, um módulo por módulo do pacote (as etapas
 de `docs/PLAN.md`). `tests/proof_of_concept/` recebe as provas de conceito e os testes das bibliotecas
@@ -86,6 +107,16 @@ exige, o Redshift (conexão, papel IAM do `COPY` e seu alcance sobre a raiz, Dat
 privilégios, configurações e o diagnóstico de um `COPY` reprovado) e os serviços de catálogo. Cada um imprime o relatório e o grava em `probes/output/`, pasta fora do git,
 para ser colado na conversa com o assistente, com seções numeradas, cada chamada ecoada acima do
 resultado ou do erro, a tabela de checagens e a seção final de chamadas que falharam.
+
+O argumento `s3://bucket/prefixo` é a raiz que a suíte S3 recebe em `SERIALIZE_DB_TEST_S3_ROOT`,
+variável que o substitui quando ele falta: `bucket.py` inventaria o que há sob ela,
+`diagnose_aws.py` lista `<raiz>/serialize-db-poc/` como a suíte faz e `redshift.py` simula o papel
+do `COPY` sobre ela; nenhum probe cria pasta ou objeto. No espaço do SageMaker, a raiz é a área de
+trabalho `dev/` do projeto, que `space.py` imprime como `s3_root` na seção do projeto, ou uma
+subpasta dela reservada aos testes. Fora disso os probes precisam só das credenciais e da região que
+o `boto3` resolve, presentes no espaço; `redshift.py` conecta pelas variáveis
+`SERIALIZE_DB_REDSHIFT_*` ou pela conexão Redshift do projeto, e sem elas registra as seções da
+sessão como `note`.
 
 Os fatos que `diagnose_aws.py` usa no seu resumo:
 
@@ -157,9 +188,11 @@ cd serialize-db
 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente .venv/bin/python -m pytest
 ```
 
-A suíte local roda sem S3 e valida a pasta preparada; com `SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo`
-a suíte S3 roda também. Não é preciso `uv` nem rede além do S3: o Python, as bibliotecas e as extensões vêm da pasta. Os
-comandos de `.venv/bin/` (como `pytest`) guardam o caminho original no cabeçalho, por isso a chamada
-é `python -m pytest`; o pacote roda do mesmo jeito, com `.venv/bin/python -m serialize_db` ou
-`.venv/bin/python -c "import serialize_db"`. A receita foi verificada extraindo o pacote em outro
-caminho e rodando a suíte com os proxies apontados para uma porta fechada.
+A suíte local roda sem S3 e valida a pasta preparada; com
+`SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo` a suíte S3 roda também, e a do Redshift com as
+variáveis da seção Testes. Não é preciso `uv` nem rede além do S3 e do Redshift: o Python, as
+bibliotecas e as extensões vêm da pasta. Os comandos de `.venv/bin/` (como `pytest`) guardam o
+caminho original no cabeçalho, por isso a chamada é `python -m pytest`; o pacote roda do mesmo
+jeito, com `.venv/bin/python -m serialize_db` ou `.venv/bin/python -c "import serialize_db"`. A
+receita foi verificada extraindo o pacote em outro caminho e rodando a suíte com os proxies
+apontados para uma porta fechada.

@@ -41,13 +41,22 @@ modelos neutros quando o dialeto do Redshift não está instalado.
 | Restrição               | Sandbox DuckDB | Sandbox Redshift |
 | ----------------------- | -------------- | ---------------- |
 | `NOT NULL`              | Declarada. | Declarada e aplicada pelo banco. |
-| `PRIMARY KEY`, `UNIQUE` | Omitida; a auditoria verifica os meses novos. | Declarada quando auditada; informativa.|
-| `FOREIGN KEY` | Omitida; auditoria opcional. | Declarada quando auditada; informativa. |
+| `PRIMARY KEY`, `UNIQUE` | Omitida; a auditoria confere a chave do modelo. | Declarada quando auditada; informativa.|
+| `FOREIGN KEY` | Omitida; a auditoria confere com `foreign_keys=True`. | Declarada quando auditada; informativa. |
 
 Unicidade, chave primária e chave estrangeira são informativas no Redshift. O planejador usa essas
 chaves para decorrelacionar subconsultas, ordenar e eliminar joins, e supõe que elas são válidas. Com
 chaves inválidas, consultas retornam resultados errados; a documentação cita um `SELECT DISTINCT` que
 devolve duplicatas. `NOT NULL` é aplicado.
+
+A auditoria da execução é onde as chaves são aplicadas, e as consultas saem do próprio modelo:
+`table.primary_key`, os `UniqueConstraint` e os `ForeignKey`, sem uma segunda declaração. A chave
+`keys` de `Table.info["serialize_db"]` só acrescenta uma chave de negócio ou exclui uma existente.
+Uma chave cujas colunas não incluem a coluna de partição é conferida na tabela inteira, não só nos
+meses da execução, porque unicidade dentro do mês não é unicidade. A chave estrangeira é conferida
+sob pedido, porque a tabela referenciada pode não estar no sandbox: só o que o pipeline usa é
+ingerido. O texto SQL de cada verificação é gerado por dialeto e pode ser impresso ou gravado, para
+depurar o comando e para o diff. As primitivas estão em `PLAN.md`.
 
 A medição publicada na documentação do DuckDB, com 554 milhões de linhas, justifica omitir chaves no
 DuckDB:
