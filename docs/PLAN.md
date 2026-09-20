@@ -107,11 +107,14 @@ O que a sondagem fixa em `cast`:
   mensagem que pede o arredondamento explícito no cliente. `pc.round` e o cast discordam em
   `2.675` (2,68 contra 2,67), então a carga inicial (etapa 7) arredonda os `Double` dos modelos
   atuais por `pc.round(x, 2)` antes do cast e registra a regra no relatório.
-- Um documento JSON entra como `string` já serializada: uma coluna de `dict` vira `struct` com a
-  união das chaves (`{"k": 1}` volta como `{"k": 1, "x": null}`), dicts heterogêneos falham na
-  inferência e `pa.array(dicts, pa.string())` falha; `json.dumps` de 300.000 documentos levou
-  204 ms. `cast` recusa `struct`, `list` e `map` numa coluna JSON e converte a `string` para a
-  extensão `arrow.json` do contrato, que o DuckDB lê como `JSON` e devolve como `string`.
+- Um documento JSON é `string` no contrato Arrow, sem a extensão `arrow.json` (decisão do usuário de
+  2026-09-20): no pandas com backend pyarrow, o dtype da extensão não tem os kernels de `.str`
+  (`utf8_length` e `match_substring_regex` falham com `ArrowNotImplementedError`), nenhum motor a
+  devolve, e o DuckDB valida o texto ao carregar numa coluna `JSON` (`Malformed JSON`). O documento
+  entra já serializado: uma coluna de `dict` vira `struct` com a união das chaves (`{"k": 1}` volta
+  como `{"k": 1, "x": null}`), dicts heterogêneos falham na inferência e `pa.array(dicts,
+  pa.string())` falha; `json.dumps` de 300.000 documentos levou 204 ms. `cast` recusa `struct`,
+  `list` e `map` numa coluna JSON.
 - `large_string` vira `string`; `timestamp[ns]` vira `[us]` quando a parte perdida é zero e é
   recusado quando não é.
 
@@ -122,8 +125,8 @@ O que a sondagem fixa em `cast`:
 | Artefato | Estado |
 | --- | --- |
 | `docs/` | Completa: `parquet.md`, `duckdb.md`, `redshift.md`, `sqlalchemy.md`, `schema.md`, `delta.md`, `guia.md`, `estrategia.md`, `serialize-db.md` e este plano. Todo bloco Python dos documentos rodou com as versões fixadas em `pyproject.toml`; os comandos do Redshift foram compilados, não executados. |
-| `src/serialize_db/model/` | Os modelos do pipeline, a primeira instância do contrato e o material dos testes: `model_base_contabil.py`, `model_base_gerencial.py` e `model_db_projetado.py`. Dois não importam (`from lib_base_contabil import Base` e `from lib_base_gerencial import Base`, módulos que o repositório não tem). Os modelos usam `Double` onde o contrato pede `Numeric(18, 2)`, deixam o `autoincrement` padrão nas chaves inteiras (o `duckdb_engine` emite `SERIAL`, que o DuckDB rejeita), declaram chaves estrangeiras `DEFERRABLE INITIALLY DEFERRED` (o DuckDB descarta a cláusula, o Redshift não a tem) e não têm a coluna `mes`, comentários nem `Table.info["serialize_db"]`. A etapa 1 os corrige. |
-| `src/serialize_db/__init__.py` | Só o `main` de exemplo do `uv init`. `pyproject.toml` não declara dependência de execução; o grupo `dev` fixa pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, boto3, redshift-connector, SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0 e pandas 3.0.6. |
+| `tests/model/` | O modelo de referência: os modelos do pipeline (`model_base_contabil.py`, `model_base_gerencial.py` e `model_db_projetado.py`), movidos do pacote para os testes em 2026-09-20. Ele faz o papel da biblioteca cliente: os testes o entregam à API do pacote como um pipeline entregaria os seus modelos, e o pacote não contém modelo algum. Dois não importam (`from lib_base_contabil import Base` e `from lib_base_gerencial import Base`, módulos que o repositório não tem). Os modelos usam `Double` onde o contrato pede `Numeric(18, 2)`, deixam o `autoincrement` padrão nas chaves inteiras (o `duckdb_engine` emite `SERIAL`, que o DuckDB rejeita), declaram chaves estrangeiras `DEFERRABLE INITIALLY DEFERRED` (o DuckDB descarta a cláusula, o Redshift não a tem) e não têm a coluna `mes`, comentários nem `Table.info["serialize_db"]`. A etapa 1 os corrige. |
+| `src/serialize_db/__init__.py` | Só o `main` de exemplo do `uv init`; o pacote não tem outro módulo. `pyproject.toml` não declara dependência de execução; o grupo `dev` fixa pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, boto3, redshift-connector, SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0 e pandas 3.0.6. |
 | `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda; `test_probes.py` testa as funções puras dos probes com respostas fabricadas, sem rede. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`poc_delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas e da stdlib (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Cada etapa abaixo lista as provas de conceito que exercitam as suas APIs. Sem variável, 64 testes passam e 48 são pulados; com a raiz local, 94 passam e 18 são pulados (2026-09-20, macOS). No espaço, em 2026-09-20, uma sessão com a raiz local e a raiz S3 gravou o JSON de `SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, sem a contagem por resultado nem o registro da limpeza, que o relatório passou a ter (`session.`, `local.cleanup`, `s3.cleanup`); a execução das 04:52 UTC, após as correções desta sessão, registrou 104 testes passados e 7 pulados em 35 s e a limpeza das duas raízes; sem variável, 63 passam e 48 são pulados. |
 | `probes/` | Leituras do ambiente, só de leitura: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` e `catalog.py` sobre `probelib.py`, com o resultado em `probes/output/` para colar na conversa. Quatro execuções no laboratório em 2026-09-20, sem Redshift, corrigiram a leitura das conexões, as leituras de rede, o rótulo dos IPs públicos, a montagem de `~/shared` e o Object Lock, acrescentaram por tabela Delta os arquivos, commits e último objeto, as sessões da suíte S3 e as versões não correntes sob a raiz, e a quarta isolou o 403 do delta-rs (`NO_PROXY` vazia) e fez `diagnose_aws.py` rodar o delta-rs como encontrado e como a suíte; o ambiente de destino ainda não foi lido. |
 | `prepare_offline.sh` | Deixa a pasta autossuficiente para o destino sem internet (`.python/`, `.venv/`, `.duckdb/`); verificado extraindo o pacote em outro caminho e rodando a suíte local com proxies mortos. |
@@ -294,9 +297,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - O DuckDB carrega extensões só da pasta configurada, com `autoinstall_known_extensions` e
   `autoload_known_extensions` desligados: o `LOAD` de uma extensão conhecida baixaria a extensão
   para `~/.duckdb` sem aviso, e o destino não tem internet (`README.md`).
-- Um campo JSON é `string` no Delta e texto nos arquivos; `JSON` no DuckDB e `SUPER` no Redshift
-  são tipos do motor, aplicados na carga; a auditoria confere `json_valid` antes de publicar, porque
-  nem o Arrow nem o Delta validam (`schema.md`).
+- Um campo JSON é `string` no esquema Arrow do contrato, sem a extensão `arrow.json`, `string` no
+  Delta e texto nos arquivos; `JSON` no DuckDB e `SUPER` no Redshift são tipos do motor, aplicados na
+  carga; a auditoria confere `json_valid` antes de publicar, porque nem o Arrow nem o Delta validam
+  (`schema.md`).
 - O SQLGlot transpila funções, não garante suporte; os testes de integração no Redshift continuam
   (`estrategia.md`).
 - O pacote `sagemaker-studio` fica fora do projeto: arrasta `deltalake`, `duckdb` e `pandas` sem
@@ -311,7 +315,6 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 | Módulo | Etapa | Conteúdo |
 | --- | --- | --- |
-| `serialize_db.model` | existente | Os modelos declarativos do pipeline, corrigidos na etapa 1. |
 | `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto, opções físicas, cast seguro, arquivos gerados. |
 | `serialize_db.sql` | 2 | O texto SQL por dialeto a partir de statements Core: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos atrás de uma interface: URIs, leitura e escrita condicional, cópia, listagem, `storage_options` e o secret do DuckDB. |
@@ -337,14 +340,17 @@ padrão; nenhum arquivo de configuração.
 
 Testes: `tests/` na raiz testa o pacote, um módulo de teste por módulo do pacote;
 `tests/proof_of_concept/` guarda as provas de conceito e os testes das bibliotecas externas,
-comentados passo a passo porque também são o material de estudo das APIs. Um teste que não grava (esquema, renderização, DuckDB em memória) roda sem variável; um teste que
+comentados passo a passo porque também são o material de estudo das APIs; `tests/model/` é o modelo
+de referência, que faz o papel da biblioteca cliente: os testes do pacote o entregam à API como um
+pipeline entregaria os seus modelos. Um teste que não grava (esquema, renderização, DuckDB em memória) roda sem variável; um teste que
 grava usa a fixture `local_location`, sob `SERIALIZE_DB_TEST_LOCAL_ROOT`, e é pulado sem ela, e o
 fim da sessão imprime, sem erro, o comando que autoriza cada suíte pulada e o que ela grava; o
 marcador `s3` repete no bucket os testes que dependem do armazenamento, sob
 `SERIALIZE_DB_TEST_S3_ROOT`; o marcador `redshift` roda só com `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`,
 o esquema onde a suíte pode criar tabelas `serialize_db_test_<id>_*`, e conecta pelas variáveis
-`SERIALIZE_DB_REDSHIFT_*`. Os arquivos gerados dos modelos do projeto (`schema/` e `sql/` na raiz
-do repositório) são comparados por teste com uma geração nova, sem gravar.
+`SERIALIZE_DB_REDSHIFT_*`. Os arquivos gerados do modelo de referência (`tests/model/schema/` e
+`tests/model/sql/`, o que um pipeline versionaria na raiz do seu repositório) são comparados por
+teste com uma geração nova, sem gravar.
 
 ## Etapas
 
@@ -354,7 +360,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
 | 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado, Redshift pendente. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
-| 1. `schema` | Modelos corrigidos; esquema Arrow, Delta e DDL; cast; arquivos `schema/`. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
+| 1. `schema` | Modelo de referência corrigido; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo de referência. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição do mês, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por mês e realocação; os mesmos no bucket com `-m s3`. |
 | 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação do mês. | O pipeline de exemplo roda em memória sobre um Delta local; a auditoria reprova a chave repetida entre o mês novo e um mês já publicado. |
@@ -389,26 +395,26 @@ para a etapa 5.
 ### Etapa 1: `schema`
 
 O módulo `serialize_db.schema` deriva dos modelos tudo o que os outros módulos precisam saber sobre
-uma tabela. A etapa começa pelos modelos de `src/serialize_db/model/`: `Base` importável de um
-módulo só, `Numeric(18, 2)` nas colunas monetárias, `autoincrement=False` nas chaves inteiras,
+uma tabela. A etapa começa pelo modelo de referência de `tests/model/`, corrigido como a biblioteca
+cliente o escreveria: `Base` importável de um módulo só, `Numeric(18, 2)` nas colunas monetárias, `autoincrement=False` nas chaves inteiras,
 chaves estrangeiras sem `DEFERRABLE`, a coluna `mes` (`String(7)`) nas tabelas particionadas,
 comentários de tabela e de coluna, e `Table.info["serialize_db"]` com `partition_by`, `sort_key` e
 `redshift`, como em `schema.md`.
 
 | Primitiva | O que faz |
 | --- | --- |
-| `arrow_schema(table)` | O `pa.Schema` do `Table`: os tipos da tabela de `schema.md`, a nulidade, o comentário de cada coluna em `metadata` do campo, `PARQUET:field_id` e a marca `arrow.json` nos campos JSON. |
+| `arrow_schema(table)` | O `pa.Schema` do `Table`: os tipos da tabela de `schema.md`, a nulidade, o comentário de cada coluna em `metadata` do campo, `PARQUET:field_id`; um campo JSON é `string`, sem a extensão `arrow.json`. |
 | `delta_schema(table)` | O `deltalake.Schema` derivado do Arrow: `decimal(18,2)`, `timestamp_ntz` para `DateTime` sem fuso e `timestamp` para o com fuso, `string` para JSON e UUID, comentários preservados. |
 | `ddl(table, dialect, prefix="")` | `CREATE TABLE` para `duckdb` ou `redshift`: sem `DEFERRABLE` nem `Identity`, `CHECK` só no DuckDB, chaves só quando `table_options` as pede, `SORTKEY`, `DISTSTYLE` e `DISTKEY` no Redshift, `Text` como `VARCHAR(65535)`, `Uuid` como `VARCHAR(36)`, `JSON` como `SUPER`; `prefix` renomeia a tabela para o sandbox. |
 | `table_options(table)` | O `TableOptions` (`partition_by`, `sort_key`, `redshift`, `keys`) lido de `Table.info["serialize_db"]` com os padrões da biblioteca: partição por `mes` quando a coluna existe e as chaves do próprio modelo, `table.primary_key` e os `UniqueConstraint`; `keys` só acrescenta uma chave de negócio ou exclui uma delas, sempre de forma explícita. |
-| `cast(data, table)` | A `pa.Table`, ou o `RecordBatchReader` lote a lote, convertida para `arrow_schema(table)` com `safe=True` e devolvida no mesmo tipo: as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(21, 2)`, `string` JSON para a extensão `arrow.json`; recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` e nulo em coluna `NOT NULL`, com a mensagem que diz o que o cliente faz antes de chamar. |
+| `cast(data, table)` | A `pa.Table`, ou o `RecordBatchReader` lote a lote, convertida para `arrow_schema(table)` com `safe=True` e devolvida no mesmo tipo: as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(21, 2)`; recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` e nulo em coluna `NOT NULL`, com a mensagem que diz o que o cliente faz antes de chamar. |
 | `check_models(metadata)` | A lista de violações do contrato nos modelos: tipo fora da tabela de tipos, `Double` em coluna monetária, `autoincrement` em chave inteira, `DEFERRABLE`, `Identity`, tabela particionada sem `mes`, tabela sem chave primária e sem `keys`, coluna sem comentário. Vazia nos modelos corrigidos. |
 | `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória. |
 | `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory`; `serialize-db schema write` grava e `serialize-db schema check` compara sem gravar. |
 
-Testes: `tests/test_schema.py`, sem gravar, sobre os modelos do projeto e sobre um modelo de teste
+Testes: `tests/test_schema.py`, sem gravar, sobre o modelo de referência e sobre um modelo de teste
 com todos os tipos; `create_all` no DuckDB em memória com o DDL de cada modelo; o diff dos arquivos
-`schema/` versionados; `write_schema_files` sob a raiz local. Dependências: `sqlalchemy`, `pyarrow`,
+`tests/model/schema/` versionados; `write_schema_files` sob a raiz local. Dependências: `sqlalchemy`, `pyarrow`,
 `deltalake`, `duckdb`, `duckdb-engine` e `sqlalchemy-redshift`. Provas de conceito:
 `test_sqlalchemy.py` (`test_declarative_model_exposes_table`, `test_ddl_per_dialect`,
 `test_create_all_and_reflection`, `test_arrow_and_delta_schema_from_table`, com o mapa de tipos e
@@ -434,7 +440,7 @@ substituição gradual da compilação em tempo de execução descrita em `sqlal
 
 Testes: `tests/test_sql.py`, sem gravar: o statement de `sqlalchemy.md` (parâmetro, `%` em literal,
 prefixo) renderizado nos dois dialetos e executado no DuckDB em memória com `$mes`; `bindparam` sem
-valor e parâmetro faltante como erros; o diff de `sql/`. Opcional: `sqlglot.parse_one(texto,
+valor e parâmetro faltante como erros; o diff de `tests/model/sql/`. Opcional: `sqlglot.parse_one(texto,
 dialect)` como teste de que o texto do Redshift analisa. Provas de conceito:
 `test_sqlalchemy.py` (`test_generated_sql_text_per_dialect`, `test_redshift_dialect_compiles_dml`) e
 `test_stdlib.py::test_generated_files_diff`.
@@ -733,8 +739,8 @@ tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a publicação sai 
 
 ## Ordem do trabalho
 
-1. Etapas 1 e 2, em pastas locais, com os modelos corrigidos e os arquivos `schema/` e `sql/` do
-   projeto versionados.
+1. Etapas 1 e 2, em pastas locais, com o modelo de referência corrigido e os seus arquivos
+   `schema/` e `sql/` versionados em `tests/model/`.
 2. Etapa 3, depois 4 e 6: um pipeline completo em disco local, o critério de aceite da etapa 6
    sobre o motor DuckDB.
 3. Em paralelo, no ambiente de destino: os probes (no laboratório rodaram três vezes em 2026-09-20,

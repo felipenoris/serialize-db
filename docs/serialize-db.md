@@ -47,9 +47,10 @@ primitivas de cada módulo, em [`PLAN.md`](PLAN.md).
   documentação da API.
 
 Os módulos são `serialize_db.schema`, `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`,
-`serialize_db.engine.duckdb`, `serialize_db.engine.redshift` e `serialize_db.execution`. Os modelos
-do projeto em `src/serialize_db/model/` são a primeira instância do contrato e o material dos
-testes. As etapas de implementação, com as primitivas e o critério de aceite de cada uma, estão em
+`serialize_db.engine.duckdb`, `serialize_db.engine.redshift` e `serialize_db.execution`; o pacote não
+contém modelos, que vêm da biblioteca cliente. O modelo de referência em `tests/model/` é a
+primeira instância do contrato e o material dos testes, que o entregam à API como um pipeline
+entregaria os seus modelos. As etapas de implementação, com as primitivas e o critério de aceite de cada uma, estão em
 [`PLAN.md`](PLAN.md).
 
 ## Metadados próprios da biblioteca
