@@ -57,20 +57,25 @@ variáveis `AWS_*` ou perfil), das permissões `s3:ListBucket`, `s3:GetObject`, 
 `delta` e `aws` do DuckDB. A suíte local precisa só da extensão `delta`. Fora das raízes informadas,
 o que uma sessão grava é `.pytest_cache/` na raiz do repositório, do próprio pytest.
 
-## Diagnóstico do ambiente AWS
+## Probes: leituras do ambiente
 
 ```
+.venv/bin/python probes/space.py
+.venv/bin/python probes/bucket.py s3://bucket/prefixo
 .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo
+.venv/bin/python probes/redshift.py
+.venv/bin/python probes/catalog.py
 ```
 
-Só leitura: nada é gravado no bucket. O resultado sai no terminal e em
-`probes/output/diagnose_aws_<data-hora>.txt`, pasta fora do git, para ser colado na conversa com o
-assistente. O script imprime, cada um com timeout curto e o tempo gasto, as versões, as
-variáveis de ambiente, a região como o `boto3` e o delta-rs a resolvem, o DNS dos endpoints (IP
-privado indica endpoint VPC de interface com DNS privado; IP público, gateway endpoint ou internet),
-as credenciais do `boto3`, a listagem de `<raiz>/serialize-db-poc/` pelo `boto3`, pelo delta-rs e
-pelo DuckDB, e o STS. O resumo diz o que a suíte S3 exige do ambiente e se ela precisa de
-manutenção:
+Scripts só de leitura, em [`probes/`](probes/README.md), que fotografam o que o ambiente oferece à
+biblioteca: o espaço do SageMaker visto de dentro (credenciais, região, projeto, rede, máquina,
+Python e DuckDB), o bucket sob a raiz (configuração, ciclo de vida, inventário e tabelas Delta), o
+acesso que a suíte S3 exige, o Redshift (conexão, papel IAM do `COPY`, sessão e privilégios) e os
+serviços de catálogo. Cada um imprime o relatório e o grava em `probes/output/`, pasta fora do git,
+para ser colado na conversa com o assistente, com seções numeradas, cada chamada ecoada acima do
+resultado ou do erro, a tabela de checagens e a seção final de chamadas que falharam.
+
+Os fatos que `diagnose_aws.py` usa no seu resumo:
 
 - **Região.** O botocore lê `AWS_DEFAULT_REGION` ou o perfil, não `AWS_REGION`, e sem região usa o
   endpoint global `s3.amazonaws.com`, que um endpoint VPC regional não atende. O delta-rs lê
@@ -85,8 +90,7 @@ manutenção:
 - **Endpoint.** Com `AWS_ENDPOINT_URL`, o `boto3` e o delta-rs o usam, e a suíte não o passa ao
   secret do DuckDB.
 
-O código de saída é 0 quando os três clientes listam o prefixo e o STS responde. Sem rede, o
-diagnóstico inteiro leva um minuto e meio: o `boto3` desiste em 11 s, o delta-rs em 10 s
+Sem rede, `diagnose_aws.py` leva um minuto e meio: o `boto3` desiste em 11 s, o delta-rs em 10 s
 (`max_retries` e `retry_timeout` em `storage_options`) e o DuckDB no teto de 60 s do subprocesso.
 
 ## Credenciais do delta-rs e proxy

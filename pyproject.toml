@@ -20,6 +20,7 @@ dev = [
     "duckdb==1.5.5",
     "pyarrow==25.0.1",
     "pytest>=8.4",
+    "redshift-connector>=2.1",
 ]
 
 [tool.pytest.ini_options]
