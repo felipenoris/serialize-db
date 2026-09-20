@@ -5,40 +5,56 @@ Uso:
     .venv/bin/python probes/redshift.py [s3://bucket/prefixo]
 
 A raiz S3, pelo argumento, por ``SERIALIZE_DB_ROOT`` ou por ``SERIALIZE_DB_TEST_S3_ROOT``
-(``probelib.s3_root``), serve à simulação do papel do ``COPY`` e do ``UNLOAD`` sobre ela.
+(``probelib.s3_root``), serve à simulação de quem alcança o S3 no ``COPY`` e no ``UNLOAD``.
 
-Só leitura: conecta e consulta visões de sistema, sem criar, alterar ou apagar nada no banco. Uma
-credencial derivada da identidade IAM (``GetCredentials``, ``GetClusterCredentials``) cria o usuário
-do banco quando ele ainda não existe; é o único efeito colateral possível, e a checagem RS-4 o aponta. O relatório sai no terminal e em
-``probes/output/redshift_<data-hora>.txt``. Seções:
+Só leitura: conecta, consulta visões de sistema e troca o banco da sessão com ``USE``, sem criar,
+alterar ou apagar nada no banco. A credencial temporária do workgroup (``GetCredentials``) cria o
+usuário do banco quando ele ainda não existe; é o único efeito colateral possível, e a checagem
+``RS-4`` o aponta. O relatório sai no terminal e em ``probes/output/redshift_<data-hora>.txt``.
+
+A conexão repete ``examples/redshift_native.py``, executado no ambiente alvo em 2026-09-20:
+``redshift-serverless:GetWorkgroup`` dá o endereço e a porta, ``GetCredentials`` dá o par usuário e
+senha derivado da identidade IAM, e ``redshift_connector.connect`` abre a sessão com esse par. Um par
+informado em ``_USER`` e ``_PASSWORD``, ou lido do secret da conexão do projeto, entra na mesma
+chamada. O IAM interno do ``redshift_connector`` e o cluster provisionado não são caminhos deste
+probe: ninguém os executou no ambiente alvo, que não tem cluster.
+
+Seções:
 
 1. Configuração: as variáveis ``SERIALIZE_DB_REDSHIFT_*`` e a conexão Redshift do projeto
-   (``sagemaker_studio``), de onde saem host, porta, banco, cluster ou workgroup.
-2. APIs: ``redshift:DescribeClusters``, ``redshift-serverless:ListWorkgroups``, ``GetWorkgroup`` e
-   ``GetNamespace``, com o papel IAM padrão que o ``COPY`` e o ``UNLOAD`` usam, o roteamento VPC e os
-   nós; a Data API, pelo ciclo completo de ``examples/redshift_data_api.py`` com ``select 1``, como
-   caminho alternativo quando a porta 5439 está fechada.
+   (``sagemaker_studio``), de onde saem host, porta, banco e workgroup.
+2. APIs: ``redshift-serverless:GetWorkgroup`` do workgroup configurado, ``ListWorkgroups`` e
+   ``GetNamespace``, com o papel IAM padrão e os associados; ``redshift:DescribeClusters`` como
+   fotografia, porque o ambiente alvo não tem cluster; a Data API, pelo ciclo completo de
+   ``examples/redshift_data_api.py`` com ``select 1``, o caminho alternativo quando a porta 5439
+   está fechada.
 3. Rede: DNS dos endpoints regionais e TCP até o host.
-4. Sessão: a credencial temporária do workgroup (``examples/redshift_native.py``), senha ou IAM do
-   ``redshift_connector``; versão, usuário, banco, ``search_path``, esquemas, os bancos visíveis e em
-   qual deles está o esquema do projeto, se o consumidor pode escrever num banco de datashare,
-   privilégios no esquema e no banco (``CREATE``, ``TEMP``), tabelas com o prefixo da biblioteca,
-   ``SUPER``, as configurações da sessão, ``stl_load_errors`` (o diagnóstico de um ``COPY``
-   reprovado) e os esquemas externos.
-5. Papel do ``COPY`` e do ``UNLOAD`` sobre a raiz S3, pela simulação de política do IAM.
+4. Sessão: a credencial temporária do workgroup; versão, usuário, banco, ``search_path``, esquemas,
+   ``SUPER``, as configurações da sessão, privilégios no banco da conexão (``CREATE``, ``TEMP``),
+   ``sys_load_error_detail`` (o diagnóstico de um ``COPY`` reprovado) e os esquemas externos; os
+   bancos visíveis e em qual deles está o esquema do projeto, os requisitos da escrita num banco de
+   datashare; o ``USE`` nesse banco (``examples/redshift_copy_unload.py``) e, depois dele, os
+   privilégios no esquema e as tabelas com o prefixo da biblioteca.
+5. Quem alcança o S3 no ``COPY`` e no ``UNLOAD``: as credenciais de quem chama, ou o papel de
+   ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, e o alcance sobre a raiz S3 pela simulação de política do IAM.
 
 Cada seção é uma função, na ordem acima, que documenta as checagens que emite (``RS-1`` a
-``RS-17``). A seção 1 devolve um ``Target`` com os parâmetros de conexão reunidos; as seguintes o
-recebem, e a seção 2 acrescenta a ele os papéis IAM padrão que a seção 5 simula. ``main`` chama as
-seções uma a uma, e uma seção que quebra não cala as outras.
+``RS-19``). A seção 1 devolve um ``Target`` com os parâmetros de conexão reunidos; as seguintes o
+recebem, e a seção 2 acrescenta a ele os papéis IAM do namespace que a seção 5 consulta. ``main``
+chama as seções uma a uma, e uma seção que quebra não cala as outras.
 
-Variáveis, todas com o prefixo do projeto: ``SERIALIZE_DB_REDSHIFT_HOST``, ``_PORT`` (5439), ``_DATABASE`` (banco da conexão),
-``_SHARE_DATABASE`` (banco do datashare que guarda o esquema do projeto, quando não é o da conexão),
-``_USER``, ``_PASSWORD``, ``_CLUSTER`` (identificador do cluster, autenticação IAM), ``_WORKGROUP``
-(serverless, autenticação IAM), ``_SCHEMA`` (esquema do projeto), ``_IAM_ROLE`` (o papel do ``COPY``
-e do ``UNLOAD`` na suíte) e ``_CONNECTION`` (nome da conexão do projeto; sem ela, a única conexão
-Redshift). Sem variável nenhuma e sem conexão no projeto, nada é conectado. Códigos de saída: 0
-checagens ok, 1 alguma chamada falhou, 2 alguma checagem reprovou.
+As leituras que descrevem o banco da conexão e a sessão vêm antes do ``USE``; depois dele o banco da
+sessão é o do datashare, e só o que precisa desse banco roda lá.
+
+Variáveis, todas com o prefixo do projeto: ``SERIALIZE_DB_REDSHIFT_WORKGROUP`` (o workgroup
+serverless: endereço por ``GetWorkgroup`` e credencial por ``GetCredentials``), ``_DATABASE`` (banco
+da conexão), ``_SHARE_DATABASE`` (banco do datashare que guarda o esquema do projeto, quando não é o
+da conexão: a sessão roda ``USE`` nele), ``_SCHEMA`` (esquema do projeto), ``_HOST``, ``_PORT``
+(5439), ``_USER`` e ``_PASSWORD`` (o par informado, na mesma chamada), ``_IAM_ROLE`` (o papel do
+``COPY`` e do ``UNLOAD`` na suíte, ou ``default``; sem ela, as credenciais de quem chama) e
+``_CONNECTION`` (nome da conexão do projeto; sem ela, a única conexão Redshift). Sem variável
+nenhuma e sem conexão no projeto, nada é conectado. Códigos de saída: 0 checagens ok, 1 alguma
+chamada falhou, 2 alguma checagem reprovou.
 """
 
 from __future__ import annotations
@@ -49,7 +65,9 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probelib  # noqa: E402
@@ -67,8 +85,8 @@ from probelib import (  # noqa: E402
     tcp_open,
 )
 
-# Os sufixos das variáveis SERIALIZE_DB_REDSHIFT_*, na ordem em que a tabela os mostra.
-VARIABLES = ("HOST", "PORT", "DATABASE", "SHARE_DATABASE", "USER", "PASSWORD", "CLUSTER", "WORKGROUP", "SCHEMA", "IAM_ROLE", "CONNECTION")
+# Os sufixos das variáveis SERIALIZE_DB_REDSHIFT_*, na ordem em que a tabela os mostra: o caminho executado primeiro.
+VARIABLES = ("WORKGROUP", "DATABASE", "SHARE_DATABASE", "SCHEMA", "HOST", "PORT", "USER", "PASSWORD", "IAM_ROLE", "CONNECTION")
 
 # As APIs do Redshift cujo endpoint regional a seção de rede resolve; sem endpoint VPC, dependem da internet.
 SERVICES = ("redshift", "redshift-serverless", "redshift-data")
@@ -78,12 +96,11 @@ TABLE_PREFIX = "serialize_db"
 
 # As chaves, em snake_case e em camelCase, com que a conexão do projeto guarda os parâmetros de conexão.
 CONNECTION_KEYS = (
-    "host", "port", "database_name", "databaseName", "workgroup_name", "workgroupName", "cluster_name", "clusterName",
-    "cluster_identifier", "clusterIdentifier", "db_user", "dbUser", "username", "password", "jdbc_url", "jdbcUrl",
-    "secret_arn", "secretArn",
+    "host", "port", "database_name", "databaseName", "workgroup_name", "workgroupName", "db_user", "dbUser", "username",
+    "password", "jdbc_url", "jdbcUrl", "secret_arn", "secretArn",
 )
 
-# As ações que o COPY e o UNLOAD exigem do papel sobre a raiz S3.
+# As ações que o COPY e o UNLOAD exigem de quem alcança a raiz S3.
 COPY_ACTIONS = ["s3:ListBucket", "s3:GetObject", "s3:PutObject"]
 
 # O patch mínimo da escrita em datashare (patch 186), por tipo de consumidor.
@@ -105,10 +122,13 @@ def variable(name: str) -> str | None:
 class Target:
     """Parâmetros de conexão reunidos das variáveis e da conexão do projeto.
 
-    ``source`` diz de onde vieram (``variáveis``, ``conexão <nome> do projeto`` ou ``nada``); ``roles`` recebe
-    os papéis IAM padrão que a seção das APIs encontra, para a simulação do ``COPY``. ``database`` é o
-    banco da conexão e ``share_database`` o banco que guarda o esquema do projeto quando ele vem de um
-    datashare, caso em que toda tabela é citada por nome em três partes.
+    ``source`` diz de onde vieram (``variáveis``, ``conexão <nome> do projeto`` ou ``nada``).
+    ``database`` é o banco da conexão e ``share_database`` o banco que guarda o esquema do projeto
+    quando ele vem de um datashare: a sessão roda ``USE`` nele e cita ``esquema.tabela``, e o nome em
+    três partes fica para uma sessão aberta em outro banco, como a da Data API. ``iam_role`` é o
+    papel de ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``; ``namespace_roles`` recebe da seção das APIs os
+    papéis IAM padrão e os associados ao namespace, ou fica ``None`` quando ela não os leu, para a
+    seção 5 dizer quem alcança o S3.
     """
 
     host: str | None = None
@@ -117,16 +137,19 @@ class Target:
     share_database: str | None = None
     user: str | None = None
     password: str | None = None
-    cluster: str | None = None
     workgroup: str | None = None
     schema: str | None = None
+    iam_role: str | None = None
     source: str = "nada"
-    roles: list[str] = field(default_factory=list)
+    namespace_roles: tuple[list[str], list[str]] | None = None
 
     def qualified(self, name: str) -> str:
-        """O nome da tabela como o SQL a cita: três partes quando o esquema está num banco de datashare."""
-        parts = [part for part in (self.share_database, self.schema, name) if part]
-        return ".".join(parts)
+        """O nome como a sessão o cita depois do ``USE``: ``esquema.tabela``, ou só a tabela sem esquema."""
+        return ".".join(part for part in (self.schema, name) if part)
+
+    def fully_qualified(self, name: str) -> str:
+        """O nome em três partes, para uma sessão aberta em outro banco: ``banco.esquema.tabela``."""
+        return ".".join(part for part in (self.schema_database(), self.schema, name) if part)
 
     def schema_database(self) -> str | None:
         """O banco que guarda o esquema do projeto: o do datashare, ou o da conexão."""
@@ -151,7 +174,6 @@ def target_from_connection(report: Report, target: Target, chosen: dict) -> None
     target.port = int(endpoint.get("port") or found.get("port") or (jdbc.group(2) if jdbc else target.port))
     target.database = target.database or found.get("database_name") or found.get("databaseName") or (jdbc.group(3) if jdbc else None)
     target.workgroup = found.get("workgroup_name") or found.get("workgroupName")
-    target.cluster = found.get("cluster_name") or found.get("clusterName") or found.get("cluster_identifier") or found.get("clusterIdentifier")
     target.user = target.user or found.get("db_user") or found.get("dbUser") or found.get("username")
     target.password = target.password or found.get("password")
     target.source = f"conexão {chosen.get('name')} do projeto"
@@ -176,7 +198,7 @@ def configuration(report: Report) -> Target:
     report.h1("Configuração")
     report.table([["variável", "valor"], *environment_rows([f"SERIALIZE_DB_REDSHIFT_{name}" for name in VARIABLES])])
 
-    # As variáveis têm precedência: com host, cluster ou workgroup nelas, a conexão do projeto é só listada.
+    # As variáveis têm precedência: com workgroup ou host nelas, a conexão do projeto é só listada.
     target = Target(
         host=variable("HOST"),
         port=int(variable("PORT") or 5439),
@@ -184,11 +206,11 @@ def configuration(report: Report) -> Target:
         share_database=variable("SHARE_DATABASE"),
         user=variable("USER"),
         password=variable("PASSWORD"),
-        cluster=variable("CLUSTER"),
         workgroup=variable("WORKGROUP"),
         schema=variable("SCHEMA"),
+        iam_role=variable("IAM_ROLE"),
     )
-    if target.host or target.cluster or target.workgroup:
+    if target.host or target.workgroup:
         target.source = "variáveis"
 
     # As conexões do projeto, uma linha cada; a conexão Redshift escolhida é a de SERIALIZE_DB_REDSHIFT_CONNECTION ou a única.
@@ -215,12 +237,14 @@ def configuration(report: Report) -> Target:
         elif not redshift:
             report.line("nenhuma conexão Redshift no projeto")
 
-    for name in ("host", "port", "database", "share_database", "user", "cluster", "workgroup", "schema"):
+    for name in ("workgroup", "host", "port", "database", "share_database", "user", "schema", "iam_role"):
         report.value(f"REDSHIFT_{name.upper()}", getattr(target, name))
 
-    # O nome que a biblioteca escreve no SQL; com o esquema num datashare, são três partes.
+    # O nome que a biblioteca escreve no SQL depois do USE, e o nome em três partes de uma sessão aberta em outro banco.
     if target.schema:
         report.value("REDSHIFT_TABLE_NAME", target.qualified("<tabela>"))
+        if target.schema_database():
+            report.value("REDSHIFT_TABLE_FULL_NAME", target.fully_qualified("<tabela>"))
 
     if target.source == "nada":
         report.note("RS-1", "conexão configurada", "nada: informe SERIALIZE_DB_REDSHIFT_* ou crie a conexão Redshift no projeto")
@@ -273,7 +297,7 @@ def workgroup_rows(workgroups: dict) -> list[list[object]]:
 
 
 def iam_roles(clusters: dict | None, namespaces: dict[str, dict]) -> tuple[list[str], list[str]]:
-    """Os papéis IAM do ``COPY`` e do ``UNLOAD``: os padrão e todos os associados, sem repetição.
+    """Os papéis IAM que ``IAM_ROLE`` aceitaria: os padrão e os apenas associados, sem repetição.
 
     Um papel só serve ao ``COPY`` quando está associado ao cluster ou ao namespace, e o padrão é o
     que ``IAM_ROLE default`` usa. Sem nenhum associado, nem um ARN explícito funciona, e é isso que
@@ -328,32 +352,30 @@ def data_api_select(client: object, parameters: dict, sql: str, timeout: float =
 
 
 def apis(report: Report, target: Target) -> None:
-    """Seção 2: ``RS-2`` (as APIs respondem), ``RS-6`` (papel IAM associado para ``COPY`` e ``UNLOAD``) e ``RS-10`` (Data API)."""
+    """Seção 2: ``RS-2`` (a API do serverless responde), ``RS-6`` (papel IAM do namespace para ``COPY`` e ``UNLOAD``) e ``RS-10`` (Data API)."""
     import boto3
 
     report.h1("APIs do Redshift")
     resolved = region()
     config = short_config()
+    serverless = boto3.client("redshift-serverless", region_name=resolved, config=config)
 
-    # Os clusters provisionados, com o papel IAM padrão de cada um.
-    clusters = report.call("redshift.describe_clusters()", lambda: boto3.client("redshift", region_name=resolved, config=config).describe_clusters(), render=None)
-    clusters_reason = report.last_reason if clusters is None else None
+    # Os clusters provisionados são fotografia: o ambiente alvo não tem nenhum e a biblioteca só chama a API do
+    # serverless, então a leitura negada é leitura.
+    clusters = report.call("redshift.describe_clusters()", lambda: boto3.client("redshift", region_name=resolved, config=config).describe_clusters(), render=None, expected=True)
     if clusters is not None:
         rows = cluster_rows(clusters)
         report.table(rows if len(rows) > 1 else [["(nenhum cluster provisionado visível)"]])
 
-    # Os workgroups serverless e, para cada um, o namespace, que guarda o banco e o papel IAM padrão.
-    workgroups = report.call("redshift-serverless.list_workgroups()", lambda: boto3.client("redshift-serverless", region_name=resolved, config=config).list_workgroups(), render=None)
-    workgroups_reason = report.last_reason if workgroups is None else None
     namespaces: dict[str, dict] = {}
 
     def read_namespace(name: str | None) -> None:
-        """Lê o namespace de um workgroup: é ele que guarda o banco e o papel IAM padrão que RS-6 cobra."""
+        """Lê o namespace de um workgroup: é ele que guarda o banco e os papéis IAM que RS-6 separa."""
         if not name or name in namespaces:
             return
         namespace = report.call(
             f"redshift-serverless.get_namespace(namespaceName={name!r})",
-            lambda: boto3.client("redshift-serverless", region_name=resolved, config=config).get_namespace(namespaceName=name)["namespace"],
+            lambda: serverless.get_namespace(namespaceName=name)["namespace"],
             render=None,
         )
         if namespace:
@@ -363,75 +385,73 @@ def apis(report: Report, target: Target) -> None:
                 [namespace.get("namespaceName"), namespace.get("dbName"), namespace.get("defaultIamRoleArn") or "-", ", ".join(namespace.get("iamRoles", [])) or "-", namespace.get("kmsKeyId") or "-"],
             ])
 
-    if workgroups is not None:
-        rows = workgroup_rows(workgroups)
-        report.table(rows if len(rows) > 1 else [["(nenhum workgroup serverless visível)"]])
-        for workgroup in workgroups.get("workgroups", []):
-            read_namespace(workgroup.get("namespaceName"))
-
-    # O workgroup configurado é lido direto: ListWorkgroups pode estar negada, e GetWorkgroup dá o
-    # endereço e a porta que a conexão usa (examples/redshift_native.py, passo 1).
-    if target.workgroup and not any(item.get("workgroupName") == target.workgroup for item in (workgroups or {}).get("workgroups", [])):
-        found = report.call(
+    # GetWorkgroup é o passo 1 de examples/redshift_native.py: dá o endereço e a porta da conexão, e a
+    # biblioteca depende dele. ListWorkgroups é a fotografia da conta, que a biblioteca não chama; sem
+    # workgroup configurado, ela é o que diz ao leitor o que informar.
+    workgroup = None
+    workgroup_reason: str | None = None
+    if target.workgroup:
+        workgroup = report.call(
             f"redshift-serverless.get_workgroup(workgroupName={target.workgroup!r})",
-            lambda: boto3.client("redshift-serverless", region_name=resolved, config=config).get_workgroup(workgroupName=target.workgroup)["workgroup"],
+            lambda: serverless.get_workgroup(workgroupName=target.workgroup)["workgroup"],
             render=None,
         )
-        if found:
-            report.table(workgroup_rows({"workgroups": [found]}))
-            read_namespace(found.get("namespaceName"))
-            endpoint = found.get("endpoint") or {}
+        workgroup_reason = report.last_reason if workgroup is None else None
+        if workgroup:
+            report.table(workgroup_rows({"workgroups": [workgroup]}))
+            read_namespace(workgroup.get("namespaceName"))
+            endpoint = workgroup.get("endpoint") or {}
             target.host = target.host or endpoint.get("address")
             target.port = int(endpoint.get("port") or target.port)
 
-    # O endereço do workgroup listado também preenche o alvo, quando as variáveis não trouxeram host.
-    for item in (workgroups or {}).get("workgroups", []):
-        if item.get("workgroupName") == target.workgroup and not target.host:
-            endpoint = item.get("endpoint") or {}
-            target.host = endpoint.get("address")
-            target.port = int(endpoint.get("port") or target.port)
+    workgroups = report.call("redshift-serverless.list_workgroups()", serverless.list_workgroups, render=None, expected=bool(target.workgroup))
+    list_reason = report.last_reason if workgroups is None else None
+    if workgroups is not None:
+        rows = workgroup_rows(workgroups)
+        report.table(rows if len(rows) > 1 else [["(nenhum workgroup serverless visível)"]])
+        for item in workgroups.get("workgroups", []):
+            read_namespace(item.get("namespaceName"))
 
-    # RS-2: cada API que falhou é nomeada com o motivo; a autenticação por IAM depende delas.
-    missing = [f"{api}: {why}" for api, why in (("redshift", clusters_reason), ("redshift-serverless", workgroups_reason)) if why]
-    if not missing:
-        report.ok("RS-2", "APIs do Redshift", "responderam")
+    # RS-2: a conexão depende de GetWorkgroup (e de GetCredentials, RS-15); sem workgroup configurado,
+    # ListWorkgroups diz o que há para informar.
+    if target.workgroup:
+        if workgroup is not None:
+            report.ok("RS-2", "API do Redshift serverless", f"GetWorkgroup respondeu por {target.workgroup}")
+        else:
+            report.fail("RS-2", "API do Redshift serverless", f"GetWorkgroup: {workgroup_reason}; sem ele não há endereço nem credencial temporária; ver a seção final")
+    elif workgroups is not None:
+        report.ok("RS-2", "API do Redshift serverless", "ListWorkgroups respondeu")
     else:
-        report.note("RS-2", "APIs do Redshift", "; ".join(missing) + "; a autenticação por IAM depende delas; ver a seção final")
+        report.note("RS-2", "API do Redshift serverless", f"ListWorkgroups: {list_reason}; informe SERIALIZE_DB_REDSHIFT_WORKGROUP para GetWorkgroup ser lido")
 
-    # RS-6: o COPY e o UNLOAD só usam papel associado ao cluster ou ao namespace. Com papel padrão,
-    # IAM_ROLE default basta; com papéis associados e sem padrão, SERIALIZE_DB_REDSHIFT_IAM_ROLE tem
-    # que nomear um; sem nenhum associado, nem um ARN explícito funciona, e quem associa é o
-    # administrador do namespace.
+    # RS-6: IAM_ROLE só aceita papel associado ao cluster ou ao namespace; o padrão é o que IAM_ROLE
+    # default usa. A biblioteca só emite IAM_ROLE com SERIALIZE_DB_REDSHIFT_IAM_ROLE: sem ela, o COPY e
+    # o UNLOAD levam as credenciais de quem chama (RS-18), o caminho de examples/redshift_copy_unload.py,
+    # que é o único possível quando o namespace não tem papel nenhum.
     defaults, attached = iam_roles(clusters, namespaces)
-    target.roles = defaults + attached
-    visible = bool((clusters or {}).get("Clusters") or (workgroups or {}).get("workgroups") or namespaces)
+    if clusters is not None or namespaces:
+        target.namespace_roles = (defaults, attached)
+    library = "a biblioteca só o usa com SERIALIZE_DB_REDSHIFT_IAM_ROLE; sem ela, as credenciais de quem chama (RS-18)"
     if defaults:
-        report.ok("RS-6", "papel IAM para COPY e UNLOAD", f"padrão: {', '.join(defaults)}" + (f"; associados: {', '.join(attached)}" if attached else ""))
+        report.ok("RS-6", "papel IAM para COPY e UNLOAD", f"padrão: {', '.join(defaults)}" + (f"; associados: {', '.join(attached)}" if attached else "") + f"; {library}")
     elif attached:
-        report.note("RS-6", "papel IAM para COPY e UNLOAD", f"sem papel padrão; associados: {', '.join(attached)}; informe um deles em SERIALIZE_DB_REDSHIFT_IAM_ROLE, porque IAM_ROLE default não resolve")
-    elif visible:
-        report.note("RS-6", "papel IAM para COPY e UNLOAD", "nenhum papel associado ao cluster ou ao namespace: o COPY e o UNLOAD levam ACCESS_KEY_ID, SECRET_ACCESS_KEY e SESSION_TOKEN de quem chama, o caminho de examples/redshift_copy_unload.py, e RS-11 simula essa identidade")
-    elif not missing:
-        report.note("RS-6", "papel IAM para COPY e UNLOAD", "nenhum cluster ou workgroup visível: nada a ler")
+        report.note("RS-6", "papel IAM para COPY e UNLOAD", f"sem papel padrão; associados: {', '.join(attached)}; IAM_ROLE default não resolve, e {library}")
+    elif target.namespace_roles is not None:
+        report.note("RS-6", "papel IAM para COPY e UNLOAD", "nenhum papel associado ao namespace: IAM_ROLE não funciona nem com ARN explícito, e o COPY e o UNLOAD levam as credenciais de quem chama (RS-18, RS-11)")
     else:
-        report.note("RS-6", "papel IAM para COPY e UNLOAD", "não lido: " + "; ".join(missing))
+        report.note("RS-6", "papel IAM para COPY e UNLOAD", "namespace não lido: nada a dizer sobre IAM_ROLE; sem a variável, o COPY leva as credenciais de quem chama")
 
-    # Sem configuração, os nomes visíveis dizem ao leitor o que informar para conectar por IAM.
+    # Sem configuração, os nomes visíveis dizem ao leitor o que informar para conectar.
     if target.source == "nada":
-        names = [cluster.get("ClusterIdentifier") for cluster in (clusters or {}).get("Clusters", [])] + [workgroup.get("workgroupName") for workgroup in (workgroups or {}).get("workgroups", [])]
+        names = [item.get("workgroupName") for item in (workgroups or {}).get("workgroups", [])]
         if names:
-            report.line(f"para conectar por IAM, informe SERIALIZE_DB_REDSHIFT_CLUSTER ou _WORKGROUP com um de: {', '.join(str(name) for name in names)}, e SERIALIZE_DB_REDSHIFT_DATABASE")
+            report.line(f"para conectar, informe SERIALIZE_DB_REDSHIFT_WORKGROUP com um de: {', '.join(str(name) for name in names)}, e SERIALIZE_DB_REDSHIFT_DATABASE")
 
     # RS-10: a Data API executa SQL por HTTPS, sem a porta 5439: o caminho de reserva se a rede fechar a
     # porta. O ciclo é o de examples/redshift_data_api.py, com select 1, que não lê dado nenhum do banco.
-    if target.database and (target.workgroup or (target.cluster and target.user)):
+    if target.database and target.workgroup:
         data = boto3.client("redshift-data", region_name=resolved, config=config)
-        parameters = {"Database": target.database}
-        if target.workgroup:
-            parameters["WorkgroupName"] = target.workgroup
-        else:
-            parameters.update({"ClusterIdentifier": target.cluster, "DbUser": target.user})
-
+        parameters = {"Database": target.database, "WorkgroupName": target.workgroup}
         executed = report.call(
             f"redshift-data: execute_statement + describe_statement + get_statement_result ({parameters}) select 1",
             lambda: data_api_select(data, parameters, "select 1"),
@@ -439,7 +459,7 @@ def apis(report: Report, target: Target) -> None:
         )
         report.note("RS-10", "Data API", "ciclo completo responde: caminho alternativo por HTTPS, sem a porta 5439" if executed is not None else f"{report.last_reason}; ver a seção final")
     else:
-        report.note("RS-10", "Data API", "não testada: precisa de SERIALIZE_DB_REDSHIFT_DATABASE e de _WORKGROUP, ou de _CLUSTER com _USER")
+        report.note("RS-10", "Data API", "não testada: precisa de SERIALIZE_DB_REDSHIFT_DATABASE e de _WORKGROUP")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -456,15 +476,15 @@ def network(report: Report, target: Target) -> None:
     rows, private = dns_rows(names)
     report.table([["nome", "endereços", "tipo"], *rows])
 
-    # RS-14: sem internet, as APIs só respondem por endpoint VPC de interface; a porta 5439 do cluster fica dentro da VPC.
+    # RS-14: sem internet, as APIs só respondem por endpoint VPC de interface; a porta 5439 do workgroup fica dentro da VPC.
     api_names = names[: len(SERVICES)]
     public_names = [name for name in api_names if not private.get(name)]
     if api_names and not public_names:
         report.ok("RS-14", "APIs do Redshift sem internet", "endpoints VPC de interface: a credencial temporária do workgroup e a Data API funcionam sem internet")
     elif api_names:
-        report.note("RS-14", "APIs do Redshift sem internet", f"sem endpoint VPC: {', '.join(public_names)}; sem internet ou proxy, a credencial temporária (GetCredentials, GetClusterCredentials) e a Data API não respondem, e resta a conexão por senha na porta 5439")
+        report.note("RS-14", "APIs do Redshift sem internet", f"sem endpoint VPC: {', '.join(public_names)}; sem internet ou proxy, GetWorkgroup, GetCredentials e a Data API não respondem, e resta o par informado em _USER e _PASSWORD na porta 5439")
 
-    # RS-3: a porta do host abre; sem host conhecido, o endereço vem das APIs da seção 2.
+    # RS-3: a porta do host abre; sem host conhecido, o endereço vem de GetWorkgroup na seção 2.
     if target.host:
         opened = report.call(f"tcp {target.host}:{target.port}", lambda: tcp_open(target.host or "", target.port, 5), render=lambda seconds: f"conectou em {seconds:.2f} s")
         if opened is None:
@@ -472,7 +492,7 @@ def network(report: Report, target: Target) -> None:
         else:
             report.ok("RS-3", "host por TCP", f"{target.host}:{target.port}")
     else:
-        report.note("RS-3", "host por TCP", "sem host conhecido; o endereço vem de GetWorkgroup ou de DescribeClusters (seção 2)")
+        report.note("RS-3", "host por TCP", "sem host conhecido; o endereço vem de GetWorkgroup (seção 2) ou de SERIALIZE_DB_REDSHIFT_HOST")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -544,15 +564,16 @@ def datashare_write_verdict(version: tuple[int, ...] | None, kind: str, isolatio
     if any(ok is False for _, ok in checks):
         return "fail", text
     if any(ok is None for _, ok in checks):
-        return "note", text
+        return "note", text + "; o que a sessão não lê, o CREATE TABLE da suíte testa"
     return "ok", text
 
 
 def session(report: Report, target: Target) -> None:
-    """Seção 4: ``RS-15`` (credencial temporária do workgroup), ``RS-4`` (a sessão abre), ``RS-16`` (o banco do
-    esquema do projeto), ``RS-17`` (escrita num banco de datashare), ``RS-5`` (privilégios no esquema),
-    ``RS-8`` (tabelas da biblioteca), ``RS-7`` (``SUPER``), ``RS-9`` (privilégios no banco), ``RS-12``
-    (diagnóstico do ``COPY``) e ``RS-13`` (esquemas externos)."""
+    """Seção 4: ``RS-15`` (credencial temporária do workgroup), ``RS-4`` (a sessão abre), ``RS-7`` (``SUPER``),
+    ``RS-9`` (privilégios no banco da conexão), ``RS-12`` (diagnóstico do ``COPY``), ``RS-13`` (esquemas
+    externos), ``RS-16`` (o banco do esquema do projeto), ``RS-17`` (escrita num banco de datashare),
+    ``RS-19`` (``USE`` no banco do datashare), ``RS-5`` (privilégios no esquema) e ``RS-8`` (tabelas da
+    biblioteca). As leituras do banco da conexão vêm antes do ``USE``, que troca o banco da sessão."""
     report.h1("Sessão")
     if target.source == "nada":
         report.line("sem configuração, nada a conectar (RS-1)")
@@ -571,10 +592,10 @@ def session(report: Report, target: Target) -> None:
     # sai da identidade IAM (IAMR:<papel>), entra em PUBLIC e a senha dura no máximo uma hora; sem
     # durationSeconds seriam 900 segundos. A senha fica fora do relatório.
     temporary = False
-    if not target.workgroup:
-        report.note("RS-15", "credencial temporária do workgroup", "sem workgroup serverless: a credencial temporária é do serverless")
-    elif target.user and target.password:
+    if target.user and target.password:
         report.note("RS-15", "credencial temporária do workgroup", "não pedida: usuário e senha vieram das variáveis ou da conexão do projeto")
+    elif not target.workgroup:
+        report.note("RS-15", "credencial temporária do workgroup", "sem SERIALIZE_DB_REDSHIFT_WORKGROUP: a credencial temporária é do workgroup serverless, e sem ela a sessão precisa do par em _USER e _PASSWORD")
     else:
         credentials = report.call(
             f"redshift-serverless.get_credentials(workgroupName={target.workgroup!r}, dbName={target.database!r}, durationSeconds=3600)",
@@ -587,23 +608,17 @@ def session(report: Report, target: Target) -> None:
             target.user, target.password, temporary = credentials["dbUser"], credentials["dbPassword"], True
             report.ok("RS-15", "credencial temporária do workgroup", credential_summary(credentials))
         else:
-            report.fail("RS-15", "credencial temporária do workgroup", f"{report.last_reason}; resta a conexão por senha ou o IAM do redshift_connector")
+            report.fail("RS-15", "credencial temporária do workgroup", f"{report.last_reason}; sem ela a sessão precisa do par em _USER e _PASSWORD")
 
-    # RS-4: a mesma resolução de tests/conftest.py. A credencial temporária com o endereço do
-    # workgroup é o caminho testado no ambiente alvo; o IAM do redshift_connector, que pede a mesma
-    # API por dentro, fica de reserva para quando ela não responde ou o endereço é desconhecido.
+    # RS-4: o passo 3 de examples/redshift_native.py, a mesma chamada de tests/conftest.py, com o par da
+    # credencial temporária ou o informado. O timeout do redshift_connector vale para conectar e para
+    # ler: 10 s abortaram sys_load_error_detail no ambiente alvo (2026-09-20) e a conexão não voltou a
+    # servir; 30 s bastam para as visões de sistema que o probe lê.
     def connect() -> tuple[str, object]:
-        # O timeout do redshift_connector vale para conectar e para ler: 10 s abortaram
-        # sys_load_error_detail no ambiente alvo (2026-09-20), e a conexão não voltou a servir.
-        common = {"database": target.database, "timeout": 30}
-        if target.host and target.user and target.password:
-            label = "credencial temporária do workgroup" if temporary else "senha"
-            return label, redshift_connector.connect(host=target.host, port=target.port, user=target.user, password=target.password, ssl=True, **common)
-        if target.workgroup:
-            return "IAM do redshift_connector (serverless)", redshift_connector.connect(iam=True, is_serverless=True, serverless_work_group=target.workgroup, region=resolved, **common)
-        if target.cluster:
-            return "IAM do redshift_connector (cluster)", redshift_connector.connect(iam=True, cluster_identifier=target.cluster, db_user=target.user, region=resolved, **common)
-        raise RuntimeError("faltam parâmetros: host, usuário e senha, ou cluster ou workgroup para autenticação por IAM")
+        if not (target.host and target.user and target.password):
+            raise RuntimeError("faltam parâmetros: o endereço vem de GetWorkgroup e o par de GetCredentials (RS-15), ou de _HOST, _USER e _PASSWORD")
+        label = "credencial temporária do workgroup" if temporary else "par informado"
+        return label, redshift_connector.connect(host=target.host, port=target.port, database=target.database, user=target.user, password=target.password, timeout=30)
 
     result = report.call("redshift_connector.connect(...)", connect, render=lambda found: f"conectou por {found[0]}")
     if result is None:
@@ -611,8 +626,7 @@ def session(report: Report, target: Target) -> None:
         return
     method, connection = result
     connection.autocommit = True
-    created_user = method.startswith("IAM") or method.startswith("credencial")
-    report.ok("RS-4", "sessão", f"aberta por {method}" + ("; a credencial derivada da identidade IAM pode ter criado o usuário do banco" if created_user else ""))
+    report.ok("RS-4", "sessão", f"aberta por {method}" + ("; a credencial derivada da identidade IAM pode ter criado o usuário do banco" if temporary else ""))
 
     # Um tempo limite de leitura fecha o socket do redshift_connector, e toda consulta seguinte
     # devolveria "cannot read from timed out object": a primeira perda é registrada, e as demais
@@ -625,7 +639,7 @@ def session(report: Report, target: Target) -> None:
         cursor = connection.cursor()
         try:
             cursor.execute(sql, params)
-            rows = cursor.fetchall()
+            rows = cursor.fetchall() if cursor.description else []  # USE não devolve linhas
         except OSError:  # TimeoutError é OSError: o socket não volta a servir
             lost.append(" ".join(sql.split())[:60])
             raise
@@ -646,13 +660,64 @@ def session(report: Report, target: Target) -> None:
         render=render_rows,
     )
 
+    # RS-7: o tipo SUPER e JSON_PARSE, que a coluna JSON do contrato usa no Redshift.
+    parsed = report.call("select json_parse(...)  (SUPER)", lambda: query("select json_parse(%s) as super_value", ('{"a": 1}',)), render=render_rows)
+    if parsed is not None:
+        report.ok("RS-7", "SUPER e JSON_PARSE", "disponíveis")
+    else:
+        report.note("RS-7", "SUPER e JSON_PARSE", "falhou; ver a seção final")
+
+    # As configurações que mudam o comportamento do SQL gerado: datas, fuso, tempo limite e sensibilidade a maiúsculas.
+    report.call(
+        "pg_settings (datestyle, timezone, statement_timeout, search_path, enable_case_sensitive_identifier)",
+        lambda: query("select name, setting from pg_settings where name in ('datestyle', 'timezone', 'statement_timeout', 'search_path', 'enable_case_sensitive_identifier', 'wlm_query_slot_count') order by 1"),
+        render=render_rows,
+    )
+    # pg_settings do serverless não trouxe timezone nem enable_case_sensitive_identifier (leitura de
+    # 2026-09-20); SHOW responde pelas duas, e a segunda decide como os identificadores são citados.
+    report.call("show enable_case_sensitive_identifier", lambda: query("show enable_case_sensitive_identifier"), render=render_rows, expected=True)
+    report.call("pg_user do usuário atual", lambda: query("select usename, usesuper, usecreatedb from pg_user where usename = current_user"), render=render_rows)
+
+    # RS-9: no banco da conexão, antes do USE: CREATE permite um esquema externo, TEMP permite a
+    # staging temporária, que é uma das moradas possíveis do sandbox de execução.
+    privileges = report.call(
+        "has_database_privilege(current_database(), CREATE | TEMP)",
+        lambda: query("select has_database_privilege(current_database(), 'CREATE') as create_db, has_database_privilege(current_database(), 'TEMP') as temp_db"),
+        render=render_rows,
+    )
+    if privileges and privileges[1]:
+        create_db, temp_db = privileges[1][0]
+        report.note("RS-9", "privilégios no banco da conexão", f"{target.database}: CREATE={create_db} (esquema externo {'possível' if create_db else 'impossível'}), TEMP={temp_db} (staging temporária {'possível' if temp_db else 'impossível'})")
+    else:
+        report.note("RS-9", "privilégios no banco da conexão", "não lidos; ver a seção final")
+
+    # RS-12: um COPY reprovado explica o motivo em sys_load_error_detail, a visão que respondeu no
+    # ambiente alvo (1,5 s, 2026-09-20) e cobre o serverless; stl_load_errors cobre só clusters
+    # provisionados e é negada a um usuário comum, então fica de reserva.
+    detail = report.call("sys_load_error_detail dos últimos 30 dias", lambda: query("select count(*) from sys_load_error_detail where start_time > dateadd(day, -30, getdate())"), render=render_rows, expected=True)
+    if detail is not None:
+        report.note("RS-12", "diagnóstico do COPY", f"sys_load_error_detail legível: {detail[1][0][0]} erro(s) de carga em 30 dias")
+    else:
+        errors = report.call("stl_load_errors dos últimos 30 dias", lambda: query("select count(*) from stl_load_errors where starttime > dateadd(day, -30, getdate())"), render=render_rows, expected=True)
+        if errors is not None:
+            report.note("RS-12", "diagnóstico do COPY", f"stl_load_errors legível: {errors[1][0][0]} erro(s) de carga em 30 dias")
+        else:
+            report.note("RS-12", "diagnóstico do COPY", "nem sys_load_error_detail nem stl_load_errors legíveis: o motivo de um COPY reprovado virá do administrador")
+
+    # RS-13: a biblioteca não usa esquemas externos; a contagem mostra se o Glue chegou ao Redshift.
+    external = report.call("svv_external_schemas", lambda: query("select count(*) from svv_external_schemas"), render=render_rows, expected=True)
+    if external is not None:
+        report.note("RS-13", "esquemas externos (Spectrum)", f"{external[1][0][0]} no banco; a biblioteca não os usa, e a contagem mostra se o Glue chegou ao Redshift")
+    else:
+        report.note("RS-13", "esquemas externos (Spectrum)", f"não lidos: {report.last_reason}")
+
     # RS-16: os bancos que a sessão enxerga e em qual deles está o esquema do projeto. Um banco de tipo
-    # shared vem de datashare, e as suas tabelas só são citadas por nome em três partes.
+    # shared vem de datashare: a sessão roda USE nele (RS-19) e cita esquema.tabela; o nome em três
+    # partes fica para uma sessão aberta em outro banco, como a da Data API.
     databases = report.call("svv_redshift_databases", lambda: query("select * from svv_redshift_databases order by 1"), render=render_rows)
     schema = target.schema
     schema_kind: str | None = None
     schema_database: str | None = None
-    used_share = False  # o USE trouxe o esquema do datashare para dentro da sessão
     if not schema:
         report.note("RS-16", "banco do esquema do projeto", "sem SERIALIZE_DB_REDSHIFT_SCHEMA")
     else:
@@ -672,34 +737,26 @@ def session(report: Report, target: Target) -> None:
             report.fail("RS-16", "banco do esquema do projeto", f"{schema} não aparece em svv_all_schemas: a sessão não o enxerga")
         else:
             schema_database, schema_kind = places[0]
+            # Sem a variável, o alvo toma o banco da leitura, para o USE e o nome em três partes saírem certos.
+            if schema_kind.lower() == "shared" and not target.share_database:
+                target.share_database = schema_database
+                report.line(f"SERIALIZE_DB_REDSHIFT_SHARE_DATABASE ausente; a leitura diz {schema_database}")
             if len(places) > 1:
                 report.note("RS-16", "banco do esquema do projeto", f"{schema} aparece em mais de um banco: {listed}; SERIALIZE_DB_REDSHIFT_SHARE_DATABASE decide qual")
             elif target.share_database and schema_database.lower() != target.share_database.lower():
                 report.fail("RS-16", "banco do esquema do projeto", f"SERIALIZE_DB_REDSHIFT_SHARE_DATABASE diz {target.share_database} e a leitura diz {listed}")
             elif schema_kind.lower() == "shared":
-                report.ok("RS-16", "banco do esquema do projeto", f"{listed}: nome em três partes")
+                report.ok("RS-16", "banco do esquema do projeto", f"{listed}: USE nele e {target.qualified('<tabela>')} na sessão (RS-19); {target.fully_qualified('<tabela>')} de outro banco, como a Data API")
             else:
-                report.ok("RS-16", "banco do esquema do projeto", f"{listed}: nome em duas partes")
-
-            # Sem a variável, o alvo toma o banco da leitura, para o nome em três partes sair certo daqui para baixo.
-            if schema_kind.lower() == "shared" and not target.share_database:
-                target.share_database = schema_database
-                report.line(f"SERIALIZE_DB_REDSHIFT_SHARE_DATABASE ausente; a leitura diz {schema_database}")
+                report.ok("RS-16", "banco do esquema do projeto", f"{listed}: {target.qualified('<tabela>')} no banco da conexão, sem USE")
             report.value("REDSHIFT_TABLE_NAME", target.qualified("<tabela>"))
-
-            # USE troca o banco da sessão, e só dela: a partir daqui o nome em duas partes vale, e
-            # has_schema_privilege alcança o esquema, que passou a ser local à sessão
-            # (examples/redshift_copy_unload.py). Nada é criado, alterado nem apagado.
-            if schema_kind.lower() == "shared" and schema_database:
-                used = report.call(f"use {schema_database}", lambda: query(f"USE {schema_database}"), render=lambda _: "banco da sessão trocado")
-                if used is not None:
-                    used_share = True
-                    target.database = schema_database
-                    report.value("REDSHIFT_CURRENT_DATABASE", schema_database)
+            report.value("REDSHIFT_TABLE_FULL_NAME", target.fully_qualified("<tabela>"))
 
     # RS-17: escrever num banco de datashare exige o patch 186 (1.0.78890 no serverless, 1.0.78881 no
     # provisionado), isolamento de snapshot no banco que recebe a escrita e 64 slices ou mais no
-    # consumidor. Sem um deles, o CREATE, o COPY e o INSERT da publicação são recusados.
+    # consumidor. Sem um deles, o CREATE, o COPY e o INSERT da publicação são recusados. O que a sessão
+    # não lê (stv_slices é negada a um usuário comum, e o isolamento do produtor vem UNKNOWN) não
+    # reprova: o CREATE TABLE da suíte é o teste, e passou no ambiente alvo em 2026-09-20.
     if not schema_kind:
         report.note("RS-17", "escrita no banco do datashare", "banco do esquema não lido (RS-16)")
     elif schema_kind.lower() != "shared":
@@ -716,21 +773,62 @@ def session(report: Report, target: Target) -> None:
         )
         getattr(report, status)("RS-17", "escrita no banco do datashare", verdict)
 
+    # RS-19: USE troca o banco da sessão, e só dela: a partir daqui esquema.tabela vale, que é como o
+    # CREATE, o COPY e o UNLOAD passaram (examples/redshift_copy_unload.py) e como tests/conftest.py
+    # abre cada conexão. A biblioteca depende da troca, então current_database() é conferido. Nada é
+    # criado, alterado nem apagado.
+    share = target.share_database
+    used_share = False
+    if not schema:
+        report.note("RS-19", "USE no banco do datashare", "sem SERIALIZE_DB_REDSHIFT_SCHEMA")
+    elif not share or share.lower() == (target.database or "").lower():
+        report.note("RS-19", "USE no banco do datashare", f"o esquema está no banco da conexão ({target.database}): sem USE")
+    else:
+        current = report.call(f"use {share}; select current_database()", lambda: (query(f"USE {share}"), query("select current_database()"))[1], render=render_rows)
+        landed = str(current[1][0][0]) if current and current[1] else None
+        if landed and landed.lower() == share.lower():
+            used_share = True
+            report.value("REDSHIFT_CURRENT_DATABASE", landed)
+            report.ok("RS-19", "USE no banco do datashare", f"a sessão passou a {landed}: {target.qualified('<tabela>')} basta, como em examples/redshift_copy_unload.py")
+        elif landed:
+            report.fail("RS-19", "USE no banco do datashare", f"USE {share} deixou a sessão em {landed}: a biblioteca depende da troca")
+        else:
+            report.fail("RS-19", "USE no banco do datashare", f"USE {share}: {report.last_reason}; ver a seção final")
+
     # RS-5 e RS-8: no esquema do projeto, USAGE e CREATE, e quantas tabelas já têm o prefixo da
-    # biblioteca. has_schema_privilege e svv_table_info enxergam o banco da sessão: com o USE, o
-    # esquema do datashare passou a ser esse banco; sem ele, a lista vem de svv_all_tables e quem
-    # concede os privilégios é o produtor.
-    distant = bool(schema_kind) and schema_kind.lower() == "shared" and not used_share
+    # biblioteca. has_schema_privilege e svv_table_info enxergam o banco da sessão: num esquema local
+    # respondem direto; num compartilhado, só depois do USE, e o que respondem lá ainda não foi lido no
+    # ambiente alvo, então uma resposta negativa é leitura e não reprovação, porque quem concede
+    # USAGE e CREATE é o produtor e o CREATE TABLE da suíte é o teste. svv_all_tables cruza bancos e é a
+    # lista provada num esquema compartilhado.
+    shared = bool(schema_kind) and schema_kind.lower() == "shared"
     if not schema:
         report.note("RS-5", "privilégios no esquema", "sem SERIALIZE_DB_REDSHIFT_SCHEMA")
         report.note("RS-8", "tabelas com o prefixo da biblioteca no esquema", "sem SERIALIZE_DB_REDSHIFT_SCHEMA")
     else:
-        if distant:
-            report.note(
-                "RS-5",
-                "privilégios no esquema",
-                f"{schema} vem do datashare {schema_database}: has_schema_privilege só alcança o banco local, e quem concede USAGE e CREATE é o produtor; o primeiro CREATE da suíte é o teste",
+        if shared and not used_share:
+            report.note("RS-5", "privilégios no esquema", f"{schema} vem do datashare {schema_database}: sem o USE (RS-19), has_schema_privilege não o alcança; quem concede USAGE e CREATE é o produtor, e o primeiro CREATE da suíte é o teste")
+        else:
+            privileges = report.call(
+                f"has_schema_privilege({schema!r}, USAGE | CREATE)" + (" depois do USE" if used_share else ""),
+                lambda: query("select has_schema_privilege(%s, 'USAGE') as usage, has_schema_privilege(%s, 'CREATE') as create", (schema, schema)),
+                render=render_rows,
+                expected=shared,
             )
+            if privileges and privileges[1]:
+                usage, create = privileges[1][0]
+                if usage and create:
+                    report.ok("RS-5", "privilégios no esquema", f"{schema}: USAGE e CREATE" + (" depois do USE" if used_share else ""))
+                elif shared:
+                    report.note("RS-5", "privilégios no esquema", f"{schema}: USAGE={usage}, CREATE={create} depois do USE; num esquema compartilhado quem concede é o produtor, e o CREATE da suíte é o teste")
+                else:
+                    report.fail("RS-5", "privilégios no esquema", f"{schema}: USAGE={usage}, CREATE={create}")
+            elif shared:
+                report.note("RS-5", "privilégios no esquema", f"{schema}: has_schema_privilege não respondeu depois do USE ({report.last_reason}); quem concede é o produtor, e o CREATE da suíte é o teste")
+            else:
+                report.fail("RS-5", "privilégios no esquema", f"{schema}: não lidos; ver a seção final")
+
+        if shared:
             found = report.call(
                 f"svv_all_tables, linhas de {schema_database}.{schema}",
                 lambda: query("select * from svv_all_tables"),
@@ -740,129 +838,142 @@ def session(report: Report, target: Target) -> None:
                 str(column_value(found[0], row, "table_name"))
                 for row in (matching_rows(found, database_name=schema_database or "", schema_name=schema) if found else [])
             ]
+            where = f"{schema_database}.{schema}"
+            # Depois do USE, svv_table_info é leitura a mais: as linhas e o tamanho, que svv_all_tables não traz, e se ela alcança o esquema.
+            if used_share:
+                report.call(
+                    f"svv_table_info do esquema {schema!r} depois do USE",
+                    lambda: query('select "table", tbl_rows, size as size_mb, diststyle, sortkey1 from svv_table_info where schema = %s order by 1', (schema,)),
+                    render=render_rows,
+                    expected=True,
+                )
         else:
-            privileges = report.call(
-                f"has_schema_privilege({schema!r}, USAGE | CREATE)",
-                lambda: query("select has_schema_privilege(%s, 'USAGE') as usage, has_schema_privilege(%s, 'CREATE') as create", (schema, schema)),
-                render=render_rows,
-            )
-            if privileges and privileges[1]:
-                usage, create = privileges[1][0]
-                if usage and create:
-                    report.ok("RS-5", "privilégios no esquema", f"{schema}: USAGE e CREATE")
-                else:
-                    report.fail("RS-5", "privilégios no esquema", f"{schema}: USAGE={usage}, CREATE={create}")
-            else:
-                report.fail("RS-5", "privilégios no esquema", f"{schema}: não lidos; ver a seção final")
-
             found = report.call(
                 f"svv_table_info do esquema {schema!r}",
                 lambda: query('select "table", tbl_rows, size as size_mb, diststyle, sortkey1 from svv_table_info where schema = %s order by 1', (schema,)),
                 render=render_rows,
             )
             names = [str(row[0]) for row in found[1]] if found else []
+            where = schema
 
-        where = f"{schema_database}.{schema}" if distant else schema
         if found is None:
             report.note("RS-8", "tabelas com o prefixo da biblioteca no esquema", f"não lidas: {report.last_reason}")
         else:
             mine = [name for name in names if name.startswith(TABLE_PREFIX)]
             report.note("RS-8", "tabelas com o prefixo da biblioteca no esquema", f"{len(mine)} de {len(names)} tabelas em {where}")
 
-    # RS-7: o tipo SUPER e JSON_PARSE, que a coluna JSON do contrato usa no Redshift.
-    parsed = report.call("select json_parse(...)  (SUPER)", lambda: query("select json_parse(%s) as super_value", ('{"a": 1}',)), render=render_rows)
-    if parsed is not None:
-        report.ok("RS-7", "SUPER e JSON_PARSE", "disponíveis")
-    else:
-        report.note("RS-7", "SUPER e JSON_PARSE", "falhou; ver a seção final")
-
-    # As configurações que mudam o comportamento do SQL gerado: datas, fuso, tempo limite e sensibilidade a maiúsculas.
-    report.call(
-        "pg_settings (datestyle, timezone, statement_timeout, search_path, enable_case_sensitive_identifier)",
-        lambda: query("select name, setting from pg_settings where name in ('datestyle', 'timezone', 'statement_timeout', 'search_path', 'enable_case_sensitive_identifier', 'wlm_query_slot_count') order by 1"),
-        render=render_rows,
-    )
-    # pg_settings do serverless não trouxe timezone nem enable_case_sensitive_identifier (leitura de
-    # 2026-09-20); SHOW responde pelas duas, e a segunda decide como os identificadores são citados.
-    report.call("show enable_case_sensitive_identifier", lambda: query("show enable_case_sensitive_identifier"), render=render_rows, expected=True)
-    report.call("pg_user do usuário atual", lambda: query("select usename, usesuper, usecreatedb from pg_user where usename = current_user"), render=render_rows)
-
-    # RS-9: CREATE no banco permite um esquema externo; TEMP permite a staging temporária.
-    privileges = report.call(
-        "has_database_privilege(current_database(), CREATE | TEMP)",
-        lambda: query("select has_database_privilege(current_database(), 'CREATE') as create_db, has_database_privilege(current_database(), 'TEMP') as temp_db"),
-        render=render_rows,
-    )
-    if privileges and privileges[1]:
-        create_db, temp_db = privileges[1][0]
-        report.note("RS-9", "privilégios no banco", f"CREATE={create_db} (esquema externo {'possível' if create_db else 'impossível'}), TEMP={temp_db} (staging temporária {'possível' if temp_db else 'impossível'})")
-    else:
-        report.note("RS-9", "privilégios no banco", "não lidos; ver a seção final")
-
-    # RS-12: um COPY reprovado explica o motivo em stl_load_errors (ou sys_load_error_detail); sem leitura, o diagnóstico
-    # depende do administrador.
-    errors = report.call("stl_load_errors dos últimos 30 dias", lambda: query("select count(*) from stl_load_errors where starttime > dateadd(day, -30, getdate())"), render=render_rows, expected=True)
-    if errors is not None:
-        report.note("RS-12", "diagnóstico do COPY", f"stl_load_errors legível: {errors[1][0][0]} erro(s) de carga em 30 dias")
-    else:
-        detail = report.call("sys_load_error_detail dos últimos 30 dias", lambda: query("select count(*) from sys_load_error_detail where start_time > dateadd(day, -30, getdate())"), render=render_rows, expected=True)
-        report.note("RS-12", "diagnóstico do COPY", "sys_load_error_detail legível" if detail is not None else "nem stl_load_errors nem sys_load_error_detail legíveis: o motivo de um COPY reprovado virá do administrador")
-
-    # RS-13: a biblioteca não usa esquemas externos; a contagem mostra se o Glue chegou ao Redshift.
-    external = report.call("svv_external_schemas", lambda: query("select count(*) from svv_external_schemas"), render=render_rows, expected=True)
-    if external is not None:
-        report.note("RS-13", "esquemas externos (Spectrum)", f"{external[1][0][0]} no banco; a biblioteca não os usa, e a contagem mostra se o Glue chegou ao Redshift")
-    else:
-        report.note("RS-13", "esquemas externos (Spectrum)", f"não lidos: {report.last_reason}")
-
     connection.close()
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Seção 5: o papel do COPY
+# Seção 5: quem alcança o S3
+
+
+class Principal(NamedTuple):
+    """Uma identidade que a seção 5 simula: o rótulo, o ARN, o que a impede antes do S3 e o que ficou sem leitura."""
+
+    label: str
+    arn: str
+    blocker: str | None = None
+    doubt: str | None = None
+
+
+def caller_credentials() -> tuple[object, object | None]:
+    """As credenciais da sessão ``boto3`` congeladas e a expiração que o provedor expõe, ou ``None``."""
+    import boto3
+
+    found = boto3.Session().get_credentials()
+    if found is None:
+        raise RuntimeError("o boto3 não encontrou credenciais")
+    return found.get_frozen_credentials(), getattr(found, "_expiry_time", None)
+
+
+def credential_text(access_key: str, token: str | None, expiry: object | None, now: datetime) -> str:
+    """O que o relatório diz das credenciais de quem chama: o prefixo da chave, se há ``SESSION_TOKEN`` e quando expiram; o segredo nunca."""
+    text = f"chave {access_key[:4]}…, SESSION_TOKEN {'presente' if token else 'ausente'}"
+    if isinstance(expiry, datetime) and expiry.tzinfo is not None:
+        minutes = (expiry - now).total_seconds() / 60
+        text += f", expira {expiry} ({'daqui a' if minutes >= 0 else 'há'} {abs(minutes):.0f} min)"
+    return text
+
+
+def copy_principals(iam_role: str | None, namespace_roles: tuple[list[str], list[str]] | None, caller_arn: str | None) -> tuple[list[Principal], str | None]:
+    """Quem alcança o S3 no ``COPY`` e no ``UNLOAD``, para a simulação, ou o motivo de não haver ninguém.
+
+    Sem ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, o comando leva as credenciais de quem chama, e a identidade
+    simulada é a do STS, como papel. Com ``default``, é o papel padrão do namespace; com um ARN, é
+    ele, e um ARN que o namespace não tem ganha o bloqueio, porque o Redshift só aceita papel
+    associado; um namespace que a seção 2 não leu deixa a dúvida.
+    """
+    if not iam_role:
+        if caller_arn:
+            return [Principal("credenciais de quem chama", probelib.principal_arn(caller_arn))], None
+        return [], "sem SERIALIZE_DB_REDSHIFT_IAM_ROLE e sem identidade do STS: nada a simular"
+
+    defaults, attached = namespace_roles or ([], [])
+    if iam_role.lower() == "default":
+        if defaults:
+            return [Principal("IAM_ROLE default", defaults[0])], None
+        if namespace_roles is None:
+            return [], "SERIALIZE_DB_REDSHIFT_IAM_ROLE=default, e o papel padrão do namespace não foi lido (RS-6): nada a simular"
+        return [], "SERIALIZE_DB_REDSHIFT_IAM_ROLE=default sem papel padrão no namespace (RS-6): o COPY recusaria IAM_ROLE default"
+
+    blocker = doubt = None
+    if namespace_roles is None:
+        doubt = "a associação ao namespace não foi lida (RS-6), e o Redshift só aceita papel associado"
+    elif iam_role not in defaults and iam_role not in attached:
+        blocker = "não está associado ao namespace (RS-6): o Redshift o recusa mesmo com permissão no S3"
+    return [Principal("SERIALIZE_DB_REDSHIFT_IAM_ROLE", iam_role, blocker, doubt)], None
 
 
 def copy_role(report: Report, target: Target) -> None:
-    """Seção 5: ``RS-11``, se o papel padrão do ``COPY`` e do ``UNLOAD`` alcança a raiz S3 informada, pela simulação de política do IAM."""
+    """Seção 5: ``RS-18`` (as credenciais de quem chama) e ``RS-11`` (se quem vai alcançar o S3 no ``COPY`` e no ``UNLOAD`` tem permissão sob a raiz, pela simulação de política do IAM)."""
     import boto3
 
-    report.h1("Alcance do COPY e do UNLOAD sobre a raiz S3")
+    report.h1("Quem alcança o S3 no COPY e no UNLOAD")
 
-    # RS-18: sem papel associado, o COPY leva as credenciais da sessão no texto do comando. Elas
-    # expiram, e um comando montado antes da renovação falha; a biblioteca as pede a cada comando.
+    # RS-18: sem SERIALIZE_DB_REDSHIFT_IAM_ROLE, o COPY e o UNLOAD levam as credenciais da sessão no
+    # texto do comando (examples/redshift_copy_unload.py). Elas expiram, e um comando montado antes da
+    # renovação falha: a biblioteca as pede a cada comando, e a expiração diz quanto um COPY pode durar.
     frozen = report.call(
-        "boto3.Session().get_credentials().get_frozen_credentials()",
-        lambda: boto3.Session().get_credentials().get_frozen_credentials(),
-        render=lambda found: f"chave {found.access_key[:4]}…, token {'presente' if found.token else 'ausente'}",
+        "boto3.Session().get_credentials()",
+        caller_credentials,
+        render=lambda found: credential_text(found[0].access_key, found[0].token, found[1], datetime.now(timezone.utc)),
     )
     if frozen is None:
-        report.fail("RS-18", "credenciais de quem chama", f"{report.last_reason}: sem elas o COPY e o UNLOAD só rodam com papel IAM associado")
-    elif not frozen.token:
-        report.note("RS-18", "credenciais de quem chama", "credenciais sem SESSION_TOKEN: o COPY dispensa a cláusula, e elas não expiram sozinhas")
+        report.fail("RS-18", "credenciais de quem chama", f"{report.last_reason}: sem elas o COPY e o UNLOAD só rodam com IAM_ROLE de um papel associado")
     else:
-        report.ok("RS-18", "credenciais de quem chama", "chave, segredo e SESSION_TOKEN presentes: o COPY e o UNLOAD os levam no texto do comando, que nunca vai para log")
+        credentials, expiry = frozen
+        text = credential_text(credentials.access_key, credentials.token, expiry, datetime.now(timezone.utc))
+        if not credentials.token:
+            report.note("RS-18", "credenciais de quem chama", f"{text}: sem SESSION_TOKEN o COPY dispensa a cláusula, e elas não expiram sozinhas")
+        else:
+            report.ok("RS-18", "credenciais de quem chama", f"{text}: o COPY e o UNLOAD as levam no texto do comando, que nunca vai para log")
+
     root, source = probelib.s3_root(sys.argv)
     if not root.startswith("s3://"):
         report.line(probelib.NO_ROOT)
         report.note("RS-11", "alcance do COPY sobre a raiz", probelib.NO_ROOT)
         return
     report.value("S3_ROOT", f"{root} (por {source})")
-    # Sem papel associado ao namespace, quem alcança o S3 é a identidade da sessão, cujas credenciais
-    # o COPY carrega no texto do comando: é ela que a simulação avalia.
-    principals = list(target.roles)
-    if not principals:
+
+    # Quem a simulação avalia é quem a biblioteca vai mandar ao S3: a identidade da sessão, ou o papel
+    # que SERIALIZE_DB_REDSHIFT_IAM_ROLE nomeia. Os demais papéis do namespace ficam em RS-6.
+    caller_arn = None
+    if not target.iam_role:
         caller = report.call(
             "sts.get_caller_identity()",
             lambda: boto3.client("sts", config=short_config(5, 10, 1)).get_caller_identity(),
             render=lambda found: found.get("Arn", ""),
         )
-        if caller:
-            principals = [probelib.principal_arn(caller["Arn"])]
-        else:
-            report.note("RS-11", "alcance do COPY sobre a raiz", f"sem papel associado (RS-6) e sem identidade do STS ({report.last_reason}): nada a simular")
-            return
+        caller_arn = caller.get("Arn") if caller else None
+    principals, reason = copy_principals(target.iam_role, target.namespace_roles, caller_arn)
+    if not principals:
+        detail = f"{reason}; STS: {report.last_reason}" if caller_arn is None and not target.iam_role else str(reason)
+        report.note("RS-11", "alcance do COPY sobre a raiz", detail)
+        return
 
-    # Uma simulação por papel: ListBucket no bucket, GetObject e PutObject sob a raiz.
+    # Uma simulação por identidade: ListBucket no bucket, GetObject e PutObject sob a raiz.
     bucket, _, prefix = root.removeprefix("s3://").partition("/")
     resources = [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"]
     iam = boto3.client("iam", config=short_config())
@@ -870,20 +981,27 @@ def copy_role(report: Report, target: Target) -> None:
     def render_decisions(found: dict) -> str:
         return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])
 
-    for role in principals:
+    for principal in principals:
+        who = f"{principal.label} ({principal.arn})"
+        if principal.blocker:
+            report.line(f"{who}: {principal.blocker}")
         found = report.call(
-            f"iam.simulate_principal_policy({role}: ListBucket, GetObject, PutObject em {root})",
-            lambda r=role: iam.simulate_principal_policy(PolicySourceArn=r, ActionNames=COPY_ACTIONS, ResourceArns=resources),
+            f"iam.simulate_principal_policy({principal.arn}: ListBucket, GetObject, PutObject em {root})",
+            lambda arn=principal.arn: iam.simulate_principal_policy(PolicySourceArn=arn, ActionNames=COPY_ACTIONS, ResourceArns=resources),
             render=render_decisions,
         )
         if found is None:
-            report.note("RS-11", "alcance do COPY sobre a raiz", f"{role}: simulação {report.last_reason}; o primeiro COPY da suíte Redshift é o teste")
+            report.note("RS-11", "alcance do COPY sobre a raiz", f"{who}: simulação {report.last_reason}; o primeiro COPY da suíte Redshift é o teste" + (f"; {principal.blocker}" if principal.blocker else ""))
             continue
         denied = [item["EvalActionName"] for item in found.get("EvaluationResults", []) if item["EvalDecision"] != "allowed"]
         if denied:
-            report.fail("RS-11", "alcance do COPY sobre a raiz", f"{role}: {', '.join(denied)} negadas sob {root}")
+            report.fail("RS-11", "alcance do COPY sobre a raiz", f"{who}: {', '.join(denied)} negadas sob {root}")
+        elif principal.blocker:
+            report.fail("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}, mas {principal.blocker}")
+        elif principal.doubt:
+            report.note("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}; {principal.doubt}")
         else:
-            report.ok("RS-11", "alcance do COPY sobre a raiz", f"{role}: ListBucket, GetObject e PutObject sob {root}")
+            report.ok("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}")
 
 
 # ---------------------------------------------------------------------------------------------------------------

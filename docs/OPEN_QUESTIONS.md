@@ -21,6 +21,11 @@ foi medido em [`POC.md`](POC.md).
   restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária
   (`TEMP` é verdadeiro no banco da conexão, e `CREATE` não) custa o sandbox morrer com a sessão. A
   [etapa 5](PLAN-STAGE-5.md) decide quando o primeiro pipeline rodar lá.
+- **O que `has_schema_privilege` e `svv_table_info` respondem depois do `USE`.** Antes dele as duas
+  enxergam só o banco local; depois dele o banco da sessão é o compartilhado, e se elas passam a
+  responder pelo esquema do datashare ninguém leu. `probes/redshift.py` (`RS-19`, `RS-5`, `RS-8`) as
+  consulta depois do `USE` como leitura, com `svv_all_tables` como a lista provada; a próxima
+  execução no ambiente alvo responde.
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
   conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
@@ -29,7 +34,9 @@ foi medido em [`POC.md`](POC.md).
   [etapa 3](PLAN-STAGE-3.md) renova `storage_options` a cada chamada, e a primeira execução longa
   no espaço confirma que o delta-rs e o `boto3` renovam pela cadeia padrão. A credencial do Redshift
   tem o mesmo teto (`GetCredentials`, 3600 segundos): o que acontece com uma conexão aberta quando a
-  senha expira, e se ela cai no meio de um `COPY`, ainda não foi medido.
+  senha expira, e se ela cai no meio de um `COPY`, ainda não foi medido. As credenciais que o `COPY`
+  e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
+  `COPY` mais longo que isso também não foi medido.
 - **Manutenção da suíte S3.** Se `diagnose_aws.py` confirmar o cenário sem proxy: exportar
   `AWS_DEFAULT_REGION` a partir de `AWS_REGION`, tornar a chamada ao STS opcional com espera curta e
   passar `AWS_ENDPOINT_URL` ao secret do DuckDB. A [etapa 3](PLAN-STAGE-3.md) implementa o mesmo

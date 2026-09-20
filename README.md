@@ -33,8 +33,8 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest -m s3
 A suíte `redshift` também grava no S3 e por isso recebe as duas raízes. Com
 `SERIALIZE_DB_REDSHIFT_WORKGROUP`, a conexão é a do ambiente alvo, por credencial temporária do
 workgroup serverless ([`examples/redshift_native.py`](examples/redshift_native.py));
-`SERIALIZE_DB_REDSHIFT_SHARE_DATABASE` é o banco do datashare que guarda o esquema, e com ele as
-tabelas são citadas por nome em três partes e cada `COPY` leva `COMPUPDATE OFF`:
+`SERIALIZE_DB_REDSHIFT_SHARE_DATABASE` é o banco do datashare que guarda o esquema: cada conexão
+roda `USE` nele e cita as tabelas por `esquema.tabela`, e o `COPY` vai sem cláusula `COMPUPDATE`:
 
 ```
 SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=esquema SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo \
@@ -43,9 +43,11 @@ SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=banco_do_datashare \
 uv run pytest -m redshift
 ```
 
-`SERIALIZE_DB_REDSHIFT_HOST` com `_USER` e `_PASSWORD`, ou `SERIALIZE_DB_REDSHIFT_CLUSTER`, são os
-outros caminhos de conexão, e `SERIALIZE_DB_REDSHIFT_IAM_ROLE` nomeia o papel do `COPY` e do
-`UNLOAD` quando o workgroup não tem um padrão. A suíte cria as tabelas no esquema de
+`SERIALIZE_DB_REDSHIFT_HOST` com `_USER` e `_PASSWORD` é o par informado, na mesma chamada; o
+IAM interno do `redshift_connector` e o cluster provisionado ficaram fora, porque ninguém os executou
+no ambiente alvo. Sem `SERIALIZE_DB_REDSHIFT_IAM_ROLE`, o `COPY` e o `UNLOAD` levam as credenciais de
+quem chama, o caminho do ambiente alvo, onde o namespace não tem papel associado; com ela, `IAM_ROLE`
+com o papel nomeado ou `default`. A suíte cria as tabelas no esquema de
 `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, a autorização; o probe lê o esquema do projeto em
 `SERIALIZE_DB_REDSHIFT_SCHEMA`.
 
@@ -69,7 +71,7 @@ comando que a autoriza e o que ela grava.
 | `test_concurrency.py` | Threads do Python sobre os pacotes nativos: o laço Python que mantém a taxa noutra thread enquanto o DuckDB agrega e converte para Arrow e o PyArrow grava e lê Parquet em memória (o GIL liberado), o `threadsafety` 1 dos drivers com um `cursor()` por thread, a conexão compartilhada que entrega a uma thread o resultado da outra, os dois `connect()` em memória que são bancos distintos, o intervalo de troca do GIL pago por cada retomada ao lado de uma thread Python ocupada (`os.stat`, o import preguiçoso), as faixas de identificadores de um contador sob `Lock`; o GIL liberado pelo delta-rs e pelo `delta_scan`, duas escritas Delta e dois `CREATE TABLE AS` em duas threads, o arquivo do DuckDB compartilhado pela mesma configuração e recusado com outra, os leitores Delta presos à versão carregada durante um `append`. | Nenhum; os quatro últimos, `local`. |
 | `test_parallel.py` | Leitura e escrita em paralelo em cada tecnologia e as APIs da implementação: o motor com um `cursor()` por thread num `threading.local`, a saída em lotes `BatchStream` e a entrada em lotes `Loader` com o pipeline de três estágios, o pool de `publish` que termina o que está em curso e cancela o resto na primeira falha, a barreira por tabela com `Condition` e as tabelas de um statement por `find_tables` ou pelo sentinela `{prefix}`; quatro tabelas Delta lidas em paralelo e ingeridas no DuckDB por `delta_scan` em cursores, escritas Delta em paralelo por tabela e por mês da mesma tabela com o conflito no mesmo mês, o início do alocador de identificadores pelas estatísticas dos arquivos com a varredura de reserva, cargas Arrow e `COPY ... TO` em paralelo no DuckDB. | Nenhum; os quatro últimos, `local`. |
 | `poc_delta.py`, `test_local.py`, `test_s3.py` | A prova de conceito da camada Delta nos dois armazenamentos: a escrita e a leitura pelo delta-rs, o `delta_scan` com os tipos do contrato e a poda de partição, os tempos de consulta, o `vacuum`; em disco, o commit atômico e o conflito entre escritores, a realocação da pasta, a abertura sem variáveis `AWS_*`; no bucket, a origem das credenciais, a cadeia do delta-rs e sua reserva, o put condicional, a criptografia, listar, copiar e apagar pelo `boto3`. | `local` e `s3`. |
-| `test_redshift.py` | Os itens da etapa 0 que esperam uma conexão: a sessão e o `paramstyle` nomeado, o `fetchmany` por lotes, o banco do esquema e o ida e volta pelo nome em três partes, o DDL do SQLAlchemy, o `COPY ... MANIFEST` de arquivos do delta-rs (`DECIMAL` em `INT64`, `timestamp_ntz`, lista de colunas, `FILLRECORD`), o `VARCHAR` excedido, o `SUPER`, o `UNLOAD ... PARTITION BY` registrado no Delta e lido pelo DuckDB, o ciclo da Data API, dois `COPY` e dois `UNLOAD` em paralelo numa conexão por thread. Conecta como [`examples/redshift_native.py`](examples/redshift_native.py); ainda não rodou contra um cluster. | `redshift` e `s3`. |
+| `test_redshift.py` | Os itens da etapa 0 que esperam uma conexão: a sessão e o `paramstyle` nomeado, o `fetchmany` por lotes, o banco do esquema e o ida e volta depois do `USE`, o DDL do SQLAlchemy, o `COPY ... MANIFEST` de arquivos do delta-rs (`DECIMAL` em `INT64`, `timestamp_ntz`, lista de colunas, `FILLRECORD`), o `VARCHAR` excedido, o `SUPER`, o `UNLOAD ... PARTITION BY` registrado no Delta e lido pelo DuckDB, o ciclo da Data API, dois `COPY` e dois `UNLOAD` em paralelo numa conexão por thread. Conecta como [`examples/redshift_native.py`](examples/redshift_native.py); ainda não rodou contra um cluster. | `redshift` e `s3`. |
 | `test_probes.py` (em `tests/`) | As funções puras dos probes, sem rede: a classificação dos erros do `boto3`, os rótulos de DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o inventário do bucket (tabelas Delta, sessões da suíte, versões não correntes), o versionamento pela amostra, o Object Lock, o ciclo de vida, a montagem de `~/shared`, o formato das tabelas do Glue e os parâmetros da conexão Redshift. | Nenhum. |
 | `test_source_db_projetado.py` (em `tests/`) | A base Parquet de origem fictícia de `source_db_projetado.py`, gravada na pasta temporária do pytest com a estrutura que `probes/parquet_source.py` leu na base de desenvolvimento em 2026-09-20: as 14 tabelas com as colunas, os tipos e a nulidade da seção 3 do relatório, as partições Hive por `data_str` e `data_base_str` com o valor só no caminho, os chunks numerados sem zeros à esquerda, o layout físico (um row group, SNAPPY, formato 1.0, `INT96` sem estatística, a chave `pandas`), os valores que a carga inicial trata, a leitura pelo DuckDB e pelo PyArrow, a consistência com as chaves do modelo de referência, a relação N×N de `rel_contrato_operacao` com `fator_rateio` somando 1 por operação, e o `schema.json` real da biblioteca anterior. É o material do teste da carga inicial. | Nenhum. |
 

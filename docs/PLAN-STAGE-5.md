@@ -5,18 +5,26 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 
 `serialize_db.engine.redshift` implementa o mesmo protocolo. A conexão vem de `RedshiftConfig`:
 `workgroup` (serverless), `database` (o banco da conexão), `share_database` (o banco do datashare que
-guarda o esquema, quando não é o da conexão), `schema`, o `iam_role` do `COPY` e do `UNLOAD`, e
-`host`, `port`, `user`, `password` ou `cluster` nos outros caminhos, com os padrões nas variáveis
+guarda o esquema, quando não é o da conexão), `schema`, o `iam_role` opcional do `COPY` e do `UNLOAD`,
+e `host`, `port`, `user` e `password` para o par informado, com os padrões nas variáveis
 `SERIALIZE_DB_REDSHIFT_*`.
 
-O caminho padrão é o de [`../examples/redshift_native.py`](../examples/redshift_native.py),
-executado no ambiente alvo em 2026-09-20: `redshift-serverless:GetWorkgroup` para o endereço e a
-porta, `GetCredentials` para o par usuário e senha derivado da identidade IAM, e
+O caminho é o de [`../examples/redshift_native.py`](../examples/redshift_native.py), executado no
+ambiente alvo em 2026-09-20: `redshift-serverless:GetWorkgroup` para o endereço e a porta,
+`GetCredentials` para o par usuário e senha derivado da identidade IAM, e
 `redshift_connector.connect` com esse par. A credencial dura no máximo uma hora, e `connect` a pede a
-cada conexão em vez de guardá-la. A senha em variável e o IAM interno do `redshift_connector` ficam
-como alternativas. A Data API não é caminho de conexão da biblioteca (decisão do usuário de
-2026-09-20): ela devolve `DECIMAL`, data e hora como texto e limita o resultado a 500 MB, o que não
-serve à troca de lotes Arrow; ela fica nos exemplos e em `RS-10`.
+cada conexão em vez de guardá-la. Um par informado em `user` e `password` entra na mesma chamada. O
+IAM interno do `redshift_connector` (`iam=True`) e o cluster provisionado
+(`redshift:GetClusterCredentials`) não são caminhos da biblioteca: ninguém os executou no ambiente
+alvo, que não tem cluster, e a regra do projeto é repetir o que rodou lá. A Data API não é caminho de
+conexão da biblioteca (decisão do usuário de 2026-09-20): ela devolve `DECIMAL`, data e hora como
+texto e limita o resultado a 500 MB, o que não serve à troca de lotes Arrow; ela fica nos exemplos e
+em `RS-10`.
+
+`connect` não passa `timeout` ao `redshift_connector`: lá ele é o tempo limite do socket, para
+conectar e para ler, e um `COPY` ou um `UNLOAD` dura mais que qualquer espera razoável (10 s abortaram
+uma visão de sistema no ambiente alvo em 2026-09-20, e a conexão não voltou a servir). Uma rede morta
+aparece como o tempo limite do sistema.
 
 `connect` roda `USE <share_database>` logo depois de abrir a sessão, e a partir daí
 `qualified(name)` é `esquema.tabela`: é o caminho executado no ambiente alvo em 2026-09-20
@@ -34,7 +42,7 @@ cláusula `COMPUPDATE` alguma.
 
 | Primitiva | Redshift |
 | --- | --- |
-| `connect(config)` | `redshift_connector.connect` com `timeout`; `USE <share_database>` quando o esquema vem de um datashare; `search_path` no esquema; `cursor.paramstyle = "named"`; uma conexão por thread num `threading.local`, aberta no primeiro uso e fechada em `cleanup`, e `connection` devolve a da thread. |
+| `connect(config)` | `GetWorkgroup`, `GetCredentials` e `redshift_connector.connect` sem `timeout`; `USE <share_database>` quando o esquema vem de um datashare, conferido por `current_database()`; `search_path` no esquema; `cursor.paramstyle = "named"`; uma conexão por thread num `threading.local`, aberta no primeiro uso e fechada em `cleanup`, e `connection` devolve a da thread. |
 | `ingest(table, uri, version, partitions=None, materialize=True)` | `copy_manifest` dos arquivos dessas partições, `COPY ... FORMAT AS PARQUET MANIFEST` com a cláusula de credenciais numa staging sem a coluna de partição criada por `ddl`, e `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'`; `JSON_PARSE` nas colunas `SUPER`. O `COPY` também lê um prefixo de pasta direto, sem manifesto, e converte `int32` da origem para a coluna `BIGINT` do contrato. |
 | `stream(statement_or_sql, params=None, batch_size=100_000, prefetch=2)` | O statement compilado para o Redshift, ou o texto com `{prefix}` em `exec_<id>_`, executado numa conexão própria da thread auxiliar; cada lote é `RecordBatch.from_pylist` dos dicionários por nome de `cursor.fetchmany(batch_size)`, com o esquema do statement, ou os lotes de `ParquetFile.iter_batches` de um `UNLOAD` acima de um limite de linhas; o mesmo `BatchStream` do DuckDB. O `redshift_connector` é Python puro, e a thread auxiliar compete pelo GIL com o cliente ([`PLAN.md`](PLAN.md)). |
 | `query(statement, **params)` | `stream(statement, params).read_all()`. |
@@ -54,7 +62,7 @@ Testes: `tests/test_engine_redshift.py` compara o SQL
 gerado (`COPY`, `INSERT ... SELECT`, `UNLOAD`, DDL da staging) com texto esperado, sem cluster; os
 testes marcados `redshift` rodam a mesma sequência com uma amostra no esquema autorizado, depois do
 `test_redshift.py` da [etapa 0](PLAN-STAGE-0.md). Provas de conceito: `test_redshift.py` (sessão e
-`paramstyle` nomeado, o `fetchmany` por lotes, banco do esquema e nome em três partes, DDL, `COPY ... MANIFEST`, lista de
+`paramstyle` nomeado, o `fetchmany` por lotes, banco do esquema e o `USE`, DDL, `COPY ... MANIFEST`, lista de
 colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API), `test_sqlalchemy.py`
 (`test_redshift_dialect_compiles_dml`, `test_three_part_name_needs_quoted_name_without_quotes`,
 `test_sandbox_copy_of_table_and_schema_files_diff`) e `test_stdlib.py::test_execution_identifiers`

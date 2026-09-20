@@ -467,15 +467,53 @@ def test_cluster_and_workgroup_rows_have_one_row_per_resource() -> None:
     assert len(rows) == 2 and rows[1][:4] == ["wg", "AVAILABLE", "b:5439", "ns"]
 
 
-def test_qualified_uses_three_parts_when_the_schema_comes_from_a_datashare() -> None:
-    """O nome da tabela no SQL: três partes com o banco do datashare, duas sem ele, uma sem esquema."""
-    assert redshift.Target(share_database="datalake_rw_shared", schema="sbx_aco_decon").qualified("t") == "datalake_rw_shared.sbx_aco_decon.t"
-    assert redshift.Target(database="dev", schema="publico").qualified("t") == "publico.t"
+def test_qualified_is_the_session_name_and_fully_qualified_the_three_part_one() -> None:
+    """O nome da tabela no SQL: ``esquema.tabela`` na sessão, que rodou ``USE``; três partes só de outro banco, como a Data API."""
+    target = redshift.Target(database="dev", share_database="datalake_rw_shared", schema="sbx_aco_decon")
+    assert target.qualified("t") == "sbx_aco_decon.t"
+    assert target.fully_qualified("t") == "datalake_rw_shared.sbx_aco_decon.t"
+
+    # Sem datashare, o banco do nome em três partes é o da conexão; sem esquema, só a tabela.
+    assert redshift.Target(database="dev", schema="publico").fully_qualified("t") == "dev.publico.t"
     assert redshift.Target(database="dev").qualified("t") == "t"
 
     # O banco do esquema é o do datashare quando há um, e o da conexão quando não há.
     assert redshift.Target(database="dev", share_database="share").schema_database() == "share"
     assert redshift.Target(database="dev").schema_database() == "dev"
+
+
+def test_copy_principals_follow_the_iam_role_variable() -> None:
+    """``RS-11`` simula quem vai alcançar o S3: quem chama sem a variável, o papel que ela nomeia com ela."""
+    roles = (["arn:padrao"], ["arn:associado"])
+    caller = "arn:aws:sts::1:assumed-role/papel/sessao"
+
+    # Sem SERIALIZE_DB_REDSHIFT_IAM_ROLE, o COPY leva as credenciais de quem chama: a identidade do STS, como papel.
+    principals, reason = redshift.copy_principals(None, roles, caller)
+    assert [(p.label, p.arn, p.blocker, p.doubt) for p in principals] == [("credenciais de quem chama", "arn:aws:iam::1:role/papel", None, None)]
+    assert reason is None
+    assert redshift.copy_principals(None, roles, None) == ([], "sem SERIALIZE_DB_REDSHIFT_IAM_ROLE e sem identidade do STS: nada a simular")
+
+    # default é o papel padrão do namespace; sem padrão, o COPY o recusaria; sem leitura, nada a simular.
+    assert redshift.copy_principals("default", roles, caller)[0][0].arn == "arn:padrao"
+    principals, reason = redshift.copy_principals("default", ([], ["arn:associado"]), caller)
+    assert principals == [] and "sem papel padrão" in reason
+    assert "não foi lido" in redshift.copy_principals("default", None, caller)[1]
+
+    # Um ARN associado passa limpo; um ARN que o namespace não tem ganha o bloqueio; um namespace não lido, a dúvida.
+    clean = redshift.copy_principals("arn:associado", roles, caller)[0][0]
+    assert (clean.blocker, clean.doubt) == (None, None)
+    assert "não está associado" in redshift.copy_principals("arn:outro", roles, caller)[0][0].blocker
+    assert "não foi lida" in redshift.copy_principals("arn:outro", None, caller)[0][0].doubt
+
+
+def test_credential_text_shows_the_key_prefix_the_token_and_the_expiry() -> None:
+    """``RS-18``: o prefixo da chave, se há ``SESSION_TOKEN`` e quando as credenciais expiram; o segredo nunca entra."""
+    now = dt.datetime(2026, 9, 20, 20, 0, tzinfo=dt.timezone.utc)
+    text = redshift.credential_text("AKIAEXEMPLO", "token", now + dt.timedelta(minutes=42), now)
+    assert text == "chave AKIA…, SESSION_TOKEN presente, expira 2026-09-20 20:42:00+00:00 (daqui a 42 min)"
+    assert "EXEMPLO" not in text
+    assert redshift.credential_text("AKIAEXEMPLO", None, None, now) == "chave AKIA…, SESSION_TOKEN ausente"
+    assert "(há 5 min)" in redshift.credential_text("AKIAEXEMPLO", "token", now - dt.timedelta(minutes=5), now)
 
 
 def test_column_value_and_matching_rows_read_by_column_name() -> None:

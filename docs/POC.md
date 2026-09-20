@@ -138,7 +138,8 @@ Consequências no plano, nesta mesma unidade de trabalho:
 
 - A [etapa 5](PLAN-STAGE-5.md) conecta pela credencial temporária do workgroup, e não por senha,
   que era o padrão escrito quando o projeto ainda não tinha Redshift; o IAM interno do
-  `redshift_connector` fica de reserva.
+  `redshift_connector` ficou de reserva até a revisão dos probes do mesmo dia, que o tirou do plano,
+  junto com o cluster provisionado, por ninguém os ter executado no ambiente alvo.
 - A Data API fica fora da biblioteca, por decisão do usuário de 2026-09-20: ela perde o tipo do
   contrato e limita o resultado a 500 MB. Ela continua no probe (`RS-10`), na suíte e nos exemplos,
   como prova de que existe caminho sem a porta 5439.

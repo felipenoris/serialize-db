@@ -62,8 +62,14 @@ guardada em lugar nenhum.
   conexão em vez de guardá-la.
 - `dbName` é opcional; informando-o, a política IAM precisa permitir o recurso `dbname` daquele banco.
 - O `redshift_connector` faz o mesmo por dentro com `iam=True, is_serverless=True,
-  serverless_work_group=...`, e fica como reserva: o caminho explícito é o que foi executado, e o
-  erro dele diz qual das duas chamadas falhou.
+  serverless_work_group=...`; o projeto não o usa: o caminho explícito é o que foi executado, e o
+  erro dele diz qual das duas chamadas falhou. O cluster provisionado (`redshift:GetClusterCredentials`)
+  também fica fora, porque o ambiente alvo não tem cluster.
+- `redshift_connector.connect(timeout=...)` é o tempo limite do socket, aplicado uma vez e válido
+  para conectar e para ler: 10 s abortaram `sys_load_error_detail` no ambiente alvo (2026-09-20), e
+  o socket não voltou a servir (`cannot read from timed out object`). O probe usa 30 s sobre visões
+  de sistema; a suíte e a biblioteca conectam sem `timeout`, porque um `COPY` dura mais que qualquer
+  espera de leitura. `ssl=True` (`verify-ca`) é o padrão da biblioteca.
 
 ### Data API
 
@@ -94,9 +100,10 @@ alvo ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.p
 documentada, de que só o nome em três partes vale, se aplica a quem não está conectado ao banco
 compartilhado. `svv_redshift_databases` diz o tipo de
 cada banco (`local` ou `shared`) e o nível de isolamento; `svv_all_schemas` diz em que banco está
-cada esquema. `has_schema_privilege` e `svv_table_info` só enxergam o banco local: num esquema
-compartilhado, quem concede `USAGE` e `CREATE` é o produtor, e a lista de tabelas vem de
-`svv_all_tables`.
+cada esquema. `has_schema_privilege` e `svv_table_info` enxergam o banco da sessão: antes do `USE`,
+o local, e num esquema compartilhado quem concede `USAGE` e `CREATE` é o produtor e a lista de
+tabelas vem de `svv_all_tables`, que cruza bancos; o que as duas respondem depois do `USE` ainda não
+foi lido, e `probes/redshift.py` (`RS-5`, `RS-8`) o lê como leitura, sem reprovar.
 
 Os objetos de um datashare só aceitam escrita quando o produtor concede `INSERT`, `CREATE` e os
 demais privilégios ao datashare, e o consumidor precisa atender três requisitos:

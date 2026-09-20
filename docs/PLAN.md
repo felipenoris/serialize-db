@@ -50,11 +50,13 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   linhas, 1,4 ms para um lote de 100.000. O pandas não entra nas dependências de execução.
 - **O Redshift do ambiente alvo é serverless, e o esquema do projeto vem de um datashare**
   (decisão do usuário de 2026-09-20). A conexão é a credencial temporária do workgroup
-  ([`../examples/redshift_native.py`](../examples/redshift_native.py), executado lá), e toda tabela
-  é citada por nome em três partes `datalake_rw_shared.sbx_aco_decon.<tabela>`. A escrita segue o
-  que um datashare aceita, com `COPY ... COMPUPDATE OFF` e transação explícita
-  ([`redshift.md`](redshift.md)). A Data API fica fora da biblioteca: ela devolve `DECIMAL` e data e
-  hora como texto e limita o resultado a 500 MB, o que não serve à troca de lotes Arrow.
+  ([`../examples/redshift_native.py`](../examples/redshift_native.py), executado lá), e nenhum
+  outro caminho de autenticação entra na biblioteca sem ter rodado no ambiente alvo. A conexão roda
+  `USE datalake_rw_shared` e cita `sbx_aco_decon.<tabela>`; o nome em três partes fica para uma
+  sessão aberta em outro banco, como a Data API. A escrita segue o que um datashare aceita, com o
+  `COPY` sem cláusula `COMPUPDATE` e transação explícita ([`redshift.md`](redshift.md)). A Data API
+  fica fora da biblioteca: ela devolve `DECIMAL` e data e hora como texto e limita o resultado a
+  500 MB, o que não serve à troca de lotes Arrow.
 - **Nenhum serviço de catálogo está habilitado.** A camada de tabela não depende de serviço, e o
   Delta atende sem código próprio. O Iceberg com catálogo em arquivo fica documentado em
   `estrategia.md` e volta à mesa se o Glue ou o S3 Tables forem habilitados; `probes/catalog.py`
