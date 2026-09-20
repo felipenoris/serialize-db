@@ -107,8 +107,9 @@ auditoria e o resumo da execução vão para o log do processo, não para `_seri
 
 As primitivas de cada módulo, com assinatura, comportamento e testes, estão em [`PLAN.md`](PLAN.md),
 etapa a etapa; os fluxos abaixo as citam pelo nome. `table` é sempre um `Table` do SQLAlchemy,
-obtido do modelo; `uri` é a pasta da tabela Delta; `reader` é um `RecordBatchReader` do Arrow; `run`
-é a `Execution` aberta, e `run.sandbox` o motor onde o pipeline roda.
+obtido do modelo; `uri` é a pasta da tabela Delta; `data` é uma `pa.Table`, o tipo que o código cliente
+entrega e recebe, ou um `RecordBatchReader` nas primitivas internas; `run` é a `Execution` aberta, e
+`run.sandbox` o motor onde o pipeline roda.
 
 ## Fluxos de uso
 
@@ -117,9 +118,10 @@ obtido do modelo; `uri` é a pasta da tabela Delta; `reader` é um `RecordBatchR
 Uma passagem por tabela e por mês, reexecutável, que termina com os leitores apontados para o Delta.
 
 1. `create_table(uri, table)` para cada modelo, na pasta do ambiente.
-2. Para cada mês, o DuckDB ou o PyArrow lê os Parquet do mês, `cast` converte para o contrato (os
-   modelos atuais usam `Double` onde o contrato pede `Numeric(18, 2)`) e `publish_month` grava o
-   mês em lotes, sem a tabela inteira na memória. Uma carga interrompida recomeça do mês seguinte
+2. Para cada mês, o DuckDB ou o PyArrow lê os Parquet do mês, `pc.round(x, 2)` leva os `Double` da
+   origem à escala do contrato (os modelos atuais usam `Double` onde o contrato pede
+   `Numeric(18, 2)`), `cast` converte para o contrato e `publish_month` grava o mês em lotes, sem a
+   tabela inteira na memória. Uma carga interrompida recomeça do mês seguinte
    ao último publicado.
 3. O relatório compara contagens e somas por mês entre a origem e o Delta; a carga só termina
    quando os dois coincidem.
@@ -137,7 +139,8 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
    versões, mesmo que outra execução publique no meio.
 2. `run.ingest` cria as views com os nomes dos modelos sobre `delta_scan` na versão fixada, e
    materializa as tabelas consultadas muitas vezes com os meses pedidos.
-3. O pipeline roda em `run.sandbox`; os intermediários ficam no sandbox, não no Delta.
+3. O pipeline roda em `run.sandbox`; o que sai para o Python sai como `pa.Table` por `query` ou
+   `execute` e volta por `load`; os intermediários ficam no sandbox, não no Delta.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
 5. `run.publish` reconcilia o esquema, substitui cada mês num commit com
    `serialize_db_execution_id` e `serialize_db_input_versions`, e avança `versions[table]`. Um
@@ -156,8 +159,8 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
    `COPY ... MANIFEST` na staging sem `mes`, seguido de `INSERT ... SELECT *, '<mes>'`. A carga de
    arquivos anteriores a uma coluna nova depende de `FILLRECORD` ou de lista de colunas, pendente da
    prova de conceito.
-3. O pipeline roda os mesmos statements Core, compilados para o Redshift; DataFrames entram por
-   Parquet em `staging/` mais `COPY`, e saem por ADBC ou `UNLOAD`.
+3. O pipeline roda os mesmos statements Core, compilados para o Redshift; as tabelas Arrow entram
+   por Parquet em `staging/` mais `COPY`, e saem das tuplas do cursor, por ADBC ou por `UNLOAD`.
 4. `run.audit` roda as mesmas consultas no Redshift.
 5. `run.publish` grava cada mês por `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE` na pasta da
    tabela e registra os arquivos por `register_files`, com estatísticas do rodapé Parquet; os dados

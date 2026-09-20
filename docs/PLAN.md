@@ -18,16 +18,24 @@ DDL, porque o Parquet não as tem, o DuckDB as cobra na carga e o Redshift só a
 aplica é a auditoria da execução, com consultas derivadas dos mesmos modelos, e a reprovação impede
 a publicação. Os statements Core do pipeline continuam válidos, e o texto SQL gerado por dialeto os
 substitui, uma interação com o banco por vez, até o SQLAlchemy terminar nos modelos e na geração.
-DataFrames entram e saem por Arrow: no DuckDB, `INSERT ... BY NAME SELECT * FROM <tabela Arrow>` e
-`to_arrow_reader()`; no Redshift, Parquet no S3 mais `COPY ... MANIFEST` e ADBC ou `UNLOAD`. A
-evolução do esquema é uma reconciliação entre o modelo e o log da tabela, sem Alembic.
+Os dados cruzam a fronteira da biblioteca como `pyarrow.Table`, nos dois sentidos: no DuckDB,
+`INSERT ... BY NAME SELECT * FROM <tabela Arrow>` e `to_arrow_table()`; no Redshift, Parquet no S3
+mais `COPY ... MANIFEST` e ADBC ou `UNLOAD`. A evolução do esquema é uma reconciliação entre o
+modelo e o log da tabela, sem Alembic.
 
 As premissas, declaradas pelo usuário, e o que cada uma fixa:
 
 - **O pipeline é majoritariamente lógica Python.** O SQLAlchemy define os modelos e gera `select` e
-  `insert` que movem DataFrames; nenhuma classe ORM é instanciada. O SQLAlchemy fica como contrato e
+  `insert` que movem tabelas; nenhuma classe ORM é instanciada. O SQLAlchemy fica como contrato e
   Core; o SQLMesh e o dbt saem; o `insert(...)` com listas de linhas sai, porque no Redshift ele
   vira uma ida ao servidor por linha.
+- **A troca de dados com o código cliente é por `pyarrow.Table`** (declaração de 2026-09-20). Quem
+  grava passa uma `pa.Table` a `load`; quem lê passa um statement Core ou um texto SQL a `query` ou
+  a `execute` e recebe uma `pa.Table`. Nenhuma instância ORM, lista de linhas ou DataFrame atravessa
+  a fronteira: `query` compila o statement pelo dialeto e o executa na conexão crua, sem `Session`,
+  e `select(Lancamento)` é aceito como statement Core. O pandas é o formato preferido de quem usa a
+  biblioteca, e a regra apoia-se na hipótese, medida na seção seguinte, de que a conversão é
+  barata: 2,3 ms sem cópia para 300.000 linhas. O pandas não entra nas dependências de execução.
 - **Nenhum serviço de catálogo está habilitado.** A camada de tabela não depende de serviço, e o
   Delta atende sem código próprio. O Iceberg com catálogo em arquivo fica documentado em
   `estrategia.md` e volta à mesa se o Glue ou o S3 Tables forem habilitados; `probes/catalog.py`
@@ -52,6 +60,60 @@ atuais; a operação (snapshots do banco, `vacuum`, compactação, arquivo). O q
 anterior: o ORM para cargas linha a linha, as chaves estrangeiras `DEFERRABLE`, o `Identity`, os
 manifestos próprios e o Alembic. O SQLGlot fica opcional, como teste de compatibilidade.
 
+### A troca de dados com o código cliente
+
+A fronteira da biblioteca é a `pyarrow.Table`. O pipeline grava com `run.sandbox.load(Modelo, data)`
+e lê com `run.sandbox.query(statement)` ou `run.sandbox.execute(texto, params)`, que devolvem uma
+`pa.Table`; o caminho de um resultado até o Delta é `load`, `audit` e `publish`. Nenhuma primitiva
+pública recebe ou devolve um DataFrame, uma lista de linhas ou uma instância ORM. Dentro da
+biblioteca, o que não cabe na memória corre por `RecordBatchReader` (`export_month` para
+`publish_month`, `rewrite`, a carga inicial), sob a regra de que a conexão não roda outro comando
+enquanto o leitor é consumido, porque o leitor do DuckDB esvazia sem erro no comando seguinte
+(`duckdb.md`); a `pa.Table` devolvida ao cliente não tem esse defeito.
+
+A hipótese da regra, de que converter para pandas é barato, foi medida em 2026-09-20 em macOS arm64
+com pandas 3.0.6, PyArrow 25.0.1 e DuckDB 1.5.5, sobre 300.000 linhas de `operacoes` com sete
+colunas (`int64`, `date32`, `int64`, `decimal128(18, 2)`, `string`, `timestamp[us]`, `string`), uma
+execução de cada conversão:
+
+| Conversão | Tempo | Cópia | Tipos |
+| --- | --- | --- | --- |
+| `table.to_pandas(types_mapper=pd.ArrowDtype)` | 2,3 ms | Nenhuma: os buffers de cada coluna são os da tabela, 128 bytes alocados. | `int64[pyarrow]`, `date32[day][pyarrow]`, `decimal128(18, 2)[pyarrow]`, `string[pyarrow]`, `timestamp[us][pyarrow]`; inteiro com nulo continua inteiro, com `<NA>`. |
+| `table.to_pandas()` | 37,6 ms | 12 MB. | `valor` em `object` de `Decimal`, `data_ref` em `object` de `date` (`datetime64[ms]` com `date_as_object=False`), `descricao` em `str`; inteiro com nulo vira `float64`. |
+| `pa.Table.from_pandas(df, preserve_index=False)` do DataFrame com `ArrowDtype` | 0,6 ms | Nenhuma. | Os mesmos tipos, todo campo anulável e sem metadados; `cast` devolve o esquema do contrato em menos de 0,1 ms. |
+| `pa.Table.from_pandas` do DataFrame com backend numpy | 9,7 ms | Parcial: 3,8 MB alocados para uma tabela de 8,6 MB, numa versão de três colunas. | Inferidos: `double` para `float64` e para inteiro com `NaN` (o `NaN` vira nulo), `timestamp[ms]` ou `[ns]` para datas, `large_string` para o `str` do pandas 3, `struct` para uma coluna de `dict`. |
+
+A aritmética do pandas sobre `decimal128[pyarrow]` fica em decimal: `sum` em 1,4 ms e
+`groupby().sum()` em 24 ms devolvem `Decimal` e `decimal128(18, 2)`; `valor * 2` dá
+`decimal128(38, 2)`, `valor * Decimal("1.1")` dá `decimal128(21, 3)` e `valor * 1.1` dá `double`;
+`merge` preserva os dtypes. Sobre `object` de `Decimal`, `sum` levou 14,3 ms. `round(2)` mantém a
+escala do dtype, e o cast seguro para `decimal128(18, 2)` então aceita; sem o `round`, recusa com
+`Rescaling Decimal value would cause data loss`.
+
+O que a sondagem fixa em `cast`:
+
+- `Table.cast(schema, safe=True)` recusa nulo em campo `nullable=False` (`Casting field ... with
+  null values to non-nullable`), estouro de inteiro e escala perdida em decimal, e exige os mesmos
+  nomes na mesma ordem: `cast` seleciona e reordena as colunas do contrato presentes e deixa as
+  ausentes para o `BY NAME`. Um inteiro numa coluna `Numeric(18, 2)` passa por `decimal128(21, 2)`,
+  porque o cast direto pede precisão 21.
+- `safe=True` não acusa duas perdas: `double` para `decimal128(18, 2)` arredonda o valor binário
+  exato (`1.236` vira `1.24` e `2.675` vira `2.67`, como o `round` do Python) e `timestamp` para
+  `date32` descarta a hora. `cast` aceita as duas conversões só quando nada se perde: um `double` é
+  representável na escala quando `pc.round(x, 2)` o devolve igual (os 300.000 valores `k/100.0`
+  passaram em 1,1 ms, e os 270.000 de `k/1000.0` com terceira casa foram apontados), e um
+  `timestamp` cabe em `date` quando a ida e volta o devolve igual; fora disso, recusa com a
+  mensagem que pede o arredondamento explícito no cliente. `pc.round` e o cast discordam em
+  `2.675` (2,68 contra 2,67), então a carga inicial (etapa 7) arredonda os `Double` dos modelos
+  atuais por `pc.round(x, 2)` antes do cast e registra a regra no relatório.
+- Um documento JSON entra como `string` já serializada: uma coluna de `dict` vira `struct` com a
+  união das chaves (`{"k": 1}` volta como `{"k": 1, "x": null}`), dicts heterogêneos falham na
+  inferência e `pa.array(dicts, pa.string())` falha; `json.dumps` de 300.000 documentos levou
+  204 ms. `cast` recusa `struct`, `list` e `map` numa coluna JSON e converte a `string` para a
+  extensão `arrow.json` do contrato, que o DuckDB lê como `JSON` e devolve como `string`.
+- `large_string` vira `string`; `timestamp[ns]` vira `[us]` quando a parte perdida é zero e é
+  recusado quando não é.
+
 ## Estado do projeto
 
 ### O repositório
@@ -61,7 +123,7 @@ manifestos próprios e o Alembic. O SQLGlot fica opcional, como teste de compati
 | `docs/` | Completa: `parquet.md`, `duckdb.md`, `redshift.md`, `sqlalchemy.md`, `schema.md`, `delta.md`, `guia.md`, `estrategia.md`, `serialize-db.md` e este plano. Todo bloco Python dos documentos rodou com as versões fixadas em `pyproject.toml`; os comandos do Redshift foram compilados, não executados. |
 | `src/serialize_db/model/` | Os modelos do pipeline, a primeira instância do contrato e o material dos testes: `model_base_contabil.py`, `model_base_gerencial.py` e `model_db_projetado.py`. Dois não importam (`from lib_base_contabil import Base` e `from lib_base_gerencial import Base`, módulos que o repositório não tem). Os modelos usam `Double` onde o contrato pede `Numeric(18, 2)`, deixam o `autoincrement` padrão nas chaves inteiras (o `duckdb_engine` emite `SERIAL`, que o DuckDB rejeita), declaram chaves estrangeiras `DEFERRABLE INITIALLY DEFERRED` (o DuckDB descarta a cláusula, o Redshift não a tem) e não têm a coluna `mes`, comentários nem `Table.info["serialize_db"]`. A etapa 1 os corrige. |
 | `src/serialize_db/__init__.py` | Só o `main` de exemplo do `uv init`. `pyproject.toml` não declara dependência de execução; o grupo `dev` fixa pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, boto3, redshift-connector, SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0 e pandas 3.0.6. |
-| `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda; `test_probes.py` testa as funções puras dos probes com respostas fabricadas, sem rede. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`poc_delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas e da stdlib (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Cada etapa abaixo lista as provas de conceito que exercitam as suas APIs. Sem variável, 34 testes passam e 48 são pulados; com a raiz local, 64 passam e 18 são pulados (2026-09-19, macOS). No espaço, em 2026-09-20, uma sessão com a raiz local e a raiz S3 gravou o JSON de `SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, sem a contagem por resultado nem o registro da limpeza, que o relatório passou a ter (`session.`, `local.cleanup`, `s3.cleanup`); a execução das 04:52 UTC, após as correções desta sessão, registrou 104 testes passados e 7 pulados em 35 s e a limpeza das duas raízes; sem variável, 63 passam e 48 são pulados. |
+| `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda; `test_probes.py` testa as funções puras dos probes com respostas fabricadas, sem rede. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`poc_delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas e da stdlib (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Cada etapa abaixo lista as provas de conceito que exercitam as suas APIs. Sem variável, 64 testes passam e 48 são pulados; com a raiz local, 94 passam e 18 são pulados (2026-09-20, macOS). No espaço, em 2026-09-20, uma sessão com a raiz local e a raiz S3 gravou o JSON de `SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, sem a contagem por resultado nem o registro da limpeza, que o relatório passou a ter (`session.`, `local.cleanup`, `s3.cleanup`); a execução das 04:52 UTC, após as correções desta sessão, registrou 104 testes passados e 7 pulados em 35 s e a limpeza das duas raízes; sem variável, 63 passam e 48 são pulados. |
 | `probes/` | Leituras do ambiente, só de leitura: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` e `catalog.py` sobre `probelib.py`, com o resultado em `probes/output/` para colar na conversa. Quatro execuções no laboratório em 2026-09-20, sem Redshift, corrigiram a leitura das conexões, as leituras de rede, o rótulo dos IPs públicos, a montagem de `~/shared` e o Object Lock, acrescentaram por tabela Delta os arquivos, commits e último objeto, as sessões da suíte S3 e as versões não correntes sob a raiz, e a quarta isolou o 403 do delta-rs (`NO_PROXY` vazia) e fez `diagnose_aws.py` rodar o delta-rs como encontrado e como a suíte; o ambiente de destino ainda não foi lido. |
 | `prepare_offline.sh` | Deixa a pasta autossuficiente para o destino sem internet (`.python/`, `.venv/`, `.duckdb/`); verificado extraindo o pacote em outro caminho e rodando a suíte local com proxies mortos. |
 
@@ -239,6 +301,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - O pacote `sagemaker-studio` fica fora do projeto: arrasta `deltalake`, `duckdb` e `pandas` sem
   versão fixa, e numa instalação de teste rebaixou o `duckdb` para 1.5.1. A raiz do banco é
   configuração explícita, nunca inferida do projeto (`probes/README.md`).
+- A fronteira com o código cliente é a `pa.Table`: `load` recebe uma, `query` e `execute` devolvem
+  uma, e nenhuma primitiva pública recebe ou devolve DataFrame, lista de linhas ou instância ORM;
+  os `RecordBatchReader` ficam nas primitivas internas, e a conexão não roda outro comando enquanto
+  um leitor é consumido (seção "A troca de dados com o código cliente").
 
 ## Organização do pacote
 
@@ -258,7 +324,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`, `deltalake`, `duckdb`,
 `pyarrow` e `boto3`, nas versões fixadas pelos documentos, mais `duckdb-engine` e
 `sqlalchemy-redshift` enquanto houver compilação em tempo de execução (hoje só no grupo `dev`, para
-as suítes de estudo); `redshift-connector` entra no extra `redshift`, e `sqlglot` no grupo `dev`. `prepare_offline.sh` passa a instalar os extras
+as suítes de estudo); `redshift-connector` entra no extra `redshift`, e `sqlglot` no grupo `dev`; o pandas
+fica no grupo `dev`, para o teste do ciclo com `ArrowDtype`, porque a biblioteca não o importa.
+`prepare_offline.sh` passa a instalar os extras
 (`--all-extras`) e é rodado de novo a cada mudança.
 
 Configuração: argumentos explícitos de `Database` e da linha de comando, com as variáveis
@@ -285,7 +353,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
 | 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado, Redshift pendente. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
-| 1. `schema` | Modelos corrigidos; esquema Arrow, Delta e DDL; cast; arquivos `schema/`. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, texto longo e nulo em `NOT NULL`. |
+| 1. `schema` | Modelos corrigidos; esquema Arrow, Delta e DDL; cast; arquivos `schema/`. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição do mês, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por mês e realocação; os mesmos no bucket com `-m s3`. |
 | 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação do mês. | O pipeline de exemplo roda em memória sobre um Delta local; a auditoria reprova a chave repetida entre o mês novo e um mês já publicado. |
@@ -332,7 +400,7 @@ comentários de tabela e de coluna, e `Table.info["serialize_db"]` com `partitio
 | `delta_schema(table)` | O `deltalake.Schema` derivado do Arrow: `decimal(18,2)`, `timestamp_ntz` para `DateTime` sem fuso e `timestamp` para o com fuso, `string` para JSON e UUID, comentários preservados. |
 | `ddl(table, dialect, prefix="")` | `CREATE TABLE` para `duckdb` ou `redshift`: sem `DEFERRABLE` nem `Identity`, `CHECK` só no DuckDB, chaves só quando `table_options` as pede, `SORTKEY`, `DISTSTYLE` e `DISTKEY` no Redshift, `Text` como `VARCHAR(65535)`, `Uuid` como `VARCHAR(36)`, `JSON` como `SUPER`; `prefix` renomeia a tabela para o sandbox. |
 | `table_options(table)` | O `TableOptions` (`partition_by`, `sort_key`, `redshift`, `keys`) lido de `Table.info["serialize_db"]` com os padrões da biblioteca: partição por `mes` quando a coluna existe e as chaves do próprio modelo, `table.primary_key` e os `UniqueConstraint`; `keys` só acrescenta uma chave de negócio ou exclui uma delas, sempre de forma explícita. |
-| `cast(reader, table)` | O `RecordBatchReader` convertido lote a lote para `arrow_schema(table)` com `safe=True`: serializa `dict` em JSON, leva timestamps a microssegundos e UTC, recusa perda de precisão, texto acima de `String(n)` e nulo em coluna `NOT NULL`. |
+| `cast(data, table)` | A `pa.Table`, ou o `RecordBatchReader` lote a lote, convertida para `arrow_schema(table)` com `safe=True` e devolvida no mesmo tipo: as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(21, 2)`, `string` JSON para a extensão `arrow.json`; recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` e nulo em coluna `NOT NULL`, com a mensagem que diz o que o cliente faz antes de chamar. |
 | `check_models(metadata)` | A lista de violações do contrato nos modelos: tipo fora da tabela de tipos, `Double` em coluna monetária, `autoincrement` em chave inteira, `DEFERRABLE`, `Identity`, tabela particionada sem `mes`, tabela sem chave primária e sem `keys`, coluna sem comentário. Vazia nos modelos corrigidos. |
 | `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória. |
 | `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory`; `serialize-db schema write` grava e `serialize-db schema check` compara sem gravar. |
@@ -344,7 +412,8 @@ com todos os tipos; `create_all` no DuckDB em memória com o DDL de cada modelo;
 `test_sqlalchemy.py` (`test_declarative_model_exposes_table`, `test_ddl_per_dialect`,
 `test_create_all_and_reflection`, `test_arrow_and_delta_schema_from_table`, com o mapa de tipos e
 `Schema.from_arrow().to_json()`, `test_sandbox_copy_of_table_and_schema_files_diff`),
-`test_pyarrow.py` (`test_schema_metadata_and_from_pylist`, `test_safe_cast_refuses_data_loss`) e
+`test_pyarrow.py` (`test_schema_metadata_and_from_pylist`, `test_safe_cast_refuses_data_loss`, com as
+perdas que o cast seguro não acusa, e `test_arrow_table_round_trips_through_pandas_without_copy`) e
 `test_stdlib.py` (`test_generated_files_diff`, `test_decimal_totals`).
 
 ### Etapa 2: `sql`
@@ -385,14 +454,14 @@ dialect)` como teste de que o texto do Redshift analisa. Provas de conceito:
 | `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou vazia, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
 
 `serialize_db.delta` é a camada de tabela; `uri` é a pasta da tabela, `table` o `Table` do modelo,
-`reader` um `RecordBatchReader`.
+`data` uma `pa.Table` ou um `RecordBatchReader`.
 
 | Primitiva | O que faz |
 | --- | --- |
 | `create_table(uri, table)` | `DeltaTable.create(mode="ignore")` com `delta_schema`, `partition_by`, nome, descrição e as propriedades `delta.logRetentionDuration = interval 3650 days` e `delta.deletedFileRetentionDuration = interval 400 days`; sem vetores de exclusão nem column mapping. |
 | `open(uri, version=None)` | A `DeltaTable` numa versão; a execução abre cada tabela uma vez e guarda a versão. |
 | `commit_metadata(execution_id, input_versions, snapshot=None)` | O dicionário de `CommitProperties(custom_metadata=...)`: `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`. |
-| `publish_month(uri, month, reader, metadata)` | `write_deltalake(mode="overwrite", predicate="mes = '<mes>'")` do `reader` já passado por `cast`; `CommitFailedError` sobe como `ExecutionConflict`. |
+| `publish_month(uri, month, data, metadata)` | `write_deltalake(mode="overwrite", predicate="mes = '<mes>'")` de `data` já passado por `cast`; `CommitFailedError` sobe como `ExecutionConflict`. |
 | `register_files(uri, files, months, metadata)` | `create_write_transaction(mode="overwrite", partition_filters=...)` com uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. |
 | `schema_diff(table, dt)` | O `SchemaDiff` entre `arrow_schema(table)` e `dt.schema()`: coluna nova anulável, `NOT NULL` relaxado e `CHECK` são aditivos; coluna `NOT NULL` nova em tabela com dados, renomeação, remoção e mudança de tipo são destrutivos. |
 | `reconcile(uri, table)` | Aplica o diff aditivo (`add_columns`, `drop_column_not_null`, `add_constraint`) e recusa o destrutivo com a mensagem que aponta `rewrite`. |
@@ -423,7 +492,9 @@ commit `overwrite` com esquema novo e estatísticas tipadas, que o DuckDB usa pa
 
 `serialize_db.audit` monta as verificações a partir do contrato e não sabe qual motor as roda;
 `serialize_db.engine` declara o protocolo `Engine`, que a execução também não conhece, e
-`serialize_db.engine.duckdb` o implementa.
+`serialize_db.engine.duckdb` o implementa. O protocolo fixa os tipos da fronteira: `load` recebe uma
+`pa.Table`, `query` e `execute` devolvem uma `pa.Table`, e os `RecordBatchReader` ficam nas
+primitivas internas.
 
 Chave primária, unicidade e chave estrangeira ficam fora do DDL dos dois sandboxes (`schema.md`), e
 a auditoria é onde elas são aplicadas. Cada verificação sai do `Table`, sem declaração adicional no
@@ -462,18 +533,20 @@ registra a verificação como não executada.
 | --- | --- |
 | `connect(config)` | Banco em arquivo `<pasta temporária>/<execution_id>.duckdb` ou em memória; `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS` (ou `.duckdb/` da pasta preparada), `autoinstall_known_extensions` e `autoload_known_extensions` desligados; `storage.duckdb_setup`; `threads`, `memory_limit`, `temp_directory` e `preserve_insertion_order = false`; `temp_directory` sempre explícito, com o espaço livre conferido e registrado no log, porque o padrão `.tmp` é relativo à pasta corrente. |
 | `ingest(table, uri, version, months=None, materialize=False)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou `CREATE TABLE ... AS SELECT ... FROM delta_scan(...) WHERE mes IN (...)` com `materialize=True`. |
-| `query(statement)` | O statement Core compilado para o dialeto e executado; o resultado por `to_arrow_reader()`. |
-| `execute(sql, params)` | O texto gerado por `render`: `{prefix}` vira vazio, `:nome` vira `$nome` por `sql.bind`, e o resultado volta por `to_arrow_reader()`. |
-| `load(table, reader)` | `INSERT ... BY NAME SELECT * FROM <tabela Arrow>` numa tabela do sandbox criada por `ddl(table, "duckdb")`. |
+| `query(statement, **params)` | O statement Core compilado para o dialeto, com as tabelas do contrato trocadas pelas do sandbox por `sql.prefixed`, e executado na conexão crua, sem `Session`; o resultado é a `pa.Table` de `to_arrow_table()`, com os tipos do motor (`decimal128(18, 2)`, `date32`, JSON como `string`). |
+| `execute(sql, params)` | O texto gerado por `render` ou escrito pelo pipeline: `{prefix}` vira vazio, `:nome` vira `$nome` por `sql.bind`, e o resultado volta como `pa.Table` por `to_arrow_table()`; um comando sem resultado devolve a tabela `Count` ou `Success` do DuckDB. |
+| `load(table, data)` | `cast(data, table)` e `INSERT ... BY NAME SELECT * FROM <tabela Arrow registrada>` numa tabela do sandbox criada por `ddl(table, "duckdb")`; `data` é uma `pa.Table`, e outro tipo é recusado com a mensagem que aponta `pa.Table.from_pandas`. |
 | `audit(table, months, **opcoes)` | Roda o texto de `audit.audit_sql(table, "duckdb")` — `json_valid` e `strftime(data_ref, '%Y-%m')` são as funções do dialeto — e monta o `AuditReport`; a comparação com os demais meses sai de `delta_scan` na versão fixada, e `passed` falso interrompe a execução. |
-| `export_month(table, month)` | O `reader` do mês, passado por `cast`, para `publish_month`; ou `COPY ... TO '<uri>/mes=<mes>/<execution_id>.parquet' (FORMAT parquet, RETURN_STATS)` mais `register_files` para a tabela que não cabe na memória. |
+| `export_month(table, month)` | O `RecordBatchReader` do mês, passado por `cast`, para `publish_month`, sem outro comando na conexão até o fim da escrita; ou `COPY ... TO '<uri>/mes=<mes>/<execution_id>.parquet' (FORMAT parquet, RETURN_STATS)` mais `register_files` para a tabela que não cabe na memória. |
 | `cleanup()` | Fecha a conexão e apaga o arquivo do banco e a pasta de transbordo. |
 
 Testes: `tests/test_audit.py`, sem gravar: o texto de cada verificação nos dois dialetos, o diff dos
 arquivos gerados, a chave lida do `primary_key` do modelo e o escopo escolhido pelas colunas da
 chave. `tests/test_engine_duckdb.py` sob a raiz local: o pipeline de exemplo (doze meses
 materializados e dimensões em view, um `select` com `join`, auditoria, exportação do mês) sobre um
-Delta local criado no teste; auditoria que reprova a chave repetida dentro do mês e a repetida
+Delta local criado no teste; o ciclo `query`, `to_pandas(types_mapper=pd.ArrowDtype)`, `from_pandas` e
+`load` com `decimal128(18, 2)` e `date32` mantidos, e `load` recusando um DataFrame; auditoria que
+reprova a chave repetida dentro do mês e a repetida
 contra um mês já publicado, e o órfão de chave estrangeira com a tabela referenciada fora do
 sandbox; `execute` com `%` em literal. Provas de conceito: `test_duckdb.py` (configuração, Arrow na
 entrada e na saída, o leitor esvaziado pelo comando seguinte, `DECIMAL`, JSON, `executemany`, `COPY`
@@ -497,9 +570,9 @@ precisam das APIs do Redshift, sem endpoint VPC no laboratório (`RS-14`), e fic
 | --- | --- |
 | `connect(config)` | `redshift_connector.connect` com `timeout`; `search_path` no esquema; `cursor.paramstyle = "named"`. |
 | `ingest(table, uri, version, months=None, materialize=True)` | `copy_manifest` dos arquivos desses meses, `COPY ... FORMAT AS PARQUET MANIFEST IAM_ROLE ...` numa staging sem `mes` criada por `ddl`, e `INSERT INTO exec_<id>_<tabela> SELECT *, '<mes>'`; `JSON_PARSE` nas colunas `SUPER`. |
-| `query(statement)` | O statement compilado para o Redshift; o resultado em Arrow a partir das tuplas com o esquema do statement, ou por `UNLOAD` acima de um limite de linhas. |
-| `execute(sql, params)` | `{prefix}` vira `exec_<id>_`, e o texto roda com o dicionário. |
-| `load(table, reader)` | Parquet em `staging/<execution_id>/` pelo PyArrow mais `COPY`; `insert(...).values(lista)` numa única ida para lotes pequenos. |
+| `query(statement, **params)` | O statement compilado para o Redshift e executado na conexão crua; o resultado é uma `pa.Table` montada das tuplas do cursor com o esquema do statement (`from_pylist` de dicionários por nome), ou por `UNLOAD` acima de um limite de linhas. |
+| `execute(sql, params)` | `{prefix}` vira `exec_<id>_`, o texto roda com o dicionário, e o resultado volta como `pa.Table`, vazia para um comando sem resultado. |
+| `load(table, data)` | `cast(data, table)`, Parquet em `staging/<execution_id>/` por `pq.write_table` mais `COPY`; abaixo de um limite de linhas, um único `INSERT` multilinha montado de `to_pylist()`, numa ida ao servidor. |
 | `audit(table, months, **opcoes)` | O mesmo texto compilado para o Redshift; os demais meses e a tabela referenciada entram em stagings só com as colunas da chave, por `COPY ... MANIFEST`. |
 | `export_month(table, month)` | `UNLOAD ('<select do contrato>') TO '<uri>/' PARTITION BY (mes) FORMAT PARQUET MANIFEST VERBOSE` mais `register_files` com as estatísticas do rodapé Parquet. |
 | `cleanup()` | `DROP TABLE` de `exec_<id>_*` e da staging; os objetos de `staging/<execution_id>/` apagados. |
@@ -524,7 +597,7 @@ nomeado, DDL, `COPY ... MANIFEST`, lista de colunas e `FILLRECORD`, `VARCHAR`, `
 | `Execution(db, engine, month, execution_id)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox; na saída descarta o sandbox e grava o resumo no log. |
 | `run.previous_months(n)` | Os `n` meses até `run.month`, inclusive. |
 | `run.ingest(*tables, months=None, materialize=False)` | `engine.ingest` de cada tabela na versão fixada; sem `months`, a tabela inteira. |
-| `run.sandbox` | O motor, onde o pipeline chama `query`, `execute` e `load`. |
+| `run.sandbox` | O motor, onde o pipeline chama `query`, `execute` e `load`: `pa.Table` na saída dos dois primeiros e na entrada do último. |
 | `run.audit(table, months, foreign_keys=False, key_scope=None)` | `engine.audit`; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta, e o relatório, com o SQL de cada verificação, vai para o log. |
 | `run.publish(table, months, audit=True)` | Exige a auditoria aprovada dessa tabela nesses meses na própria execução, e `audit=False` dispensa a exigência e fica no log; depois `create_table` se não existir, `reconcile`, `export_month` e `publish_month` por mês com `commit_metadata`; avança `versions[table]`. |
 | `run.publish_redshift(*tables)` | A publicação da etapa 8. |
@@ -549,7 +622,7 @@ A migração dos Parquet atuais para o Delta, uma passagem por tabela e por mês
 
 | Primitiva | O que faz |
 | --- | --- |
-| `initial_load(db, table, source, months=None)` | `create_table`; para cada mês, o DuckDB lê `source/mes=<mes>/*.parquet` (ou o layout que a origem tiver), `cast` converte para o contrato (os modelos atuais usam `Double` onde o contrato pede `Numeric(18, 2)`) e `publish_month` grava em lotes. Uma carga interrompida recomeça do mês seguinte ao último publicado. |
+| `initial_load(db, table, source, months=None)` | `create_table`; para cada mês, o DuckDB lê `source/mes=<mes>/*.parquet` (ou o layout que a origem tiver), `pc.round(x, 2)` leva os `Double` da origem à escala do contrato (os modelos atuais usam `Double` onde o contrato pede `Numeric(18, 2)`; o cast de `double` arredonda sem acusar, e a regra fica explícita e no relatório), `cast` converte para o contrato e `publish_month` grava em lotes. Uma carga interrompida recomeça do mês seguinte ao último publicado. |
 | `load_report(db, table, source)` | Contagem e somas das colunas numéricas por mês, na origem e no Delta; a carga só termina quando coincidem. |
 | `serialize-db load` | `--table`, `--source` e `--months`. |
 
@@ -614,9 +687,9 @@ Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, mê
 | --- | --- | --- |
 | 1. Abertura | Lê `_serialize_db/snapshots.json` e `serialize_db_publications`; abre cada tabela de entrada e registra a versão. | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
 | 2. Ingestão | DuckDB: views com os nomes dos modelos sobre `delta_scan(uri, version := 143)`; `cad_lancamentos` materializada com `WHERE mes BETWEEN '2025-09' AND '2026-08'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos desses meses em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
-| 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, mês 2026-08. |
+| 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai como `pa.Table` por `query` ou `execute` e volta por `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, mês 2026-08. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra os demais meses da versão 57, `mes = strftime(data_ref, '%Y-%m')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
-| 5. Publicação no Delta | `reconcile` e `publish_month(uri, "2026-08", reader, commit_metadata(...))`; do Redshift, `UNLOAD ... PARTITION BY (mes)` mais `register_files`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `mes=2026-08/`. |
+| 5. Publicação no Delta | `reconcile` e `publish_month(uri, "2026-08", data, commit_metadata(...))`; do Redshift, `UNLOAD ... PARTITION BY (mes)` mais `register_files`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `mes=2026-08/`. |
 | 6. Publicação no Redshift | `version_diff(57, 58)` aponta o mês 2026-08; `DELETE` do mês, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08'`; controle atualizado. | `prod_cad_lancamentos_projetados` com o mês novo; `serialize_db_publications` em 58. |
 | 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
@@ -624,19 +697,31 @@ Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, mê
 A API da etapa 6, ainda não implementada:
 
 ```python
+import pandas as pd
+import pyarrow as pa
+from sqlalchemy import select
+
 from serialize_db import Database, Execution
-from pipeline import compute_projections
+from pipeline import compute_in_sandbox, project
 from pipeline.models import Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
 
 db = Database("s3://bucket/projeto/delta", environment="prod")
 with Execution(db, engine="duckdb", month="2026-08", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento, months=run.previous_months(12), materialize=True)
     run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada
-    compute_projections(run.sandbox)                                 # statements Core, texto gerado e Python
+    compute_in_sandbox(run.sandbox)                                  # statements Core e texto gerado, por query e execute
+    entries = run.sandbox.query(select(Lancamento).where(Lancamento.mes == "2026-08"))   # pa.Table
+    frame = entries.to_pandas(types_mapper=pd.ArrowDtype)            # sem cópia; decimal128 e date32 mantidos
+    projected = project(frame)                                       # lógica Python; devolve um DataFrame
+    run.sandbox.load(LancamentoProjetado, pa.Table.from_pandas(projected, preserve_index=False))
     run.audit(LancamentoProjetado, months=["2026-08"])               # exigida por publish
     run.publish(LancamentoProjetado, months=["2026-08"])             # overwrite por mês, metadados
     run.publish_redshift(LancamentoProjetado)                        # só os meses alterados
 ```
+
+O DataFrame que `project` devolve mantém os dtypes `ArrowDtype` de `frame`, e `from_pandas` os
+devolve ao Arrow sem cópia; uma coluna calculada em `float64` chega como `double`, e `load` a recusa
+numa coluna `Numeric` enquanto houver valor fora da escala, até o pipeline arredondar.
 
 Uma reexecução com o mesmo `execution_id` repete os `overwrite` dos mesmos meses e produz o mesmo
 estado. Uma correção de um mês antigo é a mesma chamada com outro `month` e um `execution_id` novo:
