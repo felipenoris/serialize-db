@@ -18,8 +18,10 @@ de conexão já está fixado: a credencial temporária do workgroup serverless, 
   65.535 bytes.
 - `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE`: os tipos físicos de
   `TIMESTAMP` e `DECIMAL`, se as colunas saem `required`, se há estatísticas de mínimo e máximo, e o
-  registro dos arquivos por
-  `create_write_transaction`, lido pelo DuckDB.
+  registro dos arquivos por `create_write_transaction`, lido pelo DuckDB.
+  [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) exercita este item e o
+  anterior num script só, com `cast` para `DECIMAL` e `TIMESTAMP` no `select` do `UNLOAD`, porque a
+  base de origem não tem coluna de nenhum dos dois tipos.
 - Se o Redshift Spectrum mapeia colunas Parquet por nome ou por posição, só para registro; o
   projeto não cria esquemas externos.
 - O banco do esquema do projeto: a sessão enxerga `datalake_rw_shared.sbx_aco_decon` (`RS-16`,

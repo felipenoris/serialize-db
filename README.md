@@ -196,6 +196,11 @@ a Data API por HTTPS, assíncrona; e [`redshift_copy_unload.py`](examples/redshi
 probe, a suíte e a etapa 5 repetem as chamadas que estão lá, e
 [`examples/README.md`](examples/README.md) diz o que cada um fixa.
 
+[`redshift_manifest.py`](examples/redshift_manifest.py) é o próximo experimento, ainda não
+executado: ele converte uma partição de `cad_contratos` de Parquet para Delta e roda os dois
+comandos com manifesto que faltam, o `COPY ... MANIFEST` e o `UNLOAD ... PARTITION BY ... MANIFEST
+VERBOSE` numa tabela do datashare, que são os pré-requisitos do `export_partition`.
+
 ## Credenciais do delta-rs e proxy
 
 O `deltalake` (delta-rs) tem cliente HTTP próprio, em Rust, e não usa o `boto3`: busca as

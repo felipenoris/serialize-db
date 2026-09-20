@@ -5,11 +5,26 @@ referência da conectividade com o Redshift: o probe, a suíte de testes e a
 [etapa 5](../docs/PLAN-STAGE-5.md) repetem as chamadas que estão aqui, e não uma variante que
 ninguém executou. O que eles mostraram está em [`../docs/POC.md`](../docs/POC.md), com a data.
 
+`redshift_manifest.py` é a exceção, e está marcado como tal: ele é o **próximo experimento**, ainda
+não executado, escrito a partir do que os outros provaram. Depois de rodar, ele passa para a tabela
+abaixo com o que mostrou, como os demais.
+
 | Script | Caminho | Chamadas |
 | --- | --- | --- |
 | [`redshift_native.py`](redshift_native.py) | Protocolo nativo na porta 5439, com credencial temporária derivada da identidade IAM. É o caminho da biblioteca. | `redshift-serverless:GetWorkgroup`, `GetCredentials`; `redshift_connector.connect` |
 | [`redshift_data_api.py`](redshift_data_api.py) | Data API por HTTPS, assíncrona: dispara, consulta o estado e pagina o resultado. Serve a comandos e a diagnóstico. | `redshift-data:ExecuteStatement`, `DescribeStatement`, `GetStatementResult` |
 | [`redshift_copy_unload.py`](redshift_copy_unload.py) | `USE` no banco do datashare, `CREATE TABLE`, `COPY` de uma pasta Parquet e `UNLOAD`, com as credenciais de quem chama no texto do comando. | as de `redshift_native.py`, mais `s3:ListBucket`, `GetObject` e `PutObject` pela identidade da sessão |
+
+## O próximo experimento
+
+| Script | O que falta responder |
+| --- | --- |
+| [`redshift_manifest.py`](redshift_manifest.py) | Os dois comandos com manifesto, que são os pré-requisitos do `export_partition` da [etapa 5](../docs/PLAN-STAGE-5.md) e do `COPY` da publicação da [etapa 8](../docs/PLAN-STAGE-8.md): `COPY ... FORMAT AS PARQUET MANIFEST` e `UNLOAD ... PARTITION BY (<coluna>) MANIFEST VERBOSE`, os dois numa tabela do datashare. Ele converte antes uma partição de `cad_contratos` de Parquet para Delta, porque o manifesto do `COPY` é a lista de arquivos que o log do Delta guarda, e lê no fim o rodapé de um arquivo do `UNLOAD`: os tipos físicos de `DECIMAL` e `TIMESTAMP`, se as colunas saem `required` e se há estatística de mínimo e máximo são perguntas da [etapa 0](../docs/PLAN-STAGE-0.md). |
+
+`cad_contas`, a tabela dos outros exemplos, não serve a esse script: ela é uma das dez dimensões sem
+partição da base, e o `UNLOAD ... PARTITION BY` precisa de uma coluna de partição. As particionadas
+são `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao`, por `data_str`, e `cad_lancamentos`,
+por `data_base_str` ([`../docs/POC.md`](../docs/POC.md)).
 
 Os valores literais (região `sa-east-1`, workgroup `controladoria-wg`, banco `dev`, esquema
 `sbx_aco_decon` no banco `datalake_rw_shared`) são os do ambiente alvo. O probe e a suíte tomam os
@@ -21,7 +36,13 @@ Para rodar, no ambiente alvo, com as credenciais do espaço já no ambiente:
 ```
 .venv/bin/python examples/redshift_native.py
 .venv/bin/python examples/redshift_data_api.py
+.venv/bin/python examples/redshift_manifest.py
 ```
+
+`redshift_manifest.py` precisa de `deltalake` e `pyarrow` além de `boto3` e `redshift_connector`,
+por isso roda com o interpretador da pasta preparada; ele cria duas tabelas no esquema, apagadas no
+fim, e deixa os objetos da execução sob um prefixo próprio no S3, que ele imprime com o comando que
+os apaga.
 
 ## O que os exemplos fixam
 
@@ -44,7 +65,10 @@ Para rodar, no ambiente alvo, com as credenciais do espaço já no ambiente:
 
 ## Acrescentar um exemplo
 
-Só entra aqui o que rodou no ambiente alvo. O script fica como foi executado, com os valores
-literais que funcionaram, e ganha um docstring em português dizendo o que ele prova, quando rodou e
-onde o resultado está registrado. Um exemplo que contradiz um documento dispara a revisão desse
-documento na mesma unidade de trabalho.
+O script fica como foi executado, com os valores literais que funcionaram, e ganha um docstring em
+português dizendo o que ele prova, quando rodou e onde o resultado está registrado. Um exemplo que
+contradiz um documento dispara a revisão desse documento na mesma unidade de trabalho.
+
+Um script ainda não executado entra só como próximo experimento, dito no docstring e na seção
+acima, e com uma pergunta em aberto que ele fecha; sem isso, ele não pertence a esta pasta, porque o
+probe e a suíte repetem daqui o que foi executado, não o que foi imaginado.

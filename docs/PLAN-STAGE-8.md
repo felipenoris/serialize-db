@@ -13,7 +13,9 @@ mora no mesmo banco das tabelas publicadas, e a transação da publicação abre
 O `COPY` e o `UNLOAD` levam a cláusula de credenciais da [etapa 5](PLAN-STAGE-5.md).
 
 O `COPY ... MANIFEST` numa tabela de datashare ainda não foi exercitado
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o `COPY` de um prefixo de pasta passou. Recusado o
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), e
+[`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) é o experimento que
+responde); o `COPY` de um prefixo de pasta passou. Recusado o
 manifesto, a alternativa é copiar para `staging/<execution_id>/`, por `storage.copy`, os arquivos
 que o log da versão lista, e carregar esse prefixo: a cópia no S3 não lê os dados, e o prefixo da
 partição no Delta não serve direto, porque guarda também os arquivos das versões anteriores até o
