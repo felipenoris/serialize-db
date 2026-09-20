@@ -163,10 +163,24 @@ converte `data_str` a `DATE` (`hive_types_autocast`); o dataset do PyArrow a man
 `tests/source_db_projetado.py` reproduz a estrutura em 64 arquivos e 425 KB, e o probe rodado sobre
 ela imprime a seção 3 idêntica à da base real.
 
-Consequências no plano: a [etapa 7](PLAN-STAGE-7.md) descreve a origem como ela é (partições por
-`data_str` e `data_base_str`, chunks, `INT96`), trunca o `timestamp` a microssegundos e arredonda só
-as colunas `Numeric`, compara as somas depois do arredondamento, pula as tabelas fora do modelo e
-não barra a carga pela chave estrangeira; a [etapa 1](PLAN-STAGE-1.md) registra que o modelo bate com
-a origem e que `mes` deriva de `data` ou de `data_base` conforme a tabela; o tipo de `valor`, o
-`BigInteger` nas chaves, o nome da chave da coluna de data, o conteúdo de `schema.json` e os órfãos
-estão em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+O `schema.json` da raiz, colado pelo usuário em 2026-09-20, é o controle de esquema da biblioteca
+anterior no formato da reflexão do SQLAlchemy: por tabela, as colunas com tipo (`INTEGER`,
+`VARCHAR`, `DATE`, `BOOLEAN`, `DOUBLE_PRECISION`, `TIMESTAMP`), nulidade e chave primária, as chaves
+estrangeiras, os índices e as restrições de unicidade. A nulidade dos arquivos é a dele, inclusive
+nas sete colunas de `cad_contratos`; as chaves estrangeiras compostas do modelo de referência
+(`cad_contratos` para `rel_contrato_operacao`, `rel_contrato_operacao` para `cad_operacoes`,
+`cad_lancamentos` para `cad_contratos`) não constam nele, o que explica os órfãos; os índices e as
+restrições de unicidade são os do modelo. `tests/source_db_projetado_schema.json` é a cópia, e
+`tests/test_source_db_projetado.py` confere que as colunas, os tipos e a nulidade dele são os dos
+arquivos.
+
+Consequências no plano, pelas decisões do usuário de 2026-09-20 registradas nas premissas de
+[`PLAN.md`](PLAN.md): a partição é por data em texto `AAAA-MM-DD`, declarada pelo modelo com a
+coluna de data de que deriva, e o vocabulário de mês do plano virou partição
+([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md) a [`PLAN-STAGE-9.md`](PLAN-STAGE-9.md),
+[`serialize-db.md`](serialize-db.md), [`schema.md`](schema.md)); as colunas numéricas continuam
+`Double`, sem arredondamento, com `Numeric(18, 2)` como melhoria futura; as chaves passam a
+`int64`; o `timestamp` `INT96` vira `INT64` de microssegundos; a nulidade é a do modelo; as
+inconsistências da base de desenvolvimento são ignoradas, e a base fictícia é consistente, com a
+relação N×N de `rel_contrato_operacao` e `fator_rateio` somando 1 por operação. A memória por
+partição de `cad_lancamentos` continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

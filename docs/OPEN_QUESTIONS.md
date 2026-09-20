@@ -32,32 +32,6 @@ foi medido em [`POC.md`](POC.md).
   `find_tables` do statement Core ou do sentinela `{prefix}` do texto gerado
   (`test_parallel.py::test_table_barrier_delays_the_read_until_the_load_lands`). Fica fora das
   etapas até existir um pipeline paralelo real.
-- **`valor` de `cad_lancamentos`.** A única coluna monetária do modelo é `double` na origem, com
-  três casas (`±11.846.195.394,628`, leitura de 2026-09-20 em [`POC.md`](POC.md)); o plano previa
-  `Numeric(18, 2)` com `pc.round` na carga, que muda as somas. `Numeric(18, 2)` com o arredondamento
-  no relatório, `Numeric(18, 3)` ou `Double` como o modelo já declara é decisão do usuário. As taxas
-  e os fatores continuam `Double` em qualquer caso.
-- **Chaves inteiras em `int32`.** `id_lancamento` chega a 1.113.599.996, 52% do `Integer`, com
-  141,9 milhões de linhas (ids esparsos); `next_ids` continua do máximo, e cada reexecução de um mês
-  consome outra faixa. A proposta é `BigInteger` nas chaves de `cad_lancamentos` e
-  `rel_contrato_operacao` no modelo corrigido; o cast de `int32` para `int64` na carga não perde
-  nada. Espera o usuário.
-- **A coluna de data de que `mes` deriva.** `data` em três tabelas e `data_base` em
-  `cad_lancamentos`; a auditoria e a carga inicial precisam dela, e o plano a supunha `data_ref`
-  por convenção. A proposta é a chave `month_column` em `Table.info["serialize_db"]`, obrigatória
-  nas tabelas particionadas. Espera o usuário.
-- **`schema.json` da origem.** O probe não o leu. Se ele guarda o esquema que o escritor usou (a
-  nulidade de `cad_contratos` nos arquivos difere do modelo, o que sugere outra fonte), vale colar o
-  conteúdo na conversa; a carga o ignora.
-- **Órfãos na base de desenvolvimento.** `cad_lancamentos` de `data_base` 2026-01-31 não tem
-  `cad_contratos` dessa data, e `desemb-999` não tem cadastro: a auditoria com `foreign_keys=True`
-  reprovaria a carga inicial, que registra os órfãos sem barrar. `cad_contratos (data, sistema,
-  contrato)` referencia `rel_contrato_operacao`, que não tem chave nessas colunas, e
-  `rel_contrato_operacao.contrato` tem mínimo abaixo do de `cad_contratos`. Se é defeito da base ou
-  do modelo, é pergunta para o usuário.
-- **A parte sub-microssegundo do `timestamp`.** O `INT96` guarda nanossegundos e não tem
-  estatística; a carga trunca a microssegundos e registra a regra, e a primeira carga real diz se
-  algum valor tinha a parte sub-microssegundo.
 - **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)).

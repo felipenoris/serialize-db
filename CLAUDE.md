@@ -181,7 +181,7 @@ research appends to the matching group.
 | `docs/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service (Delta via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and the maturity assessment of Delta against Iceberg with the re-evaluation trigger. |
 | `docs/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `docs/PLAN-STAGE-<n>.md`. |
 | `tests/model/` | The reference model: the declarative ORM models of the accounting, management and projection tables, moved out of the package on 2026-09-20. The tests hand it to the package API as a client library would hand its own models; the package holds no model. |
-| `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado` with the structure `probes/parquet_source.py` read in the dev base on 2026-09-20: the 14 tables with the read columns, types and nullability (12 match the reference model; `alembic_version` and `meta_update_status` are outside it), Hive partitions by `data_str` and `data_base_str` whose value lives only in the path and equals `data` or `data_base`, `chunk_<n>` files without zero padding, one row group, SNAPPY without dictionary, format 1.0, `INT96` timestamps without statistics, the `pandas` footer key, `schema.json` at the root, and the values the load handles (`valor` with three decimals, `fator` with five, `id_lancamento` up to 1,113,599,996, the orphan `desemb-999`). `write_source(root)` returns the files and row counts; `tests/test_source_db_projetado.py` checks the written files against the transcribed section 3 of the report. The material of the stage 7 test. |
+| `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado` with the structure `probes/parquet_source.py` read in the dev base on 2026-09-20: the 14 tables with the read columns, types and nullability (12 match the reference model; `alembic_version` and `meta_update_status` are outside it), Hive partitions by `data_str` and `data_base_str` whose value lives only in the path and equals `data` or `data_base`, `chunk_<n>` files without zero padding, one row group, SNAPPY without dictionary, format 1.0, `INT96` timestamps without statistics, the `pandas` footer key, the real `schema.json` of the previous library at the root (`source_db_projetado_schema.json`), and the values the load handles (`valor` with three decimals, `fator` with five, `id_lancamento` up to 1,113,599,996). The data is consistent with the reference model (unique keys, every foreign key satisfied, the four dates in every partitioned table, the N×N `rel_contrato_operacao` with dyadic `fator_rateio` summing to 1 per operation). `write_source(root)` returns the files and row counts; `tests/test_source_db_projetado.py` checks the written files against the transcribed section 3 of the report, the model's keys and the schema control. The material of the stage 7 test. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
 the differences from PostgreSQL, supported types with `DECIMAL` and JSON, DDL,
@@ -290,6 +290,11 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   expected value. A hand-written footer check failed first: `FileMetaData.metadata` carries
   `ARROW:schema`, which the Arrow schema metadata the probe reads does not. Read the file the way
   the instrument reads it, and assert in its vocabulary.
+- **The writer's own control file explains a difference before a hypothesis does** (2026-09-20).
+  Seven `cad_contratos` columns nullable in the files and `NOT NULL` in the model came from the
+  previous library's `schema.json`, the SQLAlchemy reflection of the source database, which also
+  lacked the model's composite foreign keys; one reply from the user closed two open questions.
+  Ask for the metadata beside the data before listing hypotheses about it.
 
 ## What the documents establish
 
@@ -533,7 +538,17 @@ with the pyarrow backend (user statement of 2026-09-20), so `types_mapper=pd.Arr
 native form, and the rule rests on the conversion being cheap, which the probe of that day measured
 (`docs/PLAN.md`, section "A troca de dados com o código cliente"). The same day the user moved the
 models to `tests/model/` as the reference model: the tests hand it to the package API as a client
-library would, and the package holds no model.
+library would, and the package holds no model. After the source base was read (2026-09-20) the user
+decided: partition by date as text `AAAA-MM-DD` like the reference base, the column and its date
+source declared by the client's model (`partition_by`, `partition_source`), so the library's unit is
+the partition and never the month; every numeric column stays `Double`, with no rounding and no
+fixed-precision `Numeric` (the package supports `Numeric`, and moving `valor` to `Numeric(18, 2)` is
+a future improvement); integer keys become `int64` in the Delta; `INT96` timestamps become `INT64`
+and their precision does not matter; nullability follows the model until the migration proves it
+problematic; the dev base's orphans are ignored and the test base is consistent, with the N×N
+`rel_contrato_operacao` whose `fator_rateio` sums to 1 per operation; `alembic_version` and
+`meta_update_status` are ignored; `schema.json` at the source root is the previous library's schema
+control in SQLAlchemy-reflection form, not Arrow.
 
 ## Naming decisions applied to the documents
 
@@ -541,7 +556,7 @@ The convention was applied to every example in `docs/` on 2026-09-19. ORM model 
 mixins (`Operacao`, `Lancamento`, `Rastreio`) keep Portuguese names: they are data-model artifacts,
 like tables and columns. Python variables, functions, parameters, modules, the proposed API
 (`Database`, `Execution`, `ingest`, `audit`, `publish`) and the keys of `Table.info["serialize_db"]`
-(`partition_by`, `sort_key`, `redshift`) are English. The library's own metadata is English (user
+(`partition_by`, `partition_source`, `sort_key`, `redshift`) are English. The library's own metadata is English (user
 decisions of 2026-09-19). A key that lives under `_serialize_db/` carries no prefix (`snapshots` in
 `_serialize_db/snapshots.json`); everything else the library writes carries the `serialize_db_`
 prefix: the commit keys `serialize_db_execution_id`, `serialize_db_input_versions` and
@@ -561,9 +576,9 @@ primitives of each stage in `docs/PLAN-STAGE-<n>.md`, and where the implementati
 them before planning a session. The next session starts stage 1 (`serialize_db.schema`) and
 stage 2 (`serialize_db.sql`) on local folders. The source base was read on 2026-09-20:
 `docs/POC.md` holds the reading, `docs/PLAN-STAGE-7.md` the layout the load reads (Hive by
-`data_str` and `data_base_str`, `chunk_<n>` files, `INT96` timestamps) and `docs/OPEN_QUESTIONS.md`
-the decisions it waits for (the type of `valor`, `BigInteger` keys, the key naming the date column
-`mes` derives from, `schema.json`, the orphans of the dev base).
+`data_str` and `data_base_str`, `chunk_<n>` files, `INT96` timestamps), and the premises of
+`docs/PLAN.md` the user's decisions of that day; the plan's unit is the partition
+(`publish_partition`, `partitions=`, `Execution(partition=...)`), never the month.
 
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
 --python 3.13 --with "deltalake==1.6.4" --with "duckdb==1.5.5" --with "pyarrow==25.0.1" ...`; the

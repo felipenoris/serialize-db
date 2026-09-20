@@ -17,7 +17,8 @@ class Operacao(Base):
     __table_args__ = {
         "info": {
             "serialize_db": {
-                "partition_by": ["mes"],
+                "partition_by": ["data_ref_str"],
+                "partition_source": "data_ref",
                 "sort_key": ["data_ref", "id_operacao"],
                 "redshift": {"diststyle": "KEY", "distkey": "id_cliente"},
             }
@@ -29,8 +30,12 @@ class Operacao(Base):
     id_cliente: Mapped[int] = mapped_column(BigInteger)
     valor: Mapped[Decimal] = mapped_column(Numeric(18, 2))
     descricao: Mapped[str | None] = mapped_column(String(200))
-    mes: Mapped[str] = mapped_column(String(7))
+    data_ref_str: Mapped[str] = mapped_column(String(10))
 ```
+
+A coluna de partição é uma data em texto `AAAA-MM-DD`, `strftime(partition_source, '%Y-%m-%d')`,
+nos moldes da base de referência (decisão de 2026-09-20); a biblioteca não fixa o nome nem a
+granularidade, e `mes` nos exemplos dos outros documentos é uma coluna de partição ilustrativa.
 
 O `sqlalchemy-redshift` aceita `redshift_diststyle`, `redshift_distkey`, `redshift_sortkey` e
 `redshift_interleaved_sortkey` como argumentos de `Table`. Guardar as opções em `info` mantém os
@@ -52,8 +57,8 @@ devolve duplicatas. `NOT NULL` é aplicado.
 A auditoria da execução é onde as chaves são aplicadas, e as consultas saem do próprio modelo:
 `table.primary_key`, os `UniqueConstraint` e os `ForeignKey`, sem uma segunda declaração. A chave
 `keys` de `Table.info["serialize_db"]` só acrescenta uma chave de negócio ou exclui uma existente.
-Uma chave cujas colunas não incluem a coluna de partição é conferida na tabela inteira, não só nos
-meses da execução, porque unicidade dentro do mês não é unicidade. A chave estrangeira é conferida
+Uma chave cujas colunas não incluem a coluna de partição é conferida na tabela inteira, não só nas
+partições da execução, porque unicidade dentro da partição não é unicidade. A chave estrangeira é conferida
 sob pedido, porque a tabela referenciada pode não estar no sandbox: só o que o pipeline usa é
 ingerido. O texto SQL de cada verificação é gerado por dialeto e pode ser impresso ou gravado, para
 depurar o comando e para o diff. As primitivas estão em `PLAN-STAGE-4.md`.
@@ -78,12 +83,12 @@ ART precisam caber em memória durante a criação.
 | `Integer` | `int32` | `integer` | `INTEGER` | `INTEGER` | |
 | `BigInteger` | `int64` | `long` | `BIGINT` | `BIGINT` | Tipos sem sinal do Arrow e do DuckDB ficam fora do contrato. |
 | `Boolean` | `bool` | `boolean` | `BOOLEAN` | `BOOLEAN` | |
-| `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Descarregar e recarregar pelo Redshift pode perder precisão. |
+| `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Descarregar e recarregar pelo Redshift pode perder precisão. O modelo de referência usa `Double` em toda coluna numérica (decisão de 2026-09-20); `Numeric(18, 2)` nas colunas contábeis é a melhoria futura. |
 | `Numeric(p, s)` | `decimal128(p, s)` | `decimal(p, s)` | `DECIMAL(p, s)` | `DECIMAL(p, s)` | `p` até 38. O delta-rs e o DuckDB gravam `DECIMAL(18, 2)` no tipo físico `INT64`; o PyArrow, em `FIXED_LEN_BYTE_ARRAY`. |
 | `String(n)` | `string` | `string` | `VARCHAR` | `VARCHAR(n)` | `n` em bytes no Redshift; auditoria de tamanho. |
 | `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | `TEXT` no Redshift vira `VARCHAR(256)`. |
 | `Date` | `date32` | `date` | `DATE` | `DATE` | |
-| `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | Cast explícito de nanossegundos (padrão do pandas) para microssegundos; o delta-rs aceita nanossegundos e grava microssegundos em silêncio. `timestamp_ntz` exige o recurso `timestampNtz` (leitor 3, escritor 7), que o delta-rs habilita ao gravar e o DuckDB lê como `TIMESTAMP`. |
+| `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | O `INT96` da base de origem, obsoleto no formato Parquet, vira `INT64` de microssegundos na carga inicial. Cast explícito de nanossegundos (padrão do pandas) para microssegundos; o delta-rs aceita nanossegundos e grava microssegundos em silêncio. `timestamp_ntz` exige o recurso `timestampNtz` (leitor 3, escritor 7), que o delta-rs habilita ao gravar e o DuckDB lê como `TIMESTAMP`. |
 | `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Gravar sempre em UTC; o `timestamp` do Delta é ajustado a UTC, e um fuso diferente entra como o mesmo instante. O `UNLOAD` descarta o fuso. |
 | `Uuid` | `string` | `string` | `VARCHAR` | `VARCHAR(36)` | O Redshift não tem tipo UUID. |
 | `JSON().with_variant(SUPER(), "redshift")` | `string` | `string` | `JSON` | `SUPER` | Texto JSON é a forma de troca, sem a extensão `arrow.json`; a validação é do DuckDB na carga e do `JSON_PARSE` no Redshift. Detalhes na seção seguinte. |

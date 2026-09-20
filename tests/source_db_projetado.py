@@ -9,16 +9,23 @@ nunca dentro do arquivo, igual a ``data`` ou ``data_base`` em toda linha da part
 não contíguos; vários arquivos ``chunk_<n>.parquet`` por partição, numerados de 0 sem zeros à
 esquerda, o último menor que os demais; um row group por arquivo, SNAPPY, sem dicionário, formato
 1.0, timestamps em ``INT96`` sem estatísticas, a chave ``pandas`` no rodapé e nenhum ``field_id``;
-``alembic_version`` e ``meta_update_status`` fora do modelo e ``schema.json`` solto na raiz.
+``alembic_version`` e ``meta_update_status`` fora do modelo, e na raiz o ``schema.json`` da
+biblioteca anterior, o arquivo real (``source_db_projetado_schema.json``): o controle de esquema
+no formato da reflexão do SQLAlchemy, com colunas, nulidade, chaves estrangeiras, índices e
+restrições de unicidade de cada tabela.
 
-Os valores são fictícios e determinísticos, e reproduzem o que a carga inicial tem de tratar:
-``valor`` com três casas decimais (o par extremo ``±11846195394.628``), ``fator`` com cinco,
+Os valores são fictícios, determinísticos e consistentes com o modelo de referência (decisão do
+usuário de 2026-09-20): toda chave estrangeira do modelo tem a linha referenciada, toda chave é
+única, e as quatro tabelas particionadas têm as mesmas quatro datas, para que cada ``data_base`` de
+``cad_lancamentos`` tenha os seus ``cad_contratos`` (a leitura mostrou 2026-01-31 só em
+``cad_lancamentos``). ``rel_contrato_operacao`` é a relação N×N entre contratos e operações da mesma
+data: toda operação tem contratos, todo contrato está em uma ou duas operações, e ``fator_rateio``
+soma 1 entre os contratos de cada operação. Os valores reproduzem o que a carga inicial tem de
+tratar: ``valor`` com três casas (o par extremo ``±11846195394.628``), ``fator`` com cinco,
 ``data_assinatura`` nula em mais da metade das linhas, ``meta`` sempre nula, ``id_lancamento`` até
-1.113.599.996, ``desemb-999`` em ``cad_lancamentos.contrato`` sem cadastro em ``cad_contratos``,
-lançamentos de ``data_base`` 2026-01-31 sem contratos dessa data, e as sete colunas de
-``cad_contratos`` declaradas anuláveis nos arquivos sem nulo algum. O ``timestamp`` tem precisão de
-microssegundo; a parte sub-microssegundo da origem é desconhecida, porque o ``INT96`` não tem
-estatística.
+1.113.599.996 em ``int32``, e as sete colunas de ``cad_contratos`` declaradas anuláveis nos arquivos
+sem nulo algum. O ``timestamp`` tem precisão de microssegundo; a parte sub-microssegundo da origem é
+desconhecida, porque o ``INT96`` não tem estatística.
 
 A partição de ``cad_lancamentos`` é por ``data_base``, não por ``data``: ``data`` é o mês projetado,
 sempre posterior a ``data_base``, até 2026-12-31.
@@ -29,6 +36,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import random
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,6 +48,7 @@ import pyarrow.parquet as pq
 CHUNK_ROWS = 20
 SEED = 20260920
 INT96_TIMESTAMP = pa.timestamp("ns")
+SCHEMA_CONTROL = Path(__file__).with_name("source_db_projetado_schema.json")
 
 
 @dataclass(frozen=True)
@@ -51,20 +60,22 @@ class Partition:
     values: tuple[str, ...]
 
 
+PARTITION_VALUES = ("2026-01-31", "2026-02-28", "2026-03-31", "2026-06-30")
 PARTITIONS: dict[str, Partition] = {
-    "cad_contratos": Partition("data_str", "data", ("2026-02-28", "2026-03-31", "2026-06-30")),
-    "cad_lancamentos": Partition("data_base_str", "data_base", ("2026-01-31", "2026-02-28", "2026-03-31", "2026-06-30")),
-    "cad_operacoes": Partition("data_str", "data", ("2026-02-28", "2026-03-31", "2026-06-30")),
-    "rel_contrato_operacao": Partition("data_str", "data", ("2026-02-28", "2026-03-31", "2026-06-30")),
+    "cad_contratos": Partition("data_str", "data", PARTITION_VALUES),
+    "cad_lancamentos": Partition("data_base_str", "data_base", PARTITION_VALUES),
+    "cad_operacoes": Partition("data_str", "data", PARTITION_VALUES),
+    "rel_contrato_operacao": Partition("data_str", "data", PARTITION_VALUES),
 }
 
-# Linhas por partição: 2026-01-31 de cad_lancamentos passa de dez chunks (chunk_10 e chunk_11 existem, e a ordem
-# alfabética os põe antes de chunk_2); 2026-02-28 de rel_contrato_operacao tem um chunk_1 de duas linhas.
+# Linhas por partição. 2026-01-31 de cad_lancamentos passa de dez chunks (chunk_10 e chunk_11 existem, e a ordem
+# alfabética os põe antes de chunk_2). rel_contrato_operacao deriva dos contratos: cada contrato numa operação e um em
+# quatro também na seguinte, 42 linhas em 2026-02-28, com um chunk_2 de duas linhas. Cada data tem mais contratos que
+# operações, para toda operação ter contrato.
 ROWS_PER_PARTITION: dict[str, dict[str, int]] = {
-    "cad_contratos": {"2026-02-28": 45, "2026-03-31": 50, "2026-06-30": 41},
+    "cad_contratos": {"2026-01-31": 38, "2026-02-28": 33, "2026-03-31": 50, "2026-06-30": 41},
     "cad_lancamentos": {"2026-01-31": 235, "2026-02-28": 60, "2026-03-31": 60, "2026-06-30": 60},
-    "cad_operacoes": {"2026-02-28": 70, "2026-03-31": 85, "2026-06-30": 65},
-    "rel_contrato_operacao": {"2026-02-28": 22, "2026-03-31": 100, "2026-06-30": 80},
+    "cad_operacoes": {"2026-01-31": 28, "2026-02-28": 25, "2026-03-31": 40, "2026-06-30": 30},
 }
 
 # O esquema de cada tabela como a leitura o mostrou: nome, tipo Arrow e nulidade, na ordem das colunas.
@@ -192,7 +203,6 @@ ALEMBIC_REVISION = "131d90070de7"
 
 SISTEMAS = (15, 43, 89)
 MAX_ID_LANCAMENTO = 1_113_599_996
-ORPHAN_CONTRATO = "desemb-999"
 EXTREME_VALOR = 11846195394.628
 WRITE_TIMESTAMP = dt.datetime(2026, 3, 18, 16, 53, 22, 296000)
 PROJECTION_HORIZON = dt.date(2026, 12, 31)
@@ -257,10 +267,20 @@ def month_ends_after(date: dt.date, until: dt.date = PROJECTION_HORIZON) -> list
         month += 1
         if month == 13:
             year, month = year + 1, 1
-        following = (dt.date(year + (month == 12), month % 12 + 1, 1) - dt.timedelta(days=1))
+        following = dt.date(year + (month == 12), month % 12 + 1, 1) - dt.timedelta(days=1)
         if following > until:
             return ends
         ends.append(following)
+
+
+def apportionment(count: int) -> list[float]:
+    """``count`` fatores de rateio que somam exatamente 1: metade para o primeiro e o resto repartido do mesmo modo.
+
+    As frações são diádicas (1, 1/2, 1/4, ...), exatas em ponto flutuante, e a soma por operação dá 1.0 sem erro.
+    """
+    if count == 1:
+        return [1.0]
+    return [0.5] + [factor / 2 for factor in apportionment(count - 1)]
 
 
 def as_pandas_wrote(table: pa.Table) -> pa.Table:
@@ -294,7 +314,7 @@ def write_chunks(folder: Path, table: pa.Table, chunk_rows: int = CHUNK_ROWS) ->
 def build_cad_contas() -> pa.Table:
     """102 contas com ids entre 1 e 106, ``numero`` único de 3 a 13 caracteres e nomes que se repetem."""
     ids = [i for i in range(1, 107) if i not in (2, 3, 7, 105)]
-    rows = {"id_conta": [], "nome": [], "numero": [], "permite_lancamentos": []}
+    rows: dict[str, list] = {"id_conta": [], "nome": [], "numero": [], "permite_lancamentos": []}
     for k, id_conta in enumerate(ids):
         letter = "ABCDEFGHIJKLMNOPQRST"[k // 6]
         depth = k % 6
@@ -356,17 +376,20 @@ def build_dimensions() -> dict[str, pa.Table]:
 
 
 def build_meta_update_status() -> pa.Table:
-    """21 registros de carga: um por tabela sem partição, um por partição das demais, com a partição em JSON."""
+    """O registro das cargas: uma linha por tabela sem partição, uma por partição das demais, com a partição em JSON.
+
+    Os ids seguem os 21 que a leitura mostrou e continuam do último, porque a base fictícia tem 16 partições.
+    """
     entries: list[tuple[str, str | None]] = [(table, None) for table in ("dom_hierarquias_contas", "dom_veiculos", "dom_mensuracoes", "dom_segmentos", "dom_negocios")]
     for table in ("cad_operacoes", "rel_contrato_operacao", "cad_contratos", "cad_lancamentos"):
         partition = PARTITIONS[table]
         entries.extend((table, json.dumps({partition.source: {"__type__": "date", "value": value}})) for value in partition.values)
     entries.extend((table, None) for table in ("cad_contas", "rel_contas_hierarquias", "cad_aliquotas"))
-    assert len(entries) == len(UPDATE_STATUS_IDS)
+    ids = [*UPDATE_STATUS_IDS, *range(UPDATE_STATUS_IDS[-1] + 1, UPDATE_STATUS_IDS[-1] + 1 + len(entries) - len(UPDATE_STATUS_IDS))]
     started = dt.datetime(2026, 4, 9, 20, 0, 23, 978000)
     return pa.table(
         {
-            "id_update_status": list(UPDATE_STATUS_IDS),
+            "id_update_status": ids,
             "table_name": [table for table, _ in entries],
             "partition": [partition for _, partition in entries],
             "timestamp": [started + dt.timedelta(days=k * 7, seconds=k * 61) for k in range(len(entries))],
@@ -380,10 +403,10 @@ def build_meta_update_status() -> pa.Table:
 
 
 def build_cad_operacoes() -> dict[str, pa.Table]:
-    """As operações de cada mês: numéricas de 11 dígitos e ``desemb-<data>-<n>``, com as taxas nulas em bloco."""
+    """As operações de cada data: numéricas de 11 dígitos e ``desemb-<data>-<n>``, com as taxas nulas em bloco."""
     tables = {}
     next_id = 10027979
-    for month_index, value in enumerate(PARTITIONS["cad_operacoes"].values):
+    for month_index, value in enumerate(PARTITION_VALUES):
         month = dt.date.fromisoformat(value)
         count = ROWS_PER_PARTITION["cad_operacoes"][value]
         rows: dict[str, list] = {name: [] for name in SCHEMAS["cad_operacoes"].names}
@@ -411,10 +434,10 @@ def build_cad_operacoes() -> dict[str, pa.Table]:
 
 
 def build_cad_contratos(rng: random.Random) -> dict[str, pa.Table]:
-    """Os contratos de cada mês: ``data`` igual à partição, ``data_assinatura`` nula em 7 de cada 13 linhas."""
+    """Os contratos de cada data: ``data`` igual à partição, ``data_assinatura`` nula em 7 de cada 13 linhas."""
     tables = {}
     next_id = 5786566
-    for month_index, value in enumerate(PARTITIONS["cad_contratos"].values):
+    for month_index, value in enumerate(PARTITION_VALUES):
         month = dt.date.fromisoformat(value)
         count = ROWS_PER_PARTITION["cad_contratos"][value]
         rows: dict[str, list] = {name: [] for name in SCHEMAS["cad_contratos"].names}
@@ -440,24 +463,31 @@ def build_cad_contratos(rng: random.Random) -> dict[str, pa.Table]:
 
 
 def build_rel_contrato_operacao(contratos: dict[str, pa.Table], operacoes: dict[str, pa.Table]) -> dict[str, pa.Table]:
-    """A relação de cada mês liga contratos e operações do mesmo mês; uma linha em onze cita um contrato sem cadastro."""
+    """A relação N×N de cada data: todo contrato numa operação, um em quatro também na seguinte, e os fatores somando 1.
+
+    As linhas saem agrupadas por operação, e ``apportionment`` reparte a operação entre os seus contratos.
+    """
     tables = {}
     next_id = 2951753
-    for value in PARTITIONS["rel_contrato_operacao"].values:
+    for value in PARTITION_VALUES:
         month = dt.date.fromisoformat(value)
-        count = ROWS_PER_PARTITION["rel_contrato_operacao"][value]
         contract_rows = contratos[value].to_pylist()
         operation_names = operacoes[value].column("operacao").to_pylist()
+        links: dict[str, list[dict]] = {name: [] for name in operation_names}
+        for j, contract in enumerate(contract_rows):
+            links[operation_names[j % len(operation_names)]].append(contract)
+            if j % 4 == 0:
+                links[operation_names[(j + 1) % len(operation_names)]].append(contract)
         rows: dict[str, list] = {name: [] for name in SCHEMAS["rel_contrato_operacao"].names}
-        for k in range(count):
-            contract = contract_rows[k % len(contract_rows)]
-            rows["id_rel_contrato_operacao"].append(next_id)
-            rows["data"].append(month)
-            rows["operacao"].append(operation_names[(k * 7) % len(operation_names)])
-            rows["sistema"].append(contract["sistema"])
-            rows["contrato"].append(str(10000001012 + k) if k % 11 == 10 else contract["contrato"])
-            rows["fator_rateio"].append((1.0, 0.5, -0.0)[0 if k % 3 else 1 + (k % 6 == 3)])
-            next_id += 17
+        for operation, contracts in links.items():
+            for contract, factor in zip(contracts, apportionment(len(contracts)), strict=True):
+                rows["id_rel_contrato_operacao"].append(next_id)
+                rows["data"].append(month)
+                rows["operacao"].append(operation)
+                rows["sistema"].append(contract["sistema"])
+                rows["contrato"].append(contract["contrato"])
+                rows["fator_rateio"].append(factor)
+                next_id += 17
         tables[value] = pa.table(rows, schema=SCHEMAS["rel_contrato_operacao"])
     return tables
 
@@ -465,19 +495,17 @@ def build_rel_contrato_operacao(contratos: dict[str, pa.Table], operacoes: dict[
 def build_cad_lancamentos(rng: random.Random, contratos: dict[str, pa.Table], contas: pa.Table) -> dict[str, pa.Table]:
     """Os lançamentos projetados de cada ``data_base``: ``data`` posterior à base, ``valor`` com três casas, ids esparsos.
 
-    O último id é ``MAX_ID_LANCAMENTO``. Os lançamentos de 2026-01-31 citam contratos de 2026-02-28, porque
-    ``cad_contratos`` não tem essa data; ``ORPHAN_CONTRATO`` aparece uma vez por partição.
+    O último id é ``MAX_ID_LANCAMENTO``. Cada lançamento cita um contrato de ``cad_contratos`` da mesma data, ou nenhum,
+    com ``sistema`` e ``contrato`` nulos juntos (o lançamento associado a uma área).
     """
-    values = PARTITIONS["cad_lancamentos"].values
     total = sum(ROWS_PER_PARTITION["cad_lancamentos"].values())
     ids = iter(1 + round(i * (MAX_ID_LANCAMENTO - 1) / (total - 1)) for i in range(total))
     postable = [row["id_conta"] for row in contas.to_pylist() if row["permite_lancamentos"] and row["id_conta"] >= 8]
-    contract_months = PARTITIONS["cad_contratos"].values
     tables = {}
-    for partition_index, value in enumerate(values):
+    for partition_index, value in enumerate(PARTITION_VALUES):
         base = dt.date.fromisoformat(value)
         horizon = month_ends_after(base)
-        contract_rows = contratos[value if value in contract_months else contract_months[0]].to_pylist()
+        contract_rows = contratos[value].to_pylist()
         count = ROWS_PER_PARTITION["cad_lancamentos"][value]
         rows: dict[str, list] = {name: [] for name in SCHEMAS["cad_lancamentos"].names}
         for j in range(count):
@@ -498,8 +526,8 @@ def build_cad_lancamentos(rng: random.Random, contratos: dict[str, pa.Table], co
             rows["id_segmento"].append(None if j % 500 == 137 else 1 + j % 5)
             rows["id_negocio"].append(None if j % 5 < 3 else 1 + j % 7)
             rows["data_base"].append(base)
-            rows["sistema"].append(None if no_contract or j % 60 == 33 else contract["sistema"])
-            rows["contrato"].append(ORPHAN_CONTRATO if j == 5 else None if no_contract else contract["contrato"])
+            rows["sistema"].append(None if no_contract else contract["sistema"])
+            rows["contrato"].append(None if no_contract else contract["contrato"])
             rows["area"].append(None if j % 400 == 186 else AREAS_LANCAMENTO[j % 4])
         tables[value] = pa.table(rows, schema=SCHEMAS["cad_lancamentos"])
     return tables
@@ -546,10 +574,6 @@ def write_source(root: Path) -> SourceBase:
             source.partition_rows[table][value] = data.num_rows
         source.rows[table] = sum(source.partition_rows[table].values())
 
-    # O arquivo solto que a origem tem na raiz; o conteúdo do real não foi lido, e a carga o ignora.
-    description = {
-        "origem": "base fictícia de tests/source_db_projetado.py",
-        "tabelas": {table: {"particao": PARTITIONS[table].column if table in PARTITIONS else None, "linhas": source.rows[table]} for table in SCHEMAS},
-    }
-    (root / "schema.json").write_text(json.dumps(description, ensure_ascii=False, indent=2), encoding="utf-8")
+    # O controle de esquema da biblioteca anterior, como está na raiz da base real; a carga o ignora.
+    shutil.copyfile(SCHEMA_CONTROL, root / "schema.json")
     return source
