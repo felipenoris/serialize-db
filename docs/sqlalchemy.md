@@ -103,9 +103,10 @@ Os modelos em `src/serialize_db/model/` declaram `deferrable=True, initially='DE
 chaves estrangeiras de `model_base_contabil.py` e `model_base_gerencial.py`, inclusive nas compostas,
 e em nenhuma de `model_db_projetado.py`. No DuckDB o `create_all` passa, porque a cláusula é
 descartada; no Redshift ela não existe. A [política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
-estrangeiras ficam de fora e a auditoria verifica a integridade referencial com o mês inteiro
-carregado, antes da publicação, que é a verificação adiada feita pelo próprio pipeline; no Redshift a
-chave é declarada só quando auditada, sem `deferrable`.
+estrangeiras ficam de fora e a auditoria verifica a integridade referencial sob pedido
+(`foreign_keys=True`), com a tabela referenciada ingerida na versão fixada, antes da publicação: é a
+verificação adiada feita pelo próprio pipeline. No Redshift a chave é declarada só quando auditada,
+sem `deferrable`.
 
 O nome do esquema vai em `Table.schema` ou em `MetaData(schema=...)`; `BLANK_SCHEMA` exclui uma tabela
 do padrão. A opção de execução `schema_translate_map` troca nomes de esquema por conexão, útil quando

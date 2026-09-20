@@ -27,8 +27,12 @@ primitivas de cada módulo, em [`PLAN.md`](PLAN.md).
   modelo: o diff aditivo é aplicado, o destrutivo exige a reescrita explícita.
 - **Ingestão seletiva.** Cada execução fixa a versão de cada tabela lida e leva ao motor só os meses
   que o pipeline usa: views ou tabelas materializadas no DuckDB, `COPY ... MANIFEST` no Redshift.
+- **Restrições aplicadas por consulta.** Nem o Parquet nem o Delta têm chave primária, unicidade ou
+  chave estrangeira, e o Redshift só as registra. A auditoria da execução as aplica com consultas
+  derivadas dos próprios modelos, e o texto SQL de cada verificação pode ser impresso ou gravado,
+  para depuração.
 - **Execução com sandbox, auditoria e publicação.** O pipeline roda num sandbox por execução. A
-  auditoria reprova sem tocar o Delta. A publicação substitui meses inteiros, um commit por tabela,
+  auditoria reprova sem tocar o Delta, e a publicação a exige aprovada. A publicação substitui meses inteiros, um commit por tabela,
   com `serialize_db_execution_id` e `serialize_db_input_versions` nos metadados. A reexecução é
   idempotente, e o conflito entre duas execuções do mesmo ambiente aborta a segunda.
 - **Publicação para clientes no Redshift.** A diferença entre a versão publicada e a atual diz quais
