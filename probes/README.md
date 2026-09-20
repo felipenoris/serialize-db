@@ -15,7 +15,7 @@ Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma che
 .venv/bin/python probes/space.py
 .venv/bin/python probes/bucket.py s3://bucket/prefixo
 .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo
-.venv/bin/python probes/redshift.py
+.venv/bin/python probes/redshift.py s3://bucket/prefixo
 .venv/bin/python probes/catalog.py
 ```
 
@@ -23,10 +23,10 @@ Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma che
 
 | Script | O que lê | Chamadas | Saída |
 | --- | --- | --- | --- |
-| `space.py` | O espaço visto de dentro: método de credenciais do `boto3`, região como o `boto3` a resolve, endpoint de credenciais do contêiner, IMDS, STS; o projeto por `sagemaker_studio.Project()` (papel, chave KMS, raiz S3, conexões), lido neste interpretador ou no do sistema; DNS dos endpoints regionais e se resolvem para IP privado (endpoint VPC de interface), TCP até o S3 e o proxy, internet; CPUs, memória, disco, `~/shared`, comandos; Python e pacotes deste interpretador e do sistema contra as versões fixadas; DuckDB com as extensões que carregam da pasta configurada, sem instalação automática. | `sts:GetCallerIdentity`; as chamadas que `sagemaker_studio` faz. | `output/space_*.txt` |
-| `bucket.py` | O bucket sob a raiz: região, versionamento, criptografia padrão, Object Lock, bloqueio de acesso público, propriedade de objetos; as regras de ciclo de vida e se alguma expiração alcança a raiz; o inventário sob a raiz por pasta de primeiro nível, as tabelas Delta (pastas com `_delta_log`), classes de armazenamento, objeto mais recente e a criptografia de uma amostra. | `s3:HeadBucket`, `GetBucketVersioning`, `GetBucketEncryption`, `GetObjectLockConfiguration`, `GetPublicAccessBlock`, `GetBucketOwnershipControls`, `GetBucketLifecycleConfiguration`, `ListBucket`, `HeadObject`. | `output/bucket_*.txt` |
+| `space.py` | O espaço visto de dentro: método e expiração das credenciais do `boto3`, região como o `boto3` a resolve, endpoint de credenciais do contêiner, IMDS, STS; o projeto por `sagemaker_studio.Project()` (papel, chave KMS, raiz S3, conexões), lido neste interpretador ou no do sistema; DNS dos endpoints regionais e se resolvem para IP privado (endpoint VPC de interface), TCP até o S3 e o proxy, internet; CPUs, memória, disco (repositório, `HOME`, `/tmp` e a pasta temporária do Python, onde fica o sandbox), limite de arquivos abertos, `~/shared`, comandos; Python e pacotes deste interpretador e do sistema contra as versões fixadas, mais os opcionais das etapas seguintes (ADBC, SQLGlot, pdoc); DuckDB com as extensões que carregam da pasta configurada, sem instalação automática. | `sts:GetCallerIdentity`; as chamadas que `sagemaker_studio` faz. | `output/space_*.txt` |
+| `bucket.py` | O bucket sob a raiz: região, versionamento, criptografia padrão, Object Lock, bloqueio de acesso público, propriedade de objetos; as regras de ciclo de vida e se alguma expiração alcança a raiz; o inventário sob a raiz por pasta de primeiro nível, as tabelas Delta (pastas com `_delta_log`), classes de armazenamento, objeto mais recente e a criptografia de uma amostra; as permissões do papel sob a raiz pela simulação de política do IAM (`ListBucket`, `GetObject`, `PutObject`, `DeleteObject`, `AbortMultipartUpload`, `kms:GenerateDataKey`, `kms:Decrypt`); a chave KMS padrão; a política do bucket com os `Deny` condicionados; os uploads multipart incompletos. | `s3:HeadBucket`, `GetBucketVersioning`, `GetBucketEncryption`, `GetObjectLockConfiguration`, `GetPublicAccessBlock`, `GetBucketOwnershipControls`, `GetBucketLifecycleConfiguration`, `ListBucket`, `HeadObject`, `GetBucketPolicy`, `ListMultipartUploads`; `sts:GetCallerIdentity`; `iam:SimulatePrincipalPolicy`; `kms:DescribeKey`. | `output/bucket_*.txt` |
 | `diagnose_aws.py` | O acesso que a suíte S3 exige: variáveis, região como o `boto3` e o delta-rs a resolvem, DNS, credenciais, a listagem de `<raiz>/serialize-db-poc/` pelo `boto3`, pelo delta-rs e pelo DuckDB, e o STS; o resumo diz se a suíte precisa de manutenção. Formato próprio, anterior a `probelib.py`. | `s3:ListBucket`, `sts:GetCallerIdentity`. | `output/diagnose_aws_*.txt` |
-| `redshift.py` | O Redshift visto de dentro: as variáveis `SERIALIZE_DB_REDSHIFT_*` e a conexão Redshift do projeto; clusters e workgroups com o papel IAM padrão do `COPY` e do `UNLOAD`; DNS e TCP; a sessão por senha ou por IAM com versão, usuário, banco, `search_path`, esquemas, privilégios no esquema do projeto, tabelas com o prefixo da biblioteca e `SUPER`. Só consulta visões de sistema; a autenticação por IAM pode criar o usuário do banco, e a checagem `RS-4` o diz. | `redshift:DescribeClusters`, `redshift-serverless:ListWorkgroups`, `GetNamespace`; `redshift:GetClusterCredentials` ou `redshift-serverless:GetCredentials` na autenticação por IAM; consultas `select` no banco. | `output/redshift_*.txt` |
+| `redshift.py` | O Redshift visto de dentro: as variáveis `SERIALIZE_DB_REDSHIFT_*` e a conexão Redshift do projeto; clusters e workgroups com o papel IAM padrão do `COPY` e do `UNLOAD`, os nós e o roteamento VPC; a Data API como caminho alternativo à porta 5439; DNS e TCP; a sessão por senha ou por IAM com a versão (o patch), usuário, banco, `search_path`, esquemas, privilégios no esquema do projeto e no banco (`CREATE`, `TEMP`), tabelas com o prefixo da biblioteca, `SUPER`, as configurações da sessão, `stl_load_errors` e os esquemas externos; o papel do `COPY` sobre a raiz S3 informada, pela simulação de política do IAM. Só consulta visões de sistema; a autenticação por IAM pode criar o usuário do banco, e a checagem `RS-4` o diz. | `redshift:DescribeClusters`, `redshift-serverless:ListWorkgroups`, `GetNamespace`, `redshift-data:ListDatabases`; `redshift:GetClusterCredentials` ou `redshift-serverless:GetCredentials` na autenticação por IAM; `iam:SimulatePrincipalPolicy`; consultas `select` no banco. | `output/redshift_*.txt` |
 | `catalog.py` | O gatilho de reavaliação de `docs/estrategia.md`: se o Glue (bancos, tabelas por formato, catálogos federados), o Athena (workgroups), o Lake Formation (locais registrados) e o S3 Tables respondem ao papel do projeto. | `glue:GetDatabases`, `GetTables`, `GetCatalogs`; `athena:ListWorkGroups`, `GetWorkGroup`; `lakeformation:ListResources`; `s3tables:ListTableBuckets`. | `output/catalog_*.txt` |
 
 `probelib.py` é a biblioteca comum: o relatório (`Report`), as esperas curtas do `boto3`
@@ -45,6 +45,7 @@ teste rebaixou o `duckdb` para 1.5.1.
 | `SERIALIZE_DB_REDSHIFT_WORKGROUP` | Workgroup serverless, autenticação por IAM (`redshift-serverless:GetCredentials`), com `_DATABASE`. |
 | `SERIALIZE_DB_REDSHIFT_SCHEMA` | Esquema do projeto, para os privilégios `USAGE` e `CREATE` e a lista de tabelas. |
 | `SERIALIZE_DB_REDSHIFT_CONNECTION` | Nome da conexão Redshift do projeto; sem ela, a única conexão Redshift, se houver. As variáveis têm precedência sobre a conexão. |
+| argumento `s3://bucket/prefixo`, ou `SERIALIZE_DB_TEST_S3_ROOT` | A raiz sobre a qual o papel padrão do `COPY` e do `UNLOAD` é simulado (`RS-11`). |
 
 Sem variável e sem conexão no projeto, o script lista o que as APIs mostram e não conecta.
 
@@ -64,10 +65,19 @@ Sem variável e sem conexão no projeto, o script lista o que as APIs mostram e 
 | Que criptografia e versionamento o bucket aplica? | `bucket.py`, `BK-4`, `BK-5` e `BK-7` |
 | O que já existe sob a raiz, e quantas tabelas Delta? | `bucket.py` seção 3, `BK-6` |
 | A suíte S3 roda como está neste ambiente? | `diagnose_aws.py`, resumo |
+| O papel tem `ListBucket`, `GetObject`, `PutObject` e `DeleteObject` sob a raiz, e as ações do KMS sobre a chave? | `bucket.py`, `BK-8` |
+| A chave KMS padrão do bucket está habilitada? | `bucket.py`, `BK-9` |
+| A política do bucket tem `Deny` condicionado a criptografia ou a TLS? Há uploads multipart incompletos sob a raiz? | `bucket.py`, `BK-10` e `BK-11` |
+| As credenciais expiram? Quanto disco a pasta temporária do sandbox tem, e quantos arquivos um processo pode abrir? | `space.py`, seções 1 e 4 |
 | Como o ambiente expõe o Redshift, e o que falta para conectar? | `redshift.py`, `RS-1` e seção 2 |
 | O cluster ou o workgroup tem papel IAM padrão para `COPY` e `UNLOAD`? | `redshift.py`, `RS-6` |
 | A sessão abre, e o papel tem `USAGE` e `CREATE` no esquema? | `redshift.py`, `RS-4` e `RS-5` |
 | `SUPER` está disponível? | `redshift.py`, `RS-7` |
+| O usuário tem `CREATE` e `TEMP` no banco? | `redshift.py`, `RS-9` |
+| A Data API responde, para o caso de a porta 5439 estar fechada? | `redshift.py`, `RS-10` |
+| O papel do `COPY` alcança a raiz S3? | `redshift.py`, `RS-11` |
+| Um `COPY` reprovado pode ser diagnosticado por `stl_load_errors`? | `redshift.py`, `RS-12` |
+| Há esquemas externos (Spectrum) no banco, e qual é o patch do Redshift? | `redshift.py`, `RS-13` e `REDSHIFT_VERSION` |
 | O Glue, o Athena, o Lake Formation ou o S3 Tables passaram a responder ao papel do projeto? | `catalog.py`, `CT-1` a `CT-6` |
 
 ## Acrescentar um probe

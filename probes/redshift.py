@@ -2,7 +2,10 @@
 
 Uso:
 
-    .venv/bin/python probes/redshift.py
+    .venv/bin/python probes/redshift.py [s3://bucket/prefixo]
+
+A raiz S3, pelo argumento ou por ``SERIALIZE_DB_TEST_S3_ROOT``, serve à simulação do papel do
+``COPY`` e do ``UNLOAD`` sobre ela.
 
 Só leitura: conecta e consulta visões de sistema, sem criar, alterar ou apagar nada no banco. Uma
 autenticação por IAM com criação automática de usuário deixa esse usuário no cluster; é o único
@@ -12,10 +15,14 @@ efeito colateral possível, e a checagem RS-4 o aponta. O relatório sai no term
 1. Configuração: as variáveis ``SERIALIZE_DB_REDSHIFT_*`` e a conexão Redshift do projeto
    (``sagemaker_studio``), de onde saem host, porta, banco, cluster ou workgroup.
 2. APIs: ``redshift:DescribeClusters``, ``redshift-serverless:ListWorkgroups`` e ``GetNamespace``,
-   com o papel IAM padrão que o ``COPY`` e o ``UNLOAD`` usam.
+   com o papel IAM padrão que o ``COPY`` e o ``UNLOAD`` usam, o roteamento VPC e os nós; a Data API
+   (``redshift-data:ListDatabases``) como caminho alternativo quando a porta 5439 está fechada.
 3. Rede: DNS dos endpoints regionais e TCP até o host.
 4. Sessão: ``redshift_connector`` com senha ou com IAM; versão, usuário, banco, ``search_path``,
-   esquemas, privilégios no esquema do projeto, tabelas com o prefixo da biblioteca e ``SUPER``.
+   esquemas, privilégios no esquema do projeto e no banco (``CREATE``, ``TEMP``), tabelas com o
+   prefixo da biblioteca, ``SUPER``, as configurações da sessão, ``stl_load_errors`` (o diagnóstico
+   de um ``COPY`` reprovado) e os esquemas externos.
+5. Papel do ``COPY`` e do ``UNLOAD`` sobre a raiz S3, pela simulação de política do IAM.
 
 Variáveis: ``SERIALIZE_DB_REDSHIFT_HOST``, ``_PORT`` (5439), ``_DATABASE``, ``_USER``, ``_PASSWORD``,
 ``_CLUSTER`` (identificador do cluster, autenticação IAM), ``_WORKGROUP`` (serverless, autenticação
@@ -28,7 +35,7 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -57,6 +64,7 @@ class Target:
     workgroup: str | None = None
     schema: str | None = None
     source: str = "nada"
+    roles: list[str] = field(default_factory=list)
 
 
 def configuration(report: Report) -> Target:
@@ -118,13 +126,14 @@ def apis(report: Report, target: Target) -> None:
     config = short_config()
     clusters = report.call("redshift.describe_clusters()", lambda: boto3.client("redshift", region_name=resolved, config=config).describe_clusters(), render=None)
     if clusters is not None:
-        rows = [["cluster", "estado", "endpoint", "banco", "versão", "papel IAM padrão", "papéis IAM", "vpc", "público", "criptografado"]]
+        rows = [["cluster", "estado", "endpoint", "banco", "versão", "nós", "papel IAM padrão", "papéis IAM", "vpc", "roteamento VPC", "público", "criptografado"]]
         for cluster in clusters.get("Clusters", []):
             endpoint = cluster.get("Endpoint") or {}
             rows.append([
                 cluster.get("ClusterIdentifier"), cluster.get("ClusterStatus"), f"{endpoint.get('Address')}:{endpoint.get('Port')}", cluster.get("DBName"),
-                cluster.get("ClusterVersion"), cluster.get("DefaultIamRoleArn") or "-", ", ".join(role.get("IamRoleArn", "") for role in cluster.get("IamRoles", [])) or "-",
-                cluster.get("VpcId"), cluster.get("PubliclyAccessible"), cluster.get("Encrypted"),
+                cluster.get("ClusterVersion"), f"{cluster.get('NumberOfNodes')} x {cluster.get('NodeType')}", cluster.get("DefaultIamRoleArn") or "-",
+                ", ".join(role.get("IamRoleArn", "") for role in cluster.get("IamRoles", [])) or "-",
+                cluster.get("VpcId"), cluster.get("EnhancedVpcRouting"), cluster.get("PubliclyAccessible"), cluster.get("Encrypted"),
             ])
         report.table(rows if len(rows) > 1 else [["(nenhum cluster provisionado visível)"]])
     workgroups = report.call("redshift-serverless.list_workgroups()", lambda: boto3.client("redshift-serverless", region_name=resolved, config=config).list_workgroups(), render=None)
@@ -148,6 +157,7 @@ def apis(report: Report, target: Target) -> None:
         report.note("RS-2", "APIs do Redshift", "sem resposta ou negadas: a autenticação por IAM depende delas; ver a seção final")
     roles = [cluster.get("DefaultIamRoleArn") for cluster in (clusters or {}).get("Clusters", [])] + [namespace.get("defaultIamRoleArn") for namespace in namespaces.values()]
     roles = [role for role in roles if role]
+    target.roles = roles
     if roles:
         report.ok("RS-6", "papel IAM padrão para COPY e UNLOAD", ", ".join(roles))
     elif answered and ((clusters or {}).get("Clusters") or (workgroups or {}).get("workgroups")):
@@ -158,6 +168,17 @@ def apis(report: Report, target: Target) -> None:
         names = [cluster.get("ClusterIdentifier") for cluster in (clusters or {}).get("Clusters", [])] + [workgroup.get("workgroupName") for workgroup in (workgroups or {}).get("workgroups", [])]
         if names:
             report.line(f"para conectar por IAM, informe SERIALIZE_DB_REDSHIFT_CLUSTER ou _WORKGROUP com um de: {', '.join(str(name) for name in names)}, e SERIALIZE_DB_REDSHIFT_DATABASE")
+    # A Data API executa SQL por HTTPS, sem a porta 5439: o caminho de reserva se a rede fechar a porta.
+    if target.database and (target.workgroup or (target.cluster and target.user)):
+        data = boto3.client("redshift-data", region_name=resolved, config=config)
+        if target.workgroup:
+            call = lambda: data.list_databases(WorkgroupName=target.workgroup, Database=target.database)  # noqa: E731
+        else:
+            call = lambda: data.list_databases(ClusterIdentifier=target.cluster, Database=target.database, DbUser=target.user)  # noqa: E731
+        listed = report.call("redshift-data.list_databases(...)", call, render=lambda found: ", ".join(found.get("Databases", [])) or "(nenhum banco listado)")
+        report.note("RS-10", "Data API", "responde: caminho alternativo por HTTPS, sem a porta 5439" if listed is not None else "sem resposta ou negada; ver a seção final")
+    else:
+        report.note("RS-10", "Data API", "não testada: precisa de SERIALIZE_DB_REDSHIFT_DATABASE e de _WORKGROUP, ou de _CLUSTER com _USER")
 
 
 def network(report: Report, target: Target) -> None:
@@ -225,7 +246,13 @@ def session(report: Report, target: Target) -> None:
         columns, rows = found
         return tabulate([columns, *[[str(value) for value in row] for row in rows]]) if rows else "(nenhuma linha)"
 
-    report.call("select version()", lambda: query("select version()"), render=render)
+    version = report.call("select version()", lambda: query("select version()"), render=render)
+    if version and version[1]:
+        # O patch (1.0.NNNNN) diz quais recursos existem: MERGE, SUPER, o COPY de Parquet com FILLRECORD.
+        import re
+
+        patch = re.search(r"Redshift (\d+\.\d+\.\d+)", str(version[1][0][0]))
+        report.value("REDSHIFT_VERSION", patch.group(1) if patch else str(version[1][0][0])[:80])
     report.call("select current_user, current_database(), current_schema()", lambda: query("select current_user, current_database(), current_schema()"), render=render)
     report.call("show search_path", lambda: query("show search_path"), render=render)
     report.call("esquemas visíveis", lambda: query("select nspname, pg_get_userbyid(nspowner) as owner from pg_namespace where nspname not like 'pg_%%' and nspname <> 'information_schema' order by 1"), render=render)
@@ -251,13 +278,71 @@ def session(report: Report, target: Target) -> None:
         report.ok("RS-7", "SUPER e JSON_PARSE", "disponíveis")
     else:
         report.note("RS-7", "SUPER e JSON_PARSE", "falhou; ver a seção final")
+    # As configurações que mudam o comportamento do SQL gerado: datas, fuso, tempo limite e sensibilidade a maiúsculas.
+    report.call(
+        "pg_settings (datestyle, timezone, statement_timeout, search_path, enable_case_sensitive_identifier)",
+        lambda: query("select name, setting from pg_settings where name in ('datestyle', 'timezone', 'statement_timeout', 'search_path', 'enable_case_sensitive_identifier', 'wlm_query_slot_count') order by 1"),
+        render=render,
+    )
+    report.call("pg_user do usuário atual", lambda: query("select usename, usesuper, usecreatedb from pg_user where usename = current_user"), render=render)
+    privileges = report.call(
+        "has_database_privilege(current_database(), CREATE | TEMP)",
+        lambda: query("select has_database_privilege(current_database(), 'CREATE') as create_db, has_database_privilege(current_database(), 'TEMP') as temp_db"),
+        render=render,
+    )
+    if privileges and privileges[1]:
+        create_db, temp_db = privileges[1][0]
+        report.note("RS-9", "privilégios no banco", f"CREATE={create_db} (esquema externo {'possível' if create_db else 'impossível'}), TEMP={temp_db} (staging temporária {'possível' if temp_db else 'impossível'})")
+    else:
+        report.note("RS-9", "privilégios no banco", "não lidos; ver a seção final")
+    # Um COPY reprovado explica o motivo em stl_load_errors (ou sys_load_error_detail); sem leitura, o diagnóstico depende do administrador.
+    errors = report.call("stl_load_errors dos últimos 30 dias", lambda: query("select count(*) from stl_load_errors where starttime > dateadd(day, -30, getdate())"), render=render)
+    if errors is not None:
+        report.note("RS-12", "diagnóstico do COPY", f"stl_load_errors legível: {errors[1][0][0]} erro(s) de carga em 30 dias")
+    else:
+        detail = report.call("sys_load_error_detail dos últimos 30 dias", lambda: query("select count(*) from sys_load_error_detail where start_time > dateadd(day, -30, getdate())"), render=render)
+        report.note("RS-12", "diagnóstico do COPY", "sys_load_error_detail legível" if detail is not None else "nem stl_load_errors nem sys_load_error_detail legíveis: o motivo de um COPY reprovado virá do administrador")
+    external = report.call("svv_external_schemas", lambda: query("select count(*) from svv_external_schemas"), render=render)
+    if external is not None:
+        report.note("RS-13", "esquemas externos (Spectrum)", f"{external[1][0][0]} no banco; a biblioteca não os usa, e a contagem mostra se o Glue chegou ao Redshift")
     connection.close()
+
+
+def copy_role(report: Report, target: Target) -> None:
+    """Se o papel padrão do ``COPY`` e do ``UNLOAD`` alcança a raiz S3 informada, pela simulação de política do IAM."""
+    import boto3
+
+    report.h1("Papel do COPY e do UNLOAD sobre a raiz S3")
+    root = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("SERIALIZE_DB_TEST_S3_ROOT", "")).rstrip("/")
+    if not root.startswith("s3://"):
+        report.note("RS-11", "papel do COPY sobre a raiz", "sem raiz: informe s3://bucket/prefixo como argumento ou em SERIALIZE_DB_TEST_S3_ROOT")
+        return
+    if not target.roles:
+        report.note("RS-11", "papel do COPY sobre a raiz", "sem papel padrão conhecido (RS-6): o COPY precisará de IAM_ROLE explícito, e a suíte Redshift é o teste")
+        return
+    bucket, _, prefix = root.removeprefix("s3://").partition("/")
+    resources = [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"]
+    iam = boto3.client("iam", config=short_config())
+    for role in target.roles:
+        found = report.call(
+            f"iam.simulate_principal_policy({role}: ListBucket, GetObject, PutObject em {root})",
+            lambda r=role: iam.simulate_principal_policy(PolicySourceArn=r, ActionNames=["s3:ListBucket", "s3:GetObject", "s3:PutObject"], ResourceArns=resources),
+            render=lambda found: tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]]),
+        )
+        if found is None:
+            report.note("RS-11", "papel do COPY sobre a raiz", f"{role}: simulação negada ou sem resposta; o primeiro COPY da suíte Redshift é o teste")
+            continue
+        denied = [item["EvalActionName"] for item in found.get("EvaluationResults", []) if item["EvalDecision"] != "allowed"]
+        if denied:
+            report.fail("RS-11", "papel do COPY sobre a raiz", f"{role}: {', '.join(denied)} negadas sob {root}")
+        else:
+            report.ok("RS-11", "papel do COPY sobre a raiz", f"{role}: ListBucket, GetObject e PutObject sob {root}")
 
 
 def main() -> int:
     report = Report("redshift", "o Redshift do projeto visto de dentro")
     target = Target()
-    for section in (configuration, apis, network, session):
+    for section in (configuration, apis, network, session, copy_role):
         try:
             result = section(report) if section is configuration else section(report, target)
             if section is configuration and isinstance(result, Target):

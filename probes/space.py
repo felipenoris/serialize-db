@@ -29,6 +29,7 @@ import os
 import platform
 import shutil
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -37,8 +38,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probelib  # noqa: E402
 from probelib import Report, describe_error, environment_rows, pretty, region, resolve, run_python, short_config, tcp_open  # noqa: E402
 
-PACKAGES = ("deltalake", "duckdb", "pyarrow", "boto3", "botocore", "redshift_connector", "sqlalchemy", "pandas", "sagemaker_studio", "awswrangler", "pytest")
-PINNED = {"deltalake": "1.6.4", "duckdb": "1.5.5", "pyarrow": "25.0.1"}
+# Os pacotes lidos em cada interpretador: os fixados pelo projeto, os que a suíte de estudo usa, os opcionais
+# das etapas seguintes (ADBC para leitura do Redshift, SQLGlot para conferir SQL, pdoc para a documentação) e os
+# que o espaço já traz.
+PACKAGES = (
+    "deltalake", "duckdb", "pyarrow", "boto3", "botocore", "redshift_connector", "sqlalchemy", "duckdb_engine",
+    "sqlalchemy_redshift", "pandas", "sqlglot", "adbc_driver_postgresql", "pdoc", "sagemaker_studio", "awswrangler", "pytest",
+)
+PINNED = {
+    "deltalake": "1.6.4", "duckdb": "1.5.5", "pyarrow": "25.0.1", "sqlalchemy": "2.0.54", "duckdb_engine": "0.17.0",
+    "sqlalchemy_redshift": "1.0.0", "pandas": "3.0.6",
+}
 ENDPOINT_SERVICES = ("s3", "sts", "redshift", "redshift-serverless", "redshift-data", "glue", "athena", "kms", "secretsmanager", "sagemaker", "datazone")
 EXTENSIONS = ("httpfs", "delta", "aws", "parquet", "json")
 VERSIONS_PROBE = r"""
@@ -77,6 +87,9 @@ def identity(report: Report) -> None:
     credentials = report.call("boto3.Session().get_credentials()", session.get_credentials, render=lambda found: f"método {found.method}" if found else "nenhuma")
     if credentials:
         report.ok("SP-1", "credenciais do boto3", f"método {credentials.method}")
+        # Credenciais temporárias expiram; o boto3 e o delta-rs renovam as do contêiner, e uma execução longa depende disso.
+        expiry = getattr(credentials, "_expiry_time", None)
+        report.value("CREDENTIAL_EXPIRY", str(expiry) if expiry else "(sem expiração exposta: estáticas, ou renovadas pelo provedor)")
     else:
         report.fail("SP-1", "credenciais do boto3", "nenhuma encontrada: papel, variáveis AWS_* ou perfil")
     resolved = region()
@@ -164,9 +177,17 @@ def machine(report: Report) -> None:
         rows.append(["memória", f"{os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 2**30:.1f} GiB"])
     except (ValueError, OSError, AttributeError):
         rows.append(["memória", "não lida"])
-    for label, path in (("repositório", probelib.REPO_ROOT), ("HOME", Path.home()), ("/tmp", Path("/tmp"))):
+    # O sandbox do DuckDB e a pasta de transbordo ficam na pasta temporária; o espaço livre dela limita a execução.
+    for label, path in (("repositório", probelib.REPO_ROOT), ("HOME", Path.home()), ("/tmp", Path("/tmp")), ("pasta temporária do Python", Path(tempfile.gettempdir()))):
         usage = shutil.disk_usage(path)
         rows.append([f"disco livre em {label}", f"{usage.free / 2**30:.1f} GiB de {usage.total / 2**30:.1f} GiB ({path})"])
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        rows.append(["arquivos abertos por processo (ulimit -n)", f"{soft} (máximo {hard}); o DuckDB abre um descritor por arquivo Parquet lido"])
+    except (ImportError, ValueError, OSError):
+        rows.append(["arquivos abertos por processo", "não lido"])
     shared = Path.home() / "shared"
     rows.append(["~/shared", ("montada" if os.path.ismount(shared) else "existe, sem montagem") if shared.exists() else "ausente"])
     for tool in ("uv", "git", "gh", "aws", "duckdb"):
@@ -212,7 +233,7 @@ def duckdb_section(report: Report) -> None:
         config["extension_directory"] = directory
     connection = duckdb.connect(config=config)
     rows: list[list[object]] = [["item", "valor"], ["versão", duckdb.__version__], ["plataforma", connection.execute("PRAGMA platform").fetchone()[0]]]
-    for setting in ("threads", "memory_limit", "extension_directory", "autoinstall_known_extensions", "autoload_known_extensions"):
+    for setting in ("threads", "memory_limit", "temp_directory", "extension_directory", "autoinstall_known_extensions", "autoload_known_extensions"):
         rows.append([setting, connection.execute(f"SELECT current_setting('{setting}')").fetchone()[0]])
     report.table(rows)
     rows = [["extensão", "carregou", "detalhe"]]
