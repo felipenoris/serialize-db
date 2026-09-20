@@ -1,8 +1,11 @@
 """O DuckDB como sandbox: a API Python que a biblioteca usa.
 
 Sem gravar arquivo: a configuração da conexão, Arrow na entrada e na saída, o leitor invalidado pelo
-comando seguinte, o tipo ``DECIMAL`` inferido de uma amostra do pandas contra o fixado pelo esquema
-Arrow, JSON, e o custo do ``executemany`` contra a carga por Arrow. Sob a raiz local (marcador
+comando seguinte e preservado num cursor próprio, a consulta em streaming (o primeiro lote antes do
+fim, a memória de um lote, medida em subprocesso), o ``INSERT`` alimentado por um leitor sobre um
+gerador Python (um comando só, e os lotes que o leitor não confere), o tipo ``DECIMAL`` inferido de
+uma amostra do pandas contra o fixado pelo esquema Arrow, JSON, e o custo do ``executemany`` contra a
+carga por Arrow. Sob a raiz local (marcador
 ``local``): ``COPY ... TO`` com ``RETURN_STATS`` e o esquema físico do Parquet gravado, o ``COPY``
 particionado por mês e um banco em arquivo com pasta de transbordo. O ``delta_scan`` está em
 ``poc_delta.py``.
@@ -11,6 +14,10 @@ particionado por mês e um banco em arquivo com pasta de transbordo. O ``delta_s
 from __future__ import annotations
 
 import decimal
+import json
+import subprocess
+import sys
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -96,6 +103,189 @@ def test_arrow_reader_is_invalidated_by_the_next_command(con: duckdb.DuckDBPyCon
     rest = reader.read_all()
     assert rest.num_rows == 0
     record("duckdb.arrow_reader_rows_after_next_command", rest.num_rows)
+
+
+def test_arrow_reader_on_its_own_cursor_survives_commands_on_another(con: duckdb.DuckDBPyConnection) -> None:
+    """O leitor preso a um cursor entrega o snapshot da sua consulta enquanto outro cursor insere na mesma tabela, cria, altera e apaga tabelas.
+
+    É o que isola o ``stream`` da etapa 4 dos comandos que a thread do cliente roda no cursor dela.
+    O cursor fechado no meio da leitura e o custo de abrir um cursor são leituras do relatório.
+    """
+    con.execute("CREATE TABLE numeros AS SELECT range AS id FROM range(1_000_000)")
+    reading, writing = con.cursor(), con.cursor()
+    reader = reading.execute("SELECT id FROM numeros").to_arrow_reader(100_000)
+    first = reader.read_next_batch()
+
+    writing.execute("INSERT INTO numeros SELECT range + 1_000_000 FROM range(10)")
+    writing.execute("CREATE TABLE outra AS SELECT 1 AS x")
+    writing.execute("ALTER TABLE numeros ADD COLUMN y INTEGER")
+    writing.execute("DROP TABLE outra")
+    assert first.num_rows + reader.read_all().num_rows == 1_000_000  # o snapshot da consulta, sem as dez linhas
+    assert writing.execute("SELECT count(*) FROM numeros").fetchone()[0] == 1_000_010
+
+    reader = reading.execute("SELECT id FROM numeros").to_arrow_reader(100_000)
+    reader.read_next_batch()
+    reading.close()
+    record("duckdb.arrow_reader_rows_after_its_cursor_closed", reader.read_all().num_rows)
+    started = time.perf_counter()
+    for _ in range(100):
+        con.cursor().close()
+    record("duckdb.cursor_open_and_close_100", f"{(time.perf_counter() - started) * 1e3:.1f} ms")
+    writing.close()
+
+
+# Roda num subprocesso, um cenário por chamada: a memória máxima do processo depende só do cenário.
+MEMORY_PROBE = r"""
+import json, resource, sys, time
+import duckdb
+scenario, rows = sys.argv[1], int(sys.argv[2])
+con = duckdb.connect(config={"threads": 2})
+sql = f"SELECT range AS id, range % 97 AS m, 'x' || (range % 1000) AS s FROM range({rows})"
+started = time.perf_counter()
+if scenario == "table":
+    n = con.execute(sql).to_arrow_table().num_rows
+else:
+    n = sum(batch.num_rows for batch in con.execute(sql).to_arrow_reader(100_000))
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1e6 if sys.platform == "darwin" else 1e3)
+print(json.dumps({"rows": n, "seconds": round(time.perf_counter() - started, 3), "peak_mb": round(peak)}))
+"""
+
+
+def test_streaming_query_starts_before_the_end_and_bounds_memory() -> None:
+    """Sem ``ORDER BY`` o primeiro lote chega antes de a consulta terminar, e o processo fica no tamanho de um lote; com ``ORDER BY`` a ordenação inteira precede o primeiro lote.
+
+    A memória é medida num subprocesso por cenário (``ru_maxrss``): a tabela inteira contra o leitor
+    em lotes, sobre as mesmas linhas.
+    """
+    rows = 10_000_000
+    con = duckdb.connect(config={"threads": 2})
+    sql = f"SELECT range AS id, range % 97 AS m, 'x' || (range % 1000) AS s FROM range({rows})"
+
+    def timing(query: str) -> tuple[float, float, float, int]:
+        started = time.perf_counter()
+        reader = con.execute(query).to_arrow_reader(100_000)
+        executed = time.perf_counter()
+        first = reader.read_next_batch()
+        first_batch = time.perf_counter()
+        count = first.num_rows + sum(batch.num_rows for batch in reader)
+        return executed - started, first_batch - executed, time.perf_counter() - started, count
+
+    executed, first, total, count = timing(sql)
+    assert count == rows and executed + first < total / 5
+    record("duckdb.stream_10M_rows_unordered", f"execute {executed:.3f} s, primeiro lote {first:.3f} s, total {total:.3f} s")
+
+    executed, first, total, count = timing(sql + " ORDER BY m, id")
+    assert count == rows and executed > total / 2
+    record("duckdb.stream_10M_rows_ordered", f"execute {executed:.3f} s, primeiro lote {first:.3f} s, total {total:.3f} s")
+    con.close()
+
+    peaks = {}
+    for scenario in ("table", "stream"):
+        completed = subprocess.run([sys.executable, "-c", MEMORY_PROBE, scenario, str(rows)], capture_output=True, text=True, check=True)
+        peaks[scenario] = json.loads(completed.stdout)
+    record("duckdb.peak_rss_10M_rows", {scenario: f"{reading['peak_mb']} MB em {reading['seconds']} s" for scenario, reading in peaks.items()})
+    assert peaks["stream"]["rows"] == peaks["table"]["rows"] == rows
+    assert peaks["stream"]["peak_mb"] < peaks["table"]["peak_mb"] / 2
+
+
+def test_insert_from_a_reader_is_one_statement_and_trusts_the_batches(con: duckdb.DuckDBPyConnection) -> None:
+    """Um ``INSERT ... SELECT`` de um ``RecordBatchReader`` sobre um gerador Python é um comando só: a falha do gerador deixa a tabela como estava.
+
+    O ``arrow_scan`` puxa o fluxo por uma thread de leitura antecipada do Arrow, que chama o gerador
+    em outra thread, puxa lotes além do que o comando consumiu e continua depois de o comando falhar:
+    o buffer foge da fila de quem alimenta o gerador, e é por isso que o ``Loader`` de
+    ``test_parallel.py`` insere lote a lote em vez de entregar um gerador ao DuckDB. O leitor não
+    confere os lotes contra o esquema declarado, e o ``arrow_scan`` os lê pelo esquema declarado: um
+    lote com as colunas em outra ordem entra com os bytes trocados, sem erro, e o ``cast`` de cada
+    lote para o esquema, antes do leitor, é a barreira. A nulidade do esquema Arrow não é conferida; a
+    coluna ``NOT NULL`` do DuckDB é. Um objeto com ``__arrow_c_stream__`` entra por ``register`` como
+    um leitor.
+    """
+    schema = pa.schema([("id", pa.int64()), ("valor", pa.float64())])
+    con.execute("CREATE TABLE destino (id BIGINT, valor DOUBLE)")
+    threads: set[int] = set()
+    delivered: list[int] = []
+
+    def generate(count: int, fail_at: int | None = None) -> Iterator[pa.RecordBatch]:
+        for k in range(count):
+            threads.add(threading.get_ident())
+            if k == fail_at:
+                raise RuntimeError(f"falha do cliente no lote {k}")
+            delivered.append(k)
+            yield pa.RecordBatch.from_pydict({"id": pa.array(range(k * 1000, (k + 1) * 1000), pa.int64()), "valor": pa.array([float(k)] * 1000)})
+
+    con.register("entrada", pa.RecordBatchReader.from_batches(schema, generate(50)))
+    con.execute("INSERT INTO destino BY NAME SELECT * FROM entrada")
+    con.unregister("entrada")
+    assert con.execute("SELECT count(*), sum(valor) FROM destino").fetchone() == (50_000, 1_225_000.0)
+    record("duckdb.generator_pulled_by", "a thread do chamador" if threads == {threading.get_ident()} else f"outra thread ({len(threads)}, a leitura antecipada do Arrow)")
+
+    # O gerador falha no lote 20: o comando falha inteiro, com a mensagem do cliente, e a contagem não muda.
+    delivered.clear()
+    con.register("entrada", pa.RecordBatchReader.from_batches(schema, generate(50, fail_at=20)))
+    with pytest.raises(duckdb.InvalidInputException, match="falha do cliente no lote 20"):
+        con.execute("INSERT INTO destino BY NAME SELECT * FROM entrada")
+    con.unregister("entrada")
+    assert con.execute("SELECT count(*) FROM destino").fetchone()[0] == 50_000 and len(delivered) == 20
+
+    # O comando falha no primeiro lote (valor fora do INTEGER), e a leitura antecipada segue puxando o gerador.
+    con.execute("CREATE TABLE estreita (id INTEGER, valor DOUBLE)")
+    delivered.clear()
+
+    def generate_wide(count: int) -> Iterator[pa.RecordBatch]:
+        for k in range(count):
+            delivered.append(k)
+            yield pa.RecordBatch.from_pydict({"id": pa.array([2**40] * 1000, pa.int64()), "valor": pa.array([0.0] * 1000)})
+
+    con.register("entrada", pa.RecordBatchReader.from_batches(schema, generate_wide(50)))
+    with pytest.raises(duckdb.ConversionException):
+        con.execute("INSERT INTO estreita BY NAME SELECT * FROM entrada")
+    at_failure = len(delivered)
+    time.sleep(0.5)
+    con.unregister("entrada")
+    assert len(delivered) > 1
+    record("duckdb.batches_pulled_ahead_of_a_failed_insert", f"{at_failure} na falha, {len(delivered)} meio segundo depois")
+
+    # Os lotes que o leitor não confere: a ordem trocada corrompe em silêncio; a coluna a mais falha.
+    con.execute("DELETE FROM destino")
+    swapped = pa.RecordBatch.from_pydict({"valor": pa.array([1.0]), "id": pa.array([1], pa.int64())})
+    con.register("entrada", pa.RecordBatchReader.from_batches(schema, [swapped]))
+    con.execute("INSERT INTO destino BY NAME SELECT * FROM entrada")
+    con.unregister("entrada")
+    corrupted = con.execute("SELECT id, valor FROM destino").fetchall()
+    assert corrupted != [(1, 1.0)]
+    record("duckdb.batch_with_swapped_columns_read_as", str(corrupted))
+    extra = pa.RecordBatch.from_pydict({"id": pa.array([1], pa.int64()), "valor": pa.array([1.0]), "x": ["z"]})
+    con.register("entrada", pa.RecordBatchReader.from_batches(schema, [extra]))
+    with pytest.raises(duckdb.InvalidInputException, match="3 children, expected 2"):
+        con.execute("INSERT INTO destino BY NAME SELECT * FROM entrada")
+    con.unregister("entrada")
+
+    # A nulidade declarada no esquema do leitor não é conferida; a coluna NOT NULL do DuckDB é.
+    strict = pa.schema([pa.field("id", pa.int64(), nullable=False), ("valor", pa.float64())])
+    with_null = pa.RecordBatch.from_pydict({"id": pa.array([1, None], pa.int64()), "valor": pa.array([1.0, 2.0])})
+    con.execute("DELETE FROM destino")
+    con.register("entrada", pa.RecordBatchReader.from_batches(strict, [with_null]))
+    con.execute("INSERT INTO destino BY NAME SELECT * FROM entrada")
+    con.unregister("entrada")
+    assert con.execute("SELECT count(*) FILTER (WHERE id IS NULL) FROM destino").fetchone()[0] == 1
+    con.execute("CREATE TABLE estrito (id BIGINT NOT NULL, valor DOUBLE)")
+    con.register("entrada", pa.RecordBatchReader.from_batches(schema, [with_null]))
+    with pytest.raises(duckdb.ConstraintException, match="NOT NULL constraint failed"):
+        con.execute("INSERT INTO estrito BY NAME SELECT * FROM entrada")
+    con.unregister("entrada")
+
+    class Stream:
+        def __init__(self, source: pa.RecordBatchReader) -> None:
+            self._source = source
+
+        def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+            return self._source.__arrow_c_stream__(requested_schema)
+
+    con.register("entrada", Stream(pa.RecordBatchReader.from_batches(schema, generate(3))))
+    con.execute("INSERT INTO estrito BY NAME SELECT * FROM entrada")
+    con.unregister("entrada")
+    assert con.execute("SELECT count(*) FROM estrito").fetchone()[0] == 3000
 
 
 def test_decimal_from_pandas_sample_versus_arrow_schema(con: duckdb.DuckDBPyConnection) -> None:

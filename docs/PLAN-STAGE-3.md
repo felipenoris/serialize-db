@@ -17,7 +17,8 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 | `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou vazia, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
 
 `serialize_db.delta` é a camada de tabela; `uri` é a pasta da tabela, `table` o `Table` do modelo,
-`data` uma `pa.Table` ou um `RecordBatchReader`.
+`data` uma `pa.Table`, um `RecordBatchReader` ou um objeto com `__arrow_c_stream__`, como o `BatchStream`
+de um motor.
 
 | Primitiva | O que faz |
 | --- | --- |

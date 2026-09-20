@@ -1,8 +1,10 @@
 """O PyArrow como forma canônica dos dados: esquema com metadados, cast seguro, leitores em lote e Parquet.
 
 Sem gravar arquivo: o esquema com nulidade, comentários e ``PARQUET:field_id`` nos metadados de campo,
-``Table.from_pylist`` (que exige dicionários), o cast seguro que recusa perda de dados e o
-``RecordBatchReader`` consumido uma vez. Sob a raiz local (marcador ``local``): o ``ParquetWriter``
+``Table.from_pylist`` (que exige dicionários), o cast seguro que recusa perda de dados, o
+``RecordBatchReader`` consumido uma vez, o ``RecordBatch`` como unidade da fronteira (o ``cast`` do
+lote, ``to_batches`` e ``from_batches`` sem cópia, o ciclo do lote com o pandas) e o leitor de
+``from_batches`` que não confere os lotes contra o esquema declarado. Sob a raiz local (marcador ``local``): o ``ParquetWriter``
 lote a lote com um row group por lote e o rodapé lido de volta, o mesmo conteúdo gravado pelo DuckDB
 para comparar os tipos físicos, e o dataset particionado ao estilo Hive.
 """
@@ -11,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import decimal
+import gc
 import re
 from pathlib import Path
 
@@ -37,6 +40,12 @@ def contract_schema() -> pa.Schema:
         ],
         metadata={"serialize_db_version": "1"},
     )
+
+
+def addresses(column: pa.ChunkedArray | pa.Array) -> set[int]:
+    """Os endereços dos buffers de uma coluna: iguais dos dois lados quando a conversão não copiou."""
+    chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
+    return {buffer.address for chunk in chunks for buffer in chunk.buffers() if buffer is not None}
 
 
 def test_schema_metadata_and_from_pylist() -> None:
@@ -122,9 +131,6 @@ def test_arrow_table_round_trips_through_pandas_without_copy() -> None:
         "descricao": ["a", None],
     }, schema=schema)
 
-    def addresses(column: pa.ChunkedArray) -> set[int]:
-        return {buffer.address for chunk in column.chunks for buffer in chunk.buffers() if buffer is not None}
-
     # A ida com ArrowDtype não copia: os buffers do DataFrame são os da tabela, e os tipos são os do contrato.
     frame = table.to_pandas(types_mapper=pd.ArrowDtype)
     assert [str(dtype) for dtype in frame.dtypes] == ["int64[pyarrow]", "date32[day][pyarrow]", "decimal128(18, 2)[pyarrow]", "string[pyarrow]"]
@@ -163,6 +169,83 @@ def test_record_batch_reader_is_consumed_once() -> None:
     reader = pa.RecordBatchReader.from_batches(batches[0].schema, generate())
     assert reader.schema == batches[0].schema
     assert reader.read_all().num_rows == 30
+
+
+def test_record_batch_cast_and_conversions_share_buffers() -> None:
+    """``RecordBatch.cast`` recusa o que ``Table.cast`` recusa; ``to_batches``, ``from_batches`` e o ciclo do lote com o pandas por ``ArrowDtype`` compartilham os buffers."""
+    schema = pa.schema([pa.field("n", pa.int64(), nullable=False), pa.field("valor", pa.decimal128(18, 2))])
+    batch = pa.RecordBatch.from_pydict({"n": pa.array([1, None], pa.int64()), "valor": pa.array([decimal.Decimal("1.5000"), None], pa.decimal128(20, 4))})
+    with pytest.raises(ValueError, match="non-nullable"):
+        batch.cast(schema)
+    with pytest.raises(ValueError, match="field names"):
+        pa.RecordBatch.from_pydict({"b": [1], "a": [2]}).cast(pa.schema([("a", pa.int64()), ("b", pa.int64())]))
+    wide = pa.RecordBatch.from_pydict({"valor": pa.array([decimal.Decimal("1.2345")], pa.decimal128(20, 4))})
+    narrow = pa.schema([("valor", pa.decimal128(18, 2))])
+    with pytest.raises(pa.ArrowInvalid):
+        wide.cast(narrow)
+    assert wide.cast(narrow, safe=False).column("valor").to_pylist() == [decimal.Decimal("1.23")]
+
+    # to_batches fatia a tabela sem copiar, e from_batches a remonta sobre os mesmos buffers.
+    table = sample_table()
+    batches = table.to_batches(max_chunksize=100_000)
+    assert [batch.num_rows for batch in batches] == [100_000] * 3
+    assert addresses(batches[0].column("valor")) <= addresses(table.column("valor"))
+    rebuilt = pa.Table.from_batches(batches)
+    assert rebuilt.equals(table) and addresses(rebuilt.column("valor")) == addresses(table.column("valor"))
+
+    # Um lote vai ao pandas e volta sem cópia, com os tipos do contrato, como a tabela inteira.
+    frame = batches[0].to_pandas(types_mapper=pd.ArrowDtype)
+    assert str(frame["valor"].dtype) == "decimal128(18, 2)[pyarrow]"
+    assert addresses(frame["valor"].array._pa_array) == addresses(batches[0].column("valor"))
+    returned = pa.RecordBatch.from_pandas(frame, preserve_index=False)
+    assert returned.schema.types == batches[0].schema.types
+    assert addresses(returned.column("valor")) == addresses(batches[0].column("valor"))
+
+
+def test_record_batch_reader_from_batches_trusts_the_batches() -> None:
+    """``from_batches`` não confere cada lote contra o esquema declarado: ``read_next_batch`` devolve o lote como veio, e só ``read_all`` acusa.
+
+    ``close`` não chega ao gerador, que só termina quando o leitor é descartado; um objeto com
+    ``__arrow_c_stream__`` é um leitor para ``from_stream`` (e para o ``register`` do DuckDB, em
+    ``test_duckdb.py``).
+    """
+    declared = pa.schema([("id", pa.int64()), ("valor", pa.float64())])
+    swapped = pa.RecordBatch.from_pydict({"valor": pa.array([1.0]), "id": pa.array([1], pa.int64())})
+
+    reader = pa.RecordBatchReader.from_batches(declared, [swapped])
+    assert reader.schema.names == ["id", "valor"]
+    assert reader.read_next_batch().schema.names == ["valor", "id"]
+    with pytest.raises(pa.ArrowInvalid, match="Schema at index 0 was different"):
+        pa.RecordBatchReader.from_batches(declared, [swapped]).read_all()
+
+    # close() não encerra o gerador: a leitura seguinte ainda entrega, e o finally roda no descarte.
+    events: list[str] = []
+
+    def generate():
+        try:
+            for k in range(3):
+                events.append(f"lote {k}")
+                yield pa.RecordBatch.from_pydict({"id": pa.array([k], pa.int64()), "valor": pa.array([0.0])})
+        finally:
+            events.append("finally")
+
+    reader = pa.RecordBatchReader.from_batches(declared, generate())
+    reader.read_next_batch()
+    reader.close()
+    assert events == ["lote 0"]
+    assert reader.read_next_batch().num_rows == 1 and events == ["lote 0", "lote 1"]
+    del reader
+    gc.collect()
+    assert events == ["lote 0", "lote 1", "finally"]
+
+    class Stream:
+        def __init__(self, source: pa.RecordBatchReader) -> None:
+            self._source = source
+
+        def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+            return self._source.__arrow_c_stream__(requested_schema)
+
+    assert pa.RecordBatchReader.from_stream(Stream(pa.RecordBatchReader.from_batches(declared, generate()))).read_all().num_rows == 3
 
 
 @pytest.mark.local
