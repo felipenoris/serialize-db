@@ -4,7 +4,8 @@ Os probes (``probes/``) leem o ambiente; as decisões que eles tomam sobre o que
 erro do ``boto3``, rotular um IP, montar as tabelas do inventário do bucket, interpretar o Object
 Lock ou a montagem de ``~/shared``) são funções puras, testadas aqui com respostas fabricadas. Um
 ``Report`` grava em ``probes/output/``; ``make_report`` o aponta para a pasta temporária do teste e
-devolve ``sys.stdout`` ao pytest no fim. Nenhum teste grava fora de ``tmp_path``.
+devolve ``sys.stdout`` ao pytest no fim. Nenhum teste grava fora de ``tmp_path``, e o do
+``parquet_source.py`` não abre arquivo algum: as suas funções recebem colunas e rodapés fabricados.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ sys.path.insert(0, str(PROBES))
 import bucket  # noqa: E402
 import catalog  # noqa: E402
 import diagnose_aws  # noqa: E402
+import parquet_source  # noqa: E402
 import probelib  # noqa: E402
 import redshift  # noqa: E402
 import space  # noqa: E402
@@ -429,3 +431,146 @@ def test_diagnose_describe_says_whether_the_service_answered() -> None:
     """No diagnóstico da suíte S3, só a falta de resposta pede manutenção da rede."""
     assert diagnose_aws.describe(client_error("AccessDenied")).startswith("o serviço respondeu com erro: ClientError:")
     assert diagnose_aws.describe(botocore.exceptions.EndpointConnectionError(endpoint_url="x")).startswith("sem resposta: EndpointConnectionError:")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# parquet_source.py: o caminho da partição, o esquema como chave, a diferença entre esquemas e a soma do rodapé
+
+
+def column(name: str, arrow_type: str = "int64", nullable: bool = True, physical: str = "INT64", logical: str = "None") -> parquet_source.Column:
+    """Uma coluna fabricada, como o probe a monta do esquema Arrow e da folha do esquema Parquet."""
+    return parquet_source.Column(name=name, arrow_type=arrow_type, nullable=nullable, physical=physical, logical=logical, converted="NONE", field_id="-")
+
+
+def reading(path: str, statistics: dict | None = None, columns: list | None = None) -> parquet_source.FileReading:
+    """O rodapé fabricado de um arquivo, com a partição derivada do caminho como o probe faz."""
+    keys, kind = parquet_source.partition_of(path)
+    return parquet_source.FileReading(
+        path=path,
+        size=10,
+        rows=sum(entry.get("rows", 0) for entry in (statistics or {}).values()),
+        row_groups=1,
+        created_by="parquet-cpp-arrow",
+        format_version="2.6",
+        columns=columns or [column("id")],
+        footer={},
+        partition=keys,
+        partition_kind=kind,
+        compression=("SNAPPY",),
+        encodings=("PLAIN",),
+        statistics=statistics or {},
+    )
+
+
+def test_partition_of_reads_hive_nameless_and_root() -> None:
+    """O caminho diz a partição: Hive dá nome e valor, pastas sem ``=`` dão níveis numerados, a raiz não dá nada."""
+    assert parquet_source.partition_of("mes=2026-08/part-0.parquet") == ((("mes", "2026-08"),), "hive")
+    assert parquet_source.partition_of("ano=2026/mes=08/x.parquet") == ((("ano", "2026"), ("mes", "08")), "hive")
+    assert parquet_source.partition_of("2026/08/dados.parquet") == ((("nível 1", "2026"), ("nível 2", "08")), "pastas sem nome")
+    assert parquet_source.partition_of("tabela.parquet") == ((), "sem partição")
+    # Um nível misto conta como sem nome: o probe não adivinha qual metade nomeia a coluna.
+    assert parquet_source.partition_of("2026/mes=08/x.parquet")[1] == "pastas sem nome"
+
+
+def test_logical_label_shortens_timestamp_and_decimal() -> None:
+    """O tipo lógico sai curto, guardando o fuso e a unidade, que decidem entre ``timestamp`` e ``timestamp_ntz``."""
+    verbose = "Timestamp(isAdjustedToUTC=false, timeUnit=microseconds, is_from_converted_type=false, force_set_converted_type=false)"
+    assert parquet_source.logical_label(verbose) == "Timestamp(us, utc=false)"
+    assert parquet_source.logical_label(verbose.replace("false, timeUnit=microseconds", "true, timeUnit=milliseconds")) == "Timestamp(ms, utc=true)"
+    assert parquet_source.logical_label("Decimal(precision=18, scale=2)") == "Decimal(18,2)"
+    assert parquet_source.logical_label("Int(bitWidth=32, isSigned=true)") == "Int(32, com sinal=true)"
+    assert parquet_source.logical_label("String") == "String"
+
+
+def test_schema_key_separates_files_by_name_type_and_nullability() -> None:
+    """Dois arquivos entram no mesmo grupo só quando nome, tipo, nulidade e tipo físico coincidem na mesma ordem."""
+    base = [column("id"), column("valor", "decimal128(18, 2)", physical="FIXED_LEN_BYTE_ARRAY", logical="Decimal(18,2)")]
+    assert parquet_source.schema_key(base) == parquet_source.schema_key(list(base))
+    assert parquet_source.schema_key(base) != parquet_source.schema_key(list(reversed(base)))
+    assert parquet_source.schema_key(base) != parquet_source.schema_key([column("id", nullable=False), base[1]])
+
+
+def test_schema_difference_names_missing_extra_retyped_and_reordered() -> None:
+    """A divergência é dita coluna a coluna: a que falta, a que sobra, a que mudou de tipo e a ordem trocada."""
+    reference = [column("id"), column("valor", "double", physical="DOUBLE"), column("mes", "string", physical="BYTE_ARRAY", logical="String")]
+
+    missing = parquet_source.schema_difference(reference, reference[:2])
+    assert ["mes", "ausente", "string no majoritário", "-"] in missing
+
+    extra = parquet_source.schema_difference(reference, [*reference, column("id_execucao", "string", physical="BYTE_ARRAY", logical="String")])
+    assert extra == [["id_execucao", "a mais", "-", "string"]]
+
+    retyped = parquet_source.schema_difference(reference, [reference[0], column("valor", "decimal128(18, 2)", physical="FIXED_LEN_BYTE_ARRAY", logical="Decimal(18,2)"), reference[2]])
+    assert retyped[0] == ["valor", "tipo", "double", "decimal128(18, 2)"]
+    assert retyped[1] == ["valor", "tipo físico", "DOUBLE/None", "FIXED_LEN_BYTE_ARRAY/Decimal(18,2)"]
+
+    nullability = parquet_source.schema_difference(reference, [column("id", nullable=False), reference[1], reference[2]])
+    assert nullability == [["id", "nulidade", "nulo", "não nulo"]]
+
+    # Mesmas colunas e mesmos tipos em outra ordem: uma leitura posicional, como o COPY do Redshift, quebra.
+    reordered = parquet_source.schema_difference(reference, [reference[1], reference[0], reference[2]])
+    assert reordered[0][:2] == ["(todas)", "ordem"]
+
+    assert parquet_source.schema_difference(reference, list(reference)) == []
+
+
+def test_merge_statistics_sums_rows_and_keeps_the_extremes() -> None:
+    """O rodapé de vários arquivos vira uma entrada por coluna: linhas e nulos somam, mínimo e máximo são os extremos."""
+    merged = parquet_source.merge_statistics(
+        [
+            reading("mes=2026-07/a.parquet", {"valor": {"rows": 100, "nulls": 3, "min": 5, "max": 50, "distinct": 40}}),
+            reading("mes=2026-08/b.parquet", {"valor": {"rows": 200, "nulls": 0, "min": 1, "max": 30, "distinct": 70}}),
+        ]
+    )
+    assert merged["valor"]["rows"] == 300
+    assert merged["valor"]["nulls"] == 3 and merged["valor"]["nulls_known"]
+    assert (merged["valor"]["min"], merged["valor"]["max"]) == (1, 50)
+    # O maior visto num arquivo é um piso da cardinalidade da tabela; a soma contaria duas vezes o valor repetido.
+    assert merged["valor"]["distinct"] == 70
+    assert merged["valor"]["without"] == 0
+
+
+def test_merge_statistics_counts_the_files_without_min_and_max() -> None:
+    """Um arquivo sem estatística de mínimo e máximo é contado, para o leitor saber que a faixa é parcial."""
+    merged = parquet_source.merge_statistics(
+        [
+            reading("a.parquet", {"descricao": {"rows": 10, "nulls": None, "min": None, "max": None, "distinct": None}}),
+            reading("b.parquet", {"descricao": {"rows": 10, "nulls": 2, "min": "a", "max": "z", "distinct": None}}),
+        ]
+    )
+    assert merged["descricao"]["without"] == 1
+    assert (merged["descricao"]["min"], merged["descricao"]["max"]) == ("a", "z")
+    assert merged["descricao"]["nulls"] == 2
+
+    # Sem nulo conhecido em arquivo algum, a contagem fica sem verdicto em vez de sair como zero.
+    unknown = parquet_source.merge_statistics([reading("a.parquet", {"x": {"rows": 10, "nulls": None, "min": 1, "max": 2, "distinct": None}})])
+    assert unknown["x"]["nulls_known"] is False
+
+
+def test_format_value_decodes_bytes_and_cuts_long_text() -> None:
+    """Um valor de estatística cabe na célula: bytes viram texto, o ilegível vira hexadecimal, o longo é cortado."""
+    assert parquet_source.format_value(None) == "-"
+    assert parquet_source.format_value(b"2026-08") == "2026-08"
+    assert parquet_source.format_value(b"\xff\xfe").startswith("0x")
+    assert parquet_source.format_value("linha\nquebrada") == "linha\\nquebrada"
+    assert parquet_source.format_value("x" * 100, limit=10) == "x" * 9 + "…"
+
+
+def test_partition_values_lists_each_value_once_in_order() -> None:
+    """Os valores de cada coluna de partição saem sem repetição, na ordem em que os arquivos os trouxeram."""
+    values = parquet_source.partition_values(
+        [reading("mes=2026-07/a.parquet"), reading("mes=2026-07/b.parquet"), reading("mes=2026-06/c.parquet")]
+    )
+    assert values == {"mes": ["2026-07", "2026-06"]}
+
+
+def test_parse_reads_the_root_and_the_options() -> None:
+    """A linha de comando: a raiz é obrigatória, ``--sample`` e ``--files`` pedem número, e o resto é uso errado."""
+    assert parquet_source.parse(["probe", "/base"]) == ("/base", 0, parquet_source.DEFAULT_FILE_ROWS)
+    assert parquet_source.parse(["probe", "/base", "--sample", "500"]) == ("/base", 500, parquet_source.DEFAULT_FILE_ROWS)
+    assert parquet_source.parse(["probe", "--files", "5", "s3://bucket/prefixo"]) == ("s3://bucket/prefixo", 0, 5)
+    assert parquet_source.parse(["probe"]) is None
+    assert parquet_source.parse(["probe", "/base", "--sample"]) is None
+    assert parquet_source.parse(["probe", "/base", "--sample", "x"]) is None
+    assert parquet_source.parse(["probe", "/base", "/outra"]) is None
+    assert parquet_source.parse(["probe", "/base", "--desconhecida"]) is None
