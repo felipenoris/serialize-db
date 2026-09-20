@@ -65,7 +65,7 @@ foi medido em [`POC.md`](POC.md).
 Todas dependem de uma execução da suíte contra o Redshift do ambiente alvo, que ainda não houve; o
 caminho de conexão está fixado desde 2026-09-20 ([`../examples/`](../examples/)), e
 `tests/proof_of_concept/test_redshift.py` tem um teste por pergunta. As perguntas de S3 foram
-respondidas em 2026-09-19. A [etapa 0](PLAN-STAGE-0.md) as agrupa por comando.
+respondidas em 2026-09-19 ([`POC.md`](POC.md)). A [etapa 0](PLAN-STAGE-0.md) as agrupa por comando.
 
 - Se o `COPY` de Parquet aceita lista de colunas: o `awswrangler` emite
   `COPY tabela (colunas) ... FORMAT AS PARQUET`, e a referência descreve a lista só para arquivos

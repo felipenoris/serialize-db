@@ -45,9 +45,10 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   outro caminho de autenticação entra na biblioteca sem ter rodado no ambiente alvo. A conexão roda
   `USE datalake_rw_shared` e cita `sbx_aco_decon.<tabela>`; o nome em três partes fica para uma
   sessão aberta em outro banco, como a Data API. A escrita segue o que um datashare aceita, com o
-  `COPY` sem cláusula `COMPUPDATE` e transação explícita ([`redshift.md`](redshift.md)). A Data API
-  fica fora da biblioteca: ela devolve `DECIMAL` e data e hora como texto e limita o resultado a
-  500 MB, o que não serve à troca de lotes Arrow.
+  `COPY` sem cláusula `COMPUPDATE` e transação explícita, e o `COPY` e o `UNLOAD` alcançam o S3
+  pelas credenciais de quem chama, porque o namespace não tem papel IAM associado
+  ([`redshift.md`](redshift.md)). A Data API fica fora da biblioteca: ela devolve `DECIMAL` e data e
+  hora como texto e limita o resultado a 500 MB, o que não serve à troca de lotes Arrow.
 - **Nenhum serviço de catálogo está habilitado.** A camada de tabela não depende de serviço, e o
   Delta atende sem código próprio. O Iceberg com catálogo em arquivo fica documentado em
   `estrategia.md` e volta à mesa se o Glue ou o S3 Tables forem habilitados; `probes/catalog.py`
