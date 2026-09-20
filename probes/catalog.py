@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probelib import Report, describe_error, pretty, region, resolve, short_config  # noqa: E402
+from probelib import Report, describe_error, dns_rows, pretty, region, short_config  # noqa: E402
 
 SERVICES = ("glue", "athena", "lakeformation", "s3tables")
 MAX_DATABASES = 5
@@ -38,16 +38,8 @@ def network(report: Report, resolved: str | None) -> None:
     if not resolved:
         report.line("sem região, sem endpoints a resolver")
         return
-    rows = [["nome", "endereços", "tipo"]]
-    for service in SERVICES:
-        name = f"{service}.{resolved}.amazonaws.com"
-        try:
-            addresses, private = resolve(name)
-            rows.append([name, ", ".join(addresses[:4]), "privado: endpoint VPC de interface com DNS privado" if private else "público"])
-        except OSError as error:
-            rows.append([name, f"não resolve: {error}", "-"])
-            report.failures.append((f"dns {name}", describe_error(error)))
-    report.table(rows)
+    rows, _ = dns_rows([f"{service}.{resolved}.amazonaws.com" for service in SERVICES], public="público: só pela internet ou pelo proxy")
+    report.table([["nome", "endereços", "tipo"], *rows])
 
 
 def table_format(table: dict) -> str:
@@ -69,7 +61,7 @@ def glue(report: Report, resolved: str | None) -> None:
     client = boto3.client("glue", region_name=resolved, config=short_config())
     databases = report.call("glue.get_databases(MaxResults=50)", lambda: client.get_databases(MaxResults=50).get("DatabaseList", []), render=lambda found: pretty([{key: item.get(key) for key in ("Name", "LocationUri", "CatalogId", "CreateTime")} for item in found]))
     if databases is None:
-        report.note("CT-1", "Glue", "sem resposta ou negado: sem catálogo Glue para o papel do projeto")
+        report.note("CT-1", "Glue", f"não lido: {report.last_reason}; sem catálogo Glue para o papel do projeto")
         report.note("CT-2", "tabelas Iceberg no Glue", "não lidas")
     else:
         report.ok("CT-1", "Glue", f"respondeu com {len(databases)} banco(s)")
@@ -98,7 +90,7 @@ def athena(report: Report, resolved: str | None) -> None:
     client = boto3.client("athena", region_name=resolved, config=short_config())
     groups = report.call("athena.list_work_groups()", lambda: client.list_work_groups().get("WorkGroups", []), render=lambda found: pretty([{key: item.get(key) for key in ("Name", "State", "EngineVersion")} for item in found]))
     if groups is None:
-        report.note("CT-3", "Athena", "sem resposta ou negado")
+        report.note("CT-3", "Athena", f"não lido: {report.last_reason}")
         return
     report.ok("CT-3", "Athena", f"respondeu com {len(groups)} workgroup(s)")
     for group in groups[:3]:
@@ -116,7 +108,7 @@ def lake_formation(report: Report, resolved: str | None) -> None:
     client = boto3.client("lakeformation", region_name=resolved, config=short_config())
     resources = report.call("lakeformation.list_resources()", lambda: client.list_resources().get("ResourceInfoList", []), render=lambda found: pretty([{key: item.get(key) for key in ("ResourceArn", "RoleArn", "HybridAccessEnabled", "LastModified")} for item in found]))
     if resources is None:
-        report.note("CT-4", "Lake Formation", "sem resposta ou negado")
+        report.note("CT-4", "Lake Formation", f"não lido: {report.last_reason}")
     else:
         report.note("CT-4", "Lake Formation", f"{len(resources)} local(is) registrado(s)")
 
@@ -127,7 +119,7 @@ def s3_tables(report: Report, resolved: str | None) -> None:
     report.h1("S3 Tables")
     buckets = report.call("s3tables.list_table_buckets()", lambda: boto3.client("s3tables", region_name=resolved, config=short_config()).list_table_buckets().get("tableBuckets", []), render=lambda found: pretty([{key: item.get(key) for key in ("name", "arn", "createdAt")} for item in found]))
     if buckets is None:
-        report.note("CT-5", "S3 Tables", "sem resposta, negado ou sem o serviço neste boto3")
+        report.note("CT-5", "S3 Tables", f"não lido: {report.last_reason}")
     else:
         report.note("CT-5", "S3 Tables", f"{len(buckets)} table bucket(s)")
 

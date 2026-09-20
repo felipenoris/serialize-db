@@ -127,9 +127,9 @@ dates, commands, quoted output and a log entry's provenance are never cut; the w
 9. **Shorter is the goal; a fact removed is a defect.** When a cut would drop a measurement, an
    identifier or a verdict, keep the sentence.
 
-## `prompts.md`
+## `secrets/`
 
-Never read the file `prompts.md`.
+Never read the contents of the `secrets` folder.
 
 # Claude Memory
 
@@ -148,7 +148,7 @@ research appends to the matching group.
 | --- | --- |
 | `README.md` | `uv init --python 3.13`, `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with one command per suite, the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md` in the shape of the `aws/` scripts of felipenoris/AWS-DataScience: `space.py` (the space from inside: credentials and their expiry, region, project, network, machine with temp-folder space and open-file limit, pinned and optional packages, DuckDB extensions), `bucket.py` (the bucket under the root: settings, lifecycle, inventory, the role's permissions by IAM policy simulation, the KMS key, the bucket policy, incomplete uploads), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, the Data API, the session with database privileges, settings, load-error views and external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md` in the shape of the `aws/` scripts of felipenoris/AWS-DataScience: `space.py` (the space from inside: credentials and their expiry, region, project with one row per connection, network, machine with temp-folder space and open-file limit, the `dev` group of `pyproject.toml` checked for presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (the bucket under the root: settings, lifecycle, inventory, versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM policy simulation or what the run itself proved, the KMS key, the bucket policy, incomplete uploads), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection with its data parsed as a dict, JDBC URL and credentials secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, whether the Redshift APIs have VPC endpoints (`RS-14`), the Data API, the session with database privileges, settings, load-error views and external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`, where DNS, TCP and internet results are readings in the tables, never failed calls, and each failed call leaves `report.last_reason` for the check that interprets it. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -225,6 +225,13 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   through the PyCapsule interface, `partition.mes` and `size_bytes` in
   `get_add_actions(flatten=True)`, SUPER binds rendered as `json_parse(%s)`. Read the study suite
   of a library before writing code against its API.
+- **A probe's first real run tests its parsing and its verdicts** (2026-09-20). The lab run showed
+  the project connection data serialized as a repr string, unreadable by `find_values`; DNS, TCP
+  and internet readings counted as failed calls (exit code 1 in the target, where they always
+  fail); the pin list had drifted from `pyproject.toml` and missed an absent `redshift_connector`;
+  and check `BK-11` had no branch for a denied call. Serialize data as data, make expected
+  conditions readings, derive lists from the source of truth, and give every check a branch for
+  the denied call.
 
 ## What the documents establish
 
@@ -537,7 +544,21 @@ the same pinned versions.
   (ignored), and `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored, which is harmless. System
   Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0, DuckDB 1.5.4, PyArrow 21.0.0 and
   redshift_connector 2.1.10 preinstalled.
-- `gh` is installed and authenticated as the user, and `git push` over HTTPS works through it.
+- `gh` was installed and authenticated as the user on 2026-09-19, and `git push` over HTTPS worked
+  through it; the probe of 2026-09-20 found no `gh` on the PATH, so the install did not persist or
+  lives outside that PATH.
+- Probe readings of 2026-09-20 in the same space: IMDS blocked (`EINVAL`), `pypi.org` and
+  `github.com` do not resolve locally while the proxy reaches PyPI; 4 vCPUs, 15.4 GiB, `/tmp` with
+  37 GiB, `ulimit -n` 99999; the prepared `.venv` lacked redshift_connector, sqlalchemy,
+  duckdb_engine, sqlalchemy_redshift and pandas until `uv sync --group dev`; the bucket is versioned
+  (sample `VersionId`), SSE-KMS with the project key and bucket key on, and the role cannot read
+  versioning, lifecycle, policy, ownership or multipart uploads, simulate policies or describe the
+  key; Glue answers with database `mydatabase` (one Parquet table) and no federated catalog, Athena
+  with three workgroups, Lake Formation and S3 Tables deny; no Redshift cluster or workgroup, and
+  the Redshift API endpoints resolve to public IPs (no interface endpoint), so IAM authentication
+  and the Data API depend on the proxy; STS, Glue, Athena, KMS, Secrets Manager, DataZone, Lake
+  Formation and S3 Tables have interface endpoints. This lab is not the target: the target has
+  Redshift and no internet (user statement of 2026-09-20).
 
 ## Questions the official documentation does not answer
 

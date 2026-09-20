@@ -70,19 +70,46 @@ def answered(error: BaseException) -> bool:
     return isinstance(error, botocore.exceptions.ClientError)
 
 
+def unanswered(error: BaseException) -> bool:
+    """Se o boto3 não obteve resposta (rede, proxy, tempo esgotado), e não um erro local como credencial ausente."""
+    try:
+        import botocore.exceptions
+    except ImportError:
+        return False
+    if not isinstance(error, botocore.exceptions.BotoCoreError):
+        return False
+    name = type(error).__name__
+    return any(word in name for word in ("Timeout", "Connection", "Endpoint", "SSL", "Proxy"))
+
+
+def error_code(error: BaseException) -> str | None:
+    """Código de erro do serviço numa ``ClientError`` do botocore; ``None`` para os demais erros."""
+    response = getattr(error, "response", None)
+    code = response.get("Error", {}).get("Code") if isinstance(response, dict) else None
+    return str(code) if code else None
+
+
 def describe_error(error: BaseException) -> str:
-    """Erro numa linha; para o boto3, diz se o serviço respondeu com erro ou se não houve resposta."""
+    """Erro numa linha; para o boto3, diz se o serviço respondeu com erro, se não houve resposta ou se o erro é local."""
     text = re.sub(r"\x1b\[[0-9;]*m", "", " ".join(str(error).split()))[:300]
     if answered(error):
         return f"o serviço respondeu com erro: {type(error).__name__}: {text}"
-    try:
-        import botocore.exceptions
-
-        if isinstance(error, botocore.exceptions.BotoCoreError):
-            return f"sem resposta: {type(error).__name__}: {text}"
-    except ImportError:
-        pass
+    if unanswered(error):
+        return f"sem resposta: {type(error).__name__}: {text}"
     return f"{type(error).__name__}: {text}"
+
+
+def reason(error: BaseException) -> str:
+    """Motivo curto de uma falha, para a checagem que a interpreta: negado, outro erro do serviço, sem resposta ou erro local."""
+    code = error_code(error)
+    if code:
+        denied = any(word in code for word in ("AccessDenied", "Unauthorized", "Forbidden", "NotAuthorized"))
+        return f"negado ({code})" if denied else f"o serviço respondeu {code}"
+    if answered(error):
+        return f"o serviço respondeu com erro ({type(error).__name__})"
+    if unanswered(error):
+        return f"sem resposta ({type(error).__name__})"
+    return f"erro local ({type(error).__name__})"
 
 
 def region() -> str | None:
@@ -103,6 +130,34 @@ def tcp_open(host: str, port: int, timeout: float = 5) -> float:
     started = time.perf_counter()
     with socket.create_connection((host, port), timeout=timeout):
         return time.perf_counter() - started
+
+
+def tcp_probe(host: str, port: int, timeout: float = 5) -> str:
+    """Abrir uma conexão TCP como leitura: ``conectou em N s`` ou ``não conectou: erro``, sem levantar exceção."""
+    try:
+        return f"conectou em {tcp_open(host, port, timeout):.2f} s"
+    except OSError as error:
+        return f"não conectou: {error}"
+
+
+def dns_rows(names: Iterable[str], public: str = "público: gateway endpoint ou internet") -> tuple[list[list[str]], dict[str, bool | None]]:
+    """Linhas da tabela de DNS e, por nome, se resolveu para IP privado; ``None`` quando não resolve.
+
+    Um nome que não resolve é uma leitura, não uma chamada falhada: sem internet, ``pypi.org`` não resolve.
+    """
+    rows: list[list[str]] = []
+    private_by_name: dict[str, bool | None] = {}
+    for name in names:
+        try:
+            addresses, private = resolve(name)
+        except OSError as error:
+            rows.append([name, f"não resolve: {error}", "-"])
+            private_by_name[name] = None
+            continue
+        shown = ", ".join(addresses[:4]) + (" ..." if len(addresses) > 4 else "")
+        rows.append([name, shown, "privado: endpoint VPC de interface com DNS privado" if private else public])
+        private_by_name[name] = private
+    return rows, private_by_name
 
 
 def mask(data: Any) -> Any:
@@ -167,6 +222,7 @@ class Report:
         self.tee = Tee(self.path)
         self.checks: list[tuple[str, str, str, str]] = []
         self.failures: list[tuple[str, str]] = []
+        self.last_reason = "sem falha"  # motivo curto da última chamada que falhou, para a checagem que a interpreta
         self.section_number = 0
         sys.stdout = self.tee
         print("=" * 80)
@@ -201,6 +257,7 @@ class Report:
             result = action()
         except Exception as error:  # noqa: BLE001 - toda falha é diagnóstico
             detail = describe_error(error)
+            self.last_reason = reason(error)
             print(f"!! FALHOU ({time.perf_counter() - started:.1f} s): {detail}\n")
             self.failures.append((label, detail))
             return None
@@ -244,13 +301,52 @@ class Report:
 
 
 PROJECT_PROBE = r"""
-import json, sys
+import ast, json, sys
 from sagemaker_studio import Project
 project = Project()
 
 
 def endpoint(item):
     return {name: getattr(item, name, None) for name in ("host", "port", "protocol", "aws_region", "aws_account_id", "access_role", "glue_connection_name", "stage")}
+
+
+def parse_repr(text):
+    # ConnectionData(a='x',b={'k': 1}) vira {'a': 'x', 'b': {'k': 1}}: a repr do pacote é uma chamada com literais.
+    try:
+        node = ast.parse(text.strip(), mode="eval").body
+    except SyntaxError:
+        return {"repr": text}
+    if not isinstance(node, ast.Call):
+        return {"repr": text}
+    parsed = {}
+    for keyword in node.keywords:
+        try:
+            parsed[keyword.arg] = ast.literal_eval(keyword.value)
+        except (ValueError, SyntaxError):
+            parsed[keyword.arg] = ast.unparse(keyword.value)
+    return parsed
+
+
+def as_dict(data):
+    # Os dados da conexão como dicionário, para banco, workgroup e secret serem localizáveis por chave.
+    if data is None or isinstance(data, dict):
+        return data
+    for name in ("to_dict", "model_dump", "dict"):
+        method = getattr(data, name, None)
+        if callable(method):
+            try:
+                result = method()
+            except Exception:
+                continue
+            if isinstance(result, dict):
+                return result
+    fields = getattr(data, "__dict__", None)
+    if isinstance(fields, dict) and fields:
+        inner = [value for value in fields.values() if isinstance(value, dict)]
+        if len(fields) == 1 and inner:
+            return inner[0]
+        return {key.lstrip("_"): value for key, value in fields.items()}
+    return parse_repr(repr(data))
 
 
 connections = getattr(project, "connections", [])
@@ -261,7 +357,7 @@ for connection in connections or []:
     row["type"] = str(row["type"])
     row["physical_endpoints"] = [endpoint(item) for item in (getattr(connection, "physical_endpoints", None) or [])]
     try:
-        row["data"] = connection.data
+        row["data"] = as_dict(connection.data)
     except Exception as error:
         row["data_error"] = f"{type(error).__name__}: {error}"
     rows.append(row)
@@ -319,3 +415,20 @@ def find_values(data: Any, names: Iterable[str]) -> dict[str, Any]:
 
     walk(data)
     return found
+
+
+CONNECTION_DETAILS = ("s3_uri", "workgroup_name", "database_name", "jdbc_url", "host", "glue_version")
+
+
+def connection_rows(connections: Iterable[dict[str, Any]]) -> list[list[str]]:
+    """Uma linha por conexão do projeto: nome, tipo, endpoint e o dado que a distingue (URI S3, workgroup, banco)."""
+    rows: list[list[str]] = []
+    for item in connections:
+        endpoints = item.get("physical_endpoints") or []
+        shown = "; ".join(f"{endpoint.get('host')}:{endpoint.get('port')}" for endpoint in endpoints if endpoint.get("host")) or "-"
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        detail = next((f"{key}={data[key]}" for key in CONNECTION_DETAILS if data.get(key)), None)
+        detail = detail or next((f"glue_connection_name={endpoint['glue_connection_name']}" for endpoint in endpoints if endpoint.get("glue_connection_name")), None)
+        rows.append([str(item.get("name")), str(item.get("type")), shown, detail or item.get("data_error") or "-"])
+    return rows
+
