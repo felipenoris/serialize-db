@@ -3,12 +3,13 @@
 Este documento registra as razões da escolha das camadas da biblioteca e as comparações entre as
 ferramentas candidatas: qual camada gerencia os arquivos Parquet no S3 sem um serviço de catálogo,
 qual camada gera o SQL que roda no DuckDB e no Redshift, o que substitui a migração de esquema e se
-uma extensão em Rust com PyO3 compensa. A decisão que sai daqui, o estado do projeto, as etapas e o
-pipeline mensal estão em [`PLAN.md`](PLAN.md); o uso do Delta, em [`delta.md`](delta.md). As fontes
+uma extensão em Rust com PyO3 compensa. A decisão que sai daqui, as etapas e o pipeline mensal
+estão em [`PLAN.md`](PLAN.md); o estado do projeto, em [`CURRENT_STATE.md`](CURRENT_STATE.md); o
+uso do Delta, em [`delta.md`](delta.md). As fontes
 estão em [`REFERENCES.md`](../REFERENCES.md). As verificações locais deste documento rodaram em
 2026-09-19 com Python 3.13, deltalake 1.6.4, DuckDB 1.5.5 com as extensões `delta` e `ducklake`,
 PyArrow 25.0.1 e SQLGlot 30.18.0, num macOS arm64; a prova de conceito no S3, feita no espaço do
-projeto, está em `PLAN.md`.
+projeto, está em [`POC.md`](POC.md).
 
 As premissas, declaradas pelo usuário, contra as quais as ferramentas foram comparadas: o pipeline é
 majoritariamente lógica Python, com o SQLAlchemy só nos modelos declarativos e em statements Core

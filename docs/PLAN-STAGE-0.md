@@ -3,8 +3,8 @@
 A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PLAN.md`](PLAN.md), que
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
 
-Os itens de S3 estão verificados (seção "O que a prova de conceito verificou" de
-[`PLAN.md`](PLAN.md)). Os de Redshift estão em `tests/proof_of_concept/test_redshift.py`, marcador
+Os itens de S3 estão verificados ([`POC.md`](POC.md)). Os de Redshift estão em
+`tests/proof_of_concept/test_redshift.py`, marcador
 `redshift`, escrito antes de haver conexão e ainda não executado; ele roda quando
 `probes/redshift.py` mostrar a conexão, com os arquivos sob `SERIALIZE_DB_TEST_S3_ROOT` e as
 tabelas no esquema de `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`:
