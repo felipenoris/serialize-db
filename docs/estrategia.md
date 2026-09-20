@@ -61,10 +61,11 @@ perfis de `~/.aws/config`:
   0.32.x. A página "Writing to S3 with a locking provider" da documentação ainda descreve o DynamoDB
   como obrigatório e `AWS_S3_ALLOW_UNSAFE_RENAME` como saída, e está defasada em relação à 1.6.0.
 - As credenciais vêm de variáveis de ambiente, de `storage_options` ou dos metadados da instância; a
-  documentação afirma que o escritor não usa o `boto3` e não lê `~/.aws/config`. No espaço do
-  SageMaker Unified Studio o escritor encontra as credenciais do contêiner do projeto; uma falha
-  com 403 no início da verificação, contornada com `NO_PROXY` em maiúsculas, não se repetiu, e os
-  detalhes estão em [`delta.md`](delta.md).
+  documentação afirma que o escritor não usa o `boto3` e não lê `~/.aws/config`, mas o aviso
+  `aws_config::profile::credentials` de uma falha mostra a cadeia consultando o perfil `default`. No
+  espaço do SageMaker Unified Studio o escritor encontra as credenciais do contêiner do projeto; a
+  falha com 403 de 2026-09-19 vinha de uma `NO_PROXY` vazia, que o cliente HTTP do delta-rs lê antes
+  de `no_proxy`, e os detalhes estão em [`delta.md`](delta.md).
 - `write_deltalake(data, mode=..., partition_by=..., predicate=..., schema_mode=...)` aceita tabela
   PyArrow, DataFrame pandas ou iterador de `RecordBatch`; `mode="overwrite"` com `predicate` substitui
   só as linhas que casam com o predicado e rejeita dados fora dele; `schema_mode="merge"` acrescenta

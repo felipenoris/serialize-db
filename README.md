@@ -138,7 +138,9 @@ Os fatos que `diagnose_aws.py` usa no seu resumo:
   VPC do S3 não alcança o STS, e o teste falharia depois dos 60 s por tentativa e 5 tentativas do
   botocore. O diagnóstico distingue "o serviço respondeu com erro" de "sem resposta": só o segundo
   pede manutenção.
-- **Proxy.** Nada na suíte exige proxy; sem as variáveis, nada a fazer.
+- **Proxy.** Nada na suíte exige proxy; sem as variáveis, nada a fazer. Com elas, o delta-rs roda
+  como encontrado e, quando `NO_PROXY` está ausente ou vazia ao lado de `no_proxy`, de novo com
+  `NO_PROXY` exportada de `no_proxy`, como a suíte faz; a segunda linha é a que vale para a suíte.
 - **Endpoint.** Com `AWS_ENDPOINT_URL`, o `boto3` e o delta-rs o usam, e a suíte não o passa ao
   secret do DuckDB.
 
@@ -150,15 +152,17 @@ Sem rede, `diagnose_aws.py` leva um minuto e meio: o `boto3` desiste em 11 s, o 
 O `deltalake` (delta-rs) tem cliente HTTP próprio, em Rust, e não usa o `boto3`: busca as
 credenciais nas variáveis `AWS_*`, no endpoint de credenciais do contêiner
 (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`), nos metadados da instância ou em `storage_options`, e
-respeita `HTTP_PROXY`, `HTTPS_PROXY` e `NO_PROXY`. O espaço do SageMaker Unified Studio sai para a
-rede por um proxy e define só `no_proxy` em minúsculas. Na primeira verificação, a chamada de
-credenciais do delta-rs falhou com 403 e passou com `NO_PROXY` exportada; depois o ambiente como
-encontrado passou a funcionar, e a causa não ficou isolada. Por isso `tests/conftest.py` exporta
-`NO_PROXY` a partir de `no_proxy` quando só a minúscula existe, e `test_delta_rs_credential_chain`
-registra no relatório o resultado de três variantes (ambiente como encontrado, `NO_PROXY` exportada,
-proxies retirados). Se a cadeia padrão falhar em todas, `test_delta_rs_storage_options_fallback`
-mostra que o caminho de reserva da biblioteca, as credenciais do `boto3` em `storage_options`,
-funciona.
+respeita `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias, mas lê `NO_PROXY` e, só quando ela está
+ausente, `no_proxy`: uma `NO_PROXY` vazia anula todas as exceções. O espaço do SageMaker Unified
+Studio sai para a rede por um proxy e lista o endpoint de credenciais em `no_proxy`; num shell aberto
+pela extensão do Claude Code no Code Editor, `NO_PROXY` existe vazia, a chamada de credenciais do
+delta-rs vai pelo proxy e falha com `StatusCode(403)` (medido em 2026-09-20: com `NO_PROXY` ausente,
+exportada de `no_proxy` ou reduzida a `169.254.170.2` a chamada passa; vazia, falha). Por isso
+`tests/conftest.py` exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou
+vazia, e `test_delta_rs_credential_chain` registra no relatório o resultado de cinco variantes
+(ambiente como encontrado, `NO_PROXY` exportada, ausente, vazia, proxies retirados). Se a cadeia
+padrão falhar em todas, `test_delta_rs_storage_options_fallback` mostra que o caminho de reserva da
+biblioteca, as credenciais do `boto3` em `storage_options`, funciona.
 
 ## Ambiente sem internet
 

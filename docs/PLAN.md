@@ -61,8 +61,8 @@ manifestos próprios e o Alembic. O SQLGlot fica opcional, como teste de compati
 | `docs/` | Completa: `parquet.md`, `duckdb.md`, `redshift.md`, `sqlalchemy.md`, `schema.md`, `delta.md`, `guia.md`, `estrategia.md`, `serialize-db.md` e este plano. Todo bloco Python dos documentos rodou com as versões fixadas em `pyproject.toml`; os comandos do Redshift foram compilados, não executados. |
 | `src/serialize_db/model/` | Os modelos do pipeline, a primeira instância do contrato e o material dos testes: `model_base_contabil.py`, `model_base_gerencial.py` e `model_db_projetado.py`. Dois não importam (`from lib_base_contabil import Base` e `from lib_base_gerencial import Base`, módulos que o repositório não tem). Os modelos usam `Double` onde o contrato pede `Numeric(18, 2)`, deixam o `autoincrement` padrão nas chaves inteiras (o `duckdb_engine` emite `SERIAL`, que o DuckDB rejeita), declaram chaves estrangeiras `DEFERRABLE INITIALLY DEFERRED` (o DuckDB descarta a cláusula, o Redshift não a tem) e não têm a coluna `mes`, comentários nem `Table.info["serialize_db"]`. A etapa 1 os corrige. |
 | `src/serialize_db/__init__.py` | Só o `main` de exemplo do `uv init`. `pyproject.toml` não declara dependência de execução; o grupo `dev` fixa pytest, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, boto3, redshift-connector, SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0 e pandas 3.0.6. |
-| `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda; `test_probes.py` testa as funções puras dos probes com respostas fabricadas, sem rede. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`poc_delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas e da stdlib (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Cada etapa abaixo lista as provas de conceito que exercitam as suas APIs. Sem variável, 34 testes passam e 48 são pulados; com a raiz local, 64 passam e 18 são pulados (2026-09-19, macOS). No espaço, em 2026-09-20, uma sessão com a raiz local e a raiz S3 gravou o JSON de `SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, sem a contagem por resultado nem o registro da limpeza, que o relatório passou a ter (`session.`, `local.cleanup`, `s3.cleanup`). |
-| `probes/` | Leituras do ambiente, só de leitura: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` e `catalog.py` sobre `probelib.py`, com o resultado em `probes/output/` para colar na conversa. Três execuções no laboratório em 2026-09-20, sem Redshift, corrigiram a leitura das conexões, as leituras de rede, o rótulo dos IPs públicos, a montagem de `~/shared` e o Object Lock, e acrescentaram por tabela Delta os arquivos, commits e último objeto, as sessões da suíte S3 e as versões não correntes sob a raiz; o ambiente de destino ainda não foi lido. |
+| `tests/` | `conftest.py` com a regra de autorização e as fixtures dos três alvos (pasta local, bucket, Redshift); nenhum teste do pacote ainda; `test_probes.py` testa as funções puras dos probes com respostas fabricadas, sem rede. `tests/proof_of_concept/` com a prova de conceito da camada Delta nos dois armazenamentos (`poc_delta.py`, `test_local.py`, `test_s3.py`), as suítes de estudo das bibliotecas externas e da stdlib (`test_sqlalchemy.py`, `test_duckdb.py`, `test_pyarrow.py`, `test_deltalake.py`, `test_stdlib.py`), comentadas passo a passo por serem o material de aprendizado de quem dará manutenção, e `test_redshift.py`, os itens Redshift da etapa 0, escrito antes de haver conexão e ainda não executado. Cada etapa abaixo lista as provas de conceito que exercitam as suas APIs. Sem variável, 34 testes passam e 48 são pulados; com a raiz local, 64 passam e 18 são pulados (2026-09-19, macOS). No espaço, em 2026-09-20, uma sessão com a raiz local e a raiz S3 gravou o JSON de `SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, sem a contagem por resultado nem o registro da limpeza, que o relatório passou a ter (`session.`, `local.cleanup`, `s3.cleanup`); a execução das 04:52 UTC, após as correções desta sessão, registrou 104 testes passados e 7 pulados em 35 s e a limpeza das duas raízes; sem variável, 63 passam e 48 são pulados. |
+| `probes/` | Leituras do ambiente, só de leitura: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` e `catalog.py` sobre `probelib.py`, com o resultado em `probes/output/` para colar na conversa. Quatro execuções no laboratório em 2026-09-20, sem Redshift, corrigiram a leitura das conexões, as leituras de rede, o rótulo dos IPs públicos, a montagem de `~/shared` e o Object Lock, acrescentaram por tabela Delta os arquivos, commits e último objeto, as sessões da suíte S3 e as versões não correntes sob a raiz, e a quarta isolou o 403 do delta-rs (`NO_PROXY` vazia) e fez `diagnose_aws.py` rodar o delta-rs como encontrado e como a suíte; o ambiente de destino ainda não foi lido. |
 | `prepare_offline.sh` | Deixa a pasta autossuficiente para o destino sem internet (`.python/`, `.venv/`, `.duckdb/`); verificado extraindo o pacote em outro caminho e rodando a suíte local com proxies mortos. |
 
 ### O que a prova de conceito verificou
@@ -72,9 +72,9 @@ mesma região, com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1 (a suíte
 `tests/proof_of_concept/test_s3.py`, 10 testes em 27 s):
 
 - O delta-rs encontra as credenciais do contêiner do projeto pela cadeia padrão. Uma falha 403 na
-  chamada de credenciais, no início da verificação, foi contornada com `NO_PROXY` em maiúsculas e
-  não se repetiu; as credenciais do `boto3` em `storage_options` funcionam e ficam como reserva. O
-  DuckDB (`credential_chain`) e o `boto3` nunca falharam.
+  chamada de credenciais, no início da verificação, foi contornada com `NO_PROXY` em maiúsculas; a
+  causa ficou isolada em 2026-09-20 (abaixo). As credenciais do `boto3` em `storage_options`
+  funcionam e ficam como reserva. O DuckDB (`credential_chain`) e o `boto3` nunca falharam.
 - `write_deltalake` (`overwrite` particionado e `append` por commit condicional), `DeltaTable`,
   `vacuum` e `delta_scan` no bucket, com a criptografia SSE-KMS padrão do bucket aplicada sem opção
   alguma. O DuckDB lê `BIGINT`, `INTEGER`, `DECIMAL(18,2)`, `TIMESTAMP` (de `timestamp_ntz`) e
@@ -96,6 +96,22 @@ por `delta_scan`, 0,25 s por `ATTACH`, 0,19 s por `read_parquet` e 0,016 s na ta
 materializar vale nos dois armazenamentos, e no S3 a diferença é de 300 vezes. O `executemany` de
 5.000 linhas levou 2,9 s contra 0,002 s por Arrow.
 
+Na quarta execução de 2026-09-20 (04:41 UTC, 103 testes passados e 7 pulados em 34 s, num shell
+aberto pela extensão do Claude Code, onde `NO_PROXY` existe vazia), `diagnose_aws.py` reproduziu o
+403 do delta-rs e isolou a causa: o cliente HTTP do delta-rs lê `HTTP_PROXY` e `HTTPS_PROXY` nas
+duas grafias, mas lê `NO_PROXY` e, só quando ela está ausente, `no_proxy`; vazia, ela anula as
+exceções e a chamada ao endpoint de credenciais vai pelo proxy. Com `NO_PROXY` ausente, exportada de
+`no_proxy` ou reduzida a `169.254.170.2`, ou sem as variáveis de proxy, a chamada passa. A variante
+`as_found` do teste removia `NO_PROXY` em vez de devolvê-la ao valor encontrado, e por isso passava;
+o teste agora registra cinco variantes (`as_found`, `no_proxy_exported`, `no_proxy_absent`,
+`no_proxy_empty`, `proxy_unset`) e `environment.no_proxy_as_found`, e o probe roda o delta-rs como
+encontrado e como a suíte. Sem `AWS_REGION` nem `AWS_DEFAULT_REGION`, o delta-rs foi a
+`us-east-1` apesar de `region = us-west-2` no perfil `default`; com `HOME` vazio e `AWS_REGION`,
+abriu a tabela: o perfil serve à cadeia de credenciais, não à região. A limpeza da suíte S3 ficou
+confirmada: `s3.cleanup` registrou 15
+objetos apagados, e `bucket.py` só encontrou a sessão mantida por `SERIALIZE_DB_TEST_KEEP` pela
+execução anterior.
+
 Na pasta local, em macOS e no pacote extraído em outro caminho: o commit atômico em disco (dois
 escritores na mesma versão: o segundo `overwrite` do mesmo mês falha com `CommitFailedError`; meses
 diferentes e `append` mais `append` comitam os dois), os caminhos relativos do log com a realocação
@@ -105,12 +121,14 @@ da pasta e a abertura sem variáveis `AWS_*`. Os comportamentos do delta-rs que 
 
 ### O que as leituras do ambiente mostraram
 
-O espaço do SageMaker Unified Studio, lido em 2026-09-19 e três vezes em 2026-09-20 pelos probes:
+O espaço do SageMaker Unified Studio, lido em 2026-09-19 e quatro vezes em 2026-09-20 pelos probes:
 credenciais pelo endpoint do contêiner (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`), emitidas por
 cerca de uma hora (a expiração 04:19:03 UTC foi lida às 03:23 e às 03:44) e renovadas pelo endpoint;
 região `us-west-2` em `AWS_REGION` e `AWS_DEFAULT_REGION`; saída para a rede por
-`proxy.awsds.internal:3128`, com `NO_PROXY` e `no_proxy` iguais em 2026-09-20 (em 2026-09-19 só a
-minúscula existia); IMDS bloqueado; `pypi.org` e `github.com` não resolvem, e o `uv` alcança o PyPI
+`proxy.awsds.internal:3128`, com `no_proxy` sempre presente e `NO_PROXY` dependente do shell: igual
+a `no_proxy` num terminal do Code Editor (03:23 e 03:44 de 2026-09-20), vazia num shell aberto pela
+extensão do Claude Code (04:40; a leitura de 2026-09-19, "só a minúscula", não distinguia vazia de
+ausente); IMDS bloqueado; `pypi.org` e `github.com` não resolvem, e o `uv` alcança o PyPI
 pelo proxy; endpoints VPC de interface para STS, Glue, Athena, KMS, Secrets Manager, DataZone, Lake
 Formation e S3 Tables, e nenhum para `redshift`, `redshift-serverless` e `redshift-data`, que
 resolvem para IP público; 4 vCPUs, 15,4 GiB, 61 GiB livres em `HOME` e 37 GiB em `/tmp`, `ulimit -n`
@@ -127,7 +145,8 @@ Athena três workgroups, e o Lake Formation e o S3 Tables negam: o gatilho de re
 `estrategia.md` não disparou. O Python do sistema é 3.12 com deltalake 1.5.0, DuckDB 1.5.4, SQLGlot
 28.10.1 e awswrangler 3.17.0.
 
-Consequências no plano: a biblioteca exporta `NO_PROXY` a partir de `no_proxy` e não depende de
+Consequências no plano: a biblioteca exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula
+está ausente ou vazia, e não depende de
 listar buckets nem de ler o versionamento; `storage_options()` resolve as credenciais de novo a cada
 chamada, porque uma emissão dura uma hora e a reserva com credenciais fixas expiraria numa execução
 longa (etapa 3); o motor DuckDB fixa `temp_directory` numa pasta com espaço conferido, porque o
@@ -140,8 +159,10 @@ O ambiente definitivo não tem internet e pode não ter proxy, só um endpoint V
 usuário de 2026-09-19). Consequências, ainda não confirmadas por uma leitura de
 `probes/diagnose_aws.py` nesse ambiente: o botocore lê `AWS_DEFAULT_REGION` ou o perfil, nunca
 `AWS_REGION`, e sem região usa o endpoint global `s3.amazonaws.com`, que o endpoint VPC regional não
-atende; o delta-rs lê as duas variáveis e sem nenhuma consulta o IMDS e cai em `us-east-1`; o STS
-pode estar inalcançável; nenhuma extensão do DuckDB pode ser baixada. A biblioteca normaliza a
+atende; o delta-rs lê as duas variáveis e sem nenhuma cai em `us-east-1`, ignorando a região do
+perfil; sem variáveis de proxy ele alcança o endpoint de credenciais diretamente (variante
+`proxy_unset`), e a exportação de `NO_PROXY` não muda nada; o STS pode estar inalcançável; nenhuma
+extensão do DuckDB pode ser baixada. A biblioteca normaliza a
 região nos dois sentidos, não chama o STS e carrega as extensões só da pasta configurada. Se as APIs
 do Redshift também não tiverem endpoint lá, resta a conexão por senha na porta 5439, que não passa
 por elas (`RS-14`).
@@ -159,9 +180,6 @@ por elas (`RS-14`).
 - **Credenciais de uma hora.** Nenhuma execução mais longa que uma emissão rodou ainda; a etapa 3
   renova `storage_options` a cada chamada, e a primeira execução longa no espaço confirma que o
   delta-rs e o `boto3` renovam pela cadeia padrão.
-- **Limpeza da suíte S3.** `bucket.py` encontrou a pasta da sessão `8b9e9976` 54 s depois do último
-  objeto gravado, e o relatório não dizia se a limpeza rodou; com `s3.cleanup` no relatório, a
-  próxima execução diz.
 - **Manutenção da suíte S3.** Se `diagnose_aws.py` confirmar o cenário sem proxy: exportar
   `AWS_DEFAULT_REGION` a partir de `AWS_REGION`, tornar a chamada ao STS opcional com espera curta e
   passar `AWS_ENDPOINT_URL` ao secret do DuckDB. A etapa 3 implementa o mesmo na biblioteca.
@@ -198,10 +216,18 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   arquivos e a saída do Delta aberta (`delta.md`, `estrategia.md`).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
   consultada mais de uma vez é materializada no DuckDB (`delta.md`).
-- O delta-rs não lê `~/.aws/config`; as credenciais vêm do ambiente, do contêiner, do IMDS ou de
-  `storage_options`, e a região precisa estar em `AWS_REGION` ou `AWS_DEFAULT_REGION`.
-  `storage_options` leva `max_retries` e `retry_timeout` para uma rede morta falhar em 10 s em vez
-  de 59 s (`README.md`).
+- O delta-rs não lê a região de `~/.aws/config`: com `region = us-west-2` no perfil `default` e
+  sem `AWS_REGION` nem `AWS_DEFAULT_REGION`, foi a `us-east-1` (2026-09-20); a cadeia de credenciais
+  consulta o perfil (`credential_source = EcsContainer`, aviso `aws_config::profile::credentials`)
+  mas encontra o contêiner sem ele (`HOME` vazio e `AWS_REGION` bastaram). A região precisa estar
+  em `AWS_REGION` ou `AWS_DEFAULT_REGION`; as credenciais vêm do ambiente, do contêiner, do IMDS ou
+  de `storage_options`. `storage_options` leva `max_retries` e `retry_timeout` para uma rede morta
+  falhar em 10 s em vez de 59 s (`README.md`, `delta.md`).
+- O cliente HTTP do delta-rs lê `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias e `NO_PROXY` antes de
+  `no_proxy`; vazia, `NO_PROXY` anula as exceções e a chamada ao endpoint de credenciais vai pelo
+  proxy (403). `prepare_environment` exporta `NO_PROXY` de `no_proxy` quando a maiúscula está
+  ausente ou vazia, antes da primeira abertura de tabela; exportar depois do `import deltalake`
+  basta, porque a suíte importa na coleta e exporta na fixture da sessão (`delta.md`).
 - O DuckDB carrega extensões só da pasta configurada, com `autoinstall_known_extensions` e
   `autoload_known_extensions` desligados: o `LOAD` de uma extensão conhecida baixaria a extensão
   para `~/.duckdb` sem aviso, e o destino não tem internet (`README.md`).
@@ -356,7 +382,7 @@ dialect)` como teste de que o texto do Redshift analisa. Provas de conceito:
 | `copy(source, destination)` | `CopyObject` no S3, `shutil.copy2` na pasta local; a exportação sem ler dados. |
 | `storage_options()` | As opções do delta-rs: região, `AWS_ENDPOINT_URL`, `max_retries`, `retry_timeout`, `timeout`, as chaves de SSE quando configuradas, e as credenciais do `boto3` só na reserva; resolvidas a cada chamada, nunca guardadas, porque as credenciais do contêiner duram cerca de uma hora. |
 | `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REGION` e `ENDPOINT`; só `LOAD delta` na pasta local. |
-| `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy`, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
+| `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou vazia, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
 
 `serialize_db.delta` é a camada de tabela; `uri` é a pasta da tabela, `table` o `Table` do modelo,
 `reader` um `RecordBatchReader`.

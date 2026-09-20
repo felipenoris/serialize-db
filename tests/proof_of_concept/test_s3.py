@@ -17,6 +17,7 @@ padrão do DuckDB); sem isso os testes que as usam são pulados.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 
@@ -31,6 +32,13 @@ from conftest import S3Location, record
 from poc_delta import DeltaProofOfConcept, connect_duckdb, write_sample_table
 
 pytestmark = pytest.mark.s3
+
+
+def last_error(stderr: str) -> str:
+    """A exceção final de um subprocesso numa linha: da última linha ``Tipo: mensagem`` até o fim, sem códigos de cor."""
+    lines = re.sub(r"\x1b\[[0-9;]*m", "", stderr).strip().splitlines() or ["(sem saída de erro)"]
+    starts = [index for index, line in enumerate(lines) if re.match(r"^[A-Za-z_][\w.]*(Error|Exception)\b", line)]
+    return " ".join(" ".join(line.split()) for line in lines[starts[-1] if starts else -1 :])
 
 
 @pytest.fixture(scope="session")
@@ -78,20 +86,25 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         record("environment.lowercase_no_proxy", bool(os.environ.get("no_proxy")))
         record("environment.https_proxy", os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"))
 
-    def test_delta_rs_credential_chain(self, storage: S3Location) -> None:
+    def test_delta_rs_credential_chain(self, storage: S3Location, proxy_environment: dict[str, str | None]) -> None:
         """Quais variantes do ambiente deixam o delta-rs abrir a tabela pela cadeia padrão.
 
         Cada variante roda num subprocesso com o ambiente alterado; o relatório mostra o resultado de
         cada uma. Ao menos a variante com ``NO_PROXY`` exportado (a que a biblioteca usa) precisa passar.
+        No espaço do SageMaker, ``no_proxy_absent`` passa e ``no_proxy_empty`` falha com 403: o cliente
+        HTTP do delta-rs lê ``NO_PROXY`` e, só quando ela está ausente, ``no_proxy``.
         """
         uri = storage.child("credential_probe")
         write_deltalake(uri, pa.table({"id": pa.array([1], pa.int64())}), mode="overwrite")
 
         # O programa do subprocesso só abre a tabela; o que muda entre as variantes é o ambiente.
+        # ``as_found`` devolve NO_PROXY ao valor que a sessão encontrou (ausente, vazia ou definida).
         probe = f"from deltalake import DeltaTable; print(DeltaTable({uri!r}).version())"
         variants: dict[str, dict[str, str | None]] = {
-            "as_found": {"NO_PROXY": None} if os.environ.get("no_proxy") else {},
+            "as_found": {"NO_PROXY": proxy_environment["NO_PROXY"]},
             "no_proxy_exported": {},
+            "no_proxy_absent": {"NO_PROXY": None},
+            "no_proxy_empty": {"NO_PROXY": ""},
             "proxy_unset": {name: None for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")},
         }
 
@@ -105,8 +118,7 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
                     environment[key] = value
 
             completed = subprocess.run([sys.executable, "-c", probe], env=environment, capture_output=True, text=True, timeout=120)
-            last_line = (completed.stderr.strip().splitlines() or ["(sem saída de erro)"])[-1]
-            results[name] = "ok" if completed.returncode == 0 else last_line[:160]
+            results[name] = "ok" if completed.returncode == 0 else last_error(completed.stderr)[:160]
             record(f"credentials.delta_rs.{name}", results[name])
 
         assert results["no_proxy_exported"] == "ok", results

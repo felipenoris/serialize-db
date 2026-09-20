@@ -146,9 +146,9 @@ research appends to the matching group.
 
 | File | Subject |
 | --- | --- |
-| `README.md` | `uv init --python 3.13`, `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with one command per suite, the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
+| `README.md` | `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with one command per suite, the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`: `space.py` (the space from inside: credentials and their expiry with the time left, region, project with one row per connection, network, machine with temp-folder space, open-file limit and the `~/shared` mount state by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` checked for presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (the bucket under the root: settings, lifecycle, inventory with each Delta table's data files, commits and last object, the S3 suite's leftover sessions (`BK-13`) and the non-current versions and delete markers the versioning accumulated (`BK-14`), versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM policy simulation or what the run itself proved, the KMS key, the bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format; the DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection with its data parsed as a dict, JDBC URL and credentials secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, whether the Redshift APIs have VPC endpoints (`RS-14`), the Data API, the session with database privileges, settings, load-error views and external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`, where DNS, TCP and internet results are readings in the tables, never failed calls, and each failed call leaves `report.last_reason` for the check that interprets it. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. Each probe is one function per report section, with a docstring naming the checks it emits, a commented block per check and named `render_*` helpers; `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`: `space.py` (the space from inside: credentials and their expiry with the time left, region, project with one row per connection, network, machine with temp-folder space, open-file limit and the `~/shared` mount state by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` checked for presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (the bucket under the root: settings, lifecycle, inventory with each Delta table's data files, commits and last object, the S3 suite's leftover sessions (`BK-13`) and the non-current versions and delete markers the versioning accumulated (`BK-14`), versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM policy simulation or what the run itself proved, the KMS key, the bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format; delta-rs as found and, with `NO_PROXY` absent or empty beside `no_proxy`, as the suite with it exported; the DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection with its data parsed as a dict, JDBC URL and credentials secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, whether the Redshift APIs have VPC endpoints (`RS-14`), the Data API, the session with database privileges, settings, load-error views and external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`, where DNS, TCP and internet results are readings in the tables, never failed calls, and each failed call leaves `report.last_reason` for the check that interprets it. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. Each probe is one function per report section, with a docstring naming the checks it emits, a commented block per check and named `render_*` helpers; `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -169,8 +169,8 @@ DuckDB and Redshift access, and relocation.
 
 ## Lessons learned
 
-Process lessons from the sessions so far, kept so the same mistake is not paid twice; the
-technical facts stay in the list below and in the study suites. A lesson is added at the end of a
+Process lessons from the sessions so far; the technical facts stay in the list below and in the
+study suites. A lesson is added at the end of a
 unit of work when a mistake cost a retry or a verification changed the plan, with its date.
 
 - **A documented behavior becomes a test assertion only after a probe reproduces it**
@@ -196,16 +196,14 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
 - **The pytest layout has no `__init__.py`.** The root `tests/conftest.py` is imported as
   `conftest` and its folder lands on `sys.path`, so `from conftest import ...` and
   `from poc_delta import ...` work inside `tests/proof_of_concept/`; test-module basenames must stay
-  unique across `tests/` and `tests/proof_of_concept/` (a future `tests/test_local.py` would collide
-  with the proof of concept).
+  unique across `tests/` and `tests/proof_of_concept/`.
 - **Before a commit**: `uv run pytest` with no variables and again with
   `SERIALIZE_DB_TEST_LOCAL_ROOT` set to the scratchpad, both green; `py_compile` on an edited probe;
   `git status` clean of stray files.
-- **Git and shell traps.** After `git mv`, `git add` of the old path aborts a `&&` chain; add the
-  new path. In zsh, `--include=*.md` needs quotes, and an unquoted `$command` is not word-split: a command
-  held in a variable runs as one word (a probe loop silently ran nothing on 2026-09-19); write
-  the command out or use `${=command}`. A Bash result above about 50 KB is saved to a
-  file instead of shown; read a long document in `sed -n` ranges.
+- **Git and shell traps.** After `git mv`, add the new path, not the old one. In zsh, quote
+  `--include=*.md`, and an unquoted `$command` runs as one word (a probe loop silently ran nothing on
+  2026-09-19): use `${=command}`. A Bash result above about 50 KB goes to a file; read long documents
+  in `sed -n` ranges.
 - **A subprocess probe prints its own one-line error.** A DuckDB error inside a subprocess showed
   only `^`; the probe catches the exception and prints `Type: message` to stderr. Probe code held
   in a Python string is a raw string, or `\[` raises a `SyntaxWarning`. "The service answered with
@@ -214,8 +212,8 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
 - **Restructuring a document is a scripted splice followed by checks** (2026-09-19). Split on
   heading markers with a Python script, then list the headings, grep for references to the removed
   sections and for stale identifiers across the repository, and test every `](...md)` link target.
-  Trimming this file used the same idea: list the backticked spans and numbers of the old text
-  missing from the new one and review each; a fact removed is a defect.
+  Trimming this file: list the backticked spans and numbers of the old text missing from the new
+  one; a fact removed is a defect.
 - **A change the user did not ask for is named in the report.** Moving the primitives out of
   `docs/serialize-db.md` followed from the plan request and was flagged as such; the `Text` rule
   proposed in `docs/PLAN.md` is marked as awaiting the user's confirmation.
@@ -225,17 +223,20 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   through the PyCapsule interface, `partition.mes` and `size_bytes` in
   `get_add_actions(flatten=True)`, SUPER binds rendered as `json_parse(%s)`. Read the study suite
   of a library before writing code against its API.
-- **A probe's first real run tests its parsing and its verdicts** (2026-09-20). The lab run showed
-  the project connection data serialized as a repr string, unreadable by `find_values`; DNS, TCP and
-  internet readings counted as failed calls (exit code 1 in the target, where they always fail); the
-  pin list had drifted from `pyproject.toml` and missed an absent `redshift_connector`; and check
-  `BK-11` had no branch for a denied call. The second run found the gateway-endpoint label written
-  for S3 applied to every public name and a mount test that a symlink defeats. The third run showed
-  a DuckDB count of 0 beside boto3's 16 for one prefix (non-recursive glob) and a test report silent
-  on its own outcome and cleanup. Serialize data as data, make expected conditions readings, derive
-  lists from the source of truth, give every check a branch for the denied call, read a label
-  against each item it covers, make two readings of one thing agree or explain the difference, and
-  have a report record its own outcome.
+- **A probe's first real run tests its parsing and its verdicts** (2026-09-20). Three lab runs
+  found: connection data serialized as a repr string, unreadable by `find_values`; DNS, TCP and
+  internet readings counted as failed calls (exit 1 in the target, where they always fail); a pin
+  list drifted from `pyproject.toml`; `BK-11` without a branch for a denied call; the S3
+  gateway-endpoint label applied to every public name; a mount test a symlink defeats; a DuckDB
+  count of 0 beside boto3's 16 (non-recursive glob); a test report silent on its outcome and
+  cleanup. Serialize data as data, make expected conditions readings, derive lists from the source
+  of truth, give every check a branch for the denied call, read a label against each item it
+  covers, make two readings of one thing agree or explain the difference, and have a report record
+  its own outcome.
+- **A variable set to the empty string is not absent** (2026-09-20). `os.environ.get` is falsy for
+  both, so the suite's `as_found` variant removed `NO_PROXY` and passed while the probe found it
+  empty and got 403. Render `(vazia)` apart from `(ausente)`, restore a variable to the value found
+  instead of removing it, and run the failing case and the fix side by side.
 
 ## What the documents establish
 
@@ -274,12 +275,15 @@ Each fact is detailed in the file named at the end of its line.
   2024-11-25); failures return 412, conflicts 409. This is the primitive a table format needs for
   atomic commits, and it answers the open question in `docs/guia.md`. `docs/estrategia.md`
 - `deltalake` 1.6.0 (2026-05-19) removed the DynamoDB lock store; S3 conditional put is the default
-  commit mode, and the delta-rs docs page on S3 locking is stale. The writer does not read
-  `~/.aws/config`. In the SageMaker space it finds the container credentials through the default
-  chain; early in the 2026-09-19 session the credential call failed with 403 as found and passed with
-  `NO_PROXY` exported, minutes later the environment as found passed with every interpreter and
-  version, and the cause was not isolated. The library exports `NO_PROXY` as a precaution and keeps
-  `storage_options` with the `boto3` credentials as the fallback. `docs/delta.md`, `docs/estrategia.md`
+  commit mode, and the delta-rs docs page on S3 locking is stale. In the SageMaker space the writer
+  finds the container credentials through the default chain, which also consults the `default`
+  profile of `~/.aws/config` (`credential_source = EcsContainer`, per the `aws_config::profile`
+  warning) but not its `region` (without the variables it went to `us-east-1`). Its HTTP client reads `HTTP_PROXY`/`HTTPS_PROXY` in both spellings but `no_proxy` only
+  when `NO_PROXY` is absent: an empty `NO_PROXY`, what a shell opened by the Claude Code extension
+  has, sends the credential call through the proxy, which answers 403; absent, exported from
+  `no_proxy` or `169.254.170.2` alone passes (isolated 2026-09-20; the 2026-09-19 403 was this). The
+  library exports `NO_PROXY` from `no_proxy` when absent or empty and keeps `storage_options` with
+  the `boto3` credentials as the fallback. `docs/delta.md`, `docs/estrategia.md`
 - Delta data files do not contain the partition column (it lives in the `add` action), so a
   partition key must derive from a column in the file for Redshift `COPY`; DuckLake keeps identity
   and source columns inside the files. `docs/estrategia.md`
@@ -454,9 +458,8 @@ table names (`staging_<tabela>`) count as database identifiers.
 ## Where the work stands
 
 The state of the project, the decisions, the stages with their primitives and the order of work are
-in `docs/PLAN.md` (pt-BR, 2026-09-19); read it before planning a session. What the plan does not
-record: the user merges the PRs and syncs `main`, and `gh pr list --state open` at the start of a
-session says whether new commits go to an open PR's branch or to a new `claude/` branch. The next
+in `docs/PLAN.md` (pt-BR, 2026-09-19); read it before planning a session, and `gh pr list --state
+open` says whether commits go to an open PR's branch or to a new `claude/` branch. The next
 session starts stage 1 (`serialize_db.schema`) and stage 2 (`serialize_db.sql`) on local folders.
 
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
@@ -493,17 +496,16 @@ variable set whatever prevents the write fails the session (local root missing; 
 short-timeout listing, 11 s with a silent proxy; Redshift without a connection); the S3 root is never
 inferred from the SageMaker project; DuckDB extensions are installed only into
 `SERIALIZE_DB_DUCKDB_EXTENSIONS`, with `autoinstall_known_extensions` off because `LOAD` of a known
-extension otherwise downloads it into `~/.duckdb` without notice. Verified on 2026-09-19 on macOS: no
-variables, 34 passed and 48 skipped; local root, 64 passed and 18 skipped. The S3 suite passed in
-the space the same day (10 passed in 27 s) before the boto3 list, copy and delete test was added.
+extension otherwise downloads it into `~/.duckdb` without notice. Verified on 2026-09-20 in the space: no variables, 63 passed and 48
+skipped; local and S3 roots, 104 passed and 7 skipped in 35 s.
 The space session of 2026-09-20 (local and S3 roots) showed the JSON report lacked outcome counts
-and a cleanup record; `conftest.py` now records `session.*` and `<root>.cleanup`.
+and a cleanup record; `conftest.py` now records `session.*`, `<root>.cleanup` and
+`environment.no_proxy_as_found`, and `test_delta_rs_credential_chain` runs five variants.
 
 The suites exist so the same proof of concept runs in the target environment, which has no internet;
 the local suite validates the prepared folder there without S3. Verified on 2026-09-19: the archive
-extracted at another path and run with dead proxies and an empty `HOME`, 10 passed; on macOS the
-script had left `.venv/bin/python` pointing nowhere (Linux-only glob), and after the fix of PR #12 the
-local suite passed there through `.venv/bin/python -m pytest` with dead proxies. The folder travels
+extracted at another path with dead proxies and an empty `HOME`, 10 passed, and on macOS through
+`.venv/bin/python -m pytest` after the glob fix of PR #12. The folder travels
 as `.tar.gz`, never zip, to keep links and permissions; `uv sync` ignores `UV_VENV_RELOCATABLE`, and
 the `.venv/bin/*` scripts keep absolute shebangs, hence `python -m pytest`.
 
@@ -513,12 +515,10 @@ The examples in `docs/parquet.md`, `docs/duckdb.md` and `docs/sqlalchemy.md` ran
 Python 3.13, DuckDB 1.5.5, PyArrow 25.0.1, pandas 3.0.6, polars 1.44.2, SQLAlchemy 2.0.54,
 duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 and redshift_connector 2.1.16, on a sample of
 300,000 rows of `operacoes` with the columns `id_operacao`, `data_ref`, `id_cliente`, `valor` and
-`descricao`; the Redshift statements were compiled only. The S3 proof of concept ran on 2026-09-19
-inside the SageMaker Unified Studio space with Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5 and
-PyArrow 25.0.1 through `UV_PYTHON_DOWNLOADS=automatic uv run --no-project --python 3.13 --with ...`
-and `NO_PROXY="$no_proxy"` exported; the same scripts also passed on the space's system Python
-3.12.13 with deltalake 1.5.0 and DuckDB 1.5.4, and then as the pytest suite (10 passed in 27 s); the
-scratch objects were deleted afterwards. The local proof of concept in `docs/estrategia.md` ran on
+`descricao`; the Redshift statements were compiled only. The S3 proof of concept of 2026-09-19 in
+the space (Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, `NO_PROXY="$no_proxy"`
+exported; also the system Python 3.12.13 with deltalake 1.5.0 and DuckDB 1.5.4) is recorded in
+`docs/PLAN.md`. The local proof of concept in `docs/estrategia.md` ran on
 2026-09-19 on macOS arm64 with Python 3.13, deltalake 1.6.4, DuckDB 1.5.5 with the `delta`,
 `ducklake` and `iceberg` extensions (ducklake `d8a1881e`, metadata version 1.0), PyIceberg 0.12.0
 with the `sql-sqlite` and `pyiceberg-core` extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through
@@ -535,26 +535,24 @@ the same pinned versions.
   `container-role`) assumes `datazone_usr_role_avhvbqn37ty7m8_5hkjdsy3umpi1c`. `~/.aws/config` has a
   `default` profile with `credential_source = EcsContainer` and a `DomainExecutionRoleCreds` profile.
 - Project bucket `awsds-sandbox-smus-projects`, prefix `dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/`: `dev/`
-  is the working area (`s3.root`), `shared/` is the s3fs mount at `$HOME/shared`. SSE-KMS by default
-  with bucket key and the project KMS key. The role cannot `ListAllMyBuckets` or
-  `GetBucketVersioning`. A second S3 connection, `sandbox-lake.s3`, points at
+  is the working area (`s3.root`), `shared/` is the s3fs mount at `$HOME/shared`. The role cannot
+  `ListAllMyBuckets`. A second S3 connection, `sandbox-lake.s3`, points at
   `s3://awsds-sandbox-lake/sso-group-data-scientists/` through S3 Access Grants.
 - Connections: S3, Athena, Glue Spark, Spark Connect, Lakehouse and workflows. No Redshift
   connection, cluster or serverless workgroup.
-- Network: outbound HTTP goes through `proxy.awsds.internal:3128`; only lower-case `no_proxy` is
-  set. `uv` reaches PyPI through the proxy but downloads Python only with
+- Network: outbound HTTP goes through `proxy.awsds.internal:3128`; `no_proxy` is always set;
+  `NO_PROXY` equals it in a Code Editor terminal and is empty in a Claude Code extension shell. `uv` reaches PyPI through the proxy but downloads Python only with
   `UV_PYTHON_DOWNLOADS=automatic`; `uv sync` needs it to fetch Python 3.13, the venv lands in `.venv`
-  (ignored), and `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored, which is harmless. System
+  (ignored), and `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored (harmless). System
   Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0, DuckDB 1.5.4, PyArrow 21.0.0 and
   redshift_connector 2.1.10 preinstalled.
-- `gh` was installed and authenticated as the user on 2026-09-19, and `git push` over HTTPS worked
-  through it; the 03:23 UTC probe run of 2026-09-20 found no `gh` on the PATH and the 03:44 run
-  found `/usr/bin/gh` (with `/usr/local/bin/aws` and no `duckdb` CLI), so check for it before
-  relying on it.
-- Probe readings of 2026-09-20 in the same space (three runs, the last at 03:44 UTC; full reading in
+- `gh`, installed and authenticated as the user on 2026-09-19, pushes over HTTPS; the 03:23 UTC
+  probe run of 2026-09-20 found no `gh` on the PATH and the 03:44 and 04:40 runs found `/usr/bin/gh`
+  (with `/usr/local/bin/aws` and no `duckdb` CLI), so check for it before relying on it.
+- Probe readings of 2026-09-20 in the same space (four runs, the last at 04:40 UTC; full reading in
   `docs/PLAN.md`): IMDS blocked (`EINVAL`); `pypi.org` and `github.com` do not resolve locally while
-  the proxy reaches PyPI; `NO_PROXY` and `no_proxy` both set and equal; container credentials issued
-  for about an hour (expiry 04:19:03 read at 03:23 and at 03:44); 4 vCPUs, 15.4 GiB, 61 GiB free in
+  the proxy reaches PyPI; `NO_PROXY` equal to `no_proxy` at 03:23 and 03:44, empty at 04:40;
+  container credentials issued for about an hour (expiry 04:19:03 read at 03:23 and at 03:44); 4 vCPUs, 15.4 GiB, 61 GiB free in
   `HOME`, 37 GiB in `/tmp`, `ulimit -n` 99999; DuckDB defaults to 4 threads, `memory_limit` 12.3 GiB
   and `temp_directory` `.tmp` relative to the working directory; the prepared `.venv` lacked five
   `dev` packages until `uv sync --group dev`; `~/shared` is a symlink to
@@ -567,9 +565,10 @@ the same pinned versions.
   IPs (no interface endpoint), so IAM authentication and the Data API depend on the proxy; STS,
   Glue, Athena, KMS, Secrets Manager, DataZone, Lake Formation and S3 Tables have interface
   endpoints. The pytest session of 03:43 UTC (local and S3 roots) passed the three delta-rs
-  credential variants and repeated the timings of 2026-09-19; `bucket.py` found its session folder
-  54 s after the last write. This lab is not the target: the target has Redshift and no internet
-  (user statement of 2026-09-20).
+  credential variants and repeated the timings of 2026-09-19; the 04:41 session (both roots, extension
+  shell) passed 103 and skipped 7 in 34 s, recorded the cleanup of both roots, and `bucket.py` then
+  found only the session kept by `SERIALIZE_DB_TEST_KEEP` by the 04:38 run. This lab is not the
+  target: the target has Redshift and no internet (user statement of 2026-09-20).
 
 ## Questions the official documentation does not answer
 

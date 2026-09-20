@@ -9,6 +9,10 @@ para ser colado na conversa com o assistente. Cada verificação imprime uma lin
 detalhe e o tempo, sempre com timeouts curtos:
 variáveis de ambiente, região como o ``boto3`` e o delta-rs a resolvem, DNS dos endpoints, credenciais,
 listagem de ``<raiz>/serialize-db-poc/`` pelo ``boto3``, pelo delta-rs e pelo DuckDB, e o STS. O
+delta-rs roda com o ambiente como encontrado e, quando ``NO_PROXY`` está ausente ou vazia ao lado de
+``no_proxy``, de novo com ``NO_PROXY`` exportada de ``no_proxy``, que é o que a suíte faz antes de
+abrir a tabela: o cliente HTTP do delta-rs lê ``NO_PROXY`` e, só quando ela está ausente,
+``no_proxy``, e uma ``NO_PROXY`` vazia manda a chamada ao endpoint de credenciais pelo proxy. O
 resumo final diz se a suíte precisa de manutenção para o ambiente: região que o ``boto3`` não lê, STS
 inalcançável, endpoint VPC de interface sem DNS privado. Nada é gravado no bucket: as chamadas são
 listagens e leituras de metadado.
@@ -30,13 +34,13 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 # Segundos de espera por subprocesso do delta-rs e do DuckDB, que têm esperas próprias e longas sem rede.
 PROBE_TIMEOUT = 60
 
-# As variáveis de proxy nas duas grafias: o delta-rs lê só as maiúsculas.
+# As variáveis de proxy nas duas grafias: o delta-rs lê NO_PROXY e, só quando ela está ausente, no_proxy.
 PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
 
 # As variáveis mostradas com valor, e as mostradas só como presença (credenciais).
@@ -112,6 +116,8 @@ def show_environment() -> None:
         # As minúsculas de proxy repetem as maiúsculas quando iguais: o valor sai uma vez.
         if value is not None and name != name.upper() and value == os.environ.get(name.upper()):
             value = f"(igual a {name.upper()})"
+        elif value == "":
+            value = "(vazia)"
         print(f"  {name} = {value if value is not None else '(ausente)'}")
 
     for name in PRESENCE_VARIABLES:
@@ -120,6 +126,25 @@ def show_environment() -> None:
     aws_folder = Path.home() / ".aws"
     for file in ("config", "credentials"):
         print(f"  ~/.aws/{file} {'existe' if (aws_folder / file).is_file() else '(ausente)'}")
+
+
+def no_proxy_state(environ: Mapping[str, str]) -> str:
+    """``NO_PROXY`` como o ambiente a tem: ``ausente``, ``vazia`` ou ``definida``; vazia e ausente diferem para o delta-rs."""
+    value = environ.get("NO_PROXY")
+    if value is None:
+        return "ausente"
+    return "vazia" if value == "" else "definida"
+
+
+def suite_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    """As variáveis que a suíte exporta antes de abrir a tabela: ``NO_PROXY`` de ``no_proxy`` quando ausente ou vazia.
+
+    O cliente HTTP do delta-rs lê ``NO_PROXY`` e, só quando ela está ausente, ``no_proxy``; vazia,
+    ela anula as exceções, e a chamada ao endpoint de credenciais do contêiner vai pelo proxy.
+    """
+    if not environ.get("NO_PROXY") and environ.get("no_proxy"):
+        return {"NO_PROXY": environ["no_proxy"]}
+    return {}
 
 
 def resolve_regions() -> tuple[str | None, str | None]:
@@ -221,11 +246,13 @@ def check_sts(region: str | None) -> bool:
 # O delta-rs e o DuckDB, cada um num subprocesso com espera limitada
 
 
-def run_probe(label: str, code: str, arguments: list[str], on_success: Callable[[str], str]) -> bool:
-    """Roda ``code`` num subprocesso com espera limitada, porque o delta-rs e o DuckDB têm esperas próprias."""
+def run_probe(label: str, code: str, arguments: list[str], on_success: Callable[[str], str], environment: Mapping[str, str] | None = None) -> bool:
+    """Roda ``code`` num subprocesso com espera limitada, porque o delta-rs e o DuckDB têm esperas próprias; ``environment`` substitui o do processo."""
     started = time.perf_counter()
     try:
-        completed = subprocess.run([sys.executable, "-c", code, *arguments], capture_output=True, text=True, timeout=PROBE_TIMEOUT)
+        completed = subprocess.run(
+            [sys.executable, "-c", code, *arguments], capture_output=True, text=True, timeout=PROBE_TIMEOUT, env=dict(environment) if environment is not None else None
+        )
     except subprocess.TimeoutExpired:
         report("falha", label, f"sem resposta em {PROBE_TIMEOUT} s", started)
         return False
@@ -256,10 +283,10 @@ except Exception as error:
 """
 
 
-def check_delta_rs(root: str, options: dict[str, str], label: str) -> bool:
+def check_delta_rs(root: str, options: dict[str, str], label: str, environment: Mapping[str, str] | None = None) -> bool:
     """``is_deltatable`` lista ``_delta_log/`` de uma tabela sob a raiz: credenciais, região e endpoint do delta-rs, sem escrever."""
     uri = f"{root}/serialize-db-poc/_diagnostico"
-    return run_probe(label, DELTA_PROBE, [uri, json.dumps(options)], lambda out: f"listou o prefixo (tabela existe: {out})")
+    return run_probe(label, DELTA_PROBE, [uri, json.dumps(options)], lambda out: f"listou o prefixo (tabela existe: {out})", environment)
 
 
 # O DuckDB carrega as extensões da pasta configurada, sem instalação automática, e lista o prefixo com credential_chain.
@@ -346,9 +373,16 @@ def diagnose(root: str) -> int:
     results["s3_boto3_suite"] = check_s3_boto3(bucket, prefix, None, "boto3 como a suíte (região do boto3)")
     if not boto3_region and delta_region:
         results["s3_boto3_region"] = check_s3_boto3(bucket, prefix, delta_region, f"boto3 com region_name={delta_region}")
-    results["delta_rs"] = check_delta_rs(root, {}, "delta-rs como a suíte")
+    # O delta-rs como o ambiente está e, quando a suíte exportaria NO_PROXY, de novo como a suíte o deixa.
+    results["delta_rs_as_found"] = check_delta_rs(root, {}, "delta-rs como encontrado")
+    changes = suite_environment(os.environ)
+    environment = {**os.environ, **changes}
+    if changes:
+        results["delta_rs"] = check_delta_rs(root, {}, "delta-rs como a suíte (NO_PROXY exportada de no_proxy)", environment)
+    else:
+        results["delta_rs"] = results["delta_rs_as_found"]
     if not delta_region and boto3_region:
-        results["delta_rs_region"] = check_delta_rs(root, {"AWS_REGION": boto3_region}, f"delta-rs com AWS_REGION={boto3_region}")
+        results["delta_rs_region"] = check_delta_rs(root, {"AWS_REGION": boto3_region}, f"delta-rs com AWS_REGION={boto3_region}", environment)
     results["duckdb"] = check_duckdb(root, region, endpoint_host)
 
     print("== STS")
@@ -364,7 +398,13 @@ def diagnose(root: str) -> int:
         print("  região: nenhuma; defina AWS_DEFAULT_REGION antes da suíte, porque atrás de endpoint VPC o endpoint global é inalcançável")
     print("  STS: " + ("respondeu (sem manutenção)" if results["sts"] else "sem resposta; test_boto3_credential_source falharia (manutenção necessária)"))
     proxies = [name for name in PROXY_VARIABLES if os.environ.get(name)]
-    print("  proxy: " + (f"variáveis {', '.join(proxies)}; a suíte copia no_proxy para NO_PROXY" if proxies else "sem variáveis; nada a fazer"))
+    if not proxies:
+        print("  proxy: sem variáveis; nada a fazer")
+    elif changes:
+        outcome = "com ela o delta-rs listou" if results["delta_rs"] else "e mesmo assim o delta-rs falhou (manutenção necessária)"
+        print(f"  proxy: variáveis {', '.join(proxies)}; NO_PROXY {no_proxy_state(os.environ)}: a suíte a exporta de no_proxy, {outcome}")
+    else:
+        print(f"  proxy: variáveis {', '.join(proxies)}; NO_PROXY {no_proxy_state(os.environ)}, a suíte não a altera")
     print("  endpoint: " + (f"{endpoint_url} em AWS_ENDPOINT_URL; a suíte não o passa ao DuckDB (manutenção necessária)" if endpoint_url else "sem AWS_ENDPOINT_URL; os nomes s3.<região>.amazonaws.com precisam resolver (ver DNS acima)"))
     core = ("s3_boto3_suite", "delta_rs", "duckdb")
     print("  suíte S3 como está: " + ("os três clientes listaram o prefixo" if all(results[key] for key in core) else "algum cliente falhou; ver as linhas acima"))
