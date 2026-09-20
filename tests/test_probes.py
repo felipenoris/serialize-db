@@ -387,8 +387,8 @@ def test_lifecycle_flags_an_enabled_expiration_that_reaches_the_root(tmp_path: P
 def test_principal_arn_turns_an_assumed_role_into_the_role() -> None:
     """A simulação de política aceita o papel, não a sessão assumida."""
     assumed = "arn:aws:sts::892278726726:assumed-role/datazone_usr_role_x/SageMaker"
-    assert bucket.principal_arn(assumed) == "arn:aws:iam::892278726726:role/datazone_usr_role_x"
-    assert bucket.principal_arn("arn:aws:iam::1:user/eu") == "arn:aws:iam::1:user/eu"
+    assert probelib.principal_arn(assumed) == "arn:aws:iam::892278726726:role/datazone_usr_role_x"
+    assert probelib.principal_arn("arn:aws:iam::1:user/eu") == "arn:aws:iam::1:user/eu"
 
 
 # ---------------------------------------------------------------------------------------------------------------

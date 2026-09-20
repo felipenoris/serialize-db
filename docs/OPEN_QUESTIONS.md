@@ -6,33 +6,21 @@ resposta entra no documento que a guarda, e a saída nomeia esse documento. O pl
 [`PLAN.md`](PLAN.md), o estado da implementação em [`CURRENT_STATE.md`](CURRENT_STATE.md) e o que já
 foi medido em [`POC.md`](POC.md).
 
-- **Papel IAM para o `COPY` e o `UNLOAD`.** O namespace `controladoria-ns` não tem papel IAM
-  padrão nem papel associado (leitura de 2026-09-20, `RS-6`), e o Redshift só usa papel associado ao
-  namespace, com ou sem ARN explícito: enquanto isso não mudar, nenhum `COPY` do S3 e nenhum
-  `UNLOAD` rodam, o que bloqueia as etapas [5](PLAN-STAGE-5.md) e [8](PLAN-STAGE-8.md). É pedido
-  para quem administra o namespace: associar um papel com `s3:ListBucket`, `GetObject` e `PutObject`
-  sob a raiz do projeto, e de preferência torná-lo o padrão. Depois disso, `RS-6` e `RS-11` medem.
-- **Escrita no banco do datashare.** O esquema do projeto é `sbx_aco_decon` no banco
-  `datalake_rw_shared`, do datashare `controladoria_rw_datashare` (leitura de 2026-09-20), e um
-  objeto de datashare só aceita escrita quando o produtor concede `INSERT` e `CREATE`. A sessão lê o
-  esquema (três tabelas em `svv_all_tables`), mas a ACL do banco nomeia só a role administrativa do
-  SSO, e ninguém criou tabela lá pela biblioteca. Dos três requisitos do consumidor, a leitura fecha
-  um: o patch `1.0.436211` atende. O isolamento do banco que recebe a escrita fica no produtor e
-  chega como `UNKNOWN`, e `stv_slices` é negada a um usuário comum, então os 64 slices não são
-  verificáveis daqui — a capacidade base do workgroup é 8 RPU. Quem responde é
-  `test_schema_location_and_three_part_name`, que cria, insere e lê pelo nome em três partes; a
-  resposta entra em [`redshift.md`](redshift.md), e uma recusa muda a [etapa 8](PLAN-STAGE-8.md).
-- **`UNLOAD` a partir de uma tabela do datashare.** A documentação lista os comandos que a escrita
-  num datashare aceita e o `UNLOAD` não está entre eles, sem dizer que ele é recusado. O
-  `export_partition` da [etapa 5](PLAN-STAGE-5.md) depende dele;
-  `test_unload_partition_by_and_register` registra o resultado e pula o resto quando o esquema vem
-  de um datashare.
+- **`UNLOAD ... PARTITION BY` a partir de uma tabela do datashare.** O `UNLOAD` simples passou no
+  ambiente alvo em 2026-09-20 ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py)),
+  e a documentação não o lista nem entre os comandos aceitos nem entre os recusados. O que o
+  `export_partition` da [etapa 5](PLAN-STAGE-5.md) precisa é `PARTITION BY (<coluna>) MANIFEST
+  VERBOSE`, que ninguém exercitou lá; `test_unload_partition_by_and_register` registra o resultado e
+  pula o resto quando a recusa vem do datashare.
+- **`COMPUPDATE` explícito no `COPY` de um datashare.** O `COPY` sem cláusula alguma passou, e é o
+  que a biblioteca emite. Se `COMPUPDATE OFF` explícito é aceito, ou se a frase da documentação
+  ("`COPY` sem `COMPUPDATE`") quer dizer que a análise de compressão precisa estar desligada, nenhum
+  teste respondeu.
 - **Onde ficam as tabelas de execução.** O sandbox `exec_<id>_*` da [etapa 4](PLAN-STAGE-4.md) e as
-  stagings do `COPY` herdam as restrições do datashare se nascerem lá. A leitura de 2026-09-20
-  eliminou uma das alternativas: `has_database_privilege(dev, CREATE)` é falso, então o banco local
-  da conexão não recebe tabela nenhuma. Restam a tabela temporária (`TEMP` é verdadeiro) e o próprio
-  datashare, se o produtor tiver concedido `CREATE`. A tabela temporária custa o sandbox morrer com
-  a sessão, o que a [etapa 5](PLAN-STAGE-5.md) precisa acomodar se for o caminho.
+  stagings do `COPY` nascem no banco do datashare, onde o `CREATE TABLE` passou, e herdam as
+  restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária
+  (`TEMP` é verdadeiro no banco da conexão, e `CREATE` não) custa o sandbox morrer com a sessão. A
+  [etapa 5](PLAN-STAGE-5.md) decide quando o primeiro pipeline rodar lá.
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
   conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
@@ -84,6 +72,5 @@ respondidas em 2026-09-19. A [etapa 0](PLAN-STAGE-0.md) as agrupa por comando.
   `register_file` em [`delta.md`](delta.md).
 - Se o `FILLRECORD` deixa o `COPY` carregar arquivos antigos, sem as colunas acrescentadas depois,
   que a evolução do Delta e do DuckLake produz.
-- Se o `COPY ... MANIFEST FORMAT AS PARQUET COMPUPDATE OFF` numa tabela de datashare se comporta
-  como numa tabela local, e em que visão o motivo de uma recusa aparece: `stl_load_errors` cobre só
-  clusters provisionados, e `sys_load_error_detail` cobre os dois.
+- Se o `COPY ... MANIFEST FORMAT AS PARQUET` numa tabela de datashare se comporta como numa tabela
+  local: o `COPY` de um prefixo de pasta passou em 2026-09-20, o de um manifesto ainda não.

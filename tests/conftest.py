@@ -23,10 +23,12 @@ Variáveis de ambiente lidas:
   ``serialize-db-poc/<id>/``.
 - ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``: esquema do Redshift onde a suíte cria as tabelas
   ``serialize_db_poc_<id>_*``. A conexão vem de ``SERIALIZE_DB_REDSHIFT_*`` (as variáveis de
-  ``probes/redshift.py``), o banco do datashare que guarda o esquema de
-  ``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE`` (com ela, toda tabela é citada por nome em três partes e
-  o ``COPY`` leva ``COMPUPDATE OFF``) e o papel do ``COPY`` e do ``UNLOAD`` de
-  ``SERIALIZE_DB_REDSHIFT_IAM_ROLE`` (sem ela, ``IAM_ROLE default``).
+  ``probes/redshift.py``) e o banco do datashare que guarda o esquema de
+  ``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE``: com ela, cada conexão roda ``USE <banco>`` e as tabelas
+  são citadas por ``esquema.tabela``, como em ``examples/redshift_copy_unload.py``.
+  ``SERIALIZE_DB_REDSHIFT_IAM_ROLE`` nomeia o papel do ``COPY`` e do ``UNLOAD``, ou a palavra
+  ``default``; sem ela, os dois levam as credenciais da sessão ``boto3``, que é o caminho do
+  ambiente alvo, onde o namespace não tem papel associado.
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos, as pastas e as tabelas criados.
 - ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é gravado.
   O relatório abre com a sessão (``session.``: início, plataforma, Python, versões, marcadores e,
@@ -42,6 +44,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import os
+import re
 import platform
 import shutil
 import time
@@ -62,9 +65,19 @@ SESSION_PACKAGES = ("deltalake", "duckdb", "pyarrow", "boto3", "sqlalchemy", "pa
 SESSION = {"started": time.time()}
 
 
+# O COPY e o UNLOAD levam as credenciais de quem chama no texto do comando; nada que carregue esse
+# texto, nem o erro que o cita, entra num relatório feito para ser colado na conversa.
+CREDENTIAL_PATTERN = re.compile(r"(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|CREDENTIALS)\s+'[^']*'", re.IGNORECASE)
+
+
+def mask_credentials(value: object) -> object:
+    """Troca por ``***`` o valor de toda cláusula de credencial num texto; os demais valores passam."""
+    return CREDENTIAL_PATTERN.sub(r"\1 '***'", value) if isinstance(value, str) else value
+
+
 def record(key: str, value: object) -> None:
-    """Registra um fato ou uma medição no relatório da sessão."""
-    REPORT[key] = value
+    """Registra um fato ou uma medição no relatório da sessão, sem credencial alguma."""
+    REPORT[key] = mask_credentials(value)
 
 
 def now_utc() -> str:
@@ -361,7 +374,7 @@ class RedshiftSession:
     connection: object
     method: str
     schema: str
-    iam_role: str
+    iam_role: str | None
     session_id: str
     share_database: str | None = None
     keep: bool = False
@@ -374,25 +387,37 @@ class RedshiftSession:
         return name
 
     def qualified(self, name: str) -> str:
-        """O nome como o SQL o cita: ``banco.esquema.tabela`` quando o esquema vem de um datashare, ``esquema.tabela`` quando é local."""
+        """O nome como a sessão o cita: ``esquema.tabela``, porque a conexão já rodou ``USE`` no banco do datashare."""
+        return f"{self.schema}.{name}"
+
+    def fully_qualified(self, name: str) -> str:
+        """O nome em três partes, para quem está conectado a outro banco: a Data API, que abre a sessão dela."""
         parts = [part for part in (self.share_database, self.schema, name) if part]
         return ".".join(parts)
 
     def schema_prefix(self) -> str:
-        """O nome qualificado sem a tabela: ``banco.esquema`` ou ``esquema``, o que o ``MetaData`` do SQLAlchemy recebe."""
-        return self.qualified("").rstrip(".")
+        """O prefixo que o ``MetaData`` do SQLAlchemy recebe: o esquema, já que o banco vem do ``USE``."""
+        return self.schema
 
-    def copy_options(self) -> str:
-        """As opções que o ``COPY`` precisa neste destino: num banco de datashare, ``COMPUPDATE OFF``.
+    def credentials_clause(self) -> str:
+        """Como o ``COPY`` e o ``UNLOAD`` alcançam o S3: o papel IAM configurado, ou as credenciais de quem chama.
 
-        A escrita num datashare aceita o ``COPY`` só sem ``COMPUPDATE``; num esquema local a
-        cláusula é dispensável e fica de fora do texto comparado pelos testes da etapa 5.
+        Sem ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, o comando leva ``ACCESS_KEY_ID``,
+        ``SECRET_ACCESS_KEY`` e ``SESSION_TOKEN`` da sessão ``boto3``
+        (``examples/redshift_copy_unload.py``), porque o namespace do ambiente alvo não tem papel
+        associado e sem papel associado nem um ARN explícito funciona. O texto devolvido carrega
+        segredo: ele nunca é impresso, registrado no relatório nem gravado em arquivo.
         """
-        return " COMPUPDATE OFF" if self.share_database else ""
+        if self.iam_role == "default":
+            return "IAM_ROLE default"
+        if self.iam_role:
+            return f"IAM_ROLE '{self.iam_role}'"
 
-    def iam_role_clause(self) -> str:
-        """A cláusula do ``COPY`` e do ``UNLOAD``: o papel configurado ou o padrão do cluster."""
-        return "IAM_ROLE default" if self.iam_role == "default" else f"IAM_ROLE '{self.iam_role}'"
+        import boto3
+
+        credentials = boto3.Session().get_credentials().get_frozen_credentials()
+        clause = f"ACCESS_KEY_ID '{credentials.access_key}'\nSECRET_ACCESS_KEY '{credentials.secret_key}'"
+        return clause + (f"\nSESSION_TOKEN '{credentials.token}'" if credentials.token else "")
 
     def execute(self, sql: str, params: tuple | dict | None = None) -> list[tuple]:
         """Executa ``sql`` num cursor novo e devolve as linhas, ou uma lista vazia para um comando sem resultado."""
@@ -431,11 +456,24 @@ def connect_redshift() -> tuple[str, object]:
 
         region = boto3.Session().region_name
 
+    def with_share_database(connection: object, method: str) -> tuple[str, object]:
+        """Roda ``USE <banco>`` quando o esquema vem de um datashare: daí em diante, ``esquema.tabela`` basta.
+
+        É o passo de ``examples/redshift_copy_unload.py``: sem ele, quem não está conectado ao banco
+        compartilhado só cita objetos por nome em três partes, e o ``CREATE`` e o ``COPY`` não foram
+        exercitados assim.
+        """
+        share = variable("SHARE_DATABASE")
+        if share:
+            cursor = connection.cursor()
+            cursor.execute(f"USE {share}")
+        return method, connection
+
     if variable("HOST") and variable("USER") and variable("PASSWORD"):
         connection = redshift_connector.connect(
             host=variable("HOST"), port=int(variable("PORT") or 5439), user=variable("USER"), password=variable("PASSWORD"), ssl=True, **common
         )
-        return "senha", connection
+        return with_share_database(connection, "senha")
 
     if variable("WORKGROUP"):
         import boto3
@@ -451,11 +489,11 @@ def connect_redshift() -> tuple[str, object]:
             ssl=True,
             **common,
         )
-        return "credencial temporária do workgroup", connection
+        return with_share_database(connection, "credencial temporária do workgroup")
 
     if variable("CLUSTER"):
         connection = redshift_connector.connect(iam=True, cluster_identifier=variable("CLUSTER"), db_user=variable("USER"), region=region, **common)
-        return "IAM cluster", connection
+        return with_share_database(connection, "IAM cluster")
 
     raise RuntimeError("faltam parâmetros: host, usuário e senha, ou workgroup ou cluster para a credencial temporária")
 
@@ -478,13 +516,13 @@ def redshift_session() -> Iterator[RedshiftSession]:
         connection=connection,
         method=method,
         schema=schema,
-        iam_role=os.environ.get("SERIALIZE_DB_REDSHIFT_IAM_ROLE") or "default",
+        iam_role=os.environ.get("SERIALIZE_DB_REDSHIFT_IAM_ROLE") or None,
         session_id=uuid.uuid4().hex[:8],
         share_database=os.environ.get("SERIALIZE_DB_REDSHIFT_SHARE_DATABASE") or None,
         keep=bool(os.environ.get("SERIALIZE_DB_TEST_KEEP")),
     )
     record("redshift.connection_method", method)
-    record("redshift.schema", session.qualified("<tabela>"))
+    record("redshift.schema", session.fully_qualified("<tabela>"))
 
     yield session
 

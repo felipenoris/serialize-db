@@ -158,6 +158,15 @@ def reason(error: BaseException) -> str:
     return f"erro local ({type(error).__name__})"
 
 
+def principal_arn(caller_arn: str) -> str:
+    """O ARN que a simulação de política aceita: o papel por trás de um assumed-role, ou o próprio usuário."""
+    if ":assumed-role/" in caller_arn:
+        account = caller_arn.split(":")[4]
+        role = caller_arn.split(":assumed-role/")[1].split("/")[0]
+        return f"arn:aws:iam::{account}:role/{role}"
+    return caller_arn
+
+
 def s3_root(argv: list[str]) -> tuple[str, str]:
     """A raiz ``s3://bucket/prefixo`` que um probe fotografa, e de onde ela veio.
 

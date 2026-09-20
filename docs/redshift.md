@@ -87,8 +87,12 @@ diagnóstico; a troca de dados da biblioteca não passa por ela:
 
 ### O esquema do projeto num banco de datashare
 
-O esquema do projeto está num banco de datashare, e toda tabela é citada por nome em três partes,
-`banco.esquema.tabela`, a partir do banco local da conexão. `svv_redshift_databases` diz o tipo de
+O esquema do projeto está num banco de datashare. Uma sessão conectada ao banco local cita a tabela
+por nome em três partes, `banco.esquema.tabela`; `USE <banco>` troca o banco da sessão, e a partir
+dele `esquema.tabela` basta, que é como o `CREATE TABLE`, o `COPY` e o `UNLOAD` passaram no ambiente
+alvo ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py)). A restrição
+documentada, de que só o nome em três partes vale, se aplica a quem não está conectado ao banco
+compartilhado. `svv_redshift_databases` diz o tipo de
 cada banco (`local` ou `shared`) e o nível de isolamento; `svv_all_schemas` diz em que banco está
 cada esquema. `has_schema_privilege` e `svv_table_info` só enxergam o banco local: num esquema
 compartilhado, quem concede `USAGE` e `CREATE` é o produtor, e a lista de tabelas vem de
@@ -108,10 +112,12 @@ O que o Redshift aceita escrever num datashare, e o que ele não lista:
 - DDL: `CREATE`/`DROP SCHEMA`, `CREATE`/`DROP`/`SHOW TABLE`, `CREATE TABLE ... AS`, `ALTER TABLE
   ADD`/`DROP COLUMN`, `ALTER TABLE RENAME`, `ALTER SCHEMA RENAME`, `TRUNCATE`, `BEGIN` e `COMMIT`.
 - DML: `SELECT`, `INSERT`, `INSERT INTO SELECT`, `UPDATE`, `DELETE`, `MERGE` e **`COPY` sem
-  `COMPUPDATE`**. A biblioteca emite `COPY ... COMPUPDATE OFF` sempre que o destino está num
-  datashare.
-- `UNLOAD` não está na lista dos comandos suportados, e `docs/PLAN-STAGE-8.md` trata a exportação a
-  partir de uma tabela publicada como pergunta em aberto até a suíte rodar.
+  `COMPUPDATE`**. A biblioteca emite o `COPY` sem cláusula `COMPUPDATE` alguma, que é o que passou
+  no ambiente alvo em 2026-09-20; se a frase da documentação exige `COMPUPDATE OFF` explícito,
+  ninguém testou, e a leitura literal é a que funciona.
+- `UNLOAD` não está na lista dos comandos suportados nem na dos recusados, e passou no ambiente alvo
+  a partir de uma tabela do datashare (`FORMAT AS PARQUET`, sem `PARTITION BY`). O que falta medir é
+  `PARTITION BY ... MANIFEST VERBOSE`.
 - A escrita de uma transação vai para um banco só, e um comando múltiplo fora de um bloco de
   transação não é aceito: a transação da publicação abre com `BEGIN` explícito, e a tabela de
   controle mora no mesmo banco das tabelas publicadas.
@@ -120,12 +126,22 @@ O que o Redshift aceita escrever num datashare, e o que ele não lista:
   sozinho.
 - O consumidor não altera nem apaga o datashare, e não põe um objeto dele em outro datashare.
 
+### O S3 alcançado pelas credenciais de quem chama
+
+O `COPY` e o `UNLOAD` aceitam `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` e `SESSION_TOKEN` no texto do
+comando, em vez de `IAM_ROLE`. É o que destrava o ambiente alvo, onde o namespace não tem papel IAM
+associado e por isso nem um ARN explícito funcionaria: quem alcança o S3 passa a ser a identidade da
+sessão, a mesma que o `boto3` usa. As credenciais do espaço expiram em cerca de uma hora, então a
+cláusula é montada a cada comando, nunca guardada, e **nenhum texto que a carregue vai para log,
+para o relatório da suíte ou para arquivo** — `tests/conftest.py` mascara toda cláusula de
+credencial antes de gravar o relatório. O `COPY` desse caminho leu um prefixo de pasta Parquet
+direto, sem manifesto, e converteu `int32` da origem para a coluna `BIGINT` do contrato.
+
 O que o ambiente alvo respondeu a esses requisitos, lido em 2026-09-20 por `probes/redshift.py`
 ([`POC.md`](POC.md), [`readings/`](readings/)): o patch `1.0.436211` atende; o isolamento do banco
 que recebe a escrita fica no produtor e chega ao consumidor como `UNKNOWN`; `stv_slices` é negada a
 um usuário comum, então os 64 slices não são verificáveis pela sessão. Nenhum papel IAM está
-associado ao namespace, o que impede qualquer `COPY` ou `UNLOAD` sobre o S3 até que o administrador
-associe um. `has_database_privilege(dev, CREATE)` é falso e `TEMP` é verdadeiro. `pg_settings` do
+associado ao namespace, e é por isso que o `COPY` e o `UNLOAD` levam as credenciais de quem chama. `has_database_privilege(dev, CREATE)` é falso e `TEMP` é verdadeiro. `pg_settings` do
 serverless não lista `timezone` nem `enable_case_sensitive_identifier`, que `SHOW` responde.
 
 A lista dos comandos recusados acrescenta três que o projeto precisa conhecer: uma referência a

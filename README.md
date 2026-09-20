@@ -180,11 +180,12 @@ Sem rede, `diagnose_aws.py` leva um minuto e meio: o `boto3` desiste em 11 s, o 
 
 ## Exemplos: conectividade com o Redshift
 
-[`examples/`](examples/) guarda os scripts de conexão que rodaram no ambiente alvo, como foram
-executados: [`redshift_native.py`](examples/redshift_native.py), o protocolo nativo com credencial
-temporária do workgroup serverless, que é o caminho da biblioteca, e
-[`redshift_data_api.py`](examples/redshift_data_api.py), a Data API por HTTPS, assíncrona. O probe,
-a suíte e a etapa 5 repetem as chamadas que estão lá, e
+[`examples/`](examples/) guarda os scripts que rodaram no ambiente alvo, como foram executados:
+[`redshift_native.py`](examples/redshift_native.py), o protocolo nativo com credencial temporária do
+workgroup serverless, que é o caminho da biblioteca; [`redshift_data_api.py`](examples/redshift_data_api.py),
+a Data API por HTTPS, assíncrona; e [`redshift_copy_unload.py`](examples/redshift_copy_unload.py), o
+`USE` no banco do datashare com `CREATE TABLE`, `COPY` e `UNLOAD` pelas credenciais de quem chama. O
+probe, a suíte e a etapa 5 repetem as chamadas que estão lá, e
 [`examples/README.md`](examples/README.md) diz o que cada um fixa.
 
 ## Credenciais do delta-rs e proxy
