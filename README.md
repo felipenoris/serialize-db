@@ -108,6 +108,16 @@ privilégios, configurações e o diagnóstico de um `COPY` reprovado) e os serv
 para ser colado na conversa com o assistente, com seções numeradas, cada chamada ecoada acima do
 resultado ou do erro, a tabela de checagens e a seção final de chamadas que falharam.
 
+O argumento `s3://bucket/prefixo` é a raiz que a suíte S3 recebe em `SERIALIZE_DB_TEST_S3_ROOT`,
+variável que o substitui quando ele falta: `bucket.py` inventaria o que há sob ela,
+`diagnose_aws.py` lista `<raiz>/serialize-db-poc/` como a suíte faz e `redshift.py` simula o papel
+do `COPY` sobre ela; nenhum probe cria pasta ou objeto. No espaço do SageMaker, a raiz é a área de
+trabalho `dev/` do projeto, que `space.py` imprime como `s3_root` na seção do projeto, ou uma
+subpasta dela reservada aos testes. Fora disso os probes precisam só das credenciais e da região que
+o `boto3` resolve, presentes no espaço; `redshift.py` conecta pelas variáveis
+`SERIALIZE_DB_REDSHIFT_*` ou pela conexão Redshift do projeto, e sem elas registra as seções da
+sessão como `note`.
+
 Os fatos que `diagnose_aws.py` usa no seu resumo:
 
 - **Região.** O botocore lê `AWS_DEFAULT_REGION` ou o perfil, não `AWS_REGION`, e sem região usa o
