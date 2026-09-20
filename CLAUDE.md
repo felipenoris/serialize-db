@@ -175,7 +175,7 @@ research appends to the matching group.
 | `docs/redshift.md` | Redshift as the publication database and the second execution engine; it opens with the diagnostic queries for a session. |
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection, deferrable constraints, Core and ORM for DDL and DML, server-generated keys, SQL generation per dialect (`compile`, dialect objects and paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`), the `Numeric` float conversion, what each dialect and Parquet support, the verdict per part, the recommendation without the compatibility premise (own contract with Arrow as canonical form, hand-written SQL validated by SQLGlot) and the gradual replacement of runtime compilation by generated SQL text (`param`, `prefixed`, `render`, `write_sql_files`, `execute`). |
 | `docs/delta.md` | Delta Lake as the source of truth: folder layout and log actions, Delta versus Iceberg, the implementations (delta-spark, delta-rs, Delta Kernel) and the delta-rs gaps, S3 requirements, types and JSON, table creation from the model, schema evolution with the measured rename/drop rewrite and what replaces Alembic, transactions, conflicts and restore, DML, ingestion and export back to Parquet folders by month, pipeline steps, DuckDB and Redshift access, performance measurements, relocation and SQLAlchemy support. |
-| `docs/PLAN.md` | The plan (pt-BR): the decisions with the premises behind them, the `pa.Table` boundary with client code and the measured pandas conversion, the rules every stage obeys, the package layout with dependencies, configuration and test policy, the table of stages 0 to 9 with delivery and acceptance criterion and the index of the stage files, the monthly pipeline with the `Execution` API, and the order of work. |
+| `docs/PLAN.md` | The plan (pt-BR): the decisions with the premises behind them, the streaming `pa.RecordBatch` boundary with client code (`stream` and `loader`, `pa.Table` as the convenience) with its measured hazards, the measured pandas conversion, the rules every stage obeys, the package layout with dependencies, configuration and test policy, the table of stages 0 to 9 with delivery and acceptance criterion and the index of the stage files, the monthly pipeline with the `Execution` API, and the order of work. |
 | `docs/PLAN-STAGE-0.md` to `docs/PLAN-STAGE-9.md` | One file per stage, indexed in `docs/PLAN.md`: the module and its primitives with signature and behavior (`schema`, `sql`, `storage` and `delta`, `audit` and `engine.duckdb`, `engine.redshift`, `execution` and `cli`, `load`, the Redshift publication, the operation routines), the tests, the dependencies and the proofs of concept that exercise each API; stage 0 holds the Redshift items of the proof of concept and the probes that precede any stage on AWS. |
 | `docs/CURRENT_STATE.md` | Where the implementation stands (pt-BR): the situation of each stage, and the repository artifact by artifact, including the reference model's defects and each suite's last pass and skip counts. |
 | `docs/POC.md` | What each run showed (pt-BR): the S3 proof of concept in the SageMaker space with its timings, the local one, the delta-rs credential variants and the isolated `NO_PROXY` 403, and the probe readings of the space, each with its consequence in the plan. |
@@ -324,6 +324,22 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   `Proxy-Authorization` carried the credentials — none of which the error message says. Feed it
   a password with a character that URL-encoding changes (`se@nha` as `se%40nha`), so a decoded
   and an undecoded credential give different base64.
+
+- **A generator handed to native code is pulled by a thread the library does not own** (2026-09-20).
+  The loader sketch fed one `INSERT` from a queue-backed `RecordBatchReader`; when the `INSERT`
+  failed, the process hung at exit inside Arrow's thread-pool destructor, because DuckDB's
+  `arrow_scan` pulls the stream through an Arrow readahead thread that was still blocked in the
+  generator's `queue.get()`, and, with a timeout on the wait, still calling Python while the
+  interpreter finalized (`PyThread_hang_thread`). A `sample` of the native stacks found it; a
+  `faulthandler` dump did not fire, because the hang was after the script's last line. Insert
+  batch by batch in a transaction instead, never block without a timeout inside a generator a
+  native reader pulls, keep helper threads free of references to their owner so an abandoned object
+  is collected, and pipe a hung pytest through nothing that buffers (`tail` printed nothing when the
+  run was killed).
+- **A reader built by `from_batches` trusts its batches** (2026-09-20). A batch with the columns in
+  another order went through `RecordBatchReader.from_batches(schema, ...)` and DuckDB's `arrow_scan`
+  without an error and came out with the bytes swapped. Cast every batch to the declared schema
+  before it enters a reader; a probe that feeds a deliberately wrong batch is the check.
 
 ## What the documents establish
 
@@ -594,6 +610,27 @@ Each fact is detailed in the file named at the end of its line.
   columns nullable in the files and `NOT NULL` in the model with no null in the data. `docs/POC.md`,
   `docs/PLAN-STAGE-7.md`, `tests/source_db_projetado.py`
 
+- The client boundary by batches (2026-09-20, macOS arm64, DuckDB 1.5.5 with `threads = 2`): a
+  `to_arrow_reader` on its own `cursor()` delivers its query's snapshot while other cursors insert
+  into the same table and change the catalog, and closing that cursor mid-stream did not stop it;
+  100 `cursor()` plus `close()` took 0.4 ms. 20,000,000 rows: `to_arrow_table` 0.59 s at 567 MB of
+  process, `to_arrow_reader(100_000)` 0.54 s at 83 MB, first batch in 3 ms without `ORDER BY` and
+  after the whole sort (2.4 s) with it. A prefetch thread hid the client's per-batch work: 1.25x
+  with pandas work, 1.55x with a pure-Python loop. Writes of 6,000,000 rows in 100,000-row batches:
+  one `INSERT` over a queue-fed reader 0.20 s, one `INSERT` per batch in one transaction on a helper
+  thread 0.41 s (about 3.5 ms per statement, nothing visible before `commit`, `rollback` on failure
+  leaves 0 rows). DuckDB's `arrow_scan` pulls a registered Python stream through an Arrow readahead
+  thread (`BackgroundGenerator`) that ran the generator on another thread, had pulled 5 to 15
+  batches when the `INSERT` failed on the first and reached 10 to 20 after the failure.
+  `RecordBatchReader.from_batches` does not check its batches: swapped columns entered DuckDB as
+  `(4607182418800017408, 5e-324)` for `(1, 1.0)`; `read_all` raises `Schema at index 0 was
+  different`; `RecordBatch.cast` refuses what `Table.cast` refuses; `RecordBatchReader.close()` does
+  not close a generator-backed reader. `to_batches`/`from_batches`/`RecordBatch.to_pandas(ArrowDtype)`/
+  `RecordBatch.from_pandas` share buffers (0.04 ms, 0.003 ms, 1.4 ms, 0.5 ms). A mid-read query
+  error reaches Python as `OSError` with DuckDB's message. Objects with `__arrow_c_stream__` are
+  accepted by `from_stream`, DuckDB `register` and `write_deltalake`. `docs/PLAN.md`, `docs/POC.md`,
+  `docs/duckdb.md`, `tests/proof_of_concept/test_duckdb.py`, `test_pyarrow.py`, `test_parallel.py`
+
 ## The pipeline outside this repository
 
 Facts stated by the user, not visible in the code: the pipeline is mostly Python logic; SQLAlchemy
@@ -608,11 +645,14 @@ compatibility with that code (user statement of 2026-09-19); the same day the us
 runtime compilation by the dialect is replaced gradually by generated SQL text per dialect, one
 database interaction at a time, so SQLAlchemy ends in the models and in generation and
 `duckdb_engine` and `sqlalchemy-redshift` leave the runtime dependencies. On 2026-09-20 the user fixed
-the exchange type with client code: a `pa.Table` in both directions (`load` receives one; `query` and
-`execute` return one), never an ORM instance, a row list or a DataFrame; the pipelines run pandas
-with the pyarrow backend (user statement of 2026-09-20), so `types_mapper=pd.ArrowDtype` is their
-native form, and the rule rests on the conversion being cheap, which the probe of that day measured
-(`docs/PLAN.md`, section "A troca de dados com o código cliente"). The same day the user moved the
+the exchange type with client code as streaming `pa.RecordBatch` in both directions (`stream` reads,
+`loader` writes), with `pa.Table` accepted and returned by `query`, `execute` and `load` only as a
+convenience over the same batch API, so the client works on the current batch while the library
+reads the next and writes the previous; never an ORM instance, a row list or a DataFrame. The
+pipelines run pandas with the pyarrow backend (user statement of 2026-09-20), so
+`types_mapper=pd.ArrowDtype` is their native form, and the rule rests on the conversion being cheap,
+which the probes of that day measured for the table and for the batch (`docs/PLAN.md`, section "A
+troca de dados com o código cliente"). The same day the user moved the
 models to `tests/model/` as the reference model: the tests hand it to the package API as a client
 library would, and the package holds no model. After the source base was read (2026-09-20) the user
 decided: partition by date as text `AAAA-MM-DD` like the reference base, the column and its date
@@ -670,6 +710,13 @@ probe, `tests/conftest.py` and the Redshift suite follow them, and `docs/PLAN-ST
 `docs/PLAN-STAGE-8.md` carry the consequences. Running `probes/redshift.py` in the target is what
 closes the datashare questions of `docs/OPEN_QUESTIONS.md`.
 
+The client boundary was revised on 2026-09-20 to streaming `pa.RecordBatch` (`stream` with a
+prefetch thread on its own cursor, `loader` with a write-behind thread inserting batch by batch in
+one transaction), with `pa.Table` as the convenience; the measurements and the hazards are in
+`docs/PLAN.md`, section "A troca de dados com o código cliente", and `docs/POC.md`, the reference
+sketches `BatchStream` and `Loader` in `tests/proof_of_concept/test_parallel.py`, and the Redshift
+`fetchmany` question in `docs/OPEN_QUESTIONS.md`.
+
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
 --python 3.13 --with "deltalake==1.6.4" --with "duckdb==1.5.5" --with "pyarrow==25.0.1" ...`; the
 scripts were not kept, the documents are the record. New examples are checked against the
@@ -691,7 +738,7 @@ over `source_db_projetado.py`, the fictitious source base of 2026-09-20), `tests
 `tests/test_probes.py` and `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
 both storages, the study suites (commented step by step as learning material, listed per stage in
 `docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
-last-run counts (102 pass and 59 skip with no variable, 140 and 21 with the local root, 2026-09-20):
+last-run counts (110 pass and 60 skip with no variable, 148 and 22 with the local root, 2026-09-20):
 the `tests/` row of the repository table in `docs/CURRENT_STATE.md` and `README.md`. The 11 s
 listing failure behind a silent proxy is in `README.md`, the `autoinstall_known_extensions` rule in the
 lessons above; `test_delta_rs_credential_chain` runs five variants.

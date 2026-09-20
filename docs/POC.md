@@ -338,3 +338,64 @@ toda variável de proxy.
 O procedimento de uso, as variáveis e os comandos de empacotar e extrair passaram para o cabeçalho
 do script, e a seção "Ambiente sem internet" do `README.md` aponta para ele. A etapa 3 aplica a
 mesma separação em `duckdb_setup` ([`PLAN-STAGE-3.md`](PLAN-STAGE-3.md)).
+
+## O que a fronteira por lotes mostrou
+
+Em 2026-09-20, no macOS arm64 com DuckDB 1.5.5 (`threads = 2`), PyArrow 25.0.1 e pandas 3.0.6, uma
+sondagem no scratchpad e as asserções acrescentadas a `test_pyarrow.py`, `test_duckdb.py` e
+`test_parallel.py` mediram o que a troca de dados por `RecordBatch` exige. A revisão do plano está em
+[`PLAN.md`](PLAN.md), seção "A troca de dados com o código cliente", nas etapas
+[1](PLAN-STAGE-1.md), [3](PLAN-STAGE-3.md), [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e
+[6](PLAN-STAGE-6.md), e em [`serialize-db.md`](serialize-db.md), seção "Lotes em streaming".
+
+- O leitor de `to_arrow_reader` num `cursor()` próprio entregou o snapshot da consulta (1.000.000 de
+  linhas) enquanto outro cursor inseria dez linhas na mesma tabela, criava, alterava e apagava
+  tabelas; no mesmo cursor, o comando seguinte o esvazia. Fechar o cursor no meio não o interrompeu
+  (900.010 linhas lidas depois), e cem `cursor()` mais `close()` levaram 0,4 ms.
+- 20.000.000 de linhas em três colunas: `to_arrow_table` em 0,59 s, 485 MB de tabela e 567 MB de
+  processo (`ru_maxrss`, um subprocesso por cenário); `to_arrow_reader(100_000)` em 0,54 s e 83 MB;
+  com uma thread de pré-busca e fila de dois lotes, 0,47 s e 89 MB. Sem `ORDER BY`, o primeiro lote
+  em 3 ms; com `ORDER BY`, 2,4 s no `execute` e o primeiro lote em seguida. A suíte repete com
+  10.000.000 de linhas: 322 MB contra 83 MB.
+- Pré-busca em thread contra a sequência, 6.000.000 de linhas em lotes de 200.000: com o trabalho em
+  pandas por lote, 0,201 s contra 0,160 s (1,25x; só a leitura, 0,157 s); com um laço Python puro
+  sobre 20.000 valores por lote, 0,250 s contra 0,162 s (1,55x).
+- Escrita de 6.000.000 de linhas: um `INSERT` sobre um leitor da fila numa thread, 0,167 s em lotes
+  de 200.000, 0,201 s em lotes de 100.000 e 0,288 s em lotes de 20.000; um `INSERT` por lote numa
+  transação na thread auxiliar, 0,219 s, 0,412 s e 0,532 s; um `INSERT` por lote na thread do
+  cliente, sem threads, 0,343 s em lotes de 200.000. O `INSERT` por lote numa transação não deixou
+  linha visível a outro cursor antes do `commit`, e o `rollback` na falha do lote 2 deixou 0 linhas.
+  O pipeline de três estágios sobre 3.000.000 de linhas, na suíte: 0,127 s encadeado, 0,178 s lote a
+  lote sem threads, 0,131 s pela tabela inteira.
+- O `INSERT` sobre um leitor de gerador Python é atômico (a falha no lote 20 deixou a tabela com as
+  50.000 linhas anteriores, com a mensagem do cliente dentro da `InvalidInputException`), mas o
+  `arrow_scan` o puxa por uma thread de leitura antecipada do Arrow (`BackgroundGenerator`, na pilha
+  nativa lida com `sample`): o gerador rodou em outra thread, tinha entregado de 5 a 15 lotes quando
+  o comando falhou no primeiro e chegou a 10 ou 20 depois da falha. Um gerador preso num
+  `queue.get()` sem prazo nessa thread pendurou o processo na saída, no destrutor do pool de threads
+  do Arrow; com prazo, a thread ainda chamando Python na saída foi pendurada pelo CPython 3.13
+  (`PyThread_hang_thread`), com o mesmo resultado. O `Loader` da suíte insere lote a lote numa
+  transação e não entrega gerador ao DuckDB; as threads dos esboços não referenciam o objeto, para um
+  stream ou loader abandonado ser coletado e a thread terminar.
+- `RecordBatchReader.from_batches` não confere os lotes contra o esquema declarado:
+  `read_next_batch` devolve o lote como veio, `read_all` acusa `Schema at index 0 was different`, e o
+  `arrow_scan` lê os buffers pelo esquema declarado, então `(1, 1.0)` com as colunas trocadas entrou
+  como `(4607182418800017408, 5e-324)`; uma coluna a mais ou a menos falha. A nulidade do esquema
+  Arrow não é conferida pelo DuckDB; a coluna `NOT NULL` da tabela é. `RecordBatch.cast` recusa o
+  mesmo que `Table.cast`. O `close()` de um leitor sobre gerador não encerra o gerador, que só termina
+  no descarte.
+- As conversões do lote não copiam: `to_batches(max_chunksize=100_000)` de 300.000 linhas em
+  0,04 ms, `Table.from_batches` em 0,003 ms, `RecordBatch.to_pandas(types_mapper=pd.ArrowDtype)` de
+  100.000 linhas em 1,4 ms e `RecordBatch.from_pandas` em 0,5 ms, com os buffers compartilhados. Um
+  objeto com `__arrow_c_stream__` é aceito por `RecordBatchReader.from_stream`, pelo `register` do
+  DuckDB e por `write_deltalake`.
+- Um erro que a consulta encontra no meio da leitura chega ao Python como `OSError` com a mensagem
+  do DuckDB (`Conversion Error: Could not convert string 'x' to INT32`), não como
+  `duckdb.ConversionException`.
+
+Consequências: a fronteira do plano passou de `pa.Table` a lotes `RecordBatch` com `stream` e
+`loader`, e a `pa.Table` ficou como conveniência; `loader` insere lote a lote numa transação; o
+`cast` por lote virou barreira de segurança; a regra das threads da biblioteca admite a auxiliar de
+cada stream e loader; e o `fetchmany` do `redshift_connector` entrou em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). Suíte: 110 passam e 60 são pulados sem variável; 148 e
+22 com a raiz local (2026-09-20, macOS).

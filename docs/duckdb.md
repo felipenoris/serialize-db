@@ -442,7 +442,7 @@ Formas de saída, com o tempo de uma execução para 300.000 linhas:
 | Chamada | Tipos de `valor` e `data_ref` | Tempo |
 | --- | --- | --- |
 | `to_arrow_table()` | `decimal128(18, 2)`, `date32[day]` | 0,005 s |
-| `to_arrow_reader(tamanho_lote)` | Os mesmos, em lotes. | |
+| `to_arrow_reader(tamanho_lote)` | Os mesmos, em lotes. | 0,54 s para 20.000.000 de linhas em três colunas em lotes de 100.000, com o processo em 83 MB contra 567 MB de `to_arrow_table` (2026-09-20). |
 | `df()` | `float64`, `datetime64[us]` | 0,020 s |
 | `to_arrow_table().to_pandas(types_mapper=pd.ArrowDtype)` | `decimal128(18, 2)[pyarrow]`, `date32[day][pyarrow]` | 0,005 s mais menos de 0,001 s |
 | `pl()` | `Decimal(18, 2)`, `Date` | 0,086 s |
@@ -450,6 +450,15 @@ Formas de saída, com o tempo de uma execução para 300.000 linhas:
 
 `df()` é o caminho a evitar para valores contábeis. `fetchnumpy()` devolve arrays mascarados e
 `fetch_df_chunk()` devolve o resultado em pedaços de 2.048 linhas vezes um multiplicador.
+
+O leitor de `to_arrow_reader` pertence à consulta em curso: outro comando no mesmo cursor o esvazia
+sem erro, e num `cursor()` próprio ele entrega o snapshot da sua consulta enquanto os outros cursores
+inserem na mesma tabela, criam, alteram e apagam tabelas; fechar o cursor no meio não o interrompeu,
+e cem `cursor()` mais `close()` levaram 0,4 ms. Sem `ORDER BY` o primeiro lote chega antes do fim da
+consulta (3 ms em 20.000.000 de linhas); com `ORDER BY`, o `execute` só volta depois da ordenação
+inteira (2,4 s) e os lotes vêm em seguida. Um erro que a consulta encontra no meio da leitura chega
+ao Python como `OSError` com a mensagem do DuckDB, não como `duckdb.Error` (2026-09-20,
+`test_duckdb.py`, `test_parallel.py`).
 
 Parâmetros: `?` posicional, `$1` numerado e reutilizável, `$nome` nomeado com um dicionário. A API
 relacional (`con.sql(...)`, `con.table('operacoes').filter(...)`) monta consultas preguiçosas e
@@ -469,6 +478,20 @@ con.append("operacoes", df, by_name=True)          # equivalente sem SQL
 `DEFAULT` ou `NULL`) e rejeita nomes desconhecidos; o padrão `BY POSITION` segue a ordem da tabela.
 Valores de tipo diferente sofrem conversão automática, inclusive de `VARCHAR` para número, então a
 conferência de tipos precisa acontecer no Arrow, antes do comando.
+
+Um `RecordBatchReader` registrado entra por um único `INSERT ... SELECT`, atômico: se o gerador
+Python que o alimenta falha no lote 20, o comando falha inteiro e a tabela fica como estava. O
+`arrow_scan` lê o fluxo por uma thread de leitura antecipada do Arrow, que chama o gerador em outra
+thread, tinha puxado de 5 a 15 lotes quando o comando falhou no primeiro, chegou a 10 ou 20 depois
+da falha e parou ali; um gerador preso nessa thread numa espera sem prazo, ou ainda chamando Python
+na saída do processo, segura o processo no destrutor do pool de threads do Arrow. O leitor não
+confere os lotes contra o esquema declarado, e o `arrow_scan` lê os buffers por esse esquema: um
+lote com as colunas em outra ordem entra sem erro com os bytes trocados, `(1, 1.0)` lido como
+`(4607182418800017408, 5e-324)`; uma coluna a mais ou a menos falha com `ArrowArray struct has 3
+children, expected 2`. A nulidade do esquema Arrow não é conferida; a coluna `NOT NULL` da tabela é.
+A biblioteca faz o `cast` de cada lote antes de registrá-lo e insere lote a lote, um `RecordBatch` em
+memória por comando dentro de uma transação, cerca de 3,5 ms por comando, sem entregar gerador ao
+DuckDB (2026-09-20, `test_duckdb.py`, `test_parallel.py`).
 
 Conflitos em chave primária ou `UNIQUE`:
 

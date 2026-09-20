@@ -30,8 +30,10 @@ módulo, em `PLAN-STAGE-<n>.md`.
   que o pipeline usa: views ou tabelas materializadas no DuckDB, `COPY ... MANIFEST` no Redshift.
 - **Paralelismo pelo código cliente.** A API é síncrona e as primitivas podem ser chamadas de
   qualquer thread, cada uma na conexão da sua thread; o cliente paraleliza com `concurrent.futures`,
-  e `ingest` e `publish` aceitam `max_workers`. A seção "Paralelismo" diz como operar em cada
-  cenário.
+  e `ingest` e `publish` aceitam `max_workers`. Os dados cruzam a fronteira em lotes `RecordBatch`:
+  `stream` lê o lote seguinte e `loader` grava o anterior enquanto o cliente trabalha no atual, e
+  `query`, `execute` e `load` são as formas por `pa.Table`. A seção "Paralelismo" diz como operar em
+  cada cenário.
 - **Restrições aplicadas por consulta.** Nem o Parquet nem o Delta têm chave primária, unicidade ou
   chave estrangeira, e o Redshift só as registra. A auditoria da execução as aplica com consultas
   derivadas dos próprios modelos, e o texto SQL de cada verificação pode ser impresso ou gravado,
@@ -113,9 +115,10 @@ auditoria e o resumo da execução vão para o log do processo, não para `_seri
 
 As primitivas de cada módulo, com assinatura, comportamento e testes, estão em `PLAN-STAGE-<n>.md`,
 um arquivo por etapa, que [`PLAN.md`](PLAN.md) indexa; os fluxos abaixo as citam pelo nome. `table`
-é sempre um `Table` do SQLAlchemy, obtido do modelo; `uri` é a pasta da tabela Delta; `data` é uma
-`pa.Table`, o tipo que o código cliente entrega e recebe, ou um `RecordBatchReader` nas primitivas
-internas; `run` é a `Execution` aberta, e `run.sandbox` o motor onde o pipeline roda.
+é sempre um `Table` do SQLAlchemy, obtido do modelo; `uri` é a pasta da tabela Delta; `data` é o que o
+código cliente entrega a `load`, uma `pa.Table`, um `pa.RecordBatch`, um `RecordBatchReader` ou um
+iterável de lotes, ou um `RecordBatchReader` nas primitivas internas; o cliente lê lotes por `stream`
+e grava por `loader`; `run` é a `Execution` aberta, e `run.sandbox` o motor onde o pipeline roda.
 
 ## Fluxos de uso
 
@@ -148,8 +151,9 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
    versões, mesmo que outra execução publique no meio.
 2. `run.ingest` cria as views com os nomes dos modelos sobre `delta_scan` na versão fixada, e
    materializa as tabelas consultadas muitas vezes com as partições pedidas.
-3. O pipeline roda em `run.sandbox`; o que sai para o Python sai como `pa.Table` por `query` ou
-   `execute` e volta por `load`; os intermediários ficam no sandbox, não no Delta.
+3. O pipeline roda em `run.sandbox`; o que sai para o Python sai em lotes por `stream`, ou como
+   `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; os intermediários ficam no
+   sandbox, não no Delta.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
 5. `run.publish` reconcilia o esquema, substitui cada partição num commit com
    `serialize_db_execution_id` e `serialize_db_input_versions`, e avança `versions[table]`. Um
@@ -170,8 +174,9 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
    `COPY ... MANIFEST` na staging sem a coluna de partição, seguido de `INSERT ... SELECT *, '<valor>'`. A carga de
    arquivos anteriores a uma coluna nova depende de `FILLRECORD` ou de lista de colunas, pendente da
    prova de conceito.
-3. O pipeline roda os mesmos statements Core, compilados para o Redshift; as tabelas Arrow entram
-   por Parquet em `staging/` mais `COPY`, e saem das tuplas do cursor, por ADBC ou por `UNLOAD`.
+3. O pipeline roda os mesmos statements Core, compilados para o Redshift; os lotes entram por
+   Parquet em `staging/` mais `COPY`, um row group por lote, e saem das tuplas de `fetchmany` ou por
+   `UNLOAD`.
 4. `run.audit` roda as mesmas consultas no Redshift.
 5. `run.publish` grava cada partição por `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE` na pasta da
    tabela e registra os arquivos por `register_files`, com estatísticas do rodapé Parquet; os dados
@@ -298,6 +303,9 @@ cenário em `test_parallel.py` e em `test_redshift.py`.
 4. O estado da execução (`versions`, auditorias aprovadas, o alocador) fica sob lock.
 5. O DuckDB, o delta-rs e o PyArrow liberam o GIL no trabalho nativo: threads Python bastam para o
    paralelismo, e o custo de uma extensão em Rust não se justifica por ele.
+6. `stream` e `loader` são as threads da biblioteca ao lado dos pools: uma auxiliar por primitiva,
+   com um cursor próprio e uma fila limitada, encerrada no `close`; o cliente trabalha no lote atual
+   enquanto a biblioteca lê o seguinte ou grava o anterior.
 
 ### Leituras em paralelo
 
@@ -308,9 +316,10 @@ cenário em `test_parallel.py` e em `test_redshift.py`.
   no S3, onde a latência domina; em disco local uma leitura já usa os núcleos.
 - **DuckDB.** Um processo, e cada consulta usa os núcleos que `threads` permite; `threads` é da
   instância, não do cursor, então duas consultas em paralelo dividem o mesmo pool e só ganham quando
-  uma espera o S3 ou quando sobram núcleos. Várias threads chamam `run.sandbox.query` e
-  `run.sandbox.execute` ao mesmo tempo, cada uma no seu cursor. Um `RecordBatchReader` é consumido na
-  primitiva que o abriu, antes de outro comando na mesma conexão.
+  uma espera o S3 ou quando sobram núcleos. Várias threads chamam `run.sandbox.query`,
+  `run.sandbox.execute` e `run.sandbox.stream` ao mesmo tempo, cada uma no seu cursor; cada stream e
+  cada loader roda num cursor próprio, e o cursor da thread do cliente fica livre enquanto eles
+  correm.
 - **Redshift.** Paralelo dentro de cada comando; entre comandos, uma conexão por thread, limitadas
   pelas slots da fila do WLM. `run.sandbox.query` de várias threads abre uma conexão por thread.
 
@@ -344,13 +353,40 @@ with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2
         saldos.result()                                              # a leitura abaixo depende dos dois
         limites.result()
 
-    projected = run.sandbox.query(select(Saldo).where(Saldo.data_base_str == run.partition))   # já vê saldos e limites
-    frame = projected.to_pandas(types_mapper=pd.ArrowDtype)
-    frame["id_lancamento"] = run.next_ids(LancamentoProjetado, len(frame))       # faixa contígua, sob lock
-    run.sandbox.load(LancamentoProjetado, pa.Table.from_pandas(frame, preserve_index=False))
+    statement = select(Saldo).where(Saldo.data_base_str == run.partition)   # já vê saldos e limites
+    with run.sandbox.stream(statement) as stream, run.sandbox.loader(LancamentoProjetado) as loader:
+        for batch in stream:                                         # o lote seguinte já está sendo lido
+            frame = batch.to_pandas(types_mapper=pd.ArrowDtype)
+            frame["id_lancamento"] = run.next_ids(LancamentoProjetado, len(frame))   # faixa contígua, sob lock
+            loader.write(pa.RecordBatch.from_pandas(frame, preserve_index=False))    # o lote anterior entra na thread do loader
     run.audit(LancamentoProjetado, partitions=[run.partition])
     run.publish(LancamentoProjetado, Saldo, partitions=[run.partition], max_workers=2)   # duas tabelas, dois logs
 ```
+
+### Lotes em streaming
+
+`stream` e `loader` encadeiam três estágios sobre um pipeline que trata cada linha por si: a
+biblioteca lê o lote seguinte numa thread, o cliente trabalha no lote atual na sua thread, e a
+biblioteca grava o lote anterior noutra thread. O que cada um garante, medido em 2026-09-20
+([`PLAN.md`](PLAN.md), seção "A troca de dados com o código cliente"):
+
+- `stream` roda a consulta num cursor próprio e pré-busca `prefetch` lotes numa fila limitada; o
+  cursor da thread do cliente fica livre, e um comando nele não esvazia o leitor. A memória do lado
+  Python é a de `prefetch + 1` lotes; a do DuckDB é a da consulta, que uma ordenação materializa
+  antes do primeiro lote, sob `memory_limit`. O erro da consulta chega na construção ou na leitura,
+  e `close`, ou o fim do `with`, interrompe a thread; um stream abandonado é coletado e a thread
+  termina.
+- `loader` insere cada lote numa transação explícita, num cursor próprio: nada é visível antes do
+  `commit`, e uma exceção dentro do `with`, um lote recusado pelo `cast` ou um erro do `INSERT`
+  desfazem tudo. `write` bloqueia quando a fila está cheia, o que segura o cliente no ritmo da
+  escrita.
+- O ganho é o trabalho do cliente escondido atrás da leitura e da escrita, e o limite é o estágio
+  mais lento: a lógica em pandas com backend pyarrow libera o GIL nas chamadas nativas, e um laço
+  Python puro também se sobrepõe à leitura, porque puxar um lote é uma chamada nativa longa.
+- A lógica por lote é a lógica por linha. Agregações, `merge`, ordenações e janelas precisam de
+  todas as linhas: vão para SQL no sandbox, ou para a `pa.Table` de `query`, que a mesma API monta.
+- Nenhum gerador Python é entregue ao `register` do DuckDB: a leitura antecipada do `arrow_scan`
+  puxa lotes fora do controle da fila e continua depois de o comando terminar.
 
 ### Identificadores
 

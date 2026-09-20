@@ -144,6 +144,26 @@ def test_session_and_named_parameters(redshift_session: RedshiftSession) -> None
     assert session.execute("select has_schema_privilege(%s, 'CREATE')", (session.schema,))[0][0] is True
 
 
+def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession) -> None:
+    """``fetchmany`` entrega o resultado em fatias, e cada fatia vira um ``RecordBatch`` com o esquema do statement: o caminho de ``stream`` no motor Redshift."""
+    schema = pa.schema([("n", pa.int64()), ("valor", pa.decimal128(18, 2)), ("dia", pa.date32())])
+    cursor = redshift_session.connection.cursor()
+    cursor.execute(
+        "select n, cast(n * 0.25 as decimal(18, 2)) as valor, date '2026-08-01' + n as dia "
+        "from (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4) t order by n"
+    )
+    names = [column[0] for column in cursor.description]
+
+    batches = []
+    while rows := cursor.fetchmany(2):
+        batches.append(pa.RecordBatch.from_pylist([dict(zip(names, row)) for row in rows], schema=schema))
+    assert [batch.num_rows for batch in batches] == [2, 2, 1]
+
+    table = pa.Table.from_batches(batches)
+    assert table.column("valor").to_pylist() == [decimal.Decimal(f"{k * 0.25:.2f}") for k in range(5)]
+    assert table.column("dia")[4].as_py() == dt.date(2026, 8, 5)
+
+
 def test_schema_location_and_three_part_name(redshift_session: RedshiftSession) -> None:
     """Em que banco está o esquema do projeto, o que a escrita num datashare exige, e o ida e volta pelo nome em três partes."""
     session = redshift_session
