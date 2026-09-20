@@ -278,18 +278,22 @@ Redshift no projeto.
 
 Credenciais no SageMaker Unified Studio: o espaço fornece as credenciais do papel do projeto pelo
 endpoint de contêiner (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, método `container-role` no `boto3`),
-e o espaço sai para a internet por um proxy HTTP (`HTTP_PROXY`, `HTTPS_PROXY` e `no_proxy` em
-minúsculas, que lista o endpoint de credenciais e os serviços da AWS). O delta-rs encontra o endpoint
-de contêiner e abre a tabela pela cadeia padrão, sem `storage_options`. No início da sessão de
-verificação, porém, a chamada de credenciais falhou com `Non-success status from HTTP credential
-provider` (`StatusCode(403)`) com o ambiente como encontrado, e passou com `NO_PROXY` igual a
-`no_proxy`, com `AWS_CONTAINER_CREDENTIALS_FULL_URI` ou sem as variáveis de proxy; minutos depois o
-ambiente como encontrado passou a funcionar com deltalake 1.5.0 e 1.6.4 e com os dois
-interpretadores, e a falha não voltou. A causa não ficou isolada (uma resposta do proxy é a
-hipótese), e o teste `test_delta_rs_credential_chain` em `tests/` registra o resultado de cada
-variante no ambiente onde roda. Por precaução, a biblioteca exporta `NO_PROXY` a partir de
-`no_proxy` ao iniciar, quando só a minúscula existe, e mantém como reserva as credenciais
-temporárias que o `boto3` resolve, passadas em `storage_options` (`AWS_ACCESS_KEY_ID`,
+e o espaço sai para a internet por um proxy HTTP (`HTTP_PROXY`, `HTTPS_PROXY` e `no_proxy`, que
+lista o endpoint de credenciais e os serviços da AWS). O delta-rs encontra o endpoint de contêiner e
+abre a tabela pela cadeia padrão, sem `storage_options`; o aviso `aws_config::profile::credentials`
+de uma falha mostra que a cadeia também consulta o perfil `default` de `~/.aws/config`
+(`credential_source = EcsContainer`), que aponta para o mesmo endpoint. O cliente HTTP do delta-rs
+lê `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias, mas lê `NO_PROXY` e, só quando ela está ausente,
+`no_proxy`: com `NO_PROXY` vazia, a chamada ao endpoint de credenciais vai pelo proxy e falha com
+`Non-success status from HTTP credential provider` (`StatusCode(403)`). Foi essa a falha do início
+da verificação de 2026-09-19, isolada em 2026-09-20: num shell aberto pela extensão do Claude Code no
+Code Editor, `NO_PROXY` existe vazia, e num terminal do Code Editor ela tem a lista de `no_proxy`.
+Com `NO_PROXY` ausente, exportada de `no_proxy` ou reduzida a `169.254.170.2`, ou sem as variáveis
+de proxy, a chamada passa (em 2026-09-19 também passou com `AWS_CONTAINER_CREDENTIALS_FULL_URI`),
+com deltalake 1.5.0 e 1.6.4 e com os dois interpretadores. O teste `test_delta_rs_credential_chain`
+em `tests/` registra as cinco variantes no ambiente onde roda, e a biblioteca exporta `NO_PROXY` a
+partir de `no_proxy` ao iniciar, quando a maiúscula está ausente ou vazia, e mantém como reserva as
+credenciais temporárias que o `boto3` resolve, passadas em `storage_options` (`AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`) e renovadas a cada abertura da tabela,
 porque expiram. O DuckDB com `PROVIDER credential_chain` e o `boto3` nunca falharam.
 

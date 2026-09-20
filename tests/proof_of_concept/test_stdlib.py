@@ -280,6 +280,7 @@ def prepare_environment(environ: MutableMapping[str, str]) -> dict[str, str]:
     """Exporta ``NO_PROXY`` de ``no_proxy`` e copia a região entre ``AWS_REGION`` e ``AWS_DEFAULT_REGION``; devolve o que mudou."""
     changes: dict[str, str] = {}
 
+    # Ausente ou vazia: o delta-rs lê NO_PROXY antes de no_proxy, e vazia ela anula as exceções.
     if not environ.get("NO_PROXY") and environ.get("no_proxy"):
         environ["NO_PROXY"] = changes["NO_PROXY"] = environ["no_proxy"]
 
@@ -304,6 +305,10 @@ def test_prepare_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     assert os.environ["NO_PROXY"] == "169.254.169.254,localhost" and os.environ["AWS_DEFAULT_REGION"] == "us-west-2"
 
     assert prepare_environment(os.environ) == {}  # a segunda chamada não muda nada
+
+    # NO_PROXY vazia (o shell da extensão do Claude Code no espaço a deixa assim) é substituída como a ausente.
+    monkeypatch.setenv("NO_PROXY", "")
+    assert prepare_environment(os.environ) == {"NO_PROXY": "169.254.169.254,localhost"}
 
 
 def test_json_control_file_and_commit_metadata() -> None:

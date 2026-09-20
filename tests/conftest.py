@@ -252,13 +252,16 @@ def require_s3_access(root: str) -> None:
 
 @pytest.fixture(scope="session")
 def proxy_environment() -> Iterator[dict[str, str | None]]:
-    """Exporta ``NO_PROXY`` a partir de ``no_proxy`` quando só a minúscula existe.
+    """Exporta ``NO_PROXY`` a partir de ``no_proxy`` quando a maiúscula está ausente ou vazia.
 
-    O cliente HTTP do delta-rs lê apenas a variável em maiúsculas; sem ela, a chamada ao endpoint de
-    credenciais do contêiner passa pelo proxy do espaço e falha. A biblioteca fará o mesmo ao iniciar.
+    O cliente HTTP do delta-rs lê ``NO_PROXY`` e, só quando ela está ausente, ``no_proxy``; vazia,
+    ela anula as exceções, e a chamada ao endpoint de credenciais do contêiner passa pelo proxy do
+    espaço e falha com 403. A biblioteca fará o mesmo ao iniciar.
     """
     original = {name: os.environ.get(name) for name in ("NO_PROXY", "AWS_REGION")}
+    record("environment.no_proxy_as_found", "ausente" if original["NO_PROXY"] is None else ("vazia" if original["NO_PROXY"] == "" else "definida"))
 
+    # Vazia conta como ausente: ``get`` devolve "" e a condição a substitui.
     if not os.environ.get("NO_PROXY") and os.environ.get("no_proxy"):
         os.environ["NO_PROXY"] = os.environ["no_proxy"]
 

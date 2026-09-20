@@ -50,7 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Uma chave com um destes nomes tem o valor trocado por *** na saída; a variável só mostra presença.
 SECRET_PATTERN = re.compile(r"secret|password|token|credential|private", re.IGNORECASE)
 
-# As variáveis de proxy nas duas grafias: o delta-rs lê só as maiúsculas, e o espaço define as duas.
+# As variáveis de proxy nas duas grafias: o delta-rs lê NO_PROXY e, só quando ela está ausente, no_proxy; uma NO_PROXY vazia anula as exceções.
 PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
 
 # Só o S3 e o DynamoDB têm gateway endpoint; um IP público de outro serviço depende da internet ou do proxy.
@@ -283,6 +283,9 @@ def environment_rows(names: Iterable[str]) -> list[list[str]]:
         value = os.environ.get(name)
         if value is None:
             rows.append([name, "(ausente)"])
+        elif value == "":
+            # Vazia não é ausente: um cliente que lê NO_PROXY antes de no_proxy fica sem exceção alguma.
+            rows.append([name, "(vazia)"])
         elif name != name.upper() and name.upper() in names and value == os.environ.get(name.upper()):
             # A minúscula igual à maiúscula (no_proxy e NO_PROXY) sai uma vez; a lista tem 1.500 caracteres.
             rows.append([name, f"(igual a {name.upper()})"])

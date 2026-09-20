@@ -156,12 +156,14 @@ def test_environment_rows_show_presence_for_secrets_and_collapse_equal_twins(mon
     monkeypatch.setenv("https_proxy", "http://outro:3128")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("HTTP_PROXY", "")
 
-    rows = dict(probelib.environment_rows(["NO_PROXY", "no_proxy", "HTTPS_PROXY", "https_proxy", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE"]))
+    rows = dict(probelib.environment_rows(["NO_PROXY", "no_proxy", "HTTPS_PROXY", "https_proxy", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE", "HTTP_PROXY"]))
     assert rows["no_proxy"] == "(igual a NO_PROXY)"
     assert rows["https_proxy"] == "http://outro:3128"
     assert rows["AWS_SECRET_ACCESS_KEY"] == "definida"
     assert rows["AWS_PROFILE"] == "(ausente)"
+    assert rows["HTTP_PROXY"] == "(vazia)"
 
 
 def test_find_values_and_connection_rows() -> None:
@@ -408,6 +410,19 @@ def test_cluster_and_workgroup_rows_have_one_row_per_resource() -> None:
     workgroups = {"workgroups": [{"workgroupName": "wg", "status": "AVAILABLE", "endpoint": {"address": "b", "port": 5439}, "namespaceName": "ns", "baseCapacity": 8}]}
     rows = redshift.workgroup_rows(workgroups)
     assert len(rows) == 2 and rows[1][:4] == ["wg", "AVAILABLE", "b:5439", "ns"]
+
+
+def test_diagnose_suite_environment_exports_no_proxy_when_absent_or_empty() -> None:
+    """O diagnóstico repete o delta-rs com o que a suíte exporta: ``NO_PROXY`` de ``no_proxy`` quando ausente ou vazia, e nada nos demais casos."""
+    assert diagnose_aws.suite_environment({"no_proxy": "169.254.170.2,localhost"}) == {"NO_PROXY": "169.254.170.2,localhost"}
+    assert diagnose_aws.suite_environment({"NO_PROXY": "", "no_proxy": "169.254.170.2"}) == {"NO_PROXY": "169.254.170.2"}
+    assert diagnose_aws.suite_environment({"NO_PROXY": "a", "no_proxy": "b"}) == {}
+    assert diagnose_aws.suite_environment({"NO_PROXY": ""}) == {}
+    assert diagnose_aws.suite_environment({}) == {}
+
+    assert diagnose_aws.no_proxy_state({}) == "ausente"
+    assert diagnose_aws.no_proxy_state({"NO_PROXY": ""}) == "vazia"
+    assert diagnose_aws.no_proxy_state({"NO_PROXY": "a"}) == "definida"
 
 
 def test_diagnose_describe_says_whether_the_service_answered() -> None:
