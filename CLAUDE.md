@@ -543,7 +543,7 @@ the same pinned versions.
 - Network: outbound HTTP goes through `proxy.awsds.internal:3128`; `no_proxy` is always set;
   `NO_PROXY` equals it in a Code Editor terminal and is empty in a Claude Code extension shell. `uv` reaches PyPI through the proxy but downloads Python only with
   `UV_PYTHON_DOWNLOADS=automatic`; `uv sync` needs it to fetch Python 3.13, the venv lands in `.venv`
-  (ignored), and `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored, which is harmless. System
+  (ignored), and `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored (harmless). System
   Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0, DuckDB 1.5.4, PyArrow 21.0.0 and
   redshift_connector 2.1.10 preinstalled.
 - `gh`, installed and authenticated as the user on 2026-09-19, pushes over HTTPS; the 03:23 UTC
