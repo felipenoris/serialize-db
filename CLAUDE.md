@@ -348,7 +348,7 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   before it enters a reader; a probe that feeds a deliberately wrong batch is the check.
 - **A session-state change inside a probe splits its readings** (2026-09-20). `USE` landed mid-section in
   the Redshift probe, and `has_database_privilege(current_database())` after it silently read the
-  datashare database instead of the connection's: nothing failed, the value meant something else. Put every reading of the pre-change state before
+  datashare database instead of the connection's, and nothing failed. Put every reading of the pre-change state before
   the change, confirm the change with a query (`current_database()`), and run after it only what
   needs the new state.
 
@@ -570,8 +570,8 @@ Each fact is detailed in the file named at the end of its line.
   beside a thread running pure Python waits the switch interval per reacquisition: 200 `os.stat` took
   0.3 s against 0.2 ms alone (0.035 s with `sys.setswitchinterval(0.0005)`), and the lazy
   `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import everything
-  at startup and keep hot pure-Python loops out of the library's threads. The rules of `docs/PLAN.md`
-  record the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
+  at startup and keep hot pure-Python loops out of the library's threads. `docs/PLAN.md`, section "A troca de dados com o
+  código cliente", records the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
 - The target's Redshift is serverless (`controladoria-wg`, `sa-east-1`), and the connection is the
   workgroup's temporary credential: `GetWorkgroup` for the endpoint, `GetCredentials` for a user
   `IAMR:<role>` and a password lasting 900 s by default and 3600 s at most, then
