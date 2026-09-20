@@ -227,7 +227,8 @@ try:
     connection.execute("SET http_retries = 1")
     secret = f"CREATE SECRET diag (TYPE s3, PROVIDER credential_chain, REGION '{region}'" + (f", ENDPOINT '{endpoint}'" if endpoint else "") + ")"
     connection.execute(secret)
-    print(connection.execute(f"SELECT count(*) FROM glob('{root}/serialize-db-poc/*')").fetchone()[0])
+    # ** desce às subpastas; um * só não cruza "/", e as sessões da suíte ficam em serialize-db-poc/<id>/.
+    print(connection.execute(f"SELECT count(*) FROM glob('{root}/serialize-db-poc/**')").fetchone()[0])
 except Exception as error:
     print(type(error).__name__ + ": " + " ".join(str(error).split()), file=sys.stderr)
     sys.exit(1)
@@ -245,7 +246,7 @@ def duckdb_extension_directory() -> str:
 def check_duckdb(root: str, region: str | None, endpoint: str) -> bool:
     """Carrega ``httpfs``, ``aws`` e ``delta`` da pasta de extensões e lista o prefixo com um secret ``credential_chain``."""
     arguments = [root, region or "", duckdb_extension_directory(), endpoint]
-    return run_probe("DuckDB", DUCKDB_PROBE, arguments, lambda out: f"listou o prefixo ({out} entradas) com extensões de {duckdb_extension_directory() or '(padrão)'}")
+    return run_probe("DuckDB", DUCKDB_PROBE, arguments, lambda out: f"listou serialize-db-poc/ e subpastas ({out} objetos) com extensões de {duckdb_extension_directory() or '(padrão)'}")
 
 
 def main(argv: list[str]) -> int:

@@ -70,6 +70,11 @@ tentar), Redshift sem conexão. `-m local`, `-m s3` e `-m redshift` selecionam u
 criam `serialize-db-poc/<id>/` sob a raiz ou tabelas `serialize_db_poc_<id>_*` no esquema, apagam
 tudo no fim da sessão e imprimem um relatório com os fatos e as medições, com as chaves prefixadas
 pelo alvo (`local.`, `s3.`, `redshift.`) ou pela biblioteca (`duckdb.`, `sqlalchemy.`, `pyarrow.`).
+O relatório abre com a sessão (`session.`: início, plataforma, Python, versões, marcadores e, no
+fim, a contagem de testes por resultado e a duração) e registra a limpeza de cada raiz
+(`local.cleanup`, `s3.cleanup`), para dizer sozinho se a suíte passou e o que ficou. Num bucket
+versionado, cada objeto que a limpeza apaga vira versão não corrente, invisível à listagem e cobrada
+até uma regra `NoncurrentVersionExpiration`; `probes/bucket.py` (`BK-14`) conta o acumulado.
 
 Variáveis de ambiente:
 
@@ -101,12 +106,15 @@ o que uma sessão grava é `.pytest_cache/` na raiz do repositório, do próprio
 
 Scripts só de leitura, em [`probes/`](probes/README.md), que fotografam o que o ambiente oferece à
 biblioteca: o espaço do SageMaker visto de dentro (credenciais, região, projeto, rede, máquina,
-Python e DuckDB), o bucket sob a raiz (configuração, ciclo de vida, inventário e tabelas Delta, as permissões do papel
-pela simulação de política do IAM, a chave KMS, a política do bucket), o acesso que a suíte S3
-exige, o Redshift (conexão, papel IAM do `COPY` e seu alcance sobre a raiz, Data API, sessão,
-privilégios, configurações e o diagnóstico de um `COPY` reprovado) e os serviços de catálogo. Cada um imprime o relatório e o grava em `probes/output/`, pasta fora do git,
-para ser colado na conversa com o assistente, com seções numeradas, cada chamada ecoada acima do
-resultado ou do erro, a tabela de checagens e a seção final de chamadas que falharam.
+Python e DuckDB), o bucket sob a raiz (configuração, ciclo de vida, inventário, tabelas Delta e
+versões não correntes, as permissões do papel pela simulação de política do IAM, a chave KMS, a
+política do bucket), o acesso que a suíte S3 exige, o Redshift (conexão, papel IAM do `COPY` e seu
+alcance sobre a raiz, Data API, sessão, privilégios, configurações e o diagnóstico de um `COPY`
+reprovado) e os serviços de catálogo. Cada um imprime o relatório e o grava em `probes/output/`,
+pasta fora do git, para ser colado na conversa com o assistente, com seções numeradas, cada chamada
+ecoada acima do resultado ou do erro, a tabela de checagens e a seção final de chamadas que
+falharam. O JSON de `SERIALIZE_DB_TEST_REPORT` (seção Testes) acompanha os relatórios dos probes na
+conversa.
 
 O argumento `s3://bucket/prefixo` é a raiz que a suíte S3 recebe em `SERIALIZE_DB_TEST_S3_ROOT`,
 variável que o substitui quando ele falta: `bucket.py` inventaria o que há sob ela,

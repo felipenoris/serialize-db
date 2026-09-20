@@ -148,7 +148,7 @@ research appends to the matching group.
 | --- | --- |
 | `README.md` | `uv init --python 3.13`, `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with one command per suite, the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and the offline recipe (`prepare_offline.sh`, `.tar.gz` transfer, `.venv/bin/python -m pytest`). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md` in the shape of the `aws/` scripts of felipenoris/AWS-DataScience: `space.py` (the space from inside: credentials and their expiry, region, project with one row per connection, network, machine with temp-folder space, open-file limit and the `~/shared` mount state by real path, the `dev` group of `pyproject.toml` checked for presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (the bucket under the root: settings, lifecycle, inventory, versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM policy simulation or what the run itself proved, the KMS key, the bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection with its data parsed as a dict, JDBC URL and credentials secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, whether the Redshift APIs have VPC endpoints (`RS-14`), the Data API, the session with database privileges, settings, load-error views and external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`, where DNS, TCP and internet results are readings in the tables, never failed calls (a public IP is a possible gateway endpoint only for S3 and DynamoDB), and each failed call leaves `report.last_reason` for the check that interprets it. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also goes to `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md` in the shape of the `aws/` scripts of felipenoris/AWS-DataScience: `space.py` (the space from inside: credentials and their expiry with the time left, region, project with one row per connection, network, machine with temp-folder space, open-file limit and the `~/shared` mount state by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` checked for presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (the bucket under the root: settings, lifecycle, inventory with each Delta table's data files, commits and last object, the S3 suite's leftover sessions (`BK-13`) and the non-current versions and delete markers the versioning accumulated (`BK-14`), versioning inferred from a sample's `VersionId` when the API is denied, the role's permissions by IAM policy simulation or what the run itself proved, the KMS key, the bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict; own format; the DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection with its data parsed as a dict, JDBC URL and credentials secret, clusters and workgroups with the default IAM role for `COPY` and its simulated reach over the S3 root, whether the Redshift APIs have VPC endpoints (`RS-14`), the Data API, the session with database privileges, settings, load-error views and external schemas), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), over `probelib.py`, where DNS, TCP and internet results are readings in the tables, never failed calls (a public IP is a possible gateway endpoint only for S3 and DynamoDB), and each failed call leaves `report.last_reason` for the check that interprets it. `sagemaker-studio` stays out of the project: it drags unpinned `deltalake`, `duckdb` and `pandas` (a test install downgraded duckdb to 1.5.1); the probes import it from the system interpreter. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -226,13 +226,16 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   `get_add_actions(flatten=True)`, SUPER binds rendered as `json_parse(%s)`. Read the study suite
   of a library before writing code against its API.
 - **A probe's first real run tests its parsing and its verdicts** (2026-09-20). The lab run showed
-  the project connection data serialized as a repr string, unreadable by `find_values`; DNS, TCP
-  and internet readings counted as failed calls (exit code 1 in the target, where they always
-  fail); the pin list had drifted from `pyproject.toml` and missed an absent `redshift_connector`;
-  and check `BK-11` had no branch for a denied call. The second run found the gateway-endpoint
-  label written for S3 applied to every public name and a mount test that a symlink defeats.
+  the project connection data serialized as a repr string, unreadable by `find_values`; DNS, TCP and
+  internet readings counted as failed calls (exit code 1 in the target, where they always fail); the
+  pin list had drifted from `pyproject.toml` and missed an absent `redshift_connector`; and check
+  `BK-11` had no branch for a denied call. The second run found the gateway-endpoint label written
+  for S3 applied to every public name and a mount test that a symlink defeats. The third run showed
+  DuckDB counting 0 entries beside 16 objects from boto3 under the same prefix (a non-recursive
+  glob) and a test report that could not say whether the suite had passed or its cleanup had run.
   Serialize data as data, make expected conditions readings, derive lists from the source of truth,
-  give every check a branch for the denied call, and read a label against each item it covers.
+  give every check a branch for the denied call, read a label against each item it covers, make two
+  readings of one thing agree or explain the difference, and have a report record its own outcome.
 
 ## What the documents establish
 
@@ -491,8 +494,10 @@ short-timeout listing, 11 s with a silent proxy; Redshift without a connection);
 inferred from the SageMaker project; DuckDB extensions are installed only into
 `SERIALIZE_DB_DUCKDB_EXTENSIONS`, with `autoinstall_known_extensions` off because `LOAD` of a known
 extension otherwise downloads it into `~/.duckdb` without notice. Verified on 2026-09-19 on macOS: no
-variables, 34 passed and 48 skipped; local root, 64 passed and 18 skipped. The S3 suite passed in the
-space the same day (10 passed in 27 s) before the boto3 list, copy and delete test was added.
+variables, 34 passed and 48 skipped; local root, 64 passed and 18 skipped. The S3 suite passed in
+the space the same day (10 passed in 27 s) before the boto3 list, copy and delete test was added.
+The space session of 2026-09-20 (local and S3 roots) showed the JSON report lacked outcome counts
+and a cleanup record; `conftest.py` now records `session.*` and `<root>.cleanup`.
 
 The suites exist so the same proof of concept runs in the target environment, which has no internet;
 the local suite validates the prepared folder there without S3. Verified on 2026-09-19: the archive
@@ -543,23 +548,28 @@ the same pinned versions.
   Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0, DuckDB 1.5.4, PyArrow 21.0.0 and
   redshift_connector 2.1.10 preinstalled.
 - `gh` was installed and authenticated as the user on 2026-09-19, and `git push` over HTTPS worked
-  through it; both probe runs of 2026-09-20 found no `gh` on the PATH, so the install did not
-  persist or lives outside that PATH.
-- Probe readings of 2026-09-20 in the same space: IMDS blocked (`EINVAL`), `pypi.org` and
-  `github.com` do not resolve locally while the proxy reaches PyPI; 4 vCPUs, 15.4 GiB, `/tmp` with
-  37 GiB, `ulimit -n` 99999; the prepared `.venv` lacked redshift_connector, sqlalchemy,
-  duckdb_engine, sqlalchemy_redshift and pandas until `uv sync --group dev` (the 03:23 UTC run
-  passed `SP-9`); `~/shared` exists and `os.path.ismount` said not mounted, as it does for a
-  symlink, so the mount state waits for the run that reads `/proc/mounts`; the bucket is versioned
-  (sample `VersionId`), SSE-KMS with the project key and bucket key on, and the role cannot read
-  versioning, lifecycle, policy, ownership, Object Lock or multipart uploads, simulate policies or
-  describe the key; Glue answers with database `mydatabase` (one Parquet table) and no federated
+  through it; the 03:23 UTC probe run of 2026-09-20 found no `gh` on the PATH and the 03:44 run
+  found `/usr/bin/gh` (with `/usr/local/bin/aws` and no `duckdb` CLI), so check for it before
+  relying on it.
+- Probe readings of 2026-09-20 in the same space (three runs, the last at 03:44 UTC; full reading in
+  `docs/PLAN.md`): IMDS blocked (`EINVAL`); `pypi.org` and `github.com` do not resolve locally while
+  the proxy reaches PyPI; `NO_PROXY` and `no_proxy` both set and equal; container credentials issued
+  for about an hour (expiry 04:19:03 read at 03:23 and at 03:44); 4 vCPUs, 15.4 GiB, 61 GiB free in
+  `HOME`, 37 GiB in `/tmp`, `ulimit -n` 99999; DuckDB defaults to 4 threads, `memory_limit` 12.3 GiB
+  and `temp_directory` `.tmp` relative to the working directory; the prepared `.venv` lacked five
+  `dev` packages until `uv sync --group dev`; `~/shared` is a symlink to
+  `/mnt/custom-file-systems/s3/shared`, a `fuse.s3fs` mount; the bucket is versioned (sample
+  `VersionId`), SSE-KMS with the project key and bucket key on, SSE-C blocked, and the role cannot
+  read versioning, lifecycle, policy, ownership, Object Lock or multipart uploads, simulate policies
+  or describe the key; Glue answers with database `mydatabase` (one Parquet table) and no federated
   catalog, Athena with three workgroups (`GetWorkGroup` denied on `primary`), Lake Formation and S3
   Tables deny; no Redshift cluster or workgroup, and the Redshift API endpoints resolve to public
   IPs (no interface endpoint), so IAM authentication and the Data API depend on the proxy; STS,
   Glue, Athena, KMS, Secrets Manager, DataZone, Lake Formation and S3 Tables have interface
-  endpoints. This lab is not the target: the target has Redshift and no internet (user statement of
-  2026-09-20).
+  endpoints. The pytest session of 03:43 UTC (local and S3 roots) passed the three delta-rs
+  credential variants and repeated the timings of 2026-09-19; `bucket.py` found its session folder
+  54 s after the last write. This lab is not the target: the target has Redshift and no internet
+  (user statement of 2026-09-20).
 
 ## Questions the official documentation does not answer
 

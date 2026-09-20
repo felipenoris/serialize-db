@@ -35,6 +35,7 @@ import tempfile
 import tomllib
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -99,8 +100,14 @@ def identity(report: Report) -> None:
     if credentials:
         report.ok("SP-1", "credenciais do boto3", f"método {credentials.method}")
         # Credenciais temporárias expiram; o boto3 e o delta-rs renovam as do contêiner, e uma execução longa depende disso.
+        # O mesmo instante lido em duas execuções seguidas diz quanto dura cada emissão.
         expiry = getattr(credentials, "_expiry_time", None)
-        report.value("CREDENTIAL_EXPIRY", str(expiry) if expiry else "(sem expiração exposta: estáticas, ou renovadas pelo provedor)")
+        if expiry and getattr(expiry, "tzinfo", None):
+            minutes = (expiry - datetime.now(timezone.utc)).total_seconds() / 60
+            when = f"daqui a {minutes:.0f} min" if minutes >= 0 else f"expirada há {-minutes:.0f} min"
+            report.value("CREDENTIAL_EXPIRY", f"{expiry} ({when})")
+        else:
+            report.value("CREDENTIAL_EXPIRY", str(expiry) if expiry else "(sem expiração exposta: estáticas, ou renovadas pelo provedor)")
     else:
         report.fail("SP-1", "credenciais do boto3", "nenhuma encontrada: papel, variáveis AWS_* ou perfil")
     resolved = region()
@@ -183,8 +190,8 @@ def network(report: Report) -> None:
     report.note("SP-7", "internet", "alcançável" if answer and answer.startswith("HTTP") else "inalcançável: esperado no ambiente destino")
 
 
-def mount_state(path: Path) -> str:
-    """``montada`` com o tipo de sistema de arquivos de ``/proc/mounts``, ou ``existe, sem montagem``.
+def mount_state(path: Path, mounts: str = "/proc/mounts") -> str:
+    """``montada`` com o tipo e o modo (``rw`` ou ``ro``) de ``/proc/mounts``, ou ``existe, sem montagem``.
 
     Segue o link simbólico antes de perguntar, porque ``os.path.ismount`` responde False a um link.
     """
@@ -194,15 +201,16 @@ def mount_state(path: Path) -> str:
     origin = f" (link para {real})" if real != path else ""
     kinds: dict[str, str] = {}
     try:
-        with open("/proc/mounts", encoding="utf-8") as mounts:
-            for entry in mounts:
+        with open(mounts, encoding="utf-8") as handle:
+            for entry in handle:
                 fields = entry.split()
-                if len(fields) >= 3:
-                    kinds[fields[1]] = fields[2]
+                if len(fields) >= 4:
+                    mode = next((option for option in fields[3].split(",") if option in ("rw", "ro")), None)
+                    kinds[fields[1]] = f"tipo {fields[2]}" + (f", {mode}" if mode else "")
     except OSError:
         pass
     if str(real) in kinds:
-        return f"montada, tipo {kinds[str(real)]}{origin}"
+        return f"montada, {kinds[str(real)]}{origin}"
     if os.path.ismount(real):
         return f"montada{origin}"
     return f"existe, sem montagem{origin}"

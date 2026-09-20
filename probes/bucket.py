@@ -11,7 +11,10 @@ Só leitura. O relatório sai no terminal e em ``probes/output/bucket_<data-hora
 2. Ciclo de vida: as regras e se alguma expiração alcança a raiz, porque uma tabela Delta não
    tolera expiração sob a sua pasta.
 3. Inventário sob a raiz: objetos e bytes por pasta de primeiro nível, tabelas Delta (pastas com
-   ``_delta_log``), classes de armazenamento, objeto mais recente e a criptografia de uma amostra.
+   ``_delta_log``, com arquivos de dados, bytes, commits no log, checkpoints e último objeto), sessões
+   da suíte S3 (``serialize-db-poc/<id>``), classes de armazenamento, objeto mais recente, a
+   criptografia de uma amostra e o que o versionamento acumulou sob a raiz: versões não correntes e
+   marcadores de exclusão, invisíveis à listagem comum.
 4. Permissões do papel sob a raiz, pela simulação de política do IAM: ``ListBucket`` no bucket,
    ``GetObject``, ``PutObject``, ``DeleteObject`` e ``AbortMultipartUpload`` sob o prefixo, e as ações
    do KMS sobre a chave padrão. A simulação lê as políticas do IAM, não a política da chave.
@@ -21,8 +24,8 @@ Só leitura. O relatório sai no terminal e em ``probes/output/bucket_<data-hora
 
 Chamadas: ``s3:HeadBucket``, ``GetBucketLocation``, ``GetBucketVersioning``, ``GetBucketEncryption``,
 ``GetObjectLockConfiguration``, ``GetPublicAccessBlock``, ``GetBucketOwnershipControls``,
-``GetBucketLifecycleConfiguration``, ``ListBucket``, ``HeadObject``, ``GetBucketPolicy`` e
-``ListMultipartUploads``; ``sts:GetCallerIdentity``; ``iam:SimulatePrincipalPolicy``;
+``GetBucketLifecycleConfiguration``, ``ListBucket``, ``ListBucketVersions``, ``HeadObject``,
+``GetBucketPolicy`` e ``ListMultipartUploads``; ``sts:GetCallerIdentity``; ``iam:SimulatePrincipalPolicy``;
 ``kms:DescribeKey``. Nada é gravado. Códigos de saída: 0 checagens ok, 1 alguma chamada falhou,
 2 alguma checagem reprovou.
 """
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -42,6 +46,7 @@ from probelib import Report, answered, describe_error, dns_rows, error_code, pre
 
 MAX_PAGES = 20  # 20.000 objetos
 MAX_SECONDS = 30
+SESSION_ID = re.compile(r"^[0-9a-f]{8}$")  # serialize-db-poc/<id>: o id de sessão que tests/conftest.py gera
 
 # O que a biblioteca faz no S3: listar o prefixo, ler, gravar e apagar objetos, abortar um multipart interrompido.
 BUCKET_ACTIONS = ("s3:ListBucket",)
@@ -112,7 +117,7 @@ def versioning_check(report: Report, status: str | None, why: str, sample: dict 
     """BK-4 pela API ou, com ela negada, pela amostra do inventário: um objeto com VersionId prova o versionamento."""
     consequence = (
         "cada DeleteObject do vacuum deixa uma versão não corrente, que só uma regra NoncurrentVersionExpiration "
-        "remove; confirme a regra com quem administra o bucket"
+        "remove (BK-14 conta o acumulado); confirme a regra com quem administra o bucket"
     )
     version_id = (sample or {}).get("VersionId")
     if status == "Enabled":
@@ -156,6 +161,86 @@ def lifecycle(report: Report, client, bucket: str, prefix: str) -> None:
         report.ok("BK-3", "expiração sob a raiz", f"nenhuma das {len(found)} regras expira objetos sob {prefix or '(raiz do bucket)'}")
 
 
+def delta_table_rows(entries: list[tuple[str, int, Any]], roots: list[str], listing_prefix: str) -> list[list[object]]:
+    """Uma linha por tabela Delta: arquivos de dados, bytes, commits no log (``NNN.json``), checkpoints e último objeto."""
+    known = set(roots)
+    details: dict[str, dict[str, Any]] = {root: {"files": 0, "bytes": 0, "commits": 0, "checkpoints": 0, "newest": None} for root in roots}
+    for key, size, modified in entries:
+        # A tabela de um objeto é a pasta mais funda, acima dele, que tem _delta_log.
+        parts = key.split("/")
+        root = next((candidate for candidate in ("/".join(parts[:depth]) for depth in range(len(parts) - 1, 0, -1)) if candidate in known), None)
+        if root is None:
+            continue
+        found = details[root]
+        relative = key[len(root) + 1:]
+        if relative.startswith("_delta_log/"):
+            name = relative.split("/", 1)[1]
+            if name.endswith(".json") and name[:-5].isdigit():
+                found["commits"] += 1
+            elif ".checkpoint" in name and name.endswith(".parquet"):
+                found["checkpoints"] += 1
+        elif key.endswith(".parquet"):
+            found["files"] += 1
+            found["bytes"] += size
+        if found["newest"] is None or modified > found["newest"]:
+            found["newest"] = modified
+    rows: list[list[object]] = [["tabela Delta sob a raiz", "arquivos de dados", "bytes", "commits no log", "checkpoints", "último objeto"]]
+    for root in roots[:50]:
+        found = details[root]
+        rows.append([root[len(listing_prefix):] or root, found["files"], found["bytes"], found["commits"], found["checkpoints"], str(found["newest"])])
+    return rows
+
+
+def session_rows(entries: list[tuple[str, int, Any]], listing_prefix: str) -> list[list[object]]:
+    """Uma linha por sessão da suíte S3 (``serialize-db-poc/<id>/``) que ainda existe sob a raiz, a mais recente primeiro."""
+    sessions: dict[str, dict[str, Any]] = {}
+    for key, size, modified in entries:
+        parts = key[len(listing_prefix):].split("/")
+        if len(parts) < 3 or parts[0] != "serialize-db-poc" or not SESSION_ID.match(parts[1]):
+            continue
+        found = sessions.setdefault(parts[1], {"objects": 0, "bytes": 0, "newest": None})
+        found["objects"] += 1
+        found["bytes"] += size
+        if found["newest"] is None or modified > found["newest"]:
+            found["newest"] = modified
+    rows: list[list[object]] = [["sessão da suíte S3", "objetos", "bytes", "último objeto"]]
+    for session_id, found in sorted(sessions.items(), key=lambda item: item[1]["newest"], reverse=True)[:20]:
+        rows.append([session_id, found["objects"], found["bytes"], str(found["newest"])])
+    return rows
+
+
+def object_versions(report: Report, client, bucket: str, listing_prefix: str) -> None:
+    """BK-14: o que o versionamento acumulou sob a raiz, invisível a ``list_objects_v2`` e cobrado até uma regra removê-lo."""
+    counts = {"current": 0, "noncurrent": 0, "noncurrent_bytes": 0, "markers": 0}
+    truncated = False
+
+    def scan() -> str:
+        nonlocal truncated
+        started = time.perf_counter()
+        paginator = client.get_paginator("list_object_versions")
+        for page_number, page in enumerate(paginator.paginate(Bucket=bucket, Prefix=listing_prefix, PaginationConfig={"PageSize": 1000}), start=1):
+            for item in page.get("Versions", []):
+                if item.get("IsLatest"):
+                    counts["current"] += 1
+                else:
+                    counts["noncurrent"] += 1
+                    counts["noncurrent_bytes"] += item.get("Size", 0)
+            counts["markers"] += len(page.get("DeleteMarkers", []))
+            if page_number >= MAX_PAGES or time.perf_counter() - started > MAX_SECONDS:
+                truncated = page.get("IsTruncated", False)
+                break
+        return f"{counts['current']} versões correntes, {counts['noncurrent']} não correntes, {counts['markers']} marcadores de exclusão" + (" (listagem interrompida no limite)" if truncated else "")
+
+    listed = report.call("s3.list_object_versions(Prefix=raiz)", scan, render=str)
+    limit = " (listagem interrompida no limite)" if truncated else ""
+    if listed is None:
+        report.note("BK-14", "versões não correntes sob a raiz", f"não lidas: {report.last_reason}; num bucket versionado cada exclusão deixa uma versão não corrente, que só uma regra NoncurrentVersionExpiration remove")
+    elif counts["noncurrent"] or counts["markers"]:
+        report.note("BK-14", "versões não correntes sob a raiz", f"{counts['noncurrent']} ({counts['noncurrent_bytes']} bytes) e {counts['markers']} marcadores de exclusão, invisíveis à listagem comum e cobrados até uma regra NoncurrentVersionExpiration os remover{limit}")
+    else:
+        report.note("BK-14", "versões não correntes sob a raiz", f"nenhuma, nem marcador de exclusão{limit}")
+
+
 def inventory(report: Report, client, bucket: str, prefix: str) -> dict[str, Any]:
     """Devolve o que a listagem provou: ``listed`` e, quando houve amostra, ``sample`` com o ``head_object`` dela."""
     report.h1("Inventário sob a raiz")
@@ -164,7 +249,7 @@ def inventory(report: Report, client, bucket: str, prefix: str) -> dict[str, Any
     totals: Counter[str] = Counter()
     counts: Counter[str] = Counter()
     classes: Counter[str] = Counter()
-    delta_tables: set[str] = set()
+    entries: list[tuple[str, int, Any]] = []
     newest = None
     first_key = None
     objects = 0
@@ -192,8 +277,7 @@ def inventory(report: Report, client, bucket: str, prefix: str) -> dict[str, Any
                 first_key = first_key or key
                 if newest is None or item["LastModified"] > newest[0]:
                     newest = (item["LastModified"], key)
-                if "/_delta_log/" in key:
-                    delta_tables.add(key.split("/_delta_log/", 1)[0])
+                entries.append((key, item.get("Size", 0), item["LastModified"]))
             if page_number >= MAX_PAGES or time.perf_counter() - started > MAX_SECONDS:
                 truncated = page.get("IsTruncated", False)
                 break
@@ -212,13 +296,21 @@ def inventory(report: Report, client, bucket: str, prefix: str) -> dict[str, Any
     report.table([["classe de armazenamento", "objetos"], *[[name, count] for name, count in classes.most_common()]])
     if newest:
         report.line(f"objeto mais recente: {newest[1]} em {newest[0]}\n")
-    report.table([["tabela Delta (pasta com _delta_log)"], *[[table] for table in sorted(delta_tables)[:50]]] if delta_tables else [["(nenhuma pasta com _delta_log sob a raiz)"]])
-    report.note("BK-6", "tabelas Delta sob a raiz", f"{len(delta_tables)}" + (" (listagem truncada)" if truncated else ""))
+    roots = sorted({key.split("/_delta_log/", 1)[0] for key, _, _ in entries if "/_delta_log/" in key})
+    report.table(delta_table_rows(entries, roots, listing_prefix) if roots else [["(nenhuma pasta com _delta_log sob a raiz)"]])
+    report.note("BK-6", "tabelas Delta sob a raiz", f"{len(roots)}" + (" (listagem truncada)" if truncated else ""))
+    sessions = session_rows(entries, listing_prefix)
+    if len(sessions) > 1:
+        report.table(sessions)
+        report.note("BK-13", "sessões da suíte S3 sob a raiz", f"{len(sessions) - 1}, {sum(int(row[2]) for row in sessions[1:])} bytes, a mais recente com objeto de {sessions[1][3]}; a suíte apaga a sua ao terminar, salvo SERIALIZE_DB_TEST_KEEP: uma pasta que fica é de sessão mantida, interrompida ou ainda em andamento")
+    else:
+        report.note("BK-13", "sessões da suíte S3 sob a raiz", "nenhuma")
     if first_key:
         head = report.call(f"s3.head_object(Key={first_key!r})", lambda: client.head_object(Bucket=bucket, Key=first_key), render=lambda found: pretty({key: found.get(key) for key in ("ServerSideEncryption", "SSEKMSKeyId", "BucketKeyEnabled", "StorageClass", "ContentLength", "LastModified", "VersionId")}))
         if head is not None:
             proven["sample"] = head
             report.note("BK-7", "criptografia de uma amostra", f"{head.get('ServerSideEncryption', 'nenhuma')} {head.get('SSEKMSKeyId', '')}".strip() + f"; bucket key {head.get('BucketKeyEnabled', '-')}; versionado {'VersionId' in head}")
+    object_versions(report, client, bucket, listing_prefix)
     return proven
 
 
