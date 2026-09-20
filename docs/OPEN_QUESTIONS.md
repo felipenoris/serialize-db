@@ -32,12 +32,6 @@ foi medido em [`POC.md`](POC.md).
   `find_tables` do statement Core ou do sentinela `{prefix}` do texto gerado
   (`test_parallel.py::test_table_barrier_delays_the_read_until_the_load_lands`). Fica fora das
   etapas até existir um pipeline paralelo real.
-- **O proxy do DuckDB fora do `prepare_offline.sh`.** O DuckDB recusa o endereço com as
-  credenciais embutidas, e só o script separa endereço e credenciais hoje ([`POC.md`](POC.md)).
-  Toda chamada HTTP do DuckDB na rede corporativa cai no mesmo erro: os probes `space.py` e
-  `diagnose_aws.py`, e o acesso ao S3 pelo `httpfs` na [etapa 3](PLAN-STAGE-3.md). No destino
-  não há proxy, e é decisão do usuário se a separação vira função compartilhada dos probes e da
-  biblioteca ou continua só no script.
 - **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)).

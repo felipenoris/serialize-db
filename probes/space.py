@@ -377,7 +377,7 @@ def python_packages(report: Report) -> None:
 
 
 def duckdb_section(report: Report) -> None:
-    """Seção 6, DuckDB: configuração da conexão e ``SP-10`` (as extensões carregam da pasta configurada)."""
+    """Seção 6, DuckDB: configuração da conexão, o proxy separado das credenciais e ``SP-10`` (as extensões carregam da pasta configurada)."""
     import duckdb
 
     report.h1("DuckDB")
@@ -393,8 +393,14 @@ def duckdb_section(report: Report) -> None:
         config["extension_directory"] = directory
     connection = duckdb.connect(config=config)
 
+    # O DuckDB recusa o endereço de proxy com as credenciais embutidas; aqui elas vão em configurações à parte.
+    proxy = probelib.duckdb_proxy()
+    for setting, value in proxy.settings.items():
+        connection.execute(f"SET {setting} = ?", [value])
+    report.value("DUCKDB_HTTP_PROXY", proxy.reading)
+
     rows: list[list[object]] = [["item", "valor"], ["versão", duckdb.__version__], ["plataforma", connection.execute("PRAGMA platform").fetchone()[0]]]
-    for setting in ("threads", "memory_limit", "temp_directory", "extension_directory", "autoinstall_known_extensions", "autoload_known_extensions"):
+    for setting in ("threads", "memory_limit", "temp_directory", "extension_directory", "autoinstall_known_extensions", "autoload_known_extensions", "http_proxy"):
         rows.append([setting, connection.execute(f"SELECT current_setting('{setting}')").fetchone()[0]])
     report.table(rows)
 

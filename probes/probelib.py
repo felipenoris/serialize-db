@@ -16,6 +16,8 @@ O arquivo se organiza assim:
 - a classificação dos erros do ``boto3`` (``answered``, ``unanswered``, ``error_code``,
   ``describe_error``, ``reason``): "o serviço respondeu com erro" e "sem resposta" são verdictos
   diferentes, e só o segundo pede manutenção da rede;
+- o proxy do DuckDB (``DuckDBProxy``, ``split_proxy``, ``hide_credentials``, ``duckdb_proxy``), que
+  recusa o endereço com as credenciais embutidas e precisa delas em configurações à parte;
 - as leituras de rede (``resolve``, ``tcp_open``, ``tcp_probe``, ``public_label``, ``dns_rows``),
   que nunca contam como chamada falhada;
 - a formatação (``mask``, ``pretty``, ``tabulate``, ``environment_rows``), com os segredos
@@ -37,9 +39,10 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterable
+import urllib.parse
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 T = TypeVar("T")
 
@@ -52,6 +55,9 @@ SECRET_PATTERN = re.compile(r"secret|password|token|credential|private", re.IGNO
 
 # As variáveis de proxy nas duas grafias: o delta-rs lê NO_PROXY e, só quando ela está ausente, no_proxy; uma NO_PROXY vazia anula as exceções.
 PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
+
+# O DuckDB lê só esta variável, nesta grafia, para HTTP e para HTTPS, e a interpreta na hora do pedido; as demais não têm efeito sobre ele.
+DUCKDB_PROXY_VARIABLE = "HTTP_PROXY"
 
 # Só o S3 e o DynamoDB têm gateway endpoint; um IP público de outro serviço depende da internet ou do proxy.
 GATEWAY_SERVICES = ("s3", "dynamodb")
@@ -155,6 +161,78 @@ def region() -> str | None:
     import boto3
 
     return boto3.Session().region_name or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# O proxy do DuckDB: o endereço de um lado, o usuário e a senha do outro
+
+
+class DuckDBProxy(NamedTuple):
+    """As configurações de proxy de uma sessão do DuckDB e a leitura que vai ao relatório."""
+
+    settings: dict[str, str]
+    reading: str
+
+
+def split_proxy(url: str) -> tuple[str, str, str]:
+    """``url`` do proxy em endereço sem credenciais, usuário e senha, com URL-decode.
+
+    O endereço volta vazio quando não há host ou a porta não é um número; o esquema é opcional.
+    """
+    try:
+        parts = urllib.parse.urlsplit(url if "//" in url else "//" + url, scheme="http")
+        port = parts.port
+    except ValueError:
+        return "", "", ""
+    if not parts.hostname:
+        return "", "", ""
+    address = parts.hostname + (f":{port}" if port else "")
+    return address, urllib.parse.unquote(parts.username or ""), urllib.parse.unquote(parts.password or "")
+
+
+def hide_credentials(url: str) -> str:
+    """``url`` com o usuário e a senha embutidos trocados por ``***``, para o relatório."""
+    head, separator, tail = url.rpartition("@")
+    if not separator:
+        return url
+    scheme, mark, _ = head.partition("//")
+    return f"{scheme}{mark}***@{tail}"
+
+
+def duckdb_proxy(environ: Mapping[str, str] | None = None) -> DuckDBProxy:
+    """As configurações de proxy a aplicar numa sessão do DuckDB, lidas do ambiente.
+
+    O DuckDB recusa o endereço com as credenciais embutidas ("Failed to parse http_proxy ... into a
+    host and port"), que é como um proxy corporativo costuma aparecer no ambiente, e o erro atinge
+    tanto o download de uma extensão quanto o acesso ao S3 pelo ``httpfs``. O endereço vai sem elas
+    em ``http_proxy``, e o usuário e a senha, sem URL-encode, em ``http_proxy_username`` e
+    ``http_proxy_password``, lidos das variáveis ``username`` e ``password`` e, sem elas, do próprio
+    endereço com URL-decode.
+
+    Só ``HTTP_PROXY`` é lida, a mesma variável e a mesma grafia que o DuckDB lê: as configurações
+    não têm exceção equivalente a ``NO_PROXY``, e tirar o endereço de outra variável mandaria ao
+    proxy o tráfego que hoje sai direto. As demais grafias presentes entram na leitura.
+    """
+    environ = os.environ if environ is None else environ
+
+    url = (environ.get(DUCKDB_PROXY_VARIABLE) or "").strip()
+    if not url:
+        ignored = [name for name in ("http_proxy", "HTTPS_PROXY", "https_proxy") if environ.get(name)]
+        if ignored:
+            return DuckDBProxy({}, f"sem {DUCKDB_PROXY_VARIABLE}; o DuckDB ignora {', '.join(ignored)}")
+        return DuckDBProxy({}, "sem proxy no ambiente")
+
+    address, user, secret = split_proxy(url)
+    if not address:
+        return DuckDBProxy({}, f"{DUCKDB_PROXY_VARIABLE} sem host: {hide_credentials(url)}")
+
+    settings = {"http_proxy": address}
+    user = environ.get("username") or user
+    secret = environ.get("password") or secret
+    if user:
+        settings["http_proxy_username"] = user
+        settings["http_proxy_password"] = secret
+    return DuckDBProxy(settings, f"{address}, {'com usuário e senha' if user else 'sem credenciais'}")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -292,7 +370,8 @@ def environment_rows(names: Iterable[str]) -> list[list[str]]:
         elif SECRET_PATTERN.search(name) or name in ("AWS_ACCESS_KEY_ID",):
             rows.append([name, "definida"])
         else:
-            rows.append([name, value])
+            # O endereço de proxy costuma trazer o usuário e a senha embutidos, e o relatório é colado na conversa.
+            rows.append([name, hide_credentials(value) if "proxy" in name.lower() else value])
     return rows
 
 

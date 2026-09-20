@@ -30,8 +30,10 @@
 # O `uv` lê `HTTP_PROXY` sozinho, nas duas grafias e com as credenciais embutidas. O DuckDB lê só a
 # grafia maiúscula e recusa o endereço com credenciais ("Failed to parse http_proxy ... into a host
 # and port"), por isso o bloco das extensões separa endereço, usuário e senha em três configurações
-# da sessão. Sem `username` e `password`, ele usa as credenciais embutidas em `HTTP_PROXY`,
-# com URL-decode.
+# da sessão, por `probelib.duckdb_proxy`, a mesma função que os probes usam. Sem `username` e
+# `password`, valem as credenciais embutidas no endereço, com URL-decode; com só as grafias que o
+# DuckDB ignora (`http_proxy`, `HTTPS_PROXY`, `https_proxy`), o bloco diz isso e o download sai
+# direto.
 #
 # Levar a pasta ao destino
 #
@@ -95,35 +97,25 @@ done
 # Acrescente aqui toda extensão nova que o código passar a usar.
 duckdb_extensions="httpfs delta aws"
 .venv/bin/python - "$root/.duckdb" $duckdb_extensions <<'PY'
-import os
 import sys
-import urllib.parse
+from pathlib import Path
 
 import duckdb
 
 directory, *extensions = sys.argv[1:]
+
+# O INSTALL baixa a extensão por HTTP, e o DuckDB recusa o endereço de proxy com as credenciais
+# embutidas; probelib.duckdb_proxy as separa, com a mesma regra que os probes usam. A pasta de
+# extensões é .duckdb/ na raiz do projeto, onde probes/ também está.
+sys.path.insert(0, str(Path(directory).parent / "probes"))
+import probelib
+
 connection = duckdb.connect(config={"extension_directory": directory})
 
-# O INSTALL baixa a extensão por HTTP. O DuckDB lê HTTP_PROXY só na grafia maiúscula e recusa o
-# endereço com as credenciais embutidas, que é como o proxy corporativo costuma aparecer no
-# ambiente: o endereço vai sem elas em http_proxy, e o usuário e a senha, sem URL-encode, em
-# http_proxy_username e http_proxy_password.
-proxy = next(
-    (os.environ[name] for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy") if os.environ.get(name)),
-    "",
-)
-if proxy:
-    parts = urllib.parse.urlsplit(proxy if "//" in proxy else "//" + proxy, scheme="http")
-    if not parts.hostname:
-        sys.exit(f"prepare_offline.sh: proxy sem host em {proxy!r}")
-    address = parts.hostname + (f":{parts.port}" if parts.port else "")
-    user = os.environ.get("username") or urllib.parse.unquote(parts.username or "")
-    secret = os.environ.get("password") or urllib.parse.unquote(parts.password or "")
-    connection.execute("SET http_proxy = ?", [address])
-    if user:
-        connection.execute("SET http_proxy_username = ?", [user])
-        connection.execute("SET http_proxy_password = ?", [secret])
-    print("proxy do DuckDB:", address, "com usuário e senha" if user else "sem credenciais")
+proxy = probelib.duckdb_proxy()
+for setting, value in proxy.settings.items():
+    connection.execute(f"SET {setting} = ?", [value])
+print("proxy do DuckDB:", proxy.reading)
 
 for extension in extensions:
     connection.execute(f"INSTALL {extension}")

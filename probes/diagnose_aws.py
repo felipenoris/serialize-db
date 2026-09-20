@@ -13,6 +13,8 @@ delta-rs roda com o ambiente como encontrado e, quando ``NO_PROXY`` está ausent
 ``no_proxy``, de novo com ``NO_PROXY`` exportada de ``no_proxy``, que é o que a suíte faz antes de
 abrir a tabela: o cliente HTTP do delta-rs lê ``NO_PROXY`` e, só quando ela está ausente,
 ``no_proxy``, e uma ``NO_PROXY`` vazia manda a chamada ao endpoint de credenciais pelo proxy. O
+DuckDB roda com o endereço do proxy separado das credenciais, porque recusa o endereço com elas
+embutidas e não tem exceção equivalente a ``NO_PROXY``. O
 resumo final diz se a suíte precisa de manutenção para o ambiente: região que o ``boto3`` não lê, STS
 inalcançável, endpoint VPC de interface sem DNS privado. Nada é gravado no bucket: as chamadas são
 listagens e leituras de metadado.
@@ -36,6 +38,8 @@ import sys
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
+
+import probelib
 
 # Segundos de espera por subprocesso do delta-rs e do DuckDB, que têm esperas próprias e longas sem rede.
 PROBE_TIMEOUT = 60
@@ -118,6 +122,8 @@ def show_environment() -> None:
             value = f"(igual a {name.upper()})"
         elif value == "":
             value = "(vazia)"
+        elif value is not None and "proxy" in name.lower():
+            value = probelib.hide_credentials(value)
         print(f"  {name} = {value if value is not None else '(ausente)'}")
 
     for name in PRESENCE_VARIABLES:
@@ -290,9 +296,12 @@ def check_delta_rs(root: str, options: dict[str, str], label: str, environment: 
 
 
 # O DuckDB carrega as extensões da pasta configurada, sem instalação automática, e lista o prefixo com credential_chain.
+# O subprocesso lê o proxy do ambiente que herdou, por probelib: assim a senha não passa pela linha de comando.
 DUCKDB_PROBE = r"""
 import sys, duckdb
-root, region, directory, endpoint = sys.argv[1:5]
+root, region, directory, endpoint, probes = sys.argv[1:6]
+sys.path.insert(0, probes)
+import probelib
 config = {"autoinstall_known_extensions": False, "autoload_known_extensions": False}
 if directory:
     config["extension_directory"] = directory
@@ -300,6 +309,8 @@ try:
     connection = duckdb.connect(config=config)
     for extension in ("httpfs", "aws", "delta"):
         connection.execute(f"LOAD {extension}")
+    for setting, value in probelib.duckdb_proxy().settings.items():
+        connection.execute(f"SET {setting} = ?", [value])
     connection.execute("SET http_timeout = 10000")
     connection.execute("SET http_retries = 1")
     secret = f"CREATE SECRET diag (TYPE s3, PROVIDER credential_chain, REGION '{region}'" + (f", ENDPOINT '{endpoint}'" if endpoint else "") + ")"
@@ -323,8 +334,14 @@ def duckdb_extension_directory() -> str:
 
 def check_duckdb(root: str, region: str | None, endpoint: str) -> bool:
     """Carrega ``httpfs``, ``aws`` e ``delta`` da pasta de extensões e lista o prefixo com um secret ``credential_chain``."""
-    arguments = [root, region or "", duckdb_extension_directory(), endpoint]
-    return run_probe("DuckDB", DUCKDB_PROBE, arguments, lambda out: f"listou serialize-db-poc/ e subpastas ({out} objetos) com extensões de {duckdb_extension_directory() or '(padrão)'}")
+    proxy = probelib.duckdb_proxy()
+    arguments = [root, region or "", duckdb_extension_directory(), endpoint, str(Path(__file__).resolve().parent)]
+    return run_probe(
+        "DuckDB",
+        DUCKDB_PROBE,
+        arguments,
+        lambda out: f"listou serialize-db-poc/ e subpastas ({out} objetos) com extensões de {duckdb_extension_directory() or '(padrão)'} e proxy {proxy.reading}",
+    )
 
 
 # ---------------------------------------------------------------------------------------------------------------

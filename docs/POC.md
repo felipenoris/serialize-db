@@ -203,10 +203,27 @@ com DuckDB 1.5.5 (macOS arm64, um proxy de mentira em `127.0.0.1` que registra o
   duas formas com o mesmo resultado. Com `http_proxy_username` e `http_proxy_password`, o pedido
   chega ao proxy com `Proxy-Authorization: Basic` sobre `usuário:senha` sem URL-encode.
 
-Por isso o bloco das extensões de `prepare_offline.sh` separa o endereço das credenciais: tira o
-usuário e a senha do endereço, lê-os das variáveis `username` e `password` e, sem elas, usa os
-embutidos em `HTTP_PROXY` com URL-decode. As seis variantes exercidas na sonda (credenciais nas
-variáveis, só embutidas, ausentes, endereço sem esquema, endereço sem host e ambiente sem proxy)
-deram o pedido esperado, e a execução do script sem proxy instalou `httpfs`, `delta` e `aws`. O
-procedimento de uso, as variáveis e os comandos de empacotar e extrair passaram para o cabeçalho do
-script, e a seção "Ambiente sem internet" do `README.md` aponta para ele.
+Uma segunda sonda, no mesmo dia, mediu o alcance do erro e o que o DuckDB lê:
+
+- O erro não é do download de extensão: um `glob('s3://.../**')` pelo `httpfs`, com as extensões já
+  em disco, falha com a mesma `InvalidInputException`. Toda chamada HTTP do DuckDB passa por ali.
+- O DuckDB ignora `HTTPS_PROXY` e a grafia minúscula: com só uma delas, e com o mesmo endereço com
+  credenciais, o pedido saiu direto, sem erro e sem proxy.
+
+A separação é de `probelib.duckdb_proxy`, usada pelo `prepare_offline.sh`, por `probes/space.py` e
+pelo subprocesso de `probes/diagnose_aws.py`: tira o usuário e a senha do endereço, lê-os das
+variáveis `username` e `password` e, sem elas, usa os embutidos com URL-decode. Ela lê só
+`HTTP_PROXY`, a variável e a grafia que o DuckDB lê, porque as configurações não têm exceção
+equivalente a `NO_PROXY` e tirar o endereço de outra variável mandaria ao proxy o tráfego que hoje
+sai direto; as demais grafias presentes entram na leitura do relatório. As sondas exercitaram
+credenciais nas variáveis, só embutidas, ausentes, endereço sem esquema, endereço sem host e
+ambiente sem proxy, e a execução do script sem proxy instalou `httpfs`, `delta` e `aws`.
+
+A mesma leitura achou um vazamento nos relatórios: `environment_rows` do `probelib` e
+`show_environment` do `diagnose_aws` imprimiam `HTTP_PROXY` inteiro, com a senha embutida, num
+arquivo feito para ser colado na conversa. `hide_credentials` troca o usuário e a senha por `***` em
+toda variável de proxy.
+
+O procedimento de uso, as variáveis e os comandos de empacotar e extrair passaram para o cabeçalho
+do script, e a seção "Ambiente sem internet" do `README.md` aponta para ele. A etapa 3 aplica a
+mesma separação em `duckdb_setup` ([`PLAN-STAGE-3.md`](PLAN-STAGE-3.md)).
