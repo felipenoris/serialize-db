@@ -105,7 +105,10 @@ exceções e a chamada ao endpoint de credenciais vai pelo proxy. Com `NO_PROXY`
 `as_found` do teste removia `NO_PROXY` em vez de devolvê-la ao valor encontrado, e por isso passava;
 o teste agora registra cinco variantes (`as_found`, `no_proxy_exported`, `no_proxy_absent`,
 `no_proxy_empty`, `proxy_unset`) e `environment.no_proxy_as_found`, e o probe roda o delta-rs como
-encontrado e como a suíte. A limpeza da suíte S3 ficou confirmada: `s3.cleanup` registrou 15
+encontrado e como a suíte. Sem `AWS_REGION` nem `AWS_DEFAULT_REGION`, o delta-rs foi a
+`us-east-1` apesar de `region = us-west-2` no perfil `default`; com `HOME` vazio e `AWS_REGION`,
+abriu a tabela: o perfil serve à cadeia de credenciais, não à região. A limpeza da suíte S3 ficou
+confirmada: `s3.cleanup` registrou 15
 objetos apagados, e `bucket.py` só encontrou a sessão mantida por `SERIALIZE_DB_TEST_KEEP` pela
 execução anterior.
 
@@ -156,8 +159,10 @@ O ambiente definitivo não tem internet e pode não ter proxy, só um endpoint V
 usuário de 2026-09-19). Consequências, ainda não confirmadas por uma leitura de
 `probes/diagnose_aws.py` nesse ambiente: o botocore lê `AWS_DEFAULT_REGION` ou o perfil, nunca
 `AWS_REGION`, e sem região usa o endpoint global `s3.amazonaws.com`, que o endpoint VPC regional não
-atende; o delta-rs lê as duas variáveis e sem nenhuma consulta o IMDS e cai em `us-east-1`; o STS
-pode estar inalcançável; nenhuma extensão do DuckDB pode ser baixada. A biblioteca normaliza a
+atende; o delta-rs lê as duas variáveis e sem nenhuma cai em `us-east-1`, ignorando a região do
+perfil; sem variáveis de proxy ele alcança o endpoint de credenciais diretamente (variante
+`proxy_unset`), e a exportação de `NO_PROXY` não muda nada; o STS pode estar inalcançável; nenhuma
+extensão do DuckDB pode ser baixada. A biblioteca normaliza a
 região nos dois sentidos, não chama o STS e carrega as extensões só da pasta configurada. Se as APIs
 do Redshift também não tiverem endpoint lá, resta a conexão por senha na porta 5439, que não passa
 por elas (`RS-14`).
@@ -211,10 +216,18 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   arquivos e a saída do Delta aberta (`delta.md`, `estrategia.md`).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
   consultada mais de uma vez é materializada no DuckDB (`delta.md`).
-- O delta-rs não lê `~/.aws/config`; as credenciais vêm do ambiente, do contêiner, do IMDS ou de
-  `storage_options`, e a região precisa estar em `AWS_REGION` ou `AWS_DEFAULT_REGION`.
-  `storage_options` leva `max_retries` e `retry_timeout` para uma rede morta falhar em 10 s em vez
-  de 59 s (`README.md`).
+- O delta-rs não lê a região de `~/.aws/config`: com `region = us-west-2` no perfil `default` e
+  sem `AWS_REGION` nem `AWS_DEFAULT_REGION`, foi a `us-east-1` (2026-09-20); a cadeia de credenciais
+  consulta o perfil (`credential_source = EcsContainer`, aviso `aws_config::profile::credentials`)
+  mas encontra o contêiner sem ele (`HOME` vazio e `AWS_REGION` bastaram). A região precisa estar
+  em `AWS_REGION` ou `AWS_DEFAULT_REGION`; as credenciais vêm do ambiente, do contêiner, do IMDS ou
+  de `storage_options`. `storage_options` leva `max_retries` e `retry_timeout` para uma rede morta
+  falhar em 10 s em vez de 59 s (`README.md`, `delta.md`).
+- O cliente HTTP do delta-rs lê `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias e `NO_PROXY` antes de
+  `no_proxy`; vazia, `NO_PROXY` anula as exceções e a chamada ao endpoint de credenciais vai pelo
+  proxy (403). `prepare_environment` exporta `NO_PROXY` de `no_proxy` quando a maiúscula está
+  ausente ou vazia, antes da primeira abertura de tabela; exportar depois do `import deltalake`
+  basta, porque a suíte importa na coleta e exporta na fixture da sessão (`delta.md`).
 - O DuckDB carrega extensões só da pasta configurada, com `autoinstall_known_extensions` e
   `autoload_known_extensions` desligados: o `LOAD` de uma extensão conhecida baixaria a extensão
   para `~/.duckdb` sem aviso, e o destino não tem internet (`README.md`).

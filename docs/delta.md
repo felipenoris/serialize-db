@@ -282,7 +282,9 @@ e o espaço sai para a internet por um proxy HTTP (`HTTP_PROXY`, `HTTPS_PROXY` e
 lista o endpoint de credenciais e os serviços da AWS). O delta-rs encontra o endpoint de contêiner e
 abre a tabela pela cadeia padrão, sem `storage_options`; o aviso `aws_config::profile::credentials`
 de uma falha mostra que a cadeia também consulta o perfil `default` de `~/.aws/config`
-(`credential_source = EcsContainer`), que aponta para o mesmo endpoint. O cliente HTTP do delta-rs
+(`credential_source = EcsContainer`), que aponta para o mesmo endpoint, mas não lê a região dele:
+sem `AWS_REGION` nem `AWS_DEFAULT_REGION` a listagem foi a `us-east-1` com `region = us-west-2` no
+perfil, e com `HOME` vazio e `AWS_REGION` a tabela abriu (2026-09-20). O cliente HTTP do delta-rs
 lê `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias, mas lê `NO_PROXY` e, só quando ela está ausente,
 `no_proxy`: com `NO_PROXY` vazia, a chamada ao endpoint de credenciais vai pelo proxy e falha com
 `Non-success status from HTTP credential provider` (`StatusCode(403)`). Foi essa a falha do início

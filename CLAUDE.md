@@ -196,7 +196,7 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
 - **The pytest layout has no `__init__.py`.** The root `tests/conftest.py` is imported as
   `conftest` and its folder lands on `sys.path`, so `from conftest import ...` and
   `from poc_delta import ...` work inside `tests/proof_of_concept/`; test-module basenames must stay
-  unique across `tests/` and `tests/proof_of_concept/` (a `tests/test_local.py` would collide).
+  unique across `tests/` and `tests/proof_of_concept/`.
 - **Before a commit**: `uv run pytest` with no variables and again with
   `SERIALIZE_DB_TEST_LOCAL_ROOT` set to the scratchpad, both green; `py_compile` on an edited probe;
   `git status` clean of stray files.
@@ -278,7 +278,7 @@ Each fact is detailed in the file named at the end of its line.
   commit mode, and the delta-rs docs page on S3 locking is stale. In the SageMaker space the writer
   finds the container credentials through the default chain, which also consults the `default`
   profile of `~/.aws/config` (`credential_source = EcsContainer`, per the `aws_config::profile`
-  warning). Its HTTP client reads `HTTP_PROXY`/`HTTPS_PROXY` in both spellings but `no_proxy` only
+  warning) but not its `region` (without the variables it went to `us-east-1`). Its HTTP client reads `HTTP_PROXY`/`HTTPS_PROXY` in both spellings but `no_proxy` only
   when `NO_PROXY` is absent: an empty `NO_PROXY`, what a shell opened by the Claude Code extension
   has, sends the credential call through the proxy, which answers 403; absent, exported from
   `no_proxy` or `169.254.170.2` alone passes (isolated 2026-09-20; the 2026-09-19 403 was this). The
@@ -540,9 +540,8 @@ the same pinned versions.
   `s3://awsds-sandbox-lake/sso-group-data-scientists/` through S3 Access Grants.
 - Connections: S3, Athena, Glue Spark, Spark Connect, Lakehouse and workflows. No Redshift
   connection, cluster or serverless workgroup.
-- Network: outbound HTTP goes through `proxy.awsds.internal:3128`; `no_proxy` is always set, and
-  `NO_PROXY` equals it in a Code Editor terminal but is empty in a shell opened by the Claude Code
-  extension. `uv` reaches PyPI through the proxy but downloads Python only with
+- Network: outbound HTTP goes through `proxy.awsds.internal:3128`; `no_proxy` is always set;
+  `NO_PROXY` equals it in a Code Editor terminal and is empty in a Claude Code extension shell. `uv` reaches PyPI through the proxy but downloads Python only with
   `UV_PYTHON_DOWNLOADS=automatic`; `uv sync` needs it to fetch Python 3.13, the venv lands in `.venv`
   (ignored), and `uv run` warns that `VIRTUAL_ENV=/opt/conda` is ignored, which is harmless. System
   Python is 3.12.13 with boto3, awswrangler, deltalake 1.5.0, DuckDB 1.5.4, PyArrow 21.0.0 and
