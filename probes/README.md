@@ -1,7 +1,8 @@
 # `probes/`: leituras do ambiente
 
 Scripts só de leitura que fotografam o que o ambiente oferece à biblioteca: credenciais, região,
-rede, o projeto do SageMaker Unified Studio, o bucket, o Redshift e os serviços de catálogo. Nenhum
+rede, o projeto do SageMaker Unified Studio, o bucket, o Redshift, os serviços de catálogo e a
+estrutura da base Parquet de origem. Nenhum
 deles cria, altera ou apaga um recurso. Cada um roda com o interpretador da pasta preparada, imprime
 o relatório no terminal e o grava em `output/<script>_<data-hora>.txt`, pasta fora do git, para ser
 colado na conversa com o assistente. O formato segue os scripts de leitura de
@@ -17,6 +18,7 @@ Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma che
 .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo
 .venv/bin/python probes/redshift.py s3://bucket/prefixo
 .venv/bin/python probes/catalog.py
+.venv/bin/python probes/parquet_source.py /caminho/da/base
 ```
 
 ## Os scripts
@@ -28,6 +30,7 @@ Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma che
 | `diagnose_aws.py` | O acesso que a suíte S3 exige: variáveis, região como o `boto3` e o delta-rs a resolvem, DNS, credenciais, a listagem de `<raiz>/serialize-db-poc/` pelo `boto3`, pelo delta-rs (como encontrado e, com `NO_PROXY` ausente ou vazia ao lado de `no_proxy`, como a suíte, com `NO_PROXY` exportada de `no_proxy`) e pelo DuckDB (este com as subpastas, porque `*` não cruza `/`), e o STS; o resumo diz se a suíte precisa de manutenção. Formato próprio, anterior a `probelib.py`. | `s3:ListBucket`, `sts:GetCallerIdentity`. | `output/diagnose_aws_*.txt` |
 | `redshift.py` | O Redshift visto de dentro: as variáveis `SERIALIZE_DB_REDSHIFT_*` e a conexão Redshift do projeto, com os dados dela como dicionário (banco, workgroup ou cluster, URL JDBC e o secret de usuário e senha, lido sem imprimir a senha); clusters e workgroups com o papel IAM padrão do `COPY` e do `UNLOAD`, os nós e o roteamento VPC; a Data API como caminho alternativo à porta 5439; DNS e TCP, e se as APIs têm endpoint VPC de interface, sem o qual a autenticação por IAM e a Data API dependem da internet; a sessão por senha ou por IAM com a versão (o patch), usuário, banco, `search_path`, esquemas, privilégios no esquema do projeto e no banco (`CREATE`, `TEMP`), tabelas com o prefixo da biblioteca, `SUPER`, as configurações da sessão, `stl_load_errors` e os esquemas externos; o papel do `COPY` sobre a raiz S3 informada, pela simulação de política do IAM. Só consulta visões de sistema; a autenticação por IAM pode criar o usuário do banco, e a checagem `RS-4` o diz. | `redshift:DescribeClusters`, `redshift-serverless:ListWorkgroups`, `GetNamespace`, `redshift-data:ListDatabases`; `redshift:GetClusterCredentials` ou `redshift-serverless:GetCredentials` na autenticação por IAM; `secretsmanager:GetSecretValue` para o secret da conexão do projeto; `iam:SimulatePrincipalPolicy`; consultas `select` no banco. | `output/redshift_*.txt` |
 | `catalog.py` | O gatilho de reavaliação de `docs/estrategia.md`: se o Glue (bancos, tabelas por formato, catálogos federados), o Athena (workgroups), o Lake Formation (locais registrados) e o S3 Tables respondem ao papel do projeto. | `glue:GetDatabases`, `GetTables`, `GetCatalogs`; `athena:ListWorkGroups`, `GetWorkGroup`; `lakeformation:ListResources`; `s3tables:ListTableBuckets`. | `output/catalog_*.txt` |
+| `parquet_source.py` | A estrutura da base Parquet de origem da carga inicial, uma pasta por tabela: as pastas de tabela e o que não é Parquet; por tabela, arquivos, bytes, linhas, partições e quantos esquemas distintos; o esquema do grupo majoritário com tipo Arrow, nulidade, tipo físico, tipo lógico e `field_id`; as divergências de esquema entre arquivos, coluna a coluna e com todos os arquivos divergentes nomeados; as colunas de partição, os seus valores e se também estão dentro dos arquivos; por coluna, linhas, nulos, mínimo, máximo e distintos somados do rodapé; row groups, compressão, codificação, escritor e metadados do rodapé; com `--sample N`, a cardinalidade e o comprimento de texto que o rodapé não guarda. Lê o rodapé de todo arquivo de toda partição. | Nenhuma chamada AWS num caminho local; numa URI `s3://`, as leituras do `pyarrow.fs` (`ListBucket`, `GetObject`). | `output/parquet_source_*.txt` |
 
 `probelib.py` é a biblioteca comum: o relatório (`Report`), as esperas curtas do `boto3`
 (`short_config`), a classificação "o serviço respondeu com erro" contra "sem resposta", DNS e TCP, a
@@ -89,6 +92,10 @@ Sem variável e sem conexão no projeto, o script lista o que as APIs mostram e 
 | Um `COPY` reprovado pode ser diagnosticado por `stl_load_errors`? | `redshift.py`, `RS-12` |
 | Há esquemas externos (Spectrum) no banco, e qual é o patch do Redshift? | `redshift.py`, `RS-13` e `REDSHIFT_VERSION` |
 | O Glue, o Athena, o Lake Formation ou o S3 Tables passaram a responder ao papel do projeto? | `catalog.py`, `CT-1` a `CT-6` |
+| Quais são as tabelas da base de origem, e que campos e tipos cada uma tem? | `parquet_source.py`, seções 2 e 3 |
+| Todos os arquivos de todas as partições de uma tabela têm o mesmo esquema? | `parquet_source.py`, `PQ-3` e seção 4 |
+| Como a base está particionada, e a coluna de partição também está dentro dos arquivos? | `parquet_source.py`, `PQ-4` e `PQ-5` |
+| Que faixas de valores, nulos e cardinalidade uma base fictícia precisa reproduzir? | `parquet_source.py`, seções 6 e 8 |
 
 ## Acrescentar um probe
 
@@ -98,7 +105,7 @@ Sem variável e sem conexão no projeto, o script lista o que as APIs mostram e 
   espera 60 s por tentativa; `run_python` para o que precisa de espera limitada (delta-rs, DuckDB).
 - Uma seção por assunto, numerada pelo `Report`; identificadores reaproveitados como `NOME=valor`;
   toda chamada por `report.call`, para a falha ir para a seção final.
-- Checagens com prefixo próprio de duas letras (`SP`, `BK`, `RS`, `CT`), `note` para o ausente e
+- Checagens com prefixo próprio de duas letras (`SP`, `BK`, `RS`, `CT`, `PQ`), `note` para o ausente e
   `fail` para o que impede a biblioteca.
 - Uma seção que quebra não cala as outras: `main` captura a exceção e a registra como falha.
 - Uma função por seção, na ordem do relatório, com docstring que nomeia a seção e as checagens que
