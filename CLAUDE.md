@@ -181,6 +181,7 @@ research appends to the matching group.
 | `docs/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service (Delta via delta-rs, DuckLake, Iceberg without a catalog, Hudi, hand-rolled manifests) against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options (SQLAlchemy Core, SQLGlot, SQLMesh, dbt, Ibis, dlt), contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and the maturity assessment of Delta against Iceberg with the re-evaluation trigger. |
 | `docs/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `docs/PLAN-STAGE-<n>.md`. |
 | `tests/model/` | The reference model: the declarative ORM models of the accounting, management and projection tables, moved out of the package on 2026-09-20. The tests hand it to the package API as a client library would hand its own models; the package holds no model. |
+| `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado` with the structure `probes/parquet_source.py` read in the dev base on 2026-09-20: the 14 tables with the read columns, types and nullability (12 match the reference model; `alembic_version` and `meta_update_status` are outside it), Hive partitions by `data_str` and `data_base_str` whose value lives only in the path and equals `data` or `data_base`, `chunk_<n>` files without zero padding, one row group, SNAPPY without dictionary, format 1.0, `INT96` timestamps without statistics, the `pandas` footer key, `schema.json` at the root, and the values the load handles (`valor` with three decimals, `fator` with five, `id_lancamento` up to 1,113,599,996, the orphan `desemb-999`). `write_source(root)` returns the files and row counts; `tests/test_source_db_projetado.py` checks the written files against the transcribed section 3 of the report. The material of the stage 7 test. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
 the differences from PostgreSQL, supported types with `DECIMAL` and JSON, DDL,
@@ -283,6 +284,12 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   without a Parquet file, a file with no rows. A fixture without defects exercises no verdict, and
   that first run also showed four rendering defects, among them a `Timestamp` logical type whose
   full text made the schema table unreadable.
+- **A fixture that reproduces a reading is verified by the reading instrument** (2026-09-20).
+  `tests/source_db_projetado.py` was checked by running `probes/parquet_source.py` on it and diffing
+  section 3 against the real report (identical), and the test transcribes that section as the
+  expected value. A hand-written footer check failed first: `FileMetaData.metadata` carries
+  `ARROW:schema`, which the Arrow schema metadata the probe reads does not. Read the file the way
+  the instrument reads it, and assert in its vocabulary.
 
 ## What the documents establish
 
@@ -493,6 +500,18 @@ Each fact is detailed in the file named at the end of its line.
   `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import everything
   at startup and keep hot pure-Python loops out of the library's threads. The rules of `docs/PLAN.md`
   record the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
+- The source base (dev, 2026-09-20): 14 tables, 205 files, 3.76 GB, 187,340,644 rows, written by
+  pandas through parquet-cpp-arrow with format 1.0, no dictionary, `INT96` timestamps and the
+  `pandas` footer key; Hive partitions `data_str=<YYYY-MM-DD>` (`data_base_str` for
+  `cad_lancamentos`) whose value is a month end, lives only in the path and equals `data` or
+  `data_base` in every row; up to 36 `chunk_<n>.parquet` files of 1,000,000 rows and one row group
+  per partition, not zero-padded. PyArrow reads `INT96` as `timestamp[ns]` without min/max;
+  `coerce_int96_timestamp_unit="us"` and DuckDB's `TIMESTAMP` truncate silently and the safe cast
+  refuses a non-zero sub-microsecond part; DuckDB `hive_partitioning=true` casts `data_str` to
+  `DATE` unless `hive_types_autocast=false`, and a PyArrow dataset keeps it `string`. The 12 model
+  tables match the files in columns, order, types and nullability except seven `cad_contratos`
+  columns nullable in the files and `NOT NULL` in the model with no null in the data. `docs/POC.md`,
+  `docs/PLAN-STAGE-7.md`, `tests/source_db_projetado.py`
 
 ## The pipeline outside this repository
 
@@ -540,7 +559,11 @@ The decisions, the table of stages and the order of work are in `docs/PLAN.md` (
 primitives of each stage in `docs/PLAN-STAGE-<n>.md`, and where the implementation stands in
 `docs/CURRENT_STATE.md` (2026-09-20), beside `docs/POC.md` and `docs/OPEN_QUESTIONS.md`; read
 them before planning a session. The next session starts stage 1 (`serialize_db.schema`) and
-stage 2 (`serialize_db.sql`) on local folders.
+stage 2 (`serialize_db.sql`) on local folders. The source base was read on 2026-09-20:
+`docs/POC.md` holds the reading, `docs/PLAN-STAGE-7.md` the layout the load reads (Hive by
+`data_str` and `data_base_str`, `chunk_<n>` files, `INT96` timestamps) and `docs/OPEN_QUESTIONS.md`
+the decisions it waits for (the type of `valor`, `BigInteger` keys, the key naming the date column
+`mes` derives from, `schema.json`, the orphans of the dev base).
 
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
 --python 3.13 --with "deltalake==1.6.4" --with "duckdb==1.5.5" --with "pyarrow==25.0.1" ...`; the
@@ -558,7 +581,8 @@ must be rerun). The reference model in `tests/model/` and its defects are
 listed in `docs/CURRENT_STATE.md` under the repository; the `DEFERRABLE` and `SERIAL` behavior of
 each dialect is in `docs/sqlalchemy.md` and `docs/duckdb.md`.
 
-Test layout (user decision of 2026-09-19): `tests/` holds the package tests (none yet), `tests/model/`,
+Test layout (user decision of 2026-09-19): `tests/` holds the package tests (`test_source_db_projetado.py`
+over `source_db_projetado.py`, the fictitious source base of 2026-09-20), `tests/model/`,
 `tests/test_probes.py` and `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
 both storages, the study suites (commented step by step as learning material, listed per stage in
 `docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and

@@ -113,3 +113,60 @@ extensão do DuckDB pode ser baixada. A biblioteca normaliza a
 região nos dois sentidos, não chama o STS e carrega as extensões só da pasta configurada. Se as APIs
 do Redshift também não tiverem endpoint lá, resta a conexão por senha na porta 5439, que não passa
 por elas (`RS-14`).
+
+## O que a leitura da base de origem mostrou
+
+Em 2026-09-20, `probes/parquet_source.py --sample 2000` leu a base de desenvolvimento
+`db_projetado` (`/mnt/bndes_grupos_bases_analise_financeira/databases/dsv/db_projetado`, Linux,
+Python 3.13.15, o `.venv` do projeto): 14 pastas de tabela, 205 arquivos, 3.757.237.689 bytes,
+187.340.644 linhas, `schema.json` solto na raiz, nenhum arquivo ilegível, nenhuma chamada falhada e
+nenhuma checagem reprovada. Todo arquivo de cada tabela tem o mesmo esquema (`PQ-3`), cada tabela
+usa um só estilo e uma só profundidade de partição (`PQ-4`), a coluna de partição nunca está dentro
+do arquivo (`PQ-5`), e 7 das 78 colunas têm arquivo sem mínimo e máximo (`PQ-6`): os dois
+`timestamp` em `INT96`, `meta` e `data_fim_validade`, inteiramente nulas, e `data_assinatura`,
+`id_negocio` e `departamento` nos arquivos em que estão inteiramente nulas.
+
+O layout: as dez tabelas sem partição (`alembic_version`, `cad_aliquotas`, `cad_contas`, as cinco
+`dom_*`, `meta_update_status`, `rel_contas_hierarquias`) têm um único `chunk_0.parquet` na raiz da
+tabela; `cad_contratos` (8 arquivos, 6,5 milhões de linhas), `cad_operacoes` (13, 11,0 milhões) e
+`rel_contrato_operacao` (30, 27,9 milhões) são Hive por `data_str` com os valores `2026-02-28`,
+`2026-03-31` e `2026-06-30`, e `cad_lancamentos` (144 arquivos, 141,9 milhões de linhas, 2,83 GB) é
+Hive por `data_base_str` com `2026-01-31` a mais; o valor do caminho é igual a `data`, ou a
+`data_base`, em toda linha da partição, e `meta_update_status` registra cada carga com a partição
+em JSON (`{"data_base": {"__type__": "date", "value": "2026-01-31"}}`). Os arquivos têm até
+1.000.000 de linhas num row group, `chunk_<n>` sem zeros à esquerda, SNAPPY, `PLAIN` e `RLE` sem
+dicionário, `parquet-cpp-arrow`, formato 1.0, a chave `pandas` no rodapé e nenhum `field_id`. Os
+seis tipos: `int32` (30 colunas), `string` (23), `date32` (10), `double` (10), `bool` (3) e
+`timestamp[ns]` em `INT96` (2).
+
+O modelo de referência de `tests/model/` bate com os arquivos: as 12 tabelas, as colunas na mesma
+ordem, os tipos da tabela de `schema.md` e a nulidade, exceto sete colunas de `cad_contratos`
+anuláveis nos arquivos e `NOT NULL` no modelo, sem nulo nos dados; `alembic_version` e
+`meta_update_status` só existem na origem. Os valores: `valor` de `cad_lancamentos` vai de
+`-11.846.195.394,628` a `11.846.195.394,628`, com três casas; `fator` de `cad_aliquotas` tem cinco
+(`0,59895`); `id_lancamento` chega a 1.113.599.996 em `int32` com 141,9 milhões de linhas (ids
+esparsos) e `id_rel_contrato_operacao` a 556.941.030; `data` de `cad_lancamentos` vai até
+`2026-12-31` enquanto `data_base` para em `2026-06-30`; `data_assinatura` é nula em 53,9% das
+linhas, `id_negocio` em 59,8%, `meta` em todas; `id_veiculo` é sempre 1 e `id_mensuracao` sempre 2;
+seis colunas `double` têm `-0.0` como mínimo; `cad_lancamentos.contrato` tem `desemb-999`, acima do
+máximo de `cad_contratos.contrato`, e a partição `data_base` 2026-01-31 não tem `cad_contratos`
+dessa data, então a chave estrangeira do modelo tem órfãos; `rel_contrato_operacao.contrato` tem
+mínimo abaixo do de `cad_contratos`.
+
+A sondagem do mesmo dia (macOS, PyArrow 25.0.1, DuckDB 1.5.5): o PyArrow lê o `INT96` como
+`timestamp[ns]` e mantém a parte sub-microssegundo; `coerce_int96_timestamp_unit="us"` e o
+`TIMESTAMP` do DuckDB a truncam em silêncio; `cast(safe=True)` de `[ns]` para `[us]` recusa quando
+ela não é zero; o `INT96` não tem estatística; o formato 1.0 sem `INT96` recusa nanossegundos
+(`would lose data`); as codificações da origem saem de `use_dictionary=False`, `version="1.0"` e
+`use_deprecated_int96_timestamps=True`. O `read_parquet` do DuckDB com `hive_partitioning=true`
+converte `data_str` a `DATE` (`hive_types_autocast`); o dataset do PyArrow a mantém `string`.
+`tests/source_db_projetado.py` reproduz a estrutura em 64 arquivos e 425 KB, e o probe rodado sobre
+ela imprime a seção 3 idêntica à da base real.
+
+Consequências no plano: a [etapa 7](PLAN-STAGE-7.md) descreve a origem como ela é (partições por
+`data_str` e `data_base_str`, chunks, `INT96`), trunca o `timestamp` a microssegundos e arredonda só
+as colunas `Numeric`, compara as somas depois do arredondamento, pula as tabelas fora do modelo e
+não barra a carga pela chave estrangeira; a [etapa 1](PLAN-STAGE-1.md) registra que o modelo bate com
+a origem e que `mes` deriva de `data` ou de `data_base` conforme a tabela; o tipo de `valor`, o
+`BigInteger` nas chaves, o nome da chave da coluna de data, o conteúdo de `schema.json` e os órfãos
+estão em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

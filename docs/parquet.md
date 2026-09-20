@@ -1048,7 +1048,11 @@ grava v1.
 Tipos. O tipo mais estreito que cabe nos dados, `TIMESTAMP` em microssegundos (o Delta grava
 microssegundos e converte os nanossegundos do pandas em silêncio; o `INT96` é obsoleto), `DECIMAL` como inteiro quando o leitor aceita
 (`store_decimal_as_integer` no PyArrow; o DuckDB já grava assim) e strings com dicionário. O
-[contrato de tipos](schema.md) já fixa isso.
+[contrato de tipos](schema.md) já fixa isso. Um `INT96` de outro escritor (a base de origem lida em
+2026-09-20, gravada pelo pandas com `use_deprecated_int96_timestamps`) chega ao PyArrow como
+`timestamp[ns]`, sem estatística de mínimo e máximo no rodapé; `coerce_int96_timestamp_unit="us"`
+no PyArrow e o `TIMESTAMP` do DuckDB truncam a parte sub-microssegundo em silêncio, e o cast seguro
+de `[ns]` para `[us]` recusa quando ela não é zero (sondagem de 2026-09-20).
 
 Page index e checksums. Gravar o page index no PyArrow (`write_page_index=True`) custa alguns bytes
 por página e nada para leitores que o ignoram; Spark (parquet-java), DataFusion (arrow-rs) e Arrow
