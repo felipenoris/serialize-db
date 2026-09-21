@@ -3,7 +3,7 @@
 Read a story when the reason behind a rule in `CLAUDE.md` matters, or before adding a lesson. Process lessons from the sessions so far, each with the mistake that cost a retry or the verification that changed the plan, and its date; the rule distilled from each one lives in the "Working rules" section of `CLAUDE.md`, and the technical facts live in the theme files beside this one and in the study suites. A new lesson is appended here at the end of the unit of work, and its rule is added to `CLAUDE.md` in the same commit.
 
 - **A documented behavior becomes a test assertion only after a probe reproduces it**
-  (2026-09-19). Three claims taken from `docs/duckdb.md` and `docs/delta.md` failed as assertions:
+  (2026-09-19). Three claims taken from `plan/duckdb.md` and `plan/delta.md` failed as assertions:
   the DuckDB Arrow reader returns zero rows after another command instead of raising;
   `read_parquet` on a single file under `mes=.../` adds `mes` by Hive auto-detection, so a file's
   real columns come from `parquet_schema`; the `DECIMAL` inferred from a pandas column came from all
@@ -44,8 +44,8 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   Trimming this file: list the backticked spans and numbers of the old text missing from the new
   one; a fact removed is a defect.
 - **A change the user did not ask for is named in the report.** Moving the primitives out of
-  `docs/serialize-db.md` followed from the plan request and was flagged as such; the `Text` rule
-  proposed in `docs/OPEN_QUESTIONS.md` is marked as awaiting the user's confirmation.
+  `plan/serialize-db.md` followed from the plan request and was flagged as such; the `Text` rule
+  proposed in `plan/OPEN_QUESTIONS.md` is marked as awaiting the user's confirmation.
 - **API details learned by running live in `tests/proof_of_concept/`, not here**:
   `schema_mode="merge"` for an append with fewer columns than the evolved table, the normalized
   `CHECK` expression, `filters=` instead of the deprecated `partitions=`, `pa.schema(dt.schema())`
@@ -106,7 +106,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `COMPUPDATE OFF`" in the suite and in two stage files; the script that ran in the target carries
   no `COMPUPDATE` clause, and passed. The question left open after it was answered two documents
   away, by this repo's own table of Parquet `COPY` rules: that `COPY` rejects the parameter. Write
-  the plainest reading, mark the other in `docs/OPEN_QUESTIONS.md`, and grep the repository before
+  the plainest reading, mark the other in `plan/OPEN_QUESTIONS.md`, and grep the repository before
   calling a question open. A changed fact is then grepped in tables and lists too: `README.md`
   promised `IAM_ROLE default` two PRs after its prose said the caller's credentials.
 - **A probe's verdict is a hypothesis until the environment answers, and one repetition separates
@@ -145,7 +145,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   native reader pulls, and keep helper threads free of references to their owner so an abandoned
   object is collected. The same destructor hangs with no generator: `DeltaTable.to_pyarrow_table()`
   leaves an Acero task in flight, so a process exiting right after it never returns, which
-  `to_pyarrow_dataset()` or half a second of other work avoids (`docs/POC.md`).
+  `to_pyarrow_dataset()` or half a second of other work avoids (`plan/POC.md`).
 - **A reader built by `from_batches` trusts its batches** (2026-09-20). A batch with the columns in
   another order went through `RecordBatchReader.from_batches(schema, ...)` and DuckDB's `arrow_scan`
   without an error and came out with the bytes swapped. Cast every batch to the declared schema
@@ -186,11 +186,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   value is a reading.
 - **`secrets/` is read only when the user names a path inside it** (2026-09-21). The probe reports
   of the target landed in `secrets/probes-aws-bn/` and the user asked for their analysis: the folder
-  was read, nothing else under `secrets/`, the facts went to `docs/POC.md`, and copying the reports
-  into `docs/readings/` was left to the user.
+  was read, nothing else under `secrets/`, the facts went to `plan/POC.md`, and copying the reports
+  into `plan/readings/` was left to the user.
 - **A plan revision reads every stage against the decisions memory** (2026-09-21). The full review
-  found `docs/PLAN.md` saying the initial load rounds `Double` by `pc.round(x, 2)` two sections away
-  from the premise that says the opposite (decision of 2026-09-20), `docs/guia.md` still calling the
+  found `plan/PLAN.md` saying the initial load rounds `Double` by `pc.round(x, 2)` two sections away
+  from the premise that says the opposite (decision of 2026-09-20), `plan/guia.md` still calling the
   month the unit of write, a `Database` example without the `MetaData` the primitives need, and
   signatures (`publish_partition`, `export_partition`) missing the arguments their callers must pass.
   Grep the plan for the old rule's vocabulary when a decision lands, and read the API tables against
@@ -249,3 +249,16 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `pc.all` over that empty column returns null, so the first call with a reader was refused as a
   timestamp with a time of day; `min_count=0` fixed it. The rewrite in the module's shape exercised
   the three kinds and found the defect the dense draft had hidden.
+- **A generated file is generated twice and diffed before a test asserts it equal to its versioned
+  copy** (2026-09-21). `schema_files` wrote `tests/client_model/schema/*.delta.json` from delta-rs
+  `Schema.to_json()`, the files looked right, and the test that regenerates and compares failed on
+  the first run: delta-rs serializes each field's metadata map in arbitrary order, and two
+  generations of the same model differed (`{"parquet.field.id":1,"comment":...}` against
+  `{"comment":...,"parquet.field.id":2}`). The canonical dump (`json.dumps` with `sort_keys=True`)
+  is what the client versions.
+- **`uv` resolution needs every configured index reachable** (2026-09-21). `pyproject.toml` carries
+  the corporate GitLab index as an extra `[[tool.uv.index]]`; outside the corporate network `uv add`
+  and `uv lock` fail with a DNS error on it, even though every package comes from PyPI. An empty
+  configuration file (`UV_CONFIG_FILE`, or a `uv.toml` beside `pyproject.toml`) makes `uv` ignore
+  the whole `[tool.uv]` section; the workflows use `.github/uv-ci.toml`, and the local lock was made
+  the same way, with the index block restored afterwards.

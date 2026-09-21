@@ -385,7 +385,7 @@ ficam em `Table.info["serialize_db"]`, como [`schema.md`](schema.md) propõe:
 import pyarrow as pa
 import sqlalchemy as sa
 from deltalake import DeltaTable
-from serialize_db.schema import arrow_schema   # docs/sqlalchemy.md: tipos, nulidade e PARQUET:field_id
+from serialize_db.schema import arrow_schema   # plan/sqlalchemy.md: tipos, nulidade e PARQUET:field_id
 
 def delta_schema(model) -> pa.Schema:
     """Esquema Arrow do contrato com o comentário de cada coluna nos metadados do campo."""

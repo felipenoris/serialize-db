@@ -1,0 +1,23 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador do veículo",
+        "parquet.field.id": 1
+      },
+      "name": "id_veiculo",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Nome do veículo",
+        "parquet.field.id": 2
+      },
+      "name": "nome",
+      "nullable": false,
+      "type": "string"
+    }
+  ],
+  "type": "struct"
+}

@@ -2,7 +2,7 @@
 
 Na primeira execução no ambiente alvo (2026-09-21) o ``USE`` correu antes de o autocommit ser
 ligado, o ``redshift_connector`` já tinha emitido ``begin transaction``, e a sessão inteira ficou
-numa transação que o primeiro erro abortou (``docs/POC.md``). Na terceira e na quarta, o comando
+numa transação que o primeiro erro abortou (``plan/POC.md``). Na terceira e na quarta, o comando
 repetido depois de um ``TRUNCATE`` reaproveitou o prepared statement guardado pelo driver e o
 datashare o recusou com ``34510``; a conexão passou a ir com ``max_prepared_statements=0``. Os testes
 trocam o ``redshift_connector`` por um módulo fabricado que registra os argumentos da conexão e, a

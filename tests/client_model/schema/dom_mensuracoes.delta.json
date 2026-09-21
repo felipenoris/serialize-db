@@ -1,0 +1,23 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador da mensuração",
+        "parquet.field.id": 1
+      },
+      "name": "id_mensuracao",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Nome da mensuração",
+        "parquet.field.id": 2
+      },
+      "name": "nome",
+      "nullable": false,
+      "type": "string"
+    }
+  ],
+  "type": "struct"
+}

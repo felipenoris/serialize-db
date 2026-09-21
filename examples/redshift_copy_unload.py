@@ -2,7 +2,7 @@
 
 Exemplo executado com sucesso no ambiente alvo em 2026-09-20 e guardado como foi executado. Ele
 responde quatro perguntas que a documentação e os probes não fechavam
-([`../docs/POC.md`](../docs/POC.md), [`../docs/OPEN_QUESTIONS.md`](../docs/OPEN_QUESTIONS.md)):
+([`../plan/POC.md`](../plan/POC.md), [`../plan/OPEN_QUESTIONS.md`](../plan/OPEN_QUESTIONS.md)):
 
 1. **O produtor concedeu escrita no datashare.** ``CREATE TABLE``, ``COPY``, ``SELECT`` e ``UNLOAD``
    passaram em ``sbx_aco_decon``, no banco ``datalake_rw_shared``.

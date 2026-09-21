@@ -1,6 +1,6 @@
 """Prova de conceito da camada Delta no S3, executável em qualquer ambiente com um bucket.
 
-Cada teste responde a um item da etapa 0 (``docs/PLAN-STAGE-0.md``): as credenciais que o delta-rs
+Cada teste responde a um item da etapa 0 (``plan/PLAN-STAGE-0.md``): as credenciais que o delta-rs
 encontra, a escrita e a leitura no bucket, o put condicional, o ``vacuum`` e o tempo do ``delta_scan``.
 Os testes comuns aos dois armazenamentos vêm de ``poc_delta.py``; os deste módulo cobrem o que só existe
 no S3: a origem das credenciais, a cadeia de credenciais do delta-rs e sua reserva, o put condicional,

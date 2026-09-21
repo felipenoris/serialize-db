@@ -1,0 +1,140 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador do contrato",
+        "parquet.field.id": 1
+      },
+      "name": "id_contrato",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Data-base do contrato",
+        "parquet.field.id": 2
+      },
+      "name": "data",
+      "nullable": false,
+      "type": "date"
+    },
+    {
+      "metadata": {
+        "comment": "Sistema de origem do contrato",
+        "parquet.field.id": 3
+      },
+      "name": "sistema",
+      "nullable": false,
+      "type": "integer"
+    },
+    {
+      "metadata": {
+        "comment": "Código do contrato",
+        "parquet.field.id": 4
+      },
+      "name": "contrato",
+      "nullable": false,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Se o contrato vem do sistema legado",
+        "parquet.field.id": 5
+      },
+      "name": "legado",
+      "nullable": false,
+      "type": "boolean"
+    },
+    {
+      "metadata": {
+        "comment": "Unidade monetária do contrato",
+        "parquet.field.id": 6
+      },
+      "name": "um",
+      "nullable": false,
+      "type": "integer"
+    },
+    {
+      "metadata": {
+        "comment": "Código TO do contrato",
+        "parquet.field.id": 7
+      },
+      "name": "to",
+      "nullable": false,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Código da fonte de recursos",
+        "parquet.field.id": 8
+      },
+      "name": "fonte",
+      "nullable": false,
+      "type": "integer"
+    },
+    {
+      "metadata": {
+        "comment": "Família da fonte de recursos (FAT, FMM, FMC, BND)",
+        "parquet.field.id": 9
+      },
+      "name": "fonte_familia",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Estágio do contrato, de 1 a 3",
+        "parquet.field.id": 10
+      },
+      "name": "estagio",
+      "nullable": true,
+      "type": "integer"
+    },
+    {
+      "metadata": {
+        "comment": "Taxa de juros fixos",
+        "parquet.field.id": 11
+      },
+      "name": "taxa_juros_fixos",
+      "nullable": false,
+      "type": "double"
+    },
+    {
+      "metadata": {
+        "comment": "Data de assinatura",
+        "parquet.field.id": 12
+      },
+      "name": "data_assinatura",
+      "nullable": true,
+      "type": "date"
+    },
+    {
+      "metadata": {
+        "comment": "Data da primeira amortização",
+        "parquet.field.id": 13
+      },
+      "name": "data_primeira_amortizacao",
+      "nullable": false,
+      "type": "date"
+    },
+    {
+      "metadata": {
+        "comment": "Data da última amortização",
+        "parquet.field.id": 14
+      },
+      "name": "data_ultima_amortizacao",
+      "nullable": false,
+      "type": "date"
+    },
+    {
+      "metadata": {
+        "comment": "Partição: data em AAAA-MM-DD",
+        "parquet.field.id": 15
+      },
+      "name": "data_str",
+      "nullable": false,
+      "type": "string"
+    }
+  ],
+  "type": "struct"
+}

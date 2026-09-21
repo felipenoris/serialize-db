@@ -20,7 +20,7 @@ import source_db_projetado as source
 from reference_model.model_db_projetado import Base
 from test_source_db_projetado import FOREIGN_KEYS, MODEL_NOT_NULL_DECLARED_NULLABLE, UNIQUE_KEYS
 
-# O tipo Arrow que cada tipo SQLAlchemy do modelo tem nos arquivos: a tabela de tipos de docs/schema.md, com o
+# O tipo Arrow que cada tipo SQLAlchemy do modelo tem nos arquivos: a tabela de tipos de plan/schema.md, com o
 # timestamp gravado em INT96 e lido como nanossegundos.
 ARROW_TYPES = (
     (sa.Integer, pa.int32()),

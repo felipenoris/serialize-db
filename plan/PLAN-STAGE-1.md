@@ -34,15 +34,14 @@ modelo, sem nulo algum nos dados; o modelo prevalece. A origem tem duas tabelas 
 contrato: `data_str` deriva de `data` em `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao`,
 e `data_base_str` de `data_base` em `cad_lancamentos`.
 
-O que resta da etapa é o pacote: `serialize_db.errors` com `ContractError`, `serialize_db.schema`,
-o subcomando `serialize-db schema`, `tests/test_schema.py` e os arquivos gerados em
-`tests/client_model/schema/`. A migração adiantada ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), seção "A
+O pacote da etapa está escrito: `serialize_db.errors` com `ContractError`, `serialize_db.schema`,
+o subcomando `serialize-db schema` em `serialize_db.cli`, `tests/test_schema.py` e os arquivos
+gerados em `tests/client_model/schema/`. A migração adiantada ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), seção "A
 migração adiantada") vem logo depois e usa cinco primitivas: `check_models` (o modelo aprovado
 antes da carga), `arrow_schema` e `sql_type` (os `CAST` da consulta de cada partição),
 `delta_schema` (o `DeltaTable.create`) e `table_options` (a coluna de partição, a origem dela e a
-`sort_key`); elas vêm primeiro no módulo, e `cast`, `ddl` e os arquivos gerados fecham a etapa. A
-`sort_key` e os tipos do modelo cliente ficam decididos antes da migração, porque mudá-los depois é
-reescrever o Delta.
+`sort_key`). A `sort_key` e os tipos do modelo cliente ficam decididos antes da migração, porque
+mudá-los depois é reescrever o Delta.
 
 ## Os identificadores entre aspas
 
@@ -68,8 +67,8 @@ minúsculos, e os dois motores leem o nome entre aspas como o mesmo nome sem asp
 | `quoted(name)`, `column_ddl(column, dialect)` | O identificador entre aspas duplas, e a linha da coluna no `CREATE TABLE` (`"<coluna>" <tipo> [NOT NULL]`); públicas porque as etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [8](PLAN-STAGE-8.md) montam texto com identificadores e as variantes do DDL (a staging sem a coluna de partição, a tabela publicada com a chave primária informativa). |
 | `ddl(table, dialect, prefix="")` | O `CREATE TABLE` do sandbox para `duckdb` ou `redshift`, gerado como texto sem o dialeto do SQLAlchemy: colunas, tipos por `sql_type` e `NOT NULL`, todo identificador entre aspas; sem chave, `DEFERRABLE`, `Identity`, `CHECK`, `DEFAULT` nem comentário (as chaves são da auditoria, e o comentário vai no esquema Delta); `DISTSTYLE`, `DISTKEY` e `SORTKEY` no Redshift, de `table_options`; `prefix` renomeia a tabela para o sandbox (`exec_<id>_`, ou o sentinela `{prefix}` da [etapa 2](PLAN-STAGE-2.md), que sai como `"{prefix}cad_operacoes"`). |
 | `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(p + 3, s)` (`decimal128(21, 2)` para `Numeric(18, 2)`); recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` em bytes, nulo em coluna `NOT NULL` e um lote sem coluna alguma do contrato, com a tabela, a coluna e a instrução ao cliente na mensagem. |
-| `check_models(metadata)` | A lista de violações do contrato nos modelos, um texto por violação com tabela e coluna: tipo fora da tabela de tipos, `autoincrement` em chave inteira (o padrão `"auto"` inclusive), `Identity`, `String` sem comprimento, coluna ou tabela sem comentário, chave estrangeira `DEFERRABLE`, `partition_by` sem a coluna, com a coluna fora de `String(10)` ou sem `partition_source`, tabela sem chave primária e sem `keys`. Vazia no modelo cliente; no modelo de referência lista o `autoincrement` das 12 chaves, as 14 chaves estrangeiras `DEFERRABLE`, as colunas `String` sem comprimento e as tabelas e colunas sem comentário. |
-| `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória, cada texto com `\n` final. |
+| `check_models(metadata)` | A lista de violações do contrato nos modelos, um texto por violação com tabela e coluna: tipo fora da tabela de tipos, `autoincrement` em chave inteira (o padrão `"auto"` inclusive), `Identity`, `String` sem comprimento, coluna ou tabela sem comentário, chave estrangeira `DEFERRABLE`, `partition_by` sem a coluna, com a coluna fora de `String(10)` ou sem `partition_source`, tabela sem chave primária e sem `keys`. Vazia no modelo cliente; no modelo de referência lista o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), as 20 colunas `String` sem comprimento e as tabelas e colunas sem comentário. |
+| `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória, cada texto com `\n` final; o `.delta.json` é o JSON canônico (chaves ordenadas, indentado), porque o `to_json()` do delta-rs serializa os metadados de cada campo em ordem arbitrária, que muda a cada geração, e grava `PARQUET:field_id` como `parquet.field.id` inteiro. |
 | `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory` e devolve os caminhos; `serialize-db schema write --metadata modulo:atributo <pasta>` grava. |
 | `check_schema_files(metadata, directory)` | O diff unificado de cada arquivo versionado contra a geração nova, vazio quando nada mudou; `serialize-db schema check --metadata modulo:atributo <pasta>` compara sem gravar. |
 
@@ -198,7 +197,7 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
   `assert check_models(Base.metadata) == []`. O `autoincrement` padrão é a string `"auto"`, não
   `True`: a regra reprova os dois numa chave inteira. `String` sem comprimento é violação por
   decisão do usuário de 2026-09-21: sem `n`, o Redshift daria `VARCHAR(256)` e `cast` não mediria
-  nada, e `Text` é a forma sem limite. O modelo de referência é o modelo com defeitos do teste: o `autoincrement` das 12 chaves, as 14 chaves estrangeiras `DEFERRABLE`, os `String`
+  nada, e `Text` é a forma sem limite. O modelo de referência é o modelo com defeitos do teste: o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), os `String`
   sem comprimento e as tabelas e colunas sem comentário.
 - **`schema_files`** gera `<tabela>.delta.json` por `delta_schema(...).to_json()` e os dois `.sql`
   por `ddl`, cada texto com `\n` final; `write_schema_files` grava e devolve os caminhos;
@@ -227,7 +226,7 @@ teste com todos os tipos da tabela de [`schema.md`](schema.md), `to` e `timestam
 | --- | --- | --- |
 | Tipos do contrato | `test_arrow_schema_maps_every_contract_type` | Cada tipo do modelo de teste no Arrow esperado; `DateTime` sem fuso em `timestamp[us]`, com fuso em `tz=UTC`; JSON e UUID em `string`. |
 | Tipo fora do contrato | `test_arrow_schema_refuses_foreign_types` | `Float`, `LargeBinary`, `ARRAY` e `Interval` levantam `ContractError` com tabela e coluna. |
-| Esquema Delta | `test_delta_schema_json_matches_versioned_file` | `to_json()` igual ao `tests/client_model/schema/<tabela>.delta.json`. |
+| Esquema Delta | `test_delta_schema_json_matches_versioned_file` | O documento de `to_json()` igual ao `tests/client_model/schema/<tabela>.delta.json`, e o texto de `schema_files` igual ao arquivo, porque a ordem dos metadados em `to_json()` muda a cada geração. |
 | Opções físicas | `test_table_options_defaults_and_keys` | Tabela sem `info` dá `partition_by=None` e `keys` só da chave primária; o índice único de `cad_contratos` e a `UniqueConstraint` de `cad_aliquotas` entram em `keys`; `keys["add"]` acrescenta e `keys["drop"]` remove; duas colunas de partição são `ContractError`. |
 | Tipos por dialeto | `test_sql_type_per_dialect` | Cada tipo do modelo de teste no texto da tabela de tipos: `DECIMAL(18, 2)`, `VARCHAR(100)`, `VARCHAR` e `VARCHAR(65535)` para `Text`, `VARCHAR(36)`, `JSON` e `SUPER`, `DOUBLE` e `DOUBLE PRECISION`, `TIMESTAMP` e `TIMESTAMPTZ`. |
 | DDL por dialeto | `test_ddl_per_dialect` | Sem `PRIMARY KEY`, `UNIQUE`, `REFERENCES`, `DEFERRABLE`, `SERIAL`, `IDENTITY` ou `CHECK`; `SORTKEY`, `DISTSTYLE` e `DISTKEY` só no Redshift, com os nomes entre aspas; o texto igual ao esperado, linha a linha. |
@@ -238,7 +237,7 @@ teste com todos os tipos da tabela de [`schema.md`](schema.md), `to` e `timestam
 | Cast por leitor | `test_cast_reader_converts_batch_by_batch` | Um leitor de dois lotes sai como `RecordBatchReader` com o esquema do contrato e as linhas dos dois; a tabela vazia de `reader.schema.empty_table()` passa nas conferências. |
 | Cast que recusa | `test_cast_refuses_each_loss`, parametrizado | Nulo em `NOT NULL`, `double` fora da escala, `timestamp` com hora em `Date`, `struct` em JSON, texto acima de `String(n)` em bytes, escala perdida, nanossegundo não nulo, estouro de inteiro, lote sem coluna do contrato; cada mensagem cita a tabela e a coluna. |
 | Cast que preserva | `test_cast_keeps_doubles_of_the_reference_model` | `Double` do modelo de referência entra sem arredondamento. |
-| Modelos | `test_check_models_finds_each_violation`, `test_check_models_lists_the_reference_model_defects`, `test_client_model_is_clean` | Um modelo com cada defeito produz uma violação por defeito; o modelo de referência produz o `autoincrement` das 12 chaves, as 14 chaves estrangeiras `DEFERRABLE`, os `String` sem comprimento e as tabelas e colunas sem comentário, e nada mais; o modelo cliente produz lista vazia. |
+| Modelos | `test_check_models_finds_each_violation`, `test_check_models_lists_the_reference_model_defects`, `test_client_model_is_clean` | Um modelo com cada defeito produz uma violação por defeito; o modelo de referência produz o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), os 20 `String` sem comprimento e as tabelas e colunas sem comentário, e nada mais; o modelo cliente produz lista vazia. |
 | Cópia fiel | `tests/test_client_model.py` | O modelo cliente tem as tabelas e as colunas do modelo de referência, na mesma ordem, com a coluna de partição no fim; só os tipos e as chaves previstos mudam; sem `DEFERRABLE`, `autoincrement` nem índice não único; todo comentário presente; a partição declarada é a da base. |
 | Arquivos gerados | `test_schema_files_match_versioned`, `test_check_schema_files_reports_a_changed_model` | Diff vazio contra `tests/client_model/schema/`; uma coluna acrescentada aparece no diff dos três formatos. |
 | Gravação | `test_write_schema_files` (`local`) | Os arquivos sob a raiz local, com os nomes previstos. |
@@ -328,7 +327,7 @@ ARROW_TYPES: tuple[tuple[type, pa.DataType], ...] = (
 
 
 def arrow_type(column: sa.Column) -> pa.DataType:
-    """O tipo Arrow da coluna, pela tabela de tipos de docs/schema.md."""
+    """O tipo Arrow da coluna, pela tabela de tipos de plan/schema.md."""
     kind = column.type
     # Numeric leva precisão e escala; Float e Double derivam de Numeric e ficam fora deste ramo.
     if isinstance(kind, sa.Numeric) and not isinstance(kind, sa.Float):
@@ -427,7 +426,7 @@ def table_options(table: sa.Table) -> TableOptions:
 
 # ---------------------------------------------------------------- o DDL por dialeto
 
-# A tabela de tipos de docs/schema.md; Numeric, String e DateTime têm parâmetros: sql_type.
+# A tabela de tipos de plan/schema.md; Numeric, String e DateTime têm parâmetros: sql_type.
 SQL_TYPES: dict[str, dict[type, str]] = {
     "duckdb": {sa.BigInteger: "BIGINT", sa.SmallInteger: "SMALLINT", sa.Integer: "INTEGER",
                sa.Boolean: "BOOLEAN", sa.Double: "DOUBLE", sa.Date: "DATE", sa.Text: "VARCHAR",
@@ -439,7 +438,7 @@ SQL_TYPES: dict[str, dict[type, str]] = {
 
 
 def sql_type(column: sa.Column, dialect: Dialect) -> str:
-    """O nome do tipo da coluna no motor, pela tabela de tipos de docs/schema.md."""
+    """O nome do tipo da coluna no motor, pela tabela de tipos de plan/schema.md."""
     kind = column.type
     arrow = arrow_type(column)      # recusa o tipo fora do contrato antes de qualquer texto
     if pa.types.is_decimal(arrow):

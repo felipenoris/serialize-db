@@ -1,0 +1,41 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador da conta",
+        "parquet.field.id": 1
+      },
+      "name": "id_conta",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Nome da conta",
+        "parquet.field.id": 2
+      },
+      "name": "nome",
+      "nullable": false,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Número da conta no plano",
+        "parquet.field.id": 3
+      },
+      "name": "numero",
+      "nullable": false,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Se a conta recebe lançamentos",
+        "parquet.field.id": 4
+      },
+      "name": "permite_lancamentos",
+      "nullable": false,
+      "type": "boolean"
+    }
+  ],
+  "type": "struct"
+}

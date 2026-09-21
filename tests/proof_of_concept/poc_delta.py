@@ -1,7 +1,12 @@
 """Prova de conceito da camada Delta comum aos dois tipos de armazenamento.
 
 ``DeltaProofOfConcept`` reúne os testes que valem tanto para um bucket S3 quanto para uma pasta
-local. ``test_s3.py`` e ``test_local.py`` herdam a classe, fornecem as fixtures ``storage`` (a raiz
+local: a escrita e a leitura pelo delta-rs, o ``delta_scan`` com os tipos do contrato e a poda de
+partição, os tempos de consulta e o ``vacuum``. ``test_local.py`` acrescenta o que só faz sentido
+em disco (o commit atômico e o conflito entre escritores, a realocação da pasta, a abertura sem
+variáveis ``AWS_*``) e ``test_s3.py`` o que só existe no bucket (a origem das credenciais, a cadeia
+do delta-rs e sua reserva, o put condicional, a criptografia, listar, copiar e apagar pelo
+``boto3``). ``test_s3.py`` e ``test_local.py`` herdam a classe, fornecem as fixtures ``storage`` (a raiz
 da sessão), ``table_uri`` (a tabela ``operacoes`` gravada por ``write_sample_table``) e
 ``duckdb_connection`` (a conexão com as extensões daquele armazenamento) e acrescentam os testes
 próprios do seu armazenamento. As medições vão para o relatório da sessão com o prefixo do

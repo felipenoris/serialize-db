@@ -7,13 +7,18 @@ authors = [
     { name = "Felipe Noronha", email = "felipenoris@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+# As dependências de execução, nas versões fixadas pelos documentos e pelas suítes de estudo.
+dependencies = [
+    "deltalake==1.6.4",
+    "pyarrow==25.0.1",
+    "sqlalchemy==2.0.54",
+]
 
 [project.scripts]
 serialize-db = "serialize_db:main"
 
 [dependency-groups]
-# Versões fixadas nas usadas pelos exemplos em docs/ e pela prova de conceito.
+# Versões fixadas nas usadas pelos exemplos em plan/ e pela prova de conceito.
 dev = [
     "boto3>=1.40",
     "deltalake==1.6.4",
@@ -25,6 +30,10 @@ dev = [
     "redshift-connector>=2.1",
     "sqlalchemy==2.0.54",
     "sqlalchemy-redshift==1.0.0",
+]
+# A documentação do pacote, publicada em HTML estático.
+docs = [
+    "pdoc==16.0.0",
 ]
 interactive = [
     "ipykernel>=7.3.0",

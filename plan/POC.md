@@ -727,7 +727,7 @@ Consequências no plano, nesta mesma unidade de trabalho:
   respondeu em 2,0 s. As duas chamadas passaram a `short_config(2, 5, 1)` atrás desse teste, e sem
   resposta `BK-8`, `BK-9` e `RS-11` ficam como leitura. A espera no alvo, onde os nomes resolvem para
   outros endereços, a próxima execução dos probes mede.
-- A Data API em `PICKED` e a decisão de copiar ou não os relatórios para `docs/readings/` continuam em
+- A Data API em `PICKED` e a decisão de copiar ou não os relatórios para `plan/readings/` continuam em
   [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
 
 ## O que os rascunhos das etapas mostraram
@@ -785,6 +785,15 @@ além do que já estava medido:
   coluna Date` na primeira execução do rascunho, que até então só chamava `cast` com um lote;
   `pc.all(..., min_count=0)` devolve verdadeiro para a coluna vazia, e o leitor de dois lotes saiu
   com as quatro linhas.
+- A implementação da etapa 1 (2026-09-21, macOS, deltalake 1.6.4) mostrou que `Schema.to_json()`
+  do delta-rs serializa os metadados de cada campo em ordem arbitrária: duas gerações seguidas do
+  mesmo modelo deram `{"parquet.field.id":1,"comment":...}` e `{"comment":...,"parquet.field.id":2}`,
+  e o diff dos arquivos versionados reprovou; ele também grava `PARQUET:field_id` como
+  `parquet.field.id` inteiro. `schema_files` grava o JSON canônico (`json.dumps` com
+  `sort_keys=True` e `indent=2`). O modelo de referência tem 12 tabelas, 73 colunas, 14 chaves
+  estrangeiras (12 `DEFERRABLE`) e 20 colunas `String` sem comprimento; `check_models` lista 129
+  violações nele e nenhuma no modelo cliente, e o DDL das 12 tabelas do modelo cliente executou
+  num DuckDB em memória, `"to"` inclusive.
 
 ## O que a primeira execução da suíte Redshift mostrou
 

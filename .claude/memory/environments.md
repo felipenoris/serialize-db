@@ -1,6 +1,6 @@
 # The environments
 
-Read before running anything in the SageMaker space or the target, preparing the offline folder, or dating a measurement. The target Redshift's readings are in `redshift.md`; the lab's probe readings of 2026-09-20 are in `docs/POC.md`.
+Read before running anything in the SageMaker space or the target, preparing the offline folder, or dating a measurement. The target Redshift's readings are in `redshift.md`; the lab's probe readings of 2026-09-20 are in `plan/POC.md`.
 
 ## The SageMaker Unified Studio lab, as observed on 2026-09-19
 
@@ -25,7 +25,7 @@ Read before running anything in the SageMaker space or the target, preparing the
   probe run of 2026-09-20 found no `gh` on the PATH and the 03:44 and 04:40 runs found `/usr/bin/gh`
   (with `/usr/local/bin/aws` and no `duckdb` CLI), so check for it before relying on it.
 - Probe readings of 2026-09-20 in the same space (four runs, the last at 04:40 UTC) are recorded in
-  `docs/POC.md`, which also holds the lab-only readings (IMDS, the `~/shared` mount, Athena, the
+  `plan/POC.md`, which also holds the lab-only readings (IMDS, the `~/shared` mount, Athena, the
   container credential's lifetime). This lab is not the target: the target has Redshift and no
   internet (user statement of 2026-09-20).
 - The probes import `sagemaker-studio` from the system interpreter, because nothing unpinned enters the project venv
@@ -34,9 +34,9 @@ Read before running anything in the SageMaker space or the target, preparing the
 ## The target
 
 Redshift serverless `controladoria-wg` in `sa-east-1`, account 138071776059, with no internet: the readings of
-2026-09-20 and 2026-09-21 are in `redshift.md` and `docs/readings/`. The five probes of 2026-09-21
+2026-09-20 and 2026-09-21 are in `redshift.md` and `plan/readings/`. The five probes of 2026-09-21
 (03:47 to 03:51 UTC, Linux x86_64, Python 3.13.15, the project venv; reports in `secrets/probes-aws-bn/`,
-outside git; interpreted in `docs/POC.md`) read the machine and the network: 2 vCPUs, 7.6 GiB, 29.8 GiB
+outside git; interpreted in `plan/POC.md`) read the machine and the network: 2 vCPUs, 7.6 GiB, 29.8 GiB
 free of 37.0 GiB on one disk serving `HOME`, `/tmp` and the repository, `ulimit -n` 65536; DuckDB
 1.5.5 `linux_amd64` with 2 threads, `memory_limit` 6.1 GiB, `temp_directory` `.tmp`, extensions loaded
 from the prepared `.duckdb/`; `uv`, `git`, `aws` and `duckdb` on the PATH, no `gh`, no `~/shared`, no
@@ -66,10 +66,23 @@ and an empty `HOME`, 10 passed; on macOS after the glob fix of PR #12). `uv sync
 
 ## The environments of the measurements
 
-Each document dates its measurements and pins their versions in its opening lines: `docs/parquet.md`,
-`docs/duckdb.md` and `docs/sqlalchemy.md` on 2026-09-18, over 300,000 rows of `operacoes`
-(`poc_delta.sample_table`), the Redshift statements compiled only; `docs/estrategia.md` on 2026-09-19;
-the S3 proof of concept of 2026-09-19 (Python 3.13.15) in `docs/POC.md`. What they do not say: the
+Each document dates its measurements and pins their versions in its opening lines: `plan/parquet.md`,
+`plan/duckdb.md` and `plan/sqlalchemy.md` on 2026-09-18, over 300,000 rows of `operacoes`
+(`poc_delta.sample_table`), the Redshift statements compiled only; `plan/estrategia.md` on 2026-09-19;
+the S3 proof of concept of 2026-09-19 (Python 3.13.15) in `plan/POC.md`. What they do not say: the
 local proof of concept ran on macOS arm64 through `uv run --with` in the scratchpad, with 11 DuckDB
 threads and the files in the page cache, nothing against S3 or Redshift; the Python examples added
 to every document on 2026-09-19 ran under the same pinned versions.
+
+## GitHub Actions (2026-09-21)
+
+- The workflows in `.github/workflows/` run on `ubuntu-latest` with `astral-sh/setup-uv` pinned to an exact tag (the repository has no `v10` major tag; the
+  first run failed on `@v10`) and Python 3.13; `UV_CONFIG_FILE=.github/uv-ci.toml` (empty) makes `uv` ignore the corporate index of
+  `pyproject.toml`. `tests.yml` sets `SERIALIZE_DB_TEST_LOCAL_ROOT` to a folder under the workspace
+  and runs `tests/` without `tests/proof_of_concept/`; `docs.yml` builds the `pdoc` site and deploys
+  it to GitHub Pages (`actions/configure-pages`, `upload-pages-artifact`, `deploy-pages`), which
+  needs the Pages source set to "GitHub Actions" in the repository settings. The tests workflow
+  ran twice on PR #46 on 2026-09-21: the first run failed at `Set up job` (`Unable to resolve
+  action astral-sh/setup-uv@v10`, the repository tags major versions only up to `v7`), the second
+  passed the 105 package tests in about a minute with `@v10.2.0`; the docs workflow has not run.
+  `plan/CURRENT_STATE.md`, `README.md`

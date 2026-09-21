@@ -1,18 +1,18 @@
 # Types across Parquet, Arrow, Delta and the engines
 
-Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a change in what a writer produces. Each fact ends with the `docs/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a change in what a writer produces. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## What each writer produces
 
 - The DuckDB Parquet writer marks every column `optional`, even `NOT NULL`, writes `DECIMAL(18, 2)`
   as `INT64` and writes no page index; PyArrow writes `required` and `FIXED_LEN_BYTE_ARRAY(8)`.
-  `docs/parquet.md`
+  `plan/parquet.md`
 - delta-rs, DuckLake and DuckDB all write `DECIMAL(18, 2)` as `INT64`; PyArrow writes
-  `FIXED_LEN_BYTE_ARRAY`. The pending Redshift `COPY` test covers all three. `docs/estrategia.md`
+  `FIXED_LEN_BYTE_ARRAY`. The pending Redshift `COPY` test covers all three. `plan/estrategia.md`
 - delta-rs maps the contract types from Arrow as `short`, `integer`, `long`, `boolean`, `double`,
   `decimal(p,s)`, `string`, `date`, `timestamp_ntz` (naive) and `timestamp` (UTC); a naive timestamp
   column raises the protocol to reader 3 / writer 7 with the `timestampNtz` feature, which DuckDB
-  reads as `TIMESTAMP`. `docs/schema.md`, `docs/estrategia.md`
+  reads as `TIMESTAMP`. `plan/schema.md`, `plan/estrategia.md`
 
 ## The type contract
 
@@ -22,7 +22,7 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   `JSON` column with `Malformed JSON`), `string` in Delta (the extension name kept in field metadata
   when an Arrow schema carries it), `JSON` logical type in Parquet written by PyArrow or
   DuckDB and `String` when written by delta-rs; DuckDB reads `delta_scan` JSON as `VARCHAR` and
-  validates only on `::JSON`; Arrow and Delta never validate. `docs/schema.md`, `docs/delta.md`
+  validates only on `::JSON`; Arrow and Delta never validate. `plan/schema.md`, `plan/delta.md`
 
 ## PyArrow casts and pandas conversions
 
@@ -35,7 +35,7 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   the round trip finds the timestamps with a time. `Table.cast` refuses nulls in a non-nullable field
   and wants the same names in the same order; `int64` to `decimal128(18, 2)` needs the detour through
   `(21, 2)`; a `dict` column infers `struct` with the union of keys; pandas 3 `str` gives
-  `large_string`. `docs/PLAN.md`, `tests/proof_of_concept/test_pyarrow.py`
+  `large_string`. `plan/PLAN.md`, `tests/proof_of_concept/test_pyarrow.py`
 
 ## Building batches from rows (2026-09-21)
 
@@ -46,8 +46,8 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   column to the schema type and raises `ArrowInvalid` on a lossy decimal rescale, so `cast` wraps it.
   `duckdb_engine` DDL spells `NUMERIC(18, 2)`, `DOUBLE PRECISION` and `TEXT`, which DuckDB records as
   `DECIMAL(18,2)`, `DOUBLE` and `VARCHAR`. A column's default `autoincrement` is the string `"auto"`.
-  `docs/POC.md`, `docs/PLAN-STAGE-1.md`, `docs/PLAN-STAGE-5.md`
+  `plan/POC.md`, `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-5.md`
 - `pc.all` over an empty array returns null, so a check written as `not pc.all(...).as_py()` refuses
   an empty column: the reader path of `cast` derives its output schema from
   `reader.schema.empty_table()` and failed on it until the two checks got `min_count=0`, which makes
-  the empty column pass (2026-09-21). `docs/PLAN-STAGE-1.md`, `docs/POC.md`
+  the empty column pass (2026-09-21). `plan/PLAN-STAGE-1.md`, `plan/POC.md`

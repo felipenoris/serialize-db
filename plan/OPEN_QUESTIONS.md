@@ -33,8 +33,8 @@ foi medido em [`POC.md`](POC.md).
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
   `COPY` mais longo que isso também não foi medido.
 - **Os relatórios dos probes de 2026-09-21.** O usuário os guardou em `secrets/probes-aws-bn/`, fora
-  do git; [`POC.md`](POC.md) os interpreta, e `docs/readings/` não os tem. Copiá-los para
-  `docs/readings/`, como os de 2026-09-20, é decisão do usuário: eles trazem os mesmos
+  do git; [`POC.md`](POC.md) os interpreta, e `plan/readings/` não os tem. Copiá-los para
+  `plan/readings/`, como os de 2026-09-20, é decisão do usuário: eles trazem os mesmos
   identificadores (conta, papel, usuário do banco) que os relatórios já versionados.
 - **Quanto o teste de alcance poupa no ambiente alvo.** O IAM (`iam.amazonaws.com`) e o KMS não têm
   endpoint VPC lá, e `simulate_principal_policy` esperou 10 s e `describe_key` 80 s por nada em

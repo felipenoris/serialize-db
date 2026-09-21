@@ -1,0 +1,32 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador da hierarquia",
+        "parquet.field.id": 1
+      },
+      "name": "id_hierarquia",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Nome da hierarquia",
+        "parquet.field.id": 2
+      },
+      "name": "nome",
+      "nullable": false,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Descrição da hierarquia",
+        "parquet.field.id": 3
+      },
+      "name": "descricao",
+      "nullable": true,
+      "type": "string"
+    }
+  ],
+  "type": "struct"
+}

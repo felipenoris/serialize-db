@@ -1,4 +1,4 @@
-# `docs/readings/`: os relatórios dos probes que viraram registro
+# `plan/readings/`: os relatórios dos probes que viraram registro
 
 Cada arquivo aqui é a saída de uma execução de `probes/<script>.py` num ambiente real, ou o JSON
 de `SERIALIZE_DB_TEST_REPORT` de uma sessão de suíte, guardados como saíram. A pasta `probes/output/`

@@ -1,6 +1,6 @@
 # The Parquet source base and its fixture
 
-Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `tests/reference_model/` or `probes/parquet_source.py`; the user's decisions on the load are in `decisions.md`. Each fact ends with the `docs/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `tests/reference_model/` or `probes/parquet_source.py`; the user's decisions on the load are in `decisions.md`. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## The development base, read on 2026-09-20
 
@@ -17,14 +17,14 @@ Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `test
   tables match the files in columns, order, types and nullability except seven `cad_contratos`
   columns nullable in the files and `NOT NULL` in the model with no null in the data. The report was
   pasted in the conversation, never saved; its sections 2, 6, 7 and 9 survive in the transcript of
-  session `1b1640bf` on this machine, and the numbers below come from there. `docs/POC.md`,
-  `docs/PLAN-STAGE-7.md`, `tests/source_db_projetado.py`
+  session `1b1640bf` on this machine, and the numbers below come from there. `plan/POC.md`,
+  `plan/PLAN-STAGE-7.md`, `tests/source_db_projetado.py`
 
 ## The production base, read on 2026-09-21
 
 - The production base (`s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`),
   read in the target through `S3FileSystem` at 13:54 UTC with `--sample 5000`, the listing in 0.1 s
-  (the report is in `docs/readings/parquet_source-2026-09-21-1354.txt`, committed by the user): the
+  (the report is in `plan/readings/parquet_source-2026-09-21-1354.txt`, committed by the user): the
   same structure as the dev base, section 3 identical column by column (checked by script against
   the transcription in `tests/test_source_db_projetado.py`), the same partitions, layout, seven
   columns without statistics and `schema.json`; 14 tables, 205 files, 3,771,538,655 bytes,
@@ -41,7 +41,7 @@ Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `test
   without it are 3, 4 and 14 in the three `data_str` tables, the size of one partition each, and
   the report does not say which). The reference model matches it as it matches dev, no `NOT NULL`
   column of the model has a null, and the composite foreign-key orphans repeat (`data_base`
-  2026-01-31 without `cad_contratos`, `desemb-999`). `docs/POC.md`, `docs/PLAN-STAGE-7.md`
+  2026-01-31 without `cad_contratos`, `desemb-999`). `plan/POC.md`, `plan/PLAN-STAGE-7.md`
 
 ## The fixture
 

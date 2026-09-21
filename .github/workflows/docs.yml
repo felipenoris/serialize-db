@@ -1,0 +1,55 @@
+# A documentação do pacote em HTML estático, gerada pelo pdoc a partir das docstrings e de
+# docs/index.md, publicada no GitHub Pages a cada push na main. O repositório precisa ter o Pages
+# configurado com a origem "GitHub Actions".
+name: Documentação do pacote
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  # O índice corporativo de pyproject.toml ([[tool.uv.index]]) só responde na rede corporativa; um
+  # arquivo de configuração vazio faz o uv ignorar a seção [tool.uv] e resolver pelo PyPI.
+  UV_CONFIG_FILE: ${{ github.workspace }}/.github/uv-ci.toml
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Instalar o pacote e o pdoc
+        run: uv sync --group docs
+
+      - name: Gerar a documentação
+        run: uv run pdoc serialize_db --docformat restructuredtext -o site
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
