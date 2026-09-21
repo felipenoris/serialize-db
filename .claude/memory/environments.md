@@ -81,5 +81,8 @@ to every document on 2026-09-19 ran under the same pinned versions.
   `pyproject.toml`. `tests.yml` sets `SERIALIZE_DB_TEST_LOCAL_ROOT` to a folder under the workspace
   and runs `tests/` without `tests/proof_of_concept/`; `docs.yml` builds the `pdoc` site and deploys
   it to GitHub Pages (`actions/configure-pages`, `upload-pages-artifact`, `deploy-pages`), which
-  needs the Pages source set to "GitHub Actions" in the repository settings. No run has happened
-  yet. `plan/CURRENT_STATE.md`, `README.md`
+  needs the Pages source set to "GitHub Actions" in the repository settings. The tests workflow
+  ran twice on PR #46 on 2026-09-21: the first run failed at `Set up job` (`Unable to resolve
+  action astral-sh/setup-uv@v10`, the repository tags major versions only up to `v7`), the second
+  passed the 105 package tests in about a minute with `@v10.2.0`; the docs workflow has not run.
+  `plan/CURRENT_STATE.md`, `README.md`
