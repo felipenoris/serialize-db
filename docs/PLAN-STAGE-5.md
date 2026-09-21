@@ -48,15 +48,15 @@ recusado está em `sys_load_error_detail`, que a sessão lê no ambiente alvo (2
 
 | Primitiva | Redshift |
 | --- | --- |
-| `connect(config)` | `GetWorkgroup`, `GetCredentials` e `redshift_connector.connect` sem `timeout`; `USE <share_database>` quando o esquema vem de um datashare, conferido pela resolução de um nome em duas partes, porque `current_database()` continua `dev` depois dele (leitura de 2026-09-21); `search_path` no esquema; `cursor.paramstyle = "named"`; uma conexão por thread num `threading.local`, aberta no primeiro uso e fechada em `cleanup`, e `connection` devolve a da thread. A senha dura no máximo uma hora, então uma conexão derrubada pelo servidor é reaberta com credencial nova, uma vez por comando, e o comando é repetido; o que o servidor faz com uma conexão cuja senha expirou, e se ela cai no meio de um `COPY`, é questão em aberto ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). |
+| `connect(config)` | `GetWorkgroup`, `GetCredentials` e `redshift_connector.connect` sem `timeout` e com `max_prepared_statements=0`, porque o cache de prepared statements do driver reaproveita um statement preparado antes de um `TRUNCATE` e o datashare o recusa com `34510` (leitura de 2026-09-21, [`redshift.md`](redshift.md)); `USE <share_database>` quando o esquema vem de um datashare, conferido pela resolução de um nome em duas partes, porque `current_database()` continua `dev` depois dele (leitura de 2026-09-21); `search_path` no esquema; `cursor.paramstyle = "named"`; uma conexão por thread num `threading.local`, aberta no primeiro uso e fechada em `cleanup`, e `connection` devolve a da thread. A senha dura no máximo uma hora, então uma conexão derrubada pelo servidor é reaberta com credencial nova, uma vez por comando, e o comando é repetido; o que o servidor faz com uma conexão cuja senha expirou, e se ela cai no meio de um `COPY`, é questão em aberto ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). |
 | `ingest(table, uri, version, partitions=None, materialize=True)` | `copy_manifest` dos arquivos dessas partições, `COPY ... FORMAT AS PARQUET MANIFEST` com a cláusula de credenciais numa staging sem a coluna de partição criada por `ddl`, e `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'`; `JSON_PARSE` nas colunas `SUPER`. O `COPY` também lê um prefixo de pasta direto, sem manifesto, e converte `int32` da origem para a coluna `BIGINT` do contrato. |
-| `stream(statement_or_sql, params=None, batch_size=100_000, prefetch=2)` | O statement compilado para o Redshift, ou o texto com `{prefix}` em `exec_<id>_`, executado numa conexão própria da thread auxiliar; cada lote é `RecordBatch.from_arrays` das colunas de `cursor.fetchmany(batch_size)` (`zip(*linhas)`), com o esquema do statement, ou os lotes de `ParquetFile.iter_batches` de um `UNLOAD` acima de um limite de linhas; o mesmo `BatchStream` do DuckDB. O `redshift_connector` é Python puro, e a thread auxiliar compete pelo GIL com o cliente ([`PLAN.md`](PLAN.md)). |
+| `stream(statement_or_sql, params=None, batch_size=100_000, prefetch=2)` | O statement compilado para o Redshift, ou o texto com `{prefix}` em `exec_<id>_`, executado numa conexão própria da thread auxiliar; cada lote é `RecordBatch.from_arrays` das colunas de `cursor.fetchmany(batch_size)` (`zip(*linhas)`), com o esquema do statement, ou os lotes de `ParquetFile.iter_batches` de um `UNLOAD` acima de um limite de linhas, porque o driver lê o resultado inteiro no `execute` e `fetchmany` só fatia a fila (leitura do código, 2026-09-21); o mesmo `BatchStream` do DuckDB. O `redshift_connector` é Python puro, e a thread auxiliar compete pelo GIL com o cliente ([`PLAN.md`](PLAN.md)). |
 | `query(statement, **params)` | `stream(statement, params).read_all()`. |
 | `execute(sql, params)` | `stream(sql, params).read_all()`, vazia para um comando sem resultado. |
 | `loader(table, queue_depth=2)` | `write` faz `cast(batch, table)` na thread do cliente; a thread auxiliar grava um row group por lote com `ParquetWriter.write_batch` num arquivo de `staging/<execution_id>/`, e `close` fecha o arquivo e roda o `COPY`: nada entra antes dele, e uma exceção dentro do `with` apaga o arquivo sem `COPY`. |
 | `load(table, data)` | Os lotes de `data` pelo `loader`; uma `pa.Table` abaixo de um limite de linhas entra por um único `INSERT` multilinha montado de `to_pylist()`, numa ida ao servidor. |
 | `audit(table, partitions, **opcoes)` | O mesmo texto compilado para o Redshift; as demais partições e a tabela referenciada entram em stagings só com as colunas da chave, por `COPY ... MANIFEST`. |
-| `export_partition(table, uri, value, metadata, mode=None, expected_rows=None)` | `mode` é `"register"` ou `"rewrite"` (flag do usuário, 2026-09-21): do argumento, de `run.publish(export_mode=...)` ou de `SERIALIZE_DB_EXPORT_MODE`, `"register"` por omissão, a mesma flag do motor DuckDB ([etapa 4](PLAN-STAGE-4.md)) e da carga inicial ([etapa 7](PLAN-STAGE-7.md)); a mesma partição sai igual pelos dois, e o teste de integração os compara. Os dois começam por `UNLOAD ('<select do contrato>') TO '<destino>/' PARTITION BY (<coluna de partição>) FORMAT PARQUET MANIFEST VERBOSE` com a cláusula de credenciais, que passou no ambiente alvo em 2026-09-21 a partir de uma tabela do datashare ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py), [`POC.md`](POC.md)): grava na convenção Hive com a coluna de partição fora dos arquivos, e `PARALLEL OFF` quando a partição cabe num arquivo, porque o `UNLOAD` fragmenta por slice (500.000 linhas em 32 arquivos) e `MAXFILESIZE` é teto, não piso. **`register`**: o destino é `<uri>/<execution_id>/`, dentro da pasta da tabela e vazio por construção, porque o `UNLOAD` falha num destino com arquivos e a pasta da partição já tem os das versões anteriores; `register_files` recebe `<execution_id>/<coluna>=<valor>/<arquivo>` por entrada do manifesto, o `count(*)` da fonte em `expected_rows`, faz as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois. Os dados não passam pela máquina local, e os arquivos ficam como o Redshift os gravou até a compactação: `TIMESTAMP` em `INT96`, sem estatística de mínimo e máximo, lido de volta como `timestamp[us]` pelo delta-rs e pelo `delta_scan`, e `DECIMAL` em `FIXED_LEN_BYTE_ARRAY`. **`rewrite`**: o destino é `staging/<execution_id>/<tabela>/`, fora da tabela; a partição volta pelo leitor da [etapa 7](PLAN-STAGE-7.md) (`read_parquet` da pasta Hive, `INT96` a microssegundos, a coluna de partição com o valor do caminho, `cast`) e entra por `publish_partition`, onde o `write_deltalake` calcula estatística e valores de partição e recusa o que o contrato recusa. Os dados passam pela máquina local, e a memória do `write_deltalake` de uma partição de `cad_lancamentos` é a medição em aberto ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)), que a flag faz com o mesmo `UNLOAD`; `cleanup` apaga o staging. |
+| `export_partition(table, uri, value, metadata, mode=None, expected_rows=None)` | `mode` é `"register"` ou `"rewrite"` (flag do usuário, 2026-09-21): do argumento, de `run.publish(export_mode=...)` ou de `SERIALIZE_DB_EXPORT_MODE`, `"register"` por omissão, a mesma flag do motor DuckDB ([etapa 4](PLAN-STAGE-4.md)) e da carga inicial ([etapa 7](PLAN-STAGE-7.md)); a mesma partição sai igual pelos dois, e o teste de integração os compara. Os dois começam por `UNLOAD ('<select do contrato>') TO '<destino>/' PARTITION BY (<coluna de partição>) FORMAT PARQUET MANIFEST VERBOSE` com a cláusula de credenciais, que passou no ambiente alvo em 2026-09-21 a partir de uma tabela do datashare ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py), [`POC.md`](POC.md)): grava na convenção Hive com a coluna de partição fora dos arquivos, e `PARALLEL OFF` quando a partição cabe num arquivo, porque o `UNLOAD` fragmenta por slice (500.000 linhas em 32 arquivos) e `MAXFILESIZE` é teto, não piso. **`register`**: o destino é `<uri>/<execution_id>/<valor>/`, dentro da pasta da tabela e vazio por construção, porque o `UNLOAD` confere o destino como prefixo e recusa um prefixo com objetos abaixo (leitura de 2026-09-21: o mesmo prefixo e o prefixo pai reprovam, um subprefixo novo passa), a pasta da partição já tem os arquivos das versões anteriores e `<uri>/<execution_id>/` deixa de estar vazio depois da primeira partição da execução; `register_files` recebe `<execution_id>/<valor>/<coluna>=<valor>/<arquivo>` por entrada do manifesto (`<slice>_part_<nn>.parquet`, com o número da slice variando entre execuções), o `count(*)` da fonte em `expected_rows`, faz as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois. Os dados não passam pela máquina local, e os arquivos ficam como o Redshift os gravou até a compactação: `TIMESTAMP` em `INT96`, sem estatística de mínimo e máximo, lido de volta como `timestamp[us]` pelo delta-rs e pelo `delta_scan`, e `DECIMAL` em `FIXED_LEN_BYTE_ARRAY`. **`rewrite`**: o destino é `staging/<execution_id>/<tabela>/`, fora da tabela; a partição volta pelo leitor da [etapa 7](PLAN-STAGE-7.md) (`read_parquet` da pasta Hive, `INT96` a microssegundos, a coluna de partição com o valor do caminho, `cast`) e entra por `publish_partition`, onde o `write_deltalake` calcula estatística e valores de partição e recusa o que o contrato recusa. Os dados passam pela máquina local, e a memória do `write_deltalake` de uma partição de `cad_lancamentos` é a medição em aberto ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)), que a flag faz com o mesmo `UNLOAD`; `cleanup` apaga o staging. |
 | `cleanup()` | `DROP TABLE` de `exec_<id>_*` e da staging; os objetos de `staging/<execution_id>/` apagados. |
 
 O identificador de execução entra no nome do sandbox normalizado para `[a-z0-9_]`, dentro dos
@@ -71,7 +71,7 @@ Testes: `tests/test_engine_redshift.py` compara o SQL gerado (`COPY`, `INSERT ..
 mesma sequência com uma amostra no esquema autorizado, depois do
 `test_redshift.py` da [etapa 0](PLAN-STAGE-0.md). Provas de conceito: `test_redshift.py` (sessão e
 `paramstyle` nomeado, o `fetchmany` por lotes, banco do esquema e o `USE`, DDL, `COPY ... MANIFEST`, lista de
-colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API), `test_sqlalchemy.py`
+colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API, o comando repetido depois de um `TRUNCATE` com e sem o cache do driver), `test_sqlalchemy.py`
 (`test_redshift_dialect_compiles_dml`, `test_three_part_name_needs_quoted_name_without_quotes`,
 `test_sandbox_copy_of_table_and_schema_files_diff`) e `test_stdlib.py::test_execution_identifiers`
 (o prefixo do sandbox).
@@ -142,7 +142,10 @@ class RedshiftEngine:
   EXISTS <esquema>.serialize_db_publications (...)`, que só resolve no banco do datashare e deixa a
   tabela de controle da [etapa 8](PLAN-STAGE-8.md) criada; se ela falhar, a conexão é recusada com a
   mensagem do servidor. Depois vêm `SET search_path TO <esquema>` e `cursor.paramstyle = "named"`.
-  Uma conexão derrubada pelo servidor é reaberta uma vez por comando, com credencial nova.
+  Uma conexão derrubada pelo servidor é reaberta uma vez por comando, com credencial nova. A conexão
+  vai com `max_prepared_statements=0`: o driver prepara cada comando sem nome logo antes de o
+  executar, e nenhum statement guardado sobrevive a um `TRUNCATE` ou a um DDL de outra sessão
+  ([`redshift.md`](redshift.md)).
 - **`qualified`** é `f"{schema}.{name}"`; o nome em três partes não entra no motor.
 - **`credentials_clause`** devolve `IAM_ROLE '<arn>'` ou `IAM_ROLE default` quando `iam_role` está
   configurado, e `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` e `SESSION_TOKEN` das credenciais congeladas
@@ -158,9 +161,11 @@ class RedshiftEngine:
   fatia de `fetchmany(batch_size)` vira um `RecordBatch` **por colunas**: `zip(*rows)` e
   `pa.array(coluna, type=campo.type)`, com o esquema do statement ou o de
   `schema_from_description`. O rascunho mediu 0,03 s por colunas contra 0,10 s por dicionários em
-  200.000 linhas, e o plano anterior dizia dicionários. Acima de um limite de linhas, `stream`
-  passa a `UNLOAD` para `staging/` e `ParquetFile.iter_batches`; o limite espera a medição de
-  `fetchmany` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  200.000 linhas, e o plano anterior dizia dicionários. O driver lê o resultado inteiro no
+  `execute` e `fetchmany` fatia a fila (`redshift_connector` 2.1.16, leitura do código em 2026-09-21):
+  a memória de um `stream` por `fetchmany` é a do resultado, e acima de um limite de linhas `stream`
+  passa a `UNLOAD` para `staging/` e `ParquetFile.iter_batches`; o limite espera a medição no
+  ambiente alvo (seção "Decisões pendentes").
 - **`schema_from_description`** traduz o `type_code` de `cursor.description`, um OID do PostgreSQL,
   para o tipo Arrow; `NUMERIC` (1700) não carrega precisão e escala no OID, então o chamador informa
   `numeric_types` por coluna, ou o padrão `decimal128(18, 2)` do contrato. A tabela de OIDs é
@@ -176,7 +181,8 @@ class RedshiftEngine:
 - **`export_partition`** começa por `UNLOAD ('<select do contrato>') TO '<destino>/'
   <credenciais> FORMAT AS PARQUET PARTITION BY (<coluna>) MANIFEST VERBOSE`, com `PARALLEL OFF` quando
   a partição cabe num arquivo (o `UNLOAD` fragmenta por slice, 32 arquivos para 500.000 linhas). Com
-  `mode="register"`, o destino é `<uri>/<execution_id>/`, e cada entrada do manifesto vira um
+  `mode="register"`, o destino é `<uri>/<execution_id>/<valor>/`, um subprefixo novo por partição e
+  execução, e cada entrada do manifesto vira um
   `RegisteredFile` com `path` relativo à pasta da tabela, `content_length`, `record_count` e as
   estatísticas do rodapé, lido por `pyarrow.fs`; `register_files` confere e commita, com
   `expected_rows` do `count(*)` do sandbox. Com `mode="rewrite"`, o destino é
@@ -193,7 +199,7 @@ class RedshiftEngine:
 | `ingest` | Tabela Delta legível pela identidade da sessão, que o `COPY` leva; staging inexistente. | `exec_<id>_<tabela>` com as partições pedidas e a coluna de partição preenchida; a staging apagada. |
 | `stream`, `query`, `execute` | Texto ou statement válido. | Lotes com os tipos do contrato; a conexão da thread do cliente livre. |
 | `loader`, `load` | Lotes que passam por `cast`; `s3:PutObject` sob `staging/`. | Nada na tabela antes do `close`; o arquivo do staging apagado no erro. |
-| `export_partition` | Auditoria aprovada; `<uri>/<execution_id>/` vazio. | Uma versão nova no Delta; os arquivos como o Redshift os gravou (`INT96`, `FIXED_LEN_BYTE_ARRAY`, `optional`) em `register`, normalizados em `rewrite`. |
+| `export_partition` | Auditoria aprovada; `<uri>/<execution_id>/<valor>/` vazio. | Uma versão nova no Delta; os arquivos como o Redshift os gravou (`INT96`, `FIXED_LEN_BYTE_ARRAY`, `optional`) em `register`, normalizados em `rewrite`. |
 | `cleanup` | Nenhum. | Nenhuma tabela `exec_<id>_*` no esquema; `staging/<execution_id>/` vazio. |
 
 ## Testes por caso
@@ -212,7 +218,7 @@ testes marcados `redshift` repetem a sequência com uma amostra no esquema autor
 | Esquema de um texto | `test_schema_from_description` | Cada OID da tabela para o tipo Arrow; `NUMERIC` com `numeric_types`. |
 | Conexão real | `test_connect_uses_share_database` (`redshift`) | Depois do `USE`, `CREATE TABLE IF NOT EXISTS <esquema>.serialize_db_publications` passa e `current_database()` é registrado como leitura. |
 | Ciclo com amostra | `test_ingest_stream_loader_export` (`redshift`) | `ingest` de uma partição de um Delta no bucket, `stream` em lotes, `loader` por `COPY`, `export_partition` nos dois modos com as mesmas linhas, `cleanup` sem tabela restante. |
-| Memória do `fetchmany` | `test_fetchmany_memory` (`redshift`) | Uma consulta grande em subprocesso, RSS medido com `fetchmany` contra `fetchall`. |
+| Memória do `fetchmany` | `test_fetchmany_memory` (`redshift`) | Uma consulta grande em subprocesso, RSS medido com `fetchmany` contra `fetchall`, para dimensionar o limite do `UNLOAD`; o driver materializa o resultado no `execute`. |
 
 ## Rascunhos executados
 
@@ -388,3 +394,7 @@ medida: por colunas, um terço do tempo por dicionários.
 - **[decisão] O limite de linhas entre `fetchmany` e `UNLOAD` em `stream`**, e entre o `INSERT`
   multilinha e o `COPY` em `load`; os dois esperam a medição no ambiente alvo.
 - **[decisão] A tabela de OIDs de `schema_from_description`** é hipótese até a suíte a ler.
+- **[decisão] O destino de `export_partition` por partição**: `<uri>/<execution_id>/<valor>/` com
+  `PARTITION BY`, como está, ou `<uri>/<coluna>=<valor>/<execution_id>/` sem `PARTITION BY` e com a
+  coluna de partição fora do `select`, que mantém a convenção Hive no primeiro nível da pasta; o
+  `UNLOAD` confere o destino como prefixo (2026-09-21), e os dois são vazios por construção.

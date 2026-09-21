@@ -22,7 +22,7 @@ modelo:
 | Chave repetida | `table.primary_key` e os `UniqueConstraint`, mais o que `keys` acrescenta | As partições da execução quando as colunas da chave incluem a coluna de partição; a tabela inteira quando não incluem. |
 | Órfão de chave estrangeira | `table.foreign_keys` | Só com `foreign_keys=True`; a tabela referenciada entra na versão fixada pela execução. |
 | Partição fora da data | `partition_by` e `partition_source` de `table_options`: a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')` | As partições da execução. |
-| Texto acima de `String(n)` e valor fora do `Numeric(18, 2)` | os tipos de `schema.md` | As partições da execução. |
+| Texto acima de `String(n)` e valor fora do `Numeric(18, 2)` | os tipos de `schema.md`; no Redshift, o `COPY` de uma string maior que o `VARCHAR` aborta (`Spectrum Scan Error` 15007, 2026-09-21), e esta verificação é a barreira | As partições da execução. |
 | Documento JSON inválido | as colunas JSON, que nem o Arrow nem o Delta validam | As partições da execução. |
 | Totais de controle | as colunas `Numeric` e `Double`; as `Double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem | As partições da execução. |
 

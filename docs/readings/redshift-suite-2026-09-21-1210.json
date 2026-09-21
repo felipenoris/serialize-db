@@ -1,0 +1,166 @@
+{
+  "session.started_at": "2026-09-21T12:10:44+00:00",
+  "session.platform": "Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39",
+  "session.python": "3.13.15",
+  "session.packages": "deltalake 1.6.4, duckdb 1.5.5, pyarrow 25.0.1, boto3 1.43.98, sqlalchemy 2.0.54, pandas 3.0.6, pytest 9.1.1",
+  "session.markers": "redshift",
+  "redshift.connection_method": "credencial temporária do workgroup",
+  "redshift.schema": "datalake_rw_shared.sbx_aco_decon.<tabela>",
+  "redshift.version": "PostgreSQL 8.0.2 on i686-pc-linux-gnu, compiled by GCC gcc (GCC) 3.4.2 20041017 (Red Hat 3.4.2-6.fc3), Redshift 1.0.436211\u0000",
+  "redshift.current_user": "IAMR:user-533cbaba-4061-70a6-7967-78dc06230c13@3hpfa7636y4qor",
+  "redshift.current_schema": null,
+  "redshift.has_schema_privilege_create": false,
+  "redshift.current_database": "dev",
+  "redshift.databases": "datalake_rw_shared=shared/UNKNOWN; dev=local/Snapshot Isolation",
+  "redshift.schema_location": "datalake_rw_shared.sbx_aco_decon=shared",
+  "redshift.slices": "ProgrammingError: {'S': 'ERROR', 'C': '42501', 'M': 'permission denied for relation stv_slices', 'F': '/opt/brazil-pkg-cache/packages/RedshiftPADB/RedshiftPADB-1.0.336211.0/AL2_aarch64/generic-flavor/src/src/pg/src/bac",
+  "redshift.table_name": "sbx_aco_decon.serialize_db_poc_d146053c_nome_da_sessao",
+  "redshift.fully_qualified_name": "datalake_rw_shared.sbx_aco_decon.serialize_db_poc_d146053c_nome_da_sessao",
+  "redshift.ddl.information_schema_rows_after_use": 0,
+  "redshift.ddl.svv_all_columns": [
+    [
+      "id_operacao",
+      "bigint",
+      null,
+      64,
+      0
+    ],
+    [
+      "data_ref",
+      "timestamp without time zone",
+      null,
+      null,
+      null
+    ],
+    [
+      "id_cliente",
+      "integer",
+      null,
+      32,
+      0
+    ],
+    [
+      "valor",
+      "numeric",
+      null,
+      18,
+      2
+    ],
+    [
+      "descricao",
+      "character varying",
+      200,
+      null,
+      null
+    ],
+    [
+      "mes",
+      "character varying",
+      7,
+      null,
+      null
+    ],
+    [
+      "observacao",
+      "character varying",
+      256,
+      null,
+      null
+    ]
+  ],
+  "environment.no_proxy_as_found": "ausente",
+  "environment.no_proxy_exported": false,
+  "environment.aws_region": "sa-east-1",
+  "s3.root": "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests",
+  "s3.session_prefix": "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/807d773f",
+  "redshift.copy.manifest.manifest_2026-01": "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/807d773f/redshift/operacoes/mes=2026-01/part-00000-242cf523-887a-4b8f-8989-0f165fe952f2-c000.snappy.parquet",
+  "redshift.copy.manifest.manifest_2026-02": "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/807d773f/redshift/operacoes/mes=2026-02/part-00000-53f62200-ac5b-40a9-90a2-ef0594c9bfef-c000.snappy.parquet",
+  "redshift.copy.decimal_int64_and_timestamp_ntz": "ok",
+  "redshift.copy.manifest.manifest_antigo": "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/807d773f/redshift/operacoes_antigas/mes=2026-01/part-00000-8d5821d2-527c-45d2-8d8b-847762886cbe-c000.snappy.parquet",
+  "redshift.copy.positional": "ProgrammingError: {'S': 'ERROR', 'C': 'XX000', 'M': 'Spectrum Scan Error', 'D': '\\n  -----------------------------------------------\\n  error:  Spectrum Scan Error\\n  code:      15007\\n  context:   Unmatched number of ",
+  "redshift.copy.column_list": "ok: 100 linhas, canal nulo em 100",
+  "redshift.copy.manifest.manifest_texto_longo": "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/807d773f/redshift/texto_longo/mes=2026-01/part-00000-06ade795-e2f3-434f-9aee-88e1ca1c5fa2-c000.snappy.parquet",
+  "redshift.copy.varchar_overflow": "ProgrammingError: {'S': 'ERROR', 'C': 'XX000', 'M': 'Spectrum Scan Error', 'D': '\\n  -----------------------------------------------\\n  error:  Spectrum Scan Error\\n  code:      15007\\n  context:   The length of the da; sys_load_error_detail: Spectrum Scan Error. The length of the data column descricao is longer than the length defined in the table. Table: 200, Data: 300, File name: https://s3.sa-east-1.amazonaws.com/bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/807d773f/redshift/texto_longo/mes%3D2026-01/part-00000-06ade795-e2f3-434f-9aee-88e1ca1c5fa2-c000.snappy.parquet. (s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/8",
+  "redshift.super.path_and_serialize": [
+    "\"A\"",
+    "{\"sistema\":\"A\",\"ativo\":true}"
+  ],
+  "redshift.super.insert_above_65535": "ok: json_size = 80901",
+  "redshift.super.copy_parquet_string_above_65535": "ProgrammingError: {'S': 'ERROR', 'C': 'XX000', 'M': 'SUPER column in COPY query requires SERIALIZETOJSON option', 'D': '\\n  -----------------------------------------------\\n  error:  SUPER column in COPY query requires",
+  "duckdb.extension_directory": "/home/fnoro/work/projects/serialize-db/.duckdb",
+  "duckdb.version": "1.5.5",
+  "duckdb.threads": 2,
+  "redshift.unload.partition_by": "ok",
+  "redshift.unload.manifest_schema": {
+    "elements": [
+      {
+        "name": "id_operacao",
+        "type": {
+          "base": "bigint"
+        }
+      },
+      {
+        "name": "data_ref",
+        "type": {
+          "base": "timestamp without time zone"
+        }
+      },
+      {
+        "name": "id_cliente",
+        "type": {
+          "base": "integer"
+        }
+      },
+      {
+        "name": "valor",
+        "type": {
+          "base": "numeric",
+          "max_precision": 18,
+          "max_scale": 2
+        }
+      },
+      {
+        "name": "descricao",
+        "type": {
+          "base": "character varying",
+          "max_length": 200
+        }
+      },
+      {
+        "name": "mes",
+        "type": {
+          "base": "character varying",
+          "max_length": 7
+        }
+      }
+    ]
+  },
+  "redshift.unload.files": [
+    "mes=2026-01/0000_part_00.parquet",
+    "mes=2026-02/0000_part_00.parquet"
+  ],
+  "redshift.unload.physical_types": {
+    "id_operacao": "INT64",
+    "data_ref": "INT96",
+    "id_cliente": "INT32",
+    "valor": "FIXED_LEN_BYTE_ARRAY",
+    "descricao": "BYTE_ARRAY"
+  },
+  "redshift.unload.schema": "<pyarrow._parquet.ParquetSchema object at 0x7f22180f7080> required group field_id=-1 schema { optional int64 field_id=-1 id_operacao (Int(bitWidth=64, isSigned=true)); optional int96 field_id=-1 data_ref; optional int32 field_id=-1 id_cliente (Int(bitWidth=32, isSigned=true)); optional fixed_len_byte_array(8) field_id=-1 valor (Decimal(precision=18, scale=2)); optional binary field_id=-1 descricao (String); }",
+  "redshift.unload.has_min_max": true,
+  "redshift.unload.delta_rs_read": "ok",
+  "redshift.unload.destination.same_prefix": "ProgrammingError: {'S': 'ERROR', 'C': 'XX000', 'M': 'Specified unload destination on S3 is not empty. Consider using a different bucket / prefix, manually removing the target files in S3, or using the ALLOWOVERWRITE op",
+  "redshift.unload.destination.parent_prefix": "ProgrammingError: {'S': 'ERROR', 'C': 'XX000', 'M': 'Specified unload destination on S3 is not empty. Consider using a different bucket / prefix, manually removing the target files in S3, or using the ALLOWOVERWRITE op",
+  "redshift.unload.destination.new_subprefix": "ok",
+  "redshift.data_api.decimal_cell": "'10.25'",
+  "redshift.data_api.duration_ms": 177,
+  "redshift.copy.manifest.manifest_paralelo_0": "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/807d773f/redshift/paralelo_0/mes=2026-02/part-00000-4ccf8922-406e-48e6-9336-7ba1737b699d-c000.snappy.parquet",
+  "redshift.copy.manifest.manifest_paralelo_1": "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/807d773f/redshift/paralelo_1/mes=2026-01/part-00000-40ae74b5-0ae4-4cb2-aaa9-02a266821dc9-c000.snappy.parquet",
+  "redshift.parallel.copy_two_tables": "3.6 s",
+  "redshift.parallel.unload_two_tables": "1.5 s",
+  "s3.cleanup": "38 objeto(s) apagado(s) sob s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests/serialize-db-poc/807d773f",
+  "session.outcome": "10 passed, 1 failed, 0 error, 0 skipped",
+  "session.finished_at": "2026-09-21T12:11:42+00:00",
+  "session.duration_s": 58.1,
+  "failed.tests/proof_of_concept/test_redshift.py::test_copy_column_list_and_fillrecord": "redshift_connector.error.ProgrammingError: {'S': 'ERROR', 'C': 'XX000', 'M': '[Data Sharing] Error Code 34510: Concurrent DDL committed on datalake_rw_shared.sbx_aco_decon.serialize_db_poc_d146053c_evoluida between Prepare and Execute', 'F': '/opt/brazil-pkg-cache/packages/RedshiftPADB/RedshiftPADB-"
+}

@@ -22,8 +22,12 @@ A primeira execução no ambiente alvo, em 2026-09-21, passou um teste e reprovo
 inteira correu numa transação aberta antes do ``USE``, que a visão ``stv_slices`` negada abortou, e
 cada comando seguinte recebeu ``25P02``. A segunda, no mesmo dia, passou sete e reprovou quatro: a
 URL do manifesto do ``COPY`` levava uma barra dobrada, e ``information_schema.columns`` não enxerga o
-esquema do datashare depois do ``USE`` (``docs/POC.md``). As perguntas do ``COPY`` esperam a
-próxima execução.
+esquema do datashare depois do ``USE``. A terceira e a quarta, às 12:08 e 12:10 UTC, passaram dez e
+reprovaram um: o ``select count(*)`` repetido depois do terceiro ``TRUNCATE`` de
+``test_copy_column_list_and_fillrecord`` recebeu ``34510``, ``Concurrent DDL committed ... between
+Prepare and Execute``, porque o ``redshift_connector`` reaproveita o prepared statement nomeado e
+não o descarta num ``TRUNCATE``; a conexão vai com ``max_prepared_statements=0`` desde então
+(``docs/POC.md``). As perguntas do ``COPY`` estão respondidas, menos a contagem do ``FILLRECORD``.
 """
 
 from __future__ import annotations
@@ -126,21 +130,32 @@ def write_manifest(location: S3Location, key_suffix: str, table: DeltaTable, mon
     return f"s3://{location.bucket}/{key}"
 
 
+def describe(error: Exception) -> str:
+    """O tipo e a mensagem de um erro para o relatório; num erro do ``redshift_connector``, o SQLSTATE, o campo ``M`` e o detalhe ``D`` numa linha só."""
+    detail = error.args[0] if error.args else None
+    if isinstance(detail, dict) and "M" in detail:
+        parts = [str(detail.get("C", "")), str(detail["M"])]
+        if detail.get("D"):
+            parts.append(" ".join(word for word in str(detail["D"]).split() if set(word) != {"-"}))
+        return f"{type(error).__name__}: {' '.join(part for part in parts if part)}"[:400]
+    return f"{type(error).__name__}: {str(error).splitlines()[0][:200]}"
+
+
 def outcome(action: object) -> str:
-    """``ok`` quando a chamada passa; senão o tipo e a primeira linha do erro, para o relatório."""
+    """``ok`` quando a chamada passa; senão o tipo e a mensagem do erro, para o relatório."""
     try:
         action()
         return "ok"
     except Exception as error:  # noqa: BLE001 - o resultado é registrado, não propagado
-        return f"{type(error).__name__}: {str(error).splitlines()[0][:200]}"
+        return describe(error)
 
 
 def reading(action: object) -> object:
-    """O valor da chamada, ou o tipo e a primeira linha do erro; uma leitura que o ambiente decide vai para o relatório."""
+    """O valor da chamada, ou o tipo e a mensagem do erro; uma leitura que o ambiente decide vai para o relatório."""
     try:
         return action()
     except Exception as error:  # noqa: BLE001 - a leitura é registrada, não propagada
-        return f"{type(error).__name__}: {str(error).splitlines()[0][:200]}"
+        return describe(error)
 
 
 def test_session_and_named_parameters(redshift_session: RedshiftSession) -> None:
@@ -172,6 +187,11 @@ def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession
         "from (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4) t order by n"
     )
     names = [column[0] for column in cursor.description]
+
+    # O driver lê o resultado inteiro no execute: handle_messages só devolve em READY_FOR_QUERY, cada
+    # DATA_ROW vai para cursor._cached_rows, e fetchmany fatia essa fila (redshift_connector 2.1.16,
+    # core.py e cursor.py). O que a fila tem antes do primeiro fetchmany é a leitura desse fato.
+    record("redshift.driver.rows_cached_after_execute", len(cursor._cached_rows))
 
     batches = []
     while rows := cursor.fetchmany(2):
@@ -298,16 +318,72 @@ def test_copy_column_list_and_fillrecord(redshift_session: RedshiftSession, s3_l
         "fillrecord": f"COPY {qualified} FROM '{manifest}' {credentials} FORMAT AS PARQUET MANIFEST FILLRECORD",
     }
 
+    # O COPY é registrado antes da contagem, que é um comando repetido depois de um TRUNCATE: nas
+    # execuções de 2026-09-21 às 12:08 e 12:10 a terceira volta recebeu 34510 dela, com o resultado do
+    # FILLRECORD perdido (docs/POC.md). A conexão da sessão prepara cada comando logo antes de o executar.
     results = {}
     for label, sql in attempts.items():
         session.execute(f"TRUNCATE {qualified}")
         results[label] = outcome(lambda sql=sql: session.execute(sql))
+        record(f"redshift.copy.{label}", results[label])
         if results[label] == "ok":
             loaded, nulls = session.execute(f"select count(*), count(*) - count(canal) from {qualified}")[0]
             results[label] = f"ok: {loaded} linhas, canal nulo em {nulls}"
-        record(f"redshift.copy.{label}", results[label])
+            record(f"redshift.copy.{label}", results[label])
 
     assert any(result.startswith("ok") for result in results.values()), results
+
+
+def test_repeated_statement_after_truncate_and_the_driver_cache(redshift_session: RedshiftSession) -> None:
+    """Um comando repetido depois de um ``TRUNCATE`` na mesma conexão: sem o cache de prepared statements do driver ele passa; com o cache, o que o datashare responde é leitura.
+
+    O ``redshift_connector`` guarda um prepared statement nomeado por texto de comando, o reaproveita
+    no ``execute`` seguinte com ``Bind`` e ``Execute`` sem novo ``Parse``, e só descarta os guardados
+    depois de ``ALTER``, ``CREATE``, ``DROP`` e ``ROLLBACK``. Nas execuções de 2026-09-21 às 12:08 e
+    12:10 no ambiente alvo, o ``select count(*)`` de ``test_copy_column_list_and_fillrecord``
+    reprovou na terceira volta com ``[Data Sharing] Error Code 34510: Concurrent DDL committed on
+    <tabela> between Prepare and Execute`` (``docs/POC.md``): o ``TRUNCATE`` da volta é o DDL. A
+    conexão da sessão vai com ``max_prepared_statements=0`` desde então; a segunda conexão deste
+    teste mantém o padrão do driver e registra o que o Redshift responde, também depois de repetir o
+    comando, depois de um ``ALTER`` (que o driver reconhece) e numa tabela temporária do banco da
+    conexão, que diz se a recusa é do datashare.
+    """
+    session = redshift_session
+    name = session.table("cache")
+    qualified = session.qualified(name)
+    session.execute(f"CREATE TABLE {qualified} (id BIGINT)")
+    session.execute(f"INSERT INTO {qualified} VALUES (1)")
+    count = f"select count(*) from {qualified}"
+
+    # 1. A conexão da sessão, sem cache: o mesmo texto antes e depois do TRUNCATE.
+    assert session.execute(count)[0][0] == 1
+    session.execute(f"TRUNCATE {qualified}")
+    assert session.execute(count)[0][0] == 0
+
+    # 2. Uma conexão com o cache do driver: a segunda execução do count reaproveita o statement
+    # preparado antes do TRUNCATE.
+    _, connection = connect_redshift(statement_cache=True)
+    try:
+        cursor = connection.cursor()
+        cursor.execute(f"INSERT INTO {qualified} VALUES (2)")
+        cursor.execute(count)
+        assert cursor.fetchone()[0] == 1
+        cursor.execute(f"TRUNCATE {qualified}")
+        record("redshift.driver.cached_statement_after_truncate", outcome(lambda: cursor.execute(count)))
+        record("redshift.driver.cached_statement_repeated", outcome(lambda: cursor.execute(count)))
+        cursor.execute(f"ALTER TABLE {qualified} ADD COLUMN extra INTEGER")
+        record("redshift.driver.cached_statement_after_alter", outcome(lambda: cursor.execute(count)))
+
+        def local_temp_table() -> None:
+            local = f"serialize_db_poc_{session.session_id}_cache_local"
+            cursor.execute(f"CREATE TEMP TABLE {local} (id BIGINT)")
+            cursor.execute(f"select count(*) from {local}")
+            cursor.execute(f"TRUNCATE {local}")
+            cursor.execute(f"select count(*) from {local}")
+
+        record("redshift.driver.cached_statement_after_truncate_local_temp", outcome(local_temp_table))
+    finally:
+        connection.close()
 
 
 def test_copy_varchar_overflow(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
@@ -336,6 +412,13 @@ def test_copy_varchar_overflow(redshift_session: RedshiftSession, s3_location: S
             result = f"{result}; sys_load_error_detail: {rows[0][0].strip() if rows else '(vazio)'}"
     record("redshift.copy.varchar_overflow", result)
 
+    # TRUNCATECOLUMNS não está na lista das opções aceitas para Parquet (docs/parquet.md); se o Redshift
+    # a aceitar, é o caminho de degradar em vez de abortar, que a auditoria da etapa 4 dispensa.
+    record(
+        "redshift.copy.varchar_overflow_truncatecolumns",
+        outcome(lambda: session.execute(f"COPY {session.qualified(target)} FROM '{manifest}' {session.credentials_clause()} FORMAT AS PARQUET MANIFEST TRUNCATECOLUMNS")),
+    )
+
 
 def test_super_and_json_parse(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
     """``SUPER`` recebe texto por ``JSON_PARSE`` e devolve campos por caminho; um documento acima de 65.535 bytes por ``INSERT`` e por ``COPY`` é leitura."""
@@ -358,16 +441,32 @@ def test_super_and_json_parse(redshift_session: RedshiftSession, s3_location: S3
         inserted = f"ok: json_size = {reading(lambda: session.execute(f'select json_size(meta) from {qualified} where id = 2')[0][0])}"
     record("redshift.super.insert_above_65535", inserted)
 
-    # 3. O mesmo documento por COPY direto de um Parquet com a coluna em texto, sem staging: o caminho
-    # que a etapa 8 usa se o Redshift o aceitar.
+    # 3. O mesmo documento por COPY direto de um Parquet com a coluna em texto, sem staging. Em
+    # 2026-09-21 o Redshift recusou sem SERIALIZETOJSON ("SUPER column in COPY query requires
+    # SERIALIZETOJSON option"): a cláusula entra na segunda tentativa, e o que ela grava, um objeto ou
+    # uma string SUPER, é a leitura de json_typeof, que decide se JSON_PARSE ainda é preciso.
     buffer = io.BytesIO()
     pq.write_table(pa.table({"id": pa.array([3], pa.int64()), "meta": pa.array([document], pa.string())}), buffer)
     key = f"{s3_location.prefix}/redshift/super/documento.parquet"
-    boto3.client("s3").put_object(Bucket=s3_location.bucket, Key=key, Body=buffer.getvalue())
-    copied = outcome(lambda: session.execute(f"COPY {qualified} FROM 's3://{s3_location.bucket}/{key}' {session.credentials_clause()} FORMAT AS PARQUET"))
+    s3 = boto3.client("s3")
+    s3.put_object(Bucket=s3_location.bucket, Key=key, Body=buffer.getvalue())
+    source = f"s3://{s3_location.bucket}/{key}"
+    record("redshift.super.copy_parquet_string_above_65535", outcome(lambda: session.execute(f"COPY {qualified} FROM '{source}' {session.credentials_clause()} FORMAT AS PARQUET")))
+    copied = outcome(lambda: session.execute(f"COPY {qualified} FROM '{source}' {session.credentials_clause()} FORMAT AS PARQUET SERIALIZETOJSON"))
     if copied == "ok":
-        copied = f"ok: json_size = {reading(lambda: session.execute(f'select json_size(meta) from {qualified} where id = 3')[0][0])}"
-    record("redshift.super.copy_parquet_string_above_65535", copied)
+        copied = f"ok: {reading(lambda: session.execute(f'select json_typeof(meta), json_size(meta) from {qualified} where id = 3')[0])}"
+        # Uma string SUPER volta a documento por JSON_PARSE do texto, que passa pelo VARCHAR e pelo teto dele.
+        record("redshift.super.parse_of_super_string_above_65535", reading(lambda: session.execute(f"select json_size(JSON_PARSE(meta::varchar)) from {qualified} where id = 3")[0][0]))
+    record("redshift.super.copy_parquet_serializetojson", copied)
+
+    # 4. O documento como objeto num arquivo JSON de uma linha, por COPY ... FORMAT JSON 'auto': o
+    # caminho da documentação para um documento grande numa coluna SUPER.
+    key = f"{s3_location.prefix}/redshift/super/documento.json"
+    s3.put_object(Bucket=s3_location.bucket, Key=key, Body=json.dumps({"id": 4, "meta": json.loads(document)}).encode())
+    loaded = outcome(lambda: session.execute(f"COPY {qualified} FROM 's3://{s3_location.bucket}/{key}' {session.credentials_clause()} FORMAT JSON 'auto'"))
+    if loaded == "ok":
+        loaded = f"ok: {reading(lambda: session.execute(f'select json_typeof(meta), json_size(meta) from {qualified} where id = 4')[0])}"
+    record("redshift.super.copy_json_auto_above_65535", loaded)
 
 
 def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_location: S3Location, duckdb_connection: duckdb.DuckDBPyConnection) -> None:

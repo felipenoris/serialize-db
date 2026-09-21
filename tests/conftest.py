@@ -431,7 +431,7 @@ class RedshiftSession:
         return cursor.fetchall() if cursor.description else []
 
 
-def connect_redshift() -> tuple[str, object]:
+def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
     """Abre a conexão pelas variáveis ``SERIALIZE_DB_REDSHIFT_*`` e devolve o método e a conexão.
 
     Com ``_WORKGROUP``, o endereço vem de ``get_workgroup`` e o par usuário e senha de
@@ -446,6 +446,16 @@ def connect_redshift() -> tuple[str, object]:
     conectar e para ler, e um ``COPY`` ou um ``UNLOAD`` dura mais que qualquer espera razoável; 10 s
     abortaram uma visão de sistema no ambiente alvo (2026-09-20). Uma rede morta aparece como o tempo
     limite do sistema, não como um teste reprovado no meio de uma carga.
+
+    A conexão vai com ``max_prepared_statements=0``. O ``redshift_connector`` guarda um prepared
+    statement nomeado por texto de comando e o reaproveita no ``execute`` seguinte do mesmo texto,
+    e só descarta os guardados quando o servidor confirma um ``ALTER``, ``CREATE``, ``DROP`` ou
+    ``ROLLBACK`` (``core.py``, ``handle_COMMAND_COMPLETE``), nunca num ``TRUNCATE``. Numa tabela do
+    datashare, o comando reexecutado depois de um ``TRUNCATE`` recebeu ``34510``, ``Concurrent DDL
+    committed ... between Prepare and Execute``, nas duas execuções de 2026-09-21 às 12:08 e 12:10
+    (``docs/POC.md``). Com zero, o driver prepara o statement sem nome logo antes de cada execução
+    e não guarda nada; ``statement_cache=True`` mantém o padrão do driver, para a leitura que
+    reproduz o erro.
     """
     import redshift_connector
 
@@ -457,6 +467,8 @@ def connect_redshift() -> tuple[str, object]:
         raise RuntimeError("SERIALIZE_DB_REDSHIFT_DATABASE não informada")
 
     common: dict[str, object] = {"database": database}
+    if not statement_cache:
+        common["max_prepared_statements"] = 0
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
         import boto3

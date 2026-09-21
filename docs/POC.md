@@ -808,4 +808,87 @@ O relatório está em [`readings/redshift-suite-2026-09-21-1128.json`](readings/
 destinos sem `ALLOWOVERWRITE` (o mesmo prefixo, um prefixo pai com arquivos abaixo, um subprefixo
 novo dentro de uma pasta com arquivos), e um documento acima de 65.535 bytes em `SUPER` por `INSERT`
 e por `COPY` direto de um Parquet. As perguntas do `COPY` (tipos, lista de colunas, `FILLRECORD`,
-`VARCHAR` excedido, paralelo) esperam a próxima execução.
+`VARCHAR` excedido, paralelo) foram respondidas às 12:08 e às 12:10, na seção seguinte.
+
+## O que as execuções da suíte Redshift das 12:08 e das 12:10 mostraram
+
+Em 2026-09-21, às 12:08 e às 12:10 UTC, com a suíte corrigida pela segunda execução, o usuário rodou
+`pytest -m redshift` duas vezes seguidas no ambiente alvo: dez testes passaram e um reprovou em cada
+uma (60,2 s e 58,1 s), e a limpeza apagou 38 objetos e as tabelas de cada sessão. Os relatórios
+estão em [`readings/redshift-suite-2026-09-21-1208.json`](readings/redshift-suite-2026-09-21-1208.json)
+e [`readings/redshift-suite-2026-09-21-1210.json`](readings/redshift-suite-2026-09-21-1210.json). As
+duas execuções concordam em cada leitura, e o que segue vale como permanente.
+
+**A reprovação é do cache de prepared statements do driver, e se repetiu.**
+`test_copy_column_list_and_fillrecord` repete por tentativa `TRUNCATE`, `COPY` e
+`select count(*), count(*) - count(canal)`. Na terceira volta, a do `FILLRECORD`, o `COPY` passou e a
+contagem recebeu `XX000`, `[Data Sharing] Error Code 34510: Concurrent DDL committed on
+datalake_rw_shared.sbx_aco_decon.serialize_db_poc_<id>_evoluida between Prepare and Execute` (rotina
+`relocalize_data_sharing_cached_rtes`, `federation_api.cpp`). O `redshift_connector` 2.1.16 guarda um
+prepared statement nomeado por texto de comando (`Connection.execute`, chave `(operation, params)`),
+o reaproveita no `execute` seguinte do mesmo texto com `Bind` e `Execute` sem novo `Parse`, e só
+fecha e descarta os guardados quando o servidor confirma um `ALTER`, `CREATE`, `DROP` ou `ROLLBACK`
+(`handle_COMMAND_COMPLETE`); `TRUNCATE` não está na lista. A contagem foi preparada na segunda volta,
+o `TRUNCATE` da terceira é o DDL, e o datashare recusa executar um statement preparado antes dele,
+em vez de replanejar como o banco local. Os `TRUNCATE` repetidos passaram porque um comando
+utilitário não tem entradas de tabela no plano. **Consequências**: `connect_redshift` passa
+`max_prepared_statements=0`, com que o driver prepara o statement sem nome logo antes de cada
+execução e não guarda nada (`get_statement_name_bin`; o bloco que grava no cache só corre acima de
+zero), a mesma regra do `connect` da [etapa 5](PLAN-STAGE-5.md); a suíte ganhou
+`test_repeated_statement_after_truncate_and_the_driver_cache`, que exercita o mesmo texto antes e
+depois de um `TRUNCATE` na conexão da sessão e registra o que uma conexão com o cache do driver
+recebe, também na repetição, depois de um `ALTER` e numa tabela temporária do banco da conexão. A
+leitura da terceira volta ficou sem registro porque a contagem vinha antes de `record`; o `COPY` é
+registrado antes dela desde então. As mensagens de erro do relatório passaram a levar o SQLSTATE, o
+campo `M` e o detalhe `D` numa linha, em vez dos 200 primeiros caracteres do dicionário.
+
+**A leitura do código do driver respondeu a pergunta do `fetchmany`**: `EXECUTE_MSG` pede o portal
+sem limite de linhas, `handle_messages` só termina em `READY_FOR_QUERY`, cada `DATA_ROW` entra em
+`cursor._cached_rows` e `fetchmany` fatia essa fila (`Cursor.__next__`). O `execute` materializa o
+resultado inteiro em objetos Python, e o `stream` do motor Redshift limita a memória só por
+`UNLOAD`; a próxima execução registra o tamanho da fila antes do primeiro `fetchmany`.
+
+**O que as execuções responderam**, as perguntas do `COPY` da [etapa 0](PLAN-STAGE-0.md):
+
+- `COPY ... FORMAT AS PARQUET MANIFEST` de arquivos gravados pelo delta-rs carregou `DECIMAL(18, 2)`
+  em `INT64` e `timestamp_ntz` em `INT64` de microssegundos: 500 linhas por mês, a soma do `DECIMAL`
+  e o menor `timestamp` iguais aos da amostra. A URL de cada manifesto, registrada, é
+  `.../operacoes/mes=2026-01/part-00000-...-c000.snappy.parquet`, sem barra dobrada.
+- Um arquivo com cinco colunas numa tabela de seis: o `COPY` posicional reprova com
+  `Spectrum Scan Error` 15007, `Unmatched number of columns`; com lista de colunas,
+  `COPY tabela (id_operacao, data_ref, id_cliente, valor, descricao) FROM ... FORMAT AS PARQUET MANIFEST`
+  carregou as 100 linhas com `canal` nulo em todas; com `FILLRECORD` o `COPY` passou, e as linhas que
+  ele carregou são a leitura da próxima execução.
+- Uma string de 300 bytes numa coluna `VARCHAR(200)`: o `COPY` aborta com `Spectrum Scan Error`
+  15007, e `sys_load_error_detail` explica, `The length of the data column descricao is longer than
+  the length defined in the table. Table: 200, Data: 300`, com o nome do arquivo em
+  `https://s3.sa-east-1.amazonaws.com/...` e o `=` como `%3D`; `stl_load_errors` continua negada.
+- `SUPER`: `INSERT ... JSON_PARSE(%s)` de um documento de 80.901 bytes passou (`json_size` 80901),
+  acima do teto do `VARCHAR`; o `COPY` de um Parquet com a coluna em texto numa coluna `SUPER` é
+  recusado sem `SERIALIZETOJSON` (`SUPER column in COPY query requires SERIALIZETOJSON option`). A
+  cláusula, e o `COPY ... FORMAT JSON 'auto'` de um documento como objeto, são leituras da próxima
+  execução.
+- `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE` nomeia os arquivos
+  `mes=<valor>/<slice>_part_<nn>.parquet`: `0064_part_00.parquet` às 12:08 e `0000_part_00.parquet`
+  às 12:10, o número da slice muda entre execuções. Sem `ALLOWOVERWRITE`, o destino é conferido como
+  prefixo: o mesmo prefixo e o prefixo pai, com arquivos abaixo, reprovam com `Specified unload
+  destination on S3 is not empty. Consider using a different bucket / prefix, manually removing the
+  target files in S3, or using the ALLOWOVERWRITE option`; um subprefixo novo dentro de uma pasta com
+  arquivos passa.
+- Dois `COPY ... MANIFEST` de 1.000 linhas em tabelas distintas, cada um numa conexão: 4,5 s e
+  3,6 s; dois `UNLOAD`: 1,9 s e 1,5 s.
+- A Data API respondeu em 610 ms e 177 ms; `has_schema_privilege` respondeu `false` pela terceira e
+  pela quarta vez; `information_schema.columns` vazia e `svv_all_columns` com as sete colunas; o
+  `fetchmany` em fatias, o `SUPER` pequeno e o registro do `UNLOAD` no Delta passaram de novo.
+
+**Consequências nos documentos**: [`redshift.md`](redshift.md) recebe as regras lidas (posição com
+contagem de colunas, lista de colunas, o `VARCHAR` que aborta, `SERIALIZETOJSON`, o destino do
+`UNLOAD` por prefixo e os nomes dos arquivos, o cache e a leitura do resultado no driver); a
+[etapa 5](PLAN-STAGE-5.md) muda o destino de `export_partition` para `<uri>/<execution_id>/<valor>/`,
+porque `<uri>/<execution_id>/` deixa de estar vazio depois da primeira partição da execução, e passa
+`max_prepared_statements=0` no `connect`; a [etapa 8](PLAN-STAGE-8.md) tem a lista de colunas
+confirmada e ganha a decisão do teto do campo JSON; a [etapa 4](PLAN-STAGE-4.md) tem na auditoria de
+tamanho a barreira; [`schema.md`](schema.md), [`parquet.md`](parquet.md), [`delta.md`](delta.md),
+[`estrategia.md`](estrategia.md) e [`serialize-db.md`](serialize-db.md) perdem as pendências do
+`COPY`; [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perde as perguntas do `COPY`, do destino do
+`UNLOAD` e do `fetchmany`, e lista o que a próxima execução lê.

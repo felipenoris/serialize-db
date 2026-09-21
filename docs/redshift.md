@@ -71,6 +71,27 @@ guardada em lugar nenhum.
   de sistema; a suíte e a biblioteca conectam sem `timeout`, porque um `COPY` dura mais que qualquer
   espera de leitura. `ssl=True` (`verify-ca`) é o padrão da biblioteca.
 
+### O cache de prepared statements e a leitura do resultado no driver
+
+O `redshift_connector` (2.1.16) guarda um prepared statement nomeado por texto de comando
+(`Connection.execute`, chave `(operation, params)`) e o reaproveita no `execute` seguinte do mesmo
+texto, com `Bind` e `Execute` sem novo `Parse`; ele fecha e descarta os guardados quando o servidor
+confirma um `ALTER`, `CREATE`, `DROP` ou `ROLLBACK` (`handle_COMMAND_COMPLETE`), e não depois de
+`TRUNCATE`. Numa tabela do datashare, o `Execute` de um statement preparado antes de um `TRUNCATE`
+da tabela recebeu `XX000`, `[Data Sharing] Error Code 34510: Concurrent DDL committed on
+datalake_rw_shared.sbx_aco_decon.<tabela> between Prepare and Execute` (rotina
+`relocalize_data_sharing_cached_rtes`), nas duas execuções da suíte de 2026-09-21 às 12:08 e às
+12:10 ([`POC.md`](POC.md)): o datashare recusa o statement preparado antes do DDL em vez de
+replanejar. Com `max_prepared_statements=0` o driver usa o statement sem nome, preparado logo antes
+de cada execução, e não guarda nada; a suíte e a biblioteca conectam assim. Um DDL de outra sessão
+sobre a mesma tabela tem o mesmo efeito num statement guardado, e o driver não o enxerga.
+
+O `execute` lê o resultado inteiro antes de devolver: `EXECUTE_MSG` pede o portal sem limite de
+linhas, `handle_messages` só termina em `READY_FOR_QUERY`, cada `DATA_ROW` entra em
+`cursor._cached_rows`, e `fetchmany` fatia essa fila (`Cursor.__next__`). A memória de uma consulta
+é a do resultado inteiro em objetos Python, antes do primeiro `fetchmany`; o `stream` do motor
+Redshift limita a memória só por `UNLOAD` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)).
+
 ### Data API
 
 A Data API executa SQL por HTTPS, sem a porta 5439, e é assíncrona: `ExecuteStatement` devolve o
@@ -107,10 +128,10 @@ cada esquema. `has_schema_privilege` e `svv_table_info` enxergam o banco da sess
 o local, e num esquema compartilhado quem concede `USAGE` e `CREATE` é o produtor e a lista de
 tabelas vem de `svv_all_tables`, que cruza bancos. Depois do `USE`,
 `has_schema_privilege('sbx_aco_decon', 'CREATE')` respondeu `false`, sem erro, no esquema em que o
-`CREATE TABLE` passa (suíte de 2026-09-21 no ambiente alvo, duas execuções, [`POC.md`](POC.md)): a
+`CREATE TABLE` passa (suíte de 2026-09-21 no ambiente alvo, quatro execuções, [`POC.md`](POC.md)): a
 função não serve de teste do privilégio num esquema de datashare, e a prova é o próprio `CREATE`.
 `information_schema.columns` também enxerga só o banco da conexão: depois do `USE` respondeu vazio
-para uma tabela recém-criada em `sbx_aco_decon` (suíte, 2026-09-21); `svv_all_columns` cruza os
+para uma tabela recém-criada em `sbx_aco_decon` (suíte, 2026-09-21, três execuções); `svv_all_columns` cruza os
 bancos, e o `cursor.description` de um `select ... limit 0` descreve a tabela sem visão de catálogo. O
 que `svv_table_info` responde depois do `USE` ainda não foi lido; `probes/redshift.py` (`RS-5`,
 `RS-8`) lê as duas como leitura, sem reprovar.
@@ -146,7 +167,10 @@ O que o Redshift aceita escrever num datashare, e o que ele não lista:
   controle mora no mesmo banco das tabelas publicadas.
 - `VIEW` e `MATERIALIZED VIEW` não podem ser criadas, alteradas nem apagadas num banco de datashare.
 - `TRUNCATE` numa tabela remota é transacional, ao contrário do `TRUNCATE` local, que confirma
-  sozinho.
+  sozinho. Ele é DDL para o datashare: um comando preparado antes dele e executado depois recebe
+  `34510`, `Concurrent DDL committed ... between Prepare and Execute` (2026-09-21), o que o cache de
+  prepared statements do `redshift_connector` produz sozinho (seção "O cache de prepared statements
+  e a leitura do resultado no driver").
 - O consumidor não altera nem apaga o datashare, e não põe um objeto dele em outro datashare.
 
 ### O S3 alcançado pelas credenciais de quem chama
@@ -325,8 +349,9 @@ Regras de carga documentadas:
   monetários.
 
 A carga por `COPY` de Parquet exige um `DECIMAL` do arquivo compatível com a coluna. O
-[documento sobre Parquet](parquet.md) registra que a tabela de correspondência de tipos físicos do
-Parquet para o `COPY` fica pendente da prova de conceito.
+[documento sobre Parquet](parquet.md) registra a correspondência lida no ambiente alvo em
+2026-09-21: `DECIMAL(18, 2)` em `INT64` e `TIMESTAMP` em `INT64` de microssegundos carregam, e
+`FIXED_LEN_BYTE_ARRAY` fica sem leitura.
 
 A conferência de escala e precisão acontece no Arrow, antes do `COPY`, com os valores das regras
 acima:
@@ -383,9 +408,12 @@ e a opção `serialize_to_json` acrescenta `SERIALIZETOJSON` ao `COPY` de Parque
 No contrato ([campos JSON](schema.md)), a coluna é `sa.JSON().with_variant(SUPER(), "redshift")`: o
 dialeto compila `SUPER` no `CREATE TABLE`, e o `duckdb_engine` compila `JSON`. Os arquivos do Delta
 trazem o documento como texto; a carga passa pela staging `VARCHAR(65535)` e o `INSERT ... SELECT`
-aplica `JSON_PARSE`; a exportação devolve texto com `JSON_SERIALIZE`. Se o `COPY` de Parquet carrega
-o texto diretamente numa coluna `SUPER`, e o que acontece com documentos acima de 65.535 bytes, fica
-pendente da prova de conceito.
+aplica `JSON_PARSE`; a exportação devolve texto com `JSON_SERIALIZE`. O `COPY` de Parquet com a
+coluna em texto numa coluna `SUPER` é recusado sem `SERIALIZETOJSON` (`SUPER column in COPY query
+requires SERIALIZETOJSON option`, ambiente alvo, 2026-09-21), e um documento de 80.901 bytes entrou
+por `INSERT ... JSON_PARSE(%s)` com parâmetro, acima do teto do `VARCHAR` ([`POC.md`](POC.md)). O que
+`SERIALIZETOJSON` grava a partir de texto e o `COPY ... FORMAT JSON 'auto'` de um documento como
+objeto são leituras da próxima execução da suíte ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
 ```python
 import sqlalchemy as sa
@@ -867,17 +895,19 @@ gerar a lista de colunas, criação da tabela a partir do esquema Arrow com `dis
 `sortstyle`, `sortkey` e `primary_keys`); `awswrangler.redshift.to_sql` gera `INSERT` de várias
 linhas com `chunksize` de 200 e é indicado pela própria documentação só abaixo de 1.000 linhas. O
 `awswrangler` monta `COPY tabela (colunas) FROM ... FORMAT AS PARQUET` quando `use_column_names` é
-verdadeiro, o que sugere que o `COPY` de Parquet aceita lista de colunas; a documentação do `COPY`
-descreve a lista de colunas apenas para arquivos planos, e o item continua pendente da prova de
-conceito. O driver ADBC para Redshift (versão 1.7.0, 2026-09-09) faz ingestão em bloco e leitura em
+verdadeiro; a documentação do `COPY` descreve a lista de colunas apenas para arquivos planos, e o
+ambiente alvo a aceitou com Parquet em 2026-09-21 (tabela "Regras do COPY para Parquet"). O driver
+ADBC para Redshift (versão 1.7.0, 2026-09-09) faz ingestão em bloco e leitura em
 Arrow e merece um benchmark contra o fluxo acima.
 
 ### Regras do COPY para Parquet
 
 | Regra da documentação | Consequência para a biblioteca |
 | --- | --- |
-| Colunas são associadas por posição, e a quantidade precisa coincidir com a tabela. | A ordem das colunas no Parquet é a ordem do modelo. Os dois derivam do mesmo `Table`. |
+| Colunas são associadas por posição, e a quantidade precisa coincidir com a tabela. | A ordem das colunas no Parquet é a ordem do modelo. Os dois derivam do mesmo `Table`. Lido no ambiente alvo em 2026-09-21: um arquivo de cinco colunas numa tabela de seis reprova com `Spectrum Scan Error` 15007, `Unmatched number of columns`. |
+| A lista de colunas, `COPY tabela (colunas) FROM ... FORMAT AS PARQUET MANIFEST`, é aceita (2026-09-21): as colunas do arquivo entram nas listadas, por posição, e a coluna fora da lista fica nula. `FILLRECORD` foi aceito no mesmo arquivo, e as linhas que ele carrega são leitura pendente. | Um arquivo anterior a uma coluna nova entra pela lista de colunas; a lista não fornece o valor de uma coluna ausente. |
 | Só existem as colunas gravadas no arquivo. | A coluna de partição `mes` não está nos arquivos do Delta: a carga passa por uma staging sem `mes` e por `INSERT ... SELECT ..., '<mes>'` ([delta.md](delta.md)). |
+| Uma string maior que o `VARCHAR` de destino aborta o `COPY` (2026-09-21): `Spectrum Scan Error` 15007, e `sys_load_error_detail` diz `The length of the data column descricao is longer than the length defined in the table. Table: 200, Data: 300`. | A auditoria de tamanho da [etapa 4](PLAN-STAGE-4.md) é a barreira; `TRUNCATECOLUMNS` não está entre as opções aceitas para Parquet, e a próxima execução da suíte lê se ele é aceito. |
 | Parâmetros aceitos: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `STATUPDATE`, `MANIFEST`, `EXPLICIT_IDS`. `MAXERROR`, `NOLOAD` e `COMPUPDATE` não são aceitos, e não há compressão automática. | O primeiro erro aborta o `COPY`. A validação acontece antes, no Arrow. |
 | `MANIFEST` é aceito. | O `COPY` carrega exatamente os arquivos gravados pela biblioteca, e não o que mais estiver na pasta: o Delta guarda as versões anteriores até o `vacuum`. Exercitado no datashare em 2026-09-21. |
 | O bucket precisa estar na mesma região do Redshift. | Configuração da infraestrutura. |
@@ -934,8 +964,8 @@ INSERT INTO prod_operacoes (id_operacao, data_ref, id_cliente, valor, descricao,
 ```
 
 A staging temporária dispensa a codificação e as restrições do modelo: tabelas temporárias recebem
-`RAW`, e a auditoria acontece no destino. Se a lista de colunas no `COPY` de Parquet funcionar
-(pendente), a staging some.
+`RAW`, e a auditoria acontece no destino. A lista de colunas no `COPY` de Parquet funciona
+(2026-09-21), mas não fornece o valor da coluna ausente: a staging fica para a coluna de partição.
 
 ## Exportação para Parquet
 
@@ -961,10 +991,15 @@ Comportamento do `UNLOAD ... FORMAT AS PARQUET` segundo a documentação:
 - Com `PARALLEL` (padrão), cada slice grava um ou mais arquivos; `PARALLEL OFF` grava em série,
   respeitando `ORDER BY`, em arquivos de até 6,2 GB.
 - Com `PARTITION BY`, as colunas de partição saem dos arquivos, exceto com `INCLUDE`, e as pastas
-  seguem a convenção Hive.
+  seguem a convenção Hive. Os arquivos saem `<prefixo>/<coluna>=<valor>/<slice>_part_<nn>.parquet`,
+  e o número da slice muda entre execuções (`0064_part_00.parquet` e `0000_part_00.parquet` para a
+  mesma tabela no ambiente alvo, 2026-09-21).
 - `CLEANPATH` apaga de forma permanente os arquivos das pastas que recebem dados novos;
   `ALLOWOVERWRITE` sobrescreve arquivos existentes; sem os dois, o comando falha se o destino tiver
-  arquivos.
+  arquivos. O destino é conferido como prefixo (2026-09-21): o mesmo prefixo e um prefixo pai com
+  arquivos abaixo reprovam com `Specified unload destination on S3 is not empty. Consider using a
+  different bucket / prefix, manually removing the target files in S3, or using the ALLOWOVERWRITE
+  option`, e um subprefixo novo dentro de uma pasta com arquivos passa.
 - `MANIFEST VERBOSE` lista os arquivos, os nomes e tipos das colunas, as linhas por arquivo e o
   total; o manifesto simples lista só as URLs e serve ao `COPY ... MANIFEST`.
 - `PARQUET` não combina com `DELIMITER`, `FIXEDWIDTH`, `ADDQUOTES`, `ESCAPE`, `NULL AS`, `HEADER`,

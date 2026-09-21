@@ -250,13 +250,13 @@ Estas regras mantêm os arquivos legíveis pelo `COPY`:
 - A coluna de partição deriva de uma coluna do arquivo (`mes` de `data_ref`), porque o Delta não a
   grava nos dados e o `COPY` não lê diretórios. No DuckLake, a coluna permanece no arquivo.
 - `DECIMAL(18, 2)` sai como `INT64` do delta-rs, do DuckLake e do próprio DuckDB; o PyArrow grava
-  `FIXED_LEN_BYTE_ARRAY`. A prova de conceito do `COPY` com `DECIMAL` em `INT64`, pendente em
-  [`parquet.md`](parquet.md), cobre os três escritores.
+  `FIXED_LEN_BYTE_ARRAY`. O `COPY` com `DECIMAL` em `INT64` passou no ambiente alvo em 2026-09-21
+  ([`parquet.md`](parquet.md)), e cobre os três escritores.
 - O `COPY` é posicional e exige o mesmo número de colunas. Uma coluna nova entra no fim do esquema
   nos dois formatos, e os arquivos antigos ficam com uma coluna a menos. `FILLRECORD` consta das opções
-  aceitas para Parquet e preencheria as colunas finais ausentes; se não funcionar, a alternativa é
-  reescrever os meses antigos ou carregar por geração de esquema com lista de colunas. Pendente da
-  prova de conceito.
+  aceitas para Parquet e foi aceito em 2026-09-21, com as linhas que carrega por ler; a lista de
+  colunas carregou o arquivo antigo com a coluna nova nula no mesmo dia
+  ([redshift.md](redshift.md)).
 
 No sentido inverso, o `UNLOAD ... PARTITION BY (mes)` grava diretórios Hive sem a coluna de partição,
 que é a convenção do Delta, e o `MANIFEST VERBOSE` traz `content_length` e `record_count` para a

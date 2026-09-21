@@ -177,8 +177,8 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
 1. O sandbox são tabelas `exec_<id>_<tabela>` no esquema único, criadas pelo DDL do contrato.
 2. `run.ingest` monta o manifesto dos arquivos das partições pedidas, na versão fixada, e carrega por
    `COPY ... MANIFEST` na staging sem a coluna de partição, seguido de `INSERT ... SELECT *, '<valor>'`. A carga de
-   arquivos anteriores a uma coluna nova depende de `FILLRECORD` ou de lista de colunas, pendente da
-   prova de conceito.
+   arquivos anteriores a uma coluna nova vai por lista de colunas, confirmada em 2026-09-21, ou por
+   `FILLRECORD`, aceito e com as linhas por ler ([etapa 8](PLAN-STAGE-8.md)).
 3. O pipeline roda os mesmos statements Core, compilados para o Redshift; os lotes entram por
    Parquet em `staging/` mais `COPY`, um row group por lote, e saem das tuplas de `fetchmany` ou por
    `UNLOAD`.
