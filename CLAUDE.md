@@ -233,7 +233,9 @@ A new lesson adds its story there and its rule here, in the same commit.
   `tests/proof_of_concept/`; test-module basenames stay unique across the two folders.
 - **Before a commit**: `uv run pytest` with no variables and again with `SERIALIZE_DB_TEST_LOCAL_ROOT` set
   to the scratchpad, both green; `py_compile` on an edited probe; every `](...md)` link target checked;
-  `git status` clean of stray files; this file under budget.
+  `git status` clean of stray files; this file under budget; `git branch --show-current` a `claude/`
+  branch whose PR is still open (`gh pr view --json state`), because the user merges and syncs `main`
+  between turns, and a merged PR means a new branch (2026-09-21).
 - **Git and shell traps**: after `git mv`, add the new path; in zsh, quote `--include=*.md`, run a command
   held in a variable as `${=command}`, and never pass `====` to `echo` (it is `=command` expansion); a Bash
   result above about 50 KB goes to a file; read long documents in `sed -n` ranges.

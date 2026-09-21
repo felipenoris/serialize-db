@@ -208,3 +208,9 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   fixes the order in `tests/test_conftest_redshift.py`. The terminal output the user pasted supplied
   the two facts the JSON lacked: the passing test was `fetchmany`, and the first test failed on
   `has_schema_privilege` answering `false` after the `USE`.
+- **The branch is read before every commit** (2026-09-21). The user merged PR #38 and synced the
+  local checkout to `main` between two turns; the next two commits (`8fa25a3`, `dd5e19c`) ran
+  `git add -A && git commit && git push` on `main`, reached `origin/main` without a PR, and
+  `gh pr edit` rewrote the description of a merged PR. Before each commit: `git branch --show-current`
+  and `gh pr view --json state,headRefName`; a merged PR means a new `claude/` branch, and a `push`
+  never goes to `main`.
