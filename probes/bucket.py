@@ -432,7 +432,21 @@ def permissions(report: Report, bucket: str, prefix: str, resolved: str | None, 
 
     # Uma simulação para o bucket (ListBucket) e outra para os objetos sob a raiz.
     object_arn = f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"
-    iam = session.client("iam", config=short_config())
+    iam = session.client("iam", config=short_config(2, 5, 1))
+
+    def without_simulation(detail: str) -> None:
+        """A nota que substitui a simulação: o que esta execução provou, e o que só a suíte S3 prova."""
+        proofs = (("ListBucket sob a raiz", proven.get("listed")), ("HeadObject de uma amostra", proven.get("sample") is not None))
+        shown = [name for name, done in proofs if done]
+        report.note("BK-8", "permissões sob a raiz", f"{detail}; nesta execução passaram: {', '.join(shown) or 'nenhuma leitura'}; PutObject e DeleteObject só a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) prova")
+
+    # O IAM não tem endpoint VPC em todo ambiente; sem o teste, cada simulação espera por endereço resolvido.
+    alcance, leitura = probelib.endpoint_reachable(iam)
+    report.line(f"alcance do IAM: {leitura}\n")
+    if not alcance:
+        without_simulation("iam:SimulatePrincipalPolicy sem chamada: o IAM não respondeu ao teste TCP")
+        return
+
     results: dict[str, str] = {}
     for actions, resources in ((BUCKET_ACTIONS, [f"arn:aws:s3:::{bucket}"]), (OBJECT_ACTIONS, [object_arn])):
         found = report.call(
@@ -441,9 +455,7 @@ def permissions(report: Report, bucket: str, prefix: str, resolved: str | None, 
             render=decisions,
         )
         if found is None:
-            proofs = (("ListBucket sob a raiz", proven.get("listed")), ("HeadObject de uma amostra", proven.get("sample") is not None))
-            shown = [name for name, done in proofs if done]
-            report.note("BK-8", "permissões sob a raiz", f"iam:SimulatePrincipalPolicy {report.last_reason}; nesta execução passaram: {', '.join(shown) or 'nenhuma leitura'}; PutObject e DeleteObject só a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) prova")
+            without_simulation(f"iam:SimulatePrincipalPolicy {report.last_reason}")
             return
         results.update({item["EvalActionName"]: item["EvalDecision"] for item in found.get("EvaluationResults", [])})
 
@@ -484,9 +496,17 @@ def kms_key_section(report: Report, resolved: str | None, kms_key: str | None) -
         report.note("BK-9", "chave KMS", "o bucket não usa SSE-KMS por padrão, ou a criptografia não foi lida")
         return
 
+    # O KMS resolve para vários endereços; sem endpoint VPC, cada um consome o connect_timeout da chamada.
+    kms = boto3.client("kms", region_name=resolved, config=short_config(2, 5, 1))
+    alcance, leitura = probelib.endpoint_reachable(kms)
+    report.line(f"alcance do KMS: {leitura}\n")
+    if not alcance:
+        report.note("BK-9", "chave KMS", f"describe_key sem chamada: o KMS não respondeu ao teste TCP ({leitura}); a escrita da suíte S3 diz se a chave serve")
+        return
+
     described = report.call(
         f"kms.describe_key(KeyId={kms_key!r})",
-        lambda: boto3.client("kms", region_name=resolved, config=short_config()).describe_key(KeyId=kms_key)["KeyMetadata"],
+        lambda: kms.describe_key(KeyId=kms_key)["KeyMetadata"],
         render=render_key,
     )
     if described is None:

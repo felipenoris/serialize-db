@@ -991,7 +991,14 @@ def copy_role(report: Report, target: Target) -> None:
     # Uma simulação por identidade: ListBucket no bucket, GetObject e PutObject sob a raiz.
     bucket, _, prefix = root.removeprefix("s3://").partition("/")
     resources = [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"]
-    iam = boto3.client("iam", config=short_config())
+    iam = boto3.client("iam", config=short_config(2, 5, 1))
+
+    # O IAM não tem endpoint VPC em todo ambiente; sem o teste, cada simulação espera por endereço resolvido.
+    alcance, leitura = probelib.endpoint_reachable(iam)
+    report.line(f"alcance do IAM: {leitura}\n")
+    if not alcance:
+        report.note("RS-11", "alcance do COPY sobre a raiz", f"simulação sem chamada: o IAM não respondeu ao teste TCP ({leitura}); o primeiro COPY da suíte Redshift é o teste")
+        return
 
     def render_decisions(found: dict) -> str:
         return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])

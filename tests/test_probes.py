@@ -14,7 +14,9 @@ import contextlib
 import io
 import datetime as dt
 import os
+import socket
 import sys
+import types
 from pathlib import Path
 
 import botocore.exceptions
@@ -129,6 +131,44 @@ def test_public_label_marks_gateway_endpoint_only_for_s3_and_dynamodb() -> None:
     assert probelib.public_label("redshift-serverless.us-west-2.amazonaws.com") == proxy
     assert probelib.public_label("sagemaker.us-west-2.amazonaws.com") == proxy
     assert probelib.public_label("pypi.org") == proxy
+
+
+def fake_client(url: str) -> types.SimpleNamespace:
+    """Um cliente boto3 fabricado: ``endpoint_reachable`` lê só ``meta.endpoint_url``."""
+    return types.SimpleNamespace(meta=types.SimpleNamespace(endpoint_url=url))
+
+
+def test_endpoint_reachable_skips_the_call_when_the_port_does_not_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A porta que aceita conexão é alcance; a recusada dispensa a chamada, e com proxy o teste direto não decide."""
+    for name in probelib.PROXY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+    with socket.create_server(("127.0.0.1", 0)) as server:
+        port = server.getsockname()[1]
+        reachable, reading = probelib.endpoint_reachable(fake_client(f"https://127.0.0.1:{port}"))
+        assert reachable
+        assert reading.startswith(f"127.0.0.1:{port} conectou em ")
+
+    # Fora do bloco a porta está fechada: o sistema recusa a conexão, sem esperar o tempo limite.
+    reachable, reading = probelib.endpoint_reachable(fake_client(f"https://127.0.0.1:{port}"), timeout=0.5)
+    assert not reachable
+    assert "não conectou" in reading
+
+    # Um endereço sem esquema não tem host para testar, e a chamada é feita.
+    reachable, reading = probelib.endpoint_reachable(fake_client("iam.amazonaws.com"))
+    assert reachable
+    assert "endpoint sem host" in reading
+
+    # Um nome que não resolve é leitura, não chamada falhada.
+    reachable, reading = probelib.endpoint_reachable(fake_client("https://nao.existe.invalid"), timeout=0.5)
+    assert not reachable
+    assert "não resolve" in reading
+
+    # Com proxy, a conexão direta não responde pelo alcance: a chamada é feita.
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+    reachable, reading = probelib.endpoint_reachable(fake_client(f"https://127.0.0.1:{port}"), timeout=0.5)
+    assert reachable
+    assert "proxy configurado" in reading
 
 
 def test_tabulate_aligns_columns_and_fills_empty_cells() -> None:

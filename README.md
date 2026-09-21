@@ -51,6 +51,23 @@ com o papel nomeado ou `default`. A suíte cria as tabelas no esquema de
 `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, a autorização; o probe lê o esquema do projeto em
 `SERIALIZE_DB_REDSHIFT_SCHEMA`.
 
+No ambiente alvo, na pasta preparada sem internet, com a raiz S3 do projeto no lugar do exemplo:
+
+```
+export AWS_DEFAULT_REGION=sa-east-1
+export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
+export SERIALIZE_DB_REDSHIFT_DATABASE=dev
+export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
+export SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=sbx_aco_decon
+export SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo
+SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_1.json .venv/bin/python -m pytest -m redshift
+SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m pytest -m redshift
+```
+
+São duas execuções: a [etapa 0](docs/PLAN-STAGE-0.md) só escreve a consequência de uma leitura num
+arquivo de etapa depois que a segunda a repete, e os dois JSON de `SERIALIZE_DB_TEST_REPORT` são a
+resposta que acompanha os relatórios dos probes na conversa.
+
 As três variáveis de autorização se somam: informadas juntas, `uv run pytest` sem `-m` roda tudo.
 
 `tests/` na raiz recebe os testes do pacote `serialize_db`, um módulo por módulo do pacote (as etapas
