@@ -50,7 +50,11 @@ def test_the_model_tables_are_the_read_tables_column_by_column() -> None:
                 # Só o arquivo anulável e o modelo NOT NULL; o modelo prevalece (decisão de 2026-09-20).
                 assert field.nullable and not column.nullable, (name, column.name)
                 nullable_in_the_files.append((name, column.name))
-    assert nullable_in_the_files == [(table, column) for table, columns in MODEL_NOT_NULL_DECLARED_NULLABLE.items() for column in columns]
+    expected = []
+    for table, columns in MODEL_NOT_NULL_DECLARED_NULLABLE.items():
+        for column in columns:
+            expected.append((table, column))
+    assert nullable_in_the_files == expected
 
 
 def test_the_keys_transcribed_for_the_fixture_are_the_models() -> None:
@@ -61,9 +65,13 @@ def test_the_keys_transcribed_for_the_fixture_are_the_models() -> None:
         keys += [[column.name for column in index.columns] for index in table.indexes if index.unique]
         assert sorted(keys) == sorted(UNIQUE_KEYS[name]), name
 
-    foreign_keys = {
-        (table.name, tuple(element.parent.name for element in constraint.elements), constraint.referred_table.name, tuple(element.column.name for element in constraint.elements))
-        for table in Base.metadata.tables.values()
-        for constraint in table.foreign_key_constraints
-    }
-    assert foreign_keys == {(child, tuple(columns), parent, tuple(referenced)) for child, columns, parent, referenced in FOREIGN_KEYS}
+    foreign_keys = set()
+    for table in Base.metadata.tables.values():
+        for constraint in table.foreign_key_constraints:
+            columns = tuple(element.parent.name for element in constraint.elements)
+            referenced = tuple(element.column.name for element in constraint.elements)
+            foreign_keys.add((table.name, columns, constraint.referred_table.name, referenced))
+    transcribed = set()
+    for child, columns, parent, referenced in FOREIGN_KEYS:
+        transcribed.add((child, tuple(columns), parent, tuple(referenced)))
+    assert foreign_keys == transcribed

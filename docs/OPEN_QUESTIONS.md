@@ -54,7 +54,8 @@ foi medido em [`POC.md`](POC.md).
   etapas até existir um pipeline paralelo real.
 - **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
-  RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)). `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
+  RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)); a
+  migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
   (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)), e a medição decide o
   padrão da flag.
 
@@ -65,9 +66,11 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 
 - [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `@compiles`; `String(n)` medido em
   bytes; a coluna sem comentário como violação de `check_models`; `duckdb-engine` e
-  `sqlalchemy-redshift` como dependências de execução enquanto `ddl` compilar pelo dialeto; a pasta
-  do modelo cliente, a cópia corrigida de `tests/reference_model/`, que fica como está (proposta:
-  `tests/client_model/`, com os arquivos `schema/` e `sql/`).
+  `sqlalchemy-redshift` como dependências de execução enquanto `ddl` compilar pelo dialeto; no modelo
+  cliente escrito em 2026-09-21: os comprimentos de `String(n)`, a `sort_key` das quatro tabelas
+  particionadas, a distribuição no Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de
+  `cad_contratos` para colunas não únicas de `rel_contrato_operacao`, e a revisão dos comentários
+  pelo dono do modelo.
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
   `dev`.
 - [Etapa 3](PLAN-STAGE-3.md): a reserva de credenciais do `boto3` em `storage_options`; as colunas
@@ -81,7 +84,9 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   sem ele), porque o `UNLOAD` confere o destino como prefixo.
 - [Etapa 6](PLAN-STAGE-6.md): `--metadata` na linha de comando; a chave de `next_ids` numa chave
   composta; a barreira por tabela.
-- [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga.
+- [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
+  antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
+  (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.
 - [Etapa 8](PLAN-STAGE-8.md): a staging da publicação no datashare ou temporária; `FILLRECORD` em
   todo `COPY` da biblioteca (proposto: um manifesto pode listar arquivos anteriores e posteriores a
   uma coluna nova) ou a lista de colunas, os dois lidos em 2026-09-21; o teto de 65.535 bytes do

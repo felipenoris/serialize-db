@@ -413,9 +413,10 @@ Testes: `tests/` na raiz testa o pacote, um módulo de teste por módulo do paco
 `tests/proof_of_concept/` guarda as provas de conceito e os testes das bibliotecas externas,
 comentados passo a passo porque também são o material de estudo das APIs; `tests/reference_model/` é
 o modelo de referência, o modelo SQLAlchemy da base original em Parquet particionado, que fica como
-está (decisão de 2026-09-21), e `tests/client_model/` (pasta proposta) é o modelo cliente, a cópia
-corrigida pela etapa 1, que faz o papel da biblioteca cliente: os testes do pacote o entregam à API
-como um pipeline entregaria os seus modelos. Um teste que não grava (esquema, renderização, DuckDB em
+está (decisão de 2026-09-21), e `tests/client_model/` é o modelo cliente, o modelo de dados que o
+código cliente apresenta para usar a biblioteca (decisão de 2026-09-21), a cópia corrigida pela
+etapa 1, que faz o papel da biblioteca cliente: os testes do pacote o entregam à API como um
+pipeline entregaria os seus modelos. Um teste que não grava (esquema, renderização, DuckDB em
 memória) roda sem variável. Um teste que grava usa a fixture `local_location`, sob
 `SERIALIZE_DB_TEST_LOCAL_ROOT`, e é pulado sem ela; o fim da sessão imprime, sem erro, o comando que
 autoriza cada suíte pulada e o que ela grava. O marcador `s3` repete no bucket os testes que dependem
@@ -439,7 +440,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação da partição. | O pipeline de exemplo roda em memória sobre um Delta local; a auditoria reprova a chave repetida entre a partição nova e uma já publicada. |
 | 5. Motor Redshift | O mesmo protocolo com sandbox `exec_<id>_`, `COPY ... MANIFEST` e `UNLOAD`. | SQL gerado coberto por testes sem conexão; integração com amostra, marcador `redshift`. |
 | 6. Execução e linha de comando | `Database`, `Execution`, `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
-| 7. Carga inicial | Migração dos Parquet atuais por tabela e por partição, com relatório. | Contagens e somas por partição iguais entre origem e Delta. |
+| 7. Carga inicial | Migração dos Parquet atuais por tabela e por partição, com relatório; `initial_load` absorve a migração adiantada de `scripts/migrate_parquet_to_delta.py`, que vem logo depois da etapa 1. | Contagens e somas por partição iguais entre origem e Delta. |
 | 8. Publicação para clientes | Tabelas `<ambiente>_*` no Redshift, `version_diff`, transação única, `serialize_db_publications`. | Uma partição alterada recarrega só essa partição. |
 | 9. Operação | Snapshots, `vacuum`, compactação, arquivo, exportação, `history`, runbook, `pdoc`. | Runbook escrito e testes de manutenção passando. |
 
@@ -522,14 +523,19 @@ conferências da etapa 3; `rewrite` grava pelo `write_deltalake`, que confere tu
 
 ## Ordem do trabalho
 
-1. Etapas 1 e 2, em pastas locais, com o modelo cliente (a cópia corrigida de
-   `tests/reference_model/`) e os seus arquivos `schema/` e `sql/` versionados em
-   `tests/client_model/`.
-2. Etapa 3, depois 4 e 6: um pipeline completo em disco local, o critério de aceite da etapa 6
-   sobre o motor DuckDB.
-3. Em paralelo, no ambiente alvo: os cinco probes rodaram lá em 2026-09-21 ([`POC.md`](POC.md)), e
+1. Etapa 1, em pasta local: o modelo cliente em `tests/client_model/` (escrito em 2026-09-21, a
+   cópia corrigida de `tests/reference_model/`, conferida por `tests/test_client_model.py`) e o
+   módulo `serialize_db.schema`, com os arquivos `schema/` versionados em `tests/client_model/`.
+2. A migração adiantada ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), seção "A migração adiantada"):
+   `scripts/migrate_parquet_to_delta.py`, o rascunho da etapa 7 sobre `serialize_db.schema`, o
+   `deltalake` e o DuckDB, testado sobre a base fictícia e executado no ambiente alvo sobre a cópia
+   da base de produção, tabela a tabela. Ela dá a base Delta sobre a qual as etapas seguintes se
+   desenvolvem e a medição da partição de `cad_lancamentos`.
+3. Etapa 2, depois 3, 4 e 6: um pipeline completo em disco local, o critério de aceite da etapa 6
+   sobre o motor DuckDB; a etapa 7 absorve o script.
+4. Em paralelo, no ambiente alvo: os cinco probes rodaram lá em 2026-09-21 ([`POC.md`](POC.md)), e
    `redshift.py` volta a rodar pela leitura `RS-8`; a manutenção da suíte S3 se confirmada;
    `tests/proof_of_concept/` e os testes `-m s3` das etapas 3 e 4 no bucket.
-4. O `test_redshift.py` da etapa 0 rodou limpo duas vezes no ambiente alvo em 2026-09-21, pela
+5. O `test_redshift.py` da etapa 0 rodou limpo duas vezes no ambiente alvo em 2026-09-21, pela
    conexão de `examples/`; as etapas 5 e 8 vêm depois das etapas 3, 4 e 6, com essa conexão.
 5. Etapa 7 quando os Parquet de origem estiverem acessíveis; etapa 9 por último, com o runbook.
