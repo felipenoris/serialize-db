@@ -714,8 +714,8 @@ kernel 6.12 do Amazon Linux 2023, Python 3.13.15, o `.venv` da pasta preparada: 
 DuckDB 1.5.5, PyArrow 25.0.1, boto3 1.43.98, SQLAlchemy 2.0.54, pandas 3.0.6, pytest 9.1.1), com a
 raiz `s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests`
 e a credencial temporária do workgroup. A sessão durou 10,7 s: um teste passou e dez reprovaram. O
-relatório está em [`readings/redshift-suite-2026-09-21-1050.json`](readings/redshift-suite-2026-09-21-1050.json);
-a primeira tentativa não gravou o JSON e o usuário repetiu a suíte. O `conftest` criava o arquivo
+relatório não fica em `readings/`: cada leitura do ambiente que ele trazia se repete nas execuções
+limpas das 13:35 e das 13:39; a primeira tentativa não gravou o JSON e o usuário repetiu a suíte. O `conftest` criava o arquivo
 sem criar a pasta, que os probes criam e a suíte não criava; ele passou a criá-la.
 
 **A causa das dez reprovações é uma transação só.** `connect_redshift` rodava `USE
@@ -767,7 +767,8 @@ da [etapa 0](PLAN-STAGE-0.md) ficaram para as execuções seguintes, exceto a le
 
 Em 2026-09-21, às 11:28 UTC, com o `conftest` corrigido, a suíte rodou de novo no ambiente alvo:
 sete testes passaram e quatro reprovaram em 50,3 s, e a limpeza apagou as onze tabelas e 23 objetos.
-O relatório está em [`readings/redshift-suite-2026-09-21-1128.json`](readings/redshift-suite-2026-09-21-1128.json).
+O relatório não fica em `readings/`: cada leitura do ambiente que ele trazia se repete nas
+execuções limpas das 13:35 e das 13:39.
 
 **As duas causas das reprovações são da suíte, não do Redshift:**
 
@@ -815,8 +816,8 @@ e por `COPY` direto de um Parquet. As perguntas do `COPY` (tipos, lista de colun
 Em 2026-09-21, às 12:08 e às 12:10 UTC, com a suíte corrigida pela segunda execução, o usuário rodou
 `pytest -m redshift` duas vezes seguidas no ambiente alvo: dez testes passaram e um reprovou em cada
 uma (60,2 s e 58,1 s), e a limpeza apagou 38 objetos e as tabelas de cada sessão. Os relatórios
-estão em [`readings/redshift-suite-2026-09-21-1208.json`](readings/redshift-suite-2026-09-21-1208.json)
-e [`readings/redshift-suite-2026-09-21-1210.json`](readings/redshift-suite-2026-09-21-1210.json). As
+não ficam em `readings/`: cada leitura do ambiente que eles traziam se repete nas execuções limpas
+das 13:35 e das 13:39, que reproduzem de propósito o `34510` registrado aqui como reprovação. As
 duas execuções concordam em cada leitura, e o que segue vale como permanente.
 
 **A reprovação é do cache de prepared statements do driver, e se repetiu.**
