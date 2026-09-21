@@ -65,12 +65,10 @@ Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo 
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
 - [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `sql_type`; `String(n)` medido em
-  bytes; a tabela e a coluna sem comentário como violação de `check_models`; `ddl` gerado pela
-  tabela de tipos sem o dialeto do SQLAlchemy, com `duckdb-engine` e `sqlalchemy-redshift` só no
-  grupo `dev` (proposto); no modelo cliente: os comprimentos de `String(n)`, a `sort_key` das
-  quatro tabelas particionadas, a distribuição no Redshift (`redshift` ausente, `AUTO`), a chave
-  estrangeira de `cad_contratos` para colunas não únicas de `rel_contrato_operacao`, e a revisão
-  dos comentários pelo dono do modelo.
+  bytes; a tabela e a coluna sem comentário como violação de `check_models`; no modelo cliente: os
+  comprimentos de `String(n)`, a `sort_key` das quatro tabelas particionadas, a distribuição no
+  Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos` para colunas não
+  únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do modelo.
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
   `dev`.
 - [Etapa 3](PLAN-STAGE-3.md): a reserva de credenciais do `boto3` em `storage_options`; as colunas

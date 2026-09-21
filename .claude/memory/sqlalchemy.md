@@ -44,8 +44,8 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   SQLAlchemy dialects quote `"to"` on their own in DDL and DML, the Redshift one also `"timestamp"`,
   and `redshift_distkey="to"` renders `DISTKEY ("to") SORTKEY ("to", data)`; the library's own
   text generation quotes every identifier (2026-09-21). `docs/PLAN-STAGE-1.md`, `docs/POC.md`
-- Stage 1 generates the DDL from the type table without the dialect packages (proposed on
-  2026-09-21, awaiting the user): `sql_type` spells `DECIMAL(p, s)`, `VARCHAR(n)` on both engines
+- Stage 1 generates the DDL from the type table without the dialect packages (user decision of
+  2026-09-21): `sql_type` spells `DECIMAL(p, s)`, `VARCHAR(n)` on both engines
   (DuckDB ignores the length), `VARCHAR` / `VARCHAR(65535)` for `Text`, `VARCHAR(36)` for `Uuid`,
   `JSON` / `SUPER`, `DOUBLE` / `DOUBLE PRECISION`, `TIMESTAMP` / `TIMESTAMPTZ`; DuckDB read the
   fully quoted `CREATE TABLE` back as `DECIMAL(18,2)`, `TIMESTAMP WITH TIME ZONE`, `VARCHAR` and

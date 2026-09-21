@@ -78,7 +78,7 @@ modelo de teste com todos os tipos; o DDL de cada tabela executado no DuckDB em 
 arquivos `tests/client_model/schema/` versionados; `write_schema_files` sob a raiz local.
 Dependências de execução: `sqlalchemy`, `pyarrow`, `deltalake` e `duckdb`; `duckdb-engine` e
 `sqlalchemy-redshift` ficam no grupo `dev`, das suítes de estudo, porque a etapa não compila pelo
-dialeto (proposta em "Decisões pendentes"). Provas de conceito: `test_sqlalchemy.py`
+dialeto (decisão do usuário de 2026-09-21). Provas de conceito: `test_sqlalchemy.py`
 (`test_declarative_model_exposes_table`, `test_ddl_per_dialect`, `test_create_all_and_reflection`,
 `test_arrow_and_delta_schema_from_table`, com o mapa de tipos e `Schema.from_arrow().to_json()`,
 `test_sandbox_copy_of_table_and_schema_files_diff`), `test_pyarrow.py`
@@ -160,7 +160,12 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
   modelo cliente declara `ix_contratos_data_sistema_contrato` e `ix_operacoes_data_operacao` por
   `Index(unique=True)`, e
   `adjusted_keys` aplica `keys["add"]` e `keys["drop"]`, sempre por lista de colunas.
-- **`sql_type` e `ddl`** geram texto, sem o dialeto do SQLAlchemy: `SQL_TYPES` guarda por dialeto o
+- **`sql_type` e `ddl`** geram texto, sem o dialeto do SQLAlchemy (decisão do usuário de
+  2026-09-21: as três regras `@compiles` do desenho anterior, `Text` no Redshift, `Uuid` nos dois e
+  `CreateTable` com as cláusulas físicas, eram registros globais no compilador, e a alternativa,
+  compilar pelo dialeto, levaria `duckdb-engine` e `sqlalchemy-redshift` às dependências de
+  execução; a escolha vale para `ddl`, e a [etapa 2](PLAN-STAGE-2.md) decide o `render` dos
+  statements). `SQL_TYPES` guarda por dialeto o
   nome dos tipos sem parâmetro, `sql_type` monta `DECIMAL(p, s)` da precisão e da escala do tipo
   Arrow, `VARCHAR(n)` do comprimento e `TIMESTAMP` ou `TIMESTAMPTZ` do fuso; `column_ddl` monta
   `"<coluna>" <tipo>` mais `NOT NULL`; `redshift_options` monta `DISTSTYLE`, `DISTKEY` e `SORTKEY`
@@ -853,13 +858,6 @@ check_models:
 - **[decisão] A tabela e a coluna sem comentário como violação em `check_models`.** O modelo de
   referência não tem comentário algum, e o modelo cliente tem um em cada tabela e coluna, uma
   primeira redação; a regra obriga o dono do modelo a escrever os seus.
-- **[proposto] `ddl` gerado pela tabela de tipos, sem o dialeto do SQLAlchemy.** As três regras
-  `@compiles` (`Text` no Redshift, `Uuid` nos dois, `CreateTable` com as cláusulas físicas) e o
-  `quoted_name(quote=False)` saem, os identificadores saem entre aspas por `quoted`, e
-  `duckdb-engine` e `sqlalchemy-redshift` ficam no grupo `dev`. A alternativa é compilar pelo
-  dialeto, que cita as palavras reservadas sozinho e leva os dois pacotes para as dependências de
-  execução. A escolha vale para `ddl`; a [etapa 2](PLAN-STAGE-2.md) decide o `render` dos
-  statements.
 - **[decisão] Os comprimentos de `String(n)` do modelo cliente.** Escolhidos das leituras com
   folga (`contrato` e `operacao` 50, os nomes 50 e 100, `numero` 20, `descricao` e `meta` 255,
   `area` e `departamento` 20, `to` 2, `fonte_familia` 3); sem `n`, o Redshift daria `VARCHAR(256)`
