@@ -260,5 +260,6 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   the corporate GitLab index as an extra `[[tool.uv.index]]`; outside the corporate network `uv add`
   and `uv lock` fail with a DNS error on it, even though every package comes from PyPI. An empty
   configuration file (`UV_CONFIG_FILE`, or a `uv.toml` beside `pyproject.toml`) makes `uv` ignore
-  the whole `[tool.uv]` section; the workflows use `.github/uv-ci.toml`, and the local lock was made
-  the same way, with the index block restored afterwards.
+  the whole `[tool.uv]` section; the workflows used `.github/uv-ci.toml`, and the local lock was made
+  the same way, with the index block restored afterwards. The user removed the index from
+  `pyproject.toml` later that day, and the workaround left with it.

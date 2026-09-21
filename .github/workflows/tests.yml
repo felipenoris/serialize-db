@@ -1,5 +1,6 @@
-# Os testes do pacote serialize_db: tests/ sem tests/proof_of_concept/, sobre o DuckDB em memória e
-# arquivos locais, sem S3 nem Redshift. As provas de conceito, os exemplos e os probes ficam fora.
+# Os testes do pacote serialize_db: tests/ sem tests/proof_of_concept/ e sem tests/test_probes.py,
+# sobre o DuckDB em memória e arquivos locais, sem S3 nem Redshift. As provas de conceito, os
+# exemplos e os probes ficam fora.
 name: Testes do pacote
 
 on:
@@ -12,9 +13,6 @@ permissions:
   contents: read
 
 env:
-  # O índice corporativo de pyproject.toml ([[tool.uv.index]]) só responde na rede corporativa; um
-  # arquivo de configuração vazio faz o uv ignorar a seção [tool.uv] e resolver pelo PyPI.
-  UV_CONFIG_FILE: ${{ github.workspace }}/.github/uv-ci.toml
   SERIALIZE_DB_TEST_LOCAL_ROOT: ${{ github.workspace }}/.pytest-local-root
 
 jobs:
@@ -34,4 +32,8 @@ jobs:
         run: mkdir -p "$SERIALIZE_DB_TEST_LOCAL_ROOT"
 
       - name: Rodar os testes do pacote
-        run: uv run pytest tests --ignore=tests/proof_of_concept -p no:cacheprovider
+        run: >-
+          uv run pytest tests
+          --ignore=tests/proof_of_concept
+          --ignore=tests/test_probes.py
+          -p no:cacheprovider

@@ -104,3 +104,9 @@ examples or the probes; DuckDB and local files, no S3), a GitHub workflow that p
 site, and a README whose test and probe sections hold only the final commands, split into the
 package tests of the GitHub workflow and the AWS tests with a flag for Redshift, with the prose on
 what each test does moved to the header of each test file. `plan/CURRENT_STATE.md`, `README.md`
+
+Later on 2026-09-21, after merging PR #46, the user removed the corporate index from
+`pyproject.toml` (the `UV_CONFIG_FILE` workaround left the workflows), took `tests/test_probes.py`
+out of the GitHub tests workflow, and asked for a README instruction that builds the static HTML
+documentation into a folder the user names. The docs workflow fails until the user enables Pages
+with the source "GitHub Actions". `plan/CURRENT_STATE.md`, `README.md`
