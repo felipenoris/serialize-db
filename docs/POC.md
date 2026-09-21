@@ -383,6 +383,37 @@ O procedimento de uso, as variáveis e os comandos de empacotar e extrair passar
 do script, e a seção "Ambiente sem internet" do `README.md` aponta para ele. A etapa 3 aplica a
 mesma separação em `duckdb_setup` ([`PLAN-STAGE-3.md`](PLAN-STAGE-3.md)).
 
+## O que o encerramento depois de uma leitura Delta mostrou
+
+Em 2026-09-20, em macOS arm64 com deltalake 1.6.4 e PyArrow 25.0.1, um script que termina logo
+depois de `DeltaTable(uri).to_pyarrow_table()` **não encerra**: `sample` mostra a thread principal
+em `exit` → `__cxa_finalize_ranges` → `arrow::internal::ThreadPool::~ThreadPool` →
+`Shutdown` → `condition_variable::wait`, e uma worker do Arrow parada numa cadeia de callbacks do
+Acero (`AsyncTaskSchedulerImpl::OnTaskFinished`). É corrida, não travamento do comando: três
+execuções seguidas penduraram, e meio segundo de qualquer trabalho depois da leitura desfaz o
+problema (0,8 s contra 15 s sem saída).
+
+| Caso | Saída |
+| --- | --- |
+| `to_pyarrow_table()` e encerrar | não encerra (3 de 3) |
+| `to_pyarrow_table()` e 0,5 s de espera | 0,8 s |
+| `to_pyarrow_table()` e 3 s de espera | 3,3 s |
+| `to_pyarrow_dataset().to_table()` e encerrar | 0,3 s |
+| `to_pyarrow_dataset().scanner().to_reader().read_all()` e encerrar | 0,2 s |
+| `to_pyarrow_dataset().count_rows()` e encerrar | 0,2 s |
+| `write_deltalake`, `get_add_actions`, `create_write_transaction` e encerrar | 0,3 s cada |
+
+A partição não importa: a tabela sem partição pendura igual. `pq.read_table`, `ds.dataset().head()`
+e `ds.dataset().to_table()` sozinhos encerram limpos, então o gatilho é o caminho de leitura do
+`to_pyarrow_table` do delta-rs, não o Parquet nem o dataset do PyArrow.
+
+A suíte nunca viu isso porque o pytest sempre tem trabalho depois da última leitura; quem vê é um
+script ou um comando que lê e termina. A consequência está nas regras de [`PLAN.md`](PLAN.md): um
+programa que encerra logo depois de ler uma tabela Delta lê por `to_pyarrow_dataset()`. Foi assim
+que o defeito apareceu — o ensaio local de
+[`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) imprimiu tudo e ficou 30
+minutos sem encerrar.
+
 ## O que a fronteira por lotes mostrou
 
 Em 2026-09-20, no macOS arm64 com DuckDB 1.5.5 (`threads = 2`), PyArrow 25.0.1 e pandas 3.0.6, uma

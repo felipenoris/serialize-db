@@ -308,6 +308,11 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   registrado por URI absoluta (`delta.md`, `estrategia.md`).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
   consultada mais de uma vez é materializada no DuckDB (`delta.md`).
+- Um programa que encerra logo depois de ler uma tabela Delta lê por `to_pyarrow_dataset()`, nunca
+  por `to_pyarrow_table()`: o segundo deixa uma tarefa do Acero em voo, e o destrutor do pool de
+  threads do Arrow espera por ela para sempre. Meio segundo de qualquer trabalho depois da leitura
+  desfaz a corrida, e é por isso que a suíte nunca a viu; quem a vê é a linha de comando, que lê e
+  termina (`POC.md`).
 - O delta-rs não lê a região de `~/.aws/config`: com `region = us-west-2` no perfil `default` e
   sem `AWS_REGION` nem `AWS_DEFAULT_REGION`, foi a `us-east-1` (2026-09-20); a cadeia de credenciais
   consulta o perfil (`credential_source = EcsContainer`, aviso `aws_config::profile::credentials`)

@@ -329,6 +329,9 @@ registered.create_write_transaction(
     schema=registered.schema(),
     partition_by=[PARTITION_COLUMN],
 )
-print(f"   registrados no Delta {unload_uri}: {DeltaTable(unload_uri).to_pyarrow_table().num_rows} linhas de volta")
+# to_pyarrow_dataset(), não to_pyarrow_table(): o segundo deixa uma tarefa do Acero em voo, e um
+# processo que encerra logo depois trava no destrutor do pool de threads do Arrow (medido em
+# 2026-09-20, docs/POC.md). Esta é a última leitura do script, então é justamente o caso.
+print(f"   registrados no Delta {unload_uri}: {DeltaTable(unload_uri).to_pyarrow_dataset().count_rows()} linhas de volta")
 
 print(f"\nobjetos em {work}; apague com: aws s3 rm --recursive {work}")
