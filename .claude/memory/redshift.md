@@ -85,3 +85,14 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `wlm_query_slot_count` 1, `sys_load_error_detail` answered 0 in 2.4 s; the Data API `select 1` stayed
   `PICKED` for 30 s (23 ms the day before); `iam.simulate_principal_policy` times out in the target
   (no IAM endpoint), so the first `COPY` proves the permission. `docs/POC.md`, `docs/PLAN-STAGE-5.md`
+- Second suite run in the target (2026-09-21 11:28 UTC, 7 passed, 4 failed,
+  `docs/readings/redshift-suite-2026-09-21-1128.json`): `information_schema.columns` is empty for
+  the datashare schema after the `USE` (local database only, like `has_schema_privilege`, which
+  answered `false` again); `svv_all_columns` crosses databases, and `cursor.description` of a
+  `select ... limit 0` describes a table without any catalog view. `COPY ... MANIFEST` answers
+  `Spectrum Scan Error: File not found` for a URL with `//` (an S3 key with a double slash is
+  another key) and reports the `=` of a Hive folder as `%3D`; `DeltaTable.table_uri` ends with a
+  slash, and delta-rs 1.6.4 stores and returns `mes=2026-01/...` unencoded, also for an `AddAction`
+  registered with the raw path. The verbose `UNLOAD` manifest's `schema.elements` lists the
+  partition column (`mes`, `character varying`, `max_length` 7) that the files do not have. The
+  Data API answered in 444 ms: the 30 s `PICKED` was transient. `docs/POC.md`, `docs/redshift.md`

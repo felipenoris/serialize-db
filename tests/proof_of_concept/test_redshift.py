@@ -20,8 +20,10 @@ não fixa vão para o relatório da sessão em vez de virarem asserções.
 
 A primeira execução no ambiente alvo, em 2026-09-21, passou um teste e reprovou dez: a sessão
 inteira correu numa transação aberta antes do ``USE``, que a visão ``stv_slices`` negada abortou, e
-cada comando seguinte recebeu ``25P02`` (``docs/POC.md``). O autocommit passou a vir antes do
-primeiro comando, e as dez perguntas esperam a próxima execução.
+cada comando seguinte recebeu ``25P02``. A segunda, no mesmo dia, passou sete e reprovou quatro: a
+URL do manifesto do ``COPY`` levava uma barra dobrada, e ``information_schema.columns`` não enxerga o
+esquema do datashare depois do ``USE`` (``docs/POC.md``). As perguntas do ``COPY`` esperam a
+próxima execução.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import unquote
 
 import boto3
 import duckdb
@@ -97,16 +100,25 @@ def ddl(table: sa.Table) -> str:
 
 
 def write_manifest(location: S3Location, key_suffix: str, table: DeltaTable, month: str | None = None) -> str:
-    """Grava o manifesto do ``COPY`` com os arquivos do snapshot (de um mês, quando informado) e devolve a URI."""
+    """Grava o manifesto do ``COPY`` com os arquivos do snapshot (de um mês, quando informado) e devolve a URI.
+
+    A URL de cada entrada é a pasta da tabela mais o ``path`` da ação ``add``. ``DeltaTable.table_uri``
+    termina em barra, e a barra dobrada fez o ``COPY`` do ambiente alvo responder ``File not found``
+    em 2026-09-21: uma chave S3 com ``//`` é outra chave. O ``path`` pode vir codificado como URL
+    (o protocolo Delta o permite; o delta-rs 1.6.4 grava ``mes=2026-01/...`` sem codificar), e a
+    chave do objeto é a forma decodificada.
+    """
     actions = table.get_add_actions(flatten=True)
     rows = zip(actions.column("path").to_pylist(), actions.column("size_bytes").to_pylist(), actions.column("partition.mes").to_pylist())
 
     # Cada entrada leva a URL do arquivo e o content_length, obrigatório para arquivos Parquet.
+    base = table.table_uri.rstrip("/")
     entries = [
-        {"url": f"{table.table_uri}/{path}", "mandatory": True, "meta": {"content_length": size}}
+        {"url": f"{base}/{unquote(path)}", "mandatory": True, "meta": {"content_length": size}}
         for path, size, partition in rows
         if month is None or partition == month
     ]
+    record(f"redshift.copy.manifest.{key_suffix.rsplit('/', 1)[-1].removesuffix('.json')}", entries[0]["url"] if entries else "(vazio)")
 
     key = f"{location.prefix}/{key_suffix}"
     boto3.client("s3").put_object(Bucket=location.bucket, Key=key, Body=json.dumps({"entries": entries}).encode())
@@ -206,21 +218,33 @@ def test_schema_location_and_use_of_the_share_database(redshift_session: Redshif
 
 
 def test_sqlalchemy_ddl_creates_table(redshift_session: RedshiftSession) -> None:
-    """O DDL do SQLAlchemy cria a tabela no esquema; ``information_schema`` mostra o que o Redshift guardou."""
+    """O DDL do SQLAlchemy cria a tabela no esquema; o cursor descreve as colunas, e as visões de catálogo são leitura."""
     session = redshift_session
     name = session.table("ddl")
     session.execute(ddl(contract_table(name, session.schema_prefix(), month=True, text=True)))
 
-    columns = session.execute(
-        "select column_name, data_type, character_maximum_length, numeric_precision, numeric_scale "
-        "from information_schema.columns where table_schema = %s and table_name = %s order by ordinal_position",
-        (session.schema, name),
-    )
-    assert [column[0] for column in columns] == ["id_operacao", "data_ref", "id_cliente", "valor", "descricao", "mes", "observacao"]
+    # A prova de que a tabela existe com as colunas do contrato vem do próprio cursor, que descreve o
+    # resultado de um select vazio: nenhuma visão de catálogo no caminho.
+    cursor = session.connection.cursor()
+    cursor.execute(f"select * from {session.qualified(name)} limit 0")
+    assert [column[0] for column in cursor.description] == ["id_operacao", "data_ref", "id_cliente", "valor", "descricao", "mes", "observacao"]
 
-    by_name = {column[0]: column[1:] for column in columns}
-    assert by_name["valor"][2:] == (18, 2)
-    record("redshift.ddl.text_column", by_name["observacao"])  # esperado: VARCHAR(256)
+    # information_schema.columns respondeu vazio depois do USE no ambiente alvo (2026-09-21): ela
+    # enxerga só o banco da conexão, como has_schema_privilege. svv_all_columns cruza os bancos; o que
+    # ela guarda de cada coluna (observacao em VARCHAR(256), valor em numeric 18, 2) é leitura.
+    local = session.execute("select column_name from information_schema.columns where table_schema = %s and table_name = %s", (session.schema, name))
+    record("redshift.ddl.information_schema_rows_after_use", len(local))
+    database = session.share_database or session.execute("select current_database()")[0][0]
+    record(
+        "redshift.ddl.svv_all_columns",
+        reading(
+            lambda: session.execute(
+                "select column_name, data_type, character_maximum_length, numeric_precision, numeric_scale "
+                "from svv_all_columns where database_name = %s and schema_name = %s and table_name = %s order by ordinal_position",
+                (database, session.schema, name),
+            )
+        ),
+    )
 
 
 def test_copy_manifest_from_delta_files(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
@@ -313,16 +337,37 @@ def test_copy_varchar_overflow(redshift_session: RedshiftSession, s3_location: S
     record("redshift.copy.varchar_overflow", result)
 
 
-def test_super_and_json_parse(redshift_session: RedshiftSession) -> None:
-    """``SUPER`` recebe texto por ``JSON_PARSE`` e devolve campos por caminho; ``JSON_SERIALIZE`` volta ao texto."""
+def test_super_and_json_parse(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
+    """``SUPER`` recebe texto por ``JSON_PARSE`` e devolve campos por caminho; um documento acima de 65.535 bytes por ``INSERT`` e por ``COPY`` é leitura."""
     session = redshift_session
     name = session.table("eventos")
     session.execute(f"CREATE TABLE {session.qualified(name)} (id BIGINT NOT NULL, meta SUPER)")
     session.execute(f"INSERT INTO {session.qualified(name)} VALUES (1, JSON_PARSE(%s))", ('{"sistema": "A", "ativo": true}',))
 
-    rows = session.execute(f"select meta.sistema, JSON_SERIALIZE(meta) from {session.qualified(name)}")
+    rows = session.execute(f"select meta.sistema, JSON_SERIALIZE(meta) from {session.qualified(name)} where id = 1")
     record("redshift.super.path_and_serialize", rows[0])
     assert json.loads(rows[0][1])["sistema"] == "A"
+
+    # 2. Um documento acima de 65.535 bytes, o teto do VARCHAR e da staging com JSON_PARSE: se SUPER o
+    # recebe por INSERT, a pergunta que resta é o COPY direto. json_size mede o documento guardado.
+    document = json.dumps({"itens": [{"k": i, "texto": "x" * 60} for i in range(1000)]})
+    assert len(document) > 65535
+    qualified = session.qualified(name)
+    inserted = outcome(lambda: session.execute(f"INSERT INTO {qualified} VALUES (2, JSON_PARSE(%s))", (document,)))
+    if inserted == "ok":
+        inserted = f"ok: json_size = {reading(lambda: session.execute(f'select json_size(meta) from {qualified} where id = 2')[0][0])}"
+    record("redshift.super.insert_above_65535", inserted)
+
+    # 3. O mesmo documento por COPY direto de um Parquet com a coluna em texto, sem staging: o caminho
+    # que a etapa 8 usa se o Redshift o aceitar.
+    buffer = io.BytesIO()
+    pq.write_table(pa.table({"id": pa.array([3], pa.int64()), "meta": pa.array([document], pa.string())}), buffer)
+    key = f"{s3_location.prefix}/redshift/super/documento.parquet"
+    boto3.client("s3").put_object(Bucket=s3_location.bucket, Key=key, Body=buffer.getvalue())
+    copied = outcome(lambda: session.execute(f"COPY {qualified} FROM 's3://{s3_location.bucket}/{key}' {session.credentials_clause()} FORMAT AS PARQUET"))
+    if copied == "ok":
+        copied = f"ok: json_size = {reading(lambda: session.execute(f'select json_size(meta) from {qualified} where id = 3')[0][0])}"
+    record("redshift.super.copy_parquet_string_above_65535", copied)
 
 
 def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_location: S3Location, duckdb_connection: duckdb.DuckDBPyConnection) -> None:
@@ -369,6 +414,7 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     entries = manifest["entries"]
     assert sum(entry["meta"]["record_count"] for entry in entries) == 6
     record("redshift.unload.manifest_schema", manifest.get("schema"))
+    record("redshift.unload.files", [entry["url"].removeprefix(f"{destination}/") for entry in entries])
 
     # O rodapé de um arquivo: os tipos físicos, a obrigatoriedade e as estatísticas que a AddAction usa.
     body = s3.get_object(Bucket=s3_location.bucket, Key=entries[0]["url"].removeprefix(f"s3://{s3_location.bucket}/"))["Body"].read()
@@ -418,6 +464,14 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     # convertem e devolvem os valores intactos (sondagem de 2026-09-21, docs/POC.md).
     record("redshift.unload.delta_rs_read", outcome(lambda: DeltaTable(destination).to_pyarrow_table()))
     assert duckdb_connection.execute(f"SELECT count(*) FROM delta_scan('{destination}')").fetchone()[0] == 6
+
+    # Onde o UNLOAD recusa gravar sem ALLOWOVERWRITE: o mesmo prefixo, um prefixo pai com arquivos
+    # abaixo, e um subprefixo novo e vazio dentro de uma pasta com arquivos, que é o <uri>/<execution_id>/
+    # da etapa 5. Leituras: a etapa 5 fixa o destino pelo que elas disserem.
+    parent = s3_location.child("redshift/unload")
+    for label, target in (("same_prefix", f"{destination}/"), ("parent_prefix", f"{parent}/"), ("new_subprefix", f"{destination}/segunda/")):
+        result = outcome(lambda target=target: session.execute(f"UNLOAD ('{select}') TO '{target}' {session.credentials_clause()} FORMAT AS PARQUET PARTITION BY (mes)"))
+        record(f"redshift.unload.destination.{label}", result)
 
 
 def test_data_api_runs_the_statement_and_pages_the_result(redshift_session: RedshiftSession) -> None:

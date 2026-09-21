@@ -4,8 +4,9 @@ A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PL
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
 
 Os itens de S3 estão verificados ([`POC.md`](POC.md)). Os de Redshift estão em
-`tests/proof_of_concept/test_redshift.py`, marcador `redshift`, executado uma vez no ambiente alvo em
-2026-09-21 sem resposta, por uma transação aberta antes do `USE` ([`POC.md`](POC.md)); ele roda com os
+`tests/proof_of_concept/test_redshift.py`, marcador `redshift`, executado duas vezes no ambiente alvo em
+2026-09-21 (às 10:50, uma transação só, abortada; às 11:28, sete passaram e o `COPY ... MANIFEST`
+falhou pela barra dobrada na URL do manifesto, [`POC.md`](POC.md)); ele roda com os
 arquivos sob `SERIALIZE_DB_TEST_S3_ROOT` e as tabelas no esquema de
 `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, no banco de `SERIALIZE_DB_REDSHIFT_SHARE_DATABASE`. O caminho
 de conexão já está fixado: a credencial temporária do workgroup serverless, de
