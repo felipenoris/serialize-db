@@ -67,8 +67,9 @@ A base Delta sobre a qual as etapas 3 a 6 e 8 se desenvolvem sai antes da etapa 
 aceito pelo usuário em 2026-09-21: `scripts/migrate_parquet_to_delta.py` é o rascunho abaixo
 promovido a ferramenta, sobre `serialize_db.schema` ([etapa 1](PLAN-STAGE-1.md)), o `deltalake` e
 o DuckDB diretos, sem as etapas 3 e 4. O que ele faz, por tabela do modelo cliente e por partição:
-`discover_partitions`, `partition_query` com os `CAST` para o contrato (`arrow_schema` do modelo
-cliente dá os tipos, e o DuckDB os recebe pela tabela de tipos de [`schema.md`](schema.md)), a
+`discover_partitions`, `partition_query` com os `CAST` para o contrato (`sql_type(coluna, "duckdb")`
+da etapa 1 dá o tipo de cada `CAST`, e `quoted` cita cada coluna, porque `cad_contratos.to` é
+palavra reservada e a consulta sem aspas falha no DuckDB), a
 conferência do valor do caminho contra `partition_source`, `COPY ... (FORMAT parquet,
 RETURN_STATS)` para `<raiz>/<tabela>/<coluna>=<valor>/` e a `AddAction` por
 `create_write_transaction` (o modo `register`), a retomada pelas partições já presentes e
@@ -143,8 +144,10 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   `skipped`, e o relatório o lista.
 - **`partition_query`** monta o `SELECT` do DuckDB que leva a partição ao contrato:
   `read_parquet('<pasta>/*.parquet', hive_partitioning = false)`, a pasta inteira e nunca a ordem
-  dos nomes; `CAST(<coluna> AS <tipo do contrato no DuckDB>)` por coluna (`BIGINT` nas chaves
-  `int32`, `TIMESTAMP` no `INT96`, que o DuckDB trunca a microssegundos); `'<valor>' AS <coluna de
+  dos nomes; `CAST("<coluna>" AS <tipo>) AS "<coluna>"` por coluna, o tipo por
+  `sql_type(coluna, "duckdb")` e o nome por `quoted` da [etapa 1](PLAN-STAGE-1.md), porque `to` é
+  palavra reservada (`BIGINT` nas chaves `int32`, `TIMESTAMP` no `INT96`, que o DuckDB trunca a
+  microssegundos); `'<valor>' AS <coluna de
   partição>` numa tabela particionada. As colunas `double` passam como estão, sem arredondamento
   (decisão de 2026-09-20).
 - **`initial_load`** cria a tabela (`create_table`), lê as partições já presentes em

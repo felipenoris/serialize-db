@@ -376,6 +376,12 @@ A new lesson adds its story there and its rule here, in the same commit.
   decision survives in another section (the `pc.round` of the initial load, contradicting the
   `Double` decision of 2026-09-20, found only by the full review of 2026-09-21); grep the plan for the
   old rule's vocabulary when a decision lands.
+- **Every identifier the library emits is double-quoted, and a new model's names are read against
+  `duckdb_keywords()` and the Redshift reserved list**: `to` and `timestamp` are client-model columns
+  and reserved words, and the stage 1 draft never met them because its example model was safe
+  (2026-09-21).
+- **A draft calls every input kind its signature accepts**: `cast` promised three kinds and ran on
+  one; the reader path hid `pc.all` returning null on an empty column (2026-09-21).
 
 ## Naming conventions
 
@@ -413,7 +419,7 @@ check are columns, ORM classes and the loanwords `sandbox` and `staging`.
 ## Where the work stands
 
 Read `docs/PLAN.md`, the stage files, `docs/CURRENT_STATE.md`, `docs/POC.md` and
-`docs/OPEN_QUESTIONS.md` before planning a session. Stage 1 began on 2026-09-21 with the client model in `tests/client_model/`; the next session writes `serialize_db.schema` (with `serialize_db.errors`) from the `Interface` and `Rascunhos executados` sections of `docs/PLAN-STAGE-1.md`, then `scripts/migrate_parquet_to_delta.py`, the stage 7 draft on `serialize_db.schema`, `deltalake` and DuckDB (`docs/PLAN-STAGE-7.md`, section "A migração adiantada"): tested on the fixture, then run in the target on the copy of the production base the user creates, after the two measurements that section lists; stage 2 (`serialize_db.sql`) and stages 3, 4 and 6 follow, and stage 7 absorbs the script. The pending API decisions are listed per stage in `docs/OPEN_QUESTIONS.md`, the five of the client model first.
+`docs/OPEN_QUESTIONS.md` before planning a session. Stage 1 began on 2026-09-21 with the client model in `tests/client_model/`; the next session writes `serialize_db.schema` (with `serialize_db.errors`) from the `Interface` and `Rascunhos executados` sections of `docs/PLAN-STAGE-1.md` (the DDL generated from the type table without the dialect packages, every identifier double-quoted, the draft in the module's shape; two proposals await the user there: that DDL, and `String` without length as a violation), then `scripts/migrate_parquet_to_delta.py`, the stage 7 draft on `serialize_db.schema`, `deltalake` and DuckDB (`docs/PLAN-STAGE-7.md`, section "A migração adiantada"): tested on the fixture, then run in the target on the copy of the production base the user creates, after the two measurements that section lists; stage 2 (`serialize_db.sql`) and stages 3, 4 and 6 follow, and stage 7 absorbs the script. The pending API decisions are listed per stage in `docs/OPEN_QUESTIONS.md`, the seven of stage 1 first.
 The plan's unit is the partition (`publish_partition`, `partitions=`, `Execution(partition=...)`),
 never the month. The probe, `tests/conftest.py` and the Redshift suite follow the scripts in
 `examples/`, and `docs/PLAN-STAGE-5.md` and `docs/PLAN-STAGE-8.md` carry their consequences. The

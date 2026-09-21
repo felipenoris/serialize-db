@@ -152,7 +152,8 @@ class RedshiftEngine:
   do `boto3` quando não está; ela é chamada dentro de cada comando, e o texto do comando passa por
   `mask` antes de qualquer log, relatório ou exceção.
 - **`ingest`** grava `copy_manifest` da versão fixada em `staging/<execution_id>/<tabela>.manifest`,
-  cria a staging `exec_<id>_<tabela>_staging` por `ddl(table, "redshift")` sem a coluna de partição,
+  cria a staging `exec_<id>_<tabela>_staging` por `staging_ddl`, o `ddl` da [etapa 1](PLAN-STAGE-1.md)
+  sem a coluna de partição, escrito nesta etapa sobre `column_ddl` e `quoted`,
   roda `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` (a proposta da [etapa 8](PLAN-STAGE-8.md):
   um manifesto pode listar arquivos anteriores a uma coluna nova) e um
   `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'` por partição (ou `SELECT *` numa tabela sem partição), com `JSON_PARSE` nas colunas `SUPER`.

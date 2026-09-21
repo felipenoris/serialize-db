@@ -84,7 +84,8 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 - **`reconcile_published`** repete o diff aditivo com `ALTER TABLE ADD COLUMN <coluna> <tipo>` no
   fim da tabela, porque o `COPY` é posicional e recusa um arquivo com colunas a menos
   (`Unmatched number of columns`, 2026-09-21), e a staging nasce do esquema Delta; um diff destrutivo
-  devolve `DROP TABLE IF EXISTS` mais o DDL do contrato com `keys=True` (chave primária informativa),
+  devolve `DROP TABLE IF EXISTS` mais `published_ddl`, o `ddl` da [etapa 1](PLAN-STAGE-1.md) com a
+  chave primária informativa, escrito nesta etapa sobre `column_ddl` e `quoted`,
   e a publicação seguinte recarrega todas as partições.
 - **`publication_status`** compara a versão em `serialize_db_publications` com a atual e lista as
   partições pendentes por `version_diff`, para `serialize-db publish --status`.

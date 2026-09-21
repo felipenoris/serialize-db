@@ -377,13 +377,17 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   desde a versão fixada e aborta com `ExecutionConflict` quando entrou, para que duas execuções
   abertas na mesma versão não publiquem a mesma faixa; um commit só de metadados ou de manutenção
   (`reconcile`, `compact`, `vacuum`) passa e atualiza a versão fixada (`test_parallel.py`).
+- Todo identificador que a biblioteca emite, tabela ou coluna, vai entre aspas duplas: `to`, coluna
+  de `cad_contratos`, é palavra reservada no DuckDB e no Redshift, e `timestamp`, coluna de
+  `cad_lancamentos`, no Redshift; sem aspas, `CREATE TABLE t (to VARCHAR(2))` falha no DuckDB
+  (2026-09-21, `PLAN-STAGE-1.md`, `POC.md`).
 
 ## Organização do pacote
 
 | Módulo | Etapa | Conteúdo |
 | --- | --- | --- |
 | `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
-| `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto, opções físicas, cast seguro, arquivos gerados. |
+| `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto gerado pela tabela de tipos com todo identificador entre aspas, opções físicas, cast seguro, arquivos gerados. |
 | `serialize_db.sql` | 2 | O texto SQL por dialeto a partir de statements Core: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos atrás de uma interface: URIs, leitura e escrita condicional, cópia, listagem, `storage_options` e o secret do DuckDB. |
 | `serialize_db.delta` | 3 | A camada Delta: criação, publicação por partição, registro de arquivos, reconciliação, reescrita, manifesto, diferença de versões, snapshots, `vacuum`, compactação, cópia profunda, exportação. |
@@ -395,9 +399,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.cli` | 1 a 9 | `serialize-db run`, `schema`, `sql`, `audit`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`: cada subcomando entra com a etapa que entrega a primitiva por trás dele (`schema` na 1, `sql` na 2), e a etapa 6 monta o `run` e o despacho comum. |
 
 Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`, `deltalake`, `duckdb`,
-`pyarrow` e `boto3`, nas versões fixadas pelos documentos, mais `duckdb-engine` e
-`sqlalchemy-redshift`, que saem do grupo `dev` das suítes de estudo para as de execução enquanto
-houver compilação em tempo de execução; `redshift-connector` entra no extra `redshift`, e `sqlglot`
+`pyarrow` e `boto3`, nas versões fixadas pelos documentos, sem `duckdb-engine` nem
+`sqlalchemy-redshift` enquanto etapa alguma compilar pelo dialeto em tempo de execução (a etapa 1
+gera o DDL pela tabela de tipos, e a etapa 2 decide o `render`), os dois no grupo `dev` das suítes
+de estudo; `redshift-connector` entra no extra `redshift`, e `sqlglot`
 no grupo `dev`; o pandas fica no grupo `dev`, para o teste do ciclo com `ArrowDtype`, porque a
 biblioteca não o importa. `prepare_offline.sh` passa a instalar os extras (`--all-extras`) e é rodado
 de novo a cada mudança.
@@ -434,7 +439,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
 | 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão, a escrita no datashare e os dois comandos com manifesto provados por `examples/`, e a suíte `-m redshift` limpa duas vezes seguidas no ambiente alvo (2026-09-21, 13:35 e 13:39 UTC). | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
-| 1. `schema` | O modelo cliente, a cópia corrigida do modelo de referência; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo cliente. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
+| 1. `schema` | O modelo cliente, a cópia corrigida do modelo de referência; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo cliente. | O DDL de cada tabela executa no DuckDB em memória; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |
 | 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação da partição. | O pipeline de exemplo roda em memória sobre um Delta local; a auditoria reprova a chave repetida entre a partição nova e uma já publicada. |

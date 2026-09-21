@@ -463,6 +463,11 @@ COMPOUND SORTKEY (data_ref, id_operacao);
 COMMENT ON TABLE operacoes IS 'Operações do mês';
 ```
 
+`TO` e `TIMESTAMP` estão na lista de palavras reservadas do Redshift, e são colunas do modelo
+cliente: `examples/redshift_manifest.py` cria `cad_contratos` com `"to"` entre aspas, o dialeto do
+SQLAlchemy cita `"to"` e `"timestamp"` sozinho, inclusive em `DISTKEY` e `SORTKEY`, e a biblioteca
+cita todo identificador que emite ([`schema.md`](schema.md)).
+
 Sintaxe, segundo a referência:
 
 ```text

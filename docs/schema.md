@@ -85,13 +85,13 @@ ART precisam caber em memória durante a criação.
 | `Boolean` | `bool` | `boolean` | `BOOLEAN` | `BOOLEAN` | |
 | `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Descarregar e recarregar pelo Redshift pode perder precisão. O modelo de referência usa `Double` em toda coluna numérica (decisão de 2026-09-20); `Numeric(18, 2)` nas colunas contábeis é a melhoria futura. |
 | `Numeric(p, s)` | `decimal128(p, s)` | `decimal(p, s)` | `DECIMAL(p, s)` | `DECIMAL(p, s)` | `p` até 38. O delta-rs e o DuckDB gravam `DECIMAL(18, 2)` no tipo físico `INT64`; o PyArrow, em `FIXED_LEN_BYTE_ARRAY`. O `COPY` do `INT64` passou no ambiente alvo em 2026-09-21, com a soma conferida ([`POC.md`](POC.md)). |
-| `String(n)` | `string` | `string` | `VARCHAR` | `VARCHAR(n)` | `n` em bytes no Redshift; auditoria de tamanho. |
+| `String(n)` | `string` | `string` | `VARCHAR(n)` | `VARCHAR(n)` | `n` em bytes no Redshift; auditoria de tamanho. O DuckDB aceita o comprimento e o ignora (`information_schema` lê `VARCHAR`). |
 | `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | `TEXT` no Redshift vira `VARCHAR(256)`. |
 | `Date` | `date32` | `date` | `DATE` | `DATE` | |
 | `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | O `INT96` da base de origem, obsoleto no formato Parquet, vira `INT64` de microssegundos na carga inicial, e o `COPY` desse `INT64` passou no ambiente alvo em 2026-09-21. Cast explícito de nanossegundos (padrão do pandas) para microssegundos; o delta-rs aceita nanossegundos e grava microssegundos em silêncio. `timestamp_ntz` exige o recurso `timestampNtz` (leitor 3, escritor 7), que o delta-rs habilita ao gravar e o DuckDB lê como `TIMESTAMP`. O `UNLOAD` do Redshift traz o `INT96` de volta na exportação, e um arquivo desses registrado na tabela `timestamp_ntz` é lido como `timestamp[us]` pelos dois leitores, com os valores intactos e sem estatística de mínimo e máximo (2026-09-21, [POC.md](POC.md)). |
 | `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Gravar sempre em UTC; o `timestamp` do Delta é ajustado a UTC, e um fuso diferente entra como o mesmo instante. O `UNLOAD` descarta o fuso. |
-| `Uuid` | `string` | `string` | `VARCHAR` | `VARCHAR(36)` | O Redshift não tem tipo UUID. |
-| `JSON().with_variant(SUPER(), "redshift")` | `string` | `string` | `JSON` | `SUPER` | Texto JSON é a forma de troca, sem a extensão `arrow.json`; a validação é do DuckDB na carga e do `JSON_PARSE` no Redshift. Detalhes na seção seguinte. |
+| `Uuid` | `string` | `string` | `VARCHAR(36)` | `VARCHAR(36)` | O Redshift não tem tipo UUID; o contrato guarda o texto nos dois motores. |
+| `JSON()` | `string` | `string` | `JSON` | `SUPER` | Texto JSON é a forma de troca, sem a extensão `arrow.json`; a validação é do DuckDB na carga e do `JSON_PARSE` no Redshift. Detalhes na seção seguinte. |
 | `LargeBinary`, `ARRAY`, `Interval` | | | | | Fora do contrato até haver um caso de uso. |
 
 ### Campos JSON
@@ -101,7 +101,7 @@ tratamento em cada camada, verificado em 2026-09-19:
 
 | Camada | Tipo | Comportamento |
 | --- | --- | --- |
-| Modelo | `sa.JSON().with_variant(SUPER(), "redshift")`, com `SUPER` de `sqlalchemy_redshift.dialect`. | O DDL compila `JSON` no DuckDB e `SUPER` no Redshift; `isinstance(sa_type, sa.JSON)` continua verdadeiro, e `arrow_type` o reconhece. |
+| Modelo | `sa.JSON()`. | `sql_type` emite `JSON` no DuckDB e `SUPER` no Redshift por `isinstance(sa_type, sa.JSON)`, que continua verdadeiro num `sa.JSON().with_variant(SUPER(), "redshift")` (com `SUPER` de `sqlalchemy_redshift.dialect`), a forma que um `create_all` do próprio cliente no Redshift precisa; `arrow_type` reconhece as duas. |
 | Arrow | `pa.string()`. A extensão `arrow.json` (`pa.json_(pa.string())`) fica fora do contrato (decisão de 2026-09-20): o dtype dela no pandas com backend pyarrow não tem os kernels de `.str`, e nenhum motor a devolve. | Um `dict` do pandas vira `struct` com a união das chaves; o cliente serializa com `json.dumps` antes de montar a tabela, e `cast` recusa `struct`, `list` e `map`. O Arrow não valida o texto. |
 | Delta | `string`, com `ARROW:extension:name = arrow.json` nos metadados do campo quando o esquema Arrow traz a extensão. | O delta-rs grava o arquivo com o tipo lógico `String`; `schema().to_arrow()` devolve `string` simples. |
 | Parquet | `BYTE_ARRAY` com tipo lógico `JSON` quando gravado pelo PyArrow ou pelo DuckDB, `String` quando gravado pelo delta-rs. | Os dois entram na mesma tabela Delta e são lidos pelos dois leitores. |
@@ -118,6 +118,11 @@ o texto.
   ([`sqlalchemy.md`](sqlalchemy.md)).
 - Funções com nomes ou semânticas diferentes nos dois bancos ganham uma regra `@compiles` por dialeto.
   A lista sai do código atual do pipeline.
+- Todo identificador que a biblioteca emite vai entre aspas duplas: `to` é palavra reservada no
+  DuckDB (`duckdb_keywords()` a classifica `reserved`, e `CREATE TABLE t (to VARCHAR(2))` falha) e
+  no Redshift, e `timestamp` no Redshift, as duas colunas do modelo cliente (2026-09-21,
+  [`PLAN-STAGE-1.md`](PLAN-STAGE-1.md)). Os nomes do contrato são minúsculos, e os dois motores
+  leem o nome entre aspas como o mesmo nome sem aspas.
 - O DuckDB aceita construções do PostgreSQL ausentes no Redshift, como arrays e `ON CONFLICT`. Uma
   consulta que roda no DuckDB pode falhar no Redshift, então as consultas do pipeline precisam de
   testes de integração no Redshift com uma amostra pequena.

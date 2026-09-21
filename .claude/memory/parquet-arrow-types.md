@@ -47,3 +47,7 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   `duckdb_engine` DDL spells `NUMERIC(18, 2)`, `DOUBLE PRECISION` and `TEXT`, which DuckDB records as
   `DECIMAL(18,2)`, `DOUBLE` and `VARCHAR`. A column's default `autoincrement` is the string `"auto"`.
   `docs/POC.md`, `docs/PLAN-STAGE-1.md`, `docs/PLAN-STAGE-5.md`
+- `pc.all` over an empty array returns null, so a check written as `not pc.all(...).as_py()` refuses
+  an empty column: the reader path of `cast` derives its output schema from
+  `reader.schema.empty_table()` and failed on it until the two checks got `min_count=0`, which makes
+  the empty column pass (2026-09-21). `docs/PLAN-STAGE-1.md`, `docs/POC.md`

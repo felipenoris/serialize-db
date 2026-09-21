@@ -38,6 +38,19 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   and `insert` (2026-09-20, Redshift dialect). `docs/sqlalchemy.md`,
   `tests/proof_of_concept/test_sqlalchemy.py`
 - The `DEFERRABLE` and `SERIAL` behavior of each dialect is in `docs/sqlalchemy.md` and `docs/duckdb.md`.
+- Two client-model columns are reserved words: `to` (`cad_contratos`) in DuckDB (`duckdb_keywords()`
+  category `reserved`; `CREATE TABLE t (to VARCHAR(2))` is a parser error) and in Redshift, and
+  `timestamp` (`cad_lancamentos`) in Redshift (`column_name` in DuckDB, accepted bare). Both
+  SQLAlchemy dialects quote `"to"` on their own in DDL and DML, the Redshift one also `"timestamp"`,
+  and `redshift_distkey="to"` renders `DISTKEY ("to") SORTKEY ("to", data)`; the library's own
+  text generation quotes every identifier (2026-09-21). `docs/PLAN-STAGE-1.md`, `docs/POC.md`
+- Stage 1 generates the DDL from the type table without the dialect packages (proposed on
+  2026-09-21, awaiting the user): `sql_type` spells `DECIMAL(p, s)`, `VARCHAR(n)` on both engines
+  (DuckDB ignores the length), `VARCHAR` / `VARCHAR(65535)` for `Text`, `VARCHAR(36)` for `Uuid`,
+  `JSON` / `SUPER`, `DOUBLE` / `DOUBLE PRECISION`, `TIMESTAMP` / `TIMESTAMPTZ`; DuckDB read the
+  fully quoted `CREATE TABLE` back as `DECIMAL(18,2)`, `TIMESTAMP WITH TIME ZONE`, `VARCHAR` and
+  `JSON`. The `with_variant(SUPER(), "redshift")` on a JSON column stays optional: `isinstance(kind,
+  sa.JSON)` holds with or without it. `docs/PLAN-STAGE-1.md`, `docs/schema.md`
 
 ## SQL tooling
 

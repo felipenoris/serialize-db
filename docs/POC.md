@@ -764,6 +764,27 @@ além do que já estava medido:
 - Uma execução que confere a versão por igualdade abortaria depois de um `vacuum`, um `compact` ou
   um `reconcile` de outra sessão; `Execution.publish` passou a conferir por `version_diff`
   ([etapa 6](PLAN-STAGE-6.md)).
+- Duas colunas do modelo cliente são palavras reservadas, lidas em 2026-09-21 no macOS com o DuckDB
+  1.5.5: `duckdb_keywords()` classifica `to` (`cad_contratos`) como `reserved`, `timestamp`
+  (`cad_lancamentos`) como `column_name` e `data` como `unreserved`; `CREATE TABLE t1 (to
+  VARCHAR(2))` falha com `Parser Error: syntax error at or near "to"`, e `"to"`, `timestamp` e
+  `"timestamp"` passam. A lista de palavras reservadas do Redshift tem `TO` e `TIMESTAMP`, e
+  `examples/redshift_manifest.py` já cita `"to"`. O `duckdb_engine` e o `sqlalchemy-redshift` citam
+  `"to"` no `CREATE TABLE` e no `select` (`cad_contratos."to"`), o do Redshift também `"timestamp"`,
+  e `redshift_distkey="to"` sai como `DISTKEY ("to") SORTKEY ("to", data)`. O DDL do modelo
+  cliente compilado pelo `duckdb_engine` executou as 12 tabelas no DuckDB em memória (23 colunas
+  `BIGINT`, 24 `VARCHAR`, 10 `DATE`, 10 `DOUBLE`, 6 `INTEGER`, 3 `BOOLEAN`, 1 `TIMESTAMP`). A
+  biblioteca cita todo identificador que emite ([etapa 1](PLAN-STAGE-1.md)).
+- O rascunho da etapa 1 na forma do módulo, com o DDL gerado pela tabela de tipos e sem dialeto,
+  executou no DuckDB em memória um `CREATE TABLE` com os 15 tipos do contrato e os nomes entre
+  aspas, `"{prefix}cad_operacoes"` inclusive: `information_schema.columns` leu `DECIMAL(18, 2)`
+  como `DECIMAL(18,2)`, `TIMESTAMPTZ` como `TIMESTAMP WITH TIME ZONE`, `VARCHAR(100)` e
+  `VARCHAR(36)` como `VARCHAR`, e `JSON` como `JSON`.
+- `pc.all` de uma coluna vazia devolve nulo: o caminho do leitor de `cast`, que deriva o esquema de
+  saída de `reader.schema.empty_table()`, recusou a tabela vazia como `timestamp com hora numa
+  coluna Date` na primeira execução do rascunho, que até então só chamava `cast` com um lote;
+  `pc.all(..., min_count=0)` devolve verdadeiro para a coluna vazia, e o leitor de dois lotes saiu
+  com as quatro linhas.
 
 ## O que a primeira execução da suíte Redshift mostrou
 
