@@ -11,15 +11,15 @@ foi medido em [`POC.md`](POC.md).
   restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária
   (`TEMP` é verdadeiro no banco da conexão, e `CREATE` não) custa o sandbox morrer com a sessão. A
   [etapa 5](PLAN-STAGE-5.md) decide quando o primeiro pipeline rodar lá.
-- **O que `has_schema_privilege` e `svv_table_info` respondem depois do `USE`.** Antes dele as duas
-  enxergam só o banco local; se passam a responder pelo esquema do datashare depois dele ninguém
-  leu. A execução de 2026-09-21 não as leu porque `RS-19` reprovou pelo critério errado:
-  `current_database()` continuou `dev` depois do `USE`, que vale mesmo assim (confirmação do usuário
-  no mesmo dia, e os exemplos que rodaram). O critério de `RS-19` passou a ser a resolução de um
-  nome em duas partes, e a próxima execução no ambiente alvo lê `RS-5` e `RS-8`. A suíte de
-  2026-09-21 chamou `has_schema_privilege('sbx_aco_decon', 'CREATE')` depois do `USE` sem erro do
-  servidor, e o valor ficou na saída do terminal, não no JSON ([`POC.md`](POC.md)); desde então a
-  suíte o registra como `redshift.has_schema_privilege_create`.
+- **O que `svv_table_info` responde depois do `USE`, e se `has_schema_privilege` repete o `false`.**
+  Antes do `USE` as duas enxergam só o banco local. A execução do probe de 2026-09-21 não as leu
+  porque `RS-19` reprovou pelo critério errado: `current_database()` continuou `dev` depois do
+  `USE`, que vale mesmo assim (confirmação do usuário no mesmo dia, e os exemplos que rodaram); o
+  critério passou a ser a resolução de um nome em duas partes. A suíte, no mesmo dia, leu
+  `has_schema_privilege('sbx_aco_decon', 'CREATE')` depois do `USE`: `false`, sem erro, no esquema
+  em que o `CREATE TABLE` passa ([`POC.md`](POC.md)); ela o registra como
+  `redshift.has_schema_privilege_create`, e a próxima execução no ambiente alvo repete a leitura e
+  lê `RS-8`.
 - **A coluna de partição no `schema` do manifesto verboso.** O `schema.elements` do manifesto do
   `UNLOAD` traz nome e tipo de cada coluna, e é a conferência que `register_files` faz antes do
   commit ([`redshift.md`](redshift.md)). Se ele lista a coluna de partição, que o `PARTITION BY`

@@ -359,7 +359,10 @@ never the month. The probe, `tests/conftest.py` and the Redshift suite follow th
 five probes ran in the target on 2026-09-21 (reports in `secrets/probes-aws-bn/`, outside git,
 interpreted in `docs/POC.md`): no proxy, S3 by gateway endpoint, IAM and KMS unreachable, 2 vCPUs
 and 7.6 GiB; `RS-19` failed on the wrong criterion, `current_database()` does not reflect the `USE`
-(user confirmation), the probe now resolves a two-part name, and `RS-5` and `RS-8` remain unread.
+(user confirmation), the probe now resolves a two-part name, `RS-5` was read `false` by the suite (`has_schema_privilege`
+does not prove the privilege on the datashare schema; the `CREATE` does), and `RS-8` remains unread.
+The Redshift suite ran once in the target on 2026-09-21 (1 passed, 10 failed: one transaction opened
+before the `USE`, fixed in `tests/conftest.py`); the two runs stage 0 requires are still ahead.
 
 The client boundary's reference sketches `BatchStream` and `Loader` are in
 `tests/proof_of_concept/test_parallel.py`, and the Redshift `fetchmany` question in

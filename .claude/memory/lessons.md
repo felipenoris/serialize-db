@@ -205,4 +205,6 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   failed with 25P02. The JSON said "10 failed" and nothing else, and the first attempt lost the JSON
   because the report folder did not exist. Autocommit now comes before the `USE`, the cleanup rolls
   back first, the report records each failure's message and creates its folder, and a fake driver
-  fixes the order in `tests/test_conftest_redshift.py`.
+  fixes the order in `tests/test_conftest_redshift.py`. The terminal output the user pasted supplied
+  the two facts the JSON lacked: the passing test was `fetchmany`, and the first test failed on
+  `has_schema_privilege` answering `false` after the `USE`.

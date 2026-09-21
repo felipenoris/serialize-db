@@ -729,12 +729,15 @@ aborted, commands ignored until end of transaction block`. Os exemplos não pass
 `redshift_manifest.py` liga o autocommit antes do `USE`, e `redshift_copy_unload.py` não encontrou
 erro algum dentro da sua transação.
 
-Qual dos dois primeiros testes reprovou, o JSON não diz, porque ele registrava só a contagem. As
-leituras do terceiro teste (`current_database()`, `svv_redshift_databases`, `svv_all_schemas`) foram
-gravadas, então até ele nenhum comando falhou no servidor: `has_schema_privilege('sbx_aco_decon',
-'CREATE')` respondeu sem erro depois do `USE`, com `true` (o primeiro teste passou) ou com outro valor
-(a asserção reprovou). A saída do terminal decide, e o JSON passou a levar a mensagem de cada teste
-reprovado (`failed.<teste>`).
+O JSON registrava só a contagem; a saída do terminal, colada pelo usuário, completou o quadro. O
+teste que passou foi `test_cursor_fetchmany_feeds_record_batches`: cinco linhas em fatias de duas,
+cada fatia um `RecordBatch` com `int64`, `decimal128(18, 2)` e `date32` (a memória numa consulta
+grande continua por medir, [etapa 5](PLAN-STAGE-5.md)). O primeiro teste reprovou por asserção,
+`assert False is True`: `has_schema_privilege('sbx_aco_decon', 'CREATE')` respondeu `false` depois do
+`USE`, sem erro, no esquema em que o `CREATE TABLE` dos exemplos passou. É a leitura `RS-5`, numa
+execução só: a função não responde pelo privilégio num esquema de datashare, a biblioteca não a usa,
+e a prova do privilégio é o próprio `CREATE`. Os outros nove reprovaram com `25P02`. Desde então o
+JSON leva a mensagem de cada teste reprovado (`failed.<teste>`).
 
 **O que a execução respondeu**, apesar das reprovações:
 
@@ -756,6 +759,6 @@ reprovado (`failed.<teste>`).
 `rollback` quando encontra uma transação aberta; `has_schema_privilege` deixou de ser asserção no
 primeiro teste e virou a leitura `redshift.has_schema_privilege_create`, porque é a pergunta `RS-5`;
 o `conftest` cria a pasta do relatório e grava a mensagem de cada teste reprovado;
-`tests/test_conftest_redshift.py` fixa a ordem com um `redshift_connector` fabricado. As dez
-perguntas da [etapa 0](PLAN-STAGE-0.md) continuam sem resposta até a próxima execução, a primeira das
-duas que a etapa exige.
+`tests/test_conftest_redshift.py` fixa a ordem com um `redshift_connector` fabricado. As perguntas
+da [etapa 0](PLAN-STAGE-0.md) continuam sem resposta até a próxima execução, a primeira das duas que
+a etapa exige, exceto a leitura de `has_schema_privilege`, que a segunda execução repete.

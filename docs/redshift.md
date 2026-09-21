@@ -105,8 +105,12 @@ e não por essa função. `svv_redshift_databases` diz o tipo de
 cada banco (`local` ou `shared`) e o nível de isolamento; `svv_all_schemas` diz em que banco está
 cada esquema. `has_schema_privilege` e `svv_table_info` enxergam o banco da sessão: antes do `USE`,
 o local, e num esquema compartilhado quem concede `USAGE` e `CREATE` é o produtor e a lista de
-tabelas vem de `svv_all_tables`, que cruza bancos; o que as duas respondem depois do `USE` ainda não
-foi lido, e `probes/redshift.py` (`RS-5`, `RS-8`) o lê como leitura, sem reprovar.
+tabelas vem de `svv_all_tables`, que cruza bancos. Depois do `USE`,
+`has_schema_privilege('sbx_aco_decon', 'CREATE')` respondeu `false`, sem erro, no esquema em que o
+`CREATE TABLE` passa (suíte de 2026-09-21 no ambiente alvo, uma leitura, [`POC.md`](POC.md)): a
+função não serve de teste do privilégio num esquema de datashare, e a prova é o próprio `CREATE`. O
+que `svv_table_info` responde depois do `USE` ainda não foi lido; `probes/redshift.py` (`RS-5`,
+`RS-8`) lê as duas como leitura, sem reprovar.
 
 Os objetos de um datashare só aceitam escrita quando o produtor concede `INSERT`, `CREATE` e os
 demais privilégios ao datashare, e o consumidor precisa atender três requisitos:
