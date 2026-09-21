@@ -236,7 +236,10 @@ SELECT valor::DECIMAL(18, 2), '12:30' FROM t WHERE k = :k
 ## Decisões pendentes
 
 - **[decisão] Aspas duplas nos identificadores do texto gerado.** `bind` preserva só literais entre
-  aspas simples; um identificador entre aspas duplas que contenha `:nome` seria reescrito. O
-  contrato não tem identificador assim, e a alternativa é estender a expressão a `"..."`.
+  aspas simples; um identificador entre aspas duplas que contenha `:nome` seria reescrito. O texto
+  gerado tem identificadores entre aspas: o DDL da [etapa 1](PLAN-STAGE-1.md) cita todos, e os dois
+  dialetos citam `"to"` e o do Redshift `"timestamp"`, as duas colunas reservadas do modelo
+  cliente (`cad_contratos."to"` num `select` compilado em 2026-09-21). O contrato não tem
+  identificador com `:`, e a alternativa é estender a expressão a `"..."`.
 - **[decisão] O `sqlglot` no grupo `dev`** para o teste opcional que analisa o texto do Redshift; ele
   só entra depois de um ensaio em venv avulsa, pela regra de dependências.

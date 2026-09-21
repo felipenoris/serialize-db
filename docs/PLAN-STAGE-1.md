@@ -5,17 +5,17 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 
 O módulo `serialize_db.schema` deriva dos modelos tudo o que os outros módulos precisam saber sobre
 uma tabela. O modelo de referência de `tests/reference_model/`, o modelo SQLAlchemy da base original
-em Parquet particionado, fica como está (decisão do usuário de 2026-09-21); a etapa começa pelo
-modelo cliente, a cópia dele em `tests/client_model/` (escrita em 2026-09-21: o modelo de dados
-que o código cliente apresenta para usar a biblioteca) corrigida como a biblioteca cliente o
-escreveria: `Base` importável de um módulo só, cada tabela declarada uma vez, `BigInteger` nas chaves primárias inteiras
-e nas colunas que as referenciam, `autoincrement=False` nessas chaves, chaves estrangeiras sem
-`DEFERRABLE`, a coluna de partição `data_str` (`String(10)`, `AAAA-MM-DD` de `data`;
-`data_base_str` de `data_base` em `cad_lancamentos`) nas quatro tabelas particionadas, comentários
-de tabela e de coluna, e `Table.info["serialize_db"]` com `partition_by`, `partition_source`,
-`sort_key` e `redshift`, como em `schema.md`; as colunas numéricas continuam `Double` (as decisões
-de 2026-09-20 estão nas premissas de [`PLAN.md`](PLAN.md)). `String(n)` leva o comprimento tirado
-das leituras, com folga; os índices não únicos e o `sqlite_strict` do original ficam de fora,
+em Parquet particionado, fica como está (decisão do usuário de 2026-09-21); o modelo cliente, a
+cópia dele em `tests/client_model/` (decisão do usuário de 2026-09-21: o modelo de dados que o
+código cliente apresenta para usar a biblioteca), leva as correções que a biblioteca cliente faria:
+`Base` importável de um módulo só, cada tabela declarada uma vez, `BigInteger` nas chaves primárias
+inteiras e nas colunas que as referenciam, `autoincrement=False` nessas chaves, chaves estrangeiras
+sem `DEFERRABLE`, a coluna de partição `data_str` (`String(10)`, `AAAA-MM-DD` de `data`;
+`data_base_str` de `data_base` em `cad_lancamentos`) no fim das quatro tabelas particionadas,
+comentários de tabela e de coluna, e `Table.info["serialize_db"]` com `partition_by`,
+`partition_source` e `sort_key`, como em `schema.md`; as colunas numéricas continuam `Double` (as
+decisões de 2026-09-20 estão nas premissas de [`PLAN.md`](PLAN.md)). `String(n)` leva o comprimento
+tirado das leituras, com folga; os índices não únicos e o `sqlite_strict` do original ficam de fora,
 porque motor algum da biblioteca os usa; `redshift` fica ausente de `Table.info` (distribuição
 `AUTO`) até a decisão. `tests/test_client_model.py` confere a cópia contra o original: as tabelas e
 as colunas na mesma ordem, os tipos e as chaves mudados só onde previsto, sem `DEFERRABLE`,
@@ -34,38 +34,68 @@ modelo, sem nulo algum nos dados; o modelo prevalece. A origem tem duas tabelas 
 contrato: `data_str` deriva de `data` em `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao`,
 e `data_base_str` de `data_base` em `cad_lancamentos`.
 
+O que resta da etapa é o pacote: `serialize_db.errors` com `ContractError`, `serialize_db.schema`,
+o subcomando `serialize-db schema`, `tests/test_schema.py` e os arquivos gerados em
+`tests/client_model/schema/`. A migração adiantada ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), seção "A
+migração adiantada") vem logo depois e usa cinco primitivas: `check_models` (o modelo aprovado
+antes da carga), `arrow_schema` e `sql_type` (os `CAST` da consulta de cada partição),
+`delta_schema` (o `DeltaTable.create`) e `table_options` (a coluna de partição, a origem dela e a
+`sort_key`); elas vêm primeiro no módulo, e `cast`, `ddl` e os arquivos gerados fecham a etapa. A
+`sort_key` e os tipos do modelo cliente ficam decididos antes da migração, porque mudá-los depois é
+reescrever o Delta.
+
+## Os identificadores entre aspas
+
+Duas colunas do modelo cliente são palavras reservadas: `to`, de `cad_contratos`, no DuckDB
+(`duckdb_keywords()` a classifica `reserved`, e `CREATE TABLE t (to VARCHAR(2))` falha com `Parser
+Error: syntax error at or near "to"`) e no Redshift; e `timestamp`, de `cad_lancamentos`, no
+Redshift (no DuckDB ela é `column_name`, aceita sem aspas). `examples/redshift_manifest.py` já cria
+`cad_contratos` com `"to"` entre aspas. Todo identificador que a biblioteca emite, tabela ou coluna,
+vai entre aspas duplas: no DDL desta etapa, na consulta da migração adiantada, no
+`INSERT ... BY NAME` da [etapa 4](PLAN-STAGE-4.md), nas listas de colunas do `COPY` e nas consultas
+do `UNLOAD` da [etapa 5](PLAN-STAGE-5.md). Os dois dialetos do SQLAlchemy citam `"to"` sozinhos, e o
+do Redshift também `"timestamp"`, inclusive em `DISTKEY` e `SORTKEY` (leituras de 2026-09-21,
+[`POC.md`](POC.md)); o texto gerado sem dialeto cita tudo por `quoted`. Os nomes do contrato são
+minúsculos, e os dois motores leem o nome entre aspas como o mesmo nome sem aspas.
+
 | Primitiva | O que faz |
 | --- | --- |
-| `arrow_schema(table)` | O `pa.Schema` do `Table`: os tipos da tabela de `schema.md`, a nulidade, o comentário de cada coluna em `metadata` do campo, `PARQUET:field_id`; um campo JSON é `string`, sem a extensão `arrow.json`. |
+| `arrow_type(column)` | O `pa.DataType` da coluna pela tabela de tipos de `schema.md`: `Numeric(p, s)` em `decimal128(p, s)`, `DateTime` em `timestamp[us]` (`tz=UTC` com fuso), os demais por `isinstance` na ordem que põe `BigInteger` e `SmallInteger` antes de `Integer` e `Text` antes de `String`; `Float`, `LargeBinary`, `ARRAY` e `Interval` são `ContractError`, com tabela e coluna. |
+| `arrow_schema(table)` | O `pa.Schema` do `Table`: um campo por coluna, com a nulidade, o comentário em `metadata` do campo, `PARQUET:field_id` pela posição, e o nome da tabela em `serialize_db_table`; um campo JSON é `string`, sem a extensão `arrow.json`. |
 | `delta_schema(table)` | O `deltalake.Schema` derivado do Arrow: `decimal(18,2)`, `timestamp_ntz` para `DateTime` sem fuso e `timestamp` para o com fuso, `string` para JSON e UUID, comentários preservados. |
-| `ddl(table, dialect, prefix="", keys=False)` | `CREATE TABLE` para `duckdb` ou `redshift`: sem `DEFERRABLE` nem `Identity`, `CHECK` só no DuckDB, chaves só com `keys=True` (as tabelas publicadas da [etapa 8](PLAN-STAGE-8.md)), `SORTKEY`, `DISTSTYLE` e `DISTKEY` no Redshift, `Text` como `VARCHAR(65535)`, `Uuid` como `VARCHAR(36)`, `JSON` como `SUPER`; `prefix` renomeia a tabela para o sandbox. |
-| `table_options(table)` | O `TableOptions` (`partition_by`, `partition_source`, `sort_key`, `redshift`, `keys`) lido de `Table.info["serialize_db"]` com os padrões da biblioteca: tabela sem partição quando `partition_by` está ausente, uma coluna de partição no máximo, `String(10)`, derivada por `strftime(partition_source, '%Y-%m-%d')`, e as chaves do próprio modelo, `table.primary_key` e os `UniqueConstraint`; `keys` só acrescenta uma chave de negócio ou exclui uma delas, sempre de forma explícita. |
-| `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(21, 2)`; recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` e nulo em coluna `NOT NULL`, com a mensagem que diz o que o cliente faz antes de chamar. |
-| `check_models(metadata)` | A lista de violações do contrato nos modelos: tipo fora da tabela de tipos, `autoincrement` em chave inteira, `DEFERRABLE`, `Identity`, `partition_by` sem a coluna, sem `partition_source` ou com a coluna fora de `String(10)`, tabela sem chave primária e sem `keys`, coluna sem comentário. Vazia nos modelos corrigidos. |
-| `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória. |
-| `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory`; `serialize-db schema write` grava e `serialize-db schema check` compara sem gravar. |
+| `table_options(table)` | O `TableOptions` (`partition_by`, `partition_source`, `sort_key`, `redshift`, `keys`) lido de `Table.info["serialize_db"]` com os padrões da biblioteca: tabela sem partição quando `partition_by` está ausente, uma coluna de partição no máximo, `String(10)`, derivada por `strftime(partition_source, '%Y-%m-%d')`; `keys` são a chave primária, as `UniqueConstraint` e os índices únicos do modelo (`ix_contratos_data_sistema_contrato` e `ix_operacoes_data_operacao` no modelo cliente), mais `keys["add"]`, menos `keys["drop"]`, sempre por lista de colunas. |
+| `sql_type(column, dialect)` | O nome do tipo no motor, pela tabela de tipos de `schema.md`: `DECIMAL(p, s)`, `VARCHAR(n)` nos dois (o DuckDB ignora o comprimento), `Text` em `VARCHAR` e `VARCHAR(65535)`, `Uuid` em `VARCHAR(36)`, JSON em `JSON` e `SUPER`, `Double` em `DOUBLE` e `DOUBLE PRECISION`, `DateTime` em `TIMESTAMP` e `TIMESTAMPTZ`; a migração adiantada o usa nos `CAST`. |
+| `quoted(name)`, `column_ddl(column, dialect)` | O identificador entre aspas duplas, e a linha da coluna no `CREATE TABLE` (`"<coluna>" <tipo> [NOT NULL]`); públicas porque as etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [8](PLAN-STAGE-8.md) montam texto com identificadores e as variantes do DDL (a staging sem a coluna de partição, a tabela publicada com a chave primária informativa). |
+| `ddl(table, dialect, prefix="")` | O `CREATE TABLE` do sandbox para `duckdb` ou `redshift`, gerado como texto sem o dialeto do SQLAlchemy: colunas, tipos por `sql_type` e `NOT NULL`, todo identificador entre aspas; sem chave, `DEFERRABLE`, `Identity`, `CHECK`, `DEFAULT` nem comentário (as chaves são da auditoria, e o comentário vai no esquema Delta); `DISTSTYLE`, `DISTKEY` e `SORTKEY` no Redshift, de `table_options`; `prefix` renomeia a tabela para o sandbox (`exec_<id>_`, ou o sentinela `{prefix}` da [etapa 2](PLAN-STAGE-2.md), que sai como `"{prefix}cad_operacoes"`). |
+| `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(p + 3, s)` (`decimal128(21, 2)` para `Numeric(18, 2)`); recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` em bytes, nulo em coluna `NOT NULL` e um lote sem coluna alguma do contrato, com a tabela, a coluna e a instrução ao cliente na mensagem. |
+| `check_models(metadata)` | A lista de violações do contrato nos modelos, um texto por violação com tabela e coluna: tipo fora da tabela de tipos, `autoincrement` em chave inteira (o padrão `"auto"` inclusive), `Identity`, `String` sem comprimento, coluna ou tabela sem comentário, chave estrangeira `DEFERRABLE`, `partition_by` sem a coluna, com a coluna fora de `String(10)` ou sem `partition_source`, tabela sem chave primária e sem `keys`. Vazia no modelo cliente; no modelo de referência lista o `autoincrement` das 12 chaves, as 14 chaves estrangeiras `DEFERRABLE`, as colunas `String` sem comprimento e as tabelas e colunas sem comentário. |
+| `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória, cada texto com `\n` final. |
+| `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory` e devolve os caminhos; `serialize-db schema write --metadata modulo:atributo <pasta>` grava. |
+| `check_schema_files(metadata, directory)` | O diff unificado de cada arquivo versionado contra a geração nova, vazio quando nada mudou; `serialize-db schema check --metadata modulo:atributo <pasta>` compara sem gravar. |
 
-Testes: `tests/test_schema.py`, sem gravar, sobre o modelo cliente e sobre um modelo de teste com
-todos os tipos; `create_all` no DuckDB
-em memória com o DDL de cada modelo; o diff dos arquivos `tests/client_model/schema/` versionados; `write_schema_files` sob a raiz local. Dependências: `sqlalchemy`, `pyarrow`,
-`deltalake`, `duckdb`, `duckdb-engine` e `sqlalchemy-redshift`. Provas de conceito:
-`test_sqlalchemy.py` (`test_declarative_model_exposes_table`, `test_ddl_per_dialect`,
-`test_create_all_and_reflection`, `test_arrow_and_delta_schema_from_table`, com o mapa de tipos e
-`Schema.from_arrow().to_json()`, `test_sandbox_copy_of_table_and_schema_files_diff`),
-`test_pyarrow.py` (`test_schema_metadata_and_from_pylist`, `test_safe_cast_refuses_data_loss`, com as
-perdas que o cast seguro não acusa, `test_arrow_table_round_trips_through_pandas_without_copy` e
-`test_record_batch_cast_and_conversions_share_buffers`, o mesmo por lote) e
-`test_stdlib.py` (`test_generated_files_diff`, `test_decimal_totals`).
+Testes: `tests/test_schema.py`, sem gravar, sobre o modelo cliente, o modelo de referência e um
+modelo de teste com todos os tipos; o DDL de cada tabela executado no DuckDB em memória; o diff dos
+arquivos `tests/client_model/schema/` versionados; `write_schema_files` sob a raiz local.
+Dependências de execução: `sqlalchemy`, `pyarrow`, `deltalake` e `duckdb`; `duckdb-engine` e
+`sqlalchemy-redshift` ficam no grupo `dev`, das suítes de estudo, porque a etapa não compila pelo
+dialeto (proposta em "Decisões pendentes"). Provas de conceito: `test_sqlalchemy.py`
+(`test_declarative_model_exposes_table`, `test_ddl_per_dialect`, `test_create_all_and_reflection`,
+`test_arrow_and_delta_schema_from_table`, com o mapa de tipos e `Schema.from_arrow().to_json()`,
+`test_sandbox_copy_of_table_and_schema_files_diff`), `test_pyarrow.py`
+(`test_schema_metadata_and_from_pylist`, `test_safe_cast_refuses_data_loss`, com as perdas que o
+cast seguro não acusa, `test_arrow_table_round_trips_through_pandas_without_copy` e
+`test_record_batch_cast_and_conversions_share_buffers`, o mesmo por lote) e `test_stdlib.py`
+(`test_generated_files_diff`, `test_decimal_totals`, `test_entry_point_by_import_string`).
 
 ## Interface
 
 As exceções da biblioteca vivem em `serialize_db.errors`, um módulo sem dependências, porque
 `delta` levanta `ExecutionConflict` e `execution` a captura, e um módulo por exceção criaria
-importações cíclicas. `ContractError` é a primeira: dados ou modelo fora do contrato, com a
-instrução ao cliente na mensagem.
+importações cíclicas. `ContractError` é a primeira e a única desta etapa: dados ou modelo fora do
+contrato, com a instrução ao cliente na mensagem; cada etapa acrescenta as suas.
 
 ```python
-"""Assinaturas de serialize_db.schema; os corpos estão nos rascunhos abaixo."""
+"""Assinaturas de serialize_db.schema; os corpos estão no rascunho abaixo."""
 import dataclasses
 from typing import Literal
 
@@ -73,27 +103,28 @@ import pyarrow as pa
 import sqlalchemy as sa
 from deltalake import Schema as DeltaSchema
 
+from serialize_db.errors import ContractError   # ValueError: dados ou modelo fora do contrato
+
 Dialect = Literal["duckdb", "redshift"]
-
-
-class ContractError(ValueError):
-    """Dados ou modelo fora do contrato; a mensagem diz o que o cliente faz antes de chamar de novo."""
 
 
 @dataclasses.dataclass(frozen=True)
 class TableOptions:
-    partition_by: str | None          # a coluna de partição, String(10), AAAA-MM-DD
-    partition_source: str | None      # a coluna de data de que ela deriva
+    partition_by: str | None           # a coluna de partição, String(10), AAAA-MM-DD
+    partition_source: str | None       # a coluna de data de que ela deriva
     sort_key: tuple[str, ...]
-    redshift: dict[str, str]          # diststyle, distkey
-    keys: tuple[tuple[str, ...], ...]  # a chave primária e as únicas do modelo, mais keys["add"], menos keys["drop"]
+    redshift: dict[str, str]           # diststyle, distkey
+    keys: tuple[tuple[str, ...], ...]  # as chaves do modelo, mais keys["add"], menos keys["drop"]
 
 
 def arrow_type(column: sa.Column) -> pa.DataType: ...
 def arrow_schema(table: sa.Table) -> pa.Schema: ...
 def delta_schema(table: sa.Table) -> DeltaSchema: ...
 def table_options(table: sa.Table) -> TableOptions: ...
-def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", keys: bool = False) -> str: ...
+def sql_type(column: sa.Column, dialect: Dialect) -> str: ...
+def quoted(name: str) -> str: ...
+def column_ddl(column: sa.Column, dialect: Dialect) -> str: ...
+def ddl(table: sa.Table, dialect: Dialect, prefix: str = "") -> str: ...
 def cast(data: pa.Table | pa.RecordBatch | pa.RecordBatchReader, table: sa.Table) -> pa.Table | pa.RecordBatch | pa.RecordBatchReader: ...
 def check_models(metadata: sa.MetaData) -> list[str]: ...
 def schema_files(metadata: sa.MetaData) -> dict[str, str]: ...
@@ -101,108 +132,146 @@ def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]: ...
 def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]: ...
 ```
 
-`check_schema_files` é a forma sem gravar de `serialize-db schema check`: o diff unificado de cada
-arquivo versionado contra a geração nova, vazio quando nada mudou. `ddl` ganhou `keys`: a etapa 8
-declara a chave primária informativa nas tabelas publicadas, e o sandbox não.
+O módulo segue a seção "Python Code Style" de `CLAUDE.md`: uma função por responsabilidade, com
+anotação de tipo em toda assinatura e docstring com um exemplo em cada função pública (o exemplo do
+módulo mostra `check_models(Base.metadata)`, `arrow_schema(table)`, `ddl(table, "duckdb")` e
+`cast(batch, table)`); laços explícitos em vez de comprehensions com condição ou com dois `for`;
+no máximo dois níveis de aninhamento, com retorno antecipado; sem regra `@compiles`, sem
+`quoted_name` e sem despacho por `type(data)`. `cast` é a única função que recebe mais de um tipo, e
+só despacha para `cast_batch`, `cast_table` e `cast_reader`. O rascunho abaixo tem essa forma e é a
+referência do módulo; as docstrings dele têm uma linha, e o módulo acrescenta o exemplo. O
+subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenção da
+[etapa 6](PLAN-STAGE-6.md) para o `MetaData` dos modelos do pipeline.
 
 ## Estratégia de implementação
 
-- **`arrow_type`** resolve `Numeric` e `DateTime` pelos parâmetros e os demais por `isinstance` numa
-  ordem que põe `BigInteger` e `SmallInteger` antes de `Integer`, e `Text` antes de `String`;
-  `Float` e `Double` derivam de `Numeric` no SQLAlchemy, então `Double` é testado antes. Um tipo fora
-  da tabela de [`schema.md`](schema.md) é `ContractError`, não `TypeError`.
-- **`arrow_schema`** numera `PARQUET:field_id` pela posição, guarda o comentário em `metadata` do
-  campo e o nome da tabela em `metadata` do esquema (`serialize_db_table`).
+- **`arrow_type`** resolve `Numeric` e `DateTime` pelos parâmetros e os demais por `isinstance`
+  sobre `ARROW_TYPES`, uma tupla de pares na ordem que põe `BigInteger` e `SmallInteger` antes de
+  `Integer`, e `Text` antes de `String`; `Float` e `Double` derivam de `Numeric` no SQLAlchemy, e
+  só `Double` está na tupla. Um tipo fora da tabela de [`schema.md`](schema.md) é `ContractError`,
+  não `TypeError`.
+- **`arrow_schema`** monta um campo por coluna com `arrow_field`, que numera `PARQUET:field_id`
+  pela posição e guarda o comentário em `metadata` do campo, e põe o nome da tabela em `metadata`
+  do esquema (`serialize_db_table`).
 - **`delta_schema`** é `Schema.from_arrow(arrow_schema(table))`; o delta-rs deriva `timestamp_ntz`
   do `timestamp[us]` sem fuso e preserva o comentário.
-- **`table_options`** lê `Table.info["serialize_db"]` com os padrões da biblioteca e deriva `keys`
-  de `table.primary_key` e dos `UniqueConstraint`; um `Index(unique=True)` do modelo de referência
-  (`ix_contratos_data_sistema_contrato`) também é chave, então `table.indexes` com `unique` entra
-  na lista. `keys["add"]` acrescenta e `keys["drop"]` exclui, sempre por lista de colunas.
-- **`ddl`** não compila o `Table` do modelo: monta um `Table` novo com `Column(name, type, nullable,
-  comment)` por coluna, sem chave, `ForeignKey` nem `Identity`, com os `CheckConstraint` só no
-  DuckDB, e o nome `quoted_name(prefix + name, quote=False)` para o sentinela `{prefix}` e o
-  `exec_<id>_` saírem sem aspas. Três regras `@compiles` vivem no módulo: `CreateTable` no Redshift
-  acrescenta `DISTSTYLE`, `DISTKEY` e `SORTKEY` de `table_options`; `Text` no Redshift vira
-  `VARCHAR(65535)`; `Uuid` vira `VARCHAR(36)` nos dois dialetos, porque o contrato guarda UUID como
-  texto e o `duckdb_engine` emitiria `UUID`. O `duckdb_engine` escreve `NUMERIC(18, 2)`, `DOUBLE
-  PRECISION` e `TEXT`, que o DuckDB lê como `DECIMAL(18,2)`, `DOUBLE` e `VARCHAR` (rascunho abaixo).
-- **`cast`** seleciona as colunas do contrato presentes, na ordem do contrato, e trata coluna a
-  coluna o que `safe=True` não acusa: `double` numa coluna `Numeric` só quando
-  `pc.round(x, escala)` devolve o valor igual; `timestamp` numa coluna `Date` só quando a ida e
-  volta devolve o valor igual; inteiro numa coluna `Numeric` pelo desvio por `decimal128(p + 3, s)`;
-  `struct`, `list` e `map` numa coluna JSON recusados; texto acima de `String(n)` medido em bytes por
-  `pc.binary_length`, a medida do `VARCHAR(n)` do Redshift. Depois disso, o `cast` do PyArrow com
-  `safe=True` faz o resto: nulo em `NOT NULL`, escala perdida, nanossegundo não nulo, estouro. Toda
-  recusa sai como `ContractError` com a tabela, a coluna e a instrução. Um `RecordBatchReader` volta
-  como leitor que converte lote a lote, com o esquema do primeiro lote convertido.
-- **`check_models`** percorre `metadata.sorted_tables` e devolve uma lista de textos, um por
-  violação, para o teste do modelo cliente ser `assert check_models(Base.metadata) == []`. O
-  `autoincrement` padrão é a string `"auto"`, não `True`: a regra reprova os dois numa chave
-  inteira.
+- **`table_options`** lê `Table.info["serialize_db"]` com os padrões da biblioteca; `declared_keys`
+  reúne `table.primary_key`, as `UniqueConstraint` e os `table.indexes` com `unique`, porque o
+  modelo cliente declara `ix_contratos_data_sistema_contrato` e `ix_operacoes_data_operacao` por
+  `Index(unique=True)`, e
+  `adjusted_keys` aplica `keys["add"]` e `keys["drop"]`, sempre por lista de colunas.
+- **`sql_type` e `ddl`** geram texto, sem o dialeto do SQLAlchemy: `SQL_TYPES` guarda por dialeto o
+  nome dos tipos sem parâmetro, `sql_type` monta `DECIMAL(p, s)` da precisão e da escala do tipo
+  Arrow, `VARCHAR(n)` do comprimento e `TIMESTAMP` ou `TIMESTAMPTZ` do fuso; `column_ddl` monta
+  `"<coluna>" <tipo>` mais `NOT NULL`; `redshift_options` monta `DISTSTYLE`, `DISTKEY` e `SORTKEY`
+  de `table_options`, com os nomes entre aspas; `ddl` junta as linhas sob
+  `CREATE TABLE "<prefixo><tabela>"`, o prefixo dentro das aspas. `Identity`, `server_default`,
+  `CheckConstraint` e comentário não saem no texto; `check_models` reprova `Identity`. Sem o
+  dialeto, o `with_variant(SUPER(), "redshift")` de [`schema.md`](schema.md) deixa de ser
+  necessário no modelo: `sql_type` emite `SUPER` por `isinstance(kind, sa.JSON)`, e um modelo com
+  a variante continua aceito. O DuckDB registra `DECIMAL(18, 2)`, `TIMESTAMPTZ`, `VARCHAR(n)` e
+  `JSON` como `DECIMAL(18,2)`, `TIMESTAMP WITH TIME ZONE`, `VARCHAR` e `JSON` (rascunho abaixo).
+- **`cast`** despacha por `isinstance` para `cast_batch`, `cast_table` e `cast_reader`, e as três
+  passam por `contract_arrays`: `contract_fields` seleciona as colunas do contrato presentes, na
+  ordem do contrato, e `contract_column` trata coluna a coluna o que `safe=True` não acusa, numa
+  função por recusa: `refuse_double_out_of_scale` (`double` numa coluna `Numeric` só quando
+  `pc.round(x, escala)` devolve o valor igual), `refuse_timestamp_with_time` (`timestamp` numa coluna
+  `Date` só quando a ida e volta devolve o valor igual), `refuse_nested_json` (`struct`, `list` e
+  `map` numa coluna JSON) e `refuse_text_above_length` (texto acima de `String(n)` medido em bytes
+  por `pc.binary_length`, a medida do `VARCHAR(n)` do Redshift); o inteiro numa coluna `Numeric`
+  passa pelo desvio `decimal128(p + 3, s)`. Depois disso, `column.cast(field.type, safe=True)`
+  recusa escala perdida, nanossegundo não nulo e estouro, e o `cast` do esquema sobre
+  `from_arrays` recusa nulo em `NOT NULL`. Toda recusa sai como `ContractError` com a tabela, a
+  coluna e a instrução. `cast_reader` deriva o esquema de saída de `reader.schema.empty_table()` e
+  embrulha `cast_batches`, uma função geradora, em `RecordBatchReader.from_batches`; as duas
+  conferências por `pc.all` levam `min_count=0`, porque `pc.all` de uma coluna vazia devolve nulo e
+  a tabela vazia seria recusada (rascunho abaixo).
+- **`check_models`** percorre `metadata.sorted_tables` e reúne, por tabela, `column_problems`
+  (tipo, `autoincrement`, `Identity`, `String` sem comprimento, comentário), `key_problems`
+  (`DEFERRABLE`, tabela sem chave) e `partition_problems` (a coluna, `String(10)`,
+  `partition_source`), uma lista de textos, um por violação, para o teste do modelo cliente ser
+  `assert check_models(Base.metadata) == []`. O `autoincrement` padrão é a string `"auto"`, não
+  `True`: a regra reprova os dois numa chave inteira. O modelo de referência é o modelo com defeitos
+  do teste: o `autoincrement` das 12 chaves, as 14 chaves estrangeiras `DEFERRABLE`, os `String`
+  sem comprimento e as tabelas e colunas sem comentário.
 - **`schema_files`** gera `<tabela>.delta.json` por `delta_schema(...).to_json()` e os dois `.sql`
-  por `ddl`; `write_schema_files` grava com `\n` final; `check_schema_files` compara por
-  `difflib.unified_diff`.
+  por `ddl`, cada texto com `\n` final; `write_schema_files` grava e devolve os caminhos;
+  `check_schema_files` compara por `difflib.unified_diff`. `serialize-db schema write` e
+  `serialize-db schema check` resolvem `--metadata modulo:atributo` por `importlib.import_module` e
+  `getattr` (`test_stdlib.py::test_entry_point_by_import_string`); o `check` sai com 0 sem diff, 1
+  com diff impresso, 2 no erro de uso do `argparse`.
 
 ## Pré-requisitos e pós-condições
 
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
 | `arrow_schema`, `delta_schema` | Toda coluna com tipo da tabela de [`schema.md`](schema.md). | Um campo por coluna, na ordem do modelo, com nulidade, comentário e `field_id`; `ContractError` na primeira coluna fora da tabela. |
-| `table_options` | `partition_by` com uma coluna no máximo. | `partition_by` e `partition_source` preenchidos juntos ou ambos `None`; `keys` não vazia quando o modelo tem chave primária. |
-| `ddl` | Dialeto `duckdb` ou `redshift`. | Texto que o motor aceita como está: o DuckDB em memória o executa no teste, o Redshift o compila; nenhuma chave, `DEFERRABLE` ou `Identity` no texto; o prefixo sem aspas. |
-| `cast` | `data` com pelo menos uma coluna do contrato. | O mesmo tipo de entrada, só com colunas do contrato, na ordem do contrato, cada uma no tipo do contrato e com a nulidade conferida; ou `ContractError` sem nada convertido. Colunas ausentes ficam para o `INSERT ... BY NAME` do `loader` ou para a recusa de `publish_partition`. |
-| `check_models` | Modelos importáveis. | Lista vazia no modelo cliente; cada violação nomeia tabela e coluna. |
+| `table_options` | `partition_by` com uma coluna no máximo. | `partition_by` e `partition_source` preenchidos juntos ou ambos `None`; `keys` não vazia quando o modelo tem chave primária, única ou índice único. |
+| `sql_type`, `ddl` | Dialeto `duckdb` ou `redshift`. | Texto que o motor aceita como está: o DuckDB em memória o executa no teste, as 12 tabelas do modelo cliente inclusive, e o Redshift o executa na primeira carga da [etapa 5](PLAN-STAGE-5.md); nenhuma chave, `DEFERRABLE` ou `Identity` no texto; todo identificador entre aspas, o prefixo dentro delas. |
+| `cast` | `data` com pelo menos uma coluna do contrato. | O mesmo tipo de entrada, só com colunas do contrato, na ordem do contrato, cada uma no tipo do contrato e com a nulidade conferida; ou `ContractError` sem nada convertido. Colunas ausentes ficam para o `INSERT ... BY NAME` do `loader` ou para a recusa de `publish_partition`; uma tabela vazia passa. |
+| `check_models` | Modelos importáveis. | Lista vazia no modelo cliente; cada violação nomeia tabela e coluna; o modelo de referência produz as suas e nada mais. |
 | `write_schema_files`, `check_schema_files` | Pasta gravável, ou existente para o `check`. | Um arquivo por tabela e formato; o `check` devolve o diff sem gravar. |
 
 ## Testes por caso
 
-`tests/test_schema.py`, sem gravar, sobre o modelo cliente e sobre um modelo de teste com todos os
-tipos da tabela de [`schema.md`](schema.md).
+`tests/test_schema.py`, sem gravar, sobre o modelo cliente, o modelo de referência e um modelo de
+teste com todos os tipos da tabela de [`schema.md`](schema.md), `to` e `timestamp` entre as colunas.
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
 | Tipos do contrato | `test_arrow_schema_maps_every_contract_type` | Cada tipo do modelo de teste no Arrow esperado; `DateTime` sem fuso em `timestamp[us]`, com fuso em `tz=UTC`; JSON e UUID em `string`. |
-| Tipo fora do contrato | `test_arrow_schema_refuses_foreign_types` | `LargeBinary`, `ARRAY` e `Interval` levantam `ContractError` com tabela e coluna. |
+| Tipo fora do contrato | `test_arrow_schema_refuses_foreign_types` | `Float`, `LargeBinary`, `ARRAY` e `Interval` levantam `ContractError` com tabela e coluna. |
 | Esquema Delta | `test_delta_schema_json_matches_versioned_file` | `to_json()` igual ao `tests/client_model/schema/<tabela>.delta.json`. |
-| Opções físicas | `test_table_options_defaults_and_keys` | Tabela sem `info` dá `partition_by=None` e `keys` só da chave primária; o índice único do modelo entra em `keys`; `keys["drop"]` remove; duas colunas de partição são `ContractError`. |
-| DDL por dialeto | `test_ddl_per_dialect_without_keys` | Sem `PRIMARY KEY`, `UNIQUE`, `REFERENCES`, `DEFERRABLE`, `SERIAL` ou `IDENTITY`; `SORTKEY`, `DISTSTYLE` e `DISTKEY` só no Redshift; `CHECK` só no DuckDB; `Text` em `VARCHAR(65535)` e JSON em `SUPER` no Redshift; `Uuid` em `VARCHAR(36)` nos dois. |
-| DDL executável | `test_ddl_runs_in_duckdb_memory` | O DDL de cada modelo executa num DuckDB em memória e `information_schema.columns` devolve os tipos do contrato. |
-| Prefixo | `test_ddl_prefix_without_quotes` | `prefix="exec_42_"` e `prefix="{prefix}"` saem sem aspas nos dois dialetos. |
-| Cast que aceita | `test_cast_reorders_and_normalizes` | Colunas fora de ordem, `large_string`, `timestamp[ns]` com nanossegundo zero, `int64` em `Numeric`, coluna a mais ignorada; o mesmo para `pa.Table`, `pa.RecordBatch` e `RecordBatchReader`. |
-| Cast que recusa | `test_cast_refuses_each_loss`, parametrizado | Nulo em `NOT NULL`, `double` fora da escala, `timestamp` com hora em `Date`, `struct` em JSON, texto acima de `String(n)` em bytes, escala perdida, nanossegundo não nulo, estouro de inteiro; cada mensagem cita tabela e coluna. |
+| Opções físicas | `test_table_options_defaults_and_keys` | Tabela sem `info` dá `partition_by=None` e `keys` só da chave primária; o índice único de `cad_contratos` e a `UniqueConstraint` de `cad_aliquotas` entram em `keys`; `keys["add"]` acrescenta e `keys["drop"]` remove; duas colunas de partição são `ContractError`. |
+| Tipos por dialeto | `test_sql_type_per_dialect` | Cada tipo do modelo de teste no texto da tabela de tipos: `DECIMAL(18, 2)`, `VARCHAR(100)`, `VARCHAR` e `VARCHAR(65535)` para `Text`, `VARCHAR(36)`, `JSON` e `SUPER`, `DOUBLE` e `DOUBLE PRECISION`, `TIMESTAMP` e `TIMESTAMPTZ`. |
+| DDL por dialeto | `test_ddl_per_dialect` | Sem `PRIMARY KEY`, `UNIQUE`, `REFERENCES`, `DEFERRABLE`, `SERIAL`, `IDENTITY` ou `CHECK`; `SORTKEY`, `DISTSTYLE` e `DISTKEY` só no Redshift, com os nomes entre aspas; o texto igual ao esperado, linha a linha. |
+| Identificadores | `test_ddl_quotes_every_identifier` | `"to"` em `cad_contratos` e `"timestamp"` em `cad_lancamentos` nos dois dialetos; nenhum nome de tabela ou coluna sem aspas no texto. |
+| DDL executável | `test_ddl_runs_in_duckdb_memory` | O DDL das 12 tabelas do modelo cliente e o do modelo de teste executam num DuckDB em memória, e `information_schema.columns` devolve os tipos do contrato (`DECIMAL(18,2)`, `TIMESTAMP WITH TIME ZONE`, `JSON`). |
+| Prefixo | `test_ddl_prefix_inside_the_quotes` | `prefix="exec_42_"` e `prefix="{prefix}"` saem como `"exec_42_cad_operacoes"` e `"{prefix}cad_operacoes"` nos dois dialetos, e o segundo executa no DuckDB. |
+| Cast que aceita | `test_cast_reorders_and_normalizes` | Colunas fora de ordem, `large_string`, `timestamp[ns]` com nanossegundo zero, `int64` em `Numeric`, coluna a mais ignorada; o mesmo para `pa.Table` e `pa.RecordBatch`. |
+| Cast por leitor | `test_cast_reader_converts_batch_by_batch` | Um leitor de dois lotes sai como `RecordBatchReader` com o esquema do contrato e as linhas dos dois; a tabela vazia de `reader.schema.empty_table()` passa nas conferências. |
+| Cast que recusa | `test_cast_refuses_each_loss`, parametrizado | Nulo em `NOT NULL`, `double` fora da escala, `timestamp` com hora em `Date`, `struct` em JSON, texto acima de `String(n)` em bytes, escala perdida, nanossegundo não nulo, estouro de inteiro, lote sem coluna do contrato; cada mensagem cita a tabela e a coluna. |
 | Cast que preserva | `test_cast_keeps_doubles_of_the_reference_model` | `Double` do modelo de referência entra sem arredondamento. |
-| Modelos | `test_check_models_finds_each_violation`, `test_client_model_is_clean` | Um modelo com cada defeito produz uma violação por defeito; o modelo cliente produz lista vazia. |
-| Cópia fiel | `tests/test_client_model.py`, escrito em 2026-09-21 | O modelo cliente tem as tabelas e as colunas do modelo de referência, na mesma ordem, com a coluna de partição no fim; só os tipos e as chaves previstos mudam; sem `DEFERRABLE`, `autoincrement` nem índice não único; todo comentário presente; a partição declarada é a da base. |
+| Modelos | `test_check_models_finds_each_violation`, `test_check_models_lists_the_reference_model_defects`, `test_client_model_is_clean` | Um modelo com cada defeito produz uma violação por defeito; o modelo de referência produz o `autoincrement` das 12 chaves, as 14 chaves estrangeiras `DEFERRABLE`, os `String` sem comprimento e as tabelas e colunas sem comentário, e nada mais; o modelo cliente produz lista vazia. |
+| Cópia fiel | `tests/test_client_model.py` | O modelo cliente tem as tabelas e as colunas do modelo de referência, na mesma ordem, com a coluna de partição no fim; só os tipos e as chaves previstos mudam; sem `DEFERRABLE`, `autoincrement` nem índice não único; todo comentário presente; a partição declarada é a da base. |
 | Arquivos gerados | `test_schema_files_match_versioned`, `test_check_schema_files_reports_a_changed_model` | Diff vazio contra `tests/client_model/schema/`; uma coluna acrescentada aparece no diff dos três formatos. |
 | Gravação | `test_write_schema_files` (`local`) | Os arquivos sob a raiz local, com os nomes previstos. |
+| Linha de comando | `test_cli_schema_check_reads_the_versioned_files` | `serialize-db schema check --metadata client_model:Base.metadata tests/client_model/schema` sai com 0 sem gravar; um modelo mudado sai com 1 e imprime o diff; sem `--metadata` sai com 2. |
 
 ## Rascunhos executados
 
-O rascunho define as primitivas sobre um modelo de exemplo com `partition_by`, `partition_source`,
-`sort_key` e `redshift` em `Table.info`, executa o DDL no DuckDB em memória e exercita `cast` e
-`check_models`. Ele rodou em 2026-09-21 com as versões fixadas.
+O rascunho define as primitivas sobre um modelo de exemplo com todos os tipos do contrato, a chave
+única por índice, `partition_by`, `partition_source`, `sort_key` e `redshift` em `Table.info`, e as
+colunas `to` e `timestamp`; executa o DDL no DuckDB em memória, com o prefixo e com o sentinela, e
+exercita `cast` nos três tipos de entrada e `check_models`. Ele tem a forma do módulo e rodou em
+2026-09-21 com as versões fixadas.
 
 ```python
-"""Etapa 1: o esquema Arrow e Delta, o DDL por dialeto, as opções físicas, o cast por lote e a conferência dos modelos."""
+"""Etapa 1: esquema Arrow e Delta, opções físicas, DDL, cast e a conferência dos modelos."""
+
 import dataclasses
 import datetime as dt
 import decimal
 import json
+import uuid
+from typing import Literal
 
 import duckdb
-import duckdb_engine
 import pyarrow as pa
 import pyarrow.compute as pc
 import sqlalchemy as sa
 from deltalake import Schema as DeltaSchema
-from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.schema import CreateTable
-from sqlalchemy.sql import quoted_name
-from sqlalchemy_redshift.dialect import SUPER, RedshiftDialect_redshift_connector
+
+Dialect = Literal["duckdb", "redshift"]
 
 
+class ContractError(ValueError):
+    """Dados ou modelo fora do contrato; a mensagem diz o que o cliente faz antes de chamar."""
+
+
+# O modelo de exemplo tem todos os tipos do contrato, a chave única por índice, a partição em
+# Table.info, e as colunas `to` (reservada no DuckDB e no Redshift) e `timestamp` (no Redshift).
 class Base(DeclarativeBase):
     pass
 
@@ -210,218 +279,489 @@ class Base(DeclarativeBase):
 class Operacao(Base):
     __tablename__ = "cad_operacoes"
     __table_args__ = (
-        sa.UniqueConstraint("data", "operacao"),
+        sa.Index("ix_operacoes_data_operacao", "data", "operacao", unique=True),
         {"comment": "Operações", "info": {"serialize_db": {
             "partition_by": ["data_str"], "partition_source": "data",
-            "sort_key": ["data", "id_operacao"], "redshift": {"diststyle": "KEY", "distkey": "id_operacao"}}}},
+            "sort_key": ["data", "operacao"],
+            "redshift": {"diststyle": "KEY", "distkey": "id_operacao"}}}},
     )
-    id_operacao: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=False, comment="Identificador")
-    data: Mapped[dt.date] = mapped_column(sa.Date, nullable=False, comment="Data da operação")
-    operacao: Mapped[str] = mapped_column(sa.String(100), nullable=False, comment="Código")
-    valor: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(18, 2), nullable=False, comment="Valor")
+    id_operacao: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=False,
+                                             comment="Identificador")
+    data: Mapped[dt.date] = mapped_column(sa.Date, comment="Data da operação")
+    operacao: Mapped[str] = mapped_column(sa.String(100), comment="Código")
+    to: Mapped[str] = mapped_column(sa.String(2), comment="Código TO")
+    valor: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(18, 2), comment="Valor")
     spread: Mapped[float | None] = mapped_column(sa.Double, comment="Spread")
+    parcelas: Mapped[int | None] = mapped_column(sa.SmallInteger, comment="Parcelas")
+    sistema: Mapped[int] = mapped_column(sa.Integer, comment="Sistema de origem")
+    ativa: Mapped[bool] = mapped_column(sa.Boolean, comment="Se está ativa")
     observacao: Mapped[str | None] = mapped_column(sa.Text, comment="Texto longo")
-    meta: Mapped[dict | None] = mapped_column(sa.JSON().with_variant(SUPER(), "redshift"), comment="Documento")
-    carimbo: Mapped[dt.datetime | None] = mapped_column(sa.DateTime, comment="Gravação")
-    data_str: Mapped[str] = mapped_column(sa.String(10), nullable=False, comment="Partição AAAA-MM-DD de data")
+    meta: Mapped[str | None] = mapped_column(sa.JSON, comment="Documento JSON serializado")
+    timestamp: Mapped[dt.datetime] = mapped_column(sa.DateTime, comment="Gravação, sem fuso")
+    carimbo_utc: Mapped[dt.datetime | None] = mapped_column(sa.DateTime(timezone=True),
+                                                            comment="Gravação em UTC")
+    chave: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid, comment="UUID como texto")
+    data_str: Mapped[str] = mapped_column(sa.String(10), comment="Partição AAAA-MM-DD de data")
 
 
-class ContractError(ValueError):
-    """Dados ou modelo fora do contrato; a mensagem diz o que o cliente faz antes de chamar de novo."""
+# ---------------------------------------------------------------- o esquema Arrow e Delta
 
-
-ARROW_TYPES = {sa.SmallInteger: pa.int16(), sa.Integer: pa.int32(), sa.BigInteger: pa.int64(), sa.Boolean: pa.bool_(),
-               sa.Double: pa.float64(), sa.Date: pa.date32(), sa.String: pa.string(), sa.Text: pa.string(),
-               sa.Uuid: pa.string(), sa.JSON: pa.string()}
+# A ordem importa: BigInteger e SmallInteger derivam de Integer, Text de String.
+ARROW_TYPES: tuple[tuple[type, pa.DataType], ...] = (
+    (sa.BigInteger, pa.int64()),
+    (sa.SmallInteger, pa.int16()),
+    (sa.Integer, pa.int32()),
+    (sa.Boolean, pa.bool_()),
+    (sa.Double, pa.float64()),
+    (sa.Date, pa.date32()),
+    (sa.Text, pa.string()),
+    (sa.Uuid, pa.string()),
+    (sa.JSON, pa.string()),
+    (sa.String, pa.string()),
+)
 
 
 def arrow_type(column: sa.Column) -> pa.DataType:
+    """O tipo Arrow da coluna, pela tabela de tipos de docs/schema.md."""
     kind = column.type
+    # Numeric leva precisão e escala; Float e Double derivam de Numeric e ficam fora deste ramo.
     if isinstance(kind, sa.Numeric) and not isinstance(kind, sa.Float):
         return pa.decimal128(kind.precision or 18, kind.scale or 0)
     if isinstance(kind, sa.DateTime):
-        return pa.timestamp("us", tz="UTC" if kind.timezone else None)
-    for sa_type in (sa.BigInteger, sa.SmallInteger, sa.Integer, sa.Boolean, sa.Double, sa.Date, sa.Text, sa.Uuid, sa.JSON, sa.String):
+        timezone = "UTC" if kind.timezone else None
+        return pa.timestamp("us", tz=timezone)
+    for sa_type, arrow in ARROW_TYPES:
         if isinstance(kind, sa_type):
-            return ARROW_TYPES[sa_type]
+            return arrow
     raise ContractError(f"{column.table.name}.{column.name}: tipo fora do contrato: {kind!r}")
 
 
+def arrow_field(column: sa.Column, position: int) -> pa.Field:
+    """O campo Arrow da coluna: tipo, nulidade, `PARQUET:field_id` pela posição, comentário."""
+    metadata = {"PARQUET:field_id": str(position)}
+    if column.comment:
+        metadata["comment"] = column.comment
+    return pa.field(column.name, arrow_type(column), nullable=column.nullable, metadata=metadata)
+
+
 def arrow_schema(table: sa.Table) -> pa.Schema:
+    """O esquema Arrow da tabela, com o nome dela em `serialize_db_table`."""
     fields = []
-    for index, column in enumerate(table.columns, start=1):
-        metadata = {"PARQUET:field_id": str(index)} | ({"comment": column.comment} if column.comment else {})
-        fields.append(pa.field(column.name, arrow_type(column), nullable=column.nullable, metadata=metadata))
+    for position, column in enumerate(table.columns, start=1):
+        fields.append(arrow_field(column, position))
     return pa.schema(fields, metadata={"serialize_db_table": table.name})
 
 
 def delta_schema(table: sa.Table) -> DeltaSchema:
+    """O esquema Delta derivado do Arrow: `timestamp_ntz` sem fuso, `timestamp` com fuso."""
     return DeltaSchema.from_arrow(arrow_schema(table))
 
 
+# ---------------------------------------------------------------- as opções físicas
+
 @dataclasses.dataclass(frozen=True)
 class TableOptions:
-    partition_by: str | None
-    partition_source: str | None
+    """O que `Table.info["serialize_db"]` declara, com os padrões da biblioteca."""
+
+    partition_by: str | None           # a coluna de partição, String(10), AAAA-MM-DD
+    partition_source: str | None       # a coluna de data de que ela deriva
     sort_key: tuple[str, ...]
-    redshift: dict[str, str]
-    keys: tuple[tuple[str, ...], ...]   # a chave primária e as únicas do modelo, mais o que `keys` acrescenta
+    redshift: dict[str, str]           # diststyle, distkey
+    keys: tuple[tuple[str, ...], ...]  # as chaves do modelo, mais keys["add"], menos keys["drop"]
+
+
+def column_names(columns) -> tuple[str, ...]:
+    """Os nomes de uma coleção de colunas, na ordem dela."""
+    return tuple(column.name for column in columns)
+
+
+def declared_keys(table: sa.Table) -> list[tuple[str, ...]]:
+    """A chave primária, as `UniqueConstraint` e os índices únicos do modelo."""
+    keys = []
+    if table.primary_key.columns:
+        keys.append(column_names(table.primary_key.columns))
+    for constraint in table.constraints:
+        if isinstance(constraint, sa.UniqueConstraint):
+            keys.append(column_names(constraint.columns))
+    for index in table.indexes:
+        if index.unique:
+            keys.append(column_names(index.columns))
+    return keys
+
+
+def adjusted_keys(keys: list[tuple[str, ...]], info: dict) -> tuple[tuple[str, ...], ...]:
+    """As chaves do modelo mais `keys["add"]` e menos `keys["drop"]` de `Table.info`."""
+    adjustments = info.get("keys", {})
+    for key in adjustments.get("add", []):
+        keys.append(tuple(key))
+    dropped = [tuple(key) for key in adjustments.get("drop", [])]
+    kept = []
+    for key in keys:
+        if key not in dropped:
+            kept.append(key)
+    return tuple(kept)
 
 
 def table_options(table: sa.Table) -> TableOptions:
+    """As opções físicas da tabela; mais de uma coluna de partição é `ContractError`."""
     info = table.info.get("serialize_db", {})
     partition = info.get("partition_by") or []
     if len(partition) > 1:
-        raise ContractError(f"{table.name}: uma coluna de partição no máximo, recebidas {partition}")
-    keys = [tuple(c.name for c in table.primary_key.columns)] if table.primary_key.columns else []
-    keys += [tuple(c.name for c in constraint.columns) for constraint in table.constraints if isinstance(constraint, sa.UniqueConstraint)]
-    keys += [tuple(key) for key in info.get("keys", {}).get("add", [])]
-    keys = [key for key in keys if list(key) not in info.get("keys", {}).get("drop", [])]
-    return TableOptions(partition[0] if partition else None, info.get("partition_source"), tuple(info.get("sort_key", [])), dict(info.get("redshift", {})), tuple(keys))
+        raise ContractError(
+            f"{table.name}: uma coluna de partição no máximo, recebidas {partition}")
+    partition_by = partition[0] if partition else None
+    return TableOptions(
+        partition_by=partition_by,
+        partition_source=info.get("partition_source"),
+        sort_key=tuple(info.get("sort_key", [])),
+        redshift=dict(info.get("redshift", {})),
+        keys=adjusted_keys(declared_keys(table), info),
+    )
 
 
-DIALECTS = {"duckdb": duckdb_engine.Dialect(paramstyle="named"), "redshift": RedshiftDialect_redshift_connector(paramstyle="named")}
+# ---------------------------------------------------------------- o DDL por dialeto
+
+# A tabela de tipos de docs/schema.md; Numeric, String e DateTime têm parâmetros: sql_type.
+SQL_TYPES: dict[str, dict[type, str]] = {
+    "duckdb": {sa.BigInteger: "BIGINT", sa.SmallInteger: "SMALLINT", sa.Integer: "INTEGER",
+               sa.Boolean: "BOOLEAN", sa.Double: "DOUBLE", sa.Date: "DATE", sa.Text: "VARCHAR",
+               sa.Uuid: "VARCHAR(36)", sa.JSON: "JSON"},
+    "redshift": {sa.BigInteger: "BIGINT", sa.SmallInteger: "SMALLINT", sa.Integer: "INTEGER",
+                 sa.Boolean: "BOOLEAN", sa.Double: "DOUBLE PRECISION", sa.Date: "DATE",
+                 sa.Text: "VARCHAR(65535)", sa.Uuid: "VARCHAR(36)", sa.JSON: "SUPER"},
+}
 
 
-@compiles(sa.Text, "redshift")
-def text_as_widest_varchar(element, compiler, **kw):
-    return "VARCHAR(65535)"           # TEXT no Redshift seria VARCHAR(256)
+def sql_type(column: sa.Column, dialect: Dialect) -> str:
+    """O nome do tipo da coluna no motor, pela tabela de tipos de docs/schema.md."""
+    kind = column.type
+    arrow = arrow_type(column)      # recusa o tipo fora do contrato antes de qualquer texto
+    if pa.types.is_decimal(arrow):
+        return f"DECIMAL({arrow.precision}, {arrow.scale})"
+    if isinstance(kind, sa.DateTime):
+        return "TIMESTAMPTZ" if kind.timezone else "TIMESTAMP"
+    for sa_type, text in SQL_TYPES[dialect].items():
+        if isinstance(kind, sa_type):
+            return text
+    # String(n): o DuckDB aceita e ignora o comprimento, o Redshift o aplica em bytes.
+    return f"VARCHAR({kind.length})" if kind.length else "VARCHAR"
 
 
-@compiles(sa.Uuid, "redshift")
-@compiles(sa.Uuid, "duckdb")
-def uuid_as_varchar(element, compiler, **kw):
-    return "VARCHAR(36)"              # o contrato guarda UUID como texto nos dois motores
+def quoted(name: str) -> str:
+    """O identificador entre aspas duplas: `to` e `timestamp` são palavras reservadas."""
+    return f'"{name}"'
 
 
-@compiles(CreateTable, "redshift")
-def create_table_with_physical_options(element, compiler, **kw):
-    text = compiler.visit_create_table(element, **kw).rstrip()
-    options = table_options(element.element)
-    clauses = ([f"DISTSTYLE {options.redshift['diststyle']}"] if options.redshift.get("diststyle") else []) \
-        + ([f"DISTKEY ({options.redshift['distkey']})"] if options.redshift.get("distkey") else []) \
-        + ([f"SORTKEY ({', '.join(options.sort_key)})"] if options.sort_key else [])
-    return f"{text} {' '.join(clauses)}\n\n" if clauses else f"{text}\n\n"
+def column_ddl(column: sa.Column, dialect: Dialect) -> str:
+    """A linha da coluna no CREATE TABLE: nome, tipo e NOT NULL."""
+    text = f"{quoted(column.name)} {sql_type(column, dialect)}"
+    if not column.nullable:
+        text += " NOT NULL"
+    return text
 
 
-def ddl(table: sa.Table, dialect: str, prefix: str = "", keys: bool = False) -> str:
-    """CREATE TABLE do sandbox: colunas, NOT NULL e comentários; chaves só com keys=True; CHECK só no DuckDB."""
-    columns = [sa.Column(c.name, c.type, nullable=c.nullable, comment=c.comment, primary_key=keys and c.primary_key) for c in table.columns]
-    checks = [sa.CheckConstraint(c.sqltext) for c in table.constraints if isinstance(c, sa.CheckConstraint)] if dialect == "duckdb" else []
-    copy = sa.Table(quoted_name(f"{prefix}{table.name}", quote=False), sa.MetaData(), *columns, *checks, comment=table.comment, info=table.info)
-    return str(CreateTable(copy).compile(dialect=DIALECTS[dialect])).strip()
+def redshift_options(options: TableOptions) -> str:
+    """As cláusulas físicas do Redshift depois do parêntese: DISTSTYLE, DISTKEY e SORTKEY."""
+    clauses = []
+    if options.redshift.get("diststyle"):
+        clauses.append(f"DISTSTYLE {options.redshift['diststyle']}")
+    if options.redshift.get("distkey"):
+        clauses.append(f"DISTKEY ({quoted(options.redshift['distkey'])})")
+    if options.sort_key:
+        names = ", ".join(quoted(name) for name in options.sort_key)
+        clauses.append(f"SORTKEY ({names})")
+    return " " + " ".join(clauses) if clauses else ""
 
 
-def cast(data, table: sa.Table):
-    """O lote ou a tabela no esquema do contrato; um RecordBatchReader sai como leitor que converte lote a lote."""
-    if isinstance(data, pa.RecordBatchReader):
-        schema = cast(data.schema.empty_table(), table).schema
-        return pa.RecordBatchReader.from_batches(schema, (cast(batch, table) for batch in data))
-    contract = arrow_schema(table)
-    present = [field for field in contract if field.name in data.schema.names]
+def ddl(table: sa.Table, dialect: Dialect, prefix: str = "") -> str:
+    """O CREATE TABLE do sandbox: colunas, tipos e NOT NULL, todo identificador entre aspas.
+
+    Sem chave, DEFERRABLE, Identity, CHECK nem comentário: as chaves são da auditoria, e o
+    comentário vai no esquema Delta.
+    """
+    lines = []
+    for column in table.columns:
+        lines.append("    " + column_ddl(column, dialect))
+    text = f"CREATE TABLE {quoted(prefix + table.name)} (\n" + ",\n".join(lines) + "\n)"
+    if dialect == "redshift":
+        text += redshift_options(table_options(table))
+    return text
+
+
+# ---------------------------------------------------------------- o cast por lote
+
+def contract_fields(data: pa.Table | pa.RecordBatch, contract: pa.Schema, table: str) -> list:
+    """Os campos do contrato presentes nos dados, na ordem do contrato; nenhum é erro."""
+    present = []
+    for field in contract:
+        if field.name in data.schema.names:
+            present.append(field)
     if not present:
-        raise ContractError(f"{table.name}: nenhuma coluna do contrato em {data.schema.names}")
-    columns, fields = [], []
-    for field in present:
-        column, kind = data.column(field.name), data.schema.field(field.name).type
-        if pa.types.is_floating(kind) and pa.types.is_decimal(field.type):
-            if not pc.all(pc.equal(pc.round(column, field.type.scale), column)).as_py():
-                raise ContractError(f"{table.name}.{field.name}: double fora da escala {field.type.scale}; arredonde no cliente antes de chamar")
-        if pa.types.is_integer(kind) and pa.types.is_decimal(field.type):
-            column = column.cast(pa.decimal128(field.type.precision + 3, field.type.scale))
-        if pa.types.is_timestamp(kind) and pa.types.is_date(field.type):
-            if not pc.all(pc.equal(column.cast(field.type).cast(kind), column)).as_py():
-                raise ContractError(f"{table.name}.{field.name}: timestamp com hora numa coluna Date; trunque no cliente")
-        if pa.types.is_nested(kind) and isinstance(table.c[field.name].type, sa.JSON):
-            raise ContractError(f"{table.name}.{field.name}: documento JSON como {kind}; serialize com json.dumps antes de chamar")
-        limit = getattr(table.c[field.name].type, "length", None)
-        if limit and pa.types.is_string(field.type) and pa.types.is_string(kind) and (pc.max(pc.binary_length(column)).as_py() or 0) > limit:
-            raise ContractError(f"{table.name}.{field.name}: texto acima de String({limit}) em bytes")
-        columns.append(column)
-        fields.append(field)
-    try:                                                   # nomes já na ordem; nulo em NOT NULL e perda de precisão recusados aqui
-        return type(data).from_arrays([c.cast(f.type, safe=True) for c, f in zip(columns, fields)], schema=pa.schema(fields, metadata=contract.metadata)).cast(pa.schema(fields, metadata=contract.metadata), safe=True)
+        raise ContractError(f"{table}: nenhuma coluna do contrato em {data.schema.names}")
+    return present
+
+
+def refuse_double_out_of_scale(column, field: pa.Field, table: str) -> None:
+    """Um double numa coluna Numeric entra só quando pc.round o devolve igual."""
+    rounded = pc.round(column, field.type.scale)
+    # min_count=0: a tabela vazia de reader.schema.empty_table() passa; sem ele, pc.all dá nulo.
+    if not pc.all(pc.equal(rounded, column), min_count=0).as_py():
+        raise ContractError(f"{table}.{field.name}: double fora da escala {field.type.scale}; "
+                            "arredonde no cliente antes de chamar")
+
+
+def refuse_timestamp_with_time(column, field: pa.Field, table: str) -> None:
+    """Um timestamp numa coluna Date entra só quando a ida e volta o devolve igual."""
+    round_trip = column.cast(field.type).cast(column.type)
+    if not pc.all(pc.equal(round_trip, column), min_count=0).as_py():
+        raise ContractError(f"{table}.{field.name}: timestamp com hora numa coluna Date; "
+                            "trunque no cliente")
+
+
+def refuse_nested_json(column, field: pa.Field, table: str) -> None:
+    """Um documento JSON chega serializado; struct, list e map são recusados."""
+    if pa.types.is_nested(column.type):
+        raise ContractError(f"{table}.{field.name}: documento JSON como {column.type}; "
+                            "serialize com json.dumps antes de chamar")
+
+
+def refuse_text_above_length(column, field: pa.Field, table: str, limit: int) -> None:
+    """Texto acima de String(n), medido em bytes como o VARCHAR(n) do Redshift."""
+    longest = pc.max(pc.binary_length(column)).as_py() or 0
+    if longest > limit:
+        raise ContractError(f"{table}.{field.name}: texto acima de String({limit}) em bytes")
+
+
+def contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa.Table):
+    """A coluna dos dados no tipo do contrato; as perdas que safe=True não acusa vêm antes."""
+    column = data.column(field.name)
+    kind = table.c[field.name].type
+    if pa.types.is_floating(column.type) and pa.types.is_decimal(field.type):
+        refuse_double_out_of_scale(column, field, table.name)
+    if pa.types.is_integer(column.type) and pa.types.is_decimal(field.type):
+        # O cast direto de int64 para decimal128(p, s) pede precisão p + 3; o desvio é seguro.
+        column = column.cast(pa.decimal128(field.type.precision + 3, field.type.scale))
+    if pa.types.is_timestamp(column.type) and pa.types.is_date(field.type):
+        refuse_timestamp_with_time(column, field, table.name)
+    if isinstance(kind, sa.JSON):
+        refuse_nested_json(column, field, table.name)
+    limit = getattr(kind, "length", None)
+    if limit and pa.types.is_string(column.type):
+        refuse_text_above_length(column, field, table.name, limit)
+    try:
+        # safe=True recusa escala perdida, nanossegundo não nulo e estouro.
+        return column.cast(field.type, safe=True)
+    except (pa.ArrowInvalid, ValueError) as error:
+        raise ContractError(f"{table.name}.{field.name}: {error}") from None
+
+
+def contract_arrays(data: pa.Table | pa.RecordBatch, table: sa.Table) -> tuple[list, pa.Schema]:
+    """As colunas do contrato presentes, convertidas, e o esquema delas."""
+    contract = arrow_schema(table)
+    fields = contract_fields(data, contract, table.name)
+    arrays = []
+    for field in fields:
+        arrays.append(contract_column(data, field, table))
+    return arrays, pa.schema(fields, metadata=contract.metadata)
+
+
+def cast_batch(batch: pa.RecordBatch, table: sa.Table) -> pa.RecordBatch:
+    """O lote no esquema do contrato; nulo em coluna NOT NULL é recusado pelo cast do esquema."""
+    arrays, schema = contract_arrays(batch, table)
+    try:
+        return pa.RecordBatch.from_arrays(arrays, schema=schema).cast(schema, safe=True)
     except (pa.ArrowInvalid, ValueError) as error:
         raise ContractError(f"{table.name}: {error}") from None
 
 
-def check_models(metadata: sa.MetaData) -> list[str]:
+def cast_table(data: pa.Table, table: sa.Table) -> pa.Table:
+    """A tabela no esquema do contrato, pelo mesmo caminho do lote."""
+    arrays, schema = contract_arrays(data, table)
+    try:
+        return pa.Table.from_arrays(arrays, schema=schema).cast(schema, safe=True)
+    except (pa.ArrowInvalid, ValueError) as error:
+        raise ContractError(f"{table.name}: {error}") from None
+
+
+def cast_batches(reader: pa.RecordBatchReader, table: sa.Table):
+    """Os lotes do leitor convertidos um a um, para o leitor de saída."""
+    for batch in reader:
+        yield cast_batch(batch, table)
+
+
+def cast_reader(reader: pa.RecordBatchReader, table: sa.Table) -> pa.RecordBatchReader:
+    """O leitor que converte lote a lote, com o esquema do primeiro lote convertido."""
+    schema = cast_table(reader.schema.empty_table(), table).schema
+    return pa.RecordBatchReader.from_batches(schema, cast_batches(reader, table))
+
+
+def cast(data, table: sa.Table):
+    """`pa.Table`, `pa.RecordBatch` ou `RecordBatchReader` no contrato, no mesmo tipo."""
+    if isinstance(data, pa.RecordBatchReader):
+        return cast_reader(data, table)
+    if isinstance(data, pa.RecordBatch):
+        return cast_batch(data, table)
+    return cast_table(data, table)
+
+
+# ---------------------------------------------------------------- a conferência dos modelos
+
+def column_problems(column: sa.Column) -> list[str]:
+    """As violações de uma coluna: tipo, autoincrement, Identity, String sem n, comentário."""
+    table = column.table.name
     problems = []
-    for table in metadata.sorted_tables:
-        options = table_options(table)
-        for column in table.columns:
-            try:
-                arrow_type(column)
-            except ContractError as error:
-                problems.append(str(error))
-            if column.primary_key and isinstance(column.type, sa.Integer) and column.autoincrement in ("auto", True):   # o padrão "auto" emite SERIAL no duckdb_engine
-                problems.append(f"{table.name}.{column.name}: chave inteira com autoincrement; declare autoincrement=False")
-            if column.identity is not None:
-                problems.append(f"{table.name}.{column.name}: Identity fora do contrato")
-            if not column.comment:
-                problems.append(f"{table.name}.{column.name}: coluna sem comentário")
-        for constraint in table.foreign_key_constraints:
-            if constraint.deferrable or constraint.initially:
-                problems.append(f"{table.name}: chave estrangeira DEFERRABLE em {[c.name for c in constraint.columns]}")
-        if options.partition_by:
-            column = table.c.get(options.partition_by)
-            if column is None:
-                problems.append(f"{table.name}: partition_by aponta {options.partition_by}, que a tabela não tem")
-            elif not (isinstance(column.type, sa.String) and column.type.length == 10):
-                problems.append(f"{table.name}.{options.partition_by}: coluna de partição fora de String(10)")
-            if not options.partition_source or options.partition_source not in table.c:
-                problems.append(f"{table.name}: partition_by sem partition_source válido")
-        if not options.keys:
-            problems.append(f"{table.name}: sem chave primária e sem keys")
+    try:
+        arrow_type(column)
+    except ContractError as error:
+        problems.append(str(error))
+    # O autoincrement padrão é a string "auto", e o duckdb_engine emitiria SERIAL por ele.
+    integer_key = column.primary_key and isinstance(column.type, sa.Integer)
+    if integer_key and column.autoincrement in ("auto", True):
+        problems.append(f"{table}.{column.name}: chave inteira com autoincrement; "
+                        "declare autoincrement=False")
+    if column.identity is not None:
+        problems.append(f"{table}.{column.name}: Identity fora do contrato")
+    if type(column.type) is sa.String and not column.type.length:
+        problems.append(f"{table}.{column.name}: String sem comprimento; "
+                        "declare String(n) ou Text")
+    if not column.comment:
+        problems.append(f"{table}.{column.name}: coluna sem comentário")
     return problems
 
 
-schema = arrow_schema(Operacao.__table__)
-print("arrow:", [f"{f.name}:{f.type}{'' if f.nullable else '!'}" for f in schema])
-print("delta:", {f["name"]: f["type"] for f in json.loads(delta_schema(Operacao.__table__).to_json())["fields"]})
-print("options:", table_options(Operacao.__table__))
-print("-- duckdb\n" + ddl(Operacao.__table__, "duckdb"))
-print("-- redshift\n" + ddl(Operacao.__table__, "redshift", prefix="exec_42_"))
-con = duckdb.connect()
-con.execute(ddl(Operacao.__table__, "duckdb"))
-print("duckdb:", con.execute("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'cad_operacoes'").fetchall())
+def key_problems(table: sa.Table, options: TableOptions) -> list[str]:
+    """As violações das chaves: DEFERRABLE e a tabela sem chave alguma."""
+    problems = []
+    for constraint in table.foreign_key_constraints:
+        if constraint.deferrable or constraint.initially:
+            columns = list(column_names(constraint.columns))
+            problems.append(f"{table.name}: chave estrangeira DEFERRABLE em {columns}")
+    if not options.keys:
+        problems.append(f"{table.name}: sem chave primária e sem keys")
+    return problems
 
-# Um lote com as colunas fora de ordem, large_string, nanossegundos zerados e inteiro em Numeric entra no contrato.
+
+def partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
+    """As violações da partição: a coluna ausente ou fora de String(10), a origem ausente."""
+    if not options.partition_by:
+        return []
+    problems = []
+    column = table.c.get(options.partition_by)
+    if column is None:
+        problems.append(
+            f"{table.name}: partition_by aponta {options.partition_by}, que a tabela não tem")
+    elif not (isinstance(column.type, sa.String) and column.type.length == 10):
+        problems.append(
+            f"{table.name}.{options.partition_by}: coluna de partição fora de String(10)")
+    if not options.partition_source or options.partition_source not in table.c:
+        problems.append(f"{table.name}: partition_by sem partition_source válido")
+    return problems
+
+
+def check_models(metadata: sa.MetaData) -> list[str]:
+    """As violações do contrato nos modelos, uma por texto; vazia nos modelos corrigidos."""
+    problems = []
+    for table in metadata.sorted_tables:
+        if not table.comment:
+            problems.append(f"{table.name}: tabela sem comentário")
+        for column in table.columns:
+            problems.extend(column_problems(column))
+        options = table_options(table)
+        problems.extend(key_problems(table, options))
+        problems.extend(partition_problems(table, options))
+    return problems
+
+
+def schema_files(metadata: sa.MetaData) -> dict[str, str]:
+    """`<tabela>.delta.json`, `<tabela>.duckdb.sql` e `<tabela>.redshift.sql` em memória."""
+    files = {}
+    for table in metadata.sorted_tables:
+        files[f"{table.name}.delta.json"] = delta_schema(table).to_json() + "\n"
+        files[f"{table.name}.duckdb.sql"] = ddl(table, "duckdb") + "\n"
+        files[f"{table.name}.redshift.sql"] = ddl(table, "redshift") + "\n"
+    return files
+
+
+# ---------------------------------------------------------------- a execução
+
+table = Operacao.__table__
+schema = arrow_schema(table)
+print("arrow:", [f"{f.name}:{f.type}{'' if f.nullable else '!'}" for f in schema])
+delta_fields = json.loads(delta_schema(table).to_json())["fields"]
+print("delta:", {f["name"]: f["type"] for f in delta_fields})
+print("options:", table_options(table))
+print("-- duckdb\n" + ddl(table, "duckdb"))
+print("-- redshift\n" + ddl(table, "redshift", prefix="exec_42_"))
+con = duckdb.connect()
+con.execute(ddl(table, "duckdb"))
+con.execute(ddl(table, "duckdb", prefix="{prefix}"))
+print("duckdb:", con.execute(
+    "SELECT column_name, data_type FROM information_schema.columns "
+    "WHERE table_name = 'cad_operacoes' ORDER BY ordinal_position").fetchall())
+print("tabelas:",
+      con.execute("SELECT table_name FROM information_schema.tables ORDER BY 1").fetchall())
+print("arquivos:", sorted(schema_files(Base.metadata)))
+
+# Um lote com as colunas fora de ordem, large_string, nanossegundos zerados e inteiro em Numeric
+# entra no contrato, como lote, como tabela e como leitor.
 batch = pa.RecordBatch.from_pydict({
-    "operacao": pa.array(["a", "b"], pa.large_string()), "id_operacao": pa.array([1, 2], pa.int32()),
-    "valor": pa.array([10, 20], pa.int64()), "data": pa.array([dt.datetime(2026, 8, 31), dt.datetime(2026, 8, 31)], pa.timestamp("ns")),
+    "operacao": pa.array(["a", "b"], pa.large_string()),
+    "id_operacao": pa.array([1, 2], pa.int32()),
+    "valor": pa.array([10, 20], pa.int64()),
+    "data": pa.array([dt.datetime(2026, 8, 31), dt.datetime(2026, 8, 31)], pa.timestamp("ns")),
     "data_str": ["2026-08-31", "2026-08-31"], "extra": [1, 2]})
-done = cast(batch, Operacao.__table__)
-print("cast:", done.schema.names, [str(t) for t in done.schema.types], done.column("valor").to_pylist())
+done = cast(batch, table)
+print("cast:", done.schema.names, [str(t) for t in done.schema.types],
+      done.column("valor").to_pylist())
+print("tabela:", type(cast(pa.Table.from_batches([batch]), table)).__name__,
+      cast(pa.Table.from_batches([batch]), table).num_rows)
+reader = cast(pa.RecordBatchReader.from_batches(batch.schema, [batch, batch]), table)
+print("leitor:", type(reader).__name__, reader.schema.names[:3], reader.read_all().num_rows)
+
 
 # As recusas, cada uma com a instrução ao cliente.
-def refused(description, batch):
+def refused(description: str, batch: pa.RecordBatch) -> None:
     try:
-        cast(batch, Operacao.__table__)
+        cast(batch, table)
         print(f"{description}: aceito")
     except ContractError as error:
         print(f"{description}: {str(error)[:110]}")
 
-refused("nulo em NOT NULL", pa.RecordBatch.from_pydict({"id_operacao": pa.array([1, None], pa.int64())}))
+
+refused("nulo em NOT NULL",
+        pa.RecordBatch.from_pydict({"id_operacao": pa.array([1, None], pa.int64())}))
 refused("double fora da escala", pa.RecordBatch.from_pydict({"valor": pa.array([1.236])}))
 refused("double na escala", pa.RecordBatch.from_pydict({"valor": pa.array([1.25, 2.5])}))
-refused("hora numa coluna Date", pa.RecordBatch.from_pydict({"data": pa.array([dt.datetime(2026, 8, 31, 12)], pa.timestamp("us"))}))
+refused("hora numa coluna Date",
+        pa.RecordBatch.from_pydict(
+            {"data": pa.array([dt.datetime(2026, 8, 31, 12)], pa.timestamp("us"))}))
 refused("struct em JSON", pa.RecordBatch.from_pydict({"meta": pa.array([{"k": 1}])}))
-refused("texto acima de String(100)", pa.RecordBatch.from_pydict({"operacao": pa.array(["x" * 101])}))
-refused("precisão perdida", pa.RecordBatch.from_pydict({"valor": pa.array([decimal.Decimal("1.234")], pa.decimal128(20, 3))}))
-refused("nanossegundo não nulo", pa.RecordBatch.from_pydict({"carimbo": pa.array([1], pa.timestamp("ns"))}))
-print("nanossegundo nulo:", cast(pa.RecordBatch.from_pydict({"carimbo": pa.array([1000], pa.timestamp("ns"))}), Operacao.__table__).schema.field("carimbo").type)
+refused("texto acima de String(100)",
+        pa.RecordBatch.from_pydict({"operacao": pa.array(["x" * 101])}))
+refused("precisão perdida",
+        pa.RecordBatch.from_pydict(
+            {"valor": pa.array([decimal.Decimal("1.234")], pa.decimal128(20, 3))}))
+refused("nanossegundo não nulo",
+        pa.RecordBatch.from_pydict({"timestamp": pa.array([1], pa.timestamp("ns"))}))
+refused("coluna alguma do contrato", pa.RecordBatch.from_pydict({"extra": [1]}))
+accepted = cast(pa.RecordBatch.from_pydict({"timestamp": pa.array([1000], pa.timestamp("ns"))}),
+                table)
+print("nanossegundo nulo:", accepted.schema.field("timestamp").type)
 
 
 class Ruim(Base):
     __tablename__ = "ruim"
     __table_args__ = {"info": {"serialize_db": {"partition_by": ["mes"]}}}
     id: Mapped[int] = mapped_column(sa.Integer, primary_key=True)
-    id_operacao: Mapped[int] = mapped_column(sa.ForeignKey("cad_operacoes.id_operacao", deferrable=True, initially="DEFERRED"))
+    id_operacao: Mapped[int] = mapped_column(
+        sa.ForeignKey("cad_operacoes.id_operacao", deferrable=True, initially="DEFERRED"))
     mes: Mapped[str] = mapped_column(sa.String(7))
+    nome: Mapped[str] = mapped_column(sa.String)
     peso: Mapped[bytes] = mapped_column(sa.LargeBinary)
 
 
+problems = check_models(Base.metadata)
+print("cad_operacoes limpa:", [p for p in problems if "cad_operacoes" in p] == [])
 print("check_models:")
 for problem in check_models(Base.metadata):
     print("  -", problem)
@@ -430,45 +770,70 @@ for problem in check_models(Base.metadata):
 Saída:
 
 ```
-arrow: ['id_operacao:int64!', 'data:date32[day]!', 'operacao:string!', 'valor:decimal128(18, 2)!', 'spread:double', 'observacao:string', 'meta:string', 'carimbo:timestamp[us]', 'data_str:string!']
-delta: {'id_operacao': 'long', 'data': 'date', 'operacao': 'string', 'valor': 'decimal(18,2)', 'spread': 'double', 'observacao': 'string', 'meta': 'string', 'carimbo': 'timestamp_ntz', 'data_str': 'string'}
-options: TableOptions(partition_by='data_str', partition_source='data', sort_key=('data', 'id_operacao'), redshift={'diststyle': 'KEY', 'distkey': 'id_operacao'}, keys=(('id_operacao',), ('data', 'operacao')))
+arrow: ['id_operacao:int64!', 'data:date32[day]!', 'operacao:string!', 'to:string!', 'valor:decimal128(18, 2)!', 'spread:double', 'parcelas:int16', 'sistema:int32!', 'ativa:bool!', 'observacao:string', 'meta:string', 'timestamp:timestamp[us]!', 'carimbo_utc:timestamp[us, tz=UTC]', 'chave:string', 'data_str:string!']
+delta: {'id_operacao': 'long', 'data': 'date', 'operacao': 'string', 'to': 'string', 'valor': 'decimal(18,2)', 'spread': 'double', 'parcelas': 'short', 'sistema': 'integer', 'ativa': 'boolean', 'observacao': 'string', 'meta': 'string', 'timestamp': 'timestamp_ntz', 'carimbo_utc': 'timestamp', 'chave': 'string', 'data_str': 'string'}
+options: TableOptions(partition_by='data_str', partition_source='data', sort_key=('data', 'operacao'), redshift={'diststyle': 'KEY', 'distkey': 'id_operacao'}, keys=(('id_operacao',), ('data', 'operacao')))
 -- duckdb
-CREATE TABLE cad_operacoes (
-	id_operacao BIGINT NOT NULL,
-	data DATE NOT NULL,
-	operacao VARCHAR(100) NOT NULL,
-	valor NUMERIC(18, 2) NOT NULL,
-	spread DOUBLE PRECISION,
-	observacao TEXT,
-	meta JSON,
-	carimbo TIMESTAMP,
-	data_str VARCHAR(10) NOT NULL
+CREATE TABLE "cad_operacoes" (
+    "id_operacao" BIGINT NOT NULL,
+    "data" DATE NOT NULL,
+    "operacao" VARCHAR(100) NOT NULL,
+    "to" VARCHAR(2) NOT NULL,
+    "valor" DECIMAL(18, 2) NOT NULL,
+    "spread" DOUBLE,
+    "parcelas" SMALLINT,
+    "sistema" INTEGER NOT NULL,
+    "ativa" BOOLEAN NOT NULL,
+    "observacao" VARCHAR,
+    "meta" JSON,
+    "timestamp" TIMESTAMP NOT NULL,
+    "carimbo_utc" TIMESTAMPTZ,
+    "chave" VARCHAR(36),
+    "data_str" VARCHAR(10) NOT NULL
 )
 -- redshift
-CREATE TABLE exec_42_cad_operacoes (
-	...
-	observacao VARCHAR(65535),
-	meta SUPER,
-	carimbo TIMESTAMP,
-	data_str VARCHAR(10) NOT NULL
-) DISTSTYLE KEY DISTKEY (id_operacao) SORTKEY (data, id_operacao)
-duckdb: [('id_operacao', 'BIGINT'), ('data', 'DATE'), ('operacao', 'VARCHAR'), ('valor', 'DECIMAL(18,2)'), ('spread', 'DOUBLE'), ('observacao', 'VARCHAR'), ('meta', 'JSON'), ('carimbo', 'TIMESTAMP'), ('data_str', 'VARCHAR')]
+CREATE TABLE "exec_42_cad_operacoes" (
+    "id_operacao" BIGINT NOT NULL,
+    "data" DATE NOT NULL,
+    "operacao" VARCHAR(100) NOT NULL,
+    "to" VARCHAR(2) NOT NULL,
+    "valor" DECIMAL(18, 2) NOT NULL,
+    "spread" DOUBLE PRECISION,
+    "parcelas" SMALLINT,
+    "sistema" INTEGER NOT NULL,
+    "ativa" BOOLEAN NOT NULL,
+    "observacao" VARCHAR(65535),
+    "meta" SUPER,
+    "timestamp" TIMESTAMP NOT NULL,
+    "carimbo_utc" TIMESTAMPTZ,
+    "chave" VARCHAR(36),
+    "data_str" VARCHAR(10) NOT NULL
+) DISTSTYLE KEY DISTKEY ("id_operacao") SORTKEY ("data", "operacao")
+duckdb: [('id_operacao', 'BIGINT'), ('data', 'DATE'), ('operacao', 'VARCHAR'), ('to', 'VARCHAR'), ('valor', 'DECIMAL(18,2)'), ('spread', 'DOUBLE'), ('parcelas', 'SMALLINT'), ('sistema', 'INTEGER'), ('ativa', 'BOOLEAN'), ('observacao', 'VARCHAR'), ('meta', 'JSON'), ('timestamp', 'TIMESTAMP'), ('carimbo_utc', 'TIMESTAMP WITH TIME ZONE'), ('chave', 'VARCHAR'), ('data_str', 'VARCHAR')]
+tabelas: [('cad_operacoes',), ('{prefix}cad_operacoes',)]
+arquivos: ['cad_operacoes.delta.json', 'cad_operacoes.duckdb.sql', 'cad_operacoes.redshift.sql']
 cast: ['id_operacao', 'data', 'operacao', 'valor', 'data_str'] ['int64', 'date32[day]', 'string', 'decimal128(18, 2)', 'string'] [Decimal('10.00'), Decimal('20.00')]
+tabela: Table 2
+leitor: RecordBatchReader ['id_operacao', 'data', 'operacao'] 4
 nulo em NOT NULL: cad_operacoes: Casting field 'id_operacao' with null values to non-nullable
 double fora da escala: cad_operacoes.valor: double fora da escala 2; arredonde no cliente antes de chamar
 double na escala: aceito
 hora numa coluna Date: cad_operacoes.data: timestamp com hora numa coluna Date; trunque no cliente
 struct em JSON: cad_operacoes.meta: documento JSON como struct<k: int64>; serialize com json.dumps antes de chamar
 texto acima de String(100): cad_operacoes.operacao: texto acima de String(100) em bytes
-precisão perdida: cad_operacoes: Rescaling Decimal value would cause data loss
-nanossegundo não nulo: cad_operacoes: Casting from timestamp[ns] to timestamp[us] would lose data: 1
+precisão perdida: cad_operacoes.valor: Rescaling Decimal value would cause data loss
+nanossegundo não nulo: cad_operacoes.timestamp: Casting from timestamp[ns] to timestamp[us] would lose data: 1
+coluna alguma do contrato: cad_operacoes: nenhuma coluna do contrato em ['extra']
 nanossegundo nulo: timestamp[us]
+cad_operacoes limpa: True
 check_models:
+  - ruim: tabela sem comentário
   - ruim.id: chave inteira com autoincrement; declare autoincrement=False
   - ruim.id: coluna sem comentário
   - ruim.id_operacao: coluna sem comentário
   - ruim.mes: coluna sem comentário
+  - ruim.nome: String sem comprimento; declare String(n) ou Text
+  - ruim.nome: coluna sem comentário
   - ruim.peso: tipo fora do contrato: LargeBinary()
   - ruim.peso: coluna sem comentário
   - ruim: chave estrangeira DEFERRABLE em ['id_operacao']
@@ -478,19 +843,24 @@ check_models:
 
 ## Decisões pendentes
 
-- **[decisão] `Text` como `VARCHAR(65535)` no Redshift** por regra `@compiles`, em vez de exigir
+- **[decisão] `Text` como `VARCHAR(65535)` no Redshift** por `sql_type`, em vez de exigir
   `String(65535)` nos modelos ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **[decisão] O comprimento de `String(n)` em bytes ou em caracteres.** O rascunho mede bytes, a
   medida do `VARCHAR(n)` do Redshift; um texto de `n` caracteres acentuados passaria na medida por
   caracteres e seria recusado pelo `COPY`. A auditoria da [etapa 4](PLAN-STAGE-4.md) usa a mesma
   medida (`octet_length` no Redshift, `strlen` no DuckDB).
-- **[decisão] A coluna sem comentário como violação em `check_models`.** O modelo de referência não
-  tem comentário algum; a regra obriga a etapa 1 a escrever um por coluna na cópia, o que é trabalho
-  do dono do modelo.
-- **[decisão] `duckdb-engine` e `sqlalchemy-redshift` como dependências de execução** enquanto `ddl`
-  compilar pelo dialeto. A alternativa é `ddl` gerar o texto sem dialeto, com a tabela de tipos de
-  [`schema.md`](schema.md), o que tira as duas dependências já na etapa 1 e deixa o SQLAlchemy só
-  nos modelos e no `sql.render`.
+- **[decisão] A tabela e a coluna sem comentário como violação em `check_models`.** O modelo de
+  referência não tem comentário algum, e o modelo cliente tem um em cada tabela e coluna, uma
+  primeira redação; a regra obriga o dono do modelo a escrever os seus.
+- **[proposto] `ddl` gerado pela tabela de tipos, sem o dialeto do SQLAlchemy.** As três regras
+  `@compiles` (`Text` no Redshift, `Uuid` nos dois, `CreateTable` com as cláusulas físicas) e o
+  `quoted_name(quote=False)` saem, os identificadores saem entre aspas por `quoted`, e
+  `duckdb-engine` e `sqlalchemy-redshift` ficam no grupo `dev`. A alternativa é compilar pelo
+  dialeto, que cita as palavras reservadas sozinho e leva os dois pacotes para as dependências de
+  execução. A escolha vale para `ddl`; a [etapa 2](PLAN-STAGE-2.md) decide o `render` dos
+  statements.
+- **[proposto] `String` sem comprimento como violação de `check_models`.** Sem `n`, o Redshift
+  daria `VARCHAR(256)` e `cast` não mediria nada; `Text` é a forma sem limite.
 - **[decisão] Os comprimentos de `String(n)` do modelo cliente.** Escolhidos das leituras com
   folga (`contrato` e `operacao` 50, os nomes 50 e 100, `numero` 20, `descricao` e `meta` 255,
   `area` e `departamento` 20, `to` 2, `fonte_familia` 3); sem `n`, o Redshift daria `VARCHAR(256)`

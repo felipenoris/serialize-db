@@ -66,7 +66,7 @@ projeto:
 | `ALTER TABLE` | `ADD CONSTRAINT`, `DROP CONSTRAINT`. | Sem `ADD`/`DROP CONSTRAINT`; `ADD PRIMARY KEY` existe. Colunas com índice não podem ser removidas nem mudar de tipo. |
 | `VACUUM` | Recupera espaço e atualiza estatísticas. | Só estatísticas. |
 | Divisão de inteiros | `1 / 2` é `0`. | `1 / 2` é `0.5`; `1 // 2` é `0`. |
-| Identificadores | Sem aspas viram minúsculas; com aspas preservam maiúsculas. | Insensíveis a maiúsculas em qualquer caso, com a grafia preservada. |
+| Identificadores | Sem aspas viram minúsculas; com aspas preservam maiúsculas. `TO` e `TIMESTAMP` são reservadas. | Insensíveis a maiúsculas em qualquer caso, com a grafia preservada. `duckdb_keywords()` dá a categoria: `to` é `reserved` (`CREATE TABLE t (to VARCHAR(2))` falha com `syntax error at or near "to"`), `timestamp` é `column_name` e `data` é `unreserved`, aceitas sem aspas (2026-09-21). |
 | Igualdade com cast implícito | `'1.1' = 1` é erro. | `'1.1' = 1` é verdadeiro. |
 
 | Inserção linha a linha | Adequada. | Prejudicial; a documentação pede lotes acima de algumas linhas. |

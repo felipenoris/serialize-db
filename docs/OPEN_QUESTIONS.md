@@ -43,8 +43,8 @@ foi medido em [`POC.md`](POC.md).
   um endereço sem rota ([`POC.md`](POC.md)). A próxima execução dos probes no alvo diz o que sobra;
   a permissão sobre a raiz fica provada pela primeira escrita.
 - **`Text` no Redshift.** O `sqlalchemy-redshift` compila `Text` como `TEXT`, que o Redshift guarda
-  como `VARCHAR(256)`. A [etapa 1](PLAN-STAGE-1.md) emite `VARCHAR(65535)` por uma regra
-  `@compiles(Text, "redshift")` em `ddl`, em vez de exigir `String(65535)` nos modelos; a escolha
+  como `VARCHAR(256)`. A [etapa 1](PLAN-STAGE-1.md) emite `VARCHAR(65535)` por `sql_type`
+  em `ddl`, em vez de exigir `String(65535)` nos modelos; a escolha
   ainda não foi confirmada pelo usuário.
 - **Barreira por tabela.** Um cliente que dispara `load` numa thread e esquece o `result()` lê o
   estado anterior em silêncio, porque o DuckDB não espera. A guarda: `load` marca a tabela em voo,
@@ -64,13 +64,14 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `@compiles`; `String(n)` medido em
-  bytes; a coluna sem comentário como violação de `check_models`; `duckdb-engine` e
-  `sqlalchemy-redshift` como dependências de execução enquanto `ddl` compilar pelo dialeto; no modelo
-  cliente escrito em 2026-09-21: os comprimentos de `String(n)`, a `sort_key` das quatro tabelas
-  particionadas, a distribuição no Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de
-  `cad_contratos` para colunas não únicas de `rel_contrato_operacao`, e a revisão dos comentários
-  pelo dono do modelo.
+- [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `sql_type`; `String(n)` medido em
+  bytes; a tabela e a coluna sem comentário como violação de `check_models`; `ddl` gerado pela
+  tabela de tipos sem o dialeto do SQLAlchemy, com `duckdb-engine` e `sqlalchemy-redshift` só no
+  grupo `dev` (proposto); `String` sem comprimento como violação de `check_models` (proposto); no
+  modelo cliente: os comprimentos de `String(n)`, a `sort_key` das quatro tabelas particionadas, a
+  distribuição no Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos`
+  para colunas não únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do
+  modelo.
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
   `dev`.
 - [Etapa 3](PLAN-STAGE-3.md): a reserva de credenciais do `boto3` em `storage_options`; as colunas

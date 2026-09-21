@@ -234,3 +234,18 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `record`: a loop that repeats a statement records each outcome before the next step that can
   fail. The same source reading answered the `fetchmany` question: `execute` reads every row into
   `cursor._cached_rows`.
+- **A model's identifiers are read against the engines' keyword lists before SQL text is generated
+  bare** (2026-09-21). The stage 1 draft rendered its DDL on an example model whose column names were
+  all safe, and the plan sent the `{prefix}` sentinel out without quotes on purpose. The client model
+  has `to` in `cad_contratos` and `timestamp` in `cad_lancamentos`; `duckdb_keywords()` classifies
+  `to` as `reserved` (`CREATE TABLE t (to VARCHAR(2))` is a parser error) and Redshift reserves both,
+  which the user's `examples/redshift_manifest.py` had already noted with `"to"` between quotes. The
+  review of stage 1 found it by querying `duckdb_keywords()` with every table and column name of the
+  model; the rule is that every identifier the library emits is double-quoted, and a new model's names
+  are read against the two keyword lists.
+- **A draft calls every input kind its signature accepts** (2026-09-21). `cast` promised
+  `pa.Table`, `pa.RecordBatch` and `RecordBatchReader`, and the draft that ran on 2026-09-21 called it
+  only with a batch. The reader path derives its output schema from `reader.schema.empty_table()`, and
+  `pc.all` over that empty column returns null, so the first call with a reader was refused as a
+  timestamp with a time of day; `min_count=0` fixed it. The rewrite in the module's shape exercised
+  the three kinds and found the defect the dense draft had hidden.
