@@ -1,0 +1,47 @@
+# SQLAlchemy and the SQL layer
+
+Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL rule per dialect or generated SQL text. Each fact ends with the `docs/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+
+## Dialects and compilation
+
+- The generic `Identity()` disappears from the Redshift DDL, and DuckDB rejects it; business keys
+  generated on the client avoid the problem on both. `docs/sqlalchemy.md`
+- A `@compiles(CreateTable, "redshift")` hook reading `Table.info` produced the same
+  `DISTSTYLE KEY DISTKEY (...) SORTKEY (...)` as the `redshift_*` arguments. Without the dialect
+  installed, `redshift_*` arguments are accepted with a `Can't validate argument` warning; with it,
+  unknown ones raise `ArgumentError`. `docs/redshift.md`
+- `duckdb_engine` reflects columns, types and comments, not primary keys or indexes; Python-scope
+  variables are invisible to queries through the engine, so a DataFrame needs `register` on the raw
+  connection. `docs/duckdb.md`
+- `compile()` needs the right dialect object: `duckdb_engine.Dialect()` renders `%(name)s`, the
+  dialect of a created engine renders `$1` (`numeric_dollar`, set when the engine loads the DBAPI)
+  and `RedshiftDialect_redshift_connector()` renders `%s` with `positiontup`. The Redshift
+  `CREATE TABLE` compiler drops `CHECK`, but `AddConstraint` and `CREATE INDEX` still render, so
+  `ddl_if(dialect="duckdb")` gates them; `create_mock_engine` dumps the whole `create_all` sequence
+  with `checkfirst=False`. `docs/sqlalchemy.md`
+- Both dialects declare `supports_native_decimal = False`: `Numeric` parameters go through
+  `to_float` and results through a float-formatting `DecimalResultProcessor`. Through duckdb_engine,
+  `Numeric(18, 2)` is exact up to 15 significant digits, 16 digits lose the last cent, 17 round to
+  10^15 and 18 fail the `INSERT`; the Arrow path keeps 18 digits and `literal_binds` text keeps the
+  decimal. `docs/sqlalchemy.md`
+- `literal_column(":mes")` survives `literal_binds` in both dialects and is the execution parameter
+  of generated SQL; `bindparam("mes")` without a value and `text("mes = :mes")` render `mes = NULL`
+  with a `SAWarning` instead of failing. Stand-alone dialect instances (`pyformat`, `format`) double
+  `%` in literals under `literal_binds` (`LIKE 'A%'` becomes `'A%%'`); `Dialect(paramstyle="named")`
+  does not. A table name with `{` is quoted unless `quoted_name(quote=False)`;
+  `replacement_traverse` swaps the contract tables of a finished statement for prefixed copies.
+  DuckDB runs the text with `$name` and a dict; `redshift_connector` with
+  `cursor.paramstyle = "named"`. The Redshift dialect derives from `PGDialect` and compiles
+  `DISTINCT ON`, `ON CONFLICT DO NOTHING` and array subscripts without error. `docs/sqlalchemy.md`
+- A SQLAlchemy schema with a dot is one quoted identifier (`"db.schema".tabela`);
+  `MetaData(schema=quoted_name("db.schema", False))` renders the three-part name in DDL, `select`
+  and `insert` (2026-09-20, Redshift dialect). `docs/sqlalchemy.md`,
+  `tests/proof_of_concept/test_sqlalchemy.py`
+- The `DEFERRABLE` and `SERIAL` behavior of each dialect is in `docs/sqlalchemy.md` and `docs/duckdb.md`.
+
+## SQL tooling
+
+- SQLGlot transpiles function names and syntax between DuckDB and Redshift but passes through
+  constructs the target lacks (`INSERT ... BY NAME`, `list_aggregate`) and turned DuckDB
+  `VARCHAR(200)` into Redshift `VARCHAR(MAX)`; Redshift integration tests remain necessary.
+  `docs/estrategia.md`
