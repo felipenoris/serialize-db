@@ -106,7 +106,7 @@ tratamento em cada camada, verificado em 2026-09-19:
 | Delta | `string`, com `ARROW:extension:name = arrow.json` nos metadados do campo quando o esquema Arrow traz a extensão. | O delta-rs grava o arquivo com o tipo lógico `String`; `schema().to_arrow()` devolve `string` simples. |
 | Parquet | `BYTE_ARRAY` com tipo lógico `JSON` quando gravado pelo PyArrow ou pelo DuckDB, `String` quando gravado pelo delta-rs. | Os dois entram na mesma tabela Delta e são lidos pelos dois leitores. |
 | DuckDB | `JSON` nas tabelas do sandbox; `VARCHAR` no `delta_scan`. | `::JSON` valida na materialização (`Malformed JSON` para texto inválido); `->>`, `json_extract` e `json_valid` funcionam sobre `VARCHAR`; a saída em Arrow volta como `string`. |
-| Redshift | `SUPER`. | A staging recebe `VARCHAR(65535)` e o `INSERT ... SELECT` aplica `JSON_PARSE`; o `UNLOAD` devolve texto com `JSON_SERIALIZE`. Um documento de 80.901 bytes entrou por `INSERT ... JSON_PARSE(%s)` (2026-09-21); o `COPY` de Parquet numa coluna `SUPER` exige `SERIALIZETOJSON`, e o que ele grava a partir de texto é leitura pendente ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). |
+| Redshift | `SUPER`. | A staging recebe `VARCHAR(65535)` e o `INSERT ... SELECT` aplica `JSON_PARSE`; o `UNLOAD` devolve texto com `JSON_SERIALIZE`. Um documento de 80.901 bytes entrou por `INSERT ... JSON_PARSE(%s)` e por `COPY ... FORMAT JSON 'auto'` como objeto (2026-09-21); o `COPY` de Parquet numa coluna `SUPER` exige `SERIALIZETOJSON` e recusa a string acima de 65.535 bytes, então um Parquet com o documento em texto não leva um documento maior a `SUPER`. O teto do campo é decisão da [etapa 8](PLAN-STAGE-8.md). |
 
 A auditoria confere `json_valid` no DuckDB antes de publicar, porque nem o Arrow nem o Delta validam
 o texto.

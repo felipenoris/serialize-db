@@ -75,7 +75,8 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 - **`publication_transaction`** devolve a lista de comandos: `BEGIN`; `CREATE TABLE
   <esquema>.<ambiente>_<tabela>_staging` sem a coluna de partição; por partição, `DELETE FROM
   <publicada> WHERE <coluna> = '<valor>'`, `DELETE FROM <staging>`, `COPY <staging> FROM '<manifesto>'
-  <credenciais> FORMAT AS PARQUET MANIFEST`, `INSERT INTO <publicada> SELECT *, '<valor>' FROM
+  <credenciais> FORMAT AS PARQUET MANIFEST FILLRECORD` (a proposta da seção "Decisões pendentes"),
+  `INSERT INTO <publicada> SELECT *, '<valor>' FROM
   <staging>` (com `JSON_PARSE` nas colunas `SUPER`); depois `DELETE` e `INSERT` da linha de controle,
   `DROP TABLE <staging>` e `COMMIT`. `TRUNCATE` não entra: numa tabela local ele confirma a
   transação sozinho, e `DELETE` sem `WHERE` é transacional nos dois casos. Uma partição removida no
@@ -197,14 +198,18 @@ segredo fora do texto impresso: True
 - **[decisão] A staging da publicação como tabela comum no datashare ou temporária no banco da
   conexão** ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o rascunho a cria e apaga dentro da
   transação, no esquema do datashare.
-- **[decisão] A publicação depende da lista de colunas do `COPY` ou de `FILLRECORD`** para arquivos
-  anteriores a uma coluna nova: a lista de colunas carregou um arquivo de cinco colunas numa tabela
-  de seis, com a coluna nova nula (2026-09-21), `FILLRECORD` foi aceito e as linhas que ele carrega
-  são leitura pendente; nos dois casos, os arquivos de uma partição anteriores e posteriores à
-  coluna nova exigem um `COPY` por contagem de colunas, e até a decisão a reconciliação destrutiva
-  recarrega tudo.
-- **[decisão] O teto do campo JSON no Redshift**: 65.535 bytes por documento, aplicado pela
-  auditoria como `String(n)`, porque a staging `VARCHAR(65535)` mais `JSON_PARSE` é o caminho do
-  `COPY`; ou um caminho por `COPY ... FORMAT JSON 'auto'` para os documentos maiores, que a próxima
-  execução da suíte lê ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). `INSERT ... JSON_PARSE(%s)` de
-  80.901 bytes passou em 2026-09-21.
+- **[decisão] `FILLRECORD` em todo `COPY` da biblioteca, ou a lista de colunas**, para arquivos
+  anteriores a uma coluna nova: os dois carregaram um arquivo de cinco colunas numa tabela de seis
+  com a coluna nova nula (2026-09-21; a lista em quatro execuções, o `FILLRECORD` em duas). A
+  proposta é `FILLRECORD`, porque o
+  manifesto de uma partição pode listar arquivos anteriores e posteriores à coluna e um `COPY` só os
+  carrega todos; a lista de colunas exigiria um `COPY` por contagem de colunas. Até a decisão, a
+  reconciliação destrutiva recarrega tudo, e o rascunho acima emite o `COPY` sem a cláusula.
+- **[decisão] O teto do campo JSON no Redshift.** Um Parquet com o documento em texto não leva um
+  documento acima de 65.535 bytes a `SUPER`: o `COPY` exige `SERIALIZETOJSON` e, com ela, recusa a
+  string (`1224 String value exceeds the max size of 65535 bytes`, 2026-09-21), e a staging
+  `VARCHAR(65535)` tem o mesmo teto. A proposta é o teto de 65.535 bytes por documento no contrato,
+  conferido pela auditoria da [etapa 4](PLAN-STAGE-4.md) como `String(n)`; os caminhos para um
+  documento maior, se uma tabela precisar, são `COPY ... FORMAT JSON 'auto'` de um arquivo JSON com
+  uma linha por registro, que carregou um objeto de 80.901 bytes, e `INSERT ... JSON_PARSE(%s)`
+  linha a linha, que carregou o mesmo documento.

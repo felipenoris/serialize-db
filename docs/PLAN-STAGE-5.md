@@ -49,7 +49,7 @@ recusado está em `sys_load_error_detail`, que a sessão lê no ambiente alvo (2
 | Primitiva | Redshift |
 | --- | --- |
 | `connect(config)` | `GetWorkgroup`, `GetCredentials` e `redshift_connector.connect` sem `timeout` e com `max_prepared_statements=0`, porque o cache de prepared statements do driver reaproveita um statement preparado antes de um `TRUNCATE` e o datashare o recusa com `34510` (leitura de 2026-09-21, [`redshift.md`](redshift.md)); `USE <share_database>` quando o esquema vem de um datashare, conferido pela resolução de um nome em duas partes, porque `current_database()` continua `dev` depois dele (leitura de 2026-09-21); `search_path` no esquema; `cursor.paramstyle = "named"`; uma conexão por thread num `threading.local`, aberta no primeiro uso e fechada em `cleanup`, e `connection` devolve a da thread. A senha dura no máximo uma hora, então uma conexão derrubada pelo servidor é reaberta com credencial nova, uma vez por comando, e o comando é repetido; o que o servidor faz com uma conexão cuja senha expirou, e se ela cai no meio de um `COPY`, é questão em aberto ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). |
-| `ingest(table, uri, version, partitions=None, materialize=True)` | `copy_manifest` dos arquivos dessas partições, `COPY ... FORMAT AS PARQUET MANIFEST` com a cláusula de credenciais numa staging sem a coluna de partição criada por `ddl`, e `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'`; `JSON_PARSE` nas colunas `SUPER`. O `COPY` também lê um prefixo de pasta direto, sem manifesto, e converte `int32` da origem para a coluna `BIGINT` do contrato. |
+| `ingest(table, uri, version, partitions=None, materialize=True)` | `copy_manifest` dos arquivos dessas partições, `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` com a cláusula de credenciais numa staging sem a coluna de partição criada por `ddl` (`FILLRECORD` carrega um arquivo anterior a uma coluna nova com ela nula, leitura de 2026-09-21; a cláusula em todo `COPY` é a proposta da [etapa 8](PLAN-STAGE-8.md)), e `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'`; `JSON_PARSE` nas colunas `SUPER`. O `COPY` também lê um prefixo de pasta direto, sem manifesto, e converte `int32` da origem para a coluna `BIGINT` do contrato. |
 | `stream(statement_or_sql, params=None, batch_size=100_000, prefetch=2)` | O statement compilado para o Redshift, ou o texto com `{prefix}` em `exec_<id>_`, executado numa conexão própria da thread auxiliar; cada lote é `RecordBatch.from_arrays` das colunas de `cursor.fetchmany(batch_size)` (`zip(*linhas)`), com o esquema do statement, ou os lotes de `ParquetFile.iter_batches` de um `UNLOAD` acima de um limite de linhas, porque o driver lê o resultado inteiro no `execute` e `fetchmany` só fatia a fila (leitura do código, 2026-09-21); o mesmo `BatchStream` do DuckDB. O `redshift_connector` é Python puro, e a thread auxiliar compete pelo GIL com o cliente ([`PLAN.md`](PLAN.md)). |
 | `query(statement, **params)` | `stream(statement, params).read_all()`. |
 | `execute(sql, params)` | `stream(sql, params).read_all()`, vazia para um comando sem resultado. |
@@ -153,8 +153,9 @@ class RedshiftEngine:
   `mask` antes de qualquer log, relatório ou exceção.
 - **`ingest`** grava `copy_manifest` da versão fixada em `staging/<execution_id>/<tabela>.manifest`,
   cria a staging `exec_<id>_<tabela>_staging` por `ddl(table, "redshift")` sem a coluna de partição,
-  roda `COPY ... FORMAT AS PARQUET MANIFEST` e um `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'`
-  por partição (ou `SELECT *` numa tabela sem partição), com `JSON_PARSE` nas colunas `SUPER`.
+  roda `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` (a proposta da [etapa 8](PLAN-STAGE-8.md):
+  um manifesto pode listar arquivos anteriores a uma coluna nova) e um
+  `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'` por partição (ou `SELECT *` numa tabela sem partição), com `JSON_PARSE` nas colunas `SUPER`.
   `materialize=False` não existe aqui: o Redshift não lê o Delta no lugar.
 - **`stream`** compila o statement pelo dialeto Redshift (`sql.render` com `prefix=exec_<id>_`) ou
   recebe o texto por `bind(style="redshift")`, e roda numa conexão própria da thread auxiliar. Cada
@@ -212,7 +213,7 @@ testes marcados `redshift` repetem a sequência com uma amostra no esquema autor
 | Configuração | `test_config_from_environment` | `SERIALIZE_DB_REDSHIFT_*` para `RedshiftConfig`; o par informado e o workgroup são caminhos alternativos; nenhum outro. |
 | Prefixo | `test_sandbox_prefix_normalizes_and_limits` | `[a-z0-9_]`, 127 bytes. |
 | Cláusula de credenciais | `test_credentials_clause_and_mask` | `IAM_ROLE` com ARN e `default`; as três chaves da sessão sem `iam_role`; `mask` tira os valores; nenhuma exceção carrega o texto sem máscara. |
-| Comandos | `test_copy_insert_unload_text` | `COPY ... FORMAT AS PARQUET MANIFEST` sem `COMPUPDATE`; `INSERT ... SELECT *, '<valor>'`; `UNLOAD ... PARTITION BY (...) MANIFEST VERBOSE` com `PARALLEL OFF` opcional e as aspas do `select` dobradas; nomes em duas partes. |
+| Comandos | `test_copy_insert_unload_text` | `COPY ... FORMAT AS PARQUET MANIFEST` sem `COMPUPDATE`, com `FILLRECORD` quando a decisão da [etapa 8](PLAN-STAGE-8.md) o fixar; `INSERT ... SELECT *, '<valor>'`; `UNLOAD ... PARTITION BY (...) MANIFEST VERBOSE` com `PARALLEL OFF` opcional e as aspas do `select` dobradas; nomes em duas partes. |
 | DDL da staging | `test_staging_ddl_without_partition_column` | A staging sem a coluna de partição; a tabela do sandbox com ela. |
 | Lotes de `fetchmany` | `test_batches_from_cursor_by_columns` | Um cursor de mentira: lotes do tamanho pedido, tipos do esquema, o último menor; igual ao caminho por dicionários. |
 | Esquema de um texto | `test_schema_from_description` | Cada OID da tabela para o tipo Arrow; `NUMERIC` com `numeric_types`. |

@@ -1309,6 +1309,8 @@ Regras da documentação para `COPY` de formatos colunares:
   `Unmatched number of columns` ([redshift.md](redshift.md)).
 - Só estas opções: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `STATUPDATE`, `MANIFEST`,
   `EXPLICIT_IDS`. `MAXERROR`, `IGNOREALLERRORS`, `ACCEPTANYDATE` e `REGION` não são aceitos.
+  `FILLRECORD` carregou um arquivo de cinco colunas numa tabela de seis com a sexta nula
+  (2026-09-21).
 - O primeiro erro aborta o comando. Os erros aparecem no cliente e em `STL_LOAD_ERRORS` e
   `SYS_LOAD_ERROR_DETAIL` (`file_name`, `column_name`, `column_type`, `error_message`). `NOLOAD`
   valida os arquivos sem carregar.
@@ -1353,7 +1355,7 @@ informativas). O que o Redshift garante e o que não garante:
 | Tipo do Parquet compatível com a coluna | Exigido. A documentação não publica a tabela de correspondência entre tipos Parquet e tipos Redshift; os tipos físicos de `TIMESTAMP` em `INT64` de microssegundos e de `DECIMAL(18, 2)` em `INT64` carregaram no ambiente alvo em 2026-09-21 ([redshift.md](redshift.md)); `FIXED_LEN_BYTE_ARRAY` fica sem leitura. |
 | Número e ordem das colunas | Exigidos, por posição. |
 | `NOT NULL` | Aplicado; um `NULL` em coluna `NOT NULL` falha o comando. |
-| Comprimento de `VARCHAR` | Em bytes. Um valor maior que a coluna aborta o `COPY` (`Spectrum Scan Error` 15007, `The length of the data column ... is longer than the length defined in the table`, 2026-09-21); `TRUNCATECOLUMNS` não está na lista de opções aceitas para Parquet, e a próxima execução da suíte lê se ele é aceito. |
+| Comprimento de `VARCHAR` | Em bytes. Um valor maior que a coluna aborta o `COPY` (`Spectrum Scan Error` 15007, `The length of the data column ... is longer than the length defined in the table`, 2026-09-21); `TRUNCATECOLUMNS` não é aceito com Parquet (`0A000`, `TRUNCATECOLUMNS argument is not supported for PARQUET based COPY`, 2026-09-21). |
 | `PRIMARY KEY`, `UNIQUE`, `FOREIGN KEY` | Informativas; não são verificadas. Duplicatas entram e depois produzem resultados errados no planejador, como descrito em [schema.md](schema.md). |
 
 A carga com verificação segue [redshift.md](redshift.md): Arrow com o esquema do modelo, Parquet

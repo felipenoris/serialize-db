@@ -454,8 +454,8 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
     datashare, o comando reexecutado depois de um ``TRUNCATE`` recebeu ``34510``, ``Concurrent DDL
     committed ... between Prepare and Execute``, nas duas execuções de 2026-09-21 às 12:08 e 12:10
     (``docs/POC.md``). Com zero, o driver prepara o statement sem nome logo antes de cada execução
-    e não guarda nada; ``statement_cache=True`` mantém o padrão do driver, para a leitura que
-    reproduz o erro.
+    e não guarda nada, e a suíte passou limpa às 13:35 e às 13:39 do mesmo dia;
+    ``statement_cache=True`` mantém o padrão do driver, para a leitura que reproduz o erro.
     """
     import redshift_connector
 

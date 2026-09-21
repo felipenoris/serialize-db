@@ -371,15 +371,19 @@ interpreted in `docs/POC.md`): no proxy, S3 by gateway endpoint, IAM and KMS unr
 and 7.6 GiB; `RS-19` failed on the wrong criterion, `current_database()` does not reflect the `USE`
 (user confirmation), the probe now resolves a two-part name, `RS-5` was read `false` by the suite (`has_schema_privilege`
 does not prove the privilege on the datashare schema; the `CREATE` does), and `RS-8` remains unread.
-The Redshift suite ran four times in the target on 2026-09-21 (10:50: 1 passed, one transaction
+The Redshift suite ran six times in the target on 2026-09-21 (10:50: 1 passed, one transaction
 opened before the `USE`, fixed in `tests/conftest.py`; 11:28: 7 passed, the manifest URL's double
 slash and `information_schema` blind to the datashare, fixed in the suite; 12:08 and 12:10: 10
 passed, the count repeated after a `TRUNCATE` refused with 34510 because of the driver's prepared
-statement cache, now off). The `COPY` questions are answered (types, column list, positional count,
-`VARCHAR` aborts, parallel), the `UNLOAD` destination is checked as a prefix (stage 5 now unloads to
-`<uri>/<execution_id>/<valor>/`), and the next run reads the `FILLRECORD` count, `SUPER` above 65,535
-bytes by `COPY`, `TRUNCATECOLUMNS` and the cache-off confirmation; the two clean runs stage 0
-requires are still ahead.
+statement cache, now off; 13:35 and 13:39: all 12 passed, the two clean runs stage 0 required).
+Stage 0 is closed: the `COPY` questions are answered (types, column list and `FILLRECORD`,
+positional count, `VARCHAR` aborts and `TRUNCATECOLUMNS` refused, parallel), the `UNLOAD`
+destination is checked as a prefix (stage 5 unloads to `<uri>/<execution_id>/<valor>/`), a Parquet
+string above 65,535 bytes never reaches `SUPER` by `COPY` while `FORMAT JSON 'auto'` and
+`INSERT ... JSON_PARSE` load it, and the readings the two clean runs repeated are assertions. `RS-8`
+(`svv_table_info` after the `USE`) stays with the probe; no stage depends on it. Two proposals await
+the user in `docs/PLAN-STAGE-8.md`: `FILLRECORD` on every library `COPY`, and the 65,535-byte
+ceiling of the JSON field checked by the audit.
 
 The client boundary's reference sketches `BatchStream` and `Loader` are in
 `tests/proof_of_concept/test_parallel.py`; the Redshift driver materializes a result in `execute`
