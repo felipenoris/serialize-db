@@ -139,9 +139,8 @@ no máximo dois níveis de aninhamento, com retorno antecipado; sem regra `@comp
 `quoted_name` e sem despacho por `type(data)`. `cast` é a única função que recebe mais de um tipo,
 e só despacha para `_cast_batch`, `_cast_table` e `_cast_reader`. O rascunho abaixo tem essa forma
 e é a referência do módulo; as docstrings dele têm uma linha, e o módulo acrescenta o exemplo.
-As assinaturas acima são o `__all__` do módulo, e nesta etapa todas são públicas: o cliente chama
-cada uma. O que só o módulo usa leva o prefixo `_`, pela regra dos três níveis de
-[`PLAN.md`](PLAN.md). O
+As assinaturas acima são o `__all__` do módulo, a interface pública que o `pdoc` documenta; o que
+só o módulo usa leva o prefixo `_`, pela regra dos três níveis de [`PLAN.md`](PLAN.md). O
 subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenção da
 [etapa 6](PLAN-STAGE-6.md) para o `MetaData` dos modelos do pipeline.
 

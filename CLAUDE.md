@@ -402,9 +402,9 @@ like tables and columns. Python variables, functions, parameters, modules, the p
 (`partition_by`, `partition_source`, `sort_key`, `redshift`) are English. The library's own metadata is English (user
 decisions of 2026-09-19). Each module separates three levels of name (user decisions of 2026-09-21): public, the
 interface client code imports, which `pdoc` documents; protected, used by another module of the
-library; private, used only inside its module. Public and protected are unprefixed and both enter
-the module's `__all__`, the list of what is not private; private carries the `_` prefix and stays
-out of `__all__` and of the documentation. A key under `_serialize_db/` carries no prefix (`snapshots` in
+library; private, used only inside its module. The module's `__all__` lists the public names and
+only those, so a module with a protected name declares `__all__` and `pdoc` leaves the protected
+one out; protected is unprefixed all the same, and private carries the `_` prefix. A key under `_serialize_db/` carries no prefix (`snapshots` in
 `_serialize_db/snapshots.json`); everything else the library writes carries the `serialize_db_`
 prefix: the commit keys `serialize_db_execution_id`, `serialize_db_input_versions` and
 `serialize_db_snapshot`, the Parquet footer keys `serialize_db_version` and

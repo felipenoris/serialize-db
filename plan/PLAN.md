@@ -409,9 +409,10 @@ de novo a cada mudança.
 
 Nomes: cada módulo separa três níveis (decisões do usuário de 2026-09-21). O público é a
 interface que o código cliente importa, e está obrigatoriamente na documentação do `pdoc`. O
-protegido não é interface pública, mas outro módulo da biblioteca o usa. Os dois ficam sem prefixo
-e entram no `__all__` do módulo, que é a lista do que não é privado. O privado é usado só dentro do
-módulo, leva o prefixo `_` e fica fora do `__all__` e da documentação. Na etapa 1,
+protegido não é interface pública, mas outro módulo da biblioteca o usa: fica sem prefixo e fora
+do `__all__`, e com isso fora da documentação, então um módulo que tenha um nome protegido declara
+o `__all__` para o `pdoc` não o mostrar. O privado é usado só dentro do módulo e leva o prefixo
+`_`. Na etapa 1,
 `serialize_db.schema` deixou no `__all__` os nomes que o cliente chama e prefixou os demais
 (`_cast_batch`, `_contract_column`, `_ARROW_TYPES`); `serialize_db.cli` declara só `main` e
 `serialize_db.errors` só `ContractError`.

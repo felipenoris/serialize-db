@@ -117,6 +117,7 @@ the source "GitHub Actions", and the docs workflow's manual run of 18:24 UTC pub
 <https://felipenoris.github.io/serialize-db/>. The same day the user set the three levels of name
 every module separates: public, the interface client code imports, which `pdoc` documents;
 protected, not public interface but used by another module of the library; private, used only
-inside its module. The private one carries the `_` prefix; the other two are unprefixed, and the
-user decided both enter the module's `__all__`, which is therefore the list of what is not private.
+inside its module. The private one carries the `_` prefix, the other two are unprefixed, and the
+module's `__all__` lists the public names and only those, so `pdoc` documents the public interface
+and nothing else.
 `plan/PLAN.md`, `plan/CURRENT_STATE.md`, `CLAUDE.md`

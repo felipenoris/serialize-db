@@ -1027,3 +1027,16 @@ anteriores e posteriores a uma coluna nova e a lista de colunas exigiria um `COP
 colunas; a decisão do teto do campo JSON na [etapa 8](PLAN-STAGE-8.md) recebe as duas leituras do
 `SUPER`; [`redshift.md`](redshift.md), [`parquet.md`](parquet.md) e [`schema.md`](schema.md) recebem
 os fatos; [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perde a lista das leituras da suíte.
+
+## O que o `pdoc` mostrou de um módulo com `__all__`
+
+Uma sonda de 2026-09-21, um módulo de três funções (`__all__ = ["publico"]`, mais `protegido` e
+`_privado`) gerado pelo `pdoc` 16.0.0: a página traz só `publico`. Um nome sem prefixo que fica
+fora do `__all__` não aparece na documentação, como não aparece o prefixado.
+
+**Consequência**: a regra dos três níveis de [`PLAN.md`](PLAN.md) entrega o que ela promete, a
+documentação com a interface pública e nada mais, desde que o módulo com um nome protegido declare
+o `__all__`; sem `__all__`, o `pdoc` mostraria todo nome sem prefixo. As páginas do pacote em
+2026-09-21 trazem os quinze nomes do `__all__` de `serialize_db.schema`, o `main` de
+`serialize_db.cli` e o `ContractError` de `serialize_db.errors`.
+
