@@ -4,8 +4,11 @@ A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PL
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
 
 O módulo `serialize_db.schema` deriva dos modelos tudo o que os outros módulos precisam saber sobre
-uma tabela. A etapa começa pelo modelo de referência de `tests/model/`, corrigido como a biblioteca
-cliente o escreveria: `Base` importável de um módulo só, `BigInteger` nas chaves primárias inteiras
+uma tabela. O modelo de referência de `tests/reference_model/`, o modelo SQLAlchemy da base original
+em Parquet particionado, fica como está (decisão do usuário de 2026-09-21); a etapa começa pelo
+modelo cliente, a cópia dele em `tests/client_model/` (pasta proposta,
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)) corrigida como a biblioteca cliente o escreveria: `Base`
+importável de um módulo só, `BigInteger` nas chaves primárias inteiras
 e nas colunas que as referenciam, `autoincrement=False` nessas chaves, chaves estrangeiras sem
 `DEFERRABLE`, a coluna de partição `data_str` (`String(10)`, `AAAA-MM-DD` de `data`;
 `data_base_str` de `data_base` em `cad_lancamentos`) nas quatro tabelas particionadas, comentários
@@ -13,7 +16,8 @@ de tabela e de coluna, e `Table.info["serialize_db"]` com `partition_by`, `parti
 `sort_key` e `redshift`, como em `schema.md`; as colunas numéricas continuam `Double` (as decisões
 de 2026-09-20 estão nas premissas de [`PLAN.md`](PLAN.md)).
 
-O modelo de referência bate com a base de origem lida em 2026-09-20 ([`POC.md`](POC.md)): as 12
+O modelo de referência bate com a base de origem lida em 2026-09-20 (desenvolvimento) e em
+2026-09-21 (produção) ([`POC.md`](POC.md); `tests/test_reference_model.py` fixa a conferência): as 12
 tabelas existem nos arquivos com as mesmas colunas, na mesma ordem e com os tipos da tabela de
 `schema.md` (`Integer` em `int32`, `String` em `string`, `Date` em `date32`, `Double` em `double`,
 `Boolean` em `bool`, `DateTime` em `timestamp`), e a nulidade declarada é a mesma, exceto em sete
@@ -35,9 +39,9 @@ e `data_base_str` de `data_base` em `cad_lancamentos`.
 | `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória. |
 | `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory`; `serialize-db schema write` grava e `serialize-db schema check` compara sem gravar. |
 
-Testes: `tests/test_schema.py`, sem gravar, sobre o modelo de referência e sobre um modelo de teste
-com todos os tipos; `create_all` no DuckDB em memória com o DDL de cada modelo; o diff dos arquivos
-`tests/model/schema/` versionados; `write_schema_files` sob a raiz local. Dependências: `sqlalchemy`, `pyarrow`,
+Testes: `tests/test_schema.py`, sem gravar, sobre o modelo cliente, sobre o modelo de referência (as
+violações que a cópia corrige) e sobre um modelo de teste com todos os tipos; `create_all` no DuckDB
+em memória com o DDL de cada modelo; o diff dos arquivos `tests/client_model/schema/` versionados; `write_schema_files` sob a raiz local. Dependências: `sqlalchemy`, `pyarrow`,
 `deltalake`, `duckdb`, `duckdb-engine` e `sqlalchemy-redshift`. Provas de conceito:
 `test_sqlalchemy.py` (`test_declarative_model_exposes_table`, `test_ddl_per_dialect`,
 `test_create_all_and_reflection`, `test_arrow_and_delta_schema_from_table`, com o mapa de tipos e
@@ -127,7 +131,8 @@ declara a chave primária informativa nas tabelas publicadas, e o sandbox não.
   recusa sai como `ContractError` com a tabela, a coluna e a instrução. Um `RecordBatchReader` volta
   como leitor que converte lote a lote, com o esquema do primeiro lote convertido.
 - **`check_models`** percorre `metadata.sorted_tables` e devolve uma lista de textos, um por
-  violação, para o teste do modelo de referência ser `assert check_models(Base.metadata) == []`. O
+  violação, para o teste do modelo cliente ser `assert check_models(Base.metadata) == []` e o do
+  modelo de referência listar as violações que a cópia corrige. O
   `autoincrement` padrão é a string `"auto"`, não `True`: a regra reprova os dois numa chave
   inteira.
 - **`schema_files`** gera `<tabela>.delta.json` por `delta_schema(...).to_json()` e os dois `.sql`
@@ -142,19 +147,19 @@ declara a chave primária informativa nas tabelas publicadas, e o sandbox não.
 | `table_options` | `partition_by` com uma coluna no máximo. | `partition_by` e `partition_source` preenchidos juntos ou ambos `None`; `keys` não vazia quando o modelo tem chave primária. |
 | `ddl` | Dialeto `duckdb` ou `redshift`. | Texto que o motor aceita como está: o DuckDB em memória o executa no teste, o Redshift o compila; nenhuma chave, `DEFERRABLE` ou `Identity` no texto; o prefixo sem aspas. |
 | `cast` | `data` com pelo menos uma coluna do contrato. | O mesmo tipo de entrada, só com colunas do contrato, na ordem do contrato, cada uma no tipo do contrato e com a nulidade conferida; ou `ContractError` sem nada convertido. Colunas ausentes ficam para o `INSERT ... BY NAME` do `loader` ou para a recusa de `publish_partition`. |
-| `check_models` | Modelos importáveis. | Lista vazia no modelo de referência corrigido; cada violação nomeia tabela e coluna. |
+| `check_models` | Modelos importáveis. | Lista vazia no modelo cliente; no modelo de referência, uma violação por defeito que a cópia corrige; cada violação nomeia tabela e coluna. |
 | `write_schema_files`, `check_schema_files` | Pasta gravável, ou existente para o `check`. | Um arquivo por tabela e formato; o `check` devolve o diff sem gravar. |
 
 ## Testes por caso
 
-`tests/test_schema.py`, sem gravar, sobre o modelo de referência corrigido e sobre um modelo de teste
-com todos os tipos da tabela de [`schema.md`](schema.md).
+`tests/test_schema.py`, sem gravar, sobre o modelo cliente, sobre o modelo de referência e sobre um
+modelo de teste com todos os tipos da tabela de [`schema.md`](schema.md).
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
 | Tipos do contrato | `test_arrow_schema_maps_every_contract_type` | Cada tipo do modelo de teste no Arrow esperado; `DateTime` sem fuso em `timestamp[us]`, com fuso em `tz=UTC`; JSON e UUID em `string`. |
 | Tipo fora do contrato | `test_arrow_schema_refuses_foreign_types` | `LargeBinary`, `ARRAY` e `Interval` levantam `ContractError` com tabela e coluna. |
-| Esquema Delta | `test_delta_schema_json_matches_versioned_file` | `to_json()` igual ao `tests/model/schema/<tabela>.delta.json`. |
+| Esquema Delta | `test_delta_schema_json_matches_versioned_file` | `to_json()` igual ao `tests/client_model/schema/<tabela>.delta.json`. |
 | Opções físicas | `test_table_options_defaults_and_keys` | Tabela sem `info` dá `partition_by=None` e `keys` só da chave primária; o índice único do modelo entra em `keys`; `keys["drop"]` remove; duas colunas de partição são `ContractError`. |
 | DDL por dialeto | `test_ddl_per_dialect_without_keys` | Sem `PRIMARY KEY`, `UNIQUE`, `REFERENCES`, `DEFERRABLE`, `SERIAL` ou `IDENTITY`; `SORTKEY`, `DISTSTYLE` e `DISTKEY` só no Redshift; `CHECK` só no DuckDB; `Text` em `VARCHAR(65535)` e JSON em `SUPER` no Redshift; `Uuid` em `VARCHAR(36)` nos dois. |
 | DDL executável | `test_ddl_runs_in_duckdb_memory` | O DDL de cada modelo executa num DuckDB em memória e `information_schema.columns` devolve os tipos do contrato. |
@@ -162,8 +167,8 @@ com todos os tipos da tabela de [`schema.md`](schema.md).
 | Cast que aceita | `test_cast_reorders_and_normalizes` | Colunas fora de ordem, `large_string`, `timestamp[ns]` com nanossegundo zero, `int64` em `Numeric`, coluna a mais ignorada; o mesmo para `pa.Table`, `pa.RecordBatch` e `RecordBatchReader`. |
 | Cast que recusa | `test_cast_refuses_each_loss`, parametrizado | Nulo em `NOT NULL`, `double` fora da escala, `timestamp` com hora em `Date`, `struct` em JSON, texto acima de `String(n)` em bytes, escala perdida, nanossegundo não nulo, estouro de inteiro; cada mensagem cita tabela e coluna. |
 | Cast que preserva | `test_cast_keeps_doubles_of_the_reference_model` | `Double` do modelo de referência entra sem arredondamento. |
-| Modelos | `test_check_models_finds_each_violation`, `test_reference_model_is_clean` | Um modelo com cada defeito produz uma violação por defeito; o modelo de referência produz lista vazia. |
-| Arquivos gerados | `test_schema_files_match_versioned`, `test_check_schema_files_reports_a_changed_model` | Diff vazio contra `tests/model/schema/`; uma coluna acrescentada aparece no diff dos três formatos. |
+| Modelos | `test_check_models_finds_each_violation`, `test_client_model_is_clean`, `test_reference_model_lists_the_defects_the_copy_corrects` | Um modelo com cada defeito produz uma violação por defeito; o modelo cliente produz lista vazia; o modelo de referência, como está, produz as violações que a cópia corrige. |
+| Arquivos gerados | `test_schema_files_match_versioned`, `test_check_schema_files_reports_a_changed_model` | Diff vazio contra `tests/client_model/schema/`; uma coluna acrescentada aparece no diff dos três formatos. |
 | Gravação | `test_write_schema_files` (`local`) | Os arquivos sob a raiz local, com os nomes previstos. |
 
 ## Rascunhos executados
@@ -474,9 +479,13 @@ check_models:
   caracteres e seria recusado pelo `COPY`. A auditoria da [etapa 4](PLAN-STAGE-4.md) usa a mesma
   medida (`octet_length` no Redshift, `strlen` no DuckDB).
 - **[decisão] A coluna sem comentário como violação em `check_models`.** O modelo de referência não
-  tem comentário algum hoje; a regra obriga a etapa 1 a escrever um por coluna, o que é trabalho do
-  dono do modelo.
+  tem comentário algum; a regra obriga a etapa 1 a escrever um por coluna na cópia, o que é trabalho
+  do dono do modelo.
 - **[decisão] `duckdb-engine` e `sqlalchemy-redshift` como dependências de execução** enquanto `ddl`
   compilar pelo dialeto. A alternativa é `ddl` gerar o texto sem dialeto, com a tabela de tipos de
   [`schema.md`](schema.md), o que tira as duas dependências já na etapa 1 e deixa o SQLAlchemy só
   nos modelos e no `sql.render`.
+- **[decisão] A pasta do modelo cliente.** O modelo de referência fica como está em
+  `tests/reference_model/` (decisão de 2026-09-21), e a cópia corrigida, com os seus arquivos
+  `schema/` e `sql/`, vai para `tests/client_model/`, nome proposto sem confirmação
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

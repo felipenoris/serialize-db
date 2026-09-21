@@ -258,11 +258,11 @@ version := v)`) e as tabelas referenciadas sem depender de `Execution`.
 ## Testes por caso
 
 `tests/test_audit.py` sem gravar; `tests/test_engine_duckdb.py` sob a raiz local, sobre um Delta
-criado no teste a partir do modelo de referência.
+criado no teste a partir do modelo cliente.
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
-| Texto das verificações | `test_audit_sql_per_dialect` | Cada `Check` do modelo de referência renderiza nos dois dialetos; `strftime` no DuckDB e `to_char` no Redshift; `json_valid` e `is_valid_json`. |
+| Texto das verificações | `test_audit_sql_per_dialect` | Cada `Check` do modelo cliente renderiza nos dois dialetos; `strftime` no DuckDB e `to_char` no Redshift; `json_valid` e `is_valid_json`. |
 | Escopo da chave | `test_key_scope_follows_the_partition_column` | Chave com a coluna de partição gera uma consulta; sem ela, gera a segunda contra `published`; `key_scope="partition"` a suprime e o relatório registra. |
 | Chave estrangeira | `test_foreign_key_check_only_on_request` | Sem `foreign_keys=True` o nome está em `not_run`; com ele, o anti-join contra `referenced`. |
 | Arquivos | `test_audit_files_match_versioned` | Diff vazio contra a pasta versionada. |

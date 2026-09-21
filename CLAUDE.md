@@ -226,7 +226,7 @@ The budget above is never a reason to drop a fact: what does not fit here goes t
 | `.claude/memory/parquet-arrow-types.md` | `cast`, the schema mapping or a Parquet footer check: what each writer produces, the type contract, PyArrow casts and pandas conversions. |
 | `.claude/memory/aws-s3.md` | `serialize_db.storage`, the S3 suite or a probe that reaches AWS: conditional put, IAM needs, credentials, region and proxy per client. |
 | `.claude/memory/concurrency.md` | `stream`, `loader`, `max_workers` or any helper thread: the GIL, DB-API thread safety, the batch boundary measurements. |
-| `.claude/memory/source-base.md` | Stage 7 or `tests/source_db_projetado.py`: the dev base read on 2026-09-20 and the fixture. |
+| `.claude/memory/source-base.md` | Stage 7, `tests/source_db_projetado.py` or `tests/reference_model/`: the dev base read on 2026-09-20, the production base read on 2026-09-21, the fixture and the reference model against them. |
 | `.claude/memory/environments.md` | Running in the SageMaker space or the target, preparing the offline folder, dating a measurement: the lab, the target, the venv, the environments of the measurements. |
 
 ## Repository index
@@ -259,8 +259,8 @@ research appends to the matching group.
 | `docs/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): one item per pending question, with the run or the decision that will close it; a closed item leaves the file when its answer lands in the owning document. |
 | `docs/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options, contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and Delta against Iceberg with the re-evaluation trigger. |
 | `docs/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `docs/PLAN-STAGE-<n>.md`. |
-| `tests/model/` | The reference model: the declarative ORM models the tests hand to the package API as a client library would hand its own; the package holds no model. |
-| `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py`; the material of the stage 7 test. |
+| `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). Stage 1 writes the corrected copy, the client model, in `tests/client_model/` (proposed): the model the tests hand to the package API as a client library would hand its own; the package holds no model. |
+| `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base and in the production base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py`; the material of the stage 7 test. |
 
 `docs/duckdb.md`, `docs/redshift.md` and `docs/delta.md` share a section order: data organization and
 the differences from PostgreSQL, supported types with `DECIMAL` and JSON, DDL,
@@ -415,7 +415,7 @@ Read `docs/PLAN.md`, the stage files, `docs/CURRENT_STATE.md`, `docs/POC.md` and
 `docs/OPEN_QUESTIONS.md` before planning a session. The next session starts stage 1
 (`serialize_db.schema`, with `serialize_db.errors`) and stage 2 (`serialize_db.sql`) on local
 folders, from the `Interface` and `Rascunhos executados` sections of `docs/PLAN-STAGE-1.md` and
-`docs/PLAN-STAGE-2.md`; the pending API decisions are listed per stage in `docs/OPEN_QUESTIONS.md`.
+`docs/PLAN-STAGE-2.md`; the pending API decisions are listed per stage in `docs/OPEN_QUESTIONS.md`. Stage 1 writes the client model as a copy of `tests/reference_model/`, which stays as it is; the copy's folder (`tests/client_model/`) awaits the user's confirmation.
 The plan's unit is the partition (`publish_partition`, `partitions=`, `Execution(partition=...)`),
 never the month. The probe, `tests/conftest.py` and the Redshift suite follow the scripts in
 `examples/`, and `docs/PLAN-STAGE-5.md` and `docs/PLAN-STAGE-8.md` carry their consequences. The
@@ -436,7 +436,7 @@ string above 65,535 bytes never reaches `SUPER` by `COPY` while `FORMAT JSON 'au
 `INSERT ... JSON_PARSE` load it, and the readings the two clean runs repeated are assertions. `RS-8`
 (`svv_table_info` after the `USE`) stays with the probe; no stage depends on it. Two proposals await
 the user in `docs/PLAN-STAGE-8.md`: `FILLRECORD` on every library `COPY`, and the 65,535-byte
-ceiling of the JSON field checked by the audit.
+ceiling of the JSON field checked by the audit. The production base was read in the target on 2026-09-21 (`docs/readings/parquet_source-2026-09-21-1354.txt`): the same structure as the dev base, 113 rows fewer, smaller maximum ids and the `pandas` footer key in part of the files; the reference model matches both, and the fixture writes part of its files without the key.
 
 The client boundary's reference sketches `BatchStream` and `Loader` are in
 `tests/proof_of_concept/test_parallel.py`; the Redshift driver materializes a result in `execute`

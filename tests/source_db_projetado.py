@@ -1,14 +1,18 @@
-"""A base Parquet de origem ``db_projetado`` fabricada com a estrutura que o probe leu em 2026-09-20.
+"""A base Parquet de origem ``db_projetado`` fabricada com a estrutura que o probe leu nas duas bases reais.
 
-``probes/parquet_source.py`` leu a base de desenvolvimento (14 pastas de tabela, 205 arquivos,
-3,76 GB, 187 milhões de linhas), e ``write_source`` reproduz o que a leitura fixou, com poucas
-linhas por tabela: as 14 tabelas com as mesmas colunas, na mesma ordem, com os mesmos tipos Arrow e
+``probes/parquet_source.py`` leu a base de desenvolvimento em 2026-09-20 e a de produção em
+2026-09-21 (as duas com 14 pastas de tabela, 205 arquivos, 3,76 GB e 187 milhões de linhas, e a
+mesma seção 3), e ``write_source`` reproduz o que as leituras fixaram, com poucas linhas por tabela: as 14 tabelas com as mesmas colunas, na mesma ordem, com os mesmos tipos Arrow e
 a mesma nulidade declarada; a partição Hive por ``data_str`` (``cad_contratos``, ``cad_operacoes``,
 ``rel_contrato_operacao``) e por ``data_base_str`` (``cad_lancamentos``), com o valor no caminho e
 nunca dentro do arquivo, igual a ``data`` ou ``data_base`` em toda linha da partição, fins de mês
 não contíguos; vários arquivos ``chunk_<n>.parquet`` por partição, numerados de 0 sem zeros à
 esquerda, o último menor que os demais; um row group por arquivo, SNAPPY, sem dicionário, formato
-1.0, timestamps em ``INT96`` sem estatísticas, a chave ``pandas`` no rodapé e nenhum ``field_id``;
+1.0, timestamps em ``INT96`` sem estatísticas, nenhum ``field_id``, e a chave ``pandas`` no rodapé de
+parte dos arquivos (em todos na base de desenvolvimento; na de produção, em 5 de 8, 111 de 144, 9 de
+13 e 16 de 30 arquivos das tabelas particionadas e em nenhum de ``alembic_version`` e
+``meta_update_status``; aqui, fora da última partição de cada tabela particionada e dessas duas
+tabelas);
 ``alembic_version`` e ``meta_update_status`` fora do modelo, e na raiz o ``schema.json`` da
 biblioteca anterior, o arquivo real (``source_db_projetado_schema.json``): o controle de esquema
 no formato da reflexão do SQLAlchemy, com colunas, nulidade, chaves estrangeiras, índices e
@@ -24,7 +28,9 @@ soma 1 entre os contratos de cada operação. Os valores reproduzem o que a carg
 tratar: ``valor`` com três casas (o par extremo ``±11846195394.628``), ``fator`` com cinco,
 ``data_assinatura`` nula em mais da metade das linhas, ``meta`` sempre nula, ``id_lancamento`` até
 1.113.599.996 em ``int32``, e as sete colunas de ``cad_contratos`` declaradas anuláveis nos arquivos
-sem nulo algum. O ``timestamp`` tem precisão de microssegundo; a parte sub-microssegundo da origem é
+sem nulo algum. Os valores que diferem entre as duas bases são os da leitura de desenvolvimento: a
+de produção tem 113 linhas a menos, ids máximos menores (``id_lancamento`` até 952.517.158) e o
+extremo de ``valor`` em ``±11846195394.62801``. O ``timestamp`` tem precisão de microssegundo; a parte sub-microssegundo da origem é
 desconhecida, porque o ``INT96`` não tem estatística.
 
 A partição de ``cad_lancamentos`` é por ``data_base``, não por ``data``: ``data`` é o mês projetado,
@@ -288,15 +294,27 @@ def as_pandas_wrote(table: pa.Table) -> pa.Table:
     return pa.Table.from_pandas(table.to_pandas(), schema=table.schema, preserve_index=False)
 
 
-def write_chunks(folder: Path, table: pa.Table, chunk_rows: int = CHUNK_ROWS) -> list[Path]:
+def written_by_pandas(table: str, value: str | None = None) -> bool:
+    """Se o arquivo da tabela, ou da partição ``value``, leva a chave ``pandas`` no rodapé.
+
+    A base de produção tem a chave em parte dos arquivos das tabelas particionadas e em nenhum de ``alembic_version`` e
+    ``meta_update_status``; aqui a última partição de cada tabela particionada e essas duas tabelas saem sem ela.
+    """
+    if table in OUTSIDE_MODEL:
+        return False
+    return table not in PARTITIONS or value != PARTITIONS[table].values[-1]
+
+
+def write_chunks(folder: Path, table: pa.Table, chunk_rows: int = CHUNK_ROWS, pandas_key: bool = True) -> list[Path]:
     """Grava ``table`` em ``folder`` como ``chunk_0.parquet``, ``chunk_1.parquet``, ..., ``chunk_rows`` linhas por arquivo."""
     folder.mkdir(parents=True, exist_ok=True)
     paths = []
     for index, offset in enumerate(range(0, table.num_rows, chunk_rows)):
         path = folder / f"chunk_{index}.parquet"
+        chunk = table.slice(offset, chunk_rows)
         # Um row group por arquivo, SNAPPY, sem dicionário, formato 1.0 e INT96: o layout físico que a leitura mostrou.
         pq.write_table(
-            as_pandas_wrote(table.slice(offset, chunk_rows)),
+            as_pandas_wrote(chunk) if pandas_key else chunk,
             path,
             version="1.0",
             compression="snappy",
@@ -378,7 +396,7 @@ def build_dimensions() -> dict[str, pa.Table]:
 def build_meta_update_status() -> pa.Table:
     """O registro das cargas: uma linha por tabela sem partição, uma por partição das demais, com a partição em JSON.
 
-    Os ids seguem os 21 que a leitura mostrou e continuam do último, porque a base fictícia tem 16 partições.
+    Os ids seguem os 21 da leitura de desenvolvimento e continuam do último, porque a base fictícia tem 16 partições.
     """
     entries: list[tuple[str, str | None]] = [(table, None) for table in ("dom_hierarquias_contas", "dom_veiculos", "dom_mensuracoes", "dom_segmentos", "dom_negocios")]
     for table in ("cad_operacoes", "rel_contrato_operacao", "cad_contratos", "cad_lancamentos"):
@@ -563,14 +581,14 @@ def write_source(root: Path) -> SourceBase:
         folder = root / table
         if isinstance(content, pa.Table):
             # Toda tabela sem partição da origem cabe num único chunk_0.parquet.
-            source.files[table] = write_chunks(folder, content, chunk_rows=content.num_rows)
+            source.files[table] = write_chunks(folder, content, chunk_rows=content.num_rows, pandas_key=written_by_pandas(table))
             source.rows[table] = content.num_rows
             continue
         partition = PARTITIONS[table]
         source.files[table] = []
         source.partition_rows[table] = {}
         for value, data in content.items():
-            source.files[table].extend(write_chunks(folder / f"{partition.column}={value}", data))
+            source.files[table].extend(write_chunks(folder / f"{partition.column}={value}", data, pandas_key=written_by_pandas(table, value)))
             source.partition_rows[table][value] = data.num_rows
         source.rows[table] = sum(source.partition_rows[table].values())
 

@@ -1,8 +1,9 @@
-"""A base Parquet de origem fictícia reproduz a estrutura que o probe leu na base de desenvolvimento.
+"""A base Parquet de origem fictícia reproduz a estrutura que o probe leu nas duas bases reais.
 
 ``source_db_projetado.write_source`` grava a base sob a pasta temporária do pytest, e cada teste
-confere nos arquivos gravados um aspecto da leitura de 2026-09-20 (``probes/parquet_source.py``
-sobre ``db_projetado``, ambiente de desenvolvimento): as tabelas e o arquivo solto na raiz, o
+confere nos arquivos gravados um aspecto das leituras de ``probes/parquet_source.py`` sobre
+``db_projetado`` (a base de desenvolvimento em 2026-09-20 e a de produção em 2026-09-21, idênticas
+na seção 3): as tabelas e o arquivo solto na raiz, o
 esquema de cada arquivo no vocabulário do relatório (tipo Arrow, nulidade, tipo físico, lógico e
 convertido), as partições, o layout físico, os valores que a carga inicial tem de tratar, a leitura
 pelos dois leitores da biblioteca, o controle de esquema da biblioteca anterior e a consistência da
@@ -174,8 +175,9 @@ OBSERVED_TABLES = sorted(OBSERVED_PARTITION_COLUMNS) + [
     "rel_contas_hierarquias",
 ]
 
-# As chaves do modelo de referência (tests/model): a chave primária e as restrições de unicidade de cada tabela, e as
-# chaves estrangeiras com a tabela e as colunas referenciadas. A base fictícia satisfaz todas.
+# As chaves do modelo de referência (tests/reference_model; test_reference_model.py confere a transcrição): a chave
+# primária e as restrições de unicidade de cada tabela, e as chaves estrangeiras com a tabela e as colunas referenciadas.
+# A base fictícia satisfaz todas.
 UNIQUE_KEYS = {
     "cad_aliquotas": [["id"], ["id_conta_origem", "id_conta_destino"]],
     "cad_contas": [["id_conta"], ["numero"]],
@@ -341,14 +343,15 @@ def test_chunks_are_numbered_from_zero_without_padding(base: source.SourceBase) 
 
 
 def test_physical_layout_matches_the_reading(base: source.SourceBase) -> None:
-    """Um row group por arquivo, SNAPPY, PLAIN e RLE, formato 1.0, parquet-cpp-arrow, a chave ``pandas`` e INT96 sem estatística."""
+    """Um row group por arquivo, SNAPPY, PLAIN e RLE, formato 1.0, parquet-cpp-arrow, a chave ``pandas`` em parte dos arquivos e INT96 sem estatística."""
     for table in OBSERVED_TABLES:
         for path in base.files[table]:
             metadata = pq.read_metadata(path)
             assert metadata.num_row_groups == 1, path
             assert metadata.format_version == "1.0", path
             assert metadata.created_by.startswith("parquet-cpp-arrow"), path
-            assert set(pq.read_schema(path).metadata) == {b"pandas"}, path
+            value = path.parent.name.partition("=")[2] if table in OBSERVED_PARTITION_COLUMNS else None
+            assert set(pq.read_schema(path).metadata or {}) == ({b"pandas"} if source.written_by_pandas(table, value) else set()), path
             group = metadata.row_group(0)
             for index in range(group.num_columns):
                 chunk = group.column(index)
@@ -359,13 +362,19 @@ def test_physical_layout_matches_the_reading(base: source.SourceBase) -> None:
                 else:
                     assert chunk.statistics is not None and chunk.statistics.has_min_max or chunk.statistics.null_count == group.num_rows, (path, chunk.path_in_schema)
 
+    # As duas tabelas fora do modelo saem sem chave, e cada tabela particionada tem arquivos com e sem ela, como na produção.
+    for table in source.OUTSIDE_MODEL:
+        assert not (pq.read_schema(base.files[table][0]).metadata or {}), table
+    for table in OBSERVED_PARTITION_COLUMNS:
+        assert {b"pandas" in (pq.read_schema(path).metadata or {}) for path in base.files[table]} == {True, False}, table
+
 
 def test_values_reproduce_what_the_initial_load_handles(base: source.SourceBase) -> None:
     """Os valores que a carga inicial tem de tratar, um por regra de ``docs/PLAN-STAGE-7.md``."""
     lancamentos = ds.dataset(base.root / "cad_lancamentos", format="parquet", partitioning="hive").to_table()
     contratos = ds.dataset(base.root / "cad_contratos", format="parquet", partitioning="hive").to_table()
 
-    # ``valor`` é double com três casas, como toda coluna numérica da origem; o par extremo está presente.
+    # ``valor`` é double com três casas na leitura de desenvolvimento (cinco no extremo da produção); o par extremo está presente.
     valor = lancamentos.column("valor")
     assert valor.type == pa.float64()
     assert pc.sum(pc.not_equal(pc.round(valor, 2), valor)).as_py() > lancamentos.num_rows // 2
@@ -376,7 +385,7 @@ def test_values_reproduce_what_the_initial_load_handles(base: source.SourceBase)
     assert timestamp.type == pa.timestamp("ns")
     assert pc.all(pc.equal(pc.floor_temporal(timestamp, unit="microsecond"), timestamp)).as_py()
 
-    # Ids ``int32`` esparsos até 1.113.599.996, pouco acima da metade do tipo; a migração os leva a ``int64``.
+    # Ids ``int32`` esparsos até 1.113.599.996 (952.517.158 na produção), pouco acima da metade do tipo; a migração os leva a ``int64``.
     assert pc.max(lancamentos.column("id_lancamento")).as_py() == source.MAX_ID_LANCAMENTO < 2**31
     assert len(lancamentos.column("id_lancamento").unique()) == lancamentos.num_rows
 

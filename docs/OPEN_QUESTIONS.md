@@ -65,7 +65,9 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 
 - [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `@compiles`; `String(n)` medido em
   bytes; a coluna sem comentário como violação de `check_models`; `duckdb-engine` e
-  `sqlalchemy-redshift` como dependências de execução enquanto `ddl` compilar pelo dialeto.
+  `sqlalchemy-redshift` como dependências de execução enquanto `ddl` compilar pelo dialeto; a pasta
+  do modelo cliente, a cópia corrigida de `tests/reference_model/`, que fica como está (proposta:
+  `tests/client_model/`, com os arquivos `schema/` e `sql/`).
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
   `dev`.
 - [Etapa 3](PLAN-STAGE-3.md): a reserva de credenciais do `boto3` em `storage_options`; as colunas

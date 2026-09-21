@@ -99,7 +99,7 @@ Nos bancos do projeto a cláusula não tem efeito útil:
 | DuckDB 1.5.5 | Na forma de restrição de tabela que o SQLAlchemy emite (`FOREIGN KEY (...) REFERENCES ... DEFERRABLE INITIALLY DEFERRED`, `UNIQUE (...) DEFERRABLE ...`), a cláusula é aceita e descartada: `duckdb_constraints()` mostra a chave sem ela, e a verificação é imediata. Na forma de coluna (`a_id BIGINT REFERENCES a (id) DEFERRABLE ...`) e em `PRIMARY KEY ... DEFERRABLE`, falha com `Constraint not implemented!`; `SET CONSTRAINTS` é erro de sintaxe; `ALTER TABLE ... ADD CONSTRAINT` falha com `No support for that ALTER TABLE option yet!`, então `use_alter=True` também derruba o `create_all`. |
 | Redshift | A sintaxe do `CREATE TABLE` não tem `DEFERRABLE` nem `INITIALLY`, e chaves primárias, únicas e estrangeiras são informativas, nunca verificadas. Se o parser aceita e ignora a cláusula fica pendente da prova de conceito. |
 
-Os modelos de referência em `tests/model/` declaram `deferrable=True, initially='DEFERRED'` em todas as
+Os modelos de referência em `tests/reference_model/` declaram `deferrable=True, initially='DEFERRED'` em todas as
 chaves estrangeiras de `model_base_contabil.py` e `model_base_gerencial.py`, inclusive nas compostas,
 e em nenhuma de `model_db_projetado.py`. No DuckDB o `create_all` passa, porque a cláusula é
 descartada; no Redshift ela não existe. A [política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
