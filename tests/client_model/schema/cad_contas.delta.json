@@ -2,8 +2,7 @@
   "fields": [
     {
       "metadata": {
-        "comment": "Identificador da conta",
-        "parquet.field.id": 1
+        "comment": "Identificador da conta"
       },
       "name": "id_conta",
       "nullable": false,
@@ -11,8 +10,7 @@
     },
     {
       "metadata": {
-        "comment": "Nome da conta",
-        "parquet.field.id": 2
+        "comment": "Nome da conta"
       },
       "name": "nome",
       "nullable": false,
@@ -20,8 +18,7 @@
     },
     {
       "metadata": {
-        "comment": "Número da conta no plano",
-        "parquet.field.id": 3
+        "comment": "Número da conta no plano"
       },
       "name": "numero",
       "nullable": false,
@@ -29,8 +26,7 @@
     },
     {
       "metadata": {
-        "comment": "Se a conta recebe lançamentos",
-        "parquet.field.id": 4
+        "comment": "Se a conta recebe lançamentos"
       },
       "name": "permite_lancamentos",
       "nullable": false,

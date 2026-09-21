@@ -794,6 +794,23 @@ além do que já estava medido:
   estrangeiras (12 `DEFERRABLE`) e 20 colunas `String` sem comprimento; `check_models` lista 129
   violações nele e nenhuma no modelo cliente, e o DDL das 12 tabelas do modelo cliente executou
   num DuckDB em memória, `"to"` inclusive.
+- A migração adiantada (`scripts/migrate_parquet_to_delta.py`, 2026-09-21, macOS, DuckDB 1.5.5
+  com a extensão `delta` `45c4087`, deltalake 1.6.4) fez a primeira leitura por `delta_scan` de
+  uma tabela criada por `delta_schema`, e toda coluna veio nula, com a contagem certa pelo
+  `numRecords` do log, enquanto o delta-rs e o `read_parquet` do mesmo arquivo liam os valores.
+  A sonda cruzou o esquema Delta com e sem `parquet.field.id` (a chave em que
+  `Schema.from_arrow` guarda o `PARQUET:field_id` do Arrow) com três escritores: o `COPY` do
+  DuckDB, que grava sem `field_id`, e o `write_deltalake` com e sem `field_id` no arquivo. Com a
+  chave no esquema, os três arquivos leram nulo em toda coluna; sem ela, os três leram os
+  valores. `delta_schema` passou a tirar o `PARQUET:field_id` antes do `from_arrow`, os 12
+  `.delta.json` versionados perderam o `parquet.field.id`, e `tests/test_schema.py` afirma a
+  ausência. A regra que a leitura deixou está em `CLAUDE.md`: uma decisão de esquema é relida por
+  todo leitor que o pipeline usa, com um arquivo de cada escritor. No mesmo dia o script mostrou
+  que o `octet_length` do DuckDB só existe para `BLOB` (a medida em bytes de um texto é
+  `strlen`) e que uma exceção levantada pelo leitor que `write_deltalake` consome volta como
+  `DeltaError` com a mensagem original dentro do texto, não como a exceção original: por isso a
+  migração confere nulos e comprimentos numa consulta do DuckDB antes de gravar, nos dois modos,
+  e o `cast` fica atrás do `rewrite` como segunda guarda.
 
 ## O que a primeira execução da suíte Redshift mostrou
 

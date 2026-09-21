@@ -2,8 +2,7 @@
   "fields": [
     {
       "metadata": {
-        "comment": "Identificador da operação",
-        "parquet.field.id": 1
+        "comment": "Identificador da operação"
       },
       "name": "id_operacao",
       "nullable": false,
@@ -11,8 +10,7 @@
     },
     {
       "metadata": {
-        "comment": "Data-base da operação",
-        "parquet.field.id": 2
+        "comment": "Data-base da operação"
       },
       "name": "data",
       "nullable": false,
@@ -20,8 +18,7 @@
     },
     {
       "metadata": {
-        "comment": "Código da operação",
-        "parquet.field.id": 3
+        "comment": "Código da operação"
       },
       "name": "operacao",
       "nullable": false,
@@ -29,8 +26,7 @@
     },
     {
       "metadata": {
-        "comment": "Se a operação vem do sistema legado",
-        "parquet.field.id": 4
+        "comment": "Se a operação vem do sistema legado"
       },
       "name": "legado",
       "nullable": false,
@@ -38,8 +34,7 @@
     },
     {
       "metadata": {
-        "comment": "Área responsável",
-        "parquet.field.id": 5
+        "comment": "Área responsável"
       },
       "name": "area",
       "nullable": true,
@@ -47,8 +42,7 @@
     },
     {
       "metadata": {
-        "comment": "Departamento responsável",
-        "parquet.field.id": 6
+        "comment": "Departamento responsável"
       },
       "name": "departamento",
       "nullable": true,
@@ -56,8 +50,7 @@
     },
     {
       "metadata": {
-        "comment": "Spread básico",
-        "parquet.field.id": 7
+        "comment": "Spread básico"
       },
       "name": "spread_basico",
       "nullable": true,
@@ -65,8 +58,7 @@
     },
     {
       "metadata": {
-        "comment": "Spread de risco",
-        "parquet.field.id": 8
+        "comment": "Spread de risco"
       },
       "name": "spread_risco",
       "nullable": true,
@@ -74,8 +66,7 @@
     },
     {
       "metadata": {
-        "comment": "Spread total",
-        "parquet.field.id": 9
+        "comment": "Spread total"
       },
       "name": "spread_total",
       "nullable": true,
@@ -83,8 +74,7 @@
     },
     {
       "metadata": {
-        "comment": "Taxa total",
-        "parquet.field.id": 10
+        "comment": "Taxa total"
       },
       "name": "taxa_total",
       "nullable": true,
@@ -92,8 +82,7 @@
     },
     {
       "metadata": {
-        "comment": "Taxa BNDES",
-        "parquet.field.id": 11
+        "comment": "Taxa BNDES"
       },
       "name": "taxa_bndes",
       "nullable": true,
@@ -101,8 +90,7 @@
     },
     {
       "metadata": {
-        "comment": "Custo adicional",
-        "parquet.field.id": 12
+        "comment": "Custo adicional"
       },
       "name": "custo_adicional",
       "nullable": true,
@@ -110,8 +98,7 @@
     },
     {
       "metadata": {
-        "comment": "Instrumento financeiro",
-        "parquet.field.id": 13
+        "comment": "Instrumento financeiro"
       },
       "name": "instrumento_financeiro",
       "nullable": true,
@@ -119,8 +106,7 @@
     },
     {
       "metadata": {
-        "comment": "Partição: data em AAAA-MM-DD",
-        "parquet.field.id": 14
+        "comment": "Partição: data em AAAA-MM-DD"
       },
       "name": "data_str",
       "nullable": false,

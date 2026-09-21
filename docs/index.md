@@ -218,4 +218,5 @@ em cada motor. Um tipo fora desta tabela é recusado por `check_models` e por `a
 
 Cada campo Arrow leva a nulidade da coluna, o comentário em `metadata` e `PARQUET:field_id` pela
 posição; o esquema leva o nome da tabela em `serialize_db_table`. O esquema Delta é derivado do Arrow
-pelo delta-rs, com os comentários preservados.
+pelo delta-rs, com os comentários preservados e sem o `PARQUET:field_id`: com ele no esquema Delta, o
+`delta_scan` do DuckDB lê toda coluna como nula.

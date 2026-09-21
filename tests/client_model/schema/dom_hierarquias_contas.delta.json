@@ -2,8 +2,7 @@
   "fields": [
     {
       "metadata": {
-        "comment": "Identificador da hierarquia",
-        "parquet.field.id": 1
+        "comment": "Identificador da hierarquia"
       },
       "name": "id_hierarquia",
       "nullable": false,
@@ -11,8 +10,7 @@
     },
     {
       "metadata": {
-        "comment": "Nome da hierarquia",
-        "parquet.field.id": 2
+        "comment": "Nome da hierarquia"
       },
       "name": "nome",
       "nullable": false,
@@ -20,8 +18,7 @@
     },
     {
       "metadata": {
-        "comment": "Descrição da hierarquia",
-        "parquet.field.id": 3
+        "comment": "Descrição da hierarquia"
       },
       "name": "descricao",
       "nullable": true,

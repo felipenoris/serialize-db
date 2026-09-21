@@ -66,29 +66,47 @@ somas), `test_pyarrow.py` (`test_hive_partitioned_dataset`,
 A base Delta sobre a qual as etapas 3 a 6 e 8 se desenvolvem sai antes da etapa 7, pelo caminho
 aceito pelo usuário em 2026-09-21: `scripts/migrate_parquet_to_delta.py` é o rascunho abaixo
 promovido a ferramenta, sobre `serialize_db.schema` ([etapa 1](PLAN-STAGE-1.md)), o `deltalake` e
-o DuckDB diretos, sem as etapas 3 e 4. O que ele faz, por tabela do modelo cliente e por partição:
+o DuckDB diretos, sem as etapas 3 e 4; escrito e testado em 2026-09-21. O que ele faz, por tabela
+do modelo e por partição, as tabelas sem partição antes das particionadas e as duas na ordem do
+modelo (`cad_operacoes`, `rel_contrato_operacao`, `cad_contratos`, `cad_lancamentos`):
 `discover_partitions`, `partition_query` com os `CAST` para o contrato (`sql_type(coluna, "duckdb")`
 da etapa 1 dá o tipo de cada `CAST`, e `quoted` cita cada coluna, porque `cad_contratos.to` é
-palavra reservada e a consulta sem aspas falha no DuckDB), a
-conferência do valor do caminho contra `partition_source`, `COPY ... (FORMAT parquet,
-RETURN_STATS)` para `<raiz>/<tabela>/<coluna>=<valor>/` e a `AddAction` por
-`create_write_transaction` (o modo `register`), a retomada pelas partições já presentes e
-`load_report`. A ordem no alvo: as dez tabelas sem partição, `cad_contratos`, `cad_operacoes`,
-`rel_contrato_operacao` e `cad_lancamentos` por último; o relatório de contagens e somas fecha cada
-tabela. Antes do alvo, três coisas:
+palavra reservada e a consulta sem aspas falha no DuckDB), `contract_problems`, uma consulta que
+conta as linhas com `partition_source` diferente do valor do caminho, os nulos das colunas `NOT
+NULL` e os textos acima de `String(n)` em bytes (`strlen`; o `octet_length` do DuckDB só existe
+para `BLOB`) e recusa a partição por `ContractError` antes de gravar, nos dois modos; a gravação
+em `--mode register` (o padrão), `COPY ... (FORMAT parquet, RETURN_STATS)` para
+`<raiz>/<tabela>/<coluna>=<valor>/carga_inicial_<uuid>.parquet` e a `AddAction` por
+`create_write_transaction` com `numRecords`, `nullCount` de toda coluna e mínimo e máximo dos
+inteiros e das datas, ou em `--mode rewrite`, o leitor da consulta por `cast` e `write_deltalake`
+com predicado (o `cast` fica como segunda guarda: uma exceção do leitor volta de
+`write_deltalake` como `DeltaError`, com a mensagem original dentro do texto); as linhas na ordem
+da `sort_key` do modelo, salvo `--no-sort`; a retomada pelas partições já no log; `load_report`
+por partição, contagem e somas das colunas `Double` e `Numeric` como `DECIMAL(38, 6)`, a origem
+por `read_parquet` com `hive_partitioning` e o Delta por `delta_scan`, mais as conversões de tipo
+lidas do rodapé do primeiro arquivo e as entradas fora do padrão; cada partição imprime linhas,
+tempo e o RSS máximo do processo, e `--report` grava o JSON da execução. A tabela é criada por
+`DeltaTable.create` com `delta_schema`, o nome, o comentário e as retenções da etapa 3
+(`mode="ignore"`). O primeiro `delta_scan` sobre uma tabela criada por `delta_schema` leu toda
+coluna como nula por causa do `parquet.field.id` que o esquema Delta herdava do Arrow, corrigido
+na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
 
-- O script roda sobre `tests/source_db_projetado.py` em pasta local (62 arquivos), o material do
-  teste desta etapa, com o mesmo relatório.
+- O script rodou sobre `tests/source_db_projetado.py` em pasta local, o material do teste desta
+  etapa: `tests/test_migrate_parquet_to_delta.py` (16 casos, marcador `local`) cobre a
+  descoberta, a consulta, a carga uma vez só com a retomada e o filtro, os dois modos com o
+  mesmo relatório, a ordem da `sort_key`, as três recusas sem commit nos dois modos, o relatório
+  que acusa uma linha apagada e a linha de comando sobre a base inteira, duas vezes.
 - O usuário copia a base de produção para um prefixo do bucket do projeto separado da raiz das
   tabelas Delta (`aws s3 sync`, a mesma estrutura de pastas): a carga só lê, e a cópia congela o
   snapshot lido em 2026-09-21, enquanto a base de produção muda a cada carga mensal (a última em
   2026-09-14).
-- Duas medições, cada uma numa sonda de poucas linhas antes de entrar no script: o
-  `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo (a alternativa é gravar em
-  disco, 29,8 GiB livres, e subir pelo `boto3`), e a memória e o tempo de uma partição de
+- Duas medições: o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo, que a
+  primeira partição de `cad_contratos` em `--mode register` faz (a alternativa é gravar em disco,
+  29,8 GiB livres, e subir pelo `boto3`), e a memória e o tempo de uma partição de
   `cad_lancamentos` (35 milhões de linhas, cerca de 700 MB de Parquet) sob o `memory_limit` de
   6,1 GiB, a medição de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que decide o padrão de
-  `export_mode`.
+  `export_mode`: o script com `--tables cad_lancamentos --partitions <valor>`, uma vez em cada
+  modo e uma com `--no-sort`, imprime as linhas, o tempo e o RSS máximo de cada partição.
 
 Os tipos do modelo cliente ficam fechados antes da execução: mudá-los depois é reescrever o
 Delta. A `sort_key` de cada tabela particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),

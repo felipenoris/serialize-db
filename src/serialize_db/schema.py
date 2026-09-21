@@ -189,13 +189,21 @@ def delta_schema(table: sa.Table) -> DeltaSchema:
     """O esquema Delta da tabela, derivado do Arrow pelo delta-rs.
 
     ``DateTime`` sem fuso vira ``timestamp_ntz`` e com fuso ``timestamp``; ``Numeric(p, s)`` vira
-    ``decimal(p,s)``; JSON e UUID viram ``string``; os comentários ficam nos campos.
+    ``decimal(p,s)``; JSON e UUID viram ``string``; os comentários ficam nos campos. O
+    ``PARQUET:field_id`` do esquema Arrow fica de fora: com ele no esquema Delta
+    (``parquet.field.id``), o ``delta_scan`` do DuckDB lê toda coluna como nula, qualquer que
+    seja o escritor do arquivo (leitura de 2026-09-21).
 
     Exemplo:
 
         delta_schema(Operacao.__table__).to_json()   # {"type": "struct", "fields": [...]}
     """
-    return DeltaSchema.from_arrow(arrow_schema(table))
+    fields = []
+    for field in arrow_schema(table):
+        metadata = dict(field.metadata)
+        metadata.pop(b"PARQUET:field_id")
+        fields.append(field.with_metadata(metadata))
+    return DeltaSchema.from_arrow(pa.schema(fields))
 
 
 # ---------------------------------------------------------------- as opções físicas

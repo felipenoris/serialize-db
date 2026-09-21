@@ -80,6 +80,13 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   partition column inside the file, unlike delta-rs; mixing writers breaks positional `COPY`.
   `COPY ... (RETURN_STATS)` plus `AddAction` with stats gives files that both readers prune
   (`Scanning Files: 0/12`). `plan/delta.md`
+- A Delta schema whose fields carry `parquet.field.id` metadata (what `DeltaSchema.from_arrow`
+  keeps from an Arrow `PARQUET:field_id`) makes `delta_scan` read every column as null: for a
+  DuckDB `COPY` file, a delta-rs file with the ids and one without, while delta-rs and
+  `read_parquet` read the values; without the key the same three files read correctly
+  (2026-09-21, DuckDB 1.5.5, delta extension `45c4087`). `serialize_db.schema.delta_schema` drops
+  the key before `from_arrow`, and the versioned `.delta.json` files carry no ids.
+  `plan/POC.md`, `plan/PLAN-STAGE-1.md`
 
 ## The library's use of Delta
 
