@@ -6,15 +6,6 @@ resposta entra no documento que a guarda, e a saída nomeia esse documento. O pl
 [`PLAN.md`](PLAN.md), o estado da implementação em [`CURRENT_STATE.md`](CURRENT_STATE.md) e o que já
 foi medido em [`POC.md`](POC.md).
 
-- **`UNLOAD ... PARTITION BY` a partir de uma tabela do datashare.** O `UNLOAD` simples passou no
-  ambiente alvo em 2026-09-20 ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py)),
-  e a documentação não o lista nem entre os comandos aceitos nem entre os recusados. O que o
-  `export_partition` da [etapa 5](PLAN-STAGE-5.md) precisa é `PARTITION BY (<coluna>) MANIFEST
-  VERBOSE`, que ninguém exercitou lá; `test_unload_partition_by_and_register` registra o resultado e
-  pula o resto quando a recusa vem do datashare, e
-  [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) é o experimento que
-  responde. Não é bloqueio: a etapa 5 nomeia a alternativa, um `UNLOAD` por partição, que é o
-  comando que já passou.
 - **Onde ficam as tabelas de execução.** O sandbox `exec_<id>_*` da [etapa 4](PLAN-STAGE-4.md) e as
   stagings do `COPY` nascem no banco do datashare, onde o `CREATE TABLE` passou, e herdam as
   restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária
@@ -25,6 +16,12 @@ foi medido em [`POC.md`](POC.md).
   responder pelo esquema do datashare ninguém leu. `probes/redshift.py` (`RS-19`, `RS-5`, `RS-8`) as
   consulta depois do `USE` como leitura, com `svv_all_tables` como a lista provada; a próxima
   execução no ambiente alvo responde.
+- **A coluna de partição no `schema` do manifesto verboso.** O `schema.elements` do manifesto do
+  `UNLOAD` traz nome e tipo de cada coluna, e é a conferência que `register_files` faz antes do
+  commit ([`redshift.md`](redshift.md)). Se ele lista a coluna de partição, que o `PARTITION BY`
+  tira dos arquivos, ninguém leu: a execução de 2026-09-21 não imprimiu o bloco. A próxima execução
+  de [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) responde, e por isso a
+  lista esperada é parâmetro da conferência.
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
   conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
@@ -73,13 +70,5 @@ respondidas em 2026-09-19 ([`POC.md`](POC.md)). A [etapa 0](PLAN-STAGE-0.md) as 
   especial `TIMESTAMP` como `INT64` em microssegundos e o tipo físico de `DECIMAL`.
 - Se o `COPY` trunca ou aborta numa string maior que o `VARCHAR` de destino.
 - Se o Spectrum mapeia colunas Parquet soltas por nome ou por posição.
-- Os tipos físicos que o `UNLOAD` grava para `TIMESTAMP` e `DECIMAL`, se as suas colunas saem
-  `required` e se ele grava estatísticas de mínimo e máximo; os três afetam a `AddAction` de
-  `register_file` em [`delta.md`](delta.md).
 - Se o `FILLRECORD` deixa o `COPY` carregar arquivos antigos, sem as colunas acrescentadas depois,
   que a evolução do Delta e do DuckLake produz.
-- Se o `COPY ... MANIFEST FORMAT AS PARQUET` numa tabela de datashare se comporta como numa tabela
-  local: o `COPY` de um prefixo de pasta passou em 2026-09-20, o de um manifesto ainda não;
-  [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) é o experimento que
-  responde. A [etapa 8](PLAN-STAGE-8.md) nomeia a alternativa, copiar os arquivos da versão para um
-  prefixo e carregá-lo.

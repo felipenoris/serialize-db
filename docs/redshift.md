@@ -125,8 +125,12 @@ O que o Redshift aceita escrever num datashare, e o que ele não lista:
   a regra por construção, e foi assim, sem cláusula alguma, que ele passou no ambiente alvo em
   2026-09-20. A codificação das colunas vem do DDL ou de `ENCODE AUTO`.
 - `UNLOAD` não está na lista dos comandos suportados nem na dos recusados, e passou no ambiente alvo
-  a partir de uma tabela do datashare (`FORMAT AS PARQUET`, sem `PARTITION BY`). O que falta medir é
-  `PARTITION BY ... MANIFEST VERBOSE`.
+  a partir de uma tabela do datashare: `FORMAT AS PARQUET` sem `PARTITION BY` em 2026-09-20, e
+  `PARTITION BY (<coluna>) MANIFEST VERBOSE` em 2026-09-21, este em 0,8 s sobre 500.000 linhas
+  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)).
+- `COPY ... FORMAT AS PARQUET MANIFEST` passou numa tabela do datashare em 2026-09-21, 500.000
+  linhas em 4,6 s a partir de um manifesto de uma entrada apontando para um arquivo gravado pelo
+  delta-rs: o manifesto se comporta como numa tabela local.
 - A escrita de uma transação vai para um banco só, e um comando múltiplo fora de um bloco de
   transação não é aceito: a transação da publicação abre com `BEGIN` explícito, e a tabela de
   controle mora no mesmo banco das tabelas publicadas.
@@ -144,7 +148,9 @@ sessão, a mesma que o `boto3` usa. As credenciais do espaço expiram em cerca d
 cláusula é montada a cada comando, nunca guardada, e **nenhum texto que a carregue vai para log,
 para o relatório da suíte ou para arquivo** — `tests/conftest.py` mascara toda cláusula de
 credencial antes de gravar o relatório. O `COPY` desse caminho leu um prefixo de pasta Parquet
-direto, sem manifesto, e converteu `int32` da origem para a coluna `BIGINT` do contrato.
+direto, sem manifesto, e converteu `int32` da origem para a coluna `BIGINT` do contrato; em
+2026-09-21 leu também um manifesto, e o `UNLOAD` gravou com `PARTITION BY ... MANIFEST VERBOSE`
+pelas mesmas credenciais.
 
 O que o ambiente alvo respondeu a esses requisitos, lido em 2026-09-20 por `probes/redshift.py`
 ([`POC.md`](POC.md), [`readings/`](readings/)): o patch `1.0.436211` atende; o isolamento do banco
@@ -863,7 +869,7 @@ Arrow e merece um benchmark contra o fluxo acima.
 | Colunas são associadas por posição, e a quantidade precisa coincidir com a tabela. | A ordem das colunas no Parquet é a ordem do modelo. Os dois derivam do mesmo `Table`. |
 | Só existem as colunas gravadas no arquivo. | A coluna de partição `mes` não está nos arquivos do Delta: a carga passa por uma staging sem `mes` e por `INSERT ... SELECT ..., '<mes>'` ([delta.md](delta.md)). |
 | Parâmetros aceitos: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `STATUPDATE`, `MANIFEST`, `EXPLICIT_IDS`. `MAXERROR`, `NOLOAD` e `COMPUPDATE` não são aceitos, e não há compressão automática. | O primeiro erro aborta o `COPY`. A validação acontece antes, no Arrow. |
-| `MANIFEST` é aceito. | O `COPY` carrega exatamente os arquivos gravados pela biblioteca. |
+| `MANIFEST` é aceito. | O `COPY` carrega exatamente os arquivos gravados pela biblioteca, e não o que mais estiver na pasta: o Delta guarda as versões anteriores até o `vacuum`. Exercitado no datashare em 2026-09-21. |
 | O bucket precisa estar na mesma região do Redshift. | Configuração da infraestrutura. |
 | O `COPY` de Parquet usa URLs pré-assinadas válidas por 1 hora. | Políticas IAM do bucket não podem bloquear URLs pré-assinadas. |
 | O `COPY` grava `NULL` em coluna `NOT NULL` só se o arquivo trouxer `NULL`; a falha aborta a carga. | `NOT NULL` do modelo é a última barreira; a auditoria no Arrow vem antes. |
@@ -965,9 +971,40 @@ ordem do modelo, com casts para os tipos do contrato e `ORDER BY` pela chave de 
 biblioteca confere o manifesto do `UNLOAD` e os rodapés dos arquivos antes de registrá-los no log do
 Delta. `CLEANPATH` não é usado: arquivos de execuções abortadas ficam fora do log e saem pelo `vacuum`.
 
-A documentação do `UNLOAD` não informa os tipos físicos Parquet de `TIMESTAMP` e `DECIMAL`, a
-obrigatoriedade das colunas nem a presença de estatísticas de mínimo e máximo. Os três afetam o
-registro dos arquivos no log do Delta e a poda por estatísticas, e a prova de conceito verifica.
+A documentação do `UNLOAD` não informa os tipos físicos Parquet, a obrigatoriedade das colunas nem a
+presença de estatísticas, e os três afetam o registro dos arquivos no log do Delta.
+[`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) leu o rodapé de um arquivo no
+ambiente alvo em 2026-09-21 e respondeu os três:
+
+| Coluna do `UNLOAD` | Tipo físico Parquet | Tipo lógico |
+| --- | --- | --- |
+| `BIGINT` | `INT64` | `Int(bitWidth=64, isSigned=true)` |
+| `DATE` | `INT32` | `Date` |
+| `VARCHAR` | `BYTE_ARRAY` | `String` |
+| `DOUBLE PRECISION` | `DOUBLE` | nenhum |
+| `DECIMAL(18, 2)` | `FIXED_LEN_BYTE_ARRAY(8)` | `Decimal(precision=18, scale=2)` |
+| `TIMESTAMP` | `INT96` | nenhum |
+
+Toda coluna sai `optional`, inclusive as declaradas `NOT NULL` na tabela de origem: a nulidade do
+Delta vem do esquema da tabela, não dos arquivos. As estatísticas de mínimo e máximo estão
+presentes, o que faz valer preencher `minValues` e `maxValues` na `AddAction`.
+
+Os dois tipos físicos que divergem do resto do projeto:
+
+- `DECIMAL(18, 2)` sai em `FIXED_LEN_BYTE_ARRAY(8)`, como o PyArrow grava, e não em `INT64`, como
+  gravam o delta-rs, o DuckLake e o DuckDB ([estrategia.md](estrategia.md)). Uma tabela Delta que
+  recebe arquivos dos dois escritores fica com duas codificações físicas da mesma coluna lógica;
+  os leitores leem as duas, porque o tipo lógico é o mesmo.
+- `TIMESTAMP` sai em `INT96`, que o formato Parquet marca como obsoleto e que o contrato do projeto
+  tira na carga inicial ([schema.md](schema.md)). O `UNLOAD` o traz de volta, e o `INT96` não carrega
+  estatística de mínimo e máximo: a coluna de timestamp de um arquivo do `UNLOAD` não poda. Um
+  arquivo `INT96` registrado numa tabela Delta declarada `timestamp_ntz` foi lido de volta pelo
+  delta-rs e pelo `delta_scan` do DuckDB como `timestamp[us]`, com os valores intactos
+  (2026-09-21, macOS, [POC.md](POC.md)).
+
+O `UNLOAD` fragmenta por slice: 500.000 linhas em seis colunas saíram em 32 arquivos, sem
+`MAXFILESIZE`, que é um teto e não um piso. Quem controla a quantidade é `PARALLEL OFF`, que grava
+em série num arquivo só e respeita o `ORDER BY`, ou uma compactação posterior na camada Delta.
 
 O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem
 acesso do Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o
@@ -1040,6 +1077,73 @@ FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE
 Os nomes de tipo da amostra e a presença da coluna de partição em `schema` sob `PARTITION BY` não
 foram verificados; por isso a lista esperada é um parâmetro. `UnloadFromSelect` do dialeto não tem
 `PARTITION BY` nem `VERBOSE`, e o comando fica em texto.
+
+## O manifesto entre o log do Delta e o Redshift
+
+O formato do manifesto é da AWS, descrito na referência do `COPY` e na do `UNLOAD`. O Delta não
+participa dele nos dois sentidos: o que o log guarda são ações `add`, e o manifesto que o Delta tem,
+o `GENERATE symlink_format_manifest`, é outro formato, de texto, que serve ao Spectrum e não ao
+`COPY`, e que o delta-rs não implementa ([delta.md](delta.md)). As duas conversões abaixo montam e
+leem o formato da AWS a partir do log e para o log;
+[`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) executou as duas no ambiente
+alvo em 2026-09-21, numa tabela do banco de datashare.
+
+O manifesto é um objeto com `entries`, uma entrada por arquivo:
+
+| Campo | Quando é exigido |
+| --- | --- |
+| `url` | Sempre; a URL `s3://` completa do arquivo. |
+| `mandatory` | Opcional, falso por omissão, e um arquivo ausente é pulado em silêncio. |
+| `meta.content_length` | Nos formatos colunares, Parquet e ORC. |
+| `meta.record_count` | Só no manifesto que o `UNLOAD ... MANIFEST VERBOSE` grava. |
+
+### Do log do Delta para o manifesto do COPY
+
+A biblioteca lê as ações `add` da versão (`get_add_actions()`, uma linha por arquivo vivo) e grava o
+manifesto. É o `copy_manifest` da [etapa 3](PLAN-STAGE-3.md), usado pela ingestão da
+[etapa 5](PLAN-STAGE-5.md) e pela publicação da [etapa 8](PLAN-STAGE-8.md).
+
+| Ação `add` | Entrada do manifesto |
+| --- | --- |
+| `path`, relativo à pasta da tabela | `url`, a URI da tabela mais o caminho |
+| `size_bytes` | `meta.content_length` |
+| nenhuma | `mandatory: true`, porque o log afirma que o arquivo existe: sumiu um, o `COPY` falha em vez de carregar de menos |
+| `num_records` | fica fora; a soma é o valor a comparar com `pg_last_copy_count()` antes do `commit` |
+| `partition.<coluna>` | fica fora, e é a razão da staging: o valor da partição não está no arquivo, o `COPY` é posicional, e o `INSERT ... SELECT *, '<valor>'` acrescenta a coluna |
+| `min`, `max`, `null_count` | ficam fora; o `COPY` não lê estatística |
+
+Escolher os arquivos é filtrar as ações `add` por `partition.<coluna>` antes de montar as entradas,
+o que é a diferença entre publicar uma partição e publicar a tabela.
+
+### Do manifesto do UNLOAD para o log do Delta
+
+O caminho de volta não produz manifesto nenhum: ele grava um commit. `create_write_transaction`
+escreve uma versão nova do log com uma ação `add` por entrada, e os arquivos que o `UNLOAD` gravou
+ficam onde estão, sem cópia nem reescrita. É o `register_files` da [etapa 3](PLAN-STAGE-3.md),
+usado pelo `export_partition` da [etapa 5](PLAN-STAGE-5.md).
+
+| Entrada do manifesto | `AddAction` |
+| --- | --- |
+| `url`, absoluta | `path`, **relativo à pasta da tabela** |
+| `meta.content_length` | `size` |
+| `meta.record_count` | `stats.numRecords` |
+| nenhuma | `partition_values`, lido do caminho: o `PARTITION BY` grava `<coluna>=<valor>/` na convenção Hive |
+| nenhuma | `modification_time`, do `LastModified` do objeto no S3 |
+| nenhuma | `data_change`, conceito do Delta sem contraparte |
+| nenhuma | `stats.minValues`, `maxValues` e `nullCount`, lidos do rodapé Parquet |
+
+Tirar o prefixo da URL é a conversão que sustenta o resto: o log do Delta guarda caminhos relativos
+à pasta da tabela, e nenhum caminho absoluto ([delta.md](delta.md)), que é o que permite mover a
+pasta. Um caminho absoluto registrado ali quebra a tabela no primeiro `mv`.
+
+O manifesto não tem estatística, e os rodapés do `UNLOAD` têm: preencher `minValues` e `maxValues`
+custa uma leitura de rodapé por arquivo e é o que faz o `delta_scan` podar. Sem elas a poda é só por
+partição. A coluna de timestamp é a exceção, porque o `INT96` do `UNLOAD` não carrega estatística.
+
+O `schema.elements` do manifesto verboso traz o nome e o tipo de cada coluna, e é a conferência
+barata antes do commit: um `cast` errado no `select` do `UNLOAD` aparece ali, não na primeira
+leitura da tabela meses depois. A presença da coluna de partição nesse bloco sob `PARTITION BY` não
+foi verificada.
 
 ## Recomendações de performance
 

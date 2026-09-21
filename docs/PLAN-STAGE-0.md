@@ -11,26 +11,33 @@ de conexão já está fixado: a credencial temporária do workgroup serverless, 
 [`../examples/redshift_native.py`](../examples/redshift_native.py), executado no ambiente alvo em
 2026-09-20.
 
-- `COPY ... FORMAT AS PARQUET MANIFEST` de arquivos gravados pelo delta-rs: `DECIMAL(18, 2)` em
-  `INT64`, `timestamp_ntz` em `INT64` de microssegundos, o que acontece com uma string acima do
-  `VARCHAR` de destino (truncar ou abortar), a lista de colunas no `COPY`, `FILLRECORD` para
-  arquivos anteriores a uma coluna nova, e `SUPER` direto do `COPY` para documentos acima de
-  65.535 bytes.
-- `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE`: os tipos físicos de
-  `TIMESTAMP` e `DECIMAL`, se as colunas saem `required`, se há estatísticas de mínimo e máximo, e o
-  registro dos arquivos por `create_write_transaction`, lido pelo DuckDB.
-  [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) exercita este item e o
-  anterior num script só, com `cast` para `DECIMAL` e `TIMESTAMP` no `select` do `UNLOAD`, porque a
-  base de origem não tem coluna de nenhum dos dois tipos.
+- `COPY ... FORMAT AS PARQUET MANIFEST` de arquivos gravados pelo delta-rs: o comando passou no
+  datashare em 2026-09-21, com 500.000 linhas em `INT64`, `INT32` de data, `BYTE_ARRAY` e `DOUBLE`
+  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)). Faltam as colunas que a
+  base de origem não tem nem gera: `DECIMAL(18, 2)` em `INT64`, `timestamp_ntz` em `INT64` de
+  microssegundos, o que acontece com uma string acima do `VARCHAR` de destino (truncar ou abortar),
+  a lista de colunas no `COPY`, `FILLRECORD` para arquivos anteriores a uma coluna nova, e `SUPER`
+  direto do `COPY` para documentos acima de 65.535 bytes.
+- `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE`: **verificado** em 2026-09-21
+  por [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py), que exercita este
+  item e o `COPY ... MANIFEST` do item anterior num script só, com `cast` para `DECIMAL` e
+  `TIMESTAMP` no `select` porque a base de origem não tem coluna de nenhum dos dois tipos. O
+  comando é aceito a partir de uma tabela do datashare, grava na convenção Hive com a coluna de
+  partição fora dos arquivos, e `create_write_transaction` registrou os arquivos numa tabela Delta
+  que devolveu as linhas. Os tipos físicos, a obrigatoriedade das colunas e as estatísticas estão em
+  [`POC.md`](POC.md) e [`redshift.md`](redshift.md); o `TIMESTAMP` sai em `INT96`, o
+  `DECIMAL(18, 2)` em `FIXED_LEN_BYTE_ARRAY(8)`, toda coluna sai `optional` e há mínimo e máximo.
 - Se o Redshift Spectrum mapeia colunas Parquet por nome ou por posição, só para registro; o
   projeto não cria esquemas externos.
 - O banco do esquema do projeto: a sessão enxerga `datalake_rw_shared.sbx_aco_decon` (`RS-16`,
   2026-09-20), e depois de `USE datalake_rw_shared` o `CREATE TABLE`, o `COPY` de uma pasta, o
   `SELECT` e o `UNLOAD` passaram por `sbx_aco_decon.<tabela>`
   ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py)); o `SELECT` em três
-  partes passou de `dev`. Faltam o `INSERT`, o `DELETE` e o `MERGE` da publicação, o `COPY ...
-  MANIFEST` e o `UNLOAD ... PARTITION BY`. Os requisitos da escrita num datashare que a sessão não
-  lê (isolamento do produtor, slices) não impediram a escrita.
+  partes passou de `dev`. Em 2026-09-21 passaram também o `COPY ... MANIFEST`, o `INSERT ... SELECT`
+  e o `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE`
+  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)). Faltam o `DELETE` e o
+  `MERGE` da publicação. Os requisitos da escrita num datashare que a sessão não lê (isolamento do
+  produtor, slices) não impediram a escrita.
 - O ciclo da Data API com `select`, que devolve `DECIMAL` como texto: a prova de que existe caminho
   sem a porta 5439, e a razão de ela ficar fora da biblioteca.
 

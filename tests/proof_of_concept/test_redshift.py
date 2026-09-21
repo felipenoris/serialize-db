@@ -351,9 +351,9 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     )
     record("redshift.unload.partition_by", unload)
 
-    # O UNLOAD simples de uma tabela do datashare passou no ambiente alvo
-    # (examples/redshift_copy_unload.py); o que este teste acrescenta é PARTITION BY MANIFEST VERBOSE,
-    # que a documentação não lista. A recusa dele é a resposta da pergunta, não defeito da suíte.
+    # PARTITION BY MANIFEST VERBOSE, que a documentação não lista, passou no ambiente alvo em
+    # 2026-09-21 (examples/redshift_manifest.py). O pulo continua para o ambiente que recusar, mas
+    # lá ele é regressão, não pergunta em aberto.
     if unload != "ok" and session.share_database:
         pytest.skip(f"UNLOAD ... PARTITION BY recusado no datashare {session.share_database}: {unload}")
     assert unload == "ok", unload
@@ -372,6 +372,14 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     record("redshift.unload.schema", " ".join(str(parquet.schema).split()))
     statistics = parquet.metadata.row_group(0).column(0).statistics
     record("redshift.unload.has_min_max", bool(statistics and statistics.has_min_max))
+
+    # Medido no ambiente alvo em 2026-09-21 (docs/POC.md): TIMESTAMP sai em INT96, obsoleto no
+    # formato e sem estatística, e DECIMAL(18,2) em FIXED_LEN_BYTE_ARRAY, como o PyArrow grava e não
+    # como grava o delta-rs. Toda coluna sai optional, inclusive as NOT NULL da origem.
+    physical = {parquet.schema.column(i).name: parquet.schema.column(i).physical_type for i in range(len(parquet.schema))}
+    assert physical["data_ref"] == "INT96", physical
+    assert physical["valor"] == "FIXED_LEN_BYTE_ARRAY", physical
+    assert statistics and statistics.has_min_max, "o UNLOAD deixou de gravar mínimo e máximo"
 
     # O registro no Delta: a tabela nasce do esquema do contrato, e cada arquivo do manifesto vira uma AddAction.
     schema = pa.schema(
@@ -401,6 +409,8 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
         )
     delta.create_write_transaction(actions, mode="append", schema=delta.schema(), partition_by=["mes"])
 
+    # data_ref está declarada timestamp[us] na tabela Delta e INT96 no arquivo: os dois leitores
+    # convertem e devolvem os valores intactos (sondagem de 2026-09-21, docs/POC.md).
     record("redshift.unload.delta_rs_read", outcome(lambda: DeltaTable(destination).to_pyarrow_table()))
     assert duckdb_connection.execute(f"SELECT count(*) FROM delta_scan('{destination}')").fetchone()[0] == 6
 

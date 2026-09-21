@@ -5,21 +5,12 @@ referência da conectividade com o Redshift: o probe, a suíte de testes e a
 [etapa 5](../docs/PLAN-STAGE-5.md) repetem as chamadas que estão aqui, e não uma variante que
 ninguém executou. O que eles mostraram está em [`../docs/POC.md`](../docs/POC.md), com a data.
 
-`redshift_manifest.py` é a exceção, e está marcado como tal: ele é o **próximo experimento**, ainda
-não executado, escrito a partir do que os outros provaram. Depois de rodar, ele passa para a tabela
-abaixo com o que mostrou, como os demais.
-
 | Script | Caminho | Chamadas |
 | --- | --- | --- |
 | [`redshift_native.py`](redshift_native.py) | Protocolo nativo na porta 5439, com credencial temporária derivada da identidade IAM. É o caminho da biblioteca. | `redshift-serverless:GetWorkgroup`, `GetCredentials`; `redshift_connector.connect` |
 | [`redshift_data_api.py`](redshift_data_api.py) | Data API por HTTPS, assíncrona: dispara, consulta o estado e pagina o resultado. Serve a comandos e a diagnóstico. | `redshift-data:ExecuteStatement`, `DescribeStatement`, `GetStatementResult` |
 | [`redshift_copy_unload.py`](redshift_copy_unload.py) | `USE` no banco do datashare, `CREATE TABLE`, `COPY` de uma pasta Parquet e `UNLOAD`, com as credenciais de quem chama no texto do comando. | as de `redshift_native.py`, mais `s3:ListBucket`, `GetObject` e `PutObject` pela identidade da sessão |
-
-## O próximo experimento
-
-| Script | O que falta responder |
-| --- | --- |
-| [`redshift_manifest.py`](redshift_manifest.py) | Os dois comandos com manifesto, que são os pré-requisitos do `export_partition` da [etapa 5](../docs/PLAN-STAGE-5.md) e do `COPY` da publicação da [etapa 8](../docs/PLAN-STAGE-8.md): `COPY ... FORMAT AS PARQUET MANIFEST` e `UNLOAD ... PARTITION BY (<coluna>) MANIFEST VERBOSE`, os dois numa tabela do datashare. Ele converte antes uma partição de `cad_contratos` de Parquet para Delta, porque o manifesto do `COPY` é a lista de arquivos que o log do Delta guarda, e lê no fim o rodapé de um arquivo do `UNLOAD`: os tipos físicos de `DECIMAL` e `TIMESTAMP`, se as colunas saem `required` e se há estatística de mínimo e máximo são perguntas da [etapa 0](../docs/PLAN-STAGE-0.md). |
+| [`redshift_manifest.py`](redshift_manifest.py) | Os dois comandos com manifesto, pré-requisitos do `export_partition` da [etapa 5](../docs/PLAN-STAGE-5.md) e do `COPY` da publicação da [etapa 8](../docs/PLAN-STAGE-8.md): converte uma partição de `cad_contratos` de Parquet para Delta, monta o manifesto do `COPY` das ações `add`, carrega uma staging por `COPY ... FORMAT AS PARQUET MANIFEST`, acrescenta a coluna de partição por `INSERT`, grava de volta por `UNLOAD ... PARTITION BY (<coluna>) MANIFEST VERBOSE` e registra os arquivos no log do Delta por `create_write_transaction`. Os dois comandos com manifesto são aceitos numa tabela do datashare. | as de `redshift_copy_unload.py`, mais `s3:DeleteObject` sob a pasta de trabalho |
 
 `cad_contas`, a tabela dos outros exemplos, não serve a esse script: ela é uma das dez dimensões sem
 partição da base, e o `UNLOAD ... PARTITION BY` precisa de uma coluna de partição. As particionadas
@@ -69,6 +60,7 @@ O script fica como foi executado, com os valores literais que funcionaram, e gan
 português dizendo o que ele prova, quando rodou e onde o resultado está registrado. Um exemplo que
 contradiz um documento dispara a revisão desse documento na mesma unidade de trabalho.
 
-Um script ainda não executado entra só como próximo experimento, dito no docstring e na seção
-acima, e com uma pergunta em aberto que ele fecha; sem isso, ele não pertence a esta pasta, porque o
-probe e a suíte repetem daqui o que foi executado, não o que foi imaginado.
+Um script ainda não executado entra só como próximo experimento, dito no docstring e numa seção
+própria fora da tabela, e com uma pergunta em aberto que ele fecha; sem isso, ele não pertence a
+esta pasta, porque o probe e a suíte repetem daqui o que foi executado, não o que foi imaginado.
+Depois de rodar, ele passa para a tabela com o que mostrou.

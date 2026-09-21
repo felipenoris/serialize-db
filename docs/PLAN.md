@@ -86,7 +86,9 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
 - **O `timestamp` em `INT96` da origem vira `INT64` na migração** (decisão de 2026-09-20): o formato
   Parquet marca o `INT96` como obsoleto (`parquet.thrift`: "deprecated, new Parquet writers should
   not write data in INT96"), e a precisão dos timestamps da origem não importa: a carga trunca a
-  microssegundos, o `timestamp[us]` do contrato, e o delta-rs grava `INT64`.
+  microssegundos, o `timestamp[us]` do contrato, e o delta-rs grava `INT64`. A regra vale para o que
+  a biblioteca grava; o `UNLOAD` do Redshift grava `INT96` e a exportação o traz de volta, lido como
+  `timestamp[us]` pelos dois leitores e sem estatística (2026-09-21, `redshift.md`).
 - **A nulidade é a do modelo** (decisão de 2026-09-20): sete colunas de `cad_contratos` são
   anuláveis nos arquivos e `NOT NULL` no modelo, sem nulo nos dados; o `cast` da carga as recusa
   com nulo, e a regra só muda se a migração o mostrar.
@@ -306,6 +308,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - As regras que mantêm o `COPY` do Redshift lendo os arquivos e a saída do Delta aberta: sem vetores
   de exclusão, sem column mapping, sem `Identity`, caminhos relativos no log e nunca um arquivo
   registrado por URI absoluta (`delta.md`, `estrategia.md`).
+- Uma tabela alimentada pela biblioteca e pelo `UNLOAD` guarda duas codificações físicas da mesma
+  coluna lógica: o delta-rs grava `DECIMAL(18, 2)` em `INT64` e timestamp em `INT64`, o `UNLOAD`
+  grava em `FIXED_LEN_BYTE_ARRAY(8)` e `INT96`. Os leitores leem as duas, e o que se perde é a
+  estatística da coluna de timestamp, que o `INT96` não carrega (2026-09-21, `POC.md`).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
   consultada mais de uma vez é materializada no DuckDB (`delta.md`).
 - Um programa que encerra logo depois de ler uma tabela Delta lê por `to_pyarrow_dataset()`, nunca
@@ -404,7 +410,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
-| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão e a escrita no datashare provadas por `examples/`, e a suíte pendente. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
+| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão, a escrita no datashare e os dois comandos com manifesto provados por `examples/`, e a suíte pendente. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
 | 1. `schema` | Modelo de referência corrigido; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo de referência. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |
