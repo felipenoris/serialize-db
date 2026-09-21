@@ -78,3 +78,17 @@ reports stay outside git until the user decides to copy them to `docs/readings/`
 datalake_rw_shared` makes two-part names resolve in the datashare while `current_database()` keeps
 answering `dev`, so the switch is confirmed by resolving a name, never by that function
 (`docs/PLAN-STAGE-5.md`, `docs/redshift.md`).
+
+## The stage 1 review
+
+On 2026-09-21 the user accepted that a `String` without length is a `check_models` violation
+(`String(n)` or `Text`; `docs/PLAN-STAGE-1.md`). The proposal that `ddl` generates the
+`CREATE TABLE` text from the type table without the SQLAlchemy dialects stayed open, with two
+concerns of the user: whether a model change would then need `ALTER TABLE` support, and whether the
+dialects remain necessary for `SELECT`, `INSERT`, `UPDATE` and `DELETE`. The answers given: the Delta
+reconciles by the delta-rs API (stage 3), the sandboxes are recreated from the current DDL every
+execution, and the published tables get `ALTER TABLE ADD COLUMN` as text in stage 8 under either
+design, because SQLAlchemy Core has no `ALTER` (that was Alembic's, which left); the dialects stay
+for the statements (`sql.render`, stage 2), and the proposal only keeps stage 1 and the migration
+script free of them. A `String(n)` width change reaches only the versioned `.redshift.sql`, never
+the Delta diff (`docs/PLAN-STAGE-8.md`, pending decision).

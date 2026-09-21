@@ -67,11 +67,10 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 - [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `sql_type`; `String(n)` medido em
   bytes; a tabela e a coluna sem comentário como violação de `check_models`; `ddl` gerado pela
   tabela de tipos sem o dialeto do SQLAlchemy, com `duckdb-engine` e `sqlalchemy-redshift` só no
-  grupo `dev` (proposto); `String` sem comprimento como violação de `check_models` (proposto); no
-  modelo cliente: os comprimentos de `String(n)`, a `sort_key` das quatro tabelas particionadas, a
-  distribuição no Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos`
-  para colunas não únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do
-  modelo.
+  grupo `dev` (proposto); no modelo cliente: os comprimentos de `String(n)`, a `sort_key` das
+  quatro tabelas particionadas, a distribuição no Redshift (`redshift` ausente, `AUTO`), a chave
+  estrangeira de `cad_contratos` para colunas não únicas de `rel_contrato_operacao`, e a revisão
+  dos comentários pelo dono do modelo.
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
   `dev`.
 - [Etapa 3](PLAN-STAGE-3.md): a reserva de credenciais do `boto3` em `storage_options`; as colunas
@@ -92,6 +91,11 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   todo `COPY` da biblioteca (proposto: um manifesto pode listar arquivos anteriores e posteriores a
   uma coluna nova) ou a lista de colunas, os dois lidos em 2026-09-21; o teto de 65.535 bytes do
   campo JSON no Redshift conferido pela auditoria (proposto), ou um caminho por
-  `COPY ... FORMAT JSON 'auto'` ou `INSERT ... JSON_PARSE` para os documentos maiores, os dois lidos.
+  `COPY ... FORMAT JSON 'auto'` ou `INSERT ... JSON_PARSE` para os documentos maiores, os dois lidos;
+  a largura de `VARCHAR(n)` da tabela publicada quando `String(n)` cresce no modelo: o diff do Delta
+  não a vê, porque o Arrow não tem `n`, só o `<tabela>.redshift.sql` versionado a mostra, e
+  `reconcile_published` precisaria de `ALTER TABLE ... ALTER COLUMN ... TYPE VARCHAR(n)`, que o
+  Redshift aceita fora de transação e sem descer abaixo do maior valor existente
+  ([`redshift.md`](redshift.md)).
 - [Etapa 9](PLAN-STAGE-9.md): o nome do runbook; a marca de arquivamento no controle; a retenção do
   `vacuum` mensal.
