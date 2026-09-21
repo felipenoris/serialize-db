@@ -214,3 +214,10 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `gh pr edit` rewrote the description of a merged PR. Before each commit: `git branch --show-current`
   and `gh pr view --json state,headRefName`; a merged PR means a new `claude/` branch, and a `push`
   never goes to `main`.
+- **The suite repeats the example's calls, joins of URIs included** (2026-09-21).
+  `examples/redshift_manifest.py` built each manifest URL from its own base string; the suite built
+  it from `DeltaTable.table_uri`, which ends with a slash, and every `COPY ... MANIFEST` of the
+  second run in the target failed with `File not found` on `…/operacoes//mes=…`, a key that does
+  not exist. A local probe showed the trailing slash and the unencoded `=` before the fix; the suite
+  now strips the slash, decodes the path and records the first URL of each manifest, so the next
+  report shows the exact key it asked for.

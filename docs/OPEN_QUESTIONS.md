@@ -11,27 +11,20 @@ foi medido em [`POC.md`](POC.md).
   restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária
   (`TEMP` é verdadeiro no banco da conexão, e `CREATE` não) custa o sandbox morrer com a sessão. A
   [etapa 5](PLAN-STAGE-5.md) decide quando o primeiro pipeline rodar lá.
-- **O que `svv_table_info` responde depois do `USE`, e se `has_schema_privilege` repete o `false`.**
-  Antes do `USE` as duas enxergam só o banco local. A execução do probe de 2026-09-21 não as leu
-  porque `RS-19` reprovou pelo critério errado: `current_database()` continuou `dev` depois do
-  `USE`, que vale mesmo assim (confirmação do usuário no mesmo dia, e os exemplos que rodaram); o
-  critério passou a ser a resolução de um nome em duas partes. A suíte, no mesmo dia, leu
-  `has_schema_privilege('sbx_aco_decon', 'CREATE')` depois do `USE`: `false`, sem erro, no esquema
-  em que o `CREATE TABLE` passa ([`POC.md`](POC.md)); ela o registra como
-  `redshift.has_schema_privilege_create`, e a próxima execução no ambiente alvo repete a leitura e
-  lê `RS-8`.
-- **A coluna de partição no `schema` do manifesto verboso.** O `schema.elements` do manifesto do
-  `UNLOAD` traz nome e tipo de cada coluna, e é a conferência que `register_files` faz antes do
-  commit ([`redshift.md`](redshift.md)). Se ele lista a coluna de partição, que o `PARTITION BY`
-  tira dos arquivos, ninguém leu: a execução de 2026-09-21 não imprimiu o bloco. A próxima execução
-  de [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) responde, e por isso a
-  lista esperada é parâmetro da conferência.
+- **O que `svv_table_info` responde depois do `USE`.** Antes do `USE` ela enxerga só o banco local,
+  como `has_schema_privilege` e `information_schema.columns`, que a suíte leu depois do `USE` em
+  2026-09-21, duas vezes a primeira: `false` e vazio para o esquema do datashare, com o
+  `CREATE TABLE` passando nele ([`POC.md`](POC.md), [`redshift.md`](redshift.md)). A execução do
+  probe de 2026-09-21 não leu `RS-8` porque `RS-19` reprovou pelo critério errado
+  (`current_database()` continuou `dev` depois do `USE`, que vale mesmo assim; o critério passou a
+  ser a resolução de um nome em duas partes), e a próxima execução no ambiente alvo o lê.
 - **O destino do `UNLOAD` dentro da pasta da tabela.** A referência diz que sem `ALLOWOVERWRITE` nem
   `CLEANPATH` o comando falha quando o destino tem arquivos, e a pasta de uma partição já tem os das
   versões anteriores; por isso a [etapa 5](PLAN-STAGE-5.md) grava em `<uri>/<execution_id>/`, vazio
   por construção, e registra `<execution_id>/<coluna>=<valor>/<arquivo>`. Se "destino com arquivos"
-  é a pasta exata ou o prefixo, e como o `UNLOAD` nomeia os arquivos (a execução de 2026-09-21 não
-  registrou os nomes), a próxima execução do exemplo responde pelas URLs do manifesto.
+  é a pasta exata ou o prefixo, e como o `UNLOAD` nomeia os arquivos: a suíte registra os nomes e
+  três destinos sem `ALLOWOVERWRITE` (o mesmo prefixo, um prefixo pai com arquivos abaixo, um
+  subprefixo novo dentro de uma pasta com arquivos) desde 2026-09-21, e a próxima execução responde.
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
   conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
@@ -53,9 +46,6 @@ foi medido em [`POC.md`](POC.md).
   (`probelib.endpoint_reachable`), que no macOS no mesmo dia baixou de 10,0 s para 2,0 s a espera por
   um endereço sem rota ([`POC.md`](POC.md)). A próxima execução dos probes no alvo diz o que sobra;
   a permissão sobre a raiz fica provada pela primeira escrita.
-- **A Data API em `PICKED`.** Em 2026-09-21 o `select 1` ficou 30 s em `PICKED` sem terminar, e em
-  2026-09-20 respondeu em 23 ms. A repetição diz se é transitório; a Data API está fora da
-  biblioteca, e `RS-10` a mantém como leitura.
 - **`Text` no Redshift.** O `sqlalchemy-redshift` compila `Text` como `TEXT`, que o Redshift guarda
   como `VARCHAR(256)`. A [etapa 1](PLAN-STAGE-1.md) emite `VARCHAR(65535)` por uma regra
   `@compiles(Text, "redshift")` em `ddl`, em vez de exigir `String(65535)` nos modelos; a escolha

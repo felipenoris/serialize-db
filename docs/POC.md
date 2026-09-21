@@ -762,3 +762,50 @@ o `conftest` cria a pasta do relatório e grava a mensagem de cada teste reprova
 `tests/test_conftest_redshift.py` fixa a ordem com um `redshift_connector` fabricado. As perguntas
 da [etapa 0](PLAN-STAGE-0.md) continuam sem resposta até a próxima execução, a primeira das duas que
 a etapa exige, exceto a leitura de `has_schema_privilege`, que a segunda execução repete.
+
+## O que a segunda execução da suíte Redshift mostrou
+
+Em 2026-09-21, às 11:28 UTC, com o `conftest` corrigido, a suíte rodou de novo no ambiente alvo:
+sete testes passaram e quatro reprovaram em 50,3 s, e a limpeza apagou as onze tabelas e 23 objetos.
+O relatório está em [`readings/redshift-suite-2026-09-21-1128.json`](readings/redshift-suite-2026-09-21-1128.json).
+
+**As duas causas das reprovações são da suíte, não do Redshift:**
+
+- `COPY ... MANIFEST` falhou nos três testes que o usam, e a leitura do `VARCHAR` excedido registrou
+  o mesmo erro: `Spectrum Scan Error: File not found`, com a URL `…/operacoes//mes%3D2026-01/…`.
+  `write_manifest` montava a URL como `f"{table.table_uri}/{path}"`, e `DeltaTable.table_uri` termina
+  em barra (sonda local do mesmo dia: `file:///…/tabela/`); uma chave S3 com `//` é outra chave. O
+  exemplo que passou, [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py), monta a
+  URL a partir da sua própria string, sem a barra. O `%3D` é o Redshift codificando o `=` ao pedir o
+  objeto: `sys_load_error_detail` mostra as duas formas, e o delta-rs 1.6.4 grava e devolve
+  `mes=2026-01/…` sem codificar, no log e em `get_add_actions`, também para uma `AddAction` registrada
+  com o caminho cru (sonda local). A suíte passou a tirar a barra, a decodificar o `path` e a
+  registrar a primeira URL de cada manifesto.
+- `test_sqlalchemy_ddl_creates_table`: o `CREATE TABLE` passou e `information_schema.columns`
+  respondeu vazio para o esquema do datashare depois do `USE`: a visão enxerga só o banco da conexão,
+  como `has_schema_privilege`. O teste passou a conferir as colunas pelo `cursor.description` de um
+  `select ... limit 0` e a ler `svv_all_columns`, que cruza os bancos, como leitura.
+
+**O que passou, e o que respondeu:**
+
+- `has_schema_privilege('sbx_aco_decon', 'CREATE')` respondeu `false` pela segunda vez: a leitura é
+  permanente.
+- O ida e volta por `esquema.tabela` depois do `USE` (`CREATE`, `INSERT`, `SELECT`) passou.
+- `SUPER` recebe `JSON_PARSE`, devolve `meta.sistema` como `"A"` e `JSON_SERIALIZE` volta ao texto,
+  numa tabela do datashare.
+- `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE ALLOWOVERWRITE` passou de novo, e o
+  `schema.elements` do manifesto lista a coluna de partição `mes` (`character varying`, `max_length`
+  7), que os arquivos não têm: a conferência de `register_files` recebe a lista com a coluna de
+  partição. Os tipos físicos repetiram (`INT96`, `FIXED_LEN_BYTE_ARRAY`), com mínimo e máximo;
+  `create_write_transaction` registrou os arquivos, o delta-rs leu a tabela de volta
+  (`to_pyarrow_table`) e o `delta_scan` do DuckDB contou as 6 linhas.
+- A Data API executou o `select` em 444 ms: o `PICKED` de 30 s do probe foi transitório.
+- O `fetchmany` em fatias passou de novo, e `stl_load_errors` continua negada enquanto
+  `sys_load_error_detail` explica um `COPY` reprovado.
+
+**Consequências**: além das duas correções, a suíte ganhou as leituras que a tabela da
+[etapa 0](PLAN-STAGE-0.md) prometia e os testes não faziam: os nomes dos arquivos do `UNLOAD` e três
+destinos sem `ALLOWOVERWRITE` (o mesmo prefixo, um prefixo pai com arquivos abaixo, um subprefixo
+novo dentro de uma pasta com arquivos), e um documento acima de 65.535 bytes em `SUPER` por `INSERT`
+e por `COPY` direto de um Parquet. As perguntas do `COPY` (tipos, lista de colunas, `FILLRECORD`,
+`VARCHAR` excedido, paralelo) esperam a próxima execução.

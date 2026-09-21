@@ -107,8 +107,11 @@ cada esquema. `has_schema_privilege` e `svv_table_info` enxergam o banco da sess
 o local, e num esquema compartilhado quem concede `USAGE` e `CREATE` é o produtor e a lista de
 tabelas vem de `svv_all_tables`, que cruza bancos. Depois do `USE`,
 `has_schema_privilege('sbx_aco_decon', 'CREATE')` respondeu `false`, sem erro, no esquema em que o
-`CREATE TABLE` passa (suíte de 2026-09-21 no ambiente alvo, uma leitura, [`POC.md`](POC.md)): a
-função não serve de teste do privilégio num esquema de datashare, e a prova é o próprio `CREATE`. O
+`CREATE TABLE` passa (suíte de 2026-09-21 no ambiente alvo, duas execuções, [`POC.md`](POC.md)): a
+função não serve de teste do privilégio num esquema de datashare, e a prova é o próprio `CREATE`.
+`information_schema.columns` também enxerga só o banco da conexão: depois do `USE` respondeu vazio
+para uma tabela recém-criada em `sbx_aco_decon` (suíte, 2026-09-21); `svv_all_columns` cruza os
+bancos, e o `cursor.description` de um `select ... limit 0` descreve a tabela sem visão de catálogo. O
 que `svv_table_info` responde depois do `USE` ainda não foi lido; `probes/redshift.py` (`RS-5`,
 `RS-8`) lê as duas como leitura, sem reprovar.
 
@@ -1021,9 +1024,11 @@ volta num DataFrame; `unload_to_files` só descarrega.
 
 Com o Delta como fonte da verdade ([delta.md](delta.md)), o `UNLOAD` grava com `PARTITION BY (mes)`
 na pasta da tabela, e a biblioteca registra os arquivos no log do Delta depois de conferir o
-manifesto verboso. Uma amostra do manifesto, reduzida aos campos que a biblioteca lê, no leiaute que
-a documentação descreve (URL, `content_length` e `record_count` por entrada, `schema.elements` com
-nome e tipo, total em `meta`):
+manifesto verboso. O `schema.elements` lista também a coluna de partição, que o `PARTITION BY` tira
+dos arquivos (`mes` como `character varying` de `max_length` 7 na suíte de 2026-09-21,
+[`POC.md`](POC.md)): a lista esperada da conferência de `register_files` a inclui. Uma amostra do
+manifesto, reduzida aos campos que a biblioteca lê, no leiaute que a documentação descreve (URL,
+`content_length` e `record_count` por entrada, `schema.elements` com nome e tipo, total em `meta`):
 
 ```json
 {

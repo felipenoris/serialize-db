@@ -278,7 +278,9 @@ A new lesson adds its story there and its rule here, in the same commit.
   absence as a reading (`Report.call(expected=True)`), stop the section when the connection dies, run the
   probe twice before writing a consequence into a plan (2026-09-20).
 - **A script the user ran in the target outranks a plan written without one**: keep it verbatim in
-  `examples/`, with its literal values, and make the probe and the suite repeat its calls (2026-09-20).
+  `examples/`, with its literal values, and make the probe and the suite repeat its calls, the joins of
+  URIs included: `DeltaTable.table_uri` ends with a slash, the example's base string did not, and the
+  `//` cost a run in the target (2026-09-20, 2026-09-21).
 - **Each tool in a script reads the proxy its own way**: `uv` accepts `http://user:password@host:port`,
   DuckDB refuses it and reads only `HTTP_PROXY`; the probe is a local socket that logs the request and
   answers 407, fed a password with a character URL-encoding changes (2026-09-20).
@@ -363,8 +365,10 @@ interpreted in `docs/POC.md`): no proxy, S3 by gateway endpoint, IAM and KMS unr
 and 7.6 GiB; `RS-19` failed on the wrong criterion, `current_database()` does not reflect the `USE`
 (user confirmation), the probe now resolves a two-part name, `RS-5` was read `false` by the suite (`has_schema_privilege`
 does not prove the privilege on the datashare schema; the `CREATE` does), and `RS-8` remains unread.
-The Redshift suite ran once in the target on 2026-09-21 (1 passed, 10 failed: one transaction opened
-before the `USE`, fixed in `tests/conftest.py`); the two runs stage 0 requires are still ahead.
+The Redshift suite ran twice in the target on 2026-09-21 (10:50: 1 passed, one transaction opened
+before the `USE`, fixed in `tests/conftest.py`; 11:28: 7 passed, the manifest URL's double slash and
+`information_schema` blind to the datashare, fixed in the suite); the two clean runs stage 0 requires
+are still ahead.
 
 The client boundary's reference sketches `BatchStream` and `Loader` are in
 `tests/proof_of_concept/test_parallel.py`, and the Redshift `fetchmany` question in
