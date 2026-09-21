@@ -1,6 +1,6 @@
 # Redshift
 
-Read before code on `engine.redshift`, the publication of stage 8, the Redshift suite or `probes/redshift.py`; the scripts that fixed the target are in `examples/`. Each fact ends with the `docs/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before code on `engine.redshift`, the publication of stage 8, the Redshift suite or `probes/redshift.py`; the scripts that fixed the target are in `examples/`. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## The target
 
@@ -17,8 +17,8 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   probe uses 30 s over system views, the suite and the library connect without one because a `COPY`
   outlives any read timeout; `ssl=True` is the default. The driver's internal IAM (`iam=True`) and
   `GetClusterCredentials` are out: nobody ran them in the target, which has no cluster.
-  `examples/`, `docs/redshift.md`, `docs/POC.md`
-- The target's Redshift, read on 2026-09-20 (`docs/readings/`): workgroup `controladoria-wg`,
+  `examples/`, `plan/redshift.md`, `plan/POC.md`
+- The target's Redshift, read on 2026-09-20 (`plan/readings/`): workgroup `controladoria-wg`,
   namespace `controladoria-ns`, account 138071776059, base capacity 8, no provisioned cluster; the
   three Redshift APIs and the workgroup host resolve to private IPs, so the temporary credential and
   the Data API work without internet; version `1.0.436211`; `datalake_rw_shared` is `shared` from the
@@ -28,8 +28,8 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `has_database_privilege(dev, CREATE)` is false and `TEMP` true, so the execution sandbox is either
   a temporary table or the datashare itself. `stv_slices` and `stl_load_errors` are denied
   to a regular user (42501) while `sys_load_error_detail` answers; `pg_settings` on serverless lists
-  neither `timezone` nor `enable_case_sensitive_identifier`, which `SHOW` returns. `docs/POC.md`,
-  `docs/OPEN_QUESTIONS.md`
+  neither `timezone` nor `enable_case_sensitive_identifier`, which `SHOW` returns. `plan/POC.md`,
+  `plan/OPEN_QUESTIONS.md`
 
 ## The datashare, COPY and UNLOAD
 
@@ -54,13 +54,13 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `optional`, min and max are present except on the `INT96`, and it fragments by slice (32 files for
   500,000 rows, which `PARALLEL OFF` or compaction undoes). An `INT96` file registered in a
   `timestamp_ntz` table reads back as `timestamp[us]` in delta-rs and in `delta_scan`, values
-  intact. `docs/POC.md`, `docs/redshift.md`
+  intact. `plan/POC.md`, `plan/redshift.md`
 
 ## The driver
 
 - With `redshift_connector`, `executemany` makes one round trip per row and the dialect does not
   rewrite it into a multi-row `VALUES`: bulk loads go through Parquet on S3 and `COPY`, small batches
-  through `insert(Modelo).values(lista)`. `docs/redshift.md`
+  through `insert(Modelo).values(lista)`. `plan/redshift.md`
 - With autocommit off, `redshift_connector` issues `begin transaction` before the first `execute`
   of a cursor, and setting `autocommit = True` afterwards does not close the open transaction: a
   session that ran `USE` before switching autocommit on stayed in one transaction, the denied
@@ -68,7 +68,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   with 25P02 (target, 2026-09-21). The suite and the library set autocommit right after `connect`,
   before the `USE`. `select version()` comes back with a trailing NUL byte, `current_schema()` is
   null after the `USE`, and `svv_redshift_databases` reports `datalake_rw_shared` as `shared` with
-  isolation `UNKNOWN` and `dev` as `local` with `Snapshot Isolation`. `docs/POC.md`
+  isolation `UNKNOWN` and `dev` as `local` with `Snapshot Isolation`. `plan/POC.md`
 - `redshift_connector` 2.1.16 keeps a named prepared statement per SQL text (`Connection.execute`,
   key `(operation, params)`, cache per paramstyle and pid), reuses it with `Bind` and `Execute` and
   no new `Parse`, and closes and clears the cache only when a `CommandComplete` starts with `ALTER`,
@@ -80,13 +80,13 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   makes the driver use the unnamed statement, parsed right before every execute, and cache nothing
   (`get_statement_name_bin`; the cache insertion runs only above zero). The suite and the library
   connect with it; `connect_redshift(statement_cache=True)` keeps the driver default for the
-  reading that reproduces the error. `docs/redshift.md`, `docs/POC.md`
+  reading that reproduces the error. `plan/redshift.md`, `plan/POC.md`
 - The driver materializes a result in `execute`: `EXECUTE_MSG` asks the portal for all rows,
   `handle_messages` returns only at `READY_FOR_QUERY`, each `DATA_ROW` lands in
   `cursor._cached_rows`, and `fetchmany` is `islice` over `Cursor.__next__`, which pops that deque.
   `stream` on Redshift bounds memory only through `UNLOAD`; the suite read 5 rows in the queue
-  before the first `fetchmany` (2026-09-21, 13:35 and 13:39), now an assertion. `docs/redshift.md`,
-  `docs/PLAN-STAGE-5.md`
+  before the first `fetchmany` (2026-09-21, 13:35 and 13:39), now an assertion. `plan/redshift.md`,
+  `plan/PLAN-STAGE-5.md`
 
 ## The reading of 2026-09-21
 
@@ -102,7 +102,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   readings: `enable_case_sensitive_identifier` off, `datestyle` `ISO, MDY`, `statement_timeout` 0,
   `wlm_query_slot_count` 1, `sys_load_error_detail` answered 0 in 2.4 s; the Data API `select 1` stayed
   `PICKED` for 30 s (23 ms the day before); `iam.simulate_principal_policy` times out in the target
-  (no IAM endpoint), so the first `COPY` proves the permission. `docs/POC.md`, `docs/PLAN-STAGE-5.md`
+  (no IAM endpoint), so the first `COPY` proves the permission. `plan/POC.md`, `plan/PLAN-STAGE-5.md`
 - Second suite run in the target (2026-09-21 11:28 UTC, 7 passed, 4 failed; report not kept, the
   clean runs repeat its readings): `information_schema.columns` is empty for
   the datashare schema after the `USE` (local database only, like `has_schema_privilege`, which
@@ -113,7 +113,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   slash, and delta-rs 1.6.4 stores and returns `mes=2026-01/...` unencoded, also for an `AddAction`
   registered with the raw path. The verbose `UNLOAD` manifest's `schema.elements` lists the
   partition column (`mes`, `character varying`, `max_length` 7) that the files do not have. The
-  Data API answered in 444 ms: the 30 s `PICKED` was transient. `docs/POC.md`, `docs/redshift.md`
+  Data API answered in 444 ms: the 30 s `PICKED` was transient. `plan/POC.md`, `plan/redshift.md`
 - Third and fourth runs (2026-09-21 12:08 and 12:10 UTC, 10 passed and 1 failed each; reports not
   kept, the clean runs repeat their readings; identical reading by reading): `COPY ... FORMAT AS PARQUET MANIFEST` loads `DECIMAL(18,2)` as `INT64` and
   `timestamp_ntz` as `INT64` µs (sum and min checked); a five-column file into a six-column table
@@ -129,9 +129,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   destination as a prefix (same prefix and parent prefix refused with `Specified unload destination
   on S3 is not empty`, a new subprefix under a folder with files accepted), so stage 5 unloads to
   `<uri>/<execution_id>/<valor>/`; two parallel `COPY` 4.5 s and 3.6 s, two parallel `UNLOAD` 1.9 s
-  and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times. `docs/POC.md`
+  and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times. `plan/POC.md`
 - Fifth and sixth runs (2026-09-21 13:35 and 13:39 UTC, 12 passed each, the two clean runs stage 0
-  required, `docs/readings/redshift-suite-2026-09-21-1335.json` and `-1339.json`): with
+  required, `plan/readings/redshift-suite-2026-09-21-1335.json` and `-1339.json`): with
   `max_prepared_statements=0` the same `select count(*)` passes before and after a `TRUNCATE`; with
   the driver's cache the repeat after the `TRUNCATE` and a second repeat both get 34510 (the stale
   entry stays), the repeat after an `ALTER TABLE ... ADD COLUMN` passes, and the same sequence on a
@@ -145,4 +145,4 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   it (`json_typeof` `object`, `json_size` 80901). Data API 270 ms and 240 ms; parallel `COPY` 4.3 s
   and 3.8 s, `UNLOAD` 1.6 s and 1.5 s; `has_schema_privilege` `false` six times. Proposals awaiting
   the user: `FILLRECORD` on every library `COPY`, and the 65,535-byte ceiling of the JSON field
-  checked by the audit. `docs/POC.md`, `docs/PLAN-STAGE-8.md`
+  checked by the audit. `plan/POC.md`, `plan/PLAN-STAGE-8.md`

@@ -145,7 +145,7 @@ class Contrato(Base):
         # A chave estrangeira do original aponta para colunas não únicas de
         # rel_contrato_operacao, o que motor algum aceitaria; fica como a regra que a auditoria
         # verifica por anti-join (todo contrato está em alguma operação), decisão pendente em
-        # docs/PLAN-STAGE-1.md.
+        # plan/PLAN-STAGE-1.md.
         ForeignKeyConstraint(
             ["data", "sistema", "contrato"],
             [

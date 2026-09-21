@@ -62,7 +62,7 @@ COMMANDS = {
 - **`history`** imprime, por tabela, versão, operação, carimbo e os metadados
   `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`; os commits
   de `vacuum` (`VACUUM START`, `VACUUM END`) e de `optimize` aparecem sem metadados.
-- **O runbook** entra em `docs/operacao.md`: uma seção por rotina com o comando, o que conferir
+- **O runbook** entra em `plan/operacao.md`: uma seção por rotina com o comando, o que conferir
   antes (o arquivo de controle, o espaço, a última publicação) e o que esperar depois (a versão, a
   lista do `vacuum`, o `history`).
 
@@ -205,7 +205,7 @@ history: {'version': 6, 'operation': 'WRITE', 'serialize_db_execution_id': 'exec
 
 ## Decisões pendentes
 
-- **[decisão] O nome do runbook**, `docs/operacao.md`, na convenção dos documentos de assunto em
+- **[decisão] O nome do runbook**, `plan/operacao.md`, na convenção dos documentos de assunto em
   pt-BR.
 - **[decisão] A marca de arquivamento no controle** (`"archived": true` na entrada) contra remover a
   entrada; remover perde o registro de que o snapshot existiu.

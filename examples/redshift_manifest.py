@@ -1,11 +1,11 @@
 """``COPY ... MANIFEST`` e ``UNLOAD ... PARTITION BY MANIFEST VERBOSE`` sobre uma tabela Delta.
 
-Os pré-requisitos do ``export_partition`` da [etapa 5](../docs/PLAN-STAGE-5.md) e do
-``COPY`` da publicação da [etapa 8](../docs/PLAN-STAGE-8.md). Executado no ambiente alvo em
+Os pré-requisitos do ``export_partition`` da [etapa 5](../plan/PLAN-STAGE-5.md) e do
+``COPY`` da publicação da [etapa 8](../plan/PLAN-STAGE-8.md). Executado no ambiente alvo em
 2026-09-21 sobre 500.000 linhas da partição ``data_str=2026-02-28`` de ``cad_contratos``: os dois
 comandos com manifesto são aceitos numa tabela do banco de datashare, e o ciclo inteiro passou. O
-que ele mostrou está em [`../docs/POC.md`](../docs/POC.md), e fechou duas perguntas de
-[`../docs/OPEN_QUESTIONS.md`](../docs/OPEN_QUESTIONS.md).
+que ele mostrou está em [`../plan/POC.md`](../plan/POC.md), e fechou duas perguntas de
+[`../plan/OPEN_QUESTIONS.md`](../plan/OPEN_QUESTIONS.md).
 
 O que o rodapé do ``UNLOAD`` respondeu: ``TIMESTAMP`` sai em ``INT96`` e ``DECIMAL(18, 2)`` em
 ``FIXED_LEN_BYTE_ARRAY(8)``, toda coluna sai ``optional`` mesmo quando a origem é ``NOT NULL``, e há
@@ -13,7 +13,7 @@ estatística de mínimo e máximo. As 500.000 linhas saíram em 32 arquivos, um 
 
 Este script deixa ``minValues``, ``maxValues`` e ``nullCount`` vazios na ``AddAction``, e ficou como
 rodou. O ``register_files`` da biblioteca os preenche do rodapé Parquet
-([`../docs/PLAN-STAGE-3.md`](../docs/PLAN-STAGE-3.md)): sem eles a poda é só por partição.
+([`../plan/PLAN-STAGE-3.md`](../plan/PLAN-STAGE-3.md)): sem eles a poda é só por partição.
 
 O ciclo, em oito passos:
 
@@ -29,13 +29,13 @@ O ciclo, em oito passos:
 7. ``UNLOAD ... PARTITION BY (<coluna>) FORMAT PARQUET MANIFEST VERBOSE``, com ``cast`` para
    ``DECIMAL`` e ``TIMESTAMP`` no ``select``: os tipos físicos que o ``UNLOAD`` grava para os dois,
    se as colunas saem ``required`` e se há estatística de mínimo e máximo são perguntas da
-   [etapa 0](../docs/PLAN-STAGE-0.md) que só a leitura do rodapé responde.
+   [etapa 0](../plan/PLAN-STAGE-0.md) que só a leitura do rodapé responde.
 8. Registra os arquivos do ``UNLOAD`` numa tabela Delta por ``create_write_transaction``, uma
    ``AddAction`` por entrada do manifesto, e lê a tabela de volta: é o ``register_files`` da etapa 5.
 
 Por que ``cad_contratos`` e não ``cad_contas``: o ``UNLOAD ... PARTITION BY`` precisa de uma coluna
 de partição, e ``cad_contas`` é uma das dez dimensões sem partição da base, com um único
-``chunk_0.parquet`` na raiz da tabela ([`../docs/POC.md`](../docs/POC.md)). As quatro particionadas
+``chunk_0.parquet`` na raiz da tabela ([`../plan/POC.md`](../plan/POC.md)). As quatro particionadas
 são ``cad_contratos``, ``cad_operacoes`` e ``rel_contrato_operacao`` (por ``data_str``) e
 ``cad_lancamentos`` (por ``data_base_str``).
 
@@ -93,7 +93,7 @@ ROW_LIMIT        = 500_000        # None lê a partição inteira (cerca de 2,2 
 # As colunas do arquivo Parquet, na ordem em que estão nele: o COPY é posicional, e a staging
 # precisa ter exatamente estas, sem a coluna de partição. "to" é palavra reservada e vai entre aspas.
 # A nulidade aqui é a dos arquivos, não a do modelo: sete colunas de cad_contratos são anuláveis na
-# origem e NOT NULL no contrato (docs/POC.md), e quem resolve isso é o cast da etapa 1.
+# origem e NOT NULL no contrato (plan/POC.md), e quem resolve isso é o cast da etapa 1.
 FILE_COLUMNS = """
     id_contrato BIGINT NOT NULL,
     data DATE NOT NULL,
@@ -133,7 +133,7 @@ staging_table = f"exemplo_manifesto_{run_id}_staging"
 target_table = f"exemplo_manifesto_{run_id}_{TABLE}"
 
 # O cliente HTTP do delta-rs lê NO_PROXY antes de no_proxy, e uma NO_PROXY vazia anula as exceções:
-# a chamada ao endpoint de credenciais vai pelo proxy e volta 403 (docs/POC.md, 2026-09-20).
+# a chamada ao endpoint de credenciais vai pelo proxy e volta 403 (plan/POC.md, 2026-09-20).
 if not os.environ.get("NO_PROXY") and os.environ.get("no_proxy"):
     os.environ["NO_PROXY"] = os.environ["no_proxy"]
 
@@ -346,7 +346,7 @@ registered.create_write_transaction(
 )
 # to_pyarrow_dataset(), não to_pyarrow_table(): o segundo deixa uma tarefa do Acero em voo, e um
 # processo que encerra logo depois trava no destrutor do pool de threads do Arrow (medido em
-# 2026-09-20, docs/POC.md). Esta é a última leitura do script, então é justamente o caso.
+# 2026-09-20, plan/POC.md). Esta é a última leitura do script, então é justamente o caso.
 print(f"   registrados no Delta {unload_uri}: {DeltaTable(unload_uri).to_pyarrow_dataset().count_rows()} linhas de volta")
 
 print(f"\nobjetos em {work}; apague com: aws s3 rm --recursive {work}")

@@ -2,20 +2,20 @@
 
 Scripts que rodaram com sucesso no ambiente alvo, guardados como foram executados. Eles são a
 referência da conectividade com o Redshift: o probe, a suíte de testes e a
-[etapa 5](../docs/PLAN-STAGE-5.md) repetem as chamadas que estão aqui, e não uma variante que
-ninguém executou. O que eles mostraram está em [`../docs/POC.md`](../docs/POC.md), com a data.
+[etapa 5](../plan/PLAN-STAGE-5.md) repetem as chamadas que estão aqui, e não uma variante que
+ninguém executou. O que eles mostraram está em [`../plan/POC.md`](../plan/POC.md), com a data.
 
 | Script | Caminho | Chamadas |
 | --- | --- | --- |
 | [`redshift_native.py`](redshift_native.py) | Protocolo nativo na porta 5439, com credencial temporária derivada da identidade IAM. É o caminho da biblioteca. | `redshift-serverless:GetWorkgroup`, `GetCredentials`; `redshift_connector.connect` |
 | [`redshift_data_api.py`](redshift_data_api.py) | Data API por HTTPS, assíncrona: dispara, consulta o estado e pagina o resultado. Serve a comandos e a diagnóstico. | `redshift-data:ExecuteStatement`, `DescribeStatement`, `GetStatementResult` |
 | [`redshift_copy_unload.py`](redshift_copy_unload.py) | `USE` no banco do datashare, `CREATE TABLE`, `COPY` de uma pasta Parquet e `UNLOAD`, com as credenciais de quem chama no texto do comando. | as de `redshift_native.py`, mais `s3:ListBucket`, `GetObject` e `PutObject` pela identidade da sessão |
-| [`redshift_manifest.py`](redshift_manifest.py) | Os dois comandos com manifesto, pré-requisitos do `export_partition` da [etapa 5](../docs/PLAN-STAGE-5.md) e do `COPY` da publicação da [etapa 8](../docs/PLAN-STAGE-8.md): converte uma partição de `cad_contratos` de Parquet para Delta, monta o manifesto do `COPY` das ações `add`, carrega uma staging por `COPY ... FORMAT AS PARQUET MANIFEST`, acrescenta a coluna de partição por `INSERT`, grava de volta por `UNLOAD ... PARTITION BY (<coluna>) MANIFEST VERBOSE` e registra os arquivos no log do Delta por `create_write_transaction`. Os dois comandos com manifesto são aceitos numa tabela do datashare. | as de `redshift_copy_unload.py`, mais `s3:DeleteObject` sob a pasta de trabalho |
+| [`redshift_manifest.py`](redshift_manifest.py) | Os dois comandos com manifesto, pré-requisitos do `export_partition` da [etapa 5](../plan/PLAN-STAGE-5.md) e do `COPY` da publicação da [etapa 8](../plan/PLAN-STAGE-8.md): converte uma partição de `cad_contratos` de Parquet para Delta, monta o manifesto do `COPY` das ações `add`, carrega uma staging por `COPY ... FORMAT AS PARQUET MANIFEST`, acrescenta a coluna de partição por `INSERT`, grava de volta por `UNLOAD ... PARTITION BY (<coluna>) MANIFEST VERBOSE` e registra os arquivos no log do Delta por `create_write_transaction`. Os dois comandos com manifesto são aceitos numa tabela do datashare. | as de `redshift_copy_unload.py`, mais `s3:DeleteObject` sob a pasta de trabalho |
 
 `cad_contas`, a tabela dos outros exemplos, não serve a esse script: ela é uma das dez dimensões sem
 partição da base, e o `UNLOAD ... PARTITION BY` precisa de uma coluna de partição. As particionadas
 são `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao`, por `data_str`, e `cad_lancamentos`,
-por `data_base_str` ([`../docs/POC.md`](../docs/POC.md)).
+por `data_base_str` ([`../plan/POC.md`](../plan/POC.md)).
 
 Os valores literais (região `sa-east-1`, workgroup `controladoria-wg`, banco `dev`, esquema
 `sbx_aco_decon` no banco `datalake_rw_shared`) são os do ambiente alvo. O probe e a suíte tomam os
@@ -44,7 +44,7 @@ os apaga.
   tabela por nome em três partes `datalake_rw_shared.sbx_aco_decon.<tabela>`; `USE <banco>` troca o
   banco da sessão, e a partir dele `esquema.tabela` basta, que é como o `CREATE TABLE`, o `COPY` e o
   `UNLOAD` passaram. O que o Redshift permite escrever num datashare, e o que ele recusa, está em
-  [`../docs/redshift.md`](../docs/redshift.md).
+  [`../plan/redshift.md`](../plan/redshift.md).
 - **O `COPY` e o `UNLOAD` alcançam o S3 pelas credenciais de quem chama**, por `ACCESS_KEY_ID`,
   `SECRET_ACCESS_KEY` e `SESSION_TOKEN`, e não por `IAM_ROLE`: o namespace não tem papel associado,
   e sem papel associado nem um ARN explícito funcionaria. O texto do comando carrega segredo e nunca

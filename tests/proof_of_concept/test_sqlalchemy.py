@@ -5,7 +5,7 @@ compilado para o DuckDB e para o Redshift (com as opções físicas lidas de ``T
 ``create_all`` num DuckDB em memória, os statements Core de ``insert`` e ``select`` executados pelo
 ``duckdb_engine``, o caminho por Arrow na conexão bruta, a reflexão, a precisão do ``Numeric`` pelo
 dialeto contra o caminho Arrow, o ``pandas.read_sql``, o texto SQL gerado por dialeto com parâmetro
-e prefixo (``docs/sqlalchemy.md``) e a compilação de DML para o Redshift, que não exige um cluster.
+e prefixo (``plan/sqlalchemy.md``) e a compilação de DML para o Redshift, que não exige um cluster.
 Nenhuma classe ORM é instanciada: a biblioteca usa os modelos como metadados e o Core como gerador
 de SQL.
 """
@@ -387,7 +387,7 @@ def test_three_part_name_needs_quoted_name_without_quotes() -> None:
 
     O ``IdentifierPreparer`` cita qualquer identificador com caractere fora do permitido, e o ponto
     é um deles: o esquema em texto simples vira um nome só, entre aspas. O DDL e o DML da
-    [etapa 5](../../docs/PLAN-STAGE-5.md) precisam do nome em três partes inteiro.
+    [etapa 5](../../plan/PLAN-STAGE-5.md) precisam do nome em três partes inteiro.
     """
     dialect = RedshiftDialect_redshift_connector()
 

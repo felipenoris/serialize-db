@@ -1,6 +1,6 @@
 # What the user stated and decided
 
-Read before planning or implementing any stage, and whenever a "why" question comes up: these are facts stated by the user, not visible in the code, with their dates. The plan (`docs/PLAN.md`, pt-BR) records the decisions it rests on; this file keeps the statements behind them.
+Read before planning or implementing any stage, and whenever a "why" question comes up: these are facts stated by the user, not visible in the code, with their dates. The plan (`plan/PLAN.md`, pt-BR) records the decisions it rests on; this file keeps the statements behind them.
 
 ## The pipeline outside this repository
 
@@ -9,7 +9,7 @@ is used only for the declarative models (DDL) and for Core `select` and `insert`
 move tables, never for ORM instances; no catalog service is enabled, which excludes Iceberg on
 Glue (Iceberg with a SQLite catalog file moved by the library is the documented alternative if Glue
 or S3 Tables may be enabled later); development and production runs write separate tables; renaming
-or dropping columns is rare. The decision in `docs/PLAN.md`, with the rationale in `docs/estrategia.md`, follows from them: Delta Lake
+or dropping columns is rare. The decision in `plan/PLAN.md`, with the rationale in `plan/estrategia.md`, follows from them: Delta Lake
 through `deltalake` as the table layer, SQLAlchemy kept as contract metadata and Core, SQLMesh, dbt and
 DuckLake not adopted. SQLAlchemy is in the project for
 compatibility with that code (user statement of 2026-09-19); the same day the user decided that
@@ -22,7 +22,7 @@ convenience over the same batch API, so the client works on the current batch wh
 reads the next and writes the previous; never an ORM instance, a row list or a DataFrame. The
 pipelines run pandas with the pyarrow backend (user statement of 2026-09-20), so
 `types_mapper=pd.ArrowDtype` is their native form, and the rule rests on the conversion being cheap,
-which the probes of that day measured for the table and for the batch (`docs/PLAN.md`, section "A
+which the probes of that day measured for the table and for the batch (`plan/PLAN.md`, section "A
 troca de dados com o código cliente"). The same day the user moved the
 models to `tests/model/` as the reference model: the tests hand it to the package API as a client
 library would, and the package holds no model. On 2026-09-21 the user renamed it
@@ -31,7 +31,7 @@ Parquet base and that its files will not be changed: the corrections stage 1 pla
 the client model, in `tests/client_model/` (proposed, awaiting confirmation), and the reference
 model stays as the model whose defects `check_models` lists. The same day the user ran
 `probes/parquet_source.py` in the target on the production base and committed the report to
-`docs/readings/` (unlike the five probe reports of that day, kept in `secrets/`). Later that day
+`plan/readings/` (unlike the five probe reports of that day, kept in `secrets/`). Later that day
 the user confirmed `tests/client_model/` as the corrected copy (it represents the data model the
 client code presents to use the library) and accepted the path: the client model, then
 `serialize_db.schema`, then `scripts/migrate_parquet_to_delta.py` (the stage 7 draft on stage 1,
@@ -53,7 +53,7 @@ the connection runs `USE` there and the datashare write rules apply; and the Dat
 path of the library, only a probe check, a suite test and an example. On 2026-09-21 the user asked
 for a flag on how a partition an engine wrote enters the Delta, on both engines and the initial
 load: `export_mode="register"` registers the engine's file (`UNLOAD`, DuckDB
-`COPY ... (RETURN_STATS)`) after the checks of `docs/PLAN-STAGE-3.md`, `"rewrite"` writes by
+`COPY ... (RETURN_STATS)`) after the checks of `plan/PLAN-STAGE-3.md`, `"rewrite"` writes by
 `write_deltalake`; the `cad_lancamentos` measurement decides the default, `"register"` until then.
 
 ## The test layout
@@ -64,24 +64,24 @@ with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` beside it (t
 names the model imports) and `tests/test_reference_model.py`, `tests/test_probes.py` and
 `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
 both storages, the study suites (commented step by step as learning material, listed per stage in
-`docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
-last-run counts: the `tests/` row of the repository table in `docs/CURRENT_STATE.md` and `README.md`. The 11 s
+`plan/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
+last-run counts: the `tests/` row of the repository table in `plan/CURRENT_STATE.md` and `README.md`. The 11 s
 listing failure behind a silent proxy is in `README.md`; `test_delta_rs_credential_chain` runs five variants.
 
 ## The target's `USE` and the probe reports of 2026-09-21
 
 On 2026-09-21 the user ran the five probes in the target and saved the reports in
 `secrets/probes-aws-bn/`, asking for them to be read and propagated to the plan: the exception to the
-rule that `secrets/` is never read, limited to that path; the facts are in `docs/POC.md` and the
-reports stay outside git until the user decides to copy them to `docs/readings/`
-(`docs/OPEN_QUESTIONS.md`). The same day the user confirmed the reading of `RS-19`: `USE
+rule that `secrets/` is never read, limited to that path; the facts are in `plan/POC.md` and the
+reports stay outside git until the user decides to copy them to `plan/readings/`
+(`plan/OPEN_QUESTIONS.md`). The same day the user confirmed the reading of `RS-19`: `USE
 datalake_rw_shared` makes two-part names resolve in the datashare while `current_database()` keeps
 answering `dev`, so the switch is confirmed by resolving a name, never by that function
-(`docs/PLAN-STAGE-5.md`, `docs/redshift.md`).
+(`plan/PLAN-STAGE-5.md`, `plan/redshift.md`).
 
 ## The stage 1 review
 
-On 2026-09-21 the user accepted two proposals of the stage 1 review (`docs/PLAN-STAGE-1.md`): a
+On 2026-09-21 the user accepted two proposals of the stage 1 review (`plan/PLAN-STAGE-1.md`): a
 `String` without length is a `check_models` violation (`String(n)` or `Text`), and `ddl` generates
 the `CREATE TABLE` text from the type table without the SQLAlchemy dialects (`sql_type`, `quoted`,
 `column_ddl`; no `@compiles` hook; `duckdb-engine` and `sqlalchemy-redshift` stay in the `dev`
@@ -92,4 +92,4 @@ tables get `ALTER TABLE ADD COLUMN` as text under either design, since SQLAlchem
 `ALTER` (that was Alembic's, which left); and the dialects stay for the statements (`sql.render`,
 stage 2), so the decision only keeps stage 1 and the migration script free of them, and stage 2
 decides whether `render` runs at development or at runtime. A `String(n)` width change reaches only
-the versioned `.redshift.sql`, never the Delta diff (`docs/PLAN-STAGE-8.md`, pending decision).
+the versioned `.redshift.sql`, never the Delta diff (`plan/PLAN-STAGE-8.md`, pending decision).

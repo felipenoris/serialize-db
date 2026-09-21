@@ -727,7 +727,7 @@ Consequências no plano, nesta mesma unidade de trabalho:
   respondeu em 2,0 s. As duas chamadas passaram a `short_config(2, 5, 1)` atrás desse teste, e sem
   resposta `BK-8`, `BK-9` e `RS-11` ficam como leitura. A espera no alvo, onde os nomes resolvem para
   outros endereços, a próxima execução dos probes mede.
-- A Data API em `PICKED` e a decisão de copiar ou não os relatórios para `docs/readings/` continuam em
+- A Data API em `PICKED` e a decisão de copiar ou não os relatórios para `plan/readings/` continuam em
   [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
 
 ## O que os rascunhos das etapas mostraram

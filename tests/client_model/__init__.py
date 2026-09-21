@@ -2,14 +2,14 @@
 
 É a cópia de ``tests/reference_model/`` (o modelo SQLAlchemy da base original em Parquet
 particionado, que fica como está) corrigida como a biblioteca cliente a escreveria para usar o
-pacote, segundo ``docs/PLAN-STAGE-1.md``:
+pacote, segundo ``plan/PLAN-STAGE-1.md``:
 
 - uma ``Base`` só, em ``base.py``, e cada tabela declarada uma vez (o original monta
   ``cad_lancamentos`` e ``cad_contratos`` em dois módulos por ``extend_existing``);
 - ``BigInteger`` e ``autoincrement=False`` nas chaves primárias inteiras, e ``BigInteger`` nas
   colunas que as referenciam; os demais inteiros continuam ``Integer``;
 - chaves estrangeiras sem ``DEFERRABLE``, inclusive as compostas, que a auditoria verifica;
-- ``String(n)`` com o comprimento escolhido das leituras da base (``docs/POC.md``), com folga;
+- ``String(n)`` com o comprimento escolhido das leituras da base (``plan/POC.md``), com folga;
 - a coluna de partição ``data_str`` (``data_base_str`` em ``cad_lancamentos``), ``String(10)``
   em ``AAAA-MM-DD``, no fim das quatro tabelas particionadas, declarada em
   ``Table.info["serialize_db"]`` com ``partition_by``, ``partition_source`` e ``sort_key``;

@@ -180,7 +180,7 @@ class Storage:
 
     As subclasses fixam ``name``, o prefixo das chaves do relatório, e resolvem URIs e listagens no
     seu armazenamento; os testes comuns aos dois tipos usam só esta interface. É a mesma divisão que
-    ``serialize_db.storage`` faz na biblioteca (``docs/PLAN-STAGE-3.md``).
+    ``serialize_db.storage`` faz na biblioteca (``plan/PLAN-STAGE-3.md``).
     """
 
     name: ClassVar[str]
@@ -453,7 +453,7 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
     ``ROLLBACK`` (``core.py``, ``handle_COMMAND_COMPLETE``), nunca num ``TRUNCATE``. Numa tabela do
     datashare, o comando reexecutado depois de um ``TRUNCATE`` recebeu ``34510``, ``Concurrent DDL
     committed ... between Prepare and Execute``, nas duas execuções de 2026-09-21 às 12:08 e 12:10
-    (``docs/POC.md``). Com zero, o driver prepara o statement sem nome logo antes de cada execução
+    (``plan/POC.md``). Com zero, o driver prepara o statement sem nome logo antes de cada execução
     e não guarda nada, e a suíte passou limpa às 13:35 e às 13:39 do mesmo dia;
     ``statement_cache=True`` mantém o padrão do driver, para a leitura que reproduz o erro.
     """
@@ -482,7 +482,7 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
         ``begin transaction`` antes do primeiro ``execute``, e ligá-lo depois não fecha essa
         transação: a sessão inteira corre nela, e o primeiro erro do servidor (a visão de sistema
         negada a um usuário comum) aborta tudo o que vem depois, inclusive a limpeza, com
-        ``25P02`` (ambiente alvo, 2026-09-21, ``docs/POC.md``). Cada comando confirmado ao terminar
+        ``25P02`` (ambiente alvo, 2026-09-21, ``plan/POC.md``). Cada comando confirmado ao terminar
         é também o que o ``COPY`` e o ``UNLOAD`` precisam para não ficarem presos numa transação
         aberta.
 

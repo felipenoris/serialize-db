@@ -2,8 +2,8 @@
 
 Exemplo executado com sucesso no ambiente alvo em 2026-09-20 e guardado como está: os valores
 literais (região, workgroup, banco, esquema, tabela) são os do ambiente, e o que ele prova está em
-[`../docs/POC.md`](../docs/POC.md). É o caminho que a biblioteca usa
-([`../docs/PLAN-STAGE-5.md`](../docs/PLAN-STAGE-5.md)), e o que ``probes/redshift.py`` (``RS-15``) e
+[`../plan/POC.md`](../plan/POC.md). É o caminho que a biblioteca usa
+([`../plan/PLAN-STAGE-5.md`](../plan/PLAN-STAGE-5.md)), e o que ``probes/redshift.py`` (``RS-15``) e
 ``tests/conftest.py`` (``connect_redshift``) repetem.
 
 São três chamadas: ``get_workgroup`` dá o endereço e a porta do endpoint, ``get_credentials``
@@ -14,7 +14,7 @@ precisam alcançá-lo.
 
 O nome em três partes ``banco.esquema.tabela`` cita a tabela do datashare a partir do banco local da
 conexão. A biblioteca escreve nesse esquema, e o que o Redshift permite escrever num datashare está
-em [`../docs/redshift.md`](../docs/redshift.md).
+em [`../plan/redshift.md`](../plan/redshift.md).
 
 Permissões: ``redshift-serverless:GetWorkgroup`` e ``GetCredentials`` (com o recurso ``dbname``
 quando ``dbName`` é informado).

@@ -1,4 +1,4 @@
-"""Prova de conceito no Redshift: os itens de ``docs/PLAN-STAGE-0.md`` que esperam uma conexão.
+"""Prova de conceito no Redshift: os itens de ``plan/PLAN-STAGE-0.md`` que esperam uma conexão.
 
 A suíte cria tabelas ``serialize_db_poc_<id>_*`` no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``
 e arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``; sem uma das duas é pulada, e com elas a falta de
@@ -28,7 +28,7 @@ reprovaram um: o ``select count(*)`` repetido depois do terceiro ``TRUNCATE`` de
 Prepare and Execute``, porque o ``redshift_connector`` reaproveita o prepared statement nomeado e
 não o descarta num ``TRUNCATE``; a conexão vai com ``max_prepared_statements=0`` desde então. A
 quinta e a sexta, às 13:35 e às 13:39 UTC, passaram os doze testes, e a etapa 0 fechou com elas: o
-que as duas leram igual virou asserção (``docs/POC.md``).
+que as duas leram igual virou asserção (``plan/POC.md``).
 """
 
 from __future__ import annotations
@@ -212,7 +212,7 @@ def test_schema_location_and_use_of_the_share_database(redshift_session: Redshif
 
     # 0. O USE de connect_redshift faz o nome em duas partes resolver no banco do datashare, e o passo 4
     # é a prova. current_database() continua a responder o banco da conexão depois do USE (ambiente
-    # alvo, 2026-09-21, docs/POC.md), então o valor é leitura, não asserção.
+    # alvo, 2026-09-21, plan/POC.md), então o valor é leitura, não asserção.
     record("redshift.current_database", session.execute("select current_database()")[0][0])
 
     # 1. Os bancos que a sessão enxerga: o tipo diz local ou shared, e o isolamento precisa ser de
@@ -323,7 +323,7 @@ def test_copy_column_list_and_fillrecord(redshift_session: RedshiftSession, s3_l
 
     # O COPY é registrado antes da contagem, que é um comando repetido depois de um TRUNCATE: nas
     # execuções de 2026-09-21 às 12:08 e 12:10 a terceira volta recebeu 34510 dela, com o resultado do
-    # FILLRECORD perdido (docs/POC.md). A conexão da sessão prepara cada comando logo antes de o executar.
+    # FILLRECORD perdido (plan/POC.md). A conexão da sessão prepara cada comando logo antes de o executar.
     results = {}
     for label, sql in attempts.items():
         session.execute(f"TRUNCATE {qualified}")
@@ -334,7 +334,7 @@ def test_copy_column_list_and_fillrecord(redshift_session: RedshiftSession, s3_l
             results[label] = f"ok: {loaded} linhas, canal nulo em {nulls}"
             record(f"redshift.copy.{label}", results[label])
 
-    # Lido igual em 2026-09-21 às 13:35 e às 13:39 (docs/POC.md): o posicional reprova por contagem de
+    # Lido igual em 2026-09-21 às 13:35 e às 13:39 (plan/POC.md): o posicional reprova por contagem de
     # colunas (Spectrum Scan Error 15007, Unmatched number of columns), e a lista de colunas e o
     # FILLRECORD carregam as 100 linhas com a coluna nova nula.
     assert results["positional"].startswith("ProgrammingError"), results
@@ -350,7 +350,7 @@ def test_repeated_statement_after_truncate_and_the_driver_cache(redshift_session
     depois de ``ALTER``, ``CREATE``, ``DROP`` e ``ROLLBACK``. Nas execuções de 2026-09-21 às 12:08 e
     12:10 no ambiente alvo, o ``select count(*)`` de ``test_copy_column_list_and_fillrecord``
     reprovou na terceira volta com ``[Data Sharing] Error Code 34510: Concurrent DDL committed on
-    <tabela> between Prepare and Execute`` (``docs/POC.md``): o ``TRUNCATE`` da volta é o DDL. A
+    <tabela> between Prepare and Execute`` (``plan/POC.md``): o ``TRUNCATE`` da volta é o DDL. A
     conexão da sessão vai com ``max_prepared_statements=0`` desde então, e passou aqui às 13:35 e às
     13:39 do mesmo dia; a segunda conexão deste teste mantém o padrão do driver e registra o que o
     Redshift responde: ``34510`` na repetição e de novo na segunda repetição (a entrada guardada
@@ -475,7 +475,7 @@ def test_super_and_json_parse(redshift_session: RedshiftSession, s3_location: S3
     # 4. O documento como objeto num arquivo JSON de uma linha, por COPY ... FORMAT JSON 'auto': o
     # caminho da documentação para um documento grande numa coluna SUPER, que carregou o objeto de
     # 80.901 bytes em 2026-09-21 (13:35 e 13:39). É o caminho dos documentos acima do teto do VARCHAR,
-    # se a etapa 8 o adotar (docs/OPEN_QUESTIONS.md).
+    # se a etapa 8 o adotar (plan/OPEN_QUESTIONS.md).
     key = f"{s3_location.prefix}/redshift/super/documento.json"
     s3.put_object(Bucket=s3_location.bucket, Key=key, Body=json.dumps({"id": 4, "meta": json.loads(document)}).encode())
     loaded = outcome(lambda: session.execute(f"COPY {qualified} FROM 's3://{s3_location.bucket}/{key}' {session.credentials_clause()} FORMAT JSON 'auto'"))
@@ -541,7 +541,7 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     statistics = parquet.metadata.row_group(0).column(0).statistics
     record("redshift.unload.has_min_max", bool(statistics and statistics.has_min_max))
 
-    # Medido no ambiente alvo em 2026-09-21 (docs/POC.md): TIMESTAMP sai em INT96, obsoleto no
+    # Medido no ambiente alvo em 2026-09-21 (plan/POC.md): TIMESTAMP sai em INT96, obsoleto no
     # formato e sem estatística, e DECIMAL(18,2) em FIXED_LEN_BYTE_ARRAY, como o PyArrow grava e não
     # como grava o delta-rs. Toda coluna sai optional, inclusive as NOT NULL da origem.
     physical = {parquet.schema.column(i).name: parquet.schema.column(i).physical_type for i in range(len(parquet.schema))}
@@ -578,7 +578,7 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     delta.create_write_transaction(actions, mode="append", schema=delta.schema(), partition_by=["mes"])
 
     # data_ref está declarada timestamp[us] na tabela Delta e INT96 no arquivo: os dois leitores
-    # convertem e devolvem os valores intactos (sondagem de 2026-09-21, docs/POC.md).
+    # convertem e devolvem os valores intactos (sondagem de 2026-09-21, plan/POC.md).
     record("redshift.unload.delta_rs_read", outcome(lambda: DeltaTable(destination).to_pyarrow_table()))
     assert duckdb_connection.execute(f"SELECT count(*) FROM delta_scan('{destination}')").fetchone()[0] == 6
 

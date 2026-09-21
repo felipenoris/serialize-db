@@ -2,7 +2,7 @@
 
 Exemplo executado com sucesso no ambiente alvo em 2026-09-20 e guardado como está: os valores
 literais (região, workgroup, banco, tabela) são os do ambiente, e o que ele prova está em
-[`../docs/POC.md`](../docs/POC.md).
+[`../plan/POC.md`](../plan/POC.md).
 
 O ciclo tem três passos, e é o que ``probes/redshift.py`` (``RS-10``) repete com ``select 1``:
 ``execute_statement`` devolve na hora um identificador, ``describe_statement`` é consultado até o

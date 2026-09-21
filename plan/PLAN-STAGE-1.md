@@ -327,7 +327,7 @@ ARROW_TYPES: tuple[tuple[type, pa.DataType], ...] = (
 
 
 def arrow_type(column: sa.Column) -> pa.DataType:
-    """O tipo Arrow da coluna, pela tabela de tipos de docs/schema.md."""
+    """O tipo Arrow da coluna, pela tabela de tipos de plan/schema.md."""
     kind = column.type
     # Numeric leva precisão e escala; Float e Double derivam de Numeric e ficam fora deste ramo.
     if isinstance(kind, sa.Numeric) and not isinstance(kind, sa.Float):
@@ -426,7 +426,7 @@ def table_options(table: sa.Table) -> TableOptions:
 
 # ---------------------------------------------------------------- o DDL por dialeto
 
-# A tabela de tipos de docs/schema.md; Numeric, String e DateTime têm parâmetros: sql_type.
+# A tabela de tipos de plan/schema.md; Numeric, String e DateTime têm parâmetros: sql_type.
 SQL_TYPES: dict[str, dict[type, str]] = {
     "duckdb": {sa.BigInteger: "BIGINT", sa.SmallInteger: "SMALLINT", sa.Integer: "INTEGER",
                sa.Boolean: "BOOLEAN", sa.Double: "DOUBLE", sa.Date: "DATE", sa.Text: "VARCHAR",
@@ -438,7 +438,7 @@ SQL_TYPES: dict[str, dict[type, str]] = {
 
 
 def sql_type(column: sa.Column, dialect: Dialect) -> str:
-    """O nome do tipo da coluna no motor, pela tabela de tipos de docs/schema.md."""
+    """O nome do tipo da coluna no motor, pela tabela de tipos de plan/schema.md."""
     kind = column.type
     arrow = arrow_type(column)      # recusa o tipo fora do contrato antes de qualquer texto
     if pa.types.is_decimal(arrow):

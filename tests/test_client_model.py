@@ -1,7 +1,7 @@
 """O modelo cliente contra o modelo de referência: a cópia difere do original só pelas correções.
 
 A cópia é ``tests/client_model/``; o original, ``tests/reference_model/``; as correções estão em
-``docs/PLAN-STAGE-1.md``.
+``plan/PLAN-STAGE-1.md``.
 Cada teste confere uma correção e que nada mais mudou: as tabelas e as colunas na mesma ordem,
 com a coluna de partição no fim das quatro tabelas particionadas; ``BigInteger`` só nas chaves e
 nas colunas que as referenciam, e ``String(n)`` só onde havia ``String``; a nulidade; as chaves

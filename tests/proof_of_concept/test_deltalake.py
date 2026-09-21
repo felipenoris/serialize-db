@@ -4,11 +4,11 @@ Cada teste exercita uma parte: a criação idempotente a partir de um esquema, o
 substituição por predicado, a evolução de esquema e o ``update`` com predicado, a viagem no tempo e
 o ``restore``, as ações do log e o registro de um arquivo gravado por outro programa, o ``vacuum``
 com ``keep_versions``, a leitura por dataset Arrow e o conteúdo do log. Os testes seguintes cobrem
-as primitivas das etapas 3, 4, 7 e 9 (``docs/PLAN-STAGE-<n>.md``) sobre o DuckDB: a view presa a
+as primitivas das etapas 3, 4, 7 e 9 (``plan/PLAN-STAGE-<n>.md``) sobre o DuckDB: a view presa a
 uma versão e o leitor Arrow que alimenta o ``write_deltalake``, a reescrita da tabela pelo ``COPY``
 particionado registrada num commit com estatísticas, a diferença de versões, a compactação e o
 checkpoint, a exportação por cópia dos arquivos e a carga inicial de pastas Parquet. Os
-comportamentos estão descritos em ``docs/delta.md``; aqui eles viram asserções.
+comportamentos estão descritos em ``plan/delta.md``; aqui eles viram asserções.
 """
 
 from __future__ import annotations

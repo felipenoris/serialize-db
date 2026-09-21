@@ -18,7 +18,7 @@ dependencies = [
 serialize-db = "serialize_db:main"
 
 [dependency-groups]
-# Versões fixadas nas usadas pelos exemplos em docs/ e pela prova de conceito.
+# Versões fixadas nas usadas pelos exemplos em plan/ e pela prova de conceito.
 dev = [
     "boto3>=1.40",
     "deltalake==1.6.4",

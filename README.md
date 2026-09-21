@@ -38,7 +38,7 @@ UV_PYTHON_DOWNLOADS=automatic uv sync --group dev
 O `uv sync` instala em `.venv/` o Python 3.13 e as dependências do projeto. O grupo `dev` traz o
 `pytest` e as bibliotecas dos testes (`deltalake`, `duckdb`, `pyarrow`, `boto3`, `sqlalchemy` com os
 dialetos `duckdb-engine` e `sqlalchemy-redshift`, `pandas`, `redshift-connector`), fixadas nas
-versões usadas pelos documentos em `docs/`. `UV_PYTHON_DOWNLOADS=automatic` só é necessário onde o `uv`
+versões usadas pelos documentos em `plan/`. `UV_PYTHON_DOWNLOADS=automatic` só é necessário onde o `uv`
 está configurado para não baixar o Python, como no SageMaker Unified Studio.
 
 # Testes
@@ -89,14 +89,14 @@ SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_1.json .venv/bin/python -m
 SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m pytest -m redshift
 ```
 
-São duas execuções: a [etapa 0](docs/PLAN-STAGE-0.md) só escreve a consequência de uma leitura num
+São duas execuções: a [etapa 0](plan/PLAN-STAGE-0.md) só escreve a consequência de uma leitura num
 arquivo de etapa depois que a segunda a repete, e os dois JSON de `SERIALIZE_DB_TEST_REPORT` são a
 resposta que acompanha os relatórios dos probes na conversa.
 
 As três variáveis de autorização se somam: informadas juntas, `uv run pytest` sem `-m` roda tudo.
 
 `tests/` na raiz recebe os testes do pacote `serialize_db`, um módulo por módulo do pacote (as etapas
-de `docs/PLAN.md`). `tests/proof_of_concept/` recebe as provas de conceito e os testes das bibliotecas
+de `plan/PLAN.md`). `tests/proof_of_concept/` recebe as provas de conceito e os testes das bibliotecas
 externas: cada módulo exercita a parte da API que a biblioteca usa, com comentários passo a passo, e
 é o material de estudo de quem dá manutenção na biblioteca. Os testes que não gravam nada
 (SQLAlchemy, DuckDB em memória, PyArrow em memória, a stdlib) rodam sempre; os demais só onde o
@@ -113,7 +113,7 @@ comando que a autoriza e o que ela grava.
 | `test_concurrency.py` | Threads do Python sobre os pacotes nativos: o laço Python que mantém a taxa noutra thread enquanto o DuckDB agrega e converte para Arrow e o PyArrow grava e lê Parquet em memória (o GIL liberado), o `threadsafety` 1 dos drivers com um `cursor()` por thread, a conexão compartilhada que entrega a uma thread o resultado da outra, os dois `connect()` em memória que são bancos distintos, o intervalo de troca do GIL pago por cada retomada ao lado de uma thread Python ocupada (`os.stat`, o import preguiçoso), as faixas de identificadores de um contador sob `Lock`; o GIL liberado pelo delta-rs e pelo `delta_scan`, duas escritas Delta e dois `CREATE TABLE AS` em duas threads, o arquivo do DuckDB compartilhado pela mesma configuração e recusado com outra, os leitores Delta presos à versão carregada durante um `append`. | Nenhum; os quatro últimos, `local`. |
 | `test_parallel.py` | Leitura e escrita em paralelo em cada tecnologia e as APIs da implementação: o motor com um `cursor()` por thread num `threading.local`, a saída em lotes `BatchStream` e a entrada em lotes `Loader` com o pipeline de três estágios, o pool de `publish` que termina o que está em curso e cancela o resto na primeira falha, a barreira por tabela com `Condition` e as tabelas de um statement por `find_tables` ou pelo sentinela `{prefix}`; quatro tabelas Delta lidas em paralelo e ingeridas no DuckDB por `delta_scan` em cursores, escritas Delta em paralelo por tabela e por mês da mesma tabela com o conflito no mesmo mês, o início do alocador de identificadores pelas estatísticas dos arquivos com a varredura de reserva, cargas Arrow e `COPY ... TO` em paralelo no DuckDB. | Nenhum; os quatro últimos, `local`. |
 | `poc_delta.py`, `test_local.py`, `test_s3.py` | A prova de conceito da camada Delta nos dois armazenamentos: a escrita e a leitura pelo delta-rs, o `delta_scan` com os tipos do contrato e a poda de partição, os tempos de consulta, o `vacuum`; em disco, o commit atômico e o conflito entre escritores, a realocação da pasta, a abertura sem variáveis `AWS_*`; no bucket, a origem das credenciais, a cadeia do delta-rs e sua reserva, o put condicional, a criptografia, listar, copiar e apagar pelo `boto3`. | `local` e `s3`. |
-| `test_redshift.py` | Os itens da etapa 0 que esperam uma conexão: a sessão e o `paramstyle` nomeado, o `fetchmany` por lotes, o banco do esquema e o ida e volta depois do `USE`, o DDL do SQLAlchemy, o `COPY ... MANIFEST` de arquivos do delta-rs (`DECIMAL` em `INT64`, `timestamp_ntz`, lista de colunas, `FILLRECORD`), o `VARCHAR` excedido, o `SUPER`, o `UNLOAD ... PARTITION BY` registrado no Delta e lido pelo DuckDB, o ciclo da Data API, dois `COPY` e dois `UNLOAD` em paralelo numa conexão por thread, e um comando repetido depois de um `TRUNCATE` com e sem o cache de prepared statements do driver. Conecta como [`examples/redshift_native.py`](examples/redshift_native.py), com `max_prepared_statements=0`; seis execuções no ambiente alvo em 2026-09-21 corrigiram a transação aberta antes do `USE`, a barra dobrada na URL do manifesto e o cache do driver, e as duas últimas passaram limpas ([`docs/POC.md`](docs/POC.md)). | `redshift` e `s3`. |
+| `test_redshift.py` | Os itens da etapa 0 que esperam uma conexão: a sessão e o `paramstyle` nomeado, o `fetchmany` por lotes, o banco do esquema e o ida e volta depois do `USE`, o DDL do SQLAlchemy, o `COPY ... MANIFEST` de arquivos do delta-rs (`DECIMAL` em `INT64`, `timestamp_ntz`, lista de colunas, `FILLRECORD`), o `VARCHAR` excedido, o `SUPER`, o `UNLOAD ... PARTITION BY` registrado no Delta e lido pelo DuckDB, o ciclo da Data API, dois `COPY` e dois `UNLOAD` em paralelo numa conexão por thread, e um comando repetido depois de um `TRUNCATE` com e sem o cache de prepared statements do driver. Conecta como [`examples/redshift_native.py`](examples/redshift_native.py), com `max_prepared_statements=0`; seis execuções no ambiente alvo em 2026-09-21 corrigiram a transação aberta antes do `USE`, a barra dobrada na URL do manifesto e o cache do driver, e as duas últimas passaram limpas ([`plan/POC.md`](plan/POC.md)). | `redshift` e `s3`. |
 | `test_probes.py` (em `tests/`) | As funções puras dos probes, sem rede: a classificação dos erros do `boto3`, os rótulos de DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o inventário do bucket (tabelas Delta, sessões da suíte, versões não correntes), o versionamento pela amostra, o Object Lock, o ciclo de vida, a montagem de `~/shared`, o formato das tabelas do Glue e os parâmetros da conexão Redshift. | Nenhum. |
 | `test_source_db_projetado.py` (em `tests/`) | A base Parquet de origem fictícia de `source_db_projetado.py`, gravada na pasta temporária do pytest com a estrutura que `probes/parquet_source.py` leu na base de desenvolvimento em 2026-09-20 e na de produção em 2026-09-21: as 14 tabelas com as colunas, os tipos e a nulidade da seção 3 do relatório, as partições Hive por `data_str` e `data_base_str` com o valor só no caminho, os chunks numerados sem zeros à esquerda, o layout físico (um row group, SNAPPY, formato 1.0, `INT96` sem estatística, a chave `pandas` em parte dos arquivos), os valores que a carga inicial trata, a leitura pelo DuckDB e pelo PyArrow, a consistência com as chaves do modelo de referência, a relação N×N de `rel_contrato_operacao` com `fator_rateio` somando 1 por operação, e o `schema.json` real da biblioteca anterior. É o material do teste da carga inicial. | Nenhum. |
 | `test_reference_model.py` (em `tests/`) | O modelo de referência de `tests/reference_model/`, que fica como está, lido pelo SQLAlchemy contra a seção 3 das leituras da base de origem: as 12 tabelas com as colunas na mesma ordem, os tipos e a nulidade, exceto as sete colunas de `cad_contratos`; as chaves transcritas em `test_source_db_projetado.py` são as do modelo. Os módulos do modelo importam `lib_base_contabil` e `lib_base_gerencial`, a biblioteca do pipeline; `tests/lib_base_contabil.py` e `tests/lib_base_gerencial.py` apontam os nomes para os arquivos do modelo. | Nenhum. |
@@ -176,7 +176,7 @@ versões não correntes, as permissões do papel pela simulação de política d
 política do bucket), o acesso que a suíte S3 exige, o Redshift (conexão, o `USE` no banco do
 datashare, quem alcança a raiz no `COPY` e no `UNLOAD`, Data API, sessão, privilégios, configurações
 e o diagnóstico de um `COPY` reprovado), os serviços de catálogo e a estrutura da base Parquet de
-origem da carga inicial ([etapa 7](docs/PLAN-STAGE-7.md)), esta última num caminho local ou numa URI
+origem da carga inicial ([etapa 7](plan/PLAN-STAGE-7.md)), esta última num caminho local ou numa URI
 `s3://`. Cada um imprime o relatório e o grava em `probes/output/`,
 pasta fora do git, para ser colado na conversa com o assistente, com seções numeradas, cada chamada
 ecoada acima do resultado ou do erro, a tabela de checagens e a seção final de chamadas que
@@ -244,7 +244,7 @@ probe, a suíte e a etapa 5 repetem as chamadas que estão lá, e
 partição de `cad_contratos` de Parquet para Delta e roda os dois comandos com manifesto, o
 `COPY ... MANIFEST` e o `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` numa tabela do datashare, que
 são os pré-requisitos do `export_partition`. Os dois são aceitos, e o que o rodapé do `UNLOAD`
-respondeu está em [`docs/POC.md`](docs/POC.md).
+respondeu está em [`plan/POC.md`](plan/POC.md).
 
 ## Credenciais do delta-rs e proxy
 

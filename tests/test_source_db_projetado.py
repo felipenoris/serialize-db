@@ -9,7 +9,7 @@ convertido), as partições, o layout físico, os valores que a carga inicial te
 pelos dois leitores da biblioteca, o controle de esquema da biblioteca anterior e a consistência da
 base com o modelo de referência. O esquema esperado é a seção 3 do relatório, transcrita; a saída
 do probe fica em ``probes/output/``, fora do git, e a transcrição é o que o teste guarda dela. A
-base é o material do teste da carga inicial (``docs/PLAN-STAGE-7.md``), ainda por escrever.
+base é o material do teste da carga inicial (``plan/PLAN-STAGE-7.md``), ainda por escrever.
 """
 
 from __future__ import annotations
@@ -370,7 +370,7 @@ def test_physical_layout_matches_the_reading(base: source.SourceBase) -> None:
 
 
 def test_values_reproduce_what_the_initial_load_handles(base: source.SourceBase) -> None:
-    """Os valores que a carga inicial tem de tratar, um por regra de ``docs/PLAN-STAGE-7.md``."""
+    """Os valores que a carga inicial tem de tratar, um por regra de ``plan/PLAN-STAGE-7.md``."""
     lancamentos = ds.dataset(base.root / "cad_lancamentos", format="parquet", partitioning="hive").to_table()
     contratos = ds.dataset(base.root / "cad_contratos", format="parquet", partitioning="hive").to_table()
 

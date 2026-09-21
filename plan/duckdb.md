@@ -868,7 +868,7 @@ from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
 def arrow_schema(model) -> pa.Schema:
-    """Esquema Arrow derivado das colunas do modelo; implementação em docs/sqlalchemy.md."""
+    """Esquema Arrow derivado das colunas do modelo; implementação em plan/sqlalchemy.md."""
     ...
 
 def ingest(engine, model, df: pd.DataFrame) -> None:

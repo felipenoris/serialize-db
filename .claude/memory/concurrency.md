@@ -1,6 +1,6 @@
 # Threads, the GIL and the batch boundary
 
-Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in how batches cross the library's boundary. Each fact ends with the `docs/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in how batches cross the library's boundary. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 - `duckdb` and `redshift_connector` declare DB-API `threadsafety` 1: threads share the module, never a
   connection. DuckDB, delta-rs and PyArrow release the GIL during native work (a Python loop in
@@ -14,7 +14,7 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   beside a thread running pure Python waits the switch interval per reacquisition: 200 `os.stat` took
   0.3 s against 0.2 ms alone (0.035 s with `sys.setswitchinterval(0.0005)`), and the lazy
   `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import at
-  startup and keep hot pure-Python loops out of the library's threads. `docs/PLAN.md`, section "A troca de dados com o
+  startup and keep hot pure-Python loops out of the library's threads. `plan/PLAN.md`, section "A troca de dados com o
   código cliente", records the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
 - The client boundary by batches (2026-09-20, macOS arm64, DuckDB 1.5.5 with `threads = 2`): a
   `to_arrow_reader` on its own `cursor()` delivers its query's snapshot while other cursors insert
@@ -34,5 +34,5 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   not close a generator-backed reader. `to_batches`/`from_batches`/`RecordBatch.to_pandas(ArrowDtype)`/
   `RecordBatch.from_pandas` share buffers (0.04 ms, 0.003 ms, 1.4 ms, 0.5 ms). A mid-read query
   error reaches Python as `OSError` with DuckDB's message. Objects with `__arrow_c_stream__` are
-  accepted by `from_stream`, DuckDB `register` and `write_deltalake`. `docs/PLAN.md`, `docs/POC.md`,
-  `docs/duckdb.md`, `tests/proof_of_concept/test_duckdb.py`, `test_pyarrow.py`, `test_parallel.py`
+  accepted by `from_stream`, DuckDB `register` and `write_deltalake`. `plan/PLAN.md`, `plan/POC.md`,
+  `plan/duckdb.md`, `tests/proof_of_concept/test_duckdb.py`, `test_pyarrow.py`, `test_parallel.py`
