@@ -20,9 +20,12 @@ id_mensuracao, id_veiculo, id_conta` em `cad_lancamentos`; a primeira coluna é 
 partição, constante dentro dela, que no Redshift poda a tabela publicada inteira. As colunas
 numéricas continuam `Double` (as
 decisões de 2026-09-20 estão nas premissas de [`PLAN.md`](PLAN.md)). `String(n)` leva o comprimento
-tirado das leituras, com folga; os índices não únicos e o `sqlite_strict` do original ficam de fora,
-porque motor algum da biblioteca os usa; `redshift` fica ausente de `Table.info` (distribuição
-`AUTO`) até a decisão. `tests/test_client_model.py` confere a cópia contra o original: as tabelas e
+tirado das leituras, com folga, e o dono do modelo o revisa no código (decisão do usuário de
+2026-09-21); os índices não únicos e o `sqlite_strict` do original ficam de fora, porque motor
+algum da biblioteca os usa; `redshift` fica ausente de `Table.info`, a distribuição `AUTO` (decisão
+do usuário de 2026-09-21): a leitura de `svv_table_info` depois da primeira publicação
+([etapa 8](PLAN-STAGE-8.md)) diz o que o Redshift atribuiu a cada tabela, e uma chave de
+distribuição, se vier dessa leitura, entra por `ALTER TABLE`. `tests/test_client_model.py` confere a cópia contra o original: as tabelas e
 as colunas na mesma ordem, os tipos e as chaves mudados só onde previsto, sem `DEFERRABLE`,
 `autoincrement` nem índice não único, todo comentário presente, e a partição de cada tabela
 particionada igual à da base.
@@ -885,16 +888,6 @@ check_models:
 
 ## Decisões pendentes
 
-- **[decisão] Os comprimentos de `String(n)` do modelo cliente.** Escolhidos da amostra de 5.000
-  linhas por tabela, em caracteres (`contrato` e `operacao` 50, os nomes 50 e 100, `numero` 20,
-  `descricao` e `meta` 255, `area` e `departamento` 20, `to` 2, `fonte_familia` 3); sem `n`, o
-  Redshift daria `VARCHAR(256)` e o `cast` não mediria nada. O usuário pediu a medição da base
-  inteira antes de fixá-los (2026-09-21): `probes/parquet_source.py <raiz> --text-bytes` lê as
-  colunas de texto de todos os arquivos e dá o maior valor de cada coluna em bytes e em
-  caracteres, e os `n` saem dessa leitura. `to` e `fonte_familia` estão com folga zero na amostra,
-  e `cad_lancamentos.meta` é 100% nulo nas 141.901.795 linhas.
-- **[decisão] A distribuição no Redshift** (`diststyle`, `distkey`): o modelo cliente não declara
-  `redshift`, o padrão `AUTO`, até a decisão.
 - **[decisão] A chave estrangeira de `cad_contratos` para `rel_contrato_operacao`**, do original,
   referencia colunas não únicas, o que motor algum aceitaria; fica no modelo cliente como a regra
   que a auditoria verifica por anti-join (todo contrato está em alguma operação), ou sai.

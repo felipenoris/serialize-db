@@ -60,12 +60,9 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 1](PLAN-STAGE-1.md), todas do modelo cliente, e a primeira espera a execução de
-  `probes/parquet_source.py <raiz> --text-bytes` no ambiente alvo, que mede o maior texto de
-  cada coluna em bytes: os
-  comprimentos de `String(n)`, a distribuição no
-  Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos` para colunas não
-  únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do modelo.
+- [Etapa 1](PLAN-STAGE-1.md), as duas do modelo cliente: a chave estrangeira de `cad_contratos`
+  para colunas não únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do
+  modelo.
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
   `dev`.
 - [Etapa 3](PLAN-STAGE-3.md): o comentário da tabela como `description` da tabela Delta; a reserva de credenciais do `boto3` em `storage_options`; as colunas
@@ -82,7 +79,9 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.
-- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação no datashare ou temporária; `FILLRECORD` em
+- [Etapa 8](PLAN-STAGE-8.md): a `distkey` de cada tabela publicada, decidida pela leitura de
+  `svv_table_info` depois da primeira publicação (a distribuição é `AUTO` desde a decisão do
+  usuário de 2026-09-21); a staging da publicação no datashare ou temporária; `FILLRECORD` em
   todo `COPY` da biblioteca (proposto: um manifesto pode listar arquivos anteriores e posteriores a
   uma coluna nova) ou a lista de colunas, os dois lidos em 2026-09-21; o teto de 65.535 bytes do
   campo JSON no Redshift conferido pela auditoria (proposto), ou um caminho por

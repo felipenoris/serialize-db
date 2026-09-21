@@ -176,3 +176,14 @@ sample per table, in characters; two columns sit at zero margin (`cad_contratos.
 `String(255)` rests on nothing. `probes/parquet_source.py <raiz> --text-bytes` now reads the text
 columns of every file and reports, per column, the longest value in bytes and in characters
 (section 9); the run in the target closes the decision. `plan/PLAN-STAGE-1.md`, `probes/README.md`
+
+On 2026-09-21 the user replaced the decision of the same day to measure the whole base before
+fixing the `String(n)` lengths of the client model: the lengths are the model owner's, reviewed
+directly in the code, and no run in the target gates stage 1. The `--text-bytes` section of
+`probes/parquet_source.py` stays as an available reading of the base, not as a pending task. The
+same day the user left the Redshift distribution at `AUTO`: the client model declares no `redshift`
+key, and `svv_table_info` read after the first publication (stage 8, `diststyle`, `sortkey1`,
+`tbl_rows`, `skew_rows`, the denied view being a reading too) says whether an explicit `distkey`
+pays, which would then enter by `ALTER TABLE`. What weighed: nobody has measured how the clients
+query, the AWS documentation recommends `AUTO`, and the distribution is reversible, unlike the
+types the migration freezes. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`
