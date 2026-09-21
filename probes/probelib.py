@@ -298,6 +298,35 @@ def tcp_probe(host: str, port: int, timeout: float = 5) -> str:
         return f"não conectou: {error}"
 
 
+def endpoint_reachable(client: Any, timeout: float = 2) -> tuple[bool, str]:
+    """Se o endpoint de um cliente boto3 aceita conexão TCP dentro de ``timeout``, e a leitura que o diz.
+
+    Um serviço sem endpoint VPC e sem internet gasta ``connect_timeout`` em cada endereço que o nome
+    resolve, vezes as tentativas: no ambiente alvo, em 2026-09-21, ``simulate_principal_policy``
+    esperou 10 s e ``describe_key`` 80 s por nada, com ``short_config()`` em 5 s e duas tentativas.
+    O teste vai a um endereço só, e custa ``timeout`` uma vez. Com proxy configurado a conexão direta
+    não responde pelo alcance, e a chamada é feita.
+    """
+    if any(os.environ.get(name) for name in PROXY_VARIABLES if "NO_PROXY" not in name.upper()):
+        return True, "proxy configurado: a conexão direta não responde pelo alcance"
+
+    parts = urllib.parse.urlsplit(client.meta.endpoint_url)
+    if not parts.hostname:
+        return True, f"endpoint sem host: {client.meta.endpoint_url}"
+
+    port = parts.port or (80 if parts.scheme == "http" else 443)
+    try:
+        addresses, _ = resolve(parts.hostname, port)
+    except OSError as error:
+        return False, f"{parts.hostname} não resolve: {error}"
+
+    # O endereço, nunca o nome: socket.create_connection percorre todos os endereços do nome e gasta
+    # o tempo limite em cada um, que é justamente o custo que este teste existe para evitar.
+    where = parts.hostname if addresses[0] == parts.hostname else f"{parts.hostname} ({addresses[0]})"
+    reading = tcp_probe(addresses[0], port, timeout)
+    return reading.startswith("conectou"), f"{where}:{port} {reading}"
+
+
 def public_label(name: str) -> str:
     """Tipo de um nome que resolve para IP público: só o S3 e o DynamoDB têm gateway endpoint; os demais dependem da internet ou do proxy."""
     # O serviço é o primeiro rótulo (s3.us-west-2...) ou o segundo (bucket.s3.us-west-2...).

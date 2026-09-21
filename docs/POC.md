@@ -660,9 +660,17 @@ Consequências no plano, nesta mesma unidade de trabalho:
   ([etapa 7](PLAN-STAGE-7.md)).
 - [`PLAN.md`](PLAN.md) ganhou a regra do ambiente alvo: a biblioteca não chama o IAM nem o KMS, a
   permissão sobre a raiz é provada pela primeira escrita, e a criptografia SSE-KMS é aplicada pelo S3.
-- Os probes ganham tempo limite curto no IAM e no KMS, pendência de
-  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), junto com a Data API em `PICKED` e a decisão de copiar ou
-  não os relatórios para `docs/readings/`.
+- Os probes deixaram de chamar o IAM e o KMS sem antes testar o endereço. O `connect_timeout` do
+  botocore vale em cada endereço que o nome resolve, vezes as tentativas: `short_config()`, 5 s e
+  duas tentativas, dá os 10 s do IAM, que resolve para um endereço, e os 80 s do KMS, cujo endpoint
+  regional resolve para oito (contagem do macOS em 2026-09-21; a leitura do alvo não registrou os
+  endereços). Medição do mesmo dia contra `10.255.255.1`, privado e sem rota: `describe_key` esperou
+  10,0 s com a configuração antiga e 2,0 s com `short_config(2, 5, 1)`, e `probelib.endpoint_reachable`
+  respondeu em 2,0 s. As duas chamadas passaram a `short_config(2, 5, 1)` atrás desse teste, e sem
+  resposta `BK-8`, `BK-9` e `RS-11` ficam como leitura. A espera no alvo, onde os nomes resolvem para
+  outros endereços, a próxima execução dos probes mede.
+- A Data API em `PICKED` e a decisão de copiar ou não os relatórios para `docs/readings/` continuam em
+  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
 
 ## O que os rascunhos das etapas mostraram
 

@@ -44,10 +44,12 @@ foi medido em [`POC.md`](POC.md).
   do git; [`POC.md`](POC.md) os interpreta, e `docs/readings/` não os tem. Copiá-los para
   `docs/readings/`, como os de 2026-09-20, é decisão do usuário: eles trazem os mesmos
   identificadores (conta, papel, usuário do banco) que os relatórios já versionados.
-- **Tempos limite dos probes no ambiente alvo.** O IAM (`iam.amazonaws.com`) e o KMS não têm
-  endpoint VPC lá: `simulate_principal_policy` esperou 10 s e `describe_key` 80 s por nada em
-  2026-09-21. As duas chamadas ganham tempo limite curto, ou são puladas quando o nome resolve
-  para IP público sem proxy; a permissão sobre a raiz fica provada pela primeira escrita.
+- **Quanto o teste de alcance poupa no ambiente alvo.** O IAM (`iam.amazonaws.com`) e o KMS não têm
+  endpoint VPC lá, e `simulate_principal_policy` esperou 10 s e `describe_key` 80 s por nada em
+  2026-09-21. As duas passaram a `short_config(2, 5, 1)` atrás de um teste TCP de 2 s num endereço
+  (`probelib.endpoint_reachable`), que no macOS no mesmo dia baixou de 10,0 s para 2,0 s a espera por
+  um endereço sem rota ([`POC.md`](POC.md)). A próxima execução dos probes no alvo diz o que sobra;
+  a permissão sobre a raiz fica provada pela primeira escrita.
 - **A Data API em `PICKED`.** Em 2026-09-21 o `select 1` ficou 30 s em `PICKED` sem terminar, e em
   2026-09-20 respondeu em 23 ms. A repetição diz se é transitório; a Data API está fora da
   biblioteca, e `RS-10` a mantém como leitura.
