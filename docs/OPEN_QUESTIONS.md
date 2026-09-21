@@ -13,18 +13,11 @@ foi medido em [`POC.md`](POC.md).
   [etapa 5](PLAN-STAGE-5.md) decide quando o primeiro pipeline rodar lá.
 - **O que `svv_table_info` responde depois do `USE`.** Antes do `USE` ela enxerga só o banco local,
   como `has_schema_privilege` e `information_schema.columns`, que a suíte leu depois do `USE` em
-  2026-09-21, duas vezes a primeira: `false` e vazio para o esquema do datashare, com o
-  `CREATE TABLE` passando nele ([`POC.md`](POC.md), [`redshift.md`](redshift.md)). A execução do
+  2026-09-21, quatro vezes a primeira e três a segunda: `false` e vazio para o esquema do datashare,
+  com o `CREATE TABLE` passando nele ([`POC.md`](POC.md), [`redshift.md`](redshift.md)). A execução do
   probe de 2026-09-21 não leu `RS-8` porque `RS-19` reprovou pelo critério errado
   (`current_database()` continuou `dev` depois do `USE`, que vale mesmo assim; o critério passou a
   ser a resolução de um nome em duas partes), e a próxima execução no ambiente alvo o lê.
-- **O destino do `UNLOAD` dentro da pasta da tabela.** A referência diz que sem `ALLOWOVERWRITE` nem
-  `CLEANPATH` o comando falha quando o destino tem arquivos, e a pasta de uma partição já tem os das
-  versões anteriores; por isso a [etapa 5](PLAN-STAGE-5.md) grava em `<uri>/<execution_id>/`, vazio
-  por construção, e registra `<execution_id>/<coluna>=<valor>/<arquivo>`. Se "destino com arquivos"
-  é a pasta exata ou o prefixo, e como o `UNLOAD` nomeia os arquivos: a suíte registra os nomes e
-  três destinos sem `ALLOWOVERWRITE` (o mesmo prefixo, um prefixo pai com arquivos abaixo, um
-  subprefixo novo dentro de uma pasta com arquivos) desde 2026-09-21, e a próxima execução responde.
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
   conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
@@ -56,41 +49,51 @@ foi medido em [`POC.md`](POC.md).
   `find_tables` do statement Core ou do sentinela `{prefix}` do texto gerado
   (`test_parallel.py::test_table_barrier_delays_the_read_until_the_load_lands`). Fica fora das
   etapas até existir um pipeline paralelo real.
-- **`fetchmany` do `redshift_connector`.** O `stream` do motor Redshift monta cada lote de
-  `cursor.fetchmany(batch_size)`; se o driver lê as linhas do socket a cada chamada ou materializa o
-  resultado inteiro no `execute` decide se `stream` limita a memória sem `UNLOAD`.
-  `test_redshift.py::test_cursor_fetchmany_feeds_record_batches` exercita o caminho, e a primeira
-  execução com uma consulta grande mede a memória ([etapa 5](PLAN-STAGE-5.md)).
 - **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)). `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
   (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)), e a medição decide o
   padrão da flag.
 
-## O que a documentação oficial do Redshift não responde
+## O que a próxima execução da suíte Redshift lê
 
-Todas dependem de uma execução da suíte contra o Redshift do ambiente alvo, que ainda não houve; o
-caminho de conexão está fixado desde 2026-09-20 ([`../examples/`](../examples/)), e
-`tests/proof_of_concept/test_redshift.py` tem um teste por pergunta. As perguntas de S3 foram
-respondidas em 2026-09-19 ([`POC.md`](POC.md)). A [etapa 0](PLAN-STAGE-0.md) as agrupa por comando.
+As perguntas do `COPY` que a documentação oficial não responde foram fechadas pelas execuções de
+2026-09-21 às 12:08 e às 12:10 no ambiente alvo ([`POC.md`](POC.md), [`redshift.md`](redshift.md)):
+o `COPY` de Parquet aceita lista de colunas, carrega `DECIMAL(18, 2)` em `INT64` e `timestamp_ntz`
+em `INT64` de microssegundos, aborta numa string maior que o `VARCHAR` de destino, associa as colunas
+por posição e recusa um arquivo com colunas a menos. O que resta é leitura da próxima execução, com
+o teste que a faz:
 
-- Se o `COPY` de Parquet aceita lista de colunas: o `awswrangler` emite
-  `COPY tabela (colunas) ... FORMAT AS PARQUET`, e a referência descreve a lista só para arquivos
-  planos.
-- A correspondência entre os tipos físicos do Parquet e as colunas do Redshift no `COPY`, em
-  especial `TIMESTAMP` como `INT64` em microssegundos e o tipo físico de `DECIMAL`.
-- Se o `COPY` trunca ou aborta numa string maior que o `VARCHAR` de destino.
-- Se o Spectrum mapeia colunas Parquet soltas por nome ou por posição.
-- Se o `FILLRECORD` deixa o `COPY` carregar arquivos antigos, sem as colunas acrescentadas depois,
-  que a evolução do Delta e do DuckLake produz.
+- **As linhas que `FILLRECORD` carrega** de um arquivo anterior a uma coluna nova: o `COPY` com a
+  cláusula passou nas duas execuções, e a contagem que vinha depois recebeu o `34510` do driver
+  (`test_copy_column_list_and_fillrecord`); a [etapa 8](PLAN-STAGE-8.md) escolhe entre a lista de
+  colunas, confirmada, e o `FILLRECORD`.
+- **O cache de prepared statements desligado.** `connect_redshift` passa `max_prepared_statements=0`
+  desde as execuções das 12:08 e das 12:10; `test_repeated_statement_after_truncate_and_the_driver_cache`
+  afirma que o mesmo comando passa antes e depois de um `TRUNCATE` na conexão da sessão e registra o
+  que uma conexão com o cache do driver recebe: na repetição depois do `TRUNCATE`, na segunda
+  repetição, depois de um `ALTER` e numa tabela temporária do banco da conexão. O `connect` da
+  [etapa 5](PLAN-STAGE-5.md) leva a mesma opção.
+- **`SUPER` acima de 65.535 bytes pelo `COPY`.** O `INSERT ... JSON_PARSE(%s)` de 80.901 bytes
+  passou; o `COPY` de Parquet com a coluna em texto exige `SERIALIZETOJSON`. A suíte lê o que a
+  cláusula grava (`json_typeof`, `json_size` e o `JSON_PARSE` do texto de volta) e o
+  `COPY ... FORMAT JSON 'auto'` de um documento como objeto (`test_super_and_json_parse`). A decisão
+  da [etapa 8](PLAN-STAGE-8.md): o teto de 65.535 bytes no contrato do campo JSON, aplicado pela
+  auditoria, ou um caminho por JSON para os documentos maiores.
+- **`TRUNCATECOLUMNS` no `COPY` de Parquet**, que a lista de opções aceitas não inclui
+  (`test_copy_varchar_overflow`): se for aceito, é a degradação que a auditoria da
+  [etapa 4](PLAN-STAGE-4.md) dispensa.
+- **As linhas na fila do cursor antes do primeiro `fetchmany`**
+  (`test_cursor_fetchmany_feeds_record_batches`, `redshift.driver.rows_cached_after_execute`): o
+  código do driver lê o resultado inteiro no `execute` ([`redshift.md`](redshift.md)), e a leitura
+  confirma; o limite de linhas a partir do qual `stream` passa a `UNLOAD` é decisão da
+  [etapa 5](PLAN-STAGE-5.md).
 
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 0](PLAN-STAGE-0.md): rodar a suíte Redshift antes da etapa 1, para fixar a tabela de tipos
-  antes de `cast` existir.
 - [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `@compiles`; `String(n)` medido em
   bytes; a coluna sem comentário como violação de `check_models`; `duckdb-engine` e
   `sqlalchemy-redshift` como dependências de execução enquanto `ddl` compilar pelo dialeto.
@@ -102,11 +105,14 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   banco em arquivo como padrão; a amostra do `AuditReport`.
 - [Etapa 5](PLAN-STAGE-5.md): onde as tabelas `exec_<id>_*` nascem; a confirmação do `USE` pela
   criação da tabela de controle; os limites entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
-  a tabela de OIDs de `schema_from_description`.
+  a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição
+  (`<uri>/<execution_id>/<valor>/` com `PARTITION BY`, ou `<uri>/<coluna>=<valor>/<execution_id>/`
+  sem ele), porque o `UNLOAD` confere o destino como prefixo.
 - [Etapa 6](PLAN-STAGE-6.md): `--metadata` na linha de comando; a chave de `next_ids` numa chave
   composta; a barreira por tabela.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga.
-- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação no datashare ou temporária; `FILLRECORD` ou
-  lista de colunas.
+- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação no datashare ou temporária; a lista de
+  colunas do `COPY`, confirmada, ou `FILLRECORD`, com a contagem por ler; o teto de 65.535 bytes do
+  campo JSON no Redshift ou um caminho por JSON para os documentos maiores.
 - [Etapa 9](PLAN-STAGE-9.md): o nome do runbook; a marca de arquivamento no controle; a retenção do
   `vacuum` mensal.

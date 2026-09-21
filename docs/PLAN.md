@@ -208,9 +208,9 @@ A sondagem de 2026-09-20 (macOS arm64, DuckDB 1.5.5 com `threads = 2`, PyArrow 2
   `from_pylist` por dicionários em 200.000 linhas, [`POC.md`](POC.md)), numa thread auxiliar que compete pelo GIL com
   o cliente porque o `redshift_connector` é Python puro, e `loader` grava um row group por lote com
   `ParquetWriter.write_batch` em `staging/<execution_id>/` e faz o `COPY` no `close`, então nada
-  entra antes dele. Se o `redshift_connector` materializa o resultado no `execute` ou o lê do socket
-  no `fetchmany` decide se `stream` limita a memória sem `UNLOAD`
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  entra antes dele. O `redshift_connector` materializa o resultado no `execute` (leitura do código,
+  2026-09-21), então `stream` limita a memória só por `UNLOAD` acima de um limite de linhas
+  ([etapa 5](PLAN-STAGE-5.md)).
 
 ### A conversão para o pandas
 
@@ -292,10 +292,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 - A coluna de partição (`data_str` no modelo de referência) vive na ação `add`, não no arquivo de
   dados: ela deriva de uma coluna de data do arquivo por `strftime('%Y-%m-%d')`, e o Redshift a
-  recebe por uma staging sem ela e `INSERT ... SELECT *, '<valor>'`, ou por lista de colunas no
-  `COPY` se a prova de conceito a confirmar (`delta.md`).
-- `DECIMAL(18, 2)` sai como `INT64` do delta-rs e do DuckDB; o `COPY` desse tipo físico é o primeiro
-  item da prova de conceito no Redshift (`parquet.md`).
+  recebe por uma staging sem ela e `INSERT ... SELECT *, '<valor>'`; a lista de colunas no `COPY`,
+  confirmada em 2026-09-21, não fornece o valor da coluna ausente (`delta.md`).
+- `DECIMAL(18, 2)` sai como `INT64` do delta-rs e do DuckDB; o `COPY` desse tipo físico passou no
+  ambiente alvo em 2026-09-21 (`parquet.md`, `POC.md`).
 - O delta-rs não impõe duas regras de evolução: `add_columns` aceita coluna `NOT NULL` em tabela
   com dados e a deixa nula, e o `append` converte os dados para o tipo da tabela em vez de acusar a
   diferença. `reconcile` recusa a primeira, e `cast` aplica os tipos antes de gravar (`delta.md`).

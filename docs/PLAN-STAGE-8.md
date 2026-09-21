@@ -81,7 +81,8 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
   transação sozinho, e `DELETE` sem `WHERE` é transacional nos dois casos. Uma partição removida no
   Delta (`version_diff` a devolve pelo `remove`) recebe só o `DELETE`.
 - **`reconcile_published`** repete o diff aditivo com `ALTER TABLE ADD COLUMN <coluna> <tipo>` no
-  fim da tabela, porque o `COPY` é posicional e a staging nasce do esquema Delta; um diff destrutivo
+  fim da tabela, porque o `COPY` é posicional e recusa um arquivo com colunas a menos
+  (`Unmatched number of columns`, 2026-09-21), e a staging nasce do esquema Delta; um diff destrutivo
   devolve `DROP TABLE IF EXISTS` mais o DDL do contrato com `keys=True` (chave primária informativa),
   e a publicação seguinte recarrega todas as partições.
 - **`publication_status`** compara a versão em `serialize_db_publications` com a atual e lista as
@@ -196,6 +197,14 @@ segredo fora do texto impresso: True
 - **[decisão] A staging da publicação como tabela comum no datashare ou temporária no banco da
   conexão** ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o rascunho a cria e apaga dentro da
   transação, no esquema do datashare.
-- **[decisão] A publicação depende de `FILLRECORD` ou da lista de colunas do `COPY`** para arquivos
-  anteriores a uma coluna nova; a suíte responde (`test_copy_column_list_and_fillrecord`), e até lá
-  a reconciliação destrutiva recarrega tudo.
+- **[decisão] A publicação depende da lista de colunas do `COPY` ou de `FILLRECORD`** para arquivos
+  anteriores a uma coluna nova: a lista de colunas carregou um arquivo de cinco colunas numa tabela
+  de seis, com a coluna nova nula (2026-09-21), `FILLRECORD` foi aceito e as linhas que ele carrega
+  são leitura pendente; nos dois casos, os arquivos de uma partição anteriores e posteriores à
+  coluna nova exigem um `COPY` por contagem de colunas, e até a decisão a reconciliação destrutiva
+  recarrega tudo.
+- **[decisão] O teto do campo JSON no Redshift**: 65.535 bytes por documento, aplicado pela
+  auditoria como `String(n)`, porque a staging `VARCHAR(65535)` mais `JSON_PARSE` é o caminho do
+  `COPY`; ou um caminho por `COPY ... FORMAT JSON 'auto'` para os documentos maiores, que a próxima
+  execução da suíte lê ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). `INSERT ... JSON_PARSE(%s)` de
+  80.901 bytes passou em 2026-09-21.

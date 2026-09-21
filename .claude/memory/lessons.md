@@ -221,3 +221,16 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   not exist. A local probe showed the trailing slash and the unencoded `=` before the fix; the suite
   now strips the slash, decodes the path and records the first URL of each manifest, so the next
   report shows the exact key it asked for.
+- **A statement repeated on one connection is prepared again after any DDL, and a driver's cache is
+  read in its source before a retry is designed** (2026-09-21). The third and fourth runs of the
+  Redshift suite in the target passed 10 and failed 1, the same test both times:
+  `test_copy_column_list_and_fillrecord` repeats `TRUNCATE`, `COPY` and `select count(*)` per
+  attempt, and the third round's count got `34510`, `Concurrent DDL committed ... between Prepare
+  and Execute`. Reading `redshift_connector/core.py` gave the cause: a named prepared statement per
+  SQL text, reused with `Bind` and `Execute`, and a cache cleared only on `ALTER`, `CREATE`, `DROP`
+  and `ROLLBACK`; the count was parsed in the second round and the third round's `TRUNCATE`
+  invalidated it in the datashare. `max_prepared_statements=0` makes the driver parse the unnamed
+  statement before every execute. The `FILLRECORD` reading was lost because the count came before
+  `record`: a loop that repeats a statement records each outcome before the next step that can
+  fail. The same source reading answered the `fetchmany` question: `execute` reads every row into
+  `cursor._cached_rows`.

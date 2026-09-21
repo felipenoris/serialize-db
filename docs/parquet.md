@@ -1283,7 +1283,8 @@ valores são texto, inclusive `null_count`.
 O Redshift oferece três caminhos: `COPY` carrega arquivos do S3 numa tabela; `UNLOAD` grava o
 resultado de uma consulta no S3; o Redshift Spectrum consulta arquivos no lugar por tabelas externas e
 também grava, por `CREATE EXTERNAL TABLE ... AS` e `INSERT` em tabela externa. As regras abaixo vêm
-da documentação oficial; o que ela não diz está marcado como pendente da prova de conceito.
+da documentação oficial; o que ela não diz está marcado como leitura do ambiente alvo, com a data,
+ou como leitura pendente.
 
 ### COPY a partir de Parquet
 
@@ -1303,7 +1304,9 @@ Regras da documentação para `COPY` de formatos colunares:
   aparecem no arquivo, e o número de colunas do arquivo e da tabela precisa ser igual. A
   documentação de mapeamento de colunas aceita uma lista de colunas no comando, mas, para arquivos
   planos, exige que ela siga a ordem do arquivo; a documentação de formatos colunares não menciona
-  a lista. Pendente da prova de conceito: se a lista de colunas é aceita com Parquet.
+  a lista. A prova de conceito de 2026-09-21 a aceitou com Parquet: um arquivo de cinco colunas
+  entrou numa tabela de seis, com a sexta nula, e sem a lista o `COPY` reprova com
+  `Unmatched number of columns` ([redshift.md](redshift.md)).
 - Só estas opções: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `STATUPDATE`, `MANIFEST`,
   `EXPLICIT_IDS`. `MAXERROR`, `IGNOREALLERRORS`, `ACCEPTANYDATE` e `REGION` não são aceitos.
 - O primeiro erro aborta o comando. Os erros aparecem no cliente e em `STL_LOAD_ERRORS` e
@@ -1347,10 +1350,10 @@ informativas). O que o Redshift garante e o que não garante:
 
 | Verificação | Comportamento |
 | --- | --- |
-| Tipo do Parquet compatível com a coluna | Exigido. A documentação não publica a tabela de correspondência entre tipos Parquet e tipos Redshift; os tipos físicos de `TIMESTAMP` (`INT64` em microssegundos) e `DECIMAL` (`INT64` ou `FIXED_LEN_BYTE_ARRAY`) ficam pendentes da prova de conceito, como registrado em [redshift.md](redshift.md). |
+| Tipo do Parquet compatível com a coluna | Exigido. A documentação não publica a tabela de correspondência entre tipos Parquet e tipos Redshift; os tipos físicos de `TIMESTAMP` em `INT64` de microssegundos e de `DECIMAL(18, 2)` em `INT64` carregaram no ambiente alvo em 2026-09-21 ([redshift.md](redshift.md)); `FIXED_LEN_BYTE_ARRAY` fica sem leitura. |
 | Número e ordem das colunas | Exigidos, por posição. |
 | `NOT NULL` | Aplicado; um `NULL` em coluna `NOT NULL` falha o comando. |
-| Comprimento de `VARCHAR` | Em bytes. `TRUNCATECOLUMNS` não está na lista de opções aceitas para Parquet, então um valor maior que a coluna falha. Pendente da prova de conceito. |
+| Comprimento de `VARCHAR` | Em bytes. Um valor maior que a coluna aborta o `COPY` (`Spectrum Scan Error` 15007, `The length of the data column ... is longer than the length defined in the table`, 2026-09-21); `TRUNCATECOLUMNS` não está na lista de opções aceitas para Parquet, e a próxima execução da suíte lê se ele é aceito. |
 | `PRIMARY KEY`, `UNIQUE`, `FOREIGN KEY` | Informativas; não são verificadas. Duplicatas entram e depois produzem resultados errados no planejador, como descrito em [schema.md](schema.md). |
 
 A carga com verificação segue [redshift.md](redshift.md): Arrow com o esquema do modelo, Parquet

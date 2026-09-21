@@ -69,6 +69,23 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   before the `USE`. `select version()` comes back with a trailing NUL byte, `current_schema()` is
   null after the `USE`, and `svv_redshift_databases` reports `datalake_rw_shared` as `shared` with
   isolation `UNKNOWN` and `dev` as `local` with `Snapshot Isolation`. `docs/POC.md`
+- `redshift_connector` 2.1.16 keeps a named prepared statement per SQL text (`Connection.execute`,
+  key `(operation, params)`, cache per paramstyle and pid), reuses it with `Bind` and `Execute` and
+  no new `Parse`, and closes and clears the cache only when a `CommandComplete` starts with `ALTER`,
+  `CREATE`, `DROP` or `ROLLBACK` (`handle_COMMAND_COMPLETE`); `TRUNCATE` is not in the list. In the
+  datashare, an `Execute` of a statement parsed before a `TRUNCATE` of its table answered `XX000`
+  `[Data Sharing] Error Code 34510: Concurrent DDL committed on <db>.<schema>.<table> between
+  Prepare and Execute` (routine `relocalize_data_sharing_cached_rtes`) in the runs of 12:08 and
+  12:10 UTC, third round of `test_copy_column_list_and_fillrecord`. `max_prepared_statements=0`
+  makes the driver use the unnamed statement, parsed right before every execute, and cache nothing
+  (`get_statement_name_bin`; the cache insertion runs only above zero). The suite and the library
+  connect with it; `connect_redshift(statement_cache=True)` keeps the driver default for the
+  reading that reproduces the error. `docs/redshift.md`, `docs/POC.md`
+- The driver materializes a result in `execute`: `EXECUTE_MSG` asks the portal for all rows,
+  `handle_messages` returns only at `READY_FOR_QUERY`, each `DATA_ROW` lands in
+  `cursor._cached_rows`, and `fetchmany` is `islice` over `Cursor.__next__`, which pops that deque.
+  `stream` on Redshift bounds memory only through `UNLOAD`; the next run records the queue length
+  before the first `fetchmany`. `docs/redshift.md`, `docs/PLAN-STAGE-5.md`
 
 ## The reading of 2026-09-21
 
@@ -96,3 +113,20 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   registered with the raw path. The verbose `UNLOAD` manifest's `schema.elements` lists the
   partition column (`mes`, `character varying`, `max_length` 7) that the files do not have. The
   Data API answered in 444 ms: the 30 s `PICKED` was transient. `docs/POC.md`, `docs/redshift.md`
+- Third and fourth runs (2026-09-21 12:08 and 12:10 UTC, 10 passed and 1 failed each,
+  `docs/readings/redshift-suite-2026-09-21-1208.json` and `-1210.json`, identical reading by
+  reading): `COPY ... FORMAT AS PARQUET MANIFEST` loads `DECIMAL(18,2)` as `INT64` and
+  `timestamp_ntz` as `INT64` µs (sum and min checked); a five-column file into a six-column table
+  fails positionally with `Spectrum Scan Error` 15007 `Unmatched number of columns`, loads with a
+  column list (100 rows, the missing column null), and `FILLRECORD` is accepted with its row count
+  unread; a 300-byte string into `VARCHAR(200)` aborts the `COPY` with 15007 and
+  `sys_load_error_detail` says `The length of the data column descricao is longer than the length
+  defined in the table. Table: 200, Data: 300` (`stl_load_errors` still denied); `SUPER` takes an
+  80,901-byte document by `INSERT ... JSON_PARSE(%s)` (`json_size` 80901) and the `COPY` of a
+  Parquet string column into `SUPER` needs `SERIALIZETOJSON` (`SUPER column in COPY query requires
+  SERIALIZETOJSON option`); `UNLOAD ... PARTITION BY` names files `mes=<v>/<slice>_part_<nn>.parquet`
+  with the slice varying between runs (`0064`, `0000`), and without `ALLOWOVERWRITE` checks the
+  destination as a prefix (same prefix and parent prefix refused with `Specified unload destination
+  on S3 is not empty`, a new subprefix under a folder with files accepted), so stage 5 unloads to
+  `<uri>/<execution_id>/<valor>/`; two parallel `COPY` 4.5 s and 3.6 s, two parallel `UNLOAD` 1.9 s
+  and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times. `docs/POC.md`

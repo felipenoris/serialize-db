@@ -4,9 +4,11 @@ A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PL
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
 
 Os itens de S3 estão verificados ([`POC.md`](POC.md)). Os de Redshift estão em
-`tests/proof_of_concept/test_redshift.py`, marcador `redshift`, executado duas vezes no ambiente alvo em
-2026-09-21 (às 10:50, uma transação só, abortada; às 11:28, sete passaram e o `COPY ... MANIFEST`
-falhou pela barra dobrada na URL do manifesto, [`POC.md`](POC.md)); ele roda com os
+`tests/proof_of_concept/test_redshift.py`, marcador `redshift`, executado quatro vezes no ambiente
+alvo em 2026-09-21 (às 10:50, uma transação só, abortada; às 11:28, sete passaram e o
+`COPY ... MANIFEST` falhou pela barra dobrada na URL do manifesto; às 12:08 e às 12:10, dez passaram
+e a contagem repetida depois de um `TRUNCATE` recebeu o `34510` do cache de prepared statements do
+driver, desligado desde então, [`POC.md`](POC.md)); ele roda com os
 arquivos sob `SERIALIZE_DB_TEST_S3_ROOT` e as tabelas no esquema de
 `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, no banco de `SERIALIZE_DB_REDSHIFT_SHARE_DATABASE`. O caminho
 de conexão já está fixado: a credencial temporária do workgroup serverless, de
@@ -15,11 +17,14 @@ de conexão já está fixado: a credencial temporária do workgroup serverless, 
 
 - `COPY ... FORMAT AS PARQUET MANIFEST` de arquivos gravados pelo delta-rs: o comando passou no
   datashare em 2026-09-21, com 500.000 linhas em `INT64`, `INT32` de data, `BYTE_ARRAY` e `DOUBLE`
-  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)). Faltam as colunas que a
-  base de origem não tem nem gera: `DECIMAL(18, 2)` em `INT64`, `timestamp_ntz` em `INT64` de
-  microssegundos, o que acontece com uma string acima do `VARCHAR` de destino (truncar ou abortar),
-  a lista de colunas no `COPY`, `FILLRECORD` para arquivos anteriores a uma coluna nova, e `SUPER`
-  direto do `COPY` para documentos acima de 65.535 bytes.
+  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)). As colunas que a base
+  de origem não tem nem gera passaram pela suíte no mesmo dia, às 12:08 e às 12:10: `DECIMAL(18, 2)`
+  em `INT64` e `timestamp_ntz` em `INT64` de microssegundos carregam; uma string acima do `VARCHAR`
+  de destino aborta o `COPY` (`Spectrum Scan Error` 15007, o motivo em `sys_load_error_detail`); a
+  lista de colunas carrega um arquivo anterior a uma coluna nova, com a coluna nova nula;
+  `FILLRECORD` foi aceito, e as linhas que ele carrega são leitura da próxima execução; `SUPER`
+  direto do `COPY` exige `SERIALIZETOJSON`, e um documento de 80.901 bytes entrou por
+  `INSERT ... JSON_PARSE` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE`: **verificado** em 2026-09-21
   por [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py), que exercita este
   item e o `COPY ... MANIFEST` do item anterior num script só, com `cast` para `DECIMAL` e
@@ -29,8 +34,9 @@ de conexão já está fixado: a credencial temporária do workgroup serverless, 
   que devolveu as linhas. Os tipos físicos, a obrigatoriedade das colunas e as estatísticas estão em
   [`POC.md`](POC.md) e [`redshift.md`](redshift.md); o `TIMESTAMP` sai em `INT96`, o
   `DECIMAL(18, 2)` em `FIXED_LEN_BYTE_ARRAY(8)`, toda coluna sai `optional` e há mínimo e máximo.
-- Se o Redshift Spectrum mapeia colunas Parquet por nome ou por posição, só para registro; o
-  projeto não cria esquemas externos.
+- O `COPY` associa as colunas por posição e recusa um arquivo com colunas a menos
+  (`Unmatched number of columns`, 2026-09-21). Se o Redshift Spectrum mapeia por nome ou por posição
+  fica sem leitura, só para registro; o projeto não cria esquemas externos.
 - O banco do esquema do projeto: a sessão enxerga `datalake_rw_shared.sbx_aco_decon` (`RS-16`,
   2026-09-20), e depois de `USE datalake_rw_shared` o `CREATE TABLE`, o `COPY` de uma pasta, o
   `SELECT` e o `UNLOAD` passaram por `sbx_aco_decon.<tabela>`
@@ -75,18 +81,19 @@ entra.
 
 | Pergunta | Teste em `test_redshift.py` | Documento que recebe a resposta |
 | --- | --- | --- |
-| `COPY` de Parquet aceita lista de colunas; `FILLRECORD` completa um arquivo anterior a uma coluna nova. | `test_copy_column_list_and_fillrecord` | [`redshift.md`](redshift.md), "Regras do COPY para Parquet"; a ingestão da [etapa 5](PLAN-STAGE-5.md) e a publicação da [etapa 8](PLAN-STAGE-8.md) escolhem entre lista de colunas e `ALTER TABLE ADD COLUMN`. |
-| `DECIMAL(18, 2)` em `INT64` e `timestamp_ntz` em `INT64` de microssegundos carregam pelo `COPY`. | `test_copy_manifest_from_delta_files` | [`redshift.md`](redshift.md) e a tabela de tipos de [`schema.md`](schema.md). |
-| Uma string acima do `VARCHAR` de destino trunca ou aborta. | `test_copy_varchar_overflow` | A auditoria de tamanho da [etapa 4](PLAN-STAGE-4.md) passa a barreira ou a aviso. |
-| `SUPER` recebe um documento acima de 65.535 bytes pelo `COPY` direto. | `test_super_and_json_parse` | O caminho `VARCHAR(65535)` mais `JSON_PARSE` da staging fica ou cede ao `COPY` em `SUPER`. |
-| Dois `COPY` e dois `UNLOAD` em conexões distintas correm em paralelo dentro das slots do WLM. | `test_parallel_copy_and_unload_on_two_connections` | `max_workers` de `publish_redshift` na [etapa 6](PLAN-STAGE-6.md). |
-| `fetchmany` lê do socket ou o `execute` materializa o resultado. | `test_cursor_fetchmany_feeds_record_batches`, com uma consulta grande e a memória medida | O `stream` do motor Redshift decide se precisa do `UNLOAD` acima de um limite de linhas ([etapa 5](PLAN-STAGE-5.md)). |
-| `has_schema_privilege` e `svv_table_info` respondem pelo esquema do datashare depois do `USE`. | `probes/redshift.py` (`RS-5`, `RS-8`, `RS-19`) e `test_session_and_named_parameters` (`redshift.has_schema_privilege_create`): a suíte leu `false` em 2026-09-21, uma vez | Onde as tabelas de execução nascem ([etapa 5](PLAN-STAGE-5.md)); [`redshift.md`](redshift.md) diz que a função não prova o privilégio, e o `CREATE` sim. |
-| `schema.elements` do manifesto verboso lista a coluna de partição. | `test_unload_partition_by_and_register` (`redshift.unload.manifest_schema`) | A conferência de `register_files` recebe a lista esperada ([etapa 3](PLAN-STAGE-3.md)). |
-| O `UNLOAD` nomeia os arquivos e recusa um destino que já tem objetos no prefixo. | `test_unload_partition_by_and_register` (`ALLOWOVERWRITE` fora, um segundo `UNLOAD` no mesmo destino) | O destino `<uri>/<execution_id>/` da [etapa 5](PLAN-STAGE-5.md). |
+| `COPY` de Parquet aceita lista de colunas; `FILLRECORD` completa um arquivo anterior a uma coluna nova. | `test_copy_column_list_and_fillrecord`: a lista de colunas carregou 100 linhas com a coluna nova nula, e `FILLRECORD` foi aceito, com a contagem por ler (2026-09-21, 12:08 e 12:10) | [`redshift.md`](redshift.md), "Regras do COPY para Parquet"; a ingestão da [etapa 5](PLAN-STAGE-5.md) e a publicação da [etapa 8](PLAN-STAGE-8.md) escolhem entre lista de colunas e `ALTER TABLE ADD COLUMN`. |
+| `DECIMAL(18, 2)` em `INT64` e `timestamp_ntz` em `INT64` de microssegundos carregam pelo `COPY`. | `test_copy_manifest_from_delta_files`: passou, com a soma e o menor `timestamp` conferidos (2026-09-21) | [`redshift.md`](redshift.md) e a tabela de tipos de [`schema.md`](schema.md). |
+| Uma string acima do `VARCHAR` de destino trunca ou aborta. | `test_copy_varchar_overflow`: aborta, `Spectrum Scan Error` 15007 com o motivo em `sys_load_error_detail` (2026-09-21); `TRUNCATECOLUMNS` é a leitura seguinte | A auditoria de tamanho da [etapa 4](PLAN-STAGE-4.md) é a barreira. |
+| `SUPER` recebe um documento acima de 65.535 bytes pelo `COPY` direto. | `test_super_and_json_parse`: o `INSERT ... JSON_PARSE` de 80.901 bytes passou e o `COPY` de Parquet exige `SERIALIZETOJSON` (2026-09-21); a cláusula e o `COPY ... FORMAT JSON 'auto'` são as leituras seguintes | O caminho `VARCHAR(65535)` mais `JSON_PARSE` da staging fica, com o teto do campo JSON como decisão da [etapa 8](PLAN-STAGE-8.md). |
+| Dois `COPY` e dois `UNLOAD` em conexões distintas correm em paralelo dentro das slots do WLM. | `test_parallel_copy_and_unload_on_two_connections`: 4,5 s e 3,6 s os `COPY`, 1,9 s e 1,5 s os `UNLOAD` (2026-09-21) | `max_workers` de `publish_redshift` na [etapa 6](PLAN-STAGE-6.md). |
+| `fetchmany` lê do socket ou o `execute` materializa o resultado. | O código do driver: `execute` lê cada linha para `cursor._cached_rows` antes de devolver (2026-09-21); `test_cursor_fetchmany_feeds_record_batches` registra o tamanho da fila antes do primeiro `fetchmany` | O `stream` do motor Redshift precisa do `UNLOAD` acima de um limite de linhas ([etapa 5](PLAN-STAGE-5.md)). |
+| Um comando repetido depois de um `TRUNCATE` na mesma conexão passa. | `test_repeated_statement_after_truncate_and_the_driver_cache`: com o cache de prepared statements do driver, o datashare respondeu `34510` nas execuções das 12:08 e das 12:10; sem o cache (`max_prepared_statements=0`), a próxima execução afirma | O `connect` da [etapa 5](PLAN-STAGE-5.md) e [`redshift.md`](redshift.md). |
+| `has_schema_privilege` e `svv_table_info` respondem pelo esquema do datashare depois do `USE`. | `probes/redshift.py` (`RS-5`, `RS-8`, `RS-19`) e `test_session_and_named_parameters` (`redshift.has_schema_privilege_create`): a suíte leu `false` em 2026-09-21, quatro vezes | Onde as tabelas de execução nascem ([etapa 5](PLAN-STAGE-5.md)); [`redshift.md`](redshift.md) diz que a função não prova o privilégio, e o `CREATE` sim. |
+| `schema.elements` do manifesto verboso lista a coluna de partição. | `test_unload_partition_by_and_register` (`redshift.unload.manifest_schema`): lista, nas três execuções que o leram | A conferência de `register_files` recebe a lista esperada ([etapa 3](PLAN-STAGE-3.md)). |
+| O `UNLOAD` nomeia os arquivos e recusa um destino que já tem objetos no prefixo. | `test_unload_partition_by_and_register`: `<coluna>=<valor>/<slice>_part_<nn>.parquet`, com a slice variando entre execuções; o mesmo prefixo e o prefixo pai reprovados, um subprefixo novo aceito (2026-09-21) | O destino `<uri>/<execution_id>/<valor>/` da [etapa 5](PLAN-STAGE-5.md). |
 
 ## Decisões pendentes
 
-- **[decisão] A suíte Redshift roda antes ou depois da etapa 1.** A ordem do trabalho põe as
-  etapas 1 e 2 em pasta local; a suíte depende só do ambiente alvo e pode rodar a qualquer momento.
-  Rodar antes fixa a tabela de tipos de [`schema.md`](schema.md) antes de `cast` ser escrito.
+A suíte Redshift rodou antes da etapa 1, em 2026-09-21, e fixou a tabela de tipos de
+[`schema.md`](schema.md) antes de `cast` ser escrito; a etapa não tem decisão pendente. O que a
+próxima execução lê está em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

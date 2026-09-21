@@ -312,6 +312,12 @@ A new lesson adds its story there and its rule here, in the same commit.
   first `execute` when autocommit is off and leaves it open when autocommit is switched on later; one
   denied system view then aborts every later statement and the cleanup with 25P02. A report that counts
   failures records their messages and creates its own folder (2026-09-21).
+- **A statement repeated on one connection is prepared again after any DDL, and a driver's cache is
+  read in its source before a retry is designed**: `redshift_connector` reuses a named prepared
+  statement per SQL text and clears its cache only on `ALTER`, `CREATE`, `DROP` and `ROLLBACK`; a
+  `TRUNCATE` between the `Parse` and a later `Execute` got 34510 from the datashare in two runs. The
+  suite and the library connect with `max_prepared_statements=0`, and a loop that repeats a statement
+  records each outcome before the next step that can fail (2026-09-21).
 - **A plan revision reads every stage against the decisions memory**: a sentence written before a
   decision survives in another section (the `pc.round` of the initial load, contradicting the
   `Double` decision of 2026-09-20, found only by the full review of 2026-09-21); grep the plan for the
@@ -365,11 +371,16 @@ interpreted in `docs/POC.md`): no proxy, S3 by gateway endpoint, IAM and KMS unr
 and 7.6 GiB; `RS-19` failed on the wrong criterion, `current_database()` does not reflect the `USE`
 (user confirmation), the probe now resolves a two-part name, `RS-5` was read `false` by the suite (`has_schema_privilege`
 does not prove the privilege on the datashare schema; the `CREATE` does), and `RS-8` remains unread.
-The Redshift suite ran twice in the target on 2026-09-21 (10:50: 1 passed, one transaction opened
-before the `USE`, fixed in `tests/conftest.py`; 11:28: 7 passed, the manifest URL's double slash and
-`information_schema` blind to the datashare, fixed in the suite); the two clean runs stage 0 requires
-are still ahead.
+The Redshift suite ran four times in the target on 2026-09-21 (10:50: 1 passed, one transaction
+opened before the `USE`, fixed in `tests/conftest.py`; 11:28: 7 passed, the manifest URL's double
+slash and `information_schema` blind to the datashare, fixed in the suite; 12:08 and 12:10: 10
+passed, the count repeated after a `TRUNCATE` refused with 34510 because of the driver's prepared
+statement cache, now off). The `COPY` questions are answered (types, column list, positional count,
+`VARCHAR` aborts, parallel), the `UNLOAD` destination is checked as a prefix (stage 5 now unloads to
+`<uri>/<execution_id>/<valor>/`), and the next run reads the `FILLRECORD` count, `SUPER` above 65,535
+bytes by `COPY`, `TRUNCATECOLUMNS` and the cache-off confirmation; the two clean runs stage 0
+requires are still ahead.
 
 The client boundary's reference sketches `BatchStream` and `Loader` are in
-`tests/proof_of_concept/test_parallel.py`, and the Redshift `fetchmany` question in
-`docs/OPEN_QUESTIONS.md`.
+`tests/proof_of_concept/test_parallel.py`; the Redshift driver materializes a result in `execute`
+(`docs/redshift.md`), so `stream` bounds memory only through `UNLOAD`.

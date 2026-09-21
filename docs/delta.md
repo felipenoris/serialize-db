@@ -495,8 +495,9 @@ A reconciliação é o comando da biblioteca que substitui a migração: compara
 com `dt.schema()`, aplica o diff aditivo, recusa o destrutivo com a instrução de reescrita, e repete
 o mesmo diff nas tabelas publicadas no Redshift (`ALTER TABLE ADD COLUMN`, que acrescenta no fim, ou
 recriação e recarga). A ordem das colunas no Redshift segue a ordem do esquema Delta, porque o `COPY`
-é posicional; a carga de arquivos anteriores a uma coluna nova depende de `FILLRECORD` ou de lista de
-colunas, pendente da prova de conceito.
+é posicional; a carga de arquivos anteriores a uma coluna nova vai por lista de colunas, confirmada
+no ambiente alvo em 2026-09-21, ou por `FILLRECORD`, aceito e com as linhas por ler
+([redshift.md](redshift.md)).
 
 ## O que substitui o Alembic
 
@@ -886,7 +887,8 @@ COMMIT;
 ```
 
 A tabela de staging existe porque a coluna de partição não está nos arquivos e o `COPY` só lê o
-conteúdo deles; se a lista de colunas no `COPY` de Parquet funcionar (pendente), a staging some. A
+conteúdo deles; a lista de colunas no `COPY` de Parquet funciona (2026-09-21), mas não fornece o
+valor da coluna ausente, então a staging fica. A
 publicação incremental compara as ações `add` da versão publicada com as da atual e recarrega só os
 meses que mudaram, de todas as tabelas da execução numa única transação; a versão publicada de cada
 tabela fica numa tabela de controle
