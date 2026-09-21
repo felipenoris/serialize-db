@@ -42,10 +42,6 @@ foi medido em [`POC.md`](POC.md).
   (`probelib.endpoint_reachable`), que no macOS no mesmo dia baixou de 10,0 s para 2,0 s a espera por
   um endereço sem rota ([`POC.md`](POC.md)). A próxima execução dos probes no alvo diz o que sobra;
   a permissão sobre a raiz fica provada pela primeira escrita.
-- **`Text` no Redshift.** O `sqlalchemy-redshift` compila `Text` como `TEXT`, que o Redshift guarda
-  como `VARCHAR(256)`. A [etapa 1](PLAN-STAGE-1.md) emite `VARCHAR(65535)` por `sql_type`
-  em `ddl`, em vez de exigir `String(65535)` nos modelos; a escolha
-  ainda não foi confirmada pelo usuário.
 - **Barreira por tabela.** Um cliente que dispara `load` numa thread e esquece o `result()` lê o
   estado anterior em silêncio, porque o DuckDB não espera. A guarda: `load` marca a tabela em voo,
   e `query` e `execute` esperam as tabelas em voo que o statement referencia, tiradas por
@@ -64,7 +60,7 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `sql_type`; `String(n)` medido em
+- [Etapa 1](PLAN-STAGE-1.md): `String(n)` medido em
   bytes; a tabela e a coluna sem comentário como violação de `check_models`; no modelo cliente: os
   comprimentos de `String(n)`, a distribuição no
   Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos` para colunas não

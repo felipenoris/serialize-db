@@ -331,6 +331,16 @@ def test_cast_reader_converts_batch_by_batch() -> None:
     assert empty.num_rows == 0 and empty.schema.names == done.schema.names
 
 
+def test_cast_measures_text_against_the_varchar_ceiling() -> None:
+    """Numa coluna `Text`, 65.535 bytes passam e 65.536 são recusados."""
+    accepted = schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65535])), TUDO)
+    assert accepted.column("observacao").to_pylist() == ["x" * 65535]
+    with pytest.raises(ContractError) as error:
+        schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65536])), TUDO)
+    assert "tudo.observacao" in str(error.value)
+    assert "65536" in str(error.value)
+
+
 REFUSED_BATCHES = {
     "nulo em NOT NULL": (batch_of_tudo(id=pa.array([1, None], pa.int64())), "id"),
     "double fora da escala": (batch_of_tudo(valor=pa.array([1.236])), "valor"),

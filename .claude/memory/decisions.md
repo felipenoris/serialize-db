@@ -134,3 +134,13 @@ in the base today, and the user kept them. The user did not take the proposed pr
 tiebreaker. The migration does not freeze the key the way it freezes the types: the Delta log does
 not store it, changing it later reorders the partitions one rewrites, and Redshift has
 `ALTER TABLE ... ALTER COMPOUND SORTKEY`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-7.md`
+
+On 2026-09-21 the user decided how `sa.Text` reaches Redshift, the first of the seven pending
+decisions of stage 1: `sql_type` keeps writing `VARCHAR(65535)`, the engine's ceiling, instead of
+forbidding `Text` and requiring `String(n)` in the models (`sqlalchemy-redshift` would compile
+`TEXT`, which Redshift stores as `VARCHAR(256)`), and `cast` now measures a `Text` column against
+65,535 bytes. A value above it is refused at ingestion by `_refuse_text_above_varchar`, beside
+`_refuse_text_above_length` for `String(n)`; both measure bytes, and without the check the value
+would only abort the publication `COPY` (`Spectrum Scan Error` 15007, read on 2026-09-21), after
+the data was already in the Delta. No column of the client model or of the reference model is
+`Text`: the rule guards future models. `plan/PLAN-STAGE-1.md`, `plan/schema.md`, `docs/index.md`
