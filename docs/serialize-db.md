@@ -155,7 +155,9 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
    `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; os intermediários ficam no
    sandbox, não no Delta.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
-5. `run.publish` reconcilia o esquema, substitui cada partição num commit com
+5. `run.publish` reconcilia o esquema, substitui cada partição num commit (`export_mode`: `register`
+   registra o arquivo do `COPY ... (RETURN_STATS)` depois das conferências da
+   [etapa 3](PLAN-STAGE-3.md), `rewrite` grava pelo `write_deltalake`) com
    `serialize_db_execution_id` e `serialize_db_input_versions`, e avança `versions[table]`. Um
    `CommitFailedError` na mesma partição significa outra execução publicando a mesma tabela, e a
    execução aborta; ela também aborta quando a versão da tabela avançou desde a abertura, para que

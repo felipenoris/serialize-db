@@ -716,10 +716,10 @@ control in SQLAlchemy-reflection form, not Arrow. On 2026-09-20 the user also fi
 target: the library's tables live in `datalake_rw_shared.sbx_aco_decon`, the datashare database, so
 the connection runs `USE` there and the datashare write rules apply; and the Data API is not a connection
 path of the library, only a probe check, a suite test and an example. On 2026-09-21 the user asked
-for a flag on the return from Redshift to Delta: `export_mode="register"` registers the `UNLOAD`
-files after the checks of `docs/PLAN-STAGE-3.md`, `"rewrite"` rereads them through the stage 7
-reader and writes by `write_deltalake`; the `cad_lancamentos` measurement decides the default,
-`"register"` until then.
+for a flag on how a partition an engine wrote enters the Delta, on both engines and the initial
+load: `export_mode="register"` registers the engine's file (`UNLOAD`, DuckDB
+`COPY ... (RETURN_STATS)`) after the checks of `docs/PLAN-STAGE-3.md`, `"rewrite"` writes by
+`write_deltalake`; the `cad_lancamentos` measurement decides the default, `"register"` until then.
 
 ## Naming decisions applied to the documents
 

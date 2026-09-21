@@ -60,9 +60,9 @@ foi medido em [`POC.md`](POC.md).
   execução com uma consulta grande mede a memória ([etapa 5](PLAN-STAGE-5.md)).
 - **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
-  RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)). No
-  Redshift, `export_mode="rewrite"` e `"register"` sobre o mesmo `UNLOAD` medem os dois caminhos da
-  [etapa 5](PLAN-STAGE-5.md), e a medição decide o padrão da flag.
+  RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)). `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
+  (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)), e a medição decide o
+  padrão da flag.
 
 ## O que a documentação oficial do Redshift não responde
 

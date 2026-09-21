@@ -29,17 +29,17 @@ confere contra a seção 3 do relatório.
 
 `cad_lancamentos` tem 2,83 GB em quatro partições, cerca de 35 milhões de linhas e 700 MB de Parquet
 por partição. O `write_deltalake` de um `RecordBatchReader` cresceu com a entrada na medição da
-reescrita (1.140 MB de RSS para 135 MB de Parquet, [`delta.md`](delta.md)), e o `COPY ... RETURN_STATS`
-do DuckDB mais `create_write_transaction` ficou em 600 MB: a partição de `cad_lancamentos` vai pelo
-segundo caminho, e a primeira carga de uma partição real mede os dois antes de fixar o padrão. A
-auditoria de chave estrangeira não é barreira da carga: a base de desenvolvimento tem
-`cad_lancamentos` de `data_base` 2026-01-31 sem `cad_contratos` dessa data e o contrato `desemb-999`
-sem cadastro, inconsistências ignoradas por decisão de 2026-09-20, e o relatório registra os
-órfãos.
+reescrita (1.140 MB de RSS para 135 MB de Parquet, [`delta.md`](delta.md)), e o
+`COPY ... RETURN_STATS` do DuckDB mais `create_write_transaction` ficou em 600 MB: a partição de
+`cad_lancamentos` vai por `export_mode="register"`, e a primeira carga de uma partição real mede os
+dois modos antes de fixar o padrão da flag. A auditoria de chave estrangeira não é barreira da
+carga: a base de desenvolvimento tem `cad_lancamentos` de `data_base` 2026-01-31 sem `cad_contratos`
+dessa data e o contrato `desemb-999` sem cadastro, inconsistências ignoradas por decisão de
+2026-09-20, e o relatório registra os órfãos.
 
 | Primitiva | O que faz |
 | --- | --- |
-| `initial_load(db, table, source, partitions=None)` | `create_table`; descobre as partições da pasta da tabela (`<coluna>=<AAAA-MM-DD>/`, a mesma coluna e o mesmo valor do contrato, ou o arquivo único na raiz da tabela) e, para cada uma, o DuckDB lê `read_parquet('<partição>/*.parquet')`, a pasta inteira e nunca a ordem dos nomes, sem `hive_partitioning` (com ele o DuckDB converte `data_str` a `DATE`), confere que `partition_source` (`data`, ou `data_base`) é igual ao valor do caminho em toda linha e acrescenta a coluna de partição com esse valor. As conversões que a origem exige são aplicadas antes do `cast` e registradas no relatório: as chaves de `int32` a `int64`, sem perda, e o `timestamp` `INT96` de nanossegundos a microssegundos (`coerce_int96_timestamp_unit="us"` no PyArrow; o `TIMESTAMP` do DuckDB já trunca; a precisão perdida não importa, decisão de 2026-09-20). As colunas `double` entram como estão, e a nulidade é a do modelo: um nulo numa coluna `NOT NULL` é recusado pelo `cast`, com a coluna e a partição na mensagem. `cast` converte para o contrato e `publish_partition` grava. Uma carga interrompida recomeça da partição seguinte à última publicada; `partitions` filtra as partições encontradas. As tabelas fora do modelo (`alembic_version`, `meta_update_status`) e o que não é Parquet (`schema.json`) ficam fora da carga e entram no relatório. |
+| `initial_load(db, table, source, partitions=None, mode=None)` | `create_table`; descobre as partições da pasta da tabela (`<coluna>=<AAAA-MM-DD>/`, a mesma coluna e o mesmo valor do contrato, ou o arquivo único na raiz da tabela) e, para cada uma, o DuckDB lê `read_parquet('<partição>/*.parquet')`, a pasta inteira e nunca a ordem dos nomes, sem `hive_partitioning` (com ele o DuckDB converte `data_str` a `DATE`), confere que `partition_source` (`data`, ou `data_base`) é igual ao valor do caminho em toda linha e acrescenta a coluna de partição com esse valor. As conversões que a origem exige são aplicadas antes do `cast` e registradas no relatório: as chaves de `int32` a `int64`, sem perda, e o `timestamp` `INT96` de nanossegundos a microssegundos (`coerce_int96_timestamp_unit="us"` no PyArrow; o `TIMESTAMP` do DuckDB já trunca; a precisão perdida não importa, decisão de 2026-09-20). As colunas `double` entram como estão, e a nulidade é a do modelo: um nulo numa coluna `NOT NULL` é recusado pelo `cast`, com a coluna e a partição na mensagem. `cast` converte para o contrato e `mode`, a flag `export_mode` da [etapa 6](PLAN-STAGE-6.md), decide a gravação: `rewrite` grava por `publish_partition`; `register` roda `COPY (<a mesma consulta>) TO '<uri>/<coluna>=<valor>/<nome único>.parquet' (FORMAT parquet, RETURN_STATS)` e registra por `register_files`, com as conferências da [etapa 3](PLAN-STAGE-3.md). Uma carga interrompida recomeça da partição seguinte à última publicada; `partitions` filtra as partições encontradas. As tabelas fora do modelo (`alembic_version`, `meta_update_status`) e o que não é Parquet (`schema.json`) ficam fora da carga e entram no relatório. |
 | `load_report(db, table, source)` | Contagem e somas por partição, na origem e no Delta: as colunas `double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem e os valores são os mesmos dos dois lados; as `Numeric`, quando existirem, como estão. A carga só termina quando coincidem. |
 | `serialize-db load` | `--table`, `--source` e `--partitions`. |
 
@@ -49,7 +49,8 @@ e não os tipos (`INT96`, chaves em `int32`), e ele não é o caminho.
 Depois da carga os leitores abrem o Delta, e as pastas de origem ficam como cópia até a primeira
 publicação no Redshift. Testes: `tests/test_load.py` sobre a base fictícia de
 `tests/source_db_projetado.py`, gravada sob a raiz local, incluindo a carga interrompida, as chaves
-em `int64`, o `timestamp` truncado, o relatório de contagens e somas e as tabelas puladas. Provas
+em `int64`, o `timestamp` truncado, os dois modos com as mesmas contagens e somas, o relatório de
+contagens e somas e as tabelas puladas. Provas
 de conceito:
 `test_deltalake.py::test_initial_load_from_parquet_folders` (o cast na consulta do DuckDB, o mês
 por `overwrite` com predicado, a retomada pelos meses já presentes e o relatório de contagens e
