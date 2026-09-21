@@ -1057,3 +1057,54 @@ o `__all__`; sem `__all__`, o `pdoc` mostraria todo nome sem prefixo. As página
 2026-09-21 trazem os quinze nomes do `__all__` de `serialize_db.schema`, o `main` de
 `serialize_db.cli` e o `ContractError` de `serialize_db.errors`.
 
+
+## O que a pasta preparada mostrou na migração adiantada
+
+Em 2026-09-21, no laboratório (macOS arm64) sobre a pasta preparada por `prepare_offline.sh`
+(Python 3.13.15 em `.python/`, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, SQLAlchemy 2.0.54 e
+pandas 3.0.6 no `.venv/`, as extensões em `.duckdb/v1.5.5/osx_arm64/`), num ambiente despido:
+`env -i`, `HOME` numa pasta vazia, `HTTP_PROXY`, `HTTPS_PROXY` e as duas grafias minúsculas
+apontadas para `127.0.0.1:1`, porta fechada, e só `.venv/bin/python`:
+
+- `tests/test_migrate_parquet_to_delta.py`: 16 passados em 0,95 s com
+  `SERIALIZE_DB_TEST_LOCAL_ROOT` na pasta da sessão; sem a variável, 16 pulados.
+- O comando do [`README.md`](../README.md) sobre a base fictícia (`PYTHONPATH=tests`,
+  `--metadata client_model:Base.metadata`, origem e raiz em pasta local) saiu com 0, cada tabela
+  com as partições conferidas e as conversões `int32 -> int64` no relatório.
+- `LOAD delta`, `LOAD httpfs` e `LOAD aws` com `autoinstall_known_extensions` e
+  `autoload_known_extensions` em `false`: as três carregaram de `.duckdb/v1.5.5/osx_arm64/`, sem
+  tentativa de download. A extensão `delta` é carregada em toda execução, porque o relatório lê a
+  raiz por `delta_scan`.
+- `CREATE SECRET migracao (TYPE s3, PROVIDER credential_chain, REGION 'us-east-1')` reprovou com
+  `Secret Validation Failure: during 'create' using the following: Credential Chain: 'config'`: a
+  cadeia sem credencial alguma no ambiente despido, não extensão faltando. O secret só nasce
+  quando a origem ou a raiz é `s3://`.
+
+**Consequência**: `prepare_offline.sh` baixa tudo o que `scripts/migrate_parquet_to_delta.py`
+precisa — o Python de `.python-version`, o `duckdb` do grupo `dev`, o `deltalake`, o `pyarrow` e o
+`sqlalchemy` das dependências de execução, pelo `uv sync --all-groups`, e as extensões `delta`,
+`httpfs` e `aws`. O que o script ainda exige no alvo não é download: as credenciais da AWS que a
+`credential_chain` encontra, `AWS_REGION` ou `AWS_DEFAULT_REGION`, o `PYTHONPATH=tests` do modelo
+cliente (que vem no `tar` do repositório, não do script) e a preparação em Linux x86_64, porque as
+extensões são por versão do DuckDB e por plataforma.
+
+### Origem e destino, pasta ou `s3://`, nas quatro combinações
+
+`open_location` decide pelo `://`: `pafs.FileSystem.from_uri` ou a pasta local resolvida, e o resto
+do script só conhece `Location` — a URI que o DuckDB e o delta-rs recebem, o sistema de arquivos do
+PyArrow que lista e o caminho na forma dele. `pq.ParquetFile` recebe o sistema de arquivos da
+`Location`, e o caminho que entra no log é relativo à pasta da tabela
+(`<coluna>=<valor>/carga_inicial_<uuid>.parquet`), o que mantém a tabela realocável. `uses_s3` é a
+disjunção das duas raízes: basta uma ser `s3://` para o DuckDB carregar `httpfs` e `aws`, criar o
+secret e o delta-rs receber `AWS_REGION`. Numa raiz local com origem no S3, o delta-rs recebe
+`storage_options={"AWS_REGION": ...}` numa pasta, e a opção é inócua: medido no mesmo dia e
+ambiente, `DeltaTable.create` em 0,00 s, `write_deltalake` em 0,13 s e a leitura das duas linhas.
+Locais por construção ficam só `ensure_folder`, que não tem pasta a criar no S3, e o `--report`,
+que grava o JSON num arquivo local.
+
+Nenhuma execução exercitou o ramo S3 do script: `tests/test_migrate_parquet_to_delta.py` é `local`
+inteiro. Do caminho, o ambiente alvo já mostrou a leitura da base de produção por
+`probes/parquet_source.py` em 2026-09-21, que abre a origem com o mesmo
+`pafs.FileSystem.from_uri`; o `COPY ... TO 's3://...' (RETURN_STATS)`, o `create_write_transaction`
+sobre a raiz S3 e o `delta_scan` dela esperam a execução no alvo
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), etapa 7).
