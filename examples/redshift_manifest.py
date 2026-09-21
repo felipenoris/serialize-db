@@ -34,8 +34,9 @@ O que o script escreve: duas tabelas no esquema do projeto, apagadas no fim, e o
 ``S3_WORK/<identificador da execução>/``, que ficam para inspeção — o endereço sai impresso no
 fim, com o comando que os apaga. Nada é escrito na base de origem, que é lida.
 
+Todo comando SQL é ecoado antes de ser submetido, por ``execute``, a única porta para o cursor.
 O texto do ``COPY`` e do ``UNLOAD`` carrega ``ACCESS_KEY_ID``, ``SECRET_ACCESS_KEY`` e
-``SESSION_TOKEN``: **ele nunca é impresso nem gravado**. O que sai no terminal é a versão mascarada.
+``SESSION_TOKEN``: **ele nunca é impresso nem gravado**, e o eco desses dois é a versão mascarada.
 
 Precisa de ``deltalake`` e ``pyarrow`` além de ``boto3`` e ``redshift_connector``, então roda com o
 interpretador da pasta preparada:
@@ -151,7 +152,11 @@ def credentials_clause() -> str:
 
 
 def execute(cursor, sql: str) -> list[tuple]:
-    """Roda o comando, ecoa a versão mascarada e devolve as linhas, ou uma lista vazia."""
+    """Ecoa o comando, roda e devolve as linhas, ou uma lista vazia.
+
+    Todo SQL do script passa por aqui, e o eco vem antes do ``cursor.execute``: o que o terminal
+    mostra é o que foi submetido, mesmo quando o comando falha. O texto sai por ``mask``.
+    """
     print(f"\n$ {mask(sql).strip()}")
     started = time.perf_counter()
     cursor.execute(sql)
@@ -283,13 +288,14 @@ try:
             print("   é a questão em aberto; a alternativa da etapa 5 é um UNLOAD por partição")
             unloaded = False
 finally:
-    # A limpeza nunca esconde o erro que trouxe o script até aqui, e um comando por execute: num
-    # datashare, um comando múltiplo fora de um bloco de transação não é aceito.
+    # A limpeza nunca esconde o erro que trouxe o script até aqui, e passa por `execute` como o
+    # resto, um comando por chamada: num datashare, um comando múltiplo fora de um bloco de
+    # transação não é aceito.
     try:
         with connection.cursor() as cursor:
-            cursor.execute(f"USE {DB_SHARE};")
+            execute(cursor, f"USE {DB_SHARE};")
             for name in (staging_table, target_table):
-                cursor.execute(f"DROP TABLE IF EXISTS {SCHEMA}.{name};")
+                execute(cursor, f"DROP TABLE IF EXISTS {SCHEMA}.{name};")
         print(f"\n   tabelas apagadas: {staging_table}, {target_table}")
     except Exception as error:  # noqa: BLE001 - a limpeza falhada é aviso, não o resultado
         print(f"!! limpeza falhou, apague à mão {SCHEMA}.{staging_table} e {SCHEMA}.{target_table}: {error}")
