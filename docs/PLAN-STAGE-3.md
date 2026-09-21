@@ -24,10 +24,10 @@ de um motor.
 | --- | --- |
 | `create_table(uri, table)` | `DeltaTable.create(mode="ignore")` com `delta_schema`, `partition_by`, nome, descrição e as propriedades `delta.logRetentionDuration = interval 3650 days` e `delta.deletedFileRetentionDuration = interval 400 days`; sem vetores de exclusão nem column mapping. |
 | `open(uri, version=None)` | A `DeltaTable` numa versão; a execução abre cada tabela uma vez e guarda a versão. |
-| `max_key(dt, column)` | O maior valor de `column` na versão carregada: o máximo de `max.<coluna>` de `get_add_actions(flatten=True)`, sem ler dados, ou a varredura da coluna quando um arquivo não tem a estatística; 0 na tabela vazia. O início de `run.next_ids`. |
+| `max_key(dt, column)` | O maior valor de `column` na versão carregada: o máximo de `max.<coluna>` de `get_add_actions(flatten=True)`, sem ler dados, ou a varredura da coluna quando um arquivo não tem a estatística; 0 na tabela vazia. O início de `run.next_ids`, e por isso a estatística registrada é verdadeira ou omitida (seção "As conferências do registro de arquivos"): a omitida cai na varredura, a falsa daria chaves repetidas. |
 | `commit_metadata(execution_id, input_versions, snapshot=None)` | O dicionário de `CommitProperties(custom_metadata=...)`: `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`. |
 | `publish_partition(uri, value, data, metadata)` | `write_deltalake(mode="overwrite", predicate="<coluna de partição> = '<valor>'")` de `data` já passado por `cast`; `value=None` numa tabela sem partição substitui a tabela inteira; `CommitFailedError` sobe como `ExecutionConflict`. |
-| `register_files(uri, files, partitions, metadata)` | `create_write_transaction(mode="overwrite", partition_filters=...)` com uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. Os arquivos do `UNLOAD` do Redshift têm mínimo e máximo, menos nas colunas de timestamp, que saem em `INT96` e não carregam estatística: a coluna fica fora de `minValues` e `maxValues` sem falhar o registro ([`redshift.md`](redshift.md)). |
+| `register_files(uri, files, partitions, metadata, expected_rows=None)` | Arquivos que outro escritor gravou dentro da pasta da tabela entram no log por `create_write_transaction(mode="overwrite", partition_filters=...)`, uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. O `create_write_transaction` grava a ação como a recebe, e os leitores obedecem à ação, não ao arquivo ([`POC.md`](POC.md)); a primitiva faz as conferências da seção "As conferências do registro de arquivos" antes do commit e a releitura depois dele. Os arquivos do `UNLOAD` do Redshift têm mínimo e máximo, menos nas colunas de timestamp, que saem em `INT96` e não carregam estatística: a coluna fica fora de `minValues` e `maxValues` sem falhar o registro ([`redshift.md`](redshift.md)). |
 | `schema_diff(table, dt)` | O `SchemaDiff` entre `arrow_schema(table)` e `dt.schema()`: coluna nova anulável, `NOT NULL` relaxado e `CHECK` são aditivos; coluna `NOT NULL` nova em tabela com dados, renomeação, remoção e mudança de tipo são destrutivos. |
 | `reconcile(uri, table)` | Aplica o diff aditivo (`add_columns`, `drop_column_not_null`, `add_constraint`) e recusa o destrutivo com a mensagem que aponta `rewrite`. |
 | `rewrite(uri, table)` | A tabela inteira com o esquema do contrato num único commit e sem predicado: `COPY ... PARTITION_BY (<coluna de partição>) ... RETURN_STATS` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. A conexão DuckDB é aberta aqui e configurada por `storage.duckdb_setup`, sem o motor da [etapa 4](PLAN-STAGE-4.md): `delta` não depende de `engine`. |
@@ -35,9 +35,40 @@ de um motor.
 | `version_diff(uri, published, current)` | As partições com ações `add` entre as duas versões. |
 | `snapshot(root, name, versions)` | A entrada `{name: versions}` em `_serialize_db/snapshots.json`, gravada com `write_text(if_match=...)`. |
 | `vacuum_keeping_snapshots(uri, control, retention_hours=9600, apply=False)` | `vacuum` com `keep_versions` das versões do arquivo de controle; lista por padrão e apaga com `apply=True`. |
-| `compact(uri, partitions)` | `optimize.compact` das partições com arquivos pequenos, antes de um snapshot. |
+| `compact(uri, partitions)` | `optimize.compact` das partições com arquivos pequenos, antes de um snapshot. A reescrita sai pelo escritor do delta-rs: os arquivos do `UNLOAD` que ela junta perdem o `INT96` e o `FIXED_LEN_BYTE_ARRAY` e ganham estatística em toda coluna (`test_deltalake.py::test_compact_rewrites_files_from_another_writer`). |
 | `deep_copy(uri, version, destination)` | Tabela nova na versão 0 com os dados de uma versão, para a pasta de arquivo. |
 | `export_snapshot(uri, destination, version=None, mode="copy")` | Pastas `<coluna de partição>=<valor>/` sem o log: `copy` copia os arquivos que o log lista; `rewrite` reescreve pelo `COPY` particionado do DuckDB. |
+
+## As conferências do registro de arquivos
+
+`create_write_transaction` grava a ação como a recebe, e a sondagem de 2026-09-21 ([`POC.md`](POC.md),
+`test_deltalake.py::test_create_write_transaction_trusts_path_and_stats` e
+`::test_create_write_transaction_trusts_file_schema`) mostrou o que cada campo errado faz: um
+caminho inexistente commita, e toda leitura que toca a partição falha até um `restore`; uma
+estatística falsa faz o delta-rs, o `delta_scan` e o DataFusion podarem o arquivo que tem as linhas
+e devolverem zero sem erro, o `numRecords` falso vira o `count(*)` do DataFusion, e o `max.<coluna>`
+falso viraria o `max_key` de `next_ids`; um arquivo sem uma coluna `NOT NULL` commita e lê nulo nos
+dois leitores, o que o `write_deltalake` recusa; um valor que não converte para o tipo da coluna
+commita e falha quando a coluna é lida. `register_files` repõe a conferência antes do commit, só com
+o rodapé de cada arquivo, um GET por arquivo:
+
+1. O arquivo existe em `uri/path`, o caminho que o leitor resolve, com o tamanho da ação.
+2. O esquema do rodapé contra o da tabela, nome a nome: nenhuma coluna do contrato ausente, e o tipo
+   físico entre os admitidos para o lógico (`INT96` e `timestamp[ns]` para `timestamp_ntz`,
+   `FIXED_LEN_BYTE_ARRAY` e `INT64` para `decimal`, `int32` para `long`); uma coluna a mais passa,
+   porque os leitores a ignoram.
+3. O valor de partição do caminho Hive igual ao de `partitions`.
+4. A soma de `num_records` dos rodapés igual à que `files` declara e a `expected_rows`, quando o
+   chamador tem a contagem da fonte.
+5. `numRecords` do rodapé; `minValues` e `maxValues` só das colunas cujo tipo tem a transcrição
+   coberta por um teste com valor adversarial, omitidos nas demais e nas que o rodapé não traz: uma
+   estatística ausente só deixa de podar, uma errada poda o arquivo certo.
+
+A reprovação recusa o commit com o arquivo e a conferência na mensagem, e os arquivos ficam órfãos na
+pasta até `vacuum(full=True)`. Depois do commit, `read_back(uri, partitions, expected)` lê a versão
+nova pelo delta-rs e pelo `delta_scan`, `count(*)` e mínimo e máximo da chave por partição, e uma
+diferença chama `restore(version - 1)` e sobe a mesma exceção. Uma versão entra num snapshot ou em
+`publish_redshift` só depois da releitura.
 
 Testes: `tests/test_storage.py` e `tests/test_delta.py` sob a raiz local, com os mesmos casos no
 bucket por `-m s3`: substituição da partição e idempotência, conflito entre dois escritores,
@@ -49,7 +80,9 @@ condicional do arquivo de controle. Provas de conceito: `test_stdlib.py` (`test_
 `test_boto3_list_copy_delete`, `test_delta_rs_storage_options_fallback`), `test_local.py`
 (`test_commit_is_atomic_on_disk`, `test_folder_relocates`) e `test_deltalake.py` inteiro: criação
 idempotente, predicado e nulidade, evolução com `drop_column_not_null` (recebe o nome da coluna),
-`restore`, `AddAction`, `vacuum`, `version_diff`, compactação e checkpoint, exportação por cópia e a
+`restore`, `AddAction`, o que `create_write_transaction` não confere (caminho, estatística, esquema
+do arquivo) e o `overwrite` com `partition_filters`, a compactação que normaliza arquivos de outro
+escritor, `vacuum`, `version_diff`, compactação e checkpoint, exportação por cópia e a
 reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do DuckDB registrada num
 commit `overwrite` com esquema novo e estatísticas tipadas, que o DuckDB usa para podar;
 `test_parallel.py` (quatro tabelas lidas em paralelo, escritas em paralelo por tabela e por mês da

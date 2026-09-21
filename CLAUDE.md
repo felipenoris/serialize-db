@@ -167,7 +167,7 @@ research appends to the matching group.
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. Its header is the operating procedure: how to run it, the proxy variables and the pack and unpack commands. The extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`, the probes' own function, because DuckDB refuses an address with the credentials inside it. |
 | `examples/` | The scripts the user ran in the target, kept as run: `redshift_native.py` (`GetWorkgroup` for the endpoint, `GetCredentials` for a temporary user and password, `redshift_connector.connect`), `redshift_data_api.py` (the async Data API cycle) and `redshift_copy_unload.py` (`USE` into the datashare database, `CREATE TABLE`, `COPY` of a Parquet prefix and `UNLOAD`, all with the caller's credentials in the statement text). They fix the target: region `sa-east-1`, workgroup `controladoria-wg`, connection database `dev`, schema `sbx_aco_decon` in the datashare database `datalake_rw_shared`, which the session enters with `USE`. `redshift_manifest.py` ran on 2026-09-21: a `cad_contratos` partition converted to Delta, then `COPY ... MANIFEST` and `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` on a datashare table, the prerequisites of `export_partition`, both accepted. The probe, the suite and stage 5 repeat what ran. |
 | `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure — `space.py` (the space: credentials and expiry, region, connections, network, the machine, the `~/shared` mount, the pinned versions, DuckDB extensions), `bucket.py` (the S3 root: settings, lifecycle, inventory, the role's permissions, versioning, KMS, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict, own format; DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection parsed as a dict; the connection repeats `examples/redshift_native.py`, a given user/password pair the only alternative; `RS-1` to `RS-19`, from the configuration to the IAM simulation of the identity the library sends to S3, with the session readings before the `USE` into the datashare database, checked by `current_database()` as `RS-19`, and the schema readings after it), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables) and `parquet_source.py` (the initial load's source base, one folder per table, everything read from the footers and the divergent files named; `--sample N` reads what the footer does not hold, and without it no data page is read). Over `probelib.py`: DNS, TCP and internet results are readings, never failed calls, and a failed call leaves `report.last_reason` for the check that interprets it; `duckdb_proxy` splits the proxy address from the credentials for every DuckDB session (`prepare_offline.sh` uses it too) and `hide_credentials` keeps the embedded password out of a report meant to be pasted into the conversation; the probes import `sagemaker-studio` from the system interpreter (see the unpinned-packages lesson); `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
-| `docs/readings/` | The probe reports backing a statement in `docs/POC.md`, kept as they came out, indexed by `docs/readings/README.md`: the target Redshift readings of 2026-09-20. `probes/output/` stays out of git. |
+| `docs/readings/` | The probe reports backing a statement in `docs/POC.md`, kept as they came out, indexed by `docs/readings/README.md`: the target Redshift readings of 2026-09-20. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -359,6 +359,13 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   contract until a ten-line probe registered such a file in a `timestamp_ntz` table and both
   readers returned `timestamp[us]` intact: a scare became one recorded cost, the statistics the
   `INT96` does not carry.
+- **A trust-the-caller API is probed field by field before its guards are designed** (2026-09-21).
+  The critique of `create_write_transaction` was reasoned; the probe that registered one wrong
+  field per table found what the reasoning missed: a file without a `NOT NULL` column reads null in
+  both readers, a castable type mismatch is cast at read, DataFusion answers `count(*)` from
+  `numRecords`, and the reader trusts even `size`. Register one wrong field at a time, read through
+  every reader the pipeline uses, and put the cases in the study suite before the check enters the
+  plan.
 
 ## What the documents establish
 
@@ -418,8 +425,14 @@ Each fact is detailed in the file named at the end of its line.
   a SQLite catalog on S3 is unsupported by design; without PostgreSQL the model is one writer at a
   time, with the catalog file moved by the library. `docs/estrategia.md`
 - `DeltaTable.create_write_transaction` with `AddAction` registers Parquet files written by others
-  (the `UNLOAD` path); `ducklake_add_data_files` does the same for DuckLake but failed on a table
-  partitioned by `year()`/`month()`. `docs/estrategia.md`
+  (the `UNLOAD` path) and checks nothing (2026-09-21): a missing path, false statistics and a file
+  without a `NOT NULL` column all commit, and the readers obey the action: false min/max make
+  delta-rs, `delta_scan` and DataFusion prune the file that holds the rows, a false `numRecords` is
+  DataFusion's `count(*)`, the missing column reads null where `write_deltalake` refuses, a value
+  that does not cast fails only when its column is read, and `optimize.compact` rewrites registered
+  `INT96`/`FIXED_LEN_BYTE_ARRAY` files as `INT64` with statistics. `ducklake_add_data_files` does
+  the same registration for DuckLake but failed on a table partitioned by `year()`/`month()`.
+  `docs/POC.md`, `docs/estrategia.md`
 - SQLGlot transpiles function names and syntax between DuckDB and Redshift but passes through
   constructs the target lacks (`INSERT ... BY NAME`, `list_aggregate`) and turned DuckDB
   `VARCHAR(200)` into Redshift `VARCHAR(MAX)`; Redshift integration tests remain necessary.
@@ -702,7 +715,11 @@ problematic; the dev base's orphans are ignored and the test base is consistent,
 control in SQLAlchemy-reflection form, not Arrow. On 2026-09-20 the user also fixed the Redshift
 target: the library's tables live in `datalake_rw_shared.sbx_aco_decon`, the datashare database, so
 the connection runs `USE` there and the datashare write rules apply; and the Data API is not a connection
-path of the library, only a probe check, a suite test and an example.
+path of the library, only a probe check, a suite test and an example. On 2026-09-21 the user asked
+for a flag on the return from Redshift to Delta: `export_mode="register"` registers the `UNLOAD`
+files after the checks of `docs/PLAN-STAGE-3.md`, `"rewrite"` rereads them through the stage 7
+reader and writes by `write_deltalake`; the `cad_lancamentos` measurement decides the default,
+`"register"` until then.
 
 ## Naming decisions applied to the documents
 
@@ -731,26 +748,18 @@ table names (`staging_<tabela>`) count as database identifiers.
 
 ## Where the work stands
 
-The decisions, the table of stages and the order of work are in `docs/PLAN.md` (pt-BR), the
-primitives of each stage in `docs/PLAN-STAGE-<n>.md`, and where the implementation stands in
-`docs/CURRENT_STATE.md` (2026-09-20), beside `docs/POC.md` and `docs/OPEN_QUESTIONS.md`; read
-them before planning a session. The next session starts stage 1 (`serialize_db.schema`) and
-stage 2 (`serialize_db.sql`) on local folders. The source base was read on 2026-09-20:
-`docs/POC.md` holds the reading, `docs/PLAN-STAGE-7.md` the layout the load reads (Hive by
-`data_str` and `data_base_str`, `chunk_<n>` files, `INT96` timestamps), and the premises of
-`docs/PLAN.md` the user's decisions of that day; the plan's unit is the partition
-(`publish_partition`, `partitions=`, `Execution(partition=...)`), never the month. The Redshift
-connectivity was fixed on 2026-09-20 and 2026-09-21 from the scripts the user ran in the target
-(`examples/`): the probe, `tests/conftest.py` and the Redshift suite follow them, and `docs/PLAN-STAGE-5.md` and
-`docs/PLAN-STAGE-8.md` carry the consequences. The next `probes/redshift.py` run in the target checks
-the `USE` (`RS-19`) and what `has_schema_privilege` answers after it (`docs/OPEN_QUESTIONS.md`).
+Read `docs/PLAN.md`, the stage files, `docs/CURRENT_STATE.md`, `docs/POC.md` and
+`docs/OPEN_QUESTIONS.md` before planning a session. The next session starts stage 1
+(`serialize_db.schema`) and stage 2 (`serialize_db.sql`) on local folders. The plan's unit is the
+partition (`publish_partition`, `partitions=`, `Execution(partition=...)`), never the month. The
+probe, `tests/conftest.py` and the Redshift suite follow the scripts in `examples/`, and
+`docs/PLAN-STAGE-5.md` and `docs/PLAN-STAGE-8.md` carry their consequences. The next
+`probes/redshift.py` run in the target checks the `USE` (`RS-19`) and what `has_schema_privilege`
+answers after it (`docs/OPEN_QUESTIONS.md`).
 
-The client boundary was revised on 2026-09-20 to streaming `pa.RecordBatch` (`stream` with a
-prefetch thread on its own cursor, `loader` with a write-behind thread inserting batch by batch in
-one transaction), with `pa.Table` as the convenience; the measurements and the hazards are in
-`docs/PLAN.md`, section "A troca de dados com o código cliente", and `docs/POC.md`, the reference
-sketches `BatchStream` and `Loader` in `tests/proof_of_concept/test_parallel.py`, and the Redshift
-`fetchmany` question in `docs/OPEN_QUESTIONS.md`.
+The client boundary's reference sketches `BatchStream` and `Loader` are in
+`tests/proof_of_concept/test_parallel.py`, and the Redshift `fetchmany` question in
+`docs/OPEN_QUESTIONS.md`.
 
 Every Python block in `docs/` ran in the session scratchpad through `uv run --no-project
 --python 3.13 --with "deltalake==1.6.4" --with "duckdb==1.5.5" --with "pyarrow==25.0.1" ...`; the
@@ -784,19 +793,13 @@ and an empty `HOME`, 10 passed; on macOS after the glob fix of PR #12). `uv sync
 
 ## Environment of the measurements
 
-The examples in `docs/parquet.md`, `docs/duckdb.md` and `docs/sqlalchemy.md` ran on 2026-09-18 with
-Python 3.13, DuckDB 1.5.5, PyArrow 25.0.1, pandas 3.0.6, polars 1.44.2, SQLAlchemy 2.0.54,
-duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 and redshift_connector 2.1.16, on a sample of
-300,000 rows of `operacoes` (`poc_delta.sample_table`); the Redshift statements were compiled only. The S3 proof of concept of 2026-09-19 in
-the space (Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, `NO_PROXY="$no_proxy"`
-exported) is recorded in
-`docs/POC.md`. The local proof of concept in `docs/estrategia.md` ran on
-2026-09-19 on macOS arm64 with Python 3.13, deltalake 1.6.4, DuckDB 1.5.5 with the `delta`,
-`ducklake` and `iceberg` extensions (ducklake `d8a1881e`, metadata version 1.0), PyIceberg 0.12.0
-with the `sql-sqlite` and `pyiceberg-core` extras, PyArrow 25.0.1 and SQLGlot 30.18.0, through
-`uv run --with` in the scratchpad, with 11 DuckDB threads and the files in the page cache; nothing
-ran against S3 or Redshift, and the Python examples added to every document on 2026-09-19 ran under
-the same pinned versions.
+Each document dates its measurements and pins their versions in its opening lines: `docs/parquet.md`,
+`docs/duckdb.md` and `docs/sqlalchemy.md` on 2026-09-18, over 300,000 rows of `operacoes`
+(`poc_delta.sample_table`), the Redshift statements compiled only; `docs/estrategia.md` on 2026-09-19;
+the S3 proof of concept of 2026-09-19 (Python 3.13.15) in `docs/POC.md`. What they do not say: the
+local proof of concept ran on macOS arm64 through `uv run --with` in the scratchpad, with 11 DuckDB
+threads and the files in the page cache, nothing against S3 or Redshift; the Python examples added
+to every document on 2026-09-19 ran under the same pinned versions.
 
 ## The SageMaker Unified Studio environment, as observed on 2026-09-19
 
@@ -824,8 +827,3 @@ the same pinned versions.
   `docs/POC.md`, which also holds the lab-only readings (IMDS, the `~/shared` mount, Athena, the
   container credential's lifetime). This lab is not the target: the target has Redshift and no
   internet (user statement of 2026-09-20).
-## Questions the official documentation does not answer
-
-`docs/OPEN_QUESTIONS.md` holds them and `docs/PLAN-STAGE-0.md` groups them by command; all need
-the Redshift connection, and `tests/proof_of_concept/test_redshift.py` holds one test per
-question. The S3 ones were answered on 2026-09-19.

@@ -21,12 +21,13 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
-from deltalake import CommitProperties, DeltaTable, Schema, write_deltalake
+from deltalake import CommitProperties, DeltaTable, QueryBuilder, Schema, write_deltalake
 from deltalake.exceptions import DeltaError, SchemaMismatchError
 from deltalake.schema import Field, PrimitiveType
 from deltalake.transaction import AddAction
@@ -492,3 +493,143 @@ def test_initial_load_from_parquet_folders(folder: Callable[[str], str], two_mon
     assert con.execute(report).fetchall() == con.execute(loaded).fetchall()
     assert pa.schema(DeltaTable(uri).schema()).field("valor").type == pa.decimal128(18, 2)
     con.close()
+
+
+def test_create_write_transaction_trusts_path_and_stats(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """``create_write_transaction`` não confere a ação: um caminho inexistente e uma estatística falsa commitam, e os leitores obedecem à ação."""
+    uri = folder("trusts_action")
+    write_deltalake(uri, two_months, mode="append", partition_by=["mes"])
+    con = connect_duckdb(("delta",))
+
+    # Um arquivo que não existe entra no log; só a leitura que toca a partição dele falha, e o restore desfaz.
+    missing = AddAction(path="mes=2026-03/nada.parquet", size=1, partition_values={"mes": "2026-03"}, modification_time=1, data_change=True, stats=json.dumps({"numRecords": 1}))
+    DeltaTable(uri).create_write_transaction([missing], mode="append", schema=DeltaTable(uri).schema(), partition_by=["mes"])
+    assert DeltaTable(uri).version() == 1
+    assert DeltaTable(uri).to_pyarrow_table(filters=[("mes", "=", MONTHS[0])]).num_rows == 500
+    with pytest.raises((FileNotFoundError, pa.ArrowInvalid)):  # o leitor confia até no size da ação: 1 byte declarado dá o erro do rodapé
+        DeltaTable(uri).to_pyarrow_table()
+    assert con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE mes = '{MONTHS[0]}'").fetchone()[0] == 500
+    with pytest.raises(duckdb.IOException):
+        con.execute(f"SELECT count(*) FROM delta_scan('{uri}')").fetchone()
+    DeltaTable(uri).restore(0)
+    assert DeltaTable(uri).version() == 2 and DeltaTable(uri).to_pyarrow_table().num_rows == 1000
+
+    # Dez linhas com id_operacao de 160000 a 160009, registradas com mínimo, máximo e numRecords falsos.
+    file = Path(uri) / f"mes={MONTHS[1]}" / "externo.parquet"
+    pq.write_table(sample_table().slice(160_000, 10).drop_columns(["mes"]), file)
+    lying = AddAction(
+        path=f"mes={MONTHS[1]}/externo.parquet",
+        size=file.stat().st_size,
+        partition_values={"mes": MONTHS[1]},
+        modification_time=int(time.time() * 1000),
+        data_change=True,
+        stats=json.dumps({"numRecords": 999, "minValues": {"id_operacao": 900_000}, "maxValues": {"id_operacao": 900_010}, "nullCount": {"id_operacao": 0}}),
+    )
+    DeltaTable(uri).create_write_transaction([lying], mode="append", schema=DeltaTable(uri).schema(), partition_by=["mes"])
+
+    # Os três leitores podam pela estatística da ação e devolvem zero linhas para dez que existem; sem filtro, leem as 1.010.
+    where = "id_operacao BETWEEN 160000 AND 160009"
+    assert DeltaTable(uri).to_pyarrow_table().num_rows == 1010
+    assert DeltaTable(uri).to_pyarrow_table(filters=[("id_operacao", ">=", 160_000), ("id_operacao", "<=", 160_009)]).num_rows == 0
+    assert con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE {where}").fetchone()[0] == 0
+    plan = con.execute(f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}') WHERE {where}").fetchone()[1]
+    assert re.search(r"Scanning Files: 0/3", plan), plan
+    query = QueryBuilder()
+    query.register("t", DeltaTable(uri))
+    assert pa.table(query.execute(f"SELECT count(*) AS n FROM t WHERE {where}").read_all()).to_pylist() == [{"n": 0}]
+
+    # O numRecords falso vira o count(*) do DataFusion, e o máximo falso vira o max.<coluna> que max_key leria.
+    assert pa.table(query.execute("SELECT count(*) AS n FROM t").read_all()).to_pylist() == [{"n": 1999}]
+    actions = DeltaTable(uri).get_add_actions(flatten=True)
+    assert max(actions.column("max.id_operacao").to_pylist()) == 900_010
+    assert sum(actions.column("num_records").to_pylist()) == 1999
+    con.close()
+
+
+def test_create_write_transaction_trusts_file_schema(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """Um arquivo sem uma coluna ``NOT NULL`` ou com um tipo incompatível commita; a coluna lê nulo, o tipo falha na leitura."""
+    uri = folder("trusts_schema")
+    not_null = pa.schema([field.with_nullable(False) for field in two_months.schema])
+    DeltaTable.create(uri, Schema.from_arrow(not_null), partition_by=["mes"])
+    write_deltalake(uri, two_months.cast(not_null), mode="append")
+    con = connect_duckdb(("delta",))
+    ten = sample_table().slice(160_000, 10).drop_columns(["mes"])
+
+    def register(month: str, name: str, data: pa.Table) -> None:
+        folder_ = Path(uri) / f"mes={month}"
+        folder_.mkdir(exist_ok=True)
+        pq.write_table(data, folder_ / name)
+        action = AddAction(
+            path=f"mes={month}/{name}",
+            size=(folder_ / name).stat().st_size,
+            partition_values={"mes": month},
+            modification_time=int(time.time() * 1000),
+            data_change=True,
+            stats=json.dumps({"numRecords": data.num_rows, "minValues": {}, "maxValues": {}, "nullCount": {}}),
+        )
+        DeltaTable(uri).create_write_transaction([action], mode="append", schema=DeltaTable(uri).schema(), partition_by=["mes"])
+
+    # Sem a coluna descricao, NOT NULL no contrato: o commit passa e os dois leitores devolvem nulo, o que write_deltalake recusa.
+    register("2026-03", "sem_coluna.parquet", ten.drop_columns(["descricao"]))
+    assert DeltaTable(uri).to_pyarrow_table(filters=[("mes", "=", "2026-03")]).column("descricao").null_count == 10
+    assert con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE mes = '2026-03' AND descricao IS NULL").fetchone()[0] == 10
+    with_nulls = ten.drop_columns(["descricao"]).append_column("descricao", pa.array([None] * 10, pa.string())).append_column("mes", pa.array(["2026-03"] * 10))
+    with pytest.raises(DeltaError, match="failed validation"):
+        write_deltalake(uri, with_nulls, mode="append", schema_mode="merge")
+
+    # valor como texto não numérico numa coluna decimal: o commit passa, e a leitura da coluna falha depois dele.
+    register("2026-04", "tipo_errado.parquet", ten.set_column(3, "valor", pa.array(["abc"] * 10, pa.string())))
+    with pytest.raises(pa.ArrowInvalid, match="not a valid decimal128"):
+        DeltaTable(uri).to_pyarrow_table(filters=[("mes", "=", "2026-04")])
+    assert con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE mes = '2026-04'").fetchone()[0] == 10
+    with pytest.raises(duckdb.Error):
+        con.execute(f"SELECT sum(valor) FROM delta_scan('{uri}') WHERE mes = '2026-04'").fetchone()
+
+    # mode="overwrite" com partition_filters troca só os arquivos da partição filtrada.
+    before = set(DeltaTable(uri).get_add_actions(flatten=True).column("path").to_pylist())
+    pq.write_table(ten, Path(uri) / f"mes={MONTHS[1]}" / "novo.parquet")
+    replacement = AddAction(
+        path=f"mes={MONTHS[1]}/novo.parquet",
+        size=(Path(uri) / f"mes={MONTHS[1]}" / "novo.parquet").stat().st_size,
+        partition_values={"mes": MONTHS[1]},
+        modification_time=int(time.time() * 1000),
+        data_change=True,
+        stats=json.dumps({"numRecords": 10}),
+    )
+    DeltaTable(uri).create_write_transaction([replacement], mode="overwrite", schema=DeltaTable(uri).schema(), partition_by=["mes"], partition_filters=[("mes", "=", MONTHS[1])])
+    after = set(DeltaTable(uri).get_add_actions(flatten=True).column("path").to_pylist())
+    assert after - before == {f"mes={MONTHS[1]}/novo.parquet"}
+    assert all(path.startswith(f"mes={MONTHS[1]}/") for path in before - after) and len(before - after) == 1
+    assert DeltaTable(uri).to_pyarrow_table(filters=[("mes", "in", [MONTHS[0], MONTHS[1]])]).num_rows == 510
+    con.close()
+
+
+def test_compact_rewrites_files_from_another_writer(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """``optimize.compact`` reescreve pelo escritor do delta-rs: o ``INT96`` e o ``FIXED_LEN_BYTE_ARRAY`` registrados saem em ``INT64``, com estatística."""
+    uri = folder("compact_foreign")
+    write_deltalake(uri, two_months.slice(0, 500), mode="append", partition_by=["mes"])
+
+    # Dois arquivos como o UNLOAD do Redshift grava: timestamp em INT96 e decimal em FIXED_LEN_BYTE_ARRAY, registrados por AddAction.
+    partition = Path(uri) / f"mes={MONTHS[1]}"
+    partition.mkdir()
+    actions = []
+    for index in range(2):
+        file = partition / f"unload_{index}.parquet"
+        pq.write_table(two_months.slice(500 + 5 * index, 5).drop_columns(["mes"]), file, use_deprecated_int96_timestamps=True)
+        actions.append(AddAction(path=f"mes={MONTHS[1]}/{file.name}", size=file.stat().st_size, partition_values={"mes": MONTHS[1]}, modification_time=int(time.time() * 1000), data_change=True, stats=json.dumps({"numRecords": 5})))
+    physical = {column.name: column.physical_type for column in [pq.ParquetFile(partition / "unload_0.parquet").schema.column(i) for i in range(5)]}
+    assert (physical["data_ref"], physical["valor"]) == ("INT96", "FIXED_LEN_BYTE_ARRAY")
+    DeltaTable(uri).create_write_transaction(actions, mode="append", schema=DeltaTable(uri).schema(), partition_by=["mes"])
+
+    metrics = DeltaTable(uri).optimize.compact(partition_filters=[("mes", "=", MONTHS[1])])
+    assert (metrics["numFilesAdded"], metrics["numFilesRemoved"]) == (1, 2)
+    compacted = pa.table(DeltaTable(uri).get_add_actions(flatten=True)).filter(pc.equal(pc.field("partition.mes"), MONTHS[1]))
+    assert compacted.num_rows == 1
+    path = compacted.column("path").to_pylist()[0]
+    metadata = pq.ParquetFile(Path(uri) / path).metadata
+    physical = {metadata.schema.column(i).name: metadata.schema.column(i).physical_type for i in range(metadata.num_columns)}
+    assert (physical["data_ref"], physical["valor"]) == ("INT64", "INT64")
+    statistics = {metadata.schema.column(i).name: metadata.row_group(0).column(i).statistics.has_min_max for i in range(metadata.num_columns)}
+    assert all(statistics.values()), statistics
+    assert compacted.column("max.data_ref").to_pylist()[0] is not None
+    assert DeltaTable(uri).to_pyarrow_table().num_rows == 510

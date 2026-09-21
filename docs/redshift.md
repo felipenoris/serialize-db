@@ -968,8 +968,9 @@ Comportamento do `UNLOAD ... FORMAT AS PARQUET` segundo a documentação:
 O `UNLOAD` do projeto grava um mês por comando, com `PARTITION BY (mes)` na pasta da tabela Delta,
 `MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho alvo da tabela. O `SELECT` lista as colunas na
 ordem do modelo, com casts para os tipos do contrato e `ORDER BY` pela chave de ordenação. A
-biblioteca confere o manifesto do `UNLOAD` e os rodapés dos arquivos antes de registrá-los no log do
-Delta. `CLEANPATH` não é usado: arquivos de execuções abortadas ficam fora do log e saem pelo `vacuum`.
+biblioteca confere o manifesto do `UNLOAD` e o rodapé de cada arquivo antes de registrá-los no log do
+Delta, e relê a versão depois (seção "O manifesto entre o log do Delta e o Redshift"). `CLEANPATH`
+não é usado: arquivos de execuções abortadas ficam fora do log e saem pelo `vacuum`.
 
 A documentação do `UNLOAD` não informa os tipos físicos Parquet, a obrigatoriedade das colunas nem a
 presença de estatísticas, e os três afetam o registro dos arquivos no log do Delta.
@@ -1140,10 +1141,31 @@ O manifesto não tem estatística, e os rodapés do `UNLOAD` têm: preencher `mi
 custa uma leitura de rodapé por arquivo e é o que faz o `delta_scan` podar. Sem elas a poda é só por
 partição. A coluna de timestamp é a exceção, porque o `INT96` do `UNLOAD` não carrega estatística.
 
-O `schema.elements` do manifesto verboso traz o nome e o tipo de cada coluna, e é a conferência
-barata antes do commit: um `cast` errado no `select` do `UNLOAD` aparece ali, não na primeira
+O `schema.elements` do manifesto verboso traz o nome e o tipo de cada coluna, e é a primeira
+conferência antes do commit: um `cast` errado no `select` do `UNLOAD` aparece ali, não na primeira
 leitura da tabela meses depois. A presença da coluna de partição nesse bloco sob `PARTITION BY` não
-foi verificada.
+foi verificada. A conferência a que o leitor obedece é a do rodapé, abaixo.
+
+### As conferências antes do commit e a releitura depois
+
+O `create_write_transaction` grava a ação como a recebe, e os leitores obedecem à ação, não ao
+arquivo (sondagem de 2026-09-21, [POC.md](POC.md)): o caminho inexistente commita e derruba a leitura
+da partição; a estatística falsa poda o arquivo certo no delta-rs, no `delta_scan` e no DataFusion,
+sem erro; a coluna `NOT NULL` ausente do arquivo lê nulo; o tipo que não converte falha só quando a
+coluna é lida. O `write_deltalake` recusa cada um desses casos, e é o que o registro perde. A
+biblioteca repõe a conferência antes do commit, só com o rodapé de cada arquivo
+([PLAN-STAGE-3.md](PLAN-STAGE-3.md), seção "As conferências do registro de arquivos"): o arquivo
+existe no caminho que o leitor resolve, com o tamanho da entrada; o esquema do rodapé bate com o da
+tabela nome a nome, com o `INT96` e o `FIXED_LEN_BYTE_ARRAY` entre os tipos físicos admitidos; o
+valor de partição do caminho é o pedido; a soma de linhas dos rodapés é a do manifesto e a do
+`count(*)` da fonte; mínimo e máximo só das colunas cuja transcrição tem teste, omitidos nas demais.
+Depois do commit a versão é relida pelo delta-rs e pelo `delta_scan`, e uma diferença volta por
+`restore`; o snapshot e a publicação no Redshift esperam a releitura.
+
+A alternativa sem registro é reler os arquivos do `UNLOAD` e gravar por `write_deltalake`, que faz
+essas conferências sozinho e normaliza os tipos físicos, ao custo de passar os dados pela máquina
+local: é o `export_mode="rewrite"` da [etapa 5](PLAN-STAGE-5.md), ao lado do registro
+(`"register"`), e a mesma partição sai igual pelos dois.
 
 ## Recomendações de performance
 

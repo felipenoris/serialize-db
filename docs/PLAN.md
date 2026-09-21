@@ -386,8 +386,9 @@ de novo a cada mudança.
 
 Configuração: argumentos explícitos de `Database` e da linha de comando, com as variáveis
 `SERIALIZE_DB_ROOT`, `SERIALIZE_DB_ENVIRONMENT`, `SERIALIZE_DB_ENGINE`,
-`SERIALIZE_DB_DUCKDB_EXTENSIONS` e `SERIALIZE_DB_REDSHIFT_*` (as de `probes/redshift.py`) como
-padrão; nenhum arquivo de configuração.
+`SERIALIZE_DB_DUCKDB_EXTENSIONS`, `SERIALIZE_DB_EXPORT_MODE` (`register` ou `rewrite`, a volta do
+Redshift para o Delta na [etapa 5](PLAN-STAGE-5.md)) e `SERIALIZE_DB_REDSHIFT_*` (as de
+`probes/redshift.py`) como padrão; nenhum arquivo de configuração.
 
 Testes: `tests/` na raiz testa o pacote, um módulo de teste por módulo do pacote;
 `tests/proof_of_concept/` guarda as provas de conceito e os testes das bibliotecas externas,
@@ -449,7 +450,7 @@ ilustrativos.
 | 2. Ingestão | DuckDB: views com os nomes dos modelos sobre `delta_scan(uri, version := 143)`; `cad_lancamentos` materializada com `WHERE data_base_str BETWEEN '2025-09-30' AND '2026-08-31'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos dessas partições em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
 | 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
-| 5. Publicação no Delta | `reconcile` e `publish_partition(uri, "2026-08-31", data, commit_metadata(...))`; do Redshift, `UNLOAD ... PARTITION BY (data_base_str)` mais `register_files`. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
+| 5. Publicação no Delta | `reconcile` e `publish_partition(uri, "2026-08-31", data, commit_metadata(...))`; do Redshift, `UNLOAD ... PARTITION BY (data_base_str)` mais `register_files` (`export_mode="register"`) ou o leitor da etapa 7 mais `publish_partition` (`"rewrite"`). | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
 | 6. Publicação no Redshift | `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'`; controle atualizado. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
 | 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
@@ -491,7 +492,8 @@ correção de uma partição antiga é a mesma chamada com outra `partition` e u
 `publish_redshift` recarrega só essa partição, e as versões intermediárias entre snapshots do banco
 saem no `vacuum` mensal. A execução no Redshift é o mesmo ciclo com `engine="redshift"`: o sandbox
 são as tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a publicação sai por `UNLOAD` mais
-`register_files`, sem passar pela máquina local.
+`register_files` (`export_mode="register"`, sem passar pela máquina local) ou mais
+`publish_partition` (`"rewrite"`, o `write_deltalake` conferindo tudo), flag do usuário de 2026-09-21.
 
 ## Ordem do trabalho
 

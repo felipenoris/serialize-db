@@ -22,6 +22,12 @@ foi medido em [`POC.md`](POC.md).
   tira dos arquivos, ninguém leu: a execução de 2026-09-21 não imprimiu o bloco. A próxima execução
   de [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) responde, e por isso a
   lista esperada é parâmetro da conferência.
+- **O destino do `UNLOAD` dentro da pasta da tabela.** A referência diz que sem `ALLOWOVERWRITE` nem
+  `CLEANPATH` o comando falha quando o destino tem arquivos, e a pasta de uma partição já tem os das
+  versões anteriores; por isso a [etapa 5](PLAN-STAGE-5.md) grava em `<uri>/<execution_id>/`, vazio
+  por construção, e registra `<execution_id>/<coluna>=<valor>/<arquivo>`. Se "destino com arquivos"
+  é a pasta exata ou o prefixo, e como o `UNLOAD` nomeia os arquivos (a execução de 2026-09-21 não
+  registrou os nomes), a próxima execução do exemplo responde pelas URLs do manifesto.
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
   conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
@@ -54,7 +60,9 @@ foi medido em [`POC.md`](POC.md).
   execução com uma consulta grande mede a memória ([etapa 5](PLAN-STAGE-5.md)).
 - **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
-  RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)).
+  RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)). No
+  Redshift, `export_mode="rewrite"` e `"register"` sobre o mesmo `UNLOAD` medem os dois caminhos da
+  [etapa 5](PLAN-STAGE-5.md), e a medição decide o padrão da flag.
 
 ## O que a documentação oficial do Redshift não responde
 

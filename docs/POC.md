@@ -115,6 +115,14 @@ região nos dois sentidos, não chama o STS e carrega as extensões só da pasta
 `redshift-serverless:GetWorkgroup` e `GetCredentials` antes da porta 5439: se essas APIs não tiverem
 endpoint VPC lá, o que `RS-14` mede, resta a conexão por senha, que não passa por elas.
 
+Outras leituras do espaço do laboratório em 2026-09-20: o IMDS responde `EINVAL`; a sessão de pytest das 03:43 UTC, com as
+duas raízes, passou as três variantes de credencial do delta-rs daquele momento; o `.venv` preparado
+estava sem cinco pacotes do grupo `dev` até um `uv sync --group dev`; `~/shared` resolve para
+`/mnt/custom-file-systems/s3/shared`, uma montagem `fuse.s3fs`; o Athena nega `GetWorkGroup` no
+grupo `primary`; a credencial do contêiner dura cerca de uma hora (expiração 04:19:03, lida às 03:23
+e às 03:44); o `bucket.py` depois da sessão das 04:41 encontrou só a sessão que o
+`SERIALIZE_DB_TEST_KEEP` preservou na execução das 04:38.
+
 ## O que os exemplos de conexão com o Redshift mostraram
 
 Em 2026-09-20 o usuário executou no ambiente alvo dois scripts de conexão, guardados como foram
@@ -347,14 +355,32 @@ A soma de `meta.record_count` das entradas bateu com as 500.000 linhas, que é a
 vazios e ficou como rodou, conforme a regra de [`../examples/README.md`](../examples/README.md); o
 `register_files` da [etapa 3](PLAN-STAGE-3.md) os preenche do rodapé, que agora se sabe que os tem.
 
-As leituras do espaço do laboratório de 2026-09-20 que não constavam de nenhum documento, e que
-estavam guardadas no `CLAUDE.md`: o IMDS responde `EINVAL`; a sessão de pytest das 03:43 UTC, com as
-duas raízes, passou as três variantes de credencial do delta-rs daquele momento; o `.venv` preparado
-estava sem cinco pacotes do grupo `dev` até um `uv sync --group dev`; `~/shared` resolve para
-`/mnt/custom-file-systems/s3/shared`, uma montagem `fuse.s3fs`; o Athena nega `GetWorkGroup` no
-grupo `primary`; a credencial do contêiner dura cerca de uma hora (expiração 04:19:03, lida às 03:23
-e às 03:44); o `bucket.py` depois da sessão das 04:41 encontrou só a sessão que o
-`SERIALIZE_DB_TEST_KEEP` preservou na execução das 04:38.
+
+### O que o `create_write_transaction` confere
+
+Uma sondagem no macOS em 2026-09-21 (deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1) registrou ações
+`add` erradas de propósito, e `tests/proof_of_concept/test_deltalake.py` guarda os casos como
+asserções (`test_create_write_transaction_trusts_path_and_stats`,
+`test_create_write_transaction_trusts_file_schema`, `test_compact_rewrites_files_from_another_writer`):
+
+| Ação registrada | Commit | delta-rs (`to_pyarrow_table`) | DuckDB (`delta_scan`) | DataFusion (`QueryBuilder`) |
+| --- | --- | --- | --- | --- |
+| Caminho que não existe | Passa | Erro em toda leitura que toca a partição; `filters=` em outra partição lê normal | `IOException` na leitura da tabela; `WHERE` em outra partição lê normal | não medido |
+| Estatística falsa (`id_operacao` de 160000 a 160009 declarado de 900000 a 900010, `numRecords` 999) | Passa | `filters=` na faixa verdadeira devolve 0 linhas | 0 linhas e `Scanning Files: 0/3`; `count(*)` sem filtro lê os arquivos (1.010) | 0 linhas; `count(*)` sem filtro responde 1.999 pelas ações |
+| Arquivo sem uma coluna `NOT NULL` | Passa | Nulo em toda linha | Nulo em toda linha | não medido |
+| `valor` como texto não numérico numa coluna `decimal` | Passa | `ArrowInvalid` ao ler a partição | `count(*)` passa, a leitura da coluna falha | não medido |
+| Coluna a mais, `int32` numa coluna `long`, colunas em outra ordem, `timestamp[ns]` numa `timestamp[us]` | Passa | Lê certo | Lê certo | não medido |
+
+O `write_deltalake` com os mesmos dez nulos na coluna `NOT NULL` recusa (`DeltaError: 10 rows failed
+validation check`). `restore(0)` sobre a tabela com o caminho inexistente voltou a ler. O erro do
+delta-rs no caminho inexistente depende do `size` da ação, que o leitor também obedece: 1 byte
+declarado dá o erro do rodapé, um tamanho plausível dá `FileNotFoundError`. `mode="overwrite"` com
+`partition_filters` no `create_write_transaction` removeu só o arquivo da partição filtrada.
+`get_add_actions()` devolve `max.id_operacao` 900.010 e a soma de `num_records` 1.999, os valores da
+ação. E `optimize.compact` sobre dois arquivos registrados com `INT96` e `FIXED_LEN_BYTE_ARRAY`
+gravou um arquivo com os dois em `INT64` e estatística em toda coluna, timestamp incluído. As
+consequências estão em [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), seção "As conferências do registro de
+arquivos", em [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) (`export_mode`) e em [`redshift.md`](redshift.md).
 
 ## O que a leitura da base de origem mostrou
 

@@ -642,7 +642,11 @@ def register_file(dt: DeltaTable, relative_path: str, size: int, month: str, sta
 ```
 
    O arquivo precisa estar dentro da pasta da tabela, na subpasta da partição, sem a coluna de
-   partição e com as colunas na ordem do esquema. `estatisticas` segue o JSON da ação `add`
+   partição e com as colunas do esquema, em qualquer ordem, porque os leitores casam por nome. O
+   `create_write_transaction` não confere nada disso, nem a existência do arquivo nem a estatística:
+   um caminho inexistente, uma estatística falsa e um arquivo sem uma coluna `NOT NULL` commitam, e os
+   leitores obedecem à ação ([POC.md](POC.md); as conferências que a biblioteca faz antes do commit
+   estão em [PLAN-STAGE-3.md](PLAN-STAGE-3.md)). `estatisticas` segue o JSON da ação `add`
    (`numRecords`, `minValues`, `maxValues`, `nullCount`, sem as colunas de partição); o DuckDB os
    fornece por `COPY ... (RETURN_STATS)`, e um arquivo alheio os fornece pelo rodapé Parquet
    (`pq.read_metadata`). Com as estatísticas, a poda funcionou nos dois leitores: `file_uris` com
