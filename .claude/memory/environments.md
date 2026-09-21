@@ -76,8 +76,8 @@ to every document on 2026-09-19 ran under the same pinned versions.
 
 ## GitHub Actions (2026-09-21)
 
-- The workflows in `.github/workflows/` run on `ubuntu-latest` with `astral-sh/setup-uv` and Python
-  3.13; `UV_CONFIG_FILE=.github/uv-ci.toml` (empty) makes `uv` ignore the corporate index of
+- The workflows in `.github/workflows/` run on `ubuntu-latest` with `astral-sh/setup-uv` pinned to an exact tag (the repository has no `v10` major tag; the
+  first run failed on `@v10`) and Python 3.13; `UV_CONFIG_FILE=.github/uv-ci.toml` (empty) makes `uv` ignore the corporate index of
   `pyproject.toml`. `tests.yml` sets `SERIALIZE_DB_TEST_LOCAL_ROOT` to a folder under the workspace
   and runs `tests/` without `tests/proof_of_concept/`; `docs.yml` builds the `pdoc` site and deploys
   it to GitHub Pages (`actions/configure-pages`, `upload-pages-artifact`, `deploy-pages`), which
