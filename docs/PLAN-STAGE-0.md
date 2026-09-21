@@ -16,9 +16,12 @@ de conexão já está fixado: a credencial temporária do workgroup serverless, 
   `VARCHAR` de destino (truncar ou abortar), a lista de colunas no `COPY`, `FILLRECORD` para
   arquivos anteriores a uma coluna nova, e `SUPER` direto do `COPY` para documentos acima de
   65.535 bytes.
-- `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE`: os tipos físicos de `TIMESTAMP` e `DECIMAL`, se
-  as colunas saem `required`, se há estatísticas de mínimo e máximo, e o registro dos arquivos por
-  `create_write_transaction`, lido pelo DuckDB.
+- `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE`: os tipos físicos de
+  `TIMESTAMP` e `DECIMAL`, se as colunas saem `required`, se há estatísticas de mínimo e máximo, e o
+  registro dos arquivos por `create_write_transaction`, lido pelo DuckDB.
+  [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) exercita este item e o
+  anterior num script só, com `cast` para `DECIMAL` e `TIMESTAMP` no `select` do `UNLOAD`, porque a
+  base de origem não tem coluna de nenhum dos dois tipos.
 - Se o Redshift Spectrum mapeia colunas Parquet por nome ou por posição, só para registro; o
   projeto não cria esquemas externos.
 - O banco do esquema do projeto: a sessão enxerga `datalake_rw_shared.sbx_aco_decon` (`RS-16`,
@@ -26,16 +29,17 @@ de conexão já está fixado: a credencial temporária do workgroup serverless, 
   `SELECT` e o `UNLOAD` passaram por `sbx_aco_decon.<tabela>`
   ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py)); o `SELECT` em três
   partes passou de `dev`. Faltam o `INSERT`, o `DELETE` e o `MERGE` da publicação, o `COPY ...
-  MANIFEST` e o `UNLOAD ... PARTITION BY`. Os requisitos da escrita num datashare que a sessão não lê
-  (isolamento do produtor, slices) não impediram a escrita.
+  MANIFEST` e o `UNLOAD ... PARTITION BY`. Os requisitos da escrita num datashare que a sessão não
+  lê (isolamento do produtor, slices) não impediram a escrita.
 - O ciclo da Data API com `select`, que devolve `DECIMAL` como texto: a prova de que existe caminho
   sem a porta 5439, e a razão de ela ficar fora da biblioteca.
 
 Antes de qualquer etapa na AWS, os probes rodam no ambiente e o resultado é colado na conversa:
 `space.py` e `diagnose_aws.py` para a suíte S3, `bucket.py` para a raiz escolhida, `redshift.py`
-para a [etapa 5](PLAN-STAGE-5.md). O `redshift.py` rodou no ambiente alvo em 2026-09-20 e respondeu o
-papel IAM do `COPY` (`RS-6`: nenhum, e as credenciais de quem chama o substituem) e o que a sessão
-lê dos requisitos do datashare (`RS-17`); a execução seguinte, com o probe revisto, confere o `USE`
+para a [etapa 5](PLAN-STAGE-5.md) e `parquet_source.py` para a base de origem da
+[etapa 7](PLAN-STAGE-7.md). O `redshift.py` rodou no ambiente alvo em 2026-09-20 e respondeu o papel
+IAM do `COPY` (`RS-6`: nenhum, e as credenciais de quem chama o substituem) e o que a sessão lê dos
+requisitos do datashare (`RS-17`); a execução seguinte, com o probe revisto, confere o `USE`
 (`RS-19`), o que `has_schema_privilege` e `svv_table_info` respondem depois dele (`RS-5`, `RS-8`) e
 onde as tabelas de execução podem nascer (`RS-9`), a questão de
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que a suíte não alcança sem escrever.

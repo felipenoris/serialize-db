@@ -165,9 +165,9 @@ research appends to the matching group.
 | --- | --- |
 | `README.md` | `uv sync --group dev`, the test layout (`tests/` for the package, `tests/proof_of_concept/` for the proofs of concept and the study suites of the external libraries) with one command per suite, the rule that each authorization variable enables the writes under it and the variables of the three targets, the probes, the delta-rs credentials and proxy note, and why the folder is prepared for the target without internet, with the procedure itself in the `prepare_offline.sh` header. |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, the package and every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Review it whenever a dependency is added**: Python packages come in through `uv sync`; a new DuckDB extension, a Python version change or another runtime asset is added by hand, and the user reruns it before packing. It runs on any platform and stops when `.python/` has no interpreter; only a folder prepared on Linux x86_64 serves the SageMaker space. Its header is the operating procedure: how to run it, the proxy variables and the pack and unpack commands, which moved out of `README.md` on 2026-09-20. The extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`, the probes' own function, because DuckDB refuses an address with the credentials inside it. |
-| `examples/` | The three scripts the user ran in the target environment on 2026-09-20, kept as run: `redshift_native.py` (`GetWorkgroup` for the endpoint, `GetCredentials` for a temporary user and password, `redshift_connector.connect`), `redshift_data_api.py` (the async Data API cycle) and `redshift_copy_unload.py` (`USE` into the datashare database, `CREATE TABLE`, `COPY` of a Parquet prefix and `UNLOAD`, all with the caller's credentials in the statement text). They fix the target: region `sa-east-1`, serverless workgroup `controladoria-wg`, connection database `dev`, project schema `sbx_aco_decon` in the datashare database `datalake_rw_shared`, cited by the three-part name. Only what ran in the target goes in this folder, with its literal values; the probe, the suite and stage 5 repeat these calls. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`, which details each check: `space.py` (credentials and expiry, region, project connections, network, machine with temp space, open-file limit and the `~/shared` mount by real path with type and `rw`/`ro`, the `dev` group of `pyproject.toml` by presence and pinned version, optional packages, DuckDB extensions), `bucket.py` (settings, lifecycle, inventory with each Delta table's files, commits and last object, the S3 suite's leftover sessions `BK-13`, non-current versions and delete markers `BK-14`, versioning from a sample's `VersionId` when the API is denied, the role's permissions by IAM simulation or by what the run proved, KMS key, bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict, own format; delta-rs as found and as the suite with `NO_PROXY` exported; DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection parsed as a dict; the connection repeats `examples/redshift_native.py`, a given user/password pair the only alternative; `RS-1` to `RS-19`, from the configuration to the IAM simulation of the identity the library sends to S3, with the session readings before the `USE` into the datashare database, checked by `current_database()` as `RS-19`, and the schema readings after it), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), `parquet_source.py` (the initial load's source base, one folder per table, root as argument: per table the files, bytes, rows, partitions and distinct schemas, the majority schema with Arrow, physical and logical types and `field_id`, the divergences between files with every divergent file named, the partition columns and whether they are also inside the files, per-column statistics summed from the footers, row groups, compression, encoding and writer; `--sample N` reads what the footer does not hold, and without it no data page is read), over `probelib.py`: DNS, TCP and internet results are readings, never failed calls, and a failed call leaves `report.last_reason` for the check that interprets it; `duckdb_proxy` splits the proxy address from the credentials for every DuckDB session (`prepare_offline.sh` uses it too) and `hide_credentials` keeps the embedded password out of a report meant to be pasted into the conversation; the probes import `sagemaker-studio` from the system interpreter (see the unpinned-packages lesson); `probes/README.md` fixes a probe's structure, and `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
-| `docs/readings/` | The probe reports that back a statement in `docs/POC.md`, kept as they came out, indexed by `docs/readings/README.md`: the two target-environment Redshift readings of 2026-09-20 (20:37 and 20:43). `probes/output/` stays out of git. |
+| `examples/` | The scripts the user ran in the target on 2026-09-20, kept as run: `redshift_native.py` (`GetWorkgroup` for the endpoint, `GetCredentials` for a temporary user and password, `redshift_connector.connect`), `redshift_data_api.py` (the async Data API cycle) and `redshift_copy_unload.py` (`USE` into the datashare database, `CREATE TABLE`, `COPY` of a Parquet prefix and `UNLOAD`, all with the caller's credentials in the statement text). They fix the target: region `sa-east-1`, workgroup `controladoria-wg`, connection database `dev`, schema `sbx_aco_decon` in the datashare database `datalake_rw_shared`, which the session enters with `USE`. `redshift_manifest.py` is the exception, marked as such: the next experiment, not yet run, converting a `cad_contratos` partition to Delta and exercising `COPY ... MANIFEST` and `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE`, the prerequisites of `export_partition`. The probe, the suite and stage 5 repeat what ran. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation), indexed by `probes/README.md`, which details each check: `space.py` (credentials and expiry, region, project connections, network, the machine, the `~/shared` mount, the `dev` group of `pyproject.toml` against the pinned versions, DuckDB extensions), `bucket.py` (settings, lifecycle, the inventory with each Delta table and the S3 suite's leftover sessions `BK-13`, non-current versions `BK-14`, versioning from a sample's `VersionId` when the API is denied, the role's permissions by IAM simulation or by what the run proved, KMS key, bucket policy, incomplete uploads, Object Lock), `diagnose_aws.py` (the access the S3 suite needs and its maintenance verdict, own format; delta-rs as found and as the suite with `NO_PROXY` exported; DuckDB listing globs with `**`, because `*` does not cross `/`), `redshift.py` (`SERIALIZE_DB_REDSHIFT_*` or the project connection parsed as a dict; the connection repeats `examples/redshift_native.py`, a given user/password pair the only alternative; `RS-1` to `RS-19`, from the configuration to the IAM simulation of the identity the library sends to S3, with the session readings before the `USE` into the datashare database, checked by `current_database()` as `RS-19`, and the schema readings after it), `catalog.py` (the re-evaluation trigger: Glue, Athena, Lake Formation, S3 Tables), `parquet_source.py` (the initial load's source base, one folder per table, root as argument: per table the files, bytes, rows, partitions and distinct schemas, the majority schema with Arrow, physical and logical types and `field_id`, the divergences between files with every divergent file named, the partition columns and whether they are also inside the files, per-column statistics summed from the footers, row groups, compression, encoding and writer; `--sample N` reads what the footer does not hold, and without it no data page is read), over `probelib.py`: DNS, TCP and internet results are readings, never failed calls, and a failed call leaves `report.last_reason` for the check that interprets it; `duckdb_proxy` splits the proxy address from the credentials for every DuckDB session (`prepare_offline.sh` uses it too) and `hide_credentials` keeps the embedded password out of a report meant to be pasted into the conversation; the probes import `sagemaker-studio` from the system interpreter (see the unpinned-packages lesson); `probes/README.md` fixes a probe's structure, and `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
+| `docs/readings/` | The probe reports backing a statement in `docs/POC.md`, kept as they came out, indexed by `docs/readings/README.md`: the target Redshift readings of 2026-09-20. `probes/output/` stays out of git. |
 | `docs/guia.md` | ETL practices the pipeline follows: immutable monthly partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `docs/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `docs/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -284,8 +284,7 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   defects the tool must find, one per table: a column added in one month, a type changed between
   partitions, a partition column also written inside the file, a mixed partition depth, a folder
   without a Parquet file, a file with no rows. A fixture without defects exercises no verdict, and
-  that first run also showed four rendering defects, among them a `Timestamp` logical type whose
-  full text made the schema table unreadable.
+  that first run also found four rendering defects in the report itself.
 - **A fixture that reproduces a reading is verified by the reading instrument** (2026-09-20).
   `tests/source_db_projetado.py` was checked by running `probes/parquet_source.py` on it and diffing
   section 3 against the real report (identical), and the test transcribes that section as the
@@ -297,13 +296,14 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   previous library's `schema.json`, the SQLAlchemy reflection of the source database, which also
   lacked the model's composite foreign keys; one reply from the user closed two open questions.
   Ask for the metadata beside the data before listing hypotheses about it.
-- **A documented phrase is read two ways until something runs** (2026-09-20). "COPY without
-  COMPUPDATE", in the datashare write list, became "emit `COMPUPDATE OFF`" in the suite and in two
-  stage files; the script that ran in the target carries no `COMPUPDATE` clause at all, and passed.
-  The same script turned three open questions into facts (the producer's grant, `UNLOAD`, the IAM
-  role) and one blocker into a non-blocker, because credentials in the statement replace an attached
-  role. When a rule comes from prose rather than from a run, write the plainest reading, mark the
-  other one in `docs/OPEN_QUESTIONS.md`, and let the first execution settle it.
+- **A documented phrase is read two ways until something runs, and the answer may already be in the
+  repo** (2026-09-20). "COPY without COMPUPDATE", in the datashare write list, became "emit
+  `COMPUPDATE OFF`" in the suite and in two stage files; the script that ran in the target carries
+  no `COMPUPDATE` clause, and passed. The question left open after it was answered two documents
+  away, by this repo's own table of Parquet `COPY` rules: that `COPY` rejects the parameter. Write
+  the plainest reading, mark the other in `docs/OPEN_QUESTIONS.md`, and grep the repository before
+  calling a question open. A changed fact is then grepped in tables and lists too: `README.md`
+  promised `IAM_ROLE default` two PRs after its prose said the caller's credentials.
 - **A probe's verdict is a hypothesis until the environment answers, and one repetition separates
   the transient from the permanent** (2026-09-20). The first Redshift run in the target failed
   `RS-17` on an isolation level of `UNKNOWN`, which is the consumer not seeing the producer's
@@ -318,10 +318,9 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   and run the probe twice before writing a consequence into a plan.
 - **A script the user ran in the target outranks a plan written without one** (2026-09-20). Two
   connection scripts from the target replaced the plan's default (password) with the workgroup's
-  temporary credential, turned every table name into three parts, added `COMPUPDATE OFF` to every
-  `COPY`, and moved the Data API out of the library. Keep such a script verbatim in `examples/`,
-  with its literal values, and make the probe and the suite repeat its calls instead of a variant
-  nobody executed. What the script does not answer goes to `docs/OPEN_QUESTIONS.md`.
+  temporary credential and moved the Data API out of the library. Keep such a script verbatim in
+  `examples/`, with its literal values, and make the probe and the suite repeat its calls instead of
+  a variant nobody executed.
 - **Each tool in a script reads the proxy its own way** (2026-09-20). `prepare_offline.sh` got
   through `uv sync` and died on the DuckDB `INSTALL` with the same `HTTP_PROXY`: `uv` accepts
   `http://user:password@host:port`, DuckDB refuses it and reads only the uppercase spelling.
@@ -336,12 +335,13 @@ unit of work when a mistake cost a retry or a verification changed the plan, wit
   failed, the process hung at exit inside Arrow's thread-pool destructor, because DuckDB's
   `arrow_scan` pulls the stream through an Arrow readahead thread that was still blocked in the
   generator's `queue.get()`, and, with a timeout on the wait, still calling Python while the
-  interpreter finalized (`PyThread_hang_thread`). A `sample` of the native stacks found it; a
-  `faulthandler` dump did not fire, because the hang was after the script's last line. Insert
+  interpreter finalized (`PyThread_hang_thread`). A `sample` of the native stacks found it; a `faulthandler`
+  dump did not fire, the hang being after the script's last line. Insert
   batch by batch in a transaction instead, never block without a timeout inside a generator a
-  native reader pulls, keep helper threads free of references to their owner so an abandoned object
-  is collected, and pipe a hung pytest through nothing that buffers (`tail` printed nothing when the
-  run was killed).
+  native reader pulls, and keep helper threads free of references to their owner so an abandoned
+  object is collected. The same destructor hangs with no generator: `DeltaTable.to_pyarrow_table()`
+  leaves an Acero task in flight, so a process exiting right after it never returns, which
+  `to_pyarrow_dataset()` or half a second of other work avoids (`docs/POC.md`).
 - **A reader built by `from_batches` trusts its batches** (2026-09-20). A batch with the columns in
   another order went through `RecordBatchReader.from_batches(schema, ...)` and DuckDB's `arrow_scan`
   without an error and came out with the bytes swapped. Cast every batch to the declared schema
@@ -569,8 +569,8 @@ Each fact is detailed in the file named at the end of its line.
   the version they loaded while an `append` commits. A native call that releases and reacquires the GIL
   beside a thread running pure Python waits the switch interval per reacquisition: 200 `os.stat` took
   0.3 s against 0.2 ms alone (0.035 s with `sys.setswitchinterval(0.0005)`), and the lazy
-  `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import everything
-  at startup and keep hot pure-Python loops out of the library's threads. `docs/PLAN.md`, section "A troca de dados com o
+  `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import at
+  startup and keep hot pure-Python loops out of the library's threads. `docs/PLAN.md`, section "A troca de dados com o
   código cliente", records the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
 - The target's Redshift is serverless (`controladoria-wg`, `sa-east-1`), and the connection is the
   workgroup's temporary credential: `GetWorkgroup` for the endpoint, `GetCredentials` for a user

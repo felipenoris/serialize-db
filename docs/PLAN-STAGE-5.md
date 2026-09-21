@@ -33,19 +33,22 @@ aparece como o tempo limite do sistema.
 a outro banco, como a Data API, e no SQLAlchemy ele só atravessa com `quoted_name(..., quote=False)`
 ([`sqlalchemy.md`](sqlalchemy.md)).
 
-`credentials_clause()` monta como o `COPY` e o `UNLOAD` alcançam o S3: `IAM_ROLE` quando o namespace
-tem papel associado, e `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` e `SESSION_TOKEN` da sessão quando não
-tem, que é o caso do ambiente alvo. As credenciais expiram, então a cláusula é montada por comando,
-nunca guardada; e **nenhum texto que a carregue vai para log, para o relatório ou para arquivo**. As
-restrições da escrita num datashare estão em [`redshift.md`](redshift.md); o `COPY` roda sem
-cláusula `COMPUPDATE` alguma, e o de Parquet nem a aceita: a codificação das colunas vem do DDL ou de
-`ENCODE AUTO`, e `ANALYZE COMPRESSION` numa amostra real é o que a fixa. O motivo de um `COPY` recusado está em `sys_load_error_detail`, que a
-sessão lê no ambiente alvo (2026-09-20); `stl_load_errors` cobre só clusters provisionados e é negada
-a um usuário comum.
+`credentials_clause()` monta como o `COPY` e o `UNLOAD` alcançam o S3, e quem decide é o `iam_role`
+da configuração: com ele, `IAM_ROLE` com o ARN ou com `default`; sem ele, `ACCESS_KEY_ID`,
+`SECRET_ACCESS_KEY` e `SESSION_TOKEN` da sessão `boto3`, que é o caminho do ambiente alvo, onde o
+namespace não tem papel associado e por isso nem um ARN explícito funcionaria (`RS-6`). As
+credenciais expiram, então a cláusula é montada por comando, nunca guardada; e **nenhum texto que a
+carregue vai para log, para o relatório ou para arquivo**.
+
+As restrições da escrita num datashare estão em [`redshift.md`](redshift.md). O `COPY` roda sem
+cláusula `COMPUPDATE` alguma, e o de Parquet nem a aceita: a codificação das colunas vem do DDL ou
+de `ENCODE AUTO`, e `ANALYZE COMPRESSION` numa amostra real é o que a fixa. O motivo de um `COPY`
+recusado está em `sys_load_error_detail`, que a sessão lê no ambiente alvo (2026-09-20);
+`stl_load_errors` cobre só clusters provisionados e é negada a um usuário comum.
 
 | Primitiva | Redshift |
 | --- | --- |
-| `connect(config)` | `GetWorkgroup`, `GetCredentials` e `redshift_connector.connect` sem `timeout`; `USE <share_database>` quando o esquema vem de um datashare, conferido por `current_database()`; `search_path` no esquema; `cursor.paramstyle = "named"`; uma conexão por thread num `threading.local`, aberta no primeiro uso e fechada em `cleanup`, e `connection` devolve a da thread. |
+| `connect(config)` | `GetWorkgroup`, `GetCredentials` e `redshift_connector.connect` sem `timeout`; `USE <share_database>` quando o esquema vem de um datashare, conferido por `current_database()`; `search_path` no esquema; `cursor.paramstyle = "named"`; uma conexão por thread num `threading.local`, aberta no primeiro uso e fechada em `cleanup`, e `connection` devolve a da thread. A senha dura no máximo uma hora, então uma conexão derrubada pelo servidor é reaberta com credencial nova, uma vez por comando, e o comando é repetido; o que o servidor faz com uma conexão cuja senha expirou, e se ela cai no meio de um `COPY`, é questão em aberto ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). |
 | `ingest(table, uri, version, partitions=None, materialize=True)` | `copy_manifest` dos arquivos dessas partições, `COPY ... FORMAT AS PARQUET MANIFEST` com a cláusula de credenciais numa staging sem a coluna de partição criada por `ddl`, e `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'`; `JSON_PARSE` nas colunas `SUPER`. O `COPY` também lê um prefixo de pasta direto, sem manifesto, e converte `int32` da origem para a coluna `BIGINT` do contrato. |
 | `stream(statement_or_sql, params=None, batch_size=100_000, prefetch=2)` | O statement compilado para o Redshift, ou o texto com `{prefix}` em `exec_<id>_`, executado numa conexão própria da thread auxiliar; cada lote é `RecordBatch.from_pylist` dos dicionários por nome de `cursor.fetchmany(batch_size)`, com o esquema do statement, ou os lotes de `ParquetFile.iter_batches` de um `UNLOAD` acima de um limite de linhas; o mesmo `BatchStream` do DuckDB. O `redshift_connector` é Python puro, e a thread auxiliar compete pelo GIL com o cliente ([`PLAN.md`](PLAN.md)). |
 | `query(statement, **params)` | `stream(statement, params).read_all()`. |
@@ -53,19 +56,19 @@ a um usuário comum.
 | `loader(table, queue_depth=2)` | `write` faz `cast(batch, table)` na thread do cliente; a thread auxiliar grava um row group por lote com `ParquetWriter.write_batch` num arquivo de `staging/<execution_id>/`, e `close` fecha o arquivo e roda o `COPY`: nada entra antes dele, e uma exceção dentro do `with` apaga o arquivo sem `COPY`. |
 | `load(table, data)` | Os lotes de `data` pelo `loader`; uma `pa.Table` abaixo de um limite de linhas entra por um único `INSERT` multilinha montado de `to_pylist()`, numa ida ao servidor. |
 | `audit(table, partitions, **opcoes)` | O mesmo texto compilado para o Redshift; as demais partições e a tabela referenciada entram em stagings só com as colunas da chave, por `COPY ... MANIFEST`. |
-| `export_partition(table, value)` | `UNLOAD ('<select do contrato>') TO '<uri>/' PARTITION BY (<coluna de partição>) FORMAT PARQUET MANIFEST VERBOSE` com a cláusula de credenciais, mais `register_files` com as estatísticas do rodapé Parquet. O `UNLOAD` simples de uma tabela do datashare passou no ambiente alvo; `PARTITION BY MANIFEST VERBOSE` é o que a suíte ainda vai medir ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). |
+| `export_partition(table, value)` | `UNLOAD ('<select do contrato>') TO '<uri>/' PARTITION BY (<coluna de partição>) FORMAT PARQUET MANIFEST VERBOSE` com a cláusula de credenciais, mais `register_files` com as estatísticas do rodapé Parquet. O `UNLOAD` simples de uma tabela do datashare passou no ambiente alvo; `PARTITION BY MANIFEST VERBOSE` é o que [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) e a suíte ainda vão medir ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). Recusado lá, a alternativa é um `UNLOAD` por partição, com o valor no `where` e sem a coluna de partição no `select`, gravando em `<uri>/<coluna>=<valor>/`: é o `UNLOAD` que já passou, e `register_files` recebe os mesmos arquivos. |
 | `cleanup()` | `DROP TABLE` de `exec_<id>_*` e da staging; os objetos de `staging/<execution_id>/` apagados. |
 
 O identificador de execução entra no nome do sandbox normalizado para `[a-z0-9_]`, dentro dos
 127 bytes de um identificador do Redshift. Onde as tabelas `exec_<id>_*` nascem quando o esquema vem
 de um datashare é questão em aberto entre o próprio datashare, onde o `CREATE TABLE` passou, e as
-tabelas temporárias do banco da conexão, que morrem com a sessão; o banco local saiu das alternativas
-em 2026-09-20, porque `has_database_privilege(dev, CREATE)` é falso e `TEMP` é verdadeiro (`RS-9`,
-[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+tabelas temporárias do banco da conexão, que morrem com a sessão; o banco local saiu das
+alternativas em 2026-09-20, porque `has_database_privilege(dev, CREATE)` é falso e `TEMP` é
+verdadeiro (`RS-9`, [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
-Testes: `tests/test_engine_redshift.py` compara o SQL
-gerado (`COPY`, `INSERT ... SELECT`, `UNLOAD`, DDL da staging) com texto esperado, sem cluster; os
-testes marcados `redshift` rodam a mesma sequência com uma amostra no esquema autorizado, depois do
+Testes: `tests/test_engine_redshift.py` compara o SQL gerado (`COPY`, `INSERT ... SELECT`,
+`UNLOAD`, DDL da staging) com texto esperado, sem conexão; os testes marcados `redshift` rodam a
+mesma sequência com uma amostra no esquema autorizado, depois do
 `test_redshift.py` da [etapa 0](PLAN-STAGE-0.md). Provas de conceito: `test_redshift.py` (sessão e
 `paramstyle` nomeado, o `fetchmany` por lotes, banco do esquema e o `USE`, DDL, `COPY ... MANIFEST`, lista de
 colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API), `test_sqlalchemy.py`
