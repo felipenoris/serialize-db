@@ -120,7 +120,19 @@ print(schema.ddl(table, "duckdb"))
 print(schema.ddl(table, "redshift", prefix="exec_42_"))
 ```
 
-O DDL do Redshift:
+O DDL do DuckDB:
+
+```sql
+CREATE TABLE "cad_operacoes" (
+    "id_operacao" BIGINT NOT NULL,
+    "data" DATE NOT NULL,
+    "operacao" VARCHAR(50) NOT NULL,
+    "valor" DOUBLE NOT NULL,
+    "data_str" VARCHAR(10) NOT NULL
+)
+```
+
+O DDL do Redshift, com o prefixo no nome da tabela:
 
 ```sql
 CREATE TABLE "exec_42_cad_operacoes" (
@@ -132,9 +144,11 @@ CREATE TABLE "exec_42_cad_operacoes" (
 ) SORTKEY ("data", "operacao")
 ```
 
-O `CREATE TABLE` leva colunas, tipos e `NOT NULL`; as chaves ficam para a auditoria, e o
-comentário de cada coluna vai no esquema Delta. `serialize_db.schema.sql_type` dá o nome de um tipo
-num motor, para um `CAST` ou um `ALTER TABLE`, e `serialize_db.schema.quoted` cita um identificador.
+As colunas são as mesmas nos dois motores; o `Double` é `DOUBLE` no DuckDB e `DOUBLE PRECISION` no
+Redshift, e a `sort_key` vira `SORTKEY` só no Redshift. O `CREATE TABLE` leva colunas, tipos e
+`NOT NULL`; as chaves ficam para a auditoria, e o comentário de cada coluna vai no esquema Delta.
+`serialize_db.schema.sql_type` dá o nome de um tipo num motor, para um `CAST` ou um `ALTER TABLE`,
+e `serialize_db.schema.quoted` cita um identificador.
 
 ### Converter um lote de dados
 
