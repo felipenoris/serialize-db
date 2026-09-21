@@ -144,6 +144,59 @@ dates, commands, quoted output and a log entry's provenance are never cut; the w
 9. **Shorter is the goal; a fact removed is a defect.** When a cut would drop a measurement, an
    identifier or a verdict, keep the sentence.
 
+## Python Code Style
+
+### Core principle
+
+- When writing Python code, use [PEP 8 Style](https://peps.python.org/pep-0008/).
+- Use docstrings to explain function interface and purpose.
+- Add code examples when writing docstrings for public interface.
+- Add comments for each logical block of code, explaining what you're doing.
+
+IMPORTANT: prioritize code that is easy for humans to read and review over short or "clever" code.
+Test: would a junior data scientist on the team understand this snippet in a single read? If not, simplify.
+
+### Simplicity
+- Write the minimum code that solves the requested problem. Nothing speculative.
+- Do not add abstractions, classes, parameters, or configuration that were not requested.
+- Prefer functions over classes. Use classes only when there is real state; prefer `dataclass` over inheritance hierarchies.
+- Do not handle errors for scenarios that cannot happen.
+- If the solution got long, look for a more direct version before delivering, or break it into subfunctions.
+
+### Structure
+- Short functions with a single responsibility and a name that describes what they do.
+- Use early returns instead of nested `if`s; at most 2 levels of nesting.
+- Break long expressions into intermediate variables with descriptive names.
+- Prefer separate functions over one generic function controlled by boolean flags.
+- Do not use bare `except:` or generic `except Exception` without re-raising.
+
+### Constructs to avoid
+- Comprehensions with more than one `for` or a complex condition → use an explicit loop.
+- `lambda` beyond trivial expressions → use a named `def`.
+- Nested ternaries → use `if/elif/else`.
+- Walrus operator (`:=`), `functools.reduce`, `map`/`filter` with lambda.
+- Metaprogramming: metaclasses, custom decorators, dynamic `getattr`/`setattr`, monkey-patching.
+- `from module import *`.
+- One-liners that do several things at once.
+
+### Names, types, and comments
+- Descriptive names instead of abbreviations (`balance_by_account`, not `bba` or `df2`).
+- Type hints on all function signatures.
+- Short docstring on public functions: what it does, inputs, and output.
+- Comments explain *why*, not *what*. Do not comment the obvious.
+
+### Data (pandas / SQL)
+- Prefer vectorized operations over loops and `.apply()`.
+- Never use `inplace=True`; reassign the result (`df = df.dropna()`).
+- Method chaining: one method per line, wrapped in parentheses, up to ~5 steps; beyond that, split into steps with named variables.
+- Use `.loc` with explicit column names; avoid `.iloc` without justification.
+- In SQL, use CTEs with descriptive names instead of nested subqueries.
+
+### When editing existing code
+- Follow the style of the surrounding code, even if you would prefer another.
+- Change only what the task requires; do not refactor unrelated code.
+- If you notice improvements outside the scope, mention them instead of changing them.
+
 ## `secrets/`
 
 Never read the contents of the `secrets` folder.
