@@ -47,9 +47,6 @@ markers = [
     "redshift: cria tabelas no esquema SERIALIZE_DB_TEST_REDSHIFT_SCHEMA; pulado sem ela, falha sem conexão",
 ]
 
-[[tool.uv.index]]
-url = "https://gitlab.bndes.net/api/v4/projects/7713/packages/pypi/simple"
-
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"
