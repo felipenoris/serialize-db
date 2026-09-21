@@ -24,6 +24,8 @@ import sqlalchemy as sa
 
 from serialize_db import schema
 
+__all__ = ["main"]
+
 
 def _resolve_metadata(spec: str) -> sa.MetaData:
     """O ``MetaData`` de ``modulo:atributo``: importa o módulo e segue os atributos por ponto.

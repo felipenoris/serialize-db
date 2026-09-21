@@ -3,6 +3,8 @@
 Cada etapa acrescenta as suas; ``ContractError`` é a da etapa 1 (``schema``).
 """
 
+__all__ = ["ContractError"]
+
 
 class ContractError(ValueError):
     """Dados ou modelo fora do contrato.
