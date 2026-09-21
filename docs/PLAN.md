@@ -82,7 +82,8 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   `Numeric(18, 2)`, mais adequada a dados contábeis, é uma melhoria futura, por `rewrite` da tabela
   com o `cast` que recusa o `double` fora da escala.
 - **As chaves inteiras passam a `int64` na migração para o Delta** (decisão de 2026-09-20): a origem
-  as tem em `int32`, com `id_lancamento` em 1.113.599.996; o modelo corrigido declara `BigInteger`
+  as tem em `int32`, com `id_lancamento` em 1.113.599.996 na base de desenvolvimento e em 952.517.158
+  na de produção; o modelo cliente declara `BigInteger`
   nas chaves primárias inteiras e nas colunas que as referenciam, e a carga inicial faz o cast sem
   perda.
 - **O `timestamp` em `INT96` da origem vira `INT64` na migração** (decisão de 2026-09-20): o formato
@@ -290,7 +291,7 @@ O que a sondagem fixa em `cast`:
 
 Cada regra vem de um comportamento verificado, registrado no documento citado.
 
-- A coluna de partição (`data_str` no modelo de referência) vive na ação `add`, não no arquivo de
+- A coluna de partição (`data_str` no modelo cliente) vive na ação `add`, não no arquivo de
   dados: ela deriva de uma coluna de data do arquivo por `strftime('%Y-%m-%d')`, e o Redshift a
   recebe por uma staging sem ela e `INSERT ... SELECT *, '<valor>'`; a lista de colunas no `COPY`,
   confirmada em 2026-09-21, não fornece o valor da coluna ausente (`delta.md`).
@@ -410,16 +411,18 @@ arquivo de configuração.
 
 Testes: `tests/` na raiz testa o pacote, um módulo de teste por módulo do pacote;
 `tests/proof_of_concept/` guarda as provas de conceito e os testes das bibliotecas externas,
-comentados passo a passo porque também são o material de estudo das APIs; `tests/model/` é o modelo
-de referência, que faz o papel da biblioteca cliente: os testes do pacote o entregam à API como um
-pipeline entregaria os seus modelos. Um teste que não grava (esquema, renderização, DuckDB em
+comentados passo a passo porque também são o material de estudo das APIs; `tests/reference_model/` é
+o modelo de referência, o modelo SQLAlchemy da base original em Parquet particionado, que fica como
+está (decisão de 2026-09-21), e `tests/client_model/` (pasta proposta) é o modelo cliente, a cópia
+corrigida pela etapa 1, que faz o papel da biblioteca cliente: os testes do pacote o entregam à API
+como um pipeline entregaria os seus modelos. Um teste que não grava (esquema, renderização, DuckDB em
 memória) roda sem variável. Um teste que grava usa a fixture `local_location`, sob
 `SERIALIZE_DB_TEST_LOCAL_ROOT`, e é pulado sem ela; o fim da sessão imprime, sem erro, o comando que
 autoriza cada suíte pulada e o que ela grava. O marcador `s3` repete no bucket os testes que dependem
 do armazenamento, sob `SERIALIZE_DB_TEST_S3_ROOT`; o marcador `redshift` roda só com
 `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, o esquema onde a suíte pode criar tabelas
 `serialize_db_test_<id>_*`, e conecta pelas variáveis `SERIALIZE_DB_REDSHIFT_*`. Os arquivos gerados
-do modelo de referência (`tests/model/schema/` e `tests/model/sql/`, o que um pipeline versionaria na
+do modelo cliente (`tests/client_model/schema/` e `tests/client_model/sql/`, o que um pipeline versionaria na
 raiz do seu repositório) são comparados por teste com uma geração nova, sem gravar.
 
 ## Etapas
@@ -430,7 +433,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
 | 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão, a escrita no datashare e os dois comandos com manifesto provados por `examples/`, e a suíte `-m redshift` limpa duas vezes seguidas no ambiente alvo (2026-09-21, 13:35 e 13:39 UTC). | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
-| 1. `schema` | Modelo de referência corrigido; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo de referência. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
+| 1. `schema` | O modelo cliente, a cópia corrigida do modelo de referência; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo cliente. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |
 | 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação da partição. | O pipeline de exemplo roda em memória sobre um Delta local; a auditoria reprova a chave repetida entre a partição nova e uma já publicada. |
@@ -519,8 +522,9 @@ conferências da etapa 3; `rewrite` grava pelo `write_deltalake`, que confere tu
 
 ## Ordem do trabalho
 
-1. Etapas 1 e 2, em pastas locais, com o modelo de referência corrigido e os seus arquivos
-   `schema/` e `sql/` versionados em `tests/model/`.
+1. Etapas 1 e 2, em pastas locais, com o modelo cliente (a cópia corrigida de
+   `tests/reference_model/`) e os seus arquivos `schema/` e `sql/` versionados em
+   `tests/client_model/`.
 2. Etapa 3, depois 4 e 6: um pipeline completo em disco local, o critério de aceite da etapa 6
    sobre o motor DuckDB.
 3. Em paralelo, no ambiente alvo: os cinco probes rodaram lá em 2026-09-21 ([`POC.md`](POC.md)), e

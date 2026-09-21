@@ -8,9 +8,9 @@ A migração dos Parquet atuais para o Delta, uma passagem por tabela e por part
 
 ## A base de origem
 
-`probes/parquet_source.py` leu a base de desenvolvimento em 2026-09-20 ([`POC.md`](POC.md)): uma
-pasta por tabela sob a raiz, 14 pastas, 205 arquivos, 3,76 GB e 187 milhões de linhas, mais
-`schema.json` solto na raiz. As tabelas sem partição têm um único `chunk_0.parquet` na raiz da
+`probes/parquet_source.py` leu a base de desenvolvimento em 2026-09-20 e a de produção em
+2026-09-21 ([`POC.md`](POC.md)), as duas com a mesma estrutura: uma pasta por tabela sob a raiz, 14
+pastas, 205 arquivos, 3,76 GB e 187 milhões de linhas, mais `schema.json` solto na raiz. As tabelas sem partição têm um único `chunk_0.parquet` na raiz da
 tabela. As quatro particionadas usam Hive por `data_str=<AAAA-MM-DD>` (`cad_contratos`,
 `cad_operacoes`, `rel_contrato_operacao`) e por `data_base_str=<AAAA-MM-DD>` (`cad_lancamentos`): o
 valor é um fim de mês, vive só no caminho e é igual a `data`, ou a `data_base`, em toda linha da
@@ -19,13 +19,16 @@ tem também `2026-01-31`). Cada partição tem até 36 arquivos `chunk_<n>.parqu
 linhas e um row group, numerados sem zeros à esquerda (`chunk_10` vem antes de `chunk_2` na ordem
 alfabética). Os tipos são `int32`, `string`, `date32`, `double`, `bool` e `timestamp[ns]` gravado em
 `INT96`, sem estatística de mínimo e máximo; todo arquivo de cada tabela tem o mesmo esquema, sem
-`field_id`, com a chave `pandas` no rodapé, SNAPPY, sem dicionário, formato 1.0. `schema.json`, na
-raiz, é o controle de esquema da biblioteca anterior no formato da reflexão do SQLAlchemy (colunas
+`field_id`, SNAPPY, sem dicionário, formato 1.0, com a chave `pandas` no rodapé de todo arquivo na
+base de desenvolvimento e de parte deles na de produção. `schema.json`, na raiz, é o controle de esquema da biblioteca anterior no formato da reflexão do SQLAlchemy (colunas
 com tipo, nulidade e chave primária, chaves estrangeiras, índices e restrições de unicidade): a
 nulidade dos arquivos é a dele, e as chaves estrangeiras compostas do modelo de referência não
 constam nele. `tests/source_db_projetado.py` reproduz essa estrutura em poucas linhas, com os dados
 consistentes com o modelo e a cópia real de `schema.json`, e `tests/test_source_db_projetado.py` a
-confere contra a seção 3 do relatório.
+confere contra a seção 3 do relatório. As duas bases diferem nos dados, não na estrutura: a de
+produção tem 113 linhas a menos (`cad_contas`, `rel_contas_hierarquias`, `cad_lancamentos`), ids
+máximos menores (`id_lancamento` 952.517.158 em vez de 1.113.599.996) e cinco casas no extremo de
+`valor`; a carga não depende de nenhuma dessas diferenças.
 
 `cad_lancamentos` tem 2,83 GB em quatro partições, cerca de 35 milhões de linhas e 700 MB de Parquet
 por partição. O `write_deltalake` de um `RecordBatchReader` cresceu com a entrada na medição da
@@ -33,9 +36,9 @@ reescrita (1.140 MB de RSS para 135 MB de Parquet, [`delta.md`](delta.md)), e o
 `COPY ... RETURN_STATS` do DuckDB mais `create_write_transaction` ficou em 600 MB: a partição de
 `cad_lancamentos` vai por `export_mode="register"`, e a primeira carga de uma partição real mede os
 dois modos antes de fixar o padrão da flag. A auditoria de chave estrangeira não é barreira da
-carga: a base de desenvolvimento tem `cad_lancamentos` de `data_base` 2026-01-31 sem `cad_contratos`
-dessa data e o contrato `desemb-999` sem cadastro, inconsistências ignoradas por decisão de
-2026-09-20, e o relatório registra os órfãos.
+carga: as duas bases têm `cad_lancamentos` de `data_base` 2026-01-31 sem `cad_contratos` dessa data
+e o contrato `desemb-999` sem cadastro, inconsistências ignoradas por decisão de 2026-09-20, e o
+relatório registra os órfãos.
 
 | Primitiva | O que faz |
 | --- | --- |
@@ -153,7 +156,7 @@ local.
 | Partição divergente | `test_source_value_different_from_the_path_aborts` | Uma linha com `data` fora do valor do caminho aborta a partição, sem commit. |
 | Nulo em `NOT NULL` | `test_null_in_not_null_column_is_refused` | As sete colunas de `cad_contratos` com um nulo plantado: recusa com coluna e partição. |
 | Relatório | `test_load_report_matches_and_detects_a_difference` | Igual depois da carga; uma linha apagada do Delta aparece como diferença. |
-| Órfãos | `test_foreign_key_orphans_are_reported_not_blocking` | A auditoria de chave estrangeira registra os órfãos da base de desenvolvimento e não barra a carga. |
+| Órfãos | `test_foreign_key_orphans_are_reported_not_blocking` | A auditoria de chave estrangeira registra os órfãos das duas bases de origem (o `data_base` sem `cad_contratos`, o contrato sem cadastro) e não barra a carga. |
 
 ## Rascunhos executados
 

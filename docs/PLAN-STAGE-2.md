@@ -18,7 +18,7 @@ substituição gradual da compilação em tempo de execução descrita em `sqlal
 
 Testes: `tests/test_sql.py`, sem gravar: o statement de `sqlalchemy.md` (parâmetro, `%` em literal,
 prefixo) renderizado nos dois dialetos e executado no DuckDB em memória com `$mes`; `bindparam` sem
-valor e parâmetro faltante como erros; o diff de `tests/model/sql/`. Opcional: `sqlglot.parse_one(texto,
+valor e parâmetro faltante como erros; o diff de `tests/client_model/sql/`. Opcional: `sqlglot.parse_one(texto,
 dialect)` como teste de que o texto do Redshift analisa. Provas de conceito:
 `test_sqlalchemy.py` (`test_generated_sql_text_per_dialect`, `test_redshift_dialect_compiles_dml`) e
 `test_stdlib.py::test_generated_files_diff`.
@@ -96,7 +96,7 @@ rascunho.
 | `bindparam` sem valor | `test_render_refuses_bindparam_without_value` | `SqlError` em vez de `NULL` silencioso. |
 | Prefixo | `test_prefixed_replaces_every_contract_table` | Tabelas e colunas trocadas em `select`, `insert ... from_select` e `join`; o statement original intacto. |
 | Tabelas referenciadas | `test_referenced_tables_from_core_and_text` | `find_tables` e o sentinela dão o mesmo conjunto para o mesmo comando. |
-| Arquivos gerados | `test_sql_files_match_versioned`, `test_check_sql_files_reports_a_changed_statement` | Diff vazio contra `tests/model/sql/`; uma coluna nova no statement aparece no diff. |
+| Arquivos gerados | `test_sql_files_match_versioned`, `test_check_sql_files_reports_a_changed_statement` | Diff vazio contra `tests/client_model/sql/`; uma coluna nova no statement aparece no diff. |
 | Redshift analisável | `test_redshift_text_parses_with_sqlglot` (opcional) | `sqlglot.parse_one(texto, dialect="redshift")` aceita o texto. |
 
 ## Rascunhos executados

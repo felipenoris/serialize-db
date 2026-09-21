@@ -56,9 +56,10 @@ módulo, em `PLAN-STAGE-<n>.md`.
 Os módulos são `serialize_db.errors`, `serialize_db.schema`, `serialize_db.sql`, `serialize_db.storage`,
 `serialize_db.delta`, `serialize_db.audit`, `serialize_db.engine.duckdb`, `serialize_db.engine.redshift`,
 `serialize_db.execution`, `serialize_db.load`, `serialize_db.publication` e `serialize_db.cli`; o pacote não
-contém modelos, que vêm da biblioteca cliente. O modelo de referência em `tests/model/` é a
-primeira instância do contrato e o material dos testes, que o entregam à API como um pipeline
-entregaria os seus modelos. As etapas de implementação, com o critério de aceite de cada uma, estão
+contém modelos, que vêm da biblioteca cliente. O modelo de referência em `tests/reference_model/`, o
+modelo SQLAlchemy da base original, fica como está; o modelo cliente, a sua cópia corrigida em
+`tests/client_model/` (pasta proposta), é a primeira instância do contrato e o material dos testes,
+que o entregam à API como um pipeline entregaria os seus modelos. As etapas de implementação, com o critério de aceite de cada uma, estão
 em [`PLAN.md`](PLAN.md), e as primitivas de cada etapa, em `PLAN-STAGE-<n>.md`.
 
 ## Metadados próprios da biblioteca

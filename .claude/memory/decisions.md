@@ -25,7 +25,13 @@ pipelines run pandas with the pyarrow backend (user statement of 2026-09-20), so
 which the probes of that day measured for the table and for the batch (`docs/PLAN.md`, section "A
 troca de dados com o código cliente"). The same day the user moved the
 models to `tests/model/` as the reference model: the tests hand it to the package API as a client
-library would, and the package holds no model. After the source base was read (2026-09-20) the user
+library would, and the package holds no model. On 2026-09-21 the user renamed it
+`tests/reference_model/` and stated that it is the SQLAlchemy model of the original partitioned
+Parquet base and that its files will not be changed: the corrections stage 1 planned go to a copy,
+the client model, in `tests/client_model/` (proposed, awaiting confirmation), and the reference
+model stays as the model whose defects `check_models` lists. The same day the user ran
+`probes/parquet_source.py` in the target on the production base and committed the report to
+`docs/readings/` (unlike the five probe reports of that day, kept in `secrets/`). After the source base was read (2026-09-20) the user
 decided: partition by date as text `AAAA-MM-DD` like the reference base, the column and its date
 source declared by the client's model (`partition_by`, `partition_source`), so the library's unit is
 the partition and never the month; every numeric column stays `Double`, with no rounding and no
@@ -47,8 +53,10 @@ load: `export_mode="register"` registers the engine's file (`UNLOAD`, DuckDB
 ## The test layout
 
 Test layout (user decision of 2026-09-19): `tests/` holds the package tests (`test_source_db_projetado.py`
-over `source_db_projetado.py`, the fictitious source base of 2026-09-20), `tests/model/`,
-`tests/test_probes.py` and `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
+over `source_db_projetado.py`, the fictitious source base of 2026-09-20), `tests/reference_model/`
+with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` beside it (the pipeline's module
+names the model imports) and `tests/test_reference_model.py`, `tests/test_probes.py` and
+`tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
 both storages, the study suites (commented step by step as learning material, listed per stage in
 `docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
 last-run counts: the `tests/` row of the repository table in `docs/CURRENT_STATE.md` and `README.md`. The 11 s

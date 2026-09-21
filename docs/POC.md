@@ -403,11 +403,12 @@ Hive por `data_base_str` com `2026-01-31` a mais; o valor do caminho é igual a 
 `data_base`, em toda linha da partição, e `meta_update_status` registra cada carga com a partição
 em JSON (`{"data_base": {"__type__": "date", "value": "2026-01-31"}}`). Os arquivos têm até
 1.000.000 de linhas num row group, `chunk_<n>` sem zeros à esquerda, SNAPPY, `PLAIN` e `RLE` sem
-dicionário, `parquet-cpp-arrow`, formato 1.0, a chave `pandas` no rodapé e nenhum `field_id`. Os
+dicionário, `parquet-cpp-arrow`, formato 1.0, a chave `pandas` no rodapé de todo arquivo e nenhum
+`field_id`. Os
 seis tipos: `int32` (30 colunas), `string` (23), `date32` (10), `double` (10), `bool` (3) e
 `timestamp[ns]` em `INT96` (2).
 
-O modelo de referência de `tests/model/` bate com os arquivos: as 12 tabelas, as colunas na mesma
+O modelo de referência de `tests/reference_model/` bate com os arquivos: as 12 tabelas, as colunas na mesma
 ordem, os tipos da tabela de `schema.md` e a nulidade, exceto sete colunas de `cad_contratos`
 anuláveis nos arquivos e `NOT NULL` no modelo, sem nulo nos dados; `alembic_version` e
 `meta_update_status` só existem na origem. Os valores: `valor` de `cad_lancamentos` vai de
@@ -452,6 +453,63 @@ coluna de data de que deriva, e o vocabulário de mês do plano virou partição
 inconsistências da base de desenvolvimento são ignoradas, e a base fictícia é consistente, com a
 relação N×N de `rel_contrato_operacao` e `fator_rateio` somando 1 por operação. A memória por
 partição de `cad_lancamentos` continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a leitura da base de produção mostrou
+
+Em 2026-09-21, às 13:54 UTC, `probes/parquet_source.py --sample 5000` leu no ambiente alvo a base de
+produção `db_projetado`
+(`s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`,
+`S3FileSystem`, a listagem em 0,1 s, os 205 rodapés lidos; o relatório está em
+[`readings/parquet_source-2026-09-21-1354.txt`](readings/parquet_source-2026-09-21-1354.txt)): 14
+pastas de tabela, 205 arquivos, 3.771.538.655 bytes, 187.340.531 linhas, `schema.json` solto na
+raiz, nenhum arquivo ilegível, nenhuma chamada falhada e nenhuma checagem reprovada. A seção 3 é
+idêntica à da base de desenvolvimento, coluna a coluna (as 78 colunas, os tipos, a nulidade, os
+tipos físicos, nenhum `field_id`; conferido por script contra a transcrição de
+`tests/test_source_db_projetado.py`), as partições são as mesmas (`data_str` com `2026-02-28`,
+`2026-03-31` e `2026-06-30`; `data_base_str` com `2026-01-31` a mais), o valor do caminho não está
+dentro do arquivo, o layout físico é o mesmo (um row group, SNAPPY, `PLAIN` e `RLE`,
+`parquet-cpp-arrow`, formato 1.0, `INT96`), as sete colunas sem mínimo e máximo são as mesmas, e o
+`schema.json` é o mesmo controle de esquema. O modelo de referência de `tests/reference_model/`
+bate com ela como com a de desenvolvimento: as 12 tabelas com as colunas na mesma ordem, os mesmos
+tipos e a mesma nulidade, exceto as sete colunas de `cad_contratos` anuláveis nos arquivos e
+`NOT NULL` no modelo, sem nulo nos dados; nenhuma coluna `NOT NULL` do modelo tem nulo;
+`alembic_version` e `meta_update_status` só existem na origem; os órfãos das chaves estrangeiras
+compostas se repetem (`data_base` 2026-01-31 sem `cad_contratos`, o contrato `desemb-999`); e as
+chaves únicas e estrangeiras transcritas em `tests/test_source_db_projetado.py` são as do modelo
+(`tests/test_reference_model.py` fixa as duas conferências, lendo o modelo pelo SQLAlchemy).
+
+As duas bases diferem nos dados, não na estrutura:
+
+| O que | Desenvolvimento (2026-09-20) | Produção (2026-09-21) |
+| --- | --- | --- |
+| Linhas | 187.340.644 | 187.340.531: `cad_contas` 97 em vez de 102 (`numero` até `T.4` em vez de `T.5`), `rel_contas_hierarquias` 89 em vez de 93, `cad_lancamentos` 141.901.795 em vez de 141.901.899; as 104 linhas a menos tinham `sistema` e `contrato` nulos (27.391 e 20.958 nulos em vez de 27.495 e 21.062). |
+| Bytes | 3.757.237.689 | 3.771.538.655 |
+| Ids máximos | `id_contrato` 88.853.864, `id_operacao` 154.461.887, `id_lancamento` 1.113.599.996, `id_rel_contrato_operacao` 556.941.030 | 78.342.969, 136.235.442, 952.517.158 e 490.576.085; os mínimos são iguais. |
+| `cad_aliquotas.id` | 2 a 16 | 1 a 26, com os mesmos 15 pares de contas e os mesmos fatores. |
+| `valor` de `cad_lancamentos` | `±11846195394.628` | `±11846195394.62801` |
+| `meta_update_status` | ids até 182, a última carga em 2026-09-03 | ids até 161, a última carga em 2026-09-14 |
+| Chave `pandas` no rodapé | Em todo arquivo | Em parte: `cad_contratos` 5 de 8, `cad_lancamentos` 111 de 144, `cad_operacoes` 9 de 13, `rel_contrato_operacao` 16 de 30; nenhuma em `alembic_version` e `meta_update_status`; as demais tabelas 1 de 1. |
+
+Os arquivos sem a chave `pandas` na produção são 3, 33, 4 e 14 por tabela; em `cad_contratos`,
+`cad_operacoes` e `rel_contrato_operacao` é o número de arquivos de uma partição (`2026-03-31` ou
+`2026-06-30`), o relatório não diz quais arquivos são, e a hipótese de que a carga de 2026-09-14
+gravou sem passar pelo pandas não foi conferida. O escritor é `parquet-cpp-arrow` nos dois casos, e
+a chave não muda a leitura: o `read_parquet` do DuckDB e o dataset do PyArrow a ignoram, e `cast`
+segue o contrato.
+
+Consequências: a carga inicial ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)) lê a mesma estrutura nos dois
+ambientes, e nenhuma diferença entre as bases muda uma primitiva; `tests/source_db_projetado.py`
+continua a reproduzir a seção 3 e as partições, comuns às duas, com os valores que diferem (ids
+máximos, contagens, `valor`) na leitura de desenvolvimento, e passou a gravar parte dos arquivos
+sem a chave `pandas` (a última partição de cada tabela particionada, `alembic_version` e
+`meta_update_status`), conferido pelo probe sobre a base fictícia no mesmo dia. O modelo de
+referência fica como está, por decisão do usuário de 2026-09-21 (`tests/model/` passou a
+`tests/reference_model/`), então a cópia corrigida da [etapa 1](PLAN-STAGE-1.md), o modelo cliente,
+vai para `tests/client_model/` (pasta proposta, [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); a
+revisão mudou [`PLAN.md`](PLAN.md), [`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
+[`PLAN-STAGE-2.md`](PLAN-STAGE-2.md), [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md),
+[`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), [`serialize-db.md`](serialize-db.md),
+[`sqlalchemy.md`](sqlalchemy.md) e [`CURRENT_STATE.md`](CURRENT_STATE.md).
 
 ## O que o proxy com autenticação mostrou
 
