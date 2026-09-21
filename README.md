@@ -42,22 +42,21 @@ dos testes (`duckdb`, `boto3`, os dialetos `duckdb-engine` e `sqlalchemy-redshif
 `pdoc`. `UV_PYTHON_DOWNLOADS=automatic` só é necessário onde o `uv` está configurado para não baixar
 o Python, como no SageMaker Unified Studio.
 
-O índice `[[tool.uv.index]]` de `pyproject.toml` só responde na rede corporativa; fora dela, um
-arquivo de configuração vazio faz o `uv` ignorar a seção `[tool.uv]` e resolver pelo PyPI, como as
-esteiras do GitHub fazem com `UV_CONFIG_FILE=.github/uv-ci.toml`.
-
 # Documentação
 
 A documentação do pacote é gerada pelo `pdoc` a partir das docstrings e de [`docs/index.md`](docs/index.md),
-a página principal, com o funcionamento geral, o tutorial e a tabela de mapeamento de tipos:
+a página principal, com o funcionamento geral, o tutorial e a tabela de mapeamento de tipos. Para
+gerar o HTML estático, informe a pasta alvo em `-o`:
 
 ```
 uv sync --group docs
-uv run pdoc serialize_db --docformat restructuredtext -o site
+uv run pdoc serialize_db --docformat restructuredtext -o /pasta/da/documentacao
 ```
 
-`site/` fica fora do git. Sem `-o`, o `pdoc` serve a documentação em `http://localhost:8080` e a
-regenera a cada mudança. A esteira [`docs.yml`](.github/workflows/docs.yml) publica o mesmo
+A pasta é criada se não existir e recebe `index.html`, a página principal, `serialize_db.html`,
+`serialize_db/` com uma página por módulo e `search.js`; abra `index.html` no navegador. `site/`,
+a pasta que a esteira usa, fica fora do git. Sem `-o`, o `pdoc` serve a documentação em
+`http://localhost:8080` e a regenera a cada mudança. A esteira [`docs.yml`](.github/workflows/docs.yml) publica o mesmo
 resultado no GitHub Pages a cada push na `main`; o repositório precisa ter o Pages configurado com a
 origem "GitHub Actions".
 
@@ -70,12 +69,12 @@ imprime o comando que a autoriza.
 
 ## Testes do pacote
 
-Os testes de `tests/`, sem `tests/proof_of_concept/`, sobre o DuckDB em memória e arquivos locais,
-sem AWS. É o que a esteira [`tests.yml`](.github/workflows/tests.yml) roda a cada push e pull
-request:
+Os testes de `tests/`, sem `tests/proof_of_concept/` nem `tests/test_probes.py` (as funções puras
+dos probes), sobre o DuckDB em memória e arquivos locais, sem AWS. É o que a esteira
+[`tests.yml`](.github/workflows/tests.yml) roda a cada push e pull request:
 
 ```
-SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept
+SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py
 ```
 
 ## Testes no ambiente AWS

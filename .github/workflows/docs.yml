@@ -1,6 +1,7 @@
 # A documentação do pacote em HTML estático, gerada pelo pdoc a partir das docstrings e de
 # docs/index.md, publicada no GitHub Pages a cada push na main. O repositório precisa ter o Pages
-# configurado com a origem "GitHub Actions".
+# configurado com a origem "GitHub Actions" (Settings, Pages, Build and deployment); sem isso,
+# actions/configure-pages falha com "Get Pages site failed".
 name: Documentação do pacote
 
 on:
@@ -16,11 +17,6 @@ permissions:
 concurrency:
   group: pages
   cancel-in-progress: true
-
-env:
-  # O índice corporativo de pyproject.toml ([[tool.uv.index]]) só responde na rede corporativa; um
-  # arquivo de configuração vazio faz o uv ignorar a seção [tool.uv] e resolver pelo PyPI.
-  UV_CONFIG_FILE: ${{ github.workspace }}/.github/uv-ci.toml
 
 jobs:
   build:

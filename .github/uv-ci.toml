@@ -1,3 +1,0 @@
-# Configuração do uv nas esteiras do GitHub (UV_CONFIG_FILE nos workflows): vazia de propósito.
-# Com um arquivo de configuração, o uv ignora a seção [tool.uv] de pyproject.toml, onde está o
-# índice corporativo que só responde na rede corporativa, e resolve as dependências pelo PyPI.
