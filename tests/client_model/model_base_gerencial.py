@@ -117,7 +117,7 @@ class RelContratoOperacao(Base):
                 "serialize_db": {
                     "partition_by": ["data_str"],
                     "partition_source": "data",
-                    "sort_key": ["data", "operacao"],
+                    "sort_key": ["data", "sistema", "contrato", "operacao"],
                 }
             },
         },
@@ -206,7 +206,7 @@ class Lancamento(Base):
                 "serialize_db": {
                     "partition_by": ["data_base_str"],
                     "partition_source": "data_base",
-                    "sort_key": ["data_base", "data", "id_conta"],
+                    "sort_key": ["data_base", "id_mensuracao", "id_veiculo", "id_conta"],
                 }
             },
         },

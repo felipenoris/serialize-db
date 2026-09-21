@@ -90,8 +90,10 @@ tabela. Antes do alvo, três coisas:
   6,1 GiB, a medição de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que decide o padrão de
   `export_mode`.
 
-Os tipos e a `sort_key` do modelo cliente ficam fechados antes da execução: mudá-los depois é
-reescrever o Delta. Quando as etapas 3, 4 e 7 chegarem, o corpo do script vira `initial_load`, e
+Os tipos do modelo cliente ficam fechados antes da execução: mudá-los depois é reescrever o
+Delta. A `sort_key` de cada tabela particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
+2026-09-21); o log do Delta não a guarda, e mudá-la depois é reordenar as partições que interessam.
+Quando as etapas 3, 4 e 7 chegarem, o corpo do script vira `initial_load`, e
 `tests/test_load.py` o cobre; até `serialize-db load` existir, o script em `scripts/` é a
 ferramenta de operação.
 
@@ -327,9 +329,9 @@ tipos físicos gravados: {'id_contrato': 'INT64', 'data': 'INT32', 'contrato': '
 
 - **[decisão] A `sort_key` na consulta da carga.** O `COPY` sem `ORDER BY` grava na ordem dos
   arquivos; ordenar pela `sort_key` do modelo melhora a poda e custa uma ordenação por partição, que
-  em `cad_lancamentos` é de 35 milhões de linhas sob `memory_limit`. O modelo cliente propõe a
-  `sort_key` de cada tabela particionada ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md)), fechada antes da
-  migração adiantada.
+  em `cad_lancamentos` é de 35 milhões de linhas sob `memory_limit`. A `sort_key` de cada tabela
+  particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md), 2026-09-21); a medição da
+  partição de `cad_lancamentos` com e sem o `ORDER BY` decide se a carga ordena.
 - **[decisão] O padrão de `export_mode` na carga**, `register` até a medição da partição de
   `cad_lancamentos` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o ambiente alvo tem 7,6 GiB, e o
   `write_deltalake` de um leitor cresceu com a entrada (1.140 MB para 135 MB de Parquet). A
