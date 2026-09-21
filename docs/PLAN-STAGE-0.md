@@ -50,3 +50,41 @@ requisitos do datashare (`RS-17`); a execução seguinte, com o probe revisto, c
 (`RS-19`), o que `has_schema_privilege` e `svv_table_info` respondem depois dele (`RS-5`, `RS-8`) e
 onde as tabelas de execução podem nascer (`RS-9`), a questão de
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que a suíte não alcança sem escrever.
+
+## Interface
+
+A etapa não entrega módulo: as suas APIs são as dos pacotes externos, exercitadas por
+`tests/proof_of_concept/` e por `examples/`. O que ela fixa para as etapas seguintes são os
+parâmetros do ambiente alvo (`RedshiftConfig` da [etapa 5](PLAN-STAGE-5.md), lidos de
+`SERIALIZE_DB_REDSHIFT_*`) e os comandos que passaram lá, repetidos verbatim pelos motores.
+
+## Pré-requisitos e pós-condições
+
+| Item | Pré-requisitos | Pós-condições |
+| --- | --- | --- |
+| Probes no ambiente alvo | `space.py`, `diagnose_aws.py`, `bucket.py` sobre a raiz escolhida, `redshift.py` e `parquet_source.py` executados no ambiente, cada relatório colado na conversa e o do Redshift guardado em `docs/readings/`. | Cada leitura que contraria um documento dispara a revisão dele na mesma unidade de trabalho; as leituras `RS-5`, `RS-8` e `RS-19` fecham o item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) sobre o `USE`. |
+| Suíte `-m redshift` | As variáveis de `README.md` (`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, `SERIALIZE_DB_TEST_S3_ROOT`, `SERIALIZE_DB_REDSHIFT_WORKGROUP`, `_DATABASE`, `_SHARE_DATABASE`), a identidade da sessão com `s3:GetObject`, `PutObject` e `DeleteObject` sob a raiz, e `SERIALIZE_DB_TEST_REPORT` apontando para um arquivo, porque o relatório é a resposta. | O relatório JSON entra em `docs/readings/`, cada `redshift.*` do relatório responde uma linha da tabela de testes desta etapa e entra em [`redshift.md`](redshift.md), e [`POC.md`](POC.md) ganha a seção da execução com a data; a suíte é reexecutada uma segunda vez antes de qualquer consequência entrar num arquivo de etapa. |
+| Exemplos | Um script novo só entra em `examples/` depois de rodar; até lá ele é o próximo experimento, dito no docstring. | O script fica como rodou, o probe e a suíte repetem as suas chamadas. |
+
+## Testes por caso
+
+Cada pergunta pendente da etapa tem um teste na suíte, e a coluna da direita diz onde a resposta
+entra.
+
+| Pergunta | Teste em `test_redshift.py` | Documento que recebe a resposta |
+| --- | --- | --- |
+| `COPY` de Parquet aceita lista de colunas; `FILLRECORD` completa um arquivo anterior a uma coluna nova. | `test_copy_column_list_and_fillrecord` | [`redshift.md`](redshift.md), "Regras do COPY para Parquet"; a ingestão da [etapa 5](PLAN-STAGE-5.md) e a publicação da [etapa 8](PLAN-STAGE-8.md) escolhem entre lista de colunas e `ALTER TABLE ADD COLUMN`. |
+| `DECIMAL(18, 2)` em `INT64` e `timestamp_ntz` em `INT64` de microssegundos carregam pelo `COPY`. | `test_copy_manifest_from_delta_files` | [`redshift.md`](redshift.md) e a tabela de tipos de [`schema.md`](schema.md). |
+| Uma string acima do `VARCHAR` de destino trunca ou aborta. | `test_copy_varchar_overflow` | A auditoria de tamanho da [etapa 4](PLAN-STAGE-4.md) passa a barreira ou a aviso. |
+| `SUPER` recebe um documento acima de 65.535 bytes pelo `COPY` direto. | `test_super_and_json_parse` | O caminho `VARCHAR(65535)` mais `JSON_PARSE` da staging fica ou cede ao `COPY` em `SUPER`. |
+| Dois `COPY` e dois `UNLOAD` em conexões distintas correm em paralelo dentro das slots do WLM. | `test_parallel_copy_and_unload_on_two_connections` | `max_workers` de `publish_redshift` na [etapa 6](PLAN-STAGE-6.md). |
+| `fetchmany` lê do socket ou o `execute` materializa o resultado. | `test_cursor_fetchmany_feeds_record_batches`, com uma consulta grande e a memória medida | O `stream` do motor Redshift decide se precisa do `UNLOAD` acima de um limite de linhas ([etapa 5](PLAN-STAGE-5.md)). |
+| `has_schema_privilege` e `svv_table_info` respondem pelo esquema do datashare depois do `USE`. | `probes/redshift.py` (`RS-5`, `RS-8`, `RS-19`) | Onde as tabelas de execução nascem ([etapa 5](PLAN-STAGE-5.md)). |
+| `schema.elements` do manifesto verboso lista a coluna de partição. | `test_unload_partition_by_and_register` (`redshift.unload.manifest_schema`) | A conferência de `register_files` recebe a lista esperada ([etapa 3](PLAN-STAGE-3.md)). |
+| O `UNLOAD` nomeia os arquivos e recusa um destino que já tem objetos no prefixo. | `test_unload_partition_by_and_register` (`ALLOWOVERWRITE` fora, um segundo `UNLOAD` no mesmo destino) | O destino `<uri>/<execution_id>/` da [etapa 5](PLAN-STAGE-5.md). |
+
+## Decisões pendentes
+
+- **[decisão] A suíte Redshift roda antes ou depois da etapa 1.** A ordem do trabalho põe as
+  etapas 1 e 2 em pasta local; a suíte depende só do ambiente alvo e pode rodar a qualquer momento.
+  Rodar antes fixa a tabela de tipos de [`schema.md`](schema.md) antes de `cast` ser escrito.

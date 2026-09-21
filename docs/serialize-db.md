@@ -53,8 +53,9 @@ módulo, em `PLAN-STAGE-<n>.md`.
 - **Linha de comando e documentação.** `serialize-db run` executa o pipeline, e o `pdoc` gera a
   documentação da API.
 
-Os módulos são `serialize_db.schema`, `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`,
-`serialize_db.engine.duckdb`, `serialize_db.engine.redshift` e `serialize_db.execution`; o pacote não
+Os módulos são `serialize_db.errors`, `serialize_db.schema`, `serialize_db.sql`, `serialize_db.storage`,
+`serialize_db.delta`, `serialize_db.audit`, `serialize_db.engine.duckdb`, `serialize_db.engine.redshift`,
+`serialize_db.execution`, `serialize_db.load`, `serialize_db.publication` e `serialize_db.cli`; o pacote não
 contém modelos, que vêm da biblioteca cliente. O modelo de referência em `tests/model/` é a
 primeira instância do contrato e o material dos testes, que o entregam à API como um pipeline
 entregaria os seus modelos. As etapas de implementação, com o critério de aceite de cada uma, estão
@@ -132,7 +133,9 @@ Delta. A origem é a base de `data_str=<AAAA-MM-DD>/chunk_<n>.parquet` lida em 2
 2. Para cada partição da origem, o DuckDB ou o PyArrow lê os Parquet da pasta, a coluna de partição
    recebe o valor do caminho, as chaves passam de `int32` a `int64`, o `timestamp` `INT96` é
    truncado a microssegundos, as colunas `double` entram como estão, `cast` converte para o
-   contrato e `publish_partition` grava a partição em lotes, sem a tabela inteira na memória. Uma
+   contrato e a partição entra conforme `export_mode`: `register` registra por `register_files` o
+   arquivo do `COPY ... (RETURN_STATS)` do DuckDB, `rewrite` grava por `publish_partition` a partir
+   do leitor, sem a tabela inteira na memória ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)). Uma
    carga interrompida recomeça da partição seguinte à última publicada.
 3. O relatório compara contagens e somas por partição entre a origem e o Delta; a carga só termina
    quando os dois coincidem.
@@ -263,7 +266,7 @@ Para publicar no Hive ou para sair do Delta.
 1. A pasta do ambiente é copiada inteira, com `_delta_log/` de cada tabela e `_serialize_db/`, por
    `aws s3 sync` entre prefixos ou entre disco e S3; os caminhos do log e do arquivo de controle são
    relativos, e a cópia abre onde estiver, na mesma versão.
-2. Um ambiente de desenvolvimento nasce de uma cópia de produção: `Database(root, environment="dev")`
+2. Um ambiente de desenvolvimento nasce de uma cópia de produção: `Database(root, environment="dev", metadata=Base.metadata)`
    aponta para a pasta copiada, e as tabelas publicadas levam o prefixo `dev_`.
 3. Execuções de ambientes diferentes não conflitam, porque gravam tabelas diferentes; a concorrência
    que resta é entre execuções do mesmo ambiente, que o log serializa.

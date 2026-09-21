@@ -104,3 +104,16 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   holds one row per table in a 20 KB file. DuckDB `iceberg_scan` needs the `metadata.json` path,
   because PyIceberg writes no `version-hint.text` and names metadata `<N>-<uuid>.metadata.json`.
   Partition transforms on write need the `pyiceberg-core` extra. `docs/estrategia.md`
+
+## Drafts of 2026-09-21
+
+- `optimize.compact` commits `add` and `remove` actions with `dataChange: false` and their
+  `partitionValues`; a partition with a single file is not compacted and no commit is written, so the
+  version does not move. `version_diff` reads `_delta_log/<v>.json` and skips `dataChange: false`.
+  `alter.add_columns` takes the Delta type object of a field (`Field(name, <PrimitiveType>)`), not its
+  string. `get_add_actions(flatten=True)` is an `arro3` table: convert with `pa.table(...)` before
+  `pc.max`. `vacuum` within the 400-day retention lists nothing even with intermediate versions;
+  `keep_versions` only matters past the retention, and `vacuum` writes two commits (`VACUUM START`,
+  `VACUUM END`) without library metadata. A `publish` that compared versions by equality would abort
+  after a `vacuum`, `compact` or `reconcile`: `Execution.publish` compares by `version_diff`.
+  `docs/POC.md`, `docs/PLAN-STAGE-3.md`, `docs/PLAN-STAGE-6.md`

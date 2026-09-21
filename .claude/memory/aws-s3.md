@@ -32,3 +32,12 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `AWS_REGION` and no `~/.aws/config` needs maintenance; `test_boto3_credential_source` needs STS
   (60 s per attempt, 5 attempts by default). On a dead network delta-rs gives up in 10 s with
   `max_retries=1` and `retry_timeout=10s` in `storage_options` (59 s without). `README.md`
+
+## The target's network, read on 2026-09-21
+
+- No proxy variable, no internet; S3 through the gateway endpoint (public IPs, port 443 connects);
+  STS by interface endpoint; IAM (`iam.amazonaws.com`) and KMS unreachable (10 s and 80 s timeouts
+  in `bucket.py` and `redshift.py`). `diagnose_aws.py` had boto3, delta-rs as found and DuckDB list
+  the test prefix with both region variables set: the S3 suite needs no maintenance there, and the
+  library never calls IAM or KMS (SSE-KMS is applied by S3; the first write proves the permission).
+  `docs/POC.md`, `docs/PLAN.md`

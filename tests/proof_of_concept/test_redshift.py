@@ -170,11 +170,10 @@ def test_schema_location_and_use_of_the_share_database(redshift_session: Redshif
     """Em que banco está o esquema do projeto, o que o ``USE`` mudou na sessão, e o ida e volta por ``esquema.tabela``."""
     session = redshift_session
 
-    # 0. O USE de connect_redshift trocou o banco da sessão: é o que faz o nome em duas partes valer.
-    current = session.execute("select current_database()")[0][0]
-    record("redshift.current_database", current)
-    if session.share_database:
-        assert current == session.share_database, f"USE {session.share_database} não trocou o banco: {current}"
+    # 0. O USE de connect_redshift faz o nome em duas partes resolver no banco do datashare, e o passo 4
+    # é a prova. current_database() continua a responder o banco da conexão depois do USE (ambiente
+    # alvo, 2026-09-21, docs/POC.md), então o valor é leitura, não asserção.
+    record("redshift.current_database", session.execute("select current_database()")[0][0])
 
     # 1. Os bancos que a sessão enxerga: o tipo diz local ou shared, e o isolamento precisa ser de
     # snapshot no banco que recebe escrita vinda de outro warehouse.

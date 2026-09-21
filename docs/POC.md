@@ -587,3 +587,114 @@ Consequências: a fronteira do plano passou de `pa.Table` a lotes `RecordBatch` 
 cada stream e loader; e o `fetchmany` do `redshift_connector` entrou em
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). Suíte: 110 passam e 60 são pulados sem variável; 148 e
 22 com a raiz local (2026-09-20, macOS).
+
+## O que a leitura do ambiente alvo em 2026-09-21 mostrou
+
+Em 2026-09-21, entre 03:47 e 03:51 UTC, o usuário executou os cinco probes no ambiente alvo (Linux
+x86_64, Python 3.13.15, o `.venv` do projeto preparado por `prepare_offline.sh`), com a raiz
+`s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests`.
+Os relatórios estão em `secrets/probes-aws-bn/`, fora do git, por escolha do usuário
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); os números abaixo saem deles.
+
+**A máquina** (`space.py`): 2 vCPUs, 7,6 GiB de memória, 29,8 GiB livres de 37,0 GiB num disco só,
+que serve `HOME`, `/tmp` e o repositório; `ulimit -n` 65536. O DuckDB 1.5.5 `linux_amd64` nasce com
+2 threads, `memory_limit` 6,1 GiB e `temp_directory` `.tmp`, e carregou `httpfs`, `delta` e `aws` de
+`.duckdb/` da pasta preparada (`SP-10`); o `.venv` tem o grupo `dev` nas versões fixadas (`SP-9`).
+`uv`, `git`, `aws` e `duckdb` estão no `PATH`, `gh` não; `~/shared` não existe. O Python do sistema
+(`/opt/conda`) é 3.12.14 com deltalake 1.6.3, DuckDB 1.5.1, PyArrow 21.0.0 e `sagemaker_studio`
+1.1.32, que falha com `ProfileNotFound (DomainExecutionRoleCreds)`: as conexões do projeto não são
+legíveis dali, e a biblioteca não depende delas.
+
+**A rede** (`space.py`, `diagnose_aws.py`, `catalog.py`): nenhuma variável de proxy, em nenhuma
+grafia, e a internet inalcançável (`Network is unreachable` para o PyPI em 20 s), o que confirma a
+declaração de 2026-09-19. Os nomes do S3 (`s3.sa-east-1.amazonaws.com`, o global e o do bucket)
+resolvem para IP público e a porta 443 conecta em 0,00 s: é o endpoint de gateway. Têm endpoint de
+interface com DNS privado o STS, as três APIs do Redshift e o host do workgroup, o Glue, o Athena, o
+Secrets Manager e o DataZone. Resolvem para IP público e não respondem o KMS (`describe_key` esperou
+80 s), o IAM (`iam.amazonaws.com`, `simulate_principal_policy` esperou 10 s em `bucket.py` e em
+`redshift.py`), o SageMaker, o Lake Formation (30 s) e o S3 Tables (31 s). As credenciais vêm do
+endpoint do contêiner (`container-role`), duram cerca de uma hora (expiração 04:31:35 lida às 03:48),
+e `AWS_REGION` e `AWS_DEFAULT_REGION` estão as duas em `sa-east-1`, sem `~/.aws/config`.
+
+**O diagnóstico da suíte S3** (`diagnose_aws.py`): o `boto3`, o delta-rs como encontrado e o DuckDB
+com as extensões da pasta listaram o prefixo; a região saiu igual nos dois clientes; o STS respondeu
+pelo endpoint privado; "suíte S3 como está". A pergunta de manutenção da suíte S3 para o cenário sem
+proxy sai de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) respondida: nada a fazer, e
+`prepare_environment` da [etapa 3](PLAN-STAGE-3.md) fica como está, para um ambiente que tenha só
+uma das variáveis.
+
+**O bucket** (`bucket.py`): `bndes-aco-models-138071776059` em `sa-east-1`, SSE-KMS pela chave
+`55dd0bd2-f2f2-44be-9a62-bd4264a2ef45` com bucket key, SSE-C bloqueado, acesso público bloqueado,
+versionado pela amostra (`VersionId` no marcador de pasta); o papel não lê versionamento, Object Lock,
+propriedade, ciclo de vida, política nem uploads incompletos, como no laboratório. Sob a raiz de
+testes há um marcador de pasta de 2026-09-20 e nada mais: nenhuma tabela Delta, nenhuma sessão da
+suíte, nenhuma versão não corrente. A suíte S3 ainda não rodou lá.
+
+**O catálogo** (`catalog.py`): o Glue tem o banco `glue_db_5feoihj3bbzkt7` com uma tabela Parquet e
+nenhum catálogo federado; o Athena tem três workgroups, com `GetWorkGroup` negado em `primary`; o
+Lake Formation e o S3 Tables não respondem. O gatilho de reavaliação de
+[`estrategia.md`](estrategia.md) não disparou.
+
+**O Redshift** (`redshift.py`): o que a leitura de 2026-09-20 mostrou se repetiu (workgroup,
+namespace sem papel IAM, endpoints privados, credencial temporária de uma hora, versão `1.0.436211`,
+`CREATE` negado e `TEMP` permitido em `dev`, `stv_slices` negada), e `sys_load_error_detail`
+respondeu `0` em 2,4 s. Leituras novas: `enable_case_sensitive_identifier` `off`, `datestyle`
+`ISO, MDY`, `statement_timeout` 0, `wlm_query_slot_count` 1, `search_path` `$user, public`. O
+`select 1` da Data API ficou 30 s em `PICKED` sem terminar, contra 23 ms em 2026-09-20. E `RS-19`
+reprovou: depois de `USE datalake_rw_shared`, `select current_database()` respondeu `dev`. O
+critério estava errado, não o `USE`: os exemplos de 2026-09-20 e 2026-09-21 rodaram `CREATE`,
+`COPY`, `INSERT` e `UNLOAD` por `sbx_aco_decon.<tabela>` depois do mesmo `USE`, e o usuário
+confirmou no mesmo dia que o `USE` vale e `current_database()` não o reflete. Como `RS-5` e `RS-8`
+dependiam de `RS-19`, `has_schema_privilege` e `svv_table_info` continuam por ler depois do `USE`.
+
+Consequências no plano, nesta mesma unidade de trabalho:
+
+- A [etapa 5](PLAN-STAGE-5.md) confirma o `USE` resolvendo um nome em duas partes (o `CREATE TABLE IF
+  NOT EXISTS` da tabela de controle), nunca por `current_database()`; `RS-19` passou a resolver uma
+  tabela listada por `svv_all_tables` e a registrar `current_database()` como leitura, e
+  `tests/proof_of_concept/test_redshift.py` deixou de exigir o banco do datashare nessa função.
+- A [etapa 4](PLAN-STAGE-4.md) nasce com o banco DuckDB em arquivo, `memory_limit` explícito abaixo
+  dos 6,1 GiB que o DuckDB tomaria e `temp_directory` conferido: 7,6 GiB e 29,8 GiB livres não cabem
+  uma tabela materializada de doze partições de `cad_lancamentos` em memória, e cabem em disco. O
+  `export_mode="register"` fica reforçado como caminho das partições grandes
+  ([etapa 7](PLAN-STAGE-7.md)).
+- [`PLAN.md`](PLAN.md) ganhou a regra do ambiente alvo: a biblioteca não chama o IAM nem o KMS, a
+  permissão sobre a raiz é provada pela primeira escrita, e a criptografia SSE-KMS é aplicada pelo S3.
+- Os probes ganham tempo limite curto no IAM e no KMS, pendência de
+  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), junto com a Data API em `PICKED` e a decisão de copiar ou
+  não os relatórios para `docs/readings/`.
+
+## O que os rascunhos das etapas mostraram
+
+Em 2026-09-21, no macOS arm64 com deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, SQLAlchemy 2.0.54,
+duckdb-engine 0.17.0 e sqlalchemy-redshift 1.0.0, os rascunhos das etapas 1 a 9 rodaram no
+scratchpad e estão em cada `PLAN-STAGE-<n>.md`, seção "Rascunhos executados". O que eles mostraram
+além do que já estava medido:
+
+- O commit de `optimize.compact` grava `dataChange` falso nas ações `add` e `remove`, com
+  `partitionValues`; `version_diff` lê o log e ignora essas ações, então uma compactação não recarrega
+  partição nenhuma no Redshift. A compactação de uma partição com um só arquivo não commita, e a
+  versão não muda; `numFilesAdded` e `numFilesRemoved` das métricas conferem com o log (1 e 3).
+- `alter.add_columns` recebe o tipo Delta do campo (`Field(nome, <PrimitiveType>)`); o texto do tipo
+  (`PrimitiveType("string")`) é recusado com `invalid type string`.
+- `get_add_actions(flatten=True)` devolve uma tabela `arro3`, que `pa.table(...)` converte pelo
+  PyCapsule sem cópia; `pc.max` sobre a coluna `arro3` falha.
+- Um lote de `fetchmany` montado por colunas (`zip(*linhas)` e `pa.array(coluna, type=...)`) levou
+  0,03 s para 200.000 linhas em quatro colunas (`int64`, `decimal128(18, 2)`, `date32`, `string`),
+  contra 0,10 s por `RecordBatch.from_pylist` de dicionários; a primeira chamada de cada forma paga
+  a importação preguiçosa (0,16 s e 0,24 s). O `stream` do motor Redshift monta por colunas.
+- `RecordBatch.from_arrays(colunas, schema=...)` converte cada coluna ao tipo do esquema e levanta
+  `ArrowInvalid` numa escala perdida (`Rescaling Decimal value would cause data loss`); o `cast` da
+  etapa 1 embrulha a chamada e devolve `ContractError`.
+- O `autoincrement` padrão de uma coluna é a string `"auto"`, não `True`; `check_models` reprova os
+  dois numa chave inteira.
+- O DDL do `duckdb_engine` escreve `NUMERIC(18, 2)`, `DOUBLE PRECISION` e `TEXT`, que o DuckDB
+  registra como `DECIMAL(18,2)`, `DOUBLE` e `VARCHAR`.
+- `vacuum` com a retenção de 400 dias não lista nada numa tabela com versões intermediárias de hoje:
+  a retenção é a janela em que toda versão continua legível, e `keep_versions` só faz diferença fora
+  dela; com retenção zero e o snapshot preso, 5 de 6 arquivos saem, a versão do snapshot lê e a
+  intermediária falha com `FileNotFoundError`. O `vacuum` grava dois commits (`VACUUM START` e
+  `VACUUM END`), sem metadados da biblioteca.
+- Uma execução que confere a versão por igualdade abortaria depois de um `vacuum`, um `compact` ou
+  um `reconcile` de outra sessão; `Execution.publish` passou a conferir por `version_diff`
+  ([etapa 6](PLAN-STAGE-6.md)).

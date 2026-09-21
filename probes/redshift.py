@@ -774,11 +774,12 @@ def session(report: Report, target: Target) -> None:
         )
         getattr(report, status)("RS-17", "escrita no banco do datashare", verdict)
 
-    # RS-19: USE troca o banco da sessão, e só dela: a partir daqui esquema.tabela vale, que é como o
-    # CREATE, o COPY e o UNLOAD passaram (examples/redshift_copy_unload.py e redshift_manifest.py, este
-    # com os dois comandos de manifesto em 2026-09-21) e como tests/conftest.py
-    # abre cada conexão. A biblioteca depende da troca, então current_database() é conferido. Nada é
-    # criado, alterado nem apagado.
+    # RS-19: depois do USE, esquema.tabela resolve no banco do datashare, que é como o CREATE, o COPY e
+    # o UNLOAD passaram (examples/redshift_copy_unload.py e redshift_manifest.py, este com os dois
+    # comandos de manifesto em 2026-09-21) e como tests/conftest.py abre cada conexão. A prova da troca
+    # é resolver um nome em duas partes de uma tabela que svv_all_tables lista no esquema:
+    # current_database() continuou respondendo o banco da conexão depois do USE (ambiente alvo,
+    # 2026-09-21), então ele é leitura, não critério. Nada é criado, alterado nem apagado.
     share = target.share_database
     used_share = False
     if not schema:
@@ -788,14 +789,26 @@ def session(report: Report, target: Target) -> None:
     else:
         current = report.call(f"use {share}; select current_database()", lambda: (query(f"USE {share}"), query("select current_database()"))[1], render=render_rows)
         landed = str(current[1][0][0]) if current and current[1] else None
-        if landed and landed.lower() == share.lower():
-            used_share = True
-            report.value("REDSHIFT_CURRENT_DATABASE", landed)
-            report.ok("RS-19", "USE no banco do datashare", f"a sessão passou a {landed}: {target.qualified('<tabela>')} basta, como em examples/redshift_copy_unload.py")
-        elif landed:
-            report.fail("RS-19", "USE no banco do datashare", f"USE {share} deixou a sessão em {landed}: a biblioteca depende da troca")
-        else:
+        if current is None:
             report.fail("RS-19", "USE no banco do datashare", f"USE {share}: {report.last_reason}; ver a seção final")
+        else:
+            report.value("REDSHIFT_CURRENT_DATABASE", landed)
+            listed = report.call(
+                f"svv_all_tables, uma tabela de {share}.{schema} para resolver por nome em duas partes",
+                lambda: query(
+                    "select table_name from svv_all_tables where lower(database_name) = lower(%s) and lower(schema_name) = lower(%s) order by 1 limit 1",
+                    (share, schema),
+                ),
+                render=render_rows,
+            )
+            probe_table = str(listed[1][0][0]) if listed and listed[1] else None
+            if probe_table is None:
+                report.note("RS-19", "USE no banco do datashare", f"USE {share} aceito e current_database() em {landed}; sem tabela em {schema} para provar a resolução de {target.qualified('<tabela>')}, o primeiro CREATE da suíte é o teste")
+            elif report.call(f"select 1 from {target.qualified(probe_table)} where false (resolução depois do USE)", lambda: query(f"select 1 from {target.qualified(probe_table)} where false")) is not None:
+                used_share = True
+                report.ok("RS-19", "USE no banco do datashare", f"{target.qualified(probe_table)} resolveu depois do USE {share}; current_database() respondeu {landed}, que não reflete a troca")
+            else:
+                report.fail("RS-19", "USE no banco do datashare", f"{target.qualified(probe_table)} não resolveu depois do USE {share}: {report.last_reason}; a biblioteca depende da troca")
 
     # RS-5 e RS-8: no esquema do projeto, USAGE e CREATE, e quantas tabelas já têm o prefixo da
     # biblioteca. has_schema_privilege e svv_table_info enxergam o banco da sessão: num esquema local

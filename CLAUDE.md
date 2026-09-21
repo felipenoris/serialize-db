@@ -200,7 +200,7 @@ research appends to the matching group.
 | `docs/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection, deferrable constraints, Core and ORM for DDL and DML, server-generated keys, SQL generation per dialect (`compile`, dialect objects and paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`), the `Numeric` float conversion, the verdict per part, the recommendation without the compatibility premise and the gradual replacement of runtime compilation by generated SQL text (`param`, `prefixed`, `render`, `write_sql_files`, `execute`). |
 | `docs/delta.md` | Delta Lake as the source of truth: folder layout and log actions, Delta versus Iceberg, the implementations and the delta-rs gaps, S3 requirements, types and JSON, table creation from the model, schema evolution with the measured rename/drop rewrite, transactions, conflicts and restore, DML, ingestion and export, pipeline steps, DuckDB and Redshift access, performance, relocation and SQLAlchemy support. |
 | `docs/PLAN.md` | The plan (pt-BR): the decisions with the premises behind them, the streaming `pa.RecordBatch` boundary with client code and its measured hazards, the rules every stage obeys, the package layout with dependencies, configuration and test policy, the table of stages 0 to 9 with delivery and acceptance criterion, the monthly pipeline with the `Execution` API, and the order of work. |
-| `docs/PLAN-STAGE-0.md` to `docs/PLAN-STAGE-9.md` | One file per stage, indexed in `docs/PLAN.md`: the module and its primitives with signature and behavior (`schema`, `sql`, `storage` and `delta`, `audit` and `engine.duckdb`, `engine.redshift`, `execution` and `cli`, `load`, the Redshift publication, the operation routines), the tests, the dependencies and the proofs of concept that exercise each API; stage 0 holds the Redshift items of the proof of concept and the probes that precede any stage on AWS. |
+| `docs/PLAN-STAGE-0.md` to `docs/PLAN-STAGE-9.md` | One file per stage, indexed in `docs/PLAN.md`: the module and its primitives with signature and behavior (`schema`, `sql`, `storage` and `delta`, `audit` and `engine.duckdb`, `engine.redshift`, `execution` and `cli`, `load`, the `publication` module, the operation routines), the tests, the dependencies and the proofs of concept that exercise each API, and per stage the sections `Interface` (runnable signature stubs), `Estratégia de implementação`, `Pré-requisitos e pós-condições`, `Testes por caso`, `Rascunhos executados` (the code that ran on 2026-09-21 and its output, the reference for the implementation) and `Decisões pendentes` (mirrored in `docs/OPEN_QUESTIONS.md`); stage 0 holds the Redshift items of the proof of concept and the probes that precede any stage on AWS. |
 | `docs/CURRENT_STATE.md` | Where the implementation stands (pt-BR): the situation of each stage, and the repository artifact by artifact, including the reference model's defects and each suite's last pass and skip counts. |
 | `docs/POC.md` | What each run showed (pt-BR), with the date of each measurement and its consequence in the plan. |
 | `docs/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): one item per pending question, with the run or the decision that will close it; a closed item leaves the file when its answer lands in the owning document. |
@@ -297,6 +297,16 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A memory that hits its ceiling is split, not trimmed**: a fact goes to its theme file in
   `.claude/memory/`, and this file changes only when a rule, a convention or an index entry changes
   (2026-09-21).
+- **A state change is confirmed by the effect the caller depends on**, never by a system function
+  believed to report it: `current_database()` stayed `dev` after a `USE` that made two-part names
+  resolve, and the check built on it failed a working environment (2026-09-21).
+- **`secrets/` stays unread unless the user names a path inside it**: the probe reports of
+  2026-09-21 were read from `secrets/probes-aws-bn/` on request, only that folder, and nothing from
+  them is copied into git; the facts go to `docs/POC.md` (2026-09-21).
+- **A plan revision reads every stage against the decisions memory**: a sentence written before a
+  decision survives in another section (the `pc.round` of the initial load, contradicting the
+  `Double` decision of 2026-09-20, found only by the full review of 2026-09-21); grep the plan for the
+  old rule's vocabulary when a decision lands.
 
 ## Naming conventions
 
@@ -335,12 +345,16 @@ check are columns, ORM classes and the loanwords `sandbox` and `staging`.
 
 Read `docs/PLAN.md`, the stage files, `docs/CURRENT_STATE.md`, `docs/POC.md` and
 `docs/OPEN_QUESTIONS.md` before planning a session. The next session starts stage 1
-(`serialize_db.schema`) and stage 2 (`serialize_db.sql`) on local folders. The plan's unit is the
-partition (`publish_partition`, `partitions=`, `Execution(partition=...)`), never the month. The
-probe, `tests/conftest.py` and the Redshift suite follow the scripts in `examples/`, and
-`docs/PLAN-STAGE-5.md` and `docs/PLAN-STAGE-8.md` carry their consequences. The next
-`probes/redshift.py` run in the target checks the `USE` (`RS-19`) and what `has_schema_privilege`
-answers after it (`docs/OPEN_QUESTIONS.md`).
+(`serialize_db.schema`, with `serialize_db.errors`) and stage 2 (`serialize_db.sql`) on local
+folders, from the `Interface` and `Rascunhos executados` sections of `docs/PLAN-STAGE-1.md` and
+`docs/PLAN-STAGE-2.md`; the pending API decisions are listed per stage in `docs/OPEN_QUESTIONS.md`.
+The plan's unit is the partition (`publish_partition`, `partitions=`, `Execution(partition=...)`),
+never the month. The probe, `tests/conftest.py` and the Redshift suite follow the scripts in
+`examples/`, and `docs/PLAN-STAGE-5.md` and `docs/PLAN-STAGE-8.md` carry their consequences. The
+five probes ran in the target on 2026-09-21 (reports in `secrets/probes-aws-bn/`, outside git,
+interpreted in `docs/POC.md`): no proxy, S3 by gateway endpoint, IAM and KMS unreachable, 2 vCPUs
+and 7.6 GiB; `RS-19` failed on the wrong criterion, `current_database()` does not reflect the `USE`
+(user confirmation), the probe now resolves a two-part name, and `RS-5` and `RS-8` remain unread.
 
 The client boundary's reference sketches `BatchStream` and `Loader` are in
 `tests/proof_of_concept/test_parallel.py`, and the Redshift `fetchmany` question in

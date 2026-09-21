@@ -36,3 +36,14 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   and wants the same names in the same order; `int64` to `decimal128(18, 2)` needs the detour through
   `(21, 2)`; a `dict` column infers `struct` with the union of keys; pandas 3 `str` gives
   `large_string`. `docs/PLAN.md`, `tests/proof_of_concept/test_pyarrow.py`
+
+## Building batches from rows (2026-09-21)
+
+- A `RecordBatch` built by columns from `fetchmany` tuples (`zip(*rows)`, `pa.array(column,
+  type=field.type)`) took 0.03 s for 200,000 rows in four columns against 0.10 s for
+  `RecordBatch.from_pylist` of dicts, after the first call paid the lazy import (0.16 s and 0.24 s);
+  the Redshift `stream` builds by columns. `RecordBatch.from_arrays(columns, schema=...)` casts each
+  column to the schema type and raises `ArrowInvalid` on a lossy decimal rescale, so `cast` wraps it.
+  `duckdb_engine` DDL spells `NUMERIC(18, 2)`, `DOUBLE PRECISION` and `TEXT`, which DuckDB records as
+  `DECIMAL(18,2)`, `DOUBLE` and `VARCHAR`. A column's default `autoincrement` is the string `"auto"`.
+  `docs/POC.md`, `docs/PLAN-STAGE-1.md`, `docs/PLAN-STAGE-5.md`

@@ -53,3 +53,14 @@ both storages, the study suites (commented step by step as learning material, li
 `docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
 last-run counts: the `tests/` row of the repository table in `docs/CURRENT_STATE.md` and `README.md`. The 11 s
 listing failure behind a silent proxy is in `README.md`; `test_delta_rs_credential_chain` runs five variants.
+
+## The target's `USE` and the probe reports of 2026-09-21
+
+On 2026-09-21 the user ran the five probes in the target and saved the reports in
+`secrets/probes-aws-bn/`, asking for them to be read and propagated to the plan: the exception to the
+rule that `secrets/` is never read, limited to that path; the facts are in `docs/POC.md` and the
+reports stay outside git until the user decides to copy them to `docs/readings/`
+(`docs/OPEN_QUESTIONS.md`). The same day the user confirmed the reading of `RS-19`: `USE
+datalake_rw_shared` makes two-part names resolve in the datashare while `current_database()` keeps
+answering `dev`, so the switch is confirmed by resolving a name, never by that function
+(`docs/PLAN-STAGE-5.md`, `docs/redshift.md`).

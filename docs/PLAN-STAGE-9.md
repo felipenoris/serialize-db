@@ -22,3 +22,193 @@ antes e o que esperar depois. Testes: `tests/test_operation.py` sob a raiz local
 (`test_vacuum_with_keep_versions`, `test_compact_and_checkpoint`, `test_dataset_reader_and_deep_copy`,
 `test_export_snapshot_by_copying_files`, `test_log_files`) e
 `test_stdlib.py::test_exclusive_create_atomic_replace_and_fingerprint` (o arquivo de controle).
+
+## Interface
+
+A etapa não acrescenta módulo: as primitivas são as de `serialize_db.delta`
+([etapa 3](PLAN-STAGE-3.md)), e a entrega é o despacho de `serialize_db.cli` para cada rotina, o
+runbook e a documentação do `pdoc`.
+
+```python
+"""Os subcomandos de serialize_db.cli entregues pela etapa 9, com os argumentos de cada um."""
+COMMANDS = {
+    "snapshot": ["--name"],                                  # snapshot(storage, environment, name, versions atuais de todas as tabelas)
+    "vacuum": ["--apply", "--full", "--retention-hours"],    # vacuum_keeping_snapshots por tabela; lista sem --apply
+    "compact": ["--table", "--partitions"],                  # compact; recusa depois de um snapshot sem confirmação
+    "archive": ["--name"],                                   # deep_copy de cada tabela do snapshot para arquivo/<nome>/<tabela>/
+    "export": ["--table", "--destination", "--version", "--mode"],   # export_snapshot
+    "history": ["--table"],                                  # history() com os metadados da biblioteca
+}
+```
+
+## Estratégia de implementação
+
+- **`snapshot`** fora de uma execução lê a versão atual de cada tabela do ambiente e grava a
+  entrada; dentro da execução, `run.snapshot(name)` a grava no encerramento.
+- **`vacuum`** roda `vacuum_keeping_snapshots` para cada tabela com `keep_versions` do arquivo de
+  controle; sem `--apply` imprime a lista por tabela; `--full` inclui os órfãos das escritas
+  interrompidas e dos registros recusados. Dentro da retenção de 400 dias nada é listado, porque a
+  retenção é a janela em que toda versão continua legível; a lista aparece quando um arquivo
+  removido passa dela.
+- **`compact`** roda `optimize.compact` das partições pedidas e imprime `numFilesAdded` e
+  `numFilesRemoved`; uma partição com um só arquivo não commita. O comando confere o arquivo de
+  controle e recusa compactar uma tabela cujo snapshot mais recente é a versão atual, porque a
+  compactação depois do snapshot dobra os arquivos que ele referencia.
+- **`archive`** lê a entrada do snapshot, roda `deep_copy` de cada tabela na versão registrada para
+  `arquivo/<nome>/<tabela>/` e marca a entrada como arquivada no controle, para sair de
+  `keep_versions`.
+- **`export`** chama `export_snapshot` com `--mode copy` ou `rewrite`; `--version` exporta uma
+  versão antiga, com o DDL tirado do esquema daquela versão.
+- **`history`** imprime, por tabela, versão, operação, carimbo e os metadados
+  `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`; os commits
+  de `vacuum` (`VACUUM START`, `VACUUM END`) e de `optimize` aparecem sem metadados.
+- **O runbook** entra em `docs/operacao.md`: uma seção por rotina com o comando, o que conferir
+  antes (o arquivo de controle, o espaço, a última publicação) e o que esperar depois (a versão, a
+  lista do `vacuum`, o `history`).
+
+## Pré-requisitos e pós-condições
+
+| Rotina | Pré-requisitos | Pós-condições |
+| --- | --- | --- |
+| `snapshot` | Nome inédito; nenhuma execução aberta no ambiente. | A entrada com todas as tabelas; `ConflictError` se outro escritor mudou o controle. |
+| `vacuum` | Controle legível. | Sem `--apply`, nenhuma exclusão; com ele, a versão de cada snapshot continua legível e as intermediárias fora da retenção somem. |
+| `compact` | Nenhum snapshot na versão atual da tabela. | Menos arquivos na partição; o mesmo conteúdo; um commit `OPTIMIZE` com `dataChange` falso. |
+| `archive` | Snapshot registrado. | Uma tabela nova na versão 0 por tabela do snapshot, com as mesmas somas; a entrada marcada. |
+| `export` | Destino vazio. | Pastas `<coluna>=<valor>/` sem `_delta_log`; em `copy`, os mesmos bytes; em `rewrite`, o esquema atual em todos os arquivos. |
+| `history` | Nenhum. | Uma linha por commit, sem credencial. |
+
+## Testes por caso
+
+`tests/test_operation.py` sob a raiz local.
+
+| Caso | Teste | O que confere |
+| --- | --- | --- |
+| Snapshot preso | `test_vacuum_keeps_the_snapshot_version` | Com retenção zero e o controle, a versão do snapshot lê e a intermediária falha; dentro da retenção nada é listado. |
+| Compactação antes | `test_compact_refuses_after_a_snapshot_on_the_current_version` | Recusa quando o snapshot é a versão atual; compacta antes; `dataChange` falso no commit. |
+| Cópia profunda | `test_archive_copies_each_table_with_the_same_sums` | Versão 0 no arquivo, somas iguais, entrada marcada. |
+| Exportação | `test_export_by_copy_and_by_rewrite` | Os dois modos e uma versão antiga. |
+| Histórico | `test_history_shows_library_metadata` | Os três metadados nos commits da biblioteca; nenhum nos de manutenção. |
+| Linha de comando | `test_cli_operation_commands` | Cada subcomando com os argumentos; `vacuum` sem `--apply` não apaga. |
+
+## Rascunhos executados
+
+O rascunho rodou em 2026-09-21 com as versões fixadas: três arquivos pequenos compactados antes do
+snapshot, a entrada gravada, duas correções posteriores, o `vacuum` dentro e fora da retenção, a
+cópia profunda e o histórico.
+
+```python
+"""Etapa 9: o snapshot do banco no arquivo de controle, o vacuum que o preserva, a compactação antes dele, a cópia profunda e o histórico."""
+import datetime as dt
+import decimal
+import json
+import os
+import tempfile
+
+import pyarrow as pa
+from deltalake import CommitProperties, DeltaTable, write_deltalake
+
+PARTITION = "data_str"
+
+
+def rows(value: str, start: int, n: int) -> pa.Table:
+    return pa.table({"id_operacao": pa.array(range(start, start + n), pa.int64()), "valor": pa.array([decimal.Decimal(k) / 100 for k in range(start, start + n)], pa.decimal128(18, 2)),
+                     PARTITION: pa.array([value] * n)})
+
+
+def snapshot(control_path: str, name: str, versions: dict[str, int]) -> dict:
+    """A entrada {nome: versões} em snapshots.json; na biblioteca a escrita é write_text(if_match=...) do storage."""
+    control = json.loads(open(control_path).read()) if os.path.exists(control_path) else {"snapshots": {}}
+    if name in control["snapshots"]:
+        raise ValueError(f"snapshot {name} já existe: {control['snapshots'][name]}")
+    control["snapshots"][name] = dict(sorted(versions.items()))
+    with open(control_path, "w") as handle:
+        json.dump(control, handle, indent=2, sort_keys=True)
+    return control
+
+
+def vacuum_keeping_snapshots(uri: str, table: str, control: dict, retention_hours: int = 24 * 400, apply: bool = False) -> list[str]:
+    keep = sorted({v[table] for v in control["snapshots"].values() if table in v})
+    return DeltaTable(uri).vacuum(retention_hours=retention_hours, enforce_retention_duration=False, dry_run=not apply, keep_versions=keep)
+
+
+def compact(uri: str, partitions: list[str]) -> dict:
+    return DeltaTable(uri).optimize.compact(partition_filters=[(PARTITION, "in", partitions)])
+
+
+def deep_copy(uri: str, version: int, destination: str) -> int:
+    reader = DeltaTable(uri, version=version).to_pyarrow_dataset().scanner().to_reader()          # nunca to_pyarrow_table antes de encerrar
+    write_deltalake(destination, reader, mode="overwrite", partition_by=[PARTITION])
+    return DeltaTable(destination).version()
+
+
+def history(uri: str) -> list[dict]:
+    """Os commits da biblioteca: versão, operação e os metadados próprios."""
+    keys = ("serialize_db_execution_id", "serialize_db_input_versions", "serialize_db_snapshot")
+    return [{"version": h["version"], "operation": h["operation"], **{k: h[k] for k in keys if k in h}} for h in DeltaTable(uri).history()]
+
+
+with tempfile.TemporaryDirectory() as folder:
+    uri, control_path = os.path.join(folder, "prod", "cad_operacoes"), os.path.join(folder, "prod", "_serialize_db", "snapshots.json")
+    os.makedirs(os.path.dirname(control_path))
+    props = lambda execution, snap=None: CommitProperties(custom_metadata={"serialize_db_execution_id": execution} | ({"serialize_db_snapshot": snap} if snap else {}))
+    write_deltalake(uri, rows("2026-07-31", 1, 100), partition_by=[PARTITION], commit_properties=props("exec-1"))                    # 0
+    for k in range(3):
+        write_deltalake(uri, rows("2026-08-31", 101 + k, 10), mode="append", commit_properties=props("exec-2"))                       # 1..3, três arquivos pequenos
+    before = len(DeltaTable(uri).file_uris())
+    metrics = compact(uri, ["2026-08-31"])                                                                                            # 4
+    print("compactação antes do snapshot:", {k: metrics[k] for k in ("numFilesAdded", "numFilesRemoved")}, "| arquivos vivos:", before, "->", len(DeltaTable(uri).file_uris()))
+    marked = DeltaTable(uri).version()
+    write_deltalake(uri, rows("2026-08-31", 200, 5), mode="overwrite", predicate=f"{PARTITION} = '2026-08-31'", commit_properties=props("exec-3", "2026T3"))  # 5, a execução marcada
+    control = snapshot(control_path, "2026T3", {"cad_operacoes": DeltaTable(uri).version(), "cad_contratos": 88})
+    write_deltalake(uri, rows("2026-08-31", 300, 5), mode="overwrite", predicate=f"{PARTITION} = '2026-08-31'", commit_properties=props("exec-4"))  # 6, uma correção posterior
+    write_deltalake(uri, rows("2026-08-31", 400, 5), mode="overwrite", predicate=f"{PARTITION} = '2026-08-31'", commit_properties=props("exec-5"))  # 7
+    print("controle:", control["snapshots"])
+    try:
+        snapshot(control_path, "2026T3", {})
+    except ValueError as error:
+        print("snapshot repetido:", error)
+
+    print("vacuum com a retenção de 400 dias lista", len(vacuum_keeping_snapshots(uri, "cad_operacoes", control)), "arquivo(s): os arquivos são de hoje")
+    unprotected = DeltaTable(uri).vacuum(retention_hours=0, enforce_retention_duration=False, dry_run=True)
+    listed = vacuum_keeping_snapshots(uri, "cad_operacoes", control, retention_hours=0)
+    print("com retenção zero: sem keep_versions seriam", len(unprotected), "arquivo(s); com o snapshot preso,", len(listed))
+    removed = vacuum_keeping_snapshots(uri, "cad_operacoes", control, retention_hours=0, apply=True)
+    print("versão do snapshot legível depois do vacuum:", DeltaTable(uri, version=control["snapshots"]["2026T3"]["cad_operacoes"]).to_pyarrow_dataset().count_rows(),
+          "| atual:", DeltaTable(uri).to_pyarrow_dataset().count_rows())
+    try:
+        DeltaTable(uri, version=6).to_pyarrow_dataset().count_rows()
+    except Exception as error:
+        print("versão intermediária:", type(error).__name__)
+
+    archive = os.path.join(folder, "prod", "arquivo", "2026T3", "cad_operacoes")
+    print("deep_copy: versão", deep_copy(uri, control["snapshots"]["2026T3"]["cad_operacoes"], archive), "| linhas:", DeltaTable(archive).to_pyarrow_dataset().count_rows())
+    for entry in history(uri)[:4]:
+        print("history:", entry)
+```
+
+Saída:
+
+```
+compactação antes do snapshot: {'numFilesAdded': 1, 'numFilesRemoved': 3} | arquivos vivos: 4 -> 2
+controle: {'2026T3': {'cad_contratos': 88, 'cad_operacoes': 5}}
+snapshot repetido: snapshot 2026T3 já existe: {'cad_contratos': 88, 'cad_operacoes': 5}
+vacuum com a retenção de 400 dias lista 0 arquivo(s): os arquivos são de hoje
+com retenção zero: sem keep_versions seriam 6 arquivo(s); com o snapshot preso, 5
+versão do snapshot legível depois do vacuum: 105 | atual: 105
+versão intermediária: FileNotFoundError
+deep_copy: versão 0 | linhas: 105
+history: {'version': 9, 'operation': 'VACUUM END'}
+history: {'version': 8, 'operation': 'VACUUM START'}
+history: {'version': 7, 'operation': 'WRITE', 'serialize_db_execution_id': 'exec-5'}
+history: {'version': 6, 'operation': 'WRITE', 'serialize_db_execution_id': 'exec-4'}
+```
+
+## Decisões pendentes
+
+- **[decisão] O nome do runbook**, `docs/operacao.md`, na convenção dos documentos de assunto em
+  pt-BR.
+- **[decisão] A marca de arquivamento no controle** (`"archived": true` na entrada) contra remover a
+  entrada; remover perde o registro de que o snapshot existiu.
+- **[decisão] A retenção do `vacuum` mensal.** Com 400 dias, o `vacuum` só libera espaço um ano
+  depois da correção; uma retenção menor libera antes e encurta a janela de leitura das versões
+  intermediárias.
