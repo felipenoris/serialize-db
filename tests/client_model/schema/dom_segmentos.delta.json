@@ -1,0 +1,23 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador do segmento",
+        "parquet.field.id": 1
+      },
+      "name": "id_segmento",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Nome do segmento",
+        "parquet.field.id": 2
+      },
+      "name": "nome",
+      "nullable": false,
+      "type": "string"
+    }
+  ],
+  "type": "struct"
+}

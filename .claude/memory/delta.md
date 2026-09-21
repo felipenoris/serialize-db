@@ -117,3 +117,8 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `VACUUM END`) without library metadata. A `publish` that compared versions by equality would abort
   after a `vacuum`, `compact` or `reconcile`: `Execution.publish` compares by `version_diff`.
   `docs/POC.md`, `docs/PLAN-STAGE-3.md`, `docs/PLAN-STAGE-6.md`
+- `Schema.to_json()` serializes each field's `metadata` map in arbitrary order (two consecutive
+  generations of the same model differed) and writes `PARQUET:field_id` as an integer
+  `parquet.field.id`; `schema_files` dumps the parsed document with `sort_keys=True` and
+  `indent=2`, and the versioned `.delta.json` is that canonical text (2026-09-21). `docs/POC.md`,
+  `docs/PLAN-STAGE-1.md`

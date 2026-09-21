@@ -1,0 +1,140 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador do lançamento",
+        "parquet.field.id": 1
+      },
+      "name": "id_lancamento",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Veículo do lançamento",
+        "parquet.field.id": 2
+      },
+      "name": "id_veiculo",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Conta do lançamento",
+        "parquet.field.id": 3
+      },
+      "name": "id_conta",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Mês projetado, o fim do mês",
+        "parquet.field.id": 4
+      },
+      "name": "data",
+      "nullable": false,
+      "type": "date"
+    },
+    {
+      "metadata": {
+        "comment": "Valor do lançamento",
+        "parquet.field.id": 5
+      },
+      "name": "valor",
+      "nullable": false,
+      "type": "double"
+    },
+    {
+      "metadata": {
+        "comment": "Meta do lançamento",
+        "parquet.field.id": 6
+      },
+      "name": "meta",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Instante da gravação do lançamento",
+        "parquet.field.id": 7
+      },
+      "name": "timestamp",
+      "nullable": false,
+      "type": "timestamp_ntz"
+    },
+    {
+      "metadata": {
+        "comment": "Mensuração do lançamento",
+        "parquet.field.id": 8
+      },
+      "name": "id_mensuracao",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Segmento do lançamento",
+        "parquet.field.id": 9
+      },
+      "name": "id_segmento",
+      "nullable": true,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Negócio do lançamento",
+        "parquet.field.id": 10
+      },
+      "name": "id_negocio",
+      "nullable": true,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Data-base da projeção",
+        "parquet.field.id": 11
+      },
+      "name": "data_base",
+      "nullable": false,
+      "type": "date"
+    },
+    {
+      "metadata": {
+        "comment": "Sistema de origem do contrato, quando há contrato",
+        "parquet.field.id": 12
+      },
+      "name": "sistema",
+      "nullable": true,
+      "type": "integer"
+    },
+    {
+      "metadata": {
+        "comment": "Código do contrato, quando há contrato",
+        "parquet.field.id": 13
+      },
+      "name": "contrato",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Área, no lançamento associado a uma área e não a um contrato",
+        "parquet.field.id": 14
+      },
+      "name": "area",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Partição: data_base em AAAA-MM-DD",
+        "parquet.field.id": 15
+      },
+      "name": "data_base_str",
+      "nullable": false,
+      "type": "string"
+    }
+  ],
+  "type": "struct"
+}

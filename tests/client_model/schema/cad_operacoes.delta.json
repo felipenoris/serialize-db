@@ -1,0 +1,131 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador da operação",
+        "parquet.field.id": 1
+      },
+      "name": "id_operacao",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Data-base da operação",
+        "parquet.field.id": 2
+      },
+      "name": "data",
+      "nullable": false,
+      "type": "date"
+    },
+    {
+      "metadata": {
+        "comment": "Código da operação",
+        "parquet.field.id": 3
+      },
+      "name": "operacao",
+      "nullable": false,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Se a operação vem do sistema legado",
+        "parquet.field.id": 4
+      },
+      "name": "legado",
+      "nullable": false,
+      "type": "boolean"
+    },
+    {
+      "metadata": {
+        "comment": "Área responsável",
+        "parquet.field.id": 5
+      },
+      "name": "area",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Departamento responsável",
+        "parquet.field.id": 6
+      },
+      "name": "departamento",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Spread básico",
+        "parquet.field.id": 7
+      },
+      "name": "spread_basico",
+      "nullable": true,
+      "type": "double"
+    },
+    {
+      "metadata": {
+        "comment": "Spread de risco",
+        "parquet.field.id": 8
+      },
+      "name": "spread_risco",
+      "nullable": true,
+      "type": "double"
+    },
+    {
+      "metadata": {
+        "comment": "Spread total",
+        "parquet.field.id": 9
+      },
+      "name": "spread_total",
+      "nullable": true,
+      "type": "double"
+    },
+    {
+      "metadata": {
+        "comment": "Taxa total",
+        "parquet.field.id": 10
+      },
+      "name": "taxa_total",
+      "nullable": true,
+      "type": "double"
+    },
+    {
+      "metadata": {
+        "comment": "Taxa BNDES",
+        "parquet.field.id": 11
+      },
+      "name": "taxa_bndes",
+      "nullable": true,
+      "type": "double"
+    },
+    {
+      "metadata": {
+        "comment": "Custo adicional",
+        "parquet.field.id": 12
+      },
+      "name": "custo_adicional",
+      "nullable": true,
+      "type": "double"
+    },
+    {
+      "metadata": {
+        "comment": "Instrumento financeiro",
+        "parquet.field.id": 13
+      },
+      "name": "instrumento_financeiro",
+      "nullable": true,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Partição: data em AAAA-MM-DD",
+        "parquet.field.id": 14
+      },
+      "name": "data_str",
+      "nullable": false,
+      "type": "string"
+    }
+  ],
+  "type": "struct"
+}

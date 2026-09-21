@@ -1,0 +1,68 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador da relação",
+        "parquet.field.id": 1
+      },
+      "name": "id_rel_contrato_operacao",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Data-base",
+        "parquet.field.id": 2
+      },
+      "name": "data",
+      "nullable": false,
+      "type": "date"
+    },
+    {
+      "metadata": {
+        "comment": "Código da operação",
+        "parquet.field.id": 3
+      },
+      "name": "operacao",
+      "nullable": false,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Sistema de origem do contrato",
+        "parquet.field.id": 4
+      },
+      "name": "sistema",
+      "nullable": false,
+      "type": "integer"
+    },
+    {
+      "metadata": {
+        "comment": "Código do contrato",
+        "parquet.field.id": 5
+      },
+      "name": "contrato",
+      "nullable": false,
+      "type": "string"
+    },
+    {
+      "metadata": {
+        "comment": "Fração da operação atribuída ao contrato; soma 1 por operação",
+        "parquet.field.id": 6
+      },
+      "name": "fator_rateio",
+      "nullable": false,
+      "type": "double"
+    },
+    {
+      "metadata": {
+        "comment": "Partição: data em AAAA-MM-DD",
+        "parquet.field.id": 7
+      },
+      "name": "data_str",
+      "nullable": false,
+      "type": "string"
+    }
+  ],
+  "type": "struct"
+}

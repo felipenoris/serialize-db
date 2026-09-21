@@ -1,0 +1,32 @@
+{
+  "fields": [
+    {
+      "metadata": {
+        "comment": "Identificador do negócio",
+        "parquet.field.id": 1
+      },
+      "name": "id_negocio",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Segmento do negócio",
+        "parquet.field.id": 2
+      },
+      "name": "id_segmento",
+      "nullable": false,
+      "type": "long"
+    },
+    {
+      "metadata": {
+        "comment": "Nome do negócio",
+        "parquet.field.id": 3
+      },
+      "name": "nome",
+      "nullable": false,
+      "type": "string"
+    }
+  ],
+  "type": "struct"
+}
