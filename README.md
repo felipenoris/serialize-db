@@ -4,6 +4,31 @@
 uv init --python 3.13
 ```
 
+# Ambiente de Desenvolvimento
+
+## Instruções para VS Code windows
+
+- Instalar extensões Python e Jupyter.
+
+- Encontrar caminho do interpretador Python do env:
+
+```
+uv sync --group interactive
+uv python find
+```
+
+- Adicionar interpretador python no VS Code com:
+
+```
+Ctrl+Shift+P → Python: Select Interpreter → Enter interpreter path...
+```
+
+- Abrir notebook existente (ou criar novo com `Ctrl+Shift+P → Create: New Jupyter Notebook`).
+
+- Selecionar Kernel -> selecionar caminho para interpretador criado no passo anterior.
+
+Obs.: project.toml foi inicializado com `uv add ipykernel --group interactive`
+
 # Dependências
 
 ```

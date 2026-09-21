@@ -26,6 +26,9 @@ dev = [
     "sqlalchemy==2.0.54",
     "sqlalchemy-redshift==1.0.0",
 ]
+interactive = [
+    "ipykernel>=7.3.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -34,6 +37,9 @@ markers = [
     "s3: escreve sob SERIALIZE_DB_TEST_S3_ROOT; pulado sem ela, falha sem acesso",
     "redshift: cria tabelas no esquema SERIALIZE_DB_TEST_REDSHIFT_SCHEMA; pulado sem ela, falha sem conexão",
 ]
+
+[[tool.uv.index]]
+url = "https://gitlab.bndes.net/api/v4/projects/7713/packages/pypi/simple"
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
