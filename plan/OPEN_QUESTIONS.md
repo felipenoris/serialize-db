@@ -60,14 +60,13 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 1](PLAN-STAGE-1.md): a tabela e a coluna sem comentário como violação de `check_models`;
-  no modelo cliente: os
+- [Etapa 1](PLAN-STAGE-1.md), todas do modelo cliente: os
   comprimentos de `String(n)`, a distribuição no
   Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos` para colunas não
   únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do modelo.
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
   `dev`.
-- [Etapa 3](PLAN-STAGE-3.md): a reserva de credenciais do `boto3` em `storage_options`; as colunas
+- [Etapa 3](PLAN-STAGE-3.md): o comentário da tabela como `description` da tabela Delta; a reserva de credenciais do `boto3` em `storage_options`; as colunas
   com estatística registrada; `version_diff` quando o log foi limpo.
 - [Etapa 4](PLAN-STAGE-4.md): `loader` numa tabela que já existe; o padrão de `memory_limit`; o
   banco em arquivo como padrão; a amostra do `AuditReport`.

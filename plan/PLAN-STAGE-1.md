@@ -74,7 +74,7 @@ minúsculos, e os dois motores leem o nome entre aspas como o mesmo nome sem asp
 | `quoted(name)`, `column_ddl(column, dialect)` | O identificador entre aspas duplas, e a linha da coluna no `CREATE TABLE` (`"<coluna>" <tipo> [NOT NULL]`); públicas porque as etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [8](PLAN-STAGE-8.md) montam texto com identificadores e as variantes do DDL (a staging sem a coluna de partição, a tabela publicada com a chave primária informativa). |
 | `ddl(table, dialect, prefix="")` | O `CREATE TABLE` do sandbox para `duckdb` ou `redshift`, gerado como texto sem o dialeto do SQLAlchemy: colunas, tipos por `sql_type` e `NOT NULL`, todo identificador entre aspas; sem chave, `DEFERRABLE`, `Identity`, `CHECK`, `DEFAULT` nem comentário (as chaves são da auditoria, e o comentário vai no esquema Delta); `DISTSTYLE`, `DISTKEY` e `SORTKEY` no Redshift, de `table_options`; `prefix` renomeia a tabela para o sandbox (`exec_<id>_`, ou o sentinela `{prefix}` da [etapa 2](PLAN-STAGE-2.md), que sai como `"{prefix}cad_operacoes"`). |
 | `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(p + 3, s)` (`decimal128(21, 2)` para `Numeric(18, 2)`); recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` em bytes, texto acima de 65.535 bytes numa coluna `Text`, nulo em coluna `NOT NULL` e um lote sem coluna alguma do contrato, com a tabela, a coluna e a instrução ao cliente na mensagem. |
-| `check_models(metadata)` | A lista de violações do contrato nos modelos, um texto por violação com tabela e coluna: tipo fora da tabela de tipos, `autoincrement` em chave inteira (o padrão `"auto"` inclusive), `Identity`, `String` sem comprimento, coluna ou tabela sem comentário, chave estrangeira `DEFERRABLE`, `partition_by` sem a coluna, com a coluna fora de `String(10)` ou sem `partition_source`, tabela sem chave primária e sem `keys`. Vazia no modelo cliente; no modelo de referência lista o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), as 20 colunas `String` sem comprimento e as tabelas e colunas sem comentário. |
+| `check_models(metadata)` | A lista de violações do contrato nos modelos, um texto por violação com tabela e coluna: tipo fora da tabela de tipos, `autoincrement` em chave inteira (o padrão `"auto"` inclusive), `Identity`, `String` sem comprimento, chave estrangeira `DEFERRABLE`, `partition_by` sem a coluna, com a coluna fora de `String(10)` ou sem `partition_source`, tabela sem chave primária e sem `keys`. Vazia no modelo cliente; no modelo de referência lista o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), as 20 colunas `String` sem comprimento; o comentário de tabela e de coluna é opcional (decisão do usuário de 2026-09-21), e o da coluna, quando existe, vai para o esquema Arrow e para o Delta. |
 | `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória, cada texto com `\n` final; o `.delta.json` é o JSON canônico (chaves ordenadas, indentado), porque o `to_json()` do delta-rs serializa os metadados de cada campo em ordem arbitrária, que muda a cada geração, e grava `PARQUET:field_id` como `parquet.field.id` inteiro. |
 | `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory` e devolve os caminhos; `serialize-db schema write --metadata modulo:atributo <pasta>` grava. |
 | `check_schema_files(metadata, directory)` | O diff unificado de cada arquivo versionado contra a geração nova, vazio quando nada mudou; `serialize-db schema check --metadata modulo:atributo <pasta>` compara sem gravar. |
@@ -208,14 +208,17 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
   conferências por `pc.all` levam `min_count=0`, porque `pc.all` de uma coluna vazia devolve nulo e
   a tabela vazia seria recusada (rascunho abaixo).
 - **`check_models`** percorre `metadata.sorted_tables` e reúne, por tabela, `_column_problems`
-  (tipo, `autoincrement`, `Identity`, `String` sem comprimento, comentário), `_key_problems`
+  (tipo, `autoincrement`, `Identity`, `String` sem comprimento), `_key_problems`
   (`DEFERRABLE`, tabela sem chave) e `_partition_problems` (a coluna, `String(10)`,
   `partition_source`), uma lista de textos, um por violação, para o teste do modelo cliente ser
   `assert check_models(Base.metadata) == []`. O `autoincrement` padrão é a string `"auto"`, não
   `True`: a regra reprova os dois numa chave inteira. `String` sem comprimento é violação por
   decisão do usuário de 2026-09-21: sem `n`, o Redshift daria `VARCHAR(256)` e `cast` não mediria
-  nada, e `Text` é a forma sem `n`, cujo teto é o do `VARCHAR` do Redshift, 65.535 bytes, medido por `cast` (decisão do usuário de 2026-09-21). O modelo de referência é o modelo com defeitos do teste: o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), os `String`
-  sem comprimento e as tabelas e colunas sem comentário.
+  nada, e `Text` é a forma sem `n`, cujo teto é o do `VARCHAR` do Redshift, 65.535 bytes, medido por `cast` (decisão do usuário de 2026-09-21). O comentário de tabela e de coluna
+  não é violação, por decisão do usuário de 2026-09-21: a biblioteca não obriga o dono do modelo a
+  documentá-lo, e o comentário da coluna, quando existe, vai para o esquema Arrow e para o Delta.
+  O modelo de referência é o modelo com defeitos do teste: o `autoincrement` das 12 chaves, as 12
+  chaves estrangeiras `DEFERRABLE` (das 14) e os `String` sem comprimento.
 - **`schema_files`** gera `<tabela>.delta.json` por `delta_schema(...).to_json()` e os dois `.sql`
   por `ddl`, cada texto com `\n` final; `write_schema_files` grava e devolve os caminhos;
   `check_schema_files` compara por `difflib.unified_diff`. `serialize-db schema write` e
@@ -256,7 +259,7 @@ teste com todos os tipos da tabela de [`schema.md`](schema.md), `to` e `timestam
 | Cast que recusa | `test_cast_refuses_each_loss`, parametrizado | Nulo em `NOT NULL`, `double` fora da escala, `timestamp` com hora em `Date`, `struct` em JSON, texto acima de `String(n)` em bytes, escala perdida, nanossegundo não nulo, estouro de inteiro, lote sem coluna do contrato; cada mensagem cita a tabela e a coluna. |
 | Teto de `Text` | `test_cast_measures_text_against_the_varchar_ceiling` | Numa coluna `Text`, 65.535 bytes passam e 65.536 são `ContractError` com a tabela, a coluna e o tamanho lido. |
 | Cast que preserva | `test_cast_keeps_doubles_of_the_reference_model` | `Double` do modelo de referência entra sem arredondamento. |
-| Modelos | `test_check_models_finds_each_violation`, `test_check_models_lists_the_reference_model_defects`, `test_client_model_is_clean` | Um modelo com cada defeito produz uma violação por defeito; o modelo de referência produz o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), os 20 `String` sem comprimento e as tabelas e colunas sem comentário, e nada mais; o modelo cliente produz lista vazia. |
+| Modelos | `test_check_models_finds_each_violation`, `test_check_models_lists_the_reference_model_defects`, `test_client_model_is_clean` | Um modelo com cada defeito produz uma violação por defeito; o modelo de referência produz o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14) e os 20 `String` sem comprimento, e nada mais, nem por comentário ausente; o modelo cliente produz lista vazia. |
 | Cópia fiel | `tests/test_client_model.py` | O modelo cliente tem as tabelas e as colunas do modelo de referência, na mesma ordem, com a coluna de partição no fim; só os tipos e as chaves previstos mudam; sem `DEFERRABLE`, `autoincrement` nem índice não único; todo comentário presente; a partição declarada é a da base. |
 | Arquivos gerados | `test_schema_files_match_versioned`, `test_check_schema_files_reports_a_changed_model` | Diff vazio contra `tests/client_model/schema/`; uma coluna acrescentada aparece no diff dos três formatos. |
 | Gravação | `test_write_schema_files` (`local`) | Os arquivos sob a raiz local, com os nomes previstos. |
@@ -650,7 +653,7 @@ def cast(data, table: sa.Table):
 # ---------------------------------------------------------------- a conferência dos modelos
 
 def _column_problems(column: sa.Column) -> list[str]:
-    """As violações de uma coluna: tipo, autoincrement, Identity, String sem n, comentário."""
+    """As violações de uma coluna: tipo, autoincrement, Identity, String sem comprimento."""
     table = column.table.name
     problems = []
     try:
@@ -667,8 +670,6 @@ def _column_problems(column: sa.Column) -> list[str]:
     if type(column.type) is sa.String and not column.type.length:
         problems.append(f"{table}.{column.name}: String sem comprimento; "
                         "declare String(n) ou Text")
-    if not column.comment:
-        problems.append(f"{table}.{column.name}: coluna sem comentário")
     return problems
 
 
@@ -705,8 +706,6 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     """As violações do contrato nos modelos, uma por texto; vazia nos modelos corrigidos."""
     problems = []
     for table in metadata.sorted_tables:
-        if not table.comment:
-            problems.append(f"{table.name}: tabela sem comentário")
         for column in table.columns:
             problems.extend(_column_problems(column))
         options = table_options(table)
@@ -876,15 +875,9 @@ coluna alguma do contrato: cad_operacoes: nenhuma coluna do contrato em ['extra'
 nanossegundo nulo: timestamp[us]
 cad_operacoes limpa: True
 check_models:
-  - ruim: tabela sem comentário
   - ruim.id: chave inteira com autoincrement; declare autoincrement=False
-  - ruim.id: coluna sem comentário
-  - ruim.id_operacao: coluna sem comentário
-  - ruim.mes: coluna sem comentário
   - ruim.nome: String sem comprimento; declare String(n) ou Text
-  - ruim.nome: coluna sem comentário
   - ruim.peso: tipo fora do contrato: LargeBinary()
-  - ruim.peso: coluna sem comentário
   - ruim: chave estrangeira DEFERRABLE em ['id_operacao']
   - ruim.mes: coluna de partição fora de String(10)
   - ruim: partition_by sem partition_source válido
@@ -892,9 +885,6 @@ check_models:
 
 ## Decisões pendentes
 
-- **[decisão] A tabela e a coluna sem comentário como violação em `check_models`.** O modelo de
-  referência não tem comentário algum, e o modelo cliente tem um em cada tabela e coluna, uma
-  primeira redação; a regra obriga o dono do modelo a escrever os seus.
 - **[decisão] Os comprimentos de `String(n)` do modelo cliente.** Escolhidos das leituras com
   folga (`contrato` e `operacao` 50, os nomes 50 e 100, `numero` 20, `descricao` e `meta` 255,
   `area` e `departamento` 20, `to` 2, `fonte_familia` 3); sem `n`, o Redshift daria `VARCHAR(256)`

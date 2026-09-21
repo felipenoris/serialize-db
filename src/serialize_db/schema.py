@@ -547,7 +547,7 @@ def cast(
 
 
 def _column_problems(column: sa.Column) -> list[str]:
-    """As violações de uma coluna: tipo, autoincrement, Identity, String sem n, comentário."""
+    """As violações de uma coluna: tipo, autoincrement, Identity, String sem comprimento."""
     table = column.table.name
     problems = []
     try:
@@ -564,8 +564,6 @@ def _column_problems(column: sa.Column) -> list[str]:
     if type(column.type) is sa.String and not column.type.length:
         problems.append(f"{table}.{column.name}: String sem comprimento; "
                         "declare String(n) ou Text")
-    if not column.comment:
-        problems.append(f"{table}.{column.name}: coluna sem comentário")
     return problems
 
 
@@ -602,9 +600,11 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     """As violações do contrato nos modelos, um texto por violação; vazia nos modelos corretos.
 
     As regras: tipo fora da tabela de tipos; ``autoincrement`` numa chave inteira (o padrão
-    ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; tabela ou coluna sem
-    comentário; chave estrangeira ``DEFERRABLE``; ``partition_by`` sem a coluna, com a coluna fora
-    de ``String(10)`` ou sem ``partition_source``; tabela sem chave primária e sem ``keys``.
+    ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; chave estrangeira
+    ``DEFERRABLE``; ``partition_by`` sem a coluna, com a coluna fora de ``String(10)`` ou sem
+    ``partition_source``; tabela sem chave primária e sem ``keys``. O comentário de tabela e de
+    coluna é opcional (decisão do usuário de 2026-09-21); o da coluna, quando existe, vai para o
+    esquema Arrow e para o Delta.
 
     Exemplo:
 
@@ -612,8 +612,6 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     """
     problems = []
     for table in metadata.sorted_tables:
-        if not table.comment:
-            problems.append(f"{table.name}: tabela sem comentário")
         for column in table.columns:
             problems.extend(_column_problems(column))
         options = table_options(table)

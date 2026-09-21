@@ -104,8 +104,7 @@ assert problems == [], "\n".join(problems)
 ```
 
 As regras: tipo fora da tabela de tipos; `autoincrement` numa chave inteira (o padrão `"auto"`
-inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); tabela ou coluna
-sem comentário; chave estrangeira `DEFERRABLE`; `partition_by` sem a coluna, com a coluna fora de
+inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); chave estrangeira `DEFERRABLE`; `partition_by` sem a coluna, com a coluna fora de
 `String(10)` ou sem `partition_source`; tabela sem chave primária e sem `keys`.
 
 ### Derivar o esquema e o DDL

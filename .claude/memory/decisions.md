@@ -156,3 +156,13 @@ same day `probes/parquet_source.py` gained the byte maximum beside the character
 sample section, because the client model's lengths came from a reading in characters: in the
 fictitious base, `cad_contas.nome` reads 45 characters and 47 bytes.
 `plan/PLAN-STAGE-1.md`, `plan/schema.md`, `probes/README.md`
+
+On 2026-09-21 the user made the table and column comment optional, the third pending decision of
+stage 1: `check_models` no longer reports a table or a column without `comment`. The alternatives
+offered and declined were keeping the rule as it was and keeping it with the columns of a table
+grouped into one violation. The numbers behind the choice: the reference model, which has no
+comment at all, produced 129 violations, 85 of them about comments, so the 44 structural defects
+were drowned. The client model keeps its 12 table comments and its 77 column comments. The column
+comment still reaches the Arrow schema and the Delta schema; the table comment now has no consumer,
+and whether `create_table` passes it as the Delta table's `description` is an open item of stage 3.
+`plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `docs/index.md`

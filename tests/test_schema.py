@@ -388,9 +388,7 @@ def test_check_models_finds_each_violation() -> None:
     """Uma tabela com cada defeito produz uma violação por defeito."""
     problems = [p for p in schema.check_models(RuimBase.metadata) if p.startswith("ruim")]
     assert problems == [
-        "ruim: tabela sem comentário",
         "ruim.id: chave inteira com autoincrement; declare autoincrement=False",
-        "ruim.id: coluna sem comentário",
         "ruim.nome: String sem comprimento; declare String(n) ou Text",
         "ruim.peso: tipo fora do contrato: LargeBinary()",
         "ruim: chave estrangeira DEFERRABLE em ['id_tudo']",
@@ -401,14 +399,12 @@ def test_check_models_finds_each_violation() -> None:
 
 
 def test_check_models_lists_the_reference_model_defects() -> None:
-    """O modelo de referência produz autoincrement, DEFERRABLE, String sem n e comentários."""
+    """O modelo de referência produz autoincrement, DEFERRABLE e String sem comprimento."""
     problems = schema.check_models(ReferenceBase.metadata)
     counts = {
         "autoincrement": sum("chave inteira com autoincrement" in p for p in problems),
         "deferrable": sum("chave estrangeira DEFERRABLE" in p for p in problems),
         "string": sum("String sem comprimento" in p for p in problems),
-        "table_comment": sum(p.endswith(": tabela sem comentário") for p in problems),
-        "column_comment": sum(p.endswith(": coluna sem comentário") for p in problems),
     }
     tables = list(ReferenceBase.metadata.tables.values())
     columns = [column for table in tables for column in table.columns]
@@ -419,10 +415,10 @@ def test_check_models_lists_the_reference_model_defects() -> None:
         "autoincrement": len(tables),
         "deferrable": len(deferrable),
         "string": len(strings),
-        "table_comment": len(tables),
-        "column_comment": len(columns),
     }
     assert sum(counts.values()) == len(problems)
+    # O comentário é opcional: o modelo sem comentário algum não produz violação por isso.
+    assert [p for p in problems if "comentário" in p] == []
     assert (len(tables), len(foreign_keys), len(deferrable), len(strings)) == (12, 14, 12, 20)
 
 
