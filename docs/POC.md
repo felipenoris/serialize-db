@@ -115,6 +115,14 @@ região nos dois sentidos, não chama o STS e carrega as extensões só da pasta
 `redshift-serverless:GetWorkgroup` e `GetCredentials` antes da porta 5439: se essas APIs não tiverem
 endpoint VPC lá, o que `RS-14` mede, resta a conexão por senha, que não passa por elas.
 
+Outras leituras do espaço do laboratório em 2026-09-20: o IMDS responde `EINVAL`; a sessão de pytest das 03:43 UTC, com as
+duas raízes, passou as três variantes de credencial do delta-rs daquele momento; o `.venv` preparado
+estava sem cinco pacotes do grupo `dev` até um `uv sync --group dev`; `~/shared` resolve para
+`/mnt/custom-file-systems/s3/shared`, uma montagem `fuse.s3fs`; o Athena nega `GetWorkGroup` no
+grupo `primary`; a credencial do contêiner dura cerca de uma hora (expiração 04:19:03, lida às 03:23
+e às 03:44); o `bucket.py` depois da sessão das 04:41 encontrou só a sessão que o
+`SERIALIZE_DB_TEST_KEEP` preservou na execução das 04:38.
+
 ## O que os exemplos de conexão com o Redshift mostraram
 
 Em 2026-09-20 o usuário executou no ambiente alvo dois scripts de conexão, guardados como foram
@@ -268,6 +276,111 @@ Duas leituras menores que o script deixou: o `COPY` lê um prefixo de pasta Parq
 manifesto, e converte `int32` da origem para a coluna `BIGINT` do contrato; e o DDL de `cad_contas`
 gerado do esquema da base de origem ([`../tests/source_db_projetado.py`](../tests/source_db_projetado.py))
 foi aceito como está, com chave primária e unicidade informativas e `DISTSTYLE ALL`.
+
+## O que os comandos com manifesto no datashare mostraram
+
+Em 2026-09-21 o usuário executou [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)
+no ambiente alvo, sobre 500.000 linhas da partição `data_str=2026-02-28` de `cad_contratos`. O ciclo
+inteiro passou: a partição Parquet virou tabela Delta, o manifesto do `COPY` saiu das ações `add`, o
+`COPY ... MANIFEST` carregou a staging, o `INSERT` acrescentou a coluna de partição, o
+`UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` gravou de volta e `create_write_transaction`
+registrou os arquivos numa tabela Delta que devolveu as 500.000 linhas.
+
+| Comando | Tempo |
+| --- | --- |
+| `USE datalake_rw_shared` | 10,8 s |
+| `CREATE TABLE` da staging | 0,9 s |
+| `COPY ... FORMAT AS PARQUET MANIFEST` de 500.000 linhas | 4,6 s |
+| `INSERT ... SELECT *, '<valor>'` | 3,5 s |
+| `UNLOAD ... PARTITION BY (data_str) MANIFEST VERBOSE` | 0,8 s |
+
+O `USE` é o primeiro comando da sessão e pagou 10,8 s; os seguintes ficaram abaixo de 5 s. É a
+medição que confirma a retirada do `timeout` de 10 s do socket em 2026-09-20: ele teria matado a
+conexão no primeiro comando, antes de qualquer trabalho.
+
+As duas perguntas que estavam em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) foram respondidas, e as
+duas com sim:
+
+- `COPY ... FORMAT AS PARQUET MANIFEST` numa tabela de datashare se comporta como numa tabela local.
+  O manifesto tinha uma entrada, apontando para o arquivo que o delta-rs gravou, com
+  `meta.content_length` igual ao `size_bytes` da ação `add`.
+- `UNLOAD ... PARTITION BY (<coluna>) MANIFEST VERBOSE` a partir de uma tabela de datashare é
+  aceito. A alternativa que a [etapa 5](PLAN-STAGE-5.md) guardava, um `UNLOAD` por partição, deixa
+  de ser necessária.
+
+O `PARTITION BY` gravou na convenção Hive, `data_str=2026-02-28/`, com a coluna de partição fora dos
+arquivos, e o manifesto em `<prefixo>/manifest`, sem extensão. É o leiaute que o
+`partition_values` da `AddAction` lê do caminho.
+
+### Os arquivos que o UNLOAD grava
+
+O rodapé de um arquivo respondeu os três itens da [etapa 0](PLAN-STAGE-0.md):
+
+| Coluna | Tipo físico | Tipo lógico |
+| --- | --- | --- |
+| `id_contrato BIGINT` | `INT64` | `Int(bitWidth=64, isSigned=true)` |
+| `data DATE` | `INT32` | `Date` |
+| `contrato VARCHAR(100)` | `BYTE_ARRAY` | `String` |
+| `taxa_juros_fixos DOUBLE PRECISION` | `DOUBLE` | nenhum |
+| `taxa_decimal DECIMAL(18, 2)` | `FIXED_LEN_BYTE_ARRAY(8)` | `Decimal(precision=18, scale=2)` |
+| `data_hora TIMESTAMP` | `INT96` | nenhum |
+
+Toda coluna saiu `optional`, inclusive `id_contrato`, `data` e `contrato`, que eram `NOT NULL` na
+tabela de origem. As estatísticas de mínimo e máximo estão presentes (lido em `id_contrato`).
+
+O `DECIMAL(18, 2)` em `FIXED_LEN_BYTE_ARRAY(8)` é o que o PyArrow grava e não o que gravam o
+delta-rs, o DuckLake e o DuckDB, que usam `INT64` ([`estrategia.md`](estrategia.md)): uma tabela
+Delta alimentada pelo `UNLOAD` e pela biblioteca fica com duas codificações físicas da mesma coluna
+lógica, que os leitores leem igual.
+
+O `TIMESTAMP` em `INT96` é o achado que contraria o contrato: [`schema.md`](schema.md) fixa
+`timestamp_ntz` de microssegundos, a carga inicial tira o `INT96` da base de origem, e o `UNLOAD` o
+traz de volta na exportação. O modelo de referência tem colunas `timestamp`, então o caso é real.
+Uma sondagem no macOS no mesmo dia registrou um arquivo `INT96` numa tabela Delta declarada
+`timestamp_ntz`, pelo mesmo `create_write_transaction` do exemplo, e leu a coluna de volta: o
+delta-rs devolveu `timestamp[us]` e o `delta_scan` do DuckDB devolveu `TIMESTAMP`, os dois com os
+valores idênticos aos gravados. O custo é a estatística: o `INT96` não tem mínimo e máximo, então a
+coluna de timestamp de um arquivo do `UNLOAD` não poda.
+
+### A fragmentação por slice
+
+As 500.000 linhas saíram em 32 arquivos, cerca de 15.600 linhas cada, sem `MAXFILESIZE`. O
+`MAXFILESIZE` é teto e não piso, então não junta arquivo: quem controla a quantidade é
+`PARALLEL OFF`, que grava em série num arquivo só e respeita o `ORDER BY`, ou uma compactação
+posterior na camada Delta. O `export_partition` da [etapa 5](PLAN-STAGE-5.md) recebeu a
+consequência.
+
+A soma de `meta.record_count` das entradas bateu com as 500.000 linhas, que é a conferência que o
+`register_files` faz antes do commit. O exemplo gravou `minValues`, `maxValues` e `nullCount`
+vazios e ficou como rodou, conforme a regra de [`../examples/README.md`](../examples/README.md); o
+`register_files` da [etapa 3](PLAN-STAGE-3.md) os preenche do rodapé, que agora se sabe que os tem.
+
+
+### O que o `create_write_transaction` confere
+
+Uma sondagem no macOS em 2026-09-21 (deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1) registrou ações
+`add` erradas de propósito, e `tests/proof_of_concept/test_deltalake.py` guarda os casos como
+asserções (`test_create_write_transaction_trusts_path_and_stats`,
+`test_create_write_transaction_trusts_file_schema`, `test_compact_rewrites_files_from_another_writer`):
+
+| Ação registrada | Commit | delta-rs (`to_pyarrow_table`) | DuckDB (`delta_scan`) | DataFusion (`QueryBuilder`) |
+| --- | --- | --- | --- | --- |
+| Caminho que não existe | Passa | Erro em toda leitura que toca a partição; `filters=` em outra partição lê normal | `IOException` na leitura da tabela; `WHERE` em outra partição lê normal | não medido |
+| Estatística falsa (`id_operacao` de 160000 a 160009 declarado de 900000 a 900010, `numRecords` 999) | Passa | `filters=` na faixa verdadeira devolve 0 linhas | 0 linhas e `Scanning Files: 0/3`; `count(*)` sem filtro lê os arquivos (1.010) | 0 linhas; `count(*)` sem filtro responde 1.999 pelas ações |
+| Arquivo sem uma coluna `NOT NULL` | Passa | Nulo em toda linha | Nulo em toda linha | não medido |
+| `valor` como texto não numérico numa coluna `decimal` | Passa | `ArrowInvalid` ao ler a partição | `count(*)` passa, a leitura da coluna falha | não medido |
+| Coluna a mais, `int32` numa coluna `long`, colunas em outra ordem, `timestamp[ns]` numa `timestamp[us]` | Passa | Lê certo | Lê certo | não medido |
+
+O `write_deltalake` com os mesmos dez nulos na coluna `NOT NULL` recusa (`DeltaError: 10 rows failed
+validation check`). `restore(0)` sobre a tabela com o caminho inexistente voltou a ler. O erro do
+delta-rs no caminho inexistente depende do `size` da ação, que o leitor também obedece: 1 byte
+declarado dá o erro do rodapé, um tamanho plausível dá `FileNotFoundError`. `mode="overwrite"` com
+`partition_filters` no `create_write_transaction` removeu só o arquivo da partição filtrada.
+`get_add_actions()` devolve `max.id_operacao` 900.010 e a soma de `num_records` 1.999, os valores da
+ação. E `optimize.compact` sobre dois arquivos registrados com `INT96` e `FIXED_LEN_BYTE_ARRAY`
+gravou um arquivo com os dois em `INT64` e estatística em toda coluna, timestamp incluído. As
+consequências estão em [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), seção "As conferências do registro de
+arquivos", em [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) (`export_mode`) e em [`redshift.md`](redshift.md).
 
 ## O que a leitura da base de origem mostrou
 

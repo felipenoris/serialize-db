@@ -155,7 +155,9 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
    `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; os intermediários ficam no
    sandbox, não no Delta.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
-5. `run.publish` reconcilia o esquema, substitui cada partição num commit com
+5. `run.publish` reconcilia o esquema, substitui cada partição num commit (`export_mode`: `register`
+   registra o arquivo do `COPY ... (RETURN_STATS)` depois das conferências da
+   [etapa 3](PLAN-STAGE-3.md), `rewrite` grava pelo `write_deltalake`) com
    `serialize_db_execution_id` e `serialize_db_input_versions`, e avança `versions[table]`. Um
    `CommitFailedError` na mesma partição significa outra execução publicando a mesma tabela, e a
    execução aborta; ela também aborta quando a versão da tabela avançou desde a abertura, para que
@@ -178,9 +180,10 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
    Parquet em `staging/` mais `COPY`, um row group por lote, e saem das tuplas de `fetchmany` ou por
    `UNLOAD`.
 4. `run.audit` roda as mesmas consultas no Redshift.
-5. `run.publish` grava cada partição por `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE` na pasta da
-   tabela e registra os arquivos por `register_files`, com estatísticas do rodapé Parquet; os dados
-   não passam pela máquina local.
+5. `run.publish` grava cada partição por `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE` e, conforme
+   `export_mode`, registra os arquivos por `register_files` depois das conferências da
+   [etapa 3](PLAN-STAGE-3.md) (`register`: os dados não passam pela máquina local) ou os relê pelo
+   leitor da [etapa 7](PLAN-STAGE-7.md) e grava por `publish_partition` (`rewrite`).
 6. `run.publish_redshift` carrega as tabelas `prod_*` a partir do Delta, pelo mesmo caminho da
    execução no DuckDB, e `cleanup` apaga as tabelas do sandbox e o staging.
 

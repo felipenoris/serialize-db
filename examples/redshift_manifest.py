@@ -1,10 +1,19 @@
 """``COPY ... MANIFEST`` e ``UNLOAD ... PARTITION BY MANIFEST VERBOSE`` sobre uma tabela Delta.
 
 Os pré-requisitos do ``export_partition`` da [etapa 5](../docs/PLAN-STAGE-5.md) e do
-``COPY`` da publicação da [etapa 8](../docs/PLAN-STAGE-8.md), os dois comandos com manifesto que
-ninguém exercitou no datashare ([`../docs/OPEN_QUESTIONS.md`](../docs/OPEN_QUESTIONS.md)). Ao
-contrário dos outros três scripts desta pasta, este ainda **não** rodou no ambiente alvo: ele é o
-próximo experimento, escrito a partir do que os três já provaram.
+``COPY`` da publicação da [etapa 8](../docs/PLAN-STAGE-8.md). Executado no ambiente alvo em
+2026-09-21 sobre 500.000 linhas da partição ``data_str=2026-02-28`` de ``cad_contratos``: os dois
+comandos com manifesto são aceitos numa tabela do banco de datashare, e o ciclo inteiro passou. O
+que ele mostrou está em [`../docs/POC.md`](../docs/POC.md), e fechou duas perguntas de
+[`../docs/OPEN_QUESTIONS.md`](../docs/OPEN_QUESTIONS.md).
+
+O que o rodapé do ``UNLOAD`` respondeu: ``TIMESTAMP`` sai em ``INT96`` e ``DECIMAL(18, 2)`` em
+``FIXED_LEN_BYTE_ARRAY(8)``, toda coluna sai ``optional`` mesmo quando a origem é ``NOT NULL``, e há
+estatística de mínimo e máximo. As 500.000 linhas saíram em 32 arquivos, um por slice.
+
+Este script deixa ``minValues``, ``maxValues`` e ``nullCount`` vazios na ``AddAction``, e ficou como
+rodou. O ``register_files`` da biblioteca os preenche do rodapé Parquet
+([`../docs/PLAN-STAGE-3.md`](../docs/PLAN-STAGE-3.md)): sem eles a poda é só por partição.
 
 O ciclo, em oito passos:
 

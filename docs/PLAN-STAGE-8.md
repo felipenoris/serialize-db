@@ -12,14 +12,13 @@ num banco só, e um comando múltiplo apenas dentro de um bloco de transação. 
 mora no mesmo banco das tabelas publicadas, e a transação da publicação abre com `BEGIN` explícito.
 O `COPY` e o `UNLOAD` levam a cláusula de credenciais da [etapa 5](PLAN-STAGE-5.md).
 
-O `COPY ... MANIFEST` numa tabela de datashare ainda não foi exercitado
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), e
-[`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) é o experimento que
-responde); o `COPY` de um prefixo de pasta passou. Recusado o
-manifesto, a alternativa é copiar para `staging/<execution_id>/`, por `storage.copy`, os arquivos
-que o log da versão lista, e carregar esse prefixo: a cópia no S3 não lê os dados, e o prefixo da
-partição no Delta não serve direto, porque guarda também os arquivos das versões anteriores até o
-`vacuum` ([`delta.md`](delta.md)).
+O `COPY ... MANIFEST` numa tabela de datashare passou no ambiente alvo em 2026-09-21, 500.000 linhas
+em 4,6 s a partir de um arquivo gravado pelo delta-rs
+([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py), [`POC.md`](POC.md)): é o
+caminho da publicação, e o manifesto é o que impede o `COPY` de ler também os arquivos das versões
+anteriores, que o prefixo da partição guarda até o `vacuum` ([`delta.md`](delta.md)). A alternativa
+que existia enquanto a pergunta estava aberta, copiar os arquivos da versão para
+`staging/<execution_id>/` por `storage.copy` e carregar esse prefixo, deixa de ser necessária.
 
 | Primitiva | O que faz |
 | --- | --- |

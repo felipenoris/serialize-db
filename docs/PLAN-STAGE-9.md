@@ -8,7 +8,7 @@ As primitivas são as da [etapa 3](PLAN-STAGE-3.md); a etapa entrega a rotina e 
 | Rotina | Quando | Comando |
 | --- | --- | --- |
 | Snapshot do banco | Na periodicidade do processo, por exemplo o fim do trimestre. | `run.snapshot("2026T3")` na execução marcada. |
-| Compactação | Antes de um snapshot, nunca depois. | `serialize-db compact --partitions ...`. |
+| Compactação | Antes de um snapshot, nunca depois. Também normaliza os arquivos que o `UNLOAD` gravou: `INT64` no lugar de `INT96` e de `FIXED_LEN_BYTE_ARRAY`, estatística em toda coluna ([etapa 3](PLAN-STAGE-3.md)). | `serialize-db compact --partitions ...`. |
 | `vacuum` | Mensal: lista com `keep_versions` do arquivo de controle, revisada, depois aplicada; `--full` de tempos em tempos para os órfãos. Num bucket versionado o espaço só é liberado pela regra `NoncurrentVersionExpiration`; `probes/bucket.py` (`BK-14`) mostra o acumulado. | `serialize-db vacuum [--apply] [--full]`. |
 | Arquivo | Anual: `deep_copy` dos snapshots mais velhos que o prazo da tabela viva para `arquivo/<nome>/<tabela>/`, a entrada sai de `snapshots.json`, a pasta recebe a regra de ciclo de vida. | `serialize-db archive <nome>`. |
 | Exportação | Sob demanda: pastas Parquet por partição de um snapshot, `copy` ou `rewrite`. | `serialize-db export`. |

@@ -613,7 +613,8 @@ def session(report: Report, target: Target) -> None:
     # RS-4: o passo 3 de examples/redshift_native.py, a mesma chamada de tests/conftest.py, com o par da
     # credencial temporária ou o informado. O timeout do redshift_connector vale para conectar e para
     # ler: 10 s abortaram sys_load_error_detail no ambiente alvo (2026-09-20) e a conexão não voltou a
-    # servir; 30 s bastam para as visões de sistema que o probe lê.
+    # servir, e o primeiro comando de uma sessão lá custou 10,8 s (o USE de 2026-09-21); 30 s bastam
+    # para as visões de sistema que o probe lê.
     def connect() -> tuple[str, object]:
         if not (target.host and target.user and target.password):
             raise RuntimeError("faltam parâmetros: o endereço vem de GetWorkgroup e o par de GetCredentials (RS-15), ou de _HOST, _USER e _PASSWORD")
@@ -774,7 +775,8 @@ def session(report: Report, target: Target) -> None:
         getattr(report, status)("RS-17", "escrita no banco do datashare", verdict)
 
     # RS-19: USE troca o banco da sessão, e só dela: a partir daqui esquema.tabela vale, que é como o
-    # CREATE, o COPY e o UNLOAD passaram (examples/redshift_copy_unload.py) e como tests/conftest.py
+    # CREATE, o COPY e o UNLOAD passaram (examples/redshift_copy_unload.py e redshift_manifest.py, este
+    # com os dois comandos de manifesto em 2026-09-21) e como tests/conftest.py
     # abre cada conexão. A biblioteca depende da troca, então current_database() é conferido. Nada é
     # criado, alterado nem apagado.
     share = target.share_database
