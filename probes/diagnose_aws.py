@@ -24,6 +24,28 @@ verificação, agrupadas por ``== título``. O arquivo se organiza na ordem do r
 ``show_*`` imprimem o contexto, as ``check_*`` fazem uma verificação cada e devolvem se passou, o
 delta-rs e o DuckDB rodam em subprocessos (``DELTA_PROBE``, ``DUCKDB_PROBE``) com espera limitada,
 e ``diagnose`` encadeia tudo e escreve o resumo.
+
+Os fatos que o resumo usa:
+
+- Região. O botocore lê ``AWS_DEFAULT_REGION`` ou o perfil, não ``AWS_REGION``, e sem região usa o
+  endpoint global ``s3.amazonaws.com``, que um endpoint VPC regional não atende. O delta-rs lê
+  ``AWS_REGION`` e ``AWS_DEFAULT_REGION``; sem nenhuma, consulta o IMDS e cai em ``us-east-1``. A
+  suíte copia a região do ``boto3`` para ``AWS_REGION``, num sentido só: um ambiente com apenas
+  ``AWS_REGION`` e sem ``~/.aws/config`` precisa de manutenção.
+- STS. ``test_boto3_credential_source`` chama ``get_caller_identity``; um ambiente só com endpoint
+  VPC do S3 não alcança o STS, e o teste falharia depois dos 60 s por tentativa e 5 tentativas do
+  botocore. O diagnóstico distingue "o serviço respondeu com erro" de "sem resposta": só o segundo
+  pede manutenção.
+- Proxy. Nada na suíte exige proxy; sem as variáveis, nada a fazer. Com elas, o delta-rs roda como
+  encontrado e, quando ``NO_PROXY`` está ausente ou vazia ao lado de ``no_proxy``, de novo com
+  ``NO_PROXY`` exportada de ``no_proxy``, como a suíte faz; a segunda linha é a que vale para a
+  suíte.
+- Endpoint. Com ``AWS_ENDPOINT_URL``, o ``boto3`` e o delta-rs o usam, e a suíte não o passa ao
+  secret do DuckDB.
+
+Sem rede, o diagnóstico leva um minuto e meio: o ``boto3`` desiste em 11 s, o delta-rs em 10 s
+(``max_retries`` e ``retry_timeout`` em ``storage_options``) e o DuckDB no teto de 60 s do
+subprocesso.
 """
 
 from __future__ import annotations

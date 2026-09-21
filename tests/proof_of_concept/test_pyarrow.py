@@ -6,7 +6,8 @@ Sem gravar arquivo: o esquema com nulidade, comentários e ``PARQUET:field_id`` 
 lote, ``to_batches`` e ``from_batches`` sem cópia, o ciclo do lote com o pandas) e o leitor de
 ``from_batches`` que não confere os lotes contra o esquema declarado. Sob a raiz local (marcador ``local``): o ``ParquetWriter``
 lote a lote com um row group por lote e o rodapé lido de volta, o mesmo conteúdo gravado pelo DuckDB
-para comparar os tipos físicos, e o dataset particionado ao estilo Hive.
+para comparar os tipos físicos, o dataset particionado ao estilo Hive, e a leitura por lotes com
+``filters`` e o pandas com tipos Arrow.
 """
 
 from __future__ import annotations

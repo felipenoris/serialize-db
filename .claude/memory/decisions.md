@@ -93,3 +93,14 @@ tables get `ALTER TABLE ADD COLUMN` as text under either design, since SQLAlchem
 stage 2), so the decision only keeps stage 1 and the migration script free of them, and stage 2
 decides whether `render` runs at development or at runtime. A `String(n)` width change reaches only
 the versioned `.redshift.sql`, never the Delta diff (`plan/PLAN-STAGE-8.md`, pending decision).
+
+## The repository layout of 2026-09-21
+
+On 2026-09-21 the user asked, with the stage 1 implementation: `docs/` renamed to `plan/` (the plan,
+the readings and the study documents), a new `docs/` with the package documentation for `pdoc`
+(a main page with how the package works, a tutorial and the type mapping table that was in
+`schema.md`), a GitHub workflow that runs only the package tests (never the proofs of concept, the
+examples or the probes; DuckDB and local files, no S3), a GitHub workflow that publishes the `pdoc`
+site, and a README whose test and probe sections hold only the final commands, split into the
+package tests of the GitHub workflow and the AWS tests with a flag for Redshift, with the prose on
+what each test does moved to the header of each test file. `plan/CURRENT_STATE.md`, `README.md`

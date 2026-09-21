@@ -1,8 +1,11 @@
 """Testes das funções puras dos probes, sem rede e sem AWS.
 
-Os probes (``probes/``) leem o ambiente; as decisões que eles tomam sobre o que leram (classificar um
-erro do ``boto3``, rotular um IP, montar as tabelas do inventário do bucket, interpretar o Object
-Lock ou a montagem de ``~/shared``) são funções puras, testadas aqui com respostas fabricadas. Um
+Os probes (``probes/``) leem o ambiente; as decisões que eles tomam sobre o que leram são funções
+puras, testadas aqui com respostas fabricadas: a classificação dos erros do ``boto3``, os rótulos
+de DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o inventário do bucket
+(tabelas Delta, sessões da suíte, versões não correntes), o versionamento pela amostra, o Object
+Lock, o ciclo de vida, a montagem de ``~/shared``, o formato das tabelas do Glue e os parâmetros da
+conexão Redshift. Um
 ``Report`` grava em ``probes/output/``; ``make_report`` o aponta para a pasta temporária do teste e
 devolve ``sys.stdout`` ao pytest no fim. Nenhum teste grava fora de ``tmp_path``, e o do
 ``parquet_source.py`` não abre arquivo algum: as suas funções recebem colunas e rodapés fabricados.

@@ -37,7 +37,34 @@ Variáveis de ambiente lidas:
   (``local.cleanup``, ``s3.cleanup``), para dizer sozinho se a suíte passou e o que ficou.
 - ``SERIALIZE_DB_DUCKDB_EXTENSIONS``: pasta de extensões do DuckDB, a única onde a suíte instala as
   que faltam; sem ela, ``.duckdb/`` na raiz do repositório quando existir (criada por
-  ``prepare_offline.sh``), senão o padrão do DuckDB, e nada é instalado.
+  ``prepare_offline.sh``), senão o padrão do DuckDB, e nada é instalado. A instalação automática
+  do DuckDB, que no ``LOAD`` baixaria a extensão para ``~/.duckdb`` sem aviso, fica desligada, e o
+  teste cuja extensão falta é pulado.
+
+As três variáveis de autorização se somam: informadas juntas, ``pytest`` sem ``-m`` roda tudo, e
+``-m local``, ``-m s3`` e ``-m redshift`` selecionam uma suíte. Com a autorização dada, a raiz S3
+é sondada antes com tempos curtos (cerca de 11 s com um proxy que não responde, antes de o
+delta-rs tentar). As suítes criam ``serialize-db-poc/<id>/`` sob a raiz ou tabelas
+``serialize_db_poc_<id>_*`` no esquema, apagam tudo no fim da sessão e imprimem o relatório com os
+fatos e as medições, com as chaves prefixadas pelo alvo (``local.``, ``s3.``, ``redshift.``) ou
+pela biblioteca (``duckdb.``, ``sqlalchemy.``, ``pyarrow.``). Num bucket versionado, cada objeto
+que a limpeza apaga vira versão não corrente, invisível à listagem e cobrada até uma regra
+``NoncurrentVersionExpiration``; ``probes/bucket.py`` (``BK-14``) conta o acumulado. Fora das
+raízes informadas, o que uma sessão grava é ``.pytest_cache/`` na raiz do repositório, do próprio
+pytest.
+
+O que cada suíte exige do ambiente: a suíte S3 precisa de credenciais da AWS que o ``boto3``
+encontre (papel do contêiner ou da instância, variáveis ``AWS_*`` ou perfil), das permissões
+``s3:ListBucket``, ``s3:GetObject``, ``s3:PutObject`` e ``s3:DeleteObject`` sob o prefixo (e as
+de KMS quando o bucket usa SSE-KMS), e das extensões ``httpfs``, ``delta`` e ``aws`` do DuckDB. A
+suíte local precisa só da extensão ``delta``. A suíte Redshift precisa de
+``redshift-serverless:GetWorkgroup`` e ``GetCredentials`` no workgroup, do ``GRANT`` que deixa o
+usuário criar tabelas no esquema, e de ``redshift-data:ExecuteStatement``, ``DescribeStatement`` e
+``GetStatementResult`` para o teste da Data API, que é pulado sem workgroup. Como o ``COPY`` e o
+``UNLOAD`` alcançam o S3 pelas credenciais de quem chama, a identidade da sessão precisa das mesmas
+permissões de S3 da suíte S3 sob a raiz, a não ser que ``SERIALIZE_DB_REDSHIFT_IAM_ROLE`` nomeie
+um papel associado ao namespace. A suíte copia a região do ``boto3`` para ``AWS_REGION``, num
+sentido só: um ambiente com apenas ``AWS_REGION`` e sem ``~/.aws/config`` precisa de manutenção.
 """
 
 from __future__ import annotations

@@ -77,7 +77,15 @@ Renomeá-las quebraria as bibliotecas que as consultam, então elas ficam como e
 A raiz S3 que um probe fotografa sai de `probelib.s3_root`, na ordem argumento, `SERIALIZE_DB_ROOT`
 (a raiz da biblioteca, onde ela escreveria) e `SERIALIZE_DB_TEST_S3_ROOT` (a autorização da suíte
 S3, que costuma apontar para o mesmo lugar). Uma `SERIALIZE_DB_ROOT` de pasta local é ignorada por
-estes probes, que leem S3.
+estes probes, que leem S3. `bucket.py` inventaria o que há sob a raiz, `diagnose_aws.py` lista
+`<raiz>/serialize-db-poc/` como a suíte faz e `redshift.py` simula sobre ela o papel do `COPY`;
+nenhum probe cria pasta ou objeto. No espaço do SageMaker, a raiz é a área de trabalho `dev/` do
+projeto, que `space.py` imprime como `s3_root` na seção do projeto, ou uma subpasta dela reservada
+aos testes. Fora disso os probes precisam só das credenciais e da região que o `boto3` resolve,
+presentes no espaço. `redshift.py` sem as variáveis e sem a conexão do projeto registra as seções da
+sessão como `note`. `AWS_DEFAULT_REGION` é a variável que o botocore lê; sem ela e sem perfil, as
+APIs do Redshift são procuradas na região errada. O JSON de `SERIALIZE_DB_TEST_REPORT` da suíte
+acompanha os relatórios dos probes na conversa.
 
 ## Onde está a resposta
 

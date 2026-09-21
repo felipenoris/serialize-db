@@ -249,3 +249,16 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `pc.all` over that empty column returns null, so the first call with a reader was refused as a
   timestamp with a time of day; `min_count=0` fixed it. The rewrite in the module's shape exercised
   the three kinds and found the defect the dense draft had hidden.
+- **A generated file is generated twice and diffed before a test asserts it equal to its versioned
+  copy** (2026-09-21). `schema_files` wrote `tests/client_model/schema/*.delta.json` from delta-rs
+  `Schema.to_json()`, the files looked right, and the test that regenerates and compares failed on
+  the first run: delta-rs serializes each field's metadata map in arbitrary order, and two
+  generations of the same model differed (`{"parquet.field.id":1,"comment":...}` against
+  `{"comment":...,"parquet.field.id":2}`). The canonical dump (`json.dumps` with `sort_keys=True`)
+  is what the client versions.
+- **`uv` resolution needs every configured index reachable** (2026-09-21). `pyproject.toml` carries
+  the corporate GitLab index as an extra `[[tool.uv.index]]`; outside the corporate network `uv add`
+  and `uv lock` fail with a DNS error on it, even though every package comes from PyPI. An empty
+  configuration file (`UV_CONFIG_FILE`, or a `uv.toml` beside `pyproject.toml`) makes `uv` ignore
+  the whole `[tool.uv]` section; the workflows use `.github/uv-ci.toml`, and the local lock was made
+  the same way, with the index block restored afterwards.

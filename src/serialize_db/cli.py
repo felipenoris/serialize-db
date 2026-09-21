@@ -5,7 +5,7 @@ etapa 1: ``schema write`` grava os arquivos de esquema dos modelos e ``schema ch
 versionados com a geração nova, sem gravar. Os modelos chegam por ``--metadata modulo:atributo``,
 o caminho importável do ``MetaData`` do cliente.
 
-Exemplo::
+Exemplo:
 
     serialize-db schema write --metadata pipeline.models:Base.metadata schema/
     serialize-db schema check --metadata pipeline.models:Base.metadata schema/
@@ -28,7 +28,7 @@ from serialize_db import schema
 def resolve_metadata(spec: str) -> sa.MetaData:
     """O ``MetaData`` de ``modulo:atributo``: importa o módulo e segue os atributos por ponto.
 
-    Exemplo::
+    Exemplo:
 
         resolve_metadata("pipeline.models:Base.metadata")
     """

@@ -7,3 +7,4 @@ secrets/
 .python
 .duckdb
 probes/output
+site/

@@ -73,3 +73,13 @@ the S3 proof of concept of 2026-09-19 (Python 3.13.15) in `plan/POC.md`. What th
 local proof of concept ran on macOS arm64 through `uv run --with` in the scratchpad, with 11 DuckDB
 threads and the files in the page cache, nothing against S3 or Redshift; the Python examples added
 to every document on 2026-09-19 ran under the same pinned versions.
+
+## GitHub Actions (2026-09-21)
+
+- The workflows in `.github/workflows/` run on `ubuntu-latest` with `astral-sh/setup-uv` and Python
+  3.13; `UV_CONFIG_FILE=.github/uv-ci.toml` (empty) makes `uv` ignore the corporate index of
+  `pyproject.toml`. `tests.yml` sets `SERIALIZE_DB_TEST_LOCAL_ROOT` to a folder under the workspace
+  and runs `tests/` without `tests/proof_of_concept/`; `docs.yml` builds the `pdoc` site and deploys
+  it to GitHub Pages (`actions/configure-pages`, `upload-pages-artifact`, `deploy-pages`), which
+  needs the Pages source set to "GitHub Actions" in the repository settings. No run has happened
+  yet. `plan/CURRENT_STATE.md`, `README.md`

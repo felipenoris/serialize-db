@@ -12,7 +12,7 @@ A tabela de tipos do contrato está na página principal da documentação. Todo
 módulo emite vai entre aspas duplas, porque nomes como ``to`` e ``timestamp`` são palavras
 reservadas dos motores.
 
-Exemplo, com um modelo mínimo::
+Exemplo, com um modelo mínimo:
 
     from datetime import date
 
@@ -140,7 +140,7 @@ def arrow_type(column: sa.Column) -> pa.DataType:
     ``tz="UTC"`` quando o tipo tem fuso; os demais seguem a tabela. Um tipo fora dela (``Float``,
     ``LargeBinary``, ``ARRAY``, ``Interval``) é ``ContractError``, com a tabela e a coluna.
 
-    Exemplo::
+    Exemplo:
 
         arrow_type(Operacao.__table__.c.id_operacao)   # int64
         arrow_type(Operacao.__table__.c.data)          # date32[day]
@@ -173,7 +173,7 @@ def arrow_schema(table: sa.Table) -> pa.Schema:
     ``metadata``; o esquema leva o nome da tabela em ``serialize_db_table``. Um campo JSON é
     ``string``, sem a extensão ``arrow.json``.
 
-    Exemplo::
+    Exemplo:
 
         schema = arrow_schema(Operacao.__table__)
         schema.field("id_operacao").nullable        # False
@@ -191,7 +191,7 @@ def delta_schema(table: sa.Table) -> DeltaSchema:
     ``DateTime`` sem fuso vira ``timestamp_ntz`` e com fuso ``timestamp``; ``Numeric(p, s)`` vira
     ``decimal(p,s)``; JSON e UUID viram ``string``; os comentários ficam nos campos.
 
-    Exemplo::
+    Exemplo:
 
         delta_schema(Operacao.__table__).to_json()   # {"type": "struct", "fields": [...]}
     """
@@ -205,7 +205,7 @@ def delta_schema(table: sa.Table) -> DeltaSchema:
 class TableOptions:
     """O que ``Table.info["serialize_db"]`` declara para uma tabela, com os padrões da biblioteca.
 
-    Exemplo::
+    Exemplo:
 
         options = table_options(Operacao.__table__)
         options.partition_by, options.partition_source   # ("data_str", "data")
@@ -264,7 +264,7 @@ def table_options(table: sa.Table) -> TableOptions:
     ``ContractError``. ``keys`` reúne a chave primária, as ``UniqueConstraint`` e os índices
     únicos, ajustados por ``keys["add"]`` e ``keys["drop"]``, sempre listas de colunas.
 
-    Exemplo::
+    Exemplo:
 
         table_options(Operacao.__table__).sort_key   # ("data", "id_operacao")
     """
@@ -295,7 +295,7 @@ def sql_type(column: sa.Column, dialect: Dialect) -> str:
     ``JSON``; ``DOUBLE`` e ``DOUBLE PRECISION`` para ``Double``; ``TIMESTAMP`` ou ``TIMESTAMPTZ``
     para ``DateTime``. Um tipo fora do contrato é ``ContractError``.
 
-    Exemplo::
+    Exemplo:
 
         sql_type(Operacao.__table__.c.valor, "redshift")   # "DOUBLE PRECISION"
     """
@@ -319,7 +319,7 @@ def quoted(name: str) -> str:
     ``timestamp`` são palavras reservadas dos motores, e os nomes do contrato são minúsculos, que
     os dois motores leem igual com ou sem aspas.
 
-    Exemplo::
+    Exemplo:
 
         quoted("to")   # '"to"'
     """
@@ -329,7 +329,7 @@ def quoted(name: str) -> str:
 def column_ddl(column: sa.Column, dialect: Dialect) -> str:
     """A linha da coluna no ``CREATE TABLE``: nome entre aspas, tipo e ``NOT NULL``.
 
-    Exemplo::
+    Exemplo:
 
         column_ddl(Operacao.__table__.c.id_operacao, "duckdb")   # '"id_operacao" BIGINT NOT NULL'
     """
@@ -360,7 +360,7 @@ def ddl(table: sa.Table, dialect: Dialect, prefix: str = "") -> str:
     ``CHECK``, ``DEFAULT`` nem comentário: as chaves são da auditoria, e o comentário vai no
     esquema Delta. ``prefix`` renomeia a tabela para o sandbox, dentro das aspas.
 
-    Exemplo::
+    Exemplo:
 
         print(ddl(Operacao.__table__, "redshift", prefix="exec_42_"))
         # CREATE TABLE "exec_42_cad_operacoes" (
@@ -499,7 +499,7 @@ def cast(
     coluna alguma do contrato também são ``ContractError``, com a tabela, a coluna e a instrução
     ao cliente na mensagem. Um ``RecordBatchReader`` sai como leitor que converte lote a lote.
 
-    Exemplo::
+    Exemplo:
 
         batch = pa.RecordBatch.from_pydict({"valor": [10.5], "id_operacao": [1],
                                             "data": [date(2026, 8, 31)],
@@ -577,7 +577,7 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     comentário; chave estrangeira ``DEFERRABLE``; ``partition_by`` sem a coluna, com a coluna fora
     de ``String(10)`` ou sem ``partition_source``; tabela sem chave primária e sem ``keys``.
 
-    Exemplo::
+    Exemplo:
 
         assert check_models(Base.metadata) == []
     """
@@ -614,7 +614,7 @@ def schema_files(metadata: sa.MetaData) -> dict[str, str]:
     O cliente os versiona no repositório do pipeline, e o diff contra a geração nova mostra o que
     uma mudança de modelo altera em cada motor.
 
-    Exemplo::
+    Exemplo:
 
         sorted(schema_files(Base.metadata))
         # ["cad_operacoes.delta.json", "cad_operacoes.duckdb.sql", "cad_operacoes.redshift.sql"]
@@ -630,7 +630,7 @@ def schema_files(metadata: sa.MetaData) -> dict[str, str]:
 def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
     """Grava ``schema_files`` em ``directory``, criada se preciso, e devolve os caminhos gravados.
 
-    Exemplo::
+    Exemplo:
 
         write_schema_files(Base.metadata, "schema")   # ["schema/cad_operacoes.delta.json", ...]
     """
@@ -649,7 +649,7 @@ def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
 
     Vazio quando nada mudou; um arquivo ausente aparece inteiro como acrescentado. Nada é gravado.
 
-    Exemplo::
+    Exemplo:
 
         check_schema_files(Base.metadata, "schema")   # [] quando os arquivos estão atualizados
     """

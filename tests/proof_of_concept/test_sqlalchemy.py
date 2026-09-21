@@ -5,7 +5,8 @@ compilado para o DuckDB e para o Redshift (com as opções físicas lidas de ``T
 ``create_all`` num DuckDB em memória, os statements Core de ``insert`` e ``select`` executados pelo
 ``duckdb_engine``, o caminho por Arrow na conexão bruta, a reflexão, a precisão do ``Numeric`` pelo
 dialeto contra o caminho Arrow, o ``pandas.read_sql``, o texto SQL gerado por dialeto com parâmetro
-e prefixo (``plan/sqlalchemy.md``) e a compilação de DML para o Redshift, que não exige um cluster.
+e prefixo (``plan/sqlalchemy.md``), a compilação de DML para o Redshift, que não exige um cluster,
+e o nome em três partes do esquema vindo de datashare.
 Nenhuma classe ORM é instanciada: a biblioteca usa os modelos como metadados e o Core como gerador
 de SQL.
 """

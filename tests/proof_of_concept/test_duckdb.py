@@ -4,8 +4,8 @@ Sem gravar arquivo: a configuração da conexão, Arrow na entrada e na saída, 
 comando seguinte e preservado num cursor próprio, a consulta em streaming (o primeiro lote antes do
 fim, a memória de um lote, medida em subprocesso), o ``INSERT`` alimentado por um leitor sobre um
 gerador Python (um comando só, e os lotes que o leitor não confere), o tipo ``DECIMAL`` inferido de
-uma amostra do pandas contra o fixado pelo esquema Arrow, JSON, e o custo do ``executemany`` contra a
-carga por Arrow. Sob a raiz local (marcador
+uma amostra do pandas contra o fixado pelo esquema Arrow, JSON, o custo do ``executemany`` contra a
+carga por Arrow e as consultas da auditoria. Sob a raiz local (marcador
 ``local``): ``COPY ... TO`` com ``RETURN_STATS`` e o esquema físico do Parquet gravado, o ``COPY``
 particionado por mês e um banco em arquivo com pasta de transbordo. O ``delta_scan`` está em
 ``poc_delta.py``.
