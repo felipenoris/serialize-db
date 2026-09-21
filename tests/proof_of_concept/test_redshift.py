@@ -18,7 +18,10 @@ Delta e lido pelo DuckDB, a Data API pelo ciclo de ``examples/redshift_data_api.
 o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por thread. Os resultados que a documentação
 não fixa vão para o relatório da sessão em vez de virarem asserções.
 
-A suíte foi escrita antes de o projeto ter uma conexão Redshift e ainda não rodou contra um cluster.
+A primeira execução no ambiente alvo, em 2026-09-21, passou um teste e reprovou dez: a sessão
+inteira correu numa transação aberta antes do ``USE``, que a visão ``stv_slices`` negada abortou, e
+cada comando seguinte recebeu ``25P02`` (``docs/POC.md``). O autocommit passou a vir antes do
+primeiro comando, e as dez perguntas esperam a próxima execução.
 """
 
 from __future__ import annotations
@@ -129,7 +132,7 @@ def reading(action: object) -> object:
 
 
 def test_session_and_named_parameters(redshift_session: RedshiftSession) -> None:
-    """A sessão responde; o cursor aceita ``paramstyle = "named"`` e o esquema dá ``CREATE``."""
+    """A sessão responde; o cursor aceita ``paramstyle = "named"``; o que ``has_schema_privilege`` diz do esquema é leitura."""
     session = redshift_session
 
     version, user, schema = session.execute("select version(), current_user, current_schema()")[0]
@@ -143,7 +146,9 @@ def test_session_and_named_parameters(redshift_session: RedshiftSession) -> None
     cursor.execute("select :mes as mes", {"mes": "2026-08"})
     assert cursor.fetchone()[0] == "2026-08"
 
-    assert session.execute("select has_schema_privilege(%s, 'CREATE')", (session.schema,))[0][0] is True
+    # O que has_schema_privilege responde pelo esquema do datashare depois do USE é a leitura RS-5,
+    # ainda sem resposta no ambiente alvo; a prova do privilégio é o CREATE TABLE do ida e volta.
+    record("redshift.has_schema_privilege_create", reading(lambda: session.execute("select has_schema_privilege(%s, 'CREATE')", (session.schema,))[0][0]))
 
 
 def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession) -> None:
@@ -186,7 +191,8 @@ def test_schema_location_and_use_of_the_share_database(redshift_session: Redshif
     assert places, f"{session.schema} não aparece em svv_all_schemas: a sessão não o enxerga"
 
     # 3. Os outros dois requisitos da escrita num datashare, que só a leitura fixa: o patch (186, ou
-    # 1.0.78890 no serverless) e os slices do consumidor (64 ou mais).
+    # 1.0.78890 no serverless) e os slices do consumidor (64 ou mais). stv_slices é negada a um
+    # usuário comum no ambiente alvo (42501): com o autocommit, a recusa não alcança o passo 4.
     record("redshift.slices", reading(lambda: session.execute("select count(*) from stv_slices")[0][0]))
 
     # 4. O ida e volta pelo nome que a biblioteca escreve: criar, inserir e ler.
@@ -480,7 +486,6 @@ def test_parallel_copy_and_unload_on_two_connections(redshift_session: RedshiftS
 
     def on_own_connection(sql: str, count_from: str | None = None) -> int:
         _, connection = connect_redshift()
-        connection.autocommit = True
         try:
             cursor = connection.cursor()
             cursor.execute(sql)

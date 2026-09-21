@@ -61,6 +61,14 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
 - With `redshift_connector`, `executemany` makes one round trip per row and the dialect does not
   rewrite it into a multi-row `VALUES`: bulk loads go through Parquet on S3 and `COPY`, small batches
   through `insert(Modelo).values(lista)`. `docs/redshift.md`
+- With autocommit off, `redshift_connector` issues `begin transaction` before the first `execute`
+  of a cursor, and setting `autocommit = True` afterwards does not close the open transaction: a
+  session that ran `USE` before switching autocommit on stayed in one transaction, the denied
+  `stv_slices` read aborted it, and every later statement, including the cleanup's `DROP`s, failed
+  with 25P02 (target, 2026-09-21). The suite and the library set autocommit right after `connect`,
+  before the `USE`. `select version()` comes back with a trailing NUL byte, `current_schema()` is
+  null after the `USE`, and `svv_redshift_databases` reports `datalake_rw_shared` as `shared` with
+  isolation `UNKNOWN` and `dev` as `local` with `Snapshot Isolation`. `docs/POC.md`
 
 ## The reading of 2026-09-21
 

@@ -195,3 +195,14 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   signatures (`publish_partition`, `export_partition`) missing the arguments their callers must pass.
   Grep the plan for the old rule's vocabulary when a decision lands, and read the API tables against
   the flows that call them.
+- **A shared connection's transaction mode is set before its first statement, and a report that
+  counts failures records their messages** (2026-09-21). The first run of the Redshift suite in the
+  target passed 1 test and failed 10. `connect_redshift` ran `USE` before the fixture switched
+  autocommit on; `redshift_connector` had already issued `begin transaction` (it does so before the
+  first `execute` when autocommit is off, and switching autocommit on later leaves that transaction
+  open), so the whole session ran in one transaction. The denied `stv_slices` read (42501) aborted
+  it, and every later statement, the `CREATE` of eight tests and the eleven `DROP` of the cleanup,
+  failed with 25P02. The JSON said "10 failed" and nothing else, and the first attempt lost the JSON
+  because the report folder did not exist. Autocommit now comes before the `USE`, the cleanup rolls
+  back first, the report records each failure's message and creates its folder, and a fake driver
+  fixes the order in `tests/test_conftest_redshift.py`.

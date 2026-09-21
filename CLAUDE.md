@@ -303,6 +303,11 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **`secrets/` stays unread unless the user names a path inside it**: the probe reports of
   2026-09-21 were read from `secrets/probes-aws-bn/` on request, only that folder, and nothing from
   them is copied into git; the facts go to `docs/POC.md` (2026-09-21).
+- **A shared connection's transaction mode is set before its first statement, and a denied reading
+  never shares a transaction with what follows**: `redshift_connector` begins a transaction before the
+  first `execute` when autocommit is off and leaves it open when autocommit is switched on later; one
+  denied system view then aborts every later statement and the cleanup with 25P02. A report that counts
+  failures records their messages and creates its own folder (2026-09-21).
 - **A plan revision reads every stage against the decisions memory**: a sentence written before a
   decision survives in another section (the `pc.round` of the initial load, contradicting the
   `Double` decision of 2026-09-20, found only by the full review of 2026-09-21); grep the plan for the

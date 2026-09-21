@@ -706,3 +706,56 @@ além do que já estava medido:
 - Uma execução que confere a versão por igualdade abortaria depois de um `vacuum`, um `compact` ou
   um `reconcile` de outra sessão; `Execution.publish` passou a conferir por `version_diff`
   ([etapa 6](PLAN-STAGE-6.md)).
+
+## O que a primeira execução da suíte Redshift mostrou
+
+Em 2026-09-21, às 10:50 UTC, o usuário rodou `pytest -m redshift` no ambiente alvo (Linux x86_64,
+kernel 6.12 do Amazon Linux 2023, Python 3.13.15, o `.venv` da pasta preparada: deltalake 1.6.4,
+DuckDB 1.5.5, PyArrow 25.0.1, boto3 1.43.98, SQLAlchemy 2.0.54, pandas 3.0.6, pytest 9.1.1), com a
+raiz `s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests`
+e a credencial temporária do workgroup. A sessão durou 10,7 s: um teste passou e dez reprovaram. O
+relatório está em [`readings/redshift-suite-2026-09-21-1050.json`](readings/redshift-suite-2026-09-21-1050.json);
+a primeira tentativa não gravou o JSON e o usuário repetiu a suíte. O `conftest` criava o arquivo
+sem criar a pasta, que os probes criam e a suíte não criava; ele passou a criá-la.
+
+**A causa das dez reprovações é uma transação só.** `connect_redshift` rodava `USE
+datalake_rw_shared` antes de a fixture ligar o autocommit. Com ele desligado, o
+`redshift_connector` emite `begin transaction` antes do primeiro `execute` (`cursor.py`: `if not
+in_transaction and not autocommit`), e ligá-lo depois não fecha a transação aberta: a sessão inteira
+correu nela. No terceiro teste, `select count(*) from stv_slices` foi negada (`42501`, a mesma leitura
+do probe), e um erro do servidor aborta a transação. O `CREATE TABLE` seguinte, os oito testes
+restantes e os onze `DROP TABLE IF EXISTS` da limpeza receberam `25P02`, `current transaction is
+aborted, commands ignored until end of transaction block`. Os exemplos não passaram por isso:
+`redshift_manifest.py` liga o autocommit antes do `USE`, e `redshift_copy_unload.py` não encontrou
+erro algum dentro da sua transação.
+
+Qual dos dois primeiros testes reprovou, o JSON não diz, porque ele registrava só a contagem. As
+leituras do terceiro teste (`current_database()`, `svv_redshift_databases`, `svv_all_schemas`) foram
+gravadas, então até ele nenhum comando falhou no servidor: `has_schema_privilege('sbx_aco_decon',
+'CREATE')` respondeu sem erro depois do `USE`, com `true` (o primeiro teste passou) ou com outro valor
+(a asserção reprovou). A saída do terminal decide, e o JSON passou a levar a mensagem de cada teste
+reprovado (`failed.<teste>`).
+
+**O que a execução respondeu**, apesar das reprovações:
+
+- A suíte conecta pelo caminho de `examples/redshift_native.py`: usuário
+  `IAMR:user-533cbaba-4061-70a6-7967-78dc06230c13@3hpfa7636y4qor`, versão `1.0.436211`, que o driver
+  devolve com um byte nulo no fim (`Redshift 1.0.436211\0`).
+- Depois do `USE`, `current_schema()` é nulo e `current_database()` continua `dev`, como no probe.
+  `svv_redshift_databases` lista `datalake_rw_shared` como `shared` com isolamento `UNKNOWN` e `dev`
+  como `local` com `Snapshot Isolation`; `svv_all_schemas` põe `sbx_aco_decon` em
+  `datalake_rw_shared`, tipo `shared`; `stv_slices` é negada (`42501`).
+- O delta-rs gravou as tabelas dos testes sob a raiz (`write_deltalake` vem antes do primeiro comando
+  Redshift de cada teste) e a limpeza da suíte apagou 17 objetos sob `serialize-db-poc/0f5ea6d3`: a
+  primeira escrita da suíte no bucket do ambiente alvo, pelo endpoint de gateway e pelas credenciais
+  do contêiner, sem proxy.
+- O DuckDB 1.5.5 abriu com 2 threads e as extensões de `.duckdb/` da pasta preparada.
+
+**Consequências**, nesta unidade de trabalho: o autocommit passou para `connect_redshift`, antes do
+`USE` e de qualquer comando, também nas conexões por thread do teste paralelo; a limpeza faz
+`rollback` quando encontra uma transação aberta; `has_schema_privilege` deixou de ser asserção no
+primeiro teste e virou a leitura `redshift.has_schema_privilege_create`, porque é a pergunta `RS-5`;
+o `conftest` cria a pasta do relatório e grava a mensagem de cada teste reprovado;
+`tests/test_conftest_redshift.py` fixa a ordem com um `redshift_connector` fabricado. As dez
+perguntas da [etapa 0](PLAN-STAGE-0.md) continuam sem resposta até a próxima execução, a primeira das
+duas que a etapa exige.

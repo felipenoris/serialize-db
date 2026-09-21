@@ -30,7 +30,8 @@ Variáveis de ambiente lidas:
   ``default``; sem ela, os dois levam as credenciais da sessão ``boto3``, que é o caminho do
   ambiente alvo, onde o namespace não tem papel associado.
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos, as pastas e as tabelas criados.
-- ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é gravado.
+- ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é gravado; a pasta
+  é criada, e cada teste reprovado entra com a mensagem do erro.
   O relatório abre com a sessão (``session.``: início, plataforma, Python, versões, marcadores e,
   no fim, a contagem por resultado e a duração) e registra a limpeza de cada raiz
   (``local.cleanup``, ``s3.cleanup``), para dizer sozinho se a suíte passou e o que ficou.
@@ -462,13 +463,22 @@ def connect_redshift() -> tuple[str, object]:
 
         region = boto3.Session().region_name
 
-    def with_share_database(connection: object, method: str) -> tuple[str, object]:
-        """Roda ``USE <banco>`` quando o esquema vem de um datashare: daí em diante, ``esquema.tabela`` basta.
+    def prepare_session(connection: object, method: str) -> tuple[str, object]:
+        """Liga o autocommit e roda ``USE <banco>`` quando o esquema vem de um datashare: daí em diante, ``esquema.tabela`` basta.
 
-        É o passo de ``examples/redshift_copy_unload.py``: sem ele, quem não está conectado ao banco
-        compartilhado só cita objetos por nome em três partes, e o ``CREATE`` e o ``COPY`` não foram
-        exercitados assim.
+        O autocommit vem antes do primeiro comando. Desligado, o ``redshift_connector`` emite
+        ``begin transaction`` antes do primeiro ``execute``, e ligá-lo depois não fecha essa
+        transação: a sessão inteira corre nela, e o primeiro erro do servidor (a visão de sistema
+        negada a um usuário comum) aborta tudo o que vem depois, inclusive a limpeza, com
+        ``25P02`` (ambiente alvo, 2026-09-21, ``docs/POC.md``). Cada comando confirmado ao terminar
+        é também o que o ``COPY`` e o ``UNLOAD`` precisam para não ficarem presos numa transação
+        aberta.
+
+        O ``USE`` é o passo de ``examples/redshift_copy_unload.py``: sem ele, quem não está
+        conectado ao banco compartilhado só cita objetos por nome em três partes, e o ``CREATE`` e
+        o ``COPY`` não foram exercitados assim.
         """
+        connection.autocommit = True
         share = variable("SHARE_DATABASE")
         if share:
             cursor = connection.cursor()
@@ -477,7 +487,7 @@ def connect_redshift() -> tuple[str, object]:
 
     if variable("HOST") and variable("USER") and variable("PASSWORD"):
         connection = redshift_connector.connect(host=variable("HOST"), port=int(variable("PORT") or 5439), user=variable("USER"), password=variable("PASSWORD"), **common)
-        return with_share_database(connection, "par informado")
+        return prepare_session(connection, "par informado")
 
     if variable("WORKGROUP"):
         import boto3
@@ -492,7 +502,7 @@ def connect_redshift() -> tuple[str, object]:
             password=credentials["dbPassword"],
             **common,
         )
-        return with_share_database(connection, "credencial temporária do workgroup")
+        return prepare_session(connection, "credencial temporária do workgroup")
 
     raise RuntimeError("faltam parâmetros: SERIALIZE_DB_REDSHIFT_WORKGROUP para a credencial temporária, ou _HOST, _USER e _PASSWORD")
 
@@ -507,9 +517,6 @@ def redshift_session() -> Iterator[RedshiftSession]:
         method, connection = connect_redshift()
     except Exception as error:  # noqa: BLE001 - configuração incompleta, rede ou credencial
         pytest.fail(f"SERIALIZE_DB_TEST_REDSHIFT_SCHEMA informada, mas sem conexão: {type(error).__name__}: {error}", pytrace=False)
-
-    # Cada comando é confirmado ao terminar; o COPY e o UNLOAD não ficam presos numa transação aberta.
-    connection.autocommit = True
 
     session = RedshiftSession(
         connection=connection,
@@ -526,6 +533,12 @@ def redshift_session() -> Iterator[RedshiftSession]:
     yield session
 
     if not session.keep:
+        # Uma transação abortada por um teste recusaria cada DROP com 25P02: a limpeza começa fora dela.
+        if getattr(connection, "in_transaction", False):
+            try:
+                connection.rollback()
+            except Exception as error:  # noqa: BLE001 - a limpeza não esconde o resultado dos testes
+                record("redshift.cleanup.rollback", f"{type(error).__name__}: {error}")
         for name in session.created:
             try:
                 session.execute(f"DROP TABLE IF EXISTS {session.qualified(name)}")
@@ -535,6 +548,14 @@ def redshift_session() -> Iterator[RedshiftSession]:
     connection.close()
 
 
+def failure_message(report: pytest.TestReport, limit: int = 300) -> str:
+    """As primeiras linhas do erro de um teste reprovado, para o relatório: a exceção e a asserção que a explica."""
+    crash = getattr(report.longrepr, "reprcrash", None)
+    text = crash.message if crash is not None else str(report.longrepr)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return " | ".join(lines[:2])[:limit] if lines else report.outcome
+
+
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     """Imprime o relatório da sessão, as instruções das suítes puladas e grava o JSON de ``SERIALIZE_DB_TEST_REPORT``."""
     # O resultado entra no relatório: sem ele o JSON não diz se a suíte passou nem se a limpeza rodou.
@@ -542,6 +563,11 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     record("session.outcome", ", ".join(f"{len(stats.get(name, []))} {name}" for name in ("passed", "failed", "error", "skipped")))
     record("session.finished_at", now_utc())
     record("session.duration_s", round(time.time() - SESSION["started"], 1))
+
+    # Cada teste reprovado entra com a mensagem do erro: uma contagem diz quantos falharam, não por quê.
+    for kind in ("failed", "error"):
+        for report in stats.get(kind, []):
+            record(f"{kind}.{report.nodeid}", failure_message(report))
 
     # As medições e os fatos coletados; as chaves ``<suíte>.skipped`` ficam fora, porque a seção seguinte as explica.
     measurements = {key: value for key, value in REPORT.items() if not key.endswith(".skipped")}
@@ -566,6 +592,7 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
 
     path = os.environ.get("SERIALIZE_DB_TEST_REPORT")
     if path:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(REPORT, handle, ensure_ascii=False, indent=2, default=str)
         terminalreporter.write_line(f"relatório gravado em {path}")
