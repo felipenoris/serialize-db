@@ -407,6 +407,16 @@ no grupo `dev`; o pandas fica no grupo `dev`, para o teste do ciclo com `ArrowDt
 biblioteca não o importa. `prepare_offline.sh` passa a instalar os extras (`--all-extras`) e é rodado
 de novo a cada mudança.
 
+Nomes: cada módulo separa três níveis (decisões do usuário de 2026-09-21). O público é a
+interface que o código cliente importa, e está obrigatoriamente na documentação do `pdoc`. O
+protegido não é interface pública, mas outro módulo da biblioteca o usa: fica sem prefixo e fora
+do `__all__`, e com isso fora da documentação, então um módulo que tenha um nome protegido declara
+o `__all__` para o `pdoc` não o mostrar. O privado é usado só dentro do módulo e leva o prefixo
+`_`. Na etapa 1,
+`serialize_db.schema` deixou no `__all__` os nomes que o cliente chama e prefixou os demais
+(`_cast_batch`, `_contract_column`, `_ARROW_TYPES`); `serialize_db.cli` declara só `main` e
+`serialize_db.errors` só `ContractError`.
+
 Configuração: argumentos explícitos de `Database` e da linha de comando, com as variáveis
 `SERIALIZE_DB_ROOT`, `SERIALIZE_DB_ENVIRONMENT`, `SERIALIZE_DB_ENGINE`,
 `SERIALIZE_DB_DUCKDB_EXTENSIONS`, `SERIALIZE_DB_EXPORT_MODE` (`register` ou `rewrite`, como a partição

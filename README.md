@@ -1,3 +1,6 @@
+[![Testes do pacote](https://github.com/felipenoris/serialize-db/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/felipenoris/serialize-db/actions/workflows/tests.yml)
+[![Documentação do pacote](https://github.com/felipenoris/serialize-db/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/felipenoris/serialize-db/actions/workflows/docs.yml)
+
 # Inicialização
 
 ```
@@ -57,8 +60,8 @@ A pasta é criada se não existir e recebe `index.html`, a página principal, `s
 `serialize_db/` com uma página por módulo e `search.js`; abra `index.html` no navegador. `site/`,
 a pasta que a esteira usa, fica fora do git. Sem `-o`, o `pdoc` serve a documentação em
 `http://localhost:8080` e a regenera a cada mudança. A esteira [`docs.yml`](.github/workflows/docs.yml) publica o mesmo
-resultado no GitHub Pages a cada push na `main`; o repositório precisa ter o Pages configurado com a
-origem "GitHub Actions".
+resultado no GitHub Pages a cada push na `main`, em <https://felipenoris.github.io/serialize-db/>;
+a publicação exige o Pages do repositório com a origem "GitHub Actions".
 
 # Testes
 

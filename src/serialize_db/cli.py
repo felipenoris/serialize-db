@@ -24,13 +24,15 @@ import sqlalchemy as sa
 
 from serialize_db import schema
 
+__all__ = ["main"]
 
-def resolve_metadata(spec: str) -> sa.MetaData:
+
+def _resolve_metadata(spec: str) -> sa.MetaData:
     """O ``MetaData`` de ``modulo:atributo``: importa o módulo e segue os atributos por ponto.
 
     Exemplo:
 
-        resolve_metadata("pipeline.models:Base.metadata")
+        _resolve_metadata("pipeline.models:Base.metadata")
     """
     module_name, _, attribute_path = spec.partition(":")
     if not module_name or not attribute_path:
@@ -43,7 +45,7 @@ def resolve_metadata(spec: str) -> sa.MetaData:
     return target
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_parser() -> argparse.ArgumentParser:
     """O parser da linha de comando, com um subcomando por primitiva."""
     parser = argparse.ArgumentParser(prog="serialize-db")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -52,20 +54,20 @@ def build_parser() -> argparse.ArgumentParser:
     actions = schema_command.add_subparsers(dest="action", required=True)
     for action, help_text in (("write", "grava os arquivos"), ("check", "compara sem gravar")):
         action_parser = actions.add_parser(action, help=help_text)
-        action_parser.add_argument("--metadata", required=True, type=resolve_metadata,
+        action_parser.add_argument("--metadata", required=True, type=_resolve_metadata,
                                    help="modulo:atributo com o MetaData dos modelos")
         action_parser.add_argument("directory", help="a pasta dos arquivos de esquema")
     return parser
 
 
-def schema_write(args: argparse.Namespace) -> int:
+def _schema_write(args: argparse.Namespace) -> int:
     """Grava os arquivos de esquema e imprime os caminhos."""
     for path in schema.write_schema_files(args.metadata, args.directory):
         print(path)
     return 0
 
 
-def schema_check(args: argparse.Namespace) -> int:
+def _schema_check(args: argparse.Namespace) -> int:
     """Imprime o diff dos arquivos versionados contra a geração nova; 1 quando há diferença."""
     diff = schema.check_schema_files(args.metadata, args.directory)
     for line in diff:
@@ -78,10 +80,10 @@ def schema_check(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Executa a linha de comando e devolve o código de saída."""
-    args = build_parser().parse_args(argv)
+    args = _build_parser().parse_args(argv)
     if args.command == "schema" and args.action == "write":
-        return schema_write(args)
-    return schema_check(args)
+        return _schema_write(args)
+    return _schema_check(args)
 
 
 if __name__ == "__main__":
