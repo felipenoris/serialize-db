@@ -144,3 +144,15 @@ forbidding `Text` and requiring `String(n)` in the models (`sqlalchemy-redshift`
 would only abort the publication `COPY` (`Spectrum Scan Error` 15007, read on 2026-09-21), after
 the data was already in the Delta. No column of the client model or of the reference model is
 `Text`: the rule guards future models. `plan/PLAN-STAGE-1.md`, `plan/schema.md`, `docs/index.md`
+
+On 2026-09-21 the user kept the byte measure for `String(n)`, the second pending decision of stage
+1: `cast` measures with `pc.binary_length`, the measure Redshift applies to `VARCHAR(n)` (a UTF-8
+character takes up to 4 bytes), so the contract refuses at ingestion what the publication `COPY`
+would abort. The alternatives offered and declined were measuring characters (`pc.utf8_length`,
+which reads as the model's author reads `n`, but moves the failure to the `COPY`) and measuring
+characters with `VARCHAR(4n)` in the Redshift DDL. The audit of stage 4 (`octet_length` in
+Redshift, `strlen` in DuckDB) and `scripts/migrate_parquet_to_delta.py` already measure bytes. The
+same day `probes/parquet_source.py` gained the byte maximum beside the character length in its
+sample section, because the client model's lengths came from a reading in characters: in the
+fictitious base, `cad_contas.nome` reads 45 characters and 47 bytes.
+`plan/PLAN-STAGE-1.md`, `plan/schema.md`, `probes/README.md`

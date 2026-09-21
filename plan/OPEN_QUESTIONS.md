@@ -60,8 +60,8 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 1](PLAN-STAGE-1.md): `String(n)` medido em
-  bytes; a tabela e a coluna sem comentário como violação de `check_models`; no modelo cliente: os
+- [Etapa 1](PLAN-STAGE-1.md): a tabela e a coluna sem comentário como violação de `check_models`;
+  no modelo cliente: os
   comprimentos de `String(n)`, a distribuição no
   Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos` para colunas não
   únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do modelo.

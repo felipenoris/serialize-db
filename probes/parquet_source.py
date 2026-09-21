@@ -12,8 +12,8 @@ Uso:
 
 ``<raiz>`` é a pasta que contém uma subpasta por tabela, ou uma URI (``s3://bucket/prefixo``); cada
 subpasta tem um arquivo Parquet ou uma árvore de partições com vários. ``--sample N`` lê as N
-primeiras linhas de um arquivo por tabela para medir cardinalidade e comprimento de texto, que o
-rodapé não guarda; sem ele nenhuma página de dados é lida. ``--files N`` limita quantos arquivos de
+primeiras linhas de um arquivo por tabela para medir cardinalidade e comprimento de texto, em
+caracteres e em bytes, que o rodapé não guarda; sem ele nenhuma página de dados é lida. ``--files N`` limita quantos arquivos de
 cada tabela aparecem na listagem por arquivo, sem limitar quantos são lidos.
 
 Só leitura. Todo arquivo da base é aberto por ``open_input_file``, e o relatório sai no terminal e
@@ -378,6 +378,8 @@ def sample_table(filesystem: Any, root: str, table: str, relative: str, rows: in
                 edges = pc.min_max(lengths).as_py()
                 mean = pc.mean(lengths).as_py()
                 entry["length"] = (edges["min"], round(mean) if mean is not None else None, edges["max"])
+                # O contrato mede o String(n) em bytes, como o VARCHAR(n) do Redshift.
+                entry["bytes"] = pc.max(pc.binary_length(column)).as_py()
             measured[name] = entry
         return measured
 
@@ -673,12 +675,12 @@ def sample_section(report: Report, measured: dict[str, dict[str, dict[str, Any]]
         report.line("Não pedida. `--sample N` lê as N primeiras linhas de um arquivo por tabela para medir o que o rodapé não guarda.")
         return
 
-    report.line(f"As {rows} primeiras linhas de um arquivo de cada tabela; `distintos` e `comprimento` são dessa amostra, não da tabela.\n")
+    report.line(f"As {rows} primeiras linhas de um arquivo de cada tabela; `distintos` e os comprimentos são dessa amostra, não da tabela; `comprimento` conta caracteres e `máx bytes` conta bytes, a medida do `VARCHAR(n)` do Redshift.\n")
     for table, columns in sorted(measured.items()):
         report.line(f"{table}")
         report.table(
             [
-                ["coluna", "linhas", "nulos", "distintos", "comprimento mín/méd/máx", "valores quando poucos"],
+                ["coluna", "linhas", "nulos", "distintos", "comprimento mín/méd/máx", "máx bytes", "valores quando poucos"],
                 *[
                     [
                         name,
@@ -686,6 +688,7 @@ def sample_section(report: Report, measured: dict[str, dict[str, dict[str, Any]]
                         entry["nulls"],
                         entry["distinct"],
                         "/".join(str(part) for part in entry["length"]) if "length" in entry else "-",
+                        entry.get("bytes", "-"),
                         ", ".join(entry.get("values", [])) or "-",
                     ]
                     for name, entry in columns.items()

@@ -195,7 +195,9 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
   `pc.round(x, escala)` devolve o valor igual), `_refuse_timestamp_with_time` (`timestamp` numa coluna
   `Date` só quando a ida e volta devolve o valor igual), `_refuse_nested_json` (`struct`, `list` e
   `map` numa coluna JSON), `_refuse_text_above_length` (texto acima de `String(n)` medido em bytes
-  por `pc.binary_length`, a medida do `VARCHAR(n)` do Redshift) e `_refuse_text_above_varchar`
+  por `pc.binary_length`, a medida do `VARCHAR(n)` do Redshift; decisão do usuário de
+  2026-09-21, a mesma medida da auditoria da [etapa 4](PLAN-STAGE-4.md) e da migração
+  adiantada, e `probes/parquet_source.py` relata o máximo em bytes ao lado do de caracteres) e `_refuse_text_above_varchar`
   (texto acima de 65.535 bytes numa coluna `Text`, que não declara `n`: o teto do `VARCHAR` do
   Redshift, que `sql_type` escreve no DDL); o inteiro numa coluna `Numeric`
   passa pelo desvio `decimal128(p + 3, s)`. Depois disso, `column.cast(field.type, safe=True)`
@@ -890,10 +892,6 @@ check_models:
 
 ## Decisões pendentes
 
-- **[decisão] O comprimento de `String(n)` em bytes ou em caracteres.** O rascunho mede bytes, a
-  medida do `VARCHAR(n)` do Redshift; um texto de `n` caracteres acentuados passaria na medida por
-  caracteres e seria recusado pelo `COPY`. A auditoria da [etapa 4](PLAN-STAGE-4.md) usa a mesma
-  medida (`octet_length` no Redshift, `strlen` no DuckDB).
 - **[decisão] A tabela e a coluna sem comentário como violação em `check_models`.** O modelo de
   referência não tem comentário algum, e o modelo cliente tem um em cada tabela e coluna, uma
   primeira redação; a regra obriga o dono do modelo a escrever os seus.
