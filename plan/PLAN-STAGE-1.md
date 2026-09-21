@@ -885,10 +885,14 @@ check_models:
 
 ## Decisões pendentes
 
-- **[decisão] Os comprimentos de `String(n)` do modelo cliente.** Escolhidos das leituras com
-  folga (`contrato` e `operacao` 50, os nomes 50 e 100, `numero` 20, `descricao` e `meta` 255,
-  `area` e `departamento` 20, `to` 2, `fonte_familia` 3); sem `n`, o Redshift daria `VARCHAR(256)`
-  e o `cast` não mediria nada.
+- **[decisão] Os comprimentos de `String(n)` do modelo cliente.** Escolhidos da amostra de 5.000
+  linhas por tabela, em caracteres (`contrato` e `operacao` 50, os nomes 50 e 100, `numero` 20,
+  `descricao` e `meta` 255, `area` e `departamento` 20, `to` 2, `fonte_familia` 3); sem `n`, o
+  Redshift daria `VARCHAR(256)` e o `cast` não mediria nada. O usuário pediu a medição da base
+  inteira antes de fixá-los (2026-09-21): `probes/parquet_source.py <raiz> --text-bytes` lê as
+  colunas de texto de todos os arquivos e dá o maior valor de cada coluna em bytes e em
+  caracteres, e os `n` saem dessa leitura. `to` e `fonte_familia` estão com folga zero na amostra,
+  e `cad_lancamentos.meta` é 100% nulo nas 141.901.795 linhas.
 - **[decisão] A distribuição no Redshift** (`diststyle`, `distkey`): o modelo cliente não declara
   `redshift`, o padrão `AUTO`, até a decisão.
 - **[decisão] A chave estrangeira de `cad_contratos` para `rel_contrato_operacao`**, do original,

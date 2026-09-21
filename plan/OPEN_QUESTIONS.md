@@ -60,7 +60,9 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 1](PLAN-STAGE-1.md), todas do modelo cliente: os
+- [Etapa 1](PLAN-STAGE-1.md), todas do modelo cliente, e a primeira espera a execução de
+  `probes/parquet_source.py <raiz> --text-bytes` no ambiente alvo, que mede o maior texto de
+  cada coluna em bytes: os
   comprimentos de `String(n)`, a distribuição no
   Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos` para colunas não
   únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do modelo.

@@ -802,11 +802,20 @@ def test_partition_values_lists_each_value_once_in_order() -> None:
     assert values == {"mes": ["2026-07", "2026-06"]}
 
 
+def test_text_columns_lists_the_text_columns_once() -> None:
+    """As colunas de texto saem na ordem do primeiro arquivo que as traz, sem repetição."""
+    primeiro = reading("a.parquet", columns=[column("id"), column("nome", arrow_type="string"), column("data", arrow_type="date32[day]")])
+    segundo = reading("b.parquet", columns=[column("nome", arrow_type="string"), column("meta", arrow_type="large_string")])
+    assert parquet_source.text_columns([primeiro, segundo]) == ["nome", "meta"]
+    assert parquet_source.text_columns([reading("c.parquet", columns=[column("id")])]) == []
+
+
 def test_parse_reads_the_root_and_the_options() -> None:
-    """A linha de comando: a raiz é obrigatória, ``--sample`` e ``--files`` pedem número, e o resto é uso errado."""
-    assert parquet_source.parse(["probe", "/base"]) == ("/base", 0, parquet_source.DEFAULT_FILE_ROWS)
-    assert parquet_source.parse(["probe", "/base", "--sample", "500"]) == ("/base", 500, parquet_source.DEFAULT_FILE_ROWS)
-    assert parquet_source.parse(["probe", "--files", "5", "s3://bucket/prefixo"]) == ("s3://bucket/prefixo", 0, 5)
+    """A linha de comando: a raiz é obrigatória, ``--sample`` e ``--files`` pedem número, ``--text-bytes`` é uma chave, e o resto é uso errado."""
+    assert parquet_source.parse(["probe", "/base"]) == ("/base", 0, parquet_source.DEFAULT_FILE_ROWS, False)
+    assert parquet_source.parse(["probe", "/base", "--sample", "500"]) == ("/base", 500, parquet_source.DEFAULT_FILE_ROWS, False)
+    assert parquet_source.parse(["probe", "--files", "5", "s3://bucket/prefixo"]) == ("s3://bucket/prefixo", 0, 5, False)
+    assert parquet_source.parse(["probe", "/base", "--text-bytes"]) == ("/base", 0, parquet_source.DEFAULT_FILE_ROWS, True)
     assert parquet_source.parse(["probe"]) is None
     assert parquet_source.parse(["probe", "/base", "--sample"]) is None
     assert parquet_source.parse(["probe", "/base", "--sample", "x"]) is None

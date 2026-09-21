@@ -158,6 +158,7 @@ com o assistente.
 .venv/bin/python probes/redshift.py s3://bucket/prefixo
 .venv/bin/python probes/catalog.py
 .venv/bin/python probes/parquet_source.py /caminho/da/base
+.venv/bin/python probes/parquet_source.py /caminho/da/base --text-bytes
 ```
 
 O argumento `s3://bucket/prefixo` é a raiz que o probe fotografa; sem ele valem `SERIALIZE_DB_ROOT`

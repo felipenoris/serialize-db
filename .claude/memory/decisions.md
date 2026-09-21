@@ -166,3 +166,13 @@ were drowned. The client model keeps its 12 table comments and its 77 column com
 comment still reaches the Arrow schema and the Delta schema; the table comment now has no consumer,
 and whether `create_table` passes it as the Delta table's `description` is an open item of stage 3.
 `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `docs/index.md`
+
+On 2026-09-21, asked to confirm the `String(n)` lengths of the client model (the fourth pending
+decision of stage 1), the user asked for the whole base to be measured first, instead of confirming
+the lengths or widening the two with no margin. The lengths had come from the probe's 5,000-row
+sample per table, in characters; two columns sit at zero margin (`cad_contratos.to` with
+`String(2)` over the domain `01`..`ZT`, and `cad_contratos.fonte_familia` with `String(3)` over
+`BND`..`FMM`), and `cad_lancamentos.meta` is 100% null over its 141,901,795 rows, so its
+`String(255)` rests on nothing. `probes/parquet_source.py <raiz> --text-bytes` now reads the text
+columns of every file and reports, per column, the longest value in bytes and in characters
+(section 9); the run in the target closes the decision. `plan/PLAN-STAGE-1.md`, `probes/README.md`
