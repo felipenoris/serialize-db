@@ -61,3 +61,16 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
 - With `redshift_connector`, `executemany` makes one round trip per row and the dialect does not
   rewrite it into a multi-row `VALUES`: bulk loads go through Parquet on S3 and `COPY`, small batches
   through `insert(Modelo).values(lista)`. `docs/redshift.md`
+
+## The reading of 2026-09-21
+
+- `USE datalake_rw_shared` makes two-part names resolve in the datashare, and `current_database()`
+  keeps answering `dev` afterwards (probe `RS-19` of 2026-09-21, user confirmation the same day): the
+  switch is confirmed by resolving a name (the library creates
+  `<schema>.serialize_db_publications` with `IF NOT EXISTS` right after the `USE`; the probe selects
+  from a table `svv_all_tables` lists), never by that function, and the suite records the function's
+  value as a reading. `has_schema_privilege` and `svv_table_info` after the `USE` remain unread. Other
+  readings: `enable_case_sensitive_identifier` off, `datestyle` `ISO, MDY`, `statement_timeout` 0,
+  `wlm_query_slot_count` 1, `sys_load_error_detail` answered 0 in 2.4 s; the Data API `select 1` stayed
+  `PICKED` for 30 s (23 ms the day before); `iam.simulate_principal_policy` times out in the target
+  (no IAM endpoint), so the first `COPY` proves the permission. `docs/POC.md`, `docs/PLAN-STAGE-5.md`

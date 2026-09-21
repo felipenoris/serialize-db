@@ -44,8 +44,10 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   (decisão do usuário de 2026-09-20). A conexão é a credencial temporária do workgroup
   ([`../examples/redshift_native.py`](../examples/redshift_native.py), executado lá), e nenhum
   outro caminho de autenticação entra na biblioteca sem ter rodado no ambiente alvo. A conexão roda
-  `USE datalake_rw_shared` e cita `sbx_aco_decon.<tabela>`; o nome em três partes fica para uma
-  sessão aberta em outro banco, como a Data API. A escrita segue o que um datashare aceita, com o
+  `USE datalake_rw_shared` e cita `sbx_aco_decon.<tabela>`, e confirma o `USE` resolvendo um
+  nome em duas partes, porque `current_database()` continua a responder `dev` depois dele
+  (leitura de 2026-09-21, confirmada pelo usuário no mesmo dia); o nome em três partes fica para
+  uma sessão aberta em outro banco, como a Data API. A escrita segue o que um datashare aceita, com o
   `COPY` sem cláusula `COMPUPDATE` e transação explícita, e o `COPY` e o `UNLOAD` alcançam o S3
   pelas credenciais de quem chama, porque o namespace não tem papel IAM associado
   ([`redshift.md`](redshift.md)). A Data API fica fora da biblioteca: ela devolve `DECIMAL` e data e
@@ -201,8 +203,9 @@ A sondagem de 2026-09-20 (macOS arm64, DuckDB 1.5.5 com `threads = 2`, PyArrow 2
   uma janela precisam de todas as linhas: vão para SQL no sandbox, onde o DuckDB usa todos os
   núcleos, ou para a `pa.Table` de `query`. `run.next_ids(table, batch.num_rows)` dá a cada lote a
   sua faixa.
-- **No Redshift**, `stream` monta cada lote de `cursor.fetchmany(batch_size)` por
-  `RecordBatch.from_pylist` com o esquema do statement, numa thread auxiliar que compete pelo GIL com
+- **No Redshift**, `stream` monta cada lote de `cursor.fetchmany(batch_size)` por colunas,
+  `zip(*linhas)` e `pa.array(coluna, type=...)` com o esquema do statement (um terço do tempo de
+  `from_pylist` por dicionários em 200.000 linhas, [`POC.md`](POC.md)), numa thread auxiliar que compete pelo GIL com
   o cliente porque o `redshift_connector` é Python puro, e `loader` grava um row group por lote com
   `ParquetWriter.write_batch` em `staging/<execution_id>/` e faz o `COPY` no `close`, então nada
   entra antes dele. Se o `redshift_connector` materializa o resultado no `execute` ou o lê do socket
@@ -246,8 +249,9 @@ O que a sondagem fixa em `cast`:
   passaram em 1,1 ms, e os 270.000 de `k/1000.0` com terceira casa foram apontados), e um
   `timestamp` cabe em `date` quando a ida e volta o devolve igual; fora disso, recusa com a
   mensagem que pede o arredondamento explícito no cliente. `pc.round` e o cast discordam em
-  `2.675` (2,68 contra 2,67), então a carga inicial (etapa 7) arredonda os `Double` dos modelos
-  atuais por `pc.round(x, 2)` antes do cast e registra a regra no relatório.
+  `2.675` (2,68 contra 2,67). A carga inicial (etapa 7) não arredonda: as colunas numéricas do
+  modelo de referência são `Double` e entram como estão (decisão de 2026-09-20), e a regra do
+  `double` fora da escala vale para uma coluna `Numeric` futura.
 - Um documento JSON é `string` no contrato Arrow, sem a extensão `arrow.json` (decisão do usuário de
   2026-09-20): no pandas com backend pyarrow, o dtype da extensão não tem os kernels de `.str`
   (`utf8_length` e `match_substring_regex` falham com `ArrowNotImplementedError`), nenhum motor a
@@ -335,6 +339,15 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - O DuckDB carrega extensões só da pasta configurada, com `autoinstall_known_extensions` e
   `autoload_known_extensions` desligados: o `LOAD` de uma extensão conhecida baixaria a extensão
   para `~/.duckdb` sem aviso, e o destino não tem internet (`README.md`).
+- O ambiente alvo, lido pelos probes em 2026-09-21 (`POC.md`): sem variável de proxy e sem
+  internet; o S3 responde pelo endpoint de gateway, e o STS, as três APIs do Redshift, o Glue, o
+  Athena, o Secrets Manager e o DataZone por endpoints de interface; o IAM, o KMS, o Lake
+  Formation e o S3 Tables não respondem. A biblioteca não chama o IAM nem o KMS: a criptografia
+  SSE-KMS do bucket é aplicada pelo S3, e a permissão sobre a raiz é provada pela primeira escrita,
+  não por simulação. A máquina tem 2 vCPUs, 7,6 GiB de memória e 29,8 GiB livres num disco só
+  para `HOME`, `/tmp` e o repositório: o motor DuckDB nasce em arquivo, com `memory_limit`
+  explícito e `temp_directory` conferido, e `export_mode="register"` é o caminho das partições
+  grandes (etapas [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md)).
 - Um campo JSON é `string` no esquema Arrow do contrato, sem a extensão `arrow.json`, `string` no
   Delta e texto nos arquivos; `JSON` no DuckDB e `SUPER` no Redshift são tipos do motor, aplicados na
   carga; a auditoria confere `json_valid` antes de publicar, porque nem o Arrow nem o Delta validam
@@ -359,14 +372,16 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - As chaves inteiras vêm de `run.next_ids(table, n)`: faixas contíguas sob lock, a partir de
   `max_key + 1` na versão fixada, lido de `max.<coluna>` das ações `add` e pela varredura da coluna
   quando um arquivo não tem a estatística; a tabela vazia começa em 1. Os ids de uma reexecução
-  diferem, e a unicidade continua na auditoria; `publish` confere que a versão da tabela ainda é a
-  fixada e aborta com `ExecutionConflict`, para que duas execuções abertas na mesma versão não
-  publiquem a mesma faixa (`test_parallel.py`).
+  diferem, e a unicidade continua na auditoria; `publish` confere por `version_diff` que nenhuma alteração de dados entrou na tabela
+  desde a versão fixada e aborta com `ExecutionConflict` quando entrou, para que duas execuções
+  abertas na mesma versão não publiquem a mesma faixa; um commit só de metadados ou de manutenção
+  (`reconcile`, `compact`, `vacuum`) passa e atualiza a versão fixada (`test_parallel.py`).
 
 ## Organização do pacote
 
 | Módulo | Etapa | Conteúdo |
 | --- | --- | --- |
+| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
 | `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto, opções físicas, cast seguro, arquivos gerados. |
 | `serialize_db.sql` | 2 | O texto SQL por dialeto a partir de statements Core: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos atrás de uma interface: URIs, leitura e escrita condicional, cópia, listagem, `storage_options` e o secret do DuckDB. |
@@ -375,6 +390,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.engine` | 4 e 5 | O protocolo `Engine` e os motores `duckdb` e `redshift`, com a mesma interface. |
 | `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução. |
 | `serialize_db.load` | 7 | A carga inicial dos Parquet atuais. |
+| `serialize_db.publication` | 8 | A publicação para clientes: a tabela de controle, a transação por tabela, a reconciliação das tabelas publicadas e o estado da publicação. |
 | `serialize_db.cli` | 1 a 9 | `serialize-db run`, `schema`, `sql`, `audit`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`: cada subcomando entra com a etapa que entrega a primitiva por trás dele (`schema` na 1, `sql` na 2), e a etapa 6 monta o `run` e o despacho comum. |
 
 Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`, `deltalake`, `duckdb`,
@@ -424,8 +440,10 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | 8. Publicação para clientes | Tabelas `<ambiente>_*` no Redshift, `version_diff`, transação única, `serialize_db_publications`. | Uma partição alterada recarrega só essa partição. |
 | 9. Operação | Snapshots, `vacuum`, compactação, arquivo, exportação, `history`, runbook, `pdoc`. | Runbook escrito e testes de manutenção passando. |
 
-O plano de cada etapa, com as primitivas do módulo, os testes e as provas de conceito, está num
-arquivo próprio:
+O plano de cada etapa está num arquivo próprio, que fixa as primitivas do módulo, a interface com
+as assinaturas, a estratégia de implementação de cada primitiva, os pré-requisitos e as
+pós-condições, os testes por caso, os rascunhos executados, as provas de conceito que o exercitam
+e as decisões pendentes, cada uma também um item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md):
 
 - [Etapa 0: prova de conceito na AWS](PLAN-STAGE-0.md)
 - [Etapa 1: `schema`](PLAN-STAGE-1.md)
@@ -452,7 +470,7 @@ ilustrativos.
 | 2. Ingestão | DuckDB: views com os nomes dos modelos sobre `delta_scan(uri, version := 143)`; `cad_lancamentos` materializada com `WHERE data_base_str BETWEEN '2025-09-30' AND '2026-08-31'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos dessas partições em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
 | 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
-| 5. Publicação no Delta | `reconcile`; com `export_mode="register"`, `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD ... PARTITION BY (data_base_str)` do Redshift), depois das conferências; com `"rewrite"`, `publish_partition(uri, "2026-08-31", data, commit_metadata(...))` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
+| 5. Publicação no Delta | `reconcile`; com `export_mode="register"`, `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD ... PARTITION BY (data_base_str)` do Redshift), depois das conferências; com `"rewrite"`, `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
 | 6. Publicação no Redshift | `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'`; controle atualizado. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
 | 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
@@ -466,9 +484,9 @@ from sqlalchemy import select
 
 from serialize_db import Database, Execution
 from pipeline import compute_in_sandbox, project
-from pipeline.models import Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
+from pipeline.models import Base, Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
 
-db = Database("s3://bucket/projeto/delta", environment="prod")
+db = Database("s3://bucket/projeto/delta", environment="prod", metadata=Base.metadata)
 with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento, partitions=run.previous_partitions(Lancamento, 12), materialize=True)
     run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada

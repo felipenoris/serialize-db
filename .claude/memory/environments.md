@@ -34,7 +34,23 @@ Read before running anything in the SageMaker space or the target, preparing the
 ## The target
 
 Redshift serverless `controladoria-wg` in `sa-east-1`, account 138071776059, with no internet: the readings of
-2026-09-20 and 2026-09-21 are in `redshift.md` and `docs/readings/`.
+2026-09-20 and 2026-09-21 are in `redshift.md` and `docs/readings/`. The five probes of 2026-09-21
+(03:47 to 03:51 UTC, Linux x86_64, Python 3.13.15, the project venv; reports in `secrets/probes-aws-bn/`,
+outside git; interpreted in `docs/POC.md`) read the machine and the network: 2 vCPUs, 7.6 GiB, 29.8 GiB
+free of 37.0 GiB on one disk serving `HOME`, `/tmp` and the repository, `ulimit -n` 65536; DuckDB
+1.5.5 `linux_amd64` with 2 threads, `memory_limit` 6.1 GiB, `temp_directory` `.tmp`, extensions loaded
+from the prepared `.duckdb/`; `uv`, `git`, `aws` and `duckdb` on the PATH, no `gh`, no `~/shared`, no
+`~/.aws/config`; system Python 3.12.14 (`/opt/conda`) with deltalake 1.6.3, DuckDB 1.5.1, PyArrow
+21.0.0 and `sagemaker_studio` 1.1.32 failing with `ProfileNotFound (DomainExecutionRoleCreds)`. No
+proxy variable in any spelling and no internet (`Network is unreachable`); S3 names resolve public and
+connect (gateway endpoint); interface endpoints for STS, the three Redshift APIs and the workgroup
+host, Glue, Athena, Secrets Manager and DataZone; KMS (80 s), IAM (10 s), SageMaker, Lake Formation
+(30 s) and S3 Tables (31 s) resolve public and time out. Container credentials (`container-role`)
+lasting about an hour; `AWS_REGION` and `AWS_DEFAULT_REGION` both `sa-east-1`. Bucket
+`bndes-aco-models-138071776059`: SSE-KMS with bucket key, SSE-C blocked, versioned by the sample, the
+role denied the bucket-level reads as in the lab; the test root held one folder marker and no Delta
+table. Glue has one database with one Parquet table, Athena three workgroups; Lake Formation and S3
+Tables unreachable, so the re-evaluation trigger did not fire.
 
 ## The prepared folder and the venv
 

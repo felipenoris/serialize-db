@@ -177,3 +177,21 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   session goes to its theme file, and `CLAUDE.md` changes only when a rule or an index entry changes.
   The same session found a zsh trap: `====` as an `echo` argument is `=command` expansion and fails with
   "not found", so a separator is quoted or made of hyphens.
+- **A state change is confirmed by the effect the caller depends on** (2026-09-21). `RS-19`
+  confirmed the `USE` by `select current_database()`, which stayed `dev` in the target while the
+  examples' `CREATE`, `COPY` and `UNLOAD` by two-part name had passed after the same `USE`; the probe
+  failed a working environment and gated `RS-5` and `RS-8` behind the wrong verdict. The user
+  confirmed the reading. The check now selects from a table `svv_all_tables` lists, the library's
+  `connect` creates the control table with `IF NOT EXISTS` as its confirmation, and the function's
+  value is a reading.
+- **`secrets/` is read only when the user names a path inside it** (2026-09-21). The probe reports
+  of the target landed in `secrets/probes-aws-bn/` and the user asked for their analysis: the folder
+  was read, nothing else under `secrets/`, the facts went to `docs/POC.md`, and copying the reports
+  into `docs/readings/` was left to the user.
+- **A plan revision reads every stage against the decisions memory** (2026-09-21). The full review
+  found `docs/PLAN.md` saying the initial load rounds `Double` by `pc.round(x, 2)` two sections away
+  from the premise that says the opposite (decision of 2026-09-20), `docs/guia.md` still calling the
+  month the unit of write, a `Database` example without the `MetaData` the primitives need, and
+  signatures (`publish_partition`, `export_partition`) missing the arguments their callers must pass.
+  Grep the plan for the old rule's vocabulary when a decision lands, and read the API tables against
+  the flows that call them.

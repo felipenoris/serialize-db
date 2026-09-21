@@ -5,15 +5,17 @@
 
 ### Partições imutáveis e substituição idempotente
 
-O mês (`YYYY-MM`) é a unidade de escrita das tabelas particionadas. Uma reexecução ou correção grava o
-mês inteiro de novo e substitui o anterior. Reexecuções ficam idempotentes, e a exportação incremental
-se reduz a publicar os meses gravados.
+A partição, uma data em texto `AAAA-MM-DD` declarada pelo modelo do cliente (decisão de 2026-09-20),
+é a unidade de escrita das tabelas particionadas. Uma reexecução ou correção grava a partição inteira
+de novo e substitui a anterior. Reexecuções ficam idempotentes, e a exportação incremental se reduz
+a publicar as partições gravadas.
 
 ### Write-Audit-Publish
 
 Os dados novos são gravados numa área invisível aos leitores, auditados (contagem de linhas, nulos,
 unicidade de chaves, limites de tipo) e só então publicados. Uma auditoria reprovada interrompe a
-execução sem alterar as tabelas permanentes. O [sandbox da execução](#sandbox-da-execução) é essa área.
+execução sem alterar as tabelas permanentes. O sandbox da execução ([`serialize-db.md`](serialize-db.md), seção "Execução mensal no DuckDB") é
+essa área.
 
 ### Contrato de esquema
 

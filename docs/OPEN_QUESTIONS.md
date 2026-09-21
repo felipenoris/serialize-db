@@ -12,10 +12,11 @@ foi medido em [`POC.md`](POC.md).
   (`TEMP` é verdadeiro no banco da conexão, e `CREATE` não) custa o sandbox morrer com a sessão. A
   [etapa 5](PLAN-STAGE-5.md) decide quando o primeiro pipeline rodar lá.
 - **O que `has_schema_privilege` e `svv_table_info` respondem depois do `USE`.** Antes dele as duas
-  enxergam só o banco local; depois dele o banco da sessão é o compartilhado, e se elas passam a
-  responder pelo esquema do datashare ninguém leu. `probes/redshift.py` (`RS-19`, `RS-5`, `RS-8`) as
-  consulta depois do `USE` como leitura, com `svv_all_tables` como a lista provada; a próxima
-  execução no ambiente alvo responde.
+  enxergam só o banco local; se passam a responder pelo esquema do datashare depois dele ninguém
+  leu. A execução de 2026-09-21 não as leu porque `RS-19` reprovou pelo critério errado:
+  `current_database()` continuou `dev` depois do `USE`, que vale mesmo assim (confirmação do usuário
+  no mesmo dia, e os exemplos que rodaram). O critério de `RS-19` passou a ser a resolução de um
+  nome em duas partes, e a próxima execução no ambiente alvo lê `RS-5` e `RS-8`.
 - **A coluna de partição no `schema` do manifesto verboso.** O `schema.elements` do manifesto do
   `UNLOAD` traz nome e tipo de cada coluna, e é a conferência que `register_files` faz antes do
   commit ([`redshift.md`](redshift.md)). Se ele lista a coluna de partição, que o `PARTITION BY`
@@ -39,10 +40,17 @@ foi medido em [`POC.md`](POC.md).
   senha expira, e se ela cai no meio de um `COPY`, ainda não foi medido. As credenciais que o `COPY`
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
   `COPY` mais longo que isso também não foi medido.
-- **Manutenção da suíte S3.** Se `diagnose_aws.py` confirmar o cenário sem proxy: exportar
-  `AWS_DEFAULT_REGION` a partir de `AWS_REGION`, tornar a chamada ao STS opcional com espera curta e
-  passar `AWS_ENDPOINT_URL` ao secret do DuckDB. A [etapa 3](PLAN-STAGE-3.md) implementa o mesmo
-  na biblioteca.
+- **Os relatórios dos probes de 2026-09-21.** O usuário os guardou em `secrets/probes-aws-bn/`, fora
+  do git; [`POC.md`](POC.md) os interpreta, e `docs/readings/` não os tem. Copiá-los para
+  `docs/readings/`, como os de 2026-09-20, é decisão do usuário: eles trazem os mesmos
+  identificadores (conta, papel, usuário do banco) que os relatórios já versionados.
+- **Tempos limite dos probes no ambiente alvo.** O IAM (`iam.amazonaws.com`) e o KMS não têm
+  endpoint VPC lá: `simulate_principal_policy` esperou 10 s e `describe_key` 80 s por nada em
+  2026-09-21. As duas chamadas ganham tempo limite curto, ou são puladas quando o nome resolve
+  para IP público sem proxy; a permissão sobre a raiz fica provada pela primeira escrita.
+- **A Data API em `PICKED`.** Em 2026-09-21 o `select 1` ficou 30 s em `PICKED` sem terminar, e em
+  2026-09-20 respondeu em 23 ms. A repetição diz se é transitório; a Data API está fora da
+  biblioteca, e `RS-10` a mantém como leitura.
 - **`Text` no Redshift.** O `sqlalchemy-redshift` compila `Text` como `TEXT`, que o Redshift guarda
   como `VARCHAR(256)`. A [etapa 1](PLAN-STAGE-1.md) emite `VARCHAR(65535)` por uma regra
   `@compiles(Text, "redshift")` em `ddl`, em vez de exigir `String(65535)` nos modelos; a escolha
@@ -80,3 +88,30 @@ respondidas em 2026-09-19 ([`POC.md`](POC.md)). A [etapa 0](PLAN-STAGE-0.md) as 
 - Se o Spectrum mapeia colunas Parquet soltas por nome ou por posição.
 - Se o `FILLRECORD` deixa o `COPY` carregar arquivos antigos, sem as colunas acrescentadas depois,
   que a evolução do Delta e do DuckLake produz.
+
+## Decisões de API pendentes por etapa
+
+Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
+tomada sai daqui e do arquivo da etapa no mesmo commit.
+
+- [Etapa 0](PLAN-STAGE-0.md): rodar a suíte Redshift antes da etapa 1, para fixar a tabela de tipos
+  antes de `cast` existir.
+- [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `@compiles`; `String(n)` medido em
+  bytes; a coluna sem comentário como violação de `check_models`; `duckdb-engine` e
+  `sqlalchemy-redshift` como dependências de execução enquanto `ddl` compilar pelo dialeto.
+- [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
+  `dev`.
+- [Etapa 3](PLAN-STAGE-3.md): a reserva de credenciais do `boto3` em `storage_options`; as colunas
+  com estatística registrada; `version_diff` quando o log foi limpo.
+- [Etapa 4](PLAN-STAGE-4.md): `loader` numa tabela que já existe; o padrão de `memory_limit`; o
+  banco em arquivo como padrão; a amostra do `AuditReport`.
+- [Etapa 5](PLAN-STAGE-5.md): onde as tabelas `exec_<id>_*` nascem; a confirmação do `USE` pela
+  criação da tabela de controle; os limites entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
+  a tabela de OIDs de `schema_from_description`.
+- [Etapa 6](PLAN-STAGE-6.md): `--metadata` na linha de comando; a chave de `next_ids` numa chave
+  composta; a barreira por tabela.
+- [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga.
+- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação no datashare ou temporária; `FILLRECORD` ou
+  lista de colunas.
+- [Etapa 9](PLAN-STAGE-9.md): o nome do runbook; a marca de arquivamento no controle; a retenção do
+  `vacuum` mensal.

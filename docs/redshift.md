@@ -98,7 +98,10 @@ por nome em três partes, `banco.esquema.tabela`; `USE <banco>` troca o banco da
 dele `esquema.tabela` basta, que é como o `CREATE TABLE`, o `COPY` e o `UNLOAD` passaram no ambiente
 alvo ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py)). A restrição
 documentada, de que só o nome em três partes vale, se aplica a quem não está conectado ao banco
-compartilhado. `svv_redshift_databases` diz o tipo de
+compartilhado. `current_database()` continua a responder o banco da conexão depois do `USE` (leitura de
+2026-09-21 no ambiente alvo por `probes/redshift.py`, confirmada pelo usuário no mesmo dia): a
+troca é confirmada pela resolução de um nome em duas partes, como o `CREATE TABLE` dos exemplos,
+e não por essa função. `svv_redshift_databases` diz o tipo de
 cada banco (`local` ou `shared`) e o nível de isolamento; `svv_all_schemas` diz em que banco está
 cada esquema. `has_schema_privilege` e `svv_table_info` enxergam o banco da sessão: antes do `USE`,
 o local, e num esquema compartilhado quem concede `USAGE` e `CREATE` é o produtor e a lista de
