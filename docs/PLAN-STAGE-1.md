@@ -191,8 +191,9 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
   (`DEFERRABLE`, tabela sem chave) e `partition_problems` (a coluna, `String(10)`,
   `partition_source`), uma lista de textos, um por violação, para o teste do modelo cliente ser
   `assert check_models(Base.metadata) == []`. O `autoincrement` padrão é a string `"auto"`, não
-  `True`: a regra reprova os dois numa chave inteira. O modelo de referência é o modelo com defeitos
-  do teste: o `autoincrement` das 12 chaves, as 14 chaves estrangeiras `DEFERRABLE`, os `String`
+  `True`: a regra reprova os dois numa chave inteira. `String` sem comprimento é violação por
+  decisão do usuário de 2026-09-21: sem `n`, o Redshift daria `VARCHAR(256)` e `cast` não mediria
+  nada, e `Text` é a forma sem limite. O modelo de referência é o modelo com defeitos do teste: o `autoincrement` das 12 chaves, as 14 chaves estrangeiras `DEFERRABLE`, os `String`
   sem comprimento e as tabelas e colunas sem comentário.
 - **`schema_files`** gera `<tabela>.delta.json` por `delta_schema(...).to_json()` e os dois `.sql`
   por `ddl`, cada texto com `\n` final; `write_schema_files` grava e devolve os caminhos;
@@ -859,8 +860,6 @@ check_models:
   dialeto, que cita as palavras reservadas sozinho e leva os dois pacotes para as dependências de
   execução. A escolha vale para `ddl`; a [etapa 2](PLAN-STAGE-2.md) decide o `render` dos
   statements.
-- **[proposto] `String` sem comprimento como violação de `check_models`.** Sem `n`, o Redshift
-  daria `VARCHAR(256)` e `cast` não mediria nada; `Text` é a forma sem limite.
 - **[decisão] Os comprimentos de `String(n)` do modelo cliente.** Escolhidos das leituras com
   folga (`contrato` e `operacao` 50, os nomes 50 e 100, `numero` 20, `descricao` e `meta` 255,
   `area` e `departamento` 20, `to` 2, `fonte_familia` 3); sem `n`, o Redshift daria `VARCHAR(256)`

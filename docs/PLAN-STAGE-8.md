@@ -214,3 +214,11 @@ segredo fora do texto impresso: True
   documento maior, se uma tabela precisar, são `COPY ... FORMAT JSON 'auto'` de um arquivo JSON com
   uma linha por registro, que carregou um objeto de 80.901 bytes, e `INSERT ... JSON_PARSE(%s)`
   linha a linha, que carregou o mesmo documento.
+- **[decisão] A largura de `VARCHAR(n)` da tabela publicada quando `String(n)` cresce no modelo.**
+  `schema_diff` compara esquemas Arrow, que não têm `n`, então o Delta e a reconciliação aditiva
+  não veem a mudança; só o `<tabela>.redshift.sql` versionado da [etapa 1](PLAN-STAGE-1.md) a
+  mostra, e a tabela publicada continua com o `VARCHAR(n)` antigo até um
+  `ALTER TABLE ... ALTER COLUMN ... TYPE VARCHAR(n)`, que o Redshift aceita fora de transação e sem
+  descer abaixo do maior valor existente ([`redshift.md`](redshift.md)). A proposta é
+  `reconcile_published` ler a largura da tabela publicada (`svv_all_columns`, que a suíte lê desde
+  2026-09-21) e emitir o comando quando o modelo cresce; a diminuição é destrutiva.
