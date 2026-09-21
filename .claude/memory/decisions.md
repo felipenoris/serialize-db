@@ -1,0 +1,55 @@
+# What the user stated and decided
+
+Read before planning or implementing any stage, and whenever a "why" question comes up: these are facts stated by the user, not visible in the code, with their dates. The plan (`docs/PLAN.md`, pt-BR) records the decisions it rests on; this file keeps the statements behind them.
+
+## The pipeline outside this repository
+
+Facts stated by the user, not visible in the code: the pipeline is mostly Python logic; SQLAlchemy
+is used only for the declarative models (DDL) and for Core `select` and `insert` statements that
+move tables, never for ORM instances; no catalog service is enabled, which excludes Iceberg on
+Glue (Iceberg with a SQLite catalog file moved by the library is the documented alternative if Glue
+or S3 Tables may be enabled later); development and production runs write separate tables; renaming
+or dropping columns is rare. The decision in `docs/PLAN.md`, with the rationale in `docs/estrategia.md`, follows from them: Delta Lake
+through `deltalake` as the table layer, SQLAlchemy kept as contract metadata and Core, SQLMesh, dbt and
+DuckLake not adopted. SQLAlchemy is in the project for
+compatibility with that code (user statement of 2026-09-19); the same day the user decided that
+runtime compilation by the dialect is replaced gradually by generated SQL text per dialect, one
+database interaction at a time, so SQLAlchemy ends in the models and in generation and
+`duckdb_engine` and `sqlalchemy-redshift` leave the runtime dependencies. On 2026-09-20 the user fixed
+the exchange type with client code as streaming `pa.RecordBatch` in both directions (`stream` reads,
+`loader` writes), with `pa.Table` accepted and returned by `query`, `execute` and `load` only as a
+convenience over the same batch API, so the client works on the current batch while the library
+reads the next and writes the previous; never an ORM instance, a row list or a DataFrame. The
+pipelines run pandas with the pyarrow backend (user statement of 2026-09-20), so
+`types_mapper=pd.ArrowDtype` is their native form, and the rule rests on the conversion being cheap,
+which the probes of that day measured for the table and for the batch (`docs/PLAN.md`, section "A
+troca de dados com o código cliente"). The same day the user moved the
+models to `tests/model/` as the reference model: the tests hand it to the package API as a client
+library would, and the package holds no model. After the source base was read (2026-09-20) the user
+decided: partition by date as text `AAAA-MM-DD` like the reference base, the column and its date
+source declared by the client's model (`partition_by`, `partition_source`), so the library's unit is
+the partition and never the month; every numeric column stays `Double`, with no rounding and no
+fixed-precision `Numeric` (the package supports `Numeric`, and moving `valor` to `Numeric(18, 2)` is
+a future improvement); integer keys become `int64` in the Delta; `INT96` timestamps become `INT64`
+and their precision does not matter; nullability follows the model until the migration proves it
+problematic; the dev base's orphans are ignored and the test base is consistent, with the N×N
+`rel_contrato_operacao` whose `fator_rateio` sums to 1 per operation; `alembic_version` and
+`meta_update_status` are ignored; `schema.json` at the source root is the previous library's schema
+control in SQLAlchemy-reflection form, not Arrow. On 2026-09-20 the user also fixed the Redshift
+target: the library's tables live in `datalake_rw_shared.sbx_aco_decon`, the datashare database, so
+the connection runs `USE` there and the datashare write rules apply; and the Data API is not a connection
+path of the library, only a probe check, a suite test and an example. On 2026-09-21 the user asked
+for a flag on how a partition an engine wrote enters the Delta, on both engines and the initial
+load: `export_mode="register"` registers the engine's file (`UNLOAD`, DuckDB
+`COPY ... (RETURN_STATS)`) after the checks of `docs/PLAN-STAGE-3.md`, `"rewrite"` writes by
+`write_deltalake`; the `cad_lancamentos` measurement decides the default, `"register"` until then.
+
+## The test layout
+
+Test layout (user decision of 2026-09-19): `tests/` holds the package tests (`test_source_db_projetado.py`
+over `source_db_projetado.py`, the fictitious source base of 2026-09-20), `tests/model/`,
+`tests/test_probes.py` and `tests/conftest.py`; `tests/proof_of_concept/` holds the Delta proof of concept on
+both storages, the study suites (commented step by step as learning material, listed per stage in
+`docs/PLAN-STAGE-<n>.md`) and `test_redshift.py`, never run against a cluster. Files, authorization variables and
+last-run counts: the `tests/` row of the repository table in `docs/CURRENT_STATE.md` and `README.md`. The 11 s
+listing failure behind a silent proxy is in `README.md`; `test_delta_rs_credential_chain` runs five variants.
