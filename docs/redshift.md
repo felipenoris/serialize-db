@@ -331,7 +331,10 @@ LargeBinary()                    BYTEA
 `Text` sai como `TEXT`, que a tabela de diferenças registra como `VARCHAR(256)`; o `VARCHAR(65535)`
 do contrato exige `String(65535)`. `Uuid`, `JSON` e `LargeBinary` compilam para `UUID`, `JSON` e
 `BYTEA`, tipos que a mesma tabela lista como ausentes: o dialeto não os rejeita na compilação, e o
-`VARCHAR(36)` do contrato para `Uuid` exige `String(36)` ou uma regra `@compiles`.
+`VARCHAR(36)` do contrato para `Uuid` exige `String(36)` ou uma regra `@compiles`. A biblioteca não
+compila o DDL pelo dialeto: `sql_type` da [etapa 1](PLAN-STAGE-1.md) escreve `VARCHAR(65535)` para
+`Text`, `VARCHAR(36)` para `Uuid` e `SUPER` para `JSON`, e recusa `LargeBinary` (decisão de
+2026-09-21).
 
 ### DECIMAL com escala fixa
 
@@ -556,9 +559,10 @@ Regras da referência:
   `information_schema.table_constraints`.
 - Combinações num só comando reduzem o tempo: `ALTER SORTKEY (...), ALTER DISTKEY coluna`.
 
-O SQLAlchemy não tem construto para `ADD COLUMN`. Sem Alembic, a biblioteca monta esse comando com a
-especificação de coluna do compilador do dialeto, que rende `DEFAULT` e `ENCODE`, usa os construtos
-do Core para restrições e `sa.DDL` para as demais cláusulas:
+O SQLAlchemy não tem construto para `ADD COLUMN`. Sem Alembic, a biblioteca monta esse comando como
+texto, com a especificação da coluna por `column_ddl` da [etapa 1](PLAN-STAGE-1.md) (decisão de
+2026-09-21, a mesma do `CREATE TABLE`); o compilador do dialeto também a rende, com `DEFAULT` e
+`ENCODE`, e o Core tem os construtos para restrições e `sa.DDL` para as demais cláusulas:
 
 ```python
 import sqlalchemy as sa
