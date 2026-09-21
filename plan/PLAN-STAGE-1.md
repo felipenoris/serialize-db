@@ -68,7 +68,7 @@ minúsculos, e os dois motores leem o nome entre aspas como o mesmo nome sem asp
 | --- | --- |
 | `arrow_type(column)` | O `pa.DataType` da coluna pela tabela de tipos de `schema.md`: `Numeric(p, s)` em `decimal128(p, s)`, `DateTime` em `timestamp[us]` (`tz=UTC` com fuso), os demais por `isinstance` na ordem que põe `BigInteger` e `SmallInteger` antes de `Integer` e `Text` antes de `String`; `Float`, `LargeBinary`, `ARRAY` e `Interval` são `ContractError`, com tabela e coluna. |
 | `arrow_schema(table)` | O `pa.Schema` do `Table`: um campo por coluna, com a nulidade, o comentário em `metadata` do campo, `PARQUET:field_id` pela posição, e o nome da tabela em `serialize_db_table`; um campo JSON é `string`, sem a extensão `arrow.json`. |
-| `delta_schema(table)` | O `deltalake.Schema` derivado do Arrow: `decimal(18,2)`, `timestamp_ntz` para `DateTime` sem fuso e `timestamp` para o com fuso, `string` para JSON e UUID, comentários preservados. |
+| `delta_schema(table)` | O `deltalake.Schema` derivado do Arrow: `decimal(18,2)`, `timestamp_ntz` para `DateTime` sem fuso e `timestamp` para o com fuso, `string` para JSON e UUID, comentários preservados, sem o `PARQUET:field_id` do Arrow (com ele no esquema Delta, como `parquet.field.id`, o `delta_scan` do DuckDB lê toda coluna como nula, com qualquer escritor; leitura de 2026-09-21 em [`POC.md`](POC.md)). |
 | `table_options(table)` | O `TableOptions` (`partition_by`, `partition_source`, `sort_key`, `redshift`, `keys`) lido de `Table.info["serialize_db"]` com os padrões da biblioteca: tabela sem partição quando `partition_by` está ausente, uma coluna de partição no máximo, `String(10)`, derivada por `strftime(partition_source, '%Y-%m-%d')`; `keys` são a chave primária, as `UniqueConstraint` e os índices únicos do modelo (`ix_contratos_data_sistema_contrato` e `ix_operacoes_data_operacao` no modelo cliente), mais `keys["add"]`, menos `keys["drop"]`, sempre por lista de colunas. |
 | `sql_type(column, dialect)` | O nome do tipo no motor, pela tabela de tipos de `schema.md`: `DECIMAL(p, s)`, `VARCHAR(n)` nos dois (o DuckDB ignora o comprimento), `Text` em `VARCHAR` e `VARCHAR(65535)`, `Uuid` em `VARCHAR(36)`, JSON em `JSON` e `SUPER`, `Double` em `DOUBLE` e `DOUBLE PRECISION`, `DateTime` em `TIMESTAMP` e `TIMESTAMPTZ`; a migração adiantada o usa nos `CAST`. |
 | `quoted(name)`, `column_ddl(column, dialect)` | O identificador entre aspas duplas, e a linha da coluna no `CREATE TABLE` (`"<coluna>" <tipo> [NOT NULL]`); públicas porque as etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [8](PLAN-STAGE-8.md) montam texto com identificadores e as variantes do DDL (a staging sem a coluna de partição, a tabela publicada com a chave primária informativa). |
@@ -161,8 +161,12 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
 - **`arrow_schema`** monta um campo por coluna com `_arrow_field`, que numera `PARQUET:field_id`
   pela posição e guarda o comentário em `metadata` do campo, e põe o nome da tabela em `metadata`
   do esquema (`serialize_db_table`).
-- **`delta_schema`** é `Schema.from_arrow(arrow_schema(table))`; o delta-rs deriva `timestamp_ntz`
-  do `timestamp[us]` sem fuso e preserva o comentário.
+- **`delta_schema`** é `Schema.from_arrow` sobre o esquema Arrow com o `PARQUET:field_id` tirado
+  de cada campo; o delta-rs deriva `timestamp_ntz` do `timestamp[us]` sem fuso e preserva o
+  comentário. O `field_id` fica só no Arrow: no esquema Delta ele vira `parquet.field.id`, e com
+  essa chave o `delta_scan` do DuckDB 1.5.5 lê toda coluna como nula, qualquer que seja o
+  escritor do arquivo, com ou sem `field_id` nele (a migração adiantada o encontrou em 2026-09-21,
+  [`POC.md`](POC.md)).
 - **`table_options`** lê `Table.info["serialize_db"]` com os padrões da biblioteca; `_declared_keys`
   reúne `table.primary_key`, as `UniqueConstraint` e os `table.indexes` com `unique`, porque o
   modelo cliente declara `ix_contratos_data_sistema_contrato` e `ix_operacoes_data_operacao` por
@@ -236,6 +240,7 @@ teste com todos os tipos da tabela de [`schema.md`](schema.md), `to` e `timestam
 | Tipos do contrato | `test_arrow_schema_maps_every_contract_type` | Cada tipo do modelo de teste no Arrow esperado; `DateTime` sem fuso em `timestamp[us]`, com fuso em `tz=UTC`; JSON e UUID em `string`. |
 | Tipo fora do contrato | `test_arrow_schema_refuses_foreign_types` | `Float`, `LargeBinary`, `ARRAY` e `Interval` levantam `ContractError` com tabela e coluna. |
 | Esquema Delta | `test_delta_schema_json_matches_versioned_file` | O documento de `to_json()` igual ao `tests/client_model/schema/<tabela>.delta.json`, e o texto de `schema_files` igual ao arquivo, porque a ordem dos metadados em `to_json()` muda a cada geração. |
+| Esquema Delta sem `field_id` | `test_delta_schema_carries_no_field_id` | Nenhum campo do esquema Delta do modelo cliente traz `parquet.field.id`, todos trazem o comentário, e o Arrow continua com `PARQUET:field_id` (leitura de 2026-09-21: com a chave no esquema Delta, o `delta_scan` lê toda coluna como nula). |
 | Opções físicas | `test_table_options_defaults_and_keys` | Tabela sem `info` dá `partition_by=None` e `keys` só da chave primária; o índice único de `cad_contratos` e a `UniqueConstraint` de `cad_aliquotas` entram em `keys`; `keys["add"]` acrescenta e `keys["drop"]` remove; duas colunas de partição são `ContractError`. |
 | Tipos por dialeto | `test_sql_type_per_dialect` | Cada tipo do modelo de teste no texto da tabela de tipos: `DECIMAL(18, 2)`, `VARCHAR(100)`, `VARCHAR` e `VARCHAR(65535)` para `Text`, `VARCHAR(36)`, `JSON` e `SUPER`, `DOUBLE` e `DOUBLE PRECISION`, `TIMESTAMP` e `TIMESTAMPTZ`. |
 | DDL por dialeto | `test_ddl_per_dialect` | Sem `PRIMARY KEY`, `UNIQUE`, `REFERENCES`, `DEFERRABLE`, `SERIAL`, `IDENTITY` ou `CHECK`; `SORTKEY`, `DISTSTYLE` e `DISTKEY` só no Redshift, com os nomes entre aspas; o texto igual ao esperado, linha a linha. |

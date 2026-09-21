@@ -80,6 +80,14 @@ dos probes), sobre o DuckDB em memória e arquivos locais, sem AWS. É o que a e
 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py
 ```
 
+Os testes da migração leem o Delta pelo `delta_scan` e precisam da extensão `delta` do DuckDB em
+`.duckdb/` na raiz do repositório, ou na pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`;
+`prepare_offline.sh` a instala lá, e com internet basta:
+
+```
+uv run python -c "import duckdb; duckdb.connect(config={'extension_directory': '.duckdb'}).execute('INSTALL delta')"
+```
+
 ## Testes no ambiente AWS
 
 As provas de conceito e as suítes de estudo de `tests/proof_of_concept/` junto com os testes do
@@ -169,6 +177,31 @@ export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
 `SERIALIZE_DB_REDSHIFT_SCHEMA` é o esquema do projeto, que o probe lê, e
 `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` é a autorização da suíte, que diz onde ela pode criar tabelas:
 apontam para o mesmo esquema, com significados diferentes.
+
+# Migração da base Parquet para o Delta
+
+[`scripts/migrate_parquet_to_delta.py`](scripts/migrate_parquet_to_delta.py) é a migração
+adiantada da etapa 7: cada partição da base de origem vira um commit numa tabela Delta, e o
+relatório confere contagem e somas por partição. O que ele faz, o que recusa e como se mede a
+partição de `cad_lancamentos` estão no cabeçalho do script. Sobre a base fictícia, gravada em
+pasta local:
+
+```
+PYTHONPATH=tests uv run python -c "from pathlib import Path; import source_db_projetado; source_db_projetado.write_source(Path('/pasta/db_projetado'))"
+PYTHONPATH=tests uv run python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta
+```
+
+No ambiente alvo, com a pasta preparada, sobre a cópia da base de produção, uma tabela por vez e
+o relatório em JSON:
+
+```
+export AWS_DEFAULT_REGION=sa-east-1
+PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --source s3://bucket/prefixo/db_projetado --root s3://bucket/prefixo/delta --tables cad_contratos --report relatorio.json
+```
+
+`--partitions AAAA-MM-DD` carrega só as partições listadas, `--mode rewrite` grava pelo
+`write_deltalake` em vez do `COPY` do DuckDB registrado no log, e `--no-sort` grava na ordem da
+origem. A segunda execução não grava nada: a carga recomeça das partições fora do log.
 
 # Exemplos: conectividade com o Redshift
 

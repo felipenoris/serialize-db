@@ -2,8 +2,7 @@
   "fields": [
     {
       "metadata": {
-        "comment": "Identificador da relação",
-        "parquet.field.id": 1
+        "comment": "Identificador da relação"
       },
       "name": "id_rel_conta_hierarquia",
       "nullable": false,
@@ -11,8 +10,7 @@
     },
     {
       "metadata": {
-        "comment": "Hierarquia a que a relação pertence",
-        "parquet.field.id": 2
+        "comment": "Hierarquia a que a relação pertence"
       },
       "name": "id_hierarquia",
       "nullable": false,
@@ -20,8 +18,7 @@
     },
     {
       "metadata": {
-        "comment": "Conta pai",
-        "parquet.field.id": 3
+        "comment": "Conta pai"
       },
       "name": "id_parent",
       "nullable": false,
@@ -29,8 +26,7 @@
     },
     {
       "metadata": {
-        "comment": "Conta filha",
-        "parquet.field.id": 4
+        "comment": "Conta filha"
       },
       "name": "id_child",
       "nullable": false,

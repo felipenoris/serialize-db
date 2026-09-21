@@ -263,3 +263,13 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   the whole `[tool.uv]` section; the workflows used `.github/uv-ci.toml`, and the local lock was made
   the same way, with the index block restored afterwards. The user removed the index from
   `pyproject.toml` later that day, and the workaround left with it.
+- **A schema decision is read back through every reader the pipeline uses, with a file from each
+  writer** (2026-09-21). Stage 1's `delta_schema` passed the Arrow schema with `PARQUET:field_id`
+  to `DeltaSchema.from_arrow`, which keeps it as `parquet.field.id` in the Delta field metadata;
+  the stage 1 draft read the Delta schema only through delta-rs, and the proofs of concept
+  registered files on tables created by `write_deltalake` from schemas without ids. The migration
+  script's report was the first `delta_scan` over a table created by `delta_schema`: every column
+  came back null, with the DuckDB `COPY` file and with delta-rs files with and without ids, while
+  delta-rs and `read_parquet` read the values; a schema without `parquet.field.id` read the same
+  three files correctly (DuckDB 1.5.5, delta extension `45c4087`). `delta_schema` now drops the
+  key, the versioned `.delta.json` files lost it, and `tests/test_schema.py` asserts its absence.

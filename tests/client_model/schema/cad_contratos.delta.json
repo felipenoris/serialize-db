@@ -2,8 +2,7 @@
   "fields": [
     {
       "metadata": {
-        "comment": "Identificador do contrato",
-        "parquet.field.id": 1
+        "comment": "Identificador do contrato"
       },
       "name": "id_contrato",
       "nullable": false,
@@ -11,8 +10,7 @@
     },
     {
       "metadata": {
-        "comment": "Data-base do contrato",
-        "parquet.field.id": 2
+        "comment": "Data-base do contrato"
       },
       "name": "data",
       "nullable": false,
@@ -20,8 +18,7 @@
     },
     {
       "metadata": {
-        "comment": "Sistema de origem do contrato",
-        "parquet.field.id": 3
+        "comment": "Sistema de origem do contrato"
       },
       "name": "sistema",
       "nullable": false,
@@ -29,8 +26,7 @@
     },
     {
       "metadata": {
-        "comment": "Código do contrato",
-        "parquet.field.id": 4
+        "comment": "Código do contrato"
       },
       "name": "contrato",
       "nullable": false,
@@ -38,8 +34,7 @@
     },
     {
       "metadata": {
-        "comment": "Se o contrato vem do sistema legado",
-        "parquet.field.id": 5
+        "comment": "Se o contrato vem do sistema legado"
       },
       "name": "legado",
       "nullable": false,
@@ -47,8 +42,7 @@
     },
     {
       "metadata": {
-        "comment": "Unidade monetária do contrato",
-        "parquet.field.id": 6
+        "comment": "Unidade monetária do contrato"
       },
       "name": "um",
       "nullable": false,
@@ -56,8 +50,7 @@
     },
     {
       "metadata": {
-        "comment": "Código TO do contrato",
-        "parquet.field.id": 7
+        "comment": "Código TO do contrato"
       },
       "name": "to",
       "nullable": false,
@@ -65,8 +58,7 @@
     },
     {
       "metadata": {
-        "comment": "Código da fonte de recursos",
-        "parquet.field.id": 8
+        "comment": "Código da fonte de recursos"
       },
       "name": "fonte",
       "nullable": false,
@@ -74,8 +66,7 @@
     },
     {
       "metadata": {
-        "comment": "Família da fonte de recursos (FAT, FMM, FMC, BND)",
-        "parquet.field.id": 9
+        "comment": "Família da fonte de recursos (FAT, FMM, FMC, BND)"
       },
       "name": "fonte_familia",
       "nullable": true,
@@ -83,8 +74,7 @@
     },
     {
       "metadata": {
-        "comment": "Estágio do contrato, de 1 a 3",
-        "parquet.field.id": 10
+        "comment": "Estágio do contrato, de 1 a 3"
       },
       "name": "estagio",
       "nullable": true,
@@ -92,8 +82,7 @@
     },
     {
       "metadata": {
-        "comment": "Taxa de juros fixos",
-        "parquet.field.id": 11
+        "comment": "Taxa de juros fixos"
       },
       "name": "taxa_juros_fixos",
       "nullable": false,
@@ -101,8 +90,7 @@
     },
     {
       "metadata": {
-        "comment": "Data de assinatura",
-        "parquet.field.id": 12
+        "comment": "Data de assinatura"
       },
       "name": "data_assinatura",
       "nullable": true,
@@ -110,8 +98,7 @@
     },
     {
       "metadata": {
-        "comment": "Data da primeira amortização",
-        "parquet.field.id": 13
+        "comment": "Data da primeira amortização"
       },
       "name": "data_primeira_amortizacao",
       "nullable": false,
@@ -119,8 +106,7 @@
     },
     {
       "metadata": {
-        "comment": "Data da última amortização",
-        "parquet.field.id": 14
+        "comment": "Data da última amortização"
       },
       "name": "data_ultima_amortizacao",
       "nullable": false,
@@ -128,8 +114,7 @@
     },
     {
       "metadata": {
-        "comment": "Partição: data em AAAA-MM-DD",
-        "parquet.field.id": 15
+        "comment": "Partição: data em AAAA-MM-DD"
       },
       "name": "data_str",
       "nullable": false,

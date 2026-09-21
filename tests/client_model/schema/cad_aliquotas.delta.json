@@ -2,8 +2,7 @@
   "fields": [
     {
       "metadata": {
-        "comment": "Identificador da alíquota",
-        "parquet.field.id": 1
+        "comment": "Identificador da alíquota"
       },
       "name": "id",
       "nullable": false,
@@ -11,8 +10,7 @@
     },
     {
       "metadata": {
-        "comment": "Conta de origem",
-        "parquet.field.id": 2
+        "comment": "Conta de origem"
       },
       "name": "id_conta_origem",
       "nullable": false,
@@ -20,8 +18,7 @@
     },
     {
       "metadata": {
-        "comment": "Conta de destino",
-        "parquet.field.id": 3
+        "comment": "Conta de destino"
       },
       "name": "id_conta_destino",
       "nullable": false,
@@ -29,8 +26,7 @@
     },
     {
       "metadata": {
-        "comment": "Fim da vigência",
-        "parquet.field.id": 4
+        "comment": "Fim da vigência"
       },
       "name": "data_fim_validade",
       "nullable": true,
@@ -38,8 +34,7 @@
     },
     {
       "metadata": {
-        "comment": "Início da vigência",
-        "parquet.field.id": 5
+        "comment": "Início da vigência"
       },
       "name": "data_inicio_validade",
       "nullable": false,
@@ -47,8 +42,7 @@
     },
     {
       "metadata": {
-        "comment": "Fator aplicado",
-        "parquet.field.id": 6
+        "comment": "Fator aplicado"
       },
       "name": "fator",
       "nullable": false,

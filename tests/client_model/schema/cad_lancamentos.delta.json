@@ -2,8 +2,7 @@
   "fields": [
     {
       "metadata": {
-        "comment": "Identificador do lançamento",
-        "parquet.field.id": 1
+        "comment": "Identificador do lançamento"
       },
       "name": "id_lancamento",
       "nullable": false,
@@ -11,8 +10,7 @@
     },
     {
       "metadata": {
-        "comment": "Veículo do lançamento",
-        "parquet.field.id": 2
+        "comment": "Veículo do lançamento"
       },
       "name": "id_veiculo",
       "nullable": false,
@@ -20,8 +18,7 @@
     },
     {
       "metadata": {
-        "comment": "Conta do lançamento",
-        "parquet.field.id": 3
+        "comment": "Conta do lançamento"
       },
       "name": "id_conta",
       "nullable": false,
@@ -29,8 +26,7 @@
     },
     {
       "metadata": {
-        "comment": "Mês projetado, o fim do mês",
-        "parquet.field.id": 4
+        "comment": "Mês projetado, o fim do mês"
       },
       "name": "data",
       "nullable": false,
@@ -38,8 +34,7 @@
     },
     {
       "metadata": {
-        "comment": "Valor do lançamento",
-        "parquet.field.id": 5
+        "comment": "Valor do lançamento"
       },
       "name": "valor",
       "nullable": false,
@@ -47,8 +42,7 @@
     },
     {
       "metadata": {
-        "comment": "Meta do lançamento",
-        "parquet.field.id": 6
+        "comment": "Meta do lançamento"
       },
       "name": "meta",
       "nullable": true,
@@ -56,8 +50,7 @@
     },
     {
       "metadata": {
-        "comment": "Instante da gravação do lançamento",
-        "parquet.field.id": 7
+        "comment": "Instante da gravação do lançamento"
       },
       "name": "timestamp",
       "nullable": false,
@@ -65,8 +58,7 @@
     },
     {
       "metadata": {
-        "comment": "Mensuração do lançamento",
-        "parquet.field.id": 8
+        "comment": "Mensuração do lançamento"
       },
       "name": "id_mensuracao",
       "nullable": false,
@@ -74,8 +66,7 @@
     },
     {
       "metadata": {
-        "comment": "Segmento do lançamento",
-        "parquet.field.id": 9
+        "comment": "Segmento do lançamento"
       },
       "name": "id_segmento",
       "nullable": true,
@@ -83,8 +74,7 @@
     },
     {
       "metadata": {
-        "comment": "Negócio do lançamento",
-        "parquet.field.id": 10
+        "comment": "Negócio do lançamento"
       },
       "name": "id_negocio",
       "nullable": true,
@@ -92,8 +82,7 @@
     },
     {
       "metadata": {
-        "comment": "Data-base da projeção",
-        "parquet.field.id": 11
+        "comment": "Data-base da projeção"
       },
       "name": "data_base",
       "nullable": false,
@@ -101,8 +90,7 @@
     },
     {
       "metadata": {
-        "comment": "Sistema de origem do contrato, quando há contrato",
-        "parquet.field.id": 12
+        "comment": "Sistema de origem do contrato, quando há contrato"
       },
       "name": "sistema",
       "nullable": true,
@@ -110,8 +98,7 @@
     },
     {
       "metadata": {
-        "comment": "Código do contrato, quando há contrato",
-        "parquet.field.id": 13
+        "comment": "Código do contrato, quando há contrato"
       },
       "name": "contrato",
       "nullable": true,
@@ -119,8 +106,7 @@
     },
     {
       "metadata": {
-        "comment": "Área, no lançamento associado a uma área e não a um contrato",
-        "parquet.field.id": 14
+        "comment": "Área, no lançamento associado a uma área e não a um contrato"
       },
       "name": "area",
       "nullable": true,
@@ -128,8 +114,7 @@
     },
     {
       "metadata": {
-        "comment": "Partição: data_base em AAAA-MM-DD",
-        "parquet.field.id": 15
+        "comment": "Partição: data_base em AAAA-MM-DD"
       },
       "name": "data_base_str",
       "nullable": false,

@@ -2,8 +2,7 @@
   "fields": [
     {
       "metadata": {
-        "comment": "Identificador do segmento",
-        "parquet.field.id": 1
+        "comment": "Identificador do segmento"
       },
       "name": "id_segmento",
       "nullable": false,
@@ -11,8 +10,7 @@
     },
     {
       "metadata": {
-        "comment": "Nome do segmento",
-        "parquet.field.id": 2
+        "comment": "Nome do segmento"
       },
       "name": "nome",
       "nullable": false,

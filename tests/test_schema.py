@@ -179,6 +179,19 @@ def test_delta_schema_json_matches_versioned_file() -> None:
     assert fields["valor"]["metadata"]["comment"] == "Valor"
 
 
+def test_delta_schema_carries_no_field_id() -> None:
+    """O `PARQUET:field_id` do Arrow não passa ao esquema Delta.
+
+    Com `parquet.field.id` nos campos do esquema Delta, o `delta_scan` do DuckDB lê toda coluna
+    como nula, qualquer que seja o escritor do arquivo (leitura de 2026-09-21); o comentário fica.
+    """
+    for table in ClientBase.metadata.sorted_tables:
+        for field in json.loads(schema.delta_schema(table).to_json())["fields"]:
+            assert "parquet.field.id" not in field["metadata"], (table.name, field["name"])
+            assert field["metadata"]["comment"], (table.name, field["name"])
+    assert schema.arrow_schema(TUDO).field("id").metadata[b"PARQUET:field_id"] == b"1"
+
+
 # ---------------------------------------------------------------- as opções físicas
 
 
