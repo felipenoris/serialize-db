@@ -429,7 +429,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
-| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão, a escrita no datashare e os dois comandos com manifesto provados por `examples/`, e a suíte pendente. | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
+| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão, a escrita no datashare e os dois comandos com manifesto provados por `examples/`, e a suíte `-m redshift` limpa duas vezes seguidas no ambiente alvo (2026-09-21, 13:35 e 13:39 UTC). | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
 | 1. `schema` | Modelo de referência corrigido; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo de referência. | `create_all` no DuckDB em memória passa; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |
@@ -523,10 +523,9 @@ conferências da etapa 3; `rewrite` grava pelo `write_deltalake`, que confere tu
    `schema/` e `sql/` versionados em `tests/model/`.
 2. Etapa 3, depois 4 e 6: um pipeline completo em disco local, o critério de aceite da etapa 6
    sobre o motor DuckDB.
-3. Em paralelo, no ambiente alvo: os probes, que rodaram no laboratório em 2026-09-20 com as suítes
-   local e S3, e dos quais `redshift.py` rodou no ambiente alvo no mesmo dia ([`POC.md`](POC.md)); a
-   manutenção da suíte S3 se confirmada; `tests/proof_of_concept/` e os testes `-m s3` das etapas 3
-   e 4 no bucket.
-4. Com a conexão mostrada por `probes/redshift.py` e por `examples/` em 2026-09-20: o
-   `test_redshift.py` da etapa 0 no ambiente alvo, depois as etapas 5 e 8.
+3. Em paralelo, no ambiente alvo: os cinco probes rodaram lá em 2026-09-21 ([`POC.md`](POC.md)), e
+   `redshift.py` volta a rodar pela leitura `RS-8`; a manutenção da suíte S3 se confirmada;
+   `tests/proof_of_concept/` e os testes `-m s3` das etapas 3 e 4 no bucket.
+4. O `test_redshift.py` da etapa 0 rodou limpo duas vezes no ambiente alvo em 2026-09-21, pela
+   conexão de `examples/`; as etapas 5 e 8 vêm depois das etapas 3, 4 e 6, com essa conexão.
 5. Etapa 7 quando os Parquet de origem estiverem acessíveis; etapa 9 por último, com o runbook.

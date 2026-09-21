@@ -496,7 +496,7 @@ com `dt.schema()`, aplica o diff aditivo, recusa o destrutivo com a instrução 
 o mesmo diff nas tabelas publicadas no Redshift (`ALTER TABLE ADD COLUMN`, que acrescenta no fim, ou
 recriação e recarga). A ordem das colunas no Redshift segue a ordem do esquema Delta, porque o `COPY`
 é posicional; a carga de arquivos anteriores a uma coluna nova vai por lista de colunas, confirmada
-no ambiente alvo em 2026-09-21, ou por `FILLRECORD`, aceito e com as linhas por ler
+no ambiente alvo em 2026-09-21, ou por `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula
 ([redshift.md](redshift.md)).
 
 ## O que substitui o Alembic

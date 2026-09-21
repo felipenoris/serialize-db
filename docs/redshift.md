@@ -83,14 +83,19 @@ datalake_rw_shared.sbx_aco_decon.<tabela> between Prepare and Execute` (rotina
 `relocalize_data_sharing_cached_rtes`), nas duas execuções da suíte de 2026-09-21 às 12:08 e às
 12:10 ([`POC.md`](POC.md)): o datashare recusa o statement preparado antes do DDL em vez de
 replanejar. Com `max_prepared_statements=0` o driver usa o statement sem nome, preparado logo antes
-de cada execução, e não guarda nada; a suíte e a biblioteca conectam assim. Um DDL de outra sessão
-sobre a mesma tabela tem o mesmo efeito num statement guardado, e o driver não o enxerga.
+de cada execução, e não guarda nada; a suíte e a biblioteca conectam assim, e a suíte passou limpa
+às 13:35 e às 13:39 do mesmo dia. Na conexão com o cache, a repetição depois do `TRUNCATE` e a
+segunda repetição receberam `34510` (a entrada guardada fica até um comando que o driver reconhece),
+a repetição depois de um `ALTER TABLE ... ADD COLUMN` passou, e a mesma sequência numa tabela
+temporária criada depois do `USE` passou: a recusa é do datashare. Um DDL de outra sessão sobre a
+mesma tabela tem o mesmo efeito num statement guardado, e o driver não o enxerga.
 
 O `execute` lê o resultado inteiro antes de devolver: `EXECUTE_MSG` pede o portal sem limite de
 linhas, `handle_messages` só termina em `READY_FOR_QUERY`, cada `DATA_ROW` entra em
 `cursor._cached_rows`, e `fetchmany` fatia essa fila (`Cursor.__next__`). A memória de uma consulta
-é a do resultado inteiro em objetos Python, antes do primeiro `fetchmany`; o `stream` do motor
-Redshift limita a memória só por `UNLOAD` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)).
+é a do resultado inteiro em objetos Python, antes do primeiro `fetchmany` (a suíte leu as 5 linhas
+na fila em 2026-09-21, às 13:35 e às 13:39); o `stream` do motor Redshift limita a memória só por
+`UNLOAD` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)).
 
 ### Data API
 
@@ -128,10 +133,10 @@ cada esquema. `has_schema_privilege` e `svv_table_info` enxergam o banco da sess
 o local, e num esquema compartilhado quem concede `USAGE` e `CREATE` é o produtor e a lista de
 tabelas vem de `svv_all_tables`, que cruza bancos. Depois do `USE`,
 `has_schema_privilege('sbx_aco_decon', 'CREATE')` respondeu `false`, sem erro, no esquema em que o
-`CREATE TABLE` passa (suíte de 2026-09-21 no ambiente alvo, quatro execuções, [`POC.md`](POC.md)): a
+`CREATE TABLE` passa (suíte de 2026-09-21 no ambiente alvo, seis execuções, [`POC.md`](POC.md)): a
 função não serve de teste do privilégio num esquema de datashare, e a prova é o próprio `CREATE`.
 `information_schema.columns` também enxerga só o banco da conexão: depois do `USE` respondeu vazio
-para uma tabela recém-criada em `sbx_aco_decon` (suíte, 2026-09-21, três execuções); `svv_all_columns` cruza os
+para uma tabela recém-criada em `sbx_aco_decon` (suíte, 2026-09-21, cinco execuções); `svv_all_columns` cruza os
 bancos, e o `cursor.description` de um `select ... limit 0` descreve a tabela sem visão de catálogo. O
 que `svv_table_info` responde depois do `USE` ainda não foi lido; `probes/redshift.py` (`RS-5`,
 `RS-8`) lê as duas como leitura, sem reprovar.
@@ -170,7 +175,8 @@ O que o Redshift aceita escrever num datashare, e o que ele não lista:
   sozinho. Ele é DDL para o datashare: um comando preparado antes dele e executado depois recebe
   `34510`, `Concurrent DDL committed ... between Prepare and Execute` (2026-09-21), o que o cache de
   prepared statements do `redshift_connector` produz sozinho (seção "O cache de prepared statements
-  e a leitura do resultado no driver").
+  e a leitura do resultado no driver"); uma tabela temporária criada depois do `USE` aceita a mesma
+  sequência.
 - O consumidor não altera nem apaga o datashare, e não põe um objeto dele em outro datashare.
 
 ### O S3 alcançado pelas credenciais de quem chama
@@ -411,9 +417,13 @@ trazem o documento como texto; a carga passa pela staging `VARCHAR(65535)` e o `
 aplica `JSON_PARSE`; a exportação devolve texto com `JSON_SERIALIZE`. O `COPY` de Parquet com a
 coluna em texto numa coluna `SUPER` é recusado sem `SERIALIZETOJSON` (`SUPER column in COPY query
 requires SERIALIZETOJSON option`, ambiente alvo, 2026-09-21), e um documento de 80.901 bytes entrou
-por `INSERT ... JSON_PARSE(%s)` com parâmetro, acima do teto do `VARCHAR` ([`POC.md`](POC.md)). O que
-`SERIALIZETOJSON` grava a partir de texto e o `COPY ... FORMAT JSON 'auto'` de um documento como
-objeto são leituras da próxima execução da suíte ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+por `INSERT ... JSON_PARSE(%s)` com parâmetro, acima do teto do `VARCHAR` ([`POC.md`](POC.md)). Com
+`SERIALIZETOJSON`, o mesmo `COPY` recusa a string acima do teto (`1224 String value exceeds the max
+size of 65535 bytes`): um Parquet com o documento em texto não leva um documento acima de 65.535
+bytes a `SUPER`. `COPY ... FORMAT JSON 'auto'` de um arquivo JSON de uma linha, com o documento como
+objeto, carregou os 80.901 bytes (`json_typeof` `object`), lido às 13:35 e às 13:39. O teto do campo
+JSON no contrato, ou um caminho por JSON para os documentos maiores, é decisão da
+[etapa 8](PLAN-STAGE-8.md).
 
 ```python
 import sqlalchemy as sa
@@ -905,9 +915,9 @@ Arrow e merece um benchmark contra o fluxo acima.
 | Regra da documentação | Consequência para a biblioteca |
 | --- | --- |
 | Colunas são associadas por posição, e a quantidade precisa coincidir com a tabela. | A ordem das colunas no Parquet é a ordem do modelo. Os dois derivam do mesmo `Table`. Lido no ambiente alvo em 2026-09-21: um arquivo de cinco colunas numa tabela de seis reprova com `Spectrum Scan Error` 15007, `Unmatched number of columns`. |
-| A lista de colunas, `COPY tabela (colunas) FROM ... FORMAT AS PARQUET MANIFEST`, é aceita (2026-09-21): as colunas do arquivo entram nas listadas, por posição, e a coluna fora da lista fica nula. `FILLRECORD` foi aceito no mesmo arquivo, e as linhas que ele carrega são leitura pendente. | Um arquivo anterior a uma coluna nova entra pela lista de colunas; a lista não fornece o valor de uma coluna ausente. |
+| A lista de colunas, `COPY tabela (colunas) FROM ... FORMAT AS PARQUET MANIFEST`, é aceita (2026-09-21): as colunas do arquivo entram nas listadas, por posição, e a coluna fora da lista fica nula. `FILLRECORD` carregou o mesmo arquivo com o mesmo resultado, 100 linhas e a coluna nova nula (13:35 e 13:39). | Um arquivo anterior a uma coluna nova entra por `FILLRECORD`, que aceita num manifesto só arquivos anteriores e posteriores à coluna, ou pela lista de colunas, que exige um `COPY` por contagem de colunas; nenhum dos dois fornece o valor de uma coluna ausente. A [etapa 8](PLAN-STAGE-8.md) propõe `FILLRECORD` em todo `COPY` da biblioteca. |
 | Só existem as colunas gravadas no arquivo. | A coluna de partição `mes` não está nos arquivos do Delta: a carga passa por uma staging sem `mes` e por `INSERT ... SELECT ..., '<mes>'` ([delta.md](delta.md)). |
-| Uma string maior que o `VARCHAR` de destino aborta o `COPY` (2026-09-21): `Spectrum Scan Error` 15007, e `sys_load_error_detail` diz `The length of the data column descricao is longer than the length defined in the table. Table: 200, Data: 300`. | A auditoria de tamanho da [etapa 4](PLAN-STAGE-4.md) é a barreira; `TRUNCATECOLUMNS` não está entre as opções aceitas para Parquet, e a próxima execução da suíte lê se ele é aceito. |
+| Uma string maior que o `VARCHAR` de destino aborta o `COPY` (2026-09-21): `Spectrum Scan Error` 15007, e `sys_load_error_detail` diz `The length of the data column descricao is longer than the length defined in the table. Table: 200, Data: 300`. | A auditoria de tamanho da [etapa 4](PLAN-STAGE-4.md) é a barreira; `TRUNCATECOLUMNS` não é aceito com Parquet (`0A000`, `TRUNCATECOLUMNS argument is not supported for PARQUET based COPY`, 2026-09-21). |
 | Parâmetros aceitos: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `STATUPDATE`, `MANIFEST`, `EXPLICIT_IDS`. `MAXERROR`, `NOLOAD` e `COMPUPDATE` não são aceitos, e não há compressão automática. | O primeiro erro aborta o `COPY`. A validação acontece antes, no Arrow. |
 | `MANIFEST` é aceito. | O `COPY` carrega exatamente os arquivos gravados pela biblioteca, e não o que mais estiver na pasta: o Delta guarda as versões anteriores até o `vacuum`. Exercitado no datashare em 2026-09-21. |
 | O bucket precisa estar na mesma região do Redshift. | Configuração da infraestrutura. |

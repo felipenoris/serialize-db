@@ -9,15 +9,18 @@ foi medido em [`POC.md`](POC.md).
 - **Onde ficam as tabelas de execução.** O sandbox `exec_<id>_*` da [etapa 4](PLAN-STAGE-4.md) e as
   stagings do `COPY` nascem no banco do datashare, onde o `CREATE TABLE` passou, e herdam as
   restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária
-  (`TEMP` é verdadeiro no banco da conexão, e `CREATE` não) custa o sandbox morrer com a sessão. A
+  (`TEMP` é verdadeiro no banco da conexão, e `CREATE` não; a suíte criou, consultou e truncou uma
+  depois do `USE` em 2026-09-21) custa o sandbox morrer com a sessão. A
   [etapa 5](PLAN-STAGE-5.md) decide quando o primeiro pipeline rodar lá.
 - **O que `svv_table_info` responde depois do `USE`.** Antes do `USE` ela enxerga só o banco local,
   como `has_schema_privilege` e `information_schema.columns`, que a suíte leu depois do `USE` em
-  2026-09-21, quatro vezes a primeira e três a segunda: `false` e vazio para o esquema do datashare,
+  2026-09-21, seis vezes a primeira e cinco a segunda: `false` e vazio para o esquema do datashare,
   com o `CREATE TABLE` passando nele ([`POC.md`](POC.md), [`redshift.md`](redshift.md)). A execução do
   probe de 2026-09-21 não leu `RS-8` porque `RS-19` reprovou pelo critério errado
   (`current_database()` continuou `dev` depois do `USE`, que vale mesmo assim; o critério passou a
-  ser a resolução de um nome em duas partes), e a próxima execução no ambiente alvo o lê.
+  ser a resolução de um nome em duas partes), e a execução seguinte do probe no ambiente alvo o lê.
+  A biblioteca não lê a visão, e etapa alguma depende da leitura: a [etapa 0](PLAN-STAGE-0.md)
+  fechou sem ela.
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
   conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
@@ -55,40 +58,6 @@ foi medido em [`POC.md`](POC.md).
   (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)), e a medição decide o
   padrão da flag.
 
-## O que a próxima execução da suíte Redshift lê
-
-As perguntas do `COPY` que a documentação oficial não responde foram fechadas pelas execuções de
-2026-09-21 às 12:08 e às 12:10 no ambiente alvo ([`POC.md`](POC.md), [`redshift.md`](redshift.md)):
-o `COPY` de Parquet aceita lista de colunas, carrega `DECIMAL(18, 2)` em `INT64` e `timestamp_ntz`
-em `INT64` de microssegundos, aborta numa string maior que o `VARCHAR` de destino, associa as colunas
-por posição e recusa um arquivo com colunas a menos. O que resta é leitura da próxima execução, com
-o teste que a faz:
-
-- **As linhas que `FILLRECORD` carrega** de um arquivo anterior a uma coluna nova: o `COPY` com a
-  cláusula passou nas duas execuções, e a contagem que vinha depois recebeu o `34510` do driver
-  (`test_copy_column_list_and_fillrecord`); a [etapa 8](PLAN-STAGE-8.md) escolhe entre a lista de
-  colunas, confirmada, e o `FILLRECORD`.
-- **O cache de prepared statements desligado.** `connect_redshift` passa `max_prepared_statements=0`
-  desde as execuções das 12:08 e das 12:10; `test_repeated_statement_after_truncate_and_the_driver_cache`
-  afirma que o mesmo comando passa antes e depois de um `TRUNCATE` na conexão da sessão e registra o
-  que uma conexão com o cache do driver recebe: na repetição depois do `TRUNCATE`, na segunda
-  repetição, depois de um `ALTER` e numa tabela temporária do banco da conexão. O `connect` da
-  [etapa 5](PLAN-STAGE-5.md) leva a mesma opção.
-- **`SUPER` acima de 65.535 bytes pelo `COPY`.** O `INSERT ... JSON_PARSE(%s)` de 80.901 bytes
-  passou; o `COPY` de Parquet com a coluna em texto exige `SERIALIZETOJSON`. A suíte lê o que a
-  cláusula grava (`json_typeof`, `json_size` e o `JSON_PARSE` do texto de volta) e o
-  `COPY ... FORMAT JSON 'auto'` de um documento como objeto (`test_super_and_json_parse`). A decisão
-  da [etapa 8](PLAN-STAGE-8.md): o teto de 65.535 bytes no contrato do campo JSON, aplicado pela
-  auditoria, ou um caminho por JSON para os documentos maiores.
-- **`TRUNCATECOLUMNS` no `COPY` de Parquet**, que a lista de opções aceitas não inclui
-  (`test_copy_varchar_overflow`): se for aceito, é a degradação que a auditoria da
-  [etapa 4](PLAN-STAGE-4.md) dispensa.
-- **As linhas na fila do cursor antes do primeiro `fetchmany`**
-  (`test_cursor_fetchmany_feeds_record_batches`, `redshift.driver.rows_cached_after_execute`): o
-  código do driver lê o resultado inteiro no `execute` ([`redshift.md`](redshift.md)), e a leitura
-  confirma; o limite de linhas a partir do qual `stream` passa a `UNLOAD` é decisão da
-  [etapa 5](PLAN-STAGE-5.md).
-
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
@@ -111,8 +80,10 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 - [Etapa 6](PLAN-STAGE-6.md): `--metadata` na linha de comando; a chave de `next_ids` numa chave
   composta; a barreira por tabela.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga.
-- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação no datashare ou temporária; a lista de
-  colunas do `COPY`, confirmada, ou `FILLRECORD`, com a contagem por ler; o teto de 65.535 bytes do
-  campo JSON no Redshift ou um caminho por JSON para os documentos maiores.
+- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação no datashare ou temporária; `FILLRECORD` em
+  todo `COPY` da biblioteca (proposto: um manifesto pode listar arquivos anteriores e posteriores a
+  uma coluna nova) ou a lista de colunas, os dois lidos em 2026-09-21; o teto de 65.535 bytes do
+  campo JSON no Redshift conferido pela auditoria (proposto), ou um caminho por
+  `COPY ... FORMAT JSON 'auto'` ou `INSERT ... JSON_PARSE` para os documentos maiores, os dois lidos.
 - [Etapa 9](PLAN-STAGE-9.md): o nome do runbook; a marca de arquivamento no controle; a retenção do
   `vacuum` mensal.

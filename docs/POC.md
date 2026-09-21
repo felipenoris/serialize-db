@@ -760,8 +760,8 @@ JSON leva a mensagem de cada teste reprovado (`failed.<teste>`).
 primeiro teste e virou a leitura `redshift.has_schema_privilege_create`, porque é a pergunta `RS-5`;
 o `conftest` cria a pasta do relatório e grava a mensagem de cada teste reprovado;
 `tests/test_conftest_redshift.py` fixa a ordem com um `redshift_connector` fabricado. As perguntas
-da [etapa 0](PLAN-STAGE-0.md) continuam sem resposta até a próxima execução, a primeira das duas que
-a etapa exige, exceto a leitura de `has_schema_privilege`, que a segunda execução repete.
+da [etapa 0](PLAN-STAGE-0.md) ficaram para as execuções seguintes, exceto a leitura de
+`has_schema_privilege`, que todas repetiram.
 
 ## O que a segunda execução da suíte Redshift mostrou
 
@@ -846,7 +846,7 @@ campo `M` e o detalhe `D` numa linha, em vez dos 200 primeiros caracteres do dic
 sem limite de linhas, `handle_messages` só termina em `READY_FOR_QUERY`, cada `DATA_ROW` entra em
 `cursor._cached_rows` e `fetchmany` fatia essa fila (`Cursor.__next__`). O `execute` materializa o
 resultado inteiro em objetos Python, e o `stream` do motor Redshift limita a memória só por
-`UNLOAD`; a próxima execução registra o tamanho da fila antes do primeiro `fetchmany`.
+`UNLOAD`; as execuções das 13:35 e das 13:39 leram 5 linhas na fila antes do primeiro `fetchmany`.
 
 **O que as execuções responderam**, as perguntas do `COPY` da [etapa 0](PLAN-STAGE-0.md):
 
@@ -857,8 +857,8 @@ resultado inteiro em objetos Python, e o `stream` do motor Redshift limita a mem
 - Um arquivo com cinco colunas numa tabela de seis: o `COPY` posicional reprova com
   `Spectrum Scan Error` 15007, `Unmatched number of columns`; com lista de colunas,
   `COPY tabela (id_operacao, data_ref, id_cliente, valor, descricao) FROM ... FORMAT AS PARQUET MANIFEST`
-  carregou as 100 linhas com `canal` nulo em todas; com `FILLRECORD` o `COPY` passou, e as linhas que
-  ele carregou são a leitura da próxima execução.
+  carregou as 100 linhas com `canal` nulo em todas; com `FILLRECORD` o `COPY` passou, e as execuções
+  das 13:35 e das 13:39 leram as 100 linhas que ele carregou, com `canal` nulo.
 - Uma string de 300 bytes numa coluna `VARCHAR(200)`: o `COPY` aborta com `Spectrum Scan Error`
   15007, e `sys_load_error_detail` explica, `The length of the data column descricao is longer than
   the length defined in the table. Table: 200, Data: 300`, com o nome do arquivo em
@@ -866,8 +866,8 @@ resultado inteiro em objetos Python, e o `stream` do motor Redshift limita a mem
 - `SUPER`: `INSERT ... JSON_PARSE(%s)` de um documento de 80.901 bytes passou (`json_size` 80901),
   acima do teto do `VARCHAR`; o `COPY` de um Parquet com a coluna em texto numa coluna `SUPER` é
   recusado sem `SERIALIZETOJSON` (`SUPER column in COPY query requires SERIALIZETOJSON option`). A
-  cláusula, e o `COPY ... FORMAT JSON 'auto'` de um documento como objeto, são leituras da próxima
-  execução.
+  cláusula, e o `COPY ... FORMAT JSON 'auto'` de um documento como objeto, foram lidos às 13:35 e às
+  13:39.
 - `UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE` nomeia os arquivos
   `mes=<valor>/<slice>_part_<nn>.parquet`: `0064_part_00.parquet` às 12:08 e `0000_part_00.parquet`
   às 12:10, o número da slice muda entre execuções. Sem `ALLOWOVERWRITE`, o destino é conferido como
@@ -891,4 +891,50 @@ confirmada e ganha a decisão do teto do campo JSON; a [etapa 4](PLAN-STAGE-4.md
 tamanho a barreira; [`schema.md`](schema.md), [`parquet.md`](parquet.md), [`delta.md`](delta.md),
 [`estrategia.md`](estrategia.md) e [`serialize-db.md`](serialize-db.md) perdem as pendências do
 `COPY`; [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perde as perguntas do `COPY`, do destino do
-`UNLOAD` e do `fetchmany`, e lista o que a próxima execução lê.
+`UNLOAD` e do `fetchmany`, e listou as leituras que as execuções das 13:35 e das 13:39 fizeram.
+
+## O que as execuções limpas da suíte Redshift mostraram
+
+Em 2026-09-21, às 13:35 e às 13:39 UTC, com a conexão sem o cache de prepared statements, o usuário
+rodou `pytest -m redshift` duas vezes seguidas no ambiente alvo: os doze testes passaram nas duas
+(92,4 s e 61,8 s), e a limpeza apagou 42 e 43 objetos e as tabelas de cada sessão. Os relatórios
+estão em [`readings/redshift-suite-2026-09-21-1335.json`](readings/redshift-suite-2026-09-21-1335.json)
+e [`readings/redshift-suite-2026-09-21-1339.json`](readings/redshift-suite-2026-09-21-1339.json).
+As duas execuções concordam em cada leitura, e são as duas execuções limpas que a
+[etapa 0](PLAN-STAGE-0.md) exigia: a etapa fecha com elas.
+
+**O que as execuções leram**, além de repetir cada leitura das 12:08 e das 12:10:
+
+- O mesmo `select count(*)` passou antes e depois de um `TRUNCATE` na conexão da sessão, com
+  `max_prepared_statements=0`: o `34510` era do cache do driver. Na conexão com o cache, a
+  repetição depois do `TRUNCATE` recebeu `34510`, a segunda repetição também (a entrada guardada
+  fica até um comando que o driver reconhece), a repetição depois de um `ALTER TABLE ... ADD COLUMN`
+  passou, e a mesma sequência numa tabela temporária criada depois do `USE` passou: a recusa é do
+  datashare, e uma tabela temporária pode ser criada, consultada e truncada na sessão depois do
+  `USE`.
+- `cursor._cached_rows` tinha as 5 linhas antes do primeiro `fetchmany`: o `execute` materializa o
+  resultado, como o código do driver diz.
+- `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` carregou o arquivo de cinco colunas na tabela de
+  seis: 100 linhas, `canal` nulo em todas, o mesmo resultado da lista de colunas.
+- `TRUNCATECOLUMNS` não é aceito com Parquet: `0A000`, `TRUNCATECOLUMNS argument is not supported
+  for PARQUET based COPY`. Numa string acima do `VARCHAR`, o `COPY` só aborta.
+- `COPY ... FORMAT AS PARQUET SERIALIZETOJSON` de um Parquet com o documento de 80.901 bytes em
+  texto numa coluna `SUPER` recusou com `1224 String value exceeds the max size of 65535 bytes`: um
+  Parquet com o documento em texto não leva um documento acima do teto do `VARCHAR` a `SUPER`, com
+  ou sem a cláusula. `COPY ... FORMAT JSON 'auto'` de um arquivo JSON de uma linha com o documento
+  como objeto carregou: `json_typeof` `object`, `json_size` 80901.
+- A Data API respondeu em 270 ms e 240 ms; dois `COPY` paralelos em 4,3 s e 3,8 s, dois `UNLOAD` em
+  1,6 s e 1,5 s; o `UNLOAD` nomeou `0064_part_00.parquet` às 13:35 e `0000_part_00.parquet` às
+  13:39, como às 12:08 e às 12:10; `has_schema_privilege` respondeu `false` pela quinta e pela sexta
+  vez.
+
+**Consequências**: o que as duas execuções leram igual virou asserção na suíte (a fila do cursor, o
+posicional que reprova, a lista de colunas e o `FILLRECORD` com 100 linhas, o `COPY` que aborta no
+`VARCHAR`, o objeto carregado por `FORMAT JSON 'auto'`); a [etapa 0](PLAN-STAGE-0.md) está
+concluída, com `svv_table_info` depois do `USE` (`RS-8`) como a única leitura que resta, do probe,
+sem etapa que dependa dela; a [etapa 5](PLAN-STAGE-5.md) e a [etapa 8](PLAN-STAGE-8.md) propõem
+`FILLRECORD` em todo `COPY` da biblioteca, porque o manifesto de uma partição pode listar arquivos
+anteriores e posteriores a uma coluna nova e a lista de colunas exigiria um `COPY` por contagem de
+colunas; a decisão do teto do campo JSON na [etapa 8](PLAN-STAGE-8.md) recebe as duas leituras do
+`SUPER`; [`redshift.md`](redshift.md), [`parquet.md`](parquet.md) e [`schema.md`](schema.md) recebem
+os fatos; [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perde a lista das leituras da suíte.

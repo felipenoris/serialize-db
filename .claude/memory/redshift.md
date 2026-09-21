@@ -84,8 +84,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
 - The driver materializes a result in `execute`: `EXECUTE_MSG` asks the portal for all rows,
   `handle_messages` returns only at `READY_FOR_QUERY`, each `DATA_ROW` lands in
   `cursor._cached_rows`, and `fetchmany` is `islice` over `Cursor.__next__`, which pops that deque.
-  `stream` on Redshift bounds memory only through `UNLOAD`; the next run records the queue length
-  before the first `fetchmany`. `docs/redshift.md`, `docs/PLAN-STAGE-5.md`
+  `stream` on Redshift bounds memory only through `UNLOAD`; the suite read 5 rows in the queue
+  before the first `fetchmany` (2026-09-21, 13:35 and 13:39), now an assertion. `docs/redshift.md`,
+  `docs/PLAN-STAGE-5.md`
 
 ## The reading of 2026-09-21
 
@@ -130,3 +131,19 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   on S3 is not empty`, a new subprefix under a folder with files accepted), so stage 5 unloads to
   `<uri>/<execution_id>/<valor>/`; two parallel `COPY` 4.5 s and 3.6 s, two parallel `UNLOAD` 1.9 s
   and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times. `docs/POC.md`
+- Fifth and sixth runs (2026-09-21 13:35 and 13:39 UTC, 12 passed each, the two clean runs stage 0
+  required, `docs/readings/redshift-suite-2026-09-21-1335.json` and `-1339.json`): with
+  `max_prepared_statements=0` the same `select count(*)` passes before and after a `TRUNCATE`; with
+  the driver's cache the repeat after the `TRUNCATE` and a second repeat both get 34510 (the stale
+  entry stays), the repeat after an `ALTER TABLE ... ADD COLUMN` passes, and the same sequence on a
+  `CREATE TEMP TABLE` made after the `USE` passes (the refusal is the datashare's).
+  `COPY ... FILLRECORD` loads the five-column file into the six-column table with the new column
+  null (100 rows), like the column list; `TRUNCATECOLUMNS` is refused for Parquet (`0A000`
+  `TRUNCATECOLUMNS argument is not supported for PARQUET based COPY`); `COPY ... FORMAT AS PARQUET
+  SERIALIZETOJSON` of an 80,901-byte string into `SUPER` fails with `1224 String value exceeds the
+  max size of 65535 bytes`, so a Parquet string never carries a document above 65,535 bytes into
+  `SUPER`; `COPY ... FORMAT JSON 'auto'` of a one-line JSON file with the document as an object loads
+  it (`json_typeof` `object`, `json_size` 80901). Data API 270 ms and 240 ms; parallel `COPY` 4.3 s
+  and 3.8 s, `UNLOAD` 1.6 s and 1.5 s; `has_schema_privilege` `false` six times. Proposals awaiting
+  the user: `FILLRECORD` on every library `COPY`, and the 65,535-byte ceiling of the JSON field
+  checked by the audit. `docs/POC.md`, `docs/PLAN-STAGE-8.md`
