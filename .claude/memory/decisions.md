@@ -31,7 +31,13 @@ Parquet base and that its files will not be changed: the corrections stage 1 pla
 the client model, in `tests/client_model/` (proposed, awaiting confirmation), and the reference
 model stays as the model whose defects `check_models` lists. The same day the user ran
 `probes/parquet_source.py` in the target on the production base and committed the report to
-`docs/readings/` (unlike the five probe reports of that day, kept in `secrets/`). After the source base was read (2026-09-20) the user
+`docs/readings/` (unlike the five probe reports of that day, kept in `secrets/`). Later that day
+the user confirmed `tests/client_model/` as the corrected copy (it represents the data model the
+client code presents to use the library) and accepted the path: the client model, then
+`serialize_db.schema`, then `scripts/migrate_parquet_to_delta.py` (the stage 7 draft on stage 1,
+`deltalake` and DuckDB), tested on the fixture and run in the target on a copy of the production
+base the user can create there, before stages 2 to 6, with stage 7 absorbing the script; the
+migration script lives in `scripts/`. After the source base was read (2026-09-20) the user
 decided: partition by date as text `AAAA-MM-DD` like the reference base, the column and its date
 source declared by the client's model (`partition_by`, `partition_source`), so the library's unit is
 the partition and never the month; every numeric column stays `Double`, with no rounding and no

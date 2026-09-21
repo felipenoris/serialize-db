@@ -505,7 +505,7 @@ sem a chave `pandas` (a última partição de cada tabela particionada, `alembic
 `meta_update_status`), conferido pelo probe sobre a base fictícia no mesmo dia. O modelo de
 referência fica como está, por decisão do usuário de 2026-09-21 (`tests/model/` passou a
 `tests/reference_model/`), então a cópia corrigida da [etapa 1](PLAN-STAGE-1.md), o modelo cliente,
-vai para `tests/client_model/` (pasta proposta, [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); a
+vai para `tests/client_model/` (confirmada pelo usuário no mesmo dia e escrita em seguida); a
 revisão mudou [`PLAN.md`](PLAN.md), [`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
 [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md), [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md),
 [`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), [`serialize-db.md`](serialize-db.md),

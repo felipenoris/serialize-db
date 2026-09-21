@@ -61,6 +61,39 @@ somas), `test_pyarrow.py` (`test_hive_partitioned_dataset`,
 `test_parquet_streaming_read_filters_and_pandas`) e
 `test_duckdb.py::test_decimal_from_pandas_sample_versus_arrow_schema`.
 
+## A migração adiantada
+
+A base Delta sobre a qual as etapas 3 a 6 e 8 se desenvolvem sai antes da etapa 7, pelo caminho
+aceito pelo usuário em 2026-09-21: `scripts/migrate_parquet_to_delta.py` é o rascunho abaixo
+promovido a ferramenta, sobre `serialize_db.schema` ([etapa 1](PLAN-STAGE-1.md)), o `deltalake` e
+o DuckDB diretos, sem as etapas 3 e 4. O que ele faz, por tabela do modelo cliente e por partição:
+`discover_partitions`, `partition_query` com os `CAST` para o contrato (`arrow_schema` do modelo
+cliente dá os tipos, e o DuckDB os recebe pela tabela de tipos de [`schema.md`](schema.md)), a
+conferência do valor do caminho contra `partition_source`, `COPY ... (FORMAT parquet,
+RETURN_STATS)` para `<raiz>/<tabela>/<coluna>=<valor>/` e a `AddAction` por
+`create_write_transaction` (o modo `register`), a retomada pelas partições já presentes e
+`load_report`. A ordem no alvo: as dez tabelas sem partição, `cad_contratos`, `cad_operacoes`,
+`rel_contrato_operacao` e `cad_lancamentos` por último; o relatório de contagens e somas fecha cada
+tabela. Antes do alvo, três coisas:
+
+- O script roda sobre `tests/source_db_projetado.py` em pasta local (62 arquivos), o material do
+  teste desta etapa, com o mesmo relatório.
+- O usuário copia a base de produção para um prefixo do bucket do projeto separado da raiz das
+  tabelas Delta (`aws s3 sync`, a mesma estrutura de pastas): a carga só lê, e a cópia congela o
+  snapshot lido em 2026-09-21, enquanto a base de produção muda a cada carga mensal (a última em
+  2026-09-14).
+- Duas medições, cada uma numa sonda de poucas linhas antes de entrar no script: o
+  `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo (a alternativa é gravar em
+  disco, 29,8 GiB livres, e subir pelo `boto3`), e a memória e o tempo de uma partição de
+  `cad_lancamentos` (35 milhões de linhas, cerca de 700 MB de Parquet) sob o `memory_limit` de
+  6,1 GiB, a medição de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que decide o padrão de
+  `export_mode`.
+
+Os tipos e a `sort_key` do modelo cliente ficam fechados antes da execução: mudá-los depois é
+reescrever o Delta. Quando as etapas 3, 4 e 7 chegarem, o corpo do script vira `initial_load`, e
+`tests/test_load.py` o cobre; até `serialize-db load` existir, o script em `scripts/` é a
+ferramenta de operação.
+
 ## Interface
 
 ```python
@@ -291,7 +324,10 @@ tipos físicos gravados: {'id_contrato': 'INT64', 'data': 'INT32', 'contrato': '
 
 - **[decisão] A `sort_key` na consulta da carga.** O `COPY` sem `ORDER BY` grava na ordem dos
   arquivos; ordenar pela `sort_key` do modelo melhora a poda e custa uma ordenação por partição, que
-  em `cad_lancamentos` é de 35 milhões de linhas sob `memory_limit`.
+  em `cad_lancamentos` é de 35 milhões de linhas sob `memory_limit`. O modelo cliente propõe a
+  `sort_key` de cada tabela particionada ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md)), fechada antes da
+  migração adiantada.
 - **[decisão] O padrão de `export_mode` na carga**, `register` até a medição da partição de
   `cad_lancamentos` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o ambiente alvo tem 7,6 GiB, e o
-  `write_deltalake` de um leitor cresceu com a entrada (1.140 MB para 135 MB de Parquet).
+  `write_deltalake` de um leitor cresceu com a entrada (1.140 MB para 135 MB de Parquet). A
+  migração adiantada faz essa medição.
