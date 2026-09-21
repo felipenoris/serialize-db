@@ -6,4 +6,4 @@ CREATE TABLE "rel_contrato_operacao" (
     "contrato" VARCHAR(50) NOT NULL,
     "fator_rateio" DOUBLE PRECISION NOT NULL,
     "data_str" VARCHAR(10) NOT NULL
-) SORTKEY ("data", "operacao")
+) SORTKEY ("data", "sistema", "contrato", "operacao")

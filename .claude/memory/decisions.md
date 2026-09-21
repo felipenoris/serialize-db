@@ -121,3 +121,16 @@ inside its module. The private one carries the `_` prefix, the other two are unp
 module's `__all__` lists the public names and only those, so `pdoc` documents the public interface
 and nothing else.
 `plan/PLAN.md`, `plan/CURRENT_STATE.md`, `CLAUDE.md`
+
+On 2026-09-21 the user decided the `sort_key` of each partitioned table of the client model:
+`data, sistema, contrato` in `cad_contratos`, `data, operacao` in `cad_operacoes`, `data, sistema,
+contrato, operacao` in `rel_contrato_operacao` and `data_base, id_mensuracao, id_veiculo, id_conta`
+in `cad_lancamentos`, after the orientation of that day: the key is the compound `SORTKEY` of the
+published Redshift table and the `ORDER BY` of every partition written to the Delta; its first
+column is the partition source, constant inside the partition and the pruning column of the whole
+published table; a later column prunes while the earlier ones form long runs, so a high-cardinality
+column prunes only right after the partition; `id_mensuracao` and `id_veiculo` have one value each
+in the base today, and the user kept them. The user did not take the proposed primary-key
+tiebreaker. The migration does not freeze the key the way it freezes the types: the Delta log does
+not store it, changing it later reorders the partitions one rewrites, and Redshift has
+`ALTER TABLE ... ALTER COMPOUND SORTKEY`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-7.md`

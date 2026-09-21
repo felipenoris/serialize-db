@@ -13,7 +13,12 @@ inteiras e nas colunas que as referenciam, `autoincrement=False` nessas chaves, 
 sem `DEFERRABLE`, a coluna de partição `data_str` (`String(10)`, `AAAA-MM-DD` de `data`;
 `data_base_str` de `data_base` em `cad_lancamentos`) no fim das quatro tabelas particionadas,
 comentários de tabela e de coluna, e `Table.info["serialize_db"]` com `partition_by`,
-`partition_source` e `sort_key`, como em `schema.md`; as colunas numéricas continuam `Double` (as
+`partition_source` e `sort_key`, como em `schema.md`. A `sort_key` de cada tabela particionada é
+decisão do usuário de 2026-09-21: `data, sistema, contrato` em `cad_contratos`, `data, operacao`
+em `cad_operacoes`, `data, sistema, contrato, operacao` em `rel_contrato_operacao` e `data_base,
+id_mensuracao, id_veiculo, id_conta` em `cad_lancamentos`; a primeira coluna é a origem da
+partição, constante dentro dela, que no Redshift poda a tabela publicada inteira. As colunas
+numéricas continuam `Double` (as
 decisões de 2026-09-20 estão nas premissas de [`PLAN.md`](PLAN.md)). `String(n)` leva o comprimento
 tirado das leituras, com folga; os índices não únicos e o `sqlite_strict` do original ficam de fora,
 porque motor algum da biblioteca os usa; `redshift` fica ausente de `Table.info` (distribuição
@@ -40,8 +45,10 @@ gerados em `tests/client_model/schema/`. A migração adiantada ([`PLAN-STAGE-7.
 migração adiantada") vem logo depois e usa cinco primitivas: `check_models` (o modelo aprovado
 antes da carga), `arrow_schema` e `sql_type` (os `CAST` da consulta de cada partição),
 `delta_schema` (o `DeltaTable.create`) e `table_options` (a coluna de partição, a origem dela e a
-`sort_key`). A `sort_key` e os tipos do modelo cliente ficam decididos antes da migração, porque
-mudá-los depois é reescrever o Delta.
+`sort_key`). Os tipos do modelo cliente ficam decididos antes da migração, porque mudá-los depois
+é reescrever o Delta; a `sort_key`, que o log do Delta não guarda, só ordena os arquivos, e mudá-la
+depois é reordenar as partições que interessam, mas a migração grava todas uma vez, e por isso ela
+também ficou decidida antes (2026-09-21).
 
 ## Os identificadores entre aspas
 
@@ -863,10 +870,6 @@ check_models:
   folga (`contrato` e `operacao` 50, os nomes 50 e 100, `numero` 20, `descricao` e `meta` 255,
   `area` e `departamento` 20, `to` 2, `fonte_familia` 3); sem `n`, o Redshift daria `VARCHAR(256)`
   e o `cast` não mediria nada.
-- **[decisão] A `sort_key` de cada tabela particionada**, proposta no modelo cliente: `data,
-  sistema, contrato` em `cad_contratos`; `data, operacao` em `cad_operacoes` e em
-  `rel_contrato_operacao`; `data_base, data, id_conta` em `cad_lancamentos`. Ela fica fechada antes
-  da migração adiantada ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)).
 - **[decisão] A distribuição no Redshift** (`diststyle`, `distkey`): o modelo cliente não declara
   `redshift`, o padrão `AUTO`, até a decisão.
 - **[decisão] A chave estrangeira de `cad_contratos` para `rel_contrato_operacao`**, do original,

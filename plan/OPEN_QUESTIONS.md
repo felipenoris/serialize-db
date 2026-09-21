@@ -66,7 +66,7 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 
 - [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `sql_type`; `String(n)` medido em
   bytes; a tabela e a coluna sem comentário como violação de `check_models`; no modelo cliente: os
-  comprimentos de `String(n)`, a `sort_key` das quatro tabelas particionadas, a distribuição no
+  comprimentos de `String(n)`, a distribuição no
   Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos` para colunas não
   únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do modelo.
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
