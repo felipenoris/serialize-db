@@ -281,12 +281,15 @@ Para publicar no Hive ou para sair do Delta.
    `sql/total_por_cliente.duckdb.sql` e `.redshift.sql`, com as constantes embutidas, `:mes` e o
    sentinela `{prefix}`; os arquivos entram no repositório do pipeline e no diff da revisão.
 3. A chamada troca `run.sandbox.query(statement)` por `run.sandbox.execute(sql, {"mes": run.partition})`,
-   com o texto lido do arquivo; o motor substitui o prefixo e adapta os parâmetros.
+   com o texto lido por `read_sql(..., prefix=...)`, que troca o sentinela pelo prefixo informado,
+   obrigatório (decisão do usuário de 2026-09-21), e `bind` adapta os marcadores ao motor.
 4. Enquanto o statement Core existir, o teste que regenera os arquivos e os compara com os
    versionados acusa uma mudança de modelo. Quando o statement sair, o texto é a fonte, mantido à
    mão e validado por `qualify` do SQLGlot contra o contrato.
-5. Com toda interação em texto, o pipeline importa o SQLAlchemy só para os modelos, e
-   `duckdb_engine` e `sqlalchemy-redshift` saem das dependências de execução; consulta nova nasce
+5. Com toda interação em texto, o pipeline importa o SQLAlchemy só para os modelos;
+   `duckdb_engine` e `sqlalchemy-redshift` continuam dependências de execução da biblioteca, porque
+   os motores compilam por `render` o statement Core que recebem (decisão do usuário de
+   2026-09-21); consulta nova nasce
    em texto, no dialeto do DuckDB, com os testes nos dois motores ([`estrategia.md`](estrategia.md)).
 
 ## Paralelismo
