@@ -10,10 +10,9 @@ mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.
 ## Como o pacote funciona
 
 - **O contrato é o modelo.** O cliente declara as tabelas em SQLAlchemy (`DeclarativeBase`,
-  `mapped_column`), com comentários em toda tabela e coluna e as opções físicas em
+  `mapped_column`), com comentários de documentação opcionais nas tabelas e colunas e as opções físicas em
   `Table.info["serialize_db"]`. O pacote não contém modelo algum; ele recebe `Base.metadata`.
-- **A fonte da verdade são as tabelas Delta Lake**, em disco local ou no S3, uma partição por data
-  (`AAAA-MM-DD`). O esquema Delta de cada tabela sai do modelo.
+- **A fonte da verdade são as tabelas Delta Lake**, em disco local ou no S3. O esquema Delta de cada tabela sai do modelo.
 - **O DuckDB e o Redshift são sandboxes**: cada execução cria as tabelas de que precisa a partir do
   DDL do modelo, carrega os dados, roda o pipeline, audita e publica. O DDL de cada motor sai do
   modelo pela tabela de tipos abaixo, sem os dialetos do SQLAlchemy.

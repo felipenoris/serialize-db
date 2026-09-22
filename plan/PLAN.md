@@ -24,8 +24,9 @@ declarativos do SQLAlchemy são o contrato de esquema: deles saem o esquema Arro
 o DDL do sandbox nos dois motores. Chave primária, unicidade e chave estrangeira não entram nesse
 DDL, porque o Parquet não as tem, o DuckDB as cobra na carga e o Redshift só as registra: quem as
 aplica é a auditoria da execução, com consultas derivadas dos mesmos modelos, e a reprovação impede
-a publicação. Os statements Core do pipeline continuam válidos, e o texto SQL gerado por dialeto os
-substitui, uma interação com o banco por vez, até o SQLAlchemy terminar nos modelos e na geração.
+a publicação. Os statements Core do pipeline continuam válidos, e o cliente é livre para submetê-los
+a um `sqlalchemy.Connection`. Esta biblioteca também permite gerar o texto SQL gerado por dialeto
+para bind posterior de parâmetros caso o cliente queira substituir futuramente o uso do SQL Alchemy.
 Os dados cruzam a fronteira da biblioteca em lotes `pyarrow.RecordBatch` (seção "A troca de dados
 com o código cliente"). A evolução do esquema é uma reconciliação entre o modelo e o log da tabela,
 sem Alembic.
