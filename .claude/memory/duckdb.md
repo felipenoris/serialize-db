@@ -51,6 +51,8 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `plan/duckdb.md`, `plan/parquet.md`, `plan/redshift.md`, `plan/sqlalchemy.md`
 - A DuckDB listing glob over S3 crosses `/` only with `**`: `*` does not, which gave a count of 0 beside boto3's 16
   in `probes/diagnose_aws.py` before the fix (2026-09-20). `probes/README.md`
+## Catalog names and limits
+
 - `CREATE TABLE IF NOT EXISTS <name>` guards nothing but the name: over a view it passes and creates
   nothing, and the later `INSERT ... BY NAME` fails with `Catalog Error: <name> is not an table`;
   over a table with other columns it also passes, and `INSERT ... BY NAME` either fails on a missing

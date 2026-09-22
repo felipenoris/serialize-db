@@ -279,7 +279,8 @@ the same day: `published(table, uri, version)` in both engines' protocol and `ru
 in `Execution` — the pinned version as a query source that occupies no name in the sandbox, which is
 also what the audit's keys outside the partition already needed — and `SandboxError` as the stage's
 exception in `serialize_db.errors`. Stage 4 has no decision awaiting the user.
-`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`
+`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN.md`,
+`plan/serialize-db.md`, `plan/POC.md`
 
 ## The decisions of stage 3
 

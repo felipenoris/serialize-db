@@ -379,7 +379,9 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A plan revision reads every stage against the decisions memory**: a sentence written before a
   decision survives in another section (the `pc.round` of the initial load, contradicting the
   `Double` decision of 2026-09-20, found only by the full review of 2026-09-21); grep the plan for the
-  old rule's vocabulary when a decision lands.
+  old rule's vocabulary after the decision lands, not while researching it, and read with it the
+  tables that index names (`plan/PLAN.md` kept `memory_limit` explícito and missed `SandboxError` in
+  the exception list on 2026-09-22).
 - **Every identifier the library emits is double-quoted, and a new model's names are read against
   `duckdb_keywords()` and the Redshift reserved list**: `to` and `timestamp` are client-model columns
   and reserved words, and the stage 1 draft never met them because its example model was safe

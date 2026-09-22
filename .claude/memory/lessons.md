@@ -194,7 +194,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   month the unit of write, a `Database` example without the `MetaData` the primitives need, and
   signatures (`publish_partition`, `export_partition`) missing the arguments their callers must pass.
   Grep the plan for the old rule's vocabulary when a decision lands, and read the API tables against
-  the flows that call them.
+  the flows that call them. It happened again on 2026-09-22, with the stage 4 decisions: the grep for
+  `memory_limit` ran while researching the decision, not after it landed, so `plan/PLAN.md` kept "o
+  motor DuckDB nasce em arquivo, com `memory_limit` explícito" and the stage's acceptance criterion
+  kept "o pipeline de exemplo roda em memória"; the `serialize_db.errors` row of the same table, which
+  indexes the library's exceptions, missed `SandboxError`. The grep runs after the decision, and the
+  tables that index names are read with it.
 - **A shared connection's transaction mode is set before its first statement, and a report that
   counts failures records their messages** (2026-09-21). The first run of the Redshift suite in the
   target passed 1 test and failed 10. `connect_redshift` ran `USE` before the fixture switched

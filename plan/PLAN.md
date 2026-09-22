@@ -393,7 +393,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 | Módulo | Etapa | Conteúdo |
 | --- | --- | --- |
-| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
+| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `SandboxError`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
 | `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto gerado pela tabela de tipos com todo identificador entre aspas, opções físicas, cast seguro, arquivos gerados. |
 | `serialize_db.sql` | 2 | O texto SQL por dialeto a partir de statements Core: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos atrás de uma interface: URIs, leitura e escrita condicional, cópia, listagem, `storage_options` e o secret do DuckDB. |
