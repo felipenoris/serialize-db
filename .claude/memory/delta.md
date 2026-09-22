@@ -11,6 +11,14 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   its S3 conditional-put commits need no DynamoDB, which delta-spark still documents. Redshift `COPY`
   reads the raw files, so deletion vectors and column mapping stay off with any writer; DuckDB reads
   through `delta-kernel-rs`, and delta-rs `main` pins the fork `buoyant_kernel`. `plan/delta.md`
+- `create_write_transaction` does not refresh the `DeltaTable` object it is called on, and does not
+  need it refreshed: three commits in a row on one object (delta-rs 1.6.4, local folder, one
+  partition each, `mode="overwrite"` with `partition_filters`) left the object at version 0 with 0
+  entries in `file_uris()`, while the log on storage went 1, 2, 3 with one file each. Each commit
+  resolves the version against the log on storage. `scripts/migrate_parquet_to_delta.py` reopened
+  the table after every partition until the code review of 2026-09-21 measured this and removed the
+  reopen; what the in-memory object holds matters to `get_add_actions`, which the load reads once
+  before the loop. `plan/POC.md`
 - `DeltaTable.create` takes the contract schema with nullability, column comments in field
   metadata, partition columns and table properties; `mode="ignore"` makes it idempotent. Time travel
   reads a version with that version's schema, `restore` re-commits an older version, and `vacuum`

@@ -101,7 +101,8 @@ sobre os dois armazenamentos; a ingestão seletiva e o sandbox por execução em
 com auditoria e publicação; a publicação para clientes no Redshift; a carga inicial dos Parquet
 atuais; a operação (snapshots do banco, `vacuum`, compactação, arquivo). Fora da biblioteca ficam o
 ORM para cargas linha a linha, as chaves estrangeiras `DEFERRABLE`, o `Identity`, os manifestos
-próprios e o Alembic; o SQLGlot fica opcional, como teste de compatibilidade.
+próprios e o Alembic; o SQLGlot entra só no grupo `dev`, como teste de que o texto gerado para o
+Redshift analisa (decisão do usuário de 2026-09-22).
 
 ## A troca de dados com o código cliente
 
@@ -380,7 +381,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - Todo identificador que a biblioteca emite, tabela ou coluna, vai entre aspas duplas: `to`, coluna
   de `cad_contratos`, é palavra reservada no DuckDB e no Redshift, e `timestamp`, coluna de
   `cad_lancamentos`, no Redshift; sem aspas, `CREATE TABLE t (to VARCHAR(2))` falha no DuckDB
-  (2026-09-21, `PLAN-STAGE-1.md`, `POC.md`).
+  (2026-09-21, `PLAN-STAGE-1.md`, `POC.md`). O DML da [etapa 2](PLAN-STAGE-2.md) a cumpre pela
+  cópia prefixada com todo nome em `quoted_name(quote=True)`, o sentinela dentro das aspas (decisão
+  do usuário de 2026-09-21).
 
 ## Organização do pacote
 
@@ -399,10 +402,11 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.cli` | 1 a 9 | `serialize-db run`, `schema`, `sql`, `audit`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`: cada subcomando entra com a etapa que entrega a primitiva por trás dele (`schema` na 1, `sql` na 2), e a etapa 6 monta o `run` e o despacho comum. |
 
 Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`, `deltalake`, `duckdb`,
-`pyarrow` e `boto3`, nas versões fixadas pelos documentos, sem `duckdb-engine` nem
-`sqlalchemy-redshift` enquanto etapa alguma compilar pelo dialeto em tempo de execução (a etapa 1
-gera o DDL pela tabela de tipos, e a etapa 2 decide o `render`), os dois no grupo `dev` das suítes
-de estudo; `redshift-connector` entra no extra `redshift`, e `sqlglot`
+`pyarrow` e `boto3`, nas versões fixadas pelos documentos; `duckdb-engine` e `sqlalchemy-redshift`
+ficam no grupo `dev` até a etapa 2 e entram nas dependências de execução com ela, porque `render`
+compila por esses dialetos (decisão do usuário de 2026-09-21, [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md))
+e os motores chamam `render` em tempo de execução (a etapa 1 gera o DDL pela tabela de tipos, sem
+dialeto); `redshift-connector` entra no extra `redshift`, e `sqlglot`
 no grupo `dev`; o pandas fica no grupo `dev`, para o teste do ciclo com `ArrowDtype`, porque a
 biblioteca não o importa. `prepare_offline.sh` passa a instalar os extras (`--all-extras`) e é rodado
 de novo a cada mudança.

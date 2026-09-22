@@ -154,16 +154,13 @@ class Location:
     path: str
 
     def child(self, name: str) -> Location:
+        """A subpasta ``name``, com a URI e o caminho do sistema de arquivos."""
         return Location(f"{self.uri}/{name}", self.filesystem, f"{self.path}/{name}")
 
     def entries(self) -> list[pafs.FileInfo]:
         """As entradas da pasta, em ordem de nome."""
         found = self.filesystem.get_file_info(pafs.FileSelector(self.path))
-        return sorted(found, key=entry_name)
-
-
-def entry_name(entry: pafs.FileInfo) -> str:
-    return entry.base_name
+        return sorted(found, key=lambda entry: entry.base_name)
 
 
 def open_location(uri: str) -> Location:
@@ -285,7 +282,8 @@ def contract_problems(
     (``strlen`` no DuckDB conta bytes; ``octet_length`` só existe para ``BLOB``).
     """
     options = schema.table_options(table)
-    measures, labels = [], []
+    measures = []
+    labels = []
     if options.partition_by:
         partition = schema.quoted(options.partition_by)
         source = schema.quoted(options.partition_source)
@@ -309,14 +307,14 @@ def contract_problems(
 
 
 def create_table(
-    location: Location, table: sa.Table, storage_options: dict[str, str]
+    destination: Location, table: sa.Table, storage_options: dict[str, str]
 ) -> DeltaTable:
     """A tabela Delta com o esquema do contrato, a partição, o nome, o comentário e as
     retenções; repetir a chamada não muda a versão."""
     options = schema.table_options(table)
     partition_by = [options.partition_by] if options.partition_by else None
     return DeltaTable.create(
-        location.uri,
+        destination.uri,
         schema.delta_schema(table),
         partition_by=partition_by,
         name=table.name,
@@ -360,7 +358,7 @@ def delta_stats(count: int, stats: dict[str, dict[str, str]], table: sa.Table) -
 
 def copy_partition_file(
     con: duckdb.DuckDBPyConnection,
-    location: Location,
+    destination: Location,
     table: sa.Table,
     value: str | None,
     query: str,
@@ -369,16 +367,18 @@ def copy_partition_file(
     """``COPY ... RETURN_STATS`` da partição para um arquivo novo na pasta dela; devolve o
     caminho relativo à pasta da tabela, como o log o guarda, e a linha do ``RETURN_STATS``."""
     options = schema.table_options(table)
+    # A coluna de partição fica fora do arquivo: no Delta o valor dela está no caminho e na
+    # ação add, e o leitor a reconstrói de lá.
     columns = [column.name for column in table.columns if column.name != options.partition_by]
     relative = f"carga_inicial_{uuid.uuid4().hex}.parquet"
-    folder = location
+    folder = destination
     if options.partition_by:
-        folder = location.child(f"{options.partition_by}={value}")
+        folder = destination.child(f"{options.partition_by}={value}")
         relative = f"{options.partition_by}={value}/{relative}"
     ensure_folder(folder)
     select = ordered_select(query, columns, options.sort_key if sort else ())
     cursor = con.execute(
-        f"COPY ({select}) TO '{location.uri}/{relative}' (FORMAT parquet, RETURN_STATS)"
+        f"COPY ({select}) TO '{destination.uri}/{relative}' (FORMAT parquet, RETURN_STATS)"
     )
     written = dict(zip([column[0] for column in cursor.description], cursor.fetchone()))
     return relative, written
@@ -387,16 +387,16 @@ def copy_partition_file(
 def register_partition(
     con: duckdb.DuckDBPyConnection,
     delta: DeltaTable,
-    location: Location,
+    destination: Location,
     table: sa.Table,
     value: str | None,
     query: str,
-    sort: bool,
+    settings: Settings,
 ) -> int:
     """Modo ``register``: o arquivo do ``COPY`` entra no log com as estatísticas, num commit
     ``overwrite`` da partição; devolve as linhas gravadas."""
     options = schema.table_options(table)
-    relative, written = copy_partition_file(con, location, table, value, query, sort)
+    relative, written = copy_partition_file(con, destination, table, value, query, settings.sort)
     stats = {name.strip('"'): column for name, column in written["column_statistics"].items()}
     action = AddAction(
         path=relative,
@@ -420,7 +420,7 @@ def register_partition(
 
 def rewrite_partition(
     con: duckdb.DuckDBPyConnection,
-    location: Location,
+    destination: Location,
     table: sa.Table,
     value: str | None,
     query: str,
@@ -438,7 +438,7 @@ def rewrite_partition(
     if options.partition_by:
         predicate = f"{schema.quoted(options.partition_by)} = '{value}'"
     write_deltalake(
-        location.uri,
+        destination.uri,
         reader,
         mode="overwrite",
         predicate=predicate,
@@ -457,22 +457,22 @@ def peak_rss_mb() -> float:
 def load_partition(
     con: duckdb.DuckDBPyConnection,
     delta: DeltaTable,
-    location: Location,
+    destination: Location,
     table: sa.Table,
     value: str | None,
-    folder: Location,
+    source_folder: Location,
     settings: Settings,
 ) -> PartitionLoad:
     """Confere a partição contra o contrato e a grava no modo pedido."""
     started = time.perf_counter()
-    query = partition_query(folder, table, value)
+    query = partition_query(source_folder, table, value)
     problems = contract_problems(con, query, table, value)
     if problems:
         raise ContractError(f"{table.name} partição {value}: {'; '.join(problems)}")
     if settings.mode == "register":
-        rows = register_partition(con, delta, location, table, value, query, settings.sort)
+        rows = register_partition(con, delta, destination, table, value, query, settings)
     else:
-        rows = rewrite_partition(con, location, table, value, query, settings)
+        rows = rewrite_partition(con, destination, table, value, query, settings)
     return PartitionLoad(value, rows, time.perf_counter() - started, peak_rss_mb())
 
 
@@ -495,23 +495,24 @@ def initial_load(
     """Grava no Delta cada partição da tabela ainda fora do log; devolve o que gravou e as
     entradas da pasta da tabela fora do padrão."""
     options = schema.table_options(table)
-    location = root.child(table.name)
-    delta = create_table(location, table, settings.storage_options)
+    destination = root.child(table.name)
+    delta = create_table(destination, table, settings.storage_options)
     found, skipped = discover_partitions(source.child(table.name), options)
     already = loaded_partitions(delta, options)
     wanted = selected_values(found, settings.partitions)
     print(f"{table.name}: {len(found)} partições na origem, {len(already)} no log")
     loaded = []
+    # Cada commit resolve a versão no log do armazenamento, e não na versão que o objeto
+    # `delta` abriu, que não reflete os próprios commits: uma partição por commit, sem reabrir.
     for value in wanted:
         if value in already:
             continue
-        load = load_partition(con, delta, location, table, value, found[value], settings)
+        load = load_partition(con, delta, destination, table, value, found[value], settings)
         print(
             f"  {value}: {load.rows} linhas em {load.seconds:.1f} s; "
             f"RSS máximo do processo {load.peak_rss_mb:.0f} MB"
         )
         loaded.append(load)
-        delta = DeltaTable(location.uri, storage_options=settings.storage_options or None)
     return loaded, skipped
 
 
@@ -625,8 +626,13 @@ def tables_in_load_order(metadata: sa.MetaData, names: list[str] | None) -> list
     tables = list(metadata.tables.values())
     if names:
         tables = [table for table in tables if table.name in names]
-    unpartitioned = [t for t in tables if schema.table_options(t).partition_by is None]
-    partitioned = [t for t in tables if schema.table_options(t).partition_by is not None]
+    unpartitioned = []
+    partitioned = []
+    for table in tables:
+        if schema.table_options(table).partition_by is None:
+            unpartitioned.append(table)
+        else:
+            partitioned.append(table)
     return unpartitioned + partitioned
 
 

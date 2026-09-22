@@ -273,3 +273,22 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   delta-rs and `read_parquet` read the values; a schema without `parquet.field.id` read the same
   three files correctly (DuckDB 1.5.5, delta extension `45c4087`). `delta_schema` now drops the
   key, the versioned `.delta.json` files lost it, and `tests/test_schema.py` asserts its absence.
+- **A validated instrument is refactored against its own report** (2026-09-21). The code review
+  found `probes/parquet_source.py::read_footer` at 81 lines and six levels of nesting, and
+  `text_lengths` at five: the deepest functions in the repository, in a probe that had already read
+  the development base and the production base. The probe takes a local folder, so
+  `tests/source_db_projetado.py` wrote the fixture base to the scratchpad and the probe ran over it
+  with `--sample 5 --text-bytes` before and after the split, 758 lines of report each time,
+  identical but for the timestamp and the output path. The fixture carries what the report needs to
+  exercise: `INT96` without statistics, Hive partitions, the `pandas` footer key in part of the
+  files and non-ASCII text columns. `probes/redshift.py::session` got no such refactor: it needs the
+  target environment to run, and the user refused the split the same day
+  (`.claude/memory/decisions.md`).
+- **Control flow never rides on process-wide state** (2026-09-21). The stage 2 draft turned the
+  `SAWarning` of a `bindparam` rendered as `NULL` into an exception with `warnings.catch_warnings`,
+  which swaps the interpreter's warning filter for the duration of the block; the `warnings`
+  documentation calls it unsafe in a concurrent program below Python 3.14's
+  `context_aware_warnings`, the project runs 3.13, and the engines of stages 4 and 5 call `render`
+  from helper threads. The review read the compiled statement instead: without `literal_binds`,
+  `compiled.binds` lists the parameter with `required=True`; with it, the list is empty and the
+  text carries `NULL`. Two compilations, no global state. `plan/PLAN-STAGE-2.md`, `plan/POC.md`

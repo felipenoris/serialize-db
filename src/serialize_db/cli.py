@@ -10,8 +10,8 @@ Exemplo:
     serialize-db schema write --metadata pipeline.models:Base.metadata schema/
     serialize-db schema check --metadata pipeline.models:Base.metadata schema/
 
-O código de saída é 0 quando o comando termina; 1 quando ``schema check`` encontra diferença, com
-o diff impresso; 2 no erro de uso.
+O código de saída é 0 quando o comando termina; 1 quando ``schema check`` encontra
+diferença, com o diff impresso; 2 no erro de uso.
 """
 
 from __future__ import annotations
@@ -81,7 +81,8 @@ def _schema_check(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     """Executa a linha de comando e devolve o código de saída."""
     args = _build_parser().parse_args(argv)
-    if args.command == "schema" and args.action == "write":
+    # schema é o único comando; cada etapa acrescenta o seu ramo aqui.
+    if args.action == "write":
         return _schema_write(args)
     return _schema_check(args)
 

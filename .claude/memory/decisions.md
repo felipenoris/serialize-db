@@ -203,3 +203,60 @@ audit of stage 4 checks nothing between the two tables, and `rel_contrato_operac
 `id_rel_contrato_operacao` as its only key. The query the client runs is contract → operations,
 which the `sort_key` `data, sistema, contrato, operacao` already serves; the direction of a foreign
 key never bore on it. `plan/PLAN-STAGE-1.md`, `tests/client_model/`
+
+## The generated SQL text of stage 2
+
+On 2026-09-21 the user decided how `bind` reads the generated text: quotes delimit literal content,
+single and double alike, so `bind` rewrites a `:nome` marker only outside every quoted region, and
+the regex gains the `"(?:[^"]|"")*"` alternative beside the one for `'...'`. The argument is that
+the marker is the library's own, put in by `render` only where a value goes, so skipping quoted
+regions can never miss a real marker. Two measurements of the same day showed what the draft's
+expression did without it: a column named `taxa :base` came out as `"taxa $base"` with an invented
+parameter `base`, and one named `preco d'agua` opened a false literal region that swallowed the next
+`:nome` (`SqlError: parâmetros do texto [] e do dicionário ['data_str'] não fecham`). No identifier
+of the contract carries `:` or `'`, so the two expressions agree on today's text. `bind` substitutes
+no value into the SQL: it rewrites the marker's style and hands the dictionary to the driver.
+`plan/PLAN-STAGE-2.md`
+
+The same day the user decided who fills the `{prefix}` sentinel of a saved SQL file: the functions
+that handle the file take a `prefix` argument, and the obligation to state it propagates to their
+callers. `read_sql(directory, name, dialect, prefix)` replaces the sentinel and `prefix` is
+required; `sql_files` always writes the sentinel, because the versioned file serves any target; no
+other primitive fills it. The question came from the user reading `plan/PLAN-STAGE-4.md`, whose
+`stream` row said the engine emptied `{prefix}` "por `sql.bind`" while the stage 2 signature
+`bind(sql, params, style)` has no prefix; stages 4 and 5 now say the ready text arrives with the
+prefix already replaced. `plan/PLAN-STAGE-2.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`
+
+
+## The code review of 2026-09-21
+
+The user refused the three proposals the review left open, all on the same day.
+`probes/redshift.py::session` (310 lines, four levels, eleven checks on one connection) **stays as
+it is**, and so do `apis` and `copy_role`: the open item left `plan/OPEN_QUESTIONS.md` with the
+answer. `_resolve_metadata` **stays private in `serialize_db.cli`**, duplicated by
+`scripts/migrate_parquet_to_delta.py`, which the stage 7 `initial_load` absorbs anyway. **No linter
+enters the project**: `ruff` in the `dev` group and in the workflow was refused, so the style rules
+of `CLAUDE.md` stay checked by reading, and the line width stays what each file uses (100 in the
+package and in the script, wider in the probes and in the proofs of concept). A later session
+proposes none of the three again.
+
+On 2026-09-21 the user kept `duckdb-engine` and `sqlalchemy-redshift` as the compilers of
+`render` in stage 2, after the review measured the alternative (SQLAlchemy's own `postgresql`
+dialect with a fully quoted table copy compiles the same text, quotes every identifier and runs in
+DuckDB). Consequence recorded in `plan/PLAN.md`: the two packages leave the `dev` group and enter
+the runtime dependencies in the commit that writes `serialize_db.sql`, because the engines of
+stages 4 and 5 call `render` at run time; `prepare_offline.sh` runs again then.
+`plan/PLAN-STAGE-2.md`, `plan/PLAN.md`
+
+The same day the user accepted the recommendation that followed from keeping the dialects: the
+prefixed copy `render` compiles is built with `quoted_name(quote=True)` on the table name and on
+every column, so the DML quotes every contract identifier like the DDL of stage 1, with the
+`{prefix}` sentinel inside the quotes and no dependence on either dialect's reserved-word list;
+labels and the rest of the statement stay quoted as the dialect requires, because they are the
+client's. The rule of `plan/PLAN.md` stays as written. `plan/PLAN-STAGE-2.md`
+
+On 2026-09-22 the user put `sqlglot` in the tests: `sqlglot==30.18.0` (the version of the scratch
+trial of 2026-09-21) enters the `dev` group, and `test_redshift_text_parses_with_sqlglot` stops
+being optional; it parses the Redshift text of every statement with the prefix empty, since the
+versioned file with the sentinel does not parse. Stage 2 has no decision awaiting the user.
+`plan/PLAN-STAGE-2.md`, `pyproject.toml`

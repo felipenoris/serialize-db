@@ -1128,6 +1128,117 @@ fictícia, e o número de linhas por partição é o mesmo.
 
 A medição não muda a `sort_key` de `rel_contrato_operacao`, `data, sistema, contrato, operacao`
 (decisão do usuário de 2026-09-21): o prefixo dela é exatamente o contrato, a chave da consulta.
-Também não salva a chave estrangeira que `cad_contratos` declara para `rel_contrato_operacao`: com
-N operações por contrato, `(data, sistema, contrato)` continua não único no destino
-([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md), decisão pendente).
+Também não salva a chave estrangeira que `cad_contratos` declara para `rel_contrato_operacao` no
+modelo de referência: com N operações por contrato, `(data, sistema, contrato)` continua não único
+no destino, e a chave saiu do modelo cliente (decisão do usuário de 2026-09-21,
+[`PLAN-STAGE-1.md`](PLAN-STAGE-1.md)).
+
+## O que a revisão de código de 2026-09-21 mostrou
+
+A revisão do código existente contra os padrões do repositório (macOS, DuckDB 1.5.5, deltalake
+1.6.4, PyArrow 25.0.1) mediu duas coisas antes de corrigir.
+
+**O commit não precisa da tabela Delta reaberta.** `scripts/migrate_parquet_to_delta.py` reabria a
+`DeltaTable` depois de cada partição. A sonda criou uma tabela particionada e chamou
+`create_write_transaction` três vezes no mesmo objeto: o objeto ficou na versão 0 e com 0 arquivos
+em `file_uris()` do começo ao fim, enquanto o log no armazenamento passou por 1, 2 e 3 com um
+arquivo por commit. **Cada commit resolve a versão no log do armazenamento**, e não na versão que o
+objeto abriu; o objeto em memória não reflete os próprios commits. A reabertura por partição saiu,
+e os 16 casos de `tests/test_migrate_parquet_to_delta.py` continuam passando, com as versões
+`2` e `4` que o teste da retomada afirma. O que o objeto em memória guarda importa em
+`loaded_partitions`, que a carga lê uma vez antes do laço.
+
+**A refatoração de um probe é conferida pelo relatório dele.** `probes/parquet_source.py` rodou
+sobre a base fictícia de `tests/source_db_projetado.py` em pasta local (`--sample 5 --text-bytes`,
+758 linhas de relatório) antes e depois de `read_footer` e `text_lengths` perderem o aninhamento:
+as duas saídas são idênticas fora a data e o caminho do arquivo gravado. A base fictícia tem o que
+o relatório precisa exercitar: `INT96` sem estatística, partição Hive, a chave `pandas` em parte
+dos arquivos e colunas de texto não ASCII.
+
+As correções que as duas medições acompanharam estão em
+[`CURRENT_STATE.md`](CURRENT_STATE.md); nenhuma mudou o comportamento observável do pacote, e as
+suítes passaram nas duas configurações: sem variável, 160 passados e 81 pulados; com a raiz local,
+218 passados e 23 pulados.
+
+## O que o ensaio do SQLGlot mostrou
+
+Em 2026-09-21, numa venv avulsa no macOS arm64 (`uv run --no-project --python 3.13 --with sqlglot`),
+o SQLGlot 30.18.0 analisou pelo dialeto `redshift` o texto que a [etapa 2](PLAN-STAGE-2.md) gera. O
+pacote é Python puro: nenhum `.so`, 5,4 MB, nenhuma dependência além dele.
+
+| Texto | `sqlglot.parse_one(texto, dialect="redshift")` |
+| --- | --- |
+| O texto gerado, com o sentinela `{prefix}` | `ParseError` na coluna 26 |
+| O mesmo texto com o prefixo trocado | Aceita |
+| `WHERE data = :data_str` e `WHERE data = $data_str` | Aceita os dois marcadores |
+| `cad_contratos."to"` e `cad_lancamentos."timestamp"` | Aceita |
+| `WHERE area = 'TI`, a aspa desbalanceada | `TokenError` |
+| `t."taxa $base"`, o estrago da expressão sem as aspas duplas | Aceita |
+| `INSERT INTO destino BY NAME SELECT * FROM origem` | Aceita, e o Redshift não tem |
+| `list_aggregate(l, 'sum')` | Aceita, e o Redshift não tem |
+
+O teste opcional `test_redshift_text_parses_with_sqlglot` roda sobre o texto depois da troca do
+sentinela, porque o arquivo versionado não analisa. Ele pega string malformada, e não pega nem o
+identificador estragado que a decisão das aspas fechou nem construção que o Redshift não suporta, o
+que [`estrategia.md`](estrategia.md) já registrava da avaliação do SQLGlot como camada. Enquanto os
+statements forem portáveis, o texto do Redshift é igual ao do DuckDB, que a suíte executa: a lacuna
+nasce no primeiro statement cujos dois textos diferem. O usuário decidiu em 2026-09-22 incluí-lo
+desde já: `sqlglot==30.18.0` no grupo `dev`, e o teste deixa de ser opcional
+([`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).
+
+## O que a revisão da etapa 2 mostrou
+
+Em 2026-09-21, no macOS arm64 com SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift
+1.0.0 e DuckDB 1.5.5, a revisão do rascunho da [etapa 2](PLAN-STAGE-2.md) mediu três coisas.
+
+**Os três dialetos compilam o mesmo texto, fora a citação de `"timestamp"`.** O `SELECT` portável do
+rascunho, um `INSERT ... SELECT DISTINCT` e um `SELECT` sobre `cad_contratos."to"` e
+`cad_lancamentos."timestamp"` compilaram por `duckdb_engine.Dialect(paramstyle="named")`,
+`RedshiftDialect_redshift_connector(paramstyle="named")` e
+`sqlalchemy.dialects.postgresql.dialect(paramstyle="named")`: os dois primeiros statements saíram
+idênticos nos três; no terceiro, os três citam `"to"` e só o dialeto do Redshift cita
+`"timestamp"`, reservada só lá. Com `paramstyle="named"`, `LIKE 'TI:%'` sai com um `%` nos três.
+
+**O dialeto `postgresql` com uma cópia que cita todo nome gera todo identificador entre aspas.** A
+cópia da tabela com `quoted_name(f"{prefix}{nome}", quote=True)` e cada coluna como
+`sa.Column(quoted_name(nome, quote=True), tipo)`, trocada no statement por `replacement_traverse`,
+deu `SELECT "{prefix}cad_contas"."numero", sum("{prefix}cad_lancamentos"."valor") AS total FROM
+"{prefix}cad_lancamentos" JOIN ...`, `INSERT INTO "{prefix}cad_contas" ("id_conta", "numero") SELECT
+DISTINCT ...`, `CAST("{prefix}cad_lancamentos"."valor" AS NUMERIC(18, 2))` e
+`"{prefix}cad_contratos"."to", "{prefix}cad_lancamentos"."timestamp"`. O texto com
+`prefix="exec_42_"` e `:data_base_str` em `$data_base_str` rodou no DuckDB sobre
+`"exec_42_cad_lancamentos"` e `"exec_42_cad_contas"` criadas com o DDL citado da etapa 1 e devolveu
+`[('1.1', 150.0)]`, o resultado do rascunho; o statement original continuou sem prefixo e sem aspas.
+
+**O `bindparam` sem valor aparece em `compiled.binds` com `required=True`.** Sem `literal_binds`,
+`sa.bindparam("area")` compila com `binds == {"area": (None, True)}` (valor, `required`);
+`sa.bindparam("area", value="x")` com `("x", False)`; uma constante e um `in_` com lista entram com
+nomes anônimos e `required=False`; `param()`, um `literal_column`, não aparece. Com
+`literal_binds=True`, `binds` fica vazio nos cinco casos, o texto do primeiro sai `t.area = NULL` e
+um `SAWarning` avisa. A leitura de `binds` na compilação sem `literal_binds` substitui o
+`warnings.catch_warnings` do rascunho anterior: a documentação do módulo `warnings` diz que, com
+`context_aware_warnings` falso, o gerenciador modifica os atributos globais do módulo e não é
+seguro num programa concorrente, com threads ou corrotinas; o flag e a variável de contexto
+existem desde o Python 3.14, e o projeto roda 3.13.
+
+O rascunho da etapa 2 foi reescrito com essas leituras, na forma do módulo, e rodou de novo: o mesmo
+texto, o mesmo resultado no DuckDB e as mesmas recusas, mais a do sentinela restante, o alvo de um
+`INSERT ... SELECT` prefixado e as tabelas de `referenced_tables` lidas do statement e do texto.
+
+**A cópia prefixada com `quote=True` faz os dois dialetos citarem todo identificador do contrato.**
+Depois de o usuário manter `duckdb_engine.Dialect` e `RedshiftDialect_redshift_connector` como
+compiladores de `render` (2026-09-21), a mesma cópia — `quoted_name(f"{prefix}{nome}", quote=True)`
+no nome da tabela e `quoted_name(nome, quote=True)` em cada coluna — compilou pelos dois: o `SELECT`
+portável saiu idêntico nos dois dialetos, `SELECT "{prefix}cad_contas"."numero",
+sum("{prefix}cad_lancamentos"."valor") AS total FROM "{prefix}cad_lancamentos" JOIN ...`, e o das
+colunas reservadas saiu `"{prefix}cad_contratos"."to", "{prefix}cad_lancamentos"."timestamp"` nos
+dois, sem depender da lista de palavras reservadas de cada dialeto. O sentinela dentro das aspas
+continua legível por `\{prefix\}(\w+)`, que devolveu `cad_contas` e `cad_lancamentos` nos dois
+textos, e o texto com `prefix="exec_42_"` rodou no DuckDB sobre as tabelas do DDL citado da etapa 1
+e devolveu `[('1.1', 150.0)]`. Com `quote=False`, a forma do rascunho, o DML compilado cita só o
+que o dialeto reserva: `"to"` nos dois e `"timestamp"` só no Redshift.
+
+Com a decisão do usuário de 2026-09-21 pela cópia com `quote=True`, o rascunho da etapa 2 rodou de
+novo: o mesmo `[('1.1', 150.0)]`, as mesmas recusas, os dois textos iguais, e toda tabela e coluna
+do contrato entre aspas, o `INSERT ... SELECT` inclusive (`INSERT INTO "{prefix}cad_contas"
+("id_conta", "numero") ...`).

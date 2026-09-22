@@ -172,7 +172,8 @@ def test_delta_schema_json_matches_versioned_file() -> None:
         generated = json.loads(schema.delta_schema(table).to_json())
         assert json.loads(versioned) == generated, table.name
         assert files[f"{table.name}.delta.json"] == versioned, table.name
-    fields = {f["name"]: f for f in json.loads(schema.delta_schema(TUDO).to_json())["fields"]}
+    tudo_fields = json.loads(schema.delta_schema(TUDO).to_json())["fields"]
+    fields = {field["name"]: field for field in tudo_fields}
     assert fields["timestamp"]["type"] == "timestamp_ntz"
     assert fields["carimbo_utc"]["type"] == "timestamp"
     assert fields["valor"]["type"] == "decimal(18,2)"
@@ -224,8 +225,10 @@ def test_table_options_defaults_and_keys() -> None:
 
 def test_sql_type_per_dialect() -> None:
     """Cada tipo do contrato no texto de cada motor."""
-    duckdb_types = {c.name: schema.sql_type(c, "duckdb") for c in TUDO.columns}
-    redshift_types = {c.name: schema.sql_type(c, "redshift") for c in TUDO.columns}
+    duckdb_types = {column.name: schema.sql_type(column, "duckdb") for column in TUDO.columns}
+    redshift_types = {
+        column.name: schema.sql_type(column, "redshift") for column in TUDO.columns
+    }
     assert duckdb_types["valor"] == redshift_types["valor"] == "DECIMAL(18, 2)"
     assert duckdb_types["nome"] == redshift_types["nome"] == "VARCHAR(100)"
     assert duckdb_types["observacao"] == "VARCHAR"
@@ -386,7 +389,8 @@ def test_cast_keeps_doubles_of_the_reference_model() -> None:
 
 def test_check_models_finds_each_violation() -> None:
     """Uma tabela com cada defeito produz uma violação por defeito."""
-    problems = [p for p in schema.check_models(RuimBase.metadata) if p.startswith("ruim")]
+    found = schema.check_models(RuimBase.metadata)
+    problems = [problem for problem in found if problem.startswith("ruim")]
     assert problems == [
         "ruim.id: chave inteira com autoincrement; declare autoincrement=False",
         "ruim.nome: String sem comprimento; declare String(n) ou Text",
@@ -395,22 +399,24 @@ def test_check_models_finds_each_violation() -> None:
         "ruim.mes: coluna de partição fora de String(10)",
         "ruim: partition_by sem partition_source válido",
     ]
-    assert [p for p in schema.check_models(RuimBase.metadata) if p.startswith("tudo")] == []
+    assert [problem for problem in found if problem.startswith("tudo")] == []
 
 
 def test_check_models_lists_the_reference_model_defects() -> None:
     """O modelo de referência produz autoincrement, DEFERRABLE e String sem comprimento."""
     problems = schema.check_models(ReferenceBase.metadata)
     counts = {
-        "autoincrement": sum("chave inteira com autoincrement" in p for p in problems),
-        "deferrable": sum("chave estrangeira DEFERRABLE" in p for p in problems),
-        "string": sum("String sem comprimento" in p for p in problems),
+        "autoincrement": sum("chave inteira com autoincrement" in text for text in problems),
+        "deferrable": sum("chave estrangeira DEFERRABLE" in text for text in problems),
+        "string": sum("String sem comprimento" in text for text in problems),
     }
     tables = list(ReferenceBase.metadata.tables.values())
     columns = [column for table in tables for column in table.columns]
-    strings = [c for c in columns if type(c.type) is sa.String and not c.type.length]
-    foreign_keys = [fk for table in tables for fk in table.foreign_key_constraints]
-    deferrable = [fk for fk in foreign_keys if fk.deferrable]
+    strings = [
+        column for column in columns if type(column.type) is sa.String and not column.type.length
+    ]
+    foreign_keys = [key for table in tables for key in table.foreign_key_constraints]
+    deferrable = [key for key in foreign_keys if key.deferrable]
     assert counts == {
         "autoincrement": len(tables),
         "deferrable": len(deferrable),
@@ -418,7 +424,7 @@ def test_check_models_lists_the_reference_model_defects() -> None:
     }
     assert sum(counts.values()) == len(problems)
     # O comentário é opcional: o modelo sem comentário algum não produz violação por isso.
-    assert [p for p in problems if "comentário" in p] == []
+    assert [text for text in problems if "comentário" in text] == []
     assert (len(tables), len(foreign_keys), len(deferrable), len(strings)) == (12, 14, 12, 20)
 
 

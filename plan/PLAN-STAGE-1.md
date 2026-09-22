@@ -196,8 +196,8 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
   `JSON` como `DECIMAL(18,2)`, `TIMESTAMP WITH TIME ZONE`, `VARCHAR` e `JSON` (rascunho abaixo).
 - **`cast`** despacha por `isinstance` para `_cast_batch`, `_cast_table` e `_cast_reader`, e as três
   passam por `_contract_arrays`: `_contract_fields` seleciona as colunas do contrato presentes, na
-  ordem do contrato, e `_contract_column` trata coluna a coluna o que `safe=True` não acusa, numa
-  função por recusa: `_refuse_double_out_of_scale` (`double` numa coluna `Numeric` só quando
+  ordem do contrato, e `_contract_column` converte coluna a coluna, depois de
+  `_refuse_silent_losses` recusar o que `safe=True` não acusa, numa função por recusa: `_refuse_double_out_of_scale` (`double` numa coluna `Numeric` só quando
   `pc.round(x, escala)` devolve o valor igual), `_refuse_timestamp_with_time` (`timestamp` numa coluna
   `Date` só quando a ida e volta devolve o valor igual), `_refuse_nested_json` (`struct`, `list` e
   `map` numa coluna JSON), `_refuse_text_above_length` (texto acima de `String(n)` medido em bytes

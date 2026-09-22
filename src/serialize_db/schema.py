@@ -57,7 +57,7 @@ import dataclasses
 import difflib
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from typing import Literal
 
 import pyarrow as pa
@@ -104,6 +104,8 @@ _ARROW_TYPES: tuple[tuple[type, pa.DataType], ...] = (
 )
 
 # O nome de cada tipo sem parâmetro em cada motor; Numeric, String e DateTime saem de sql_type.
+# A ordem importa como em _ARROW_TYPES: sql_type devolve o primeiro tipo que casa por
+# isinstance, e BigInteger e SmallInteger derivam de Integer.
 _SQL_TYPES: dict[str, dict[type, str]] = {
     "duckdb": {
         sa.BigInteger: "BIGINT",
@@ -237,7 +239,7 @@ class TableOptions:
     modelo, mais ``keys["add"]``, menos ``keys["drop"]``."""
 
 
-def _column_names(columns) -> tuple[str, ...]:
+def _column_names(columns: Iterable[sa.Column]) -> tuple[str, ...]:
     """Os nomes de uma coleção de colunas, na ordem dela."""
     return tuple(column.name for column in columns)
 
@@ -259,11 +261,12 @@ def _declared_keys(table: sa.Table) -> list[tuple[str, ...]]:
 def _adjusted_keys(keys: list[tuple[str, ...]], info: dict) -> tuple[tuple[str, ...], ...]:
     """As chaves do modelo mais ``keys["add"]`` e menos ``keys["drop"]`` de ``Table.info``."""
     adjustments = info.get("keys", {})
+    declared = list(keys)
     for key in adjustments.get("add", []):
-        keys.append(tuple(key))
+        declared.append(tuple(key))
     dropped = [tuple(key) for key in adjustments.get("drop", [])]
     kept = []
-    for key in keys:
+    for key in declared:
         if key not in dropped:
             kept.append(key)
     return tuple(kept)
@@ -392,7 +395,9 @@ def ddl(table: sa.Table, dialect: Dialect, prefix: str = "") -> str:
 # ---------------------------------------------------------------- o cast por lote
 
 
-def _contract_fields(data: pa.Table | pa.RecordBatch, contract: pa.Schema, table: str) -> list:
+def _contract_fields(
+    data: pa.Table | pa.RecordBatch, contract: pa.Schema, table: str
+) -> list[pa.Field]:
     """Os campos do contrato presentes nos dados, na ordem do contrato; nenhum é erro."""
     present = []
     for field in contract:
@@ -403,7 +408,9 @@ def _contract_fields(data: pa.Table | pa.RecordBatch, contract: pa.Schema, table
     return present
 
 
-def _refuse_double_out_of_scale(column, field: pa.Field, table: str) -> None:
+def _refuse_double_out_of_scale(
+    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
+) -> None:
     """Um double numa coluna Numeric entra só quando ``pc.round`` o devolve igual."""
     rounded = pc.round(column, field.type.scale)
     # min_count=0: a tabela vazia de reader.schema.empty_table() passa; sem ele, pc.all dá nulo.
@@ -412,7 +419,9 @@ def _refuse_double_out_of_scale(column, field: pa.Field, table: str) -> None:
                             "arredonde no cliente antes de chamar")
 
 
-def _refuse_timestamp_with_time(column, field: pa.Field, table: str) -> None:
+def _refuse_timestamp_with_time(
+    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
+) -> None:
     """Um timestamp numa coluna Date entra só quando a ida e volta o devolve igual."""
     round_trip = column.cast(field.type).cast(column.type)
     if not pc.all(pc.equal(round_trip, column), min_count=0).as_py():
@@ -420,19 +429,21 @@ def _refuse_timestamp_with_time(column, field: pa.Field, table: str) -> None:
                             "trunque no cliente")
 
 
-def _refuse_nested_json(column, field: pa.Field, table: str) -> None:
+def _refuse_nested_json(column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str) -> None:
     """Um documento JSON chega serializado; struct, list e map são recusados."""
     if pa.types.is_nested(column.type):
         raise ContractError(f"{table}.{field.name}: documento JSON como {column.type}; "
                             "serialize com json.dumps antes de chamar")
 
 
-def _longest_text(column) -> int:
+def _longest_text(column: pa.Array | pa.ChunkedArray) -> int:
     """O maior valor da coluna em bytes; 0 numa coluna vazia ou só de nulos."""
     return pc.max(pc.binary_length(column)).as_py() or 0
 
 
-def _refuse_text_above_length(column, field: pa.Field, table: str, limit: int) -> None:
+def _refuse_text_above_length(
+    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str, limit: int
+) -> None:
     """Texto acima de String(n), medido em bytes como o VARCHAR(n) do Redshift."""
     longest = _longest_text(column)
     if longest > limit:
@@ -440,7 +451,9 @@ def _refuse_text_above_length(column, field: pa.Field, table: str, limit: int) -
                             f"String({limit}) em bytes; corte o valor ou aumente o comprimento")
 
 
-def _refuse_text_above_varchar(column, field: pa.Field, table: str) -> None:
+def _refuse_text_above_varchar(
+    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
+) -> None:
     """Texto acima do teto do VARCHAR do Redshift numa coluna Text, que não declara n."""
     longest = _longest_text(column)
     if longest > _TEXT_LIMIT:
@@ -448,24 +461,38 @@ def _refuse_text_above_varchar(column, field: pa.Field, table: str) -> None:
                             f"{_TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor")
 
 
-def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa.Table):
+def _refuse_silent_losses(
+    column: pa.Array | pa.ChunkedArray,
+    field: pa.Field,
+    kind: sa.types.TypeEngine,
+    table: str,
+) -> None:
+    """As perdas que ``cast(safe=True)`` não acusa, recusadas antes da conversão."""
+    if pa.types.is_floating(column.type) and pa.types.is_decimal(field.type):
+        _refuse_double_out_of_scale(column, field, table)
+    if pa.types.is_timestamp(column.type) and pa.types.is_date(field.type):
+        _refuse_timestamp_with_time(column, field, table)
+    if isinstance(kind, sa.JSON):
+        _refuse_nested_json(column, field, table)
+    if not pa.types.is_string(column.type):
+        return
+    # Text é subclasse de String e vem antes: o limite dela é o teto do VARCHAR do Redshift,
+    # qualquer que seja o comprimento declarado, porque sql_type ignora o comprimento de Text.
+    if isinstance(kind, sa.Text):
+        _refuse_text_above_varchar(column, field, table)
+    elif isinstance(kind, sa.String) and kind.length:
+        _refuse_text_above_length(column, field, table, kind.length)
+
+
+def _contract_column(
+    data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa.Table
+) -> pa.Array | pa.ChunkedArray:
     """A coluna dos dados no tipo do contrato; as perdas que ``safe=True`` não acusa vêm antes."""
     column = data.column(field.name)
-    kind = table.c[field.name].type
-    if pa.types.is_floating(column.type) and pa.types.is_decimal(field.type):
-        _refuse_double_out_of_scale(column, field, table.name)
+    _refuse_silent_losses(column, field, table.c[field.name].type, table.name)
     if pa.types.is_integer(column.type) and pa.types.is_decimal(field.type):
         # O cast direto de int64 para decimal128(p, s) pede precisão p + 3; o desvio é seguro.
         column = column.cast(pa.decimal128(field.type.precision + 3, field.type.scale))
-    if pa.types.is_timestamp(column.type) and pa.types.is_date(field.type):
-        _refuse_timestamp_with_time(column, field, table.name)
-    if isinstance(kind, sa.JSON):
-        _refuse_nested_json(column, field, table.name)
-    limit = getattr(kind, "length", None)
-    if isinstance(kind, sa.Text) and pa.types.is_string(column.type):
-        _refuse_text_above_varchar(column, field, table.name)
-    elif limit and pa.types.is_string(column.type):
-        _refuse_text_above_length(column, field, table.name, limit)
     try:
         # safe=True recusa escala perdida, nanossegundo não nulo e estouro.
         return column.cast(field.type, safe=True)
@@ -473,7 +500,9 @@ def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa
         raise ContractError(f"{table.name}.{field.name}: {error}") from None
 
 
-def _contract_arrays(data: pa.Table | pa.RecordBatch, table: sa.Table) -> tuple[list, pa.Schema]:
+def _contract_arrays(
+    data: pa.Table | pa.RecordBatch, table: sa.Table
+) -> tuple[list[pa.Array | pa.ChunkedArray], pa.Schema]:
     """As colunas do contrato presentes, convertidas, e o esquema delas."""
     contract = arrow_schema(table)
     fields = _contract_fields(data, contract, table.name)
@@ -633,6 +662,14 @@ def _delta_schema_json(table: sa.Table) -> str:
     return json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+def _versioned_text(path: str) -> str:
+    """O conteúdo do arquivo versionado, ou vazio quando ele não existe."""
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
 def schema_files(metadata: sa.MetaData) -> dict[str, str]:
     """Os arquivos de esquema de cada tabela, em memória: o conteúdo por nome de arquivo.
 
@@ -683,11 +720,7 @@ def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
     diff = []
     for name, content in sorted(schema_files(metadata).items()):
         path = os.path.join(directory, name)
-        versioned = ""
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as handle:
-                versioned = handle.read()
         diff.extend(difflib.unified_diff(
-            versioned.splitlines(), content.splitlines(),
+            _versioned_text(path).splitlines(), content.splitlines(),
             fromfile=path, tofile=f"{path} (gerado)", lineterm=""))
     return diff
