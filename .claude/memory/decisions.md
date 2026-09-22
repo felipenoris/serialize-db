@@ -263,6 +263,8 @@ the quoted sentinel parses, and the test parses the versioned file of every stat
 text with the prefix empty. Stage 2 has no decision awaiting the user. `plan/PLAN-STAGE-2.md`,
 `plan/POC.md`, `pyproject.toml`
 
+## The decisions of stage 4
+
 On 2026-09-22 the user took the four decisions of stage 4. The `loader` refuses a name already taken
 in the sandbox with `SandboxError`, instead of creating with `IF NOT EXISTS` and appending: a loop
 over partitions keeps one loader open. `memory_limit` stays at DuckDB's default, 80% of the machine,
@@ -279,7 +281,7 @@ also what the audit's keys outside the partition already needed — and `Sandbox
 exception in `serialize_db.errors`. Stage 4 has no decision awaiting the user.
 `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`
 
-## Stage 3, decided on 2026-09-22
+## The decisions of stage 3
 
 Four decisions, all before any code. `create_table` passes the table comment as the Delta
 `description`, and `reconcile` syncs the description and the column comments with the model through
