@@ -298,3 +298,17 @@ publication, instead of falling back to the set difference of `get_add_actions`:
 pins `delta.logRetentionDuration` at 3650 days, and the cleanup that would remove the file also
 makes the published version unreadable. Stage 3 has no decision awaiting the user.
 `plan/PLAN-STAGE-3.md`, `plan/POC.md`
+
+## The sandbox tables and the DDL flag of 2026-09-22
+
+On 2026-09-22 the user proposed, in `CLAUDE.md`, temporary tables to separate the pipeline's
+execution from the published data in the single Redshift schema, with prefixes for the
+environments, and reverted the sentence the same day after the analysis: the sandboxes stay with
+regular tables, `exec_<id>_*` in the datashare schema for Redshift and the models' names in the
+throwaway file database for DuckDB, as the plan already had. What weighed: a DuckDB temporary
+table belongs to the connection that created it while the engine gives a cursor per thread, stream
+and loader (probe of the same day); a Redshift temporary table lives in the session, which the
+serverless workgroup ends after 3,600 s idle, cannot be inspected from outside or after a failed
+audit, and gets `RAW` encoding by default. The user asked for
+`ddl(table, dialect, prefix="", temporary=False)` all the same, with `temporary=True` emitting
+`CREATE TEMP TABLE` and no use inside the plan. `plan/PLAN-STAGE-1.md`, `plan/POC.md`

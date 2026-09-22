@@ -64,3 +64,11 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `Parser Error: Unknown unit for memory`, `'4.5GiB'` passes. The default is 80% of the memory
   DuckDB detects (14.3 GiB where `os.sysconf` reads 18.0 GiB; 6.1 GiB of the target's 7.6 GiB), so a
   fraction of the machine is Python's arithmetic (2026-09-22). `plan/duckdb.md`
+- A `CREATE TEMP TABLE` belongs to the connection that created it: `con.cursor()` is a new
+  connection and gets `Catalog Error` on it, a second `connect(path)` in the same process cannot
+  see it either, and the same connection object used from another thread can; `duckdb_tables()`
+  lists it under catalog `temp`, schema `main`, `temporary` true, only in that connection
+  (2026-09-22, DuckDB 1.5.5; the docs: session scoped, only the creating connection, in memory
+  with spill to `temp_directory`). The engine gives a cursor per thread, stream and loader, so the
+  sandboxes stay with regular tables; `schema.ddl(..., temporary=True)` exists at the user's
+  request and the plan does not use it. `plan/POC.md`, `plan/PLAN-STAGE-1.md`

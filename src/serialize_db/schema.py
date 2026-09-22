@@ -385,13 +385,15 @@ def _redshift_options(options: TableOptions) -> str:
     return " " + " ".join(clauses) if clauses else ""
 
 
-def ddl(table: sa.Table, dialect: Dialect, prefix: str = "") -> str:
+def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", temporary: bool = False) -> str:
     """O ``CREATE TABLE`` da tabela no motor, gerado como texto.
 
     Colunas, tipos e ``NOT NULL``, todo identificador entre aspas; ``DISTSTYLE``, ``DISTKEY`` e
     ``SORTKEY`` no Redshift, de ``table_options``. Sem chave, ``DEFERRABLE``, ``Identity``,
     ``CHECK``, ``DEFAULT`` nem comentário: as chaves são da auditoria, e o comentário vai no
-    esquema Delta. ``prefix`` renomeia a tabela para o sandbox, dentro das aspas.
+    esquema Delta. ``prefix`` renomeia a tabela para o sandbox, dentro das aspas, e ``temporary``
+    emite ``CREATE TEMP TABLE``, a tabela que dura a sessão: no DuckDB só a conexão que a criou a
+    vê, e um ``cursor()`` é outra conexão.
 
     Exemplo:
 
@@ -406,7 +408,8 @@ def ddl(table: sa.Table, dialect: Dialect, prefix: str = "") -> str:
     lines = []
     for column in table.columns:
         lines.append("    " + column_ddl(column, dialect))
-    text = f"CREATE TABLE {quoted(prefix + table.name)} (\n" + ",\n".join(lines) + "\n)"
+    keyword = "CREATE TEMP TABLE" if temporary else "CREATE TABLE"
+    text = f"{keyword} {quoted(prefix + table.name)} (\n" + ",\n".join(lines) + "\n)"
     if dialect == "redshift":
         text += _redshift_options(table_options(table))
     return text

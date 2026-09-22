@@ -153,7 +153,9 @@ As colunas são as mesmas nos dois motores; o `Double` é `DOUBLE` no DuckDB e `
 Redshift, e a `sort_key` vira `SORTKEY` só no Redshift. O `CREATE TABLE` leva colunas, tipos e
 `NOT NULL`; as chaves ficam para a auditoria, e o comentário de cada coluna vai no esquema Delta.
 `serialize_db.schema.sql_type` dá o nome de um tipo num motor, para um `CAST` ou um `ALTER TABLE`,
-e `serialize_db.schema.quoted` cita um identificador.
+e `serialize_db.schema.quoted` cita um identificador. `temporary=True` faz `ddl` emitir
+`CREATE TEMP TABLE`, a tabela que dura a sessão: no DuckDB só a conexão que a criou a vê, e um
+`cursor()` é outra conexão.
 
 ### Converter um lote de dados
 

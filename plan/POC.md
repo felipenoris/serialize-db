@@ -1387,3 +1387,29 @@ e texto, pela decisão da [etapa 3](PLAN-STAGE-3.md) do mesmo dia, com `stat_con
 conversão e `tests/test_migrate_parquet_to_delta.py::test_registered_stats_carry_the_four_exact_types`
 conferindo os valores contra o arquivo; a coluna `meta` de `cad_lancamentos`, sempre nula na base de
 origem, fica sem extremos.
+
+## O que a sonda das tabelas temporárias do DuckDB mostrou
+
+Em 2026-09-22, no macOS (DuckDB 1.5.5), uma sonda criou `CREATE TEMP TABLE temporaria` e
+`CREATE TABLE comum` num banco em arquivo e leu as duas de quatro lugares. A conexão raiz lê as
+duas; um `cursor()` da mesma conexão lê `comum` e recebe `Catalog Error: Table with name
+temporaria does not exist!` na temporária, e uma temporária criada nesse cursor é invisível à
+raiz; um segundo `duckdb.connect` ao mesmo arquivo, no mesmo processo, lê `comum` e não lê a
+temporária; a conexão raiz usada de outra thread lê a temporária. `duckdb_tables()` lista a
+temporária no catálogo `temp`, esquema `main`, com `temporary` verdadeiro, só na conexão que a
+criou. A documentação diz o mesmo: "Temporary tables are session scoped, meaning that only the
+specific connection that created them can access them", e elas "reside in memory rather than on
+disk even when connecting to a persistent DuckDB", com transbordo para `temp_directory`. No
+`redshift_connector` 2.1.16, `Cursor.execute` delega a `Connection.execute` (leitura do código):
+os cursores de uma conexão são a mesma sessão, e uma temporária criada num deles vale para os
+outros.
+
+**Consequência**: o sandbox dos dois motores fica de tabelas comuns, como o plano previa. No
+DuckDB, o motor da [etapa 4](PLAN-STAGE-4.md) dá um `cursor()` a cada thread, a cada `stream` e a
+cada `loader`, e uma temporária de um cursor não alcança os outros; no Redshift, o usuário
+reverteu em 2026-09-22 a frase do `CLAUDE.md` que propunha temporárias para separar a execução
+dos dados publicados, e as tabelas `exec_<id>_*` continuam no esquema do datashare
+([etapa 5](PLAN-STAGE-5.md)). `ddl` ganhou `temporary=True`, que emite `CREATE TEMP TABLE` nos
+dois dialetos, a pedido do usuário do mesmo dia e sem uso no plano;
+`tests/test_schema.py::test_ddl_temporary_table` afirma a leitura: a tabela nasce no catálogo
+`temp`, e o `cursor()` não a vê.

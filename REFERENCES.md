@@ -307,6 +307,7 @@ Documentação:
 - <https://duckdb.org/docs/current/data/multiple_files/overview.html>
 - <https://duckdb.org/docs/current/sql/statements/insert.html>
 - <https://duckdb.org/docs/current/sql/statements/create_table.html>
+- <https://duckdb.org/docs/lts/sql/statements/create_table>
 - <https://duckdb.org/docs/current/guides/performance/file_formats.html>
 - <https://duckdb.org/docs/current/guides/performance/indexing.html>
 - <https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads.html>

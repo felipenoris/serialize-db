@@ -297,6 +297,26 @@ def test_ddl_prefix_inside_the_quotes() -> None:
         "{prefix}tudo",)
 
 
+def test_ddl_temporary_table() -> None:
+    """`temporary=True` emite `CREATE TEMP TABLE` nos dois dialetos, com o resto do texto igual; no
+    DuckDB a tabela nasce no catálogo `temp` da conexão, e um `cursor()` da mesma conexão não a vê."""
+    for dialect in ("duckdb", "redshift"):
+        temporary = schema.ddl(TUDO, dialect, prefix="exec_42_", temporary=True)
+        assert temporary.startswith('CREATE TEMP TABLE "exec_42_tudo" (')
+        permanent = schema.ddl(TUDO, dialect, prefix="exec_42_")
+        assert temporary.replace("CREATE TEMP TABLE", "CREATE TABLE", 1) == permanent
+    connection = duckdb.connect()
+    connection.execute(schema.ddl(TUDO, "duckdb", temporary=True))
+    listed = connection.execute(
+        "SELECT database_name, temporary FROM duckdb_tables() WHERE table_name = 'tudo'"
+    ).fetchall()
+    assert listed == [("temp", True)]
+    # A tabela temporária é da conexão que a criou (leitura de 2026-09-22): o cursor() é outra
+    # conexão, e é por isso que o sandbox do motor DuckDB fica de tabelas comuns.
+    with pytest.raises(duckdb.CatalogException):
+        connection.cursor().execute("SELECT count(*) FROM tudo")
+
+
 # ---------------------------------------------------------------- o cast por lote
 
 ACCEPTED_BATCH = pa.RecordBatch.from_pydict({
