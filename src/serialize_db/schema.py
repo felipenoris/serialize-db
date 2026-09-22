@@ -14,6 +14,8 @@ reservadas dos motores.
 
 Exemplo, com um modelo mínimo:
 
+.. code-block:: python
+
     from datetime import date
 
     import pyarrow as pa
@@ -148,6 +150,8 @@ def arrow_type(column: sa.Column) -> pa.DataType:
 
     Exemplo:
 
+    .. code-block:: python
+
         arrow_type(Operacao.__table__.c.id_operacao)   # int64
         arrow_type(Operacao.__table__.c.data)          # date32[day]
     """
@@ -181,6 +185,8 @@ def arrow_schema(table: sa.Table) -> pa.Schema:
 
     Exemplo:
 
+    .. code-block:: python
+
         schema = arrow_schema(Operacao.__table__)
         schema.field("id_operacao").nullable        # False
         schema.field("valor").metadata[b"comment"]  # b"Valor"
@@ -202,6 +208,8 @@ def delta_schema(table: sa.Table) -> DeltaSchema:
 
     Exemplo:
 
+    .. code-block:: python
+
         delta_schema(Operacao.__table__).to_json()   # {"type": "struct", "fields": [...]}
     """
     fields = []
@@ -220,6 +228,8 @@ class TableOptions:
     """O que ``Table.info["serialize_db"]`` declara para uma tabela, com os padrões da biblioteca.
 
     Exemplo:
+
+    .. code-block:: python
 
         options = table_options(Operacao.__table__)
         options.partition_by, options.partition_source   # ("data_str", "data")
@@ -281,6 +291,8 @@ def table_options(table: sa.Table) -> TableOptions:
 
     Exemplo:
 
+    .. code-block:: python
+
         table_options(Operacao.__table__).sort_key   # ("data", "id_operacao")
     """
     info = table.info.get("serialize_db", {})
@@ -312,6 +324,8 @@ def sql_type(column: sa.Column, dialect: Dialect) -> str:
 
     Exemplo:
 
+    .. code-block:: python
+
         sql_type(Operacao.__table__.c.valor, "redshift")   # "DOUBLE PRECISION"
     """
     kind = column.type
@@ -336,6 +350,8 @@ def quoted(name: str) -> str:
 
     Exemplo:
 
+    .. code-block:: python
+
         quoted("to")   # '"to"'
     """
     return f'"{name}"'
@@ -345,6 +361,8 @@ def column_ddl(column: sa.Column, dialect: Dialect) -> str:
     """A linha da coluna no ``CREATE TABLE``: nome entre aspas, tipo e ``NOT NULL``.
 
     Exemplo:
+
+    .. code-block:: python
 
         column_ddl(Operacao.__table__.c.id_operacao, "duckdb")   # '"id_operacao" BIGINT NOT NULL'
     """
@@ -376,6 +394,8 @@ def ddl(table: sa.Table, dialect: Dialect, prefix: str = "") -> str:
     esquema Delta. ``prefix`` renomeia a tabela para o sandbox, dentro das aspas.
 
     Exemplo:
+
+    .. code-block:: python
 
         print(ddl(Operacao.__table__, "redshift", prefix="exec_42_"))
         # CREATE TABLE "exec_42_cad_operacoes" (
@@ -559,6 +579,8 @@ def cast(
 
     Exemplo:
 
+    .. code-block:: python
+
         batch = pa.RecordBatch.from_pydict({"valor": [10.5], "id_operacao": [1],
                                             "data": [date(2026, 8, 31)],
                                             "data_str": ["2026-08-31"], "extra": [0]})
@@ -637,6 +659,8 @@ def check_models(metadata: sa.MetaData) -> list[str]:
 
     Exemplo:
 
+    .. code-block:: python
+
         assert check_models(Base.metadata) == []
     """
     problems = []
@@ -680,6 +704,8 @@ def schema_files(metadata: sa.MetaData) -> dict[str, str]:
 
     Exemplo:
 
+    .. code-block:: python
+
         sorted(schema_files(Base.metadata))
         # ["cad_operacoes.delta.json", "cad_operacoes.duckdb.sql", "cad_operacoes.redshift.sql"]
     """
@@ -695,6 +721,8 @@ def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
     """Grava ``schema_files`` em ``directory``, criada se preciso, e devolve os caminhos gravados.
 
     Exemplo:
+
+    .. code-block:: python
 
         write_schema_files(Base.metadata, "schema")   # ["schema/cad_operacoes.delta.json", ...]
     """
@@ -714,6 +742,8 @@ def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
     Vazio quando nada mudou; um arquivo ausente aparece inteiro como acrescentado. Nada é gravado.
 
     Exemplo:
+
+    .. code-block:: python
 
         check_schema_files(Base.metadata, "schema")   # [] quando os arquivos estão atualizados
     """

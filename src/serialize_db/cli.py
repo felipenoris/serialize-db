@@ -10,6 +10,8 @@ cliente, e os statements por ``--statements modulo:atributo``, o caminho import√
 
 Exemplo:
 
+.. code-block:: shell
+
     serialize-db schema write --metadata pipeline.models:Base.metadata schema/
     serialize-db schema check --metadata pipeline.models:Base.metadata schema/
     serialize-db sql write --metadata pipeline.models:Base.metadata --statements pipeline.queries:STATEMENTS sql/
@@ -36,6 +38,8 @@ def _resolve_attribute(spec: str) -> object:
     """O objeto de ``modulo:atributo``: importa o m√≥dulo e segue os atributos por ponto.
 
     Exemplo:
+
+    .. code-block:: python
 
         _resolve_attribute("pipeline.models:Base.metadata")
     """

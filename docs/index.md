@@ -37,7 +37,7 @@ são as etapas seguintes do plano, na pasta `plan/` do repositório.
 
 No repositório, o `uv` instala o Python 3.13, o pacote e as dependências:
 
-```
+```shell
 uv sync --group dev
 ```
 
@@ -190,7 +190,7 @@ quando `round` o devolve igual; numa coluna `Double` ele entra como chega.
 `CREATE TABLE` de cada motor. O pipeline versiona esses arquivos no seu repositório, e o diff contra
 a geração nova mostra o que uma mudança de modelo altera em cada motor:
 
-```
+```shell
 serialize-db schema write --metadata pipeline.models:Base.metadata schema/
 serialize-db schema check --metadata pipeline.models:Base.metadata schema/
 ```
@@ -247,7 +247,7 @@ O pipeline versiona o texto gerado, um arquivo por statement e por motor, e o di
 geração nova mostra o que uma mudança de modelo ou de statement altera em cada motor;
 `--statements` recebe o caminho importável do dicionário `{nome: statement}`:
 
-```
+```shell
 serialize-db sql write --metadata pipeline.models:Base.metadata --statements pipeline.queries:STATEMENTS sql/
 serialize-db sql check --metadata pipeline.models:Base.metadata --statements pipeline.queries:STATEMENTS sql/
 ```

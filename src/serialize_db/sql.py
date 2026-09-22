@@ -16,6 +16,8 @@ o texto. Toda tabela e toda coluna do contrato saem entre aspas duplas, como no 
 
 Exemplo, com duas tabelas do contrato:
 
+.. code-block:: python
+
     import duckdb
     import sqlalchemy as sa
 
@@ -103,6 +105,8 @@ def param(name: str, type_: sa.types.TypeEngine | None = None) -> sa.ColumnEleme
 
     Exemplo:
 
+    .. code-block:: python
+
         entries.c.data_base_str == param("data_base_str", sa.String(10))
         # ... "data_base_str" = :data_base_str
     """
@@ -135,6 +139,8 @@ def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
     ``INSERT`` e as tabelas de uma subconsulta inclusive.
 
     Exemplo:
+
+    .. code-block:: python
 
         str(prefixed(sa.select(accounts.c.numero), metadata, "exec_42_"))
         # SELECT "exec_42_cad_contas"."numero" FROM "exec_42_cad_contas"
@@ -179,6 +185,8 @@ def render(statement: sa.sql.ClauseElement, dialect: Dialect, metadata: sa.MetaD
 
     Exemplo:
 
+    .. code-block:: python
+
         render(statement, "redshift", metadata, prefix="exec_42_")
         # SELECT "exec_42_cad_contas"."numero", ... WHERE ... = :data_base_str ...
     """
@@ -216,6 +224,8 @@ def bind(sql: str, params: dict[str, object], style: Dialect) -> tuple[str, dict
 
     Exemplo:
 
+    .. code-block:: python
+
         bind('SELECT 1 WHERE "data_str" = :data_str', {"data_str": "2026-08-31"}, "duckdb")
         # ('SELECT 1 WHERE "data_str" = $data_str', {'data_str': '2026-08-31'})
     """
@@ -244,6 +254,8 @@ def referenced_tables(statement_or_sql: sa.sql.ClauseElement | str) -> set[str]:
     o sentinela ``{prefix}``. O log da execução as registra por comando.
 
     Exemplo:
+
+    .. code-block:: python
 
         referenced_tables(statement)                            # {"cad_contas", "cad_lancamentos"}
         referenced_tables(render(statement, "duckdb", metadata))   # o mesmo conjunto
@@ -278,6 +290,8 @@ def sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData
 
     Exemplo:
 
+    .. code-block:: python
+
         sorted(sql_files({"total_por_conta": statement}, metadata))
         # ["total_por_conta.duckdb.sql", "total_por_conta.redshift.sql"]
     """
@@ -293,6 +307,8 @@ def write_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
     """Grava ``sql_files`` em ``directory``, criada se preciso, e devolve os caminhos gravados.
 
     Exemplo:
+
+    .. code-block:: python
 
         write_sql_files({"total_por_conta": statement}, metadata, "sql")
         # ["sql/total_por_conta.duckdb.sql", "sql/total_por_conta.redshift.sql"]
@@ -315,6 +331,8 @@ def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
 
     Exemplo:
 
+    .. code-block:: python
+
         check_sql_files({"total_por_conta": statement}, metadata, "sql")   # [] quando atualizados
     """
     diff = []
@@ -334,6 +352,8 @@ def read_sql(directory: str, name: str, dialect: Dialect, prefix: str) -> str:
     Nenhuma outra primitiva preenche o sentinela.
 
     Exemplo:
+
+    .. code-block:: python
 
         read_sql("sql", "total_por_conta", "duckdb", prefix="exec_42_")
         # SELECT "exec_42_cad_contas"."numero", ...
