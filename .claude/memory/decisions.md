@@ -239,3 +239,11 @@ enters the project**: `ruff` in the `dev` group and in the workflow was refused,
 of `CLAUDE.md` stay checked by reading, and the line width stays what each file uses (100 in the
 package and in the script, wider in the probes and in the proofs of concept). A later session
 proposes none of the three again.
+
+On 2026-09-21 the user kept `duckdb-engine` and `sqlalchemy-redshift` as the compilers of
+`render` in stage 2, after the review measured the alternative (SQLAlchemy's own `postgresql`
+dialect with a fully quoted table copy compiles the same text, quotes every identifier and runs in
+DuckDB). Consequence recorded in `plan/PLAN.md`: the two packages leave the `dev` group and enter
+the runtime dependencies in the commit that writes `serialize_db.sql`, because the engines of
+stages 4 and 5 call `render` at run time; `prepare_offline.sh` runs again then.
+`plan/PLAN-STAGE-2.md`, `plan/PLAN.md`

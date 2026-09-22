@@ -1223,3 +1223,16 @@ existem desde o Python 3.14, e o projeto roda 3.13.
 O rascunho da etapa 2 foi reescrito com essas leituras, na forma do módulo, e rodou de novo: o mesmo
 texto, o mesmo resultado no DuckDB e as mesmas recusas, mais a do sentinela restante, o alvo de um
 `INSERT ... SELECT` prefixado e as tabelas de `referenced_tables` lidas do statement e do texto.
+
+**A cópia prefixada com `quote=True` faz os dois dialetos citarem todo identificador do contrato.**
+Depois de o usuário manter `duckdb_engine.Dialect` e `RedshiftDialect_redshift_connector` como
+compiladores de `render` (2026-09-21), a mesma cópia — `quoted_name(f"{prefix}{nome}", quote=True)`
+no nome da tabela e `quoted_name(nome, quote=True)` em cada coluna — compilou pelos dois: o `SELECT`
+portável saiu idêntico nos dois dialetos, `SELECT "{prefix}cad_contas"."numero",
+sum("{prefix}cad_lancamentos"."valor") AS total FROM "{prefix}cad_lancamentos" JOIN ...`, e o das
+colunas reservadas saiu `"{prefix}cad_contratos"."to", "{prefix}cad_lancamentos"."timestamp"` nos
+dois, sem depender da lista de palavras reservadas de cada dialeto. O sentinela dentro das aspas
+continua legível por `\{prefix\}(\w+)`, que devolveu `cad_contas` e `cad_lancamentos` nos dois
+textos, e o texto com `prefix="exec_42_"` rodou no DuckDB sobre as tabelas do DDL citado da etapa 1
+e devolveu `[('1.1', 150.0)]`. Com `quote=False`, a forma do rascunho, o DML compilado cita só o
+que o dialeto reserva: `"to"` nos dois e `"timestamp"` só no Redshift.

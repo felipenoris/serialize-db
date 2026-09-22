@@ -83,7 +83,13 @@ localmente só para rodar sozinho.
   `warnings.catch_warnings`, que troca o filtro de avisos do processo inteiro: a documentação do
   módulo `warnings` o declara inseguro num programa com threads abaixo do Python 3.14, e o projeto
   roda 3.13 com os motores das etapas [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md) chamando `render`
-  em threads ([`POC.md`](POC.md)).
+  em threads ([`POC.md`](POC.md)). Os dialetos são `duckdb_engine.Dialect` e
+  `RedshiftDialect_redshift_connector` (decisão do usuário de 2026-09-21): como os motores chamam
+  `render` em tempo de execução, `duckdb-engine` e `sqlalchemy-redshift` saem do grupo `dev` e
+  entram nas dependências de execução de `pyproject.toml` no commit que escrever o módulo, com
+  `prepare_offline.sh` rodado de novo. A alternativa medida em 2026-09-21 — o dialeto `postgresql`
+  do próprio SQLAlchemy, que compila o mesmo texto fora a citação de `"timestamp"`
+  ([`POC.md`](POC.md)) — fica registrada e não adotada.
 - **`bind`** recusa um texto que ainda traga o sentinela `{prefix}`, porque sem a troca ele chegaria
   ao motor como erro de sintaxe (decisão do usuário de 2026-09-21; `read_sql` o preenche). Depois
   lê os nomes dos marcadores com `_placeholders`, que percorre o texto com uma expressão que
@@ -410,30 +416,19 @@ prefix='exec_42_': FROM exec_42_cad_lancamentos JOIN exec_42_cad_contas ON exec_
 
 ## Decisões pendentes
 
-- **[decisão] O compilador de `render`.** O rascunho compila pelos dialetos de terceiros,
-  `duckdb_engine.Dialect` e `RedshiftDialect_redshift_connector`, e os motores das etapas
-  [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md) chamam `render` em tempo de execução: com esse desenho,
-  `duckdb-engine` e `sqlalchemy-redshift` saem do grupo `dev` e entram nas dependências de execução
-  do pacote, o que [`PLAN.md`](PLAN.md) deixou para esta etapa decidir. A medição de 2026-09-21
-  ([`POC.md`](POC.md)) compara os dois com o dialeto `postgresql` do próprio SQLAlchemy: o texto dos
-  três é idêntico para o `SELECT` portável, o `INSERT ... SELECT` e o `CAST`, e a única diferença é a
-  citação de `"timestamp"`, que só o dialeto do Redshift faz, por ser reservada só lá (`"to"` os
-  três citam). Com uma cópia da tabela que cita todo nome (`quoted_name(..., quote=True)` no nome
-  prefixado e em cada coluna), o dialeto `postgresql` gera todo identificador entre aspas — a regra
-  de [`PLAN.md`](PLAN.md) que o DDL da etapa 1 já cumpre, com o sentinela dentro das aspas
-  (`"{prefix}cad_contas"."numero"`) como no DDL —, e o texto roda no DuckDB sobre as tabelas criadas
-  pelo DDL citado. Adotado, o desenho muda: `render` e `read_sql` perdem `dialect`, porque um só
-  compilador produz um só texto, e `sql_files` grava um `<nome>.sql` por statement; `Dialect` fica
-  para o `style` de `bind`; os dois dialetos ficam no grupo `dev`, fora do pacote; na etapa 4,
-  `@compiles(json_valid, "redshift")` perde o dialeto por que despachar, e a auditoria escolhe
-  `json_valid` ou `is_valid_json`, `strftime` ou `to_char`, ao montar cada `Check` pelo `dialect`
-  que `audit_sql` já recebe, o que também tira um decorador próprio do código; `audit_files`
-  continua com um arquivo por dialeto, porque ali os statements diferem; e o gatilho do `sqlglot`
-  passa a ser o primeiro texto escrito só para o Redshift. Recomendado: adotar, porque cumpre a
-  regra dos identificadores, dispensa dois pacotes de terceiros em tempo de execução (um deles,
-  `duckdb-engine`, sem lançamento desde 2025-03-29) e fecha a decisão de [`PLAN.md`](PLAN.md) pelo
-  ramo que ele prefere. Recusado, o rascunho vale como está e `pyproject.toml` move os dois
-  dialetos para as dependências de execução.
+- **[decisão] As aspas nos identificadores do DML.** [`PLAN.md`](PLAN.md) manda citar todo
+  identificador que a biblioteca emite, e o DDL da etapa 1 cumpre. O rascunho compila o DML com a
+  cópia prefixada em `quote=False`, e o texto cita só o que cada dialeto reserva (`"to"` nos
+  dois, `"timestamp"` só no Redshift). A medição de 2026-09-21 ([`POC.md`](POC.md)) mostrou que a
+  cópia com `quote=True` no nome prefixado e em cada coluna faz os dois dialetos citarem toda
+  tabela e coluna do contrato, com o sentinela dentro das aspas como no DDL
+  (`"{prefix}cad_contas"."numero"`), ainda legível por `referenced_tables`, e o texto roda no
+  DuckDB sobre o DDL citado. Os rótulos e o resto do statement continuam citados como o dialeto
+  exige, porque são do cliente. Recomendado: `quote=True`, a regra como está, um só flag no
+  rascunho e o DML alinhado ao DDL sem depender da lista reservada de nenhum dialeto. A
+  alternativa é restringir a regra de [`PLAN.md`](PLAN.md) ao texto que a biblioteca gera por
+  conta própria, com o DML citando o que o dialeto reserva, o que as medições cobrem para `to` e
+  `timestamp`.
 - **[decisão] O `sqlglot` no grupo `dev`** para o teste opcional que analisa o texto do Redshift. O
   ensaio em venv avulsa que a regra de dependências exige rodou em 2026-09-21 ([`POC.md`](POC.md)):
   o SQLGlot 30.18.0 é Python puro, 5,4 MB e sem dependências; recusa uma aspa desbalanceada; aceita
