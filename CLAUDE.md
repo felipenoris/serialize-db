@@ -22,7 +22,7 @@ The main goal is to build a library that takes as input a database stored as a s
 
 - Data will be published to Redshift for clients.
 
-- The project has access to a single Redshift schema. Temp tables could be used to separate production data from pipeline execution. Prefixes to table names could be used to separate environments (development/production).
+- The project has access to a single Redshift schema. A prefix on table names could implement a namespace that separates production, development and pipeline execution.
 
 - Parquet, DuckDB and Redshift are columnar, with little emphasis on table constraints:
 
