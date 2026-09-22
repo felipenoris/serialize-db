@@ -1440,8 +1440,15 @@ cliente faz fora e dentro da biblioteca:
 - **`render` com `bindparam`.** `replacement_traverse` trocando cada `BindParameter` com
   `required=True` por `literal_column(":nome", type_)` antes de compilar com `literal_binds` deu
   `... WHERE cad_contas.id_conta = :id AND cad_contas.nome LIKE 'C%'`, com o statement original
-  intacto (`:id` e `:nome_1` na compilação normal). É a proposta pendente da
-  [etapa 2](PLAN-STAGE-2.md).
+  intacto (`:id` e `:nome_1` na compilação normal). É a implementação de `render` desde
+  2026-09-22 (decisão do usuário, [etapa 2](PLAN-STAGE-2.md)), e a sonda da implementação leu
+  cada forma de `bindparam`: sem valor, `:nome`; com valor, constante; o mesmo `bindparam` duas
+  vezes, `:nome` nas duas; `text("data_str = :mes")`, `:mes`; `in_` com lista, constantes;
+  `bindparam("area", value=None)`, `NULL` com o `SAWarning`, porque o valor foi dado;
+  `bindparam("Data Base")`, `:Data Base`, que `render` recusa como nome inválido. Os oito
+  arquivos de `tests/client_model/sql/` saíram iguais com `sa.bindparam` no lugar de `param`, em
+  duas gerações, e o statement de teste rodou num `create_engine("duckdb:///:memory:")` com o
+  dicionário de parâmetros.
 - **`create_all` do modelo cliente no DuckDB.** `Base.metadata.create_all(connection)` falhou em
   `rel_contrato_operacao`: `Binder Error: Failed to create foreign key: referenced table
   "cad_operacoes" does not have a primary key or unique constraint on the columns
@@ -1457,4 +1464,6 @@ cliente faz fora e dentro da biblioteca:
 [5](PLAN-STAGE-5.md) é o statement Core compilado pela cópia prefixada com os parâmetros do
 cliente, e o texto SQL versionado é a opção de migração para fora do SQLAlchemy (decisão do
 usuário de 2026-09-22); o requisito que a acompanha, um modelo e um statement que um
-`sqlalchemy.Connection` criado fora da biblioteca aceite, tem os dois itens pendentes acima.
+`sqlalchemy.Connection` criado fora da biblioteca aceite, fechou o primeiro item em 2026-09-22
+(decisão do usuário: `render` troca o `bindparam` sem valor por `:nome`, e `param` saiu do
+módulo) e tem o segundo pendente.

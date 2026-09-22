@@ -5,7 +5,8 @@ em literais, duas tabelas do contrato), sobre os quatro statements do pipeline f
 ``tests/client_model/statements.py``, com os arquivos versionados em ``tests/client_model/sql/``,
 e sobre uma tabela cujos identificadores carregam ``:`` e ``'``. Nada é gravado, exceto o teste
 marcado ``local``, que grava os arquivos de texto SQL sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; o
-texto executa num DuckDB em memória sobre o DDL da etapa 1.
+texto executa num DuckDB em memória sobre o DDL da etapa 1, e o statement com ``bindparam`` num
+``sqlalchemy.Connection`` do ``duckdb-engine`` criado fora da biblioteca.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ ACCOUNTS = sa.Table(
 TOTAL_BY_ACCOUNT = (
     sa.select(ACCOUNTS.c.numero, sa.func.sum(ENTRIES.c.valor).label("total"))
     .join_from(ENTRIES, ACCOUNTS, ENTRIES.c.id_conta == ACCOUNTS.c.id_conta)
-    .where(ENTRIES.c.data_base_str == sql.param("data_base_str", sa.String(10)),
+    .where(ENTRIES.c.data_base_str == sa.bindparam("data_base_str", type_=sa.String(10)),
            ENTRIES.c.area.like("TI:%"), ACCOUNTS.c.numero != "1:2")
     .group_by(ACCOUNTS.c.numero)
     .order_by(ACCOUNTS.c.numero)
@@ -134,16 +135,42 @@ def test_rendered_text_runs_in_duckdb(prefix: str) -> None:
     assert vehicles == [(5, "veículo 5")]
 
 
-def test_render_refuses_bindparam_without_value() -> None:
-    """Um `bindparam` sem valor é `SqlError` em vez de `NULL` silencioso; com valor, é constante."""
+def test_render_writes_a_bindparam_without_value_as_placeholder() -> None:
+    """Um `bindparam` sem valor sai como `:nome`, num `text()` inclusive, e o statement original
+    fica intacto; com valor, é constante; um nome fora de `[a-z_][a-z0-9_]*` é `SqlError`
+    (decisão do usuário de 2026-09-22)."""
     statement = sa.select(ENTRIES.c.id_conta).where(ENTRIES.c.area == sa.bindparam("area"))
-    with pytest.raises(SqlError, match=r"\['area'\]; use param"):
-        sql.render(statement, "duckdb", METADATA)
+    assert sql.render(statement, "duckdb", METADATA, prefix="").endswith('"area" = :area')
+    assert "area" in statement.compile().binds
+    fragment = sa.select(ENTRIES.c.id_conta).where(sa.text('"area" = :area'))
+    assert sql.render(fragment, "redshift", METADATA, prefix="").endswith('"area" = :area')
     with_value = sa.select(ENTRIES.c.id_conta).where(
         ENTRIES.c.area == sa.bindparam("area", value="RH"))
     assert sql.render(with_value, "duckdb", METADATA).endswith("\"area\" = 'RH'")
-    with pytest.raises(SqlError, match="nome de parâmetro inválido"):
-        sql.param("Data Base")
+    invalid = sa.select(ENTRIES.c.id_conta).where(ENTRIES.c.area == sa.bindparam("Data Base"))
+    with pytest.raises(SqlError, match="nome de parâmetro inválido: 'Data Base'"):
+        sql.render(invalid, "duckdb", METADATA)
+
+
+def test_statement_with_bindparam_runs_on_a_client_connection() -> None:
+    """O statement escrito com `bindparam` roda num `sqlalchemy.Connection` criado fora da
+    biblioteca, com o dicionário de parâmetros: um statement serve ao `Connection` do cliente, aos
+    motores e aos arquivos (decisão do usuário de 2026-09-22)."""
+    engine = sa.create_engine("duckdb:///:memory:")
+    with engine.begin() as connection:
+        METADATA.create_all(connection)
+        connection.execute(sa.insert(ENTRIES), [
+            {"id_lancamento": 1, "id_conta": 7, "valor": 150, "area": "TI:infra",
+             "data_base_str": "2026-08-31"},
+            {"id_lancamento": 2, "id_conta": 7, "valor": 50, "area": "RH",
+             "data_base_str": "2026-08-31"},
+            {"id_lancamento": 3, "id_conta": 9, "valor": 200, "area": "TI:dados",
+             "data_base_str": "2026-07-31"},
+        ])
+        connection.execute(sa.insert(ACCOUNTS), [
+            {"id_conta": 7, "numero": "1.1"}, {"id_conta": 9, "numero": "1:2"}])
+        assert connection.execute(TOTAL_BY_ACCOUNT, PARTITION).fetchall() == [("1.1", 150.0)]
+    engine.dispose()
 
 
 # ---------------------------------------------------------------- o bind
@@ -170,7 +197,7 @@ def test_bind_leaves_quoted_identifiers_alone() -> None:
     )
     query = (
         sa.select(table.c["taxa :base"], table.c[":base"], table.c["preco d'agua"])
-        .where(table.c.data_str == sql.param("data_str"))
+        .where(table.c.data_str == sa.bindparam("data_str"))
     )
     text, values = sql.bind(
         sql.render(query, "duckdb", quoted_metadata, prefix=""), {"data_str": "2026-08-31"}, "duckdb")

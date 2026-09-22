@@ -1207,9 +1207,8 @@ etapa 2 do plano ([`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)):
 
 | Primitiva | O que faz |
 | --- | --- |
-| `param(name, type_)` | Parâmetro de execução: `literal_column(":nome")`, que atravessa `literal_binds` e chega ao texto como `:nome`. |
 | `prefixed(statement, metadata, prefix)` | Troca cada tabela do contrato num statement pronto pela cópia com o prefixo do sandbox, por `replacement_traverse`; todo nome da cópia vai citado, `quoted_name(quote=True)`, com o sentinela `{prefix}` dentro das aspas como no DDL (decisão do usuário de 2026-09-21). |
-| `render(statement, dialect, metadata, prefix)` | Texto do dialeto com as constantes embutidas e os parâmetros como `:nome`; um `bindparam` sem valor é erro. |
+| `render(statement, dialect, metadata, prefix)` | Texto do dialeto com as constantes embutidas e cada `bindparam` sem valor como `:nome`, o mesmo statement que roda num `Connection` do cliente (decisão do usuário de 2026-09-22); o `bindparam` com valor sai como constante. |
 | `write_sql_files(statements, metadata, directory)` | `sql/<nome>.duckdb.sql` e `sql/<nome>.redshift.sql`, comparados por teste como os arquivos de esquema. |
 | `read_sql(directory, name, dialect, prefix)` e `bind(sql, params, style)` | O texto versionado com o sentinela trocado pelo `prefix` informado, obrigatório (decisão do usuário de 2026-09-21), e os marcadores `:nome` reescritos para o motor (`$nome` no DuckDB, `paramstyle = "named"` no `redshift_connector`), com toda região citada intacta; o `execute` dos motores roda o texto pronto. |
 
@@ -1222,9 +1221,10 @@ Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 
   como comando com parâmetros do DBAPI e errado como SQL. `Dialect(paramstyle="named")` desliga a
   dobra nos dois dialetos.
 - `bindparam("mes")` sem valor e `text("mes = :mes")` não falham sob `literal_binds`: viram
-  `mes = NULL`, com um `SAWarning`. `render` lê `compiled.binds` na compilação sem `literal_binds` e
-  recusa o `bindparam` com `required=True`, sem tocar no filtro de avisos do processo
-  (2026-09-21, [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).
+  `mes = NULL`, com um `SAWarning`. `render` troca cada `BindParameter` com `required=True` por
+  `literal_column(":nome")` por `replacement_traverse` antes de compilar, e o texto sai
+  `mes = :mes` nos dois casos, sem tocar no filtro de avisos do processo (2026-09-22,
+  [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).
 - Um nome de tabela com `{` é citado, `"{prefix}cad_operacoes"`; `quoted_name(..., quote=False)` o
   deixa sem aspas nos dois dialetos.
 - Um esquema `banco.esquema`, o nome em três partes do datashare do ambiente alvo, cai na mesma

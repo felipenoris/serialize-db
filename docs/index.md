@@ -206,10 +206,11 @@ mesmo.
 ### Gerar o texto SQL de cada motor
 
 A opção de migração para fora do SQLAlchemy. Um statement Core do pipeline vira texto do DuckDB e
-do Redshift por `serialize_db.sql.render`. A
-partição de referência entra por `serialize_db.sql.param`, que chega ao texto como `:nome`; as
-constantes ficam embutidas, e cada tabela do contrato sai com o sentinela `{prefix}` no nome,
-dentro das aspas, que a execução troca pelo prefixo do sandbox:
+do Redshift por `serialize_db.sql.render`. A partição de referência entra por um `sa.bindparam`
+sem valor, que chega ao texto como `:nome`, e o statement é o mesmo que roda num
+`sqlalchemy.Connection` do cliente e nos motores; as constantes ficam embutidas, e cada tabela do
+contrato sai com o sentinela `{prefix}` no nome, dentro das aspas, que a execução troca pelo
+prefixo do sandbox:
 
 ```python
 from serialize_db import sql
@@ -217,7 +218,7 @@ from serialize_db import sql
 operations = Operacao.__table__
 statement = (
     sa.select(operations.c.operacao, sa.func.sum(operations.c.valor).label("total"))
-    .where(operations.c.data_str == sql.param("data_str", sa.String(10)),
+    .where(operations.c.data_str == sa.bindparam("data_str", type_=sa.String(10)),
            operations.c.operacao.like("A%"))
     .group_by(operations.c.operacao)
     .order_by(operations.c.operacao)
@@ -233,8 +234,8 @@ FROM "{prefix}cad_operacoes"
 WHERE "{prefix}cad_operacoes"."data_str" = :data_str AND "{prefix}cad_operacoes"."operacao" LIKE 'A%' GROUP BY "{prefix}cad_operacoes"."operacao" ORDER BY "{prefix}cad_operacoes"."operacao"
 ```
 
-Um `bindparam` sem valor é recusado com `serialize_db.errors.SqlError`, porque o compilador o
-renderizaria como `NULL`. Na execução, `serialize_db.sql.bind` reescreve o marcador para o estilo
+Um `bindparam` com valor sai como constante, e um nome de parâmetro fora de `[a-z_][a-z0-9_]*` é
+recusado com `serialize_db.errors.SqlError`. Na execução, `serialize_db.sql.bind` reescreve o marcador para o estilo
 do motor (`$nome` no DuckDB, `:nome` no `redshift_connector` com `paramstyle = "named"`) e confere
 o dicionário de parâmetros; toda região citada passa intacta, e um texto que ainda traz o sentinela
 é recusado:

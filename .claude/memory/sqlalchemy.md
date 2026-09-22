@@ -101,8 +101,10 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   SQL text being the optional migration path. On a `sqlalchemy.Connection` built outside the
   library (`duckdb_engine`), a client-model statement with `bindparam` runs and `"to"` is quoted
   by the dialect; one with `sql.param` fails (`Parser Error: syntax error at or near ":"`), so
-  `render` mapping a valueless `bindparam` to `:name` by `replacement_traverse` (probed, original
-  intact) is the pending stage 2 proposal. `Base.metadata.create_all` of the client model on
+  `render` maps a valueless `bindparam` to `:name` by `replacement_traverse` (original intact)
+  since 2026-09-22 (user decision) and `param` left the module; a `text()` placeholder, a
+  `bindparam` used twice and an `in_` list render as expected, `bindparam(value=None)` renders
+  `NULL` with the `SAWarning`, and `bindparam("Data Base")` is refused as an invalid name. `Base.metadata.create_all` of the client model on
   DuckDB fails at `rel_contrato_operacao`: its composite foreign key targets the columns of a
   unique index, not a `UniqueConstraint`, and Redshift documents the same requirement
   (2026-09-22). `plan/POC.md`, `plan/PLAN-STAGE-2.md`, `plan/OPEN_QUESTIONS.md`

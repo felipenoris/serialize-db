@@ -276,7 +276,7 @@ o esquema Delta ou DuckLake).
 
 A substituição do dialeto por texto gerado é uma opção de migração, não o caminho padrão (decisão
 do usuário de 2026-09-22): a biblioteca gera o texto SQL de cada dialeto a partir dos statements
-Core (`param`, `prefixed`, `render`, `write_sql_files`), o texto entra versionado no repositório do
+Core (`prefixed`, `render`, `write_sql_files`), o texto entra versionado no repositório do
 pipeline, e cada chamada que compilava um statement pode passar a executar o texto gerado, uma
 interação com o banco por vez. O padrão é o motor compilar o statement Core com os parâmetros do
 cliente, e por isso `duckdb-engine` e `sqlalchemy-redshift` são dependências de execução. O que
