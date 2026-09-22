@@ -157,7 +157,8 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
    materializa as tabelas consultadas muitas vezes com as partições pedidas.
 3. O pipeline roda em `run.sandbox`; o que sai para o Python sai em lotes por `stream`, ou como
    `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; os intermediários ficam no
-   sandbox, não no Delta.
+   sandbox, não no Delta. O nome de uma tabela no sandbox é do `ingest` ou do `loader`, nunca dos
+   dois: a tabela que a execução grava é lida na versão publicada por `run.published(table)`.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
 5. `run.publish` reconcilia o esquema, substitui cada partição num commit (`export_mode`: `register`
    registra o arquivo do `COPY ... (RETURN_STATS)` depois das conferências da
