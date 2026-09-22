@@ -7,11 +7,16 @@ authors = [
     { name = "Felipe Noronha", email = "felipenoris@gmail.com" }
 ]
 requires-python = ">=3.13"
-# As dependências de execução, nas versões fixadas pelos documentos e pelas suítes de estudo.
+# As dependências de execução, nas versões fixadas pelos documentos e pelas suítes de estudo. Os
+# dialetos duckdb-engine e sqlalchemy-redshift são os compiladores de serialize_db.sql.render
+# (decisão do usuário de 2026-09-21), e duckdb-engine importa o duckdb.
 dependencies = [
     "deltalake==1.6.4",
+    "duckdb==1.5.5",
+    "duckdb-engine==0.17.0",
     "pyarrow==25.0.1",
     "sqlalchemy==2.0.54",
+    "sqlalchemy-redshift==1.0.0",
 ]
 
 [project.scripts]
@@ -23,13 +28,11 @@ dev = [
     "boto3>=1.40",
     "deltalake==1.6.4",
     "duckdb==1.5.5",
-    "duckdb-engine==0.17.0",
     "pandas==3.0.6",
     "pyarrow==25.0.1",
     "pytest>=8.4",
     "redshift-connector>=2.1",
     "sqlalchemy==2.0.54",
-    "sqlalchemy-redshift==1.0.0",
     "sqlglot==30.18.0",
 ]
 # A documentação do pacote, publicada em HTML estático.

@@ -456,11 +456,13 @@ def test_mount_state_follows_the_link_and_reads_proc_mounts(tmp_path: Path) -> N
     assert space.mount_state(real, str(tmp_path / "nomounts")) == "existe, sem montagem"
 
 
-def test_dev_requirements_read_the_pinned_versions_of_pyproject() -> None:
-    """``SP-9`` compara o venv com o grupo ``dev`` de ``pyproject.toml``: nome de importação e versão quando fixada por ``==``."""
-    requirements = space.dev_requirements()
+def test_pinned_requirements_read_the_pinned_versions_of_pyproject() -> None:
+    """``SP-9`` compara o venv com as dependências de execução e o grupo ``dev`` de ``pyproject.toml``: nome de
+    importação e versão quando fixada por ``==``; os dialetos são de execução desde a etapa 2."""
+    requirements = space.pinned_requirements()
     assert requirements["deltalake"] == "1.6.4" and requirements["duckdb"] == "1.5.5"
-    assert "redshift_connector" in requirements and "sqlalchemy_redshift" in requirements
+    assert requirements["sqlalchemy_redshift"] == "1.0.0" and requirements["duckdb_engine"] == "0.17.0"
+    assert "redshift_connector" in requirements and requirements["sqlglot"] == "30.18.0"
     assert requirements["boto3"] is None
 
 

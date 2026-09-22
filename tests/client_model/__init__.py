@@ -19,7 +19,9 @@ pacote, segundo ``plan/PLAN-STAGE-1.md``:
 - as colunas numéricas continuam ``Double`` (decisão de 2026-09-20).
 
 Os índices não únicos e o ``sqlite_strict`` do original ficam de fora: nenhum motor da biblioteca
-os usa. ``tests/test_client_model.py`` confere a cópia contra o original.
+os usa. ``tests/test_client_model.py`` confere a cópia contra o original. ``statements.py`` traz
+os statements Core do pipeline fictício (``STATEMENTS``) e ``sql/`` os arquivos de texto SQL
+gerados deles pela etapa 2.
 
 Exemplo::
 

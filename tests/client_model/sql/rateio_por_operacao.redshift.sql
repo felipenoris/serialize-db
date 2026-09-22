@@ -1,0 +1,3 @@
+SELECT "{prefix}rel_contrato_operacao"."operacao", sum("{prefix}cad_lancamentos"."valor" * "{prefix}rel_contrato_operacao"."fator_rateio") AS valor_rateado
+FROM "{prefix}cad_lancamentos" JOIN "{prefix}rel_contrato_operacao" ON "{prefix}cad_lancamentos"."sistema" = "{prefix}rel_contrato_operacao"."sistema" AND "{prefix}cad_lancamentos"."contrato" = "{prefix}rel_contrato_operacao"."contrato" AND "{prefix}cad_lancamentos"."data_base_str" = "{prefix}rel_contrato_operacao"."data_str"
+WHERE "{prefix}cad_lancamentos"."data_base_str" = :data_base_str AND "{prefix}cad_lancamentos"."area" LIKE 'TI%' AND "{prefix}cad_lancamentos"."area" != '1:2' GROUP BY "{prefix}rel_contrato_operacao"."operacao" ORDER BY "{prefix}rel_contrato_operacao"."operacao"

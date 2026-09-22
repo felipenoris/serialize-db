@@ -14,7 +14,7 @@ Só leitura. O relatório sai no terminal e em ``probes/output/space_<data-hora>
    interface com DNS privado), TCP até o S3 regional e até o proxy, e a internet por HTTPS.
 4. Máquina: CPUs, memória, disco, a pasta compartilhada e os comandos disponíveis.
 5. Python e pacotes: este interpretador e o do sistema, com as versões dos pacotes do projeto,
-   conferidas contra o grupo ``dev`` de ``pyproject.toml``.
+   conferidas contra as dependências de execução e o grupo ``dev`` de ``pyproject.toml``.
 6. DuckDB: versão, plataforma, threads, memória e as extensões que carregam da pasta configurada,
    com a instalação automática desligada.
 
@@ -57,8 +57,8 @@ from probelib import (  # noqa: E402
     tcp_probe,
 )
 
-# Os pacotes lidos em cada interpretador: os fixados pelo projeto (o grupo `dev` de pyproject.toml, com o
-# sqlglot desde 2026-09-22), os que a suíte de estudo usa, os opcionais das etapas seguintes (ADBC para leitura
+# Os pacotes lidos em cada interpretador: os fixados pelo projeto (as dependências de execução e o grupo
+# `dev` de pyproject.toml, com o sqlglot desde 2026-09-22), os que a suíte de estudo usa, os opcionais das etapas seguintes (ADBC para leitura
 # do Redshift, pdoc para a documentação) e os que o espaço já traz.
 PACKAGES = (
     "deltalake", "duckdb", "pyarrow", "boto3", "botocore", "redshift_connector", "sqlalchemy", "duckdb_engine",
@@ -106,10 +106,12 @@ def package_version(name: str) -> str | None:
     return None
 
 
-def dev_requirements() -> dict[str, str | None]:
-    """Os pacotes do grupo ``dev`` de ``pyproject.toml`` pelo nome de importação, com a versão quando ela é ``==``."""
+def pinned_requirements() -> dict[str, str | None]:
+    """Os pacotes das dependências de execução e do grupo ``dev`` de ``pyproject.toml`` pelo nome de importação,
+    com a versão quando ela é ``==``; os dialetos passaram de um para o outro na etapa 2 (2026-09-22)."""
     with open(probelib.REPO_ROOT / "pyproject.toml", "rb") as handle:
-        entries = tomllib.load(handle).get("dependency-groups", {}).get("dev", [])
+        pyproject = tomllib.load(handle)
+    entries = pyproject.get("project", {}).get("dependencies", []) + pyproject.get("dependency-groups", {}).get("dev", [])
 
     # "deltalake==1.6.4" vira {"deltalake": "1.6.4"}; "boto3" vira {"boto3": None}; nomes com "-" viram "_".
     found: dict[str, str | None] = {}
@@ -332,7 +334,7 @@ def machine(report: Report) -> None:
 
 
 def python_packages(report: Report) -> None:
-    """Seção 5, Python e pacotes: ``SP-8`` (Python 3.13) e ``SP-9`` (o grupo ``dev`` de ``pyproject.toml``)."""
+    """Seção 5, Python e pacotes: ``SP-8`` (Python 3.13) e ``SP-9`` (as dependências de execução e o grupo ``dev`` de ``pyproject.toml``)."""
     report.h1("Python e pacotes")
 
     # Uma coluna por interpretador: este, e cada candidato do sistema lido por subprocesso (VERSIONS_PROBE).
@@ -362,8 +364,9 @@ def python_packages(report: Report) -> None:
     else:
         report.fail("SP-8", "Python 3.13 neste interpretador", f"{here['version']}: o projeto fixa 3.13")
 
-    # SP-9: o grupo dev de pyproject.toml é a referência: cada pacote presente, e na versão fixada quando ela é ``==``.
-    requirements = dev_requirements()
+    # SP-9: as dependências de execução e o grupo dev de pyproject.toml são a referência: cada pacote presente, e
+    # na versão fixada quando ela é ``==``.
+    requirements = pinned_requirements()
     installed = {name: here[name] if name in here else package_version(name) for name in requirements}
     wrong = [
         f"{name} ausente" if installed[name] is None else f"{name} {installed[name]} (esperado {version})"
@@ -371,9 +374,9 @@ def python_packages(report: Report) -> None:
         if installed[name] is None or (version and installed[name] != version)
     ]
     if wrong:
-        report.fail("SP-9", "grupo dev do pyproject neste interpretador", "; ".join(wrong) + "; rode uv sync --group dev, ou prepare_offline.sh de novo, na pasta do projeto")
+        report.fail("SP-9", "dependências e grupo dev do pyproject neste interpretador", "; ".join(wrong) + "; rode uv sync --group dev, ou prepare_offline.sh de novo, na pasta do projeto")
     else:
-        report.ok("SP-9", "grupo dev do pyproject neste interpretador", ", ".join(f"{name} {installed[name]}" for name in requirements))
+        report.ok("SP-9", "dependências e grupo dev do pyproject neste interpretador", ", ".join(f"{name} {installed[name]}" for name in requirements))
 
 
 def duckdb_section(report: Report) -> None:
