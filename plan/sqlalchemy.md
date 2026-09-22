@@ -102,7 +102,12 @@ Nos bancos do projeto a cláusula não tem efeito útil:
 Os modelos de referência em `tests/reference_model/` declaram `deferrable=True, initially='DEFERRED'` em todas as
 chaves estrangeiras de `model_base_contabil.py` e `model_base_gerencial.py`, inclusive nas compostas,
 e em nenhuma de `model_db_projetado.py`. No DuckDB o `create_all` passa, porque a cláusula é
-descartada; no Redshift ela não existe. A [política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
+descartada; no Redshift ela não existe. O `create_all` do modelo cliente no DuckDB falhava em
+`rel_contrato_operacao` enquanto as colunas apontadas pelas chaves estrangeiras compostas eram de
+índice único: o DuckDB exige chave primária ou `UNIQUE` nas colunas apontadas, na mesma ordem
+(leituras de 2026-09-22, [`POC.md`](POC.md)); o modelo cliente as declara como `UniqueConstraint`
+desde então, e `check_models` confere o alvo de cada chave estrangeira. A
+[política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
 estrangeiras ficam de fora e a auditoria verifica a integridade referencial sob pedido
 (`foreign_keys=True`), com a tabela referenciada ingerida na versão fixada, antes da publicação: é a
 verificação adiada feita pelo próprio pipeline. No Redshift a chave é declarada só quando auditada,
@@ -1151,7 +1156,9 @@ def check(model, path: str) -> None:
 O SQLAlchemy está no projeto por compatibilidade com o pipeline existente: os modelos declarativos
 definem cada tabela, e statements Core de `select` e `insert` movem DataFrames. As subseções
 seguintes registram o que cada parte da biblioteca entrega ao projeto, a recomendação sem essa
-premissa e a substituição gradual do dialeto em tempo de execução, que é o caminho adotado.
+premissa e a substituição do dialeto por texto gerado, que passou a ser a opção de migração para
+fora do SQLAlchemy, não o caminho padrão (decisão do usuário de 2026-09-22): o pipeline submete o
+statement Core ao motor, que o compila pelo dialeto com os parâmetros do cliente.
 
 ### O que cada parte entrega
 
@@ -1192,20 +1199,21 @@ produto das duas é uma string executada pelo DuckDB ou pelo `redshift_connector
 
 ### Substituição gradual do dialeto em tempo de execução
 
-O pipeline compila hoje cada statement Core pelo dialeto a cada execução. A biblioteca passa a gerar
-o texto SQL de cada dialeto, e a substituição acontece uma interação com o banco por vez: o texto
+O pipeline compila hoje cada statement Core pelo dialeto a cada execução, e esse continua o caminho
+padrão: o motor compila a cópia prefixada com os parâmetros do cliente (decisão do usuário de
+2026-09-22). A biblioteca também gera o texto SQL de cada dialeto, para um pipeline que queira sair
+do SQLAlchemy uma interação com o banco por vez: o texto
 gerado entra no repositório do pipeline, revisado no diff; um teste o compara com uma nova geração
 enquanto o statement Core existir; e a chamada que compilava o statement passa a executar o texto.
-No fim, o SQLAlchemy fica nos modelos e na geração; `duckdb_engine` e `sqlalchemy-redshift`
-continuam dependências de execução da biblioteca, porque os motores compilam por `render` o
-statement Core que recebem (decisão do usuário de 2026-09-21). As primitivas, especificadas na
+No fim desse caminho, o SQLAlchemy fica nos modelos e na geração; `duckdb_engine` e
+`sqlalchemy-redshift` continuam dependências de execução da biblioteca, porque os motores compilam
+pelo dialeto o statement Core que recebem (decisão do usuário de 2026-09-21). As primitivas, especificadas na
 etapa 2 do plano ([`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)):
 
 | Primitiva | O que faz |
 | --- | --- |
-| `param(name, type_)` | Parâmetro de execução: `literal_column(":nome")`, que atravessa `literal_binds` e chega ao texto como `:nome`. |
 | `prefixed(statement, metadata, prefix)` | Troca cada tabela do contrato num statement pronto pela cópia com o prefixo do sandbox, por `replacement_traverse`; todo nome da cópia vai citado, `quoted_name(quote=True)`, com o sentinela `{prefix}` dentro das aspas como no DDL (decisão do usuário de 2026-09-21). |
-| `render(statement, dialect, metadata, prefix)` | Texto do dialeto com as constantes embutidas e os parâmetros como `:nome`; um `bindparam` sem valor é erro. |
+| `render(statement, dialect, metadata, prefix)` | Texto do dialeto com as constantes embutidas e cada `bindparam` sem valor como `:nome`, o mesmo statement que roda num `Connection` do cliente (decisão do usuário de 2026-09-22); o `bindparam` com valor sai como constante. |
 | `write_sql_files(statements, metadata, directory)` | `sql/<nome>.duckdb.sql` e `sql/<nome>.redshift.sql`, comparados por teste como os arquivos de esquema. |
 | `read_sql(directory, name, dialect, prefix)` e `bind(sql, params, style)` | O texto versionado com o sentinela trocado pelo `prefix` informado, obrigatório (decisão do usuário de 2026-09-21), e os marcadores `:nome` reescritos para o motor (`$nome` no DuckDB, `paramstyle = "named"` no `redshift_connector`), com toda região citada intacta; o `execute` dos motores roda o texto pronto. |
 
@@ -1218,9 +1226,10 @@ Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 
   como comando com parâmetros do DBAPI e errado como SQL. `Dialect(paramstyle="named")` desliga a
   dobra nos dois dialetos.
 - `bindparam("mes")` sem valor e `text("mes = :mes")` não falham sob `literal_binds`: viram
-  `mes = NULL`, com um `SAWarning`. `render` lê `compiled.binds` na compilação sem `literal_binds` e
-  recusa o `bindparam` com `required=True`, sem tocar no filtro de avisos do processo
-  (2026-09-21, [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).
+  `mes = NULL`, com um `SAWarning`. `render` troca cada `BindParameter` com `required=True` por
+  `literal_column(":nome")` por `replacement_traverse` antes de compilar, e o texto sai
+  `mes = :mes` nos dois casos, sem tocar no filtro de avisos do processo (2026-09-22,
+  [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).
 - Um nome de tabela com `{` é citado, `"{prefix}cad_operacoes"`; `quoted_name(..., quote=False)` o
   deixa sem aspas nos dois dialetos.
 - Um esquema `banco.esquema`, o nome em três partes do datashare do ambiente alvo, cai na mesma

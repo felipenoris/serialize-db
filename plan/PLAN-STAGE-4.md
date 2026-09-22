@@ -21,7 +21,7 @@ modelo:
 | Nulo em coluna `NOT NULL` | `column.nullable` | As partições da execução. |
 | Chave repetida | `table.primary_key` e os `UniqueConstraint`, mais o que `keys` acrescenta | As partições da execução quando as colunas da chave incluem a coluna de partição; a tabela inteira quando não incluem. |
 | Órfão de chave estrangeira | `table.foreign_keys` | Só com `foreign_keys=True`; a tabela referenciada entra na versão fixada pela execução. |
-| Partição fora da data | `partition_by` e `partition_source` de `table_options`: a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')` | As partições da execução. |
+| Partição fora da origem, e valor que não serve de nome de pasta | `partition_by` e `partition_source` de `table_options`: com `partition_source` declarado, a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')`; em toda tabela particionada, o valor vazio ou com `/`, `=` ou espaço (a partição é texto desde a decisão de 2026-09-22, e a data é o caso da base atual) | As partições da execução. |
 | Texto acima de `String(n)` e valor fora do `Numeric(18, 2)` | os tipos de `schema.md`; no Redshift, o `COPY` de uma string maior que o `VARCHAR` aborta (`Spectrum Scan Error` 15007, 2026-09-21), e esta verificação é a barreira | As partições da execução. |
 | Documento JSON inválido, ou acima de 65.535 bytes se a decisão da [etapa 8](PLAN-STAGE-8.md) fixar o teto | as colunas JSON, que nem o Arrow nem o Delta validam; o teto é o do `VARCHAR` da staging do Redshift e da string que o `COPY` de Parquet aceita numa coluna `SUPER` (2026-09-21) | As partições da execução. |
 | Totais de controle | as colunas `Numeric` e `Double`; as `Double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem | As partições da execução. |
@@ -50,7 +50,7 @@ registra a verificação como não executada.
 | `connect(config)` | Banco em arquivo `<temp_directory>/<execution_id>.duckdb`, e em memória só com `DuckDBConfig(database=":memory:")` (decisão do usuário de 2026-09-22); `temp_directory` omitido é uma pasta nova de `tempfile.mkdtemp`, apagada com o banco em `cleanup`, porque o padrão `.tmp` do DuckDB é relativo à pasta corrente; `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS` (ou `.duckdb/` da pasta preparada), `autoinstall_known_extensions` e `autoload_known_extensions` desligados; `storage.duckdb_setup`; `threads`, `temp_directory` e `preserve_insertion_order = false`; `memory_limit` só quando a configuração o informa, e o log registra na abertura o `current_setting('memory_limit')` que o DuckDB escolheu e o espaço livre de `temp_directory` (decisão do usuário de 2026-09-22); uma conexão por thread, o `cursor()` da raiz guardado num `threading.local` no primeiro uso e fechado em `cleanup`, e `connection` devolve a da thread. |
 | `ingest(table, uri, version, partitions=None, materialize=False)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou `CREATE TABLE ... AS SELECT ... FROM delta_scan(...) WHERE data_str IN (...)` com `materialize=True`. |
 | `published(table, uri, version)` | A versão fixada como origem de consulta, sem ocupar nome no sandbox: o `FromClause` com as colunas do contrato que compila para `delta_scan('<uri>', version := <v>)`. É por ele que o pipeline lê as partições publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader`, e é ele que a auditoria usa como `published` nas chaves que não incluem a coluna de partição (decisão do usuário de 2026-09-22). Sem versão fixada, numa tabela que ainda não existe, levanta `SandboxError` nomeando a tabela. |
-| `stream(statement_or_sql, params=None, batch_size=100_000, prefetch=2)` | Um statement Core compilado para o dialeto, com as tabelas do contrato trocadas pelas do sandbox por `sql.prefixed`, ou o texto já com o prefixo trocado, gerado por `render` ou lido por `sql.read_sql(..., prefix="")`, com `:nome` em `$nome` por `sql.bind`; roda num `cursor()` próprio, sem `Session`, e devolve o `BatchStream`: iterável de `pa.RecordBatch` com os tipos do motor (`decimal128(18, 2)`, `date32`, JSON como `string`), `schema`, `read_next_batch`, `read_all`, `close`, gerenciador de contexto e `__arrow_c_stream__` (para `write_deltalake` e `RecordBatchReader.from_stream`, nunca para o `register` do DuckDB). Uma thread auxiliar puxa `prefetch` lotes de `to_arrow_reader(batch_size)` para uma fila limitada, com esperas com prazo e sem referência ao stream; `prefetch=0` dispensa a thread; `close` a interrompe e fecha o cursor; o erro da consulta chega na construção ou na leitura seguinte. |
+| `stream(statement_or_sql, params=None, batch_size=100_000, prefetch=2)` | Um statement Core com as tabelas do contrato trocadas pelas do sandbox por `sql.prefixed(prefix="")`, compilado pelo dialeto `duckdb` com `paramstyle="named"` e sem `literal_binds`, as constantes como parâmetros e os `bindparam` do cliente juntados por `construct_params(params)`, o marcador `:nome` em `$nome` pelo reescritor de `bind` (leitura de 2026-09-22, [`POC.md`](POC.md); `param` não é exigido); ou um texto pronto, gerado por `render` ou lido por `sql.read_sql(..., prefix="")`, com `:nome` em `$nome` por `sql.bind`; roda num `cursor()` próprio, sem `Session`, e devolve o `BatchStream`: iterável de `pa.RecordBatch` com os tipos do motor (`decimal128(18, 2)`, `date32`, JSON como `string`), `schema`, `read_next_batch`, `read_all`, `close`, gerenciador de contexto e `__arrow_c_stream__` (para `write_deltalake` e `RecordBatchReader.from_stream`, nunca para o `register` do DuckDB). Uma thread auxiliar puxa `prefetch` lotes de `to_arrow_reader(batch_size)` para uma fila limitada, com esperas com prazo e sem referência ao stream; `prefetch=0` dispensa a thread; `close` a interrompe e fecha o cursor; o erro da consulta chega na construção ou na leitura seguinte. |
 | `query(statement, **params)` | `stream(statement, params).read_all()`: a `pa.Table` com os tipos do motor. |
 | `execute(sql, params)` | `stream(sql, params).read_all()`; um comando sem resultado devolve a tabela `Count` ou `Success` do DuckDB. |
 | `loader(table, queue_depth=2)` | O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada por `ddl(table, "duckdb")`: um nome já ocupado, pela view do `ingest` ou pela tabela de um `loader` anterior, é recusado com `SandboxError` na abertura, antes do primeiro lote (decisão do usuário de 2026-09-22), e um laço por partição mantém um `loader` só aberto; `write(data)` aceita `pa.RecordBatch` ou `pa.Table`, faz `cast(batch, table)` na thread do cliente e põe o lote numa fila limitada; uma thread auxiliar, num `cursor()` próprio e numa transação explícita, registra cada lote e roda `INSERT ... BY NAME SELECT * FROM <lote>`, `commit` no `close` e `rollback` em qualquer erro, inclusive uma exceção dentro do `with` ou um loader abandonado; `close` relança o erro da thread; `rows` conta as linhas gravadas. Nada é visível antes do `commit`, e nenhum gerador Python é entregue ao DuckDB. |
@@ -165,7 +165,8 @@ class Loader(Protocol):
 
 @runtime_checkable
 class Engine(Protocol):
-    """A interface dos dois motores; Execution só depende dela."""
+    """A interface dos dois motores; Execution só depende dela. connection é a conexão crua da
+    thread no DuckDB e a sessão única do motor Redshift (etapa 5), para uma thread por vez."""
     @property
     def connection(self) -> object: ...
     def ingest(self, table: sa.Table, uri: str, version: int, partitions: list[str] | None = None, materialize: bool = False) -> None: ...
@@ -203,8 +204,10 @@ protocolo, porque o pipeline também o chama, por `run.published(table)` ([etapa
 
 - **`checks`** monta os statements Core sobre a cópia prefixada da tabela (`sql.prefixed`). Uma
   consulta de linhas reúne num `count(*) FILTER` por coluna: nulo em `NOT NULL`, texto acima de
-  `String(n)`, JSON inválido, a coluna de partição diferente de `partition_text(partition_source)`,
-  e a soma de controle de cada coluna `Double` e `Numeric` como `DECIMAL(38, 6)`. Duas funções
+  `String(n)`, JSON inválido, a coluna de partição diferente de `partition_text(partition_source)`
+  quando o modelo declara `partition_source`, o valor de partição vazio ou com `/`, `=` ou espaço
+  (a partição é texto desde 2026-09-22, e a data é o caso da base atual), e a soma de controle de
+  cada coluna `Double` e `Numeric` como `DECIMAL(38, 6)`. Duas funções
   genéricas com `@compiles` por dialeto fazem a portabilidade: `partition_text` é
   `strftime(x, '%Y-%m-%d')` no DuckDB e `to_char(x, 'YYYY-MM-DD')` no Redshift; `json_valid` fica
   no DuckDB e vira `is_valid_json` no Redshift. Uma consulta por chave (`GROUP BY ... HAVING count(*)
@@ -238,9 +241,11 @@ protocolo, porque o pipeline também o chama, por `run.published(table)` ([etapa
   as colunas do contrato, e não cria objeto no sandbox: é a origem que a auditoria já precisa nas
   chaves fora da partição, e a que o pipeline usa para ler a tabela cujo nome no sandbox é a saída
   do `loader`. No Redshift ele é a staging da [etapa 5](PLAN-STAGE-5.md).
-- **`stream`** é o `BatchStream` de `test_parallel.py`: um statement Core vira texto por
-  `sql.render(prefix="")` e `sql.bind(style="duckdb")`, um texto pronto, já sem o sentinela, passa
-  por `bind`; a consulta
+- **`stream`** é o `BatchStream` de `test_parallel.py`: um statement Core vira a cópia prefixada de
+  `sql.prefixed(prefix="")`, compilada pelo dialeto com `paramstyle="named"` e sem `literal_binds`,
+  com `construct_params(params)` juntando as constantes e os `bindparam` do cliente e o marcador
+  `:nome` reescrito em `$nome` (a sonda de 2026-09-22 rodou esse caminho no DuckDB); um texto
+  pronto, já sem o sentinela, passa por `bind`; a consulta
   roda num `cursor()` próprio com `to_arrow_reader(batch_size)`, e a thread auxiliar puxa `prefetch`
   lotes para uma fila limitada, com esperas com prazo, sem referência ao stream, encerrada em `close`.
 - **`query` e `execute`** são `stream(...).read_all()`.

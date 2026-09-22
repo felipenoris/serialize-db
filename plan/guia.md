@@ -5,8 +5,8 @@
 
 ### Partições imutáveis e substituição idempotente
 
-A partição, uma data em texto `AAAA-MM-DD` declarada pelo modelo do cliente (decisão de 2026-09-20),
-é a unidade de escrita das tabelas particionadas. Uma reexecução ou correção grava a partição inteira
+A partição, uma coluna de texto declarada pelo modelo do cliente (decisão de 2026-09-22; na base
+atual, a data em texto `AAAA-MM-DD`), é a unidade de escrita das tabelas particionadas. Uma reexecução ou correção grava a partição inteira
 de novo e substitui a anterior. Reexecuções ficam idempotentes, e a exportação incremental se reduz
 a publicar as partições gravadas.
 

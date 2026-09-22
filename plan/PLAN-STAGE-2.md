@@ -3,14 +3,16 @@
 A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PLAN.md`](PLAN.md), que
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
 
-O módulo `serialize_db.sql` gera o texto SQL de cada dialeto a partir de um statement Core, para a
-substituição gradual da compilação em tempo de execução descrita em `sqlalchemy.md`.
+O módulo `serialize_db.sql` gera o texto SQL de cada dialeto a partir de um statement Core, a
+opção de migração para fora do SQLAlchemy descrita em `sqlalchemy.md`, e a cópia prefixada que os
+motores compilam. O caminho padrão é o statement Core submetido ao motor, que o compila pelo
+dialeto com os parâmetros do cliente (decisão do usuário de 2026-09-22); o texto versionado é
+opcional.
 
 | Primitiva | O que faz |
 | --- | --- |
-| `param(name, type_=None)` | `literal_column(":nome", type_)`: o parâmetro de execução, que atravessa `literal_binds` e chega ao texto como `:nome`. |
 | `prefixed(statement, metadata, prefix="{prefix}")` | A cópia do statement com cada tabela do contrato trocada pela cópia com o prefixo, por `replacement_traverse`; todo nome da cópia vai citado (`quoted_name(quote=True)`), o sentinela dentro das aspas como no DDL. |
-| `render(statement, dialect, metadata, prefix="{prefix}")` | O texto de `duckdb` ou `redshift` com as constantes embutidas e os parâmetros como `:nome`, compilado por um dialeto com `paramstyle="named"`, que não dobra o `%` dos literais; um `bindparam` sem valor é erro, porque o compilador o renderia como `NULL`; nenhuma linha termina em espaço, para o arquivo versionado sobreviver a um editor que apara o fim das linhas. |
+| `render(statement, dialect, metadata, prefix="{prefix}")` | O texto de `duckdb` ou `redshift` com as constantes embutidas e os parâmetros como `:nome`, compilado por um dialeto com `paramstyle="named"`, que não dobra o `%` dos literais; cada `bindparam` sem valor sai como `:nome` por `replacement_traverse`, o com valor como constante, e um nome fora de `[a-z_][a-z0-9_]*` é erro (decisão do usuário de 2026-09-22); nenhuma linha termina em espaço, para o arquivo versionado sobreviver a um editor que apara o fim das linhas. |
 | `bind(sql, params, style)` | O texto com `:nome` reescrito para o estilo do motor (`$nome` no DuckDB; inalterado no `redshift_connector` com `paramstyle = "named"`) e o dicionário conferido: parâmetro faltante ou sobrando é erro, e um texto que ainda traz `{prefix}` também. Toda região citada passa intacta, entre aspas simples ou duplas. |
 | `referenced_tables(statement_or_sql)` | As tabelas do contrato que um statement Core (`find_tables`) ou um texto gerado (o sentinela) cita, para o log da execução. |
 | `sql_files(statements, metadata)` | `{"<nome>.duckdb.sql": ..., "<nome>.redshift.sql": ...}` de um dicionário `{nome: statement}`. |
@@ -19,7 +21,8 @@ substituição gradual da compilação em tempo de execução descrita em `sqlal
 
 Testes: `tests/test_sql.py`, sem gravar fora do caso `local`: o statement de `sqlalchemy.md` (parâmetro, `%` em literal,
 prefixo) renderizado nos dois dialetos e executado no DuckDB em memória com `$mes`; `bindparam` sem
-valor e parâmetro faltante como erros; o diff de `tests/client_model/sql/`, gerado dos statements do
+valor como `:nome`, o statement num `Connection` criado fora da biblioteca, e parâmetro faltante
+como erro; o diff de `tests/client_model/sql/`, gerado dos statements do
 pipeline fictício em `tests/client_model/statements.py` (`STATEMENTS`, o dicionário `{nome: statement}`
 que `serialize-db sql` recebe por `--statements`). `sqlglot.parse_one(texto, dialect="redshift")` sobre o texto do Redshift de cada statement, o
 arquivo versionado com o sentinela inclusive, como teste de que o texto gerado para o Redshift
@@ -39,7 +42,6 @@ from serialize_db.errors import SqlError   # ValueError: statement sem texto exe
 from serialize_db.schema import Dialect    # Literal["duckdb", "redshift"], definido uma vez na etapa 1
 
 
-def param(name: str, type_: sa.types.TypeEngine | None = None) -> sa.ColumnElement: ...
 def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData, prefix: str = "{prefix}") -> sa.sql.ClauseElement: ...
 def render(statement: sa.sql.ClauseElement, dialect: Dialect, metadata: sa.MetaData, prefix: str = "{prefix}") -> str: ...
 def bind(sql: str, params: dict[str, object], style: Dialect) -> tuple[str, dict[str, object]]: ...
@@ -62,15 +64,13 @@ nenhum decorador próprio e nenhum estado global do processo mudado para control
 assinaturas acima são o `__all__`. `SENTINEL` (`"{prefix}"`) fica protegido, sem prefixo e fora do
 `__all__`, porque as etapas [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md) o leem; `_DIALECTS`,
 `_MARKERS`, `_PARAMETER_NAME`, `_QUOTED_OR_PLACEHOLDER`, `_SENTINEL_TABLE`, `_prefixed_copy`,
-`_parameters_without_value`, `_placeholders` e `_versioned_text` são privados. `SqlError` entra em
+`_parameters_as_placeholders`, `_placeholders` e `_versioned_text` são privados. `SqlError` entra em
 `serialize_db.errors` ao lado de `ContractError`, e `Dialect` é o de `serialize_db.schema`. O
 rascunho abaixo tem essa forma e é a referência do módulo; ele define `Dialect` e `SqlError`
 localmente só para rodar sozinho.
 
 ## Estratégia de implementação
 
-- **`param`** valida o nome (`[a-z_][a-z0-9_]*`) e devolve `literal_column(":nome", type_)`; o
-  tipo serve à compilação de comparações com colunas tipadas.
 - **`prefixed`** monta, para cada tabela do contrato, uma cópia só com o que a compilação de um DML
   usa (`_prefixed_copy`): o nome com o prefixo e cada coluna com nome e tipo, todos em
   `quoted_name(..., quote=True)`; chaves e índices ficam de fora, porque um `SELECT` ou um
@@ -83,11 +83,16 @@ localmente só para rodar sozinho.
   statement e deixa o nó como está quando ela devolve `None`; a função troca cada `Table` do
   contrato pela cópia e cada `Column` pela coluna de mesmo nome na cópia. O statement original não
   muda.
-- **`render`** compila a cópia prefixada duas vezes com um dialeto avulso de `paramstyle="named"`,
-  que não dobra o `%` dos literais. A primeira, sem `literal_binds`, lê em `compiled.binds` os
-  `bindparam` com `required=True`, os sem valor, que a segunda renderizaria como `NULL`; havendo
-  algum, `SqlError` os nomeia e manda usar `param`. A segunda, com `literal_binds=True`, é o texto,
-  sem o espaço que o compilador deixa antes de cada quebra de linha, para o arquivo versionado
+- **`render`** troca na cópia prefixada cada `bindparam` sem valor (`required=True`) por
+  `literal_column(":nome", type_)`, por `replacement_traverse` (`_parameters_as_placeholders`), e
+  compila o resultado com `literal_binds=True` num dialeto avulso de `paramstyle="named"`, que não
+  dobra o `%` dos literais: o `literal_column` atravessa a compilação como texto, o `bindparam` com
+  valor sai como constante, e um nome fora de `[a-z_][a-z0-9_]*` é `SqlError`, porque `bind` não o
+  leria. É a decisão do usuário de 2026-09-22: o statement escrito com `bindparam` serve ao
+  `Connection` do cliente, ao `execute` dos motores e aos arquivos, e `param`
+  (`literal_column(":nome")`, que chegava ao driver como texto e falhava no `Connection` com
+  `Parser Error: syntax error at or near ":"`) saiu do módulo ([`POC.md`](POC.md)). O texto sai sem
+  o espaço que o compilador deixa antes de cada quebra de linha, para o arquivo versionado
   sobreviver a um editor que apara o fim das linhas (2026-09-22, [`POC.md`](POC.md)).
   O rascunho anterior transformava o `SAWarning` dessa renderização em exceção com
   `warnings.catch_warnings`, que troca o filtro de avisos do processo inteiro: a documentação do
@@ -123,9 +128,9 @@ localmente só para rodar sozinho.
 - **`read_sql`** abre `<pasta>/<nome>.<dialeto>.sql` com `encoding="utf-8"`, como a etapa 1, e troca
   `{prefix}` pelo `prefix` informado, argumento obrigatório (decisão do usuário de 2026-09-21): quem
   chama sabe o alvo — a string vazia para as tabelas do contrato, `exec_<id>_` para o sandbox da
-  execução —, e a obrigação de informar sobe para os chamadores, os motores das etapas
-  [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md) e o pipeline. Nenhuma outra primitiva preenche o
-  sentinela.
+  execução —, e a obrigação de informar sobe para o pipeline que lê o arquivo e entrega o texto ao
+  `execute` dos motores das etapas [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md). Nenhuma outra
+  primitiva preenche o sentinela.
 - **`serialize-db sql write|check`** recebe `--metadata modulo:atributo`, `--statements
   modulo:atributo` (o dicionário `{nome: statement}` do pipeline, resolvido pelo mesmo caminho de
   `--metadata`) e a pasta; `check` imprime o diff e sai com 1 quando há diferença, como
@@ -135,9 +140,8 @@ localmente só para rodar sozinho.
 
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
-| `param` | Nome válido como identificador. | Um `literal_column` que atravessa `literal_binds` como `:nome`. |
 | `prefixed` | Toda tabela do statement pertence ao `metadata` informado. | Uma cópia com cada tabela e coluna trocadas; o original intacto. |
-| `render` | Statement sem `bindparam` sem valor. | Texto com as constantes embutidas, `%` dos literais simples e toda tabela e coluna do contrato entre aspas, o `{prefix}` dentro delas; o mesmo texto nos dois dialetos para o SQL portável; nenhuma linha termina em espaço. |
+| `render` | Statement Core sobre tabelas do `metadata`; o nome de cada `bindparam` sem valor válido como identificador. | Texto com as constantes embutidas, cada `bindparam` sem valor como `:nome`, `%` dos literais simples e toda tabela e coluna do contrato entre aspas, o `{prefix}` dentro delas; o mesmo texto nos dois dialetos para o SQL portável; nenhuma linha termina em espaço. |
 | `referenced_tables` | Statement Core, ou texto gerado com o sentinela. | Os nomes das tabelas do contrato que ele cita. |
 | `bind` | Texto com `:nome` fora das regiões citadas e sem `{prefix}`. | O texto no estilo do motor e o dicionário conferido, com literais e identificadores citados intactos; `SqlError` quando os nomes não fecham. |
 | `write_sql_files` | Pasta gravável. | Dois arquivos por statement; `check_sql_files` vazio quando nada mudou. |
@@ -155,7 +159,8 @@ localmente só para rodar sozinho.
 | Literais com dois-pontos | `test_bind_leaves_quoted_literals_and_casts_alone` | `'TI:%'`, `'12:30'` e `valor::DECIMAL(18, 2)` intactos; só `:nome` do dicionário muda. |
 | Identificadores citados | `test_bind_leaves_quoted_identifiers_alone` | As colunas `taxa :base`, `:base` e `preco d'agua` saem intactas entre aspas duplas, e o `:nome` fora das aspas é o único trocado. |
 | Parâmetros | `test_bind_refuses_missing_and_extra_parameters` | Faltante e sobrando são `SqlError` com os dois conjuntos na mensagem. |
-| `bindparam` sem valor | `test_render_refuses_bindparam_without_value` | `SqlError` em vez de `NULL` silencioso. |
+| `bindparam` sem valor | `test_render_writes_a_bindparam_without_value_as_placeholder` | `:nome` no texto, num `text()` inclusive, com o statement original intacto; o `bindparam` com valor como constante; o nome fora de `[a-z_][a-z0-9_]*` como `SqlError`. |
+| `Connection` do cliente | `test_statement_with_bindparam_runs_on_a_client_connection` | O statement com `bindparam` roda num `sqlalchemy.Connection` do `duckdb-engine` criado fora da biblioteca, com o dicionário de parâmetros. |
 | Prefixo | `test_prefixed_replaces_every_contract_table` | Tabelas e colunas trocadas em `select`, `insert ... from_select` e `join`; o statement original intacto. |
 | Tabelas referenciadas | `test_referenced_tables_from_core_and_text` | `find_tables` e o sentinela dão o mesmo conjunto para o mesmo comando. |
 | Arquivos gerados | `test_sql_files_match_versioned`, `test_check_sql_files_reports_a_changed_statement` | Diff vazio contra `tests/client_model/sql/`; uma coluna nova no statement aparece no diff. |
@@ -166,7 +171,8 @@ localmente só para rodar sozinho.
 
 ## Rascunhos executados
 
-Rodou em 2026-09-21 com as versões fixadas.
+Rodou em 2026-09-21 com as versões fixadas; o `param` do rascunho saiu do módulo em 2026-09-22
+(decisão do usuário), e `render` troca cada `bindparam` sem valor por `:nome`.
 
 ```python
 """Etapa 2: param, prefixed, render, bind, referenced_tables, sql_files e read_sql sobre um
@@ -431,7 +437,8 @@ prefix='exec_42_': FROM "exec_42_cad_lancamentos" JOIN "exec_42_cad_contas" ON "
 
 ## Decisões pendentes
 
-Nenhuma: as cinco decisões da etapa foram tomadas pelo usuário em 2026-09-21 e 2026-09-22 — as
-regiões citadas em `bind`, o `prefix` obrigatório de `read_sql`, os dialetos de terceiros como
-compiladores de `render`, a cópia prefixada com `quote=True` e o `sqlglot` no grupo `dev` —, e cada
-uma está escrita na seção que a descreve.
+As decisões da etapa foram tomadas pelo usuário em 2026-09-21 e 2026-09-22 — as regiões citadas
+em `bind`, o `prefix` obrigatório de `read_sql`, os dialetos de terceiros como compiladores de
+`render`, a cópia prefixada com `quote=True`, o `sqlglot` no grupo `dev`, e cada `bindparam` sem
+valor como `:nome` em `render`, com `param` fora do módulo —, e cada uma está escrita na seção que
+a descreve. Nenhuma decisão da etapa espera o usuário.

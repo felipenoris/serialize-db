@@ -1387,3 +1387,92 @@ e texto, pela decisão da [etapa 3](PLAN-STAGE-3.md) do mesmo dia, com `stat_con
 conversão e `tests/test_migrate_parquet_to_delta.py::test_registered_stats_carry_the_four_exact_types`
 conferindo os valores contra o arquivo; a coluna `meta` de `cad_lancamentos`, sempre nula na base de
 origem, fica sem extremos.
+
+## O que a sonda das tabelas temporárias do DuckDB mostrou
+
+Em 2026-09-22, no macOS (DuckDB 1.5.5), uma sonda criou `CREATE TEMP TABLE temporaria` e
+`CREATE TABLE comum` num banco em arquivo e leu as duas de quatro lugares. A conexão raiz lê as
+duas; um `cursor()` da mesma conexão lê `comum` e recebe `Catalog Error: Table with name
+temporaria does not exist!` na temporária, e uma temporária criada nesse cursor é invisível à
+raiz; um segundo `duckdb.connect` ao mesmo arquivo, no mesmo processo, lê `comum` e não lê a
+temporária; a conexão raiz usada de outra thread lê a temporária. `duckdb_tables()` lista a
+temporária no catálogo `temp`, esquema `main`, com `temporary` verdadeiro, só na conexão que a
+criou. A documentação diz o mesmo: "Temporary tables are session scoped, meaning that only the
+specific connection that created them can access them", e elas "reside in memory rather than on
+disk even when connecting to a persistent DuckDB", com transbordo para `temp_directory`. No
+`redshift_connector` 2.1.16, `Cursor.execute` delega a `Connection.execute` (leitura do código):
+os cursores de uma conexão são a mesma sessão, e uma temporária criada num deles vale para os
+outros.
+
+**Consequência**: o sandbox dos dois motores fica de tabelas comuns, como o plano previa. No
+DuckDB, o motor da [etapa 4](PLAN-STAGE-4.md) dá um `cursor()` a cada thread, a cada `stream` e a
+cada `loader`, e uma temporária de um cursor não alcança os outros; no Redshift, o usuário
+reverteu em 2026-09-22 a frase do `CLAUDE.md` que propunha temporárias para separar a execução
+dos dados publicados, e as tabelas `exec_<id>_*` continuam no esquema do datashare
+([etapa 5](PLAN-STAGE-5.md)). `ddl` ganhou `temporary=True`, que emite `CREATE TEMP TABLE` nos
+dois dialetos, a pedido do usuário do mesmo dia e sem uso no plano;
+`tests/test_schema.py::test_ddl_temporary_table` afirma a leitura: a tabela nasce no catálogo
+`temp`, e o `cursor()` não a vê.
+
+## O que as sondas dos statements num `Connection` mostraram
+
+Em 2026-09-22, no macOS (SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0,
+DuckDB 1.5.5, redshift-connector 2.1.16), quatro sondas leram o que um statement Core do modelo
+cliente faz fora e dentro da biblioteca:
+
+- **Os estilos de parâmetro.** `duckdb.paramstyle` é `qmark`, `duckdb_engine.Dialect()` compila
+  em `pyformat` e `Dialect(paramstyle="named")` em `named`; `redshift_connector.paramstyle` e
+  `RedshiftDialect_redshift_connector()` são `format`. Um `select` com `bindparam("minimo")` e um
+  `LIKE 'TI%'`, compilado por `Dialect(paramstyle="named")` sem `literal_binds`, saiu como
+  `... WHERE cad_contas.area LIKE :area_1 AND cad_contas.id_conta > :minimo`, com `"to"` citado
+  pelo dialeto sozinho; `compiled.construct_params({"minimo": 5})` devolveu
+  `{'area_1': 'TI%', 'minimo': 5}`, e o texto com `:nome` reescrito em `$nome` rodou na conexão
+  crua do DuckDB com esse dicionário. É o caminho padrão dos motores desde a decisão do usuário do
+  mesmo dia: a cópia prefixada compilada com os parâmetros do cliente, sem `render`.
+- **O `Connection` criado fora da biblioteca.** Num
+  `sqlalchemy.create_engine("duckdb:///:memory:")`, `cad_contas` e `cad_contratos` do modelo
+  cliente foram criadas por `Table.create`, um `select` com `sa.bindparam("id")` rodou por
+  `connection.execute(query, {"id": 1})`, e `select(cad_contratos.c.to)` compilou como
+  `cad_contratos."to"`. O mesmo `select` com `sql.param("id", sa.BigInteger)` falhou:
+  `ProgrammingError ... Parser Error: syntax error at or near ":"`, porque o `literal_column(":id")`
+  chega ao driver como texto. Um statement escrito com `param` serve aos arquivos e não a um
+  `Connection`; um com `bindparam` serve ao `Connection` e aos motores, e `render` o recusa.
+- **`render` com `bindparam`.** `replacement_traverse` trocando cada `BindParameter` com
+  `required=True` por `literal_column(":nome", type_)` antes de compilar com `literal_binds` deu
+  `... WHERE cad_contas.id_conta = :id AND cad_contas.nome LIKE 'C%'`, com o statement original
+  intacto (`:id` e `:nome_1` na compilação normal). É a implementação de `render` desde
+  2026-09-22 (decisão do usuário, [etapa 2](PLAN-STAGE-2.md)), e a sonda da implementação leu
+  cada forma de `bindparam`: sem valor, `:nome`; com valor, constante; o mesmo `bindparam` duas
+  vezes, `:nome` nas duas; `text("data_str = :mes")`, `:mes`; `in_` com lista, constantes;
+  `bindparam("area", value=None)`, `NULL` com o `SAWarning`, porque o valor foi dado;
+  `bindparam("Data Base")`, `:Data Base`, que `render` recusa como nome inválido. Os oito
+  arquivos de `tests/client_model/sql/` saíram iguais com `sa.bindparam` no lugar de `param`, em
+  duas gerações, e o statement de teste rodou num `create_engine("duckdb:///:memory:")` com o
+  dicionário de parâmetros.
+- **`create_all` do modelo cliente no DuckDB.** `Base.metadata.create_all(connection)` falhou em
+  `rel_contrato_operacao`: `Binder Error: Failed to create foreign key: referenced table
+  "cad_operacoes" does not have a primary key or unique constraint on the columns
+  data,operacao`. A chave estrangeira composta aponta as colunas do índice único
+  `ix_operacoes_data_operacao`, e `cad_lancamentos` faz o mesmo com
+  `ix_contratos_data_sistema_contrato`; a página de `CREATE TABLE` do Redshift diz "The
+  referenced columns must be the columns of a unique or primary key constraint in the referenced
+  table". A biblioteca não emite chaves no DDL e `keys` lê índice e constraint por igual, então
+  nada muda para ela. O dono do modelo decidiu no mesmo dia: os dois índices viraram
+  `UniqueConstraint` e `check_models` recusa a chave estrangeira sem chave no alvo
+  ([etapa 1](PLAN-STAGE-1.md)). A sonda da regra, no DuckDB 1.5.5: `FOREIGN KEY (b, a)
+  REFERENCES alvo (b, a)` contra `UNIQUE (a, b)` é recusada (`Binder Error: Failed to create
+  foreign key: referenced table "alvo" does not have a primary key or unique constraint on the
+  columns b,a`), então a regra compara as colunas na ordem; um índice único como alvo é recusado
+  (`there is no primary key or unique constraint for referenced table "alvo2"`); o modelo cliente
+  inteiro, com as duas `UniqueConstraint`, é criado por `create_all` num
+  `create_engine("duckdb:///:memory:")`, e os 36 arquivos de esquema versionados saíram iguais
+  em duas gerações, porque o DDL da biblioteca não emite chaves.
+
+**Consequência**: o caminho padrão dos motores das etapas [4](PLAN-STAGE-4.md) e
+[5](PLAN-STAGE-5.md) é o statement Core compilado pela cópia prefixada com os parâmetros do
+cliente, e o texto SQL versionado é a opção de migração para fora do SQLAlchemy (decisão do
+usuário de 2026-09-22); o requisito que a acompanha, um modelo e um statement que um
+`sqlalchemy.Connection` criado fora da biblioteca aceite, fechou os dois itens em 2026-09-22
+(decisões do usuário: `render` troca o `bindparam` sem valor por `:nome`, com `param` fora do
+módulo; os dois índices únicos compostos do modelo cliente viraram `UniqueConstraint`, e
+`check_models` confere o alvo de cada chave estrangeira).

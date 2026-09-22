@@ -237,9 +237,11 @@ class TableOptions:
     """
 
     partition_by: str | None
-    """A coluna de partição, ``String(10)`` em ``AAAA-MM-DD``; ``None`` sem partição."""
+    """A coluna de partição, de texto ``String(n)``; ``None`` sem partição. O valor é o nome da
+    pasta da partição, sem ``/``, ``=`` nem espaço; na base atual é a data em ``AAAA-MM-DD``."""
     partition_source: str | None
-    """A coluna de data de que a coluna de partição deriva."""
+    """A coluna de data de que a coluna de partição deriva por ``strftime('%Y-%m-%d')``, quando
+    deriva; ``None`` quando o valor não vem de outra coluna."""
     sort_key: tuple[str, ...]
     """As colunas da ``SORTKEY`` do Redshift e da ordenação dos arquivos."""
     redshift: dict[str, str]
@@ -385,13 +387,15 @@ def _redshift_options(options: TableOptions) -> str:
     return " " + " ".join(clauses) if clauses else ""
 
 
-def ddl(table: sa.Table, dialect: Dialect, prefix: str = "") -> str:
+def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", temporary: bool = False) -> str:
     """O ``CREATE TABLE`` da tabela no motor, gerado como texto.
 
     Colunas, tipos e ``NOT NULL``, todo identificador entre aspas; ``DISTSTYLE``, ``DISTKEY`` e
     ``SORTKEY`` no Redshift, de ``table_options``. Sem chave, ``DEFERRABLE``, ``Identity``,
     ``CHECK``, ``DEFAULT`` nem comentário: as chaves são da auditoria, e o comentário vai no
-    esquema Delta. ``prefix`` renomeia a tabela para o sandbox, dentro das aspas.
+    esquema Delta. ``prefix`` renomeia a tabela para o sandbox, dentro das aspas, e ``temporary``
+    emite ``CREATE TEMP TABLE``, a tabela que dura a sessão: no DuckDB só a conexão que a criou a
+    vê, e um ``cursor()`` é outra conexão.
 
     Exemplo:
 
@@ -406,7 +410,8 @@ def ddl(table: sa.Table, dialect: Dialect, prefix: str = "") -> str:
     lines = []
     for column in table.columns:
         lines.append("    " + column_ddl(column, dialect))
-    text = f"CREATE TABLE {quoted(prefix + table.name)} (\n" + ",\n".join(lines) + "\n)"
+    keyword = "CREATE TEMP TABLE" if temporary else "CREATE TABLE"
+    text = f"{keyword} {quoted(prefix + table.name)} (\n" + ",\n".join(lines) + "\n)"
     if dialect == "redshift":
         text += _redshift_options(table_options(table))
     return text
@@ -618,32 +623,66 @@ def _column_problems(column: sa.Column) -> list[str]:
     return problems
 
 
+def _keyed_targets(table: sa.Table) -> list[tuple[str, ...]]:
+    """As listas de colunas que uma chave estrangeira pode apontar na tabela: a chave primária e
+    as ``UniqueConstraint``, na ordem declarada; um índice único não serve no DuckDB nem no Redshift."""
+    targets = []
+    if table.primary_key.columns:
+        targets.append(_column_names(table.primary_key.columns))
+    for constraint in table.constraints:
+        if isinstance(constraint, sa.UniqueConstraint):
+            targets.append(_column_names(constraint.columns))
+    return targets
+
+
+def _foreign_keys_by_columns(table: sa.Table) -> list[sa.ForeignKeyConstraint]:
+    """As chaves estrangeiras da tabela na ordem das colunas locais; o SQLAlchemy as guarda num conjunto."""
+    ordered = []
+    for position, constraint in enumerate(table.foreign_key_constraints):
+        ordered.append((_column_names(constraint.columns), position, constraint))
+    ordered.sort()
+    return [constraint for _, _, constraint in ordered]
+
+
 def _key_problems(table: sa.Table, options: TableOptions) -> list[str]:
-    """As violações das chaves: DEFERRABLE e a tabela sem chave alguma."""
+    """As violações das chaves: DEFERRABLE, o alvo de chave estrangeira sem chave, a tabela sem chave alguma."""
     problems = []
-    for constraint in table.foreign_key_constraints:
+    for constraint in _foreign_keys_by_columns(table):
+        columns = list(_column_names(constraint.columns))
         if constraint.deferrable or constraint.initially:
-            columns = list(_column_names(constraint.columns))
             problems.append(f"{table.name}: chave estrangeira DEFERRABLE em {columns}")
+        # O DuckDB e o Redshift exigem chave primária ou UNIQUE nas colunas apontadas, na mesma
+        # ordem; com um índice único no lugar, create_all num Connection do DuckDB falha
+        # (leitura de 2026-09-22).
+        referenced = tuple(element.column.name for element in constraint.elements)
+        if referenced not in _keyed_targets(constraint.referred_table):
+            problems.append(
+                f"{table.name}: chave estrangeira em {columns} aponta "
+                f"{constraint.referred_table.name} {list(referenced)}, sem chave primária nem "
+                "UniqueConstraint nessas colunas")
     if not options.keys:
         problems.append(f"{table.name}: sem chave primária e sem keys")
     return problems
 
 
 def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
-    """As violações da partição: a coluna ausente ou fora de String(10), a origem ausente."""
-    if not options.partition_by:
-        return []
+    """As violações da partição: a coluna ausente ou fora de String(n), a origem que não existe."""
     problems = []
+    if options.partition_source and not options.partition_by:
+        problems.append(f"{table.name}: partition_source sem partition_by")
+    if not options.partition_by:
+        return problems
     column = table.c.get(options.partition_by)
     if column is None:
         problems.append(
             f"{table.name}: partition_by aponta {options.partition_by}, que a tabela não tem")
-    elif not (isinstance(column.type, sa.String) and column.type.length == 10):
+    elif not (isinstance(column.type, sa.String) and column.type.length):
         problems.append(
-            f"{table.name}.{options.partition_by}: coluna de partição fora de String(10)")
-    if not options.partition_source or options.partition_source not in table.c:
-        problems.append(f"{table.name}: partition_by sem partition_source válido")
+            f"{table.name}.{options.partition_by}: coluna de partição fora de String(n)")
+    if options.partition_source and options.partition_source not in table.c:
+        problems.append(
+            f"{table.name}: partition_source aponta {options.partition_source}, "
+            "que a tabela não tem")
     return problems
 
 
@@ -652,9 +691,11 @@ def check_models(metadata: sa.MetaData) -> list[str]:
 
     As regras: tipo fora da tabela de tipos; ``autoincrement`` numa chave inteira (o padrão
     ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; chave estrangeira
-    ``DEFERRABLE``; ``partition_by`` sem a coluna, com a coluna fora de ``String(10)`` ou sem
-    ``partition_source``; tabela sem chave primária e sem ``keys``. O comentário de tabela e de
-    coluna é opcional (decisão do usuário de 2026-09-21); o da coluna, quando existe, vai para o
+    ``DEFERRABLE``, ou cujas colunas apontadas não são a chave primária nem uma
+    ``UniqueConstraint`` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB
+    nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
+    ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave primária e
+    sem ``keys``. O comentário de tabela e de coluna é opcional (decisão do usuário de 2026-09-21); o da coluna, quando existe, vai para o
     esquema Arrow e para o Delta.
 
     Exemplo:

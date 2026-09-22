@@ -15,7 +15,7 @@ DuckLake not adopted. SQLAlchemy is in the project for
 compatibility with that code (user statement of 2026-09-19); the same day the user decided that
 runtime compilation by the dialect is replaced gradually by generated SQL text per dialect, one
 database interaction at a time, so SQLAlchemy ends in the models and in generation and
-`duckdb_engine` and `sqlalchemy-redshift` leave the runtime dependencies. On 2026-09-20 the user fixed
+`duckdb_engine` and `sqlalchemy-redshift` leave the runtime dependencies (superseded: on 2026-09-21 the two dialects stayed runtime dependencies as `render`'s compilers, and on 2026-09-22 the user made the Core statement submitted to the engine the default path and the generated text the optional migration path out of SQLAlchemy). On 2026-09-20 the user fixed
 the exchange type with client code as streaming `pa.RecordBatch` in both directions (`stream` reads,
 `loader` writes), with `pa.Table` accepted and returned by `query`, `execute` and `load` only as a
 convenience over the same batch API, so the client works on the current batch while the library
@@ -298,3 +298,55 @@ publication, instead of falling back to the set difference of `get_add_actions`:
 pins `delta.logRetentionDuration` at 3650 days, and the cleanup that would remove the file also
 makes the published version unreadable. Stage 3 has no decision awaiting the user.
 `plan/PLAN-STAGE-3.md`, `plan/POC.md`
+
+## The sandbox tables and the DDL flag of 2026-09-22
+
+On 2026-09-22 the user proposed, in `CLAUDE.md`, temporary tables to separate the pipeline's
+execution from the published data in the single Redshift schema, with prefixes for the
+environments, and reverted the sentence the same day after the analysis: the sandboxes stay with
+regular tables, `exec_<id>_*` in the datashare schema for Redshift and the models' names in the
+throwaway file database for DuckDB, as the plan already had. What weighed: a DuckDB temporary
+table belongs to the connection that created it while the engine gives a cursor per thread, stream
+and loader (probe of the same day); a Redshift temporary table lives in the session, which the
+serverless workgroup ends after 3,600 s idle, cannot be inspected from outside or after a failed
+audit, and gets `RAW` encoding by default. The user asked for
+`ddl(table, dialect, prefix="", temporary=False)` all the same, with `temporary=True` emitting
+`CREATE TEMP TABLE` and no use inside the plan. `plan/PLAN-STAGE-1.md`, `plan/POC.md`
+
+The same day the user removed the per-thread connection from the Redshift engine (stage 5): the
+engine keeps one session per execution and a `threading.Lock`, every command takes it, `stream`
+executes under it and its helper thread only slices `fetchmany` (the driver materializes the
+result in `execute`), `loader` writes the Parquet outside it and runs the `COPY` under it;
+`ingest(max_workers)` serializes on that engine, `publish_redshift` keeps a connection per table,
+and a temporary table the pipeline creates in the session serves the next commands and is lost
+when the engine reconnects. The DuckDB engine keeps its cursor per thread, stream and loader.
+`plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/serialize-db.md`
+
+The same day the user generalized the partition column: any text column `String(n)` partitions,
+`partition_source` is optional and the derivation `strftime('%Y-%m-%d')` is checked by the audit
+and the initial load only when the model declares it, and the `AAAA-MM-DD` date is the current
+base's case, not the contract; the value must serve as a folder name and a literal (no `/`, `=`,
+space or empty), `previous_partitions` returns the text order, and `Execution` validates the
+value against those rules instead of `AAAA-MM-DD`. `check_models` refuses a partition column
+without length, a `partition_source` the table lacks and one without `partition_by`. A non-text
+partition type stays out: five SQL templates and the log's `partition_values` treat the value as
+quoted text. `plan/PLAN.md`, `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`,
+`plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-7.md`, `docs/index.md`
+
+The same day the user made the Core statement submitted to the engine the default path
+(`run.sandbox.query`, `execute` and `stream` compile the prefixed copy with the client's
+parameters and run it on the raw connection) and the generated SQL text the optional migration
+path out of SQLAlchemy, not the core feature; the wording in `plan/PLAN.md` follows the proposal
+the user accepted, with one requirement the user stated: the library never demands a model that a
+`sqlalchemy.Connection` created outside the library would refuse, because the client may submit
+the same statements there. The user accepted the two proposals from the probes of that day, both
+the same day: `render` maps a valueless `bindparam` to `:nome` by `replacement_traverse` and
+`param` left the module, so one statement serves the client's `Connection`, the engines and the
+files (`plan/PLAN-STAGE-2.md`); and `UniqueConstraint` replaced the two unique indexes the client
+model's composite foreign keys reference, with the `check_models` rule that a foreign key targets
+the referred table's primary key or a `UniqueConstraint` in the same column order, because DuckDB
+refuses a unique index as target and a swapped order, and Redshift documents the same requirement
+(`plan/PLAN-STAGE-1.md`, `plan/schema.md`). The
+migration ran successfully in the target; its reports exist and are not available yet, so the
+`export_mode` default still waits for their numbers. `plan/PLAN.md`, `plan/PLAN-STAGE-2.md`,
+`plan/OPEN_QUESTIONS.md`, `plan/POC.md`

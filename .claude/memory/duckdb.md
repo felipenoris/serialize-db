@@ -18,6 +18,11 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
 - Constraints cost on load and do not help queries in either engine: a DuckDB load of 300,000 rows
   went from 0.008 s to 0.073 s with a composite primary key, and Redshift keys are informational.
   `plan/schema.md`, `plan/duckdb.md`
+- A foreign key needs a primary key or `UNIQUE` constraint on the referenced columns, in the same
+  order: `FOREIGN KEY (b, a) REFERENCES alvo (b, a)` against `UNIQUE (a, b)` fails with
+  `Binder Error: ... does not have a primary key or unique constraint on the columns b,a`, and a
+  unique index as target with `there is no primary key or unique constraint for referenced table`
+  (DuckDB 1.5.5, 2026-09-22); `check_models` enforces the rule. `plan/POC.md`, `plan/schema.md`
 - `COPY ... (FORMAT parquet, RETURN_STATS)` returns `filename`, `count`, `file_size_bytes`,
   `footer_size_bytes`, `column_statistics` and `partition_keys`; the statistics come keyed by the
   quoted column name, with `column_size_bytes`, `min`, `max`, `null_count`, `num_values` as text,
@@ -64,3 +69,11 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `Parser Error: Unknown unit for memory`, `'4.5GiB'` passes. The default is 80% of the memory
   DuckDB detects (14.3 GiB where `os.sysconf` reads 18.0 GiB; 6.1 GiB of the target's 7.6 GiB), so a
   fraction of the machine is Python's arithmetic (2026-09-22). `plan/duckdb.md`
+- A `CREATE TEMP TABLE` belongs to the connection that created it: `con.cursor()` is a new
+  connection and gets `Catalog Error` on it, a second `connect(path)` in the same process cannot
+  see it either, and the same connection object used from another thread can; `duckdb_tables()`
+  lists it under catalog `temp`, schema `main`, `temporary` true, only in that connection
+  (2026-09-22, DuckDB 1.5.5; the docs: session scoped, only the creating connection, in memory
+  with spill to `temp_directory`). The engine gives a cursor per thread, stream and loader, so the
+  sandboxes stay with regular tables; `schema.ddl(..., temporary=True)` exists at the user's
+  request and the plan does not use it. `plan/POC.md`, `plan/PLAN-STAGE-1.md`

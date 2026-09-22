@@ -36,3 +36,10 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   error reaches Python as `OSError` with DuckDB's message. Objects with `__arrow_c_stream__` are
   accepted by `from_stream`, DuckDB `register` and `write_deltalake`. `plan/PLAN.md`, `plan/POC.md`,
   `plan/duckdb.md`, `tests/proof_of_concept/test_duckdb.py`, `test_pyarrow.py`, `test_parallel.py`
+- The Redshift engine keeps one session per execution under a `threading.Lock` (user decision of
+  2026-09-22), no connection per thread: `stream` takes the lock for `execute` only, because the
+  driver materializes the result there, `loader` writes the Parquet outside it and `COPY`s under
+  it, `ingest(max_workers)` serializes on that engine and `publish_redshift` keeps a connection
+  per table. A DuckDB temporary table is per connection and `cursor()` is a new connection
+  (2026-09-22), so the DuckDB engine keeps its cursor per thread, stream and loader, and both
+  sandboxes use regular tables. `plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/POC.md`

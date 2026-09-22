@@ -274,11 +274,13 @@ a linha no Redshift, `SERIAL` rejeitado e `DEFERRABLE` descartado pelo DuckDB, `
 o `Table` do modelo continua uma boa fonte do contrato (esquema Arrow, DDL dos dois bancos e, agora,
 o esquema Delta ou DuckLake).
 
-A substituição gradual do dialeto em tempo de execução está decidida: a biblioteca gera o texto SQL
-de cada dialeto a partir dos statements Core (`param`, `prefixed`, `render`, `write_sql_files`), o
-texto entra versionado no repositório do pipeline, e cada chamada que compilava um statement passa a
-executar o texto gerado, uma interação com o banco por vez. Ao fim, o SQLAlchemy fica nos modelos e
-na geração, e os dois dialetos deixam de ser dependências de execução. O que cada parte do
+A substituição do dialeto por texto gerado é uma opção de migração, não o caminho padrão (decisão
+do usuário de 2026-09-22): a biblioteca gera o texto SQL de cada dialeto a partir dos statements
+Core (`prefixed`, `render`, `write_sql_files`), o texto entra versionado no repositório do
+pipeline, e cada chamada que compilava um statement pode passar a executar o texto gerado, uma
+interação com o banco por vez. O padrão é o motor compilar o statement Core com os parâmetros do
+cliente, e por isso `duckdb-engine` e `sqlalchemy-redshift` são dependências de execução. O que
+cada parte do
 SQLAlchemy entrega ao projeto, a recomendação sem a compatibilidade com o pipeline e os
 comportamentos do compilador que a geração contorna estão em [`sqlalchemy.md`](sqlalchemy.md).
 

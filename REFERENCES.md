@@ -54,6 +54,10 @@ Documentação:
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_ALTER_TABLE_APPEND.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_Character_types.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_TABLE_NEW.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_ALTER_USER.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-usage-considerations.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-billing.html>
+- <https://repost.aws/knowledge-center/redshift-temporary-tables-memory> (respondeu 403 em 2026-09-22)
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_TABLE_examples.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/performing-a-deep-copy.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_SCHEMA.html>
@@ -307,6 +311,7 @@ Documentação:
 - <https://duckdb.org/docs/current/data/multiple_files/overview.html>
 - <https://duckdb.org/docs/current/sql/statements/insert.html>
 - <https://duckdb.org/docs/current/sql/statements/create_table.html>
+- <https://duckdb.org/docs/lts/sql/statements/create_table>
 - <https://duckdb.org/docs/current/guides/performance/file_formats.html>
 - <https://duckdb.org/docs/current/guides/performance/indexing.html>
 - <https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads.html>

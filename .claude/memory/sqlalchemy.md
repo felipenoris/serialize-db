@@ -92,3 +92,21 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   2026-09-21 was on the bare sentinel of the `quote=False` draft. It accepts `||`, `CAST(... AS
   NUMERIC(18, 2))`, `NOT (EXISTS (...))` and both `:name` and `$name` markers, and raises
   `TokenError` on an unbalanced quote (2026-09-22). `plan/POC.md`
+- `duckdb.paramstyle` is `qmark`, `duckdb_engine.Dialect()` compiles `pyformat` and
+  `Dialect(paramstyle="named")` `named`; `redshift_connector.paramstyle` and
+  `RedshiftDialect_redshift_connector()` are `format`. A statement compiled with the named dialect
+  and no `literal_binds` renders constants and `bindparam` as `:name`,
+  `compiled.construct_params(params)` merges both, and the text with `$name` runs on the raw
+  DuckDB connection: the engines' default path since 2026-09-22 (user decision), the versioned
+  SQL text being the optional migration path. On a `sqlalchemy.Connection` built outside the
+  library (`duckdb_engine`), a client-model statement with `bindparam` runs and `"to"` is quoted
+  by the dialect; one with `sql.param` fails (`Parser Error: syntax error at or near ":"`), so
+  `render` maps a valueless `bindparam` to `:name` by `replacement_traverse` (original intact)
+  since 2026-09-22 (user decision) and `param` left the module; a `text()` placeholder, a
+  `bindparam` used twice and an `in_` list render as expected, `bindparam(value=None)` renders
+  `NULL` with the `SAWarning`, and `bindparam("Data Base")` is refused as an invalid name. `Base.metadata.create_all` of the client model on
+  DuckDB failed at `rel_contrato_operacao` while its composite foreign key targeted the columns
+  of a unique index; the model declares them as `UniqueConstraint` since 2026-09-22 (user
+  decision), the whole model creates on a `duckdb-engine` `Connection`, and `check_models`
+  checks the target of every foreign key. `plan/POC.md`, `plan/PLAN-STAGE-2.md`,
+  `plan/PLAN-STAGE-1.md`

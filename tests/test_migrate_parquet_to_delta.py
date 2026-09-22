@@ -117,6 +117,15 @@ def test_discover_partitions_and_the_entries_outside_the_pattern(
     assert list(found) == PARTITION_VALUES and skipped == ["notas.txt"]
     stray.unlink()
 
+    # A partição é texto (decisão de 2026-09-22): uma pasta cujo valor não é data também é achada.
+    quarter = base.root / "cad_operacoes" / "data_str=2026-Q1"
+    quarter.mkdir()
+    found, skipped = migrate.discover_partitions(
+        origin.child("cad_operacoes"), schema.table_options(TABLES["cad_operacoes"])
+    )
+    assert "2026-Q1" in found and skipped == []
+    quarter.rmdir()
+
 
 def test_partition_query_casts_to_the_contract(
     base: source.SourceBase, origin: migrate.Location, con

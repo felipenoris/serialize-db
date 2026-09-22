@@ -33,9 +33,11 @@ class Operacao(Base):
     data_ref_str: Mapped[str] = mapped_column(String(10))
 ```
 
-A coluna de partição é uma data em texto `AAAA-MM-DD`, `strftime(partition_source, '%Y-%m-%d')`,
-nos moldes da base de referência (decisão de 2026-09-20); a biblioteca não fixa o nome nem a
-granularidade, e `mes` nos exemplos dos outros documentos é uma coluna de partição ilustrativa.
+A coluna de partição é uma coluna de texto `String(n)` do modelo (decisão de 2026-09-22, que
+generaliza a de 2026-09-20); na base de referência ela é a data em texto `AAAA-MM-DD`,
+`strftime(partition_source, '%Y-%m-%d')`, e `partition_source`, opcional, declara a coluna de data
+de que ela deriva; a biblioteca não fixa o nome nem a granularidade, e `mes` nos exemplos dos
+outros documentos é uma coluna de partição ilustrativa.
 
 O `sqlalchemy-redshift` aceita `redshift_diststyle`, `redshift_distkey`, `redshift_sortkey` e
 `redshift_interleaved_sortkey` como argumentos de `Table`. Guardar as opções em `info` mantém os
@@ -48,6 +50,13 @@ modelos neutros quando o dialeto do Redshift não está instalado.
 | `NOT NULL`              | Declarada. | Declarada e aplicada pelo banco. |
 | `PRIMARY KEY`, `UNIQUE` | Omitida; a auditoria confere a chave do modelo. | Declarada quando auditada; informativa.|
 | `FOREIGN KEY` | Omitida; a auditoria confere com `foreign_keys=True`. | Declarada quando auditada; informativa. |
+
+Uma chave estrangeira do modelo aponta a chave primária ou uma `UniqueConstraint` da tabela
+referenciada, na mesma ordem de colunas, e `check_models` a confere: o DuckDB recusa o índice único
+como alvo e a ordem trocada (`Binder Error: ... does not have a primary key or unique constraint on
+the columns`, leituras de 2026-09-22, [`POC.md`](POC.md)), o Redshift documenta a mesma exigência, e
+sem ela `create_all` num `sqlalchemy.Connection` criado fora da biblioteca falha (decisão do usuário
+de 2026-09-22).
 
 Unicidade, chave primária e chave estrangeira são informativas no Redshift. O planejador usa essas
 chaves para decorrelacionar subconsultas, ordenar e eliminar joins, e supõe que elas são válidas. Com

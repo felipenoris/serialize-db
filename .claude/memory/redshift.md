@@ -146,3 +146,20 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   and 3.8 s, `UNLOAD` 1.6 s and 1.5 s; `has_schema_privilege` `false` six times. Proposals awaiting
   the user: `FILLRECORD` on every library `COPY`, and the 65,535-byte ceiling of the JSON field
   checked by the audit. `plan/POC.md`, `plan/PLAN-STAGE-8.md`
+
+## Sessions and temporary tables
+
+- Redshift Serverless ends by `SESSION TIMEOUT` a session idle for more than 3,600 s and a
+  transaction left open and inactive for more than 21,600 s, and stops a query above 86,399 s;
+  `ALTER USER ... SESSION TIMEOUT` sets the limit per user, 60 s to 20 days, new sessions only, and
+  needs a superuser or the `ALTER USER` privilege; `stv_sessions` shows the session's limit. Every
+  query is billed activity, a keepalive included, with a 60 s minimum (AWS docs read on
+  2026-09-22). A temporary table lives in a session-specific schema that comes first in the
+  `search_path`, may carry the name of a permanent table and shadows it until the permanent one is
+  schema-qualified, gets `RAW` encoding by default unless a column says `ENCODE`, and is absent
+  from `svv_table_info`. `redshift_connector.Cursor.execute` delegates to `Connection.execute`, so
+  every cursor of a connection is the same session. `plan/redshift.md`
+- The Redshift engine keeps one session per execution under a `threading.Lock` (user decision of
+  2026-09-22), the `exec_<id>_*` tables stay permanent in the datashare schema, and the user
+  reverted the temporary-table proposal the same day; a temporary table the pipeline creates in
+  the session is lost when the engine reconnects. `plan/PLAN-STAGE-5.md`

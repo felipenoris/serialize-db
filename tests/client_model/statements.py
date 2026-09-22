@@ -3,7 +3,8 @@
 Cada entrada é ``{nome: statement}``, e o nome vira ``sql/<nome>.duckdb.sql`` e
 ``sql/<nome>.redshift.sql``, os arquivos versionados em ``tests/client_model/sql/``. Os quatro
 statements são os de um pipeline de exemplo sobre o modelo cliente, com o que o texto gerado tem
-de tratar: a partição de referência como parâmetro (``sql.param("data_base_str")``), um literal
+de tratar: a partição de referência como parâmetro (``sa.bindparam("data_base_str")``, o mesmo
+statement que roda num ``sqlalchemy.Connection`` do cliente), um literal
 com ``%`` e outro com ``:``, as colunas ``to`` e ``timestamp``, palavras reservadas dos motores,
 um ``CAST``, e um ``INSERT ... SELECT`` cujo alvo aparece de novo numa subconsulta.
 
@@ -26,8 +27,6 @@ Exemplo::
 
 import sqlalchemy as sa
 
-from serialize_db import sql
-
 from .base import Base
 
 TABLES = Base.metadata.tables
@@ -37,8 +36,9 @@ CONTRACTS = TABLES["cad_contratos"]
 APPORTIONMENTS = TABLES["rel_contrato_operacao"]
 VEHICLES = TABLES["dom_veiculos"]
 
-# A partição de referência, o parâmetro de toda execução; o tipo é o da coluna de partição.
-PARTITION = sql.param("data_base_str", sa.String(10))
+# A partição de referência, o parâmetro de toda execução; o tipo é o da coluna de partição. O
+# bindparam sem valor sai como :nome em render e recebe o valor no Connection e nos motores.
+PARTITION = sa.bindparam("data_base_str", type_=sa.String(10))
 
 # O saldo de cada conta que permite lançamentos, na partição de referência.
 BALANCE_BY_ACCOUNT = (

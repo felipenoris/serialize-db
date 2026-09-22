@@ -71,6 +71,19 @@ guardada em lugar nenhum.
   de sistema; a suíte e a biblioteca conectam sem `timeout`, porque um `COPY` dura mais que qualquer
   espera de leitura. `ssl=True` (`verify-ca`) é o padrão da biblioteca.
 
+### Os limites de sessão do serverless
+
+O Redshift Serverless encerra por `SESSION TIMEOUT` a sessão ociosa há mais de 3.600 s e a transação
+aberta e inativa há mais de 21.600 s, e interrompe a consulta que passa de 86.399 s;
+`ALTER USER ... SESSION TIMEOUT` troca o limite por usuário, de 60 s a 20 dias, só para sessões
+novas, e exige superusuário ou o privilégio `ALTER USER`; `stv_sessions` mostra o limite da sessão
+corrente. Toda consulta conta como atividade cobrada, uma de keepalive inclusive, com o mínimo de
+60 s de RPU (páginas de faturamento, de considerações e de `ALTER USER` do serverless, lidas em
+2026-09-22). O motor da [etapa 5](PLAN-STAGE-5.md) guarda uma sessão por execução: uma fase do
+pipeline fora do banco mais longa que uma hora perde a sessão, o motor reconecta no comando
+seguinte, e o que se perde é a tabela temporária que o pipeline tenha criado nela; as
+`exec_<id>_*` são permanentes.
+
 ### O cache de prepared statements e a leitura do resultado no driver
 
 O `redshift_connector` (2.1.16) guarda um prepared statement nomeado por texto de comando
@@ -502,8 +515,12 @@ Pontos da referência:
   snapshots de qualquer forma.
 - `CREATE TABLE ... AS SELECT` aceita `DISTSTYLE`, `DISTKEY` e `SORTKEY`, herda os tipos da consulta
   e recebe `ANALYZE` automático.
-- Tabelas temporárias vivem num esquema da sessão, aceitam nome igual ao de uma permanente e recebem
-  codificação `RAW`. Um nome iniciado por `#` cria uma tabela temporária.
+- Tabelas temporárias vivem num esquema da sessão, o primeiro do `search_path`, morrem com ela,
+  aceitam nome igual ao de uma permanente, que fica à sombra até ser qualificada pelo esquema, e
+  recebem codificação `RAW` por padrão, salvo `ENCODE` por coluna; `svv_table_info` não as lista. Um
+  nome iniciado por `#` cria uma tabela temporária. O sandbox da biblioteca não as usa (decisão do
+  usuário de 2026-09-22); o pipeline pode criá-las na sessão única do motor
+  ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)).
 - Limites: 127 bytes por nome, 1.600 colunas, cota de tabelas por tipo de nó.
 
 As tabelas do sandbox recebem o prefixo da execução no nome, dentro do único esquema. O `Table` do

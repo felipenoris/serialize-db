@@ -1,9 +1,9 @@
 """O texto SQL de cada motor a partir de um statement Core: parâmetro, prefixo, renderização, arquivos.
 
 O módulo gera o texto SQL do DuckDB e do Redshift a partir de um statement Core do SQLAlchemy
-(``render``): as constantes ficam embutidas, os parâmetros de execução saem como ``:nome``
-(``param``) e cada tabela do contrato sai com o sentinela ``{prefix}`` no nome (``prefixed``), que
-quem executa troca pelo prefixo do sandbox (``read_sql``). ``bind`` reescreve os marcadores para o
+(``render``): as constantes ficam embutidas, cada ``bindparam`` sem valor sai como ``:nome``, o
+parâmetro de execução, e cada tabela do contrato sai com o sentinela ``{prefix}`` no nome
+(``prefixed``), que quem executa troca pelo prefixo do sandbox (``read_sql``). ``bind`` reescreve os marcadores para o
 estilo do motor e confere o dicionário de parâmetros; ``referenced_tables`` lista as tabelas do
 contrato que um statement ou um texto cita; ``sql_files``, ``write_sql_files`` e
 ``check_sql_files`` geram, gravam e conferem os arquivos que o pipeline versiona, um por statement
@@ -12,7 +12,9 @@ e por motor.
 É a substituição gradual da compilação pelo dialeto em tempo de execução: o texto gerado entra no
 repositório do pipeline, revisado no diff, e a chamada que compilava o statement passa a executar
 o texto. Toda tabela e toda coluna do contrato saem entre aspas duplas, como no DDL de
-``serialize_db.schema``, com o sentinela dentro das aspas (``"{prefix}cad_contas"."numero"``).
+``serialize_db.schema``, com o sentinela dentro das aspas (``"{prefix}cad_contas"."numero"``). O
+statement é o mesmo que roda num ``sqlalchemy.Connection`` criado fora da biblioteca e no
+``execute`` dos motores: nada nele é próprio deste módulo.
 
 Exemplo, com duas tabelas do contrato:
 
@@ -32,7 +34,7 @@ Exemplo, com duas tabelas do contrato:
     statement = (
         sa.select(accounts.c.numero, sa.func.sum(entries.c.valor).label("total"))
         .join_from(entries, accounts, entries.c.id_conta == accounts.c.id_conta)
-        .where(entries.c.data_base_str == sql.param("data_base_str", sa.String(10)))
+        .where(entries.c.data_base_str == sa.bindparam("data_base_str", type_=sa.String(10)))
         .group_by(accounts.c.numero)
     )
     print(sql.render(statement, "duckdb", metadata))
@@ -64,7 +66,6 @@ from serialize_db.schema import Dialect
 __all__ = [
     "bind",
     "check_sql_files",
-    "param",
     "prefixed",
     "read_sql",
     "referenced_tables",
@@ -93,26 +94,7 @@ _QUOTED_OR_PLACEHOLDER = re.compile(
 _SENTINEL_TABLE = re.compile(r"\{prefix\}(\w+)")
 
 
-# ---------------------------------------------------------------- o parâmetro e o prefixo
-
-
-def param(name: str, type_: sa.types.TypeEngine | None = None) -> sa.ColumnElement:
-    """O parâmetro de execução, que atravessa ``literal_binds`` e chega ao texto como ``:nome``.
-
-    ``type_`` é o tipo da coluna com que o parâmetro se compara, para o compilador do dialeto.
-    Um nome fora de ``[a-z_][a-z0-9_]*`` é ``SqlError``. Um ``bindparam`` sem valor não serve de
-    parâmetro: o compilador o renderiza como ``NULL``, e ``render`` o recusa.
-
-    Exemplo:
-
-    .. code-block:: python
-
-        entries.c.data_base_str == param("data_base_str", sa.String(10))
-        # ... "data_base_str" = :data_base_str
-    """
-    if not _PARAMETER_NAME.fullmatch(name):
-        raise SqlError(f"nome de parâmetro inválido: {name!r}")
-    return sa.literal_column(f":{name}", type_=type_)
+# ---------------------------------------------------------------- o prefixo
 
 
 def _prefixed_copy(table: sa.Table, prefix: str) -> sa.Table:
@@ -163,25 +145,36 @@ def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
 # ---------------------------------------------------------------- o texto por motor
 
 
-def _parameters_without_value(statement: sa.sql.ClauseElement, dialect: object) -> list[str]:
-    """Os ``bindparam`` sem valor do statement, que ``literal_binds`` renderizaria como ``NULL``."""
-    names = []
-    for parameter in statement.compile(dialect=dialect).binds.values():
-        if parameter.required:
-            names.append(parameter.key)
-    return names
+def _parameters_as_placeholders(statement: sa.sql.ClauseElement) -> sa.sql.ClauseElement:
+    """A cópia do statement com cada ``bindparam`` sem valor trocado por ``:nome``; o original não muda.
+
+    ``literal_binds`` renderizaria o ``bindparam`` sem valor como ``NULL``; um
+    ``literal_column(":nome")`` atravessa a compilação como texto. O ``bindparam`` com valor fica,
+    e sai como constante. Um nome fora de ``[a-z_][a-z0-9_]*`` é ``SqlError``, porque ``bind`` não
+    o leria no texto.
+    """
+    def replace(element: sa.sql.ClauseElement) -> sa.sql.ClauseElement | None:
+        # replacement_traverse chama replace em cada nó; None deixa o nó como está.
+        if not isinstance(element, sa.BindParameter) or not element.required:
+            return None
+        if not _PARAMETER_NAME.fullmatch(element.key):
+            raise SqlError(f"nome de parâmetro inválido: {element.key!r}")
+        return sa.literal_column(f":{element.key}", type_=element.type)
+
+    return replacement_traverse(statement, {}, replace)
 
 
 def render(statement: sa.sql.ClauseElement, dialect: Dialect, metadata: sa.MetaData,
            prefix: str = SENTINEL) -> str:
-    """O texto do motor com as constantes embutidas e os parâmetros como ``:nome``.
+    """O texto do motor com as constantes embutidas e cada ``bindparam`` sem valor como ``:nome``.
 
     O statement é compilado sobre a cópia prefixada (``prefixed``) pelo dialeto do motor com
-    ``paramstyle="named"``, que não dobra o ``%`` dos literais. Um ``bindparam`` sem valor é
-    ``SqlError``, porque o compilador o renderizaria como ``NULL``: o parâmetro de execução é
-    ``param``. O texto sai com o sentinela ``{prefix}`` dentro das aspas de cada tabela do
-    contrato; ``prefix=""`` dá o texto sobre as tabelas do contrato, e ``prefix="exec_42_"`` o
-    texto sobre o sandbox dessa execução. Nenhuma linha termina em espaço.
+    ``paramstyle="named"``, que não dobra o ``%`` dos literais. O ``bindparam`` sem valor é o
+    parâmetro de execução, que ``bind`` reescreve para o motor; o ``bindparam`` com valor sai como
+    constante, e um nome de parâmetro fora de ``[a-z_][a-z0-9_]*`` é ``SqlError``. O texto sai com
+    o sentinela ``{prefix}`` dentro das aspas de cada tabela do contrato; ``prefix=""`` dá o texto
+    sobre as tabelas do contrato, e ``prefix="exec_42_"`` o texto sobre o sandbox dessa execução.
+    Nenhuma linha termina em espaço.
 
     Exemplo:
 
@@ -190,10 +183,7 @@ def render(statement: sa.sql.ClauseElement, dialect: Dialect, metadata: sa.MetaD
         render(statement, "redshift", metadata, prefix="exec_42_")
         # SELECT "exec_42_cad_contas"."numero", ... WHERE ... = :data_base_str ...
     """
-    copy = prefixed(statement, metadata, prefix)
-    missing = _parameters_without_value(copy, _DIALECTS[dialect])
-    if missing:
-        raise SqlError(f"parâmetro sem valor no statement: {missing}; use param('nome')")
+    copy = _parameters_as_placeholders(prefixed(statement, metadata, prefix))
     compiled = copy.compile(dialect=_DIALECTS[dialect], compile_kwargs={"literal_binds": True})
     # O compilador deixa um espaço antes de cada quebra de linha; sem ele o arquivo versionado
     # sobrevive a um editor que apara o fim das linhas.

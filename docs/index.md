@@ -19,11 +19,12 @@ mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.
 - **Os dados atravessam a fronteira em lotes Arrow** (`pyarrow.RecordBatch`, `pyarrow.Table` ou
   `pyarrow.RecordBatchReader`), e `serialize_db.schema.cast` leva cada lote ao esquema do contrato
   ou o recusa com a instrução ao cliente.
-- **O SQL do pipeline vira texto gerado por motor.** Cada statement Core do pipeline sai como
-  texto do DuckDB e do Redshift por `serialize_db.sql.render`, com as constantes embutidas, a
+- **O statement Core do pipeline roda no motor como está.** O cliente o submete às primitivas do
+  motor, que o compilam pelo dialeto com os parâmetros dele; o mesmo statement roda num
+  `sqlalchemy.Connection` criado fora do pacote. Como opção para quem quer sair do SQLAlchemy,
+  `serialize_db.sql.render` gera o texto do DuckDB e do Redshift, com as constantes embutidas, a
   partição como parâmetro `:nome` e cada tabela do contrato com o sentinela `{prefix}` no nome,
-  que a execução troca pelo prefixo do sandbox. O pipeline versiona o texto e o executa no lugar
-  de compilar o statement a cada execução.
+  que a execução troca pelo prefixo do sandbox, e o pipeline versiona o texto.
 - **Todo identificador que a biblioteca emite vai entre aspas duplas**: nomes de coluna como `to` e
   `timestamp` são palavras reservadas do DuckDB e do Redshift.
 
@@ -65,7 +66,7 @@ class Base(DeclarativeBase):
 class Operacao(Base):
     __tablename__ = "cad_operacoes"
     __table_args__ = (
-        sa.Index("ix_operacoes_data_operacao", "data", "operacao", unique=True),
+        sa.UniqueConstraint("data", "operacao"),
         {
             "comment": "Operações de crédito por data-base",
             "info": {
@@ -91,8 +92,8 @@ As chaves de `Table.info["serialize_db"]`:
 
 | Chave | O que declara |
 | --- | --- |
-| `partition_by` | A coluna de partição, uma no máximo, `String(10)` em `AAAA-MM-DD`, no fim da tabela. |
-| `partition_source` | A coluna de data de que a coluna de partição deriva (`strftime('%Y-%m-%d')`). |
+| `partition_by` | A coluna de partição, uma no máximo, de texto `String(n)`, no fim da tabela; o valor é o nome da pasta da partição, sem `/`, `=` nem espaço. Na base atual é a data em `AAAA-MM-DD`. |
+| `partition_source` | Opcional: a coluna de data de que a coluna de partição deriva (`strftime('%Y-%m-%d')`); com ela, a auditoria e a carga inicial conferem a derivação. |
 | `sort_key` | As colunas da `SORTKEY` do Redshift e da ordenação dos arquivos. |
 | `redshift` | `diststyle` e `distkey` do Redshift; ausente, a distribuição é `AUTO`. |
 | `keys` | `{"add": [[...]], "drop": [[...]]}`: uma chave de negócio a mais para a auditoria, ou uma chave do modelo a menos, sempre por lista de colunas. |
@@ -110,8 +111,12 @@ assert problems == [], "\n".join(problems)
 ```
 
 As regras: tipo fora da tabela de tipos; `autoincrement` numa chave inteira (o padrão `"auto"`
-inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); chave estrangeira `DEFERRABLE`; `partition_by` sem a coluna, com a coluna fora de
-`String(10)` ou sem `partition_source`; tabela sem chave primária e sem `keys`.
+inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); chave
+estrangeira `DEFERRABLE`, ou cujas colunas apontadas não são a chave primária nem uma
+`UniqueConstraint` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB nem no
+Redshift, e `create_all` num `sqlalchemy.Connection` do DuckDB falha); `partition_by` sem a coluna
+ou com a coluna fora de `String(n)`, `partition_source` que a tabela não tem ou sem
+`partition_by`; tabela sem chave primária e sem `keys`.
 
 ### Derivar o esquema e o DDL
 
@@ -153,7 +158,9 @@ As colunas são as mesmas nos dois motores; o `Double` é `DOUBLE` no DuckDB e `
 Redshift, e a `sort_key` vira `SORTKEY` só no Redshift. O `CREATE TABLE` leva colunas, tipos e
 `NOT NULL`; as chaves ficam para a auditoria, e o comentário de cada coluna vai no esquema Delta.
 `serialize_db.schema.sql_type` dá o nome de um tipo num motor, para um `CAST` ou um `ALTER TABLE`,
-e `serialize_db.schema.quoted` cita um identificador.
+e `serialize_db.schema.quoted` cita um identificador. `temporary=True` faz `ddl` emitir
+`CREATE TEMP TABLE`, a tabela que dura a sessão: no DuckDB só a conexão que a criou a vê, e um
+`cursor()` é outra conexão.
 
 ### Converter um lote de dados
 
@@ -201,10 +208,12 @@ mesmo.
 
 ### Gerar o texto SQL de cada motor
 
-Um statement Core do pipeline vira texto do DuckDB e do Redshift por `serialize_db.sql.render`. A
-partição de referência entra por `serialize_db.sql.param`, que chega ao texto como `:nome`; as
-constantes ficam embutidas, e cada tabela do contrato sai com o sentinela `{prefix}` no nome,
-dentro das aspas, que a execução troca pelo prefixo do sandbox:
+A opção de migração para fora do SQLAlchemy. Um statement Core do pipeline vira texto do DuckDB e
+do Redshift por `serialize_db.sql.render`. A partição de referência entra por um `sa.bindparam`
+sem valor, que chega ao texto como `:nome`, e o statement é o mesmo que roda num
+`sqlalchemy.Connection` do cliente e nos motores; as constantes ficam embutidas, e cada tabela do
+contrato sai com o sentinela `{prefix}` no nome, dentro das aspas, que a execução troca pelo
+prefixo do sandbox:
 
 ```python
 from serialize_db import sql
@@ -212,7 +221,7 @@ from serialize_db import sql
 operations = Operacao.__table__
 statement = (
     sa.select(operations.c.operacao, sa.func.sum(operations.c.valor).label("total"))
-    .where(operations.c.data_str == sql.param("data_str", sa.String(10)),
+    .where(operations.c.data_str == sa.bindparam("data_str", type_=sa.String(10)),
            operations.c.operacao.like("A%"))
     .group_by(operations.c.operacao)
     .order_by(operations.c.operacao)
@@ -228,8 +237,8 @@ FROM "{prefix}cad_operacoes"
 WHERE "{prefix}cad_operacoes"."data_str" = :data_str AND "{prefix}cad_operacoes"."operacao" LIKE 'A%' GROUP BY "{prefix}cad_operacoes"."operacao" ORDER BY "{prefix}cad_operacoes"."operacao"
 ```
 
-Um `bindparam` sem valor é recusado com `serialize_db.errors.SqlError`, porque o compilador o
-renderizaria como `NULL`. Na execução, `serialize_db.sql.bind` reescreve o marcador para o estilo
+Um `bindparam` com valor sai como constante, e um nome de parâmetro fora de `[a-z_][a-z0-9_]*` é
+recusado com `serialize_db.errors.SqlError`. Na execução, `serialize_db.sql.bind` reescreve o marcador para o estilo
 do motor (`$nome` no DuckDB, `:nome` no `redshift_connector` com `paramstyle = "named"`) e confere
 o dicionário de parâmetros; toda região citada passa intacta, e um texto que ainda traz o sentinela
 é recusado:

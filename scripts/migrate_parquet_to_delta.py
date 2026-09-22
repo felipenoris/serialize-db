@@ -5,15 +5,15 @@ promovido a ferramenta, sobre ``serialize_db.schema``, o ``deltalake`` e o DuckD
 3 e 4; quando elas chegarem, o corpo vira ``serialize_db.load.initial_load``. Para cada tabela do
 modelo, as sem partição primeiro e as particionadas depois, na ordem do modelo:
 
-- ``discover_partitions`` lista a pasta da tabela na origem: as pastas ``<coluna>=<AAAA-MM-DD>``
+- ``discover_partitions`` lista a pasta da tabela na origem: as pastas ``<coluna>=<valor>``
   viram as partições, e o que não segue o padrão vai para o relatório;
 - ``partition_query`` monta o ``SELECT`` do DuckDB que leva a partição ao contrato: a pasta
   inteira por ``read_parquet``, cada coluna em ``CAST`` para o tipo de ``sql_type`` (as chaves de
   ``int32`` a ``BIGINT``, o ``timestamp`` ``INT96`` a ``TIMESTAMP``, truncado a microssegundos),
   o valor do caminho na coluna de partição;
-- a carga confere numa consulta que a coluna de origem da partição (``data``, ``data_base``) é
-  igual ao valor do caminho em toda linha, que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum
-  texto passa do ``String(n)`` em bytes, e grava a partição no modo pedido: ``register`` roda
+- a carga confere numa consulta que a coluna de origem da partição (``data``, ``data_base``),
+  quando o modelo a declara em ``partition_source``, é igual ao valor do caminho em toda linha,
+  que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum texto passa do ``String(n)`` em bytes, e grava a partição no modo pedido: ``register`` roda
   ``COPY ... TO`` na pasta da tabela com ``RETURN_STATS`` e registra o arquivo no log por
   ``create_write_transaction``, com o ``nullCount`` de toda coluna e o mínimo e o máximo das
   inteiras, de data, ``Double`` e texto; ``rewrite`` passa o leitor da consulta por ``cast`` e
@@ -80,7 +80,7 @@ from deltalake.transaction import AddAction
 from serialize_db import schema
 from serialize_db.errors import ContractError
 
-PARTITION_FOLDER = re.compile(r"(?P<column>[a-z_]+)=(?P<value>\d{4}-\d{2}-\d{2})")
+PARTITION_FOLDER = re.compile(r"(?P<column>[a-z_]+)=(?P<value>[^/=]+)")
 
 # As retenções que a etapa 3 fixa em create_table: o log legível por dez anos e os arquivos
 # removidos guardados por 400 dias, a janela em que toda versão continua legível.
@@ -197,8 +197,8 @@ def discover_partitions(
 ) -> tuple[dict[str | None, Location], list[str]]:
     """As partições da pasta da tabela e as entradas fora do padrão.
 
-    Numa tabela particionada, ``{valor: pasta}`` das pastas ``<coluna>=<AAAA-MM-DD>`` com a
-    coluna do modelo; numa tabela sem partição, ``{None: pasta}``.
+    Numa tabela particionada, ``{valor: pasta}`` das pastas ``<coluna>=<valor>`` com a coluna
+    do modelo; numa tabela sem partição, ``{None: pasta}``.
     """
     if options.partition_by is None:
         return {None: location}, []
@@ -279,14 +279,15 @@ def contract_problems(
 ) -> list[str]:
     """O que a partição tem fora do contrato, numa consulta só.
 
-    Linhas com a coluna de origem da partição diferente do valor do caminho, nulos nas colunas
-    ``NOT NULL`` e textos acima do ``String(n)`` em bytes, a medida do ``VARCHAR(n)`` do Redshift
-    (``strlen`` no DuckDB conta bytes; ``octet_length`` só existe para ``BLOB``).
+    Linhas com a coluna de origem da partição diferente do valor do caminho, quando o modelo
+    declara ``partition_source``, nulos nas colunas ``NOT NULL`` e textos acima do ``String(n)`` em
+    bytes, a medida do ``VARCHAR(n)`` do Redshift (``strlen`` no DuckDB conta bytes;
+    ``octet_length`` só existe para ``BLOB``).
     """
     options = schema.table_options(table)
     measures = []
     labels = []
-    if options.partition_by:
+    if options.partition_by and options.partition_source:
         partition = schema.quoted(options.partition_by)
         source = schema.quoted(options.partition_source)
         measures.append(f"count(*) FILTER (WHERE {partition} <> strftime({source}, '%Y-%m-%d'))")
