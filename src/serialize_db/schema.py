@@ -129,6 +129,10 @@ _SQL_TYPES: dict[str, dict[type, str]] = {
     },
 }
 
+# O teto do VARCHAR no Redshift, em bytes: o limite de uma coluna Text, que não declara n
+# (decisão do usuário de 2026-09-21).
+_TEXT_LIMIT = 65535
+
 
 # ---------------------------------------------------------------- o esquema Arrow e Delta
 
@@ -423,11 +427,25 @@ def _refuse_nested_json(column, field: pa.Field, table: str) -> None:
                             "serialize com json.dumps antes de chamar")
 
 
+def _longest_text(column) -> int:
+    """O maior valor da coluna em bytes; 0 numa coluna vazia ou só de nulos."""
+    return pc.max(pc.binary_length(column)).as_py() or 0
+
+
 def _refuse_text_above_length(column, field: pa.Field, table: str, limit: int) -> None:
     """Texto acima de String(n), medido em bytes como o VARCHAR(n) do Redshift."""
-    longest = pc.max(pc.binary_length(column)).as_py() or 0
+    longest = _longest_text(column)
     if longest > limit:
-        raise ContractError(f"{table}.{field.name}: texto acima de String({limit}) em bytes")
+        raise ContractError(f"{table}.{field.name}: texto de {longest} bytes acima de "
+                            f"String({limit}) em bytes; corte o valor ou aumente o comprimento")
+
+
+def _refuse_text_above_varchar(column, field: pa.Field, table: str) -> None:
+    """Texto acima do teto do VARCHAR do Redshift numa coluna Text, que não declara n."""
+    longest = _longest_text(column)
+    if longest > _TEXT_LIMIT:
+        raise ContractError(f"{table}.{field.name}: texto de {longest} bytes acima do teto de "
+                            f"{_TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor")
 
 
 def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa.Table):
@@ -444,7 +462,9 @@ def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa
     if isinstance(kind, sa.JSON):
         _refuse_nested_json(column, field, table.name)
     limit = getattr(kind, "length", None)
-    if limit and pa.types.is_string(column.type):
+    if isinstance(kind, sa.Text) and pa.types.is_string(column.type):
+        _refuse_text_above_varchar(column, field, table.name)
+    elif limit and pa.types.is_string(column.type):
         _refuse_text_above_length(column, field, table.name, limit)
     try:
         # safe=True recusa escala perdida, nanossegundo não nulo e estouro.
@@ -502,7 +522,8 @@ def cast(
     grava. Cada coluna é convertida com ``safe=True`` (``large_string`` para ``string``,
     timestamps a microssegundos, inteiro em ``Numeric``), e as perdas que o cast seguro não acusa
     são recusadas antes: ``double`` fora da escala de um ``Numeric``, ``timestamp`` com hora numa
-    coluna ``Date``, documento JSON como ``struct``, texto acima de ``String(n)`` em bytes. Nulo
+    coluna ``Date``, documento JSON como ``struct``, texto acima de ``String(n)`` em bytes e texto
+    acima de 65.535 bytes numa coluna ``Text``, o teto do ``VARCHAR`` do Redshift. Nulo
     em coluna ``NOT NULL``, escala perdida, nanossegundo não nulo, estouro de inteiro e um lote sem
     coluna alguma do contrato também são ``ContractError``, com a tabela, a coluna e a instrução
     ao cliente na mensagem. Um ``RecordBatchReader`` sai como leitor que converte lote a lote.
@@ -526,7 +547,7 @@ def cast(
 
 
 def _column_problems(column: sa.Column) -> list[str]:
-    """As violações de uma coluna: tipo, autoincrement, Identity, String sem n, comentário."""
+    """As violações de uma coluna: tipo, autoincrement, Identity, String sem comprimento."""
     table = column.table.name
     problems = []
     try:
@@ -543,8 +564,6 @@ def _column_problems(column: sa.Column) -> list[str]:
     if type(column.type) is sa.String and not column.type.length:
         problems.append(f"{table}.{column.name}: String sem comprimento; "
                         "declare String(n) ou Text")
-    if not column.comment:
-        problems.append(f"{table}.{column.name}: coluna sem comentário")
     return problems
 
 
@@ -581,9 +600,11 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     """As violações do contrato nos modelos, um texto por violação; vazia nos modelos corretos.
 
     As regras: tipo fora da tabela de tipos; ``autoincrement`` numa chave inteira (o padrão
-    ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; tabela ou coluna sem
-    comentário; chave estrangeira ``DEFERRABLE``; ``partition_by`` sem a coluna, com a coluna fora
-    de ``String(10)`` ou sem ``partition_source``; tabela sem chave primária e sem ``keys``.
+    ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; chave estrangeira
+    ``DEFERRABLE``; ``partition_by`` sem a coluna, com a coluna fora de ``String(10)`` ou sem
+    ``partition_source``; tabela sem chave primária e sem ``keys``. O comentário de tabela e de
+    coluna é opcional (decisão do usuário de 2026-09-21); o da coluna, quando existe, vai para o
+    esquema Arrow e para o Delta.
 
     Exemplo:
 
@@ -591,8 +612,6 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     """
     problems = []
     for table in metadata.sorted_tables:
-        if not table.comment:
-            problems.append(f"{table.name}: tabela sem comentário")
         for column in table.columns:
             problems.extend(_column_problems(column))
         options = table_options(table)

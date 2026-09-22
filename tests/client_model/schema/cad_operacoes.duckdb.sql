@@ -3,7 +3,7 @@ CREATE TABLE "cad_operacoes" (
     "data" DATE NOT NULL,
     "operacao" VARCHAR(50) NOT NULL,
     "legado" BOOLEAN NOT NULL,
-    "area" VARCHAR(20),
+    "area" VARCHAR(256),
     "departamento" VARCHAR(20),
     "spread_basico" DOUBLE,
     "spread_risco" DOUBLE,
@@ -11,6 +11,6 @@ CREATE TABLE "cad_operacoes" (
     "taxa_total" DOUBLE,
     "taxa_bndes" DOUBLE,
     "custo_adicional" DOUBLE,
-    "instrumento_financeiro" VARCHAR(100),
+    "instrumento_financeiro" VARCHAR(256),
     "data_str" VARCHAR(10) NOT NULL
 )

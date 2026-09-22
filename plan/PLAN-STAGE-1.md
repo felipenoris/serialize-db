@@ -10,9 +10,12 @@ cópia dele em `tests/client_model/` (decisão do usuário de 2026-09-21: o mode
 código cliente apresenta para usar a biblioteca), leva as correções que a biblioteca cliente faria:
 `Base` importável de um módulo só, cada tabela declarada uma vez, `BigInteger` nas chaves primárias
 inteiras e nas colunas que as referenciam, `autoincrement=False` nessas chaves, chaves estrangeiras
-sem `DEFERRABLE`, a coluna de partição `data_str` (`String(10)`, `AAAA-MM-DD` de `data`;
+sem `DEFERRABLE` e sem a de `cad_contratos` para `rel_contrato_operacao` (o destino não é único,
+porque o contrato está em N operações; decisão do usuário de 2026-09-21), a coluna de partição
+`data_str` (`String(10)`, `AAAA-MM-DD` de `data`;
 `data_base_str` de `data_base` em `cad_lancamentos`) no fim das quatro tabelas particionadas,
-comentários de tabela e de coluna, e `Table.info["serialize_db"]` com `partition_by`,
+comentários de tabela e de coluna, uma primeira redação que o dono do modelo revisa no código
+(decisão do usuário de 2026-09-21), e `Table.info["serialize_db"]` com `partition_by`,
 `partition_source` e `sort_key`, como em `schema.md`. A `sort_key` de cada tabela particionada é
 decisão do usuário de 2026-09-21: `data, sistema, contrato` em `cad_contratos`, `data, operacao`
 em `cad_operacoes`, `data, sistema, contrato, operacao` em `rel_contrato_operacao` e `data_base,
@@ -20,9 +23,12 @@ id_mensuracao, id_veiculo, id_conta` em `cad_lancamentos`; a primeira coluna é 
 partição, constante dentro dela, que no Redshift poda a tabela publicada inteira. As colunas
 numéricas continuam `Double` (as
 decisões de 2026-09-20 estão nas premissas de [`PLAN.md`](PLAN.md)). `String(n)` leva o comprimento
-tirado das leituras, com folga; os índices não únicos e o `sqlite_strict` do original ficam de fora,
-porque motor algum da biblioteca os usa; `redshift` fica ausente de `Table.info` (distribuição
-`AUTO`) até a decisão. `tests/test_client_model.py` confere a cópia contra o original: as tabelas e
+tirado das leituras, com folga, e o dono do modelo o revisa no código (decisão do usuário de
+2026-09-21); os índices não únicos e o `sqlite_strict` do original ficam de fora, porque motor
+algum da biblioteca os usa; `redshift` fica ausente de `Table.info`, a distribuição `AUTO` (decisão
+do usuário de 2026-09-21): a leitura de `svv_table_info` depois da primeira publicação
+([etapa 8](PLAN-STAGE-8.md)) diz o que o Redshift atribuiu a cada tabela, e uma chave de
+distribuição, se vier dessa leitura, entra por `ALTER TABLE`. `tests/test_client_model.py` confere a cópia contra o original: as tabelas e
 as colunas na mesma ordem, os tipos e as chaves mudados só onde previsto, sem `DEFERRABLE`,
 `autoincrement` nem índice não único, todo comentário presente, e a partição de cada tabela
 particionada igual à da base.
@@ -70,11 +76,11 @@ minúsculos, e os dois motores leem o nome entre aspas como o mesmo nome sem asp
 | `arrow_schema(table)` | O `pa.Schema` do `Table`: um campo por coluna, com a nulidade, o comentário em `metadata` do campo, `PARQUET:field_id` pela posição, e o nome da tabela em `serialize_db_table`; um campo JSON é `string`, sem a extensão `arrow.json`. |
 | `delta_schema(table)` | O `deltalake.Schema` derivado do Arrow: `decimal(18,2)`, `timestamp_ntz` para `DateTime` sem fuso e `timestamp` para o com fuso, `string` para JSON e UUID, comentários preservados, sem o `PARQUET:field_id` do Arrow (com ele no esquema Delta, como `parquet.field.id`, o `delta_scan` do DuckDB lê toda coluna como nula, com qualquer escritor; leitura de 2026-09-21 em [`POC.md`](POC.md)). |
 | `table_options(table)` | O `TableOptions` (`partition_by`, `partition_source`, `sort_key`, `redshift`, `keys`) lido de `Table.info["serialize_db"]` com os padrões da biblioteca: tabela sem partição quando `partition_by` está ausente, uma coluna de partição no máximo, `String(10)`, derivada por `strftime(partition_source, '%Y-%m-%d')`; `keys` são a chave primária, as `UniqueConstraint` e os índices únicos do modelo (`ix_contratos_data_sistema_contrato` e `ix_operacoes_data_operacao` no modelo cliente), mais `keys["add"]`, menos `keys["drop"]`, sempre por lista de colunas. |
-| `sql_type(column, dialect)` | O nome do tipo no motor, pela tabela de tipos de `schema.md`: `DECIMAL(p, s)`, `VARCHAR(n)` nos dois (o DuckDB ignora o comprimento), `Text` em `VARCHAR` e `VARCHAR(65535)`, `Uuid` em `VARCHAR(36)`, JSON em `JSON` e `SUPER`, `Double` em `DOUBLE` e `DOUBLE PRECISION`, `DateTime` em `TIMESTAMP` e `TIMESTAMPTZ`; a migração adiantada o usa nos `CAST`. |
+| `sql_type(column, dialect)` | O nome do tipo no motor, pela tabela de tipos de `schema.md`: `DECIMAL(p, s)`, `VARCHAR(n)` nos dois (o DuckDB ignora o comprimento), `Text` em `VARCHAR` e `VARCHAR(65535)` (decisão do usuário de 2026-09-21), `Uuid` em `VARCHAR(36)`, JSON em `JSON` e `SUPER`, `Double` em `DOUBLE` e `DOUBLE PRECISION`, `DateTime` em `TIMESTAMP` e `TIMESTAMPTZ`; a migração adiantada o usa nos `CAST`. |
 | `quoted(name)`, `column_ddl(column, dialect)` | O identificador entre aspas duplas, e a linha da coluna no `CREATE TABLE` (`"<coluna>" <tipo> [NOT NULL]`); públicas porque as etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [8](PLAN-STAGE-8.md) montam texto com identificadores e as variantes do DDL (a staging sem a coluna de partição, a tabela publicada com a chave primária informativa). |
 | `ddl(table, dialect, prefix="")` | O `CREATE TABLE` do sandbox para `duckdb` ou `redshift`, gerado como texto sem o dialeto do SQLAlchemy: colunas, tipos por `sql_type` e `NOT NULL`, todo identificador entre aspas; sem chave, `DEFERRABLE`, `Identity`, `CHECK`, `DEFAULT` nem comentário (as chaves são da auditoria, e o comentário vai no esquema Delta); `DISTSTYLE`, `DISTKEY` e `SORTKEY` no Redshift, de `table_options`; `prefix` renomeia a tabela para o sandbox (`exec_<id>_`, ou o sentinela `{prefix}` da [etapa 2](PLAN-STAGE-2.md), que sai como `"{prefix}cad_operacoes"`). |
-| `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(p + 3, s)` (`decimal128(21, 2)` para `Numeric(18, 2)`); recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` em bytes, nulo em coluna `NOT NULL` e um lote sem coluna alguma do contrato, com a tabela, a coluna e a instrução ao cliente na mensagem. |
-| `check_models(metadata)` | A lista de violações do contrato nos modelos, um texto por violação com tabela e coluna: tipo fora da tabela de tipos, `autoincrement` em chave inteira (o padrão `"auto"` inclusive), `Identity`, `String` sem comprimento, coluna ou tabela sem comentário, chave estrangeira `DEFERRABLE`, `partition_by` sem a coluna, com a coluna fora de `String(10)` ou sem `partition_source`, tabela sem chave primária e sem `keys`. Vazia no modelo cliente; no modelo de referência lista o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), as 20 colunas `String` sem comprimento e as tabelas e colunas sem comentário. |
+| `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(p + 3, s)` (`decimal128(21, 2)` para `Numeric(18, 2)`); recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` em bytes, texto acima de 65.535 bytes numa coluna `Text`, nulo em coluna `NOT NULL` e um lote sem coluna alguma do contrato, com a tabela, a coluna e a instrução ao cliente na mensagem. |
+| `check_models(metadata)` | A lista de violações do contrato nos modelos, um texto por violação com tabela e coluna: tipo fora da tabela de tipos, `autoincrement` em chave inteira (o padrão `"auto"` inclusive), `Identity`, `String` sem comprimento, chave estrangeira `DEFERRABLE`, `partition_by` sem a coluna, com a coluna fora de `String(10)` ou sem `partition_source`, tabela sem chave primária e sem `keys`. Vazia no modelo cliente; no modelo de referência lista o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), as 20 colunas `String` sem comprimento; o comentário de tabela e de coluna é opcional (decisão do usuário de 2026-09-21), e o da coluna, quando existe, vai para o esquema Arrow e para o Delta. |
 | `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória, cada texto com `\n` final; o `.delta.json` é o JSON canônico (chaves ordenadas, indentado), porque o `to_json()` do delta-rs serializa os metadados de cada campo em ordem arbitrária, que muda a cada geração, e grava `PARQUET:field_id` como `parquet.field.id` inteiro. |
 | `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory` e devolve os caminhos; `serialize-db schema write --metadata modulo:atributo <pasta>` grava. |
 | `check_schema_files(metadata, directory)` | O diff unificado de cada arquivo versionado contra a geração nova, vazio quando nada mudou; `serialize-db schema check --metadata modulo:atributo <pasta>` compara sem gravar. |
@@ -194,8 +200,12 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
   função por recusa: `_refuse_double_out_of_scale` (`double` numa coluna `Numeric` só quando
   `pc.round(x, escala)` devolve o valor igual), `_refuse_timestamp_with_time` (`timestamp` numa coluna
   `Date` só quando a ida e volta devolve o valor igual), `_refuse_nested_json` (`struct`, `list` e
-  `map` numa coluna JSON) e `_refuse_text_above_length` (texto acima de `String(n)` medido em bytes
-  por `pc.binary_length`, a medida do `VARCHAR(n)` do Redshift); o inteiro numa coluna `Numeric`
+  `map` numa coluna JSON), `_refuse_text_above_length` (texto acima de `String(n)` medido em bytes
+  por `pc.binary_length`, a medida do `VARCHAR(n)` do Redshift; decisão do usuário de
+  2026-09-21, a mesma medida da auditoria da [etapa 4](PLAN-STAGE-4.md) e da migração
+  adiantada, e `probes/parquet_source.py` relata o máximo em bytes ao lado do de caracteres) e `_refuse_text_above_varchar`
+  (texto acima de 65.535 bytes numa coluna `Text`, que não declara `n`: o teto do `VARCHAR` do
+  Redshift, que `sql_type` escreve no DDL); o inteiro numa coluna `Numeric`
   passa pelo desvio `decimal128(p + 3, s)`. Depois disso, `column.cast(field.type, safe=True)`
   recusa escala perdida, nanossegundo não nulo e estouro, e o `cast` do esquema sobre
   `from_arrays` recusa nulo em `NOT NULL`. Toda recusa sai como `ContractError` com a tabela, a
@@ -204,14 +214,17 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
   conferências por `pc.all` levam `min_count=0`, porque `pc.all` de uma coluna vazia devolve nulo e
   a tabela vazia seria recusada (rascunho abaixo).
 - **`check_models`** percorre `metadata.sorted_tables` e reúne, por tabela, `_column_problems`
-  (tipo, `autoincrement`, `Identity`, `String` sem comprimento, comentário), `_key_problems`
+  (tipo, `autoincrement`, `Identity`, `String` sem comprimento), `_key_problems`
   (`DEFERRABLE`, tabela sem chave) e `_partition_problems` (a coluna, `String(10)`,
   `partition_source`), uma lista de textos, um por violação, para o teste do modelo cliente ser
   `assert check_models(Base.metadata) == []`. O `autoincrement` padrão é a string `"auto"`, não
   `True`: a regra reprova os dois numa chave inteira. `String` sem comprimento é violação por
   decisão do usuário de 2026-09-21: sem `n`, o Redshift daria `VARCHAR(256)` e `cast` não mediria
-  nada, e `Text` é a forma sem limite. O modelo de referência é o modelo com defeitos do teste: o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), os `String`
-  sem comprimento e as tabelas e colunas sem comentário.
+  nada, e `Text` é a forma sem `n`, cujo teto é o do `VARCHAR` do Redshift, 65.535 bytes, medido por `cast` (decisão do usuário de 2026-09-21). O comentário de tabela e de coluna
+  não é violação, por decisão do usuário de 2026-09-21: a biblioteca não obriga o dono do modelo a
+  documentá-lo, e o comentário da coluna, quando existe, vai para o esquema Arrow e para o Delta.
+  O modelo de referência é o modelo com defeitos do teste: o `autoincrement` das 12 chaves, as 12
+  chaves estrangeiras `DEFERRABLE` (das 14) e os `String` sem comprimento.
 - **`schema_files`** gera `<tabela>.delta.json` por `delta_schema(...).to_json()` e os dois `.sql`
   por `ddl`, cada texto com `\n` final; `write_schema_files` grava e devolve os caminhos;
   `check_schema_files` compara por `difflib.unified_diff`. `serialize-db schema write` e
@@ -250,8 +263,9 @@ teste com todos os tipos da tabela de [`schema.md`](schema.md), `to` e `timestam
 | Cast que aceita | `test_cast_reorders_and_normalizes` | Colunas fora de ordem, `large_string`, `timestamp[ns]` com nanossegundo zero, `int64` em `Numeric`, coluna a mais ignorada; o mesmo para `pa.Table` e `pa.RecordBatch`. |
 | Cast por leitor | `test_cast_reader_converts_batch_by_batch` | Um leitor de dois lotes sai como `RecordBatchReader` com o esquema do contrato e as linhas dos dois; a tabela vazia de `reader.schema.empty_table()` passa nas conferências. |
 | Cast que recusa | `test_cast_refuses_each_loss`, parametrizado | Nulo em `NOT NULL`, `double` fora da escala, `timestamp` com hora em `Date`, `struct` em JSON, texto acima de `String(n)` em bytes, escala perdida, nanossegundo não nulo, estouro de inteiro, lote sem coluna do contrato; cada mensagem cita a tabela e a coluna. |
+| Teto de `Text` | `test_cast_measures_text_against_the_varchar_ceiling` | Numa coluna `Text`, 65.535 bytes passam e 65.536 são `ContractError` com a tabela, a coluna e o tamanho lido. |
 | Cast que preserva | `test_cast_keeps_doubles_of_the_reference_model` | `Double` do modelo de referência entra sem arredondamento. |
-| Modelos | `test_check_models_finds_each_violation`, `test_check_models_lists_the_reference_model_defects`, `test_client_model_is_clean` | Um modelo com cada defeito produz uma violação por defeito; o modelo de referência produz o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), os 20 `String` sem comprimento e as tabelas e colunas sem comentário, e nada mais; o modelo cliente produz lista vazia. |
+| Modelos | `test_check_models_finds_each_violation`, `test_check_models_lists_the_reference_model_defects`, `test_client_model_is_clean` | Um modelo com cada defeito produz uma violação por defeito; o modelo de referência produz o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14) e os 20 `String` sem comprimento, e nada mais, nem por comentário ausente; o modelo cliente produz lista vazia. |
 | Cópia fiel | `tests/test_client_model.py` | O modelo cliente tem as tabelas e as colunas do modelo de referência, na mesma ordem, com a coluna de partição no fim; só os tipos e as chaves previstos mudam; sem `DEFERRABLE`, `autoincrement` nem índice não único; todo comentário presente; a partição declarada é a da base. |
 | Arquivos gerados | `test_schema_files_match_versioned`, `test_check_schema_files_reports_a_changed_model` | Diff vazio contra `tests/client_model/schema/`; uma coluna acrescentada aparece no diff dos três formatos. |
 | Gravação | `test_write_schema_files` (`local`) | Os arquivos sob a raiz local, com os nomes previstos. |
@@ -450,6 +464,9 @@ _SQL_TYPES: dict[str, dict[type, str]] = {
                  sa.Text: "VARCHAR(65535)", sa.Uuid: "VARCHAR(36)", sa.JSON: "SUPER"},
 }
 
+# O teto do VARCHAR no Redshift, em bytes: o limite de uma coluna Text, que não declara n.
+_TEXT_LIMIT = 65535
+
 
 def sql_type(column: sa.Column, dialect: Dialect) -> str:
     """O nome do tipo da coluna no motor, pela tabela de tipos de plan/schema.md."""
@@ -544,11 +561,25 @@ def _refuse_nested_json(column, field: pa.Field, table: str) -> None:
                             "serialize com json.dumps antes de chamar")
 
 
+def _longest_text(column) -> int:
+    """O maior valor da coluna em bytes; 0 numa coluna vazia ou só de nulos."""
+    return pc.max(pc.binary_length(column)).as_py() or 0
+
+
 def _refuse_text_above_length(column, field: pa.Field, table: str, limit: int) -> None:
     """Texto acima de String(n), medido em bytes como o VARCHAR(n) do Redshift."""
-    longest = pc.max(pc.binary_length(column)).as_py() or 0
+    longest = _longest_text(column)
     if longest > limit:
-        raise ContractError(f"{table}.{field.name}: texto acima de String({limit}) em bytes")
+        raise ContractError(f"{table}.{field.name}: texto de {longest} bytes acima de "
+                            f"String({limit}) em bytes; corte o valor ou aumente o comprimento")
+
+
+def _refuse_text_above_varchar(column, field: pa.Field, table: str) -> None:
+    """Texto acima do teto do VARCHAR do Redshift numa coluna Text, que não declara n."""
+    longest = _longest_text(column)
+    if longest > _TEXT_LIMIT:
+        raise ContractError(f"{table}.{field.name}: texto de {longest} bytes acima do teto de "
+                            f"{_TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor")
 
 
 def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa.Table):
@@ -565,7 +596,9 @@ def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa
     if isinstance(kind, sa.JSON):
         _refuse_nested_json(column, field, table.name)
     limit = getattr(kind, "length", None)
-    if limit and pa.types.is_string(column.type):
+    if isinstance(kind, sa.Text) and pa.types.is_string(column.type):
+        _refuse_text_above_varchar(column, field, table.name)
+    elif limit and pa.types.is_string(column.type):
         _refuse_text_above_length(column, field, table.name, limit)
     try:
         # safe=True recusa escala perdida, nanossegundo não nulo e estouro.
@@ -626,7 +659,7 @@ def cast(data, table: sa.Table):
 # ---------------------------------------------------------------- a conferência dos modelos
 
 def _column_problems(column: sa.Column) -> list[str]:
-    """As violações de uma coluna: tipo, autoincrement, Identity, String sem n, comentário."""
+    """As violações de uma coluna: tipo, autoincrement, Identity, String sem comprimento."""
     table = column.table.name
     problems = []
     try:
@@ -643,8 +676,6 @@ def _column_problems(column: sa.Column) -> list[str]:
     if type(column.type) is sa.String and not column.type.length:
         problems.append(f"{table}.{column.name}: String sem comprimento; "
                         "declare String(n) ou Text")
-    if not column.comment:
-        problems.append(f"{table}.{column.name}: coluna sem comentário")
     return problems
 
 
@@ -681,8 +712,6 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     """As violações do contrato nos modelos, uma por texto; vazia nos modelos corrigidos."""
     problems = []
     for table in metadata.sorted_tables:
-        if not table.comment:
-            problems.append(f"{table.name}: tabela sem comentário")
         for column in table.columns:
             problems.extend(_column_problems(column))
         options = table_options(table)
@@ -757,6 +786,10 @@ refused("hora numa coluna Date",
 refused("struct em JSON", pa.RecordBatch.from_pydict({"meta": pa.array([{"k": 1}])}))
 refused("texto acima de String(100)",
         pa.RecordBatch.from_pydict({"operacao": pa.array(["x" * 101])}))
+refused("texto acima do teto do VARCHAR",
+        pa.RecordBatch.from_pydict({"observacao": pa.array(["x" * 65536])}))
+refused("texto no teto do VARCHAR",
+        pa.RecordBatch.from_pydict({"observacao": pa.array(["x" * 65535])}))
 refused("precisão perdida",
         pa.RecordBatch.from_pydict(
             {"valor": pa.array([decimal.Decimal("1.234")], pa.decimal128(20, 3))}))
@@ -839,22 +872,18 @@ double fora da escala: cad_operacoes.valor: double fora da escala 2; arredonde n
 double na escala: aceito
 hora numa coluna Date: cad_operacoes.data: timestamp com hora numa coluna Date; trunque no cliente
 struct em JSON: cad_operacoes.meta: documento JSON como struct<k: int64>; serialize com json.dumps antes de chamar
-texto acima de String(100): cad_operacoes.operacao: texto acima de String(100) em bytes
+texto acima de String(100): cad_operacoes.operacao: texto de 101 bytes acima de String(100) em bytes; corte o valor ou aumente o comprimen
+texto acima do teto do VARCHAR: cad_operacoes.observacao: texto de 65536 bytes acima do teto de 65535 bytes do VARCHAR do Redshift; corte o va
+texto no teto do VARCHAR: aceito
 precisão perdida: cad_operacoes.valor: Rescaling Decimal value would cause data loss
 nanossegundo não nulo: cad_operacoes.timestamp: Casting from timestamp[ns] to timestamp[us] would lose data: 1
 coluna alguma do contrato: cad_operacoes: nenhuma coluna do contrato em ['extra']
 nanossegundo nulo: timestamp[us]
 cad_operacoes limpa: True
 check_models:
-  - ruim: tabela sem comentário
   - ruim.id: chave inteira com autoincrement; declare autoincrement=False
-  - ruim.id: coluna sem comentário
-  - ruim.id_operacao: coluna sem comentário
-  - ruim.mes: coluna sem comentário
   - ruim.nome: String sem comprimento; declare String(n) ou Text
-  - ruim.nome: coluna sem comentário
   - ruim.peso: tipo fora do contrato: LargeBinary()
-  - ruim.peso: coluna sem comentário
   - ruim: chave estrangeira DEFERRABLE em ['id_operacao']
   - ruim.mes: coluna de partição fora de String(10)
   - ruim: partition_by sem partition_source válido
@@ -862,23 +891,5 @@ check_models:
 
 ## Decisões pendentes
 
-- **[decisão] `Text` como `VARCHAR(65535)` no Redshift** por `sql_type`, em vez de exigir
-  `String(65535)` nos modelos ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
-- **[decisão] O comprimento de `String(n)` em bytes ou em caracteres.** O rascunho mede bytes, a
-  medida do `VARCHAR(n)` do Redshift; um texto de `n` caracteres acentuados passaria na medida por
-  caracteres e seria recusado pelo `COPY`. A auditoria da [etapa 4](PLAN-STAGE-4.md) usa a mesma
-  medida (`octet_length` no Redshift, `strlen` no DuckDB).
-- **[decisão] A tabela e a coluna sem comentário como violação em `check_models`.** O modelo de
-  referência não tem comentário algum, e o modelo cliente tem um em cada tabela e coluna, uma
-  primeira redação; a regra obriga o dono do modelo a escrever os seus.
-- **[decisão] Os comprimentos de `String(n)` do modelo cliente.** Escolhidos das leituras com
-  folga (`contrato` e `operacao` 50, os nomes 50 e 100, `numero` 20, `descricao` e `meta` 255,
-  `area` e `departamento` 20, `to` 2, `fonte_familia` 3); sem `n`, o Redshift daria `VARCHAR(256)`
-  e o `cast` não mediria nada.
-- **[decisão] A distribuição no Redshift** (`diststyle`, `distkey`): o modelo cliente não declara
-  `redshift`, o padrão `AUTO`, até a decisão.
-- **[decisão] A chave estrangeira de `cad_contratos` para `rel_contrato_operacao`**, do original,
-  referencia colunas não únicas, o que motor algum aceitaria; fica no modelo cliente como a regra
-  que a auditoria verifica por anti-join (todo contrato está em alguma operação), ou sai.
-- **[decisão] Os comentários do modelo cliente** são uma primeira redação para a revisão do dono do
-  modelo; `um`, `to`, `meta`, `estagio` e `fonte` são os que o nome e os valores não explicam.
+Nenhuma: as sete decisões da etapa foram tomadas pelo usuário em 2026-09-21, e cada uma está escrita
+na seção que a descreve.

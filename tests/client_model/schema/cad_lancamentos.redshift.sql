@@ -12,6 +12,6 @@ CREATE TABLE "cad_lancamentos" (
     "data_base" DATE NOT NULL,
     "sistema" INTEGER,
     "contrato" VARCHAR(50),
-    "area" VARCHAR(20),
+    "area" VARCHAR(256),
     "data_base_str" VARCHAR(10) NOT NULL
 ) SORTKEY ("data_base", "id_mensuracao", "id_veiculo", "id_conta")

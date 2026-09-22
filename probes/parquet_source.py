@@ -8,13 +8,15 @@ posicional.
 
 Uso:
 
-    .venv/bin/python probes/parquet_source.py <raiz> [--sample N] [--files N]
+    .venv/bin/python probes/parquet_source.py <raiz> [--sample N] [--files N] [--text-bytes]
 
 ``<raiz>`` é a pasta que contém uma subpasta por tabela, ou uma URI (``s3://bucket/prefixo``); cada
 subpasta tem um arquivo Parquet ou uma árvore de partições com vários. ``--sample N`` lê as N
-primeiras linhas de um arquivo por tabela para medir cardinalidade e comprimento de texto, que o
-rodapé não guarda; sem ele nenhuma página de dados é lida. ``--files N`` limita quantos arquivos de
-cada tabela aparecem na listagem por arquivo, sem limitar quantos são lidos.
+primeiras linhas de um arquivo por tabela para medir cardinalidade e comprimento de texto, em
+caracteres e em bytes, que o rodapé não guarda; sem ele nenhuma página de dados é lida. ``--files N`` limita quantos arquivos de
+cada tabela aparecem na listagem por arquivo, sem limitar quantos são lidos. ``--text-bytes`` lê
+as colunas de texto de todos os arquivos, linha por linha, e mede o maior valor de cada coluna em
+bytes e em caracteres: é a medida do ``String(n)`` do contrato, e a varredura é longa.
 
 Só leitura. Todo arquivo da base é aberto por ``open_input_file``, e o relatório sai no terminal e
 em ``probes/output/parquet_source_<data-hora>.txt``, dentro do repositório. Nada é criado, alterado
@@ -54,6 +56,7 @@ HIVE_SEGMENT = re.compile(r"^([^=/]+)=(.*)$")
 # Quantos arquivos de cada tabela a listagem por arquivo mostra, e quantos valores distintos a amostra lista.
 DEFAULT_FILE_ROWS = 20
 MAX_LISTED_VALUES = 25
+TEXT_BATCH_ROWS = 100_000
 
 
 @dataclasses.dataclass
@@ -378,8 +381,45 @@ def sample_table(filesystem: Any, root: str, table: str, relative: str, rows: in
                 edges = pc.min_max(lengths).as_py()
                 mean = pc.mean(lengths).as_py()
                 entry["length"] = (edges["min"], round(mean) if mean is not None else None, edges["max"])
+                # O contrato mede o String(n) em bytes, como o VARCHAR(n) do Redshift.
+                entry["bytes"] = pc.max(pc.binary_length(column)).as_py()
             measured[name] = entry
         return measured
+
+
+def text_columns(collected: list[FileReading]) -> list[str]:
+    """Os nomes das colunas de texto da tabela, na ordem do primeiro arquivo que as traz."""
+    names: list[str] = []
+    for reading in collected:
+        for column in reading.columns:
+            if column.arrow_type.endswith("string") and column.name not in names:
+                names.append(column.name)
+    return names
+
+
+def text_lengths(filesystem: Any, root: str, table: str, collected: list[FileReading], names: list[str]) -> dict[str, dict[str, int]]:
+    """Mede em todas as linhas de todos os arquivos o maior texto de cada coluna, em bytes e em caracteres."""
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    measured = {name: {"rows": 0, "nulls": 0, "bytes": 0, "chars": 0} for name in names}
+    for reading in collected:
+        with filesystem.open_input_file(f"{root}/{table}/{reading.path}") as handle:
+            parquet = pq.ParquetFile(handle)
+            # Um arquivo pode não ter todas as colunas: o esquema divergente é outra seção.
+            present = [name for name in names if name in parquet.schema_arrow.names]
+            if not present:
+                continue
+            for batch in parquet.iter_batches(batch_size=TEXT_BATCH_ROWS, columns=present):
+                for name, column in zip(batch.schema.names, batch.columns):
+                    entry = measured[name]
+                    entry["rows"] += len(column)
+                    entry["nulls"] += column.null_count
+                    longest = pc.max(pc.binary_length(column)).as_py()
+                    if longest is not None:
+                        entry["bytes"] = max(entry["bytes"], longest)
+                        entry["chars"] = max(entry["chars"], pc.max(pc.utf8_length(column)).as_py())
+    return measured
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -673,12 +713,12 @@ def sample_section(report: Report, measured: dict[str, dict[str, dict[str, Any]]
         report.line("Não pedida. `--sample N` lê as N primeiras linhas de um arquivo por tabela para medir o que o rodapé não guarda.")
         return
 
-    report.line(f"As {rows} primeiras linhas de um arquivo de cada tabela; `distintos` e `comprimento` são dessa amostra, não da tabela.\n")
+    report.line(f"As {rows} primeiras linhas de um arquivo de cada tabela; `distintos` e os comprimentos são dessa amostra, não da tabela; `comprimento` conta caracteres e `máx bytes` conta bytes, a medida do `VARCHAR(n)` do Redshift.\n")
     for table, columns in sorted(measured.items()):
         report.line(f"{table}")
         report.table(
             [
-                ["coluna", "linhas", "nulos", "distintos", "comprimento mín/méd/máx", "valores quando poucos"],
+                ["coluna", "linhas", "nulos", "distintos", "comprimento mín/méd/máx", "máx bytes", "valores quando poucos"],
                 *[
                     [
                         name,
@@ -686,7 +726,35 @@ def sample_section(report: Report, measured: dict[str, dict[str, dict[str, Any]]
                         entry["nulls"],
                         entry["distinct"],
                         "/".join(str(part) for part in entry["length"]) if "length" in entry else "-",
+                        entry.get("bytes", "-"),
                         ", ".join(entry.get("values", [])) or "-",
+                    ]
+                    for name, entry in columns.items()
+                ],
+            ]
+        )
+
+
+def text_length_section(report: Report, lengths: dict[str, dict[str, dict[str, int]]]) -> None:
+    """Seção 9, o comprimento de texto: o maior valor de cada coluna de texto em todas as linhas."""
+    report.h1("Comprimento de texto")
+    if not lengths:
+        report.line("Não pedido. `--text-bytes` lê as colunas de texto de todo arquivo e mede o maior valor de cada uma.")
+        return
+
+    report.line("Todas as linhas de todos os arquivos, só as colunas de texto; `máx bytes` é a medida do `VARCHAR(n)` do Redshift e do `String(n)` do contrato.\n")
+    for table, columns in sorted(lengths.items()):
+        report.line(f"{table}")
+        report.table(
+            [
+                ["coluna", "linhas", "nulos", "máx bytes", "máx caracteres"],
+                *[
+                    [
+                        name,
+                        f"{entry['rows']:,}".replace(",", "."),
+                        f"{entry['nulls']:,}".replace(",", "."),
+                        entry["bytes"],
+                        entry["chars"],
                     ]
                     for name, entry in columns.items()
                 ],
@@ -697,15 +765,18 @@ def sample_section(report: Report, measured: dict[str, dict[str, dict[str, Any]]
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def parse(argv: list[str]) -> tuple[str, int, int] | None:
-    """A raiz, o tamanho da amostra e o limite da listagem por arquivo; ``None`` quando o uso está errado."""
+def parse(argv: list[str]) -> tuple[str, int, int, bool] | None:
+    """A raiz, a amostra, o limite da listagem e se mede o texto; ``None`` quando o uso está errado."""
     root = ""
     sample = 0
     files = DEFAULT_FILE_ROWS
+    text_bytes = False
     rest = argv[1:]
     while rest:
         argument = rest.pop(0)
-        if argument in ("--sample", "--files"):
+        if argument == "--text-bytes":
+            text_bytes = True
+        elif argument in ("--sample", "--files"):
             if not rest or not rest[0].isdigit():
                 return None
             value = int(rest.pop(0))
@@ -716,15 +787,15 @@ def parse(argv: list[str]) -> tuple[str, int, int] | None:
             return None
         else:
             root = argument
-    return (root, sample, files) if root else None
+    return (root, sample, files, text_bytes) if root else None
 
 
 def main(argv: list[str]) -> int:
     parsed = parse(argv)
     if parsed is None:
-        print("uso: .venv/bin/python probes/parquet_source.py <raiz> [--sample N] [--files N]", file=sys.stderr)
+        print("uso: .venv/bin/python probes/parquet_source.py <raiz> [--sample N] [--files N] [--text-bytes]", file=sys.stderr)
         return 2
-    uri, sample, file_rows = parsed
+    uri, sample, file_rows, text_bytes = parsed
 
     filesystem, root, filesystem_name = open_root(uri)
     report = Report("parquet_source", f"a estrutura da base Parquet em {root}")
@@ -760,6 +831,19 @@ def main(argv: list[str]) -> int:
             except Exception as error:  # noqa: BLE001
                 report.failures.append((f"amostra de {table}", describe_error(error)))
 
+    lengths: dict[str, dict[str, dict[str, int]]] = {}
+    if text_bytes:
+        for table, collected in sorted(readings.items()):
+            names = text_columns(collected)
+            if not names:
+                continue
+            # A varredura é longa: o andamento sai no terminal, fora do relatório.
+            print(f"medindo o texto de {table}: {len(collected)} arquivo(s), {len(names)} coluna(s)", file=sys.stderr)
+            try:
+                lengths[table] = text_lengths(filesystem, root, table, collected, names)
+            except Exception as error:  # noqa: BLE001
+                report.failures.append((f"comprimento de texto de {table}", describe_error(error)))
+
     def guarded(section, *arguments):
         # Uma seção interrompida não cala as outras.
         try:
@@ -777,6 +861,7 @@ def main(argv: list[str]) -> int:
     guarded(statistics_section, readings)
     guarded(layout_section, readings)
     guarded(sample_section, measured, sample)
+    guarded(text_length_section, lengths)
 
     if unreadable:
         report.fail("PQ-8", "arquivo ilegível", f"{len(unreadable)}: {unreadable[0]}")

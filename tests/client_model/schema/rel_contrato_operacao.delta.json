@@ -42,7 +42,7 @@
     },
     {
       "metadata": {
-        "comment": "Fração da operação atribuída ao contrato; soma 1 por operação"
+        "comment": "Fração do contrato atribuída à operação; soma 1 por contrato"
       },
       "name": "fator_rateio",
       "nullable": false,

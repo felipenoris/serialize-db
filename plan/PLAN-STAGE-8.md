@@ -108,6 +108,7 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 | Primeira publicação | `test_first_publication_loads_every_partition` (`redshift`) | Sem linha de controle, todas as partições; a linha de controle escrita na mesma transação. |
 | Falha no meio | `test_failed_copy_leaves_control_row_untouched` (`redshift`) | Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto. |
 | Estado | `test_publication_status_lists_pending_partitions` | A versão publicada, a atual e as partições pendentes por tabela. |
+| Distribuição atribuída | `test_published_tables_distribution_is_read` (`redshift`) | `svv_table_info` depois da primeira publicação: `diststyle`, `sortkey1`, `tbl_rows` e `skew_rows` de cada tabela publicada, como leitura, nunca como reprovação; a visão negada também é leitura, porque `RS-8` ainda não foi lida no ambiente alvo. O modelo cliente não declara `redshift` e a distribuição é `AUTO` (decisão do usuário de 2026-09-21): é esta leitura que diz se uma `distkey` explícita se paga, e ela entraria por `ALTER TABLE`. |
 
 ## Rascunhos executados
 

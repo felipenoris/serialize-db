@@ -104,8 +104,7 @@ assert problems == [], "\n".join(problems)
 ```
 
 As regras: tipo fora da tabela de tipos; `autoincrement` numa chave inteira (o padrão `"auto"`
-inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); tabela ou coluna
-sem comentário; chave estrangeira `DEFERRABLE`; `partition_by` sem a coluna, com a coluna fora de
+inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); chave estrangeira `DEFERRABLE`; `partition_by` sem a coluna, com a coluna fora de
 `String(10)` ou sem `partition_source`; tabela sem chave primária e sem `keys`.
 
 ### Derivar o esquema e o DDL
@@ -174,7 +173,7 @@ done.schema.names   # ["id_operacao", "data", "operacao", "valor", "data_str"]
 O que `cast` recusa, com `serialize_db.errors.ContractError` e a instrução ao cliente na mensagem:
 nulo em coluna `NOT NULL`, `double` fora da escala de um `Numeric`, `timestamp` com hora numa
 coluna `Date`, documento JSON como `struct`, texto acima de `String(n)` (medido em bytes, como o
-`VARCHAR(n)` do Redshift), escala perdida num decimal, nanossegundo não nulo num timestamp, estouro
+`VARCHAR(n)` do Redshift), texto acima de 65.535 bytes numa coluna `Text`, escala perdida num decimal, nanossegundo não nulo num timestamp, estouro
 de inteiro e um lote sem coluna alguma do contrato. Um `double` entra numa coluna `Numeric` só
 quando `round` o devolve igual; numa coluna `Double` ele entra como chega.
 
@@ -208,7 +207,7 @@ em cada motor. Um tipo fora desta tabela é recusado por `check_models` e por `a
 | `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Entra como chega, sem arredondamento. Descarregar e recarregar pelo Redshift pode perder precisão. |
 | `Numeric(p, s)` | `decimal128(p, s)` | `decimal(p, s)` | `DECIMAL(p, s)` | `DECIMAL(p, s)` | `p` até 38. O delta-rs e o DuckDB gravam `DECIMAL(18, 2)` no tipo físico `INT64`; o PyArrow, em `FIXED_LEN_BYTE_ARRAY`. |
 | `String(n)` | `string` | `string` | `VARCHAR(n)` | `VARCHAR(n)` | `n` em bytes no Redshift, e é assim que `cast` mede o texto; o DuckDB aceita o comprimento e o ignora. `String` sem `n` é violação. |
-| `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | O texto sem limite; `TEXT` no Redshift seria `VARCHAR(256)`. |
+| `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | O texto sem `n`; o teto é o do `VARCHAR` do Redshift, que o `cast` mede; `TEXT` no Redshift seria `VARCHAR(256)`. |
 | `Date` | `date32` | `date` | `DATE` | `DATE` | |
 | `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | Microssegundos; um nanossegundo não nulo é recusado por `cast`. |
 | `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Sempre em UTC. |

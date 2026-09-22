@@ -331,6 +331,16 @@ def test_cast_reader_converts_batch_by_batch() -> None:
     assert empty.num_rows == 0 and empty.schema.names == done.schema.names
 
 
+def test_cast_measures_text_against_the_varchar_ceiling() -> None:
+    """Numa coluna `Text`, 65.535 bytes passam e 65.536 são recusados."""
+    accepted = schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65535])), TUDO)
+    assert accepted.column("observacao").to_pylist() == ["x" * 65535]
+    with pytest.raises(ContractError) as error:
+        schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65536])), TUDO)
+    assert "tudo.observacao" in str(error.value)
+    assert "65536" in str(error.value)
+
+
 REFUSED_BATCHES = {
     "nulo em NOT NULL": (batch_of_tudo(id=pa.array([1, None], pa.int64())), "id"),
     "double fora da escala": (batch_of_tudo(valor=pa.array([1.236])), "valor"),
@@ -378,9 +388,7 @@ def test_check_models_finds_each_violation() -> None:
     """Uma tabela com cada defeito produz uma violação por defeito."""
     problems = [p for p in schema.check_models(RuimBase.metadata) if p.startswith("ruim")]
     assert problems == [
-        "ruim: tabela sem comentário",
         "ruim.id: chave inteira com autoincrement; declare autoincrement=False",
-        "ruim.id: coluna sem comentário",
         "ruim.nome: String sem comprimento; declare String(n) ou Text",
         "ruim.peso: tipo fora do contrato: LargeBinary()",
         "ruim: chave estrangeira DEFERRABLE em ['id_tudo']",
@@ -391,14 +399,12 @@ def test_check_models_finds_each_violation() -> None:
 
 
 def test_check_models_lists_the_reference_model_defects() -> None:
-    """O modelo de referência produz autoincrement, DEFERRABLE, String sem n e comentários."""
+    """O modelo de referência produz autoincrement, DEFERRABLE e String sem comprimento."""
     problems = schema.check_models(ReferenceBase.metadata)
     counts = {
         "autoincrement": sum("chave inteira com autoincrement" in p for p in problems),
         "deferrable": sum("chave estrangeira DEFERRABLE" in p for p in problems),
         "string": sum("String sem comprimento" in p for p in problems),
-        "table_comment": sum(p.endswith(": tabela sem comentário") for p in problems),
-        "column_comment": sum(p.endswith(": coluna sem comentário") for p in problems),
     }
     tables = list(ReferenceBase.metadata.tables.values())
     columns = [column for table in tables for column in table.columns]
@@ -409,10 +415,10 @@ def test_check_models_lists_the_reference_model_defects() -> None:
         "autoincrement": len(tables),
         "deferrable": len(deferrable),
         "string": len(strings),
-        "table_comment": len(tables),
-        "column_comment": len(columns),
     }
     assert sum(counts.values()) == len(problems)
+    # O comentário é opcional: o modelo sem comentário algum não produz violação por isso.
+    assert [p for p in problems if "comentário" in p] == []
     assert (len(tables), len(foreign_keys), len(deferrable), len(strings)) == (12, 14, 12, 20)
 
 

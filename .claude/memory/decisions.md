@@ -45,7 +45,7 @@ fixed-precision `Numeric` (the package supports `Numeric`, and moving `valor` to
 a future improvement); integer keys become `int64` in the Delta; `INT96` timestamps become `INT64`
 and their precision does not matter; nullability follows the model until the migration proves it
 problematic; the dev base's orphans are ignored and the test base is consistent, with the N×N
-`rel_contrato_operacao` whose `fator_rateio` sums to 1 per operation; `alembic_version` and
+`rel_contrato_operacao` whose `fator_rateio` sums to 1 per contract (per operation until the user's measurement of 2026-09-21 on the production base corrected the direction); `alembic_version` and
 `meta_update_status` are ignored; `schema.json` at the source root is the previous library's schema
 control in SQLAlchemy-reflection form, not Arrow. On 2026-09-20 the user also fixed the Redshift
 target: the library's tables live in `datalake_rw_shared.sbx_aco_decon`, the datashare database, so
@@ -134,3 +134,72 @@ in the base today, and the user kept them. The user did not take the proposed pr
 tiebreaker. The migration does not freeze the key the way it freezes the types: the Delta log does
 not store it, changing it later reorders the partitions one rewrites, and Redshift has
 `ALTER TABLE ... ALTER COMPOUND SORTKEY`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-7.md`
+
+On 2026-09-21 the user decided how `sa.Text` reaches Redshift, the first of the seven pending
+decisions of stage 1: `sql_type` keeps writing `VARCHAR(65535)`, the engine's ceiling, instead of
+forbidding `Text` and requiring `String(n)` in the models (`sqlalchemy-redshift` would compile
+`TEXT`, which Redshift stores as `VARCHAR(256)`), and `cast` now measures a `Text` column against
+65,535 bytes. A value above it is refused at ingestion by `_refuse_text_above_varchar`, beside
+`_refuse_text_above_length` for `String(n)`; both measure bytes, and without the check the value
+would only abort the publication `COPY` (`Spectrum Scan Error` 15007, read on 2026-09-21), after
+the data was already in the Delta. No column of the client model or of the reference model is
+`Text`: the rule guards future models. `plan/PLAN-STAGE-1.md`, `plan/schema.md`, `docs/index.md`
+
+On 2026-09-21 the user kept the byte measure for `String(n)`, the second pending decision of stage
+1: `cast` measures with `pc.binary_length`, the measure Redshift applies to `VARCHAR(n)` (a UTF-8
+character takes up to 4 bytes), so the contract refuses at ingestion what the publication `COPY`
+would abort. The alternatives offered and declined were measuring characters (`pc.utf8_length`,
+which reads as the model's author reads `n`, but moves the failure to the `COPY`) and measuring
+characters with `VARCHAR(4n)` in the Redshift DDL. The audit of stage 4 (`octet_length` in
+Redshift, `strlen` in DuckDB) and `scripts/migrate_parquet_to_delta.py` already measure bytes. The
+same day `probes/parquet_source.py` gained the byte maximum beside the character length in its
+sample section, because the client model's lengths came from a reading in characters: in the
+fictitious base, `cad_contas.nome` reads 45 characters and 47 bytes.
+`plan/PLAN-STAGE-1.md`, `plan/schema.md`, `probes/README.md`
+
+On 2026-09-21 the user made the table and column comment optional, the third pending decision of
+stage 1: `check_models` no longer reports a table or a column without `comment`. The alternatives
+offered and declined were keeping the rule as it was and keeping it with the columns of a table
+grouped into one violation. The numbers behind the choice: the reference model, which has no
+comment at all, produced 129 violations, 85 of them about comments, so the 44 structural defects
+were drowned. The client model keeps its 12 table comments and its 77 column comments. The column
+comment still reaches the Arrow schema and the Delta schema; the table comment now has no consumer,
+and whether `create_table` passes it as the Delta table's `description` is an open item of stage 3.
+`plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `docs/index.md`
+
+On 2026-09-21, asked to confirm the `String(n)` lengths of the client model (the fourth pending
+decision of stage 1), the user asked for the whole base to be measured first, instead of confirming
+the lengths or widening the two with no margin. The lengths had come from the probe's 5,000-row
+sample per table, in characters; two columns sit at zero margin (`cad_contratos.to` with
+`String(2)` over the domain `01`..`ZT`, and `cad_contratos.fonte_familia` with `String(3)` over
+`BND`..`FMM`), and `cad_lancamentos.meta` is 100% null over its 141,901,795 rows, so its
+`String(255)` rests on nothing. `probes/parquet_source.py <raiz> --text-bytes` now reads the text
+columns of every file and reports, per column, the longest value in bytes and in characters
+(section 9); the run in the target closes the decision. `plan/PLAN-STAGE-1.md`, `probes/README.md`
+
+On 2026-09-21 the user replaced the decision of the same day to measure the whole base before
+fixing the `String(n)` lengths of the client model: the lengths are the model owner's, reviewed
+directly in the code, and no run in the target gates stage 1. The `--text-bytes` section of
+`probes/parquet_source.py` stays as an available reading of the base, not as a pending task. The
+same day the user left the Redshift distribution at `AUTO`: the client model declares no `redshift`
+key, and `svv_table_info` read after the first publication (stage 8, `diststyle`, `sortkey1`,
+`tbl_rows`, `skew_rows`, the denied view being a reading too) says whether an explicit `distkey`
+pays, which would then enter by `ALTER TABLE`. What weighed: nobody has measured how the clients
+query, the AWS documentation recommends `AUTO`, and the distribution is reversible, unlike the
+types the migration freezes. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`
+
+On 2026-09-21 the user closed the review of the client model's comments the same way as the
+lengths: they are a first draft, and the model's owner revises them directly in the code, so the
+item leaves `plan/OPEN_QUESTIONS.md`. The only pending decision of stage 1 left is the foreign key
+`cad_contratos` declares to `rel_contrato_operacao`. `plan/PLAN-STAGE-1.md`
+
+On 2026-09-21 the user removed the foreign key `cad_contratos` declared to `rel_contrato_operacao`,
+the last pending decision of stage 1, and declined declaring `(data, sistema, contrato, operacao)`
+as a unique key of `rel_contrato_operacao`. The key was copied from the original model and pointed
+at columns that are not unique — the contract is apportioned among its N operations — so no engine
+would accept it, and the alternatives offered were inverting it (the direction the unique index
+`ix_contratos_data_sistema_contrato` sustains), declaring both, or keeping it. With it gone, the
+audit of stage 4 checks nothing between the two tables, and `rel_contrato_operacao` keeps
+`id_rel_contrato_operacao` as its only key. The query the client runs is contract → operations,
+which the `sort_key` `data, sistema, contrato, operacao` already serves; the direction of a foreign
+key never bore on it. `plan/PLAN-STAGE-1.md`, `tests/client_model/`

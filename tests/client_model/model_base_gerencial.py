@@ -87,7 +87,7 @@ class Operacao(Base):
     data: Mapped[date] = mapped_column(Date, comment="Data-base da operação")
     operacao: Mapped[str] = mapped_column(String(50), comment="Código da operação")
     legado: Mapped[bool] = mapped_column(Boolean, comment="Se a operação vem do sistema legado")
-    area: Mapped[str | None] = mapped_column(String(20), comment="Área responsável")
+    area: Mapped[str | None] = mapped_column(String(256), comment="Área responsável")
     departamento: Mapped[str | None] = mapped_column(
         String(20), comment="Departamento responsável"
     )
@@ -98,13 +98,13 @@ class Operacao(Base):
     taxa_bndes: Mapped[float | None] = mapped_column(Double, comment="Taxa BNDES")
     custo_adicional: Mapped[float | None] = mapped_column(Double, comment="Custo adicional")
     instrumento_financeiro: Mapped[str | None] = mapped_column(
-        String(100), comment="Instrumento financeiro"
+        String(256), comment="Instrumento financeiro"
     )
     data_str: Mapped[str] = mapped_column(String(10), comment="Partição: data em AAAA-MM-DD")
 
 
 class RelContratoOperacao(Base):
-    """``rel_contrato_operacao``: os contratos de cada operação, com o fator de rateio."""
+    """``rel_contrato_operacao``: as operações de cada contrato, com o fator de rateio."""
 
     __tablename__ = "rel_contrato_operacao"
     __table_args__ = (
@@ -112,7 +112,7 @@ class RelContratoOperacao(Base):
             ["data", "operacao"], ["cad_operacoes.data", "cad_operacoes.operacao"]
         ),
         {
-            "comment": "Contratos de cada operação, com o fator de rateio",
+            "comment": "Operações de cada contrato, com o fator de rateio",
             "info": {
                 "serialize_db": {
                     "partition_by": ["data_str"],
@@ -131,7 +131,7 @@ class RelContratoOperacao(Base):
     sistema: Mapped[int] = mapped_column(Integer, comment="Sistema de origem do contrato")
     contrato: Mapped[str] = mapped_column(String(50), comment="Código do contrato")
     fator_rateio: Mapped[float] = mapped_column(
-        Double, comment="Fração da operação atribuída ao contrato; soma 1 por operação"
+        Double, comment="Fração do contrato atribuída à operação; soma 1 por contrato"
     )
     data_str: Mapped[str] = mapped_column(String(10), comment="Partição: data em AAAA-MM-DD")
 
@@ -142,18 +142,9 @@ class Contrato(Base):
     __tablename__ = "cad_contratos"
     __table_args__ = (
         Index("ix_contratos_data_sistema_contrato", "data", "sistema", "contrato", unique=True),
-        # A chave estrangeira do original aponta para colunas não únicas de
-        # rel_contrato_operacao, o que motor algum aceitaria; fica como a regra que a auditoria
-        # verifica por anti-join (todo contrato está em alguma operação), decisão pendente em
-        # plan/PLAN-STAGE-1.md.
-        ForeignKeyConstraint(
-            ["data", "sistema", "contrato"],
-            [
-                "rel_contrato_operacao.data",
-                "rel_contrato_operacao.sistema",
-                "rel_contrato_operacao.contrato",
-            ],
-        ),
+        # A chave estrangeira do original, de (data, sistema, contrato) para
+        # rel_contrato_operacao, saiu: o destino não é único, porque o contrato está em N
+        # operações (decisão do usuário de 2026-09-21).
         {
             "comment": "Contratos por data-base",
             "info": {
@@ -246,7 +237,7 @@ class Lancamento(Base):
         String(50), comment="Código do contrato, quando há contrato"
     )
     area: Mapped[str | None] = mapped_column(
-        String(20), comment="Área, no lançamento associado a uma área e não a um contrato"
+        String(256), comment="Área, no lançamento associado a uma área e não a um contrato"
     )
     data_base_str: Mapped[str] = mapped_column(
         String(10), comment="Partição: data_base em AAAA-MM-DD"

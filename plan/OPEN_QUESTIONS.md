@@ -42,10 +42,6 @@ foi medido em [`POC.md`](POC.md).
   (`probelib.endpoint_reachable`), que no macOS no mesmo dia baixou de 10,0 s para 2,0 s a espera por
   um endereço sem rota ([`POC.md`](POC.md)). A próxima execução dos probes no alvo diz o que sobra;
   a permissão sobre a raiz fica provada pela primeira escrita.
-- **`Text` no Redshift.** O `sqlalchemy-redshift` compila `Text` como `TEXT`, que o Redshift guarda
-  como `VARCHAR(256)`. A [etapa 1](PLAN-STAGE-1.md) emite `VARCHAR(65535)` por `sql_type`
-  em `ddl`, em vez de exigir `String(65535)` nos modelos; a escolha
-  ainda não foi confirmada pelo usuário.
 - **Barreira por tabela.** Um cliente que dispara `load` numa thread e esquece o `result()` lê o
   estado anterior em silêncio, porque o DuckDB não espera. A guarda: `load` marca a tabela em voo,
   e `query` e `execute` esperam as tabelas em voo que o statement referencia, tiradas por
@@ -64,14 +60,9 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 1](PLAN-STAGE-1.md): `Text` como `VARCHAR(65535)` por `sql_type`; `String(n)` medido em
-  bytes; a tabela e a coluna sem comentário como violação de `check_models`; no modelo cliente: os
-  comprimentos de `String(n)`, a distribuição no
-  Redshift (`redshift` ausente, `AUTO`), a chave estrangeira de `cad_contratos` para colunas não
-  únicas de `rel_contrato_operacao`, e a revisão dos comentários pelo dono do modelo.
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
   `dev`.
-- [Etapa 3](PLAN-STAGE-3.md): a reserva de credenciais do `boto3` em `storage_options`; as colunas
+- [Etapa 3](PLAN-STAGE-3.md): o comentário da tabela como `description` da tabela Delta; a reserva de credenciais do `boto3` em `storage_options`; as colunas
   com estatística registrada; `version_diff` quando o log foi limpo.
 - [Etapa 4](PLAN-STAGE-4.md): `loader` numa tabela que já existe; o padrão de `memory_limit`; o
   banco em arquivo como padrão; a amostra do `AuditReport`.
@@ -85,7 +76,9 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.
-- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação no datashare ou temporária; `FILLRECORD` em
+- [Etapa 8](PLAN-STAGE-8.md): a `distkey` de cada tabela publicada, decidida pela leitura de
+  `svv_table_info` depois da primeira publicação (a distribuição é `AUTO` desde a decisão do
+  usuário de 2026-09-21); a staging da publicação no datashare ou temporária; `FILLRECORD` em
   todo `COPY` da biblioteca (proposto: um manifesto pode listar arquivos anteriores e posteriores a
   uma coluna nova) ou a lista de colunas, os dois lidos em 2026-09-21; o teto de 65.535 bytes do
   campo JSON no Redshift conferido pela auditoria (proposto), ou um caminho por

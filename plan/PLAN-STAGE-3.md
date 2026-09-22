@@ -666,6 +666,11 @@ não o seu texto.
 
 ## Decisões pendentes
 
+- **[decisão] O comentário da tabela como `description` da tabela Delta.** O comentário da
+  coluna vai para o esquema Arrow e para o Delta; o da tabela não tem consumidor desde que
+  deixou de ser violação de `check_models` ([etapa 1](PLAN-STAGE-1.md), decisão do usuário de
+  2026-09-21). `create_table` pode passá-lo em `description`, ou o modelo o mantém só como
+  documentação do código.
 - **[decisão] A reserva de credenciais do `boto3` em `storage_options`.** Passar sempre as
   credenciais congeladas do `boto3` dispensa a cadeia do delta-rs e a exportação de `NO_PROXY`, ao
   custo de um `DeltaTable` aberto carregar credenciais que expiram em uma hora; a cadeia do delta-rs

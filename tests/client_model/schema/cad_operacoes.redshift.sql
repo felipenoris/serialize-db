@@ -3,7 +3,7 @@ CREATE TABLE "cad_operacoes" (
     "data" DATE NOT NULL,
     "operacao" VARCHAR(50) NOT NULL,
     "legado" BOOLEAN NOT NULL,
-    "area" VARCHAR(20),
+    "area" VARCHAR(256),
     "departamento" VARCHAR(20),
     "spread_basico" DOUBLE PRECISION,
     "spread_risco" DOUBLE PRECISION,
@@ -11,6 +11,6 @@ CREATE TABLE "cad_operacoes" (
     "taxa_total" DOUBLE PRECISION,
     "taxa_bndes" DOUBLE PRECISION,
     "custo_adicional" DOUBLE PRECISION,
-    "instrumento_financeiro" VARCHAR(100),
+    "instrumento_financeiro" VARCHAR(256),
     "data_str" VARCHAR(10) NOT NULL
 ) SORTKEY ("data", "operacao")

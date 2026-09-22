@@ -24,7 +24,8 @@ usuário de 2026-09-20): toda chave estrangeira do modelo tem a linha referencia
 ``cad_lancamentos`` tenha os seus ``cad_contratos`` (a leitura mostrou 2026-01-31 só em
 ``cad_lancamentos``). ``rel_contrato_operacao`` é a relação N×N entre contratos e operações da mesma
 data: toda operação tem contratos, todo contrato está em uma ou duas operações, e ``fator_rateio``
-soma 1 entre os contratos de cada operação. Os valores reproduzem o que a carga inicial tem de
+reparte cada contrato entre as suas operações e soma 1 por contrato (leitura do usuário na base
+de produção, 2026-09-21). Os valores reproduzem o que a carga inicial tem de
 tratar: ``valor`` com três casas (o par extremo ``±11846195394.628``), ``fator`` com cinco,
 ``data_assinatura`` nula em mais da metade das linhas, ``meta`` sempre nula, ``id_lancamento`` até
 1.113.599.996 em ``int32``, e as sete colunas de ``cad_contratos`` declaradas anuláveis nos arquivos
@@ -282,7 +283,7 @@ def month_ends_after(date: dt.date, until: dt.date = PROJECTION_HORIZON) -> list
 def apportionment(count: int) -> list[float]:
     """``count`` fatores de rateio que somam exatamente 1: metade para o primeiro e o resto repartido do mesmo modo.
 
-    As frações são diádicas (1, 1/2, 1/4, ...), exatas em ponto flutuante, e a soma por operação dá 1.0 sem erro.
+    As frações são diádicas (1, 1/2, 1/4, ...), exatas em ponto flutuante, e a soma por contrato dá 1.0 sem erro.
     """
     if count == 1:
         return [1.0]
@@ -483,7 +484,7 @@ def build_cad_contratos(rng: random.Random) -> dict[str, pa.Table]:
 def build_rel_contrato_operacao(contratos: dict[str, pa.Table], operacoes: dict[str, pa.Table]) -> dict[str, pa.Table]:
     """A relação N×N de cada data: todo contrato numa operação, um em quatro também na seguinte, e os fatores somando 1.
 
-    As linhas saem agrupadas por operação, e ``apportionment`` reparte a operação entre os seus contratos.
+    As linhas saem agrupadas por contrato, e ``apportionment`` reparte o contrato entre as suas operações.
     """
     tables = {}
     next_id = 2951753
@@ -491,14 +492,14 @@ def build_rel_contrato_operacao(contratos: dict[str, pa.Table], operacoes: dict[
         month = dt.date.fromisoformat(value)
         contract_rows = contratos[value].to_pylist()
         operation_names = operacoes[value].column("operacao").to_pylist()
-        links: dict[str, list[dict]] = {name: [] for name in operation_names}
-        for j, contract in enumerate(contract_rows):
-            links[operation_names[j % len(operation_names)]].append(contract)
-            if j % 4 == 0:
-                links[operation_names[(j + 1) % len(operation_names)]].append(contract)
         rows: dict[str, list] = {name: [] for name in SCHEMAS["rel_contrato_operacao"].names}
-        for operation, contracts in links.items():
-            for contract, factor in zip(contracts, apportionment(len(contracts)), strict=True):
+        for j, contract in enumerate(contract_rows):
+            # Todo contrato entra numa operação, e um em cada quatro também na seguinte; o rateio
+            # reparte o contrato entre as operações dele e soma 1 por contrato.
+            operations = [operation_names[j % len(operation_names)]]
+            if j % 4 == 0:
+                operations.append(operation_names[(j + 1) % len(operation_names)])
+            for operation, factor in zip(operations, apportionment(len(operations)), strict=True):
                 rows["id_rel_contrato_operacao"].append(next_id)
                 rows["data"].append(month)
                 rows["operacao"].append(operation)
