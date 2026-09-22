@@ -87,7 +87,7 @@ class Operacao(Base):
     data: Mapped[date] = mapped_column(Date, comment="Data-base da operação")
     operacao: Mapped[str] = mapped_column(String(50), comment="Código da operação")
     legado: Mapped[bool] = mapped_column(Boolean, comment="Se a operação vem do sistema legado")
-    area: Mapped[str | None] = mapped_column(String(20), comment="Área responsável")
+    area: Mapped[str | None] = mapped_column(String(256), comment="Área responsável")
     departamento: Mapped[str | None] = mapped_column(
         String(20), comment="Departamento responsável"
     )
@@ -98,7 +98,7 @@ class Operacao(Base):
     taxa_bndes: Mapped[float | None] = mapped_column(Double, comment="Taxa BNDES")
     custo_adicional: Mapped[float | None] = mapped_column(Double, comment="Custo adicional")
     instrumento_financeiro: Mapped[str | None] = mapped_column(
-        String(100), comment="Instrumento financeiro"
+        String(256), comment="Instrumento financeiro"
     )
     data_str: Mapped[str] = mapped_column(String(10), comment="Partição: data em AAAA-MM-DD")
 
@@ -237,7 +237,7 @@ class Lancamento(Base):
         String(50), comment="Código do contrato, quando há contrato"
     )
     area: Mapped[str | None] = mapped_column(
-        String(20), comment="Área, no lançamento associado a uma área e não a um contrato"
+        String(256), comment="Área, no lançamento associado a uma área e não a um contrato"
     )
     data_base_str: Mapped[str] = mapped_column(
         String(10), comment="Partição: data_base em AAAA-MM-DD"
