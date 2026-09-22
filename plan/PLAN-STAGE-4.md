@@ -21,7 +21,7 @@ modelo:
 | Nulo em coluna `NOT NULL` | `column.nullable` | As partições da execução. |
 | Chave repetida | `table.primary_key` e os `UniqueConstraint`, mais o que `keys` acrescenta | As partições da execução quando as colunas da chave incluem a coluna de partição; a tabela inteira quando não incluem. |
 | Órfão de chave estrangeira | `table.foreign_keys` | Só com `foreign_keys=True`; a tabela referenciada entra na versão fixada pela execução. |
-| Partição fora da data | `partition_by` e `partition_source` de `table_options`: a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')` | As partições da execução. |
+| Partição fora da origem, e valor que não serve de nome de pasta | `partition_by` e `partition_source` de `table_options`: com `partition_source` declarado, a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')`; em toda tabela particionada, o valor vazio ou com `/`, `=` ou espaço (a partição é texto desde a decisão de 2026-09-22, e a data é o caso da base atual) | As partições da execução. |
 | Texto acima de `String(n)` e valor fora do `Numeric(18, 2)` | os tipos de `schema.md`; no Redshift, o `COPY` de uma string maior que o `VARCHAR` aborta (`Spectrum Scan Error` 15007, 2026-09-21), e esta verificação é a barreira | As partições da execução. |
 | Documento JSON inválido, ou acima de 65.535 bytes se a decisão da [etapa 8](PLAN-STAGE-8.md) fixar o teto | as colunas JSON, que nem o Arrow nem o Delta validam; o teto é o do `VARCHAR` da staging do Redshift e da string que o `COPY` de Parquet aceita numa coluna `SUPER` (2026-09-21) | As partições da execução. |
 | Totais de controle | as colunas `Numeric` e `Double`; as `Double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem | As partições da execução. |
@@ -204,8 +204,10 @@ protocolo, porque o pipeline também o chama, por `run.published(table)` ([etapa
 
 - **`checks`** monta os statements Core sobre a cópia prefixada da tabela (`sql.prefixed`). Uma
   consulta de linhas reúne num `count(*) FILTER` por coluna: nulo em `NOT NULL`, texto acima de
-  `String(n)`, JSON inválido, a coluna de partição diferente de `partition_text(partition_source)`,
-  e a soma de controle de cada coluna `Double` e `Numeric` como `DECIMAL(38, 6)`. Duas funções
+  `String(n)`, JSON inválido, a coluna de partição diferente de `partition_text(partition_source)`
+  quando o modelo declara `partition_source`, o valor de partição vazio ou com `/`, `=` ou espaço
+  (a partição é texto desde 2026-09-22, e a data é o caso da base atual), e a soma de controle de
+  cada coluna `Double` e `Numeric` como `DECIMAL(38, 6)`. Duas funções
   genéricas com `@compiles` por dialeto fazem a portabilidade: `partition_text` é
   `strftime(x, '%Y-%m-%d')` no DuckDB e `to_char(x, 'YYYY-MM-DD')` no Redshift; `json_valid` fica
   no DuckDB e vira `is_valid_json` no Redshift. Uma consulta por chave (`GROUP BY ... HAVING count(*)

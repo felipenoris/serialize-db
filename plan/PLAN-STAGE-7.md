@@ -42,7 +42,7 @@ relatório registra os órfãos.
 
 | Primitiva | O que faz |
 | --- | --- |
-| `initial_load(db, table, source, partitions=None, mode=None)` | `create_table`; descobre as partições da pasta da tabela (`<coluna>=<AAAA-MM-DD>/`, a mesma coluna e o mesmo valor do contrato, ou o arquivo único na raiz da tabela) e, para cada uma, o DuckDB lê `read_parquet('<partição>/*.parquet')`, a pasta inteira e nunca a ordem dos nomes, sem `hive_partitioning` (com ele o DuckDB converte `data_str` a `DATE`), confere que `partition_source` (`data`, ou `data_base`) é igual ao valor do caminho em toda linha e acrescenta a coluna de partição com esse valor. As conversões que a origem exige são aplicadas antes do `cast` e registradas no relatório: as chaves de `int32` a `int64`, sem perda, e o `timestamp` `INT96` de nanossegundos a microssegundos (`coerce_int96_timestamp_unit="us"` no PyArrow; o `TIMESTAMP` do DuckDB já trunca; a precisão perdida não importa, decisão de 2026-09-20). As colunas `double` entram como estão, e a nulidade é a do modelo: um nulo numa coluna `NOT NULL` é recusado pelo `cast`, com a coluna e a partição na mensagem. `cast` converte para o contrato e `mode`, a flag `export_mode` da [etapa 6](PLAN-STAGE-6.md), decide a gravação: `rewrite` grava por `publish_partition`; `register` roda `COPY (<a mesma consulta>) TO '<uri>/<coluna>=<valor>/<nome único>.parquet' (FORMAT parquet, RETURN_STATS)` e registra por `register_files`, com as conferências da [etapa 3](PLAN-STAGE-3.md). Uma carga interrompida recomeça da partição seguinte à última publicada; `partitions` filtra as partições encontradas. As tabelas fora do modelo (`alembic_version`, `meta_update_status`) e o que não é Parquet (`schema.json`) ficam fora da carga e entram no relatório. |
+| `initial_load(db, table, source, partitions=None, mode=None)` | `create_table`; descobre as partições da pasta da tabela (`<coluna>=<valor>/`, a coluna de partição do contrato, ou o arquivo único na raiz da tabela) e, para cada uma, o DuckDB lê `read_parquet('<partição>/*.parquet')`, a pasta inteira e nunca a ordem dos nomes, sem `hive_partitioning` (com ele o DuckDB converte `data_str` a `DATE`), confere, quando o modelo declara `partition_source` (`data`, ou `data_base`), que ela é igual ao valor do caminho em toda linha, e acrescenta a coluna de partição com esse valor. As conversões que a origem exige são aplicadas antes do `cast` e registradas no relatório: as chaves de `int32` a `int64`, sem perda, e o `timestamp` `INT96` de nanossegundos a microssegundos (`coerce_int96_timestamp_unit="us"` no PyArrow; o `TIMESTAMP` do DuckDB já trunca; a precisão perdida não importa, decisão de 2026-09-20). As colunas `double` entram como estão, e a nulidade é a do modelo: um nulo numa coluna `NOT NULL` é recusado pelo `cast`, com a coluna e a partição na mensagem. `cast` converte para o contrato e `mode`, a flag `export_mode` da [etapa 6](PLAN-STAGE-6.md), decide a gravação: `rewrite` grava por `publish_partition`; `register` roda `COPY (<a mesma consulta>) TO '<uri>/<coluna>=<valor>/<nome único>.parquet' (FORMAT parquet, RETURN_STATS)` e registra por `register_files`, com as conferências da [etapa 3](PLAN-STAGE-3.md). Uma carga interrompida recomeça da partição seguinte à última publicada; `partitions` filtra as partições encontradas. As tabelas fora do modelo (`alembic_version`, `meta_update_status`) e o que não é Parquet (`schema.json`) ficam fora da carga e entram no relatório. |
 | `load_report(db, table, source)` | Contagem e somas por partição, na origem e no Delta: as colunas `double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem e os valores são os mesmos dos dois lados; as `Numeric`, quando existirem, como estão. A carga só termina quando coincidem. |
 | `serialize-db load` | `--table`, `--source` e `--partitions`. |
 
@@ -160,7 +160,7 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
 
 ## Estratégia de implementação
 
-- **`discover_partitions`** lista a pasta da tabela na origem: as entradas `<coluna>=<AAAA-MM-DD>`
+- **`discover_partitions`** lista a pasta da tabela na origem: as entradas `<coluna>=<valor>`
   com a coluna de `table_options(table)` viram `{valor: pasta}`; numa tabela sem partição, a própria
   pasta com `None`; o resto (`alembic_version`, `schema.json`, pastas sem o padrão) vai para
   `skipped`, e o relatório o lista.
@@ -174,7 +174,8 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   (decisão de 2026-09-20).
 - **`initial_load`** cria a tabela (`create_table`), lê as partições já presentes em
   `get_add_actions` e pula cada uma delas (a retomada); para cada partição pendente, confere
-  `count(*) ... WHERE <coluna> <> strftime(<partition_source>, '%Y-%m-%d')` igual a zero, e grava
+  `count(*) ... WHERE <coluna> <> strftime(<partition_source>, '%Y-%m-%d')` igual a zero quando o
+  modelo declara `partition_source`, e grava
   conforme `mode`: `register` roda `COPY (SELECT <colunas sem a de partição> FROM (<consulta>)) TO
   '<uri>/<coluna>=<valor>/carga_inicial_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` e chama
   `register_files` com o `RegisteredFile` da linha do `RETURN_STATS`; `rewrite` passa
@@ -193,7 +194,7 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
 
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
-| `discover_partitions` | Pasta da tabela legível. | Um valor por pasta `<coluna>=<AAAA-MM-DD>`, ou `None`; o resto em `skipped`. |
+| `discover_partitions` | Pasta da tabela legível. | Um valor por pasta `<coluna>=<valor>`, ou `None`; o resto em `skipped`. |
 | `partition_query` | Arquivos com as colunas do contrato. | Um `SELECT` cujo esquema Arrow é o do contrato, com a coluna de partição no fim. |
 | `initial_load` | Tabela aprovada por `check_models`; a origem intocada (a carga só lê). | Uma versão por partição carregada; a segunda chamada não carrega nada; um valor de `partition_source` diferente do caminho aborta a partição sem commit. |
 | `load_report` | Carga concluída. | Contagem e somas por partição dos dois lados e o veredito; a carga só termina com `matches` verdadeiro. |

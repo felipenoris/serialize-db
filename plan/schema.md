@@ -33,9 +33,11 @@ class Operacao(Base):
     data_ref_str: Mapped[str] = mapped_column(String(10))
 ```
 
-A coluna de partição é uma data em texto `AAAA-MM-DD`, `strftime(partition_source, '%Y-%m-%d')`,
-nos moldes da base de referência (decisão de 2026-09-20); a biblioteca não fixa o nome nem a
-granularidade, e `mes` nos exemplos dos outros documentos é uma coluna de partição ilustrativa.
+A coluna de partição é uma coluna de texto `String(n)` do modelo (decisão de 2026-09-22, que
+generaliza a de 2026-09-20); na base de referência ela é a data em texto `AAAA-MM-DD`,
+`strftime(partition_source, '%Y-%m-%d')`, e `partition_source`, opcional, declara a coluna de data
+de que ela deriva; a biblioteca não fixa o nome nem a granularidade, e `mes` nos exemplos dos
+outros documentos é uma coluna de partição ilustrativa.
 
 O `sqlalchemy-redshift` aceita `redshift_diststyle`, `redshift_distkey`, `redshift_sortkey` e
 `redshift_interleaved_sortkey` como argumentos de `Table`. Guardar as opções em `info` mantém os

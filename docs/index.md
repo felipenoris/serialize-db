@@ -91,8 +91,8 @@ As chaves de `Table.info["serialize_db"]`:
 
 | Chave | O que declara |
 | --- | --- |
-| `partition_by` | A coluna de partição, uma no máximo, `String(10)` em `AAAA-MM-DD`, no fim da tabela. |
-| `partition_source` | A coluna de data de que a coluna de partição deriva (`strftime('%Y-%m-%d')`). |
+| `partition_by` | A coluna de partição, uma no máximo, de texto `String(n)`, no fim da tabela; o valor é o nome da pasta da partição, sem `/`, `=` nem espaço. Na base atual é a data em `AAAA-MM-DD`. |
+| `partition_source` | Opcional: a coluna de data de que a coluna de partição deriva (`strftime('%Y-%m-%d')`); com ela, a auditoria e a carga inicial conferem a derivação. |
 | `sort_key` | As colunas da `SORTKEY` do Redshift e da ordenação dos arquivos. |
 | `redshift` | `diststyle` e `distkey` do Redshift; ausente, a distribuição é `AUTO`. |
 | `keys` | `{"add": [[...]], "drop": [[...]]}`: uma chave de negócio a mais para a auditoria, ou uma chave do modelo a menos, sempre por lista de colunas. |
@@ -110,8 +110,9 @@ assert problems == [], "\n".join(problems)
 ```
 
 As regras: tipo fora da tabela de tipos; `autoincrement` numa chave inteira (o padrão `"auto"`
-inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); chave estrangeira `DEFERRABLE`; `partition_by` sem a coluna, com a coluna fora de
-`String(10)` ou sem `partition_source`; tabela sem chave primária e sem `keys`.
+inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); chave estrangeira `DEFERRABLE`; `partition_by` sem a coluna ou com a coluna fora de
+`String(n)`, `partition_source` que a tabela não tem ou sem `partition_by`; tabela sem chave
+primária e sem `keys`.
 
 ### Derivar o esquema e o DDL
 

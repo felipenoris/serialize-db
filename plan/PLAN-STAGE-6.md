@@ -9,7 +9,7 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 | --- | --- |
 | `Database(root, environment, metadata, storage_options=None)` | A raiz do banco, o ambiente (`prod`, `dev`) e o `MetaData` dos modelos; `uri(table)` é `<root>/<ambiente>/<tabela>/`, mais o arquivo de controle e os prefixos `staging/`, `publicacao/` e `arquivo/`; chama `prepare_environment` e cria `Storage.for_uri(root)`. |
 | `Execution(db, engine, partition, execution_id)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox; na saída descarta o sandbox e grava o resumo no log. As primitivas podem ser chamadas de qualquer thread, cada uma na conexão da sua thread no DuckDB e na sessão única do motor Redshift, e o estado mutável (`versions`, auditorias aprovadas, o alocador) fica sob lock. |
-| `run.previous_partitions(table, n)` | Os `n` últimos valores de partição da tabela na versão fixada até `run.partition`, inclusive, lidos das ações `add`; o calendário é do cliente, não da biblioteca. |
+| `run.previous_partitions(table, n)` | Os `n` últimos valores de partição da tabela na versão fixada até `run.partition`, inclusive, lidos das ações `add`, na ordem de texto dos valores, que nos valores `AAAA-MM-DD` é a do calendário; o calendário é do cliente, não da biblioteca. |
 | `run.ingest(*tables, partitions=None, materialize=False, max_workers=1)` | `engine.ingest` de cada tabela na versão fixada, num `ThreadPoolExecutor(max_workers)` quando `max_workers > 1`, cada tarefa na conexão da sua thread no DuckDB, e em série na sessão única do motor Redshift; sem `partitions`, a tabela inteira. O ganho é no S3, onde a latência domina; em disco local o pool da instância já usa os núcleos. |
 | `run.published(table)` | A versão fixada da tabela como origem de consulta, por `engine.published(table, db.uri(table), versions[table])`: `delta_scan('<uri>', version := <v>)` no DuckDB, a staging `exec_<id>_<tabela>_publicado` no Redshift ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)). É por ela que o pipeline lê as partições já publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader` (decisão do usuário de 2026-09-22); numa tabela que ainda não existe, levanta `SandboxError`. |
 | `run.sandbox` | O motor, onde o pipeline chama `stream` e `loader`, os lotes na saída e na entrada, e `query`, `execute` e `load`, as formas por `pa.Table`, de qualquer thread; no DuckDB cada stream e cada loader roda num cursor próprio, e no Redshift todo comando passa pela sessão única sob o lock do motor ([etapa 5](PLAN-STAGE-5.md)); `run.sandbox.connection` é a conexão crua, a da thread no DuckDB e a sessão no Redshift, para o que as primitivas não cobrem, uma thread por vez. |
@@ -102,7 +102,10 @@ um motor já construído, para os testes.
   (`DeltaTable.is_deltatable`) e guarda a `DeltaTable` e a versão; a tabela ausente fica com `None`
   e nasce em `publish`. Toda leitura da execução usa esses objetos: `previous_partitions`, `ingest`,
   `next_ids`, `audit`. O `execution_id` ausente vira `exec-<AAAA-MM-DD>-<uuid8>`. A partição é
-  validada como `AAAA-MM-DD`. O motor é construído aqui, com o `execution_id` e o `Storage`.
+  validada como texto não vazio, dentro do `String(n)` da coluna de partição de cada tabela
+  particionada do modelo e sem `/`, `=` ou espaço, os caracteres que o nome da pasta e o manifesto
+  não aceitam (decisão de 2026-09-22; a data `AAAA-MM-DD` é o caso da base atual). O motor é
+  construído aqui, com o `execution_id` e o `Storage`.
 - **`__exit__`** chama `sandbox.cleanup()` aconteça o que acontecer e grava o resumo no log
   (`serialize_db.execution`): identificador, partição, versões lidas, versões gravadas, tempo por
   passo.
@@ -148,7 +151,7 @@ um motor já construído, para os testes.
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
 | `Database` | Raiz alcançável; `metadata` aprovado por `check_models`. | Caminhos montados; ambiente normalizado. |
-| `Execution.__enter__` | Partição `AAAA-MM-DD`; motor configurável. | `versions` com toda tabela do ambiente; o sandbox aberto; o log com as versões lidas. |
+| `Execution.__enter__` | Partição de texto válida; motor configurável. | `versions` com toda tabela do ambiente; o sandbox aberto; o log com as versões lidas. |
 | `previous_partitions` | Tabela existente e particionada. | Os `n` últimos valores até a partição da execução, inclusive, em ordem crescente. |
 | `next_ids` | Tabela com chave primária inteira de uma coluna. | Faixas contíguas e disjuntas entre threads, a primeira acima do máximo da versão fixada. |
 | `audit` | Sandbox com a tabela. | O par aprovado registrado, ou `AuditFailed` com o relatório no log; o Delta intocado. |

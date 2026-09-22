@@ -321,3 +321,14 @@ result in `execute`), `loader` writes the Parquet outside it and runs the `COPY`
 and a temporary table the pipeline creates in the session serves the next commands and is lost
 when the engine reconnects. The DuckDB engine keeps its cursor per thread, stream and loader.
 `plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/serialize-db.md`
+
+The same day the user generalized the partition column: any text column `String(n)` partitions,
+`partition_source` is optional and the derivation `strftime('%Y-%m-%d')` is checked by the audit
+and the initial load only when the model declares it, and the `AAAA-MM-DD` date is the current
+base's case, not the contract; the value must serve as a folder name and a literal (no `/`, `=`,
+space or empty), `previous_partitions` returns the text order, and `Execution` validates the
+value against those rules instead of `AAAA-MM-DD`. `check_models` refuses a partition column
+without length, a `partition_source` the table lacks and one without `partition_by`. A non-text
+partition type stays out: five SQL templates and the log's `partition_values` treat the value as
+quoted text. `plan/PLAN.md`, `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`,
+`plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-7.md`, `docs/index.md`

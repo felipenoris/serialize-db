@@ -237,9 +237,11 @@ class TableOptions:
     """
 
     partition_by: str | None
-    """A coluna de partição, ``String(10)`` em ``AAAA-MM-DD``; ``None`` sem partição."""
+    """A coluna de partição, de texto ``String(n)``; ``None`` sem partição. O valor é o nome da
+    pasta da partição, sem ``/``, ``=`` nem espaço; na base atual é a data em ``AAAA-MM-DD``."""
     partition_source: str | None
-    """A coluna de data de que a coluna de partição deriva."""
+    """A coluna de data de que a coluna de partição deriva por ``strftime('%Y-%m-%d')``, quando
+    deriva; ``None`` quando o valor não vem de outra coluna."""
     sort_key: tuple[str, ...]
     """As colunas da ``SORTKEY`` do Redshift e da ordenação dos arquivos."""
     redshift: dict[str, str]
@@ -634,19 +636,23 @@ def _key_problems(table: sa.Table, options: TableOptions) -> list[str]:
 
 
 def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
-    """As violações da partição: a coluna ausente ou fora de String(10), a origem ausente."""
-    if not options.partition_by:
-        return []
+    """As violações da partição: a coluna ausente ou fora de String(n), a origem que não existe."""
     problems = []
+    if options.partition_source and not options.partition_by:
+        problems.append(f"{table.name}: partition_source sem partition_by")
+    if not options.partition_by:
+        return problems
     column = table.c.get(options.partition_by)
     if column is None:
         problems.append(
             f"{table.name}: partition_by aponta {options.partition_by}, que a tabela não tem")
-    elif not (isinstance(column.type, sa.String) and column.type.length == 10):
+    elif not (isinstance(column.type, sa.String) and column.type.length):
         problems.append(
-            f"{table.name}.{options.partition_by}: coluna de partição fora de String(10)")
-    if not options.partition_source or options.partition_source not in table.c:
-        problems.append(f"{table.name}: partition_by sem partition_source válido")
+            f"{table.name}.{options.partition_by}: coluna de partição fora de String(n)")
+    if options.partition_source and options.partition_source not in table.c:
+        problems.append(
+            f"{table.name}: partition_source aponta {options.partition_source}, "
+            "que a tabela não tem")
     return problems
 
 
@@ -655,9 +661,9 @@ def check_models(metadata: sa.MetaData) -> list[str]:
 
     As regras: tipo fora da tabela de tipos; ``autoincrement`` numa chave inteira (o padrão
     ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; chave estrangeira
-    ``DEFERRABLE``; ``partition_by`` sem a coluna, com a coluna fora de ``String(10)`` ou sem
-    ``partition_source``; tabela sem chave primária e sem ``keys``. O comentário de tabela e de
-    coluna é opcional (decisão do usuário de 2026-09-21); o da coluna, quando existe, vai para o
+    ``DEFERRABLE``; ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
+    ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave primária e
+    sem ``keys``. O comentário de tabela e de coluna é opcional (decisão do usuário de 2026-09-21); o da coluna, quando existe, vai para o
     esquema Arrow e para o Delta.
 
     Exemplo:

@@ -117,14 +117,16 @@ class Ruim(RuimBase):
     """Uma tabela com cada defeito que ``check_models`` reprova."""
 
     __tablename__ = "ruim"
-    __table_args__ = {"info": {"serialize_db": {"partition_by": ["mes"]}}}
+    __table_args__ = {
+        "info": {"serialize_db": {"partition_by": ["mes"], "partition_source": "inexistente"}}
+    }
     id: Mapped[int] = mapped_column(sa.Integer, primary_key=True)
     id_tudo: Mapped[int] = mapped_column(
         sa.BigInteger,
         sa.ForeignKey("tudo.id", deferrable=True, initially="DEFERRED"),
         comment="Referência",
     )
-    mes: Mapped[str] = mapped_column(sa.String(7), comment="Mês")
+    mes: Mapped[str] = mapped_column(sa.Text, comment="Partição sem comprimento")
     nome: Mapped[str] = mapped_column(sa.String, comment="Nome sem comprimento")
     peso: Mapped[bytes] = mapped_column(sa.LargeBinary, comment="Fora do contrato")
 
@@ -416,10 +418,37 @@ def test_check_models_finds_each_violation() -> None:
         "ruim.nome: String sem comprimento; declare String(n) ou Text",
         "ruim.peso: tipo fora do contrato: LargeBinary()",
         "ruim: chave estrangeira DEFERRABLE em ['id_tudo']",
-        "ruim.mes: coluna de partição fora de String(10)",
-        "ruim: partition_by sem partition_source válido",
+        "ruim.mes: coluna de partição fora de String(n)",
+        "ruim: partition_source aponta inexistente, que a tabela não tem",
     ]
     assert [problem for problem in found if problem.startswith("tudo")] == []
+
+
+def test_partition_column_is_any_text_and_the_source_optional() -> None:
+    """Uma coluna de texto de qualquer comprimento particiona sem `partition_source` (decisão de
+    2026-09-22); `partition_source` sem `partition_by` é violação."""
+    metadata = sa.MetaData()
+    regions = sa.Table(
+        "por_regiao",
+        metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("regiao", sa.String(20), nullable=False),
+        info={"serialize_db": {"partition_by": ["regiao"]}},
+    )
+    assert schema.check_models(metadata) == []
+    options = schema.table_options(regions)
+    assert (options.partition_by, options.partition_source) == ("regiao", None)
+
+    orphan = sa.Table(
+        "sem_particao",
+        sa.MetaData(),
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("data", sa.Date),
+        info={"serialize_db": {"partition_source": "data"}},
+    )
+    assert schema.check_models(orphan.metadata) == [
+        "sem_particao: partition_source sem partition_by"
+    ]
 
 
 def test_check_models_lists_the_reference_model_defects() -> None:

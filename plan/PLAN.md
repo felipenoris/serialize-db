@@ -69,14 +69,16 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
 - **Um teste só grava onde o usuário autorizou.** A variável de raiz de cada suíte é a
   autorização: sem ela a suíte é pulada, com ela o que impede a escrita é falha, e `pytest` sem
   variável não grava arquivo algum.
-- **A partição é por data em texto `AAAA-MM-DD`, nos moldes da base de referência** (decisão de
-  2026-09-20). A coluna de partição é do modelo do cliente, não da biblioteca: o modelo a declara
-  em `Table.info["serialize_db"]` com a coluna de data de que ela deriva (`partition_by`
-  `["data_str"]` e `partition_source` `"data"`; em `cad_lancamentos`, `data_base_str` de
-  `data_base`), o valor é `strftime(<coluna de data>, '%Y-%m-%d')`, e cada valor é uma partição, a
-  unidade de ingestão, auditoria, publicação e substituição. A biblioteca não fixa nome nem
-  granularidade; `mes` nos exemplos de `delta.md`, `duckdb.md`, `parquet.md` e `sqlalchemy.md` é
-  uma coluna de partição ilustrativa.
+- **A partição é uma coluna de texto do modelo do cliente** (decisão de 2026-09-22, que generaliza
+  a de 2026-09-20): `String(n)`, declarada em `Table.info["serialize_db"]` (`partition_by`
+  `["data_str"]`), e cada valor é uma partição, a unidade de ingestão, auditoria, publicação e
+  substituição; o valor serve de nome de pasta e de literal, sem `/`, `=`, espaço nem vazio, e a
+  ordem de texto dos valores é a que `previous_partitions` devolve. Na base atual ela é a data em
+  texto `AAAA-MM-DD` derivada de uma coluna de data por `strftime(<coluna de data>, '%Y-%m-%d')`,
+  declarada em `partition_source` (`"data"`; em `cad_lancamentos`, `data_base_str` de
+  `data_base`), e a biblioteca confere a derivação quando o modelo a declara. A biblioteca não
+  fixa nome nem granularidade; `mes` nos exemplos de `delta.md`, `duckdb.md`, `parquet.md` e
+  `sqlalchemy.md` é uma coluna de partição ilustrativa.
 - **Toda coluna numérica da base de origem é `double`, e o modelo de referência a mantém `Double`**
   (decisão de 2026-09-20): sem arredondamento nem `Numeric` de precisão fixa. O pacote suporta
   `Numeric(p, s)` pela tabela de tipos de `schema.md`, e a transição de `valor` para
@@ -298,8 +300,8 @@ O que a sondagem fixa em `cast`:
 Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 - A coluna de partição (`data_str` no modelo cliente) vive na ação `add`, não no arquivo de
-  dados: ela deriva de uma coluna de data do arquivo por `strftime('%Y-%m-%d')`, e o Redshift a
-  recebe por uma staging sem ela e `INSERT ... SELECT *, '<valor>'`; a lista de colunas no `COPY`,
+  dados: no modelo cliente ela deriva de uma coluna de data do arquivo por `strftime('%Y-%m-%d')`,
+  e o Redshift a recebe por uma staging sem ela e `INSERT ... SELECT *, '<valor>'`; a lista de colunas no `COPY`,
   confirmada em 2026-09-21, não fornece o valor da coluna ausente (`delta.md`).
 - `DECIMAL(18, 2)` sai como `INT64` do delta-rs e do DuckDB; o `COPY` desse tipo físico passou no
   ambiente alvo em 2026-09-21 (`parquet.md`, `POC.md`).
