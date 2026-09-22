@@ -1184,3 +1184,42 @@ que [`estrategia.md`](estrategia.md) já registrava da avaliação do SQLGlot co
 statements forem portáveis, o texto do Redshift é igual ao do DuckDB, que a suíte executa: a lacuna
 nasce no primeiro statement cujos dois textos diferem, o gatilho da decisão em
 [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md).
+
+## O que a revisão da etapa 2 mostrou
+
+Em 2026-09-21, no macOS arm64 com SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift
+1.0.0 e DuckDB 1.5.5, a revisão do rascunho da [etapa 2](PLAN-STAGE-2.md) mediu três coisas.
+
+**Os três dialetos compilam o mesmo texto, fora a citação de `"timestamp"`.** O `SELECT` portável do
+rascunho, um `INSERT ... SELECT DISTINCT` e um `SELECT` sobre `cad_contratos."to"` e
+`cad_lancamentos."timestamp"` compilaram por `duckdb_engine.Dialect(paramstyle="named")`,
+`RedshiftDialect_redshift_connector(paramstyle="named")` e
+`sqlalchemy.dialects.postgresql.dialect(paramstyle="named")`: os dois primeiros statements saíram
+idênticos nos três; no terceiro, os três citam `"to"` e só o dialeto do Redshift cita
+`"timestamp"`, reservada só lá. Com `paramstyle="named"`, `LIKE 'TI:%'` sai com um `%` nos três.
+
+**O dialeto `postgresql` com uma cópia que cita todo nome gera todo identificador entre aspas.** A
+cópia da tabela com `quoted_name(f"{prefix}{nome}", quote=True)` e cada coluna como
+`sa.Column(quoted_name(nome, quote=True), tipo)`, trocada no statement por `replacement_traverse`,
+deu `SELECT "{prefix}cad_contas"."numero", sum("{prefix}cad_lancamentos"."valor") AS total FROM
+"{prefix}cad_lancamentos" JOIN ...`, `INSERT INTO "{prefix}cad_contas" ("id_conta", "numero") SELECT
+DISTINCT ...`, `CAST("{prefix}cad_lancamentos"."valor" AS NUMERIC(18, 2))` e
+`"{prefix}cad_contratos"."to", "{prefix}cad_lancamentos"."timestamp"`. O texto com
+`prefix="exec_42_"` e `:data_base_str` em `$data_base_str` rodou no DuckDB sobre
+`"exec_42_cad_lancamentos"` e `"exec_42_cad_contas"` criadas com o DDL citado da etapa 1 e devolveu
+`[('1.1', 150.0)]`, o resultado do rascunho; o statement original continuou sem prefixo e sem aspas.
+
+**O `bindparam` sem valor aparece em `compiled.binds` com `required=True`.** Sem `literal_binds`,
+`sa.bindparam("area")` compila com `binds == {"area": (None, True)}` (valor, `required`);
+`sa.bindparam("area", value="x")` com `("x", False)`; uma constante e um `in_` com lista entram com
+nomes anônimos e `required=False`; `param()`, um `literal_column`, não aparece. Com
+`literal_binds=True`, `binds` fica vazio nos cinco casos, o texto do primeiro sai `t.area = NULL` e
+um `SAWarning` avisa. A leitura de `binds` na compilação sem `literal_binds` substitui o
+`warnings.catch_warnings` do rascunho anterior: a documentação do módulo `warnings` diz que, com
+`context_aware_warnings` falso, o gerenciador modifica os atributos globais do módulo e não é
+seguro num programa concorrente, com threads ou corrotinas; o flag e a variável de contexto
+existem desde o Python 3.14, e o projeto roda 3.13.
+
+O rascunho da etapa 2 foi reescrito com essas leituras, na forma do módulo, e rodou de novo: o mesmo
+texto, o mesmo resultado no DuckDB e as mesmas recusas, mais a do sentinela restante, o alvo de um
+`INSERT ... SELECT` prefixado e as tabelas de `referenced_tables` lidas do statement e do texto.

@@ -831,6 +831,11 @@ Escritas condicionais (`If-None-Match`, `If-Match`):
 - <https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes-enforce.html>
 - <https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-s3-enforcement-conditional-write-operations-general-purpose-buckets/>
 
+## Biblioteca padrão do Python
+
+- <https://docs.python.org/3/library/warnings.html> (`catch_warnings` altera o estado global do
+  módulo e não é seguro com threads sem `context_aware_warnings`, do Python 3.14)
+
 ## Pacotes Python
 
 - <https://github.com/Mause/duckdb_engine>

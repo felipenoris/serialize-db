@@ -284,3 +284,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   files and non-ASCII text columns. `probes/redshift.py::session` got no such refactor: it needs the
   target environment to run, and the user refused the split the same day
   (`.claude/memory/decisions.md`).
+- **Control flow never rides on process-wide state** (2026-09-21). The stage 2 draft turned the
+  `SAWarning` of a `bindparam` rendered as `NULL` into an exception with `warnings.catch_warnings`,
+  which swaps the interpreter's warning filter for the duration of the block; the `warnings`
+  documentation calls it unsafe in a concurrent program below Python 3.14's
+  `context_aware_warnings`, the project runs 3.13, and the engines of stages 4 and 5 call `render`
+  from helper threads. The review read the compiled statement instead: without `literal_binds`,
+  `compiled.binds` lists the parameter with `required=True`; with it, the list is empty and the
+  text carries `NULL`. Two compilations, no global state. `plan/PLAN-STAGE-2.md`, `plan/POC.md`

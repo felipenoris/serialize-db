@@ -51,6 +51,21 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   fully quoted `CREATE TABLE` back as `DECIMAL(18,2)`, `TIMESTAMP WITH TIME ZONE`, `VARCHAR` and
   `JSON`. The `with_variant(SUPER(), "redshift")` on a JSON column stays optional: `isinstance(kind,
   sa.JSON)` holds with or without it. `plan/PLAN-STAGE-1.md`, `plan/schema.md`
+- A `bindparam` without value shows in the plain compilation as `compiled.binds[name]` with
+  `required=True` (`value=None`); one with a value has `required=False`; constants and `in_` lists
+  enter under anonymous names with `required=False`; a `literal_column(":nome")` never appears.
+  With `literal_binds=True`, `binds` is empty, the text carries `= NULL` and a `SAWarning` fires.
+  Stage 2 reads `binds` instead of catching the warning: `warnings.catch_warnings` swaps the
+  process-wide filter and the `warnings` docs call it unsafe with threads below Python 3.14's
+  `context_aware_warnings`; the project runs 3.13 (2026-09-21). `plan/PLAN-STAGE-2.md`, `plan/POC.md`
+- For a portable `SELECT`, an `INSERT ... SELECT` and a `CAST`, `duckdb_engine.Dialect`,
+  `RedshiftDialect_redshift_connector` and SQLAlchemy's own `postgresql.dialect`, all with
+  `paramstyle="named"`, compile byte-identical text; the only difference measured is the quoting
+  of `"timestamp"`, which only the Redshift dialect does. A table copy built with
+  `quoted_name(name, quote=True)` on the prefixed table name and on every column makes the
+  `postgresql` dialect quote every identifier, sentinel inside the quotes
+  (`"{prefix}cad_contas"."numero"`), and the text runs in DuckDB over the quoted DDL of stage 1
+  (2026-09-21). The decision on `render`'s compiler is pending. `plan/PLAN-STAGE-2.md`, `plan/POC.md`
 
 ## SQL tooling
 

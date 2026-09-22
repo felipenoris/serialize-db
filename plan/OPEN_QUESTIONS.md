@@ -60,9 +60,11 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 2](PLAN-STAGE-2.md): o `sqlglot` no grupo `dev`, que o ensaio de 2026-09-21
-  ([`POC.md`](POC.md)) deixou preso ao primeiro statement cujo texto Redshift difira do texto
-  DuckDB.
+- [Etapa 2](PLAN-STAGE-2.md): o compilador de `render` — os dois dialetos de terceiros, que então
+  viram dependências de execução do pacote, ou o dialeto `postgresql` do SQLAlchemy com todo
+  identificador citado, um texto e um arquivo por statement (medição de 2026-09-21 em
+  [`POC.md`](POC.md)); o `sqlglot` no grupo `dev`, que o ensaio de 2026-09-21 deixou preso ao
+  primeiro statement cujo texto Redshift difira do texto DuckDB.
 - [Etapa 3](PLAN-STAGE-3.md): o comentário da tabela como `description` da tabela Delta; a reserva de credenciais do `boto3` em `storage_options`; as colunas
   com estatística registrada; `version_diff` quando o log foi limpo.
 - [Etapa 4](PLAN-STAGE-4.md): `loader` numa tabela que já existe; o padrão de `memory_limit`; o
