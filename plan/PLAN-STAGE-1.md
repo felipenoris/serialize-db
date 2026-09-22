@@ -12,7 +12,8 @@ código cliente apresenta para usar a biblioteca), leva as correções que a bib
 inteiras e nas colunas que as referenciam, `autoincrement=False` nessas chaves, chaves estrangeiras
 sem `DEFERRABLE`, a coluna de partição `data_str` (`String(10)`, `AAAA-MM-DD` de `data`;
 `data_base_str` de `data_base` em `cad_lancamentos`) no fim das quatro tabelas particionadas,
-comentários de tabela e de coluna, e `Table.info["serialize_db"]` com `partition_by`,
+comentários de tabela e de coluna, uma primeira redação que o dono do modelo revisa no código
+(decisão do usuário de 2026-09-21), e `Table.info["serialize_db"]` com `partition_by`,
 `partition_source` e `sort_key`, como em `schema.md`. A `sort_key` de cada tabela particionada é
 decisão do usuário de 2026-09-21: `data, sistema, contrato` em `cad_contratos`, `data, operacao`
 em `cad_operacoes`, `data, sistema, contrato, operacao` em `rel_contrato_operacao` e `data_base,
@@ -891,5 +892,3 @@ check_models:
 - **[decisão] A chave estrangeira de `cad_contratos` para `rel_contrato_operacao`**, do original,
   referencia colunas não únicas, o que motor algum aceitaria; fica no modelo cliente como a regra
   que a auditoria verifica por anti-join (todo contrato está em alguma operação), ou sai.
-- **[decisão] Os comentários do modelo cliente** são uma primeira redação para a revisão do dono do
-  modelo; `um`, `to`, `meta`, `estagio` e `fonte` são os que o nome e os valores não explicam.

@@ -436,11 +436,11 @@ def test_the_base_satisfies_the_reference_model(base: source.SourceBase) -> None
             assert connection.execute(f'SELECT count(*) FILTER (WHERE "{column}" IS NULL) FROM {table}').fetchone()[0] == 0, (table, column)
 
 
-def test_rel_contrato_operacao_apportions_each_operation_among_its_contracts(base: source.SourceBase) -> None:
-    """A relação N para N: toda operação tem contratos, um contrato está em mais de uma operação, e ``fator_rateio`` soma 1 por operação."""
+def test_rel_contrato_operacao_apportions_each_contract_among_its_operations(base: source.SourceBase) -> None:
+    """A relação N para N: toda operação tem contratos, um contrato está em mais de uma operação, e ``fator_rateio`` soma 1 por contrato."""
     connection = connect_with_views(base)
-    sums = connection.execute("SELECT data, operacao, sum(fator_rateio) FROM rel_contrato_operacao GROUP BY 1, 2").fetchall()
-    assert sums and all(total == 1.0 for _, _, total in sums)
+    sums = connection.execute("SELECT data, sistema, contrato, sum(fator_rateio) FROM rel_contrato_operacao GROUP BY 1, 2, 3").fetchall()
+    assert sums and all(total == 1.0 for _, _, _, total in sums)
 
     # Toda operação está na relação (o modelo só declara a chave estrangeira no sentido contrário, dos contratos).
     without_contract = connection.execute(

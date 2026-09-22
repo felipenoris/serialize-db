@@ -45,7 +45,7 @@ fixed-precision `Numeric` (the package supports `Numeric`, and moving `valor` to
 a future improvement); integer keys become `int64` in the Delta; `INT96` timestamps become `INT64`
 and their precision does not matter; nullability follows the model until the migration proves it
 problematic; the dev base's orphans are ignored and the test base is consistent, with the N×N
-`rel_contrato_operacao` whose `fator_rateio` sums to 1 per operation; `alembic_version` and
+`rel_contrato_operacao` whose `fator_rateio` sums to 1 per contract (per operation until the user's measurement of 2026-09-21 on the production base corrected the direction); `alembic_version` and
 `meta_update_status` are ignored; `schema.json` at the source root is the previous library's schema
 control in SQLAlchemy-reflection form, not Arrow. On 2026-09-20 the user also fixed the Redshift
 target: the library's tables live in `datalake_rw_shared.sbx_aco_decon`, the datashare database, so
@@ -187,3 +187,8 @@ key, and `svv_table_info` read after the first publication (stage 8, `diststyle`
 pays, which would then enter by `ALTER TABLE`. What weighed: nobody has measured how the clients
 query, the AWS documentation recommends `AUTO`, and the distribution is reversible, unlike the
 types the migration freezes. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`
+
+On 2026-09-21 the user closed the review of the client model's comments the same way as the
+lengths: they are a first draft, and the model's owner revises them directly in the code, so the
+item leaves `plan/OPEN_QUESTIONS.md`. The only pending decision of stage 1 left is the foreign key
+`cad_contratos` declares to `rel_contrato_operacao`. `plan/PLAN-STAGE-1.md`

@@ -451,7 +451,8 @@ coluna de data de que deriva, e o vocabulário de mês do plano virou partição
 `Double`, sem arredondamento, com `Numeric(18, 2)` como melhoria futura; as chaves passam a
 `int64`; o `timestamp` `INT96` vira `INT64` de microssegundos; a nulidade é a do modelo; as
 inconsistências da base de desenvolvimento são ignoradas, e a base fictícia é consistente, com a
-relação N×N de `rel_contrato_operacao` e `fator_rateio` somando 1 por operação. A memória por
+relação N×N de `rel_contrato_operacao` e `fator_rateio` somando 1 por contrato (a direção que a
+medição do usuário de 2026-09-21 fixou; a seção abaixo). A memória por
 partição de `cad_lancamentos` continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
 
 ## O que a leitura da base de produção mostrou
@@ -1108,3 +1109,25 @@ inteiro. Do caminho, o ambiente alvo já mostrou a leitura da base de produção
 `pafs.FileSystem.from_uri`; o `COPY ... TO 's3://...' (RETURN_STATS)`, o `create_write_transaction`
 sobre a raiz S3 e o `delta_scan` dela esperam a execução no alvo
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), etapa 7).
+
+## O que a medição do rateio na base de produção mostrou
+
+Em 2026-09-21 o usuário agrupou `rel_contrato_operacao` da base de produção pela chave do contrato,
+`(sistema, contrato)`, e o somatório de `fator_rateio` deu 1: **cada contrato é rateado entre as
+suas N operações**, e não cada operação entre os seus contratos. A consulta que o cliente faz segue
+a mesma direção, do contrato para as operações dele; a inversa não é pedida.
+
+A leitura contradizia o que o repositório registrava. Corrigidos no mesmo dia:
+`tests/source_db_projetado.py`, que rateava cada operação entre os contratos dela e passou a
+ratear cada contrato entre as operações dele, com `apportionment` por contrato;
+`tests/test_source_db_projetado.py`, que soma por `(data, sistema, contrato)`; o comentário de
+`fator_rateio` e o da tabela no modelo cliente, com o `rel_contrato_operacao.delta.json` versionado
+regerado; e as frases desta página e de [`CURRENT_STATE.md`](CURRENT_STATE.md). A estrutura não
+mudou: a relação continua N×N, o par `(data, operacao, sistema, contrato)` continua único na base
+fictícia, e o número de linhas por partição é o mesmo.
+
+A medição não muda a `sort_key` de `rel_contrato_operacao`, `data, sistema, contrato, operacao`
+(decisão do usuário de 2026-09-21): o prefixo dela é exatamente o contrato, a chave da consulta.
+Também não salva a chave estrangeira que `cad_contratos` declara para `rel_contrato_operacao`: com
+N operações por contrato, `(data, sistema, contrato)` continua não único no destino
+([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md), decisão pendente).

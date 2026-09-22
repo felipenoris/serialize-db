@@ -45,4 +45,15 @@ Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `test
 
 ## The fixture
 
+On 2026-09-21 the user grouped the production `rel_contrato_operacao` by the contract key
+`(sistema, contrato)` and read `sum(fator_rateio) = 1`: each contract is apportioned among its N
+operations, not each operation among its contracts, and the client's query runs the same way, from
+the contract to its operations. The fixture built it the other way and was corrected the same day
+(`tests/source_db_projetado.py`, `tests/test_source_db_projetado.py`, the `fator_rateio` and table
+comments of the client model, the regenerated `rel_contrato_operacao.delta.json`). The structure
+did not change: still N×N, the pair `(data, operacao, sistema, contrato)` still unique, the same
+row count per partition. It does not rescue the foreign key `cad_contratos` declares to
+`rel_contrato_operacao`: with N operations per contract, `(data, sistema, contrato)` is still not
+unique at the target. `plan/POC.md`
+
 The fictitious Parquet source base `db_projetado`, reproducing the structure common to the two readings (section 3, the partitions, the `chunk_<n>` files, the `INT96` timestamps, the layout): the 14 tables with the read columns, types and nullability (12 match the reference model; `alembic_version` and `meta_update_status` are outside it), the Hive partitions, and the previous library's real `schema.json` at the root (`source_db_projetado_schema.json`). The values that differ between the bases follow the dev reading (`valor` with three decimals, `fator` with five, `id_lancamento` up to 1,113,599,996, the `meta_update_status` ids). The `pandas` footer key follows the production base: `written_by_pandas` leaves the last partition of each partitioned table and the two control tables without it, so every partitioned table has files of both kinds; the probe run on the fixture on 2026-09-21 printed section 3 identical to the transcription and the footer table with the mix. The data is consistent with the reference model (unique keys, every foreign key satisfied, the four dates in every partitioned table, the N×N `rel_contrato_operacao` with dyadic `fator_rateio` summing to 1 per operation). `write_source(root)` returns the files and row counts; `tests/test_source_db_projetado.py` checks the written files against the transcribed section 3 of the report, the model's keys and the schema control, and `tests/test_reference_model.py` reads the reference model through SQLAlchemy (with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules) and checks it against `SCHEMAS` and the transcribed keys. The material of the stage 7 test.

@@ -104,7 +104,7 @@ class Operacao(Base):
 
 
 class RelContratoOperacao(Base):
-    """``rel_contrato_operacao``: os contratos de cada operação, com o fator de rateio."""
+    """``rel_contrato_operacao``: as operações de cada contrato, com o fator de rateio."""
 
     __tablename__ = "rel_contrato_operacao"
     __table_args__ = (
@@ -112,7 +112,7 @@ class RelContratoOperacao(Base):
             ["data", "operacao"], ["cad_operacoes.data", "cad_operacoes.operacao"]
         ),
         {
-            "comment": "Contratos de cada operação, com o fator de rateio",
+            "comment": "Operações de cada contrato, com o fator de rateio",
             "info": {
                 "serialize_db": {
                     "partition_by": ["data_str"],
@@ -131,7 +131,7 @@ class RelContratoOperacao(Base):
     sistema: Mapped[int] = mapped_column(Integer, comment="Sistema de origem do contrato")
     contrato: Mapped[str] = mapped_column(String(50), comment="Código do contrato")
     fator_rateio: Mapped[float] = mapped_column(
-        Double, comment="Fração da operação atribuída ao contrato; soma 1 por operação"
+        Double, comment="Fração do contrato atribuída à operação; soma 1 por contrato"
     )
     data_str: Mapped[str] = mapped_column(String(10), comment="Partição: data em AAAA-MM-DD")
 
