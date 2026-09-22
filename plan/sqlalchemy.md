@@ -102,7 +102,12 @@ Nos bancos do projeto a cláusula não tem efeito útil:
 Os modelos de referência em `tests/reference_model/` declaram `deferrable=True, initially='DEFERRED'` em todas as
 chaves estrangeiras de `model_base_contabil.py` e `model_base_gerencial.py`, inclusive nas compostas,
 e em nenhuma de `model_db_projetado.py`. No DuckDB o `create_all` passa, porque a cláusula é
-descartada; no Redshift ela não existe. A [política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
+descartada; no Redshift ela não existe. O `create_all` do modelo cliente no DuckDB falhava em
+`rel_contrato_operacao` enquanto as colunas apontadas pelas chaves estrangeiras compostas eram de
+índice único: o DuckDB exige chave primária ou `UNIQUE` nas colunas apontadas, na mesma ordem
+(leituras de 2026-09-22, [`POC.md`](POC.md)); o modelo cliente as declara como `UniqueConstraint`
+desde então, e `check_models` confere o alvo de cada chave estrangeira. A
+[política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
 estrangeiras ficam de fora e a auditoria verifica a integridade referencial sob pedido
 (`foreign_keys=True`), com a tabela referenciada ingerida na versão fixada, antes da publicação: é a
 verificação adiada feita pelo próprio pipeline. No Redshift a chave é declarada só quando auditada,

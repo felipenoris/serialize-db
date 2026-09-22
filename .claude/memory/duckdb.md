@@ -18,6 +18,11 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
 - Constraints cost on load and do not help queries in either engine: a DuckDB load of 300,000 rows
   went from 0.008 s to 0.073 s with a composite primary key, and Redshift keys are informational.
   `plan/schema.md`, `plan/duckdb.md`
+- A foreign key needs a primary key or `UNIQUE` constraint on the referenced columns, in the same
+  order: `FOREIGN KEY (b, a) REFERENCES alvo (b, a)` against `UNIQUE (a, b)` fails with
+  `Binder Error: ... does not have a primary key or unique constraint on the columns b,a`, and a
+  unique index as target with `there is no primary key or unique constraint for referenced table`
+  (DuckDB 1.5.5, 2026-09-22); `check_models` enforces the rule. `plan/POC.md`, `plan/schema.md`
 - `COPY ... (FORMAT parquet, RETURN_STATS)` returns `filename`, `count`, `file_size_bytes`,
   `footer_size_bytes`, `column_statistics` and `partition_keys`; the statistics come keyed by the
   quoted column name, with `column_size_bytes`, `min`, `max`, `null_count`, `num_values` as text,

@@ -623,13 +623,43 @@ def _column_problems(column: sa.Column) -> list[str]:
     return problems
 
 
+def _keyed_targets(table: sa.Table) -> list[tuple[str, ...]]:
+    """As listas de colunas que uma chave estrangeira pode apontar na tabela: a chave primária e
+    as ``UniqueConstraint``, na ordem declarada; um índice único não serve no DuckDB nem no Redshift."""
+    targets = []
+    if table.primary_key.columns:
+        targets.append(_column_names(table.primary_key.columns))
+    for constraint in table.constraints:
+        if isinstance(constraint, sa.UniqueConstraint):
+            targets.append(_column_names(constraint.columns))
+    return targets
+
+
+def _foreign_keys_by_columns(table: sa.Table) -> list[sa.ForeignKeyConstraint]:
+    """As chaves estrangeiras da tabela na ordem das colunas locais; o SQLAlchemy as guarda num conjunto."""
+    ordered = []
+    for position, constraint in enumerate(table.foreign_key_constraints):
+        ordered.append((_column_names(constraint.columns), position, constraint))
+    ordered.sort()
+    return [constraint for _, _, constraint in ordered]
+
+
 def _key_problems(table: sa.Table, options: TableOptions) -> list[str]:
-    """As violações das chaves: DEFERRABLE e a tabela sem chave alguma."""
+    """As violações das chaves: DEFERRABLE, o alvo de chave estrangeira sem chave, a tabela sem chave alguma."""
     problems = []
-    for constraint in table.foreign_key_constraints:
+    for constraint in _foreign_keys_by_columns(table):
+        columns = list(_column_names(constraint.columns))
         if constraint.deferrable or constraint.initially:
-            columns = list(_column_names(constraint.columns))
             problems.append(f"{table.name}: chave estrangeira DEFERRABLE em {columns}")
+        # O DuckDB e o Redshift exigem chave primária ou UNIQUE nas colunas apontadas, na mesma
+        # ordem; com um índice único no lugar, create_all num Connection do DuckDB falha
+        # (leitura de 2026-09-22).
+        referenced = tuple(element.column.name for element in constraint.elements)
+        if referenced not in _keyed_targets(constraint.referred_table):
+            problems.append(
+                f"{table.name}: chave estrangeira em {columns} aponta "
+                f"{constraint.referred_table.name} {list(referenced)}, sem chave primária nem "
+                "UniqueConstraint nessas colunas")
     if not options.keys:
         problems.append(f"{table.name}: sem chave primária e sem keys")
     return problems
@@ -661,7 +691,9 @@ def check_models(metadata: sa.MetaData) -> list[str]:
 
     As regras: tipo fora da tabela de tipos; ``autoincrement`` numa chave inteira (o padrão
     ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; chave estrangeira
-    ``DEFERRABLE``; ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
+    ``DEFERRABLE``, ou cujas colunas apontadas não são a chave primária nem uma
+    ``UniqueConstraint`` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB
+    nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
     ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave primária e
     sem ``keys``. O comentário de tabela e de coluna é opcional (decisão do usuário de 2026-09-21); o da coluna, quando existe, vai para o
     esquema Arrow e para o Delta.

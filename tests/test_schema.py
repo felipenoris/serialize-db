@@ -117,15 +117,18 @@ class Ruim(RuimBase):
     """Uma tabela com cada defeito que ``check_models`` reprova."""
 
     __tablename__ = "ruim"
-    __table_args__ = {
-        "info": {"serialize_db": {"partition_by": ["mes"], "partition_source": "inexistente"}}
-    }
+    __table_args__ = (
+        sa.ForeignKeyConstraint(["data_tudo", "nome_tudo"], ["tudo.data", "tudo.nome"]),
+        {"info": {"serialize_db": {"partition_by": ["mes"], "partition_source": "inexistente"}}},
+    )
     id: Mapped[int] = mapped_column(sa.Integer, primary_key=True)
     id_tudo: Mapped[int] = mapped_column(
         sa.BigInteger,
         sa.ForeignKey("tudo.id", deferrable=True, initially="DEFERRED"),
         comment="Referência",
     )
+    data_tudo: Mapped[dt.date] = mapped_column(sa.Date, comment="Alvo de índice único, sem chave")
+    nome_tudo: Mapped[str] = mapped_column(sa.String(100), comment="Alvo de índice único, sem chave")
     mes: Mapped[str] = mapped_column(sa.Text, comment="Partição sem comprimento")
     nome: Mapped[str] = mapped_column(sa.String, comment="Nome sem comprimento")
     peso: Mapped[bytes] = mapped_column(sa.LargeBinary, comment="Fora do contrato")
@@ -206,11 +209,12 @@ def test_table_options_defaults_and_keys() -> None:
     assert options.sort_key == () and options.redshift == {}
     assert options.keys == (("id",),)
 
-    # O índice único de cad_contratos e a UniqueConstraint de cad_aliquotas são chaves.
+    # As UniqueConstraint de cad_contratos e de cad_aliquotas e o índice único de TUDO são chaves.
     contratos = schema.table_options(ClientBase.metadata.tables["cad_contratos"])
     assert contratos.keys == (("id_contrato",), ("data", "sistema", "contrato"))
     aliquotas = schema.table_options(ClientBase.metadata.tables["cad_aliquotas"])
     assert aliquotas.keys == (("id",), ("id_conta_origem", "id_conta_destino"))
+    assert schema.table_options(TUDO).keys == (("id",), ("data", "nome"))
 
     adjusted = TUDO.to_metadata(sa.MetaData())
     adjusted.info = {"serialize_db": {"keys": {"add": [["nome"]], "drop": [["data", "nome"]]}}}
@@ -417,6 +421,8 @@ def test_check_models_finds_each_violation() -> None:
         "ruim.id: chave inteira com autoincrement; declare autoincrement=False",
         "ruim.nome: String sem comprimento; declare String(n) ou Text",
         "ruim.peso: tipo fora do contrato: LargeBinary()",
+        "ruim: chave estrangeira em ['data_tudo', 'nome_tudo'] aponta tudo ['data', 'nome'], "
+        "sem chave primária nem UniqueConstraint nessas colunas",
         "ruim: chave estrangeira DEFERRABLE em ['id_tudo']",
         "ruim.mes: coluna de partição fora de String(n)",
         "ruim: partition_source aponta inexistente, que a tabela não tem",
@@ -451,13 +457,65 @@ def test_partition_column_is_any_text_and_the_source_optional() -> None:
     ]
 
 
+def references_a_key(constraint: sa.ForeignKeyConstraint) -> bool:
+    """Se as colunas apontadas são a chave primária ou uma `UniqueConstraint` da tabela apontada,
+    na mesma ordem."""
+    referred = constraint.referred_table
+    referenced = tuple(element.column.name for element in constraint.elements)
+    targets = [tuple(column.name for column in referred.primary_key.columns)]
+    for candidate in referred.constraints:
+        if isinstance(candidate, sa.UniqueConstraint):
+            targets.append(tuple(column.name for column in candidate.columns))
+    return referenced in targets
+
+
+def test_foreign_key_target_must_be_a_key_in_the_same_order() -> None:
+    """A chave estrangeira que aponta uma `UniqueConstraint` na ordem dela passa; na ordem trocada
+    é violação, e o DuckDB recusa o mesmo `create_all` (leitura de 2026-09-22)."""
+    def model(local_columns: list[str], referenced: list[str]) -> sa.MetaData:
+        metadata = sa.MetaData()
+        sa.Table(
+            "alvo", metadata,
+            sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+            sa.Column("a", sa.Integer, nullable=False), sa.Column("b", sa.Integer, nullable=False),
+            sa.UniqueConstraint("a", "b"),
+        )
+        sa.Table(
+            "origem", metadata,
+            sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+            sa.Column("a", sa.Integer), sa.Column("b", sa.Integer),
+            sa.ForeignKeyConstraint(local_columns, referenced),
+        )
+        return metadata
+
+    same_order = model(["a", "b"], ["alvo.a", "alvo.b"])
+    swapped = model(["b", "a"], ["alvo.b", "alvo.a"])
+    assert schema.check_models(same_order) == []
+    assert schema.check_models(swapped) == [
+        "origem: chave estrangeira em ['b', 'a'] aponta alvo ['b', 'a'], "
+        "sem chave primária nem UniqueConstraint nessas colunas"
+    ]
+    # Um banco em memória por modelo: create_all pula a tabela que já existe com o mesmo nome.
+    def create_on_duckdb(metadata: sa.MetaData) -> None:
+        engine = sa.create_engine("duckdb:///:memory:")
+        with engine.begin() as connection:
+            metadata.create_all(connection)
+        engine.dispose()
+
+    create_on_duckdb(same_order)
+    with pytest.raises(sa.exc.DBAPIError, match="unique constraint"):
+        create_on_duckdb(swapped)
+
+
 def test_check_models_lists_the_reference_model_defects() -> None:
-    """O modelo de referência produz autoincrement, DEFERRABLE e String sem comprimento."""
+    """O modelo de referência produz autoincrement, DEFERRABLE, String sem comprimento e as
+    chaves estrangeiras sem chave no alvo."""
     problems = schema.check_models(ReferenceBase.metadata)
     counts = {
         "autoincrement": sum("chave inteira com autoincrement" in text for text in problems),
         "deferrable": sum("chave estrangeira DEFERRABLE" in text for text in problems),
         "string": sum("String sem comprimento" in text for text in problems),
+        "target": sum("sem chave primária nem UniqueConstraint" in text for text in problems),
     }
     tables = list(ReferenceBase.metadata.tables.values())
     columns = [column for table in tables for column in table.columns]
@@ -466,15 +524,18 @@ def test_check_models_lists_the_reference_model_defects() -> None:
     ]
     foreign_keys = [key for table in tables for key in table.foreign_key_constraints]
     deferrable = [key for key in foreign_keys if key.deferrable]
+    unkeyed = [key for key in foreign_keys if not references_a_key(key)]
     assert counts == {
         "autoincrement": len(tables),
         "deferrable": len(deferrable),
         "string": len(strings),
+        "target": len(unkeyed),
     }
     assert sum(counts.values()) == len(problems)
     # O comentário é opcional: o modelo sem comentário algum não produz violação por isso.
     assert [text for text in problems if "comentário" in text] == []
-    assert (len(tables), len(foreign_keys), len(deferrable), len(strings)) == (12, 14, 12, 20)
+    assert (len(tables), len(foreign_keys), len(deferrable), len(strings), len(unkeyed)) == (
+        12, 14, 12, 20, 3)
 
 
 def test_client_model_is_clean() -> None:

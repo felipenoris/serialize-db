@@ -5,8 +5,11 @@ A cópia é ``tests/client_model/``; o original, ``tests/reference_model/``; as 
 Cada teste confere uma correção e que nada mais mudou: as tabelas e as colunas na mesma ordem,
 com a coluna de partição no fim das quatro tabelas particionadas; ``BigInteger`` só nas chaves e
 nas colunas que as referenciam, e ``String(n)`` só onde havia ``String``; a nulidade; as chaves
-primárias, únicas e estrangeiras, sem ``DEFERRABLE`` e sem ``autoincrement``; os comentários; e
-``Table.info["serialize_db"]`` com a partição que a base tem.
+primárias, únicas e estrangeiras, sem ``DEFERRABLE`` e sem ``autoincrement``, com os dois índices
+únicos compostos do original como ``UniqueConstraint``, porque as chaves estrangeiras compostas os
+apontam; os comentários; e ``Table.info["serialize_db"]`` com a partição que a base tem. O modelo
+inteiro é criado por ``create_all`` num ``sqlalchemy.Connection`` do DuckDB criado fora da
+biblioteca.
 """
 
 from __future__ import annotations
@@ -40,16 +43,27 @@ def references_a_primary_key(column: sa.Column) -> bool:
     return False
 
 
-def unique_keys(table: sa.Table) -> set[tuple[str, ...]]:
-    """As ``UniqueConstraint`` e os índices únicos da tabela, como tuplas de colunas."""
+def unique_constraints(table: sa.Table) -> set[tuple[str, ...]]:
+    """As ``UniqueConstraint`` da tabela, como tuplas de colunas."""
     keys = set()
     for constraint in table.constraints:
         if isinstance(constraint, sa.UniqueConstraint):
             keys.add(tuple(column.name for column in constraint.columns))
+    return keys
+
+
+def unique_indexes(table: sa.Table) -> set[tuple[str, ...]]:
+    """Os índices únicos da tabela, como tuplas de colunas."""
+    keys = set()
     for index in table.indexes:
         if index.unique:
             keys.add(tuple(column.name for column in index.columns))
     return keys
+
+
+def unique_keys(table: sa.Table) -> set[tuple[str, ...]]:
+    """As ``UniqueConstraint`` e os índices únicos da tabela, como tuplas de colunas."""
+    return unique_constraints(table) | unique_indexes(table)
 
 
 def foreign_keys(table: sa.Table) -> set[tuple[tuple[str, ...], str, tuple[str, ...]]]:
@@ -99,7 +113,8 @@ REMOVED_FOREIGN_KEY = (("data", "sistema", "contrato"), "rel_contrato_operacao",
 
 
 def test_keys_are_the_references_without_deferrable_and_without_autoincrement() -> None:
-    """As chaves do original sem ``DEFERRABLE`` nem ``autoincrement``, menos a que apontava para colunas não únicas; nenhum índice não único."""
+    """As chaves do original sem ``DEFERRABLE`` nem ``autoincrement``, menos a que apontava para
+    colunas não únicas; nenhum índice, porque os únicos viraram ``UniqueConstraint``."""
     assert REMOVED_FOREIGN_KEY in foreign_keys(reference_table("cad_contratos"))
     for name, client in ClientBase.metadata.tables.items():
         reference = reference_table(name)
@@ -113,8 +128,31 @@ def test_keys_are_the_references_without_deferrable_and_without_autoincrement() 
             assert constraint.initially is None, (name, constraint.name)
         for column in client.primary_key.columns:
             assert column.autoincrement is False, (name, column.name)
-        for index in client.indexes:
-            assert index.unique, (name, index.name)
+        assert not client.indexes, name
+
+
+# Os índices únicos do original que viraram UniqueConstraint na cópia: as chaves estrangeiras
+# compostas apontam estas colunas, e o DuckDB e o Redshift exigem chave primária ou UNIQUE no alvo
+# (decisão do usuário de 2026-09-22).
+UNIQUE_CONSTRAINTS_FROM_INDEXES = {
+    "cad_operacoes": ("data", "operacao"),
+    "cad_contratos": ("data", "sistema", "contrato"),
+}
+
+
+def test_the_composite_foreign_key_targets_are_unique_constraints() -> None:
+    """Os dois índices únicos do original são ``UniqueConstraint`` na cópia, e o modelo inteiro é
+    criado por ``create_all`` num ``sqlalchemy.Connection`` do DuckDB criado fora da biblioteca,
+    que recusava o índice único como alvo de chave estrangeira (leitura de 2026-09-22)."""
+    for name, columns in UNIQUE_CONSTRAINTS_FROM_INDEXES.items():
+        assert columns in unique_indexes(reference_table(name)), name
+        assert columns in unique_constraints(ClientBase.metadata.tables[name]), name
+    engine = sa.create_engine("duckdb:///:memory:")
+    with engine.begin() as connection:
+        ClientBase.metadata.create_all(connection)
+        rows = connection.execute(sa.text("SELECT table_name FROM duckdb_tables()")).fetchall()
+    engine.dispose()
+    assert sorted(row[0] for row in rows) == sorted(ClientBase.metadata.tables)
 
 
 def test_every_table_and_column_has_a_comment() -> None:

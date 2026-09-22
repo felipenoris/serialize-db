@@ -15,9 +15,9 @@ from sqlalchemy import (
     Double,
     ForeignKey,
     ForeignKeyConstraint,
-    Index,
     Integer,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -68,7 +68,10 @@ class Operacao(Base):
 
     __tablename__ = "cad_operacoes"
     __table_args__ = (
-        Index("ix_operacoes_data_operacao", "data", "operacao", unique=True),
+        # UniqueConstraint no lugar do índice único do original: a chave estrangeira composta de
+        # rel_contrato_operacao aponta estas colunas, e o DuckDB e o Redshift exigem chave primária
+        # ou UNIQUE no alvo (decisão do usuário de 2026-09-22).
+        UniqueConstraint("data", "operacao", name="uq_operacoes_data_operacao"),
         {
             "comment": "Operações de crédito por data-base",
             "info": {
@@ -141,7 +144,9 @@ class Contrato(Base):
 
     __tablename__ = "cad_contratos"
     __table_args__ = (
-        Index("ix_contratos_data_sistema_contrato", "data", "sistema", "contrato", unique=True),
+        # UniqueConstraint no lugar do índice único do original: a chave estrangeira composta de
+        # cad_lancamentos aponta estas colunas (decisão do usuário de 2026-09-22).
+        UniqueConstraint("data", "sistema", "contrato", name="uq_contratos_data_sistema_contrato"),
         # A chave estrangeira do original, de (data, sistema, contrato) para
         # rel_contrato_operacao, saiu: o destino não é único, porque o contrato está em N
         # operações (decisão do usuário de 2026-09-21).

@@ -105,6 +105,8 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   since 2026-09-22 (user decision) and `param` left the module; a `text()` placeholder, a
   `bindparam` used twice and an `in_` list render as expected, `bindparam(value=None)` renders
   `NULL` with the `SAWarning`, and `bindparam("Data Base")` is refused as an invalid name. `Base.metadata.create_all` of the client model on
-  DuckDB fails at `rel_contrato_operacao`: its composite foreign key targets the columns of a
-  unique index, not a `UniqueConstraint`, and Redshift documents the same requirement
-  (2026-09-22). `plan/POC.md`, `plan/PLAN-STAGE-2.md`, `plan/OPEN_QUESTIONS.md`
+  DuckDB failed at `rel_contrato_operacao` while its composite foreign key targeted the columns
+  of a unique index; the model declares them as `UniqueConstraint` since 2026-09-22 (user
+  decision), the whole model creates on a `duckdb-engine` `Connection`, and `check_models`
+  checks the target of every foreign key. `plan/POC.md`, `plan/PLAN-STAGE-2.md`,
+  `plan/PLAN-STAGE-1.md`

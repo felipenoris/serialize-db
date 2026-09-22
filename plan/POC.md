@@ -1457,13 +1457,22 @@ cliente faz fora e dentro da biblioteca:
   `ix_contratos_data_sistema_contrato`; a página de `CREATE TABLE` do Redshift diz "The
   referenced columns must be the columns of a unique or primary key constraint in the referenced
   table". A biblioteca não emite chaves no DDL e `keys` lê índice e constraint por igual, então
-  nada muda para ela; a decisão fica com o dono do modelo ([etapa 1](PLAN-STAGE-1.md),
-  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  nada muda para ela. O dono do modelo decidiu no mesmo dia: os dois índices viraram
+  `UniqueConstraint` e `check_models` recusa a chave estrangeira sem chave no alvo
+  ([etapa 1](PLAN-STAGE-1.md)). A sonda da regra, no DuckDB 1.5.5: `FOREIGN KEY (b, a)
+  REFERENCES alvo (b, a)` contra `UNIQUE (a, b)` é recusada (`Binder Error: Failed to create
+  foreign key: referenced table "alvo" does not have a primary key or unique constraint on the
+  columns b,a`), então a regra compara as colunas na ordem; um índice único como alvo é recusado
+  (`there is no primary key or unique constraint for referenced table "alvo2"`); o modelo cliente
+  inteiro, com as duas `UniqueConstraint`, é criado por `create_all` num
+  `create_engine("duckdb:///:memory:")`, e os 36 arquivos de esquema versionados saíram iguais
+  em duas gerações, porque o DDL da biblioteca não emite chaves.
 
 **Consequência**: o caminho padrão dos motores das etapas [4](PLAN-STAGE-4.md) e
 [5](PLAN-STAGE-5.md) é o statement Core compilado pela cópia prefixada com os parâmetros do
 cliente, e o texto SQL versionado é a opção de migração para fora do SQLAlchemy (decisão do
 usuário de 2026-09-22); o requisito que a acompanha, um modelo e um statement que um
-`sqlalchemy.Connection` criado fora da biblioteca aceite, fechou o primeiro item em 2026-09-22
-(decisão do usuário: `render` troca o `bindparam` sem valor por `:nome`, e `param` saiu do
-módulo) e tem o segundo pendente.
+`sqlalchemy.Connection` criado fora da biblioteca aceite, fechou os dois itens em 2026-09-22
+(decisões do usuário: `render` troca o `bindparam` sem valor por `:nome`, com `param` fora do
+módulo; os dois índices únicos compostos do modelo cliente viraram `UniqueConstraint`, e
+`check_models` confere o alvo de cada chave estrangeira).

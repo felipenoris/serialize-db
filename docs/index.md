@@ -66,7 +66,7 @@ class Base(DeclarativeBase):
 class Operacao(Base):
     __tablename__ = "cad_operacoes"
     __table_args__ = (
-        sa.Index("ix_operacoes_data_operacao", "data", "operacao", unique=True),
+        sa.UniqueConstraint("data", "operacao"),
         {
             "comment": "Operações de crédito por data-base",
             "info": {
@@ -111,9 +111,12 @@ assert problems == [], "\n".join(problems)
 ```
 
 As regras: tipo fora da tabela de tipos; `autoincrement` numa chave inteira (o padrão `"auto"`
-inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); chave estrangeira `DEFERRABLE`; `partition_by` sem a coluna ou com a coluna fora de
-`String(n)`, `partition_source` que a tabela não tem ou sem `partition_by`; tabela sem chave
-primária e sem `keys`.
+inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); chave
+estrangeira `DEFERRABLE`, ou cujas colunas apontadas não são a chave primária nem uma
+`UniqueConstraint` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB nem no
+Redshift, e `create_all` num `sqlalchemy.Connection` do DuckDB falha); `partition_by` sem a coluna
+ou com a coluna fora de `String(n)`, `partition_source` que a tabela não tem ou sem
+`partition_by`; tabela sem chave primária e sem `keys`.
 
 ### Derivar o esquema e o DDL
 

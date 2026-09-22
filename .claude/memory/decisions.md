@@ -339,12 +339,14 @@ parameters and run it on the raw connection) and the generated SQL text the opti
 path out of SQLAlchemy, not the core feature; the wording in `plan/PLAN.md` follows the proposal
 the user accepted, with one requirement the user stated: the library never demands a model that a
 `sqlalchemy.Connection` created outside the library would refuse, because the client may submit
-the same statements there. Of the two proposals from the probes of that day, the user accepted
-the first the same day: `render` maps a valueless `bindparam` to `:nome` by
-`replacement_traverse` and `param` left the module, so one statement serves the client's
-`Connection`, the engines and the files (`plan/PLAN-STAGE-2.md`); the second, `UniqueConstraint`
-in place of the two unique indexes the client model's composite foreign keys reference, with a
-`check_models` rule (`create_all` on DuckDB refuses the model as it is), awaits the user. The
+the same statements there. The user accepted the two proposals from the probes of that day, both
+the same day: `render` maps a valueless `bindparam` to `:nome` by `replacement_traverse` and
+`param` left the module, so one statement serves the client's `Connection`, the engines and the
+files (`plan/PLAN-STAGE-2.md`); and `UniqueConstraint` replaced the two unique indexes the client
+model's composite foreign keys reference, with the `check_models` rule that a foreign key targets
+the referred table's primary key or a `UniqueConstraint` in the same column order, because DuckDB
+refuses a unique index as target and a swapped order, and Redshift documents the same requirement
+(`plan/PLAN-STAGE-1.md`, `plan/schema.md`). The
 migration ran successfully in the target; its reports exist and are not available yet, so the
 `export_mode` default still waits for their numbers. `plan/PLAN.md`, `plan/PLAN-STAGE-2.md`,
 `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
