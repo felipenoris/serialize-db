@@ -1128,6 +1128,7 @@ fictícia, e o número de linhas por partição é o mesmo.
 
 A medição não muda a `sort_key` de `rel_contrato_operacao`, `data, sistema, contrato, operacao`
 (decisão do usuário de 2026-09-21): o prefixo dela é exatamente o contrato, a chave da consulta.
-Também não salva a chave estrangeira que `cad_contratos` declara para `rel_contrato_operacao`: com
-N operações por contrato, `(data, sistema, contrato)` continua não único no destino
-([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md), decisão pendente).
+Também não salva a chave estrangeira que `cad_contratos` declara para `rel_contrato_operacao` no
+modelo de referência: com N operações por contrato, `(data, sistema, contrato)` continua não único
+no destino, e a chave saiu do modelo cliente (decisão do usuário de 2026-09-21,
+[`PLAN-STAGE-1.md`](PLAN-STAGE-1.md)).
