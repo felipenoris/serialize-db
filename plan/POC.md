@@ -19,7 +19,8 @@ mesma região, com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1 (a suíte
 - O delta-rs encontra as credenciais do contêiner do projeto pela cadeia padrão. Uma falha 403 na
   chamada de credenciais, no início da verificação, foi contornada com `NO_PROXY` em maiúsculas; a
   causa ficou isolada em 2026-09-20 (abaixo). As credenciais do `boto3` em `storage_options`
-  funcionam e ficam como reserva. O DuckDB (`credential_chain`) e o `boto3` nunca falharam.
+  funcionam, e a decisão do usuário de 2026-09-22 deixou a biblioteca só com a cadeia padrão. O
+  DuckDB (`credential_chain`) e o `boto3` nunca falharam.
 - `write_deltalake` (`overwrite` particionado e `append` por commit condicional), `DeltaTable`,
   `vacuum` e `delta_scan` no bucket, com a criptografia SSE-KMS padrão do bucket aplicada sem opção
   alguma. O DuckDB lê `BIGINT`, `INTEGER`, `DECIMAL(18,2)`, `TIMESTAMP` (de `timestamp_ntz`) e
@@ -92,9 +93,10 @@ Athena três workgroups, e o Lake Formation e o S3 Tables negam: o gatilho de re
 
 Consequências no plano: a biblioteca exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula
 está ausente ou vazia, e não depende de
-listar buckets nem de ler o versionamento; `storage_options()` resolve as credenciais de novo a cada
-chamada, porque uma emissão dura uma hora e a reserva com credenciais fixas expiraria numa execução
-longa ([etapa 3](PLAN-STAGE-3.md)); o motor DuckDB fixa `temp_directory` numa pasta com espaço
+listar buckets nem de ler o versionamento; `storage_options()` é resolvido de novo a cada chamada e
+não leva credencial alguma, porque uma emissão dura uma hora e um trio congelado expiraria numa
+execução longa, enquanto a cadeia padrão renova o `DeltaTable` que a execução segura
+([etapa 3](PLAN-STAGE-3.md)); o motor DuckDB fixa `temp_directory` numa pasta com espaço
 conferido, porque o padrão é relativo à pasta corrente ([etapa 4](PLAN-STAGE-4.md)); a
 [etapa 5](PLAN-STAGE-5.md) nasceu conectando por senha, porque a autenticação por IAM e a Data API
 dependem das APIs do Redshift, sem endpoint VPC no laboratório (`RS-14`) — decisão revista em

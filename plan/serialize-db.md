@@ -78,8 +78,9 @@ rodapé Parquet `serialize_db_version` e `serialize_db_execution_id`, e a tabela
 já é o espaço de nomes. O que vive em `_serialize_db/` dispensa o prefixo, como a chave `snapshots`
 de `snapshots.json`. As tabelas e colunas do banco de dados continuam em português.
 
-O log de cada tabela guarda tudo o que é da tabela: os arquivos de cada versão, o esquema de cada
-versão com os comentários de coluna, as estatísticas por arquivo e os metadados que a biblioteca
+O log de cada tabela guarda tudo o que é da tabela: os arquivos de cada versão, o nome e o
+comentário da tabela na `description` da ação `metaData`, o esquema de cada versão com os
+comentários de coluna, as estatísticas por arquivo e os metadados que a biblioteca
 grava em cada commit (`serialize_db_execution_id`, `serialize_db_input_versions` e, quando houver,
 `serialize_db_snapshot`). O modelo SQLAlchemy dá o DDL e os tipos do contrato atual, e a
 reconciliação descrita em [`delta.md`](delta.md), seção "Evolução de esquema", garante que ele e o

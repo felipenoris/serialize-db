@@ -235,8 +235,12 @@ exportada de `no_proxy` ou reduzida a `169.254.170.2` a chamada passa; vazia, fa
 `tests/conftest.py` exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou
 vazia, e `test_delta_rs_credential_chain` registra no relatório o resultado de cinco variantes
 (ambiente como encontrado, `NO_PROXY` exportada, ausente, vazia, proxies retirados). Se a cadeia
-padrão falhar em todas, `test_delta_rs_storage_options_fallback` mostra que o caminho de reserva da
-biblioteca, as credenciais do `boto3` em `storage_options`, funciona.
+padrão falhar em todas, `test_delta_rs_storage_options_fallback` mostra que credenciais congeladas
+do `boto3` em `storage_options` funcionam. A biblioteca não as usa: o `storage_options` dela leva
+região, endpoint, retry e as chaves de SSE, e credencial alguma (decisão do usuário de 2026-09-22),
+porque a cadeia padrão renova as credenciais no `DeltaTable` que a execução segura, enquanto um trio
+congelado expiraria em cerca de uma hora e circularia num dicionário que um log ou uma exceção
+imprime.
 
 # Ambiente sem internet
 

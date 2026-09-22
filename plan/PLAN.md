@@ -308,7 +308,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   uma sondagem de 2026-09-19 com `interval 0 days`, seis commits e um checkpoint manteve a versão 0
   legível, então a limpeza não vira asserção); a tabela nasce com `interval 3650 days`,
   `delta.deletedFileRetentionDuration` fica em `interval 400 days`, e `keep_versions` protege os
-  snapshots do banco.
+  snapshots do banco. Com essa retenção, um arquivo de log ausente significa tabela fora do estado
+  que `create_table` cria, e `version_diff` recusa com `LogUnavailable` em vez de adivinhar as
+  partições alteradas (decisão do usuário de 2026-09-22).
 - Dois `overwrite` da mesma partição conflitam (`CommitFailedError`); partições diferentes e
   `append` entram. Uma execução por ambiente por vez, e o conflito é o sinal de que houve duas; a ação `txn`
   não impede repetição, e a idempotência é do `overwrite` por partição (`delta.md`).
@@ -322,6 +324,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   coluna lógica: o delta-rs grava `DECIMAL(18, 2)` em `INT64` e timestamp em `INT64`, o `UNLOAD`
   grava em `FIXED_LEN_BYTE_ARRAY(8)` e `INT96`. Os leitores leem as duas, e o que se perde é a
   estatística da coluna de timestamp, que o `INT96` não carrega (2026-09-21, `POC.md`).
+- O log guarda `minValues` e `maxValues` como valor JSON, e a transcrição do escritor do delta-rs só
+  é exata em inteiro, data, `Double` e texto: um `decimal(18, 2)` de 18 dígitos significativos vira
+  um dobro, e o máximo abaixo do valor real poda o arquivo que tem a linha, sem erro, nos dois
+  leitores. `register_files` registra mínimo e máximo só desses quatro tipos, e uma coluna `Numeric`
+  larga carrega o defeito também por `publish_partition`; o modelo cliente não tem nenhuma
+  (2026-09-22, `POC.md`, `delta.md`).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
   consultada mais de uma vez é materializada no DuckDB (`delta.md`).
 - Um programa que encerra logo depois de ler uma tabela Delta lê por `to_pyarrow_dataset()`, nunca
@@ -333,9 +341,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   sem `AWS_REGION` nem `AWS_DEFAULT_REGION`, foi a `us-east-1` (2026-09-20); a cadeia de credenciais
   consulta o perfil (`credential_source = EcsContainer`, aviso `aws_config::profile::credentials`)
   mas encontra o contêiner sem ele (`HOME` vazio e `AWS_REGION` bastaram). A região precisa estar
-  em `AWS_REGION` ou `AWS_DEFAULT_REGION`; as credenciais vêm do ambiente, do contêiner, do IMDS ou
-  de `storage_options`. `storage_options` leva `max_retries` e `retry_timeout` para uma rede morta
-  falhar em 10 s em vez de 59 s (`README.md`, `delta.md`).
+  em `AWS_REGION` ou `AWS_DEFAULT_REGION`; as credenciais vêm do ambiente, do contêiner ou do IMDS,
+  pela cadeia padrão, que as renova no `DeltaTable` que a execução segura. `storage_options` leva a
+  região, o endpoint, as chaves de SSE e `max_retries` e `retry_timeout`, para uma rede morta falhar
+  em 10 s em vez de 59 s, e credencial alguma (decisão do usuário de 2026-09-22): um trio congelado
+  expiraria em cerca de uma hora no meio de uma execução longa e circularia num dicionário que um log
+  ou uma exceção imprime (`README.md`, `delta.md`).
 - O cliente HTTP do delta-rs lê `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias e `NO_PROXY` antes de
   `no_proxy`; vazia, `NO_PROXY` anula as exceções e a chamada ao endpoint de credenciais vai pelo
   proxy (403). `prepare_environment` exporta `NO_PROXY` de `no_proxy` quando a maiúscula está
@@ -393,7 +404,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 | Módulo | Etapa | Conteúdo |
 | --- | --- | --- |
-| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `SandboxError`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
+| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `LogUnavailable`, `SandboxError`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
 | `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto gerado pela tabela de tipos com todo identificador entre aspas, opções físicas, cast seguro, arquivos gerados. |
 | `serialize_db.sql` | 2 | O texto SQL por dialeto a partir de statements Core: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos atrás de uma interface: URIs, leitura e escrita condicional, cópia, listagem, `storage_options` e o secret do DuckDB. |
