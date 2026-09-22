@@ -19,10 +19,14 @@ módulo, em `PLAN-STAGE-<n>.md`.
   motores. As opções físicas, a coluna de partição com a data de que ela deriva, chave de ordenação e
   distribuição no Redshift, ficam em `Table.info["serialize_db"]`. Os arquivos de esquema gerados são versionados no
   repositório do pipeline e comparados por teste.
-- **SQL gerado por dialeto.** Cada statement Core do pipeline vira texto SQL do DuckDB e do
-  Redshift, com as constantes embutidas, a partição como parâmetro nomeado e o prefixo do sandbox
-  como sentinela. O texto gerado é versionado no repositório do pipeline e substitui, uma interação por
-  vez, a compilação pelo dialeto em tempo de execução ([`sqlalchemy.md`](sqlalchemy.md)).
+- **Statements Core executados pelo motor, e o texto SQL como opção.** O pipeline submete cada
+  statement Core a `run.sandbox.query`, `execute` ou `stream`, que o compila pelo dialeto com os
+  parâmetros do cliente; o mesmo statement roda num `sqlalchemy.Connection` criado fora da
+  biblioteca (decisão do usuário de 2026-09-22). Para um pipeline que queira sair do SQLAlchemy,
+  cada statement vira texto SQL do DuckDB e do Redshift, com as constantes embutidas, a partição
+  como parâmetro nomeado e o prefixo do sandbox como sentinela, versionado no repositório do
+  pipeline e executado no lugar da compilação, uma interação por vez
+  ([`sqlalchemy.md`](sqlalchemy.md)).
 - **Banco em tabelas Delta.** Uma pasta por ambiente e uma subpasta por tabela. A biblioteca cria
   cada tabela a partir do contrato, de forma idempotente, e reconcilia o esquema da tabela com o
   modelo: o diff aditivo é aplicado, o destrutivo exige a reescrita explícita.
@@ -278,6 +282,9 @@ Para publicar no Hive ou para sair do Delta.
 
 ### Substituição do dialeto em tempo de execução
 
+A opção de migração para fora do SQLAlchemy, não o caminho padrão (decisão do usuário de
+2026-09-22).
+
 1. O pipeline escolhe uma interação com o banco: um statement Core que hoje é compilado pelo
    dialeto a cada execução, com a partição como parâmetro (`param("mes")` no exemplo de `sqlalchemy.md`).
 2. `write_sql_files({"total_por_cliente": statement}, metadata, "sql/")` grava
@@ -291,7 +298,7 @@ Para publicar no Hive ou para sair do Delta.
    mão e validado por `qualify` do SQLGlot contra o contrato.
 5. Com toda interação em texto, o pipeline importa o SQLAlchemy só para os modelos;
    `duckdb_engine` e `sqlalchemy-redshift` continuam dependências de execução da biblioteca, porque
-   os motores compilam por `render` o statement Core que recebem (decisão do usuário de
+   os motores compilam pelo dialeto o statement Core que recebem (decisão do usuário de
    2026-09-21); consulta nova nasce
    em texto, no dialeto do DuckDB, com os testes nos dois motores ([`estrategia.md`](estrategia.md)).
 

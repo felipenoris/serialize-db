@@ -1151,7 +1151,9 @@ def check(model, path: str) -> None:
 O SQLAlchemy está no projeto por compatibilidade com o pipeline existente: os modelos declarativos
 definem cada tabela, e statements Core de `select` e `insert` movem DataFrames. As subseções
 seguintes registram o que cada parte da biblioteca entrega ao projeto, a recomendação sem essa
-premissa e a substituição gradual do dialeto em tempo de execução, que é o caminho adotado.
+premissa e a substituição do dialeto por texto gerado, que passou a ser a opção de migração para
+fora do SQLAlchemy, não o caminho padrão (decisão do usuário de 2026-09-22): o pipeline submete o
+statement Core ao motor, que o compila pelo dialeto com os parâmetros do cliente.
 
 ### O que cada parte entrega
 
@@ -1192,13 +1194,15 @@ produto das duas é uma string executada pelo DuckDB ou pelo `redshift_connector
 
 ### Substituição gradual do dialeto em tempo de execução
 
-O pipeline compila hoje cada statement Core pelo dialeto a cada execução. A biblioteca passa a gerar
-o texto SQL de cada dialeto, e a substituição acontece uma interação com o banco por vez: o texto
+O pipeline compila hoje cada statement Core pelo dialeto a cada execução, e esse continua o caminho
+padrão: o motor compila a cópia prefixada com os parâmetros do cliente (decisão do usuário de
+2026-09-22). A biblioteca também gera o texto SQL de cada dialeto, para um pipeline que queira sair
+do SQLAlchemy uma interação com o banco por vez: o texto
 gerado entra no repositório do pipeline, revisado no diff; um teste o compara com uma nova geração
 enquanto o statement Core existir; e a chamada que compilava o statement passa a executar o texto.
-No fim, o SQLAlchemy fica nos modelos e na geração; `duckdb_engine` e `sqlalchemy-redshift`
-continuam dependências de execução da biblioteca, porque os motores compilam por `render` o
-statement Core que recebem (decisão do usuário de 2026-09-21). As primitivas, especificadas na
+No fim desse caminho, o SQLAlchemy fica nos modelos e na geração; `duckdb_engine` e
+`sqlalchemy-redshift` continuam dependências de execução da biblioteca, porque os motores compilam
+pelo dialeto o statement Core que recebem (decisão do usuário de 2026-09-21). As primitivas, especificadas na
 etapa 2 do plano ([`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)):
 
 | Primitiva | O que faz |

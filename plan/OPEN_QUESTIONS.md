@@ -58,6 +58,13 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
+- [Etapa 1](PLAN-STAGE-1.md): as duas chaves estrangeiras compostas do modelo cliente apontam
+  colunas de índices únicos, não de `UniqueConstraint`, e `Base.metadata.create_all` num
+  `sqlalchemy.Connection` do DuckDB as recusa (leitura de 2026-09-22); a proposta é
+  `UniqueConstraint` nos dois lugares e uma regra de `check_models`, decisão do dono do modelo.
+- [Etapa 2](PLAN-STAGE-2.md): `render` aceitando um `bindparam` sem valor como `:nome`, para um
+  statement escrito com `bindparam` servir ao `Connection` do cliente, aos motores e aos arquivos
+  (proposto; `param` ficaria dispensável).
 - [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
   entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição

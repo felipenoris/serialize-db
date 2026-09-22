@@ -24,9 +24,13 @@ declarativos do SQLAlchemy são o contrato de esquema: deles saem o esquema Arro
 o DDL do sandbox nos dois motores. Chave primária, unicidade e chave estrangeira não entram nesse
 DDL, porque o Parquet não as tem, o DuckDB as cobra na carga e o Redshift só as registra: quem as
 aplica é a auditoria da execução, com consultas derivadas dos mesmos modelos, e a reprovação impede
-a publicação. Os statements Core do pipeline continuam válidos, e o cliente é livre para submetê-los
-a um `sqlalchemy.Connection`. Esta biblioteca também permite gerar o texto SQL gerado por dialeto
-para bind posterior de parâmetros caso o cliente queira substituir futuramente o uso do SQL Alchemy.
+a publicação. Os statements Core do pipeline continuam válidos: o cliente os submete a `run.sandbox.query`,
+`execute` ou `stream`, que os compilam pelo dialeto do motor com os parâmetros dele e os executam
+na conexão crua, e pode submetê-los a um `sqlalchemy.Connection` que ele mesmo crie fora da
+biblioteca, porque o contrato não exige do modelo nem do statement nada que um `Connection` não
+aceite (decisão do usuário de 2026-09-22). O texto SQL gerado por dialeto, com os parâmetros para
+o bind posterior, é a opção para um pipeline que queira substituir o SQLAlchemy no futuro, não o
+caminho padrão.
 Os dados cruzam a fronteira da biblioteca em lotes `pyarrow.RecordBatch` (seção "A troca de dados
 com o código cliente"). A evolução do esquema é uma reconciliação entre o modelo e o log da tabela,
 sem Alembic.
@@ -129,8 +133,10 @@ devolve um `BatchStream` (iterável de `RecordBatch` com `schema`, `read_next_ba
 `run.sandbox.execute(texto, params)`, que devolvem a `pa.Table` de `stream(...).read_all()`; grava
 com `with run.sandbox.loader(Modelo) as loader: loader.write(lote)`, ou com
 `run.sandbox.load(Modelo, data)`, que aceita `pa.Table`, `RecordBatch`, `RecordBatchReader` ou
-iterável de lotes e os passa ao mesmo `loader`. `query` compila o statement pelo dialeto e o executa
-na conexão crua, sem `Session`, e `select(Lancamento)` é aceito como statement Core. A forma por
+iterável de lotes e os passa ao mesmo `loader`. `query` compila o statement pelo dialeto, com os `bindparam` do
+cliente e as constantes como parâmetros do driver, e o executa na conexão crua, sem `Session`;
+`select(Lancamento)` é aceito como statement Core, e o mesmo statement roda num
+`sqlalchemy.Connection` que o cliente crie fora da biblioteca. A forma por
 tabela serve ao que cabe na memória e à lógica que precisa de todas as linhas: `query(statement)`
 devolve a `pa.Table`, `to_pandas(types_mapper=pd.ArrowDtype)` a leva ao pandas, e
 `load(Modelo, pa.Table.from_pandas(frame, preserve_index=False))` grava. O caminho de um resultado
@@ -417,7 +423,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | --- | --- | --- |
 | `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `LogUnavailable`, `SandboxError`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
 | `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto gerado pela tabela de tipos com todo identificador entre aspas, opções físicas, cast seguro, arquivos gerados. |
-| `serialize_db.sql` | 2 | O texto SQL por dialeto a partir de statements Core: parâmetro, prefixo, renderização, arquivos gerados. |
+| `serialize_db.sql` | 2 | A cópia prefixada dos statements Core que os motores compilam, e o texto SQL por dialeto, a opção de migração para fora do SQLAlchemy: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos atrás de uma interface: URIs, leitura e escrita condicional, cópia, listagem, `storage_options` e o secret do DuckDB. |
 | `serialize_db.delta` | 3 | A camada Delta: criação, publicação por partição, registro de arquivos, reconciliação, reescrita, manifesto, diferença de versões, snapshots, `vacuum`, compactação, cópia profunda, exportação. |
 | `serialize_db.audit` | 4 | As verificações derivadas do contrato: chaves, nulos, limites de tipo, JSON e totais; o texto SQL por dialeto e o `AuditReport`. |

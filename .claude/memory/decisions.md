@@ -15,7 +15,7 @@ DuckLake not adopted. SQLAlchemy is in the project for
 compatibility with that code (user statement of 2026-09-19); the same day the user decided that
 runtime compilation by the dialect is replaced gradually by generated SQL text per dialect, one
 database interaction at a time, so SQLAlchemy ends in the models and in generation and
-`duckdb_engine` and `sqlalchemy-redshift` leave the runtime dependencies. On 2026-09-20 the user fixed
+`duckdb_engine` and `sqlalchemy-redshift` leave the runtime dependencies (superseded: on 2026-09-21 the two dialects stayed runtime dependencies as `render`'s compilers, and on 2026-09-22 the user made the Core statement submitted to the engine the default path and the generated text the optional migration path out of SQLAlchemy). On 2026-09-20 the user fixed
 the exchange type with client code as streaming `pa.RecordBatch` in both directions (`stream` reads,
 `loader` writes), with `pa.Table` accepted and returned by `query`, `execute` and `load` only as a
 convenience over the same batch API, so the client works on the current batch while the library
@@ -332,3 +332,17 @@ without length, a `partition_source` the table lacks and one without `partition_
 partition type stays out: five SQL templates and the log's `partition_values` treat the value as
 quoted text. `plan/PLAN.md`, `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`,
 `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-7.md`, `docs/index.md`
+
+The same day the user made the Core statement submitted to the engine the default path
+(`run.sandbox.query`, `execute` and `stream` compile the prefixed copy with the client's
+parameters and run it on the raw connection) and the generated SQL text the optional migration
+path out of SQLAlchemy, not the core feature; the wording in `plan/PLAN.md` follows the proposal
+the user accepted, with one requirement the user stated: the library never demands a model that a
+`sqlalchemy.Connection` created outside the library would refuse, because the client may submit
+the same statements there. Two proposals from the probes of that day await the user: `render`
+mapping a valueless `bindparam` to `:nome`, so that `param` becomes unnecessary, and
+`UniqueConstraint` in place of the two unique indexes the client model's composite foreign keys
+reference, with a `check_models` rule (`create_all` on DuckDB refuses the model as it is). The
+migration ran successfully in the target; its reports exist and are not available yet, so the
+`export_mode` default still waits for their numbers. `plan/PLAN.md`, `plan/PLAN-STAGE-2.md`,
+`plan/OPEN_QUESTIONS.md`, `plan/POC.md`

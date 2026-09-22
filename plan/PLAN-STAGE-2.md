@@ -3,8 +3,11 @@
 A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PLAN.md`](PLAN.md), que
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
 
-O módulo `serialize_db.sql` gera o texto SQL de cada dialeto a partir de um statement Core, para a
-substituição gradual da compilação em tempo de execução descrita em `sqlalchemy.md`.
+O módulo `serialize_db.sql` gera o texto SQL de cada dialeto a partir de um statement Core, a
+opção de migração para fora do SQLAlchemy descrita em `sqlalchemy.md`, e a cópia prefixada que os
+motores compilam. O caminho padrão é o statement Core submetido ao motor, que o compila pelo
+dialeto com os parâmetros do cliente (decisão do usuário de 2026-09-22); o texto versionado é
+opcional.
 
 | Primitiva | O que faz |
 | --- | --- |
@@ -123,9 +126,9 @@ localmente só para rodar sozinho.
 - **`read_sql`** abre `<pasta>/<nome>.<dialeto>.sql` com `encoding="utf-8"`, como a etapa 1, e troca
   `{prefix}` pelo `prefix` informado, argumento obrigatório (decisão do usuário de 2026-09-21): quem
   chama sabe o alvo — a string vazia para as tabelas do contrato, `exec_<id>_` para o sandbox da
-  execução —, e a obrigação de informar sobe para os chamadores, os motores das etapas
-  [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md) e o pipeline. Nenhuma outra primitiva preenche o
-  sentinela.
+  execução —, e a obrigação de informar sobe para o pipeline que lê o arquivo e entrega o texto ao
+  `execute` dos motores das etapas [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md). Nenhuma outra
+  primitiva preenche o sentinela.
 - **`serialize-db sql write|check`** recebe `--metadata modulo:atributo`, `--statements
   modulo:atributo` (o dicionário `{nome: statement}` do pipeline, resolvido pelo mesmo caminho de
   `--metadata`) e a pasta; `check` imprime o diff e sai com 1 quando há diferença, como
@@ -431,7 +434,16 @@ prefix='exec_42_': FROM "exec_42_cad_lancamentos" JOIN "exec_42_cad_contas" ON "
 
 ## Decisões pendentes
 
-Nenhuma: as cinco decisões da etapa foram tomadas pelo usuário em 2026-09-21 e 2026-09-22 — as
-regiões citadas em `bind`, o `prefix` obrigatório de `read_sql`, os dialetos de terceiros como
-compiladores de `render`, a cópia prefixada com `quote=True` e o `sqlglot` no grupo `dev` —, e cada
-uma está escrita na seção que a descreve.
+As cinco decisões da etapa foram tomadas pelo usuário em 2026-09-21 e 2026-09-22 — as regiões
+citadas em `bind`, o `prefix` obrigatório de `read_sql`, os dialetos de terceiros como compiladores
+de `render`, a cópia prefixada com `quote=True` e o `sqlglot` no grupo `dev` —, e cada uma está
+escrita na seção que a descreve. Uma proposta espera o usuário:
+
+- **[decisão] `render` aceitando um `bindparam` sem valor como `:nome`.** Hoje `render` o recusa e
+  exige `param`, e um statement com `param` não roda num `sqlalchemy.Connection` criado fora da
+  biblioteca (`Parser Error: syntax error at or near ":"`, leitura de 2026-09-22), enquanto um com
+  `bindparam` roda no `Connection` e no `execute` dos motores; a sonda do mesmo dia trocou cada
+  `bindparam` sem valor por `literal_column(":nome")` por `replacement_traverse` antes de compilar,
+  com o original intacto ([`POC.md`](POC.md)). A proposta é `render` fazer essa troca, para um
+  statement escrito com `bindparam` servir ao `Connection` do cliente, aos motores e aos arquivos,
+  e `param` ficar dispensável ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

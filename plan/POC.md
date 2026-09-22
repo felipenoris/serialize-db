@@ -1413,3 +1413,48 @@ dos dados publicados, e as tabelas `exec_<id>_*` continuam no esquema do datasha
 dois dialetos, a pedido do usuário do mesmo dia e sem uso no plano;
 `tests/test_schema.py::test_ddl_temporary_table` afirma a leitura: a tabela nasce no catálogo
 `temp`, e o `cursor()` não a vê.
+
+## O que as sondas dos statements num `Connection` mostraram
+
+Em 2026-09-22, no macOS (SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0,
+DuckDB 1.5.5, redshift-connector 2.1.16), quatro sondas leram o que um statement Core do modelo
+cliente faz fora e dentro da biblioteca:
+
+- **Os estilos de parâmetro.** `duckdb.paramstyle` é `qmark`, `duckdb_engine.Dialect()` compila
+  em `pyformat` e `Dialect(paramstyle="named")` em `named`; `redshift_connector.paramstyle` e
+  `RedshiftDialect_redshift_connector()` são `format`. Um `select` com `bindparam("minimo")` e um
+  `LIKE 'TI%'`, compilado por `Dialect(paramstyle="named")` sem `literal_binds`, saiu como
+  `... WHERE cad_contas.area LIKE :area_1 AND cad_contas.id_conta > :minimo`, com `"to"` citado
+  pelo dialeto sozinho; `compiled.construct_params({"minimo": 5})` devolveu
+  `{'area_1': 'TI%', 'minimo': 5}`, e o texto com `:nome` reescrito em `$nome` rodou na conexão
+  crua do DuckDB com esse dicionário. É o caminho padrão dos motores desde a decisão do usuário do
+  mesmo dia: a cópia prefixada compilada com os parâmetros do cliente, sem `render`.
+- **O `Connection` criado fora da biblioteca.** Num
+  `sqlalchemy.create_engine("duckdb:///:memory:")`, `cad_contas` e `cad_contratos` do modelo
+  cliente foram criadas por `Table.create`, um `select` com `sa.bindparam("id")` rodou por
+  `connection.execute(query, {"id": 1})`, e `select(cad_contratos.c.to)` compilou como
+  `cad_contratos."to"`. O mesmo `select` com `sql.param("id", sa.BigInteger)` falhou:
+  `ProgrammingError ... Parser Error: syntax error at or near ":"`, porque o `literal_column(":id")`
+  chega ao driver como texto. Um statement escrito com `param` serve aos arquivos e não a um
+  `Connection`; um com `bindparam` serve ao `Connection` e aos motores, e `render` o recusa.
+- **`render` com `bindparam`.** `replacement_traverse` trocando cada `BindParameter` com
+  `required=True` por `literal_column(":nome", type_)` antes de compilar com `literal_binds` deu
+  `... WHERE cad_contas.id_conta = :id AND cad_contas.nome LIKE 'C%'`, com o statement original
+  intacto (`:id` e `:nome_1` na compilação normal). É a proposta pendente da
+  [etapa 2](PLAN-STAGE-2.md).
+- **`create_all` do modelo cliente no DuckDB.** `Base.metadata.create_all(connection)` falhou em
+  `rel_contrato_operacao`: `Binder Error: Failed to create foreign key: referenced table
+  "cad_operacoes" does not have a primary key or unique constraint on the columns
+  data,operacao`. A chave estrangeira composta aponta as colunas do índice único
+  `ix_operacoes_data_operacao`, e `cad_lancamentos` faz o mesmo com
+  `ix_contratos_data_sistema_contrato`; a página de `CREATE TABLE` do Redshift diz "The
+  referenced columns must be the columns of a unique or primary key constraint in the referenced
+  table". A biblioteca não emite chaves no DDL e `keys` lê índice e constraint por igual, então
+  nada muda para ela; a decisão fica com o dono do modelo ([etapa 1](PLAN-STAGE-1.md),
+  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+**Consequência**: o caminho padrão dos motores das etapas [4](PLAN-STAGE-4.md) e
+[5](PLAN-STAGE-5.md) é o statement Core compilado pela cópia prefixada com os parâmetros do
+cliente, e o texto SQL versionado é a opção de migração para fora do SQLAlchemy (decisão do
+usuário de 2026-09-22); o requisito que a acompanha, um modelo e um statement que um
+`sqlalchemy.Connection` criado fora da biblioteca aceite, tem os dois itens pendentes acima.

@@ -19,11 +19,12 @@ mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.
 - **Os dados atravessam a fronteira em lotes Arrow** (`pyarrow.RecordBatch`, `pyarrow.Table` ou
   `pyarrow.RecordBatchReader`), e `serialize_db.schema.cast` leva cada lote ao esquema do contrato
   ou o recusa com a instrução ao cliente.
-- **O SQL do pipeline vira texto gerado por motor.** Cada statement Core do pipeline sai como
-  texto do DuckDB e do Redshift por `serialize_db.sql.render`, com as constantes embutidas, a
+- **O statement Core do pipeline roda no motor como está.** O cliente o submete às primitivas do
+  motor, que o compilam pelo dialeto com os parâmetros dele; o mesmo statement roda num
+  `sqlalchemy.Connection` criado fora do pacote. Como opção para quem quer sair do SQLAlchemy,
+  `serialize_db.sql.render` gera o texto do DuckDB e do Redshift, com as constantes embutidas, a
   partição como parâmetro `:nome` e cada tabela do contrato com o sentinela `{prefix}` no nome,
-  que a execução troca pelo prefixo do sandbox. O pipeline versiona o texto e o executa no lugar
-  de compilar o statement a cada execução.
+  que a execução troca pelo prefixo do sandbox, e o pipeline versiona o texto.
 - **Todo identificador que a biblioteca emite vai entre aspas duplas**: nomes de coluna como `to` e
   `timestamp` são palavras reservadas do DuckDB e do Redshift.
 
@@ -204,7 +205,8 @@ mesmo.
 
 ### Gerar o texto SQL de cada motor
 
-Um statement Core do pipeline vira texto do DuckDB e do Redshift por `serialize_db.sql.render`. A
+A opção de migração para fora do SQLAlchemy. Um statement Core do pipeline vira texto do DuckDB e
+do Redshift por `serialize_db.sql.render`. A
 partição de referência entra por `serialize_db.sql.param`, que chega ao texto como `:nome`; as
 constantes ficam embutidas, e cada tabela do contrato sai com o sentinela `{prefix}` no nome,
 dentro das aspas, que a execução troca pelo prefixo do sandbox:

@@ -894,5 +894,18 @@ check_models:
 
 ## Decisões pendentes
 
-Nenhuma: as sete decisões da etapa foram tomadas pelo usuário em 2026-09-21, e cada uma está escrita
-na seção que a descreve.
+As sete decisões da etapa foram tomadas pelo usuário em 2026-09-21, e cada uma está escrita na seção
+que a descreve. Uma decisão do modelo cliente espera o dono do modelo:
+
+- **[decisão] As duas chaves estrangeiras compostas apontam índices únicos, não
+  `UniqueConstraint`.** `rel_contrato_operacao` referencia `cad_operacoes (data, operacao)` e
+  `cad_lancamentos` referencia `cad_contratos (data, sistema, contrato)`, colunas de
+  `Index(unique=True)`; `Base.metadata.create_all` num `sqlalchemy.Connection` do DuckDB falha em
+  `rel_contrato_operacao` (`Binder Error: referenced table "cad_operacoes" does not have a primary
+  key or unique constraint on the columns data,operacao`, leitura de 2026-09-22,
+  [`POC.md`](POC.md)), e a documentação do Redshift diz que as colunas referenciadas precisam ser
+  de uma `UNIQUE` ou `PRIMARY KEY`. A biblioteca não emite chaves no DDL e `keys` lê índice e
+  constraint por igual, então nada muda para ela; a exigência do usuário de 2026-09-22, um modelo
+  que um `Connection` criado fora da biblioteca aceite, pede `UniqueConstraint` no lugar dos dois
+  índices e uma regra de `check_models` para a chave estrangeira sem chave única no alvo;
+  `tests/test_client_model.py` muda junto ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

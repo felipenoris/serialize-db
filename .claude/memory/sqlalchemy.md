@@ -92,3 +92,17 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   2026-09-21 was on the bare sentinel of the `quote=False` draft. It accepts `||`, `CAST(... AS
   NUMERIC(18, 2))`, `NOT (EXISTS (...))` and both `:name` and `$name` markers, and raises
   `TokenError` on an unbalanced quote (2026-09-22). `plan/POC.md`
+- `duckdb.paramstyle` is `qmark`, `duckdb_engine.Dialect()` compiles `pyformat` and
+  `Dialect(paramstyle="named")` `named`; `redshift_connector.paramstyle` and
+  `RedshiftDialect_redshift_connector()` are `format`. A statement compiled with the named dialect
+  and no `literal_binds` renders constants and `bindparam` as `:name`,
+  `compiled.construct_params(params)` merges both, and the text with `$name` runs on the raw
+  DuckDB connection: the engines' default path since 2026-09-22 (user decision), the versioned
+  SQL text being the optional migration path. On a `sqlalchemy.Connection` built outside the
+  library (`duckdb_engine`), a client-model statement with `bindparam` runs and `"to"` is quoted
+  by the dialect; one with `sql.param` fails (`Parser Error: syntax error at or near ":"`), so
+  `render` mapping a valueless `bindparam` to `:name` by `replacement_traverse` (probed, original
+  intact) is the pending stage 2 proposal. `Base.metadata.create_all` of the client model on
+  DuckDB fails at `rel_contrato_operacao`: its composite foreign key targets the columns of a
+  unique index, not a `UniqueConstraint`, and Redshift documents the same requirement
+  (2026-09-22). `plan/POC.md`, `plan/PLAN-STAGE-2.md`, `plan/OPEN_QUESTIONS.md`
