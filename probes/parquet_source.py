@@ -188,18 +188,27 @@ def merge_statistics(readings: list[FileReading]) -> dict[str, dict[str, Any]]:
             if statistic.get("min") is None and statistic.get("max") is None:
                 entry["without"] += 1
                 continue
-            for edge, better in (("min", lambda a, b: b < a), ("max", lambda a, b: b > a)):
+            for edge in ("min", "max"):
                 value = statistic.get(edge)
-                if value is None:
-                    continue
-                current = entry[edge]
-                try:
-                    if current is None or better(current, value):
-                        entry[edge] = value
-                except TypeError:
-                    # Tipos que não se comparam entre arquivos (um bytes ao lado de um str): fica o primeiro lido.
-                    pass
+                if value is not None and better_extreme(edge, value, entry[edge]):
+                    entry[edge] = value
     return merged
+
+
+def better_extreme(edge: str, value: Any, current: Any) -> bool:
+    """Se ``value`` substitui ``current`` no extremo ``edge``, ``min`` ou ``max``.
+
+    Valores de tipos que não se comparam entre si (um ``bytes`` ao lado de um ``str``, que o
+    Parquet permite entre arquivos e entre row groups) mantêm o primeiro lido.
+    """
+    if current is None:
+        return True
+    try:
+        if edge == "min":
+            return value < current
+        return value > current
+    except TypeError:
+        return False
 
 
 def format_value(value: Any, limit: int = 44) -> str:
@@ -280,62 +289,10 @@ def read_footer(filesystem: Any, root: str, table: str, relative: str, size: int
     with filesystem.open_input_file(f"{root}/{table}/{relative}") as handle:
         parquet = pq.ParquetFile(handle)
         metadata = parquet.metadata
-        arrow_schema = parquet.schema_arrow
-
-        # O esquema Parquet traz o tipo físico de cada folha; o Arrow traz o tipo que um leitor devolve.
-        leaves = {}
-        for index in range(len(parquet.schema)):
-            leaf = parquet.schema.column(index)
-            logical = logical_label(str(leaf.logical_type)) if leaf.logical_type is not None else "None"
-            leaves[leaf.path] = (leaf.physical_type, logical, str(leaf.converted_type))
-
-        columns = []
-        for field in arrow_schema:
-            physical, logical, converted = leaves.get(field.name, ("(aninhado)", "(aninhado)", "(aninhado)"))
-            field_id = field.metadata.get(b"PARQUET:field_id", b"").decode() if field.metadata else ""
-            columns.append(
-                Column(
-                    name=field.name,
-                    arrow_type=str(field.type),
-                    nullable=field.nullable,
-                    physical=physical,
-                    logical=logical,
-                    converted=converted,
-                    field_id=field_id or "-",
-                )
-            )
-
-        # As estatísticas vivem por row group; a entrada do arquivo é a soma delas, e o extremo dos extremos.
-        statistics: dict[str, dict[str, Any]] = {}
-        compression: set[str] = set()
-        encodings: set[str] = set()
-        for group in range(metadata.num_row_groups):
-            row_group = metadata.row_group(group)
-            for index in range(row_group.num_columns):
-                chunk = row_group.column(index)
-                name = chunk.path_in_schema
-                entry = statistics.setdefault(name, {"rows": 0, "nulls": None, "min": None, "max": None, "distinct": None})
-                entry["rows"] += row_group.num_rows
-                compression.add(str(chunk.compression))
-                encodings.update(str(encoding) for encoding in (chunk.encodings or ()))
-                statistic = chunk.statistics
-                if statistic is None:
-                    continue
-                if statistic.null_count is not None:
-                    entry["nulls"] = (entry["nulls"] or 0) + statistic.null_count
-                if statistic.has_distinct_count:
-                    entry["distinct"] = max(entry["distinct"] or 0, statistic.distinct_count)
-                if statistic.has_min_max:
-                    for edge, value in (("min", statistic.min), ("max", statistic.max)):
-                        current = entry[edge]
-                        try:
-                            if current is None or (value < current if edge == "min" else value > current):
-                                entry[edge] = value
-                        except TypeError:
-                            pass
+        statistics, compression, encodings = row_group_statistics(metadata)
 
         footer = {}
-        for key, value in (arrow_schema.metadata or {}).items():
+        for key, value in (parquet.schema_arrow.metadata or {}).items():
             footer[key.decode(errors="replace")] = value.decode(errors="replace")
 
         keys, kind = partition_of(relative)
@@ -346,7 +303,7 @@ def read_footer(filesystem: Any, root: str, table: str, relative: str, size: int
             row_groups=metadata.num_row_groups,
             created_by=str(metadata.created_by),
             format_version=str(metadata.format_version),
-            columns=columns,
+            columns=footer_columns(parquet),
             footer=footer,
             partition=keys,
             partition_kind=kind,
@@ -354,6 +311,75 @@ def read_footer(filesystem: Any, root: str, table: str, relative: str, size: int
             encodings=tuple(sorted(encodings)),
             statistics=statistics,
         )
+
+
+def footer_columns(parquet: Any) -> list[Column]:
+    """Uma entrada por coluna do arquivo: o tipo que um leitor devolve e os tipos do Parquet.
+
+    O esquema Parquet traz o tipo físico e o tipo lógico de cada folha; o Arrow traz o tipo que um
+    leitor devolve. Uma coluna aninhada não tem folha de mesmo nome e sai como ``(aninhado)``.
+    """
+    leaves = {}
+    for index in range(len(parquet.schema)):
+        leaf = parquet.schema.column(index)
+        logical = logical_label(str(leaf.logical_type)) if leaf.logical_type is not None else "None"
+        leaves[leaf.path] = (leaf.physical_type, logical, str(leaf.converted_type))
+
+    columns = []
+    for field in parquet.schema_arrow:
+        physical, logical, converted = leaves.get(field.name, ("(aninhado)", "(aninhado)", "(aninhado)"))
+        field_id = field.metadata.get(b"PARQUET:field_id", b"").decode() if field.metadata else ""
+        columns.append(
+            Column(
+                name=field.name,
+                arrow_type=str(field.type),
+                nullable=field.nullable,
+                physical=physical,
+                logical=logical,
+                converted=converted,
+                field_id=field_id or "-",
+            )
+        )
+    return columns
+
+
+def row_group_statistics(metadata: Any) -> tuple[dict[str, dict[str, Any]], set[str], set[str]]:
+    """As estatísticas por coluna de um arquivo, a compressão e as codificações dos row groups.
+
+    As estatísticas vivem por row group; a entrada de uma coluna soma as linhas e os nulos de
+    todos eles, e o mínimo e o máximo são o extremo dos extremos.
+    """
+    statistics: dict[str, dict[str, Any]] = {}
+    compression: set[str] = set()
+    encodings: set[str] = set()
+    for group in range(metadata.num_row_groups):
+        row_group = metadata.row_group(group)
+        for index in range(row_group.num_columns):
+            chunk = row_group.column(index)
+            entry = statistics.setdefault(
+                chunk.path_in_schema,
+                {"rows": 0, "nulls": None, "min": None, "max": None, "distinct": None},
+            )
+            entry["rows"] += row_group.num_rows
+            compression.add(str(chunk.compression))
+            encodings.update(str(encoding) for encoding in (chunk.encodings or ()))
+            merge_row_group(entry, chunk.statistics)
+    return statistics, compression, encodings
+
+
+def merge_row_group(entry: dict[str, Any], statistic: Any) -> None:
+    """Estende a entrada da coluna com as estatísticas de um row group; sem elas, nada muda."""
+    if statistic is None:
+        return
+    if statistic.null_count is not None:
+        entry["nulls"] = (entry["nulls"] or 0) + statistic.null_count
+    if statistic.has_distinct_count:
+        entry["distinct"] = max(entry["distinct"] or 0, statistic.distinct_count)
+    if not statistic.has_min_max:
+        return
+    for edge, value in (("min", statistic.min), ("max", statistic.max)):
+        if better_extreme(edge, value, entry[edge]):
+            entry[edge] = value
 
 
 def sample_table(filesystem: Any, root: str, table: str, relative: str, rows: int) -> dict[str, dict[str, Any]]:
@@ -399,27 +425,43 @@ def text_columns(collected: list[FileReading]) -> list[str]:
 
 def text_lengths(filesystem: Any, root: str, table: str, collected: list[FileReading], names: list[str]) -> dict[str, dict[str, int]]:
     """Mede em todas as linhas de todos os arquivos o maior texto de cada coluna, em bytes e em caracteres."""
-    import pyarrow.compute as pc
-    import pyarrow.parquet as pq
-
     measured = {name: {"rows": 0, "nulls": 0, "bytes": 0, "chars": 0} for name in names}
     for reading in collected:
-        with filesystem.open_input_file(f"{root}/{table}/{reading.path}") as handle:
-            parquet = pq.ParquetFile(handle)
-            # Um arquivo pode não ter todas as colunas: o esquema divergente é outra seção.
-            present = [name for name in names if name in parquet.schema_arrow.names]
-            if not present:
-                continue
-            for batch in parquet.iter_batches(batch_size=TEXT_BATCH_ROWS, columns=present):
-                for name, column in zip(batch.schema.names, batch.columns):
-                    entry = measured[name]
-                    entry["rows"] += len(column)
-                    entry["nulls"] += column.null_count
-                    longest = pc.max(pc.binary_length(column)).as_py()
-                    if longest is not None:
-                        entry["bytes"] = max(entry["bytes"], longest)
-                        entry["chars"] = max(entry["chars"], pc.max(pc.utf8_length(column)).as_py())
+        measure_file_text(filesystem, f"{root}/{table}/{reading.path}", measured, names)
     return measured
+
+
+def measure_file_text(filesystem: Any, path: str, measured: dict[str, dict[str, int]], names: list[str]) -> None:
+    """Mede as colunas de texto presentes num arquivo, lote a lote, sobre a medida acumulada."""
+    import pyarrow.parquet as pq
+
+    with filesystem.open_input_file(path) as handle:
+        parquet = pq.ParquetFile(handle)
+        # Um arquivo pode não ter todas as colunas: o esquema divergente é outra seção.
+        present = [name for name in names if name in parquet.schema_arrow.names]
+        if not present:
+            return
+        for batch in parquet.iter_batches(batch_size=TEXT_BATCH_ROWS, columns=present):
+            measure_text_batch(measured, batch)
+
+
+def measure_text_batch(measured: dict[str, dict[str, int]], batch: Any) -> None:
+    """Soma as linhas e os nulos de cada coluna do lote e estende o maior texto dela.
+
+    ``bytes`` é a medida do ``String(n)`` do contrato, a mesma do ``VARCHAR(n)`` do Redshift;
+    ``chars`` é a contagem de caracteres, que difere dela em texto não ASCII.
+    """
+    import pyarrow.compute as pc
+
+    for name, column in zip(batch.schema.names, batch.columns):
+        entry = measured[name]
+        entry["rows"] += len(column)
+        entry["nulls"] += column.null_count
+        longest = pc.max(pc.binary_length(column)).as_py()
+        if longest is None:
+            continue
+        entry["bytes"] = max(entry["bytes"], longest)
+        entry["chars"] = max(entry["chars"], pc.max(pc.utf8_length(column)).as_py())
 
 
 # ---------------------------------------------------------------------------------------------------------------

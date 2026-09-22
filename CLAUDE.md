@@ -393,6 +393,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   `pyproject.toml` failed outside the corporate network, and the user removed it on 2026-09-21; an
   index the workflows cannot reach stays out of the repository, and an empty `UV_CONFIG_FILE` is
   the way to ignore a `[tool.uv]` section when one must (2026-09-21).
+- **A validated instrument is refactored against its own report**: run the probe over the fixture
+  base (`tests/source_db_projetado.py` writes it to the scratchpad; `probes/parquet_source.py`
+  takes a local folder) before and after, and diff the two reports; one that needs the target
+  environment to run is not restructured, the item goes to `plan/OPEN_QUESTIONS.md` (2026-09-21).
 - **A schema decision is read back through every reader the pipeline uses, with a file from each
   writer**: `parquet.field.id` in the Delta schema made `delta_scan` read every column as null for
   every writer, and only the migration script's report, the first `delta_scan` over a table created

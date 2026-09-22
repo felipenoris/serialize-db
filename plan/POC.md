@@ -1132,3 +1132,30 @@ Também não salva a chave estrangeira que `cad_contratos` declara para `rel_con
 modelo de referência: com N operações por contrato, `(data, sistema, contrato)` continua não único
 no destino, e a chave saiu do modelo cliente (decisão do usuário de 2026-09-21,
 [`PLAN-STAGE-1.md`](PLAN-STAGE-1.md)).
+
+## O que a revisão de código de 2026-09-21 mostrou
+
+A revisão do código existente contra os padrões do repositório (macOS, DuckDB 1.5.5, deltalake
+1.6.4, PyArrow 25.0.1) mediu duas coisas antes de corrigir.
+
+**O commit não precisa da tabela Delta reaberta.** `scripts/migrate_parquet_to_delta.py` reabria a
+`DeltaTable` depois de cada partição. A sonda criou uma tabela particionada e chamou
+`create_write_transaction` três vezes no mesmo objeto: o objeto ficou na versão 0 e com 0 arquivos
+em `file_uris()` do começo ao fim, enquanto o log no armazenamento passou por 1, 2 e 3 com um
+arquivo por commit. **Cada commit resolve a versão no log do armazenamento**, e não na versão que o
+objeto abriu; o objeto em memória não reflete os próprios commits. A reabertura por partição saiu,
+e os 16 casos de `tests/test_migrate_parquet_to_delta.py` continuam passando, com as versões
+`2` e `4` que o teste da retomada afirma. O que o objeto em memória guarda importa em
+`loaded_partitions`, que a carga lê uma vez antes do laço.
+
+**A refatoração de um probe é conferida pelo relatório dele.** `probes/parquet_source.py` rodou
+sobre a base fictícia de `tests/source_db_projetado.py` em pasta local (`--sample 5 --text-bytes`,
+758 linhas de relatório) antes e depois de `read_footer` e `text_lengths` perderem o aninhamento:
+as duas saídas são idênticas fora a data e o caminho do arquivo gravado. A base fictícia tem o que
+o relatório precisa exercitar: `INT96` sem estatística, partição Hive, a chave `pandas` em parte
+dos arquivos e colunas de texto não ASCII.
+
+As correções que as duas medições acompanharam estão em
+[`CURRENT_STATE.md`](CURRENT_STATE.md); nenhuma mudou o comportamento observável do pacote, e as
+suítes passaram nas duas configurações: sem variável, 160 passados e 81 pulados; com a raiz local,
+218 passados e 23 pulados.

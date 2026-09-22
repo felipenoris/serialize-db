@@ -768,6 +768,19 @@ def test_merge_statistics_sums_rows_and_keeps_the_extremes() -> None:
     assert merged["valor"]["without"] == 0
 
 
+def test_better_extreme_keeps_the_first_of_two_types_that_do_not_compare() -> None:
+    """O extremo sai do valor que compara; um tipo que não compara com o atual mantém o lido antes."""
+    assert parquet_source.better_extreme("min", 5, None) is True
+    assert parquet_source.better_extreme("min", 1, 5) is True
+    assert parquet_source.better_extreme("min", 9, 5) is False
+    assert parquet_source.better_extreme("max", 50, 30) is True
+    assert parquet_source.better_extreme("max", 10, 30) is False
+
+    # bytes ao lado de str, que o Parquet permite entre arquivos e entre row groups.
+    assert parquet_source.better_extreme("min", b"a", "a") is False
+    assert parquet_source.better_extreme("max", b"z", "a") is False
+
+
 def test_merge_statistics_counts_the_files_without_min_and_max() -> None:
     """Um arquivo sem estatística de mínimo e máximo é contado, para o leitor saber que a faixa é parcial."""
     merged = parquet_source.merge_statistics(
@@ -783,6 +796,26 @@ def test_merge_statistics_counts_the_files_without_min_and_max() -> None:
     # Sem nulo conhecido em arquivo algum, a contagem fica sem verdicto em vez de sair como zero.
     unknown = parquet_source.merge_statistics([reading("a.parquet", {"x": {"rows": 10, "nulls": None, "min": 1, "max": 2, "distinct": None}})])
     assert unknown["x"]["nulls_known"] is False
+
+
+def test_measure_text_batch_counts_bytes_and_characters() -> None:
+    """A medida acumula linhas e nulos e guarda o maior texto em bytes, a medida do String(n)."""
+    import pyarrow as pa
+
+    measured = {"nome": {"rows": 0, "nulls": 0, "bytes": 0, "chars": 0}}
+    batch = pa.RecordBatch.from_pydict({"nome": ["ação", None, "ab"]})
+    parquet_source.measure_text_batch(measured, batch)
+    # "ação" tem 4 caracteres e 6 bytes em UTF-8: o ç e o ã levam dois cada.
+    assert measured["nome"] == {"rows": 3, "nulls": 1, "bytes": 6, "chars": 4}
+
+    parquet_source.measure_text_batch(measured, pa.RecordBatch.from_pydict({"nome": ["x" * 9]}))
+    assert measured["nome"] == {"rows": 4, "nulls": 1, "bytes": 9, "chars": 9}
+
+    # Um lote só de nulos soma as linhas e não mexe no maior texto.
+    parquet_source.measure_text_batch(
+        measured, pa.RecordBatch.from_pydict({"nome": pa.array([None], pa.string())})
+    )
+    assert measured["nome"] == {"rows": 5, "nulls": 2, "bytes": 9, "chars": 9}
 
 
 def test_format_value_decodes_bytes_and_cuts_long_text() -> None:

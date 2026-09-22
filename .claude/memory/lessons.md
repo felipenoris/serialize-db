@@ -273,3 +273,13 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   delta-rs and `read_parquet` read the values; a schema without `parquet.field.id` read the same
   three files correctly (DuckDB 1.5.5, delta extension `45c4087`). `delta_schema` now drops the
   key, the versioned `.delta.json` files lost it, and `tests/test_schema.py` asserts its absence.
+- **A validated instrument is refactored against its own report** (2026-09-21). The code review
+  found `probes/parquet_source.py::read_footer` at 81 lines and six levels of nesting, and
+  `text_lengths` at five: the deepest functions in the repository, in a probe that had already read
+  the development base and the production base. The probe takes a local folder, so
+  `tests/source_db_projetado.py` wrote the fixture base to the scratchpad and the probe ran over it
+  with `--sample 5 --text-bytes` before and after the split, 758 lines of report each time,
+  identical but for the timestamp and the output path. The fixture carries what the report needs to
+  exercise: `INT96` without statistics, Hive partitions, the `pandas` footer key in part of the
+  files and non-ASCII text columns. `probes/redshift.py::session` got no such refactor: it needs the
+  target environment to run, so the split waits for the user (`plan/OPEN_QUESTIONS.md`).

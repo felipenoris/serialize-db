@@ -84,8 +84,8 @@ def physical_types(path: str) -> dict[str, str]:
     """O tipo físico de cada coluna do arquivo Parquet."""
     parquet_schema = pq.ParquetFile(path).schema
     return {
-        parquet_schema.column(i).name: parquet_schema.column(i).physical_type
-        for i in range(len(parquet_schema))
+        parquet_schema.column(index).name: parquet_schema.column(index).physical_type
+        for index in range(len(parquet_schema))
     }
 
 
@@ -204,11 +204,11 @@ def test_interrupted_load_resumes(
     original = migrate.register_partition
     attempts: list[str | None] = []
 
-    def failing_on_the_third(*arguments):
-        attempts.append(arguments[4])
+    def failing_on_the_third(con, delta, destination, table, value, query, settings):
+        attempts.append(value)
         if len(attempts) == 3:
             raise RuntimeError("interrompida")
-        return original(*arguments)
+        return original(con, delta, destination, table, value, query, settings)
 
     monkeypatch.setattr(migrate, "register_partition", failing_on_the_third)
     with pytest.raises(RuntimeError, match="interrompida"):
