@@ -211,8 +211,9 @@ A sondagem de 2026-09-20 (macOS arm64, DuckDB 1.5.5 com `threads = 2`, PyArrow 2
   sua faixa.
 - **No Redshift**, `stream` monta cada lote de `cursor.fetchmany(batch_size)` por colunas,
   `zip(*linhas)` e `pa.array(coluna, type=...)` com o esquema do statement (um terço do tempo de
-  `from_pylist` por dicionários em 200.000 linhas, [`POC.md`](POC.md)), numa thread auxiliar que compete pelo GIL com
-  o cliente porque o `redshift_connector` é Python puro, e `loader` grava um row group por lote com
+  `from_pylist` por dicionários em 200.000 linhas, [`POC.md`](POC.md)), numa thread auxiliar que toma o lock da sessão
+  única do motor só durante o `execute` e compete pelo GIL com o cliente porque o
+  `redshift_connector` é Python puro, e `loader` grava um row group por lote com
   `ParquetWriter.write_batch` em `staging/<execution_id>/` e faz o `COPY` no `close`, então nada
   entra antes dele. O `redshift_connector` materializa o resultado no `execute` (leitura do código,
   2026-09-21), então `stream` limita a memória só por `UNLOAD` acima de um limite de linhas
@@ -378,15 +379,22 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - A troca de dados com o código cliente obedece à seção "A troca de dados com o código cliente":
   lotes com `cast` em cada um, nenhum gerador Python entregue ao `register` do DuckDB, API síncrona
   com o paralelismo do lado do cliente, e nenhum laço Python puro ao lado das threads da biblioteca.
-- O motor guarda uma conexão por thread: `duckdb` e `redshift_connector` declaram `threadsafety` 1,
+- O motor DuckDB guarda uma conexão por thread, e o motor Redshift uma sessão por execução
+  (decisão do usuário de 2026-09-22): `duckdb` e `redshift_connector` declaram `threadsafety` 1,
   uma conexão DuckDB compartilhada entrega a uma thread o resultado da outra sem erro, um banco em
   memória só é compartilhado por `cursor()` da conexão que o abriu, um segundo `connect(arquivo)`
-  com outra configuração ou `read_only` é recusado, e `threads` é da instância. Cada thread recebe
-  um `cursor()` do DuckDB ou uma conexão Redshift num `threading.local`, criados no primeiro uso e
-  fechados em `cleanup`, e cada `stream` e cada `loader` abre um cursor próprio, fechado no `close`,
-  que deixa o da thread do cliente livre; `run.sandbox.connection` expõe a conexão crua da thread; o
-  estado mutável de `Execution` fica sob lock; o cliente não cria conexão para o sandbox, e a
-  biblioteca não cria `Engine` do SQLAlchemy (`test_concurrency.py`, `test_parallel.py`).
+  com outra configuração ou `read_only` é recusado, e `threads` é da instância. No DuckDB cada
+  thread recebe um `cursor()` num `threading.local`, criado no primeiro uso e fechado em `cleanup`,
+  e cada `stream` e cada `loader` abre um cursor próprio, fechado no `close`, que deixa o da thread
+  do cliente livre. No Redshift o motor guarda uma conexão e um `threading.Lock`: todo comando, da
+  biblioteca ou do cliente, passa pela sessão em série; `stream` executa sob o lock e a thread
+  auxiliar só fatia o `fetchmany`, porque o driver materializa o resultado no `execute`; o `loader`
+  grava o Parquet no S3 fora do lock e roda o `COPY` sob ele no `close`; uma tabela temporária que
+  o pipeline crie na sessão vale para os comandos seguintes, e se perde quando a sessão cai e o
+  motor reconecta. `run.sandbox.connection` expõe a conexão crua, a da thread no DuckDB e a sessão
+  no Redshift, para uma thread por vez; o estado mutável de `Execution` fica sob lock; o cliente
+  não cria conexão para o sandbox, e a biblioteca não cria `Engine` do SQLAlchemy
+  (`test_concurrency.py`, `test_parallel.py`).
 - As chaves inteiras vêm de `run.next_ids(table, n)`: faixas contíguas sob lock, a partir de
   `max_key + 1` na versão fixada, lido de `max.<coluna>` das ações `add` e pela varredura da coluna
   quando um arquivo não tem a estatística; a tabela vazia começa em 1. Os ids de uma reexecução
@@ -473,7 +481,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |
 | 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação da partição. | O pipeline de exemplo roda num banco em arquivo sobre um Delta local; a auditoria reprova a chave repetida entre a partição nova e uma já publicada. |
-| 5. Motor Redshift | O mesmo protocolo com sandbox `exec_<id>_`, `COPY ... MANIFEST` e `UNLOAD`. | SQL gerado coberto por testes sem conexão; integração com amostra, marcador `redshift`. |
+| 5. Motor Redshift | O mesmo protocolo, numa sessão única por execução sob lock, com sandbox `exec_<id>_`, `COPY ... MANIFEST` e `UNLOAD`. | SQL gerado coberto por testes sem conexão; integração com amostra, marcador `redshift`. |
 | 6. Execução e linha de comando | `Database`, `Execution`, `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
 | 7. Carga inicial | Migração dos Parquet atuais por tabela e por partição, com relatório; `initial_load` absorve a migração adiantada de `scripts/migrate_parquet_to_delta.py`, que vem logo depois da etapa 1. | Contagens e somas por partição iguais entre origem e Delta. |
 | 8. Publicação para clientes | Tabelas `<ambiente>_*` no Redshift, `version_diff`, transação única, `serialize_db_publications`. | Uma partição alterada recarrega só essa partição. |

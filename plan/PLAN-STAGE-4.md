@@ -165,7 +165,8 @@ class Loader(Protocol):
 
 @runtime_checkable
 class Engine(Protocol):
-    """A interface dos dois motores; Execution só depende dela."""
+    """A interface dos dois motores; Execution só depende dela. connection é a conexão crua da
+    thread no DuckDB e a sessão única do motor Redshift (etapa 5), para uma thread por vez."""
     @property
     def connection(self) -> object: ...
     def ingest(self, table: sa.Table, uri: str, version: int, partitions: list[str] | None = None, materialize: bool = False) -> None: ...

@@ -312,3 +312,12 @@ serverless workgroup ends after 3,600 s idle, cannot be inspected from outside o
 audit, and gets `RAW` encoding by default. The user asked for
 `ddl(table, dialect, prefix="", temporary=False)` all the same, with `temporary=True` emitting
 `CREATE TEMP TABLE` and no use inside the plan. `plan/PLAN-STAGE-1.md`, `plan/POC.md`
+
+The same day the user removed the per-thread connection from the Redshift engine (stage 5): the
+engine keeps one session per execution and a `threading.Lock`, every command takes it, `stream`
+executes under it and its helper thread only slices `fetchmany` (the driver materializes the
+result in `execute`), `loader` writes the Parquet outside it and runs the `COPY` under it;
+`ingest(max_workers)` serializes on that engine, `publish_redshift` keeps a connection per table,
+and a temporary table the pipeline creates in the session serves the next commands and is lost
+when the engine reconnects. The DuckDB engine keeps its cursor per thread, stream and loader.
+`plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/serialize-db.md`

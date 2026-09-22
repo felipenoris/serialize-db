@@ -6,12 +6,6 @@ resposta entra no documento que a guarda, e a saída nomeia esse documento. O pl
 [`PLAN.md`](PLAN.md), o estado da implementação em [`CURRENT_STATE.md`](CURRENT_STATE.md) e o que já
 foi medido em [`POC.md`](POC.md).
 
-- **Onde ficam as tabelas de execução.** O sandbox `exec_<id>_*` da [etapa 4](PLAN-STAGE-4.md) e as
-  stagings do `COPY` nascem no banco do datashare, onde o `CREATE TABLE` passou, e herdam as
-  restrições dele: escrita num banco por transação, sem `VIEW`. A alternativa da tabela temporária
-  (`TEMP` é verdadeiro no banco da conexão, e `CREATE` não; a suíte criou, consultou e truncou uma
-  depois do `USE` em 2026-09-21) custa o sandbox morrer com a sessão. A
-  [etapa 5](PLAN-STAGE-5.md) decide quando o primeiro pipeline rodar lá.
 - **O que `svv_table_info` responde depois do `USE`.** Antes do `USE` ela enxerga só o banco local,
   como `has_schema_privilege` e `information_schema.columns`, que a suíte leu depois do `USE` em
   2026-09-21, seis vezes a primeira e cinco a segunda: `false` e vazio para o esquema do datashare,
@@ -29,8 +23,11 @@ foi medido em [`POC.md`](POC.md).
   [etapa 3](PLAN-STAGE-3.md) resolve `storage_options` a cada chamada e não põe credencial nele
   (decisão do usuário de 2026-09-22), e a primeira execução longa no espaço confirma que o delta-rs
   renova pela cadeia padrão o `DeltaTable` que a execução segura. A credencial do Redshift
-  tem o mesmo teto (`GetCredentials`, 3600 segundos): o que acontece com uma conexão aberta quando a
-  senha expira, e se ela cai no meio de um `COPY`, ainda não foi medido. As credenciais que o `COPY`
+  tem o mesmo teto (`GetCredentials`, 3600 segundos), e o serverless encerra a sessão ociosa há
+  3.600 s e a transação inativa há 21.600 s ([`redshift.md`](redshift.md)): o que acontece com uma
+  conexão aberta quando a senha expira, e se ela cai no meio de um `COPY`, ainda não foi medido; o
+  motor da [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela temporária
+  que o pipeline tenha criado na sessão. As credenciais que o `COPY`
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
   `COPY` mais longo que isso também não foi medido.
 - **Os relatórios dos probes de 2026-09-21.** O usuário os guardou em `secrets/probes-aws-bn/`, fora
@@ -61,8 +58,8 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 5](PLAN-STAGE-5.md): onde as tabelas `exec_<id>_*` nascem; a confirmação do `USE` pela
-  criação da tabela de controle; os limites entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
+- [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
+  entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição
   (`<uri>/<execution_id>/<valor>/` com `PARTITION BY`, ou `<uri>/<coluna>=<valor>/<execution_id>/`
   sem ele), porque o `UNLOAD` confere o destino como prefixo.

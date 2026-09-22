@@ -29,7 +29,8 @@ módulo, em `PLAN-STAGE-<n>.md`.
 - **Ingestão seletiva.** Cada execução fixa a versão de cada tabela lida e leva ao motor só as partições
   que o pipeline usa: views ou tabelas materializadas no DuckDB, `COPY ... MANIFEST` no Redshift.
 - **Paralelismo pelo código cliente.** A API é síncrona e as primitivas podem ser chamadas de
-  qualquer thread, cada uma na conexão da sua thread; o cliente paraleliza com `concurrent.futures`,
+  qualquer thread, cada uma na conexão da sua thread no DuckDB e na sessão única do motor
+  Redshift; o cliente paraleliza com `concurrent.futures`,
   e `ingest` e `publish` aceitam `max_workers`. Os dados cruzam a fronteira em lotes `RecordBatch`:
   `stream` lê o lote seguinte e `loader` grava o anterior enquanto o cliente trabalha no atual, e
   `query`, `execute` e `load` são as formas por `pa.Table`. A seção "Paralelismo" diz como operar em
@@ -183,9 +184,9 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
    arquivos anteriores a uma coluna nova vai por lista de colunas, confirmada em 2026-09-21, ou por
    `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula, a proposta da
    [etapa 8](PLAN-STAGE-8.md).
-3. O pipeline roda os mesmos statements Core, compilados para o Redshift; os lotes entram por
-   Parquet em `staging/` mais `COPY`, um row group por lote, e saem das tuplas de `fetchmany` ou por
-   `UNLOAD`.
+3. O pipeline roda os mesmos statements Core, compilados para o Redshift, numa sessão só; os lotes
+   entram por Parquet em `staging/` mais `COPY`, um row group por lote, e saem das tuplas de
+   `fetchmany` ou por `UNLOAD`.
 4. `run.audit` roda as mesmas consultas no Redshift.
 5. `run.publish` grava cada partição por `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE` e, conforme
    `export_mode`, registra os arquivos por `register_files` depois das conferências da
@@ -307,18 +308,21 @@ cenário em `test_parallel.py` e em `test_redshift.py`.
 
 1. Toda primitiva é síncrona: quando ela retorna, o efeito está visível para a chamada seguinte, de
    qualquer thread, porque os dois motores confirmam cada comando ao terminar.
-2. Cada thread tem a sua conexão: um `cursor()` do DuckDB ou uma conexão Redshift, criados no
-   primeiro uso e fechados no encerramento da execução. O cliente nunca cria conexão para o sandbox,
-   e `run.sandbox.connection` devolve a conexão crua da thread para o que as primitivas não cobrem.
-   Uma conexão DuckDB compartilhada por duas threads entrega a uma o resultado da outra, sem erro, e
-   os dois drivers declaram `threadsafety` 1: as threads compartilham o módulo, não a conexão.
+2. No DuckDB cada thread tem a sua conexão, um `cursor()` criado no primeiro uso e fechado no
+   encerramento da execução; no Redshift o motor tem uma sessão por execução e um lock, e todo
+   comando passa por ela em série (decisão do usuário de 2026-09-22). O cliente nunca cria conexão
+   para o sandbox, e `run.sandbox.connection` devolve a conexão crua, a da thread ou a sessão, para
+   o que as primitivas não cobrem, uma thread por vez. Uma conexão DuckDB compartilhada por duas
+   threads entrega a uma o resultado da outra, sem erro, e os dois drivers declaram `threadsafety`
+   1: as threads compartilham o módulo, não a conexão.
 3. `run.next_ids(table, n)` devolve faixas de identificadores que não se sobrepõem entre threads.
 4. O estado da execução (`versions`, auditorias aprovadas, o alocador) fica sob lock.
 5. O DuckDB, o delta-rs e o PyArrow liberam o GIL no trabalho nativo: threads Python bastam para o
    paralelismo, e o custo de uma extensão em Rust não se justifica por ele.
 6. `stream` e `loader` são as threads da biblioteca ao lado dos pools: uma auxiliar por primitiva,
-   com um cursor próprio e uma fila limitada, encerrada no `close`; o cliente trabalha no lote atual
-   enquanto a biblioteca lê o seguinte ou grava o anterior.
+   com um cursor próprio no DuckDB e a sessão sob o lock no Redshift, e uma fila limitada, encerrada
+   no `close`; o cliente trabalha no lote atual enquanto a biblioteca lê o seguinte ou grava o
+   anterior.
 
 ### Leituras em paralelo
 
@@ -333,8 +337,11 @@ cenário em `test_parallel.py` e em `test_redshift.py`.
   `run.sandbox.execute` e `run.sandbox.stream` ao mesmo tempo, cada uma no seu cursor; cada stream e
   cada loader roda num cursor próprio, e o cursor da thread do cliente fica livre enquanto eles
   correm.
-- **Redshift.** Paralelo dentro de cada comando; entre comandos, uma conexão por thread, limitadas
-  pelas slots da fila do WLM. `run.sandbox.query` de várias threads abre uma conexão por thread.
+- **Redshift.** Paralelo dentro de cada comando; entre comandos, uma sessão por execução, com os
+  comandos em série sob o lock do motor (decisão do usuário de 2026-09-22): `run.sandbox.query` de
+  várias threads espera a vez, o `stream` solta o lock depois do `execute` e fatia o resultado já
+  materializado, e uma tabela temporária que o pipeline crie na sessão vale para os comandos
+  seguintes. As slots da fila do WLM limitam só a publicação, que abre uma conexão por tabela.
 
 ### Escritas em paralelo
 
@@ -360,7 +367,7 @@ from concurrent.futures import ThreadPoolExecutor
 with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento, Contrato, Operacao, RelContratoOperacao, partitions=run.previous_partitions(Lancamento, 12), max_workers=4)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:                 # dois passos independentes
+    with ThreadPoolExecutor(max_workers=2) as pool:                 # dois passos independentes; em série no Redshift
         saldos = pool.submit(run.sandbox.execute, SALDOS_SQL, {"data_base_str": run.partition})     # grava {prefix}saldos
         limites = pool.submit(run.sandbox.execute, LIMITES_SQL, {"data_base_str": run.partition})   # grava {prefix}limites
         saldos.result()                                              # a leitura abaixo depende dos dois
@@ -383,8 +390,9 @@ biblioteca lê o lote seguinte numa thread, o cliente trabalha no lote atual na 
 biblioteca grava o lote anterior noutra thread. O que cada um garante, medido em 2026-09-20
 ([`PLAN.md`](PLAN.md), seção "A troca de dados com o código cliente"):
 
-- `stream` roda a consulta num cursor próprio e pré-busca `prefetch` lotes numa fila limitada; o
-  cursor da thread do cliente fica livre, e um comando nele não esvazia o leitor. A memória do lado
+- `stream` roda a consulta num cursor próprio no DuckDB, e na sessão do motor sob o lock no
+  Redshift, e pré-busca `prefetch` lotes numa fila limitada; o cursor da thread do cliente fica
+  livre, e um comando nele não esvazia o leitor. A memória do lado
   Python é a de `prefetch + 1` lotes; a do DuckDB é a da consulta, que uma ordenação materializa
   antes do primeiro lote, sob `memory_limit`. O erro da consulta chega na construção ou na leitura,
   e `close`, ou o fim do `with`, interrompe a thread; um stream abandonado é coletado e a thread
