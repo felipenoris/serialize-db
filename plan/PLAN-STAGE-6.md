@@ -11,6 +11,7 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 | `Execution(db, engine, partition, execution_id)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox; na saída descarta o sandbox e grava o resumo no log. As primitivas podem ser chamadas de qualquer thread, cada uma na conexão da sua thread, e o estado mutável (`versions`, auditorias aprovadas, o alocador) fica sob lock. |
 | `run.previous_partitions(table, n)` | Os `n` últimos valores de partição da tabela na versão fixada até `run.partition`, inclusive, lidos das ações `add`; o calendário é do cliente, não da biblioteca. |
 | `run.ingest(*tables, partitions=None, materialize=False, max_workers=1)` | `engine.ingest` de cada tabela na versão fixada, num `ThreadPoolExecutor(max_workers)` quando `max_workers > 1`, cada tarefa na conexão da sua thread; sem `partitions`, a tabela inteira. O ganho é no S3, onde a latência domina; em disco local o pool da instância já usa os núcleos. |
+| `run.published(table)` | A versão fixada da tabela como origem de consulta, por `engine.published(table, db.uri(table), versions[table])`: `delta_scan('<uri>', version := <v>)` no DuckDB, a staging `exec_<id>_<tabela>_publicado` no Redshift ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)). É por ela que o pipeline lê as partições já publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader` (decisão do usuário de 2026-09-22); numa tabela que ainda não existe, levanta `SandboxError`. |
 | `run.sandbox` | O motor, onde o pipeline chama `stream` e `loader`, os lotes na saída e na entrada, e `query`, `execute` e `load`, as formas por `pa.Table`, de qualquer thread; cada stream e cada loader roda num cursor próprio; `run.sandbox.connection` é a conexão crua da thread, para o que as primitivas não cobrem. |
 | `run.next_ids(table, n)` | Um `range` de `n` inteiros contíguos, sob lock, a partir de `max_key(chave) + 1` na versão fixada da tabela, lido uma vez por tabela; as faixas de threads paralelas não se sobrepõem, e os ids de uma reexecução diferem. |
 | `run.audit(table, partitions, foreign_keys=False, key_scope=None)` | `engine.audit`; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta, e o relatório, com o SQL de cada verificação, vai para o log. |
@@ -77,6 +78,7 @@ class Execution:
     execution_id: str
     def previous_partitions(self, table: sa.Table, n: int) -> list[str]: ...
     def ingest(self, *tables: sa.Table, partitions: list[str] | None = None, materialize: bool = False, max_workers: int = 1) -> None: ...
+    def published(self, table: sa.Table) -> sa.FromClause: ...
     def next_ids(self, table: sa.Table, n: int) -> range: ...
     def audit(self, table: sa.Table, partitions: list[str] | None, foreign_keys: bool = False, key_scope: str | None = None) -> object: ...
     def publish(self, *tables: sa.Table, partitions: list[str] | None = None, audit: bool = True, max_workers: int = 1, export_mode: ExportMode | None = None) -> dict[str, int]: ...
@@ -109,6 +111,8 @@ um motor já construído, para os testes.
   filtra `<= run.partition` e devolve os `n` maiores; o calendário é do cliente.
 - **`ingest`** despacha `sandbox.ingest(table, uri, versions[table], partitions, materialize)` num
   `ThreadPoolExecutor(max_workers)`; cada tarefa usa a conexão da sua thread.
+- **`published`** devolve `sandbox.published(table, db.uri(table), versions[table])` e não cria
+  objeto com o nome do modelo, que fica para o `loader` da tabela que a execução grava.
 - **`next_ids`** guarda um contador por tabela sob `threading.Lock`, iniciado em
   `delta.max_key(dt, chave) + 1` na versão fixada, ou 1 numa tabela nova, e devolve `range(inicio,
   inicio + n)`; a chave é a primeira coluna da chave primária, e uma chave composta ou não inteira é

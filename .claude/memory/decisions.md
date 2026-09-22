@@ -262,3 +262,36 @@ parse, a reading of the `quote=False` draft of 2026-09-21; the implementation of
 the quoted sentinel parses, and the test parses the versioned file of every statement and the
 text with the prefix empty. Stage 2 has no decision awaiting the user. `plan/PLAN-STAGE-2.md`,
 `plan/POC.md`, `pyproject.toml`
+
+On 2026-09-22 the user took the four decisions of stage 4. The `loader` refuses a name already taken
+in the sandbox with `SandboxError`, instead of creating with `IF NOT EXISTS` and appending: a loop
+over partitions keeps one loader open. `memory_limit` stays at DuckDB's default, 80% of the machine,
+and the engine only records in the log the value DuckDB chose, beside the free space of
+`temp_directory`; the first real run measures what is left for the client's pandas, which DuckDB's
+limit does not cover. The database is a file at `<temp_directory>/<execution_id>.duckdb`, with
+`temp_directory` omitted becoming a new `tempfile.mkdtemp` folder that `cleanup` deletes, and
+`:memory:` only through `DuckDBConfig(database=":memory:")`. The `AuditReport` carries up to 20 whole
+rows of sample per failed check, in the log, and the `linhas` check, a `count(*) FILTER` per column,
+fetches its sample in a second query per counter above zero. The refusal brought two decisions of
+the same day: `published(table, uri, version)` in both engines' protocol and `run.published(table)`
+in `Execution` — the pinned version as a query source that occupies no name in the sandbox, which is
+also what the audit's keys outside the partition already needed — and `SandboxError` as the stage's
+exception in `serialize_db.errors`. Stage 4 has no decision awaiting the user.
+`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`
+
+## Stage 3, decided on 2026-09-22
+
+Four decisions, all before any code. `create_table` passes the table comment as the Delta
+`description`, and `reconcile` syncs the description and the column comments with the model through
+`set_table_description` and `set_column_metadata`: a probe of the same day showed the three survive
+every `overwrite`, so the only question left was drift. `storage_options` carries no credential at
+all: the delta-rs default chain renews them inside the `DeltaTable` an execution holds, while a
+frozen `boto3` trio would expire in about an hour mid-execution and would travel in a dictionary a
+log or an exception prints; `test_delta_rs_storage_options_fallback` keeps measuring the shape for
+the day an environment breaks the chain. `register_files` registers min and max of the integer,
+date, `Double` and `String` columns, the four that transcribe exactly, and leaves `decimal` and
+`timestamp` out. `version_diff` refuses a cleaned log with `LogUnavailable`, naming the full
+publication, instead of falling back to the set difference of `get_add_actions`: `create_table`
+pins `delta.logRetentionDuration` at 3650 days, and the cleanup that would remove the file also
+makes the published version unreadable. Stage 3 has no decision awaiting the user.
+`plan/PLAN-STAGE-3.md`, `plan/POC.md`

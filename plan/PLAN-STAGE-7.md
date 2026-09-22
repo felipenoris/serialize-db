@@ -77,8 +77,10 @@ NULL` e os textos acima de `String(n)` em bytes (`strlen`; o `octet_length` do D
 para `BLOB`) e recusa a partição por `ContractError` antes de gravar, nos dois modos; a gravação
 em `--mode register` (o padrão), `COPY ... (FORMAT parquet, RETURN_STATS)` para
 `<raiz>/<tabela>/<coluna>=<valor>/carga_inicial_<uuid>.parquet` e a `AddAction` por
-`create_write_transaction` com `numRecords`, `nullCount` de toda coluna e mínimo e máximo dos
-inteiros e das datas, ou em `--mode rewrite`, o leitor da consulta por `cast` e `write_deltalake`
+`create_write_transaction` com `numRecords`, `nullCount` de toda coluna e mínimo e máximo das
+colunas inteiras, de data, `Double` e texto, os tipos que a [etapa 3](PLAN-STAGE-3.md) registra
+(decisão do usuário de 2026-09-22), ou em `--mode rewrite`, o leitor da consulta por `cast` e
+`write_deltalake`
 com predicado (o `cast` fica como segunda guarda: uma exceção do leitor volta de
 `write_deltalake` como `DeltaError`, com a mensagem original dentro do texto); as linhas na ordem
 da `sort_key` do modelo, salvo `--no-sort`; a retomada pelas partições já no log; `load_report`

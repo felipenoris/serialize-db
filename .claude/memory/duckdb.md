@@ -18,6 +18,12 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
 - Constraints cost on load and do not help queries in either engine: a DuckDB load of 300,000 rows
   went from 0.008 s to 0.073 s with a composite primary key, and Redshift keys are informational.
   `plan/schema.md`, `plan/duckdb.md`
+- `COPY ... (FORMAT parquet, RETURN_STATS)` returns `filename`, `count`, `file_size_bytes`,
+  `footer_size_bytes`, `column_statistics` and `partition_keys`; the statistics come keyed by the
+  quoted column name, with `column_size_bytes`, `min`, `max`, `null_count`, `num_values` as text,
+  plus `has_nan` on a float column holding one. A `DOUBLE` round-trips through `float`, a `VARCHAR`
+  is not truncated (200 characters came back whole), and an all-null column carries no `min`/`max`.
+  `plan/POC.md`, `scripts/migrate_parquet_to_delta.py`
 
 ## Proxy
 
@@ -45,3 +51,14 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `plan/duckdb.md`, `plan/parquet.md`, `plan/redshift.md`, `plan/sqlalchemy.md`
 - A DuckDB listing glob over S3 crosses `/` only with `**`: `*` does not, which gave a count of 0 beside boto3's 16
   in `probes/diagnose_aws.py` before the fix (2026-09-20). `probes/README.md`
+- `CREATE TABLE IF NOT EXISTS <name>` guards nothing but the name: over a view it passes and creates
+  nothing, and the later `INSERT ... BY NAME` fails with `Catalog Error: <name> is not an table`;
+  over a table with other columns it also passes, and `INSERT ... BY NAME` either fails on a missing
+  column or fills an extra column with null in silence. `con.register("lote", ...)` occupies a view
+  name, listed by `duckdb_views()` and typed `VIEW` by `information_schema.tables`, against
+  `BASE TABLE` for tables. A table from `CREATE TABLE AS SELECT` carries no `NOT NULL` (2026-09-22).
+  `plan/PLAN-STAGE-4.md`, `plan/POC.md`
+- `memory_limit` takes only a value with a unit: `'60%'` and `'60'` are refused with
+  `Parser Error: Unknown unit for memory`, `'4.5GiB'` passes. The default is 80% of the memory
+  DuckDB detects (14.3 GiB where `os.sysconf` reads 18.0 GiB; 6.1 GiB of the target's 7.6 GiB), so a
+  fraction of the machine is Python's arithmetic (2026-09-22). `plan/duckdb.md`

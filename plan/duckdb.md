@@ -757,6 +757,11 @@ con.execute("SET threads = 2; SET memory_limit = '4GB'")     # ajuste em tempo d
 con.sql("SELECT current_setting('threads'), current_setting('memory_limit')").fetchone()   # (2, '3.7 GiB')
 ```
 
+O `memory_limit` só aceita valor com unidade: `'60%'` e `'60'` são recusados com `Parser Error:
+Unknown unit for memory` (DuckDB 1.5.5, 2026-09-22), e quem quer uma fração da máquina a calcula
+antes. O padrão é 80% da memória que o DuckDB detecta: 14,3 GiB numa máquina que o `os.sysconf` do
+Python lê como 18,0 GiB, e 6,1 GiB dos 7,6 GiB do ambiente alvo.
+
 Sem `temp_directory`, um banco em arquivo transborda para `<arquivo>.tmp` ao lado dele e um banco em
 memória para `.tmp` no diretório corrente; `max_temp_directory_size` limita o transbordo a 90 % do
 espaço livre do disco por padrão. `8GB` aparece como `7.4 GiB` porque o limite é lido em bytes

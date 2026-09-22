@@ -71,6 +71,17 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   rewriting with DuckDB `COPY (SELECT * FROM delta_scan(...)) TO ... (PARTITION_BY (mes))`, which
   gave one `data_0.parquet` per month with 11 threads and keeps the partition column out of the
   files unless `WRITE_PARTITION_COLUMNS true`. `plan/delta.md`
+- The writer's own `minValues`/`maxValues` are JSON numbers, so a wide `decimal` loses rows:
+  `decimal(18,2)` holding `123456789012345.21` was written as `123456789012345.2`, and
+  `WHERE valor = 123456789012345.21` returned 0 rows in delta-rs and in `delta_scan` with the row in
+  the file. `timestamp[us]` is truncated to milliseconds (`...59.999999` becomes `...59.999`) and
+  both readers still found the row; `float64` and `string` are exact, and `NaN` stays out of min and
+  max. The defect is the writer's, so `publish_partition` carries it too; the client model has no
+  `Numeric` column. `test_deltalake.py::test_written_stats_lose_the_row_on_decimal`, `plan/POC.md`
+- A table's `description`, `name` and column comments survive `write_deltalake(mode="overwrite")`
+  with and without a predicate; `alter.set_table_description` and `alter.set_column_metadata` change
+  them in a commit of `commitInfo` and `metaData` alone.
+  `test_deltalake.py::test_description_and_comments_survive_overwrite`, `plan/POC.md`
 
 ## Performance measured
 

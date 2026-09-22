@@ -26,8 +26,9 @@ foi medido em [`POC.md`](POC.md).
   conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
   `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket.
 - **Credenciais de uma hora.** Nenhuma execução mais longa que uma emissão rodou ainda; a
-  [etapa 3](PLAN-STAGE-3.md) renova `storage_options` a cada chamada, e a primeira execução longa
-  no espaço confirma que o delta-rs e o `boto3` renovam pela cadeia padrão. A credencial do Redshift
+  [etapa 3](PLAN-STAGE-3.md) resolve `storage_options` a cada chamada e não põe credencial nele
+  (decisão do usuário de 2026-09-22), e a primeira execução longa no espaço confirma que o delta-rs
+  renova pela cadeia padrão o `DeltaTable` que a execução segura. A credencial do Redshift
   tem o mesmo teto (`GetCredentials`, 3600 segundos): o que acontece com uma conexão aberta quando a
   senha expira, e se ela cai no meio de um `COPY`, ainda não foi medido. As credenciais que o `COPY`
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
@@ -60,10 +61,6 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 3](PLAN-STAGE-3.md): o comentário da tabela como `description` da tabela Delta; a reserva de credenciais do `boto3` em `storage_options`; as colunas
-  com estatística registrada; `version_diff` quando o log foi limpo.
-- [Etapa 4](PLAN-STAGE-4.md): `loader` numa tabela que já existe; o padrão de `memory_limit`; o
-  banco em arquivo como padrão; a amostra do `AuditReport`.
 - [Etapa 5](PLAN-STAGE-5.md): onde as tabelas `exec_<id>_*` nascem; a confirmação do `USE` pela
   criação da tabela de controle; os limites entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição
