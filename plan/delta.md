@@ -489,7 +489,11 @@ dos arquivos sob o nome antigo; o `restore` da versão anterior desfez. A biblio
 `predicate` junto com `schema_mode="overwrite"`. O `dt.alter` do delta-rs 1.6.4 oferece
 `add_columns`, `add_constraint`, `add_feature`, `drop_column_not_null`, `drop_constraint`,
 `set_column_metadata`, `set_table_description`, `set_table_name` e `set_table_properties`; não há
-`rename_column` nem `drop_columns`.
+`rename_column` nem `drop_columns`. O nome, a `description` e os comentários de coluna atravessam
+todo `write_deltalake(mode="overwrite")`, com e sem predicado, e cada `set_table_description` ou
+`set_column_metadata` sai num commit de `commitInfo` e `metaData`, sem tocar nos dados (2026-09-22,
+[`POC.md`](POC.md)): a documentação da tabela sobrevive à publicação de partição e é sincronizada
+com o modelo pela reconciliação.
 
 A reconciliação é o comando da biblioteca que substitui a migração: compara `arrow_schema(Table)`
 com `dt.schema()`, aplica o diff aditivo, recusa o destrutivo com a instrução de reescrita, e repete
@@ -651,7 +655,12 @@ def register_file(dt: DeltaTable, relative_path: str, size: int, month: str, sta
    (`numRecords`, `minValues`, `maxValues`, `nullCount`, sem as colunas de partição); o DuckDB os
    fornece por `COPY ... (RETURN_STATS)`, e um arquivo alheio os fornece pelo rodapé Parquet
    (`pq.read_metadata`). Com as estatísticas, a poda funcionou nos dois leitores: `file_uris` com
-   `id_operacao >= 990000` devolveu lista vazia, e o DuckDB mostrou `Scanning Files: 0/12`.
+   `id_operacao >= 990000` devolveu lista vazia, e o DuckDB mostrou `Scanning Files: 0/12`. O
+   mínimo e o máximo entram só dos tipos que o JSON transcreve exato — inteiro, data, `Double` e
+   texto —, porque o log os guarda como valor JSON: um `decimal(18, 2)` de 18 dígitos
+   significativos vira um dobro e perde precisão, e um máximo abaixo do valor real poda o arquivo
+   que tem a linha (adiante, "As estatísticas por tipo"). Uma estatística ausente só deixa de
+   podar.
 3. `convert_to_deltalake(uri, partition_by=..., partition_strategy="hive")` cria o log sobre uma pasta
    Parquet existente, sem reescrever. Serve para a carga inicial só se os arquivos já têm os tipos, a
    ordem de colunas e o layout Hive do contrato; não foi testado.
@@ -659,6 +668,22 @@ def register_file(dt: DeltaTable, relative_path: str, size: int, month: str, sta
 
 A carga inicial dos Parquet atuais é o caminho 1, tabela a tabela e mês a mês, com cast para o
 contrato (os modelos usam `Double` onde o contrato pede `Numeric(18, 2)`).
+
+### As estatísticas por tipo
+
+O escritor do delta-rs grava `minValues` e `maxValues` como valor JSON, e a transcrição não é exata
+em todo tipo (medido em 2026-09-22, delta-rs 1.6.4, [`POC.md`](POC.md)):
+
+| Tipo | O que o log guarda | Consequência na poda |
+| --- | --- | --- |
+| Inteiro, data, `double`, texto | O valor exato; `-1e+308`, `0.30000000000000004` e um texto de 41 caracteres saíram inteiros, e `NaN` fica fora do mínimo e do máximo | A poda acha a linha |
+| `decimal(p, s)` | Um número JSON: `123456789012345.21` virou `123456789012345.2` | `WHERE valor = 123456789012345.21` devolveu **zero linhas** no delta-rs e no `delta_scan`, com a linha dentro do arquivo |
+| `timestamp` | O texto truncado em milissegundos: `2026-08-31 23:59:59.999999` virou `2026-08-31 23:59:59.999` | Os dois leitores acharam a linha mesmo assim |
+
+O defeito do `decimal` é do escritor, então uma coluna `Numeric` larga gravada por
+`write_deltalake` carrega a mesma poda; o modelo cliente não tem nenhuma, porque as colunas
+numéricas são `Double`. O `register_files` da [etapa 3](PLAN-STAGE-3.md) registra mínimo e máximo
+só dos quatro tipos exatos.
 
 ## Exportação para Parquet
 

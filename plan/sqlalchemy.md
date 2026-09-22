@@ -1196,17 +1196,18 @@ O pipeline compila hoje cada statement Core pelo dialeto a cada execução. A bi
 o texto SQL de cada dialeto, e a substituição acontece uma interação com o banco por vez: o texto
 gerado entra no repositório do pipeline, revisado no diff; um teste o compara com uma nova geração
 enquanto o statement Core existir; e a chamada que compilava o statement passa a executar o texto.
-No fim, o SQLAlchemy fica nos modelos e na geração, e `duckdb_engine` e `sqlalchemy-redshift` deixam
-de ser dependências de execução. As primitivas, especificadas na etapa 2 do plano
-([`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)):
+No fim, o SQLAlchemy fica nos modelos e na geração; `duckdb_engine` e `sqlalchemy-redshift`
+continuam dependências de execução da biblioteca, porque os motores compilam por `render` o
+statement Core que recebem (decisão do usuário de 2026-09-21). As primitivas, especificadas na
+etapa 2 do plano ([`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)):
 
 | Primitiva | O que faz |
 | --- | --- |
 | `param(name, type_)` | Parâmetro de execução: `literal_column(":nome")`, que atravessa `literal_binds` e chega ao texto como `:nome`. |
-| `prefixed(statement, metadata, prefix)` | Troca cada tabela do contrato num statement pronto pela cópia com o prefixo do sandbox, por `replacement_traverse`; o sentinela `{prefix}` sai sem aspas com `quoted_name(quote=False)`. |
+| `prefixed(statement, metadata, prefix)` | Troca cada tabela do contrato num statement pronto pela cópia com o prefixo do sandbox, por `replacement_traverse`; todo nome da cópia vai citado, `quoted_name(quote=True)`, com o sentinela `{prefix}` dentro das aspas como no DDL (decisão do usuário de 2026-09-21). |
 | `render(statement, dialect, metadata, prefix)` | Texto do dialeto com as constantes embutidas e os parâmetros como `:nome`; um `bindparam` sem valor é erro. |
 | `write_sql_files(statements, metadata, directory)` | `sql/<nome>.duckdb.sql` e `sql/<nome>.redshift.sql`, comparados por teste como os arquivos de esquema. |
-| `execute(sql, params)` nos motores | Substitui `{prefix}`, adapta `:nome` (`$nome` no DuckDB, `paramstyle = "named"` no `redshift_connector`) e executa. |
+| `read_sql(directory, name, dialect, prefix)` e `bind(sql, params, style)` | O texto versionado com o sentinela trocado pelo `prefix` informado, obrigatório (decisão do usuário de 2026-09-21), e os marcadores `:nome` reescritos para o motor (`$nome` no DuckDB, `paramstyle = "named"` no `redshift_connector`), com toda região citada intacta; o `execute` dos motores roda o texto pronto. |
 
 Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 com SQLAlchemy
 2.0.54, duckdb_engine 0.17.0, sqlalchemy-redshift 1.0.0 e DuckDB 1.5.5:
@@ -1217,7 +1218,9 @@ Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 
   como comando com parâmetros do DBAPI e errado como SQL. `Dialect(paramstyle="named")` desliga a
   dobra nos dois dialetos.
 - `bindparam("mes")` sem valor e `text("mes = :mes")` não falham sob `literal_binds`: viram
-  `mes = NULL`, com um `SAWarning`. `render` transforma o aviso em erro.
+  `mes = NULL`, com um `SAWarning`. `render` lê `compiled.binds` na compilação sem `literal_binds` e
+  recusa o `bindparam` com `required=True`, sem tocar no filtro de avisos do processo
+  (2026-09-21, [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).
 - Um nome de tabela com `{` é citado, `"{prefix}cad_operacoes"`; `quoted_name(..., quote=False)` o
   deixa sem aspas nos dois dialetos.
 - Um esquema `banco.esquema`, o nome em três partes do datashare do ambiente alvo, cai na mesma
@@ -1228,6 +1231,9 @@ Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 
   2026-09-20 com o dialeto do Redshift, `test_sqlalchemy.py::test_three_part_name_needs_quoted_name_without_quotes`).
   O dialeto do SQL Server quebra um esquema com ponto em partes; o do Redshift, derivado do
   PostgreSQL, não.
+
+O bloco abaixo é o ensaio de 2026-09-19, com a cópia `quote=False` e o `SAWarning` transformado em
+erro; a forma atual das primitivas está em [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md).
 
 ```python
 """Renderiza um select do Core como texto de cada dialeto: constantes embutidas, mês como parâmetro, prefixo do sandbox como sentinela; executa o texto no DuckDB."""

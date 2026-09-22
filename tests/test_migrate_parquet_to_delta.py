@@ -8,8 +8,8 @@ retomada depois de uma interrupção e o filtro de partições; os dois modos co
 relatório e os tipos
 do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem commit (valor da
 coluna de origem fora do caminho, nulo em coluna ``NOT NULL``, texto acima de ``String(n)``), nos
-dois modos; o relatório que acusa uma linha apagada; e a linha de comando sobre a base inteira,
-duas vezes. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+dois modos; as estatísticas registradas, de inteiro, data, ``Double`` e texto; o relatório que
+acusa uma linha apagada; e a linha de comando sobre a base inteira, duas vezes. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
@@ -25,6 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 from deltalake import DeltaTable
@@ -289,6 +290,52 @@ def test_rows_are_written_in_sort_key_order(
         [pq.read_table(chunk, columns=key) for chunk in chunks]
     ).to_pylist()
     assert [tuple(row[name] for name in key) for row in original] != keys
+
+
+def test_registered_stats_carry_the_four_exact_types(
+    base: source.SourceBase, origin: migrate.Location, con, root: migrate.Location
+) -> None:
+    """A ação registrada leva mínimo e máximo de inteiro, data, ``Double`` e texto, e deixa o
+    ``timestamp`` de fora; os valores batem com os do arquivo."""
+    # decimal e timestamp ficam sem extremos: o log os guarda como número JSON, e um máximo abaixo
+    # do valor real poda o arquivo que tem a linha (plan/POC.md, 2026-09-22).
+    assert migrate.stat_converter(pa.decimal128(18, 2)) is None
+    assert migrate.stat_converter(pa.timestamp("us")) is None
+
+    table = TABLES["cad_lancamentos"]
+    migrate.initial_load(con, table, origin, root, settings(partitions=("2026-01-31",)))
+
+    uri = root.child("cad_lancamentos").uri
+    log = Path(uri, "_delta_log", "00000000000000000001.json").read_text()
+    actions = [json.loads(line) for line in log.splitlines()]
+    (add,) = [action["add"] for action in actions if "add" in action]
+    stats = json.loads(add["stats"])
+    partition_by = schema.table_options(table).partition_by
+
+    # As colunas com extremos saem do contrato: as que stat_converter transcreve, menos a de
+    # partição, que no Delta fica só no caminho.
+    expected = {
+        field.name
+        for field in schema.arrow_schema(table)
+        if migrate.stat_converter(field.type) is not None and field.name != partition_by
+    }
+    # Uma coluna só de nulos não tem mínimo nem máximo no RETURN_STATS, e fica de fora dos dois.
+    all_null = {name for name, nulls in stats["nullCount"].items() if nulls == stats["numRecords"]}
+    assert all_null == {"meta"}
+    assert set(stats["minValues"]) == expected - all_null
+    assert stats["minValues"].keys() == stats["maxValues"].keys()
+    assert "timestamp" in stats["nullCount"] and "timestamp" not in stats["minValues"]
+    assert stats["numRecords"] == base.partition_rows["cad_lancamentos"]["2026-01-31"]
+
+    # Os extremos registrados são os do arquivo, no tipo que o log guarda.
+    (written,) = DeltaTable(uri).file_uris()
+    rows = pq.read_table(written, columns=["id_lancamento", "valor", "data", "area"])
+    assert stats["maxValues"]["id_lancamento"] == pc.max(rows.column("id_lancamento")).as_py()
+    assert stats["minValues"]["valor"] == pc.min(rows.column("valor")).as_py()
+    assert stats["maxValues"]["data"] == str(pc.max(rows.column("data")).as_py())
+    assert stats["maxValues"]["area"] == pc.max(rows.column("area")).as_py()
+    assert isinstance(stats["maxValues"]["valor"], float)
+    assert isinstance(stats["maxValues"]["id_lancamento"], int)
 
 
 def off_the_path(chunk: pa.Table) -> pa.Table:

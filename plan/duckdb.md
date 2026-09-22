@@ -674,7 +674,11 @@ COPY (
 - `OVERWRITE_OR_IGNORE`, `OVERWRITE` e `APPEND` controlam a escrita sobre pastas existentes;
   `FILENAME_PATTERN '{uuid}'` evita colisões de nome.
 - `RETURN_STATS` devolve, por arquivo, contagem de linhas, tamanho e estatísticas por coluna, base
-  para a conferência antes da publicação.
+  para a conferência antes da publicação. Os valores saem como texto, com as chaves
+  `column_size_bytes`, `min`, `max`, `null_count` e `num_values`, e `has_nan` numa coluna de ponto
+  flutuante que tenha um: um `DOUBLE` faz o percurso de ida e volta por `float`, um `VARCHAR` sai
+  inteiro, sem truncar, e uma coluna só de nulos não traz `min` nem `max` (2026-09-22,
+  [`POC.md`](POC.md)).
 - `WRITE_BLOOM_FILTER` (padrão verdadeiro) grava filtros Bloom para colunas codificadas por
   dicionário; `PARQUET_VERSION V2` habilita as codificações mais novas.
 - O escritor da versão 1.5.5 declara todas as colunas como `optional`, mesmo `NOT NULL`, grava
@@ -756,6 +760,11 @@ con.sql("SELECT name, value FROM duckdb_settings() WHERE name IN "
 con.execute("SET threads = 2; SET memory_limit = '4GB'")     # ajuste em tempo de execução
 con.sql("SELECT current_setting('threads'), current_setting('memory_limit')").fetchone()   # (2, '3.7 GiB')
 ```
+
+O `memory_limit` só aceita valor com unidade: `'60%'` e `'60'` são recusados com `Parser Error:
+Unknown unit for memory` (DuckDB 1.5.5, 2026-09-22), e quem quer uma fração da máquina a calcula
+antes. O padrão é 80% da memória que o DuckDB detecta: 14,3 GiB numa máquina que o `os.sysconf` do
+Python lê como 18,0 GiB, e 6,1 GiB dos 7,6 GiB do ambiente alvo.
 
 Sem `temp_directory`, um banco em arquivo transborda para `<arquivo>.tmp` ao lado dele e um banco em
 memória para `.tmp` no diretório corrente; `max_temp_directory_size` limita o transbordo a 90 % do

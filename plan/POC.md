@@ -19,7 +19,8 @@ mesma região, com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1 (a suíte
 - O delta-rs encontra as credenciais do contêiner do projeto pela cadeia padrão. Uma falha 403 na
   chamada de credenciais, no início da verificação, foi contornada com `NO_PROXY` em maiúsculas; a
   causa ficou isolada em 2026-09-20 (abaixo). As credenciais do `boto3` em `storage_options`
-  funcionam e ficam como reserva. O DuckDB (`credential_chain`) e o `boto3` nunca falharam.
+  funcionam, e a decisão do usuário de 2026-09-22 deixou a biblioteca só com a cadeia padrão. O
+  DuckDB (`credential_chain`) e o `boto3` nunca falharam.
 - `write_deltalake` (`overwrite` particionado e `append` por commit condicional), `DeltaTable`,
   `vacuum` e `delta_scan` no bucket, com a criptografia SSE-KMS padrão do bucket aplicada sem opção
   alguma. O DuckDB lê `BIGINT`, `INTEGER`, `DECIMAL(18,2)`, `TIMESTAMP` (de `timestamp_ntz`) e
@@ -92,9 +93,10 @@ Athena três workgroups, e o Lake Formation e o S3 Tables negam: o gatilho de re
 
 Consequências no plano: a biblioteca exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula
 está ausente ou vazia, e não depende de
-listar buckets nem de ler o versionamento; `storage_options()` resolve as credenciais de novo a cada
-chamada, porque uma emissão dura uma hora e a reserva com credenciais fixas expiraria numa execução
-longa ([etapa 3](PLAN-STAGE-3.md)); o motor DuckDB fixa `temp_directory` numa pasta com espaço
+listar buckets nem de ler o versionamento; `storage_options()` é resolvido de novo a cada chamada e
+não leva credencial alguma, porque uma emissão dura uma hora e um trio congelado expiraria numa
+execução longa, enquanto a cadeia padrão renova o `DeltaTable` que a execução segura
+([etapa 3](PLAN-STAGE-3.md)); o motor DuckDB fixa `temp_directory` numa pasta com espaço
 conferido, porque o padrão é relativo à pasta corrente ([etapa 4](PLAN-STAGE-4.md)); a
 [etapa 5](PLAN-STAGE-5.md) nasceu conectando por senha, porque a autenticação por IAM e a Data API
 dependem das APIs do Redshift, sem endpoint VPC no laboratório (`RS-14`) — decisão revista em
@@ -712,11 +714,12 @@ Consequências no plano, nesta mesma unidade de trabalho:
   NOT EXISTS` da tabela de controle), nunca por `current_database()`; `RS-19` passou a resolver uma
   tabela listada por `svv_all_tables` e a registrar `current_database()` como leitura, e
   `tests/proof_of_concept/test_redshift.py` deixou de exigir o banco do datashare nessa função.
-- A [etapa 4](PLAN-STAGE-4.md) nasce com o banco DuckDB em arquivo, `memory_limit` explícito abaixo
-  dos 6,1 GiB que o DuckDB tomaria e `temp_directory` conferido: 7,6 GiB e 29,8 GiB livres não cabem
-  uma tabela materializada de doze partições de `cad_lancamentos` em memória, e cabem em disco. O
-  `export_mode="register"` fica reforçado como caminho das partições grandes
-  ([etapa 7](PLAN-STAGE-7.md)).
+- A [etapa 4](PLAN-STAGE-4.md) nasce com o banco DuckDB em arquivo e `temp_directory` conferido:
+  7,6 GiB e 29,8 GiB livres não cabem uma tabela materializada de doze partições de
+  `cad_lancamentos` em memória, e cabem em disco. É o banco em arquivo que tira a tabela
+  materializada da memória; o `memory_limit` ficou no padrão do DuckDB por decisão do usuário de
+  2026-09-22, e o motor registra no log o valor que o DuckDB escolheu. O `export_mode="register"`
+  fica reforçado como caminho das partições grandes ([etapa 7](PLAN-STAGE-7.md)).
 - [`PLAN.md`](PLAN.md) ganhou a regra do ambiente alvo: a biblioteca não chama o IAM nem o KMS, a
   permissão sobre a raiz é provada pela primeira escrita, e a criptografia SSE-KMS é aplicada pelo S3.
 - Os probes deixaram de chamar o IAM e o KMS sem antes testar o endereço. O `connect_timeout` do
@@ -1290,3 +1293,81 @@ versões instaladas; o probe passou a ler as dependências de execução junto c
 
 As suítes depois da etapa: sem variável, 174 passam e 82 são pulados; com a raiz local, 233 passam
 e 23 são pulados (macOS, 2026-09-22); `tests/test_sql.py` tem 15 casos, um deles `local`.
+
+## O que o probe das decisões da etapa 4 mostrou
+
+Em 2026-09-22, no macOS arm64 com DuckDB 1.5.5 e PyArrow 25.0.1, dois probes leram o que o rascunho
+da [etapa 4](PLAN-STAGE-4.md) supunha sobre o `loader` e sobre o `memory_limit`, antes das decisões
+do usuário do mesmo dia.
+
+**O `memory_limit` não aceita porcentagem.** `SET memory_limit = '60%'` e `SET memory_limit = '60'`
+são recusados com `Parser Error: Unknown unit for memory: '%' (expected: KB, MB, GB, TB for 1000^i
+units or KiB, MiB, GiB, TiB for 1024^i units)`; `'4.5GiB'` passa. O padrão da máquina foi
+`14.3 GiB`, e `os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')` leu 18,0 GiB, cujos 80% são
+14,4 GiB: as duas leituras concordam dentro do arredondamento do texto que o DuckDB mostra, como
+concordam no ambiente alvo (7,6 e 6,1 GiB). Uma fração da máquina, portanto, é conta do Python, não
+do DuckDB. O usuário decidiu no mesmo dia deixar o `memory_limit` no padrão do DuckDB e registrar no
+log o valor que ele escolheu.
+
+**O `CREATE TABLE IF NOT EXISTS` não guarda o nome do sandbox.** Sobre uma view, ele passa e não
+cria nada, e o `INSERT ... BY NAME` seguinte morre com `CatalogException: Catalog Error: destino is
+not an table`. Sobre uma tabela de outro formato, ele também passa: a tabela `(id BIGINT, outra
+VARCHAR)` continuou com as suas colunas, e o `INSERT ... BY NAME` de um lote `(id, valor)` deu
+`BinderException: Binder Error: Table "destino" does not have a column with name "valor"`. No caminho
+oposto, uma tabela com uma coluna a mais aceitou o lote e preencheu a coluna que sobra com nulo, sem
+dizer nada. A tabela que o `ingest` materializa por `CREATE TABLE AS SELECT` não tem o `NOT NULL` do
+contrato — `is_nullable` verdadeiro em todas as colunas —, então um `loader` que acrescentasse nela
+deixaria entrar o nulo que o DDL do contrato recusa, e só a auditoria o pegaria. O usuário decidiu
+que o `loader` recusa o nome ocupado com `SandboxError`, e a recusa trouxe `published(table)`, por
+onde o pipeline lê as partições publicadas da tabela cujo nome no sandbox pertence ao `loader`.
+
+**Um lote registrado ocupa um nome de view.** `con.register("lote", ...)` aparece em
+`duckdb_views()` ao lado das views do `ingest`, e `information_schema.tables` classifica os dois
+como `VIEW`, contra `BASE TABLE` das tabelas. A guarda do `loader` lê daí o que existe, e o nome com
+que o `loader` registra cada lote não pode ser o de uma tabela do modelo.
+
+## O que as sondagens das decisões da etapa 3 mostraram
+
+Quatro sondagens no macOS em 2026-09-22 (deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1) mediram o
+que as decisões da [etapa 3](PLAN-STAGE-3.md) esperavam, e
+`tests/proof_of_concept/test_deltalake.py` guarda as duas primeiras como asserções
+(`test_description_and_comments_survive_overwrite`, `test_written_stats_lose_the_row_on_decimal`).
+
+**A descrição, o nome e os comentários de coluna atravessam o `overwrite`.** Uma tabela criada com
+`description="Operações por data-base"`, `name="cad_operacoes"` e comentário em cada campo manteve
+os três depois de um `write_deltalake(mode="overwrite")` com predicado e de outro sem predicado. O
+`publish_partition` da etapa 3 não apaga a documentação, e a pergunta de a guardar ou não no Delta
+passou a ser só de sincronizar com o modelo. `alter.set_table_description` e
+`alter.set_column_metadata` mudam cada um, e o commit resultante traz só `commitInfo` e `metaData`,
+sem tocar nos dados. Consequência: `create_table` passa o comentário da tabela em `description` e
+`reconcile` sincroniza a descrição e os comentários (decisão do usuário do mesmo dia).
+
+**O próprio delta-rs perde a linha na estatística de `decimal`.** Uma tabela com
+`decimal(18, 2)` valendo `123456789012345.21` saiu com `"valor": 123456789012345.2` em
+`maxValues`, porque o escritor grava mínimo e máximo como número JSON, e o dobro não representa 18
+dígitos significativos. `WHERE valor = 123456789012345.21` devolveu **zero linhas** no delta-rs
+(`to_pyarrow_dataset`) e no `delta_scan` do DuckDB, com a linha dentro do arquivo: os dois podam
+pelo máximo abaixo do valor real. O `timestamp[us]` sai truncado em milissegundos
+(`2026-08-31 23:59:59.999999` vira `"2026-08-31 23:59:59.999"`), e mesmo assim os dois leitores
+acharam a linha. `float64` e `string` transcrevem exato, inclusive `0.30000000000000004`,
+`1e+308` e um texto de 41 caracteres, e `NaN` fica fora de `minValues` e `maxValues`. Consequência:
+`register_files` registra mínimo e máximo das colunas inteiras, de data, `Double` e `String`, e
+deixa `decimal` e `timestamp` de fora (decisão do usuário do mesmo dia). O defeito é do escritor,
+não do registro: uma coluna `Numeric` larga gravada por `publish_partition` carrega a mesma poda, e
+o modelo cliente não tem nenhuma, porque as colunas numéricas são `Double` (decisão de 2026-09-20).
+
+**O que o `RETURN_STATS` do DuckDB devolve por tipo.** Uma sondagem no macOS em 2026-09-22 (DuckDB
+1.5.5) gravou uma tabela com `BIGINT`, `DATE`, `DOUBLE` e `VARCHAR` por `COPY ... (FORMAT parquet,
+RETURN_STATS)` e leu `column_statistics`: os valores saem como texto, com as chaves
+`column_size_bytes`, `min`, `max`, `null_count` e `num_values`, e o nome da coluna vem entre aspas.
+O `DOUBLE` faz o percurso de ida e volta por `float` (`-1e+308` e `1234567890.1234567`, o valor
+exato do dobro), e a coluna com `NaN` ganha `has_nan: "true"` com mínimo e máximo dos demais
+valores. O `VARCHAR` sai inteiro, sem truncar: um texto de 200 caracteres apareceu por completo em
+`max`. Uma coluna só de nulos não traz `min` nem `max`. Um `NaN` registrado com mínimo e máximo dos
+outros valores não atrapalha a poda: `isnan(taxa)` achou a linha no delta-rs e no `delta_scan`, que
+divergem só em `taxa > 2` (o DuckDB conta o `NaN`, o Arrow não). Consequência: `delta_stats` de
+`scripts/migrate_parquet_to_delta.py` passou a registrar mínimo e máximo de inteiro, data, `Double`
+e texto, pela decisão da [etapa 3](PLAN-STAGE-3.md) do mesmo dia, com `stat_converter` escolhendo a
+conversão e `tests/test_migrate_parquet_to_delta.py::test_registered_stats_carry_the_four_exact_types`
+conferindo os valores contra o arquivo; a coluna `meta` de `cad_lancamentos`, sempre nula na base de
+origem, fica sem extremos.

@@ -15,7 +15,8 @@ modelo, as sem partição primeiro e as particionadas depois, na ordem do modelo
   igual ao valor do caminho em toda linha, que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum
   texto passa do ``String(n)`` em bytes, e grava a partição no modo pedido: ``register`` roda
   ``COPY ... TO`` na pasta da tabela com ``RETURN_STATS`` e registra o arquivo no log por
-  ``create_write_transaction``; ``rewrite`` passa o leitor da consulta por ``cast`` e
+  ``create_write_transaction``, com o ``nullCount`` de toda coluna e o mínimo e o máximo das
+  inteiras, de data, ``Double`` e texto; ``rewrite`` passa o leitor da consulta por ``cast`` e
   ``write_deltalake``. Nos dois modos as linhas saem na ordem da ``sort_key`` do modelo, salvo
   ``--no-sort``;
 - a retomada pula as partições já no log: a segunda execução não grava nada;
@@ -64,6 +65,7 @@ import resource
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 
@@ -336,21 +338,41 @@ def loaded_partitions(delta: DeltaTable, options: schema.TableOptions) -> set[st
     return set(actions.column(f"partition.{options.partition_by}").to_pylist())
 
 
+def stat_converter(field_type: pa.DataType) -> Callable[[str], object] | None:
+    """A conversão do texto do ``RETURN_STATS`` para o valor que o log guarda, ou ``None`` quando o
+    tipo fica sem mínimo e máximo.
+
+    Inteiro, data, ``Double`` e texto transcrevem exato, e são os tipos que a etapa 3 registra
+    (decisão do usuário de 2026-09-22). ``decimal`` e ``timestamp`` ficam de fora: o log guarda o
+    mínimo e o máximo como número JSON, e um máximo abaixo do valor real poda o arquivo que tem a
+    linha, sem erro, nos dois leitores (``plan/POC.md``).
+
+    Exemplo:
+
+        stat_converter(pa.int64())("42")     # 42
+        stat_converter(pa.decimal128(18, 2)) # None
+    """
+    if pa.types.is_integer(field_type):
+        return int
+    if pa.types.is_floating(field_type):
+        return float
+    if pa.types.is_date(field_type) or pa.types.is_string(field_type):
+        return str
+    return None
+
+
 def delta_stats(count: int, stats: dict[str, dict[str, str]], table: sa.Table) -> str:
-    """O JSON de estatísticas da ação: ``numRecords``, ``nullCount`` de toda coluna e mínimo e
-    máximo dos inteiros e das datas, tipados a partir do texto do ``RETURN_STATS``."""
+    """O JSON de estatísticas da ação: ``numRecords``, ``nullCount`` de toda coluna e o mínimo e o
+    máximo dos tipos que ``stat_converter`` transcreve, a partir do texto do ``RETURN_STATS``."""
     typed: dict[str, dict[str, object]] = {"minValues": {}, "maxValues": {}, "nullCount": {}}
     for field in schema.arrow_schema(table):
         column = stats.get(field.name)
         if column is None:
             continue
         typed["nullCount"][field.name] = int(column["null_count"])
-        # Mínimo e máximo só dos inteiros e das datas, os tipos que a etapa 3 transcreve
-        # com teste.
-        with_extremes = pa.types.is_integer(field.type) or pa.types.is_date(field.type)
-        if "min" not in column or not with_extremes:
+        convert = stat_converter(field.type)
+        if convert is None or "min" not in column:
             continue
-        convert = int if pa.types.is_integer(field.type) else str
         typed["minValues"][field.name] = convert(column["min"])
         typed["maxValues"][field.name] = convert(column["max"])
     return json.dumps({"numRecords": count, **typed})

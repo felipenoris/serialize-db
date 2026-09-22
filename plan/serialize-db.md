@@ -78,8 +78,9 @@ rodapé Parquet `serialize_db_version` e `serialize_db_execution_id`, e a tabela
 já é o espaço de nomes. O que vive em `_serialize_db/` dispensa o prefixo, como a chave `snapshots`
 de `snapshots.json`. As tabelas e colunas do banco de dados continuam em português.
 
-O log de cada tabela guarda tudo o que é da tabela: os arquivos de cada versão, o esquema de cada
-versão com os comentários de coluna, as estatísticas por arquivo e os metadados que a biblioteca
+O log de cada tabela guarda tudo o que é da tabela: os arquivos de cada versão, o nome e o
+comentário da tabela na `description` da ação `metaData`, o esquema de cada versão com os
+comentários de coluna, as estatísticas por arquivo e os metadados que a biblioteca
 grava em cada commit (`serialize_db_execution_id`, `serialize_db_input_versions` e, quando houver,
 `serialize_db_snapshot`). O modelo SQLAlchemy dá o DDL e os tipos do contrato atual, e a
 reconciliação descrita em [`delta.md`](delta.md), seção "Evolução de esquema", garante que ele e o
@@ -157,7 +158,8 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
    materializa as tabelas consultadas muitas vezes com as partições pedidas.
 3. O pipeline roda em `run.sandbox`; o que sai para o Python sai em lotes por `stream`, ou como
    `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; os intermediários ficam no
-   sandbox, não no Delta.
+   sandbox, não no Delta. O nome de uma tabela no sandbox é do `ingest` ou do `loader`, nunca dos
+   dois: a tabela que a execução grava é lida na versão publicada por `run.published(table)`.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
 5. `run.publish` reconcilia o esquema, substitui cada partição num commit (`export_mode`: `register`
    registra o arquivo do `COPY ... (RETURN_STATS)` depois das conferências da
@@ -281,12 +283,15 @@ Para publicar no Hive ou para sair do Delta.
    `sql/total_por_cliente.duckdb.sql` e `.redshift.sql`, com as constantes embutidas, `:mes` e o
    sentinela `{prefix}`; os arquivos entram no repositório do pipeline e no diff da revisão.
 3. A chamada troca `run.sandbox.query(statement)` por `run.sandbox.execute(sql, {"mes": run.partition})`,
-   com o texto lido do arquivo; o motor substitui o prefixo e adapta os parâmetros.
+   com o texto lido por `read_sql(..., prefix=...)`, que troca o sentinela pelo prefixo informado,
+   obrigatório (decisão do usuário de 2026-09-21), e `bind` adapta os marcadores ao motor.
 4. Enquanto o statement Core existir, o teste que regenera os arquivos e os compara com os
    versionados acusa uma mudança de modelo. Quando o statement sair, o texto é a fonte, mantido à
    mão e validado por `qualify` do SQLGlot contra o contrato.
-5. Com toda interação em texto, o pipeline importa o SQLAlchemy só para os modelos, e
-   `duckdb_engine` e `sqlalchemy-redshift` saem das dependências de execução; consulta nova nasce
+5. Com toda interação em texto, o pipeline importa o SQLAlchemy só para os modelos;
+   `duckdb_engine` e `sqlalchemy-redshift` continuam dependências de execução da biblioteca, porque
+   os motores compilam por `render` o statement Core que recebem (decisão do usuário de
+   2026-09-21); consulta nova nasce
    em texto, no dialeto do DuckDB, com os testes nos dois motores ([`estrategia.md`](estrategia.md)).
 
 ## Paralelismo

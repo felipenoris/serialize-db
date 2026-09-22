@@ -10,12 +10,14 @@ particionado registrada num commit com estatísticas, a diferença de versões, 
 checkpoint, a exportação por cópia dos arquivos e a carga inicial de pastas Parquet; e ainda
 ``is_deltatable`` e ``drop_column_not_null``, o que ``create_write_transaction`` não confere
 (caminho, estatística, esquema do arquivo), o ``overwrite`` com ``partition_filters`` e a
-compactação que normaliza arquivos de outro escritor. Os comportamentos estão descritos em
-``plan/delta.md``; aqui eles viram asserções.
+compactação que normaliza arquivos de outro escritor, a descrição e os comentários que atravessam o
+``overwrite`` e mudam por ``alter``, e o mínimo e o máximo que o próprio delta-rs grava por tipo. Os
+comportamentos estão descritos em ``plan/delta.md``; aqui eles viram asserções.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import decimal
 import json
 import re
@@ -636,3 +638,81 @@ def test_compact_rewrites_files_from_another_writer(folder: Callable[[str], str]
     assert all(statistics.values()), statistics
     assert compacted.column("max.data_ref").to_pylist()[0] is not None
     assert DeltaTable(uri).to_pyarrow_table().num_rows == 510
+
+
+def test_description_and_comments_survive_overwrite(folder: Callable[[str], str]) -> None:
+    """A descrição, o nome e os comentários de coluna atravessam o ``overwrite`` e mudam por ``alter``."""
+    uri = folder("description")
+    schema = pa.schema(
+        [
+            pa.field("id_operacao", pa.int64(), nullable=False, metadata={"comment": "Identificador"}),
+            pa.field("mes", pa.string(), nullable=False, metadata={"comment": "Partição"}),
+        ]
+    )
+    DeltaTable.create(uri, schema, mode="ignore", partition_by=["mes"], name="cad_operacoes", description="Operações por data-base")
+
+    def comments(table: DeltaTable) -> dict[str, str | None]:
+        """O comentário de cada campo, como o esquema Delta o guarda."""
+        return {field["name"]: field.get("metadata", {}).get("comment") for field in json.loads(table.schema().to_json())["fields"]}
+
+    # O lote gravado não traz metadados de campo, e o overwrite com e sem predicado não apaga os da tabela.
+    data = pa.table({"id_operacao": pa.array([1], pa.int64()), "mes": pa.array([MONTHS[0]])})
+    write_deltalake(uri, data, mode="overwrite", predicate=f"mes = '{MONTHS[0]}'")
+    write_deltalake(uri, data, mode="overwrite")
+    table = DeltaTable(uri)
+    assert table.metadata().description == "Operações por data-base" and table.metadata().name == "cad_operacoes"
+    assert comments(table) == {"id_operacao": "Identificador", "mes": "Partição"}
+
+    # A sincronização com o modelo: cada alteração é um commit só de metaData, sem tocar nos dados.
+    table.alter.set_table_description("Operações de crédito por data-base")
+    table.alter.set_column_metadata("id_operacao", {"comment": "Identificador da operação"})
+    table = DeltaTable(uri)
+    assert table.metadata().description == "Operações de crédito por data-base"
+    assert comments(table) == {"id_operacao": "Identificador da operação", "mes": "Partição"}
+    actions = {key for line in Path(uri, "_delta_log", f"{table.version():020d}.json").read_text().splitlines() for key in json.loads(line)}
+    assert actions == {"commitInfo", "metaData"}
+    assert table.to_pyarrow_table().num_rows == 1
+
+
+def test_written_stats_lose_the_row_on_decimal(folder: Callable[[str], str]) -> None:
+    """O próprio delta-rs grava o mínimo e o máximo de ``decimal`` como float JSON, e a poda perde a linha."""
+    uri = folder("stats_types")
+    top = decimal.Decimal("123456789012345.21")
+    assert decimal.Decimal(repr(float(top))) < top, "o valor escolhido tem de arredondar para baixo"
+    top_time = dt.datetime(2026, 8, 31, 23, 59, 59, 999999)
+    schema = pa.schema(
+        [
+            pa.field("valor", pa.decimal128(18, 2), nullable=False),
+            pa.field("carimbo", pa.timestamp("us"), nullable=False),
+            pa.field("taxa", pa.float64(), nullable=False),
+            pa.field("descricao", pa.string(), nullable=False),
+        ]
+    )
+    data = pa.table(
+        {
+            "valor": pa.array([decimal.Decimal("0.01"), top], pa.decimal128(18, 2)),
+            "carimbo": pa.array([dt.datetime(2026, 7, 1), top_time], pa.timestamp("us")),
+            "taxa": pa.array([0.1 + 0.2, 1234567890.123456789], pa.float64()),
+            "descricao": pa.array(["a", "z" * 40]),
+        },
+        schema=schema,
+    )
+    write_deltalake(uri, data)
+
+    # O log guarda o decimal como número JSON e o timestamp truncado em milissegundos; o double e o texto saem exatos.
+    add = [json.loads(line)["add"] for line in Path(uri, "_delta_log", "00000000000000000000.json").read_text().splitlines() if "add" in json.loads(line)][0]
+    stats = json.loads(add["stats"])
+    assert decimal.Decimal(repr(stats["maxValues"]["valor"])) < top, "o máximo registrado fica abaixo do valor real"
+    assert stats["maxValues"]["carimbo"] == "2026-08-31 23:59:59.999"
+    assert stats["maxValues"]["taxa"] == 1234567890.123456789 and stats["maxValues"]["descricao"] == "z" * 40
+
+    # O máximo abaixo do valor real poda o arquivo que tem a linha, sem erro, nos dois leitores.
+    dataset = DeltaTable(uri).to_pyarrow_dataset()
+    assert dataset.count_rows(filter=pc.field("valor") == top) == 0
+    connection = connect_duckdb(["delta"])
+    assert connection.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor = {top}").fetchone() == (0,)
+
+    # O timestamp truncado e os tipos exatos continuam achando a linha.
+    assert dataset.count_rows(filter=pc.field("carimbo") == top_time) == 1
+    assert dataset.count_rows(filter=pc.field("taxa") == 1234567890.123456789) == 1
+    assert dataset.count_rows(filter=pc.field("descricao") == "z" * 40) == 1

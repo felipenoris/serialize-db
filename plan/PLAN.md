@@ -133,7 +133,10 @@ devolve a `pa.Table`, `to_pandas(types_mapper=pd.ArrowDtype)` a leva ao pandas, 
 `load(Modelo, pa.Table.from_pandas(frame, preserve_index=False))` grava. O caminho de um resultado
 até o Delta é `loader` ou `load`, `audit` e `publish`. Nenhuma primitiva pública recebe ou devolve
 um DataFrame, uma lista de linhas ou uma instância ORM; a mensagem que recusa um DataFrame aponta
-`pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. Dentro da biblioteca, o que não cabe na
+`pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. O nome de cada tabela no sandbox é de um
+só dono: `loader` recusa com `SandboxError` um nome que o `ingest` ou outro `loader` já ocupou, e a
+tabela que a execução grava é lida na versão publicada por `run.published(Modelo)`, que não cria
+objeto no sandbox (decisões do usuário de 2026-09-22). Dentro da biblioteca, o que não cabe na
 memória corre por `RecordBatchReader` (`export_partition` e a carga inicial em
 `export_mode="rewrite"`, para `publish_partition`), cada um no seu cursor; o registro em `register`
 e a `rewrite` da tabela vão pelo `COPY ... (RETURN_STATS)` do DuckDB, sem passar pelo Python. O exemplo de uso, `stream` e `loader` dentro de uma
@@ -305,7 +308,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   uma sondagem de 2026-09-19 com `interval 0 days`, seis commits e um checkpoint manteve a versão 0
   legível, então a limpeza não vira asserção); a tabela nasce com `interval 3650 days`,
   `delta.deletedFileRetentionDuration` fica em `interval 400 days`, e `keep_versions` protege os
-  snapshots do banco.
+  snapshots do banco. Com essa retenção, um arquivo de log ausente significa tabela fora do estado
+  que `create_table` cria, e `version_diff` recusa com `LogUnavailable` em vez de adivinhar as
+  partições alteradas (decisão do usuário de 2026-09-22).
 - Dois `overwrite` da mesma partição conflitam (`CommitFailedError`); partições diferentes e
   `append` entram. Uma execução por ambiente por vez, e o conflito é o sinal de que houve duas; a ação `txn`
   não impede repetição, e a idempotência é do `overwrite` por partição (`delta.md`).
@@ -319,6 +324,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   coluna lógica: o delta-rs grava `DECIMAL(18, 2)` em `INT64` e timestamp em `INT64`, o `UNLOAD`
   grava em `FIXED_LEN_BYTE_ARRAY(8)` e `INT96`. Os leitores leem as duas, e o que se perde é a
   estatística da coluna de timestamp, que o `INT96` não carrega (2026-09-21, `POC.md`).
+- O log guarda `minValues` e `maxValues` como valor JSON, e a transcrição do escritor do delta-rs só
+  é exata em inteiro, data, `Double` e texto: um `decimal(18, 2)` de 18 dígitos significativos vira
+  um dobro, e o máximo abaixo do valor real poda o arquivo que tem a linha, sem erro, nos dois
+  leitores. `register_files` registra mínimo e máximo só desses quatro tipos, e uma coluna `Numeric`
+  larga carrega o defeito também por `publish_partition`; o modelo cliente não tem nenhuma
+  (2026-09-22, `POC.md`, `delta.md`).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
   consultada mais de uma vez é materializada no DuckDB (`delta.md`).
 - Um programa que encerra logo depois de ler uma tabela Delta lê por `to_pyarrow_dataset()`, nunca
@@ -330,9 +341,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   sem `AWS_REGION` nem `AWS_DEFAULT_REGION`, foi a `us-east-1` (2026-09-20); a cadeia de credenciais
   consulta o perfil (`credential_source = EcsContainer`, aviso `aws_config::profile::credentials`)
   mas encontra o contêiner sem ele (`HOME` vazio e `AWS_REGION` bastaram). A região precisa estar
-  em `AWS_REGION` ou `AWS_DEFAULT_REGION`; as credenciais vêm do ambiente, do contêiner, do IMDS ou
-  de `storage_options`. `storage_options` leva `max_retries` e `retry_timeout` para uma rede morta
-  falhar em 10 s em vez de 59 s (`README.md`, `delta.md`).
+  em `AWS_REGION` ou `AWS_DEFAULT_REGION`; as credenciais vêm do ambiente, do contêiner ou do IMDS,
+  pela cadeia padrão, que as renova no `DeltaTable` que a execução segura. `storage_options` leva a
+  região, o endpoint, as chaves de SSE e `max_retries` e `retry_timeout`, para uma rede morta falhar
+  em 10 s em vez de 59 s, e credencial alguma (decisão do usuário de 2026-09-22): um trio congelado
+  expiraria em cerca de uma hora no meio de uma execução longa e circularia num dicionário que um log
+  ou uma exceção imprime (`README.md`, `delta.md`).
 - O cliente HTTP do delta-rs lê `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias e `NO_PROXY` antes de
   `no_proxy`; vazia, `NO_PROXY` anula as exceções e a chamada ao endpoint de credenciais vai pelo
   proxy (403). `prepare_environment` exporta `NO_PROXY` de `no_proxy` quando a maiúscula está
@@ -347,9 +361,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   Formation e o S3 Tables não respondem. A biblioteca não chama o IAM nem o KMS: a criptografia
   SSE-KMS do bucket é aplicada pelo S3, e a permissão sobre a raiz é provada pela primeira escrita,
   não por simulação. A máquina tem 2 vCPUs, 7,6 GiB de memória e 29,8 GiB livres num disco só
-  para `HOME`, `/tmp` e o repositório: o motor DuckDB nasce em arquivo, com `memory_limit`
-  explícito e `temp_directory` conferido, e `export_mode="register"` é o caminho das partições
-  grandes (etapas [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md)).
+  para `HOME`, `/tmp` e o repositório: o motor DuckDB nasce em arquivo, com `temp_directory`
+  conferido e o `memory_limit` que o DuckDB escolhe registrado no log (decisão do usuário de
+  2026-09-22), e `export_mode="register"` é o caminho das partições grandes
+  (etapas [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md)).
 - Um campo JSON é `string` no esquema Arrow do contrato, sem a extensão `arrow.json`, `string` no
   Delta e texto nos arquivos; `JSON` no DuckDB e `SUPER` no Redshift são tipos do motor, aplicados na
   carga; a auditoria confere `json_valid` antes de publicar, porque nem o Arrow nem o Delta validam
@@ -389,7 +404,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 | Módulo | Etapa | Conteúdo |
 | --- | --- | --- |
-| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
+| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `LogUnavailable`, `SandboxError`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
 | `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto gerado pela tabela de tipos com todo identificador entre aspas, opções físicas, cast seguro, arquivos gerados. |
 | `serialize_db.sql` | 2 | O texto SQL por dialeto a partir de statements Core: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos atrás de uma interface: URIs, leitura e escrita condicional, cópia, listagem, `storage_options` e o secret do DuckDB. |
@@ -456,7 +471,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | 1. `schema` | O modelo cliente, a cópia corrigida do modelo de referência; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo cliente. | O DDL de cada tabela executa no DuckDB em memória; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `param`, `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |
-| 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação da partição. | O pipeline de exemplo roda em memória sobre um Delta local; a auditoria reprova a chave repetida entre a partição nova e uma já publicada. |
+| 4. `audit` e motor DuckDB | As verificações do contrato e seu texto por dialeto; conexão, ingestão, consulta, execução de texto, carga, auditoria, exportação da partição. | O pipeline de exemplo roda num banco em arquivo sobre um Delta local; a auditoria reprova a chave repetida entre a partição nova e uma já publicada. |
 | 5. Motor Redshift | O mesmo protocolo com sandbox `exec_<id>_`, `COPY ... MANIFEST` e `UNLOAD`. | SQL gerado coberto por testes sem conexão; integração com amostra, marcador `redshift`. |
 | 6. Execução e linha de comando | `Database`, `Execution`, `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
 | 7. Carga inicial | Migração dos Parquet atuais por tabela e por partição, com relatório; `initial_load` absorve a migração adiantada de `scripts/migrate_parquet_to_delta.py`, que vem logo depois da etapa 1. | Contagens e somas por partição iguais entre origem e Delta. |
