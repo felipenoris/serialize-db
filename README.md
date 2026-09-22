@@ -1,5 +1,5 @@
 [![Testes do pacote](https://github.com/felipenoris/serialize-db/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/felipenoris/serialize-db/actions/workflows/tests.yml)
-[![Documentação do pacote](https://github.com/felipenoris/serialize-db/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/felipenoris/serialize-db/actions/workflows/docs.yml)
+[![Documentação do pacote](https://github.com/felipenoris/serialize-db/actions/workflows/docs.yml/badge.svg?branch=main)](https://felipenoris.github.io/serialize-db/)
 
 # Inicialização
 
