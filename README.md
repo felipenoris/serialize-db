@@ -49,8 +49,10 @@ o Python, como no SageMaker Unified Studio.
 # Documentação
 
 A documentação do pacote é gerada pelo `pdoc` a partir das docstrings e de [`docs/index.md`](docs/index.md),
-a página principal, com o funcionamento geral, o tutorial e a tabela de mapeamento de tipos. Para
-gerar o HTML estático, informe a pasta alvo em `-o`:
+a página principal, com o funcionamento geral, o tutorial e a tabela de mapeamento de tipos. Cada
+exemplo de docstring abre com `.. code-block:: python`, ou `.. code-block:: shell` no da linha de
+comando: o `pdoc` só destaca o código dessa diretiva, e um bloco apenas indentado sai sem destaque.
+Para gerar o HTML estático, informe a pasta alvo em `-o`:
 
 ```
 uv sync --group docs

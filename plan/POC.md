@@ -1062,6 +1062,22 @@ o `__all__`; sem `__all__`, o `pdoc` mostraria todo nome sem prefixo. As página
 `serialize_db.cli` e o `ContractError` de `serialize_db.errors`.
 
 
+## O que o destaque de código do `pdoc` mostrou
+
+A geração de 2026-09-22 com `--docformat restructuredtext`: o bloco indentado depois de `Exemplo:`
+sai como `<pre><code>` sem classe e sem destaque, e o bloco de `.. code-block:: python` sai como
+`<div class="pdoc-code codehilite">` com cada elemento num `<span>`, que a folha de estilo embutida
+na página colore. O literal `::` do reStructuredText não serve: o `pdoc` deixa os dois pontos no
+texto e o bloco continua sem destaque. O `docstrings.py` do `pdoc` 16.0.0 traduz a diretiva numa
+cerca Markdown com a linguagem, e só a cerca com linguagem chega ao Pygments. As páginas tinham 41
+blocos com destaque e 29 sem; depois da mudança, 70 com destaque e nenhum sem.
+
+**Consequência**: cada exemplo das docstrings de `serialize_db.schema`, `serialize_db.sql` e
+`serialize_db.cli` abre com `.. code-block:: python`, o da linha de comando com
+`.. code-block:: shell`, e as três cercas sem linguagem de [`index.md`](../docs/index.md) ganharam
+`shell`.
+
+
 ## O que a pasta preparada mostrou na migração adiantada
 
 Em 2026-09-21, no laboratório (macOS arm64) sobre a pasta preparada por `prepare_offline.sh`
