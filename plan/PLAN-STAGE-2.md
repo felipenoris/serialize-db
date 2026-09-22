@@ -21,8 +21,9 @@ Testes: `tests/test_sql.py`, sem gravar: o statement de `sqlalchemy.md` (parâme
 prefixo) renderizado nos dois dialetos e executado no DuckDB em memória com `$mes`; `bindparam` sem
 valor e parâmetro faltante como erros; o diff de `tests/client_model/sql/`, gerado dos statements do
 pipeline fictício em `tests/client_model/statements.py` (`STATEMENTS`, o dicionário `{nome: statement}`
-que `serialize-db sql` recebe por `--statements`). Opcional: `sqlglot.parse_one(texto,
-dialect)` como teste de que o texto do Redshift analisa. Provas de conceito:
+que `serialize-db sql` recebe por `--statements`). `sqlglot.parse_one(texto, dialect="redshift")` sobre o texto de cada statement com o prefixo vazio,
+como teste de que o texto gerado para o Redshift analisa (decisão do usuário de 2026-09-22;
+`sqlglot==30.18.0` no grupo `dev`, a versão do ensaio de 2026-09-21). Provas de conceito:
 `test_sqlalchemy.py` (`test_generated_sql_text_per_dialect`, `test_redshift_dialect_compiles_dml`) e
 `test_stdlib.py::test_generated_files_diff`.
 
@@ -156,7 +157,7 @@ rascunho.
 | Arquivos gerados | `test_sql_files_match_versioned`, `test_check_sql_files_reports_a_changed_statement` | Diff vazio contra `tests/client_model/sql/`; uma coluna nova no statement aparece no diff. |
 | Prefixo do arquivo | `test_read_sql_fills_the_sentinel` | `read_sql(..., prefix="")` dá `cad_lancamentos` e `prefix="exec_42_"` dá `exec_42_cad_lancamentos`; um `{prefix}` que sobra no texto é `SqlError` no `bind`. |
 | Linha de comando | `test_cli_sql_check_reads_the_versioned_files` | `serialize-db sql check --metadata client_model:Base.metadata --statements client_model.statements:STATEMENTS tests/client_model/sql` sai com 0 sem gravar; um statement mudado sai com 1 e imprime o diff; sem `--statements` sai com 2. |
-| Redshift analisável | `test_redshift_text_parses_with_sqlglot` (opcional) | `sqlglot.parse_one(texto, dialect="redshift")` aceita o texto. |
+| Redshift analisável | `test_redshift_text_parses_with_sqlglot` | `sqlglot.parse_one(texto, dialect="redshift")` aceita o texto do Redshift de cada statement de `STATEMENTS` com o prefixo vazio (o arquivo versionado não analisa, por causa do sentinela) e recusa uma aspa desbalanceada; o teste não diz o que o Redshift suporta nem vê um identificador estragado como `"taxa $base"` (ensaio de 2026-09-21, [`POC.md`](POC.md)). |
 
 ## Rascunhos executados
 
@@ -425,11 +426,7 @@ prefix='exec_42_': FROM "exec_42_cad_lancamentos" JOIN "exec_42_cad_contas" ON "
 
 ## Decisões pendentes
 
-- **[decisão] O `sqlglot` no grupo `dev`** para o teste opcional que analisa o texto do Redshift. O
-  ensaio em venv avulsa que a regra de dependências exige rodou em 2026-09-21 ([`POC.md`](POC.md)):
-  o SQLGlot 30.18.0 é Python puro, 5,4 MB e sem dependências; recusa uma aspa desbalanceada; aceita
-  `t."taxa $base"` e `INSERT ... BY NAME`, que o Redshift não tem; e reprova o arquivo versionado,
-  porque o sentinela `{prefix}` não analisa. O gatilho: enquanto os statements forem portáveis, o
-  texto do Redshift é igual ao do DuckDB, que `test_rendered_text_runs_in_duckdb` executa, e o
-  `sqlglot` entra no primeiro statement cujos dois textos diferem, com `sqlglot==30.18.0` e
-  `prepare_offline.sh` rodado de novo no mesmo commit.
+Nenhuma: as cinco decisões da etapa foram tomadas pelo usuário em 2026-09-21 e 2026-09-22 — as
+regiões citadas em `bind`, o `prefix` obrigatório de `read_sql`, os dialetos de terceiros como
+compiladores de `render`, a cópia prefixada com `quote=True` e o `sqlglot` no grupo `dev` —, e cada
+uma está escrita na seção que a descreve.

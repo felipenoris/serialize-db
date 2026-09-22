@@ -101,7 +101,8 @@ sobre os dois armazenamentos; a ingestão seletiva e o sandbox por execução em
 com auditoria e publicação; a publicação para clientes no Redshift; a carga inicial dos Parquet
 atuais; a operação (snapshots do banco, `vacuum`, compactação, arquivo). Fora da biblioteca ficam o
 ORM para cargas linha a linha, as chaves estrangeiras `DEFERRABLE`, o `Identity`, os manifestos
-próprios e o Alembic; o SQLGlot fica opcional, como teste de compatibilidade.
+próprios e o Alembic; o SQLGlot entra só no grupo `dev`, como teste de que o texto gerado para o
+Redshift analisa (decisão do usuário de 2026-09-22).
 
 ## A troca de dados com o código cliente
 

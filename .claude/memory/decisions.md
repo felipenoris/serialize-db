@@ -254,3 +254,9 @@ every column, so the DML quotes every contract identifier like the DDL of stage 
 `{prefix}` sentinel inside the quotes and no dependence on either dialect's reserved-word list;
 labels and the rest of the statement stay quoted as the dialect requires, because they are the
 client's. The rule of `plan/PLAN.md` stays as written. `plan/PLAN-STAGE-2.md`
+
+On 2026-09-22 the user put `sqlglot` in the tests: `sqlglot==30.18.0` (the version of the scratch
+trial of 2026-09-21) enters the `dev` group, and `test_redshift_text_parses_with_sqlglot` stops
+being optional; it parses the Redshift text of every statement with the prefix empty, since the
+versioned file with the sentinel does not parse. Stage 2 has no decision awaiting the user.
+`plan/PLAN-STAGE-2.md`, `pyproject.toml`

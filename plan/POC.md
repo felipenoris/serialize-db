@@ -1182,8 +1182,9 @@ sentinela, porque o arquivo versionado não analisa. Ele pega string malformada,
 identificador estragado que a decisão das aspas fechou nem construção que o Redshift não suporta, o
 que [`estrategia.md`](estrategia.md) já registrava da avaliação do SQLGlot como camada. Enquanto os
 statements forem portáveis, o texto do Redshift é igual ao do DuckDB, que a suíte executa: a lacuna
-nasce no primeiro statement cujos dois textos diferem, o gatilho da decisão em
-[`PLAN-STAGE-2.md`](PLAN-STAGE-2.md).
+nasce no primeiro statement cujos dois textos diferem. O usuário decidiu em 2026-09-22 incluí-lo
+desde já: `sqlglot==30.18.0` no grupo `dev`, e o teste deixa de ser opcional
+([`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).
 
 ## O que a revisão da etapa 2 mostrou
 

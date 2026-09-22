@@ -30,6 +30,7 @@ dev = [
     "redshift-connector>=2.1",
     "sqlalchemy==2.0.54",
     "sqlalchemy-redshift==1.0.0",
+    "sqlglot==30.18.0",
 ]
 # A documentação do pacote, publicada em HTML estático.
 docs = [

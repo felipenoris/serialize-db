@@ -452,8 +452,9 @@ decisão, com as consequências de cada premissa e as partes da biblioteca, est�
   `insert(...)` executado com listas de linhas sai, porque no Redshift ele vira uma ida ao servidor
   por linha.
 - **SQLGlot puro** no lugar do SQLAlchemy exigiria reescrever as consultas sem ganho de
-  portabilidade, porque os dois exigem os mesmos testes no Redshift; o SQLGlot fica opcional, como
-  teste de compatibilidade.
+  portabilidade, porque os dois exigem os mesmos testes no Redshift; o SQLGlot entra só no grupo
+  `dev`, como teste de que o texto gerado para o Redshift analisa (decisão do usuário de
+  2026-09-22).
 - **SQLMesh e dbt** saem, porque o pipeline é majoritariamente lógica Python e não transformações
   SQL; o SQLMesh ainda assumiria a orquestração, o estado e os nomes das tabelas, que são o sandbox
   da biblioteca.

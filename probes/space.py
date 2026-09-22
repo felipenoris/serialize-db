@@ -57,9 +57,9 @@ from probelib import (  # noqa: E402
     tcp_probe,
 )
 
-# Os pacotes lidos em cada interpretador: os fixados pelo projeto, os que a suíte de estudo usa, os opcionais
-# das etapas seguintes (ADBC para leitura do Redshift, SQLGlot para conferir SQL, pdoc para a documentação) e os
-# que o espaço já traz.
+# Os pacotes lidos em cada interpretador: os fixados pelo projeto (o grupo `dev` de pyproject.toml, com o
+# sqlglot desde 2026-09-22), os que a suíte de estudo usa, os opcionais das etapas seguintes (ADBC para leitura
+# do Redshift, pdoc para a documentação) e os que o espaço já traz.
 PACKAGES = (
     "deltalake", "duckdb", "pyarrow", "boto3", "botocore", "redshift_connector", "sqlalchemy", "duckdb_engine",
     "sqlalchemy_redshift", "pandas", "sqlglot", "adbc_driver_postgresql", "pdoc", "sagemaker_studio", "awswrangler", "pytest",
