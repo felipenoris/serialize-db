@@ -275,5 +275,11 @@ prefix='exec_42_': FROM exec_42_cad_lancamentos JOIN exec_42_cad_contas ON exec_
 
 ## Decisões pendentes
 
-- **[decisão] O `sqlglot` no grupo `dev`** para o teste opcional que analisa o texto do Redshift; ele
-  só entra depois de um ensaio em venv avulsa, pela regra de dependências.
+- **[decisão] O `sqlglot` no grupo `dev`** para o teste opcional que analisa o texto do Redshift. O
+  ensaio em venv avulsa que a regra de dependências exige rodou em 2026-09-21 ([`POC.md`](POC.md)):
+  o SQLGlot 30.18.0 é Python puro, 5,4 MB e sem dependências; recusa uma aspa desbalanceada; aceita
+  `t."taxa $base"` e `INSERT ... BY NAME`, que o Redshift não tem; e reprova o arquivo versionado,
+  porque o sentinela `{prefix}` não analisa. O gatilho: enquanto os statements forem portáveis, o
+  texto do Redshift é igual ao do DuckDB, que `test_rendered_text_runs_in_duckdb` executa, e o
+  `sqlglot` entra no primeiro statement cujos dois textos diferem, com `sqlglot==30.18.0` e
+  `prepare_offline.sh` rodado de novo no mesmo commit.

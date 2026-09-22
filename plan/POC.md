@@ -1159,3 +1159,28 @@ As correções que as duas medições acompanharam estão em
 [`CURRENT_STATE.md`](CURRENT_STATE.md); nenhuma mudou o comportamento observável do pacote, e as
 suítes passaram nas duas configurações: sem variável, 160 passados e 81 pulados; com a raiz local,
 218 passados e 23 pulados.
+
+## O que o ensaio do SQLGlot mostrou
+
+Em 2026-09-21, numa venv avulsa no macOS arm64 (`uv run --no-project --python 3.13 --with sqlglot`),
+o SQLGlot 30.18.0 analisou pelo dialeto `redshift` o texto que a [etapa 2](PLAN-STAGE-2.md) gera. O
+pacote é Python puro: nenhum `.so`, 5,4 MB, nenhuma dependência além dele.
+
+| Texto | `sqlglot.parse_one(texto, dialect="redshift")` |
+| --- | --- |
+| O texto gerado, com o sentinela `{prefix}` | `ParseError` na coluna 26 |
+| O mesmo texto com o prefixo trocado | Aceita |
+| `WHERE data = :data_str` e `WHERE data = $data_str` | Aceita os dois marcadores |
+| `cad_contratos."to"` e `cad_lancamentos."timestamp"` | Aceita |
+| `WHERE area = 'TI`, a aspa desbalanceada | `TokenError` |
+| `t."taxa $base"`, o estrago da expressão sem as aspas duplas | Aceita |
+| `INSERT INTO destino BY NAME SELECT * FROM origem` | Aceita, e o Redshift não tem |
+| `list_aggregate(l, 'sum')` | Aceita, e o Redshift não tem |
+
+O teste opcional `test_redshift_text_parses_with_sqlglot` roda sobre o texto depois da troca do
+sentinela, porque o arquivo versionado não analisa. Ele pega string malformada, e não pega nem o
+identificador estragado que a decisão das aspas fechou nem construção que o Redshift não suporta, o
+que [`estrategia.md`](estrategia.md) já registrava da avaliação do SQLGlot como camada. Enquanto os
+statements forem portáveis, o texto do Redshift é igual ao do DuckDB, que a suíte executa: a lacuna
+nasce no primeiro statement cujos dois textos diferem, o gatilho da decisão em
+[`PLAN-STAGE-2.md`](PLAN-STAGE-2.md).
