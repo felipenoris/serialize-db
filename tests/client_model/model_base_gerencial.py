@@ -142,18 +142,9 @@ class Contrato(Base):
     __tablename__ = "cad_contratos"
     __table_args__ = (
         Index("ix_contratos_data_sistema_contrato", "data", "sistema", "contrato", unique=True),
-        # A chave estrangeira do original aponta para colunas não únicas de
-        # rel_contrato_operacao, o que motor algum aceitaria; fica como a regra que a auditoria
-        # verifica por anti-join (todo contrato está em alguma operação), decisão pendente em
-        # plan/PLAN-STAGE-1.md.
-        ForeignKeyConstraint(
-            ["data", "sistema", "contrato"],
-            [
-                "rel_contrato_operacao.data",
-                "rel_contrato_operacao.sistema",
-                "rel_contrato_operacao.contrato",
-            ],
-        ),
+        # A chave estrangeira do original, de (data, sistema, contrato) para
+        # rel_contrato_operacao, saiu: o destino não é único, porque o contrato está em N
+        # operações (decisão do usuário de 2026-09-21).
         {
             "comment": "Contratos por data-base",
             "info": {

@@ -93,15 +93,21 @@ def test_types_and_nullability_change_only_where_the_plan_says() -> None:
                 assert type(column.type) is type(reference_column.type), (name, column.name)
 
 
+# A chave estrangeira do original que saiu do modelo cliente: o destino não é único, porque o
+# contrato está em N operações (decisão do usuário de 2026-09-21).
+REMOVED_FOREIGN_KEY = (("data", "sistema", "contrato"), "rel_contrato_operacao", ("data", "sistema", "contrato"))
+
+
 def test_keys_are_the_references_without_deferrable_and_without_autoincrement() -> None:
-    """As chaves do original sem ``DEFERRABLE`` nem ``autoincrement``; nenhum índice não único."""
+    """As chaves do original sem ``DEFERRABLE`` nem ``autoincrement``, menos a que apontava para colunas não únicas; nenhum índice não único."""
+    assert REMOVED_FOREIGN_KEY in foreign_keys(reference_table("cad_contratos"))
     for name, client in ClientBase.metadata.tables.items():
         reference = reference_table(name)
         client_primary = [column.name for column in client.primary_key.columns]
         reference_primary = [column.name for column in reference.primary_key.columns]
         assert client_primary == reference_primary, name
         assert unique_keys(client) == unique_keys(reference), name
-        assert foreign_keys(client) == foreign_keys(reference), name
+        assert foreign_keys(client) == foreign_keys(reference) - {REMOVED_FOREIGN_KEY}, name
         for constraint in client.foreign_key_constraints:
             assert constraint.deferrable is None, (name, constraint.name)
             assert constraint.initially is None, (name, constraint.name)

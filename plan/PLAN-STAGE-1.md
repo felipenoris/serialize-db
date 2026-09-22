@@ -10,7 +10,9 @@ cópia dele em `tests/client_model/` (decisão do usuário de 2026-09-21: o mode
 código cliente apresenta para usar a biblioteca), leva as correções que a biblioteca cliente faria:
 `Base` importável de um módulo só, cada tabela declarada uma vez, `BigInteger` nas chaves primárias
 inteiras e nas colunas que as referenciam, `autoincrement=False` nessas chaves, chaves estrangeiras
-sem `DEFERRABLE`, a coluna de partição `data_str` (`String(10)`, `AAAA-MM-DD` de `data`;
+sem `DEFERRABLE` e sem a de `cad_contratos` para `rel_contrato_operacao` (o destino não é único,
+porque o contrato está em N operações; decisão do usuário de 2026-09-21), a coluna de partição
+`data_str` (`String(10)`, `AAAA-MM-DD` de `data`;
 `data_base_str` de `data_base` em `cad_lancamentos`) no fim das quatro tabelas particionadas,
 comentários de tabela e de coluna, uma primeira redação que o dono do modelo revisa no código
 (decisão do usuário de 2026-09-21), e `Table.info["serialize_db"]` com `partition_by`,
@@ -889,6 +891,5 @@ check_models:
 
 ## Decisões pendentes
 
-- **[decisão] A chave estrangeira de `cad_contratos` para `rel_contrato_operacao`**, do original,
-  referencia colunas não únicas, o que motor algum aceitaria; fica no modelo cliente como a regra
-  que a auditoria verifica por anti-join (todo contrato está em alguma operação), ou sai.
+Nenhuma: as sete decisões da etapa foram tomadas pelo usuário em 2026-09-21, e cada uma está escrita
+na seção que a descreve.

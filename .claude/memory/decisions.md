@@ -192,3 +192,14 @@ On 2026-09-21 the user closed the review of the client model's comments the same
 lengths: they are a first draft, and the model's owner revises them directly in the code, so the
 item leaves `plan/OPEN_QUESTIONS.md`. The only pending decision of stage 1 left is the foreign key
 `cad_contratos` declares to `rel_contrato_operacao`. `plan/PLAN-STAGE-1.md`
+
+On 2026-09-21 the user removed the foreign key `cad_contratos` declared to `rel_contrato_operacao`,
+the last pending decision of stage 1, and declined declaring `(data, sistema, contrato, operacao)`
+as a unique key of `rel_contrato_operacao`. The key was copied from the original model and pointed
+at columns that are not unique — the contract is apportioned among its N operations — so no engine
+would accept it, and the alternatives offered were inverting it (the direction the unique index
+`ix_contratos_data_sistema_contrato` sustains), declaring both, or keeping it. With it gone, the
+audit of stage 4 checks nothing between the two tables, and `rel_contrato_operacao` keeps
+`id_rel_contrato_operacao` as its only key. The query the client runs is contract → operations,
+which the `sort_key` `data, sistema, contrato, operacao` already serves; the direction of a foreign
+key never bore on it. `plan/PLAN-STAGE-1.md`, `tests/client_model/`

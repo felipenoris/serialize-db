@@ -60,8 +60,6 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 1](PLAN-STAGE-1.md), uma só, do modelo cliente: a chave estrangeira de `cad_contratos`
-  para colunas não únicas de `rel_contrato_operacao`.
 - [Etapa 2](PLAN-STAGE-2.md): identificadores entre aspas duplas em `bind`; o `sqlglot` no grupo
   `dev`.
 - [Etapa 3](PLAN-STAGE-3.md): o comentário da tabela como `description` da tabela Delta; a reserva de credenciais do `boto3` em `storage_options`; as colunas
