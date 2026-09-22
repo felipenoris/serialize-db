@@ -11,10 +11,10 @@ substituição gradual da compilação em tempo de execução descrita em `sqlal
 | `param(name, type_=None)` | `literal_column(":nome", type_)`: o parâmetro de execução, que atravessa `literal_binds` e chega ao texto como `:nome`. |
 | `prefixed(statement, metadata, prefix="{prefix}")` | A cópia do statement com cada tabela do contrato trocada pela cópia com o prefixo, por `replacement_traverse`; o nome sai sem aspas (`quoted_name(quote=False)`). |
 | `render(statement, dialect, metadata, prefix="{prefix}")` | O texto de `duckdb` ou `redshift` com as constantes embutidas e os parâmetros como `:nome`, compilado por um dialeto com `paramstyle="named"`, que não dobra o `%` dos literais; um `bindparam` sem valor é erro, porque o compilador o renderia como `NULL`. |
-| `bind(sql, params, style)` | O texto com `:nome` reescrito para o estilo do motor (`$nome` no DuckDB; inalterado no `redshift_connector` com `paramstyle = "named"`) e o dicionário conferido: parâmetro faltante ou sobrando é erro. |
+| `bind(sql, params, style)` | O texto com `:nome` reescrito para o estilo do motor (`$nome` no DuckDB; inalterado no `redshift_connector` com `paramstyle = "named"`) e o dicionário conferido: parâmetro faltante ou sobrando é erro. Toda região citada passa intacta, entre aspas simples ou duplas. |
 | `sql_files(statements, metadata)` | `{"<nome>.duckdb.sql": ..., "<nome>.redshift.sql": ...}` de um dicionário `{nome: statement}`. |
 | `write_sql_files(statements, metadata, directory)` | Grava `sql_files`; `serialize-db sql write` e `serialize-db sql check`. |
-| `read_sql(directory, name, dialect)` | O texto versionado, para o `execute` dos motores. |
+| `read_sql(directory, name, dialect, prefix)` | O texto versionado com o sentinela `{prefix}` trocado pelo `prefix` informado, para o `execute` dos motores. |
 
 Testes: `tests/test_sql.py`, sem gravar: o statement de `sqlalchemy.md` (parâmetro, `%` em literal,
 prefixo) renderizado nos dois dialetos e executado no DuckDB em memória com `$mes`; `bindparam` sem
@@ -46,7 +46,7 @@ def referenced_tables(statement_or_sql: sa.sql.ClauseElement | str) -> set[str]:
 def sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData) -> dict[str, str]: ...
 def write_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData, directory: str) -> list[str]: ...
 def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData, directory: str) -> list[str]: ...
-def read_sql(directory: str, name: str, dialect: Dialect) -> str: ...
+def read_sql(directory: str, name: str, dialect: Dialect, prefix: str) -> str: ...
 ```
 
 `referenced_tables` entra aqui, e não na [etapa 6](PLAN-STAGE-6.md): as tabelas de um statement
@@ -64,13 +64,26 @@ tabela de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) a usaria.
 - **`render`** compila com um dialeto avulso de `paramstyle="named"` e `literal_binds=True`, dentro
   de `warnings.catch_warnings()` com `SAWarning` como erro: o `bindparam` sem valor, que renderizaria
   `NULL`, vira `SqlError` com a instrução de usar `param`.
-- **`bind`** reescreve `:nome` por uma expressão regular que consome primeiro os literais entre
-  aspas simples (com `''` escapado) e só depois reconhece `:nome` fora de `::cast`; um `:` dentro de
-  um literal fica intacto. O conjunto de nomes encontrados precisa ser igual ao do dicionário:
-  faltante e sobrando são `SqlError`. No estilo `duckdb` o marcador vira `$nome`; no `redshift`
-  fica `:nome`, que o `redshift_connector` lê com `cursor.paramstyle = "named"`.
-- **`sql_files`** renderiza cada statement nos dois dialetos com `\n` final; `write_sql_files`,
-  `check_sql_files` e `read_sql` repetem o padrão da [etapa 1](PLAN-STAGE-1.md).
+- **`bind`** reescreve `:nome` por uma expressão regular que consome primeiro as regiões citadas —
+  o literal entre aspas simples (com `''` escapado) e o identificador entre aspas duplas (com `""`
+  escapado) — e só depois reconhece `:nome` fora de `::cast`. Aspas simples e duplas delimitam
+  conteúdo literal, e `render` põe o marcador só onde vai um valor: pular toda região citada não
+  perde marcador algum (decisão do usuário de 2026-09-21). Sem a alternativa das aspas duplas, uma
+  coluna chamada `taxa :base` sai como `"taxa $base"` com o parâmetro `base` inventado, e uma
+  chamada `preco d'agua` abre uma região falsa de literal que vai até a aspa simples seguinte do
+  texto e engole o `:nome` que estiver no meio (medições de 2026-09-21). O conjunto de nomes
+  encontrados precisa ser igual ao do dicionário: faltante e sobrando são `SqlError`. No estilo
+  `duckdb` o marcador vira `$nome`; no `redshift` fica `:nome`, que o `redshift_connector` lê com
+  `cursor.paramstyle = "named"`. Proposto: um `{prefix}` restante no texto é `SqlError`, porque o
+  sentinela sem troca chega ao motor como erro de sintaxe.
+- **`sql_files`** renderiza cada statement nos dois dialetos com `\n` final, sempre com o sentinela
+  `{prefix}`, porque o arquivo versionado serve a qualquer alvo; `write_sql_files` e
+  `check_sql_files` repetem o padrão da [etapa 1](PLAN-STAGE-1.md).
+- **`read_sql`** lê o arquivo e troca `{prefix}` pelo `prefix` informado, argumento obrigatório
+  (decisão do usuário de 2026-09-21): quem chama sabe o alvo — a string vazia para as tabelas do
+  contrato, `exec_<id>_` para o sandbox da execução —, e a obrigação de informar sobe para os
+  chamadores, os motores das etapas [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md) e o pipeline.
+  Nenhuma outra primitiva preenche o sentinela.
 
 ## Pré-requisitos e pós-condições
 
@@ -79,8 +92,9 @@ tabela de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) a usaria.
 | `param` | Nome válido como identificador. | Um `literal_column` que atravessa `literal_binds` como `:nome`. |
 | `prefixed` | Toda tabela do statement pertence ao `metadata` informado. | Uma cópia com cada tabela e coluna trocadas; o original intacto. |
 | `render` | Statement sem `bindparam` sem valor. | Texto com as constantes embutidas, `%` dos literais simples e `{prefix}` sem aspas; o mesmo texto nos dois dialetos para o SQL portável. |
-| `bind` | Texto com `:nome` fora de literais. | O texto no estilo do motor e o dicionário conferido; `SqlError` quando os nomes não fecham. |
+| `bind` | Texto com `:nome` fora das regiões citadas e sem `{prefix}`. | O texto no estilo do motor e o dicionário conferido, com literais e identificadores citados intactos; `SqlError` quando os nomes não fecham. |
 | `write_sql_files` | Pasta gravável. | Dois arquivos por statement; `check_sql_files` vazio quando nada mudou. |
+| `read_sql` | Arquivo gravado por `write_sql_files`; `prefix` informado. | O texto sem o sentinela, pronto para `bind`. |
 
 ## Testes por caso
 
@@ -92,11 +106,13 @@ rascunho.
 | Texto por dialeto | `test_render_embeds_constants_and_keeps_parameters` | Constantes embutidas, `:nome` preservado, `%` simples em `LIKE`, `{prefix}` sem aspas; DuckDB e Redshift iguais para o statement portável. |
 | Execução | `test_rendered_text_runs_in_duckdb` | O texto com `prefix=""` passa por `bind` e roda num DuckDB em memória com `$nome`. |
 | Literais com dois-pontos | `test_bind_leaves_quoted_literals_and_casts_alone` | `'TI:%'`, `'12:30'` e `valor::DECIMAL(18, 2)` intactos; só `:nome` do dicionário muda. |
+| Identificadores citados | `test_bind_leaves_quoted_identifiers_alone` | As colunas `taxa :base`, `:base` e `preco d'agua` saem intactas entre aspas duplas, e o `:nome` fora das aspas é o único trocado. |
 | Parâmetros | `test_bind_refuses_missing_and_extra_parameters` | Faltante e sobrando são `SqlError` com os dois conjuntos na mensagem. |
 | `bindparam` sem valor | `test_render_refuses_bindparam_without_value` | `SqlError` em vez de `NULL` silencioso. |
 | Prefixo | `test_prefixed_replaces_every_contract_table` | Tabelas e colunas trocadas em `select`, `insert ... from_select` e `join`; o statement original intacto. |
 | Tabelas referenciadas | `test_referenced_tables_from_core_and_text` | `find_tables` e o sentinela dão o mesmo conjunto para o mesmo comando. |
 | Arquivos gerados | `test_sql_files_match_versioned`, `test_check_sql_files_reports_a_changed_statement` | Diff vazio contra `tests/client_model/sql/`; uma coluna nova no statement aparece no diff. |
+| Prefixo do arquivo | `test_read_sql_fills_the_sentinel` | `read_sql(..., prefix="")` dá `cad_lancamentos` e `prefix="exec_42_"` dá `exec_42_cad_lancamentos`; um `{prefix}` que sobra no texto é `SqlError` no `bind`. |
 | Redshift analisável | `test_redshift_text_parses_with_sqlglot` (opcional) | `sqlglot.parse_one(texto, dialect="redshift")` aceita o texto. |
 
 ## Rascunhos executados
@@ -104,9 +120,11 @@ rascunho.
 Rodou em 2026-09-21 com as versões fixadas.
 
 ```python
-"""Etapa 2: param, prefixed, render, bind e sql_files sobre um statement Core, executado no DuckDB com $nome."""
+"""Etapa 2: param, prefixed, render, bind, sql_files e read_sql sobre um statement Core, executado no DuckDB com $nome."""
 import re
+import tempfile
 import warnings
+from pathlib import Path
 
 import duckdb
 import duckdb_engine
@@ -156,7 +174,7 @@ def render(statement, dialect: str, metadata: sa.MetaData, prefix: str = "{prefi
     return str(compiled)
 
 
-PLACEHOLDER = re.compile(r"'(?:[^']|'')*'|(?<![:\w]):([a-z_][a-z0-9_]*)")   # literal entre aspas, ou :nome fora de ::cast
+PLACEHOLDER = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|(?<![:\w]):([a-z_][a-z0-9_]*)")   # região citada, ou :nome fora de ::cast
 
 
 def bind(sql: str, params: dict, style: str) -> tuple[str, dict]:
@@ -177,6 +195,11 @@ def bind(sql: str, params: dict, style: str) -> tuple[str, dict]:
 
 def sql_files(statements: dict, metadata: sa.MetaData) -> dict[str, str]:
     return {f"{name}.{dialect}.sql": render(statement, dialect, metadata) + "\n" for name, statement in statements.items() for dialect in DIALECTS}
+
+
+def read_sql(directory: str, name: str, dialect: str, prefix: str) -> str:
+    """O texto versionado com o sentinela trocado pelo prefixo informado, que quem chama decide."""
+    return Path(directory, f"{name}.{dialect}.sql").read_text().replace("{prefix}", prefix)
 
 
 metadata = sa.MetaData()
@@ -215,6 +238,20 @@ for description, action in {
 
 print(sorted(sql_files({"total_por_conta": statement}, metadata)))
 print(bind("SELECT valor::DECIMAL(18, 2), '12:30' FROM t WHERE k = :k", {"k": 1}, "redshift")[0])   # ::cast e '12:30' preservados
+
+# Um identificador citado passa intacto: o marcador só existe onde vai um valor.
+citados = sa.MetaData()
+citada = sa.Table("t", citados, sa.Column("taxa :base", sa.String(10)), sa.Column("preco d'agua", sa.Double),
+                  sa.Column("data_str", sa.String(10)))
+consulta = sa.select(citada.c["taxa :base"], citada.c["preco d'agua"]).where(citada.c.data_str == param("data_str"))
+print(bind(render(consulta, "duckdb", citados, prefix=""), {"data_str": "2026-08-31"}, "duckdb")[0].splitlines()[0])
+
+# O arquivo versionado guarda o sentinela; quem lê informa o alvo.
+with tempfile.TemporaryDirectory() as pasta:
+    for nome, texto in sql_files({"total_por_conta": statement}, metadata).items():
+        Path(pasta, nome).write_text(texto)
+    for prefixo in ("", "exec_42_"):
+        print(f"prefix={prefixo!r}:", read_sql(pasta, "total_por_conta", "duckdb", prefixo).splitlines()[1])
 ```
 
 Saída:
@@ -231,15 +268,12 @@ parâmetro faltante: parâmetros do texto ['a', 'b'] e do dicionário ['a'] não
 parâmetro sobrando: parâmetros do texto ['a'] e do dicionário ['a', 'b'] não fecham
 ['total_por_conta.duckdb.sql', 'total_por_conta.redshift.sql']
 SELECT valor::DECIMAL(18, 2), '12:30' FROM t WHERE k = :k
+SELECT t."taxa :base", t."preco d'agua"
+prefix='': FROM cad_lancamentos JOIN cad_contas ON cad_lancamentos.id_conta = cad_contas.id_conta
+prefix='exec_42_': FROM exec_42_cad_lancamentos JOIN exec_42_cad_contas ON exec_42_cad_lancamentos.id_conta = exec_42_cad_contas.id_conta
 ```
 
 ## Decisões pendentes
 
-- **[decisão] Aspas duplas nos identificadores do texto gerado.** `bind` preserva só literais entre
-  aspas simples; um identificador entre aspas duplas que contenha `:nome` seria reescrito. O texto
-  gerado tem identificadores entre aspas: o DDL da [etapa 1](PLAN-STAGE-1.md) cita todos, e os dois
-  dialetos citam `"to"` e o do Redshift `"timestamp"`, as duas colunas reservadas do modelo
-  cliente (`cad_contratos."to"` num `select` compilado em 2026-09-21). O contrato não tem
-  identificador com `:`, e a alternativa é estender a expressão a `"..."`.
 - **[decisão] O `sqlglot` no grupo `dev`** para o teste opcional que analisa o texto do Redshift; ele
   só entra depois de um ensaio em venv avulsa, pela regra de dependências.

@@ -203,3 +203,26 @@ audit of stage 4 checks nothing between the two tables, and `rel_contrato_operac
 `id_rel_contrato_operacao` as its only key. The query the client runs is contract → operations,
 which the `sort_key` `data, sistema, contrato, operacao` already serves; the direction of a foreign
 key never bore on it. `plan/PLAN-STAGE-1.md`, `tests/client_model/`
+
+## The generated SQL text of stage 2
+
+On 2026-09-21 the user decided how `bind` reads the generated text: quotes delimit literal content,
+single and double alike, so `bind` rewrites a `:nome` marker only outside every quoted region, and
+the regex gains the `"(?:[^"]|"")*"` alternative beside the one for `'...'`. The argument is that
+the marker is the library's own, put in by `render` only where a value goes, so skipping quoted
+regions can never miss a real marker. Two measurements of the same day showed what the draft's
+expression did without it: a column named `taxa :base` came out as `"taxa $base"` with an invented
+parameter `base`, and one named `preco d'agua` opened a false literal region that swallowed the next
+`:nome` (`SqlError: parâmetros do texto [] e do dicionário ['data_str'] não fecham`). No identifier
+of the contract carries `:` or `'`, so the two expressions agree on today's text. `bind` substitutes
+no value into the SQL: it rewrites the marker's style and hands the dictionary to the driver.
+`plan/PLAN-STAGE-2.md`
+
+The same day the user decided who fills the `{prefix}` sentinel of a saved SQL file: the functions
+that handle the file take a `prefix` argument, and the obligation to state it propagates to their
+callers. `read_sql(directory, name, dialect, prefix)` replaces the sentinel and `prefix` is
+required; `sql_files` always writes the sentinel, because the versioned file serves any target; no
+other primitive fills it. The question came from the user reading `plan/PLAN-STAGE-4.md`, whose
+`stream` row said the engine emptied `{prefix}` "por `sql.bind`" while the stage 2 signature
+`bind(sql, params, style)` has no prefix; stages 4 and 5 now say the ready text arrives with the
+prefix already replaced. `plan/PLAN-STAGE-2.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`

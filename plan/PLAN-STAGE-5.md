@@ -159,7 +159,8 @@ class RedshiftEngine:
   `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'` por partição (ou `SELECT *` numa tabela sem partição), com `JSON_PARSE` nas colunas `SUPER`.
   `materialize=False` não existe aqui: o Redshift não lê o Delta no lugar.
 - **`stream`** compila o statement pelo dialeto Redshift (`sql.render` com `prefix=exec_<id>_`) ou
-  recebe o texto por `bind(style="redshift")`, e roda numa conexão própria da thread auxiliar. Cada
+  recebe o texto já com o prefixo trocado (`sql.read_sql(..., prefix="exec_<id>_")`) e o passa por
+  `bind(style="redshift")`, e roda numa conexão própria da thread auxiliar. Cada
   fatia de `fetchmany(batch_size)` vira um `RecordBatch` **por colunas**: `zip(*rows)` e
   `pa.array(coluna, type=campo.type)`, com o esquema do statement ou o de
   `schema_from_description`. O rascunho mediu 0,03 s por colunas contra 0,10 s por dicionários em
