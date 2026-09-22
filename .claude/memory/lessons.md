@@ -282,4 +282,5 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   identical but for the timestamp and the output path. The fixture carries what the report needs to
   exercise: `INT96` without statistics, Hive partitions, the `pandas` footer key in part of the
   files and non-ASCII text columns. `probes/redshift.py::session` got no such refactor: it needs the
-  target environment to run, so the split waits for the user (`plan/OPEN_QUESTIONS.md`).
+  target environment to run, and the user refused the split the same day
+  (`.claude/memory/decisions.md`).

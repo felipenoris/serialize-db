@@ -226,3 +226,16 @@ other primitive fills it. The question came from the user reading `plan/PLAN-STA
 `stream` row said the engine emptied `{prefix}` "por `sql.bind`" while the stage 2 signature
 `bind(sql, params, style)` has no prefix; stages 4 and 5 now say the ready text arrives with the
 prefix already replaced. `plan/PLAN-STAGE-2.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`
+
+
+## The code review of 2026-09-21
+
+The user refused the three proposals the review left open, all on the same day.
+`probes/redshift.py::session` (310 lines, four levels, eleven checks on one connection) **stays as
+it is**, and so do `apis` and `copy_role`: the open item left `plan/OPEN_QUESTIONS.md` with the
+answer. `_resolve_metadata` **stays private in `serialize_db.cli`**, duplicated by
+`scripts/migrate_parquet_to_delta.py`, which the stage 7 `initial_load` absorbs anyway. **No linter
+enters the project**: `ruff` in the `dev` group and in the workflow was refused, so the style rules
+of `CLAUDE.md` stay checked by reading, and the line width stays what each file uses (100 in the
+package and in the script, wider in the probes and in the proofs of concept). A later session
+proposes none of the three again.

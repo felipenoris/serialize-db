@@ -54,15 +54,6 @@ foi medido em [`POC.md`](POC.md).
   migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
   (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)), e a medição decide o
   padrão da flag.
-- **A seção 4 de `probes/redshift.py`.** A função `session` tem 310 linhas e quatro níveis de
-  aninhamento, com as funções internas `connect` e `query` e a conexão compartilhada por onze
-  checagens (`RS-15`, `RS-4`, `RS-7`, `RS-9`, `RS-12`, `RS-13`, `RS-16`, `RS-17`, `RS-19`, `RS-5`,
-  `RS-8`): a maior função do repositório, contra a regra de uma responsabilidade por função e de
-  dois níveis de aninhamento. A revisão de código de 2026-09-21 não a dividiu, porque a ordem das
-  leituras em torno do `USE` e o estado da conexão são o que as seis execuções no ambiente alvo
-  acertaram, e o probe não roda fora de lá: dividi-la é uma mudança conferida só pela execução
-  seguinte no ambiente alvo, que o usuário decide pedir. As duas outras funções longas do mesmo
-  arquivo, `apis` (109 linhas) e `copy_role` (83), estão na mesma situação.
 
 ## Decisões de API pendentes por etapa
 
