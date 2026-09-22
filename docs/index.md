@@ -5,7 +5,7 @@ dados e a conferência dos próprios modelos.
 
 Esta página explica o funcionamento geral do pacote, traz o tutorial de uso e a tabela de
 mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.schema`,
-`serialize_db.errors` e `serialize_db.cli`.
+`serialize_db.sql`, `serialize_db.errors` e `serialize_db.cli`.
 
 ## Como o pacote funciona
 
@@ -20,11 +20,17 @@ mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.
 - **Os dados atravessam a fronteira em lotes Arrow** (`pyarrow.RecordBatch`, `pyarrow.Table` ou
   `pyarrow.RecordBatchReader`), e `serialize_db.schema.cast` leva cada lote ao esquema do contrato
   ou o recusa com a instrução ao cliente.
+- **O SQL do pipeline vira texto gerado por motor.** Cada statement Core do pipeline sai como
+  texto do DuckDB e do Redshift por `serialize_db.sql.render`, com as constantes embutidas, a
+  partição como parâmetro `:nome` e cada tabela do contrato com o sentinela `{prefix}` no nome,
+  que a execução troca pelo prefixo do sandbox. O pipeline versiona o texto e o executa no lugar
+  de compilar o statement a cada execução.
 - **Todo identificador que a biblioteca emite vai entre aspas duplas**: nomes de coluna como `to` e
   `timestamp` são palavras reservadas do DuckDB e do Redshift.
 
-O que já existe é o módulo de esquema, `serialize_db.schema`, com a linha de comando
-`serialize-db schema`. O armazenamento Delta, os motores, a auditoria, a execução e a publicação
+O que já existe são o módulo de esquema, `serialize_db.schema`, e o de texto SQL,
+`serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`. O
+armazenamento Delta, os motores, a auditoria, a execução e a publicação
 são as etapas seguintes do plano, na pasta `plan/` do repositório.
 
 ## Instalação
@@ -35,8 +41,9 @@ No repositório, o `uv` instala o Python 3.13, o pacote e as dependências:
 uv sync --group dev
 ```
 
-O pacote depende de `sqlalchemy`, `pyarrow` e `deltalake`, nas versões fixadas em
-`pyproject.toml`; o DuckDB entra com o motor.
+O pacote depende de `sqlalchemy`, `pyarrow`, `deltalake`, `duckdb` e dos dialetos `duckdb-engine`
+e `sqlalchemy-redshift`, que compilam o texto SQL de cada motor, nas versões fixadas em
+`pyproject.toml`.
 
 ## Tutorial
 
@@ -192,6 +199,62 @@ serialize-db schema check --metadata pipeline.models:Base.metadata schema/
 os arquivos estão atualizados, 1 com o diff impresso quando há diferença, e 2 no erro de uso. Em
 Python, `serialize_db.schema.write_schema_files` e `serialize_db.schema.check_schema_files` fazem o
 mesmo.
+
+### Gerar o texto SQL de cada motor
+
+Um statement Core do pipeline vira texto do DuckDB e do Redshift por `serialize_db.sql.render`. A
+partição de referência entra por `serialize_db.sql.param`, que chega ao texto como `:nome`; as
+constantes ficam embutidas, e cada tabela do contrato sai com o sentinela `{prefix}` no nome,
+dentro das aspas, que a execução troca pelo prefixo do sandbox:
+
+```python
+from serialize_db import sql
+
+operations = Operacao.__table__
+statement = (
+    sa.select(operations.c.operacao, sa.func.sum(operations.c.valor).label("total"))
+    .where(operations.c.data_str == sql.param("data_str", sa.String(10)),
+           operations.c.operacao.like("A%"))
+    .group_by(operations.c.operacao)
+    .order_by(operations.c.operacao)
+)
+print(sql.render(statement, "duckdb", Base.metadata))
+```
+
+O texto, igual nos dois motores para um statement portável:
+
+```sql
+SELECT "{prefix}cad_operacoes"."operacao", sum("{prefix}cad_operacoes"."valor") AS total
+FROM "{prefix}cad_operacoes"
+WHERE "{prefix}cad_operacoes"."data_str" = :data_str AND "{prefix}cad_operacoes"."operacao" LIKE 'A%' GROUP BY "{prefix}cad_operacoes"."operacao" ORDER BY "{prefix}cad_operacoes"."operacao"
+```
+
+Um `bindparam` sem valor é recusado com `serialize_db.errors.SqlError`, porque o compilador o
+renderizaria como `NULL`. Na execução, `serialize_db.sql.bind` reescreve o marcador para o estilo
+do motor (`$nome` no DuckDB, `:nome` no `redshift_connector` com `paramstyle = "named"`) e confere
+o dicionário de parâmetros; toda região citada passa intacta, e um texto que ainda traz o sentinela
+é recusado:
+
+```python
+import duckdb
+
+text, values = sql.bind(sql.render(statement, "duckdb", Base.metadata, prefix=""),
+                        {"data_str": "2026-08-31"}, "duckdb")
+duckdb.connect().execute(text, values)   # ... WHERE "cad_operacoes"."data_str" = $data_str ...
+```
+
+O pipeline versiona o texto gerado, um arquivo por statement e por motor, e o diff contra a
+geração nova mostra o que uma mudança de modelo ou de statement altera em cada motor;
+`--statements` recebe o caminho importável do dicionário `{nome: statement}`:
+
+```
+serialize-db sql write --metadata pipeline.models:Base.metadata --statements pipeline.queries:STATEMENTS sql/
+serialize-db sql check --metadata pipeline.models:Base.metadata --statements pipeline.queries:STATEMENTS sql/
+```
+
+`serialize_db.sql.read_sql` lê o arquivo versionado com o sentinela trocado pelo prefixo informado,
+a string vazia para as tabelas do contrato ou `exec_<id>_` para o sandbox de uma execução, e
+`serialize_db.sql.referenced_tables` lista as tabelas do contrato que um statement ou um texto cita.
 
 ## Tabela de mapeamento de tipos
 

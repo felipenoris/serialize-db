@@ -292,3 +292,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   from helper threads. The review read the compiled statement instead: without `literal_binds`,
   `compiled.binds` lists the parameter with `required=True`; with it, the list is empty and the
   text carries `NULL`. Two compilations, no global state. `plan/PLAN-STAGE-2.md`, `plan/POC.md`
+- **A verdict measured on a draft is measured again after a decision changes the draft's output**
+  (2026-09-22). The SQLGlot trial of 2026-09-21 read a `ParseError` on the generated text with the
+  sentinel, when the draft's prefixed copy used `quote=False` and the sentinel stood bare
+  (`{prefix}cad_contas`). The `quote=True` decision of the same day put the sentinel inside the
+  quotes of an identifier, and the verdict survived unchanged into `plan/PLAN-STAGE-2.md`,
+  `plan/POC.md`, the decisions memory and the user's decision of 2026-09-22 to parse only the text
+  with the prefix empty. The first run of `tests/test_sql.py` parsed the versioned files with the
+  sentinel. The test now parses the versioned file of every statement, and the three documents
+  were revised in the same commit. `plan/POC.md`

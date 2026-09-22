@@ -1,0 +1,3 @@
+SELECT "{prefix}cad_contratos"."contrato", "{prefix}cad_contratos"."to", "{prefix}cad_lancamentos"."timestamp", CAST("{prefix}cad_lancamentos"."valor" AS NUMERIC(18, 2)) AS valor_centavos
+FROM "{prefix}cad_lancamentos" JOIN "{prefix}cad_contratos" ON "{prefix}cad_lancamentos"."sistema" = "{prefix}cad_contratos"."sistema" AND "{prefix}cad_lancamentos"."contrato" = "{prefix}cad_contratos"."contrato" AND "{prefix}cad_lancamentos"."data_base_str" = "{prefix}cad_contratos"."data_str"
+WHERE "{prefix}cad_lancamentos"."data_base_str" = :data_base_str ORDER BY "{prefix}cad_contratos"."contrato", "{prefix}cad_lancamentos"."id_lancamento"

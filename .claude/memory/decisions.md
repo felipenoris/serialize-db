@@ -257,6 +257,8 @@ client's. The rule of `plan/PLAN.md` stays as written. `plan/PLAN-STAGE-2.md`
 
 On 2026-09-22 the user put `sqlglot` in the tests: `sqlglot==30.18.0` (the version of the scratch
 trial of 2026-09-21) enters the `dev` group, and `test_redshift_text_parses_with_sqlglot` stops
-being optional; it parses the Redshift text of every statement with the prefix empty, since the
-versioned file with the sentinel does not parse. Stage 2 has no decision awaiting the user.
-`plan/PLAN-STAGE-2.md`, `pyproject.toml`
+being optional. The decision was taken believing the versioned file with the sentinel does not
+parse, a reading of the `quote=False` draft of 2026-09-21; the implementation of 2026-09-22 showed
+the quoted sentinel parses, and the test parses the versioned file of every statement and the
+text with the prefix empty. Stage 2 has no decision awaiting the user. `plan/PLAN-STAGE-2.md`,
+`plan/POC.md`, `pyproject.toml`

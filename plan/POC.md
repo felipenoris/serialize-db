@@ -1177,10 +1177,13 @@ pacote é Python puro: nenhum `.so`, 5,4 MB, nenhuma dependência além dele.
 | `INSERT INTO destino BY NAME SELECT * FROM origem` | Aceita, e o Redshift não tem |
 | `list_aggregate(l, 'sum')` | Aceita, e o Redshift não tem |
 
-O teste opcional `test_redshift_text_parses_with_sqlglot` roda sobre o texto depois da troca do
-sentinela, porque o arquivo versionado não analisa. Ele pega string malformada, e não pega nem o
-identificador estragado que a decisão das aspas fechou nem construção que o Redshift não suporta, o
-que [`estrategia.md`](estrategia.md) já registrava da avaliação do SQLGlot como camada. Enquanto os
+O texto da primeira linha da tabela é o do rascunho de então, com a cópia `quote=False` e o
+sentinela nu, `{prefix}cad_contas`; com a cópia citada da decisão do mesmo dia, o sentinela fica
+dentro das aspas de um identificador, e o arquivo versionado analisa (leitura de 2026-09-22, na
+seção da implementação da etapa 2). O teste `test_redshift_text_parses_with_sqlglot` pega string
+malformada, e não pega nem o identificador estragado que a decisão das aspas fechou nem construção
+que o Redshift não suporta, o que [`estrategia.md`](estrategia.md) já registrava da avaliação do
+SQLGlot como camada. Enquanto os
 statements forem portáveis, o texto do Redshift é igual ao do DuckDB, que a suíte executa: a lacuna
 nasce no primeiro statement cujos dois textos diferem. O usuário decidiu em 2026-09-22 incluí-lo
 desde já: `sqlglot==30.18.0` no grupo `dev`, e o teste deixa de ser opcional
@@ -1242,3 +1245,48 @@ Com a decisão do usuário de 2026-09-21 pela cópia com `quote=True`, o rascunh
 novo: o mesmo `[('1.1', 150.0)]`, as mesmas recusas, os dois textos iguais, e toda tabela e coluna
 do contrato entre aspas, o `INSERT ... SELECT` inclusive (`INSERT INTO "{prefix}cad_contas"
 ("id_conta", "numero") ...`).
+
+## O que a implementação da etapa 2 mostrou
+
+Em 2026-09-22, no macOS arm64 com SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift
+1.0.0, DuckDB 1.5.5 e sqlglot 30.18.0, o módulo `serialize_db.sql` foi escrito na forma do rascunho
+revisado de [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md) e rodou sobre os quatro statements do pipeline
+fictício de `tests/client_model/statements.py` (`saldos_por_conta`, `rateio_por_operacao`,
+`lancamentos_por_contrato` e `veiculos_novos`).
+
+**Os quatro statements saem idênticos nos dois dialetos e rodam no DuckDB sobre o DDL da etapa 1.**
+O `SELECT` com junção, parâmetro e coluna booleana, o das três condições de junção com `LIKE 'TI%'`
+e `!= '1:2'`, o das colunas `to` e `timestamp` com `CAST(... AS NUMERIC(18, 2))` e o
+`INSERT ... SELECT DISTINCT` com `NOT EXISTS` sobre a própria tabela alvo compilaram byte a byte
+iguais por `duckdb_engine.Dialect(paramstyle="named")` e
+`RedshiftDialect_redshift_connector(paramstyle="named")`, e `referenced_tables` leu o mesmo
+conjunto do statement e do texto. Com `prefix=""` e com `prefix="exec_42_"`, os quatro rodaram num
+DuckDB em memória sobre as 12 tabelas criadas por `schema.ddl`; `veiculos_novos` inseriu
+`(5, 'veículo 5')` a partir de um lançamento e, repetido, não inseriu de novo. Duas gerações de
+`serialize-db sql write` deram arquivos iguais.
+
+**O arquivo versionado com o sentinela analisa pelo SQLGlot.** `sqlglot.parse_one(texto,
+dialect="redshift")` aceitou o texto dos quatro statements com o sentinela, `"{prefix}cad_contas"`:
+com a cópia `quote=True` da decisão de 2026-09-21, o sentinela fica dentro das aspas de um
+identificador, que o analisador aceita. O `ParseError` na coluna 26 do ensaio de 2026-09-21 foi
+lido sobre o texto do rascunho de então, com `quote=False` e o sentinela nu, e a frase "o arquivo
+versionado não analisa, por causa do sentinela" atravessou a decisão das aspas até
+[`PLAN-STAGE-2.md`](PLAN-STAGE-2.md) e a decisão do usuário de 2026-09-22. A frase saiu do plano, e
+`test_redshift_text_parses_with_sqlglot` analisa o arquivo versionado de cada statement e o texto
+com o prefixo vazio; a aspa desbalanceada continua `TokenError`.
+
+**O compilador deixa um espaço antes de cada quebra de linha.** `str(compiled)` sai com `" \nFROM"`
+e `" \nWHERE"` nos dois dialetos; `render` apara o fim de cada linha, para o arquivo versionado
+sobreviver a um editor que apara o fim das linhas sem produzir diff em `sql check`.
+
+**Os dialetos entram sem o driver do Redshift.** `RedshiftDialect_redshift_connector` importa o
+`redshift_connector` só em `import_dbapi`, que `compile` não chama: `sqlalchemy-redshift` entrou nas
+dependências de execução e `redshift-connector` ficou no grupo `dev`. `duckdb_engine` importa o
+`duckdb` ao ser importado, então `duckdb==1.5.5` entrou nas dependências de execução com
+`duckdb-engine==0.17.0`, fixado como o grupo `dev` já fixava. A mudança de grupo reprovou
+`tests/test_probes.py::test_dev_requirements_read_the_pinned_versions_of_pyproject`, que esperava
+`sqlalchemy_redshift` entre os pacotes do grupo `dev` que `probes/space.py` (`SP-9`) compara com as
+versões instaladas; o probe passou a ler as dependências de execução junto com o grupo `dev`.
+
+As suítes depois da etapa: sem variável, 174 passam e 82 são pulados; com a raiz local, 233 passam
+e 23 são pulados (macOS, 2026-09-22); `tests/test_sql.py` tem 15 casos, um deles `local`.

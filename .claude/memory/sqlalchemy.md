@@ -70,6 +70,16 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   `quoted_name(quote=True)` on the table name and every column, so the DML quotes every contract
   identifier like the DDL, sentinel inside the quotes (user decision of 2026-09-21, measured on
   both dialects). `plan/PLAN-STAGE-2.md`, `plan/POC.md`
+- `str(compiled)` leaves a space before each line break (`" \nFROM"`, `" \nWHERE"`) in both
+  dialects; `render` strips line ends so the versioned file survives an editor that trims them.
+  `RedshiftDialect_redshift_connector` imports the driver only in `import_dbapi`, which `compile`
+  never calls, so the dialect compiles without `redshift-connector`; `duckdb_engine` imports
+  `duckdb` at import time, so `duckdb` is pinned beside the dialects in the runtime dependencies
+  (2026-09-22). The four statements of `tests/client_model/statements.py` (join with a bare
+  boolean column, three-condition join with `LIKE 'TI%'`, `"to"` and `"timestamp"` with
+  `CAST(... AS NUMERIC(18, 2))`, `INSERT ... SELECT DISTINCT ... WHERE NOT EXISTS` on the target
+  table) compile byte-identical on both dialects and run in DuckDB over the stage 1 DDL with the
+  prefix empty and with `exec_42_`. `plan/POC.md`
 
 ## SQL tooling
 
@@ -77,3 +87,8 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   constructs the target lacks (`INSERT ... BY NAME`, `list_aggregate`) and turned DuckDB
   `VARCHAR(200)` into Redshift `VARCHAR(MAX)`; Redshift integration tests remain necessary.
   `plan/estrategia.md`
+- `sqlglot.parse_one(text, dialect="redshift")` (30.18.0) accepts the sentinel inside a quoted
+  identifier (`"{prefix}cad_contas"`), so the versioned SQL file parses; the `ParseError` of
+  2026-09-21 was on the bare sentinel of the `quote=False` draft. It accepts `||`, `CAST(... AS
+  NUMERIC(18, 2))`, `NOT (EXISTS (...))` and both `:name` and `$name` markers, and raises
+  `TokenError` on an unbalanced quote (2026-09-22). `plan/POC.md`

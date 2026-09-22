@@ -39,9 +39,10 @@ UV_PYTHON_DOWNLOADS=automatic uv sync --group dev
 ```
 
 O `uv sync` instala em `.venv/` o Python 3.13, o pacote com as dependências de execução fixadas em
-`pyproject.toml` (`sqlalchemy`, `pyarrow`, `deltalake`) e o grupo `dev`: o `pytest` e as bibliotecas
-dos testes (`duckdb`, `boto3`, os dialetos `duckdb-engine` e `sqlalchemy-redshift`, `pandas`,
-`redshift-connector`), fixadas nas versões usadas pelos documentos em `plan/`. O grupo `docs` traz o
+`pyproject.toml` (`sqlalchemy`, `pyarrow`, `deltalake`, `duckdb` e os dialetos `duckdb-engine` e
+`sqlalchemy-redshift`, que compilam o texto SQL de cada motor) e o grupo `dev`: o `pytest` e as
+bibliotecas dos testes (`boto3`, `pandas`, `redshift-connector`, `sqlglot`), fixadas nas versões
+usadas pelos documentos em `plan/`. O grupo `docs` traz o
 `pdoc`. `UV_PYTHON_DOWNLOADS=automatic` só é necessário onde o `uv` está configurado para não baixar
 o Python, como no SageMaker Unified Studio.
 
