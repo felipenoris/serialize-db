@@ -66,7 +66,10 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   `postgresql` dialect quote every identifier, sentinel inside the quotes
   (`"{prefix}cad_contas"."numero"`), and the text runs in DuckDB over the quoted DDL of stage 1
   (2026-09-21). The user kept the two third-party dialects as `render`'s compilers the same day, so
-  they become runtime dependencies with stage 2. `plan/PLAN-STAGE-2.md`, `plan/POC.md`
+  they become runtime dependencies with stage 2, and `prefixed` builds its copies with
+  `quoted_name(quote=True)` on the table name and every column, so the DML quotes every contract
+  identifier like the DDL, sentinel inside the quotes (user decision of 2026-09-21, measured on
+  both dialects). `plan/PLAN-STAGE-2.md`, `plan/POC.md`
 
 ## SQL tooling
 

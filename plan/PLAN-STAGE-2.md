@@ -9,7 +9,7 @@ substituição gradual da compilação em tempo de execução descrita em `sqlal
 | Primitiva | O que faz |
 | --- | --- |
 | `param(name, type_=None)` | `literal_column(":nome", type_)`: o parâmetro de execução, que atravessa `literal_binds` e chega ao texto como `:nome`. |
-| `prefixed(statement, metadata, prefix="{prefix}")` | A cópia do statement com cada tabela do contrato trocada pela cópia com o prefixo, por `replacement_traverse`; o nome sai sem aspas (`quoted_name(quote=False)`). |
+| `prefixed(statement, metadata, prefix="{prefix}")` | A cópia do statement com cada tabela do contrato trocada pela cópia com o prefixo, por `replacement_traverse`; todo nome da cópia vai citado (`quoted_name(quote=True)`), o sentinela dentro das aspas como no DDL. |
 | `render(statement, dialect, metadata, prefix="{prefix}")` | O texto de `duckdb` ou `redshift` com as constantes embutidas e os parâmetros como `:nome`, compilado por um dialeto com `paramstyle="named"`, que não dobra o `%` dos literais; um `bindparam` sem valor é erro, porque o compilador o renderia como `NULL`. |
 | `bind(sql, params, style)` | O texto com `:nome` reescrito para o estilo do motor (`$nome` no DuckDB; inalterado no `redshift_connector` com `paramstyle = "named"`) e o dicionário conferido: parâmetro faltante ou sobrando é erro, e um texto que ainda traz `{prefix}` também. Toda região citada passa intacta, entre aspas simples ou duplas. |
 | `referenced_tables(statement_or_sql)` | As tabelas do contrato que um statement Core (`find_tables`) ou um texto gerado (o sentinela) cita, para o log da execução. |
@@ -69,9 +69,14 @@ localmente só para rodar sozinho.
 - **`param`** valida o nome (`[a-z_][a-z0-9_]*`) e devolve `literal_column(":nome", type_)`; o
   tipo serve à compilação de comparações com colunas tipadas.
 - **`prefixed`** monta, para cada tabela do contrato, uma cópia só com o que a compilação de um DML
-  usa (`_prefixed_copy`): o nome com o prefixo, por `quoted_name(prefix + name, quote=False)`, e
-  cada coluna com nome e tipo; chaves e índices ficam de fora, porque um `SELECT` ou um
-  `INSERT ... SELECT` não os compila. `replacement_traverse` chama uma função em cada nó do
+  usa (`_prefixed_copy`): o nome com o prefixo e cada coluna com nome e tipo, todos em
+  `quoted_name(..., quote=True)`; chaves e índices ficam de fora, porque um `SELECT` ou um
+  `INSERT ... SELECT` não os compila. Com todo nome citado, o DML cumpre a regra de
+  [`PLAN.md`](PLAN.md) que o DDL da etapa 1 já cumpre — `"{prefix}cad_contas"."numero"`, com o
+  sentinela dentro das aspas como no DDL — sem depender da lista de palavras reservadas de nenhum
+  dialeto (decisão do usuário de 2026-09-21, medição em [`POC.md`](POC.md): com `quote=False` o
+  texto citava só `"to"` nos dois dialetos e `"timestamp"` só no Redshift). Os rótulos e o resto
+  do statement continuam citados como o dialeto exige, porque são do cliente. `replacement_traverse` chama uma função em cada nó do
   statement e deixa o nó como está quando ela devolve `None`; a função troca cada `Table` do
   contrato pela cópia e cada `Column` pela coluna de mesmo nome na cópia. O statement original não
   muda.
@@ -127,7 +132,7 @@ localmente só para rodar sozinho.
 | --- | --- | --- |
 | `param` | Nome válido como identificador. | Um `literal_column` que atravessa `literal_binds` como `:nome`. |
 | `prefixed` | Toda tabela do statement pertence ao `metadata` informado. | Uma cópia com cada tabela e coluna trocadas; o original intacto. |
-| `render` | Statement sem `bindparam` sem valor. | Texto com as constantes embutidas, `%` dos literais simples e `{prefix}` sem aspas; o mesmo texto nos dois dialetos para o SQL portável. |
+| `render` | Statement sem `bindparam` sem valor. | Texto com as constantes embutidas, `%` dos literais simples e toda tabela e coluna do contrato entre aspas, o `{prefix}` dentro delas; o mesmo texto nos dois dialetos para o SQL portável. |
 | `referenced_tables` | Statement Core, ou texto gerado com o sentinela. | Os nomes das tabelas do contrato que ele cita. |
 | `bind` | Texto com `:nome` fora das regiões citadas e sem `{prefix}`. | O texto no estilo do motor e o dicionário conferido, com literais e identificadores citados intactos; `SqlError` quando os nomes não fecham. |
 | `write_sql_files` | Pasta gravável. | Dois arquivos por statement; `check_sql_files` vazio quando nada mudou. |
@@ -140,7 +145,7 @@ rascunho.
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
-| Texto por dialeto | `test_render_embeds_constants_and_keeps_parameters` | Constantes embutidas, `:nome` preservado, `%` simples em `LIKE`, `{prefix}` sem aspas; DuckDB e Redshift iguais para o statement portável. |
+| Texto por dialeto | `test_render_embeds_constants_and_keeps_parameters` | Constantes embutidas, `:nome` preservado, `%` simples em `LIKE`, toda tabela e coluna do contrato entre aspas nos dois dialetos com o sentinela dentro delas (`"{prefix}cad_contas"."numero"`, `"to"`, `"timestamp"`); DuckDB e Redshift iguais para o statement portável. |
 | Execução | `test_rendered_text_runs_in_duckdb` | O texto com `prefix=""` passa por `bind` e roda num DuckDB em memória com `$nome`. |
 | Literais com dois-pontos | `test_bind_leaves_quoted_literals_and_casts_alone` | `'TI:%'`, `'12:30'` e `valor::DECIMAL(18, 2)` intactos; só `:nome` do dicionário muda. |
 | Identificadores citados | `test_bind_leaves_quoted_identifiers_alone` | As colunas `taxa :base`, `:base` e `preco d'agua` saem intactas entre aspas duplas, e o `:nome` fora das aspas é o único trocado. |
@@ -205,11 +210,15 @@ def param(name: str, type_: sa.types.TypeEngine | None = None) -> sa.ColumnEleme
 
 
 def _prefixed_copy(table: sa.Table, prefix: str) -> sa.Table:
-    """A cópia da tabela com o prefixo no nome e só nomes e tipos, o que um DML compilado usa."""
+    """A cópia da tabela com o prefixo no nome e só nomes e tipos, o que um DML compilado usa.
+
+    Todo nome vai citado, como no DDL da etapa 1: o texto não depende da lista de palavras
+    reservadas do dialeto, e o sentinela fica dentro das aspas.
+    """
     columns = []
     for column in table.columns:
-        columns.append(sa.Column(column.name, column.type))
-    name = quoted_name(f"{prefix}{table.name}", quote=False)    # o sentinela fica fora das aspas
+        columns.append(sa.Column(quoted_name(column.name, quote=True), column.type))
+    name = quoted_name(f"{prefix}{table.name}", quote=True)
     return sa.Table(name, sa.MetaData(), *columns)
 
 
@@ -395,40 +404,27 @@ with tempfile.TemporaryDirectory() as directory:
 Saída:
 
 ```
-SELECT {prefix}cad_contas.numero, sum({prefix}cad_lancamentos.valor) AS total
-FROM {prefix}cad_lancamentos JOIN {prefix}cad_contas ON {prefix}cad_lancamentos.id_conta = {prefix}cad_contas.id_conta
-WHERE {prefix}cad_lancamentos.data_base_str = :data_base_str AND {prefix}cad_lancamentos.area LIKE 'TI:%' AND {prefix}cad_contas.numero != '1:2' GROUP BY {prefix}cad_contas.numero ORDER BY {prefix}cad_contas.numero
+SELECT "{prefix}cad_contas"."numero", sum("{prefix}cad_lancamentos"."valor") AS total
+FROM "{prefix}cad_lancamentos" JOIN "{prefix}cad_contas" ON "{prefix}cad_lancamentos"."id_conta" = "{prefix}cad_contas"."id_conta"
+WHERE "{prefix}cad_lancamentos"."data_base_str" = :data_base_str AND "{prefix}cad_lancamentos"."area" LIKE 'TI:%' AND "{prefix}cad_contas"."numero" != '1:2' GROUP BY "{prefix}cad_contas"."numero" ORDER BY "{prefix}cad_contas"."numero"
 redshift igual ao duckdb: True
 tabelas do statement e do texto: ['cad_contas', 'cad_lancamentos'] ['cad_contas', 'cad_lancamentos']
-WHERE cad_lancamentos.data_base_str = $data_base_str AND cad_lancamentos.area LIKE 'TI:%' AND cad_contas.numero != '1:2' GROUP BY cad_contas.numero ORDER BY cad_contas.numero
+WHERE "cad_lancamentos"."data_base_str" = $data_base_str AND "cad_lancamentos"."area" LIKE 'TI:%' AND "cad_contas"."numero" != '1:2' GROUP BY "cad_contas"."numero" ORDER BY "cad_contas"."numero"
 [('1.1', 150.0)]
-INSERT INTO {prefix}cad_contas (id_conta, numero) SELECT DISTINCT {prefix}cad_lancamentos.id_conta, {prefix}cad_lancamentos.area FROM {prefix}cad_lancamentos
+INSERT INTO "{prefix}cad_contas" ("id_conta", "numero") SELECT DISTINCT "{prefix}cad_lancamentos"."id_conta", "{prefix}cad_lancamentos"."area" FROM "{prefix}cad_lancamentos"
 bindparam sem valor: parâmetro sem valor no statement: ['area']; use param('nome')
 parâmetro faltante: parâmetros do texto ['a', 'b'] e do dicionário ['a'] não fecham
 parâmetro sobrando: parâmetros do texto ['a'] e do dicionário ['a', 'b'] não fecham
 sentinela restante: o texto ainda traz o sentinela {prefix}; leia-o por read_sql(..., prefix=...)
 ['total_por_conta.duckdb.sql', 'total_por_conta.redshift.sql']
 SELECT valor::DECIMAL(18, 2), '12:30' FROM t WHERE k = :k
-SELECT t."taxa :base", t."preco d'agua"
-prefix='': FROM cad_lancamentos JOIN cad_contas ON cad_lancamentos.id_conta = cad_contas.id_conta
-prefix='exec_42_': FROM exec_42_cad_lancamentos JOIN exec_42_cad_contas ON exec_42_cad_lancamentos.id_conta = exec_42_cad_contas.id_conta
+SELECT "t"."taxa :base", "t"."preco d'agua"
+prefix='': FROM "cad_lancamentos" JOIN "cad_contas" ON "cad_lancamentos"."id_conta" = "cad_contas"."id_conta"
+prefix='exec_42_': FROM "exec_42_cad_lancamentos" JOIN "exec_42_cad_contas" ON "exec_42_cad_lancamentos"."id_conta" = "exec_42_cad_contas"."id_conta"
 ```
 
 ## Decisões pendentes
 
-- **[decisão] As aspas nos identificadores do DML.** [`PLAN.md`](PLAN.md) manda citar todo
-  identificador que a biblioteca emite, e o DDL da etapa 1 cumpre. O rascunho compila o DML com a
-  cópia prefixada em `quote=False`, e o texto cita só o que cada dialeto reserva (`"to"` nos
-  dois, `"timestamp"` só no Redshift). A medição de 2026-09-21 ([`POC.md`](POC.md)) mostrou que a
-  cópia com `quote=True` no nome prefixado e em cada coluna faz os dois dialetos citarem toda
-  tabela e coluna do contrato, com o sentinela dentro das aspas como no DDL
-  (`"{prefix}cad_contas"."numero"`), ainda legível por `referenced_tables`, e o texto roda no
-  DuckDB sobre o DDL citado. Os rótulos e o resto do statement continuam citados como o dialeto
-  exige, porque são do cliente. Recomendado: `quote=True`, a regra como está, um só flag no
-  rascunho e o DML alinhado ao DDL sem depender da lista reservada de nenhum dialeto. A
-  alternativa é restringir a regra de [`PLAN.md`](PLAN.md) ao texto que a biblioteca gera por
-  conta própria, com o DML citando o que o dialeto reserva, o que as medições cobrem para `to` e
-  `timestamp`.
 - **[decisão] O `sqlglot` no grupo `dev`** para o teste opcional que analisa o texto do Redshift. O
   ensaio em venv avulsa que a regra de dependências exige rodou em 2026-09-21 ([`POC.md`](POC.md)):
   o SQLGlot 30.18.0 é Python puro, 5,4 MB e sem dependências; recusa uma aspa desbalanceada; aceita

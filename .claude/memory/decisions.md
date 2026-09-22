@@ -247,3 +247,10 @@ DuckDB). Consequence recorded in `plan/PLAN.md`: the two packages leave the `dev
 the runtime dependencies in the commit that writes `serialize_db.sql`, because the engines of
 stages 4 and 5 call `render` at run time; `prepare_offline.sh` runs again then.
 `plan/PLAN-STAGE-2.md`, `plan/PLAN.md`
+
+The same day the user accepted the recommendation that followed from keeping the dialects: the
+prefixed copy `render` compiles is built with `quoted_name(quote=True)` on the table name and on
+every column, so the DML quotes every contract identifier like the DDL of stage 1, with the
+`{prefix}` sentinel inside the quotes and no dependence on either dialect's reserved-word list;
+labels and the rest of the statement stay quoted as the dialect requires, because they are the
+client's. The rule of `plan/PLAN.md` stays as written. `plan/PLAN-STAGE-2.md`

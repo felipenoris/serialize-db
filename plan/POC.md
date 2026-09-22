@@ -1236,3 +1236,8 @@ continua legível por `\{prefix\}(\w+)`, que devolveu `cad_contas` e `cad_lancam
 textos, e o texto com `prefix="exec_42_"` rodou no DuckDB sobre as tabelas do DDL citado da etapa 1
 e devolveu `[('1.1', 150.0)]`. Com `quote=False`, a forma do rascunho, o DML compilado cita só o
 que o dialeto reserva: `"to"` nos dois e `"timestamp"` só no Redshift.
+
+Com a decisão do usuário de 2026-09-21 pela cópia com `quote=True`, o rascunho da etapa 2 rodou de
+novo: o mesmo `[('1.1', 150.0)]`, as mesmas recusas, os dois textos iguais, e toda tabela e coluna
+do contrato entre aspas, o `INSERT ... SELECT` inclusive (`INSERT INTO "{prefix}cad_contas"
+("id_conta", "numero") ...`).

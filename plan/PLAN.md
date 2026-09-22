@@ -380,7 +380,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - Todo identificador que a biblioteca emite, tabela ou coluna, vai entre aspas duplas: `to`, coluna
   de `cad_contratos`, é palavra reservada no DuckDB e no Redshift, e `timestamp`, coluna de
   `cad_lancamentos`, no Redshift; sem aspas, `CREATE TABLE t (to VARCHAR(2))` falha no DuckDB
-  (2026-09-21, `PLAN-STAGE-1.md`, `POC.md`).
+  (2026-09-21, `PLAN-STAGE-1.md`, `POC.md`). O DML da [etapa 2](PLAN-STAGE-2.md) a cumpre pela
+  cópia prefixada com todo nome em `quoted_name(quote=True)`, o sentinela dentro das aspas (decisão
+  do usuário de 2026-09-21).
 
 ## Organização do pacote
 
