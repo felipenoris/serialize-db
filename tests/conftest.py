@@ -112,6 +112,22 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def opened_partition_folders(connection: object, column: str) -> set[str]:
+    """As pastas ``<coluna>=<valor>`` dos arquivos Parquet que o DuckDB abriu, lidas do log
+    ``FileSystem`` desde o último ``CALL truncate_duckdb_logs()``.
+
+    A conexão precisa de ``CALL enable_logging('FileSystem')`` antes da consulta medida; cada
+    abertura de arquivo é uma mensagem com ``"op":"OPEN"`` e o caminho do arquivo.
+    """
+    messages = connection.execute(
+        "SELECT message FROM duckdb_logs WHERE type = 'FileSystem'").fetchall()
+    folders = set()
+    for (message,) in messages:
+        if '"op":"OPEN"' in message and ".parquet" in message:
+            folders.add(re.search(rf"{column}=[0-9-]+", message).group(0))
+    return folders
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Abre o relatório com a sessão: quando, onde, com que versões e com que seleção ela roda."""
     versions = []
