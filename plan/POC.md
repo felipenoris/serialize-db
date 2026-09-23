@@ -185,18 +185,18 @@ informada, que mudou duas linhas. Os números abaixo saem delas, e o histórico 
 relatórios.
 
 **O que respondeu.** Workgroup `controladoria-wg` no namespace `controladoria-ns`, conta
-138071776059, capacidade base 8, sem acesso público e com roteamento VPC melhorado; nenhum cluster
+`<conta>`, capacidade base 8, sem acesso público e com roteamento VPC melhorado; nenhum cluster
 provisionado. Os três endpoints regionais do Redshift e o host do workgroup resolvem para IP privado
 (`10.100.x.x`): o ambiente alvo tem endpoint VPC de interface para todos, e `RS-14` passou, o que
 responde a dúvida que a leitura do laboratório deixou — a credencial temporária e a Data API
 funcionam ali sem internet. A porta 5439 abriu em 0,00 s. A credencial temporária saiu para o
-usuário `IAMR:user-533cbaba-...@3hpfa7636y4qor`, válida por uma hora, e a sessão abriu com ela. O
+usuário `IAMR:<usuário>@<projeto>`, válida por uma hora, e a sessão abriu com ela. O
 ciclo da Data API devolveu `select 1` em 23 ms. A versão é `1.0.436211`, muito acima do patch 186
 que a escrita em datashare exige. `SUPER` e `JSON_PARSE` respondem.
 
 **O esquema e o banco.** `svv_redshift_databases` mostra `dev` local com isolamento de snapshot e
 `datalake_rw_shared` do tipo `shared`, vindo do datashare `controladoria_rw_datashare` da conta
-produtora 390403891846, com isolamento `UNKNOWN`. `svv_all_schemas` põe `sbx_aco_decon` só nesse
+produtora `<conta do produtor>`, com isolamento `UNKNOWN`. `svv_all_schemas` põe `sbx_aco_decon` só nesse
 banco, tipo `shared`: o nome em três partes está confirmado, e `RS-16` passou. `svv_all_tables`
 lista três tabelas lá (`teste`, `teste3`, `new_table`), nenhuma com o prefixo da biblioteca, então a
 sessão lê o esquema. A ACL do banco compartilhado nomeia só a role administrativa do SSO, não a
@@ -465,7 +465,7 @@ partição de `cad_lancamentos` continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS
 
 Em 2026-09-21, às 13:54 UTC, `probes/parquet_source.py --sample 5000` leu no ambiente alvo a base de
 produção `db_projetado`
-(`s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`,
+(`s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`,
 `S3FileSystem`, a listagem em 0,1 s, os 205 rodapés lidos; o relatório está em
 [`readings/parquet_source-2026-09-21-1354.txt`](readings/parquet_source-2026-09-21-1354.txt)): 14
 pastas de tabela, 205 arquivos, 3.771.538.655 bytes, 187.340.531 linhas, `schema.json` solto na
@@ -658,7 +658,7 @@ cada stream e loader; e o `fetchmany` do `redshift_connector` entrou em
 
 Em 2026-09-21, entre 03:47 e 03:51 UTC, o usuário executou os cinco probes no ambiente alvo (Linux
 x86_64, Python 3.13.15, o `.venv` do projeto preparado por `prepare_offline.sh`), com a raiz
-`s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests`.
+`s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/serialize-db-tests`.
 Os relatórios estão em `secrets/probes-aws-bn/`, fora do git, por escolha do usuário
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); os números abaixo saem deles.
 
@@ -689,14 +689,14 @@ proxy sai de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) respondida: nada a fazer, 
 `prepare_environment` da [etapa 3](PLAN-STAGE-3.md) fica como está, para um ambiente que tenha só
 uma das variáveis.
 
-**O bucket** (`bucket.py`): `bndes-aco-models-138071776059` em `sa-east-1`, SSE-KMS pela chave
-`55dd0bd2-f2f2-44be-9a62-bd4264a2ef45` com bucket key, SSE-C bloqueado, acesso público bloqueado,
+**O bucket** (`bucket.py`): `bndes-aco-models-<conta>` em `sa-east-1`, SSE-KMS pela chave
+`<chave>` com bucket key, SSE-C bloqueado, acesso público bloqueado,
 versionado pela amostra (`VersionId` no marcador de pasta); o papel não lê versionamento, Object Lock,
 propriedade, ciclo de vida, política nem uploads incompletos, como no laboratório. Sob a raiz de
 testes há um marcador de pasta de 2026-09-20 e nada mais: nenhuma tabela Delta, nenhuma sessão da
 suíte, nenhuma versão não corrente. A suíte S3 ainda não rodou lá.
 
-**O catálogo** (`catalog.py`): o Glue tem o banco `glue_db_5feoihj3bbzkt7` com uma tabela Parquet e
+**O catálogo** (`catalog.py`): o Glue tem o banco `glue_db_<id>` com uma tabela Parquet e
 nenhum catálogo federado; o Athena tem três workgroups, com `GetWorkGroup` negado em `primary`; o
 Lake Formation e o S3 Tables não respondem. O gatilho de reavaliação de
 [`estrategia.md`](estrategia.md) não disparou.
@@ -827,7 +827,7 @@ mostraram além do que já estava medido:
 Em 2026-09-21, às 10:50 UTC, o usuário rodou `pytest -m redshift` no ambiente alvo (Linux x86_64,
 kernel 6.12 do Amazon Linux 2023, Python 3.13.15, o `.venv` da pasta preparada: deltalake 1.6.4,
 DuckDB 1.5.5, PyArrow 25.0.1, boto3 1.43.98, SQLAlchemy 2.0.54, pandas 3.0.6, pytest 9.1.1), com a
-raiz `s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests`
+raiz `s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/serialize-db-tests`
 e a credencial temporária do workgroup. A sessão durou 10,7 s: um teste passou e dez reprovaram. O
 relatório não entrou no git: cada leitura do ambiente que ele trazia se repete nas execuções
 limpas das 13:35 e das 13:39; a primeira tentativa não gravou o JSON e o usuário repetiu a suíte. O `conftest` criava o arquivo
@@ -857,7 +857,7 @@ JSON leva a mensagem de cada teste reprovado (`failed.<teste>`).
 **O que a execução respondeu**, apesar das reprovações:
 
 - A suíte conecta pelo caminho de `examples/redshift_native.py`: usuário
-  `IAMR:user-533cbaba-4061-70a6-7967-78dc06230c13@3hpfa7636y4qor`, versão `1.0.436211`, que o driver
+  `IAMR:<usuário>@<projeto>`, versão `1.0.436211`, que o driver
   devolve com um byte nulo no fim (`Redshift 1.0.436211\0`).
 - Depois do `USE`, `current_schema()` é nulo e `current_database()` continua `dev`, como no probe.
   `svv_redshift_databases` lista `datalake_rw_shared` como `shared` com isolamento `UNKNOWN` e `dev`

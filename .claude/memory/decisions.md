@@ -644,8 +644,9 @@ producer's namespace and the private addresses, each replaced by a placeholder t
 `README.md` lists. The source-base reading of 2026-09-21 stays, masked, because no newer reading
 replaces it; the probe reports of 2026-09-21 stay out of git, and the older readings live in git
 history. The rule of the same day decides when a report leaves: once `plan/POC.md` and the stage
-file hold what it showed. The same identifiers remain elsewhere in the repository (`plan/POC.md`, the memory,
-`SUITE.md`, `examples/`, `tests/test_probes.py`), a question put to the user. `plan/readings/README.md`
+file hold what it showed. The same identifiers remained elsewhere in the repository (`plan/POC.md`, the memory,
+`SUITE.md`, `examples/`, `tests/test_probes.py`) until the user's answer of the same day, in the
+section on the publication flow. `plan/readings/README.md`
 
 ## The Redshift suite runs of 2026-09-23 and the stage 8 transaction
 
@@ -687,5 +688,10 @@ the `mode`, with a warning in the execution log (`log.warning`, the user's choic
 `warnings.warn`) when the mode asked for `register`; approved the empty text stream's schema from
 `schema_from_row_description` of `select * from (<texto>) as t limit 0`; and kept `load` through the
 `loader` after the `COPY` cost reading. The user also asked to mask the environment's sensitive
-identifiers everywhere in the repository except `SUITE.md`. `plan/PLAN-STAGE-8.md`,
+identifiers everywhere in the repository except `SUITE.md`: `plan/POC.md`, the memory, the bucket
+path of `examples/redshift_copy_unload.py` and `examples/redshift_manifest.py`, and the lab
+account in a fabricated ARN of `tests/test_probes.py`, which took the documentation's
+`123456789012`, carry the placeholders of `plan/readings/README.md` (the lab's got their own:
+`<conta do laboratório>`, `dzd-<domínio do laboratório>`, `<projeto do laboratório>`); git
+history keeps the old values. `plan/PLAN-STAGE-8.md`,
 `plan/PLAN-STAGE-5.md`, `plan/OPEN_QUESTIONS.md`

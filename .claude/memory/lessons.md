@@ -124,7 +124,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
 - **A script the user ran in the target outranks a plan written without one** (2026-09-20). Two
   connection scripts from the target replaced the plan's default (password) with the workgroup's
   temporary credential and moved the Data API out of the library. Keep such a script verbatim in
-  `examples/`, with its literal values, and make the probe and the suite repeat its calls instead of
+  `examples/`, with its literal values (the environment's identifiers masked since 2026-09-23), and make the probe and the suite repeat its calls instead of
   a variant nobody executed.
 - **Each tool in a script reads the proxy its own way** (2026-09-20). `prepare_offline.sh` got
   through `uv sync` and died on the DuckDB `INSTALL` with the same `HTTP_PROXY`: `uv` accepts

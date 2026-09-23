@@ -37,8 +37,8 @@ WORKGROUP = "controladoria-wg"
 DB_CONN   = "dev"                 # banco local onde você conecta
 DB_SHARE  = "datalake_rw_shared"  # banco do datashare (só no nome da tabela)
 SCHEMA    = "sbx_aco_decon"
-S3_DB_TABLE_PATH = "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/dsv/db_projetado/cad_contas/"
-S3_UNLOAD_PATH = "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/unload/"
+S3_DB_TABLE_PATH = "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/dsv/db_projetado/cad_contas/"
+S3_UNLOAD_PATH = "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/unload/"
 
 rs = boto3.client("redshift-serverless", region_name=REGION)
 

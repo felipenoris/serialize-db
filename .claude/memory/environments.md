@@ -4,13 +4,13 @@ Read before running anything in the SageMaker space or the target, preparing the
 
 ## The SageMaker Unified Studio lab, as observed on 2026-09-19
 
-- Domain `dzd-d8yrvx1ko7im6o`, project `eighth-experimentation` (`avhvbqn37ty7m8`), account
-  892278726726, region `us-west-2`, space `my-code-v4` (Code Editor, 4 vCPUs). The `sagemaker_studio`
+- Domain `dzd-<domínio do laboratório>`, project `eighth-experimentation` (`<projeto do laboratório>`), account
+  `<conta do laboratório>`, region `us-west-2`, space `my-code-v4` (Code Editor, 4 vCPUs). The `sagemaker_studio`
   package's `Project()` gives `iam_role`, `kms_key_arn`, `s3.root` and `connections`.
 - Credentials: the container endpoint (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`; `boto3` reports
-  `container-role`) assumes `datazone_usr_role_avhvbqn37ty7m8_5hkjdsy3umpi1c`. `~/.aws/config` has a
+  `container-role`) assumes `datazone_usr_role_<projeto do laboratório>_<ambiente do laboratório>`. `~/.aws/config` has a
   `default` profile with `credential_source = EcsContainer` and a `DomainExecutionRoleCreds` profile.
-- Project bucket `awsds-sandbox-smus-projects`, prefix `dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/`: `dev/`
+- Project bucket `awsds-sandbox-smus-projects`, prefix `dzd-<domínio do laboratório>/<projeto do laboratório>/`: `dev/`
   is the working area (`s3.root`), `shared/` is the s3fs mount at `$HOME/shared`. The role cannot
   `ListAllMyBuckets`. A second S3 connection, `sandbox-lake.s3`, points at
   `s3://awsds-sandbox-lake/sso-group-data-scientists/` through S3 Access Grants.
@@ -36,7 +36,7 @@ Read before running anything in the SageMaker space or the target, preparing the
 The target is a sandbox, not production (user statement of 2026-09-23): the source files under
 `databases/prd/db_projetado` are a copy of the production base, and the S3 bucket and the Redshift
 schema are sandbox resources; `prd` in the path names the base copied, not the environment.
-Redshift serverless `controladoria-wg` in `sa-east-1`, account 138071776059, with no internet: the readings of
+Redshift serverless `controladoria-wg` in `sa-east-1`, account `<conta>`, with no internet: the readings of
 2026-09-20 and 2026-09-21 are in `redshift.md` and `plan/POC.md`, and `plan/readings/` holds the
 masked reports of 2026-09-23 and the source-base reading of 2026-09-21. The five probes of 2026-09-21
 (03:47 to 03:51 UTC, Linux x86_64, Python 3.13.15, the project venv; reports in `secrets/probes-aws-bn/`,
@@ -51,7 +51,7 @@ connect (gateway endpoint); interface endpoints for STS, the three Redshift APIs
 host, Glue, Athena, Secrets Manager and DataZone; KMS (80 s), IAM (10 s), SageMaker, Lake Formation
 (30 s) and S3 Tables (31 s) resolve public and time out. Container credentials (`container-role`)
 lasting about an hour; `AWS_REGION` and `AWS_DEFAULT_REGION` both `sa-east-1`. Bucket
-`bndes-aco-models-138071776059`: SSE-KMS with bucket key, SSE-C blocked, versioned by the sample, the
+`bndes-aco-models-<conta>`: SSE-KMS with bucket key, SSE-C blocked, versioned by the sample, the
 role denied the bucket-level reads as in the lab; the test root held one folder marker and no Delta
 table. Glue has one database with one Parquet table, Athena three workgroups; Lake Formation and S3
 Tables unreachable, so the re-evaluation trigger did not fire.

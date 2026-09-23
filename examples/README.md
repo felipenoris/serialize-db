@@ -18,7 +18,11 @@ são `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao`, por `data_str`,
 por `data_base_str` ([`../plan/POC.md`](../plan/POC.md)).
 
 Os valores literais (região `sa-east-1`, workgroup `controladoria-wg`, banco `dev`, esquema
-`sbx_aco_decon` no banco `datalake_rw_shared`) são os do ambiente alvo. O probe e a suíte tomam os
+`sbx_aco_decon` no banco `datalake_rw_shared`) são os do ambiente alvo. O caminho do bucket em
+`redshift_copy_unload.py` e `redshift_manifest.py` leva os marcadores `<conta>`, `dzd-<domínio>`
+e `<projeto>` no lugar dos identificadores do ambiente, mascarados como em
+[`../plan/readings/README.md`](../plan/readings/README.md) (decisão do usuário de 2026-09-23);
+para rodar esses dois, o caminho volta aos valores do ambiente. O probe e a suíte tomam os
 mesmos parâmetros das variáveis `SERIALIZE_DB_REDSHIFT_*`, descritas em
 [`../probes/README.md`](../probes/README.md).
 

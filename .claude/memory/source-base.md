@@ -22,7 +22,7 @@ Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `test
 
 ## The production base, read on 2026-09-21
 
-- The production base (`s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`),
+- The production base (`s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`),
   read in the target through `S3FileSystem` at 13:54 UTC with `--sample 5000`, the listing in 0.1 s
   (the report is in `plan/readings/parquet_source-2026-09-21-1354.txt`, committed by the user): the
   same structure as the dev base, section 3 identical column by column (checked by script against

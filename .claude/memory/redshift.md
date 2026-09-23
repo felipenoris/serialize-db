@@ -20,10 +20,10 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `examples/`, `plan/redshift.md`, `plan/POC.md`
 - The target's Redshift, read on 2026-09-20 (the reports left `plan/readings/` on 2026-09-23 and
   stay in git history): workgroup `controladoria-wg`,
-  namespace `controladoria-ns`, account 138071776059, base capacity 8, no provisioned cluster; the
+  namespace `controladoria-ns`, account `<conta>`, base capacity 8, no provisioned cluster; the
   three Redshift APIs and the workgroup host resolve to private IPs, so the temporary credential and
   the Data API work without internet; version `1.0.436211`; `datalake_rw_shared` is `shared` from the
-  datashare `controladoria_rw_datashare` (producer account 390403891846) with isolation `UNKNOWN`,
+  datashare `controladoria_rw_datashare` (producer account `<conta do produtor>`) with isolation `UNKNOWN`,
   and `sbx_aco_decon` exists only there. The namespace has no IAM role, default or attached, so
   `IAM_ROLE` is unusable and `COPY`/`UNLOAD` carry the caller's credentials.
   `has_database_privilege(dev, CREATE)` is false and `TEMP` true, so the execution sandbox is either

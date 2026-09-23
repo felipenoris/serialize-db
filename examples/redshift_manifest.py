@@ -81,7 +81,7 @@ DB_CONN   = "dev"                 # banco local onde você conecta
 DB_SHARE  = "datalake_rw_shared"  # banco do datashare que guarda o esquema
 SCHEMA    = "sbx_aco_decon"
 
-BASE = "s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared"
+BASE = "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared"
 S3_SOURCE = f"{BASE}/bndes_grupos_bases_analise_financeira/databases/dsv/db_projetado/cad_contratos"
 S3_WORK   = f"{BASE}/serialize-db-exemplo"
 
