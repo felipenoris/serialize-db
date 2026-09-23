@@ -19,7 +19,8 @@ Exemplo, com o motor DuckDB:
 
     with DuckDBEngine(DuckDBConfig(), "exec-2026-09-05", storage) as engine:
         engine.ingest(Operacao.__table__, uri, version, partitions=["2026-08-31"])
-        with engine.stream(sa.select(Operacao)) as stream, engine.loader(Projetada.__table__) as loader:
+        with engine.stream(sa.select(Operacao)) as stream, \\
+                engine.loader(Projetada.__table__) as loader:
             for batch in stream:
                 loader.write(project(batch))
 """
@@ -86,8 +87,10 @@ class Engine(Protocol):
     def query(self, statement_or_sql: sa.sql.ClauseElement | str,
               params: Mapping[str, object] | None = None) -> pa.Table: ...
     def loader(self, table: sa.Table, queue_depth: int = 2) -> Loader: ...
-    def load(self, table: sa.Table,
-             data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch]) -> int: ...
+    def load(
+        self, table: sa.Table,
+        data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
+    ) -> int: ...
     def audit(self, table: sa.Table, partitions: list[str] | None, uri: str | None = None,
               version: int | None = None, foreign_keys: bool = False,
               key_scope: KeyScope | None = None,

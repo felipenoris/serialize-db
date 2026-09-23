@@ -11,8 +11,9 @@ As verificações:
 - **linhas**: uma consulta, agrupada pela coluna de partição numa tabela particionada, que conta
   por coluna o nulo em ``NOT NULL``, o texto acima de ``String(n)`` em bytes, o JSON inválido, a
   coluna de partição diferente da derivação de ``partition_source`` e o valor de partição fora de
-  ``schema.PARTITION_VALUE``; e que soma cada coluna ``Numeric`` e ``Double`` como ``DECIMAL(38, 6)``
-  (a ``Double`` só nos valores finitos) e conta à parte os não finitos, uma leitura que não reprova;
+  ``schema.PARTITION_VALUE``; e que soma cada coluna ``Numeric`` e ``Double`` como
+  ``DECIMAL(38, 6)`` (a ``Double`` só nos valores finitos) e conta à parte os não finitos, uma
+  leitura que não reprova;
 - **chave_<colunas>**: a chave repetida nas partições da execução, uma consulta por chave;
 - **chave_<colunas>_publicada**: a chave repetida entre as partições da execução e as demais da
   versão publicada, quando a chave não inclui a coluna de partição nem a de ``partition_source``;
@@ -44,7 +45,15 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.functions import FunctionElement
 
 from serialize_db import sql
-from serialize_db.schema import PARTITION_VALUE, Dialect, check_partition_value, table_options
+from serialize_db.schema import (
+    PARTITION_VALUE,
+    TEXT_LIMIT,
+    Dialect,
+    check_partition_value,
+    foreign_keys_by_columns,
+    sequential_key,
+    table_options,
+)
 
 __all__ = ["AuditReport", "Check", "CheckResult", "KeyScope", "audit_sql", "checks"]
 
@@ -75,6 +84,7 @@ class partition_text(FunctionElement):  # noqa: N801 - o nome da classe é o da 
 
 compiles(partition_text)(_by_name)
 
+
 @compiles(partition_text, "duckdb")
 def _duckdb_partition_text(element: partition_text, compiler: object, **kw: object) -> str:
     return f"strftime({compiler.process(element.clauses, **kw)}, '%Y-%m-%d')"
@@ -95,6 +105,7 @@ class json_valid(FunctionElement):  # noqa: N801 - o nome da classe é o da fun�
 
 compiles(json_valid)(_by_name)
 
+
 @compiles(json_valid, "redshift")
 def _redshift_json_valid(element: json_valid, compiler: object, **kw: object) -> str:
     return f"is_valid_json({compiler.process(element.clauses, **kw)})"
@@ -110,6 +121,7 @@ class text_bytes(FunctionElement):  # noqa: N801 - o nome da classe é o da fun�
 
 
 compiles(text_bytes)(_by_name)
+
 
 @compiles(text_bytes, "duckdb")
 def _duckdb_text_bytes(element: text_bytes, compiler: object, **kw: object) -> str:
@@ -131,6 +143,7 @@ class partition_value_valid(FunctionElement):  # noqa: N801 - o nome da classe �
 
 
 compiles(partition_value_valid)(_by_name)
+
 
 @compiles(partition_value_valid, "duckdb")
 def _duckdb_partition_value_valid(element: partition_value_valid, compiler: object,
@@ -154,6 +167,7 @@ class is_finite(FunctionElement):  # noqa: N801 - o nome da classe é o da funç
 
 
 compiles(is_finite)(_by_name)
+
 
 @compiles(is_finite, "redshift")
 def _redshift_is_finite(element: is_finite, compiler: object, **kw: object) -> str:
@@ -268,9 +282,10 @@ def _defect_counters(table: sa.Table) -> dict[str, sa.ColumnElement]:
         if not column.nullable:
             counters[f"nulo_{column.name}"] = column.is_(None)
         if isinstance(column.type, sa.JSON):
-            counters[f"json_{column.name}"] = sa.and_(column.isnot(None), sa.not_(json_valid(column)))
+            invalid = sa.not_(json_valid(column))
+            counters[f"json_{column.name}"] = sa.and_(column.isnot(None), invalid)
         elif isinstance(column.type, sa.Text):
-            counters[f"texto_{column.name}"] = text_bytes(column) > 65535
+            counters[f"texto_{column.name}"] = text_bytes(column) > TEXT_LIMIT
         elif isinstance(column.type, sa.String) and column.type.length:
             counters[f"texto_{column.name}"] = text_bytes(column) > column.type.length
     if options.partition_by is not None:
@@ -282,28 +297,24 @@ def _defect_counters(table: sa.Table) -> dict[str, sa.ColumnElement]:
     return counters
 
 
-def _double_columns(table: sa.Table) -> list[sa.Column]:
-    """As colunas ``Double`` do contrato."""
-    return [column for column in table.columns if isinstance(column.type, sa.Double)]
-
-
 def _totals(table: sa.Table) -> list[sa.ColumnElement]:
     """As somas de controle como ``DECIMAL(38, 6)`` e a contagem dos não finitos de cada ``Double``.
 
     A soma de uma coluna ``Double`` corre só nos valores finitos: o ``CAST`` de um ``NaN`` ou de um
     infinito para ``DECIMAL`` falha, e o ``FILTER`` do agregado não o evita.
     """
-    measures = []
+    sums = []
+    nonfinite = []
     for column in table.columns:
         as_decimal = sa.cast(column, sa.Numeric(38, 6))
         if isinstance(column.type, sa.Double):
             finite = sa.case((is_finite(column), as_decimal))
-            measures.append(sa.func.sum(finite).label(f"total_{column.name}"))
+            sums.append(sa.func.sum(finite).label(f"total_{column.name}"))
+            not_finite = _count_where(sa.not_(is_finite(column)))
+            nonfinite.append(not_finite.label(f"naofinito_{column.name}"))
         elif isinstance(column.type, sa.Numeric):
-            measures.append(sa.func.sum(as_decimal).label(f"total_{column.name}"))
-    for column in _double_columns(table):
-        measures.append(_count_where(sa.not_(is_finite(column))).label(f"naofinito_{column.name}"))
-    return measures
+            sums.append(sa.func.sum(as_decimal).label(f"total_{column.name}"))
+    return sums + nonfinite
 
 
 def _count_where(condition: sa.ColumnElement) -> sa.ColumnElement:
@@ -314,7 +325,8 @@ def _count_where(condition: sa.ColumnElement) -> sa.ColumnElement:
 
 
 def _rows_check(table: sa.Table, partitions: Sequence[str] | None) -> Check:
-    """A verificação de linhas: os contadores de defeito, as somas e os não finitos, por partição."""
+    """A verificação de linhas: os contadores de defeito, as somas e os não finitos, por
+    partição."""
     partition_by = table_options(table).partition_by
     counters = _defect_counters(table)
     measures = [sa.func.count().label("linhas")]
@@ -353,12 +365,12 @@ def _key_within(table: sa.Table, key: Sequence[str], partitions: Sequence[str] |
 
 
 def _single_integer_key(table: sa.Table, key: Sequence[str]) -> sa.Column | None:
-    """A coluna da chave primária inteira de uma coluna, a que ``next_ids`` preenche."""
-    primary = [column.name for column in table.primary_key.columns]
-    if len(key) != 1 or list(key) != primary:
+    """A coluna de ``key`` quando ``key`` é a chave sequencial da tabela, a chave primária inteira
+    de uma coluna que ``next_ids`` preenche; ``None`` nas outras chaves."""
+    column = sequential_key(table)
+    if column is None or list(key) != [column.name]:
         return None
-    column = table.c[key[0]]
-    return column if isinstance(column.type, sa.Integer) else None
+    return column
 
 
 def _key_against_published(table: sa.Table, key: Sequence[str], partitions: Sequence[str],
@@ -423,14 +435,14 @@ def _key_checks(table: sa.Table, partitions: Sequence[str] | None, key_scope: Ke
     return found, not_run
 
 
-def _foreign_key_checks(table: sa.Table, partitions: Sequence[str] | None, foreign_keys: bool,
-                        referenced: Mapping[str, sa.FromClause] | None) -> tuple[list[Check], list[str]]:
+def _foreign_key_checks(
+    table: sa.Table, partitions: Sequence[str] | None, foreign_keys: bool,
+    referenced: Mapping[str, sa.FromClause] | None,
+) -> tuple[list[Check], list[str]]:
     """Os anti-joins das chaves estrangeiras e as que não rodam, com o motivo."""
     found = []
     not_run = []
-    ordered = sorted(table.foreign_key_constraints,
-                     key=lambda constraint: [column.name for column in constraint.columns])
-    for constraint in ordered:
+    for constraint in foreign_keys_by_columns(table):
         label = _key_label([column.name for column in constraint.columns])
         target = constraint.referred_table.name
         if not foreign_keys:
