@@ -240,10 +240,11 @@ print(json.dumps({"rows": n, "seconds": round(time.perf_counter() - started, 3),
 def test_spooled_stream_bounds_memory(local_location: LocalLocation) -> None:
     """O resultado gravado lote a lote num arquivo Arrow IPC com LZ4 por uma thread, e lido lote a lote enquanto ela grava, mantém o processo no tamanho de um lote, como o leitor direto.
 
-    É o ``stream`` da sessão única (``test_parallel.py``): a thread roda a consulta sob o lock e grava
-    cada lote assim que o DuckDB o entrega, e o cliente lê cada lote gravado sem a sessão. O tempo
-    até o primeiro lote, o tempo da consulta, o tamanho do arquivo e a memória máxima vão para o
-    relatório; a asserção é a mesma do leitor direto, menos da metade da memória da tabela inteira.
+    É o caminho do arquivo do ``stream`` híbrido (``test_parallel.py``), o que ele toma depois do
+    orçamento de memória: a thread roda a consulta sob o lock e grava cada lote assim que o DuckDB o
+    entrega, e o cliente lê cada lote gravado sem a sessão. O tempo até o primeiro lote, o tempo da
+    consulta, o tamanho do arquivo e a memória máxima vão para o relatório; a asserção é a mesma do
+    leitor direto, menos da metade da memória da tabela inteira.
     """
     rows = 10_000_000
     folder = Path(local_location.child("transbordo_memoria"))

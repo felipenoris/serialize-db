@@ -419,3 +419,15 @@ exact, and the pruning defect involves no `CAST`; the decision stays pending in 
 asked for the context of the `loader` creating its table at `close` and of `interrupt()`, and for a
 reference implementation of the hybrid `stream` before deciding; the three stay pending in
 `plan/OPEN_QUESTIONS.md`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`
+
+The same day the user answered the rest. The non-finite `Double`: `cast` does not refuse `NaN` or
+infinity; the pruning defect is GitHub issue #59 (opened at the user's request) and stays in
+`plan/OPEN_QUESTIONS.md`, with the `register_files` statistics for a `has_nan` column pending in
+stage 3 and the audit counting non-finite values as a reading, without failing. Accepted and
+implemented in the sketches of `tests/proof_of_concept/test_parallel.py`, the stage 4 reference: the
+`loader` checks the name at open on a cursor of its own, without the session lock, and creates the
+table at `close` in one transaction with the `INSERT`; the hybrid `stream` (batches in memory up to
+64 MiB, the LZ4 spool file after), which the user asked to see as code before approving; and
+`interrupt()` in the stream's `close` and in the engine's `cleanup`. Stage 4 has no decision
+awaiting the user. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`,
+`plan/PLAN.md`, `plan/POC.md`

@@ -126,10 +126,12 @@ com backend pyarrow é o formato dos pipelines (declaração do usuário de 2026
 apoia-se na conversão barata, medida na subseção "A conversão para o pandas": 2,3 ms sem cópia
 para 300.000 linhas, 1,4 ms para um lote de 100.000; o pandas não entra nas dependências de
 execução. Cada motor tem uma sessão por execução sob um lock, e nenhum lock espera pelo código do
-cliente, porque o que usa a sessão termina sem esperar por ele e os lotes passam por um arquivo
-intermediário. No DuckDB, a saída é cada lote de `to_arrow_reader()` gravado num arquivo Arrow IPC
-com LZ4 por uma thread que roda a consulta sob o lock, e o cliente lê cada lote gravado enquanto a
-consulta continua; a entrada é um arquivo igual carregado num único `INSERT ... BY NAME`. No
+cliente, porque o que usa a sessão termina sem esperar por ele e os lotes esperam o cliente fora
+dela. No DuckDB, a saída é cada lote de `to_arrow_reader()` entregue por uma thread que roda a
+consulta sob o lock à memória, enquanto os lotes guardados cabem em 64 MiB, e a um arquivo Arrow IPC
+com LZ4 depois disso, e o cliente lê os lotes enquanto a consulta continua; a entrada é um arquivo
+Arrow IPC carregado no `close`, numa transação, com o `CREATE TABLE` e um único `INSERT ... BY NAME`
+(decisões do usuário de 2026-09-23). No
 Redshift, a saída são as tuplas que o driver materializa, fatiadas por `fetchmany`, ou os arquivos
 de um `UNLOAD`, e a entrada é Parquet no S3 mais `COPY ... MANIFEST`. O que roda em paralelo, sem as
 tabelas temporárias da sessão, abre uma sessão a mais com `run.sandbox.new_session()`.
@@ -167,24 +169,31 @@ As medições, com a data e o ambiente de cada uma, estão em [`POC.md`](POC.md)
 por lotes mostrou", de 2026-09-20, e "O que a sessão única mostrou", de 2026-09-22), e as asserções
 em `test_duckdb.py`, `test_pyarrow.py` e `test_parallel.py`. O que elas fixaram:
 
-- **`stream` roda a consulta numa thread auxiliar, sob o lock, e grava cada lote num arquivo
-  intermediário assim que o DuckDB o entrega**; o cliente lê cada lote gravado, na sua thread,
-  enquanto a consulta continua. O leitor do DuckDB é esvaziado, sem erro, pelo comando seguinte na
-  mesma conexão, e por isso a thread o consome inteiro antes de soltar o lock, sem esperar pelo
-  cliente. O arquivo é Arrow IPC com LZ4, um terço do tamanho sem compressão. Numa consulta sem
-  operador bloqueante sobre 20.000.000 de linhas, o primeiro lote chegou em 5 ms, como no leitor
-  direto de um cursor próprio (3 ms), contra 472 ms quando o arquivo só era lido depois da consulta
-  inteira, e com 5 ms de trabalho do cliente por lote o total foi 0,939 s, contra 0,842 s e 1,330 s
-  (2026-09-23, [`POC.md`](POC.md)). A memória do lado Python fica no tamanho de um lote: 94 MB para
-  10.000.000 de linhas, contra 83 MB do leitor direto e 322 MB da tabela inteira.
+- **`stream` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à memória
+  enquanto os lotes guardados cabem em 64 MiB, e a um arquivo intermediário o lote que não cabe e os
+  seguintes** (decisão do usuário de 2026-09-23); o cliente lê a memória e depois o arquivo, na sua
+  thread, na ordem da consulta, enquanto ela continua. O leitor do DuckDB é esvaziado, sem erro, pelo
+  comando seguinte na mesma conexão, e por isso a thread o consome inteiro antes de soltar o lock,
+  sem esperar pelo cliente. O arquivo é Arrow IPC com LZ4, um terço do tamanho sem compressão. Numa
+  consulta sem operador bloqueante sobre 20.000.000 de linhas, com 13.333.333 no resultado, o
+  primeiro lote chegou em 4 ms, e o total foi 0,411 s sem trabalho do cliente, 0,673 s com 5 ms de
+  Python puro por lote e 0,411 s com pandas, contra 0,622 s, 0,965 s e 0,641 s quando todo lote
+  passava pelo arquivo com LZ4, e 0,399 s, 0,673 s e 0,408 s do leitor direto de um cursor próprio
+  (2026-09-23, [`POC.md`](POC.md)). A memória do lado Python fica no orçamento mais um lote: com o
+  cliente atrasado, 297 MB de pico com 96 lotes no arquivo; o arquivo sozinho manteve 10.000.000 de
+  linhas em 94 MB, contra 83 MB do leitor direto e 322 MB da tabela inteira.
 - **Dentro de `session()`, na mesma thread, a consulta roda na thread de quem chama**, porque a
   auxiliar esperaria o bloco, e o bloco o stream; o cliente lê o arquivo depois da consulta
   inteira. Toda espera por um lote tem prazo e confere o encerramento, a thread não referencia o
-  stream, e `close` (ou o fim do `with`) para a consulta no lote seguinte e apaga o arquivo; um
-  stream abandonado é coletado, a consulta para e o arquivo sai. O erro que a consulta encontra antes
-  do primeiro lote chega ao cliente na construção, como `duckdb.Error` ou como `OSError` com a
-  mensagem do DuckDB; o que ela encontra depois chega na leitura seguinte ao último lote gravado e
-  nas que vêm depois dela, nunca em silêncio.
+  stream, e `close` (ou o fim do `with`) cancela por `interrupt()` a consulta que ainda roda e apaga
+  o arquivo, e o `cleanup` do motor cancela o comando em curso antes de fechar a conexão (decisão do
+  usuário de 2026-09-23): o `close` depois do primeiro lote de uma varredura longa terminou em 7 a
+  10 ms, e o `cleanup` com uma ordenação em curso, em 2 ms. A thread marca o fim da consulta ainda
+  com o lock tomado, e o `interrupt()` do `close` nunca alcança o comando seguinte da sessão. Um
+  stream abandonado é coletado, a consulta para no lote seguinte e o arquivo sai. O erro que a
+  consulta encontra antes do primeiro lote chega ao cliente na construção, como `duckdb.Error` ou
+  como `OSError` com a mensagem do DuckDB; o que ela encontra depois chega na leitura seguinte ao
+  último lote entregue e nas que vêm depois dela, nunca em silêncio.
 - **O streaming limita a memória do lado Python, não a do DuckDB.** A consulta roda sob
   `memory_limit` e `temp_directory`, e uma ordenação materializa o resultado antes do primeiro lote.
   A ordem dos lotes é a da consulta: sem `ORDER BY`, com `preserve_insertion_order = false`, é
@@ -193,17 +202,18 @@ em `test_duckdb.py`, `test_pyarrow.py` e `test_parallel.py`. O que elas fixaram:
   limitado pelo estágio mais lento: 1,25x com o trabalho em pandas por lote e 1,55x com um laço
   Python puro, em 6.000.000 de linhas. Ler um lote é uma chamada nativa longa, e a thread auxiliar
   paga no máximo um intervalo de troca do GIL por lote ao lado do laço Python do cliente.
-- **`loader` grava os lotes num arquivo intermediário numa thread auxiliar e os insere num único
-  `INSERT ... BY NAME` no `close`**, sob o lock, enquanto o cliente prepara o lote seguinte: `write`
+- **`loader` grava os lotes num arquivo intermediário numa thread auxiliar e, no `close`, cria a
+  tabela e os insere num único `INSERT ... BY NAME`, numa transação**, sob o lock, enquanto o
+  cliente prepara o lote seguinte: `write`
   faz o `cast` do lote na thread do cliente, para o erro aparecer com o lote em mãos, e bloqueia
-  quando a fila está cheia; nada é visível antes do `INSERT`, e uma exceção dentro do `with`, um lote
-  recusado pelo `cast`, um erro do `INSERT` ou um loader abandonado não inserem nada. O comando único
+  quando a fila está cheia; nada existe antes do `close`, e uma exceção dentro do `with`, um lote
+  recusado pelo `cast`, um erro do `INSERT` ou um loader abandonado não deixam tabela. O comando único
   é o caminho rápido: um `INSERT` por lote custa cerca de 3,5 ms, e num banco em arquivo o pipeline
   de três estágios sobre 3.000.000 de linhas levou 0,400 s na sessão única, contra 0,565 s com um
-  cursor por stream e por loader e um `INSERT` por lote numa transação. A abertura cria a tabela sob
-  o lock, e depois de um `stream` espera a consulta dele inteira: em 20.000.000 de linhas, o
-  primeiro lote chegou em 0,811 s, contra 0,006 s com a tabela criada no `close` (2026-09-23; a
-  proposta espera o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  cursor por stream e por loader e um `INSERT` por lote numa transação. A abertura só confere o
+  nome, num cursor à parte e sem o lock, porque um `CREATE TABLE` sob o lock esperaria a consulta
+  inteira de um `stream` aberto antes: em 20.000.000 de linhas, o primeiro lote chegava em 0,811 s,
+  contra 0,006 s com a tabela criada no `close` (decisão do usuário de 2026-09-23).
 - **O `INSERT` único sobre um leitor alimentado por gerador Python não é o caminho**, embora seja um
   comando só e atômico: o `arrow_scan` do DuckDB puxa o fluxo por uma thread de leitura antecipada do
   Arrow, que chama o gerador em outra thread além do que o comando consumiu e depois da falha, e essa
@@ -416,10 +426,11 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   compartilhada sem lock entrega a uma thread o resultado da outra, sem erro: o lock é o que deixa
   várias threads usarem a sessão (`test_concurrency.py`).
 - Nenhum lock espera pelo código do cliente: a parte de cada primitiva que usa a sessão termina sem
-  esperar por ele. `stream` roda a consulta numa thread auxiliar, sob o lock, e grava cada lote num
-  arquivo intermediário assim que o motor o entrega, e o cliente lê cada lote gravado enquanto a
-  consulta continua; o `loader` grava os lotes num arquivo fora da sessão e o carrega num comando
-  só, sob o lock, no `close`. Por isso o cliente trabalha no lote atual enquanto a consulta produz o
+  esperar por ele. `stream` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à
+  memória, até o orçamento, ou a um arquivo intermediário, e o cliente lê os lotes enquanto a
+  consulta continua; o `loader` confere o nome na abertura sem a sessão, grava os lotes num arquivo
+  fora dela e, no `close`, cria a tabela e o carrega num comando só, sob o lock. Por isso o cliente
+  trabalha no lote atual enquanto a consulta produz o
   seguinte, ou enquanto a biblioteca grava o anterior, e nenhuma combinação de `stream`, `loader` e
   outras primitivas, de uma thread ou de várias, trava: outro comando espera só a consulta em curso
   (`test_parallel.py`, [`POC.md`](POC.md)).

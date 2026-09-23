@@ -330,12 +330,13 @@ e os exemplos do Redshift em `test_redshift.py`.
    paralelismo, e o custo de uma extensão em Rust não se justifica por ele.
 6. As threads da biblioteca são os pools de `publish`, de `publish_redshift` e de `ingest`, este
    com uma sessão a mais por tabela, e a auxiliar de cada `stream` e de cada `loader`, encerrada no
-   `close`: a de `stream` roda a consulta e grava cada lote num arquivo intermediário enquanto o
-   cliente lê os lotes já gravados, e a de `loader` grava os lotes num arquivo fora da sessão. O
-   cliente trabalha no lote atual enquanto a consulta produz o seguinte ou a biblioteca grava o
-   anterior. A exceção medida em 2026-09-23 é o `loader` aberto depois de um `stream`: a abertura
-   cria a tabela sob o lock e espera a consulta inteira do stream, e a proposta de criá-la no
-   `close` espera o usuário ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+   `close`: a de `stream` roda a consulta e entrega cada lote à memória, até um orçamento de
+   64 MiB, ou a um arquivo intermediário depois dele, enquanto o cliente lê os lotes já entregues, e
+   a de `loader` grava os lotes num arquivo fora da sessão, que o `close` carrega numa tabela criada
+   ali. O cliente trabalha no lote atual enquanto a consulta produz o seguinte ou a biblioteca grava
+   o anterior, também com o `loader` aberto depois do `stream`, porque a abertura dele não usa a
+   sessão, e o `close` de um stream cancela a consulta que ainda roda (decisões do usuário de
+   2026-09-23).
 
 ### Leituras em paralelo
 

@@ -83,7 +83,7 @@ minúsculos, e os dois motores leem o nome entre aspas como o mesmo nome sem asp
 | `sql_type(column, dialect)` | O nome do tipo no motor, pela tabela de tipos da documentação (`docs/index.md`): `DECIMAL(p, s)`, `VARCHAR(n)` nos dois (o DuckDB ignora o comprimento), `Text` em `VARCHAR` e `VARCHAR(65535)` (decisão do usuário de 2026-09-21), `Uuid` em `VARCHAR(36)`, JSON em `JSON` e `SUPER`, `Double` em `DOUBLE` e `DOUBLE PRECISION`, `DateTime` em `TIMESTAMP` e `TIMESTAMPTZ`; a migração adiantada o usa nos `CAST`. |
 | `quoted(name)`, `column_ddl(column, dialect)` | O identificador entre aspas duplas, e a linha da coluna no `CREATE TABLE` (`"<coluna>" <tipo> [NOT NULL]`); públicas porque as etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [8](PLAN-STAGE-8.md) montam texto com identificadores e as variantes do DDL (a staging sem a coluna de partição, a tabela publicada com a chave primária informativa). |
 | `ddl(table, dialect, prefix="", temporary=False)` | O `CREATE TABLE` do sandbox para `duckdb` ou `redshift`, gerado como texto sem o dialeto do SQLAlchemy: colunas, tipos por `sql_type` e `NOT NULL`, todo identificador entre aspas; sem chave, `DEFERRABLE`, `Identity`, `CHECK`, `DEFAULT` nem comentário (as chaves são da auditoria, e o comentário vai no esquema Delta); `DISTSTYLE`, `DISTKEY` e `SORTKEY` no Redshift, de `table_options`; `prefix` renomeia a tabela para o sandbox (`exec_<id>_`, ou o sentinela `{prefix}` da [etapa 2](PLAN-STAGE-2.md), que sai como `"{prefix}cad_operacoes"`); `temporary=True` emite `CREATE TEMP TABLE`, a tabela da sessão, pedida pelo usuário em 2026-09-22 sem uso no plano, porque o sandbox dos dois motores é de tabelas comuns e, no DuckDB, a temporária é da conexão que a criou e um `cursor()` não a vê (leitura de 2026-09-22, [`POC.md`](POC.md)). |
-| `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string`, `string_view` e dicionário para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric(p, s)` por `decimal128(38, s)`, que recebe qualquer `int64`, antes de conferir `p`; recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` em bytes, texto acima de 65.535 bytes numa coluna `Text`, os dois medidos depois da conversão para `string`, um tipo sem conversão para o do contrato, nulo em coluna `NOT NULL` e um lote sem coluna alguma do contrato, com a tabela, a coluna e a instrução ao cliente na mensagem. |
+| `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string`, `string_view` e dicionário para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric(p, s)` por `decimal128(38, s)`, que recebe qualquer `int64`, antes de conferir `p`; recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` em bytes, texto acima de 65.535 bytes numa coluna `Text`, os dois medidos depois da conversão para `string`, um tipo sem conversão para o do contrato, nulo em coluna `NOT NULL` e um lote sem coluna alguma do contrato, com a tabela, a coluna e a instrução ao cliente na mensagem. Aceita `NaN` e infinito numa coluna `Double` (decisão do usuário de 2026-09-23): os dois escritores do Delta gravam o máximo sem o `NaN`, e o `delta_scan` responde a um filtro por intervalo conforme a poda, a questão aberta da [issue #59](https://github.com/felipenoris/serialize-db/issues/59). |
 | `check_models(metadata)` | A lista de violações do contrato nos modelos, um texto por violação com tabela e coluna: tipo fora da tabela de tipos, `autoincrement` em chave inteira (o padrão `"auto"` inclusive), `Identity`, `String` sem comprimento, chave estrangeira `DEFERRABLE` ou cujas colunas apontadas não são a chave primária nem uma `UniqueConstraint` da tabela apontada, na mesma ordem (decisão do usuário de 2026-09-22: o DuckDB recusa o índice único como alvo e a ordem trocada, e o Redshift documenta a mesma exigência), `partition_by` sem a coluna ou com a coluna fora de `String(n)`, `partition_source` que a tabela não tem ou sem `partition_by`, tabela sem chave primária e sem `keys`. Vazia no modelo cliente; no modelo de referência lista o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), as 3 chaves estrangeiras sem chave no alvo, as 20 colunas `String` sem comprimento; o comentário de tabela e de coluna é opcional (decisão do usuário de 2026-09-21), e o da coluna, quando existe, vai para o esquema Arrow e para o Delta. |
 | `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória, cada texto com `\n` final; o `.delta.json` é o JSON canônico (chaves ordenadas, indentado), porque o `to_json()` do delta-rs serializa os metadados de cada campo em ordem arbitrária, que muda a cada geração, e grava `PARQUET:field_id` como `parquet.field.id` inteiro. |
 | `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory` e devolve os caminhos; `serialize-db schema write --metadata modulo:atributo <pasta>` grava. |
@@ -236,8 +236,10 @@ em [`POC.md`](POC.md), seção "O que os rascunhos das etapas mostraram".
 
 ## Decisões pendentes
 
-As decisões da etapa foram tomadas pelo usuário em 2026-09-21 e 2026-09-22, e cada uma está
-escrita na seção que a descreve. A de 2026-09-22 pôs `UniqueConstraint` no lugar dos dois índices
+As decisões da etapa foram tomadas pelo usuário em 2026-09-21, 2026-09-22 e 2026-09-23, e cada uma
+está escrita na seção que a descreve. A de 2026-09-23 manteve o `cast` aceitando o `NaN` e o
+infinito numa coluna `Double`, e o que eles fazem nas estatísticas do Delta ficou na
+[issue #59](https://github.com/felipenoris/serialize-db/issues/59). A de 2026-09-22 pôs `UniqueConstraint` no lugar dos dois índices
 únicos compostos do modelo cliente, que `rel_contrato_operacao` e `cad_lancamentos` apontam por
 chave estrangeira composta, e a regra da chave estrangeira sem chave no alvo em `check_models`:
 `Base.metadata.create_all` num `sqlalchemy.Connection` do DuckDB falhava em
@@ -253,21 +255,3 @@ A revisão de código de 2026-09-22 deixou uma proposta à espera do usuário:
   instrução de converter no cliente, porque a conversão muda o valor que o cliente vê e nenhuma
   coluna do modelo cliente tem fuso.
 
-A revisão das etapas 3 e 4 de 2026-09-23 deixou outra:
-
-- **O `Double` não finito.** `cast` aceita `NaN` e infinito numa coluna `Double`, e o pandas gera
-  `NaN` numa divisão por zero. Os dois escritores do Delta gravam o máximo sem o `NaN`, e o
-  `delta_scan` do DuckDB, que ordena o `NaN` acima de todo número, responde conforme a poda:
-  `valor > 3` deu 0 linhas com o arquivo podado, e `valor >= 2` deu 2, com o `NaN` dentro; a soma de
-  controle da auditoria, `CAST(valor AS DECIMAL(38, 6))`, falha com `ConversionException` no `NaN`
-  e no infinito (leituras de 2026-09-23, [`POC.md`](POC.md)). A soma de controle já não falha: a
-  [etapa 4](PLAN-STAGE-4.md) soma só os valores finitos e conta os demais. Tirar o `CAST` da soma
-  também evitaria a falha, mas o `CAST` para `DECIMAL(38, 6)` é o que torna a soma exata: em
-  20.000.000 de valores, a soma em `DOUBLE` deu cinco resultados com 1, 2, 4, 8 e 11 threads, o mais
-  distante a 13.409 da soma exata, e a soma por `DECIMAL(38, 6)` deu o valor exato nas cinco. Nenhuma das duas
-  resolve a poda, que não passa por `CAST` algum. Proposto: recusar o `NaN` e o infinito com
-  `ContractError`, como o nulo numa coluna `NOT NULL`, depois de contar `isnan` e `isinf` nas
-  colunas `Double` das tabelas que a migração adiantada gravou no ambiente alvo, porque a recusa
-  vale também para a carga inicial. As alternativas são converter o `NaN` em nulo no `cast`, a
-  convenção do pandas, que muda o valor gravado, e aceitá-los, com a contagem na auditoria e o
-  resultado de um filtro por intervalo dependendo da poda.

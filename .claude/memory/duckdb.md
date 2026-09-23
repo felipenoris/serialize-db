@@ -62,7 +62,9 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `cursor()`. `cursor()` returns in 0.04 ms while the connection runs a query in another thread.
   The DB-API style `qmark` compiled by `duckdb_engine.Dialect(paramstyle="qmark")` runs with the
   list built from `compiled.positiontup`, and a `?` inside a quoted literal passes intact
-  (2026-09-23). `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`, `test_sqlalchemy.py`
+  (2026-09-23). An `interrupt()` that reaches a read of the Arrow reader surfaces as `OSError:
+  INTERRUPT Error: Interrupted!`, one that reaches `execute` as `duckdb.InterruptException`.
+  `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`, `test_sqlalchemy.py`, `test_parallel.py`
 - `COPY ... (RETURN_STATS)` on a `DOUBLE` with `NaN` gives `has_nan: true` and the largest number
   as the maximum; infinity comes as the text `inf`. Long text comes truncated to 256 characters,
   the maximum as 255 characters with the last one incremented, above the real value; long

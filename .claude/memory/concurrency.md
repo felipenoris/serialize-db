@@ -97,7 +97,7 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   803 to 917 MB; part of the gain is the calling threads added to the pool, which the target's
   2 vCPUs lack. The proposals (table created at close, hybrid stream, `interrupt()`) await the user
   in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_duckdb.py`
-- The hybrid `stream` reference implementation (2026-09-23, scratchpad, pending the user's decision)
+- The hybrid `stream` (user decision of 2026-09-23, implemented in `test_parallel.py`)
   keeps batches in a deque while their bytes fit a 64 MiB budget and writes the first batch that
   does not fit, and every later one, to the LZ4 spool; the client drains the deque before reading
   the file, so the order holds. The spool file is born mid-query, after `__del__` may have unlinked
@@ -108,3 +108,14 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   without work, 0.965 → 0.673 s with 5 ms pure Python per batch, 0.641 → 0.411 s with pandas, and
   1.086 → 0.908 s with a lagging client (96 batches spilled, 297 MB peak; 256 MiB gave 0.839 s at
   522 MB). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- The stage 4 sketches in `test_parallel.py` (2026-09-23): `BatchStream.close` sets `stop` and,
+  under the spool's condition while the query has not marked its end, calls the connection's
+  `interrupt()`, which never reaches another command because the producer marks the end under the
+  session lock; `SandboxEngine.cleanup` interrupts before taking the lock; `new_session` creates the
+  cursor without the lock; `Loader` checks the name through `name_in_use` on a cursor and runs
+  `BEGIN`, the `CREATE TABLE`, the `INSERT` and `COMMIT` at `close`, rolling back on failure. The
+  close after the first batch of a long scan took 7 to 10 ms, the cleanup of a sort 2 ms, the
+  three-stage pipeline 0.365 to 0.370 s against 0.406 to 0.436 s before; with `stream` then `loader`
+  in one `with`, the first batch arrives while the query runs. Five runs of the suite were green;
+  the orphan-file race and a `__del__` reading a field the failed `__init__` never set appeared only
+  on repetition. `plan/POC.md`, `plan/PLAN-STAGE-4.md`

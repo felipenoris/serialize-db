@@ -74,6 +74,18 @@ foi medido em [`POC.md`](POC.md).
   e espera uma execução no ambiente alvo; o resultado decide se a transação da etapa 8 fica como
   está ou ganha o `LOCK`, a nova tentativa, o `UPDATE` condicionado à versão lida ou a staging por
   execução.
+- **O `Double` não finito nas estatísticas do Delta**, a
+  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
+  infinito numa coluna `Double` (decisão do usuário de 2026-09-23), e os dois escritores do Delta
+  gravam o máximo do arquivo sem o `NaN`; o DuckDB ordena o `NaN` acima de todo número, e o
+  `delta_scan` responde a um filtro por intervalo conforme a poda: `valor > 3` deu 0 linhas com o
+  arquivo podado, e `valor >= 2` deu 2, com o `NaN` dentro (leituras de 2026-09-23,
+  [`POC.md`](POC.md)). A soma de controle da auditoria já soma só os finitos e conta os demais, e o
+  registro deixa fora o extremo infinito. Continuam abertos: a contagem de `isnan` e `isinf` nas
+  colunas `Double` das tabelas que a migração adiantada gravou no ambiente alvo, com a busca por
+  `Infinity` nos arquivos do log delas; o que `register_files` grava numa coluna com `has_nan`
+  ([etapa 3](PLAN-STAGE-3.md)); se a contagem da auditoria reprova; e o aviso aos clientes da tabela
+  publicada.
 - **O `pytest` sem variável grava na pasta temporária do pytest.** A premissa de
   [`PLAN.md`](PLAN.md) diz que `pytest` sem variável não grava arquivo algum, e o cabeçalho de
   `tests/conftest.py` diz que fora das raízes informadas a sessão grava só `.pytest_cache/`; mas
@@ -103,25 +115,10 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 - [Etapa 1](PLAN-STAGE-1.md): o timestamp com fuso numa coluna `DateTime` sem fuso, e o inverso,
   que o `cast` aceita em silêncio: o instante UTC vira hora local, e a hora local vira UTC (leitura
   de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, porque a
-  conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso. E o
-  `Double` não finito, que o `cast` aceita: os dois escritores do Delta gravam o máximo sem o `NaN`,
-  e o `delta_scan` responde a um filtro por intervalo conforme a poda (leituras de 2026-09-23,
-  [`POC.md`](POC.md)). A soma de controle da auditoria, que falhava no `NaN` e no infinito, já soma
-  só os finitos ([etapa 4](PLAN-STAGE-4.md)); tirar o `CAST` dela também evitaria a falha, mas a soma
-  em `DOUBLE` mudou com o número de threads, e nenhuma das duas resolve a poda, que é o que a decisão
-  resolve. Proposto: recusar os dois com `ContractError`, depois de contar `isnan` e `isinf` nas
-  colunas `Double` das tabelas que a migração adiantada gravou no ambiente alvo.
-- [Etapa 3](PLAN-STAGE-3.md): o mínimo e o máximo de uma coluna `Double` com `NaN`, que segue a
-  decisão da etapa 1: com o `NaN` aceito, `register_files` omite os dois quando o `RETURN_STATS`
-  traz `has_nan`.
-- [Etapa 4](PLAN-STAGE-4.md), com as medições de 2026-09-23 em [`POC.md`](POC.md): a tabela do
-  `loader` criada no `close`, com o nome conferido na abertura num cursor próprio, porque o
-  `CREATE TABLE` da abertura espera a consulta inteira de um `stream` aberto antes (primeiro lote
-  em 0,811 s contra 0,006 s); o `stream` híbrido, com os lotes em memória até 64 MiB e o arquivo com
-  LZ4 depois, cuja implementação de referência o usuário pediu para ver antes de decidir (0,411 s
-  contra 0,622 s sem trabalho, 0,673 s contra 0,965 s com Python puro); e o `interrupt()` no `close`
-  do stream e no `cleanup`, para um operador bloqueante em 2 ms em vez de esperar a consulta inteira
-  com o lock tomado.
+  conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso.
+- [Etapa 3](PLAN-STAGE-3.md): o mínimo e o máximo de uma coluna `Double` com `NaN`, da
+  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). Proposto: `register_files`
+  omite os dois quando o `RETURN_STATS` traz `has_nan`.
 - [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
   entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição

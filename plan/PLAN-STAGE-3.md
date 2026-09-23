@@ -84,8 +84,9 @@ o rodapé de cada arquivo, um GET por arquivo:
    máximo, e o `delta_scan ... WHERE valor > 3` perdeu a linha que o DuckDB ordena acima de todo
    número; o infinito entraria no JSON do log como `Infinity`, que não é JSON válido (leitura de
    2026-09-23, [`POC.md`](POC.md)). O extremo infinito fica fora, como o escritor do delta-rs faz,
-   que grava `null` no lugar dele; o `NaN` segue a decisão da [etapa 1](PLAN-STAGE-1.md) sobre o
-   `Double` não finito, porque o próprio delta-rs grava o máximo sem ele. O texto não tem exceção: o
+   que grava `null` no lugar dele. O `NaN`, que o `cast` aceita (decisão do usuário de 2026-09-23),
+   é a questão aberta da [issue #59](https://github.com/felipenoris/serialize-db/issues/59), porque
+   o próprio delta-rs grava o máximo sem ele. O texto não tem exceção: o
    `RETURN_STATS` trunca o máximo para cima, e omite o texto multibyte longo.
 
 A reprovação recusa o commit com o arquivo e a conferência na mensagem, e os arquivos ficam órfãos na
@@ -643,14 +644,14 @@ não o seu texto.
 
 ## Decisões pendentes
 
-- **O mínimo e o máximo de uma coluna `Double` com `NaN`.** Os dois escritores deixam o `NaN`
-  fora do máximo, e o `delta_scan` perde a linha num filtro por intervalo quando poda o arquivo
-  (leitura de 2026-09-23, [`POC.md`](POC.md)). A decisão é a do `Double` não finito, na
-  [etapa 1](PLAN-STAGE-1.md): recusado pelo contrato, a coluna nunca traz `NaN`; aceito,
-  `register_files` omite o mínimo e o máximo da coluna quando o `RETURN_STATS` traz `has_nan`, e o
-  `publish_partition` continua com os do delta-rs. A migração adiantada registrou o `Double` na base
-  de produção, e a contagem de `isnan` por coluna `Double` nas tabelas migradas, no ambiente alvo,
-  diz se alguma já tem o defeito.
+- **O mínimo e o máximo de uma coluna `Double` com `NaN`**, a
+  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). Os dois escritores deixam o
+  `NaN` fora do máximo, e o `delta_scan` perde a linha num filtro por intervalo quando poda o arquivo
+  (leitura de 2026-09-23, [`POC.md`](POC.md)); o `cast` aceita o `NaN` (decisão do usuário de
+  2026-09-23). Proposto: `register_files` omite o mínimo e o máximo da coluna quando o
+  `RETURN_STATS` traz `has_nan`, e o `publish_partition` continua com os do delta-rs. A migração
+  adiantada registrou o `Double` na base de produção, e a contagem de `isnan` por coluna `Double`
+  nas tabelas migradas, no ambiente alvo, diz se alguma já tem o defeito.
 
 As seis decisões da etapa tomadas pelo usuário em 2026-09-22 estão escritas na seção que
 descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a

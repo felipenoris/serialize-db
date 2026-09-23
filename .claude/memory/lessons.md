@@ -370,3 +370,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   each clause form that reaches a path (`IN`, `NOT IN`, `OR`, expanding parameters, table
   functions) and probe each one, reading pruning through the files the engine opens.
   `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- **A concurrency test is repeated before it is trusted, and its failure paths are read** (2026-09-23).
+  The hybrid `stream` passed its eight cases on the first run; repeated six times, it left the spool
+  file of an abandoned stream in three runs, because the file is born mid-query and can appear after
+  `__del__` unlinked the path. The `Loader` that refuses an occupied name at open printed an
+  `AttributeError` from `__del__`, which read an event the failed `__init__` never created, only as
+  a warning in the suite's output. Run a new test of threads or finalizers several times in a row,
+  read the warnings the run prints, and give every field a finalizer reads a value before the first
+  line of `__init__` that can raise. `plan/POC.md`

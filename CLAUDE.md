@@ -445,6 +445,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   `IN` lists only after the plan was written (`__[POSTCOMPILE_...]`), and `delta_scan` prunes by
   `=` and ranges but opens every file for a multi-value `IN`; read pruning through the files the
   engine opens (2026-09-23).
+- **A concurrency test is repeated before it is trusted, and its failure paths are read**: the
+  hybrid stream's orphan-file race showed in three of six runs and never in the first, and a
+  `__del__` read a field a failed `__init__` never set; run such tests several times, read the
+  warnings, and set every field a finalizer reads before the first line that can raise (2026-09-23).
 
 ## Naming conventions
 
@@ -492,22 +496,22 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
 - Stages 0, 1 and 2 are closed; the package has `errors`, `schema`, `sql`, `_files` and `cli`.
   Stages 3 to 9 have no code. The review of stages 3 and 4 of 2026-09-23 corrected both stage files
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as
-  `FunctionElement`) and left proposals awaiting the user in `plan/OPEN_QUESTIONS.md`: refusing the
-  non-finite `Double` in the contract (stage 1, which decides the `NaN` statistics of stage 3), and
-  three for stage 4: the `loader` creating its table at `close`, the hybrid `stream` (the user asked
-  to see its reference implementation first) and `interrupt()` in `close`. The user decided the
-  `qmark` style, the audit key scope and the engine interface the same day
-  (`.claude/memory/decisions.md`).
+  `FunctionElement`), and the user's answers of the same day closed stage 4: the `qmark` style, the
+  audit key scope, the engine interface, the `loader` creating its table at `close`, the hybrid
+  `stream` and `interrupt()`, the last three implemented in the `test_parallel.py` sketches. The
+  `cast` keeps accepting the non-finite `Double`; its pruning defect is issue #59 and the stage 3
+  `NaN` statistics wait on it (`.claude/memory/decisions.md`).
 - The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
   ran successfully there on the copy of the production base, and its reports, not yet available,
   carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the
   default, and whether the other mode leaves stages 4, 5 and 7). Stages 3, 4 and 6 follow on local
   folders, and stage 7 absorbs the script.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
-  no lock holder waits for client code: DuckDB `stream` writes each batch to an intermediate file
-  while the query runs and the client reads the written batches, `loader` loads its file in one
-  `INSERT`, `session()` hands the raw connection, and `new_session()` opens an extra session for
-  parallel work, which `run.ingest` uses per table (2026-09-23). The reference sketches are
+  no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
+  to an intermediate file after it while the query runs, and its `close` interrupts a query still
+  running; `loader` checks the name without the lock and creates and loads its table in one
+  transaction at `close`; `session()` hands the raw connection, and `new_session()` opens an extra
+  session for parallel work, which `run.ingest` uses per table (2026-09-23). The reference sketches are
   `SandboxEngine`, `BatchStream` and `Loader` in `tests/proof_of_concept/test_parallel.py`. The
   Redshift driver materializes a result in `execute` (`plan/redshift.md`), so `stream` bounds memory
   there only through `UNLOAD`.

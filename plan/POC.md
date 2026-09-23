@@ -1940,3 +1940,39 @@ etapas 3 e 4.
 **Consequência**: [`PLAN-STAGE-1.md`](PLAN-STAGE-1.md) registra, na decisão do `Double` não finito,
 que o `CAST` da soma de controle fica; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) propõe o híbrido com
 64 MiB, à espera do usuário.
+
+## O que os esboços do stream híbrido, do cancelamento e do loader mostraram
+
+Em 2026-09-23, no mesmo macOS, os esboços de `tests/proof_of_concept/test_parallel.py` passaram a
+implementar as decisões do usuário do mesmo dia: o `BatchStream` híbrido, com os lotes em memória
+até 64 MiB e o arquivo Arrow IPC com LZ4 depois; o `interrupt()` no `close` do stream e no
+`cleanup` do motor; e o `Loader` que confere o nome num cursor próprio, sem o lock da sessão, e cria
+a tabela no `close`, numa transação com o `INSERT`. A suíte rodou cinco vezes seguidas, 14 casos
+verdes em todas.
+
+- **O cancelamento.** O `close` depois do primeiro lote de uma varredura que acha linhas só no
+  começo da tabela (`id < 150000 OR md5(id::VARCHAR) = 'x'`, 20.000.000 de linhas) terminou em 7 a
+  10 ms, contra 0,729 s da mesma consulta sem o `interrupt()` na sonda; o `cleanup` com um stream
+  preso numa ordenação, noutra thread, terminou em 2 ms, e a construção desse stream recebeu o erro
+  do cancelamento. O `interrupt()` que alcança a leitura do Arrow chega como `OSError: INTERRUPT
+  Error: Interrupted!`, e o que alcança o `execute`, como `duckdb.InterruptException`; a sessão
+  continuou usável depois dos dois.
+- **O orçamento.** Com o cliente mais lento que a consulta e um orçamento de dois lotes, 28 dos 30
+  lotes foram para o arquivo, a memória não passou de 1,9 MB, e as 3.000.000 de linhas saíram na
+  ordem.
+- **O `loader` depois do stream.** Na ordem do exemplo mensal, `stream` e depois `loader` no mesmo
+  `with`, o primeiro lote chegou com a consulta ainda rodando; um `CREATE TABLE` pedido à sessão logo
+  depois de abrir o stream só rodou com a consulta terminada. O `ROLLBACK` desfaz o `CREATE TABLE`
+  quando o `INSERT` falha, e o nome fica livre.
+- **O pipeline de três estágios** sobre 3.000.000 de linhas levou de 0,365 s a 0,370 s encadeado,
+  contra 0,406 s a 0,436 s do desenho anterior nas execuções da suíte de 2026-09-22 e 2026-09-23;
+  0,437 s a 0,439 s pela tabela inteira e 0,652 s a 0,668 s lote a lote sem threads.
+- **Dois defeitos que só a repetição mostrou.** A primeira versão do híbrido deixava o arquivo de um
+  stream abandonado em três de seis execuções da bateria, e a do `Loader` escrevia um aviso de
+  `AttributeError` no `__del__` quando a abertura recusava o nome, porque o evento que o `__del__`
+  usa nascia depois da recusa. A thread do stream apaga o arquivo que criou quando para pelo `stop`,
+  e o `Loader` cria o evento antes da conferência do nome.
+
+**Consequência**: [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) e [`PLAN.md`](PLAN.md) descrevem o stream
+híbrido, o cancelamento e o `loader` com a criação no `close`, e a etapa 4 não tem decisão
+pendente.
