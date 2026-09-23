@@ -430,8 +430,13 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   commits: o cliente que lê numa sessão o que grava na outra espera o `close` do `loader` ou o fim
   do comando. `run.ingest` de mais de uma tabela abre uma sessão a mais por tabela; quatro tabelas de 150.000 linhas
   entraram em 0,017 s assim e em 0,066 s em série na sessão principal (`test_parallel.py`,
-  2026-09-23). No Redshift, cada sessão a mais pede a sua credencial temporária; dois `COPY` em
-  conexões abertas dentro da tarefa levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
+  2026-09-23). No DuckDB, o pool `threads` é da instância e vale para todas as sessões, e a thread
+  que chama cada sessão também executa a consulta dela: com `threads` igual aos núcleos, o padrão,
+  uma varredura grande já ocupa a máquina, e a sessão a mais ganha nas consultas pequenas, nos
+  operadores que não se paralelizam e na espera do S3, onde a documentação do DuckDB recomenda
+  `threads` de 2 a 5 vezes os núcleos (2026-09-23, [`duckdb.md`](duckdb.md)). No Redshift, cada
+  sessão a mais pede a sua credencial temporária; dois `COPY` em conexões abertas dentro da tarefa
+  levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
 - As chaves inteiras vêm de `run.next_ids(table, n)`: faixas contíguas sob lock, a partir de
   `max_key + 1` na versão fixada, lido de `max.<coluna>` das ações `add` e pela varredura da coluna
   quando um arquivo não tem a estatística; a tabela vazia começa em 1. Os ids de uma reexecução

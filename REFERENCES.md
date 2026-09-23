@@ -321,6 +321,7 @@ Documentação:
 - <https://duckdb.org/docs/current/guides/performance/file_formats.html>
 - <https://duckdb.org/docs/current/guides/performance/indexing.html>
 - <https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads.html>
+- <https://duckdb.org/docs/stable/guides/performance/how_to_tune_workloads> (redireciona para a anterior)
 - <https://duckdb.org/docs/current/guides/performance/join_operations.html>
 - <https://duckdb.org/docs/current/guides/file_formats/parquet_import.html>
 - <https://duckdb.org/docs/current/guides/file_formats/parquet_export.html>

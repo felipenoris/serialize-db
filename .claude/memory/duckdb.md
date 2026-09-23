@@ -78,3 +78,13 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   (user decision of 2026-09-22), so a temporary table the pipeline creates serves every later
   command; the library's own sandbox tables stay regular, and `schema.ddl(..., temporary=True)`
   exists at the user's request. `plan/POC.md`, `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`
+- `threads` belongs to the database instance, not the connection (2026-09-23): `duckdb_settings()`
+  gives `threads` and `external_threads` scope `GLOBAL`, `SET SESSION threads` fails with `option
+  "threads" cannot be set locally`, and `SET threads` changes the pool at runtime for every cursor.
+  The thread that calls each connection also executes its query beside the pool: with `threads = 1`,
+  four cursors in four Python threads scanned 100,000,000 rows in 0.639 s against 0.608 s for one;
+  with `threads` at the 11 cores, 0.313 s against 0.079 s, their time in series, and 22 threads
+  changed nothing. `range()` generates rows on one thread whatever `threads` says. The docs
+  ("How to Tune Workloads") parallelize by 122,880-row row groups and advise 2 to 5 times the cores
+  for remote files, whose I/O is synchronous, one HTTP request per thread. `plan/duckdb.md`,
+  `tests/proof_of_concept/test_concurrency.py`

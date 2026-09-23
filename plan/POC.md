@@ -1692,3 +1692,40 @@ assinatura, e o `BatchStream` de `test_parallel.py` é a referência ([`PLAN.md`
 [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md)); os dois motores ganharam `new_session()`, e
 `run.ingest` de mais de uma tabela abre uma sessão a mais por tabela ([etapa 6](PLAN-STAGE-6.md)).
 O item da ingestão de várias tabelas na sessão única saiu de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a sonda do pool de threads do DuckDB mostrou
+
+Em 2026-09-23, no macOS com 11 núcleos (DuckDB 1.5.5), uma sonda no scratchpad mediu o que uma
+sessão a mais acrescenta ao paralelismo do DuckDB, respondendo se cada sessão poderia ganhar threads
+próprias.
+
+- **O `threads` é da instância, e muda em execução.** `duckdb_settings()` dá `threads` e
+  `external_threads` com escopo `GLOBAL`; `SET SESSION threads = 3` foi recusado com `Catalog Error:
+  option "threads" cannot be set locally`; `SET threads = 3` e `SET GLOBAL threads = 3` foram
+  aceitos, e outro cursor leu 3 em seguida.
+- **A thread que chama cada sessão executa a consulta dela.** Numa varredura de 100.000.000 de
+  linhas em memória (`SELECT sum(hash(id)) FROM t`, melhor de três), uma consulta sozinha e duas e
+  quatro juntas, cada uma num cursor e numa thread Python: com `threads = 1`, 0,608 s, 0,622 s e
+  0,639 s; com 2, 0,310 s, 0,473 s e 0,600 s; com 4, 0,159 s, 0,269 s e 0,449 s; com 8, 0,097 s,
+  0,175 s e 0,326 s; com 11, o padrão, 0,079 s, 0,160 s e 0,313 s; com 22, 0,078 s, 0,156 s e
+  0,307 s.
+- **Com `threads` igual aos núcleos, uma consulta grande já ocupa a máquina**: duas sessões juntas
+  levaram 2,01 vezes uma, o tempo delas em série, e o dobro dos núcleos não mudou nada.
+- **Uma consulta que não se paraleliza deixa núcleos para as outras sessões**:
+  `SELECT sum(hash(range)) FROM range(300_000_000)` levou de 1,78 s a 1,94 s com qualquer `threads`
+  de 1 a 22, porque a função `range` gera as linhas numa thread só, e quatro juntas levaram de 1,07 a
+  1,13 vez uma.
+- A documentação do DuckDB ("How to Tune Workloads") diz que o paralelismo é por row group de
+  122.880 linhas, que a leitura de arquivos remotos é síncrona, uma requisição HTTP por thread, e
+  recomenda `threads` de 2 a 5 vezes os núcleos para ela.
+
+A suíte repete o escopo como asserção e os tempos como leitura
+(`test_concurrency.py::test_duckdb_thread_pool_is_global_and_each_caller_joins_it`, 20.000.000 de
+linhas): com `threads = 1`, 0,122 s uma sessão e 0,128 s quatro juntas; com 11, 0,016 s e 0,061 s.
+
+**Consequência**: a regra da sessão a mais em [`PLAN.md`](PLAN.md), a seção do paralelismo de
+[`serialize-db.md`](serialize-db.md) e a estratégia do motor na [etapa 4](PLAN-STAGE-4.md) dizem que o
+pool é da instância e que a sessão a mais ganha nas consultas pequenas, nos operadores que não se
+paralelizam e na espera do S3; o `threads` da leitura do S3 entrou em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), à espera de uma medição no ambiente alvo. As medições estão
+em [`duckdb.md`](duckdb.md).

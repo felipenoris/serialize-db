@@ -5,7 +5,9 @@ converte para Arrow e o PyArrow grava e lê Parquet em memória (o GIL liberado)
 dos drivers, o ``cursor()`` por thread, a conexão compartilhada que entrega a uma thread o
 resultado da outra, os dois ``connect()`` em memória que são bancos distintos; o intervalo de troca do
 GIL pago por cada retomada ao lado de uma thread Python ocupada (``os.stat`` e o import preguiçoso);
-as faixas de identificadores tiradas de um contador sob ``Lock``. Sob a raiz local (marcador ``local``): o GIL
+as faixas de identificadores tiradas de um contador sob ``Lock``; o pool de threads do DuckDB, da
+instância e mudado em execução, ao lado da thread de cada sessão, que executa a consulta dela. Sob a
+raiz local (marcador ``local``): o GIL
 liberado pelo delta-rs e pelo ``delta_scan``, duas escritas Delta e dois ``CREATE TABLE AS`` em duas
 threads, o arquivo do DuckDB compartilhado no processo pela mesma configuração e recusado com outra,
 os leitores Delta presos à versão carregada enquanto um ``append`` entra.
@@ -202,6 +204,50 @@ def test_drivers_share_the_module_not_the_connection() -> None:
     with pytest.raises(duckdb.CatalogException, match="Table with name t_a does not exist"):
         other.execute("SELECT * FROM t_a")
     other.close()
+    con.close()
+
+
+def test_duckdb_thread_pool_is_global_and_each_caller_joins_it() -> None:
+    """O ``threads`` do DuckDB é da instância: vale para todas as sessões, muda em execução por ``SET threads`` e recusa o escopo de sessão.
+
+    A thread que chama cada sessão também executa a consulta dela, ao lado do pool: com ``threads =
+    1``, quatro sessões em quatro threads Python levam quase o tempo de uma. Com ``threads`` igual
+    aos núcleos, o padrão, uma varredura grande já ocupa a máquina, e quatro sessões juntas levam o
+    tempo das quatro em série. Os tempos são leituras do relatório, porque dependem dos núcleos
+    livres.
+    """
+    con = duckdb.connect()
+    scopes = dict(con.execute("SELECT name, scope FROM duckdb_settings() WHERE name IN ('threads', 'external_threads')").fetchall())
+    assert scopes == {"threads": "GLOBAL", "external_threads": "GLOBAL"}
+    with pytest.raises(duckdb.CatalogException, match='option "threads" cannot be set locally'):
+        con.execute("SET SESSION threads = 3")
+
+    # O valor que uma sessão grava é o que a outra lê: o pool é um só.
+    other = con.cursor()
+    con.execute("SET threads = 3")
+    assert other.execute("SELECT current_setting('threads')").fetchone()[0] == 3
+    other.close()
+
+    # 20.000.000 de linhas são 163 grupos de 122.880, a unidade da varredura paralela.
+    con.execute("CREATE TABLE numeros AS SELECT range AS id FROM range(20_000_000)")
+
+    def scan(connection: duckdb.DuckDBPyConnection) -> None:
+        connection.execute("SELECT sum(hash(id)) FROM numeros").fetchall()
+
+    def four_sessions_together() -> float:
+        cursors = [con.cursor() for _ in range(4)]
+        elapsed = run_in_threads([functools.partial(scan, cursor) for cursor in cursors])
+        for cursor in cursors:
+            cursor.close()
+        return elapsed
+
+    readings = []
+    for threads in (1, os.cpu_count()):
+        con.execute(f"SET threads = {threads}")
+        one = min(run_in_threads([functools.partial(scan, con)]) for _ in range(3))
+        four = min(four_sessions_together() for _ in range(3))
+        readings.append(f"threads={threads}: uma sessão {one:.3f} s, quatro juntas {four:.3f} s ({four / one:.2f}x)")
+    record("concurrency.duckdb_thread_pool", "; ".join(readings))
     con.close()
 
 

@@ -343,8 +343,10 @@ e os exemplos do Redshift em `test_redshift.py`.
   `DeltaTable(uri).to_pyarrow_dataset()` lê várias tabelas; o ganho aparece no S3, onde a latência
   domina.
 - **O sandbox.** Um comando por vez em cada sessão, cada um com o paralelismo do motor. No DuckDB,
-  `threads` é da instância, então duas consultas simultâneas dividem o mesmo pool e ganham quando
-  uma espera o S3 ou quando as consultas são pequenas; no Redshift, cada comando corre nas slices.
+  o pool `threads` é da instância e muda em execução por `SET threads`; duas consultas simultâneas o
+  dividem, cada uma também com a thread que a chamou, e ganham quando uma espera o S3, quando as
+  consultas são pequenas ou quando um operador não se paraleliza (as medições de 2026-09-23 estão
+  em [`duckdb.md`](duckdb.md)); no Redshift, cada comando corre nas slices.
   Várias threads chamam `run.sandbox.query`, `execute` e `stream` ao mesmo tempo e esperam a vez na
   sessão, e a leitura dos lotes de cada `stream` corre fora dela. A ingestão de várias tabelas corre
   em paralelo, uma sessão a mais por tabela: em disco local, quatro tabelas de 150.000 linhas

@@ -776,6 +776,30 @@ memória para `.tmp` no diretório corrente; `max_temp_directory_size` limita o 
 espaço livre do disco por padrão. `8GB` aparece como `7.4 GiB` porque o limite é lido em bytes
 decimais e exibido em unidades binárias.
 
+O `threads` é da instância do banco, não da conexão: `duckdb_settings()` o dá com escopo `GLOBAL`,
+`SET SESSION threads` é recusado (`option "threads" cannot be set locally`), e o valor que uma
+conexão grava é o que as outras leem. O pool vale para todas as conexões e cursores da instância, e
+a thread que chama cada conexão também executa a consulta dela, ao lado do pool (`external_threads`,
+1 por padrão). Numa varredura de 100.000.000 de linhas em memória, com 11 núcleos (DuckDB 1.5.5,
+2026-09-23, melhor de três), cada linha é o tempo de uma consulta sozinha e o de duas e de quatro
+conexões em threads Python distintas, juntas:
+
+| `threads` | Uma | Duas juntas | Quatro juntas |
+| --- | --- | --- | --- |
+| 1 | 0,608 s | 0,622 s | 0,639 s |
+| 2 | 0,310 s | 0,473 s | 0,600 s |
+| 4 | 0,159 s | 0,269 s | 0,449 s |
+| 8 | 0,097 s | 0,175 s | 0,326 s |
+| 11, o padrão | 0,079 s | 0,160 s | 0,313 s |
+| 22 | 0,078 s | 0,156 s | 0,307 s |
+
+Com `threads` igual aos núcleos, uma varredura grande já ocupa a máquina, e as conexões juntas levam
+o tempo delas em série; mais threads que núcleos não mudam nada num trabalho de CPU. Uma conexão a
+mais ganha quando a consulta não ocupa os núcleos: menos de `k × 122.880` linhas, um operador que
+não se paraleliza (quatro `SELECT sum(hash(range)) FROM range(300_000_000)` juntos levaram 2,014 s
+contra 1,777 s de um com `threads = 1`, e 2,042 s contra 1,904 s com 11, porque a função `range` gera
+as linhas numa thread só) ou a espera do S3, onde cada thread faz uma requisição HTTP por vez.
+
 ### Organização das tabelas para filtros por chave e joins
 
 - Ordenar os dados pelas colunas de filtro na carga. A ordenação alimenta os zonemaps: no exemplo da

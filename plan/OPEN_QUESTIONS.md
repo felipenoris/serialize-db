@@ -53,6 +53,13 @@ foi medido em [`POC.md`](POC.md).
   (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)). O relatório da
   migração com essa medição é o gatilho de revisão de [`PLAN.md`](PLAN.md): ele decide o padrão da
   flag e se o outro modo sai, em cada motor e na carga inicial.
+- **O `threads` do DuckDB na leitura do S3.** O DuckDB lê arquivos remotos com E/S síncrona, uma
+  requisição HTTP por thread, e a documentação recomenda `threads` de 2 a 5 vezes os núcleos para
+  essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo, 2 no ambiente alvo, e a sessão a
+  mais de cada tabela de `run.ingest` só acrescenta a thread que a chama. A primeira execução no
+  ambiente alvo mede a ingestão por `delta_scan` do S3 com o padrão e com `threads` acima dos
+  núcleos, e a medição decide o padrão de `DuckDBConfig.threads` para uma raiz no S3
+  ([etapa 4](PLAN-STAGE-4.md)).
 - **Duas transações simultâneas no esquema do datashare.** A publicação da
   [etapa 8](PLAN-STAGE-8.md) grava a linha de controle em `serialize_db_publications`, a única
   tabela que dois ambientes escrevem, e usa uma staging de nome fixo por ambiente e tabela. A
