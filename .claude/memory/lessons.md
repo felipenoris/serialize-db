@@ -334,3 +334,15 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   let five of seven through, and the claim about `text()` had been generalized from the one case
   the draft ran. `render` already read `compiled.binds` for thread safety; the documents now give
   the second reason. `plan/POC.md`, `plan/sqlalchemy.md`, `plan/PLAN-STAGE-2.md`
+- **A requirement is measured in the user's own words before it is reported kept** (2026-09-23).
+  On 2026-09-22 the user asked that the client work on the next or previous batch while the
+  connection does I/O, and the single-session design was reported as keeping the requirement:
+  the client's work overlapped the reading of the spool file, but the query ran whole before the
+  first batch, so the connection's I/O never overlapped the client. The pipeline measurement had
+  no client work in it, and the design read faster than the cursors. The user's next question
+  ("did the first batch arrive differently before?") exposed it; timing the first batch and the
+  total with 2 ms and 5 ms of client work per batch gave 0.472 s against 0.003 s and 1.330 s
+  against 0.842 s, and the stream now writes each batch while the query runs (0.005 s and
+  0.939 s). A requirement that names what overlaps with what is timed on exactly that overlap,
+  with the work it names, and a design that keeps it in a weaker form says so in the report.
+  `plan/POC.md`

@@ -191,33 +191,56 @@ def test_streaming_query_starts_before_the_end_and_bounds_memory() -> None:
 # O stream da sessão única: o leitor inteiro gravado num arquivo Arrow IPC com LZ4, e o arquivo lido
 # lote a lote. Roda num subprocesso, como MEMORY_PROBE, para a memória máxima ser só dele.
 SPOOL_PROBE = r"""
-import json, os, resource, sys, time
+import json, os, resource, sys, threading, time
 import duckdb, pyarrow as pa
 rows, folder = int(sys.argv[1]), sys.argv[2]
 con = duckdb.connect(config={"threads": 2})
 sql = f"SELECT range AS id, range % 97 AS m, 'x' || (range % 1000) AS s FROM range({rows})"
 path = os.path.join(folder, "transbordo.arrow")
-started = time.perf_counter()
-reader = con.execute(sql).to_arrow_reader(100_000)
 options = pa.ipc.IpcWriteOptions(compression="lz4")
-with pa.OSFile(path, "wb") as sink, pa.ipc.new_stream(sink, reader.schema, options=options) as writer:
-    for batch in reader:
-        writer.write_batch(batch)
-spooled = time.perf_counter() - started
+condition = threading.Condition()
+progress = {"written": 0, "done": False, "query_seconds": None}
+
+def produce():
+    reader = con.execute(sql).to_arrow_reader(100_000)
+    with pa.OSFile(path, "wb") as sink, pa.ipc.new_stream(sink, reader.schema, options=options) as writer:
+        for batch in reader:
+            writer.write_batch(batch)
+            with condition:
+                progress["written"] += 1
+                condition.notify_all()
+    with condition:
+        progress["done"], progress["query_seconds"] = True, time.perf_counter() - started
+        condition.notify_all()
+
+started = time.perf_counter()
+threading.Thread(target=produce).start()
+with condition:
+    condition.wait_for(lambda: progress["written"] > 0 or progress["done"])
+first = time.perf_counter() - started
+n = read = 0
 with pa.OSFile(path, "rb") as source:
-    n = sum(batch.num_rows for batch in pa.ipc.open_stream(source))
+    reader = pa.ipc.open_stream(source)
+    while True:
+        with condition:
+            condition.wait_for(lambda: progress["written"] > read or progress["done"])
+            if progress["written"] == read:
+                break
+        n += reader.read_next_batch().num_rows
+        read += 1
 peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1e6 if sys.platform == "darwin" else 1e3)
-print(json.dumps({"rows": n, "seconds": round(time.perf_counter() - started, 3), "spool_seconds": round(spooled, 3),
-                  "file_mb": round(os.path.getsize(path) / 1e6), "peak_mb": round(peak)}))
+print(json.dumps({"rows": n, "seconds": round(time.perf_counter() - started, 3), "first_batch_seconds": round(first, 3),
+                  "query_seconds": round(progress["query_seconds"], 3), "file_mb": round(os.path.getsize(path) / 1e6), "peak_mb": round(peak)}))
 """
 
 
 @pytest.mark.local
 def test_spooled_stream_bounds_memory(local_location: LocalLocation) -> None:
-    """O resultado transbordado num arquivo Arrow IPC com LZ4 e lido lote a lote mantém o processo no tamanho de um lote, como o leitor direto, e a consulta termina antes do primeiro lote.
+    """O resultado gravado lote a lote num arquivo Arrow IPC com LZ4 por uma thread, e lido lote a lote enquanto ela grava, mantém o processo no tamanho de um lote, como o leitor direto.
 
-    É o ``stream`` da sessão única (``test_parallel.py``): a consulta roda inteira sob o lock, e a
-    leitura do arquivo não usa a sessão. O tempo, o tamanho do arquivo e a memória máxima vão para o
+    É o ``stream`` da sessão única (``test_parallel.py``): a thread roda a consulta sob o lock e grava
+    cada lote assim que o DuckDB o entrega, e o cliente lê cada lote gravado sem a sessão. O tempo
+    até o primeiro lote, o tempo da consulta, o tamanho do arquivo e a memória máxima vão para o
     relatório; a asserção é a mesma do leitor direto, menos da metade da memória da tabela inteira.
     """
     rows = 10_000_000
@@ -226,7 +249,11 @@ def test_spooled_stream_bounds_memory(local_location: LocalLocation) -> None:
     completed = subprocess.run([sys.executable, "-c", SPOOL_PROBE, str(rows), str(folder)], capture_output=True, text=True, check=True)
     spooled = json.loads(completed.stdout)
     table = json.loads(subprocess.run([sys.executable, "-c", MEMORY_PROBE, "table", str(rows)], capture_output=True, text=True, check=True).stdout)
-    record("duckdb.spooled_stream_10M_rows", f"{spooled['peak_mb']} MB em {spooled['seconds']} s ({spooled['spool_seconds']} s até o arquivo fechar, {spooled['file_mb']} MB de arquivo); a tabela inteira, {table['peak_mb']} MB")
+    record(
+        "duckdb.spooled_stream_10M_rows",
+        f"{spooled['peak_mb']} MB em {spooled['seconds']} s (primeiro lote em {spooled['first_batch_seconds']} s, consulta em {spooled['query_seconds']} s, "
+        f"{spooled['file_mb']} MB de arquivo); a tabela inteira, {table['peak_mb']} MB",
+    )
     assert spooled["rows"] == table["rows"] == rows
     assert spooled["peak_mb"] < table["peak_mb"] / 2
 

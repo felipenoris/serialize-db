@@ -56,3 +56,21 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   against 0.017 s in four cursors, so `ingest` lost `max_workers`; S3 is unmeasured.
   `publish_redshift` keeps a connection per table, outside the sandbox session. `plan/PLAN.md`,
   `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/POC.md`, `tests/proof_of_concept/test_parallel.py`
+- The DuckDB `stream` writes each batch while the query runs (2026-09-23): a helper thread takes the
+  session lock, pulls `to_arrow_reader`, writes each batch to the Arrow IPC spool and counts the
+  batches written under a `threading.Condition`; the client reads each written batch in its own
+  thread, with timed waits that check the stop event. The IPC stream writer puts the schema in the
+  file only with the first batch or at close (`Tried reading schema message, was null or length 0`
+  before that), so the stream waits for the first batch or the end before opening the reader. The
+  engine records the thread inside `session()`; a `stream` opened there runs the query in the
+  calling thread, because a helper would wait for the block. Best of three over 20,000,000 rows on a
+  file database, 13,333,333 rows out, `threads = 2`: first batch 0.003 s with a cursor per stream,
+  0.472 s with the whole result spooled first, 0.005 s writing batch by batch; with 5 ms of client
+  work per batch, 0.842 s, 1.330 s and 0.939 s; the batch-by-batch spool costs about 0.18 s of file
+  writing in the query's path. 10,000,000 rows peaked at 94 MB. The loader through its file beat a
+  cursor with an `INSERT` per batch while the client produced fast (0.747 s against 1.101 s) and tied
+  when client work dominated. `new_session()` is `cursor()` on DuckDB: it sees tables the main
+  session committed, refuses its temporary tables with `CatalogException`, and runs while the main
+  session is held; four 150,000-row tables entered by `delta_scan` in 0.017 s in four extra
+  sessions against 0.066 s in series. `plan/PLAN.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`,
+  `tests/proof_of_concept/test_parallel.py`, `tests/proof_of_concept/test_duckdb.py`

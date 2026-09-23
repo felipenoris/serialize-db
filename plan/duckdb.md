@@ -459,7 +459,8 @@ consulta (3 ms em 20.000.000 de linhas); com `ORDER BY`, o `execute` só volta d
 inteira (2,4 s) e os lotes vêm em seguida. Um erro que a consulta encontra no meio da leitura chega
 ao Python como `OSError` com a mensagem do DuckDB, não como `duckdb.Error` (2026-09-20,
 `test_duckdb.py`, `test_parallel.py`). A sessão única da biblioteca consome o leitor inteiro num
-arquivo antes do comando seguinte (2026-09-22, [`POC.md`](POC.md)).
+arquivo antes do comando seguinte, lote a lote numa thread, e o cliente lê cada lote gravado
+enquanto a consulta continua (2026-09-23, [`POC.md`](POC.md)).
 
 Parâmetros: `?` posicional, `$1` numerado e reutilizável, `$nome` nomeado com um dicionário. A API
 relacional (`con.sql(...)`, `con.table('operacoes').filter(...)`) monta consultas preguiçosas e

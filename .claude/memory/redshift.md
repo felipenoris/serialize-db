@@ -163,3 +163,23 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   2026-09-22), the `exec_<id>_*` tables stay permanent in the datashare schema, and the user
   reverted the temporary-table proposal the same day; a temporary table the pipeline creates in
   the session is lost when the engine reconnects. `plan/PLAN-STAGE-5.md`
+- Concurrent transactions, from the AWS docs read on 2026-09-23: a transaction's snapshot starts at
+  its first `SELECT`, DML, `CREATE`/`DROP`/`ALTER`/`TRUNCATE TABLE`, not at `BEGIN`; `SNAPSHOT` is
+  the default level of new clusters and workgroups, and under it two `UPDATE`s of distinct rows of
+  one table both commit, while under `SERIALIZABLE` the second gets `ERROR:1023 DETAIL: Serializable
+  isolation violation on table`; concurrent `DELETE`/`UPDATE` on one table wait for the first to
+  finish on both levels, and concurrent `COPY`/`INSERT` run together under snapshot until both must
+  write; locks leave only at the transaction's end, and `INSERT`/`COPY` followed by an exclusive
+  statement on the same table can deadlock under snapshot. `LOCK` takes `ACCESS EXCLUSIVE` until the
+  end and is the documented way to force order, but it is not in the list of statements a datashare
+  consumer may write with; datashare writes require snapshot isolation on the producer's database,
+  and `svv_redshift_databases` reported `datalake_rw_shared` as `UNKNOWN`. `1018 Relation does not
+  exist` is a transaction reading a table another created after its snapshot.
+  `tests/proof_of_concept/test_redshift_transactions.py` measures what the datashare schema does with
+  two simultaneous stage 8 publications; it has not run in the target. `plan/redshift.md`,
+  `plan/PLAN-STAGE-8.md`
+- An extra session (`new_session()`, 2026-09-23) is another connection with its own temporary
+  credential and `USE`: it sees the `exec_<id>_*` tables the main session committed and not its
+  temporary tables; `run.ingest` of more than one table opens one per table. The suite's two
+  parallel `COPY`s, each opening its connection inside the task, took 4.3 s and 3.8 s in the target
+  on 2026-09-21. `plan/PLAN-STAGE-5.md`

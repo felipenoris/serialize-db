@@ -371,3 +371,28 @@ DuckDB, and `ingest` without `max_workers`. The user stated that the target may 
 vCPUs and that the library must explore parallelism to scale; the 2 vCPUs read on 2026-09-21 are a
 reading, not a design premise. `plan/PLAN.md`, `plan/PLAN-STAGE-3.md` to `plan/PLAN-STAGE-6.md`,
 `plan/serialize-db.md`, `plan/POC.md`
+
+## The answers of 2026-09-23: extra sessions, parallel ingest and the audit text
+
+On 2026-09-23 the user asked for a probe of simultaneous Redshift transactions around
+`serialize_db_publications`; it is `tests/proof_of_concept/test_redshift_transactions.py`
+(`-m redshift`, five scenarios and the isolation readings), waiting for a run in the target, and
+its result decides whether the stage 8 transaction stays as it is. The user asked whether the
+client could open several sessions for parallel reads, accepting no ordering between calls and no
+shared temporary tables: the plan adopted `new_session()` on both engines, an engine over another
+connection (a DuckDB `cursor()`, a Redshift connection with its own temporary credential and
+`USE`) with its own lock; the name is the assistant's proposal, named in the report. The user
+suggested that the engines' initial ingestion, one table at a time by nature, always run in
+parallel: `run.ingest` of more than one table runs each in its own extra session, all at once, and
+returns when all finish. The user asked whether the first batch waited for the whole query in the
+earlier design and whether that design was more efficient; the measurement answered yes for
+`stream` and no for `loader`, and the assistant changed `stream` so a helper thread runs the query
+under the lock and writes each batch to the spool file while the client reads the batches already
+written (`prefetch` left the signature), named in the report as a change the user did not ask for.
+The user asked to record the `export_mode` revision trigger in the plan: the target's migration
+report with the `cad_lancamentos` partition in both modes sets the default and decides, per engine
+and for the initial load, whether the other mode leaves stages 4, 5 and 7. The user accepted
+freezing the generated SQL text path where it served only diffs: `audit_files`,
+`write_audit_files` and `serialize-db audit --write` left the plan, and `audit_sql` with `--sql`
+stay for debugging. `plan/PLAN.md`, `plan/PLAN-STAGE-4.md` to `plan/PLAN-STAGE-8.md`,
+`plan/serialize-db.md`, `plan/redshift.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`

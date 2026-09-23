@@ -50,15 +50,19 @@ foi medido em [`POC.md`](POC.md).
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)); a
   migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
-  (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)), e a medição decide o
-  padrão da flag.
-- **A ingestão de várias tabelas do S3 na sessão única.** Os dois motores rodam um comando por vez na
-  sessão (decisão do usuário de 2026-09-22), e a ingestão de várias tabelas ficou em série: em disco
-  local, quatro tabelas de 150.000 linhas levaram 0,061 s na sessão e 0,017 s em quatro cursores
-  ([`POC.md`](POC.md)). No S3 a latência domina e o ganho de ingerir em paralelo pode ser maior; a
-  primeira execução no ambiente alvo mede `ingest(materialize=True)` das tabelas do pipeline em
-  série, e, se compensar, a ingestão baixa os arquivos da versão fixada em paralelo fora da sessão e
-  carrega cada tabela sob o lock a partir da pasta local.
+  (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)). O relatório da
+  migração com essa medição é o gatilho de revisão de [`PLAN.md`](PLAN.md): ele decide o padrão da
+  flag e se o outro modo sai, em cada motor e na carga inicial.
+- **Duas transações simultâneas no esquema do datashare.** A publicação da
+  [etapa 8](PLAN-STAGE-8.md) grava a linha de controle em `serialize_db_publications`, a única
+  tabela que dois ambientes escrevem, e usa uma staging de nome fixo por ambiente e tabela. A
+  documentação prevê que o segundo `DELETE` espere o primeiro terminar e que, sob isolamento de
+  snapshot, linhas distintas confirmem as duas transações ([`redshift.md`](redshift.md)); o banco do
+  datashare informa isolamento `UNKNOWN`, e o `LOCK` não está na lista de comandos da escrita por
+  datashare. `tests/proof_of_concept/test_redshift_transactions.py` (`-m redshift`) mede os cenários
+  e espera uma execução no ambiente alvo; o resultado decide se a transação da etapa 8 fica como
+  está ou ganha o `LOCK`, a nova tentativa, o `UPDATE` condicionado à versão lida ou a staging por
+  execução.
 - **O `pytest` sem variável grava na pasta temporária do pytest.** A premissa de
   [`PLAN.md`](PLAN.md) diz que `pytest` sem variável não grava arquivo algum, e o cabeçalho de
   `tests/conftest.py` diz que fora das raízes informadas a sessão grava só `.pytest_cache/`; mas

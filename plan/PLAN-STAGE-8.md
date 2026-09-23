@@ -32,7 +32,8 @@ a cláusula de credenciais mascarada; integração marcada `redshift`. Provas de
 `test_deltalake.py::test_version_diff_reads_data_changes_in_the_log`,
 `test_stdlib.py::test_group_log_actions_by_partition` e
 `test_redshift.py::test_copy_manifest_from_delta_files` (a transação da publicação repete o `COPY`
-na staging e o `INSERT` com a partição).
+na staging e o `INSERT` com a partição) e `test_redshift_transactions.py` (duas publicações
+simultâneas no esquema do datashare, à espera do ambiente alvo).
 
 ## Interface
 
@@ -82,6 +83,17 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
   `DROP TABLE <staging>` e `COMMIT`. `TRUNCATE` não entra: numa tabela local ele confirma a
   transação sozinho, e `DELETE` sem `WHERE` é transacional nos dois casos. Uma partição removida no
   Delta (`version_diff` a devolve pelo `remove`) recebe só o `DELETE`.
+- **As publicações simultâneas.** A tabela de controle é a única que dois ambientes escrevem, e duas
+  publicações do mesmo ambiente podem tocar a mesma tabela (`serialize-db publish` ao lado de uma
+  execução). A documentação do Redshift prevê que o `DELETE` da linha de controle da segunda
+  transação espere a primeira terminar e que, sob isolamento de snapshot, linhas distintas
+  confirmem as duas, enquanto sob o serializável a segunda recebe `1023`
+  ([`redshift.md`](redshift.md), seção "Transações concorrentes").
+  `tests/proof_of_concept/test_redshift_transactions.py` mede no esquema do datashare as escritas em
+  tabelas distintas, dev e prod gravando linhas distintas da tabela de controle, duas publicações da
+  mesma tabela com a staging de nome fixo, o `LOCK` da tabela de controle e o `UPDATE` condicionado
+  à versão lida; a primeira execução no ambiente alvo decide se a transação fica como está
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **`reconcile_published`** repete o diff aditivo com `ALTER TABLE ADD COLUMN <coluna> <tipo>` no
   fim da tabela, porque o `COPY` é posicional e recusa um arquivo com colunas a menos
   (`Unmatched number of columns`, 2026-09-21), e a staging nasce do esquema Delta; um diff destrutivo

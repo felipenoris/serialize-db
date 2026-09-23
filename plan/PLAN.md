@@ -68,7 +68,8 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   toca as tabelas de outro ambiente. Dentro de um ambiente roda uma execução por vez; se duas se
   sobrepõem, o log de cada tabela ordena os commits e `publish` aborta a segunda com
   `ExecutionConflict` (seção "Regras que as etapas obedecem"). A exceção é a tabela de controle
-  `serialize_db_publications` do Redshift, uma só para todos os ambientes
+  `serialize_db_publications` do Redshift, uma só para todos os ambientes; o que duas publicações
+  simultâneas fazem nela é medido por `test_redshift_transactions.py`, à espera do ambiente alvo
   ([etapa 8](PLAN-STAGE-8.md)).
 - **Renomear ou remover colunas é raro.** A evolução é aditiva; o caso raro reescreve a tabela
   inteira num commit e recria a tabela publicada, sem esperar o column mapping do delta-rs.
@@ -124,16 +125,18 @@ o seguinte ou grava o anterior, cada primitiva numa thread auxiliar com uma fila
 com backend pyarrow é o formato dos pipelines (declaração do usuário de 2026-09-20), e a regra
 apoia-se na conversão barata, medida na subseção "A conversão para o pandas": 2,3 ms sem cópia
 para 300.000 linhas, 1,4 ms para um lote de 100.000; o pandas não entra nas dependências de
-execução. Cada motor tem uma sessão por execução sob um lock, e nenhum lock fica tomado enquanto o
-código do cliente roda, porque o que usa a sessão termina sem esperar pelo cliente e os lotes passam
-por um arquivo intermediário. No DuckDB, a saída é o resultado de `to_arrow_reader()` gravado num
-arquivo Arrow IPC com LZ4 e lido fora da sessão, e a entrada, um arquivo igual carregado num único
-`INSERT ... BY NAME`; no Redshift, a saída são as tuplas que o driver materializa, fatiadas por
-`fetchmany`, ou os arquivos de um `UNLOAD`, e a entrada é Parquet no S3 mais `COPY ... MANIFEST`.
+execução. Cada motor tem uma sessão por execução sob um lock, e nenhum lock espera pelo código do
+cliente, porque o que usa a sessão termina sem esperar por ele e os lotes passam por um arquivo
+intermediário. No DuckDB, a saída é cada lote de `to_arrow_reader()` gravado num arquivo Arrow IPC
+com LZ4 por uma thread que roda a consulta sob o lock, e o cliente lê cada lote gravado enquanto a
+consulta continua; a entrada é um arquivo igual carregado num único `INSERT ... BY NAME`. No
+Redshift, a saída são as tuplas que o driver materializa, fatiadas por `fetchmany`, ou os arquivos
+de um `UNLOAD`, e a entrada é Parquet no S3 mais `COPY ... MANIFEST`. O que roda em paralelo, sem as
+tabelas temporárias da sessão, abre uma sessão a mais com `run.sandbox.new_session()`.
 
 ### A API
 
-O pipeline lê com `run.sandbox.stream(statement_ou_texto, params, batch_size, prefetch)`, que
+O pipeline lê com `run.sandbox.stream(statement_ou_texto, params, batch_size)`, que
 devolve um `BatchStream` (iterável de `RecordBatch` com `schema`, `read_next_batch`, `read_all`,
 `close`, gerenciador de contexto e `__arrow_c_stream__`), ou com `run.sandbox.query(statement)` e
 `run.sandbox.execute(texto, params)`, que devolvem a `pa.Table` de `stream(...).read_all()`; grava
@@ -163,19 +166,24 @@ As medições, com a data e o ambiente de cada uma, estão em [`POC.md`](POC.md)
 por lotes mostrou", de 2026-09-20, e "O que a sessão única mostrou", de 2026-09-22), e as asserções
 em `test_duckdb.py`, `test_pyarrow.py` e `test_parallel.py`. O que elas fixaram:
 
-- **`stream` roda a consulta sob o lock e grava o resultado inteiro num arquivo intermediário**, e a
-  thread auxiliar lê o arquivo fora da sessão. O leitor do DuckDB é esvaziado, sem erro, pelo
-  comando seguinte na mesma conexão, e por isso a sessão única o consome antes de soltar o lock. O
-  arquivo é Arrow IPC com LZ4, um terço do tamanho sem compressão. A consulta termina antes do
-  primeiro lote, e a memória do lado Python fica no tamanho de um lote: 106 MB para 10.000.000 de
-  linhas, contra 83 MB do leitor direto e 322 MB da tabela inteira.
-- **Uma thread auxiliar por stream lê `prefetch` lotes do arquivo** (padrão 2) numa fila limitada
-  enquanto o cliente trabalha no lote atual; `prefetch=0` dispensa a thread. Toda espera na fila tem
-  prazo e confere o encerramento, a thread não referencia o stream, e `close` (ou o fim do `with`) a
-  interrompe, esvazia a fila e apaga o arquivo; um stream abandonado é coletado, a thread termina e o
-  arquivo sai. O erro da consulta chega ao cliente na construção, como `duckdb.Error` ou como
-  `OSError` com a mensagem do DuckDB, e o de leitura do arquivo na leitura seguinte e nas que vêm
-  depois dela, nunca em silêncio.
+- **`stream` roda a consulta numa thread auxiliar, sob o lock, e grava cada lote num arquivo
+  intermediário assim que o DuckDB o entrega**; o cliente lê cada lote gravado, na sua thread,
+  enquanto a consulta continua. O leitor do DuckDB é esvaziado, sem erro, pelo comando seguinte na
+  mesma conexão, e por isso a thread o consome inteiro antes de soltar o lock, sem esperar pelo
+  cliente. O arquivo é Arrow IPC com LZ4, um terço do tamanho sem compressão. Numa consulta sem
+  operador bloqueante sobre 20.000.000 de linhas, o primeiro lote chegou em 5 ms, como no leitor
+  direto de um cursor próprio (3 ms), contra 472 ms quando o arquivo só era lido depois da consulta
+  inteira, e com 5 ms de trabalho do cliente por lote o total foi 0,939 s, contra 0,842 s e 1,330 s
+  (2026-09-23, [`POC.md`](POC.md)). A memória do lado Python fica no tamanho de um lote: 94 MB para
+  10.000.000 de linhas, contra 83 MB do leitor direto e 322 MB da tabela inteira.
+- **Dentro de `session()`, na mesma thread, a consulta roda na thread de quem chama**, porque a
+  auxiliar esperaria o bloco, e o bloco o stream; o cliente lê o arquivo depois da consulta
+  inteira. Toda espera por um lote tem prazo e confere o encerramento, a thread não referencia o
+  stream, e `close` (ou o fim do `with`) para a consulta no lote seguinte e apaga o arquivo; um
+  stream abandonado é coletado, a consulta para e o arquivo sai. O erro que a consulta encontra antes
+  do primeiro lote chega ao cliente na construção, como `duckdb.Error` ou como `OSError` com a
+  mensagem do DuckDB; o que ela encontra depois chega na leitura seguinte ao último lote gravado e
+  nas que vêm depois dela, nunca em silêncio.
 - **O streaming limita a memória do lado Python, não a do DuckDB.** A consulta roda sob
   `memory_limit` e `temp_directory`, e uma ordenação materializa o resultado antes do primeiro lote.
   A ordem dos lotes é a da consulta: sem `ORDER BY`, com `preserve_insertion_order = false`, é
@@ -287,8 +295,9 @@ O que a sondagem fixa em `cast`:
   paralelismo de cada comando é o do motor (as `threads` do DuckDB, as slices do Redshift), e cresce
   com a máquina; o do código cliente vem de `concurrent.futures`, e `Future.result()` expressa a
   dependência entre um `load` e a leitura que o segue. A biblioteca não tem scheduler nem grafo de
-  tarefas, e as suas threads são os pools de `publish` e `publish_redshift` e a auxiliar de cada
-  `stream` e de cada `loader`, com fila limitada e encerrada no `close`. O DuckDB, o delta-rs e o
+  tarefas, e as suas threads são os pools de `publish`, de `publish_redshift` e de `ingest`, uma
+  sessão a mais por tabela, e a auxiliar de cada `stream` e de cada `loader`, encerrada no `close`.
+  O DuckDB, o delta-rs e o
   PyArrow liberam o GIL no trabalho nativo, então threads bastam, e uma extensão em Rust não entra
   por paralelismo (`test_concurrency.py`, `serialize-db.md`, seção "Paralelismo").
 - Uma chamada nativa que solta e retoma o GIL ao lado de uma thread em Python puro espera o
@@ -327,7 +336,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   não impede repetição, e a idempotência é do `overwrite` por partição (`delta.md`).
 - A biblioteca escreve por um único caminho, delta-rs ou `COPY ... (RETURN_STATS)` mais
   `create_write_transaction`, escolhido por `export_mode`: o `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de
-  partição dentro do arquivo e quebraria o `COPY` posicional (`delta.md`).
+  partição dentro do arquivo e quebraria o `COPY` posicional (`delta.md`). O gatilho de revisão
+  do `export_mode` é o relatório da migração no ambiente alvo com a partição de `cad_lancamentos`
+  nos dois modos (tempo, RSS máximo e linhas, [etapa 7](PLAN-STAGE-7.md)): com ele o plano fixa o
+  padrão e decide, em cada motor e na carga inicial, se o outro modo sai das etapas
+  [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md), com o seu código e os seus
+  testes.
 - As regras que mantêm o `COPY` do Redshift lendo os arquivos e a saída do Delta aberta: sem vetores
   de exclusão, sem column mapping, sem `Identity`, caminhos relativos no log e nunca um arquivo
   registrado por URI absoluta (`delta.md`, `estrategia.md`).
@@ -394,19 +408,30 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   reconecta. `duckdb` e `redshift_connector` declaram `threadsafety` 1, e uma conexão DuckDB
   compartilhada sem lock entrega a uma thread o resultado da outra, sem erro: o lock é o que deixa
   várias threads usarem a sessão (`test_concurrency.py`).
-- Nenhum lock fica tomado enquanto o código do cliente roda, e a parte de cada primitiva que usa a
-  sessão roda na thread de quem chama e termina sem esperar pelo cliente: `stream` executa a
-  consulta e grava o resultado inteiro num arquivo intermediário antes de soltar o lock, e a thread
-  auxiliar o lê fora da sessão; o `loader` grava os lotes num arquivo fora da sessão e o carrega num
-  comando só, sob o lock, no `close`. Por isso o cliente trabalha no lote atual enquanto a biblioteca
-  lê o seguinte ou grava o anterior, e nenhuma combinação de `stream`, `loader` e outras primitivas,
-  de uma thread ou de várias, trava (`test_parallel.py`, [`POC.md`](POC.md)).
+- Nenhum lock espera pelo código do cliente: a parte de cada primitiva que usa a sessão termina sem
+  esperar por ele. `stream` roda a consulta numa thread auxiliar, sob o lock, e grava cada lote num
+  arquivo intermediário assim que o motor o entrega, e o cliente lê cada lote gravado enquanto a
+  consulta continua; o `loader` grava os lotes num arquivo fora da sessão e o carrega num comando
+  só, sob o lock, no `close`. Por isso o cliente trabalha no lote atual enquanto a consulta produz o
+  seguinte, ou enquanto a biblioteca grava o anterior, e nenhuma combinação de `stream`, `loader` e
+  outras primitivas, de uma thread ou de várias, trava: outro comando espera só a consulta em curso
+  (`test_parallel.py`, [`POC.md`](POC.md)).
 - O cliente não toca o lock: as primitivas o tomam e soltam, e `with run.sandbox.session() as
   connection:` dá a conexão crua ao que elas não cobrem, com o lock tomado pelo bloco. O lock é
-  reentrante, então uma primitiva chamada dentro do bloco, na mesma thread, não trava; o bloco não
-  espera por outra thread que use o sandbox, e uma transação que o cliente abra nele fecha nele. O
-  estado mutável de `Execution` fica sob lock; o cliente não cria conexão para o sandbox, e a
-  biblioteca não cria `Engine` do SQLAlchemy.
+  reentrante, então uma primitiva chamada dentro do bloco, na mesma thread, não trava, e um `stream`
+  aberto nele roda a consulta na thread do bloco; o bloco não espera por outra thread que use o
+  sandbox, e uma transação que o cliente abra nele fecha nele. O estado mutável de `Execution` fica
+  sob lock; o cliente não cria conexão para o sandbox, e a biblioteca não cria `Engine` do
+  SQLAlchemy.
+- O paralelismo entre comandos usa sessões a mais: `with run.sandbox.new_session() as other:` abre
+  outra conexão ao mesmo banco, com o seu lock e as mesmas primitivas (um `cursor()` no DuckDB, uma
+  conexão com credencial própria e o `USE` no Redshift), fechada no fim do bloco. Ela vê o que a
+  sessão principal confirmou e não as tabelas temporárias dela, e a ordem entre as duas é a dos
+  commits: o cliente que lê numa sessão o que grava na outra espera o `close` do `loader` ou o fim
+  do comando. `run.ingest` de mais de uma tabela abre uma sessão a mais por tabela; quatro tabelas de 150.000 linhas
+  entraram em 0,017 s assim e em 0,066 s em série na sessão principal (`test_parallel.py`,
+  2026-09-23). No Redshift, cada sessão a mais pede a sua credencial temporária; dois `COPY` em
+  conexões abertas dentro da tarefa levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
 - As chaves inteiras vêm de `run.next_ids(table, n)`: faixas contíguas sob lock, a partir de
   `max_key + 1` na versão fixada, lido de `max.<coluna>` das ações `add` e pela varredura da coluna
   quando um arquivo não tem a estatística; a tabela vazia começa em 1. Os ids de uma reexecução

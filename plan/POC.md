@@ -1635,3 +1635,60 @@ por `=`, e [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md) acrescenta esse fato à razão d
 `compiled.binds`; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) mede o texto da auditoria em bytes, no
 rascunho, na estratégia e nos testes. `test_sqlalchemy.py` tem 15 casos; sem variável, 186 passam e
 89 são pulados; com a raiz local, 252 passam e 23 são pulados.
+## O que o stream lote a lote e as sessões a mais mostraram
+
+Em 2026-09-23, no macOS (DuckDB 1.5.5, PyArrow 25.0.1, pandas 3.0.6), uma sonda no scratchpad
+comparou três desenhos de `stream` sobre o mesmo banco em arquivo, com os mesmos dados e lotes de
+100.000 linhas, melhor de três execuções: o cursor próprio por stream, anterior à sessão única, com
+a thread que puxa do leitor vivo; o transbordo do resultado inteiro antes do primeiro lote, o
+desenho de 2026-09-22; e o desenho atual de `test_parallel.py`, em que uma thread roda a consulta
+sob o lock e grava cada lote no arquivo assim que o DuckDB o entrega, e o cliente lê cada lote
+gravado. A tabela tem 20.000.000 de linhas em três colunas; a consulta sem operador bloqueante
+devolve 13.333.333 linhas em 134 lotes, e o trabalho do cliente por lote é um `sleep`, que solta o
+GIL como o trabalho nativo, ou a conversão para pandas com duas colunas calculadas.
+
+| Consulta e trabalho por lote, `threads = 2` | Cursor próprio | Transbordo inteiro | Lote a lote |
+| --- | --- | --- | --- |
+| Sem operador bloqueante, sem trabalho | 1º lote em 0,003 s, total 0,303 s | 0,472 s, 0,516 s | 0,005 s, 0,482 s |
+| Sem operador bloqueante, 2 ms | 0,003 s, 0,339 s | 0,466 s, 0,810 s | 0,005 s, 0,490 s |
+| Sem operador bloqueante, 5 ms | 0,005 s, 0,842 s | 0,494 s, 1,330 s | 0,012 s, 0,939 s |
+| Sem operador bloqueante, pandas | 0,003 s, 0,306 s | 0,473 s, 0,580 s | 0,005 s, 0,495 s |
+| `ORDER BY`, sem trabalho | 0,458 s, 0,755 s | 0,995 s, 1,041 s | 0,459 s, 0,960 s |
+| `ORDER BY`, 5 ms | 0,457 s, 1,279 s | 0,973 s, 1,815 s | 0,485 s, 1,405 s |
+
+- **O cursor próprio é o mais rápido** e é o que a sessão única não pode ter: ele segura a conexão
+  enquanto o cliente trabalha. O transbordo inteiro soma a consulta ao trabalho do cliente, e o lote
+  a lote os sobrepõe, pagando a escrita do arquivo no caminho da consulta, cerca de 0,18 s nestas
+  13.333.333 linhas. Com 5 ms por lote, o lote a lote ficou 0,097 s atrás do cursor e 0,391 s à
+  frente do transbordo inteiro; o primeiro lote chegou em 5 ms, contra 472 ms.
+- **Com `threads = 8`** a ordem não mudou: sem trabalho, 0,299 s, 0,549 s e 0,511 s; com 5 ms por
+  lote, 0,834 s, 1,348 s e 0,935 s; com `ORDER BY`, o primeiro lote em 0,164 s, 0,711 s e 0,169 s.
+- **O `loader` com o arquivo e o `INSERT` único ganha do cursor próprio com um `INSERT` por lote
+  numa transação enquanto o cliente produz depressa, e empata quando o trabalho do cliente domina**,
+  6.000.000 de linhas em 60 lotes: sem trabalho, 0,747 s contra 1,101 s; com 2 ms por lote, 0,836 s
+  contra 1,121 s; com 5 ms, 1,115 s contra 1,150 s. Com `threads = 8`, 0,883 s contra 1,116 s,
+  0,949 s contra 1,125 s e 1,192 s contra 1,124 s.
+- **O esquema do fluxo Arrow IPC só entra no arquivo com o primeiro lote**, ou no fechamento de um
+  resultado vazio: abrir o leitor antes disso falhou com `Tried reading schema message, was null or
+  length 0`, e o stream espera o primeiro lote gravado, ou o fim da consulta, antes de abrir o
+  arquivo.
+- **A memória**, na suíte (`test_duckdb.py::test_spooled_stream_bounds_memory`, um subprocesso,
+  10.000.000 de linhas, quatro execuções): 94 MB nas três primeiras e 97 MB na quarta, o primeiro
+  lote em 0,005 s a 0,006 s e a consulta em 0,369 s a 0,388 s, com 81 MB de arquivo, contra 322 MB
+  da tabela inteira.
+- **Na suíte** (`test_parallel.py`, quatro execuções): o primeiro lote de 2.000.000 de linhas chegou
+  entre 0,004 s e 0,008 s, com a consulta ainda rodando, de um total de 0,066 s a 0,068 s com um
+  comando da sessão no meio de cada lote; numa delas, o `close` depois do primeiro lote parou a
+  consulta com 3 de 3.000 lotes gravados; o erro de conversão na linha 2.900.000 chegou como `OSError` depois de 27
+  lotes; o pipeline de três estágios sobre 3.000.000 de linhas levou 0,433 s pela tabela inteira,
+  0,691 s lote a lote dentro de `session()` e 0,406 s encadeado. A sessão de `new_session`, um
+  `cursor()` da conexão, viu a tabela confirmada pela principal, recusou a temporária dela com
+  `CatalogException` e rodou enquanto a principal estava num bloco `session()`; quatro tabelas de
+  150.000 linhas entraram por `delta_scan` em 0,017 s em quatro sessões a mais, contra 0,066 s em
+  série na sessão principal.
+
+**Consequência**: o `stream` do DuckDB grava cada lote enquanto a consulta roda, `prefetch` saiu da
+assinatura, e o `BatchStream` de `test_parallel.py` é a referência ([`PLAN.md`](PLAN.md), etapas
+[4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md)); os dois motores ganharam `new_session()`, e
+`run.ingest` de mais de uma tabela abre uma sessão a mais por tabela ([etapa 6](PLAN-STAGE-6.md)).
+O item da ingestão de várias tabelas na sessão única saiu de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

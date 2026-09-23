@@ -428,6 +428,11 @@ A new lesson adds its story there and its rule here, in the same commit.
   `VALUES`, a `select` column and `text()`; guard on the state the library exposes
   (`compiled.binds`, `required`), and probe every form the input takes before writing that a
   behavior warns (2026-09-22).
+- **A requirement is measured in the user's own words before it is reported kept**: "the client
+  works while the connection does I/O" was reported kept when only the spool file's reading
+  overlapped the client, and the query ran whole before the first batch; time the overlap the
+  requirement names, with the client work it names (first batch, total with work per batch), and
+  report a weaker form as weaker (2026-09-23).
 
 ## Naming conventions
 
@@ -476,14 +481,20 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   Stages 3 to 9 have no code, and stages 3 and 4 have no decision awaiting the user.
 - The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
   ran successfully there on the copy of the production base, and its reports, not yet available,
-  carry the `cad_lancamentos` partition measurement that decides the `export_mode` default. Stages
-  3, 4 and 6 follow on local folders, and stage 7 absorbs the script.
-- Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22):
-  `stream` and `loader` pass batches through intermediate files, so no lock is held while client
-  code runs, and `session()` hands the raw connection. The reference sketches are `SandboxEngine`,
-  `BatchStream` and `Loader` in `tests/proof_of_concept/test_parallel.py`. The Redshift driver
-  materializes a result in `execute` (`plan/redshift.md`), so `stream` bounds memory there only
-  through `UNLOAD`.
+  carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the
+  default, and whether the other mode leaves stages 4, 5 and 7). Stages 3, 4 and 6 follow on local
+  folders, and stage 7 absorbs the script.
+- Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
+  no lock holder waits for client code: DuckDB `stream` writes each batch to an intermediate file
+  while the query runs and the client reads the written batches, `loader` loads its file in one
+  `INSERT`, `session()` hands the raw connection, and `new_session()` opens an extra session for
+  parallel work, which `run.ingest` uses per table (2026-09-23). The reference sketches are
+  `SandboxEngine`, `BatchStream` and `Loader` in `tests/proof_of_concept/test_parallel.py`. The
+  Redshift driver materializes a result in `execute` (`plan/redshift.md`), so `stream` bounds memory
+  there only through `UNLOAD`.
+- `tests/proof_of_concept/test_redshift_transactions.py` waits for a run in the target: two
+  simultaneous publications around `serialize_db_publications`, whose result decides the stage 8
+  transaction.
 - The plan's unit is the partition (`publish_partition`, `partitions=`, `Execution(partition=...)`),
   a `String(n)` text column; the `AAAA-MM-DD` date is the current base's case, never the month.
 - The Redshift target is `sbx_aco_decon` in the datashare database `datalake_rw_shared`, reached by

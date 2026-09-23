@@ -10,21 +10,22 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 | `Database(root, environment, metadata, storage_options=None)` | A raiz do banco, o ambiente (`prod`, `dev`) e o `MetaData` dos modelos; `uri(table)` é `<root>/<ambiente>/<tabela>/`, mais o arquivo de controle e os prefixos `staging/`, `publicacao/` e `arquivo/`; chama `prepare_environment` e cria `Storage.for_uri(root)`. |
 | `Execution(db, engine, partition, execution_id)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox; na saída descarta o sandbox e grava o resumo no log. As primitivas podem ser chamadas de qualquer thread, cada uma na sessão única do motor, sob o lock dele, e o estado mutável (`versions`, auditorias aprovadas, o alocador) fica sob lock. |
 | `run.previous_partitions(table, n)` | Os `n` últimos valores de partição da tabela na versão fixada até `run.partition`, inclusive, lidos das ações `add`, na ordem de texto dos valores, que nos valores `AAAA-MM-DD` é a do calendário; o calendário é do cliente, não da biblioteca. |
-| `run.ingest(*tables, partitions=None, materialize=False)` | `engine.ingest` de cada tabela na versão fixada, em série na sessão única do motor; sem `partitions`, a tabela inteira. Cada comando usa o paralelismo do motor (as `threads` do DuckDB, as slices do Redshift); o que a sessão única tira é ingerir duas tabelas ao mesmo tempo, que em disco local custou 0,061 s contra 0,017 s em quatro cursores para quatro tabelas de 150.000 linhas (`test_parallel.py`, 2026-09-22) e no S3 não foi medido ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). |
+| `run.ingest(*tables, partitions=None, materialize=False)` | `engine.ingest` de cada tabela na versão fixada; sem `partitions`, a tabela inteira. Uma tabela entra na sessão principal; mais de uma entram todas em paralelo, cada uma numa sessão a mais do motor (`new_session`), e a chamada volta quando todas terminam. Cada comando também usa o paralelismo do motor (as `threads` do DuckDB, as slices do Redshift). Em disco local, quatro tabelas de 150.000 linhas entraram em 0,017 s em quatro sessões e em 0,066 s em série (`test_parallel.py`, 2026-09-23). |
 | `run.published(table)` | A versão fixada da tabela como origem de consulta, por `engine.published(table, db.uri(table), versions[table])`: `delta_scan('<uri>', version := <v>)` no DuckDB, a staging `exec_<id>_<tabela>_publicado` no Redshift ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)). É por ela que o pipeline lê as partições já publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader` (decisão do usuário de 2026-09-22); numa tabela que ainda não existe, levanta `SandboxError`. |
-| `run.sandbox` | O motor, onde o pipeline chama `stream` e `loader`, os lotes na saída e na entrada, e `query`, `execute` e `load`, as formas por `pa.Table`, de qualquer thread; nos dois motores todo comando passa pela sessão única da execução, sob o lock que as primitivas tomam e soltam ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)); `with run.sandbox.session() as connection:` dá a conexão crua para o que as primitivas não cobrem, com o lock tomado pelo bloco e reentrante na mesma thread. |
+| `run.sandbox` | O motor, onde o pipeline chama `stream` e `loader`, os lotes na saída e na entrada, e `query`, `execute` e `load`, as formas por `pa.Table`, de qualquer thread; nos dois motores todo comando passa pela sessão única da execução, sob o lock que as primitivas tomam e soltam ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)); `with run.sandbox.session() as connection:` dá a conexão crua para o que as primitivas não cobrem, com o lock tomado pelo bloco e reentrante na mesma thread, e `with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo, sem as tabelas temporárias da principal. |
 | `run.next_ids(table, n)` | Um `range` de `n` inteiros contíguos, sob lock, a partir de `max_key(chave) + 1` na versão fixada da tabela, lido uma vez por tabela; as faixas de threads paralelas não se sobrepõem, e os ids de uma reexecução diferem. |
 | `run.audit(table, partitions, foreign_keys=False, key_scope=None)` | `engine.audit`; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta, e o relatório, com o SQL de cada verificação e até 20 linhas de amostra por verificação reprovada, vai para o log. |
 | `run.publish(*tables, partitions, audit=True, max_workers=1, export_mode=None)` | Exige a auditoria aprovada de cada tabela nessas partições na própria execução, e `audit=False` dispensa a exigência e fica no log; confere por `version_diff` que nenhuma alteração de dados entrou em cada tabela desde a versão fixada e aborta com `ExecutionConflict` quando entrou (um avanço só de metadados ou de manutenção passa e atualiza a versão fixada); depois `create_table` se não existir, `reconcile`, `export_partition` e `publish_partition` por partição com `commit_metadata`, tabela a tabela num `ThreadPoolExecutor(max_workers)`: na primeira falha as tarefas em curso terminam, as não iniciadas são canceladas, e a exceção lista o resultado de cada tabela, porque os commits feitos ficam; avança `versions[table]` sob lock. O padrão 1 vem da memória por escrita (`delta.md`). `export_mode` (`"register"` ou `"rewrite"`, `SERIALIZE_DB_EXPORT_MODE` por omissão, `"register"` sem ela) vai ao `export_partition` dos dois motores ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)): `register` registra por `register_files` o arquivo que o motor gravou, depois das conferências da [etapa 3](PLAN-STAGE-3.md); `rewrite` grava por `publish_partition` a partir do leitor. |
 | `run.publish_redshift(*tables, max_workers=1)` | A publicação da [etapa 8](PLAN-STAGE-8.md), uma conexão por tabela em paralelo, limitada pelas slots do WLM; dois `COPY` e dois `UNLOAD` em conexões distintas passaram em paralelo no ambiente alvo em 2026-09-21 ([`POC.md`](POC.md)). |
 | `run.snapshot(name)` | Marca a execução: `serialize_db_snapshot` nos commits e `snapshot(root, name, versions)` no encerramento. |
 | `serialize-db run` | `--root`, `--environment`, `--engine`, `--partition`, `--execution-id` e `modulo:funcao` do pipeline, que recebe `run`; código de saída 0, 1 na reprovação da auditoria, 2 no conflito. |
-| `serialize-db audit` | `--table`, `--partitions`, `--foreign-keys` e `--key-scope`; com `--sql` imprime o texto das verificações do dialeto escolhido e não abre conexão nem armazenamento, e `--write <pasta>` grava os arquivos das duas variantes. Sem `--sql`, roda a auditoria sobre a versão publicada e imprime o relatório. |
+| `serialize-db audit` | `--table`, `--partitions`, `--foreign-keys` e `--key-scope`; com `--sql` imprime, para depuração, o texto das verificações do dialeto escolhido e não abre conexão nem armazenamento. Sem `--sql`, roda a auditoria sobre a versão publicada e imprime o relatório. |
 
 O log é o `logging` padrão com um resumo por execução: identificador, partição, versões lidas, versões
 gravadas e tempo por passo. Testes: `tests/test_execution.py` sob a raiz local com o motor DuckDB:
 a reexecução com o mesmo `execution_id` produz as mesmas linhas, com ids que podem diferir;
-`next_ids` de duas threads devolve faixas disjuntas; a auditoria reprovada deixa a versão da tabela
+`next_ids` de duas threads devolve faixas disjuntas; `ingest` de três tabelas as carrega em três
+sessões a mais, a sessão principal lê as três, e a falha de uma lista o resultado das outras; a auditoria reprovada deixa a versão da tabela
 como estava; de duas execuções publicando a mesma partição, a segunda aborta com `ExecutionConflict`, e
 também a que publica uma tabela em que outra execução gravou dados desde a abertura, e não a que só foi compactada; `publish` com
 `max_workers=2` dá o mesmo resultado que com 1. Provas de conceito: `test_stdlib.py` (`test_partition_values_in_text_order`,
@@ -113,8 +114,11 @@ um motor já construído, para os testes.
   fixada, convertido para PyArrow por `pa.table(...)` (o delta-rs devolve uma tabela `arro3`),
   filtra `<= run.partition` e devolve os `n` maiores; o calendário é do cliente.
 - **`ingest`** chama `sandbox.ingest(table, uri, versions[table], partitions, materialize)` por
-  tabela, em série: a sessão é uma só nos dois motores, e cada comando já usa o paralelismo do
-  motor.
+  tabela. Com uma tabela, na sessão principal; com mais, um `ThreadPoolExecutor` com uma thread por
+  tabela, e cada thread roda `with sandbox.new_session() as session: session.ingest(...)`. As
+  tabelas do sandbox são tabelas comuns, e a sessão principal as vê no comando seguinte. Uma falha
+  não cancela as ingestões que já rodam: todas terminam, e a exceção lista o resultado de cada
+  tabela; o que entrou fica para o `cleanup`.
 - **`published`** devolve `sandbox.published(table, db.uri(table), versions[table])` e não cria
   objeto com o nome do modelo, que fica para o `loader` da tabela que a execução grava.
 - **`next_ids`** guarda um contador por tabela sob `threading.Lock`, iniciado em
@@ -186,8 +190,9 @@ O rascunho rodou em 2026-09-21 com as versões fixadas, com um motor de mentira 
 por partição e um Delta local com três partições, e de novo em 2026-09-22, com a partição validada
 como texto: a linha de comando recusa o valor vazio ou com `/`, `=` ou espaço, e `Execution` recusa
 também o que passa do `String(n)` da coluna de partição, lida por `table_options` da
-[etapa 1](PLAN-STAGE-1.md). O `ingest` dele ainda despacha as tabelas num pool
-de `max_workers`, o desenho anterior à sessão única dos dois motores.
+[etapa 1](PLAN-STAGE-1.md). O `ingest` dele despacha as tabelas num pool de
+`max_workers` sobre a mesma sessão; a implementação dá a cada tabela uma sessão a mais e dispensa o
+argumento.
 
 ```python
 """Etapa 6: Database e Execution sobre um motor de mentira: versões fixadas, partições anteriores, next_ids sob lock, o conflito de versão e a linha de comando."""

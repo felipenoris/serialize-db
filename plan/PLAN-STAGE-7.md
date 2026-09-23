@@ -358,4 +358,6 @@ tipos físicos gravados: {'id_contrato': 'INT64', 'data': 'INT32', 'contrato': '
 - **[decisão] O padrão de `export_mode` na carga**, `register` até a medição da partição de
   `cad_lancamentos` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o ambiente alvo tem 7,6 GiB, e o
   `write_deltalake` de um leitor cresceu com a entrada (1.140 MB para 135 MB de Parquet). A
-  migração adiantada faz essa medição.
+  migração adiantada faz essa medição, e o relatório dela é o gatilho de revisão de
+  [`PLAN.md`](PLAN.md): com ele o plano fixa o padrão e decide se o outro modo sai das etapas 4, 5 e
+  7.

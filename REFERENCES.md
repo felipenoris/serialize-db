@@ -71,6 +71,7 @@ Documentação:
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_write_readwrite.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_Serializable_isolation_example.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_serial_isolation-serializable-isolation-troubleshooting.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_LOCK.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-format.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-load.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-column-mapping.html>

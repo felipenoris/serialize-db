@@ -319,17 +319,21 @@ e os exemplos do Redshift em `test_redshift.py`.
    qualquer thread, porque os dois motores confirmam cada comando ao terminar.
 2. Cada motor tem uma sessão por execução e um lock reentrante, e todo comando do sandbox passa por
    ela em série (decisão do usuário de 2026-09-22): uma tabela temporária vale para os comandos
-   seguintes, de qualquer thread, nos dois motores. As primitivas tomam e soltam o lock, e nenhuma o
-   segura enquanto o código do cliente roda; `with run.sandbox.session() as connection:` dá a
-   conexão crua ao que elas não cobrem. O cliente nunca cria conexão para o sandbox.
+   seguintes, de qualquer thread, nos dois motores. As primitivas tomam e soltam o lock, e nenhuma
+   espera pelo código do cliente com ele tomado; `with run.sandbox.session() as connection:` dá a
+   conexão crua ao que elas não cobrem, e `with run.sandbox.new_session() as other:` abre uma sessão
+   a mais para o que roda em paralelo, sem as tabelas temporárias da principal. O cliente nunca cria
+   conexão para o sandbox.
 3. `run.next_ids(table, n)` devolve faixas de identificadores que não se sobrepõem entre threads.
 4. O estado da execução (`versions`, auditorias aprovadas, o alocador) fica sob lock.
 5. O DuckDB, o delta-rs e o PyArrow liberam o GIL no trabalho nativo: threads Python bastam para o
    paralelismo, e o custo de uma extensão em Rust não se justifica por ele.
-6. `stream` e `loader` são as threads da biblioteca ao lado dos pools de `publish` e de
-   `publish_redshift`: uma auxiliar por primitiva, que lê ou grava um arquivo intermediário fora da
-   sessão, e uma fila limitada, encerrada no `close`; o cliente trabalha no lote atual enquanto a
-   biblioteca lê o seguinte ou grava o anterior.
+6. As threads da biblioteca são os pools de `publish`, de `publish_redshift` e de `ingest`, este
+   com uma sessão a mais por tabela, e a auxiliar de cada `stream` e de cada `loader`, encerrada no
+   `close`: a de `stream` roda a consulta e grava cada lote num arquivo intermediário enquanto o
+   cliente lê os lotes já gravados, e a de `loader` grava os lotes num arquivo fora da sessão. O
+   cliente trabalha no lote atual enquanto a consulta produz o seguinte ou a biblioteca grava o
+   anterior.
 
 ### Leituras em paralelo
 
@@ -338,13 +342,15 @@ e os exemplos do Redshift em `test_redshift.py`.
   de uma tabela em paralelo por conta própria, e um pool do cliente sobre
   `DeltaTable(uri).to_pyarrow_dataset()` lê várias tabelas; o ganho aparece no S3, onde a latência
   domina.
-- **O sandbox.** Um comando por vez na sessão, cada um com o paralelismo do motor. No DuckDB,
-  `threads` é da instância, então duas consultas simultâneas dividiriam o mesmo pool e só ganhariam
-  quando uma esperasse o S3; no Redshift, cada comando corre nas slices. Várias threads chamam
-  `run.sandbox.query`, `execute` e `stream` ao mesmo tempo e esperam a vez na sessão, e a leitura
-  dos lotes de cada `stream` corre fora dela. A ingestão de várias tabelas é em série: em disco
-  local, quatro tabelas de 150.000 linhas levaram 0,061 s na sessão e 0,017 s em quatro cursores
-  (`test_parallel.py`, 2026-09-22); no S3 não foi medido ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- **O sandbox.** Um comando por vez em cada sessão, cada um com o paralelismo do motor. No DuckDB,
+  `threads` é da instância, então duas consultas simultâneas dividem o mesmo pool e ganham quando
+  uma espera o S3 ou quando as consultas são pequenas; no Redshift, cada comando corre nas slices.
+  Várias threads chamam `run.sandbox.query`, `execute` e `stream` ao mesmo tempo e esperam a vez na
+  sessão, e a leitura dos lotes de cada `stream` corre fora dela. A ingestão de várias tabelas corre
+  em paralelo, uma sessão a mais por tabela: em disco local, quatro tabelas de 150.000 linhas
+  entraram em 0,017 s assim e em 0,066 s em série (`test_parallel.py`, 2026-09-23). O cliente abre
+  as suas sessões a mais para as consultas independentes, que não veem as tabelas temporárias da
+  sessão principal.
 
 ### Escritas em paralelo
 
@@ -361,7 +367,8 @@ e os exemplos do Redshift em `test_redshift.py`.
 - **Escritas no motor com dependências.** Um passo posterior que lê o que um passo anterior gravou
   espera o `Future` desse passo; a dependência é do fluxo de controle do cliente, não da biblioteca.
   Passos independentes podem ir para um pool: os comandos deles correm em série na sessão, e o ganho
-  é o trabalho Python de cada passo, que corre fora dela. Cada `load` e cada `execute` gravam
+  é o trabalho Python de cada passo, que corre fora dela; numa sessão a mais por passo, quando o
+  passo não usa as tabelas temporárias da principal, os comandos também correm juntos. Cada `load` e cada `execute` gravam
   tabelas distintas, e cada comando é confirmado ao terminar, então nada fica meio gravado para a
   leitura seguinte.
 - **Publicação no Redshift.** `run.publish_redshift(*tables, max_workers=n)`: um `COPY` por tabela,
@@ -382,7 +389,7 @@ with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2
 
     statement = select(Saldo).where(Saldo.data_base_str == run.partition)   # já vê saldos e limites
     with run.sandbox.stream(statement) as stream, run.sandbox.loader(LancamentoProjetado) as loader:
-        for batch in stream:                                         # o lote seguinte já está sendo lido
+        for batch in stream:                                         # a consulta segue gravando os lotes seguintes
             frame = batch.to_pandas(types_mapper=pd.ArrowDtype)
             frame["id_lancamento"] = run.next_ids(LancamentoProjetado, len(frame))   # faixa contígua, sob lock
             loader.write(pa.RecordBatch.from_pandas(frame, preserve_index=False))    # o lote anterior vai para o arquivo do loader
