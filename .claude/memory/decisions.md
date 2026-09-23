@@ -671,7 +671,7 @@ Asked how the first publication of a table writes its control row, the user rede
 transaction (2026-09-23): open the transaction, read the table's control row, identify the previous
 version, `INSERT` the row when there is none, and when there is one check the version and
 `UPDATE` it; and create an unpublish flow, similar but with `DELETE`. The assistant's reading,
-named in the report: the read is the transaction's first statement and fixes its snapshot; the
+which the user confirmed the same day: the read is the transaction's first statement and fixes its snapshot; the
 check compares the version read with the Delta version the execution publishes (equal: nothing to
 publish, `ROLLBACK`; higher: `ExecutionConflict`; lower: `version_diff` between them); the control
 row is written last, after the partitions, because its `INSERT` or `UPDATE` holds the control

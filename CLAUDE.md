@@ -619,8 +619,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   decided on 2026-09-23 the stage 8 transaction: read the control row first, `INSERT` it on the
   first publication or check the version and `UPDATE` it, written last; and an unpublish flow with
   `DROP TABLE` and `DELETE` of the row. The file's two temporary-staging cases, added the same day,
-  wait for a run in the target. `probes/duckdb_threads.py` measures the DuckDB `threads` over the
-  migrated tables and waits for a target run after the migration rerun.
+  wait for a run in the target, and the `-m "not redshift"` session there reads the `VmHWM` fix
+  of the memory measurements. `probes/duckdb_threads.py` measures the DuckDB `threads` over the
+  tables the first migration wrote and waits for a target run, never at the same time as the
+  migration rerun.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing

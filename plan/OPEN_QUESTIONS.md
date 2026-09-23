@@ -49,7 +49,16 @@ foi medido em [`POC.md`](POC.md).
   tabela: em disco local, num macOS de 11 núcleos, quatro tabelas de 8.000.000 de linhas entraram
   em 1,629 s contra 3,498 s em série com `threads = 2`, e parte do ganho veio das threads que
   chamam cada sessão, que o ambiente alvo, com 4 vCPUs, não tem de sobra (2026-09-23,
-  [`POC.md`](POC.md)). O probe roda depois da migração dos comandos de `SUITE.md`.
+  [`POC.md`](POC.md)). O probe lê as tabelas que a migração gravou no `--root` e não depende da
+  nova execução dos comandos de `SUITE.md`; os dois não rodam ao mesmo tempo, porque disputariam
+  as mesmas vCPUs.
+- **As medições de memória de `test_duckdb.py` no ambiente alvo.** Na sessão `-m "not redshift"`
+  de 2026-09-23 às 18:48 UTC, `test_streaming_query_bounds_memory` e
+  `test_spooled_stream_bounds_memory` reprovaram com 1.120 MB em todo cenário, porque o
+  `ru_maxrss` do subprocesso herdava o pico do pytest ([`POC.md`](POC.md)). A leitura por
+  `VmHWM`, com o acréscimo sobre a base depois das importações, entrou depois dessa sessão e
+  passou só no contêiner Linux; a próxima sessão `-m "not redshift"` de `SUITE.md` no ambiente
+  alvo a confirma.
 - **O `Double` não finito nas estatísticas do Delta**, a
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
   infinito numa coluna `Double`, e a biblioteca grava sem mínimo e máximo, no rodapé Parquet e no
