@@ -499,3 +499,16 @@ partition and per attempt, `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/` in `r
 assistant's). Stage 5 has no decision awaiting the user; the readings the next suite run in the
 target makes for these decisions are in `plan/OPEN_QUESTIONS.md`. `plan/PLAN-STAGE-5.md`,
 `plan/PLAN-STAGE-8.md`, `plan/PLAN.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+The user then chose the per-partition version of the #59 rule (2026-09-23): a `Double` column with a
+non-finite value (`NaN` or infinity) in a partition is written without min and max, in the Parquet
+footer (`ColumnProperties(statistics_enabled="NONE")` in `publish_partition`) and in the Delta log
+(`register_files`); the other partitions keep both. The list comes from the audit's non-finite count
+per partition and column (`AuditReport.nonfinite_columns`, the row query grouped by the partition
+column), which `run.publish` passes as `columns_without_min_max` to `export_partition` of both
+engines; with `audit=False` every `Double` column goes in the list. The trigger is any non-finite
+value, so the audit count serves as it is and the infinite-extreme special case of `register_files`
+goes. `initial_load` counts non-finite values in its partition check query, and its `load_report`
+sums only finite values. Open: the footer the Redshift `UNLOAD` writes for a row group with `NaN`.
+`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`,
+`plan/PLAN-STAGE-7.md`, `plan/OPEN_QUESTIONS.md`

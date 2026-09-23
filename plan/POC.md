@@ -2027,13 +2027,18 @@ sondas, repetidas com o mesmo resultado.
   DuckDB trata disso.
 
 **Consequência**: a proposta de `register_files` omitir o mínimo e o máximo quando o `RETURN_STATS`
-traz `has_nan` cai, e omitir só no log não protege o modo `rewrite`. A recomendação, que espera o
-usuário, é gravar o `Double` sem mínimo e máximo no rodapé e no log;
-[`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) e
-[`delta.md`](delta.md) descrevem a decisão pendente. Os casos entraram nas suítes de estudo:
+traz `has_nan` cai, e omitir só no log não protege o modo `rewrite`. O usuário decidiu no mesmo dia
+gravar sem mínimo e máximo, no rodapé e no log, as colunas `Double` com valor não finito em cada
+partição, pela contagem da auditoria. Um caso a mais mediu a regra: o `writer_properties` do
+`write_deltalake` vale para a chamada, uma por partição, e o `delta_scan ... WHERE valor > 3`
+devolveu a linha do `NaN` da partição sem estatística e não abriu o arquivo da outra, podado pelo
+máximo 2,5. [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md),
+[`PLAN-STAGE-6.md`](PLAN-STAGE-6.md), [`delta.md`](delta.md) e [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
+descrevem a regra e o que continua aberto. Os casos entraram nas suítes de estudo:
 `test_duckdb.py::test_return_stats_has_nan_follows_only_the_last_row_group`,
-`test_duckdb.py::test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer` e
-`test_deltalake.py::test_float_statistics_off_keep_the_nan_row`.
+`test_duckdb.py::test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer`,
+`test_deltalake.py::test_float_statistics_off_keep_the_nan_row` e
+`test_deltalake.py::test_float_statistics_off_per_partition_keep_the_nan_row_and_the_pruning`.
 
 ## O que as sondas das decisões da etapa 6 mostraram
 

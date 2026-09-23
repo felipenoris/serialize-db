@@ -111,6 +111,13 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   removes the column's min and max from the footer and the log (its `nullCount` too), and
   `delta_scan` finds the row. `plan/POC.md`, `plan/delta.md`, `plan/PLAN-STAGE-3.md`,
   `tests/proof_of_concept/test_deltalake.py`
+- `writer_properties` applies to one `write_deltalake` call, so each partition written by
+  `mode="overwrite", predicate=...` keeps or drops the float statistics on its own: a partition
+  written with `statistics_enabled="NONE"` on `valor` and one written with the default gave
+  `delta_scan ... WHERE valor > 3` the `NaN` row of the first and never opened the file of the
+  second, pruned by its maximum 2.5 (2026-09-23). Statistics live per file, one `add` action each,
+  with `partitionValues`; the table keeps no aggregate. `plan/POC.md`, `plan/PLAN-STAGE-3.md`,
+  `tests/proof_of_concept/test_deltalake.py`
 
 ## Performance measured
 

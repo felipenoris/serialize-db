@@ -702,8 +702,9 @@ PARQUET-2249 (2026-05-26), contá-lo em `nan_count`; o leitor sem `nan_count` su
 `maxValues` como o maior valor válido do arquivo, sem contagem de `NaN`; o delta-kernel-rs grava o
 `NaN` como máximo, e o Delta Spark descarta o mínimo e o máximo de ponto flutuante que colhe do
 rodapé de escritores que deixam o `NaN` de fora (PR #7101, 2026-06-27). O delta-rs copia o máximo do
-rodapé para o log. O que a biblioteca grava no `Double` é a decisão pendente da
-[issue #59](https://github.com/felipenoris/serialize-db/issues/59), medida em [`POC.md`](POC.md).
+rodapé para o log. A biblioteca grava sem mínimo e máximo, no rodapé e no log, as colunas `Double`
+com valor não finito em cada partição (decisão do usuário de 2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59),
+[etapa 3](PLAN-STAGE-3.md)), medido em [`POC.md`](POC.md).
 
 ## Exportação para Parquet
 

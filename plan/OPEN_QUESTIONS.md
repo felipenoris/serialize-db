@@ -70,19 +70,21 @@ foi medido em [`POC.md`](POC.md).
   execução.
 - **O `Double` não finito nas estatísticas do Delta**, a
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
-  infinito numa coluna `Double` (decisão do usuário de 2026-09-23). O DuckDB ordena o `NaN` acima de
-  todo número e perde a linha dele num filtro por intervalo quando poda por um máximo sem o `NaN`: o
-  do log, que o delta-rs e o registro copiam do rodapé, e o do rodapé do delta-rs e do pyarrow, que o
-  leitor Parquet do DuckDB usa por grupo de linhas
-  ([duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521)). A especificação do Parquet
-  deixa o `NaN` fora do mínimo e do máximo e o conta em `nan_count`; o protocolo Delta não tem essa
-  contagem, e o delta-kernel-rs e o Delta Spark tratam o `NaN` como o maior valor (leituras de
-  2026-09-23, [`POC.md`](POC.md)). A soma de controle da auditoria já soma só os finitos e conta os
-  demais, e o registro deixa fora o extremo infinito. Continuam abertos: o mínimo e o máximo do
-  `Double` no rodapé e no log ([etapa 3](PLAN-STAGE-3.md)); a contagem de `isnan` e `isinf` nas
-  colunas `Double` das tabelas que a migração adiantada gravou no ambiente alvo, com a busca por
-  `Infinity` nos arquivos do log delas; se a contagem da auditoria reprova; e o aviso aos clientes
-  da tabela publicada.
+  infinito numa coluna `Double`, e a biblioteca grava sem mínimo e máximo, no rodapé Parquet e no
+  log Delta, as colunas `Double` com valor não finito em cada partição, pela contagem da auditoria
+  (decisões do usuário de 2026-09-23, [etapa 3](PLAN-STAGE-3.md)). Continuam abertos:
+  - O rodapé que o `UNLOAD` do Redshift grava num grupo de linhas com `NaN`, que só o ambiente alvo
+    mede. O Redshift aceita `NaN` em `DOUBLE PRECISION`, e um rodapé com o máximo sem o `NaN`, como
+    o do pyarrow, faz o leitor Parquet do DuckDB perder a linha mesmo com o log sem estatística
+    ([duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521), leituras de 2026-09-23,
+    [`POC.md`](POC.md)).
+  - As tabelas que a migração adiantada gravou no ambiente alvo, com o mínimo e o máximo do
+    `Double` registrados. O relatório dela soma cada coluna `Double` por `CAST` para
+    `DECIMAL(38, 6)`, que falha com `NaN` e infinito, e só `ContractError` é tratado: uma execução
+    completa sem erro indica tabelas sem valor não finito. Os relatórios da execução, ainda não
+    disponíveis, dizem quais tabelas rodaram; uma tabela fora deles pede a contagem de `isnan` e
+    `isinf`.
+  - Se a contagem de não finitos da auditoria reprova.
 - **O `pytest` sem variável grava na pasta temporária do pytest.** A premissa de
   [`PLAN.md`](PLAN.md) diz que `pytest` sem variável não grava arquivo algum, e o cabeçalho de
   `tests/conftest.py` diz que fora das raízes informadas a sessão grava só `.pytest_cache/`; mas
@@ -128,12 +130,6 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   que o `cast` aceita em silêncio: o instante UTC vira hora local, e a hora local vira UTC (leitura
   de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, porque a
   conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso.
-- [Etapa 3](PLAN-STAGE-3.md): o mínimo e o máximo de uma coluna `Double`, da
-  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). Proposto: nenhuma coluna
-  `Double` com mínimo e máximo, no rodapé Parquet e no log Delta
-  (`ColumnProperties(statistics_enabled="NONE")` no `write_deltalake`, os dois omitidos em
-  `register_files`). A alternativa é manter os dois sem o `NaN`, como a especificação do Parquet
-  escreve, e documentar a poda do DuckDB.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.

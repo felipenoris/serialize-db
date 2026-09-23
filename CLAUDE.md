@@ -516,9 +516,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `FunctionElement`), and the user's answers of the same day closed stage 4: the `qmark` style, the
   audit key scope, the engine interface, the `loader` creating its table at `close`, the hybrid
   `stream` and `interrupt()`, the last three implemented in the `test_parallel.py` sketches. The
-  `cast` keeps accepting the non-finite `Double`; its pruning defect is issue #59, and the stage 3
-  recommendation of 2026-09-23, no `Double` min and max in the Parquet footer or the Delta log,
-  waits on the user (`.claude/memory/decisions.md`). The user's answers of 2026-09-23 closed stage
+  `cast` keeps accepting the non-finite `Double`, and the user's decision of 2026-09-23 on issue
+  #59 writes no min and max, in the Parquet footer or the Delta log, for the `Double` columns holding
+  a non-finite value in each partition, from the audit's count (`columns_without_min_max`)
+  (`.claude/memory/decisions.md`). The user's answers of 2026-09-23 closed stage
   6: `--metadata` in `serialize-db run`, `next_ids` only on the sequential single-column key, the
   allowlist `[0-9A-Za-z][0-9A-Za-z_.-]*` for the partition value and the `execution_id`, and no
   table barrier, with the stage 5 `loader` creating its table at `close` like stage 4's. The user's

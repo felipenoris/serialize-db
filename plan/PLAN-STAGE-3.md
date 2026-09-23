@@ -32,8 +32,8 @@ solto, e `value` é o valor de uma partição, `None` numa tabela sem partição
 | `open_table(uri, storage, version=None)` | A `DeltaTable` numa versão; a execução abre cada tabela uma vez e guarda a versão. O nome não é `open`, que sombrearia a função embutida dentro do módulo. |
 | `max_key(dt, column)` | O maior valor de `column` na versão carregada: o máximo de `max.<coluna>` de `get_add_actions(flatten=True)`, sem ler dados, ou a varredura da coluna quando um arquivo não tem a estatística; 0 na tabela vazia. O início de `run.next_ids`, e por isso a estatística registrada é verdadeira ou omitida (seção "As conferências do registro de arquivos"): a omitida cai na varredura, a falsa daria chaves repetidas. |
 | `commit_metadata(execution_id, input_versions, snapshot=None)` | O dicionário de `CommitProperties(custom_metadata=...)`: `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`. |
-| `publish_partition(uri, table, value, data, metadata, storage)` | `write_deltalake(dt, data, mode="overwrite", predicate="<coluna de partição> = '<valor>'")` de `data` já passado por `cast`, pelo objeto `DeltaTable`, e devolve `dt.version()`, a versão do próprio commit; `value=None` numa tabela sem partição substitui a tabela inteira; `CommitFailedError` sobe como `ExecutionConflict`. |
-| `register_files(uri, table, files, value, metadata, storage, expected_rows=None)` | Arquivos que outro escritor gravou dentro da pasta da tabela entram no log por `create_write_transaction(mode="overwrite", partition_filters=...)`, uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. O `create_write_transaction` grava a ação como a recebe, e os leitores obedecem à ação, não ao arquivo ([`POC.md`](POC.md)); a primitiva faz as conferências da seção "As conferências do registro de arquivos" antes do commit e a releitura depois dele. Os arquivos do `UNLOAD` do Redshift têm mínimo e máximo, menos nas colunas de timestamp, que saem em `INT96` e não carregam estatística: a coluna fica fora de `minValues` e `maxValues` sem falhar o registro ([`redshift.md`](redshift.md)). O `schema.elements` do manifesto verboso listou a coluna de partição, que os arquivos não têm, no `UNLOAD` com `PARTITION BY` (suíte de 2026-09-21); o da [etapa 5](PLAN-STAGE-5.md) grava sem ele e com a coluna fora do `select` (decisão do usuário de 2026-09-23), e a lista esperada da conferência é a do `select`, que a próxima execução da suíte confere. O segundo registro da mesma partição a partir da mesma versão é `CommitFailedError` (leitura de 2026-09-23), que sobe como `ExecutionConflict`, como em `publish_partition`. |
+| `publish_partition(uri, table, value, data, metadata, storage, columns_without_min_max=())` | `write_deltalake(dt, data, mode="overwrite", predicate="<coluna de partição> = '<valor>'")` de `data` já passado por `cast`, pelo objeto `DeltaTable`, e devolve `dt.version()`, a versão do próprio commit; as colunas de `columns_without_min_max` recebem `ColumnProperties(statistics_enabled="NONE")` no `writer_properties` e saem sem mínimo e máximo no rodapé e no log, pela regra do `Double` não finito da seção "As conferências do registro de arquivos"; `value=None` numa tabela sem partição substitui a tabela inteira; `CommitFailedError` sobe como `ExecutionConflict`. |
+| `register_files(uri, table, files, value, metadata, storage, expected_rows=None, columns_without_min_max=())` | Arquivos que outro escritor gravou dentro da pasta da tabela entram no log por `create_write_transaction(mode="overwrite", partition_filters=...)`, uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. O `create_write_transaction` grava a ação como a recebe, e os leitores obedecem à ação, não ao arquivo ([`POC.md`](POC.md)); a primitiva faz as conferências da seção "As conferências do registro de arquivos" antes do commit e a releitura depois dele. Os arquivos do `UNLOAD` do Redshift têm mínimo e máximo, menos nas colunas de timestamp, que saem em `INT96` e não carregam estatística: a coluna fica fora de `minValues` e `maxValues` sem falhar o registro ([`redshift.md`](redshift.md)). O `schema.elements` do manifesto verboso listou a coluna de partição, que os arquivos não têm, no `UNLOAD` com `PARTITION BY` (suíte de 2026-09-21); o da [etapa 5](PLAN-STAGE-5.md) grava sem ele e com a coluna fora do `select` (decisão do usuário de 2026-09-23), e a lista esperada da conferência é a do `select`, que a próxima execução da suíte confere. O segundo registro da mesma partição a partir da mesma versão é `CommitFailedError` (leitura de 2026-09-23), que sobe como `ExecutionConflict`, como em `publish_partition`. |
 | `read_back(uri, table, value, expected_rows, storage)` | A releitura da versão recém-commitada pelos dois leitores, em conexão DuckDB própria; uma diferença volta a versão e levanta `RegistrationRefused`. |
 | `schema_diff(table, dt)` | O `SchemaDiff` entre `arrow_schema(table)` e `dt.schema()`: coluna nova anulável, `NOT NULL` relaxado, `CHECK` e comentário divergente são aditivos; coluna `NOT NULL` nova em tabela com dados, renomeação, remoção e mudança de tipo são destrutivos. |
 | `reconcile(uri, table, storage)` | Aplica o diff aditivo (`add_columns`, `drop_column_not_null`, `add_constraint`, `set_table_description` e `set_column_metadata`) e recusa o destrutivo com a mensagem que aponta `rewrite`. |
@@ -80,14 +80,16 @@ o rodapé de cada arquivo, um GET por arquivo:
    mediu transcrevendo exato ([`POC.md`](POC.md), decisão do usuário do mesmo dia); `decimal` fica
    de fora porque o próprio delta-rs grava o mínimo e o máximo como número JSON e perde a linha na
    poda, e `timestamp` porque o valor sai truncado em milissegundos. O `Double` transcreve exato só
-   os valores finitos: com `NaN` na coluna, o máximo do `RETURN_STATS` fica sem ele, e o
-   `delta_scan ... WHERE valor > 3` perdeu a linha que o DuckDB ordena acima de todo número; o
-   `has_nan` só vê o `NaN` do último grupo de linhas do arquivo; o infinito entraria no JSON do log
-   como `Infinity`, que não é JSON válido (leituras de 2026-09-23, [`POC.md`](POC.md)). O extremo
-   infinito fica fora, como o escritor do delta-rs faz, que grava `null` no lugar dele. O `NaN`, que
-   o `cast` aceita (decisão do usuário de 2026-09-23), é a decisão pendente da
-   [issue #59](https://github.com/felipenoris/serialize-db/issues/59), no fim deste arquivo. O texto
-   não tem exceção: o `RETURN_STATS` trunca o máximo para cima, e omite o texto multibyte longo.
+   os valores finitos, e as colunas de `columns_without_min_max`, as `Double` com valor não finito
+   na partição, ficam sem mínimo e máximo (decisão do usuário de 2026-09-23,
+   [issue #59](https://github.com/felipenoris/serialize-db/issues/59)). Com `NaN` na coluna, o máximo do
+   `RETURN_STATS` fica sem ele, e o `delta_scan ... WHERE valor > 3` perdeu a linha que o DuckDB
+   ordena acima de todo número; o infinito entraria no JSON do log como
+   `Infinity`, que não é JSON válido; e o `has_nan` só vê o último grupo de linhas do arquivo, por
+   isso a lista vem da contagem da auditoria, não do `RETURN_STATS` (leituras de 2026-09-23,
+   [`POC.md`](POC.md)). O rodapé do `COPY` do DuckDB já sai sem mínimo e máximo no grupo de linhas
+   com `NaN`. O texto não tem exceção: o `RETURN_STATS` trunca o máximo para cima, e omite o texto
+   multibyte longo.
 
 A reprovação recusa o commit com o arquivo e a conferência na mensagem, e os arquivos ficam órfãos na
 pasta até `vacuum(full=True)`. Depois do commit, `read_back` lê a versão nova pelo delta-rs e pelo
@@ -125,7 +127,7 @@ mesma tabela com o conflito no mesmo mês, e `max_key` pelas estatísticas com a
 """Assinaturas de serialize_db.storage e serialize_db.delta; os corpos estão nos rascunhos abaixo."""
 import dataclasses
 import os
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Collection, Mapping, MutableMapping
 from typing import Literal
 
 import duckdb
@@ -202,8 +204,10 @@ def create_table(uri: str, table: sa.Table, storage: Storage) -> DeltaTable: ...
 def open_table(uri: str, storage: Storage, version: int | None = None) -> DeltaTable: ...
 def max_key(dt: DeltaTable, column: str) -> int: ...
 def commit_metadata(execution_id: str, input_versions: Mapping[str, int], snapshot: str | None = None) -> dict[str, str]: ...
-def publish_partition(uri: str, table: sa.Table, value: str | None, data: object, metadata: Mapping[str, str], storage: Storage) -> int: ...
-def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value: str | None, metadata: Mapping[str, str], storage: Storage, expected_rows: int | None = None) -> int: ...
+def publish_partition(uri: str, table: sa.Table, value: str | None, data: object, metadata: Mapping[str, str], storage: Storage,
+                      columns_without_min_max: Collection[str] = ()) -> int: ...
+def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value: str | None, metadata: Mapping[str, str], storage: Storage,
+                   expected_rows: int | None = None, columns_without_min_max: Collection[str] = ()) -> int: ...
 def read_back(uri: str, table: sa.Table, value: str | None, expected_rows: int, storage: Storage) -> None: ...
 def schema_diff(table: sa.Table, dt: DeltaTable) -> SchemaDiff: ...
 def reconcile(uri: str, table: sa.Table, storage: Storage) -> SchemaDiff: ...
@@ -282,9 +286,12 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   aspa simples, que quebraria o predicado (proposta em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
   `value=None` numa tabela sem partição substitui a tabela; `CommitFailedError` vira
   `ExecutionConflict`. Ela recebe `data` já passado por `cast`, e recusa um lote sem a coluna de
-  partição antes de gravar.
+  partição antes de gravar. As colunas de `columns_without_min_max` entram no `writer_properties`
+  com `ColumnProperties(statistics_enabled="NONE")`, que vale para a chamada inteira, uma por
+  partição (`test_deltalake.py::test_float_statistics_off_per_partition_keep_the_nan_row_and_the_pruning`).
 - **`register_files`** traz de `scripts/migrate_parquet_to_delta.py` a montagem da ação
-  (`stat_converter`, `delta_stats`) e faz as conferências da seção "As conferências do registro de
+  (`stat_converter`, `delta_stats`), sem o mínimo e o máximo das colunas de
+  `columns_without_min_max`, e faz as conferências da seção "As conferências do registro de
   arquivos" com um `pq.ParquetFile` por arquivo (um `GET` de rodapé no S3, pelo `pyarrow.fs` do
   `Storage`), cada conferência numa função que levanta `RegistrationRefused`; depois, um único
   `create_write_transaction(mode="overwrite", partition_filters=[(coluna, "=", valor)])` com uma
@@ -383,6 +390,7 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
 | Registro | `test_register_files_registers_an_unload_like_file` | Um arquivo `INT96` e `FIXED_LEN_BYTE_ARRAY` registrado; os dois leitores devolvem as linhas e `timestamp[us]`. |
 | Conferências | `test_register_files_refuses_each_defect`, parametrizado | Tamanho, contagem, partição do caminho, coluna `NOT NULL` ausente, tipo físico fora dos admitidos e `expected_rows` diferente; a versão não muda e o arquivo fica órfão. |
 | Releitura | `test_read_back_restores_on_a_difference` | Uma estatística falsa injetada faz `read_back` voltar a versão. |
+| `Double` não finito | `test_nonfinite_double_columns_leave_min_max_out` | Uma coluna em `columns_without_min_max` numa partição: `publish_partition` grava o rodapé e o log sem o mínimo e o máximo dela, `register_files` grava o log sem os dois, a outra partição sai com eles, e o `delta_scan` devolve a linha do `NaN` num filtro por intervalo e não abre o arquivo da outra partição. |
 | Estatísticas | `test_registered_stats_prune_files` | `EXPLAIN ANALYZE` do DuckDB mostra `Scanning Files: 0/n` para uma chave acima do máximo registrado; as colunas `decimal` e `timestamp` entram sem mínimo e máximo. |
 | Reconciliação aditiva | `test_reconcile_adds_nullable_column_and_relaxes_not_null` | A coluna entra no fim; as linhas antigas leem nulo; a versão anterior lê o esquema antigo. |
 | Documentação | `test_reconcile_syncs_description_and_comments` | Um comentário de tabela e um de coluna alterados no modelo entram por commit de `metaData`; a segunda chamada não commita. |
@@ -644,27 +652,7 @@ não o seu texto.
 
 ## Decisões pendentes
 
-- **O mínimo e o máximo de uma coluna `Double`**, a
-  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita o `NaN`
-  (decisão do usuário de 2026-09-23). O rodapé Parquet e o log Delta seguem convenções diferentes:
-  a especificação do Parquet deixa o `NaN` fora do mínimo e do máximo e o conta em `nan_count`; o
-  protocolo Delta não tem contagem de `NaN`, e o delta-kernel-rs e o Delta Spark tratam o `NaN` como
-  o maior valor. O DuckDB perde a linha do `NaN` num filtro por intervalo nas duas camadas: pelo
-  máximo sem o `NaN` que o delta-rs e o registro copiam para o log, e pelo máximo do rodapé do
-  delta-rs e do pyarrow, que o leitor Parquet do DuckDB usa para podar o grupo de linhas
-  ([duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521)). Tirar só o do log não
-  basta, e o `has_nan` do `RETURN_STATS` só vê o último grupo de linhas (leituras de 2026-09-23,
-  [`POC.md`](POC.md)). Proposto: nenhuma coluna `Double` com mínimo e máximo, no rodapé e no log.
-  `publish_partition` passa `ColumnProperties(statistics_enabled="NONE")` às colunas `Double` no
-  `write_deltalake`, e `register_files` omite os dois; o `COPY` do DuckDB já grava sem eles o grupo
-  de linhas com `NaN`. As duas especificações aceitam a estatística ausente, e o Delta Spark
-  descarta o mínimo e o máximo de ponto flutuante que colhe do rodapé desses escritores. O custo é a
-  poda por coluna `Double`, e nenhuma delas está em `partition_by` ou `sort_key` no modelo cliente.
-  A alternativa é manter o mínimo e o máximo sem o `NaN`, como a especificação do Parquet escreve, e
-  documentar que o resultado de um filtro por intervalo numa coluna `Double` com `NaN` depende da
-  disposição dos arquivos no DuckDB. A migração adiantada registrou o `Double` com o mínimo e o
-  máximo sem o `NaN`, e a contagem de `isnan` por coluna `Double` nas tabelas migradas, no ambiente
-  alvo, diz se alguma precisa regravar as estatísticas.
+Nenhuma.
 
 As seis decisões da etapa tomadas pelo usuário em 2026-09-22 estão escritas na seção que
 descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a
@@ -672,5 +660,7 @@ descrição e os comentários de coluna; `storage_options` sem credencial alguma
 delta-rs; o mínimo e o máximo das colunas inteiras, de data, `Double` e `String` em
 `register_files`; `version_diff` recusando com `LogUnavailable` o log limpo; `expressions` em
 `rewrite`, para a renomeação e a coluna `NOT NULL` nova; e `Storage` sobre `pyarrow.fs`, sem uma
-classe por armazenamento. As sondagens que mediram as quatro primeiras estão em [`POC.md`](POC.md) e
+classe por armazenamento. A decisão de 2026-09-23 sobre o `Double` não finito, a lista
+`columns_without_min_max` por partição, está no item 5 das conferências do registro e em
+`publish_partition`. As sondagens que mediram as quatro primeiras estão em [`POC.md`](POC.md) e
 em `tests/proof_of_concept/test_deltalake.py`.

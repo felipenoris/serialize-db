@@ -14,7 +14,8 @@ exportação por cópia dos arquivos e a carga inicial de pastas Parquet; e aind
 compactação que normaliza arquivos de outro escritor, a descrição e os comentários que atravessam o
 ``overwrite`` e mudam por ``alter``, o mínimo e o máximo que o próprio delta-rs grava por tipo, o
 ``NaN`` e o infinito nas estatísticas registradas e nas do delta-rs, o ``Double`` sem estatística
-no rodapé e no log, dois registros concorrentes da mesma partição, a poda do ``delta_scan`` por
+no rodapé e no log, também por partição, dois registros concorrentes da mesma partição, a poda do
+``delta_scan`` por
 forma de predicado, e o valor de partição codificado na pasta e no log, com a aspa que quebra o
 predicado. Os
 comportamentos estão descritos em ``plan/delta.md``; aqui eles viram asserções.
@@ -907,6 +908,43 @@ def test_float_statistics_off_keep_the_nan_row(folder: Callable[[str], str]) -> 
                       data_change=True, stats=stats)
     DeltaTable(uri).create_write_transaction([added], mode="append", schema=table.schema)
     assert delta_scan_count(uri) == 1
+    con.close()
+
+
+def test_float_statistics_off_per_partition_keep_the_nan_row_and_the_pruning(folder: Callable[[str], str]) -> None:
+    """A regra da issue #59 por partição: a partição com valor não finito grava o ``Double`` sem mínimo e máximo, a outra grava os dois, e o ``delta_scan`` devolve a linha do ``NaN`` e continua podando pelo valor a partição sem ele.
+
+    ``publish_partition`` grava uma partição por chamada de ``write_deltalake``, e o
+    ``writer_properties`` vale para a chamada: o arquivo de agosto sai sem a estatística do valor no
+    rodapé e no log, e o de setembro sai com ela. O log ``FileSystem`` do DuckDB mostra os arquivos
+    abertos.
+    """
+    uri = folder("estatistica_por_particao")
+    schema = pa.schema([("particao", pa.string()), ("valor", pa.float64())])
+    DeltaTable.create(uri, schema, partition_by=["particao"])
+    without_bounds = WriterProperties(column_properties={"valor": ColumnProperties(statistics_enabled="NONE")})
+    partitions = {"2026-08-31": ([1.5, float("nan"), 2.0], without_bounds), "2026-09-30": ([1.0, 2.0, 2.5], None)}
+    for value, (numbers, properties) in partitions.items():
+        data = pa.table({"particao": [value] * len(numbers), "valor": pa.array(numbers, pa.float64())}, schema=schema)
+        write_deltalake(uri, data, mode="overwrite", predicate=f"particao = '{value}'", writer_properties=properties)
+
+    # Uma ação add por partição: agosto sem o valor nas estatísticas, setembro com ele.
+    stats = {}
+    for version in (1, 2):
+        added = [action["add"] for action in log_actions(uri, version) if "add" in action][0]
+        stats[added["partitionValues"]["particao"]] = json.loads(added["stats"])
+    assert "valor" not in stats["2026-08-31"]["maxValues"]
+    assert stats["2026-09-30"]["maxValues"]["valor"] == 2.5
+
+    con = connect_duckdb(("delta",))
+    con.execute("CALL enable_logging('FileSystem')")
+    con.execute("CALL truncate_duckdb_logs()")
+    assert con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 3").fetchone()[0] == 1  # o NaN de agosto
+    opened = set()
+    for (message,) in con.execute("SELECT message FROM duckdb_logs WHERE type = 'FileSystem'").fetchall():
+        if '"op":"OPEN"' in message and ".parquet" in message:
+            opened.add(re.search(r"particao=[0-9-]+", message).group(0))
+    assert opened == {"particao=2026-08-31"}  # setembro podado pelo máximo 2.5
     con.close()
 
 def test_two_registrations_of_the_same_partition_conflict(folder: Callable[[str], str], two_months: pa.Table) -> None:
