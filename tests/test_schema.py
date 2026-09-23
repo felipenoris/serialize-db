@@ -360,14 +360,37 @@ def test_cast_reader_converts_batch_by_batch() -> None:
     assert empty.num_rows == 0 and empty.schema.names == done.schema.names
 
 
-def test_cast_measures_text_against_the_varchar_ceiling() -> None:
-    """Numa coluna `Text`, 65.535 bytes passam e 65.536 são recusados."""
-    accepted = schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65535])), TUDO)
+@pytest.mark.parametrize("text_type", [pa.string(), pa.large_string()], ids=str)
+def test_cast_measures_text_against_the_varchar_ceiling(text_type: pa.DataType) -> None:
+    """Numa coluna `Text`, 65.535 bytes passam e 65.536 são recusados, em `string` e em
+    `large_string`, o tipo do `str` do pandas 3."""
+    accepted = schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65535], text_type)), TUDO)
     assert accepted.column("observacao").to_pylist() == ["x" * 65535]
     with pytest.raises(ContractError) as error:
-        schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65536])), TUDO)
+        schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65536], text_type)), TUDO)
     assert "tudo.observacao" in str(error.value)
     assert "65536" in str(error.value)
+
+
+def test_cast_integer_into_numeric_of_any_precision() -> None:
+    """Um `int64` entra em `Numeric(p, s)` de qualquer precisão quando o valor cabe em `p`, e é
+    recusado quando não cabe; o cast direto do PyArrow exige que `p` comporte todo o `int64`
+    (leitura de 2026-09-22)."""
+    table = sa.Table(
+        "decimais", sa.MetaData(),
+        sa.Column("pequeno", sa.Numeric(5, 2)),
+        sa.Column("fino", sa.Numeric(10, 4)),
+        sa.Column("largo", sa.Numeric(38, 2)),
+    )
+    integers = pa.array([1, 999], pa.int64())
+    batch = pa.RecordBatch.from_pydict({"pequeno": integers, "fino": integers, "largo": integers})
+    done = schema.cast(batch, table)
+    assert done.column("pequeno").to_pylist() == [decimal.Decimal("1.00"), decimal.Decimal("999.00")]
+    assert done.schema.field("fino").type == pa.decimal128(10, 4)
+    assert done.schema.field("largo").type == pa.decimal128(38, 2)
+    too_large = pa.RecordBatch.from_pydict({"pequeno": pa.array([1000], pa.int64())})
+    with pytest.raises(ContractError, match="decimais.pequeno"):
+        schema.cast(too_large, table)
 
 
 REFUSED_BATCHES = {
@@ -378,11 +401,20 @@ REFUSED_BATCHES = {
     "struct em JSON": (batch_of_tudo(meta=pa.array([{"k": 1}])), "meta"),
     "texto acima de String(100)": (batch_of_tudo(nome=pa.array(["x" * 101])), "nome"),
     "texto acima de String(2) em bytes": (batch_of_tudo(to=pa.array(["ãã"])), "to"),
+    # O texto chega em outros tipos Arrow e é medido depois da conversão para string.
+    "large_string acima de String(2)": (
+        batch_of_tudo(to=pa.array(["xyz"], pa.large_string())), "to"),
+    "string_view acima de String(2)": (
+        batch_of_tudo(to=pa.array(["xyz"], pa.string_view())), "to"),
+    "dicionário acima de String(2)": (
+        batch_of_tudo(to=pa.array(["xyz"]).dictionary_encode()), "to"),
     "escala perdida": (
         batch_of_tudo(valor=pa.array([decimal.Decimal("1.234")], pa.decimal128(20, 3))), "valor"),
+    "inteiro acima da precisão": (batch_of_tudo(valor=pa.array([10**17], pa.int64())), "valor"),
     "nanossegundo não nulo": (
         batch_of_tudo(timestamp=pa.array([1], pa.timestamp("ns"))), "timestamp"),
     "estouro de inteiro": (batch_of_tudo(parcelas=pa.array([40000], pa.int32())), "parcelas"),
+    "tipo sem conversão": (batch_of_tudo(sistema=pa.array([{"a": 1}])), "sistema"),
     "nenhuma coluna do contrato": (batch_of_tudo(extra=[1]), "extra"),
 }
 
@@ -469,42 +501,47 @@ def references_a_key(constraint: sa.ForeignKeyConstraint) -> bool:
     return referenced in targets
 
 
+def foreign_key_model(local_columns: list[str], referenced: list[str]) -> sa.MetaData:
+    """Duas tabelas: `alvo`, com a `UniqueConstraint` em `(a, b)`, e `origem`, com a chave
+    estrangeira das colunas locais informadas para as colunas apontadas informadas."""
+    metadata = sa.MetaData()
+    sa.Table(
+        "alvo", metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("a", sa.Integer, nullable=False), sa.Column("b", sa.Integer, nullable=False),
+        sa.UniqueConstraint("a", "b"),
+    )
+    sa.Table(
+        "origem", metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("a", sa.Integer), sa.Column("b", sa.Integer),
+        sa.ForeignKeyConstraint(local_columns, referenced),
+    )
+    return metadata
+
+
+def create_all_on_duckdb(metadata: sa.MetaData) -> None:
+    """`create_all` num `Connection` do `duckdb-engine` sobre um banco em memória novo, porque
+    `create_all` pula a tabela que já existe com o mesmo nome."""
+    engine = sa.create_engine("duckdb:///:memory:")
+    with engine.begin() as connection:
+        metadata.create_all(connection)
+    engine.dispose()
+
+
 def test_foreign_key_target_must_be_a_key_in_the_same_order() -> None:
     """A chave estrangeira que aponta uma `UniqueConstraint` na ordem dela passa; na ordem trocada
     é violação, e o DuckDB recusa o mesmo `create_all` (leitura de 2026-09-22)."""
-    def model(local_columns: list[str], referenced: list[str]) -> sa.MetaData:
-        metadata = sa.MetaData()
-        sa.Table(
-            "alvo", metadata,
-            sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
-            sa.Column("a", sa.Integer, nullable=False), sa.Column("b", sa.Integer, nullable=False),
-            sa.UniqueConstraint("a", "b"),
-        )
-        sa.Table(
-            "origem", metadata,
-            sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
-            sa.Column("a", sa.Integer), sa.Column("b", sa.Integer),
-            sa.ForeignKeyConstraint(local_columns, referenced),
-        )
-        return metadata
-
-    same_order = model(["a", "b"], ["alvo.a", "alvo.b"])
-    swapped = model(["b", "a"], ["alvo.b", "alvo.a"])
+    same_order = foreign_key_model(["a", "b"], ["alvo.a", "alvo.b"])
+    swapped = foreign_key_model(["b", "a"], ["alvo.b", "alvo.a"])
     assert schema.check_models(same_order) == []
     assert schema.check_models(swapped) == [
         "origem: chave estrangeira em ['b', 'a'] aponta alvo ['b', 'a'], "
         "sem chave primária nem UniqueConstraint nessas colunas"
     ]
-    # Um banco em memória por modelo: create_all pula a tabela que já existe com o mesmo nome.
-    def create_on_duckdb(metadata: sa.MetaData) -> None:
-        engine = sa.create_engine("duckdb:///:memory:")
-        with engine.begin() as connection:
-            metadata.create_all(connection)
-        engine.dispose()
-
-    create_on_duckdb(same_order)
+    create_all_on_duckdb(same_order)
     with pytest.raises(sa.exc.DBAPIError, match="unique constraint"):
-        create_on_duckdb(swapped)
+        create_all_on_duckdb(swapped)
 
 
 def test_check_models_lists_the_reference_model_defects() -> None:
@@ -518,11 +555,14 @@ def test_check_models_lists_the_reference_model_defects() -> None:
         "target": sum("sem chave primária nem UniqueConstraint" in text for text in problems),
     }
     tables = list(ReferenceBase.metadata.tables.values())
-    columns = [column for table in tables for column in table.columns]
+    columns = []
+    foreign_keys = []
+    for table in tables:
+        columns.extend(table.columns)
+        foreign_keys.extend(table.foreign_key_constraints)
     strings = [
         column for column in columns if type(column.type) is sa.String and not column.type.length
     ]
-    foreign_keys = [key for table in tables for key in table.foreign_key_constraints]
     deferrable = [key for key in foreign_keys if key.deferrable]
     unkeyed = [key for key in foreign_keys if not references_a_key(key)]
     assert counts == {

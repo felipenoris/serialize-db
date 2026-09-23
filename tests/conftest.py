@@ -248,7 +248,9 @@ class S3Location(Storage):
         # A listagem é paginada pelo boto3; cada página traz até 1.000 chaves em ``Contents``.
         bucket, _, prefix = table_uri.removeprefix("s3://").partition("/")
         pages = boto3.client("s3").get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix + "/")
-        keys = [item["Key"] for page in pages for item in page.get("Contents", [])]
+        keys = []
+        for page in pages:
+            keys.extend(item["Key"] for item in page.get("Contents", []))
 
         return sorted(f"s3://{bucket}/{key}" for key in keys if key.endswith(".parquet") and "/_delta_log/" not in key)
 
@@ -294,6 +296,15 @@ def require_s3_access(root: str) -> None:
         pytest.fail(f"{root} informada, mas sem acesso: {type(error).__name__}: {error}", pytrace=False)
 
 
+def variable_state(value: str | None) -> str:
+    """O estado de uma variável de ambiente para o relatório: ausente, vazia ou definida."""
+    if value is None:
+        return "ausente"
+    if value == "":
+        return "vazia"
+    return "definida"
+
+
 @pytest.fixture(scope="session")
 def proxy_environment() -> Iterator[dict[str, str | None]]:
     """Exporta ``NO_PROXY`` a partir de ``no_proxy`` quando a maiúscula está ausente ou vazia.
@@ -303,7 +314,7 @@ def proxy_environment() -> Iterator[dict[str, str | None]]:
     espaço e falha com 403. A biblioteca fará o mesmo ao iniciar.
     """
     original = {name: os.environ.get(name) for name in ("NO_PROXY", "AWS_REGION")}
-    record("environment.no_proxy_as_found", "ausente" if original["NO_PROXY"] is None else ("vazia" if original["NO_PROXY"] == "" else "definida"))
+    record("environment.no_proxy_as_found", variable_state(original["NO_PROXY"]))
 
     # Vazia conta como ausente: ``get`` devolve "" e a condição a substitui.
     if not os.environ.get("NO_PROXY") and os.environ.get("no_proxy"):
@@ -355,18 +366,25 @@ def s3_location(proxy_environment: dict[str, str | None]) -> Iterator[S3Location
         record("s3.cleanup", f"mantida por SERIALIZE_DB_TEST_KEEP: {location.uri}")
         return
 
-    # Limpeza: lista o prefixo da sessão página a página e apaga até 1.000 chaves por chamada.
+    # Limpeza: lista o prefixo da sessão página a página e apaga até 1.000 chaves por chamada. Com
+    # Quiet, a resposta traz só as chaves recusadas, em Errors.
     s3 = boto3.client("s3")
     paginator = s3.get_paginator("list_objects_v2")
     deleted = 0
+    refused = []
     for page in paginator.paginate(Bucket=location.bucket, Prefix=location.prefix + "/"):
         keys = [{"Key": item["Key"]} for item in page.get("Contents", [])]
-        if keys:
-            s3.delete_objects(Bucket=location.bucket, Delete={"Objects": keys, "Quiet": True})
-            deleted += len(keys)
+        if not keys:
+            continue
+        response = s3.delete_objects(Bucket=location.bucket, Delete={"Objects": keys, "Quiet": True})
+        errors = response.get("Errors", [])
+        refused.extend(f"{error['Key']}: {error.get('Code')}" for error in errors)
+        deleted += len(keys) - len(errors)
     # Num bucket versionado a exclusão só cria marcadores: os objetos viram versões não correntes, cobradas até uma regra de ciclo de vida.
     versioned = "; no bucket versionado cada um vira versão não corrente até uma regra NoncurrentVersionExpiration" if REPORT.get("s3.versioned") else ""
     record("s3.cleanup", f"{deleted} objeto(s) apagado(s) sob {location.uri}{versioned}")
+    if refused:
+        record("s3.cleanup.refused", refused)
 
 
 @pytest.fixture(scope="session")
@@ -390,9 +408,16 @@ def local_location() -> Iterator[LocalLocation]:
 
     if location.keep:
         record("local.cleanup", f"mantida por SERIALIZE_DB_TEST_KEEP: {location.uri}")
-    else:
-        shutil.rmtree(location.path, ignore_errors=True)
-        record("local.cleanup", f"apagada: {location.uri}")
+        return
+    shutil.rmtree(location.path, ignore_errors=True)
+    if location.path.exists():
+        record("local.cleanup", f"não apagada por inteiro: {location.uri}")
+        return
+    # A pasta comum às sessões sai quando fica vazia.
+    parent = location.path.parent
+    if not any(parent.iterdir()):
+        parent.rmdir()
+    record("local.cleanup", f"apagada: {location.uri}")
 
 
 @dataclass(kw_only=True)

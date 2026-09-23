@@ -21,9 +21,10 @@ import re
 import shutil
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -32,6 +33,7 @@ from deltalake import DeltaTable
 
 import source_db_projetado as source
 from client_model import Base
+from conftest import LocalLocation
 from serialize_db import schema
 from serialize_db.errors import ContractError
 
@@ -54,7 +56,7 @@ def settings(
 
 
 @pytest.fixture(scope="module")
-def base(local_location) -> source.SourceBase:
+def base(local_location: LocalLocation) -> source.SourceBase:
     """A base fictícia gravada uma vez por módulo sob a pasta da sessão."""
     return source.write_source(Path(local_location.child("migracao-origem")))
 
@@ -65,20 +67,26 @@ def origin(base: source.SourceBase) -> migrate.Location:
 
 
 @pytest.fixture(scope="module")
-def con():
+def con() -> Iterator[duckdb.DuckDBPyConnection]:
+    """A conexão DuckDB do script, sem S3, compartilhada pelo módulo."""
     connection = migrate.connect_duckdb(uses_s3=False, region=None)
     yield connection
     connection.close()
 
 
 @pytest.fixture
-def root(local_location) -> migrate.Location:
+def root(local_location: LocalLocation) -> migrate.Location:
     """Uma raiz Delta nova por teste."""
     return migrate.open_location(local_location.child(f"delta-{uuid.uuid4().hex[:8]}"))
 
 
 def loaded_values(loaded: list[migrate.PartitionLoad]) -> list[str | None]:
     return [load.value for load in loaded]
+
+
+def key_values(row: dict[str, object], key: list[str]) -> tuple[object, ...]:
+    """Os valores das colunas de ``key`` numa linha, na ordem de ``key``."""
+    return tuple(row[name] for name in key)
 
 
 def physical_types(path: str) -> dict[str, str]:
@@ -109,26 +117,33 @@ def test_discover_partitions_and_the_entries_outside_the_pattern(
         ), name
     assert migrate.entries_outside_the_model(origin, Base.metadata) == OUTSIDE_MODEL
 
+    # A base é do módulo inteiro: o arquivo e a pasta acrescentados saem mesmo se a asserção falhar.
     stray = base.root / "cad_operacoes" / "notas.txt"
     stray.write_text("fora do padrão")
-    found, skipped = migrate.discover_partitions(
-        origin.child("cad_operacoes"), schema.table_options(TABLES["cad_operacoes"])
-    )
-    assert list(found) == PARTITION_VALUES and skipped == ["notas.txt"]
-    stray.unlink()
+    try:
+        found, skipped = migrate.discover_partitions(
+            origin.child("cad_operacoes"), schema.table_options(TABLES["cad_operacoes"])
+        )
+    finally:
+        stray.unlink()
+    assert list(found) == PARTITION_VALUES
+    assert skipped == ["notas.txt"]
 
-    # A partição é texto (decisão de 2026-09-22): uma pasta cujo valor não é data também é achada.
+    # A partição é texto: uma pasta cujo valor não é data também é achada.
     quarter = base.root / "cad_operacoes" / "data_str=2026-Q1"
     quarter.mkdir()
-    found, skipped = migrate.discover_partitions(
-        origin.child("cad_operacoes"), schema.table_options(TABLES["cad_operacoes"])
-    )
-    assert "2026-Q1" in found and skipped == []
-    quarter.rmdir()
+    try:
+        found, skipped = migrate.discover_partitions(
+            origin.child("cad_operacoes"), schema.table_options(TABLES["cad_operacoes"])
+        )
+    finally:
+        quarter.rmdir()
+    assert "2026-Q1" in found
+    assert skipped == []
 
 
 def test_partition_query_casts_to_the_contract(
-    base: source.SourceBase, origin: migrate.Location, con
+    base: source.SourceBase, origin: migrate.Location, con: duckdb.DuckDBPyConnection
 ) -> None:
     """O esquema Arrow do ``SELECT`` é o do contrato: as chaves em ``int64``, o ``timestamp`` em
     microssegundos, a coluna de partição no fim com o valor do caminho; a consulta de
@@ -161,7 +176,10 @@ def test_partition_query_casts_to_the_contract(
 
 
 def test_initial_load_loads_every_partition_once(
-    base: source.SourceBase, origin: migrate.Location, con, root: migrate.Location
+    base: source.SourceBase,
+    origin: migrate.Location,
+    con: duckdb.DuckDBPyConnection,
+    root: migrate.Location,
 ) -> None:
     """A primeira passagem grava toda partição num commit cada, com o nome, a partição e as
     retenções no log; a
@@ -191,7 +209,7 @@ def test_initial_load_loads_every_partition_once(
 
 
 def test_partition_filter_loads_only_the_listed_values(
-    origin: migrate.Location, con, root: migrate.Location
+    origin: migrate.Location, con: duckdb.DuckDBPyConnection, root: migrate.Location
 ) -> None:
     """``--partitions`` filtra as partições encontradas, deixa as tabelas sem partição de fora,
     e a passagem
@@ -206,7 +224,10 @@ def test_partition_filter_loads_only_the_listed_values(
 
 
 def test_interrupted_load_resumes(
-    origin: migrate.Location, con, root: migrate.Location, monkeypatch: pytest.MonkeyPatch
+    origin: migrate.Location,
+    con: duckdb.DuckDBPyConnection,
+    root: migrate.Location,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Uma exceção na terceira partição deixa duas no log; a chamada seguinte carrega só as
     duas restantes."""
@@ -214,11 +235,12 @@ def test_interrupted_load_resumes(
     original = migrate.register_partition
     attempts: list[str | None] = []
 
-    def failing_on_the_third(con, delta, destination, table, value, query, settings):
-        attempts.append(value)
+    def failing_on_the_third(*arguments: object) -> int:
+        # Os argumentos de register_partition; o quinto é o valor da partição.
+        attempts.append(arguments[4])
         if len(attempts) == 3:
             raise RuntimeError("interrompida")
-        return original(con, delta, destination, table, value, query, settings)
+        return original(*arguments)
 
     monkeypatch.setattr(migrate, "register_partition", failing_on_the_third)
     with pytest.raises(RuntimeError, match="interrompida"):
@@ -233,7 +255,10 @@ def test_interrupted_load_resumes(
 
 
 def test_both_modes_give_the_same_report_and_the_contract_types(
-    base: source.SourceBase, origin: migrate.Location, con, local_location
+    base: source.SourceBase,
+    origin: migrate.Location,
+    con: duckdb.DuckDBPyConnection,
+    local_location: LocalLocation,
 ) -> None:
     """``register`` e ``rewrite`` sobre ``cad_lancamentos`` dão o mesmo relatório, o Delta lê
     ``int64`` e ``timestamp[us]``, e o arquivo do ``COPY`` tem ``INT64`` onde a origem tinha
@@ -280,7 +305,10 @@ def test_both_modes_give_the_same_report_and_the_contract_types(
 
 
 def test_rows_are_written_in_sort_key_order(
-    base: source.SourceBase, origin: migrate.Location, con, root: migrate.Location
+    base: source.SourceBase,
+    origin: migrate.Location,
+    con: duckdb.DuckDBPyConnection,
+    root: migrate.Location,
 ) -> None:
     """As linhas da partição saem na ordem da ``sort_key`` do modelo, que não é a da origem."""
     table = TABLES["cad_lancamentos"]
@@ -290,7 +318,7 @@ def test_rows_are_written_in_sort_key_order(
 
     (written,) = DeltaTable(root.child("cad_lancamentos").uri).file_uris()
     rows = pq.read_table(written, columns=key).to_pylist()
-    keys = [tuple(row[name] for name in key) for row in rows]
+    keys = [key_values(row, key) for row in rows]
     assert len(keys) == base.partition_rows["cad_lancamentos"]["2026-01-31"]
     assert keys == sorted(keys)
 
@@ -298,11 +326,14 @@ def test_rows_are_written_in_sort_key_order(
     original = pa.concat_tables(
         [pq.read_table(chunk, columns=key) for chunk in chunks]
     ).to_pylist()
-    assert [tuple(row[name] for name in key) for row in original] != keys
+    assert [key_values(row, key) for row in original] != keys
 
 
 def test_registered_stats_carry_the_four_exact_types(
-    base: source.SourceBase, origin: migrate.Location, con, root: migrate.Location
+    base: source.SourceBase,
+    origin: migrate.Location,
+    con: duckdb.DuckDBPyConnection,
+    root: migrate.Location,
 ) -> None:
     """A ação registrada leva mínimo e máximo de inteiro, data, ``Double`` e texto, e deixa o
     ``timestamp`` de fora; os valores batem com os do arquivo."""
@@ -375,7 +406,10 @@ def above_the_length(chunk: pa.Table) -> pa.Table:
 
 
 def source_with_defect(
-    local_location, base: source.SourceBase, table: str, alter: Callable[[pa.Table], pa.Table]
+    local_location: LocalLocation,
+    base: source.SourceBase,
+    table: str,
+    alter: Callable[[pa.Table], pa.Table],
 ) -> migrate.Location:
     """Uma origem nova só com a partição 2026-02-28 da tabela, o primeiro chunk alterado por
     ``alter``."""
@@ -402,10 +436,10 @@ def source_with_defect(
 @pytest.mark.parametrize("mode", ["register", "rewrite"])
 def test_a_partition_off_the_contract_is_refused_without_commit(
     base: source.SourceBase,
-    con,
-    local_location,
+    con: duckdb.DuckDBPyConnection,
+    local_location: LocalLocation,
     table: str,
-    alter: Callable,
+    alter: Callable[[pa.Table], pa.Table],
     fragment: str,
     mode: str,
 ) -> None:
@@ -423,7 +457,10 @@ def test_a_partition_off_the_contract_is_refused_without_commit(
 
 
 def test_load_report_matches_and_detects_a_deleted_row(
-    base: source.SourceBase, origin: migrate.Location, con, root: migrate.Location
+    base: source.SourceBase,
+    origin: migrate.Location,
+    con: duckdb.DuckDBPyConnection,
+    root: migrate.Location,
 ) -> None:
     """O relatório confere contagem e somas por partição, ``None`` numa tabela sem partição, e
     uma linha apagada
@@ -460,7 +497,7 @@ def test_load_report_matches_and_detects_a_deleted_row(
 
 
 def test_main_migrates_the_whole_base(
-    base: source.SourceBase, local_location, capsys: pytest.CaptureFixture
+    base: source.SourceBase, local_location: LocalLocation, capsys: pytest.CaptureFixture
 ) -> None:
     """A linha de comando sobre a base inteira: as tabelas sem partição antes das particionadas,
     o relatório em JSON com as 12 tabelas iguais e o que ficou fora do modelo, saída 0; a
@@ -492,11 +529,10 @@ def test_main_migrates_the_whole_base(
     ]
     assert len(document["tables"]) == 12 and all(table["matches"] for table in document["tables"])
     assert document["outside_model"] == OUTSIDE_MODEL
-    rows = {
-        table["table"]: sum(partition["source_rows"] for partition in table["partitions"])
-        for table in document["tables"]
-    }
-    assert rows == {name: base.rows[name] for name in rows}
+    rows = {}
+    for table in document["tables"]:
+        rows[table["table"]] = sum(partition["source_rows"] for partition in table["partitions"])
+    assert rows == {name: base.rows[name] for name in TABLES}
     assert all(table["loaded"] for table in document["tables"])
 
     assert migrate.main(argv) == 0
@@ -505,7 +541,7 @@ def test_main_migrates_the_whole_base(
 
 
 def test_main_refuses_a_model_with_violations(
-    base: source.SourceBase, local_location, capsys: pytest.CaptureFixture
+    base: source.SourceBase, local_location: LocalLocation, capsys: pytest.CaptureFixture
 ) -> None:
     """O modelo de referência viola o contrato: saída 2 com a lista, sem ler a origem."""
     argv = [
@@ -518,3 +554,4 @@ def test_main_refuses_a_model_with_violations(
     ]
     assert migrate.main(argv) == 2
     assert "modelo fora do contrato" in capsys.readouterr().err
+    assert not Path(local_location.child("nunca-gravada")).exists()

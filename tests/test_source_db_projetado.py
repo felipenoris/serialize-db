@@ -9,7 +9,8 @@ convertido), as partições, o layout físico, os valores que a carga inicial te
 pelos dois leitores da biblioteca, o controle de esquema da biblioteca anterior e a consistência da
 base com o modelo de referência. O esquema esperado é a seção 3 do relatório, transcrita; a saída
 do probe fica em ``probes/output/``, fora do git, e a transcrição é o que o teste guarda dela. A
-base é o material do teste da carga inicial (``plan/PLAN-STAGE-7.md``), ainda por escrever.
+base é o material de ``tests/test_migrate_parquet_to_delta.py``, o teste da migração adiantada da
+carga inicial (``plan/PLAN-STAGE-7.md``).
 """
 
 from __future__ import annotations
@@ -325,7 +326,7 @@ def test_partitions_live_in_the_path_and_equal_the_source_column(base: source.So
 
 
 def test_chunks_are_numbered_from_zero_without_padding(base: source.SourceBase) -> None:
-    """``chunk_<n>.parquet`` de 0 em diante por partição, o último menor que ``CHUNK_ROWS``, e ``chunk_10`` antes de ``chunk_2`` na ordem alfabética."""
+    """``chunk_<n>.parquet`` de 0 em diante por partição, o último com até ``CHUNK_ROWS`` linhas, e ``chunk_10`` antes de ``chunk_2`` na ordem alfabética."""
     for table in OBSERVED_PARTITION_COLUMNS:
         for partition in sorted((base.root / table).iterdir()):
             files = parquet_files(partition)
@@ -359,8 +360,11 @@ def test_physical_layout_matches_the_reading(base: source.SourceBase) -> None:
                 assert set(chunk.encodings) <= {"PLAIN", "RLE"}, (path, chunk.path_in_schema)
                 if chunk.physical_type == "INT96":
                     assert chunk.statistics is None, (path, chunk.path_in_schema)
-                else:
-                    assert chunk.statistics is not None and chunk.statistics.has_min_max or chunk.statistics.null_count == group.num_rows, (path, chunk.path_in_schema)
+                    continue
+                # Fora do INT96 toda coluna tem estatística: mínimo e máximo, ou só nulos.
+                statistics = chunk.statistics
+                assert statistics is not None, (path, chunk.path_in_schema)
+                assert statistics.has_min_max or statistics.null_count == group.num_rows, (path, chunk.path_in_schema)
 
     # As duas tabelas fora do modelo saem sem chave, e cada tabela particionada tem arquivos com e sem ela, como na produção.
     for table in source.OUTSIDE_MODEL:

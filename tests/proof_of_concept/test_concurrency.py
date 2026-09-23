@@ -1,4 +1,4 @@
-"""Threads do Python sobre os pacotes nativos: o GIL liberado, uma conexão por thread e o paralelismo real.
+"""Threads do Python sobre os pacotes nativos: o GIL liberado, um cursor DuckDB por thread e o paralelismo real.
 
 Sem gravar arquivo: o laço Python que mantém a taxa noutra thread enquanto o DuckDB agrega e
 converte para Arrow e o PyArrow grava e lê Parquet em memória (o GIL liberado); o ``threadsafety``
@@ -37,7 +37,7 @@ import redshift_connector
 from deltalake import DeltaTable, write_deltalake
 
 from conftest import LocalLocation, record
-from poc_delta import APPENDED_ROWS, ROWS, connect_duckdb, sample_table
+from poc_delta import APPENDED_ROWS, ROWS, connect_duckdb, run_in_threads, sample_table
 
 LARGE_ROWS = 2_000_000
 
@@ -93,18 +93,6 @@ def assert_gil_released(reference: float, label: str, action: Callable[[], objec
     share = rate / reference
     record(f"concurrency.gil.{label}", f"{elapsed:.3f} s; laço Python a {share:.0%} da referência ({rate / 1e6:.1f} M it/s)")
     assert share >= GIL_RELEASED_SHARE, f"{label}: o laço Python caiu a {share:.0%} da referência, o GIL ficou retido"
-
-
-def run_in_threads(actions: list[Callable[[], object]]) -> float:
-    """Roda as ações em threads, uma por ação, e devolve o tempo até a última terminar."""
-    threads = [threading.Thread(target=action) for action in actions]
-    started = time.perf_counter()
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    return time.perf_counter() - started
 
 
 def test_duckdb_and_pyarrow_release_the_gil() -> None:
@@ -187,14 +175,15 @@ def test_drivers_share_the_module_not_the_connection() -> None:
     a_executed, b_executed = threading.Event(), threading.Event()
     fetched: dict[str, list[tuple]] = {}
 
+    # Toda espera tem prazo: se uma thread falha antes do set, a outra falha em vez de travar a suíte.
     def first() -> None:
         con.execute("SELECT 'a' AS who, count(*) AS n FROM range(5_000_000)")
         a_executed.set()
-        b_executed.wait()
+        assert b_executed.wait(timeout=10)
         fetched["a"] = con.fetchall()
 
     def second() -> None:
-        a_executed.wait()
+        assert a_executed.wait(timeout=10)
         con.execute("SELECT 'b' AS who, 0 AS n")
         b_executed.set()
 
@@ -227,7 +216,11 @@ class RangeAllocator:
 
 def test_id_ranges_from_a_locked_counter() -> None:
     """Oito threads tiram faixas de tamanhos variados; as faixas são disjuntas e cobrem o intervalo sem buraco."""
-    sizes = [[random.Random(seed).randint(1, 500) for _ in range(100)] for seed in range(8)]
+    # Um gerador por thread, criado uma vez: cem tamanhos diferentes de 1 a 500 por thread.
+    sizes = []
+    for seed in range(8):
+        generator = random.Random(seed)
+        sizes.append([generator.randint(1, 500) for _ in range(100)])
     allocator = RangeAllocator(start=1_001)
     taken: list[range] = []
     collect = threading.Lock()
@@ -326,14 +319,15 @@ def test_delta_readers_keep_their_version_while_a_writer_commits(local_location:
     uri = local_location.child("readers")
     sample = sample_table()
     write_deltalake(uri, sample, mode="overwrite", partition_by=["mes"])
-    loaded = threading.Barrier(5)
+    # Prazo na barreira e no evento: um leitor que falha não prende os outros nem a suíte.
+    loaded = threading.Barrier(5, timeout=10)
     commit_done = threading.Event()
     seen: dict[int, tuple[int, int]] = {}
 
     def read(k: int) -> None:
         table = DeltaTable(uri)  # o snapshot é a versão carregada aqui, sem sessão nem bloqueio
         loaded.wait()
-        commit_done.wait()
+        assert commit_done.wait(timeout=10)
         seen[k] = (table.version(), table.to_pyarrow_table().num_rows)
 
     readers = [threading.Thread(target=read, args=(k,)) for k in range(4)]

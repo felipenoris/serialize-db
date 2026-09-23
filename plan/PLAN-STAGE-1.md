@@ -83,7 +83,7 @@ minúsculos, e os dois motores leem o nome entre aspas como o mesmo nome sem asp
 | `sql_type(column, dialect)` | O nome do tipo no motor, pela tabela de tipos de `schema.md`: `DECIMAL(p, s)`, `VARCHAR(n)` nos dois (o DuckDB ignora o comprimento), `Text` em `VARCHAR` e `VARCHAR(65535)` (decisão do usuário de 2026-09-21), `Uuid` em `VARCHAR(36)`, JSON em `JSON` e `SUPER`, `Double` em `DOUBLE` e `DOUBLE PRECISION`, `DateTime` em `TIMESTAMP` e `TIMESTAMPTZ`; a migração adiantada o usa nos `CAST`. |
 | `quoted(name)`, `column_ddl(column, dialect)` | O identificador entre aspas duplas, e a linha da coluna no `CREATE TABLE` (`"<coluna>" <tipo> [NOT NULL]`); públicas porque as etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [8](PLAN-STAGE-8.md) montam texto com identificadores e as variantes do DDL (a staging sem a coluna de partição, a tabela publicada com a chave primária informativa). |
 | `ddl(table, dialect, prefix="", temporary=False)` | O `CREATE TABLE` do sandbox para `duckdb` ou `redshift`, gerado como texto sem o dialeto do SQLAlchemy: colunas, tipos por `sql_type` e `NOT NULL`, todo identificador entre aspas; sem chave, `DEFERRABLE`, `Identity`, `CHECK`, `DEFAULT` nem comentário (as chaves são da auditoria, e o comentário vai no esquema Delta); `DISTSTYLE`, `DISTKEY` e `SORTKEY` no Redshift, de `table_options`; `prefix` renomeia a tabela para o sandbox (`exec_<id>_`, ou o sentinela `{prefix}` da [etapa 2](PLAN-STAGE-2.md), que sai como `"{prefix}cad_operacoes"`); `temporary=True` emite `CREATE TEMP TABLE`, a tabela da sessão, pedida pelo usuário em 2026-09-22 sem uso no plano, porque o sandbox dos dois motores é de tabelas comuns e, no DuckDB, a temporária é da conexão que a criou e um `cursor()` não a vê (leitura de 2026-09-22, [`POC.md`](POC.md)). |
-| `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string` para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric` por `decimal128(p + 3, s)` (`decimal128(21, 2)` para `Numeric(18, 2)`); recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` em bytes, texto acima de 65.535 bytes numa coluna `Text`, nulo em coluna `NOT NULL` e um lote sem coluna alguma do contrato, com a tabela, a coluna e a instrução ao cliente na mensagem. |
+| `cast(data, table)` | A `pa.Table`, o `pa.RecordBatch` ou o `RecordBatchReader` lote a lote, convertido para `arrow_schema(table)` com `safe=True` e devolvido no mesmo tipo (`RecordBatch.cast` recusa o mesmo que `Table.cast`): as colunas do contrato presentes, na ordem do contrato; `large_string`, `string_view` e dicionário para `string`, timestamps a microssegundos e UTC, inteiro em `Numeric(p, s)` por `decimal128(38, s)`, que recebe qualquer `int64`, antes de conferir `p`; recusa perda de precisão, `double` fora da escala e `timestamp` com hora numa coluna `Date` (as duas perdas que `safe=True` não acusa), `struct` numa coluna JSON, texto acima de `String(n)` em bytes, texto acima de 65.535 bytes numa coluna `Text`, os dois medidos depois da conversão para `string`, um tipo sem conversão para o do contrato, nulo em coluna `NOT NULL` e um lote sem coluna alguma do contrato, com a tabela, a coluna e a instrução ao cliente na mensagem. |
 | `check_models(metadata)` | A lista de violações do contrato nos modelos, um texto por violação com tabela e coluna: tipo fora da tabela de tipos, `autoincrement` em chave inteira (o padrão `"auto"` inclusive), `Identity`, `String` sem comprimento, chave estrangeira `DEFERRABLE` ou cujas colunas apontadas não são a chave primária nem uma `UniqueConstraint` da tabela apontada, na mesma ordem (decisão do usuário de 2026-09-22: o DuckDB recusa o índice único como alvo e a ordem trocada, e o Redshift documenta a mesma exigência), `partition_by` sem a coluna ou com a coluna fora de `String(n)`, `partition_source` que a tabela não tem ou sem `partition_by`, tabela sem chave primária e sem `keys`. Vazia no modelo cliente; no modelo de referência lista o `autoincrement` das 12 chaves, as 12 chaves estrangeiras `DEFERRABLE` (das 14), as 3 chaves estrangeiras sem chave no alvo, as 20 colunas `String` sem comprimento; o comentário de tabela e de coluna é opcional (decisão do usuário de 2026-09-21), e o da coluna, quando existe, vai para o esquema Arrow e para o Delta. |
 | `schema_files(metadata)` | `{"<tabela>.delta.json": ..., "<tabela>.duckdb.sql": ..., "<tabela>.redshift.sql": ...}` em memória, cada texto com `\n` final; o `.delta.json` é o JSON canônico (chaves ordenadas, indentado), porque o `to_json()` do delta-rs serializa os metadados de cada campo em ordem arbitrária, que muda a cada geração, e grava `PARQUET:field_id` como `parquet.field.id` inteiro. |
 | `write_schema_files(metadata, directory)` | Grava `schema_files` em `directory` e devolve os caminhos; `serialize-db schema write --metadata modulo:atributo <pasta>` grava. |
@@ -200,20 +200,26 @@ subcomando `serialize-db schema` recebe `--metadata modulo:atributo`, a convenç
   `JSON` como `DECIMAL(18,2)`, `TIMESTAMP WITH TIME ZONE`, `VARCHAR` e `JSON` (rascunho abaixo).
 - **`cast`** despacha por `isinstance` para `_cast_batch`, `_cast_table` e `_cast_reader`, e as três
   passam por `_contract_arrays`: `_contract_fields` seleciona as colunas do contrato presentes, na
-  ordem do contrato, e `_contract_column` converte coluna a coluna, depois de
-  `_refuse_silent_losses` recusar o que `safe=True` não acusa, numa função por recusa: `_refuse_double_out_of_scale` (`double` numa coluna `Numeric` só quando
-  `pc.round(x, escala)` devolve o valor igual), `_refuse_timestamp_with_time` (`timestamp` numa coluna
-  `Date` só quando a ida e volta devolve o valor igual), `_refuse_nested_json` (`struct`, `list` e
-  `map` numa coluna JSON), `_refuse_text_above_length` (texto acima de `String(n)` medido em bytes
-  por `pc.binary_length`, a medida do `VARCHAR(n)` do Redshift; decisão do usuário de
-  2026-09-21, a mesma medida da auditoria da [etapa 4](PLAN-STAGE-4.md) e da migração
-  adiantada, e `probes/parquet_source.py` relata o máximo em bytes ao lado do de caracteres) e `_refuse_text_above_varchar`
-  (texto acima de 65.535 bytes numa coluna `Text`, que não declara `n`: o teto do `VARCHAR` do
-  Redshift, que `sql_type` escreve no DDL); o inteiro numa coluna `Numeric`
-  passa pelo desvio `decimal128(p + 3, s)`. Depois disso, `column.cast(field.type, safe=True)`
-  recusa escala perdida, nanossegundo não nulo e estouro, e o `cast` do esquema sobre
-  `from_arrays` recusa nulo em `NOT NULL`. Toda recusa sai como `ContractError` com a tabela, a
-  coluna e a instrução. `_cast_reader` deriva o esquema de saída de `reader.schema.empty_table()` e
+  ordem do contrato, e `_contract_column` converte coluna a coluna em três passos. Antes da
+  conversão, `_refuse_silent_losses` recusa o que `safe=True` não acusa, numa função por recusa:
+  `_refuse_double_out_of_scale` (`double` numa coluna `Numeric` só quando `pc.round(x, escala)`
+  devolve o valor igual), `_refuse_timestamp_with_time` (`timestamp` numa coluna `Date` só quando a
+  ida e volta devolve o valor igual) e `_refuse_nested_json` (`struct`, `list` e `map` numa coluna
+  JSON). A conversão, `_converted`, é `column.cast(field.type, safe=True)`, que recusa escala
+  perdida, nanossegundo não nulo e estouro; o inteiro numa coluna `Numeric(p, s)` passa antes por
+  `decimal128(38, s)`, porque o cast direto exige que `p` comporte qualquer `int64` (19 dígitos
+  mais a escala), e o segundo cast confere se cada valor cabe em `p`. `ArrowInvalid` e
+  `ArrowNotImplementedError`, o tipo sem conversão para o do contrato, viram `ContractError`.
+  Depois da conversão, `_refuse_long_text` mede o texto já em `string`, porque ele chega também em
+  `large_string` (o `str` do pandas 3), `string_view` e dicionário, que `pa.types.is_string` não
+  reconhece (leitura de 2026-09-22, [`POC.md`](POC.md)): `_refuse_text_above_length` (texto acima
+  de `String(n)` medido em bytes por `pc.binary_length`, a medida do `VARCHAR(n)` do Redshift;
+  decisão do usuário de 2026-09-21, a mesma medida da auditoria da [etapa 4](PLAN-STAGE-4.md) e
+  da migração adiantada, e `probes/parquet_source.py` relata o máximo em bytes ao lado do de
+  caracteres) e `_refuse_text_above_varchar` (texto acima de 65.535 bytes numa coluna `Text`, que
+  não declara `n`: o teto do `VARCHAR` do Redshift, que `sql_type` escreve no DDL). O `cast` do
+  esquema sobre `from_arrays` recusa nulo em `NOT NULL`. Toda recusa sai como `ContractError` com
+  a tabela, a coluna e a instrução. `_cast_reader` deriva o esquema de saída de `reader.schema.empty_table()` e
   embrulha `_cast_batches`, uma função geradora, em `RecordBatchReader.from_batches`; as duas
   conferências por `pc.all` levam `min_count=0`, porque `pc.all` de uma coluna vazia devolve nulo e
   a tabela vazia seria recusada (rascunho abaixo).
@@ -904,5 +910,12 @@ chave estrangeira composta, e a regra da chave estrangeira sem chave no alvo em 
 `Base.metadata.create_all` num `sqlalchemy.Connection` do DuckDB falhava em
 `rel_contrato_operacao` (`Binder Error: referenced table "cad_operacoes" does not have a primary
 key or unique constraint on the columns data,operacao`, leitura de 2026-09-22,
-[`POC.md`](POC.md)), e a página de `CREATE TABLE` do Redshift exige o mesmo. Nenhuma decisão da
-etapa espera o usuário.
+[`POC.md`](POC.md)), e a página de `CREATE TABLE` do Redshift exige o mesmo.
+
+A revisão de código de 2026-09-22 deixou uma proposta à espera do usuário:
+
+- **O timestamp com fuso numa coluna sem fuso.** `cast` aceita `timestamp[us, tz=...]` numa coluna
+  `DateTime` sem fuso, e guarda o instante UTC como hora local, e aceita o inverso assumindo UTC
+  (leitura de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, com a
+  instrução de converter no cliente, porque a conversão muda o valor que o cliente vê e nenhuma
+  coluna do modelo cliente tem fuso.

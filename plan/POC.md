@@ -1476,3 +1476,46 @@ usuário de 2026-09-22); o requisito que a acompanha, um modelo e um statement q
 (decisões do usuário: `render` troca o `bindparam` sem valor por `:nome`, com `param` fora do
 módulo; os dois índices únicos compostos do modelo cliente viraram `UniqueConstraint`, e
 `check_models` confere o alvo de cada chave estrangeira).
+
+## O que a revisão de código de 2026-09-22 mostrou
+
+Em 2026-09-22, no macOS (PyArrow 25.0.1, deltalake 1.6.4), as sondas da revisão do pacote leram o
+`cast` com as entradas que um pipeline em pandas produz e a versão que cada escrita do delta-rs
+deixa no objeto `DeltaTable`.
+
+- **O texto fora do tipo `string` escapava da medida de bytes.** `pa.types.is_string` é falso para
+  `large_string`, o tipo que `pa.Table.from_pandas` dá ao `str` do pandas 3, e para `string_view`
+  e dicionário; `_refuse_silent_losses` só media o texto quando a coluna chegava em `string`, então
+  `"xyz"` em `large_string` entrava numa coluna `String(2)` e 65.536 bytes numa coluna `Text`, e só
+  o `COPY` da publicação os recusaria. `pc.binary_length` não aceita `string_view` nem dicionário
+  (`ArrowNotImplementedError`). A medida passou para depois da conversão, sobre a coluna já em
+  `string` (`_refuse_long_text`), e os três tipos são recusados.
+- **Um tipo sem conversão saía como erro do PyArrow.** `struct` numa coluna `Integer`, `list` numa
+  `Date`, `bool` numa `Date` e `date32` numa `BigInteger` levantam `ArrowNotImplementedError`
+  (subclasse de `NotImplementedError`, não de `ValueError`), que o `except (pa.ArrowInvalid,
+  ValueError)` não pegava. Viram `ContractError` com a tabela e a coluna.
+- **O desvio do inteiro para `Numeric` servia só a `Numeric(18, 2)`.** O cast direto de inteiro
+  para `decimal128(p, s)` exige que `p` comporte qualquer valor do tipo inteiro, não os presentes:
+  19 dígitos mais a escala num `int64`, 10 num `int32`. O desvio `decimal128(p + 3, s)` acertava a
+  precisão 21 de `Numeric(18, 2)` por coincidência; `Numeric(10, 4)`, `Numeric(12, 0)`,
+  `Numeric(5, 2)` e `Numeric(20, 10)` levantavam `ArrowInvalid` (`Precision is not great enough`)
+  fora do `try`, e `Numeric(36, 10)` e `Numeric(38, 2)` `ValueError` (`precision should be between
+  1 and 38`). O desvio passou a `decimal128(38, s)`, e o segundo cast recusa o valor que não cabe
+  em `p` (`1000` em `Numeric(5, 2)`: `Decimal value does not fit in precision 5`).
+- **O fuso some em silêncio.** `timestamp[us, tz=America/Sao_Paulo]` convertido para
+  `timestamp[us]` passa com `safe=True` e guarda o instante UTC como hora local, e o inverso
+  assume UTC. O `cast` aceita os dois; a decisão fica em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+- **O nulo em `NOT NULL` é `ValueError` simples.** `RecordBatch.cast` do esquema levanta
+  `ValueError`, não `ArrowInvalid`, e `ArrowInvalid` já é subclasse de `ValueError`: o `except` do
+  cast do esquema passou a `ValueError`.
+- **A versão depois de cada escrita.** `write_deltalake(dt, ...)` com o objeto `DeltaTable` deixa
+  `dt.version()` na versão do próprio commit, mesmo com o commit de outro escritor entre os dois
+  (1, depois 3 com o 2 de outro objeto). `create_write_transaction` não atualiza o objeto (3 no
+  objeto, 4 no log), como a revisão de 2026-09-21 já lera. `DeltaTable(uri).version()` depois da
+  escrita, a forma dos rascunhos da [etapa 3](PLAN-STAGE-3.md), devolve a última versão do log, que
+  pode ser a de outro escritor.
+
+**Consequência**: os três defeitos do `cast` estão corrigidos em `serialize_db.schema`, com os
+casos em `tests/test_schema.py` que reprovavam no código anterior (seis) e passam no novo;
+`publish_partition` da etapa 3 escreve pelo objeto `DeltaTable` e devolve `dt.version()`, e
+`register_files` relê a versão depois do commit.

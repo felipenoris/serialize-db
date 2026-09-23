@@ -51,3 +51,20 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   an empty column: the reader path of `cast` derives its output schema from
   `reader.schema.empty_table()` and failed on it until the two checks got `min_count=0`, which makes
   the empty column pass (2026-09-21). `plan/PLAN-STAGE-1.md`, `plan/POC.md`
+
+## Cast input types and errors (2026-09-22)
+
+- `pa.types.is_string` is false for `large_string` (the type of the pandas 3 `str` after
+  `from_pandas`), `string_view` and dictionary; `pc.binary_length` has no kernel for `string_view`
+  or dictionary. `cast` measures text on the column already converted to `string`.
+- A cast with no kernel (`struct` to `int32`, `list` or `bool` to `date32`, `date32` to `int64`)
+  raises `ArrowNotImplementedError`, a `NotImplementedError`, not a `ValueError`; `ArrowInvalid`
+  is a `ValueError`, and a null in a `nullable=False` field raises a plain `ValueError` from
+  `RecordBatch.cast`.
+- Integer to `decimal128(p, s)` needs `p` to hold the whole integer type (19 digits plus the scale
+  for `int64`, 10 for `int32`) regardless of the values; `cast` goes through `decimal128(38, s)`
+  and the second cast checks each value against `p` (`1000` into `(5, 2)`: `Decimal value does not
+  fit in precision 5`).
+- `timestamp[us, tz=...]` to naive `timestamp[us]` passes with `safe=True` and keeps the UTC
+  instant as wall time; naive to tz-aware assumes UTC. `cast` accepts both today (pending decision
+  in `plan/OPEN_QUESTIONS.md`). `plan/POC.md`

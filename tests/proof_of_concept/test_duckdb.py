@@ -253,7 +253,7 @@ def test_insert_from_a_reader_is_one_statement_and_trusts_the_batches(con: duckd
     con.execute("INSERT INTO destino BY NAME SELECT * FROM entrada")
     con.unregister("entrada")
     corrupted = con.execute("SELECT id, valor FROM destino").fetchall()
-    assert corrupted != [(1, 1.0)]
+    assert len(corrupted) == 1 and corrupted != [(1, 1.0)]
     record("duckdb.batch_with_swapped_columns_read_as", str(corrupted))
     extra = pa.RecordBatch.from_pydict({"id": pa.array([1], pa.int64()), "valor": pa.array([1.0]), "x": ["z"]})
     con.register("entrada", pa.RecordBatchReader.from_batches(schema, [extra]))

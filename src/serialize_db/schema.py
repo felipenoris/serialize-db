@@ -56,9 +56,7 @@ Exemplo, com um modelo mínimo:
 from __future__ import annotations
 
 import dataclasses
-import difflib
 import json
-import os
 from collections.abc import Iterable, Iterator
 from typing import Literal
 
@@ -67,6 +65,7 @@ import pyarrow.compute as pc
 import sqlalchemy as sa
 from deltalake import Schema as DeltaSchema
 
+from serialize_db._files import diff_files, write_files
 from serialize_db.errors import ContractError
 
 __all__ = [
@@ -499,8 +498,20 @@ def _refuse_silent_losses(
         _refuse_timestamp_with_time(column, field, table)
     if isinstance(kind, sa.JSON):
         _refuse_nested_json(column, field, table)
-    if not pa.types.is_string(column.type):
-        return
+
+
+def _refuse_long_text(
+    column: pa.Array | pa.ChunkedArray,
+    field: pa.Field,
+    kind: sa.types.TypeEngine,
+    table: str,
+) -> None:
+    """O texto acima do limite da coluna, medido em bytes na coluna já convertida para ``string``.
+
+    A medida vem depois da conversão porque o texto chega em outros tipos Arrow: ``large_string``
+    (o ``str`` do pandas 3), ``string_view`` e dicionário (a ``category`` do pandas), que
+    ``pa.types.is_string`` não reconhece e ``binary_length`` não aceita nos dois últimos.
+    """
     # Text é subclasse de String e vem antes: o limite dela é o teto do VARCHAR do Redshift,
     # qualquer que seja o comprimento declarado, porque sql_type ignora o comprimento de Text.
     if isinstance(kind, sa.Text):
@@ -509,20 +520,36 @@ def _refuse_silent_losses(
         _refuse_text_above_length(column, field, table, kind.length)
 
 
+def _converted(
+    column: pa.Array | pa.ChunkedArray, target: pa.DataType
+) -> pa.Array | pa.ChunkedArray:
+    """A coluna no tipo do contrato por ``cast(safe=True)``.
+
+    Um inteiro vai a ``decimal128(p, s)`` passando por ``decimal128(38, s)``: o cast direto exige
+    que ``p`` comporte qualquer valor do tipo inteiro (19 dígitos mais a escala num ``int64``),
+    não só os valores presentes; o segundo cast confere se cada valor cabe em ``p``.
+    """
+    if pa.types.is_integer(column.type) and pa.types.is_decimal(target):
+        column = column.cast(pa.decimal128(38, target.scale), safe=True)
+    return column.cast(target, safe=True)
+
+
 def _contract_column(
     data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa.Table
 ) -> pa.Array | pa.ChunkedArray:
-    """A coluna dos dados no tipo do contrato; as perdas que ``safe=True`` não acusa vêm antes."""
+    """A coluna dos dados no tipo do contrato: as perdas que ``safe=True`` não acusa são recusadas
+    antes da conversão, e o texto longo depois dela."""
     column = data.column(field.name)
-    _refuse_silent_losses(column, field, table.c[field.name].type, table.name)
-    if pa.types.is_integer(column.type) and pa.types.is_decimal(field.type):
-        # O cast direto de int64 para decimal128(p, s) pede precisão p + 3; o desvio é seguro.
-        column = column.cast(pa.decimal128(field.type.precision + 3, field.type.scale))
+    kind = table.c[field.name].type
+    _refuse_silent_losses(column, field, kind, table.name)
     try:
-        # safe=True recusa escala perdida, nanossegundo não nulo e estouro.
-        return column.cast(field.type, safe=True)
-    except (pa.ArrowInvalid, ValueError) as error:
+        converted = _converted(column, field.type)
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError) as error:
+        # ArrowInvalid: escala perdida, nanossegundo não nulo, estouro, texto que não converte.
+        # ArrowNotImplementedError: um tipo sem conversão para o do contrato, como struct em Integer.
         raise ContractError(f"{table.name}.{field.name}: {error}") from None
+    _refuse_long_text(converted, field, kind, table.name)
+    return converted
 
 
 def _contract_arrays(
@@ -542,7 +569,8 @@ def _cast_batch(batch: pa.RecordBatch, table: sa.Table) -> pa.RecordBatch:
     arrays, schema = _contract_arrays(batch, table)
     try:
         return pa.RecordBatch.from_arrays(arrays, schema=schema).cast(schema, safe=True)
-    except (pa.ArrowInvalid, ValueError) as error:
+    except ValueError as error:
+        # O nulo em campo nullable=False sai do cast do esquema como ValueError.
         raise ContractError(f"{table.name}: {error}") from None
 
 
@@ -551,7 +579,8 @@ def _cast_table(data: pa.Table, table: sa.Table) -> pa.Table:
     arrays, schema = _contract_arrays(data, table)
     try:
         return pa.Table.from_arrays(arrays, schema=schema).cast(schema, safe=True)
-    except (pa.ArrowInvalid, ValueError) as error:
+    except ValueError as error:
+        # O nulo em campo nullable=False sai do cast do esquema como ValueError.
         raise ContractError(f"{table.name}: {error}") from None
 
 
@@ -573,14 +602,15 @@ def cast(
     """Os dados no esquema do contrato da tabela, devolvidos no mesmo tipo em que chegaram.
 
     Só as colunas do contrato presentes entram, na ordem do contrato; as ausentes ficam para quem
-    grava. Cada coluna é convertida com ``safe=True`` (``large_string`` para ``string``,
-    timestamps a microssegundos, inteiro em ``Numeric``), e as perdas que o cast seguro não acusa
-    são recusadas antes: ``double`` fora da escala de um ``Numeric``, ``timestamp`` com hora numa
-    coluna ``Date``, documento JSON como ``struct``, texto acima de ``String(n)`` em bytes e texto
-    acima de 65.535 bytes numa coluna ``Text``, o teto do ``VARCHAR`` do Redshift. Nulo
-    em coluna ``NOT NULL``, escala perdida, nanossegundo não nulo, estouro de inteiro e um lote sem
-    coluna alguma do contrato também são ``ContractError``, com a tabela, a coluna e a instrução
-    ao cliente na mensagem. Um ``RecordBatchReader`` sai como leitor que converte lote a lote.
+    grava. Cada coluna é convertida com ``safe=True`` (``large_string``, ``string_view`` e
+    dicionário para ``string``, timestamps a microssegundos, inteiro em ``Numeric``), e as perdas
+    que o cast seguro não acusa são recusadas: ``double`` fora da escala de um ``Numeric``,
+    ``timestamp`` com hora numa coluna ``Date``, documento JSON como ``struct``, texto acima de
+    ``String(n)`` em bytes e texto acima de 65.535 bytes numa coluna ``Text``, o teto do
+    ``VARCHAR`` do Redshift. Nulo em coluna ``NOT NULL``, escala perdida, nanossegundo não nulo,
+    estouro de inteiro, um tipo sem conversão para o do contrato e um lote sem coluna alguma do
+    contrato também são ``ContractError``, com a tabela, a coluna e a instrução ao cliente na
+    mensagem. Um ``RecordBatchReader`` sai como leitor que converte lote a lote.
 
     Exemplo:
 
@@ -635,13 +665,15 @@ def _keyed_targets(table: sa.Table) -> list[tuple[str, ...]]:
     return targets
 
 
+def _local_column_names(constraint: sa.ForeignKeyConstraint) -> tuple[str, ...]:
+    """Os nomes das colunas locais da chave estrangeira, a chave da ordenação."""
+    return _column_names(constraint.columns)
+
+
 def _foreign_keys_by_columns(table: sa.Table) -> list[sa.ForeignKeyConstraint]:
-    """As chaves estrangeiras da tabela na ordem das colunas locais; o SQLAlchemy as guarda num conjunto."""
-    ordered = []
-    for position, constraint in enumerate(table.foreign_key_constraints):
-        ordered.append((_column_names(constraint.columns), position, constraint))
-    ordered.sort()
-    return [constraint for _, _, constraint in ordered]
+    """As chaves estrangeiras na ordem das colunas locais: o SQLAlchemy as guarda num conjunto, e
+    a ordem fixa a das mensagens de ``check_models``."""
+    return sorted(table.foreign_key_constraints, key=_local_column_names)
 
 
 def _key_problems(table: sa.Table, options: TableOptions) -> list[str]:
@@ -695,8 +727,8 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     ``UniqueConstraint`` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB
     nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
     ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave primária e
-    sem ``keys``. O comentário de tabela e de coluna é opcional (decisão do usuário de 2026-09-21); o da coluna, quando existe, vai para o
-    esquema Arrow e para o Delta.
+    sem ``keys``. O comentário de tabela e de coluna é opcional (decisão do usuário de
+    2026-09-21); o da coluna, quando existe, vai para o esquema Arrow e para o Delta.
 
     Exemplo:
 
@@ -725,14 +757,6 @@ def _delta_schema_json(table: sa.Table) -> str:
     """
     document = json.loads(delta_schema(table).to_json())
     return json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-
-
-def _versioned_text(path: str) -> str:
-    """O conteúdo do arquivo versionado, ou vazio quando ele não existe."""
-    if not os.path.exists(path):
-        return ""
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
 
 
 def schema_files(metadata: sa.MetaData) -> dict[str, str]:
@@ -767,14 +791,7 @@ def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
 
         write_schema_files(Base.metadata, "schema")   # ["schema/cad_operacoes.delta.json", ...]
     """
-    os.makedirs(directory, exist_ok=True)
-    written = []
-    for name, content in sorted(schema_files(metadata).items()):
-        path = os.path.join(directory, name)
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        written.append(path)
-    return written
+    return write_files(schema_files(metadata), directory)
 
 
 def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
@@ -788,10 +805,4 @@ def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
 
         check_schema_files(Base.metadata, "schema")   # [] quando os arquivos estão atualizados
     """
-    diff = []
-    for name, content in sorted(schema_files(metadata).items()):
-        path = os.path.join(directory, name)
-        diff.extend(difflib.unified_diff(
-            _versioned_text(path).splitlines(), content.splitlines(),
-            fromfile=path, tofile=f"{path} (gerado)", lineterm=""))
-    return diff
+    return diff_files(schema_files(metadata), directory)

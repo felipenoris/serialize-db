@@ -156,8 +156,9 @@ class AuditFailed(Exception):
 @contextlib.contextmanager
 def execution(engine: FakeEngine) -> Iterator[FakeEngine]:
     """O ciclo de uma execução: abre, entrega o motor ao pipeline e descarta o sandbox aconteça o que acontecer."""
-    engine.ingest("cad_lancamentos", "/dados/prod/cad_lancamentos", 143)
+    # A abertura fica dentro do try: uma ingestão que falha também descarta o sandbox.
     try:
+        engine.ingest("cad_lancamentos", "/dados/prod/cad_lancamentos", 143)
         yield engine
     finally:
         engine.cleanup()

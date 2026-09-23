@@ -255,8 +255,9 @@ O que a sondagem fixa em `cast`:
 - `Table.cast(schema, safe=True)` recusa nulo em campo `nullable=False` (`Casting field ... with
   null values to non-nullable`), estouro de inteiro e escala perdida em decimal, e exige os mesmos
   nomes na mesma ordem: `cast` seleciona e reordena as colunas do contrato presentes e deixa as
-  ausentes para o `BY NAME`. Um inteiro numa coluna `Numeric(18, 2)` passa por `decimal128(21, 2)`,
-  porque o cast direto pede precisão 21.
+  ausentes para o `BY NAME`. Um inteiro numa coluna `Numeric(p, s)` passa por `decimal128(38, s)`,
+  porque o cast direto pede que `p` comporte qualquer `int64` (precisão 21 na escala 2), e o
+  segundo cast confere se cada valor cabe em `p` (leitura de 2026-09-22).
 - `safe=True` não acusa duas perdas: `double` para `decimal128(18, 2)` arredonda o valor binário
   exato (`1.236` vira `1.24` e `2.675` vira `2.67`, como o `round` do Python) e `timestamp` para
   `date32` descarta a hora. `cast` aceita as duas conversões só quando nada se perde: um `double` é
@@ -275,8 +276,9 @@ O que a sondagem fixa em `cast`:
   como `{"k": 1, "x": null}`), dicts heterogêneos falham na inferência e `pa.array(dicts,
   pa.string())` falha; `json.dumps` de 300.000 documentos levou 204 ms. `cast` recusa `struct`,
   `list` e `map` numa coluna JSON.
-- `large_string` vira `string`; `timestamp[ns]` vira `[us]` quando a parte perdida é zero e é
-  recusado quando não é.
+- `large_string`, `string_view` e dicionário viram `string`, e o comprimento do texto é medido
+  depois da conversão, porque `pa.types.is_string` não reconhece os três (leitura de 2026-09-22);
+  `timestamp[ns]` vira `[us]` quando a parte perdida é zero e é recusado quando não é.
 - Uma coluna calculada no pandas em `float64` chega como `double`: `loader.write` e `load` a recusam
   numa coluna `Numeric` enquanto houver valor fora da escala, até o pipeline arredondar; nas colunas
   `Double` do modelo de referência (decisão de 2026-09-20) ela entra como chega. O DataFrame que a
@@ -589,4 +591,4 @@ conferências da etapa 3; `rewrite` grava pelo `write_deltalake`, que confere tu
    `tests/proof_of_concept/` e os testes `-m s3` das etapas 3 e 4 no bucket.
 5. O `test_redshift.py` da etapa 0 rodou limpo duas vezes no ambiente alvo em 2026-09-21, pela
    conexão de `examples/`; as etapas 5 e 8 vêm depois das etapas 3, 4 e 6, com essa conexão.
-5. Etapa 7 quando os Parquet de origem estiverem acessíveis; etapa 9 por último, com o runbook.
+6. Etapa 7 quando os Parquet de origem estiverem acessíveis; etapa 9 por último, com o runbook.

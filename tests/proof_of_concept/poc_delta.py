@@ -5,7 +5,7 @@ local: a escrita e a leitura pelo delta-rs, o ``delta_scan`` com os tipos do con
 partição, os tempos de consulta e o ``vacuum``. ``test_local.py`` acrescenta o que só faz sentido
 em disco (o commit atômico e o conflito entre escritores, a realocação da pasta, a abertura sem
 variáveis ``AWS_*``) e ``test_s3.py`` o que só existe no bucket (a origem das credenciais, a cadeia
-do delta-rs e sua reserva, o put condicional, a criptografia, listar, copiar e apagar pelo
+do delta-rs e a forma da reserva que a biblioteca não usa, o put condicional, a criptografia, listar, copiar e apagar pelo
 ``boto3``). ``test_s3.py`` e ``test_local.py`` herdam a classe, fornecem as fixtures ``storage`` (a raiz
 da sessão), ``table_uri`` (a tabela ``operacoes`` gravada por ``write_sample_table``) e
 ``duckdb_connection`` (a conexão com as extensões daquele armazenamento) e acrescentam os testes
@@ -13,7 +13,8 @@ próprios do seu armazenamento. As medições vão para o relatório da sessão 
 armazenamento, como ``local.timing.delta_scan.aggregate_first``.
 
 O módulo também é o material comum dos outros testes da pasta: ``sample_table`` é a amostra com os
-tipos do contrato, e ``connect_duckdb`` abre o DuckDB com a regra de extensões do projeto.
+tipos do contrato, ``connect_duckdb`` abre o DuckDB com a regra de extensões do projeto, e
+``run_in_threads`` roda ações em paralelo e mede o tempo até a última terminar.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 
 import duckdb
 import pyarrow as pa
@@ -48,6 +50,20 @@ def timed(storage: Storage, label: str, action: Callable[[], object], repeat: in
 
     storage.record(f"timing.{label}", f"{time.perf_counter() - started:.3f} s")
     return result
+
+
+def run_in_threads(actions: list[Callable[[], object]]) -> float:
+    """Roda as ações em threads, uma por ação, e devolve o tempo até a última terminar.
+
+    A exceção de uma ação sobe no chamador por ``future.result()``: numa ``threading.Thread`` ela
+    só seria impressa, e o teste falharia depois com um sintoma sem relação.
+    """
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=len(actions)) as pool:
+        futures = [pool.submit(action) for action in actions]
+        for future in futures:
+            future.result()
+    return time.perf_counter() - started
 
 
 def seconds(storage: Storage, label: str) -> float:

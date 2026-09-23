@@ -15,8 +15,9 @@ o ida e volta depois do ``USE``, o DDL compilado pelo SQLAlchemy, o ``COPY ... M
 arquivos gravados pelo delta-rs (o ``DECIMAL`` em ``INT64``, o ``timestamp_ntz``, a lista de colunas
 e o ``FILLRECORD``), o ``VARCHAR`` excedido, o ``SUPER``, o ``UNLOAD ... PARTITION BY`` registrado no
 Delta e lido pelo DuckDB, a Data API pelo ciclo de ``examples/redshift_data_api.py``, e o ``COPY`` e
-o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por thread. Os resultados que a documentação
-não fixa vão para o relatório da sessão em vez de virarem asserções.
+o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por tabela, o caminho de
+``publish_redshift`` da etapa 8. Os resultados que a documentação não fixa vão para o relatório da
+sessão em vez de virarem asserções.
 
 A primeira execução no ambiente alvo, em 2026-09-21, passou um teste e reprovou dez: a sessão
 inteira correu numa transação aberta antes do ``USE``, que a visão ``stv_slices`` negada abortou, e
@@ -174,8 +175,8 @@ def test_session_and_named_parameters(redshift_session: RedshiftSession) -> None
     cursor.execute("select :mes as mes", {"mes": "2026-08"})
     assert cursor.fetchone()[0] == "2026-08"
 
-    # O que has_schema_privilege responde pelo esquema do datashare depois do USE é a leitura RS-5,
-    # ainda sem resposta no ambiente alvo; a prova do privilégio é o CREATE TABLE do ida e volta.
+    # has_schema_privilege responde false pelo esquema do datashare depois do USE (leitura RS-5,
+    # plan/POC.md): fica como leitura, e a prova do privilégio é o CREATE TABLE do ida e volta.
     record("redshift.has_schema_privilege_create", reading(lambda: session.execute("select has_schema_privilege(%s, 'CREATE')", (session.schema,))[0][0]))
 
 
@@ -638,12 +639,13 @@ def test_data_api_runs_the_statement_and_pages_the_result(redshift_session: Reds
 
 
 def test_parallel_copy_and_unload_on_two_connections(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
-    """Duas tabelas carregadas por ``COPY ... MANIFEST`` e descarregadas por ``UNLOAD`` em paralelo, uma conexão por thread.
+    """Duas tabelas carregadas por ``COPY ... MANIFEST`` e descarregadas por ``UNLOAD`` em paralelo, uma conexão por tabela.
 
-    O ``redshift_connector`` declara ``threadsafety`` 1: a conexão da sessão não é compartilhada
-    entre threads, e cada tarefa abre a sua pela mesma resolução de ``connect_redshift``, que pede
-    uma credencial temporária por conexão. O motor da biblioteca guarda essa conexão num
-    ``threading.local``.
+    O ``redshift_connector`` declara ``threadsafety`` 1: uma conexão não serve a duas threads ao
+    mesmo tempo, e cada tarefa abre a sua pela mesma resolução de ``connect_redshift``, que pede
+    uma credencial temporária por conexão. É o caminho de ``publish_redshift`` da etapa 8, uma
+    conexão por tabela; o motor da etapa 5 guarda uma sessão só por execução, sob um
+    ``threading.Lock``, e os comandos do pipeline correm nela em série.
     """
     session = redshift_session
     two_months = sample_table().slice(ROWS // 2 - 500, 1000)

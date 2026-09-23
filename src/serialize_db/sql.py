@@ -1,20 +1,21 @@
-"""O texto SQL de cada motor a partir de um statement Core: parâmetro, prefixo, renderização, arquivos.
+"""O texto SQL de cada motor a partir de um statement Core: prefixo, renderização, bind, arquivos.
 
 O módulo gera o texto SQL do DuckDB e do Redshift a partir de um statement Core do SQLAlchemy
 (``render``): as constantes ficam embutidas, cada ``bindparam`` sem valor sai como ``:nome``, o
 parâmetro de execução, e cada tabela do contrato sai com o sentinela ``{prefix}`` no nome
-(``prefixed``), que quem executa troca pelo prefixo do sandbox (``read_sql``). ``bind`` reescreve os marcadores para o
-estilo do motor e confere o dicionário de parâmetros; ``referenced_tables`` lista as tabelas do
-contrato que um statement ou um texto cita; ``sql_files``, ``write_sql_files`` e
-``check_sql_files`` geram, gravam e conferem os arquivos que o pipeline versiona, um por statement
-e por motor.
+(``prefixed``), que quem executa troca pelo prefixo do sandbox (``read_sql``). ``bind``
+reescreve os marcadores para o estilo do motor e confere o dicionário de parâmetros;
+``referenced_tables`` lista as tabelas do contrato que um statement ou um texto cita;
+``sql_files``, ``write_sql_files`` e ``check_sql_files`` geram, gravam e conferem os arquivos que
+o pipeline versiona, um por statement e por motor.
 
-É a substituição gradual da compilação pelo dialeto em tempo de execução: o texto gerado entra no
-repositório do pipeline, revisado no diff, e a chamada que compilava o statement passa a executar
-o texto. Toda tabela e toda coluna do contrato saem entre aspas duplas, como no DDL de
-``serialize_db.schema``, com o sentinela dentro das aspas (``"{prefix}cad_contas"."numero"``). O
-statement é o mesmo que roda num ``sqlalchemy.Connection`` criado fora da biblioteca e no
-``execute`` dos motores: nada nele é próprio deste módulo.
+O caminho padrão do pipeline é o statement Core submetido ao motor, que o compila pela cópia de
+``prefixed`` com os parâmetros do cliente; o texto gerado é a opção para um pipeline que queira
+sair do SQLAlchemy: ele entra no repositório do pipeline, revisado no diff, e a chamada que
+compilava o statement passa a executar o texto. Toda tabela e toda coluna do contrato saem entre
+aspas duplas, como no DDL de ``serialize_db.schema``, com o sentinela dentro das aspas
+(``"{prefix}cad_contas"."numero"``). O statement é o mesmo que roda num ``sqlalchemy.Connection``
+criado fora da biblioteca e nos motores: nada nele é próprio deste módulo.
 
 Exemplo, com duas tabelas do contrato:
 
@@ -49,7 +50,6 @@ Exemplo, com duas tabelas do contrato:
 
 from __future__ import annotations
 
-import difflib
 import os
 import re
 
@@ -60,6 +60,7 @@ from sqlalchemy.sql.util import find_tables
 from sqlalchemy.sql.visitors import replacement_traverse
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
+from serialize_db._files import diff_files, write_files
 from serialize_db.errors import SqlError
 from serialize_db.schema import Dialect
 
@@ -262,14 +263,6 @@ def referenced_tables(statement_or_sql: sa.sql.ClauseElement | str) -> set[str]:
 # ---------------------------------------------------------------- os arquivos gerados
 
 
-def _versioned_text(path: str) -> str:
-    """O conteúdo do arquivo versionado, ou vazio quando ele não existe."""
-    if not os.path.exists(path):
-        return ""
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
-
-
 def sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData) -> dict[str, str]:
     """Os arquivos de texto SQL de cada statement, em memória: o conteúdo por nome de arquivo.
 
@@ -303,14 +296,7 @@ def write_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
         write_sql_files({"total_por_conta": statement}, metadata, "sql")
         # ["sql/total_por_conta.duckdb.sql", "sql/total_por_conta.redshift.sql"]
     """
-    os.makedirs(directory, exist_ok=True)
-    written = []
-    for name, content in sorted(sql_files(statements, metadata).items()):
-        path = os.path.join(directory, name)
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        written.append(path)
-    return written
+    return write_files(sql_files(statements, metadata), directory)
 
 
 def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData,
@@ -325,13 +311,7 @@ def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
 
         check_sql_files({"total_por_conta": statement}, metadata, "sql")   # [] quando atualizados
     """
-    diff = []
-    for name, content in sorted(sql_files(statements, metadata).items()):
-        path = os.path.join(directory, name)
-        diff.extend(difflib.unified_diff(
-            _versioned_text(path).splitlines(), content.splitlines(),
-            fromfile=path, tofile=f"{path} (gerado)", lineterm=""))
-    return diff
+    return diff_files(sql_files(statements, metadata), directory)
 
 
 def read_sql(directory: str, name: str, dialect: Dialect, prefix: str) -> str:

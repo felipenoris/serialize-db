@@ -306,3 +306,13 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   with the prefix empty. The first run of `tests/test_sql.py` parsed the versioned files with the
   sentinel. The test now parses the versioned file of every statement, and the three documents
   were revised in the same commit. `plan/POC.md`
+- **A conversion rule is probed with every input type and parameter that reaches it** (2026-09-22).
+  `cast` measured text only when the input column was `string` (`pa.types.is_string`), which is
+  false for `large_string`, the type `pa.Table.from_pandas` gives the pandas 3 `str`, and for
+  `string_view` and dictionary; a pipeline in pandas with the numpy backend would have passed text
+  above `String(n)` to the Redshift `COPY`, which the byte measure existed to prevent. The same
+  review found the integer detour `decimal128(p + 3, s)` right only for `Numeric(18, 2)`: the cast
+  needs the precision of the whole integer type (19 digits plus the scale for `int64`), and
+  `p + 3 = 21` was a coincidence of the one case measured. Both rules were written from a single
+  measurement and asserted on it. The fix measures text after the conversion to the contract type,
+  and the tests feed each input type the pandas paths produce. `plan/POC.md`, `plan/PLAN-STAGE-1.md`

@@ -6,8 +6,9 @@ ORM, com as classes mapeadas e a `Session`. Os modelos ORM são o [contrato de e
 projeto: deles derivam o DDL do DuckDB e do Redshift, o esquema Arrow dos arquivos Parquet e as
 auditorias. Este documento resume os conceitos usados pela biblioteca, as opções de customização e o
 comportamento com Redshift, DuckDB e Parquet. A seção [Papel do SQLAlchemy na
-biblioteca](#papel-do-sqlalchemy-na-biblioteca) registra o que cada parte entrega ao projeto e a
-substituição gradual do dialeto em tempo de execução pelo texto SQL gerado.
+biblioteca](#papel-do-sqlalchemy-na-biblioteca) registra o que cada parte entrega ao projeto, a
+compilação pelo dialeto em tempo de execução, que é o caminho padrão, e o texto SQL gerado, a
+opção de migração para fora do SQLAlchemy.
 
 As afirmações vêm da documentação oficial da versão 2.0, consultada em 2026-09-18. Os exemplos foram
 executados com SQLAlchemy 2.0.54, duckdb_engine 0.17.0 sobre DuckDB 1.5.5 e sqlalchemy-redshift 1.0.0;
@@ -1197,7 +1198,7 @@ geração: produz o DDL e o texto SQL de cada dialeto, e nenhum dado passa pelo 
 e complexa pode nascer em texto validado por SQLGlot desde já; as duas formas convivem, porque o
 produto das duas é uma string executada pelo DuckDB ou pelo `redshift_connector`.
 
-### Substituição gradual do dialeto em tempo de execução
+### O texto SQL gerado como opção de migração
 
 O pipeline compila hoje cada statement Core pelo dialeto a cada execução, e esse continua o caminho
 padrão: o motor compila a cópia prefixada com os parâmetros do cliente (decisão do usuário de

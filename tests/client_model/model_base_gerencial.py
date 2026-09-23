@@ -64,7 +64,7 @@ class Negocio(Base):
 
 
 class Operacao(Base):
-    """``cad_operacoes``: as operações de crédito de cada data-base, partição por ``data``."""
+    """``cad_operacoes``: as operações de crédito de cada data-base, particionadas por ``data_str``, derivada de ``data``."""
 
     __tablename__ = "cad_operacoes"
     __table_args__ = (
@@ -140,7 +140,7 @@ class RelContratoOperacao(Base):
 
 
 class Contrato(Base):
-    """``cad_contratos``: os contratos de cada data-base, particionados por ``data``."""
+    """``cad_contratos``: os contratos de cada data-base, particionados por ``data_str``, derivada de ``data``."""
 
     __tablename__ = "cad_contratos"
     __table_args__ = (

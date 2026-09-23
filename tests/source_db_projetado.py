@@ -7,7 +7,7 @@ a mesma nulidade declarada; a partição Hive por ``data_str`` (``cad_contratos`
 ``rel_contrato_operacao``) e por ``data_base_str`` (``cad_lancamentos``), com o valor no caminho e
 nunca dentro do arquivo, igual a ``data`` ou ``data_base`` em toda linha da partição, fins de mês
 não contíguos; vários arquivos ``chunk_<n>.parquet`` por partição, numerados de 0 sem zeros à
-esquerda, o último menor que os demais; um row group por arquivo, SNAPPY, sem dicionário, formato
+esquerda, o último com o resto das linhas; um row group por arquivo, SNAPPY, sem dicionário, formato
 1.0, timestamps em ``INT96`` sem estatísticas, nenhum ``field_id``, e a chave ``pandas`` no rodapé de
 parte dos arquivos (em todos na base de desenvolvimento; na de produção, em 5 de 8, 111 de 144, 9 de
 13 e 16 de 30 arquivos das tabelas particionadas e em nenhum de ``alembic_version`` e

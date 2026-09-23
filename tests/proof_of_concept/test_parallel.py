@@ -42,7 +42,7 @@ from deltalake.transaction import AddAction
 from sqlalchemy.sql.util import find_tables
 
 from conftest import LocalLocation, record
-from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
+from poc_delta import MONTHS, ROWS, connect_duckdb, run_in_threads, sample_table
 
 FOUR_MONTHS = ("2026-01", "2026-02", "2026-03", "2026-04")
 
@@ -54,18 +54,6 @@ def four_month_table(con: duckdb.DuckDBPyConnection, rows: int = 400_000) -> pa.
         f"'x' || range AS descricao FROM range({rows})"
     )
     return con.execute(sql).to_arrow_table()
-
-
-def run_in_threads(actions: list[Callable[[], object]]) -> float:
-    """Roda as ações em threads, uma por ação, e devolve o tempo até a última terminar."""
-    threads = [threading.Thread(target=action) for action in actions]
-    started = time.perf_counter()
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    return time.perf_counter() - started
 
 
 # --- As APIs da implementação -------------------------------------------------------------------
@@ -202,10 +190,13 @@ class BatchStream:
             except queue.Empty:
                 if self._stop.is_set():
                     raise StopIteration from None
+        # O fim e o erro voltam à fila: a thread já terminou, e a leitura seguinte os encontra de
+        # novo em vez de esperar por um lote que não vem.
         if item is END:
             self._queue.put(item)
             raise StopIteration
         if isinstance(item, Exception):
+            self._queue.put(item)
             raise item
         return item
 
@@ -383,6 +374,15 @@ def test_batch_stream_prefetches_on_its_own_cursor_and_stops_early() -> None:
             for _ in failing:
                 pass
     record("parallel.stream.query_error_class", f"{type(failure.value).__name__} na leitura")
+
+    # Depois do erro, a leitura seguinte levanta o mesmo erro; sem o erro de volta na fila, ela
+    # esperaria para sempre pela thread que já terminou.
+    failing = BatchStream(engine._root, "SELECT CASE WHEN i < 250_000 THEN i ELSE error('falha no meio') END AS v FROM range(400_000) t(i)", batch_size=100_000)
+    assert failing.read_next_batch().num_rows == 100_000
+    for _ in range(2):
+        with pytest.raises(OSError, match="falha no meio"):
+            failing.read_next_batch()
+    failing.close()
     engine.cleanup()
 
 
@@ -597,7 +597,7 @@ def test_table_barrier_delays_the_read_until_the_load_lands() -> None:
 
     def load() -> None:
         with barrier.loading("cad_lancamentos"):
-            landed.wait()
+            assert landed.wait(timeout=10)
             events.append("carga")
 
     loader = threading.Thread(target=load)
