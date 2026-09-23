@@ -30,16 +30,20 @@ dev = [
     "boto3>=1.40",
     "deltalake==1.6.4",
     "duckdb==1.5.5",
-    # O substituto local do S3 (tests/emulator.py): o servidor do moto roda sobre o Flask.
-    "flask==3.1.3",
-    "flask-cors==6.0.5",
-    "moto[s3]==5.2.3",
     "pandas==3.0.6",
     "pyarrow==25.0.1",
     "pytest>=8.4",
     "redshift-connector>=2.1",
     "sqlalchemy==2.0.54",
     "sqlglot==30.18.0",
+]
+# O substituto local do S3 e do Redshift (tests/emulator.py), que roda as suítes do ambiente alvo
+# fora dele com SERIALIZE_DB_TEST_EMULATOR: o servidor do moto roda sobre o Flask. Fica fora do dev
+# para que os testes padrão não o instalem.
+emulator = [
+    "flask==3.1.3",
+    "flask-cors==6.0.5",
+    "moto[s3]==5.2.3",
 ]
 # A documentação do pacote, publicada em HTML estático.
 docs = [

@@ -509,9 +509,10 @@ A reconciliação é o comando da biblioteca que substitui a migração: compara
 com `dt.schema()`, aplica o diff aditivo, recusa o destrutivo com a instrução de reescrita, e repete
 o mesmo diff nas tabelas publicadas no Redshift (`ALTER TABLE ADD COLUMN`, que acrescenta no fim, ou
 recriação e recarga). A ordem das colunas no Redshift segue a ordem do esquema Delta, porque o `COPY`
-é posicional; a carga de arquivos anteriores a uma coluna nova vai por lista de colunas, confirmada
-no ambiente alvo em 2026-09-21, ou por `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula
-([redshift.md](redshift.md)).
+é posicional; a carga de arquivos anteriores a uma coluna nova vai por `FILLRECORD`, que carregou o
+mesmo arquivo com a coluna nova nula no ambiente alvo em 2026-09-21, como a lista de colunas, e é o
+caminho de todo `COPY` da biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md);
+[redshift.md](redshift.md)).
 
 ## O que substitui o Alembic
 

@@ -183,8 +183,9 @@ class RedshiftEngine:
 - **`ingest`** grava `copy_manifest(uri, version, partitions, storage.uri_of(<ambiente>/staging/<execution_id>/<tabela>.manifest), storage)`,
   cria a staging `exec_<id>_<tabela>_staging` por `staging_ddl`, o `ddl` da [etapa 1](PLAN-STAGE-1.md)
   sem a coluna de partição, escrito nesta etapa sobre `column_ddl` e `quoted`,
-  roda `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` (a proposta da [etapa 8](PLAN-STAGE-8.md):
-  um manifesto pode listar arquivos anteriores a uma coluna nova) e um
+  roda `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` (decisão do usuário de 2026-09-23 para todo
+  `COPY` da biblioteca, [etapa 8](PLAN-STAGE-8.md): um manifesto pode listar arquivos anteriores a
+  uma coluna nova) e um
   `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'` por partição (ou `SELECT *` numa tabela sem partição), com `JSON_PARSE` nas colunas `SUPER`.
   `materialize=False` não existe aqui: o Redshift não lê o Delta no lugar.
 - **`stream`** vai sempre por `UNLOAD` (decisão do usuário de 2026-09-23). O driver lê o resultado
@@ -297,7 +298,7 @@ testes marcados `redshift` repetem a sequência com uma amostra no esquema autor
 | Configuração | `test_config_from_environment` | `SERIALIZE_DB_REDSHIFT_*` para `RedshiftConfig`; o par informado e o workgroup são caminhos alternativos; nenhum outro. |
 | Prefixo | `test_sandbox_prefix_normalizes_and_limits` | `[a-z0-9_]`, 127 bytes. |
 | Cláusula de credenciais | `test_credentials_clause_and_mask` | `IAM_ROLE` com ARN e `default`; as três chaves da sessão sem `iam_role`; `mask` tira os valores; nenhuma exceção carrega o texto sem máscara. |
-| Comandos | `test_copy_insert_unload_text` | `COPY ... FORMAT AS PARQUET MANIFEST` sem `COMPUPDATE`, com `FILLRECORD` quando a decisão da [etapa 8](PLAN-STAGE-8.md) o fixar; `INSERT ... SELECT *, '<valor>'`; `UNLOAD ... MANIFEST VERBOSE` sem `PARTITION BY`, o `select` da exportação sem a coluna de partição, `PARALLEL OFF` opcional na exportação e fixo no `stream`, as aspas do `select` dobradas; nomes em duas partes. |
+| Comandos | `test_copy_insert_unload_text` | `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` sem `COMPUPDATE` ([etapa 8](PLAN-STAGE-8.md)); `INSERT ... SELECT *, '<valor>'`; `UNLOAD ... MANIFEST VERBOSE` sem `PARTITION BY`, o `select` da exportação sem a coluna de partição, `PARALLEL OFF` opcional na exportação e fixo no `stream`, as aspas do `select` dobradas; nomes em duas partes. |
 | Destino por tentativa | `test_unload_destination_is_new_per_call` | Duas exportações da mesma partição e duas partições da mesma tabela, em `register` e em `rewrite`, recebem destinos distintos; em `register`, `<coluna>=<valor>/` é o primeiro segmento do caminho relativo à pasta da tabela. |
 | DDL da staging | `test_staging_ddl_without_partition_column` | A staging sem a coluna de partição; a tabela do sandbox com ela. |
 | Tabela do cursor | `test_table_from_cursor_by_columns` | Um cursor de mentira: a `pa.Table` com os tipos do esquema, igual ao caminho por dicionários. |

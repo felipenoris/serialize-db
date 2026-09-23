@@ -11,7 +11,7 @@ As primitivas são as da [etapa 3](PLAN-STAGE-3.md), mais a inicialização da t
 | Tabela de controle da publicação | Uma vez no esquema do Redshift, antes da primeira publicação de qualquer ambiente: `publish_redshift` recusa publicar sem ela ([etapa 8](PLAN-STAGE-8.md), decisão do usuário de 2026-09-23). | `serialize-db publish --init`. |
 | Snapshot do banco | Na periodicidade do processo, por exemplo o fim do trimestre. | `run.snapshot("2026T3")` na execução marcada. |
 | Compactação | Antes de um snapshot, nunca depois. Também normaliza os arquivos que o `UNLOAD` gravou: `INT64` no lugar de `INT96` e de `FIXED_LEN_BYTE_ARRAY`, estatística em toda coluna ([etapa 3](PLAN-STAGE-3.md)). | `serialize-db compact --partitions ...`. |
-| `vacuum` | Mensal: lista com `keep_versions` do arquivo de controle, revisada, depois aplicada; `--full` de tempos em tempos para os órfãos. Num bucket versionado o espaço só é liberado pela regra `NoncurrentVersionExpiration`; `probes/bucket.py` (`BK-14`) mostra o acumulado. | `serialize-db vacuum [--apply] [--full]`. |
+| `vacuum` | Mensal: lista com `keep_versions` do arquivo de controle, revisada, depois aplicada; `--full` de tempos em tempos para os órfãos. A retenção é de 400 dias (decisão do usuário de 2026-09-23), e `docs/index.md`, seção "Retenção dos arquivos removidos", diz como mudá-la. Num bucket versionado o espaço só é liberado pela regra `NoncurrentVersionExpiration`; `probes/bucket.py` (`BK-14`) mostra o acumulado. | `serialize-db vacuum [--apply] [--full]`. |
 | Arquivo | Anual: `deep_copy` dos snapshots mais velhos que o prazo da tabela viva para `arquivo/<nome>/<tabela>/`, a entrada sai de `snapshots.json`, a pasta recebe a regra de ciclo de vida. | `serialize-db archive <nome>`. |
 | Exportação | Sob demanda: pastas Parquet por partição de um snapshot, `copy` ou `rewrite`. | `serialize-db export`. |
 | Auditoria avulsa | Depois de uma correção, e quando o SQL de uma verificação precisa ser lido. | `serialize-db audit --table ... [--sql]`. |
@@ -69,7 +69,9 @@ COMMANDS = {
 - **`history`** imprime, por tabela, versão, operação, carimbo e os metadados
   `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`; os commits
   de `vacuum` (`VACUUM START`, `VACUUM END`) e de `optimize` aparecem sem metadados.
-- **O runbook** entra em `plan/operacao.md`: uma seção por rotina com o comando, o que conferir
+- **O runbook** entra em `docs/operacao.md`, publicado pelo `pdoc` com a docstring de
+  `serialize_db.cli` que o inclui (decisão do usuário de 2026-09-23), ao lado da seção "Retenção
+  dos arquivos removidos" de `docs/index.md`: uma seção por rotina com o comando, o que conferir
   antes (o arquivo de controle, o espaço, a última publicação) e o que esperar depois (a versão, a
   lista do `vacuum`, o `history`).
 
@@ -212,10 +214,14 @@ history: {'version': 6, 'operation': 'WRITE', 'serialize_db_execution_id': 'exec
 
 ## Decisões pendentes
 
-- **[decisão] O nome do runbook**, `plan/operacao.md`, na convenção dos documentos de assunto em
-  pt-BR.
-- **[decisão] A marca de arquivamento no controle** (`"archived": true` na entrada) contra remover a
-  entrada; remover perde o registro de que o snapshot existiu.
-- **[decisão] A retenção do `vacuum` mensal.** Com 400 dias, o `vacuum` só libera espaço um ano
-  depois da correção; uma retenção menor libera antes e encurta a janela de leitura das versões
-  intermediárias.
+- **[decisão] A entrada de um snapshot arquivado no controle.** Remover a entrada, como a rotina
+  `archive` descreve acima, perde o registro de que o snapshot existiu e libera o nome para um
+  snapshot novo, cujo arquivo colidiria com `arquivo/<nome>/`. A marca `"archived": true` dentro
+  da entrada guarda o registro, mas mistura um booleano no mapa tabela→versão que
+  `vacuum_keeping_snapshots` percorre, e ele teria de pulá-la. Proposto: mover a entrada de
+  `snapshots` para uma chave irmã `archived` do mesmo arquivo, na mesma escrita condicional:
+  `vacuum_keeping_snapshots` lê só `snapshots` e não muda, e `snapshot` recusa um nome presente em
+  qualquer das duas chaves.
+
+As decisões do usuário de 2026-09-23 sobre o lugar do runbook, `docs/operacao.md`, e a retenção
+de 400 dias do `vacuum` mensal estão escritas nas seções que as descrevem.

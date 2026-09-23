@@ -73,8 +73,7 @@ listing failure behind a silent proxy is in `README.md`; `test_delta_rs_credenti
 On 2026-09-21 the user ran the five probes in the target and saved the reports in
 `secrets/probes-aws-bn/`, asking for them to be read and propagated to the plan: the exception to the
 rule that `secrets/` is never read, limited to that path; the facts are in `plan/POC.md` and the
-reports stay outside git until the user decides to copy them to `plan/readings/`
-(`plan/OPEN_QUESTIONS.md`). The same day the user confirmed the reading of `RS-19`: `USE
+reports stay outside git (the user decided on 2026-09-23 not to copy them to `plan/readings/`). The same day the user confirmed the reading of `RS-19`: `USE
 datalake_rw_shared` makes two-part names resolve in the datashare while `current_database()` keeps
 answering `dev`, so the switch is confirmed by resolving a name, never by that function
 (`plan/PLAN-STAGE-5.md`, `plan/redshift.md`).
@@ -564,7 +563,8 @@ accounting accounts, which the fixture now builds and `tests/test_source_db_proj
 
 The user asked on 2026-09-23 to build the local stand-in and apply the behavior corrections of the
 target-only suites, then to version the stand-in: `tests/emulator.py`, switched on by
-`SERIALIZE_DB_TEST_EMULATOR`, with moto pinned in the `dev` group. `plan/POC.md`,
+`SERIALIZE_DB_TEST_EMULATOR`, with moto pinned in the `dev` group (in the `emulator` group since the
+answers to the pending decisions, below). `plan/POC.md`,
 `plan/CURRENT_STATE.md`
 
 ## The early migration's reports
@@ -584,3 +584,29 @@ table's load, every requested partition in the four write variants, each in a ne
 also when the partition is already in the log, and the report carries the machine; `--no-measure`
 turns it off (the assistant's design, named in the report). `source-base.md`,
 `plan/PLAN-STAGE-7.md`, `plan/OPEN_QUESTIONS.md`
+
+## The answers to the pending decisions
+
+On 2026-09-23 the user went through the pending decisions of the plan and answered them. `cast`
+refuses a tz-aware `timestamp` in a `DateTime` column without time zone and the reverse
+(`ContractError`; the same 12:00 UTC came out 12:00 from the PyArrow cast and 09:00 from the DuckDB
+`CAST` in `America/Sao_Paulo`); another zone into a tz-aware column keeps the instant. Stage 8:
+`FILLRECORD` on every `COPY` of the library; the JSON document capped at 65,535 bytes in the
+contract, refused by `cast` and counted by the audit (`texto_<coluna>`, `json_size` on Redshift),
+with no path for larger documents until a table needs one; a `VARCHAR(n)` width change is a
+destructive diff (recreate and reload), detected through `svv_all_columns`, and
+`ALTER COLUMN ... TYPE` enters only after `test_alter_column_type_on_the_share` reads it on the
+datashare. Stage 9: the runbook is `docs/operacao.md`, published by pdoc through the
+`serialize_db.cli` docstring; the monthly `vacuum` keeps the 400-day retention, and the user asked for
+a pdoc section on it and on how to change it (`docs/index.md`, "Retenção dos arquivos removidos").
+The probe reports of 2026-09-21 in `secrets/` stay out of git, and the Redshift reports left
+`plan/readings/` (a report stays only while a pending stage consults it; the production base reading
+stays). The local stand-in stays out of the GitHub workflow: it runs locally before a push that
+touches what the target-only suites cover, from the `emulator` dependency group (moto, flask), kept
+out of `dev`. Still open after the same conversation: the publication staging (temporary or regular;
+the user asked where the one-database-per-transaction rule comes from: the AWS page "Considerations
+for data sharing reads and writes", never measured in the target), the entry of an archived snapshot
+(the assistant proposed moving it to a sibling `archived` key), the pytest temporary folder (the
+user asked for context), and the source of the distribution reading, which the probe of the same
+day found denied in `svv_table_info`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-9.md`,
+`plan/OPEN_QUESTIONS.md`, `docs/index.md`, `README.md`

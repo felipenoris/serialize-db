@@ -19,8 +19,9 @@ no Delta e lido pelo DuckDB, a Data API pelo ciclo de ``examples/redshift_data_a
 ``publish_redshift`` da etapa 8. As leituras que as decisões da etapa 5 de 2026-09-23 esperam vêm no
 fim: o ``UNLOAD`` sem ``PARTITION BY`` para a pasta Hive, o ``stream`` por ``UNLOAD`` com os valores
 como literais e os seus casos de borda, o ``row_desc`` de cada tipo, o custo de uma carga pequena
-por ``COPY``, o rodapé do ``UNLOAD`` com ``NaN`` (issue #59), e o texto da auditoria da etapa 4 sob
-``search_path`` no esquema do datashare, com a comparação do ``NaN``. Os resultados que a
+por ``COPY``, o rodapé do ``UNLOAD`` com ``NaN`` (issue #59), o texto da auditoria da etapa 4 sob
+``search_path`` no esquema do datashare, com a comparação do ``NaN``, e o aumento de
+``VARCHAR(n)`` por ``ALTER COLUMN ... TYPE``, que a etapa 8 espera. Os resultados que a
 documentação não fixa vão para o relatório da sessão; os que duas execuções limpas no ambiente alvo
 leram iguais são asserções. O que cada execução no ambiente alvo leu está em ``plan/POC.md``.
 """
@@ -1705,7 +1706,7 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
         expected = {
             "linhas": "4", "particao_data_str": "1", "naofinito_valor": "2",
             "total_valor": "4.500000", "total_preco": "16.250000", "json_meta": "0",
-            "texto_nome": "0", "valor_data_str": "0",
+            "texto_meta": "0", "texto_nome": "0", "valor_data_str": "0",
         }
 
         # 4. O texto de cada verificação, como o motor o roda; a de linhas também medida a medida,
@@ -1758,3 +1759,46 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
         record("redshift.audit.client_model", results)
     finally:
         connection.close()
+
+
+def test_alter_column_type_on_the_share(redshift_session: RedshiftSession) -> None:
+    """O aumento de ``VARCHAR(n)`` por ``ALTER TABLE ... ALTER COLUMN ... TYPE`` no esquema do
+    datashare, numa coluna comum e numa da chave primária informativa.
+
+    A etapa 8 trata a largura de ``String(n)`` que cresce como diff destrutivo, com recriação e
+    recarga, e esta leitura diz se o comando entra depois como atalho (decisão do usuário de
+    2026-09-23): ele não está na lista do que a escrita por datashare aceita, e a documentação o
+    recusa numa coluna com chave. O desfecho de cada comando, a largura em ``svv_all_columns`` e a
+    inserção de um valor de dez caracteres, o efeito de que a publicação depende, são leituras.
+    """
+    session = redshift_session
+    name = session.table("largura")
+    qualified = session.qualified(name)
+    session.execute(
+        f"CREATE TABLE {qualified} (codigo VARCHAR(5) NOT NULL, nome VARCHAR(5), "
+        "PRIMARY KEY (codigo))"
+    )
+    session.execute(f"INSERT INTO {qualified} VALUES ('abc', 'abcde')")
+    database = session.share_database or session.execute("select current_database()")[0][0]
+    widths_query = (
+        "select column_name, character_maximum_length from svv_all_columns "
+        "where database_name = %s and schema_name = %s and table_name = %s "
+        "order by ordinal_position"
+    )
+    widths = functools.partial(session.execute, widths_query, (database, session.schema, name))
+    record("redshift.alter_type.widths_before", reading(widths))
+
+    # O aumento em cada coluna, e o valor de dez caracteres que só a coluna aumentada aceita.
+    commands = {
+        "common_column": f"ALTER TABLE {qualified} ALTER COLUMN nome TYPE VARCHAR(10)",
+        "key_column": f"ALTER TABLE {qualified} ALTER COLUMN codigo TYPE VARCHAR(10)",
+    }
+    for label, command in commands.items():
+        record(f"redshift.alter_type.{label}", outcome(functools.partial(session.execute, command)))
+    record("redshift.alter_type.widths_after", reading(widths))
+    inserts = {
+        "insert_common_column": f"INSERT INTO {qualified} VALUES ('def', 'abcdefghij')",
+        "insert_key_column": f"INSERT INTO {qualified} VALUES ('abcdefghij', 'x')",
+    }
+    for label, command in inserts.items():
+        record(f"redshift.alter_type.{label}", outcome(functools.partial(session.execute, command)))

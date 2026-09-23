@@ -185,8 +185,8 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
 2. `run.ingest` monta o manifesto dos arquivos das partições pedidas, na versão fixada, e carrega por
    `COPY ... MANIFEST` na staging sem a coluna de partição, seguido de `INSERT ... SELECT *, '<valor>'`. A carga de
    arquivos anteriores a uma coluna nova vai por lista de colunas, confirmada em 2026-09-21, ou por
-   `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula, a proposta da
-   [etapa 8](PLAN-STAGE-8.md).
+   `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula, o caminho de todo `COPY` da
+   biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md)).
 3. O pipeline roda os mesmos statements Core, compilados para o Redshift, numa sessão só; os lotes
    entram por Parquet em `staging/` mais `COPY`, um row group por lote, e saem por `UNLOAD` em
    `stream` e das tuplas do cursor em `query`.

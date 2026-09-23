@@ -386,6 +386,31 @@ def test_cast_measures_text_against_the_varchar_ceiling(text_type: pa.DataType) 
     assert "65536" in str(error.value)
 
 
+def test_cast_measures_json_against_the_redshift_ceiling() -> None:
+    """Um documento JSON de 65.535 bytes passa e um de 65.536 é recusado: o `COPY` de Parquet não
+    leva um documento maior a `SUPER` (leitura de 2026-09-21)."""
+    at_ceiling = json.dumps({"k": "x" * 65526})
+    above = json.dumps({"k": "x" * 65527})
+    assert (len(at_ceiling), len(above)) == (65535, 65536)
+    accepted = schema.cast(batch_of_tudo(meta=[at_ceiling]), TUDO)
+    assert accepted.column("meta").to_pylist() == [at_ceiling]
+    with pytest.raises(ContractError) as error:
+        schema.cast(batch_of_tudo(meta=[above]), TUDO)
+    assert "tudo.meta" in str(error.value)
+    assert "65536" in str(error.value)
+
+
+def test_cast_keeps_the_instant_between_time_zones() -> None:
+    """Um `timestamp` de outro fuso numa coluna com fuso entra no mesmo instante, em UTC. Sem fuso
+    dos dois lados é que a hora mudaria: o mesmo 12:00 UTC saiu 09:00 do `CAST` do DuckDB, na
+    sessão `America/Sao_Paulo`, e 12:00 do `cast` do PyArrow (leitura de 2026-09-23)."""
+    instant = dt.datetime(2026, 8, 31, 12, tzinfo=dt.timezone.utc)
+    local = pa.array([instant], pa.timestamp("us", tz="America/Sao_Paulo"))
+    done = schema.cast(batch_of_tudo(carimbo_utc=local), TUDO)
+    assert done.schema.field("carimbo_utc").type == pa.timestamp("us", tz="UTC")
+    assert done.column("carimbo_utc").to_pylist() == [instant]
+
+
 def test_cast_integer_into_numeric_of_any_precision() -> None:
     """Um `int64` entra em `Numeric(p, s)` de qualquer precisão quando o valor cabe em `p`, e é
     recusado quando não cabe; o cast direto do PyArrow exige que `p` comporte todo o `int64`
@@ -428,6 +453,13 @@ REFUSED_BATCHES = {
     "inteiro acima da precisão": (batch_of_tudo(valor=pa.array([10**17], pa.int64())), "valor"),
     "nanossegundo não nulo": (
         batch_of_tudo(timestamp=pa.array([1], pa.timestamp("ns"))), "timestamp"),
+    "fuso numa coluna sem fuso": (
+        batch_of_tudo(timestamp=pa.array(
+            [dt.datetime(2026, 8, 31, 12, tzinfo=dt.timezone.utc)], pa.timestamp("us", tz="UTC"))),
+        "timestamp"),
+    "sem fuso numa coluna com fuso": (
+        batch_of_tudo(carimbo_utc=pa.array([dt.datetime(2026, 8, 31, 12)], pa.timestamp("us"))),
+        "carimbo_utc"),
     "estouro de inteiro": (batch_of_tudo(parcelas=pa.array([40000], pa.int32())), "parcelas"),
     "tipo sem conversão": (batch_of_tudo(sistema=pa.array([{"a": 1}])), "sistema"),
     "nenhuma coluna do contrato": (batch_of_tudo(extra=[1]), "extra"),

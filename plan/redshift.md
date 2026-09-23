@@ -188,7 +188,11 @@ O que o Redshift aceita escrever num datashare, e o que ele não lista:
   delta-rs: o manifesto se comporta como numa tabela local.
 - A escrita de uma transação vai para um banco só, e um comando múltiplo fora de um bloco de
   transação não é aceito: a transação da publicação abre com `BEGIN` explícito, e a tabela de
-  controle mora no mesmo banco das tabelas publicadas.
+  controle mora no mesmo banco das tabelas publicadas. A regra é da página
+  [Considerations for data sharing reads and writes](https://docs.aws.amazon.com/redshift/latest/dg/considerations-datashare-reads-writes.html)
+  ("Note that the writes in a transaction are only supported to a single database", relida em
+  2026-09-23), e nenhuma execução no ambiente alvo a mediu: a página não diz em que banco fica uma
+  tabela temporária criada depois do `USE`, nem se escrever nela conta como escrever noutro banco.
 - `VIEW` e `MATERIALIZED VIEW` não podem ser criadas, alteradas nem apagadas num banco de datashare.
 - `TRUNCATE` numa tabela remota é transacional, ao contrário do `TRUNCATE` local, que confirma
   sozinho. Ele é DDL para o datashare: um comando preparado antes dele e executado depois recebe
@@ -212,7 +216,7 @@ direto, sem manifesto, e converteu `int32` da origem para a coluna `BIGINT` do c
 pelas mesmas credenciais.
 
 O que o ambiente alvo respondeu a esses requisitos, lido em 2026-09-20 por `probes/redshift.py`
-([`POC.md`](POC.md), [`readings/`](readings/)): o patch `1.0.436211` atende; o isolamento do banco
+([`POC.md`](POC.md)): o patch `1.0.436211` atende; o isolamento do banco
 que recebe a escrita fica no produtor e chega ao consumidor como `UNKNOWN`; `stv_slices` é negada a
 um usuário comum, então os 64 slices não são verificáveis pela sessão. Nenhum papel IAM está
 associado ao namespace, e é por isso que o `COPY` e o `UNLOAD` levam as credenciais de quem chama. `has_database_privilege(dev, CREATE)` é falso e `TEMP` é verdadeiro. `pg_settings` do
@@ -443,9 +447,10 @@ por `INSERT ... JSON_PARSE(%s)` com parâmetro, acima do teto do `VARCHAR` ([`PO
 `SERIALIZETOJSON`, o mesmo `COPY` recusa a string acima do teto (`1224 String value exceeds the max
 size of 65535 bytes`): um Parquet com o documento em texto não leva um documento acima de 65.535
 bytes a `SUPER`. `COPY ... FORMAT JSON 'auto'` de um arquivo JSON de uma linha, com o documento como
-objeto, carregou os 80.901 bytes (`json_typeof` `object`), lido às 13:35 e às 13:39. O teto do campo
-JSON no contrato, ou um caminho por JSON para os documentos maiores, é decisão da
-[etapa 8](PLAN-STAGE-8.md).
+objeto, carregou os 80.901 bytes (`json_typeof` `object`), lido às 13:35 e às 13:39. O contrato
+fixa o teto de 65.535 bytes por documento, recusado pelo `cast` e contado pela auditoria (decisão
+do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md)); os caminhos por JSON ficam para uma tabela
+que precise de documentos maiores.
 
 ```python
 import sqlalchemy as sa
@@ -575,6 +580,9 @@ Regras da referência:
 - `ALTER COLUMN TYPE` só muda o tamanho de um `VARCHAR`, sem descer abaixo do maior valor
   existente, fora de transação, e não aceita colunas
   com `DEFAULT`, com chaves, nem com codificações `BYTEDICT`, `RUNLENGTH`, `TEXT255` e `TEXT32K`.
+  Ele também não está na lista do que a escrita por datashare aceita; a
+  [etapa 8](PLAN-STAGE-8.md) trata a largura que muda como diff destrutivo, e
+  `test_redshift.py::test_alter_column_type_on_the_share` lê o comando no esquema do datashare.
 - `ALTER DISTKEY`, `ALTER DISTSTYLE` e `ALTER SORTKEY` não rodam junto com `VACUUM`, não valem para
   tabelas temporárias nem com chave interleaved, e retiram a tabela da otimização automática quando
   ela estava em `AUTO`. Uma chave compound pode virar interleaved apenas recriando a tabela.

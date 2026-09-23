@@ -18,7 +18,8 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   outlives any read timeout; `ssl=True` is the default. The driver's internal IAM (`iam=True`) and
   `GetClusterCredentials` are out: nobody ran them in the target, which has no cluster.
   `examples/`, `plan/redshift.md`, `plan/POC.md`
-- The target's Redshift, read on 2026-09-20 (`plan/readings/`): workgroup `controladoria-wg`,
+- The target's Redshift, read on 2026-09-20 (the reports left `plan/readings/` on 2026-09-23 and
+  stay in git history): workgroup `controladoria-wg`,
   namespace `controladoria-ns`, account 138071776059, base capacity 8, no provisioned cluster; the
   three Redshift APIs and the workgroup host resolve to private IPs, so the temporary credential and
   the Data API work without internet; version `1.0.436211`; `datalake_rw_shared` is `shared` from the
@@ -164,7 +165,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/` (user decision of 2026-09-23); two parallel `COPY` 4.5 s and 3.6 s, two parallel `UNLOAD` 1.9 s
   and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times. `plan/POC.md`
 - Fifth and sixth runs (2026-09-21 13:35 and 13:39 UTC, 12 passed each, the two clean runs stage 0
-  required, `plan/readings/redshift-suite-2026-09-21-1335.json` and `-1339.json`): with
+  required; the two JSON reports left `plan/readings/` on 2026-09-23, in git history): with
   `max_prepared_statements=0` the same `select count(*)` passes before and after a `TRUNCATE`; with
   the driver's cache the repeat after the `TRUNCATE` and a second repeat both get 34510 (the stale
   entry stays), the repeat after an `ALTER TABLE ... ADD COLUMN` passes, and the same sequence on a
