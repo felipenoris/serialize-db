@@ -15,26 +15,17 @@ o ida e volta depois do ``USE``, o DDL compilado pelo SQLAlchemy, o ``COPY ... M
 arquivos gravados pelo delta-rs (o ``DECIMAL`` em ``INT64``, o ``timestamp_ntz``, a lista de colunas
 e o ``FILLRECORD``), o ``VARCHAR`` excedido, o ``SUPER``, o ``UNLOAD ... PARTITION BY`` registrado no
 Delta e lido pelo DuckDB, a Data API pelo ciclo de ``examples/redshift_data_api.py``, e o ``COPY`` e
-o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por thread. Os resultados que a documentação
-não fixa vão para o relatório da sessão em vez de virarem asserções.
-
-A primeira execução no ambiente alvo, em 2026-09-21, passou um teste e reprovou dez: a sessão
-inteira correu numa transação aberta antes do ``USE``, que a visão ``stv_slices`` negada abortou, e
-cada comando seguinte recebeu ``25P02``. A segunda, no mesmo dia, passou sete e reprovou quatro: a
-URL do manifesto do ``COPY`` levava uma barra dobrada, e ``information_schema.columns`` não enxerga o
-esquema do datashare depois do ``USE``. A terceira e a quarta, às 12:08 e 12:10 UTC, passaram dez e
-reprovaram um: o ``select count(*)`` repetido depois do terceiro ``TRUNCATE`` de
-``test_copy_column_list_and_fillrecord`` recebeu ``34510``, ``Concurrent DDL committed ... between
-Prepare and Execute``, porque o ``redshift_connector`` reaproveita o prepared statement nomeado e
-não o descarta num ``TRUNCATE``; a conexão vai com ``max_prepared_statements=0`` desde então. A
-quinta e a sexta, às 13:35 e às 13:39 UTC, passaram os doze testes, e a etapa 0 fechou com elas: o
-que as duas leram igual virou asserção (``plan/POC.md``).
+o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por tabela, o caminho de
+``publish_redshift`` da etapa 8. Os resultados que a documentação não fixa vão para o relatório da
+sessão; os que duas execuções limpas no ambiente alvo leram iguais são asserções. O que cada
+execução no ambiente alvo leu está em ``plan/POC.md``.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import decimal
+import functools
 import io
 import json
 import os
@@ -75,9 +66,10 @@ def duckdb_connection() -> duckdb.DuckDBPyConnection:
 def contract_table(name: str, schema: str, *, month: bool = False, extra: bool = False, text: bool = False) -> sa.Table:
     """O ``Table`` de ``operacoes`` no esquema da sessão, na ordem das colunas dos arquivos do delta-rs.
 
-    ``schema`` é ``banco.esquema`` quando o esquema vem de um datashare, e o ``quoted_name`` com
-    ``quote=False`` é o que mantém o ponto fora das aspas: um esquema com ponto em texto simples
-    compila ``"banco.esquema".tabela``, que o Redshift lê como um esquema de nome esquisito.
+    ``schema`` é o esquema da sessão: depois do ``USE``, ``esquema.tabela`` resolve no banco do
+    datashare. O ``quoted_name`` com ``quote=False`` deixa o nome sem aspas no texto; num
+    ``banco.esquema``, o nome em três partes de uma sessão sem ``USE``, é ele que mantém o ponto fora
+    das aspas, porque o esquema com ponto em texto simples compila ``"banco.esquema".tabela``.
 
     ``month`` acrescenta ``mes`` no fim (a tabela final), ``extra`` uma coluna nova no fim (a
     evolução de esquema) e ``text`` uma coluna ``Text`` (o tipo que o Redshift guarda como VARCHAR(256)).
@@ -108,8 +100,8 @@ def write_manifest(location: S3Location, key_suffix: str, table: DeltaTable, mon
     """Grava o manifesto do ``COPY`` com os arquivos do snapshot (de um mês, quando informado) e devolve a URI.
 
     A URL de cada entrada é a pasta da tabela mais o ``path`` da ação ``add``. ``DeltaTable.table_uri``
-    termina em barra, e a barra dobrada fez o ``COPY`` do ambiente alvo responder ``File not found``
-    em 2026-09-21: uma chave S3 com ``//`` é outra chave. O ``path`` pode vir codificado como URL
+    termina em barra, que sai antes da junção: uma chave S3 com ``//`` é outra chave, e o ``COPY``
+    responde ``File not found`` (ambiente alvo, 2026-09-21). O ``path`` pode vir codificado como URL
     (o protocolo Delta o permite; o delta-rs 1.6.4 grava ``mes=2026-01/...`` sem codificar), e a
     chave do objeto é a forma decodificada.
     """
@@ -118,11 +110,11 @@ def write_manifest(location: S3Location, key_suffix: str, table: DeltaTable, mon
 
     # Cada entrada leva a URL do arquivo e o content_length, obrigatório para arquivos Parquet.
     base = table.table_uri.rstrip("/")
-    entries = [
-        {"url": f"{base}/{unquote(path)}", "mandatory": True, "meta": {"content_length": size}}
-        for path, size, partition in rows
-        if month is None or partition == month
-    ]
+    entries = []
+    for path, size, partition in rows:
+        if month is not None and partition != month:
+            continue
+        entries.append({"url": f"{base}/{unquote(path)}", "mandatory": True, "meta": {"content_length": size}})
     record(f"redshift.copy.manifest.{key_suffix.rsplit('/', 1)[-1].removesuffix('.json')}", entries[0]["url"] if entries else "(vazio)")
 
     key = f"{location.prefix}/{key_suffix}"
@@ -174,8 +166,8 @@ def test_session_and_named_parameters(redshift_session: RedshiftSession) -> None
     cursor.execute("select :mes as mes", {"mes": "2026-08"})
     assert cursor.fetchone()[0] == "2026-08"
 
-    # O que has_schema_privilege responde pelo esquema do datashare depois do USE é a leitura RS-5,
-    # ainda sem resposta no ambiente alvo; a prova do privilégio é o CREATE TABLE do ida e volta.
+    # has_schema_privilege responde false pelo esquema do datashare depois do USE (leitura RS-5,
+    # plan/POC.md): fica como leitura, e a prova do privilégio é o CREATE TABLE do ida e volta.
     record("redshift.has_schema_privilege_create", reading(lambda: session.execute("select has_schema_privilege(%s, 'CREATE')", (session.schema,))[0][0]))
 
 
@@ -197,8 +189,10 @@ def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession
     assert len(cursor._cached_rows) == 5
 
     batches = []
-    while rows := cursor.fetchmany(2):
+    rows = cursor.fetchmany(2)
+    while rows:
         batches.append(pa.RecordBatch.from_pylist([dict(zip(names, row)) for row in rows], schema=schema))
+        rows = cursor.fetchmany(2)
     assert [batch.num_rows for batch in batches] == [2, 2, 1]
 
     table = pa.Table.from_batches(batches)
@@ -321,13 +315,14 @@ def test_copy_column_list_and_fillrecord(redshift_session: RedshiftSession, s3_l
         "fillrecord": f"COPY {qualified} FROM '{manifest}' {credentials} FORMAT AS PARQUET MANIFEST FILLRECORD",
     }
 
-    # O COPY é registrado antes da contagem, que é um comando repetido depois de um TRUNCATE: nas
-    # execuções de 2026-09-21 às 12:08 e 12:10 a terceira volta recebeu 34510 dela, com o resultado do
-    # FILLRECORD perdido (plan/POC.md). A conexão da sessão prepara cada comando logo antes de o executar.
+    # O COPY é registrado antes da contagem: a contagem repete um comando depois de um TRUNCATE, e uma
+    # recusa dela não apaga o resultado do COPY. A conexão da sessão prepara cada comando logo antes
+    # de o executar (max_prepared_statements=0), sem o prepared statement guardado que o datashare
+    # recusa com 34510 depois de um TRUNCATE.
     results = {}
     for label, sql in attempts.items():
         session.execute(f"TRUNCATE {qualified}")
-        results[label] = outcome(lambda sql=sql: session.execute(sql))
+        results[label] = outcome(functools.partial(session.execute, sql))
         record(f"redshift.copy.{label}", results[label])
         if results[label] == "ok":
             loaded, nulls = session.execute(f"select count(*), count(*) - count(canal) from {qualified}")[0]
@@ -347,15 +342,14 @@ def test_repeated_statement_after_truncate_and_the_driver_cache(redshift_session
 
     O ``redshift_connector`` guarda um prepared statement nomeado por texto de comando, o reaproveita
     no ``execute`` seguinte com ``Bind`` e ``Execute`` sem novo ``Parse``, e só descarta os guardados
-    depois de ``ALTER``, ``CREATE``, ``DROP`` e ``ROLLBACK``. Nas execuções de 2026-09-21 às 12:08 e
-    12:10 no ambiente alvo, o ``select count(*)`` de ``test_copy_column_list_and_fillrecord``
-    reprovou na terceira volta com ``[Data Sharing] Error Code 34510: Concurrent DDL committed on
-    <tabela> between Prepare and Execute`` (``plan/POC.md``): o ``TRUNCATE`` da volta é o DDL. A
-    conexão da sessão vai com ``max_prepared_statements=0`` desde então, e passou aqui às 13:35 e às
-    13:39 do mesmo dia; a segunda conexão deste teste mantém o padrão do driver e registra o que o
-    Redshift responde: ``34510`` na repetição e de novo na segunda repetição (a entrada guardada
-    fica), ``ok`` depois de um ``ALTER`` (que o driver reconhece) e ``ok`` numa tabela temporária do
-    banco da conexão (a recusa é do datashare).
+    depois de ``ALTER``, ``CREATE``, ``DROP`` e ``ROLLBACK``. O datashare recusa a repetição guardada
+    depois de um ``TRUNCATE`` com ``[Data Sharing] Error Code 34510: Concurrent DDL committed on
+    <tabela> between Prepare and Execute``, e por isso a conexão da sessão vai com
+    ``max_prepared_statements=0``. A segunda conexão deste teste mantém o padrão do driver; no
+    ambiente alvo, em 2026-09-21 às 13:35 e às 13:39 (``plan/POC.md``), ela leu ``34510`` na
+    repetição e de novo na segunda repetição (a entrada guardada fica), ``ok`` depois de um
+    ``ALTER`` (que o driver reconhece) e ``ok`` numa tabela temporária do banco da conexão (a recusa
+    é do datashare).
     """
     session = redshift_session
     name = session.table("cache")
@@ -519,8 +513,8 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     record("redshift.unload.partition_by", unload)
 
     # PARTITION BY MANIFEST VERBOSE, que a documentação não lista, passou no ambiente alvo em
-    # 2026-09-21 (examples/redshift_manifest.py). O pulo continua para o ambiente que recusar, mas
-    # lá ele é regressão, não pergunta em aberto.
+    # 2026-09-21 (examples/redshift_manifest.py). O pulo cobre o ambiente que recusar, e lá a recusa
+    # é regressão.
     if unload != "ok" and session.share_database:
         pytest.skip(f"UNLOAD ... PARTITION BY recusado no datashare {session.share_database}: {unload}")
     assert unload == "ok", unload
@@ -587,8 +581,15 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     # da etapa 5. Leituras: a etapa 5 fixa o destino pelo que elas disserem.
     parent = s3_location.child("redshift/unload")
     for label, target in (("same_prefix", f"{destination}/"), ("parent_prefix", f"{parent}/"), ("new_subprefix", f"{destination}/segunda/")):
-        result = outcome(lambda target=target: session.execute(f"UNLOAD ('{select}') TO '{target}' {session.credentials_clause()} FORMAT AS PARQUET PARTITION BY (mes)"))
-        record(f"redshift.unload.destination.{label}", result)
+        sql = f"UNLOAD ('{select}') TO '{target}' {session.credentials_clause()} FORMAT AS PARQUET PARTITION BY (mes)"
+        record(f"redshift.unload.destination.{label}", outcome(functools.partial(session.execute, sql)))
+
+
+def cell_value(cell: dict) -> object:
+    """O valor de uma célula da Data API: o único item do dicionário, ou ``None`` com ``isNull``."""
+    if cell.get("isNull"):
+        return None
+    return next(iter(cell.values()))
 
 
 def test_data_api_runs_the_statement_and_pages_the_result(redshift_session: RedshiftSession) -> None:
@@ -628,7 +629,8 @@ def test_data_api_runs_the_statement_and_pages_the_result(redshift_session: Reds
     rows: list[list[object]] = []
     for page in client.get_paginator("get_statement_result").paginate(Id=statement):
         columns = columns or [column["name"] for column in page["ColumnMetadata"]]
-        rows.extend([None if cell.get("isNull") else next(iter(cell.values())) for cell in raw] for raw in page["Records"])
+        for record_cells in page["Records"]:
+            rows.append([cell_value(cell) for cell in record_cells])
 
     assert columns == ["id", "valor", "texto"]
     assert [row[0] for row in rows] == [1, 2]
@@ -638,12 +640,13 @@ def test_data_api_runs_the_statement_and_pages_the_result(redshift_session: Reds
 
 
 def test_parallel_copy_and_unload_on_two_connections(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
-    """Duas tabelas carregadas por ``COPY ... MANIFEST`` e descarregadas por ``UNLOAD`` em paralelo, uma conexão por thread.
+    """Duas tabelas carregadas por ``COPY ... MANIFEST`` e descarregadas por ``UNLOAD`` em paralelo, uma conexão por tabela.
 
-    O ``redshift_connector`` declara ``threadsafety`` 1: a conexão da sessão não é compartilhada
-    entre threads, e cada tarefa abre a sua pela mesma resolução de ``connect_redshift``, que pede
-    uma credencial temporária por conexão. O motor da biblioteca guarda essa conexão num
-    ``threading.local``.
+    O ``redshift_connector`` declara ``threadsafety`` 1: uma conexão não serve a duas threads ao
+    mesmo tempo, e cada tarefa abre a sua pela mesma resolução de ``connect_redshift``, que pede
+    uma credencial temporária por conexão. É o caminho de ``publish_redshift`` da etapa 8, uma
+    conexão por tabela; o motor da etapa 5 guarda uma sessão só por execução, sob um
+    ``threading.RLock``, e os comandos do pipeline correm nela em série.
     """
     session = redshift_session
     two_months = sample_table().slice(ROWS // 2 - 500, 1000)
@@ -667,33 +670,29 @@ def test_parallel_copy_and_unload_on_two_connections(redshift_session: RedshiftS
         finally:
             connection.close()
 
+    def copy_into_target(k: int) -> int:
+        """O ``COPY`` do manifesto ``k`` na tabela ``k``, numa conexão própria; devolve a contagem."""
+        sql = f"COPY {session.qualified(targets[k])} FROM '{manifests[k]}' {session.credentials_clause()} FORMAT AS PARQUET MANIFEST"
+        return on_own_connection(sql, session.qualified(targets[k]))
+
     # 1. Dois COPY em paralelo, em tabelas distintas: cada um numa conexão, limitados pelas slots do WLM.
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=2) as pool:
-        counts = list(
-            pool.map(
-                lambda k: on_own_connection(
-                    f"COPY {session.qualified(targets[k])} FROM '{manifests[k]}' {session.credentials_clause()} FORMAT AS PARQUET MANIFEST",
-                    session.qualified(targets[k]),
-                ),
-                range(2),
-            )
-        )
+        counts = list(pool.map(copy_into_target, range(2)))
     record("redshift.parallel.copy_two_tables", f"{time.perf_counter() - started:.1f} s")
     assert counts == [1000, 1000]
 
     # 2. Dois UNLOAD em paralelo, para prefixos distintos.
     destinations = [s3_location.child(f"redshift/unload_paralelo_{k}") for k in range(2)]
+
+    def unload_target(k: int) -> int:
+        """O ``UNLOAD`` da tabela ``k`` para o prefixo ``k``, numa conexão própria."""
+        sql = f"UNLOAD ('select * from {session.qualified(targets[k])}') TO '{destinations[k]}/' {session.credentials_clause()} FORMAT PARQUET"
+        return on_own_connection(sql)
+
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=2) as pool:
-        list(
-            pool.map(
-                lambda k: on_own_connection(
-                    f"UNLOAD ('select * from {session.qualified(targets[k])}') TO '{destinations[k]}/' {session.credentials_clause()} FORMAT PARQUET"
-                ),
-                range(2),
-            )
-        )
+        list(pool.map(unload_target, range(2)))
     record("redshift.parallel.unload_two_tables", f"{time.perf_counter() - started:.1f} s")
     for destination in destinations:
         files = s3_location.data_files(destination)

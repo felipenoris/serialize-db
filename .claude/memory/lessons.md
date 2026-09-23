@@ -306,3 +306,43 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   with the prefix empty. The first run of `tests/test_sql.py` parsed the versioned files with the
   sentinel. The test now parses the versioned file of every statement, and the three documents
   were revised in the same commit. `plan/POC.md`
+- **A conversion rule is probed with every input type and parameter that reaches it** (2026-09-22).
+  `cast` measured text only when the input column was `string` (`pa.types.is_string`), which is
+  false for `large_string`, the type `pa.Table.from_pandas` gives the pandas 3 `str`, and for
+  `string_view` and dictionary; a pipeline in pandas with the numpy backend would have passed text
+  above `String(n)` to the Redshift `COPY`, which the byte measure existed to prevent. The same
+  review found the integer detour `decimal128(p + 3, s)` right only for `Numeric(18, 2)`: the cast
+  needs the precision of the whole integer type (19 digits plus the scale for `int64`), and
+  `p + 3 = 21` was a coincidence of the one case measured. Both rules were written from a single
+  measurement and asserted on it. The fix measures text after the conversion to the contract type,
+  and the tests feed each input type the pandas paths produce. `plan/POC.md`, `plan/PLAN-STAGE-1.md`
+- **A comparison between two designs runs both under the same conditions** (2026-09-22). The first
+  probe of the single session put the new design on a file-backed DuckDB database, the stage 4
+  default, against the cursor sketches of `test_parallel.py` on an in-memory one, and read the
+  three-stage pipeline six times slower (0.699 s against 0.110 s). Profiling the parts showed the
+  `INSERT` into a file database dominating; on the same database kind the single session with
+  Arrow IPC files was faster on a file (0.400 s against 0.565 s) and 20% slower in memory. A
+  timing that decides a design is taken best of three, on the same database, the same data and the
+  same batch size, for every alternative. `plan/POC.md`
+- **A library's warning is a reading, never a guard** (2026-09-22). `plan/sqlalchemy.md` said since
+  2026-09-19 that a valueless `bindparam` and `text("mes = :mes")` both render `mes = NULL` under
+  `literal_binds` with a `SAWarning`, and the stage 2 draft of 2026-09-21 turned that warning into
+  an error. The review of the study suites probed seven forms: the warning fires only for the two
+  `=` comparisons (`coluna = :mes`, `upper(coluna) = upper(:mes)`), and `LIKE`, `coalesce`, a
+  `select` column, the `VALUES` of an `INSERT` and `text()` render `NULL` silently, while
+  `compiled.binds` marks the parameter `required` in all seven. The warning-based guard would have
+  let five of seven through, and the claim about `text()` had been generalized from the one case
+  the draft ran. `render` already read `compiled.binds` for thread safety; the documents now give
+  the second reason. `plan/POC.md`, `plan/sqlalchemy.md`, `plan/PLAN-STAGE-2.md`
+- **A requirement is measured in the user's own words before it is reported kept** (2026-09-23).
+  On 2026-09-22 the user asked that the client work on the next or previous batch while the
+  connection does I/O, and the single-session design was reported as keeping the requirement:
+  the client's work overlapped the reading of the spool file, but the query ran whole before the
+  first batch, so the connection's I/O never overlapped the client. The pipeline measurement had
+  no client work in it, and the design read faster than the cursors. The user's next question
+  ("did the first batch arrive differently before?") exposed it; timing the first batch and the
+  total with 2 ms and 5 ms of client work per batch gave 0.472 s against 0.003 s and 1.330 s
+  against 0.842 s, and the stream now writes each batch while the query runs (0.005 s and
+  0.939 s). A requirement that names what overlaps with what is timed on exactly that overlap,
+  with the work it names, and a design that keeps it in a weaker form says so in the report.
+  `plan/POC.md`

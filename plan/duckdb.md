@@ -458,7 +458,9 @@ e cem `cursor()` mais `close()` levaram 0,4 ms. Sem `ORDER BY` o primeiro lote c
 consulta (3 ms em 20.000.000 de linhas); com `ORDER BY`, o `execute` só volta depois da ordenação
 inteira (2,4 s) e os lotes vêm em seguida. Um erro que a consulta encontra no meio da leitura chega
 ao Python como `OSError` com a mensagem do DuckDB, não como `duckdb.Error` (2026-09-20,
-`test_duckdb.py`, `test_parallel.py`).
+`test_duckdb.py`, `test_parallel.py`). A sessão única da biblioteca consome o leitor inteiro num
+arquivo antes do comando seguinte, lote a lote numa thread, e o cliente lê cada lote gravado
+enquanto a consulta continua (2026-09-23, [`POC.md`](POC.md)).
 
 Parâmetros: `?` posicional, `$1` numerado e reutilizável, `$nome` nomeado com um dicionário. A API
 relacional (`con.sql(...)`, `con.table('operacoes').filter(...)`) monta consultas preguiçosas e
@@ -489,9 +491,11 @@ confere os lotes contra o esquema declarado, e o `arrow_scan` lê os buffers por
 lote com as colunas em outra ordem entra sem erro com os bytes trocados, `(1, 1.0)` lido como
 `(4607182418800017408, 5e-324)`; uma coluna a mais ou a menos falha com `ArrowArray struct has 3
 children, expected 2`. A nulidade do esquema Arrow não é conferida; a coluna `NOT NULL` da tabela é.
-A biblioteca faz o `cast` de cada lote antes de registrá-lo e insere lote a lote, um `RecordBatch` em
-memória por comando dentro de uma transação, cerca de 3,5 ms por comando, sem entregar gerador ao
-DuckDB (2026-09-20, `test_duckdb.py`, `test_parallel.py`).
+Um `INSERT` por lote, um `RecordBatch` em memória por comando dentro de uma transação, custa cerca
+de 3,5 ms por comando (2026-09-20). A biblioteca faz o `cast` de cada lote, grava os lotes num
+arquivo Arrow IPC com LZ4 fora da sessão e os insere num único comando sobre o leitor do arquivo,
+que é nativo e não traz a leitura antecipada de um gerador Python (2026-09-22, `test_duckdb.py`,
+`test_parallel.py`, [`POC.md`](POC.md)).
 
 Conflitos em chave primária ou `UNIQUE`:
 
@@ -694,33 +698,34 @@ Em Python, o `RETURN_STATS` devolve uma linha por arquivo gravado, e `column_sta
 dicionário de dicionários de texto:
 
 ```python
-# Conferência do arquivo exportado pelo RETURN_STATS: nulos em colunas NOT NULL e intervalo do mês.
+# Conferência do arquivo exportado pelo RETURN_STATS: nulos em colunas NOT NULL e data_ref dentro da partição.
 import os
 
-def export_month(con: duckdb.DuckDBPyConnection, month: str, folder: str) -> dict[str, dict[str, str]]:
-    destination = f"{folder}/mes={month}/exec_abc123.parquet"
+def export_partition(con: duckdb.DuckDBPyConnection, value: str, folder: str) -> dict[str, dict[str, str]]:
+    destination = f"{folder}/mes={value}/exec_abc123.parquet"
     os.makedirs(os.path.dirname(destination), exist_ok=True)         # o COPY não cria a pasta
     (row,) = con.execute(f"""
         COPY (SELECT id_operacao, data_ref, id_cliente, valor, descricao FROM operacoes
               WHERE mes = ? ORDER BY data_ref, id_operacao)
-        TO '{destination}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000, RETURN_STATS)""", [month]).fetchall()
+        TO '{destination}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000, RETURN_STATS)""", [value]).fetchall()
     stats = row[4]      # filename, count, file_size_bytes, footer_size_bytes, column_statistics, partition_keys
     columns = {name.strip('"'): values for name, values in stats.items()}   # as chaves vêm entre aspas
     for name in ("id_operacao", "data_ref", "id_cliente", "valor"):
         if columns[name]["null_count"] != "0":
             raise ValueError(f"{name}: {columns[name]['null_count']} nulos em coluna NOT NULL")
-    if not (columns["data_ref"]["min"][:7] == month == columns["data_ref"]["max"][:7]):
-        raise ValueError(f"data_ref fora do mês {month}: {columns['data_ref']['min']} a {columns['data_ref']['max']}")
+    if not (columns["data_ref"]["min"][:7] == value == columns["data_ref"]["max"][:7]):
+        raise ValueError(f"data_ref fora da partição {value}: {columns['data_ref']['min']} a {columns['data_ref']['max']}")
     return columns
 
-export_month(con, "2026-08", "operacoes")["valor"]
+export_partition(con, "2026-08", "operacoes")["valor"]
 # {'column_size_bytes': '264685', 'max': '99994.51', 'min': '0.04', 'null_count': '0', 'num_values': '149991'}
 ```
 
 Os valores `min`, `max`, `null_count`, `num_values` e `column_size_bytes` são strings, inclusive para
-`DECIMAL` e `DATE` (`'2026-08-01'` a `'2026-08-31'` para `data_ref`). O `?` do mês é aceito dentro da
-consulta do `COPY`. Os mesmos valores alimentam a `AddAction` do registro do arquivo na tabela Delta
-([delta.md](delta.md)).
+`DECIMAL` e `DATE` (`'2026-08-01'` a `'2026-08-31'` para `data_ref`). O `?` do valor da partição é
+aceito dentro da consulta do `COPY`. É o `COPY` de `export_partition` no modo `register` da
+[etapa 4](PLAN-STAGE-4.md), e os mesmos valores alimentam a `AddAction` do registro do arquivo na
+tabela Delta ([delta.md](delta.md)).
 
 ## Recomendações de performance
 
@@ -770,6 +775,30 @@ Sem `temp_directory`, um banco em arquivo transborda para `<arquivo>.tmp` ao lad
 memória para `.tmp` no diretório corrente; `max_temp_directory_size` limita o transbordo a 90 % do
 espaço livre do disco por padrão. `8GB` aparece como `7.4 GiB` porque o limite é lido em bytes
 decimais e exibido em unidades binárias.
+
+O `threads` é da instância do banco, não da conexão: `duckdb_settings()` o dá com escopo `GLOBAL`,
+`SET SESSION threads` é recusado (`option "threads" cannot be set locally`), e o valor que uma
+conexão grava é o que as outras leem. O pool vale para todas as conexões e cursores da instância, e
+a thread que chama cada conexão também executa a consulta dela, ao lado do pool (`external_threads`,
+1 por padrão). Numa varredura de 100.000.000 de linhas em memória, com 11 núcleos (DuckDB 1.5.5,
+2026-09-23, melhor de três), cada linha é o tempo de uma consulta sozinha e o de duas e de quatro
+conexões em threads Python distintas, juntas:
+
+| `threads` | Uma | Duas juntas | Quatro juntas |
+| --- | --- | --- | --- |
+| 1 | 0,608 s | 0,622 s | 0,639 s |
+| 2 | 0,310 s | 0,473 s | 0,600 s |
+| 4 | 0,159 s | 0,269 s | 0,449 s |
+| 8 | 0,097 s | 0,175 s | 0,326 s |
+| 11, o padrão | 0,079 s | 0,160 s | 0,313 s |
+| 22 | 0,078 s | 0,156 s | 0,307 s |
+
+Com `threads` igual aos núcleos, uma varredura grande já ocupa a máquina, e as conexões juntas levam
+o tempo delas em série; mais threads que núcleos não mudam nada num trabalho de CPU. Uma conexão a
+mais ganha quando a consulta não ocupa os núcleos: menos de `k × 122.880` linhas, um operador que
+não se paraleliza (quatro `SELECT sum(hash(range)) FROM range(300_000_000)` juntos levaram 2,014 s
+contra 1,777 s de um com `threads = 1`, e 2,042 s contra 1,904 s com 11, porque a função `range` gera
+as linhas numa thread só) ou a espera do S3, onde cada thread faz uma requisição HTTP por vez.
 
 ### Organização das tabelas para filtros por chave e joins
 

@@ -58,7 +58,7 @@ from probelib import (  # noqa: E402
 )
 
 # Os pacotes lidos em cada interpretador: os fixados pelo projeto (as dependências de execução e o grupo
-# `dev` de pyproject.toml, com o sqlglot desde 2026-09-22), os que a suíte de estudo usa, os opcionais das etapas seguintes (ADBC para leitura
+# `dev` de pyproject.toml), os que a suíte de estudo usa, os opcionais das etapas seguintes (ADBC para leitura
 # do Redshift, pdoc para a documentação) e os que o espaço já traz.
 PACKAGES = (
     "deltalake", "duckdb", "pyarrow", "boto3", "botocore", "redshift_connector", "sqlalchemy", "duckdb_engine",
@@ -108,7 +108,7 @@ def package_version(name: str) -> str | None:
 
 def pinned_requirements() -> dict[str, str | None]:
     """Os pacotes das dependências de execução e do grupo ``dev`` de ``pyproject.toml`` pelo nome de importação,
-    com a versão quando ela é ``==``; os dialetos passaram de um para o outro na etapa 2 (2026-09-22)."""
+    com a versão quando ela é ``==``."""
     with open(probelib.REPO_ROOT / "pyproject.toml", "rb") as handle:
         pyproject = tomllib.load(handle)
     entries = pyproject.get("project", {}).get("dependencies", []) + pyproject.get("dependency-groups", {}).get("dev", [])

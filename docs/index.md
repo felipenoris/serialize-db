@@ -186,9 +186,13 @@ done.schema.names   # ["id_operacao", "data", "operacao", "valor", "data_str"]
 O que `cast` recusa, com `serialize_db.errors.ContractError` e a instrução ao cliente na mensagem:
 nulo em coluna `NOT NULL`, `double` fora da escala de um `Numeric`, `timestamp` com hora numa
 coluna `Date`, documento JSON como `struct`, texto acima de `String(n)` (medido em bytes, como o
-`VARCHAR(n)` do Redshift), texto acima de 65.535 bytes numa coluna `Text`, escala perdida num decimal, nanossegundo não nulo num timestamp, estouro
-de inteiro e um lote sem coluna alguma do contrato. Um `double` entra numa coluna `Numeric` só
-quando `round` o devolve igual; numa coluna `Double` ele entra como chega.
+`VARCHAR(n)` do Redshift), texto acima de 65.535 bytes numa coluna `Text`, escala perdida num
+decimal, inteiro que não cabe na precisão de um `Numeric`, nanossegundo não nulo num timestamp,
+estouro de inteiro, um tipo sem conversão para o do contrato (`struct` numa coluna `Integer`) e um
+lote sem coluna alguma do contrato. O texto é medido depois da conversão para `string`, então o
+`large_string` do `str` do pandas 3, o `string_view` e o dicionário da `category` passam pela mesma
+medida. Um `double` entra numa coluna `Numeric` só quando `round` o devolve igual; numa coluna
+`Double` ele entra como chega.
 
 ### Versionar os arquivos de esquema
 

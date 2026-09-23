@@ -1,17 +1,21 @@
 """Leitura e escrita em paralelo em cada tecnologia, e as APIs da implementação do paralelismo.
 
-Sem gravar arquivo: a conexão por thread do motor (``threading.local`` sobre ``cursor()``), a saída
-em lotes ``BatchStream`` (a consulta num cursor próprio e uma thread que pré-busca os lotes numa fila
-limitada) e a entrada em lotes ``Loader`` (o cliente empurra lotes numa fila e uma thread roda um
-único ``INSERT``), o pipeline de três estágios que as encadeia, o pool de ``ingest`` e ``publish``
-que termina o que está em curso e cancela o que não começou na primeira falha
-(``shutdown(cancel_futures=True)``), a barreira por tabela com ``Condition`` e as tabelas de um
-statement por ``find_tables`` ou pelo sentinela ``{prefix}``. Sob a raiz local (marcador
-``local``): várias tabelas Delta lidas em paralelo pelo delta-rs e ingeridas em paralelo no DuckDB
-por ``delta_scan`` em cursores; escritas Delta em paralelo em tabelas distintas e em meses distintos
+Sem gravar arquivo: a sessão única do motor (uma conexão e um ``RLock``, a tabela temporária que
+vale para todas as threads e ``session`` reentrante), a sessão a mais de ``new_session`` (outra
+conexão ao mesmo banco, com o seu lock, que vê o que a principal confirmou e não as tabelas
+temporárias dela), o pool de ``publish`` que termina o que está em curso e cancela o que não começou
+na primeira falha (``shutdown(cancel_futures=True)``), a barreira por tabela com ``Condition`` e as
+tabelas de um statement por ``find_tables`` ou pelo sentinela ``{prefix}``. Sob a raiz local
+(marcador ``local``): a saída em lotes ``BatchStream`` (uma thread roda a consulta sob o lock e grava
+cada lote num arquivo Arrow IPC assim que o DuckDB o entrega, e o cliente lê cada lote gravado
+enquanto a consulta continua) e a entrada em lotes ``Loader`` (uma thread grava os lotes num arquivo,
+e o ``close`` roda um único ``INSERT``), o pipeline de três estágios que as encadeia; várias tabelas
+Delta lidas em paralelo pelo delta-rs e ingeridas em paralelo no DuckDB por ``delta_scan``, uma
+sessão a mais por tabela; escritas Delta em paralelo em tabelas distintas e em meses distintos
 da mesma tabela, e o conflito de dois escritores no mesmo mês; o início do alocador de
 identificadores pelas estatísticas dos arquivos, com a varredura como reserva; cargas Arrow e
-exportações ``COPY ... TO`` em paralelo no DuckDB. Os tempos são leituras do relatório.
+exportações ``COPY ... TO`` pedidas por várias threads à sessão única. Os tempos são leituras do
+relatório.
 
 O Redshift está em ``test_redshift.py`` (``test_parallel_copy_and_unload_on_two_connections``).
 """
@@ -19,14 +23,17 @@ O Redshift está em ``test_redshift.py`` (``test_parallel_copy_and_unload_on_two
 from __future__ import annotations
 
 import decimal
+import functools
 import json
 import queue
 import re
 import threading
 import time
-from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import uuid
+from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
@@ -42,7 +49,7 @@ from deltalake.transaction import AddAction
 from sqlalchemy.sql.util import find_tables
 
 from conftest import LocalLocation, record
-from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
+from poc_delta import MONTHS, ROWS, connect_duckdb, run_in_threads, sample_table
 
 FOUR_MONTHS = ("2026-01", "2026-02", "2026-03", "2026-04")
 
@@ -56,158 +63,260 @@ def four_month_table(con: duckdb.DuckDBPyConnection, rows: int = 400_000) -> pa.
     return con.execute(sql).to_arrow_table()
 
 
-def run_in_threads(actions: list[Callable[[], object]]) -> float:
-    """Roda as ações em threads, uma por ação, e devolve o tempo até a última terminar."""
-    threads = [threading.Thread(target=action) for action in actions]
-    started = time.perf_counter()
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    return time.perf_counter() - started
-
-
 # --- As APIs da implementação -------------------------------------------------------------------
 
 
 class SandboxEngine:
-    """O esboço do motor DuckDB com uma conexão por thread.
+    """O esboço do motor DuckDB com uma sessão por execução: uma conexão e um ``RLock``.
 
-    A conexão raiz abre o banco; cada thread recebe um ``cursor()`` dela no primeiro uso, guardado
-    num ``threading.local``, e ``cleanup`` fecha todos. O código cliente chama ``query`` e ``load``
-    de qualquer thread sem ver conexão; ``connection`` é a conexão crua da thread.
+    Todo comando toma o lock pelo tempo do comando e o solta ao terminar, e quem segura o lock nunca
+    espera pelo código do cliente: é o que deixa várias threads usarem uma conexão que o ``duckdb``
+    declara ``threadsafety`` 1. Uma tabela temporária criada por um comando vale para os
+    seguintes, de qualquer thread. ``session`` dá a conexão crua com o lock tomado pelo bloco; o
+    ``RLock`` deixa uma primitiva ser chamada dentro do bloco, na mesma thread, sem travar.
+    ``new_session`` abre uma sessão a mais sobre o mesmo banco, com a sua conexão e o seu lock, para o
+    que roda em paralelo: ela vê o que esta sessão confirmou, não as tabelas temporárias dela.
+    ``folder`` é a pasta de transbordo de ``BatchStream`` e de ``Loader``.
     """
 
-    def __init__(self, path: str = ":memory:") -> None:
-        self._root = duckdb.connect(path, config={"threads": 2})
-        self._local = threading.local()
-        self._cursors: list[duckdb.DuckDBPyConnection] = []
-        self._lock = threading.Lock()
+    def __init__(self, database: str = ":memory:", folder: str | None = None, connection: duckdb.DuckDBPyConnection | None = None) -> None:
+        # Uma sessão nova abre o banco; a de new_session recebe a conexão duplicada da principal.
+        self._connection = connection if connection is not None else duckdb.connect(database, config={"threads": 2})
+        self._lock = threading.RLock()
+        self._owner: int | None = None  # a thread dentro de session, que BatchStream consulta
+        self.folder = folder
 
-    @property
-    def connection(self) -> duckdb.DuckDBPyConnection:
-        cursor = getattr(self._local, "cursor", None)
-        if cursor is None:
-            cursor = self._root.cursor()
-            self._local.cursor = cursor
-            with self._lock:
-                self._cursors.append(cursor)
+    @contextmanager
+    def session(self) -> Iterator[duckdb.DuckDBPyConnection]:
+        with self._lock:
+            outer_owner = self._owner
+            self._owner = threading.get_ident()
+            try:
+                yield self._connection
+            finally:
+                self._owner = outer_owner
 
-        return cursor
+    def holds_session(self) -> bool:
+        """Verdadeiro na thread que está dentro de ``session``: ali, outra thread que pedisse a sessão esperaria o bloco."""
+        return self._owner == threading.get_ident()
+
+    def new_session(self) -> SandboxEngine:
+        """Uma sessão a mais sobre o mesmo banco: ``cursor()`` é outra conexão, com as suas tabelas temporárias e a sua transação."""
+        with self.session() as connection:
+            return SandboxEngine(folder=self.folder, connection=connection.cursor())
 
     def query(self, sql: str) -> pa.Table:
-        return self.connection.execute(sql).to_arrow_table()
+        with self.session() as connection:
+            return connection.execute(sql).to_arrow_table()
 
     def load(self, name: str, data: pa.Table) -> None:
-        # O registro da tabela Arrow vale só na conexão que o fez, por isso entra e sai na mesma chamada.
-        connection = self.connection
-        connection.register("data_in", data)
-        connection.execute(f"CREATE TABLE {name} AS SELECT * FROM data_in")
-        connection.unregister("data_in")
+        # O registro da tabela Arrow e o CREATE correm no mesmo bloco: outra thread nunca vê o nome registrado.
+        with self.session() as connection:
+            connection.register("data_in", data)
+            connection.execute(f"CREATE TABLE {name} AS SELECT * FROM data_in")
+            connection.unregister("data_in")
+
+    def spool_path(self, kind: str) -> str:
+        """Um caminho novo na pasta de transbordo, para o arquivo de um stream ou de um loader."""
+        if self.folder is None:
+            raise ValueError("o motor sem pasta de transbordo não abre stream nem loader")
+        return str(Path(self.folder) / f"{kind}_{uuid.uuid4().hex}.arrow")
 
     def cleanup(self) -> None:
         with self._lock:
-            for cursor in self._cursors:
-                cursor.close()
-        self._root.close()
+            self._connection.close()
+
+    def __enter__(self) -> SandboxEngine:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.cleanup()
 
 
-def test_engine_hands_each_thread_its_own_cursor() -> None:
-    """Quatro threads carregam e consultam pelo mesmo motor: cada uma recebe um cursor próprio, todas veem as tabelas das outras, e ``cleanup`` fecha tudo."""
+def test_sandbox_serializes_threads_on_one_session() -> None:
+    """Quatro threads carregam e consultam pelo mesmo motor, uma de cada vez na sessão: todas veem as tabelas das outras, a tabela temporária de uma vale para as demais, e uma primitiva chamada dentro de ``session`` não trava."""
     engine = SandboxEngine()
-    cursors: dict[int, int] = {}
     counts: dict[int, int] = {}
 
     def work(k: int) -> None:
         engine.load(f"t{k}", pa.table({"x": pa.array(range(1000 * (k + 1)), pa.int64())}))
-        cursors[k] = id(engine.connection)
         counts[k] = engine.query(f"SELECT count(*) AS n FROM t{k}").column("n")[0].as_py()
 
-    run_in_threads([lambda k=k: work(k) for k in range(4)])
+    run_in_threads([functools.partial(work, k) for k in range(4)])
     assert counts == {0: 1000, 1: 2000, 2: 3000, 3: 4000}
-    assert len(set(cursors.values())) == 4 and id(engine.connection) not in cursors.values()
+    assert engine.query("SELECT list(table_name ORDER BY table_name) AS t FROM duckdb_tables() WHERE NOT temporary").column("t")[0].as_py() == ["t0", "t1", "t2", "t3"]
 
-    # A thread principal, no seu cursor, vê as quatro tabelas.
-    assert engine.query("SELECT list(table_name ORDER BY table_name) AS t FROM duckdb_tables()").column("t")[0].as_py() == ["t0", "t1", "t2", "t3"]
+    # A tabela temporária é da sessão, e a sessão é uma só: outra thread a lê.
+    engine.query("CREATE TEMP TABLE temporaria AS SELECT range AS id FROM range(10)")
+    seen: dict[str, int] = {}
+
+    def read_temporary() -> None:
+        seen["outra_thread"] = engine.query("SELECT count(*) AS n FROM temporaria").column("n")[0].as_py()
+
+    run_in_threads([read_temporary])
+    assert seen == {"outra_thread": 10}
+
+    # O bloco session segura a sessão; uma primitiva chamada nele, na mesma thread, entra no RLock.
+    with engine.session() as connection:
+        connection.execute("CREATE TABLE dentro_do_bloco AS SELECT 1 AS x")
+        assert engine.query("SELECT count(*) AS n FROM dentro_do_bloco").column("n")[0].as_py() == 1
+        assert engine.holds_session()
+    assert not engine.holds_session()
 
     engine.cleanup()
     with pytest.raises(duckdb.ConnectionException, match="Connection already closed"):
         engine.query("SELECT 1")
 
 
+def test_new_session_runs_beside_the_main_one() -> None:
+    """``new_session`` abre outra conexão ao mesmo banco, com o seu lock: ela vê as tabelas que a sessão principal confirmou e não as temporárias dela, roda enquanto a principal está tomada, e a principal vê o que ela confirma."""
+    engine = SandboxEngine()
+    engine.query("CREATE TABLE confirmada AS SELECT range AS id FROM range(10)")
+    engine.query("CREATE TEMP TABLE temporaria AS SELECT range AS id FROM range(10)")
+    with engine.new_session() as other:
+        assert other.query("SELECT count(*) AS n FROM confirmada").column("n")[0].as_py() == 10
+        with pytest.raises(duckdb.CatalogException, match="temporaria"):
+            other.query("SELECT count(*) FROM temporaria")
+
+        # A sessão principal tomada por um bloco não segura a outra, pedida por outra thread.
+        seen: dict[str, int] = {}
+
+        def count_on_the_other_session() -> None:
+            seen["n"] = other.query("SELECT count(*) AS n FROM confirmada").column("n")[0].as_py()
+
+        with engine.session():
+            run_in_threads([count_on_the_other_session])
+        assert seen == {"n": 10}
+
+        # O que a outra sessão confirma, a principal vê no comando seguinte.
+        other.query("CREATE TABLE da_outra AS SELECT 1 AS x")
+        assert engine.query("SELECT count(*) AS n FROM da_outra").column("n")[0].as_py() == 1
+    engine.cleanup()
+
+
 END = object()
 
+# O arquivo de transbordo: Arrow IPC em formato de fluxo, com LZ4. Em 20.000.000 de linhas de três
+# colunas, 162 MB contra 478 MB sem compressão, por 0,09 s a mais na escrita (2026-09-22, POC.md).
+SPOOL_OPTIONS = pa.ipc.IpcWriteOptions(compression="lz4")
 
-def offer(sink: queue.Queue[object], item: object, stop: threading.Event) -> bool:
-    """Põe ``item`` na fila com espera limitada; ``False`` quando ``stop`` chegou antes de haver lugar."""
-    while not stop.is_set():
+
+@dataclass
+class SpoolProgress:
+    """O que a thread de ``BatchStream`` conta ao cliente: os lotes já gravados no arquivo, o fim da consulta e o erro dela."""
+
+    condition: threading.Condition = field(default_factory=threading.Condition)
+    written: int = 0
+    done: bool = False
+    error: BaseException | None = None
+
+
+def take(source: queue.Queue[object], stop: threading.Event) -> object | None:
+    """O próximo item da fila, esperando em fatias de 50 ms; ``None`` quando ``stop`` chega com a fila vazia.
+
+    A espera com prazo deixa quem lê perceber o ``stop``, em vez de ficar preso num ``get`` sem fim;
+    nenhum item da fila é ``None``.
+    """
+    while True:
         try:
-            sink.put(item, timeout=0.05)
-            return True
-        except queue.Full:
-            continue
-    return False
+            return source.get(timeout=0.05)
+        except queue.Empty:
+            pass
+        if stop.is_set():
+            return None
 
 
-def pump(reader: pa.RecordBatchReader, sink: queue.Queue[object], stop: threading.Event) -> None:
-    """A thread de ``BatchStream``: puxa os lotes do leitor para a fila até o fim, o erro da consulta ou o ``stop``.
 
-    Recebe só o que usa, nunca o ``BatchStream``: sem esse ciclo de referências, um stream que o
-    cliente abandona é coletado, o ``__del__`` liga o ``stop``, e a thread termina.
+def produce(engine: SandboxEngine, sql: str, batch_size: int, path: str, stop: threading.Event, progress: SpoolProgress) -> None:
+    """Roda a consulta na sessão, sob o lock, e grava cada lote no arquivo de transbordo assim que o DuckDB o entrega.
+
+    Nunca espera pelo cliente: o lock sai quando o resultado acaba ou quando ``stop`` chega, com o
+    cliente ainda lendo o arquivo. Recebe só o que usa, nunca o ``BatchStream``: um stream que o
+    cliente abandona é coletado, o ``__del__`` liga o ``stop``, e a consulta para no lote seguinte.
     """
     try:
-        for batch in reader:
-            if not offer(sink, batch, stop):
-                return
-        offer(sink, END, stop)
-    except Exception as error:  # noqa: BLE001 - o erro da consulta vai ao consumidor
-        offer(sink, error, stop)
+        with engine.session() as connection:
+            reader = connection.execute(sql).to_arrow_reader(batch_size)
+            # O esquema entra no arquivo com o primeiro lote, ou no fechamento de um resultado vazio.
+            with pa.OSFile(path, "wb") as sink, pa.ipc.new_stream(sink, reader.schema, options=SPOOL_OPTIONS) as writer:
+                for batch in reader:
+                    if stop.is_set():
+                        return
+                    writer.write_batch(batch)
+                    with progress.condition:
+                        progress.written += 1
+                        progress.condition.notify_all()
+    except Exception as error:  # noqa: BLE001 - o erro da consulta vai ao cliente
+        progress.error = error
+    finally:
+        with progress.condition:
+            progress.done = True
+            progress.condition.notify_all()
 
 
 class BatchStream:
-    """O esboço da saída em lotes do motor (``stream`` da etapa 4).
+    """O esboço da saída em lotes do motor (``stream`` da etapa 4) numa sessão única.
 
-    A consulta roda num cursor próprio, e uma thread auxiliar puxa os lotes para uma fila de
-    ``prefetch`` lotes enquanto o cliente trabalha no lote atual; o cursor da thread do cliente fica
-    livre. ``close`` interrompe a thread e fecha o cursor; o erro da consulta aparece na construção
-    ou na leitura seguinte. Com ``prefetch=0`` não há thread, e o cliente puxa direto do leitor.
-    ``__arrow_c_stream__`` entrega o leitor a ``write_deltalake`` e a ``RecordBatchReader.from_stream``;
-    não ao ``register`` do DuckDB, cujo ``arrow_scan`` puxa o fluxo numa thread de leitura
-    antecipada do Arrow que continua chamando Python depois de o comando terminar
-    (``test_duckdb.py``); para levar lotes ao sandbox existe ``Loader``.
+    Uma thread roda a consulta na sessão, sob o lock, e grava cada lote num arquivo de transbordo
+    assim que o DuckDB o entrega; o cliente lê cada lote gravado, na sua thread, enquanto a consulta
+    continua. O primeiro lote chega antes de a consulta terminar, e a consulta termina sem esperar
+    pelo cliente: o lock sai com o resultado inteiro no arquivo, e o leitor do DuckDB, que o comando
+    seguinte na mesma conexão esvaziaria (``test_duckdb.py``), já foi consumido. Por isso nada trava:
+    outro comando, de qualquer thread, espera só a consulta. Dentro de ``session``, na mesma thread,
+    a consulta roda na thread do cliente, porque a outra esperaria o bloco, e o bloco o stream. O erro
+    que a consulta encontra antes do primeiro lote aparece na construção; o que ela encontra depois,
+    na leitura seguinte ao último lote gravado, e em cada leitura depois dela. ``close`` para a
+    consulta no lote seguinte e apaga o arquivo. ``__arrow_c_stream__`` entrega os lotes a
+    ``write_deltalake`` e a ``RecordBatchReader.from_stream``; não ao ``register`` do DuckDB, cujo
+    ``arrow_scan`` puxa o fluxo numa thread de leitura antecipada do Arrow que continua chamando
+    Python depois de o comando terminar (``test_duckdb.py``); para levar lotes ao sandbox existe
+    ``Loader``.
     """
 
-    def __init__(self, root: duckdb.DuckDBPyConnection, sql: str, batch_size: int = 100_000, prefetch: int = 2) -> None:
-        self._cursor = root.cursor()
-        try:
-            self._reader = self._cursor.execute(sql).to_arrow_reader(batch_size)
-        except Exception:
-            self._cursor.close()
-            raise
-        self.schema = self._reader.schema
+    def __init__(self, engine: SandboxEngine, sql: str, batch_size: int = 100_000) -> None:
+        # O stop e o caminho vêm antes de tudo: o __del__ de uma construção que falhou os usa.
         self._stop = threading.Event()
-        self._queue: queue.Queue[object] | None = queue.Queue(maxsize=prefetch) if prefetch > 0 else None
-        self._thread = threading.Thread(target=pump, args=(self._reader, self._queue, self._stop)) if self._queue is not None else None
-        if self._thread is not None:
+        self._path = engine.spool_path("stream")
+        self._progress = SpoolProgress()
+        self._source: pa.OSFile | None = None
+        self._read = 0
+        self._thread: threading.Thread | None = None
+        arguments = (engine, sql, batch_size, self._path, self._stop, self._progress)
+        if engine.holds_session():
+            produce(*arguments)
+        else:
+            self._thread = threading.Thread(target=produce, args=arguments)
             self._thread.start()
 
-    def read_next_batch(self) -> pa.RecordBatch:
-        if self._queue is None:
-            return self._reader.read_next_batch()
-        while True:
-            try:
-                item = self._queue.get(timeout=0.05)
-                break
-            except queue.Empty:
+        # A construção espera o primeiro lote ou o fim: o erro de uma consulta que nada entregou chega aqui.
+        if not self._wait_for_batch() and self._progress.error is not None:
+            self.close()
+            raise self._progress.error
+        self._source = pa.OSFile(self._path, "rb")
+        self._reader = pa.ipc.open_stream(self._source)
+        self.schema = self._reader.schema
+
+    def _wait_for_batch(self) -> bool:
+        """Espera um lote gravado e ainda não lido, ou o fim da consulta; ``True`` quando há lote.
+
+        A espera tem prazo e confere o ``stop``: quem puxa o stream pode ser a thread de leitura
+        antecipada de um leitor nativo, e ela não fica presa aqui depois de um ``close``.
+        """
+        with self._progress.condition:
+            while self._progress.written <= self._read and not self._progress.done:
                 if self._stop.is_set():
-                    raise StopIteration from None
-        if item is END:
-            self._queue.put(item)
+                    return False
+                self._progress.condition.wait(timeout=0.05)
+            return self._progress.written > self._read
+
+    def read_next_batch(self) -> pa.RecordBatch:
+        if not self._wait_for_batch():
+            if self._progress.error is not None:
+                raise self._progress.error
             raise StopIteration
-        if isinstance(item, Exception):
-            raise item
-        return item
+        batch = self._reader.read_next_batch()
+        self._read += 1
+        return batch
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
         while True:
@@ -225,13 +334,10 @@ class BatchStream:
     def close(self) -> None:
         self._stop.set()
         if self._thread is not None:
-            while True:  # esvazia a fila para a thread sair do put
-                try:
-                    self._queue.get_nowait()
-                except queue.Empty:
-                    break
             self._thread.join(timeout=10)
-        self._cursor.close()
+        if self._source is not None:
+            self._source.close()
+        Path(self._path).unlink(missing_ok=True)
 
     def __enter__(self) -> BatchStream:
         return self
@@ -240,62 +346,60 @@ class BatchStream:
         self.close()
 
     def __del__(self) -> None:
+        # O stream abandonado: a consulta para no lote seguinte, e o arquivo sai.
         self._stop.set()
+        Path(self._path).unlink(missing_ok=True)
 
 
-def insert_batches(cursor: duckdb.DuckDBPyConnection, table: str, source: queue.Queue[object], closed: threading.Event, outcome: dict[str, object]) -> None:
-    """A thread de ``Loader``: uma transação, um ``INSERT`` por lote tirado da fila, ``commit`` no fim e ``rollback`` em qualquer erro.
+def write_until_end(writer: pa.ipc.RecordBatchStreamWriter, source: queue.Queue[object], closed: threading.Event, outcome: dict[str, object]) -> None:
+    """Grava cada lote tirado da fila até o fim dela; a exceção que o cliente pôs na fila, e o loader abandonado, sobem daqui."""
+    item = take(source, closed)
+    while item is not END:
+        if item is None:
+            raise RuntimeError("loader encerrado sem close")
+        if isinstance(item, BaseException):
+            raise item
+        writer.write_batch(item)
+        outcome["rows"] += item.num_rows
+        item = take(source, closed)
 
-    Cada lote é um ``RecordBatch`` em memória registrado por um comando: o ``arrow_scan`` o esgota
-    dentro do comando, e nenhuma thread do DuckDB volta a chamar Python depois. Um ``closed`` sem o
-    fim da fila é um loader abandonado, e a transação é desfeita.
+
+def write_spool(path: str, schema: pa.Schema, source: queue.Queue[object], closed: threading.Event, outcome: dict[str, object]) -> None:
+    """A thread de ``Loader``: grava no arquivo de transbordo os lotes tirados da fila, até o fim da fila.
+
+    Não usa a sessão: o ``close`` carrega o arquivo depois, num comando só. Um ``closed`` sem o fim da
+    fila é um loader abandonado, e a thread termina sem completar o arquivo.
     """
-    cursor.begin()
     try:
-        while True:
-            try:
-                item = source.get(timeout=0.05)
-            except queue.Empty:
-                if closed.is_set():
-                    raise RuntimeError("loader encerrado sem close")
-                continue
-            if item is END:
-                break
-            if isinstance(item, BaseException):
-                raise item
-            cursor.register("lote", item)
-            cursor.execute(f"INSERT INTO {table} BY NAME SELECT * FROM lote")
-            cursor.unregister("lote")
-            outcome["rows"] += item.num_rows
-        cursor.commit()
+        with pa.OSFile(path, "wb") as sink, pa.ipc.new_stream(sink, schema, options=SPOOL_OPTIONS) as writer:
+            write_until_end(writer, source, closed, outcome)
     except BaseException as error:  # noqa: BLE001 - relançado em close, ou em write quando a thread já terminou
-        cursor.rollback()
         outcome["error"] = error
-    finally:
-        cursor.close()
 
 
 class Loader:
-    """O esboço da entrada em lotes do motor (``loader`` da etapa 4).
+    """O esboço da entrada em lotes do motor (``loader`` da etapa 4) numa sessão única.
 
-    O cliente empurra lotes numa fila limitada, e uma thread auxiliar os insere numa transação num
-    cursor próprio enquanto o cliente prepara o lote seguinte. ``write`` faz o cast do lote na thread
-    do cliente, para o erro aparecer com o lote em mãos, e bloqueia quando a fila está cheia;
-    ``close`` encerra a fila, espera o ``commit`` e relança o erro da thread. Uma exceção dentro do
-    ``with`` desfaz a transação, e a tabela fica como estava; nada é visível antes do ``commit``.
-
-    O ``INSERT`` único sobre um leitor da fila é mais rápido (``test_duckdb.py`` mede os dois), mas
-    entrega um gerador Python ao ``arrow_scan``, cuja leitura antecipada puxa cerca de dez lotes além
-    do que o comando consumiu e continua depois de ele falhar: o buffer foge do controle da fila, e a
-    thread do Arrow ainda chamando Python na saída do processo o pendura.
+    O cliente empurra lotes numa fila limitada, e uma thread auxiliar os grava num arquivo de
+    transbordo, sem a sessão, enquanto o cliente prepara o lote seguinte. ``write`` faz o cast do lote
+    na thread do cliente, para o erro aparecer com o lote em mãos, e bloqueia quando a fila está
+    cheia. ``close`` espera o arquivo e roda, sob o lock, um único ``INSERT ... BY NAME`` sobre o
+    leitor do arquivo: um comando atômico, e nada é visível antes dele. Uma exceção dentro do
+    ``with``, um lote recusado pelo cast ou um loader abandonado apagam o arquivo sem ``INSERT``, e a
+    tabela fica como estava. O leitor que o ``INSERT`` consome é o do arquivo, nativo: nenhum gerador
+    Python chega ao ``arrow_scan``, e o comando único não traz a leitura antecipada que foge da fila
+    (``test_duckdb.py``).
     """
 
-    def __init__(self, root: duckdb.DuckDBPyConnection, table: str, schema: pa.Schema, queue_depth: int = 2) -> None:
+    def __init__(self, engine: SandboxEngine, table: str, schema: pa.Schema, queue_depth: int = 2) -> None:
+        self._engine = engine
+        self._table = table
         self._schema = schema
+        self._path = engine.spool_path("loader")
         self._queue: queue.Queue[object] = queue.Queue(maxsize=queue_depth)
         self._closed = threading.Event()
         self._outcome: dict[str, object] = {"rows": 0, "error": None}
-        self._thread = threading.Thread(target=insert_batches, args=(root.cursor(), table, self._queue, self._closed, self._outcome))
+        self._thread = threading.Thread(target=write_spool, args=(self._path, schema, self._queue, self._closed, self._outcome))
         self._thread.start()
 
     @property
@@ -321,10 +425,25 @@ class Loader:
             if not self._put(batch.cast(self._schema)):
                 raise self.error or RuntimeError("a thread do loader terminou antes do fim da fila")
 
+    def _insert(self) -> None:
+        """O arquivo inteiro num ``INSERT ... BY NAME``, sob o lock; o nome registrado é único e sai no mesmo bloco."""
+        name = f"lote_{uuid.uuid4().hex[:8]}"
+        with pa.OSFile(self._path, "rb") as source, self._engine.session() as connection:
+            connection.register(name, pa.ipc.open_stream(source))
+            try:
+                connection.execute(f"INSERT INTO {self._table} BY NAME SELECT * FROM {name}")
+            finally:
+                connection.unregister(name)
+
     def close(self, error: BaseException | None = None) -> None:
         self._put(error if error is not None else END)
         self._closed.set()
         self._thread.join()
+        try:
+            if error is None and self.error is None:
+                self._insert()
+        finally:
+            Path(self._path).unlink(missing_ok=True)
         if error is None and self.error is not None:
             raise self.error
 
@@ -338,82 +457,105 @@ class Loader:
         self._closed.set()
 
 
-def test_batch_stream_prefetches_on_its_own_cursor_and_stops_early() -> None:
-    """``BatchStream`` entrega os lotes na ordem da consulta enquanto o cursor da thread do cliente roda outros comandos, guarda no máximo ``prefetch`` lotes, para a thread num ``close`` antecipado e traz o erro da consulta ao cliente."""
-    engine = SandboxEngine()
-    engine.query("CREATE TABLE numeros AS SELECT range AS id, 'x' || range AS s FROM range(1_000_000)")
+@pytest.mark.local
+def test_batch_stream_writes_each_batch_while_the_query_runs(local_location: LocalLocation) -> None:
+    """``BatchStream`` entrega o primeiro lote enquanto a consulta roda e os lotes na ordem da consulta; outro comando espera só a consulta, um stream dentro de ``session`` não trava, a tabela temporária serve ao stream, o ``close`` antecipado e o abandono param a consulta, e o erro da consulta chega ao cliente."""
+    engine = SandboxEngine(folder=local_location.child("transbordo_stream"))
+    Path(engine.folder).mkdir()
+    engine.query("CREATE TABLE numeros AS SELECT range AS id, 'x' || range AS s FROM range(3_000_000)")
 
+    # O primeiro lote chega com a thread ainda gravando; um comando no meio da leitura espera só a
+    # consulta, nunca o cliente. Os tempos são leituras.
+    started = time.perf_counter()
+    first_batch: float | None = None
+    query_running = False
+    last_id = -1
     seen = 0
-    with BatchStream(engine._root, "SELECT id, s FROM numeros ORDER BY id", batch_size=100_000, prefetch=2) as stream:
+    with BatchStream(engine, "SELECT id, s FROM numeros WHERE id % 3 <> 0", batch_size=100_000) as stream:
         for batch in stream:
-            assert batch.column("id")[0].as_py() == seen and stream._queue.qsize() <= 2
-            engine.query("SELECT count(*) FROM numeros")  # o cursor da thread do cliente está livre
+            if first_batch is None:
+                first_batch = time.perf_counter() - started
+                query_running = stream._thread.is_alive()
+            assert batch.column("id")[0].as_py() > last_id
+            last_id = batch.column("id")[-1].as_py()
+            engine.query("SELECT count(*) FROM numeros")
             seen += batch.num_rows
-    assert seen == 1_000_000 and not stream._thread.is_alive()
+    total = time.perf_counter() - started
+    assert seen == 2_000_000 and not stream._thread.is_alive()
+    assert list(Path(engine.folder).iterdir()) == []  # o close apagou o arquivo
+    record("parallel.stream.first_batch", f"{first_batch:.3f} s de {total:.3f} s, com a consulta ainda rodando: {query_running}")
 
-    # Sem thread, o cliente puxa direto do leitor; read_all monta a tabela.
-    with BatchStream(engine._root, "SELECT id FROM numeros WHERE id < 10 ORDER BY id", prefetch=0) as direct:
-        assert direct.read_all().column("id").to_pylist() == list(range(10))
+    # A tabela temporária da sessão serve ao stream, como no Redshift; dentro de session, na mesma
+    # thread, a consulta roda na thread do cliente, sem a outra.
+    engine.query("CREATE TEMP TABLE pares AS SELECT id FROM numeros WHERE id % 2 = 0")
+    with engine.session(), BatchStream(engine, "SELECT count(*) AS n FROM pares") as inside:
+        assert inside._thread is None
+        assert inside.read_all().column("n").to_pylist() == [1_500_000]
 
-    # O close antecipado para a thread, presa na fila cheia, e fecha o cursor.
-    stream = BatchStream(engine._root, "SELECT id FROM numeros", batch_size=1000, prefetch=2)
+    # O close antecipado para a consulta no lote seguinte e apaga o arquivo.
+    stream = BatchStream(engine, "SELECT id FROM numeros", batch_size=1000)
     stream.read_next_batch()
-    time.sleep(0.05)
-    assert stream._queue.full()
     stream.close()
-    assert not stream._thread.is_alive()
+    assert not stream._thread.is_alive() and list(Path(engine.folder).iterdir()) == []
+    record("parallel.stream.batches_written_before_close", f"{stream._progress.written} de 3000")
 
     # __arrow_c_stream__: o stream é um leitor para quem o pede pelo PyCapsule, como write_deltalake.
-    with BatchStream(engine._root, "SELECT id FROM numeros WHERE id < 5000", batch_size=1000) as source:
+    with BatchStream(engine, "SELECT id FROM numeros WHERE id < 5000", batch_size=1000) as source:
         assert pa.RecordBatchReader.from_stream(source).read_all().num_rows == 5000
 
     # Um stream abandonado sem close: a thread não referencia o objeto, o __del__ liga o stop, e ela termina.
-    abandoned = BatchStream(engine._root, "SELECT id FROM numeros", batch_size=1000, prefetch=2)
+    abandoned = BatchStream(engine, "SELECT id FROM numeros", batch_size=1000)
     abandoned.read_next_batch()
     thread = abandoned._thread
     del abandoned
-    thread.join(timeout=2)
-    assert not thread.is_alive()
+    thread.join(timeout=5)
+    assert not thread.is_alive() and list(Path(engine.folder).iterdir()) == []
 
-    # O erro da consulta chega ao cliente, nunca em silêncio: duckdb.Error na construção, ou OSError com a
-    # mensagem do DuckDB quando o leitor Arrow o encontra no meio da leitura.
-    failing_sql = "SELECT CAST(CASE WHEN id = 900_000 THEN 'x' ELSE CAST(id AS VARCHAR) END AS INTEGER) AS n FROM numeros"
+    # O erro da consulta chega ao cliente na construção, quando nenhum lote saiu antes dele, ou na
+    # leitura seguinte ao último lote gravado: duckdb.Error no execute, ou OSError com a mensagem do
+    # DuckDB quando o leitor Arrow o encontra.
+    failing_sql = "SELECT CAST(CASE WHEN id = 2_900_000 THEN 'x' ELSE CAST(id AS VARCHAR) END AS INTEGER) AS n FROM numeros"
+    delivered = 0
     with pytest.raises((duckdb.ConversionException, OSError), match="Could not convert string 'x' to INT32") as failure:
-        with BatchStream(engine._root, failing_sql, batch_size=100_000) as failing:
-            for _ in failing:
-                pass
-    record("parallel.stream.query_error_class", f"{type(failure.value).__name__} na leitura")
+        with BatchStream(engine, failing_sql, batch_size=100_000) as failing:
+            for batch in failing:
+                delivered += 1
+    record("parallel.stream.query_error", f"{type(failure.value).__name__} depois de {delivered} lotes")
+    assert list(Path(engine.folder).iterdir()) == []  # o arquivo parcial saiu
     engine.cleanup()
 
 
-def test_loader_writes_behind_in_one_statement_and_aborts_on_client_error() -> None:
-    """``Loader`` insere cada lote numa transação enquanto o cliente prepara o lote seguinte: nada é visível antes do ``close``, uma exceção do cliente ou um lote fora do contrato desfaz a transação, e o erro do ``INSERT`` chega ao cliente."""
-    engine = SandboxEngine()
+@pytest.mark.local
+def test_loader_spools_and_inserts_in_one_statement_on_close(local_location: LocalLocation) -> None:
+    """``Loader`` grava os lotes num arquivo enquanto o cliente prepara o lote seguinte e os insere num comando no ``close``: nada é visível antes dele, uma exceção do cliente ou um lote fora do contrato não insere nada, e o erro do ``INSERT`` chega ao cliente."""
+    engine = SandboxEngine(folder=local_location.child("transbordo_loader"))
+    Path(engine.folder).mkdir()
     schema = pa.schema([("id", pa.int64()), ("valor", pa.decimal128(18, 2))])
     engine.query("CREATE TABLE destino (id BIGINT, valor DECIMAL(18, 2))")
 
-    def batch(k: int, rows: int = 10_000, id_type: pa.DataType = pa.int64()) -> pa.RecordBatch:
-        return pa.RecordBatch.from_pydict({"id": pa.array(range(k * rows, (k + 1) * rows), id_type), "valor": pa.array([decimal.Decimal(k) / 100] * rows, pa.decimal128(18, 2))})
+    def batch(k: int, rows: int = 10_000) -> pa.RecordBatch:
+        return pa.RecordBatch.from_pydict({"id": pa.array(range(k * rows, (k + 1) * rows), pa.int64()), "valor": pa.array([decimal.Decimal(k) / 100] * rows, pa.decimal128(18, 2))})
 
     def count(table: str = "destino") -> int:
         return engine.query(f"SELECT count(*) AS n FROM {table}").column("n")[0].as_py()
 
     visible: list[int] = []
-    with Loader(engine._root, "destino", schema) as loader:
+    with Loader(engine, "destino", schema) as loader:
         for k in range(20):
             loader.write(batch(k))
-            visible.append(count())
+            visible.append(count())  # a sessão está livre enquanto o loader grava o arquivo
     assert loader.rows == 200_000 and count() == 200_000 and set(visible) == {0}
+    assert list(Path(engine.folder).iterdir()) == []
 
-    # Uma exceção dentro do with: a transação é desfeita, a tabela fica como estava, e a exceção que sobe é a do cliente.
+    # Uma exceção dentro do with: nada é inserido, e a exceção que sobe é a do cliente.
     with pytest.raises(ValueError, match="falha do cliente"):
-        with Loader(engine._root, "destino", schema) as loader:
+        with Loader(engine, "destino", schema) as loader:
             loader.write(batch(0))
             raise ValueError("falha do cliente")
     assert isinstance(loader.error, ValueError) and count() == 200_000
 
-    # Um loader abandonado sem close: a thread desfaz a transação e termina.
-    abandoned = Loader(engine._root, "destino", schema)
+    # Um loader abandonado sem close: a thread termina, e nada é inserido.
+    abandoned = Loader(engine, "destino", schema)
     abandoned.write(batch(0))
     thread = abandoned._thread
     del abandoned
@@ -422,23 +564,25 @@ def test_loader_writes_behind_in_one_statement_and_aborts_on_client_error() -> N
 
     # Um lote fora do contrato é recusado no write, na thread do cliente, e nada entra.
     with pytest.raises(pa.ArrowInvalid, match="Rescaling"):
-        with Loader(engine._root, "destino", schema) as loader:
+        with Loader(engine, "destino", schema) as loader:
             loader.write(pa.RecordBatch.from_pydict({"id": pa.array([1], pa.int64()), "valor": pa.array([decimal.Decimal("1.2345")], pa.decimal128(20, 4))}))
     assert count() == 200_000
 
-    # O erro do INSERT chega ao cliente: uma coluna estreita demais para o valor.
+    # O erro do INSERT chega ao cliente no close, e o comando único não deixa linha alguma.
     engine.query("CREATE TABLE estreita (id INTEGER, valor DECIMAL(18, 2))")
-    with pytest.raises(duckdb.ConversionException):
-        with Loader(engine._root, "estreita", schema) as loader:
-            for k in range(20):
-                loader.write(batch(k).set_column(0, "id", pa.array([2**40] * 10_000, pa.int64())))
+    with pytest.raises(duckdb.ConversionException), Loader(engine, "estreita", schema) as loader:
+        for k in range(20):
+            loader.write(batch(k).set_column(0, "id", pa.array([2**40] * 10_000, pa.int64())))
     assert count("estreita") == 0
     engine.cleanup()
 
 
-def test_three_stage_pipeline_overlaps_read_work_and_write() -> None:
-    """Leitura por ``BatchStream``, trabalho do cliente por lote e escrita por ``Loader`` produzem as mesmas linhas que a versão por lote sem threads e que a versão por ``pa.Table``; os tempos são leituras do relatório."""
-    engine = SandboxEngine()
+@pytest.mark.local
+def test_three_stage_pipeline_overlaps_read_work_and_write(local_location: LocalLocation) -> None:
+    """Leitura por ``BatchStream``, trabalho do cliente por lote e escrita por ``Loader`` numa sessão única, sobre um banco em arquivo, produzem as mesmas linhas que a versão por lote sem threads e que a versão por ``pa.Table``; os tempos são leituras do relatório."""
+    folder = Path(local_location.child("pipeline"))
+    folder.mkdir()
+    engine = SandboxEngine(str(folder / "sandbox.duckdb"), folder=str(folder))
     engine.query("CREATE TABLE fonte AS SELECT range AS id, CAST(((range * 7) % 1000) / 100.0 AS DECIMAL(18, 2)) AS valor, 'x' || range AS s FROM range(3_000_000)")
     target = pa.schema([("id", pa.int64()), ("valor", pa.decimal128(18, 2)), ("s", pa.string()), ("dobro", pa.float64())])
     for name in ("sequencial", "encadeado"):
@@ -450,11 +594,11 @@ def test_three_stage_pipeline_overlaps_read_work_and_write() -> None:
         frame["dobro"] = (frame["valor"] * 2).astype("double[pyarrow]")
         return type(data).from_pandas(frame, preserve_index=False).cast(target)
 
-    def insert(name: str, data: pa.RecordBatch | pa.Table) -> None:
-        connection = engine.connection
-        connection.register("lote", data)
-        connection.execute(f"INSERT INTO {name} BY NAME SELECT * FROM lote")
-        connection.unregister("lote")
+    def insert(name: str, data: pa.RecordBatch) -> None:
+        with engine.session() as connection:
+            connection.register("lote", data)
+            connection.execute(f"INSERT INTO {name} BY NAME SELECT * FROM lote")
+            connection.unregister("lote")
 
     timings: dict[str, float] = {}
 
@@ -463,17 +607,18 @@ def test_three_stage_pipeline_overlaps_read_work_and_write() -> None:
     engine.load("por_tabela", work(engine.query(sql)))
     timings["por_tabela"] = time.perf_counter() - started
 
-    # Por lote, sem threads: o leitor num cursor, o trabalho e um INSERT por lote no cursor da thread.
+    # Por lote, sem threads: dentro de session, o stream roda a consulta inteira na thread do
+    # cliente, e o trabalho e um INSERT por lote entram no mesmo bloco.
     started = time.perf_counter()
-    reading = engine._root.cursor()
-    for batch in reading.execute(sql).to_arrow_reader(200_000):
-        insert("sequencial", work(batch))
-    reading.close()
+    with engine.session(), BatchStream(engine, sql, batch_size=200_000) as stream:
+        for batch in stream:
+            insert("sequencial", work(batch))
     timings["sequencial"] = time.perf_counter() - started
 
-    # Encadeado: a leitura na thread do stream, o trabalho na thread do cliente, a escrita na thread do loader.
+    # Encadeado: a consulta e o arquivo na thread do stream, o trabalho na thread do cliente, a
+    # escrita do arquivo na thread do loader, e o INSERT único no close.
     started = time.perf_counter()
-    with BatchStream(engine._root, sql, batch_size=200_000) as stream, Loader(engine._root, "encadeado", target) as loader:
+    with BatchStream(engine, sql, batch_size=200_000) as stream, Loader(engine, "encadeado", target) as loader:
         for batch in stream:
             loader.write(work(batch))
     timings["encadeado"] = time.perf_counter() - started
@@ -495,6 +640,24 @@ class PublishFailed(Exception):
         self.outcomes = outcomes
 
 
+def outcome_of(future: Future) -> str:
+    """O resultado de uma tarefa terminada ou cancelada, como ``PublishFailed`` o lista."""
+    if future.cancelled():
+        return "cancelada"
+    error = future.exception()
+    if error is None:
+        return "concluída"
+    return f"falhou: {type(error).__name__}: {error}"
+
+
+def first_failure(futures: Iterable[Future]) -> Future | None:
+    """A primeira tarefa que falha, na ordem em que as tarefas terminam; ``None`` quando todas concluem."""
+    for future in as_completed(futures):
+        if future.exception() is not None:
+            return future
+    return None
+
+
 def publish_all(tables: list[str], action: Callable[[str], object], max_workers: int) -> dict[str, str]:
     """Roda ``action`` por tabela num pool.
 
@@ -502,24 +665,17 @@ def publish_all(tables: list[str], action: Callable[[str], object], max_workers:
     começou é cancelado, e ``PublishFailed`` traz o resultado de cada tabela: os commits feitos ficam,
     porque o Delta não tem transação entre tabelas.
     """
-    outcomes: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(action, table): table for table in tables}
-        for future in as_completed(futures):
-            error = future.exception()
-            if error is None:
-                outcomes[futures[future]] = "concluída"
-                continue
+        failed = first_failure(futures)
+        # shutdown espera as tarefas em curso e cancela as que ainda não começaram.
+        pool.shutdown(wait=True, cancel_futures=True)
 
-            outcomes[futures[future]] = f"falhou: {type(error).__name__}: {error}"
-            pool.shutdown(wait=True, cancel_futures=True)
-            for other, table in futures.items():
-                if other.cancelled():
-                    outcomes[table] = "cancelada"
-                elif table not in outcomes:
-                    outcomes[table] = "concluída" if other.exception() is None else f"falhou: {other.exception()}"
-            raise PublishFailed(outcomes)
-
+    outcomes = {}
+    for future, table in futures.items():
+        outcomes[table] = outcome_of(future)
+    if failed is not None:
+        raise PublishFailed(outcomes)
     return outcomes
 
 
@@ -597,7 +753,7 @@ def test_table_barrier_delays_the_read_until_the_load_lands() -> None:
 
     def load() -> None:
         with barrier.loading("cad_lancamentos"):
-            landed.wait()
+            assert landed.wait(timeout=10)
             events.append("carga")
 
     loader = threading.Thread(target=load)
@@ -610,7 +766,11 @@ def test_table_barrier_delays_the_read_until_the_load_lands() -> None:
     assert time.perf_counter() - started < 0.05
 
     # A tabela em voo segura a leitura até a carga terminar.
-    reader = threading.Thread(target=lambda: (barrier.wait_for(referenced_tables(statement)), events.append("leitura")))
+    def read() -> None:
+        barrier.wait_for(referenced_tables(statement))
+        events.append("leitura")
+
+    reader = threading.Thread(target=read)
     reader.start()
     time.sleep(0.05)
     assert events == []
@@ -643,7 +803,7 @@ def max_key(table: DeltaTable, column: str) -> int:
 
 @pytest.mark.local
 def test_several_delta_tables_read_and_ingested_in_parallel(local_location: LocalLocation) -> None:
-    """Quatro tabelas Delta lidas pelo delta-rs e ingeridas no DuckDB por ``delta_scan``, em sequência e em quatro threads, cada thread no seu cursor."""
+    """Quatro tabelas Delta lidas pelo delta-rs e ingeridas no DuckDB por ``delta_scan``, em sequência na sessão principal e em quatro threads, uma sessão a mais por tabela."""
     sample = sample_table()
     uris = [local_location.child(f"leitura/tabela_{k}") for k in range(4)]
     for uri in uris:
@@ -662,24 +822,27 @@ def test_several_delta_tables_read_and_ingested_in_parallel(local_location: Loca
     assert sequential == parallel == [ROWS] * 4
     record("parallel.timing.delta_read_4_tables", f"sequencial {one_by_one:.3f} s, quatro threads {in_threads:.3f} s")
 
-    # A ingestão: um cursor por thread, e cada um materializa um mês de uma tabela por delta_scan.
-    con = connect_duckdb(["delta"])
-    con.execute("SET threads = 2")
+    # A ingestão: cada tabela materializa um mês por delta_scan, em série na sessão principal ou numa
+    # sessão a mais por thread; a tabela confirmada pela outra sessão é vista pela principal.
+    engine = SandboxEngine(connection=connect_duckdb(["delta"]))
+    engine.query("SET threads = 2")
 
-    def ingest(prefix: str, k: int) -> None:
-        cursor = con.cursor()
-        cursor.execute(f"CREATE TABLE {prefix}_{k} AS SELECT * FROM delta_scan('{uris[k]}') WHERE mes = '{MONTHS[0]}'")
-        cursor.close()
+    def ingest(session: SandboxEngine, prefix: str, k: int) -> None:
+        session.query(f"CREATE TABLE {prefix}_{k} AS SELECT * FROM delta_scan('{uris[k]}') WHERE mes = '{MONTHS[0]}'")
+
+    def ingest_in_own_session(k: int) -> None:
+        with engine.new_session() as session:
+            ingest(session, "par", k)
 
     started = time.perf_counter()
     for k in range(4):
-        ingest("seq", k)
+        ingest(engine, "seq", k)
     one_by_one = time.perf_counter() - started
-    in_threads = run_in_threads([lambda k=k: ingest("par", k) for k in range(4)])
-    counts = con.execute("SELECT (SELECT count(*) FROM par_0), (SELECT count(*) FROM par_1), (SELECT count(*) FROM par_2), (SELECT count(*) FROM par_3)").fetchone()
-    assert counts == (ROWS // 2,) * 4
-    record("parallel.timing.duckdb_ingest_4_tables_by_delta_scan", f"sequencial {one_by_one:.3f} s, quatro threads {in_threads:.3f} s")
-    con.close()
+    in_threads = run_in_threads([functools.partial(ingest_in_own_session, k) for k in range(4)])
+    counts = engine.query("SELECT (SELECT count(*) FROM par_0) AS a, (SELECT count(*) FROM par_1) AS b, (SELECT count(*) FROM par_2) AS c, (SELECT count(*) FROM par_3) AS d").to_pylist()[0]
+    assert list(counts.values()) == [ROWS // 2] * 4
+    record("parallel.timing.duckdb_ingest_4_tables_by_delta_scan", f"sequencial {one_by_one:.3f} s, quatro sessões {in_threads:.3f} s")
+    engine.cleanup()
 
 
 @pytest.mark.local
@@ -691,8 +854,12 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(local_l
 
     # 1. Quatro tabelas em quatro threads: quatro commits independentes, cada log na sua pasta.
     uris = [local_location.child(f"escrita/tabela_{k}") for k in range(4)]
+
+    def write_table(uri: str) -> None:
+        write_deltalake(uri, data, mode="overwrite", partition_by=["mes"])
+
     with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda uri: write_deltalake(uri, data, mode="overwrite", partition_by=["mes"]), uris))
+        list(pool.map(write_table, uris))
     assert [DeltaTable(uri).version() for uri in uris] == [0] * 4
 
     # 2. A mesma tabela, quatro meses em quatro threads: cada overwrite com predicado troca os arquivos do
@@ -703,7 +870,7 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(local_l
         month_rows = data.filter(pc.equal(data.column("mes"), month))
         write_deltalake(uri, month_rows, mode="overwrite", predicate=f"mes = '{month}'")
 
-    elapsed = run_in_threads([lambda month=month: replace_month(month) for month in FOUR_MONTHS])
+    elapsed = run_in_threads([functools.partial(replace_month, month) for month in FOUR_MONTHS])
     table = DeltaTable(uri)
     assert table.version() == 4 and table.to_pyarrow_dataset().count_rows() == data.num_rows
     record("parallel.timing.delta_overwrite_4_months_same_table", f"{elapsed:.3f} s em quatro threads")
@@ -721,7 +888,7 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(local_l
         except CommitFailedError:
             outcomes.append("CommitFailedError")
 
-    run_in_threads([lambda: overwrite(first), lambda: overwrite(second)])
+    run_in_threads([functools.partial(overwrite, first), functools.partial(overwrite, second)])
     assert sorted(outcomes) == ["CommitFailedError", "commit"] and DeltaTable(uri).version() == 5
 
 
@@ -766,32 +933,39 @@ def test_id_allocator_starts_after_the_maximum_in_the_file_statistics(local_loca
 
 
 @pytest.mark.local
-def test_duckdb_loads_and_exports_in_parallel_by_cursor(local_location: LocalLocation) -> None:
-    """Quatro cargas Arrow em tabelas distintas e quatro ``COPY ... TO`` em quatro threads, cada uma no seu cursor; o registro da tabela Arrow vale só na conexão que o fez."""
+def test_duckdb_loads_and_exports_from_threads_on_one_session(local_location: LocalLocation) -> None:
+    """Quatro cargas Arrow em tabelas distintas e quatro ``COPY ... TO`` pedidos por quatro threads, em série na sessão única; o registro da tabela Arrow vale só na conexão que o fez."""
     engine = SandboxEngine(str(local_location.path / "sandbox.duckdb"))
-    data = four_month_table(engine.connection)
+    with engine.session() as connection:
+        data = four_month_table(connection)
     by_month = {month: data.filter(pc.equal(data.column("mes"), month)) for month in FOUR_MONTHS}
 
-    elapsed = run_in_threads([lambda k=k: engine.load(f"carga_{k}", by_month[FOUR_MONTHS[k]]) for k in range(4)])
+    def load(k: int) -> None:
+        engine.load(f"carga_{k}", by_month[FOUR_MONTHS[k]])
+
+    elapsed = run_in_threads([functools.partial(load, k) for k in range(4)])
     counts = engine.query("SELECT table_name, estimated_size FROM duckdb_tables() ORDER BY table_name").to_pylist()
     assert [row["table_name"] for row in counts] == [f"carga_{k}" for k in range(4)]
     assert engine.query("SELECT (SELECT count(*) FROM carga_0) + (SELECT count(*) FROM carga_1) + (SELECT count(*) FROM carga_2) + (SELECT count(*) FROM carga_3) AS n").column("n")[0].as_py() == data.num_rows
-    record("parallel.timing.duckdb_load_4_tables", f"{elapsed:.3f} s em quatro threads")
+    record("parallel.timing.duckdb_load_4_tables", f"{elapsed:.3f} s em quatro threads, em série na sessão")
 
     folder = local_location.path / "exportacao"
     folder.mkdir()
 
     def export(k: int) -> None:
-        engine.connection.execute(f"COPY carga_{k} TO '{folder / f'carga_{k}.parquet'}' (FORMAT parquet)")
+        with engine.session() as connection:
+            connection.execute(f"COPY carga_{k} TO '{folder / f'carga_{k}.parquet'}' (FORMAT parquet)")
 
-    elapsed = run_in_threads([lambda k=k: export(k) for k in range(4)])
+    elapsed = run_in_threads([functools.partial(export, k) for k in range(4)])
     assert [pq.read_metadata(folder / f"carga_{k}.parquet").num_rows for k in range(4)] == [by_month[month].num_rows for month in FOUR_MONTHS]
-    record("parallel.timing.duckdb_copy_to_4_files", f"{elapsed:.3f} s em quatro threads")
+    record("parallel.timing.duckdb_copy_to_4_files", f"{elapsed:.3f} s em quatro threads, em série na sessão")
 
-    # O registro de uma tabela Arrow pertence à conexão: outro cursor não a vê.
-    engine.connection.register("somente_aqui", data)
-    other = engine._root.cursor()
-    with pytest.raises(duckdb.CatalogException, match="somente_aqui"):
-        other.execute("SELECT count(*) FROM somente_aqui")
-    other.close()
+    # O registro de uma tabela Arrow pertence à conexão: um cursor dela, que é outra conexão, não a vê.
+    with engine.session() as connection:
+        connection.register("somente_aqui", data)
+        other = connection.cursor()
+        with pytest.raises(duckdb.CatalogException, match="somente_aqui"):
+            other.execute("SELECT count(*) FROM somente_aqui")
+        other.close()
+        connection.unregister("somente_aqui")
     engine.cleanup()

@@ -1,4 +1,8 @@
-"""Os statements Core do pipeline fictício: ``STATEMENTS``, o dicionário que ``serialize-db sql`` recebe.
+"""Os statements Core do pipeline fictício: ``STATEMENTS``, o dicionário ``{nome: statement}``.
+
+O caminho padrão do pipeline submete cada statement ao motor, que o compila pela cópia prefixada
+com os parâmetros do cliente; ``serialize-db sql`` recebe o mesmo dicionário e gera o texto SQL
+versionado, a opção de migração para fora do SQLAlchemy.
 
 Cada entrada é ``{nome: statement}``, e o nome vira ``sql/<nome>.duckdb.sql`` e
 ``sql/<nome>.redshift.sql``, os arquivos versionados em ``tests/client_model/sql/``. Os quatro
@@ -50,7 +54,8 @@ BALANCE_BY_ACCOUNT = (
 )
 
 # O valor dos lançamentos de cada contrato repartido entre as operações dele por fator_rateio,
-# na área de TI (o literal com %) e fora do centro de custo '1:2' (o literal com :).
+# na área de TI (o literal com %); o filtro area != '1:2', sempre verdadeiro ao lado do LIKE, existe
+# para o texto gerado ter um literal com :.
 APPORTIONMENT_BY_OPERATION = (
     sa.select(
         APPORTIONMENTS.c.operacao,

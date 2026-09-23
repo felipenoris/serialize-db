@@ -449,10 +449,10 @@ decisão, com as consequências de cada premissa e as partes da biblioteca, est�
   mesma primitiva do S3.
 - **SQLAlchemy Core** permanece porque o pipeline já o usa nos modelos e em `select` e `insert`, e
   o `Table` do modelo é a fonte do esquema Arrow, do esquema Delta e do DDL dos dois motores. O que
-  muda é o caminho dos DataFrames, que passa por Arrow, e a compilação em tempo de execução, que o
-  texto gerado por dialeto substitui uma interação por vez ([`sqlalchemy.md`](sqlalchemy.md)). O
-  `insert(...)` executado com listas de linhas sai, porque no Redshift ele vira uma ida ao servidor
-  por linha.
+  muda é o caminho dos DataFrames, que passa por Arrow; a compilação pelo dialeto continua o
+  caminho padrão, e o texto gerado por dialeto é a opção de migração para fora do SQLAlchemy
+  (decisão do usuário de 2026-09-22, [`sqlalchemy.md`](sqlalchemy.md)). O `insert(...)` executado
+  com listas de linhas sai, porque no Redshift ele vira uma ida ao servidor por linha.
 - **SQLGlot puro** no lugar do SQLAlchemy exigiria reescrever as consultas sem ganho de
   portabilidade, porque os dois exigem os mesmos testes no Redshift; o SQLGlot entra só no grupo
   `dev`, como teste de que o texto gerado para o Redshift analisa (decisão do usuário de

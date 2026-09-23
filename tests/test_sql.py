@@ -137,8 +137,7 @@ def test_rendered_text_runs_in_duckdb(prefix: str) -> None:
 
 def test_render_writes_a_bindparam_without_value_as_placeholder() -> None:
     """Um `bindparam` sem valor sai como `:nome`, num `text()` inclusive, e o statement original
-    fica intacto; com valor, é constante; um nome fora de `[a-z_][a-z0-9_]*` é `SqlError`
-    (decisão do usuário de 2026-09-22)."""
+    fica intacto; com valor, é constante; um nome fora de `[a-z_][a-z0-9_]*` é `SqlError`."""
     statement = sa.select(ENTRIES.c.id_conta).where(ENTRIES.c.area == sa.bindparam("area"))
     assert sql.render(statement, "duckdb", METADATA, prefix="").endswith('"area" = :area')
     assert "area" in statement.compile().binds
@@ -155,7 +154,7 @@ def test_render_writes_a_bindparam_without_value_as_placeholder() -> None:
 def test_statement_with_bindparam_runs_on_a_client_connection() -> None:
     """O statement escrito com `bindparam` roda num `sqlalchemy.Connection` criado fora da
     biblioteca, com o dicionário de parâmetros: um statement serve ao `Connection` do cliente, aos
-    motores e aos arquivos (decisão do usuário de 2026-09-22)."""
+    motores e aos arquivos."""
     engine = sa.create_engine("duckdb:///:memory:")
     with engine.begin() as connection:
         METADATA.create_all(connection)

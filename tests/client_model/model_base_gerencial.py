@@ -64,13 +64,12 @@ class Negocio(Base):
 
 
 class Operacao(Base):
-    """``cad_operacoes``: as operações de crédito de cada data-base, partição por ``data``."""
+    """``cad_operacoes``: as operações de crédito de cada data-base, particionadas por ``data_str``, derivada de ``data``."""
 
     __tablename__ = "cad_operacoes"
     __table_args__ = (
-        # UniqueConstraint no lugar do índice único do original: a chave estrangeira composta de
-        # rel_contrato_operacao aponta estas colunas, e o DuckDB e o Redshift exigem chave primária
-        # ou UNIQUE no alvo (decisão do usuário de 2026-09-22).
+        # UniqueConstraint, e não índice único: a chave estrangeira composta de rel_contrato_operacao
+        # aponta estas colunas, e o DuckDB e o Redshift exigem chave primária ou UNIQUE no alvo.
         UniqueConstraint("data", "operacao", name="uq_operacoes_data_operacao"),
         {
             "comment": "Operações de crédito por data-base",
@@ -140,16 +139,15 @@ class RelContratoOperacao(Base):
 
 
 class Contrato(Base):
-    """``cad_contratos``: os contratos de cada data-base, particionados por ``data``."""
+    """``cad_contratos``: os contratos de cada data-base, particionados por ``data_str``, derivada de ``data``."""
 
     __tablename__ = "cad_contratos"
     __table_args__ = (
-        # UniqueConstraint no lugar do índice único do original: a chave estrangeira composta de
-        # cad_lancamentos aponta estas colunas (decisão do usuário de 2026-09-22).
+        # UniqueConstraint, e não índice único: a chave estrangeira composta de cad_lancamentos
+        # aponta estas colunas.
         UniqueConstraint("data", "sistema", "contrato", name="uq_contratos_data_sistema_contrato"),
-        # A chave estrangeira do original, de (data, sistema, contrato) para
-        # rel_contrato_operacao, saiu: o destino não é único, porque o contrato está em N
-        # operações (decisão do usuário de 2026-09-21).
+        # Sem chave estrangeira de (data, sistema, contrato) para rel_contrato_operacao: o destino
+        # não é único, porque o contrato está em N operações.
         {
             "comment": "Contratos por data-base",
             "info": {

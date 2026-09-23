@@ -71,6 +71,7 @@ Documentação:
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_write_readwrite.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_Serializable_isolation_example.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_serial_isolation-serializable-isolation-troubleshooting.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_LOCK.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-format.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-load.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-column-mapping.html>
@@ -281,6 +282,11 @@ Delta Lake no Redshift Spectrum (tabelas de manifesto simbólico), consultado em
 - <https://aws.amazon.com/blogs/big-data/introducing-native-delta-lake-table-support-with-aws-glue-crawlers>
 - <https://aws.amazon.com/about-aws/whats-new/2022/12/aws-glue-crawlers-support-delta-lake-tables>
 
+O comprimento em bytes de um `VARCHAR`, para a verificação de texto da auditoria, consultado em
+2026-09-22:
+
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_OCTET_LENGTH.html>
+
 ## DuckDB
 
 Documentação:
@@ -315,6 +321,7 @@ Documentação:
 - <https://duckdb.org/docs/current/guides/performance/file_formats.html>
 - <https://duckdb.org/docs/current/guides/performance/indexing.html>
 - <https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads.html>
+- <https://duckdb.org/docs/stable/guides/performance/how_to_tune_workloads> (redireciona para a anterior)
 - <https://duckdb.org/docs/current/guides/performance/join_operations.html>
 - <https://duckdb.org/docs/current/guides/file_formats/parquet_import.html>
 - <https://duckdb.org/docs/current/guides/file_formats/parquet_export.html>

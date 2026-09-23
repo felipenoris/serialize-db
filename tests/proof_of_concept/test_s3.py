@@ -3,7 +3,7 @@
 Cada teste responde a um item da etapa 0 (``plan/PLAN-STAGE-0.md``): as credenciais que o delta-rs
 encontra, a escrita e a leitura no bucket, o put condicional, o ``vacuum`` e o tempo do ``delta_scan``.
 Os testes comuns aos dois armazenamentos vêm de ``poc_delta.py``; os deste módulo cobrem o que só existe
-no S3: a origem das credenciais, a cadeia de credenciais do delta-rs e sua reserva, o put condicional,
+no S3: a origem das credenciais, a cadeia de credenciais do delta-rs e a forma da reserva que a biblioteca não usa, o put condicional,
 a criptografia dos arquivos e as chamadas do ``boto3`` que a biblioteca usa (listar, copiar, apagar).
 As medições vão para o relatório impresso no fim da sessão (``conftest.py``). A suíte escreve só sob
 a raiz informada em ``SERIALIZE_DB_TEST_S3_ROOT``: sem ela é pulada, e com ela falta de credencial ou
@@ -124,7 +124,11 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         assert results["no_proxy_exported"] == "ok", results
 
     def test_delta_rs_storage_options_fallback(self, storage: S3Location) -> None:
-        """As credenciais temporárias do ``boto3`` em ``storage_options`` são a reserva da biblioteca."""
+        """As credenciais temporárias do ``boto3`` em ``storage_options`` abrem a tabela sem a cadeia padrão.
+
+        A biblioteca não as usa: ``storage_options`` nunca leva credencial, e o teste mede a forma
+        para o dia em que um ambiente quebrar a cadeia.
+        """
         # get_frozen_credentials fixa o trio chave, segredo e token no instante da chamada.
         frozen = boto3.Session().get_credentials().get_frozen_credentials()
         options = {
@@ -180,7 +184,10 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
 
         # O paginador entrega as chaves em páginas de até 1.000; o filtro deixa só os arquivos de dados.
         pages = s3.get_paginator("list_objects_v2").paginate(Bucket=storage.bucket, Prefix=source_prefix + "/")
-        data_keys = [item["Key"] for page in pages for item in page.get("Contents", []) if item["Key"].endswith(".parquet")]
+        contents = []
+        for page in pages:
+            contents.extend(page.get("Contents", []))
+        data_keys = [item["Key"] for item in contents if item["Key"].endswith(".parquet")]
         assert data_keys == [uri.removeprefix(f"s3://{storage.bucket}/") for uri in storage.data_files(table_uri)]
 
         # copy_object copia dentro do serviço, sem baixar os dados; o layout mes=.../ é preservado.

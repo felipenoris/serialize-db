@@ -65,6 +65,11 @@ da pasta e a abertura sem variáveis `AWS_*`. Os comportamentos do delta-rs que 
 (substituição por predicado, `schema_mode`, `add_columns`, cast no `append`, `restore`, `vacuum`,
 `keep_versions`, exportação por mês) foram verificados localmente e estão em `delta.md`.
 
+Em 2026-09-20, uma sessão no espaço com a raiz local e a raiz S3 gravou o relatório de
+`SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, e a execução das 04:52 UTC, depois das
+correções do dia, registrou 104 testes passados e 7 pulados em 35 s, com a limpeza das duas raízes
+(`local.cleanup`, `s3.cleanup`); sem variável, 63 passaram e 48 foram pulados.
+
 ## O que as leituras do ambiente mostraram
 
 O espaço do SageMaker Unified Studio, lido em 2026-09-19 e quatro vezes em 2026-09-20 pelos probes:
@@ -595,7 +600,8 @@ sondagem no scratchpad e as asserções acrescentadas a `test_pyarrow.py`, `test
 `test_parallel.py` mediram o que a troca de dados por `RecordBatch` exige. A revisão do plano está em
 [`PLAN.md`](PLAN.md), seção "A troca de dados com o código cliente", nas etapas
 [1](PLAN-STAGE-1.md), [3](PLAN-STAGE-3.md), [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e
-[6](PLAN-STAGE-6.md), e em [`serialize-db.md`](serialize-db.md), seção "Lotes em streaming".
+[6](PLAN-STAGE-6.md), e em [`serialize-db.md`](serialize-db.md), seção "Paralelismo". O desenho por
+cursor que ela mediu deu lugar à sessão única em 2026-09-22 (seção "O que a sessão única mostrou").
 
 - O leitor de `to_arrow_reader` num `cursor()` próprio entregou o snapshot da consulta (1.000.000 de
   linhas) enquanto outro cursor inseria dez linhas na mesma tabela, criava, alterava e apagava
@@ -738,8 +744,9 @@ Consequências no plano, nesta mesma unidade de trabalho:
 
 Em 2026-09-21, no macOS arm64 com deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, SQLAlchemy 2.0.54,
 duckdb-engine 0.17.0 e sqlalchemy-redshift 1.0.0, os rascunhos das etapas 1 a 9 rodaram no
-scratchpad e estão em cada `PLAN-STAGE-<n>.md`, seção "Rascunhos executados". O que eles mostraram
-além do que já estava medido:
+scratchpad; os das etapas 3 a 9 estão em cada `PLAN-STAGE-<n>.md`, seção "Rascunhos executados", e
+os das etapas 1 e 2 deram lugar aos módulos `serialize_db.schema` e `serialize_db.sql`. O que eles
+mostraram além do que já estava medido:
 
 - O commit de `optimize.compact` grava `dataChange` falso nas ações `add` e `remove`, com
   `partitionValues`; `version_diff` lê o log e ignora essas ações, então uma compactação não recarrega
@@ -1476,3 +1483,249 @@ usuário de 2026-09-22); o requisito que a acompanha, um modelo e um statement q
 (decisões do usuário: `render` troca o `bindparam` sem valor por `:nome`, com `param` fora do
 módulo; os dois índices únicos compostos do modelo cliente viraram `UniqueConstraint`, e
 `check_models` confere o alvo de cada chave estrangeira).
+
+## O que a revisão de código de 2026-09-22 mostrou
+
+Em 2026-09-22, no macOS (PyArrow 25.0.1, deltalake 1.6.4), as sondas da revisão do pacote leram o
+`cast` com as entradas que um pipeline em pandas produz e a versão que cada escrita do delta-rs
+deixa no objeto `DeltaTable`.
+
+- **O texto fora do tipo `string` escapava da medida de bytes.** `pa.types.is_string` é falso para
+  `large_string`, o tipo que `pa.Table.from_pandas` dá ao `str` do pandas 3, e para `string_view`
+  e dicionário; `_refuse_silent_losses` só media o texto quando a coluna chegava em `string`, então
+  `"xyz"` em `large_string` entrava numa coluna `String(2)` e 65.536 bytes numa coluna `Text`, e só
+  o `COPY` da publicação os recusaria. `pc.binary_length` não aceita `string_view` nem dicionário
+  (`ArrowNotImplementedError`). A medida passou para depois da conversão, sobre a coluna já em
+  `string` (`_refuse_long_text`), e os três tipos são recusados.
+- **Um tipo sem conversão saía como erro do PyArrow.** `struct` numa coluna `Integer`, `list` numa
+  `Date`, `bool` numa `Date` e `date32` numa `BigInteger` levantam `ArrowNotImplementedError`
+  (subclasse de `NotImplementedError`, não de `ValueError`), que o `except (pa.ArrowInvalid,
+  ValueError)` não pegava. Viram `ContractError` com a tabela e a coluna.
+- **O desvio do inteiro para `Numeric` servia só a `Numeric(18, 2)`.** O cast direto de inteiro
+  para `decimal128(p, s)` exige que `p` comporte qualquer valor do tipo inteiro, não os presentes:
+  19 dígitos mais a escala num `int64`, 10 num `int32`. O desvio `decimal128(p + 3, s)` acertava a
+  precisão 21 de `Numeric(18, 2)` por coincidência; `Numeric(10, 4)`, `Numeric(12, 0)`,
+  `Numeric(5, 2)` e `Numeric(20, 10)` levantavam `ArrowInvalid` (`Precision is not great enough`)
+  fora do `try`, e `Numeric(36, 10)` e `Numeric(38, 2)` `ValueError` (`precision should be between
+  1 and 38`). O desvio passou a `decimal128(38, s)`, e o segundo cast recusa o valor que não cabe
+  em `p` (`1000` em `Numeric(5, 2)`: `Decimal value does not fit in precision 5`).
+- **O fuso some em silêncio.** `timestamp[us, tz=America/Sao_Paulo]` convertido para
+  `timestamp[us]` passa com `safe=True` e guarda o instante UTC como hora local, e o inverso
+  assume UTC. O `cast` aceita os dois; a decisão fica em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+- **O nulo em `NOT NULL` é `ValueError` simples.** `RecordBatch.cast` do esquema levanta
+  `ValueError`, não `ArrowInvalid`, e `ArrowInvalid` já é subclasse de `ValueError`: o `except` do
+  cast do esquema passou a `ValueError`.
+- **A versão depois de cada escrita.** `write_deltalake(dt, ...)` com o objeto `DeltaTable` deixa
+  `dt.version()` na versão do próprio commit, mesmo com o commit de outro escritor entre os dois
+  (1, depois 3 com o 2 de outro objeto). `create_write_transaction` não atualiza o objeto (3 no
+  objeto, 4 no log), como a revisão de 2026-09-21 já lera. `DeltaTable(uri).version()` depois da
+  escrita, a forma dos rascunhos da [etapa 3](PLAN-STAGE-3.md), devolve a última versão do log, que
+  pode ser a de outro escritor.
+
+**Consequência**: os três defeitos do `cast` estão corrigidos em `serialize_db.schema`, com os
+casos em `tests/test_schema.py` que reprovavam no código anterior (seis) e passam no novo;
+`publish_partition` da etapa 3 escreve pelo objeto `DeltaTable` e devolve `dt.version()`, e
+`register_files` relê a versão depois do commit.
+
+## O que a sessão única mostrou
+
+Em 2026-09-22, no macOS (DuckDB 1.5.5 com `threads = 2`, PyArrow 25.0.1, pandas 3.0.6), as sondas no
+scratchpad e os esboços reescritos de `test_parallel.py` mediram se os dois motores podem ter uma
+sessão por execução sob um lock, como o usuário decidiu no mesmo dia, sem perder a troca por lotes
+em que o cliente trabalha no lote atual enquanto a biblioteca lê o seguinte ou grava o anterior.
+
+- **O leitor do DuckDB não sobrevive a outro comando na mesma conexão.** O comando seguinte o
+  esvazia, sem erro (`test_duckdb.py::test_arrow_reader_is_invalidated_by_the_next_command`, de
+  2026-09-20). Um stream que segurasse o leitor seguraria a sessão enquanto o cliente trabalha, e
+  o `close` de um `loader` aberto no mesmo `with`, que sai antes do stream, esperaria por ela. O
+  stream da sessão única consome o leitor inteiro num arquivo antes de soltar o lock.
+- **O arquivo intermediário.** Com Parquet nos dois sentidos, o pipeline de três estágios sobre
+  3.000.000 de linhas levou 0,699 s num banco em arquivo: o `ParquetWriter` padrão gastou 0,240 s e
+  o `INSERT ... BY NAME` de `read_parquet` 0,319 s. Com Arrow IPC, o resultado de 3.000.000 de linhas
+  foi gravado em 0,069 s e lido em 0,005 s, contra 0,054 s do leitor direto. Em 20.000.000 de linhas
+  de três colunas, o Arrow IPC sem compressão teve 478 MB (escrita 0,612 s, leitura 0,026 s), com LZ4
+  162 MB (0,697 s e 0,054 s) e com ZSTD 97 MB (0,791 s e 0,143 s): LZ4 é o formato do arquivo.
+- **A comparação justa.** A primeira sonda comparou a sessão única num banco em arquivo com os
+  esboços por cursor num banco em memória; no mesmo banco, melhor de três execuções do pipeline de
+  três estágios sobre 3.000.000 de linhas: em memória, 0,112 s por cursor contra 0,135 s na sessão
+  única com Arrow IPC; em arquivo, o padrão da [etapa 4](PLAN-STAGE-4.md), 0,565 s por cursor contra
+  0,400 s na sessão única, porque um `INSERT` único sobre o leitor do arquivo custa menos que um
+  `INSERT` por lote numa transação num banco em arquivo. Na suíte, sobre um banco em arquivo: 0,427 s
+  pela tabela inteira, 0,687 s lote a lote sem threads e 0,436 s encadeado.
+- **A memória.** 20.000.000 de linhas: a tabela inteira em 567 MB e 0,594 s, o leitor direto em
+  83 MB e 0,576 s, o arquivo sem compressão em 89 MB e 0,63 s. Na suíte, 10.000.000 de linhas: o
+  arquivo com LZ4 em 106 MB e 0,408 s (0,381 s até o arquivo fechar, 81 MB de arquivo), contra 83 MB
+  e 0,316 s do leitor direto e 322 MB e 0,341 s da tabela inteira. A consulta termina antes do
+  primeiro lote.
+- **O que não trava.** Um comando no meio de um stream, a tabela temporária lida pelo stream, a
+  saída antecipada do laço com o `loader` no mesmo `with` (0,013 s), duas threads de cliente com
+  stream e loader ao mesmo tempo (as duas terminaram com 1.000.000 de linhas cada, em 0,072 s) e uma
+  primitiva chamada dentro de `session()` na mesma thread, pelo `RLock`. Um stream de 10 linhas pelo
+  arquivo custou 0,3 ms.
+- **O que a sessão única deixa de fazer.** Quatro tabelas de 150.000 linhas ingeridas por
+  `delta_scan` em disco local levaram 0,061 s em série e 0,017 s em quatro cursores; quatro cargas
+  Arrow pedidas por quatro threads levaram 0,071 s, e quatro `COPY ... TO`, 0,029 s, em série na
+  sessão (`test_parallel.py`).
+
+**Consequência**: os dois motores têm uma sessão por execução sob um `RLock` que as primitivas tomam
+e soltam e que `session()` dá ao cliente; `stream` grava o resultado num arquivo Arrow IPC com LZ4
+antes de soltar o lock, o `loader` grava os lotes num arquivo fora da sessão e os insere num comando
+no `close`, e `query` e `execute` devolvem `to_arrow_table()` sob o lock ([`PLAN.md`](PLAN.md),
+etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [6](PLAN-STAGE-6.md)). A ingestão de várias
+tabelas passa a ser em série, e `max_workers` saiu de `ingest`; a medição no S3 está em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a revisão de legibilidade dos testes de 2026-09-22 mostrou
+
+Em 2026-09-22, no macOS (PyArrow 25.0.1, pytest 9.1.1), cada mudança da revisão de legibilidade
+dos testes do pacote foi conferida pelo instrumento que a valida.
+
+- **A base fictícia refatorada é a mesma, byte a byte.** `tests/source_db_projetado.py` gravou a
+  base no scratchpad antes e depois da troca dos nomes e da quebra das expressões: os 63 arquivos
+  saíram idênticos (`diff -r`), e `probes/parquet_source.py` com `--sample 5 --text-bytes` deu dois
+  relatórios de 758 linhas, iguais fora a data e o caminho. O sorteio de `taxa_juros_fixos` continua
+  um por linha de `cad_contratos`, usado numa linha em quatro, porque os valores de
+  `cad_lancamentos` saem da mesma sequência do gerador.
+- **O teste do `conftest` Redshift herdava a porta do ambiente.** O terceiro teste de
+  `tests/test_conftest_redshift.py` não apagava `SERIALIZE_DB_REDSHIFT_PORT` e lia a do shell: com
+  `SERIALIZE_DB_REDSHIFT_PORT=abc`, a versão anterior reprovou com `ValueError: invalid literal for
+  int() with base 10: 'abc'`, e a nova, que apaga as sete `SERIALIZE_DB_REDSHIFT_*` antes de definir
+  as do teste, passou. Nenhum dos três deixava a variável definida para os testes seguintes.
+- **O `pythonpath` do pytest resolve pela raiz do repositório.** Com `pythonpath = ["scripts",
+  "probes"]` em `pyproject.toml`, `tests/test_probes.py` e `tests/test_migrate_parquet_to_delta.py`
+  importam os scripts pelo nome também com o pytest chamado de dentro de `tests/`, e o comando da
+  esteira de testes passou os 99 casos do pacote com a raiz local.
+
+**Consequência**: nenhuma mudança alterou o que as suítes conferem, e as contagens ficaram as da
+sessão única: sem variável, 183 passam e 89 são pulados; com a raiz local, 249 passam e 23 são
+pulados.
+
+## O que a revisão das suítes de estudo de 2026-09-22 mostrou
+
+Em 2026-09-22, no macOS (SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0,
+DuckDB 1.5.5, deltalake 1.6.4, PyArrow 25.0.1), as suítes de `tests/proof_of_concept/` passaram a
+ensinar as abordagens das decisões de 2026-09-21 e 2026-09-22, e cada comportamento novo nelas foi
+lido por uma sonda antes de virar asserção.
+
+- **O `SAWarning` do `bindparam` sem valor só sai numa comparação por `=`.** Sob `literal_binds`,
+  `coluna = :mes` e `upper(coluna) = upper(:mes)` saem `= NULL` com o aviso; `LIKE :padrao`,
+  `coalesce(coluna, :mes)`, `select(:mes)`, o `VALUES` de um `INSERT` e `text("mes = :mes")` saem
+  `NULL` sem aviso algum. Sem `literal_binds`, `compiled.binds` marca o parâmetro `required` nas
+  sete formas. Uma guarda pelo aviso, a do rascunho anterior da etapa 2, deixaria passar cinco das
+  sete, e [`sqlalchemy.md`](sqlalchemy.md) dizia que o `text()` também avisa.
+- **As releituras concordaram com o plano.** `Schema.from_arrow` leva o `PARQUET:field_id` do Arrow
+  ao esquema Delta como `parquet.field.id` inteiro, e sem a chave no Arrow ela não aparece. No log,
+  o `overwrite` com predicado grava `remove` e `add` com `dataChange` verdadeiro, o `delete` que
+  reescreve um arquivo também, e o `optimize.compact` grava os dois com `dataChange` falso. O
+  `RETURN_STATS` do DuckDB traz mínimo e máximo como texto em todo tipo, o `decimal` exato
+  (`123456789012345.21`), e nenhum dos dois numa coluna só de nulos; registrados só os de inteiro,
+  data, `double` e texto, como faz `stat_converter`, `get_add_actions(flatten=True)` mostra
+  `min.valor` e `min.data_ref` nulos, e o DuckDB poda pelo inteiro e pelo texto (`Scanning Files:
+  0/2`). `strlen('ação ação')` dá 13 e `length`, 9, e `octet_length` recusa `VARCHAR` com
+  `BinderException`; no PyArrow, `'ç' * 101` mede 202 em `binary_length` e 101 em `utf8_length`.
+  Com `hive_partitioning = true`, `data_str=2026-08-31` é lido como `DATE`, numa pasta só inclusive,
+  `hive_types_autocast = false` o mantém `VARCHAR`, e `mes=2026-01` fica `VARCHAR`.
+- **O rascunho da auditoria da etapa 4 media o texto em caracteres.** Com `text_bytes`, `strlen` no
+  DuckDB e `octet_length` no Redshift, que a página da função mede em bytes num `VARCHAR`, o
+  rascunho rodou de novo com o mesmo resultado, e o valor `'ação ação'` (9 caracteres, 13 bytes)
+  numa coluna `String(10)` só é acusado pela medida em bytes.
+
+**Consequência**: [`sqlalchemy.md`](sqlalchemy.md) passou a dizer que o aviso sai só na comparação
+por `=`, e [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md) acrescenta esse fato à razão de `render` ler
+`compiled.binds`; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) mede o texto da auditoria em bytes, no
+rascunho, na estratégia e nos testes. `test_sqlalchemy.py` tem 15 casos; sem variável, 186 passam e
+89 são pulados; com a raiz local, 252 passam e 23 são pulados.
+## O que o stream lote a lote e as sessões a mais mostraram
+
+Em 2026-09-23, no macOS (DuckDB 1.5.5, PyArrow 25.0.1, pandas 3.0.6), uma sonda no scratchpad
+comparou três desenhos de `stream` sobre o mesmo banco em arquivo, com os mesmos dados e lotes de
+100.000 linhas, melhor de três execuções: o cursor próprio por stream, anterior à sessão única, com
+a thread que puxa do leitor vivo; o transbordo do resultado inteiro antes do primeiro lote, o
+desenho de 2026-09-22; e o desenho atual de `test_parallel.py`, em que uma thread roda a consulta
+sob o lock e grava cada lote no arquivo assim que o DuckDB o entrega, e o cliente lê cada lote
+gravado. A tabela tem 20.000.000 de linhas em três colunas; a consulta sem operador bloqueante
+devolve 13.333.333 linhas em 134 lotes, e o trabalho do cliente por lote é um `sleep`, que solta o
+GIL como o trabalho nativo, ou a conversão para pandas com duas colunas calculadas.
+
+| Consulta e trabalho por lote, `threads = 2` | Cursor próprio | Transbordo inteiro | Lote a lote |
+| --- | --- | --- | --- |
+| Sem operador bloqueante, sem trabalho | 1º lote em 0,003 s, total 0,303 s | 0,472 s, 0,516 s | 0,005 s, 0,482 s |
+| Sem operador bloqueante, 2 ms | 0,003 s, 0,339 s | 0,466 s, 0,810 s | 0,005 s, 0,490 s |
+| Sem operador bloqueante, 5 ms | 0,005 s, 0,842 s | 0,494 s, 1,330 s | 0,012 s, 0,939 s |
+| Sem operador bloqueante, pandas | 0,003 s, 0,306 s | 0,473 s, 0,580 s | 0,005 s, 0,495 s |
+| `ORDER BY`, sem trabalho | 0,458 s, 0,755 s | 0,995 s, 1,041 s | 0,459 s, 0,960 s |
+| `ORDER BY`, 5 ms | 0,457 s, 1,279 s | 0,973 s, 1,815 s | 0,485 s, 1,405 s |
+
+- **O cursor próprio é o mais rápido** e é o que a sessão única não pode ter: ele segura a conexão
+  enquanto o cliente trabalha. O transbordo inteiro soma a consulta ao trabalho do cliente, e o lote
+  a lote os sobrepõe, pagando a escrita do arquivo no caminho da consulta, cerca de 0,18 s nestas
+  13.333.333 linhas. Com 5 ms por lote, o lote a lote ficou 0,097 s atrás do cursor e 0,391 s à
+  frente do transbordo inteiro; o primeiro lote chegou em 5 ms, contra 472 ms.
+- **Com `threads = 8`** a ordem não mudou: sem trabalho, 0,299 s, 0,549 s e 0,511 s; com 5 ms por
+  lote, 0,834 s, 1,348 s e 0,935 s; com `ORDER BY`, o primeiro lote em 0,164 s, 0,711 s e 0,169 s.
+- **O `loader` com o arquivo e o `INSERT` único ganha do cursor próprio com um `INSERT` por lote
+  numa transação enquanto o cliente produz depressa, e empata quando o trabalho do cliente domina**,
+  6.000.000 de linhas em 60 lotes: sem trabalho, 0,747 s contra 1,101 s; com 2 ms por lote, 0,836 s
+  contra 1,121 s; com 5 ms, 1,115 s contra 1,150 s. Com `threads = 8`, 0,883 s contra 1,116 s,
+  0,949 s contra 1,125 s e 1,192 s contra 1,124 s.
+- **O esquema do fluxo Arrow IPC só entra no arquivo com o primeiro lote**, ou no fechamento de um
+  resultado vazio: abrir o leitor antes disso falhou com `Tried reading schema message, was null or
+  length 0`, e o stream espera o primeiro lote gravado, ou o fim da consulta, antes de abrir o
+  arquivo.
+- **A memória**, na suíte (`test_duckdb.py::test_spooled_stream_bounds_memory`, um subprocesso,
+  10.000.000 de linhas, quatro execuções): 94 MB nas três primeiras e 97 MB na quarta, o primeiro
+  lote em 0,005 s a 0,006 s e a consulta em 0,369 s a 0,388 s, com 81 MB de arquivo, contra 322 MB
+  da tabela inteira.
+- **Na suíte** (`test_parallel.py`, quatro execuções): o primeiro lote de 2.000.000 de linhas chegou
+  entre 0,004 s e 0,008 s, com a consulta ainda rodando, de um total de 0,066 s a 0,068 s com um
+  comando da sessão no meio de cada lote; numa delas, o `close` depois do primeiro lote parou a
+  consulta com 3 de 3.000 lotes gravados; o erro de conversão na linha 2.900.000 chegou como `OSError` depois de 27
+  lotes; o pipeline de três estágios sobre 3.000.000 de linhas levou 0,433 s pela tabela inteira,
+  0,691 s lote a lote dentro de `session()` e 0,406 s encadeado. A sessão de `new_session`, um
+  `cursor()` da conexão, viu a tabela confirmada pela principal, recusou a temporária dela com
+  `CatalogException` e rodou enquanto a principal estava num bloco `session()`; quatro tabelas de
+  150.000 linhas entraram por `delta_scan` em 0,017 s em quatro sessões a mais, contra 0,066 s em
+  série na sessão principal.
+
+**Consequência**: o `stream` do DuckDB grava cada lote enquanto a consulta roda, `prefetch` saiu da
+assinatura, e o `BatchStream` de `test_parallel.py` é a referência ([`PLAN.md`](PLAN.md), etapas
+[4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md)); os dois motores ganharam `new_session()`, e
+`run.ingest` de mais de uma tabela abre uma sessão a mais por tabela ([etapa 6](PLAN-STAGE-6.md)).
+O item da ingestão de várias tabelas na sessão única saiu de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a sonda do pool de threads do DuckDB mostrou
+
+Em 2026-09-23, no macOS com 11 núcleos (DuckDB 1.5.5), uma sonda no scratchpad mediu o que uma
+sessão a mais acrescenta ao paralelismo do DuckDB, respondendo se cada sessão poderia ganhar threads
+próprias.
+
+- **O `threads` é da instância, e muda em execução.** `duckdb_settings()` dá `threads` e
+  `external_threads` com escopo `GLOBAL`; `SET SESSION threads = 3` foi recusado com `Catalog Error:
+  option "threads" cannot be set locally`; `SET threads = 3` e `SET GLOBAL threads = 3` foram
+  aceitos, e outro cursor leu 3 em seguida.
+- **A thread que chama cada sessão executa a consulta dela.** Numa varredura de 100.000.000 de
+  linhas em memória (`SELECT sum(hash(id)) FROM t`, melhor de três), uma consulta sozinha e duas e
+  quatro juntas, cada uma num cursor e numa thread Python: com `threads = 1`, 0,608 s, 0,622 s e
+  0,639 s; com 2, 0,310 s, 0,473 s e 0,600 s; com 4, 0,159 s, 0,269 s e 0,449 s; com 8, 0,097 s,
+  0,175 s e 0,326 s; com 11, o padrão, 0,079 s, 0,160 s e 0,313 s; com 22, 0,078 s, 0,156 s e
+  0,307 s.
+- **Com `threads` igual aos núcleos, uma consulta grande já ocupa a máquina**: duas sessões juntas
+  levaram 2,01 vezes uma, o tempo delas em série, e o dobro dos núcleos não mudou nada.
+- **Uma consulta que não se paraleliza deixa núcleos para as outras sessões**:
+  `SELECT sum(hash(range)) FROM range(300_000_000)` levou de 1,78 s a 1,94 s com qualquer `threads`
+  de 1 a 22, porque a função `range` gera as linhas numa thread só, e quatro juntas levaram de 1,07 a
+  1,13 vez uma.
+- A documentação do DuckDB ("How to Tune Workloads") diz que o paralelismo é por row group de
+  122.880 linhas, que a leitura de arquivos remotos é síncrona, uma requisição HTTP por thread, e
+  recomenda `threads` de 2 a 5 vezes os núcleos para ela.
+
+A suíte repete o escopo como asserção e os tempos como leitura
+(`test_concurrency.py::test_duckdb_thread_pool_is_global_and_each_caller_joins_it`, 20.000.000 de
+linhas): com `threads = 1`, 0,122 s uma sessão e 0,128 s quatro juntas; com 11, 0,016 s e 0,061 s.
+
+**Consequência**: a regra da sessão a mais em [`PLAN.md`](PLAN.md), a seção do paralelismo de
+[`serialize-db.md`](serialize-db.md) e a estratégia do motor na [etapa 4](PLAN-STAGE-4.md) dizem que o
+pool é da instância e que a sessão a mais ganha nas consultas pequenas, nos operadores que não se
+paralelizam e na espera do S3; o `threads` da leitura do S3 entrou em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), à espera de uma medição no ambiente alvo. As medições estão
+em [`duckdb.md`](duckdb.md).

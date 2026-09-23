@@ -1,12 +1,15 @@
 """O SQLAlchemy no papel que a biblioteca lhe dá: modelos declarativos como contrato e Core para mover dados.
 
 Sem gravar arquivo algum, os testes mostram o ``Table`` que um modelo declarativo expõe, o DDL
-compilado para o DuckDB e para o Redshift (com as opções físicas lidas de ``Table.info``), o
-``create_all`` num DuckDB em memória, os statements Core de ``insert`` e ``select`` executados pelo
-``duckdb_engine``, o caminho por Arrow na conexão bruta, a reflexão, a precisão do ``Numeric`` pelo
-dialeto contra o caminho Arrow, o ``pandas.read_sql``, o texto SQL gerado por dialeto com parâmetro
-e prefixo (``plan/sqlalchemy.md``), a compilação de DML para o Redshift, que não exige um cluster,
-e o nome em três partes do esquema vindo de datashare.
+compilado para o DuckDB e para o Redshift (com as opções físicas de ``Table.info`` acrescentadas
+por uma função comum, sem regra ``@compiles``), o ``create_all`` num DuckDB em memória, os
+statements Core de ``insert`` e ``select`` executados pelo ``duckdb_engine``, o caminho por Arrow
+na conexão bruta, a reflexão, a precisão do ``Numeric`` pelo dialeto contra o caminho Arrow, o
+``pandas.read_sql``, os comportamentos do compilador que dão forma ao ``render`` da etapa 2 (o
+``bindparam`` sem valor sob ``literal_binds``, ``compiled.binds``, o ``%`` dobrado, a citação só
+das palavras reservadas), o nome em três partes, que só serve a uma sessão aberta em outro banco, a
+compilação de DML para o Redshift, que não exige um cluster, os esquemas Arrow e Delta derivados do
+``Table`` e a cópia do sandbox com o diff dos arquivos gerados.
 Nenhuma classe ORM é instanciada: a biblioteca usa os modelos como metadados e o Core como gerador
 de SQL.
 """
@@ -17,11 +20,8 @@ import datetime as dt
 import decimal
 import difflib
 import json
-import re
-import warnings
 from collections.abc import Iterator
 
-import duckdb
 import duckdb_engine
 import pandas as pd
 import pyarrow as pa
@@ -29,7 +29,6 @@ import pytest
 import sqlalchemy as sa
 from deltalake import Schema as DeltaSchema
 from sqlalchemy.exc import SAWarning
-from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql import quoted_name
@@ -99,31 +98,40 @@ CLIENTES = [
 ]
 
 
-@compiles(CreateTable, "redshift")
-def create_table_with_physical_options(element: CreateTable, compiler: sa.sql.compiler.DDLCompiler, **kw: object) -> str:
-    """Acrescenta ao ``CREATE TABLE`` do Redshift as opções físicas guardadas em ``Table.info["serialize_db"]``.
+def redshift_ddl(table: sa.Table) -> str:
+    """O ``CREATE TABLE`` do Redshift compilado pelo dialeto, com as opções físicas de ``Table.info["serialize_db"]`` no fim.
 
-    É a alternativa aos argumentos ``redshift_diststyle``, ``redshift_distkey`` e ``redshift_sortkey``
-    do ``sqlalchemy-redshift``, que só existem com o dialeto instalado; ``info`` mantém o modelo neutro.
+    As opções ficam em ``info``, e não nos argumentos ``redshift_diststyle``, ``redshift_distkey`` e
+    ``redshift_sortkey`` do ``sqlalchemy-redshift``, que só existem com o dialeto instalado: o modelo
+    fica neutro. É uma função chamada por quem quer as opções, e não uma regra
+    ``@compiles(CreateTable, "redshift")``, que mudaria a compilação de todo ``CreateTable`` do
+    Redshift no processo, a das outras suítes inclusive. O DDL da biblioteca não passa pelo dialeto
+    (``serialize_db.schema.ddl``).
     """
-    text = compiler.visit_create_table(element, **kw).rstrip()
-    options = element.element.info.get("serialize_db", {})
-    clauses = []
-
+    text = str(CreateTable(table).compile(dialect=DIALECTS["redshift"])).rstrip()
+    options = table.info.get("serialize_db", {})
     redshift = options.get("redshift", {})
-    if redshift.get("diststyle"):
-        clauses.append(f"DISTSTYLE {redshift['diststyle']}")
-    if redshift.get("distkey"):
-        clauses.append(f"DISTKEY ({redshift['distkey']})")
-    if options.get("sort_key"):
-        clauses.append(f"SORTKEY ({', '.join(options['sort_key'])})")
 
-    return f"{text} {' '.join(clauses)}\n\n" if clauses else f"{text}\n\n"
+    # As cláusulas físicas vêm depois do parêntese que fecha a lista de colunas.
+    parts = [text]
+    if redshift.get("diststyle"):
+        parts.append(f"DISTSTYLE {redshift['diststyle']}")
+    if redshift.get("distkey"):
+        parts.append(f"DISTKEY ({redshift['distkey']})")
+    if options.get("sort_key"):
+        parts.append(f"SORTKEY ({', '.join(options['sort_key'])})")
+    return " ".join(parts)
 
 
 def normalized(sql: str) -> str:
     """O texto com espaços e quebras de linha reduzidos a um espaço, para comparações."""
     return " ".join(sql.split())
+
+
+def literal_text(statement: sa.sql.ClauseElement) -> str:
+    """O texto do DuckDB com as constantes embutidas (``literal_binds``), numa linha só."""
+    compiled = statement.compile(dialect=DIALECTS["duckdb"], compile_kwargs={"literal_binds": True})
+    return normalized(str(compiled))
 
 
 @pytest.fixture
@@ -165,20 +173,25 @@ def test_declarative_model_exposes_table() -> None:
 
 
 def test_ddl_per_dialect() -> None:
-    """O mesmo ``Table`` compila o ``CREATE TABLE`` de cada motor; o Redshift recebe as opções físicas de ``info``."""
-    duckdb_ddl = normalized(str(CreateTable(Operacao.__table__).compile(dialect=DIALECTS["duckdb"])))
-    redshift_ddl = normalized(str(CreateTable(Operacao.__table__).compile(dialect=DIALECTS["redshift"])))
+    """O mesmo ``Table`` compila o ``CREATE TABLE`` de cada motor; ``redshift_ddl`` acrescenta as opções físicas de ``info``."""
+    duckdb_text = normalized(str(CreateTable(Operacao.__table__).compile(dialect=DIALECTS["duckdb"])))
+    redshift_text = normalized(redshift_ddl(Operacao.__table__))
 
-    assert "valor NUMERIC(18, 2) NOT NULL" in duckdb_ddl
-    assert "meta JSON" in duckdb_ddl
-    assert "PRIMARY KEY (id_operacao)" in duckdb_ddl
+    assert "valor NUMERIC(18, 2) NOT NULL" in duckdb_text
+    assert "meta JSON" in duckdb_text
+    assert "PRIMARY KEY (id_operacao)" in duckdb_text
 
-    assert "meta SUPER" in redshift_ddl
-    assert redshift_ddl.endswith("DISTSTYLE KEY DISTKEY (id_cliente) SORTKEY (data_ref, id_operacao)")
+    assert "meta SUPER" in redshift_text
+    assert redshift_text.endswith("DISTSTYLE KEY DISTKEY (id_cliente) SORTKEY (data_ref, id_operacao)")
 
-    # Text vira TEXT no Redshift, que o banco guarda como VARCHAR(256); o contrato usa String(65535).
+    # O dialeto sozinho não lê info: o CREATE TABLE compilado sem a função termina na lista de colunas.
+    plain = normalized(str(CreateTable(Operacao.__table__).compile(dialect=DIALECTS["redshift"])))
+    assert plain.endswith(")") and "DISTSTYLE" not in plain
+
+    # O dialeto compila Text como TEXT, que o Redshift guarda como VARCHAR(256); o DDL da biblioteca,
+    # gerado sem o dialeto, emite VARCHAR(65535) para Text.
     text_table = sa.Table("observacoes", sa.MetaData(), sa.Column("texto", sa.Text))
-    assert "texto TEXT" in normalized(str(CreateTable(text_table).compile(dialect=DIALECTS["redshift"])))
+    assert "texto TEXT" in normalized(redshift_ddl(text_table))
 
 
 def test_create_all_and_reflection(engine: sa.Engine) -> None:
@@ -318,90 +331,143 @@ def test_pandas_read_sql_keeps_decimal_only_with_coerce_float_off(engine: sa.Eng
     assert isinstance(kept["data_ref"].iloc[0], dt.date)
 
 
-def param(name: str, type_: sa.types.TypeEngine | None = None) -> sa.ColumnElement:
-    """Parâmetro de execução: o texto ``:nome`` atravessa ``literal_binds`` e é resolvido na execução."""
-    return sa.literal_column(f":{name}", type_=type_)
+def test_literal_binds_renders_a_bindparam_without_value_as_null(recwarn: pytest.WarningsRecorder) -> None:
+    """Sob ``literal_binds``, o ``bindparam`` sem valor sai ``NULL`` sem erro, e o ``SAWarning`` só aparece numa comparação por ``=``.
 
+    No ``LIKE``, no ``coalesce``, no ``VALUES`` de um ``INSERT`` e no ``text()`` o ``NULL`` sai
+    calado, e o texto gerado filtraria ou gravaria nulo sem que ninguém percebesse. Por isso o
+    ``render`` da [etapa 2](../../plan/PLAN-STAGE-2.md) não se apoia no aviso e lê
+    ``compiled.binds`` (o teste seguinte).
+    """
+    operations = Operacao.__table__
 
-def prefixed(statement: sa.Select, metadata: sa.MetaData, prefix: str = "{prefix}") -> sa.Select:
-    """Troca cada tabela do contrato pela cópia com o prefixo do sandbox; o sentinela sai sem aspas."""
-    copies = {
-        table: table.to_metadata(sa.MetaData(), name=quoted_name(f"{prefix}{table.name}", quote=False)) for table in metadata.tables.values()
+    # O fim do texto esperado de cada statement: o parâmetro virou NULL.
+    silent = {
+        "WHERE cad_operacoes.descricao LIKE NULL": sa.select(operations.c.id_operacao).where(operations.c.descricao.like(sa.bindparam("padrao"))),
+        "SELECT coalesce(cad_operacoes.mes, NULL) AS coalesce_1 FROM cad_operacoes": sa.select(sa.func.coalesce(operations.c.mes, sa.bindparam("mes", type_=sa.String(7)))),
+        "INSERT INTO cad_operacoes (id_operacao, mes) VALUES (1, NULL)": sa.insert(operations).values(id_operacao=1, mes=sa.bindparam("mes")),
+        "WHERE mes = NULL": sa.select(operations.c.id_operacao).where(sa.text("mes = :mes")),
     }
+    for ending, statement in silent.items():
+        assert literal_text(statement).endswith(ending)
+    assert [warning for warning in recwarn if issubclass(warning.category, SAWarning)] == []
 
-    def replace(element: object) -> object:
-        if isinstance(element, sa.Table):
-            return copies.get(element)
-        if isinstance(element, sa.Column) and element.table in copies:
-            return copies[element.table].c[element.name]
+    # Só a comparação por = avisa.
+    compared = sa.select(operations.c.id_operacao).where(operations.c.mes == sa.bindparam("mes"))
+    assert literal_text(compared).endswith("WHERE cad_operacoes.mes = NULL")
+    assert "rendering literal NULL" in str(recwarn.pop(SAWarning).message)
+
+
+def test_compiled_binds_marks_the_bindparam_without_value_as_required() -> None:
+    """Sem ``literal_binds``, ``compiled.binds`` marca ``required`` todo ``bindparam`` sem valor, e um ``literal_column(":nome")`` no lugar dele atravessa ``literal_binds`` como texto.
+
+    São as duas peças do ``render`` da [etapa 2](../../plan/PLAN-STAGE-2.md): ``required`` diz que
+    nós trocar, e ``replacement_traverse`` os troca numa cópia do statement.
+    """
+    operations = Operacao.__table__
+    query = sa.select(operations.c.id_operacao).where(
+        operations.c.mes == sa.bindparam("mes"),
+        operations.c.descricao.like(sa.bindparam("padrao")),
+        operations.c.id_cliente == sa.bindparam("cliente", value=7),
+        operations.c.valor > decimal.Decimal("100.00"),
+    )
+    compiled = query.compile(dialect=DIALECTS["duckdb"])
+
+    # Só os dois sem valor são obrigatórios: o bindparam com valor e a constante, que entra com um
+    # nome anônimo, não são. construct_params junta os valores do chamador aos que o statement tem.
+    assert sorted(name for name, bind in compiled.binds.items() if bind.required) == ["mes", "padrao"]
+    values = {"mes": "2026-08", "padrao": "A%"}
+    assert compiled.construct_params(values) == {**values, "cliente": 7, "valor_1": decimal.Decimal("100.00")}
+
+    # replacement_traverse chama a função em cada nó e deixa o nó como está quando ela devolve None.
+    def placeholder(element: sa.sql.ClauseElement) -> sa.sql.ClauseElement | None:
+        if isinstance(element, sa.BindParameter) and element.required:
+            return sa.literal_column(f":{element.key}", type_=element.type)
         return None
 
-    return replacement_traverse(statement, {}, replace)
-
-
-def render(statement: sa.Select, dialect: str, metadata: sa.MetaData, prefix: str = "{prefix}") -> str:
-    """Texto do dialeto com as constantes embutidas; um ``bindparam`` sem valor viraria ``NULL``, então é erro."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", SAWarning)
-        compiled = prefixed(statement, metadata, prefix).compile(dialect=DIALECTS[dialect], compile_kwargs={"literal_binds": True})
-
-    return str(compiled)
-
-
-def test_generated_sql_text_per_dialect() -> None:
-    """O statement Core vira texto de cada dialeto com ``:mes``, o prefixo do sandbox e os literais intactos."""
-    operations, clients = Operacao.__table__, Cliente.__table__
-    query = (
-        sa.select(clients.c.nome, sa.func.sum(operations.c.valor).label("total"))
-        .join_from(operations, clients, operations.c.id_cliente == clients.c.id_cliente)
-        .where(operations.c.mes == param("mes", sa.String(7)), operations.c.valor > decimal.Decimal("100.00"), clients.c.nome.like("A%"))
-        .group_by(clients.c.nome)
-        .order_by(clients.c.nome)
+    copy = replacement_traverse(query, {}, placeholder)
+    assert literal_text(copy).endswith(
+        "WHERE cad_operacoes.mes = :mes AND cad_operacoes.descricao LIKE :padrao "
+        "AND cad_operacoes.id_cliente = 7 AND cad_operacoes.valor > 100.00"
     )
 
-    texts = {dialect: render(query, dialect, Base.metadata) for dialect in DIALECTS}
-    assert texts["duckdb"] == texts["redshift"]
-    assert "{prefix}cad_operacoes" in texts["duckdb"] and ":mes" in texts["duckdb"] and "LIKE 'A%'" in texts["duckdb"]
+    # O statement original continua com os parâmetros.
+    assert normalized(str(compiled)).endswith(
+        "WHERE cad_operacoes.mes = :mes AND cad_operacoes.descricao LIKE :padrao "
+        "AND cad_operacoes.id_cliente = :cliente AND cad_operacoes.valor > :valor_1"
+    )
 
-    # Um bindparam sem valor renderizaria NULL com um aviso; render o transforma em erro.
-    with pytest.raises(SAWarning):
-        render(sa.select(operations.c.id_cliente).where(operations.c.mes == sa.bindparam("mes")), "duckdb", Base.metadata)
 
-    # Com o dialeto avulso no paramstyle padrão (pyformat), o mesmo literal sairia dobrado: LIKE 'A%%'.
-    doubled = str(query.compile(dialect=duckdb_engine.Dialect(), compile_kwargs={"literal_binds": True}))
-    assert "LIKE 'A%%'" in doubled
+def test_default_paramstyle_doubles_the_percent_in_literals() -> None:
+    """Um dialeto avulso compila no ``paramstyle`` do driver, e sob ``literal_binds`` os estilos com ``%`` dobram o ``%`` dos literais; ``paramstyle="named"`` não dobra.
 
-    # O texto roda no DuckDB com o prefixo do sandbox no lugar do sentinela e :mes reescrito como $mes.
-    con = duckdb.connect()
-    con.execute("CREATE TABLE exec_42_cad_operacoes (id_operacao BIGINT, id_cliente BIGINT, valor DECIMAL(18,2), mes VARCHAR)")
-    con.execute("CREATE TABLE exec_42_cad_clientes (id_cliente BIGINT, nome VARCHAR, mes VARCHAR)")
-    con.execute("INSERT INTO exec_42_cad_operacoes VALUES (1, 7, 150.00, '2026-08'), (2, 7, 50.00, '2026-08'), (3, 9, 200.00, '2026-07'), (4, 9, 120.00, '2026-08')")
-    con.execute("INSERT INTO exec_42_cad_clientes VALUES (7, 'Alfa', '2026-08'), (9, 'Beta', '2026-08')")
+    O texto dobrado é o comando que o DBAPI recebe e desdobra, e fora dele é SQL errado: por isso o
+    ``render`` da [etapa 2](../../plan/PLAN-STAGE-2.md) compila com ``paramstyle="named"``.
+    """
+    operations = Operacao.__table__
+    query = sa.select(operations.c.id_operacao).where(
+        operations.c.descricao.like("A%"),
+        sa.func.strftime(operations.c.data_ref, "%Y-%m") == "2026-08",
+    )
 
-    params = {"mes": "2026-08"}
-    sql = re.sub(rf"(?<!:):({'|'.join(params)})\b", r"$\1", render(query, "duckdb", Base.metadata, prefix="exec_42_"))
-    assert con.execute(sql, params).fetchall() == [("Alfa", decimal.Decimal("150.00"))]
+    defaults = {"duckdb": duckdb_engine.Dialect(), "redshift": RedshiftDialect_redshift_connector()}
+    assert {name: dialect.paramstyle for name, dialect in defaults.items()} == {"duckdb": "pyformat", "redshift": "format"}
+    for dialect in defaults.values():
+        text = str(query.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
+        assert "LIKE 'A%%'" in text and "'%%Y-%%m'" in text
+
+    for dialect in DIALECTS.values():
+        text = str(query.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
+        assert "LIKE 'A%'" in text and "'%Y-%m'" in text
+
+
+def test_dialects_quote_only_their_reserved_words() -> None:
+    """Cada dialeto cita só as palavras que ele reserva, ``to`` nos dois e ``timestamp`` só no Redshift; ``quoted_name(quote=True)`` cita todo nome.
+
+    É por isso que a cópia prefixada do ``render`` leva ``quote=True`` em toda tabela e coluna do
+    contrato, como o DDL da etapa 1, com o sentinela ``{prefix}`` dentro das aspas. O texto
+    compilado deixa um espaço antes de cada quebra de linha, que o ``render`` apara.
+    """
+    contracts = sa.Table(
+        "cad_contratos", sa.MetaData(),
+        sa.Column("to", sa.Date), sa.Column("timestamp", sa.DateTime), sa.Column("numero", sa.String(20)),
+    )
+    query = sa.select(contracts)
+    assert normalized(str(query.compile(dialect=DIALECTS["duckdb"]))) == 'SELECT cad_contratos."to", cad_contratos.timestamp, cad_contratos.numero FROM cad_contratos'
+    assert normalized(str(query.compile(dialect=DIALECTS["redshift"]))) == 'SELECT cad_contratos."to", cad_contratos."timestamp", cad_contratos.numero FROM cad_contratos'
+    assert " \nFROM" in str(query.compile(dialect=DIALECTS["duckdb"]))
+
+    # A cópia com todo nome em quoted_name(quote=True): o mesmo texto nos dois dialetos.
+    columns = []
+    for column in contracts.columns:
+        columns.append(sa.Column(quoted_name(column.name, quote=True), column.type))
+    copy = sa.Table(quoted_name("{prefix}cad_contratos", quote=True), sa.MetaData(), *columns)
+    expected = 'SELECT "{prefix}cad_contratos"."to", "{prefix}cad_contratos"."timestamp", "{prefix}cad_contratos"."numero" FROM "{prefix}cad_contratos"'
+    for dialect in DIALECTS.values():
+        assert normalized(str(sa.select(copy).compile(dialect=dialect))) == expected
 
 
 def test_three_part_name_needs_quoted_name_without_quotes() -> None:
-    """Um esquema ``banco.esquema``, o do datashare do ambiente alvo, só sai sem aspas com ``quoted_name(quote=False)``.
+    """Um esquema ``banco.esquema``, o nome em três partes, só sai sem aspas com ``quoted_name(quote=False)``.
 
     O ``IdentifierPreparer`` cita qualquer identificador com caractere fora do permitido, e o ponto
-    é um deles: o esquema em texto simples vira um nome só, entre aspas. O DDL e o DML da
-    [etapa 5](../../plan/PLAN-STAGE-5.md) precisam do nome em três partes inteiro.
+    é um deles: o esquema em texto simples vira um nome só, entre aspas. O motor Redshift da
+    [etapa 5](../../plan/PLAN-STAGE-5.md) roda ``USE`` no banco do datashare e cita
+    ``esquema.tabela``; o nome em três partes serve a uma sessão aberta em outro banco, como a da
+    Data API.
     """
-    dialect = RedshiftDialect_redshift_connector()
+    dialect = DIALECTS["redshift"]
 
     def table(schema: object) -> sa.Table:
         return sa.Table("operacoes", sa.MetaData(schema=schema), sa.Column("id_operacao", sa.BigInteger, nullable=False))
 
     # O esquema com ponto em texto simples: um identificador só, entre aspas.
-    plain = normalized(str(CreateTable(table("datalake_rw_shared.sbx_aco_decon")).compile(dialect=dialect)))
+    plain = normalized(redshift_ddl(table("datalake_rw_shared.sbx_aco_decon")))
     assert plain.startswith('CREATE TABLE "datalake_rw_shared.sbx_aco_decon".operacoes')
 
     # Com quote=False o ponto atravessa, no DDL e no DML.
     name = quoted_name("datalake_rw_shared.sbx_aco_decon", False)
-    assert normalized(str(CreateTable(table(name)).compile(dialect=dialect))).startswith("CREATE TABLE datalake_rw_shared.sbx_aco_decon.operacoes")
+    assert normalized(redshift_ddl(table(name))).startswith("CREATE TABLE datalake_rw_shared.sbx_aco_decon.operacoes")
     assert "FROM datalake_rw_shared.sbx_aco_decon.operacoes" in normalized(str(sa.select(table(name)).compile(dialect=dialect)))
     insert = sa.insert(table(name)).values([{"id_operacao": 1}])
     assert normalized(str(insert.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))).startswith("INSERT INTO datalake_rw_shared.sbx_aco_decon.operacoes")
@@ -467,8 +533,33 @@ def arrow_schema(table: sa.Table) -> pa.Schema:
     return pa.schema(fields, metadata={"serialize_db_table": table.name})
 
 
+def delta_schema(table: sa.Table) -> DeltaSchema:
+    """O esquema Delta do ``Table``: o esquema Arrow sem o ``PARQUET:field_id`` de cada campo, derivado pelo delta-rs.
+
+    ``Schema.from_arrow`` guarda o ``PARQUET:field_id`` como ``parquet.field.id``, e com essa chave
+    no esquema Delta o ``delta_scan`` do DuckDB lê toda coluna como nula; o
+    ``serialize_db.schema.delta_schema`` a tira do mesmo jeito.
+    """
+    fields = []
+    for field in arrow_schema(table):
+        metadata = dict(field.metadata)
+        metadata.pop(b"PARQUET:field_id")
+        fields.append(field.with_metadata(metadata))
+    return DeltaSchema.from_arrow(pa.schema(fields))
+
+
+def delta_json(table: sa.Table) -> str:
+    """O conteúdo de ``<tabela>.delta.json``: o esquema Delta em JSON canônico, com as chaves ordenadas.
+
+    O ``to_json()`` do delta-rs serializa os metadados de cada campo em ordem arbitrária, que muda a
+    cada geração; o arquivo versionado precisa sair igual em toda geração.
+    """
+    document = json.loads(delta_schema(table).to_json())
+    return json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False)
+
+
 def test_arrow_and_delta_schema_from_table() -> None:
-    """Do ``Table`` saem o esquema Arrow e, dele, o esquema Delta em JSON: a etapa 1 sem gravar nada."""
+    """Do ``Table`` saem o esquema Arrow e, dele sem o ``PARQUET:field_id``, o esquema Delta em JSON: a etapa 1 sem gravar nada."""
     schema = arrow_schema(Operacao.__table__)
 
     assert schema.field("id_operacao").type == pa.int64() and not schema.field("id_operacao").nullable
@@ -478,9 +569,13 @@ def test_arrow_and_delta_schema_from_table() -> None:
     assert schema.field("id_cliente").metadata[b"comment"] == b"Chave do cliente"
     assert schema.field("mes").metadata[b"PARQUET:field_id"] == b"7"
 
-    # O delta-rs deriva o esquema Delta do Arrow; to_json é o conteúdo de schema/<tabela>.delta.json.
-    delta = DeltaSchema.from_arrow(schema)
-    fields = {field["name"]: field for field in json.loads(delta.to_json())["fields"]}
+    # Schema.from_arrow leva o PARQUET:field_id do Arrow ao esquema Delta, como parquet.field.id inteiro.
+    carried = {field["name"]: field for field in json.loads(DeltaSchema.from_arrow(schema).to_json())["fields"]}
+    assert carried["mes"]["metadata"]["parquet.field.id"] == 7
+
+    # O esquema Delta do contrato sai sem a chave, e o JSON canônico dele é schema/<tabela>.delta.json.
+    fields = {field["name"]: field for field in json.loads(delta_json(Operacao.__table__))["fields"]}
+    assert [name for name, field in fields.items() if "parquet.field.id" in field["metadata"]] == []
     assert fields["id_operacao"]["type"] == "long" and fields["valor"]["type"] == "decimal(18,2)"
     assert fields["data_ref"]["type"] == "date" and fields["meta"]["type"] == "string"
     assert fields["id_cliente"]["metadata"]["comment"] == "Chave do cliente"
@@ -488,7 +583,7 @@ def test_arrow_and_delta_schema_from_table() -> None:
 
     # Um DateTime sem fuso vira timestamp_ntz; com fuso, timestamp.
     stamped = sa.Table("carimbos", sa.MetaData(), sa.Column("local", sa.DateTime), sa.Column("utc", sa.DateTime(timezone=True)))
-    kinds = {field["name"]: field["type"] for field in json.loads(DeltaSchema.from_arrow(arrow_schema(stamped)).to_json())["fields"]}
+    kinds = {field["name"]: field["type"] for field in json.loads(delta_json(stamped))["fields"]}
     assert kinds == {"local": "timestamp_ntz", "utc": "timestamp"}
 
 
@@ -496,18 +591,20 @@ def test_sandbox_copy_of_table_and_schema_files_diff() -> None:
     """``to_metadata`` dá a cópia com prefixo e esquema para o sandbox; os arquivos gerados são comparados por ``difflib``."""
     table = Operacao.__table__
 
-    # A cópia renomeada e qualificada é o que o motor Redshift cria por execução.
+    # A cópia renomeada no esquema: esquema.tabela, o nome em duas partes que o motor Redshift cita
+    # depois do USE. info vem junto, e com ele as opções físicas.
     sandbox = table.to_metadata(sa.MetaData(schema="projeto"), name="exec_42_cad_operacoes")
-    ddl = normalized(str(CreateTable(sandbox).compile(dialect=DIALECTS["redshift"])))
+    ddl = normalized(redshift_ddl(sandbox))
     assert ddl.startswith("CREATE TABLE projeto.exec_42_cad_operacoes (")
+    assert ddl.endswith("SORTKEY (data_ref, id_operacao)")
     assert sandbox.c.valor.type.scale == 2 and sandbox.info == table.info
 
     # schema/<tabela>.<dialeto>.sql versionado contra o regenerado depois de uma coluna nova.
     def schema_files(source: sa.Table) -> dict[str, str]:
         return {
             f"{source.name}.duckdb.sql": str(CreateTable(source).compile(dialect=DIALECTS["duckdb"])),
-            f"{source.name}.redshift.sql": str(CreateTable(source).compile(dialect=DIALECTS["redshift"])),
-            f"{source.name}.delta.json": DeltaSchema.from_arrow(arrow_schema(source)).to_json(),
+            f"{source.name}.redshift.sql": redshift_ddl(source),
+            f"{source.name}.delta.json": delta_json(source),
         }
 
     versioned = schema_files(table)

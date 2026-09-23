@@ -20,21 +20,19 @@ import os
 import socket
 import sys
 import types
+from collections.abc import Iterator
 from pathlib import Path
 
 import botocore.exceptions
 import pytest
 
-PROBES = Path(__file__).resolve().parent.parent / "probes"
-sys.path.insert(0, str(PROBES))
-
-import bucket  # noqa: E402
-import catalog  # noqa: E402
-import diagnose_aws  # noqa: E402
-import parquet_source  # noqa: E402
-import probelib  # noqa: E402
-import redshift  # noqa: E402
-import space  # noqa: E402
+import bucket
+import catalog
+import diagnose_aws
+import parquet_source
+import probelib
+import redshift
+import space
 
 NOW = dt.datetime(2026, 9, 20, 3, 44, tzinfo=dt.timezone.utc)
 MINUTE = dt.timedelta(minutes=1)
@@ -45,8 +43,13 @@ def client_error(code: str, operation: str = "Operation") -> botocore.exceptions
     return botocore.exceptions.ClientError({"Error": {"Code": code, "Message": "mensagem"}}, operation)
 
 
+def denied_call() -> None:
+    """Uma chamada que o serviço nega, como ``s3.get_bucket_policy()`` sem a permissão."""
+    raise client_error("AccessDenied", "GetBucketPolicy")
+
+
 @contextlib.contextmanager
-def make_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def make_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[probelib.Report]:
     """Um ``Report`` que grava em ``tmp_path``; no fim, fecha o arquivo e devolve ``sys.stdout`` ao pytest."""
     monkeypatch.setattr(probelib, "OUTPUT_DIR", tmp_path)
     stdout = sys.stdout
@@ -67,10 +70,10 @@ def checks(report: probelib.Report, check_id: str) -> list[str]:
 class FakePaginator:
     """Um paginador do boto3 que devolve páginas prontas, ou levanta a exceção colocada no lugar de uma página."""
 
-    def __init__(self, pages: list) -> None:
+    def __init__(self, pages: list[dict | Exception]) -> None:
         self.pages = pages
 
-    def paginate(self, **kwargs):
+    def paginate(self, **kwargs: object) -> Iterator[dict]:
         for page in self.pages:
             if isinstance(page, Exception):
                 raise page
@@ -78,22 +81,42 @@ class FakePaginator:
 
 
 class FakeS3:
-    """Um cliente S3 cujas respostas são dicionários prontos; uma exceção no lugar da resposta é levantada."""
+    """Um cliente S3 com as operações que ``bucket.py`` chama nestes testes.
 
-    def __init__(self, **responses) -> None:
+    Cada operação devolve a resposta pronta passada com o nome dela, ou levanta a exceção passada no
+    lugar da resposta; ``get_paginator`` recebe a lista de páginas.
+    """
+
+    def __init__(self, **responses: dict | list | Exception) -> None:
         self.responses = responses
 
-    def __getattr__(self, name: str):
-        if name not in self.responses:
-            raise AttributeError(name)
+    def respond(self, operation: str) -> dict:
+        """A resposta pronta de ``operation``, ou a exceção colocada no lugar dela, levantada."""
+        response = self.responses[operation]
+        if isinstance(response, Exception):
+            raise response
+        return response
 
-        def call(**kwargs):
-            response = self.responses[name]
-            if isinstance(response, Exception):
-                raise response
-            return response
+    def head_bucket(self, **kwargs: object) -> dict:
+        return self.respond("head_bucket")
 
-        return call
+    def get_bucket_versioning(self, **kwargs: object) -> dict:
+        return self.respond("get_bucket_versioning")
+
+    def get_bucket_encryption(self, **kwargs: object) -> dict:
+        return self.respond("get_bucket_encryption")
+
+    def get_object_lock_configuration(self, **kwargs: object) -> dict:
+        return self.respond("get_object_lock_configuration")
+
+    def get_public_access_block(self, **kwargs: object) -> dict:
+        return self.respond("get_public_access_block")
+
+    def get_bucket_ownership_controls(self, **kwargs: object) -> dict:
+        return self.respond("get_bucket_ownership_controls")
+
+    def get_bucket_lifecycle_configuration(self, **kwargs: object) -> dict:
+        return self.respond("get_bucket_lifecycle_configuration")
 
     def get_paginator(self, name: str) -> FakePaginator:
         return FakePaginator(self.responses[name])
@@ -287,10 +310,11 @@ def test_find_values_and_connection_rows() -> None:
 def test_report_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kinds: list[str], failing: bool, expected: int) -> None:
     """O código de saída: 2 com checagem reprovada, senão 1 com chamada falhada, senão 0."""
     with make_report(tmp_path, monkeypatch) as report:
+        record = {"pass": report.ok, "fail": report.fail}
         for kind in kinds:
-            getattr(report, "ok" if kind == "pass" else kind)("T-1", "o que", "detalhe")
+            record[kind]("T-1", "o que", "detalhe")
         if failing:
-            assert report.call("falha()", lambda: (_ for _ in ()).throw(client_error("AccessDenied"))) is None
+            assert report.call("falha()", denied_call) is None
             assert report.last_reason == "negado (AccessDenied)"
         assert report.finish() == expected
         assert report.path.read_text(encoding="utf-8").count("# ") >= 2
@@ -302,10 +326,7 @@ def test_report_call_returns_the_result_and_records_the_failure(tmp_path: Path, 
         assert report.call("soma", lambda: 1 + 1, render=str) == 2
         assert report.failures == []
 
-        def denied():
-            raise client_error("AccessDenied", "GetBucketPolicy")
-
-        assert report.call("s3.get_bucket_policy()", denied) is None
+        assert report.call("s3.get_bucket_policy()", denied_call) is None
         assert report.last_reason == "negado (AccessDenied)"
         assert report.failures[0][0] == "s3.get_bucket_policy()"
         assert report.failures[0][1].startswith("o serviço respondeu com erro: ClientError:")
@@ -389,7 +410,7 @@ def test_versioning_check_uses_the_api_or_the_sample(tmp_path: Path, monkeypatch
         ({"ObjectLockConfiguration": {"ObjectLockEnabled": "Enabled", "Rule": {"DefaultRetention": {"Mode": "COMPLIANCE", "Years": 1}}}}, "ativo, retenção padrão COMPLIANCE por 1 ano;"),
     ],
 )
-def test_bucket_settings_interpret_object_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lock, expected: str) -> None:
+def test_bucket_settings_interpret_object_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lock: dict | Exception, expected: str) -> None:
     """``BK-12``: a ausência de Object Lock é uma leitura (``desativado``), a negação traz o motivo, e a retenção padrão sai por extenso."""
     client = FakeS3(
         head_bucket={"ResponseMetadata": {"HTTPHeaders": {"x-amz-bucket-region": "us-west-2"}}},
@@ -456,14 +477,30 @@ def test_mount_state_follows_the_link_and_reads_proc_mounts(tmp_path: Path) -> N
     assert space.mount_state(real, str(tmp_path / "nomounts")) == "existe, sem montagem"
 
 
-def test_pinned_requirements_read_the_pinned_versions_of_pyproject() -> None:
+def test_pinned_requirements_read_the_pinned_versions_of_pyproject(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``SP-9`` compara o venv com as dependências de execução e o grupo ``dev`` de ``pyproject.toml``: nome de
-    importação e versão quando fixada por ``==``; os dialetos são de execução desde a etapa 2."""
-    requirements = space.pinned_requirements()
-    assert requirements["deltalake"] == "1.6.4" and requirements["duckdb"] == "1.5.5"
-    assert requirements["sqlalchemy_redshift"] == "1.0.0" and requirements["duckdb_engine"] == "0.17.0"
-    assert "redshift_connector" in requirements and requirements["sqlglot"] == "30.18.0"
-    assert requirements["boto3"] is None
+    importação e versão quando fixada por ``==``, e nenhum pacote dos outros grupos."""
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+dependencies = ["deltalake==1.6.4", "duckdb-engine==0.17.0", "sqlalchemy-redshift == 1.0.0"]
+
+[dependency-groups]
+dev = ["boto3>=1.40", "redshift-connector>=2.1", "sqlglot==30.18.0; python_version >= '3.13'"]
+docs = ["pdoc==16.0.0"]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(probelib, "REPO_ROOT", tmp_path)
+
+    assert space.pinned_requirements() == {
+        "deltalake": "1.6.4",
+        "duckdb_engine": "0.17.0",
+        "sqlalchemy_redshift": "1.0.0",
+        "boto3": None,
+        "redshift_connector": None,
+        "sqlglot": "30.18.0",
+    }
 
 
 def test_table_format_recognizes_iceberg_delta_and_parquet() -> None:
@@ -839,9 +876,9 @@ def test_partition_values_lists_each_value_once_in_order() -> None:
 
 def test_text_columns_lists_the_text_columns_once() -> None:
     """As colunas de texto saem na ordem do primeiro arquivo que as traz, sem repetição."""
-    primeiro = reading("a.parquet", columns=[column("id"), column("nome", arrow_type="string"), column("data", arrow_type="date32[day]")])
-    segundo = reading("b.parquet", columns=[column("nome", arrow_type="string"), column("meta", arrow_type="large_string")])
-    assert parquet_source.text_columns([primeiro, segundo]) == ["nome", "meta"]
+    first = reading("a.parquet", columns=[column("id"), column("nome", arrow_type="string"), column("data", arrow_type="date32[day]")])
+    second = reading("b.parquet", columns=[column("nome", arrow_type="string"), column("meta", arrow_type="large_string")])
+    assert parquet_source.text_columns([first, second]) == ["nome", "meta"]
     assert parquet_source.text_columns([reading("c.parquet", columns=[column("id")])]) == []
 
 

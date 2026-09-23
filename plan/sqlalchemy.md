@@ -6,8 +6,9 @@ ORM, com as classes mapeadas e a `Session`. Os modelos ORM são o [contrato de e
 projeto: deles derivam o DDL do DuckDB e do Redshift, o esquema Arrow dos arquivos Parquet e as
 auditorias. Este documento resume os conceitos usados pela biblioteca, as opções de customização e o
 comportamento com Redshift, DuckDB e Parquet. A seção [Papel do SQLAlchemy na
-biblioteca](#papel-do-sqlalchemy-na-biblioteca) registra o que cada parte entrega ao projeto e a
-substituição gradual do dialeto em tempo de execução pelo texto SQL gerado.
+biblioteca](#papel-do-sqlalchemy-na-biblioteca) registra o que cada parte entrega ao projeto, a
+compilação pelo dialeto em tempo de execução, que é o caminho padrão, e o texto SQL gerado, a
+opção de migração para fora do SQLAlchemy.
 
 As afirmações vêm da documentação oficial da versão 2.0, consultada em 2026-09-18. Os exemplos foram
 executados com SQLAlchemy 2.0.54, duckdb_engine 0.17.0 sobre DuckDB 1.5.5 e sqlalchemy-redshift 1.0.0;
@@ -46,7 +47,7 @@ dialeto na compilação: `Numeric(18, 2)` vira `NUMERIC(18, 2)` nos dois (`DECIM
 do DuckDB), `String(200)` vira `VARCHAR(200)` nos dois, e o catálogo do DuckDB descarta o
 comprimento. Os tipos específicos ficam em `sqlalchemy.dialects.<dialeto>` e nos dialetos externos
 (`sqlalchemy_redshift.dialect.SUPER`, `TIMESTAMPTZ`). `type_.with_variant(other_type, "<dialeto>")` troca o
-tipo num dialeto só. A [tabela de tipos do contrato](schema.md) fixa a correspondência com Arrow,
+tipo num dialeto só. A [tabela de tipos do contrato](../docs/index.md) fixa a correspondência com Arrow,
 Delta, DuckDB e Redshift.
 
 Restrições e índices são objetos: `PrimaryKeyConstraint`, `ForeignKey` na coluna ou
@@ -1197,7 +1198,7 @@ geração: produz o DDL e o texto SQL de cada dialeto, e nenhum dado passa pelo 
 e complexa pode nascer em texto validado por SQLGlot desde já; as duas formas convivem, porque o
 produto das duas é uma string executada pelo DuckDB ou pelo `redshift_connector`.
 
-### Substituição gradual do dialeto em tempo de execução
+### O texto SQL gerado como opção de migração
 
 O pipeline compila hoje cada statement Core pelo dialeto a cada execução, e esse continua o caminho
 padrão: o motor compila a cópia prefixada com os parâmetros do cliente (decisão do usuário de
@@ -1226,7 +1227,10 @@ Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 
   como comando com parâmetros do DBAPI e errado como SQL. `Dialect(paramstyle="named")` desliga a
   dobra nos dois dialetos.
 - `bindparam("mes")` sem valor e `text("mes = :mes")` não falham sob `literal_binds`: viram
-  `mes = NULL`, com um `SAWarning`. `render` troca cada `BindParameter` com `required=True` por
+  `mes = NULL`. O `SAWarning` sai só numa comparação por `=`; no `text()`, no `LIKE`, no
+  `coalesce`, na coluna de um `select` e no `VALUES` de um `INSERT` o `NULL` sai calado, e
+  `compiled.binds`, sem `literal_binds`, marca o parâmetro `required` nas sete formas (leitura de
+  2026-09-22, [`POC.md`](POC.md)). `render` troca cada `BindParameter` com `required=True` por
   `literal_column(":nome")` por `replacement_traverse` antes de compilar, e o texto sai
   `mes = :mes` nos dois casos, sem tocar no filtro de avisos do processo (2026-09-22,
   [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).

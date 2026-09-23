@@ -8,26 +8,27 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 | Primitiva | O que faz |
 | --- | --- |
 | `Database(root, environment, metadata, storage_options=None)` | A raiz do banco, o ambiente (`prod`, `dev`) e o `MetaData` dos modelos; `uri(table)` é `<root>/<ambiente>/<tabela>/`, mais o arquivo de controle e os prefixos `staging/`, `publicacao/` e `arquivo/`; chama `prepare_environment` e cria `Storage.for_uri(root)`. |
-| `Execution(db, engine, partition, execution_id)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox; na saída descarta o sandbox e grava o resumo no log. As primitivas podem ser chamadas de qualquer thread, cada uma na conexão da sua thread no DuckDB e na sessão única do motor Redshift, e o estado mutável (`versions`, auditorias aprovadas, o alocador) fica sob lock. |
+| `Execution(db, engine, partition, execution_id)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox; na saída descarta o sandbox e grava o resumo no log. As primitivas podem ser chamadas de qualquer thread, cada uma na sessão única do motor, sob o lock dele, e o estado mutável (`versions`, auditorias aprovadas, o alocador) fica sob lock. |
 | `run.previous_partitions(table, n)` | Os `n` últimos valores de partição da tabela na versão fixada até `run.partition`, inclusive, lidos das ações `add`, na ordem de texto dos valores, que nos valores `AAAA-MM-DD` é a do calendário; o calendário é do cliente, não da biblioteca. |
-| `run.ingest(*tables, partitions=None, materialize=False, max_workers=1)` | `engine.ingest` de cada tabela na versão fixada, num `ThreadPoolExecutor(max_workers)` quando `max_workers > 1`, cada tarefa na conexão da sua thread no DuckDB, e em série na sessão única do motor Redshift; sem `partitions`, a tabela inteira. O ganho é no S3, onde a latência domina; em disco local o pool da instância já usa os núcleos. |
+| `run.ingest(*tables, partitions=None, materialize=False)` | `engine.ingest` de cada tabela na versão fixada; sem `partitions`, a tabela inteira. Uma tabela entra na sessão principal; mais de uma entram todas em paralelo, cada uma numa sessão a mais do motor (`new_session`), e a chamada volta quando todas terminam. Cada comando também usa o paralelismo do motor (as `threads` do DuckDB, as slices do Redshift). Em disco local, quatro tabelas de 150.000 linhas entraram em 0,017 s em quatro sessões e em 0,066 s em série (`test_parallel.py`, 2026-09-23). |
 | `run.published(table)` | A versão fixada da tabela como origem de consulta, por `engine.published(table, db.uri(table), versions[table])`: `delta_scan('<uri>', version := <v>)` no DuckDB, a staging `exec_<id>_<tabela>_publicado` no Redshift ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)). É por ela que o pipeline lê as partições já publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader` (decisão do usuário de 2026-09-22); numa tabela que ainda não existe, levanta `SandboxError`. |
-| `run.sandbox` | O motor, onde o pipeline chama `stream` e `loader`, os lotes na saída e na entrada, e `query`, `execute` e `load`, as formas por `pa.Table`, de qualquer thread; no DuckDB cada stream e cada loader roda num cursor próprio, e no Redshift todo comando passa pela sessão única sob o lock do motor ([etapa 5](PLAN-STAGE-5.md)); `run.sandbox.connection` é a conexão crua, a da thread no DuckDB e a sessão no Redshift, para o que as primitivas não cobrem, uma thread por vez. |
+| `run.sandbox` | O motor, onde o pipeline chama `stream` e `loader`, os lotes na saída e na entrada, e `query`, `execute` e `load`, as formas por `pa.Table`, de qualquer thread; nos dois motores todo comando passa pela sessão única da execução, sob o lock que as primitivas tomam e soltam ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)); `with run.sandbox.session() as connection:` dá a conexão crua para o que as primitivas não cobrem, com o lock tomado pelo bloco e reentrante na mesma thread, e `with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo, sem as tabelas temporárias da principal. |
 | `run.next_ids(table, n)` | Um `range` de `n` inteiros contíguos, sob lock, a partir de `max_key(chave) + 1` na versão fixada da tabela, lido uma vez por tabela; as faixas de threads paralelas não se sobrepõem, e os ids de uma reexecução diferem. |
 | `run.audit(table, partitions, foreign_keys=False, key_scope=None)` | `engine.audit`; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta, e o relatório, com o SQL de cada verificação e até 20 linhas de amostra por verificação reprovada, vai para o log. |
 | `run.publish(*tables, partitions, audit=True, max_workers=1, export_mode=None)` | Exige a auditoria aprovada de cada tabela nessas partições na própria execução, e `audit=False` dispensa a exigência e fica no log; confere por `version_diff` que nenhuma alteração de dados entrou em cada tabela desde a versão fixada e aborta com `ExecutionConflict` quando entrou (um avanço só de metadados ou de manutenção passa e atualiza a versão fixada); depois `create_table` se não existir, `reconcile`, `export_partition` e `publish_partition` por partição com `commit_metadata`, tabela a tabela num `ThreadPoolExecutor(max_workers)`: na primeira falha as tarefas em curso terminam, as não iniciadas são canceladas, e a exceção lista o resultado de cada tabela, porque os commits feitos ficam; avança `versions[table]` sob lock. O padrão 1 vem da memória por escrita (`delta.md`). `export_mode` (`"register"` ou `"rewrite"`, `SERIALIZE_DB_EXPORT_MODE` por omissão, `"register"` sem ela) vai ao `export_partition` dos dois motores ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)): `register` registra por `register_files` o arquivo que o motor gravou, depois das conferências da [etapa 3](PLAN-STAGE-3.md); `rewrite` grava por `publish_partition` a partir do leitor. |
 | `run.publish_redshift(*tables, max_workers=1)` | A publicação da [etapa 8](PLAN-STAGE-8.md), uma conexão por tabela em paralelo, limitada pelas slots do WLM; dois `COPY` e dois `UNLOAD` em conexões distintas passaram em paralelo no ambiente alvo em 2026-09-21 ([`POC.md`](POC.md)). |
 | `run.snapshot(name)` | Marca a execução: `serialize_db_snapshot` nos commits e `snapshot(root, name, versions)` no encerramento. |
 | `serialize-db run` | `--root`, `--environment`, `--engine`, `--partition`, `--execution-id` e `modulo:funcao` do pipeline, que recebe `run`; código de saída 0, 1 na reprovação da auditoria, 2 no conflito. |
-| `serialize-db audit` | `--table`, `--partitions`, `--foreign-keys` e `--key-scope`; com `--sql` imprime o texto das verificações do dialeto escolhido e não abre conexão nem armazenamento, e `--write <pasta>` grava os arquivos das duas variantes. Sem `--sql`, roda a auditoria sobre a versão publicada e imprime o relatório. |
+| `serialize-db audit` | `--table`, `--partitions`, `--foreign-keys` e `--key-scope`; com `--sql` imprime, para depuração, o texto das verificações do dialeto escolhido e não abre conexão nem armazenamento. Sem `--sql`, roda a auditoria sobre a versão publicada e imprime o relatório. |
 
 O log é o `logging` padrão com um resumo por execução: identificador, partição, versões lidas, versões
 gravadas e tempo por passo. Testes: `tests/test_execution.py` sob a raiz local com o motor DuckDB:
 a reexecução com o mesmo `execution_id` produz as mesmas linhas, com ids que podem diferir;
-`next_ids` de duas threads devolve faixas disjuntas; a auditoria reprovada deixa a versão da tabela
+`next_ids` de duas threads devolve faixas disjuntas; `ingest` de três tabelas as carrega em três
+sessões a mais, a sessão principal lê as três, e a falha de uma lista o resultado das outras; a auditoria reprovada deixa a versão da tabela
 como estava; de duas execuções publicando a mesma partição, a segunda aborta com `ExecutionConflict`, e
-também a que publica uma tabela em que outra execução gravou dados desde a abertura, e não a que só foi compactada; `ingest` e `publish` com
-`max_workers=2` dão o mesmo resultado que com 1. Provas de conceito: `test_stdlib.py` (`test_month_arithmetic`,
+também a que publica uma tabela em que outra execução gravou dados desde a abertura, e não a que só foi compactada; `publish` com
+`max_workers=2` dá o mesmo resultado que com 1. Provas de conceito: `test_stdlib.py` (`test_partition_values_in_text_order`,
 `test_execution_identifiers`, `test_context_manager_cleans_up_on_failure`,
 `test_entry_point_by_import_string`, `test_command_line_parsing`, `test_execution_log`,
 `test_prepare_environment`, `test_json_control_file_and_commit_metadata`) e
@@ -77,7 +78,7 @@ class Execution:
     partition: str
     execution_id: str
     def previous_partitions(self, table: sa.Table, n: int) -> list[str]: ...
-    def ingest(self, *tables: sa.Table, partitions: list[str] | None = None, materialize: bool = False, max_workers: int = 1) -> None: ...
+    def ingest(self, *tables: sa.Table, partitions: list[str] | None = None, materialize: bool = False) -> None: ...
     def published(self, table: sa.Table) -> sa.FromClause: ...
     def next_ids(self, table: sa.Table, n: int) -> range: ...
     def audit(self, table: sa.Table, partitions: list[str] | None, foreign_keys: bool = False, key_scope: str | None = None) -> object: ...
@@ -112,9 +113,12 @@ um motor já construído, para os testes.
 - **`previous_partitions`** lê `partition.<coluna>` de `get_add_actions(flatten=True)` da versão
   fixada, convertido para PyArrow por `pa.table(...)` (o delta-rs devolve uma tabela `arro3`),
   filtra `<= run.partition` e devolve os `n` maiores; o calendário é do cliente.
-- **`ingest`** despacha `sandbox.ingest(table, uri, versions[table], partitions, materialize)` num
-  `ThreadPoolExecutor(max_workers)`; cada tarefa usa a conexão da sua thread no DuckDB, e no
-  Redshift as tarefas serializam na sessão única do motor.
+- **`ingest`** chama `sandbox.ingest(table, uri, versions[table], partitions, materialize)` por
+  tabela. Com uma tabela, na sessão principal; com mais, um `ThreadPoolExecutor` com uma thread por
+  tabela, e cada thread roda `with sandbox.new_session() as session: session.ingest(...)`. As
+  tabelas do sandbox são tabelas comuns, e a sessão principal as vê no comando seguinte. Uma falha
+  não cancela as ingestões que já rodam: todas terminam, e a exceção lista o resultado de cada
+  tabela; o que entrou fica para o `cleanup`.
 - **`published`** devolve `sandbox.published(table, db.uri(table), versions[table])` e não cria
   objeto com o nome do modelo, que fica para o `loader` da tabela que a execução grava.
 - **`next_ids`** guarda um contador por tabela sob `threading.Lock`, iniciado em
@@ -167,6 +171,7 @@ as chamadas.
 | Caso | Teste | O que confere |
 | --- | --- | --- |
 | Abertura | `test_execution_opens_every_table_and_fixes_versions` | `versions` com as tabelas existentes e `None` nas ausentes; o log com as versões. |
+| Partição | `test_execution_refuses_an_invalid_partition` | O valor vazio, com `/`, `=` ou espaço, ou acima do `String(n)` da coluna de partição em bytes é recusado antes de o sandbox abrir; `2026-Q1` passa. |
 | Partições anteriores | `test_previous_partitions_up_to_the_execution_partition` | Só valores até a partição da execução, os `n` últimos, em ordem. |
 | Identificadores | `test_next_ids_are_disjoint_across_threads` | Duas threads, faixas disjuntas, o início acima do máximo lido das estatísticas; a tabela nova começa em 1. |
 | Auditoria exigida | `test_publish_requires_the_audit` | `publish` sem `audit` é `AuditFailed`; com `audit=False` passa e o log registra. |
@@ -174,7 +179,7 @@ as chamadas.
 | Reexecução | `test_rerun_with_the_same_execution_id_produces_the_same_rows` | As mesmas linhas, ids que podem diferir, uma versão a mais. |
 | Conflito | `test_publish_aborts_when_data_changed_since_open` | Um `append` de outra execução depois da abertura é `ExecutionConflict`; um `compact` não é. |
 | Mesma partição | `test_two_executions_on_the_same_partition_conflict` | A segunda aborta no `CommitFailedError`. |
-| Paralelismo | `test_ingest_and_publish_with_two_workers_match_one` | O mesmo resultado com `max_workers=1` e `2`; a falha de uma tabela cancela as não iniciadas e lista cada resultado. |
+| Paralelismo | `test_publish_with_two_workers_matches_one` | O mesmo resultado com `max_workers=1` e `2`; a falha de uma tabela cancela as não iniciadas e lista cada resultado. |
 | Metadados | `test_commit_metadata_in_history` | `serialize_db_execution_id` e `serialize_db_input_versions` no `history`; `serialize_db_snapshot` só na execução marcada. |
 | Snapshot | `test_snapshot_writes_the_control_file_at_exit` | Todas as tabelas do ambiente na entrada, gravada uma vez. |
 | Linha de comando | `test_cli_run_parses_and_exits_by_result` | `--partition` inválida sai com 2; `--metadata` obrigatório; `AuditFailed` sai com 1; `ExecutionConflict` com 2. |
@@ -182,13 +187,17 @@ as chamadas.
 ## Rascunhos executados
 
 O rascunho rodou em 2026-09-21 com as versões fixadas, com um motor de mentira que grava uma linha
-por partição e um Delta local com três partições.
+por partição e um Delta local com três partições, e de novo em 2026-09-22, com a partição validada
+como texto: a linha de comando recusa o valor vazio ou com `/`, `=` ou espaço, e `Execution` recusa
+também o que passa do `String(n)` da coluna de partição, lida por `table_options` da
+[etapa 1](PLAN-STAGE-1.md). O `ingest` dele despacha as tabelas num pool de
+`max_workers` sobre a mesma sessão; a implementação dá a cada tabela uma sessão a mais e dispensa o
+argumento.
 
 ```python
 """Etapa 6: Database e Execution sobre um motor de mentira: versões fixadas, partições anteriores, next_ids sob lock, o conflito de versão e a linha de comando."""
 import argparse
 import dataclasses
-import datetime as dt
 import json
 import logging
 import os
@@ -201,6 +210,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import sqlalchemy as sa
 from deltalake import CommitProperties, DeltaTable, Schema as DeltaSchema, write_deltalake
+
+from serialize_db.schema import table_options
 
 log = logging.getLogger("serialize_db.execution")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -227,6 +238,24 @@ class Database:
         return list(self.metadata.sorted_tables)
 
 
+def partition_problem(value: str) -> str | None:
+    """O motivo de recusa do valor de partição, ou None: texto não vazio e sem /, = nem espaço, os caracteres que o nome da pasta e o manifesto não aceitam."""
+    if not value:
+        return "vazia"
+    if re.search(r"[/=\s]", value):
+        return "com /, = ou espaço"
+    return None
+
+
+def partition_length_problem(value: str, db: Database) -> str | None:
+    """O String(n) de uma coluna de partição do modelo que o valor excede, medido em bytes, ou None."""
+    for table in db.tables():
+        column = table_options(table).partition_by
+        if column and len(value.encode()) > table.c[column].type.length:
+            return f"acima de {table.c[column].type} em {table.name}.{column}"
+    return None
+
+
 class FakeEngine:
     def __init__(self):
         self.calls, self.audited = [], set()
@@ -250,8 +279,9 @@ class FakeEngine:
 
 class Execution:
     def __init__(self, db: Database, engine, partition: str, execution_id: str) -> None:
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", partition):
-            raise ValueError(f"partição fora de AAAA-MM-DD: {partition!r}")
+        problem = partition_problem(partition) or partition_length_problem(partition, db)
+        if problem:
+            raise ValueError(f"partição {partition!r} recusada: {problem}")
         self.db, self.sandbox, self.partition, self.execution_id = db, engine, partition, execution_id
         self.versions: dict[str, int | None] = {}
         self._tables: dict[str, DeltaTable] = {}
@@ -312,8 +342,9 @@ class Execution:
 
 
 metadata = sa.MetaData()
-entries = sa.Table("cad_lancamentos", metadata, sa.Column("id_lancamento", sa.BigInteger), sa.Column("data_base_str", sa.String(10)))
-projected = sa.Table("cad_lancamentos_projetados", metadata, sa.Column("id_lancamento", sa.BigInteger), sa.Column("data_base_str", sa.String(10)))
+partitioned = {"serialize_db": {"partition_by": ["data_base_str"]}}
+entries = sa.Table("cad_lancamentos", metadata, sa.Column("id_lancamento", sa.BigInteger), sa.Column("data_base_str", sa.String(10)), info=partitioned)
+projected = sa.Table("cad_lancamentos_projetados", metadata, sa.Column("id_lancamento", sa.BigInteger), sa.Column("data_base_str", sa.String(10)), info=partitioned)
 
 with tempfile.TemporaryDirectory() as folder:
     db = Database(folder, "prod", metadata)
@@ -338,11 +369,16 @@ with tempfile.TemporaryDirectory() as folder:
         except ExecutionConflict as error:
             print("conflito:", error)
     print("chamadas ao motor:", run.sandbox.calls[-3:])
+    try:
+        Execution(db, FakeEngine(), "2026-08-31-extra", "exec-2026-09-06")
+    except ValueError as error:
+        print("execução recusada:", error)
 
 
 def partition_argument(text: str) -> str:
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) or dt.date.fromisoformat(text) is None:
-        raise argparse.ArgumentTypeError(f"partição inválida: {text!r} (esperado AAAA-MM-DD)")
+    problem = partition_problem(text)                                    # o String(n) fica para Execution, que tem o modelo
+    if problem:
+        raise argparse.ArgumentTypeError(f"partição inválida: {text!r} ({problem})")
     return text
 
 
@@ -359,8 +395,9 @@ run_command.add_argument("--metadata", required=True, help="modulo:atributo com 
 run_command.add_argument("pipeline", help="modulo:funcao que recebe a execução aberta")
 args = parser.parse_args(["run", "--root", "s3://bucket/projeto/delta", "--partition", "2026-08-31", "--metadata", "pipeline.models:Base.metadata", "pipeline:main"])
 print(vars(args))
+print("partição de texto aceita:", parser.parse_args(["run", "--root", "x", "--partition", "2026-Q1", "--metadata", "m:a", "p:f"]).partition)
 try:
-    parser.parse_args(["run", "--root", "x", "--partition", "2026-13-01", "--metadata", "m:a", "p:f"])
+    parser.parse_args(["run", "--root", "x", "--partition", "2026/08/31", "--metadata", "m:a", "p:f"])
 except SystemExit as exit_code:
     print("partição inválida sai com código", exit_code.code)
 ```
@@ -376,14 +413,16 @@ usage: serialize-db run [-h] --root ROOT [--environment ENVIRONMENT]
                         --partition PARTITION [--execution-id EXECUTION_ID]
                         --metadata METADATA
                         pipeline
-serialize-db run: error: argument --partition: invalid partition_argument value: '2026-13-01'
+serialize-db run: error: argument --partition: partição inválida: '2026/08/31' (com /, = ou espaço)
 previous_partitions: ['2026-06-30', '2026-07-31']
 next_ids: [(31, 36), (46, 51), (36, 41), (41, 46)] | disjuntas: True | começa depois do máximo lido: True
 publish sem auditoria: cad_lancamentos_projetados: publish exige a auditoria aprovada em ['2026-08-31']
 versões após publish: {'cad_lancamentos': 0, 'cad_lancamentos_projetados': 1} | metadados do commit: {"cad_lancamentos": 0}
 conflito: cad_lancamentos está na versão 1, a execução fixou 0
 chamadas ao motor: [('ingest', 'cad_lancamentos_projetados', None, ['2026-06-30', '2026-07-31']), ('export', 'cad_lancamentos_projetados', '2026-08-31', 'register'), ('cleanup',)]
+execução recusada: partição '2026-08-31-extra' recusada: acima de VARCHAR(10) em cad_lancamentos.data_base_str
 {'command': 'run', 'root': 's3://bucket/projeto/delta', 'environment': 'dev', 'engine': 'duckdb', 'export_mode': 'register', 'partition': '2026-08-31', 'execution_id': None, 'metadata': 'pipeline.models:Base.metadata', 'pipeline': 'pipeline:main'}
+partição de texto aceita: 2026-Q1
 partição inválida sai com código 2
 ```
 
@@ -398,3 +437,8 @@ implementação usa `version_diff`, pela regra da estratégia.
   inteira; a alternativa é `Table.info["serialize_db"]["id_column"]`.
 - **[decisão] A barreira por tabela** para um cliente que esquece o `result()` de um `load`
   disparado numa thread continua fora das etapas ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- **[decisão] A aspa simples no valor da partição.** A validação recusa `/`, `=`, espaço e o vazio,
+  e deixa passar `'`, que quebra o predicado `<coluna> = '<valor>'` de `publish_partition`
+  ([etapa 3](PLAN-STAGE-3.md)) e todo literal `'<valor>'` das etapas 4, 5 e 8. Proposto (revisão de
+  2026-09-22): recusá-la junto com os demais, ou trocar a lista de recusas por `[0-9A-Za-z_.-]+`,
+  que cobre `AAAA-MM-DD` e `2026-Q1`.

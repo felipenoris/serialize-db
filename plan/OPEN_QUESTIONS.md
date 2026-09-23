@@ -50,21 +50,66 @@ foi medido em [`POC.md`](POC.md).
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)); a
   migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
-  (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)), e a medição decide o
-  padrão da flag.
+  (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)). O relatório da
+  migração com essa medição é o gatilho de revisão de [`PLAN.md`](PLAN.md): ele decide o padrão da
+  flag e se o outro modo sai, em cada motor e na carga inicial.
+- **O `threads` do DuckDB na leitura do S3.** O DuckDB lê arquivos remotos com E/S síncrona, uma
+  requisição HTTP por thread, e a documentação recomenda `threads` de 2 a 5 vezes os núcleos para
+  essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo, 2 no ambiente alvo, e a sessão a
+  mais de cada tabela de `run.ingest` só acrescenta a thread que a chama. A primeira execução no
+  ambiente alvo mede a ingestão por `delta_scan` do S3 com o padrão e com `threads` acima dos
+  núcleos, e a medição decide o padrão de `DuckDBConfig.threads` para uma raiz no S3
+  ([etapa 4](PLAN-STAGE-4.md)).
+- **Duas transações simultâneas no esquema do datashare.** A publicação da
+  [etapa 8](PLAN-STAGE-8.md) grava a linha de controle em `serialize_db_publications`, a única
+  tabela que dois ambientes escrevem, e usa uma staging de nome fixo por ambiente e tabela. A
+  documentação prevê que o segundo `DELETE` espere o primeiro terminar e que, sob isolamento de
+  snapshot, linhas distintas confirmem as duas transações ([`redshift.md`](redshift.md)); o banco do
+  datashare informa isolamento `UNKNOWN`, e o `LOCK` não está na lista de comandos da escrita por
+  datashare. `tests/proof_of_concept/test_redshift_transactions.py` (`-m redshift`) mede os cenários
+  e espera uma execução no ambiente alvo; o resultado decide se a transação da etapa 8 fica como
+  está ou ganha o `LOCK`, a nova tentativa, o `UPDATE` condicionado à versão lida ou a staging por
+  execução.
+- **O `pytest` sem variável grava na pasta temporária do pytest.** A premissa de
+  [`PLAN.md`](PLAN.md) diz que `pytest` sem variável não grava arquivo algum, e o cabeçalho de
+  `tests/conftest.py` diz que fora das raízes informadas a sessão grava só `.pytest_cache/`; mas
+  `tests/test_source_db_projetado.py` grava a base fictícia inteira em `tmp_path_factory`, e
+  `tests/test_probes.py` grava relatórios em `tmp_path`, sem variável (revisão de 2026-09-22). A
+  decisão é do usuário: admitir a pasta temporária do pytest na premissa e no cabeçalho, ou marcar
+  esses testes `local`, e a esteira do GitHub deixa de rodá-los.
+- **As correções das suítes S3 e Redshift que esperam o ambiente alvo.** A revisão de 2026-09-22
+  achou asserções que não reprovam e leituras que se perdem, em suítes que só rodam no bucket e no
+  Redshift e que por isso não mudaram sem uma execução lá:
+  `test_redshift.py::outcome` pega toda exceção, e a asserção de `test_copy_varchar_overflow` passa
+  com um `TypeError` do próprio teste (pegar `redshift_connector.Error`); o `UNLOAD` recusado de
+  `test_unload_partition_by_and_register`, que o comentário chama de regressão, é pulado com
+  `share_database` em vez de reprovar; `test_s3.py::test_boto3_list_copy_delete` compara a
+  listagem do `list_objects_v2` com `storage.data_files()`, que sai do mesmo paginador (comparar
+  com `DeltaTable(uri).file_uris()`), `test_data_file_encryption` aceita qualquer criptografia, e
+  `test_boto3_credential_source` chama o STS antes de registrar a origem das credenciais, que se
+  perde quando o STS não responde; `connect_redshift` de `tests/conftest.py` tem 85 linhas com
+  duas funções aninhadas. A próxima execução das duas suítes no ambiente alvo vem com essas
+  correções.
 
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
+- [Etapa 1](PLAN-STAGE-1.md): o timestamp com fuso numa coluna `DateTime` sem fuso, e o inverso,
+  que o `cast` aceita em silêncio: o instante UTC vira hora local, e a hora local vira UTC (leitura
+  de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, porque a
+  conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso.
 - [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
   entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição
   (`<uri>/<execution_id>/<valor>/` com `PARTITION BY`, ou `<uri>/<coluna>=<valor>/<execution_id>/`
   sem ele), porque o `UNLOAD` confere o destino como prefixo.
 - [Etapa 6](PLAN-STAGE-6.md): `--metadata` na linha de comando; a chave de `next_ids` numa chave
-  composta; a barreira por tabela.
+  composta; a barreira por tabela; a aspa simples no valor da partição, que a validação de
+  `Execution` não exclui (sem `/`, `=`, espaço nem vazio) e que quebraria o predicado de
+  `publish_partition` e todo literal `'<valor>'` das etapas 4, 5 e 8. Proposto: recusá-la junto
+  com os demais, ou trocar a lista por `[0-9A-Za-z_.-]+`, que cobre `AAAA-MM-DD` e `2026-Q1`.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.

@@ -18,7 +18,7 @@ class ContractError(ValueError):
 class SqlError(ValueError):
     """Um statement que não vira texto executável, ou um texto cujos parâmetros não fecham.
 
-    A mensagem nomeia os parâmetros em falta ou sobrando, o ``bindparam`` sem valor ou o sentinela
-    que ficou no texto, e diz o que o cliente faz: usar ``param``, completar o dicionário, ler o
-    texto por ``read_sql``.
+    A mensagem nomeia o parâmetro de nome inválido, os parâmetros em falta ou sobrando ou o
+    sentinela que ficou no texto, e diz o que o cliente faz: renomear o ``bindparam``, completar o
+    dicionário, ler o texto por ``read_sql``.
     """

@@ -319,7 +319,9 @@ executes under it and its helper thread only slices `fetchmany` (the driver mate
 result in `execute`), `loader` writes the Parquet outside it and runs the `COPY` under it;
 `ingest(max_workers)` serializes on that engine, `publish_redshift` keeps a connection per table,
 and a temporary table the pipeline creates in the session serves the next commands and is lost
-when the engine reconnects. The DuckDB engine keeps its cursor per thread, stream and loader.
+when the engine reconnects. The DuckDB engine keeps its cursor per thread, stream and loader
+(superseded later the same day: both engines keep a single session under a lock, section "The
+review of 2026-09-22 and the single session on both engines").
 `plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/serialize-db.md`
 
 The same day the user generalized the partition column: any text column `String(n)` partitions,
@@ -350,3 +352,47 @@ refuses a unique index as target and a swapped order, and Redshift documents the
 migration ran successfully in the target; its reports exist and are not available yet, so the
 `export_mode` default still waits for their numbers. `plan/PLAN.md`, `plan/PLAN-STAGE-2.md`,
 `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## The review of 2026-09-22 and the single session on both engines
+
+Later on 2026-09-22, answering the code review, the user accepted the rewrite of the environment
+premise in `plan/PLAN.md` (dev and prod never touch each other's tables; inside an environment one
+execution at a time, with the log ordering commits and `publish` aborting the second with
+`ExecutionConflict`; the shared `serialize_db_publications` as the exception) and the two stage 3
+proposals: `expressions` in `rewrite` (the old name in a rename, the value of a new `NOT NULL`
+column) and `Storage` over `pyarrow.fs` (a dataclass with the URI, the filesystem and the path, no
+class per storage, `boto3` only for the conditional write of `_serialize_db/snapshots.json`). The
+same day the user asked for one behavior on both engines: a single session per execution protected
+by a lock, so temporary tables are portable, keeping the streaming requirement (the client works on
+the current batch while the connection does I/O) and an API that handles the lock for the client.
+The probes of the same day showed it feasible with intermediate files (`.claude/memory/concurrency.md`),
+and the plan now has `session()` on both engines, `stream` and `loader` through Arrow IPC files on
+DuckDB, and `ingest` without `max_workers`. The user stated that the target may have any number of
+vCPUs and that the library must explore parallelism to scale; the 2 vCPUs read on 2026-09-21 are a
+reading, not a design premise. `plan/PLAN.md`, `plan/PLAN-STAGE-3.md` to `plan/PLAN-STAGE-6.md`,
+`plan/serialize-db.md`, `plan/POC.md`
+
+## The answers of 2026-09-23: extra sessions, parallel ingest and the audit text
+
+On 2026-09-23 the user asked for a probe of simultaneous Redshift transactions around
+`serialize_db_publications`; it is `tests/proof_of_concept/test_redshift_transactions.py`
+(`-m redshift`, five scenarios and the isolation readings), waiting for a run in the target, and
+its result decides whether the stage 8 transaction stays as it is. The user asked whether the
+client could open several sessions for parallel reads, accepting no ordering between calls and no
+shared temporary tables: the plan adopted `new_session()` on both engines, an engine over another
+connection (a DuckDB `cursor()`, a Redshift connection with its own temporary credential and
+`USE`) with its own lock; the name is the assistant's proposal, named in the report. The user
+suggested that the engines' initial ingestion, one table at a time by nature, always run in
+parallel: `run.ingest` of more than one table runs each in its own extra session, all at once, and
+returns when all finish. The user asked whether the first batch waited for the whole query in the
+earlier design and whether that design was more efficient; the measurement answered yes for
+`stream` and no for `loader`, and the assistant changed `stream` so a helper thread runs the query
+under the lock and writes each batch to the spool file while the client reads the batches already
+written (`prefetch` left the signature), named in the report as a change the user did not ask for.
+The user asked to record the `export_mode` revision trigger in the plan: the target's migration
+report with the `cad_lancamentos` partition in both modes sets the default and decides, per engine
+and for the initial load, whether the other mode leaves stages 4, 5 and 7. The user accepted
+freezing the generated SQL text path where it served only diffs: `audit_files`,
+`write_audit_files` and `serialize-db audit --write` left the plan, and `audit_sql` with `--sql`
+stay for debugging. `plan/PLAN.md`, `plan/PLAN-STAGE-4.md` to `plan/PLAN-STAGE-8.md`,
+`plan/serialize-db.md`, `plan/redshift.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`

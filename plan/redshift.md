@@ -847,6 +847,41 @@ transação, `cursor.paramstyle` aceita `qmark`, `numeric`, `named`, `format` (p
 `cursor.executemany` executa o comando uma vez por conjunto de parâmetros, com uma ida ao servidor
 por linha.
 
+### Transações concorrentes
+
+O Redshift aceita escritas concorrentes com locks de tabela e isolamento serializável. Duas
+transações são concorrentes quando a segunda começa antes de a primeira confirmar, e cada uma
+trabalha sobre o snapshot confirmado quando ela o tomou. O que a documentação diz, lida em
+2026-09-23:
+
+- O snapshot nasce no primeiro `SELECT`, no primeiro DML (`COPY`, `DELETE`, `INSERT`, `UPDATE`,
+  `TRUNCATE`) ou no primeiro `ALTER TABLE`, `CREATE TABLE`, `DROP TABLE` ou `TRUNCATE TABLE` da
+  transação, não no `BEGIN`.
+- Os níveis são `SNAPSHOT`, o padrão de clusters e workgroups novos, e `SERIALIZABLE`. Sob o
+  snapshot, dois `UPDATE` de linhas distintas da mesma tabela confirmam os dois; sob o
+  serializável, o segundo é abortado com `ERROR:1023 DETAIL: Serializable isolation violation on
+  table`. `STV_DB_ISOLATION_LEVEL` informa o nível de cada banco, e a escrita por datashare exige
+  isolamento de snapshot no banco do produtor.
+- `DELETE` e `UPDATE` concorrentes na mesma tabela esperam nos dois níveis: o segundo roda depois
+  que o primeiro solta o lock, e o snapshot dele nasce depois disso quando o comando é o primeiro da
+  transação. `COPY` e `INSERT` concorrentes na mesma tabela correm juntos sob o snapshot até os dois
+  precisarem gravar, e daí em sequência; sob o serializável, o segundo espera o primeiro.
+- Uma transação solta os locks de todas as tabelas de uma vez, no fim. Duas transações que escrevem
+  as mesmas tabelas em ordens diferentes podem travar uma à outra, e sob o snapshot também
+  `INSERT` ou `COPY` concorrentes seguidos, numa delas, de `UPDATE`, `DELETE`, `MERGE` ou DDL na
+  mesma tabela. A documentação manda escrever as tabelas sempre na mesma ordem, separar o comando
+  que pede o lock exclusivo numa transação própria, ou repetir a transação.
+- `LOCK <tabela>` toma o lock `ACCESS EXCLUSIVE` até o fim da transação e é a forma documentada de
+  forçar a ordem: todas as tabelas da transação, sempre na mesma ordem, no início dela. O `LOCK` não
+  está na lista de comandos que a escrita por datashare aceita num consumidor.
+- `1018 Relation does not exist` é a transação lendo uma tabela que outra criou depois do snapshot
+  dela; as tabelas de catálogo (`pg_*`) não seguem o isolamento das tabelas do usuário.
+
+A tabela de controle `serialize_db_publications` é a única que dois ambientes escrevem
+([etapa 8](PLAN-STAGE-8.md)), e o banco do datashare informou isolamento `UNKNOWN` em
+`svv_redshift_databases` (2026-09-20). `tests/proof_of_concept/test_redshift_transactions.py` mede
+no esquema do datashare o que estas regras fazem com duas publicações simultâneas.
+
 ## Ingestão de dados
 
 Ordem de preferência da documentação:
@@ -1524,8 +1559,9 @@ linha do `redshift_connector`.
   `COMMENT`, restrições, chaves de ordenação e distribuição, `SELECT`, `INSERT`, `UPDATE`, `DELETE`,
   `MERGE`, `TRUNCATE`, tabelas de staging, carga de dados e boas práticas, `COPY`, `UNLOAD`,
   `VACUUM`, `ANALYZE`, codificações de compressão, otimização automática de tabelas, planejamento e
-  desempenho de consultas, `EXPLAIN`, isolamento e escritas concorrentes, `PG_LAST_COPY_COUNT`,
-  `STL_LOAD_ERRORS` e `SYS_LOAD_ERROR_DETAIL`.
+  desempenho de consultas, `EXPLAIN`, isolamento e escritas concorrentes, os exemplos de escrita
+  concorrente, os erros de isolamento, `LOCK`, os comandos aceitos e recusados pela escrita por
+  datashare, `PG_LAST_COPY_COUNT`, `STL_LOAD_ERRORS` e `SYS_LOAD_ERROR_DETAIL`.
 - Guia de gerenciamento do Amazon Redshift, conector Python e Data API:
   <https://docs.aws.amazon.com/redshift/latest/mgmt/>.
 - Repositório do `redshift_connector`: <https://github.com/aws/amazon-redshift-python-driver>.
