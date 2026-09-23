@@ -29,7 +29,11 @@ arquivo versionado com o sentinela inclusive, como teste de que o texto gerado p
 analisa (decisão do usuário de 2026-09-22; `sqlglot==30.18.0` no grupo `dev`, a versão do ensaio
 de 2026-09-21; o sentinela dentro das aspas de um identificador analisa, leitura de 2026-09-22 em
 [`POC.md`](POC.md)). Provas de conceito:
-`test_sqlalchemy.py` (`test_generated_sql_text_per_dialect`, `test_redshift_dialect_compiles_dml`) e
+`test_sqlalchemy.py` (os comportamentos do compilador que dão forma a `render`:
+`test_literal_binds_renders_a_bindparam_without_value_as_null`,
+`test_compiled_binds_marks_the_bindparam_without_value_as_required`,
+`test_default_paramstyle_doubles_the_percent_in_literals` e
+`test_dialects_quote_only_their_reserved_words`; e `test_redshift_dialect_compiles_dml`) e
 `test_stdlib.py::test_generated_files_diff`.
 
 ## Estratégia de implementação
@@ -61,7 +65,10 @@ de 2026-09-21; o sentinela dentro das aspas de um identificador analisa, leitura
   `warnings.catch_warnings`, que troca o filtro de avisos do processo inteiro: a documentação do
   módulo `warnings` o declara inseguro num programa com threads abaixo do Python 3.14, e o projeto
   roda 3.13 com os motores das etapas [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md) chamando `render`
-  em threads ([`POC.md`](POC.md)). Os dialetos são `duckdb_engine.Dialect` e
+  em threads ([`POC.md`](POC.md)). O aviso também não serve de guarda: ele sai só numa comparação
+  por `=`, e no `LIKE`, no `coalesce`, no `VALUES` de um `INSERT` e no `text()` o `bindparam` sem
+  valor vira `NULL` calado, enquanto `required` o marca nas sete formas medidas (leitura de
+  2026-09-22, [`POC.md`](POC.md)). Os dialetos são `duckdb_engine.Dialect` e
   `RedshiftDialect_redshift_connector` (decisão do usuário de 2026-09-21): como os motores chamam
   `render` em tempo de execução, `duckdb-engine` e `sqlalchemy-redshift` saem do grupo `dev` e
   entram nas dependências de execução de `pyproject.toml` no commit que escrever o módulo, com

@@ -324,3 +324,13 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   Arrow IPC files was faster on a file (0.400 s against 0.565 s) and 20% slower in memory. A
   timing that decides a design is taken best of three, on the same database, the same data and the
   same batch size, for every alternative. `plan/POC.md`
+- **A library's warning is a reading, never a guard** (2026-09-22). `plan/sqlalchemy.md` said since
+  2026-09-19 that a valueless `bindparam` and `text("mes = :mes")` both render `mes = NULL` under
+  `literal_binds` with a `SAWarning`, and the stage 2 draft of 2026-09-21 turned that warning into
+  an error. The review of the study suites probed seven forms: the warning fires only for the two
+  `=` comparisons (`coluna = :mes`, `upper(coluna) = upper(:mes)`), and `LIKE`, `coalesce`, a
+  `select` column, the `VALUES` of an `INSERT` and `text()` render `NULL` silently, while
+  `compiled.binds` marks the parameter `required` in all seven. The warning-based guard would have
+  let five of seven through, and the claim about `text()` had been generalized from the one case
+  the draft ran. `render` already read `compiled.binds` for thread safety; the documents now give
+  the second reason. `plan/POC.md`, `plan/sqlalchemy.md`, `plan/PLAN-STAGE-2.md`

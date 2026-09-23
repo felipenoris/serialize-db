@@ -21,14 +21,15 @@ O Redshift está em ``test_redshift.py`` (``test_parallel_copy_and_unload_on_two
 from __future__ import annotations
 
 import decimal
+import functools
 import json
 import queue
 import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -114,7 +115,7 @@ def test_sandbox_serializes_threads_on_one_session() -> None:
         engine.load(f"t{k}", pa.table({"x": pa.array(range(1000 * (k + 1)), pa.int64())}))
         counts[k] = engine.query(f"SELECT count(*) AS n FROM t{k}").column("n")[0].as_py()
 
-    run_in_threads([lambda k=k: work(k) for k in range(4)])
+    run_in_threads([functools.partial(work, k) for k in range(4)])
     assert counts == {0: 1000, 1: 2000, 2: 3000, 3: 4000}
     assert engine.query("SELECT list(table_name ORDER BY table_name) AS t FROM duckdb_tables() WHERE NOT temporary").column("t")[0].as_py() == ["t0", "t1", "t2", "t3"]
 
@@ -156,6 +157,30 @@ def offer(sink: queue.Queue[object], item: object, stop: threading.Event) -> boo
     return False
 
 
+def take(source: queue.Queue[object], stop: threading.Event) -> object | None:
+    """O próximo item da fila, esperando em fatias de 50 ms; ``None`` quando ``stop`` chega com a fila vazia.
+
+    A espera com prazo deixa quem lê perceber o ``stop``, em vez de ficar preso num ``get`` sem fim;
+    nenhum item da fila é ``None``.
+    """
+    while True:
+        try:
+            return source.get(timeout=0.05)
+        except queue.Empty:
+            pass
+        if stop.is_set():
+            return None
+
+
+def drain(source: queue.Queue[object]) -> None:
+    """Esvazia a fila sem esperar: a thread presa num ``put`` com a fila cheia segue e vê o ``stop``."""
+    while True:
+        try:
+            source.get_nowait()
+        except queue.Empty:
+            return
+
+
 def spool(reader: pa.RecordBatchReader, path: str) -> int:
     """Grava os lotes do leitor no arquivo de transbordo e devolve as linhas; o esquema vai no arquivo mesmo sem lote."""
     rows = 0
@@ -166,6 +191,14 @@ def spool(reader: pa.RecordBatchReader, path: str) -> int:
     return rows
 
 
+def offer_batches(reader: pa.RecordBatchReader, sink: queue.Queue[object], stop: threading.Event) -> bool:
+    """Põe na fila cada lote do leitor; ``False`` quando ``stop`` chegou antes do fim."""
+    for batch in reader:
+        if not offer(sink, batch, stop):
+            return False
+    return True
+
+
 def pump(path: str, sink: queue.Queue[object], stop: threading.Event) -> None:
     """A thread de ``BatchStream``: lê os lotes do arquivo de transbordo para a fila até o fim, um erro de leitura ou o ``stop``.
 
@@ -174,10 +207,9 @@ def pump(path: str, sink: queue.Queue[object], stop: threading.Event) -> None:
     """
     try:
         with pa.OSFile(path, "rb") as source:
-            for batch in pa.ipc.open_stream(source):
-                if not offer(sink, batch, stop):
-                    return
-        offer(sink, END, stop)
+            finished = offer_batches(pa.ipc.open_stream(source), sink, stop)
+        if finished:
+            offer(sink, END, stop)
     except Exception as error:  # noqa: BLE001 - o erro de leitura vai ao consumidor
         offer(sink, error, stop)
 
@@ -224,13 +256,9 @@ class BatchStream:
     def read_next_batch(self) -> pa.RecordBatch:
         if self._queue is None:
             return self._reader.read_next_batch()
-        while True:
-            try:
-                item = self._queue.get(timeout=0.05)
-                break
-            except queue.Empty:
-                if self._stop.is_set():
-                    raise StopIteration from None
+        item = take(self._queue, self._stop)
+        if item is None:
+            raise StopIteration
         # O fim e o erro voltam à fila: a thread já terminou, e a leitura seguinte os encontra de
         # novo em vez de esperar por um lote que não vem.
         if item is END:
@@ -257,11 +285,7 @@ class BatchStream:
     def close(self) -> None:
         self._stop.set()
         if self._thread is not None:
-            while True:  # esvazia a fila para a thread sair do put
-                try:
-                    self._queue.get_nowait()
-                except queue.Empty:
-                    break
+            drain(self._queue)
             self._thread.join(timeout=10)
         self._source.close()
         Path(self._path).unlink(missing_ok=True)
@@ -278,6 +302,19 @@ class BatchStream:
         Path(self._path).unlink(missing_ok=True)
 
 
+def write_until_end(writer: pa.ipc.RecordBatchStreamWriter, source: queue.Queue[object], closed: threading.Event, outcome: dict[str, object]) -> None:
+    """Grava cada lote tirado da fila até o fim dela; a exceção que o cliente pôs na fila, e o loader abandonado, sobem daqui."""
+    item = take(source, closed)
+    while item is not END:
+        if item is None:
+            raise RuntimeError("loader encerrado sem close")
+        if isinstance(item, BaseException):
+            raise item
+        writer.write_batch(item)
+        outcome["rows"] += item.num_rows
+        item = take(source, closed)
+
+
 def write_spool(path: str, schema: pa.Schema, source: queue.Queue[object], closed: threading.Event, outcome: dict[str, object]) -> None:
     """A thread de ``Loader``: grava no arquivo de transbordo os lotes tirados da fila, até o fim da fila.
 
@@ -286,19 +323,7 @@ def write_spool(path: str, schema: pa.Schema, source: queue.Queue[object], close
     """
     try:
         with pa.OSFile(path, "wb") as sink, pa.ipc.new_stream(sink, schema, options=SPOOL_OPTIONS) as writer:
-            while True:
-                try:
-                    item = source.get(timeout=0.05)
-                except queue.Empty:
-                    if closed.is_set():
-                        raise RuntimeError("loader encerrado sem close")
-                    continue
-                if item is END:
-                    return
-                if isinstance(item, BaseException):
-                    raise item
-                writer.write_batch(item)
-                outcome["rows"] += item.num_rows
+            write_until_end(writer, source, closed, outcome)
     except BaseException as error:  # noqa: BLE001 - relançado em close, ou em write quando a thread já terminou
         outcome["error"] = error
 
@@ -481,10 +506,9 @@ def test_loader_spools_and_inserts_in_one_statement_on_close(local_location: Loc
 
     # O erro do INSERT chega ao cliente no close, e o comando único não deixa linha alguma.
     engine.query("CREATE TABLE estreita (id INTEGER, valor DECIMAL(18, 2))")
-    with pytest.raises(duckdb.ConversionException):
-        with Loader(engine, "estreita", schema) as loader:
-            for k in range(20):
-                loader.write(batch(k).set_column(0, "id", pa.array([2**40] * 10_000, pa.int64())))
+    with pytest.raises(duckdb.ConversionException), Loader(engine, "estreita", schema) as loader:
+        for k in range(20):
+            loader.write(batch(k).set_column(0, "id", pa.array([2**40] * 10_000, pa.int64())))
     assert count("estreita") == 0
     engine.cleanup()
 
@@ -506,6 +530,12 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(local_location: Local
         frame["dobro"] = (frame["valor"] * 2).astype("double[pyarrow]")
         return type(data).from_pandas(frame, preserve_index=False).cast(target)
 
+    def insert(name: str, data: pa.RecordBatch) -> None:
+        with engine.session() as connection:
+            connection.register("lote", data)
+            connection.execute(f"INSERT INTO {name} BY NAME SELECT * FROM lote")
+            connection.unregister("lote")
+
     timings: dict[str, float] = {}
 
     # A tabela inteira: to_arrow_table, o trabalho de uma vez, a carga de uma vez.
@@ -517,10 +547,7 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(local_location: Local
     started = time.perf_counter()
     with BatchStream(engine, sql, batch_size=200_000, prefetch=0) as stream:
         for batch in stream:
-            with engine.session() as connection:
-                connection.register("lote", work(batch))
-                connection.execute("INSERT INTO sequencial BY NAME SELECT * FROM lote")
-                connection.unregister("lote")
+            insert("sequencial", work(batch))
     timings["sequencial"] = time.perf_counter() - started
 
     # Encadeado: a leitura do arquivo na thread do stream, o trabalho na thread do cliente, a escrita
@@ -548,6 +575,24 @@ class PublishFailed(Exception):
         self.outcomes = outcomes
 
 
+def outcome_of(future: Future) -> str:
+    """O resultado de uma tarefa terminada ou cancelada, como ``PublishFailed`` o lista."""
+    if future.cancelled():
+        return "cancelada"
+    error = future.exception()
+    if error is None:
+        return "concluída"
+    return f"falhou: {type(error).__name__}: {error}"
+
+
+def first_failure(futures: Iterable[Future]) -> Future | None:
+    """A primeira tarefa que falha, na ordem em que as tarefas terminam; ``None`` quando todas concluem."""
+    for future in as_completed(futures):
+        if future.exception() is not None:
+            return future
+    return None
+
+
 def publish_all(tables: list[str], action: Callable[[str], object], max_workers: int) -> dict[str, str]:
     """Roda ``action`` por tabela num pool.
 
@@ -555,24 +600,17 @@ def publish_all(tables: list[str], action: Callable[[str], object], max_workers:
     começou é cancelado, e ``PublishFailed`` traz o resultado de cada tabela: os commits feitos ficam,
     porque o Delta não tem transação entre tabelas.
     """
-    outcomes: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(action, table): table for table in tables}
-        for future in as_completed(futures):
-            error = future.exception()
-            if error is None:
-                outcomes[futures[future]] = "concluída"
-                continue
+        failed = first_failure(futures)
+        # shutdown espera as tarefas em curso e cancela as que ainda não começaram.
+        pool.shutdown(wait=True, cancel_futures=True)
 
-            outcomes[futures[future]] = f"falhou: {type(error).__name__}: {error}"
-            pool.shutdown(wait=True, cancel_futures=True)
-            for other, table in futures.items():
-                if other.cancelled():
-                    outcomes[table] = "cancelada"
-                elif table not in outcomes:
-                    outcomes[table] = "concluída" if other.exception() is None else f"falhou: {other.exception()}"
-            raise PublishFailed(outcomes)
-
+    outcomes = {}
+    for future, table in futures.items():
+        outcomes[table] = outcome_of(future)
+    if failed is not None:
+        raise PublishFailed(outcomes)
     return outcomes
 
 
@@ -663,7 +701,11 @@ def test_table_barrier_delays_the_read_until_the_load_lands() -> None:
     assert time.perf_counter() - started < 0.05
 
     # A tabela em voo segura a leitura até a carga terminar.
-    reader = threading.Thread(target=lambda: (barrier.wait_for(referenced_tables(statement)), events.append("leitura")))
+    def read() -> None:
+        barrier.wait_for(referenced_tables(statement))
+        events.append("leitura")
+
+    reader = threading.Thread(target=read)
     reader.start()
     time.sleep(0.05)
     assert events == []
@@ -728,7 +770,7 @@ def test_several_delta_tables_read_and_ingested_in_parallel(local_location: Loca
     for k in range(4):
         ingest("seq", k)
     one_by_one = time.perf_counter() - started
-    in_threads = run_in_threads([lambda k=k: ingest("par", k) for k in range(4)])
+    in_threads = run_in_threads([functools.partial(ingest, "par", k) for k in range(4)])
     counts = con.execute("SELECT (SELECT count(*) FROM par_0), (SELECT count(*) FROM par_1), (SELECT count(*) FROM par_2), (SELECT count(*) FROM par_3)").fetchone()
     assert counts == (ROWS // 2,) * 4
     record("parallel.timing.duckdb_ingest_4_tables_by_delta_scan", f"sequencial {one_by_one:.3f} s, quatro threads {in_threads:.3f} s")
@@ -744,8 +786,12 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(local_l
 
     # 1. Quatro tabelas em quatro threads: quatro commits independentes, cada log na sua pasta.
     uris = [local_location.child(f"escrita/tabela_{k}") for k in range(4)]
+
+    def write_table(uri: str) -> None:
+        write_deltalake(uri, data, mode="overwrite", partition_by=["mes"])
+
     with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda uri: write_deltalake(uri, data, mode="overwrite", partition_by=["mes"]), uris))
+        list(pool.map(write_table, uris))
     assert [DeltaTable(uri).version() for uri in uris] == [0] * 4
 
     # 2. A mesma tabela, quatro meses em quatro threads: cada overwrite com predicado troca os arquivos do
@@ -756,7 +802,7 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(local_l
         month_rows = data.filter(pc.equal(data.column("mes"), month))
         write_deltalake(uri, month_rows, mode="overwrite", predicate=f"mes = '{month}'")
 
-    elapsed = run_in_threads([lambda month=month: replace_month(month) for month in FOUR_MONTHS])
+    elapsed = run_in_threads([functools.partial(replace_month, month) for month in FOUR_MONTHS])
     table = DeltaTable(uri)
     assert table.version() == 4 and table.to_pyarrow_dataset().count_rows() == data.num_rows
     record("parallel.timing.delta_overwrite_4_months_same_table", f"{elapsed:.3f} s em quatro threads")
@@ -774,7 +820,7 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(local_l
         except CommitFailedError:
             outcomes.append("CommitFailedError")
 
-    run_in_threads([lambda: overwrite(first), lambda: overwrite(second)])
+    run_in_threads([functools.partial(overwrite, first), functools.partial(overwrite, second)])
     assert sorted(outcomes) == ["CommitFailedError", "commit"] and DeltaTable(uri).version() == 5
 
 
@@ -826,7 +872,10 @@ def test_duckdb_loads_and_exports_from_threads_on_one_session(local_location: Lo
         data = four_month_table(connection)
     by_month = {month: data.filter(pc.equal(data.column("mes"), month)) for month in FOUR_MONTHS}
 
-    elapsed = run_in_threads([lambda k=k: engine.load(f"carga_{k}", by_month[FOUR_MONTHS[k]]) for k in range(4)])
+    def load(k: int) -> None:
+        engine.load(f"carga_{k}", by_month[FOUR_MONTHS[k]])
+
+    elapsed = run_in_threads([functools.partial(load, k) for k in range(4)])
     counts = engine.query("SELECT table_name, estimated_size FROM duckdb_tables() ORDER BY table_name").to_pylist()
     assert [row["table_name"] for row in counts] == [f"carga_{k}" for k in range(4)]
     assert engine.query("SELECT (SELECT count(*) FROM carga_0) + (SELECT count(*) FROM carga_1) + (SELECT count(*) FROM carga_2) + (SELECT count(*) FROM carga_3) AS n").column("n")[0].as_py() == data.num_rows
@@ -839,7 +888,7 @@ def test_duckdb_loads_and_exports_from_threads_on_one_session(local_location: Lo
         with engine.session() as connection:
             connection.execute(f"COPY carga_{k} TO '{folder / f'carga_{k}.parquet'}' (FORMAT parquet)")
 
-    elapsed = run_in_threads([lambda k=k: export(k) for k in range(4)])
+    elapsed = run_in_threads([functools.partial(export, k) for k in range(4)])
     assert [pq.read_metadata(folder / f"carga_{k}.parquet").num_rows for k in range(4)] == [by_month[month].num_rows for month in FOUR_MONTHS]
     record("parallel.timing.duckdb_copy_to_4_files", f"{elapsed:.3f} s em quatro threads, em série na sessão")
 

@@ -29,7 +29,8 @@ que existia enquanto a pergunta estava aberta, copiar os arquivos da versão par
 
 Testes: o SQL da transação comparado com texto esperado, sem conexão, com o nome em duas partes e
 a cláusula de credenciais mascarada; integração marcada `redshift`. Provas de conceito:
-`test_deltalake.py::test_version_diff`, `test_stdlib.py::test_group_log_actions_by_month` e
+`test_deltalake.py::test_version_diff_reads_data_changes_in_the_log`,
+`test_stdlib.py::test_group_log_actions_by_partition` e
 `test_redshift.py::test_copy_manifest_from_delta_files` (a transação da publicação repete o `COPY`
 na staging e o `INSERT` com a partição).
 

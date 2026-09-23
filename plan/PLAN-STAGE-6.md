@@ -27,7 +27,7 @@ a reexecução com o mesmo `execution_id` produz as mesmas linhas, com ids que p
 `next_ids` de duas threads devolve faixas disjuntas; a auditoria reprovada deixa a versão da tabela
 como estava; de duas execuções publicando a mesma partição, a segunda aborta com `ExecutionConflict`, e
 também a que publica uma tabela em que outra execução gravou dados desde a abertura, e não a que só foi compactada; `publish` com
-`max_workers=2` dá o mesmo resultado que com 1. Provas de conceito: `test_stdlib.py` (`test_month_arithmetic`,
+`max_workers=2` dá o mesmo resultado que com 1. Provas de conceito: `test_stdlib.py` (`test_partition_values_in_text_order`,
 `test_execution_identifiers`, `test_context_manager_cleans_up_on_failure`,
 `test_entry_point_by_import_string`, `test_command_line_parsing`, `test_execution_log`,
 `test_prepare_environment`, `test_json_control_file_and_commit_metadata`) e

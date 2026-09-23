@@ -26,7 +26,8 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   decimal. `plan/sqlalchemy.md`
 - `literal_column(":mes")` survives `literal_binds` in both dialects and is the execution parameter
   of generated SQL; `bindparam("mes")` without a value and `text("mes = :mes")` render `mes = NULL`
-  with a `SAWarning` instead of failing. Stand-alone dialect instances (`pyformat`, `format`) double
+  instead of failing, and the `SAWarning` fires only for a `=` comparison (2026-09-22: `LIKE`,
+  `coalesce`, a `select` column, `VALUES` and `text()` render `NULL` silently). Stand-alone dialect instances (`pyformat`, `format`) double
   `%` in literals under `literal_binds` (`LIKE 'A%'` becomes `'A%%'`); `Dialect(paramstyle="named")`
   does not. A table name with `{` is quoted unless `quoted_name(quote=False)`;
   `replacement_traverse` swaps the contract tables of a finished statement for prefixed copies.
@@ -54,7 +55,9 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
 - A `bindparam` without value shows in the plain compilation as `compiled.binds[name]` with
   `required=True` (`value=None`); one with a value has `required=False`; constants and `in_` lists
   enter under anonymous names with `required=False`; a `literal_column(":nome")` never appears.
-  With `literal_binds=True`, `binds` is empty, the text carries `= NULL` and a `SAWarning` fires.
+  With `literal_binds=True`, `binds` is empty and the text carries `NULL`; the `SAWarning` fires
+  only for a `=` comparison, while `compiled.binds` marks the parameter `required` in the seven
+  forms probed on 2026-09-22, so the warning is no guard.
   Stage 2 reads `binds` instead of catching the warning: `warnings.catch_warnings` swaps the
   process-wide filter and the `warnings` docs call it unsafe with threads below Python 3.14's
   `context_aware_warnings`; the project runs 3.13 (2026-09-21). `plan/PLAN-STAGE-2.md`, `plan/POC.md`

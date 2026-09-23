@@ -55,9 +55,11 @@ publicação no Redshift. Testes: `tests/test_load.py` sobre a base fictícia de
 em `int64`, o `timestamp` truncado, os dois modos com as mesmas contagens e somas, o relatório de
 contagens e somas e as tabelas puladas. Provas
 de conceito:
-`test_deltalake.py::test_initial_load_from_parquet_folders` (o cast na consulta do DuckDB, o mês
-por `overwrite` com predicado, a retomada pelos meses já presentes e o relatório de contagens e
-somas), `test_pyarrow.py` (`test_hive_partitioned_dataset`,
+`test_deltalake.py::test_initial_load_from_parquet_folders` (cada pasta lida sem
+`hive_partitioning`, com o valor do caminho na coluna de partição, a chave em `BIGINT` e o `double`
+mantido, a partição por `overwrite` com predicado, a retomada pelas partições já presentes, o
+relatório de contagens e somas em `DECIMAL(38, 6)` e o `data_str` que a detecção de tipos do Hive
+lê como `DATE`), `test_pyarrow.py` (`test_hive_partitioned_dataset`,
 `test_parquet_streaming_read_filters_and_pandas`) e
 `test_duckdb.py::test_decimal_from_pandas_sample_versus_arrow_schema`.
 

@@ -96,16 +96,17 @@ reconciliação aditiva e recusa da destrutiva, `rewrite` num commit sem predica
 anterior legível, `keep_versions`, `export_snapshot` nos dois modos, realocação da pasta e a escrita
 condicional do arquivo de controle. Provas de conceito: `test_stdlib.py` (`test_storage_uris`,
 `test_exclusive_create_atomic_replace_and_fingerprint`, `test_json_control_file_and_commit_metadata`,
-`test_group_log_actions_by_month`, `test_prepare_environment`), `test_s3.py` (`test_conditional_put`,
+`test_group_log_actions_by_partition`, `test_prepare_environment`), `test_s3.py` (`test_conditional_put`,
 `test_boto3_list_copy_delete`, e `test_delta_rs_storage_options_fallback`, que mede a forma das
 credenciais em `storage_options` sem que a biblioteca a use), `test_local.py`
 (`test_commit_is_atomic_on_disk`, `test_folder_relocates`) e `test_deltalake.py` inteiro: criação
 idempotente, predicado e nulidade, evolução com `drop_column_not_null` (recebe o nome da coluna),
 `restore`, `AddAction`, o que `create_write_transaction` não confere (caminho, estatística, esquema
 do arquivo) e o `overwrite` com `partition_filters`, a compactação que normaliza arquivos de outro
-escritor, `vacuum`, `version_diff`, compactação e checkpoint, exportação por cópia e a
-reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do DuckDB registrada num
-commit `overwrite` com esquema novo e estatísticas tipadas, que o DuckDB usa para podar;
+escritor, `vacuum`, `version_diff` pelas ações `add` e `remove` com `dataChange` do log, compactação
+e checkpoint, exportação por cópia e a reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN,
+RETURN_STATS` do DuckDB registrada num commit `overwrite` com esquema novo e o mínimo e o máximo
+dos tipos de `stat_converter`, que o DuckDB usa para podar;
 `test_parallel.py` (quatro tabelas lidas em paralelo, escritas em paralelo por tabela e por mês da
 mesma tabela com o conflito no mesmo mês, e `max_key` pelas estatísticas com a varredura de reserva);
 `tests/test_migrate_parquet_to_delta.py` (o registro com as estatísticas dos quatro tipos).

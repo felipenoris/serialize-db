@@ -1,21 +1,21 @@
 """A biblioteca padrão do Python nos papéis que as etapas (``plan/PLAN-STAGE-<n>.md``) lhe dão.
 
-Sem gravar arquivo: a aritmética de meses (``datetime``, ``calendar``), os identificadores de
-execução e de sandbox (``uuid``, ``re``), o protocolo do motor e as configurações
-(``typing.Protocol``, ``dataclasses``), o gerenciador de contexto que descarta o sandbox mesmo com a
-auditoria reprovada (``contextlib``), o ponto de entrada ``modulo:funcao`` (``importlib``), a linha
-de comando (``argparse``), o log da execução (``logging``), o ambiente normalizado (``os.environ``
-com ``monkeypatch``), o arquivo de controle e os metadados de commit (``json``), as URIs dos dois
-armazenamentos (``urllib.parse``, ``pathlib``), o agrupamento das ações do log por mês
-(``itertools``, ``collections``), os totais da auditoria (``decimal``) e o diff dos arquivos gerados
-(``difflib``). Sob a raiz local (marcador ``local``): a criação exclusiva, a substituição atômica e
-a impressão digital de um arquivo (``os``, ``tempfile``, ``hashlib``, ``shutil``).
+Sem gravar arquivo: a ordem dos valores de partição e o valor derivado de uma data (``datetime``),
+os identificadores de execução e de sandbox (``uuid``, ``re``), o protocolo do motor e as
+configurações (``typing.Protocol``, ``dataclasses``), o gerenciador de contexto que descarta o
+sandbox mesmo com a auditoria reprovada (``contextlib``), o ponto de entrada ``modulo:funcao``
+(``importlib``), a linha de comando (``argparse``), o log da execução (``logging``), o ambiente
+normalizado (``os.environ`` com ``monkeypatch``), o arquivo de controle e os metadados de commit
+(``json``), as URIs dos dois armazenamentos (``urllib.parse``, ``pathlib``), as ações do log
+agrupadas por partição (``json``, ``itertools``, ``collections``), os totais da auditoria
+(``decimal``) e o diff dos arquivos gerados (``difflib``). Sob a raiz local (marcador ``local``): a
+criação exclusiva, a substituição atômica e a impressão digital de um arquivo (``os``,
+``tempfile``, ``hashlib``, ``shutil``).
 """
 
 from __future__ import annotations
 
 import argparse
-import calendar
 import collections
 import contextlib
 import dataclasses
@@ -43,31 +43,31 @@ import pytest
 from conftest import LocalLocation
 
 
-def previous_months(month: str, count: int) -> list[str]:
-    """Os ``count`` meses até ``month``, inclusive, como ``YYYY-MM`` em ordem crescente."""
-    last = dt.date.fromisoformat(f"{month}-01")
-    months = []
-
-    for _ in range(count):
-        months.append(last.strftime("%Y-%m"))
-        last = (last - dt.timedelta(days=1)).replace(day=1)  # o dia anterior ao dia 1 cai no mês anterior
-
-    return sorted(months)
+def previous_partitions(values: list[str], partition: str, count: int) -> list[str]:
+    """Os ``count`` últimos valores até ``partition``, inclusive, na ordem de texto: o que ``run.previous_partitions`` devolve."""
+    up_to_partition = []
+    for value in sorted(set(values)):
+        if value <= partition:
+            up_to_partition.append(value)
+    return up_to_partition[-count:]
 
 
-def test_month_arithmetic() -> None:
-    """``run.previous_months(n)`` e o mês seguinte vêm de ``date`` e ``calendar``, sem biblioteca externa."""
-    assert previous_months("2026-08", 12) == [f"2025-{m:02d}" for m in range(9, 13)] + [f"2026-{m:02d}" for m in range(1, 9)]
-    assert previous_months("2026-01", 2) == ["2025-12", "2026-01"]
+def test_partition_values_in_text_order() -> None:
+    """``run.previous_partitions(table, n)`` ordena os valores de partição como texto, que em ``AAAA-MM-DD`` é a ordem do calendário; a auditoria deriva o valor de uma data por ``strftime``."""
+    # Os fins de mês da base de origem, não contíguos e fora de ordem, e um valor depois da partição da execução.
+    values = ["2026-06-30", "2026-01-31", "2026-09-30", "2026-03-31", "2026-02-28"]
+    assert previous_partitions(values, "2026-08-31", 2) == ["2026-03-31", "2026-06-30"]
+    assert previous_partitions(values, "2026-08-31", 12) == ["2026-01-31", "2026-02-28", "2026-03-31", "2026-06-30"]
 
-    # O mês seguinte, com a virada do ano; monthrange dá o dia da semana do dia 1 e a quantidade de dias.
-    year, month = 2026, 12
-    following = dt.date(year + month // 12, month % 12 + 1, 1)
-    assert following.strftime("%Y-%m") == "2027-01"
-    assert calendar.monthrange(2026, 2) == (6, 28)
+    # Em AAAA-MM-DD a ordem de texto é a do calendário; em DD-MM-AAAA não é. A biblioteca só ordena
+    # texto, e o calendário é do cliente.
+    assert sorted(values) == sorted(values, key=dt.date.fromisoformat)
+    assert sorted(["31-01-2026", "28-02-2026"]) == ["28-02-2026", "31-01-2026"]
 
-    # O mês de uma data, como a auditoria confere mes = strftime(data_ref, '%Y-%m').
-    assert dt.datetime(2026, 8, 31, 23, 59).strftime("%Y-%m") == "2026-08"
+    # Com partition_source declarado, a auditoria confere a coluna de partição contra
+    # strftime(<coluna de data>, '%Y-%m-%d'); a hora de um timestamp não entra no valor.
+    assert dt.date(2026, 8, 31).strftime("%Y-%m-%d") == "2026-08-31"
+    assert dt.datetime(2026, 8, 31, 23, 59).strftime("%Y-%m-%d") == "2026-08-31"
 
 
 def sandbox_prefix(execution_id: str) -> str:
@@ -102,7 +102,7 @@ def test_execution_identifiers() -> None:
 class Engine(Protocol):
     """A interface que os dois motores implementam; a execução só depende dela."""
 
-    def ingest(self, table: str, uri: str, version: int, months: list[str] | None = None, materialize: bool = False) -> None: ...
+    def ingest(self, table: str, uri: str, version: int, partitions: list[str] | None = None, materialize: bool = False) -> None: ...
 
     def cleanup(self) -> None: ...
 
@@ -125,7 +125,7 @@ class FakeEngine:
         self.calls: list[tuple[str, str, int]] = []
         self.cleaned = False
 
-    def ingest(self, table: str, uri: str, version: int, months: list[str] | None = None, materialize: bool = False) -> None:
+    def ingest(self, table: str, uri: str, version: int, partitions: list[str] | None = None, materialize: bool = False) -> None:
         self.calls.append((table, uri, version))
 
     def cleanup(self) -> None:
@@ -174,7 +174,7 @@ def test_context_manager_cleans_up_on_failure() -> None:
     failed = FakeEngine()
     with pytest.raises(AuditFailed, match="chave duplicada"):
         with execution(failed):
-            raise AuditFailed("chave duplicada em 2026-08")
+            raise AuditFailed("chave duplicada em 2026-08-31")
     assert failed.cleaned  # o sandbox foi descartado mesmo assim
 
     # Vários recursos abertos em sequência e fechados na ordem inversa.
@@ -210,55 +210,68 @@ def test_entry_point_by_import_string() -> None:
         load_entry_point("json:inexistente")
 
 
-def month_argument(text: str) -> str:
-    """Valida ``YYYY-MM`` na linha de comando; ``argparse`` transforma a exceção em mensagem e saída 2."""
-    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", text):
-        raise argparse.ArgumentTypeError(f"mês inválido: {text!r} (esperado YYYY-MM)")
+def partition_argument(text: str) -> str:
+    """Valida o valor de partição na linha de comando; ``argparse`` transforma a exceção em mensagem e saída 2.
+
+    A partição é texto: não vazio e sem ``/``, ``=`` nem espaço, os caracteres que o nome da pasta
+    ``<coluna>=<valor>`` e o manifesto não aceitam.
+    """
+    if not text or re.search(r"[/=\s]", text):
+        raise argparse.ArgumentTypeError(f"partição inválida: {text!r} (texto sem /, = nem espaço)")
 
     return text
 
 
 def build_parser(environ: MutableMapping[str, str]) -> argparse.ArgumentParser:
-    """``serialize-db run`` e ``serialize-db schema``, com as variáveis de ambiente como padrão dos argumentos."""
+    """``serialize-db run`` e ``serialize-db schema write|check``, com as variáveis de ambiente como padrão dos argumentos."""
     parser = argparse.ArgumentParser(prog="serialize-db")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    run = commands.add_parser("run", help="executa o pipeline de um mês")
+    run = commands.add_parser("run", help="executa o pipeline de uma partição")
     run.add_argument("--root", default=environ.get("SERIALIZE_DB_ROOT"), required="SERIALIZE_DB_ROOT" not in environ)
     run.add_argument("--environment", default=environ.get("SERIALIZE_DB_ENVIRONMENT", "dev"))
     run.add_argument("--engine", choices=["duckdb", "redshift"], default=environ.get("SERIALIZE_DB_ENGINE", "duckdb"))
-    run.add_argument("--month", type=month_argument, required=True)
+    run.add_argument("--export-mode", choices=["register", "rewrite"], default=environ.get("SERIALIZE_DB_EXPORT_MODE", "register"))
+    run.add_argument("--partition", type=partition_argument, required=True)
     run.add_argument("--execution-id", default=None)
+    run.add_argument("--metadata", required=True, help="modulo:atributo com o MetaData dos modelos do pipeline")
     run.add_argument("pipeline", help="modulo:funcao que recebe a execução aberta")
 
-    schema = commands.add_parser("schema", help="gera ou confere os arquivos de esquema")
-    schema.add_argument("action", choices=["write", "check"])
-    schema.add_argument("--directory", default="schema")
+    # schema write e schema check: um subcomando dentro de outro, cada um com os mesmos argumentos.
+    schema = commands.add_parser("schema", help="os arquivos de esquema dos modelos")
+    actions = schema.add_subparsers(dest="action", required=True)
+    for action in ("write", "check"):
+        action_parser = actions.add_parser(action)
+        action_parser.add_argument("--metadata", required=True, help="modulo:atributo com o MetaData dos modelos")
+        action_parser.add_argument("directory", help="a pasta dos arquivos de esquema")
 
     return parser
 
 
 def test_command_line_parsing() -> None:
-    """``argparse`` com subcomandos, escolhas, validação de tipo e padrões vindos do ambiente."""
+    """``argparse`` com subcomandos aninhados, escolhas, validação de tipo e padrões vindos do ambiente."""
     parser = build_parser({"SERIALIZE_DB_ROOT": "s3://bucket/projeto/delta"})
 
-    args = parser.parse_args(["run", "--month", "2026-08", "pipeline:main"])
-    assert (args.command, args.root, args.environment, args.engine) == ("run", "s3://bucket/projeto/delta", "dev", "duckdb")
-    assert args.month == "2026-08" and args.pipeline == "pipeline:main" and args.execution_id is None
+    args = parser.parse_args(["run", "--partition", "2026-08-31", "--metadata", "pipeline.models:Base.metadata", "pipeline:main"])
+    assert (args.command, args.root, args.environment, args.engine, args.export_mode) == ("run", "s3://bucket/projeto/delta", "dev", "duckdb", "register")
+    assert args.partition == "2026-08-31" and args.pipeline == "pipeline:main" and args.execution_id is None
 
-    check = parser.parse_args(["schema", "check", "--directory", "esquemas"])
-    assert (check.command, check.action, check.directory) == ("schema", "check", "esquemas")
+    check = parser.parse_args(["schema", "check", "--metadata", "pipeline.models:Base.metadata", "esquemas"])
+    assert (check.command, check.action, check.metadata, check.directory) == ("schema", "check", "pipeline.models:Base.metadata", "esquemas")
 
-    # Erros de uso saem com código 2 e a mensagem do argparse, sem traceback.
+    # Erros de uso saem com código 2 e a mensagem do argparse, sem traceback: a partição com /, o
+    # motor fora das escolhas e o schema sem --metadata.
     with pytest.raises(SystemExit) as exit_info:
-        parser.parse_args(["run", "--month", "2026-13", "pipeline:main"])
+        parser.parse_args(["run", "--partition", "2026/08/31", "--metadata", "m:a", "pipeline:main"])
     assert exit_info.value.code == 2
     with pytest.raises(SystemExit):
-        parser.parse_args(["run", "--engine", "spark", "--month", "2026-08", "pipeline:main"])
+        parser.parse_args(["run", "--engine", "spark", "--partition", "2026-08-31", "--metadata", "m:a", "pipeline:main"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["schema", "check", "esquemas"])
 
     # Sem a variável, --root passa a ser obrigatório.
     with pytest.raises(SystemExit):
-        build_parser({}).parse_args(["run", "--month", "2026-08", "pipeline:main"])
+        build_parser({}).parse_args(["run", "--partition", "2026-08-31", "--metadata", "m:a", "pipeline:main"])
 
 
 def test_execution_log(caplog: pytest.LogCaptureFixture) -> None:
@@ -267,9 +280,9 @@ def test_execution_log(caplog: pytest.LogCaptureFixture) -> None:
 
     with caplog.at_level(logging.INFO, logger="serialize_db.execution"):
         started = time.perf_counter()
-        logger.info("execução %s aberta: mês %s, versões lidas %s", "exec-2026-09-05", "2026-08", {"cad_lancamentos": 143})
+        logger.info("execução %s aberta: partição %s, versões lidas %s", "exec-2026-09-05", "2026-08-31", {"cad_lancamentos": 143})
         logger.info("passo %s concluído em %.3f s", "ingest", time.perf_counter() - started)
-        logger.warning("auditoria reprovada: %s", "chave duplicada em 2026-08")
+        logger.warning("auditoria reprovada: %s", "chave duplicada em 2026-08-31")
         logger.info("encerrada", extra={"execution_id": "exec-2026-09-05"})
 
     assert [record.levelname for record in caplog.records] == ["INFO", "INFO", "WARNING", "INFO"]
@@ -352,28 +365,55 @@ def test_storage_uris() -> None:
     assert Path(urllib.parse.urlparse("file:///dados/prod").path) == Path("/dados/prod")
 
 
-def test_group_log_actions_by_month() -> None:
-    """``itertools.groupby`` e ``collections`` agrupam as ações ``add`` por mês; a diferença de conjuntos dá ``version_diff``."""
-    actions = [("mes=2026-01/a.parquet", 100, "2026-01"), ("mes=2026-02/b.parquet", 300, "2026-02"), ("mes=2026-01/c.parquet", 50, "2026-01")]
+def partition_of(file_action: dict) -> str:
+    """O valor de partição de uma ação ``add`` ou ``remove`` do log."""
+    return file_action["partitionValues"]["data_str"]
+
+
+def test_group_log_actions_by_partition() -> None:
+    """``json`` lê as ações do log, uma por linha; ``itertools.groupby`` e ``collections`` as agrupam por partição; as partições com ``dataChange`` são as de ``version_diff``."""
+    # Dois commits: a substituição da partição 2026-08-31 e a compactação da 2026-07-31, que troca
+    # arquivos sem mudar dados e grava dataChange falso.
+    lines = [
+        '{"commitInfo": {"operation": "WRITE"}}',
+        '{"remove": {"path": "data_str=2026-08-31/a.parquet", "partitionValues": {"data_str": "2026-08-31"}, "dataChange": true}}',
+        '{"add": {"path": "data_str=2026-08-31/b.parquet", "partitionValues": {"data_str": "2026-08-31"}, "size": 300, "dataChange": true}}',
+        '{"commitInfo": {"operation": "OPTIMIZE"}}',
+        '{"remove": {"path": "data_str=2026-07-31/c.parquet", "partitionValues": {"data_str": "2026-07-31"}, "dataChange": false}}',
+        '{"remove": {"path": "data_str=2026-07-31/d.parquet", "partitionValues": {"data_str": "2026-07-31"}, "dataChange": false}}',
+        '{"add": {"path": "data_str=2026-07-31/e.parquet", "partitionValues": {"data_str": "2026-07-31"}, "size": 150, "dataChange": false}}',
+        '{"add": {"path": "data_str=2026-07-31/f.parquet", "partitionValues": {"data_str": "2026-07-31"}, "size": 50, "dataChange": false}}',
+    ]
+    actions = [json.loads(line) for line in lines]
+    adds = [action["add"] for action in actions if "add" in action]
 
     # groupby exige a entrada ordenada pela chave.
-    by_month = {month: [path for path, _, _ in group] for month, group in itertools.groupby(sorted(actions, key=lambda a: a[2]), key=lambda a: a[2])}
-    assert by_month == {"2026-01": ["mes=2026-01/a.parquet", "mes=2026-01/c.parquet"], "2026-02": ["mes=2026-02/b.parquet"]}
+    files_by_partition = {}
+    for value, group in itertools.groupby(sorted(adds, key=partition_of), key=partition_of):
+        files_by_partition[value] = [add["path"] for add in group]
+    assert files_by_partition == {
+        "2026-07-31": ["data_str=2026-07-31/e.parquet", "data_str=2026-07-31/f.parquet"],
+        "2026-08-31": ["data_str=2026-08-31/b.parquet"],
+    }
 
-    bytes_by_month: collections.Counter[str] = collections.Counter()
-    for _, size, month in actions:
-        bytes_by_month[month] += size
-    assert bytes_by_month == {"2026-01": 150, "2026-02": 300}
+    bytes_by_partition: collections.Counter[str] = collections.Counter()
+    for add in adds:
+        bytes_by_partition[partition_of(add)] += add["size"]
+    assert bytes_by_partition == {"2026-07-31": 200, "2026-08-31": 300}
 
-    files: collections.defaultdict[str, list[str]] = collections.defaultdict(list)
-    for path, _, month in actions:
-        files[month].append(path)
-    assert len(files["2026-03"]) == 0  # um mês sem arquivos existe com lista vazia
+    removed: collections.defaultdict[str, list[str]] = collections.defaultdict(list)
+    for action in actions:
+        if "remove" in action:
+            removed[partition_of(action["remove"])].append(action["remove"]["path"])
+    assert len(removed["2026-06-30"]) == 0  # uma partição sem arquivos existe com lista vazia
 
-    # version_diff: os meses dos arquivos que a versão nova tem e a publicada não tinha.
-    published = {"mes=2026-01/a.parquet", "mes=2026-02/b.parquet"}
-    current = {"mes=2026-01/a.parquet", "mes=2026-02/d.parquet"}
-    assert {path.split("/")[0].removeprefix("mes=") for path in current - published} == {"2026-02"}
+    # version_diff: as partições com add ou remove de dados; a compactação não conta.
+    changed = set()
+    for action in actions:
+        file_action = action.get("add") or action.get("remove")
+        if file_action is not None and file_action["dataChange"]:
+            changed.add(partition_of(file_action))
+    assert changed == {"2026-08-31"}
 
 
 def test_decimal_totals() -> None:

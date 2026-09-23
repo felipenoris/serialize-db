@@ -27,7 +27,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from conftest import LocalLocation, record
-from poc_delta import MONTHS, ROWS, sample_table
+from poc_delta import MONTHS, ROWS, StreamOnly, sample_table
 
 
 def contract_schema() -> pa.Schema:
@@ -46,7 +46,12 @@ def contract_schema() -> pa.Schema:
 def addresses(column: pa.ChunkedArray | pa.Array) -> set[int]:
     """Os endereços dos buffers de uma coluna: iguais dos dois lados quando a conversão não copiou."""
     chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
-    return {buffer.address for chunk in chunks for buffer in chunk.buffers() if buffer is not None}
+
+    # Um array sem nulos não tem o buffer de validade, e buffers() devolve None no lugar dele.
+    buffers = []
+    for chunk in chunks:
+        buffers.extend(chunk.buffers())
+    return {buffer.address for buffer in buffers if buffer is not None}
 
 
 def test_schema_metadata_and_from_pylist() -> None:
@@ -85,9 +90,11 @@ def test_safe_cast_refuses_data_loss() -> None:
         pa.array([1], pa.timestamp("ns")).cast(pa.timestamp("us"))
     assert pa.array([1000], pa.timestamp("ns")).cast(pa.timestamp("us"))[0].as_py() == dt.datetime(1970, 1, 1, 0, 0, 0, 1)
 
-    # O tipo string não tem comprimento: String(200) do contrato é verificado com utf8_length.
-    lengths = pc.utf8_length(pa.array(["ok", "x" * 201]))
-    assert pc.max(lengths).as_py() == 201
+    # O tipo string não tem comprimento, e o String(200) do contrato é conferido à parte, em bytes, a
+    # medida do VARCHAR(n) do Redshift: binary_length conta bytes, utf8_length conta caracteres.
+    texts = pa.array(["ok", "ç" * 101])
+    assert pc.max(pc.binary_length(texts)).as_py() == 202
+    assert pc.max(pc.utf8_length(texts)).as_py() == 101
 
     # double para decimal arredonda o valor binário exato (2,675 é 2,67499...) sem acusar a perda, mesmo com
     # safe=True; o valor representável na escala é o que pc.round devolve igual, e pc.round difere do cast em 2,675.
@@ -239,14 +246,9 @@ def test_record_batch_reader_from_batches_trusts_the_batches() -> None:
     gc.collect()
     assert events == ["lote 0", "lote 1", "finally"]
 
-    class Stream:
-        def __init__(self, source: pa.RecordBatchReader) -> None:
-            self._source = source
-
-        def __arrow_c_stream__(self, requested_schema: object = None) -> object:
-            return self._source.__arrow_c_stream__(requested_schema)
-
-    assert pa.RecordBatchReader.from_stream(Stream(pa.RecordBatchReader.from_batches(declared, generate()))).read_all().num_rows == 3
+    # Um objeto que só expõe __arrow_c_stream__ vira leitor por from_stream.
+    stream = StreamOnly(pa.RecordBatchReader.from_batches(declared, generate()))
+    assert pa.RecordBatchReader.from_stream(stream).read_all().num_rows == 3
 
 
 @pytest.mark.local

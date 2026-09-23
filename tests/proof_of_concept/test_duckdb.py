@@ -28,7 +28,7 @@ import pyarrow as pa
 import pytest
 
 from conftest import LocalLocation, record
-from poc_delta import MONTHS, ROWS, sample_table
+from poc_delta import MONTHS, ROWS, StreamOnly, sample_table
 
 
 @pytest.fixture
@@ -318,14 +318,8 @@ def test_insert_from_a_reader_is_one_statement_and_trusts_the_batches(con: duckd
         con.execute("INSERT INTO estrito BY NAME SELECT * FROM entrada")
     con.unregister("entrada")
 
-    class Stream:
-        def __init__(self, source: pa.RecordBatchReader) -> None:
-            self._source = source
-
-        def __arrow_c_stream__(self, requested_schema: object = None) -> object:
-            return self._source.__arrow_c_stream__(requested_schema)
-
-    con.register("entrada", Stream(pa.RecordBatchReader.from_batches(schema, generate(3))))
+    # Um objeto que só expõe __arrow_c_stream__ entra por register como um leitor.
+    con.register("entrada", StreamOnly(pa.RecordBatchReader.from_batches(schema, generate(3))))
     con.execute("INSERT INTO estrito BY NAME SELECT * FROM entrada")
     con.unregister("entrada")
     assert con.execute("SELECT count(*) FROM estrito").fetchone()[0] == 3000
@@ -469,28 +463,36 @@ def test_database_file_and_temp_directory(local_location: LocalLocation) -> None
 
 
 def test_audit_queries(con: duckdb.DuckDBPyConnection) -> None:
-    """As consultas da auditoria acham cada defeito de um mês: chave repetida, nulo, ``mes`` errado, JSON inválido, texto longo."""
-    con.execute("CREATE TABLE lancamentos (id BIGINT, data_ref DATE, mes VARCHAR, valor DECIMAL(18,2), meta VARCHAR, descricao VARCHAR)")
+    """As consultas da auditoria acham cada defeito de uma partição: chave repetida, nulo, partição diferente da data de origem, JSON inválido, texto acima de ``String(200)`` em bytes."""
+    con.execute("CREATE TABLE lancamentos (id BIGINT, data_base DATE, data_base_str VARCHAR, valor DECIMAL(18,2), meta VARCHAR, descricao VARCHAR)")
     con.execute(
         """
         INSERT INTO lancamentos VALUES
-            (1, '2026-08-01', '2026-08', 10.00, '{"ok": true}', 'a'),
-            (1, '2026-08-02', '2026-08', 20.00, NULL, 'b'),
-            (2, '2026-08-03', '2026-08', NULL, '{invalido', 'c'),
-            (3, '2026-07-31', '2026-08', 5.00, NULL, repeat('x', 201))
+            (1, '2026-08-31', '2026-08-31', 10.00, '{"ok": true}', 'a'),
+            (1, '2026-08-31', '2026-08-31', 20.00, NULL, 'b'),
+            (2, '2026-08-31', '2026-08-31', NULL, '{invalido', repeat('x', 200)),
+            (3, '2026-07-31', '2026-08-31', 5.00, NULL, repeat('ç', 101))
         """
     )
 
     duplicates = con.execute("SELECT id, count(*) FROM lancamentos GROUP BY id HAVING count(*) > 1").fetchall()
     assert duplicates == [(1, 2)]
 
-    # count(*) FILTER conta os defeitos numa passagem só; o total de controle acompanha.
+    # O String(n) do contrato é medido em bytes, a medida do VARCHAR(n) do Redshift: strlen conta
+    # bytes, length conta caracteres, e 'ç' ocupa dois bytes. O octet_length do DuckDB só aceita BLOB.
+    assert con.execute("SELECT strlen(repeat('ç', 101)), length(repeat('ç', 101))").fetchone() == (202, 101)
+    with pytest.raises(duckdb.BinderException, match="octet_length"):
+        con.execute("SELECT octet_length(descricao) FROM lancamentos")
+
+    # count(*) FILTER conta os defeitos numa passagem só; o total de controle acompanha. A partição
+    # é conferida contra a data de origem por strftime(data, '%Y-%m-%d') quando o modelo declara
+    # partition_source.
     row = con.execute(
         """
         SELECT count(*) FILTER (WHERE valor IS NULL),
-               count(*) FILTER (WHERE mes <> strftime(data_ref, '%Y-%m')),
+               count(*) FILTER (WHERE data_base_str <> strftime(data_base, '%Y-%m-%d')),
                count(*) FILTER (WHERE meta IS NOT NULL AND NOT json_valid(meta)),
-               count(*) FILTER (WHERE length(descricao) > 200),
+               count(*) FILTER (WHERE strlen(descricao) > 200),
                sum(valor)
         FROM lancamentos
         """

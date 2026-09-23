@@ -423,6 +423,11 @@ A new lesson adds its story there and its rule here, in the same commit.
   decisions memory and a user decision, and the implementation found the quoted sentinel parses;
   grep the plan for a measurement's premise when a decision changes what a primitive emits
   (2026-09-22).
+- **A library's warning is a reading, never a guard**: the valueless `bindparam` warns under
+  `literal_binds` only in a `=` comparison and renders `NULL` silently in `LIKE`, `coalesce`,
+  `VALUES`, a `select` column and `text()`; guard on the state the library exposes
+  (`compiled.binds`, `required`), and probe every form the input takes before writing that a
+  behavior warns (2026-09-22).
 
 ## Naming conventions
 
@@ -484,6 +489,3 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
 - The Redshift target is `sbx_aco_decon` in the datashare database `datalake_rw_shared`, reached by
   `USE` with the workgroup's temporary credential; the probe, `tests/conftest.py` and the Redshift
   suite follow the scripts in `examples/`.
-- Left for separate sessions, suggested on 2026-09-22: the study content of
-  `tests/proof_of_concept/` older than the decisions of 2026-09-21 and 2026-09-22, and the
-  readability of the fixture base and of the probe tests.

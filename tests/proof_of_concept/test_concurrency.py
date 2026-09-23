@@ -16,6 +16,7 @@ tempo de duas threads é leitura do relatório, porque depende dos núcleos livr
 
 from __future__ import annotations
 
+import functools
 import importlib
 import itertools
 import os
@@ -103,8 +104,13 @@ def test_duckdb_and_pyarrow_release_the_gil() -> None:
 
     assert_gil_released(reference, "duckdb_aggregate", lambda: con.execute("SELECT sum(range * range) FROM range(60_000_000)").fetchall())
 
+    # A conversão guarda a tabela para as medições seguintes.
     produced: dict[str, pa.Table] = {}
-    assert_gil_released(reference, "duckdb_to_arrow_table", lambda: produced.setdefault("table", large_table(con)))
+
+    def convert_to_arrow() -> None:
+        produced["table"] = large_table(con)
+
+    assert_gil_released(reference, "duckdb_to_arrow_table", convert_to_arrow)
 
     # Parquet em memória: o mesmo escritor e leitor dos arquivos, sem tocar o disco.
     sink = pa.BufferOutputStream()
@@ -168,7 +174,7 @@ def test_drivers_share_the_module_not_the_connection() -> None:
         cursor.execute(f"CREATE TABLE {name} AS SELECT range AS x FROM range(1000)")
         cursor.close()
 
-    run_in_threads([lambda: create("t_a"), lambda: create("t_b")])
+    run_in_threads([functools.partial(create, "t_a"), functools.partial(create, "t_b")])
     assert con.execute("SELECT (SELECT count(*) FROM t_a), (SELECT count(*) FROM t_b)").fetchone() == (1000, 1000)
 
     # A conexão compartilhada: A executa, B executa na mesma conexão, e o fetchall de A traz as linhas de B.
@@ -231,7 +237,7 @@ def test_id_ranges_from_a_locked_counter() -> None:
             with collect:
                 taken.append(taken_range)
 
-    run_in_threads([lambda k=k: worker(k) for k in range(8)])
+    run_in_threads([functools.partial(worker, k) for k in range(8)])
 
     ordered = sorted(taken, key=lambda taken_range: taken_range.start)
     total = sum(map(sum, sizes))
@@ -265,24 +271,22 @@ def test_two_threads_run_native_work_in_parallel(local_location: LocalLocation) 
     con = duckdb.connect(str(local_location.path / "parallel.duckdb"), config={"threads": 2})
     table = large_table(con)
 
-    def compare(label: str, make: Callable[[int], Callable[[], object]]) -> None:
+    def compare(label: str, action: Callable[[int], object]) -> None:
+        """``action(0)`` e ``action(1)`` em sequência, ``action(2)`` e ``action(3)`` em duas threads; os tempos vão ao relatório."""
         started = time.perf_counter()
-        make(0)()
-        make(1)()
+        action(0)
+        action(1)
         sequential = time.perf_counter() - started
-        parallel = run_in_threads([make(2), make(3)])
+        parallel = run_in_threads([functools.partial(action, 2), functools.partial(action, 3)])
         record(f"concurrency.timing.{label}", f"sequencial {sequential:.3f} s, duas threads {parallel:.3f} s ({sequential / parallel:.2f}x)")
 
-    def delta_write(k: int) -> Callable[[], object]:
-        return lambda: write_deltalake(local_location.child(f"w{k}"), table, mode="overwrite")
+    def delta_write(k: int) -> None:
+        write_deltalake(local_location.child(f"w{k}"), table, mode="overwrite")
 
-    def create_table(k: int) -> Callable[[], object]:
-        def action() -> None:
-            cursor = con.cursor()
-            cursor.execute(f"CREATE TABLE c{k} AS SELECT range AS x FROM range(10_000_000)")
-            cursor.close()
-
-        return action
+    def create_table(k: int) -> None:
+        cursor = con.cursor()
+        cursor.execute(f"CREATE TABLE c{k} AS SELECT range AS x FROM range(10_000_000)")
+        cursor.close()
 
     compare("deltalake_write_two_tables", delta_write)
     for k in range(4):
@@ -344,8 +348,11 @@ def test_delta_readers_keep_their_version_while_a_writer_commits(local_location:
     assert current.version() == 1 and current.to_pyarrow_dataset().count_rows() == ROWS + APPENDED_ROWS
 
     # Quatro leituras da mesma versão em paralelo contra uma: leitura do relatório.
+    def read_current() -> None:
+        DeltaTable(uri).to_pyarrow_table()
+
     started = time.perf_counter()
     current.to_pyarrow_table()
     one = time.perf_counter() - started
-    four = run_in_threads([lambda: DeltaTable(uri).to_pyarrow_table() for _ in range(4)])
+    four = run_in_threads([read_current] * 4)
     record("concurrency.timing.delta_read_one_vs_four_threads", f"uma leitura {one:.3f} s, quatro em paralelo {four:.3f} s")

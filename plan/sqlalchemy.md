@@ -1227,7 +1227,10 @@ Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 
   como comando com parâmetros do DBAPI e errado como SQL. `Dialect(paramstyle="named")` desliga a
   dobra nos dois dialetos.
 - `bindparam("mes")` sem valor e `text("mes = :mes")` não falham sob `literal_binds`: viram
-  `mes = NULL`, com um `SAWarning`. `render` troca cada `BindParameter` com `required=True` por
+  `mes = NULL`. O `SAWarning` sai só numa comparação por `=`; no `text()`, no `LIKE`, no
+  `coalesce`, na coluna de um `select` e no `VALUES` de um `INSERT` o `NULL` sai calado, e
+  `compiled.binds`, sem `literal_binds`, marca o parâmetro `required` nas sete formas (leitura de
+  2026-09-22, [`POC.md`](POC.md)). `render` troca cada `BindParameter` com `required=True` por
   `literal_column(":nome")` por `replacement_traverse` antes de compilar, e o texto sai
   `mes = :mes` nos dois casos, sem tocar no filtro de avisos do processo (2026-09-22,
   [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).

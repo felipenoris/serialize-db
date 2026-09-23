@@ -13,8 +13,9 @@ próprios do seu armazenamento. As medições vão para o relatório da sessão 
 armazenamento, como ``local.timing.delta_scan.aggregate_first``.
 
 O módulo também é o material comum dos outros testes da pasta: ``sample_table`` é a amostra com os
-tipos do contrato, ``connect_duckdb`` abre o DuckDB com a regra de extensões do projeto, e
-``run_in_threads`` roda ações em paralelo e mede o tempo até a última terminar.
+tipos do contrato, ``connect_duckdb`` abre o DuckDB com a regra de extensões do projeto,
+``run_in_threads`` roda ações em paralelo e mede o tempo até a última terminar, e ``StreamOnly`` é
+um fluxo Arrow que não é um ``RecordBatchReader``.
 """
 
 from __future__ import annotations
@@ -55,8 +56,9 @@ def timed(storage: Storage, label: str, action: Callable[[], object], repeat: in
 def run_in_threads(actions: list[Callable[[], object]]) -> float:
     """Roda as ações em threads, uma por ação, e devolve o tempo até a última terminar.
 
-    A exceção de uma ação sobe no chamador por ``future.result()``: numa ``threading.Thread`` ela
-    só seria impressa, e o teste falharia depois com um sintoma sem relação.
+    Cada ação é uma função sem argumentos; ``functools.partial(funcao, argumento)`` fixa o argumento
+    de cada uma. A exceção de uma ação sobe no chamador por ``future.result()``: numa
+    ``threading.Thread`` ela só seria impressa, e o teste falharia depois com um sintoma sem relação.
     """
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=len(actions)) as pool:
@@ -140,6 +142,20 @@ def connect_duckdb(extensions: Iterable[str]) -> duckdb.DuckDBPyConnection:
     record("duckdb.threads", connection.execute("SELECT current_setting('threads')").fetchone()[0])
 
     return connection
+
+
+class StreamOnly:
+    """Um objeto que só expõe ``__arrow_c_stream__``, como o ``BatchStream`` de ``test_parallel.py``.
+
+    Quem pede um fluxo pela interface PyCapsule (``RecordBatchReader.from_stream``, o ``register``
+    do DuckDB) o aceita como um leitor, sem que ele seja um ``RecordBatchReader``.
+    """
+
+    def __init__(self, source: pa.RecordBatchReader) -> None:
+        self._source = source
+
+    def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+        return self._source.__arrow_c_stream__(requested_schema)
 
 
 class DeltaProofOfConcept:

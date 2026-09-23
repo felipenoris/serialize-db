@@ -281,6 +281,11 @@ Delta Lake no Redshift Spectrum (tabelas de manifesto simbólico), consultado em
 - <https://aws.amazon.com/blogs/big-data/introducing-native-delta-lake-table-support-with-aws-glue-crawlers>
 - <https://aws.amazon.com/about-aws/whats-new/2022/12/aws-glue-crawlers-support-delta-lake-tables>
 
+O comprimento em bytes de um `VARCHAR`, para a verificação de texto da auditoria, consultado em
+2026-09-22:
+
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_OCTET_LENGTH.html>
+
 ## DuckDB
 
 Documentação:

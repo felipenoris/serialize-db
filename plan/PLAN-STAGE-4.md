@@ -22,7 +22,7 @@ modelo:
 | Chave repetida | `table.primary_key` e os `UniqueConstraint`, mais o que `keys` acrescenta | As partições da execução quando as colunas da chave incluem a coluna de partição; a tabela inteira quando não incluem. |
 | Órfão de chave estrangeira | `table.foreign_keys` | Só com `foreign_keys=True`; a tabela referenciada entra na versão fixada pela execução. |
 | Partição fora da origem, e valor que não serve de nome de pasta | `partition_by` e `partition_source` de `table_options`: com `partition_source` declarado, a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')`; em toda tabela particionada, o valor vazio ou com `/`, `=` ou espaço (a partição é texto desde a decisão de 2026-09-22, e a data é o caso da base atual) | As partições da execução. |
-| Texto acima de `String(n)` e valor fora do `Numeric(18, 2)` | os tipos do contrato (`docs/index.md`); no Redshift, o `COPY` de uma string maior que o `VARCHAR` aborta (`Spectrum Scan Error` 15007, 2026-09-21), e esta verificação é a barreira | As partições da execução. |
+| Texto acima de `String(n)` em bytes e valor fora do `Numeric(18, 2)` | os tipos do contrato (`docs/index.md`); no Redshift, o `COPY` de uma string maior que o `VARCHAR` aborta (`Spectrum Scan Error` 15007, 2026-09-21), e esta verificação é a barreira | As partições da execução. |
 | Documento JSON inválido, ou acima de 65.535 bytes se a decisão da [etapa 8](PLAN-STAGE-8.md) fixar o teto | as colunas JSON, que nem o Arrow nem o Delta validam; o teto é o do `VARCHAR` da staging do Redshift e da string que o `COPY` de Parquet aceita numa coluna `SUPER` (2026-09-21) | As partições da execução. |
 | Totais de controle | as colunas `Numeric` e `Double`; as `Double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem | As partições da execução. |
 
@@ -77,7 +77,8 @@ publicada, e o órfão de chave estrangeira com a tabela referenciada fora do sa
 leitor esvaziado pelo comando seguinte e preservado num cursor próprio, a consulta em streaming com
 a memória medida em subprocesso, o `INSERT` sobre um leitor de gerador com a leitura antecipada e
 os lotes que o leitor não confere, `DECIMAL`, JSON, `executemany`, `COPY` com `RETURN_STATS` e
-particionado, banco em arquivo, `test_audit_queries`), `poc_delta.py`
+particionado, banco em arquivo, `test_audit_queries` com o texto medido em bytes por `strlen`),
+`poc_delta.py`
 (`delta_scan`, poda, tempos, `ATTACH ... PIN_SNAPSHOT`),
 `test_deltalake.py::test_duckdb_view_pins_version_and_reader_feeds_write`
 (a view presa a `version := v` e o `to_arrow_reader()` no `write_deltalake` com predicado),
@@ -203,13 +204,16 @@ class DuckDBEngine:
 
 - **`checks`** monta os statements Core sobre a cópia prefixada da tabela (`sql.prefixed`). Uma
   consulta de linhas reúne num `count(*) FILTER` por coluna: nulo em `NOT NULL`, texto acima de
-  `String(n)`, JSON inválido, a coluna de partição diferente de `partition_text(partition_source)`
+  `String(n)` em bytes, JSON inválido, a coluna de partição diferente de `partition_text(partition_source)`
   quando o modelo declara `partition_source`, o valor de partição vazio ou com `/`, `=` ou espaço
   (a partição é texto desde 2026-09-22, e a data é o caso da base atual), e a soma de controle de
-  cada coluna `Double` e `Numeric` como `DECIMAL(38, 6)`. Duas funções
+  cada coluna `Double` e `Numeric` como `DECIMAL(38, 6)`. As funções
   genéricas com `@compiles` por dialeto fazem a portabilidade: `partition_text` é
   `strftime(x, '%Y-%m-%d')` no DuckDB e `to_char(x, 'YYYY-MM-DD')` no Redshift; `json_valid` fica
-  no DuckDB e vira `is_valid_json` no Redshift. Uma consulta por chave (`GROUP BY ... HAVING count(*)
+  no DuckDB e vira `is_valid_json` no Redshift; `text_bytes`, o comprimento em bytes que o
+  `String(n)` mede como o `VARCHAR(n)` do Redshift, é `strlen` no DuckDB e `octet_length` no
+  Redshift, porque o `length` dos dois conta caracteres e o `octet_length` do DuckDB só aceita
+  `BLOB`. Uma consulta por chave (`GROUP BY ... HAVING count(*)
   > 1`) dentro das partições da execução, e, quando a chave não inclui a coluna de partição e
   `key_scope != "partition"`, uma segunda consulta que junta o sandbox com `published` (o
   `delta_scan` da versão fixada, ou a staging no Redshift) fora das partições da execução. Uma
@@ -306,11 +310,11 @@ criado no teste a partir do modelo cliente.
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
-| Texto das verificações | `test_audit_sql_per_dialect` | Cada `Check` do modelo cliente renderiza nos dois dialetos; `strftime` no DuckDB e `to_char` no Redshift; `json_valid` e `is_valid_json`. |
+| Texto das verificações | `test_audit_sql_per_dialect` | Cada `Check` do modelo cliente renderiza nos dois dialetos; `strftime` no DuckDB e `to_char` no Redshift; `json_valid` e `is_valid_json`; `strlen` e `octet_length`. |
 | Escopo da chave | `test_key_scope_follows_the_partition_column` | Chave com a coluna de partição gera uma consulta; sem ela, gera a segunda contra `published`; `key_scope="partition"` a suprime e o relatório registra. |
 | Chave estrangeira | `test_foreign_key_check_only_on_request` | Sem `foreign_keys=True` o nome está em `not_run`; com ele, o anti-join contra `referenced`. |
 | Arquivos | `test_audit_files_match_versioned` | Diff vazio contra a pasta versionada. |
-| Defeitos plantados | `test_audit_finds_each_defect` | O sandbox do rascunho: nulo, texto longo, partição errada, chave repetida dentro da partição e contra a publicada, chave única repetida contra a publicada. |
+| Defeitos plantados | `test_audit_finds_each_defect` | O sandbox do rascunho: nulo, texto acima do `String(n)` em bytes e dentro dele em caracteres, partição errada, chave repetida dentro da partição e contra a publicada, chave única repetida contra a publicada. |
 | Sessão | `test_engine_config_and_single_session` | `duckdb_settings()` com os valores pedidos, o `memory_limit` no padrão do DuckDB quando a configuração o omite, e o banco em arquivo dentro da pasta de `tempfile.mkdtemp`; três threads usam a mesma sessão, uma de cada vez; a tabela temporária criada por uma é visível às outras; uma primitiva chamada dentro de `session()` não trava. |
 | Ingestão presa | `test_ingest_pins_the_version` | Um `append` na tabela depois da abertura não aparece na view nem na tabela materializada. |
 | Versão publicada | `test_published_reads_the_pinned_version` | `published` lê a versão fixada sem criar objeto no sandbox, e o `loader` da mesma tabela fica com o nome do modelo. |
@@ -326,10 +330,12 @@ criado no teste a partir do modelo cliente.
 
 ## Rascunhos executados
 
-Os dois rascunhos rodaram em 2026-09-21 com as versões fixadas. O primeiro monta as verificações a
-partir de um `Table` com chave primária e chave única, imprime o texto de cada uma nos dois dialetos
-e as executa num DuckDB em memória com um defeito de cada tipo; a tabela `delta_scan` faz o papel da
-versão publicada. O segundo é o motor por partes, com o modelo de conexão anterior à sessão única (um
+Os dois rascunhos rodaram em 2026-09-21 com as versões fixadas, e o primeiro de novo em 2026-09-22,
+com o texto medido em bytes. O primeiro monta as verificações a partir de um `Table` com chave
+primária e chave única, imprime o texto de cada uma nos dois dialetos e as executa num DuckDB em
+memória com um defeito de cada tipo (o texto `'ação ação'` tem 9 caracteres e 13 bytes: só a
+medida em bytes o acusa numa coluna `String(10)`); a tabela `delta_scan` faz o papel da versão
+publicada. O segundo é o motor por partes, com o modelo de conexão anterior à sessão única (um
 cursor por thread num `threading.local`); a sessão única e os arquivos intermediários estão nos
 esboços de `test_parallel.py`.
 
@@ -376,6 +382,22 @@ def _redshift_json_valid(element, compiler, **kw):
     return f"is_valid_json({compiler.process(element.clauses.clauses[0], **kw)})"
 
 
+class text_bytes(GenericFunction):
+    """O comprimento do texto em bytes, a medida do VARCHAR(n): strlen no DuckDB, octet_length no Redshift; o length dos dois conta caracteres."""
+    type = sa.Integer()
+    inherit_cache = True
+
+
+@compiles(text_bytes, "duckdb")
+def _duckdb_text_bytes(element, compiler, **kw):
+    return f"strlen({compiler.process(element.clauses.clauses[0], **kw)})"
+
+
+@compiles(text_bytes, "redshift")
+def _redshift_text_bytes(element, compiler, **kw):
+    return f"octet_length({compiler.process(element.clauses.clauses[0], **kw)})"
+
+
 @dataclasses.dataclass(frozen=True)
 class Check:
     name: str
@@ -397,7 +419,7 @@ def checks(table: sa.Table, partitions: list[str] | None, options: dict, prefix:
         if not column.nullable:
             filters.append(sa.func.count().filter(column.is_(None)).label(f"nulo_{column.name}"))
         if isinstance(column.type, sa.String) and column.type.length and column.name != partition_by:
-            filters.append(sa.func.count().filter(sa.func.length(column) > column.type.length).label(f"texto_{column.name}"))
+            filters.append(sa.func.count().filter(text_bytes(column) > column.type.length).label(f"texto_{column.name}"))
         if isinstance(column.type, sa.JSON):
             filters.append(sa.func.count().filter(sa.and_(column.isnot(None), sa.not_(json_valid(column)))).label(f"json_{column.name}"))
         if isinstance(column.type, (sa.Double, sa.Numeric)) and not isinstance(column.type, sa.Float) or isinstance(column.type, sa.Double):
@@ -437,6 +459,8 @@ for name, text in texts.items():
     print(f"-- {name}\n{' '.join(text.split())}")
 redshift = audit_sql(entries, "redshift", partitions=["2026-08-31"], options=options, prefix="exec_42_", published=published)
 print("-- redshift, linhas:", " ".join(redshift["linhas"].split())[:230], "...")
+for dialect in DIALECTS:
+    print(f"-- {dialect}, texto:", text_bytes(entries.c.area).compile(dialect=DIALECTS[dialect]))
 
 con = duckdb.connect()
 con.execute("CREATE TABLE cad_lancamentos (id_lancamento BIGINT, id_conta BIGINT, data_base DATE, valor DOUBLE, area VARCHAR, meta JSON, data_base_str VARCHAR)")
@@ -444,8 +468,8 @@ con.execute("""INSERT INTO cad_lancamentos VALUES
     (1, 7, '2026-08-31', 10.5, 'TI', '{"ok": true}', '2026-08-31'),
     (1, 7, '2026-08-31', 20.25, 'RH', NULL, '2026-08-31'),
     (2, NULL, '2026-08-31', 0.1, 'x', NULL, '2026-08-31'),
-    (3, 8, '2026-07-31', 0.2, 'area longa demais', NULL, '2026-08-31'),
-    (4, 9, '2026-08-31', 0.3, 'TI', NULL, '2026-07-31')""")   # a partição de julho fica fora do escopo de agosto
+    (3, 8, '2026-07-31', 0.2, 'ação ação', NULL, '2026-08-31'),
+    (4, 9, '2026-08-31', 0.3, 'TI', NULL, '2026-07-31')""")   # 'ação ação': 9 caracteres e 13 bytes; a partição de julho fica fora do escopo de agosto
 con.execute("""CREATE TABLE delta_scan AS SELECT * FROM (VALUES
     (3, 8, DATE '2026-07-31', 0.2, 'x', NULL, '2026-06-30'),
     (4, 9, DATE '2026-08-31', 0.3, 'TI', NULL, '2026-08-31'),
@@ -458,7 +482,7 @@ Saída:
 
 ```
 -- linhas
-SELECT count(*) FILTER (WHERE cad_lancamentos.id_lancamento IS NULL) AS nulo_id_lancamento, count(*) FILTER (WHERE cad_lancamentos.id_conta IS NULL) AS nulo_id_conta, count(*) FILTER (WHERE cad_lancamentos.data_base IS NULL) AS nulo_data_base, count(*) FILTER (WHERE cad_lancamentos.valor IS NULL) AS nulo_valor, sum(CAST(cad_lancamentos.valor AS NUMERIC(38, 6))) AS total_valor, count(*) FILTER (WHERE length(cad_lancamentos.area) > 10) AS texto_area, count(*) FILTER (WHERE cad_lancamentos.meta IS NOT NULL AND NOT json_valid(cad_lancamentos.meta)) AS json_meta, count(*) FILTER (WHERE cad_lancamentos.data_base_str IS NULL) AS nulo_data_base_str, count(*) FILTER (WHERE cad_lancamentos.data_base_str != strftime(cad_lancamentos.data_base, '%Y-%m-%d')) AS particao_data_base_str FROM cad_lancamentos WHERE cad_lancamentos.data_base_str IN ('2026-08-31')
+SELECT count(*) FILTER (WHERE cad_lancamentos.id_lancamento IS NULL) AS nulo_id_lancamento, count(*) FILTER (WHERE cad_lancamentos.id_conta IS NULL) AS nulo_id_conta, count(*) FILTER (WHERE cad_lancamentos.data_base IS NULL) AS nulo_data_base, count(*) FILTER (WHERE cad_lancamentos.valor IS NULL) AS nulo_valor, sum(CAST(cad_lancamentos.valor AS NUMERIC(38, 6))) AS total_valor, count(*) FILTER (WHERE strlen(cad_lancamentos.area) > 10) AS texto_area, count(*) FILTER (WHERE cad_lancamentos.meta IS NOT NULL AND NOT json_valid(cad_lancamentos.meta)) AS json_meta, count(*) FILTER (WHERE cad_lancamentos.data_base_str IS NULL) AS nulo_data_base_str, count(*) FILTER (WHERE cad_lancamentos.data_base_str != strftime(cad_lancamentos.data_base, '%Y-%m-%d')) AS particao_data_base_str FROM cad_lancamentos WHERE cad_lancamentos.data_base_str IN ('2026-08-31')
 -- chave_id_lancamento
 SELECT cad_lancamentos.id_lancamento, count(*) AS n FROM cad_lancamentos WHERE cad_lancamentos.data_base_str IN ('2026-08-31') GROUP BY cad_lancamentos.id_lancamento HAVING count(*) > 1
 -- chave_id_lancamento_publicada
@@ -468,6 +492,8 @@ SELECT cad_lancamentos.id_conta, cad_lancamentos.data_base, cad_lancamentos.area
 -- chave_id_conta_data_base_area_publicada
 SELECT cad_lancamentos.id_conta, cad_lancamentos.data_base, cad_lancamentos.area FROM cad_lancamentos JOIN delta_scan AS publicado ON cad_lancamentos.id_conta = publicado.id_conta AND cad_lancamentos.data_base = publicado.data_base AND cad_lancamentos.area = publicado.area WHERE cad_lancamentos.data_base_str IN ('2026-08-31') AND (publicado.data_base_str NOT IN ('2026-08-31'))
 -- redshift, linhas: SELECT count(*) FILTER (WHERE exec_42_cad_lancamentos.id_lancamento IS NULL) AS nulo_id_lancamento, count(*) FILTER (WHERE exec_42_cad_lancamentos.id_conta IS NULL) AS nulo_id_conta, count(*) FILTER (WHERE exec_42_cad_lancamentos. ...
+-- duckdb, texto: strlen(cad_lancamentos.area)
+-- redshift, texto: octet_length(cad_lancamentos.area)
 linhas: [(0, 1, 0, 0, Decimal('31.050000'), 1, 0, 0, 1)]
 chave_id_lancamento: [(1, 2)]
 chave_id_lancamento_publicada: [(3,)]

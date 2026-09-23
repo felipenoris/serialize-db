@@ -95,11 +95,13 @@ arquivos `tests/client_model/schema/` versionados; `write_schema_files` sob a ra
 Dependências de execução: `sqlalchemy`, `pyarrow`, `deltalake` e `duckdb`; `duckdb-engine` e
 `sqlalchemy-redshift` ficam no grupo `dev`, das suítes de estudo, porque a etapa não compila pelo
 dialeto (decisão do usuário de 2026-09-21). Provas de conceito: `test_sqlalchemy.py`
-(`test_declarative_model_exposes_table`, `test_ddl_per_dialect`, `test_create_all_and_reflection`,
-`test_arrow_and_delta_schema_from_table`, com o mapa de tipos e `Schema.from_arrow().to_json()`,
+(`test_declarative_model_exposes_table`, `test_ddl_per_dialect`, com as opções físicas de `info`
+acrescentadas por uma função comum e não por uma regra `@compiles`, `test_create_all_and_reflection`,
+`test_arrow_and_delta_schema_from_table`, com o mapa de tipos, o `parquet.field.id` que
+`Schema.from_arrow` leva do Arrow ao esquema Delta e o esquema Delta sem ele,
 `test_sandbox_copy_of_table_and_schema_files_diff`), `test_pyarrow.py`
 (`test_schema_metadata_and_from_pylist`, `test_safe_cast_refuses_data_loss`, com as perdas que o
-cast seguro não acusa, `test_arrow_table_round_trips_through_pandas_without_copy` e
+cast seguro não acusa e o texto medido em bytes, `test_arrow_table_round_trips_through_pandas_without_copy` e
 `test_record_batch_cast_and_conversions_share_buffers`, o mesmo por lote) e `test_stdlib.py`
 (`test_generated_files_diff`, `test_decimal_totals`, `test_entry_point_by_import_string`).
 

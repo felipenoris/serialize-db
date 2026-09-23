@@ -184,7 +184,10 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
 
         # O paginador entrega as chaves em páginas de até 1.000; o filtro deixa só os arquivos de dados.
         pages = s3.get_paginator("list_objects_v2").paginate(Bucket=storage.bucket, Prefix=source_prefix + "/")
-        data_keys = [item["Key"] for page in pages for item in page.get("Contents", []) if item["Key"].endswith(".parquet")]
+        contents = []
+        for page in pages:
+            contents.extend(page.get("Contents", []))
+        data_keys = [item["Key"] for item in contents if item["Key"].endswith(".parquet")]
         assert data_keys == [uri.removeprefix(f"s3://{storage.bucket}/") for uri in storage.data_files(table_uri)]
 
         # copy_object copia dentro do serviço, sem baixar os dados; o layout mes=.../ é preservado.

@@ -1599,3 +1599,39 @@ dos testes do pacote foi conferida pelo instrumento que a valida.
 **Consequência**: nenhuma mudança alterou o que as suítes conferem, e as contagens ficaram as da
 sessão única: sem variável, 183 passam e 89 são pulados; com a raiz local, 249 passam e 23 são
 pulados.
+
+## O que a revisão das suítes de estudo de 2026-09-22 mostrou
+
+Em 2026-09-22, no macOS (SQLAlchemy 2.0.54, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0,
+DuckDB 1.5.5, deltalake 1.6.4, PyArrow 25.0.1), as suítes de `tests/proof_of_concept/` passaram a
+ensinar as abordagens das decisões de 2026-09-21 e 2026-09-22, e cada comportamento novo nelas foi
+lido por uma sonda antes de virar asserção.
+
+- **O `SAWarning` do `bindparam` sem valor só sai numa comparação por `=`.** Sob `literal_binds`,
+  `coluna = :mes` e `upper(coluna) = upper(:mes)` saem `= NULL` com o aviso; `LIKE :padrao`,
+  `coalesce(coluna, :mes)`, `select(:mes)`, o `VALUES` de um `INSERT` e `text("mes = :mes")` saem
+  `NULL` sem aviso algum. Sem `literal_binds`, `compiled.binds` marca o parâmetro `required` nas
+  sete formas. Uma guarda pelo aviso, a do rascunho anterior da etapa 2, deixaria passar cinco das
+  sete, e [`sqlalchemy.md`](sqlalchemy.md) dizia que o `text()` também avisa.
+- **As releituras concordaram com o plano.** `Schema.from_arrow` leva o `PARQUET:field_id` do Arrow
+  ao esquema Delta como `parquet.field.id` inteiro, e sem a chave no Arrow ela não aparece. No log,
+  o `overwrite` com predicado grava `remove` e `add` com `dataChange` verdadeiro, o `delete` que
+  reescreve um arquivo também, e o `optimize.compact` grava os dois com `dataChange` falso. O
+  `RETURN_STATS` do DuckDB traz mínimo e máximo como texto em todo tipo, o `decimal` exato
+  (`123456789012345.21`), e nenhum dos dois numa coluna só de nulos; registrados só os de inteiro,
+  data, `double` e texto, como faz `stat_converter`, `get_add_actions(flatten=True)` mostra
+  `min.valor` e `min.data_ref` nulos, e o DuckDB poda pelo inteiro e pelo texto (`Scanning Files:
+  0/2`). `strlen('ação ação')` dá 13 e `length`, 9, e `octet_length` recusa `VARCHAR` com
+  `BinderException`; no PyArrow, `'ç' * 101` mede 202 em `binary_length` e 101 em `utf8_length`.
+  Com `hive_partitioning = true`, `data_str=2026-08-31` é lido como `DATE`, numa pasta só inclusive,
+  `hive_types_autocast = false` o mantém `VARCHAR`, e `mes=2026-01` fica `VARCHAR`.
+- **O rascunho da auditoria da etapa 4 media o texto em caracteres.** Com `text_bytes`, `strlen` no
+  DuckDB e `octet_length` no Redshift, que a página da função mede em bytes num `VARCHAR`, o
+  rascunho rodou de novo com o mesmo resultado, e o valor `'ação ação'` (9 caracteres, 13 bytes)
+  numa coluna `String(10)` só é acusado pela medida em bytes.
+
+**Consequência**: [`sqlalchemy.md`](sqlalchemy.md) passou a dizer que o aviso sai só na comparação
+por `=`, e [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md) acrescenta esse fato à razão de `render` ler
+`compiled.binds`; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) mede o texto da auditoria em bytes, no
+rascunho, na estratégia e nos testes. `test_sqlalchemy.py` tem 15 casos; sem variável, 186 passam e
+89 são pulados; com a raiz local, 252 passam e 23 são pulados.
