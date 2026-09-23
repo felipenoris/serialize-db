@@ -19,7 +19,6 @@ import datetime as dt
 import json
 import re
 import shutil
-import sys
 import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -31,15 +30,12 @@ import pyarrow.parquet as pq
 import pytest
 from deltalake import DeltaTable
 
+import migrate_parquet_to_delta as migrate
 import source_db_projetado as source
 from client_model import Base
 from conftest import LocalLocation
 from serialize_db import schema
 from serialize_db.errors import ContractError
-
-# O script vive em scripts/, fora do pacote e de tests/: a pasta entra no caminho de importação.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-import migrate_parquet_to_delta as migrate  # noqa: E402
 
 pytestmark = pytest.mark.local
 

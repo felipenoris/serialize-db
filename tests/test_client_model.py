@@ -61,6 +61,23 @@ def unique_indexes(table: sa.Table) -> set[tuple[str, ...]]:
     return keys
 
 
+def expected_type(reference_column: sa.Column) -> type:
+    """O tipo que a cópia declara para a coluna do original: ``BigInteger`` na chave inteira e na coluna que aponta
+    para uma, e o mesmo tipo nas demais."""
+    if isinstance(reference_column.type, sa.Integer) and references_a_primary_key(reference_column):
+        return sa.BigInteger
+    return type(reference_column.type)
+
+
+def column_pairs() -> list[tuple[str, sa.Column, sa.Column]]:
+    """Cada coluna do original ao lado da mesma coluna na cópia, com o nome da tabela."""
+    pairs = []
+    for name, client in ClientBase.metadata.tables.items():
+        for reference_column in reference_table(name).columns:
+            pairs.append((name, reference_column, client.c[reference_column.name]))
+    return pairs
+
+
 def unique_keys(table: sa.Table) -> set[tuple[str, ...]]:
     """As ``UniqueConstraint`` e os índices únicos da tabela, como tuplas de colunas."""
     return unique_constraints(table) | unique_indexes(table)
@@ -91,30 +108,21 @@ def test_types_and_nullability_change_only_where_the_plan_says() -> None:
 
     A nulidade de cada coluna é a do original.
     """
-    for name, client in ClientBase.metadata.tables.items():
-        for reference_column in reference_table(name).columns:
-            column = client.c[reference_column.name]
-            assert column.nullable == reference_column.nullable, (name, column.name)
-            if isinstance(reference_column.type, sa.Integer):
-                if references_a_primary_key(reference_column):
-                    assert type(column.type) is sa.BigInteger, (name, column.name)
-                else:
-                    assert type(column.type) is sa.Integer, (name, column.name)
-            elif isinstance(reference_column.type, sa.String):
-                assert type(column.type) is sa.String, (name, column.name)
-                assert column.type.length, (name, column.name)
-            else:
-                assert type(column.type) is type(reference_column.type), (name, column.name)
+    for name, reference_column, column in column_pairs():
+        assert column.nullable == reference_column.nullable, (name, column.name)
+        assert type(column.type) is expected_type(reference_column), (name, column.name)
+        if isinstance(reference_column.type, sa.String):
+            assert column.type.length, (name, column.name)
 
 
-# A chave estrangeira do original que saiu do modelo cliente: o destino não é único, porque o
-# contrato está em N operações (decisão do usuário de 2026-09-21).
+# A chave estrangeira do original que o modelo cliente não tem: o destino não é único, porque o
+# contrato está em N operações.
 REMOVED_FOREIGN_KEY = (("data", "sistema", "contrato"), "rel_contrato_operacao", ("data", "sistema", "contrato"))
 
 
 def test_keys_are_the_references_without_deferrable_and_without_autoincrement() -> None:
     """As chaves do original sem ``DEFERRABLE`` nem ``autoincrement``, menos a que apontava para
-    colunas não únicas; nenhum índice, porque os únicos viraram ``UniqueConstraint``."""
+    colunas não únicas; nenhum índice, porque a cópia declara os únicos como ``UniqueConstraint``."""
     assert REMOVED_FOREIGN_KEY in foreign_keys(reference_table("cad_contratos"))
     for name, client in ClientBase.metadata.tables.items():
         reference = reference_table(name)
@@ -131,9 +139,8 @@ def test_keys_are_the_references_without_deferrable_and_without_autoincrement() 
         assert not client.indexes, name
 
 
-# Os índices únicos do original que viraram UniqueConstraint na cópia: as chaves estrangeiras
-# compostas apontam estas colunas, e o DuckDB e o Redshift exigem chave primária ou UNIQUE no alvo
-# (decisão do usuário de 2026-09-22).
+# Os índices únicos do original que a cópia declara como UniqueConstraint: as chaves estrangeiras
+# compostas apontam estas colunas, e o DuckDB e o Redshift exigem chave primária ou UNIQUE no alvo.
 UNIQUE_CONSTRAINTS_FROM_INDEXES = {
     "cad_operacoes": ("data", "operacao"),
     "cad_contratos": ("data", "sistema", "contrato"),
@@ -143,7 +150,7 @@ UNIQUE_CONSTRAINTS_FROM_INDEXES = {
 def test_the_composite_foreign_key_targets_are_unique_constraints() -> None:
     """Os dois índices únicos do original são ``UniqueConstraint`` na cópia, e o modelo inteiro é
     criado por ``create_all`` num ``sqlalchemy.Connection`` do DuckDB criado fora da biblioteca,
-    que recusava o índice único como alvo de chave estrangeira (leitura de 2026-09-22)."""
+    que recusa o índice único como alvo de chave estrangeira."""
     for name, columns in UNIQUE_CONSTRAINTS_FROM_INDEXES.items():
         assert columns in unique_indexes(reference_table(name)), name
         assert columns in unique_constraints(ClientBase.metadata.tables[name]), name

@@ -265,7 +265,7 @@ research appends to the matching group.
 | `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `_files.py` (private: writing and diffing the generated files of both) and `cli.py` (`serialize-db schema\|sql write\|check`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` and `plan/PLAN-STAGE-2.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
 | `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). The corrected copy is the client model in `tests/client_model/`. |
 | `tests/client_model/` | The client model (user decision of 2026-09-21): the corrected copy of `tests/reference_model/` that the tests hand to the package API as a client library would, the corrections listed in `plan/PLAN-STAGE-1.md` and checked by `tests/test_client_model.py`; `statements.py` holds the fictitious pipeline's Core statements (`STATEMENTS`), `schema/` and `sql/` the generated files. |
-| `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base and in the production base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py`; the material of the stage 7 test. |
+| `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base and in the production base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py`; the material of the stage 7 test. It also holds the reference model's keys (`UNIQUE_KEYS`, `FOREIGN_KEYS`, `MODEL_NOT_NULL_DECLARED_NULLABLE`), which `tests/test_reference_model.py` checks against the model and the fixture satisfies. |
 
 `plan/duckdb.md`, `plan/redshift.md` and `plan/delta.md` share a section order: data organization and
 the differences from PostgreSQL, supported types with `DECIMAL` and JSON, DDL,
@@ -288,7 +288,9 @@ A new lesson adds its story there and its rule here, in the same commit.
   any install (`probes/space.py` SP-9), restore with `uv sync --group dev` (2026-09-19).
 - **The pytest layout has no `__init__.py`**: `tests/conftest.py` is imported as `conftest` and its folder
   lands on `sys.path`, so `from conftest import ...` and `from poc_delta import ...` work inside
-  `tests/proof_of_concept/`; test-module basenames stay unique across the two folders.
+  `tests/proof_of_concept/`; `pythonpath = ["scripts", "probes"]` in `pyproject.toml` puts the migration
+  script and the probes on `sys.path` too, so module basenames stay unique across `tests/`,
+  `tests/proof_of_concept/`, `scripts/` and `probes/`.
 - **Before a commit**: `uv run pytest` with no variables and again with `SERIALIZE_DB_TEST_LOCAL_ROOT` set
   to the scratchpad, both green; `py_compile` on an edited probe; every `](...md)` link target checked;
   `git status` clean of stray files; this file under budget; `git branch --show-current` a `claude/`

@@ -45,6 +45,9 @@ interactive = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A migração adiantada e os probes são scripts fora do pacote: as pastas entram no caminho de
+# importação, e tests/test_migrate_parquet_to_delta.py e tests/test_probes.py os importam pelo nome.
+pythonpath = ["scripts", "probes"]
 markers = [
     "local: escreve sob SERIALIZE_DB_TEST_LOCAL_ROOT; pulado sem ela",
     "s3: escreve sob SERIALIZE_DB_TEST_S3_ROOT; pulado sem ela, falha sem acesso",

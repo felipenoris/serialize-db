@@ -16,7 +16,7 @@ pacote, segundo ``plan/PLAN-STAGE-1.md``:
   ``Table.info["serialize_db"]`` com ``partition_by``, ``partition_source`` e ``sort_key``;
 - comentários de tabela e de coluna, uma primeira redação que o dono do modelo revisa no
   código;
-- as colunas numéricas continuam ``Double`` (decisão de 2026-09-20).
+- as colunas numéricas continuam ``Double``.
 
 Os índices não únicos e o ``sqlite_strict`` do original ficam de fora: nenhum motor da biblioteca
 os usa. ``tests/test_client_model.py`` confere a cópia contra o original. ``statements.py`` traz

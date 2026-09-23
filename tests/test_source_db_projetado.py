@@ -176,43 +176,6 @@ OBSERVED_TABLES = sorted(OBSERVED_PARTITION_COLUMNS) + [
     "rel_contas_hierarquias",
 ]
 
-# As chaves do modelo de referência (tests/reference_model; test_reference_model.py confere a transcrição): a chave
-# primária e as restrições de unicidade de cada tabela, e as chaves estrangeiras com a tabela e as colunas referenciadas.
-# A base fictícia satisfaz todas.
-UNIQUE_KEYS = {
-    "cad_aliquotas": [["id"], ["id_conta_origem", "id_conta_destino"]],
-    "cad_contas": [["id_conta"], ["numero"]],
-    "cad_contratos": [["id_contrato"], ["data", "sistema", "contrato"]],
-    "cad_lancamentos": [["id_lancamento"]],
-    "cad_operacoes": [["id_operacao"], ["data", "operacao"]],
-    "dom_hierarquias_contas": [["id_hierarquia"], ["nome"]],
-    "dom_mensuracoes": [["id_mensuracao"], ["nome"]],
-    "dom_negocios": [["id_negocio"], ["nome"]],
-    "dom_segmentos": [["id_segmento"], ["nome"]],
-    "dom_veiculos": [["id_veiculo"], ["nome"]],
-    "rel_contas_hierarquias": [["id_rel_conta_hierarquia"], ["id_hierarquia", "id_child"]],
-    "rel_contrato_operacao": [["id_rel_contrato_operacao"]],
-}
-FOREIGN_KEYS = [
-    ("cad_aliquotas", ["id_conta_origem"], "cad_contas", ["id_conta"]),
-    ("cad_aliquotas", ["id_conta_destino"], "cad_contas", ["id_conta"]),
-    ("rel_contas_hierarquias", ["id_hierarquia"], "dom_hierarquias_contas", ["id_hierarquia"]),
-    ("rel_contas_hierarquias", ["id_parent"], "cad_contas", ["id_conta"]),
-    ("rel_contas_hierarquias", ["id_child"], "cad_contas", ["id_conta"]),
-    ("dom_negocios", ["id_segmento"], "dom_segmentos", ["id_segmento"]),
-    ("cad_lancamentos", ["id_veiculo"], "dom_veiculos", ["id_veiculo"]),
-    ("cad_lancamentos", ["id_conta"], "cad_contas", ["id_conta"]),
-    ("cad_lancamentos", ["id_mensuracao"], "dom_mensuracoes", ["id_mensuracao"]),
-    ("cad_lancamentos", ["id_segmento"], "dom_segmentos", ["id_segmento"]),
-    ("cad_lancamentos", ["id_negocio"], "dom_negocios", ["id_negocio"]),
-    ("cad_lancamentos", ["data_base", "sistema", "contrato"], "cad_contratos", ["data", "sistema", "contrato"]),
-    ("rel_contrato_operacao", ["data", "operacao"], "cad_operacoes", ["data", "operacao"]),
-    ("cad_contratos", ["data", "sistema", "contrato"], "rel_contrato_operacao", ["data", "sistema", "contrato"]),
-]
-# As colunas NOT NULL do modelo que os arquivos declaram anuláveis; o cast do contrato as recusa com nulo.
-MODEL_NOT_NULL_DECLARED_NULLABLE = {
-    "cad_contratos": ["sistema", "um", "to", "fonte", "taxa_juros_fixos", "data_primeira_amortizacao", "data_ultima_amortizacao"],
-}
 # Os tipos do controle de esquema da biblioteca anterior e o tipo Arrow que os arquivos têm.
 SQL_TYPES = {"INTEGER": "int32", "VARCHAR": "string", "DATE": "date32[day]", "BOOLEAN": "bool", "DOUBLE_PRECISION": "double", "TIMESTAMP": "timestamp[ns]"}
 
@@ -303,6 +266,14 @@ def test_every_file_has_the_schema_the_probe_reported(base: source.SourceBase) -
     assert sum(counter.values()) == 78
 
 
+def assert_partition_files(folder: Path, partition: source.Partition, value: str) -> None:
+    """Os arquivos da partição ``value`` não trazem a coluna do caminho e têm ``value`` na coluna de origem em toda linha."""
+    for path in parquet_files(folder / f"{partition.column}={value}"):
+        data = pq.read_table(path)
+        assert partition.column not in data.column_names, path
+        assert data.column(partition.source).unique().to_pylist() == [dt.date.fromisoformat(value)], path
+
+
 def test_partitions_live_in_the_path_and_equal_the_source_column(base: source.SourceBase) -> None:
     """Hive por ``data_str`` ou ``data_base_str``, valor ausente do arquivo e igual a ``data`` ou ``data_base`` em toda linha."""
     for table, column in OBSERVED_PARTITION_COLUMNS.items():
@@ -314,10 +285,7 @@ def test_partitions_live_in_the_path_and_equal_the_source_column(base: source.So
         partition = source.PARTITIONS[table]
         assert (partition.column, list(partition.values)) == (column, PARTITION_VALUES)
         for value in PARTITION_VALUES:
-            for path in parquet_files(folder / f"{column}={value}"):
-                data = pq.read_table(path)
-                assert column not in data.column_names, path
-                assert data.column(partition.source).unique().to_pylist() == [dt.date.fromisoformat(value)], path
+            assert_partition_files(folder, partition, value)
 
     # As tabelas sem partição têm um único chunk_0.parquet na raiz da tabela.
     for table in OBSERVED_TABLES:
@@ -343,28 +311,42 @@ def test_chunks_are_numbered_from_zero_without_padding(base: source.SourceBase) 
     assert pq.read_metadata(base.root / "rel_contrato_operacao" / "data_str=2026-02-28" / "chunk_2.parquet").num_rows == 2
 
 
+def assert_column_chunks(path: Path, group: pq.RowGroupMetaData) -> None:
+    """Cada coluna do row group em SNAPPY, só com PLAIN e RLE, e com estatística fora do INT96."""
+    for index in range(group.num_columns):
+        chunk = group.column(index)
+        where = (path, chunk.path_in_schema)
+        assert chunk.compression == "SNAPPY", where
+        assert set(chunk.encodings) <= {"PLAIN", "RLE"}, where
+        if chunk.physical_type == "INT96":
+            assert chunk.statistics is None, where
+            continue
+        # Fora do INT96 toda coluna tem estatística: mínimo e máximo, ou só nulos.
+        statistics = chunk.statistics
+        assert statistics is not None, where
+        assert statistics.has_min_max or statistics.null_count == group.num_rows, where
+
+
+def assert_file_layout(table: str, path: Path) -> None:
+    """Um row group, formato 1.0, gravado pelo parquet-cpp-arrow, e a chave ``pandas`` no rodapé só onde a origem a gravou."""
+    metadata = pq.read_metadata(path)
+    assert metadata.num_row_groups == 1, path
+    assert metadata.format_version == "1.0", path
+    assert metadata.created_by.startswith("parquet-cpp-arrow"), path
+
+    value = None
+    if table in OBSERVED_PARTITION_COLUMNS:
+        value = path.parent.name.partition("=")[2]
+    expected_keys = {b"pandas"} if source.written_by_pandas(table, value) else set()
+    assert set(pq.read_schema(path).metadata or {}) == expected_keys, path
+    assert_column_chunks(path, metadata.row_group(0))
+
+
 def test_physical_layout_matches_the_reading(base: source.SourceBase) -> None:
     """Um row group por arquivo, SNAPPY, PLAIN e RLE, formato 1.0, parquet-cpp-arrow, a chave ``pandas`` em parte dos arquivos e INT96 sem estatística."""
     for table in OBSERVED_TABLES:
         for path in base.files[table]:
-            metadata = pq.read_metadata(path)
-            assert metadata.num_row_groups == 1, path
-            assert metadata.format_version == "1.0", path
-            assert metadata.created_by.startswith("parquet-cpp-arrow"), path
-            value = path.parent.name.partition("=")[2] if table in OBSERVED_PARTITION_COLUMNS else None
-            assert set(pq.read_schema(path).metadata or {}) == ({b"pandas"} if source.written_by_pandas(table, value) else set()), path
-            group = metadata.row_group(0)
-            for index in range(group.num_columns):
-                chunk = group.column(index)
-                assert chunk.compression == "SNAPPY", (path, chunk.path_in_schema)
-                assert set(chunk.encodings) <= {"PLAIN", "RLE"}, (path, chunk.path_in_schema)
-                if chunk.physical_type == "INT96":
-                    assert chunk.statistics is None, (path, chunk.path_in_schema)
-                    continue
-                # Fora do INT96 toda coluna tem estatística: mínimo e máximo, ou só nulos.
-                statistics = chunk.statistics
-                assert statistics is not None, (path, chunk.path_in_schema)
-                assert statistics.has_min_max or statistics.null_count == group.num_rows, (path, chunk.path_in_schema)
+            assert_file_layout(table, path)
 
     # As duas tabelas fora do modelo saem sem chave, e cada tabela particionada tem arquivos com e sem ela, como na produção.
     for table in source.OUTSIDE_MODEL:
@@ -382,7 +364,7 @@ def test_values_reproduce_what_the_initial_load_handles(base: source.SourceBase)
     valor = lancamentos.column("valor")
     assert valor.type == pa.float64()
     assert pc.sum(pc.not_equal(pc.round(valor, 2), valor)).as_py() > lancamentos.num_rows // 2
-    assert (pc.max(valor).as_py(), pc.min(valor).as_py()) == (source.EXTREME_VALOR, -source.EXTREME_VALOR)
+    assert (pc.max(valor).as_py(), pc.min(valor).as_py()) == (source.EXTREME_AMOUNT, -source.EXTREME_AMOUNT)
 
     # O ``timestamp`` chega em nanossegundos (INT96) com a parte sub-microssegundo zerada.
     timestamp = lancamentos.column("timestamp")
@@ -390,7 +372,7 @@ def test_values_reproduce_what_the_initial_load_handles(base: source.SourceBase)
     assert pc.all(pc.equal(pc.floor_temporal(timestamp, unit="microsecond"), timestamp)).as_py()
 
     # Ids ``int32`` esparsos até 1.113.599.996 (952.517.158 na produção), pouco acima da metade do tipo; a migração os leva a ``int64``.
-    assert pc.max(lancamentos.column("id_lancamento")).as_py() == source.MAX_ID_LANCAMENTO < 2**31
+    assert pc.max(lancamentos.column("id_lancamento")).as_py() == source.MAX_ENTRY_ID < 2**31
     assert len(lancamentos.column("id_lancamento").unique()) == lancamentos.num_rows
 
     # ``data`` é o mês projetado, sempre depois de ``data_base`` e até 2026-12-31; ``meta`` é sempre nula.
@@ -404,7 +386,7 @@ def test_values_reproduce_what_the_initial_load_handles(base: source.SourceBase)
     assert 0 < lancamentos.column("contrato").null_count < lancamentos.num_rows
 
     # As sete colunas de ``cad_contratos`` anuláveis nos arquivos e ``NOT NULL`` no modelo não têm nulo; ``data_assinatura`` tem em mais da metade.
-    for column in MODEL_NOT_NULL_DECLARED_NULLABLE["cad_contratos"]:
+    for column in source.MODEL_NOT_NULL_DECLARED_NULLABLE["cad_contratos"]:
         assert contratos.column(column).null_count == 0, column
     assert contratos.column("data_assinatura").null_count > contratos.num_rows // 2
 
@@ -422,20 +404,20 @@ def test_values_reproduce_what_the_initial_load_handles(base: source.SourceBase)
 def test_the_base_satisfies_the_reference_model(base: source.SourceBase) -> None:
     """Toda chave do modelo é única, toda chave estrangeira tem a linha referenciada, e as colunas NOT NULL do modelo não têm nulo."""
     connection = connect_with_views(base)
-    for table, keys in UNIQUE_KEYS.items():
+    for table, keys in source.UNIQUE_KEYS.items():
         for columns in keys:
             key = ", ".join(f'"{column}"' for column in columns)
             total, distinct = connection.execute(f"SELECT (SELECT count(*) FROM {table}), (SELECT count(*) FROM (SELECT DISTINCT {key} FROM {table}))").fetchone()
             assert total == distinct, (table, columns)
 
     # Anti-join por chave estrangeira; uma linha com componente nulo não é conferida, como no SQL.
-    for child, columns, parent, referenced in FOREIGN_KEYS:
+    for child, columns, parent, referenced in source.FOREIGN_KEYS:
         condition = " AND ".join(f'c."{a}" = p."{b}"' for a, b in zip(columns, referenced, strict=True))
         not_null = " AND ".join(f'c."{a}" IS NOT NULL' for a in columns)
         orphans = connection.execute(f"SELECT count(*) FROM {child} c WHERE {not_null} AND NOT EXISTS (SELECT 1 FROM {parent} p WHERE {condition})").fetchone()[0]
         assert orphans == 0, (child, columns, parent)
 
-    for table, columns in MODEL_NOT_NULL_DECLARED_NULLABLE.items():
+    for table, columns in source.MODEL_NOT_NULL_DECLARED_NULLABLE.items():
         for column in columns:
             assert connection.execute(f'SELECT count(*) FILTER (WHERE "{column}" IS NULL) FROM {table}').fetchone()[0] == 0, (table, column)
 

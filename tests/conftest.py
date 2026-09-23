@@ -495,19 +495,18 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
     usuário do banco quando ele ainda não existe.
 
     A conexão vai sem ``timeout``: no ``redshift_connector`` ele é o tempo limite do socket, para
-    conectar e para ler, e um ``COPY`` ou um ``UNLOAD`` dura mais que qualquer espera razoável; 10 s
-    abortaram uma visão de sistema no ambiente alvo (2026-09-20). Uma rede morta aparece como o tempo
-    limite do sistema, não como um teste reprovado no meio de uma carga.
+    conectar e para ler, e um ``COPY`` ou um ``UNLOAD`` dura mais que qualquer espera razoável
+    (``plan/POC.md``). Uma rede morta aparece como o tempo limite do sistema, não como um teste
+    reprovado no meio de uma carga.
 
     A conexão vai com ``max_prepared_statements=0``. O ``redshift_connector`` guarda um prepared
     statement nomeado por texto de comando e o reaproveita no ``execute`` seguinte do mesmo texto,
     e só descarta os guardados quando o servidor confirma um ``ALTER``, ``CREATE``, ``DROP`` ou
     ``ROLLBACK`` (``core.py``, ``handle_COMMAND_COMPLETE``), nunca num ``TRUNCATE``. Numa tabela do
-    datashare, o comando reexecutado depois de um ``TRUNCATE`` recebeu ``34510``, ``Concurrent DDL
-    committed ... between Prepare and Execute``, nas duas execuções de 2026-09-21 às 12:08 e 12:10
-    (``plan/POC.md``). Com zero, o driver prepara o statement sem nome logo antes de cada execução
-    e não guarda nada, e a suíte passou limpa às 13:35 e às 13:39 do mesmo dia;
-    ``statement_cache=True`` mantém o padrão do driver, para a leitura que reproduz o erro.
+    datashare, o comando reexecutado depois de um ``TRUNCATE`` recebe ``34510``, ``Concurrent DDL
+    committed ... between Prepare and Execute`` (``plan/POC.md``). Com zero, o driver prepara o
+    statement sem nome logo antes de cada execução e não guarda nada; ``statement_cache=True``
+    mantém o padrão do driver, para a leitura que reproduz o erro.
     """
     import redshift_connector
 
@@ -534,9 +533,8 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
         ``begin transaction`` antes do primeiro ``execute``, e ligá-lo depois não fecha essa
         transação: a sessão inteira corre nela, e o primeiro erro do servidor (a visão de sistema
         negada a um usuário comum) aborta tudo o que vem depois, inclusive a limpeza, com
-        ``25P02`` (ambiente alvo, 2026-09-21, ``plan/POC.md``). Cada comando confirmado ao terminar
-        é também o que o ``COPY`` e o ``UNLOAD`` precisam para não ficarem presos numa transação
-        aberta.
+        ``25P02`` (``plan/POC.md``). Cada comando confirmado ao terminar é também o que o ``COPY``
+        e o ``UNLOAD`` precisam para não ficarem presos numa transação aberta.
 
         O ``USE`` é o passo de ``examples/redshift_copy_unload.py``: sem ele, quem não está
         conectado ao banco compartilhado só cita objetos por nome em três partes, e o ``CREATE`` e

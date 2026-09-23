@@ -1574,3 +1574,28 @@ no `close`, e `query` e `execute` devolvem `to_arrow_table()` sob o lock ([`PLAN
 etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [6](PLAN-STAGE-6.md)). A ingestão de várias
 tabelas passa a ser em série, e `max_workers` saiu de `ingest`; a medição no S3 está em
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a revisão de legibilidade dos testes de 2026-09-22 mostrou
+
+Em 2026-09-22, no macOS (PyArrow 25.0.1, pytest 9.1.1), cada mudança da revisão de legibilidade
+dos testes do pacote foi conferida pelo instrumento que a valida.
+
+- **A base fictícia refatorada é a mesma, byte a byte.** `tests/source_db_projetado.py` gravou a
+  base no scratchpad antes e depois da troca dos nomes e da quebra das expressões: os 63 arquivos
+  saíram idênticos (`diff -r`), e `probes/parquet_source.py` com `--sample 5 --text-bytes` deu dois
+  relatórios de 758 linhas, iguais fora a data e o caminho. O sorteio de `taxa_juros_fixos` continua
+  um por linha de `cad_contratos`, usado numa linha em quatro, porque os valores de
+  `cad_lancamentos` saem da mesma sequência do gerador.
+- **O teste do `conftest` Redshift herdava a porta do ambiente.** O terceiro teste de
+  `tests/test_conftest_redshift.py` não apagava `SERIALIZE_DB_REDSHIFT_PORT` e lia a do shell: com
+  `SERIALIZE_DB_REDSHIFT_PORT=abc`, a versão anterior reprovou com `ValueError: invalid literal for
+  int() with base 10: 'abc'`, e a nova, que apaga as sete `SERIALIZE_DB_REDSHIFT_*` antes de definir
+  as do teste, passou. Nenhum dos três deixava a variável definida para os testes seguintes.
+- **O `pythonpath` do pytest resolve pela raiz do repositório.** Com `pythonpath = ["scripts",
+  "probes"]` em `pyproject.toml`, `tests/test_probes.py` e `tests/test_migrate_parquet_to_delta.py`
+  importam os scripts pelo nome também com o pytest chamado de dentro de `tests/`, e o comando da
+  esteira de testes passou os 99 casos do pacote com a raiz local.
+
+**Consequência**: nenhuma mudança alterou o que as suítes conferem, e as contagens ficaram as da
+sessão única: sem variável, 183 passam e 89 são pulados; com a raiz local, 249 passam e 23 são
+pulados.
