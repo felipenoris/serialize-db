@@ -41,13 +41,15 @@ foi medido em [`POC.md`](POC.md).
   requisição HTTP por thread, e a documentação recomenda `threads` de 2 a 5 vezes os núcleos para
   essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo, 4 no ambiente alvo em
   2026-09-23 (2 em 2026-09-21), e a sessão a mais de cada tabela de `run.ingest` só acrescenta a
-  thread que a chama. A primeira execução no ambiente alvo mede a ingestão por `delta_scan` do S3
-  com o padrão e com `threads` acima dos núcleos, e a medição decide o padrão de
-  `DuckDBConfig.threads` para uma raiz no S3 ([etapa 4](PLAN-STAGE-4.md)). A mesma execução mede a
-  ingestão de várias tabelas em sessões a mais: em disco local, num macOS de 11 núcleos, quatro
-  tabelas de 8.000.000 de linhas entraram em 1,629 s contra 3,498 s em série com `threads = 2`, e
-  parte do ganho veio das threads que chamam cada sessão, que o ambiente alvo, com 4 vCPUs, não tem
-  de sobra (2026-09-23, [`POC.md`](POC.md)).
+  thread que a chama. `probes/duckdb_threads.py` mede no ambiente alvo, sobre as tabelas Delta que
+  a migração gravou, a ingestão pelo motor DuckDB com o padrão e com `threads` até 5 vezes os
+  núcleos, e a medição decide o padrão de `DuckDBConfig.threads` para uma raiz no S3
+  ([etapa 4](PLAN-STAGE-4.md)). O mesmo probe mede a ingestão de `cad_lancamentos`,
+  `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao` em série e numa sessão a mais por
+  tabela: em disco local, num macOS de 11 núcleos, quatro tabelas de 8.000.000 de linhas entraram
+  em 1,629 s contra 3,498 s em série com `threads = 2`, e parte do ganho veio das threads que
+  chamam cada sessão, que o ambiente alvo, com 4 vCPUs, não tem de sobra (2026-09-23,
+  [`POC.md`](POC.md)). O probe roda depois da migração dos comandos de `SUITE.md`.
 - **O `Double` não finito nas estatísticas do Delta**, a
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
   infinito numa coluna `Double`, e a biblioteca grava sem mínimo e máximo, no rodapé Parquet e no

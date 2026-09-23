@@ -2705,3 +2705,27 @@ ambiente alvo. A transação da publicação da [etapa 8](PLAN-STAGE-8.md) abre 
 condicionado (decisão do usuário de 2026-09-23), e o modo `register` da etapa 5 não cumpre a regra
 da issue #59 numa partição com `NaN`, porque o rodapé é o do Redshift: a proposta, à espera do
 usuário, é exportar essa partição por `rewrite` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que a validação local do probe das threads mostrou
+
+Em 2026-09-23, no contêiner Linux x86_64 com 4 vCPUs (DuckDB 1.5.5, deltalake 1.6.4, pyarrow
+25.0.1), `probes/duckdb_threads.py` rodou sobre a base fictícia de `tests/source_db_projetado.py`
+migrada por `scripts/migrate_parquet_to_delta.py` para uma pasta local e copiada para o moto do
+substituto, na partição 2026-06-30 de `cad_lancamentos`, `cad_contratos`, `cad_operacoes` e
+`rel_contrato_operacao` (60, 41, 30 e 52 linhas).
+
+- **Os valores padrão**: `threads` 4, 8, 12, 16 e 20, o padrão do DuckDB vezes 1 a 5, três
+  repetições, vinte configurações em processos novos em 25 s; as linhas lidas bateram com as do log
+  em todas (`DT-2`), e o DuckDB aplicou cada valor (`DT-3`). Os tempos, de 0,01 s a 0,06 s, não dizem
+  nada da leitura do S3.
+- **Só leitura sob a raiz**: a raiz comparada por `diff -r` com uma cópia feita antes ficou igual, e
+  nenhuma pasta `serialize_db_*` do motor sobrou na pasta temporária. O mesmo relatório saiu pela
+  URI `s3://` do moto, com o secret do DuckDB no endpoint do substituto.
+- **A configuração que falha**: com um arquivo apagado da partição de `cad_contratos` numa cópia da
+  raiz, as duas medidas de várias tabelas falharam com `IOException`, entraram na tabela com a
+  primeira linha do erro, em `DT-4` e na seção final, e o probe saiu com o código 1.
+
+**Consequência**: o probe é o instrumento do item das `threads` em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) e roda no ambiente alvo depois da migração dos comandos de
+`SUITE.md`, sobre o `--root` dela; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) o nomeia como a medição do
+padrão de `DuckDBConfig.threads`.

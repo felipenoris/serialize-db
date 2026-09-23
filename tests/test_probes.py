@@ -4,12 +4,13 @@ Os probes (``probes/``) leem o ambiente; as decisões que eles tomam sobre o que
 puras, testadas aqui com respostas fabricadas: a classificação dos erros do ``boto3``, os rótulos de
 DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o inventário do bucket
 (tabelas Delta, sessões da suíte, versões não correntes), o versionamento pela amostra, o Object
-Lock, o ciclo de vida, a montagem de ``~/shared``, o formato das tabelas do Glue e os parâmetros da
-conexão Redshift. Um ``Report`` grava em ``probes/output/``; ``make_report`` o aponta para a pasta
-do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes que gravam, o relatório e os arquivos
-fabricados, são ``local``: gravam numa pasta nova sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são
-pulados sem ela. O do ``parquet_source.py`` não abre arquivo algum: as suas funções recebem
-colunas e rodapés fabricados.
+Lock, o ciclo de vida, a montagem de ``~/shared``, o formato das tabelas do Glue, os parâmetros da
+conexão Redshift e, no ``duckdb_threads.py``, os valores de ``threads``, a partição comum, os totais
+do log, a tabela das medições e as checagens delas. Um ``Report`` grava em ``probes/output/``;
+``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes
+que gravam, o relatório e os arquivos fabricados, são ``local``: gravam numa pasta nova sob
+``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do ``parquet_source.py`` não abre arquivo
+algum: as suas funções recebem colunas e rodapés fabricados.
 
 A consulta DNS é a do nome ``nao.existe.invalid`` em
 ``test_endpoint_reachable_skips_the_call_when_the_port_does_not_answer``: ``socket.getaddrinfo``
@@ -33,10 +34,12 @@ from pathlib import Path
 import botocore.exceptions
 import pyarrow as pa
 import pytest
+import sqlalchemy as sa
 
 import bucket
 import catalog
 import diagnose_aws
+import duckdb_threads
 import parquet_source
 import probelib
 import redshift
@@ -1317,3 +1320,104 @@ def test_parse_reads_the_root_and_the_options() -> None:
     assert parquet_source.parse(["probe", "/base", "--sample", "x"]) is None
     assert parquet_source.parse(["probe", "/base", "/outra"]) is None
     assert parquet_source.parse(["probe", "/base", "--desconhecida"]) is None
+
+
+# ---------------------------------------------------------------- duckdb_threads.py
+
+
+def threads_input(name: str, rows: int) -> duckdb_threads.TableInput:
+    """Uma tabela medida fabricada, sem partição, com as linhas que o log diz ter."""
+    table = sa.Table(name, sa.MetaData(), sa.Column("id", sa.BigInteger))
+    return duckdb_threads.TableInput(table, f"/delta/{name}", 3, None, 1, 100, rows)
+
+
+def test_thread_values_multiply_the_default_or_take_the_requested() -> None:
+    """Sem pedido, o padrão do DuckDB vezes 1 a 5; os valores pedidos saem em ordem, sem
+    repetição."""
+    assert duckdb_threads.thread_values(4, None) == [4, 8, 12, 16, 20]
+    assert duckdb_threads.thread_values(4, [8, 2, 8]) == [2, 8]
+
+
+def test_latest_common_partition_needs_the_value_in_every_table() -> None:
+    """A partição medida é a mais recente presente em todas as tabelas particionadas."""
+    values = {
+        "cad_lancamentos": {"2026-01-31", "2026-03-31", "2026-06-30"},
+        "cad_contratos": {"2026-03-31", "2026-06-30"},
+    }
+    assert duckdb_threads.latest_common_partition(values) == "2026-06-30"
+    disjoint = {"a": {"2026-01-31"}, "b": {"2026-02-28"}}
+    assert duckdb_threads.latest_common_partition(disjoint) is None
+    assert duckdb_threads.latest_common_partition({}) is None
+
+
+def test_partition_totals_sum_the_partition_or_the_whole_table() -> None:
+    """Os arquivos, os bytes e as linhas das ações ``add`` da partição, ou de todas sem coluna de
+    partição."""
+    actions = pa.table({
+        "partition.data_str": ["2026-06-30", "2026-06-30", "2026-03-31"],
+        "size_bytes": [10, 20, 40],
+        "num_records": [1, 2, 4],
+    })
+    assert duckdb_threads.partition_totals(actions, "data_str", "2026-06-30") == (2, 30, 3)
+    assert duckdb_threads.partition_totals(actions, None, None) == (3, 70, 7)
+
+
+def test_best_speedup_and_short_error() -> None:
+    """A melhor repetição, a razão entre dois tempos e o erro cortado para caber numa célula."""
+    assert duckdb_threads.best([]) is None
+    assert duckdb_threads.best([0.3, 0.2, 0.25]) == 0.2
+    assert duckdb_threads.speedup(2.0, 1.0) == "2.00x"
+    assert duckdb_threads.speedup(None, 1.0) == "-"
+    first_line = duckdb_threads.short_error("IOException: sem arquivo\ndetalhe")
+    assert first_line == "IOException: sem arquivo"
+    assert duckdb_threads.short_error("a" * 150, limit=20) == "a" * 17 + "..."
+
+
+def test_measurement_rows_and_fastest_configuration() -> None:
+    """A tabela de uma seção compara cada linha com o primeiro valor do cenário e traz o erro curto
+    da configuração que falhou; a mais rápida ignora a que falhou."""
+    inputs = [threads_input("cad_lancamentos", 10), threads_input("cad_contratos", 5)]
+    measurements = [
+        duckdb_threads.Measurement("materializada", 4, [2.0, 1.0], 4, 100, 150, 10),
+        duckdb_threads.Measurement("materializada", 8, [0.5], 8, 100, 160, 10),
+        duckdb_threads.Measurement(
+            "materializada", 12, error="OutOfMemoryException: sem memória\nmais"
+        ),
+    ]
+    assert duckdb_threads.fastest_configuration(measurements, "materializada") == (8, 0.5)
+    assert duckdb_threads.fastest_configuration(measurements, "agregada") is None
+    assert duckdb_threads.expected_rows("materializada", inputs) == 10
+    assert duckdb_threads.expected_rows("em série", inputs) == 15
+
+    rows = duckdb_threads.measurement_rows(measurements, inputs)
+    assert rows[1][3:6] == ["1.000", "2.000, 1.000", "1.00x"]
+    assert rows[2][3:6] == ["0.500", "0.500", "2.00x"]
+    assert rows[3][4] == "OutOfMemoryException: sem memória"
+    assert rows[3][-1] == "10"
+
+
+@pytest.mark.local
+def test_measurement_checks_flag_rows_threads_and_failed_configurations(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``DT-2`` reprova as linhas lidas diferentes das do log, ``DT-3`` as threads que o DuckDB não
+    aplicou, e ``DT-4`` registra a configuração que falhou, que também vai para a seção final."""
+    inputs = [threads_input("cad_lancamentos", 10)]
+    measurements = [
+        duckdb_threads.Measurement("materializada", 4, [1.0], 4, 100, 150, 10),
+        duckdb_threads.Measurement("materializada", 8, [1.0], 8, 100, 150, 9),
+        duckdb_threads.Measurement("agregada", 4, [1.0], 2, 100, 150, 10),
+        duckdb_threads.Measurement("agregada", 8, error="IOException: sem arquivo"),
+    ]
+    with make_report(folder, monkeypatch) as report:
+        duckdb_threads.measurement_checks(report, measurements, inputs)
+        assert checks(report, "DT-2") == ["materializada/8: 9 contra 10"]
+        assert checks(report, "DT-3") == ["agregada/4: 2"]
+        assert checks(report, "DT-4") == ["agregada/8: IOException: sem arquivo"]
+        assert report.failures == [("agregada com threads=8", "IOException: sem arquivo")]
+        assert report.finish() == 2
+
+    passing = [duckdb_threads.Measurement("materializada", 4, [1.0], 4, 100, 150, 10)]
+    with make_report(folder, monkeypatch) as report:
+        duckdb_threads.measurement_checks(report, passing, inputs)
+        assert report.finish() == 0

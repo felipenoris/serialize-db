@@ -174,7 +174,8 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   cobre. `threads` omitido fica no padrão do DuckDB, um por núcleo; ele é da instância, vale para a
   sessão principal e para as de `new_session()`, e muda em execução por `SET threads`. A leitura do
   S3 pede mais threads que núcleos, porque cada thread faz uma requisição HTTP por vez, e quantas é
-  o que a primeira execução no ambiente alvo mede ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A
+  o que `probes/duckdb_threads.py` mede no ambiente alvo, sobre as tabelas que a migração gravou
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A
   conexão é a sessão da execução, e `session()` toma o `threading.RLock` e a dá ao
   bloco; toda primitiva toma o mesmo lock pelo tempo do seu comando, e nenhuma espera pelo código do
   cliente com ele tomado. O motor guarda a thread que está dentro de `session()`, e é por ela que
