@@ -107,6 +107,13 @@ foi medido em [`POC.md`](POC.md).
   perde quando o STS não responde; `connect_redshift` de `tests/conftest.py` tem 85 linhas com
   duas funções aninhadas. A próxima execução das duas suítes no ambiente alvo vem com essas
   correções.
+- **O texto da auditoria no Redshift.** O texto de `serialize_db.audit.audit_sql(..., "redshift")`
+  nunca rodou no Redshift: a contagem por `count(CASE WHEN ... THEN 1 END)`, que a documentação do
+  `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o operador
+  POSIX `~` da regra da partição, e o `is_finite` como `x NOT IN ('NaN'::float8, 'Infinity'::float8,
+  '-Infinity'::float8)`, que supõe o `NaN` igual a si mesmo, como no PostgreSQL
+  ([etapa 4](PLAN-STAGE-4.md)). A [etapa 5](PLAN-STAGE-5.md) roda esse texto, e um caso na suíte
+  Redshift, com uma linha de cada defeito e um `NaN`, o confere antes dela.
 - **As leituras da etapa 5 na próxima execução da suíte Redshift.** As decisões do usuário de
   2026-09-23 ([etapa 5](PLAN-STAGE-5.md)) supõem comportamentos que ninguém executou no ambiente
   alvo. Os casos estão em `tests/proof_of_concept/test_redshift.py` e passaram, em 2026-09-23, por

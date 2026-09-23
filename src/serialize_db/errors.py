@@ -1,9 +1,9 @@
 """As exceções da biblioteca, num módulo sem dependências.
 
 Cada etapa acrescenta as suas: ``ContractError`` é a da etapa 1 (``schema``), ``SqlError`` a da
-etapa 2 (``sql``), e ``ConflictError``, ``ExecutionConflict``, ``RegistrationRefused``,
+etapa 2 (``sql``), ``ConflictError``, ``ExecutionConflict``, ``RegistrationRefused``,
 ``SchemaDiffRefused`` e ``LogUnavailable`` as da etapa 3 (``storage`` e ``delta``), que
-``serialize_db.delta`` levanta e a execução captura.
+``serialize_db.delta`` levanta e a execução captura, e ``SandboxError`` a da etapa 4 (os motores).
 """
 
 __all__ = [
@@ -12,6 +12,7 @@ __all__ = [
     "ExecutionConflict",
     "LogUnavailable",
     "RegistrationRefused",
+    "SandboxError",
     "SchemaDiffRefused",
     "SqlError",
 ]
@@ -68,3 +69,12 @@ class SchemaDiffRefused(Exception):
 class LogUnavailable(Exception):
     """Um arquivo do log entre duas versões não existe; a mensagem manda publicar a tabela
     inteira, porque as partições alteradas não podem ser lidas do log."""
+
+
+class SandboxError(ValueError):
+    """Um nome já ocupado no sandbox, ou um objeto do sandbox que não serve ao que foi pedido.
+
+    A mensagem nomeia o objeto e diz o que o cliente faz: ler a versão publicada por
+    ``run.published(table)`` em vez de gravar no nome que o ``ingest`` ocupou, ou abrir um
+    ``loader`` só por tabela.
+    """

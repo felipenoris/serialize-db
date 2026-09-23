@@ -206,3 +206,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   temporary tables; `run.ingest` of more than one table opens one per table. The suite's two
   parallel `COPY`s, each opening its connection inside the task, took 4.3 s and 3.8 s in the target
   on 2026-09-21. `plan/PLAN-STAGE-5.md`
+
+- Redshift's `COUNT` has no `FILTER (WHERE ...)` clause (`COUNT( * | expression )` in the docs, read
+  2026-09-23), so the audit counts with `count(CASE WHEN <defect> THEN 1 END)` on both engines; the
+  whole Redshift audit text, `is_finite` as `x NOT IN ('NaN'::float8, 'Infinity'::float8,
+  '-Infinity'::float8)` included, has not run in the target yet. `plan/PLAN-STAGE-4.md`,
+  `plan/OPEN_QUESTIONS.md`

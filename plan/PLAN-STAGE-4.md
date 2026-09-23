@@ -49,9 +49,9 @@ registra a verificação como não executada.
 
 | Primitiva | O que faz |
 | --- | --- |
-| `checks(table, partitions=None, foreign_keys=False, key_scope=None, published=None, referenced=None, published_max_key=None)` | A lista de `Check` (nome, statement Core, o que reprova e, na chave primária inteira de uma coluna, o `skip_when` do mínimo contra `published_max_key`): os defeitos de linha num `count(*) FILTER` por coluna na mesma passagem, uma consulta por chave e uma por chave estrangeira. |
+| `checks(table, partitions=None, foreign_keys=False, key_scope=None, published=None, referenced=None, published_max_key=None)` | A lista de `Check` (nome, statement Core, o que reprova e, na chave primária inteira de uma coluna, o `skip_when` do mínimo contra `published_max_key`): os defeitos de linha num `count(CASE WHEN <defeito> THEN 1 END)` por coluna na mesma passagem, porque o Redshift não tem a cláusula `FILTER` nos agregados, uma consulta por chave e uma por chave estrangeira; `checks_and_not_run`, protegida, devolve também as que não rodam, com o motivo, e `sample_statement` a consulta da amostra de um contador. |
 | `audit_sql(table, dialect, partitions=None, foreign_keys=False, key_scope=None, published=None, referenced=None, prefix="{prefix}")` | `{nome: texto}` por `sql.render` com o prefixo pedido, sem conexão e sem motor: o SQL que a auditoria vai rodar, para depuração. |
-| `AuditReport` | Por verificação: nome, o SQL rodado, a contagem de defeitos, uma amostra das linhas reprovadas e o veredito; `passed` é a conjunção, e `report.sql()` devolve o texto de todas; `nonfinite_columns` dá, por valor de partição, as colunas `Double` com valor não finito, a lista que `run.publish` passa a `export_partition` como `columns_without_min_max`. |
+| `AuditReport` | Por verificação: nome, o SQL rodado, a contagem de defeitos, uma amostra das linhas reprovadas e o veredito; `passed` é a conjunção, e `report.sql()` devolve o texto de todas; `nonfinite_columns` dá, por valor de partição, as colunas `Double` com valor não finito, a lista que `run.publish` passa a `export_partition` como `columns_without_min_max`; `totals` dá, por valor de partição, a linha da verificação de linhas (a contagem, os contadores, as somas de controle e os não finitos), e `rows(valor)` a contagem que `run.publish` passa como `expected_rows`; `not_run` traz o motivo de cada verificação que não rodou, e `CheckResult.reason` o da dispensa pelo `skip_when`. |
 
 | Primitiva | DuckDB |
 | --- | --- |
@@ -61,11 +61,11 @@ registra a verificação como não executada.
 | `published(table, uri, version)` | A versão fixada como origem de consulta, sem ocupar nome no sandbox: o `FromClause` com as colunas do contrato que compila para `delta_scan('<uri>', version := <v>)`. É por ele que o pipeline lê as partições publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader`, e é ele que a auditoria usa como `published` nas chaves que não incluem a coluna de partição (decisão do usuário de 2026-09-22). Sem versão fixada, numa tabela que ainda não existe, levanta `SandboxError` nomeando a tabela. |
 | `stream(statement_or_sql, params=None, batch_size=100_000)` | Um statement Core com as tabelas do contrato trocadas pelas do sandbox por `sql.prefixed(prefix="")`, com os valores do cliente dados por `statement.params(**params)` e compilado por `duckdb_engine.Dialect(paramstyle="qmark")`, o estilo do driver do DuckDB, sem `literal_binds` e com `render_postcompile=True`, que expande o `IN` de lista e o `bindparam(..., expanding=True)` (sem ele o texto sai com `__[POSTCOMPILE_...]`, que o DuckDB recusa, leitura de 2026-09-23); os nomes de `params` conferidos contra os `bindparam` sem valor do statement, porque `params` ignora um nome a mais; as constantes e os valores do cliente juntados por `construct_params()` e passados como lista na ordem de `positiontup`, sem reescrever marcador (decisão do usuário de 2026-09-23, leituras de 2026-09-22 e 2026-09-23, [`POC.md`](POC.md); `param` não é exigido); ou um texto pronto, gerado por `render` ou lido por `sql.read_sql(..., prefix="")`, com `:nome` em `$nome` por `sql.bind`; roda numa thread auxiliar, na sessão, sob o lock e sem `Session` do SQLAlchemy, que entrega cada lote de `to_arrow_reader(batch_size)` à memória enquanto os lotes guardados cabem no orçamento de 64 MiB, e a um arquivo Arrow IPC com LZ4 na pasta de transbordo o lote que não cabe e os seguintes, e solta o lock quando o resultado acaba, sem esperar pelo cliente (decisão do usuário de 2026-09-23); dentro de `session()`, na mesma thread, a consulta roda na thread de quem chama. O motor devolve o `BatchStream`: iterável de `pa.RecordBatch` com os tipos do motor (`decimal128(18, 2)`, `date32`, JSON como `string`), `schema`, `read_next_batch`, `read_all`, `close`, gerenciador de contexto e `__arrow_c_stream__` (para `write_deltalake` e `RecordBatchReader.from_stream`, nunca para o `register` do DuckDB). O cliente lê a memória e depois o arquivo, na sua thread e na ordem da consulta, enquanto ela continua, com esperas com prazo; a thread não referencia o stream; `close` cancela por `interrupt()` a consulta que ainda roda e apaga o arquivo; o erro anterior ao primeiro lote chega na construção, e o posterior na leitura seguinte ao último lote entregue. |
 | `query(statement_or_sql, params=None)` | O statement Core ou o texto pronto, pelo caminho de compilação de `stream`, sob o lock, por `to_arrow_table()`: a `pa.Table` com os tipos do motor, igual a `stream(statement_or_sql, params).read_all()`, sem arquivo; um comando sem resultado devolve a tabela `Count` ou `Success` do DuckDB. `execute` saiu da interface (decisão do usuário de 2026-09-23). |
-| `loader(table, queue_depth=2)` | O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada por `ddl(table, "duckdb")` no `close`: um nome já ocupado, pela view do `ingest` ou pela tabela de um `loader` anterior, é recusado com `SandboxError` na abertura, antes do primeiro lote (decisão do usuário de 2026-09-22), por uma leitura do catálogo num cursor próprio, sem o lock da sessão (decisão do usuário de 2026-09-23), e um laço por partição mantém um `loader` só aberto; `write(data)` aceita `pa.RecordBatch` ou `pa.Table`, faz `cast(batch, table)` na thread do cliente e põe o lote numa fila limitada; uma thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4 na pasta de transbordo, sem a sessão, e o `close` roda, sob o lock e numa transação, o `CREATE TABLE` e um único `INSERT ... BY NAME SELECT * FROM <leitor do arquivo>`; uma exceção dentro do `with`, um lote recusado pelo `cast` ou um loader abandonado apagam o arquivo sem criar a tabela, e um erro do `INSERT` desfaz o `CREATE`; `close` relança o erro da thread e o do `INSERT`; `rows` conta as linhas gravadas. Nada existe antes do `close`, e o leitor que o `INSERT` consome é o do arquivo, nativo: nenhum gerador Python é entregue ao DuckDB. |
+| `loader(table, queue_depth=2)` | O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada por `ddl(table, "duckdb")` no `close`: um nome já ocupado, pela view do `ingest` ou pela tabela de um `loader` anterior, é recusado com `SandboxError` na abertura, antes do primeiro lote (decisão do usuário de 2026-09-22), por uma leitura do catálogo num cursor próprio, sem o lock da sessão (decisão do usuário de 2026-09-23), e um laço por partição mantém um `loader` só aberto; `write(data)` aceita `pa.RecordBatch` ou `pa.Table`, faz `cast(batch, table)` na thread do cliente e põe o lote numa fila limitada; uma thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4 na pasta de transbordo, sem a sessão, e o `close` roda, sob o lock e numa transação, o `CREATE TABLE` e um único `INSERT ... BY NAME SELECT * FROM <leitor do arquivo>`; uma exceção dentro do `with`, um lote recusado pelo `cast` ou um loader abandonado apagam o arquivo sem criar a tabela, e um erro do `INSERT` desfaz o `CREATE`; `close` relança o erro da thread e o do `INSERT`; `rows` conta as linhas gravadas. O arquivo nasce com o esquema do primeiro lote convertido, e um lote com outro conjunto de colunas é `ContractError`; o `loader` sem lote cria a tabela vazia. Nada existe antes do `close`, e o leitor que o `INSERT` consome é o do arquivo, nativo: nenhum gerador Python é entregue ao DuckDB. |
 | `load(table, data)` | `data` é uma `pa.Table`, um `pa.RecordBatch`, um `RecordBatchReader` ou um iterável de lotes: `with loader(table) as l: for batch in ...: l.write(batch)`; outro tipo é recusado com a mensagem que aponta `pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. |
-| `audit(table, partitions, uri=None, version=None, foreign_keys=False, key_scope=None)` | `uri` e `version` são os da tabela fixada, e montam `published`, as tabelas referenciadas e o `published_max_key` de `delta.max_key` sem depender de `Execution`. Roda o texto de `audit.audit_sql(table, "duckdb")` — `json_valid` e `strftime(data, '%Y-%m-%d')` são as funções do dialeto — e monta o `AuditReport`, com até 20 linhas inteiras de amostra por verificação reprovada (decisão do usuário de 2026-09-22): a verificação `linhas` é um `count(*) FILTER` por coluna e não tem linha para amostrar, então cada contador acima de zero ganha uma segunda consulta, `SELECT * ... WHERE <condição da coluna> LIMIT 20`, rodada só na reprovação; a comparação com as demais partições sai de `published` na versão fixada, e `passed` falso interrompe a execução. |
-| `export_partition(table, uri, value, metadata, mode, expected_rows=None, columns_without_min_max=())` | `uri`, `metadata` e `expected_rows` vêm do chamador, porque o motor não conhece o `Database` e o commit precisa dos metadados. `mode` é a flag `export_mode` já resolvida pela [etapa 6](PLAN-STAGE-6.md) (`register` ou `rewrite`; o motor não lê `SERIALIZE_DB_EXPORT_MODE`, decisão do usuário de 2026-09-23), a mesma do motor Redshift ([etapa 5](PLAN-STAGE-5.md)) e da carga inicial ([etapa 7](PLAN-STAGE-7.md)). `columns_without_min_max`, as colunas `Double` com valor não finito na partição, vem de `run.publish` e vai a `register_files` ou a `publish_partition`. **`register`**: `COPY (SELECT <colunas do contrato, sem a de partição> FROM <sandbox> WHERE <coluna de partição> = '<valor>') TO '<uri>/<coluna de partição>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` mais `register_files` com as estatísticas de `RETURN_STATS`, as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois; a memória é constante (600 MB na reescrita medida em [`delta.md`](delta.md)). O `uuid` no nome impede uma reexecução com o mesmo `execution_id` de sobrescrever o arquivo que a versão anterior referencia. **`rewrite`**: o leitor do DuckDB da partição, `to_arrow_reader` sob o lock, passado por `cast` a `publish_partition`, sem `stream` nem arquivo, porque ali não há trabalho do cliente para sobrepor (decisão do usuário de 2026-09-23); o lock fica tomado pela escrita, como no `COPY` do `register`, o `write_deltalake` calcula estatística e nulidade, e a memória cresce com a partição (1.140 MB para 135 MB de Parquet na mesma medição). A mesma partição sai igual pelos dois, e o teste os compara. |
-| `cleanup()` | Cancela por `interrupt()` o comando em curso, fecha a conexão e apaga o arquivo do banco e a pasta de transbordo. |
+| `audit(table, partitions, uri=None, version=None, foreign_keys=False, key_scope=None, referenced=None)` | `uri` e `version` são os da tabela fixada, e montam `published` e o `published_max_key` de `delta.max_key` sem depender de `Execution`; `referenced` dá, por nome de tabela, a URI e a versão fixada da tabela referenciada que o sandbox não tem, e a que o sandbox tem entra pelo nome do modelo. Roda o texto de `sql.render(check.statement, "duckdb", metadata, prefix="")` de cada verificação — `json_valid` e `strftime(data, '%Y-%m-%d')` são as funções do dialeto — e monta o `AuditReport`, com até 20 linhas inteiras de amostra por verificação reprovada (decisão do usuário de 2026-09-22): a verificação `linhas` conta por coluna e não tem linha para amostrar, então cada contador acima de zero ganha uma segunda consulta, `SELECT * ... WHERE <condição da coluna> LIMIT 20`, rodada só na reprovação; a comparação com as demais partições sai de `published` na versão fixada, e `passed` falso interrompe a execução. |
+| `export_partition(table, uri, value, metadata, mode, expected_rows=None, columns_without_min_max=())` | `uri`, `metadata` e `expected_rows` vêm do chamador, porque o motor não conhece o `Database` e o commit precisa dos metadados. `mode` é a flag `export_mode` já resolvida pela [etapa 6](PLAN-STAGE-6.md) (`register` ou `rewrite`; o motor não lê `SERIALIZE_DB_EXPORT_MODE`, decisão do usuário de 2026-09-23), a mesma do motor Redshift ([etapa 5](PLAN-STAGE-5.md)) e da carga inicial ([etapa 7](PLAN-STAGE-7.md)). `columns_without_min_max`, as colunas `Double` com valor não finito na partição, vem de `run.publish` e vai a `register_files` ou a `publish_partition`. **`register`**: `COPY (SELECT <cada coluna do contrato em CAST para o tipo dele, sem a de partição> FROM <sandbox> WHERE <coluna de partição> = '<valor>' ORDER BY <sort_key>) TO '<uri>/<coluna de partição>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)`, com a contagem do sandbox no mesmo bloco da sessão, mais `register_files` com as estatísticas de `RETURN_STATS`, as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois; a memória é constante (600 MB na reescrita medida em [`delta.md`](delta.md)). O `uuid` no nome impede uma reexecução com o mesmo `execution_id` de sobrescrever o arquivo que a versão anterior referencia. **`rewrite`**: o leitor do DuckDB da partição, `to_arrow_reader` sob o lock, passado por `cast` a `publish_partition`, sem `stream` nem arquivo, porque ali não há trabalho do cliente para sobrepor (decisão do usuário de 2026-09-23); o lock fica tomado pela escrita, como no `COPY` do `register`, o `write_deltalake` calcula estatística e nulidade, e a memória cresce com a partição (1.140 MB para 135 MB de Parquet na mesma medição). A mesma partição sai igual pelos dois, e o teste os compara. |
+| `cleanup()` | Cancela por `interrupt()` o comando em curso, fecha a conexão e apaga o arquivo do banco, o seu `.wal` e a pasta de transbordo, e a pasta de `tempfile.mkdtemp`; o banco de um caminho que a configuração informou fica. Numa sessão a mais, fecha só o cursor; a segunda chamada não faz nada. |
 
 Testes: `tests/test_audit.py`, sem gravar: o texto de cada verificação nos dois dialetos, a chave
 lida do `primary_key` do modelo e o escopo escolhido pelas colunas da chave. `tests/test_engine_duckdb.py` sob a raiz local: o pipeline de exemplo (doze partições
@@ -103,126 +103,14 @@ threads à sessão) e
 `test_pyarrow.py::test_record_batch_cast_and_conversions_share_buffers`; `test_duckdb.py` mede a
 memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 
-## Interface
-
-```python
-"""Assinaturas de serialize_db.audit, serialize_db.engine e serialize_db.engine.duckdb; os corpos estão nos rascunhos abaixo."""
-import contextlib
-import dataclasses
-from collections.abc import Collection, Iterable, Iterator, Mapping
-from typing import Literal, Protocol, runtime_checkable
-
-import duckdb
-import pyarrow as pa
-import sqlalchemy as sa
-
-Dialect = Literal["duckdb", "redshift"]
-ExportMode = Literal["register", "rewrite"]
-
-
-class SandboxError(ValueError):      # o módulo importa o de serialize_db.errors
-    """Um nome já ocupado no sandbox, ou um objeto do sandbox que não serve ao que foi pedido."""
-
-
-@dataclasses.dataclass(frozen=True)
-class Check:
-    name: str                        # "linhas", "chave_<colunas>", "chave_<colunas>_publicada", "orfao_<colunas>"
-    statement: sa.Select
-    fails_when: str                  # "algum contador acima de zero" ou "alguma linha"
-    skip_when: sa.Select | None = None   # uma linha booleana que, verdadeira, aprova a verificação sem rodá-la
-
-
-@dataclasses.dataclass(frozen=True)
-class CheckResult:
-    name: str
-    sql: str
-    defects: int
-    sample: pa.Table                 # até 20 linhas inteiras reprovadas; a verificação de linhas as busca numa segunda consulta
-    passed: bool
-
-
-@dataclasses.dataclass(frozen=True)
-class AuditReport:
-    table: str
-    partitions: tuple[str, ...]
-    results: tuple[CheckResult, ...]
-    not_run: tuple[str, ...]         # "orfao_*" sem foreign_keys=True
-    nonfinite_columns: Mapping[str | None, tuple[str, ...]]  # por valor de partição, as colunas Double com valor não finito
-
-    @property
-    def passed(self) -> bool: ...
-    def sql(self) -> str: ...
-
-
-def checks(table: sa.Table, partitions: list[str] | None = None, foreign_keys: bool = False, key_scope: Literal["partition", "table"] | None = None,
-           published: sa.FromClause | None = None, referenced: Mapping[str, sa.FromClause] | None = None,
-           published_max_key: int | None = None) -> list[Check]: ...
-def audit_sql(table: sa.Table, dialect: Dialect, partitions: list[str] | None = None, foreign_keys: bool = False,
-              key_scope: Literal["partition", "table"] | None = None, published: sa.FromClause | None = None,
-              referenced: Mapping[str, sa.FromClause] | None = None, prefix: str = "{prefix}") -> dict[str, str]: ...
-
-
-class BatchStream(Protocol):
-    schema: pa.Schema
-    def read_next_batch(self) -> pa.RecordBatch: ...
-    def __iter__(self) -> Iterator[pa.RecordBatch]: ...
-    def read_all(self) -> pa.Table: ...
-    def close(self) -> None: ...
-    def __enter__(self) -> "BatchStream": ...
-    def __exit__(self, *exc: object) -> None: ...
-    def __arrow_c_stream__(self, requested_schema: object = None) -> object: ...
-
-
-class Loader(Protocol):
-    rows: int
-    def write(self, data: pa.RecordBatch | pa.Table) -> None: ...
-    def close(self) -> None: ...
-    def __enter__(self) -> "Loader": ...
-    def __exit__(self, *exc: object) -> None: ...
-
-
-@runtime_checkable
-class Engine(Protocol):
-    """A interface dos dois motores; Execution só depende dela. Cada motor guarda uma sessão por
-    execução sob um RLock que as primitivas tomam e soltam; session() dá a conexão crua com o lock
-    tomado pelo bloco, reentrante na mesma thread; new_session() abre uma sessão a mais sobre o
-    mesmo banco, e o fim do with fecha só a conexão dela."""
-    def session(self) -> contextlib.AbstractContextManager[object]: ...
-    def new_session(self) -> "Engine": ...
-    def __enter__(self) -> "Engine": ...
-    def __exit__(self, *exc: object) -> None: ...
-    def ingest(self, table: sa.Table, uri: str, version: int, partitions: list[str] | None = None, materialize: bool = False) -> None: ...
-    def published(self, table: sa.Table, uri: str, version: int) -> sa.FromClause: ...
-    def stream(self, statement_or_sql: sa.sql.ClauseElement | str, params: Mapping[str, object] | None = None, batch_size: int = 100_000) -> BatchStream: ...
-    def query(self, statement_or_sql: sa.sql.ClauseElement | str, params: Mapping[str, object] | None = None) -> pa.Table: ...
-    def loader(self, table: sa.Table, queue_depth: int = 2) -> Loader: ...
-    def load(self, table: sa.Table, data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch]) -> int: ...
-    def audit(self, table: sa.Table, partitions: list[str] | None, uri: str | None = None, version: int | None = None,
-              foreign_keys: bool = False, key_scope: Literal["partition", "table"] | None = None) -> AuditReport: ...
-    def export_partition(self, table: sa.Table, uri: str, value: str | None, metadata: Mapping[str, str], mode: ExportMode, expected_rows: int | None = None,
-                         columns_without_min_max: Collection[str] = ()) -> int: ...
-    def cleanup(self) -> None: ...
-
-
-@dataclasses.dataclass(frozen=True, kw_only=True)
-class DuckDBConfig:
-    database: str | None = None      # None: <temp_directory>/<execution_id>.duckdb; ":memory:" só por pedido
-    threads: int | None = None
-    memory_limit: str | None = None  # None: o padrão do DuckDB, 80% da memória, registrado no log
-    temp_directory: str | None = None  # None: uma pasta nova de tempfile.mkdtemp, apagada em cleanup
-    extension_directory: str | None = None
-
-
-class DuckDBEngine:
-    def __init__(self, config: DuckDBConfig, execution_id: str, storage: Storage) -> None: ...   # serialize_db.storage.Storage
-```
-
 ## Estratégia de implementação
 
 - **`checks`** monta os statements Core sobre a tabela do contrato, e `audit_sql` os renderiza pela
   cópia prefixada de `sql.render` com o prefixo pedido; `checks` não recebe `prefix` (decisão do
-  usuário de 2026-09-23). Uma consulta de linhas, agrupada pela coluna de partição numa tabela particionada, reúne num
-  `count(*) FILTER` por coluna: nulo em `NOT NULL`, texto acima de
+  usuário de 2026-09-23). Uma consulta de linhas, agrupada pela coluna de partição numa tabela
+  particionada, reúne num `count(CASE WHEN <defeito> THEN 1 END)` por coluna, a forma que os dois
+  motores aceitam, porque o `COUNT` do Redshift não tem a cláusula `FILTER` (documentação lida em
+  2026-09-23): nulo em `NOT NULL`, texto acima de
   `String(n)` em bytes, JSON inválido, a coluna de partição diferente de `partition_text(partition_source)`
   quando o modelo declara `partition_source`, o valor de partição fora da regra da partição,
   `[0-9A-Za-z][0-9A-Za-z_.-]*` (a partição é texto desde 2026-09-22, e a data é o caso da base
@@ -231,15 +119,20 @@ class DuckDBEngine:
   sobre os valores finitos, `sum(CASE WHEN isfinite(x) THEN CAST(x AS DECIMAL(38, 6)) END)` no
   DuckDB, e a consulta conta à parte os não finitos de cada coluna, que dão `nonfinite_columns`:
   o `CAST` de um `NaN` ou de um infinito para
-  `DECIMAL` falha com `ConversionException` e derrubaria a verificação inteira, e o `FILTER` do
+  `DECIMAL` falha com `ConversionException` e derrubaria a verificação inteira, e um filtro do
   agregado não o evita (leitura de 2026-09-23). A contagem entra no relatório sem reprovar, porque
-  o `cast` aceita o `Double` não finito (decisão do usuário de 2026-09-23); se ela deve reprovar é
-  uma das questões da [issue #59](https://github.com/felipenoris/serialize-db/issues/59). As funções com `@compiles` por dialeto
+  o `cast` aceita o `Double` não finito, e dá a lista `columns_without_min_max` da
+  [issue #59](https://github.com/felipenoris/serialize-db/issues/59) (decisões do usuário de
+  2026-09-23). No Redshift, `is_finite` sai `x NOT IN ('NaN'::float8, 'Infinity'::float8,
+  '-Infinity'::float8)`, que nenhuma execução no ambiente alvo conferiu. As funções com `@compiles` por dialeto
   fazem a portabilidade, e cada uma é subclasse de `FunctionElement` com `name`, como o `month_of`
-  de [`sqlalchemy.md`](sqlalchemy.md), e não de `GenericFunction`, a classe do rascunho abaixo, que
+  de [`sqlalchemy.md`](sqlalchemy.md), e não de `GenericFunction`, a classe do rascunho de 2026-09-21, que
   se registra em `sa.func` para o processo inteiro: depois dela, o `sa.func.json_valid` do próprio
   cliente sai `is_valid_json` no Redshift, e a subclasse de `FunctionElement` deixa o `sa.func`
-  intacto (leitura de 2026-09-23). `partition_text` é
+  intacto (leitura de 2026-09-23). Cada uma tem também uma regra padrão, o nome com os argumentos:
+  sem ela a subclasse não compila fora dos dialetos que a declaram, e o dialeto do `duckdb_engine`
+  é um compilador do PostgreSQL (`UnsupportedCompilationError`, leitura de 2026-09-23).
+  `partition_text` é
   `strftime(x, '%Y-%m-%d')` no DuckDB e `to_char(x, 'YYYY-MM-DD')` no Redshift; `json_valid` fica
   no DuckDB e vira `is_valid_json` no Redshift; `text_bytes`, o comprimento em bytes que o
   `String(n)` mede como o `VARCHAR(n)` do Redshift, é `strlen` no DuckDB e `octet_length` no
@@ -326,7 +219,12 @@ class DuckDBEngine:
   cliente lê os lotes depois dela, porque a auxiliar esperaria o bloco. Em 13.333.333 linhas, sem
   trabalho, com 5 ms de Python puro por lote e com pandas, o total foi 0,411 s, 0,673 s e 0,411 s,
   sem lote no arquivo; com o cliente atrasado, 0,908 s e 297 MB de pico com 96 lotes no arquivo
-  (2026-09-23, [`POC.md`](POC.md)).
+  (2026-09-23, [`POC.md`](POC.md)). O motor abre com `preserve_insertion_order = false`: num filtro
+  que acha poucas linhas, todas no começo da tabela, o primeiro lote só sai no fim da consulta com
+  duas threads (1,093 s de 1,093 s, contra 0,373 s com a ordem preservada); no filtro de uma
+  partição entre doze, o do pipeline mensal, o primeiro lote chegou em 2 a 3 ms nos dois ajustes, e
+  o `CREATE TABLE AS` de 17.000.000 de linhas levou 0,533 s e 802 MB acima da base com a ordem
+  livre, contra 0,908 s e 876 MB (leituras de 2026-09-23, [`POC.md`](POC.md)).
 - **`query`** roda sob o lock, pelo caminho de compilação de `stream` para um statement e por `bind`
   para um texto pronto, e devolve `to_arrow_table()`, sem arquivo.
 - **`loader`** é o `Loader` de `test_parallel.py`, com a recusa do nome ocupado na abertura:
@@ -397,15 +295,21 @@ class DuckDBEngine:
 
 ## Testes por caso
 
-`tests/test_audit.py` sem gravar; `tests/test_engine_duckdb.py` sob a raiz local, sobre um Delta
-criado no teste a partir do modelo cliente.
+`tests/test_audit.py` sem gravar, sobre o modelo cliente e uma tabela com uma coluna de cada tipo
+que muda de função entre os motores; `tests/test_engine_duckdb.py` sob a raiz local, sobre um
+Delta criado no teste a partir de um modelo com a partição, a origem dela, uma chave estrangeira e
+uma chave única.
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
 | Texto das verificações | `test_audit_sql_per_dialect` | Cada `Check` do modelo cliente renderiza nos dois dialetos; `strftime` no DuckDB e `to_char` no Redshift; `json_valid` e `is_valid_json`; `strlen` e `octet_length`. |
 | Escopo da chave | `test_key_scope_follows_the_partition_column` | Chave com a coluna de partição ou a de `partition_source` gera uma consulta; sem elas, gera a segunda contra `published`; `key_scope="partition"` a suprime e o relatório registra; a chave primária inteira de uma coluna leva o `skip_when` do mínimo contra `published_max_key`. |
 | Chave estrangeira | `test_foreign_key_check_only_on_request` | Sem `foreign_keys=True` o nome está em `not_run`; com ele, o anti-join contra `referenced`. |
-| Defeitos plantados | `test_audit_finds_each_defect` | O sandbox do rascunho: nulo, texto acima do `String(n)` em bytes e dentro dele em caracteres, partição errada, chave repetida dentro da partição e contra a publicada, chave única repetida contra a publicada. |
+| Defeitos plantados | `test_audit_finds_each_defect` | Nulo, texto acima do `String(n)` em bytes e dentro dele em caracteres, partição fora da origem, valor de partição fora da regra, JSON inválido numa tabela criada por SQL (a coluna `JSON` do DuckDB recusa o texto inválido na carga), chave repetida dentro da partição e contra a publicada. |
+| Chave única publicada | `test_audit_unique_key_against_the_published_version` | A chave única sem a coluna de partição nem a de origem, repetida contra a versão publicada. |
+| Órfão | `test_audit_orphan_against_a_referenced_table_outside_the_sandbox` | Com `foreign_keys=True`, a tabela referenciada fora do sandbox entra pela versão fixada de `referenced` e o órfão aparece; sem o argumento, a verificação fica em `not_run`. |
+| Regra da partição | `test_partition_values_follow_the_rule` | O valor fora da regra é recusado antes de qualquer texto. |
+| Pasta temporária | `test_temporary_folder_is_created_and_removed` | Sem `temp_directory`, a pasta nova sai inteira no `cleanup`. |
 | Sessão | `test_engine_config_and_single_session` | `duckdb_settings()` com os valores pedidos, o `memory_limit` no padrão do DuckDB quando a configuração o omite, e o banco em arquivo dentro da pasta de `tempfile.mkdtemp`; três threads usam a mesma sessão, uma de cada vez; a tabela temporária criada por uma é visível às outras; uma primitiva chamada dentro de `session()` não trava. |
 | Sessão a mais | `test_new_session_runs_beside_the_main_one` | A sessão de `new_session` vê a tabela confirmada pela principal e não a temporária dela, roda enquanto a principal está num bloco `session()`, e a principal vê o que ela confirma; o fim do `with` fecha só o cursor, e o arquivo do banco continua. |
 | Ingestão presa | `test_ingest_pins_the_version` | Um `append` na tabela depois da abertura não aparece na view nem na tabela materializada. |
@@ -423,333 +327,19 @@ criado no teste a partir do modelo cliente.
 | Exportação | `test_export_partition_modes_produce_the_same_partition` | `register` e `rewrite` sobre a mesma partição dão as mesmas linhas e somas; `register` poda pela estatística (`Scanning Files: 0/n`); `expected_rows` diferente recusa. |
 | Pipeline de exemplo | `test_example_pipeline_in_a_file_backed_database` | Doze partições materializadas, dimensões em view, um `select` com `join`, auditoria, exportação; o arquivo `.duckdb` apagado por `cleanup`. |
 | Dispensa da junção | `test_audit_skips_the_published_join_above_max_key` | Com as chaves da execução acima do `max_key` da versão fixada, a junção com as demais partições não roda e o relatório diz por quê; com uma chave abaixo dele, a junção roda e acha a repetição. |
-| Amostra | `test_audit_report_samples_failing_rows` | Até 20 linhas inteiras por verificação reprovada; a de `linhas` busca as suas numa segunda consulta por contador acima de zero, e uma verificação aprovada não roda consulta alguma. |
+| Amostra | `test_audit_report_samples_failing_rows` | Até 20 linhas inteiras por verificação reprovada; a de `linhas` busca as suas numa segunda consulta por contador acima de zero, e uma verificação aprovada não traz amostra; o `NaN` entra em `nonfinite_columns` sem reprovar. |
 | Texto com `%` | `test_query_keeps_percent_literals` | `LIKE 'A%'`, num statement e num texto pronto, chega ao DuckDB como está. |
 
-## Rascunhos executados
+## A implementação
 
-Os dois rascunhos rodaram em 2026-09-21 com as versões fixadas, e o primeiro de novo em 2026-09-22,
-com o texto medido em bytes. O primeiro monta as verificações a partir de um `Table` com chave
-primária e chave única, imprime o texto de cada uma nos dois dialetos e as executa num DuckDB em
-memória com um defeito de cada tipo (o texto `'ação ação'` tem 9 caracteres e 13 bytes: só a
-medida em bytes o acusa numa coluna `String(10)`); a tabela `delta_scan` faz o papel da versão
-publicada. O segundo é o motor por partes, com o modelo de conexão anterior à sessão única (um
-cursor por thread num `threading.local`); a sessão única e os arquivos intermediários estão nos
-esboços de `test_parallel.py`.
-
-```python
-"""Etapa 4: as verificações da auditoria derivadas do Table, o texto por dialeto e a execução no DuckDB com defeitos plantados."""
-import dataclasses
-import datetime as dt
-
-import duckdb
-import duckdb_engine
-import sqlalchemy as sa
-from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.sql import quoted_name
-from sqlalchemy.sql.functions import GenericFunction
-from sqlalchemy.sql.visitors import replacement_traverse
-from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
-
-DIALECTS = {"duckdb": duckdb_engine.Dialect(paramstyle="named"), "redshift": RedshiftDialect_redshift_connector(paramstyle="named")}
-
-
-class partition_text(GenericFunction):
-    """strftime(data, '%Y-%m-%d') no DuckDB, to_char(data, 'YYYY-MM-DD') no Redshift: o valor da coluna de partição."""
-    type = sa.String()
-    inherit_cache = True
-
-
-@compiles(partition_text, "duckdb")
-def _duckdb_partition_text(element, compiler, **kw):
-    return f"strftime({compiler.process(element.clauses.clauses[0], **kw)}, '%Y-%m-%d')"
-
-
-@compiles(partition_text, "redshift")
-def _redshift_partition_text(element, compiler, **kw):
-    return f"to_char({compiler.process(element.clauses.clauses[0], **kw)}, 'YYYY-MM-DD')"
-
-
-class json_valid(GenericFunction):
-    type = sa.Boolean()
-    inherit_cache = True
-
-
-@compiles(json_valid, "redshift")
-def _redshift_json_valid(element, compiler, **kw):
-    return f"is_valid_json({compiler.process(element.clauses.clauses[0], **kw)})"
-
-
-class text_bytes(GenericFunction):
-    """O comprimento do texto em bytes, a medida do VARCHAR(n): strlen no DuckDB, octet_length no Redshift; o length dos dois conta caracteres."""
-    type = sa.Integer()
-    inherit_cache = True
-
-
-@compiles(text_bytes, "duckdb")
-def _duckdb_text_bytes(element, compiler, **kw):
-    return f"strlen({compiler.process(element.clauses.clauses[0], **kw)})"
-
-
-@compiles(text_bytes, "redshift")
-def _redshift_text_bytes(element, compiler, **kw):
-    return f"octet_length({compiler.process(element.clauses.clauses[0], **kw)})"
-
-
-@dataclasses.dataclass(frozen=True)
-class Check:
-    name: str
-    statement: sa.Select
-    fails_when: str       # "count > 0" para defeitos; "any" para chaves (uma linha por chave repetida)
-
-
-def sandbox_copy(table: sa.Table, prefix: str) -> sa.Table:
-    return table.to_metadata(sa.MetaData(), name=quoted_name(f"{prefix}{table.name}", quote=False))
-
-
-def checks(table: sa.Table, partitions: list[str] | None, options: dict, prefix: str = "{prefix}", published=None, key_scope: str | None = None) -> list[Check]:
-    """Uma consulta de defeitos de linha, uma por chave, uma por chave estrangeira; 'published' é a fonte das demais partições (delta_scan)."""
-    sandbox = sandbox_copy(table, prefix)
-    partition_by, source = options.get("partition_by", [None])[0], options.get("partition_source")
-    scope = sandbox.c[partition_by].in_(partitions) if partition_by and partitions else sa.true()
-    filters = []
-    for column in sandbox.columns:
-        if not column.nullable:
-            filters.append(sa.func.count().filter(column.is_(None)).label(f"nulo_{column.name}"))
-        if isinstance(column.type, sa.String) and column.type.length and column.name != partition_by:
-            filters.append(sa.func.count().filter(text_bytes(column) > column.type.length).label(f"texto_{column.name}"))
-        if isinstance(column.type, sa.JSON):
-            filters.append(sa.func.count().filter(sa.and_(column.isnot(None), sa.not_(json_valid(column)))).label(f"json_{column.name}"))
-        if isinstance(column.type, (sa.Double, sa.Numeric)) and not isinstance(column.type, sa.Float) or isinstance(column.type, sa.Double):
-            filters.append(sa.func.sum(sa.cast(column, sa.Numeric(38, 6))).label(f"total_{column.name}"))
-    if partition_by and source:
-        filters.append(sa.func.count().filter(sandbox.c[partition_by] != partition_text(sandbox.c[source])).label(f"particao_{partition_by}"))
-    result = [Check("linhas", sa.select(*filters).where(scope), "algum contador de defeito acima de zero")]
-
-    keys = [tuple(c.name for c in table.primary_key.columns)] + [tuple(c.name for c in k.columns) for k in table.constraints if isinstance(k, sa.UniqueConstraint)]
-    for key in keys:
-        columns = [sandbox.c[name] for name in key]
-        within = sa.select(*columns, sa.func.count().label("n")).where(scope).group_by(*columns).having(sa.func.count() > 1)
-        result.append(Check(f"chave_{'_'.join(key)}", within, "alguma linha"))
-        if partition_by and partition_by not in key and key_scope != "partition" and published is not None:
-            other = published.alias("publicado")
-            outside = sa.select(*columns).select_from(sandbox.join(other, sa.and_(*[sandbox.c[n] == other.c[n] for n in key]))).where(scope, other.c[partition_by].notin_(partitions or []))
-            result.append(Check(f"chave_{'_'.join(key)}_publicada", outside, "alguma linha"))
-    return result
-
-
-def audit_sql(table: sa.Table, dialect: str, **options) -> dict[str, str]:
-    return {check.name: str(check.statement.compile(dialect=DIALECTS[dialect], compile_kwargs={"literal_binds": True})) for check in checks(table, **options)}
-
-
-metadata = sa.MetaData()
-entries = sa.Table("cad_lancamentos", metadata,
-                   sa.Column("id_lancamento", sa.BigInteger, primary_key=True, autoincrement=False), sa.Column("id_conta", sa.BigInteger, nullable=False),
-                   sa.Column("data_base", sa.Date, nullable=False), sa.Column("valor", sa.Double, nullable=False), sa.Column("area", sa.String(10)),
-                   sa.Column("meta", sa.JSON), sa.Column("data_base_str", sa.String(10), nullable=False),
-                   sa.UniqueConstraint("id_conta", "data_base", "area"))
-options = {"partition_by": ["data_base_str"], "partition_source": "data_base"}
-
-# A versão publicada, que as chaves fora da partição comparam: no motor, delta_scan(uri, version := v).
-published = sa.table("delta_scan", *[sa.column(c.name) for c in entries.columns])
-texts = audit_sql(entries, "duckdb", partitions=["2026-08-31"], options=options, prefix="", published=published)
-for name, text in texts.items():
-    print(f"-- {name}\n{' '.join(text.split())}")
-redshift = audit_sql(entries, "redshift", partitions=["2026-08-31"], options=options, prefix="exec_42_", published=published)
-print("-- redshift, linhas:", " ".join(redshift["linhas"].split())[:230], "...")
-for dialect in DIALECTS:
-    print(f"-- {dialect}, texto:", text_bytes(entries.c.area).compile(dialect=DIALECTS[dialect]))
-
-con = duckdb.connect()
-con.execute("CREATE TABLE cad_lancamentos (id_lancamento BIGINT, id_conta BIGINT, data_base DATE, valor DOUBLE, area VARCHAR, meta JSON, data_base_str VARCHAR)")
-con.execute("""INSERT INTO cad_lancamentos VALUES
-    (1, 7, '2026-08-31', 10.5, 'TI', '{"ok": true}', '2026-08-31'),
-    (1, 7, '2026-08-31', 20.25, 'RH', NULL, '2026-08-31'),
-    (2, NULL, '2026-08-31', 0.1, 'x', NULL, '2026-08-31'),
-    (3, 8, '2026-07-31', 0.2, 'ação ação', NULL, '2026-08-31'),
-    (4, 9, '2026-08-31', 0.3, 'TI', NULL, '2026-07-31')""")   # 'ação ação': 9 caracteres e 13 bytes; a partição de julho fica fora do escopo de agosto
-con.execute("""CREATE TABLE delta_scan AS SELECT * FROM (VALUES
-    (3, 8, DATE '2026-07-31', 0.2, 'x', NULL, '2026-06-30'),
-    (4, 9, DATE '2026-08-31', 0.3, 'TI', NULL, '2026-08-31'),
-    (9, 7, DATE '2026-08-31', 1.0, 'TI', NULL, '2026-05-31')) t(id_lancamento, id_conta, data_base, valor, area, meta, data_base_str)""")   # 3 repete a chave primária fora da partição; 9 repete a chave única (7, 2026-08-31, TI)
-for name, text in texts.items():
-    print(f"{name}: {con.execute(text).fetchall()}")
-```
-
-Saída:
-
-```
--- linhas
-SELECT count(*) FILTER (WHERE cad_lancamentos.id_lancamento IS NULL) AS nulo_id_lancamento, count(*) FILTER (WHERE cad_lancamentos.id_conta IS NULL) AS nulo_id_conta, count(*) FILTER (WHERE cad_lancamentos.data_base IS NULL) AS nulo_data_base, count(*) FILTER (WHERE cad_lancamentos.valor IS NULL) AS nulo_valor, sum(CAST(cad_lancamentos.valor AS NUMERIC(38, 6))) AS total_valor, count(*) FILTER (WHERE strlen(cad_lancamentos.area) > 10) AS texto_area, count(*) FILTER (WHERE cad_lancamentos.meta IS NOT NULL AND NOT json_valid(cad_lancamentos.meta)) AS json_meta, count(*) FILTER (WHERE cad_lancamentos.data_base_str IS NULL) AS nulo_data_base_str, count(*) FILTER (WHERE cad_lancamentos.data_base_str != strftime(cad_lancamentos.data_base, '%Y-%m-%d')) AS particao_data_base_str FROM cad_lancamentos WHERE cad_lancamentos.data_base_str IN ('2026-08-31')
--- chave_id_lancamento
-SELECT cad_lancamentos.id_lancamento, count(*) AS n FROM cad_lancamentos WHERE cad_lancamentos.data_base_str IN ('2026-08-31') GROUP BY cad_lancamentos.id_lancamento HAVING count(*) > 1
--- chave_id_lancamento_publicada
-SELECT cad_lancamentos.id_lancamento FROM cad_lancamentos JOIN delta_scan AS publicado ON cad_lancamentos.id_lancamento = publicado.id_lancamento WHERE cad_lancamentos.data_base_str IN ('2026-08-31') AND (publicado.data_base_str NOT IN ('2026-08-31'))
--- chave_id_conta_data_base_area
-SELECT cad_lancamentos.id_conta, cad_lancamentos.data_base, cad_lancamentos.area, count(*) AS n FROM cad_lancamentos WHERE cad_lancamentos.data_base_str IN ('2026-08-31') GROUP BY cad_lancamentos.id_conta, cad_lancamentos.data_base, cad_lancamentos.area HAVING count(*) > 1
--- chave_id_conta_data_base_area_publicada
-SELECT cad_lancamentos.id_conta, cad_lancamentos.data_base, cad_lancamentos.area FROM cad_lancamentos JOIN delta_scan AS publicado ON cad_lancamentos.id_conta = publicado.id_conta AND cad_lancamentos.data_base = publicado.data_base AND cad_lancamentos.area = publicado.area WHERE cad_lancamentos.data_base_str IN ('2026-08-31') AND (publicado.data_base_str NOT IN ('2026-08-31'))
--- redshift, linhas: SELECT count(*) FILTER (WHERE exec_42_cad_lancamentos.id_lancamento IS NULL) AS nulo_id_lancamento, count(*) FILTER (WHERE exec_42_cad_lancamentos.id_conta IS NULL) AS nulo_id_conta, count(*) FILTER (WHERE exec_42_cad_lancamentos. ...
--- duckdb, texto: strlen(cad_lancamentos.area)
--- redshift, texto: octet_length(cad_lancamentos.area)
-linhas: [(0, 1, 0, 0, Decimal('31.050000'), 1, 0, 0, 1)]
-chave_id_lancamento: [(1, 2)]
-chave_id_lancamento_publicada: [(3,)]
-chave_id_conta_data_base_area: []
-chave_id_conta_data_base_area_publicada: [(7, datetime.date(2026, 8, 31), 'TI')]
-```
-
-```python
-"""Etapa 4: o motor DuckDB por partes: conexão por thread, ingest presa à versão, query, loader por lotes e export_partition em modo register."""
-import dataclasses
-import datetime as dt
-import decimal
-import json
-import os
-import tempfile
-import threading
-import time
-import uuid
-from pathlib import Path
-
-import duckdb
-import pyarrow as pa
-from deltalake import CommitProperties, DeltaTable, Schema as DeltaSchema, write_deltalake
-from deltalake.transaction import AddAction
-
-PARTITION = "data_str"
-CONTRACT = pa.schema([pa.field("id_operacao", pa.int64(), nullable=False), pa.field("data", pa.date32(), nullable=False),
-                      pa.field("valor", pa.decimal128(18, 2), nullable=False), pa.field("descricao", pa.string()), pa.field(PARTITION, pa.string(), nullable=False)])
-DDL = "CREATE TABLE IF NOT EXISTS {name} (id_operacao BIGINT NOT NULL, data DATE NOT NULL, valor DECIMAL(18, 2) NOT NULL, descricao VARCHAR, data_str VARCHAR(10) NOT NULL)"
-
-
-@dataclasses.dataclass(frozen=True, kw_only=True)
-class DuckDBConfig:
-    database: str | None = None            # None: em memória
-    threads: int | None = None
-    memory_limit: str | None = None
-    temp_directory: str | None = None
-    extension_directory: str | None = None
-
-
-class DuckDBEngine:
-    def __init__(self, config: DuckDBConfig, execution_id: str) -> None:
-        settings = {k: v for k, v in {"threads": config.threads, "memory_limit": config.memory_limit, "temp_directory": config.temp_directory}.items() if v}
-        settings |= {"extension_directory": config.extension_directory or os.environ.get("SERIALIZE_DB_DUCKDB_EXTENSIONS", ".duckdb"),
-                     "autoinstall_known_extensions": False, "autoload_known_extensions": False, "preserve_insertion_order": False}
-        self._root = duckdb.connect(config.database or ":memory:", config=settings)
-        self._root.execute("LOAD delta")
-        self._local = threading.local()
-        self.execution_id = execution_id
-
-    @property
-    def connection(self) -> duckdb.DuckDBPyConnection:
-        """O cursor da thread, criado no primeiro uso; o cliente nunca vê a conexão raiz."""
-        if not hasattr(self._local, "cursor"):
-            self._local.cursor = self._root.cursor()
-        return self._local.cursor
-
-    def ingest(self, name: str, uri: str, version: int, partitions: list[str] | None = None, materialize: bool = False) -> None:
-        where = f" WHERE {PARTITION} IN ({', '.join(repr(p) for p in partitions)})" if partitions else ""
-        kind = "TABLE" if materialize else "VIEW"
-        self.connection.execute(f"CREATE {kind} {name} AS SELECT * FROM delta_scan('{uri}', version := {version}){where}")
-
-    def query(self, sql: str, params: dict | None = None) -> pa.Table:
-        with self._root.cursor() as cursor:                                 # um cursor próprio: o da thread fica livre
-            return cursor.execute(sql, params or {}).to_arrow_table()
-
-    def load(self, name: str, data: pa.Table | pa.RecordBatch, schema: pa.Schema) -> int:
-        """A forma curta do loader: cada lote passa pelo cast e por um INSERT ... BY NAME numa transação; nada visível antes do commit."""
-        batches = data.to_batches() if isinstance(data, pa.Table) else [data]
-        cursor = self._root.cursor()
-        cursor.execute(DDL.format(name=name))
-        cursor.begin()
-        try:
-            for batch in batches:
-                cursor.register("lote", batch.select([f.name for f in schema if f.name in batch.schema.names]).cast(pa.schema([schema.field(n) for n in batch.schema.names if n in schema.names])))
-                cursor.execute(f"INSERT INTO {name} BY NAME SELECT * FROM lote")
-                cursor.unregister("lote")
-            cursor.commit()
-        except Exception:
-            cursor.rollback()
-            raise
-        finally:
-            cursor.close()
-        return sum(b.num_rows for b in batches)
-
-    def export_partition(self, name: str, uri: str, value: str, metadata: dict[str, str]) -> int:
-        """Modo register: COPY ... RETURN_STATS grava o arquivo dentro da pasta da tabela, e o commit registra a ação com as estatísticas."""
-        relative = f"{PARTITION}={value}/{self.execution_id}_{uuid.uuid4().hex}.parquet"
-        Path(uri, relative).parent.mkdir(parents=True, exist_ok=True)
-        columns = [f.name for f in CONTRACT if f.name != PARTITION]
-        (row,) = self._root.cursor().execute(
-            f"COPY (SELECT {', '.join(columns)} FROM {name} WHERE {PARTITION} = '{value}' ORDER BY id_operacao) TO '{Path(uri, relative)}' (FORMAT parquet, RETURN_STATS)"
-        ).fetchall()
-        count, size, stats = row[1], row[2], {k.strip('"'): v for k, v in row[4].items()}
-        expected = self.query(f"SELECT count(*) FROM {name} WHERE {PARTITION} = '{value}'").column(0)[0].as_py()
-        assert count == expected, (count, expected)
-        typed = {"numRecords": count, "minValues": {}, "maxValues": {}, "nullCount": {c: int(stats[c]["null_count"]) for c in columns if c in stats}}
-        for column in ("id_operacao",):                                       # só as colunas cuja transcrição tem teste adversarial
-            typed["minValues"][column], typed["maxValues"][column] = int(stats[column]["min"]), int(stats[column]["max"])
-        table = DeltaTable(uri)
-        table.create_write_transaction(
-            [AddAction(path=relative, size=size, partition_values={PARTITION: value}, modification_time=int(time.time() * 1000), data_change=True, stats=json.dumps(typed))],
-            mode="overwrite", schema=table.schema(), partition_by=[PARTITION], partition_filters=[(PARTITION, "=", value)],
-            commit_properties=CommitProperties(custom_metadata=metadata))
-        return DeltaTable(uri).version()
-
-    def cleanup(self) -> None:
-        self._root.close()
-
-
-def sample(value: str, start: int, n: int) -> pa.Table:
-    return pa.table({"id_operacao": pa.array(range(start, start + n), pa.int64()), "data": pa.array([dt.date.fromisoformat(value)] * n, pa.date32()),
-                     "valor": pa.array([decimal.Decimal(k) / 100 for k in range(start, start + n)], pa.decimal128(18, 2)),
-                     "descricao": pa.array([f"op {k}" for k in range(start, start + n)]), PARTITION: pa.array([value] * n)}, schema=CONTRACT)
-
-
-with tempfile.TemporaryDirectory() as folder:
-    uri = os.path.join(folder, "prod", "cad_operacoes")
-    DeltaTable.create(uri, DeltaSchema.from_arrow(CONTRACT), partition_by=[PARTITION])
-    write_deltalake(uri, pa.concat_tables([sample("2026-07-31", 1, 1000), sample("2026-08-31", 1001, 1000)]), mode="append")
-    fixed = DeltaTable(uri).version()
-    write_deltalake(uri, sample("2026-09-30", 5001, 10), mode="append")                # outra execução avança a tabela depois da abertura
-
-    engine = DuckDBEngine(DuckDBConfig(threads=2, memory_limit="1GB", temp_directory=os.path.join(folder, "tmp")), "exec-2026-09-05")
-    engine.ingest("cad_operacoes", uri, fixed, partitions=["2026-08-31"], materialize=True)
-    engine.ingest("dim", uri, fixed)                                                  # a view enxerga a versão fixada, não a atual
-    print("ingest:", engine.query("SELECT count(*) FROM cad_operacoes").column(0)[0].as_py(), engine.query("SELECT count(*) FROM dim").column(0)[0].as_py(), "| atual:", DeltaTable(uri).to_pyarrow_dataset().count_rows())
-
-    cursors = set()
-    def work(k: int) -> None:
-        cursors.add(id(engine.connection))
-        engine.connection.execute(f"CREATE TABLE t{k} AS SELECT {k} AS k")
-    threads = [threading.Thread(target=work, args=(k,)) for k in range(3)]
-    [t.start() for t in threads]; [t.join() for t in threads]
-    print("cursores distintos por thread:", len(cursors), "| tabelas das threads visíveis:", engine.query("SELECT count(*) FROM duckdb_tables() WHERE table_name LIKE 't%'").column(0)[0].as_py())
-
-    projected = engine.query("SELECT id_operacao + 100000 AS id_operacao, data, valor * 2 AS valor, descricao, data_str FROM cad_operacoes")
-    print("load:", engine.load("cad_operacoes_projetadas", projected, CONTRACT), "linhas |", engine.query("SELECT count(*), sum(valor) FROM cad_operacoes_projetadas").to_pylist())
-    try:
-        engine.load("cad_operacoes_projetadas", pa.table({"id_operacao": pa.array([None], pa.int64()), "data": [dt.date(2026, 8, 31)], "valor": pa.array([1], pa.decimal128(18, 2)), "descricao": ["x"], PARTITION: ["2026-08-31"]}), CONTRACT)
-    except Exception as error:
-        print("load recusado:", type(error).__name__, "| linhas depois do rollback:", engine.query("SELECT count(*) FROM cad_operacoes_projetadas").column(0)[0].as_py())
-
-    version = engine.export_partition("cad_operacoes_projetadas", uri, "2026-08-31", {"serialize_db_execution_id": "exec-2026-09-05"})
-    print("export_partition register: versão", version, "| partição relida:", engine.query(f"SELECT count(*), min(id_operacao), sum(valor) FROM delta_scan('{uri}') WHERE {PARTITION} = '2026-08-31'").to_pylist(),
-          "| poda:", "Scanning Files: 0/" in engine.query(f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}') WHERE id_operacao > 999999").column(1)[0].as_py())
-    engine.cleanup()
-```
-
-Saída:
-
-```
-ingest: 1000 2000 | atual: 2010
-cursores distintos por thread: 3 | tabelas das threads visíveis: 3
-load: 1000 linhas | [{'count_star()': 1000, 'sum(valor)': Decimal('30010.00')}]
-load recusado: ValueError | linhas depois do rollback: 1000
-export_partition register: versão 3 | partição relida: [{'count_star()': 1000, 'min(id_operacao)': 101001, 'sum(valor)': Decimal('30010.00')}] | poda: True
-```
+Os módulos `serialize_db.audit`, `serialize_db.engine` (o protocolo `Engine`, `BatchStream`,
+`Loader` e `ExportMode`) e `serialize_db.engine.duckdb` (`DuckDBConfig`, `DuckDBEngine`, e o
+`DuckDBStream` e o `DuckDBLoader` dele), com `SandboxError` em `serialize_db.errors`, e os casos de
+`tests/test_audit.py` e `tests/test_engine_duckdb.py` substituem a interface e os rascunhos
+executados em 2026-09-21: as assinaturas e as docstrings estão no código e na documentação do
+`pdoc`. O motor segue os esboços de `test_parallel.py`, com a sessão a mais de `new_session` por
+`DuckDBEngine(..., parent=motor)`. O que a implementação mostrou está em [`POC.md`](POC.md), seção
+"O que a implementação da etapa 4 mostrou".
 
 ## Decisões pendentes
 

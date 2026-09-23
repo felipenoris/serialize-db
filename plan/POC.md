@@ -2237,3 +2237,46 @@ implementação de `serialize_db.storage` e `serialize_db.delta` leu a API do de
 `storage_options` sem `timeout`, `table_exists` e `file_from_return_stats`, as três conferências
 novas, a releitura que compara o log com os leitores, e os não finitos de `rewrite`. A revisão das
 etapas 4 a 9 depois da etapa 3 levou a elas a interface de `Storage` e de `delta`.
+
+## O que a implementação da etapa 4 mostrou
+
+Em 2026-09-23, no mesmo macOS (DuckDB 1.5.5, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0,
+SQLAlchemy 2.0.54), a implementação de `serialize_db.audit` e do motor DuckDB leu o compilador, o
+driver e a documentação antes de cada primitiva, e os casos entraram em `tests/test_audit.py` e
+`tests/test_engine_duckdb.py`.
+
+- **O `FILTER` nos agregados.** O texto do Redshift que o rascunho de 2026-09-21 imprimia levava
+  `count(*) FILTER (WHERE ...)`, e a sintaxe do `COUNT` na documentação do Redshift não tem a
+  cláusula (`COUNT( * | expression )`, `COUNT ( [ DISTINCT | ALL ] expression )`). A auditoria conta
+  por `count(CASE WHEN <defeito> THEN 1 END)`, que os dois motores aceitam, e o texto do DuckDB de
+  cada verificação do modelo cliente rodou num DuckDB em memória sobre o DDL da etapa 1.
+- **A regra padrão das funções.** Uma subclasse de `FunctionElement` com `@compiles` só para o
+  Redshift falhou no dialeto do DuckDB com `UnsupportedCompilationError`: o `duckdb_engine` compila
+  pelo `PGCompiler`, e a subclasse não tem regra padrão. Cada função da auditoria ganhou a regra
+  padrão, o nome com os argumentos, e `sa.func.json_valid` continuou uma `Function` comum.
+- **A ordem de inserção e o primeiro lote.** Com `preserve_insertion_order = false`, o ajuste do
+  motor, a consulta `WHERE id < 150000 OR md5(id::VARCHAR) = 'x'` sobre 20.000.000 de linhas deu o
+  primeiro lote só no fim com duas threads (1,093 s de 1,093 s), contra 0,373 s de 1,108 s com a
+  ordem preservada; com 11 threads, 0,289 s de 0,289 s contra 0,331 s de 0,339 s. O filtro de uma
+  partição entre doze deu o primeiro lote em 2 a 3 ms nos quatro ajustes, e o `CREATE TABLE AS` de
+  17.000.000 de linhas levou 0,533 s e 802 MB acima da base com a ordem livre, contra 0,908 s e
+  876 MB com ela (duas threads; com 11, 0,145 s e 808 MB contra 0,389 s e 955 MB), o melhor de três
+  para os tempos do stream. A consulta sem `ORDER BY` sai em ordem arbitrária, e o teste do
+  orçamento do stream, que conferia a ordem das linhas, passou a ordenar a consulta.
+- **O teste do cancelamento.** Com a ordem livre, a consulta rara do teste herdado de
+  `test_parallel.py` terminava antes do `close`, e o teste falhou em três de seis rodadas sem
+  erro de interrupção; com `SET preserve_insertion_order = true` só naquela sessão, o `close`
+  cancelou a consulta em 14 ms em seis rodadas seguidas.
+- **O driver.** `to_arrow_table()` de um `CREATE` ou de um `INSERT` devolve a tabela `Count`, e de
+  um `SET` ou de um `DROP`, `Success`; `cursor()` de um cursor abre outra conexão ao mesmo banco; o
+  banco em arquivo tem um `.wal` ao lado enquanto está aberto, e só o `.duckdb` depois do `close`.
+- **A carga do JSON inválido.** A coluna `JSON` do DuckDB recusa o texto inválido na carga, e o
+  teste da auditoria planta o JSON inválido numa tabela criada por `CREATE TABLE AS`, com a coluna em
+  `VARCHAR`: a verificação `json_*` serve à tabela que o pipeline cria por SQL e ao Redshift.
+
+**Consequência**: [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) troca a interface e os rascunhos pela seção
+"A implementação" e registra a contagem por `CASE`, a regra padrão das funções, o custo do primeiro
+lote com a ordem livre, `referenced` na auditoria do motor, `totals` e `rows` no relatório, o
+esquema do primeiro lote no `loader` e o `CAST` de cada coluna na exportação. O `is_finite` do
+Redshift, `x NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)`, espera uma execução
+no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

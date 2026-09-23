@@ -80,6 +80,16 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   DECIMAL(38, 6)))` gave the exact value on all five, and `fsum` a double near it (2026-09-23).
   `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`
 
+- `preserve_insertion_order = false`, the engine's setting, makes a selective scan hand out its
+  first batch only at the end: `WHERE id < 150000 OR md5(id::VARCHAR) = 'x'` over 20,000,000 rows
+  gave the first batch at 1.093 s of 1.093 s with two threads, against 0.373 s of 1.108 s with the
+  order kept; a one-partition filter (1/12, contiguous) gave it in 2 to 3 ms in every setting, and a
+  17,000,000-row `CREATE TABLE AS` took 0.533 s and 802 MB above base without the order against
+  0.908 s and 876 MB with it (2026-09-23). A query without `ORDER BY` comes in arbitrary order.
+  `to_arrow_table()` of a `CREATE` or `INSERT` gives a `Count` table, of `SET` or `DROP` a `Success`
+  table; `cursor()` of a cursor opens another connection to the database; a file database keeps a
+  `.wal` beside it while open. `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+
 ## Catalog names and limits
 
 - `CREATE TABLE IF NOT EXISTS <name>` guards nothing but the name: over a view it passes and creates

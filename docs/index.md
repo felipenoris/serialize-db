@@ -5,7 +5,8 @@ dados e a conferência dos próprios modelos.
 
 Esta página explica o funcionamento geral do pacote, traz o tutorial de uso e a tabela de
 mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.schema`,
-`serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.errors` e
+`serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
+`serialize_db.engine` (com o motor `serialize_db.engine.duckdb`), `serialize_db.errors` e
 `serialize_db.cli`.
 
 ## Como o pacote funciona
@@ -30,10 +31,10 @@ mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.
   `timestamp` são palavras reservadas do DuckDB e do Redshift.
 
 O que já existe são o módulo de esquema, `serialize_db.schema`, o de texto SQL,
-`serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`, e a camada
-de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3. Os motores, a
-auditoria, a execução e a publicação são as etapas seguintes do plano, na pasta `plan/` do
-repositório.
+`serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`, a camada
+de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3, a auditoria,
+`serialize_db.audit`, e o motor DuckDB, `serialize_db.engine.duckdb`. O motor Redshift, a execução
+e a publicação são as etapas seguintes do plano, na pasta `plan/` do repositório.
 
 ## Instalação
 
@@ -303,6 +304,52 @@ cada um, e relê a versão pelos dois leitores, desfazendo o commit numa diferen
 `serialize_db.delta.rewrite` resolve, num commit: renomeação, remoção e mudança de tipo.
 `serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo de controle do
 ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva.
+
+### Rodar o pipeline no sandbox DuckDB
+
+`serialize_db.engine.duckdb.DuckDBEngine` é o sandbox de uma execução: um banco em arquivo numa
+pasta temporária, apagado no `cleanup`, com uma sessão que várias threads usam uma de cada vez. A
+tabela Delta entra presa a uma versão, e os dados saem e voltam em lotes Arrow:
+
+```python
+import pyarrow as pa
+import sqlalchemy as sa
+
+from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
+
+with DuckDBEngine(DuckDBConfig(), "exec-2026-09-05", storage) as engine:
+    engine.ingest(Lancamento.__table__, uri, version, partitions=["2026-07-31", "2026-08-31"],
+                  materialize=True)
+    query = sa.select(Lancamento).where(Lancamento.data_base_str == sa.bindparam("particao"))
+    with engine.stream(query, {"particao": "2026-08-31"}) as stream, \
+            engine.loader(Projetado.__table__) as loader:
+        for batch in stream:                 # a consulta continua enquanto o cliente trabalha
+            loader.write(project(batch))     # cast aqui; a tabela nasce no close do loader
+```
+
+`query` devolve a `pa.Table` inteira, e `load` grava uma `pa.Table`, um lote, um leitor ou um
+iterável de lotes; um DataFrame é recusado com a conversão sem cópia na mensagem
+(`pa.Table.from_pandas(frame, preserve_index=False)`). O nome de cada tabela no sandbox tem um só
+dono: o `loader` recusa com `serialize_db.errors.SandboxError` o nome que o `ingest` ocupou, e
+`engine.published(table, uri, version)` lê a versão publicada sem ocupar nome. `with
+engine.session() as connection:` dá a conexão crua ao que as primitivas não cobrem, e `with
+engine.new_session() as other:` abre uma sessão a mais para o que roda em paralelo.
+
+### Auditar antes de publicar
+
+`engine.audit(table, partitions, uri, version)` roda as verificações que
+`serialize_db.audit.checks` deriva do modelo e devolve o `AuditReport`: nulo em coluna `NOT NULL`,
+texto acima de `String(n)` em bytes, JSON inválido, a partição fora da coluna de origem e do padrão
+de nome de pasta, a chave repetida na partição e, quando a chave não inclui a partição, contra as
+demais partições da versão publicada, e o órfão de chave estrangeira com `foreign_keys=True`. O
+relatório traz o SQL de cada verificação, até 20 linhas de amostra das reprovadas, as somas de
+controle e as colunas `Double` com `NaN` ou infinito, que a publicação grava sem mínimo e máximo.
+`serialize_db.audit.audit_sql(table, "redshift")` imprime o texto de cada verificação, para
+depuração.
+
+`engine.export_partition(table, uri, value, metadata, mode)` leva a partição auditada ao Delta:
+`"register"` registra o arquivo que o `COPY` do DuckDB gravou, depois das conferências do rodapé, e
+`"rewrite"` grava pelo `write_deltalake`.
 
 ## Tabela de mapeamento de tipos
 

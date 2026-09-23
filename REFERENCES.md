@@ -294,6 +294,13 @@ O comprimento em bytes de um `VARCHAR`, para a verificação de texto da auditor
 
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_OCTET_LENGTH.html>
 
+A sintaxe do `COUNT`, sem a cláusula `FILTER` nos agregados, para os contadores da auditoria,
+consultada em 2026-09-23 (a busca achou também a página sobre `FILTER` do Modern SQL):
+
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_COUNT.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_Aggregate_Functions.html>
+- <https://modern-sql.com/feature/filter>
+
 ## DuckDB
 
 Documentação:

@@ -121,3 +121,8 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   decision), the whole model creates on a `duckdb-engine` `Connection`, and `check_models`
   checks the target of every foreign key. `plan/POC.md`, `plan/PLAN-STAGE-2.md`,
   `plan/PLAN-STAGE-1.md`
+
+- A `FunctionElement` subclass with `@compiles` only for some dialects has no default rule and fails
+  with `UnsupportedCompilationError` elsewhere, the `duckdb_engine` dialect included, which compiles
+  through the `PGCompiler`; `serialize_db.audit` gives each of its functions a default rule, the
+  name with its arguments (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
