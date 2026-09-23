@@ -74,3 +74,26 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   session is held; four 150,000-row tables entered by `delta_scan` in 0.017 s in four extra
   sessions against 0.066 s in series. `plan/PLAN.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`,
   `tests/proof_of_concept/test_parallel.py`, `tests/proof_of_concept/test_duckdb.py`
+- The 2026-09-23 review measured alternatives to the single-session `stream` and `loader` (macOS,
+  11 cores, file database, best of three, `threads = 2`, 100,000-row batches). `stream` over
+  13,333,333 rows (134 batches), total without work / 5 ms pure Python per batch / pandas: current
+  LZ4 spool 0.598 / 0.996 / 0.629 s, uncompressed spool 0.436 / 0.862 / 0.466 s (486 MB against
+  178 MB), unbounded memory queue 0.394 / 0.694 / 0.404 s (527 MB peak when the client lags), hybrid
+  (memory up to 256 MiB, LZ4 file after) 0.407 / 0.709 / 0.418 s, own cursor 0.399 / 0.673 / 0.408 s,
+  sequential 0.399 / 1.068 / 0.555 s. LZ4 on the query path costs 0.2 s and holds the lock that
+  long; with pure-Python client work the helper waits the GIL switch interval per reacquisition
+  (`sys.setswitchinterval(0.0005)` took the current design to 0.788 s). `loader` over 6,000,000 rows:
+  the current IPC LZ4 spool plus one `INSERT` (0.753 s, the `INSERT` 0.660 s at 2 threads and 0.346 s
+  at 8) beat raw IPC (0.697 s, 263 MB), Parquet spools (1.18 to 1.29 s), an own cursor inserting per
+  batch into a hidden table renamed at close (1.223 s, about 20 ms per batch) and per-batch inserts
+  in one transaction (1.327 s). In the three-stage pipeline over 20,000,000 rows, the `CREATE TABLE`
+  the stage 4 `loader` runs under the lock at open waited for the whole query of the `stream`
+  opened before it: first batch 0.811 s against 0.006 s with the table created at `close`, total
+  3.120 s against 2.761 s. `cursor()` returned in 0.04 ms while the connection ran a query, so
+  `new_session()` needs no session lock; `interrupt()` from another thread stopped a blocking sort
+  in 2 ms and left the connection usable, and one connection's `interrupt()` does not stop a query
+  on its cursor. Four 8,000,000-row Delta tables ingested in 1.629 s in extra sessions against
+  3.498 s in series with `threads = 2` (1.037 against 1.382 s with 11), peak memory 373 to 514 MB and
+  803 to 917 MB; part of the gain is the calling threads added to the pool, which the target's
+  2 vCPUs lack. The proposals (table created at close, hybrid stream, `interrupt()`) await the user
+  in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_duckdb.py`

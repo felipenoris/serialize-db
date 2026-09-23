@@ -346,3 +346,27 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   0.939 s). A requirement that names what overlaps with what is timed on exactly that overlap,
   with the work it names, and a design that keeps it in a weaker form says so in the report.
   `plan/POC.md`
+- **A primitive is measured in the documented usage, with every command its implementation runs**
+  (2026-09-23). The reference `Loader` of `test_parallel.py` wrote into tables the tests created
+  beforehand, so the three-stage pipeline measured on 2026-09-22 and 2026-09-23 never ran the
+  `CREATE TABLE` that the stage 4 `loader` runs under the session lock at open. In the order of the
+  plan's own monthly example, `with stream(...), loader(...)`, that command waits for the whole
+  query of the stream: over 20,000,000 rows the first batch came at 0.811 s instead of 0.006 s,
+  and the requirement reported kept on 2026-09-23 held only with the loader opened first. A sketch
+  that stands in for a primitive runs every command the primitive's plan lists, in the order the
+  documented usage opens them, before its timings back a requirement. `plan/POC.md`
+- **A claim that a type round-trips is probed with the type's special values** (2026-09-22,
+  2026-09-23). The stage 3 decision registered min and max of the four types "that transcribe
+  exactly", measured with finite doubles; `NaN` stays out of the maximum in both Delta writers,
+  and `delta_scan` then answers a range filter by the pruning, while infinity becomes `Infinity`,
+  invalid JSON, through `float`. The same `NaN` makes the audit's control total fail with
+  `ConversionException`, a check nobody had fed a special value. Before calling a type exact or
+  safe, feed it `NaN`, the infinities, null, the empty value and the longest value.
+  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
+- **A statement path is probed with every clause form the plan writes** (2026-09-23). The engines'
+  compile path was probed on 2026-09-22 with `=` and `LIKE`, and an `IN` list compiles there as
+  `__[POSTCOMPILE_...]`, which DuckDB refuses; the `delta_scan` pruning was read on `=` and
+  `BETWEEN`, and the stage 4 `ingest` wrote `IN`, which opens every file. Grep the stage files for
+  each clause form that reaches a path (`IN`, `NOT IN`, `OR`, expanding parameters, table
+  functions) and probe each one, reading pruning through the files the engine opens.
+  `plan/POC.md`, `plan/PLAN-STAGE-4.md`

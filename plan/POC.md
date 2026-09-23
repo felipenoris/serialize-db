@@ -1729,3 +1729,181 @@ pool é da instância e que a sessão a mais ganha nas consultas pequenas, nos o
 paralelizam e na espera do S3; o `threads` da leitura do S3 entrou em
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), à espera de uma medição no ambiente alvo. As medições estão
 em [`duckdb.md`](duckdb.md).
+
+## O que as sondas da revisão das etapas 3 e 4 mostraram
+
+Em 2026-09-23, no macOS arm64 (M3 Pro com 11 núcleos e 18 GiB; Python 3.13.15, DuckDB 1.5.5,
+PyArrow 25.0.1, deltalake 1.6.4, SQLAlchemy 2.0.54, duckdb-engine 0.17.0), sondas no scratchpad
+leram o que as etapas [3](PLAN-STAGE-3.md) e [4](PLAN-STAGE-4.md) supõem antes da implementação. As
+asserções estão nas suítes de estudo citadas em cada item.
+
+- **O `IN` de lista não roda pelo caminho de compilação dos motores.** Compilado sem
+  `literal_binds`, `coluna.in_([...])` sai `IN (__[POSTCOMPILE_mes_1])`, e o DuckDB recusa o texto
+  com `Parameter argument/count mismatch`, e o `NOT IN` também; a auditoria roda o texto de
+  `render`, com `literal_binds`, e não passa por esse caminho. Com os parâmetros do
+  cliente dados por `statement.params(**params)` e `render_postcompile=True`, a lista sai expandida,
+  o `bindparam(..., expanding=True)` do cliente também, e `construct_params()` devolve todos os
+  valores. Um nome que o statement não tem é ignorado em silêncio, e o valor que falta é
+  `InvalidRequestError` na compilação. No estilo `qmark`, o do driver do DuckDB, o texto roda com a
+  lista de `positiontup`, sem a reescrita de `:nome` em `$nome`, que só lê nomes
+  `[a-z_][a-z0-9_]*`; um `?` dentro de um literal de `text()` passa intacto
+  (`test_sqlalchemy.py::test_in_list_needs_render_postcompile_on_the_engine_path`).
+- **Uma `GenericFunction` se registra em `sa.func` para o processo inteiro.** Depois da classe
+  `json_valid(GenericFunction)` com `@compiles` para o Redshift, como no rascunho da auditoria, o
+  `sa.func.json_valid(meta)` do próprio cliente passou de `json_valid(meta)` a
+  `is_valid_json(meta)` no Redshift. Uma subclasse de `FunctionElement` com `name` e `@compiles`
+  por dialeto, como o `month_of` de [`sqlalchemy.md`](sqlalchemy.md), compila igual e deixa o
+  `sa.func` do cliente intacto
+  (`test_sqlalchemy.py::test_generic_function_subclass_registers_in_sa_func_for_the_whole_process`).
+- **`published` compila para `delta_scan`.** `sa.func.delta_scan(sa.literal(uri),
+  sa.literal_column("version := 0")).table_valued(*colunas)` rodou num `JOIN` com `NOT IN`, com o
+  caminho como parâmetro ou como literal; `delta_scan($p, version := $v)` também roda.
+- **A poda do `delta_scan` depende da forma do predicado.** Pelo log `FileSystem` do DuckDB, numa
+  tabela de 12 partições com um arquivo cada: `=` e `IN` de um valor abriram uma pasta; `IN` de dois
+  ou três valores e `OR` de dois `=` abriram as 12; `BETWEEN` e `>=` abriram as do intervalo, e
+  `BETWEEN` somado ao `IN` também. Uma view sobre `delta_scan` com o `WHERE ... IN` leu as 12. O
+  `EXPLAIN ANALYZE` de `BETWEEN` somado ao `IN` falha na extensão `delta` com `InternalException:
+  ... total_files inconsistent!`, e a consulta e o `CREATE TABLE AS` com o mesmo predicado rodam,
+  com a conexão usável depois
+  (`test_deltalake.py::test_delta_scan_prunes_by_equality_and_range_not_by_in_list`).
+- **`FileSystem.from_uri` vai à rede num `s3://` sem região.** Num ambiente despido (sem `AWS_*`,
+  proxies num porto fechado, `HOME` vazio), `from_uri("s3://<bucket>/raiz")` respondeu em 0,49 s com
+  `OSError: Bucket ... not found`, a consulta da região do bucket; com `?region=us-east-1` na URI,
+  ou com `S3FileSystem(region=...)`, a construção levou 0,00 s, sem rede.
+- **O predicado do `overwrite` aceita o nome entre aspas duplas**: `"data_str" = '2026-08-31'` e
+  `"to" = 'a'`, a coluna de nome reservado.
+- **Dois `create_write_transaction(overwrite)` da mesma partição conflitam.** A partir da mesma
+  versão, o segundo recebeu `CommitFailedError: ... a concurrent transaction deleted data this
+  operation read`, e a partição ficou com o arquivo do primeiro. O método devolve `None`, e o objeto
+  que o chamou continua na versão lida
+  (`test_deltalake.py::test_two_registrations_of_the_same_partition_conflict`).
+- **O `RETURN_STATS` deixa o `NaN` fora do máximo, e o registro perde a linha.** Um `DOUBLE` com
+  `NaN` sai com `has_nan: true` e o maior número como máximo. Registrado por `stat_converter`, o
+  máximo 2,0 fez o `delta_scan ... WHERE valor > 3` devolver 0 linhas, contra 1 na tabela do
+  sandbox, porque o DuckDB ordena o `NaN` acima de todo número. O infinito sai `inf`, e `float` o
+  leva a `Infinity` no JSON do log, que não é JSON válido; o delta-rs o leu como estatística
+  ausente. O texto longo sai truncado em 256 caracteres, com o máximo de 255 caracteres e o último
+  incrementado, acima do valor real, e o texto multibyte longo sai sem mínimo e máximo: a poda por
+  texto não perde linha (`test_duckdb.py::test_return_stats_leave_nan_out_and_bound_long_text`,
+  `test_deltalake.py::test_nan_statistics_hide_rows_from_delta_scan`).
+- **O `write_deltalake` também grava o máximo sem o `NaN`**, e o `delta_scan` responde conforme a
+  poda: `valor > 3` deu 0 linhas, com o arquivo podado pelo máximo 2,0, e `valor >= 2` deu 2, com o
+  `NaN` dentro. Numa tabela Arrow registrada no DuckDB, o filtro empurrado ao PyArrow dá `NaN > 3`
+  falso, e as duas consultas deram 0 e 1. No infinito, o delta-rs grava `null` no extremo, e a poda
+  acha a linha. A soma de controle da auditoria, `sum(CAST(valor AS DECIMAL(38, 6)))`, falha com
+  `ConversionException: Could not cast value nan to DECIMAL(38,6)`, e com `inf` do mesmo modo,
+  também sob `FILTER (WHERE isfinite(valor))`, porque o `CAST` é avaliado antes do filtro; um `CASE
+  WHEN isfinite(valor)` soma só os finitos
+  (`test_duckdb.py::test_control_total_fails_on_nan_and_infinity`).
+- **`interrupt()` para de outra thread uma consulta presa num operador bloqueante.** Uma ordenação
+  de 60.000.000 de linhas, cujo primeiro lote sai em 1,63 s, parou 2 ms depois do pedido com
+  `InterruptException` (1,4 ms na suíte, com 20.000.000); a conexão continuou usável, um
+  `interrupt()` ocioso não afetou o comando seguinte, e o da conexão não parou a consulta de um
+  cursor dela (`test_duckdb.py::test_interrupt_stops_a_blocking_query_from_another_thread`).
+- **`cursor()` não espera a consulta em curso na conexão**: voltou em 0,04 ms com uma ordenação
+  rodando noutra thread, e o cursor consultou o mesmo banco
+  (`test_duckdb.py::test_cursor_opens_while_the_connection_runs_a_query`).
+
+**Consequência**: [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md) constrói o `S3FileSystem` com a região do
+ambiente, converte o `CommitFailedError` de `register_files` e de `rewrite` em `ExecutionConflict`
+e deixa fora do registro o extremo infinito; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) e
+[`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) compilam o statement com `render_postcompile=True` sobre
+`statement.params(**params)` e conferem os nomes; a `ingest` com partições soma o intervalo delas ao
+`IN`; `new_session()` cria o cursor sem o lock da sessão; a soma de controle da auditoria corre só
+sobre os finitos; as funções da auditoria são subclasses de `FunctionElement`; e
+[`PLAN.md`](PLAN.md) registra a poda por forma de predicado. Esperam o usuário, em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md): o `Double` não finito no contrato da
+[etapa 1](PLAN-STAGE-1.md), o estilo `qmark` e o `interrupt()` no `close` do stream, entre as
+propostas da [etapa 4](PLAN-STAGE-4.md).
+
+## O que as estratégias de stream, loader e ingestão mostraram
+
+Em 2026-09-23, no mesmo macOS, uma sonda no scratchpad comparou desenhos de `stream` e de `loader`
+sobre a sessão única e a ingestão de várias tabelas, cada caso num processo, melhor de três
+execuções, sobre bancos em arquivo, com os mesmos dados e lotes de 100.000 linhas; `threads = 2`,
+o ambiente alvo, salvo onde a tabela diz outro valor. O trabalho do cliente por lote é um `sleep`,
+que solta o GIL, um laço Python puro calibrado, ou a conversão para pandas com uma coluna calculada.
+
+**`stream`.** 20.000.000 de linhas em três colunas; a consulta sem operador bloqueante devolve
+13.333.333 linhas em 134 lotes. O total em segundos, com o primeiro lote entre 0,004 s e 0,009 s em
+todos os desenhos; o arquivo com LZ4 teve 178 MB, e sem compressão, 486 MB.
+
+| Desenho | Sem trabalho | 5 ms de `sleep` | 5 ms de Python puro | pandas |
+| --- | --- | --- | --- | --- |
+| Atual: arquivo IPC com LZ4, lote a lote | 0,598 | 0,926 | 0,996 | 0,629 |
+| Arquivo IPC sem compressão | 0,436 | 0,956 | 0,862 | 0,466 |
+| Fila em memória sem limite, sem arquivo | 0,394 | 0,817, com 527 MB de pico | 0,694 | 0,404 |
+| Híbrido: memória até 256 MiB, arquivo LZ4 depois | 0,407 | 0,825, com 515 MB de pico | 0,709 | 0,418 |
+| Híbrido: memória até 64 MiB | 0,413 | 0,902, com 126 MB em arquivo | 0,673 | 0,420 |
+| Cursor próprio, sem a sessão única | 0,399 | 0,839 | 0,673 | 0,408 |
+| Sequencial, a consulta e o trabalho na mesma thread | 0,399 | 1,319 | 1,068 | 0,555 |
+
+- **A compressão LZ4 no caminho da consulta é o custo do desenho atual**: 0,2 s em 13.333.333
+  linhas, e o lock da sessão fica tomado por esse tempo a mais. Com trabalho em pandas, o desenho
+  atual (0,629 s) ficou atrás do sequencial (0,555 s).
+- **Com Python puro no cliente, a thread auxiliar espera o intervalo de troca do GIL** a cada
+  retomada: 0,996 s contra 0,673 s do cursor e 1,068 s do sequencial. Com
+  `sys.setswitchinterval(0.0005)`, o desenho atual fez 0,788 s, o arquivo sem compressão 0,759 s, a
+  memória 0,605 s, o cursor 0,679 s e o híbrido de 256 MiB 0,717 s. Com 20 ms de Python puro por
+  lote, 2,723 s, 2,594 s no híbrido e 2,550 s no cursor, perto dos 2,68 s de trabalho.
+- **O híbrido fica no tempo do cursor** enquanto o cliente acompanha a consulta, com a memória
+  limitada pelo orçamento, e grava no arquivo o que passa dele quando o cliente se atrasa. A fila
+  sem limite chegou a 527 MB de pico com o `sleep` de 5 ms, contra 267 MB sem trabalho.
+- Com `threads = 8`, sem trabalho e com 5 ms de `sleep`: o atual 0,520 s e 0,935 s, a memória
+  0,258 s e 0,825 s, o cursor 0,255 s e 0,836 s.
+
+**`loader`.** 6.000.000 de linhas em quatro colunas e 60 lotes prontos em memória, do primeiro
+`write` ao fim do `close`; entre parênteses, o tempo do `close`. O arquivo com LZ4 teve 79 MB, sem
+compressão 263 MB, em Parquet sem compressão 158 MB e com snappy 77 MB.
+
+| Desenho | `threads = 2` | 5 ms de `sleep` por lote | `threads = 8` |
+| --- | --- | --- | --- |
+| Atual: arquivo IPC com LZ4 e um `INSERT` no `close` | 0,753 (0,660) | 1,052 (0,677) | 0,439 (0,346) |
+| Arquivo IPC sem compressão | 0,697 (0,660) | 1,065 (0,688) | 0,376 (0,339) |
+| Parquet sem compressão e `read_parquet` | 1,180 (0,696) | 1,189 | 0,826 |
+| Parquet com snappy | 1,293 (0,721) | 1,290 | 0,923 |
+| Cursor próprio, `INSERT` por lote numa tabela de nome oculto e `RENAME` no `close` | 1,223 | 1,230 | 0,998 |
+| Cursor próprio, `INSERT` por lote numa transação | 1,327 (0,078) | 1,331 | 1,347 |
+
+- **O desenho atual é o mais rápido dos medidos**: o `INSERT` único sobre o leitor do arquivo escala
+  com `threads` (0,660 s com 2, 0,346 s com 8), e um `INSERT` por lote custa cerca de 20 ms. A
+  compressão do arquivo corre na thread auxiliar, fora do caminho do cliente, e custou 0,05 s.
+
+**O pipeline de três estágios**, `stream`, pandas e `loader`, com o `loader` criando a tabela como a
+etapa 4 prevê. Primeiro lote e total, em segundos:
+
+| Combinação | 6.000.000 de linhas | 20.000.000 | 20.000.000 com 5 ms de `sleep` |
+| --- | --- | --- | --- |
+| Atual, `loader` aberto depois do stream e criando a tabela na abertura | 0,246 e 1,028 | 0,811 e 3,120 | 0,804 e 4,290 |
+| Atual, `loader` aberto antes do stream | 0,006 e 0,924 | 0,006 e 2,762 | 0,006 e 3,424 |
+| Atual, `loader` criando a tabela no `close` | 0,006 e 0,927 | 0,006 e 2,761 | 0,006 e 3,415 |
+| Stream atual e `loader` com `INSERT` por lote em cursor próprio | 0,006 e 1,259 | 0,006 e 4,152 | 0,007 e 4,116 |
+| Cursor próprio e `loader` criando a tabela no `close` | 0,004 e 0,817 | 0,004 e 2,400 | 0,004 e 3,264 |
+
+- **O `CREATE TABLE` que o `loader` roda sob o lock na abertura espera a consulta inteira do
+  stream aberto antes dele**, a ordem do exemplo mensal de [`PLAN.md`](PLAN.md): o primeiro lote
+  chegou em 0,811 s, a consulta toda, em vez de 0,006 s. Criar a tabela no `close`, no mesmo bloco
+  do `INSERT`, desfaz a espera e custa o mesmo que abrir o `loader` primeiro.
+
+**A ingestão de várias tabelas.** Quatro tabelas Delta de 12 partições cada, materializadas por
+`CREATE TABLE AS SELECT * FROM delta_scan(..., version := 0)` num banco em arquivo, em série na
+sessão principal ou numa sessão a mais por tabela, em quatro threads. Segundos e pico de memória:
+
+| Tabelas | `threads = 2`, em série | Sessões a mais | `threads = 11`, em série | Sessões a mais |
+| --- | --- | --- | --- | --- |
+| 4 × 150.000 linhas | 0,155 | 0,043 | 0,140 | 0,112 |
+| 4 × 2.000.000 | 1,079 | 0,443 | 1,258, 336 MB | 0,385, 603 MB |
+| 4 × 8.000.000 | 3,498 | 1,629 | 1,382, 803 MB | 1,037, 917 MB |
+| 12.000.000 e 3 × 300.000 | 1,491 | 1,322 | 1,038 | 0,856 |
+
+- **As sessões a mais ganharam em todos os tamanhos em disco local**, e a memória cresceu com
+  elas. Com `threads = 2` o ganho vem também das threads que chamam cada sessão, que executam a
+  consulta dela ao lado do pool, numa máquina de 11 núcleos; o ambiente alvo tem 2 vCPUs, e ali o
+  ganho de CPU some e fica o da espera do S3, ainda não medida. A mistura parecida com o pipeline
+  mensal, uma tabela grande e três pequenas, ganhou 1,13 e 1,21 vezes.
+
+**Consequência**: o `stream` da sessão única tem o custo medido acima, e o híbrido o devolve ao tempo
+do cursor sem perder o limite de memória; o `loader` fica como está, com a criação da tabela no
+`close` para não esperar o stream; a ingestão paralela fica. As três propostas esperam o usuário em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), e [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) registra a espera
+do `loader`.

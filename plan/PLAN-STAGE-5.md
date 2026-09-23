@@ -175,10 +175,13 @@ class RedshiftEngine:
   um manifesto pode listar arquivos anteriores a uma coluna nova) e um
   `INSERT INTO exec_<id>_<tabela> SELECT *, '<valor>'` por partição (ou `SELECT *` numa tabela sem partição), com `JSON_PARSE` nas colunas `SUPER`.
   `materialize=False` não existe aqui: o Redshift não lê o Delta no lugar.
-- **`stream`** compila a cópia prefixada do statement (`sql.prefixed` com `prefix=exec_<id>_`) pelo
-  dialeto Redshift com `paramstyle="named"` e sem `literal_binds`, `construct_params(params)` com os
-  parâmetros do cliente e o marcador `:nome` como o `redshift_connector` lê com
-  `cursor.paramstyle = "named"`, ou recebe o texto já com o prefixo trocado
+- **`stream`** compila a cópia prefixada do statement (`sql.prefixed` com `prefix=exec_<id>_`), com
+  os valores do cliente dados por `statement.params(**params)` e os nomes conferidos como no motor
+  DuckDB, pelo dialeto Redshift com `paramstyle="named"`, sem `literal_binds` e com
+  `render_postcompile=True`, que expande o `IN` de lista (sem ele o texto sai com
+  `__[POSTCOMPILE_...]`, leitura de 2026-09-23 no DuckDB, [etapa 4](PLAN-STAGE-4.md));
+  `construct_params()` dá os valores e o marcador `:nome` fica como o `redshift_connector` o lê com
+  `cursor.paramstyle = "named"`; ou recebe o texto já com o prefixo trocado
   (`sql.read_sql(..., prefix="exec_<id>_")`) e o passa por `bind(style="redshift")`, e roda na sessão
   do motor, sob o lock, na thread de quem chama: o `execute` materializa o resultado, o lock sai, e a
   thread auxiliar fatia sem a sessão. O `execute` não vai para a thread auxiliar: lá ele esperaria

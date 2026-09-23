@@ -679,7 +679,7 @@ em todo tipo (medido em 2026-09-22, delta-rs 1.6.4, [`POC.md`](POC.md)):
 
 | Tipo | O que o log guarda | Consequência na poda |
 | --- | --- | --- |
-| Inteiro, data, `double`, texto | O valor exato; `-1e+308`, `0.30000000000000004` e um texto de 41 caracteres saíram inteiros, e `NaN` fica fora do mínimo e do máximo | A poda acha a linha |
+| Inteiro, data, `double`, texto | O valor exato; `-1e+308`, `0.30000000000000004` e um texto de 41 caracteres saíram inteiros, `NaN` fica fora do mínimo e do máximo, e o infinito vira `null` | A poda acha a linha, menos a do `NaN` num filtro por intervalo do `delta_scan`: o DuckDB ordena o `NaN` acima de todo número, e `valor > 3` deu 0 linhas com o arquivo podado pelo máximo 2,0, enquanto `valor >= 2` deu 2 (2026-09-23) |
 | `decimal(p, s)` | Um número JSON: `123456789012345.21` virou `123456789012345.2` | `WHERE valor = 123456789012345.21` devolveu **zero linhas** no delta-rs e no `delta_scan`, com a linha dentro do arquivo |
 | `timestamp` | O texto truncado em milissegundos: `2026-08-31 23:59:59.999999` virou `2026-08-31 23:59:59.999` | Os dois leitores acharam a linha mesmo assim |
 
@@ -863,7 +863,11 @@ INSERT INTO cad_operacoes SELECT ...;                                    -- appe
 Comportamentos verificados:
 
 - `delta_scan` empurra filtros de partição e de estatísticas (`Scanning Files: 0/12` para um filtro
-  fora do intervalo de todas as colunas) e projeção; lê vetores de exclusão, tipos primitivos, structs
+  fora do intervalo de todas as colunas) e projeção. Na coluna de partição, `=`, `IN` de um valor,
+  `BETWEEN` e `>=` podam, e `IN` de mais de um valor e `OR` abrem todos os arquivos; o intervalo somado
+  ao `IN` poda pelo intervalo, e o `EXPLAIN ANALYZE` dessa forma falha com `InternalException:
+  ... total_files inconsistent!`, com a consulta rodando (2026-09-23, log `FileSystem` do DuckDB).
+  Lê vetores de exclusão, tipos primitivos, structs
   e `VARIANT`; expõe a coluna de partição como coluna comum; mostra todas as colunas como anuláveis.
 - `delta_scan(uri, version := n)` e `ATTACH ... (VERSION n)` leem versões antigas;
   `delta_scan(...) AT (VERSION => n)` não é aceito. `ATTACH ... (PIN_SNAPSHOT true)` fixa a versão:
@@ -881,7 +885,10 @@ Comportamentos verificados:
   escritor paralelo do DuckDB e devolve `count`, `file_size_bytes` e `column_statistics` (mapa com
   `min`, `max`, `null_count` por coluna, nomes entre aspas e valores em texto), que viram a
   `AddAction` do registro. O arquivo do DuckDB marca todas as colunas como `optional`; a nulidade
-  continua garantida pelo esquema Delta e pela auditoria.
+  continua garantida pelo esquema Delta e pela auditoria. Num `DOUBLE` com `NaN`, o `RETURN_STATS`
+  traz `has_nan: true` e o maior número como máximo, e o infinito sai `inf`; o texto longo sai
+  truncado em 256 caracteres, com o máximo de 255 e o último incrementado, acima do valor real, e o
+  texto multibyte longo sai sem mínimo e máximo (2026-09-23).
 
 ## Manipulação a partir do Redshift
 

@@ -252,3 +252,16 @@ A revisão de código de 2026-09-22 deixou uma proposta à espera do usuário:
   (leitura de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, com a
   instrução de converter no cliente, porque a conversão muda o valor que o cliente vê e nenhuma
   coluna do modelo cliente tem fuso.
+
+A revisão das etapas 3 e 4 de 2026-09-23 deixou outra:
+
+- **O `Double` não finito.** `cast` aceita `NaN` e infinito numa coluna `Double`, e o pandas gera
+  `NaN` numa divisão por zero. Os dois escritores do Delta gravam o máximo sem o `NaN`, e o
+  `delta_scan` do DuckDB, que ordena o `NaN` acima de todo número, responde conforme a poda:
+  `valor > 3` deu 0 linhas com o arquivo podado, e `valor >= 2` deu 2, com o `NaN` dentro; a soma de
+  controle da auditoria, `CAST(valor AS DECIMAL(38, 6))`, falha com `ConversionException` no `NaN`
+  e no infinito (leituras de 2026-09-23, [`POC.md`](POC.md)). Proposto: recusar os dois com
+  `ContractError`, como o nulo numa coluna `NOT NULL`, depois de contar `isnan` e `isinf` nas
+  colunas `Double` das tabelas que a migração adiantada gravou no ambiente alvo, porque a recusa
+  vale também para a carga inicial. A alternativa é aceitá-los e contá-los na auditoria, com a soma
+  de controle só sobre os finitos, e deixar o resultado de um filtro por intervalo depender da poda.

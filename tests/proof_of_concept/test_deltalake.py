@@ -12,7 +12,9 @@ exportação por cópia dos arquivos e a carga inicial de pastas Parquet; e aind
 ``is_deltatable`` e ``drop_column_not_null``, o que ``create_write_transaction`` não confere
 (caminho, estatística, esquema do arquivo), o ``overwrite`` com ``partition_filters`` e a
 compactação que normaliza arquivos de outro escritor, a descrição e os comentários que atravessam o
-``overwrite`` e mudam por ``alter``, e o mínimo e o máximo que o próprio delta-rs grava por tipo. Os
+``overwrite`` e mudam por ``alter``, o mínimo e o máximo que o próprio delta-rs grava por tipo, o
+``NaN`` e o infinito nas estatísticas registradas e nas do delta-rs, dois registros concorrentes da
+mesma partição e a poda do ``delta_scan`` por forma de predicado. Os
 comportamentos estão descritos em ``plan/delta.md``; aqui eles viram asserções.
 """
 
@@ -34,7 +36,7 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
 from deltalake import CommitProperties, DeltaTable, QueryBuilder, Schema, write_deltalake
-from deltalake.exceptions import DeltaError, SchemaMismatchError
+from deltalake.exceptions import CommitFailedError, DeltaError, SchemaMismatchError
 from deltalake.schema import Field, PrimitiveType
 from deltalake.transaction import AddAction
 
@@ -812,3 +814,116 @@ def test_written_stats_lose_the_row_on_decimal(folder: Callable[[str], str]) -> 
     assert dataset.count_rows(filter=pc.field("carimbo") == top_time) == 1
     assert dataset.count_rows(filter=pc.field("taxa") == 1234567890.123456789) == 1
     assert dataset.count_rows(filter=pc.field("descricao") == "z" * 40) == 1
+
+
+def test_nan_statistics_hide_rows_from_delta_scan(folder: Callable[[str], str]) -> None:
+    """O ``NaN`` fica fora do máximo, no ``RETURN_STATS`` e no escritor do delta-rs, e o ``delta_scan`` responde a um filtro por intervalo conforme a poda; o infinito registrado por ``stat_converter`` vira ``Infinity`` no log, e o delta-rs grava ``null`` no lugar dele.
+
+    O ``Double`` transcreve exato os valores finitos; os especiais não. No DuckDB, ``NaN > 3`` é
+    verdadeiro: a tabela do sandbox devolve a linha, e a tabela Delta a perde quando o arquivo é
+    podado pelo máximo sem o ``NaN``. É a decisão do ``Double`` não finito no contrato (etapa 1).
+    """
+    con = connect_duckdb(("delta",))
+    schema = pa.schema([("id", pa.int64()), ("valor", pa.float64())])
+    outcomes = {}
+    for name, values in (("nan", "(1, 1.5), (2, 'nan'::DOUBLE), (3, 2.0)"), ("infinito", "(1, 1.5), (2, 'inf'::DOUBLE), (3, 2.0)")):
+        uri = folder(f"especiais_{name}")
+        DeltaTable.create(uri, schema)
+        con.execute(f"CREATE OR REPLACE TABLE t AS SELECT * FROM (VALUES {values}) v(id, valor)")
+        cursor = con.execute(f"COPY t TO '{uri}/f.parquet' (FORMAT parquet, RETURN_STATS)")
+        columns = [column[0] for column in cursor.description]
+        row = dict(zip(columns, cursor.fetchone()))
+        minimum, maximum, nulls = column_statistics(row, schema)
+        stats = json.dumps({"numRecords": row["count"], "minValues": minimum, "maxValues": maximum, "nullCount": nulls})
+        added = AddAction(path="f.parquet", size=row["file_size_bytes"], partition_values={}, modification_time=int(time.time() * 1000),
+                          data_change=True, stats=stats)
+        DeltaTable(uri).create_write_transaction([added], mode="append", schema=schema)
+        sandbox = con.execute("SELECT count(*) FROM t WHERE valor > 3").fetchone()[0]
+        registered = con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 3").fetchone()[0]
+        maximum = pa.table(DeltaTable(uri).get_add_actions(flatten=True)).column("max.valor").to_pylist()
+        outcomes[name] = (sandbox, registered, maximum, log_actions(uri, 1)[-1]["add"]["stats"])
+
+    # NaN: o sandbox acha a linha, o delta_scan poda o arquivo pelo máximo 2.0.
+    assert outcomes["nan"][:3] == (1, 0, [2.0])
+    # Infinito: o log leva Infinity, que não é JSON, e o delta-rs o lê como nulo; o delta_scan acha a linha.
+    assert '"valor": Infinity' in outcomes["infinito"][3]
+    assert outcomes["infinito"][:3] == (1, 1, [None])
+
+    # O escritor do delta-rs: o mesmo máximo sem o NaN, e a resposta conforme a poda; no infinito, null.
+    uri = folder("especiais_delta_rs")
+    write_deltalake(uri, pa.table({"id": pa.array([1, 2, 3], pa.int64()), "valor": pa.array([1.5, float("nan"), 2.0])}))
+    written = json.loads(log_actions(uri, 0)[-1]["add"]["stats"])
+    assert written["maxValues"]["valor"] == 2.0
+    pruned = con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 3").fetchone()[0]
+    kept = con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor >= 2").fetchone()[0]
+    assert (pruned, kept) == (0, 2)  # o NaN some com o arquivo podado e aparece com ele lido
+    uri = folder("infinito_delta_rs")
+    write_deltalake(uri, pa.table({"id": pa.array([1, 2], pa.int64()), "valor": pa.array([1.5, float("inf")])}))
+    assert json.loads(log_actions(uri, 0)[-1]["add"]["stats"])["maxValues"]["valor"] is None
+    con.close()
+
+
+def test_two_registrations_of_the_same_partition_conflict(folder: Callable[[str], str], two_months: pa.Table) -> None:
+    """Dois ``create_write_transaction(mode="overwrite")`` da mesma partição, a partir da mesma versão: o segundo é ``CommitFailedError``, e a partição fica com o arquivo do primeiro.
+
+    É a guarda que ``publish_partition`` tem no ``write_deltalake``, e que ``register_files`` e
+    ``rewrite`` convertem em ``ExecutionConflict``. A transação não atualiza o objeto que a fez: a
+    versão dele continua a lida.
+    """
+    uri = folder("registro_concorrente")
+    write_deltalake(uri, two_months, mode="append", partition_by=["mes"])
+    first, second = DeltaTable(uri), DeltaTable(uri)
+    month = two_months.filter(pc.equal(two_months.column("mes"), MONTHS[1])).drop_columns(["mes"])
+
+    def action(name: str) -> AddAction:
+        file = Path(uri) / f"mes={MONTHS[1]}" / f"{name}.parquet"
+        pq.write_table(month, file)
+        return AddAction(path=f"mes={MONTHS[1]}/{name}.parquet", size=file.stat().st_size, partition_values={"mes": MONTHS[1]},
+                         modification_time=int(time.time() * 1000), data_change=True, stats=json.dumps({"numRecords": month.num_rows}))
+
+    filters = [("mes", "=", MONTHS[1])]
+    first.create_write_transaction([action("primeiro")], mode="overwrite", schema=first.schema(), partition_by=["mes"], partition_filters=filters)
+    assert first.version() == 0  # o objeto não avança
+    with pytest.raises(CommitFailedError, match="concurrent transaction deleted data this operation read"):
+        second.create_write_transaction([action("segundo")], mode="overwrite", schema=second.schema(), partition_by=["mes"], partition_filters=filters)
+
+    current = DeltaTable(uri)
+    assert current.version() == 1 and current.to_pyarrow_dataset().count_rows() == 1000
+    assert sorted(Path(path).name for path in current.file_uris() if f"mes={MONTHS[1]}" in path) == ["primeiro.parquet"]
+
+
+def test_delta_scan_prunes_by_equality_and_range_not_by_in_list(folder: Callable[[str], str]) -> None:
+    """O ``delta_scan`` abre só os arquivos das partições de um ``=`` ou de um intervalo; um ``IN`` de mais de um valor e um ``OR`` abrem todos.
+
+    O log ``FileSystem`` do DuckDB mostra os arquivos abertos. ``BETWEEN`` somado ao ``IN`` abre o
+    intervalo, e é a forma que serve à ``ingest`` da etapa 4 com partições não contíguas. O
+    ``EXPLAIN ANALYZE`` dessa forma falha na extensão ``delta`` com ``InternalException``, e a
+    consulta roda: a poda dela só se lê pelo log.
+    """
+    uri = folder("poda_por_predicado")
+    values = [f"2026-0{month}" for month in range(1, 7)]
+    data = pa.table({"id": pa.array(range(600), pa.int64()), "mes": pa.array([values[k % 6] for k in range(600)])})
+    write_deltalake(uri, data, partition_by=["mes"])
+    con = connect_duckdb(("delta",))
+    con.execute("CALL enable_logging('FileSystem')")
+
+    def partitions_opened(predicate: str) -> int:
+        con.execute("CALL truncate_duckdb_logs()")
+        con.execute(f"SELECT count(*) FROM delta_scan('{uri}', version := 0) WHERE {predicate}").fetchone()
+        folders = set()
+        for (message,) in con.execute("SELECT message FROM duckdb_logs WHERE type = 'FileSystem'").fetchall():
+            if '"op":"OPEN"' in message and ".parquet" in message:
+                folders.add(re.search(r"mes=[0-9-]+", message).group(0))
+        return len(folders)
+
+    assert partitions_opened(f"mes = '{values[2]}'") == 1
+    assert partitions_opened(f"mes IN ('{values[2]}')") == 1
+    assert partitions_opened(f"mes IN ('{values[2]}', '{values[4]}')") == 6
+    assert partitions_opened(f"mes = '{values[2]}' OR mes = '{values[4]}'") == 6
+    assert partitions_opened(f"mes BETWEEN '{values[2]}' AND '{values[4]}'") == 3
+    in_range = f"mes BETWEEN '{values[2]}' AND '{values[4]}' AND mes IN ('{values[2]}', '{values[4]}')"
+    assert partitions_opened(in_range) == 3
+    assert con.execute(f"SELECT count(*) FROM delta_scan('{uri}', version := 0) WHERE {in_range}").fetchone()[0] == 200
+    with pytest.raises(duckdb.InternalException, match="total_files inconsistent"):
+        con.execute(f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}', version := 0) WHERE {in_range}")
+    con.close()

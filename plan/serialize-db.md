@@ -333,7 +333,9 @@ e os exemplos do Redshift em `test_redshift.py`.
    `close`: a de `stream` roda a consulta e grava cada lote num arquivo intermediário enquanto o
    cliente lê os lotes já gravados, e a de `loader` grava os lotes num arquivo fora da sessão. O
    cliente trabalha no lote atual enquanto a consulta produz o seguinte ou a biblioteca grava o
-   anterior.
+   anterior. A exceção medida em 2026-09-23 é o `loader` aberto depois de um `stream`: a abertura
+   cria a tabela sob o lock e espera a consulta inteira do stream, e a proposta de criá-la no
+   `close` espera o usuário ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
 ### Leituras em paralelo
 
@@ -350,7 +352,10 @@ e os exemplos do Redshift em `test_redshift.py`.
   Várias threads chamam `run.sandbox.query`, `execute` e `stream` ao mesmo tempo e esperam a vez na
   sessão, e a leitura dos lotes de cada `stream` corre fora dela. A ingestão de várias tabelas corre
   em paralelo, uma sessão a mais por tabela: em disco local, quatro tabelas de 150.000 linhas
-  entraram em 0,017 s assim e em 0,066 s em série (`test_parallel.py`, 2026-09-23). O cliente abre
+  entraram em 0,017 s assim e em 0,066 s em série (`test_parallel.py`), e quatro de 8.000.000 de
+  linhas em 1,629 s contra 3,498 s com `threads = 2` e em 1,037 s contra 1,382 s com 11, num macOS
+  de 11 núcleos em que as threads que chamam as sessões somam núcleos ao pool; com 2 vCPUs, o ganho
+  fica na espera do S3, ainda não medida (2026-09-23, [`POC.md`](POC.md)). O cliente abre
   as suas sessões a mais para as consultas independentes, que não veem as tabelas temporárias da
   sessão principal.
 

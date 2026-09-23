@@ -82,6 +82,14 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   with and without a predicate; `alter.set_table_description` and `alter.set_column_metadata` change
   them in a commit of `commitInfo` and `metaData` alone.
   `test_deltalake.py::test_description_and_comments_survive_overwrite`, `plan/POC.md`
+- Two `create_write_transaction(mode="overwrite", partition_filters=...)` of the same partition from
+  the same read version: the second raises `CommitFailedError` (`a concurrent transaction deleted
+  data this operation read`); the method returns `None` and leaves the calling object at the read
+  version. Both writers keep `NaN` out of a `double` maximum, so `delta_scan` answers a range filter
+  by the pruning (`valor > 3` 0 rows with the file pruned, `valor >= 2` 2 rows with `NaN` inside,
+  because DuckDB orders `NaN` above every number); delta-rs writes `null` for an infinite extreme,
+  and `float("inf")` from `RETURN_STATS` would put `Infinity`, invalid JSON, in the log
+  (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `tests/proof_of_concept/test_deltalake.py`
 
 ## Performance measured
 
@@ -106,6 +114,13 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   (2026-09-21, DuckDB 1.5.5, delta extension `45c4087`). `serialize_db.schema.delta_schema` drops
   the key before `from_arrow`, and the versioned `.delta.json` files carry no ids.
   `plan/POC.md`, `plan/PLAN-STAGE-1.md`
+- `delta_scan` prunes partition files by `=`, by a one-value `IN`, by `BETWEEN` and by `>=`, and
+  opens every file for an `IN` of two or more values and for an `OR` of equalities; a range added
+  beside the `IN` prunes to the range, and `EXPLAIN ANALYZE` of that form fails with
+  `InternalException: ... total_files inconsistent!` while the query and a `CREATE TABLE AS` run.
+  Read pruning through `CALL enable_logging('FileSystem')` and the `OPEN` messages of
+  `duckdb_logs` (2026-09-23, DuckDB 1.5.5). `plan/delta.md`, `plan/PLAN-STAGE-4.md`,
+  `tests/proof_of_concept/test_deltalake.py`
 
 ## The library's use of Delta
 

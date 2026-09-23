@@ -199,7 +199,10 @@ em `test_duckdb.py`, `test_pyarrow.py` e `test_parallel.py`. O que elas fixaram:
   recusado pelo `cast`, um erro do `INSERT` ou um loader abandonado não inserem nada. O comando único
   é o caminho rápido: um `INSERT` por lote custa cerca de 3,5 ms, e num banco em arquivo o pipeline
   de três estágios sobre 3.000.000 de linhas levou 0,400 s na sessão única, contra 0,565 s com um
-  cursor por stream e por loader e um `INSERT` por lote numa transação.
+  cursor por stream e por loader e um `INSERT` por lote numa transação. A abertura cria a tabela sob
+  o lock, e depois de um `stream` espera a consulta dele inteira: em 20.000.000 de linhas, o
+  primeiro lote chegou em 0,811 s, contra 0,006 s com a tabela criada no `close` (2026-09-23; a
+  proposta espera o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **O `INSERT` único sobre um leitor alimentado por gerador Python não é o caminho**, embora seja um
   comando só e atômico: o `arrow_scan` do DuckDB puxa o fluxo por uma thread de leitura antecipada do
   Arrow, que chama o gerador em outra thread além do que o comando consumiu e depois da falha, e essa
@@ -356,7 +359,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   larga carrega o defeito também por `publish_partition`; o modelo cliente não tem nenhuma
   (2026-09-22, `POC.md`, `delta.md`).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
-  consultada mais de uma vez é materializada no DuckDB (`delta.md`).
+  consultada mais de uma vez é materializada no DuckDB (`delta.md`). O `delta_scan` poda partição
+  por `=`, por `IN` de um valor e por intervalo, e abre todos os arquivos com um `IN` de mais de um
+  valor ou um `OR` (2026-09-23, `POC.md`): um filtro de várias partições leva o intervalo delas ao
+  lado do `IN`.
 - Um programa que encerra logo depois de ler uma tabela Delta lê por `to_pyarrow_dataset()`, nunca
   por `to_pyarrow_table()`: o segundo deixa uma tarefa do Acero em voo, e o destrutor do pool de
   threads do Arrow espera por ela para sempre. Meio segundo de qualquer trabalho depois da leitura
@@ -428,13 +434,18 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   conexão com credencial própria e o `USE` no Redshift), fechada no fim do bloco. Ela vê o que a
   sessão principal confirmou e não as tabelas temporárias dela, e a ordem entre as duas é a dos
   commits: o cliente que lê numa sessão o que grava na outra espera o `close` do `loader` ou o fim
-  do comando. `run.ingest` de mais de uma tabela abre uma sessão a mais por tabela; quatro tabelas de 150.000 linhas
-  entraram em 0,017 s assim e em 0,066 s em série na sessão principal (`test_parallel.py`,
-  2026-09-23). No DuckDB, o pool `threads` é da instância e vale para todas as sessões, e a thread
-  que chama cada sessão também executa a consulta dela: com `threads` igual aos núcleos, o padrão,
-  uma varredura grande já ocupa a máquina, e a sessão a mais ganha nas consultas pequenas, nos
-  operadores que não se paralelizam e na espera do S3, onde a documentação do DuckDB recomenda
-  `threads` de 2 a 5 vezes os núcleos (2026-09-23, [`duckdb.md`](duckdb.md)). No Redshift, cada
+  do comando. O cursor da sessão a mais nasce sem o lock da principal, porque `cursor()` não
+  espera o comando em curso nela. `run.ingest` de mais de uma tabela abre uma sessão a mais por
+  tabela; quatro tabelas de 150.000 linhas entraram em 0,017 s assim e em 0,066 s em série na sessão
+  principal (`test_parallel.py`), e quatro de 8.000.000 de linhas, em 1,629 s contra 3,498 s com
+  `threads = 2` e em 1,037 s contra 1,382 s com 11, e o pico de memória subiu de 373 MB para
+  514 MB e de 803 MB para 917 MB (2026-09-23, `POC.md`). No DuckDB, o pool `threads` é da
+  instância e vale para todas as sessões, e a thread que chama cada sessão também executa a consulta
+  dela: com `threads` igual aos núcleos, o padrão, uma varredura grande em memória já ocupa a
+  máquina, a ingestão por `CREATE TABLE AS` sobre `delta_scan` não ocupa, e a sessão a mais ganha
+  nela, nas consultas pequenas, nos operadores que não se paralelizam e na espera do S3, onde a
+  documentação do DuckDB recomenda `threads` de 2 a 5 vezes os núcleos (2026-09-23,
+  [`duckdb.md`](duckdb.md)). No Redshift, cada
   sessão a mais pede a sua credencial temporária; dois `COPY` em conexões abertas dentro da tarefa
   levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
 - As chaves inteiras vêm de `run.next_ids(table, n)`: faixas contíguas sob lock, a partir de

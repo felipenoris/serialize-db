@@ -433,6 +433,18 @@ A new lesson adds its story there and its rule here, in the same commit.
   overlapped the client, and the query ran whole before the first batch; time the overlap the
   requirement names, with the client work it names (first batch, total with work per batch), and
   report a weaker form as weaker (2026-09-23).
+- **A primitive is measured in the documented usage, with every command its implementation runs**:
+  the reference `Loader` wrote into tables the tests had created, and the stage 4 `loader`'s
+  `CREATE TABLE` at open waits for the whole query of a `stream` opened before it (first batch
+  0.811 s against 0.006 s); a sketch backs a requirement only after running every command the
+  primitive's plan lists, in the documented order (2026-09-23).
+- **A claim that a type round-trips is probed with the type's special values**: `NaN`, the
+  infinities, null, the empty and the longest value; the "exact" `Double` statistics lose the `NaN`
+  row in `delta_scan`, and the audit's control total fails on it (2026-09-23).
+- **A statement path is probed with every clause form the plan writes**: the compile path met
+  `IN` lists only after the plan was written (`__[POSTCOMPILE_...]`), and `delta_scan` prunes by
+  `=` and ranges but opens every file for a multi-value `IN`; read pruning through the files the
+  engine opens (2026-09-23).
 
 ## Naming conventions
 
@@ -478,7 +490,12 @@ awaits the user or a run), `plan/PLAN.md` and the stage file before planning a s
 measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/decisions.md`.
 
 - Stages 0, 1 and 2 are closed; the package has `errors`, `schema`, `sql`, `_files` and `cli`.
-  Stages 3 to 9 have no code, and stages 3 and 4 have no decision awaiting the user.
+  Stages 3 to 9 have no code. The review of stages 3 and 4 of 2026-09-23 corrected both stage files
+  (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as
+  `FunctionElement`) and left proposals awaiting the user in `plan/OPEN_QUESTIONS.md`: refusing the
+  non-finite `Double` in the contract (stage 1, which decides the `NaN` statistics of stage 3), and
+  six for stage 4, among them the `loader` creating its table at `close`, the hybrid `stream` and
+  `interrupt()` in `close`.
 - The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
   ran successfully there on the copy of the production base, and its reports, not yet available,
   carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the
