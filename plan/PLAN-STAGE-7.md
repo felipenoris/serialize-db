@@ -91,9 +91,15 @@ da `sort_key` do modelo, salvo `--no-sort`; a retomada pelas partições já no 
 por partição, contagem e somas das colunas `Double` e `Numeric` como `DECIMAL(38, 6)`, a origem
 por `read_parquet` com `hive_partitioning` e o Delta por `delta_scan`, mais as conversões de tipo
 lidas do rodapé do primeiro arquivo e as entradas fora do padrão; cada partição imprime linhas,
-tempo e o RSS máximo do processo, e `--report` grava o JSON da execução. O script segue a regra do `Double` não finito da
-[etapa 3](PLAN-STAGE-3.md), e o relatório soma só os valores finitos e compara os não finitos
-contados nos dois lados. A versão que rodou no ambiente alvo registrava o mínimo e o máximo de
+tempo e o pico de memória do processo, e `--report` grava o JSON da execução, com a máquina, as
+versões e as configurações do DuckDB. Antes da carga de cada tabela particionada, o script mede
+cada partição pedida, esteja ela no log ou não, nas quatro variantes de gravação (`register` e
+`rewrite`, com e sem a ordem da `sort_key`): cada variante roda num processo novo e grava numa
+tabela descartável sob `<raiz>/_medicao_<tabela>/`, apagada logo depois, e o relatório leva as
+linhas, o tempo, a memória do processo depois das importações e o pico dele (`VmHWM` no Linux),
+os arquivos e os bytes, ou o erro da variante que falhou; `--no-measure` desliga a medição. O
+script segue a regra do `Double` não finito da [etapa 3](PLAN-STAGE-3.md), e o relatório soma só
+os valores finitos e compara os não finitos contados nos dois lados. A versão que rodou no ambiente alvo registrava o mínimo e o máximo de
 toda coluna `Double`, e o relatório dela falharia com `ConversionException` numa coluna com `NaN`
 ou infinito. A tabela é criada por
 `DeltaTable.create` com `delta_schema`, o nome, o comentário e as retenções da etapa 3
@@ -102,10 +108,11 @@ coluna como nula por causa do `parquet.field.id` que o esquema Delta herdava do 
 na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
 
 - O script rodou sobre `tests/source_db_projetado.py` em pasta local, o material do teste desta
-  etapa: `tests/test_migrate_parquet_to_delta.py` (16 casos, marcador `local`) cobre a
+  etapa: `tests/test_migrate_parquet_to_delta.py` (23 casos, marcador `local`) cobre a
   descoberta, a consulta, a carga uma vez só com a retomada e o filtro, os dois modos com o
   mesmo relatório, a ordem da `sort_key`, as três recusas sem commit nos dois modos, o relatório
-  que acusa uma linha apagada e a linha de comando sobre a base inteira, duas vezes.
+  que acusa uma linha apagada, a linha de comando sobre a base inteira, duas vezes, e a medição
+  das variantes, também com a partição já no log.
 - O usuário copia a base de produção para um prefixo do bucket do projeto separado da raiz das
   tabelas Delta (`aws s3 sync`, a mesma estrutura de pastas): a carga só lê, e a cópia congela o
   snapshot lido em 2026-09-21, enquanto a base de produção muda a cada carga mensal (a última em
@@ -113,10 +120,11 @@ na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
 - Duas medições: o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo, que a
   primeira partição de `cad_contratos` em `--mode register` faz (a alternativa é gravar em disco,
   29,8 GiB livres, e subir pelo `boto3`), e a memória e o tempo de uma partição de
-  `cad_lancamentos` (35 milhões de linhas, cerca de 700 MB de Parquet) sob o `memory_limit` de
-  6,1 GiB, a medição de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que decide o padrão de
-  `export_mode`: o script com `--tables cad_lancamentos --partitions <valor>`, uma vez em cada
-  modo e uma com `--no-sort`, imprime as linhas, o tempo e o RSS máximo de cada partição.
+  `cad_lancamentos` (35 milhões de linhas, cerca de 700 MB de Parquet) na instância do ambiente
+  alvo, a medição de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que decide o padrão de
+  `export_mode` e a ordem da carga: a medição das variantes que o script faz por padrão, na
+  execução dos comandos de todas as tabelas com os mesmos parâmetros (decisão do usuário de
+  2026-09-23).
 
 Os tipos do modelo cliente ficam fechados antes da execução: mudá-los depois é reescrever o
 Delta. A `sort_key` de cada tabela particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),

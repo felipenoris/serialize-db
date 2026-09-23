@@ -60,8 +60,9 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
 
 ## The early migration in the target
 
-- `scripts/migrate_parquet_to_delta.py` ran in the target on the copy of the production base, one
-  process and one `--report` JSON per table, in a version from d2c545b (2026-09-21) to 8de3c8b
+- `scripts/migrate_parquet_to_delta.py` ran in the target over the production base itself, read
+  only (the `--source` of `SUITE.md` is `databases/prd/db_projetado`, not a copy), one process and
+  one `--report` JSON per table, in a version from d2c545b (2026-09-21) to 8de3c8b
   (2026-09-22), before the issue #59 rule of e2ed614: the user reported the success in the session
   of cea8a51 (2026-09-22) and handed the reports over on 2026-09-23. The JSON records neither the
   mode, the sort, the roots nor the machine; the script prints the DuckDB `threads` and
@@ -88,10 +89,13 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   `memory_limit` is 80% of its RAM: the peaks do not say whether a partition fits in 7.6 GiB, and
   only the first partition of each process is an isolated peak. `decisions.md`
 - The `export_mode` default and the load's sort still need `cad_lancamentos` in `rewrite` and with
-  `--no-sort`, run with the latest script: `--tables cad_lancamentos --partitions 2026-03-31`, the
-  largest partition, once per case, each in its own process (the RSS is the process maximum) and
-  its own `--root` (the script resumes from the log and skips a loaded partition), on one instance,
-  with the printed output kept. Nothing else needs a rerun: since d2c545b the Delta schema changed
+  `--no-sort`: the user declined separate runs, and the script now measures, before each
+  partitioned table's load, every requested partition in the four variants (`register` and
+  `rewrite`, with and without the `sort_key` order), each in a new process with its own peak and a
+  scratch table under `<root>/_medicao_<table>/`, also when the partition is already in the log
+  (the script resumes from the log and would skip a loaded partition); the report carries the
+  machine. The user reruns the `SUITE.md` commands, every table with the same parameters. Nothing
+  else needs a rerun: since d2c545b the Delta schema changed
   only in the comments of `rel_contrato_operacao` (7261f0a), which `delta.reconcile` applies as
   additive, and the `register` versions before 8de3c8b (2026-09-22) logged min and max only for
   integers and dates, which costs pruning on `Double` and text columns, not correctness.

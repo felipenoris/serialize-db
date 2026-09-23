@@ -576,4 +576,11 @@ findings live in `source-base.md`, and `plan/` is not updated, so `plan/CURRENT_
 `plan/OPEN_QUESTIONS.md` and `plan/POC.md` still describe the reports as unavailable and still list
 the issue #59 item on the migrated tables. The user offered to run the latest script again in the
 target; the assistant's analysis of the same day found that only the `cad_lancamentos` partition in
-`rewrite` and with `--no-sort` needs the rerun. `source-base.md`
+`rewrite` and with `--no-sort` needs the rerun. The user declined the separate runs the assistant
+proposed and asked instead that the script produce the measurement when the `SUITE.md` commands
+run again, every table with the same parameters: the script measures, before each partitioned
+table's load, every requested partition in the four write variants, each in a new process
+(`spawn`) with its own peak (`VmHWM` on Linux) and a scratch table under `<root>/_medicao_<table>/`,
+also when the partition is already in the log, and the report carries the machine; `--no-measure`
+turns it off (the assistant's design, named in the report). `source-base.md`,
+`plan/PLAN-STAGE-7.md`, `plan/OPEN_QUESTIONS.md`

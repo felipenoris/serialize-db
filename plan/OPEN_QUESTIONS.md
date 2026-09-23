@@ -40,13 +40,18 @@ foi medido em [`POC.md`](POC.md).
   (`probelib.endpoint_reachable`), que no macOS no mesmo dia baixou de 10,0 s para 2,0 s a espera por
   um endereço sem rota ([`POC.md`](POC.md)). A próxima execução dos probes no alvo diz o que sobra;
   a permissão sobre a raiz fica provada pela primeira escrita.
-- **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
-  linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
+- **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de linhas
+  por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)); a
-  migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
-  (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)). O relatório da
-  migração com essa medição é o gatilho de revisão de [`PLAN.md`](PLAN.md): ele decide o padrão da
-  flag e se o outro modo sai, em cada motor e na carga inicial.
+  migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. O
+  script mede por padrão, antes da carga de cada tabela particionada, cada partição nas quatro
+  variantes de gravação (`register` e `rewrite`, com e sem a ordem da `sort_key`), cada uma num
+  processo novo, e a próxima execução dos comandos de todas as tabelas no ambiente alvo, com os
+  mesmos parâmetros, traz a medição (decisão do usuário de 2026-09-23). `export_mode="rewrite"` e
+  `"register"` medem os dois caminhos em cada motor e na carga inicial (etapas [4](PLAN-STAGE-4.md),
+  [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)). O relatório da migração com essa medição é o gatilho
+  de revisão de [`PLAN.md`](PLAN.md): ele decide o padrão da flag e se o outro modo sai, em cada
+  motor e na carga inicial, e se a carga ordena pela `sort_key`.
 - **O `threads` do DuckDB na leitura do S3.** O DuckDB lê arquivos remotos com E/S síncrona, uma
   requisição HTTP por thread, e a documentação recomenda `threads` de 2 a 5 vezes os núcleos para
   essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo, 2 no ambiente alvo, e a sessão a

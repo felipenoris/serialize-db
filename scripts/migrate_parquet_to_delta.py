@@ -33,9 +33,16 @@ coluna na mensagem; a execução seguinte recomeça dela. As tabelas da origem f
 (``alembic_version``, ``meta_update_status``) e o ``schema.json`` da raiz ficam de fora e entram
 no relatório. A auditoria de chaves estrangeiras é da etapa 7, não daqui.
 
-Cada partição imprime as linhas, o tempo e o RSS máximo do processo até ali: é a medição de
-``plan/OPEN_QUESTIONS.md`` sobre a partição de ``cad_lancamentos``, feita com ``--tables
-cad_lancamentos --partitions <valor>`` nos dois modos e com ``--no-sort``.
+Cada partição carregada imprime as linhas, o tempo e o pico de memória do processo até ali. Antes
+da carga de cada tabela particionada, ``measure_table`` mede a gravação de cada partição pedida,
+esteja ela no log ou não, nas quatro variantes de ``VARIANTS`` (``register`` e ``rewrite``, com e
+sem a ordem da ``sort_key``): cada variante roda num processo novo, pelo ``spawn``, e grava numa
+tabela descartável sob ``<raiz>/_medicao_<tabela>/``, apagada logo depois; o pico de memória é o do
+próprio processo filho (``VmHWM`` no Linux), ao lado da base depois das importações e da conexão.
+É a medição de ``plan/OPEN_QUESTIONS.md`` que decide o padrão de ``export_mode`` e a ordem da
+carga, e o relatório leva também a máquina, as versões e as configurações do DuckDB
+(``describe_environment``). A variante que falha, até pela falta de memória que mata o processo
+filho, entra no relatório com o erro; ``--no-measure`` desliga a medição.
 
 Origem e raiz aceitam pasta local ou ``s3://bucket/prefixo``: no S3 o DuckDB carrega ``httpfs``
 e ``aws`` da pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz
@@ -63,14 +70,20 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import importlib
+import importlib.metadata
 import json
+import multiprocessing
 import os
+import platform
 import re
 import resource
 import sys
 import time
 import uuid
 from collections.abc import Callable, Collection
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -80,6 +93,7 @@ import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import sqlalchemy as sa
 from deltalake import ColumnProperties, DeltaTable, WriterProperties, write_deltalake
+from deltalake.exceptions import DeltaError
 from deltalake.transaction import AddAction
 
 from serialize_db import schema
@@ -129,15 +143,34 @@ class PartitionLoad:
 
 
 @dataclasses.dataclass(frozen=True)
+class VariantMeasurement:
+    """Uma variante da gravação de uma partição, medida num processo novo: as linhas, o tempo da
+    conferência e da gravação, a memória do processo depois das importações e da conexão e o pico
+    dele, os arquivos e os bytes gravados; ``error`` quando a variante falhou."""
+
+    value: str | None
+    mode: str
+    sort: bool
+    rows: int | None = None
+    seconds: float | None = None
+    base_mb: float | None = None
+    peak_mb: float | None = None
+    files: int | None = None
+    bytes: int | None = None
+    error: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
 class LoadReport:
     """O relatório de uma tabela: as partições conferidas, o que foi gravado agora, as entradas
-    fora do padrão e as conversões de tipo da origem para o contrato."""
+    fora do padrão, as conversões de tipo da origem para o contrato e a medição das variantes."""
 
     table: str
     partitions: tuple[PartitionReport, ...]
     loaded: tuple[PartitionLoad, ...]
     skipped: tuple[str, ...]
     conversions: tuple[str, ...]
+    measurements: tuple[VariantMeasurement, ...] = ()
 
     @property
     def matches(self) -> bool:
@@ -533,10 +566,17 @@ def writer_properties(columns_without_min_max: Collection[str]) -> WriterPropert
 
 
 def peak_rss_mb() -> float:
-    """O RSS máximo do processo até agora, em MB: o Linux o mede em KB e o macOS em bytes."""
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
-    return peak / divisor
+    """O pico de memória residente do próprio processo até agora, em MB.
+
+    No Linux, o ``VmHWM`` de ``/proc/self/status``, em KB: o ``ru_maxrss`` de um processo novo
+    começa no pico do processo pai, e a medição roda cada variante num processo filho. No macOS,
+    o ``ru_maxrss``, em bytes.
+    """
+    if sys.platform == "darwin":
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
+    status = Path("/proc/self/status").read_text()
+    kilobytes = re.search(r"^VmHWM:\s+(\d+)", status, re.MULTILINE).group(1)
+    return int(kilobytes) / 1024
 
 
 def load_partition(
@@ -604,6 +644,132 @@ def initial_load(
         print(line)
         loaded.append(load)
     return loaded, skipped
+
+
+# ---------------------------------------------------------------- a medição das variantes
+
+# As variantes que a medição grava de cada partição: os dois modos, com e sem a ordem da sort_key.
+VARIANTS = (("register", True), ("rewrite", True), ("register", False), ("rewrite", False))
+
+# As falhas de uma variante que entram no relatório sem parar a execução: o processo filho morto
+# (a falta de memória, por exemplo), o erro do DuckDB, do delta-rs e do armazenamento.
+MEASUREMENT_ERRORS = (BrokenProcessPool, duckdb.Error, DeltaError, OSError, MemoryError)
+
+
+def measure_variant(
+    table: sa.Table,
+    source_folder: Location,
+    destination: Location,
+    value: str | None,
+    settings: Settings,
+    uses_s3: bool,
+    region: str | None,
+) -> VariantMeasurement:
+    """Grava a partição numa tabela descartável, no modo e na ordem de ``settings``, e mede o
+    processo; roda num processo novo, e a base é a memória dele depois das importações e da
+    conexão."""
+    con = connect_duckdb(uses_s3, region)
+    base = peak_rss_mb()
+    delta = create_table(destination, table, settings.storage_options)
+    load = load_partition(con, delta, destination, table, value, source_folder, settings)
+    con.close()
+
+    # Os arquivos e os bytes que a variante gravou, pelas ações add do log.
+    written = DeltaTable(destination.uri, storage_options=settings.storage_options or None)
+    actions = pa.table(written.get_add_actions(flatten=True))
+    return VariantMeasurement(
+        value=value,
+        mode=settings.mode,
+        sort=settings.sort,
+        rows=load.rows,
+        seconds=round(load.seconds, 3),
+        base_mb=round(base),
+        peak_mb=round(load.peak_rss_mb),
+        files=actions.num_rows,
+        bytes=sum(actions.column("size_bytes").to_pylist()),
+    )
+
+
+def remove_folder(location: Location) -> None:
+    """Apaga a pasta e o que há nela, quando ela existe."""
+    info = location.filesystem.get_file_info(location.path)
+    if info.type != pafs.FileType.NotFound:
+        location.filesystem.delete_dir(location.path)
+
+
+def print_measurement(measurement: VariantMeasurement) -> None:
+    """A linha de uma variante medida."""
+    order = "ordenada" if measurement.sort else "sem ordem"
+    label = f"  medição {measurement.value} {measurement.mode} {order}"
+    if measurement.error:
+        print(f"{label}: {measurement.error}")
+        return
+    print(
+        f"{label}: {measurement.rows} linhas em {measurement.seconds:.1f} s; pico do processo "
+        f"{measurement.peak_mb:.0f} MB sobre a base de {measurement.base_mb:.0f} MB; "
+        f"{measurement.files} arquivo(s), {measurement.bytes / 2**20:.0f} MB"
+    )
+
+
+def measure_partition(
+    table: sa.Table,
+    source_folder: Location,
+    scratch: Location,
+    value: str | None,
+    settings: Settings,
+    uses_s3: bool,
+    region: str | None,
+) -> list[VariantMeasurement]:
+    """Mede a gravação da partição em cada variante de ``VARIANTS``, cada uma num processo novo e
+    numa tabela sob ``scratch`` apagada logo depois; a variante que falha entra com o erro."""
+    context = multiprocessing.get_context("spawn")
+    measurements = []
+    for mode, sort in VARIANTS:
+        variant = dataclasses.replace(settings, mode=mode, sort=sort)
+        order = "ordenada" if sort else "sem_ordem"
+        destination = scratch.child(f"{value}_{mode}_{order}")
+        try:
+            # Um processo por variante: o pico de memória de cada uma é só dela.
+            with ProcessPoolExecutor(max_workers=1, mp_context=context) as executor:
+                future = executor.submit(
+                    measure_variant,
+                    table, source_folder, destination, value, variant, uses_s3, region,
+                )
+                measurement = future.result()
+        except MEASUREMENT_ERRORS as error:
+            message = f"{type(error).__name__}: {error}"
+            measurement = VariantMeasurement(value, mode, sort, error=message)
+        finally:
+            remove_folder(destination)
+        print_measurement(measurement)
+        measurements.append(measurement)
+    return measurements
+
+
+def measure_table(
+    table: sa.Table,
+    source: Location,
+    root: Location,
+    settings: Settings,
+    uses_s3: bool,
+    region: str | None,
+) -> list[VariantMeasurement]:
+    """Mede cada partição pedida de uma tabela particionada, esteja ela no log ou não, sob a pasta
+    ``_medicao_<tabela>`` da raiz, apagada no fim; uma tabela sem partição não é medida."""
+    options = schema.table_options(table)
+    if options.partition_by is None:
+        return []
+    found, _ = discover_partitions(source.child(table.name), options)
+    scratch = root.child(f"_medicao_{table.name}")
+    measurements = []
+    try:
+        for value in selected_values(found, settings.partitions):
+            measurements += measure_partition(
+                table, found[value], scratch, value, settings, uses_s3, region
+            )
+    finally:
+        remove_folder(scratch)
+    return measurements
 
 
 # ---------------------------------------------------------------- o relatório da carga
@@ -682,11 +848,12 @@ def load_report(
     root: Location,
     loaded: list[PartitionLoad],
     skipped: list[str],
+    measurements: list[VariantMeasurement] | None = None,
 ) -> LoadReport:
     """Contagem e somas por partição na origem e no Delta, as colunas ``Double`` e ``Numeric``
     somadas como ``DECIMAL(38, 6)`` de cada valor, porque a soma em ponto flutuante depende da
     ordem e os valores são os mesmos dos dois lados; as ``Double`` só nos valores finitos, com os
-    não finitos contados à parte."""
+    não finitos contados à parte. ``measurements`` entra no relatório como veio."""
     options = schema.table_options(table)
     sums = [column.name for column in table.columns if isinstance(column.type, sa.Numeric)]
     doubles = double_columns(table)
@@ -717,6 +884,7 @@ def load_report(
         loaded=tuple(loaded),
         skipped=tuple(skipped),
         conversions=conversions(first_partition_folder(folder, options), table),
+        measurements=tuple(measurements or ()),
     )
 
 
@@ -738,9 +906,12 @@ def print_report(report: LoadReport) -> None:
         print(f"  ignorado fora do padrão: {entry}")
 
 
-def write_report(path: str, reports: list[LoadReport], outside: list[str]) -> None:
-    """O relatório da execução em JSON, com as somas como texto."""
+def write_report(
+    path: str, reports: list[LoadReport], outside: list[str], environment: dict[str, object]
+) -> None:
+    """O relatório da execução em JSON, com as somas como texto e o ambiente que a mediu."""
     document = {
+        "environment": environment,
         "tables": [dataclasses.asdict(report) | {"matches": report.matches} for report in reports],
         "outside_model": outside,
     }
@@ -810,14 +981,46 @@ def connect_duckdb(uses_s3: bool, region: str | None) -> duckdb.DuckDBPyConnecti
     return con
 
 
-def print_duckdb_settings(con: duckdb.DuckDBPyConnection) -> None:
-    """A versão do DuckDB e as configurações que a medição da partição lê."""
+def duckdb_settings(con: duckdb.DuckDBPyConnection) -> dict[str, str]:
+    """As configurações do DuckDB que a medição da partição lê."""
     rows = con.execute(
         "SELECT name, value FROM duckdb_settings() "
         "WHERE name IN ('threads', 'memory_limit', 'temp_directory') ORDER BY name"
     ).fetchall()
-    settings = ", ".join(f"{name} {value}" for name, value in rows)
+    return dict(rows)
+
+
+def print_duckdb_settings(con: duckdb.DuckDBPyConnection) -> None:
+    """A versão do DuckDB e as configurações que a medição da partição lê."""
+    settings = ", ".join(f"{name} {value}" for name, value in duckdb_settings(con).items())
     print(f"DuckDB {duckdb.__version__}: {settings}")
+
+
+def describe_environment(
+    con: duckdb.DuckDBPyConnection, arguments: argparse.Namespace
+) -> dict[str, object]:
+    """A máquina, as versões, as configurações do DuckDB e os parâmetros da execução, que o
+    relatório leva para ler a medição: a memória e os núcleos mudam com a instância."""
+    physical_memory = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    packages = ("duckdb", "deltalake", "pyarrow")
+    return {
+        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "cpus": os.cpu_count(),
+        "memory_total_mb": round(physical_memory / 2**20),
+        "packages": {name: importlib.metadata.version(name) for name in packages},
+        "duckdb_settings": duckdb_settings(con),
+        "arguments": {
+            "source": arguments.source,
+            "root": arguments.root,
+            "tables": arguments.tables,
+            "partitions": arguments.partitions,
+            "mode": arguments.mode,
+            "sort": arguments.sort,
+            "measure": arguments.measure,
+        },
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -862,6 +1065,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="ordenar cada partição pela sort_key do modelo (padrão)",
     )
     parser.add_argument(
+        "--measure",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="antes da carga, medir cada partição das tabelas particionadas em register e rewrite, "
+        "com e sem a ordem da sort_key, cada variante num processo novo e numa tabela descartável "
+        "sob a raiz (padrão)",
+    )
+    parser.add_argument(
         "--report", metavar="ARQUIVO.json", help="grava o relatório da execução em JSON"
     )
     return parser
@@ -891,11 +1102,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     con = connect_duckdb(uses_s3, region)
     print_duckdb_settings(con)
+    environment = describe_environment(con, arguments)
+    print(f"{environment['cpus']} CPUs, {environment['memory_total_mb']} MB de memória")
     reports = []
     try:
         for table in tables_in_load_order(metadata, arguments.tables):
+            # A medição vem antes da carga, com o processo principal ainda sem consulta pesada.
+            measurements = []
+            if arguments.measure:
+                measurements = measure_table(table, source, root, settings, uses_s3, region)
             loaded, skipped = initial_load(con, table, source, root, settings)
-            report = load_report(con, table, source, root, loaded, skipped)
+            report = load_report(con, table, source, root, loaded, skipped, measurements)
             print_report(report)
             reports.append(report)
     except ContractError as error:
@@ -907,7 +1124,7 @@ def main(argv: list[str] | None = None) -> int:
     if outside:
         print(f"fora do modelo: {', '.join(outside)}")
     if arguments.report:
-        write_report(arguments.report, reports, outside)
+        write_report(arguments.report, reports, outside, environment)
     matches = all(report.matches for report in reports)
     print(
         f"{len(reports)} tabelas conferidas, "
