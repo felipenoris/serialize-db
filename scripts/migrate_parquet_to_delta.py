@@ -343,10 +343,10 @@ def stat_converter(field_type: pa.DataType) -> Callable[[str], object] | None:
     """A conversão do texto do ``RETURN_STATS`` para o valor que o log guarda, ou ``None`` quando o
     tipo fica sem mínimo e máximo.
 
-    Inteiro, data, ``Double`` e texto transcrevem exato, e são os tipos que a etapa 3 registra
-    (decisão do usuário de 2026-09-22). ``decimal`` e ``timestamp`` ficam de fora: o log guarda o
-    mínimo e o máximo como número JSON, e um máximo abaixo do valor real poda o arquivo que tem a
-    linha, sem erro, nos dois leitores (``plan/POC.md``).
+    Inteiro, data, ``Double`` e texto transcrevem exato, e são os tipos que a etapa 3 registra.
+    ``decimal`` e ``timestamp`` ficam de fora: o log guarda o mínimo e o máximo como número JSON,
+    e um máximo abaixo do valor real poda o arquivo que tem a linha, sem erro, nos dois leitores
+    (``plan/POC.md``).
 
     Exemplo:
 

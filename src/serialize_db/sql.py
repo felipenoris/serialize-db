@@ -79,7 +79,7 @@ SENTINEL = "{prefix}"
 """O sentinela do prefixo do sandbox no texto gerado; os motores o leem, e ``read_sql`` o troca."""
 
 # O compilador de cada motor, com paramstyle "named" para o % dos literais não sair dobrado. São os
-# dialetos de terceiros, e não o postgresql do SQLAlchemy (decisão do usuário de 2026-09-21).
+# dialetos de terceiros, e não o postgresql do SQLAlchemy.
 _DIALECTS = {
     "duckdb": duckdb_engine.Dialect(paramstyle="named"),
     "redshift": RedshiftDialect_redshift_connector(paramstyle="named"),
@@ -318,8 +318,8 @@ def read_sql(directory: str, name: str, dialect: Dialect, prefix: str) -> str:
     """O texto versionado com o sentinela trocado pelo prefixo informado, pronto para ``bind``.
 
     ``prefix`` é obrigatório, porque quem chama sabe o alvo: a string vazia para as tabelas do
-    contrato, ``exec_<id>_`` para o sandbox da execução (decisão do usuário de 2026-09-21).
-    Nenhuma outra primitiva preenche o sentinela.
+    contrato, ``exec_<id>_`` para o sandbox da execução. Nenhuma outra primitiva preenche o
+    sentinela.
 
     Exemplo:
 

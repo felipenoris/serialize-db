@@ -463,8 +463,8 @@ def test_check_models_finds_each_violation() -> None:
 
 
 def test_partition_column_is_any_text_and_the_source_optional() -> None:
-    """Uma coluna de texto de qualquer comprimento particiona sem `partition_source` (decisão de
-    2026-09-22); `partition_source` sem `partition_by` é violação."""
+    """Uma coluna de texto de qualquer comprimento particiona sem `partition_source`;
+    `partition_source` sem `partition_by` é violação."""
     metadata = sa.MetaData()
     regions = sa.Table(
         "por_regiao",

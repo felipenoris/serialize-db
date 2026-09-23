@@ -132,8 +132,7 @@ _SQL_TYPES: dict[str, dict[type, str]] = {
     },
 }
 
-# O teto do VARCHAR no Redshift, em bytes: o limite de uma coluna Text, que não declara n
-# (decisão do usuário de 2026-09-21).
+# O teto do VARCHAR no Redshift, em bytes: o limite de uma coluna Text, que não declara n.
 _TEXT_LIMIT = 65535
 
 
@@ -727,8 +726,8 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     ``UniqueConstraint`` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB
     nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
     ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave primária e
-    sem ``keys``. O comentário de tabela e de coluna é opcional (decisão do usuário de
-    2026-09-21); o da coluna, quando existe, vai para o esquema Arrow e para o Delta.
+    sem ``keys``. O comentário de tabela e de coluna é opcional; o da coluna, quando existe, vai
+    para o esquema Arrow e para o Delta.
 
     Exemplo:
 

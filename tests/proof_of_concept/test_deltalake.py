@@ -538,7 +538,7 @@ def test_export_snapshot_by_copying_files(folder: Callable[[str], str], two_mont
 def test_initial_load_from_parquet_folders(folder: Callable[[str], str], two_months: pa.Table) -> None:
     """A carga inicial: cada pasta ``mes=<valor>/`` de Parquet entra por ``overwrite`` com predicado, com o valor do caminho na coluna de partição, a chave em ``BIGINT`` e o ``double`` mantido, e recomeça de onde parou."""
     # A origem tem id_cliente em int32 e valor em double, como os modelos atuais; o contrato leva a
-    # chave a int64 e mantém o double (decisão de 2026-09-20).
+    # chave a int64 e mantém o double.
     source_table = two_months.set_column(two_months.schema.get_field_index("valor"), "valor", two_months.column("valor").cast(pa.float64()))
     contract = source_table.schema.set(source_table.schema.get_field_index("id_cliente"), pa.field("id_cliente", pa.int64()))
     source = Path(folder("source_parquet"))

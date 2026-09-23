@@ -126,8 +126,8 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
     def test_delta_rs_storage_options_fallback(self, storage: S3Location) -> None:
         """As credenciais temporárias do ``boto3`` em ``storage_options`` abrem a tabela sem a cadeia padrão.
 
-        A biblioteca não as usa: ``storage_options`` nunca leva credencial (decisão do usuário de
-        2026-09-22), e o teste mede a forma para o dia em que um ambiente quebrar a cadeia.
+        A biblioteca não as usa: ``storage_options`` nunca leva credencial, e o teste mede a forma
+        para o dia em que um ambiente quebrar a cadeia.
         """
         # get_frozen_credentials fixa o trio chave, segredo e token no instante da chamada.
         frozen = boto3.Session().get_credentials().get_frozen_credentials()
