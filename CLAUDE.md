@@ -247,7 +247,7 @@ research appends to the matching group.
 | `examples/` | The scripts the user ran in the target, kept as run: `redshift_native.py`, `redshift_data_api.py`, `redshift_copy_unload.py` (2026-09-20) and `redshift_manifest.py` (2026-09-21, the prerequisites of `export_partition`); `examples/README.md` says what each one fixes. The probe, the suite and stage 5 repeat their calls, and the target they fix is in `.claude/memory/redshift.md`. |
 | `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py` and `parquet_source.py` (`--sample N`), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, with no network but one DNS lookup; its cases that write a report or fabricated files are `local`. |
 | `scripts/` | `migrate_parquet_to_delta.py`, the early migration of stage 7 (2026-09-21): per table and partition, the DuckDB query with the contract casts, one query checking partition value, nulls and text lengths and finding the `Double` columns with `NaN` or infinity, which lose min and max in the log and in the `rewrite` footer (issue #59), `register` (`COPY ... RETURN_STATS` committed by `create_write_transaction`) or `rewrite` (`cast` and `write_deltalake`), the `sort_key` order, resume from the log, the count-and-sum report (`Double` sums over finite values, non-finite values counted) with time and RSS per partition and `--report` JSON with the machine, and, by default, the measurement of every partition in the four write variants (`register`/`rewrite`, sorted or not), each in a new process with its own peak (`--no-measure` turns it off); local folder or `s3://`. The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
-| `plan/readings/` | The probe reports a pending stage still consults, kept as they came out, indexed by `plan/readings/README.md`: the production base reading of 2026-09-21. A report leaves once `plan/POC.md` and the stage file hold what it showed, and git history keeps it (user decision of 2026-09-23: the Redshift reports of 2026-09-20 and 2026-09-21 left). |
+| `plan/readings/` | The probe and suite reports a pending stage still consults, kept as they came out with the environment's sensitive identifiers masked, indexed by `plan/readings/README.md`: the suite and probe runs of 2026-09-23 and the production base reading of 2026-09-21. A report leaves once `plan/POC.md` and the stage file hold what it showed, and git history keeps it (user decisions of 2026-09-23). |
 | `plan/guia.md` | ETL practices the pipeline follows: immutable partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `plan/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `plan/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -265,7 +265,7 @@ research appends to the matching group.
 | `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3), `audit.py`, `engine/__init__.py` (the `Engine` protocol) and `engine/duckdb.py` (stage 4), `execution.py` (stage 6), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, `run` and `audit`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` to `plan/PLAN-STAGE-4.md` and `plan/PLAN-STAGE-6.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
 | `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). The corrected copy is the client model in `tests/client_model/`. |
 | `tests/client_model/` | The client model (user decision of 2026-09-21): the corrected copy of `tests/reference_model/` that the tests hand to the package API as a client library would, the corrections listed in `plan/PLAN-STAGE-1.md` and checked by `tests/test_client_model.py`; `statements.py` holds the fictitious pipeline's Core statements (`STATEMENTS`), `schema/` and `sql/` the generated files. |
-| `tests/emulator.py` | The local stand-in of S3 and Redshift for the target-only suites (user decision of 2026-09-23): with `SERIALIZE_DB_TEST_EMULATOR`, `tests/conftest.py` starts the moto server (`moto[s3]` and `flask` in the `emulator` group, out of `dev`) as a subprocess before collection, points the AWS variables and the suites' roots at it, and gives `connect_redshift` a fake `redshift_connector` connection over an in-memory DuckDB that translates the suites' Redshift SQL and imitates the refusals read in the target; `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` and `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` provoke failures. It checks the tests' code, not the target's behavior; the command is in `README.md`. |
+| `tests/emulator.py` | The local stand-in of S3 and Redshift for the target-only suites (user decision of 2026-09-23): with `SERIALIZE_DB_TEST_EMULATOR`, `tests/conftest.py` starts the moto server (`moto[s3]` and `flask` in the `emulator` group, out of `dev`) as a subprocess before collection, points the AWS variables and the suites' roots at it, and gives `connect_redshift` a fake `redshift_connector` connection over an in-memory DuckDB that translates the suites' Redshift SQL and imitates the refusals and behaviors read in the target (the backslash escape in literals, the empty `UNLOAD` writing nothing, `pg_last_unload_count()`, `is_valid_json` refusing `SUPER`); `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` and `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` provoke failures. It checks the tests' code, not the target's behavior; the command is in `README.md`. |
 | `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base and in the production base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py` (all `local`); the material of the stage 7 test. It also holds the reference model's keys (`UNIQUE_KEYS`, `FOREIGN_KEYS`, `MODEL_NOT_NULL_DECLARED_NULLABLE`), which `tests/test_reference_model.py` checks against the model and the fixture satisfies. |
 
 `plan/duckdb.md`, `plan/redshift.md` and `plan/delta.md` share a section order: data organization and
@@ -504,6 +504,14 @@ A new lesson adds its story there and its rule here, in the same commit.
   Linux a new process's `ru_maxrss` starts at its parent's peak, so read `VmHWM` from
   `/proc/self/status`, and compare what each scenario adds over the base after the imports, which
   changes with the platform (2026-09-23).
+- **A difference the stand-in shows is read against the target's documentation before it is blamed
+  on the stand-in**, and an output that can be empty is read with the command's own count: the
+  `UNLOAD` literal escapes the backslash, a case matched no row, and the empty `UNLOAD` wrote no
+  manifest, which the suite read as a failure (`pg_last_unload_count()` tells them apart,
+  2026-09-23).
+- **A SQL predicate is probed on table rows as well as constants, and a function in generated SQL
+  with the type the generated DDL gives its argument**: Redshift compared `NaN` as PostgreSQL on
+  constants and as IEEE in a table scan, and refused `is_valid_json` on `SUPER` (2026-09-23).
 
 ## Naming conventions
 
@@ -568,7 +576,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   (`create_publications_table`, `serialize-db publish --init`) and `publish_redshift` refuses to
   publish without it, `stream` always through `UNLOAD`, `load` always through `loader`, the
   `NUMERIC` type from the driver's `type_modifier`, and the export without `PARTITION BY` to a prefix
-  new per attempt; the readings they need wait for the next suite run in the target.
+  new per attempt. The suite runs of 2026-09-23 in the target read most of what they need (the `=`
+  prefix, the empty `UNLOAD` writing nothing, the `row_desc`, the `SUPER` file); two stage 5
+  proposals await the user: exporting by `rewrite` a partition with a non-finite `Double`, because
+  the `UNLOAD` footer leaves `NaN` out of the maximum, and the empty text stream's schema.
 - The reports of `scripts/migrate_parquet_to_delta.py`, which ran successfully in the target over
   the copy of the production base in the sandbox, in its version before issue #59, arrived on
   2026-09-23 and stay outside git and out of `plan/` at the user's request, so `plan/` still calls
@@ -591,10 +602,16 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   is at most 100 characters. The
   Redshift driver materializes a result in `execute` (`plan/redshift.md`), so `stream` there always
   goes through `UNLOAD` and `query` through the cursor (user decision of 2026-09-23).
-- `tests/proof_of_concept/test_redshift_transactions.py` waits for a run in the target: two
-  simultaneous publications around `serialize_db_publications`, whose result decides the stage 8
-  transaction. The three target-only suites pass on the local stand-in `tests/emulator.py`, which
-  has no locks, no bucket encryption and no Data API (2026-09-23).
+- The three target-only suites ran in the target on 2026-09-23 from `main`: S3 passed, and the
+  Redshift suite failed twice only on the stream's backslash case. The fixes of the same day (the
+  `UNLOAD` literal doubling the backslash, `pg_last_unload_count()` for the empty result, the
+  Redshift audit's strict `is_finite` and `true` for JSON on `SUPER`) pass on the local stand-in
+  `tests/emulator.py`, which has no locks, no bucket encryption, no Data API and no IEEE `NaN`, and
+  wait for two Redshift suite runs in the target. After the simultaneous publications of
+  `test_redshift_transactions.py`, the user chose on 2026-09-23 to open the stage 8 transaction
+  with the control row's `UPDATE` conditioned on the version read (0 rows is `ExecutionConflict`,
+  no retry); the first publication's control row is a pending decision. The file's two
+  temporary-staging cases, added the same day, wait for a run in the target.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing

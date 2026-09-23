@@ -56,6 +56,28 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   500,000 rows, which `PARALLEL OFF` or compaction undoes). An `INT96` file registered in a
   `timestamp_ntz` table reads back as `timestamp[us]` in delta-rs and in `delta_scan`, values
   intact. `plan/POC.md`, `plan/redshift.md`
+- The `UNLOAD` read on 2026-09-23, twice: the `select` is a literal that treats the backslash as an
+  escape (the docs escape a quote as `\'`), so the text goes in with the backslash and the quote
+  doubled; with only the quote doubled, a literal with a backslash reached the inner `select`
+  unpaired and matched no row. An empty result passes and writes no file and no manifest;
+  `pg_last_unload_count()` (docs read that day) gives the rows of the session's last completed
+  `UNLOAD`, 0 when none completed or it failed while unloading. The outer `LIMIT` is `42601 Limit
+  clause is not supported`; a session temporary table is readable by the `UNLOAD` of the same
+  session; without `PARTITION BY`, a prefix with `=` works and the verbose manifest's
+  `schema.elements` lists the `select`'s columns only; a `SUPER` column comes out with the Parquet
+  `JSON` type, read by pyarrow as `extension<arrow.json>` holding each value's JSON text, which
+  `schema.cast` turns into `string`. In a row group with `NaN`, the footer's min and max of a
+  `DOUBLE PRECISION` leave the `NaN` out, as pyarrow does, and DuckDB's `read_parquet` pruned the
+  group (0 rows for `valor > 3`), wherever the `NaN` sat; with the infinities, the footer holds
+  `-inf` and `inf`. `plan/POC.md`, `plan/redshift.md`, `plan/PLAN-STAGE-5.md`
+- The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
+  1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
+  `DECIMAL`, `VARCHAR`, `CHAR`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `BOOLEAN` and `SUPER`;
+  `type_modifier` 1,179,654 for `DECIMAL(18, 2)`, `n + 4` for `VARCHAR(n)` and `CHAR(n)`,
+  16,384,000 for `SUPER`, -1 elsewhere; `sum` and `avg` of `DECIMAL(18, 2)` come out
+  `NUMERIC(38, 2)`, a text literal `VARCHAR`, `1.5` `NUMERIC(2, 1)`; `SUPER` reaches Python as
+  `str`. A 10-row load took 0.91 s and 0.97 s by `COPY` against 0.53 s and 0.55 s by a multi-row
+  `INSERT` (best of three). `plan/POC.md`, `plan/PLAN-STAGE-5.md`
 
 ## The driver
 
@@ -103,20 +125,19 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `literal_binds`, where a valueless `IN` list renders `IN (NULL)`, so the guard walks the statement
   (`sqlalchemy.sql.visitors.iterate`) for `BindParameter.required`; `text().params()` refuses to
   render (`CompileError ... with datatype NULL`) and `sa.bindparam(name, value=value, expanding=...)`
-  types each value. Whether Redshift reads the doubled backslash as one, in a plain statement and
-  inside the `UNLOAD` literal, is `test_stream_by_unload_with_literal_values`, not yet run in the
-  target. `plan/PLAN-STAGE-5.md`, `plan/POC.md`
-- The stage 5 readings wait in `tests/proof_of_concept/test_redshift.py` for the next run in the
-  target (seven tests after `test_parallel_copy_and_unload_on_two_connections`, listed in
-  `plan/OPEN_QUESTIONS.md`); a local emulator ran their code on 2026-09-23. `plan/POC.md`
+  types each value. The `UNLOAD` literal also treats the backslash as an escape, so the `select`
+  goes in with the backslash and the quote doubled again (target reading of 2026-09-23, below);
+  the six cases of `test_stream_by_unload_with_literal_values` wait for the next run with that
+  escape. `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+- The stage 5 readings of `tests/proof_of_concept/test_redshift.py` (seven tests after
+  `test_parallel_copy_and_unload_on_two_connections`) ran in the target on 2026-09-23, twice; what
+  is left for the next run is in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`
 - The stage 1 `ddl` and the stage 4 `audit_sql` cite tables without a schema, so on Redshift the
-  engine relies on `SET search_path TO <schema>` after `USE`, which never ran on the datashare
-  schema; the JSON column is `SUPER` in the Redshift DDL and the audit calls `is_valid_json` on it,
-  and one refused measure fails the whole rows check. `test_audit_sql_under_search_path_and_nan_comparison`
-  reads the `search_path`, `'NaN'::float8 = 'NaN'::float8` against the audit's `is_finite`
-  (`NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)`), each measure alone, a table
-  with planted defects beside the expected counters, and the client model's texts on empty tables.
-  `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+  engine relies on `SET search_path TO <schema>` after `USE`, which passed on the datashare schema
+  on 2026-09-23; one refused measure fails the whole rows check, so
+  `test_audit_sql_under_search_path_and_nan_comparison` also runs each measure alone beside the
+  expected counters, and the client model's texts on empty tables. `plan/OPEN_QUESTIONS.md`,
+  `plan/POC.md`
 
 ## The reading of 2026-09-21
 
@@ -165,7 +186,8 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/` (user decision of 2026-09-23); two parallel `COPY` 4.5 s and 3.6 s, two parallel `UNLOAD` 1.9 s
   and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times. `plan/POC.md`
 - Fifth and sixth runs (2026-09-21 13:35 and 13:39 UTC, 12 passed each, the two clean runs stage 0
-  required; the two JSON reports left `plan/readings/` on 2026-09-23, in git history): with
+  required; the two JSON reports left `plan/readings/` on 2026-09-23, in git history, and the
+  folder holds the 2026-09-23 runs): with
   `max_prepared_statements=0` the same `select count(*)` passes before and after a `TRUNCATE`; with
   the driver's cache the repeat after the `TRUNCATE` and a second repeat both get 34510 (the stale
   entry stays), the repeat after an `ALTER TABLE ... ADD COLUMN` passes, and the same sequence on a
@@ -209,8 +231,15 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   consumer may write with; datashare writes require snapshot isolation on the producer's database,
   and `svv_redshift_databases` reported `datalake_rw_shared` as `UNKNOWN`. `1018 Relation does not
   exist` is a transaction reading a table another created after its snapshot.
-  `tests/proof_of_concept/test_redshift_transactions.py` measures what the datashare schema does with
-  two simultaneous stage 8 publications; it has not run in the target. `plan/redshift.md`,
+  `tests/proof_of_concept/test_redshift_transactions.py` read in the datashare schema twice on
+  2026-09-23 (A holds its transaction 10 s while B runs in a thread): writes to distinct tables do
+  not wait; distinct control rows both commit, B's `DELETE` of its row waiting for A's `COMMIT`;
+  B's `CREATE TABLE` of the fixed-name staging A created waits for A's `COMMIT`, and B's `DELETE`
+  of the partition A replaced then gets `1023 Serializable isolation violation`; `LOCK` is refused
+  (`0A000 Operation is not supported through datashares`); the `UPDATE` of the control row
+  conditioned on the version read, as the first statement, waits for A's `COMMIT` and affects 0
+  rows. `stv_db_isolation_level` is denied (42501). The stage 8 transaction opens with that
+  `UPDATE` (user decision of 2026-09-23, `decisions.md`). `plan/redshift.md`, `plan/POC.md`,
   `plan/PLAN-STAGE-8.md`
 - An extra session (`new_session()`, 2026-09-23) is another connection with its own temporary
   credential and `USE`: it sees the `exec_<id>_*` tables the main session committed and not its
@@ -219,7 +248,16 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   on 2026-09-21. `plan/PLAN-STAGE-5.md`
 
 - Redshift's `COUNT` has no `FILTER (WHERE ...)` clause (`COUNT( * | expression )` in the docs, read
-  2026-09-23), so the audit counts with `count(CASE WHEN <defect> THEN 1 END)` on both engines; the
-  whole Redshift audit text, `is_finite` as `x NOT IN ('NaN'::float8, 'Infinity'::float8,
-  '-Infinity'::float8)` included, has not run in the target yet. `plan/PLAN-STAGE-4.md`,
-  `plan/OPEN_QUESTIONS.md`
+  2026-09-23), so the audit counts with `count(CASE WHEN <defect> THEN 1 END)` on both engines.
+  The audit text ran in the target on 2026-09-23, on a connection with `SET search_path` to the
+  datashare schema after the `USE` (it passed, the unqualified `CREATE TABLE` landed there, and
+  `current_schema()` stayed null): `count(CASE WHEN ...)`, `to_char`, `octet_length` and `~` passed;
+  `is_valid_json(super)` does not exist (42883), and it took the whole rows check down; and Redshift
+  compares `NaN` two ways, equal to itself on constants (`'NaN'::float8 = 'NaN'::float8` true, as
+  PostgreSQL) and unequal to everything in a table scan (IEEE), so `x NOT IN ('NaN'::float8, ...)`
+  counted 1 of 2 non-finite values and let the `NaN` reach the `CAST`, refused with `NaN input
+  (scale float to decimal)`; the `CAST` of a constant `NaN` to `NUMERIC(38, 6)` is `22P02`, and a
+  `sum` with a `NaN` is `nan`. The text now compiles `is_finite` as `(x > '-Infinity'::float8 AND
+  x < 'Infinity'::float8)`, false for `NaN` under both rules, and `json_valid` as `true`, because
+  the JSON column is `SUPER`; the new text waits for the next suite run. `plan/PLAN-STAGE-4.md`,
+  `plan/POC.md`, `plan/OPEN_QUESTIONS.md`

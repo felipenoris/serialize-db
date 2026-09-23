@@ -68,9 +68,10 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   toca as tabelas de outro ambiente. Dentro de um ambiente roda uma execução por vez; se duas se
   sobrepõem, o log de cada tabela ordena os commits e `publish` aborta a segunda com
   `ExecutionConflict` (seção "Regras que as etapas obedecem"). A exceção é a tabela de controle
-  `serialize_db_publications` do Redshift, uma só para todos os ambientes; o que duas publicações
-  simultâneas fazem nela é medido por `test_redshift_transactions.py`, à espera do ambiente alvo
-  ([etapa 8](PLAN-STAGE-8.md)).
+  `serialize_db_publications` do Redshift, uma só para todos os ambientes: a transação da
+  publicação abre com o `UPDATE` da linha da tabela condicionado à versão lida, e a publicação que
+  perde a corrida sai com `ExecutionConflict` ([etapa 8](PLAN-STAGE-8.md), decisão do usuário de
+  2026-09-23).
 - **Renomear ou remover colunas é raro.** A evolução é aditiva; o caso raro reescreve a tabela
   inteira num commit e recria a tabela publicada, sem esperar o column mapping do delta-rs.
 - **Os dois armazenamentos são suportados.** Toda primitiva recebe a URI de uma pasta local ou de
@@ -592,7 +593,7 @@ ilustrativos.
 | 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
 | 5. Publicação no Delta | `reconcile`; com `export_mode="register"`, `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD` do Redshift para `data_base_str=2026-08-31/<execution_id>_<uuid>/`), depois das conferências; com `"rewrite"`, `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
-| 6. Publicação no Redshift | Confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'`; controle atualizado. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
+| 6. Publicação no Redshift | Confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; `version_diff(57, 58)` aponta a partição 2026-08-31; o `UPDATE` da linha de controle de 57 para 58, `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'`. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
 | 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
 

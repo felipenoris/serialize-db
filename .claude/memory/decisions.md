@@ -633,3 +633,37 @@ Rejected: `SHOW TABLE`, which probably shows only `DISTSTYLE AUTO`, and asking t
 the view. `tests/proof_of_concept/test_redshift.py::test_explain_of_a_join_on_the_share` reads whether
 the role may run `EXPLAIN` on the datashare. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`,
 `plan/OPEN_QUESTIONS.md`
+
+## The readings folder
+
+On 2026-09-23 the user decided that `plan/readings/` holds the reports of 2026-09-23, the three
+suite sessions and the five probes, in place of the older ones, with the environment's sensitive
+identifiers masked: the accounts, the database user and the personal folder, the role id and the
+SSO role suffix, the DataZone domain, project and environment ids, the KMS key, the datashare
+producer's namespace and the private addresses, each replaced by a placeholder the folder's
+`README.md` lists. The source-base reading of 2026-09-21 stays, masked, because no newer reading
+replaces it; the probe reports of 2026-09-21 stay out of git, and the older readings live in git
+history. The rule of the same day decides when a report leaves: once `plan/POC.md` and the stage
+file hold what it showed. The same identifiers remain elsewhere in the repository (`plan/POC.md`, the memory,
+`SUITE.md`, `examples/`, `tests/test_probes.py`), a question put to the user. `plan/readings/README.md`
+
+## The Redshift suite runs of 2026-09-23 and the stage 8 transaction
+
+On 2026-09-23 the user ran the three target-only suites from `main` (S3 at 18:48 UTC, Redshift at
+18:52 and 18:55) and approved registering their readings in `plan/` and fixing the tests in the
+open PR: the `UNLOAD` literal doubles the backslash as well as the quote, the stream test reads
+`pg_last_unload_count()` to tell an empty result from a missing manifest and records an empty
+`UNLOAD` instead of stopping, and the Redshift audit text compiles `is_finite` as the strict
+comparison with the infinities and `json_valid` as `true` on the `SUPER` column (the assistant's
+fixes, named in the report). For the stage 8 transaction the assistant offered (a) keeping the
+`DELETE`/`INSERT` of the control row and repeating the transaction on `1023`, or (b) opening the
+transaction with `UPDATE serialize_db_publications ... WHERE table_name = <t> AND delta_version =
+<version read>`, where 0 affected rows raises `ExecutionConflict` without a retry and a `1023` that
+still escapes from any command raises `ExecutionConflict` too; the user chose (b). The first
+publication of a table, which has no control row for the `UPDATE`, is a pending decision with the
+assistant's proposal (the published table and its row with `delta_version` -1 in a transaction of
+their own). Two stage 5 proposals await the user: exporting by `rewrite` a partition with a
+non-finite `Double`, because the `UNLOAD` footer leaves `NaN` out of the maximum and DuckDB's
+Parquet reader lost the row, and the schema of an empty text stream from the `row_desc` of the text
+under `limit 0`. `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-4.md`,
+`plan/POC.md`, `plan/OPEN_QUESTIONS.md`

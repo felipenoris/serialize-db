@@ -24,7 +24,7 @@ que existia enquanto a pergunta estava aberta, copiar os arquivos da versão par
 | --- | --- |
 | `serialize_db_publications` | Uma só para todos os ambientes, criada uma vez no esquema pelo usuário, antes da primeira publicação: `CREATE TABLE <esquema>.serialize_db_publications (table_name VARCHAR(127), delta_version BIGINT, execution_id VARCHAR(127), published_at TIMESTAMP)`, sem `IF NOT EXISTS`. Nenhum caminho do pipeline a cria (decisão do usuário de 2026-09-23). |
 | `create_publications_table(config)` | A inicialização da tabela de controle: abre uma sessão pelo `connect` da [etapa 5](PLAN-STAGE-5.md) e roda `control_ddl`; a segunda chamada falha com a mensagem do servidor, porque a tabela já existe. |
-| `run.publish_redshift(*tables)` | Começa conferindo que a tabela de controle existe, e sem ela levanta `PublicationError`, que aponta `serialize-db publish --init`, antes de qualquer escrita. Depois, para cada tabela, `version_diff` entre a versão em `serialize_db_publications` e a atual (na primeira publicação, todas as partições); a reconciliação da tabela publicada (`ALTER TABLE ADD COLUMN` no fim, porque o `COPY` é posicional; recriação e recarga no diff destrutivo); numa única transação aberta por `BEGIN`, por tabela e partição: `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '<valor>'` e a linha de controle. |
+| `run.publish_redshift(*tables)` | Começa conferindo que a tabela de controle existe, e sem ela levanta `PublicationError`, que aponta `serialize-db publish --init`, antes de qualquer escrita. Depois, para cada tabela, `version_diff` entre a versão em `serialize_db_publications` e a atual (na primeira publicação, todas as partições); a reconciliação da tabela publicada (`ALTER TABLE ADD COLUMN` no fim, porque o `COPY` é posicional; recriação e recarga no diff destrutivo); numa transação por tabela, aberta por `BEGIN` e pelo `UPDATE` da linha de controle condicionado à versão lida, que sem linha afetada levanta `ExecutionConflict` sem repetir (decisão do usuário de 2026-09-23), e por partição: `DELETE` da partição, `COPY ... MANIFEST` na staging e `INSERT ... SELECT *, '<valor>'`. |
 | `publication_status(db)` | A versão publicada contra a atual de cada tabela, para o operador, com a mesma conferência da tabela de controle. |
 | `serialize-db publish` | A publicação fora de uma execução, por exemplo depois de uma correção; `--status` mostra `publication_status`, e `--init` roda `create_publications_table`. |
 
@@ -59,7 +59,8 @@ class PublicationStatus:
 def control_ddl(schema: str) -> str: ...
 def create_publications_table(config: object) -> None: ...   # uma vez no esquema, pelo usuário; RedshiftConfig da etapa 5
 def publication_transaction(schema: str, environment: str, table: sa.Table, partitions: list[str | None], manifests: dict[str | None, str],
-                            delta_version: int, execution_id: str, credentials: str) -> list[str]: ...
+                            delta_version: int, published_version: int, execution_id: str,
+                            credentials: str) -> list[str]: ...
 def reconcile_published(schema: str, environment: str, table: sa.Table, diff: object) -> list[str]: ...
 def publish_redshift(db: object, engine: object, tables: list[sa.Table], execution_id: str, max_workers: int = 1) -> dict[str, int]: ...
 def publication_status(db: object, engine: object) -> list[PublicationStatus]: ...
@@ -86,28 +87,35 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
   falha sobe com o seu tipo e o resultado de cada tabela numa nota (`add_note`), porque entregar
   todas de uma vez deixou o worker único pegar a tabela seguinte à que falhou (leitura de
   2026-09-23, [`POC.md`](POC.md)). `run.publish_redshift` entra em `Execution` com esta etapa.
-- **`publication_transaction`** devolve a lista de comandos: `BEGIN`; `CREATE TABLE
-  <esquema>.<ambiente>_<tabela>_staging` sem a coluna de partição; por partição, `DELETE FROM
-  <publicada> WHERE <coluna> = '<valor>'`, `DELETE FROM <staging>`, `COPY <staging> FROM '<manifesto>'
-  <credenciais> FORMAT AS PARQUET MANIFEST FILLRECORD` (decisão do usuário de 2026-09-23: o
-  manifesto de uma partição pode listar arquivos anteriores e posteriores a uma coluna nova, e um
-  `COPY` só os carrega todos, com a coluna nova nula nos anteriores, como o Delta os lê),
-  `INSERT INTO <publicada> SELECT *, '<valor>' FROM
-  <staging>` (com `JSON_PARSE` nas colunas `SUPER`); depois `DELETE` e `INSERT` da linha de controle,
-  `DROP TABLE <staging>` e `COMMIT`. `TRUNCATE` não entra: numa tabela local ele confirma a
-  transação sozinho, e `DELETE` sem `WHERE` é transacional nos dois casos. Uma partição removida no
-  Delta (`version_diff` a devolve pelo `remove`) recebe só o `DELETE`.
+- **`publication_transaction`** devolve a lista de comandos: `BEGIN`; `UPDATE
+  <esquema>.serialize_db_publications SET delta_version = <nova>, execution_id = '<id>',
+  published_at = getdate() WHERE table_name = '<ambiente>_<tabela>' AND delta_version = <lida>`;
+  `CREATE TABLE <esquema>.<ambiente>_<tabela>_staging` sem a coluna de partição; por partição,
+  `DELETE FROM <publicada> WHERE <coluna> = '<valor>'`, `DELETE FROM <staging>`, `COPY <staging>
+  FROM '<manifesto>' <credenciais> FORMAT AS PARQUET MANIFEST FILLRECORD` (decisão do usuário de
+  2026-09-23: o manifesto de uma partição pode listar arquivos anteriores e posteriores a uma
+  coluna nova, e um `COPY` só os carrega todos, com a coluna nova nula nos anteriores, como o
+  Delta os lê), `INSERT INTO <publicada> SELECT *, '<valor>' FROM <staging>` (com
+  `JSON_PARSE` nas colunas `SUPER`); depois `DROP TABLE <staging>` e `COMMIT`. `publish_redshift`
+  roda um comando por `execute` e confere o `rowcount` do `UPDATE`: 0 é outra publicação que gravou
+  a tabela desde a leitura da versão, e a transação sai por `ROLLBACK` com `ExecutionConflict`, sem
+  repetir; um `1023` de qualquer comando também sai como `ExecutionConflict`. `TRUNCATE` não entra:
+  numa tabela local ele confirma a transação sozinho, e `DELETE` sem `WHERE` é transacional nos
+  dois casos. Uma partição removida no Delta (`version_diff` a devolve pelo `remove`) recebe só o
+  `DELETE`.
 - **As publicações simultâneas.** A tabela de controle é a única que dois ambientes escrevem, e duas
   publicações do mesmo ambiente podem tocar a mesma tabela (`serialize-db publish` ao lado de uma
-  execução). A documentação do Redshift prevê que o `DELETE` da linha de controle da segunda
-  transação espere a primeira terminar e que, sob isolamento de snapshot, linhas distintas
-  confirmem as duas, enquanto sob o serializável a segunda recebe `1023`
-  ([`redshift.md`](redshift.md), seção "Transações concorrentes").
-  `tests/proof_of_concept/test_redshift_transactions.py` mede no esquema do datashare as escritas em
-  tabelas distintas, dev e prod gravando linhas distintas da tabela de controle, duas publicações da
-  mesma tabela com a staging de nome fixo, o `LOCK` da tabela de controle e o `UPDATE` condicionado
-  à versão lida; a primeira execução no ambiente alvo decide se a transação fica como está
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  execução). No esquema do datashare, em duas execuções de
+  `tests/proof_of_concept/test_redshift_transactions.py` em 2026-09-23 ([`POC.md`](POC.md)):
+  escritas em tabelas distintas não esperam; dev e prod gravando linhas distintas da tabela de
+  controle confirmam as duas, com a segunda esperando o `COMMIT` da primeira no `DELETE` da sua
+  linha; duas publicações da mesma tabela e partição abortam a segunda com `1023` no `DELETE` da
+  partição, depois de ela esperar no `CREATE TABLE` da staging de nome fixo; o `LOCK` é recusado
+  (`0A000 Operation is not supported through datashares`); e o `UPDATE` da linha de controle
+  condicionado à versão lida, como primeiro comando, faz a segunda esperar o `COMMIT` da primeira e
+  afetar 0 linhas. A transação abre com esse `UPDATE` (decisão do usuário de 2026-09-23): o conflito
+  vira um erro explícito, e a publicação nunca grava por cima de uma versão mais nova. O operador
+  publica de novo depois de ler `publication_status`.
 - **`reconcile_published`** repete o diff aditivo com `ALTER TABLE ADD COLUMN <coluna> <tipo>` no
   fim da tabela, porque o `COPY` é posicional e recusa um arquivo com colunas a menos
   (`Unmatched number of columns`, 2026-09-21), e a staging nasce do esquema Delta; um diff destrutivo
@@ -136,8 +144,8 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
-| `publish_redshift` | A tabela de controle criada por `create_publications_table`; a versão do Delta relida por `read_back`; a sessão no banco do datashare; `s3:GetObject` pela identidade da sessão sobre a pasta da tabela. | Por tabela, uma transação: as partições alteradas trocadas, a linha de controle com a versão do Delta; na falha, `ROLLBACK` implícito e o controle intacto. |
-| `publication_transaction` | Manifestos gravados; staging inexistente. | Comandos que o Redshift aceita num bloco de transação, sem `COMPUPDATE`, sem `TRUNCATE`, com nomes em duas partes e a cláusula de credenciais só no `COPY`. |
+| `publish_redshift` | A tabela de controle criada por `create_publications_table`; a versão do Delta relida por `read_back`; a sessão no banco do datashare; `s3:GetObject` pela identidade da sessão sobre a pasta da tabela. | Por tabela, uma transação: as partições alteradas trocadas, a linha de controle com a versão do Delta; na falha, `ROLLBACK` implícito e o controle intacto; `ExecutionConflict` quando outra publicação gravou a tabela desde a leitura da versão. |
+| `publication_transaction` | Manifestos gravados; staging inexistente; a linha de controle da tabela com a versão lida. | Comandos que o Redshift aceita num bloco de transação, sem `COMPUPDATE`, sem `TRUNCATE`, com nomes em duas partes e a cláusula de credenciais só no `COPY`. |
 | `reconcile_published` | Diff calculado contra o esquema Delta publicado; a largura de cada `VARCHAR` da tabela publicada lida em `svv_all_columns`. | `ADD COLUMN` no fim; no destrutivo, que inclui a largura de `VARCHAR(n)` mudada, a recriação e a recarga completa na publicação seguinte. |
 
 ## Testes por caso
@@ -148,7 +156,8 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 | Texto da transação | `test_publication_transaction_text` (sem conexão) | A sequência de comandos, um por item, com `BEGIN` e `COMMIT`, sem `TRUNCATE` nem `COMPUPDATE`, nomes em duas partes, credenciais mascaradas no que vai a log. |
 | Reconciliação | `test_reconcile_published_add_column_and_recreate` | `ADD COLUMN` no aditivo; `DROP TABLE` mais DDL com chave no destrutivo e na largura de `VARCHAR(n)` que muda no modelo. |
 | Diferença | `test_publish_only_changed_partitions` (`redshift`) | Duas publicações: a segunda, depois de uma partição alterada, emite um `DELETE` e um `COPY` só dela. |
-| Primeira publicação | `test_first_publication_loads_every_partition` (`redshift`) | Sem linha de controle, todas as partições; a linha de controle escrita na mesma transação. |
+| Primeira publicação | `test_first_publication_loads_every_partition` (`redshift`) | Sem publicação anterior, todas as partições, e a linha de controle com a versão do Delta; a forma de criar a linha é a decisão pendente da primeira publicação. |
+| Publicação simultânea | `test_concurrent_publication_raises_execution_conflict` (`redshift`) | Duas publicações da mesma tabela a partir da mesma versão lida: a segunda espera, afeta 0 linhas no `UPDATE` e levanta `ExecutionConflict`; a partição e a linha de controle ficam as da primeira. |
 | Falha no meio | `test_failed_copy_leaves_control_row_untouched` (`redshift`) | Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto. |
 | Estado | `test_publication_status_lists_pending_partitions` | A versão publicada, a atual e as partições pendentes por tabela. |
 | Redistribuição nos joins | `test_published_join_redistribution_is_read` (`redshift`) | O `EXPLAIN` de um join típico entre as tabelas publicadas, `cad_lancamentos` com `cad_contas` por `id_conta`, depois da primeira publicação: os rótulos `DS_*` de cada passo de join, como leitura, nunca como reprovação. O modelo cliente não declara `redshift` e a distribuição é `AUTO` (decisão do usuário de 2026-09-21); uma `distkey` explícita só entra, por `ALTER TABLE ... ALTER DISTKEY`, quando o plano mostra `DS_BCAST_INNER` ou `DS_DIST_BOTH` (decisão do usuário de 2026-09-23). A leitura é o `EXPLAIN` porque o papel do projeto não lê `svv_table_info` depois do `USE` (`permission denied`, 42501, probe de 2026-09-23, [`POC.md`](POC.md)). |
@@ -156,7 +165,8 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 ## Rascunhos executados
 
 O rascunho monta o texto da transação e da reconciliação; compilado, não executado num cluster
-(2026-09-21). O `IF NOT EXISTS` do `control_ddl` dele saiu com a decisão do usuário de 2026-09-23.
+(2026-09-21). O `IF NOT EXISTS` do `control_ddl` dele e a linha de controle por `DELETE` e `INSERT`
+no fim da transação saíram com as decisões do usuário de 2026-09-23.
 
 ```python
 """Etapa 8: a transação da publicação como texto, a partir do diff de versões e das ações add; compilado, não executado."""
@@ -240,6 +250,13 @@ segredo fora do texto impresso: True
 
 ## Decisões pendentes
 
+- **[decisão] A linha de controle da primeira publicação de uma tabela.** O `UPDATE` condicionado
+  não acha linha numa tabela nunca publicada, e 0 linhas seria lido como conflito. A proposta é
+  criar a tabela publicada (`published_ddl`) e a sua linha de controle, com `delta_version` -1,
+  numa transação própria antes da primeira transação de dados, e ler -1 como "nunca publicada":
+  duas primeiras publicações simultâneas se encontram no `CREATE TABLE` do mesmo nome, onde a
+  segunda espera o `COMMIT` da primeira (a staging de nome fixo esperou assim em 2026-09-23) e
+  recebe o erro de tabela existente, que ninguém leu no esquema do datashare.
 - **[decisão] A staging da publicação como tabela comum no datashare ou temporária no banco da
   conexão** ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o rascunho a cria e apaga dentro da
   transação, no esquema do datashare. A escrita de uma transação vai para um banco só no datashare

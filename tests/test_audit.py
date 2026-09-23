@@ -4,7 +4,8 @@ Os testes conferem o texto de cada verificação do modelo cliente nos dois dial
 de cada motor e sem a cláusula ``FILTER``, que o Redshift não tem; o texto do DuckDB rodando num
 DuckDB em memória sobre o DDL da etapa 1; o escopo da chave pela coluna de partição e pela de
 ``partition_source``, com ``key_scope`` e o ``skip_when`` da chave primária inteira; as chaves
-estrangeiras só com ``foreign_keys=True``; e a recusa do valor de partição fora da regra.
+estrangeiras só com ``foreign_keys=True``; a recusa do valor de partição fora da regra; e o texto do
+``is_finite`` do Redshift sobre o ``NaN``, os infinitos, um número e o nulo, rodando no DuckDB.
 """
 
 from __future__ import annotations
@@ -12,9 +13,11 @@ from __future__ import annotations
 import datetime as dt
 
 import duckdb
+import pyarrow as pa
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
 from client_model import Base as ClientBase
 from serialize_db import audit, schema
@@ -60,11 +63,12 @@ FUNCTION_TEXTS = {
     ],
     "redshift": [
         """to_char("cad_eventos"."data", 'YYYY-MM-DD')""",
-        "is_valid_json(",
+        "IS NOT NULL AND NOT true)",
         "octet_length(",
         """json_size("cad_eventos"."documento") > 65535""",
         "~ '^[0-9A-Za-z][0-9A-Za-z_.-]*$'",
-        "'NaN'::float8",
+        "> '-Infinity'::float8 AND",
+        "< 'Infinity'::float8)",
     ],
 }
 
@@ -113,6 +117,22 @@ def test_audit_sql_per_dialect() -> None:
 
     # As funções da auditoria não se registram em sa.func: o cliente continua com as suas.
     assert type(sa.func.json_valid(sa.column("x"))) is sa.sql.functions.Function
+
+
+def test_redshift_is_finite_under_the_postgresql_rule() -> None:
+    """O ``is_finite`` do Redshift dá falso ao ``NaN`` e aos infinitos, verdadeiro ao número e nulo
+    ao nulo pela regra do PostgreSQL, que o DuckDB segue: o ``NaN`` igual a si mesmo e acima de todo
+    número. A regra do IEEE, que o Redshift aplica na varredura de uma tabela, só o ambiente alvo
+    mostra (``test_audit_sql_under_search_path_and_nan_comparison``)."""
+    finite = audit.is_finite(sa.column("v"))
+    text = str(finite.compile(dialect=RedshiftDialect_redshift_connector(paramstyle="named")))
+    values = pa.table({"v": pa.array([float("nan"), float("inf"), float("-inf"), 1.5, None])})
+
+    connection = duckdb.connect()
+    connection.register("valores", values)
+    rows = connection.execute(f"SELECT {text} FROM valores").fetchall()
+    connection.close()
+    assert [row[0] for row in rows] == [False, False, False, True, None]
 
 
 def test_key_scope_follows_the_partition_column() -> None:

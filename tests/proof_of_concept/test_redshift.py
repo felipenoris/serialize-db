@@ -1016,11 +1016,13 @@ def unload_text(select: str, destination: str, credentials: str) -> str:
     """O ``UNLOAD`` da etapa 5: o ``select`` em Parquet para ``destination``, com manifesto verboso
     e ``PARALLEL OFF``.
 
-    O ``select`` entra como literal, com as aspas simples dobradas, e ``PARALLEL OFF`` grava em
-    série, na ordem do ``ORDER BY`` (``plan/redshift.md``). O texto devolvido carrega a cláusula de
-    credenciais: ele vai só para ``session.execute``, nunca para o relatório.
+    O ``select`` entra como literal, com a contrabarra e a aspa simples dobradas: o literal do
+    ``UNLOAD`` trata a contrabarra como escape (o ``\\'OH\\'`` da documentação), e o ``select`` que
+    o dialeto já escapou chega intacto só assim. ``PARALLEL OFF`` grava em série, na ordem do
+    ``ORDER BY`` (``plan/redshift.md``). O texto devolvido carrega a cláusula de credenciais: ele
+    vai só para ``session.execute``, nunca para o relatório.
     """
-    escaped = select.replace("'", "''")
+    escaped = select.replace("\\", "\\\\").replace("'", "''")
     return (
         f"UNLOAD ('{escaped}') TO '{destination}/' {credentials} "
         "FORMAT AS PARQUET MANIFEST VERBOSE PARALLEL OFF"
@@ -1039,11 +1041,40 @@ def read_manifest(location: S3Location, destination: str) -> dict | None:
     return json.loads(body)
 
 
-def unloaded_manifest(location: S3Location, destination: str) -> dict:
-    """O manifesto de um ``UNLOAD ... MANIFEST`` que passou; a falta dele reprova."""
+def unload_count(session: RedshiftSession) -> object:
+    """As linhas que o último ``UNLOAD`` da sessão descarregou, por ``pg_last_unload_count()``, ou
+    o erro, para o relatório."""
+    return reading(functools.partial(first_value, session, "select pg_last_unload_count()"))
+
+
+def unloaded_manifest(session: RedshiftSession, location: S3Location, destination: str) -> dict:
+    """O manifesto de um ``UNLOAD ... MANIFEST`` que passou; a falta dele reprova, com a contagem
+    do ``UNLOAD`` na mensagem."""
     manifest = read_manifest(location, destination)
-    assert manifest is not None, f"o UNLOAD passou e não gravou o manifesto em {destination}"
+    assert manifest is not None, (
+        f"o UNLOAD passou e não gravou o manifesto em {destination}; "
+        f"pg_last_unload_count(): {unload_count(session)!r}"
+    )
     return manifest
+
+
+def stream_entries(session: RedshiftSession, location: S3Location, destination: str) -> list[dict]:
+    """As entradas do manifesto do ``UNLOAD`` do ``stream``, nenhuma quando ele não descarregou
+    linha.
+
+    O ``UNLOAD`` de um resultado vazio passa sem gravar manifesto nem arquivo (leitura de
+    2026-09-23), e ``pg_last_unload_count()``, lido na mesma sessão logo depois, separa esse caso
+    do manifesto que falta, que reprova.
+    """
+    manifest = read_manifest(location, destination)
+    if manifest is not None:
+        return manifest["entries"]
+    unloaded = unload_count(session)
+    assert unloaded == 0, (
+        f"o UNLOAD passou, descarregou {unloaded!r} linha(s) e não gravou o manifesto em "
+        f"{destination}"
+    )
+    return []
 
 
 def read_unloaded(location: S3Location, entries: list[dict]) -> pa.Table:
@@ -1133,7 +1164,7 @@ def test_unload_to_a_hive_prefix_and_register(
         record(f"redshift.unload_hive.unload.{month}", unload)
         assert unload == "ok", unload
 
-        manifest = unloaded_manifest(s3_location, prefix)
+        manifest = unloaded_manifest(session, s3_location, prefix)
         listed = [
             element.get("name") for element in (manifest.get("schema") or {}).get("elements", [])
         ]
@@ -1181,9 +1212,10 @@ def test_stream_by_unload_with_literal_values(
 
     O texto do ``UNLOAD`` é um literal e não recebe parâmetro. O dialeto com ``paramstyle="named"``
     dobra a aspa simples, mantém o ``%`` e dobra a contrabarra, o escape do PostgreSQL (sonda local
-    de 2026-09-23, ``plan/POC.md``). Cada caso roda por três caminhos, que separam as hipóteses: os
-    parâmetros do driver, o texto com os literais direto no cursor e o mesmo texto dentro do
-    ``UNLOAD``. As comparações são leituras até duas execuções limpas no ambiente alvo.
+    de 2026-09-23, ``plan/POC.md``), e ``unload_text`` dobra as duas de novo. Cada caso roda por
+    três caminhos, que separam as hipóteses: os parâmetros do driver, o texto com os literais direto
+    no cursor e o mesmo texto dentro do ``UNLOAD``. Um ``UNLOAD`` sem linha é leitura, e o caso
+    seguinte roda. As comparações são leituras até duas execuções limpas no ambiente alvo.
     """
     session = redshift_session
     name = session.table("stream")
@@ -1271,7 +1303,7 @@ def test_stream_by_unload_with_literal_values(
         )
         by_unload: object = unload
         if unload == "ok":
-            entries = unloaded_manifest(s3_location, destination)["entries"]
+            entries = stream_entries(session, s3_location, destination)
             by_unload = []
             if entries:
                 unloaded_rows = read_unloaded(s3_location, entries).to_pylist()
@@ -1296,7 +1328,8 @@ def test_unload_limit_empty_result_temp_table_and_super(
     Parquet.
 
     A documentação recusa o ``LIMIT`` externo (``plan/redshift.md``), e a mensagem é a leitura. O
-    que o ``UNLOAD`` grava para um resultado vazio decide de onde sai o esquema do lote vazio.
+    ``UNLOAD`` de um resultado vazio não gravou manifesto nem arquivo (leitura de 2026-09-23), e
+    ``pg_last_unload_count()`` é o que separa esse caso do manifesto que falta.
     """
     session = redshift_session
     name = session.table("borda")
@@ -1339,6 +1372,7 @@ def test_unload_limit_empty_result_temp_table_and_super(
             )
         ),
     )
+    record("redshift.stream.empty.unload_count", unload_count(session))
     manifest = read_manifest(s3_location, empty)
     record(
         "redshift.stream.empty.manifest",
@@ -1378,9 +1412,10 @@ def test_unload_limit_empty_result_temp_table_and_super(
         )
     )
     if unloaded == "ok":
-        manifest = unloaded_manifest(s3_location, from_temporary)
+        counted = unload_count(session)
+        manifest = unloaded_manifest(session, s3_location, from_temporary)
         unloaded_count = sum(entry["meta"]["record_count"] for entry in manifest["entries"])
-        unloaded = f"ok: {unloaded_count} linhas"
+        unloaded = f"ok: {unloaded_count} linhas, pg_last_unload_count() {counted!r}"
     record("redshift.stream.temp_table", unloaded)
 
     # 4. A coluna SUPER no Parquet do UNLOAD: o tipo lido e os valores, em texto para o relatório.
@@ -1397,7 +1432,7 @@ def test_unload_limit_empty_result_temp_table_and_super(
     )
     record("redshift.stream.super.unload", unloaded)
     if unloaded == "ok":
-        manifest = unloaded_manifest(s3_location, super_prefix)
+        manifest = unloaded_manifest(session, s3_location, super_prefix)
         super_rows = read_unloaded(s3_location, manifest["entries"])
         record("redshift.stream.super.type", str(super_rows.schema.field("meta").type))
         record(
@@ -1584,7 +1619,7 @@ def test_unload_footer_statistics_with_nan(
             record(f"redshift.unload_nan.{label}", unloaded)
             continue
 
-        manifest = unloaded_manifest(s3_location, destination)
+        manifest = unloaded_manifest(session, s3_location, destination)
         url = manifest["entries"][0]["url"]
         body = read_object(s3_location, url)
         parquet = pq.ParquetFile(io.BytesIO(body))
@@ -1622,14 +1657,14 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
     ``NaN``, tudo leitura.
 
     O ``ddl`` da etapa 1 e o ``audit_sql`` citam as tabelas sem esquema, e o motor conta com o
-    ``search_path`` no esquema do datashare depois do ``USE``, que nunca rodou no ambiente alvo; o
-    caso roda numa conexão própria, com o ``SET search_path`` do ``connect`` da etapa 5. O
-    ``is_finite`` do Redshift é ``x NOT IN ('NaN'::float8, ...)``, que supõe o ``NaN`` igual a si
-    mesmo, como no PostgreSQL; pelo IEEE, o ``NaN`` passaria por finito, ``naofinito_valor``
-    contaria só o infinito e a soma levaria o ``NaN`` ao ``CAST`` para ``NUMERIC(38, 6)``. A tabela
-    ``auditoria`` tem defeitos plantados e o esperado de cada contador ao lado da leitura; os textos
-    do modelo cliente rodam sobre as tabelas vazias, e cobrem ``to_char``, ``octet_length``, ``~`` e
-    ``count(CASE WHEN ...)``, que também nunca rodaram lá (``plan/OPEN_QUESTIONS.md``).
+    ``search_path`` no esquema do datashare depois do ``USE``, que passou no ambiente alvo em
+    2026-09-23; o caso roda numa conexão própria, com o ``SET search_path`` do ``connect`` da
+    etapa 5. O ``is_finite`` do Redshift é a comparação estrita com os infinitos, falsa ao ``NaN``
+    pela regra do PostgreSQL e pela do IEEE: em 2026-09-23, a constante comparou o ``NaN`` igual a
+    si mesmo e a varredura da tabela não, e ``NOT IN ('NaN'::float8, ...)`` contou só o infinito e
+    levou o ``NaN`` ao ``CAST`` para ``NUMERIC(38, 6)``; ``nan_na_tabela`` lê a regra da varredura.
+    A tabela ``auditoria`` tem defeitos plantados e o esperado de cada contador ao lado da leitura;
+    os textos do modelo cliente rodam sobre as tabelas vazias (``plan/OPEN_QUESTIONS.md``).
     """
     session = redshift_session
     prefix = f"serialize_db_poc_{session.session_id}_"
@@ -1705,6 +1740,13 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
             "(4, '2026-08-30', '2026-08-31', 'd', 3.0, 3.00, JSON_PARSE('{\"c\": 3}')), "
             "(5, '2026-08-30', '2026-08-30', 'e', 4.0, 4.00, NULL)"
         )
+        # A comparação do NaN na varredura da tabela, ao lado da constante do passo 1: o NaN da
+        # linha 2 dá 0 e 1 pelo IEEE, 1 e 0 pelo PostgreSQL.
+        nan_in_scan = (
+            f"select count(case when valor = 'NaN'::float8 then 1 end), "
+            f'count(case when valor <> valor then 1 end) from "{name}"'
+        )
+        record("redshift.audit.nan_na_tabela", reading(functools.partial(run_as_text, nan_in_scan)))
         expected = {
             "linhas": "4", "particao_data_str": "1", "naofinito_valor": "2",
             "total_valor": "4.500000", "total_preco": "16.250000", "json_meta": "0",
