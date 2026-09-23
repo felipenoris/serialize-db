@@ -32,8 +32,8 @@ aceite (decisão do usuário de 2026-09-22). O texto SQL gerado por dialeto, com
 o bind posterior, é a opção para um pipeline que queira substituir o SQLAlchemy no futuro, não o
 caminho padrão.
 Os dados cruzam a fronteira da biblioteca em lotes `pyarrow.RecordBatch` (seção "A troca de dados
-com o código cliente"). A evolução do esquema é uma reconciliação entre o modelo e o log da tabela,
-sem Alembic.
+com o código cliente"). A evolução do esquema é uma reconciliação entre o modelo SQLAlchemy e o
+log da tabela Delta Lake, sem Alembic.
 
 As premissas, declaradas pelo usuário, e o que cada uma fixa:
 
@@ -62,7 +62,7 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   `estrategia.md` e volta à mesa se o Glue ou o S3 Tables forem habilitados; `probes/catalog.py`
   mede esse gatilho.
 - **O Delta é a fonte da verdade depois da carga inicial.** A tabela é criada do modelo por
-  `DeltaTable.create`, sem DDL em SQL; a evolução e o histórico ficam no log.
+  `DeltaTable.create`, sem DDL em SQL; a evolução e o histórico ficam no log de cada tabela Delta Lake.
 - **Execuções de desenvolvimento e de produção gravam tabelas separadas.** Um caminho por ambiente,
   `<raiz>/<ambiente>/<tabela>/`, e o prefixo do ambiente nas tabelas do Redshift; a concorrência
   que resta é entre execuções do mesmo ambiente, que o log serializa.
