@@ -18,9 +18,9 @@ biblioteca anterior, o arquivo real (``source_db_projetado_schema.json``): o con
 no formato da reflexão do SQLAlchemy, com colunas, nulidade, chaves estrangeiras, índices e
 restrições de unicidade de cada tabela.
 
-Os valores são fictícios, determinísticos e consistentes com o modelo de referência (decisão do
-usuário de 2026-09-20): toda chave estrangeira do modelo tem a linha referenciada, toda chave é
-única, e as quatro tabelas particionadas têm as mesmas quatro datas, para que cada ``data_base`` de
+Os valores são fictícios, determinísticos e consistentes com o modelo de referência: toda chave
+estrangeira do modelo tem a linha referenciada, toda chave é única, e as quatro tabelas
+particionadas têm as mesmas quatro datas, para que cada ``data_base`` de
 ``cad_lancamentos`` tenha os seus ``cad_contratos`` (a leitura mostrou 2026-01-31 só em
 ``cad_lancamentos``). ``rel_contrato_operacao`` é a relação N×N entre contratos e operações da mesma
 data: toda operação tem contratos, todo contrato está em uma ou duas operações, e ``fator_rateio``
@@ -48,7 +48,6 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 

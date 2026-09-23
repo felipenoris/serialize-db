@@ -155,7 +155,7 @@ fator_rateio              double       NÃO NULO  DOUBLE      None    NONE      
 
 # A seção 5: a coluna de partição de cada tabela particionada. A leitura tinha três datas em cad_contratos,
 # cad_operacoes e rel_contrato_operacao (2026-02-28, 2026-03-31 e 2026-06-30) e quatro em cad_lancamentos; a base
-# fictícia dá as quatro a todas, para que cada data_base tenha os seus contratos (decisão do usuário de 2026-09-20).
+# fictícia dá as quatro a todas, para que cada data_base tenha os seus contratos.
 OBSERVED_PARTITION_COLUMNS = {
     "cad_contratos": "data_str",
     "cad_lancamentos": "data_base_str",

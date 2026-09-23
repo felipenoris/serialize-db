@@ -1,7 +1,7 @@
 """O modelo de referência contra a leitura da base de origem.
 
 ``tests/reference_model/`` é o modelo SQLAlchemy da base original em Parquet particionado, que fica
-como está (decisão do usuário de 2026-09-21). ``probes/parquet_source.py`` leu a base de
+como está. ``probes/parquet_source.py`` leu a base de
 desenvolvimento em 2026-09-20 e a de produção em 2026-09-21 com a mesma seção 3, que
 ``source_db_projetado.SCHEMAS`` transcreve e ``test_source_db_projetado.py`` confere nos arquivos
 gravados; aqui o modelo é lido pelo SQLAlchemy e comparado com ela coluna a coluna, e as chaves que
