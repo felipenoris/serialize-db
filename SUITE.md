@@ -19,7 +19,7 @@ uv run pytest
 # Probes e Testes - BN
 
 ```
-~/work/projects/serialize-db
+cd ~/work/projects/serialize-db
 
 export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/serialize-db-tests
 export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
@@ -50,6 +50,8 @@ SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m
 # Migração Parquet -> Delta
 
 ```
+cd ~/work/projects/serialize-db
+
 export PYTHONPATH=tests
 export SOURCE_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
 export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta/db_projetado
@@ -137,11 +139,7 @@ export TABELA=rel_contrato_operacao
     --source $SOURCE_PATH \
     --root   $TARGET_ROOT_PATH \
     --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-```
 
-Probe da Migração:
-
-```
 export AWS_DEFAULT_REGION=sa-east-1
-PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta/db_projetado
+PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH
 ```
