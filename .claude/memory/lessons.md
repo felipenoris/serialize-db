@@ -400,3 +400,15 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   stage 6 supports, while the DuckDB `register` already carried a `uuid` for that rerun. Read a
   uniqueness claim against the loop that calls the primitive and against the rerun, and end every
   write destination with a segment new per call. `plan/PLAN-STAGE-5.md`
+- **A checkout shared with another session is read from git before a branch or a commit**
+  (2026-09-23). Two sessions worked in the same folder: while one discussed the stage 6 decisions,
+  the other created `claude/nan-estatisticas-parquet-delta`, committed and opened PR #60. The first
+  ran `git checkout -b claude/decisoes-etapa-6` trusting its opening snapshot, which said `main`, so
+  the new branch started from the other session's commit, and the switch moved the other
+  session's `HEAD` too: a commit of it in those two minutes would have landed on the wrong branch.
+  `git status -sb` and `git reflog` showed what had happened; the empty branch was deleted, and the
+  commits went to the open PR's branch, as the git rule asks. Three sessions then edited the same
+  plan files in turn, each one waiting for the previous one's message, adding files by path and
+  leaving alone the files another session had modified. Read `git status -sb` and `git reflog -5`
+  before creating a branch or committing, and agree by message on the order of edits to shared
+  files. `CLAUDE.md`

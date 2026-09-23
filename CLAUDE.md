@@ -461,6 +461,11 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **"Empty by construction" is read against the caller's loop and the rerun**: the `UNLOAD`
   destinations of `export_partition` were empty only for the first partition of an execution and
   its first attempt; end every write destination with a segment new per call (2026-09-23).
+- **A checkout may be shared with another session**: read `git status -sb` and `git reflog -5`
+  before creating a branch or committing, never the session's opening snapshot, because a branch
+  switch moves every session in the folder; another session's open `claude/` PR is the open PR the
+  git rule names; add files by path, and agree by message on the order of edits to files two
+  sessions touch (2026-09-23).
 
 ## Naming conventions
 
