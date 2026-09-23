@@ -472,3 +472,30 @@ options and `AuditFailed` imported from `serialize_db.errors`, and made `storage
 `functools.cached_property` after a probe showed the frozen dataclass refusing the `init=False`
 field in `__post_init__`; each was named in the report. `plan/PLAN-STAGE-6.md`,
 `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+
+## The decisions of stage 5
+
+On 2026-09-23 the user took the four pending decisions of stage 5, after the assistant's review found
+defects behind three of them. The control table was the user's own proposal: neither `connect` nor
+`publish_redshift` creates `serialize_db_publications`; `publish_redshift` checks at its start that
+the table exists and stops with an error when it does not; a dedicated initialization, run
+explicitly by the user once, creates it, so no pipeline code path runs its `CREATE TABLE`. The
+assistant's choices around it, named in the report: `create_publications_table(config)`,
+`serialize-db publish --init`, the new `PublicationError`, a plain `CREATE TABLE` without `IF NOT
+EXISTS`, the check by `select 1 ... limit 0` outside a transaction, `publication_status` making the
+same check, the pipeline's opening no longer reading the table (`plan/PLAN.md`, step 1), a
+runbook row in stage 9, and `connect` running no command to confirm the `USE` (the first two-part
+statement confirms it). The user accepted the other three proposals as made. `stream` always goes
+through `UNLOAD ... PARALLEL OFF` to `staging/<execution_id>/stream/<uuid>/` and `query` always
+through the cursor, because the engine cannot know a result's size before the `execute` that
+materializes it; the client's values enter the `UNLOAD` as literals, guarded by `required` in
+`compiled.binds`, and the `'` and `\` escape is probed in the target first. `load` always goes
+through the `loader`, and the multi-row `INSERT` left. `schema_from_row_description` reads the
+`NUMERIC` precision and scale from the `type_modifier` in the driver's private
+`cursor.ps["row_desc"]`, `numeric_types` left, and the `redshift` extra pins
+`redshift-connector==2.1.16`. The export has no `PARTITION BY` and writes to a prefix new per
+partition and per attempt, `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/` in `register` and
+`staging/<execution_id>/<tabela>/<coluna>=<valor>/<uuid>/` in `rewrite` (the `rewrite` path is the
+assistant's). Stage 5 has no decision awaiting the user; the readings the next suite run in the
+target makes for these decisions are in `plan/OPEN_QUESTIONS.md`. `plan/PLAN-STAGE-5.md`,
+`plan/PLAN-STAGE-8.md`, `plan/PLAN.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`

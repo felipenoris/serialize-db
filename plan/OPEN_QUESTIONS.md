@@ -103,6 +103,21 @@ foi medido em [`POC.md`](POC.md).
   perde quando o STS não responde; `connect_redshift` de `tests/conftest.py` tem 85 linhas com
   duas funções aninhadas. A próxima execução das duas suítes no ambiente alvo vem com essas
   correções.
+- **As leituras da etapa 5 na próxima execução da suíte Redshift.** As decisões do usuário de
+  2026-09-23 ([etapa 5](PLAN-STAGE-5.md)) supõem comportamentos que ninguém executou no ambiente
+  alvo, e os casos entram em `tests/proof_of_concept/test_redshift.py` antes dessa execução:
+  - o `UNLOAD` sem `PARTITION BY` para um prefixo com `=`,
+    `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/`, o `schema.elements` do manifesto dele sem a
+    coluna de partição, o registro dos arquivos e a releitura pelo `delta_scan`;
+  - o `stream` por `UNLOAD`: valores literais com `'` e `\`, uma data, um número e um `IN` de lista,
+    o resultado igual ao do `query` do mesmo statement, uma coluna `SUPER` no Parquet do `UNLOAD`,
+    o que ele grava para um resultado vazio, de que depende o esquema do lote vazio, a mensagem que
+    recusa o `LIMIT` externo e a tabela temporária da sessão lida pelo `UNLOAD`;
+  - o `row_desc` de um `select` com uma coluna de cada tipo do contrato, `SUPER`, `count(*)`, `sum`
+    de `NUMERIC(18, 2)`, `sum` de `DOUBLE PRECISION` e um literal de texto, que fecha a tabela de
+    OIDs de `schema_from_row_description`;
+  - o tempo de um `load` de 10 linhas pelo `COPY`, como leitura: é o que traria de volta o `INSERT`
+    multilinha.
 
 ## Decisões de API pendentes por etapa
 
@@ -119,11 +134,6 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   (`ColumnProperties(statistics_enabled="NONE")` no `write_deltalake`, os dois omitidos em
   `register_files`). A alternativa é manter os dois sem o `NaN`, como a especificação do Parquet
   escreve, e documentar a poda do DuckDB.
-- [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
-  entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
-  a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição
-  (`<uri>/<execution_id>/<valor>/` com `PARTITION BY`, ou `<uri>/<coluna>=<valor>/<execution_id>/`
-  sem ele), porque o `UNLOAD` confere o destino como prefixo.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.

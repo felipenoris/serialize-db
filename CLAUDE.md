@@ -454,6 +454,13 @@ A new lesson adds its story there and its rule here, in the same commit.
   files, and missed DuckDB's Parquet reader pruning by the delta-rs and pyarrow footers and a
   `has_nan` that sees only the last row group; the question came from a 2018 Java ticket, while the
   spec changed in May 2026 (2026-09-23).
+- **A path chosen by a quantity needs the quantity before the path runs**: the stage 5 `stream`
+  threshold between `fetchmany` and `UNLOAD` waited on a measurement, while the row count only
+  existed after the `execute` that had already materialized the result; write down where the
+  quantity is read before measuring a threshold (2026-09-23).
+- **"Empty by construction" is read against the caller's loop and the rerun**: the `UNLOAD`
+  destinations of `export_partition` were empty only for the first partition of an execution and
+  its first attempt; end every write destination with a segment new per call (2026-09-23).
 
 ## Naming conventions
 
@@ -509,7 +516,12 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   waits on the user (`.claude/memory/decisions.md`). The user's answers of 2026-09-23 closed stage
   6: `--metadata` in `serialize-db run`, `next_ids` only on the sequential single-column key, the
   allowlist `[0-9A-Za-z][0-9A-Za-z_.-]*` for the partition value and the `execution_id`, and no
-  table barrier, with the stage 5 `loader` creating its table at `close` like stage 4's.
+  table barrier, with the stage 5 `loader` creating its table at `close` like stage 4's. The user's
+  answers of 2026-09-23 closed stage 5: the user creates `serialize_db_publications` once
+  (`create_publications_table`, `serialize-db publish --init`) and `publish_redshift` refuses to
+  publish without it, `stream` always through `UNLOAD`, `load` always through `loader`, the
+  `NUMERIC` type from the driver's `type_modifier`, and the export without `PARTITION BY` to a prefix
+  new per attempt; the readings they need wait for the next suite run in the target.
 - The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
   ran successfully there on the copy of the production base, and its reports, not yet available,
   carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the
@@ -522,8 +534,8 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   transaction at `close`; `session()` hands the raw connection, and `new_session()` opens an extra
   session for parallel work, which `run.ingest` uses per table (2026-09-23). The reference sketches are
   `SandboxEngine`, `BatchStream` and `Loader` in `tests/proof_of_concept/test_parallel.py`. The
-  Redshift driver materializes a result in `execute` (`plan/redshift.md`), so `stream` bounds memory
-  there only through `UNLOAD`.
+  Redshift driver materializes a result in `execute` (`plan/redshift.md`), so `stream` there always
+  goes through `UNLOAD` and `query` through the cursor (user decision of 2026-09-23).
 - `tests/proof_of_concept/test_redshift_transactions.py` waits for a run in the target: two
   simultaneous publications around `serialize_db_publications`, whose result decides the stage 8
   transaction.

@@ -133,8 +133,9 @@ consulta sob o lock à memória, enquanto os lotes guardados cabem em 64 MiB, e 
 com LZ4 depois disso, e o cliente lê os lotes enquanto a consulta continua; a entrada é um arquivo
 Arrow IPC carregado no `close`, numa transação, com o `CREATE TABLE` e um único `INSERT ... BY NAME`
 (decisões do usuário de 2026-09-23). No
-Redshift, a saída são as tuplas que o driver materializa, fatiadas por `fetchmany`, ou os arquivos
-de um `UNLOAD`, e a entrada é Parquet no S3 mais `COPY ... MANIFEST`. O que roda em paralelo, sem as
+Redshift, `stream` lê os arquivos Parquet de um `UNLOAD` no `staging/`, `query` lê as tuplas que o
+driver materializa, e a entrada é Parquet no S3 mais `COPY ... MANIFEST` (decisões do usuário de
+2026-09-23). O que roda em paralelo, sem as
 tabelas temporárias da sessão, abre uma sessão a mais com `run.sandbox.new_session()`.
 
 ### A API
@@ -235,14 +236,15 @@ em `test_duckdb.py`, `test_pyarrow.py` e `test_parallel.py`. O que elas fixaram:
   uma janela precisam de todas as linhas: vão para SQL no sandbox, onde o motor usa todos os
   núcleos, ou para a `pa.Table` de `query`. `run.next_ids(table, batch.num_rows)` dá a cada lote a
   sua faixa.
-- **No Redshift**, `stream` executa sob o lock, na thread de quem chama, e o `redshift_connector`
-  materializa o resultado no `execute` (leitura do código, 2026-09-21); a thread auxiliar monta cada
-  lote de `cursor.fetchmany(batch_size)` por colunas, `zip(*linhas)` e `pa.array(coluna, type=...)`
-  com o esquema do statement, um terço do tempo de `from_pylist` por dicionários em 200.000 linhas,
-  fora da sessão e competindo pelo GIL com o cliente, porque o driver é Python puro. Acima de um
-  limite de linhas o arquivo intermediário é o do `UNLOAD` no S3 ([etapa 5](PLAN-STAGE-5.md)). O
-  `loader` grava um row group por lote com `ParquetWriter.write_batch` em `staging/<execution_id>/`
-  e faz o `COPY` no `close`, então nada entra antes dele.
+- **No Redshift**, `stream` vai sempre por `UNLOAD` para `staging/<execution_id>/`, sob o lock, na
+  thread de quem chama, e a thread auxiliar lê os lotes dos arquivos por `ParquetFile.iter_batches`
+  enquanto o cliente trabalha (decisão do usuário de 2026-09-23): o `redshift_connector` materializa
+  o resultado inteiro no `execute` (leitura do código, 2026-09-21), e o motor não sabe o tamanho do
+  resultado antes dele. `query` monta a `pa.Table` das tuplas do cursor por colunas, `zip(*linhas)` e
+  `pa.array(coluna, type=...)`, um terço do tempo de `from_pylist` por dicionários em 200.000 linhas.
+  O `loader` grava um row group por lote com `ParquetWriter.write_batch` em `staging/<execution_id>/`
+  e faz o `COPY` no `close`, então nada entra antes dele, e `load` passa sempre por ele
+  ([etapa 5](PLAN-STAGE-5.md)).
 
 ### A conversão para o pandas
 
@@ -481,7 +483,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 | Módulo | Etapa | Conteúdo |
 | --- | --- | --- |
-| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `LogUnavailable`, `SandboxError`, `AuditFailed`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
+| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `LogUnavailable`, `SandboxError`, `AuditFailed`, `PublicationError`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
 | `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto gerado pela tabela de tipos com todo identificador entre aspas, opções físicas, cast seguro, arquivos gerados. |
 | `serialize_db.sql` | 2 | A cópia prefixada dos statements Core que os motores compilam, e o texto SQL por dialeto, a opção de migração para fora do SQLAlchemy: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos pelo `pyarrow.fs`: URIs, listagem, leitura, cópia, a escrita condicional do arquivo de controle (`boto3` no S3), `storage_options` e o secret do DuckDB. |
@@ -498,7 +500,8 @@ Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`,
 ficam no grupo `dev` até a etapa 2 e entram nas dependências de execução com ela, porque `render`
 compila por esses dialetos (decisão do usuário de 2026-09-21, [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md))
 e os motores chamam `render` em tempo de execução (a etapa 1 gera o DDL pela tabela de tipos, sem
-dialeto); `redshift-connector` entra no extra `redshift`, e `sqlglot`
+dialeto); `redshift-connector==2.1.16` entra no extra `redshift`, fixado porque o motor lê o
+`type_modifier` do `row_desc` privado do driver ([etapa 5](PLAN-STAGE-5.md)), e `sqlglot`
 no grupo `dev`; o pandas fica no grupo `dev`, para o teste do ciclo com `ArrowDtype`, porque a
 biblioteca não o importa. `prepare_offline.sh` passa a instalar os extras (`--all-extras`) e é rodado
 de novo a cada mudança.
@@ -583,12 +586,12 @@ ilustrativos.
 
 | Passo | O que acontece | Artefatos |
 | --- | --- | --- |
-| 1. Abertura | Lê `_serialize_db/snapshots.json` e `serialize_db_publications`; abre cada tabela de entrada e registra a versão. | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
+| 1. Abertura | Lê `_serialize_db/snapshots.json`; abre cada tabela de entrada e registra a versão. `serialize_db_publications` é lida só na publicação no Redshift (decisão do usuário de 2026-09-23). | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
 | 2. Ingestão | DuckDB: views com os nomes dos modelos sobre `delta_scan(uri, version := 143)`; `cad_lancamentos` materializada com `WHERE data_base_str BETWEEN '2025-09-30' AND '2026-08-31'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos dessas partições em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
 | 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
-| 5. Publicação no Delta | `reconcile`; com `export_mode="register"`, `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD ... PARTITION BY (data_base_str)` do Redshift), depois das conferências; com `"rewrite"`, `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
-| 6. Publicação no Redshift | `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'`; controle atualizado. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
+| 5. Publicação no Delta | `reconcile`; com `export_mode="register"`, `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD` do Redshift para `data_base_str=2026-08-31/<execution_id>_<uuid>/`), depois das conferências; com `"rewrite"`, `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
+| 6. Publicação no Redshift | Confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'`; controle atualizado. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
 | 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
 

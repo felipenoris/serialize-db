@@ -107,8 +107,14 @@ O `execute` lê o resultado inteiro antes de devolver: `EXECUTE_MSG` pede o port
 linhas, `handle_messages` só termina em `READY_FOR_QUERY`, cada `DATA_ROW` entra em
 `cursor._cached_rows`, e `fetchmany` fatia essa fila (`Cursor.__next__`). A memória de uma consulta
 é a do resultado inteiro em objetos Python, antes do primeiro `fetchmany` (a suíte leu as 5 linhas
-na fila em 2026-09-21, às 13:35 e às 13:39); o `stream` do motor Redshift limita a memória só por
-`UNLOAD` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)).
+na fila em 2026-09-21, às 13:35 e às 13:39); o `stream` do motor Redshift vai sempre por `UNLOAD`,
+e o `query` pelo cursor ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md), decisão do usuário de 2026-09-23).
+
+O `cursor.description` do driver devolve só o nome e o OID de cada coluna, `(nome, oid, None, None,
+None, None, None)`. O `type_modifier` que a mensagem `RowDescription` traz, com a precisão e a
+escala do `NUMERIC`, fica em `cursor.ps["row_desc"]`, e o próprio driver o usa para decodificar o
+`NUMERIC` binário, com a escala `(type_modifier - 4) & 0xFFFF` (`Cursor.truncated_row_desc`,
+leitura do código do 2.1.16 em 2026-09-23). O `SUPER` chega como texto.
 
 ### Data API
 
@@ -1081,9 +1087,12 @@ Comportamento do `UNLOAD ... FORMAT AS PARQUET` segundo a documentação:
 - O Parquet é até 2 vezes mais rápido de descarregar e ocupa até 6 vezes menos espaço no S3 que
   texto.
 
-O `UNLOAD` do projeto grava um mês por comando, com `PARTITION BY (mes)` na pasta da tabela Delta,
-`MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho alvo da tabela. O `SELECT` lista as colunas na
-ordem do modelo, com casts para os tipos do contrato e `ORDER BY` pela chave de ordenação. A
+O `UNLOAD` do projeto grava uma partição por comando, sem `PARTITION BY` e com a coluna de partição
+fora do `SELECT`, num prefixo novo por tentativa dentro da pasta da partição,
+`<coluna>=<valor>/<execution_id>_<uuid>/` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md), decisão do usuário
+de 2026-09-23), com `MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho alvo da tabela. O `SELECT`
+lista as colunas na ordem do modelo, com casts para os tipos do contrato e `ORDER BY` pela chave de
+ordenação. A
 biblioteca confere o manifesto do `UNLOAD` e o rodapé de cada arquivo antes de registrá-los no log do
 Delta, e relê a versão depois (seção "O manifesto entre o log do Delta e o Redshift"). `CLEANPATH`
 não é usado: arquivos de execuções abortadas ficam fora do log e saem pelo `vacuum`.
@@ -1246,7 +1255,7 @@ usado pelo `export_partition` da [etapa 5](PLAN-STAGE-5.md).
 | `url`, absoluta | `path`, **relativo à pasta da tabela** |
 | `meta.content_length` | `size` |
 | `meta.record_count` | `stats.numRecords` |
-| nenhuma | `partition_values`, lido do caminho: o `PARTITION BY` grava `<coluna>=<valor>/` na convenção Hive |
+| nenhuma | `partition_values`, o valor da partição exportada, que a biblioteca também põe no caminho, `<coluna>=<valor>/` na convenção Hive |
 | nenhuma | `modification_time`, do `LastModified` do objeto no S3 |
 | nenhuma | `data_change`, conceito do Delta sem contraparte |
 | nenhuma | `stats.minValues`, `maxValues` e `nullCount`, lidos do rodapé Parquet |
@@ -1261,8 +1270,10 @@ partição. A coluna de timestamp é a exceção, porque o `INT96` do `UNLOAD` n
 
 O `schema.elements` do manifesto verboso traz o nome e o tipo de cada coluna, e é a primeira
 conferência antes do commit: um `cast` errado no `select` do `UNLOAD` aparece ali, não na primeira
-leitura da tabela meses depois. A presença da coluna de partição nesse bloco sob `PARTITION BY` não
-foi verificada. A conferência a que o leitor obedece é a do rodapé, abaixo.
+leitura da tabela meses depois. Sob `PARTITION BY`, o bloco listou também a coluna de partição, que
+os arquivos não têm (suíte de 2026-09-21); sem ele, como a biblioteca grava, a lista esperada é a do
+`select`, que a próxima execução da suíte confere. A conferência a que o leitor obedece é a do
+rodapé, abaixo.
 
 ### As conferências antes do commit e a releitura depois
 

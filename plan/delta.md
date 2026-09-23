@@ -849,8 +849,8 @@ mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends 
    limites de tipo, no motor.
 5. **Publicação.** Por tabela e por mês: do DuckDB, `write_deltalake(mode="overwrite",
    predicate="mes = ...")` com o `RecordBatchReader` da consulta, ou `COPY ... TO` na subpasta do
-   mês mais `create_write_transaction`; do Redshift, `UNLOAD ... PARTITION BY (mes)` na pasta da
-   tabela mais `create_write_transaction`. Cada commit leva `serialize_db_execution_id` e
+   mês mais `create_write_transaction`; do Redshift, `UNLOAD` num prefixo novo dentro da subpasta do
+   mês mais `create_write_transaction`. Cada commit leva `serialize_db_execution_id` e
    `serialize_db_input_versions` em `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e
    é idempotente; um conflito de commit no mesmo mês significa outra execução publicando a mesma
    tabela, e a execução aborta.
@@ -957,8 +957,10 @@ IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
 FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE;
 ```
 
-`PARTITION BY` grava em `mes=2026-08/` e retira a coluna do arquivo, que é a convenção do Delta. O
-manifesto verboso traz `content_length` e `record_count` por arquivo; `minValues` e `maxValues` vêm
+`PARTITION BY` grava em `mes=2026-08/` e retira a coluna do arquivo, que é a convenção do Delta. A
+biblioteca chega ao mesmo layout sem ele: o `select` deixa a coluna de partição de fora, e o destino
+é um prefixo novo por tentativa dentro da pasta da partição, montado por ela
+([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md), decisão do usuário de 2026-09-23). O manifesto verboso traz `content_length` e `record_count` por arquivo; `minValues` e `maxValues` vêm
 do rodapé Parquet de cada arquivo, lido com `pq.read_metadata`. Um `create_write_transaction` com
 `mode="overwrite"` e `partition_filters` do mês substitui os arquivos anteriores. Quatro regras
 mantêm esse caminho carregável nos dois sentidos: nenhuma linha fora dos arquivos (sem vetores de

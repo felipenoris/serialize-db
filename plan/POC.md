@@ -2079,3 +2079,35 @@ atributo nasceu uma vez, no primeiro uso, a igualdade e o hash seguiram só os c
 **Consequência**: [`PLAN-STAGE-6.md`](PLAN-STAGE-6.md) declara `storage` como `cached_property`, sem
 o `object.__setattr__` que o estilo do projeto evita, e o caso entrou em
 `test_stdlib.py::test_frozen_dataclass_derives_an_attribute_by_cached_property`.
+
+## O que a leitura do driver e a sonda das decisões da etapa 5 mostraram
+
+Em 2026-09-23, a discussão das decisões pendentes da etapa 5 leu o código do `redshift_connector`
+2.1.16 instalado no projeto e rodou uma sonda no mesmo macOS (pyarrow 25.0.1).
+
+- **O `cursor.description` do driver não traz precisão nem escala.** `Cursor._getDescription`
+  devolve `(nome, oid, None, None, None, None, None)` por coluna. O `type_modifier` de cada coluna
+  chega na mensagem `RowDescription`, `Connection.handle_ROW_DESCRIPTION` o guarda em
+  `cursor.ps["row_desc"]`, e `Cursor.truncated_row_desc` o usa para decodificar o `NUMERIC`
+  binário, com a escala `(type_modifier - 4) & 0xFFFF`. O enum `RedshiftOID` tem, além dos OIDs do
+  rascunho de `schema_from_description`, `REAL` (700), `BPCHAR` (1042), `TEXT` (25), `UNKNOWN` (705)
+  e `SUPER` (4000), e o driver lê o `SUPER` como texto.
+- **Um `decimal128(18, 2)` fixo recusa o `NUMERIC` de outra escala e de outra precisão.**
+  `pa.array([Decimal('1.234567')], type=pa.decimal128(18, 2))` falhou com `ArrowInvalid: Rescaling
+  Decimal value would cause data loss`, e `pa.array([Decimal('12345678901234567.00')],
+  type=pa.decimal128(18, 2))` com `ArrowInvalid: Decimal type with precision 19 does not fit into
+  precision inferred from first array element: 18`.
+
+**Consequência**: o usuário decidiu no mesmo dia as quatro pendências da etapa 5, e
+[`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) não tem decisão pendente. `schema_from_row_description` lê a
+precisão e a escala do `type_modifier`, com `redshift-connector==2.1.16` no extra `redshift`
+([`PLAN.md`](PLAN.md)). A mesma discussão achou no plano o que nenhuma sonda mediu: o limite de
+linhas entre `fetchmany` e `UNLOAD` não tinha como ser aplicado, porque o `execute` que revelaria o
+tamanho já materializa o resultado; o destino do `rewrite`, `staging/<execution_id>/<tabela>/`,
+seria recusado pelo `UNLOAD` a partir da segunda partição, porque `run.publish` exporta uma
+partição por chamada; e o destino do `register` estaria ocupado na reexecução com o mesmo
+`execution_id`. O `stream` passou a ir sempre por `UNLOAD`, o `load` sempre pelo `loader`, a
+exportação a um prefixo novo por partição e por tentativa, sem `PARTITION BY`, e a tabela de
+controle a ser criada só pelo usuário ([`PLAN-STAGE-8.md`](PLAN-STAGE-8.md)). Os comportamentos que
+isso supõe no ambiente alvo esperam a próxima execução da suíte
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

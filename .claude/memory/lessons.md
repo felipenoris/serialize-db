@@ -387,3 +387,16 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   changed in May 2026. Put the special value in the first, a middle and the last row group, read it
   through the log and through `read_parquet`, and quote the spec file at its current commit.
   `plan/POC.md`
+- **A path chosen by a quantity needs the quantity before the path runs** (2026-09-23). The stage 5
+  plan switched `stream` from `fetchmany` to `UNLOAD` above a row threshold and waited on a
+  measurement in the target to fix it; the row count exists only after the `execute` that already
+  materialized the whole result in the driver, so no threshold could ever be applied, and the
+  measurement would have sized a rule that cannot run. Before measuring a threshold, write down
+  where the quantity is read and whether that happens before the choice. `plan/PLAN-STAGE-5.md`
+- **"Empty by construction" is read against the caller's loop and the rerun** (2026-09-23). The
+  stage 5 `UNLOAD` destinations were empty only on the first call: `rewrite` sent every partition to
+  `staging/<execution_id>/<tabela>/`, which the first partition of `run.publish`'s loop fills, and
+  `register` reused `<uri>/<execution_id>/<valor>/` on the rerun with the same `execution_id` that
+  stage 6 supports, while the DuckDB `register` already carried a `uuid` for that rerun. Read a
+  uniqueness claim against the loop that calls the primitive and against the rerun, and end every
+  write destination with a segment new per call. `plan/PLAN-STAGE-5.md`
