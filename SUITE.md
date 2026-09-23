@@ -41,7 +41,8 @@ export SERIALIZE_DB_REDSHIFT_DATABASE=dev
 export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
 SERIALIZE_DB_TEST_REPORT=probes/output/suite_s3.json .venv/bin/python -m pytest -m "not redshift"
 SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_1.json .venv/bin/python -m pytest -m redshift
-SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m pytest -m redshift```
+SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m pytest -m redshift
+```
 
 # Migração Parquet -> Delta
 
