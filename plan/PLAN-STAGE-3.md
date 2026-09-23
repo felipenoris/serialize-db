@@ -282,8 +282,8 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   nome da coluna entre aspas duplas, e chama `write_deltalake(dt, data, mode="overwrite",
   predicate=..., commit_properties=CommitProperties(custom_metadata=metadata))` sobre o objeto
   aberto por `open_table`, que depois da escrita está na versão do próprio commit. O valor entra
-  entre aspas simples e chega validado pela [etapa 6](PLAN-STAGE-6.md); a regra de lá não exclui a
-  aspa simples, que quebraria o predicado (proposta em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  entre aspas simples e chega validado pela regra da partição da [etapa 6](PLAN-STAGE-6.md),
+  `[0-9A-Za-z][0-9A-Za-z_.-]*`, que exclui a aspa simples que quebraria o predicado.
   `value=None` numa tabela sem partição substitui a tabela; `CommitFailedError` vira
   `ExecutionConflict`. Ela recebe `data` já passado por `cast`, e recusa um lote sem a coluna de
   partição antes de gravar. As colunas de `columns_without_min_max` entram no `writer_properties`

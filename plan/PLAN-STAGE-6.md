@@ -140,9 +140,9 @@ um motor já construído, para os testes.
   inicio + n)`. A chave é a chave primária inteira de uma coluna, a sequencial; numa chave composta
   o cliente decide os ids e não chama `next_ids` (decisão do usuário de 2026-09-23), e a chamada
   numa chave composta ou não inteira levanta `ContractError`.
-- **`audit`** chama `sandbox.audit(table, partitions, uri, versions[table], ...)`, guarda o par
-  `(tabela, partições)` aprovado sob lock, escreve `report.sql()` no log e levanta `AuditFailed` na
-  reprovação.
+- **`audit`** chama `sandbox.audit(table, partitions, uri, versions[table], ...)`, guarda sob lock
+  o par `(tabela, partições)` aprovado e o `nonfinite_columns` do relatório, escreve `report.sql()`
+  no log e levanta `AuditFailed` na reprovação.
 - **`publish`** exige o par aprovado (ou `audit=False`, que fica no log); para cada tabela, cria
   (`create_table`) quando `versions[table]` é `None`, senão confere que nenhuma **alteração de
   dados** entrou desde a versão fixada: `delta.version_diff(uri, versions[table], atual)` vazio.
@@ -150,8 +150,10 @@ um motor já construído, para os testes.
   que gravam commits) não é conflito, e `versions[table]` passa para a versão atual; um avanço com
   dados é `ExecutionConflict`, porque duas execuções abertas na mesma versão publicariam a mesma
   faixa de `next_ids`. Depois `reconcile`, e `sandbox.export_partition(table, uri, valor,
-  commit_metadata(...), mode, expected_rows)` por partição, com o `export_mode` resolvido em `mode`
-  (`partitions=None` numa tabela sem partição é `[None]`); as tabelas correm num
+  commit_metadata(...), mode, expected_rows, columns_without_min_max)` por partição, com o
+  `export_mode` resolvido em `mode` (`partitions=None` numa tabela sem partição é `[None]`) e, em
+  `columns_without_min_max`, o `nonfinite_columns[valor]` da auditoria aprovada, ou todas as colunas
+  `Double` da tabela com `audit=False`; as tabelas correm num
   `ThreadPoolExecutor(max_workers)` com a política de `publish_all` de `test_parallel.py`: na
   primeira falha nada novo começa, e a exceção lista o resultado por tabela. `versions[table]`
   avança sob lock a cada commit, e o dicionário devolvido é `{tabela: versão}`.
@@ -177,7 +179,7 @@ um motor já construído, para os testes.
 | `previous_partitions` | Tabela existente e particionada. | Os `n` últimos valores até a partição da execução, inclusive, em ordem crescente. |
 | `next_ids` | Tabela com chave primária inteira de uma coluna; outra chave é `ContractError`. | Faixas contíguas e disjuntas entre threads, a primeira acima do máximo da versão fixada. |
 | `audit` | Sandbox com a tabela. | O par aprovado registrado, ou `AuditFailed` com o relatório no log; o Delta intocado. |
-| `publish` | Auditoria aprovada; nenhuma alteração de dados na tabela desde a versão fixada. | Uma versão por partição com os metadados; `versions` avançado; `ExecutionConflict` sem commit no conflito; na falha de uma tabela, as demais terminam ou são canceladas e a exceção lista cada resultado. |
+| `publish` | Auditoria aprovada; nenhuma alteração de dados na tabela desde a versão fixada. | Uma versão por partição com os metadados, sem mínimo e máximo nas colunas `Double` com valor não finito; `versions` avançado; `ExecutionConflict` sem commit no conflito; na falha de uma tabela, as demais terminam ou são canceladas e a exceção lista cada resultado. |
 | `__exit__` | Nenhum. | Sandbox descartado, staging apagado, resumo no log, snapshot gravado quando marcado. |
 | `serialize-db run` | `--metadata` e o pipeline importáveis. | Código de saída pelo resultado; nenhum traceback no erro de uso. |
 
@@ -198,6 +200,7 @@ as chamadas.
 | Conflito | `test_publish_aborts_when_data_changed_since_open` | Um `append` de outra execução depois da abertura é `ExecutionConflict`; um `compact` não é. |
 | Mesma partição | `test_two_executions_on_the_same_partition_conflict` | A segunda aborta no `CommitFailedError`. |
 | Paralelismo | `test_publish_with_two_workers_matches_one` | O mesmo resultado com `max_workers=1` e `2`; a falha de uma tabela cancela as não iniciadas e lista cada resultado. |
+| `Double` não finito | `test_publish_passes_the_nonfinite_columns_to_the_export` | O motor de mentira recebe, por partição, as colunas `Double` com valor não finito que a auditoria contou, a partição sem elas recebe a lista vazia, e com `audit=False` recebe todas as colunas `Double`; no motor DuckDB, a partição com `NaN` sai sem o mínimo e o máximo da coluna. |
 | Modo de exportação | `test_export_mode_resolution` | O argumento de `publish` vence o de `Execution`, que vence `SERIALIZE_DB_EXPORT_MODE`, que vence `"register"`; o motor de mentira recebe o modo resolvido, e o `--export-mode` do `run` chega a `Execution`. |
 | Metadados | `test_commit_metadata_in_history` | `serialize_db_execution_id` e `serialize_db_input_versions` no `history`; `serialize_db_snapshot` só na execução marcada. |
 | Snapshot | `test_snapshot_writes_the_control_file_at_exit` | Todas as tabelas do ambiente na entrada, gravada uma vez. |
