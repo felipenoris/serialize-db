@@ -47,7 +47,8 @@ COMMANDS = {
 
 - **`snapshot`** fora de uma execução lê a versão atual de cada tabela do ambiente e grava a
   entrada; dentro da execução, `run.snapshot(name)` a grava no encerramento.
-- **`vacuum`** roda `vacuum_keeping_snapshots` para cada tabela com `keep_versions` do arquivo de
+- **`vacuum`** roda `vacuum_keeping_snapshots(uri, control, table.name, storage, retention_hours,
+  apply, full)` da [etapa 3](PLAN-STAGE-3.md) para cada tabela, com `keep_versions` do arquivo de
   controle; sem `--apply` imprime a lista por tabela; `--full` inclui os órfãos das escritas
   interrompidas e dos registros recusados. Dentro da retenção de 400 dias nada é listado, porque a
   retenção é a janela em que toda versão continua legível; a lista aparece quando um arquivo
@@ -56,9 +57,11 @@ COMMANDS = {
   `numFilesRemoved`; uma partição com um só arquivo não commita. O comando confere o arquivo de
   controle e recusa compactar uma tabela cujo snapshot mais recente é a versão atual, porque a
   compactação depois do snapshot dobra os arquivos que ele referencia.
-- **`archive`** lê a entrada do snapshot, roda `deep_copy` de cada tabela na versão registrada para
-  `arquivo/<nome>/<tabela>/` e marca a entrada como arquivada no controle, para sair de
-  `keep_versions`.
+- **`archive`** lê a entrada do snapshot, roda `deep_copy(uri, versão, storage.uri_of(<ambiente>/arquivo/<nome>/<tabela>), storage)`
+  de cada tabela na versão registrada e tira a entrada de `snapshots.json` pela escrita condicional
+  (`read_snapshots` e `storage.write_text(if_match=...)`), como a tabela de rotinas diz:
+  `vacuum_keeping_snapshots` preserva as versões de toda entrada do controle, e a entrada arquivada
+  deixa de prendê-las.
 - **`export`** chama `export_snapshot` com `--mode copy` ou `rewrite`; `--version` exporta uma
   versão antiga, com o DDL tirado do esquema daquela versão.
 - **`history`** imprime, por tabela, versão, operação, carimbo e os metadados

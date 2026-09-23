@@ -78,7 +78,7 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
   inexistente vira `PublicationError`, com o comando de inicialização na mensagem, e a publicação
   para sem ter escrito nada. Depois lê, por tabela, a versão publicada em `serialize_db_publications`
   e a atual, chama `delta.version_diff` (todas as partições na primeira publicação), grava um
-  `copy_manifest` por partição em `publicacao/<execution_id>/<tabela>/<valor>.manifest`, aplica
+  `copy_manifest` por partição na URI `storage.uri_of(<ambiente>/publicacao/<execution_id>/<tabela>/<valor>.manifest)`, aplica
   `reconcile_published` quando o esquema Delta ganhou colunas, e roda `publication_transaction`,
   um comando por `execute`, com `BEGIN` e `COMMIT` explícitos; as tabelas correm num pool com uma
   conexão por thread, limitadas pelas slots do WLM.

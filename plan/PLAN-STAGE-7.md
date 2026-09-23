@@ -190,8 +190,11 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   `register_files` com o `RegisteredFile` da linha do `RETURN_STATS`; `rewrite` passa
   `con.execute(consulta).to_arrow_reader()` por `cast` e `publish_partition`. A conexão DuckDB é
   do motor DuckDB da etapa 4, aberta pela própria carga, sem `Execution`; um nulo numa coluna `NOT
-  NULL` é recusado pelo `cast` (`rewrite`) ou pela conferência de `nullCount` (`register`), com a
-  coluna e a partição na mensagem.
+  NULL` é recusado pelo `cast` (`rewrite`) ou pela conferência de nulos do rodapé de
+  `register_files` (`register`), com a coluna e o arquivo na mensagem. O `register_files` da
+  [etapa 3](PLAN-STAGE-3.md) traz o que o script não tinha: as conferências do rodapé de cada
+  arquivo e a releitura depois do commit, que varre as colunas da chave da partição pelos dois
+  leitores; o custo dela na partição de `cad_lancamentos` é uma leitura do relatório da carga.
 - **`load_report`** roda a mesma agregação nos dois lados, `count(*)`, `sum(CAST(<coluna> AS
   DECIMAL(38, 6)))` por coluna `Numeric` e, por coluna `Double`, a mesma soma só dos valores
   finitos (`CASE WHEN isfinite(<coluna>) THEN ... END`) com a contagem dos não finitos, agrupada

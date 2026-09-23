@@ -2217,11 +2217,13 @@ implementação de `serialize_db.storage` e `serialize_db.delta` leu a API do de
 - **As estatísticas achatadas.** `get_add_actions(flatten=True)` tipa `min.<coluna>` e
   `max.<coluna>` pelo tipo da coluna (`date32`, `decimal128(18, 2)`, `timestamp[us]`), e
   `partition.<coluna>` sai `string not null`.
-- **As conferências do registro.** Cada uma das nove recusas de `register_files` saiu pela
+- **As conferências do registro.** Cada uma das dez recusas de `register_files` saiu pela
   conferência pretendida, lidas as mensagens: tamanho, linhas do rodapé, pasta da partição,
   `expected_rows`, caminho absoluto, coluna do contrato ausente, `valor` em `BYTE_ARRAY` no lugar de
-  `DOUBLE`, a coluna de partição dentro do arquivo e as colunas fora da ordem do contrato. As duas
-  últimas conferências são da implementação: o `COPY` do Redshift lê o Parquet por posição.
+  `DOUBLE`, a coluna de partição dentro do arquivo, as colunas fora da ordem do contrato e 20 nulos
+  numa coluna `NOT NULL`, contados pelo rodapé. As três últimas conferências são da implementação:
+  o `COPY` do Redshift lê o Parquet por posição, e a [etapa 7](PLAN-STAGE-7.md) conta com a
+  recusa do nulo no modo `register`.
 - **A releitura.** Um registro com o máximo da chave abaixo do real passou pelas conferências do
   rodapé, e o `read_back` o pegou pelo limite do log (`o log registra 101..105, e os dados têm
   101..110`), voltou a versão por `restore` e deixou a partição com as 10 linhas anteriores.
@@ -2232,5 +2234,6 @@ implementação de `serialize_db.storage` e `serialize_db.delta` leu a API do de
 **Consequência**: [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md) troca a interface e os rascunhos pela seção
 "A implementação" e registra o que a implementação fixou: os métodos de caminho de `Storage`
 (`relative`, `uri_of`, `size`, `ensure_folder`, `open_input_file`), `duckdb_connect`, o `retry` de
-`storage_options` sem `timeout`, `table_exists` e `file_from_return_stats`, as duas conferências
-novas, a releitura que compara o log com os leitores, e os não finitos de `rewrite`.
+`storage_options` sem `timeout`, `table_exists` e `file_from_return_stats`, as três conferências
+novas, a releitura que compara o log com os leitores, e os não finitos de `rewrite`. A revisão das
+etapas 4 a 9 depois da etapa 3 levou a elas a interface de `Storage` e de `delta`.

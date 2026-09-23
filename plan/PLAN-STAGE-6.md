@@ -104,12 +104,16 @@ um motor já construído, para os testes.
 ## Estratégia de implementação
 
 - **`Database`** chama `prepare_environment` no `__post_init__` e monta os caminhos; não toca o
-  armazenamento. `storage` é um `functools.cached_property` que cria `Storage.for_uri(root)` no
-  primeiro uso: um campo `init=False` de um dataclass congelado não aceita a atribuição do
+  armazenamento. `uri(table)` é `storage.uri_of("<ambiente>/<tabela>")`, a partir da raiz que
+  `Storage.for_uri` normalizou: uma pasta local relativa vira absoluta, sem barra final, e é essa a
+  URI que o delta-rs, o DuckDB e `storage.relative` recebem; os prefixos (`control_path`,
+  `staging_prefix`, `publication_prefix`, `archive_prefix`) são caminhos relativos à raiz, os que os
+  métodos de `Storage` recebem ([etapa 3](PLAN-STAGE-3.md)). `storage` é um
+  `functools.cached_property` que cria `Storage.for_uri(root)` no primeiro uso: um campo `init=False` de um dataclass congelado não aceita a atribuição do
   `__post_init__` (`FrozenInstanceError`, leitura de 2026-09-23), e o `object.__setattr__` que a
   contornaria é a atribuição dinâmica que o estilo do projeto evita.
 - **`Execution.__enter__`** abre toda tabela do `metadata` que existe no ambiente
-  (`DeltaTable.is_deltatable`) e guarda a `DeltaTable` e a versão; a tabela ausente fica com `None`
+  (`delta.table_exists`, e depois `delta.open_table`) e guarda a `DeltaTable` e a versão; a tabela ausente fica com `None`
   e nasce em `publish`. Toda leitura da execução usa esses objetos: `previous_partitions`, `ingest`,
   `next_ids`, `audit`. O `execution_id` ausente vira `exec-<AAAA-MM-DD>-<uuid8>`. A partição e o
   `execution_id` passam pela regra da partição, `re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z_.-]*",

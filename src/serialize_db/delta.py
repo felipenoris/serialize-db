@@ -568,6 +568,24 @@ def _check_partition_path(file: RegisteredFile, partition_by: str | None,
         raise RegistrationRefused(f"{file.path}: fora da pasta da partição {partition_by}={value}")
 
 
+def _check_not_null(footer: pq.ParquetFile, file: RegisteredFile, contract: pa.Schema) -> None:
+    """Nenhum nulo nas colunas ``NOT NULL`` do contrato, pela contagem de nulos de cada grupo de
+    linhas do rodapé: o DuckDB grava toda coluna como ``optional``, e o leitor devolveria o nulo
+    que o ``write_deltalake`` recusaria. Um grupo sem estatística da coluna não é conferido."""
+    names = footer.schema_arrow.names
+    for field in contract:
+        if field.nullable or field.name not in names:
+            continue
+        index = names.index(field.name)
+        nulls = 0
+        for group in range(footer.metadata.num_row_groups):
+            statistics = footer.metadata.row_group(group).column(index).statistics
+            if statistics is not None and statistics.has_null_count:
+                nulls += statistics.null_count
+        if nulls:
+            raise RegistrationRefused(f"{file.path}: {nulls} nulos na coluna NOT NULL {field.name}")
+
+
 def _check_file_rows(footer: pq.ParquetFile, file: RegisteredFile) -> None:
     """As linhas do rodapé iguais às que o arquivo declara, que viram o ``numRecords`` da ação."""
     if footer.metadata.num_rows != file.rows:
@@ -588,6 +606,7 @@ def _check_file(storage: Storage, table_path: str, file: RegisteredFile, contrac
     _check_file_size(storage, table_path, file)
     footer = pq.ParquetFile(storage.open_input_file(storage.join(table_path, file.path)))
     _check_footer_schema(footer, file, contract, partition_by)
+    _check_not_null(footer, file, contract)
     _check_partition_path(file, partition_by, value)
     _check_file_rows(footer, file)
 
@@ -627,7 +646,7 @@ def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value
     arquivo; por isso cada arquivo passa antes pelas conferências do rodapé, um GET por arquivo: o
     arquivo existe com o tamanho declarado; o esquema do rodapé tem cada coluna do contrato, na
     ordem dele, num tipo físico que os leitores leem como o lógico, e não tem a coluna de partição;
-    o caminho está na pasta da partição; as linhas do rodapé são as declaradas, e a soma é
+    as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o caminho está na pasta da partição; as linhas do rodapé são as declaradas, e a soma é
     ``expected_rows`` quando o chamador tem a contagem da fonte. A reprovação é
     ``RegistrationRefused``, sem commit, e o arquivo fica órfão até ``vacuum(full=True)``.
 

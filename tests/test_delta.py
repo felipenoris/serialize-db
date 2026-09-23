@@ -311,12 +311,14 @@ def defect(storage: Storage, uri: str, name: str) -> tuple[list[RegisteredFile],
         "tipo físico": data.set_column(data.schema.get_field_index("valor"), "valor", pa.array(["x"] * 20)),
         "partição dentro": data.append_column("data_str", pa.array(["2026-09-30"] * 20)),
         "ordem": data.select(["data", "id_operacao", "valor", "preco", "carimbo", "to", "descricao"]),
+        "nulo em not null": data.set_column(data.schema.get_field_index("data"), "data",
+                                            pa.array([None] * 20, pa.date32())),
     }
     return [write_external_file(storage, uri, f"data_str=2026-09-30/{name}_v.parquet", variants[name])], "2026-09-30", None
 
 
 @pytest.mark.parametrize("name", ["tamanho", "linhas", "partição do caminho", "esperadas", "caminho absoluto",
-                                  "coluna ausente", "tipo físico", "partição dentro", "ordem"])
+                                  "coluna ausente", "tipo físico", "partição dentro", "ordem", "nulo em not null"])
 def test_register_files_refuses_each_defect(storage: Storage, uri: str, name: str) -> None:
     """Cada conferência recusa com ``RegistrationRefused``: a versão não muda e o arquivo fica
     órfão na pasta."""

@@ -172,7 +172,7 @@ class RedshiftEngine:
   configurado, e `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` e `SESSION_TOKEN` das credenciais congeladas
   do `boto3` quando não está; ela é chamada dentro de cada comando, e o texto do comando passa por
   `mask` antes de qualquer log, relatório ou exceção.
-- **`ingest`** grava `copy_manifest` da versão fixada em `staging/<execution_id>/<tabela>.manifest`,
+- **`ingest`** grava `copy_manifest(uri, version, partitions, storage.uri_of(<ambiente>/staging/<execution_id>/<tabela>.manifest), storage)`,
   cria a staging `exec_<id>_<tabela>_staging` por `staging_ddl`, o `ddl` da [etapa 1](PLAN-STAGE-1.md)
   sem a coluna de partição, escrito nesta etapa sobre `column_ddl` e `quoted`,
   roda `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` (a proposta da [etapa 8](PLAN-STAGE-8.md):
@@ -253,8 +253,13 @@ class RedshiftEngine:
   por slice, 32 arquivos para 500.000 linhas). O último segmento do destino é novo a cada chamada,
   com um `uuid`. Com `mode="register"`, o destino é `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/`,
   e cada entrada do manifesto vira um `RegisteredFile` com `path` relativo à pasta da tabela,
-  `content_length`, `record_count` e as estatísticas do rodapé, lido por `pyarrow.fs`;
-  `register_files` confere e commita, com `expected_rows` do `count(*)` do sandbox. Com
+  `content_length`, `record_count` e as estatísticas do rodapé, lido por `storage.open_input_file`:
+  o `null_count` de cada coluna e o mínimo e o máximo dos tipos que transcrevem exato, somados os
+  grupos de linhas, uma função que esta etapa acrescenta a `serialize_db.delta` ao lado de
+  `file_from_return_stats` da [etapa 3](PLAN-STAGE-3.md); `register_files` confere e commita, com
+  `expected_rows` do `count(*)` do sandbox, e relê. O `select` do `UNLOAD` lista as colunas do
+  contrato na ordem dele e sem a de partição, porque `register_files` recusa o arquivo com a coluna
+  de partição, fora da ordem ou com nulo numa coluna `NOT NULL`. Com
   `mode="rewrite"`, o destino é `staging/<execution_id>/<tabela>/<coluna>=<valor>/<uuid>/`, e a
   partição volta pelo leitor da [etapa 7](PLAN-STAGE-7.md), sobre os arquivos do manifesto, para
   `publish_partition`.

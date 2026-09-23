@@ -55,7 +55,7 @@ registra a verificação como não executada.
 
 | Primitiva | DuckDB |
 | --- | --- |
-| `connect(config)` | Banco em arquivo `<temp_directory>/<execution_id>.duckdb`, e em memória só com `DuckDBConfig(database=":memory:")` (decisão do usuário de 2026-09-22); `temp_directory` omitido é uma pasta nova de `tempfile.mkdtemp`, apagada com o banco em `cleanup`, porque o padrão `.tmp` do DuckDB é relativo à pasta corrente; `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS` (ou `.duckdb/` da pasta preparada), `autoinstall_known_extensions` e `autoload_known_extensions` desligados; `storage.duckdb_setup`; `threads`, `temp_directory` e `preserve_insertion_order = false`; `memory_limit` só quando a configuração o informa, e o log registra na abertura o `current_setting('memory_limit')` que o DuckDB escolheu e o espaço livre de `temp_directory` (decisão do usuário de 2026-09-22); uma conexão só, a sessão da execução, e um `threading.RLock` que todo comando toma pelo tempo do comando (decisão do usuário de 2026-09-22, a mesma do motor Redshift); `session()` dá a conexão crua ao cliente com o lock tomado pelo bloco. |
+| `connect(config)` | Banco em arquivo `<temp_directory>/<execution_id>.duckdb`, e em memória só com `DuckDBConfig(database=":memory:")` (decisão do usuário de 2026-09-22); `temp_directory` omitido é uma pasta nova de `tempfile.mkdtemp`, apagada com o banco em `cleanup`, porque o padrão `.tmp` do DuckDB é relativo à pasta corrente; a conexão de `storage.duckdb_connect(<arquivo do banco>, config)` da [etapa 3](PLAN-STAGE-3.md), que resolve `extension_directory` (`DuckDBConfig.extension_directory`, senão `SERIALIZE_DB_DUCKDB_EXTENSIONS`, senão `.duckdb/` ao lado do ambiente virtual), desliga `autoinstall_known_extensions` e `autoload_known_extensions` e aplica `duckdb_setup`; `threads`, `temp_directory` e `preserve_insertion_order = false`; `memory_limit` só quando a configuração o informa, e o log registra na abertura o `current_setting('memory_limit')` que o DuckDB escolheu e o espaço livre de `temp_directory` (decisão do usuário de 2026-09-22); uma conexão só, a sessão da execução, e um `threading.RLock` que todo comando toma pelo tempo do comando (decisão do usuário de 2026-09-22, a mesma do motor Redshift); `session()` dá a conexão crua ao cliente com o lock tomado pelo bloco. |
 | `new_session()` | Uma sessão a mais sobre o mesmo banco: um motor sobre `cursor()` da conexão, com o seu `RLock`, as mesmas primitivas e a mesma pasta de transbordo, gerenciador de contexto. Ele vê o que a sessão principal confirmou e não as tabelas temporárias dela; o fim do `with` e o `cleanup` dele fecham só essa conexão. `run.ingest` abre uma por tabela, e o cliente a usa para o que roda em paralelo ([`PLAN.md`](PLAN.md), seção "Regras que as etapas obedecem"). |
 | `ingest(table, uri, version, partitions=None, materialize=False)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou `CREATE TABLE ... AS SELECT ... FROM delta_scan(...)` com `materialize=True`; com `partitions`, as duas filtram por `<coluna> BETWEEN '<menor>' AND '<maior>' AND <coluna> IN (...)`, porque o `delta_scan` poda por `=` e por intervalo e abre todos os arquivos com um `IN` de mais de um valor (leitura de 2026-09-23). |
 | `published(table, uri, version)` | A versão fixada como origem de consulta, sem ocupar nome no sandbox: o `FromClause` com as colunas do contrato que compila para `delta_scan('<uri>', version := <v>)`. É por ele que o pipeline lê as partições publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader`, e é ele que a auditoria usa como `published` nas chaves que não incluem a coluna de partição (decisão do usuário de 2026-09-22). Sem versão fixada, numa tabela que ainda não existe, levanta `SandboxError` nomeando a tabela. |
@@ -214,7 +214,7 @@ class DuckDBConfig:
 
 
 class DuckDBEngine:
-    def __init__(self, config: DuckDBConfig, execution_id: str, storage: object) -> None: ...
+    def __init__(self, config: DuckDBConfig, execution_id: str, storage: Storage) -> None: ...   # serialize_db.storage.Storage
 ```
 
 ## Estratégia de implementação
@@ -261,10 +261,11 @@ class DuckDBEngine:
   de 2026-09-23).
 - **`AuditReport`** guarda por verificação o SQL rodado, a contagem e uma amostra; `passed` é a
   conjunção; `sql()` concatena os textos para o log da execução.
-- **`DuckDBEngine.__init__`** abre a conexão raiz com `extension_directory`,
-  `autoinstall_known_extensions` e `autoload_known_extensions` desligados, `threads`,
-  `temp_directory`, `preserve_insertion_order = false`, e chama
-  `storage.duckdb_setup`. O banco é um arquivo em `<temp_directory>/<execution_id>.duckdb` por
+- **`DuckDBEngine.__init__`** abre a conexão raiz por `storage.duckdb_connect(<arquivo do banco>,
+  config)` da [etapa 3](PLAN-STAGE-3.md), com `threads`, `temp_directory`,
+  `preserve_insertion_order = false` e, quando a configuração os informa, `memory_limit` e
+  `extension_directory`; a etapa 3 resolve a pasta de extensões, desliga a instalação e a carga
+  automáticas e aplica `duckdb_setup`. O banco é um arquivo em `<temp_directory>/<execution_id>.duckdb` por
   padrão: no ambiente alvo a máquina tem 7,6 GiB de memória, 2 vCPUs e 29,8 GiB livres num só
   disco, e uma tabela materializada de doze partições de `cad_lancamentos` não cabe em memória, cabe
   em disco ([`POC.md`](POC.md), leitura de 2026-09-21). `temp_directory` omitido é uma pasta de
@@ -363,12 +364,16 @@ class DuckDBEngine:
   `published_max_key` vem de `delta.max_key` sobre `delta.open_table(uri, storage, version)` quando
   a chave primária é inteira, de uma coluna e fora do escopo da partição; o `skip_when` de uma
   verificação roda antes dela e, verdadeiro, a aprova sem rodá-la, com o motivo no relatório.
-- **`export_partition`** com `mode="register"`: `COPY (SELECT <colunas sem a de partição> FROM
-  <sandbox> WHERE <coluna> = '<valor>' ORDER BY <sort_key>) TO '<uri>/<coluna>=<valor>/<execution_id>_<uuid>.parquet'
-  (FORMAT parquet, RETURN_STATS)`, a linha do `RETURN_STATS` vira um `RegisteredFile` (contagem,
-  tamanho, `null_count` de todas as colunas, `min` e `max` das colunas com transcrição testada), e
-  `delta.register_files` faz as conferências e o commit, com `expected_rows` do `count(*)` do
-  sandbox. Com `mode="rewrite"`: sob o lock, o `to_arrow_reader` da partição passado por `cast` a
+- **`export_partition`** com `mode="register"`: `COPY (SELECT <colunas do contrato na ordem dele,
+  sem a de partição> FROM <sandbox> WHERE <coluna> = '<valor>' ORDER BY <sort_key>) TO
+  '<uri>/<coluna>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)`, com a pasta
+  da partição criada antes por `storage.ensure_folder` na raiz local, porque o `COPY` para um arquivo
+  não cria a pasta; a linha do `RETURN_STATS` vira um `RegisteredFile` por
+  `delta.file_from_return_stats` (contagem, tamanho, `null_count` de todas as colunas, `min` e
+  `max` dos tipos que transcrevem exato), e `delta.register_files` faz as conferências, o commit e a
+  releitura, com `expected_rows` do `count(*)` do sandbox. A ordem das colunas e a coluna de
+  partição fora do arquivo são conferências de `register_files` ([etapa 3](PLAN-STAGE-3.md)): o
+  `COPY` posicional do Redshift leria o arquivo fora delas. Com `mode="rewrite"`: sob o lock, o `to_arrow_reader` da partição passado por `cast` a
   `delta.publish_partition`, sem `stream` nem arquivo. O modo chega resolvido por `Execution`.
 - **`cleanup`** chama `interrupt()` na conexão antes de tomar o lock, porque a execução acabou e o
   comando em curso, de um stream que ninguém lê, é cancelado em vez de esperado (2 ms com uma

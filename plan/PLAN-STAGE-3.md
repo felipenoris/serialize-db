@@ -79,7 +79,9 @@ o rodapé de cada arquivo, um GET por arquivo:
    `FIXED_LEN_BYTE_ARRAY`, `INT64` e `INT32` para `decimal`, `INT32` para `long`); a coluna de
    partição fora do arquivo, porque ela vive na ação e o `COPY` posicional do Redshift a leria como
    a coluna seguinte; e as colunas do contrato na ordem dele, pelo mesmo `COPY`. Uma coluna fora do
-   contrato passa, porque os leitores a ignoram.
+   contrato passa, porque os leitores a ignoram. Nenhum nulo numa coluna `NOT NULL`, pela contagem
+   de nulos de cada grupo de linhas do rodapé: o DuckDB grava toda coluna como `optional`, e o leitor
+   devolveria o nulo que o `write_deltalake` recusa.
 3. O valor de partição do caminho Hive igual ao de `value`.
 4. A soma de `num_records` dos rodapés igual à que `files` declara e a `expected_rows`, quando o
    chamador tem a contagem da fonte.
@@ -138,7 +140,8 @@ com as estatísticas dos quatro tipos).
 - **A forma do código** segue o `CLAUDE.md`, não a dos rascunhos de 2026-09-21, que eram provas
   densas: laços explícitos no lugar das compreensões com condição composta, uma função por
   conferência de `register_files` (`_check_relative_path`, `_check_file_size`,
-  `_check_footer_schema`, `_check_partition_path`, `_check_file_rows`, `_check_row_counts`), o
+  `_check_footer_schema`, `_check_not_null`, `_check_partition_path`, `_check_file_rows`,
+  `_check_row_counts`), o
   `SchemaDiff` montado por laço e não pelas
   expressões condicionais que escolhem a lista e o valor ao mesmo tempo, dicionários de ação
   montados em variáveis nomeadas, e a versão lida do objeto `DeltaTable` que escreveu, nunca de
@@ -311,7 +314,7 @@ com as estatísticas dos quatro tipos).
 | Sem partição | `test_publish_partition_without_partition_replaces_the_table` | `value=None` troca a tabela inteira; um valor numa tabela sem partição é recusado. |
 | Conflito | `test_two_writers_on_the_same_partition_conflict` | Dois `overwrite` da mesma partição na mesma versão, por `publish_partition` e por `register_files`: o segundo é `ExecutionConflict`; partições distintas passam. |
 | Registro | `test_register_files_registers_an_unload_like_file` | Um arquivo `INT96` e `FIXED_LEN_BYTE_ARRAY` registrado; os dois leitores devolvem as linhas e `timestamp[us]`; o mínimo e o máximo da chave na ação. |
-| Conferências | `test_register_files_refuses_each_defect`, parametrizado | Tamanho, linhas, partição do caminho, `expected_rows` diferente, caminho absoluto, coluna do contrato ausente, tipo físico fora dos admitidos, coluna de partição dentro do arquivo e colunas fora de ordem; a versão não muda e o arquivo fica órfão. |
+| Conferências | `test_register_files_refuses_each_defect`, parametrizado | Tamanho, linhas, partição do caminho, `expected_rows` diferente, caminho absoluto, coluna do contrato ausente, tipo físico fora dos admitidos, coluna de partição dentro do arquivo, colunas fora de ordem e nulo numa coluna `NOT NULL`; a versão não muda e o arquivo fica órfão. |
 | Releitura | `test_read_back_restores_on_a_difference` | Um máximo falso da chave, abaixo do real, faz `read_back` voltar a versão por `restore`. |
 | `Double` não finito | `test_nonfinite_double_columns_leave_min_max_out` | Uma coluna em `columns_without_min_max` numa partição: `publish_partition` grava o rodapé e o log sem o mínimo e o máximo dela, `register_files` grava o log sem os dois (o infinito inclusive), a outra partição sai com eles, e o `delta_scan` devolve as linhas do `NaN` e do infinito num filtro por intervalo e não abre o arquivo da outra partição. |
 | Estatísticas | `test_file_from_return_stats_and_registered_stats_prune` | O arquivo do `COPY ... RETURN_STATS` do DuckDB entra com o mínimo e o máximo dos tipos exatos; `EXPLAIN ANALYZE` mostra `Scanning Files: 0/n` para uma chave acima do máximo e um texto acima do máximo; as colunas `decimal` e `timestamp` entram sem mínimo e máximo. |
