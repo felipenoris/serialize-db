@@ -226,7 +226,7 @@ The budget above is never a reason to drop a fact: what does not fit here goes t
 | `.claude/memory/parquet-arrow-types.md` | `cast`, the schema mapping or a Parquet footer check: what each writer produces, the type contract, PyArrow casts and pandas conversions. |
 | `.claude/memory/aws-s3.md` | `serialize_db.storage`, the S3 suite or a probe that reaches AWS: conditional put, IAM needs, credentials, region and proxy per client. |
 | `.claude/memory/concurrency.md` | `stream`, `loader`, `max_workers` or any helper thread: the GIL, DB-API thread safety, the batch boundary measurements. |
-| `.claude/memory/source-base.md` | Stage 7, `tests/source_db_projetado.py` or `tests/reference_model/`: the dev base read on 2026-09-20, the production base read on 2026-09-21, the fixture and the reference model against them. |
+| `.claude/memory/source-base.md` | Stage 7, `tests/source_db_projetado.py` or `tests/reference_model/`: the dev base read on 2026-09-20, the production base read on 2026-09-21, the fixture and the reference model against them, and the early migration's reports from the target, kept only here. |
 | `.claude/memory/environments.md` | Running in the SageMaker space or the target, preparing the offline folder, dating a measurement: the lab, the target, the venv, the environments of the measurements. |
 
 ## Repository index
@@ -561,11 +561,15 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   publish without it, `stream` always through `UNLOAD`, `load` always through `loader`, the
   `NUMERIC` type from the driver's `type_modifier`, and the export without `PARTITION BY` to a prefix
   new per attempt; the readings they need wait for the next suite run in the target.
-- The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
-  ran successfully there on the copy of the production base, and its reports, not yet available,
-  carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the
-  default, and whether the other mode leaves stages 4, 5 and 7). Stage 5 follows with the target's
-  suite run, and stage 7 absorbs the script over the stage 3, 4 and 6 modules.
+- The reports of `scripts/migrate_parquet_to_delta.py`, which ran successfully in the target on the
+  copy of the production base in its version before issue #59, arrived on 2026-09-23 and stay
+  outside git and out of `plan/` at the user's request, so `plan/` still calls them unavailable;
+  their findings are in `.claude/memory/source-base.md`: every table and partition matched, and the
+  production copy has no non-finite `Double`. The next step is the `cad_lancamentos` partition in
+  `rewrite` and with `--no-sort`, run with the latest script in the target, the revision trigger
+  of `export_mode` (the default, and whether the other mode leaves stages 4, 5 and 7) and of the
+  load's sort. Stage 5 follows with the target's suite run, and stage 7 absorbs the script over the
+  stage 3, 4 and 6 modules.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still
