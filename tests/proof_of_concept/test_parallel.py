@@ -11,7 +11,8 @@ entrega cada lote à memória até um orçamento e a um arquivo Arrow IPC depois
 lotes enquanto a consulta continua; o ``close`` e o ``cleanup`` cancelam por ``interrupt`` a consulta
 que ainda roda) e a entrada em lotes ``Loader`` (a abertura confere o nome sem o lock da sessão, uma
 thread grava os lotes num arquivo, e o ``close`` cria a tabela e roda um único ``INSERT`` numa
-transação), o pipeline de três estágios que as encadeia; várias tabelas
+transação), a leitura que corre ao lado de um ``load`` esquecido numa thread e falha em vez de ler
+dado velho, o pipeline de três estágios que as encadeia; várias tabelas
 Delta lidas em paralelo pelo delta-rs e ingeridas em paralelo no DuckDB por ``delta_scan``, uma
 sessão a mais por tabela; escritas Delta em paralelo em tabelas distintas e em meses distintos
 da mesma tabela, e o conflito de dois escritores no mesmo mês; o início do alocador de
@@ -1004,6 +1005,43 @@ def test_table_barrier_delays_the_read_until_the_load_lands() -> None:
     loader.join()
     reader.join()
     assert events == ["carga", "leitura"]
+
+
+@pytest.mark.local
+def test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows(local_location: LocalLocation) -> None:
+    """Um ``load`` disparado numa thread sem ``result()`` não deixa a leitura ver dado velho: a tabela só nasce no ``close`` do ``Loader``, e o nome ocupado é recusado, então a leitura antes da carga falha com ``CatalogException`` na sessão principal e numa sessão a mais."""
+    engine = SandboxEngine(folder=local_location.child("transbordo_carga_esquecida"))
+    Path(engine.folder).mkdir()
+    schema = pa.schema([("id", pa.int64())])
+    ddl = "CREATE TABLE destino (id BIGINT)"
+    opened = threading.Event()
+    release = threading.Event()
+
+    def load() -> None:
+        with Loader(engine, "destino", schema, ddl) as loader:
+            loader.write(pa.RecordBatch.from_pydict({"id": pa.array(range(1000), pa.int64())}))
+            opened.set()
+            assert release.wait(timeout=10)
+
+    with ThreadPoolExecutor(1) as pool:
+        future = pool.submit(load)  # o cliente esquece o result()
+        assert opened.wait(timeout=10)
+
+        # A carga em voo: a leitura falha nas duas sessões, em vez de ver uma tabela vazia ou anterior.
+        with pytest.raises(duckdb.CatalogException, match="destino does not exist"):
+            engine.query("SELECT count(*) FROM destino")
+        with engine.new_session() as other:
+            with pytest.raises(duckdb.CatalogException, match="destino does not exist"):
+                other.query("SELECT count(*) FROM destino")
+        release.set()
+        future.result()
+
+    assert engine.query("SELECT count(*) AS n FROM destino").column("n")[0].as_py() == 1000
+
+    # Uma segunda carga no mesmo nome é recusada: nenhuma tabela do sandbox tem estado anterior a ler.
+    with pytest.raises(ValueError, match="destino"):
+        Loader(engine, "destino", schema, ddl)
+    engine.cleanup()
 
 
 def max_key(table: DeltaTable, column: str) -> int:

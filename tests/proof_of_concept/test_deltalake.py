@@ -14,8 +14,9 @@ exportação por cópia dos arquivos e a carga inicial de pastas Parquet; e aind
 compactação que normaliza arquivos de outro escritor, a descrição e os comentários que atravessam o
 ``overwrite`` e mudam por ``alter``, o mínimo e o máximo que o próprio delta-rs grava por tipo, o
 ``NaN`` e o infinito nas estatísticas registradas e nas do delta-rs, o ``Double`` sem estatística
-no rodapé e no log, dois registros concorrentes da mesma partição e a poda do ``delta_scan`` por
-forma de predicado. Os
+no rodapé e no log, dois registros concorrentes da mesma partição, a poda do ``delta_scan`` por
+forma de predicado, e o valor de partição codificado na pasta e no log, com a aspa que quebra o
+predicado. Os
 comportamentos estão descritos em ``plan/delta.md``; aqui eles viram asserções.
 """
 
@@ -972,3 +973,22 @@ def test_delta_scan_prunes_by_equality_and_range_not_by_in_list(folder: Callable
     with pytest.raises(duckdb.InternalException, match="total_files inconsistent"):
         con.execute(f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}', version := 0) WHERE {in_range}")
     con.close()
+
+
+def test_partition_value_is_percent_encoded_in_the_folder_and_the_log(folder: Callable[[str], str]) -> None:
+    """O delta-rs grava o valor de partição codificado por porcentagem no nome da pasta, e o caminho da ação ``add`` sai codificado de novo; o valor só de letras, dígitos, ``_``, ``.`` e ``-`` sai igual nos dois. A aspa simples fecha o literal do predicado de ``publish_partition``."""
+    uri = folder("particao_codificada")
+    for value in ["2026-Q1", "a:b", "a%b", "ação", "d'agua"]:
+        write_deltalake(uri, pa.table({"id": pa.array([1], pa.int64()), "p": [value]}), partition_by=["p"], mode="append")
+
+    # A pasta no disco leva o valor codificado uma vez; o caminho no log, a pasta codificada de novo.
+    folders = sorted(entry.name for entry in Path(uri).iterdir() if entry.name.startswith("p="))
+    assert folders == ["p=2026-Q1", "p=a%25b", "p=a%3Ab", "p=a%C3%A7%C3%A3o", "p=d%27agua"]
+    actions = pa.table(DeltaTable(uri).get_add_actions(flatten=True))
+    log_folders = dict(zip(actions.column("partition.p").to_pylist(), [path.split("/")[0] for path in actions.column("path").to_pylist()]))
+    assert log_folders == {"2026-Q1": "p=2026-Q1", "a:b": "p=a%253Ab", "a%b": "p=a%2525b", "ação": "p=a%25C3%25A7%25C3%25A3o", "d'agua": "p=d%2527agua"}
+
+    # O predicado da substituição por partição é texto SQL: o valor com aspa quebra o literal.
+    write_deltalake(uri, pa.table({"id": pa.array([2], pa.int64()), "p": ["a:b"]}), mode="overwrite", predicate="p = 'a:b'")
+    with pytest.raises(DeltaError, match="Unterminated string literal"):
+        write_deltalake(uri, pa.table({"id": pa.array([2], pa.int64()), "p": ["d'agua"]}), mode="overwrite", predicate="p = 'd'agua'")

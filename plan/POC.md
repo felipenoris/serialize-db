@@ -2034,3 +2034,36 @@ usuário, é gravar o `Double` sem mínimo e máximo no rodapé e no log;
 `test_duckdb.py::test_return_stats_has_nan_follows_only_the_last_row_group`,
 `test_duckdb.py::test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer` e
 `test_deltalake.py::test_float_statistics_off_keep_the_nan_row`.
+
+## O que as sondas das decisões da etapa 6 mostraram
+
+Em 2026-09-23, no mesmo macOS (DuckDB 1.5.5, deltalake 1.6.4, pyarrow 25.0.1), duas sondas
+responderam às decisões pendentes da etapa 6, e os casos entraram nas suítes de estudo.
+
+- **O `load` esquecido numa thread.** Com o `Loader` de referência de `test_parallel.py`, um `load`
+  disparado num `ThreadPoolExecutor` sem `result()` e, logo depois, uma leitura da mesma tabela: a
+  leitura falhou com `Catalog Error: Table with name destino does not exist!` na sessão principal e
+  numa sessão a mais, a leitura depois da carga contou as 5.000 linhas, e um segundo `Loader` no
+  mesmo nome foi recusado. A premissa do item da barreira por tabela, a leitura do estado anterior
+  em silêncio, é anterior à decisão do mesmo dia de o `loader` criar a tabela no `close`: sem nome
+  reaproveitável não há estado anterior, e a corrida vira um erro intermitente. O teste rodou seis
+  vezes seguidas, verde em todas.
+- **O valor de partição com caracteres especiais.** O `write_deltalake` com `partition_by` gravou as
+  pastas `p=a%3Ab`, `p=a%25b`, `p=a%23b`, `p=a%C3%A7%C3%A3o` e `p=d%27agua` para `a:b`, `a%b`,
+  `a#b`, `ação` e `d'agua`, e o `path` das ações `add` codificou a pasta de novo (`p=a%253Ab`);
+  `2026-Q1` saiu igual nos dois. O predicado `p = 'd'agua'` falhou com `DeltaError: Generic
+  DeltaTable error: External error: Generic error: Unterminated string literal at Line: 1, Column:
+  12`, e os de `:`, `%`, `#` e acento passaram. A expressão `regexp_full_match(v,
+  '[0-9A-Za-z][0-9A-Za-z_.-]*')` do DuckDB concordou com o `re.fullmatch` do Python em doze
+  valores, entre eles o vazio, `..`, `-x`, `_x` e `x.y_z-1`.
+
+**Consequência**: o usuário decidiu no mesmo dia as quatro pendências da etapa 6, e
+[`PLAN-STAGE-6.md`](PLAN-STAGE-6.md) não tem decisão pendente: `--metadata` no `serialize-db run`,
+`next_ids` só na chave sequencial, a regra da partição `[0-9A-Za-z][0-9A-Za-z_.-]*` no valor e no
+`execution_id`, e a barreira por tabela fora das etapas, que saiu de
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). O `loader` do Redshift passou a recusar o nome ocupado e
+a criar a tabela no `close`, na transação do `COPY` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)), e
+[`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN.md`](PLAN.md), [`delta.md`](delta.md) e
+[`docs/index.md`](../docs/index.md) escrevem a regra. Os casos:
+`test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` e
+`test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`.

@@ -74,6 +74,13 @@ O arquivo que sai numa substituição não é apagado: a ação `remove` o retir
 no tempo continua a enxergá-lo até o `vacuum`. Os valores de partição ficam na ação `add`, não dentro
 do arquivo de dados: o Parquet gravado pelo delta-rs para `mes=2026-02` tem cinco colunas, sem `mes`.
 
+O valor de partição entra no nome da pasta codificado por porcentagem (`p=a%3Ab` para `a:b`,
+`p=d%27agua` para `d'agua`, `p=a%C3%A7%C3%A3o` para `ação`), e o `path` da ação `add` codifica a
+pasta de novo (`p=a%253Ab`). O valor só de letras, dígitos, `_`, `.` e `-` sai igual nos dois. A
+regra da partição da [etapa 6](PLAN-STAGE-6.md) aceita só esses caracteres, porque o `COPY` do modo
+`register` monta o nome da pasta com o valor sem codificar (deltalake 1.6.4, 2026-09-23,
+`test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`).
+
 ### Log, snapshot e checkpoint
 
 O snapshot de uma versão é o resultado de reproduzir as ações do log em ordem: o conjunto de `add`

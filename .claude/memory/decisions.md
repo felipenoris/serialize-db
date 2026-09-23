@@ -439,3 +439,24 @@ different spec rule (min and max without the `NaN` plus `nan_count`), a Delta lo
 Parquet spec, and DuckDB losing the row through both layers; the recommendation awaiting the user is
 no `Double` min and max in the footer or the log. `plan/POC.md`, `plan/PLAN-STAGE-3.md`,
 `plan/OPEN_QUESTIONS.md`
+
+## The decisions of stage 6
+
+On 2026-09-23 the user took the four pending decisions of stage 6. `serialize-db run` keeps
+`--metadata modulo:atributo`, like `schema` and `sql`, instead of a conventional attribute of the
+pipeline module. On `next_ids` the user stated that it serves only sequential keys, which are a
+single column; for a table whose primary key has several columns the client decides the ids
+directly and does not call `next_ids`. So `next_ids` takes the single-column integer primary key
+and no `id_column` option exists; raising `ContractError` on another key is the assistant's
+reading, named in the report. The table barrier left the plan and stage 5's Redshift `loader` was
+aligned with stage 4 (refuse a taken name at open, `CREATE TABLE` and `COPY` in one transaction at
+`close`), after the probe of the same day showed that a read racing a forgotten `load` fails with
+`CatalogException` instead of reading old rows; checking the name on Redshift by
+`select 1 from <esquema>.<nome> limit 0` is the assistant's proposal. The partition value and the
+`execution_id` follow the allowlist `[0-9A-Za-z][0-9A-Za-z_.-]*` (full match) instead of the list
+of refused characters: the single quote broke the `publish_partition` predicate, and delta-rs
+percent-encodes `:`, `%`, `#`, `'` and accents in the folder name, which the `register` mode's
+`COPY` writes unencoded. Validating every value of `partitions` in `ingest`, `audit` and `publish`
+is the assistant's extension, named in the report. Stage 6 has no decision awaiting the user.
+`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN.md`,
+`plan/POC.md`, `plan/OPEN_QUESTIONS.md`

@@ -37,6 +37,13 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
 - `add`/`remove` paths are relative to the table folder: a copied folder opened at the same version
   with the same rows in delta-rs and DuckDB, history and time travel intact. Never register files
   by absolute URI; Iceberg manifests store absolute paths. `plan/delta.md`
+- deltalake 1.6.4 percent-encodes the partition value in the folder name (`p=a%3Ab` for `a:b`,
+  `p=d%27agua` for `d'agua`, `p=a%C3%A7%C3%A3o` for `ação`) and the `add` path encodes the folder
+  again (`p=a%253Ab`); a value of letters, digits, `_`, `.` and `-` comes out unchanged in both. The
+  predicate `p = 'd'agua'` fails with `Unterminated string literal` (2026-09-23,
+  `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`). This is
+  why the partition value and the `execution_id` follow `[0-9A-Za-z][0-9A-Za-z_.-]*`.
+  `plan/delta.md`, `plan/PLAN-STAGE-6.md`
 - Delta data files do not contain the partition column (it lives in the `add` action), so a
   partition key must derive from a column in the file for Redshift `COPY`; DuckLake keeps identity
   and source columns inside the files. `plan/estrategia.md`

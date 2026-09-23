@@ -81,10 +81,11 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
 - **A partição é uma coluna de texto do modelo do cliente** (decisão de 2026-09-22, que generaliza
   a de 2026-09-20): `String(n)`, declarada em `Table.info["serialize_db"]` (`partition_by`
   `["data_str"]`), e cada valor é uma partição, a unidade de ingestão, auditoria, publicação e
-  substituição; o valor serve de nome de pasta e de literal, sem `/`, `=`, espaço nem vazio, e a
-  ordem de texto dos valores é a que `previous_partitions` devolve. Na base atual ela é a data em
-  texto `AAAA-MM-DD` derivada de uma coluna de data por `strftime(<coluna de data>, '%Y-%m-%d')`,
-  declarada em `partition_source` (`"data"`; em `cad_lancamentos`, `data_base_str` de
+  substituição; o valor serve de nome de pasta e de literal e segue a regra da partição,
+  `[0-9A-Za-z][0-9A-Za-z_.-]*`, que também vale para o `execution_id` (decisão do usuário de
+  2026-09-23), e a ordem de texto dos valores é a que `previous_partitions` devolve. Na base atual
+  ela é a data em texto `AAAA-MM-DD` derivada de uma coluna de data por `strftime(<coluna de data>,
+  '%Y-%m-%d')`, declarada em `partition_source` (`"data"`; em `cad_lancamentos`, `data_base_str` de
   `data_base`), e a biblioteca confere a derivação quando o modelo a declara. A biblioteca não
   fixa nome nem granularidade; `mes` nos exemplos de `delta.md`, `duckdb.md`, `parquet.md` e
   `sqlalchemy.md` é uma coluna de partição ilustrativa.
@@ -460,10 +461,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   [`duckdb.md`](duckdb.md)). No Redshift, cada
   sessão a mais pede a sua credencial temporária; dois `COPY` em conexões abertas dentro da tarefa
   levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
-- As chaves inteiras vêm de `run.next_ids(table, n)`: faixas contíguas sob lock, a partir de
-  `max_key + 1` na versão fixada, lido de `max.<coluna>` das ações `add` e pela varredura da coluna
-  quando um arquivo não tem a estatística; a tabela vazia começa em 1. Os ids de uma reexecução
-  diferem, e a unicidade continua na auditoria; `publish` confere por `version_diff` que nenhuma alteração de dados entrou na tabela
+- As chaves sequenciais, a chave primária inteira de uma coluna, vêm de `run.next_ids(table, n)`:
+  faixas contíguas sob lock, a partir de `max_key + 1` na versão fixada, lido de `max.<coluna>` das
+  ações `add` e pela varredura da coluna quando um arquivo não tem a estatística; a tabela vazia
+  começa em 1. Numa chave primária composta o cliente decide os ids e não chama `next_ids`
+  (decisão do usuário de 2026-09-23). Os ids de uma reexecução diferem, e a unicidade continua na
+  auditoria; `publish` confere por `version_diff` que nenhuma alteração de dados entrou na tabela
   desde a versão fixada e aborta com `ExecutionConflict` quando entrou, para que duas execuções
   abertas na mesma versão não publiquem a mesma faixa; um commit só de metadados ou de manutenção
   (`reconcile`, `compact`, `vacuum`) passa e atualiza a versão fixada (`test_parallel.py`).

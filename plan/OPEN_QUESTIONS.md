@@ -40,12 +40,6 @@ foi medido em [`POC.md`](POC.md).
   (`probelib.endpoint_reachable`), que no macOS no mesmo dia baixou de 10,0 s para 2,0 s a espera por
   um endereço sem rota ([`POC.md`](POC.md)). A próxima execução dos probes no alvo diz o que sobra;
   a permissão sobre a raiz fica provada pela primeira escrita.
-- **Barreira por tabela.** Um cliente que dispara `load` numa thread e esquece o `result()` lê o
-  estado anterior em silêncio, porque o DuckDB não espera. A guarda: `load` marca a tabela em voo,
-  e `query` e `stream` esperam as tabelas em voo que o statement referencia, tiradas por
-  `find_tables` do statement Core ou do sentinela `{prefix}` do texto gerado
-  (`test_parallel.py::test_table_barrier_delays_the_read_until_the_load_lands`). Fica fora das
-  etapas até existir um pipeline paralelo real.
 - **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)); a
@@ -130,11 +124,6 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição
   (`<uri>/<execution_id>/<valor>/` com `PARTITION BY`, ou `<uri>/<coluna>=<valor>/<execution_id>/`
   sem ele), porque o `UNLOAD` confere o destino como prefixo.
-- [Etapa 6](PLAN-STAGE-6.md): `--metadata` na linha de comando; a chave de `next_ids` numa chave
-  composta; a barreira por tabela; a aspa simples no valor da partição, que a validação de
-  `Execution` não exclui (sem `/`, `=`, espaço nem vazio) e que quebraria o predicado de
-  `publish_partition` e todo literal `'<valor>'` das etapas 4, 5 e 8. Proposto: recusá-la junto
-  com os demais, ou trocar a lista por `[0-9A-Za-z_.-]+`, que cobre `AAAA-MM-DD` e `2026-Q1`.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.

@@ -21,7 +21,7 @@ modelo:
 | Nulo em coluna `NOT NULL` | `column.nullable` | As partições da execução. |
 | Chave repetida | `table.primary_key` e os `UniqueConstraint`, mais o que `keys` acrescenta | As partições da execução quando as colunas da chave incluem a coluna de partição ou a de `partition_source`; a tabela inteira quando não incluem, menos a chave primária inteira de uma coluna cujo menor valor na execução passa do `max_key` da versão fixada. |
 | Órfão de chave estrangeira | `table.foreign_keys` | Só com `foreign_keys=True`; a tabela referenciada entra na versão fixada pela execução. |
-| Partição fora da origem, e valor que não serve de nome de pasta | `partition_by` e `partition_source` de `table_options`: com `partition_source` declarado, a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')`; em toda tabela particionada, o valor vazio ou com `/`, `=` ou espaço (a partição é texto desde a decisão de 2026-09-22, e a data é o caso da base atual) | As partições da execução. |
+| Partição fora da origem, e valor que não serve de nome de pasta | `partition_by` e `partition_source` de `table_options`: com `partition_source` declarado, a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')`; em toda tabela particionada, o valor fora da regra da partição, `[0-9A-Za-z][0-9A-Za-z_.-]*` (a partição é texto desde a decisão de 2026-09-22, a regra é a decisão do usuário de 2026-09-23, e a data é o caso da base atual) | As partições da execução. |
 | Texto acima de `String(n)` em bytes e valor fora do `Numeric(18, 2)` | os tipos do contrato (`docs/index.md`); no Redshift, o `COPY` de uma string maior que o `VARCHAR` aborta (`Spectrum Scan Error` 15007, 2026-09-21), e esta verificação é a barreira | As partições da execução. |
 | Documento JSON inválido, ou acima de 65.535 bytes se a decisão da [etapa 8](PLAN-STAGE-8.md) fixar o teto | as colunas JSON, que nem o Arrow nem o Delta validam; o teto é o do `VARCHAR` da staging do Redshift e da string que o `COPY` de Parquet aceita numa coluna `SUPER` (2026-09-21) | As partições da execução. |
 | Totais de controle | as colunas `Numeric` e `Double`; as `Double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem | As partições da execução. |
@@ -221,8 +221,9 @@ class DuckDBEngine:
   cópia prefixada de `sql.render` com o prefixo pedido; `checks` não recebe `prefix` (decisão do
   usuário de 2026-09-23). Uma consulta de linhas reúne num `count(*) FILTER` por coluna: nulo em `NOT NULL`, texto acima de
   `String(n)` em bytes, JSON inválido, a coluna de partição diferente de `partition_text(partition_source)`
-  quando o modelo declara `partition_source`, o valor de partição vazio ou com `/`, `=` ou espaço
-  (a partição é texto desde 2026-09-22, e a data é o caso da base atual), e a soma de controle de
+  quando o modelo declara `partition_source`, o valor de partição fora da regra da partição,
+  `[0-9A-Za-z][0-9A-Za-z_.-]*` (a partição é texto desde 2026-09-22, e a data é o caso da base
+  atual), e a soma de controle de
   cada coluna `Double` e `Numeric` como `DECIMAL(38, 6)`. A soma de uma coluna `Double` corre só
   sobre os valores finitos, `sum(CASE WHEN isfinite(x) THEN CAST(x AS DECIMAL(38, 6)) END)` no
   DuckDB, e a consulta conta à parte os não finitos: o `CAST` de um `NaN` ou de um infinito para
@@ -239,8 +240,11 @@ class DuckDBEngine:
   no DuckDB e vira `is_valid_json` no Redshift; `text_bytes`, o comprimento em bytes que o
   `String(n)` mede como o `VARCHAR(n)` do Redshift, é `strlen` no DuckDB e `octet_length` no
   Redshift, porque o `length` dos dois conta caracteres e o `octet_length` do DuckDB só aceita
-  `BLOB`. Uma consulta por chave (`GROUP BY ... HAVING count(*)
-  > 1`) dentro das partições da execução, e, quando a chave não inclui a coluna de partição e
+  `BLOB`; `partition_value_valid`, a regra da partição, é `regexp_full_match(x,
+  '[0-9A-Za-z][0-9A-Za-z_.-]*')` no DuckDB, que concordou com o `re.fullmatch` do Python em doze
+  valores (2026-09-23), e o operador POSIX `x ~ '^[0-9A-Za-z][0-9A-Za-z_.-]*$'` no Redshift. Uma
+  consulta por chave (`GROUP BY ... HAVING count(*) > 1`) dentro das partições da execução, e,
+  quando a chave não inclui a coluna de partição e
   `key_scope != "partition"`, uma segunda consulta que junta o sandbox com `published` (o
   `delta_scan` da versão fixada, ou a staging no Redshift) fora das partições da execução. A chave
   que inclui a coluna de `partition_source` não ganha a segunda consulta, e a chave primária inteira
@@ -332,7 +336,12 @@ class DuckDBEngine:
   antes do primeiro lote, 0,811 s contra 0,006 s em 20.000.000 de linhas (leitura e decisão do
   usuário de 2026-09-23, [`POC.md`](POC.md)). O cursor não vê as tabelas temporárias da sessão
   principal, e um nome ocupado entre a abertura e o `close` falha no `CREATE` do `close`, sem
-  inserir nada. Depois da guarda, `write` faz `cast(batch, table)` na thread do cliente e enfileira,
+  inserir nada. Por isso um `load` disparado numa thread e esquecido sem `result()` não deixa a
+  leitura ver dado velho: antes do `close`, a leitura da tabela falha com `CatalogException`, na
+  sessão principal e numa sessão a mais, e a barreira por tabela que esperaria a carga ficou fora
+  das etapas (decisão do usuário de 2026-09-23,
+  `test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`).
+  Depois da guarda, `write` faz `cast(batch, table)` na thread do cliente e enfileira,
   e a thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4, sem a sessão. O `close` registra
   o leitor do arquivo com um nome único, que não é o de uma tabela do modelo, porque um leitor
   registrado ocupa um nome de view (leitura de 2026-09-22), e roda, sob o lock e numa transação,

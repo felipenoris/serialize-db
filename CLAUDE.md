@@ -506,7 +506,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `stream` and `interrupt()`, the last three implemented in the `test_parallel.py` sketches. The
   `cast` keeps accepting the non-finite `Double`; its pruning defect is issue #59, and the stage 3
   recommendation of 2026-09-23, no `Double` min and max in the Parquet footer or the Delta log,
-  waits on the user (`.claude/memory/decisions.md`).
+  waits on the user (`.claude/memory/decisions.md`). The user's answers of 2026-09-23 closed stage
+  6: `--metadata` in `serialize-db run`, `next_ids` only on the sequential single-column key, the
+  allowlist `[0-9A-Za-z][0-9A-Za-z_.-]*` for the partition value and the `execution_id`, and no
+  table barrier, with the stage 5 `loader` creating its table at `close` like stage 4's.
 - The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
   ran successfully there on the copy of the production base, and its reports, not yet available,
   carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the
