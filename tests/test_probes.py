@@ -6,9 +6,10 @@ DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o i
 (tabelas Delta, sessões da suíte, versões não correntes), o versionamento pela amostra, o Object
 Lock, o ciclo de vida, a montagem de ``~/shared``, o formato das tabelas do Glue e os parâmetros da
 conexão Redshift. Um ``Report`` grava em ``probes/output/``; ``make_report`` o aponta para a pasta
-temporária do teste e devolve ``sys.stdout`` ao pytest no fim. Nenhum teste grava fora de
-``tmp_path``, e o do ``parquet_source.py`` não abre arquivo algum: as suas funções recebem colunas e
-rodapés fabricados.
+do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes que gravam, o relatório e os arquivos
+fabricados, são ``local``: gravam numa pasta nova sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são
+pulados sem ela. O do ``parquet_source.py`` não abre arquivo algum: as suas funções recebem
+colunas e rodapés fabricados.
 
 A consulta DNS é a do nome ``nao.existe.invalid`` em
 ``test_endpoint_reachable_skips_the_call_when_the_port_does_not_answer``: ``socket.getaddrinfo``
@@ -25,6 +26,7 @@ import os
 import socket
 import sys
 import types
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -39,6 +41,7 @@ import parquet_source
 import probelib
 import redshift
 import space
+from conftest import LocalLocation
 
 NOW = dt.datetime(2026, 9, 20, 3, 44, tzinfo=dt.timezone.utc)
 MINUTE = dt.timedelta(minutes=1)
@@ -57,11 +60,19 @@ def denied_call() -> None:
     raise client_error("AccessDenied", "GetBucketPolicy")
 
 
+@pytest.fixture
+def folder(local_location: LocalLocation) -> Path:
+    """Uma pasta nova sob a pasta da sessão da suíte local, onde o teste grava."""
+    path = Path(local_location.child(f"probes-{uuid.uuid4().hex[:8]}"))
+    path.mkdir()
+    return path
+
+
 @contextlib.contextmanager
-def make_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[probelib.Report]:
-    """Um ``Report`` que grava em ``tmp_path``; no fim, fecha o arquivo e devolve ``sys.stdout`` ao
+def make_report(folder: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[probelib.Report]:
+    """Um ``Report`` que grava em ``folder``; no fim, fecha o arquivo e devolve ``sys.stdout`` ao
     pytest."""
-    monkeypatch.setattr(probelib, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(probelib, "OUTPUT_DIR", folder)
     stdout = sys.stdout
     report = probelib.Report("teste", "funções puras")
     try:
@@ -394,15 +405,16 @@ def test_find_values_and_connection_rows() -> None:
     ("kinds", "failing", "expected"),
     [(["pass"], False, 0), (["pass"], True, 1), (["fail", "pass"], False, 2), (["fail"], True, 2)],
 )
+@pytest.mark.local
 def test_report_exit_code(
-    tmp_path: Path,
+    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
     kinds: list[str],
     failing: bool,
     expected: int,
 ) -> None:
     """O código de saída: 2 com checagem reprovada, senão 1 com chamada falhada, senão 0."""
-    with make_report(tmp_path, monkeypatch) as report:
+    with make_report(folder, monkeypatch) as report:
         record = {"pass": report.ok, "fail": report.fail}
         for kind in kinds:
             record[kind]("T-1", "o que", "detalhe")
@@ -413,12 +425,13 @@ def test_report_exit_code(
         assert report.path.read_text(encoding="utf-8").count("# ") >= 2
 
 
+@pytest.mark.local
 def test_report_call_returns_the_result_and_records_the_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``call`` devolve o resultado da ação; na exceção, devolve ``None``, guarda o motivo e
     registra a falha na seção final."""
-    with make_report(tmp_path, monkeypatch) as report:
+    with make_report(folder, monkeypatch) as report:
         assert report.call("soma", lambda: 1 + 1, render=str) == 2
         assert report.failures == []
 
@@ -490,8 +503,9 @@ def test_session_rows_list_the_suite_sessions_newest_first() -> None:
     assert rows[1][1:] == [7, 307055, str(NOW + 2 * MINUTE)]
 
 
+@pytest.mark.local
 def test_object_versions_reads_denied_accumulated_and_clean(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``BK-14``: negado com o motivo; versões não correntes e marcadores contados; ou nada
     acumulado."""
@@ -506,7 +520,7 @@ def test_object_versions_reads_denied_accumulated_and_clean(
     }
     accumulated = FakeS3(list_object_versions=[accumulated_page])
     clean = FakeS3(list_object_versions=[{"Versions": [{"IsLatest": True, "Size": 10}]}])
-    with make_report(tmp_path, monkeypatch) as report:
+    with make_report(folder, monkeypatch) as report:
         bucket.object_versions(report, denied, "b", PREFIX)
         bucket.object_versions(report, accumulated, "b", PREFIX)
         bucket.object_versions(report, clean, "b", PREFIX)
@@ -517,12 +531,13 @@ def test_object_versions_reads_denied_accumulated_and_clean(
         assert notes[2] == "nenhuma, nem marcador de exclusão"
 
 
+@pytest.mark.local
 def test_versioning_check_uses_the_api_or_the_sample(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``BK-4``: pela API quando lida; com ela negada, um VersionId na amostra prova o
     versionamento."""
-    with make_report(tmp_path, monkeypatch) as report:
+    with make_report(folder, monkeypatch) as report:
         bucket.versioning_check(report, "Enabled", "lido", None)
         bucket.versioning_check(report, "Suspended", "lido", None)
         bucket.versioning_check(report, None, "negado (AccessDenied)", {"VersionId": "ORjAs2CA"})
@@ -558,13 +573,14 @@ def bucket_client(lock: dict | Exception) -> FakeS3:
     )
 
 
+@pytest.mark.local
 def test_bucket_settings_read_the_region_the_encryption_and_the_denied_versioning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``BK-1``, ``BK-2`` e ``BK-5``: o bucket, a região e a chave KMS; o versionamento negado
     volta com o motivo."""
     client = bucket_client(client_error("ObjectLockConfigurationNotFoundError"))
-    with make_report(tmp_path, monkeypatch) as report:
+    with make_report(folder, monkeypatch) as report:
         kms_key, status, why = bucket.bucket_settings(report, client, "b", None)
         assert kms_key == KMS_KEY
         assert status is None
@@ -593,18 +609,20 @@ def test_bucket_settings_read_the_region_the_encryption_and_the_denied_versionin
         ),
     ],
 )
+@pytest.mark.local
 def test_bucket_settings_interpret_object_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lock: dict | Exception, expected: str
+    folder: Path, monkeypatch: pytest.MonkeyPatch, lock: dict | Exception, expected: str
 ) -> None:
     """``BK-12``: a ausência de Object Lock é uma leitura (``desativado``), a negação traz o motivo,
     e a retenção padrão sai por extenso."""
-    with make_report(tmp_path, monkeypatch) as report:
+    with make_report(folder, monkeypatch) as report:
         bucket.bucket_settings(report, bucket_client(lock), "b", None)
         assert checks(report, "BK-12")[0].startswith(expected)
 
 
+@pytest.mark.local
 def test_lifecycle_flags_an_enabled_expiration_that_reaches_the_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``BK-3``: só uma regra habilitada, com expiração, cujo prefixo contém a raiz ou está contido
     nela, reprova."""
@@ -627,7 +645,7 @@ def test_lifecycle_flags_an_enabled_expiration_that_reaches_the_root(
         client_error("NoSuchLifecycleConfiguration"),
         client_error("AccessDenied"),
     ]
-    with make_report(tmp_path, monkeypatch) as report:
+    with make_report(folder, monkeypatch) as report:
         for response in responses:
             client = FakeS3(get_bucket_lifecycle_configuration=response)
             bucket.lifecycle(report, client, "b", "dzd/proj")
@@ -651,14 +669,15 @@ def test_principal_arn_turns_an_assumed_role_into_the_role() -> None:
 # space.py, catalog.py, redshift.py e diagnose_aws.py
 
 
-def test_mount_state_follows_the_link_and_reads_proc_mounts(tmp_path: Path) -> None:
+@pytest.mark.local
+def test_mount_state_follows_the_link_and_reads_proc_mounts(folder: Path) -> None:
     """``~/shared`` é um link para a montagem; o estado vem do caminho real em ``/proc/mounts``, com
     o tipo e ``rw`` ou ``ro``."""
-    real = Path(os.path.realpath(tmp_path / "shared"))
+    real = Path(os.path.realpath(folder / "shared"))
     real.mkdir()
-    link = tmp_path / "link"
+    link = folder / "link"
     link.symlink_to(real)
-    mounts = tmp_path / "mounts"
+    mounts = folder / "mounts"
 
     mounted_rw = (
         f"s3fs {real} fuse.s3fs rw,nosuid,nodev,relatime,user_id=1000,allow_other 0 0\n"
@@ -670,17 +689,18 @@ def test_mount_state_follows_the_link_and_reads_proc_mounts(tmp_path: Path) -> N
     mounts.write_text(f"s3fs {real} fuse.s3fs ro,nosuid 0 0\n")
     assert space.mount_state(real, str(mounts)) == "montada, tipo fuse.s3fs, ro"
 
-    assert space.mount_state(tmp_path / "nothere", str(mounts)) == "ausente"
-    assert space.mount_state(real, str(tmp_path / "nomounts")) == "existe, sem montagem"
+    assert space.mount_state(folder / "nothere", str(mounts)) == "ausente"
+    assert space.mount_state(real, str(folder / "nomounts")) == "existe, sem montagem"
 
 
+@pytest.mark.local
 def test_pinned_requirements_read_the_pinned_versions_of_pyproject(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``SP-9`` compara o venv com as dependências de execução e o grupo ``dev`` de
     ``pyproject.toml``: nome de importação e versão quando fixada por ``==``, e nenhum pacote dos
     outros grupos."""
-    (tmp_path / "pyproject.toml").write_text(
+    (folder / "pyproject.toml").write_text(
         """
 [project]
 dependencies = ["deltalake==1.6.4", "duckdb-engine==0.17.0", "sqlalchemy-redshift == 1.0.0"]
@@ -691,7 +711,7 @@ docs = ["pdoc==16.0.0"]
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(probelib, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(probelib, "REPO_ROOT", folder)
 
     assert space.pinned_requirements() == {
         "deltalake": "1.6.4",
@@ -716,8 +736,9 @@ def test_table_format_recognizes_iceberg_delta_and_parquet() -> None:
     assert catalog.table_format({}) == "-"
 
 
+@pytest.mark.local
 def test_target_from_connection_fills_host_port_and_database(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Os parâmetros da conexão do projeto: o endpoint físico, os dados em camelCase e a URL JDBC
     preenchem o alvo."""
@@ -730,7 +751,7 @@ def test_target_from_connection_fills_host_port_and_database(
             "jdbcUrl": "jdbc:redshift://outro:5439/ignorado",
         },
     }
-    with make_report(tmp_path, monkeypatch) as report:
+    with make_report(folder, monkeypatch) as report:
         target = redshift.Target()
         redshift.target_from_connection(report, target, chosen)
         assert target.host == "wg.redshift.amazonaws.com"

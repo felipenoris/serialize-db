@@ -15,8 +15,8 @@ saída: a visão de sistema negada a um usuário comum e o pacote ausente fora d
 do ambiente, não defeito a corrigir.
 Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma checagem reprovou.
 
-Um relatório que sustenta uma afirmação de `plan/POC.md` é guardado em `plan/readings/`, indexado
-por [`plan/readings/README.md`](../plan/readings/README.md); `output/` fica fora do git.
+Um relatório que uma etapa pendente ainda consulta é guardado em `plan/readings/`, indexado por
+[`plan/readings/README.md`](../plan/readings/README.md); `output/` fica fora do git.
 
 ```
 .venv/bin/python probes/space.py

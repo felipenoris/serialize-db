@@ -3,11 +3,11 @@ publicação. Os modelos SQLAlchemy do cliente são o contrato de esquema: a
 biblioteca deriva deles o esquema Arrow e Delta, o DDL de cada motor, a conversão dos lotes de
 dados e a conferência dos próprios modelos.
 
-Esta página explica o funcionamento geral do pacote, traz o tutorial de uso e a tabela de
-mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.schema`,
-`serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
-`serialize_db.engine` (com o motor `serialize_db.engine.duckdb`), `serialize_db.execution`,
-`serialize_db.errors` e `serialize_db.cli`.
+Esta página explica o funcionamento geral do pacote, traz o tutorial de uso, a retenção dos
+arquivos removidos e a tabela de mapeamento de tipos. A referência de cada módulo está no menu:
+`serialize_db.schema`, `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`,
+`serialize_db.audit`, `serialize_db.engine` (com o motor `serialize_db.engine.duckdb`),
+`serialize_db.execution`, `serialize_db.errors` e `serialize_db.cli`.
 
 ## Como o pacote funciona
 
@@ -193,14 +193,19 @@ done.schema.names   # ["id_operacao", "data", "operacao", "valor", "data_str"]
 
 O que `cast` recusa, com `serialize_db.errors.ContractError` e a instrução ao cliente na mensagem:
 nulo em coluna `NOT NULL`, `double` fora da escala de um `Numeric`, `timestamp` com hora numa
-coluna `Date`, documento JSON como `struct`, texto acima de `String(n)` (medido em bytes, como o
-`VARCHAR(n)` do Redshift), texto acima de 65.535 bytes numa coluna `Text`, escala perdida num
+coluna `Date`, `timestamp` com fuso numa coluna `DateTime` sem fuso e o inverso, documento JSON como
+`struct`, texto acima de `String(n)` (medido em bytes, como o `VARCHAR(n)` do Redshift), texto numa
+coluna `Text` ou documento JSON acima de 65.535 bytes, o teto do Redshift, escala perdida num
 decimal, inteiro que não cabe na precisão de um `Numeric`, nanossegundo não nulo num timestamp,
 estouro de inteiro, um tipo sem conversão para o do contrato (`struct` numa coluna `Integer`) e um
 lote sem coluna alguma do contrato. O texto é medido depois da conversão para `string`, então o
 `large_string` do `str` do pandas 3, o `string_view` e o dicionário da `category` passam pela mesma
 medida. Um `double` entra numa coluna `Numeric` só quando `round` o devolve igual; numa coluna
-`Double` ele entra como chega.
+`Double` ele entra como chega. O fuso é recusado porque tirá-lo ou pô-lo muda a hora gravada, e
+cada camada o faz de um jeito: o mesmo 12:00 UTC vira 12:00 no `cast` do PyArrow e 09:00 no `CAST`
+do DuckDB com a sessão em `America/Sao_Paulo`. O cliente converte antes de chamar, no pandas com
+`serie.dt.tz_convert("America/Sao_Paulo").dt.tz_localize(None)`, ou no SQL do sandbox. Um
+`timestamp` de outro fuso numa coluna com fuso entra no mesmo instante, em UTC.
 
 ### Versionar os arquivos de esquema
 
@@ -388,7 +393,8 @@ engine.new_session() as other:` abre uma sessão a mais para o que roda em paral
 
 `engine.audit(table, partitions, uri, version)` roda as verificações que
 `serialize_db.audit.checks` deriva do modelo e devolve o `AuditReport`: nulo em coluna `NOT NULL`,
-texto acima de `String(n)` em bytes, JSON inválido, a partição fora da coluna de origem e do padrão
+texto acima de `String(n)` em bytes, texto numa coluna `Text` ou documento JSON acima de 65.535
+bytes, JSON inválido, a partição fora da coluna de origem e do padrão
 de nome de pasta, a chave repetida na partição e, quando a chave não inclui a partição, contra as
 demais partições da versão publicada, e o órfão de chave estrangeira com `foreign_keys=True`. O
 relatório traz o SQL de cada verificação, até 20 linhas de amostra das reprovadas, as somas de
@@ -399,6 +405,69 @@ depuração.
 `engine.export_partition(table, uri, value, metadata, mode)` leva a partição auditada ao Delta:
 `"register"` registra o arquivo que o `COPY` do DuckDB gravou, depois das conferências do rodapé, e
 `"rewrite"` grava pelo `write_deltalake`.
+
+## Retenção dos arquivos removidos
+
+Um commit que substitui uma partição tira do log os arquivos da versão anterior sem apagá-los: eles
+ficam no armazenamento até o `vacuum`, e enquanto ficam a versão que os usa continua legível.
+`serialize_db.delta.create_table` grava duas propriedades em toda tabela:
+
+| Propriedade | Valor | O que controla |
+| --- | --- | --- |
+| `delta.deletedFileRetentionDuration` | `interval 400 days` | A idade mínima de um arquivo removido antes que o `vacuum` o apague: a janela em que toda versão continua legível, para um `restore` ou para reler a entrada de uma execução pela versão em `serialize_db_input_versions`. |
+| `delta.logRetentionDuration` | `interval 3650 days` | A idade mínima dos arquivos de log que a limpeza do log preserva: o histórico que `serialize_db.delta.version_diff` lê. Com o log limpo, `version_diff` levanta `serialize_db.errors.LogUnavailable`, com a instrução de publicar a tabela inteira. |
+
+`serialize_db.delta.vacuum_keeping_snapshots` roda o `vacuum` de uma tabela com
+`retention_hours=9600`, os 400 dias, por padrão: lista os arquivos sem apagar e apaga com
+`apply=True`. As versões que `serialize_db.delta.snapshot` registra em
+`<ambiente>/_serialize_db/snapshots.json` continuam legíveis qualquer que seja a retenção. A chamada
+vale pelo `retention_hours` informado, e a propriedade da tabela vale para quem roda o `vacuum` do
+delta-rs sem esse argumento. Em regime, cada tabela guarda cerca de 13 meses (400/30) de partições
+substituídas além da versão atual. A rotina mensal que chama o `vacuum` de cada tabela é da
+operação, uma das etapas seguintes do plano.
+
+**O bucket versionado.** Num bucket com versionamento, o `vacuum` não libera espaço: cada objeto
+apagado vira uma versão não corrente, invisível à listagem e cobrada até que uma regra de ciclo de
+vida `NoncurrentVersionExpiration` a expire. O papel do projeto no ambiente alvo não lê a
+configuração de ciclo de vida do bucket, e `probes/bucket.py` (`BK-14`) conta as versões não
+correntes acumuladas sob a raiz. A regra é pedida a quem administra o bucket, com o prefixo da
+raiz, junto com `AbortIncompleteMultipartUpload`, que apaga as partes de um envio interrompido; os
+dias abaixo são exemplos:
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "serialize-db-versoes-nao-correntes",
+      "Filter": {"Prefix": "prefixo/da/raiz/"},
+      "Status": "Enabled",
+      "NoncurrentVersionExpiration": {"NoncurrentDays": 30},
+      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}
+    }
+  ]
+}
+```
+
+`aws s3api put-bucket-lifecycle-configuration` substitui a configuração inteira do bucket, então a
+regra entra ao lado das que já existem. Os `NoncurrentDays` somam-se à retenção: durante eles, quem
+administra o bucket ainda recupera um arquivo que o `vacuum` apagou.
+
+**Como alterar a retenção.**
+
+- A janela de um `vacuum`: o argumento `retention_hours` de
+  `serialize_db.delta.vacuum_keeping_snapshots`, por exemplo `24 * 90` para 90 dias.
+- A propriedade de uma tabela existente, que os outros leitores e escritores Delta respeitam: o
+  comando abaixo grava um commit sem dados, que `version_diff` não conta como partição alterada.
+- As tabelas novas nascem com os valores da tabela acima, fixos em `serialize_db.delta`: outro
+  padrão é uma mudança da biblioteca, e as tabelas já criadas mudam pelo comando abaixo.
+
+```python
+delta.open_table(uri, storage).alter.set_table_properties(
+    {"delta.deletedFileRetentionDuration": "interval 90 days"})
+```
+
+Uma retenção menor libera espaço antes, desde que o bucket tenha a regra, e encurta a janela em que
+uma versão intermediária continua legível.
 
 ## Tabela de mapeamento de tipos
 
@@ -416,10 +485,10 @@ em cada motor. Um tipo fora desta tabela é recusado por `check_models` e por `a
 | `String(n)` | `string` | `string` | `VARCHAR(n)` | `VARCHAR(n)` | `n` em bytes no Redshift, e é assim que `cast` mede o texto; o DuckDB aceita o comprimento e o ignora. `String` sem `n` é violação. |
 | `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | O texto sem `n`; o teto é o do `VARCHAR` do Redshift, que o `cast` mede; `TEXT` no Redshift seria `VARCHAR(256)`. |
 | `Date` | `date32` | `date` | `DATE` | `DATE` | |
-| `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | Microssegundos; um nanossegundo não nulo é recusado por `cast`. |
-| `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Sempre em UTC. |
+| `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | Microssegundos; um nanossegundo não nulo e um `timestamp` com fuso são recusados por `cast`. |
+| `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Sempre em UTC; outro fuso entra no mesmo instante, e um `timestamp` sem fuso é recusado por `cast`. |
 | `Uuid` | `string` | `string` | `VARCHAR(36)` | `VARCHAR(36)` | O contrato guarda o UUID como texto; o Redshift não tem o tipo. |
-| `JSON` | `string` | `string` | `JSON` | `SUPER` | O documento entra serializado (`json.dumps`); `cast` recusa `struct`, `list` e `map`. O `with_variant(SUPER(), "redshift")` do `sqlalchemy-redshift` no modelo é opcional. |
+| `JSON` | `string` | `string` | `JSON` | `SUPER` | O documento entra serializado (`json.dumps`); `cast` recusa `struct`, `list` e `map`, e o documento acima de 65.535 bytes, o maior que o `COPY` de Parquet leva a `SUPER`. O `with_variant(SUPER(), "redshift")` do `sqlalchemy-redshift` no modelo é opcional. |
 | `Float`, `LargeBinary`, `ARRAY`, `Interval` | | | | | Fora do contrato. |
 
 Cada campo Arrow leva a nulidade da coluna, o comentário em `metadata` e `PARQUET:field_id` pela

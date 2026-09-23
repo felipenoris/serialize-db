@@ -112,7 +112,7 @@ lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
 | Registro | Onde | Conteúdo | Quem grava |
 | --- | --- | --- | --- |
 | Metadados de commit | `commitInfo` de cada commit da biblioteca. | `serialize_db_execution_id`; `serialize_db_input_versions`, o JSON `{tabela: versão}` das versões lidas, fixado na abertura da execução; `serialize_db_snapshot` só na execução que marca um snapshot. | `publish_partition` e `register_files`, por `CommitProperties(custom_metadata=...)`. |
-| Arquivo de controle | `<ambiente>/_serialize_db/snapshots.json`. | `{"snapshots": {nome: {tabela: versão}}}`, com todas as tabelas do ambiente, lidas ou gravadas. | `snapshot`, com `IfMatch`. |
+| Arquivo de controle | `<ambiente>/_serialize_db/snapshots.json`. | `{"snapshots": {nome: {tabela: versão}}}`, com todas as tabelas do ambiente, lidas ou gravadas, e `"archived"` com as entradas dos snapshots arquivados, no mesmo formato ([etapa 9](PLAN-STAGE-9.md)). | `snapshot`, com `IfMatch`; `archive` move a entrada. |
 | Tabela de controle | `serialize_db_publications(table_name, delta_version, execution_id, published_at)` no esquema do Redshift; `table_name` leva o prefixo do ambiente, como `prod_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga; a tabela é criada uma vez pelo usuário, por `create_publications_table`. |
 
 O registro durável de uma execução é o `commitInfo` das tabelas que ela gravou; o relatório da
@@ -185,8 +185,8 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
 2. `run.ingest` monta o manifesto dos arquivos das partições pedidas, na versão fixada, e carrega por
    `COPY ... MANIFEST` na staging sem a coluna de partição, seguido de `INSERT ... SELECT *, '<valor>'`. A carga de
    arquivos anteriores a uma coluna nova vai por lista de colunas, confirmada em 2026-09-21, ou por
-   `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula, a proposta da
-   [etapa 8](PLAN-STAGE-8.md).
+   `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula, o caminho de todo `COPY` da
+   biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md)).
 3. O pipeline roda os mesmos statements Core, compilados para o Redshift, numa sessão só; os lotes
    entram por Parquet em `staging/` mais `COPY`, um row group por lote, e saem por `UNLOAD` em
    `stream` e das tuplas do cursor em `query`.
@@ -254,8 +254,8 @@ outro caminho. A tabela `serialize_db_publications` é criada uma vez no esquema
    `delta_scan(uri, version := v)` ou um manifesto de `COPY` daquela versão. `restore` torna a
    versão do snapshot o estado atual, num commit novo.
 5. Anualmente, `deep_copy` leva os snapshots mais velhos que o prazo da tabela viva para
-   `arquivo/<nome>/<tabela>/`, a entrada sai de `snapshots.json`, e a pasta de arquivo recebe a
-   regra de ciclo de vida para a classe de armazenamento mais barata.
+   `arquivo/<nome>/<tabela>/`, a entrada passa de `snapshots` para `archived` no mesmo arquivo, e a
+   pasta de arquivo recebe a regra de ciclo de vida para a classe de armazenamento mais barata.
 
 ### Exportação para pastas Parquet por partição
 

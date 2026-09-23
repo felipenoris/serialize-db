@@ -180,9 +180,9 @@ tabela do datashare é aceito, e qual papel IAM o `COPY` usa ([`OPEN_QUESTIONS.m
 ## O que a leitura do Redshift do ambiente alvo mostrou
 
 Em 2026-09-20, às 20:37 UTC, `probes/redshift.py` rodou no ambiente alvo (Linux x86_64, Python
-3.13.15) com as variáveis do workgroup. Os relatórios estão em
-[`readings/`](readings/): a leitura das 20:37 e a repetição das 20:43 com a raiz S3 informada, que
-mudou duas linhas. Os números abaixo saem deles.
+3.13.15) com as variáveis do workgroup: a leitura das 20:37 e a repetição das 20:43 com a raiz S3
+informada, que mudou duas linhas. Os números abaixo saem delas, e o histórico do git guarda os
+relatórios.
 
 **O que respondeu.** Workgroup `controladoria-wg` no namespace `controladoria-ns`, conta
 138071776059, capacidade base 8, sem acesso público e com roteamento VPC melhorado; nenhum cluster
@@ -220,8 +220,7 @@ trouxe `timezone` nem `enable_case_sensitive_identifier`, que só `SHOW` respond
 
 **O diagnóstico de um `COPY` reprovado existe.** Na leitura das 20:37, `sys_load_error_detail`
 estourou o tempo limite de 10 s e derrubou a conexão; na repetição das 20:43, com a raiz S3
-informada, ela respondeu `0` em 1,5 s, e `svv_external_schemas` respondeu `0` logo depois
-([`readings/redshift-2026-09-20-2043.txt`](readings/redshift-2026-09-20-2043.txt)). A visão é
+informada, ela respondeu `0` em 1,5 s, e `svv_external_schemas` respondeu `0` logo depois. A visão é
 legível, o primeiro tempo limite era o defeito do probe, e a etapa 5 lê o motivo de uma carga
 recusada na própria sessão por `sys_load_error_detail`, nunca por `stl_load_errors`.
 
@@ -737,8 +736,8 @@ Consequências no plano, nesta mesma unidade de trabalho:
   respondeu em 2,0 s. As duas chamadas passaram a `short_config(2, 5, 1)` atrás desse teste, e sem
   resposta `BK-8`, `BK-9` e `RS-11` ficam como leitura. A espera no alvo, onde os nomes resolvem para
   outros endereços, a próxima execução dos probes mede.
-- A Data API em `PICKED` e a decisão de copiar ou não os relatórios para `plan/readings/` continuam em
-  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+- A Data API em `PICKED` continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). Os relatórios ficam
+  fora do git (decisão do usuário de 2026-09-23).
 
 ## O que os rascunhos das etapas mostraram
 
@@ -830,7 +829,7 @@ kernel 6.12 do Amazon Linux 2023, Python 3.13.15, o `.venv` da pasta preparada: 
 DuckDB 1.5.5, PyArrow 25.0.1, boto3 1.43.98, SQLAlchemy 2.0.54, pandas 3.0.6, pytest 9.1.1), com a
 raiz `s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests`
 e a credencial temporária do workgroup. A sessão durou 10,7 s: um teste passou e dez reprovaram. O
-relatório não fica em `readings/`: cada leitura do ambiente que ele trazia se repete nas execuções
+relatório não entrou no git: cada leitura do ambiente que ele trazia se repete nas execuções
 limpas das 13:35 e das 13:39; a primeira tentativa não gravou o JSON e o usuário repetiu a suíte. O `conftest` criava o arquivo
 sem criar a pasta, que os probes criam e a suíte não criava; ele passou a criá-la.
 
@@ -883,7 +882,7 @@ da [etapa 0](PLAN-STAGE-0.md) ficaram para as execuções seguintes, exceto a le
 
 Em 2026-09-21, às 11:28 UTC, com o `conftest` corrigido, a suíte rodou de novo no ambiente alvo:
 sete testes passaram e quatro reprovaram em 50,3 s, e a limpeza apagou as onze tabelas e 23 objetos.
-O relatório não fica em `readings/`: cada leitura do ambiente que ele trazia se repete nas
+O relatório não entrou no git: cada leitura do ambiente que ele trazia se repete nas
 execuções limpas das 13:35 e das 13:39.
 
 **As duas causas das reprovações são da suíte, não do Redshift:**
@@ -932,7 +931,7 @@ e por `COPY` direto de um Parquet. As perguntas do `COPY` (tipos, lista de colun
 Em 2026-09-21, às 12:08 e às 12:10 UTC, com a suíte corrigida pela segunda execução, o usuário rodou
 `pytest -m redshift` duas vezes seguidas no ambiente alvo: dez testes passaram e um reprovou em cada
 uma (60,2 s e 58,1 s), e a limpeza apagou 38 objetos e as tabelas de cada sessão. Os relatórios
-não ficam em `readings/`: cada leitura do ambiente que eles traziam se repete nas execuções limpas
+não entraram no git: cada leitura do ambiente que eles traziam se repete nas execuções limpas
 das 13:35 e das 13:39, que reproduzem de propósito o `34510` registrado aqui como reprovação. As
 duas execuções concordam em cada leitura, e o que segue vale como permanente.
 
@@ -1014,10 +1013,8 @@ tamanho a barreira; [`schema.md`](schema.md), [`parquet.md`](parquet.md), [`delt
 
 Em 2026-09-21, às 13:35 e às 13:39 UTC, com a conexão sem o cache de prepared statements, o usuário
 rodou `pytest -m redshift` duas vezes seguidas no ambiente alvo: os doze testes passaram nas duas
-(92,4 s e 61,8 s), e a limpeza apagou 42 e 43 objetos e as tabelas de cada sessão. Os relatórios
-estão em [`readings/redshift-suite-2026-09-21-1335.json`](readings/redshift-suite-2026-09-21-1335.json)
-e [`readings/redshift-suite-2026-09-21-1339.json`](readings/redshift-suite-2026-09-21-1339.json).
-As duas execuções concordam em cada leitura, e são as duas execuções limpas que a
+(92,4 s e 61,8 s), e a limpeza apagou 42 e 43 objetos e as tabelas de cada sessão; o histórico do
+git guarda os dois relatórios. As duas execuções concordam em cada leitura, e são as duas execuções limpas que a
 [etapa 0](PLAN-STAGE-0.md) exigia: a etapa fecha com elas.
 
 **O que as execuções leram**, além de repetir cada leitura das 12:08 e das 12:10:
@@ -1511,7 +1508,8 @@ deixa no objeto `DeltaTable`.
   em `p` (`1000` em `Numeric(5, 2)`: `Decimal value does not fit in precision 5`).
 - **O fuso some em silêncio.** `timestamp[us, tz=America/Sao_Paulo]` convertido para
   `timestamp[us]` passa com `safe=True` e guarda o instante UTC como hora local, e o inverso
-  assume UTC. O `cast` aceita os dois; a decisão fica em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+  assume UTC. O `cast` aceitava os dois, e a decisão do usuário de 2026-09-23 os recusa
+  ([etapa 1](PLAN-STAGE-1.md); seção "O que a sonda do fuso mostrou").
 - **O nulo em `NOT NULL` é `ValueError` simples.** `RecordBatch.cast` do esquema levanta
   `ValueError`, não `ArrowInvalid`, e `ArrowInvalid` já é subclasse de `ValueError`: o `except` do
   cast do esquema passou a `ValueError`.
@@ -2563,3 +2561,52 @@ já conhecidos.
 **Consequência**: a leitura da distribuição atribuída da [etapa 8](PLAN-STAGE-8.md) precisa de uma
 fonte que o papel leia, e a escolha entrou nas decisões pendentes da etapa;
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perdeu os itens de `svv_table_info` e do teste de alcance.
+
+## O que a sonda do fuso mostrou
+
+Em 2026-09-23, no contêiner Linux x86_64 com Python 3.13.12, `duckdb` 1.5.5 e `pyarrow` 25.0.1, o
+mesmo instante, 12:00 UTC, perdeu o fuso por duas camadas:
+
+- `CAST(TIMESTAMPTZ '2026-09-23 12:00:00+00' AS TIMESTAMP)` no DuckDB, com `SET TimeZone =
+  'America/Sao_Paulo'`, deu `2026-09-23 09:00:00`: a hora na zona da sessão.
+- O `cast` do PyArrow de `timestamp[us, tz=America/Sao_Paulo]` para `timestamp[us]` deu
+  `2026-09-23 12:00:00`: a hora UTC.
+- No pandas 3.0.6, `serie.dt.tz_convert("America/Sao_Paulo").dt.tz_localize(None)` sobre o mesmo
+  instante deu `09:00` em `datetime64[us]`, e o `cast` novo o aceitou numa coluna `DateTime`; a série
+  com fuso foi recusada com `ContractError` (`t.quando: timestamp com fuso UTC numa coluna DateTime
+  sem fuso; ...`).
+
+**Consequência**: a hora gravada dependia da camada que tirava o fuso, e a decisão do usuário de
+2026-09-23 recusa no `cast` o `timestamp` com fuso numa coluna sem fuso e o inverso
+([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md)). O caso de `America/Sao_Paulo` numa coluna com fuso continua
+aceito, no mesmo instante em UTC. `docs/index.md` traz a conversão do pandas. Os casos novos de
+`tests/test_schema.py`, de `tests/test_audit.py` e de `tests/test_engine_duckdb.py` reprovaram (cinco)
+com `schema.py` e `audit.py` anteriores e passam com os novos.
+
+## O que a sonda da retenção mostrou
+
+Em 2026-09-23, no mesmo contêiner, com `deltalake` 1.6.4, `serialize_db.delta.create_table` numa
+pasta local gravou `delta.logRetentionDuration = interval 3650 days` e
+`delta.deletedFileRetentionDuration = interval 400 days` na versão 0.
+`open_table(uri, storage).alter.set_table_properties({"delta.deletedFileRetentionDuration":
+"interval 90 days"})` gravou a versão 1, sem ação de arquivo, com a propriedade nova e a do log
+mantida, e `vacuum_keeping_snapshots(..., retention_hours=24 * 90)` listou nada, porque os arquivos
+eram do mesmo dia.
+
+**Consequência**: `docs/index.md`, seção "Retenção dos arquivos removidos", documenta a retenção de
+400 dias, mantida pela decisão do usuário de 2026-09-23 ([`PLAN-STAGE-9.md`](PLAN-STAGE-9.md)), o
+bucket versionado que só libera espaço com `NoncurrentVersionExpiration`, e como mudar a janela do
+`vacuum` e a propriedade de uma tabela existente.
+
+## O que o pytest sem variável gravou
+
+Em 2026-09-23, no contêiner Linux x86_64, `test_source_db_projetado.py` (14 casos) e os 17 casos de
+`test_probes.py` que gravam o relatório ou arquivos fabricados passaram a `local`, gravando numa
+pasta nova sob `SERIALIZE_DB_TEST_LOCAL_ROOT` no lugar da pasta temporária do pytest (decisão do
+usuário de 2026-09-23). A suíte sem variável rodou num ambiente despido (`env -i`, `HOME` e `TMPDIR`
+em pastas vazias, os proxies numa porta fechada, `.venv/bin/python -m pytest -p no:cacheprovider`):
+187 aprovados e 279 pulados, as duas pastas continuaram vazias, e o repositório não ganhou arquivo.
+
+**Consequência**: a premissa de [`PLAN.md`](PLAN.md), `pytest` sem variável não grava arquivo algum,
+e o cabeçalho de `tests/conftest.py` valem como estão; [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
+perdeu o item da pasta temporária do pytest.

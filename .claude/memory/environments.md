@@ -34,7 +34,7 @@ Read before running anything in the SageMaker space or the target, preparing the
 ## The target
 
 Redshift serverless `controladoria-wg` in `sa-east-1`, account 138071776059, with no internet: the readings of
-2026-09-20 and 2026-09-21 are in `redshift.md` and `plan/readings/`. The five probes of 2026-09-21
+2026-09-20 and 2026-09-21 are in `redshift.md` and `plan/POC.md`. The five probes of 2026-09-21
 (03:47 to 03:51 UTC, Linux x86_64, Python 3.13.15, the project venv; reports in `secrets/probes-aws-bn/`,
 outside git; interpreted in `plan/POC.md`) read the machine and the network: 2 vCPUs, 7.6 GiB, 29.8 GiB
 free of 37.0 GiB on one disk serving `HOME`, `/tmp` and the repository, `ulimit -n` 65536; DuckDB

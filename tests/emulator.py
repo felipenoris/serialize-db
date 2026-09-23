@@ -26,6 +26,7 @@ tratamento de falha:
 from __future__ import annotations
 
 import collections
+import importlib.util
 import io
 import json
 import os
@@ -201,8 +202,12 @@ def start() -> subprocess.Popen:
     """Sobe o moto, aponta o ambiente do processo para ele e cria o bucket da raiz S3.
 
     Devolve o processo do moto, que ``stop`` encerra no fim da sessão. A saída dele vai para o
-    ``/dev/null``: o moto registra cada requisição, e um pipe sem leitor o travaria.
+    ``/dev/null``: o moto registra cada requisição, e um pipe sem leitor o travaria. O moto vem do
+    grupo ``emulator`` do ``pyproject.toml``, fora do ``dev``.
     """
+    if importlib.util.find_spec("moto") is None:
+        raise RuntimeError("SERIALIZE_DB_TEST_EMULATOR precisa do moto, do grupo emulator: "
+                           "uv run --group emulator pytest ...")
     port = free_port()
     process = subprocess.Popen(
         [sys.executable, "-m", "moto.server", "-H", "127.0.0.1", "-p", str(port)],

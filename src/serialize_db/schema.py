@@ -535,6 +535,23 @@ def _refuse_timestamp_with_time(
                             "trunque no cliente")
 
 
+def _refuse_time_zone_change(
+    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
+) -> None:
+    """Um timestamp entra só quando ele e a coluna têm fuso, ou nenhum dos dois tem.
+
+    Tirar ou pôr o fuso muda a hora gravada, e cada camada o faz de um jeito: o ``cast`` do
+    PyArrow guarda a hora UTC, e o ``CAST`` do DuckDB, a hora no ``TimeZone`` da sessão.
+    """
+    if column.type.tz is not None and field.type.tz is None:
+        raise ContractError(f"{table}.{field.name}: timestamp com fuso {column.type.tz} numa "
+                            "coluna DateTime sem fuso; converta para o fuso desejado e retire o "
+                            "fuso no cliente")
+    if column.type.tz is None and field.type.tz is not None:
+        raise ContractError(f"{table}.{field.name}: timestamp sem fuso numa coluna DateTime com "
+                            "fuso; declare o fuso no cliente")
+
+
 def _refuse_nested_json(column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str) -> None:
     """Um documento JSON chega serializado; struct, list e map são recusados."""
     if pa.types.is_nested(column.type):
@@ -567,6 +584,17 @@ def _refuse_text_above_varchar(
                             f"{TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor")
 
 
+def _refuse_json_above_limit(
+    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
+) -> None:
+    """Documento JSON acima de 65.535 bytes, o maior que o ``COPY`` de Parquet leva a ``SUPER`` e
+    que a staging ``VARCHAR`` da publicação no Redshift guarda."""
+    longest = _longest_text(column)
+    if longest > TEXT_LIMIT:
+        raise ContractError(f"{table}.{field.name}: documento JSON de {longest} bytes acima do "
+                            f"teto de {TEXT_LIMIT} bytes do Redshift; reduza o documento")
+
+
 def _refuse_silent_losses(
     column: pa.Array | pa.ChunkedArray,
     field: pa.Field,
@@ -578,6 +606,8 @@ def _refuse_silent_losses(
         _refuse_double_out_of_scale(column, field, table)
     if pa.types.is_timestamp(column.type) and pa.types.is_date(field.type):
         _refuse_timestamp_with_time(column, field, table)
+    if pa.types.is_timestamp(column.type) and pa.types.is_timestamp(field.type):
+        _refuse_time_zone_change(column, field, table)
     if isinstance(kind, sa.JSON):
         _refuse_nested_json(column, field, table)
 
@@ -596,7 +626,9 @@ def _refuse_long_text(
     """
     # Text é subclasse de String e vem antes: o limite dela é o teto do VARCHAR do Redshift,
     # qualquer que seja o comprimento declarado, porque sql_type ignora o comprimento de Text.
-    if isinstance(kind, sa.Text):
+    if isinstance(kind, sa.JSON):
+        _refuse_json_above_limit(column, field, table)
+    elif isinstance(kind, sa.Text):
         _refuse_text_above_varchar(column, field, table)
     elif isinstance(kind, sa.String) and kind.length:
         _refuse_text_above_length(column, field, table, kind.length)
@@ -688,9 +720,11 @@ def cast(
     grava. Cada coluna é convertida com ``safe=True`` (``large_string``, ``string_view`` e
     dicionário para ``string``, timestamps a microssegundos, inteiro em ``Numeric``), e as perdas
     que o cast seguro não acusa são recusadas: ``double`` fora da escala de um ``Numeric``,
-    ``timestamp`` com hora numa coluna ``Date``, documento JSON como ``struct``, texto acima de
-    ``String(n)`` em bytes e texto acima de 65.535 bytes numa coluna ``Text``, o teto do
-    ``VARCHAR`` do Redshift. Nulo em coluna ``NOT NULL``, escala perdida, nanossegundo não nulo,
+    ``timestamp`` com hora numa coluna ``Date``, ``timestamp`` com fuso numa coluna ``DateTime``
+    sem fuso e o inverso, documento JSON como ``struct``, texto acima de ``String(n)`` em bytes, e
+    texto numa coluna ``Text`` ou documento JSON acima de 65.535 bytes, o teto do Redshift. Um
+    ``timestamp`` com outro fuso numa coluna com fuso entra no mesmo instante, em UTC. Nulo em
+    coluna ``NOT NULL``, escala perdida, nanossegundo não nulo,
     estouro de inteiro, um tipo sem conversão para o do contrato e um lote sem coluna alguma do
     contrato também são ``ContractError``, com a tabela, a coluna e a instrução ao cliente na
     mensagem. Um ``RecordBatchReader`` sai como leitor que converte lote a lote.

@@ -11,7 +11,9 @@ foi medido em [`POC.md`](POC.md).
   conta o acumulado (219 versões não correntes, 1.388.530 bytes, e 219 marcadores de exclusão
   sob a raiz dos probes em 2026-09-23, [`POC.md`](POC.md)), e a regra
   `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
-  para quem administra o bucket.
+  para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
+  `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
+  retenção.
 - **Credenciais de uma hora.** Nenhuma execução mais longa que uma emissão rodou ainda; a
   [etapa 3](PLAN-STAGE-3.md) resolve `storage_options` a cada chamada e não põe credencial nele
   (decisão do usuário de 2026-09-22), e a primeira execução longa no espaço confirma que o delta-rs
@@ -23,10 +25,6 @@ foi medido em [`POC.md`](POC.md).
   que o pipeline tenha criado na sessão. As credenciais que o `COPY`
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
   `COPY` mais longo que isso também não foi medido.
-- **Os relatórios dos probes de 2026-09-21.** O usuário os guardou em `secrets/probes-aws-bn/`, fora
-  do git; [`POC.md`](POC.md) os interpreta, e `plan/readings/` não os tem. Copiá-los para
-  `plan/readings/`, como os de 2026-09-20, é decisão do usuário: eles trazem os mesmos
-  identificadores (conta, papel, usuário do banco) que os relatórios já versionados.
 - **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de linhas
   por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)); a
@@ -79,22 +77,10 @@ foi medido em [`POC.md`](POC.md).
     execução completa sem erro indica tabelas sem valor não finito. O script já segue a regra. Os relatórios da execução, ainda não
     disponíveis, dizem quais tabelas rodaram; uma tabela fora deles pede a contagem de `isnan` e
     `isinf`.
-  - Se a contagem de não finitos da auditoria reprova.
-- **O `pytest` sem variável grava na pasta temporária do pytest.** A premissa de
-  [`PLAN.md`](PLAN.md) diz que `pytest` sem variável não grava arquivo algum, e o cabeçalho de
-  `tests/conftest.py` diz que fora das raízes informadas a sessão grava só `.pytest_cache/`; mas
-  `tests/test_source_db_projetado.py` grava a base fictícia inteira em `tmp_path_factory`, e
-  `tests/test_probes.py` grava relatórios em `tmp_path`, sem variável (revisão de 2026-09-22). A
-  decisão é do usuário: admitir a pasta temporária do pytest na premissa e no cabeçalho, ou marcar
-  esses testes `local`, e a esteira do GitHub deixa de rodá-los.
-- **A esteira do GitHub com o substituto local.** `tests.yml` roda os testes do pacote sem
-  `tests/proof_of_concept/`. Com `SERIALIZE_DB_TEST_EMULATOR`, a esteira rodaria também as suítes
-  S3 e Redshift e os casos `s3` do pacote no moto (a suíte inteira levou 70 s no macOS em
-  2026-09-23, [`POC.md`](POC.md)) e precisaria das extensões `httpfs` e `aws` do DuckDB em
-  `.duckdb/`, além da `delta`. A decisão é do usuário.
 - **O texto da auditoria no Redshift.** O texto de `serialize_db.audit.audit_sql(..., "redshift")`
   nunca rodou no Redshift: a contagem por `count(CASE WHEN ... THEN 1 END)`, que a documentação do
-  `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o operador
+  `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o
+  `json_size` do teto de 65.535 bytes do documento JSON, o operador
   POSIX `~` da regra da partição, e o `is_finite` como `x NOT IN ('NaN'::float8, 'Infinity'::float8,
   '-Infinity'::float8)`, que supõe o `NaN` igual a si mesmo, como no PostgreSQL
   ([etapa 4](PLAN-STAGE-4.md)). A [etapa 5](PLAN-STAGE-5.md) roda esse texto, e
@@ -130,31 +116,28 @@ foi medido em [`POC.md`](POC.md).
     a tabela de OIDs de `schema_from_row_description`;
   - `test_small_load_copy_cost`: o melhor de três de um `load` de 10 linhas pelo `COPY` e pelo
     `INSERT` de várias linhas, como leitura: é o que traria de volta o `INSERT` multilinha.
+- **O `ALTER COLUMN TYPE` no datashare.** A [etapa 8](PLAN-STAGE-8.md) trata a largura de
+  `String(n)` que cresce como diff destrutivo, com recriação e recarga (decisão do usuário de
+  2026-09-23), porque o comando não está na lista do que a escrita por datashare aceita e recusa
+  coluna com chave. `test_redshift.py::test_alter_column_type_on_the_share` o lê numa coluna comum
+  e numa da chave primária informativa, com a largura em `svv_all_columns` e a inserção de dez
+  caracteres depois; o substituto local só confere o código, porque o DuckDB ignora a largura. Se
+  o datashare aceitar o aumento numa coluna comum, ele entra na etapa 8 como atalho da recriação.
 
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 1](PLAN-STAGE-1.md): o timestamp com fuso numa coluna `DateTime` sem fuso, e o inverso,
-  que o `cast` aceita em silêncio: o instante UTC vira hora local, e a hora local vira UTC (leitura
-  de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, porque a
-  conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.
-- [Etapa 8](PLAN-STAGE-8.md): a `distkey` de cada tabela publicada e a fonte da leitura da
+- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação como tabela comum no datashare ou temporária.
+  A regra de que a escrita de uma transação vai para um banco só vem da página "Considerations for
+  data sharing reads and writes" da AWS e nunca foi medida no ambiente alvo, e a página não diz em
+  que banco fica a tabela temporária criada depois do `USE` ([`redshift.md`](redshift.md));
+  `test_redshift_transactions.py` lê a temporária cheia dentro da transação e antes do `BEGIN`, e
+  passou no substituto local em 2026-09-23, que só confere o código. A fonte da leitura da
   distribuição atribuída, porque o papel do projeto não lê `svv_table_info` depois do `USE`
   (`permission denied`, 42501, probe de 2026-09-23; a distribuição é `AUTO` desde a decisão do
-  usuário de 2026-09-21); a staging da publicação no datashare ou temporária; `FILLRECORD` em
-  todo `COPY` da biblioteca (proposto: um manifesto pode listar arquivos anteriores e posteriores a
-  uma coluna nova) ou a lista de colunas, os dois lidos em 2026-09-21; o teto de 65.535 bytes do
-  campo JSON no Redshift conferido pela auditoria (proposto), ou um caminho por
-  `COPY ... FORMAT JSON 'auto'` ou `INSERT ... JSON_PARSE` para os documentos maiores, os dois lidos;
-  a largura de `VARCHAR(n)` da tabela publicada quando `String(n)` cresce no modelo: o diff do Delta
-  não a vê, porque o Arrow não tem `n`, só o `<tabela>.redshift.sql` versionado a mostra, e
-  `reconcile_published` precisaria de `ALTER TABLE ... ALTER COLUMN ... TYPE VARCHAR(n)`, que o
-  Redshift aceita fora de transação e sem descer abaixo do maior valor existente
-  ([`redshift.md`](redshift.md)).
-- [Etapa 9](PLAN-STAGE-9.md): o nome do runbook; a marca de arquivamento no controle; a retenção do
-  `vacuum` mensal.
+  usuário de 2026-09-21).

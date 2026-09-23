@@ -9,7 +9,8 @@ contrato, e não sabe qual motor o roda; ``audit_sql`` renderiza o texto de cada
 As verificações:
 
 - **linhas**: uma consulta, agrupada pela coluna de partição numa tabela particionada, que conta
-  por coluna o nulo em ``NOT NULL``, o texto acima de ``String(n)`` em bytes, o JSON inválido, a
+  por coluna o nulo em ``NOT NULL``, o texto acima de ``String(n)`` em bytes, o texto de uma coluna
+  ``Text`` e o documento JSON acima de 65.535 bytes, o teto do Redshift, o JSON inválido, a
   coluna de partição diferente da derivação de ``partition_source`` e o valor de partição fora de
   ``schema.PARTITION_VALUE``; e que soma cada coluna ``Numeric`` e ``Double`` como
   ``DECIMAL(38, 6)`` (a ``Double`` só nos valores finitos) e conta à parte os não finitos, uma
@@ -131,6 +132,28 @@ def _duckdb_text_bytes(element: text_bytes, compiler: object, **kw: object) -> s
 @compiles(text_bytes, "redshift")
 def _redshift_text_bytes(element: text_bytes, compiler: object, **kw: object) -> str:
     return f"octet_length({compiler.process(element.clauses, **kw)})"
+
+
+class json_bytes(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
+    """O tamanho do documento JSON em bytes: ``strlen`` do texto no DuckDB, onde a coluna é ``JSON``
+    ou ``VARCHAR``, e ``json_size`` no Redshift, onde ela é ``SUPER``."""
+
+    name = "json_bytes"
+    type = sa.Integer()
+    inherit_cache = True
+
+
+compiles(json_bytes)(_by_name)
+
+
+@compiles(json_bytes, "duckdb")
+def _duckdb_json_bytes(element: json_bytes, compiler: object, **kw: object) -> str:
+    return f"strlen(CAST({compiler.process(element.clauses, **kw)} AS VARCHAR))"
+
+
+@compiles(json_bytes, "redshift")
+def _redshift_json_bytes(element: json_bytes, compiler: object, **kw: object) -> str:
+    return f"json_size({compiler.process(element.clauses, **kw)})"
 
 
 class partition_value_valid(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
@@ -284,6 +307,7 @@ def _defect_counters(table: sa.Table) -> dict[str, sa.ColumnElement]:
         if isinstance(column.type, sa.JSON):
             invalid = sa.not_(json_valid(column))
             counters[f"json_{column.name}"] = sa.and_(column.isnot(None), invalid)
+            counters[f"texto_{column.name}"] = json_bytes(column) > TEXT_LIMIT
         elif isinstance(column.type, sa.Text):
             counters[f"texto_{column.name}"] = text_bytes(column) > TEXT_LIMIT
         elif isinstance(column.type, sa.String) and column.type.length:

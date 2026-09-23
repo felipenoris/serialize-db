@@ -827,17 +827,18 @@ def test_pandas_round_trip_keeps_contract_types(setup: Setup) -> None:
 
 def test_audit_finds_each_defect(setup: Setup) -> None:
     """Nulo, texto acima do ``String(n)`` em bytes e dentro dele em caracteres, partição fora da
-    origem, valor de partição fora da regra, JSON inválido, chave repetida na partição e contra a
-    publicada, e chave única repetida contra a publicada."""
+    origem, valor de partição fora da regra, JSON inválido, documento JSON acima de 65.535 bytes,
+    chave repetida na partição e contra a publicada, e chave única repetida contra a publicada."""
     version = published_table(setup, PROJECTED, MONTHS[:2], rows=10)
     engine = setup.engine
-    good = entries(MONTHS[2], 100, 6, PROJECTED)
+    good = entries(MONTHS[2], 100, 7, PROJECTED)
     batch = good.to_pylist()
     batch[0]["id_lancamento"] = batch[1]["id_lancamento"]  # repetida na partição
     batch[2]["id_lancamento"] = 3  # repetida contra a publicada
     batch[3]["area"] = "ação ação"  # 9 caracteres, 13 bytes
     batch[4]["data_base"] = dt.date(2026, 7, 31)  # fora da origem da partição
     batch[5]["meta"] = "{nao json"  # JSON inválido
+    batch[6]["meta"] = json.dumps({"k": "x" * 65527})  # 65.536 bytes
     # A coluna JSON do DuckDB recusa o texto inválido na carga: a tabela nasce por CTAS, com meta em
     # VARCHAR, como uma tabela que o pipeline criasse por SQL.
     with engine.session() as connection:
@@ -855,6 +856,7 @@ def test_audit_finds_each_defect(setup: Setup) -> None:
     assert counters["texto_area"] == 1
     assert counters["particao_data_base_str"] == 1
     assert counters["json_meta"] == 1
+    assert counters["texto_meta"] == 1
     assert result_of(report, "chave_id_lancamento").defects == 1
     repeated = result_of(report, "chave_id_lancamento_publicada")
     assert repeated.sample.column(0).to_pylist() == [3]

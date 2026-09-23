@@ -1,7 +1,8 @@
 """A base Parquet de origem fictícia reproduz a estrutura que o probe leu nas duas bases reais.
 
-``source_db_projetado.write_source`` grava a base sob a pasta temporária do pytest, e cada teste
-confere nos arquivos gravados um aspecto das leituras de ``probes/parquet_source.py`` sobre
+``source_db_projetado.write_source`` grava a base uma vez por módulo sob a pasta da sessão da suíte
+local, e os testes são ``local``: pulados sem ``SERIALIZE_DB_TEST_LOCAL_ROOT``. Cada teste confere
+nos arquivos gravados um aspecto das leituras de ``probes/parquet_source.py`` sobre
 ``db_projetado`` (a base de desenvolvimento em 2026-09-20 e a de produção em 2026-09-21, idênticas
 na seção 3): as tabelas e o arquivo solto na raiz, o esquema de cada arquivo no vocabulário do
 relatório (tipo Arrow, nulidade, tipo físico, lógico e convertido), as partições, o layout físico,
@@ -28,6 +29,9 @@ import pyarrow.parquet as pq
 import pytest
 
 import source_db_projetado as source
+from conftest import LocalLocation
+
+pytestmark = pytest.mark.local
 
 # A seção 3 do relatório do probe sobre a base real, como ele a imprimiu: por tabela, coluna, tipo
 # Arrow, nulidade, tipo físico, tipo lógico, tipo convertido e field_id.
@@ -274,9 +278,9 @@ def connect_with_views(base: source.SourceBase) -> duckdb.DuckDBPyConnection:
 
 
 @pytest.fixture(scope="module")
-def base(tmp_path_factory: pytest.TempPathFactory) -> source.SourceBase:
-    """A base gravada uma vez por módulo, sob a pasta temporária do pytest."""
-    return source.write_source(tmp_path_factory.mktemp("db_projetado"))
+def base(local_location: LocalLocation) -> source.SourceBase:
+    """A base gravada uma vez por módulo, sob a pasta da sessão da suíte local."""
+    return source.write_source(Path(local_location.child("base-ficticia")))
 
 
 def test_root_has_the_table_folders_and_the_loose_file(base: source.SourceBase) -> None:
