@@ -74,6 +74,8 @@ When you need to commit in this repo, do it on a new branch prefixed with `claud
 
 - Redshift: read and write permissions on a single schema
 
+- Since the programs using this package will run on scalable AWS compute of our choosing, let's optimize for parallel processing.
+
 ## Language convention (important)
 
 All prose in this repo is **Brazilian Portuguese (pt-BR)**: README files, code comments, docstrings, printed output, test messages, and shell-script comments. When editing or adding content, keep writing in pt-BR to match.
