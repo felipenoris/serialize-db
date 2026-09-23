@@ -45,6 +45,7 @@ import duckdb
 import pyarrow.fs as pafs
 
 from serialize_db.errors import ConflictError
+from serialize_db.schema import literal
 
 __all__ = ["Storage", "prepare_environment"]
 
@@ -70,11 +71,6 @@ def _region() -> str | None:
 def _endpoint() -> str | None:
     """O endpoint de ``AWS_ENDPOINT_URL``, para um serviço compatível com o S3."""
     return os.environ.get("AWS_ENDPOINT_URL") or None
-
-
-def _sql_text(value: str) -> str:
-    """O literal SQL de um texto, com a aspa simples dobrada."""
-    return "'" + value.replace("'", "''") + "'"
 
 
 def _extension_directory() -> str | None:
@@ -110,6 +106,28 @@ def _proxy_settings(environ: Mapping[str, str]) -> dict[str, str]:
         settings["http_proxy_username"] = user
         settings["http_proxy_password"] = password
     return settings
+
+
+def _duckdb_secret_options() -> list[str]:
+    """As opções do secret S3 do DuckDB: a cadeia de credenciais e a região; com
+    ``AWS_ENDPOINT_URL``, o endereço sem o esquema, o endereço por caminho e, num endpoint
+    ``http``, ``USE_SSL false``.
+
+    O DuckDB não lê ``AWS_ENDPOINT_URL``. Sem ``URL_STYLE 'path'`` o bucket vira subdomínio do
+    endereço, que num IP não resolve, e sem ``USE_SSL false`` a conexão a um endpoint ``http``
+    tenta TLS e falha (sonda de 2026-09-23 contra o moto, ``plan/POC.md``). O endereço por caminho
+    é o que o delta-rs e o PyArrow usam com um endpoint próprio.
+    """
+    options = ["TYPE s3", "PROVIDER credential_chain", f"REGION {literal(_region())}"]
+    endpoint = _endpoint()
+    if not endpoint:
+        return options
+    parts = urllib.parse.urlsplit(endpoint)
+    options.append(f"ENDPOINT {literal(parts.netloc or endpoint)}")
+    options.append("URL_STYLE 'path'")
+    if parts.scheme == "http":
+        options.append("USE_SSL false")
+    return options
 
 
 def _fingerprint(content: bytes) -> str:
@@ -298,8 +316,9 @@ class Storage:
 
         .. code-block:: python
 
-            first = storage.write_text("prod/_serialize_db/snapshots.json", "{}", if_none_match=True)
-            storage.write_text("prod/_serialize_db/snapshots.json", "{}", if_none_match=True)
+            path = "prod/_serialize_db/snapshots.json"
+            first = storage.write_text(path, "{}", if_none_match=True)
+            storage.write_text(path, "{}", if_none_match=True)
             # ConflictError: o arquivo já existe
         """
         if self.is_s3:
@@ -390,8 +409,9 @@ class Storage:
         if not self.is_s3:
             return {}
         options = {"AWS_REGION": _region()}
-        if _endpoint():
-            options["AWS_ENDPOINT_URL"] = _endpoint()
+        endpoint = _endpoint()
+        if endpoint:
+            options["AWS_ENDPOINT_URL"] = endpoint
         options.update(_RETRY_OPTIONS)
         for variable, key in _SSE_VARIABLES.items():
             if os.environ.get(variable):
@@ -402,9 +422,9 @@ class Storage:
         """Carrega as extensões que a raiz pede e, no S3, cria o secret da cadeia de credenciais.
 
         Na pasta local, só ``LOAD delta``. No S3, ``LOAD httpfs``, ``LOAD delta`` e ``LOAD aws``,
-        o secret ``credential_chain`` com a região e o endpoint, e o proxy de ``HTTP_PROXY`` sem
-        as credenciais no endereço. As extensões vêm da pasta configurada na conexão; nada é
-        baixado.
+        o secret ``credential_chain`` com a região e o endpoint de ``_duckdb_secret_options``, e o
+        proxy de ``HTTP_PROXY`` sem as credenciais no endereço. As extensões vêm da pasta
+        configurada na conexão; nada é baixado.
         """
         if not self.is_s3:
             connection.execute("LOAD delta")
@@ -412,12 +432,9 @@ class Storage:
         for extension in ("httpfs", "delta", "aws"):
             connection.execute(f"LOAD {extension}")
         for name, value in _proxy_settings(os.environ).items():
-            connection.execute(f"SET {name} = {_sql_text(value)}")
-        options = ["TYPE s3", "PROVIDER credential_chain", f"REGION {_sql_text(_region())}"]
-        if _endpoint():
-            host = urllib.parse.urlsplit(_endpoint()).netloc or _endpoint()
-            options.append(f"ENDPOINT {_sql_text(host)}")
-        connection.execute(f"CREATE OR REPLACE SECRET serialize_db_s3 ({', '.join(options)})")
+            connection.execute(f"SET {name} = {literal(value)}")
+        options = ", ".join(_duckdb_secret_options())
+        connection.execute(f"CREATE OR REPLACE SECRET serialize_db_s3 ({options})")
 
     def duckdb_connect(self, database: str = ":memory:",
                        config: Mapping[str, object] | None = None) -> duckdb.DuckDBPyConnection:
@@ -434,7 +451,8 @@ class Storage:
         .. code-block:: python
 
             connection = storage.duckdb_connect()
-            connection.execute(f"SELECT count(*) FROM delta_scan('{storage.uri}/prod/cad_operacoes')")
+            uri = storage.uri_of("prod/cad_operacoes")
+            connection.execute(f"SELECT count(*) FROM delta_scan('{uri}')")
         """
         settings: dict[str, object] = {
             "autoinstall_known_extensions": False,
@@ -460,8 +478,9 @@ def _s3_storage(uri: str) -> Storage:
         raise ValueError(f"{uri}: o S3 precisa da região em AWS_REGION ou AWS_DEFAULT_REGION")
     path = uri.removeprefix("s3://").strip("/")
     options: dict[str, object] = {"region": region}
-    if _endpoint():
-        options["endpoint_override"] = _endpoint()
+    endpoint = _endpoint()
+    if endpoint:
+        options["endpoint_override"] = endpoint
     return Storage(f"s3://{path}", pafs.S3FileSystem(**options), path)
 
 
@@ -493,9 +512,8 @@ def prepare_environment(environ: MutableMapping[str, str] = os.environ) -> dict[
         environ["NO_PROXY"] = environ["no_proxy"]
         changes["NO_PROXY"] = environ["no_proxy"]
     region = environ.get("AWS_REGION") or environ.get("AWS_DEFAULT_REGION")
-    if region:
-        for name in ("AWS_REGION", "AWS_DEFAULT_REGION"):
-            if environ.get(name) != region:
-                environ[name] = region
-                changes[name] = region
+    for name in ("AWS_REGION", "AWS_DEFAULT_REGION"):
+        if region and environ.get(name) != region:
+            environ[name] = region
+            changes[name] = region
     return changes

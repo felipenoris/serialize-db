@@ -53,3 +53,25 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   the test prefix with both region variables set: the S3 suite needs no maintenance there, and the
   library never calls IAM or KMS (SSE-KMS is applied by S3; the first write proves the permission).
   `plan/POC.md`, `plan/PLAN.md`
+
+## The local stand-in for S3
+
+- `tests/emulator.py`, switched on by `SERIALIZE_DB_TEST_EMULATOR` in `tests/conftest.py`, starts
+  the moto 5.2.3 server as `python -m moto.server -H 127.0.0.1 -p <free port>` from the `dev` group
+  (`moto[s3]==5.2.3`, `flask==3.1.3`, `flask-cors==6.0.5`: 28 packages, against 61 for
+  `moto[server]`, which pulls `cfn-lint`, `docker` and `sympy`); the throwaway stand-in ran
+  `uvx --from 'moto[server]==5.2.3' moto_server` outside the venv. Moto answered S3 and STS for
+  `test_s3.py`, the Redshift suites and the package's `s3` tests on 2026-09-23: the conditional
+  `PutObject` (`IfNoneMatch='*'`, `IfMatch`) returns 412, and `HeadObject` returns no
+  `ServerSideEncryption`. Its output goes to `/dev/null`, because it logs every request and a pipe
+  without a reader would block it. `plan/POC.md`
+- Each client reaches it its own way: `boto3` and `pyarrow` read `AWS_ENDPOINT_URL`, delta-rs also
+  needs `AWS_ALLOW_HTTP=true`, and DuckDB 1.5.5 ignores the variable: its secret needs `ENDPOINT`
+  without the scheme, `URL_STYLE 'path'` (without it the bucket becomes a subdomain of the IP) and
+  `USE_SSL false` for an `http` endpoint (without it, an SSL error), which
+  `serialize_db.storage._duckdb_secret_options` now builds. With only `AWS_REGION` set, `boto3`
+  1.43.98 took the region of the user's profile, and a `CreateBucket` without
+  `LocationConstraint` got `IllegalLocationConstraintException`: the stand-in sets
+  `AWS_DEFAULT_REGION` too. With keys in
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, `boto3` reports the credential method `env`.
+  `plan/POC.md`, `plan/PLAN-STAGE-3.md`

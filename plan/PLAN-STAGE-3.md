@@ -21,7 +21,7 @@ da tabela, que `relative` leva ao caminho relativo à raiz.
 | `copy(source, destination)` | `copy_file` do sistema de arquivos, que no S3 é o `CopyObject`; a exportação sem ler dados. |
 | `storage_options()` | As opções do delta-rs: região, `AWS_ENDPOINT_URL`, `max_retries` 3 e `retry_timeout` 10 s, e as chaves de SSE das variáveis do object_store (`AWS_SERVER_SIDE_ENCRYPTION`, `AWS_SSE_KMS_KEY_ID`, `AWS_SSE_BUCKET_KEY_ENABLED`) quando configuradas; vazias na pasta local; nunca credenciais (decisão do usuário de 2026-09-22). A cadeia padrão do delta-rs as resolve e as renova sozinha no `DeltaTable` que a execução guarda, enquanto um trio congelado expiraria em cerca de uma hora e circularia num dicionário que um log ou uma exceção imprime. Resolvidas a cada chamada, nunca guardadas. |
 | `duckdb_connect(database=":memory:", config=None)` | A conexão do DuckDB com `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao lado do ambiente virtual (a pasta que `prepare_offline.sh` cria), `autoinstall_known_extensions` e `autoload_known_extensions` desligados, as opções de `config` e `duckdb_setup` aplicado; é a conexão de `rewrite`, `read_back` e `export_snapshot`, e a do motor da [etapa 4](PLAN-STAGE-4.md). |
-| `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REGION` e `ENDPOINT`; só `LOAD delta` na pasta local. Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password` a partir de `HTTP_PROXY`, `username` e `password`, como `probelib.duckdb_proxy` faz nos probes: o DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3, não só o download de extensão ([`POC.md`](POC.md)). |
+| `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REGION` e, com `AWS_ENDPOINT_URL`, `ENDPOINT` sem o esquema, `URL_STYLE 'path'` e, num endpoint `http`, `USE_SSL false`; só `LOAD delta` na pasta local. Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password` a partir de `HTTP_PROXY`, `username` e `password`, como `probelib.duckdb_proxy` faz nos probes: o DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3, não só o download de extensão ([`POC.md`](POC.md)). |
 | `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou vazia, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
 
 `serialize_db.delta` é a camada de tabela; `uri` é a pasta da tabela, `table` o `Table` do modelo,
@@ -128,12 +128,11 @@ e `test_deltalake.py` inteiro: criação idempotente, predicado e nulidade, evol
 `create_write_transaction` não confere (caminho, estatística, esquema do arquivo) e o `overwrite`
 com `partition_filters`, a compactação que normaliza arquivos de outro escritor, `vacuum`,
 `version_diff` pelas ações `add` e `remove` com `dataChange` do log, compactação e checkpoint,
-exportação por cópia e a reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do
-DuckDB registrada num commit `overwrite` com esquema novo e o mínimo e o máximo dos tipos de
-`stat_converter`, que o DuckDB usa para podar; `test_parallel.py` (quatro tabelas lidas em paralelo,
-escritas em paralelo por tabela e por mês da mesma tabela com o conflito no mesmo mês, e `max_key`
-pelas estatísticas com a varredura de reserva); `tests/test_migrate_parquet_to_delta.py` (o registro
-com as estatísticas dos quatro tipos).
+e exportação por cópia; `test_parallel.py` (quatro tabelas lidas em paralelo, escritas em paralelo
+por tabela e por mês da mesma tabela com o conflito no mesmo mês);
+`tests/test_migrate_parquet_to_delta.py` (o registro com as estatísticas dos quatro tipos). A
+reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do DuckDB e `max_key` pelas
+estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
 
 ## Estratégia de implementação
 
@@ -179,13 +178,15 @@ com as estatísticas dos quatro tipos).
   ([`POC.md`](POC.md), leitura de 2026-09-21). `test_delta_rs_storage_options_fallback` continua
   medindo a forma das credenciais congeladas, para o dia em que um ambiente quebrar a cadeia.
 - **`duckdb_setup`** roda `LOAD httpfs; LOAD delta; LOAD aws` e cria o secret `credential_chain`
-  com a região e o endpoint quando a raiz é S3, e só `LOAD delta` na pasta local; aplica
-  `http_proxy`, `http_proxy_username` e `http_proxy_password` separados de `HTTP_PROXY` como
-  `probelib.duckdb_proxy`. No ambiente alvo não há variável de proxy, e o bloco é vazio
-  ([`POC.md`](POC.md), leitura de 2026-09-21).
-- **`prepare_environment`** é a função de `test_stdlib.py`: `NO_PROXY` de `no_proxy` quando a
-  maiúscula está ausente ou vazia, a região copiada nos dois sentidos, e o dicionário do que mudou
-  para o log.
+  com a região e o endpoint quando a raiz é S3, e só `LOAD delta` na pasta local. O DuckDB não lê
+  `AWS_ENDPOINT_URL`, e com um endpoint o secret leva o endereço sem o esquema, o endereço por
+  caminho (`URL_STYLE 'path'`) que o delta-rs e o PyArrow usam, e `USE_SSL false` num endpoint
+  `http`: sem as duas opções, o moto em `127.0.0.1` não respondeu ao DuckDB ([`POC.md`](POC.md),
+  sonda de 2026-09-23). Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password`
+  separados de `HTTP_PROXY` como `probelib.duckdb_proxy`. No ambiente alvo não há variável de
+  proxy, e o bloco é vazio ([`POC.md`](POC.md), leitura de 2026-09-21).
+- **`prepare_environment`** exporta `NO_PROXY` de `no_proxy` quando a maiúscula está ausente ou
+  vazia, copia a região nos dois sentidos e devolve o dicionário do que mudou, para o log.
 - **`create_table`** é `DeltaTable.create(mode="ignore")` com `delta_schema(table)`,
   `partition_by` de `table_options`, o nome da tabela, o comentário da tabela em `description` e as
   duas propriedades de retenção. A descrição, o nome e os comentários de coluna atravessam todo
@@ -305,8 +306,9 @@ com as estatísticas dos quatro tipos).
 | Escrita condicional | `test_write_text_exclusive_create_and_if_match` | A segunda criação exclusiva e o `if_match` velho são `ConflictError`; o conteúdo final é o da escrita que venceu; o arquivo ausente é `FileNotFoundError`. |
 | Listagem, cópia e exclusão | `test_list_copy_delete` | `list_files` desce as pastas e exclui `_delta_log/`; `copy` preserva bytes; `delete` de caminho ausente não falha. |
 | Opções do delta-rs | `test_storage_options_resolved_per_call` (sem gravar) | Duas chamadas devolvem dicionários novos; a região vem da variável; `max_retries` presente; as chaves de SSE configuradas; nenhuma chave de credencial no dicionário. |
-| Ambiente | `test_prepare_environment` (sem gravar) | Os casos de `test_stdlib.py`, com `NO_PROXY` vazia tratada como ausente. |
+| Ambiente | `test_prepare_environment` (sem gravar) | `NO_PROXY` sai de `no_proxy` quando ausente ou vazia, a região vai nos dois sentidos, e a segunda chamada não muda nada. |
 | Proxy do DuckDB | `test_duckdb_proxy_settings_without_credentials_in_the_address` (sem gravar) | O endereço sem as credenciais, o usuário e a senha das variáveis ou do endereço, sem URL-encode. |
+| Secret do DuckDB | `test_duckdb_secret_options_for_an_endpoint` (sem gravar) | Sem `AWS_ENDPOINT_URL`, a cadeia de credenciais e a região; com ele, o endereço sem o esquema e `URL_STYLE 'path'`, e `USE_SSL false` só num endpoint `http`. |
 | Conexão do DuckDB | `test_duckdb_connect_loads_delta` | A extensão `delta` carregada da pasta configurada, sem instalação automática, e o secret no S3. |
 | Criação | `test_create_table_is_idempotent` | Versão 0 nas duas chamadas; esquema, partição, retenções, nome e o comentário da tabela em `description` lidos do log. |
 | Substituição | `test_publish_partition_replaces_only_its_partition` | Duas partições, a segunda republicada: a primeira intacta, uma versão por chamada, os metadados no `history`; o valor fora da regra e os dados sem a coluna de partição recusados antes de gravar. |

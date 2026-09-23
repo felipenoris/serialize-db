@@ -20,10 +20,7 @@ import source_db_projetado as source
 from client_model import Base as ClientBase
 from reference_model.model_db_projetado import Base as ReferenceBase
 
-
-def reference_table(name: str) -> sa.Table:
-    """A tabela ``name`` do modelo de referência."""
-    return ReferenceBase.metadata.tables[name]
+REFERENCE_TABLES = ReferenceBase.metadata.tables
 
 
 def partition_column(name: str) -> str | None:
@@ -62,8 +59,8 @@ def unique_indexes(table: sa.Table) -> set[tuple[str, ...]]:
 
 
 def expected_type(reference_column: sa.Column) -> type:
-    """O tipo que a cópia declara para a coluna do original: ``BigInteger`` na chave inteira e na coluna que aponta
-    para uma, e o mesmo tipo nas demais."""
+    """O tipo que a cópia declara para a coluna do original: ``BigInteger`` na chave inteira e na
+    coluna que aponta para uma, e o mesmo tipo nas demais."""
     if isinstance(reference_column.type, sa.Integer) and references_a_primary_key(reference_column):
         return sa.BigInteger
     return type(reference_column.type)
@@ -73,7 +70,7 @@ def column_pairs() -> list[tuple[str, sa.Column, sa.Column]]:
     """Cada coluna do original ao lado da mesma coluna na cópia, com o nome da tabela."""
     pairs = []
     for name, client in ClientBase.metadata.tables.items():
-        for reference_column in reference_table(name).columns:
+        for reference_column in REFERENCE_TABLES[name].columns:
             pairs.append((name, reference_column, client.c[reference_column.name]))
     return pairs
 
@@ -95,11 +92,12 @@ def foreign_keys(table: sa.Table) -> set[tuple[tuple[str, ...], str, tuple[str, 
 
 def test_the_tables_and_columns_are_the_references_with_the_partition_column_last() -> None:
     """As 12 tabelas do original, cada coluna na mesma posição, e a coluna de partição no fim."""
-    assert sorted(ClientBase.metadata.tables) == sorted(ReferenceBase.metadata.tables)
+    assert sorted(ClientBase.metadata.tables) == sorted(REFERENCE_TABLES)
     for name, client in ClientBase.metadata.tables.items():
-        expected = [column.name for column in reference_table(name).columns]
-        if partition_column(name) is not None:
-            expected.append(partition_column(name))
+        expected = [column.name for column in REFERENCE_TABLES[name].columns]
+        partition = partition_column(name)
+        if partition is not None:
+            expected.append(partition)
         assert [column.name for column in client.columns] == expected, name
 
 
@@ -117,15 +115,20 @@ def test_types_and_nullability_change_only_where_the_plan_says() -> None:
 
 # A chave estrangeira do original que o modelo cliente não tem: o destino não é único, porque o
 # contrato está em N operações.
-REMOVED_FOREIGN_KEY = (("data", "sistema", "contrato"), "rel_contrato_operacao", ("data", "sistema", "contrato"))
+REMOVED_FOREIGN_KEY = (
+    ("data", "sistema", "contrato"),
+    "rel_contrato_operacao",
+    ("data", "sistema", "contrato"),
+)
 
 
 def test_keys_are_the_references_without_deferrable_and_without_autoincrement() -> None:
     """As chaves do original sem ``DEFERRABLE`` nem ``autoincrement``, menos a que apontava para
-    colunas não únicas; nenhum índice, porque a cópia declara os únicos como ``UniqueConstraint``."""
-    assert REMOVED_FOREIGN_KEY in foreign_keys(reference_table("cad_contratos"))
+    colunas não únicas; nenhum índice, porque a cópia declara os únicos como
+    ``UniqueConstraint``."""
+    assert REMOVED_FOREIGN_KEY in foreign_keys(REFERENCE_TABLES["cad_contratos"])
     for name, client in ClientBase.metadata.tables.items():
-        reference = reference_table(name)
+        reference = REFERENCE_TABLES[name]
         client_primary = [column.name for column in client.primary_key.columns]
         reference_primary = [column.name for column in reference.primary_key.columns]
         assert client_primary == reference_primary, name
@@ -152,7 +155,7 @@ def test_the_composite_foreign_key_targets_are_unique_constraints() -> None:
     criado por ``create_all`` num ``sqlalchemy.Connection`` do DuckDB criado fora da biblioteca,
     que recusa o índice único como alvo de chave estrangeira."""
     for name, columns in UNIQUE_CONSTRAINTS_FROM_INDEXES.items():
-        assert columns in unique_indexes(reference_table(name)), name
+        assert columns in unique_indexes(REFERENCE_TABLES[name]), name
         assert columns in unique_constraints(ClientBase.metadata.tables[name]), name
     engine = sa.create_engine("duckdb:///:memory:")
     with engine.begin() as connection:
@@ -186,5 +189,6 @@ def test_the_partitioned_tables_declare_the_partition_the_base_has() -> None:
         assert options["partition_source"] == partition.source, name
         last = list(table.columns)[-1]
         assert last.name == partition.column, name
-        assert last.type.length == 10 and not last.nullable, name
+        assert last.type.length == 10, name
+        assert not last.nullable, name
         assert set(options["sort_key"]) <= set(table.columns.keys()), name

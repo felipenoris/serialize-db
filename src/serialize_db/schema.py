@@ -71,9 +71,9 @@ from serialize_db.errors import ContractError
 
 __all__ = [
     "Dialect",
+    "PARTITION_VALUE",
     "TableOptions",
     "arrow_schema",
-    "PARTITION_VALUE",
     "arrow_type",
     "cast",
     "check_models",
@@ -107,6 +107,9 @@ _ARROW_TYPES: tuple[tuple[type, pa.DataType], ...] = (
     (sa.String, pa.string()),
 )
 
+# O teto do VARCHAR no Redshift, em bytes: o limite de uma coluna Text, que não declara n.
+TEXT_LIMIT = 65535
+
 # O nome de cada tipo sem parâmetro em cada motor; Numeric, String e DateTime saem de sql_type.
 # A ordem importa como em _ARROW_TYPES: sql_type devolve o primeiro tipo que casa por
 # isinstance, e BigInteger e SmallInteger derivam de Integer.
@@ -129,14 +132,11 @@ _SQL_TYPES: dict[str, dict[type, str]] = {
         sa.Boolean: "BOOLEAN",
         sa.Double: "DOUBLE PRECISION",
         sa.Date: "DATE",
-        sa.Text: "VARCHAR(65535)",
+        sa.Text: f"VARCHAR({TEXT_LIMIT})",
         sa.Uuid: "VARCHAR(36)",
         sa.JSON: "SUPER",
     },
 }
-
-# O teto do VARCHAR no Redshift, em bytes: o limite de uma coluna Text, que não declara n.
-_TEXT_LIMIT = 65535
 
 
 # ---------------------------------------------------------------- o esquema Arrow e Delta
@@ -257,14 +257,22 @@ def _column_names(columns: Iterable[sa.Column]) -> tuple[str, ...]:
     return tuple(column.name for column in columns)
 
 
-def _declared_keys(table: sa.Table) -> list[tuple[str, ...]]:
-    """A chave primária, as ``UniqueConstraint`` e os índices únicos do modelo."""
-    keys = []
+def _keyed_targets(table: sa.Table) -> list[tuple[str, ...]]:
+    """As listas de colunas que uma chave estrangeira pode apontar na tabela: a chave primária e
+    as ``UniqueConstraint``, na ordem declarada; um índice único não serve no DuckDB nem no
+    Redshift."""
+    targets = []
     if table.primary_key.columns:
-        keys.append(_column_names(table.primary_key.columns))
+        targets.append(_column_names(table.primary_key.columns))
     for constraint in table.constraints:
         if isinstance(constraint, sa.UniqueConstraint):
-            keys.append(_column_names(constraint.columns))
+            targets.append(_column_names(constraint.columns))
+    return targets
+
+
+def _declared_keys(table: sa.Table) -> list[tuple[str, ...]]:
+    """A chave primária, as ``UniqueConstraint`` e os índices únicos do modelo."""
+    keys = _keyed_targets(table)
     for index in table.indexes:
         if index.unique:
             keys.append(_column_names(index.columns))
@@ -311,6 +319,36 @@ def table_options(table: sa.Table) -> TableOptions:
         redshift=dict(info.get("redshift", {})),
         keys=_adjusted_keys(_declared_keys(table), info),
     )
+
+
+def sequential_key(table: sa.Table) -> sa.Column | None:
+    """A chave primária inteira de uma coluna, a chave sequencial que ``next_ids`` preenche;
+    ``None`` quando a chave primária é outra."""
+    primary = list(table.primary_key.columns)
+    if len(primary) != 1 or not isinstance(primary[0].type, sa.Integer):
+        return None
+    return primary[0]
+
+
+def double_columns(table: sa.Table) -> list[str]:
+    """Os nomes das colunas ``Double``, as que podem guardar ``NaN`` e infinito, que ficam sem
+    mínimo e máximo no Delta (issue #59)."""
+    names = []
+    for column in table.columns:
+        if isinstance(column.type, sa.Double):
+            names.append(column.name)
+    return names
+
+
+def _local_column_names(constraint: sa.ForeignKeyConstraint) -> tuple[str, ...]:
+    """Os nomes das colunas locais da chave estrangeira, a chave da ordenação."""
+    return _column_names(constraint.columns)
+
+
+def foreign_keys_by_columns(table: sa.Table) -> list[sa.ForeignKeyConstraint]:
+    """As chaves estrangeiras na ordem das colunas locais: o SQLAlchemy as guarda num conjunto, e
+    a ordem fixa a das mensagens de ``check_models`` e das verificações da auditoria."""
+    return sorted(table.foreign_key_constraints, key=_local_column_names)
 
 
 PARTITION_VALUE = r"[0-9A-Za-z][0-9A-Za-z_.-]*"
@@ -388,6 +426,18 @@ def quoted(name: str) -> str:
         quoted("to")   # '"to"'
     """
     return f'"{name}"'
+
+
+def literal(value: str) -> str:
+    """O literal SQL de um texto, entre aspas simples e com a aspa simples dobrada.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        literal("d'agua")   # "'d''agua'"
+    """
+    return "'" + value.replace("'", "''") + "'"
 
 
 def column_ddl(column: sa.Column, dialect: Dialect) -> str:
@@ -512,9 +562,9 @@ def _refuse_text_above_varchar(
 ) -> None:
     """Texto acima do teto do VARCHAR do Redshift numa coluna Text, que não declara n."""
     longest = _longest_text(column)
-    if longest > _TEXT_LIMIT:
+    if longest > TEXT_LIMIT:
         raise ContractError(f"{table}.{field.name}: texto de {longest} bytes acima do teto de "
-                            f"{_TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor")
+                            f"{TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor")
 
 
 def _refuse_silent_losses(
@@ -578,7 +628,8 @@ def _contract_column(
         converted = _converted(column, field.type)
     except (pa.ArrowInvalid, pa.ArrowNotImplementedError) as error:
         # ArrowInvalid: escala perdida, nanossegundo não nulo, estouro, texto que não converte.
-        # ArrowNotImplementedError: um tipo sem conversão para o do contrato, como struct em Integer.
+        # ArrowNotImplementedError: um tipo sem conversão para o do contrato, como struct em
+        # Integer.
         raise ContractError(f"{table.name}.{field.name}: {error}") from None
     _refuse_long_text(converted, field, kind, table.name)
     return converted
@@ -685,33 +736,11 @@ def _column_problems(column: sa.Column) -> list[str]:
     return problems
 
 
-def _keyed_targets(table: sa.Table) -> list[tuple[str, ...]]:
-    """As listas de colunas que uma chave estrangeira pode apontar na tabela: a chave primária e
-    as ``UniqueConstraint``, na ordem declarada; um índice único não serve no DuckDB nem no Redshift."""
-    targets = []
-    if table.primary_key.columns:
-        targets.append(_column_names(table.primary_key.columns))
-    for constraint in table.constraints:
-        if isinstance(constraint, sa.UniqueConstraint):
-            targets.append(_column_names(constraint.columns))
-    return targets
-
-
-def _local_column_names(constraint: sa.ForeignKeyConstraint) -> tuple[str, ...]:
-    """Os nomes das colunas locais da chave estrangeira, a chave da ordenação."""
-    return _column_names(constraint.columns)
-
-
-def _foreign_keys_by_columns(table: sa.Table) -> list[sa.ForeignKeyConstraint]:
-    """As chaves estrangeiras na ordem das colunas locais: o SQLAlchemy as guarda num conjunto, e
-    a ordem fixa a das mensagens de ``check_models``."""
-    return sorted(table.foreign_key_constraints, key=_local_column_names)
-
-
 def _key_problems(table: sa.Table, options: TableOptions) -> list[str]:
-    """As violações das chaves: DEFERRABLE, o alvo de chave estrangeira sem chave, a tabela sem chave alguma."""
+    """As violações das chaves: DEFERRABLE, o alvo de chave estrangeira sem chave, a tabela sem
+    chave alguma."""
     problems = []
-    for constraint in _foreign_keys_by_columns(table):
+    for constraint in foreign_keys_by_columns(table):
         columns = list(_column_names(constraint.columns))
         if constraint.deferrable or constraint.initially:
             problems.append(f"{table.name}: chave estrangeira DEFERRABLE em {columns}")
@@ -730,7 +759,8 @@ def _key_problems(table: sa.Table, options: TableOptions) -> list[str]:
 
 
 def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
-    """As violações da partição: a coluna ausente ou fora de String(n), a origem que não existe."""
+    """As violações da partição: a coluna ausente ou fora de String(n), a origem que não
+    existe."""
     problems = []
     if options.partition_source and not options.partition_by:
         problems.append(f"{table.name}: partition_source sem partition_by")

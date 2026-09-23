@@ -24,8 +24,8 @@ Exemplo:
 
     db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
     with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as run:
-        run.ingest(Lancamento.__table__, partitions=run.previous_partitions(Lancamento.__table__, 12),
-                   materialize=True)
+        previous = run.previous_partitions(Lancamento.__table__, 12)
+        run.ingest(Lancamento.__table__, partitions=previous, materialize=True)
         with run.sandbox.stream(sa.select(Lancamento)) as stream, \\
                 run.sandbox.loader(Projetado.__table__) as loader:
             for batch in stream:
@@ -57,7 +57,12 @@ from serialize_db.audit import AuditReport, KeyScope
 from serialize_db.engine import Engine, ExportMode
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import AuditFailed, ContractError, ExecutionConflict, SandboxError
-from serialize_db.schema import check_partition_value, table_options
+from serialize_db.schema import (
+    check_partition_value,
+    double_columns,
+    sequential_key,
+    table_options,
+)
 from serialize_db.storage import Storage, prepare_environment
 
 __all__ = ["Database", "Execution"]
@@ -143,7 +148,8 @@ def _checked_partition(value: str, db: Database) -> str:
             continue
         length = table.c[column].type.length
         if len(value.encode("utf-8")) > length:
-            raise ContractError(f"partição {value!r} acima de String({length}) em {table.name}.{column}")
+            raise ContractError(
+                f"partição {value!r} acima de String({length}) em {table.name}.{column}")
     return value
 
 
@@ -171,16 +177,20 @@ def _checked_partitions(partitions: Sequence[str] | None) -> list[str] | None:
 
 
 def _sequential_key(table: sa.Table) -> sa.Column:
-    """A chave primária inteira de uma coluna, a única que ``next_ids`` preenche."""
-    primary = list(table.primary_key.columns)
-    if len(primary) != 1 or not isinstance(primary[0].type, sa.Integer):
-        names = [column.name for column in primary]
-        raise ContractError(f"{table.name}: next_ids serve à chave primária inteira de uma coluna, e "
-                            f"a chave é {names}; numa chave composta o cliente decide os ids")
-    return primary[0]
+    """A chave sequencial, a chave primária inteira de uma coluna, a única que ``next_ids``
+    preenche; outra chave é ``ContractError``."""
+    key = sequential_key(table)
+    if key is None:
+        names = [column.name for column in table.primary_key.columns]
+        raise ContractError(f"{table.name}: next_ids serve à chave primária inteira de uma coluna, "
+                            f"e a chave é {names}; numa chave composta o cliente decide os ids")
+    return key
 
 
 # ---------------------------------------------------------------- o pool das tabelas
+
+# Uma tarefa do pool: o nome da tabela e a função que a processa.
+_Task = tuple[str, Callable[[], object]]
 
 
 def _outcome(future: Future) -> str:
@@ -212,9 +222,9 @@ def _outcomes_of(futures: Mapping[Future, str]) -> dict[str, str]:
 
 
 @dataclasses.dataclass
-class _Pool:
-    """O pool da publicação: uma tabela começa só com um worker livre e nenhuma falha, então, na
-    primeira falha, o que está em curso termina e o que não começou fica de fora."""
+class _PoolState:
+    """O estado do pool das tabelas: uma tarefa começa só com um worker livre e nenhuma falha,
+    então, na primeira falha, o que está em curso termina e o que não começou fica de fora."""
 
     pool: ThreadPoolExecutor
     workers: int
@@ -222,8 +232,8 @@ class _Pool:
     finished: dict[Future, str] = dataclasses.field(default_factory=dict)
     failure: BaseException | None = None
 
-    def start(self, waiting: list[tuple[str, Callable[[], int]]]) -> None:
-        """Começa as tabelas que cabem nos workers livres, enquanto não houve falha."""
+    def start(self, waiting: list[_Task]) -> None:
+        """Começa as tarefas que cabem nos workers livres, enquanto não houve falha."""
         while waiting and self.failure is None and len(self.running) < self.workers:
             name, action = waiting.pop(0)
             self.running[self.pool.submit(action)] = name
@@ -235,6 +245,31 @@ class _Pool:
             self.finished[future] = self.running.pop(future)
             if future.exception() is not None and self.failure is None:
                 self.failure = future.exception()
+
+
+def _run_in_pool(tasks: list[_Task], max_workers: int) -> dict[str, object]:
+    """Roda as tarefas num pool de ``max_workers`` e devolve o resultado de cada uma pelo nome.
+
+    Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em
+    curso terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de cada
+    tarefa numa nota. Com um worker por tarefa, todas começam juntas e todas terminam.
+    """
+    waiting = list(tasks)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        state = _PoolState(pool, max_workers)
+        state.start(waiting)
+        while state.running:
+            state.collect()
+            state.start(waiting)
+    outcomes = _outcomes_of(state.finished)
+    for name, _ in waiting:
+        outcomes[name] = "cancelada"
+    if state.failure is not None:
+        _raise_with_outcomes(outcomes, state.failure)
+    results = {}
+    for future, name in state.finished.items():
+        results[name] = future.result()
+    return results
 
 
 # ---------------------------------------------------------------- a execução
@@ -325,8 +360,9 @@ class Execution:
         finally:
             timings = {name: round(seconds, 3) for name, seconds in self._timings.items()}
             outcome = "com erro" if exc is not None else "concluída"
-            log.info("execução %s %s: partição %s, versões lidas %s, versões gravadas %s, tempos %s",
-                     self.execution_id, outcome, self.partition, self._read, self._written, timings)
+            log.info("execução %s %s: partição %s, versões lidas %s, versões gravadas %s, "
+                     "tempos %s", self.execution_id, outcome, self.partition, self._read,
+                     self._written, timings)
 
     def _write_snapshot(self) -> None:
         """A entrada do snapshot marcado, com a versão de toda tabela do ambiente."""
@@ -373,10 +409,12 @@ class Execution:
 
     def _ingest_one(self, engine: Engine, table: sa.Table, partitions: list[str] | None,
                     materialize: bool) -> None:
-        """A ingestão de uma tabela na versão fixada; a tabela que não existe é ``SandboxError``."""
+        """A ingestão de uma tabela na versão fixada; a tabela que não existe é
+        ``SandboxError``."""
         version = self._version(table)
         if version is None:
-            raise SandboxError(f"{table.name}: a tabela não existe no ambiente {self.db.environment}")
+            raise SandboxError(
+                f"{table.name}: a tabela não existe no ambiente {self.db.environment}")
         engine.ingest(table, self._uri(table), version, partitions, materialize)
 
     def _ingest_in_new_session(self, table: sa.Table, partitions: list[str] | None,
@@ -404,22 +442,26 @@ class Execution:
             if len(tables) == 1:
                 self._ingest_one(self.sandbox, tables[0], checked, materialize)
                 return
-            with ThreadPoolExecutor(max_workers=max(len(tables), 1)) as pool:
-                futures = {}
-                for table in tables:
-                    future = pool.submit(self._ingest_in_new_session, table, checked, materialize)
-                    futures[future] = table.name
-            for future in futures:
-                if future.exception() is not None:
-                    _raise_with_outcomes(_outcomes_of(futures), future.exception())
+            tasks = []
+            for table in tables:
+                task = functools.partial(self._ingest_in_new_session, table, checked, materialize)
+                tasks.append((table.name, task))
+            _run_in_pool(tasks, max_workers=max(len(tables), 1))
 
     def published(self, table: sa.Table) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: é por ela
         que o pipeline lê as partições publicadas da tabela que ele mesmo grava."""
         return self.sandbox.published(table, self._uri(table), self._version(table))
 
+    def _first_id(self, table: sa.Table, key: sa.Column) -> int:
+        """O primeiro id de ``next_ids``: o maior da versão fixada mais um, ou 1 na tabela nova."""
+        if table.name not in self._tables:
+            return 1
+        return delta.max_key(self._tables[table.name], key.name) + 1
+
     def next_ids(self, table: sa.Table, n: int) -> range:
-        """Uma faixa de ``n`` inteiros contíguos da chave sequencial, acima do maior da versão fixada.
+        """Uma faixa de ``n`` inteiros contíguos da chave sequencial, acima do maior da versão
+        fixada.
 
         A chave é a chave primária inteira de uma coluna; outra chave é ``ContractError``. O maior
         valor é lido uma vez por tabela, das estatísticas do log; a tabela nova começa em 1. As
@@ -436,10 +478,7 @@ class Execution:
             raise ContractError(f"next_ids({table.name}, {n}): n negativo")
         with self._lock:
             if table.name not in self._next_ids:
-                start = 1
-                if table.name in self._tables:
-                    start = delta.max_key(self._tables[table.name], key.name) + 1
-                self._next_ids[table.name] = start
+                self._next_ids[table.name] = self._first_id(table, key)
             first = self._next_ids[table.name]
             self._next_ids[table.name] = first + n
         return range(first, first + n)
@@ -508,10 +547,12 @@ class Execution:
         partition_by = table_options(table).partition_by
         if partition_by is None:
             if partitions is not None:
-                raise ContractError(f"{table.name}: tabela sem partição recebeu partitions={partitions}")
+                raise ContractError(
+                    f"{table.name}: tabela sem partição recebeu partitions={partitions}")
             return [None]
         if partitions is None:
-            raise ContractError(f"{table.name}: publish de uma tabela particionada exige partitions")
+            raise ContractError(
+                f"{table.name}: publish de uma tabela particionada exige partitions")
         return list(partitions)
 
     def _approved(self, table: sa.Table, partitions: list[str] | None,
@@ -529,8 +570,8 @@ class Execution:
         return report
 
     def _check_no_data_change(self, table: sa.Table, uri: str) -> None:
-        """Confere que nenhuma alteração de dados entrou na tabela desde a versão fixada; um avanço só
-        de metadados ou de manutenção atualiza a versão fixada. A tabela ausente nasce aqui."""
+        """Confere que nenhuma alteração de dados entrou na tabela desde a versão fixada; um avanço
+        só de metadados ou de manutenção atualiza a versão fixada. A tabela ausente nasce aqui."""
         storage = self.db.storage
         pinned = self._version(table)
         if pinned is None:
@@ -552,13 +593,19 @@ class Execution:
         uri = self._uri(table)
         self._check_no_data_change(table, uri)
         delta.reconcile(uri, table, self.db.storage)
-        doubles = tuple(column.name for column in table.columns if isinstance(column.type, sa.Double))
         version = self._version(table)
         for value in values:
             with self._lock:
-                metadata = delta.commit_metadata(self.execution_id, dict(self._read), self._snapshot)
-            expected = report.rows(value) if report is not None else None
-            nonfinite = report.nonfinite_columns.get(value, ()) if report is not None else doubles
+                metadata = delta.commit_metadata(self.execution_id, dict(self._read),
+                                                 self._snapshot)
+            # Sem auditoria não há contagem a conferir, e toda coluna Double sai sem mínimo e
+            # máximo, porque nada diz quais têm valor não finito.
+            if report is None:
+                expected = None
+                nonfinite = double_columns(table)
+            else:
+                expected = report.rows(value)
+                nonfinite = report.nonfinite_columns.get(value, ())
             version = self.sandbox.export_partition(table, uri, value, metadata, mode, expected,
                                                     nonfinite)
             with self._lock:
@@ -587,35 +634,15 @@ class Execution:
         """
         checked = _checked_partitions(partitions)
         mode = self._resolved_mode(export_mode)
-        plans = []
+        # As partições e a auditoria de toda tabela são conferidas antes do primeiro commit.
+        tasks = []
         for table in tables:
             values = self._values(table, checked)
-            plans.append((table, values, self._approved(table, checked, audit)))
+            report = self._approved(table, checked, audit)
+            task = functools.partial(self._publish_table, table, values, report, mode)
+            tasks.append((table.name, task))
         with self._step("publish"):
-            return self._publish_in_pool(plans, mode, max_workers)
-
-    def _publish_in_pool(self, plans: list[tuple], mode: ExportMode, max_workers: int) -> dict[str, int]:
-        """As tabelas num pool: na primeira falha, as tarefas em curso terminam e as que não
-        começaram ficam canceladas."""
-        waiting = []
-        for table, values, report in plans:
-            action = functools.partial(self._publish_table, table, values, report, mode)
-            waiting.append((table.name, action))
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            state = _Pool(pool, max_workers)
-            state.start(waiting)
-            while state.running:
-                state.collect()
-                state.start(waiting)
-        outcomes = _outcomes_of(state.finished)
-        for name, _ in waiting:
-            outcomes[name] = "cancelada"
-        if state.failure is not None:
-            _raise_with_outcomes(outcomes, state.failure)
-        results = {}
-        for future, name in state.finished.items():
-            results[name] = future.result()
-        return results
+            return _run_in_pool(tasks, max_workers)
 
     def snapshot(self, name: str) -> None:
         """Marca a execução: ``serialize_db_snapshot`` nos commits seguintes e, no encerramento sem

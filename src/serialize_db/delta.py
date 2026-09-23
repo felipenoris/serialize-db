@@ -31,7 +31,8 @@ Exemplo, numa pasta local:
     delta.create_table(uri, Operacao.__table__, storage)
     data = schema.cast(pa.table({...}), Operacao.__table__)
     metadata = delta.commit_metadata("exec-2026-09-05", {"cad_contratos": 88})
-    version = delta.publish_partition(uri, Operacao.__table__, "2026-08-31", data, metadata, storage)
+    version = delta.publish_partition(uri, Operacao.__table__, "2026-08-31", data, metadata,
+                                      storage)
     delta.version_diff(uri, version - 1, version, Operacao.__table__, storage)   # {"2026-08-31"}
 """
 
@@ -51,7 +52,13 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import sqlalchemy as sa
-from deltalake import ColumnProperties, CommitProperties, DeltaTable, WriterProperties, write_deltalake
+from deltalake import (
+    ColumnProperties,
+    CommitProperties,
+    DeltaTable,
+    WriterProperties,
+    write_deltalake,
+)
 from deltalake.exceptions import CommitFailedError
 from deltalake.transaction import AddAction
 
@@ -66,6 +73,8 @@ from serialize_db.schema import (
     arrow_schema,
     check_partition_value,
     delta_schema,
+    double_columns,
+    literal,
     quoted,
     sql_type,
     table_options,
@@ -178,11 +187,6 @@ def _options(storage: Storage) -> dict[str, str] | None:
     return storage.storage_options() or None
 
 
-def _literal(value: str) -> str:
-    """O literal SQL de um texto, com a aspa simples dobrada."""
-    return "'" + value.replace("'", "''") + "'"
-
-
 def _checked_value(table: sa.Table, value: str | None) -> str | None:
     """O valor de partição conferido: obrigatório e na regra da partição numa tabela particionada,
     ``None`` numa tabela sem partição."""
@@ -199,8 +203,8 @@ def _checked_value(table: sa.Table, value: str | None) -> str | None:
 def create_table(uri: str, table: sa.Table, storage: Storage) -> DeltaTable:
     """A tabela Delta do modelo, criada na versão 0 se ainda não existe.
 
-    ``DeltaTable.create(mode="ignore")`` com ``delta_schema(table)``, a coluna de partição, o nome da
-    tabela, o comentário da tabela em ``description`` e as retenções: o log por 3.650 dias e os
+    ``DeltaTable.create(mode="ignore")`` com ``delta_schema(table)``, a coluna de partição, o nome
+    da tabela, o comentário da tabela em ``description`` e as retenções: o log por 3.650 dias e os
     arquivos removidos por 400. Sem vetores de exclusão nem column mapping, que o ``COPY`` do
     Redshift não lê. A chamada repetida devolve a tabela como está.
 
@@ -241,6 +245,18 @@ def table_exists(uri: str, storage: Storage) -> bool:
     return DeltaTable.is_deltatable(uri, storage_options=_options(storage))
 
 
+def _logged_statistic(actions: pa.Table, name: str,
+                      aggregate: Callable[[pa.ChunkedArray], pa.Scalar]) -> object | None:
+    """O agregado de uma estatística das ações ``add``, como o ``pc.max`` de ``max.<coluna>``;
+    ``None`` quando não há ação ou quando algum arquivo não tem a estatística."""
+    if actions.num_rows == 0 or name not in actions.column_names:
+        return None
+    column = actions.column(name)
+    if column.null_count > 0:
+        return None
+    return aggregate(column).as_py()
+
+
 def max_key(dt: DeltaTable, column: str) -> int:
     """O maior valor de ``column`` na versão carregada, o início de ``next_ids``.
 
@@ -258,9 +274,9 @@ def max_key(dt: DeltaTable, column: str) -> int:
     actions = pa.table(dt.get_add_actions(flatten=True))
     if actions.num_rows == 0:
         return 0
-    name = f"max.{column}"
-    if name in actions.column_names and actions.column(name).null_count == 0:
-        return pc.max(actions.column(name)).as_py()
+    logged = _logged_statistic(actions, f"max.{column}", pc.max)
+    if logged is not None:
+        return logged
     scanned = dt.to_pyarrow_dataset().to_table(columns=[column]).column(column)
     return pc.max(scanned).as_py()
 
@@ -316,10 +332,11 @@ def _writer_properties(columns_without_min_max: Collection[str]) -> WriterProper
 
 
 def _partition_predicate(partition_by: str | None, value: str | None) -> str | None:
-    """O predicado da substituição da partição, ``"<coluna>" = '<valor>'``; ``None`` sem partição."""
+    """O predicado da substituição da partição, ``"<coluna>" = '<valor>'``; ``None`` sem
+    partição."""
     if partition_by is None:
         return None
-    return f"{quoted(partition_by)} = {_literal(value)}"
+    return f"{quoted(partition_by)} = {literal(value)}"
 
 
 def publish_partition(uri: str, table: sa.Table, value: str | None, data: object,
@@ -424,7 +441,8 @@ def file_from_return_stats(row: Mapping[str, object], table: sa.Table, uri: str)
 
 
 def _exact_statistic(field_type: pa.DataType) -> bool:
-    """Se o mínimo e o máximo do tipo transcrevem exato no log: inteiro, data, ``Double`` e texto."""
+    """Se o mínimo e o máximo do tipo transcrevem exato no log: inteiro, data, ``Double`` e
+    texto."""
     return _stat_converter(field_type) is not None
 
 
@@ -467,7 +485,8 @@ def _action_stats(file: RegisteredFile, contract: pa.Schema,
 
 def _add_action(file: RegisteredFile, contract: pa.Schema, partition_by: str | None,
                 value: str | None, columns_without_min_max: Collection[str]) -> AddAction:
-    """A ação ``add`` de um arquivo conferido: caminho relativo, tamanho, partição e estatísticas."""
+    """A ação ``add`` de um arquivo conferido: caminho relativo, tamanho, partição e
+    estatísticas."""
     partition_values = {partition_by: value} if partition_by else {}
     return AddAction(
         path=file.path,
@@ -568,6 +587,17 @@ def _check_partition_path(file: RegisteredFile, partition_by: str | None,
         raise RegistrationRefused(f"{file.path}: fora da pasta da partição {partition_by}={value}")
 
 
+def _footer_null_count(footer: pq.ParquetFile, index: int) -> int:
+    """A soma dos nulos da coluna ``index`` nos grupos de linhas do rodapé; um grupo sem a
+    estatística conta zero."""
+    nulls = 0
+    for group in range(footer.metadata.num_row_groups):
+        statistics = footer.metadata.row_group(group).column(index).statistics
+        if statistics is not None and statistics.has_null_count:
+            nulls += statistics.null_count
+    return nulls
+
+
 def _check_not_null(footer: pq.ParquetFile, file: RegisteredFile, contract: pa.Schema) -> None:
     """Nenhum nulo nas colunas ``NOT NULL`` do contrato, pela contagem de nulos de cada grupo de
     linhas do rodapé: o DuckDB grava toda coluna como ``optional``, e o leitor devolveria o nulo
@@ -576,12 +606,7 @@ def _check_not_null(footer: pq.ParquetFile, file: RegisteredFile, contract: pa.S
     for field in contract:
         if field.nullable or field.name not in names:
             continue
-        index = names.index(field.name)
-        nulls = 0
-        for group in range(footer.metadata.num_row_groups):
-            statistics = footer.metadata.row_group(group).column(index).statistics
-            if statistics is not None and statistics.has_null_count:
-                nulls += statistics.null_count
+        nulls = _footer_null_count(footer, names.index(field.name))
         if nulls:
             raise RegistrationRefused(f"{file.path}: {nulls} nulos na coluna NOT NULL {field.name}")
 
@@ -646,9 +671,10 @@ def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value
     arquivo; por isso cada arquivo passa antes pelas conferências do rodapé, um GET por arquivo: o
     arquivo existe com o tamanho declarado; o esquema do rodapé tem cada coluna do contrato, na
     ordem dele, num tipo físico que os leitores leem como o lógico, e não tem a coluna de partição;
-    as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o caminho está na pasta da partição; as linhas do rodapé são as declaradas, e a soma é
-    ``expected_rows`` quando o chamador tem a contagem da fonte. A reprovação é
-    ``RegistrationRefused``, sem commit, e o arquivo fica órfão até ``vacuum(full=True)``.
+    as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o caminho está na pasta da
+    partição; as linhas do rodapé são as declaradas, e a soma é ``expected_rows`` quando o chamador
+    tem a contagem da fonte. A reprovação é ``RegistrationRefused``, sem commit, e o arquivo fica
+    órfão até ``vacuum(full=True)``.
 
     A ação leva ``numRecords``, o ``nullCount`` e o mínimo e o máximo das colunas inteiras, de data,
     ``Double`` e texto, menos as de ``columns_without_min_max``, as ``Double`` com valor não finito
@@ -701,7 +727,7 @@ def _partition_filter(partition_by: str | None, value: str | None) -> str:
     """O ``WHERE`` da partição no texto do DuckDB; vazio sem partição ou na tabela inteira."""
     if partition_by is None or value is None:
         return ""
-    return f" WHERE {quoted(partition_by)} = {_literal(value)}"
+    return f" WHERE {quoted(partition_by)} = {literal(value)}"
 
 
 def _duckdb_reading(uri: str, version: int, table: sa.Table, value: str | None,
@@ -712,7 +738,7 @@ def _duckdb_reading(uri: str, version: int, table: sa.Table, value: str | None,
         measures.append(f"min({quoted(name)})")
         measures.append(f"max({quoted(name)})")
     where = _partition_filter(table_options(table).partition_by, value)
-    text = (f"SELECT {', '.join(measures)} FROM delta_scan({_literal(uri)}, "
+    text = (f"SELECT {', '.join(measures)} FROM delta_scan({literal(uri)}, "
             f"version := {version}){where}")
     connection = storage.duckdb_connect()
     try:
@@ -757,15 +783,8 @@ def _log_reading(dt: DeltaTable, table: sa.Table, value: str | None,
     minimum = []
     maximum = []
     for name in keys:
-        low = actions.column(f"min.{name}") if f"min.{name}" in actions.column_names else None
-        high = actions.column(f"max.{name}") if f"max.{name}" in actions.column_names else None
-        complete = low is not None and high is not None and actions.num_rows > 0
-        if complete and low.null_count == 0 and high.null_count == 0:
-            minimum.append(pc.min(low).as_py())
-            maximum.append(pc.max(high).as_py())
-        else:
-            minimum.append(None)
-            maximum.append(None)
+        minimum.append(_logged_statistic(actions, f"min.{name}", pc.min))
+        maximum.append(_logged_statistic(actions, f"max.{name}", pc.max))
     return _Reading(rows, tuple(minimum), tuple(maximum))
 
 
@@ -790,7 +809,7 @@ def _read_back_problems(table: sa.Table, keys: tuple[str, ...], expected_rows: i
         low, high = log.minimum[index], log.maximum[index]
         read_low, read_high = arrow.minimum[index], arrow.maximum[index]
         exact = _exact_statistic(contract.field(name).type)
-        if not exact or low is None or read_low is None:
+        if not exact or low is None or high is None or read_low is None:
             continue
         if low > read_low or high < read_high:
             problems.append(f"{name}: o log registra {low}..{high}, e os dados têm "
@@ -872,12 +891,17 @@ def schema_diff(table: sa.Table, dt: DeltaTable) -> SchemaDiff:
     current = pa.schema(dt.schema())
     with_data = _has_data(dt)
     add, relax, comments, destructive = [], [], [], []
+    # As colunas novas: anuláveis, ou NOT NULL numa tabela ainda sem dados.
+    for field in contract:
+        if field.name in current.names:
+            continue
+        if field.nullable or not with_data:
+            add.append(field)
+        else:
+            destructive.append(f"{field.name}: coluna NOT NULL nova numa tabela com dados")
+    # As colunas do modelo que a tabela já tem: o tipo, a nulidade e o comentário.
     for field in contract:
         if field.name not in current.names:
-            if field.nullable or not with_data:
-                add.append(field)
-            else:
-                destructive.append(f"{field.name}: coluna NOT NULL nova numa tabela com dados")
             continue
         existing = current.field(field.name)
         if existing.type != field.type:
@@ -889,6 +913,7 @@ def schema_diff(table: sa.Table, dt: DeltaTable) -> SchemaDiff:
             destructive.append(f"{field.name}: NOT NULL numa coluna anulável")
         if _comment(field) != _comment(existing):
             comments.append(field.name)
+    # As colunas da tabela que o modelo não tem mais.
     for name in current.names:
         if name not in contract.names:
             destructive.append(f"{name}: removida do modelo")
@@ -903,6 +928,15 @@ def schema_diff(table: sa.Table, dt: DeltaTable) -> SchemaDiff:
         comments=tuple(comments),
         destructive=tuple(destructive),
     )
+
+
+def _check_constraint_texts(table: sa.Table, names: Collection[str]) -> dict[str, str]:
+    """O texto SQL de cada ``CheckConstraint`` do modelo cujo nome está em ``names``."""
+    texts = {}
+    for constraint in table.constraints:
+        if isinstance(constraint, sa.CheckConstraint) and constraint.name in names:
+            texts[constraint.name] = str(constraint.sqltext)
+    return texts
 
 
 def reconcile(uri: str, table: sa.Table, storage: Storage) -> SchemaDiff:
@@ -934,11 +968,7 @@ def reconcile(uri: str, table: sa.Table, storage: Storage) -> SchemaDiff:
     for name in diff.relax:
         dt.alter.drop_column_not_null(name)
     if diff.checks:
-        constraints = {}
-        for constraint in table.constraints:
-            if isinstance(constraint, sa.CheckConstraint) and constraint.name in diff.checks:
-                constraints[constraint.name] = str(constraint.sqltext)
-        dt.alter.add_constraint(constraints)
+        dt.alter.add_constraint(_check_constraint_texts(table, diff.checks))
     if diff.description is not None:
         dt.alter.set_table_description(diff.description)
     contract = arrow_schema(table)
@@ -960,7 +990,8 @@ def _rewrite_select(table: sa.Table, expressions: Mapping[str, str], source: str
     columns = []
     for column in table.columns:
         expression = expressions.get(column.name, quoted(column.name))
-        columns.append(f"CAST({expression} AS {sql_type(column, 'duckdb')}) AS {quoted(column.name)}")
+        converted = f"CAST({expression} AS {sql_type(column, 'duckdb')})"
+        columns.append(f"{converted} AS {quoted(column.name)}")
     return f"SELECT {', '.join(columns)} FROM {source}"
 
 
@@ -968,26 +999,25 @@ def _nonfinite_by_partition(connection: object, table: sa.Table,
                             select: str) -> dict[str | None, tuple[str, ...]]:
     """As colunas ``Double`` com valor não finito em cada partição do ``SELECT``, que ficam sem
     mínimo e máximo no log (issue #59)."""
-    doubles = [column.name for column in table.columns if isinstance(column.type, sa.Double)]
+    doubles = double_columns(table)
     if not doubles:
         return {}
     partition_by = table_options(table).partition_by
     measures = []
     for name in doubles:
         measures.append(f"count(*) FILTER (WHERE NOT isfinite({quoted(name)}))")
+    counts = ", ".join(measures)
+    # Uma linha por partição, com o valor dela na frente das contagens; None numa tabela sem
+    # partição.
     if partition_by is None:
-        rows = [(None, *connection.execute(f"SELECT {', '.join(measures)} FROM ({select})").fetchone())]
+        counted = connection.execute(f"SELECT {counts} FROM ({select})").fetchone()
+        rows = [(None, *counted)]
     else:
-        key = quoted(partition_by)
         rows = connection.execute(
-            f"SELECT {key}, {', '.join(measures)} FROM ({select}) GROUP BY 1").fetchall()
+            f"SELECT {quoted(partition_by)}, {counts} FROM ({select}) GROUP BY 1").fetchall()
     found = {}
     for row in rows:
-        columns = []
-        for name, count in zip(doubles, row[1:]):
-            if count:
-                columns.append(name)
-        found[row[0]] = tuple(columns)
+        found[row[0]] = tuple(name for name, count in zip(doubles, row[1:]) if count)
     return found
 
 
@@ -1002,12 +1032,21 @@ def _copy_rewrite(connection: object, uri: str, table: sa.Table, select: str) ->
         target = uri
         options = (f"FORMAT parquet, PARTITION_BY ({quoted(partition_by)}), APPEND true, "
                    "FILENAME_PATTERN 'rewrite_{uuid}', RETURN_STATS")
-    cursor = connection.execute(f"COPY ({select}) TO {_literal(target)} ({options})")
+    cursor = connection.execute(f"COPY ({select}) TO {literal(target)} ({options})")
     names = [column[0] for column in cursor.description]
     rows = []
     for row in cursor.fetchall():
         rows.append(dict(zip(names, row)))
     return rows
+
+
+def _written_partition(row: Mapping[str, object], partition_by: str | None) -> str | None:
+    """O valor de partição de um arquivo do ``COPY ... PARTITION_BY``, de ``partition_keys``;
+    ``None`` numa tabela sem partição."""
+    if partition_by is None:
+        return None
+    partition_keys = dict(row["partition_keys"] or {})
+    return partition_keys.get(partition_by)
 
 
 def rewrite(uri: str, table: sa.Table, storage: Storage,
@@ -1036,7 +1075,7 @@ def rewrite(uri: str, table: sa.Table, storage: Storage,
     _check_expressions(table, expressions)
     partition_by = table_options(table).partition_by
     dt = open_table(uri, storage)
-    source = f"delta_scan({_literal(uri)}, version := {dt.version()})"
+    source = f"delta_scan({literal(uri)}, version := {dt.version()})"
     select = _rewrite_select(table, expressions, source)
     connection = storage.duckdb_connect()
     try:
@@ -1050,7 +1089,7 @@ def rewrite(uri: str, table: sa.Table, storage: Storage,
     total = 0
     for row in written:
         file = file_from_return_stats(row, table, uri)
-        value = dict(row["partition_keys"] or {}).get(partition_by) if partition_by else None
+        value = _written_partition(row, partition_by)
         _check_file(storage, table_path, file, contract, partition_by, value)
         actions.append(_add_action(file, contract, partition_by, value, nonfinite.get(value, ())))
         total += file.rows
@@ -1068,6 +1107,20 @@ def _partition_of(file_action: Mapping[str, object], partition_by: str | None) -
     if partition_by is None:
         return None
     return file_action.get("partitionValues", {}).get(partition_by)
+
+
+def _changed_partitions(log_text: str, partition_by: str | None) -> set[str | None]:
+    """As partições das ações ``add`` e ``remove`` com ``dataChange`` verdadeiro num arquivo do
+    log; a compactação grava ``dataChange`` falso e não conta."""
+    changed: set[str | None] = set()
+    for line in log_text.splitlines():
+        if not line.strip():
+            continue
+        action = json.loads(line)
+        file_action = action.get("add") or action.get("remove")
+        if file_action is not None and file_action.get("dataChange", True):
+            changed.add(_partition_of(file_action, partition_by))
+    return changed
 
 
 def version_diff(uri: str, published: int, current: int, table: sa.Table,
@@ -1099,14 +1152,17 @@ def version_diff(uri: str, published: int, current: int, table: sa.Table,
             raise LogUnavailable(
                 f"{table.name}: o log da versão {version} não existe; as partições alteradas entre "
                 f"{published} e {current} não podem ser lidas, publique a tabela inteira") from None
-        for line in text.splitlines():
-            if not line.strip():
-                continue
-            action = json.loads(line)
-            file_action = action.get("add") or action.get("remove")
-            if file_action is not None and file_action.get("dataChange", True):
-                changed.add(_partition_of(file_action, partition_by))
+        changed.update(_changed_partitions(text, partition_by))
     return changed
+
+
+def _in_partitions(action: Mapping[str, object], partition_columns: list[str],
+                   partitions: list[str] | None) -> bool:
+    """Se a ação ``add`` está numa das partições pedidas; toda ação está, com ``partitions=None``
+    ou numa tabela sem partição."""
+    if partitions is None or not partition_columns:
+        return True
+    return action[f"partition.{partition_columns[0]}"] in partitions
 
 
 def copy_manifest(uri: str, version: int, partitions: list[str] | None, destination: str,
@@ -1127,12 +1183,11 @@ def copy_manifest(uri: str, version: int, partitions: list[str] | None, destinat
                       storage)
     """
     dt = open_table(uri, storage, version)
-    partition_by = dt.metadata().partition_columns
+    partition_columns = dt.metadata().partition_columns
     entries = []
     for action in pa.table(dt.get_add_actions(flatten=True)).to_pylist():
-        if partitions is not None and partition_by:
-            if action[f"partition.{partition_by[0]}"] not in partitions:
-                continue
+        if not _in_partitions(action, partition_columns, partitions):
+            continue
         entries.append({
             "url": f"{uri.rstrip('/')}/{action['path']}",
             "mandatory": True,
@@ -1280,7 +1335,8 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
 
 
 def _export_by_copy(dt: DeltaTable, uri: str, destination: str, storage: Storage) -> list[str]:
-    """Os arquivos que o log lista, copiados sem ler dados, no mesmo layout ``<coluna>=<valor>/``."""
+    """Os arquivos que o log lista, copiados sem ler dados, no mesmo layout
+    ``<coluna>=<valor>/``."""
     source_path = storage.relative(uri)
     target_path = storage.relative(destination)
     copied = []
@@ -1295,7 +1351,7 @@ def _export_by_rewrite(dt: DeltaTable, uri: str, table: sa.Table, destination: s
     """A versão reescrita pelo ``COPY`` particionado do DuckDB: um arquivo por partição, sem a
     coluna de partição dentro dele."""
     partition_by = table_options(table).partition_by
-    source = f"SELECT * FROM delta_scan({_literal(uri)}, version := {dt.version()})"
+    source = f"SELECT * FROM delta_scan({literal(uri)}, version := {dt.version()})"
     if partition_by is None:
         storage.ensure_folder(storage.relative(destination))
         target = f"{destination}/data.parquet"
@@ -1305,7 +1361,7 @@ def _export_by_rewrite(dt: DeltaTable, uri: str, table: sa.Table, destination: s
         options = f"FORMAT parquet, PARTITION_BY ({quoted(partition_by)}), RETURN_STATS"
     connection = storage.duckdb_connect()
     try:
-        rows = connection.execute(f"COPY ({source}) TO {_literal(target)} ({options})").fetchall()
+        rows = connection.execute(f"COPY ({source}) TO {literal(target)} ({options})").fetchall()
     finally:
         connection.close()
     return sorted(str(row[0]) for row in rows)

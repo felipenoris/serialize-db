@@ -18,8 +18,10 @@ Exemplo:
 
     serialize-db schema write --metadata pipeline.models:Base.metadata schema/
     serialize-db schema check --metadata pipeline.models:Base.metadata schema/
-    serialize-db sql write --metadata pipeline.models:Base.metadata --statements pipeline.queries:STATEMENTS sql/
-    serialize-db sql check --metadata pipeline.models:Base.metadata --statements pipeline.queries:STATEMENTS sql/
+    serialize-db sql write --metadata pipeline.models:Base.metadata \\
+        --statements pipeline.queries:STATEMENTS sql/
+    serialize-db sql check --metadata pipeline.models:Base.metadata \\
+        --statements pipeline.queries:STATEMENTS sql/
     serialize-db run --root s3://bucket/delta --environment prod --partition 2026-08-31 \\
         --metadata pipeline.models:Base.metadata pipeline.mensal:main
     serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
@@ -31,9 +33,9 @@ impresso, e quando a auditoria reprova; 2 no erro de uso e no conflito de execu�
 from __future__ import annotations
 
 import argparse
-import importlib
 import logging
 import os
+import pkgutil
 import sys
 import uuid
 from collections.abc import Callable
@@ -50,7 +52,8 @@ __all__ = ["main"]
 
 
 def _resolve_attribute(spec: str) -> object:
-    """O objeto de ``modulo:atributo``: importa o módulo e segue os atributos por ponto.
+    """O objeto de ``modulo:atributo``, pelo ``pkgutil.resolve_name`` da biblioteca padrão: importa
+    o módulo e segue os atributos por ponto.
 
     Exemplo:
 
@@ -62,12 +65,9 @@ def _resolve_attribute(spec: str) -> object:
     if not module_name or not attribute_path:
         raise argparse.ArgumentTypeError(f"esperado modulo:atributo, recebido {spec!r}")
     try:
-        target = importlib.import_module(module_name)
-        for name in attribute_path.split("."):
-            target = getattr(target, name)
+        return pkgutil.resolve_name(spec)
     except (ImportError, AttributeError) as error:
         raise argparse.ArgumentTypeError(f"{spec}: {error}") from None
-    return target
 
 
 def _resolve_metadata(spec: str) -> sa.MetaData:
@@ -117,13 +117,15 @@ def _add_run_parser(commands: argparse._SubParsersAction) -> None:
     run.add_argument("--engine", choices=["duckdb", "redshift"],
                      default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb")
     run.add_argument("--export-mode", choices=["register", "rewrite"], default=None,
-                     help="o modo dos publish que não informam o seu; padrão SERIALIZE_DB_EXPORT_MODE")
+                     help="o modo dos publish que não informam o seu; "
+                          "padrão SERIALIZE_DB_EXPORT_MODE")
     run.add_argument("--partition", type=_name_argument, required=True)
     run.add_argument("--execution-id", type=_name_argument, default=None)
     run.add_argument("--metadata", required=True, type=_resolve_metadata,
                      help="modulo:atributo com o MetaData dos modelos do pipeline")
     run.add_argument("pipeline", type=_resolve_function,
                      help="modulo:funcao que recebe a execução aberta")
+    run.set_defaults(handler=_run)
 
 
 def _add_audit_parser(commands: argparse._SubParsersAction) -> None:
@@ -139,10 +141,12 @@ def _add_audit_parser(commands: argparse._SubParsersAction) -> None:
                                default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb",
                                help="o dialeto do texto e o motor da auditoria")
     audit_command.add_argument("--sql", action="store_true",
-                               help="imprime o texto das verificações, sem conexão nem armazenamento")
+                               help="imprime o texto das verificações, sem conexão nem "
+                                    "armazenamento")
     audit_command.add_argument("--root", default=os.environ.get("SERIALIZE_DB_ROOT"))
     audit_command.add_argument("--environment", type=_name_argument,
                                default=os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev")
+    audit_command.set_defaults(handler=_audit)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -154,21 +158,25 @@ def _build_parser() -> argparse.ArgumentParser:
 
     schema_command = commands.add_parser("schema", help="os arquivos de esquema dos modelos")
     schema_actions = schema_command.add_subparsers(dest="action", required=True)
-    for action, help_text in (("write", "grava os arquivos"), ("check", "compara sem gravar")):
+    for action, handler, help_text in (("write", _schema_write, "grava os arquivos"),
+                                       ("check", _schema_check, "compara sem gravar")):
         action_parser = schema_actions.add_parser(action, help=help_text)
         action_parser.add_argument("--metadata", required=True, type=_resolve_metadata,
                                    help="modulo:atributo com o MetaData dos modelos")
         action_parser.add_argument("directory", help="a pasta dos arquivos de esquema")
+        action_parser.set_defaults(handler=handler)
 
     sql_command = commands.add_parser("sql", help="o texto SQL dos statements em cada motor")
     sql_actions = sql_command.add_subparsers(dest="action", required=True)
-    for action, help_text in (("write", "grava os arquivos"), ("check", "compara sem gravar")):
+    for action, handler, help_text in (("write", _sql_write, "grava os arquivos"),
+                                       ("check", _sql_check, "compara sem gravar")):
         action_parser = sql_actions.add_parser(action, help=help_text)
         action_parser.add_argument("--metadata", required=True, type=_resolve_metadata,
                                    help="modulo:atributo com o MetaData dos modelos")
         action_parser.add_argument("--statements", required=True, type=_resolve_statements,
                                    help="modulo:atributo com o dicionário {nome: statement}")
         action_parser.add_argument("directory", help="a pasta dos arquivos de texto SQL")
+        action_parser.set_defaults(handler=handler)
     return parser
 
 
@@ -233,7 +241,9 @@ def _print_report(report: AuditReport) -> None:
     """O relatório da auditoria: o veredito de cada verificação, as amostras e as leituras."""
     for result in report.results:
         verdict = "aprovada" if result.passed else f"reprovada, {result.defects} defeito(s)"
-        print(f"{result.name}: {verdict}{' (' + result.reason + ')' if result.reason else ''}")
+        if result.reason:
+            verdict += f" ({result.reason})"
+        print(f"{result.name}: {verdict}")
         for row in result.sample.to_pylist():
             print(f"    {row}")
     for reason in report.not_run:
@@ -250,11 +260,13 @@ def _audit_published(args: argparse.Namespace, table: sa.Table) -> int:
         print(f"serialize-db audit: {table.name} não existe em {uri}", file=sys.stderr)
         return 2
     version = delta.open_table(uri, db.storage).version()
+    # A versão atual de cada tabela referenciada que existe, para as chaves estrangeiras.
     referenced = {}
     for constraint in table.foreign_key_constraints:
         target = db.uri(constraint.referred_table)
         if delta.table_exists(target, db.storage):
-            referenced[constraint.referred_table.name] = (target, delta.open_table(target, db.storage).version())
+            target_version = delta.open_table(target, db.storage).version()
+            referenced[constraint.referred_table.name] = (target, target_version)
     with DuckDBEngine(DuckDBConfig(), f"auditoria-{uuid.uuid4().hex[:8]}", db.storage) as engine:
         engine.ingest(table, uri, version, args.partitions, materialize=True)
         report = engine.audit(table, args.partitions, uri, version, args.foreign_keys,
@@ -286,23 +298,15 @@ def _audit(args: argparse.Namespace) -> int:
     return _audit_published(args, table)
 
 
-# A função de cada par (comando, ação); cada etapa acrescenta o seu par aqui.
-_HANDLERS = {
-    ("schema", "write"): _schema_write,
-    ("schema", "check"): _schema_check,
-    ("sql", "write"): _sql_write,
-    ("sql", "check"): _sql_check,
-    ("run", None): _run,
-    ("audit", None): _audit,
-}
-
-
 def main(argv: list[str] | None = None) -> int:
-    """Executa a linha de comando e devolve o código de saída."""
+    """Executa a linha de comando e devolve o código de saída.
+
+    Cada subcomando guarda a sua função em ``handler`` (``set_defaults`` do ``argparse``).
+    """
     args = _build_parser().parse_args(argv)
     if args.command in ("run", "audit"):
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    return _HANDLERS[(args.command, getattr(args, "action", None))](args)
+    return args.handler(args)
 
 
 if __name__ == "__main__":

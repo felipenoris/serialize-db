@@ -97,9 +97,10 @@ Dependências de execução: `sqlalchemy`, `pyarrow`, `deltalake` e `duckdb`; `d
 dialeto (decisão do usuário de 2026-09-21). Provas de conceito: `test_sqlalchemy.py`
 (`test_declarative_model_exposes_table`, `test_ddl_per_dialect`, com as opções físicas de `info`
 acrescentadas por uma função comum e não por uma regra `@compiles`, `test_create_all_and_reflection`,
-`test_arrow_and_delta_schema_from_table`, com o mapa de tipos, o `parquet.field.id` que
-`Schema.from_arrow` leva do Arrow ao esquema Delta e o esquema Delta sem ele,
-`test_sandbox_copy_of_table_and_schema_files_diff`), `test_pyarrow.py`
+`test_arrow_and_delta_schema_from_table`, com os tipos, a nulidade, o comentário e o
+`parquet.field.id` que `Schema.from_arrow` leva do Arrow ao esquema Delta, num esquema montado à
+mão, e `test_sandbox_copy_of_table_and_schema_files_diff`, com a cópia de `to_metadata` para o
+sandbox; o mapa de tipos e os arquivos de esquema são de `tests/test_schema.py`), `test_pyarrow.py`
 (`test_schema_metadata_and_from_pylist`, `test_safe_cast_refuses_data_loss`, com as perdas que o
 cast seguro não acusa e o texto medido em bytes, `test_arrow_table_round_trips_through_pandas_without_copy` e
 `test_record_batch_cast_and_conversions_share_buffers`, o mesmo por lote) e `test_stdlib.py`
@@ -182,8 +183,8 @@ cast seguro não acusa e o texto medido em bytes, `test_arrow_table_round_trips_
 - **`schema_files`** gera `<tabela>.delta.json` por `delta_schema(...).to_json()` e os dois `.sql`
   por `ddl`, cada texto com `\n` final; `write_schema_files` grava e devolve os caminhos;
   `check_schema_files` compara por `difflib.unified_diff`. `serialize-db schema write` e
-  `serialize-db schema check` resolvem `--metadata modulo:atributo` por `importlib.import_module` e
-  `getattr` (`test_stdlib.py::test_entry_point_by_import_string`); o `check` sai com 0 sem diff, 1
+  `serialize-db schema check` resolvem `--metadata modulo:atributo` por `pkgutil.resolve_name`
+  (`test_stdlib.py::test_entry_point_by_import_string`); o `check` sai com 0 sem diff, 1
   com diff impresso, 2 no erro de uso do `argparse`.
 
 ## Pré-requisitos e pós-condições

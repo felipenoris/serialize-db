@@ -147,7 +147,8 @@ def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
 
 
 def _parameters_as_placeholders(statement: sa.sql.ClauseElement) -> sa.sql.ClauseElement:
-    """A cópia do statement com cada ``bindparam`` sem valor trocado por ``:nome``; o original não muda.
+    """A cópia do statement com cada ``bindparam`` sem valor trocado por ``:nome``; o original não
+    muda.
 
     ``literal_binds`` renderizaria o ``bindparam`` sem valor como ``NULL``; um
     ``literal_column(":nome")`` atravessa a compilação como texto. O ``bindparam`` com valor fica,

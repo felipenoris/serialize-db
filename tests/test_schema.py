@@ -23,6 +23,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from client_model import Base as ClientBase
+from conftest import LocalLocation
 from reference_model.model_db_projetado import Base as ReferenceBase
 from serialize_db import schema
 from serialize_db.cli import main
@@ -128,7 +129,9 @@ class Ruim(RuimBase):
         comment="Referência",
     )
     data_tudo: Mapped[dt.date] = mapped_column(sa.Date, comment="Alvo de índice único, sem chave")
-    nome_tudo: Mapped[str] = mapped_column(sa.String(100), comment="Alvo de índice único, sem chave")
+    nome_tudo: Mapped[str] = mapped_column(
+        sa.String(100), comment="Alvo de índice único, sem chave"
+    )
     mes: Mapped[str] = mapped_column(sa.Text, comment="Partição sem comprimento")
     nome: Mapped[str] = mapped_column(sa.String, comment="Nome sem comprimento")
     peso: Mapped[bytes] = mapped_column(sa.LargeBinary, comment="Fora do contrato")
@@ -138,7 +141,7 @@ class Ruim(RuimBase):
 TUDO.to_metadata(RuimBase.metadata)
 
 
-def batch_of_tudo(**columns) -> pa.RecordBatch:
+def batch_of_tudo(**columns: pa.Array | list) -> pa.RecordBatch:
     """Um lote com as colunas informadas, para os testes de ``cast``."""
     return pa.RecordBatch.from_pydict(columns)
 
@@ -150,7 +153,8 @@ def test_arrow_schema_maps_every_contract_type() -> None:
     """Cada tipo do contrato no Arrow esperado, com a nulidade, o comentário e o field_id."""
     arrow = schema.arrow_schema(TUDO)
     assert {field.name: field.type for field in arrow} == EXPECTED_ARROW
-    assert not arrow.field("id").nullable and arrow.field("spread").nullable
+    assert not arrow.field("id").nullable
+    assert arrow.field("spread").nullable
     assert arrow.field("valor").metadata == {b"PARQUET:field_id": b"5", b"comment": b"Valor"}
     assert arrow.metadata == {b"serialize_db_table": b"tudo"}
 
@@ -203,11 +207,11 @@ def test_delta_schema_carries_no_field_id() -> None:
 
 def test_table_options_defaults_and_keys() -> None:
     """Os padrões sem `info`, as chaves do modelo e de `keys`, e a partição de uma coluna só."""
+    # A tabela sem info: os padrões, e a chave primária em keys.
     plain = sa.Table("simples", sa.MetaData(), sa.Column("id", sa.BigInteger, primary_key=True))
-    options = schema.table_options(plain)
-    assert options.partition_by is None and options.partition_source is None
-    assert options.sort_key == () and options.redshift == {}
-    assert options.keys == (("id",),)
+    defaults = schema.TableOptions(partition_by=None, partition_source=None, sort_key=(),
+                                   redshift={}, keys=(("id",),))
+    assert schema.table_options(plain) == defaults
 
     # As UniqueConstraint de cad_contratos e de cad_aliquotas e o índice único de TUDO são chaves.
     contratos = schema.table_options(ClientBase.metadata.tables["cad_contratos"])
@@ -216,14 +220,17 @@ def test_table_options_defaults_and_keys() -> None:
     assert aliquotas.keys == (("id",), ("id_conta_origem", "id_conta_destino"))
     assert schema.table_options(TUDO).keys == (("id",), ("data", "nome"))
 
+    # keys["add"] acrescenta uma chave e keys["drop"] remove outra.
     adjusted = TUDO.to_metadata(sa.MetaData())
     adjusted.info = {"serialize_db": {"keys": {"add": [["nome"]], "drop": [["data", "nome"]]}}}
     assert schema.table_options(adjusted).keys == (("id",), ("nome",))
 
-    two = sa.Table("duas", sa.MetaData(), sa.Column("id", sa.BigInteger, primary_key=True),
-                   info={"serialize_db": {"partition_by": ["a", "b"]}})
+    # Duas colunas de partição são ContractError.
+    two_partitions = sa.Table("duas", sa.MetaData(),
+                              sa.Column("id", sa.BigInteger, primary_key=True),
+                              info={"serialize_db": {"partition_by": ["a", "b"]}})
     with pytest.raises(ContractError, match="duas: uma coluna de partição no máximo"):
-        schema.table_options(two)
+        schema.table_options(two_partitions)
 
 
 # ---------------------------------------------------------------- o DDL por motor
@@ -249,28 +256,29 @@ def test_sql_type_per_dialect() -> None:
 
 
 def test_ddl_per_dialect() -> None:
-    """O texto de cada motor, linha a linha; as cláusulas físicas só no Redshift, entre aspas."""
+    """O texto de cada motor, linha a linha, sem `PRIMARY KEY`, `UNIQUE`, `REFERENCES`,
+    `DEFERRABLE`, `SERIAL`, `IDENTITY`, `CHECK` nem `COMMENT`; as cláusulas físicas só no
+    Redshift, entre aspas."""
     assert schema.ddl(TUDO, "duckdb") == EXPECTED_DUCKDB_DDL
     assert schema.ddl(TUDO, "redshift") == EXPECTED_REDSHIFT_DDL
-    for dialect in ("duckdb", "redshift"):
-        text = schema.ddl(TUDO, dialect)
-        for absent in ("PRIMARY KEY", "UNIQUE", "REFERENCES", "DEFERRABLE", "SERIAL",
-                       "IDENTITY", "CHECK", "COMMENT"):
-            assert absent not in text, (dialect, absent)
 
 
-def test_ddl_quotes_every_identifier() -> None:
+# Os ids evitam "redshift", o marcador da suíte Redshift: o id do parâmetro vira palavra-chave do
+# teste, e o conftest pula o teste com essa palavra-chave quando SERIALIZE_DB_TEST_REDSHIFT_SCHEMA
+# falta.
+@pytest.mark.parametrize("dialect", ["duckdb", "redshift"],
+                         ids=["dialect_duckdb", "dialect_redshift"])
+def test_ddl_quotes_every_identifier(dialect: str) -> None:
     """Todo nome de tabela e de coluna entre aspas, `"to"` e `"timestamp"` inclusive."""
-    for dialect in ("duckdb", "redshift"):
-        contratos = schema.ddl(ClientBase.metadata.tables["cad_contratos"], dialect)
-        lancamentos = schema.ddl(ClientBase.metadata.tables["cad_lancamentos"], dialect)
-        assert '    "to" VARCHAR(2) NOT NULL' in contratos
-        assert '    "timestamp" TIMESTAMP NOT NULL' in lancamentos
-        for table in ClientBase.metadata.sorted_tables:
-            lines = schema.ddl(table, dialect).splitlines()
-            assert lines[0] == f'CREATE TABLE "{table.name}" ('
-            for line in lines[1:-1]:
-                assert line.startswith('    "'), (dialect, table.name, line)
+    contratos = schema.ddl(ClientBase.metadata.tables["cad_contratos"], dialect)
+    lancamentos = schema.ddl(ClientBase.metadata.tables["cad_lancamentos"], dialect)
+    assert '    "to" VARCHAR(2) NOT NULL' in contratos
+    assert '    "timestamp" TIMESTAMP NOT NULL' in lancamentos
+    for table in ClientBase.metadata.sorted_tables:
+        lines = schema.ddl(table, dialect).splitlines()
+        assert lines[0] == f'CREATE TABLE "{table.name}" ('
+        for line in lines[1:-1]:
+            assert line.startswith('    "'), (table.name, line)
 
 
 def test_ddl_runs_in_duckdb_memory() -> None:
@@ -287,7 +295,8 @@ def test_ddl_runs_in_duckdb_memory() -> None:
     assert types["valor"] == "DECIMAL(18,2)"
     assert types["carimbo_utc"] == "TIMESTAMP WITH TIME ZONE"
     assert types["meta"] == "JSON"
-    assert types["to"] == "VARCHAR" and types["timestamp"] == "TIMESTAMP"
+    assert types["to"] == "VARCHAR"
+    assert types["timestamp"] == "TIMESTAMP"
 
 
 def test_ddl_prefix_inside_the_quotes() -> None:
@@ -299,13 +308,14 @@ def test_ddl_prefix_inside_the_quotes() -> None:
         assert sentinel.startswith('CREATE TABLE "{prefix}tudo" (')
     connection = duckdb.connect()
     connection.execute(schema.ddl(TUDO, "duckdb", prefix="{prefix}"))
-    assert connection.execute("SELECT table_name FROM information_schema.tables").fetchone() == (
-        "{prefix}tudo",)
+    created = connection.execute("SELECT table_name FROM information_schema.tables").fetchone()
+    assert created == ("{prefix}tudo",)
 
 
 def test_ddl_temporary_table() -> None:
     """`temporary=True` emite `CREATE TEMP TABLE` nos dois dialetos, com o resto do texto igual; no
-    DuckDB a tabela nasce no catálogo `temp` da conexão, e um `cursor()` da mesma conexão não a vê."""
+    DuckDB a tabela nasce no catálogo `temp` da conexão, e um `cursor()` da mesma conexão não a
+    vê."""
     for dialect in ("duckdb", "redshift"):
         temporary = schema.ddl(TUDO, dialect, prefix="exec_42_", temporary=True)
         assert temporary.startswith('CREATE TEMP TABLE "exec_42_tudo" (')
@@ -317,8 +327,8 @@ def test_ddl_temporary_table() -> None:
         "SELECT database_name, temporary FROM duckdb_tables() WHERE table_name = 'tudo'"
     ).fetchall()
     assert listed == [("temp", True)]
-    # A tabela temporária é da conexão que a criou (leitura de 2026-09-22): o cursor() é outra
-    # conexão, e é por isso que o sandbox do motor DuckDB fica de tabelas comuns.
+    # A tabela temporária é da conexão que a criou (leitura de 2026-09-22), e o cursor() é outra
+    # conexão: o sandbox do motor DuckDB fica de tabelas comuns.
     with pytest.raises(duckdb.CatalogException):
         connection.cursor().execute("SELECT count(*) FROM tudo")
 
@@ -351,13 +361,17 @@ def test_cast_reorders_and_normalizes(kind: str) -> None:
 
 def test_cast_reader_converts_batch_by_batch() -> None:
     """Um leitor de dois lotes sai como leitor no contrato; a tabela vazia passa."""
+    # O leitor de dois lotes.
     reader = pa.RecordBatchReader.from_batches(ACCEPTED_BATCH.schema, [ACCEPTED_BATCH] * 2)
     done = schema.cast(reader, TUDO)
     assert isinstance(done, pa.RecordBatchReader)
     assert done.schema.names == ["id", "data", "nome", "valor", "data_str"]
     assert done.read_all().num_rows == 4
+
+    # A tabela vazia do mesmo esquema.
     empty = schema.cast(ACCEPTED_BATCH.schema.empty_table(), TUDO)
-    assert empty.num_rows == 0 and empty.schema.names == done.schema.names
+    assert empty.num_rows == 0
+    assert empty.schema.names == done.schema.names
 
 
 @pytest.mark.parametrize("text_type", [pa.string(), pa.large_string()], ids=str)
@@ -385,7 +399,8 @@ def test_cast_integer_into_numeric_of_any_precision() -> None:
     integers = pa.array([1, 999], pa.int64())
     batch = pa.RecordBatch.from_pydict({"pequeno": integers, "fino": integers, "largo": integers})
     done = schema.cast(batch, table)
-    assert done.column("pequeno").to_pylist() == [decimal.Decimal("1.00"), decimal.Decimal("999.00")]
+    expected = [decimal.Decimal("1.00"), decimal.Decimal("999.00")]
+    assert done.column("pequeno").to_pylist() == expected
     assert done.schema.field("fino").type == pa.decimal128(10, 4)
     assert done.schema.field("largo").type == pa.decimal128(38, 2)
     too_large = pa.RecordBatch.from_pydict({"pequeno": pa.array([1000], pa.int64())})
@@ -430,14 +445,21 @@ def test_cast_refuses_each_loss(case: str) -> None:
 
 
 def test_cast_keeps_doubles_of_the_reference_model() -> None:
-    """Uma coluna `Double` entra como chega, sem arredondamento; `2.675` é um double exato."""
+    """Uma coluna `Double` do modelo de referência, que o modelo cliente mantém (`valor` de
+    `cad_lancamentos`), entra como chega, sem arredondamento; `2.675` é um double exato. Um double
+    de escala exata entra em `Numeric(18, 2)`, e o nanossegundo zero, em `DateTime`."""
+    # A coluna Double, sem arredondamento.
     lancamentos = ClientBase.metadata.tables["cad_lancamentos"]
     batch = pa.RecordBatch.from_pydict({"valor": pa.array([2.675, 11846195394.62801])})
     done = schema.cast(batch, lancamentos)
     assert done.schema.field("valor").type == pa.float64()
     assert done.column("valor").to_pylist() == [2.675, 11846195394.62801]
+
+    # O double de escala exata em Numeric(18, 2).
     exact = schema.cast(batch_of_tudo(valor=pa.array([1.25, 2.5])), TUDO)
     assert exact.column("valor").to_pylist() == [decimal.Decimal("1.25"), decimal.Decimal("2.50")]
+
+    # O nanossegundo zero em DateTime, que sai em microssegundos.
     accepted = schema.cast(batch_of_tudo(timestamp=pa.array([1000], pa.timestamp("ns"))), TUDO)
     assert accepted.schema.field("timestamp").type == pa.timestamp("us")
 
@@ -574,8 +596,15 @@ def test_check_models_lists_the_reference_model_defects() -> None:
     assert sum(counts.values()) == len(problems)
     # O comentário é opcional: o modelo sem comentário algum não produz violação por isso.
     assert [text for text in problems if "comentário" in text] == []
-    assert (len(tables), len(foreign_keys), len(deferrable), len(strings), len(unkeyed)) == (
-        12, 14, 12, 20, 3)
+    sizes = {
+        "tables": len(tables),
+        "foreign_keys": len(foreign_keys),
+        "deferrable": len(deferrable),
+        "strings": len(strings),
+        "unkeyed": len(unkeyed),
+    }
+    assert sizes == {"tables": 12, "foreign_keys": 14, "deferrable": 12, "strings": 20,
+                     "unkeyed": 3}
 
 
 def test_client_model_is_clean() -> None:
@@ -604,7 +633,7 @@ def test_check_schema_files_reports_a_changed_model() -> None:
 
 
 @pytest.mark.local
-def test_write_schema_files(local_location) -> None:
+def test_write_schema_files(local_location: LocalLocation) -> None:
     """Os arquivos gravados sob a raiz local, com os nomes previstos, e o `check` vazio depois."""
     directory = local_location.child("schema")
     written = schema.write_schema_files(ClientBase.metadata, directory)
@@ -615,18 +644,18 @@ def test_write_schema_files(local_location) -> None:
 
 
 def test_cli_schema_check_reads_the_versioned_files(capsys: pytest.CaptureFixture) -> None:
-    """`schema check` sai com 0 sem diff, 1 com o diff impresso e 2 sem `--metadata`."""
-    assert main(["schema", "check", "--metadata", "client_model:Base.metadata",
-                 str(SCHEMA_DIRECTORY)]) == 0
+    """`schema check` sai com 0 sem diff, 1 com o diff impresso e 2 sem `--metadata` ou com um
+    `--metadata` que não é um `MetaData`."""
+    directory = str(SCHEMA_DIRECTORY)
+    assert main(["schema", "check", "--metadata", "client_model:Base.metadata", directory]) == 0
     assert "atualizados" in capsys.readouterr().out
 
-    directory = str(SCHEMA_DIRECTORY)
     assert main(["schema", "check", "--metadata", "test_schema:changed", directory]) == 1
     assert '+    "canal" VARCHAR(20)' in capsys.readouterr().out
 
     with pytest.raises(SystemExit) as exit_code:
-        main(["schema", "check", str(SCHEMA_DIRECTORY)])
+        main(["schema", "check", directory])
     assert exit_code.value.code == 2
     with pytest.raises(SystemExit) as exit_code:
-        main(["schema", "check", "--metadata", "client_model:Base", str(SCHEMA_DIRECTORY)])
+        main(["schema", "check", "--metadata", "client_model:Base", directory])
     assert exit_code.value.code == 2

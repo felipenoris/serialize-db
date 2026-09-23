@@ -97,7 +97,7 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   803 to 917 MB; part of the gain is the calling threads added to the pool, which the target's
   2 vCPUs lack. The proposals (table created at close, hybrid stream, `interrupt()`) await the user
   in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_duckdb.py`
-- The hybrid `stream` (user decision of 2026-09-23, implemented in `test_parallel.py`)
+- The hybrid `stream` (user decision of 2026-09-23, implemented in `serialize_db.engine.duckdb`)
   keeps batches in a deque while their bytes fit a 64 MiB budget and writes the first batch that
   does not fit, and every later one, to the LZ4 spool; the client drains the deque before reading
   the file, so the order holds. The spool file is born mid-query, after `__del__` may have unlinked
@@ -108,7 +108,9 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   without work, 0.965 → 0.673 s with 5 ms pure Python per batch, 0.641 → 0.411 s with pandas, and
   1.086 → 0.908 s with a lagging client (96 batches spilled, 297 MB peak; 256 MiB gave 0.839 s at
   522 MB). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
-- The stage 4 sketches in `test_parallel.py` (2026-09-23): `BatchStream.close` sets `stop` and,
+- The stage 4 sketches (2026-09-23; `test_parallel.py` held them until the review of the same day
+  retired them, user decision, and `DuckDBStream` and `DuckDBLoader` implement them):
+  `BatchStream.close` sets `stop` and,
   under the spool's condition while the query has not marked its end, calls the connection's
   `interrupt()`, which never reaches another command because the producer marks the end under the
   session lock; `SandboxEngine.cleanup` interrupts before taking the lock; `new_session` creates the
@@ -123,16 +125,17 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   `CatalogException: Table with name ... does not exist!` on the main session and on an extra
   session, never reads old rows: the reference `Loader` creates the table only at `close` and
   refuses a taken name, so no sandbox table has a previous state (probe and
-  `test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`, six green
-  runs, 2026-09-23, macOS). The table barrier left the plan for that reason. `plan/POC.md`,
+  `test_engine_duckdb.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`, six
+  green runs, 2026-09-23, macOS). The table barrier left the plan for that reason. `plan/POC.md`,
   `plan/PLAN-STAGE-4.md`
 
 - A pool that receives every task at once cannot promise that nothing new starts after the first
   failure: with one worker, the worker took the third table before the main loop saw the second
-  one fail, and `shutdown(cancel_futures=True)` came too late; the sketch in `test_parallel.py`
-  passed only because each task slept 0.5 s. `Execution.publish` submits a table only when a worker
-  is free and no failure arrived, and the failure goes up with its own type and each table's outcome
-  in a note (`add_note`) (2026-09-23). Under load, DuckDB can hand a stream's first batch only at the
+  one fail, and `shutdown(cancel_futures=True)` came too late; the sketch that was in
+  `test_parallel.py` passed only because each task slept 0.5 s. `Execution.publish` submits a table
+  only when a worker is free and no failure arrived, and the failure goes up with its own type and
+  each table's outcome in a note (`add_note`) (2026-09-23); `run.ingest` uses the same pool function
+  (`_run_in_pool`) with one worker per table, so every table starts at once and all finish. Under load, DuckDB can hand a stream's first batch only at the
   end of the query (4.531 s in a three-process reproducer, with the second batch already in memory),
   so a test that closes a stream "mid-query" asserts the thread ended and the session is free, with
   the error null or the interrupt's. `plan/POC.md`, `plan/PLAN-STAGE-6.md`

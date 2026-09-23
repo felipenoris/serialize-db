@@ -29,12 +29,18 @@ Variáveis de ambiente lidas:
   ``SERIALIZE_DB_REDSHIFT_IAM_ROLE`` nomeia o papel do ``COPY`` e do ``UNLOAD``, ou a palavra
   ``default``; sem ela, os dois levam as credenciais da sessão ``boto3``, que é o caminho do
   ambiente alvo, onde o namespace não tem papel associado.
+- ``SERIALIZE_DB_TEST_EMULATOR``: qualquer valor troca o S3 e o Redshift pelo substituto local de
+  ``emulator.py``, o moto e um DuckDB em memória, e autoriza as suítes S3 e Redshift nele: a
+  sessão define as raízes delas e aponta as variáveis da AWS para o moto, em ``127.0.0.1``.
+  ``SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL`` e ``SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST`` provocam
+  falhas no substituto.
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos, as pastas e as tabelas criados.
-- ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é gravado; a pasta
-  é criada, e cada teste reprovado entra com a mensagem do erro.
+- ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é
+  gravado; a pasta é criada, e cada teste reprovado entra com a mensagem do erro.
   O relatório abre com a sessão (``session.``: início, plataforma, Python, versões, marcadores e,
   no fim, a contagem por resultado e a duração) e registra a limpeza de cada raiz
-  (``local.cleanup``, ``s3.cleanup``), para dizer sozinho se a suíte passou e o que ficou.
+  (``local.cleanup``, ``s3.cleanup``, ``redshift.cleanup``), para dizer sozinho se a suíte passou
+  e o que ficou.
 - ``SERIALIZE_DB_DUCKDB_EXTENSIONS``: pasta de extensões do DuckDB, a única onde a suíte instala as
   que faltam; sem ela, ``.duckdb/`` na raiz do repositório quando existir (criada por
   ``prepare_offline.sh``), senão o padrão do DuckDB, e nada é instalado. A instalação automática
@@ -75,6 +81,7 @@ import os
 import re
 import platform
 import shutil
+import subprocess
 import time
 import uuid
 from collections.abc import Iterator
@@ -94,22 +101,76 @@ SESSION = {"started": time.time()}
 
 
 # O COPY e o UNLOAD levam as credenciais de quem chama no texto do comando; nada que carregue esse
-# texto, nem o erro que o cita, entra num relatório feito para ser colado na conversa.
-CREDENTIAL_PATTERN = re.compile(r"(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|CREDENTIALS)\s+'[^']*'", re.IGNORECASE)
+# texto, nem o erro que o cita, entra num relatório feito para ser colado na conversa. As duas
+# saídas do relatório, a impressa e o JSON, passam por mask_credentials, que alcança também o valor
+# guardado dentro de um dicionário ou de uma lista; a aspa do valor pode chegar escapada por repr
+# ou pelo JSON (\' ou \\').
+CREDENTIAL_PATTERN = re.compile(
+    r"(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|CREDENTIALS)\s+\\*'[^']*'", re.IGNORECASE
+)
 
 
-def mask_credentials(value: object) -> object:
-    """Troca por ``***`` o valor de toda cláusula de credencial num texto; os demais valores passam."""
-    return CREDENTIAL_PATTERN.sub(r"\1 '***'", value) if isinstance(value, str) else value
+def mask_credentials(text: str) -> str:
+    """Troca por ``***`` o valor de toda cláusula de credencial num texto."""
+    return CREDENTIAL_PATTERN.sub(r"\1 '***'", text)
 
 
 def record(key: str, value: object) -> None:
-    """Registra um fato ou uma medição no relatório da sessão, sem credencial alguma."""
-    REPORT[key] = mask_credentials(value)
+    """Registra um fato ou uma medição no relatório da sessão; a impressão e o JSON do relatório
+    mascaram as credenciais."""
+    REPORT[key] = value
 
 
 def now_utc() -> str:
+    """O instante atual em UTC, em ISO 8601 com precisão de segundos, para o relatório."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def opened_partition_folders(connection: object, column: str) -> set[str]:
+    """As pastas ``<coluna>=<valor>`` dos arquivos Parquet que o DuckDB abriu, lidas do log
+    ``FileSystem`` desde o último ``CALL truncate_duckdb_logs()``.
+
+    A conexão precisa de ``CALL enable_logging('FileSystem')`` antes da consulta medida; cada
+    abertura de arquivo é uma mensagem com ``"op":"OPEN"`` e o caminho do arquivo.
+    """
+    messages = connection.execute(
+        "SELECT message FROM duckdb_logs WHERE type = 'FileSystem'").fetchall()
+    folders = set()
+    for (message,) in messages:
+        if '"op":"OPEN"' in message and ".parquet" in message:
+            folders.add(re.search(rf"{column}=[0-9-]+", message).group(0))
+    return folders
+
+
+# O processo do moto, guardado na configuração enquanto a sessão roda sobre o substituto local.
+MOTO_PROCESS = pytest.StashKey[subprocess.Popen]()
+
+
+def emulator_enabled() -> bool:
+    """Verdadeiro quando ``SERIALIZE_DB_TEST_EMULATOR`` liga o substituto local."""
+    return bool(os.environ.get("SERIALIZE_DB_TEST_EMULATOR"))
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Com o substituto local ligado, sobe o moto e aponta as suítes S3 e Redshift para ele antes
+    da coleta, que lê as raízes delas."""
+    if not emulator_enabled():
+        return
+    import emulator
+
+    config.stash[MOTO_PROCESS] = emulator.start()
+    endpoint = os.environ["AWS_ENDPOINT_URL"]
+    record("session.emulator", f"S3 no moto em {endpoint}; Redshift num DuckDB em memória")
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Encerra o moto do substituto local."""
+    process = config.stash.get(MOTO_PROCESS, None)
+    if process is None:
+        return
+    import emulator
+
+    emulator.stop(process)
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -138,8 +199,17 @@ def duckdb_extension_directory() -> str | None:
     return str(local) if local.is_dir() else None
 
 
+def duckdb_s3_secret(name: str) -> str:
+    """O ``CREATE SECRET`` S3 do DuckDB com as opções de ``Storage.duckdb_setup``: a cadeia de
+    credenciais, a região e, com ``AWS_ENDPOINT_URL``, o endpoint, como no substituto local."""
+    from serialize_db.storage import _duckdb_secret_options
+
+    return f"CREATE SECRET {name} ({', '.join(_duckdb_secret_options())})"
+
+
 def local_root() -> Path | None:
-    """Raiz da suíte local, de ``SERIALIZE_DB_TEST_LOCAL_ROOT``, ou ``None`` quando não informada."""
+    """Raiz da suíte local, de ``SERIALIZE_DB_TEST_LOCAL_ROOT``, ou ``None`` quando não
+    informada."""
     configured = os.environ.get("SERIALIZE_DB_TEST_LOCAL_ROOT")
     return Path(configured).expanduser().resolve() if configured else None
 
@@ -151,15 +221,25 @@ def s3_root() -> str | None:
 
 
 def redshift_schema() -> str | None:
-    """Esquema da suíte Redshift, de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``, ou ``None`` quando não informado."""
+    """Esquema da suíte Redshift, de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``, ou ``None`` quando não
+    informado."""
     return os.environ.get("SERIALIZE_DB_TEST_REDSHIFT_SCHEMA") or None
 
 
 # Motivo registrado no relatório e em ``pytest -rs`` quando a autorização de uma suíte falta.
 SKIP_REASONS = {
-    "local": "SERIALIZE_DB_TEST_LOCAL_ROOT não informada: a suíte local só escreve sob a pasta que ela indica",
-    "s3": "SERIALIZE_DB_TEST_S3_ROOT não informada: a suíte S3 só escreve sob o prefixo que ela indica",
-    "redshift": "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA não informada: a suíte Redshift só cria tabelas no esquema que ela indica",
+    "local": (
+        "SERIALIZE_DB_TEST_LOCAL_ROOT não informada: a suíte local só escreve sob a pasta que ela "
+        "indica"
+    ),
+    "s3": (
+        "SERIALIZE_DB_TEST_S3_ROOT não informada: a suíte S3 só escreve sob o prefixo que ela "
+        "indica"
+    ),
+    "redshift": (
+        "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA não informada: a suíte Redshift só cria tabelas no "
+        "esquema que ela indica"
+    ),
 }
 
 # Como autorizar cada suíte; impresso no fim da sessão quando ela foi pulada. Não é um erro: sem a
@@ -171,17 +251,20 @@ USAGE = {
     ),
     "s3": (
         "SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest -m s3",
-        "grava só em serialize-db-poc/<id>/ sob o prefixo e o apaga no fim; precisa de credenciais que o boto3 "
-        "encontre e das extensões httpfs, delta e aws do DuckDB",
+        "grava só em serialize-db-poc/<id>/ sob o prefixo e o apaga no fim; precisa de credenciais "
+        "que o boto3 encontre e das extensões httpfs, delta e aws do DuckDB",
     ),
     "redshift": (
         "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=esquema SERIALIZE_DB_REDSHIFT_WORKGROUP=workgroup "
-        "SERIALIZE_DB_REDSHIFT_DATABASE=banco SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=banco_do_datashare "
+        "SERIALIZE_DB_REDSHIFT_DATABASE=banco "
+        "SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=banco_do_datashare "
         "SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest -m redshift",
-        "cria só tabelas serialize_db_poc_<id>_* no esquema e as apaga no fim; com _WORKGROUP a credencial é "
-        "temporária (redshift-serverless:GetWorkgroup e GetCredentials, examples/redshift_native.py), e _HOST com "
-        "_USER e _PASSWORD é o par informado na mesma chamada; _SHARE_DATABASE quando o esquema vem de um "
-        "datashare (USE); SERIALIZE_DB_REDSHIFT_IAM_ROLE para o COPY e o UNLOAD (sem ela, as credenciais de quem chama)",
+        "cria só tabelas serialize_db_poc_<id>_* no esquema e as apaga no fim; com _WORKGROUP a "
+        "credencial é temporária (redshift-serverless:GetWorkgroup e GetCredentials, "
+        "examples/redshift_native.py), e _HOST com _USER e _PASSWORD é o par informado na mesma "
+        "chamada; _SHARE_DATABASE quando o esquema vem de um datashare (USE); "
+        "SERIALIZE_DB_REDSHIFT_IAM_ROLE para o COPY e o UNLOAD (sem ela, as credenciais de quem "
+        "chama)",
     ),
 }
 
@@ -189,10 +272,16 @@ USAGE = {
 @pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Pula cada suíte cuja autorização não foi informada; roda depois da seleção por ``-m``."""
-    missing = {"local": local_root() is None, "s3": s3_root() is None, "redshift": redshift_schema() is None}
+    missing = {
+        "local": local_root() is None,
+        "s3": s3_root() is None,
+        "redshift": redshift_schema() is None,
+    }
 
     for marker, reason in SKIP_REASONS.items():
-        selected = [item for item in items if marker in item.keywords]
+        # A marca, e não os keywords do item: o id de um parâmetro também entra nos keywords, e um
+        # parâmetro chamado redshift pularia o caso com a suíte Redshift.
+        selected = [item for item in items if item.get_closest_marker(marker) is not None]
         if not selected or not missing[marker]:
             continue
 
@@ -202,7 +291,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @dataclass(kw_only=True)
-class Storage:
+class SessionRoot:
     """Raiz exclusiva de uma sessão de testes num tipo de armazenamento.
 
     As subclasses fixam ``name``, o prefixo das chaves do relatório, e resolvem URIs e listagens no
@@ -222,7 +311,8 @@ class Storage:
         return f"{self.uri}/{name}"
 
     def data_files(self, table_uri: str) -> list[str]:
-        """Arquivos Parquet de dados sob a pasta da tabela, sem os checkpoints de ``_delta_log/``."""
+        """Arquivos Parquet de dados sob a pasta da tabela, sem os checkpoints de
+        ``_delta_log/``."""
         raise NotImplementedError
 
     def record(self, key: str, value: object) -> None:
@@ -231,7 +321,7 @@ class Storage:
 
 
 @dataclass(kw_only=True)
-class S3Location(Storage):
+class S3Location(SessionRoot):
     """Bucket e prefixo exclusivos da sessão."""
 
     name: ClassVar[str] = "s3"
@@ -247,16 +337,21 @@ class S3Location(Storage):
 
         # A listagem é paginada pelo boto3; cada página traz até 1.000 chaves em ``Contents``.
         bucket, _, prefix = table_uri.removeprefix("s3://").partition("/")
-        pages = boto3.client("s3").get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix + "/")
+        paginator = boto3.client("s3").get_paginator("list_objects_v2")
         keys = []
-        for page in pages:
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix + "/"):
             keys.extend(item["Key"] for item in page.get("Contents", []))
 
-        return sorted(f"s3://{bucket}/{key}" for key in keys if key.endswith(".parquet") and "/_delta_log/" not in key)
+        files = []
+        for key in keys:
+            in_log = "/_delta_log/" in key
+            if key.endswith(".parquet") and not in_log:
+                files.append(f"s3://{bucket}/{key}")
+        return sorted(files)
 
 
 @dataclass(kw_only=True)
-class LocalLocation(Storage):
+class LocalLocation(SessionRoot):
     """Pasta exclusiva da sessão em disco local."""
 
     name: ClassVar[str] = "local"
@@ -268,14 +363,20 @@ class LocalLocation(Storage):
 
     def data_files(self, table_uri: str) -> list[str]:
         folder = Path(table_uri)
-        return sorted(str(file) for file in folder.rglob("*.parquet") if "_delta_log" not in file.relative_to(folder).parts)
+        files = []
+        for file in folder.rglob("*.parquet"):
+            in_log = "_delta_log" in file.relative_to(folder).parts
+            if not in_log:
+                files.append(str(file))
+        return sorted(files)
 
 
 def require_s3_access(root: str) -> None:
     """Reprova a sessão quando a raiz informada não está acessível.
 
-    Confere as credenciais do ``boto3`` e lista um objeto sob ``<raiz>/serialize-db-poc/`` com tempos
-    curtos: sem rede, o ``boto3`` esperaria 60 s por tentativa, e o delta-rs tem as próprias esperas.
+    Confere as credenciais do ``boto3`` e lista um objeto sob ``<raiz>/serialize-db-poc/`` com
+    tempos curtos: sem rede, o ``boto3`` esperaria 60 s por tentativa, e o delta-rs tem as próprias
+    esperas.
     """
     import boto3
     import botocore.config
@@ -283,17 +384,28 @@ def require_s3_access(root: str) -> None:
     bucket, _, prefix = root.removeprefix("s3://").partition("/")
 
     # Tempos curtos só para esta sondagem; os clientes dos testes usam os padrões do boto3.
-    config = botocore.config.Config(connect_timeout=5, read_timeout=15, retries={"total_max_attempts": 2, "mode": "standard"})
+    config = botocore.config.Config(
+        connect_timeout=5, read_timeout=15, retries={"total_max_attempts": 2, "mode": "standard"}
+    )
 
     try:
         session = boto3.Session()
+        # pytest.fail levanta Failed, que deriva de BaseException: o except abaixo não a captura.
         if session.get_credentials() is None:
-            pytest.fail(f"{root} informada, mas o boto3 não encontrou credenciais (papel, variáveis AWS_* ou perfil)", pytrace=False)
+            pytest.fail(
+                f"{root} informada, mas o boto3 não encontrou credenciais "
+                "(papel, variáveis AWS_* ou perfil)",
+                pytrace=False,
+            )
 
         client = session.client("s3", config=config)
-        client.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/serialize-db-poc/".lstrip("/"), MaxKeys=1)
+        client.list_objects_v2(
+            Bucket=bucket, Prefix=f"{prefix}/serialize-db-poc/".lstrip("/"), MaxKeys=1
+        )
     except Exception as error:  # noqa: BLE001 - falha de rede, de credencial ou de permissão
-        pytest.fail(f"{root} informada, mas sem acesso: {type(error).__name__}: {error}", pytrace=False)
+        pytest.fail(
+            f"{root} informada, mas sem acesso: {type(error).__name__}: {error}", pytrace=False
+        )
 
 
 def variable_state(value: str | None) -> str:
@@ -311,7 +423,8 @@ def proxy_environment() -> Iterator[dict[str, str | None]]:
 
     O cliente HTTP do delta-rs lê ``NO_PROXY`` e, só quando ela está ausente, ``no_proxy``; vazia,
     ela anula as exceções, e a chamada ao endpoint de credenciais do contêiner passa pelo proxy do
-    espaço e falha com 403. A biblioteca fará o mesmo ao iniciar.
+    espaço e falha com 403. Na biblioteca, ``serialize_db.storage.prepare_environment`` faz o
+    mesmo, chamada por ``Database`` ao iniciar.
     """
     original = {name: os.environ.get(name) for name in ("NO_PROXY", "AWS_REGION")}
     record("environment.no_proxy_as_found", variable_state(original["NO_PROXY"]))
@@ -376,12 +489,20 @@ def s3_location(proxy_environment: dict[str, str | None]) -> Iterator[S3Location
         keys = [{"Key": item["Key"]} for item in page.get("Contents", [])]
         if not keys:
             continue
-        response = s3.delete_objects(Bucket=location.bucket, Delete={"Objects": keys, "Quiet": True})
+        response = s3.delete_objects(
+            Bucket=location.bucket, Delete={"Objects": keys, "Quiet": True}
+        )
         errors = response.get("Errors", [])
         refused.extend(f"{error['Key']}: {error.get('Code')}" for error in errors)
         deleted += len(keys) - len(errors)
-    # Num bucket versionado a exclusão só cria marcadores: os objetos viram versões não correntes, cobradas até uma regra de ciclo de vida.
-    versioned = "; no bucket versionado cada um vira versão não corrente até uma regra NoncurrentVersionExpiration" if REPORT.get("s3.versioned") else ""
+    # Num bucket versionado a exclusão só cria marcadores: os objetos viram versões não correntes,
+    # cobradas até uma regra de ciclo de vida.
+    versioned = ""
+    if REPORT.get("s3.versioned"):
+        versioned = (
+            "; no bucket versionado cada um vira versão não corrente até uma regra "
+            "NoncurrentVersionExpiration"
+        )
     record("s3.cleanup", f"{deleted} objeto(s) apagado(s) sob {location.uri}{versioned}")
     if refused:
         record("s3.cleanup.refused", refused)
@@ -389,12 +510,15 @@ def s3_location(proxy_environment: dict[str, str | None]) -> Iterator[S3Location
 
 @pytest.fixture(scope="session")
 def local_location() -> Iterator[LocalLocation]:
-    """Pasta ``serialize-db-poc/<id>/`` sob a raiz informada, que precisa existir, apagada no fim da sessão."""
+    """Pasta ``serialize-db-poc/<id>/`` sob a raiz informada, que precisa existir, apagada no fim da
+    sessão."""
     root = local_root()
     assert root, "SERIALIZE_DB_TEST_LOCAL_ROOT não informada"
 
     if not root.is_dir():
-        pytest.fail(f"SERIALIZE_DB_TEST_LOCAL_ROOT aponta para uma pasta inexistente: {root}", pytrace=False)
+        pytest.fail(
+            f"SERIALIZE_DB_TEST_LOCAL_ROOT aponta para uma pasta inexistente: {root}", pytrace=False
+        )
 
     location = LocalLocation(
         path=root / "serialize-db-poc" / uuid.uuid4().hex[:8],
@@ -422,7 +546,8 @@ def local_location() -> Iterator[LocalLocation]:
 
 @dataclass(kw_only=True)
 class RedshiftSession:
-    """Conexão aberta pela suíte Redshift e o esquema onde ela cria as tabelas ``serialize_db_poc_<id>_*``."""
+    """Conexão aberta pela suíte Redshift e o esquema onde ela cria as tabelas
+    ``serialize_db_poc_<id>_*``."""
 
     connection: object
     method: str
@@ -440,20 +565,19 @@ class RedshiftSession:
         return name
 
     def qualified(self, name: str) -> str:
-        """O nome como a sessão o cita: ``esquema.tabela``, porque a conexão já rodou ``USE`` no banco do datashare."""
+        """O nome como a sessão o cita: ``esquema.tabela``, porque a conexão já rodou ``USE`` no
+        banco do datashare."""
         return f"{self.schema}.{name}"
 
     def fully_qualified(self, name: str) -> str:
-        """O nome em três partes, para quem está conectado a outro banco: a Data API, que abre a sessão dela."""
+        """O nome em três partes, para quem está conectado a outro banco: a Data API, que abre a
+        sessão dela."""
         parts = [part for part in (self.share_database, self.schema, name) if part]
         return ".".join(parts)
 
-    def schema_prefix(self) -> str:
-        """O prefixo que o ``MetaData`` do SQLAlchemy recebe: o esquema, já que o banco vem do ``USE``."""
-        return self.schema
-
     def credentials_clause(self) -> str:
-        """Como o ``COPY`` e o ``UNLOAD`` alcançam o S3: o papel IAM configurado, ou as credenciais de quem chama.
+        """Como o ``COPY`` e o ``UNLOAD`` alcançam o S3: o papel IAM configurado, ou as credenciais
+        de quem chama.
 
         Sem ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, o comando leva ``ACCESS_KEY_ID``,
         ``SECRET_ACCESS_KEY`` e ``SESSION_TOKEN`` da sessão ``boto3``
@@ -469,18 +593,75 @@ class RedshiftSession:
         import boto3
 
         credentials = boto3.Session().get_credentials().get_frozen_credentials()
-        clause = f"ACCESS_KEY_ID '{credentials.access_key}'\nSECRET_ACCESS_KEY '{credentials.secret_key}'"
-        return clause + (f"\nSESSION_TOKEN '{credentials.token}'" if credentials.token else "")
+        clause = (
+            f"ACCESS_KEY_ID '{credentials.access_key}'\n"
+            f"SECRET_ACCESS_KEY '{credentials.secret_key}'"
+        )
+        if not credentials.token:
+            return clause
+        return f"{clause}\nSESSION_TOKEN '{credentials.token}'"
 
     def execute(self, sql: str, params: tuple | dict | None = None) -> list[tuple]:
-        """Executa ``sql`` num cursor novo e devolve as linhas, ou uma lista vazia para um comando sem resultado."""
+        """Executa ``sql`` num cursor novo e devolve as linhas, ou uma lista vazia para um comando
+        sem resultado."""
         cursor = self.connection.cursor()
-        if params is None:
-            cursor.execute(sql)
-        else:
-            cursor.execute(sql, params)
-
+        cursor.execute(sql, params)
         return cursor.fetchall() if cursor.description else []
+
+
+def redshift_variable(name: str) -> str | None:
+    """``SERIALIZE_DB_REDSHIFT_<name>``, com a variável vazia lida como ausente."""
+    return os.environ.get(f"SERIALIZE_DB_REDSHIFT_{name}") or None
+
+
+def prepare_redshift_session(connection: object) -> None:
+    """Liga o autocommit e roda ``USE <banco>`` quando o esquema vem de um datashare: daí em diante,
+    ``esquema.tabela`` basta.
+
+    O autocommit vem antes do primeiro comando. Desligado, o ``redshift_connector`` emite
+    ``begin transaction`` antes do primeiro ``execute``, e ligá-lo depois não fecha essa
+    transação: a sessão inteira corre nela, e o primeiro erro do servidor (a visão de sistema
+    negada a um usuário comum) aborta tudo o que vem depois, inclusive a limpeza, com
+    ``25P02`` (``plan/POC.md``). Cada comando confirmado ao terminar é também o que o ``COPY``
+    e o ``UNLOAD`` precisam para não ficarem presos numa transação aberta.
+
+    O ``USE`` é o passo de ``examples/redshift_copy_unload.py``: sem ele, quem não está
+    conectado ao banco compartilhado só cita objetos por nome em três partes, e o ``CREATE`` e
+    o ``COPY`` não foram exercitados assim.
+    """
+    connection.autocommit = True
+    share = redshift_variable("SHARE_DATABASE")
+    if share:
+        cursor = connection.cursor()
+        cursor.execute(f"USE {share}")
+
+
+def workgroup_login(database: str) -> dict[str, object]:
+    """O endereço e o par usuário e senha do workgroup de ``SERIALIZE_DB_REDSHIFT_WORKGROUP``, nos
+    argumentos de ``redshift_connector.connect``.
+
+    O endereço vem de ``get_workgroup``, e ``_HOST`` e ``_PORT`` o substituem; o par vem de
+    ``get_credentials``, pedido com ``durationSeconds=3600``. A região é a de ``AWS_REGION``, a de
+    ``AWS_DEFAULT_REGION`` ou, sem as duas, a da sessão ``boto3``.
+    """
+    import boto3
+
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    if not region:
+        region = boto3.Session().region_name
+
+    workgroup = redshift_variable("WORKGROUP")
+    serverless = boto3.client("redshift-serverless", region_name=region)
+    endpoint = serverless.get_workgroup(workgroupName=workgroup)["workgroup"]["endpoint"]
+    credentials = serverless.get_credentials(
+        workgroupName=workgroup, dbName=database, durationSeconds=3600
+    )
+    return {
+        "host": redshift_variable("HOST") or endpoint["address"],
+        "port": int(redshift_variable("PORT") or endpoint["port"]),
+        "user": credentials["dbUser"],
+        "password": credentials["dbPassword"],
+    }
 
 
 def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
@@ -488,11 +669,11 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
 
     Com ``_WORKGROUP``, o endereço vem de ``get_workgroup`` e o par usuário e senha de
     ``get_credentials``: o caminho de ``examples/redshift_native.py``, executado no ambiente alvo.
-    Com ``_HOST``, ``_USER`` e ``_PASSWORD``, o par informado entra na mesma chamada. O IAM interno do
-    ``redshift_connector`` e o cluster provisionado não são caminhos da suíte: ninguém os executou no
-    ambiente alvo, que não tem cluster. A mesma resolução de ``probes/redshift.py``. Cada chamada pede
-    a sua credencial, que dura no máximo uma hora, e a credencial derivada da identidade IAM cria o
-    usuário do banco quando ele ainda não existe.
+    Com ``_HOST``, ``_USER`` e ``_PASSWORD``, o par informado entra na mesma chamada. O IAM interno
+    do ``redshift_connector`` e o cluster provisionado não são caminhos da suíte: ninguém os
+    executou no ambiente alvo, que não tem cluster. A mesma resolução de ``probes/redshift.py``.
+    Cada chamada pede a sua credencial, que dura no máximo uma hora, e a credencial derivada da
+    identidade IAM cria o usuário do banco quando ele ainda não existe.
 
     A conexão vai sem ``timeout``: no ``redshift_connector`` ele é o tempo limite do socket, para
     conectar e para ler, e um ``COPY`` ou um ``UNLOAD`` dura mais que qualquer espera razoável
@@ -507,66 +688,84 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
     committed ... between Prepare and Execute`` (``plan/POC.md``). Com zero, o driver prepara o
     statement sem nome logo antes de cada execução e não guarda nada; ``statement_cache=True``
     mantém o padrão do driver, para a leitura que reproduz o erro.
+
+    Com ``SERIALIZE_DB_TEST_EMULATOR``, a conexão é a do substituto local, sem credencial nem
+    rede.
     """
+    if emulator_enabled():
+        import emulator
+
+        connection = emulator.connect()
+        prepare_redshift_session(connection)
+        return "substituto local", connection
+
     import redshift_connector
 
-    def variable(name: str) -> str | None:
-        return os.environ.get(f"SERIALIZE_DB_REDSHIFT_{name}") or None
-
-    database = variable("DATABASE")
+    database = redshift_variable("DATABASE")
     if not database:
         raise RuntimeError("SERIALIZE_DB_REDSHIFT_DATABASE não informada")
 
-    common: dict[str, object] = {"database": database}
-    if not statement_cache:
-        common["max_prepared_statements"] = 0
-    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-    if not region:
-        import boto3
-
-        region = boto3.Session().region_name
-
-    def prepare_session(connection: object, method: str) -> tuple[str, object]:
-        """Liga o autocommit e roda ``USE <banco>`` quando o esquema vem de um datashare: daí em diante, ``esquema.tabela`` basta.
-
-        O autocommit vem antes do primeiro comando. Desligado, o ``redshift_connector`` emite
-        ``begin transaction`` antes do primeiro ``execute``, e ligá-lo depois não fecha essa
-        transação: a sessão inteira corre nela, e o primeiro erro do servidor (a visão de sistema
-        negada a um usuário comum) aborta tudo o que vem depois, inclusive a limpeza, com
-        ``25P02`` (``plan/POC.md``). Cada comando confirmado ao terminar é também o que o ``COPY``
-        e o ``UNLOAD`` precisam para não ficarem presos numa transação aberta.
-
-        O ``USE`` é o passo de ``examples/redshift_copy_unload.py``: sem ele, quem não está
-        conectado ao banco compartilhado só cita objetos por nome em três partes, e o ``CREATE`` e
-        o ``COPY`` não foram exercitados assim.
-        """
-        connection.autocommit = True
-        share = variable("SHARE_DATABASE")
-        if share:
-            cursor = connection.cursor()
-            cursor.execute(f"USE {share}")
-        return method, connection
-
-    if variable("HOST") and variable("USER") and variable("PASSWORD"):
-        connection = redshift_connector.connect(host=variable("HOST"), port=int(variable("PORT") or 5439), user=variable("USER"), password=variable("PASSWORD"), **common)
-        return prepare_session(connection, "par informado")
-
-    if variable("WORKGROUP"):
-        import boto3
-
-        serverless = boto3.client("redshift-serverless", region_name=region)
-        endpoint = serverless.get_workgroup(workgroupName=variable("WORKGROUP"))["workgroup"]["endpoint"]
-        credentials = serverless.get_credentials(workgroupName=variable("WORKGROUP"), dbName=database, durationSeconds=3600)
-        connection = redshift_connector.connect(
-            host=variable("HOST") or endpoint["address"],
-            port=int(variable("PORT") or endpoint["port"]),
-            user=credentials["dbUser"],
-            password=credentials["dbPassword"],
-            **common,
+    # O par informado vem antes da credencial temporária do workgroup.
+    host = redshift_variable("HOST")
+    user = redshift_variable("USER")
+    password = redshift_variable("PASSWORD")
+    if host and user and password:
+        method = "par informado"
+        port = int(redshift_variable("PORT") or 5439)
+        login = {"host": host, "port": port, "user": user, "password": password}
+    elif redshift_variable("WORKGROUP"):
+        method = "credencial temporária do workgroup"
+        login = workgroup_login(database)
+    else:
+        raise RuntimeError(
+            "faltam parâmetros: SERIALIZE_DB_REDSHIFT_WORKGROUP para a credencial temporária, "
+            "ou _HOST, _USER e _PASSWORD"
         )
-        return prepare_session(connection, "credencial temporária do workgroup")
 
-    raise RuntimeError("faltam parâmetros: SERIALIZE_DB_REDSHIFT_WORKGROUP para a credencial temporária, ou _HOST, _USER e _PASSWORD")
+    options: dict[str, object] = {"database": database}
+    if not statement_cache:
+        options["max_prepared_statements"] = 0
+    connection = redshift_connector.connect(**login, **options)
+    prepare_redshift_session(connection)
+    return method, connection
+
+
+def describe_error(error: Exception) -> str:
+    """O tipo e a mensagem de um erro para o relatório; num erro do ``redshift_connector``, o
+    SQLSTATE, o campo ``M`` e o detalhe ``D`` numa linha só."""
+    detail = error.args[0] if error.args else None
+    if isinstance(detail, dict) and "M" in detail:
+        parts = [str(detail.get("C", "")), str(detail["M"])]
+        if detail.get("D"):
+            # O detalhe D vem entre linhas de hífens; as palavras só de hífens saem do texto.
+            parts.append(" ".join(word for word in str(detail["D"]).split() if set(word) != {"-"}))
+        return f"{type(error).__name__}: {' '.join(part for part in parts if part)}"[:400]
+
+    # Uma exceção sem mensagem tem o texto vazio, e o relatório leva só o tipo dela.
+    lines = str(error).splitlines()
+    first_line = lines[0] if lines else ""
+    return f"{type(error).__name__}: {first_line[:200]}"
+
+
+def drop_session_tables(session: RedshiftSession) -> int:
+    """Apaga as tabelas ``serialize_db_poc_<id>_*`` que a sessão criou e devolve quantas saíram;
+    cada falha vai ao relatório sem esconder o resultado dos testes."""
+    # Uma transação abortada por um teste recusaria cada DROP com 25P02: a limpeza começa fora
+    # dela.
+    if session.connection.in_transaction:
+        try:
+            session.connection.rollback()
+        except Exception as error:  # noqa: BLE001 - a limpeza não esconde o resultado dos testes
+            record("redshift.cleanup.rollback", describe_error(error))
+    dropped = 0
+    for name in session.created:
+        try:
+            session.execute(f"DROP TABLE IF EXISTS {session.qualified(name)}")
+        except Exception as error:  # noqa: BLE001 - a limpeza não esconde o resultado dos testes
+            record(f"redshift.cleanup.{name}", describe_error(error))
+            continue
+        dropped += 1
+    return dropped
 
 
 @pytest.fixture(scope="session")
@@ -578,7 +777,11 @@ def redshift_session() -> Iterator[RedshiftSession]:
     try:
         method, connection = connect_redshift()
     except Exception as error:  # noqa: BLE001 - configuração incompleta, rede ou credencial
-        pytest.fail(f"SERIALIZE_DB_TEST_REDSHIFT_SCHEMA informada, mas sem conexão: {type(error).__name__}: {error}", pytrace=False)
+        pytest.fail(
+            "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA informada, mas sem conexão: "
+            f"{type(error).__name__}: {error}",
+            pytrace=False,
+        )
 
     session = RedshiftSession(
         connection=connection,
@@ -594,24 +797,20 @@ def redshift_session() -> Iterator[RedshiftSession]:
 
     yield session
 
-    if not session.keep:
-        # Uma transação abortada por um teste recusaria cada DROP com 25P02: a limpeza começa fora dela.
-        if getattr(connection, "in_transaction", False):
-            try:
-                connection.rollback()
-            except Exception as error:  # noqa: BLE001 - a limpeza não esconde o resultado dos testes
-                record("redshift.cleanup.rollback", f"{type(error).__name__}: {error}")
-        for name in session.created:
-            try:
-                session.execute(f"DROP TABLE IF EXISTS {session.qualified(name)}")
-            except Exception as error:  # noqa: BLE001 - a limpeza não esconde o resultado dos testes
-                record(f"redshift.cleanup.{name}", f"{type(error).__name__}: {error}")
-
+    # A limpeza entra no relatório, como a das outras raízes: quantas tabelas saíram, ou quantas
+    # ficaram por SERIALIZE_DB_TEST_KEEP.
+    created = len(session.created)
+    if session.keep:
+        record("redshift.cleanup", f"mantidas por SERIALIZE_DB_TEST_KEEP: {created} tabela(s)")
+    else:
+        dropped = drop_session_tables(session)
+        record("redshift.cleanup", f"{dropped} de {created} tabela(s) apagada(s) de {schema}")
     connection.close()
 
 
 def failure_message(report: pytest.TestReport, limit: int = 300) -> str:
-    """As primeiras linhas do erro de um teste reprovado, para o relatório: a exceção e a asserção que a explica."""
+    """As primeiras linhas do erro de um teste reprovado, para o relatório: a exceção e a asserção
+    que a explica."""
     crash = getattr(report.longrepr, "reprcrash", None)
     text = crash.message if crash is not None else str(report.longrepr)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -619,42 +818,56 @@ def failure_message(report: pytest.TestReport, limit: int = 300) -> str:
 
 
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
-    """Imprime o relatório da sessão, as instruções das suítes puladas e grava o JSON de ``SERIALIZE_DB_TEST_REPORT``."""
-    # O resultado entra no relatório: sem ele o JSON não diz se a suíte passou nem se a limpeza rodou.
+    """Imprime o relatório da sessão, as instruções das suítes puladas e grava o JSON de
+    ``SERIALIZE_DB_TEST_REPORT``."""
+    # O resultado entra no relatório: sem ele o JSON não diz se a suíte passou nem se a limpeza
+    # rodou.
     stats = terminalreporter.stats
-    record("session.outcome", ", ".join(f"{len(stats.get(name, []))} {name}" for name in ("passed", "failed", "error", "skipped")))
+    counts = []
+    for name in ("passed", "failed", "error", "skipped"):
+        counts.append(f"{len(stats.get(name, []))} {name}")
+    record("session.outcome", ", ".join(counts))
     record("session.finished_at", now_utc())
     record("session.duration_s", round(time.time() - SESSION["started"], 1))
 
-    # Cada teste reprovado entra com a mensagem do erro: uma contagem diz quantos falharam, não por quê.
+    # Cada teste reprovado entra com a mensagem do erro: uma contagem diz quantos falharam, não por
+    # quê.
     for kind in ("failed", "error"):
         for report in stats.get(kind, []):
             record(f"{kind}.{report.nodeid}", failure_message(report))
 
-    # As medições e os fatos coletados; as chaves ``<suíte>.skipped`` ficam fora, porque a seção seguinte as explica.
+    # As medições e os fatos coletados; as chaves ``<suíte>.skipped`` ficam fora, porque a seção
+    # seguinte as explica.
     measurements = {key: value for key, value in REPORT.items() if not key.endswith(".skipped")}
     if measurements:
         terminalreporter.section("relatório da prova de conceito")
         width = max(len(key) for key in measurements)
         for key, value in measurements.items():
-            terminalreporter.write_line(f"{key.ljust(width)}  {value}")
+            terminalreporter.write_line(mask_credentials(f"{key.ljust(width)}  {value}"))
 
     # Instruções, não erro: cada suíte pulada mostra a variável que a autoriza e o que ela grava.
     skipped = [marker for marker in USAGE if f"{marker}.skipped" in REPORT]
     if skipped:
         terminalreporter.section("suítes não executadas: como autorizá-las", sep="-")
-        terminalreporter.write_line("Cada suíte grava só onde a sua variável de ambiente autoriza; sem a variável ela é pulada.")
+        terminalreporter.write_line(
+            "Cada suíte grava só onde a sua variável de ambiente autoriza; sem a variável ela é "
+            "pulada."
+        )
         for marker in skipped:
             command, note = USAGE[marker]
             terminalreporter.write_line(f"  {marker}:")
             terminalreporter.write_line(f"    {command}")
             terminalreporter.write_line(f"    {note}.")
-        terminalreporter.write_line("  Na pasta preparada sem internet, `.venv/bin/python -m pytest` no lugar de `uv run pytest`;")
+        terminalreporter.write_line(
+            "  Na pasta preparada sem internet, `.venv/bin/python -m pytest` no lugar de "
+            "`uv run pytest`;"
+        )
         terminalreporter.write_line("  as variáveis estão descritas em README.md, seção Testes.")
 
     path = os.environ.get("SERIALIZE_DB_TEST_REPORT")
     if path:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        text = json.dumps(REPORT, ensure_ascii=False, indent=2, default=str)
         with open(path, "w", encoding="utf-8") as handle:
-            json.dump(REPORT, handle, ensure_ascii=False, indent=2, default=str)
+            handle.write(mask_credentials(text))
         terminalreporter.write_line(f"relatório gravado em {path}")

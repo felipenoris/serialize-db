@@ -432,3 +432,56 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   of the `docs` and `interactive` groups (pdoc, ipykernel) that the folder's venv carried, and
   `uv sync --all-groups` put them back. The rule now names `--all-groups`, what
   `prepare_offline.sh` runs.
+
+- **A draft of package code leaves the study suites when its module lands** (2026-09-23). Stage 4
+  was implemented from the sketches `SandboxEngine`, `BatchStream` and `Loader` of
+  `tests/proof_of_concept/test_parallel.py`, and the sketches stayed. By the code review of the same
+  day, `BatchStream` differed from `DuckDBStream` only in docstrings and wrapping, while
+  `SandboxEngine.load` had drifted (`register` plus `CREATE TABLE AS`, where the engine goes through
+  the loader), `SandboxEngine` kept `preserve_insertion_order` on, which the engine turns off, so
+  seven twin tests timed a setup the engine never runs, and `test_stdlib.py` still stated the old
+  partition rule. The user retired the drafts; the unique cases moved to the package tests.
+  `CLAUDE.md`, `plan/PLAN-STAGE-4.md`
+- **A promised behavior without a failing assertion can be false** (2026-09-23). The `DuckDBLoader`
+  docstring and stage 4 said an abandoned loader deletes its spool file; the case moved from the
+  sketch asserted only that the thread ended and no table appeared, and a direct check showed the
+  file stayed until `cleanup`. The writer thread now deletes the file when it ends with an error,
+  and the new assertion was run against the old code, where it fails. `CLAUDE.md`, `plan/POC.md`
+- **A mask at the entry misses what nests** (2026-09-23). `record` masked the credential clauses
+  of a string value; the Redshift suite recorded a dict whose `"unload"` entry was the `repr` of the
+  `UNLOAD` outcome, an error text that can quote the command. The mask moved to the two outputs, the
+  printed lines and the JSON text, and a session with fake credentials in a dict, a list and a
+  string printed none of them. `CLAUDE.md`, `tests/conftest.py`
+- **A parameter id is a pytest keyword** (2026-09-23). The skip hook selected a suite's tests by
+  `marker in item.keywords`; the review parametrized a DDL test by dialect, and its `[redshift]` case
+  was skipped as part of the Redshift suite, without a word. The hook reads
+  `item.get_closest_marker(marker)`, and the selection of the 453 collected tests did not change.
+  `CLAUDE.md`, `tests/conftest.py`
+- **A default path that writes is a write** (2026-09-23). `test_temporary_folder_is_created_and_removed`
+  checked the engine's own `mkdtemp` folder, created in the system temp directory, outside the root
+  `SERIALIZE_DB_TEST_LOCAL_ROOT` authorizes; the test points `tempfile.tempdir` at the local root
+  first. The same review found `test_stdlib.py` leaving `NO_PROXY` and `AWS_DEFAULT_REGION` in the
+  process, because `monkeypatch.delenv` on an absent variable records nothing to restore.
+  `CLAUDE.md`, `plan/POC.md`
+- **Planned code is not speculative code** (2026-09-23). The code review reported the three
+  `Database` prefixes of stages 5, 8 and 9 (`staging_prefix`, `publication_prefix`,
+  `archive_prefix`) as code without a caller, against the style rule "nothing speculative", and
+  offered to remove them. The user decided that code the plan assigns to a later stage stays: the
+  rule covers code no stage plans. `CLAUDE.md`, `.claude/memory/decisions.md`
+- **A correction of a failure path is proved by provoking the failure** (2026-09-23). The review's
+  corrections to the S3 and Redshift suites change what happens when the target fails, and the
+  stand-in (the moto 5.2.3 server for S3 and STS, DuckDB for Redshift) ran green before and after
+  them: 35 passed, 1 skipped. Switches in the stand-in provoked each failure (no manifest after an
+  `UNLOAD` that passed, `PARTITION BY` refused, A's `INSERT` refused, `pg_backend_pid` refused), and
+  the old code ran beside the new one from a worktree: the old code recorded the missing manifest
+  as an empty result and as `ok: sem manifesto linhas`, skipped the refused `PARTITION BY`, left A's
+  aborted transaction open until its connection closed, and raised `TypeError` on the refused
+  `pg_backend_pid`. A green run proves only the path without failure. `CLAUDE.md`, `plan/POC.md`
+- **A compatibility the library claims is run against an instance of it** (2026-09-23).
+  `storage.py` read `AWS_ENDPOINT_URL` "for an S3-compatible service" and passed it to boto3,
+  PyArrow and delta-rs, while the DuckDB secret carried only the host: with DuckDB's default
+  virtual-host style and TLS, it never reached an `http` endpoint or one at an IP, and no test ran
+  it against such a service. The moto stand-in found it when the package's `s3` tests read through
+  `Storage.duckdb_connect`; the secret now adds `URL_STYLE 'path'` and, for `http`,
+  `USE_SSL false`. `CLAUDE.md`, `plan/POC.md`
+

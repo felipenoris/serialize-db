@@ -2,12 +2,13 @@
 
 A suíte escreve só sob a pasta informada em ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e nada aqui toca a AWS:
 ela roda em qualquer ambiente e valida o Python, o delta-rs, o DuckDB e as extensões antes da suíte
-no S3. Os testes comuns aos dois armazenamentos vêm de ``poc_delta.py``; os deste módulo cobrem o que só
-faz sentido em disco: a primitiva do commit atômico e o conflito entre escritores, os caminhos
-relativos do log com a realocação da pasta, e a abertura sem variáveis AWS.
+no S3. Os testes comuns aos dois armazenamentos vêm de ``poc_delta.py``; os deste módulo cobrem o
+que só faz sentido em disco: a primitiva do commit atômico e o conflito entre escritores, os
+caminhos relativos do log com a realocação da pasta, e a abertura sem variáveis AWS.
 
-Só a extensão ``delta`` do DuckDB é necessária; sem ela e sem internet, os testes que a usam são
-pulados.
+Só a extensão ``delta`` do DuckDB é necessária; sem ela na pasta de extensões, os testes que a usam
+são pulados, a não ser que ``SERIALIZE_DB_DUCKDB_EXTENSIONS`` indique a pasta onde a suíte a
+instala.
 """
 
 from __future__ import annotations
@@ -38,6 +39,22 @@ from poc_delta import (
 
 pytestmark = pytest.mark.local
 
+# O programa do subprocesso sem ambiente AWS: abre a tabela pelo delta-rs e a lê pelo DuckDB, sem
+# instalar nada; a URI da tabela e a pasta de extensões chegam por sys.argv.
+READ_TABLE_PROGRAM = r"""
+import sys
+
+import duckdb
+from deltalake import DeltaTable
+
+table_uri, directory = sys.argv[1], sys.argv[2]
+print(DeltaTable(table_uri).version())
+config = {"extension_directory": directory, "autoinstall_known_extensions": False}
+connection = duckdb.connect(config=config)
+connection.execute("LOAD delta")
+print(connection.execute(f"SELECT count(*) FROM delta_scan('{table_uri}')").fetchone()[0])
+"""
+
 
 @pytest.fixture(scope="session")
 def storage(local_location: LocalLocation) -> LocalLocation:
@@ -53,7 +70,8 @@ def table_uri(storage: LocalLocation) -> str:
 
 @pytest.fixture(scope="session")
 def duckdb_connection() -> duckdb.DuckDBPyConnection:
-    """Conexão com a extensão ``delta`` carregada; uma pasta local dispensa ``httpfs``, ``aws`` e secrets."""
+    """Conexão com a extensão ``delta`` carregada; uma pasta local dispensa ``httpfs``, ``aws`` e
+    secrets."""
     return connect_duckdb(("delta",))
 
 
@@ -61,16 +79,18 @@ class TestLocalProofOfConcept(DeltaProofOfConcept):
     """Os testes comuns sobre a pasta mais os próprios do disco local."""
 
     def test_commit_is_atomic_on_disk(self, storage: LocalLocation) -> None:
-        """O commit em disco cria o arquivo do log só se ele não existe, o equivalente do ``If-None-Match`` no S3.
+        """O commit em disco cria o arquivo do log só se ele não existe, o equivalente do
+        ``If-None-Match`` no S3.
 
         Dois escritores abertos na mesma versão: o segundo ``overwrite`` do mesmo mês falha com
-        ``CommitFailedError``; ``overwrite`` de meses diferentes e ``append`` mais ``append`` comitam os dois.
+        ``CommitFailedError``; ``overwrite`` de meses diferentes e ``append`` mais ``append``
+        comitam os dois.
         """
         uri = storage.child("commit_probe")
         small = sample_table().slice(ROWS // 2 - 500, 1000)  # 500 linhas de cada mês
         write_deltalake(uri, small, mode="overwrite", partition_by=["mes"])
 
-        # A primitiva: abrir o arquivo da versão com O_EXCL falha quando ele existe, e é isso que o delta-rs usa.
+        # A primitiva: o delta-rs abre o arquivo da versão com O_EXCL, que falha quando ele existe.
         with pytest.raises(FileExistsError):
             open(Path(uri) / "_delta_log" / "00000000000000000000.json", "x").close()
 
@@ -101,14 +121,19 @@ class TestLocalProofOfConcept(DeltaProofOfConcept):
         assert table.version() == 5
         assert table.to_pyarrow_table().num_rows == small.num_rows + 20
 
-    def test_folder_relocates(self, storage: LocalLocation, duckdb_connection: duckdb.DuckDBPyConnection, table_uri: str) -> None:
-        """O log guarda caminhos relativos, e a pasta copiada abre na mesma versão pelo delta-rs e pelo DuckDB.
+    def test_folder_relocates(
+        self, storage: LocalLocation, duckdb_connection: duckdb.DuckDBPyConnection, table_uri: str
+    ) -> None:
+        """O log guarda caminhos relativos, e a pasta copiada abre na mesma versão pelo delta-rs e
+        pelo DuckDB.
 
-        É a propriedade que leva um banco entre pastas, e entre a pasta e o S3, sem reescrever metadado.
+        É a propriedade que leva um banco entre pastas, e entre a pasta e o S3, sem reescrever
+        metadado.
         """
         # As ações add do log guardam o caminho relativo à pasta da tabela.
         paths = DeltaTable(table_uri).get_add_actions().column("path").to_pylist()
-        assert paths and not any(path.startswith(("/", "file:")) for path in paths)
+        assert paths
+        assert not any(path.startswith(("/", "file:")) for path in paths)
 
         # Uma cópia comum da pasta, com o log, é uma tabela igual na mesma versão.
         copy = Path(storage.child("relocated")) / "operacoes"
@@ -119,39 +144,36 @@ class TestLocalProofOfConcept(DeltaProofOfConcept):
         assert moved.to_pyarrow_table().num_rows == ROWS + APPENDED_ROWS
         assert DeltaTable(copy.as_uri()).version() == 1  # a URI file:// equivale ao caminho
 
-        count = duckdb_connection.execute(f"SELECT count(*) FROM delta_scan('{copy}')").fetchone()[0]
+        count_query = f"SELECT count(*) FROM delta_scan('{copy}')"
+        count = duckdb_connection.execute(count_query).fetchone()[0]
         assert count == ROWS + APPENDED_ROWS
 
+    # A fixture duckdb_connection instala a extensão delta, ou pula o teste sem ela, antes do
+    # subprocesso, que só a carrega.
     @pytest.mark.usefixtures("duckdb_connection")
     def test_opens_without_aws_environment(self, storage: LocalLocation, table_uri: str) -> None:
-        """Sem variáveis ``AWS_*``, sem proxy e sem ``~/.aws``, o delta-rs e o DuckDB abrem a tabela.
+        """Sem variáveis ``AWS_*``, sem proxy e sem ``~/.aws``, o delta-rs e o DuckDB abrem a
+        tabela.
 
-        O ``HOME`` do subprocesso é uma pasta vazia da sessão; ele recebe a pasta de extensões do DuckDB
-        resolvida aqui, porque esse ``HOME`` esconde a pasta padrão.
+        O ``HOME`` do subprocesso é uma pasta vazia da sessão; ele recebe a pasta de extensões do
+        DuckDB resolvida aqui, porque esse ``HOME`` esconde a pasta padrão.
         """
         home = Path(storage.child("empty_home"))
         home.mkdir()
         directory = duckdb_extension_directory() or str(Path.home() / ".duckdb" / "extensions")
 
-        # O programa do subprocesso: abre a tabela pelo delta-rs e a lê pelo DuckDB, sem instalar nada.
-        probe = "\n".join(
-            [
-                "import duckdb",
-                "from deltalake import DeltaTable",
-                f"print(DeltaTable({table_uri!r}).version())",
-                f"connection = duckdb.connect(config={{'extension_directory': {directory!r}, 'autoinstall_known_extensions': False}})",
-                "connection.execute('LOAD delta')",
-                f"print(connection.execute(\"SELECT count(*) FROM delta_scan('{table_uri}')\").fetchone()[0])",
-            ]
-        )
-
         # O ambiente do subprocesso: sem AWS_*, sem proxies e com um HOME vazio.
         proxies = {"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY"}
-        environment = {
-            name: value for name, value in os.environ.items() if not name.startswith("AWS_") and name.upper() not in proxies
-        }
+        environment: dict[str, str] = {}
+        for name, value in os.environ.items():
+            if name.startswith("AWS_") or name.upper() in proxies:
+                continue
+            environment[name] = value
         environment["HOME"] = str(home)
 
-        completed = subprocess.run([sys.executable, "-c", probe], env=environment, capture_output=True, text=True, timeout=120)
+        command = [sys.executable, "-c", READ_TABLE_PROGRAM, table_uri, directory]
+        completed = subprocess.run(
+            command, env=environment, capture_output=True, text=True, timeout=120
+        )
         assert completed.returncode == 0, completed.stderr
         assert completed.stdout.split() == ["1", str(ROWS + APPENDED_ROWS)]

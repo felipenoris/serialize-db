@@ -2,16 +2,15 @@
 
 Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a base de
 ``tests/source_db_projetado.py`` numa pasta da sessão e as tabelas Delta em outras, uma raiz por
-teste. Eles conferem a descoberta das partições e do que fica fora do modelo; a consulta que leva
-a partição ao contrato, com ``to`` entre aspas; a carga de cada partição uma vez só, a
-retomada depois de uma interrupção e o filtro de partições; os dois modos com o mesmo
-relatório e os tipos
-do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem commit (valor da
-coluna de origem fora do caminho, nulo em coluna ``NOT NULL``, texto acima de ``String(n)``), nos
-dois modos; as estatísticas registradas, de inteiro, data, ``Double`` e texto; a coluna
-``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, nos dois modos, com o
-relatório que soma só os finitos; o relatório que acusa uma linha apagada; e a linha de comando
-sobre a base inteira, duas vezes. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+teste. Eles conferem a descoberta das partições e do que fica fora do modelo; a consulta que leva a
+partição ao contrato, com ``to`` entre aspas; a carga de cada partição uma vez só, a retomada depois
+de uma interrupção e o filtro de partições; os dois modos com o mesmo relatório e os tipos do
+contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem commit (valor da coluna de
+origem fora do caminho, nulo em coluna ``NOT NULL``, texto acima de ``String(n)``), nos dois modos;
+as estatísticas registradas, de inteiro, data, ``Double`` e texto; a coluna ``Double`` com ``NaN``
+ou infinito sem mínimo e máximo na partição dela, nos dois modos, com o relatório que soma só os
+finitos; o relatório que acusa uma linha apagada; e a linha de comando sobre a base inteira, duas
+vezes. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
@@ -22,7 +21,7 @@ import json
 import re
 import shutil
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
@@ -46,11 +45,14 @@ OUTSIDE_MODEL = ["alembic_version", "meta_update_status", "schema.json"]
 PARTITION_VALUES = list(source.PARTITION_VALUES)
 
 
-def settings(
-    mode: str = "register", sort: bool = True, partitions: tuple[str, ...] = ()
-) -> migrate.Settings:
-    """As configurações de uma execução local, sem S3."""
-    return migrate.Settings(mode=mode, sort=sort, partitions=partitions, storage_options={})
+def settings(mode: str = "register", partitions: tuple[str, ...] = ()) -> migrate.Settings:
+    """As configurações de uma execução local, sem S3, com as linhas na ordem da ``sort_key``."""
+    return migrate.Settings(mode=mode, sort=True, partitions=partitions, storage_options={})
+
+
+def unique_child(local_location: LocalLocation, prefix: str) -> str:
+    """Uma pasta nova sob a pasta da sessão: ``prefix``, um hífen e oito dígitos hexadecimais."""
+    return local_location.child(f"{prefix}-{uuid.uuid4().hex[:8]}")
 
 
 @pytest.fixture(scope="module")
@@ -61,6 +63,7 @@ def base(local_location: LocalLocation) -> source.SourceBase:
 
 @pytest.fixture(scope="module")
 def origin(base: source.SourceBase) -> migrate.Location:
+    """A raiz da base fictícia, aberta como o script abre a origem."""
     return migrate.open_location(str(base.root))
 
 
@@ -75,10 +78,11 @@ def con() -> Iterator[duckdb.DuckDBPyConnection]:
 @pytest.fixture
 def root(local_location: LocalLocation) -> migrate.Location:
     """Uma raiz Delta nova por teste."""
-    return migrate.open_location(local_location.child(f"delta-{uuid.uuid4().hex[:8]}"))
+    return migrate.open_location(unique_child(local_location, "delta"))
 
 
 def loaded_values(loaded: list[migrate.PartitionLoad]) -> list[str | None]:
+    """Os valores de partição das cargas, na ordem em que foram gravadas."""
     return [load.value for load in loaded]
 
 
@@ -96,26 +100,28 @@ def physical_types(path: str) -> dict[str, str]:
     }
 
 
-def test_discover_partitions_and_the_entries_outside_the_pattern(
-    base: source.SourceBase, origin: migrate.Location
-) -> None:
+def test_discover_partitions_and_the_entries_outside_the_model(origin: migrate.Location) -> None:
     """As quatro tabelas particionadas dão os valores do caminho, as oito sem partição dão
-    ``None``, e o que a
-    raiz tem fora do modelo e o que a pasta da tabela tem fora do padrão vão para as listas."""
+    ``None``, e o que a raiz tem fora do modelo vai para a lista."""
     for name, table in TABLES.items():
         options = schema.table_options(table)
         found, skipped = migrate.discover_partitions(origin.child(name), options)
         assert skipped == [], name
         if options.partition_by is None:
-            assert list(found) == [None] and found[None].uri == f"{origin.uri}/{name}", name
+            assert list(found) == [None], name
+            assert found[None].uri == f"{origin.uri}/{name}", name
             continue
         assert list(found) == PARTITION_VALUES, name
-        assert (
-            found["2026-02-28"].uri == f"{origin.uri}/{name}/{options.partition_by}=2026-02-28"
-        ), name
+        expected_uri = f"{origin.uri}/{name}/{options.partition_by}=2026-02-28"
+        assert found["2026-02-28"].uri == expected_uri, name
     assert migrate.entries_outside_the_model(origin, Base.metadata) == OUTSIDE_MODEL
 
-    # A base é do módulo inteiro: o arquivo e a pasta acrescentados saem mesmo se a asserção falhar.
+
+def test_discover_partitions_skips_an_entry_outside_the_pattern(
+    base: source.SourceBase, origin: migrate.Location
+) -> None:
+    """O que a pasta da tabela tem fora do padrão ``<coluna>=<valor>`` vai para a lista."""
+    # A base é do módulo inteiro: o arquivo acrescentado sai mesmo se a asserção falhar.
     stray = base.root / "cad_operacoes" / "notas.txt"
     stray.write_text("fora do padrão")
     try:
@@ -127,7 +133,12 @@ def test_discover_partitions_and_the_entries_outside_the_pattern(
     assert list(found) == PARTITION_VALUES
     assert skipped == ["notas.txt"]
 
-    # A partição é texto: uma pasta cujo valor não é data também é achada.
+
+def test_discover_partitions_accepts_a_value_that_is_not_a_date(
+    base: source.SourceBase, origin: migrate.Location
+) -> None:
+    """A partição é texto: uma pasta cujo valor não é data também é achada."""
+    # A base é do módulo inteiro: a pasta acrescentada sai mesmo se a asserção falhar.
     quarter = base.root / "cad_operacoes" / "data_str=2026-Q1"
     quarter.mkdir()
     try:
@@ -147,30 +158,26 @@ def test_partition_query_casts_to_the_contract(
     microssegundos, a coluna de partição no fim com o valor do caminho; a consulta de
     ``cad_contratos`` roda com ``to`` entre aspas."""
     table = TABLES["cad_lancamentos"]
-    query = migrate.partition_query(
-        origin.child("cad_lancamentos").child("data_base_str=2026-01-31"), table, "2026-01-31"
-    )
-    read = con.execute(query).to_arrow_reader().schema
-    contract = schema.arrow_schema(table)
-    assert read.names == contract.names
-    assert [str(field.type) for field in read] == [str(field.type) for field in contract]
-    assert (
-        str(read.field("id_lancamento").type) == "int64"
-        and str(read.field("timestamp").type) == "timestamp[us]"
-    )
-    assert con.execute(f"SELECT DISTINCT data_base_str FROM ({query})").fetchall() == [
-        ("2026-01-31",)
-    ]
+    folder = origin.child("cad_lancamentos").child("data_base_str=2026-01-31")
+    query = migrate.partition_query(folder, table, "2026-01-31")
+    query_schema = con.execute(query).to_arrow_reader().schema
+    contract_schema = schema.arrow_schema(table)
+    assert query_schema.names == contract_schema.names
+    query_types = [str(field.type) for field in query_schema]
+    contract_types = [str(field.type) for field in contract_schema]
+    assert query_types == contract_types
+    assert str(query_schema.field("id_lancamento").type) == "int64"
+    assert str(query_schema.field("timestamp").type) == "timestamp[us]"
+    path_values = con.execute(f"SELECT DISTINCT data_base_str FROM ({query})").fetchall()
+    assert path_values == [("2026-01-31",)]
 
-    contratos = migrate.partition_query(
+    contracts_query = migrate.partition_query(
         origin.child("cad_contratos").child("data_str=2026-02-28"),
         TABLES["cad_contratos"],
         "2026-02-28",
     )
-    assert (
-        con.execute(f"SELECT count(*) FROM ({contratos})").fetchone()[0]
-        == base.partition_rows["cad_contratos"]["2026-02-28"]
-    )
+    counted = con.execute(f"SELECT count(*) FROM ({contracts_query})").fetchone()[0]
+    assert counted == base.partition_rows["cad_contratos"]["2026-02-28"]
 
 
 def test_initial_load_loads_every_partition_once(
@@ -180,42 +187,50 @@ def test_initial_load_loads_every_partition_once(
     root: migrate.Location,
 ) -> None:
     """A primeira passagem grava toda partição num commit cada, com o nome, a partição e as
-    retenções no log; a
-    segunda não grava nada; uma tabela sem partição carrega uma vez, com o valor ``None``."""
+    retenções no log; a segunda não grava nada; uma tabela sem partição carrega uma vez, com o
+    valor ``None``."""
     table = TABLES["cad_contratos"]
     loaded, skipped = migrate.initial_load(con, table, origin, root, settings())
-    assert loaded_values(loaded) == PARTITION_VALUES and skipped == []
+    assert loaded_values(loaded) == PARTITION_VALUES
+    assert skipped == []
     assert [load.rows for load in loaded] == [
         base.partition_rows["cad_contratos"][value] for value in PARTITION_VALUES
     ]
-    assert all(load.seconds > 0 and load.peak_rss_mb > 0 for load in loaded)
+    assert all(load.seconds > 0 for load in loaded)
+    assert all(load.peak_rss_mb > 0 for load in loaded)
     delta = DeltaTable(root.child("cad_contratos").uri)
+    metadata = delta.metadata()
     assert delta.version() == len(PARTITION_VALUES)
-    assert delta.metadata().name == "cad_contratos" and delta.metadata().partition_columns == [
-        "data_str"
-    ]
-    assert delta.metadata().description == "Contratos por data-base"
-    assert delta.metadata().configuration == migrate.RETENTION
+    assert metadata.name == "cad_contratos"
+    assert metadata.partition_columns == ["data_str"]
+    assert metadata.description == table.comment
+    assert metadata.configuration == migrate.RETENTION
 
-    assert migrate.initial_load(con, table, origin, root, settings()) == ([], [])
+    # A segunda passagem não grava nada.
+    loaded, skipped = migrate.initial_load(con, table, origin, root, settings())
+    assert loaded == []
+    assert skipped == []
     assert DeltaTable(root.child("cad_contratos").uri).version() == len(PARTITION_VALUES)
 
-    loaded, _ = migrate.initial_load(con, TABLES["cad_contas"], origin, root, settings())
+    # Uma tabela sem partição carrega uma vez, com o valor None.
+    accounts = TABLES["cad_contas"]
+    loaded, _ = migrate.initial_load(con, accounts, origin, root, settings())
     assert [(load.value, load.rows) for load in loaded] == [(None, base.rows["cad_contas"])]
-    assert migrate.initial_load(con, TABLES["cad_contas"], origin, root, settings())[0] == []
+    loaded, _ = migrate.initial_load(con, accounts, origin, root, settings())
+    assert loaded == []
     assert DeltaTable(root.child("cad_contas").uri).version() == 1
 
 
 def test_partition_filter_loads_only_the_listed_values(
     origin: migrate.Location, con: duckdb.DuckDBPyConnection, root: migrate.Location
 ) -> None:
-    """``--partitions`` filtra as partições encontradas, deixa as tabelas sem partição de fora,
-    e a passagem
-    seguinte sem o filtro carrega só o que falta."""
+    """``--partitions`` filtra as partições encontradas, deixa as tabelas sem partição de fora, e
+    a passagem seguinte sem o filtro carrega só o que falta."""
     only = settings(partitions=("2026-02-28",))
     loaded, _ = migrate.initial_load(con, TABLES["cad_operacoes"], origin, root, only)
     assert loaded_values(loaded) == ["2026-02-28"]
-    assert migrate.initial_load(con, TABLES["cad_contas"], origin, root, only)[0] == []
+    loaded, _ = migrate.initial_load(con, TABLES["cad_contas"], origin, root, only)
+    assert loaded == []
 
     loaded, _ = migrate.initial_load(con, TABLES["cad_operacoes"], origin, root, settings())
     assert loaded_values(loaded) == ["2026-01-31", "2026-03-31", "2026-06-30"]
@@ -234,6 +249,7 @@ def test_interrupted_load_resumes(
     attempts: list[str | None] = []
 
     def failing_on_the_third(*arguments: object) -> int:
+        """O ``register_partition`` do script, com uma exceção na terceira partição."""
         # Os argumentos de register_partition; o quinto é o valor da partição.
         attempts.append(arguments[4])
         if len(attempts) == 3:
@@ -244,7 +260,8 @@ def test_interrupted_load_resumes(
     with pytest.raises(RuntimeError, match="interrompida"):
         migrate.initial_load(con, table, origin, root, settings())
     uri = root.child("rel_contrato_operacao").uri
-    assert attempts == PARTITION_VALUES[:3] and DeltaTable(uri).version() == 2
+    assert attempts == PARTITION_VALUES[:3]
+    assert DeltaTable(uri).version() == 2
 
     monkeypatch.undo()
     loaded, _ = migrate.initial_load(con, table, origin, root, settings())
@@ -294,11 +311,11 @@ def test_both_modes_give_the_same_report_and_the_contract_types(
     )
 
     written = sorted(DeltaTable(roots["register"].child("cad_lancamentos").uri).file_uris())
-    assert len(written) == len(PARTITION_VALUES) and all(
-        "/carga_inicial_" in path for path in written
-    )
+    assert len(written) == len(PARTITION_VALUES)
+    assert all("/carga_inicial_" in path for path in written)
     types = physical_types(written[0])
-    assert types["id_lancamento"] == "INT64" and types["timestamp"] == "INT64"
+    assert types["id_lancamento"] == "INT64"
+    assert types["timestamp"] == "INT64"
     assert "data_base_str" not in types
 
 
@@ -310,21 +327,22 @@ def test_rows_are_written_in_sort_key_order(
 ) -> None:
     """As linhas da partição saem na ordem da ``sort_key`` do modelo, que não é a da origem."""
     table = TABLES["cad_lancamentos"]
-    key = list(schema.table_options(table).sort_key)
-    assert key == ["data_base", "id_mensuracao", "id_veiculo", "id_conta"]
+    sort_columns = list(schema.table_options(table).sort_key)
+    assert sort_columns == ["data_base", "id_mensuracao", "id_veiculo", "id_conta"]
     migrate.initial_load(con, table, origin, root, settings(partitions=("2026-01-31",)))
 
     (written,) = DeltaTable(root.child("cad_lancamentos").uri).file_uris()
-    rows = pq.read_table(written, columns=key).to_pylist()
-    keys = [key_values(row, key) for row in rows]
-    assert len(keys) == base.partition_rows["cad_lancamentos"]["2026-01-31"]
-    assert keys == sorted(keys)
+    rows = pq.read_table(written, columns=sort_columns).to_pylist()
+    written_keys = [key_values(row, sort_columns) for row in rows]
+    assert len(written_keys) == base.partition_rows["cad_lancamentos"]["2026-01-31"]
+    assert written_keys == sorted(written_keys)
 
-    chunks = sorted((base.root / "cad_lancamentos" / "data_base_str=2026-01-31").glob("*.parquet"))
-    original = pa.concat_tables(
-        [pq.read_table(chunk, columns=key) for chunk in chunks]
+    partition_folder = base.root / "cad_lancamentos" / "data_base_str=2026-01-31"
+    chunks = sorted(partition_folder.glob("*.parquet"))
+    source_rows = pa.concat_tables(
+        [pq.read_table(chunk, columns=sort_columns) for chunk in chunks]
     ).to_pylist()
-    assert [key_values(row, key) for row in original] != keys
+    assert [key_values(row, sort_columns) for row in source_rows] != written_keys
 
 
 def test_registered_stats_carry_the_four_exact_types(
@@ -352,17 +370,18 @@ def test_registered_stats_carry_the_four_exact_types(
 
     # As colunas com extremos saem do contrato: as que stat_converter transcreve, menos a de
     # partição, que no Delta fica só no caminho.
-    expected = {
-        field.name
-        for field in schema.arrow_schema(table)
-        if migrate.stat_converter(field.type) is not None and field.name != partition_by
-    }
+    expected = set()
+    for field in schema.arrow_schema(table):
+        has_bounds = migrate.stat_converter(field.type) is not None
+        if has_bounds and field.name != partition_by:
+            expected.add(field.name)
     # Uma coluna só de nulos não tem mínimo nem máximo no RETURN_STATS, e fica de fora dos dois.
     all_null = {name for name, nulls in stats["nullCount"].items() if nulls == stats["numRecords"]}
     assert all_null == {"meta"}
     assert set(stats["minValues"]) == expected - all_null
     assert stats["minValues"].keys() == stats["maxValues"].keys()
-    assert "timestamp" in stats["nullCount"] and "timestamp" not in stats["minValues"]
+    assert "timestamp" in stats["nullCount"]
+    assert "timestamp" not in stats["minValues"]
     assert stats["numRecords"] == base.partition_rows["cad_lancamentos"]["2026-01-31"]
 
     # Os extremos registrados são os do arquivo, no tipo que o log guarda.
@@ -376,30 +395,23 @@ def test_registered_stats_carry_the_four_exact_types(
     assert isinstance(stats["maxValues"]["id_lancamento"], int)
 
 
-def off_the_path(chunk: pa.Table) -> pa.Table:
-    """A primeira linha com ``data`` fora do valor do caminho da partição."""
-    values = chunk.column("data").to_pylist()
-    values[0] = dt.date(2026, 3, 31)
-    return chunk.set_column(
-        chunk.schema.get_field_index("data"), "data", pa.array(values, pa.date32())
-    )
+def replace_first_value(chunk: pa.Table, column: str, value: object) -> pa.Table:
+    """A tabela com ``value`` na primeira linha de ``column``, no campo do arquivo: mesmo tipo e
+    mesma nulidade."""
+    values = chunk.column(column).to_pylist()
+    values[0] = value
+    field = chunk.schema.field(column)
+    index = chunk.schema.get_field_index(column)
+    return chunk.set_column(index, field, pa.array(values, field.type))
 
 
-def with_a_null(chunk: pa.Table) -> pa.Table:
-    """A primeira linha com ``sistema`` nulo: ``NOT NULL`` no modelo, anulável nos arquivos."""
-    values = chunk.column("sistema").to_pylist()
-    values[0] = None
-    return chunk.set_column(
-        chunk.schema.get_field_index("sistema"), "sistema", pa.array(values, pa.int32())
-    )
-
-
-def above_the_length(chunk: pa.Table) -> pa.Table:
-    """A primeira linha com ``to`` de três bytes, coluna ``String(2)`` no modelo."""
-    values = chunk.column("to").to_pylist()
-    values[0] = "ABC"
-    return chunk.set_column(
-        chunk.schema.get_field_index("to"), "to", pa.array(values, pa.string())
+def rewrite_first_chunk(folder: Path, column: str, value: object) -> None:
+    """Regrava ``chunk_0.parquet`` de ``folder`` com ``value`` na primeira linha de ``column``, no
+    layout da origem."""
+    path = folder / "chunk_0.parquet"
+    altered = replace_first_value(pq.read_table(path), column, value)
+    pq.write_table(
+        altered, path, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
     )
 
 
@@ -407,28 +419,35 @@ def source_with_defect(
     local_location: LocalLocation,
     base: source.SourceBase,
     table: str,
-    alter: Callable[[pa.Table], pa.Table],
+    column: str,
+    value: object,
 ) -> migrate.Location:
-    """Uma origem nova só com a partição 2026-02-28 da tabela, o primeiro chunk alterado por
-    ``alter``."""
+    """Uma origem nova só com a partição 2026-02-28 da tabela, com ``value`` na primeira linha de
+    ``column`` do primeiro chunk."""
     folder_name = f"{source.PARTITIONS[table].column}=2026-02-28"
-    new_root = Path(local_location.child(f"origem-{uuid.uuid4().hex[:8]}"))
+    new_root = Path(unique_child(local_location, "origem"))
     destination = new_root / table / folder_name
     shutil.copytree(base.root / table / folder_name, destination)
-    first = destination / "chunk_0.parquet"
-    altered = alter(pq.read_table(first))
-    pq.write_table(
-        altered, first, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
-    )
+    rewrite_first_chunk(destination, column, value)
     return migrate.open_location(str(new_root))
 
 
 @pytest.mark.parametrize(
-    ("table", "alter", "fragment"),
+    ("table", "column", "value", "fragment"),
     [
-        ("cad_operacoes", off_the_path, "1 linhas com data diferente de 2026-02-28"),
-        ("cad_contratos", with_a_null, "1 nulos na coluna NOT NULL sistema"),
-        ("cad_contratos", above_the_length, "1 textos acima de String(2) em to"),
+        pytest.param(
+            "cad_operacoes",
+            "data",
+            dt.date(2026, 3, 31),
+            "1 linhas com data diferente de 2026-02-28",
+            id="off_the_path",
+        ),
+        pytest.param(
+            "cad_contratos", "sistema", None, "1 nulos na coluna NOT NULL sistema", id="with_a_null"
+        ),
+        pytest.param(
+            "cad_contratos", "to", "ABC", "1 textos acima de String(2) em to", id="above_the_length"
+        ),
     ],
 )
 @pytest.mark.parametrize("mode", ["register", "rewrite"])
@@ -436,16 +455,21 @@ def test_a_partition_off_the_contract_is_refused_without_commit(
     base: source.SourceBase,
     con: duckdb.DuckDBPyConnection,
     local_location: LocalLocation,
+    root: migrate.Location,
     table: str,
-    alter: Callable[[pa.Table], pa.Table],
+    column: str,
+    value: object,
     fragment: str,
     mode: str,
 ) -> None:
     """Cada defeito é ``ContractError`` com a tabela, a partição e a coluna, antes de qualquer
-    gravação: a versão
-    fica em 0 e a pasta da tabela não tem arquivo Parquet, nos dois modos."""
-    origin = source_with_defect(local_location, base, table, alter)
-    root = migrate.open_location(local_location.child(f"delta-{uuid.uuid4().hex[:8]}"))
+    gravação: a versão fica em 0 e a pasta da tabela não tem arquivo Parquet, nos dois modos.
+
+    Os defeitos, na primeira linha: ``data`` fora do valor do caminho da partição; ``sistema``
+    nulo, ``NOT NULL`` no modelo e anulável nos arquivos; ``to`` de três bytes, coluna
+    ``String(2)`` no modelo.
+    """
+    origin = source_with_defect(local_location, base, table, column, value)
     with pytest.raises(ContractError, match=re.escape(fragment)) as refusal:
         migrate.initial_load(con, TABLES[table], origin, root, settings(mode=mode))
     assert str(refusal.value).startswith(f"{table} partição 2026-02-28: ")
@@ -454,47 +478,27 @@ def test_a_partition_off_the_contract_is_refused_without_commit(
     assert list(Path(uri).rglob("*.parquet")) == []
 
 
-
-def with_a_value(number: float) -> Callable[[pa.Table], pa.Table]:
-    """A alteração que troca o ``valor`` da primeira linha por ``number``."""
-
-    def alter(chunk: pa.Table) -> pa.Table:
-        values = chunk.column("valor").to_pylist()
-        values[0] = number
-        return chunk.set_column(
-            chunk.schema.get_field_index("valor"), "valor", pa.array(values, pa.float64())
-        )
-
-    return alter
-
-
 def source_with_nonfinite(
     local_location: LocalLocation, base: source.SourceBase
 ) -> migrate.Location:
     """Uma origem nova com ``cad_lancamentos`` inteira, um ``NaN`` no primeiro chunk da partição
     2026-02-28 e um infinito no da 2026-03-31."""
-    new_root = Path(local_location.child(f"origem-{uuid.uuid4().hex[:8]}"))
+    new_root = Path(unique_child(local_location, "origem"))
     shutil.copytree(base.root / "cad_lancamentos", new_root / "cad_lancamentos")
-    column = source.PARTITIONS["cad_lancamentos"].column
-    for value, number in (("2026-02-28", float("nan")), ("2026-03-31", float("inf"))):
-        first = new_root / "cad_lancamentos" / f"{column}={value}" / "chunk_0.parquet"
-        altered = with_a_value(number)(pq.read_table(first))
-        pq.write_table(
-            altered,
-            first,
-            version="1.0",
-            use_dictionary=False,
-            use_deprecated_int96_timestamps=True,
-        )
+    partition_column = source.PARTITIONS["cad_lancamentos"].column
+    nonfinite_values = {"2026-02-28": float("nan"), "2026-03-31": float("inf")}
+    for value, number in nonfinite_values.items():
+        folder = new_root / "cad_lancamentos" / f"{partition_column}={value}"
+        rewrite_first_chunk(folder, "valor", number)
     return migrate.open_location(str(new_root))
 
 
-def valor_has_min_max(path: str) -> bool:
-    """Verdadeiro quando algum grupo de linhas do arquivo tem mínimo e máximo de ``valor``."""
-    footer = pq.ParquetFile(path)
-    index = footer.schema_arrow.get_field_index("valor")
-    for group in range(footer.metadata.num_row_groups):
-        statistics = footer.metadata.row_group(group).column(index).statistics
+def has_min_max(path: str, column: str) -> bool:
+    """Verdadeiro quando algum grupo de linhas do arquivo tem mínimo e máximo de ``column``."""
+    parquet_file = pq.ParquetFile(path)
+    index = parquet_file.schema_arrow.get_field_index(column)
+    for row_group_index in range(parquet_file.metadata.num_row_groups):
+        statistics = parquet_file.metadata.row_group(row_group_index).column(index).statistics
         if statistics is not None and statistics.has_min_max:
             return True
     return False
@@ -505,6 +509,7 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     base: source.SourceBase,
     con: duckdb.DuckDBPyConnection,
     local_location: LocalLocation,
+    root: migrate.Location,
     mode: str,
 ) -> None:
     """As partições com ``NaN`` ou infinito em ``valor`` gravam a coluna sem mínimo e máximo no
@@ -512,7 +517,6 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     dois lados; e o ``delta_scan`` devolve as duas linhas num filtro acima de todo número finito,
     porque o DuckDB ordena o ``NaN`` e o infinito acima deles (issue #59)."""
     origin = source_with_nonfinite(local_location, base)
-    root = migrate.open_location(local_location.child(f"delta-{uuid.uuid4().hex[:8]}"))
     table = TABLES["cad_lancamentos"]
     loaded, skipped = migrate.initial_load(con, table, origin, root, settings(mode=mode))
     nonfinite_partitions = {"2026-02-28", "2026-03-31"}
@@ -523,7 +527,8 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     # O log: as partições dos não finitos sem o mínimo e o máximo de valor, as outras com eles.
     uri = root.child("cad_lancamentos").uri
     partition_by = schema.table_options(table).partition_by
-    for action in pa.table(DeltaTable(uri).get_add_actions(flatten=True)).to_pylist():
+    add_actions = pa.table(DeltaTable(uri).get_add_actions(flatten=True)).to_pylist()
+    for action in add_actions:
         value = action[f"partition.{partition_by}"]
         has_bounds = value not in nonfinite_partitions
         assert (action["min.valor"] is not None) == has_bounds, value
@@ -534,18 +539,20 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     files = DeltaTable(uri).file_uris()
     nan_file = next(path for path in files if f"{partition_by}=2026-02-28" in path)
     finite_file = next(path for path in files if f"{partition_by}=2026-01-31" in path)
-    assert not valor_has_min_max(nan_file)
-    assert valor_has_min_max(finite_file)
+    assert not has_min_max(nan_file, "valor")
+    assert has_min_max(finite_file, "valor")
 
     # O relatório não falha no CAST para DECIMAL e confere os não finitos dos dois lados.
     report = migrate.load_report(con, table, origin, root, loaded, skipped)
     assert report.matches
     for partition in report.partitions:
         count = 1 if partition.value in nonfinite_partitions else 0
-        assert partition.source_nonfinite == partition.delta_nonfinite == {"valor": count}
+        assert partition.source_nonfinite == {"valor": count}, partition.value
+        assert partition.delta_nonfinite == {"valor": count}, partition.value
 
     query = f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 1e300"
     assert con.execute(query).fetchone()[0] == 2
+
 
 def test_load_report_matches_and_detects_a_deleted_row(
     base: source.SourceBase,
@@ -553,33 +560,30 @@ def test_load_report_matches_and_detects_a_deleted_row(
     con: duckdb.DuckDBPyConnection,
     root: migrate.Location,
 ) -> None:
-    """O relatório confere contagem e somas por partição, ``None`` numa tabela sem partição, e
-    uma linha apagada
-    do Delta aparece como diferença na partição dela."""
+    """O relatório confere contagem e somas por partição, ``None`` numa tabela sem partição, e uma
+    linha apagada do Delta aparece como diferença na partição dela."""
     for name in ("cad_aliquotas", "cad_operacoes"):
         loaded, skipped = migrate.initial_load(con, TABLES[name], origin, root, settings())
         report = migrate.load_report(con, TABLES[name], origin, root, loaded, skipped)
-        assert (
-            report.matches
-            and report.skipped == ()
-            and loaded_values(report.loaded) == loaded_values(loaded)
-        ), name
+        assert report.matches, name
+        assert report.skipped == (), name
+        assert loaded_values(report.loaded) == loaded_values(loaded), name
 
-    aliquotas = migrate.load_report(con, TABLES["cad_aliquotas"], origin, root, [], [])
-    assert [partition.value for partition in aliquotas.partitions] == [None]
-    assert aliquotas.partitions[0].source_rows == base.rows["cad_aliquotas"]
-    assert aliquotas.partitions[0].source_sums.keys() == {"fator"}
-    assert aliquotas.conversions == (
+    rates_report = migrate.load_report(con, TABLES["cad_aliquotas"], origin, root, [], [])
+    assert [partition.value for partition in rates_report.partitions] == [None]
+    assert rates_report.partitions[0].source_rows == base.rows["cad_aliquotas"]
+    assert rates_report.partitions[0].source_sums.keys() == {"fator"}
+    assert rates_report.conversions == (
         "id: int32 -> int64",
         "id_conta_origem: int32 -> int64",
         "id_conta_destino: int32 -> int64",
     )
 
     uri = root.child("cad_operacoes").uri
-    first = con.execute(
+    deleted_id = con.execute(
         f"SELECT min(id_operacao) FROM delta_scan('{uri}') WHERE data_str = '2026-03-31'"
     ).fetchone()[0]
-    DeltaTable(uri).delete(f"data_str = '2026-03-31' AND id_operacao = {first}")
+    DeltaTable(uri).delete(f"data_str = '2026-03-31' AND id_operacao = {deleted_id}")
     report = migrate.load_report(con, TABLES["cad_operacoes"], origin, root, [], [])
     assert not report.matches
     differing = [partition for partition in report.partitions if not partition.matches]
@@ -593,7 +597,7 @@ def test_main_migrates_the_whole_base(
     """A linha de comando sobre a base inteira: as tabelas sem partição antes das particionadas,
     o relatório em JSON com as 12 tabelas iguais e o que ficou fora do modelo, saída 0; a
     segunda execução não grava nada."""
-    root = local_location.child(f"delta-{uuid.uuid4().hex[:8]}")
+    root = unique_child(local_location, "delta")
     report_path = Path(local_location.child("relatorio-migracao.json"))
     argv = [
         "--metadata",
@@ -612,13 +616,15 @@ def test_main_migrates_the_whole_base(
     assert "12 tabelas conferidas, contagens e somas iguais" in out
 
     document = json.loads(report_path.read_text())
-    assert [table["table"] for table in document["tables"]][-4:] == [
+    table_order = [table["table"] for table in document["tables"]]
+    assert table_order[-4:] == [
         "cad_operacoes",
         "rel_contrato_operacao",
         "cad_contratos",
         "cad_lancamentos",
     ]
-    assert len(document["tables"]) == 12 and all(table["matches"] for table in document["tables"])
+    assert len(document["tables"]) == len(TABLES)
+    assert all(table["matches"] for table in document["tables"])
     assert document["outside_model"] == OUTSIDE_MODEL
     rows = {}
     for table in document["tables"]:
@@ -635,14 +641,15 @@ def test_main_refuses_a_model_with_violations(
     base: source.SourceBase, local_location: LocalLocation, capsys: pytest.CaptureFixture
 ) -> None:
     """O modelo de referência viola o contrato: saída 2 com a lista, sem ler a origem."""
+    never_written = local_location.child("nunca-gravada")
     argv = [
         "--metadata",
         "reference_model.model_db_projetado:Base.metadata",
         "--source",
         str(base.root),
         "--root",
-        local_location.child("nunca-gravada"),
+        never_written,
     ]
     assert migrate.main(argv) == 2
     assert "modelo fora do contrato" in capsys.readouterr().err
-    assert not Path(local_location.child("nunca-gravada")).exists()
+    assert not Path(never_written).exists()

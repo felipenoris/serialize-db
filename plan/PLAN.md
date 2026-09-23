@@ -169,7 +169,7 @@ execução, está na seção "Pipeline de atualização mensal".
 
 As medições, com a data e o ambiente de cada uma, estão em [`POC.md`](POC.md) ("O que a fronteira
 por lotes mostrou", de 2026-09-20, e "O que a sessão única mostrou", de 2026-09-22), e as asserções
-em `test_duckdb.py`, `test_pyarrow.py` e `test_parallel.py`. O que elas fixaram:
+em `test_duckdb.py`, `test_pyarrow.py` e `tests/test_engine_duckdb.py`. O que elas fixaram:
 
 - **`stream` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à memória
   enquanto os lotes guardados cabem em 64 MiB, e a um arquivo intermediário o lote que não cabe e os
@@ -436,7 +436,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   trabalha no lote atual enquanto a consulta produz o
   seguinte, ou enquanto a biblioteca grava o anterior, e nenhuma combinação de `stream`, `loader` e
   outras primitivas, de uma thread ou de várias, trava: outro comando espera só a consulta em curso
-  (`test_parallel.py`, [`POC.md`](POC.md)).
+  (`tests/test_engine_duckdb.py`, [`POC.md`](POC.md)).
 - O cliente não toca o lock: as primitivas o tomam e soltam, e `with run.sandbox.session() as
   connection:` dá a conexão crua ao que elas não cobrem, com o lock tomado pelo bloco. O lock é
   reentrante, então uma primitiva chamada dentro do bloco, na mesma thread, não trava, e um `stream`
@@ -471,7 +471,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   auditoria; `publish` confere por `version_diff` que nenhuma alteração de dados entrou na tabela
   desde a versão fixada e aborta com `ExecutionConflict` quando entrou, para que duas execuções
   abertas na mesma versão não publiquem a mesma faixa; um commit só de metadados ou de manutenção
-  (`reconcile`, `compact`, `vacuum`) passa e atualiza a versão fixada (`test_parallel.py`).
+  (`reconcile`, `compact`, `vacuum`) passa e atualiza a versão fixada (`tests/test_execution.py`).
 - Todo identificador que a biblioteca emite, tabela ou coluna, vai entre aspas duplas: `to`, coluna
   de `cad_contratos`, é palavra reservada no DuckDB e no Redshift, e `timestamp`, coluna de
   `cad_lancamentos`, no Redshift; sem aspas, `CREATE TABLE t (to VARCHAR(2))` falha no DuckDB

@@ -9,8 +9,10 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 um `BatchStream` de `pa.RecordBatch` e `loader` recebe lotes por `write`; `query` devolve a
 `pa.Table` que `stream` montaria, e `load` entrega ao `loader` os lotes de uma `pa.Table`, de um
 `RecordBatch`, de um `RecordBatchReader` ou de um iterável ([`PLAN.md`](PLAN.md), seção "A troca de
-dados com o código cliente"). Os esboços `SandboxEngine`, `BatchStream` e `Loader` de
-`test_parallel.py`, na sessão única, são a referência da implementação.
+dados com o código cliente"). A implementação, `serialize_db.engine.duckdb`, é a referência; os
+esboços `SandboxEngine`, `BatchStream` e `Loader` de `test_parallel.py` que a precederam saíram
+das suítes de estudo, e os casos que só eles tinham estão em `tests/test_engine_duckdb.py`
+(decisão do usuário de 2026-09-23).
 
 Chave primária, unicidade e chave estrangeira ficam fora do DDL dos dois sandboxes (`schema.md`), e
 a auditoria é onde elas são aplicadas. Cada verificação sai do `Table`, sem declaração adicional no
@@ -94,12 +96,9 @@ particionado, banco em arquivo, `test_audit_queries` com o texto medido em bytes
 pelo DuckDB, pelo delta-rs e pelo PyArrow, um `cursor()` por thread, a conexão compartilhada sem lock
 que troca os resultados das threads, o arquivo do DuckDB recusado com outra configuração, dois
 comandos em dois cursores, o intervalo de troca do GIL pago por cada retomada ao lado de uma thread
-Python ocupada) e `test_parallel.py` (o motor com a sessão única e a sessão a mais de
-`new_session`, os esboços `BatchStream`, que entrega cada lote à memória até o orçamento e ao
-arquivo depois dele e cancela a consulta no `close`, e `Loader`, que confere o nome sem o lock e
-cria a tabela no `close`, o pipeline de três estágios, a ingestão de quatro tabelas por
-`delta_scan` numa sessão a mais por tabela, e cargas Arrow e `COPY ... TO` pedidos por quatro
-threads à sessão) e
+Python ocupada) e `test_parallel.py` (a ingestão de quatro tabelas por `delta_scan` em cursores
+do DuckDB cru, as escritas paralelas no Delta, e cargas Arrow e `COPY ... TO` pedidos por quatro
+threads a uma conexão) e
 `test_pyarrow.py::test_record_batch_cast_and_conversions_share_buffers`; `test_duckdb.py` mede a
 memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 
@@ -194,7 +193,7 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   as colunas do contrato, e não cria objeto no sandbox: é a origem que a auditoria já precisa nas
   chaves fora da partição, e a que o pipeline usa para ler a tabela cujo nome no sandbox é a saída
   do `loader`. No Redshift ele é a staging da [etapa 5](PLAN-STAGE-5.md).
-- **`stream`** é o `BatchStream` de `test_parallel.py`: um statement Core vira a cópia prefixada de
+- **`stream`** devolve um `DuckDBStream`: um statement Core vira a cópia prefixada de
   `sql.prefixed(prefix="")`, recebe os valores do cliente por `statement.params(**params)` e é
   compilado por `duckdb_engine.Dialect(paramstyle="qmark")`, o estilo do driver do DuckDB, sem
   `literal_binds` e com `render_postcompile=True`; `construct_params()` junta as constantes e os
@@ -227,7 +226,7 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   livre, contra 0,908 s e 876 MB (leituras de 2026-09-23, [`POC.md`](POC.md)).
 - **`query`** roda sob o lock, pelo caminho de compilação de `stream` para um statement e por `bind`
   para um texto pronto, e devolve `to_arrow_table()`, sem arquivo.
-- **`loader`** é o `Loader` de `test_parallel.py`, com a recusa do nome ocupado na abertura:
+- **`loader`** devolve um `DuckDBLoader`, com a recusa do nome ocupado na abertura:
   `duckdb_tables()` e `duckdb_views()` dizem o que existe, e um nome tomado levanta `SandboxError`
   com a mensagem que aponta `run.published(table)` para ler a versão publicada. O `CREATE TABLE IF
   NOT EXISTS` não serve de guarda: sobre uma view ele passa em silêncio e o `INSERT ... BY NAME`
@@ -243,7 +242,7 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   leitura ver dado velho: antes do `close`, a leitura da tabela falha com `CatalogException`, na
   sessão principal e numa sessão a mais, e a barreira por tabela que esperaria a carga ficou fora
   das etapas (decisão do usuário de 2026-09-23,
-  `test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`).
+  `test_engine_duckdb.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`).
   Depois da guarda, `write` faz `cast(batch, table)` na thread do cliente e enfileira,
   e a thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4, sem a sessão. O `close` registra
   o leitor do arquivo com um nome único, que não é o de uma tabela do modelo, porque um leitor
@@ -316,11 +315,13 @@ uma chave única.
 | Poda da ingestão | `test_ingest_opens_only_the_range_of_partitions` | A ingestão de partições contíguas e de uma lista salteada abre só os arquivos do intervalo, lidos pelo log `FileSystem` do DuckDB, e traz só as linhas pedidas. |
 | Parâmetros | `test_statement_parameters_expand_in_lists` | Um statement com `IN` de lista, `NOT IN` e `bindparam(..., expanding=True)` roda por `query` e por `stream`; um nome de parâmetro a mais ou a menos é `SqlError` antes de rodar. |
 | Versão publicada | `test_published_reads_the_pinned_version` | `published` lê a versão fixada sem criar objeto no sandbox, e o `loader` da mesma tabela fica com o nome do modelo. |
-| Stream | `test_stream_delivers_each_batch_while_the_query_runs` | Os casos de `test_parallel.py`: o primeiro lote com a consulta ainda rodando, a ordem, nenhum lote no arquivo com o cliente acompanhando, um comando no meio da leitura que só roda depois do fim da consulta, a tabela temporária lida pelo stream, o stream dentro de `session()`, o abandono que para a consulta e apaga o arquivo, e o erro da consulta na construção ou na leitura seguinte ao último lote, da memória ou do arquivo. |
+| Stream | `test_stream_delivers_each_batch_while_the_query_runs` | O primeiro lote com a consulta ainda rodando, a ordem, nenhum lote no arquivo com o cliente acompanhando, um comando no meio da leitura que só roda depois do fim da consulta, a tabela temporária lida pelo stream, o stream dentro de `session()`, o abandono que para a consulta e apaga o arquivo, e o erro da consulta na construção ou na leitura seguinte ao último lote, da memória ou do arquivo. |
 | Orçamento | `test_stream_spills_after_the_budget_and_keeps_the_order` | Com o cliente lento e um orçamento de dois lotes, a memória nunca passa do orçamento, o resto vai para o arquivo, as linhas saem todas e na ordem, e o `close` apaga o arquivo. |
 | Cancelamento | `test_close_and_cleanup_interrupt_the_running_query` | O `close` depois do primeiro lote de uma varredura longa cancela a consulta, e a sessão continua usável; o `cleanup` cancela a ordenação de um stream que outra thread ainda constrói. |
-| Loader | `test_loader_creates_and_inserts_in_one_transaction_on_close` | Nada existe antes do `close`; exceção do cliente, lote recusado pelo `cast` e erro do `INSERT` não deixam tabela; `rows`. |
+| Loader | `test_loader_creates_and_inserts_in_one_transaction_on_close` | Nada existe antes do `close`; exceção do cliente, lote recusado pelo `cast` e erro do `INSERT` não deixam tabela; `rows`; o loader abandonado sem `close` apaga o arquivo de transbordo e não cria a tabela. |
 | Ordem do exemplo mensal | `test_loader_opened_after_a_stream_does_not_wait_for_its_query` | Com `stream` e depois `loader` no mesmo `with`, o primeiro lote chega com a consulta rodando, e a tabela tem todas as linhas no fim. |
+| Pipeline de três estágios | `test_three_stage_pipeline_overlaps_read_work_and_write` | Leitura por `stream`, trabalho do cliente por lote e escrita por `loader` numa sessão única, sobre um banco em arquivo, dão as mesmas linhas que a versão por lote sem threads e que a versão por `pa.Table`; os tempos são leituras do relatório. |
+| Carga esquecida | `test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` | Um `load` disparado numa thread sem `result()`: antes do `close` do `loader`, a leitura da tabela falha com `CatalogException` na sessão principal e numa sessão a mais, em vez de ler dado velho. |
 | Nome ocupado | `test_loader_refuses_a_name_in_use` | O `loader` sobre a view do `ingest`, sobre a tabela do `ingest` materializado e sobre a tabela de um `loader` anterior levanta `SandboxError` antes do primeiro lote, e o objeto que estava lá não muda. |
 | Formas por tabela | `test_query_and_load_match_stream_and_loader` | `query` de um statement e de um texto igual a `stream(...).read_all()`; `load` de `pa.Table`, `RecordBatch`, leitor e iterável com o mesmo resultado; DataFrame recusado com a mensagem. |
 | Ciclo pandas | `test_pandas_round_trip_keeps_contract_types` | `to_pandas(types_mapper=pd.ArrowDtype)` e `from_pandas` mantêm `decimal128(18, 2)` e `date32`. |
@@ -337,8 +338,8 @@ Os módulos `serialize_db.audit`, `serialize_db.engine` (o protocolo `Engine`, `
 `DuckDBStream` e o `DuckDBLoader` dele), com `SandboxError` em `serialize_db.errors`, e os casos de
 `tests/test_audit.py` e `tests/test_engine_duckdb.py` substituem a interface e os rascunhos
 executados em 2026-09-21: as assinaturas e as docstrings estão no código e na documentação do
-`pdoc`. O motor segue os esboços de `test_parallel.py`, com a sessão a mais de `new_session` por
-`DuckDBEngine(..., parent=motor)`. O que a implementação mostrou está em [`POC.md`](POC.md), seção
+`pdoc`. A sessão a mais de `new_session` é um `DuckDBEngine(..., parent=motor)`. O que a
+implementação mostrou está em [`POC.md`](POC.md), seção
 "O que a implementação da etapa 4 mostrou".
 
 ## Decisões pendentes
@@ -351,8 +352,8 @@ a interface do motor, com `query(statement_or_sql, params=None)` no lugar de `qu
 `**options`, `checks` sem `prefix` e o `rewrite` de `export_partition` sem `stream`; o `loader` que
 confere o nome num cursor próprio e cria a tabela no `close`, numa transação; o `stream` híbrido,
 com os lotes em memória até 64 MiB e o arquivo com LZ4 depois; e o `interrupt()` no `close` do
-stream e no `cleanup`. Os esboços de `test_parallel.py` implementam as três últimas, com os casos de
-cada uma.
+stream e no `cleanup`. O motor implementa as três últimas, e `tests/test_engine_duckdb.py` tem os
+casos de cada uma.
 
 As quatro decisões que o usuário tomou em 2026-09-22 — o `loader` recusando com `SandboxError` um
 nome já ocupado no sandbox, o `memory_limit` no padrão do DuckDB, o banco em arquivo com

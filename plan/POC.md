@@ -2070,7 +2070,7 @@ responderam às decisões pendentes da etapa 6, e os casos entraram nas suítes 
 a criar a tabela no `close`, na transação do `COPY` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)), e
 [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN.md`](PLAN.md), [`delta.md`](delta.md) e
 [`docs/index.md`](../docs/index.md) escrevem a regra. Os casos:
-`test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` e
+`test_engine_duckdb.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` e
 `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`.
 
 ## O que a sonda do dataclass congelado de `Database` mostrou
@@ -2343,3 +2343,149 @@ chave primária, partição com `partition_source`, `String(n)`, `Double`, `Nume
 comparação do `NaN` e cada medida isolada ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), "O texto da
 auditoria no Redshift"), e [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) registra que o `search_path` resolve
 os nomes sem esquema.
+
+## O que a revisão do código de 2026-09-23 mostrou
+
+Em 2026-09-23, no mesmo macOS, a revisão de `src/` e de `tests/` contra as regras de código do
+repositório rodou cada arquivo alterado sem variável e com a raiz local, e as suítes de estudo
+perderam os rascunhos do pacote (decisão do usuário do mesmo dia). O que as execuções mostraram:
+
+- **O gancho que pula as suítes.** `pytest_collection_modifyitems` conferia `marker in
+  item.keywords`, e o id de um parâmetro entra nos keywords: o caso `[redshift]` de um teste
+  parametrizado por dialeto foi pulado como parte da suíte Redshift. O gancho confere a marca do
+  item (`get_closest_marker`), e a seleção dos 453 testes coletados saiu igual à anterior.
+- **A máscara do relatório.** `record` mascarava só um valor de texto, e o `repr` de um erro
+  guardado num dicionário passava. A máscara vai na saída, na impressão e no JSON: uma sessão com
+  credenciais falsas num dicionário, numa lista e num texto não as mostrou em nenhuma das duas, e o
+  JSON continuou válido.
+- **O loader abandonado.** A thread do loader terminava sem apagar o arquivo de transbordo, que
+  ficava até o `cleanup`, ao contrário do que a docstring e a [etapa 4](PLAN-STAGE-4.md) diziam. A
+  thread terminada com erro apaga o arquivo, e a asserção da pasta vazia falha no código anterior.
+- **Um teste gravava fora da raiz autorizada.** `test_temporary_folder_is_created_and_removed`
+  criava a pasta do `DuckDBConfig()` por `tempfile.mkdtemp`, na pasta temporária do sistema; o
+  teste aponta `tempfile.tempdir` para a raiz local.
+- **O ambiente que um teste deixava no processo.** O `test_prepare_environment` de
+  `test_stdlib.py` deixava `NO_PROXY` e `AWS_DEFAULT_REGION` definidas depois do teste: o `delenv`
+  de uma variável ausente não registra o que restaurar.
+- **A espera pela ordenação.** `duckdb_memory()`, lida numa sessão a mais, mostrou memória
+  `ORDER_BY` cerca de 13 ms depois do início da ordenação de 20.000.000 de linhas, e o `interrupt`
+  nesse ponto levantou `INTERRUPT Error: Interrupted!`; o teste do `cleanup` espera essa memória,
+  com prazo de 10 s, no lugar de um `sleep` de 0,2 s. O `close` do stream interrompeu em 0,026 a
+  0,030 s, com `OSError`.
+- **O erro de conversão no meio do stream** chegou como `OSError` do leitor Arrow, depois de 25 ou
+  26 lotes, nos dois orçamentos (seis execuções).
+- **Os casos que vieram dos esboços**, agora sobre o motor: 28 de 30 lotes foram ao arquivo, com
+  pico de 1,9 MB em memória; o `cleanup` levou 0,002 s; o pipeline de três estágios levou 0,55 a
+  0,58 s pela `pa.Table`, 0,75 a 0,88 s em série e 0,41 a 0,46 s encadeado (três execuções).
+- **A consulta DNS de `test_probes.py`.** Nomes `.invalid` sem cache levaram de 54 a 1.534 ms, a
+  faixa de nomes inexistentes de `example.com` (43 a 1.368 ms), e `localhost`, 0,3 ms: a consulta
+  chega ao servidor DNS, e a docstring do módulo a menciona.
+- **Os valores fixados em `test_deltalake.py`**, com o deltalake 1.6.4 no macOS arm64: o
+  `drop_column_not_null` grava a operação `CHANGE COLUMN` no histórico, e a leitura de uma versão
+  cujo arquivo o `vacuum` apagou levanta `FileNotFoundError`; falta a confirmação no Linux.
+- **A base fictícia refeita por linha.** Os construtores de `tests/source_db_projetado.py` passaram
+  a montar uma linha por dicionário; as 26 tabelas, com esquema, metadados, `-0.0` e `NaN`, e os 63
+  arquivos gravados saíram byte a byte iguais aos anteriores.
+
+**Consequência**: `src/serialize_db/engine/duckdb.py` apaga o arquivo do loader abandonado,
+`tests/conftest.py` confere a marca e mascara na saída, e [`CURRENT_STATE.md`](CURRENT_STATE.md)
+registra as contagens novas. As correções que mudam o comportamento das suítes que só rodam no
+ambiente alvo passaram pelo substituto local da seção seguinte.
+
+## O que o substituto local das suítes S3 e Redshift mostrou
+
+Em 2026-09-23, no mesmo macOS, as correções que as revisões de 2026-09-22 e 2026-09-23 acharam nas
+suítes que só rodam no ambiente alvo rodaram num substituto local descartável, no scratchpad da
+sessão: o servidor do moto 5.2.3 no lugar do S3 e do STS, e um plugin do pytest que troca
+`redshift_connector.connect` por uma conexão sobre o DuckDB em memória, com o `COPY` e o `UNLOAD`
+feitos pelo `boto3` e pelo `pyarrow` sobre o moto. O substituto confere só o código Python dos
+testes.
+
+- **As três suítes** (`test_s3.py`, `test_redshift.py` e `test_redshift_transactions.py`) deram 35
+  aprovados e 1 pulado, a Data API sem `SERIALIZE_DB_REDSHIFT_WORKGROUP`, antes e depois das
+  correções: as extrações mecânicas da revisão também rodam.
+- **Cada correção do tratamento de falha**, com a falha provocada no substituto e o código anterior
+  e o corrigido rodados lado a lado:
+  - sem o manifesto de um `UNLOAD ... MANIFEST` que passou, o código anterior aprovou
+    `test_stream_by_unload_with_literal_values` com `'unload': '[]'` no relatório, registrou `ok:
+    sem manifesto linhas` para a tabela temporária e caiu com `TypeError` nos casos do `SUPER` e do
+    `NaN`; o corrigido reprova os quatro casos com `o UNLOAD passou e não gravou o manifesto em
+    <destino>`, por `unloaded_manifest`;
+  - com o `UNLOAD ... PARTITION BY` recusado (`0A000`), o anterior pulou
+    `test_unload_partition_by_and_register` pela condição `share_database`, e o corrigido reprova,
+    porque o comando passou no ambiente alvo em 2026-09-21;
+  - com o `INSERT` de A recusado em `test_writes_to_distinct_tables`, o anterior deixou a transação
+    abortada de A aberta, com os bloqueios dela, enquanto `finish` esperava B por até 120 s
+    (`FINISH_WITHIN`); o corrigido registra o `ROLLBACK` depois do erro, por `end_transaction`;
+  - com o `SELECT pg_backend_pid()` recusado, o anterior caiu com `TypeError` na abertura do
+    participante, no `.result[0][0]` do resultado vazio; o corrigido registra o erro em
+    `redshift.transactions.pid.A` e `redshift.transactions.pid.B`, roda o cenário, e `finish`
+    registra a sessão presa sem pid em vez de encerrá-la;
+  - `outcome` e `reading` pegam só `SERVICE_ERRORS` (`redshift_connector.Error`,
+    `botocore.exceptions.ClientError`, `DeltaError`, `pa.ArrowException` e `OSError`): um
+    `ProgrammingError` saiu `ProgrammingError: 42P01 relation "x" does not exist detalhe`, e
+    `ZeroDivisionError` e `AttributeError` subiram. No código anterior, um erro do próprio teste
+    virava leitura, e a asserção de `test_copy_varchar_overflow`, que espera o `COPY` recusado,
+    passava com ele.
+- **As correções de forma e de relatório**: `describe_error` em `tests/conftest.py`, usado pelas
+  duas suítes Redshift e pela limpeza, com o erro do driver em `XX000 <mensagem>` no lugar do
+  dicionário cru; `redshift.cleanup` no relatório (`46 de 46 tabela(s) apagada(s) de emulador`);
+  `statement_timeout` e `pid` por participante; os participantes como gerenciadores de contexto, e A
+  fechada quando B não conecta; a fixture `duckdb_connection` pedindo `s3_location`, que põe
+  `AWS_REGION` no ambiente antes do secret, e fechando a conexão; `run_on_own_connection` no lugar
+  do `count_from` que escolhia o modo. Em `test_s3.py`: a origem das credenciais e o proxy de
+  `test_boto3_credential_source` no relatório antes do STS, que pode não responder; em
+  `test_data_file_encryption`, a criptografia e a chave KMS do arquivo do delta-rs comparadas com as
+  de um objeto que o `boto3` grava sem opção (`None` nos dois, no moto); em
+  `test_boto3_list_copy_delete`, a listagem do `list_objects_v2` comparada com
+  `DeltaTable(uri).file_uris()`, e não com `storage.data_files()`, que sai do mesmo paginador; a
+  docstring da extensão ausente.
+- **O que o substituto não mostra**: o DuckDB não faz uma transação esperar a outra, e `b_espera_a`
+  saiu `False` nos cinco cenários; o moto não devolve `ServerSideEncryption`; as credenciais vieram
+  de variáveis (`env`), sem proxy; a Data API foi pulada.
+
+**Consequência**: as correções ficam nas suítes, e a próxima execução delas no ambiente alvo lê o
+que o substituto não tem: os bloqueios da [etapa 8](PLAN-STAGE-8.md), a criptografia padrão do
+bucket e a Data API. [`CURRENT_STATE.md`](CURRENT_STATE.md) registra as suítes corrigidas.
+
+## O que o substituto local versionado mostrou
+
+Em 2026-09-23, no mesmo macOS, o substituto passou a `tests/emulator.py`, ligado por
+`SERIALIZE_DB_TEST_EMULATOR` em `tests/conftest.py`, e o moto 5.2.3 entrou fixado no grupo `dev`
+com o `flask` 3.1.3 e o `flask-cors` 6.0.5.
+
+- **As dependências do moto.** O `moto[server]==5.2.3` trouxe 61 pacotes, entre eles `cfn-lint`,
+  `docker`, `sympy` e `aws-xray-sdk`; o `moto[s3]` com o `flask` e o `flask-cors` trouxe 28 e
+  serviu o S3 e o STS por `python -m moto.server`, no ar em 0,16 s, com o 412 da escrita
+  condicional. Com só `AWS_REGION` definida, o `boto3` 1.43.98 tomou a região do perfil do usuário
+  e o `CreateBucket` sem `LocationConstraint` recebeu `IllegalLocationConstraintException`: o
+  substituto define também `AWS_DEFAULT_REGION`.
+- **O secret do DuckDB contra o moto.** No DuckDB 1.5.5, o secret `credential_chain` com
+  `REGION 'us-east-1'` foi a `https://emulador.s3.us-east-1.amazonaws.com`, porque o DuckDB não lê
+  `AWS_ENDPOINT_URL`. Com só o `ENDPOINT`, o que `Storage.duckdb_setup` montava, o endereço saiu
+  `https://emulador.127.0.0.1:<porta>`, sem resolução de nome; com `URL_STYLE 'path'`, erro de SSL;
+  com `USE_SSL false` sem `URL_STYLE`, o mesmo nome sem resolução; com as três opções, a leitura.
+  O endereço por caminho é o que o delta-rs e o PyArrow usam com um endpoint próprio.
+- **O substituto sem remendos.** A versão descartável trocava `redshift_connector.connect` e
+  `Storage.duckdb_setup` em tempo de execução. Na versionada, `connect_redshift` escolhe a conexão
+  do substituto, a biblioteca monta o secret com o endpoint, e as duas suítes criam o secret delas
+  por `duckdb_s3_secret`, com as opções da biblioteca. O código anterior a este `tests/conftest.py`
+  não alcança o substituto: um lado a lado roda o arquivo de teste antigo com o `conftest.py`
+  atual.
+- **As execuções.** As três suítes deram 35 aprovados e 1 pulado, a Data API, com a variável só.
+  Com a raiz local, a suíte inteira deu 456 aprovados e 1 pulado em 70 s, e os casos `s3` de
+  `test_storage.py` e de `test_delta.py` rodaram no moto pelo `Storage.duckdb_connect`. Os três
+  testes de `test_conftest_redshift.py`, que conferem o caminho do driver, reprovaram com o
+  substituto ligado até o próprio teste desligá-lo. Num ambiente despido (`env -i`, com `HOME` e
+  `TMPDIR` em pastas vazias e `.venv/bin/python -m pytest`), as três suítes deram o mesmo
+  resultado, as duas pastas continuaram vazias, o repositório não mudou, e o relatório não trouxe
+  resposta da AWS de verdade (chave inválida, assinatura, `amazonaws.com`). O moto saiu com a
+  sessão em cada execução.
+- **As falhas provocadas**, sobre o código corrigido: `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST`
+  reprovou os quatro casos do manifesto; `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` com `PARTITION BY`
+  reprovou `test_unload_partition_by_and_register`, com o `INSERT` de A levou ao `ROLLBACK`, e com
+  `pg_backend_pid` registrou o erro dos dois participantes e rodou o cenário.
+
+**Consequência**: `Storage.duckdb_setup` leva ao secret o endereço por caminho e, num endpoint
+`http`, `USE_SSL false` ([`PLAN-STAGE-3.md`](PLAN-STAGE-3.md)), e
+[`CURRENT_STATE.md`](CURRENT_STATE.md) registra o substituto e as contagens.

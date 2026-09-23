@@ -11,11 +11,11 @@ mesmo banco, com o seu lock.
 As primitivas:
 
 - ``ingest`` cria uma view (ou tabela, com ``materialize=True``) com o nome do modelo sobre
-  ``delta_scan(uri, version := v)``, e ``published`` devolve a versão fixada como origem de consulta,
-  sem ocupar nome no sandbox;
-- ``stream`` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à memória enquanto
-  os lotes guardados cabem em 64 MiB, e a um arquivo Arrow IPC com LZ4 na pasta de transbordo o lote
-  que não cabe e os seguintes; ``query`` devolve a ``pa.Table``;
+  ``delta_scan(uri, version := v)``, e ``published`` devolve a versão fixada como origem de
+  consulta, sem ocupar nome no sandbox;
+- ``stream`` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à memória
+  enquanto os lotes guardados cabem em 64 MiB, e a um arquivo Arrow IPC com LZ4 na pasta de
+  transbordo o lote que não cabe e os seguintes; ``query`` devolve a ``pa.Table``;
 - ``loader`` confere o nome na abertura, grava os lotes num arquivo numa thread auxiliar e, no
   ``close``, cria a tabela e a carrega num único ``INSERT ... BY NAME``, numa transação; ``load`` é
   a forma por tabela;
@@ -64,8 +64,19 @@ from sqlalchemy.sql.visitors import iterate
 
 from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
+from serialize_db.engine import ExportMode
 from serialize_db.errors import ContractError, RegistrationRefused, SandboxError, SqlError
-from serialize_db.schema import cast, check_partition_value, ddl, quoted, sql_type, table_options
+from serialize_db.schema import (
+    cast,
+    check_partition_value,
+    ddl,
+    double_columns,
+    literal,
+    quoted,
+    sequential_key,
+    sql_type,
+    table_options,
+)
 from serialize_db.storage import Storage
 
 __all__ = ["DuckDBConfig", "DuckDBEngine"]
@@ -82,7 +93,7 @@ _SPOOL_OPTIONS = pa.ipc.IpcWriteOptions(compression="lz4")
 
 # O orçamento de memória de cada stream: 64 MiB de lotes guardados à espera do cliente; com o
 # cliente atrasado, o pico do processo ficou em 297 MB, contra 522 MB com 256 MiB (2026-09-23).
-MEMORY_BUDGET = 64 * 2**20
+_MEMORY_BUDGET = 64 * 2**20
 
 # A mensagem que recusa o que não é Arrow e aponta a conversão sem cópia.
 _ARROW_ONLY = ("recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iterável de lotes; um "
@@ -92,14 +103,9 @@ _ARROW_ONLY = ("recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iter
 _END = object()
 
 
-def _literal(value: str) -> str:
-    """O literal SQL de um texto, com a aspa simples dobrada."""
-    return "'" + value.replace("'", "''") + "'"
-
-
 def _delta_scan(uri: str, version: int) -> str:
     """A leitura da tabela Delta presa a uma versão, no texto do DuckDB."""
-    return f"delta_scan({_literal(uri)}, version := {int(version)})"
+    return f"delta_scan({literal(uri)}, version := {int(version)})"
 
 
 # ---------------------------------------------------------------- a compilação
@@ -116,21 +122,22 @@ def _required_parameters(statement: sa.sql.ClauseElement) -> set[str]:
 
 
 def _statement_metadata(statement: sa.sql.ClauseElement) -> sa.MetaData | None:
-    """O ``MetaData`` das tabelas do contrato que o statement cita, o que ``sql.prefixed`` recebe."""
+    """O ``MetaData`` das tabelas do contrato que o statement cita, o que ``sql.prefixed``
+    recebe."""
     for table in find_tables(statement, include_crud=True):
         if isinstance(table, sa.Table):
             return table.metadata
     return None
 
 
-def compiled_statement(statement: sa.sql.ClauseElement,
-                       params: Mapping[str, object] | None) -> tuple[str, list[object]]:
+def _compiled_statement(statement: sa.sql.ClauseElement,
+                        params: Mapping[str, object] | None) -> tuple[str, list[object]]:
     """O texto do DuckDB e a lista posicional de um statement Core com os valores do cliente.
 
     Os nomes de ``params`` fecham com os ``bindparam`` sem valor, ou é ``SqlError``: ``params``
     ignora o nome a mais, e o valor que falta seria ``InvalidRequestError``. A cópia prefixada põe
     todo nome entre aspas; ``render_postcompile`` expande o ``IN`` de lista e o ``bindparam``
-    expansível. Protegida: o motor a usa em ``query`` e ``stream``.
+    expansível.
     """
     values = dict(params or {})
     required = _required_parameters(statement)
@@ -156,9 +163,10 @@ def compiled_statement(statement: sa.sql.ClauseElement,
 class _Spool:
     """O que a thread da consulta entrega ao cliente, protegido pela ``condition``.
 
-    ``in_memory`` guarda os lotes que cabem no orçamento; ``spilled`` conta os lotes gravados no
-    arquivo. Depois do primeiro lote no arquivo, todo lote seguinte vai para ele, para a ordem da
-    consulta se manter: o cliente esvazia a memória antes de ler o arquivo.
+    ``schema`` é o do leitor da consulta, que existe antes do primeiro lote; ``in_memory`` guarda os
+    lotes que cabem no orçamento, e ``memory_bytes`` o tamanho deles; ``spilled`` conta os lotes
+    gravados no arquivo. Depois do primeiro lote no arquivo, todo lote seguinte vai para ele, para a
+    ordem da consulta se manter: o cliente esvazia a memória antes de ler o arquivo.
     """
 
     condition: threading.Condition = dataclasses.field(default_factory=threading.Condition)
@@ -197,12 +205,14 @@ class _SpillFile:
     writer: pa.ipc.RecordBatchStreamWriter | None = None
 
     def write(self, batch: pa.RecordBatch, schema: pa.Schema) -> None:
+        """Grava o lote, abrindo o arquivo no primeiro."""
         if self.writer is None:
             self.sink = pa.OSFile(self.path, "wb")
             self.writer = pa.ipc.new_stream(self.sink, schema, options=_SPOOL_OPTIONS)
         self.writer.write_batch(batch)
 
     def close(self) -> None:
+        """Fecha o arquivo, quando algum lote o abriu."""
         if self.writer is not None:
             self.writer.close()
             self.sink.close()
@@ -228,11 +238,12 @@ def _produce(engine: DuckDBEngine, text: str, arguments: Sequence[object] | Mapp
     Nunca espera pelo cliente: o lock sai quando o resultado acaba, quando ``stop`` chega ou quando
     o ``interrupt`` do ``close`` cancela a consulta. O fim é marcado ainda com o lock tomado, e o
     ``close`` nunca cancela o comando seguinte da sessão. Recebe só o que usa, nunca o stream, para
-    um stream abandonado ser coletado.
+    um stream abandonado ser coletado e o ``__del__`` ligar o ``stop``.
     """
     with engine.session() as connection:
         try:
-            # Um close que chegou antes da consulta: o interrupt, com a conexão ociosa, não a alcançaria.
+            # Um close que chegou antes da consulta: o interrupt, com a conexão ociosa, não a
+            # alcançaria.
             if stop.is_set():
                 return
             reader = connection.execute(text, arguments).to_arrow_reader(batch_size)
@@ -273,7 +284,7 @@ class DuckDBStream:
 
     def __init__(self, engine: DuckDBEngine, text: str,
                  arguments: Sequence[object] | Mapping[str, object], batch_size: int = 100_000,
-                 budget: int = MEMORY_BUDGET) -> None:
+                 budget: int = _MEMORY_BUDGET) -> None:
         # O stop e o caminho vêm antes de tudo: o __del__ de uma construção que falhou os usa.
         self._stop = threading.Event()
         self._path = engine.spool_path("stream")
@@ -300,7 +311,8 @@ class DuckDBStream:
 
     def _wait_for_batch(self) -> str | None:
         """Espera um lote não lido, em memória ou no arquivo; devolve de onde ele vem, ou ``None``
-        no fim. A espera tem prazo e confere o ``stop``."""
+        no fim. A espera tem prazo e confere o ``stop``: quem puxa o stream pode ser a thread de
+        leitura antecipada de um leitor nativo, e ela não fica presa aqui depois de um ``close``."""
         spool = self._spool
         with spool.condition:
             while not spool.in_memory and spool.spilled <= self._read_from_file and not spool.done:
@@ -357,7 +369,8 @@ class DuckDBStream:
     def close(self) -> None:
         """Cancela a consulta que ainda roda e apaga o arquivo; a sessão continua usável."""
         self._stop.set()
-        # Sob a condition, a thread não marca o fim, e o interrupt alcança só a consulta deste stream.
+        # Sob a condition, a thread não marca o fim, e o interrupt alcança só a consulta deste
+        # stream.
         with self._spool.condition:
             if self._thread is not None and not self._spool.done:
                 self._engine.interrupt()
@@ -383,8 +396,9 @@ class DuckDBStream:
 
 
 def _take(source: queue.Queue, stop: threading.Event) -> object | None:
-    """O próximo item da fila, esperando em fatias de 50 ms; ``None`` quando ``stop`` chega com a
-    fila vazia. Nenhum item da fila é ``None``."""
+    """O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o ``stop`` em
+    vez de ficar preso num ``get`` sem fim; ``None`` quando ``stop`` chega com a fila vazia. Nenhum
+    item da fila é ``None``."""
     while True:
         try:
             return source.get(timeout=0.05)
@@ -411,13 +425,19 @@ def _write_until_end(spill: _SpillFile, source: queue.Queue, closed: threading.E
 
 def _write_spool(spill: _SpillFile, source: queue.Queue, closed: threading.Event,
                  outcome: dict[str, object]) -> None:
-    """A thread do loader: grava no arquivo os lotes da fila, sem a sessão."""
+    """A thread do loader: grava no arquivo os lotes da fila, sem a sessão.
+
+    Um ``closed`` sem o fim da fila é um loader abandonado. Terminada com erro, o abandono, a
+    exceção do cliente ou um lote recusado, a thread apaga o arquivo, que nenhum ``INSERT`` vai ler.
+    """
     try:
         _write_until_end(spill, source, closed, outcome)
     except BaseException as error:  # noqa: BLE001 - relançado em close, ou no write seguinte
         outcome["error"] = error
     finally:
         spill.close()
+    if outcome["error"] is not None:
+        Path(spill.path).unlink(missing_ok=True)
 
 
 def _checked_batches(data: pa.RecordBatch | pa.Table) -> list[pa.RecordBatch]:
@@ -434,11 +454,12 @@ class DuckDBLoader:
 
     A abertura confere o nome num cursor à parte, sem o lock da sessão, e recusa com
     ``SandboxError`` o nome que o ``ingest`` ou outro ``loader`` ocupou. ``write`` faz o ``cast`` do
-    lote na thread do cliente e o põe numa fila limitada, e uma thread auxiliar grava os lotes num
-    arquivo Arrow IPC com LZ4, sem a sessão. ``close`` roda, sob o lock e numa transação, o
-    ``CREATE TABLE`` do modelo e um único ``INSERT ... BY NAME`` sobre o leitor do arquivo: nada
-    existe antes dele, e um erro desfaz os dois. Uma exceção dentro do ``with``, um lote recusado
-    pelo ``cast`` ou um loader abandonado apagam o arquivo sem criar a tabela.
+    lote na thread do cliente, para o erro aparecer com o lote em mãos, e o põe numa fila limitada,
+    que bloqueia quando está cheia; uma thread auxiliar grava os lotes num arquivo Arrow IPC com
+    LZ4, sem a sessão, enquanto o cliente prepara o lote seguinte. ``close`` roda, sob o lock e numa
+    transação, o ``CREATE TABLE`` do modelo e um único ``INSERT ... BY NAME`` sobre o leitor do
+    arquivo: nada existe antes dele, e um erro desfaz os dois. Uma exceção dentro do ``with``, um
+    lote recusado pelo ``cast`` ou um loader abandonado apagam o arquivo sem criar a tabela.
     """
 
     def __init__(self, engine: DuckDBEngine, table: sa.Table, queue_depth: int = 2) -> None:
@@ -446,8 +467,8 @@ class DuckDBLoader:
         self._closed = threading.Event()
         if engine.name_in_use(table.name):
             raise SandboxError(
-                f"{table.name}: o nome já está ocupado no sandbox, pelo ingest ou por outro loader; "
-                f"leia a versão publicada por run.published({table.name})")
+                f"{table.name}: o nome já está ocupado no sandbox, pelo ingest ou por outro "
+                f"loader; leia a versão publicada por run.published({table.name})")
         self._engine = engine
         self._table = table
         self._schema: pa.Schema | None = None
@@ -481,7 +502,8 @@ class DuckDBLoader:
         return False
 
     def _converted(self, batch: pa.RecordBatch) -> pa.RecordBatch:
-        """O lote no contrato, com as colunas do primeiro lote; outro conjunto é ``ContractError``."""
+        """O lote no contrato, com as colunas do primeiro lote; outro conjunto é
+        ``ContractError``."""
         converted = cast(batch, self._table)
         if self._schema is None:
             self._schema = converted.schema
@@ -528,7 +550,8 @@ class DuckDBLoader:
                 connection.unregister(name)
 
     def close(self, error: BaseException | None = None) -> None:
-        """Cria a tabela e insere os lotes; com ``error`` ou um lote recusado, só apaga o arquivo."""
+        """Cria a tabela e insere os lotes; com ``error`` ou um lote recusado, só apaga o
+        arquivo."""
         failure = error or self._refused
         self._put(failure if failure is not None else _END)
         self._closed.set()
@@ -592,7 +615,8 @@ class DuckDBConfig:
     threads: int | None = None
     """As threads da instância; ``None`` fica no padrão do DuckDB, um por núcleo."""
     memory_limit: str | None = None
-    """Com unidade (``"4GiB"``); ``None`` fica no padrão do DuckDB, 80% da memória, registrado no log."""
+    """Com unidade (``"4GiB"``); ``None`` fica no padrão do DuckDB, 80% da memória, registrado no
+    log."""
     temp_directory: str | None = None
     """A pasta do banco, do transbordo do DuckDB e dos arquivos de ``stream`` e ``loader``;
     ``None`` é uma pasta nova de ``tempfile.mkdtemp``, apagada em ``cleanup``."""
@@ -690,7 +714,8 @@ class DuckDBEngine:
         return DuckDBEngine(self._config, self.execution_id, self._storage, parent=self)
 
     def interrupt(self) -> None:
-        """Cancela o comando em curso na conexão; não toma o lock, que está com quem roda o comando."""
+        """Cancela o comando em curso na conexão; não toma o lock, que está com quem roda o
+        comando."""
         self._connection.interrupt()
 
     def spool_path(self, kind: str) -> str:
@@ -714,18 +739,20 @@ class DuckDBEngine:
 
     def _partition_filter(self, table: sa.Table, partitions: Sequence[str] | None) -> str:
         """O ``WHERE`` das partições: o intervalo delas ao lado do ``IN``, porque o ``delta_scan``
-        poda por ``=`` e por intervalo e abre todos os arquivos com um ``IN`` de mais de um valor."""
+        poda por ``=`` e por intervalo e abre todos os arquivos com um ``IN`` de mais de um
+        valor."""
         if partitions is None:
             return ""
         partition_by = table_options(table).partition_by
         if partition_by is None:
-            raise ContractError(f"{table.name}: tabela sem partição recebeu partitions={partitions}")
+            raise ContractError(
+                f"{table.name}: tabela sem partição recebeu partitions={partitions}")
         values = sorted(check_partition_value(value) for value in partitions)
         if not values:
             return " WHERE false"
         column = quoted(partition_by)
-        listed = ", ".join(_literal(value) for value in values)
-        return (f" WHERE {column} BETWEEN {_literal(values[0])} AND {_literal(values[-1])} "
+        listed = ", ".join(literal(value) for value in values)
+        return (f" WHERE {column} BETWEEN {literal(values[0])} AND {literal(values[-1])} "
                 f"AND {column} IN ({listed})")
 
     def ingest(self, table: sa.Table, uri: str, version: int, partitions: list[str] | None = None,
@@ -755,7 +782,8 @@ class DuckDBEngine:
 
     def published(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: o
-        ``FromClause`` com as colunas do contrato que compila para ``delta_scan(uri, version := v)``.
+        ``FromClause`` com as colunas do contrato que compila para
+        ``delta_scan(uri, version := v)``.
 
         Numa tabela que ainda não existe, sem versão, é ``SandboxError``.
 
@@ -782,7 +810,7 @@ class DuckDBEngine:
         pronto por ``sql.bind``."""
         if isinstance(statement_or_sql, str):
             return sql.bind(statement_or_sql, dict(params or {}), "duckdb")
-        return compiled_statement(statement_or_sql, params)
+        return _compiled_statement(statement_or_sql, params)
 
     def query(self, statement_or_sql: sa.sql.ClauseElement | str,
               params: Mapping[str, object] | None = None) -> pa.Table:
@@ -817,7 +845,8 @@ class DuckDBEngine:
         return DuckDBStream(self, text, arguments, batch_size)
 
     def loader(self, table: sa.Table, queue_depth: int = 2) -> DuckDBLoader:
-        """O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada no ``close``.
+        """O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada no
+        ``close``.
 
         Exemplo:
 
@@ -828,8 +857,10 @@ class DuckDBEngine:
         """
         return DuckDBLoader(self, table, queue_depth)
 
-    def load(self, table: sa.Table,
-             data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch]) -> int:
+    def load(
+        self, table: sa.Table,
+        data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
+    ) -> int:
         """Grava os lotes numa tabela nova pelo ``loader`` e devolve as linhas; um DataFrame é
         ``ContractError`` com a conversão sem cópia na mensagem.
 
@@ -848,14 +879,17 @@ class DuckDBEngine:
     # ------------------------------------------------------------ a auditoria
 
     def _published_max_key(self, table: sa.Table, uri: str, version: int) -> int | None:
-        """O ``max_key`` da versão publicada na chave primária inteira de uma coluna, sem ler dados."""
-        primary = list(table.primary_key.columns)
-        if len(primary) != 1 or not isinstance(primary[0].type, sa.Integer):
+        """O ``max_key`` da versão publicada na chave sequencial, sem ler dados; ``None`` numa
+        tabela sem ela."""
+        key = sequential_key(table)
+        if key is None:
             return None
-        return delta.max_key(delta.open_table(uri, self._storage, version), primary[0].name)
+        return delta.max_key(delta.open_table(uri, self._storage, version), key.name)
 
-    def _referenced_sources(self, table: sa.Table, foreign_keys: bool,
-                            referenced: Mapping[str, tuple[str, int]] | None) -> dict[str, sa.FromClause]:
+    def _referenced_sources(
+        self, table: sa.Table, foreign_keys: bool,
+        referenced: Mapping[str, tuple[str, int]] | None,
+    ) -> dict[str, sa.FromClause]:
         """A origem da linha referenciada de cada chave estrangeira: a tabela do sandbox com o nome
         do modelo, ou a versão fixada informada em ``referenced``."""
         sources: dict[str, sa.FromClause] = {}
@@ -880,15 +914,13 @@ class DuckDBEngine:
         text = self._text(check.statement, table)
         rows = self.query(text).to_pylist()
         partition_by = table_options(table).partition_by
-        doubles = [column.name for column in table.columns if isinstance(column.type, sa.Double)]
+        doubles = double_columns(table)
         totals = {}
         nonfinite = {}
+        # Uma linha por partição: o valor dela é a chave, e as demais colunas são as leituras.
         for row in rows:
             value = row[partition_by] if partition_by else None
-            readings = {}
-            for name, reading in row.items():
-                if name != partition_by:
-                    readings[name] = reading
+            readings = {name: reading for name, reading in row.items() if name != partition_by}
             totals[value] = readings
             nonfinite[value] = tuple(name for name in doubles if readings[f"naofinito_{name}"])
         failing = []
@@ -913,12 +945,14 @@ class DuckDBEngine:
         return pa.concat_tables(samples).slice(0, audit.SAMPLE_ROWS)
 
     def _check_result(self, table: sa.Table, check: audit.Check) -> CheckResult:
-        """Uma verificação de chave ou de órfão; o ``skip_when`` verdadeiro a aprova sem rodá-la."""
+        """Uma verificação de chave ou de órfão; o ``skip_when`` verdadeiro a aprova sem
+        rodá-la."""
         text = self._text(check.statement, table)
         if check.skip_when is not None:
             skipped = self.query(self._text(check.skip_when, table)).column(0)[0].as_py()
             if skipped is True:
-                reason = "dispensada: o menor valor da execução passa do maior da versão publicada"
+                reason = ("dispensada: o menor valor da execução passa do maior da versão "
+                          "publicada")
                 return CheckResult(check.name, text, 0, pa.table({}), True, reason)
         found = self.query(text)
         return CheckResult(check.name, text, found.num_rows, found.slice(0, audit.SAMPLE_ROWS),
@@ -972,8 +1006,8 @@ class DuckDBEngine:
     # ------------------------------------------------------------ a exportação
 
     def _partition_select(self, table: sa.Table, value: str | None, with_partition: bool) -> str:
-        """O ``SELECT`` da partição no sandbox, cada coluna do contrato em ``CAST`` para o tipo dele,
-        na ordem da ``sort_key``; com ``with_partition=False``, sem a coluna de partição."""
+        """O ``SELECT`` da partição no sandbox, cada coluna do contrato em ``CAST`` para o tipo
+        dele, na ordem da ``sort_key``; com ``with_partition=False``, sem a coluna de partição."""
         options = table_options(table)
         columns = []
         for column in table.columns:
@@ -983,7 +1017,7 @@ class DuckDBEngine:
             columns.append(f"CAST({name} AS {sql_type(column, 'duckdb')}) AS {name}")
         text = f"SELECT {', '.join(columns)} FROM {quoted(table.name)}"
         if options.partition_by is not None:
-            text += f" WHERE {quoted(options.partition_by)} = {_literal(value)}"
+            text += f" WHERE {quoted(options.partition_by)} = {literal(value)}"
         if options.sort_key:
             text += " ORDER BY " + ", ".join(quoted(name) for name in options.sort_key)
         return text
@@ -993,14 +1027,14 @@ class DuckDBEngine:
         partition_by = table_options(table).partition_by
         text = f"SELECT count(*) FROM {quoted(table.name)}"
         if partition_by is not None:
-            text += f" WHERE {quoted(partition_by)} = {_literal(value)}"
+            text += f" WHERE {quoted(partition_by)} = {literal(value)}"
         return text
 
     def _export_register(self, table: sa.Table, uri: str, value: str | None,
                          metadata: Mapping[str, str], expected_rows: int | None,
                          columns_without_min_max: Collection[str]) -> int:
-        """O ``COPY ... RETURN_STATS`` da partição para um arquivo novo na pasta dela, registrado por
-        ``register_files`` com as conferências, o commit e a releitura."""
+        """O ``COPY ... RETURN_STATS`` da partição para um arquivo novo na pasta dela, registrado
+        por ``register_files`` com as conferências, o commit e a releitura."""
         partition_by = table_options(table).partition_by
         table_path = self._storage.relative(uri)
         name = f"{self.execution_id}_{uuid.uuid4().hex}.parquet"
@@ -1013,7 +1047,7 @@ class DuckDBEngine:
         with self.session() as connection:
             count = connection.execute(self._count_text(table, value)).fetchone()[0]
             cursor = connection.execute(
-                f"COPY ({select}) TO {_literal(target)} (FORMAT parquet, RETURN_STATS)")
+                f"COPY ({select}) TO {literal(target)} (FORMAT parquet, RETURN_STATS)")
             names = [column[0] for column in cursor.description]
             row = dict(zip(names, cursor.fetchone()))
         file = delta.file_from_return_stats(row, table, self._storage.uri_of(table_path))
@@ -1037,7 +1071,8 @@ class DuckDBEngine:
                                            self._storage, columns_without_min_max)
 
     def export_partition(self, table: sa.Table, uri: str, value: str | None,
-                         metadata: Mapping[str, str], mode: str, expected_rows: int | None = None,
+                         metadata: Mapping[str, str], mode: ExportMode,
+                         expected_rows: int | None = None,
                          columns_without_min_max: Collection[str] = ()) -> int:
         """Leva a partição do sandbox ao Delta e devolve a versão do commit.
 

@@ -90,8 +90,8 @@ de 2026-09-21; o sentinela dentro das aspas de um identificador analisa, leitura
   que o `redshift_connector` lê com `cursor.paramstyle = "named"`. Ler os nomes e reescrever são
   dois passos com a mesma expressão, no lugar de uma função de substituição que acumula nomes num
   conjunto de fora.
-- **`referenced_tables`** é o esboço de `test_parallel.py`: `find_tables(include_crud=True)` num
-  statement Core, o sentinela seguido do nome num texto gerado; só nomes de `sa.Table`.
+- **`referenced_tables`** lê `find_tables(include_crud=True)` num statement Core e o sentinela
+  seguido do nome num texto gerado; só nomes de `sa.Table`.
 - **`sql_files`** renderiza cada statement nos dois dialetos, um laço com uma linha por arquivo,
   sempre com o sentinela `{prefix}` e com `\n` final, porque o arquivo versionado serve a qualquer
   alvo; `write_sql_files` e `check_sql_files` repetem o padrão da [etapa 1](PLAN-STAGE-1.md).
