@@ -5,12 +5,12 @@ comando seguinte e preservado num cursor próprio, a consulta em streaming (o pr
 fim, a memória de um lote, medida em subprocesso), o ``INSERT`` alimentado por um leitor sobre um
 gerador Python (um comando só, e os lotes que o leitor não confere), o tipo ``DECIMAL`` inferido de
 uma amostra do pandas contra o fixado pelo esquema Arrow, JSON, o custo do ``executemany`` contra a
-carga por Arrow, as consultas da auditoria e a soma de controle que o ``NaN`` derruba, o
-``interrupt()`` chamado de outra thread e o ``cursor()`` aberto com uma consulta em curso. Sob a raiz
-local (marcador ``local``): ``COPY ... TO`` com ``RETURN_STATS`` e o esquema físico do Parquet
-gravado, o ``RETURN_STATS`` com ``NaN``, infinito e texto longo, o ``COPY``
-particionado por mês e um banco em arquivo com pasta de transbordo. O ``delta_scan`` está em
-``poc_delta.py``.
+carga por Arrow, as consultas da auditoria, a soma de controle que o ``NaN`` derruba e a que o
+``DECIMAL(38, 6)`` torna independente das threads, o ``interrupt()`` chamado de outra thread e o
+``cursor()`` aberto com uma consulta em curso. Sob a raiz local (marcador ``local``): ``COPY ...
+TO`` com ``RETURN_STATS`` e o esquema físico do Parquet gravado, o ``RETURN_STATS`` com ``NaN``,
+infinito e texto longo, o ``COPY`` particionado por mês e um banco em arquivo com pasta de
+transbordo. O ``delta_scan`` está em ``poc_delta.py``.
 """
 
 from __future__ import annotations
@@ -501,6 +501,25 @@ def test_control_total_fails_on_nan_and_infinity(con: duckdb.DuckDBPyConnection)
         "SELECT sum(CASE WHEN isfinite(valor) THEN CAST(valor AS DECIMAL(38, 6)) END), count(*) FILTER (WHERE NOT isfinite(valor)) FROM t"
     ).fetchone()
     assert finite == (decimal.Decimal("1.500000"), 2)
+
+
+def test_control_total_by_decimal_does_not_depend_on_threads(con: duckdb.DuckDBPyConnection) -> None:
+    """A soma de controle por ``DECIMAL(38, 6)`` dá o mesmo valor com qualquer número de threads; a soma em ``DOUBLE`` depende da ordem, e as suas somas são leituras do relatório.
+
+    É o motivo do ``CAST`` na soma de controle da auditoria: sem ele, duas execuções sobre as
+    mesmas linhas podem discordar nas últimas casas.
+    """
+    con.execute(
+        "CREATE TABLE t AS SELECT (hash(range) % 2400000000000)::DOUBLE / 100 - 11846195394.62 AS valor FROM range(5_000_000)"
+    )
+    as_double = []
+    as_decimal = []
+    for threads in (1, 2, 4):
+        con.execute(f"SET threads = {threads}")
+        as_double.append(con.execute("SELECT sum(valor) FROM t").fetchone()[0])
+        as_decimal.append(con.execute("SELECT sum(CAST(valor AS DECIMAL(38, 6))) FROM t").fetchone()[0])
+    assert len(set(as_decimal)) == 1
+    record("duckdb.control_total_double_by_threads", ", ".join(repr(total) for total in as_double))
 
 
 def test_interrupt_stops_a_blocking_query_from_another_thread() -> None:

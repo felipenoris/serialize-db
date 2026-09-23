@@ -260,8 +260,14 @@ A revisão das etapas 3 e 4 de 2026-09-23 deixou outra:
   `delta_scan` do DuckDB, que ordena o `NaN` acima de todo número, responde conforme a poda:
   `valor > 3` deu 0 linhas com o arquivo podado, e `valor >= 2` deu 2, com o `NaN` dentro; a soma de
   controle da auditoria, `CAST(valor AS DECIMAL(38, 6))`, falha com `ConversionException` no `NaN`
-  e no infinito (leituras de 2026-09-23, [`POC.md`](POC.md)). Proposto: recusar os dois com
+  e no infinito (leituras de 2026-09-23, [`POC.md`](POC.md)). A soma de controle já não falha: a
+  [etapa 4](PLAN-STAGE-4.md) soma só os valores finitos e conta os demais. Tirar o `CAST` da soma
+  também evitaria a falha, mas o `CAST` para `DECIMAL(38, 6)` é o que torna a soma exata: em
+  20.000.000 de valores, a soma em `DOUBLE` deu cinco resultados com 1, 2, 4, 8 e 11 threads, o mais
+  distante a 13.409 da soma exata, e a soma por `DECIMAL(38, 6)` deu o valor exato nas cinco. Nenhuma das duas
+  resolve a poda, que não passa por `CAST` algum. Proposto: recusar o `NaN` e o infinito com
   `ContractError`, como o nulo numa coluna `NOT NULL`, depois de contar `isnan` e `isinf` nas
   colunas `Double` das tabelas que a migração adiantada gravou no ambiente alvo, porque a recusa
-  vale também para a carga inicial. A alternativa é aceitá-los e contá-los na auditoria, com a soma
-  de controle só sobre os finitos, e deixar o resultado de um filtro por intervalo depender da poda.
+  vale também para a carga inicial. As alternativas são converter o `NaN` em nulo no `cast`, a
+  convenção do pandas, que muda o valor gravado, e aceitá-los, com a contagem na auditoria e o
+  resultado de um filtro por intervalo dependendo da poda.

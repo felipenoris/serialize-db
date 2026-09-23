@@ -24,8 +24,8 @@ declarativos do SQLAlchemy são o contrato de esquema: deles saem o esquema Arro
 o DDL do sandbox nos dois motores. Chave primária, unicidade e chave estrangeira não entram nesse
 DDL, porque o Parquet não as tem, o DuckDB as cobra na carga e o Redshift só as registra: quem as
 aplica é a auditoria da execução, com consultas derivadas dos mesmos modelos, e a reprovação impede
-a publicação. Os statements Core do pipeline continuam válidos: o cliente os submete a `run.sandbox.query`,
-`execute` ou `stream`, que os compilam pelo dialeto do motor com os parâmetros dele e os executam
+a publicação. Os statements Core do pipeline continuam válidos: o cliente os submete a `run.sandbox.query`
+ou `stream`, que os compilam pelo dialeto do motor com os parâmetros dele e os executam
 na conexão crua, e pode submetê-los a um `sqlalchemy.Connection` que ele mesmo crie fora da
 biblioteca, porque o contrato não exige do modelo nem do statement nada que um `Connection` não
 aceite (decisão do usuário de 2026-09-22). O texto SQL gerado por dialeto, com os parâmetros para
@@ -138,8 +138,9 @@ tabelas temporárias da sessão, abre uma sessão a mais com `run.sandbox.new_se
 
 O pipeline lê com `run.sandbox.stream(statement_ou_texto, params, batch_size)`, que
 devolve um `BatchStream` (iterável de `RecordBatch` com `schema`, `read_next_batch`, `read_all`,
-`close`, gerenciador de contexto e `__arrow_c_stream__`), ou com `run.sandbox.query(statement)` e
-`run.sandbox.execute(texto, params)`, que devolvem a `pa.Table` de `stream(...).read_all()`; grava
+`close`, gerenciador de contexto e `__arrow_c_stream__`), ou com
+`run.sandbox.query(statement_ou_texto, params)`, que devolve a `pa.Table` de `stream(...).read_all()`
+e roda também o comando sem resultado (decisão do usuário de 2026-09-23, que tirou `execute`); grava
 com `with run.sandbox.loader(Modelo) as loader: loader.write(lote)`, ou com
 `run.sandbox.load(Modelo, data)`, que aceita `pa.Table`, `RecordBatch`, `RecordBatchReader` ou
 iterável de lotes e os passa ao mesmo `loader`. `query` compila o statement pelo dialeto, com os `bindparam` do
@@ -570,7 +571,7 @@ ilustrativos.
 | --- | --- | --- |
 | 1. Abertura | Lê `_serialize_db/snapshots.json` e `serialize_db_publications`; abre cada tabela de entrada e registra a versão. | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
 | 2. Ingestão | DuckDB: views com os nomes dos modelos sobre `delta_scan(uri, version := 143)`; `cad_lancamentos` materializada com `WHERE data_base_str BETWEEN '2025-09-30' AND '2026-08-31'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos dessas partições em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
-| 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
+| 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
 | 5. Publicação no Delta | `reconcile`; com `export_mode="register"`, `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD ... PARTITION BY (data_base_str)` do Redshift), depois das conferências; com `"rewrite"`, `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
 | 6. Publicação no Redshift | `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'`; controle atualizado. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
@@ -592,7 +593,7 @@ db = Database("s3://bucket/projeto/delta", environment="prod", metadata=Base.met
 with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento, partitions=run.previous_partitions(Lancamento, 12), materialize=True)
     run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada
-    compute_in_sandbox(run.sandbox)                                  # statements Core e texto gerado, por query e execute
+    compute_in_sandbox(run.sandbox)                                  # statements Core e texto gerado, por query
     entries = select(Lancamento).where(Lancamento.data_base_str == "2026-08-31")
     with run.sandbox.stream(entries, batch_size=100_000) as stream, run.sandbox.loader(LancamentoProjetado) as loader:
         for batch in stream:                                         # a biblioteca já lê o lote seguinte

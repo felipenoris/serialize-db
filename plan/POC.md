@@ -1907,3 +1907,36 @@ do cursor sem perder o limite de memória; o `loader` fica como está, com a cri
 `close` para não esperar o stream; a ingestão paralela fica. As três propostas esperam o usuário em
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), e [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) registra a espera
 do `loader`.
+
+## O que a soma de controle e a implementação do stream híbrido mostraram
+
+Em 2026-09-23, no mesmo macOS, duas sondas responderam às perguntas do usuário sobre a revisão das
+etapas 3 e 4.
+
+- **A soma de `DOUBLE` muda com o número de threads, e a soma por `DECIMAL(38, 6)` não.** Em
+  20.000.000 de valores de até 1,2 × 10¹⁰ com centavos, `sum(valor)` deu cinco resultados com 1, 2,
+  4, 8 e 11 threads, de 3.070.199.043.647.900,5 a 3.070.199.043.661.792, e o mais distante ficou a
+  13.409 da soma exata; a mesma soma em ordem crescente e decrescente, numa thread, também diferiu.
+  `sum(CAST(valor AS DECIMAL(38, 6)))` deu 3.070.199.043.661.309,110470 nas cinco, e o `fsum`, a soma
+  compensada do DuckDB, 3.070.199.043.661.309,0, que o `DOUBLE` não representa com centavos nessa
+  grandeza. Tirar o `CAST` da soma de controle evitaria a falha no `NaN`, e a soma de controle
+  deixaria de ser comparável entre execuções; a poda do `delta_scan` com `NaN` não passa por `CAST`
+  algum (`test_duckdb.py::test_control_total_by_decimal_does_not_depend_on_threads`).
+- **A implementação de referência do stream híbrido passou nos casos do `BatchStream` atual e nos
+  do orçamento**, doze execuções seguidas da bateria: o primeiro lote com a consulta rodando, a
+  ordem, o transbordo com o cliente lento e a memória nunca acima do orçamento, o `close` antecipado,
+  o abandono, o erro antes e depois do primeiro lote, na memória e no arquivo, a consulta dentro de
+  `session()`, o resultado vazio com o esquema do leitor, e o comando da sessão que espera só a
+  consulta. A primeira versão deixava um arquivo órfão em três de seis execuções: o arquivo nasce no
+  primeiro lote que não cabe no orçamento, que pode vir depois de o `__del__` apagar o caminho, e a
+  thread passou a apagar o arquivo que criou quando para pelo `stop`. A thread marca o fim da
+  consulta ainda com o lock tomado, então o comando que roda depois do stream já o vê terminado.
+- **Contra o desenho atual, na mesma rodada** (13.333.333 linhas, `threads = 2`, melhor de três):
+  sem trabalho, 0,622 s contra 0,411 s; com 5 ms de Python puro por lote, 0,965 s contra 0,673 s; com
+  pandas, 0,641 s contra 0,411 s, sem lote no arquivo; com 5 ms de `sleep`, o cliente atrasado,
+  1,086 s contra 0,908 s, com 96 lotes no arquivo e 297 MB de pico. Com o orçamento de 256 MiB, os
+  três primeiros casos ficaram iguais e o do cliente atrasado fez 0,839 s com 522 MB de pico.
+
+**Consequência**: [`PLAN-STAGE-1.md`](PLAN-STAGE-1.md) registra, na decisão do `Double` não finito,
+que o `CAST` da soma de controle fica; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) propõe o híbrido com
+64 MiB, à espera do usuário.

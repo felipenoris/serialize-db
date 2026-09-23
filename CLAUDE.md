@@ -494,8 +494,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as
   `FunctionElement`) and left proposals awaiting the user in `plan/OPEN_QUESTIONS.md`: refusing the
   non-finite `Double` in the contract (stage 1, which decides the `NaN` statistics of stage 3), and
-  six for stage 4, among them the `loader` creating its table at `close`, the hybrid `stream` and
-  `interrupt()` in `close`.
+  three for stage 4: the `loader` creating its table at `close`, the hybrid `stream` (the user asked
+  to see its reference implementation first) and `interrupt()` in `close`. The user decided the
+  `qmark` style, the audit key scope and the engine interface the same day
+  (`.claude/memory/decisions.md`).
 - The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
   ran successfully there on the copy of the production base, and its reports, not yet available,
   carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the

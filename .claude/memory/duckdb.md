@@ -70,6 +70,11 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `ConversionException` on `NaN` and infinity, also under `FILTER (WHERE isfinite(x))`, because the
   cast runs before the aggregate filter; `CASE WHEN isfinite(x) THEN CAST(...) END` works
   (2026-09-23). `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`
+- `sum(x)` over `DOUBLE` depends on the order and the thread count: 20,000,000 values up to
+  1.2e10 with cents gave five results for 1, 2, 4, 8 and 11 threads, the farthest 13,409 from the
+  exact sum, and ascending and descending order differed on one thread; `sum(CAST(x AS
+  DECIMAL(38, 6)))` gave the exact value on all five, and `fsum` a double near it (2026-09-23).
+  `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`
 
 ## Catalog names and limits
 

@@ -97,3 +97,14 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   803 to 917 MB; part of the gain is the calling threads added to the pool, which the target's
   2 vCPUs lack. The proposals (table created at close, hybrid stream, `interrupt()`) await the user
   in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_duckdb.py`
+- The hybrid `stream` reference implementation (2026-09-23, scratchpad, pending the user's decision)
+  keeps batches in a deque while their bytes fit a 64 MiB budget and writes the first batch that
+  does not fit, and every later one, to the LZ4 spool; the client drains the deque before reading
+  the file, so the order holds. The spool file is born mid-query, after `__del__` may have unlinked
+  the path: the first version left an orphan file in three of six runs, and the producer now unlinks
+  the file it created when it stops on `stop`. The producer marks the end under the session lock, so
+  a command that runs after the stream sees it finished (the same arrangement the `interrupt()`
+  proposal needs). Against the current design over 13,333,333 rows at `threads = 2`: 0.622 → 0.411 s
+  without work, 0.965 → 0.673 s with 5 ms pure Python per batch, 0.641 → 0.411 s with pandas, and
+  1.086 → 0.908 s with a lagging client (96 batches spilled, 297 MB peak; 256 MiB gave 0.839 s at
+  522 MB). `plan/POC.md`, `plan/PLAN-STAGE-4.md`

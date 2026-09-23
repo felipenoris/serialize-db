@@ -42,7 +42,7 @@ foi medido em [`POC.md`](POC.md).
   a permissão sobre a raiz fica provada pela primeira escrita.
 - **Barreira por tabela.** Um cliente que dispara `load` numa thread e esquece o `result()` lê o
   estado anterior em silêncio, porque o DuckDB não espera. A guarda: `load` marca a tabela em voo,
-  e `query` e `execute` esperam as tabelas em voo que o statement referencia, tiradas por
+  e `query` e `stream` esperam as tabelas em voo que o statement referencia, tiradas por
   `find_tables` do statement Core ou do sentinela `{prefix}` do texto gerado
   (`test_parallel.py::test_table_barrier_delays_the_read_until_the_load_lands`). Fica fora das
   etapas até existir um pipeline paralelo real.
@@ -105,24 +105,23 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, porque a
   conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso. E o
   `Double` não finito, que o `cast` aceita: os dois escritores do Delta gravam o máximo sem o `NaN`,
-  e o `delta_scan` responde a um filtro por intervalo conforme a poda; a soma de controle da
-  auditoria falha no `NaN` e no infinito (leituras de 2026-09-23, [`POC.md`](POC.md)). Proposto:
-  recusar os dois com `ContractError`, depois de contar `isnan` e `isinf` nas colunas `Double` das
-  tabelas que a migração adiantada gravou no ambiente alvo.
+  e o `delta_scan` responde a um filtro por intervalo conforme a poda (leituras de 2026-09-23,
+  [`POC.md`](POC.md)). A soma de controle da auditoria, que falhava no `NaN` e no infinito, já soma
+  só os finitos ([etapa 4](PLAN-STAGE-4.md)); tirar o `CAST` dela também evitaria a falha, mas a soma
+  em `DOUBLE` mudou com o número de threads, e nenhuma das duas resolve a poda, que é o que a decisão
+  resolve. Proposto: recusar os dois com `ContractError`, depois de contar `isnan` e `isinf` nas
+  colunas `Double` das tabelas que a migração adiantada gravou no ambiente alvo.
 - [Etapa 3](PLAN-STAGE-3.md): o mínimo e o máximo de uma coluna `Double` com `NaN`, que segue a
   decisão da etapa 1: com o `NaN` aceito, `register_files` omite os dois quando o `RETURN_STATS`
   traz `has_nan`.
 - [Etapa 4](PLAN-STAGE-4.md), com as medições de 2026-09-23 em [`POC.md`](POC.md): a tabela do
   `loader` criada no `close`, com o nome conferido na abertura num cursor próprio, porque o
   `CREATE TABLE` da abertura espera a consulta inteira de um `stream` aberto antes (primeiro lote
-  em 0,811 s contra 0,006 s); o `stream` híbrido, com os lotes em memória até 256 MiB e o arquivo
-  com LZ4 depois (0,407 s contra 0,598 s sem trabalho, 0,709 s contra 0,996 s com Python puro); o
-  `interrupt()` no `close` do stream e no `cleanup`, para um operador bloqueante em 2 ms; o
-  estilo `qmark` no caminho do statement Core; o escopo das chaves da
-  auditoria pela coluna de `partition_source` e pelo `max_key` da versão fixada; e a interface do
-  motor (`query(statement, params=None)`, `execute` junto de `query`, o `mode` resolvido em
-  `Execution`, argumentos nomeados no lugar de `**options`, `checks` sem `prefix`, e o leitor do
-  DuckDB entregue ao `write_deltalake` no `rewrite` de `export_partition`).
+  em 0,811 s contra 0,006 s); o `stream` híbrido, com os lotes em memória até 64 MiB e o arquivo com
+  LZ4 depois, cuja implementação de referência o usuário pediu para ver antes de decidir (0,411 s
+  contra 0,622 s sem trabalho, 0,673 s contra 0,965 s com Python puro); e o `interrupt()` no `close`
+  do stream e no `cleanup`, para um operador bloqueante em 2 ms em vez de esperar a consulta inteira
+  com o lock tomado.
 - [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
   entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição

@@ -396,3 +396,26 @@ freezing the generated SQL text path where it served only diffs: `audit_files`,
 `write_audit_files` and `serialize-db audit --write` left the plan, and `audit_sql` with `--sql`
 stay for debugging. `plan/PLAN.md`, `plan/PLAN-STAGE-4.md` to `plan/PLAN-STAGE-8.md`,
 `plan/serialize-db.md`, `plan/redshift.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+## The review of stages 3 and 4 of 2026-09-23
+
+The user answered the review's proposals the same day. Accepted, now written in
+`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md` and `plan/PLAN-STAGE-6.md`: the DuckDB engine compiles
+Core statements with `duckdb_engine.Dialect(paramstyle="qmark")` and the positional list of
+`positiontup`, with no marker rewrite (the text path keeps `bind`); the audit checks a key that
+includes the `partition_source` column only in the execution's partitions, and gives the
+single-column integer primary key a `skip_when` (`min(key) > published_max_key`, the pinned
+version's `max_key`) that skips the join with the other partitions, and on Redshift the key staging;
+and the engine interface: `query(statement_or_sql, params=None)` replaces `query(statement,
+**params)` and `execute` (the assistant's reading of "`execute` como a mesma primitiva de `query`
+sobre texto", named in the report), `export_partition` takes the `mode` resolved by `Execution`, and
+the engine never reads `SERIALIZE_DB_EXPORT_MODE`, `audit` and `audit_sql` take `checks`' named
+arguments instead of `**options`, `checks` has no `prefix`, and `export_partition` in `rewrite` mode
+hands the DuckDB reader to `write_deltalake` under the lock, without `stream`. The user asked
+whether removing the `CAST` from the control total would solve the non-finite `Double`: it would
+stop the crash, but `sum(double)` changed with the thread count (five results for 1 to 11 threads,
+the farthest 13,409 from the exact sum over 20,000,000 values) while the `DECIMAL(38, 6)` sum stayed
+exact, and the pruning defect involves no `CAST`; the decision stays pending in stage 1. The user
+asked for the context of the `loader` creating its table at `close` and of `interrupt()`, and for a
+reference implementation of the hybrid `stream` before deciding; the three stay pending in
+`plan/OPEN_QUESTIONS.md`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`
