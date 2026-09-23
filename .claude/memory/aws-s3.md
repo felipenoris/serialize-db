@@ -53,3 +53,14 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   the test prefix with both region variables set: the S3 suite needs no maintenance there, and the
   library never calls IAM or KMS (SSE-KMS is applied by S3; the first write proves the permission).
   `plan/POC.md`, `plan/PLAN.md`
+
+## The local stand-in for S3
+
+- The moto 5.2.3 server (`uvx --from 'moto[server]==5.2.3' moto_server -H 127.0.0.1 -p 5055`,
+  outside the project venv) answered S3 and STS for `test_s3.py` and the Redshift suites on
+  2026-09-23: the conditional `PutObject` (`IfNoneMatch='*'`, `IfMatch`) returns 412, and
+  `HeadObject` returns no `ServerSideEncryption`. Each client reaches it its own way: `boto3` and
+  `pyarrow` read `AWS_ENDPOINT_URL`, delta-rs also needs `AWS_ALLOW_HTTP=true`, and DuckDB needs a
+  secret with `ENDPOINT '127.0.0.1:5055'`, `USE_SSL false` and `URL_STYLE 'path'`. With keys in
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, `boto3` reports the credential method `env`.
+  `plan/POC.md`

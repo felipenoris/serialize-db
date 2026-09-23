@@ -35,16 +35,20 @@ import json
 import os
 import time
 import uuid
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote
 
 import boto3
+import botocore.exceptions
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import redshift_connector
 import sqlalchemy as sa
 from deltalake import DeltaTable, write_deltalake
+from deltalake.exceptions import DeltaError
 from deltalake.transaction import AddAction
 from redshift_connector.utils.oids import get_datatype_name
 from sqlalchemy.schema import CreateTable
@@ -53,7 +57,7 @@ from sqlalchemy.sql.visitors import iterate
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
 from client_model import Base as ClientBase
-from conftest import RedshiftSession, S3Location, connect_redshift, record
+from conftest import RedshiftSession, S3Location, connect_redshift, describe_error, record
 from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
 from serialize_db import audit, schema, sql
 
@@ -64,15 +68,29 @@ REDSHIFT = RedshiftDialect_redshift_connector()
 # dobrado, e o padrão "format" o dobra (sonda local de 2026-09-23, plan/POC.md).
 REDSHIFT_NAMED = RedshiftDialect_redshift_connector(paramstyle="named")
 
+# Os erros que uma leitura registra em vez de reprovar: os do servidor, pelo driver, e os dos
+# clientes do S3, do Delta e do Arrow. Um erro do próprio teste, como um TypeError, sobe e reprova.
+SERVICE_ERRORS = (
+    redshift_connector.Error,
+    botocore.exceptions.ClientError,
+    DeltaError,
+    pa.ArrowException,
+    OSError,
+)
+
 
 @pytest.fixture(scope="session")
-def duckdb_connection() -> duckdb.DuckDBPyConnection:
-    """Conexão com ``httpfs``, ``delta`` e ``aws`` e um secret S3 pela cadeia de credenciais."""
+def duckdb_connection(s3_location: S3Location) -> Iterator[duckdb.DuckDBPyConnection]:
+    """Conexão com ``httpfs``, ``delta`` e ``aws`` e um secret S3 pela cadeia de credenciais,
+    fechada no fim da sessão."""
+    # s3_location roda antes do secret: pelo proxy_environment, AWS_REGION e NO_PROXY estão no
+    # ambiente, e require_s3_access conferiu o acesso à raiz.
     connection = connect_duckdb(("httpfs", "delta", "aws"))
     region = os.environ.get("AWS_REGION", "")
     connection.execute(f"CREATE SECRET poc (TYPE s3, PROVIDER credential_chain, REGION '{region}')")
 
-    return connection
+    yield connection
+    connection.close()
 
 
 def contract_table(name: str, schema_name: str, *, month: bool = False, extra: bool = False,
@@ -151,39 +169,25 @@ def write_manifest(location: S3Location, key_suffix: str, table: DeltaTable,
     return f"s3://{location.bucket}/{key}"
 
 
-def describe(error: Exception) -> str:
-    """O tipo e a mensagem de um erro para o relatório; num erro do ``redshift_connector``, o
-    SQLSTATE, o campo ``M`` e o detalhe ``D`` numa linha só."""
-    detail = error.args[0] if error.args else None
-    if isinstance(detail, dict) and "M" in detail:
-        parts = [str(detail.get("C", "")), str(detail["M"])]
-        if detail.get("D"):
-            # O detalhe D vem entre linhas de hífens; as palavras só de hífens saem do texto.
-            parts.append(" ".join(word for word in str(detail["D"]).split() if set(word) != {"-"}))
-        return f"{type(error).__name__}: {' '.join(part for part in parts if part)}"[:400]
-
-    # Uma exceção sem mensagem tem o texto vazio, e o relatório leva só o tipo dela.
-    lines = str(error).splitlines()
-    first_line = lines[0] if lines else ""
-    return f"{type(error).__name__}: {first_line[:200]}"
-
-
-def outcome(action: object) -> str:
-    """``ok`` quando a chamada passa; senão o tipo e a mensagem do erro, para o relatório."""
+def outcome(action: Callable[[], object],
+            errors: tuple[type[Exception], ...] = SERVICE_ERRORS) -> str:
+    """``ok`` quando a chamada passa; num dos ``errors``, o tipo e a mensagem do erro, para o
+    relatório. Outro erro sobe."""
     try:
         action()
         return "ok"
-    except Exception as error:  # noqa: BLE001 - o resultado é registrado, não propagado
-        return describe(error)
+    except errors as error:
+        return describe_error(error)
 
 
-def reading(action: object) -> object:
-    """O valor da chamada, ou o tipo e a mensagem do erro; uma leitura que o ambiente decide vai
-    para o relatório."""
+def reading(action: Callable[[], object],
+            errors: tuple[type[Exception], ...] = SERVICE_ERRORS) -> object:
+    """O valor da chamada, ou, num dos ``errors``, o tipo e a mensagem do erro: uma leitura que o
+    ambiente decide vai para o relatório. Outro erro sobe."""
     try:
         return action()
-    except Exception as error:  # noqa: BLE001 - a leitura é registrada, não propagada
-        return describe(error)
+    except errors as error:
+        return describe_error(error)
 
 
 def first_row(session: RedshiftSession, text: str, params: tuple | None = None) -> list[object]:
@@ -785,12 +789,7 @@ def test_unload_partition_by_and_register(
     record("redshift.unload.partition_by", unload)
 
     # PARTITION BY MANIFEST VERBOSE, que a documentação não lista, passou no ambiente alvo em
-    # 2026-09-21 (examples/redshift_manifest.py). O pulo cobre o ambiente que recusar, e lá a recusa
-    # é regressão.
-    if unload != "ok" and session.share_database:
-        pytest.skip(
-            f"UNLOAD ... PARTITION BY recusado no datashare {session.share_database}: {unload}"
-        )
+    # 2026-09-21 (examples/redshift_manifest.py): a recusa é regressão e reprova.
     assert unload == "ok", unload
 
     manifest = json.loads(read_object(s3_location, f"{destination}/manifest"))
@@ -828,10 +827,11 @@ def test_unload_partition_by_and_register(
 
     # data_ref está declarada timestamp[us] na tabela Delta e INT96 no arquivo: os dois leitores
     # convertem e devolvem os valores intactos (sondagem de 2026-09-21, plan/POC.md).
-    record(
-        "redshift.unload.delta_rs_read",
-        outcome(lambda: DeltaTable(destination).to_pyarrow_table()),
-    )
+    def read_by_delta_rs() -> None:
+        """A tabela registrada, lida inteira pelo delta-rs."""
+        DeltaTable(destination).to_pyarrow_table()
+
+    record("redshift.unload.delta_rs_read", outcome(read_by_delta_rs))
     assert duckdb_connection.execute(
         f"SELECT count(*) FROM delta_scan('{destination}')"
     ).fetchone()[0] == 6
@@ -950,26 +950,27 @@ def test_parallel_copy_and_unload_on_two_connections(
     for target in targets:
         session.execute(ddl(contract_table(target, session.schema)))
 
-    def on_own_connection(command: str, count_from: str | None = None) -> int:
+    def run_on_own_connection(*commands: str) -> list:
+        """Roda os comandos em ordem numa conexão própria e devolve as linhas do último."""
         _, connection = connect_redshift()
         try:
             cursor = connection.cursor()
-            cursor.execute(command)
-            if count_from is None:
-                return 0
-            cursor.execute(f"select count(*) from {count_from}")
-            return cursor.fetchone()[0]
+            for command in commands:
+                cursor.execute(command)
+            return cursor.fetchall() if cursor.description else []
         finally:
             connection.close()
 
     def copy_into_target(k: int) -> int:
         """O ``COPY`` do manifesto ``k`` na tabela ``k``, numa conexão própria; devolve a
         contagem."""
+        qualified = session.qualified(targets[k])
         command = (
-            f"COPY {session.qualified(targets[k])} FROM '{manifests[k]}' "
+            f"COPY {qualified} FROM '{manifests[k]}' "
             f"{session.credentials_clause()} FORMAT AS PARQUET MANIFEST"
         )
-        return on_own_connection(command, session.qualified(targets[k]))
+        rows = run_on_own_connection(command, f"select count(*) from {qualified}")
+        return rows[0][0]
 
     # 1. Dois COPY em paralelo, em tabelas distintas: cada um numa conexão, limitados pelas slots do
     # WLM.
@@ -982,13 +983,13 @@ def test_parallel_copy_and_unload_on_two_connections(
     # 2. Dois UNLOAD em paralelo, para prefixos distintos.
     destinations = [s3_location.child(f"redshift/unload_paralelo_{k}") for k in range(2)]
 
-    def unload_target(k: int) -> int:
+    def unload_target(k: int) -> None:
         """O ``UNLOAD`` da tabela ``k`` para o prefixo ``k``, numa conexão própria."""
         command = (
             f"UNLOAD ('select * from {session.qualified(targets[k])}') TO '{destinations[k]}/' "
             f"{session.credentials_clause()} FORMAT PARQUET"
         )
-        return on_own_connection(command)
+        run_on_own_connection(command)
 
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -1027,6 +1028,13 @@ def read_manifest(location: S3Location, destination: str) -> dict | None:
     except s3.exceptions.NoSuchKey:
         return None
     return json.loads(body)
+
+
+def unloaded_manifest(location: S3Location, destination: str) -> dict:
+    """O manifesto de um ``UNLOAD ... MANIFEST`` que passou; a falta dele reprova."""
+    manifest = read_manifest(location, destination)
+    assert manifest is not None, f"o UNLOAD passou e não gravou o manifesto em {destination}"
+    return manifest
 
 
 def read_unloaded(location: S3Location, entries: list[dict]) -> pa.Table:
@@ -1116,8 +1124,7 @@ def test_unload_to_a_hive_prefix_and_register(
         record(f"redshift.unload_hive.unload.{month}", unload)
         assert unload == "ok", unload
 
-        manifest = read_manifest(s3_location, prefix)
-        assert manifest is not None, f"o UNLOAD não gravou o manifesto em {prefix}"
+        manifest = unloaded_manifest(s3_location, prefix)
         listed = [
             element.get("name") for element in (manifest.get("schema") or {}).get("elements", [])
         ]
@@ -1255,13 +1262,11 @@ def test_stream_by_unload_with_literal_values(
         )
         by_unload: object = unload
         if unload == "ok":
-            manifest = read_manifest(s3_location, destination)
-            entries = manifest["entries"] if manifest else []
-            by_unload = (
-                [tuple(row.values()) for row in read_unloaded(s3_location, entries).to_pylist()]
-                if entries
-                else []
-            )
+            entries = unloaded_manifest(s3_location, destination)["entries"]
+            by_unload = []
+            if entries:
+                unloaded_rows = read_unloaded(s3_location, entries).to_pylist()
+                by_unload = [tuple(row.values()) for row in unloaded_rows]
 
         record(
             f"redshift.stream.{label}",
@@ -1364,11 +1369,9 @@ def test_unload_limit_empty_result_temp_table_and_super(
         )
     )
     if unloaded == "ok":
-        manifest = read_manifest(s3_location, from_temporary)
-        unloaded = f"ok: {
-            sum(entry['meta']['record_count'] for entry in manifest['entries'])
-            if manifest else 'sem manifesto'
-        } linhas"
+        manifest = unloaded_manifest(s3_location, from_temporary)
+        unloaded_count = sum(entry["meta"]["record_count"] for entry in manifest["entries"])
+        unloaded = f"ok: {unloaded_count} linhas"
     record("redshift.stream.temp_table", unloaded)
 
     # 4. A coluna SUPER no Parquet do UNLOAD: o tipo lido e os valores, em texto para o relatório.
@@ -1385,7 +1388,7 @@ def test_unload_limit_empty_result_temp_table_and_super(
     )
     record("redshift.stream.super.unload", unloaded)
     if unloaded == "ok":
-        manifest = read_manifest(s3_location, super_prefix)
+        manifest = unloaded_manifest(s3_location, super_prefix)
         super_rows = read_unloaded(s3_location, manifest["entries"])
         record("redshift.stream.super.type", str(super_rows.schema.field("meta").type))
         record(
@@ -1447,7 +1450,9 @@ def test_row_description_oids_and_type_modifier(redshift_session: RedshiftSessio
                 "nome": field["label"].decode(),
                 "oid": field["type_oid"],
                 # ValueError num OID fora do enum
-                "tipo": reading(functools.partial(get_datatype_name, field["type_oid"])),
+                "tipo": reading(
+                    functools.partial(get_datatype_name, field["type_oid"]), errors=(ValueError,)
+                ),
                 "type_modifier": modifier,
                 "python": type(value).__name__,
             }
@@ -1570,7 +1575,7 @@ def test_unload_footer_statistics_with_nan(
             record(f"redshift.unload_nan.{label}", unloaded)
             continue
 
-        manifest = read_manifest(s3_location, destination)
+        manifest = unloaded_manifest(s3_location, destination)
         url = manifest["entries"][0]["url"]
         body = read_object(s3_location, url)
         parquet = pq.ParquetFile(io.BytesIO(body))

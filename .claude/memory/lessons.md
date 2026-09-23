@@ -468,3 +468,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `archive_prefix`) as code without a caller, against the style rule "nothing speculative", and
   offered to remove them. The user decided that code the plan assigns to a later stage stays: the
   rule covers code no stage plans. `CLAUDE.md`, `.claude/memory/decisions.md`
+- **A correction of a failure path is proved by provoking the failure** (2026-09-23). The review's
+  corrections to the S3 and Redshift suites change what happens when the target fails, and the
+  stand-in (the moto 5.2.3 server for S3 and STS, DuckDB for Redshift) ran green before and after
+  them: 35 passed, 1 skipped. Switches in the stand-in provoked each failure (no manifest after an
+  `UNLOAD` that passed, `PARTITION BY` refused, A's `INSERT` refused, `pg_backend_pid` refused), and
+  the old code ran beside the new one from a worktree: the old code recorded the missing manifest
+  as an empty result and as `ok: sem manifesto linhas`, skipped the refused `PARTITION BY`, left A's
+  aborted transaction open until its connection closed, and raised `TypeError` on the refused
+  `pg_backend_pid`. A green run proves only the path without failure. `CLAUDE.md`, `plan/POC.md`

@@ -2390,4 +2390,60 @@ perderam os rascunhos do pacote (decisão do usuário do mesmo dia). O que as ex
 **Consequência**: `src/serialize_db/engine/duckdb.py` apaga o arquivo do loader abandonado,
 `tests/conftest.py` confere a marca e mascara na saída, e [`CURRENT_STATE.md`](CURRENT_STATE.md)
 registra as contagens novas. As correções que mudam o comportamento das suítes que só rodam no
-ambiente alvo esperam uma execução lá ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+ambiente alvo passaram pelo substituto local da seção seguinte.
+
+## O que o substituto local das suítes S3 e Redshift mostrou
+
+Em 2026-09-23, no mesmo macOS, as correções que as revisões de 2026-09-22 e 2026-09-23 acharam nas
+suítes que só rodam no ambiente alvo rodaram num substituto local descartável, no scratchpad da
+sessão: o servidor do moto 5.2.3 no lugar do S3 e do STS, e um plugin do pytest que troca
+`redshift_connector.connect` por uma conexão sobre o DuckDB em memória, com o `COPY` e o `UNLOAD`
+feitos pelo `boto3` e pelo `pyarrow` sobre o moto. O substituto confere só o código Python dos
+testes.
+
+- **As três suítes** (`test_s3.py`, `test_redshift.py` e `test_redshift_transactions.py`) deram 35
+  aprovados e 1 pulado, a Data API sem `SERIALIZE_DB_REDSHIFT_WORKGROUP`, antes e depois das
+  correções: as extrações mecânicas da revisão também rodam.
+- **Cada correção do tratamento de falha**, com a falha provocada no substituto e o código anterior
+  e o corrigido rodados lado a lado:
+  - sem o manifesto de um `UNLOAD ... MANIFEST` que passou, o código anterior aprovou
+    `test_stream_by_unload_with_literal_values` com `'unload': '[]'` no relatório, registrou `ok:
+    sem manifesto linhas` para a tabela temporária e caiu com `TypeError` nos casos do `SUPER` e do
+    `NaN`; o corrigido reprova os quatro casos com `o UNLOAD passou e não gravou o manifesto em
+    <destino>`, por `unloaded_manifest`;
+  - com o `UNLOAD ... PARTITION BY` recusado (`0A000`), o anterior pulou
+    `test_unload_partition_by_and_register` pela condição `share_database`, e o corrigido reprova,
+    porque o comando passou no ambiente alvo em 2026-09-21;
+  - com o `INSERT` de A recusado em `test_writes_to_distinct_tables`, o anterior deixou a transação
+    abortada de A aberta, com os bloqueios dela, enquanto `finish` esperava B por até 120 s
+    (`FINISH_WITHIN`); o corrigido registra o `ROLLBACK` depois do erro, por `end_transaction`;
+  - com o `SELECT pg_backend_pid()` recusado, o anterior caiu com `TypeError` na abertura do
+    participante, no `.result[0][0]` do resultado vazio; o corrigido registra o erro em
+    `redshift.transactions.pid.A` e `redshift.transactions.pid.B`, roda o cenário, e `finish`
+    registra a sessão presa sem pid em vez de encerrá-la;
+  - `outcome` e `reading` pegam só `SERVICE_ERRORS` (`redshift_connector.Error`,
+    `botocore.exceptions.ClientError`, `DeltaError`, `pa.ArrowException` e `OSError`): um
+    `ProgrammingError` saiu `ProgrammingError: 42P01 relation "x" does not exist detalhe`, e
+    `ZeroDivisionError` e `AttributeError` subiram. No código anterior, um erro do próprio teste
+    virava leitura, e a asserção de `test_copy_varchar_overflow`, que espera o `COPY` recusado,
+    passava com ele.
+- **As correções de forma e de relatório**: `describe_error` em `tests/conftest.py`, usado pelas
+  duas suítes Redshift e pela limpeza, com o erro do driver em `XX000 <mensagem>` no lugar do
+  dicionário cru; `redshift.cleanup` no relatório (`46 de 46 tabela(s) apagada(s) de emulador`);
+  `statement_timeout` e `pid` por participante; os participantes como gerenciadores de contexto, e A
+  fechada quando B não conecta; a fixture `duckdb_connection` pedindo `s3_location`, que põe
+  `AWS_REGION` no ambiente antes do secret, e fechando a conexão; `run_on_own_connection` no lugar
+  do `count_from` que escolhia o modo. Em `test_s3.py`: a origem das credenciais e o proxy de
+  `test_boto3_credential_source` no relatório antes do STS, que pode não responder; em
+  `test_data_file_encryption`, a criptografia e a chave KMS do arquivo do delta-rs comparadas com as
+  de um objeto que o `boto3` grava sem opção (`None` nos dois, no moto); em
+  `test_boto3_list_copy_delete`, a listagem do `list_objects_v2` comparada com
+  `DeltaTable(uri).file_uris()`, e não com `storage.data_files()`, que sai do mesmo paginador; a
+  docstring da extensão ausente.
+- **O que o substituto não mostra**: o DuckDB não faz uma transação esperar a outra, e `b_espera_a`
+  saiu `False` nos cinco cenários; o moto não devolve `ServerSideEncryption`; as credenciais vieram
+  de variáveis (`env`), sem proxy; a Data API foi pulada.
+
+**Consequência**: as correções ficam nas suítes, e a próxima execução delas no ambiente alvo lê o
+que o substituto não tem: os bloqueios da [etapa 8](PLAN-STAGE-8.md), a criptografia padrão do
+bucket e a Data API. [`CURRENT_STATE.md`](CURRENT_STATE.md) registra as suítes corrigidas.

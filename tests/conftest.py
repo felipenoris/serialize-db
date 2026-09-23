@@ -34,7 +34,8 @@ Variáveis de ambiente lidas:
   gravado; a pasta é criada, e cada teste reprovado entra com a mensagem do erro.
   O relatório abre com a sessão (``session.``: início, plataforma, Python, versões, marcadores e,
   no fim, a contagem por resultado e a duração) e registra a limpeza de cada raiz
-  (``local.cleanup``, ``s3.cleanup``), para dizer sozinho se a suíte passou e o que ficou.
+  (``local.cleanup``, ``s3.cleanup``, ``redshift.cleanup``), para dizer sozinho se a suíte passou
+  e o que ficou.
 - ``SERIALIZE_DB_DUCKDB_EXTENSIONS``: pasta de extensões do DuckDB, a única onde a suíte instala as
   que faltam; sem ela, ``.duckdb/`` na raiz do repositório quando existir (criada por
   ``prepare_offline.sh``), senão o padrão do DuckDB, e nada é instalado. A instalação automática
@@ -674,21 +675,42 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
     return method, connection
 
 
-def drop_session_tables(session: RedshiftSession) -> None:
-    """Apaga as tabelas ``serialize_db_poc_<id>_*`` que a sessão criou; cada falha vai ao relatório
-    sem esconder o resultado dos testes."""
+def describe_error(error: Exception) -> str:
+    """O tipo e a mensagem de um erro para o relatório; num erro do ``redshift_connector``, o
+    SQLSTATE, o campo ``M`` e o detalhe ``D`` numa linha só."""
+    detail = error.args[0] if error.args else None
+    if isinstance(detail, dict) and "M" in detail:
+        parts = [str(detail.get("C", "")), str(detail["M"])]
+        if detail.get("D"):
+            # O detalhe D vem entre linhas de hífens; as palavras só de hífens saem do texto.
+            parts.append(" ".join(word for word in str(detail["D"]).split() if set(word) != {"-"}))
+        return f"{type(error).__name__}: {' '.join(part for part in parts if part)}"[:400]
+
+    # Uma exceção sem mensagem tem o texto vazio, e o relatório leva só o tipo dela.
+    lines = str(error).splitlines()
+    first_line = lines[0] if lines else ""
+    return f"{type(error).__name__}: {first_line[:200]}"
+
+
+def drop_session_tables(session: RedshiftSession) -> int:
+    """Apaga as tabelas ``serialize_db_poc_<id>_*`` que a sessão criou e devolve quantas saíram;
+    cada falha vai ao relatório sem esconder o resultado dos testes."""
     # Uma transação abortada por um teste recusaria cada DROP com 25P02: a limpeza começa fora
     # dela.
     if session.connection.in_transaction:
         try:
             session.connection.rollback()
         except Exception as error:  # noqa: BLE001 - a limpeza não esconde o resultado dos testes
-            record("redshift.cleanup.rollback", f"{type(error).__name__}: {error}")
+            record("redshift.cleanup.rollback", describe_error(error))
+    dropped = 0
     for name in session.created:
         try:
             session.execute(f"DROP TABLE IF EXISTS {session.qualified(name)}")
         except Exception as error:  # noqa: BLE001 - a limpeza não esconde o resultado dos testes
-            record(f"redshift.cleanup.{name}", f"{type(error).__name__}: {error}")
+            record(f"redshift.cleanup.{name}", describe_error(error))
+            continue
+        dropped += 1
+    return dropped
 
 
 @pytest.fixture(scope="session")
@@ -720,8 +742,14 @@ def redshift_session() -> Iterator[RedshiftSession]:
 
     yield session
 
-    if not session.keep:
-        drop_session_tables(session)
+    # A limpeza entra no relatório, como a das outras raízes: quantas tabelas saíram, ou quantas
+    # ficaram por SERIALIZE_DB_TEST_KEEP.
+    created = len(session.created)
+    if session.keep:
+        record("redshift.cleanup", f"mantidas por SERIALIZE_DB_TEST_KEEP: {created} tabela(s)")
+    else:
+        dropped = drop_session_tables(session)
+        record("redshift.cleanup", f"{dropped} de {created} tabela(s) apagada(s) de {schema}")
     connection.close()
 
 

@@ -37,8 +37,9 @@ import time
 from dataclasses import dataclass
 
 import pytest
+import redshift_connector
 
-from conftest import RedshiftSession, connect_redshift, record
+from conftest import RedshiftSession, connect_redshift, describe_error, record
 
 pytestmark = [pytest.mark.redshift]
 
@@ -82,7 +83,8 @@ class Participant:
 
     A conexão vem de ``connect_redshift``, com o autocommit ligado e o ``USE`` no banco do
     datashare, e a transação é o ``BEGIN`` explícito da etapa 8. O primeiro erro encerra a
-    sequência, porque numa transação abortada cada comando seguinte receberia ``25P02``.
+    sequência, porque numa transação abortada cada comando seguinte receberia ``25P02``. O
+    participante é um gerenciador de contexto, que fecha a conexão na saída do bloco.
     """
 
     def __init__(self, name: str) -> None:
@@ -97,8 +99,10 @@ class Participant:
         timeout = self.execute(
             Step("statement_timeout", f"SET statement_timeout TO {STATEMENT_TIMEOUT_MS}")
         )
-        record("redshift.transactions.statement_timeout", timeout.describe())
-        self.pid = self.execute(Step("pid", "SELECT pg_backend_pid()")).result[0][0]
+        record(f"redshift.transactions.statement_timeout.{name}", timeout.describe())
+        pid = self.execute(Step("pid", "SELECT pg_backend_pid()"))
+        record(f"redshift.transactions.pid.{name}", pid.describe())
+        self.pid = pid.result[0][0] if pid.result else None
 
     def execute(self, step: Step) -> Step:
         """Roda um comando e preenche o desfecho dele, sem levantar o erro do servidor."""
@@ -108,8 +112,9 @@ class Participant:
             cursor.execute(step.sql)
             step.rowcount = cursor.rowcount
             step.result = cursor.fetchall() if cursor.description else None
-        except Exception as error:  # noqa: BLE001 - o erro do servidor é a leitura
-            step.error = f"{type(error).__name__}: {error}"
+        except redshift_connector.Error as error:
+            # O erro do servidor é a leitura; um erro do próprio teste sobe.
+            step.error = describe_error(error)
         step.seconds = time.perf_counter() - started
         return step
 
@@ -121,6 +126,14 @@ class Participant:
             self.steps.append(step)
             if self.execute(step).error is not None:
                 self.failed = True
+
+    def end_transaction(self) -> None:
+        """``COMMIT`` quando a sequência correu sem erro; senão ``ROLLBACK``, que solta os
+        bloqueios da transação abortada antes de o cenário esperar pelo outro participante."""
+        if self.failed:
+            self.steps.append(self.execute(Step("ROLLBACK", "ROLLBACK")))
+            return
+        self.run([commit()])
 
     def start(self, steps: list[Step]) -> threading.Thread:
         """Roda os comandos numa thread, para o cenário ver se eles esperam pela transação do
@@ -144,8 +157,14 @@ class Participant:
         record(f"{prefix}.{self.name}", " | ".join(step.describe() for step in self.steps))
 
     def close(self) -> None:
-        # O fim da sessão desfaz a transação que ficou aberta.
+        """Fecha a conexão; o fim da sessão desfaz a transação que ficou aberta."""
         self.connection.close()
+
+    def __enter__(self) -> Participant:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 @dataclass(frozen=True)
@@ -240,6 +259,10 @@ def finish(thread: threading.Thread, participant: Participant, session: Redshift
         f"{prefix}.presa",
         f"{participant.name} em '{participant.current()}' depois de {FINISH_WITHIN:.0f} s",
     )
+    # Sem o pid, lido na abertura, a sessão presa não tem como ser encerrada.
+    if participant.pid is None:
+        record(f"{prefix}.encerramento", f"{participant.name} sem pid: sessão não encerrada")
+        return
     session.execute(f"SELECT pg_terminate_backend({participant.pid})")
     thread.join(FINISH_WITHIN)
 
@@ -276,22 +299,17 @@ def run_scenario(
     """Roda um cenário e devolve os dois participantes.
 
     A roda ``a_steps`` e segura a transação aberta; B roda ``b_steps`` e, numa thread,
-    ``b_thread_steps``. O relatório registra se B espera A e em que comando, e o ``COMMIT`` de A
-    solta B.
+    ``b_thread_steps``. O relatório registra se B espera A e em que comando, e o fim da transação
+    de A, o ``COMMIT`` ou o ``ROLLBACK`` de uma sequência que falhou, solta B.
     """
-    a = Participant("A")
-    b = Participant("B")
-    try:
+    with Participant("A") as a, Participant("B") as b:
         a.run(a_steps)
         b.run(b_steps)
         thread = b.start(b_thread_steps)
         b_waits = waits(thread)
         record(f"{prefix}.b_espera_a", f"{b_waits} ({b.current()})")
-        a.run([commit()])
+        a.end_transaction()
         finish(thread, b, session, prefix)
-    finally:
-        a.close()
-        b.close()
     a.report(prefix)
     b.report(prefix)
     return a, b
@@ -314,11 +332,9 @@ def test_isolation_level_readings(redshift_session: RedshiftSession) -> None:
             "redshift.transactions.isolation.stv_db_isolation_level",
             session.execute("SELECT * FROM stv_db_isolation_level"),
         )
-    except Exception as error:  # noqa: BLE001 - a negação é a leitura
-        record(
-            "redshift.transactions.isolation.stv_db_isolation_level",
-            f"{type(error).__name__}: {error}",
-        )
+    except redshift_connector.Error as error:
+        # A negação é a leitura.
+        record("redshift.transactions.isolation.stv_db_isolation_level", describe_error(error))
 
 
 def test_writes_to_distinct_tables(redshift_session: RedshiftSession) -> None:
@@ -425,9 +441,7 @@ def test_lock_on_the_control_table(redshift_session: RedshiftSession) -> None:
     session = redshift_session
     tables = create_tables(session, "lock")
     prefix = "redshift.transactions.lock"
-    a = Participant("A")
-    b = Participant("B")
-    try:
+    with Participant("A") as a, Participant("B") as b:
         a.run([begin(), Step("LOCK", f"LOCK {tables.control}")])
         if a.failed:
             a.report(prefix)
@@ -454,11 +468,8 @@ def test_lock_on_the_control_table(redshift_session: RedshiftSession) -> None:
         )
         b_waits = waits(thread)
         record(f"{prefix}.b_espera_a", f"{b_waits} ({b.current()})")
-        a.run([commit()])
+        a.end_transaction()
         finish(thread, b, session, prefix)
-    finally:
-        a.close()
-        b.close()
     a.report(prefix)
     b.report(prefix)
     rows = control_rows(session, tables)

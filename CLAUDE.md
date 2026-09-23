@@ -470,9 +470,12 @@ A new lesson adds its story there and its rule here, in the same commit.
   git rule names; add files by path, and agree by message on the order of edits to files two
   sessions touch (2026-09-23).
 - **A test only the target can run is first run against a local stand-in**: DuckDB for Redshift and
-  a folder for S3 check the test's own code before a target run is spent; the stand-in found a `NaN`
-  case filtering `valor > 2`, which the footer's 3.0 maximum lets through, so the pruning loss it
-  was written to show could never appear (2026-09-23).
+  the moto server or a folder for S3 check the test's own code before a target run is spent; the
+  stand-in found a `NaN` case filtering `valor > 2`, which the footer's 3.0 maximum lets through, so
+  the pruning loss it was written to show could never appear. A correction of a failure path is
+  proved by provoking that failure in the stand-in, the old and the new code side by side: both ran
+  green without it, and the old suites recorded a missing `UNLOAD` manifest as an empty result
+  (2026-09-23).
 - **When a stage's module lands, the study suites keep only the external libraries' facts**: every
   draft of package code leaves in the same unit of work, and its unique cases move to the package
   tests; a draft kept beside its module drifts and measures a setup the module never runs (user

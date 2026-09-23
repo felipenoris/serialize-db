@@ -65,9 +65,10 @@ foi medido em [`POC.md`](POC.md).
   snapshot, linhas distintas confirmem as duas transações ([`redshift.md`](redshift.md)); o banco do
   datashare informa isolamento `UNKNOWN`, e o `LOCK` não está na lista de comandos da escrita por
   datashare. `tests/proof_of_concept/test_redshift_transactions.py` (`-m redshift`) mede os cenários
-  e espera uma execução no ambiente alvo; o resultado decide se a transação da etapa 8 fica como
-  está ou ganha o `LOCK`, a nova tentativa, o `UPDATE` condicionado à versão lida ou a staging por
-  execução.
+  e espera uma execução no ambiente alvo: o substituto local de 2026-09-23 conferiu só o código
+  deles, porque o DuckDB não faz uma transação esperar a outra ([`POC.md`](POC.md)). O resultado
+  no ambiente alvo decide se a transação da etapa 8 fica como está ou ganha o `LOCK`, a nova
+  tentativa, o `UPDATE` condicionado à versão lida ou a staging por execução.
 - **O `Double` não finito nas estatísticas do Delta**, a
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
   infinito numa coluna `Double`, e a biblioteca grava sem mínimo e máximo, no rodapé Parquet e no
@@ -94,28 +95,6 @@ foi medido em [`POC.md`](POC.md).
   `tests/test_probes.py` grava relatórios em `tmp_path`, sem variável (revisão de 2026-09-22). A
   decisão é do usuário: admitir a pasta temporária do pytest na premissa e no cabeçalho, ou marcar
   esses testes `local`, e a esteira do GitHub deixa de rodá-los.
-- **As correções das suítes S3 e Redshift que esperam o ambiente alvo.** A revisão de 2026-09-22
-  achou asserções que não reprovam e leituras que se perdem, em suítes que só rodam no bucket e no
-  Redshift e que por isso não mudaram sem uma execução lá:
-  `test_redshift.py::outcome` pega toda exceção, e a asserção de `test_copy_varchar_overflow` passa
-  com um `TypeError` do próprio teste (pegar `redshift_connector.Error`); o `UNLOAD` recusado de
-  `test_unload_partition_by_and_register`, que o comentário chama de regressão, é pulado com
-  `share_database` em vez de reprovar; `test_s3.py::test_boto3_list_copy_delete` compara a
-  listagem do `list_objects_v2` com `storage.data_files()`, que sai do mesmo paginador (comparar
-  com `DeltaTable(uri).file_uris()`), `test_data_file_encryption` aceita qualquer criptografia, e
-  `test_boto3_credential_source` chama o STS antes de registrar a origem das credenciais, que se
-  perde quando o STS não responde. A revisão do código de 2026-09-23 mudou essas suítes só na forma
-  e em extrações mecânicas, e achou mais correções que mudam o comportamento na falha:
-  `test_redshift.py` trata o manifesto ausente de três modos (asserção, reserva e nenhuma
-  conferência), `on_own_connection` usa `count_from` como chave de modo, a fixture
-  `duckdb_connection` só recebe `AWS_REGION` pela ordem dos argumentos do teste, e a limpeza do
-  Redshift não registra nada quando dá certo; em `test_redshift_transactions.py`, a participante A
-  que falha antes do `COMMIT` não desfaz a transação antes de `finish`, e B pode esperar os 120 s
-  presa nos bloqueios de A, a chave `statement_timeout` do relatório é regravada por cada
-  participante, um `SELECT pg_backend_pid()` que falha faz `.result[0][0]` levantar `TypeError`, A
-  não é fechada quando B não conecta, e o erro sai cru do driver onde `test_redshift.py` usa
-  `describe`; em `test_s3.py`, a docstring ainda diz que a suíte é pulada sem internet. A próxima
-  execução das duas suítes no ambiente alvo vem com essas correções.
 - **O texto da auditoria no Redshift.** O texto de `serialize_db.audit.audit_sql(..., "redshift")`
   nunca rodou no Redshift: a contagem por `count(CASE WHEN ... THEN 1 END)`, que a documentação do
   `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o operador

@@ -174,8 +174,7 @@ def connect_duckdb(extensions: Iterable[str]) -> duckdb.DuckDBPyConnection:
 
 
 class StreamOnly:
-    """Um objeto que só expõe ``__arrow_c_stream__``, como o ``BatchStream`` de
-    ``test_parallel.py``.
+    """Um objeto que só expõe ``__arrow_c_stream__``, como o ``DuckDBStream`` do motor DuckDB.
 
     Quem pede um fluxo pela interface PyCapsule (``RecordBatchReader.from_stream``, o ``register``
     do DuckDB) o aceita como um leitor, sem que ele seja um ``RecordBatchReader``.
