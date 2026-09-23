@@ -33,6 +33,9 @@ Read before running anything in the SageMaker space or the target, preparing the
 
 ## The target
 
+The target is a sandbox, not production (user statement of 2026-09-23): the source files under
+`databases/prd/db_projetado` are a copy of the production base, and the S3 bucket and the Redshift
+schema are sandbox resources; `prd` in the path names the base copied, not the environment.
 Redshift serverless `controladoria-wg` in `sa-east-1`, account 138071776059, with no internet: the readings of
 2026-09-20 and 2026-09-21 are in `redshift.md` and `plan/POC.md`. The five probes of 2026-09-21
 (03:47 to 03:51 UTC, Linux x86_64, Python 3.13.15, the project venv; reports in `secrets/probes-aws-bn/`,

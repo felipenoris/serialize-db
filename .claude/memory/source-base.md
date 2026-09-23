@@ -60,9 +60,9 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
 
 ## The early migration in the target
 
-- `scripts/migrate_parquet_to_delta.py` ran in the target over the production base itself, read
-  only (the `--source` of `SUITE.md` is `databases/prd/db_projetado`, not a copy), one process and
-  one `--report` JSON per table, in a version from d2c545b (2026-09-21) to 8de3c8b
+- `scripts/migrate_parquet_to_delta.py` ran in the target over the copy of the production base in
+  the sandbox (`databases/prd/db_projetado`, the `--source` of `SUITE.md`), one process and one
+  `--report` JSON per table, in a version from d2c545b (2026-09-21) to 8de3c8b
   (2026-09-22), before the issue #59 rule of e2ed614: the user reported the success in the session
   of cea8a51 (2026-09-22) and handed the reports over on 2026-09-23. The JSON records neither the
   mode, the sort, the roots nor the machine; the script prints the DuckDB `threads` and

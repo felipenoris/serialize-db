@@ -570,10 +570,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `NUMERIC` type from the driver's `type_modifier`, and the export without `PARTITION BY` to a prefix
   new per attempt; the readings they need wait for the next suite run in the target.
 - The reports of `scripts/migrate_parquet_to_delta.py`, which ran successfully in the target over
-  the production base, read only, in its version before issue #59, arrived on 2026-09-23 and stay
-  outside git and out of `plan/` at the user's request, so `plan/` still calls them unavailable;
-  their findings are in `.claude/memory/source-base.md`: every table and partition matched, and the
-  production copy has no non-finite `Double`. The next step is the user's rerun of the `SUITE.md`
+  the copy of the production base in the sandbox, in its version before issue #59, arrived on
+  2026-09-23 and stay outside git and out of `plan/` at the user's request, so `plan/` still calls
+  them unavailable; their findings are in `.claude/memory/source-base.md`: every table and
+  partition matched, and the production copy has no non-finite `Double`. The next step is the user's rerun of the `SUITE.md`
   migration commands (every table, same parameters) with the latest script, which measures every
   partition in the four write variants: the `cad_lancamentos` numbers are the revision trigger of
   `export_mode` (the default, and whether the other mode leaves stages 4, 5 and 7) and of the
