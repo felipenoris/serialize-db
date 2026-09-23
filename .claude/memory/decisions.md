@@ -561,3 +561,8 @@ the same day: code the plan assigns to a later stage stays, even without a calle
 `id_parent` and `id_child` always differ, and `rel_contas_hierarquias` implements a tree of
 accounting accounts, which the fixture now builds and `tests/test_source_db_projetado.py` checks.
 `plan/PLAN-STAGE-4.md`, `plan/CURRENT_STATE.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+The user asked on 2026-09-23 to build the local stand-in and apply the behavior corrections of the
+target-only suites, then to version the stand-in: `tests/emulator.py`, switched on by
+`SERIALIZE_DB_TEST_EMULATOR`, with moto pinned in the `dev` group. `plan/POC.md`,
+`plan/CURRENT_STATE.md`

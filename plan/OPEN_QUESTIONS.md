@@ -95,6 +95,11 @@ foi medido em [`POC.md`](POC.md).
   `tests/test_probes.py` grava relatórios em `tmp_path`, sem variável (revisão de 2026-09-22). A
   decisão é do usuário: admitir a pasta temporária do pytest na premissa e no cabeçalho, ou marcar
   esses testes `local`, e a esteira do GitHub deixa de rodá-los.
+- **A esteira do GitHub com o substituto local.** `tests.yml` roda os testes do pacote sem
+  `tests/proof_of_concept/`. Com `SERIALIZE_DB_TEST_EMULATOR`, a esteira rodaria também as suítes
+  S3 e Redshift e os casos `s3` do pacote no moto (a suíte inteira levou 70 s no macOS em
+  2026-09-23, [`POC.md`](POC.md)) e precisaria das extensões `httpfs` e `aws` do DuckDB em
+  `.duckdb/`, além da `delta`. A decisão é do usuário.
 - **O texto da auditoria no Redshift.** O texto de `serialize_db.audit.audit_sql(..., "redshift")`
   nunca rodou no Redshift: a contagem por `count(CASE WHEN ... THEN 1 END)`, que a documentação do
   `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o operador

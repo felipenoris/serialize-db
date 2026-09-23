@@ -57,7 +57,14 @@ from sqlalchemy.sql.visitors import iterate
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
 from client_model import Base as ClientBase
-from conftest import RedshiftSession, S3Location, connect_redshift, describe_error, record
+from conftest import (
+    RedshiftSession,
+    S3Location,
+    connect_redshift,
+    describe_error,
+    duckdb_s3_secret,
+    record,
+)
 from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
 from serialize_db import audit, schema, sql
 
@@ -82,12 +89,11 @@ SERVICE_ERRORS = (
 @pytest.fixture(scope="session")
 def duckdb_connection(s3_location: S3Location) -> Iterator[duckdb.DuckDBPyConnection]:
     """Conexão com ``httpfs``, ``delta`` e ``aws`` e um secret S3 pela cadeia de credenciais,
-    fechada no fim da sessão."""
+    com as opções de ``Storage.duckdb_setup``, fechada no fim da sessão."""
     # s3_location roda antes do secret: pelo proxy_environment, AWS_REGION e NO_PROXY estão no
     # ambiente, e require_s3_access conferiu o acesso à raiz.
     connection = connect_duckdb(("httpfs", "delta", "aws"))
-    region = os.environ.get("AWS_REGION", "")
-    connection.execute(f"CREATE SECRET poc (TYPE s3, PROVIDER credential_chain, REGION '{region}')")
+    connection.execute(duckdb_s3_secret("poc"))
 
     yield connection
     connection.close()

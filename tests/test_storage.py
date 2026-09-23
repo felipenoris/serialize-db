@@ -1,11 +1,11 @@
 """``serialize_db.storage``: os dois armazenamentos pelo ``pyarrow.fs``.
 
 Os testes sem gravar rodam sem variável: a construção por URI sem rede, os caminhos relativos, as
-opções do delta-rs resolvidas a cada chamada e sem credencial, o ambiente que o delta-rs lê e o
-proxy do DuckDB. Os que gravam rodam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``) e,
-com ``SERIALIZE_DB_TEST_S3_ROOT``, os mesmos no bucket (marcador ``s3``): a escrita condicional do
-arquivo de controle, a listagem, a cópia e a exclusão, e a conexão do DuckDB com a extensão
-``delta`` da pasta configurada.
+opções do delta-rs resolvidas a cada chamada e sem credencial, o ambiente que o delta-rs lê, e o
+proxy e o secret do DuckDB. Os que gravam rodam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador
+``local``) e, com ``SERIALIZE_DB_TEST_S3_ROOT``, os mesmos no bucket (marcador ``s3``): a escrita
+condicional do arquivo de controle, a listagem, a cópia e a exclusão, e a conexão do DuckDB com a
+extensão ``delta`` da pasta configurada.
 """
 
 from __future__ import annotations
@@ -17,7 +17,12 @@ import pyarrow.fs as pafs
 import pytest
 
 from serialize_db.errors import ConflictError
-from serialize_db.storage import Storage, _proxy_settings, prepare_environment
+from serialize_db.storage import (
+    Storage,
+    _duckdb_secret_options,
+    _proxy_settings,
+    prepare_environment,
+)
 
 # As variáveis que Storage lê; cada teste sem gravar parte delas limpas.
 AWS_VARIABLES = (
@@ -135,6 +140,23 @@ def test_duckdb_proxy_settings_without_credentials_in_the_address() -> None:
     separate = _proxy_settings({"HTTP_PROXY": "proxy:3128", "username": "bia", "password": "x"})
     assert separate == {"http_proxy": "proxy:3128", "http_proxy_username": "bia",
                         "http_proxy_password": "x"}
+
+
+def test_duckdb_secret_options_for_an_endpoint(clean_aws: pytest.MonkeyPatch) -> None:
+    """Sem ``AWS_ENDPOINT_URL``, a cadeia de credenciais e a região; com ele, o endereço sem o
+    esquema e o endereço por caminho, e ``USE_SSL false`` só num endpoint ``http``."""
+    clean_aws.setenv("AWS_REGION", "sa-east-1")
+    chain = ["TYPE s3", "PROVIDER credential_chain", "REGION 'sa-east-1'"]
+    assert _duckdb_secret_options() == chain
+
+    # O endpoint http de um serviço compatível num IP, como o moto do substituto local.
+    clean_aws.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:5055")
+    http = [*chain, "ENDPOINT '127.0.0.1:5055'", "URL_STYLE 'path'", "USE_SSL false"]
+    assert _duckdb_secret_options() == http
+
+    clean_aws.setenv("AWS_ENDPOINT_URL", "https://minio.exemplo:9000")
+    https = [*chain, "ENDPOINT 'minio.exemplo:9000'", "URL_STYLE 'path'"]
+    assert _duckdb_secret_options() == https
 
 
 def test_write_text_exclusive_create_and_if_match(storage: Storage) -> None:

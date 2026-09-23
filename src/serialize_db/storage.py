@@ -108,6 +108,28 @@ def _proxy_settings(environ: Mapping[str, str]) -> dict[str, str]:
     return settings
 
 
+def _duckdb_secret_options() -> list[str]:
+    """As opções do secret S3 do DuckDB: a cadeia de credenciais e a região; com
+    ``AWS_ENDPOINT_URL``, o endereço sem o esquema, o endereço por caminho e, num endpoint
+    ``http``, ``USE_SSL false``.
+
+    O DuckDB não lê ``AWS_ENDPOINT_URL``. Sem ``URL_STYLE 'path'`` o bucket vira subdomínio do
+    endereço, que num IP não resolve, e sem ``USE_SSL false`` a conexão a um endpoint ``http``
+    tenta TLS e falha (sonda de 2026-09-23 contra o moto, ``plan/POC.md``). O endereço por caminho
+    é o que o delta-rs e o PyArrow usam com um endpoint próprio.
+    """
+    options = ["TYPE s3", "PROVIDER credential_chain", f"REGION {literal(_region())}"]
+    endpoint = _endpoint()
+    if not endpoint:
+        return options
+    parts = urllib.parse.urlsplit(endpoint)
+    options.append(f"ENDPOINT {literal(parts.netloc or endpoint)}")
+    options.append("URL_STYLE 'path'")
+    if parts.scheme == "http":
+        options.append("USE_SSL false")
+    return options
+
+
 def _fingerprint(content: bytes) -> str:
     """A impressão digital de um conteúdo na pasta local: o ``sha256`` dele, o papel da etag."""
     return hashlib.sha256(content).hexdigest()
@@ -400,9 +422,9 @@ class Storage:
         """Carrega as extensões que a raiz pede e, no S3, cria o secret da cadeia de credenciais.
 
         Na pasta local, só ``LOAD delta``. No S3, ``LOAD httpfs``, ``LOAD delta`` e ``LOAD aws``,
-        o secret ``credential_chain`` com a região e o endpoint, e o proxy de ``HTTP_PROXY`` sem
-        as credenciais no endereço. As extensões vêm da pasta configurada na conexão; nada é
-        baixado.
+        o secret ``credential_chain`` com a região e o endpoint de ``_duckdb_secret_options``, e o
+        proxy de ``HTTP_PROXY`` sem as credenciais no endereço. As extensões vêm da pasta
+        configurada na conexão; nada é baixado.
         """
         if not self.is_s3:
             connection.execute("LOAD delta")
@@ -411,13 +433,8 @@ class Storage:
             connection.execute(f"LOAD {extension}")
         for name, value in _proxy_settings(os.environ).items():
             connection.execute(f"SET {name} = {literal(value)}")
-        options = ["TYPE s3", "PROVIDER credential_chain", f"REGION {literal(_region())}"]
-        endpoint = _endpoint()
-        if endpoint:
-            # O secret recebe o endereço sem o esquema: host e porta.
-            host = urllib.parse.urlsplit(endpoint).netloc or endpoint
-            options.append(f"ENDPOINT {literal(host)}")
-        connection.execute(f"CREATE OR REPLACE SECRET serialize_db_s3 ({', '.join(options)})")
+        options = ", ".join(_duckdb_secret_options())
+        connection.execute(f"CREATE OR REPLACE SECRET serialize_db_s3 ({options})")
 
     def duckdb_connect(self, database: str = ":memory:",
                        config: Mapping[str, object] | None = None) -> duckdb.DuckDBPyConnection:

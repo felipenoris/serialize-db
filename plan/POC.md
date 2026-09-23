@@ -2447,3 +2447,45 @@ testes.
 **Consequência**: as correções ficam nas suítes, e a próxima execução delas no ambiente alvo lê o
 que o substituto não tem: os bloqueios da [etapa 8](PLAN-STAGE-8.md), a criptografia padrão do
 bucket e a Data API. [`CURRENT_STATE.md`](CURRENT_STATE.md) registra as suítes corrigidas.
+
+## O que o substituto local versionado mostrou
+
+Em 2026-09-23, no mesmo macOS, o substituto passou a `tests/emulator.py`, ligado por
+`SERIALIZE_DB_TEST_EMULATOR` em `tests/conftest.py`, e o moto 5.2.3 entrou fixado no grupo `dev`
+com o `flask` 3.1.3 e o `flask-cors` 6.0.5.
+
+- **As dependências do moto.** O `moto[server]==5.2.3` trouxe 61 pacotes, entre eles `cfn-lint`,
+  `docker`, `sympy` e `aws-xray-sdk`; o `moto[s3]` com o `flask` e o `flask-cors` trouxe 28 e
+  serviu o S3 e o STS por `python -m moto.server`, no ar em 0,16 s, com o 412 da escrita
+  condicional. Com só `AWS_REGION` definida, o `boto3` 1.43.98 tomou a região do perfil do usuário
+  e o `CreateBucket` sem `LocationConstraint` recebeu `IllegalLocationConstraintException`: o
+  substituto define também `AWS_DEFAULT_REGION`.
+- **O secret do DuckDB contra o moto.** No DuckDB 1.5.5, o secret `credential_chain` com
+  `REGION 'us-east-1'` foi a `https://emulador.s3.us-east-1.amazonaws.com`, porque o DuckDB não lê
+  `AWS_ENDPOINT_URL`. Com só o `ENDPOINT`, o que `Storage.duckdb_setup` montava, o endereço saiu
+  `https://emulador.127.0.0.1:<porta>`, sem resolução de nome; com `URL_STYLE 'path'`, erro de SSL;
+  com `USE_SSL false` sem `URL_STYLE`, o mesmo nome sem resolução; com as três opções, a leitura.
+  O endereço por caminho é o que o delta-rs e o PyArrow usam com um endpoint próprio.
+- **O substituto sem remendos.** A versão descartável trocava `redshift_connector.connect` e
+  `Storage.duckdb_setup` em tempo de execução. Na versionada, `connect_redshift` escolhe a conexão
+  do substituto, a biblioteca monta o secret com o endpoint, e as duas suítes criam o secret delas
+  por `duckdb_s3_secret`, com as opções da biblioteca. O código anterior a este `tests/conftest.py`
+  não alcança o substituto: um lado a lado roda o arquivo de teste antigo com o `conftest.py`
+  atual.
+- **As execuções.** As três suítes deram 35 aprovados e 1 pulado, a Data API, com a variável só.
+  Com a raiz local, a suíte inteira deu 456 aprovados e 1 pulado em 70 s, e os casos `s3` de
+  `test_storage.py` e de `test_delta.py` rodaram no moto pelo `Storage.duckdb_connect`. Os três
+  testes de `test_conftest_redshift.py`, que conferem o caminho do driver, reprovaram com o
+  substituto ligado até o próprio teste desligá-lo. Num ambiente despido (`env -i`, com `HOME` e
+  `TMPDIR` em pastas vazias e `.venv/bin/python -m pytest`), as três suítes deram o mesmo
+  resultado, as duas pastas continuaram vazias, o repositório não mudou, e o relatório não trouxe
+  resposta da AWS de verdade (chave inválida, assinatura, `amazonaws.com`). O moto saiu com a
+  sessão em cada execução.
+- **As falhas provocadas**, sobre o código corrigido: `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST`
+  reprovou os quatro casos do manifesto; `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` com `PARTITION BY`
+  reprovou `test_unload_partition_by_and_register`, com o `INSERT` de A levou ao `ROLLBACK`, e com
+  `pg_backend_pid` registrou o erro dos dois participantes e rodou o cenário.
+
+**Consequência**: `Storage.duckdb_setup` leva ao secret o endereço por caminho e, num endpoint
+`http`, `USE_SSL false` ([`PLAN-STAGE-3.md`](PLAN-STAGE-3.md)), e
+[`CURRENT_STATE.md`](CURRENT_STATE.md) registra o substituto e as contagens.

@@ -240,7 +240,7 @@ research appends to the matching group.
 
 | File | Subject |
 | --- | --- |
-| `README.md` | `uv sync --group dev`, the `pdoc` build, and only the commands: the package tests (the GitHub workflow's command), the AWS tests (`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` switches the Redshift suite on, `-m "not redshift"` off), the variables table, the probe commands and the migration script's commands; the two workflow badges open it. What each test does lives in the header of its file, and the suites' writes, permissions and report in the header of `tests/conftest.py` (user decision of 2026-09-21). |
+| `README.md` | `uv sync --group dev`, the `pdoc` build, and only the commands: the package tests (the GitHub workflow's command), the stand-in run of the target-only suites (`SERIALIZE_DB_TEST_EMULATOR`), the AWS tests (`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` switches the Redshift suite on, `-m "not redshift"` off), the variables table, the probe commands and the migration script's commands; the two workflow badges open it. What each test does lives in the header of its file, and the suites' writes, permissions and report in the header of `tests/conftest.py` (user decision of 2026-09-21). |
 | `docs/` | The package documentation for `pdoc` (user decision of 2026-09-21): `docs/index.md` is the main page, included by the docstring of `src/serialize_db/__init__.py`, with how the package works, the tutorial and the type mapping table; `uv run pdoc serialize_db --docformat restructuredtext -o site` builds it. Docstring examples open with `.. code-block:: python` (or `shell`), the only form pdoc highlights. |
 | `.github/` | `tests.yml` installs the DuckDB `delta` extension into `.duckdb/` and runs `tests/` without `tests/proof_of_concept/` and `tests/test_probes.py` on push and pull request; `docs.yml` publishes the `pdoc` site to <https://felipenoris.github.io/serialize-db/> on push to `main` (the repository's Pages source must be "GitHub Actions"). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Rerun it whenever a dependency is added**; a new DuckDB extension, a Python version change or another runtime asset is added by hand. Only a folder prepared on Linux x86_64 serves the SageMaker space; the header is the operating procedure, and the extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`. |
@@ -265,6 +265,7 @@ research appends to the matching group.
 | `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3), `audit.py`, `engine/__init__.py` (the `Engine` protocol) and `engine/duckdb.py` (stage 4), `execution.py` (stage 6), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, `run` and `audit`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` to `plan/PLAN-STAGE-4.md` and `plan/PLAN-STAGE-6.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
 | `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). The corrected copy is the client model in `tests/client_model/`. |
 | `tests/client_model/` | The client model (user decision of 2026-09-21): the corrected copy of `tests/reference_model/` that the tests hand to the package API as a client library would, the corrections listed in `plan/PLAN-STAGE-1.md` and checked by `tests/test_client_model.py`; `statements.py` holds the fictitious pipeline's Core statements (`STATEMENTS`), `schema/` and `sql/` the generated files. |
+| `tests/emulator.py` | The local stand-in of S3 and Redshift for the target-only suites (user decision of 2026-09-23): with `SERIALIZE_DB_TEST_EMULATOR`, `tests/conftest.py` starts the moto server (`moto[s3]` pinned in `dev`) as a subprocess before collection, points the AWS variables and the suites' roots at it, and gives `connect_redshift` a fake `redshift_connector` connection over an in-memory DuckDB that translates the suites' Redshift SQL and imitates the refusals read in the target; `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` and `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` provoke failures. It checks the tests' code, not the target's behavior; the command is in `README.md`. |
 | `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base and in the production base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py`; the material of the stage 7 test. It also holds the reference model's keys (`UNIQUE_KEYS`, `FOREIGN_KEYS`, `MODEL_NOT_NULL_DECLARED_NULLABLE`), which `tests/test_reference_model.py` checks against the model and the fixture satisfies. |
 
 `plan/duckdb.md`, `plan/redshift.md` and `plan/delta.md` share a section order: data organization and
@@ -469,13 +470,13 @@ A new lesson adds its story there and its rule here, in the same commit.
   switch moves every session in the folder; another session's open `claude/` PR is the open PR the
   git rule names; add files by path, and agree by message on the order of edits to files two
   sessions touch (2026-09-23).
-- **A test only the target can run is first run against a local stand-in**: DuckDB for Redshift and
-  the moto server or a folder for S3 check the test's own code before a target run is spent; the
-  stand-in found a `NaN` case filtering `valor > 2`, which the footer's 3.0 maximum lets through, so
-  the pruning loss it was written to show could never appear. A correction of a failure path is
-  proved by provoking that failure in the stand-in, the old and the new code side by side: both ran
-  green without it, and the old suites recorded a missing `UNLOAD` manifest as an empty result
-  (2026-09-23).
+- **A test only the target can run is first run against a local stand-in**: `tests/emulator.py`
+  (`SERIALIZE_DB_TEST_EMULATOR`), DuckDB for Redshift and moto for S3, checks the test's own code
+  before a target run is spent; the stand-in found a `NaN` case filtering `valor > 2`, which the
+  footer's 3.0 maximum lets through, so the pruning loss it was written to show could never appear.
+  A correction of a failure path is proved by provoking that failure in the stand-in, the old and
+  the new code side by side: both ran green without it, and the old suites recorded a missing
+  `UNLOAD` manifest as an empty result (2026-09-23).
 - **When a stage's module lands, the study suites keep only the external libraries' facts**: every
   draft of package code leaves in the same unit of work, and its unique cases move to the package
   tests; a draft kept beside its module drifts and measures a setup the module never runs (user
@@ -489,6 +490,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   every parameter id: a case with the id `redshift` was skipped as the Redshift suite (2026-09-23).
 - **A test that runs a default which writes points the default at the authorized root first**:
   `DuckDBConfig()`'s `mkdtemp` wrote in the system temp folder from a `local` test (2026-09-23).
+- **A compatibility the library claims is run against an instance of it**: `AWS_ENDPOINT_URL`
+  reached boto3, PyArrow and delta-rs, while the DuckDB secret carried only the host and never
+  reached an `http` or IP endpoint until the moto stand-in ran the package's `s3` tests
+  (2026-09-23).
 - **Code the plan assigns to a later stage stays, even without a caller**: the no-speculative-code
   rule covers code no stage plans (user decision of 2026-09-23).
 
@@ -575,7 +580,8 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   goes through `UNLOAD` and `query` through the cursor (user decision of 2026-09-23).
 - `tests/proof_of_concept/test_redshift_transactions.py` waits for a run in the target: two
   simultaneous publications around `serialize_db_publications`, whose result decides the stage 8
-  transaction.
+  transaction. The three target-only suites pass on the local stand-in `tests/emulator.py`, which
+  has no locks, no bucket encryption and no Data API (2026-09-23).
 - The plan's unit is the partition (`publish_partition`, `partitions=`, `Execution(partition=...)`),
   a `String(n)` text column; the `AAAA-MM-DD` date is the current base's case, never the month.
 - The Redshift target is `sbx_aco_decon` in the datashare database `datalake_rw_shared`, reached by

@@ -477,3 +477,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   as an empty result and as `ok: sem manifesto linhas`, skipped the refused `PARTITION BY`, left A's
   aborted transaction open until its connection closed, and raised `TypeError` on the refused
   `pg_backend_pid`. A green run proves only the path without failure. `CLAUDE.md`, `plan/POC.md`
+- **A compatibility the library claims is run against an instance of it** (2026-09-23).
+  `storage.py` read `AWS_ENDPOINT_URL` "for an S3-compatible service" and passed it to boto3,
+  PyArrow and delta-rs, while the DuckDB secret carried only the host: with DuckDB's default
+  virtual-host style and TLS, it never reached an `http` endpoint or one at an IP, and no test ran
+  it against such a service. The moto stand-in found it when the package's `s3` tests read through
+  `Storage.duckdb_connect`; the secret now adds `URL_STYLE 'path'` and, for `http`,
+  `USE_SSL false`. `CLAUDE.md`, `plan/POC.md`
+

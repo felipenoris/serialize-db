@@ -29,6 +29,11 @@ Variáveis de ambiente lidas:
   ``SERIALIZE_DB_REDSHIFT_IAM_ROLE`` nomeia o papel do ``COPY`` e do ``UNLOAD``, ou a palavra
   ``default``; sem ela, os dois levam as credenciais da sessão ``boto3``, que é o caminho do
   ambiente alvo, onde o namespace não tem papel associado.
+- ``SERIALIZE_DB_TEST_EMULATOR``: qualquer valor troca o S3 e o Redshift pelo substituto local de
+  ``emulator.py``, o moto e um DuckDB em memória, e autoriza as suítes S3 e Redshift nele: a
+  sessão define as raízes delas e aponta as variáveis da AWS para o moto, em ``127.0.0.1``.
+  ``SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL`` e ``SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST`` provocam
+  falhas no substituto.
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos, as pastas e as tabelas criados.
 - ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é
   gravado; a pasta é criada, e cada teste reprovado entra com a mensagem do erro.
@@ -76,6 +81,7 @@ import os
 import re
 import platform
 import shutil
+import subprocess
 import time
 import uuid
 from collections.abc import Iterator
@@ -136,6 +142,37 @@ def opened_partition_folders(connection: object, column: str) -> set[str]:
     return folders
 
 
+# O processo do moto, guardado na configuração enquanto a sessão roda sobre o substituto local.
+MOTO_PROCESS = pytest.StashKey[subprocess.Popen]()
+
+
+def emulator_enabled() -> bool:
+    """Verdadeiro quando ``SERIALIZE_DB_TEST_EMULATOR`` liga o substituto local."""
+    return bool(os.environ.get("SERIALIZE_DB_TEST_EMULATOR"))
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Com o substituto local ligado, sobe o moto e aponta as suítes S3 e Redshift para ele antes
+    da coleta, que lê as raízes delas."""
+    if not emulator_enabled():
+        return
+    import emulator
+
+    config.stash[MOTO_PROCESS] = emulator.start()
+    endpoint = os.environ["AWS_ENDPOINT_URL"]
+    record("session.emulator", f"S3 no moto em {endpoint}; Redshift num DuckDB em memória")
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Encerra o moto do substituto local."""
+    process = config.stash.get(MOTO_PROCESS, None)
+    if process is None:
+        return
+    import emulator
+
+    emulator.stop(process)
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Abre o relatório com a sessão: quando, onde, com que versões e com que seleção ela roda."""
     versions = []
@@ -160,6 +197,14 @@ def duckdb_extension_directory() -> str | None:
 
     local = Path(__file__).resolve().parent.parent / ".duckdb"
     return str(local) if local.is_dir() else None
+
+
+def duckdb_s3_secret(name: str) -> str:
+    """O ``CREATE SECRET`` S3 do DuckDB com as opções de ``Storage.duckdb_setup``: a cadeia de
+    credenciais, a região e, com ``AWS_ENDPOINT_URL``, o endpoint, como no substituto local."""
+    from serialize_db.storage import _duckdb_secret_options
+
+    return f"CREATE SECRET {name} ({', '.join(_duckdb_secret_options())})"
 
 
 def local_root() -> Path | None:
@@ -643,7 +688,17 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
     committed ... between Prepare and Execute`` (``plan/POC.md``). Com zero, o driver prepara o
     statement sem nome logo antes de cada execução e não guarda nada; ``statement_cache=True``
     mantém o padrão do driver, para a leitura que reproduz o erro.
+
+    Com ``SERIALIZE_DB_TEST_EMULATOR``, a conexão é a do substituto local, sem credencial nem
+    rede.
     """
+    if emulator_enabled():
+        import emulator
+
+        connection = emulator.connect()
+        prepare_redshift_session(connection)
+        return "substituto local", connection
+
     import redshift_connector
 
     database = redshift_variable("DATABASE")

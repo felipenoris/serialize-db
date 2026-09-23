@@ -30,7 +30,7 @@ import pyarrow as pa
 import pytest
 from deltalake import DeltaTable, write_deltalake
 
-from conftest import S3Location, record
+from conftest import S3Location, duckdb_s3_secret, record
 from poc_delta import DeltaProofOfConcept, connect_duckdb, write_sample_table
 from probelib import hide_credentials
 
@@ -93,9 +93,8 @@ def duckdb_connection(storage: S3Location) -> duckdb.DuckDBPyConnection:
     connection = connect_duckdb(("httpfs", "delta", "aws"))
 
     # O secret credential_chain usa a mesma resolução do SDK da AWS (ambiente, contêiner, perfil,
-    # IMDS).
-    region = os.environ.get("AWS_REGION", "")
-    connection.execute(f"CREATE SECRET poc (TYPE s3, PROVIDER credential_chain, REGION '{region}')")
+    # IMDS), com as opções de Storage.duckdb_setup: a região e o endpoint de AWS_ENDPOINT_URL.
+    connection.execute(duckdb_s3_secret("poc"))
 
     return connection
 

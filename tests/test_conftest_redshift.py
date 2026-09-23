@@ -52,11 +52,13 @@ def use_fake_driver(monkeypatch: pytest.MonkeyPatch, variables: dict[str, str]) 
     """Troca o ``redshift_connector`` pelo fabricado e deixa no ambiente só as
     ``SERIALIZE_DB_REDSHIFT_*`` de ``variables``.
 
-    As variáveis do ambiente de quem roda a suíte saem, para o teste ler só as que declara; a região
-    fica definida, para ``connect_redshift`` não perguntar ao ``boto3``.
+    As variáveis do ambiente de quem roda a suíte saem, para o teste ler só as que declara, e o
+    substituto local fica desligado, porque o teste confere o caminho do driver; a região fica
+    definida, para ``connect_redshift`` não perguntar ao ``boto3``.
     """
     monkeypatch.setitem(sys.modules, "redshift_connector",
                         types.SimpleNamespace(connect=FakeConnection))
+    monkeypatch.delenv("SERIALIZE_DB_TEST_EMULATOR", raising=False)
     for name in REDSHIFT_VARIABLES:
         monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
     for name, value in variables.items():
