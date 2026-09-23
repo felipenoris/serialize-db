@@ -20,10 +20,11 @@ no Delta e lido pelo DuckDB, a Data API pelo ciclo de ``examples/redshift_data_a
 fim: o ``UNLOAD`` sem ``PARTITION BY`` para a pasta Hive, o ``stream`` por ``UNLOAD`` com os valores
 como literais e os seus casos de borda, o ``row_desc`` de cada tipo, o custo de uma carga pequena
 por ``COPY``, o rodapé do ``UNLOAD`` com ``NaN`` (issue #59), o texto da auditoria da etapa 4 sob
-``search_path`` no esquema do datashare, com a comparação do ``NaN``, e o aumento de
-``VARCHAR(n)`` por ``ALTER COLUMN ... TYPE``, que a etapa 8 espera. Os resultados que a
-documentação não fixa vão para o relatório da sessão; os que duas execuções limpas no ambiente alvo
-leram iguais são asserções. O que cada execução no ambiente alvo leu está em ``plan/POC.md``.
+``search_path`` no esquema do datashare, com a comparação do ``NaN``, e, para a etapa 8, o
+aumento de ``VARCHAR(n)`` por ``ALTER COLUMN ... TYPE`` e o ``EXPLAIN`` de um join no datashare. Os
+resultados que a documentação não fixa vão para o relatório da sessão; os que duas execuções
+limpas no ambiente alvo leram iguais são asserções. O que cada execução no ambiente alvo leu está
+em ``plan/POC.md``.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ import functools
 import io
 import json
 import os
+import re
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -1802,3 +1804,43 @@ def test_alter_column_type_on_the_share(redshift_session: RedshiftSession) -> No
     }
     for label, command in inserts.items():
         record(f"redshift.alter_type.{label}", outcome(functools.partial(session.execute, command)))
+
+
+def test_explain_of_a_join_on_the_share(redshift_session: RedshiftSession) -> None:
+    """O ``EXPLAIN`` de um join entre duas tabelas do esquema do datashare, a leitura da
+    distribuição que a etapa 8 faz depois da primeira publicação.
+
+    O papel do projeto não lê ``svv_table_info`` depois do ``USE`` (42501, probe de 2026-09-23), e
+    a decisão do usuário de 2026-09-23 põe no lugar dela o ``EXPLAIN`` de um join típico: uma
+    ``distkey`` explícita só entra quando o plano mostra ``DS_BCAST_INNER`` ou ``DS_DIST_BOTH``. As
+    tabelas nascem com a distribuição ``AUTO``, como as publicadas. O plano inteiro, ou a recusa do
+    ``EXPLAIN``, e os rótulos ``DS_*`` que ele traz são leituras.
+    """
+    session = redshift_session
+    accounts = session.qualified(session.table("explain_contas"))
+    entries = session.qualified(session.table("explain_lancamentos"))
+    session.execute(
+        f"CREATE TABLE {accounts} (id_conta BIGINT NOT NULL, codigo VARCHAR(20), "
+        "PRIMARY KEY (id_conta))"
+    )
+    session.execute(
+        f"CREATE TABLE {entries} (id_lancamento BIGINT NOT NULL, id_conta BIGINT NOT NULL, "
+        "valor DOUBLE PRECISION, PRIMARY KEY (id_lancamento))"
+    )
+    session.execute(f"INSERT INTO {accounts} VALUES (1, 'A'), (2, 'B')")
+    session.execute(f"INSERT INTO {entries} VALUES (1, 1, 1.5), (2, 2, 2.5), (3, 1, 3.5)")
+
+    # O join de cad_lancamentos com cad_contas por id_conta, como o cliente o consultaria.
+    join = (
+        f"SELECT c.codigo, sum(l.valor) FROM {entries} l "
+        f"JOIN {accounts} c ON l.id_conta = c.id_conta GROUP BY c.codigo"
+    )
+    plan = reading(functools.partial(rows_as_tuples, session, f"EXPLAIN {join}"))
+    record("redshift.explain.join_plan", plan)
+
+    # Os rótulos de redistribuição de cada passo de join, sem repetição.
+    labels = set()
+    if isinstance(plan, list):
+        for row in plan:
+            labels.update(re.findall(r"DS_[A-Z_]+", str(row[0])))
+    record("redshift.explain.join_labels", sorted(labels))

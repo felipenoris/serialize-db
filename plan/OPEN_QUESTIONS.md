@@ -123,6 +123,12 @@ foi medido em [`POC.md`](POC.md).
   e numa da chave primária informativa, com a largura em `svv_all_columns` e a inserção de dez
   caracteres depois; o substituto local só confere o código, porque o DuckDB ignora a largura. Se
   o datashare aceitar o aumento numa coluna comum, ele entra na etapa 8 como atalho da recriação.
+- **O `EXPLAIN` no datashare.** A leitura da distribuição da [etapa 8](PLAN-STAGE-8.md) é o
+  `EXPLAIN` de um join típico entre as tabelas publicadas, e a distribuição fica `AUTO` até o
+  plano mostrar `DS_BCAST_INNER` ou `DS_DIST_BOTH` (decisão do usuário de 2026-09-23). Ninguém
+  rodou `EXPLAIN` no esquema do datashare com o papel do projeto;
+  `test_redshift.py::test_explain_of_a_join_on_the_share` lê o plano, ou a recusa, e os rótulos
+  `DS_*` dele. O substituto local só confere o código.
 
 ## Decisões de API pendentes por etapa
 
@@ -137,7 +143,4 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   data sharing reads and writes" da AWS e nunca foi medida no ambiente alvo, e a página não diz em
   que banco fica a tabela temporária criada depois do `USE` ([`redshift.md`](redshift.md));
   `test_redshift_transactions.py` lê a temporária cheia dentro da transação e antes do `BEGIN`, e
-  passou no substituto local em 2026-09-23, que só confere o código. A fonte da leitura da
-  distribuição atribuída, porque o papel do projeto não lê `svv_table_info` depois do `USE`
-  (`permission denied`, 42501, probe de 2026-09-23; a distribuição é `AUTO` desde a decisão do
-  usuário de 2026-09-21).
+  passou no substituto local em 2026-09-23, que só confere o código.

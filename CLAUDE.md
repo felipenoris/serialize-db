@@ -598,9 +598,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing
-  tests are `local`); the publication staging waits on the two temporary-staging cases of
-  `test_redshift_transactions.py` in the target, and the source of the distribution reading waits
-  on the user (`plan/OPEN_QUESTIONS.md`, `.claude/memory/decisions.md`).
+  tests are `local`), and the stage 8 distribution reading, the `EXPLAIN` of a typical join with
+  the tables at `AUTO`; the publication staging waits on the two temporary-staging cases of
+  `test_redshift_transactions.py` in the target, and the stage 7 defaults on the migration's
+  measurement (`plan/OPEN_QUESTIONS.md`, `.claude/memory/decisions.md`).
 - The plan's unit is the partition (`publish_partition`, `partitions=`, `Execution(partition=...)`),
   a `String(n)` text column; the `AAAA-MM-DD` date is the current base's case, never the month.
 - The Redshift target is `sbx_aco_decon` in the datashare database `datalake_rw_shared`, reached by

@@ -151,7 +151,7 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 | Primeira publicação | `test_first_publication_loads_every_partition` (`redshift`) | Sem linha de controle, todas as partições; a linha de controle escrita na mesma transação. |
 | Falha no meio | `test_failed_copy_leaves_control_row_untouched` (`redshift`) | Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto. |
 | Estado | `test_publication_status_lists_pending_partitions` | A versão publicada, a atual e as partições pendentes por tabela. |
-| Distribuição atribuída | `test_published_tables_distribution_is_read` (`redshift`) | `svv_table_info` depois da primeira publicação: `diststyle`, `sortkey1`, `tbl_rows` e `skew_rows` de cada tabela publicada, como leitura, nunca como reprovação; a visão negada também é leitura: o probe de 2026-09-23 (`RS-8`) recebeu `permission denied` (42501) nela depois do `USE`, e a fonte da leitura é decisão pendente. O modelo cliente não declara `redshift` e a distribuição é `AUTO` (decisão do usuário de 2026-09-21): é esta leitura que diz se uma `distkey` explícita se paga, e ela entraria por `ALTER TABLE`. |
+| Redistribuição nos joins | `test_published_join_redistribution_is_read` (`redshift`) | O `EXPLAIN` de um join típico entre as tabelas publicadas, `cad_lancamentos` com `cad_contas` por `id_conta`, depois da primeira publicação: os rótulos `DS_*` de cada passo de join, como leitura, nunca como reprovação. O modelo cliente não declara `redshift` e a distribuição é `AUTO` (decisão do usuário de 2026-09-21); uma `distkey` explícita só entra, por `ALTER TABLE ... ALTER DISTKEY`, quando o plano mostra `DS_BCAST_INNER` ou `DS_DIST_BOTH` (decisão do usuário de 2026-09-23). A leitura é o `EXPLAIN` porque o papel do projeto não lê `svv_table_info` depois do `USE` (`permission denied`, 42501, probe de 2026-09-23, [`POC.md`](POC.md)). |
 
 ## Rascunhos executados
 
@@ -250,11 +250,7 @@ segredo fora do texto impresso: True
   staging e os locks durante ela (decisão do usuário de 2026-09-23). A execução no ambiente alvo
   decide: a temporária quando um dos dois passar, e a comum com nome por execução quando nenhum
   passar.
-- **[decisão] A fonte da leitura da distribuição atribuída.** O papel do projeto não lê
-  `svv_table_info` depois do `USE` (`permission denied`, 42501, probe de 2026-09-23,
-  [`POC.md`](POC.md)), e `test_published_tables_distribution_is_read` fica sem a visão que diria se
-  uma `distkey` explícita se paga (a distribuição é `AUTO`, decisão do usuário de 2026-09-21). Uma
-  fonte que o papel leia no esquema do datashare ainda não foi medida no ambiente alvo.
 
-As decisões do usuário de 2026-09-23 sobre o `FILLRECORD`, o teto do documento JSON e a largura
-de `VARCHAR(n)` estão escritas nas seções que as descrevem.
+As decisões do usuário de 2026-09-23 sobre o `FILLRECORD`, o teto do documento JSON, a largura
+de `VARCHAR(n)` e a leitura da distribuição pelo `EXPLAIN` estão escritas nas seções que as
+descrevem.
