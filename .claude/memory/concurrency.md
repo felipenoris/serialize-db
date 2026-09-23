@@ -119,3 +119,10 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   in one `with`, the first batch arrives while the query runs. Five runs of the suite were green;
   the orphan-file race and a `__del__` reading a field the failed `__init__` never set appeared only
   on repetition. `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- A read racing a `load` fired in a thread and forgotten without `result()` fails with
+  `CatalogException: Table with name ... does not exist!` on the main session and on an extra
+  session, never reads old rows: the reference `Loader` creates the table only at `close` and
+  refuses a taken name, so no sandbox table has a previous state (probe and
+  `test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`, six green
+  runs, 2026-09-23, macOS). The table barrier left the plan for that reason. `plan/POC.md`,
+  `plan/PLAN-STAGE-4.md`

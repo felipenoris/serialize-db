@@ -113,7 +113,7 @@ lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
 | --- | --- | --- | --- |
 | Metadados de commit | `commitInfo` de cada commit da biblioteca. | `serialize_db_execution_id`; `serialize_db_input_versions`, o JSON `{tabela: versão}` das versões lidas, fixado na abertura da execução; `serialize_db_snapshot` só na execução que marca um snapshot. | `publish_partition` e `register_files`, por `CommitProperties(custom_metadata=...)`. |
 | Arquivo de controle | `<ambiente>/_serialize_db/snapshots.json`. | `{"snapshots": {nome: {tabela: versão}}}`, com todas as tabelas do ambiente, lidas ou gravadas. | `snapshot`, com `IfMatch`. |
-| Tabela de controle | `serialize_db_publications(table_name, delta_version, execution_id, published_at)` no esquema do Redshift; `table_name` leva o prefixo do ambiente, como `prod_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga. |
+| Tabela de controle | `serialize_db_publications(table_name, delta_version, execution_id, published_at)` no esquema do Redshift; `table_name` leva o prefixo do ambiente, como `prod_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga; a tabela é criada uma vez pelo usuário, por `create_publications_table`. |
 
 O registro durável de uma execução é o `commitInfo` das tabelas que ela gravou; o relatório da
 auditoria e o resumo da execução vão para o log do processo, não para `_serialize_db/`.
@@ -188,10 +188,11 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
    `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula, a proposta da
    [etapa 8](PLAN-STAGE-8.md).
 3. O pipeline roda os mesmos statements Core, compilados para o Redshift, numa sessão só; os lotes
-   entram por Parquet em `staging/` mais `COPY`, um row group por lote, e saem das tuplas de
-   `fetchmany` ou por `UNLOAD`.
+   entram por Parquet em `staging/` mais `COPY`, um row group por lote, e saem por `UNLOAD` em
+   `stream` e das tuplas do cursor em `query`.
 4. `run.audit` roda as mesmas consultas no Redshift.
-5. `run.publish` grava cada partição por `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE` e, conforme
+5. `run.publish` grava cada partição por `UNLOAD ... MANIFEST VERBOSE`, sem `PARTITION BY`, num
+   prefixo novo por tentativa, `<coluna>=<valor>/<execution_id>_<uuid>/`, e, conforme
    `export_mode`, registra os arquivos por `register_files` depois das conferências da
    [etapa 3](PLAN-STAGE-3.md) (`register`: os dados não passam pela máquina local) ou os relê pelo
    leitor da [etapa 7](PLAN-STAGE-7.md) e grava por `publish_partition` (`rewrite`).
@@ -201,7 +202,9 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
 ### Publicação para clientes no Redshift
 
 As tabelas publicadas têm o prefixo do ambiente e são derivadas do Delta; nada é escrito nelas por
-outro caminho.
+outro caminho. A tabela `serialize_db_publications` é criada uma vez no esquema pelo usuário, por
+`serialize-db publish --init`, e a publicação para sem escrever nada quando ela não existe
+([etapa 8](PLAN-STAGE-8.md), decisão do usuário de 2026-09-23).
 
 1. `version_diff` compara, para cada tabela, a versão em `serialize_db_publications` com a versão
    atual e devolve as partições com arquivos novos. Na primeira publicação, todas as partições.

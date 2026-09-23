@@ -431,3 +431,84 @@ table at `close` in one transaction with the `INSERT`; the hybrid `stream` (batc
 `interrupt()` in the stream's `close` and in the engine's `cleanup`. Stage 4 has no decision
 awaiting the user. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`,
 `plan/PLAN.md`, `plan/POC.md`
+
+After merging PR #58 the user read PARQUET-1246 as the Parquet spec recommending no min and max for
+a column holding `NaN`, noted that DuckDB documents its own `NaN` convention, and proposed that the
+library follow the Parquet storage standard whatever DuckDB does (2026-09-23). The sources showed a
+different spec rule (min and max without the `NaN` plus `nan_count`), a Delta log outside the
+Parquet spec, and DuckDB losing the row through both layers; the recommendation awaiting the user is
+no `Double` min and max in the footer or the log. `plan/POC.md`, `plan/PLAN-STAGE-3.md`,
+`plan/OPEN_QUESTIONS.md`
+
+## The decisions of stage 6
+
+On 2026-09-23 the user took the four pending decisions of stage 6. `serialize-db run` keeps
+`--metadata modulo:atributo`, like `schema` and `sql`, instead of a conventional attribute of the
+pipeline module. On `next_ids` the user stated that it serves only sequential keys, which are a
+single column; for a table whose primary key has several columns the client decides the ids
+directly and does not call `next_ids`. So `next_ids` takes the single-column integer primary key
+and no `id_column` option exists; raising `ContractError` on another key is the assistant's
+reading, named in the report. The table barrier left the plan and stage 5's Redshift `loader` was
+aligned with stage 4 (refuse a taken name at open, `CREATE TABLE` and `COPY` in one transaction at
+`close`), after the probe of the same day showed that a read racing a forgotten `load` fails with
+`CatalogException` instead of reading old rows; checking the name on Redshift by
+`select 1 from <esquema>.<nome> limit 0` is the assistant's proposal. The partition value and the
+`execution_id` follow the allowlist `[0-9A-Za-z][0-9A-Za-z_.-]*` (full match) instead of the list
+of refused characters: the single quote broke the `publish_partition` predicate, and delta-rs
+percent-encodes `:`, `%`, `#`, `'` and accents in the folder name, which the `register` mode's
+`COPY` writes unencoded. Validating every value of `partitions` in `ingest`, `audit` and `publish`
+is the assistant's extension, named in the report. Stage 6 has no decision awaiting the user.
+`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN.md`,
+`plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+Later on 2026-09-23 the user asked for the stage 6 interface to be corrected against its table of
+primitives: `Database(root, environment, metadata)` without `storage_options`, which stage 3
+resolves per call; `Execution(..., export_mode=None)` as the default mode of the execution's
+`publish` calls, filled by `serialize-db run --export-mode`, resolved in the order `publish`
+argument, `Execution` argument, `SERIALIZE_DB_EXPORT_MODE`, `"register"`; and `--export-mode` in the
+`run` row. The assistant also aligned `uri` without a trailing slash, `partitions=None` in
+`publish`, `delta.snapshot(storage, environment, name, versions)`, the `serialize-db audit`
+options and `AuditFailed` imported from `serialize_db.errors`, and made `storage` a
+`functools.cached_property` after a probe showed the frozen dataclass refusing the `init=False`
+field in `__post_init__`; each was named in the report. `plan/PLAN-STAGE-6.md`,
+`plan/PLAN-STAGE-5.md`, `plan/POC.md`
+
+## The decisions of stage 5
+
+On 2026-09-23 the user took the four pending decisions of stage 5, after the assistant's review found
+defects behind three of them. The control table was the user's own proposal: neither `connect` nor
+`publish_redshift` creates `serialize_db_publications`; `publish_redshift` checks at its start that
+the table exists and stops with an error when it does not; a dedicated initialization, run
+explicitly by the user once, creates it, so no pipeline code path runs its `CREATE TABLE`. The
+assistant's choices around it, named in the report: `create_publications_table(config)`,
+`serialize-db publish --init`, the new `PublicationError`, a plain `CREATE TABLE` without `IF NOT
+EXISTS`, the check by `select 1 ... limit 0` outside a transaction, `publication_status` making the
+same check, the pipeline's opening no longer reading the table (`plan/PLAN.md`, step 1), a
+runbook row in stage 9, and `connect` running no command to confirm the `USE` (the first two-part
+statement confirms it). The user accepted the other three proposals as made. `stream` always goes
+through `UNLOAD ... PARALLEL OFF` to `staging/<execution_id>/stream/<uuid>/` and `query` always
+through the cursor, because the engine cannot know a result's size before the `execute` that
+materializes it; the client's values enter the `UNLOAD` as literals, guarded by `required` in
+`compiled.binds`, and the `'` and `\` escape is probed in the target first. `load` always goes
+through the `loader`, and the multi-row `INSERT` left. `schema_from_row_description` reads the
+`NUMERIC` precision and scale from the `type_modifier` in the driver's private
+`cursor.ps["row_desc"]`, `numeric_types` left, and the `redshift` extra pins
+`redshift-connector==2.1.16`. The export has no `PARTITION BY` and writes to a prefix new per
+partition and per attempt, `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/` in `register` and
+`staging/<execution_id>/<tabela>/<coluna>=<valor>/<uuid>/` in `rewrite` (the `rewrite` path is the
+assistant's). Stage 5 has no decision awaiting the user; the readings the next suite run in the
+target makes for these decisions are in `plan/OPEN_QUESTIONS.md`. `plan/PLAN-STAGE-5.md`,
+`plan/PLAN-STAGE-8.md`, `plan/PLAN.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+The user then chose the per-partition version of the #59 rule (2026-09-23): a `Double` column with a
+non-finite value (`NaN` or infinity) in a partition is written without min and max, in the Parquet
+footer (`ColumnProperties(statistics_enabled="NONE")` in `publish_partition`) and in the Delta log
+(`register_files`); the other partitions keep both. The list comes from the audit's non-finite count
+per partition and column (`AuditReport.nonfinite_columns`, the row query grouped by the partition
+column), which `run.publish` passes as `columns_without_min_max` to `export_partition` of both
+engines; with `audit=False` every `Double` column goes in the list. The trigger is any non-finite
+value, so the audit count serves as it is and the infinite-extreme special case of `register_files`
+goes. `initial_load` counts non-finite values in its partition check query, and its `load_report`
+sums only finite values. Open: the footer the Redshift `UNLOAD` writes for a row group with `NaN`.
+`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`,
+`plan/PLAN-STAGE-7.md`, `plan/OPEN_QUESTIONS.md`

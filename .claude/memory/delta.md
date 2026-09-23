@@ -37,6 +37,13 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
 - `add`/`remove` paths are relative to the table folder: a copied folder opened at the same version
   with the same rows in delta-rs and DuckDB, history and time travel intact. Never register files
   by absolute URI; Iceberg manifests store absolute paths. `plan/delta.md`
+- deltalake 1.6.4 percent-encodes the partition value in the folder name (`p=a%3Ab` for `a:b`,
+  `p=d%27agua` for `d'agua`, `p=a%C3%A7%C3%A3o` for `ação`) and the `add` path encodes the folder
+  again (`p=a%253Ab`); a value of letters, digits, `_`, `.` and `-` comes out unchanged in both. The
+  predicate `p = 'd'agua'` fails with `Unterminated string literal` (2026-09-23,
+  `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`). This is
+  why the partition value and the `execution_id` follow `[0-9A-Za-z][0-9A-Za-z_.-]*`.
+  `plan/delta.md`, `plan/PLAN-STAGE-6.md`
 - Delta data files do not contain the partition column (it lives in the `add` action), so a
   partition key must derive from a column in the file for Redshift `COPY`; DuckLake keeps identity
   and source columns inside the files. `plan/estrategia.md`
@@ -90,6 +97,27 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   because DuckDB orders `NaN` above every number); delta-rs writes `null` for an infinite extreme,
   and `float("inf")` from `RETURN_STATS` would put `Infinity`, invalid JSON, in the log
   (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `tests/proof_of_concept/test_deltalake.py`
+- The Delta log and the Parquet footer follow different `NaN` conventions (read 2026-09-23). The
+  protocol keeps file statistics in the JSON `stats` of the `add` action, `maxValues` being the
+  largest valid value, with no `NaN` count; delta-kernel-rs writes `NaN` as the maximum
+  (`default-engine/src/stats.rs`), and Delta Spark drops the float min and max it collects from the
+  footer of writers that leave `NaN` out (PR #7101, 2026-06-27,
+  `collectStats.skipFloatingPointFromFooter` on by default), keeping parquet-mr's, which records
+  `NaN` as the maximum. delta-rs copies the footer maximum without the `NaN` into the log, and no
+  delta-rs issue covers it. delta-rs honors `delta.dataSkippingStatsColumns` when writing the log,
+  while `delta_scan` uses whatever statistics the log carries; the footer keeps the maximum without
+  the `NaN`, and `delta_scan` still loses the row by the row-group pruning of DuckDB's Parquet
+  reader. `ColumnProperties(statistics_enabled="NONE")` in `WriterProperties(column_properties=...)`
+  removes the column's min and max from the footer and the log (its `nullCount` too), and
+  `delta_scan` finds the row. `plan/POC.md`, `plan/delta.md`, `plan/PLAN-STAGE-3.md`,
+  `tests/proof_of_concept/test_deltalake.py`
+- `writer_properties` applies to one `write_deltalake` call, so each partition written by
+  `mode="overwrite", predicate=...` keeps or drops the float statistics on its own: a partition
+  written with `statistics_enabled="NONE"` on `valor` and one written with the default gave
+  `delta_scan ... WHERE valor > 3` the `NaN` row of the first and never opened the file of the
+  second, pruned by its maximum 2.5 (2026-09-23). Statistics live per file, one `add` action each,
+  with `partitionValues`; the table keeps no aggregate. `plan/POC.md`, `plan/PLAN-STAGE-3.md`,
+  `tests/proof_of_concept/test_deltalake.py`
 
 ## Performance measured
 

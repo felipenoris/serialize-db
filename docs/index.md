@@ -92,7 +92,7 @@ As chaves de `Table.info["serialize_db"]`:
 
 | Chave | O que declara |
 | --- | --- |
-| `partition_by` | A coluna de partição, uma no máximo, de texto `String(n)`, no fim da tabela; o valor é o nome da pasta da partição, sem `/`, `=` nem espaço. Na base atual é a data em `AAAA-MM-DD`. |
+| `partition_by` | A coluna de partição, uma no máximo, de texto `String(n)`, no fim da tabela; o valor é o nome da pasta da partição e começa por letra ou dígito, seguido de letras, dígitos, `_`, `.` e `-` (`[0-9A-Za-z][0-9A-Za-z_.-]*`). Na base atual é a data em `AAAA-MM-DD`. |
 | `partition_source` | Opcional: a coluna de data de que a coluna de partição deriva (`strftime('%Y-%m-%d')`); com ela, a auditoria e a carga inicial conferem a derivação. |
 | `sort_key` | As colunas da `SORTKEY` do Redshift e da ordenação dos arquivos. |
 | `redshift` | `diststyle` e `distkey` do Redshift; ausente, a distribuição é `AUTO`. |

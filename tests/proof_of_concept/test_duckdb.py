@@ -9,8 +9,9 @@ carga por Arrow, as consultas da auditoria, a soma de controle que o ``NaN`` der
 ``DECIMAL(38, 6)`` torna independente das threads, o ``interrupt()`` chamado de outra thread e o
 ``cursor()`` aberto com uma consulta em curso. Sob a raiz local (marcador ``local``): ``COPY ...
 TO`` com ``RETURN_STATS`` e o esquema físico do Parquet gravado, o ``RETURN_STATS`` com ``NaN``,
-infinito e texto longo, o ``COPY`` particionado por mês e um banco em arquivo com pasta de
-transbordo. O ``delta_scan`` está em ``poc_delta.py``.
+infinito e texto longo, o ``has_nan`` que só vê o último grupo de linhas, a poda do leitor Parquet
+pelo rodapé do pyarrow num grupo com ``NaN``, o ``COPY`` particionado por mês e um banco em arquivo
+com pasta de transbordo. O ``delta_scan`` está em ``poc_delta.py``.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from conftest import LocalLocation, record
@@ -484,6 +486,69 @@ def test_return_stats_leave_nan_out_and_bound_long_text(local_location: LocalLoc
     assert "min" not in multibyte and "max" not in multibyte
     con.close()
 
+
+
+@pytest.mark.local
+def test_return_stats_has_nan_follows_only_the_last_row_group(local_location: LocalLocation) -> None:
+    """O ``has_nan`` do ``RETURN_STATS`` num arquivo de dois grupos de linhas só vê o ``NaN`` do último grupo; o rodapé omite o mínimo e o máximo de todo grupo com ``NaN``.
+
+    Um ``NaN`` só no primeiro grupo sai ``has_nan`` falso, com o mínimo e o máximo dos números do
+    arquivo inteiro: ``register_files`` não decide pelo ``has_nan`` se a coluna tem ``NaN`` (issue
+    #59).
+    """
+    folder = Path(local_location.child("duckdb/has_nan"))
+    folder.mkdir(parents=True)
+    con = duckdb.connect()
+    outcomes = {}
+    for name, nan_rows in (("primeiro_grupo", "7"), ("ultimo_grupo", "3000"), ("nenhum", "-1")):
+        file = folder / f"{name}.parquet"
+        source = f"SELECT i AS id, CASE WHEN i IN ({nan_rows}) THEN 'nan'::DOUBLE ELSE i / 1000 END AS valor FROM range(4096) r(i)"
+        cursor = con.execute(f"COPY ({source}) TO '{file}' (FORMAT parquet, ROW_GROUP_SIZE 2048, RETURN_STATS)")
+        columns = [column[0] for column in cursor.description]
+        valor = dict(zip(columns, cursor.fetchone()))["column_statistics"]['"valor"']
+        footer = con.execute(
+            f"SELECT stats_min_value, stats_max_value FROM parquet_metadata('{file}') WHERE path_in_schema = 'valor' ORDER BY row_group_id"
+        ).fetchall()
+        outcomes[name] = (valor["has_nan"], footer)
+
+    assert outcomes["primeiro_grupo"] == ("false", [(None, None), ("2.048", "4.095")])
+    assert outcomes["ultimo_grupo"] == ("true", [("0.0", "2.047"), (None, None)])
+    assert outcomes["nenhum"] == ("false", [("0.0", "2.047"), ("2.048", "4.095")])
+    con.close()
+
+
+@pytest.mark.local
+def test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer(local_location: LocalLocation) -> None:
+    """O leitor Parquet do DuckDB poda pelo máximo do rodapé um grupo de linhas com ``NaN`` gravado pelo pyarrow, e perde a linha que ele mesmo ordena acima de todo número; o arquivo do próprio DuckDB e a tabela nativa a devolvem.
+
+    O pyarrow segue a especificação do Parquet, que deixa o ``NaN`` fora do mínimo e do máximo; o
+    DuckDB grava o grupo com ``NaN`` sem mínimo e máximo, e a tabela nativa guarda o ``NaN`` como
+    máximo. É a issue duckdb/duckdb#25521; o delta-rs grava como o pyarrow
+    (``test_deltalake.py::test_float_statistics_off_keep_the_nan_row``).
+    """
+    folder = Path(local_location.child("duckdb/poda_nan"))
+    folder.mkdir(parents=True)
+    table = pa.table({"id": pa.array([1, 2, 3, 4, 5, 6], pa.int64()), "valor": pa.array([1.5, float("nan"), 2.0, 4.0, 5.0, 6.0])})
+    con = duckdb.connect()
+    con.register("origem", table)
+    con.execute("CREATE TABLE nativa AS SELECT * FROM origem")
+    pq.write_table(table, folder / "pyarrow.parquet", row_group_size=3)
+    con.execute(f"COPY nativa TO '{folder / 'duckdb.parquet'}' (FORMAT parquet)")
+
+    def count(source: str, predicate: str = "valor > 3") -> int:
+        return con.execute(f"SELECT count(*) FROM {source} WHERE {predicate}").fetchone()[0]
+
+    arrow_file = f"read_parquet('{folder / 'pyarrow.parquet'}')"
+    maximums = con.execute(
+        f"SELECT stats_max_value FROM parquet_metadata('{folder / 'pyarrow.parquet'}') WHERE path_in_schema = 'valor' ORDER BY row_group_id"
+    ).fetchall()
+    assert maximums == [("2.0",), ("6.0",)]
+    # NaN > 3 no DuckDB: 4 linhas sem poda, 3 com o grupo do NaN podado pelo máximo 2.0.
+    assert count(arrow_file) == 3
+    assert count(arrow_file, "valor + 0 > 3") == 4  # a expressão não desce ao leitor como filtro
+    assert count(f"read_parquet('{folder / 'duckdb.parquet'}')") == 4
+    assert count("nativa") == 4
+    con.close()
 
 def test_control_total_fails_on_nan_and_infinity(con: duckdb.DuckDBPyConnection) -> None:
     """A soma de controle da auditoria, ``sum(CAST(valor AS DECIMAL(38, 6)))``, falha com ``ConversionException`` num ``NaN`` ou num infinito, também sob ``FILTER (WHERE isfinite(valor))``; um ``CASE`` com ``isfinite`` soma só os finitos.

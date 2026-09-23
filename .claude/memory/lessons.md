@@ -378,3 +378,37 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   a warning in the suite's output. Run a new test of threads or finalizers several times in a row,
   read the warnings the run prints, and give every field a finalizer reads a value before the first
   line of `__init__` that can raise. `plan/POC.md`
+- **A statistic is probed at every layer that prunes and in every position of the file, and a
+  standard is read in its current text** (2026-09-23). The first `NaN` probe read only the Delta log
+  over one-row-group files, and missed that DuckDB's Parquet reader prunes by the footer of the
+  delta-rs and pyarrow writers, so removing the log statistics alone keeps the defect, and that
+  `has_nan` sees only the last row group, which sank the proposal built on it. The question itself
+  came from PARQUET-1246, a Java reader fix of 2018, while the spec's rule dates from 2022 and
+  changed in May 2026. Put the special value in the first, a middle and the last row group, read it
+  through the log and through `read_parquet`, and quote the spec file at its current commit.
+  `plan/POC.md`
+- **A path chosen by a quantity needs the quantity before the path runs** (2026-09-23). The stage 5
+  plan switched `stream` from `fetchmany` to `UNLOAD` above a row threshold and waited on a
+  measurement in the target to fix it; the row count exists only after the `execute` that already
+  materialized the whole result in the driver, so no threshold could ever be applied, and the
+  measurement would have sized a rule that cannot run. Before measuring a threshold, write down
+  where the quantity is read and whether that happens before the choice. `plan/PLAN-STAGE-5.md`
+- **"Empty by construction" is read against the caller's loop and the rerun** (2026-09-23). The
+  stage 5 `UNLOAD` destinations were empty only on the first call: `rewrite` sent every partition to
+  `staging/<execution_id>/<tabela>/`, which the first partition of `run.publish`'s loop fills, and
+  `register` reused `<uri>/<execution_id>/<valor>/` on the rerun with the same `execution_id` that
+  stage 6 supports, while the DuckDB `register` already carried a `uuid` for that rerun. Read a
+  uniqueness claim against the loop that calls the primitive and against the rerun, and end every
+  write destination with a segment new per call. `plan/PLAN-STAGE-5.md`
+- **A checkout shared with another session is read from git before a branch or a commit**
+  (2026-09-23). Two sessions worked in the same folder: while one discussed the stage 6 decisions,
+  the other created `claude/nan-estatisticas-parquet-delta`, committed and opened PR #60. The first
+  ran `git checkout -b claude/decisoes-etapa-6` trusting its opening snapshot, which said `main`, so
+  the new branch started from the other session's commit, and the switch moved the other
+  session's `HEAD` too: a commit of it in those two minutes would have landed on the wrong branch.
+  `git status -sb` and `git reflog` showed what had happened; the empty branch was deleted, and the
+  commits went to the open PR's branch, as the git rule asks. Three sessions then edited the same
+  plan files in turn, each one waiting for the previous one's message, adding files by path and
+  leaving alone the files another session had modified. Read `git status -sb` and `git reflog -5`
+  before creating a branch or committing, and agree by message on the order of edits to shared
+  files. `CLAUDE.md`

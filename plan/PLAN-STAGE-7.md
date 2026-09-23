@@ -42,8 +42,8 @@ relatório registra os órfãos.
 
 | Primitiva | O que faz |
 | --- | --- |
-| `initial_load(db, table, source, partitions=None, mode=None)` | `create_table`; descobre as partições da pasta da tabela (`<coluna>=<valor>/`, a coluna de partição do contrato, ou o arquivo único na raiz da tabela) e, para cada uma, o DuckDB lê `read_parquet('<partição>/*.parquet')`, a pasta inteira e nunca a ordem dos nomes, sem `hive_partitioning` (com ele o DuckDB converte `data_str` a `DATE`), confere, quando o modelo declara `partition_source` (`data`, ou `data_base`), que ela é igual ao valor do caminho em toda linha, e acrescenta a coluna de partição com esse valor. As conversões que a origem exige são aplicadas antes do `cast` e registradas no relatório: as chaves de `int32` a `int64`, sem perda, e o `timestamp` `INT96` de nanossegundos a microssegundos (`coerce_int96_timestamp_unit="us"` no PyArrow; o `TIMESTAMP` do DuckDB já trunca; a precisão perdida não importa, decisão de 2026-09-20). As colunas `double` entram como estão, e a nulidade é a do modelo: um nulo numa coluna `NOT NULL` é recusado pelo `cast`, com a coluna e a partição na mensagem. `cast` converte para o contrato e `mode`, a flag `export_mode` da [etapa 6](PLAN-STAGE-6.md), decide a gravação: `rewrite` grava por `publish_partition`; `register` roda `COPY (<a mesma consulta>) TO '<uri>/<coluna>=<valor>/<nome único>.parquet' (FORMAT parquet, RETURN_STATS)` e registra por `register_files`, com as conferências da [etapa 3](PLAN-STAGE-3.md). Uma carga interrompida recomeça da partição seguinte à última publicada; `partitions` filtra as partições encontradas. As tabelas fora do modelo (`alembic_version`, `meta_update_status`) e o que não é Parquet (`schema.json`) ficam fora da carga e entram no relatório. |
-| `load_report(db, table, source)` | Contagem e somas por partição, na origem e no Delta: as colunas `double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem e os valores são os mesmos dos dois lados; as `Numeric`, quando existirem, como estão. A carga só termina quando coincidem. |
+| `initial_load(db, table, source, partitions=None, mode=None)` | `create_table`; descobre as partições da pasta da tabela (`<coluna>=<valor>/`, a coluna de partição do contrato, ou o arquivo único na raiz da tabela) e, para cada uma, o DuckDB lê `read_parquet('<partição>/*.parquet')`, a pasta inteira e nunca a ordem dos nomes, sem `hive_partitioning` (com ele o DuckDB converte `data_str` a `DATE`), confere, quando o modelo declara `partition_source` (`data`, ou `data_base`), que ela é igual ao valor do caminho em toda linha, e acrescenta a coluna de partição com esse valor. As conversões que a origem exige são aplicadas antes do `cast` e registradas no relatório: as chaves de `int32` a `int64`, sem perda, e o `timestamp` `INT96` de nanossegundos a microssegundos (`coerce_int96_timestamp_unit="us"` no PyArrow; o `TIMESTAMP` do DuckDB já trunca; a precisão perdida não importa, decisão de 2026-09-20). As colunas `double` entram como estão, e a nulidade é a do modelo: um nulo numa coluna `NOT NULL` é recusado pelo `cast`, com a coluna e a partição na mensagem. `cast` converte para o contrato e `mode`, a flag `export_mode` da [etapa 6](PLAN-STAGE-6.md), decide a gravação: `rewrite` grava por `publish_partition`; `register` roda `COPY (<a mesma consulta>) TO '<uri>/<coluna>=<valor>/<nome único>.parquet' (FORMAT parquet, RETURN_STATS)` e registra por `register_files`, com as conferências da [etapa 3](PLAN-STAGE-3.md). Uma carga interrompida recomeça da partição seguinte à última publicada; `partitions` filtra as partições encontradas. As tabelas fora do modelo (`alembic_version`, `meta_update_status`) e o que não é Parquet (`schema.json`) ficam fora da carga e entram no relatório. A consulta que confere a partição conta também os valores não finitos de cada coluna `Double`, e as colunas com contagem acima de zero vão a `publish_partition` ou a `register_files` em `columns_without_min_max` (decisão do usuário de 2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59)). |
+| `load_report(db, table, source)` | Contagem e somas por partição, na origem e no Delta: as colunas `double` somadas como `DECIMAL(38, 6)` de cada valor finito, com os não finitos contados à parte, porque a soma em ponto flutuante depende da ordem, os valores são os mesmos dos dois lados e o `CAST` de um `NaN` ou de um infinito falha com `ConversionException` (leitura de 2026-09-23); as `Numeric`, quando existirem, como estão. A carga só termina quando coincidem. |
 | `serialize-db load` | `--table`, `--source` e `--partitions`. |
 
 `convert_to_deltalake` registra os arquivos no lugar, sem reescrever, só quando eles já têm os
@@ -89,7 +89,9 @@ da `sort_key` do modelo, salvo `--no-sort`; a retomada pelas partições já no 
 por partição, contagem e somas das colunas `Double` e `Numeric` como `DECIMAL(38, 6)`, a origem
 por `read_parquet` com `hive_partitioning` e o Delta por `delta_scan`, mais as conversões de tipo
 lidas do rodapé do primeiro arquivo e as entradas fora do padrão; cada partição imprime linhas,
-tempo e o RSS máximo do processo, e `--report` grava o JSON da execução. A tabela é criada por
+tempo e o RSS máximo do processo, e `--report` grava o JSON da execução. O script registra o mínimo e o máximo de toda coluna
+`Double`, e o relatório falha com `ConversionException` numa coluna com `NaN` ou infinito;
+`initial_load` segue a regra do `Double` não finito da [etapa 3](PLAN-STAGE-3.md). A tabela é criada por
 `DeltaTable.create` com `delta_schema`, o nome, o comentário e as retenções da etapa 3
 (`mode="ignore"`). O primeiro `delta_scan` sobre uma tabela criada por `delta_schema` leu toda
 coluna como nula por causa do `parquet.field.id` que o esquema Delta herdava do Arrow, corrigido
@@ -177,7 +179,8 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
 - **`initial_load`** cria a tabela (`create_table`), lê as partições já presentes em
   `get_add_actions` e pula cada uma delas (a retomada); para cada partição pendente, confere
   `count(*) ... WHERE <coluna> <> strftime(<partition_source>, '%Y-%m-%d')` igual a zero quando o
-  modelo declara `partition_source`, e grava
+  modelo declara `partition_source`, conta os valores não finitos de cada coluna `Double` para
+  `columns_without_min_max`, e grava
   conforme `mode`: `register` roda `COPY (SELECT <colunas sem a de partição> FROM (<consulta>)) TO
   '<uri>/<coluna>=<valor>/carga_inicial_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` e chama
   `register_files` com o `RegisteredFile` da linha do `RETURN_STATS`; `rewrite` passa
@@ -185,8 +188,10 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   do motor DuckDB da etapa 4, aberta pela própria carga, sem `Execution`; um nulo numa coluna `NOT
   NULL` é recusado pelo `cast` (`rewrite`) ou pela conferência de `nullCount` (`register`), com a
   coluna e a partição na mensagem.
-- **`load_report`** roda a mesma agregação nos dois lados, `count(*)` e `sum(CAST(<coluna> AS
-  DECIMAL(38, 6)))` por coluna `Double` e `Numeric`, agrupada pela coluna de partição
+- **`load_report`** roda a mesma agregação nos dois lados, `count(*)`, `sum(CAST(<coluna> AS
+  DECIMAL(38, 6)))` por coluna `Numeric` e, por coluna `Double`, a mesma soma só dos valores
+  finitos (`CASE WHEN isfinite(<coluna>) THEN ... END`) com a contagem dos não finitos, agrupada
+  pela coluna de partição
   (`hive_partitioning = true, hive_types_autocast = false` na origem, `delta_scan` no destino), e
   monta `LoadReport`; `matches` exige contagens e somas iguais em toda partição.
 - **`serialize-db load`** recebe `--table`, `--source`, `--partitions` e `--mode`, chama

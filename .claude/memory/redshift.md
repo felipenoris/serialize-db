@@ -84,17 +84,25 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
 - The driver materializes a result in `execute`: `EXECUTE_MSG` asks the portal for all rows,
   `handle_messages` returns only at `READY_FOR_QUERY`, each `DATA_ROW` lands in
   `cursor._cached_rows`, and `fetchmany` is `islice` over `Cursor.__next__`, which pops that deque.
-  `stream` on Redshift bounds memory only through `UNLOAD`; the suite read 5 rows in the queue
-  before the first `fetchmany` (2026-09-21, 13:35 and 13:39), now an assertion. `plan/redshift.md`,
-  `plan/PLAN-STAGE-5.md`
+  `stream` on Redshift always goes through `UNLOAD` and `query` through the cursor (user decision of
+  2026-09-23); the suite read 5 rows in the queue before the first `fetchmany` (2026-09-21, 13:35
+  and 13:39), now an assertion. `plan/redshift.md`, `plan/PLAN-STAGE-5.md`
+- `cursor.description` of `redshift_connector` 2.1.16 is `(name, oid, None, None, None, None,
+  None)` per column (`Cursor._getDescription`); the `type_modifier` of each column is in
+  `cursor.ps["row_desc"]`, stored by `Connection.handle_ROW_DESCRIPTION`, and the driver itself
+  decodes the binary `NUMERIC` with scale `(type_modifier - 4) & 0xFFFF`
+  (`Cursor.truncated_row_desc`); precision is `((type_modifier - 4) >> 16) & 0xFFFF`. `RedshiftOID`
+  lists `REAL` 700, `BPCHAR` 1042, `TEXT` 25, `UNKNOWN` 705 and `SUPER` 4000, which the driver reads
+  as text (code reading of 2026-09-23). `plan/redshift.md`, `plan/PLAN-STAGE-5.md`
 
 ## The reading of 2026-09-21
 
 - `USE datalake_rw_shared` makes two-part names resolve in the datashare, and `current_database()`
   keeps answering `dev` afterwards (probe `RS-19` of 2026-09-21, user confirmation the same day): the
-  switch is confirmed by resolving a name (the library creates
-  `<schema>.serialize_db_publications` with `IF NOT EXISTS` right after the `USE`; the probe selects
-  from a table `svv_all_tables` lists), never by that function, and the suite records the function's
+  switch is confirmed by resolving a name (the library runs no confirmation command, and its first
+  two-part statement confirms it; only `create_publications_table`, run once by the user, creates
+  `<schema>.serialize_db_publications`, user decision of 2026-09-23; the probe selects from a table
+  `svv_all_tables` lists), never by that function, and the suite records the function's
   value as a reading. `has_schema_privilege('sbx_aco_decon', 'CREATE')` after the `USE` answered
   `false` without error in the suite of 2026-09-21 (one reading), in the schema where `CREATE TABLE`
   works: the function does not prove the privilege on a datashare schema, the `CREATE` does;
@@ -127,8 +135,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   SERIALIZETOJSON option`); `UNLOAD ... PARTITION BY` names files `mes=<v>/<slice>_part_<nn>.parquet`
   with the slice varying between runs (`0064`, `0000`), and without `ALLOWOVERWRITE` checks the
   destination as a prefix (same prefix and parent prefix refused with `Specified unload destination
-  on S3 is not empty`, a new subprefix under a folder with files accepted), so stage 5 unloads to
-  `<uri>/<execution_id>/<valor>/`; two parallel `COPY` 4.5 s and 3.6 s, two parallel `UNLOAD` 1.9 s
+  on S3 is not empty`, a new subprefix under a folder with files accepted), so stage 5 unloads
+  without `PARTITION BY` to a prefix new per partition and per attempt,
+  `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/` (user decision of 2026-09-23); two parallel `COPY` 4.5 s and 3.6 s, two parallel `UNLOAD` 1.9 s
   and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times. `plan/POC.md`
 - Fifth and sixth runs (2026-09-21 13:35 and 13:39 UTC, 12 passed each, the two clean runs stage 0
   required, `plan/readings/redshift-suite-2026-09-21-1335.json` and `-1339.json`): with

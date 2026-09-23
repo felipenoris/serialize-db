@@ -65,8 +65,10 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   (2026-09-23). An `interrupt()` that reaches a read of the Arrow reader surfaces as `OSError:
   INTERRUPT Error: Interrupted!`, one that reaches `execute` as `duckdb.InterruptException`.
   `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`, `test_sqlalchemy.py`, `test_parallel.py`
-- `COPY ... (RETURN_STATS)` on a `DOUBLE` with `NaN` gives `has_nan: true` and the largest number
-  as the maximum; infinity comes as the text `inf`. Long text comes truncated to 256 characters,
+- `COPY ... (RETURN_STATS)` on a `DOUBLE` with `NaN` gives the largest number as the maximum and a
+  `has_nan` that sees only the last row group: 4,096 rows in two groups of 2,048 gave `false` with
+  the `NaN` only in the first group (2026-09-23), while the footer omits min and max of every group
+  holding a `NaN`. Infinity comes as the text `inf`. Long text comes truncated to 256 characters,
   the maximum as 255 characters with the last one incremented, above the real value; long
   multibyte text comes without minimum and maximum. `sum(CAST(x AS DECIMAL(38, 6)))` fails with
   `ConversionException` on `NaN` and infinity, also under `FILTER (WHERE isfinite(x))`, because the
@@ -110,3 +112,12 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   ("How to Tune Workloads") parallelize by 122,880-row row groups and advise 2 to 5 times the cores
   for remote files, whose I/O is synchronous, one HTTP request per thread. `plan/duckdb.md`,
   `tests/proof_of_concept/test_concurrency.py`
+- DuckDB's Parquet reader prunes a row group by the footer maximum that pyarrow
+  (`parquet-cpp-arrow 25.0.1`) and delta-rs (`parquet-rs 59.3.0`) write without the `NaN`, and loses
+  the row DuckDB orders above every number: `read_parquet ... WHERE valor > 3` gave 3 rows of 4,
+  and `valor + 0 > 3`, which does not reach the reader, gave 4 (2026-09-23). It is
+  duckdb/duckdb#25521 (open, `reproduced`, also `!=` losing and `<=` adding the row). DuckDB's own
+  writer omits min and max of a group with `NaN`, and its native storage keeps `NaN` as the segment
+  maximum; both answer 4. The documented deviation is from IEEE 754, not from Parquet: `NaN` equals
+  `NaN` and is greater than every float. `plan/POC.md`, `plan/delta.md`,
+  `tests/proof_of_concept/test_duckdb.py`

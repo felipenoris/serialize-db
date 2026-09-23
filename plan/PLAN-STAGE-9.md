@@ -3,10 +3,12 @@
 A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PLAN.md`](PLAN.md), que
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
 
-As primitivas são as da [etapa 3](PLAN-STAGE-3.md); a etapa entrega a rotina e a documentação.
+As primitivas são as da [etapa 3](PLAN-STAGE-3.md), mais a inicialização da tabela de controle da
+[etapa 8](PLAN-STAGE-8.md); a etapa entrega a rotina e a documentação.
 
 | Rotina | Quando | Comando |
 | --- | --- | --- |
+| Tabela de controle da publicação | Uma vez no esquema do Redshift, antes da primeira publicação de qualquer ambiente: `publish_redshift` recusa publicar sem ela ([etapa 8](PLAN-STAGE-8.md), decisão do usuário de 2026-09-23). | `serialize-db publish --init`. |
 | Snapshot do banco | Na periodicidade do processo, por exemplo o fim do trimestre. | `run.snapshot("2026T3")` na execução marcada. |
 | Compactação | Antes de um snapshot, nunca depois. Também normaliza os arquivos que o `UNLOAD` gravou: `INT64` no lugar de `INT96` e de `FIXED_LEN_BYTE_ARRAY`, estatística em toda coluna ([etapa 3](PLAN-STAGE-3.md)). | `serialize-db compact --partitions ...`. |
 | `vacuum` | Mensal: lista com `keep_versions` do arquivo de controle, revisada, depois aplicada; `--full` de tempos em tempos para os órfãos. Num bucket versionado o espaço só é liberado pela regra `NoncurrentVersionExpiration`; `probes/bucket.py` (`BK-14`) mostra o acumulado. | `serialize-db vacuum [--apply] [--full]`. |

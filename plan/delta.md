@@ -74,6 +74,13 @@ O arquivo que sai numa substituição não é apagado: a ação `remove` o retir
 no tempo continua a enxergá-lo até o `vacuum`. Os valores de partição ficam na ação `add`, não dentro
 do arquivo de dados: o Parquet gravado pelo delta-rs para `mes=2026-02` tem cinco colunas, sem `mes`.
 
+O valor de partição entra no nome da pasta codificado por porcentagem (`p=a%3Ab` para `a:b`,
+`p=d%27agua` para `d'agua`, `p=a%C3%A7%C3%A3o` para `ação`), e o `path` da ação `add` codifica a
+pasta de novo (`p=a%253Ab`). O valor só de letras, dígitos, `_`, `.` e `-` sai igual nos dois. A
+regra da partição da [etapa 6](PLAN-STAGE-6.md) aceita só esses caracteres, porque o `COPY` do modo
+`register` monta o nome da pasta com o valor sem codificar (deltalake 1.6.4, 2026-09-23,
+`test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`).
+
 ### Log, snapshot e checkpoint
 
 O snapshot de uma versão é o resultado de reproduzir as ações do log em ordem: o conjunto de `add`
@@ -679,7 +686,7 @@ em todo tipo (medido em 2026-09-22, delta-rs 1.6.4, [`POC.md`](POC.md)):
 
 | Tipo | O que o log guarda | Consequência na poda |
 | --- | --- | --- |
-| Inteiro, data, `double`, texto | O valor exato; `-1e+308`, `0.30000000000000004` e um texto de 41 caracteres saíram inteiros, `NaN` fica fora do mínimo e do máximo, e o infinito vira `null` | A poda acha a linha, menos a do `NaN` num filtro por intervalo do `delta_scan`: o DuckDB ordena o `NaN` acima de todo número, e `valor > 3` deu 0 linhas com o arquivo podado pelo máximo 2,0, enquanto `valor >= 2` deu 2 (2026-09-23) |
+| Inteiro, data, `double`, texto | O valor exato; `-1e+308`, `0.30000000000000004` e um texto de 41 caracteres saíram inteiros, `NaN` fica fora do mínimo e do máximo, e o infinito vira `null` | A poda acha a linha, menos a do `NaN` num filtro por intervalo do `delta_scan`: o DuckDB ordena o `NaN` acima de todo número, e `valor > 3` deu 0 linhas com o arquivo podado pelo máximo 2,0, enquanto `valor >= 2` deu 2 (2026-09-23). O rodapé do arquivo também tem o máximo sem o `NaN`, e o leitor Parquet do DuckDB poda o grupo de linhas por ele mesmo sem estatística no log |
 | `decimal(p, s)` | Um número JSON: `123456789012345.21` virou `123456789012345.2` | `WHERE valor = 123456789012345.21` devolveu **zero linhas** no delta-rs e no `delta_scan`, com a linha dentro do arquivo |
 | `timestamp` | O texto truncado em milissegundos: `2026-08-31 23:59:59.999999` virou `2026-08-31 23:59:59.999` | Os dois leitores acharam a linha mesmo assim |
 
@@ -687,6 +694,17 @@ O defeito do `decimal` é do escritor, então uma coluna `Numeric` larga gravada
 `write_deltalake` carrega a mesma poda; o modelo cliente não tem nenhuma, porque as colunas
 numéricas são `Double`. O `register_files` da [etapa 3](PLAN-STAGE-3.md) registra mínimo e máximo
 só dos quatro tipos exatos.
+
+O `NaN` segue convenções diferentes no rodapé Parquet e no log. A especificação do Parquet
+(`parquet.thrift`) manda o escritor deixar o `NaN` fora do mínimo e do máximo e, desde o
+PARQUET-2249 (2026-05-26), contá-lo em `nan_count`; o leitor sem `nan_count` supõe que pode haver
+`NaN`, e ignora o mínimo e o máximo numa busca que o `NaN` satisfaz. O protocolo Delta define
+`maxValues` como o maior valor válido do arquivo, sem contagem de `NaN`; o delta-kernel-rs grava o
+`NaN` como máximo, e o Delta Spark descarta o mínimo e o máximo de ponto flutuante que colhe do
+rodapé de escritores que deixam o `NaN` de fora (PR #7101, 2026-06-27). O delta-rs copia o máximo do
+rodapé para o log. A biblioteca grava sem mínimo e máximo, no rodapé e no log, as colunas `Double`
+com valor não finito em cada partição (decisão do usuário de 2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59),
+[etapa 3](PLAN-STAGE-3.md)), medido em [`POC.md`](POC.md).
 
 ## Exportação para Parquet
 
@@ -832,8 +850,8 @@ mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends 
    limites de tipo, no motor.
 5. **Publicação.** Por tabela e por mês: do DuckDB, `write_deltalake(mode="overwrite",
    predicate="mes = ...")` com o `RecordBatchReader` da consulta, ou `COPY ... TO` na subpasta do
-   mês mais `create_write_transaction`; do Redshift, `UNLOAD ... PARTITION BY (mes)` na pasta da
-   tabela mais `create_write_transaction`. Cada commit leva `serialize_db_execution_id` e
+   mês mais `create_write_transaction`; do Redshift, `UNLOAD` num prefixo novo dentro da subpasta do
+   mês mais `create_write_transaction`. Cada commit leva `serialize_db_execution_id` e
    `serialize_db_input_versions` em `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e
    é idempotente; um conflito de commit no mesmo mês significa outra execução publicando a mesma
    tabela, e a execução aborta.
@@ -886,7 +904,8 @@ Comportamentos verificados:
   `min`, `max`, `null_count` por coluna, nomes entre aspas e valores em texto), que viram a
   `AddAction` do registro. O arquivo do DuckDB marca todas as colunas como `optional`; a nulidade
   continua garantida pelo esquema Delta e pela auditoria. Num `DOUBLE` com `NaN`, o `RETURN_STATS`
-  traz `has_nan: true` e o maior número como máximo, e o infinito sai `inf`; o texto longo sai
+  traz o maior número como máximo e `has_nan: true` só quando o `NaN` está no último grupo de linhas
+  do arquivo; o rodapé grava sem mínimo e máximo todo grupo com `NaN`. O infinito sai `inf`; o texto longo sai
   truncado em 256 caracteres, com o máximo de 255 e o último incrementado, acima do valor real, e o
   texto multibyte longo sai sem mínimo e máximo (2026-09-23).
 
@@ -939,8 +958,10 @@ IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
 FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE;
 ```
 
-`PARTITION BY` grava em `mes=2026-08/` e retira a coluna do arquivo, que é a convenção do Delta. O
-manifesto verboso traz `content_length` e `record_count` por arquivo; `minValues` e `maxValues` vêm
+`PARTITION BY` grava em `mes=2026-08/` e retira a coluna do arquivo, que é a convenção do Delta. A
+biblioteca chega ao mesmo layout sem ele: o `select` deixa a coluna de partição de fora, e o destino
+é um prefixo novo por tentativa dentro da pasta da partição, montado por ela
+([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md), decisão do usuário de 2026-09-23). O manifesto verboso traz `content_length` e `record_count` por arquivo; `minValues` e `maxValues` vêm
 do rodapé Parquet de cada arquivo, lido com `pq.read_metadata`. Um `create_write_transaction` com
 `mode="overwrite"` e `partition_filters` do mês substitui os arquivos anteriores. Quatro regras
 mantêm esse caminho carregável nos dois sentidos: nenhuma linha fora dos arquivos (sem vetores de

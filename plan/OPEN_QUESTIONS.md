@@ -40,12 +40,6 @@ foi medido em [`POC.md`](POC.md).
   (`probelib.endpoint_reachable`), que no macOS no mesmo dia baixou de 10,0 s para 2,0 s a espera por
   um endereço sem rota ([`POC.md`](POC.md)). A próxima execução dos probes no alvo diz o que sobra;
   a permissão sobre a raiz fica provada pela primeira escrita.
-- **Barreira por tabela.** Um cliente que dispara `load` numa thread e esquece o `result()` lê o
-  estado anterior em silêncio, porque o DuckDB não espera. A guarda: `load` marca a tabela em voo,
-  e `query` e `stream` esperam as tabelas em voo que o statement referencia, tiradas por
-  `find_tables` do statement Core ou do sentinela `{prefix}` do texto gerado
-  (`test_parallel.py::test_table_barrier_delays_the_read_until_the_load_lands`). Fica fora das
-  etapas até existir um pipeline paralelo real.
 - **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
   linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)); a
@@ -76,16 +70,21 @@ foi medido em [`POC.md`](POC.md).
   execução.
 - **O `Double` não finito nas estatísticas do Delta**, a
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
-  infinito numa coluna `Double` (decisão do usuário de 2026-09-23), e os dois escritores do Delta
-  gravam o máximo do arquivo sem o `NaN`; o DuckDB ordena o `NaN` acima de todo número, e o
-  `delta_scan` responde a um filtro por intervalo conforme a poda: `valor > 3` deu 0 linhas com o
-  arquivo podado, e `valor >= 2` deu 2, com o `NaN` dentro (leituras de 2026-09-23,
-  [`POC.md`](POC.md)). A soma de controle da auditoria já soma só os finitos e conta os demais, e o
-  registro deixa fora o extremo infinito. Continuam abertos: a contagem de `isnan` e `isinf` nas
-  colunas `Double` das tabelas que a migração adiantada gravou no ambiente alvo, com a busca por
-  `Infinity` nos arquivos do log delas; o que `register_files` grava numa coluna com `has_nan`
-  ([etapa 3](PLAN-STAGE-3.md)); se a contagem da auditoria reprova; e o aviso aos clientes da tabela
-  publicada.
+  infinito numa coluna `Double`, e a biblioteca grava sem mínimo e máximo, no rodapé Parquet e no
+  log Delta, as colunas `Double` com valor não finito em cada partição, pela contagem da auditoria
+  (decisões do usuário de 2026-09-23, [etapa 3](PLAN-STAGE-3.md)). Continuam abertos:
+  - O rodapé que o `UNLOAD` do Redshift grava num grupo de linhas com `NaN`, que só o ambiente alvo
+    mede. O Redshift aceita `NaN` em `DOUBLE PRECISION`, e um rodapé com o máximo sem o `NaN`, como
+    o do pyarrow, faz o leitor Parquet do DuckDB perder a linha mesmo com o log sem estatística
+    ([duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521), leituras de 2026-09-23,
+    [`POC.md`](POC.md)).
+  - As tabelas que a migração adiantada gravou no ambiente alvo, com o mínimo e o máximo do
+    `Double` registrados. O relatório dela soma cada coluna `Double` por `CAST` para
+    `DECIMAL(38, 6)`, que falha com `NaN` e infinito, e só `ContractError` é tratado: uma execução
+    completa sem erro indica tabelas sem valor não finito. Os relatórios da execução, ainda não
+    disponíveis, dizem quais tabelas rodaram; uma tabela fora deles pede a contagem de `isnan` e
+    `isinf`.
+  - Se a contagem de não finitos da auditoria reprova.
 - **O `pytest` sem variável grava na pasta temporária do pytest.** A premissa de
   [`PLAN.md`](PLAN.md) diz que `pytest` sem variável não grava arquivo algum, e o cabeçalho de
   `tests/conftest.py` diz que fora das raízes informadas a sessão grava só `.pytest_cache/`; mas
@@ -106,6 +105,21 @@ foi medido em [`POC.md`](POC.md).
   perde quando o STS não responde; `connect_redshift` de `tests/conftest.py` tem 85 linhas com
   duas funções aninhadas. A próxima execução das duas suítes no ambiente alvo vem com essas
   correções.
+- **As leituras da etapa 5 na próxima execução da suíte Redshift.** As decisões do usuário de
+  2026-09-23 ([etapa 5](PLAN-STAGE-5.md)) supõem comportamentos que ninguém executou no ambiente
+  alvo, e os casos entram em `tests/proof_of_concept/test_redshift.py` antes dessa execução:
+  - o `UNLOAD` sem `PARTITION BY` para um prefixo com `=`,
+    `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/`, o `schema.elements` do manifesto dele sem a
+    coluna de partição, o registro dos arquivos e a releitura pelo `delta_scan`;
+  - o `stream` por `UNLOAD`: valores literais com `'` e `\`, uma data, um número e um `IN` de lista,
+    o resultado igual ao do `query` do mesmo statement, uma coluna `SUPER` no Parquet do `UNLOAD`,
+    o que ele grava para um resultado vazio, de que depende o esquema do lote vazio, a mensagem que
+    recusa o `LIMIT` externo e a tabela temporária da sessão lida pelo `UNLOAD`;
+  - o `row_desc` de um `select` com uma coluna de cada tipo do contrato, `SUPER`, `count(*)`, `sum`
+    de `NUMERIC(18, 2)`, `sum` de `DOUBLE PRECISION` e um literal de texto, que fecha a tabela de
+    OIDs de `schema_from_row_description`;
+  - o tempo de um `load` de 10 linhas pelo `COPY`, como leitura: é o que traria de volta o `INSERT`
+    multilinha.
 
 ## Decisões de API pendentes por etapa
 
@@ -116,19 +130,6 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   que o `cast` aceita em silêncio: o instante UTC vira hora local, e a hora local vira UTC (leitura
   de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, porque a
   conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso.
-- [Etapa 3](PLAN-STAGE-3.md): o mínimo e o máximo de uma coluna `Double` com `NaN`, da
-  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). Proposto: `register_files`
-  omite os dois quando o `RETURN_STATS` traz `has_nan`.
-- [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
-  entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
-  a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição
-  (`<uri>/<execution_id>/<valor>/` com `PARTITION BY`, ou `<uri>/<coluna>=<valor>/<execution_id>/`
-  sem ele), porque o `UNLOAD` confere o destino como prefixo.
-- [Etapa 6](PLAN-STAGE-6.md): `--metadata` na linha de comando; a chave de `next_ids` numa chave
-  composta; a barreira por tabela; a aspa simples no valor da partição, que a validação de
-  `Execution` não exclui (sem `/`, `=`, espaço nem vazio) e que quebraria o predicado de
-  `publish_partition` e todo literal `'<valor>'` das etapas 4, 5 e 8. Proposto: recusá-la junto
-  com os demais, ou trocar a lista por `[0-9A-Za-z_.-]+`, que cobre `AAAA-MM-DD` e `2026-Q1`.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.

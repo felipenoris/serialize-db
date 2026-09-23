@@ -21,7 +21,7 @@ modelo:
 | Nulo em coluna `NOT NULL` | `column.nullable` | As partições da execução. |
 | Chave repetida | `table.primary_key` e os `UniqueConstraint`, mais o que `keys` acrescenta | As partições da execução quando as colunas da chave incluem a coluna de partição ou a de `partition_source`; a tabela inteira quando não incluem, menos a chave primária inteira de uma coluna cujo menor valor na execução passa do `max_key` da versão fixada. |
 | Órfão de chave estrangeira | `table.foreign_keys` | Só com `foreign_keys=True`; a tabela referenciada entra na versão fixada pela execução. |
-| Partição fora da origem, e valor que não serve de nome de pasta | `partition_by` e `partition_source` de `table_options`: com `partition_source` declarado, a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')`; em toda tabela particionada, o valor vazio ou com `/`, `=` ou espaço (a partição é texto desde a decisão de 2026-09-22, e a data é o caso da base atual) | As partições da execução. |
+| Partição fora da origem, e valor que não serve de nome de pasta | `partition_by` e `partition_source` de `table_options`: com `partition_source` declarado, a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')`; em toda tabela particionada, o valor fora da regra da partição, `[0-9A-Za-z][0-9A-Za-z_.-]*` (a partição é texto desde a decisão de 2026-09-22, a regra é a decisão do usuário de 2026-09-23, e a data é o caso da base atual) | As partições da execução. |
 | Texto acima de `String(n)` em bytes e valor fora do `Numeric(18, 2)` | os tipos do contrato (`docs/index.md`); no Redshift, o `COPY` de uma string maior que o `VARCHAR` aborta (`Spectrum Scan Error` 15007, 2026-09-21), e esta verificação é a barreira | As partições da execução. |
 | Documento JSON inválido, ou acima de 65.535 bytes se a decisão da [etapa 8](PLAN-STAGE-8.md) fixar o teto | as colunas JSON, que nem o Arrow nem o Delta validam; o teto é o do `VARCHAR` da staging do Redshift e da string que o `COPY` de Parquet aceita numa coluna `SUPER` (2026-09-21) | As partições da execução. |
 | Totais de controle | as colunas `Numeric` e `Double`; as `Double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem | As partições da execução. |
@@ -51,7 +51,7 @@ registra a verificação como não executada.
 | --- | --- |
 | `checks(table, partitions=None, foreign_keys=False, key_scope=None, published=None, referenced=None, published_max_key=None)` | A lista de `Check` (nome, statement Core, o que reprova e, na chave primária inteira de uma coluna, o `skip_when` do mínimo contra `published_max_key`): os defeitos de linha num `count(*) FILTER` por coluna na mesma passagem, uma consulta por chave e uma por chave estrangeira. |
 | `audit_sql(table, dialect, partitions=None, foreign_keys=False, key_scope=None, published=None, referenced=None, prefix="{prefix}")` | `{nome: texto}` por `sql.render` com o prefixo pedido, sem conexão e sem motor: o SQL que a auditoria vai rodar, para depuração. |
-| `AuditReport` | Por verificação: nome, o SQL rodado, a contagem de defeitos, uma amostra das linhas reprovadas e o veredito; `passed` é a conjunção, e `report.sql()` devolve o texto de todas. |
+| `AuditReport` | Por verificação: nome, o SQL rodado, a contagem de defeitos, uma amostra das linhas reprovadas e o veredito; `passed` é a conjunção, e `report.sql()` devolve o texto de todas; `nonfinite_columns` dá, por valor de partição, as colunas `Double` com valor não finito, a lista que `run.publish` passa a `export_partition` como `columns_without_min_max`. |
 
 | Primitiva | DuckDB |
 | --- | --- |
@@ -64,12 +64,12 @@ registra a verificação como não executada.
 | `loader(table, queue_depth=2)` | O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada por `ddl(table, "duckdb")` no `close`: um nome já ocupado, pela view do `ingest` ou pela tabela de um `loader` anterior, é recusado com `SandboxError` na abertura, antes do primeiro lote (decisão do usuário de 2026-09-22), por uma leitura do catálogo num cursor próprio, sem o lock da sessão (decisão do usuário de 2026-09-23), e um laço por partição mantém um `loader` só aberto; `write(data)` aceita `pa.RecordBatch` ou `pa.Table`, faz `cast(batch, table)` na thread do cliente e põe o lote numa fila limitada; uma thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4 na pasta de transbordo, sem a sessão, e o `close` roda, sob o lock e numa transação, o `CREATE TABLE` e um único `INSERT ... BY NAME SELECT * FROM <leitor do arquivo>`; uma exceção dentro do `with`, um lote recusado pelo `cast` ou um loader abandonado apagam o arquivo sem criar a tabela, e um erro do `INSERT` desfaz o `CREATE`; `close` relança o erro da thread e o do `INSERT`; `rows` conta as linhas gravadas. Nada existe antes do `close`, e o leitor que o `INSERT` consome é o do arquivo, nativo: nenhum gerador Python é entregue ao DuckDB. |
 | `load(table, data)` | `data` é uma `pa.Table`, um `pa.RecordBatch`, um `RecordBatchReader` ou um iterável de lotes: `with loader(table) as l: for batch in ...: l.write(batch)`; outro tipo é recusado com a mensagem que aponta `pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. |
 | `audit(table, partitions, uri=None, version=None, foreign_keys=False, key_scope=None)` | `uri` e `version` são os da tabela fixada, e montam `published`, as tabelas referenciadas e o `published_max_key` de `delta.max_key` sem depender de `Execution`. Roda o texto de `audit.audit_sql(table, "duckdb")` — `json_valid` e `strftime(data, '%Y-%m-%d')` são as funções do dialeto — e monta o `AuditReport`, com até 20 linhas inteiras de amostra por verificação reprovada (decisão do usuário de 2026-09-22): a verificação `linhas` é um `count(*) FILTER` por coluna e não tem linha para amostrar, então cada contador acima de zero ganha uma segunda consulta, `SELECT * ... WHERE <condição da coluna> LIMIT 20`, rodada só na reprovação; a comparação com as demais partições sai de `published` na versão fixada, e `passed` falso interrompe a execução. |
-| `export_partition(table, uri, value, metadata, mode, expected_rows=None)` | `uri`, `metadata` e `expected_rows` vêm do chamador, porque o motor não conhece o `Database` e o commit precisa dos metadados. `mode` é a flag `export_mode` já resolvida pela [etapa 6](PLAN-STAGE-6.md) (`register` ou `rewrite`; o motor não lê `SERIALIZE_DB_EXPORT_MODE`, decisão do usuário de 2026-09-23), a mesma do motor Redshift ([etapa 5](PLAN-STAGE-5.md)) e da carga inicial ([etapa 7](PLAN-STAGE-7.md)). **`register`**: `COPY (SELECT <colunas do contrato, sem a de partição> FROM <sandbox> WHERE <coluna de partição> = '<valor>') TO '<uri>/<coluna de partição>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` mais `register_files` com as estatísticas de `RETURN_STATS`, as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois; a memória é constante (600 MB na reescrita medida em [`delta.md`](delta.md)). O `uuid` no nome impede uma reexecução com o mesmo `execution_id` de sobrescrever o arquivo que a versão anterior referencia. **`rewrite`**: o leitor do DuckDB da partição, `to_arrow_reader` sob o lock, passado por `cast` a `publish_partition`, sem `stream` nem arquivo, porque ali não há trabalho do cliente para sobrepor (decisão do usuário de 2026-09-23); o lock fica tomado pela escrita, como no `COPY` do `register`, o `write_deltalake` calcula estatística e nulidade, e a memória cresce com a partição (1.140 MB para 135 MB de Parquet na mesma medição). A mesma partição sai igual pelos dois, e o teste os compara. |
+| `export_partition(table, uri, value, metadata, mode, expected_rows=None, columns_without_min_max=())` | `uri`, `metadata` e `expected_rows` vêm do chamador, porque o motor não conhece o `Database` e o commit precisa dos metadados. `mode` é a flag `export_mode` já resolvida pela [etapa 6](PLAN-STAGE-6.md) (`register` ou `rewrite`; o motor não lê `SERIALIZE_DB_EXPORT_MODE`, decisão do usuário de 2026-09-23), a mesma do motor Redshift ([etapa 5](PLAN-STAGE-5.md)) e da carga inicial ([etapa 7](PLAN-STAGE-7.md)). `columns_without_min_max`, as colunas `Double` com valor não finito na partição, vem de `run.publish` e vai a `register_files` ou a `publish_partition`. **`register`**: `COPY (SELECT <colunas do contrato, sem a de partição> FROM <sandbox> WHERE <coluna de partição> = '<valor>') TO '<uri>/<coluna de partição>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` mais `register_files` com as estatísticas de `RETURN_STATS`, as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois; a memória é constante (600 MB na reescrita medida em [`delta.md`](delta.md)). O `uuid` no nome impede uma reexecução com o mesmo `execution_id` de sobrescrever o arquivo que a versão anterior referencia. **`rewrite`**: o leitor do DuckDB da partição, `to_arrow_reader` sob o lock, passado por `cast` a `publish_partition`, sem `stream` nem arquivo, porque ali não há trabalho do cliente para sobrepor (decisão do usuário de 2026-09-23); o lock fica tomado pela escrita, como no `COPY` do `register`, o `write_deltalake` calcula estatística e nulidade, e a memória cresce com a partição (1.140 MB para 135 MB de Parquet na mesma medição). A mesma partição sai igual pelos dois, e o teste os compara. |
 | `cleanup()` | Cancela por `interrupt()` o comando em curso, fecha a conexão e apaga o arquivo do banco e a pasta de transbordo. |
 
 Testes: `tests/test_audit.py`, sem gravar: o texto de cada verificação nos dois dialetos, a chave
 lida do `primary_key` do modelo e o escopo escolhido pelas colunas da chave. `tests/test_engine_duckdb.py` sob a raiz local: o pipeline de exemplo (doze partições
-materializadas e dimensões em view, um `select` com `join`, auditoria, exportação da partição nos dois modos com as mesmas linhas) sobre um
+materializadas e dimensões em view, um `select` com `join`, auditoria, com `nonfinite_columns` numa partição com `NaN`, exportação da partição nos dois modos com as mesmas linhas e sem o mínimo e o máximo dessa coluna) sobre um
 Delta local criado no teste; o ciclo `query`, `to_pandas(types_mapper=pd.ArrowDtype)`, `from_pandas` e
 `load` com `decimal128(18, 2)` e `date32` mantidos, `load` recusando um DataFrame e o `loader`
 recusando o nome que a view do `ingest` ocupa, com a leitura da versão publicada por `published` no
@@ -109,7 +109,7 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 """Assinaturas de serialize_db.audit, serialize_db.engine e serialize_db.engine.duckdb; os corpos estão nos rascunhos abaixo."""
 import contextlib
 import dataclasses
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from typing import Literal, Protocol, runtime_checkable
 
 import duckdb
@@ -147,6 +147,7 @@ class AuditReport:
     partitions: tuple[str, ...]
     results: tuple[CheckResult, ...]
     not_run: tuple[str, ...]         # "orfao_*" sem foreign_keys=True
+    nonfinite_columns: Mapping[str | None, tuple[str, ...]]  # por valor de partição, as colunas Double com valor não finito
 
     @property
     def passed(self) -> bool: ...
@@ -198,7 +199,8 @@ class Engine(Protocol):
     def load(self, table: sa.Table, data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch]) -> int: ...
     def audit(self, table: sa.Table, partitions: list[str] | None, uri: str | None = None, version: int | None = None,
               foreign_keys: bool = False, key_scope: Literal["partition", "table"] | None = None) -> AuditReport: ...
-    def export_partition(self, table: sa.Table, uri: str, value: str | None, metadata: Mapping[str, str], mode: ExportMode, expected_rows: int | None = None) -> int: ...
+    def export_partition(self, table: sa.Table, uri: str, value: str | None, metadata: Mapping[str, str], mode: ExportMode, expected_rows: int | None = None,
+                         columns_without_min_max: Collection[str] = ()) -> int: ...
     def cleanup(self) -> None: ...
 
 
@@ -219,13 +221,16 @@ class DuckDBEngine:
 
 - **`checks`** monta os statements Core sobre a tabela do contrato, e `audit_sql` os renderiza pela
   cópia prefixada de `sql.render` com o prefixo pedido; `checks` não recebe `prefix` (decisão do
-  usuário de 2026-09-23). Uma consulta de linhas reúne num `count(*) FILTER` por coluna: nulo em `NOT NULL`, texto acima de
+  usuário de 2026-09-23). Uma consulta de linhas, agrupada pela coluna de partição numa tabela particionada, reúne num
+  `count(*) FILTER` por coluna: nulo em `NOT NULL`, texto acima de
   `String(n)` em bytes, JSON inválido, a coluna de partição diferente de `partition_text(partition_source)`
-  quando o modelo declara `partition_source`, o valor de partição vazio ou com `/`, `=` ou espaço
-  (a partição é texto desde 2026-09-22, e a data é o caso da base atual), e a soma de controle de
+  quando o modelo declara `partition_source`, o valor de partição fora da regra da partição,
+  `[0-9A-Za-z][0-9A-Za-z_.-]*` (a partição é texto desde 2026-09-22, e a data é o caso da base
+  atual), e a soma de controle de
   cada coluna `Double` e `Numeric` como `DECIMAL(38, 6)`. A soma de uma coluna `Double` corre só
   sobre os valores finitos, `sum(CASE WHEN isfinite(x) THEN CAST(x AS DECIMAL(38, 6)) END)` no
-  DuckDB, e a consulta conta à parte os não finitos: o `CAST` de um `NaN` ou de um infinito para
+  DuckDB, e a consulta conta à parte os não finitos de cada coluna, que dão `nonfinite_columns`:
+  o `CAST` de um `NaN` ou de um infinito para
   `DECIMAL` falha com `ConversionException` e derrubaria a verificação inteira, e o `FILTER` do
   agregado não o evita (leitura de 2026-09-23). A contagem entra no relatório sem reprovar, porque
   o `cast` aceita o `Double` não finito (decisão do usuário de 2026-09-23); se ela deve reprovar é
@@ -239,8 +244,11 @@ class DuckDBEngine:
   no DuckDB e vira `is_valid_json` no Redshift; `text_bytes`, o comprimento em bytes que o
   `String(n)` mede como o `VARCHAR(n)` do Redshift, é `strlen` no DuckDB e `octet_length` no
   Redshift, porque o `length` dos dois conta caracteres e o `octet_length` do DuckDB só aceita
-  `BLOB`. Uma consulta por chave (`GROUP BY ... HAVING count(*)
-  > 1`) dentro das partições da execução, e, quando a chave não inclui a coluna de partição e
+  `BLOB`; `partition_value_valid`, a regra da partição, é `regexp_full_match(x,
+  '[0-9A-Za-z][0-9A-Za-z_.-]*')` no DuckDB, que concordou com o `re.fullmatch` do Python em doze
+  valores (2026-09-23), e o operador POSIX `x ~ '^[0-9A-Za-z][0-9A-Za-z_.-]*$'` no Redshift. Uma
+  consulta por chave (`GROUP BY ... HAVING count(*) > 1`) dentro das partições da execução, e,
+  quando a chave não inclui a coluna de partição e
   `key_scope != "partition"`, uma segunda consulta que junta o sandbox com `published` (o
   `delta_scan` da versão fixada, ou a staging no Redshift) fora das partições da execução. A chave
   que inclui a coluna de `partition_source` não ganha a segunda consulta, e a chave primária inteira
@@ -332,7 +340,12 @@ class DuckDBEngine:
   antes do primeiro lote, 0,811 s contra 0,006 s em 20.000.000 de linhas (leitura e decisão do
   usuário de 2026-09-23, [`POC.md`](POC.md)). O cursor não vê as tabelas temporárias da sessão
   principal, e um nome ocupado entre a abertura e o `close` falha no `CREATE` do `close`, sem
-  inserir nada. Depois da guarda, `write` faz `cast(batch, table)` na thread do cliente e enfileira,
+  inserir nada. Por isso um `load` disparado numa thread e esquecido sem `result()` não deixa a
+  leitura ver dado velho: antes do `close`, a leitura da tabela falha com `CatalogException`, na
+  sessão principal e numa sessão a mais, e a barreira por tabela que esperaria a carga ficou fora
+  das etapas (decisão do usuário de 2026-09-23,
+  `test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`).
+  Depois da guarda, `write` faz `cast(batch, table)` na thread do cliente e enfileira,
   e a thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4, sem a sessão. O `close` registra
   o leitor do arquivo com um nome único, que não é o de uma tabela do modelo, porque um leitor
   registrado ocupa um nome de view (leitura de 2026-09-22), e roda, sob o lock e numa transação,

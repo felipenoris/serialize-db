@@ -13,8 +13,11 @@ exportação por cópia dos arquivos e a carga inicial de pastas Parquet; e aind
 (caminho, estatística, esquema do arquivo), o ``overwrite`` com ``partition_filters`` e a
 compactação que normaliza arquivos de outro escritor, a descrição e os comentários que atravessam o
 ``overwrite`` e mudam por ``alter``, o mínimo e o máximo que o próprio delta-rs grava por tipo, o
-``NaN`` e o infinito nas estatísticas registradas e nas do delta-rs, dois registros concorrentes da
-mesma partição e a poda do ``delta_scan`` por forma de predicado. Os
+``NaN`` e o infinito nas estatísticas registradas e nas do delta-rs, o ``Double`` sem estatística
+no rodapé e no log, também por partição, dois registros concorrentes da mesma partição, a poda do
+``delta_scan`` por
+forma de predicado, e o valor de partição codificado na pasta e no log, com a aspa que quebra o
+predicado. Os
 comportamentos estão descritos em ``plan/delta.md``; aqui eles viram asserções.
 """
 
@@ -35,7 +38,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
-from deltalake import CommitProperties, DeltaTable, QueryBuilder, Schema, write_deltalake
+from deltalake import ColumnProperties, CommitProperties, DeltaTable, QueryBuilder, Schema, WriterProperties, write_deltalake
 from deltalake.exceptions import CommitFailedError, DeltaError, SchemaMismatchError
 from deltalake.schema import Field, PrimitiveType
 from deltalake.transaction import AddAction
@@ -863,6 +866,87 @@ def test_nan_statistics_hide_rows_from_delta_scan(folder: Callable[[str], str]) 
     con.close()
 
 
+
+def test_float_statistics_off_keep_the_nan_row(folder: Callable[[str], str]) -> None:
+    """Sem mínimo e máximo do ``Double`` no rodapé e no log, o ``delta_scan`` devolve a linha do ``NaN``; tirar só os do log não basta, porque o leitor Parquet do DuckDB poda o grupo de linhas pelo rodapé.
+
+    O delta-rs respeita ``delta.dataSkippingStatsColumns`` ao gravar o log, e o rodapé continua com o
+    máximo sem o ``NaN``; ``ColumnProperties(statistics_enabled="NONE")`` tira a estatística da
+    coluna dos dois. O arquivo do DuckDB já sai sem mínimo e máximo no grupo com ``NaN``, e
+    registrado sem os dois no log devolve a linha que ``test_nan_statistics_hide_rows_from_delta_scan``
+    perde. É a recomendação da issue #59.
+    """
+    con = connect_duckdb(("delta",))
+    table = pa.table({"id": pa.array([1, 2, 3, 4, 5, 6], pa.int64()), "valor": pa.array([1.5, float("nan"), 2.0, 4.0, 5.0, 6.0])})
+
+    def delta_scan_count(uri: str) -> int:
+        return con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 3").fetchone()[0]
+
+    # O log sem o valor e o rodapé com o máximo 2.0 no grupo do NaN: o grupo é podado.
+    uri = folder("estatistica_so_no_rodape")
+    write_deltalake(uri, table, configuration={"delta.dataSkippingStatsColumns": "id"}, writer_properties=WriterProperties(max_row_group_size=3))
+    assert "valor" not in json.loads(log_actions(uri, 0)[-1]["add"]["stats"])["maxValues"]
+    assert delta_scan_count(uri) == 3
+
+    # Sem estatística do valor no rodapé nem no log: a linha volta.
+    uri = folder("sem_estatistica_do_double")
+    properties = WriterProperties(max_row_group_size=3, column_properties={"valor": ColumnProperties(statistics_enabled="NONE")})
+    write_deltalake(uri, table, writer_properties=properties)
+    stats = json.loads(log_actions(uri, 0)[-1]["add"]["stats"])
+    assert stats == {"numRecords": 6, "minValues": {"id": 1}, "maxValues": {"id": 6}, "nullCount": {"id": 0}}
+    assert delta_scan_count(uri) == 4
+
+    # O arquivo do DuckDB com [1.5, NaN, 2.0], registrado sem o mínimo e o máximo do valor.
+    uri = folder("registro_sem_minimo_e_maximo")
+    DeltaTable.create(uri, table.schema)
+    con.register("origem", table.slice(0, 3))
+    cursor = con.execute(f"COPY origem TO '{uri}/f.parquet' (FORMAT parquet, RETURN_STATS)")
+    columns = [column[0] for column in cursor.description]
+    row = dict(zip(columns, cursor.fetchone()))
+    stats = json.dumps({"numRecords": row["count"], "minValues": {"id": 1}, "maxValues": {"id": 3}, "nullCount": {"id": 0, "valor": 0}})
+    added = AddAction(path="f.parquet", size=row["file_size_bytes"], partition_values={}, modification_time=int(time.time() * 1000),
+                      data_change=True, stats=stats)
+    DeltaTable(uri).create_write_transaction([added], mode="append", schema=table.schema)
+    assert delta_scan_count(uri) == 1
+    con.close()
+
+
+def test_float_statistics_off_per_partition_keep_the_nan_row_and_the_pruning(folder: Callable[[str], str]) -> None:
+    """A regra da issue #59 por partição: a partição com valor não finito grava o ``Double`` sem mínimo e máximo, a outra grava os dois, e o ``delta_scan`` devolve a linha do ``NaN`` e continua podando pelo valor a partição sem ele.
+
+    ``publish_partition`` grava uma partição por chamada de ``write_deltalake``, e o
+    ``writer_properties`` vale para a chamada: o arquivo de agosto sai sem a estatística do valor no
+    rodapé e no log, e o de setembro sai com ela. O log ``FileSystem`` do DuckDB mostra os arquivos
+    abertos.
+    """
+    uri = folder("estatistica_por_particao")
+    schema = pa.schema([("particao", pa.string()), ("valor", pa.float64())])
+    DeltaTable.create(uri, schema, partition_by=["particao"])
+    without_bounds = WriterProperties(column_properties={"valor": ColumnProperties(statistics_enabled="NONE")})
+    partitions = {"2026-08-31": ([1.5, float("nan"), 2.0], without_bounds), "2026-09-30": ([1.0, 2.0, 2.5], None)}
+    for value, (numbers, properties) in partitions.items():
+        data = pa.table({"particao": [value] * len(numbers), "valor": pa.array(numbers, pa.float64())}, schema=schema)
+        write_deltalake(uri, data, mode="overwrite", predicate=f"particao = '{value}'", writer_properties=properties)
+
+    # Uma ação add por partição: agosto sem o valor nas estatísticas, setembro com ele.
+    stats = {}
+    for version in (1, 2):
+        added = [action["add"] for action in log_actions(uri, version) if "add" in action][0]
+        stats[added["partitionValues"]["particao"]] = json.loads(added["stats"])
+    assert "valor" not in stats["2026-08-31"]["maxValues"]
+    assert stats["2026-09-30"]["maxValues"]["valor"] == 2.5
+
+    con = connect_duckdb(("delta",))
+    con.execute("CALL enable_logging('FileSystem')")
+    con.execute("CALL truncate_duckdb_logs()")
+    assert con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 3").fetchone()[0] == 1  # o NaN de agosto
+    opened = set()
+    for (message,) in con.execute("SELECT message FROM duckdb_logs WHERE type = 'FileSystem'").fetchall():
+        if '"op":"OPEN"' in message and ".parquet" in message:
+            opened.add(re.search(r"particao=[0-9-]+", message).group(0))
+    assert opened == {"particao=2026-08-31"}  # setembro podado pelo máximo 2.5
+    con.close()
+
 def test_two_registrations_of_the_same_partition_conflict(folder: Callable[[str], str], two_months: pa.Table) -> None:
     """Dois ``create_write_transaction(mode="overwrite")`` da mesma partição, a partir da mesma versão: o segundo é ``CommitFailedError``, e a partição fica com o arquivo do primeiro.
 
@@ -927,3 +1011,22 @@ def test_delta_scan_prunes_by_equality_and_range_not_by_in_list(folder: Callable
     with pytest.raises(duckdb.InternalException, match="total_files inconsistent"):
         con.execute(f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}', version := 0) WHERE {in_range}")
     con.close()
+
+
+def test_partition_value_is_percent_encoded_in_the_folder_and_the_log(folder: Callable[[str], str]) -> None:
+    """O delta-rs grava o valor de partição codificado por porcentagem no nome da pasta, e o caminho da ação ``add`` sai codificado de novo; o valor só de letras, dígitos, ``_``, ``.`` e ``-`` sai igual nos dois. A aspa simples fecha o literal do predicado de ``publish_partition``."""
+    uri = folder("particao_codificada")
+    for value in ["2026-Q1", "a:b", "a%b", "ação", "d'agua"]:
+        write_deltalake(uri, pa.table({"id": pa.array([1], pa.int64()), "p": [value]}), partition_by=["p"], mode="append")
+
+    # A pasta no disco leva o valor codificado uma vez; o caminho no log, a pasta codificada de novo.
+    folders = sorted(entry.name for entry in Path(uri).iterdir() if entry.name.startswith("p="))
+    assert folders == ["p=2026-Q1", "p=a%25b", "p=a%3Ab", "p=a%C3%A7%C3%A3o", "p=d%27agua"]
+    actions = pa.table(DeltaTable(uri).get_add_actions(flatten=True))
+    log_folders = dict(zip(actions.column("partition.p").to_pylist(), [path.split("/")[0] for path in actions.column("path").to_pylist()]))
+    assert log_folders == {"2026-Q1": "p=2026-Q1", "a:b": "p=a%253Ab", "a%b": "p=a%2525b", "ação": "p=a%25C3%25A7%25C3%25A3o", "d'agua": "p=d%2527agua"}
+
+    # O predicado da substituição por partição é texto SQL: o valor com aspa quebra o literal.
+    write_deltalake(uri, pa.table({"id": pa.array([2], pa.int64()), "p": ["a:b"]}), mode="overwrite", predicate="p = 'a:b'")
+    with pytest.raises(DeltaError, match="Unterminated string literal"):
+        write_deltalake(uri, pa.table({"id": pa.array([2], pa.int64()), "p": ["d'agua"]}), mode="overwrite", predicate="p = 'd'agua'")

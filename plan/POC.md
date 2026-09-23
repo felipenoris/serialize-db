@@ -1976,3 +1976,143 @@ verdes em todas.
 **Consequência**: [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) e [`PLAN.md`](PLAN.md) descrevem o stream
 híbrido, o cancelamento e o `loader` com a criação no `close`, e a etapa 4 não tem decisão
 pendente.
+
+## O que as fontes e as sondas do `NaN` nas estatísticas mostraram
+
+Em 2026-09-23, no mesmo macOS (DuckDB 1.5.5 com a extensão `delta` 45c4087, deltalake 1.6.4,
+pyarrow 25.0.1), a pergunta do usuário sobre o PARQUET-1246 foi lida nas fontes e medida por três
+sondas, repetidas com o mesmo resultado.
+
+- **A especificação do Parquet.** O PARQUET-1246 (2018, parquet-mr 1.10.0 e 1.8.3) mudou o caminho
+  de leitura da implementação Java: ignora o mínimo e o máximo de `float` e `double` quando eles são
+  `NaN`, porque o próprio parquet-mr gravava o `NaN` como máximo. O `parquet.thrift` manda o escritor
+  deixar o `NaN` fora do mínimo e do máximo (PARQUET-1222, parquet-format 2.10.0, 2022) e, desde o
+  PARQUET-2249 (commit de 2026-05-26), gravar `nan_count` mesmo quando zero; o leitor sem
+  `nan_count` supõe que pode haver `NaN`, e ignora o mínimo e o máximo numa busca que o `NaN`
+  satisfaz. Só uma coluna de valores todos `NaN` fica sem mínimo e máximo. A ordem nova
+  `IEEE_754_TOTAL_ORDER` põe o `NaN` positivo acima de todo número e mantém o mínimo e o máximo nos
+  valores que não são `NaN`.
+- **O protocolo Delta.** A estatística de arquivo fica no campo `stats` da ação `add`, texto JSON no
+  `_delta_log` (no checkpoint, texto JSON ou `stats_parsed` dentro de um Parquet); `maxValues` é o
+  maior valor válido do arquivo, sem contagem de `NaN` e sem menção a ele. O delta-kernel-rs grava o
+  `NaN` como máximo (`test_file_stats_accumulator_float_nan_ordering` em
+  `default-engine/src/stats.rs`) e não usa o mínimo e o máximo do rodapé numa coluna de partição de
+  ponto flutuante. O Delta Spark descarta o mínimo e o máximo de `float` e `double` que colhe do
+  rodapé de escritores que deixam o `NaN` de fora, como parquet-cpp, Arrow e pyarrow, e mantém os do
+  parquet-mr (PR #7101, 2026-06-27, `collectStats.skipFloatingPointFromFooter` ligado por padrão).
+  Nenhuma issue do delta-rs trata do máximo sem o `NaN` que ele copia para o log.
+- **Os escritores do rodapé.** Num grupo de linhas com `NaN`, o `COPY` do DuckDB grava o grupo sem
+  mínimo e máximo; o pyarrow (`parquet-cpp-arrow version 25.0.1`) e o delta-rs (`parquet-rs version
+  59.3.0`) gravam os dois sem o `NaN`. A tabela nativa do DuckDB guarda o `NaN` como máximo do
+  segmento (`[Min: 1.0, Max: nan]` em `pragma_storage_info`).
+- **O leitor Parquet do DuckDB.** Sobre `[1.5, NaN, 2.0]` e `[4, 5, 6]` em dois grupos de linhas,
+  `read_parquet(...) WHERE valor > 3` devolveu 3 linhas nos arquivos do pyarrow e do delta-rs e 4 no
+  do DuckDB; `valor + 0 > 3`, que não desce ao leitor, devolveu 4 nos três. O leitor poda pelo
+  máximo do rodapé um grupo que tem uma linha que o próprio DuckDB ordena acima de todo número, o que
+  a regra de leitura da especificação proíbe. É a issue
+  [duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521), aberta em 2026-09-09 e
+  marcada `reproduced`, que também mostra `!=` perdendo e `<=` ganhando a linha. A tabela nativa
+  devolveu 4.
+- **O `delta_scan`.** Sobre dois arquivos do DuckDB registrados, `[1.5, NaN, 2.0]` e `[4, 5, 6]`,
+  `valor > 3` devolveu 3 com o máximo 2,0 no log e 4 com o valor sem mínimo e máximo ou com o máximo
+  `null`. A propriedade `delta.dataSkippingStatsColumns` sem a coluna não muda a leitura de um log
+  que traz a estatística (3). O `write_deltalake` respeita a propriedade e grava o log sem o valor,
+  mas o rodapé continua com o máximo sem o `NaN`, e o `delta_scan` perdeu a linha pela poda do grupo
+  (3). Com `ColumnProperties(statistics_enabled="NONE")` na coluna, o rodapé e o log saem sem a
+  estatística do valor (o `nullCount` dele também sai), e o `delta_scan` e o `read_parquet`
+  devolveram 4.
+- **O `has_nan` do `RETURN_STATS`.** Em 4.096 linhas gravadas em dois grupos de 2.048, o `has_nan`
+  saiu falso com o `NaN` só no primeiro grupo (na linha 7 ou na linha 0) e verdadeiro com ele no
+  último grupo ou nos dois; o mínimo e o máximo cobrem os números dos dois grupos. Nenhuma issue do
+  DuckDB trata disso.
+
+**Consequência**: a proposta de `register_files` omitir o mínimo e o máximo quando o `RETURN_STATS`
+traz `has_nan` cai, e omitir só no log não protege o modo `rewrite`. O usuário decidiu no mesmo dia
+gravar sem mínimo e máximo, no rodapé e no log, as colunas `Double` com valor não finito em cada
+partição, pela contagem da auditoria. Um caso a mais mediu a regra: o `writer_properties` do
+`write_deltalake` vale para a chamada, uma por partição, e o `delta_scan ... WHERE valor > 3`
+devolveu a linha do `NaN` da partição sem estatística e não abriu o arquivo da outra, podado pelo
+máximo 2,5. [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md),
+[`PLAN-STAGE-6.md`](PLAN-STAGE-6.md), [`delta.md`](delta.md) e [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
+descrevem a regra e o que continua aberto. Os casos entraram nas suítes de estudo:
+`test_duckdb.py::test_return_stats_has_nan_follows_only_the_last_row_group`,
+`test_duckdb.py::test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer`,
+`test_deltalake.py::test_float_statistics_off_keep_the_nan_row` e
+`test_deltalake.py::test_float_statistics_off_per_partition_keep_the_nan_row_and_the_pruning`.
+
+## O que as sondas das decisões da etapa 6 mostraram
+
+Em 2026-09-23, no mesmo macOS (DuckDB 1.5.5, deltalake 1.6.4, pyarrow 25.0.1), duas sondas
+responderam às decisões pendentes da etapa 6, e os casos entraram nas suítes de estudo.
+
+- **O `load` esquecido numa thread.** Com o `Loader` de referência de `test_parallel.py`, um `load`
+  disparado num `ThreadPoolExecutor` sem `result()` e, logo depois, uma leitura da mesma tabela: a
+  leitura falhou com `Catalog Error: Table with name destino does not exist!` na sessão principal e
+  numa sessão a mais, a leitura depois da carga contou as 5.000 linhas, e um segundo `Loader` no
+  mesmo nome foi recusado. A premissa do item da barreira por tabela, a leitura do estado anterior
+  em silêncio, é anterior à decisão do mesmo dia de o `loader` criar a tabela no `close`: sem nome
+  reaproveitável não há estado anterior, e a corrida vira um erro intermitente. O teste rodou seis
+  vezes seguidas, verde em todas.
+- **O valor de partição com caracteres especiais.** O `write_deltalake` com `partition_by` gravou as
+  pastas `p=a%3Ab`, `p=a%25b`, `p=a%23b`, `p=a%C3%A7%C3%A3o` e `p=d%27agua` para `a:b`, `a%b`,
+  `a#b`, `ação` e `d'agua`, e o `path` das ações `add` codificou a pasta de novo (`p=a%253Ab`);
+  `2026-Q1` saiu igual nos dois. O predicado `p = 'd'agua'` falhou com `DeltaError: Generic
+  DeltaTable error: External error: Generic error: Unterminated string literal at Line: 1, Column:
+  12`, e os de `:`, `%`, `#` e acento passaram. A expressão `regexp_full_match(v,
+  '[0-9A-Za-z][0-9A-Za-z_.-]*')` do DuckDB concordou com o `re.fullmatch` do Python em doze
+  valores, entre eles o vazio, `..`, `-x`, `_x` e `x.y_z-1`.
+
+**Consequência**: o usuário decidiu no mesmo dia as quatro pendências da etapa 6, e
+[`PLAN-STAGE-6.md`](PLAN-STAGE-6.md) não tem decisão pendente: `--metadata` no `serialize-db run`,
+`next_ids` só na chave sequencial, a regra da partição `[0-9A-Za-z][0-9A-Za-z_.-]*` no valor e no
+`execution_id`, e a barreira por tabela fora das etapas, que saiu de
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). O `loader` do Redshift passou a recusar o nome ocupado e
+a criar a tabela no `close`, na transação do `COPY` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)), e
+[`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN.md`](PLAN.md), [`delta.md`](delta.md) e
+[`docs/index.md`](../docs/index.md) escrevem a regra. Os casos:
+`test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` e
+`test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`.
+
+## O que a sonda do dataclass congelado de `Database` mostrou
+
+Em 2026-09-23, no mesmo macOS (Python 3.13), a correção da interface da etapa 6 leu o campo
+`storage` de `Database`. Num dataclass congelado, o campo `init=False` atribuído no `__post_init__`
+levantou `FrozenInstanceError: cannot assign to field 'storage'`. Com `functools.cached_property`, o
+atributo nasceu uma vez, no primeiro uso, a igualdade e o hash seguiram só os campos, e o campo
+`root` continuou congelado.
+
+**Consequência**: [`PLAN-STAGE-6.md`](PLAN-STAGE-6.md) declara `storage` como `cached_property`, sem
+o `object.__setattr__` que o estilo do projeto evita, e o caso entrou em
+`test_stdlib.py::test_frozen_dataclass_derives_an_attribute_by_cached_property`.
+
+## O que a leitura do driver e a sonda das decisões da etapa 5 mostraram
+
+Em 2026-09-23, a discussão das decisões pendentes da etapa 5 leu o código do `redshift_connector`
+2.1.16 instalado no projeto e rodou uma sonda no mesmo macOS (pyarrow 25.0.1).
+
+- **O `cursor.description` do driver não traz precisão nem escala.** `Cursor._getDescription`
+  devolve `(nome, oid, None, None, None, None, None)` por coluna. O `type_modifier` de cada coluna
+  chega na mensagem `RowDescription`, `Connection.handle_ROW_DESCRIPTION` o guarda em
+  `cursor.ps["row_desc"]`, e `Cursor.truncated_row_desc` o usa para decodificar o `NUMERIC`
+  binário, com a escala `(type_modifier - 4) & 0xFFFF`. O enum `RedshiftOID` tem, além dos OIDs do
+  rascunho de `schema_from_description`, `REAL` (700), `BPCHAR` (1042), `TEXT` (25), `UNKNOWN` (705)
+  e `SUPER` (4000), e o driver lê o `SUPER` como texto.
+- **Um `decimal128(18, 2)` fixo recusa o `NUMERIC` de outra escala e de outra precisão.**
+  `pa.array([Decimal('1.234567')], type=pa.decimal128(18, 2))` falhou com `ArrowInvalid: Rescaling
+  Decimal value would cause data loss`, e `pa.array([Decimal('12345678901234567.00')],
+  type=pa.decimal128(18, 2))` com `ArrowInvalid: Decimal type with precision 19 does not fit into
+  precision inferred from first array element: 18`.
+
+**Consequência**: o usuário decidiu no mesmo dia as quatro pendências da etapa 5, e
+[`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) não tem decisão pendente. `schema_from_row_description` lê a
+precisão e a escala do `type_modifier`, com `redshift-connector==2.1.16` no extra `redshift`
+([`PLAN.md`](PLAN.md)). A mesma discussão achou no plano o que nenhuma sonda mediu: o limite de
+linhas entre `fetchmany` e `UNLOAD` não tinha como ser aplicado, porque o `execute` que revelaria o
+tamanho já materializa o resultado; o destino do `rewrite`, `staging/<execution_id>/<tabela>/`,
+seria recusado pelo `UNLOAD` a partir da segunda partição, porque `run.publish` exporta uma
+partição por chamada; e o destino do `register` estaria ocupado na reexecução com o mesmo
+`execution_id`. O `stream` passou a ir sempre por `UNLOAD`, o `load` sempre pelo `loader`, a
+exportação a um prefixo novo por partição e por tentativa, sem `PARTITION BY`, e a tabela de
+controle a ser criada só pelo usuário ([`PLAN-STAGE-8.md`](PLAN-STAGE-8.md)). Os comportamentos que
+isso supõe no ambiente alvo esperam a próxima execução da suíte
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
