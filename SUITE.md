@@ -31,15 +31,17 @@ export AWS_DEFAULT_REGION=sa-east-1
 .venv/bin/python probes/diagnose_aws.py $SERIALIZE_DB_TEST_S3_ROOT
 .venv/bin/python probes/catalog.py
 
+mkdir $HOME/serialize-db-local
 export AWS_DEFAULT_REGION=sa-east-1
+export SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local
+export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db-tests
+export SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=sbx_aco_decon
 export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
 export SERIALIZE_DB_REDSHIFT_DATABASE=dev
 export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
-export SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=sbx_aco_decon
-export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests
+SERIALIZE_DB_TEST_REPORT=probes/output/suite_s3.json .venv/bin/python -m pytest -m "not redshift"
 SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_1.json .venv/bin/python -m pytest -m redshift
-SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m pytest -m redshift
-```
+SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m pytest -m redshift```
 
 # Migração Parquet -> Delta
 
