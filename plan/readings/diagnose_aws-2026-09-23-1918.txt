@@ -1,0 +1,44 @@
+== diagnóstico de s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/serialize-db-tests em 2026-09-23 19:18:41 +0000
+  Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
+  boto3 1.43.98; botocore 1.43.98; deltalake 1.6.4; duckdb 1.5.5
+== variáveis de ambiente
+  AWS_REGION = sa-east-1
+  AWS_DEFAULT_REGION = sa-east-1
+  AWS_PROFILE = (ausente)
+  AWS_ENDPOINT_URL = (ausente)
+  AWS_ENDPOINT_URL_S3 = (ausente)
+  HTTP_PROXY = (ausente)
+  HTTPS_PROXY = (ausente)
+  http_proxy = (ausente)
+  https_proxy = (ausente)
+  NO_PROXY = (ausente)
+  no_proxy = (ausente)
+  AWS_ACCESS_KEY_ID (ausente)
+  AWS_SESSION_TOKEN (ausente)
+  AWS_CONTAINER_CREDENTIALS_RELATIVE_URI definida
+  AWS_CONTAINER_CREDENTIALS_FULL_URI (ausente)
+  AWS_WEB_IDENTITY_TOKEN_FILE (ausente)
+  ~/.aws/config (ausente)
+  ~/.aws/credentials (ausente)
+== região
+[ ok  ] boto3: sa-east-1
+[ ok  ] delta-rs: sa-east-1
+== DNS
+[ ok  ] DNS s3.amazonaws.com: 16.15.246.50, 16.15.246.80, 16.182.34.160, 16.182.38.88, 52.217.125.200, 52.217.175.32, 52.217.71.134, 54.231.169.104 (IP público: gateway endpoint ou internet) (0.0 s)
+[ ok  ] DNS s3.sa-east-1.amazonaws.com: 3.5.232.180, 3.5.232.48, 3.5.233.105, 3.5.233.12, 3.5.233.14, 3.5.234.160, 3.5.234.3, 3.5.234.84 (IP público: gateway endpoint ou internet) (0.0 s)
+[ ok  ] DNS bndes-aco-models-<conta>.s3.sa-east-1.amazonaws.com: 3.5.232.242, 3.5.232.63, 3.5.233.185, 3.5.233.226, 3.5.233.91, 3.5.234.142, 3.5.234.166, 3.5.234.88 (IP público: gateway endpoint ou internet) (0.0 s)
+[ ok  ] DNS sts.sa-east-1.amazonaws.com: 10.x.x.x, 10.x.x.x, 10.x.x.x (IP privado: endpoint VPC de interface com DNS privado) (0.0 s)
+== credenciais
+[ ok  ] boto3: método container-role (0.0 s)
+== S3
+[ ok  ] boto3 como a suíte (região do boto3): https://s3.sa-east-1.amazonaws.com (0.1 s)
+[ ok  ] delta-rs como encontrado: listou o prefixo (tabela existe: False) (0.2 s)
+[ ok  ] DuckDB: listou serialize-db-poc/ e subpastas (0 objetos) com extensões de /home/<usuário>/work/projects/serialize-db/.duckdb e proxy sem proxy no ambiente (0.8 s)
+== STS
+[ ok  ] STS: https://sts.sa-east-1.amazonaws.com: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker (0.0 s)
+== resumo
+  região: sa-east-1, resolvida pelo boto3 (sem manutenção)
+  STS: respondeu (sem manutenção)
+  proxy: sem variáveis; nada a fazer
+  endpoint: sem AWS_ENDPOINT_URL; os nomes s3.<região>.amazonaws.com precisam resolver (ver DNS acima)
+  suíte S3 como está: os três clientes listaram o prefixo

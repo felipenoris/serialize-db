@@ -1,0 +1,177 @@
+================================================================================
+bucket: o bucket bndes-aco-models-<conta> sob dzd-<domínio>/<projeto>/shared/serialize-db-tests
+2026-09-23 19:18:36 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
+interpretador /home/<usuário>/work/projects/serialize-db/.venv/bin/python
+================================================================================
+BUCKET=bndes-aco-models-<conta>
+PREFIX=dzd-<domínio>/<projeto>/shared/serialize-db-tests
+REGION=sa-east-1
+
+
+################################################################################
+# 1. Bucket
+################################################################################
+
+$ s3.head_bucket(Bucket='bndes-aco-models-<conta>')
+{
+  "x-amz-bucket-region": "sa-east-1",
+  "x-amz-access-point-alias": "false",
+  "x-amz-bucket-arn": "arn:aws:s3:::bndes-aco-models-<conta>"
+}
+(0.1 s)
+
+BUCKET_REGION=sa-east-1
+DNS bndes-aco-models-<conta>.s3.sa-east-1.amazonaws.com: 3.5.232.194, 3.5.232.202, 3.5.232.234, 3.5.232.26 ... (público: gateway endpoint ou internet)
+
+$ s3.get_bucket_versioning()
+!! FALHOU (0.0 s): o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetBucketVersioning operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetBucketVersioning on resource: "arn:aws:s3:::bndes-aco-models-<conta>" becau
+
+$ s3.get_bucket_encryption()
+{
+  "ServerSideEncryptionConfiguration": {
+    "Rules": [
+      {
+        "ApplyServerSideEncryptionByDefault": {
+          "SSEAlgorithm": "aws:kms",
+          "KMSMasterKeyID": "arn:aws:kms:sa-east-1:<conta>:key/<chave>"
+        },
+        "BucketKeyEnabled": true,
+        "BlockedEncryptionTypes": {
+          "EncryptionType": [
+            "SSE-C"
+          ]
+        }
+      }
+    ]
+  }
+}
+(0.0 s)
+
+$ s3.get_object_lock_configuration()
+!! FALHOU (0.0 s): o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetObjectLockConfiguration operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetBucketObjectLockConfiguration on resource: "arn:aws:s3:::bndes-aco-models
+
+$ s3.get_public_access_block()
+{
+  "PublicAccessBlockConfiguration": {
+    "BlockPublicAcls": true,
+    "IgnorePublicAcls": true,
+    "BlockPublicPolicy": true,
+    "RestrictPublicBuckets": true
+  }
+}
+(0.0 s)
+
+$ s3.get_bucket_ownership_controls()
+!! FALHOU (0.0 s): o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetBucketOwnershipControls operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetBucketOwnershipControls on resource: "arn:aws:s3:::bndes-aco-models-<conta>
+
+
+
+################################################################################
+# 2. Ciclo de vida
+################################################################################
+
+$ s3.get_bucket_lifecycle_configuration()
+!! FALHOU (0.0 s): o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetBucketLifecycleConfiguration operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetLifecycleConfiguration on resource: "arn:aws:s3:::bndes-aco-models-<conta>
+
+
+
+################################################################################
+# 3. Inventário sob a raiz
+################################################################################
+
+LISTING_PREFIX=dzd-<domínio>/<projeto>/shared/serialize-db-tests/
+$ s3.list_objects_v2(Bucket='bndes-aco-models-<conta>', Prefix='dzd-<domínio>/<projeto>/shared/serialize-db-tests/')
+0 objetos
+(0.0 s)
+
+pasta  objetos  bytes  GiB
+total  0        0      0.000
+
+classe de armazenamento  objetos
+
+(nenhuma pasta com _delta_log sob a raiz)
+
+$ s3.list_object_versions(Prefix=raiz)
+0 versões correntes, 219 não correntes, 219 marcadores de exclusão
+(0.1 s)
+
+
+
+################################################################################
+# 4. Permissões do papel sob a raiz
+################################################################################
+
+$ sts.get_caller_identity()
+{
+  "UserId": "<id do papel>:SageMaker",
+  "Account": "<conta>",
+  "Arn": "arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker"
+}
+(0.1 s)
+
+PRINCIPAL=arn:aws:iam::<conta>:role/datazone_usr_role_<projeto>_<ambiente>
+alcance do IAM: iam.amazonaws.com (44.216.202.179):443 não conectou: timed out
+
+
+
+################################################################################
+# 5. Chave KMS padrão do bucket
+################################################################################
+
+alcance do KMS: kms.sa-east-1.amazonaws.com (15.229.198.143):443 não conectou: timed out
+
+
+
+################################################################################
+# 6. Política do bucket e uploads incompletos
+################################################################################
+
+$ s3.get_bucket_policy()
+!! FALHOU (0.0 s): o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetBucketPolicy operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetBucketPolicy on resource: "arn:aws:s3:::bndes-aco-models-<conta>" because no id
+
+$ s3.list_multipart_uploads(Prefix=raiz)
+!! FALHOU (0.0 s): o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the ListMultipartUploads operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:ListBucketMultipartUploads on resource: "arn:aws:s3:::bndes-aco-models-<conta>
+
+
+
+################################################################################
+# 7. Checagens
+################################################################################
+
+RESULTADO  ID     O QUE                                     DETALHE
+note       BK-5   criptografia padrão                       aws:kms arn:aws:kms:sa-east-1:<conta>:key/<chave>; bucket key True
+note       BK-12  Object Lock                               não lido: negado (AccessDenied)
+note       BK-3   expiração sob a raiz                      regras não lidas: negado (AccessDenied); confirme com quem administra o bucket
+note       BK-6   tabelas Delta sob a raiz                  0
+note       BK-13  sessões da suíte S3 sob a raiz            nenhuma
+note       BK-14  versões não correntes sob a raiz          219 (1388530 bytes) e 219 marcadores de exclusão, invisíveis à listagem comum e cobrados até uma regra NoncurrentVersionExpiration os remover
+note       BK-4   versionamento                             não lido: pela API, negado (AccessDenied), e nenhuma amostra com VersionId
+note       BK-8   permissões sob a raiz                     iam:SimulatePrincipalPolicy sem chamada: o IAM não respondeu ao teste TCP; nesta execução passaram: ListBucket sob a raiz; PutObject e DeleteObject só a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) prova
+note       BK-9   chave KMS                                 describe_key sem chamada: o KMS não respondeu ao teste TCP (kms.sa-east-1.amazonaws.com (15.229.198.143):443 não conectou: timed out); a escrita da suíte S3 diz se a chave serve
+note       BK-10  política do bucket                        não lida: negado (AccessDenied); um Deny condicionado a cabeçalho de criptografia ou a TLS valeria para o delta-rs e o DuckDB
+note       BK-11  uploads multipart incompletos sob a raiz  não lidos: negado (AccessDenied); as sobras de escritas interrompidas só uma regra AbortIncompleteMultipartUpload limpa
+pass       BK-1   bucket acessível                          bndes-aco-models-<conta>
+pass       BK-2   região do bucket                          sa-east-1
+
+
+
+################################################################################
+# 8. Chamadas que falharam
+################################################################################
+
+Cada entrada é uma chamada cujo resultado falta acima; um bloco vazio em outro lugar significa que a chamada passou e não devolveu nada.
+
+- s3.get_bucket_versioning()
+  o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetBucketVersioning operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetBucketVersioning on resource: "arn:aws:s3:::bndes-aco-models-<conta>" becau
+- s3.get_object_lock_configuration()
+  o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetObjectLockConfiguration operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetBucketObjectLockConfiguration on resource: "arn:aws:s3:::bndes-aco-models
+- s3.get_bucket_ownership_controls()
+  o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetBucketOwnershipControls operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetBucketOwnershipControls on resource: "arn:aws:s3:::bndes-aco-models-<conta>
+- s3.get_bucket_lifecycle_configuration()
+  o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetBucketLifecycleConfiguration operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetLifecycleConfiguration on resource: "arn:aws:s3:::bndes-aco-models-<conta>
+- s3.get_bucket_policy()
+  o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetBucketPolicy operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetBucketPolicy on resource: "arn:aws:s3:::bndes-aco-models-<conta>" because no id
+- s3.list_multipart_uploads(Prefix=raiz)
+  o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the ListMultipartUploads operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:ListBucketMultipartUploads on resource: "arn:aws:s3:::bndes-aco-models-<conta>
+
+código de saída 1: 0 checagem(ns) reprovada(s), 6 chamada(s) falhada(s)

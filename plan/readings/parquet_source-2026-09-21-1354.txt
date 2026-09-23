@@ -1,13 +1,13 @@
 ================================================================================
 Gerado com o seguinte comando:
-$ .venv/bin/python probes/parquet_source.py s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado --sample 5000
+$ .venv/bin/python probes/parquet_source.py s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado --sample 5000
 ================================================================================
-parquet_source: a estrutura da base Parquet em bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
+parquet_source: a estrutura da base Parquet em bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
 2026-09-21 13:54:05 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
-interpretador /home/fnoro/work/projects/serialize-db/.venv/bin/python
+interpretador /home/<usuário>/work/projects/serialize-db/.venv/bin/python
 ================================================================================
 Só leitura: cada arquivo é aberto por open_input_file, e nada sob a raiz é criado, alterado ou apagado.
-$ listar bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado recursivamente
+$ listar bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado recursivamente
 14 pasta(s) de tabela, 205 arquivo(s) Parquet
 (0.1 s)
 
@@ -20,7 +20,7 @@ rodapés lidos: 205 arquivo(s), 0 ilegível(is)
 ################################################################################
 
 FILESYSTEM=S3FileSystem
-ROOT=bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
+ROOT=bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
 o que                         quanto
 pastas de tabela              14
 arquivos Parquet              205
