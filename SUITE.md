@@ -19,7 +19,7 @@ uv run pytest
 # Probes e Testes - BN
 
 ```
-export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests
+export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/serialize-db-tests
 export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
 export SERIALIZE_DB_REDSHIFT_DATABASE=dev
 export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
@@ -32,9 +32,10 @@ export AWS_DEFAULT_REGION=sa-east-1
 .venv/bin/python probes/catalog.py
 
 mkdir $HOME/serialize-db-local
+
 export AWS_DEFAULT_REGION=sa-east-1
 export SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local
-export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db-tests
+export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/serialize-db-tests
 export SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=sbx_aco_decon
 export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
 export SERIALIZE_DB_REDSHIFT_DATABASE=dev
@@ -49,7 +50,7 @@ SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m
 ```
 export PYTHONPATH=tests
 export SOURCE_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
-export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/delta/db_projetado
+export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta/db_projetado
 
 export TABELA=cad_aliquotas
 .venv/bin/python scripts/migrate_parquet_to_delta.py \
@@ -140,5 +141,5 @@ Probe da Migração:
 
 ```
 export AWS_DEFAULT_REGION=sa-east-1
-PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/delta/db_projetado
+PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta/db_projetado
 ```
