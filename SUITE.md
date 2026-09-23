@@ -141,5 +141,5 @@ export TABELA=rel_contrato_operacao
     --tables "${TABELA}" --report "relatorio_${TABELA}.json"
 
 export AWS_DEFAULT_REGION=sa-east-1
-PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH
+.venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH
 ```
