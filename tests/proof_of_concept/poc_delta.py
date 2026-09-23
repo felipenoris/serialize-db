@@ -35,14 +35,15 @@ import pyarrow as pa
 import pytest
 from deltalake import DeltaTable, write_deltalake
 
-from conftest import REPORT, Storage, duckdb_extension_directory, record
+from conftest import REPORT, SessionRoot, duckdb_extension_directory, record
 
 ROWS = 300_000
 APPENDED_ROWS = 10
 MONTHS = ("2026-01", "2026-02")
 
 
-def timed(storage: Storage, label: str, action: Callable[[], object], repeat: int = 1) -> object:
+def timed(storage: SessionRoot, label: str, action: Callable[[], object],
+          repeat: int = 1) -> object:
     """Executa ``action`` ``repeat`` vezes e registra o tempo total em ``timing.<label>`` do
     armazenamento."""
     started = time.perf_counter()
@@ -71,7 +72,7 @@ def run_in_threads(actions: list[Callable[[], object]]) -> float:
     return time.perf_counter() - started
 
 
-def seconds(storage: Storage, label: str) -> float:
+def seconds(storage: SessionRoot, label: str) -> float:
     """Tempo registrado por ``timed`` para ``label``, em segundos."""
     # timed grava o texto "0.087 s" sob o prefixo do armazenamento.
     recorded = str(REPORT[f"{storage.name}.timing.{label}"])
@@ -103,7 +104,7 @@ def sample_table() -> pa.Table:
     )
 
 
-def write_sample_table(storage: Storage) -> str:
+def write_sample_table(storage: SessionRoot) -> str:
     """Grava ``operacoes`` sob a raiz da sessão, ``overwrite`` particionado por ``mes`` e um
     ``append``, e devolve a URI."""
     uri = storage.child("operacoes")
@@ -191,7 +192,7 @@ class DeltaProofOfConcept:
     """Testes que valem para os dois armazenamentos; a subclasse é coletada com as fixtures do seu
     módulo: ``storage``, ``table_uri`` e ``duckdb_connection``."""
 
-    def test_write_and_open(self, storage: Storage, table_uri: str) -> None:
+    def test_write_and_open(self, storage: SessionRoot, table_uri: str) -> None:
         """A tabela gravada tem os dois commits, um arquivo por mês mais o do ``append`` e o
         protocolo esperado."""
         table = DeltaTable(table_uri)
@@ -220,7 +221,8 @@ class DeltaProofOfConcept:
         assert rows == ROWS + APPENDED_ROWS
 
     def test_delta_scan_reads_types(
-        self, storage: Storage, duckdb_connection: duckdb.DuckDBPyConnection, table_uri: str
+        self, storage: SessionRoot, duckdb_connection: duckdb.DuckDBPyConnection,
+        table_uri: str,
     ) -> None:
         """``delta_scan`` lê a tabela com os tipos do contrato e soma o ``DECIMAL`` sem perda."""
         # DESCRIBE mostra o tipo que o DuckDB atribui a cada coluna lida do Delta.
@@ -252,7 +254,8 @@ class DeltaProofOfConcept:
         assert total == sample_total + appended_total
 
     def test_delta_scan_prunes_partitions(
-        self, storage: Storage, duckdb_connection: duckdb.DuckDBPyConnection, table_uri: str
+        self, storage: SessionRoot, duckdb_connection: duckdb.DuckDBPyConnection,
+        table_uri: str,
     ) -> None:
         """O filtro por ``mes`` lê só os arquivos da partição."""
         query = f"SELECT count(*) FROM delta_scan('{table_uri}') WHERE mes = '{MONTHS[1]}'"
@@ -274,7 +277,8 @@ class DeltaProofOfConcept:
         assert int(scanned.group(1)) == 1
 
     def test_scan_timings(
-        self, storage: Storage, duckdb_connection: duckdb.DuckDBPyConnection, table_uri: str
+        self, storage: SessionRoot, duckdb_connection: duckdb.DuckDBPyConnection,
+        table_uri: str,
     ) -> None:
         """Consultas pontuais: ``delta_scan``, ``ATTACH`` fixado, ``read_parquet`` e tabela
         materializada.
@@ -324,7 +328,7 @@ class DeltaProofOfConcept:
         delta_scan_seconds = seconds(storage, "point_queries.delta_scan")
         assert materialized_seconds < delta_scan_seconds
 
-    def test_vacuum_deletes_files(self, storage: Storage) -> None:
+    def test_vacuum_deletes_files(self, storage: SessionRoot) -> None:
         """``vacuum(dry_run=False)`` remove do armazenamento os arquivos substituídos."""
         uri = storage.child("vacuum_probe")
         small = sample_table().slice(0, 1000)

@@ -245,7 +245,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 @dataclass(kw_only=True)
-class Storage:
+class SessionRoot:
     """Raiz exclusiva de uma sessão de testes num tipo de armazenamento.
 
     As subclasses fixam ``name``, o prefixo das chaves do relatório, e resolvem URIs e listagens no
@@ -275,7 +275,7 @@ class Storage:
 
 
 @dataclass(kw_only=True)
-class S3Location(Storage):
+class S3Location(SessionRoot):
     """Bucket e prefixo exclusivos da sessão."""
 
     name: ClassVar[str] = "s3"
@@ -305,7 +305,7 @@ class S3Location(Storage):
 
 
 @dataclass(kw_only=True)
-class LocalLocation(Storage):
+class LocalLocation(SessionRoot):
     """Pasta exclusiva da sessão em disco local."""
 
     name: ClassVar[str] = "local"
