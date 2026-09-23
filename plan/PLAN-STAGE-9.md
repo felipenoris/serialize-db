@@ -29,7 +29,9 @@ antes e o que esperar depois. Testes: `tests/test_operation.py` sob a raiz local
 
 A etapa não acrescenta módulo: as primitivas são as de `serialize_db.delta`
 ([etapa 3](PLAN-STAGE-3.md)), e a entrega é o despacho de `serialize_db.cli` para cada rotina, o
-runbook e a documentação do `pdoc`.
+runbook e a documentação do `pdoc`. O despacho reaproveita o que a [etapa 6](PLAN-STAGE-6.md) pôs
+na linha de comando: `--metadata`, `--root` e `--environment` com os padrões `SERIALIZE_DB_*`, o
+`Database` que monta a URI de cada tabela, a regra da partição nos nomes e o `logging` em `INFO`.
 
 ```python
 """Os subcomandos de serialize_db.cli entregues pela etapa 9, com os argumentos de cada um."""

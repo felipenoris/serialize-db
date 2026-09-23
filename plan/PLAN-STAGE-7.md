@@ -202,7 +202,12 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   (`hive_partitioning = true, hive_types_autocast = false` na origem, `delta_scan` no destino), e
   monta `LoadReport`; `matches` exige contagens e somas iguais em toda partição.
 - **`serialize-db load`** recebe `--table`, `--source`, `--partitions` e `--mode`, chama
-  `initial_load` e depois `load_report`, e sai com 1 quando `matches` é falso.
+  `initial_load` e depois `load_report`, e sai com 1 quando `matches` é falso. Ela reaproveita o que
+  a [etapa 6](PLAN-STAGE-6.md) pôs em `serialize_db.cli`: `--metadata` e `--root` com os padrões
+  `SERIALIZE_DB_*`, o `_name_argument` da regra da partição em `--partitions`, o `modulo:atributo`
+  que não importa como erro de uso, e o `logging` em `INFO`; `db` é o `Database` da etapa 6, e
+  `mode=None` segue a ordem de `Execution`: o argumento, `SERIALIZE_DB_EXPORT_MODE` e
+  `"register"`.
 
 ## Pré-requisitos e pós-condições
 

@@ -146,6 +146,10 @@ class RedshiftEngine:
 
 ## Estratégia de implementação
 
+- **O motor entra em `Execution`** pelo nome `"redshift"`, que hoje é `ContractError` em
+  `Execution._build_engine` ([etapa 6](PLAN-STAGE-6.md)): a etapa troca a recusa pela construção
+  do motor com a configuração das variáveis `SERIALIZE_DB_REDSHIFT_*`, o `execution_id` e o
+  `Storage`, e o `serialize-db audit` sem `--sql` passa a aceitar `--engine redshift`.
 - **`connect`** (interno, uma vez por execução) repete `examples/redshift_native.py`: `GetWorkgroup`,
   `GetCredentials(durationSeconds=3600)`, `redshift_connector.connect` sem `timeout`, ou o par
   informado. Com `share_database`, roda `USE <banco>` e nenhum comando de conferência (decisão do
