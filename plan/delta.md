@@ -294,10 +294,13 @@ Com `NO_PROXY` ausente, exportada de `no_proxy` ou reduzida a `169.254.170.2`, o
 de proxy, a chamada passa (em 2026-09-19 também passou com `AWS_CONTAINER_CREDENTIALS_FULL_URI`),
 com deltalake 1.5.0 e 1.6.4 e com os dois interpretadores. O teste `test_delta_rs_credential_chain`
 em `tests/` registra as cinco variantes no ambiente onde roda, e a biblioteca exporta `NO_PROXY` a
-partir de `no_proxy` ao iniciar, quando a maiúscula está ausente ou vazia, e mantém como reserva as
-credenciais temporárias que o `boto3` resolve, passadas em `storage_options` (`AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`) e renovadas a cada abertura da tabela,
-porque expiram. O DuckDB com `PROVIDER credential_chain` e o `boto3` nunca falharam.
+partir de `no_proxy` ao iniciar, quando a maiúscula está ausente ou vazia. As credenciais
+temporárias que o `boto3` resolve também abrem a tabela quando passadas em `storage_options`
+(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`;
+`test_delta_rs_storage_options_fallback`), mas a biblioteca não as põe lá: a cadeia padrão do
+delta-rs as renova na `DeltaTable` que a execução segura, e um trio congelado expiraria em cerca de
+uma hora e circularia num dicionário que um log imprime (decisão do usuário de 2026-09-22,
+[etapa 3](PLAN-STAGE-3.md)). O DuckDB com `PROVIDER credential_chain` e o `boto3` nunca falharam.
 
 ## Tipos suportados
 

@@ -697,33 +697,34 @@ Em Python, o `RETURN_STATS` devolve uma linha por arquivo gravado, e `column_sta
 dicionário de dicionários de texto:
 
 ```python
-# Conferência do arquivo exportado pelo RETURN_STATS: nulos em colunas NOT NULL e intervalo do mês.
+# Conferência do arquivo exportado pelo RETURN_STATS: nulos em colunas NOT NULL e data_ref dentro da partição.
 import os
 
-def export_month(con: duckdb.DuckDBPyConnection, month: str, folder: str) -> dict[str, dict[str, str]]:
-    destination = f"{folder}/mes={month}/exec_abc123.parquet"
+def export_partition(con: duckdb.DuckDBPyConnection, value: str, folder: str) -> dict[str, dict[str, str]]:
+    destination = f"{folder}/mes={value}/exec_abc123.parquet"
     os.makedirs(os.path.dirname(destination), exist_ok=True)         # o COPY não cria a pasta
     (row,) = con.execute(f"""
         COPY (SELECT id_operacao, data_ref, id_cliente, valor, descricao FROM operacoes
               WHERE mes = ? ORDER BY data_ref, id_operacao)
-        TO '{destination}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000, RETURN_STATS)""", [month]).fetchall()
+        TO '{destination}' (FORMAT parquet, COMPRESSION zstd, ROW_GROUP_SIZE 100_000, RETURN_STATS)""", [value]).fetchall()
     stats = row[4]      # filename, count, file_size_bytes, footer_size_bytes, column_statistics, partition_keys
     columns = {name.strip('"'): values for name, values in stats.items()}   # as chaves vêm entre aspas
     for name in ("id_operacao", "data_ref", "id_cliente", "valor"):
         if columns[name]["null_count"] != "0":
             raise ValueError(f"{name}: {columns[name]['null_count']} nulos em coluna NOT NULL")
-    if not (columns["data_ref"]["min"][:7] == month == columns["data_ref"]["max"][:7]):
-        raise ValueError(f"data_ref fora do mês {month}: {columns['data_ref']['min']} a {columns['data_ref']['max']}")
+    if not (columns["data_ref"]["min"][:7] == value == columns["data_ref"]["max"][:7]):
+        raise ValueError(f"data_ref fora da partição {value}: {columns['data_ref']['min']} a {columns['data_ref']['max']}")
     return columns
 
-export_month(con, "2026-08", "operacoes")["valor"]
+export_partition(con, "2026-08", "operacoes")["valor"]
 # {'column_size_bytes': '264685', 'max': '99994.51', 'min': '0.04', 'null_count': '0', 'num_values': '149991'}
 ```
 
 Os valores `min`, `max`, `null_count`, `num_values` e `column_size_bytes` são strings, inclusive para
-`DECIMAL` e `DATE` (`'2026-08-01'` a `'2026-08-31'` para `data_ref`). O `?` do mês é aceito dentro da
-consulta do `COPY`. Os mesmos valores alimentam a `AddAction` do registro do arquivo na tabela Delta
-([delta.md](delta.md)).
+`DECIMAL` e `DATE` (`'2026-08-01'` a `'2026-08-31'` para `data_ref`). O `?` do valor da partição é
+aceito dentro da consulta do `COPY`. É o `COPY` de `export_partition` no modo `register` da
+[etapa 4](PLAN-STAGE-4.md), e os mesmos valores alimentam a `AddAction` do registro do arquivo na
+tabela Delta ([delta.md](delta.md)).
 
 ## Recomendações de performance
 
