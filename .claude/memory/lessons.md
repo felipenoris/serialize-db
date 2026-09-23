@@ -485,3 +485,16 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `Storage.duckdb_connect`; the secret now adds `URL_STYLE 'path'` and, for `http`,
   `USE_SSL false`. `CLAUDE.md`, `plan/POC.md`
 
+- **A memory reading in a child process reads the child's own peak and counts from its base**
+  (2026-09-23). The two memory tests of `tests/proof_of_concept/test_duckdb.py` passed on macOS and
+  failed in a Linux x86_64 container under pytest: in the full session every scenario read the same
+  peak as the whole table (935 MB, 1,117 MB with the local root; 1,120 MB in the target the same
+  day), and the two tests alone read the direct reader at 195 MB and the spool at 199 MB against
+  362 MB for the whole table, with the ceiling at half of it. On Linux a new process's `ru_maxrss`
+  starts at its parent's peak (a child of a 524 MB parent read 524 MB, its `VmHWM` 9 MB), and the
+  probe's base before any query was 161 MB under a parent that had imported the test module: the
+  reader's reading was pytest's peak. Read through `VmHWM`, the process base after importing DuckDB
+  and PyArrow and connecting is 92 MB, more than half of the 168 MB ceiling, so the spool passed
+  with as little as 23 MB to spare; counted from the base, the table adds 243 MB, the reader 10 MB
+  and the spool 37 to 45 MB. The macOS runs never exercised the parent's peak. `CLAUDE.md`,
+  `plan/POC.md`

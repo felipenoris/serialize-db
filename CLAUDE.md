@@ -496,6 +496,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   (2026-09-23).
 - **Code the plan assigns to a later stage stays, even without a caller**: the no-speculative-code
   rule covers code no stage plans (user decision of 2026-09-23).
+- **A memory reading in a child process reads the child's own peak and counts from its base**: on
+  Linux a new process's `ru_maxrss` starts at its parent's peak, so read `VmHWM` from
+  `/proc/self/status`, and compare what each scenario adds over the base after the imports, which
+  changes with the platform (2026-09-23).
 
 ## Naming conventions
 
