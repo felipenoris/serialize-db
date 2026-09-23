@@ -124,7 +124,9 @@ um motor já construído, para os testes.
   valor codificado é o próprio valor. A partição também cabe no `String(n)` da coluna de partição
   de cada tabela particionada do modelo, e cada valor de `partitions` que `ingest`, `audit` e
   `publish` recebem passa pela mesma regra. A data `AAAA-MM-DD`, o caso da base atual, e `2026-Q1`
-  passam. O motor é construído aqui, com o `execution_id` e o `Storage`.
+  passam. O motor é construído aqui, com o `execution_id` e o `Storage`: `"duckdb"` é
+  `DuckDBEngine(DuckDBConfig(), execution_id, db.storage)` da [etapa 4](PLAN-STAGE-4.md), que também
+  confere o `execution_id` pela regra da partição e nasce numa pasta de `tempfile.mkdtemp`.
 - **`__exit__`** chama `sandbox.cleanup()` aconteça o que acontecer e grava o resumo no log
   (`serialize_db.execution`): identificador, partição, versões lidas, versões gravadas, tempo por
   passo.
@@ -144,9 +146,13 @@ um motor já construído, para os testes.
   inicio + n)`. A chave é a chave primária inteira de uma coluna, a sequencial; numa chave composta
   o cliente decide os ids e não chama `next_ids` (decisão do usuário de 2026-09-23), e a chamada
   numa chave composta ou não inteira levanta `ContractError`.
-- **`audit`** chama `sandbox.audit(table, partitions, uri, versions[table], ...)`, guarda sob lock
-  o par `(tabela, partições)` aprovado e o `nonfinite_columns` do relatório, escreve `report.sql()`
-  no log e levanta `AuditFailed` na reprovação.
+- **`audit`** chama `sandbox.audit(table, partitions, uri, versions[table], foreign_keys,
+  key_scope, referenced)`, com `referenced` montado de `versions` para cada tabela que uma chave
+  estrangeira aponta, guarda sob lock o relatório aprovado por `(tabela, partições)`, escreve
+  `report.sql()` no log e levanta `AuditFailed` na reprovação. Do relatório saem, por partição, a
+  contagem (`report.rows(valor)`), que `publish` passa como `expected_rows`, e o
+  `nonfinite_columns` ([etapa 4](PLAN-STAGE-4.md)): uma linha escrita no sandbox entre a auditoria e
+  a publicação faz a exportação recusar com `RegistrationRefused`.
 - **`publish`** exige o par aprovado (ou `audit=False`, que fica no log); para cada tabela, cria
   (`create_table`) quando `versions[table]` é `None`, senão confere que nenhuma **alteração de
   dados** entrou desde a versão fixada: `delta.version_diff(uri, versions[table], atual)` vazio.
@@ -157,7 +163,8 @@ um motor já construído, para os testes.
   commit_metadata(...), mode, expected_rows, columns_without_min_max)` por partição, com o
   `export_mode` resolvido em `mode` (`partitions=None` numa tabela sem partição é `[None]`) e, em
   `columns_without_min_max`, o `nonfinite_columns[valor]` da auditoria aprovada, ou todas as colunas
-  `Double` da tabela com `audit=False`; as tabelas correm num
+  `Double` da tabela com `audit=False`, e em `expected_rows` a contagem da auditoria, ou `None` com
+  `audit=False`; as tabelas correm num
   `ThreadPoolExecutor(max_workers)` com a política de `publish_all` de `test_parallel.py`: na
   primeira falha nada novo começa, e a exceção lista o resultado por tabela. `versions[table]`
   avança sob lock a cada commit, e o dicionário devolvido é `{tabela: versão}`.
