@@ -513,8 +513,9 @@ do `__all__`, e com isso fora da documentação, então um módulo que tenha um 
 o `__all__` para o `pdoc` não o mostrar. O privado é usado só dentro do módulo e leva o prefixo
 `_`. Na etapa 1,
 `serialize_db.schema` deixou no `__all__` os nomes que o cliente chama e prefixou os demais
-(`_cast_batch`, `_contract_column`, `_ARROW_TYPES`); `serialize_db.cli` declara só `main` e
-`serialize_db.errors` só `ContractError`.
+(`_cast_batch`, `_contract_column`, `_ARROW_TYPES`); `serialize_db.cli` declara só `main`,
+`serialize_db.errors` as exceções que o cliente captura, e `serialize_db.delta` deixa fora do
+`__all__` a protegida `file_from_return_stats`, que o motor DuckDB usa.
 
 Configuração: argumentos explícitos de `Database` e da linha de comando, com as variáveis
 `SERIALIZE_DB_ROOT`, `SERIALIZE_DB_ENVIRONMENT`, `SERIALIZE_DB_ENGINE`,

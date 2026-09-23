@@ -144,7 +144,7 @@ arquivo de etapa depois que a segunda a repete.
 | `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` | Esquema do Redshift onde a suíte cria as tabelas `serialize_db_poc_<id>_*`. Sem ela, os testes `redshift` são pulados. A conexão vem de `SERIALIZE_DB_REDSHIFT_*` (a tabela está em [`probes/README.md`](probes/README.md)), e `SERIALIZE_DB_REDSHIFT_SHARE_DATABASE` é o banco do datashare em que cada conexão roda `USE`. `SERIALIZE_DB_REDSHIFT_IAM_ROLE` nomeia o papel do `COPY` e do `UNLOAD`, ou a palavra `default`; sem ela, os dois levam as credenciais de quem chama. |
 | `SERIALIZE_DB_TEST_KEEP` | Qualquer valor mantém a pasta, os objetos e as tabelas criados pela sessão. |
 | `SERIALIZE_DB_TEST_REPORT` | Caminho de um JSON onde o relatório da sessão é gravado, além de impresso. |
-| `SERIALIZE_DB_DUCKDB_EXTENSIONS` | Pasta de extensões do DuckDB, a única onde a suíte instala as que faltam. Sem ela, `.duckdb/` na raiz do repositório quando existir, senão a pasta padrão do DuckDB, e nada é instalado. |
+| `SERIALIZE_DB_DUCKDB_EXTENSIONS` | Pasta de extensões do DuckDB, a única onde a suíte instala as que faltam. Sem ela, `.duckdb/` na raiz do repositório quando existir, senão a pasta padrão do DuckDB, e nada é instalado. A biblioteca carrega as extensões da mesma pasta, e sem ela de `.duckdb/` ao lado do ambiente virtual, sem instalar nada. |
 | `AWS_REGION`, `AWS_DEFAULT_REGION` | Região do bucket e do workgroup. O botocore lê `AWS_DEFAULT_REGION` ou o perfil, e o delta-rs lê as duas; sem uma delas, a suíte Redshift procura o workgroup na região errada. |
 
 # Probes

@@ -38,6 +38,13 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   network, so stage 3 builds the filesystem with the environment's region (2026-09-23).
   `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 
+- The delta-rs retry bound, read on 2026-09-23 in a stripped subprocess: against an unroutable
+  endpoint (`http://10.255.255.1:9`) `is_deltatable` gave up in 57.0 s with the defaults and in
+  10.3 s with `retry_timeout=10s`, whether `max_retries` was 1 or 3; against a closed local port in
+  2.4, 0.3 and 0.6 s. `serialize_db.storage` passes `max_retries=3` and `retry_timeout=10s`: the
+  timeout is the ceiling, and the retries cover a passing S3 error. `plan/POC.md`,
+  `plan/PLAN-STAGE-3.md`
+
 ## The target's network, read on 2026-09-21
 
 - No proxy variable, no internet; S3 through the gateway endpoint (public IPs, port 443 connects);

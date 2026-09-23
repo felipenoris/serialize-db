@@ -425,3 +425,10 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   stand-in the target's contract where the test reads it (the emulator's first `description` and
   `row_desc` disagreed, a defect of the emulator, not of the test). `plan/POC.md`,
   `plan/PLAN-STAGE-5.md`
+
+- **A shared venv is restored with every group** (2026-09-23). While implementing stage 3 in a
+  checkout two other sessions used, the assistant pinned `boto3` in the runtime dependencies and ran
+  `uv sync --group dev`, the restore command the venv rule named; the sync removed the 29 packages
+  of the `docs` and `interactive` groups (pdoc, ipykernel) that the folder's venv carried, and
+  `uv sync --all-groups` put them back. The rule now names `--all-groups`, what
+  `prepare_offline.sh` runs.

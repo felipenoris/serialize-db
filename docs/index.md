@@ -5,7 +5,8 @@ dados e a conferência dos próprios modelos.
 
 Esta página explica o funcionamento geral do pacote, traz o tutorial de uso e a tabela de
 mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.schema`,
-`serialize_db.sql`, `serialize_db.errors` e `serialize_db.cli`.
+`serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.errors` e
+`serialize_db.cli`.
 
 ## Como o pacote funciona
 
@@ -28,10 +29,11 @@ mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.
 - **Todo identificador que a biblioteca emite vai entre aspas duplas**: nomes de coluna como `to` e
   `timestamp` são palavras reservadas do DuckDB e do Redshift.
 
-O que já existe são o módulo de esquema, `serialize_db.schema`, e o de texto SQL,
-`serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`. O
-armazenamento Delta, os motores, a auditoria, a execução e a publicação
-são as etapas seguintes do plano, na pasta `plan/` do repositório.
+O que já existe são o módulo de esquema, `serialize_db.schema`, o de texto SQL,
+`serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`, e a camada
+de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3. Os motores, a
+auditoria, a execução e a publicação são as etapas seguintes do plano, na pasta `plan/` do
+repositório.
 
 ## Instalação
 
@@ -41,9 +43,12 @@ No repositório, o `uv` instala o Python 3.13, o pacote e as dependências:
 uv sync --group dev
 ```
 
-O pacote depende de `sqlalchemy`, `pyarrow`, `deltalake`, `duckdb` e dos dialetos `duckdb-engine`
-e `sqlalchemy-redshift`, que compilam o texto SQL de cada motor, nas versões fixadas em
-`pyproject.toml`.
+O pacote depende de `sqlalchemy`, `pyarrow`, `deltalake`, `duckdb`, `boto3`, que faz a escrita
+condicional do arquivo de controle no S3, e dos dialetos `duckdb-engine` e `sqlalchemy-redshift`,
+que compilam o texto SQL de cada motor, nas versões fixadas em `pyproject.toml`. O S3 precisa da
+região em `AWS_REGION` ou `AWS_DEFAULT_REGION`, e as credenciais vêm da cadeia padrão do ambiente;
+a extensão `delta` do DuckDB vem da pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao
+lado do ambiente virtual, sem download.
 
 ## Tutorial
 
@@ -267,6 +272,37 @@ serialize-db sql check --metadata pipeline.models:Base.metadata --statements pip
 `serialize_db.sql.read_sql` lê o arquivo versionado com o sentinela trocado pelo prefixo informado,
 a string vazia para as tabelas do contrato ou `exec_<id>_` para o sandbox de uma execução, e
 `serialize_db.sql.referenced_tables` lista as tabelas do contrato que um statement ou um texto cita.
+
+### Gravar as tabelas Delta
+
+`serialize_db.storage.Storage` é a raiz do banco, uma pasta local ou um prefixo `s3://`, e cada
+primitiva de `serialize_db.delta` recebe a URI da pasta da tabela e o `Storage`. A tabela nasce do
+modelo, e cada partição entra num commit que a substitui, com os metadados da execução:
+
+```python
+from serialize_db import delta, schema
+from serialize_db.storage import Storage
+
+storage = Storage.for_uri("s3://bucket/projeto/delta")
+uri = storage.uri_of("prod/cad_operacoes")
+delta.create_table(uri, table, storage)                         # versão 0, repetível
+metadata = delta.commit_metadata("exec-2026-09-05", {"cad_contratos": 88})
+version = delta.publish_partition(uri, table, "2026-08-31", schema.cast(data, table), metadata, storage)
+delta.version_diff(uri, version - 1, version, table, storage)   # {"2026-08-31"}
+```
+
+O valor de partição segue `serialize_db.schema.PARTITION_VALUE`, letra ou dígito no início e
+depois letras, dígitos, `_`, `.` e `-`, porque vira nome de pasta e literal SQL. Duas escritas da
+mesma partição a partir da mesma versão levantam `serialize_db.errors.ExecutionConflict`, e a
+segunda não commita. `serialize_db.delta.register_files` registra no log os arquivos que outro
+escritor gravou dentro da pasta da tabela, como o `COPY` do DuckDB, depois de conferir o rodapé de
+cada um, e relê a versão pelos dois leitores, desfazendo o commit numa diferença.
+
+`serialize_db.delta.reconcile` aplica ao log o que o modelo acrescentou (coluna anulável,
+`NOT NULL` relaxado, comentários) e recusa com `serialize_db.errors.SchemaDiffRefused` o que só
+`serialize_db.delta.rewrite` resolve, num commit: renomeação, remoção e mudança de tipo.
+`serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo de controle do
+ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva.
 
 ## Tabela de mapeamento de tipos
 

@@ -1,0 +1,501 @@
+"""Os dois armazenamentos da biblioteca, a pasta local e o S3, pelo sistema de arquivos do PyArrow.
+
+``Storage`` guarda a raiz do banco: a URI que o delta-rs e o DuckDB recebem, o sistema de arquivos
+do ``pyarrow.fs`` que lista, lê, copia e apaga nos dois armazenamentos, e o caminho da raiz nele.
+Os métodos recebem caminhos relativos à raiz, montados com ``/`` por ``join``; ``relative`` leva
+uma URI sob a raiz ao caminho relativo. Só a escrita condicional do arquivo de controle tem um ramo
+por armazenamento: ``put_object`` do ``boto3`` com ``IfMatch`` ou ``IfNoneMatch`` no S3, porque o
+``pyarrow.fs`` não tem a condição nem devolve a etag, e ``O_EXCL`` ou a impressão digital com
+``os.replace`` na pasta local.
+
+``storage_options`` monta a cada chamada as opções do delta-rs, sem credencial alguma: a cadeia
+padrão do delta-rs as resolve e as renova no ``DeltaTable`` que a execução segura.
+``duckdb_connect`` abre uma conexão do DuckDB com as extensões da pasta configurada, e
+``duckdb_setup`` carrega as extensões e cria o secret do S3 numa conexão já aberta.
+``prepare_environment`` acerta as variáveis que o delta-rs lê antes da primeira abertura de tabela.
+
+Exemplo, numa pasta local:
+
+.. code-block:: python
+
+    from serialize_db.storage import Storage
+
+    storage = Storage.for_uri("/dados/delta")
+    path = storage.join("prod", "_serialize_db", "snapshots.json")
+    fingerprint = storage.write_text(path, "{}", if_none_match=True)
+    text, fingerprint = storage.read_text(path)
+    storage.write_text(path, '{"snapshots": {}}', if_match=fingerprint)
+    storage.relative("/dados/delta/prod/cad_operacoes")   # "prod/cad_operacoes"
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import os
+import sys
+import tempfile
+import urllib.parse
+from collections.abc import Mapping, MutableMapping
+from pathlib import Path
+
+import boto3
+import botocore.exceptions
+import duckdb
+import pyarrow.fs as pafs
+
+from serialize_db.errors import ConflictError
+
+__all__ = ["Storage", "prepare_environment"]
+
+# O delta-rs tenta de novo por até 10 s: contra um endereço que não responde, a chamada desistiu em
+# 10,3 s, contra 57,0 s no padrão, e contra uma porta fechada em 0,6 s (leitura de 2026-09-23); um
+# erro passageiro do S3 ainda ganha até três novas tentativas dentro dos 10 s.
+_RETRY_OPTIONS = {"max_retries": "3", "retry_timeout": "10s"}
+
+# As variáveis de criptografia do object_store, o cliente de armazenamento do delta-rs, e a chave
+# de storage_options de cada uma. Sem elas, o S3 aplica a criptografia padrão do bucket.
+_SSE_VARIABLES = {
+    "AWS_SERVER_SIDE_ENCRYPTION": "aws_server_side_encryption",
+    "AWS_SSE_KMS_KEY_ID": "aws_sse_kms_key_id",
+    "AWS_SSE_BUCKET_KEY_ENABLED": "aws_sse_bucket_key_enabled",
+}
+
+
+def _region() -> str | None:
+    """A região de ``AWS_REGION`` ou, sem ela, de ``AWS_DEFAULT_REGION``."""
+    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+
+
+def _endpoint() -> str | None:
+    """O endpoint de ``AWS_ENDPOINT_URL``, para um serviço compatível com o S3."""
+    return os.environ.get("AWS_ENDPOINT_URL") or None
+
+
+def _sql_text(value: str) -> str:
+    """O literal SQL de um texto, com a aspa simples dobrada."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _extension_directory() -> str | None:
+    """A pasta de extensões do DuckDB: ``SERIALIZE_DB_DUCKDB_EXTENSIONS``; sem ela, ``.duckdb/``
+    ao lado do ambiente virtual quando existe, a pasta que ``prepare_offline.sh`` cria; senão
+    ``None``, a padrão do DuckDB."""
+    configured = os.environ.get("SERIALIZE_DB_DUCKDB_EXTENSIONS")
+    if configured:
+        return configured
+    prepared = Path(sys.prefix).parent / ".duckdb"
+    return str(prepared) if prepared.is_dir() else None
+
+
+def _proxy_settings(environ: Mapping[str, str]) -> dict[str, str]:
+    """As configurações de proxy do DuckDB lidas de ``HTTP_PROXY``.
+
+    O DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3: o
+    endereço vai sem elas em ``http_proxy``, e o usuário e a senha em ``http_proxy_username`` e
+    ``http_proxy_password``, das variáveis ``username`` e ``password`` e, sem elas, do próprio
+    endereço, como ``probelib.duckdb_proxy`` faz nos probes.
+    """
+    url = (environ.get("HTTP_PROXY") or "").strip()
+    if not url:
+        return {}
+    parts = urllib.parse.urlsplit(url if "//" in url else "//" + url, scheme="http")
+    if not parts.hostname:
+        return {}
+    address = parts.hostname + (f":{parts.port}" if parts.port else "")
+    settings = {"http_proxy": address}
+    user = environ.get("username") or urllib.parse.unquote(parts.username or "")
+    password = environ.get("password") or urllib.parse.unquote(parts.password or "")
+    if user:
+        settings["http_proxy_username"] = user
+        settings["http_proxy_password"] = password
+    return settings
+
+
+def _fingerprint(content: bytes) -> str:
+    """A impressão digital de um conteúdo na pasta local: o ``sha256`` dele, o papel da etag."""
+    return hashlib.sha256(content).hexdigest()
+
+
+@dataclasses.dataclass(frozen=True)
+class Storage:
+    """A raiz do banco num dos dois armazenamentos, com o sistema de arquivos que a percorre.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        storage = Storage.for_uri("s3://bucket/projeto/delta")
+        storage.uri                      # "s3://bucket/projeto/delta"
+        storage.path                     # "bucket/projeto/delta"
+        storage.list_files("prod/cad_operacoes", ".parquet")
+    """
+
+    uri: str
+    """A raiz como o delta-rs e o DuckDB a recebem, sem barra final: ``s3://bucket/prefixo`` ou o
+    caminho absoluto da pasta local."""
+    filesystem: pafs.FileSystem
+    """``S3FileSystem`` ou ``LocalFileSystem``."""
+    path: str
+    """A raiz na forma do sistema de arquivos: ``bucket/prefixo`` ou o caminho absoluto."""
+
+    @staticmethod
+    def for_uri(uri: str) -> Storage:
+        """O armazenamento de ``s3://bucket/prefixo``, de um caminho ou de ``file://``.
+
+        No S3, o ``S3FileSystem`` leva a região de ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``, a
+        mesma que ``storage_options`` passa ao delta-rs, e o ``endpoint_override`` de
+        ``AWS_ENDPOINT_URL``; sem região é ``ValueError``, porque o PyArrow a buscaria na rede e o
+        delta-rs cairia em ``us-east-1``. Nada toca a rede na construção. O caminho local é
+        resolvido para absoluto. Outro esquema é ``ValueError``.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            Storage.for_uri("file:///dados/delta").uri   # "/dados/delta"
+        """
+        if uri.startswith("s3://"):
+            return _s3_storage(uri)
+        if "://" in uri and not uri.startswith("file://"):
+            raise ValueError(f"{uri}: esquema fora dos armazenamentos da biblioteca; "
+                             "use uma pasta local, file:// ou s3://")
+        return _local_storage(uri)
+
+    @property
+    def is_s3(self) -> bool:
+        """Se a raiz está no S3."""
+        return self.uri.startswith("s3://")
+
+    # ------------------------------------------------------------ caminhos
+
+    def join(self, *parts: str) -> str:
+        """O caminho relativo à raiz com as partes juntadas por ``/``, sem barras nas pontas.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            storage.join("prod/", "cad_operacoes", "_delta_log")   # "prod/cad_operacoes/_delta_log"
+        """
+        pieces = []
+        for part in parts:
+            stripped = part.strip("/")
+            if stripped:
+                pieces.append(stripped)
+        return "/".join(pieces)
+
+    def relative(self, uri: str) -> str:
+        """O caminho relativo à raiz de uma URI sob ela; a própria raiz dá ``""``.
+
+        Uma URI fora da raiz é ``ValueError``: as primitivas de ``serialize_db.delta`` só tocam o
+        que está sob a raiz do banco.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            storage.relative(storage.uri + "/prod/cad_operacoes")   # "prod/cad_operacoes"
+        """
+        target = uri.rstrip("/")
+        if target == self.uri:
+            return ""
+        if not target.startswith(self.uri + "/"):
+            raise ValueError(f"{uri} fora da raiz {self.uri}")
+        return target.removeprefix(self.uri + "/")
+
+    def uri_of(self, path: str) -> str:
+        """A URI de um caminho relativo à raiz, como o delta-rs e o DuckDB a recebem."""
+        return f"{self.uri}/{path}" if path else self.uri
+
+    def _full(self, path: str) -> str:
+        """O caminho no sistema de arquivos de um caminho relativo à raiz."""
+        return f"{self.path}/{path}" if path else self.path
+
+    def _local_parent(self, path: str) -> None:
+        """Cria a pasta de um arquivo na pasta local; no S3 não há pasta a criar."""
+        if not self.is_s3:
+            Path(self._full(path)).parent.mkdir(parents=True, exist_ok=True)
+
+    def ensure_folder(self, path: str) -> None:
+        """Cria a pasta na pasta local, porque o ``COPY`` do DuckDB para um arquivo não cria a pasta
+        dele; no S3 não há pasta a criar."""
+        if not self.is_s3:
+            Path(self._full(path)).mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------ listagem, cópia e exclusão
+
+    def exists(self, path: str) -> bool:
+        """Se o arquivo ou a pasta existe."""
+        info = self.filesystem.get_file_info(self._full(path))
+        return info.type != pafs.FileType.NotFound
+
+    def size(self, path: str) -> int | None:
+        """O tamanho do arquivo em bytes, ou ``None`` quando ele não existe ou não é arquivo."""
+        info = self.filesystem.get_file_info(self._full(path))
+        if info.type != pafs.FileType.File:
+            return None
+        return info.size
+
+    def list_files(self, prefix: str, suffix: str = "") -> list[str]:
+        """Os arquivos sob ``prefix`` que terminam em ``suffix``, relativos à raiz e em ordem.
+
+        A listagem desce as subpastas e exclui ``_delta_log/``, onde os checkpoints também
+        terminam em ``.parquet``; um prefixo ausente dá a lista vazia.
+        """
+        selector = pafs.FileSelector(self._full(prefix), recursive=True, allow_not_found=True)
+        files = []
+        for info in self.filesystem.get_file_info(selector):
+            relative = info.path.removeprefix(self.path + "/")
+            in_log = "_delta_log" in relative.split("/")
+            if info.type == pafs.FileType.File and relative.endswith(suffix) and not in_log:
+                files.append(relative)
+        return sorted(files)
+
+    def copy(self, source: str, destination: str) -> None:
+        """Copia um arquivo sem passar os dados pelo Python: o ``CopyObject`` no S3."""
+        self._local_parent(destination)
+        self.filesystem.copy_file(self._full(source), self._full(destination))
+
+    def delete(self, paths: list[str]) -> None:
+        """Apaga os arquivos; um caminho ausente não é erro."""
+        for path in paths:
+            try:
+                self.filesystem.delete_file(self._full(path))
+            except FileNotFoundError:
+                continue
+
+    def open_input_file(self, path: str) -> object:
+        """O arquivo aberto para leitura aleatória, como ``pq.ParquetFile`` o recebe: no S3, o
+        rodapé é lido por GET de intervalo."""
+        return self.filesystem.open_input_file(self._full(path))
+
+    # ------------------------------------------------------------ a escrita condicional
+
+    def read_text(self, path: str) -> tuple[str, str]:
+        """O texto do arquivo e a impressão digital dele: a etag no S3, o ``sha256`` na pasta local.
+
+        Um arquivo ausente é ``FileNotFoundError`` nos dois armazenamentos.
+        """
+        if self.is_s3:
+            return self._read_s3(path)
+        full = Path(self._full(path))
+        content = full.read_bytes()
+        return content.decode("utf-8"), _fingerprint(content)
+
+    def write_text(self, path: str, text: str, if_match: str | None = None,
+                   if_none_match: bool = False) -> str:
+        """Grava o texto por inteiro e devolve a impressão digital nova.
+
+        ``if_none_match`` grava só se o arquivo não existe, e ``if_match`` só se a impressão
+        digital atual é a informada; quando a condição falha, nada é gravado e a escrita levanta
+        ``ConflictError``. No S3, ``put_object`` com ``IfNoneMatch="*"`` ou ``IfMatch=<etag>``,
+        atômico no servidor. Na pasta local, ``O_EXCL`` ou a comparação da impressão digital
+        seguida de ``os.replace`` de um arquivo temporário, que não é atômica entre processos e
+        basta à pasta local, o ambiente dos testes e do desenvolvimento.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            first = storage.write_text("prod/_serialize_db/snapshots.json", "{}", if_none_match=True)
+            storage.write_text("prod/_serialize_db/snapshots.json", "{}", if_none_match=True)
+            # ConflictError: o arquivo já existe
+        """
+        if self.is_s3:
+            return self._write_s3(path, text, if_match, if_none_match)
+        return self._write_local(path, text, if_match, if_none_match)
+
+    def _write_local(self, path: str, text: str, if_match: str | None,
+                     if_none_match: bool) -> str:
+        """A escrita condicional na pasta local."""
+        full = Path(self._full(path))
+        full.parent.mkdir(parents=True, exist_ok=True)
+        content = text.encode("utf-8")
+        if if_none_match:
+            try:
+                descriptor = os.open(full, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            except FileExistsError:
+                raise ConflictError(f"{path} já existe") from None
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content)
+            return _fingerprint(content)
+        if if_match is not None:
+            current = _fingerprint(full.read_bytes()) if full.exists() else None
+            if current != if_match:
+                raise ConflictError(f"{path} mudou desde a leitura")
+        # O arquivo temporário na mesma pasta: os.replace troca de uma vez.
+        with tempfile.NamedTemporaryFile("wb", dir=full.parent, delete=False) as handle:
+            handle.write(content)
+            temporary = handle.name
+        os.replace(temporary, full)
+        return _fingerprint(content)
+
+    def _bucket_and_key(self, path: str) -> tuple[str, str]:
+        """O bucket e a chave de um caminho relativo à raiz no S3."""
+        bucket, _, key = self._full(path).partition("/")
+        return bucket, key
+
+    def _s3_client(self) -> object:
+        """O cliente S3 do ``boto3`` com a região e o endpoint do ambiente: o botocore não lê
+        ``AWS_REGION`` e, sem região, iria ao endpoint global."""
+        return boto3.client("s3", region_name=_region(), endpoint_url=_endpoint())
+
+    def _read_s3(self, path: str) -> tuple[str, str]:
+        """O texto e a etag de um objeto do S3."""
+        bucket, key = self._bucket_and_key(path)
+        try:
+            response = self._s3_client().get_object(Bucket=bucket, Key=key)
+        except botocore.exceptions.ClientError as error:
+            if error.response["Error"]["Code"] in ("NoSuchKey", "404"):
+                raise FileNotFoundError(self.uri_of(path)) from None
+            raise
+        return response["Body"].read().decode("utf-8"), response["ETag"]
+
+    def _write_s3(self, path: str, text: str, if_match: str | None, if_none_match: bool) -> str:
+        """O ``put_object`` com a condição pedida; o 412 vira ``ConflictError``."""
+        bucket, key = self._bucket_and_key(path)
+        condition = {}
+        if if_none_match:
+            condition["IfNoneMatch"] = "*"
+        if if_match is not None:
+            condition["IfMatch"] = if_match
+        try:
+            response = self._s3_client().put_object(
+                Bucket=bucket, Key=key, Body=text.encode("utf-8"), **condition)
+        except botocore.exceptions.ClientError as error:
+            if error.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+                raise ConflictError(f"{self.uri_of(path)}: {error}") from None
+            raise
+        return response["ETag"]
+
+    # ------------------------------------------------------------ delta-rs e DuckDB
+
+    def storage_options(self) -> dict[str, str]:
+        """As opções do delta-rs, montadas a cada chamada; vazias na pasta local.
+
+        No S3: ``AWS_REGION``, ``AWS_ENDPOINT_URL`` quando presente, ``max_retries`` e
+        ``retry_timeout`` para uma rede morta falhar em segundos, e as chaves de SSE das variáveis
+        do object_store quando configuradas. Nenhuma credencial: a cadeia padrão do delta-rs as
+        resolve e as renova no ``DeltaTable`` que a execução segura, enquanto um trio congelado
+        expiraria em cerca de uma hora e circularia num dicionário que um log imprime.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            Storage.for_uri("s3://bucket/delta").storage_options()
+            # {"AWS_REGION": "us-east-1", "max_retries": "3", "retry_timeout": "10s"}
+        """
+        if not self.is_s3:
+            return {}
+        options = {"AWS_REGION": _region()}
+        if _endpoint():
+            options["AWS_ENDPOINT_URL"] = _endpoint()
+        options.update(_RETRY_OPTIONS)
+        for variable, key in _SSE_VARIABLES.items():
+            if os.environ.get(variable):
+                options[key] = os.environ[variable]
+        return options
+
+    def duckdb_setup(self, connection: duckdb.DuckDBPyConnection) -> None:
+        """Carrega as extensões que a raiz pede e, no S3, cria o secret da cadeia de credenciais.
+
+        Na pasta local, só ``LOAD delta``. No S3, ``LOAD httpfs``, ``LOAD delta`` e ``LOAD aws``,
+        o secret ``credential_chain`` com a região e o endpoint, e o proxy de ``HTTP_PROXY`` sem
+        as credenciais no endereço. As extensões vêm da pasta configurada na conexão; nada é
+        baixado.
+        """
+        if not self.is_s3:
+            connection.execute("LOAD delta")
+            return
+        for extension in ("httpfs", "delta", "aws"):
+            connection.execute(f"LOAD {extension}")
+        for name, value in _proxy_settings(os.environ).items():
+            connection.execute(f"SET {name} = {_sql_text(value)}")
+        options = ["TYPE s3", "PROVIDER credential_chain", f"REGION {_sql_text(_region())}"]
+        if _endpoint():
+            host = urllib.parse.urlsplit(_endpoint()).netloc or _endpoint()
+            options.append(f"ENDPOINT {_sql_text(host)}")
+        connection.execute(f"CREATE OR REPLACE SECRET serialize_db_s3 ({', '.join(options)})")
+
+    def duckdb_connect(self, database: str = ":memory:",
+                       config: Mapping[str, object] | None = None) -> duckdb.DuckDBPyConnection:
+        """Uma conexão do DuckDB com as extensões da pasta configurada, sem instalação automática,
+        e ``duckdb_setup`` aplicado.
+
+        ``config`` acrescenta as opções da abertura (``threads``, ``temp_directory``,
+        ``memory_limit``). A instalação e a carga automáticas ficam desligadas: o ``LOAD`` de uma
+        extensão conhecida a baixaria para ``~/.duckdb`` sem aviso, e o ambiente alvo não tem
+        internet.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            connection = storage.duckdb_connect()
+            connection.execute(f"SELECT count(*) FROM delta_scan('{storage.uri}/prod/cad_operacoes')")
+        """
+        settings: dict[str, object] = {
+            "autoinstall_known_extensions": False,
+            "autoload_known_extensions": False,
+        }
+        directory = _extension_directory()
+        if directory:
+            settings["extension_directory"] = directory
+        settings.update(config or {})
+        connection = duckdb.connect(database, config=settings)
+        try:
+            self.duckdb_setup(connection)
+        except duckdb.Error:
+            connection.close()
+            raise
+        return connection
+
+
+def _s3_storage(uri: str) -> Storage:
+    """O armazenamento no S3, com a região e o endpoint das variáveis."""
+    region = _region()
+    if not region:
+        raise ValueError(f"{uri}: o S3 precisa da região em AWS_REGION ou AWS_DEFAULT_REGION")
+    path = uri.removeprefix("s3://").strip("/")
+    options: dict[str, object] = {"region": region}
+    if _endpoint():
+        options["endpoint_override"] = _endpoint()
+    return Storage(f"s3://{path}", pafs.S3FileSystem(**options), path)
+
+
+def _local_storage(uri: str) -> Storage:
+    """O armazenamento numa pasta local, com o caminho absoluto resolvido."""
+    raw = urllib.parse.urlsplit(uri).path if uri.startswith("file://") else uri
+    resolved = str(Path(raw).expanduser().resolve())
+    return Storage(resolved, pafs.LocalFileSystem(), resolved)
+
+
+def prepare_environment(environ: MutableMapping[str, str] = os.environ) -> dict[str, str]:
+    """Acerta as variáveis que o delta-rs lê e devolve as que mudaram, para o log.
+
+    Exporta ``NO_PROXY`` a partir de ``no_proxy`` quando a maiúscula está ausente ou vazia: o
+    cliente HTTP do delta-rs lê ``NO_PROXY`` antes de ``no_proxy``, e vazia ela anula as exceções e
+    manda ao proxy a chamada ao endpoint de credenciais do contêiner. Copia a região entre
+    ``AWS_REGION`` e ``AWS_DEFAULT_REGION`` nos dois sentidos, porque o botocore lê só a segunda e
+    o delta-rs as duas. A segunda chamada não muda nada.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        prepare_environment()   # {"NO_PROXY": "169.254.170.2,localhost"} na primeira chamada
+    """
+    changes: dict[str, str] = {}
+    # Vazia conta como ausente: get devolve "" e a condição a substitui.
+    if not environ.get("NO_PROXY") and environ.get("no_proxy"):
+        environ["NO_PROXY"] = environ["no_proxy"]
+        changes["NO_PROXY"] = environ["no_proxy"]
+    region = environ.get("AWS_REGION") or environ.get("AWS_DEFAULT_REGION")
+    if region:
+        for name in ("AWS_REGION", "AWS_DEFAULT_REGION"):
+            if environ.get(name) != region:
+                environ[name] = region
+                changes[name] = region
+    return changes

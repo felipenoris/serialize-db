@@ -9,15 +9,18 @@ PyArrow (`pyarrow.fs`), que lista, lê, copia e apaga nos dois armazenamentos e 
 alvo (decisão do usuário de 2026-09-22). `Storage` é um `dataclass` com a URI, o sistema de
 arquivos e o caminho nele, sem uma classe por armazenamento; só a escrita condicional do arquivo de
 controle tem um ramo por armazenamento. Toda primitiva de `serialize_db.delta` que toca o
-armazenamento recebe o `Storage`, que resolve `storage_options()` a cada chamada.
+armazenamento recebe o `Storage`, que resolve `storage_options()` a cada chamada, e a URI da pasta
+da tabela, que `relative` leva ao caminho relativo à raiz.
 
 | Primitiva | O que faz |
 | --- | --- |
 | `Storage.for_uri(uri)` | `pafs.S3FileSystem` com a região de `AWS_REGION` ou `AWS_DEFAULT_REGION` e o `endpoint_override` de `AWS_ENDPOINT_URL` para `s3://bucket/prefixo`, sem rede na construção; `pafs.LocalFileSystem` com o caminho resolvido para um caminho ou `file://`. |
-| `join(*parts)`, `exists(path)`, `list_files(prefix, suffix)`, `delete(paths)` | Caminhos relativos à raiz, pelo `get_file_info` e pelo `delete_file` do sistema de arquivos; a listagem exclui `_delta_log/`. |
-| `read_text(path)`, `write_text(path, text, if_match=None, if_none_match=False)` | Escrita condicional, o único ramo por armazenamento: `put_object` do `boto3` com `IfMatch` ou `IfNoneMatch` no S3 (412 vira `ConflictError`), porque o `pyarrow.fs` não tem a condição nem devolve a etag; `O_EXCL` e `os.replace` na pasta local. É a escrita de `_serialize_db/snapshots.json`. |
+| `join(*parts)`, `relative(uri)`, `uri_of(path)` | `join` monta com `/` um caminho relativo à raiz, sem barras nas pontas; `relative` leva uma URI sob a raiz ao caminho relativo e recusa a de fora com `ValueError`; `uri_of` faz a volta. |
+| `exists(path)`, `size(path)`, `list_files(prefix, suffix)`, `delete(paths)`, `ensure_folder(path)`, `open_input_file(path)` | Caminhos relativos à raiz, pelo `get_file_info`, pelo `delete_file` e pelo `open_input_file` do sistema de arquivos; a listagem desce as pastas e exclui `_delta_log/`; `delete` de um caminho ausente não é erro; `ensure_folder` cria a pasta local que o `COPY` do DuckDB para um arquivo não cria, e no S3 não faz nada. |
+| `read_text(path)`, `write_text(path, text, if_match=None, if_none_match=False)` | Escrita condicional, o único ramo por armazenamento: `put_object` do `boto3` com `IfMatch` ou `IfNoneMatch` no S3 (412 vira `ConflictError`), porque o `pyarrow.fs` não tem a condição nem devolve a etag; `O_EXCL` e `os.replace` na pasta local. É a escrita de `_serialize_db/snapshots.json` e do manifesto, e a leitura do log por `version_diff`; o arquivo ausente é `FileNotFoundError` nos dois armazenamentos. |
 | `copy(source, destination)` | `copy_file` do sistema de arquivos, que no S3 é o `CopyObject`; a exportação sem ler dados. |
-| `storage_options()` | As opções do delta-rs: região, `AWS_ENDPOINT_URL`, `max_retries`, `retry_timeout`, `timeout` e as chaves de SSE quando configuradas; nunca credenciais (decisão do usuário de 2026-09-22). A cadeia padrão do delta-rs as resolve e as renova sozinha no `DeltaTable` que a execução guarda, enquanto um trio congelado expiraria em cerca de uma hora e circularia num dicionário que um log ou uma exceção imprime. Resolvidas a cada chamada, nunca guardadas. |
+| `storage_options()` | As opções do delta-rs: região, `AWS_ENDPOINT_URL`, `max_retries` 3 e `retry_timeout` 10 s, e as chaves de SSE das variáveis do object_store (`AWS_SERVER_SIDE_ENCRYPTION`, `AWS_SSE_KMS_KEY_ID`, `AWS_SSE_BUCKET_KEY_ENABLED`) quando configuradas; vazias na pasta local; nunca credenciais (decisão do usuário de 2026-09-22). A cadeia padrão do delta-rs as resolve e as renova sozinha no `DeltaTable` que a execução guarda, enquanto um trio congelado expiraria em cerca de uma hora e circularia num dicionário que um log ou uma exceção imprime. Resolvidas a cada chamada, nunca guardadas. |
+| `duckdb_connect(database=":memory:", config=None)` | A conexão do DuckDB com `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao lado do ambiente virtual (a pasta que `prepare_offline.sh` cria), `autoinstall_known_extensions` e `autoload_known_extensions` desligados, as opções de `config` e `duckdb_setup` aplicado; é a conexão de `rewrite`, `read_back` e `export_snapshot`, e a do motor da [etapa 4](PLAN-STAGE-4.md). |
 | `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REGION` e `ENDPOINT`; só `LOAD delta` na pasta local. Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password` a partir de `HTTP_PROXY`, `username` e `password`, como `probelib.duckdb_proxy` faz nos probes: o DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3, não só o download de extensão ([`POC.md`](POC.md)). |
 | `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou vazia, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
 
@@ -30,28 +33,31 @@ solto, e `value` é o valor de uma partição, `None` numa tabela sem partição
 | --- | --- |
 | `create_table(uri, table, storage)` | `DeltaTable.create(mode="ignore")` com `delta_schema`, `partition_by`, o nome da tabela, o comentário da tabela em `description` (decisão do usuário de 2026-09-22) e as propriedades `delta.logRetentionDuration = interval 3650 days` e `delta.deletedFileRetentionDuration = interval 400 days`; sem vetores de exclusão nem column mapping. |
 | `open_table(uri, storage, version=None)` | A `DeltaTable` numa versão; a execução abre cada tabela uma vez e guarda a versão. O nome não é `open`, que sombrearia a função embutida dentro do módulo. |
+| `table_exists(uri, storage)` | `DeltaTable.is_deltatable`: a pasta sem `_delta_log/` não é tabela; é o que `Execution.__enter__` consulta. |
 | `max_key(dt, column)` | O maior valor de `column` na versão carregada: o máximo de `max.<coluna>` de `get_add_actions(flatten=True)`, sem ler dados, ou a varredura da coluna quando um arquivo não tem a estatística; 0 na tabela vazia. O início de `run.next_ids`, e por isso a estatística registrada é verdadeira ou omitida (seção "As conferências do registro de arquivos"): a omitida cai na varredura, a falsa daria chaves repetidas. |
 | `commit_metadata(execution_id, input_versions, snapshot=None)` | O dicionário de `CommitProperties(custom_metadata=...)`: `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`. |
 | `publish_partition(uri, table, value, data, metadata, storage, columns_without_min_max=())` | `write_deltalake(dt, data, mode="overwrite", predicate="<coluna de partição> = '<valor>'")` de `data` já passado por `cast`, pelo objeto `DeltaTable`, e devolve `dt.version()`, a versão do próprio commit; as colunas de `columns_without_min_max` recebem `ColumnProperties(statistics_enabled="NONE")` no `writer_properties` e saem sem mínimo e máximo no rodapé e no log, pela regra do `Double` não finito da seção "As conferências do registro de arquivos"; `value=None` numa tabela sem partição substitui a tabela inteira; `CommitFailedError` sobe como `ExecutionConflict`. |
 | `register_files(uri, table, files, value, metadata, storage, expected_rows=None, columns_without_min_max=())` | Arquivos que outro escritor gravou dentro da pasta da tabela entram no log por `create_write_transaction(mode="overwrite", partition_filters=...)`, uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. O `create_write_transaction` grava a ação como a recebe, e os leitores obedecem à ação, não ao arquivo ([`POC.md`](POC.md)); a primitiva faz as conferências da seção "As conferências do registro de arquivos" antes do commit e a releitura depois dele. Os arquivos do `UNLOAD` do Redshift têm mínimo e máximo, menos nas colunas de timestamp, que saem em `INT96` e não carregam estatística: a coluna fica fora de `minValues` e `maxValues` sem falhar o registro ([`redshift.md`](redshift.md)). O `schema.elements` do manifesto verboso listou a coluna de partição, que os arquivos não têm, no `UNLOAD` com `PARTITION BY` (suíte de 2026-09-21); o da [etapa 5](PLAN-STAGE-5.md) grava sem ele e com a coluna fora do `select` (decisão do usuário de 2026-09-23), e a lista esperada da conferência é a do `select`, que a próxima execução da suíte confere. O segundo registro da mesma partição a partir da mesma versão é `CommitFailedError` (leitura de 2026-09-23), que sobe como `ExecutionConflict`, como em `publish_partition`. |
-| `read_back(uri, table, value, expected_rows, storage)` | A releitura da versão recém-commitada pelos dois leitores, em conexão DuckDB própria; uma diferença volta a versão e levanta `RegistrationRefused`. |
+| `read_back(uri, table, value, expected_rows, storage)` | A releitura da versão recém-commitada pelos dois leitores, em conexão DuckDB própria, na partição ou, com `value=None`, na tabela inteira: as linhas iguais à soma de `numRecords` do log e a `expected_rows`, o menor e o maior valor de cada coluna da primeira chave iguais nos dois leitores, e o mínimo e o máximo registrados no log como limites dos lidos; uma diferença volta a versão e levanta `RegistrationRefused`. |
+| `file_from_return_stats(row, table, uri)` | O `RegisteredFile` de uma linha do `RETURN_STATS` do DuckDB, com o caminho relativo à pasta da tabela, o `null_count` de toda coluna e o mínimo e o máximo dos tipos que transcrevem exato, convertidos do texto; protegida, usada por `rewrite` e pelo `export_partition` do motor DuckDB. |
 | `schema_diff(table, dt)` | O `SchemaDiff` entre `arrow_schema(table)` e `dt.schema()`: coluna nova anulável, `NOT NULL` relaxado, `CHECK` e comentário divergente são aditivos; coluna `NOT NULL` nova em tabela com dados, renomeação, remoção e mudança de tipo são destrutivos. |
 | `reconcile(uri, table, storage)` | Aplica o diff aditivo (`add_columns`, `drop_column_not_null`, `add_constraint`, `set_table_description` e `set_column_metadata`) e recusa o destrutivo com a mensagem que aponta `rewrite`. |
 | `rewrite(uri, table, storage, expressions=None)` | A tabela inteira com o esquema do contrato num único commit e sem predicado: `COPY ... PARTITION_BY (<coluna de partição>) ... RETURN_STATS` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. `expressions` dá, por coluna do contrato, a expressão sobre a versão atual que a preenche: o nome antigo numa renomeação, o valor de uma coluna `NOT NULL` nova (decisão do usuário de 2026-09-22). A conexão DuckDB é aberta aqui e configurada por `storage.duckdb_setup`, sem o motor da [etapa 4](PLAN-STAGE-4.md): `delta` não depende de `engine`. `CommitFailedError` sobe como `ExecutionConflict`. |
-| `copy_manifest(uri, version, partitions, destination, storage)` | O manifesto do `COPY` do Redshift (`url` e `meta.content_length` de `get_add_actions()`), gravado sob `publicacao/`. |
+| `copy_manifest(uri, version, partitions, destination, storage)` | O manifesto do `COPY` do Redshift (`url` e `meta.content_length` de `get_add_actions()`, `mandatory` verdadeiro), gravado na URI `destination` sob `publicacao/` ou `staging/`; devolve a URI. |
 | `version_diff(uri, published, current, table, storage)` | As partições com ações `add` ou `remove` de dados entre as duas versões, lidas do log; a compactação (`dataChange` falso) não conta. Um arquivo do log ausente é `LogUnavailable`, com a instrução de publicar a tabela inteira (decisão do usuário de 2026-09-22). |
-| `read_snapshots(storage, environment)`, `snapshot(storage, environment, name, versions)` | O arquivo de controle `_serialize_db/snapshots.json` do ambiente com a impressão digital, e a entrada `{name: versions}` gravada nele com `write_text(if_match=...)`. |
+| `read_snapshots(storage, environment)`, `snapshot(storage, environment, name, versions)` | O arquivo de controle `_serialize_db/snapshots.json` do ambiente com a impressão digital, `({"snapshots": {}}, None)` quando ele ainda não existe, e a entrada `{name: versions}` gravada nele com `write_text(if_match=...)`, ou `if_none_match` no primeiro; o nome repetido é `ValueError`. |
 | `vacuum_keeping_snapshots(uri, control, table_name, storage, retention_hours=9600, apply=False, full=False)` | `vacuum` com `keep_versions` das versões do arquivo de controle; lista por padrão e apaga com `apply=True`. |
 | `compact(uri, table, partitions, storage)` | `optimize.compact` das partições com arquivos pequenos, antes de um snapshot. A reescrita sai pelo escritor do delta-rs: os arquivos do `UNLOAD` que ela junta perdem o `INT96` e o `FIXED_LEN_BYTE_ARRAY` e ganham estatística em toda coluna (`test_deltalake.py::test_compact_rewrites_files_from_another_writer`). |
-| `deep_copy(uri, version, destination, storage)` | Tabela nova na versão 0 com os dados de uma versão, para a pasta de arquivo. |
-| `export_snapshot(uri, table, destination, storage, version=None, mode="copy")` | Pastas `<coluna de partição>=<valor>/` sem o log: `copy` copia os arquivos que o log lista; `rewrite` reescreve pelo `COPY` particionado do DuckDB. |
+| `deep_copy(uri, version, destination, storage)` | Tabela nova na URI `destination`, na versão 0, com os dados, o esquema (nulidade e comentários inclusive), a partição, o nome, a descrição e as propriedades de uma versão, para a pasta de arquivo. |
+| `export_snapshot(uri, table, destination, storage, version=None, mode="copy")` | Pastas `<coluna de partição>=<valor>/` sem o log na URI `destination`: `copy` copia os arquivos que o log lista; `rewrite` reescreve pelo `COPY` particionado do DuckDB; devolve as URIs gravadas. |
 
 `scripts/migrate_parquet_to_delta.py`, a migração adiantada da [etapa 7](PLAN-STAGE-7.md), já tem
 em forma de módulo, testada e executada no ambiente alvo, a metade de `register_files` que monta a
 ação: `stat_converter` (os quatro tipos que transcrevem exato), `delta_stats` (o JSON de
 estatísticas a partir do `RETURN_STATS`), `copy_partition_file` e `register_partition` (o
 `COPY ... RETURN_STATS` na pasta da partição e o `create_write_transaction` da ação). A etapa as
-traz para `serialize_db.delta`, e o script passa a chamar a biblioteca.
+trouxe para `serialize_db.delta` (`_stat_converter`, `file_from_return_stats`, `_action_stats` e
+`register_files`); o script mantém as suas cópias até a [etapa 7](PLAN-STAGE-7.md) absorvê-lo.
 
 ## As conferências do registro de arquivos
 
@@ -66,11 +72,14 @@ dois leitores, o que o `write_deltalake` recusa; um valor que não converte para
 commita e falha quando a coluna é lida. `register_files` repõe a conferência antes do commit, só com
 o rodapé de cada arquivo, um GET por arquivo:
 
-1. O arquivo existe em `uri/path`, o caminho que o leitor resolve, com o tamanho da ação.
+1. O caminho é relativo à pasta da tabela, sem `/` inicial, URI nem `..`, e o arquivo existe em
+   `uri/path`, o caminho que o leitor resolve, com o tamanho da ação.
 2. O esquema do rodapé contra o da tabela, nome a nome: nenhuma coluna do contrato ausente, e o tipo
-   físico entre os admitidos para o lógico (`INT96` e `timestamp[ns]` para `timestamp_ntz`,
-   `FIXED_LEN_BYTE_ARRAY` e `INT64` para `decimal`, `int32` para `long`); uma coluna a mais passa,
-   porque os leitores a ignoram.
+   físico entre os admitidos para o lógico (`INT96` e `INT64` para `timestamp_ntz`,
+   `FIXED_LEN_BYTE_ARRAY`, `INT64` e `INT32` para `decimal`, `INT32` para `long`); a coluna de
+   partição fora do arquivo, porque ela vive na ação e o `COPY` posicional do Redshift a leria como
+   a coluna seguinte; e as colunas do contrato na ordem dele, pelo mesmo `COPY`. Uma coluna fora do
+   contrato passa, porque os leitores a ignoram.
 3. O valor de partição do caminho Hive igual ao de `value`.
 4. A soma de `num_records` dos rodapés igual à que `files` declara e a `expected_rows`, quando o
    chamador tem a contagem da fonte.
@@ -91,147 +100,46 @@ o rodapé de cada arquivo, um GET por arquivo:
    com `NaN`. O texto não tem exceção: o `RETURN_STATS` trunca o máximo para cima, e omite o texto
    multibyte longo.
 
-A reprovação recusa o commit com o arquivo e a conferência na mensagem, e os arquivos ficam órfãos na
-pasta até `vacuum(full=True)`. Depois do commit, `read_back` lê a versão nova pelo delta-rs e pelo
-`delta_scan`, `count(*)` e mínimo e máximo da chave por partição, e uma diferença chama
-`restore(version - 1)` e sobe a mesma exceção. A releitura pega o que as conferências do rodapé não
-veem, um leitor que não lê o arquivo como o outro: o `parquet.field.id` no esquema Delta fez o
-`delta_scan` ler toda coluna como nula com a contagem certa (2026-09-21, [`POC.md`](POC.md)), e o
-mínimo e o máximo da chave o acusariam. Uma versão entra num snapshot ou em `publish_redshift` só
-depois da releitura.
+A reprovação recusa o commit com o arquivo e a conferência na mensagem, e os arquivos ficam órfãos
+na pasta até `vacuum(full=True)`. Depois do commit, `read_back` lê a versão nova pelo delta-rs e
+pelo `delta_scan`, `count(*)` e mínimo e máximo da chave por partição, confere as linhas contra a
+soma de `numRecords` do log e o mínimo e o máximo registrados da chave como limites dos lidos, e uma
+diferença chama `restore(version - 1)` e sobe a mesma exceção. A releitura pega o que as
+conferências do rodapé não veem, um leitor que não lê o arquivo como o outro: o `parquet.field.id`
+no esquema Delta fez o `delta_scan` ler toda coluna como nula com a contagem certa (2026-09-21,
+[`POC.md`](POC.md)), e o mínimo e o máximo da chave o acusariam. Uma versão entra num snapshot ou em
+`publish_redshift` só depois da releitura.
 
 Testes: `tests/test_storage.py` e `tests/test_delta.py` sob a raiz local, com os mesmos casos no
-bucket por `-m s3`: substituição da partição e idempotência, conflito entre dois escritores,
-reconciliação aditiva e recusa da destrutiva, `rewrite` num commit sem predicado com a versão
-anterior legível, `keep_versions`, `export_snapshot` nos dois modos, realocação da pasta e a escrita
-condicional do arquivo de controle. Provas de conceito: `test_stdlib.py` (`test_storage_uris`,
-`test_exclusive_create_atomic_replace_and_fingerprint`, `test_json_control_file_and_commit_metadata`,
-`test_group_log_actions_by_partition`, `test_prepare_environment`), `test_s3.py` (`test_conditional_put`,
-`test_boto3_list_copy_delete`, e `test_delta_rs_storage_options_fallback`, que mede a forma das
-credenciais em `storage_options` sem que a biblioteca a use), `test_local.py`
-(`test_commit_is_atomic_on_disk`, `test_folder_relocates`) e `test_deltalake.py` inteiro: criação
-idempotente, predicado e nulidade, evolução com `drop_column_not_null` (recebe o nome da coluna),
-`restore`, `AddAction`, o que `create_write_transaction` não confere (caminho, estatística, esquema
-do arquivo) e o `overwrite` com `partition_filters`, a compactação que normaliza arquivos de outro
-escritor, `vacuum`, `version_diff` pelas ações `add` e `remove` com `dataChange` do log, compactação
-e checkpoint, exportação por cópia e a reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN,
-RETURN_STATS` do DuckDB registrada num commit `overwrite` com esquema novo e o mínimo e o máximo
-dos tipos de `stat_converter`, que o DuckDB usa para podar;
-`test_parallel.py` (quatro tabelas lidas em paralelo, escritas em paralelo por tabela e por mês da
-mesma tabela com o conflito no mesmo mês, e `max_key` pelas estatísticas com a varredura de reserva);
-`tests/test_migrate_parquet_to_delta.py` (o registro com as estatísticas dos quatro tipos).
-
-## Interface
-
-```python
-"""Assinaturas de serialize_db.storage e serialize_db.delta; os corpos estão nos rascunhos abaixo."""
-import dataclasses
-import os
-from collections.abc import Collection, Mapping, MutableMapping
-from typing import Literal
-
-import duckdb
-import pyarrow as pa
-import pyarrow.fs as pafs
-import sqlalchemy as sa
-from deltalake import DeltaTable
-
-
-# As exceções da etapa entram em serialize_db.errors, o módulo sem dependências (PLAN.md,
-# "Organização do pacote"), porque delta as levanta e execution as captura.
-class ConflictError(Exception):
-    """A escrita condicional perdeu: outro escritor mudou o objeto (412 no S3, impressão digital diferente na pasta local)."""
-
-
-class ExecutionConflict(Exception):
-    """Outra execução gravou a mesma partição ou avançou a tabela com dados: CommitFailedError do delta-rs, ou a versão fixada ficou para trás."""
-
-
-class RegistrationRefused(Exception):
-    """Uma conferência de register_files reprovou antes do commit, ou a releitura reprovou e restore voltou a versão anterior; o arquivo fica órfão até vacuum(full=True)."""
-
-
-class SchemaDiffRefused(Exception):
-    """O diff entre o modelo e a tabela é destrutivo; a mensagem aponta rewrite."""
-
-
-class LogUnavailable(Exception):
-    """Um arquivo do log entre as duas versões não existe; a mensagem manda publicar a tabela inteira."""
-
-
-@dataclasses.dataclass(frozen=True)
-class Storage:
-    uri: str                         # a raiz como o DuckDB e o delta-rs a recebem
-    filesystem: pafs.FileSystem      # S3FileSystem ou LocalFileSystem
-    path: str                        # a raiz na forma do sistema de arquivos
-
-    @staticmethod
-    def for_uri(uri: str) -> "Storage": ...
-    def join(self, *parts: str) -> str: ...
-    def exists(self, path: str) -> bool: ...
-    def list_files(self, prefix: str, suffix: str = "") -> list[str]: ...
-    def read_text(self, path: str) -> tuple[str, str]: ...                      # o texto e a impressão digital (etag no S3)
-    def write_text(self, path: str, text: str, if_match: str | None = None, if_none_match: bool = False) -> str: ...
-    def copy(self, source: str, destination: str) -> None: ...
-    def delete(self, paths: list[str]) -> None: ...
-    def storage_options(self) -> dict[str, str]: ...                            # região, endpoint, retry e SSE; nunca credenciais
-    def duckdb_setup(self, connection: duckdb.DuckDBPyConnection) -> None: ...
-
-
-def prepare_environment(environ: MutableMapping[str, str] = os.environ) -> dict[str, str]: ...
-
-
-@dataclasses.dataclass(frozen=True)
-class RegisteredFile:
-    """Um arquivo que outro escritor gravou dentro da pasta da tabela, como o COPY do DuckDB ou o manifesto do UNLOAD o descrevem."""
-    path: str                        # relativo à pasta da tabela, como o log guarda
-    size: int
-    rows: int
-    stats: Mapping[str, Mapping[str, object]]   # {"min": {coluna: valor}, "max": {...}, "null_count": {...}}, tipados; ausente é omitido
-
-
-@dataclasses.dataclass(frozen=True)
-class SchemaDiff:
-    add: tuple[pa.Field, ...]        # colunas anuláveis novas
-    relax: tuple[str, ...]           # NOT NULL relaxado
-    checks: tuple[str, ...]          # CHECK novos
-    description: str | None          # o comentário da tabela quando difere da description do Delta
-    comments: tuple[str, ...]        # as colunas cujo comentário difere do do esquema Delta
-    destructive: tuple[str, ...]     # NOT NULL nova em tabela com dados, renomeação, remoção, mudança de tipo
-
-
-def create_table(uri: str, table: sa.Table, storage: Storage) -> DeltaTable: ...
-def open_table(uri: str, storage: Storage, version: int | None = None) -> DeltaTable: ...
-def max_key(dt: DeltaTable, column: str) -> int: ...
-def commit_metadata(execution_id: str, input_versions: Mapping[str, int], snapshot: str | None = None) -> dict[str, str]: ...
-def publish_partition(uri: str, table: sa.Table, value: str | None, data: object, metadata: Mapping[str, str], storage: Storage,
-                      columns_without_min_max: Collection[str] = ()) -> int: ...
-def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value: str | None, metadata: Mapping[str, str], storage: Storage,
-                   expected_rows: int | None = None, columns_without_min_max: Collection[str] = ()) -> int: ...
-def read_back(uri: str, table: sa.Table, value: str | None, expected_rows: int, storage: Storage) -> None: ...
-def schema_diff(table: sa.Table, dt: DeltaTable) -> SchemaDiff: ...
-def reconcile(uri: str, table: sa.Table, storage: Storage) -> SchemaDiff: ...
-def rewrite(uri: str, table: sa.Table, storage: Storage, expressions: Mapping[str, str] | None = None) -> int: ...
-def copy_manifest(uri: str, version: int, partitions: list[str] | None, destination: str, storage: Storage) -> str: ...
-def version_diff(uri: str, published: int, current: int, table: sa.Table, storage: Storage) -> set[str | None]: ...
-def read_snapshots(storage: Storage, environment: str) -> tuple[dict, str]: ...
-def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[str, int]) -> dict: ...
-def vacuum_keeping_snapshots(uri: str, control: Mapping, table_name: str, storage: Storage, retention_hours: int = 9600, apply: bool = False, full: bool = False) -> list[str]: ...
-def compact(uri: str, table: sa.Table, partitions: list[str], storage: Storage) -> dict: ...
-def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int: ...
-def export_snapshot(uri: str, table: sa.Table, destination: str, storage: Storage, version: int | None = None, mode: Literal["copy", "rewrite"] = "copy") -> list[str]: ...
-```
-
-O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `ExportMode` é o nome de
-`Literal["register", "rewrite"]` nas etapas 4 a 7, a flag de como uma partição entra no Delta.
-`version_diff` devolve `None` no conjunto quando a tabela não tem partição e foi alterada.
+bucket por `-m s3`, e os de `test_storage.py` que não gravam sem variável: substituição da partição
+e idempotência, conflito entre dois escritores, as recusas do registro e a releitura que desfaz o
+commit, reconciliação aditiva e recusa da destrutiva, `rewrite` num commit sem predicado com a
+versão anterior legível, `keep_versions`, `export_snapshot` nos dois modos, o manifesto, a cópia
+profunda, realocação da pasta e a escrita condicional do arquivo de controle. Provas de conceito:
+`test_stdlib.py` (`test_storage_uris`, `test_exclusive_create_atomic_replace_and_fingerprint`,
+`test_json_control_file_and_commit_metadata`, `test_group_log_actions_by_partition`,
+`test_prepare_environment`), `test_s3.py` (`test_conditional_put`, `test_boto3_list_copy_delete`, e
+`test_delta_rs_storage_options_fallback`, que mede a forma das credenciais em `storage_options` sem
+que a biblioteca a use), `test_local.py` (`test_commit_is_atomic_on_disk`, `test_folder_relocates`)
+e `test_deltalake.py` inteiro: criação idempotente, predicado e nulidade, evolução com
+`drop_column_not_null` (recebe o nome da coluna), `restore`, `AddAction`, o que
+`create_write_transaction` não confere (caminho, estatística, esquema do arquivo) e o `overwrite`
+com `partition_filters`, a compactação que normaliza arquivos de outro escritor, `vacuum`,
+`version_diff` pelas ações `add` e `remove` com `dataChange` do log, compactação e checkpoint,
+exportação por cópia e a reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do
+DuckDB registrada num commit `overwrite` com esquema novo e o mínimo e o máximo dos tipos de
+`stat_converter`, que o DuckDB usa para podar; `test_parallel.py` (quatro tabelas lidas em paralelo,
+escritas em paralelo por tabela e por mês da mesma tabela com o conflito no mesmo mês, e `max_key`
+pelas estatísticas com a varredura de reserva); `tests/test_migrate_parquet_to_delta.py` (o registro
+com as estatísticas dos quatro tipos).
 
 ## Estratégia de implementação
 
-- **A forma do código** segue o `CLAUDE.md`, não a dos rascunhos abaixo, que são provas densas de
-  2026-09-21: laços explícitos no lugar das compreensões com condição composta, uma função por
-  conferência de `register_files` (`_check_file_size`, `_check_footer_schema`,
-  `_check_partition_path`, `_check_row_counts`), o `SchemaDiff` montado por laço e não pelas
+- **A forma do código** segue o `CLAUDE.md`, não a dos rascunhos de 2026-09-21, que eram provas
+  densas: laços explícitos no lugar das compreensões com condição composta, uma função por
+  conferência de `register_files` (`_check_relative_path`, `_check_file_size`,
+  `_check_footer_schema`, `_check_partition_path`, `_check_file_rows`, `_check_row_counts`), o
+  `SchemaDiff` montado por laço e não pelas
   expressões condicionais que escolhem a lista e o valor ao mesmo tempo, dicionários de ação
   montados em variáveis nomeadas, e a versão lida do objeto `DeltaTable` que escreveu, nunca de
   `DeltaTable(uri).version()`, que devolve o último commit do log, talvez de outro escritor
@@ -255,16 +163,18 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   devolve o texto e a impressão para a escrita seguinte. É o único uso do `boto3` na etapa, que o
   leva às dependências de execução fixado em 1.43.98, a versão do `uv.lock`, e roda
   `prepare_offline.sh` de novo.
-- **`storage_options`** monta as opções do delta-rs a cada chamada: `AWS_REGION` de
-  `AWS_REGION` ou `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL` quando presente, `max_retries` e
-  `retry_timeout` para uma rede morta falhar em segundos, e as chaves de SSE quando configuradas.
-  Credencial alguma entra no dicionário: a cadeia padrão do delta-rs as resolve e as renova enquanto
-  a execução segura o `DeltaTable`, que nasce com as opções recebidas; um trio congelado do `boto3`
-  expiraria em cerca de uma hora no meio de uma execução longa e circularia num dicionário que um
-  log ou uma mensagem de exceção imprime. A cadeia depende do `NO_PROXY` que `prepare_environment`
-  exporta, e o ambiente alvo não tem proxy ([`POC.md`](POC.md), leitura de 2026-09-21).
-  `test_delta_rs_storage_options_fallback` continua medindo a forma das credenciais congeladas, para
-  o dia em que um ambiente quebrar a cadeia.
+- **`storage_options`** monta as opções do delta-rs a cada chamada: `AWS_REGION` de `AWS_REGION` ou
+  `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL` quando presente, `max_retries` 3 e `retry_timeout` 10 s,
+  e as chaves de SSE quando configuradas. Contra um endereço que não responde, o delta-rs desistiu
+  em 10,3 s com essas opções, contra 57,0 s no padrão, e contra uma porta fechada em 0,6 s;
+  `max_retries` 1 deu os mesmos 10,3 s (leitura de 2026-09-23, [`POC.md`](POC.md)), e as três
+  tentativas cobrem o erro passageiro do S3 dentro dos 10 s. Credencial alguma entra no dicionário:
+  a cadeia padrão do delta-rs as resolve e as renova enquanto a execução segura o `DeltaTable`, que
+  nasce com as opções recebidas; um trio congelado do `boto3` expiraria em cerca de uma hora no meio
+  de uma execução longa e circularia num dicionário que um log ou uma mensagem de exceção imprime. A
+  cadeia depende do `NO_PROXY` que `prepare_environment` exporta, e o ambiente alvo não tem proxy
+  ([`POC.md`](POC.md), leitura de 2026-09-21). `test_delta_rs_storage_options_fallback` continua
+  medindo a forma das credenciais congeladas, para o dia em que um ambiente quebrar a cadeia.
 - **`duckdb_setup`** roda `LOAD httpfs; LOAD delta; LOAD aws` e cria o secret `credential_chain`
   com a região e o endpoint quando a raiz é S3, e só `LOAD delta` na pasta local; aplica
   `http_proxy`, `http_proxy_username` e `http_proxy_password` separados de `HTTP_PROXY` como
@@ -295,9 +205,10 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   arquivos" com um `pq.ParquetFile` por arquivo (um `GET` de rodapé no S3, pelo `pyarrow.fs` do
   `Storage`), cada conferência numa função que levanta `RegistrationRefused`; depois, um único
   `create_write_transaction(mode="overwrite", partition_filters=[(coluna, "=", valor)])` com uma
-  `AddAction` por arquivo. A tabela de tipos físicos admitidos por tipo lógico é a do rascunho
-  (`INT96` e `INT64` para `timestamp_ntz`, `FIXED_LEN_BYTE_ARRAY` e `INT64` para `decimal`, `INT32` e
-  `INT64` para `long`). O mínimo e o máximo entram das colunas inteiras, de data, `Double` e
+  `AddAction` por arquivo. A tabela de tipos físicos admitidos por tipo lógico é a do rascunho,
+  com o `INT32` do decimal de até 9 dígitos que o DuckDB grava (`INT96` e `INT64` para
+  `timestamp_ntz`, `FIXED_LEN_BYTE_ARRAY`, `INT64` e `INT32` para `decimal`, `INT32` e `INT64` para
+  `long`). O mínimo e o máximo entram das colunas inteiras, de data, `Double` e
   `String`, os quatro tipos que transcrevem exato, e `nullCount` de todas as que o rodapé traz. O
   inteiro converte por `int`, a data e o texto saem como o texto do `RETURN_STATS`, e o `Double` por
   `float`, que faz o percurso de ida e volta na representação mais curta.
@@ -306,13 +217,16 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   ambiente, a versão relida é a do próprio commit. O commit confere conflito como o
   `write_deltalake`: um segundo registro da mesma partição, a partir da versão que o primeiro
   substituiu, é `CommitFailedError`, e a primitiva o converte em `ExecutionConflict`.
-- **`read_back`** roda depois do commit, numa conexão DuckDB própria configurada por
-  `duckdb_setup`, como `rewrite`: `count(*)` e mínimo e máximo da chave por partição no delta-rs
-  (`to_pyarrow_dataset`) e no `delta_scan` do DuckDB; uma diferença chama `restore(version - 1)` e
-  levanta `RegistrationRefused`.
+- **`read_back`** roda depois do commit, numa conexão de `storage.duckdb_connect`, como `rewrite`:
+  `count(*)` e mínimo e máximo de cada coluna da primeira chave do modelo por partição no delta-rs
+  (o scanner de `to_pyarrow_dataset`, lote a lote, com a memória de um lote) e no `delta_scan` do
+  DuckDB, a soma de `numRecords` das ações `add` da partição, e o mínimo e o máximo que o log
+  registra da chave, nos tipos exatos, como limites dos lidos: um máximo registrado abaixo do lido
+  podaria o arquivo que tem a linha. Uma diferença chama `restore(version - 1)` e levanta
+  `RegistrationRefused` com as leituras.
 - **`version_diff`** lê os arquivos `_delta_log/<versão>.json` de `published + 1` a `current` pelo
   `Storage` e recolhe `partitionValues` das ações `add` e `remove` com `dataChange` verdadeiro; a
-  compactação grava `dataChange` falso e não conta (rascunho abaixo), o que evita recarregar no
+  compactação grava `dataChange` falso e não conta (rascunho de 2026-09-21), o que evita recarregar no
   Redshift uma partição só compactada. Um arquivo do log ausente é `LogUnavailable`, com a
   instrução de publicar a tabela inteira: `create_table` fixa `delta.logRetentionDuration` em 3.650
   dias, e a limpeza que apagaria o arquivo também torna ilegível a versão publicada ([`delta.md`](delta.md),
@@ -328,18 +242,22 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   `set_table_description` e o da coluna para `set_column_metadata`, cada um num commit só de
   `metaData`, e a comparação lê a chave `comment` do campo, porque o esquema Arrow traz o
   `PARQUET:field_id` que o Delta não tem.
-- **`rewrite`** abre uma conexão DuckDB própria, configurada por `duckdb_setup`, roda `COPY (SELECT
-  <expressão de cada coluna do contrato, sem a de partição> FROM delta_scan(uri)) TO uri (FORMAT
-  parquet, PARTITION_BY (<coluna>), APPEND true, FILENAME_PATTERN 'rewrite_{uuid}', RETURN_STATS)`
+- **`rewrite`** abre uma conexão de `storage.duckdb_connect`, roda `COPY (SELECT <expressão de cada
+  coluna do contrato> FROM delta_scan(uri, version := <atual>)) TO uri (FORMAT parquet, PARTITION_BY
+  (<coluna>), APPEND true, FILENAME_PATTERN 'rewrite_{uuid}', RETURN_STATS)`, que tira a coluna de
+  partição dos arquivos, ou `TO '<uri>/rewrite_<uuid>.parquet'` numa tabela sem partição,
   e registra tudo num `create_write_transaction(mode="overwrite", schema=delta_schema(table))`; é o
   caminho medido em [`delta.md`](delta.md) com memória constante, e a medição de lá renomeou
   `valor` por `valor AS valor_bruto` no `SELECT`. A expressão de cada coluna é
   `CAST(<expressão> AS <sql_type(coluna, "duckdb")>) AS "<coluna>"`, com a expressão de
   `expressions` ou o nome da coluna entre aspas: a renomeação é `{"valor_bruto": '"valor"'}`, a
   coluna `NOT NULL` nova leva o seu valor (`{"canal": "'web'"}`), a mudança de tipo sai do `CAST`, e
-  a remoção é a coluna que o contrato não tem mais. Uma coluna do contrato ausente da versão atual
-  e fora de `expressions` falha no `COPY`, antes de qualquer commit. As ações passam pelas mesmas
-  funções de `register_files`, e `read_back` roda depois.
+  a remoção é a coluna que o contrato não tem mais. Uma chave de `expressions` fora do contrato é
+  `ContractError`, e uma coluna do contrato ausente da versão atual e fora de `expressions` falha
+  no DuckDB (`BinderException`), antes de qualquer commit. Uma consulta sobre o mesmo `SELECT`
+  conta os não finitos de cada coluna `Double` por partição, e essas colunas saem sem mínimo e
+  máximo no log de cada arquivo da partição (issue #59). As ações passam pelas mesmas conferências
+  de `register_files`, e `read_back` roda depois, na tabela inteira.
 - **`snapshot`** lê o arquivo de controle com a impressão, recusa um nome repetido, grava com
   `if_match` (ou `if_none_match` no primeiro) e devolve o controle novo; `ConflictError` sobe.
 - **`vacuum_keeping_snapshots`** monta `keep_versions` das versões do controle para a tabela e
@@ -348,8 +266,10 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   versões intermediárias: a retenção de 400 dias é a janela em que toda versão continua legível.
 - **`compact`** é `optimize.compact(partition_filters=[(coluna, "in", partitions)])`; a operação
   com um só arquivo na partição não commita, e o chamador lê a versão antes e depois.
-- **`deep_copy`** grava `write_deltalake(destination, DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader(), mode="overwrite", partition_by=...)`,
-  nunca `to_pyarrow_table`, pela regra de encerramento de [`PLAN.md`](PLAN.md).
+- **`deep_copy`** grava `write_deltalake(destination, DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader(), mode="error", partition_by=..., name=..., description=..., configuration=...)`,
+  nunca `to_pyarrow_table`, pela regra de encerramento de [`PLAN.md`](PLAN.md); o esquema do
+  dataset leva a nulidade e os comentários da versão (leitura de 2026-09-23), e `mode="error"`
+  recusa um destino que já tem tabela.
 - **`export_snapshot`** copia os arquivos que `get_add_actions()` lista no layout
   `<coluna>=<valor>/` por `Storage.copy` (`mode="copy"`), ou reescreve pelo `COPY` particionado do
   DuckDB (`mode="rewrite"`); um snapshot antigo usa `DeltaTable(uri, version=v)`.
@@ -363,7 +283,7 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
 | `create_table` | Modelo aprovado por `check_models`. | Tabela na versão 0 com o esquema Delta do contrato, a partição, as retenções, o nome e o comentário da tabela em `description`; a chamada repetida não muda a versão. |
 | `publish_partition` | `data` passado por `cast`, com a coluna de partição; a versão atual da tabela sem dados novos desde a fixada (conferido por `Execution.publish`); o valor validado pela etapa 6. | Uma versão nova com os arquivos da partição e os metadados de commit, devolvida pelo objeto que escreveu; as demais partições intactas; `ExecutionConflict` sem commit no conflito. |
 | `register_files` | Arquivos gravados dentro da pasta da tabela, com o rodapé legível. | Um commit `overwrite` da partição com uma ação por arquivo, ou `RegistrationRefused` sem commit e com o arquivo e a conferência na mensagem. |
-| `read_back` | Um commit recém-feito. | Contagem e extremos da chave iguais nos dois leitores, ou `restore(version - 1)` e `RegistrationRefused`. |
+| `read_back` | Um commit recém-feito. | Contagem igual nos dois leitores, no log e em `expected_rows`, extremos da chave iguais nos dois leitores e dentro dos limites do log, ou `restore(version - 1)` e `RegistrationRefused`. |
 | `reconcile` | Tabela existente. | O diff aditivo aplicado em commits de metadados, comentários incluídos; `SchemaDiffRefused` sem alteração no destrutivo; a versão anterior continua legível com o esquema antigo. |
 | `rewrite` | Ordem explícita fora da execução mensal; em `expressions`, a expressão de toda coluna do contrato que a versão atual não tem. | Um commit com `remove` de todos os arquivos vivos, `add` dos novos e `metaData`; memória constante; a releitura feita. |
 | `version_diff` | `published <= current`; os arquivos do log das duas versões presentes. | O conjunto das partições com dados alterados; vazio para `published == current` e para uma compactação; `LogUnavailable` quando um arquivo do log falta. |
@@ -377,278 +297,48 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
-| Armazenamento por URI | `test_storage_for_uri` (sem gravar e sem rede) | `s3://`, `file://` e caminho dão o sistema de arquivos certo (`S3FileSystem` com a região da variável, `LocalFileSystem`) e o caminho nele; outra URI é erro. |
-| Escrita condicional | `test_write_text_exclusive_create_and_if_match` | A segunda criação exclusiva e o `if_match` velho são `ConflictError`; o conteúdo final é o da escrita que venceu. |
-| Listagem, cópia e exclusão | `test_list_copy_delete` | `list_files` exclui `_delta_log/`; `copy` preserva bytes; `delete` de caminho ausente não falha. |
-| Opções do delta-rs | `test_storage_options_resolved_per_call` | Duas chamadas devolvem dicionários novos; a região vem da variável; `max_retries` presente; nenhuma chave de credencial no dicionário. |
-| Ambiente | `test_prepare_environment` | Os casos de `test_stdlib.py`, com `NO_PROXY` vazia tratada como ausente. |
+| Armazenamento por URI | `test_storage_for_uri` (sem gravar e sem rede) | `s3://`, `file://` e caminho dão o sistema de arquivos certo (`S3FileSystem` com a região da variável, `LocalFileSystem`) e o caminho nele; outra URI e o S3 sem região são erro. |
+| Caminhos | `test_paths_relative_to_the_root` (sem gravar) | `join` sem barras nas pontas, `relative` da URI sob a raiz e a recusa da de fora, `uri_of`. |
+| Escrita condicional | `test_write_text_exclusive_create_and_if_match` | A segunda criação exclusiva e o `if_match` velho são `ConflictError`; o conteúdo final é o da escrita que venceu; o arquivo ausente é `FileNotFoundError`. |
+| Listagem, cópia e exclusão | `test_list_copy_delete` | `list_files` desce as pastas e exclui `_delta_log/`; `copy` preserva bytes; `delete` de caminho ausente não falha. |
+| Opções do delta-rs | `test_storage_options_resolved_per_call` (sem gravar) | Duas chamadas devolvem dicionários novos; a região vem da variável; `max_retries` presente; as chaves de SSE configuradas; nenhuma chave de credencial no dicionário. |
+| Ambiente | `test_prepare_environment` (sem gravar) | Os casos de `test_stdlib.py`, com `NO_PROXY` vazia tratada como ausente. |
+| Proxy do DuckDB | `test_duckdb_proxy_settings_without_credentials_in_the_address` (sem gravar) | O endereço sem as credenciais, o usuário e a senha das variáveis ou do endereço, sem URL-encode. |
+| Conexão do DuckDB | `test_duckdb_connect_loads_delta` | A extensão `delta` carregada da pasta configurada, sem instalação automática, e o secret no S3. |
 | Criação | `test_create_table_is_idempotent` | Versão 0 nas duas chamadas; esquema, partição, retenções, nome e o comentário da tabela em `description` lidos do log. |
-| Substituição | `test_publish_partition_replaces_only_its_partition` | Duas partições, a segunda republicada: a primeira intacta, uma versão por chamada, os metadados no `history`. |
-| Versão devolvida | `test_publish_partition_returns_its_own_version` | Com o commit de outro escritor entre a abertura e a escrita, a versão devolvida é a do próprio commit. |
-| Sem partição | `test_publish_partition_without_partition_replaces_the_table` | `value=None` troca a tabela inteira. |
-| Conflito | `test_two_writers_on_the_same_partition_conflict` | Dois `overwrite` da mesma partição na mesma versão: o segundo é `ExecutionConflict`; partições distintas passam. |
-| Registro | `test_register_files_registers_an_unload_like_file` | Um arquivo `INT96` e `FIXED_LEN_BYTE_ARRAY` registrado; os dois leitores devolvem as linhas e `timestamp[us]`. |
-| Conferências | `test_register_files_refuses_each_defect`, parametrizado | Tamanho, contagem, partição do caminho, coluna `NOT NULL` ausente, tipo físico fora dos admitidos e `expected_rows` diferente; a versão não muda e o arquivo fica órfão. |
-| Releitura | `test_read_back_restores_on_a_difference` | Uma estatística falsa injetada faz `read_back` voltar a versão. |
-| `Double` não finito | `test_nonfinite_double_columns_leave_min_max_out` | Uma coluna em `columns_without_min_max` numa partição: `publish_partition` grava o rodapé e o log sem o mínimo e o máximo dela, `register_files` grava o log sem os dois, a outra partição sai com eles, e o `delta_scan` devolve a linha do `NaN` num filtro por intervalo e não abre o arquivo da outra partição. |
-| Estatísticas | `test_registered_stats_prune_files` | `EXPLAIN ANALYZE` do DuckDB mostra `Scanning Files: 0/n` para uma chave acima do máximo registrado; as colunas `decimal` e `timestamp` entram sem mínimo e máximo. |
-| Reconciliação aditiva | `test_reconcile_adds_nullable_column_and_relaxes_not_null` | A coluna entra no fim; as linhas antigas leem nulo; a versão anterior lê o esquema antigo. |
+| Substituição | `test_publish_partition_replaces_only_its_partition` | Duas partições, a segunda republicada: a primeira intacta, uma versão por chamada, os metadados no `history`; o valor fora da regra e os dados sem a coluna de partição recusados antes de gravar. |
+| Versão devolvida | `test_publish_partition_returns_its_own_version` | Com o commit de outro escritor entre a abertura e a escrita, a versão devolvida é a do próprio commit; os dados chegam por `__arrow_c_stream__`. |
+| Sem partição | `test_publish_partition_without_partition_replaces_the_table` | `value=None` troca a tabela inteira; um valor numa tabela sem partição é recusado. |
+| Conflito | `test_two_writers_on_the_same_partition_conflict` | Dois `overwrite` da mesma partição na mesma versão, por `publish_partition` e por `register_files`: o segundo é `ExecutionConflict`; partições distintas passam. |
+| Registro | `test_register_files_registers_an_unload_like_file` | Um arquivo `INT96` e `FIXED_LEN_BYTE_ARRAY` registrado; os dois leitores devolvem as linhas e `timestamp[us]`; o mínimo e o máximo da chave na ação. |
+| Conferências | `test_register_files_refuses_each_defect`, parametrizado | Tamanho, linhas, partição do caminho, `expected_rows` diferente, caminho absoluto, coluna do contrato ausente, tipo físico fora dos admitidos, coluna de partição dentro do arquivo e colunas fora de ordem; a versão não muda e o arquivo fica órfão. |
+| Releitura | `test_read_back_restores_on_a_difference` | Um máximo falso da chave, abaixo do real, faz `read_back` voltar a versão por `restore`. |
+| `Double` não finito | `test_nonfinite_double_columns_leave_min_max_out` | Uma coluna em `columns_without_min_max` numa partição: `publish_partition` grava o rodapé e o log sem o mínimo e o máximo dela, `register_files` grava o log sem os dois (o infinito inclusive), a outra partição sai com eles, e o `delta_scan` devolve as linhas do `NaN` e do infinito num filtro por intervalo e não abre o arquivo da outra partição. |
+| Estatísticas | `test_file_from_return_stats_and_registered_stats_prune` | O arquivo do `COPY ... RETURN_STATS` do DuckDB entra com o mínimo e o máximo dos tipos exatos; `EXPLAIN ANALYZE` mostra `Scanning Files: 0/n` para uma chave acima do máximo e um texto acima do máximo; as colunas `decimal` e `timestamp` entram sem mínimo e máximo. |
+| Chave máxima | `test_max_key_reads_statistics_and_scans_without_them` | O máximo das estatísticas, a varredura quando um arquivo registrado não as tem, 0 na tabela vazia. |
+| Reconciliação aditiva | `test_reconcile_adds_nullable_column_and_relaxes_not_null` | A coluna entra no fim, com o comentário; as linhas antigas leem nulo; a versão anterior lê o esquema antigo; a segunda chamada não commita. |
 | Documentação | `test_reconcile_syncs_description_and_comments` | Um comentário de tabela e um de coluna alterados no modelo entram por commit de `metaData`; a segunda chamada não commita. |
-| Reconciliação destrutiva | `test_reconcile_refuses_destructive_diff` | Tipo trocado, coluna removida e `NOT NULL` nova em tabela com dados são `SchemaDiffRefused`, sem commit. |
-| Reescrita | `test_rewrite_in_one_commit_keeps_previous_version_readable` | Um commit, o esquema novo, as somas iguais e a versão anterior legível; uma coluna renomeada por `expressions` lê os valores da antiga, e uma coluna do contrato ausente e fora de `expressions` falha sem commit. |
-| Diferença de versões | `test_version_diff_counts_data_changes_only` | Substituição e remoção contam, compactação não, `published == current` dá vazio. |
+| Reconciliação destrutiva | `test_reconcile_refuses_destructive_diff`, parametrizado | Tipo trocado, coluna removida, `NOT NULL` nova e `NOT NULL` numa coluna anulável, numa tabela com dados, são `SchemaDiffRefused`, sem commit. |
+| Reescrita | `test_rewrite_in_one_commit_keeps_previous_version_readable` | Um commit, o esquema novo, as linhas iguais e a versão anterior legível; uma coluna renomeada por `expressions` lê os valores da antiga; o `Double` com `NaN` sem mínimo e máximo na partição dele; uma coluna do contrato ausente e fora de `expressions` falha sem commit. |
+| Diferença de versões | `test_version_diff_counts_data_changes_only` | Substituição e remoção contam, compactação e reconciliação não, `published == current` dá vazio; `{None}` na tabela sem partição. |
 | Log ausente | `test_version_diff_refuses_a_cleaned_log` | Um arquivo do log apagado entre as duas versões dá `LogUnavailable`, com a publicação completa na mensagem. |
 | Snapshot | `test_snapshot_control_file_is_written_conditionally` | O nome repetido é erro; a escrita concorrente é `ConflictError`. |
 | `vacuum` | `test_vacuum_keeps_snapshot_versions` | Com retenção zero e `keep_versions`, a versão do snapshot lê e a intermediária falha; dentro da retenção nada é listado. |
 | Compactação | `test_compact_before_snapshot` | Arquivos pequenos de uma partição virando um; a partição com um arquivo não commita. |
-| Exportação | `test_export_snapshot_copy_and_rewrite` | Os dois modos produzem `<coluna>=<valor>/` com as mesmas linhas; `copy` não lê dados. |
-| Realocação | `test_folder_relocates` | A pasta copiada abre na mesma versão, nos dois leitores. |
+| Exportação | `test_export_snapshot_copy_and_rewrite` | Os dois modos produzem `<coluna>=<valor>/` com as mesmas linhas; `copy` copia só o que o log lista; uma versão antiga exporta o que ela tinha. |
+| Manifesto | `test_copy_manifest_lists_the_files_of_a_version` | A URL, o tamanho e `mandatory` de cada arquivo da versão nas partições pedidas, e de todos sem elas. |
+| Cópia e realocação | `test_deep_copy_and_relocation` | A cópia profunda nasce na versão 0 com a nulidade do esquema; a pasta copiada abre na mesma versão nos dois leitores. |
 
-## Rascunhos executados
+## A implementação
 
-O rascunho rodou em 2026-09-21 com as versões fixadas, numa pasta temporária: a camada Delta com o
-registro de um arquivo gravado como o `UNLOAD` grava (`INT96`, `FIXED_LEN_BYTE_ARRAY`), as recusas,
-`version_diff` pelo log e a reconciliação. O armazenamento sobre `pyarrow.fs` é o `Location` de
-`scripts/migrate_parquet_to_delta.py`, e a escrita condicional na pasta local está em
-`test_stdlib.py::test_exclusive_create_atomic_replace_and_fingerprint`. O `delta_scan` precisa da extensão `delta` na pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`,
-ou em `.duckdb/` da raiz do repositório. Eles são o registro do que rodou e provam o comportamento
-das APIs; a forma do módulo é a da primeira entrada da seção "Estratégia de implementação", e a
-versão depois de cada escrita vem do objeto que escreveu, não de `DeltaTable(uri).version()`.
-
-```python
-"""Etapa 3: create_table, publish_partition, register_files com as conferências, version_diff pelo log e a reconciliação."""
-import dataclasses
-import datetime as dt
-import decimal
-import json
-import os
-import tempfile
-import time
-from pathlib import Path
-
-import duckdb
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
-from deltalake import CommitProperties, DeltaTable, Schema as DeltaSchema, write_deltalake
-from deltalake.exceptions import CommitFailedError
-from deltalake.schema import Field
-from deltalake.transaction import AddAction
-
-PARTITION, SOURCE = "data_str", "data"
-CONTRACT = pa.schema([
-    pa.field("id_operacao", pa.int64(), nullable=False), pa.field(SOURCE, pa.date32(), nullable=False),
-    pa.field("valor", pa.decimal128(18, 2), nullable=False), pa.field("carimbo", pa.timestamp("us")),
-    pa.field("descricao", pa.string()), pa.field(PARTITION, pa.string(), nullable=False)])
-PHYSICAL_ALLOWED = {"timestamp[us]": {"INT64", "INT96"}, "decimal128(18, 2)": {"INT64", "FIXED_LEN_BYTE_ARRAY"}, "int64": {"INT64", "INT32"},
-                    "date32[day]": {"INT32"}, "string": {"BYTE_ARRAY"}}
-
-
-class ExecutionConflict(Exception):
-    """Outra execução gravou a mesma partição ou avançou a tabela: CommitFailedError do delta-rs."""
-
-
-class RegistrationRefused(Exception):
-    """Uma conferência de register_files reprovou; nada foi commitado e o arquivo fica órfão até vacuum(full=True)."""
-
-
-@dataclasses.dataclass(frozen=True)
-class RegisteredFile:
-    """Um arquivo que outro escritor gravou dentro da pasta da tabela, como o COPY do DuckDB ou o UNLOAD o descrevem."""
-    path: str                      # relativo à pasta da tabela, como o log guarda
-    size: int
-    rows: int
-    stats: dict[str, dict]         # {"min": {col: v}, "max": {col: v}, "null_count": {col: n}}, tipados; ausentes são omitidos
-
-
-def create_table(uri: str, schema: pa.Schema, partition_by: str | None, name: str) -> DeltaTable:
-    return DeltaTable.create(uri, DeltaSchema.from_arrow(schema), partition_by=[partition_by] if partition_by else None, name=name, mode="ignore",
-                             configuration={"delta.logRetentionDuration": "interval 3650 days", "delta.deletedFileRetentionDuration": "interval 400 days"})
-
-
-def commit_metadata(execution_id: str, input_versions: dict[str, int], snapshot: str | None = None) -> dict[str, str]:
-    metadata = {"serialize_db_execution_id": execution_id, "serialize_db_input_versions": json.dumps(input_versions, sort_keys=True)}
-    return metadata | ({"serialize_db_snapshot": snapshot} if snapshot else {})
-
-
-def publish_partition(uri: str, partition_by: str | None, value: str | None, data, metadata: dict[str, str]) -> int:
-    """overwrite da partição (ou da tabela, sem partição) num commit com os metadados; devolve a versão nova."""
-    predicate = f"{partition_by} = '{value}'" if partition_by else None
-    try:
-        write_deltalake(uri, data, mode="overwrite", predicate=predicate, commit_properties=CommitProperties(custom_metadata=metadata))
-    except CommitFailedError as error:
-        raise ExecutionConflict(f"{uri} partição {value}: {error}") from None
-    return DeltaTable(uri).version()
-
-
-def register_files(uri: str, table: DeltaTable, files: list[RegisteredFile], partition_by: str | None, value: str | None,
-                   metadata: dict[str, str], expected_rows: int | None = None) -> int:
-    """As conferências da etapa 3 sobre o rodapé de cada arquivo, depois um único commit overwrite da partição."""
-    contract = pa.schema(table.schema())
-    total = 0
-    for file in files:
-        full = os.path.join(uri, file.path)
-        if not os.path.exists(full) or os.path.getsize(full) != file.size:                                   # 1. existe, com o tamanho da ação
-            raise RegistrationRefused(f"{file.path}: ausente ou com tamanho diferente de {file.size}")
-        footer = pq.ParquetFile(full)
-        physical = {footer.schema.column(i).name: footer.schema.column(i).physical_type for i in range(len(footer.schema))}
-        for field in contract:                                                                                 # 2. esquema nome a nome
-            if field.name == partition_by:
-                continue
-            if field.name not in physical:
-                raise RegistrationRefused(f"{file.path}: coluna {field.name} do contrato ausente do arquivo")
-            if physical[field.name] not in PHYSICAL_ALLOWED[str(field.type)]:
-                raise RegistrationRefused(f"{file.path}: {field.name} em {physical[field.name]}, fora de {PHYSICAL_ALLOWED[str(field.type)]}")
-        if partition_by and f"{partition_by}={value}" not in file.path.split("/"):                             # 3. a partição do caminho
-            raise RegistrationRefused(f"{file.path}: caminho fora da partição {partition_by}={value}")
-        if footer.metadata.num_rows != file.rows:                                                              # 4. as linhas do rodapé
-            raise RegistrationRefused(f"{file.path}: {footer.metadata.num_rows} linhas no rodapé, {file.rows} declaradas")
-        total += file.rows
-    if expected_rows is not None and total != expected_rows:
-        raise RegistrationRefused(f"{total} linhas nos arquivos, {expected_rows} na fonte")
-    actions = [AddAction(path=f.path, size=f.size, partition_values={partition_by: value} if partition_by else {}, modification_time=int(time.time() * 1000),
-                         data_change=True, stats=json.dumps({"numRecords": f.rows, "minValues": f.stats.get("min", {}), "maxValues": f.stats.get("max", {}),
-                                                              "nullCount": f.stats.get("null_count", {})}, default=str)) for f in files]
-    table.create_write_transaction(actions, mode="overwrite", schema=table.schema(), partition_by=[partition_by] if partition_by else None,
-                                   partition_filters=[(partition_by, "=", value)] if partition_by else None, commit_properties=CommitProperties(custom_metadata=metadata))
-    return DeltaTable(uri).version()
-
-
-def version_diff(uri: str, published: int, current: int) -> set[str]:
-    """As partições com add ou remove de dados entre as duas versões, pelo log; a compactação (dataChange falso) não conta."""
-    touched = set()
-    for version in range(published + 1, current + 1):
-        for line in Path(uri, "_delta_log", f"{version:020d}.json").read_text().splitlines():
-            action = json.loads(line)
-            for kind in ("add", "remove"):
-                if kind in action and action[kind].get("dataChange", True):
-                    touched.add(action[kind].get("partitionValues", {}).get(PARTITION))
-    return touched - {None}
-
-
-def schema_diff(contract: pa.Schema, current: pa.Schema) -> dict[str, list]:
-    diff = {"add": [], "relax": [], "destructive": []}
-    for field in contract:
-        existing = current.field(field.name) if field.name in current.names else None
-        if existing is None:
-            (diff["destructive"] if not field.nullable else diff["add"]).append(field.name if field.nullable else f"{field.name} NOT NULL nova")
-        elif existing.type != field.type:
-            diff["destructive"].append(f"{field.name}: {existing.type} -> {field.type}")
-        elif not existing.nullable and field.nullable:
-            diff["relax"].append(field.name)
-    diff["destructive"] += [f"{name} removida" for name in current.names if name not in contract.names]
-    return diff
-
-
-def reconcile(uri: str, contract: pa.Schema) -> dict[str, list]:
-    table = DeltaTable(uri)
-    diff = schema_diff(contract, pa.schema(table.schema()))
-    if diff["destructive"]:
-        raise ValueError(f"diff destrutivo, só por rewrite: {diff['destructive']}")
-    if diff["add"]:
-        table.alter.add_columns([Field(name, DeltaSchema.from_arrow(pa.schema([contract.field(name)])).fields[0].type, nullable=True) for name in diff["add"]])
-    for name in diff["relax"]:
-        table.alter.drop_column_not_null(name)
-    return diff
-
-
-def rows(value: str, start: int, n: int) -> pa.Table:
-    day = dt.date.fromisoformat(value)
-    return pa.table({"id_operacao": pa.array(range(start, start + n), pa.int64()), SOURCE: pa.array([day] * n, pa.date32()),
-                     "valor": pa.array([decimal.Decimal(k) / 100 for k in range(start, start + n)], pa.decimal128(18, 2)),
-                     "carimbo": pa.array([dt.datetime(2026, 8, 31, 12)] * n, pa.timestamp("us")), "descricao": pa.array([f"op {k}" for k in range(start, start + n)]),
-                     PARTITION: pa.array([value] * n)}, schema=CONTRACT)
-
-
-with tempfile.TemporaryDirectory() as folder:
-    uri = os.path.join(folder, "prod", "cad_operacoes")
-    create_table(uri, CONTRACT, PARTITION, "cad_operacoes")
-    assert create_table(uri, CONTRACT, PARTITION, "cad_operacoes").version() == 0      # idempotente
-    metadata = commit_metadata("exec-2026-09-05", {"cad_contratos": 88})
-    v1 = publish_partition(uri, PARTITION, "2026-07-31", rows("2026-07-31", 1, 100), metadata)
-    v2 = publish_partition(uri, PARTITION, "2026-08-31", rows("2026-08-31", 101, 100), metadata)
-    v3 = publish_partition(uri, PARTITION, "2026-08-31", rows("2026-08-31", 101, 100), metadata)   # a repetição substitui a mesma partição
-    print("versões:", v1, v2, v3, "| linhas:", DeltaTable(uri).to_pyarrow_dataset().count_rows(), "| metadados:", DeltaTable(uri).history(1)[0].get("serialize_db_execution_id"))
-
-    # Um arquivo gravado por outro escritor: INT96 no timestamp e FIXED_LEN_BYTE_ARRAY no decimal, como o UNLOAD grava.
-    external = rows("2026-09-30", 201, 50).drop_columns([PARTITION])
-    relative = f"exec-2026-09-05/{PARTITION}=2026-09-30/0000_part_00.parquet"
-    Path(uri, relative).parent.mkdir(parents=True)
-    pq.write_table(external, Path(uri, relative), use_deprecated_int96_timestamps=True)
-    physical = {pq.ParquetFile(Path(uri, relative)).schema.column(i).physical_type for i in range(6 - 1)}
-    print("tipos físicos do arquivo externo:", sorted(physical))
-    good = RegisteredFile(relative, Path(uri, relative).stat().st_size, 50, {"min": {"id_operacao": 201}, "max": {"id_operacao": 250}, "null_count": {"id_operacao": 0}})
-    v4 = register_files(uri, DeltaTable(uri), [good], PARTITION, "2026-09-30", metadata, expected_rows=50)
-    read_back = duckdb.connect(config={"extension_directory": os.environ.get("SERIALIZE_DB_DUCKDB_EXTENSIONS", ".duckdb"), "autoinstall_known_extensions": False, "autoload_known_extensions": False})
-    read_back.execute("LOAD delta")
-    print("versão", v4, "| delta-rs:", DeltaTable(uri).to_pyarrow_dataset().count_rows(), "| delta_scan:", read_back.execute(f"SELECT count(*), max(id_operacao), typeof(carimbo) FROM delta_scan('{uri}') GROUP BY ALL").fetchall())
-
-    for description, bad in {
-        "tamanho errado": dataclasses.replace(good, size=good.size + 1),
-        "linhas erradas": dataclasses.replace(good, rows=49),
-        "partição do caminho": good,                                                 # o arquivo existe sob 2026-09-30 e é registrado como 2026-10-31
-    }.items():
-        try:
-            register_files(uri, DeltaTable(uri), [bad], PARTITION, "2026-10-31" if "partição" in description else "2026-09-30", metadata)
-        except RegistrationRefused as error:
-            print(f"recusa ({description}): {str(error)[:90]}")
-    missing = external.drop_columns(["valor"])                                       # sem uma coluna NOT NULL do contrato
-    other = f"exec-2026-09-05/{PARTITION}=2026-09-30/0001_part_00.parquet"
-    pq.write_table(missing, Path(uri, other))
-    try:
-        register_files(uri, DeltaTable(uri), [RegisteredFile(other, Path(uri, other).stat().st_size, 50, {})], PARTITION, "2026-09-30", metadata)
-    except RegistrationRefused as error:
-        print(f"recusa (coluna ausente): {str(error)[:90]}")
-    print("versão depois das recusas:", DeltaTable(uri).version(), "| órfãos na pasta:", len([p for p in Path(uri).rglob('*.parquet') if '_delta_log' not in p.parts]) - len(DeltaTable(uri).file_uris()))
-
-    # version_diff pelo log: a compactação (dataChange falso) não conta, a substituição e a remoção contam.
-    write_deltalake(uri, rows("2026-08-31", 301, 10), mode="append")                                  # um segundo arquivo na partição, para haver o que compactar
-    v4b = DeltaTable(uri).version()
-    DeltaTable(uri).optimize.compact(partition_filters=[(PARTITION, "=", "2026-08-31")])
-    v5 = DeltaTable(uri).version()
-    compaction = [json.loads(line) for line in Path(uri, "_delta_log", f"{v5:020d}.json").read_text().splitlines()]
-    print("dataChange na compactação:", sorted({str(a.get("add", a.get("remove", {})).get("dataChange")) for a in compaction if "add" in a or "remove" in a}))
-    DeltaTable(uri).delete(f"{PARTITION} = '2026-07-31'")
-    v6 = DeltaTable(uri).version()
-    print("version_diff:", sorted(version_diff(uri, v3, v4)), sorted(version_diff(uri, v4b, v5)), sorted(version_diff(uri, v5, v6)), sorted(version_diff(uri, v1, v6)))
-
-    # A reconciliação: coluna anulável nova e NOT NULL relaxado entram; tipo trocado e NOT NULL nova são recusados.
-    evolved = pa.schema([f if f.name != "descricao" else pa.field("descricao", pa.string(), nullable=True) for f in CONTRACT] + [pa.field("canal", pa.string())])
-    print("reconcile:", reconcile(uri, evolved), "| colunas:", pa.schema(DeltaTable(uri).schema()).names[-2:])
-    try:
-        reconcile(uri, pa.schema([pa.field("id_operacao", pa.int32(), nullable=False), pa.field("nova", pa.int64(), nullable=False)] + [f for f in evolved if f.name != "id_operacao"]))
-    except ValueError as error:
-        print("reconcile recusa:", str(error)[:120])
-    try:
-        publish_partition(uri, PARTITION, "2026-08-31", rows("2026-08-31", 1, 10).append_column("canal", pa.array(["x"] * 10)), metadata)
-        DeltaTable(uri, version=v6)   # a versão anterior continua legível
-        print("versão anterior legível:", DeltaTable(uri, version=v6).to_pyarrow_dataset().count_rows())
-    except ExecutionConflict as error:
-        print(error)
-```
-
-Saída:
-
-```
-versões: 1 2 3 | linhas: 200 | metadados: exec-2026-09-05
-tipos físicos do arquivo externo: ['BYTE_ARRAY', 'FIXED_LEN_BYTE_ARRAY', 'INT32', 'INT64', 'INT96']
-versão 4 | delta-rs: 250 | delta_scan: [(250, 250, 'TIMESTAMP')]
-recusa (tamanho errado): exec-2026-09-05/data_str=2026-09-30/0000_part_00.parquet: ausente ou com tamanho diferente
-recusa (linhas erradas): exec-2026-09-05/data_str=2026-09-30/0000_part_00.parquet: 50 linhas no rodapé, 49 declarad
-recusa (partição do caminho): exec-2026-09-05/data_str=2026-09-30/0000_part_00.parquet: caminho fora da partição data_st
-recusa (coluna ausente): exec-2026-09-05/data_str=2026-09-30/0001_part_00.parquet: coluna valor do contrato ausente
-versão depois das recusas: 4 | órfãos na pasta: 2
-dataChange na compactação: ['False']
-version_diff: ['2026-09-30'] [] ['2026-07-31'] ['2026-07-31', '2026-08-31', '2026-09-30']
-reconcile: {'add': ['canal'], 'relax': [], 'destructive': []} | colunas: ['data_str', 'canal']
-reconcile recusa: diff destrutivo, só por rewrite: ['id_operacao: int64 -> int32', 'nova NOT NULL nova']
-versão anterior legível: 160
-```
-
-O rascunho mostra três fatos que entram no plano: o commit da compactação grava `dataChange` falso
-nas ações `add` e `remove`, o que `version_diff` usa; uma compactação de partição com um só arquivo
-não commita; e `alter.add_columns` recebe o tipo Delta do campo (`Field(name, <PrimitiveType>)`),
-não o seu texto.
+Os módulos `serialize_db.storage` e `serialize_db.delta` e os casos de `tests/test_storage.py` e
+`tests/test_delta.py` substituem a interface e o rascunho executado em 2026-09-21: as assinaturas
+e as docstrings estão no código e na documentação do `pdoc`, as exceções da etapa em
+`serialize_db.errors`, e a regra da partição em `serialize_db.schema` (`PARTITION_VALUE`,
+`check_partition_value`). O que o rascunho mostrou (o `dataChange` falso da compactação, a
+compactação de um arquivo que não commita, o tipo Delta que `add_columns` recebe) e o que a
+implementação mostrou estão em [`POC.md`](POC.md), seções "O que os rascunhos das etapas
+mostraram" e "O que a implementação da etapa 3 mostrou".
 
 ## Decisões pendentes
 

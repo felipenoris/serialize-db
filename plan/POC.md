@@ -2186,3 +2186,51 @@ ler `compiled.binds`, para o percurso do statement com `required`, como `render`
 `paramstyle="named"` e o texto pronto com os `bindparam` tipados pelo valor. O que o Redshift faz
 com a contrabarra dobrada, dentro e fora do `UNLOAD`, e os demais casos esperam a próxima execução
 da suíte no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que a implementação da etapa 3 mostrou
+
+Em 2026-09-23, no mesmo macOS (deltalake 1.6.4, DuckDB 1.5.5, pyarrow 25.0.1, boto3 1.43.98), a
+implementação de `serialize_db.storage` e `serialize_db.delta` leu a API do delta-rs, do
+`pyarrow.fs` e do DuckDB antes de cada primitiva, e os casos entraram em `tests/test_storage.py` e
+`tests/test_delta.py`.
+
+- **O retry do delta-rs contra uma rede morta.** Num subprocesso despido (`HOME` inexistente,
+  credenciais fictícias, `AWS_EC2_METADATA_DISABLED`), `DeltaTable.is_deltatable` contra o endpoint
+  `http://10.255.255.1:9`, que não responde, desistiu em 57,0 s com as opções padrão, em 10,3 s com
+  `max_retries` 1 e `retry_timeout` 10 s, e em 10,3 s com `max_retries` 3 e o mesmo `retry_timeout`;
+  contra uma porta fechada em `127.0.0.1`, em 2,4 s, 0,3 s e 0,6 s. O `retry_timeout` é o teto, e
+  as três tentativas não o alongam.
+- **O `pyarrow.fs`.** `S3FileSystem(region=...)` nasceu em 0,014 s sem rede; no `LocalFileSystem`,
+  `delete_file` de um caminho ausente levanta `FileNotFoundError`, `copy_file` para uma pasta que
+  não existe falha, e `FileSelector(..., allow_not_found=True)` de uma pasta ausente devolve a lista
+  vazia. `Storage.delete` ignora o ausente, e `Storage.copy` cria a pasta local do destino.
+- **O esquema Delta e o `alter`.** Os tipos de `arrow_schema(table)` voltaram iguais de
+  `pa.schema(dt.schema())` em todos os tipos do contrato, com a nulidade; `create` aceita
+  `description=None`; `set_column_metadata` junta a chave nova às que o campo tinha, sem apagar; o
+  `Field` de `delta_schema` entra em `add_columns` com o comentário; e três `alter` seguidos no
+  mesmo objeto commitaram as versões 2, 3 e 4, com o objeto na última.
+- **A estatística desligada no rodapé.** Com `ColumnProperties(statistics_enabled="NONE")`, a coluna
+  do arquivo do delta-rs sai com `statistics` `None` no rodapé, não com `has_min_max` falso.
+- **A cópia profunda.** O esquema do leitor de `to_pyarrow_dataset().scanner().to_reader()` leva a
+  nulidade e os comentários da versão, e `write_deltalake(..., mode="error", name=...,
+  description=..., configuration=...)` nasceu na versão 0 com os três.
+- **As estatísticas achatadas.** `get_add_actions(flatten=True)` tipa `min.<coluna>` e
+  `max.<coluna>` pelo tipo da coluna (`date32`, `decimal128(18, 2)`, `timestamp[us]`), e
+  `partition.<coluna>` sai `string not null`.
+- **As conferências do registro.** Cada uma das nove recusas de `register_files` saiu pela
+  conferência pretendida, lidas as mensagens: tamanho, linhas do rodapé, pasta da partição,
+  `expected_rows`, caminho absoluto, coluna do contrato ausente, `valor` em `BYTE_ARRAY` no lugar de
+  `DOUBLE`, a coluna de partição dentro do arquivo e as colunas fora da ordem do contrato. As duas
+  últimas conferências são da implementação: o `COPY` do Redshift lê o Parquet por posição.
+- **A releitura.** Um registro com o máximo da chave abaixo do real passou pelas conferências do
+  rodapé, e o `read_back` o pegou pelo limite do log (`o log registra 101..105, e os dados têm
+  101..110`), voltou a versão por `restore` e deixou a partição com as 10 linhas anteriores.
+- **O `hive_partitioning` na leitura da exportação.** O `read_parquet` das pastas exportadas leu
+  `data_str=2026-07-31` como `DATE`; com `hive_types_autocast = false`, como texto, a mesma leitura de
+  `test_deltalake.py::test_initial_load_from_parquet_folders`.
+
+**Consequência**: [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md) troca a interface e os rascunhos pela seção
+"A implementação" e registra o que a implementação fixou: os métodos de caminho de `Storage`
+(`relative`, `uri_of`, `size`, `ensure_folder`, `open_input_file`), `duckdb_connect`, o `retry` de
+`storage_options` sem `timeout`, `table_exists` e `file_from_return_stats`, as duas conferências
+novas, a releitura que compara o log com os leitores, e os não finitos de `rewrite`.

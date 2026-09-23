@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from collections.abc import Iterable, Iterator
 from typing import Literal
 
@@ -72,9 +73,11 @@ __all__ = [
     "Dialect",
     "TableOptions",
     "arrow_schema",
+    "PARTITION_VALUE",
     "arrow_type",
     "cast",
     "check_models",
+    "check_partition_value",
     "check_schema_files",
     "column_ddl",
     "ddl",
@@ -236,7 +239,7 @@ class TableOptions:
 
     partition_by: str | None
     """A coluna de partição, de texto ``String(n)``; ``None`` sem partição. O valor é o nome da
-    pasta da partição, sem ``/``, ``=`` nem espaço; na base atual é a data em ``AAAA-MM-DD``."""
+    pasta da partição e segue ``PARTITION_VALUE``; na base atual é a data em ``AAAA-MM-DD``."""
     partition_source: str | None
     """A coluna de data de que a coluna de partição deriva por ``strftime('%Y-%m-%d')``, quando
     deriva; ``None`` quando o valor não vem de outra coluna."""
@@ -308,6 +311,36 @@ def table_options(table: sa.Table) -> TableOptions:
         redshift=dict(info.get("redshift", {})),
         keys=_adjusted_keys(_declared_keys(table), info),
     )
+
+
+PARTITION_VALUE = r"[0-9A-Za-z][0-9A-Za-z_.-]*"
+"""A regra da partição, que vale também para o ``execution_id``: letra ou dígito no início,
+depois letras, dígitos, ``_``, ``.`` e ``-``.
+
+O valor vira nome de pasta e literal SQL. A aspa simples fecharia o literal ``'<valor>'`` do
+predicado da substituição, e o delta-rs grava ``:``, ``%``, ``'`` ou um acento codificados por
+porcentagem no nome da pasta, que o ``COPY`` do DuckDB gravaria sem codificar; com a regra, o
+valor codificado é o próprio valor."""
+
+_PARTITION_VALUE = re.compile(PARTITION_VALUE)
+
+
+def check_partition_value(value: str) -> str:
+    """O valor, quando segue ``PARTITION_VALUE`` por inteiro; ``ContractError`` quando não segue.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        check_partition_value("2026-08-31")   # "2026-08-31"
+        check_partition_value("2026-Q1")      # "2026-Q1"
+        check_partition_value("d'agua")       # ContractError
+    """
+    if not isinstance(value, str) or not _PARTITION_VALUE.fullmatch(value):
+        raise ContractError(
+            f"valor {value!r} fora da regra da partição {PARTITION_VALUE}: letra ou dígito no "
+            "início, depois letras, dígitos, _, . e -")
+    return value
 
 
 # ---------------------------------------------------------------- o DDL por motor

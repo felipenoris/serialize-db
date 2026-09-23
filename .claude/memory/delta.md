@@ -119,6 +119,18 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   with `partitionValues`; the table keeps no aggregate. `plan/POC.md`, `plan/PLAN-STAGE-3.md`,
   `tests/proof_of_concept/test_deltalake.py`
 
+- Read while implementing stage 3 (2026-09-23): `pa.schema(dt.schema())` returns every contract
+  type of `arrow_schema(table)` unchanged, with nullability; `alter.set_column_metadata` merges the
+  new keys into the field's metadata instead of replacing it; a `Field` from `delta_schema` enters
+  `alter.add_columns` with its comment; three `alter` calls on one object committed three versions
+  and advanced the object; `ColumnProperties(statistics_enabled="NONE")` leaves the column's
+  footer `statistics` as `None`, not `has_min_max` false; the reader of
+  `to_pyarrow_dataset().scanner().to_reader()` carries the version's nullability and comments, so
+  `write_deltalake(..., mode="error", name=..., description=..., configuration=...)` makes a deep
+  copy at version 0 with all three; `get_add_actions(flatten=True)` types `min.<col>`/`max.<col>` by
+  the column (`date32`, `decimal128`, `timestamp[us]`) and `partition.<col>` as `string not null`.
+  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
+
 ## Performance measured
 
 - On local disk, 3,000,000 rows in 12 files: `delta_scan` aggregates in 0.010 s against 0.006 s for
