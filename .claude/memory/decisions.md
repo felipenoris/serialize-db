@@ -659,11 +659,33 @@ fixes, named in the report). For the stage 8 transaction the assistant offered (
 `DELETE`/`INSERT` of the control row and repeating the transaction on `1023`, or (b) opening the
 transaction with `UPDATE serialize_db_publications ... WHERE table_name = <t> AND delta_version =
 <version read>`, where 0 affected rows raises `ExecutionConflict` without a retry and a `1023` that
-still escapes from any command raises `ExecutionConflict` too; the user chose (b). The first
-publication of a table, which has no control row for the `UPDATE`, is a pending decision with the
-assistant's proposal (the published table and its row with `delta_version` -1 in a transaction of
-their own). Two stage 5 proposals await the user: exporting by `rewrite` a partition with a
-non-finite `Double`, because the `UNLOAD` footer leaves `NaN` out of the maximum and DuckDB's
-Parquet reader lost the row, and the schema of an empty text stream from the `row_desc` of the text
-under `limit 0`. `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-4.md`,
-`plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+still escapes from any command raises `ExecutionConflict` too; the user chose (b), and replaced it
+later the same day with the flow of the next section, as the answers on the first publication and
+on the two stage 5 proposals came. `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-5.md`,
+`plan/PLAN-STAGE-4.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+## The publication flow, the unpublish flow and the stage 5 answers of 2026-09-23
+
+Asked how the first publication of a table writes its control row, the user redesigned the stage 8
+transaction (2026-09-23): open the transaction, read the table's control row, identify the previous
+version, `INSERT` the row when there is none, and when there is one check the version and
+`UPDATE` it; and create an unpublish flow, similar but with `DELETE`. The assistant's reading,
+named in the report: the read is the transaction's first statement and fixes its snapshot; the
+check compares the version read with the Delta version the execution publishes (equal: nothing to
+publish, `ROLLBACK`; higher: `ExecutionConflict`; lower: `version_diff` between them); the control
+row is written last, after the partitions, because its `INSERT` or `UPDATE` holds the control
+table's lock until the end and the tables publish in parallel; the `UPDATE` stays conditioned on the
+version read, and its zero rows, a `1023` and the failed `CREATE TABLE` of a published table another
+first publication created are `ExecutionConflict`, without a retry. The unpublish flow reads the row
+the same way and, when present, runs `DROP TABLE` on the published table and `DELETE` of the row,
+conditioned on the version read, in one transaction (`unpublish_redshift`,
+`serialize-db publish --unpublish`); a destructive schema diff unpublishes and republishes. The
+concurrent behavior of the new sequence is a reading of
+`test_redshift_transactions.py::test_control_row_read_first_and_written_last`, added the same day.
+On stage 5 the user approved exporting by `rewrite` a partition with a non-finite `Double` whatever
+the `mode`, with a warning in the execution log (`log.warning`, the user's choice over
+`warnings.warn`) when the mode asked for `register`; approved the empty text stream's schema from
+`schema_from_row_description` of `select * from (<texto>) as t limit 0`; and kept `load` through the
+`loader` after the `COPY` cost reading. The user also asked to mask the environment's sensitive
+identifiers everywhere in the repository except `SUITE.md`. `plan/PLAN-STAGE-8.md`,
+`plan/PLAN-STAGE-5.md`, `plan/OPEN_QUESTIONS.md`

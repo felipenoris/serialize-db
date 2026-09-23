@@ -577,9 +577,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   publish without it, `stream` always through `UNLOAD`, `load` always through `loader`, the
   `NUMERIC` type from the driver's `type_modifier`, and the export without `PARTITION BY` to a prefix
   new per attempt. The suite runs of 2026-09-23 in the target read most of what they need (the `=`
-  prefix, the empty `UNLOAD` writing nothing, the `row_desc`, the `SUPER` file); two stage 5
-  proposals await the user: exporting by `rewrite` a partition with a non-finite `Double`, because
-  the `UNLOAD` footer leaves `NaN` out of the maximum, and the empty text stream's schema.
+  prefix, the empty `UNLOAD` writing nothing, the `row_desc`, the `SUPER` file), and the user's
+  answers of the same day export by `rewrite`, with a `log.warning`, a partition with a non-finite
+  `Double` (the `UNLOAD` footer leaves `NaN` out of the maximum), take the empty text stream's
+  schema from a `limit 0` query and keep `load` through the `loader`.
 - The reports of `scripts/migrate_parquet_to_delta.py`, which ran successfully in the target over
   the copy of the production base in the sandbox, in its version before issue #59, arrived on
   2026-09-23 and stay outside git and out of `plan/` at the user's request, so `plan/` still calls
@@ -607,11 +608,12 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `UNLOAD` literal doubling the backslash, `pg_last_unload_count()` for the empty result, the
   Redshift audit's strict `is_finite` and `true` for JSON on `SUPER`) pass on the local stand-in
   `tests/emulator.py`, which has no locks, no bucket encryption, no Data API and no IEEE `NaN`, and
-  wait for two Redshift suite runs in the target. After the simultaneous publications of
-  `test_redshift_transactions.py`, the user chose on 2026-09-23 to open the stage 8 transaction
-  with the control row's `UPDATE` conditioned on the version read (0 rows is `ExecutionConflict`,
-  no retry); the first publication's control row is a pending decision. The file's two
-  temporary-staging cases, added the same day, wait for a run in the target.
+  wait for two Redshift suite runs in the target. After `test_redshift_transactions.py`, the user
+  decided on 2026-09-23 the stage 8 transaction: read the control row first, `INSERT` it on the
+  first publication or check the version and `UPDATE` it, written last; and an unpublish flow with
+  `DROP TABLE` and `DELETE` of the row. The file's two temporary-staging cases, added the same day,
+  wait for a run in the target. `probes/duckdb_threads.py` measures the DuckDB `threads` over the
+  migrated tables and waits for a target run after the migration rerun.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing

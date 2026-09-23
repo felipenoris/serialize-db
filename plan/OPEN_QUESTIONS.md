@@ -97,21 +97,24 @@ foi medido em [`POC.md`](POC.md).
   `test_redshift.py::test_explain_of_a_join_on_the_share` lê o plano, ou a recusa, e os rótulos
   `DS_*` dele. O substituto local só confere o código.
 
+- **A publicação com a linha de controle lida no início da transação.** A etapa 8 lê a linha de
+  controle no início da transação e a grava no fim, por `INSERT` na primeira publicação e por
+  `UPDATE` condicionado à versão lida nas seguintes (decisão do usuário de 2026-09-23,
+  [etapa 8](PLAN-STAGE-8.md)). O que a segunda de duas publicações da mesma tabela recebe no
+  esquema do datashare, o `1023` ao apagar as linhas que a primeira trocou ou o `UPDATE` sem linha,
+  é leitura de `test_redshift_transactions.py::test_control_row_read_first_and_written_last` na
+  próxima execução da suíte Redshift; o substituto local conferiu só o código do caso
+  ([`POC.md`](POC.md)).
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 5](PLAN-STAGE-5.md): a partição com `Double` não finito exportada por `rewrite` qualquer
-  que seja o `mode` (proposto: o rodapé do `UNLOAD` deixa o `NaN` fora do máximo, e o leitor
-  Parquet do DuckDB perdeu a linha, leitura de 2026-09-23); o esquema do `stream` vazio de um
-  texto pelo `row_desc` de `select * from (<texto>) as t limit 0` (proposto).
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.
-- [Etapa 8](PLAN-STAGE-8.md): a linha de controle da primeira publicação de uma tabela (proposto:
-  a tabela publicada e a linha com `delta_version` -1 numa transação própria, antes da primeira
-  transação de dados). A staging da publicação como tabela comum no datashare ou temporária.
+- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação como tabela comum no datashare ou temporária.
   A regra de que a escrita de uma transação vai para um banco só vem da página "Considerations for
   data sharing reads and writes" da AWS e nunca foi medida no ambiente alvo, e a página não diz em
   que banco fica a tabela temporária criada depois do `USE` ([`redshift.md`](redshift.md));

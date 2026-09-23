@@ -25,9 +25,10 @@ confirmada deixou as suas linhas e a abortada nenhuma. Uma thread que não termi
 Os cenários: escritas em tabelas distintas (a ingestão em paralelo e ``publish_redshift`` com uma
 conexão por tabela); dev e prod publicando ao mesmo tempo, com linhas distintas da tabela de
 controle; duas publicações da mesma tabela e partição, com a staging de nome fixo da etapa 8; o
-``LOCK`` da tabela de controle no início da transação; e a linha de controle gravada por um
-``UPDATE`` condicionado à versão lida, como primeiro comando. Dois cenários de uma conexão só
-leem a staging temporária da publicação, cheia dentro da transação e antes do ``BEGIN``: a
+``LOCK`` da tabela de controle no início da transação; a linha de controle gravada por um
+``UPDATE`` condicionado à versão lida, como primeiro comando; e a publicação que a etapa 8 adotou,
+com a linha de controle lida no início da transação e gravada no fim. Dois cenários de uma conexão
+só leem a staging temporária da publicação, cheia dentro da transação e antes do ``BEGIN``: a
 escrita de uma transação vai para um banco só no datashare, e a documentação não diz em que banco
 fica a tabela temporária criada depois do ``USE``. As tabelas são
 ``serialize_db_poc_<id>_*`` no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``, apagadas no fim da
@@ -600,3 +601,48 @@ def test_conditional_update_of_the_control_row(redshift_session: RedshiftSession
 
     # B nunca confirma aqui: o fechamento da conexão desfaz a transação dele.
     assert rows["prod_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
+
+
+def test_control_row_read_first_and_written_last(redshift_session: RedshiftSession) -> None:
+    """A publicação da etapa 8 como o usuário a decidiu em 2026-09-23: a linha de controle lida no
+    início da transação, a partição trocada e a linha gravada no fim, pelo ``UPDATE`` condicionado à
+    versão lida.
+
+    As duas publicações leem a versão 1 antes do ``COMMIT`` de A, então o snapshot de B é anterior a
+    ele. O relatório diz em que comando B espera e se ele é abortado com ``1023`` ou chega ao
+    ``UPDATE`` e afeta 0 linhas; nos dois casos a publicação de B desfaria a transação, e aqui o
+    fechamento da conexão a desfaz.
+    """
+    session = redshift_session
+    tables = create_tables(session, "leitura")
+    prefix = "redshift.transactions.leitura"
+
+    def publication(execution_id: str, version: int) -> list[Step]:
+        return [
+            Step(
+                "lê a linha de controle",
+                f"SELECT delta_version FROM {tables.control} WHERE table_name = 'prod_x'",
+            ),
+            *replace_partition(tables.prod, execution_id),
+            Step(
+                "atualiza a linha de controle se a versão é 1",
+                f"UPDATE {tables.control} SET delta_version = {version}, "
+                f"execution_id = '{execution_id}', published_at = getdate() "
+                "WHERE table_name = 'prod_x' AND delta_version = 1",
+            ),
+        ]
+
+    a, b = run_scenario(
+        session,
+        prefix,
+        [begin(), *publication("exec-a", 2)],
+        [begin()],
+        publication("exec-b", 3),
+    )
+    rows = control_rows(session, tables)
+    record(f"{prefix}.controle", rows)
+    record(f"{prefix}.particao", partition_origin(session, tables.prod))
+
+    # B nunca confirma aqui: a partição e a linha de controle são as de A, quando A confirmou.
+    assert rows["prod_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
+    assert partition_origin(session, tables.prod) == (["exec-a"] if a.committed else ["exec-0"])

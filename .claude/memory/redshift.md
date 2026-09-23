@@ -238,9 +238,10 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   of the partition A replaced then gets `1023 Serializable isolation violation`; `LOCK` is refused
   (`0A000 Operation is not supported through datashares`); the `UPDATE` of the control row
   conditioned on the version read, as the first statement, waits for A's `COMMIT` and affects 0
-  rows. `stv_db_isolation_level` is denied (42501). The stage 8 transaction opens with that
-  `UPDATE` (user decision of 2026-09-23, `decisions.md`). `plan/redshift.md`, `plan/POC.md`,
-  `plan/PLAN-STAGE-8.md`
+  rows. `stv_db_isolation_level` is denied (42501). The stage 8 transaction reads the control row
+  first and writes it last, by `INSERT` or by the `UPDATE` conditioned on the version read, and the
+  unpublish flow deletes it with the published table (user decision of 2026-09-23,
+  `decisions.md`). `plan/redshift.md`, `plan/POC.md`, `plan/PLAN-STAGE-8.md`
 - An extra session (`new_session()`, 2026-09-23) is another connection with its own temporary
   credential and `USE`: it sees the `exec_<id>_*` tables the main session committed and not its
   temporary tables; `run.ingest` of more than one table opens one per table. The suite's two

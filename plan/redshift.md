@@ -902,7 +902,7 @@ distintas não esperam; linhas distintas da tabela de controle confirmam as duas
 criou espera o `COMMIT` dela; o `DELETE` das linhas que outra transação confirmada trocou recebe
 `1023 Serializable isolation violation`; o `LOCK` é recusado (`0A000 Operation is not supported
 through datashares`); e o `UPDATE` condicionado à versão lida espera o `COMMIT` da outra e afeta 0
-linhas. A etapa 8 abre a transação com esse `UPDATE`.
+linhas. A etapa 8 lê a linha de controle no início da transação e a grava no fim.
 
 ## Ingestão de dados
 
