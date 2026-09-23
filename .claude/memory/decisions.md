@@ -460,3 +460,15 @@ percent-encodes `:`, `%`, `#`, `'` and accents in the folder name, which the `re
 is the assistant's extension, named in the report. Stage 6 has no decision awaiting the user.
 `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN.md`,
 `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+Later on 2026-09-23 the user asked for the stage 6 interface to be corrected against its table of
+primitives: `Database(root, environment, metadata)` without `storage_options`, which stage 3
+resolves per call; `Execution(..., export_mode=None)` as the default mode of the execution's
+`publish` calls, filled by `serialize-db run --export-mode`, resolved in the order `publish`
+argument, `Execution` argument, `SERIALIZE_DB_EXPORT_MODE`, `"register"`; and `--export-mode` in the
+`run` row. The assistant also aligned `uri` without a trailing slash, `partitions=None` in
+`publish`, `delta.snapshot(storage, environment, name, versions)`, the `serialize-db audit`
+options and `AuditFailed` imported from `serialize_db.errors`, and made `storage` a
+`functools.cached_property` after a probe showed the frozen dataclass refusing the `init=False`
+field in `__post_init__`; each was named in the report. `plan/PLAN-STAGE-6.md`,
+`plan/PLAN-STAGE-5.md`, `plan/POC.md`

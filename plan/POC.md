@@ -2067,3 +2067,15 @@ a criar a tabela no `close`, na transação do `COPY` ([`PLAN-STAGE-5.md`](PLAN-
 [`docs/index.md`](../docs/index.md) escrevem a regra. Os casos:
 `test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` e
 `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`.
+
+## O que a sonda do dataclass congelado de `Database` mostrou
+
+Em 2026-09-23, no mesmo macOS (Python 3.13), a correção da interface da etapa 6 leu o campo
+`storage` de `Database`. Num dataclass congelado, o campo `init=False` atribuído no `__post_init__`
+levantou `FrozenInstanceError: cannot assign to field 'storage'`. Com `functools.cached_property`, o
+atributo nasceu uma vez, no primeiro uso, a igualdade e o hash seguiram só os campos, e o campo
+`root` continuou congelado.
+
+**Consequência**: [`PLAN-STAGE-6.md`](PLAN-STAGE-6.md) declara `storage` como `cached_property`, sem
+o `object.__setattr__` que o estilo do projeto evita, e o caso entrou em
+`test_stdlib.py::test_frozen_dataclass_derives_an_attribute_by_cached_property`.

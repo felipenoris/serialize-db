@@ -2,7 +2,8 @@
 
 Sem gravar arquivo: a ordem dos valores de partição e o valor derivado de uma data (``datetime``),
 os identificadores de execução e de sandbox (``uuid``, ``re``), o protocolo do motor e as
-configurações (``typing.Protocol``, ``dataclasses``), o gerenciador de contexto que descarta o
+configurações (``typing.Protocol``, ``dataclasses``), o atributo derivado de um dataclass congelado
+(``functools.cached_property``), o gerenciador de contexto que descarta o
 sandbox mesmo com a auditoria reprovada (``contextlib``), o ponto de entrada ``modulo:funcao``
 (``importlib``), a linha de comando (``argparse``), o log da execução (``logging``), o ambiente
 normalizado (``os.environ`` com ``monkeypatch``), o arquivo de controle e os metadados de commit
@@ -22,6 +23,7 @@ import dataclasses
 import datetime as dt
 import decimal
 import difflib
+import functools
 import hashlib
 import importlib
 import itertools
@@ -147,6 +149,39 @@ def test_engine_protocol_and_config_dataclass() -> None:
     assert dataclasses.asdict(config)["memory_limit"] == "4GB"
     with pytest.raises(dataclasses.FrozenInstanceError):
         config.threads = 8  # type: ignore[misc]
+
+
+def test_frozen_dataclass_derives_an_attribute_by_cached_property() -> None:
+    """Um campo ``init=False`` de um dataclass congelado não aceita a atribuição do ``__post_init__``; ``functools.cached_property`` cria o atributo derivado no primeiro uso e deixa os campos congelados: é o ``storage`` de ``Database``."""
+
+    @dataclasses.dataclass(frozen=True)
+    class WithField:
+        root: str
+        storage: str = dataclasses.field(init=False)
+
+        def __post_init__(self) -> None:
+            self.storage = f"Storage({self.root})"
+
+    with pytest.raises(dataclasses.FrozenInstanceError, match="storage"):
+        WithField("s3://bucket/projeto")
+
+    built: list[str] = []
+
+    @dataclasses.dataclass(frozen=True)
+    class Database:
+        root: str
+
+        @functools.cached_property
+        def storage(self) -> str:
+            built.append(self.root)
+            return f"Storage({self.root})"
+
+    # O atributo nasce uma vez, no primeiro uso; igualdade e hash seguem só os campos.
+    db = Database("s3://bucket/projeto")
+    assert db.storage is db.storage and built == ["s3://bucket/projeto"]
+    assert db == Database("s3://bucket/projeto") and hash(db) == hash(Database("s3://bucket/projeto"))
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        db.root = "outra"  # type: ignore[misc]
 
 
 class AuditFailed(Exception):
