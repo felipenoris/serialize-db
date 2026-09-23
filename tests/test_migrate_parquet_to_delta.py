@@ -9,9 +9,11 @@ contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem commit (
 origem fora do caminho, nulo em coluna ``NOT NULL``, texto acima de ``String(n)``), nos dois modos;
 as estatísticas registradas, de inteiro, data, ``Double`` e texto; a coluna ``Double`` com ``NaN``
 ou infinito sem mínimo e máximo na partição dela, nos dois modos, com o relatório que soma só os
-finitos; o relatório que acusa uma linha apagada; e a linha de comando sobre a base inteira, duas
-vezes. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
-(``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
+finitos; o relatório que acusa uma linha apagada; a linha de comando sobre a base inteira, duas
+vezes, com o ambiente no relatório; e a medição das variantes, cada uma num processo novo, com o
+pico do processo filho abaixo do processo do teste, também na segunda execução do mesmo comando e
+com a variante que falha registrada. A extensão ``delta`` do DuckDB precisa estar na pasta de
+extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
 from __future__ import annotations
@@ -608,6 +610,7 @@ def test_main_migrates_the_whole_base(
         root,
         "--report",
         str(report_path),
+        "--no-measure",
     ]
     assert migrate.main(argv) == 0
     out = capsys.readouterr().out
@@ -616,6 +619,11 @@ def test_main_migrates_the_whole_base(
     assert "12 tabelas conferidas, contagens e somas iguais" in out
 
     document = json.loads(report_path.read_text())
+    environment = document["environment"]
+    assert environment["cpus"] > 0 and environment["memory_total_mb"] > 0
+    assert {"threads", "memory_limit"} <= set(environment["duckdb_settings"])
+    assert environment["arguments"]["measure"] is False
+    assert all(table["measurements"] == [] for table in document["tables"])
     table_order = [table["table"] for table in document["tables"]]
     assert table_order[-4:] == [
         "cad_operacoes",
@@ -635,6 +643,76 @@ def test_main_migrates_the_whole_base(
     assert migrate.main(argv) == 0
     document = json.loads(report_path.read_text())
     assert all(table["loaded"] == [] for table in document["tables"])
+
+
+def test_measurement_runs_every_variant_even_with_the_partition_in_the_log(
+    base: source.SourceBase, local_location: LocalLocation, capsys: pytest.CaptureFixture
+) -> None:
+    """A medição grava a partição pedida nas quatro variantes, cada uma num processo novo, antes
+    da carga e de novo quando a partição já está no log, como na segunda execução do mesmo
+    comando; a tabela descartável sai da raiz. As outras partições ficam fora do Delta, e o
+    relatório as acusa: saída 1."""
+    root = unique_child(local_location, "delta")
+    report_path = Path(unique_child(local_location, "relatorio-medicao") + ".json")
+    value = PARTITION_VALUES[0]
+    argv = [
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        str(base.root),
+        "--root",
+        root,
+        "--tables",
+        "cad_contratos",
+        "--partitions",
+        value,
+        "--report",
+        str(report_path),
+    ]
+    # O processo do teste passa de 512 MB, uma página tocada a cada 4 KB: um pico medido nele, ou
+    # num filho que herdasse o pico dele, passaria disso.
+    ballast = bytearray(512 * 2**20)
+    ballast[::4096] = b"\x01" * (len(ballast) // 4096)
+    for run in range(2):
+        assert migrate.main(argv) == 1
+        assert f"medição {value} rewrite sem ordem" in capsys.readouterr().out
+        table = json.loads(report_path.read_text())["tables"][0]
+        assert len(table["loaded"]) == (1 if run == 0 else 0)
+
+        # Cada variante gravou as linhas da partição, uma vez, sem erro.
+        partitions = {partition["value"]: partition for partition in table["partitions"]}
+        measurements = table["measurements"]
+        variants = [(measurement["mode"], measurement["sort"]) for measurement in measurements]
+        assert variants == list(migrate.VARIANTS)
+        for measurement in measurements:
+            assert measurement["error"] is None
+            assert measurement["value"] == value
+            assert measurement["rows"] == partitions[value]["source_rows"]
+            assert 0 < measurement["base_mb"] <= measurement["peak_mb"] < 512
+            assert measurement["files"] >= 1 and measurement["bytes"] > 0
+        assert not Path(root, "_medicao_cad_contratos").exists()
+    del ballast
+
+
+def test_a_failed_variant_enters_the_measurement_with_its_error(
+    origin: migrate.Location, root: migrate.Location
+) -> None:
+    """A variante que falha no processo filho entra na medição com o erro, e as seguintes rodam;
+    a tabela descartável de cada uma sai da pasta. Uma pasta de partição ausente faz o
+    ``read_parquet`` falhar nas quatro."""
+    table = TABLES["cad_contratos"]
+    missing = origin.child(table.name).child("data_str=2099-12-31")
+    scratch = root.child("_medicao_cad_contratos")
+    measurements = migrate.measure_partition(
+        table, missing, scratch, "2099-12-31", settings(), uses_s3=False, region=None
+    )
+    assert [(measurement.mode, measurement.sort) for measurement in measurements] == list(
+        migrate.VARIANTS
+    )
+    for measurement in measurements:
+        assert measurement.error.startswith("IOException: "), measurement.error
+        assert measurement.rows is None
+    assert not Path(scratch.path).exists() or not any(Path(scratch.path).iterdir())
 
 
 def test_main_refuses_a_model_with_violations(

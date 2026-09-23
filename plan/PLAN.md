@@ -650,8 +650,8 @@ conferências da etapa 3; `rewrite` grava pelo `write_deltalake`, que confere tu
    desenvolvem e a medição da partição de `cad_lancamentos`.
 3. Etapa 2, depois 3, 4 e 6: um pipeline completo em disco local, o critério de aceite da etapa 6
    sobre o motor DuckDB; a etapa 7 absorve o script.
-4. Em paralelo, no ambiente alvo: os cinco probes rodaram lá em 2026-09-21 ([`POC.md`](POC.md)), e
-   `redshift.py` volta a rodar pela leitura `RS-8`; a manutenção da suíte S3 se confirmada;
+4. Em paralelo, no ambiente alvo: os cinco probes rodaram lá em 2026-09-21 e de novo em 2026-09-23,
+   com a leitura `RS-8` ([`POC.md`](POC.md)); a manutenção da suíte S3 se confirmada;
    `tests/proof_of_concept/` e os testes `-m s3` das etapas 3 e 4 no bucket.
 5. O `test_redshift.py` da etapa 0 rodou limpo duas vezes no ambiente alvo em 2026-09-21, pela
    conexão de `examples/`; as etapas 5 e 8 vêm depois das etapas 3, 4 e 6, com essa conexão.

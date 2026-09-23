@@ -57,3 +57,47 @@ row count per partition. It does not rescue the foreign key `cad_contratos` decl
 unique at the target. `plan/POC.md`
 
 The fictitious Parquet source base `db_projetado`, reproducing the structure common to the two readings (section 3, the partitions, the `chunk_<n>` files, the `INT96` timestamps, the layout): the 14 tables with the read columns, types and nullability (12 match the reference model; `alembic_version` and `meta_update_status` are outside it), the Hive partitions, and the previous library's real `schema.json` at the root (`source_db_projetado_schema.json`). The values that differ between the bases follow the dev reading (`valor` with three decimals, `fator` with five, `id_lancamento` up to 1,113,599,996, the `meta_update_status` ids). The `pandas` footer key follows the production base: `written_by_pandas` leaves the last partition of each partitioned table and the two control tables without it, so every partitioned table has files of both kinds; the probe run on the fixture on 2026-09-21 printed section 3 identical to the transcription and the footer table with the mix. The data is consistent with the reference model (unique keys, every foreign key satisfied, the four dates in every partitioned table, `rel_contas_hierarquias` a tree of accounting accounts, one root and five levels, with no account its own parent (the user stated on 2026-09-23 that in the real base `id_parent` and `id_child` always differ and that the table implements a tree of accounting accounts), the N×N `rel_contrato_operacao` with `fator_rateio` 1 or 1/2, dyadic, summing to 1 per contract, since a contract is in one or two operations; the builders make one dict per row since the review of 2026-09-23, with the written base byte-identical). `write_source(root)` returns the files and row counts; `tests/test_source_db_projetado.py` checks the written files against the transcribed section 3 of the report, the model's keys and the schema control, and `tests/test_reference_model.py` reads the reference model through SQLAlchemy (with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules) and checks it against `SCHEMAS` and the transcribed keys. The material of the stage 7 test.
+
+## The early migration in the target
+
+- `scripts/migrate_parquet_to_delta.py` ran in the target over the production base itself, read
+  only (the `--source` of `SUITE.md` is `databases/prd/db_projetado`, not a copy), one process and
+  one `--report` JSON per table, in a version from d2c545b (2026-09-21) to 8de3c8b
+  (2026-09-22), before the issue #59 rule of e2ed614: the user reported the success in the session
+  of cea8a51 (2026-09-22) and handed the reports over on 2026-09-23. The JSON records neither the
+  mode, the sort, the roots nor the machine; the script prints the DuckDB `threads` and
+  `memory_limit` outside it. `decisions.md`
+- Every model table loaded every partition, with counts and sums equal between the source and the
+  Delta: 187,340,509 rows, the production reading's 187,340,531 minus `alembic_version` (1) and
+  `meta_update_status` (21), which the reports list outside the model with `schema.json`.
+  `cad_lancamentos` has 2026-01-31 (33,239,719 rows), 2026-02-28 (23,789,279), 2026-03-31
+  (52,654,607) and 2026-06-30 (32,218,190); `cad_contratos` (6,543,408 rows), `cad_operacoes`
+  (10,984,434) and `rel_contrato_operacao` (27,910,654) have the last three dates. The conversions
+  reported are the `int32` keys to `int64` and `INT96` to `timestamp[us]`. `decisions.md`
+- The production copy has no `NaN` or infinity in any `Double` column: that version summed every
+  `Double` (a `sa.Numeric` subclass) as `CAST(... AS DECIMAL(38, 6))` over the whole source and
+  the whole Delta table, the cast raises `ConversionException` on `NaN` and ±infinity in DuckDB
+  1.5.5 (probed again on 2026-09-23), and `main` caught only `ContractError`, so a non-finite value
+  would have ended the process before its JSON. Any `Double` min and max it logged is correct, and
+  the issue #59 item on the migrated tables needs no `isnan`/`isinf` count. `decisions.md`
+- Each partition's time runs from the check query to the commit, beside the process's peak RSS so
+  far: `cad_lancamentos` 5.3 s (11,548 MB), 4.5 s (11,548 MB), 7.1 s (19,595 MB) and 5.3 s
+  (19,595 MB) in date order; `rel_contrato_operacao` up to 4.2 s and 4,587 MB, `cad_operacoes` up
+  to 3.2 s and 3,130 MB, `cad_contratos` up to 3.0 s and 2,000 MB, the unpartitioned tables under
+  0.6 s at about 258 MB; about 53 s of loading in all. A 19,595 MB peak exceeds the 7.6 GiB of the
+  2026-09-21 reading and the 15.4 GiB of 2026-09-23 (`environments.md`), so the run used a larger
+  instance, whose default DuckDB
+  `memory_limit` is 80% of its RAM: the peaks do not say whether a partition fits in 7.6 GiB, and
+  only the first partition of each process is an isolated peak. `decisions.md`
+- The `export_mode` default and the load's sort still need `cad_lancamentos` in `rewrite` and with
+  `--no-sort`: the user declined separate runs, and the script now measures, before each
+  partitioned table's load, every requested partition in the four variants (`register` and
+  `rewrite`, with and without the `sort_key` order), each in a new process with its own peak and a
+  scratch table under `<root>/_medicao_<table>/`, also when the partition is already in the log
+  (the script resumes from the log and would skip a loaded partition); the report carries the
+  machine. The user reruns the `SUITE.md` commands, every table with the same parameters. Nothing
+  else needs a rerun: since d2c545b the Delta schema changed
+  only in the comments of `rel_contrato_operacao` (7261f0a), which `delta.reconcile` applies as
+  additive, and the `register` versions before 8de3c8b (2026-09-22) logged min and max only for
+  integers and dates, which costs pruning on `Double` and text columns, not correctness.
+  `decisions.md`

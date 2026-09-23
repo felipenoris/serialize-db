@@ -201,22 +201,44 @@ def test_registered_arrow_table_is_seen_only_by_its_connection(
 # stream transbordado leem o mesmo texto, e a comparação entre eles é justa.
 STREAM_SQL = "SELECT range AS id, range % 97 AS m, 'x' || (range % 1000) AS s FROM range({rows})"
 
+# O pico de memória residente do próprio processo, em MB, que os scripts de subprocesso importam. No
+# Linux o ru_maxrss de um processo novo começa no pico do processo pai (o pytest passa de 160 MB), e
+# o VmHWM de /proc/self/status mede só o processo; no macOS, onde a suíte não mostrou essa herança,
+# o ru_maxrss vem em bytes.
+PEAK_MB = r"""
+import resource, sys
+
+def peak_mb() -> float:
+    if sys.platform == "darwin":
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6
+    with open("/proc/self/status") as status:
+        for line in status:
+            if line.startswith("VmHWM:"):
+                return int(line.split()[1]) / 1e3
+"""
+
 # Roda num subprocesso, um cenário por chamada: a memória máxima do processo depende só do cenário.
-MEMORY_PROBE = r"""
-import json, resource, sys, time
-import duckdb
+# A base é o pico depois das importações e da conexão, com o pyarrow importado antes dela, como no
+# SPOOL_PROBE; o cenário se mede pelo que acrescenta a ela.
+MEMORY_PROBE = PEAK_MB + r"""
+import json, time
+import duckdb, pyarrow
 scenario = sys.argv[1]
 sql = sys.argv[2]
 con = duckdb.connect(config={"threads": 2})
+base = peak_mb()
 started = time.perf_counter()
 if scenario == "table":
     rows = con.execute(sql).to_arrow_table().num_rows
 else:
     rows = sum(batch.num_rows for batch in con.execute(sql).to_arrow_reader(100_000))
-scale = 1e6 if sys.platform == "darwin" else 1e3
-peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / scale
 seconds = round(time.perf_counter() - started, 3)
-print(json.dumps({"rows": rows, "seconds": seconds, "peak_mb": round(peak)}))
+print(json.dumps({
+    "rows": rows,
+    "seconds": seconds,
+    "base_mb": round(base),
+    "peak_mb": round(peak_mb()),
+}))
 """
 
 
@@ -225,6 +247,12 @@ def run_probe(script: str, *arguments: str) -> dict[str, object]:
     completed = subprocess.run([sys.executable, "-c", script, *arguments],
                                capture_output=True, text=True, check=True)
     return json.loads(completed.stdout)
+
+
+def increment_mb(reading: dict[str, object]) -> int:
+    """O que o cenário acrescentou à memória do processo: o pico menos a base depois das importações
+    e da conexão, que muda com a plataforma."""
+    return reading["peak_mb"] - reading["base_mb"]
 
 
 def test_streaming_query_starts_before_the_end() -> None:
@@ -266,8 +294,9 @@ def test_streaming_query_starts_before_the_end() -> None:
 def test_streaming_query_bounds_memory() -> None:
     """Sem ``ORDER BY`` o processo fica no tamanho de um lote.
 
-    A memória é medida num subprocesso por cenário (``ru_maxrss``): a tabela inteira contra o leitor
-    em lotes, sobre as mesmas linhas.
+    A memória é o pico do próprio subprocesso, um por cenário (``peak_mb``: ``VmHWM`` no Linux,
+    ``ru_maxrss`` no macOS), menos a base depois das importações e da conexão: o acréscimo da tabela
+    inteira contra o do leitor em lotes, sobre as mesmas linhas.
     """
     rows = 10_000_000
     sql = STREAM_SQL.format(rows=rows)
@@ -276,20 +305,22 @@ def test_streaming_query_bounds_memory() -> None:
         peaks[scenario] = run_probe(MEMORY_PROBE, scenario, sql)
     readings = {}
     for scenario, reading in peaks.items():
-        readings[scenario] = f"{reading['peak_mb']} MB em {reading['seconds']} s"
+        readings[scenario] = (f"{reading['peak_mb']} MB, {increment_mb(reading)} MB acima da base, "
+                              f"em {reading['seconds']} s")
     record("duckdb.peak_rss_10M_rows", readings)
     assert peaks["stream"]["rows"] == peaks["table"]["rows"] == rows
-    assert peaks["stream"]["peak_mb"] < peaks["table"]["peak_mb"] / 2
+    assert increment_mb(peaks["stream"]) < increment_mb(peaks["table"]) / 2
 
 
 # O stream da sessão única: o leitor inteiro gravado num arquivo Arrow IPC com LZ4, e o arquivo lido
 # lote a lote. Roda num subprocesso, como MEMORY_PROBE, para a memória máxima ser só dele.
-SPOOL_PROBE = r"""
-import json, os, resource, sys, threading, time
+SPOOL_PROBE = PEAK_MB + r"""
+import json, os, threading, time
 import duckdb, pyarrow as pa
 folder = sys.argv[1]
 sql = sys.argv[2]
 con = duckdb.connect(config={"threads": 2})
+base = peak_mb()
 path = os.path.join(folder, "transbordo.arrow")
 options = pa.ipc.IpcWriteOptions(compression="lz4")
 condition = threading.Condition()
@@ -325,15 +356,14 @@ with pa.OSFile(path, "rb") as source:
                 break
         rows_read += reader.read_next_batch().num_rows
         batches_read += 1
-scale = 1e6 if sys.platform == "darwin" else 1e3
-peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / scale
 print(json.dumps({
     "rows": rows_read,
     "seconds": round(time.perf_counter() - started, 3),
     "first_batch_seconds": round(first, 3),
     "query_seconds": round(progress["query_seconds"], 3),
     "file_mb": round(os.path.getsize(path) / 1e6),
-    "peak_mb": round(peak),
+    "base_mb": round(base),
+    "peak_mb": round(peak_mb()),
 }))
 """
 
@@ -347,7 +377,7 @@ def test_spooled_stream_bounds_memory(local_location: LocalLocation) -> None:
     depois do orçamento de memória: a thread roda a consulta sob o lock e grava cada lote assim que
     o DuckDB o entrega, e o cliente lê cada lote gravado sem a sessão. O tempo até o primeiro lote,
     o tempo da consulta, o tamanho do arquivo e a memória máxima vão para o relatório; a asserção é
-    a mesma do leitor direto, menos da metade da memória da tabela inteira.
+    a mesma do leitor direto, menos da metade do acréscimo da tabela inteira sobre a base.
     """
     rows = 10_000_000
     sql = STREAM_SQL.format(rows=rows)
@@ -357,12 +387,13 @@ def test_spooled_stream_bounds_memory(local_location: LocalLocation) -> None:
     table = run_probe(MEMORY_PROBE, "table", sql)
     record(
         "duckdb.spooled_stream_10M_rows",
-        f"{spooled['peak_mb']} MB em {spooled['seconds']} s (primeiro lote em "
-        f"{spooled['first_batch_seconds']} s, consulta em {spooled['query_seconds']} s, "
-        f"{spooled['file_mb']} MB de arquivo); a tabela inteira, {table['peak_mb']} MB",
+        f"{spooled['peak_mb']} MB, {increment_mb(spooled)} MB acima da base, em "
+        f"{spooled['seconds']} s (primeiro lote em {spooled['first_batch_seconds']} s, consulta em "
+        f"{spooled['query_seconds']} s, {spooled['file_mb']} MB de arquivo); a tabela inteira, "
+        f"{table['peak_mb']} MB, {increment_mb(table)} MB acima da base",
     )
     assert spooled["rows"] == table["rows"] == rows
-    assert spooled["peak_mb"] < table["peak_mb"] / 2
+    assert increment_mb(spooled) < increment_mb(table) / 2
 
 
 # O esquema dos leitores dos testes de INSERT: um inteiro e um DOUBLE.

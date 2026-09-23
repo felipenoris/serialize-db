@@ -6,19 +6,12 @@ resposta entra no documento que a guarda, e a saída nomeia esse documento. O pl
 [`PLAN.md`](PLAN.md), o estado da implementação em [`CURRENT_STATE.md`](CURRENT_STATE.md) e o que já
 foi medido em [`POC.md`](POC.md).
 
-- **O que `svv_table_info` responde depois do `USE`.** Antes do `USE` ela enxerga só o banco local,
-  como `has_schema_privilege` e `information_schema.columns`, que a suíte leu depois do `USE` em
-  2026-09-21, seis vezes a primeira e cinco a segunda: `false` e vazio para o esquema do datashare,
-  com o `CREATE TABLE` passando nele ([`POC.md`](POC.md), [`redshift.md`](redshift.md)). A execução do
-  probe de 2026-09-21 não leu `RS-8` porque `RS-19` reprovou pelo critério errado
-  (`current_database()` continuou `dev` depois do `USE`, que vale mesmo assim; o critério passou a
-  ser a resolução de um nome em duas partes), e a execução seguinte do probe no ambiente alvo o lê.
-  A biblioteca não lê a visão, e etapa alguma depende da leitura: a [etapa 0](PLAN-STAGE-0.md)
-  fechou sem ela.
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
-  conta o acumulado, e a regra `NoncurrentVersionExpiration` sob a raiz, junto com
-  `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket.
+  conta o acumulado (219 versões não correntes, 1.388.530 bytes, e 219 marcadores de exclusão
+  sob a raiz dos probes em 2026-09-23, [`POC.md`](POC.md)), e a regra
+  `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
+  para quem administra o bucket.
 - **Credenciais de uma hora.** Nenhuma execução mais longa que uma emissão rodou ainda; a
   [etapa 3](PLAN-STAGE-3.md) resolve `storage_options` a cada chamada e não põe credencial nele
   (decisão do usuário de 2026-09-22), e a primeira execução longa no espaço confirma que o delta-rs
@@ -34,30 +27,29 @@ foi medido em [`POC.md`](POC.md).
   do git; [`POC.md`](POC.md) os interpreta, e `plan/readings/` não os tem. Copiá-los para
   `plan/readings/`, como os de 2026-09-20, é decisão do usuário: eles trazem os mesmos
   identificadores (conta, papel, usuário do banco) que os relatórios já versionados.
-- **Quanto o teste de alcance poupa no ambiente alvo.** O IAM (`iam.amazonaws.com`) e o KMS não têm
-  endpoint VPC lá, e `simulate_principal_policy` esperou 10 s e `describe_key` 80 s por nada em
-  2026-09-21. As duas passaram a `short_config(2, 5, 1)` atrás de um teste TCP de 2 s num endereço
-  (`probelib.endpoint_reachable`), que no macOS no mesmo dia baixou de 10,0 s para 2,0 s a espera por
-  um endereço sem rota ([`POC.md`](POC.md)). A próxima execução dos probes no alvo diz o que sobra;
-  a permissão sobre a raiz fica provada pela primeira escrita.
-- **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de
-  linhas por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
+- **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de linhas
+  por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
   RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)); a
-  migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
-  (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)). O relatório da
-  migração com essa medição é o gatilho de revisão de [`PLAN.md`](PLAN.md): ele decide o padrão da
-  flag e se o outro modo sai, em cada motor e na carga inicial.
+  migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. O
+  script mede por padrão, antes da carga de cada tabela particionada, cada partição nas quatro
+  variantes de gravação (`register` e `rewrite`, com e sem a ordem da `sort_key`), cada uma num
+  processo novo, e a próxima execução dos comandos de todas as tabelas no ambiente alvo, com os
+  mesmos parâmetros, traz a medição (decisão do usuário de 2026-09-23). `export_mode="rewrite"` e
+  `"register"` medem os dois caminhos em cada motor e na carga inicial (etapas [4](PLAN-STAGE-4.md),
+  [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)). O relatório da migração com essa medição é o gatilho
+  de revisão de [`PLAN.md`](PLAN.md): ele decide o padrão da flag e se o outro modo sai, em cada
+  motor e na carga inicial, e se a carga ordena pela `sort_key`.
 - **O `threads` do DuckDB na leitura do S3.** O DuckDB lê arquivos remotos com E/S síncrona, uma
   requisição HTTP por thread, e a documentação recomenda `threads` de 2 a 5 vezes os núcleos para
-  essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo, 2 no ambiente alvo, e a sessão a
-  mais de cada tabela de `run.ingest` só acrescenta a thread que a chama. A primeira execução no
-  ambiente alvo mede a ingestão por `delta_scan` do S3 com o padrão e com `threads` acima dos
-  núcleos, e a medição decide o padrão de `DuckDBConfig.threads` para uma raiz no S3
-  ([etapa 4](PLAN-STAGE-4.md)). A mesma execução mede a ingestão de várias tabelas em sessões a
-  mais: em disco local, num macOS de 11 núcleos, quatro tabelas de 8.000.000 de linhas entraram em
-  1,629 s contra 3,498 s em série com `threads = 2`, e parte do ganho veio das threads que chamam
-  cada sessão, que o ambiente alvo, com 2 vCPUs, não tem de sobra (2026-09-23,
-  [`POC.md`](POC.md)).
+  essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo, 4 no ambiente alvo em
+  2026-09-23 (2 em 2026-09-21), e a sessão a mais de cada tabela de `run.ingest` só acrescenta a
+  thread que a chama. A primeira execução no ambiente alvo mede a ingestão por `delta_scan` do S3
+  com o padrão e com `threads` acima dos núcleos, e a medição decide o padrão de
+  `DuckDBConfig.threads` para uma raiz no S3 ([etapa 4](PLAN-STAGE-4.md)). A mesma execução mede a
+  ingestão de várias tabelas em sessões a mais: em disco local, num macOS de 11 núcleos, quatro
+  tabelas de 8.000.000 de linhas entraram em 1,629 s contra 3,498 s em série com `threads = 2`, e
+  parte do ganho veio das threads que chamam cada sessão, que o ambiente alvo, com 4 vCPUs, não tem
+  de sobra (2026-09-23, [`POC.md`](POC.md)).
 - **Duas transações simultâneas no esquema do datashare.** A publicação da
   [etapa 8](PLAN-STAGE-8.md) grava a linha de controle em `serialize_db_publications`, a única
   tabela que dois ambientes escrevem, e usa uma staging de nome fixo por ambiente e tabela. A
@@ -151,8 +143,9 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.
-- [Etapa 8](PLAN-STAGE-8.md): a `distkey` de cada tabela publicada, decidida pela leitura de
-  `svv_table_info` depois da primeira publicação (a distribuição é `AUTO` desde a decisão do
+- [Etapa 8](PLAN-STAGE-8.md): a `distkey` de cada tabela publicada e a fonte da leitura da
+  distribuição atribuída, porque o papel do projeto não lê `svv_table_info` depois do `USE`
+  (`permission denied`, 42501, probe de 2026-09-23; a distribuição é `AUTO` desde a decisão do
   usuário de 2026-09-21); a staging da publicação no datashare ou temporária; `FILLRECORD` em
   todo `COPY` da biblioteca (proposto: um manifesto pode listar arquivos anteriores e posteriores a
   uma coluna nova) ou a lista de colunas, os dois lidos em 2026-09-21; o teto de 65.535 bytes do

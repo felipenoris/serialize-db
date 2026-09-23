@@ -223,7 +223,9 @@ PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata
 
 `--partitions AAAA-MM-DD` carrega só as partições listadas, `--mode rewrite` grava pelo
 `write_deltalake` em vez do `COPY` do DuckDB registrado no log, e `--no-sort` grava na ordem da
-origem. A segunda execução não grava nada: a carga recomeça das partições fora do log.
+origem. A segunda execução não grava nada: a carga recomeça das partições fora do log. A medição
+das variantes de gravação, descrita no cabeçalho do script, roda por padrão antes da carga de
+cada tabela particionada, também sobre as partições já no log, e `--no-measure` a desliga.
 
 # Exemplos: conectividade com o Redshift
 

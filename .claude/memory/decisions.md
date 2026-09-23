@@ -566,3 +566,21 @@ The user asked on 2026-09-23 to build the local stand-in and apply the behavior 
 target-only suites, then to version the stand-in: `tests/emulator.py`, switched on by
 `SERIALIZE_DB_TEST_EMULATOR`, with moto pinned in the `dev` group. `plan/POC.md`,
 `plan/CURRENT_STATE.md`
+
+## The early migration's reports
+
+On 2026-09-23 the user handed over the JSON reports of the early migration run in the target,
+written by the script version before the issue #59 rule, and asked that they not be recorded in the
+repository, allowing the memory to keep the findings it needs: the reports stay outside git, the
+findings live in `source-base.md`, and `plan/` is not updated, so `plan/CURRENT_STATE.md`,
+`plan/OPEN_QUESTIONS.md` and `plan/POC.md` still describe the reports as unavailable and still list
+the issue #59 item on the migrated tables. The user offered to run the latest script again in the
+target; the assistant's analysis of the same day found that only the `cad_lancamentos` partition in
+`rewrite` and with `--no-sort` needs the rerun. The user declined the separate runs the assistant
+proposed and asked instead that the script produce the measurement when the `SUITE.md` commands
+run again, every table with the same parameters: the script measures, before each partitioned
+table's load, every requested partition in the four write variants, each in a new process
+(`spawn`) with its own peak (`VmHWM` on Linux) and a scratch table under `<root>/_medicao_<table>/`,
+also when the partition is already in the log, and the report carries the machine; `--no-measure`
+turns it off (the assistant's design, named in the report). `source-base.md`,
+`plan/PLAN-STAGE-7.md`, `plan/OPEN_QUESTIONS.md`

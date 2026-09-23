@@ -2489,3 +2489,77 @@ com o `flask` 3.1.3 e o `flask-cors` 6.0.5.
 **Consequência**: `Storage.duckdb_setup` leva ao secret o endereço por caminho e, num endpoint
 `http`, `USE_SSL false` ([`PLAN-STAGE-3.md`](PLAN-STAGE-3.md)), e
 [`CURRENT_STATE.md`](CURRENT_STATE.md) registra o substituto e as contagens.
+
+## O que as suítes mostraram no Linux x86_64
+
+Em 2026-09-23, num contêiner Linux x86_64 com 4 vCPUs e 15 GiB (Python 3.13.12, DuckDB 1.5.5,
+PyArrow 25.0.1), as duas medições de memória de `tests/proof_of_concept/test_duckdb.py` reprovaram
+e o resto passou: sem variável, 213 aprovados e `test_streaming_query_bounds_memory` reprovado; com
+a raiz local, 381 aprovados e também `test_spooled_stream_bounds_memory` reprovado. Na suíte
+inteira, cada cenário marcou o mesmo pico da tabela inteira, 935 MB sem variável e 1.117 MB com a
+raiz local. Com só os dois casos, o leitor em lotes marcou 195 MB e o arquivo de transbordo 199 MB,
+contra 362 MB da tabela inteira e o teto de metade dela; sozinho, o caso do leitor passou três
+vezes, com 164 MB e 165 MB contra 336 MB, a 3 MB do teto. No ambiente alvo, na sessão
+`-m "not redshift"` do mesmo dia às 18:48 UTC (Python 3.13.15, a versão da `main`), os dois casos
+reprovaram com o mesmo sintoma, a tabela inteira, o leitor e o arquivo de transbordo em 1.120 MB, e
+os outros 430 casos passaram.
+
+- **O `ru_maxrss` de um processo novo começa no pico do processo pai, no Linux.** Um filho de um
+  pai com 524 MB leu 524 MB de `ru_maxrss`, com `VmHWM` de 9 MB em `/proc/self/status`, e continuou
+  lendo 524 MB depois de o pai liberar a memória. A base do subprocesso da suíte, antes de qualquer
+  consulta, foi de 161 MB sob um pai que tinha importado o módulo de teste, contra 53 MB sob o
+  `uv run`: a leitura do leitor em lotes era o pico do pytest, não a do leitor. Lançado direto do
+  shell, o `ru_maxrss` bateu com o `VmHWM` (9 MB); pelo `uv run`, herdou os 37 MB do `uv`. O macOS
+  não mostrou a herança: lá a suíte leu 83 MB para o leitor, lançado pelo pytest.
+- **A base do processo, lida por `VmHWM`, é de 92 MB no Linux**: o Python com 9 MB, o
+  `import duckdb` com 42 MB, a conexão com 2 MB e o `import pyarrow` com 39 MB, com o `mimalloc`
+  como pool padrão do PyArrow. Com a medida certa e o teto absoluto, o arquivo de transbordo ficou
+  entre 132 MB e 145 MB, contra o teto de 168 MB, de que a base ocupa mais da metade.
+- **O acréscimo sobre a base**, em cinco execuções dos dois casos sozinhos e duas da suíte inteira,
+  com 10.000.000 de linhas: a tabela inteira com 335 MB, de 242 MB a 243 MB acima da base; o leitor
+  em lotes com 102 MB, de 9 MB a 10 MB acima; o arquivo de transbordo de 130 MB a 138 MB, de 37 MB a
+  45 MB acima, com 81 MB de arquivo. Um leitor que guarda todos os lotes numa lista acrescentou
+  245 MB e reprovou; sob um pai com 500 MB, a medida nova leu 10 MB de acréscimo e a antiga, 673 MB
+  de pico. O `import pyarrow` feito pelo `to_arrow_reader`, com a consulta já rodando, deixou o
+  leitor em 103 MB sobre uma base de 53 MB.
+
+**Consequência**: as duas sondas de `test_duckdb.py` leem o pico do próprio processo (`VmHWM` no
+Linux, `ru_maxrss` no macOS), importam o PyArrow antes da base e comparam o acréscimo de cada
+cenário sobre ela, com o mesmo teto de metade do acréscimo da tabela inteira. O `peak_rss_mb` de
+`scripts/migrate_parquet_to_delta.py` lê o `ru_maxrss` do próprio processo: por
+`.venv/bin/python`, como no `README.md` para o ambiente alvo, ele herda só o pico do shell, e pelo
+`uv run`, os 37 MB do `uv`. Com a correção, as três sessões deram no Linux as contagens do macOS
+([`CURRENT_STATE.md`](CURRENT_STATE.md)): 214 aprovados e 243 pulados sem variável, 383 e 74 com a
+raiz local, 456 e 1 com o substituto.
+
+## O que os probes mostraram no ambiente alvo em 2026-09-23
+
+Em 2026-09-23, entre 19:18 e 19:19 UTC, os cinco probes rodaram de novo no ambiente alvo, a partir
+da `main`, sobre a raiz `.../shared/serialize-db-tests`. Nenhuma checagem reprovou, e as chamadas
+que falharam são as leituras negadas ao papel, os serviços sem rota e o pacote `sagemaker_studio`,
+já conhecidos.
+
+- **A máquina** (`space.py`): 4 vCPUs, 15,4 GiB de memória e 29,7 GiB livres de 37,0 GiB num disco
+  só; o DuckDB 1.5.5 com 4 threads e `memory_limit` de 12,3 GiB. Em 2026-09-21 eram 2 vCPUs e
+  7,6 GiB: a instância do espaço mudou. A `.venv` traz o grupo `dev` com o moto 5.2.3 (`SP-9`), e a
+  rede é a mesma, sem proxy e sem internet, com os endpoints VPC de interface do STS, das três APIs
+  do Redshift, do Glue, do Athena, do Secrets Manager e do DataZone.
+- **`RS-8`** (`redshift.py`): depois do `USE datalake_rw_shared`, `svv_table_info` respondeu
+  `permission denied for relation svv_table_info` (42501) ao papel do projeto. `RS-19` passou pelo
+  critério novo, com `sbx_aco_decon.<tabela>` resolvendo e `current_database()` em `dev`, e `RS-5`
+  leu `USAGE` e `CREATE` falsos depois do `USE`, como em 2026-09-21. A credencial temporária do
+  workgroup vale uma hora (`RS-15`), e a de quem chama expirava em 56 minutos (`RS-18`).
+- **O teste de alcance** (`bucket.py`, `redshift.py`): o IAM e o KMS não conectaram por TCP em 2 s,
+  e `simulate_principal_policy` e `describe_key` não foram chamadas, contra 10 s e 80 s de espera
+  em 2026-09-21.
+- **O bucket** (`bucket.py`): SSE-KMS com bucket key (`BK-5`); sob a raiz dos probes, 219 versões
+  não correntes (1.388.530 bytes) e 219 marcadores de exclusão (`BK-14`); o ciclo de vida, a
+  política, os uploads multipart, o versionamento e o Object Lock negados, como em 2026-09-21. Em
+  `diagnose_aws.py`, o boto3, o delta-rs e o DuckDB listaram o prefixo.
+- **O catálogo** (`catalog.py`): o Glue com um banco e uma tabela Parquet, o Athena com três
+  workgroups, e o Lake Formation e o S3 Tables sem resposta (`ConnectTimeoutError` em 60,6 s e
+  30,2 s): o gatilho de reavaliação não disparou.
+
+**Consequência**: a leitura da distribuição atribuída da [etapa 8](PLAN-STAGE-8.md) precisa de uma
+fonte que o papel leia, e a escolha entrou nas decisões pendentes da etapa;
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perdeu os itens de `svv_table_info` e do teste de alcance.

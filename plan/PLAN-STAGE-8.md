@@ -135,7 +135,7 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 | Primeira publicação | `test_first_publication_loads_every_partition` (`redshift`) | Sem linha de controle, todas as partições; a linha de controle escrita na mesma transação. |
 | Falha no meio | `test_failed_copy_leaves_control_row_untouched` (`redshift`) | Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto. |
 | Estado | `test_publication_status_lists_pending_partitions` | A versão publicada, a atual e as partições pendentes por tabela. |
-| Distribuição atribuída | `test_published_tables_distribution_is_read` (`redshift`) | `svv_table_info` depois da primeira publicação: `diststyle`, `sortkey1`, `tbl_rows` e `skew_rows` de cada tabela publicada, como leitura, nunca como reprovação; a visão negada também é leitura, porque `RS-8` ainda não foi lida no ambiente alvo. O modelo cliente não declara `redshift` e a distribuição é `AUTO` (decisão do usuário de 2026-09-21): é esta leitura que diz se uma `distkey` explícita se paga, e ela entraria por `ALTER TABLE`. |
+| Distribuição atribuída | `test_published_tables_distribution_is_read` (`redshift`) | `svv_table_info` depois da primeira publicação: `diststyle`, `sortkey1`, `tbl_rows` e `skew_rows` de cada tabela publicada, como leitura, nunca como reprovação; a visão negada também é leitura: o probe de 2026-09-23 (`RS-8`) recebeu `permission denied` (42501) nela depois do `USE`, e a fonte da leitura é decisão pendente. O modelo cliente não declara `redshift` e a distribuição é `AUTO` (decisão do usuário de 2026-09-21): é esta leitura que diz se uma `distkey` explícita se paga, e ela entraria por `ALTER TABLE`. |
 
 ## Rascunhos executados
 
@@ -250,3 +250,8 @@ segredo fora do texto impresso: True
   descer abaixo do maior valor existente ([`redshift.md`](redshift.md)). A proposta é
   `reconcile_published` ler a largura da tabela publicada (`svv_all_columns`, que a suíte lê desde
   2026-09-21) e emitir o comando quando o modelo cresce; a diminuição é destrutiva.
+- **[decisão] A fonte da leitura da distribuição atribuída.** O papel do projeto não lê
+  `svv_table_info` depois do `USE` (`permission denied`, 42501, probe de 2026-09-23,
+  [`POC.md`](POC.md)), e `test_published_tables_distribution_is_read` fica sem a visão que diria se
+  uma `distkey` explícita se paga (a distribuição é `AUTO`, decisão do usuário de 2026-09-21). Uma
+  fonte que o papel leia no esquema do datashare ainda não foi medida no ambiente alvo.

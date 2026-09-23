@@ -139,3 +139,12 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   end of the query (4.531 s in a three-process reproducer, with the second batch already in memory),
   so a test that closes a stream "mid-query" asserts the thread ended and the session is free, with
   the error null or the interrupt's. `plan/POC.md`, `plan/PLAN-STAGE-6.md`
+- The memory probes of `tests/proof_of_concept/test_duckdb.py` on Linux x86_64 (2026-09-23, 4 vCPUs,
+  Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1): a new process's `ru_maxrss` starts at its parent's
+  peak on Linux, so the probes read `VmHWM` from `/proc/self/status` there and `ru_maxrss` on macOS,
+  import PyArrow before the base and count each scenario from the base after the imports and the
+  connection, 92 MB on Linux (Python 9 MB, `import duckdb` 42 MB, the connection 2 MB,
+  `import pyarrow` 39 MB, PyArrow's default pool `mimalloc`). 10,000,000 rows: the whole table
+  335 MB (242 to 243 MB over the base), the direct reader 102 MB (9 to 10 MB), the spool 130 to
+  138 MB (37 to 45 MB, 81 MB of file); PyArrow imported by `to_arrow_reader` mid-query left the
+  reader at 103 MB over a 53 MB base. `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`

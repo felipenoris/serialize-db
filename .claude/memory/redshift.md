@@ -128,7 +128,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   value as a reading. `has_schema_privilege('sbx_aco_decon', 'CREATE')` after the `USE` answered
   `false` without error in the suite of 2026-09-21 (one reading), in the schema where `CREATE TABLE`
   works: the function does not prove the privilege on a datashare schema, the `CREATE` does;
-  `svv_table_info` after the `USE` remains unread. Other
+  `svv_table_info` after the `USE` answered `permission denied for relation svv_table_info` (42501)
+  to the project's role (probe `RS-8`, 2026-09-23), so stage 8 needs another source for the assigned
+  distribution (`plan/PLAN-STAGE-8.md`). Other
   readings: `enable_case_sensitive_identifier` off, `datestyle` `ISO, MDY`, `statement_timeout` 0,
   `wlm_query_slot_count` 1, `sys_load_error_detail` answered 0 in 2.4 s; the Data API `select 1` stayed
   `PICKED` for 30 s (23 ms the day before); `iam.simulate_principal_policy` times out in the target
