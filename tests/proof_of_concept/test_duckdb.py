@@ -5,10 +5,12 @@ comando seguinte e preservado num cursor próprio, a consulta em streaming (o pr
 fim, a memória de um lote, medida em subprocesso), o ``INSERT`` alimentado por um leitor sobre um
 gerador Python (um comando só, e os lotes que o leitor não confere), o tipo ``DECIMAL`` inferido de
 uma amostra do pandas contra o fixado pelo esquema Arrow, JSON, o custo do ``executemany`` contra a
-carga por Arrow e as consultas da auditoria. Sob a raiz local (marcador
-``local``): ``COPY ... TO`` com ``RETURN_STATS`` e o esquema físico do Parquet gravado, o ``COPY``
-particionado por mês e um banco em arquivo com pasta de transbordo. O ``delta_scan`` está em
-``poc_delta.py``.
+carga por Arrow, as consultas da auditoria, a soma de controle que o ``NaN`` derruba e a que o
+``DECIMAL(38, 6)`` torna independente das threads, o ``interrupt()`` chamado de outra thread e o
+``cursor()`` aberto com uma consulta em curso. Sob a raiz local (marcador ``local``): ``COPY ...
+TO`` com ``RETURN_STATS`` e o esquema físico do Parquet gravado, o ``RETURN_STATS`` com ``NaN``,
+infinito e texto longo, o ``COPY`` particionado por mês e um banco em arquivo com pasta de
+transbordo. O ``delta_scan`` está em ``poc_delta.py``.
 """
 
 from __future__ import annotations
@@ -238,10 +240,11 @@ print(json.dumps({"rows": n, "seconds": round(time.perf_counter() - started, 3),
 def test_spooled_stream_bounds_memory(local_location: LocalLocation) -> None:
     """O resultado gravado lote a lote num arquivo Arrow IPC com LZ4 por uma thread, e lido lote a lote enquanto ela grava, mantém o processo no tamanho de um lote, como o leitor direto.
 
-    É o ``stream`` da sessão única (``test_parallel.py``): a thread roda a consulta sob o lock e grava
-    cada lote assim que o DuckDB o entrega, e o cliente lê cada lote gravado sem a sessão. O tempo
-    até o primeiro lote, o tempo da consulta, o tamanho do arquivo e a memória máxima vão para o
-    relatório; a asserção é a mesma do leitor direto, menos da metade da memória da tabela inteira.
+    É o caminho do arquivo do ``stream`` híbrido (``test_parallel.py``), o que ele toma depois do
+    orçamento de memória: a thread roda a consulta sob o lock e grava cada lote assim que o DuckDB o
+    entrega, e o cliente lê cada lote gravado sem a sessão. O tempo até o primeiro lote, o tempo da
+    consulta, o tamanho do arquivo e a memória máxima vão para o relatório; a asserção é a mesma do
+    leitor direto, menos da metade da memória da tabela inteira.
     """
     rows = 10_000_000
     folder = Path(local_location.child("transbordo_memoria"))
@@ -444,6 +447,153 @@ def test_copy_to_parquet_with_return_stats(local_location: LocalLocation) -> Non
     assert repetition["id_operacao"] == "OPTIONAL"
 
     assert con.execute(f"SELECT count(*) FROM read_parquet('{path}')").fetchone()[0] == 10_000
+    con.close()
+
+
+@pytest.mark.local
+def test_return_stats_leave_nan_out_and_bound_long_text(local_location: LocalLocation) -> None:
+    """O ``RETURN_STATS`` de um ``DOUBLE`` com ``NaN`` marca ``has_nan`` e dá o máximo sem ele; o infinito sai ``inf``; o texto longo sai truncado em 256 caracteres, com o máximo arredondado para cima, e o texto multibyte longo sai sem mínimo e máximo.
+
+    ``register_files`` da [etapa 3](../../plan/PLAN-STAGE-3.md) transcreve o ``Double`` por
+    ``float``: o ``NaN`` fica fora do máximo registrado, e ``float("inf")`` vira ``Infinity`` no JSON
+    do log (``test_deltalake.py::test_nan_statistics_hide_rows_from_delta_scan``). No texto, o
+    máximo truncado continua acima de todo valor do arquivo, e a poda não perde linha.
+    """
+    folder = Path(local_location.child("duckdb/estatisticas"))
+    folder.mkdir(parents=True)
+    con = duckdb.connect()
+
+    def column_stats(values_sql: str, column: str) -> dict[str, str]:
+        con.execute(f"CREATE OR REPLACE TABLE t AS SELECT * FROM (VALUES {values_sql}) v({column})")
+        row = con.execute(f"COPY t TO '{folder / 'f.parquet'}' (FORMAT parquet, RETURN_STATS)").fetchone()
+        return row[4][f'"{column}"']
+
+    # NaN: o máximo é o maior número, e has_nan avisa. O infinito entra como texto 'inf'.
+    with_nan = column_stats("(1.5), ('nan'::DOUBLE), (2.0)", "valor")
+    assert (with_nan["has_nan"], with_nan["min"], with_nan["max"]) == ("true", "1.5", "2.0")
+    with_infinity = column_stats("(1.5), ('inf'::DOUBLE)", "valor")
+    assert (with_infinity["has_nan"], with_infinity["max"]) == ("false", "inf")
+    assert json.dumps({"max": float(with_infinity["max"])}) == '{"max": Infinity}'  # não é JSON válido
+
+    # Texto: 255 caracteres e o último incrementado, um limite superior do valor real.
+    long_z = "a" * 300 + "z"
+    long_text = column_stats(f"('{'a' * 300 + 'b'}'), ('{long_z}')", "texto")
+    assert long_text["max"] == "a" * 255 + "b" and long_text["max"] > long_z
+    assert long_text["min"] == "a" * 256
+    multibyte = column_stats(f"('{'ç' * 200 + 'z'}'), ('{'ç' * 10}')", "texto")
+    assert "min" not in multibyte and "max" not in multibyte
+    con.close()
+
+
+def test_control_total_fails_on_nan_and_infinity(con: duckdb.DuckDBPyConnection) -> None:
+    """A soma de controle da auditoria, ``sum(CAST(valor AS DECIMAL(38, 6)))``, falha com ``ConversionException`` num ``NaN`` ou num infinito, também sob ``FILTER (WHERE isfinite(valor))``; um ``CASE`` com ``isfinite`` soma só os finitos.
+
+    Um ``Double`` não finito derrubaria a verificação ``linhas`` inteira da etapa 4 em vez de
+    aparecer como contagem. O ``FILTER`` do agregado não evita o erro, porque o ``CAST`` é avaliado
+    em toda linha antes dele.
+    """
+    con.execute("CREATE TABLE t AS SELECT * FROM (VALUES (1, 1.5), (2, 'nan'::DOUBLE), (3, 'inf'::DOUBLE)) v(id, valor)")
+    for special in (2, 3):
+        with pytest.raises(duckdb.ConversionException, match="to DECIMAL\\(38,6\\)"):
+            con.execute(f"SELECT sum(CAST(valor AS DECIMAL(38, 6))) FROM t WHERE id = {special}").fetchall()
+    with pytest.raises(duckdb.ConversionException):
+        con.execute("SELECT sum(CAST(valor AS DECIMAL(38, 6))) FILTER (WHERE isfinite(valor)) FROM t").fetchall()
+    finite = con.execute(
+        "SELECT sum(CASE WHEN isfinite(valor) THEN CAST(valor AS DECIMAL(38, 6)) END), count(*) FILTER (WHERE NOT isfinite(valor)) FROM t"
+    ).fetchone()
+    assert finite == (decimal.Decimal("1.500000"), 2)
+
+
+def test_control_total_by_decimal_does_not_depend_on_threads(con: duckdb.DuckDBPyConnection) -> None:
+    """A soma de controle por ``DECIMAL(38, 6)`` dá o mesmo valor com qualquer número de threads; a soma em ``DOUBLE`` depende da ordem, e as suas somas são leituras do relatório.
+
+    É o motivo do ``CAST`` na soma de controle da auditoria: sem ele, duas execuções sobre as
+    mesmas linhas podem discordar nas últimas casas.
+    """
+    con.execute(
+        "CREATE TABLE t AS SELECT (hash(range) % 2400000000000)::DOUBLE / 100 - 11846195394.62 AS valor FROM range(5_000_000)"
+    )
+    as_double = []
+    as_decimal = []
+    for threads in (1, 2, 4):
+        con.execute(f"SET threads = {threads}")
+        as_double.append(con.execute("SELECT sum(valor) FROM t").fetchone()[0])
+        as_decimal.append(con.execute("SELECT sum(CAST(valor AS DECIMAL(38, 6))) FROM t").fetchone()[0])
+    assert len(set(as_decimal)) == 1
+    record("duckdb.control_total_double_by_threads", ", ".join(repr(total) for total in as_double))
+
+
+def test_interrupt_stops_a_blocking_query_from_another_thread() -> None:
+    """``interrupt()``, chamado de outra thread, para em milissegundos uma consulta presa num operador bloqueante; a conexão continua usável, um ``interrupt()`` ocioso não afeta o comando seguinte, e o de uma conexão não para a consulta de um cursor dela.
+
+    O ``close`` de um ``stream`` da etapa 4 só confere o pedido de parada entre lotes; uma ordenação
+    não entrega lote algum antes de terminar. O tempo até parar é leitura do relatório.
+    """
+    con = duckdb.connect(config={"threads": 2})
+    con.execute("CREATE TABLE t AS SELECT range AS id, hash(range) AS h FROM range(20_000_000)")
+    outcome: dict[str, object] = {}
+
+    def sort_all(connection: duckdb.DuckDBPyConnection) -> None:
+        try:
+            connection.execute("SELECT id FROM t ORDER BY h").to_arrow_table()
+            outcome["error"] = None
+        except duckdb.Error as error:
+            outcome["error"] = error
+
+    worker = threading.Thread(target=sort_all, args=(con,))
+    worker.start()
+    time.sleep(0.2)
+    asked = time.perf_counter()
+    con.interrupt()
+    worker.join(timeout=10)
+    stopped = time.perf_counter() - asked
+    assert isinstance(outcome["error"], duckdb.InterruptException)
+    record("duckdb.interrupt_stop", f"{stopped * 1e3:.1f} ms depois do pedido")
+
+    # A conexão continua usável, e um interrupt sem consulta em curso não afeta o comando seguinte.
+    assert con.execute("SELECT count(*) FROM t").fetchone()[0] == 20_000_000
+    con.interrupt()
+    assert con.execute("SELECT 42").fetchone()[0] == 42
+
+    # O interrupt pertence à conexão: a consulta num cursor dela, que é outra conexão, termina.
+    cursor = con.cursor()
+    outcome.clear()
+    worker = threading.Thread(target=sort_all, args=(cursor,))
+    worker.start()
+    time.sleep(0.2)
+    con.interrupt()
+    worker.join(timeout=30)
+    assert outcome["error"] is None
+    cursor.close()
+    con.close()
+
+
+def test_cursor_opens_while_the_connection_runs_a_query() -> None:
+    """``cursor()`` volta na hora com uma consulta em curso na conexão, de outra thread, e o cursor novo consulta o mesmo banco.
+
+    ``new_session()`` da etapa 4 e um cursor próprio não precisam do lock da sessão para nascer: a
+    sessão a mais pedida durante um comando longo da principal não espera por ele.
+    """
+    con = duckdb.connect(config={"threads": 2})
+    con.execute("CREATE TABLE t AS SELECT range AS id, hash(range) AS h FROM range(20_000_000)")
+    finished = threading.Event()
+
+    def sort_all() -> None:
+        con.execute("SELECT id FROM t ORDER BY h").to_arrow_table()
+        finished.set()
+
+    worker = threading.Thread(target=sort_all)
+    worker.start()
+    time.sleep(0.2)
+    started = time.perf_counter()
+    cursor = con.cursor()
+    opened = time.perf_counter() - started
+    running = not finished.is_set()
+    assert cursor.execute("SELECT count(*) FROM t").fetchone()[0] == 20_000_000
+    worker.join(timeout=30)
+    assert running and opened < 0.1
+    record("duckdb.cursor_during_a_query", f"{opened * 1e3:.2f} ms com a consulta da conexão em curso")
+    cursor.close()
     con.close()
 
 

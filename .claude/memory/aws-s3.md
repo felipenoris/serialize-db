@@ -32,6 +32,11 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `AWS_REGION` and no `~/.aws/config` needs maintenance; `test_boto3_credential_source` needs STS
   (60 s per attempt, 5 attempts by default). On a dead network delta-rs gives up in 10 s with
   `max_retries=1` and `retry_timeout=10s` in `storage_options` (59 s without). `README.md`
+- `pyarrow.fs.FileSystem.from_uri("s3://<bucket>/...")` without a region looks the bucket's region
+  up over the network at construction (0.49 s and `OSError: Bucket ... not found` in a stripped
+  environment); `?region=...` in the URI or `S3FileSystem(region=...)` builds in 0.00 s without
+  network, so stage 3 builds the filesystem with the environment's region (2026-09-23).
+  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 
 ## The target's network, read on 2026-09-21
 

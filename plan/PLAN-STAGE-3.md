@@ -13,7 +13,7 @@ armazenamento recebe o `Storage`, que resolve `storage_options()` a cada chamada
 
 | Primitiva | O que faz |
 | --- | --- |
-| `Storage.for_uri(uri)` | `pafs.FileSystem.from_uri` para `s3://bucket/prefixo`, `pafs.LocalFileSystem` com o caminho resolvido para um caminho ou `file://`, como `open_location` do script. |
+| `Storage.for_uri(uri)` | `pafs.S3FileSystem` com a região de `AWS_REGION` ou `AWS_DEFAULT_REGION` e o `endpoint_override` de `AWS_ENDPOINT_URL` para `s3://bucket/prefixo`, sem rede na construção; `pafs.LocalFileSystem` com o caminho resolvido para um caminho ou `file://`. |
 | `join(*parts)`, `exists(path)`, `list_files(prefix, suffix)`, `delete(paths)` | Caminhos relativos à raiz, pelo `get_file_info` e pelo `delete_file` do sistema de arquivos; a listagem exclui `_delta_log/`. |
 | `read_text(path)`, `write_text(path, text, if_match=None, if_none_match=False)` | Escrita condicional, o único ramo por armazenamento: `put_object` do `boto3` com `IfMatch` ou `IfNoneMatch` no S3 (412 vira `ConflictError`), porque o `pyarrow.fs` não tem a condição nem devolve a etag; `O_EXCL` e `os.replace` na pasta local. É a escrita de `_serialize_db/snapshots.json`. |
 | `copy(source, destination)` | `copy_file` do sistema de arquivos, que no S3 é o `CopyObject`; a exportação sem ler dados. |
@@ -33,11 +33,11 @@ solto, e `value` é o valor de uma partição, `None` numa tabela sem partição
 | `max_key(dt, column)` | O maior valor de `column` na versão carregada: o máximo de `max.<coluna>` de `get_add_actions(flatten=True)`, sem ler dados, ou a varredura da coluna quando um arquivo não tem a estatística; 0 na tabela vazia. O início de `run.next_ids`, e por isso a estatística registrada é verdadeira ou omitida (seção "As conferências do registro de arquivos"): a omitida cai na varredura, a falsa daria chaves repetidas. |
 | `commit_metadata(execution_id, input_versions, snapshot=None)` | O dicionário de `CommitProperties(custom_metadata=...)`: `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`. |
 | `publish_partition(uri, table, value, data, metadata, storage)` | `write_deltalake(dt, data, mode="overwrite", predicate="<coluna de partição> = '<valor>'")` de `data` já passado por `cast`, pelo objeto `DeltaTable`, e devolve `dt.version()`, a versão do próprio commit; `value=None` numa tabela sem partição substitui a tabela inteira; `CommitFailedError` sobe como `ExecutionConflict`. |
-| `register_files(uri, table, files, value, metadata, storage, expected_rows=None)` | Arquivos que outro escritor gravou dentro da pasta da tabela entram no log por `create_write_transaction(mode="overwrite", partition_filters=...)`, uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. O `create_write_transaction` grava a ação como a recebe, e os leitores obedecem à ação, não ao arquivo ([`POC.md`](POC.md)); a primitiva faz as conferências da seção "As conferências do registro de arquivos" antes do commit e a releitura depois dele. Os arquivos do `UNLOAD` do Redshift têm mínimo e máximo, menos nas colunas de timestamp, que saem em `INT96` e não carregam estatística: a coluna fica fora de `minValues` e `maxValues` sem falhar o registro ([`redshift.md`](redshift.md)). O `schema.elements` do manifesto verboso lista a coluna de partição, que os arquivos não têm (suíte de 2026-09-21): a lista esperada da conferência a inclui. |
+| `register_files(uri, table, files, value, metadata, storage, expected_rows=None)` | Arquivos que outro escritor gravou dentro da pasta da tabela entram no log por `create_write_transaction(mode="overwrite", partition_filters=...)`, uma `AddAction` por arquivo: caminho relativo à pasta da tabela, tamanho, valores de partição e estatísticas do `RETURN_STATS` do DuckDB ou do rodapé Parquet. O `create_write_transaction` grava a ação como a recebe, e os leitores obedecem à ação, não ao arquivo ([`POC.md`](POC.md)); a primitiva faz as conferências da seção "As conferências do registro de arquivos" antes do commit e a releitura depois dele. Os arquivos do `UNLOAD` do Redshift têm mínimo e máximo, menos nas colunas de timestamp, que saem em `INT96` e não carregam estatística: a coluna fica fora de `minValues` e `maxValues` sem falhar o registro ([`redshift.md`](redshift.md)). O `schema.elements` do manifesto verboso lista a coluna de partição, que os arquivos não têm (suíte de 2026-09-21): a lista esperada da conferência a inclui. O segundo registro da mesma partição a partir da mesma versão é `CommitFailedError` (leitura de 2026-09-23), que sobe como `ExecutionConflict`, como em `publish_partition`. |
 | `read_back(uri, table, value, expected_rows, storage)` | A releitura da versão recém-commitada pelos dois leitores, em conexão DuckDB própria; uma diferença volta a versão e levanta `RegistrationRefused`. |
 | `schema_diff(table, dt)` | O `SchemaDiff` entre `arrow_schema(table)` e `dt.schema()`: coluna nova anulável, `NOT NULL` relaxado, `CHECK` e comentário divergente são aditivos; coluna `NOT NULL` nova em tabela com dados, renomeação, remoção e mudança de tipo são destrutivos. |
 | `reconcile(uri, table, storage)` | Aplica o diff aditivo (`add_columns`, `drop_column_not_null`, `add_constraint`, `set_table_description` e `set_column_metadata`) e recusa o destrutivo com a mensagem que aponta `rewrite`. |
-| `rewrite(uri, table, storage, expressions=None)` | A tabela inteira com o esquema do contrato num único commit e sem predicado: `COPY ... PARTITION_BY (<coluna de partição>) ... RETURN_STATS` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. `expressions` dá, por coluna do contrato, a expressão sobre a versão atual que a preenche: o nome antigo numa renomeação, o valor de uma coluna `NOT NULL` nova (decisão do usuário de 2026-09-22). A conexão DuckDB é aberta aqui e configurada por `storage.duckdb_setup`, sem o motor da [etapa 4](PLAN-STAGE-4.md): `delta` não depende de `engine`. |
+| `rewrite(uri, table, storage, expressions=None)` | A tabela inteira com o esquema do contrato num único commit e sem predicado: `COPY ... PARTITION_BY (<coluna de partição>) ... RETURN_STATS` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. `expressions` dá, por coluna do contrato, a expressão sobre a versão atual que a preenche: o nome antigo numa renomeação, o valor de uma coluna `NOT NULL` nova (decisão do usuário de 2026-09-22). A conexão DuckDB é aberta aqui e configurada por `storage.duckdb_setup`, sem o motor da [etapa 4](PLAN-STAGE-4.md): `delta` não depende de `engine`. `CommitFailedError` sobe como `ExecutionConflict`. |
 | `copy_manifest(uri, version, partitions, destination, storage)` | O manifesto do `COPY` do Redshift (`url` e `meta.content_length` de `get_add_actions()`), gravado sob `publicacao/`. |
 | `version_diff(uri, published, current, table, storage)` | As partições com ações `add` ou `remove` de dados entre as duas versões, lidas do log; a compactação (`dataChange` falso) não conta. Um arquivo do log ausente é `LogUnavailable`, com a instrução de publicar a tabela inteira (decisão do usuário de 2026-09-22). |
 | `read_snapshots(storage, environment)`, `snapshot(storage, environment, name, versions)` | O arquivo de controle `_serialize_db/snapshots.json` do ambiente com a impressão digital, e a entrada `{name: versions}` gravada nele com `write_text(if_match=...)`. |
@@ -79,7 +79,15 @@ o rodapé de cada arquivo, um GET por arquivo:
    podar, uma errada poda o arquivo certo. Os quatro tipos são os que a sondagem de 2026-09-22
    mediu transcrevendo exato ([`POC.md`](POC.md), decisão do usuário do mesmo dia); `decimal` fica
    de fora porque o próprio delta-rs grava o mínimo e o máximo como número JSON e perde a linha na
-   poda, e `timestamp` porque o valor sai truncado em milissegundos.
+   poda, e `timestamp` porque o valor sai truncado em milissegundos. O `Double` transcreve exato só
+   os valores finitos: com `NaN` na coluna, o `RETURN_STATS` dá `has_nan` e o maior número como
+   máximo, e o `delta_scan ... WHERE valor > 3` perdeu a linha que o DuckDB ordena acima de todo
+   número; o infinito entraria no JSON do log como `Infinity`, que não é JSON válido (leitura de
+   2026-09-23, [`POC.md`](POC.md)). O extremo infinito fica fora, como o escritor do delta-rs faz,
+   que grava `null` no lugar dele. O `NaN`, que o `cast` aceita (decisão do usuário de 2026-09-23),
+   é a questão aberta da [issue #59](https://github.com/felipenoris/serialize-db/issues/59), porque
+   o próprio delta-rs grava o máximo sem ele. O texto não tem exceção: o
+   `RETURN_STATS` trunca o máximo para cima, e omite o texto multibyte longo.
 
 A reprovação recusa o commit com o arquivo e a conferência na mensagem, e os arquivos ficam órfãos na
 pasta até `vacuum(full=True)`. Depois do commit, `read_back` lê a versão nova pelo delta-rs e pelo
@@ -224,10 +232,14 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   montados em variáveis nomeadas, e a versão lida do objeto `DeltaTable` que escreveu, nunca de
   `DeltaTable(uri).version()`, que devolve o último commit do log, talvez de outro escritor
   (leitura de 2026-09-22, [`POC.md`](POC.md)).
-- **`Storage.for_uri`** repete `open_location` de `scripts/migrate_parquet_to_delta.py`:
-  `pafs.FileSystem.from_uri(uri)` para `s3://`, e para um caminho ou `file://` o
-  `pafs.LocalFileSystem()` com o caminho resolvido. Os caminhos das primitivas são relativos à raiz
-  e `join` os monta com `/`; `list_files` é `get_file_info(FileSelector(prefixo, recursive=True))`,
+- **`Storage.for_uri`** constrói o `pafs.S3FileSystem` para `s3://` com a região de `AWS_REGION` ou
+  `AWS_DEFAULT_REGION`, a mesma que `storage_options` passa ao delta-rs, e o `endpoint_override` de
+  `AWS_ENDPOINT_URL`, e para um caminho ou `file://` o `pafs.LocalFileSystem()` com o caminho
+  resolvido. O `pafs.FileSystem.from_uri(uri)` de `open_location`, no script, consulta a região do
+  bucket na rede quando a URI não a traz (0,49 s num ambiente despido, leitura de 2026-09-23,
+  [`POC.md`](POC.md)), e `test_storage_for_uri` roda sem rede na esteira do GitHub. Os caminhos
+  das primitivas são relativos à raiz e `join` os monta com `/`; `list_files` é
+  `get_file_info(FileSelector(prefixo, recursive=True))`,
   `delete` é `delete_file`, `copy` é `copy_file`, e os rodapés de `register_files` saem de
   `pq.ParquetFile` sobre `open_input_file` do mesmo sistema de arquivos.
 - **`write_text`** é a escrita de `_serialize_db/snapshots.json`. Na pasta local, `if_none_match`
@@ -236,7 +248,9 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   atômicas entre processos, o que basta à pasta local, o ambiente dos testes e do desenvolvimento.
   No S3, `put_object` do `boto3` com `IfNoneMatch="*"` ou `IfMatch=<etag>`, atômico no servidor, e
   o 412 vira `ConflictError`; `read_text` lê pelo `get_object`, que devolve a etag. `read_text`
-  devolve o texto e a impressão para a escrita seguinte. É o único uso do `boto3` na etapa.
+  devolve o texto e a impressão para a escrita seguinte. É o único uso do `boto3` na etapa, que o
+  leva às dependências de execução fixado em 1.43.98, a versão do `uv.lock`, e roda
+  `prepare_offline.sh` de novo.
 - **`storage_options`** monta as opções do delta-rs a cada chamada: `AWS_REGION` de
   `AWS_REGION` ou `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL` quando presente, `max_retries` e
   `retry_timeout` para uma rede morta falhar em segundos, e as chaves de SSE quando configuradas.
@@ -280,9 +294,11 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   `String`, os quatro tipos que transcrevem exato, e `nullCount` de todas as que o rodapé traz. O
   inteiro converte por `int`, a data e o texto saem como o texto do `RETURN_STATS`, e o `Double` por
   `float`, que faz o percurso de ida e volta na representação mais curta.
-  `create_write_transaction` não atualiza o objeto `DeltaTable` (leituras de 2026-09-21 e
-  2026-09-22), então a primitiva relê a versão depois do commit; com uma execução por ambiente, a
-  versão relida é a do próprio commit.
+  `create_write_transaction` devolve `None` e não atualiza o objeto `DeltaTable` (leituras de
+  2026-09-21 a 2026-09-23), então a primitiva relê a versão depois do commit; com uma execução por
+  ambiente, a versão relida é a do próprio commit. O commit confere conflito como o
+  `write_deltalake`: um segundo registro da mesma partição, a partir da versão que o primeiro
+  substituiu, é `CommitFailedError`, e a primitiva o converte em `ExecutionConflict`.
 - **`read_back`** roda depois do commit, numa conexão DuckDB própria configurada por
   `duckdb_setup`, como `rewrite`: `count(*)` e mínimo e máximo da chave por partição no delta-rs
   (`to_pyarrow_dataset`) e no `delta_scan` do DuckDB; uma diferença chama `restore(version - 1)` e
@@ -354,7 +370,7 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
-| Armazenamento por URI | `test_storage_for_uri` (sem gravar) | `s3://`, `file://` e caminho dão o sistema de arquivos certo (`S3FileSystem`, `LocalFileSystem`) e o caminho nele; outra URI é erro. |
+| Armazenamento por URI | `test_storage_for_uri` (sem gravar e sem rede) | `s3://`, `file://` e caminho dão o sistema de arquivos certo (`S3FileSystem` com a região da variável, `LocalFileSystem`) e o caminho nele; outra URI é erro. |
 | Escrita condicional | `test_write_text_exclusive_create_and_if_match` | A segunda criação exclusiva e o `if_match` velho são `ConflictError`; o conteúdo final é o da escrita que venceu. |
 | Listagem, cópia e exclusão | `test_list_copy_delete` | `list_files` exclui `_delta_log/`; `copy` preserva bytes; `delete` de caminho ausente não falha. |
 | Opções do delta-rs | `test_storage_options_resolved_per_call` | Duas chamadas devolvem dicionários novos; a região vem da variável; `max_retries` presente; nenhuma chave de credencial no dicionário. |
@@ -628,7 +644,16 @@ não o seu texto.
 
 ## Decisões pendentes
 
-Nenhuma. As seis decisões da etapa, todas do usuário em 2026-09-22, estão escritas na seção que
+- **O mínimo e o máximo de uma coluna `Double` com `NaN`**, a
+  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). Os dois escritores deixam o
+  `NaN` fora do máximo, e o `delta_scan` perde a linha num filtro por intervalo quando poda o arquivo
+  (leitura de 2026-09-23, [`POC.md`](POC.md)); o `cast` aceita o `NaN` (decisão do usuário de
+  2026-09-23). Proposto: `register_files` omite o mínimo e o máximo da coluna quando o
+  `RETURN_STATS` traz `has_nan`, e o `publish_partition` continua com os do delta-rs. A migração
+  adiantada registrou o `Double` na base de produção, e a contagem de `isnan` por coluna `Double`
+  nas tabelas migradas, no ambiente alvo, diz se alguma já tem o defeito.
+
+As seis decisões da etapa tomadas pelo usuário em 2026-09-22 estão escritas na seção que
 descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a
 descrição e os comentários de coluna; `storage_options` sem credencial alguma, pela cadeia padrão do
 delta-rs; o mínimo e o máximo das colunas inteiras, de data, `Double` e `String` em

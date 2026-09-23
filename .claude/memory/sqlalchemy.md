@@ -83,6 +83,14 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   `CAST(... AS NUMERIC(18, 2))`, `INSERT ... SELECT DISTINCT ... WHERE NOT EXISTS` on the target
   table) compile byte-identical on both dialects and run in DuckDB over the stage 1 DDL with the
   prefix empty and with `exec_42_`. `plan/POC.md`
+- Without `literal_binds`, an `IN` list compiles as `__[POSTCOMPILE_<name>]`, which DuckDB refuses
+  (`Parameter argument/count mismatch`). The engines' path is `statement.params(**client_params)`
+  then `compile(..., compile_kwargs={"render_postcompile": True})` and `construct_params()`: lists
+  and `bindparam(..., expanding=True)` expand; `params` ignores a name the statement lacks, and a
+  missing value is `InvalidRequestError` at compile time. A `GenericFunction` subclass registers
+  its name in `sa.func` for the whole process (the client's `sa.func.json_valid` then compiles as
+  `is_valid_json` on Redshift); a `FunctionElement` subclass with `name` and `@compiles` per dialect
+  does not (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_sqlalchemy.py`
 
 ## SQL tooling
 

@@ -56,6 +56,28 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `plan/duckdb.md`, `plan/parquet.md`, `plan/redshift.md`, `plan/sqlalchemy.md`
 - A DuckDB listing glob over S3 crosses `/` only with `**`: `*` does not, which gave a count of 0 beside boto3's 16
   in `probes/diagnose_aws.py` before the fix (2026-09-20). `probes/README.md`
+- `interrupt()` called from another thread stops a query stuck in a blocking operator in about
+  2 ms with `InterruptException`, and the connection stays usable; an idle `interrupt()` does not
+  affect the next command, and one connection's `interrupt()` does not stop a query on its
+  `cursor()`. `cursor()` returns in 0.04 ms while the connection runs a query in another thread.
+  The DB-API style `qmark` compiled by `duckdb_engine.Dialect(paramstyle="qmark")` runs with the
+  list built from `compiled.positiontup`, and a `?` inside a quoted literal passes intact
+  (2026-09-23). An `interrupt()` that reaches a read of the Arrow reader surfaces as `OSError:
+  INTERRUPT Error: Interrupted!`, one that reaches `execute` as `duckdb.InterruptException`.
+  `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`, `test_sqlalchemy.py`, `test_parallel.py`
+- `COPY ... (RETURN_STATS)` on a `DOUBLE` with `NaN` gives `has_nan: true` and the largest number
+  as the maximum; infinity comes as the text `inf`. Long text comes truncated to 256 characters,
+  the maximum as 255 characters with the last one incremented, above the real value; long
+  multibyte text comes without minimum and maximum. `sum(CAST(x AS DECIMAL(38, 6)))` fails with
+  `ConversionException` on `NaN` and infinity, also under `FILTER (WHERE isfinite(x))`, because the
+  cast runs before the aggregate filter; `CASE WHEN isfinite(x) THEN CAST(...) END` works
+  (2026-09-23). `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`
+- `sum(x)` over `DOUBLE` depends on the order and the thread count: 20,000,000 values up to
+  1.2e10 with cents gave five results for 1, 2, 4, 8 and 11 threads, the farthest 13,409 from the
+  exact sum, and ascending and descending order differed on one thread; `sum(CAST(x AS
+  DECIMAL(38, 6)))` gave the exact value on all five, and `fsum` a double near it (2026-09-23).
+  `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`
+
 ## Catalog names and limits
 
 - `CREATE TABLE IF NOT EXISTS <name>` guards nothing but the name: over a view it passes and creates

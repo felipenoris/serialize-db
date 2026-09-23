@@ -17,7 +17,7 @@ opcional.
 | `referenced_tables(statement_or_sql)` | As tabelas do contrato que um statement Core (`find_tables`) ou um texto gerado (o sentinela) cita, para o log da execução. |
 | `sql_files(statements, metadata)` | `{"<nome>.duckdb.sql": ..., "<nome>.redshift.sql": ...}` de um dicionário `{nome: statement}`. |
 | `write_sql_files(statements, metadata, directory)` | Grava `sql_files`; `serialize-db sql write` e `serialize-db sql check`. |
-| `read_sql(directory, name, dialect, prefix)` | O texto versionado com o sentinela `{prefix}` trocado pelo `prefix` informado, para o `execute` dos motores. |
+| `read_sql(directory, name, dialect, prefix)` | O texto versionado com o sentinela `{prefix}` trocado pelo `prefix` informado, para a `query` e o `stream` dos motores. |
 
 Testes: `tests/test_sql.py`, sem gravar fora do caso `local`: o statement de `sqlalchemy.md` (parâmetro, `%` em literal,
 prefixo) renderizado nos dois dialetos e executado no DuckDB em memória com `$mes`; `bindparam` sem
@@ -56,7 +56,7 @@ de 2026-09-21; o sentinela dentro das aspas de um identificador analisa, leitura
   dobra o `%` dos literais: o `literal_column` atravessa a compilação como texto, o `bindparam` com
   valor sai como constante, e um nome fora de `[a-z_][a-z0-9_]*` é `SqlError`, porque `bind` não o
   leria. É a decisão do usuário de 2026-09-22: o statement escrito com `bindparam` serve ao
-  `Connection` do cliente, ao `execute` dos motores e aos arquivos, e `param`
+  `Connection` do cliente, à `query` e ao `stream` dos motores e aos arquivos, e `param`
   (`literal_column(":nome")`, que chegava ao driver como texto e falhava no `Connection` com
   `Parser Error: syntax error at or near ":"`) saiu do módulo ([`POC.md`](POC.md)). O texto sai sem
   o espaço que o compilador deixa antes de cada quebra de linha, para o arquivo versionado
@@ -98,8 +98,8 @@ de 2026-09-21; o sentinela dentro das aspas de um identificador analisa, leitura
 - **`read_sql`** abre `<pasta>/<nome>.<dialeto>.sql` com `encoding="utf-8"`, como a etapa 1, e troca
   `{prefix}` pelo `prefix` informado, argumento obrigatório (decisão do usuário de 2026-09-21): quem
   chama sabe o alvo — a string vazia para as tabelas do contrato, `exec_<id>_` para o sandbox da
-  execução —, e a obrigação de informar sobe para o pipeline que lê o arquivo e entrega o texto ao
-  `execute` dos motores das etapas [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md). Nenhuma outra
+  execução —, e a obrigação de informar sobe para o pipeline que lê o arquivo e entrega o texto à
+  `query` e ao `stream` dos motores das etapas [4](PLAN-STAGE-4.md) e [5](PLAN-STAGE-5.md). Nenhuma outra
   primitiva preenche o sentinela.
 - **`serialize-db sql write|check`** recebe `--metadata modulo:atributo`, `--statements
   modulo:atributo` (o dicionário `{nome: statement}` do pipeline, resolvido pelo mesmo caminho de

@@ -346,3 +346,35 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   0.939 s). A requirement that names what overlaps with what is timed on exactly that overlap,
   with the work it names, and a design that keeps it in a weaker form says so in the report.
   `plan/POC.md`
+- **A primitive is measured in the documented usage, with every command its implementation runs**
+  (2026-09-23). The reference `Loader` of `test_parallel.py` wrote into tables the tests created
+  beforehand, so the three-stage pipeline measured on 2026-09-22 and 2026-09-23 never ran the
+  `CREATE TABLE` that the stage 4 `loader` runs under the session lock at open. In the order of the
+  plan's own monthly example, `with stream(...), loader(...)`, that command waits for the whole
+  query of the stream: over 20,000,000 rows the first batch came at 0.811 s instead of 0.006 s,
+  and the requirement reported kept on 2026-09-23 held only with the loader opened first. A sketch
+  that stands in for a primitive runs every command the primitive's plan lists, in the order the
+  documented usage opens them, before its timings back a requirement. `plan/POC.md`
+- **A claim that a type round-trips is probed with the type's special values** (2026-09-22,
+  2026-09-23). The stage 3 decision registered min and max of the four types "that transcribe
+  exactly", measured with finite doubles; `NaN` stays out of the maximum in both Delta writers,
+  and `delta_scan` then answers a range filter by the pruning, while infinity becomes `Infinity`,
+  invalid JSON, through `float`. The same `NaN` makes the audit's control total fail with
+  `ConversionException`, a check nobody had fed a special value. Before calling a type exact or
+  safe, feed it `NaN`, the infinities, null, the empty value and the longest value.
+  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
+- **A statement path is probed with every clause form the plan writes** (2026-09-23). The engines'
+  compile path was probed on 2026-09-22 with `=` and `LIKE`, and an `IN` list compiles there as
+  `__[POSTCOMPILE_...]`, which DuckDB refuses; the `delta_scan` pruning was read on `=` and
+  `BETWEEN`, and the stage 4 `ingest` wrote `IN`, which opens every file. Grep the stage files for
+  each clause form that reaches a path (`IN`, `NOT IN`, `OR`, expanding parameters, table
+  functions) and probe each one, reading pruning through the files the engine opens.
+  `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- **A concurrency test is repeated before it is trusted, and its failure paths are read** (2026-09-23).
+  The hybrid `stream` passed its eight cases on the first run; repeated six times, it left the spool
+  file of an abandoned stream in three runs, because the file is born mid-query and can appear after
+  `__del__` unlinked the path. The `Loader` that refuses an occupied name at open printed an
+  `AttributeError` from `__del__`, which read an event the failed `__init__` never created, only as
+  a warning in the suite's output. Run a new test of threads or finalizers several times in a row,
+  read the warnings the run prints, and give every field a finalizer reads a value before the first
+  line of `__init__` that can raise. `plan/POC.md`

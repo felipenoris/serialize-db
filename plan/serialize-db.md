@@ -20,7 +20,7 @@ módulo, em `PLAN-STAGE-<n>.md`.
   distribuição no Redshift, ficam em `Table.info["serialize_db"]`. Os arquivos de esquema gerados são versionados no
   repositório do pipeline e comparados por teste.
 - **Statements Core executados pelo motor, e o texto SQL como opção.** O pipeline submete cada
-  statement Core a `run.sandbox.query`, `execute` ou `stream`, que o compila pelo dialeto com os
+  statement Core a `run.sandbox.query` ou `stream`, que o compila pelo dialeto com os
   parâmetros do cliente; o mesmo statement roda num `sqlalchemy.Connection` criado fora da
   biblioteca (decisão do usuário de 2026-09-22). Para um pipeline que queira sair do SQLAlchemy,
   cada statement vira texto SQL do DuckDB e do Redshift, com as constantes embutidas, a partição
@@ -36,7 +36,7 @@ módulo, em `PLAN-STAGE-<n>.md`.
   e as primitivas podem ser chamadas de qualquer thread; cada motor tem uma sessão por execução sob
   um lock reentrante, e cada comando usa o paralelismo do motor. Os dados cruzam a fronteira em
   lotes `RecordBatch`: `stream` lê o lote seguinte e `loader` grava o anterior enquanto o cliente
-  trabalha no atual, e `query`, `execute` e `load` são as formas por `pa.Table`; `publish` e
+  trabalha no atual, e `query` e `load` são as formas por `pa.Table`; `publish` e
   `publish_redshift` aceitam `max_workers`. A seção "Paralelismo" diz como operar em cada cenário.
 - **Restrições aplicadas por consulta.** Nem o Parquet nem o Delta têm chave primária, unicidade ou
   chave estrangeira, e o Redshift só as registra. A auditoria da execução as aplica com consultas
@@ -161,7 +161,7 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
 2. `run.ingest` cria as views com os nomes dos modelos sobre `delta_scan` na versão fixada, e
    materializa as tabelas consultadas muitas vezes com as partições pedidas.
 3. O pipeline roda em `run.sandbox`; o que sai para o Python sai em lotes por `stream`, ou como
-   `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; os intermediários ficam no
+   `pa.Table` por `query`, e volta por `loader` ou `load`; os intermediários ficam no
    sandbox, não no Delta. O nome de uma tabela no sandbox é do `ingest` ou do `loader`, nunca dos
    dois: a tabela que a execução grava é lida na versão publicada por `run.published(table)`.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
@@ -289,7 +289,7 @@ A opção de migração para fora do SQLAlchemy, não o caminho padrão (decisã
 2. `write_sql_files({"total_por_cliente": statement}, metadata, "sql/")` grava
    `sql/total_por_cliente.duckdb.sql` e `.redshift.sql`, com as constantes embutidas, `:mes` e o
    sentinela `{prefix}`; os arquivos entram no repositório do pipeline e no diff da revisão.
-3. A chamada troca `run.sandbox.query(statement)` por `run.sandbox.execute(sql, {"mes": run.partition})`,
+3. A chamada troca `run.sandbox.query(statement)` por `run.sandbox.query(sql, {"mes": run.partition})`,
    com o texto lido por `read_sql(..., prefix=...)`, que troca o sentinela pelo prefixo informado,
    obrigatório (decisão do usuário de 2026-09-21), e `bind` adapta os marcadores ao motor.
 4. Enquanto o statement Core existir, o teste que regenera os arquivos e os compara com os
@@ -330,10 +330,13 @@ e os exemplos do Redshift em `test_redshift.py`.
    paralelismo, e o custo de uma extensão em Rust não se justifica por ele.
 6. As threads da biblioteca são os pools de `publish`, de `publish_redshift` e de `ingest`, este
    com uma sessão a mais por tabela, e a auxiliar de cada `stream` e de cada `loader`, encerrada no
-   `close`: a de `stream` roda a consulta e grava cada lote num arquivo intermediário enquanto o
-   cliente lê os lotes já gravados, e a de `loader` grava os lotes num arquivo fora da sessão. O
-   cliente trabalha no lote atual enquanto a consulta produz o seguinte ou a biblioteca grava o
-   anterior.
+   `close`: a de `stream` roda a consulta e entrega cada lote à memória, até um orçamento de
+   64 MiB, ou a um arquivo intermediário depois dele, enquanto o cliente lê os lotes já entregues, e
+   a de `loader` grava os lotes num arquivo fora da sessão, que o `close` carrega numa tabela criada
+   ali. O cliente trabalha no lote atual enquanto a consulta produz o seguinte ou a biblioteca grava
+   o anterior, também com o `loader` aberto depois do `stream`, porque a abertura dele não usa a
+   sessão, e o `close` de um stream cancela a consulta que ainda roda (decisões do usuário de
+   2026-09-23).
 
 ### Leituras em paralelo
 
@@ -347,10 +350,13 @@ e os exemplos do Redshift em `test_redshift.py`.
   dividem, cada uma também com a thread que a chamou, e ganham quando uma espera o S3, quando as
   consultas são pequenas ou quando um operador não se paraleliza (as medições de 2026-09-23 estão
   em [`duckdb.md`](duckdb.md)); no Redshift, cada comando corre nas slices.
-  Várias threads chamam `run.sandbox.query`, `execute` e `stream` ao mesmo tempo e esperam a vez na
+  Várias threads chamam `run.sandbox.query` e `stream` ao mesmo tempo e esperam a vez na
   sessão, e a leitura dos lotes de cada `stream` corre fora dela. A ingestão de várias tabelas corre
   em paralelo, uma sessão a mais por tabela: em disco local, quatro tabelas de 150.000 linhas
-  entraram em 0,017 s assim e em 0,066 s em série (`test_parallel.py`, 2026-09-23). O cliente abre
+  entraram em 0,017 s assim e em 0,066 s em série (`test_parallel.py`), e quatro de 8.000.000 de
+  linhas em 1,629 s contra 3,498 s com `threads = 2` e em 1,037 s contra 1,382 s com 11, num macOS
+  de 11 núcleos em que as threads que chamam as sessões somam núcleos ao pool; com 2 vCPUs, o ganho
+  fica na espera do S3, ainda não medida (2026-09-23, [`POC.md`](POC.md)). O cliente abre
   as suas sessões a mais para as consultas independentes, que não veem as tabelas temporárias da
   sessão principal.
 
@@ -370,7 +376,7 @@ e os exemplos do Redshift em `test_redshift.py`.
   espera o `Future` desse passo; a dependência é do fluxo de controle do cliente, não da biblioteca.
   Passos independentes podem ir para um pool: os comandos deles correm em série na sessão, e o ganho
   é o trabalho Python de cada passo, que corre fora dela; numa sessão a mais por passo, quando o
-  passo não usa as tabelas temporárias da principal, os comandos também correm juntos. Cada `load` e cada `execute` gravam
+  passo não usa as tabelas temporárias da principal, os comandos também correm juntos. Cada `load` e cada `query` gravam
   tabelas distintas, e cada comando é confirmado ao terminar, então nada fica meio gravado para a
   leitura seguinte.
 - **Publicação no Redshift.** `run.publish_redshift(*tables, max_workers=n)`: um `COPY` por tabela,
@@ -384,8 +390,8 @@ with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2
     run.ingest(Lancamento, Contrato, Operacao, RelContratoOperacao, partitions=run.previous_partitions(Lancamento, 12))
 
     with ThreadPoolExecutor(max_workers=2) as pool:                 # dois passos independentes; os comandos correm em série na sessão
-        saldos = pool.submit(run.sandbox.execute, SALDOS_SQL, {"data_base_str": run.partition})     # grava {prefix}saldos
-        limites = pool.submit(run.sandbox.execute, LIMITES_SQL, {"data_base_str": run.partition})   # grava {prefix}limites
+        saldos = pool.submit(run.sandbox.query, SALDOS_SQL, {"data_base_str": run.partition})       # grava {prefix}saldos
+        limites = pool.submit(run.sandbox.query, LIMITES_SQL, {"data_base_str": run.partition})     # grava {prefix}limites
         saldos.result()                                              # a leitura abaixo depende dos dois
         limites.result()
 

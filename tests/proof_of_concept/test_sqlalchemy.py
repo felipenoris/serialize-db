@@ -7,7 +7,9 @@ statements Core de ``insert`` e ``select`` executados pelo ``duckdb_engine``, o 
 na conexão bruta, a reflexão, a precisão do ``Numeric`` pelo dialeto contra o caminho Arrow, o
 ``pandas.read_sql``, os comportamentos do compilador que dão forma ao ``render`` da etapa 2 (o
 ``bindparam`` sem valor sob ``literal_binds``, ``compiled.binds``, o ``%`` dobrado, a citação só
-das palavras reservadas), o nome em três partes, que só serve a uma sessão aberta em outro banco, a
+das palavras reservadas), o ``IN`` de lista no caminho dos motores (``statement.params`` com
+``render_postcompile``, e o estilo ``qmark``), o registro de uma ``GenericFunction`` em ``sa.func``
+para o processo inteiro, o nome em três partes, que só serve a uma sessão aberta em outro banco, a
 compilação de DML para o Redshift, que não exige um cluster, os esquemas Arrow e Delta derivados do
 ``Table`` e a cópia do sandbox com o diff dos arquivos gerados.
 Nenhuma classe ORM é instanciada: a biblioteca usa os modelos como metadados e o Core como gerador
@@ -22,16 +24,19 @@ import difflib
 import json
 from collections.abc import Iterator
 
+import duckdb
 import duckdb_engine
 import pandas as pd
 import pyarrow as pa
 import pytest
 import sqlalchemy as sa
 from deltalake import Schema as DeltaSchema
-from sqlalchemy.exc import SAWarning
+from sqlalchemy.exc import InvalidRequestError, SAWarning
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql import quoted_name
+from sqlalchemy.sql.functions import Function, FunctionElement, GenericFunction
 from sqlalchemy.sql.visitors import replacement_traverse
 from sqlalchemy_redshift.dialect import SUPER, RedshiftDialect_redshift_connector
 
@@ -445,6 +450,83 @@ def test_dialects_quote_only_their_reserved_words() -> None:
     expected = 'SELECT "{prefix}cad_contratos"."to", "{prefix}cad_contratos"."timestamp", "{prefix}cad_contratos"."numero" FROM "{prefix}cad_contratos"'
     for dialect in DIALECTS.values():
         assert normalized(str(sa.select(copy).compile(dialect=dialect))) == expected
+
+
+def test_in_list_needs_render_postcompile_on_the_engine_path() -> None:
+    """Sem ``literal_binds``, o ``IN`` de uma lista compila como ``__[POSTCOMPILE_...]``, que o DuckDB recusa; ``statement.params`` e ``render_postcompile`` expandem a lista e o ``bindparam`` expansível do cliente.
+
+    É o caminho padrão dos motores das etapas 4 e 5, o statement do cliente compilado com os
+    parâmetros dele, e o cliente filtra partições por ``in_``. ``params`` dá os valores antes da
+    compilação e ignora um nome que o statement não tem; o valor que falta é
+    ``InvalidRequestError`` na compilação. O estilo ``qmark``, o do driver do DuckDB, roda com a
+    lista de ``positiontup``, sem reescrever marcador algum.
+    """
+    operations = Operacao.__table__
+    connection = duckdb.connect()
+    connection.execute("CREATE TABLE cad_operacoes (id_operacao BIGINT, id_cliente BIGINT, mes VARCHAR)")
+    connection.execute("INSERT INTO cad_operacoes VALUES (1, 7, '2026-06'), (2, 7, '2026-07'), (3, 9, '2026-08')")
+    in_list = sa.select(operations.c.id_operacao).where(operations.c.mes.in_(["2026-07", "2026-08"]))
+
+    # Sem render_postcompile: o marcador fica no texto, e o DuckDB não o lê.
+    compiled = in_list.compile(dialect=DIALECTS["duckdb"])
+    assert "IN (__[POSTCOMPILE_mes_1])" in normalized(str(compiled))
+    with pytest.raises(duckdb.InvalidInputException, match="Parameter argument/count mismatch"):
+        connection.execute(normalized(str(compiled)).replace(":mes_1", "$mes_1"), compiled.construct_params())
+
+    # Os parâmetros do cliente entram por params, e render_postcompile expande as listas.
+    statement = sa.select(operations.c.id_operacao).where(
+        operations.c.mes.in_(sa.bindparam("meses", expanding=True)),
+        operations.c.id_cliente == sa.bindparam("cliente"),
+    )
+    qmark = duckdb_engine.Dialect(paramstyle="qmark")
+    bound = statement.params(meses=["2026-06", "2026-07"], cliente=7, sobra=1)
+    compiled = bound.compile(dialect=qmark, compile_kwargs={"render_postcompile": True})
+    values = compiled.construct_params()
+    arguments = [values[name] for name in compiled.positiontup]
+    assert normalized(str(compiled)).endswith("WHERE cad_operacoes.mes IN (?, ?) AND cad_operacoes.id_cliente = ?")
+    assert arguments == ["2026-06", "2026-07", 7]  # o nome que sobra não aparece
+    assert connection.execute(str(compiled), arguments).fetchall() == [(1,), (2,)]
+
+    # O valor que falta é recusado na compilação.
+    with pytest.raises(InvalidRequestError, match="A value is required for bind parameter 'cliente'"):
+        statement.params(meses=["2026-06"]).compile(dialect=qmark, compile_kwargs={"render_postcompile": True})
+    connection.close()
+
+
+def test_generic_function_subclass_registers_in_sa_func_for_the_whole_process() -> None:
+    """Uma subclasse de ``GenericFunction`` se registra em ``sa.func`` pelo nome, para o processo inteiro; uma de ``FunctionElement``, com ``@compiles`` por dialeto, compila igual sem registro.
+
+    O rascunho da auditoria da etapa 4 definia ``json_valid`` como ``GenericFunction``, com
+    ``@compiles`` para o Redshift: o ``sa.func.json_valid`` do próprio cliente passaria a sair
+    ``is_valid_json`` no Redshift depois do import da biblioteca. Os nomes das classes abaixo são
+    únicos, para o registro que a primeira deixa não alcançar outro teste.
+    """
+    column = sa.column("meta", sa.String)
+    assert type(sa.func.serialize_db_sonda_len(column)) is Function
+
+    class serialize_db_sonda_len(GenericFunction):  # noqa: N801 - o nome da classe é o nome da função SQL
+        type = sa.Integer()
+        inherit_cache = True
+
+    assert type(sa.func.serialize_db_sonda_len(column)) is serialize_db_sonda_len
+
+    # A subclasse de FunctionElement, como o month_of de plan/sqlalchemy.md: uma regra por dialeto, e o sa.func intacto.
+    class serialize_db_sonda_bytes(FunctionElement):  # noqa: N801 - o nome da classe segue o da função SQL
+        type = sa.Integer()
+        name = "serialize_db_sonda_bytes"
+        inherit_cache = True
+
+    @compiles(serialize_db_sonda_bytes, "duckdb")
+    def _duckdb_bytes(element: FunctionElement, compiler: sa.sql.compiler.SQLCompiler, **kw: object) -> str:
+        return f"strlen({compiler.process(element.clauses, **kw)})"
+
+    @compiles(serialize_db_sonda_bytes, "redshift")
+    def _redshift_bytes(element: FunctionElement, compiler: sa.sql.compiler.SQLCompiler, **kw: object) -> str:
+        return f"octet_length({compiler.process(element.clauses, **kw)})"
+
+    assert str(serialize_db_sonda_bytes(column).compile(dialect=DIALECTS["duckdb"])) == "strlen(meta)"
+    assert str(serialize_db_sonda_bytes(column).compile(dialect=DIALECTS["redshift"])) == "octet_length(meta)"
+    assert type(sa.func.serialize_db_sonda_bytes(column)) is Function
 
 
 def test_three_part_name_needs_quoted_name_without_quotes() -> None:

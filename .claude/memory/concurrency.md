@@ -74,3 +74,48 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   session is held; four 150,000-row tables entered by `delta_scan` in 0.017 s in four extra
   sessions against 0.066 s in series. `plan/PLAN.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`,
   `tests/proof_of_concept/test_parallel.py`, `tests/proof_of_concept/test_duckdb.py`
+- The 2026-09-23 review measured alternatives to the single-session `stream` and `loader` (macOS,
+  11 cores, file database, best of three, `threads = 2`, 100,000-row batches). `stream` over
+  13,333,333 rows (134 batches), total without work / 5 ms pure Python per batch / pandas: current
+  LZ4 spool 0.598 / 0.996 / 0.629 s, uncompressed spool 0.436 / 0.862 / 0.466 s (486 MB against
+  178 MB), unbounded memory queue 0.394 / 0.694 / 0.404 s (527 MB peak when the client lags), hybrid
+  (memory up to 256 MiB, LZ4 file after) 0.407 / 0.709 / 0.418 s, own cursor 0.399 / 0.673 / 0.408 s,
+  sequential 0.399 / 1.068 / 0.555 s. LZ4 on the query path costs 0.2 s and holds the lock that
+  long; with pure-Python client work the helper waits the GIL switch interval per reacquisition
+  (`sys.setswitchinterval(0.0005)` took the current design to 0.788 s). `loader` over 6,000,000 rows:
+  the current IPC LZ4 spool plus one `INSERT` (0.753 s, the `INSERT` 0.660 s at 2 threads and 0.346 s
+  at 8) beat raw IPC (0.697 s, 263 MB), Parquet spools (1.18 to 1.29 s), an own cursor inserting per
+  batch into a hidden table renamed at close (1.223 s, about 20 ms per batch) and per-batch inserts
+  in one transaction (1.327 s). In the three-stage pipeline over 20,000,000 rows, the `CREATE TABLE`
+  the stage 4 `loader` runs under the lock at open waited for the whole query of the `stream`
+  opened before it: first batch 0.811 s against 0.006 s with the table created at `close`, total
+  3.120 s against 2.761 s. `cursor()` returned in 0.04 ms while the connection ran a query, so
+  `new_session()` needs no session lock; `interrupt()` from another thread stopped a blocking sort
+  in 2 ms and left the connection usable, and one connection's `interrupt()` does not stop a query
+  on its cursor. Four 8,000,000-row Delta tables ingested in 1.629 s in extra sessions against
+  3.498 s in series with `threads = 2` (1.037 against 1.382 s with 11), peak memory 373 to 514 MB and
+  803 to 917 MB; part of the gain is the calling threads added to the pool, which the target's
+  2 vCPUs lack. The proposals (table created at close, hybrid stream, `interrupt()`) await the user
+  in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_duckdb.py`
+- The hybrid `stream` (user decision of 2026-09-23, implemented in `test_parallel.py`)
+  keeps batches in a deque while their bytes fit a 64 MiB budget and writes the first batch that
+  does not fit, and every later one, to the LZ4 spool; the client drains the deque before reading
+  the file, so the order holds. The spool file is born mid-query, after `__del__` may have unlinked
+  the path: the first version left an orphan file in three of six runs, and the producer now unlinks
+  the file it created when it stops on `stop`. The producer marks the end under the session lock, so
+  a command that runs after the stream sees it finished (the same arrangement the `interrupt()`
+  proposal needs). Against the current design over 13,333,333 rows at `threads = 2`: 0.622 → 0.411 s
+  without work, 0.965 → 0.673 s with 5 ms pure Python per batch, 0.641 → 0.411 s with pandas, and
+  1.086 → 0.908 s with a lagging client (96 batches spilled, 297 MB peak; 256 MiB gave 0.839 s at
+  522 MB). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- The stage 4 sketches in `test_parallel.py` (2026-09-23): `BatchStream.close` sets `stop` and,
+  under the spool's condition while the query has not marked its end, calls the connection's
+  `interrupt()`, which never reaches another command because the producer marks the end under the
+  session lock; `SandboxEngine.cleanup` interrupts before taking the lock; `new_session` creates the
+  cursor without the lock; `Loader` checks the name through `name_in_use` on a cursor and runs
+  `BEGIN`, the `CREATE TABLE`, the `INSERT` and `COMMIT` at `close`, rolling back on failure. The
+  close after the first batch of a long scan took 7 to 10 ms, the cleanup of a sort 2 ms, the
+  three-stage pipeline 0.365 to 0.370 s against 0.406 to 0.436 s before; with `stream` then `loader`
+  in one `with`, the first batch arrives while the query runs. Five runs of the suite were green;
+  the orphan-file race and a `__del__` reading a field the failed `__init__` never set appeared only
+  on repetition. `plan/POC.md`, `plan/PLAN-STAGE-4.md`

@@ -24,8 +24,8 @@ declarativos do SQLAlchemy são o contrato de esquema: deles saem o esquema Arro
 o DDL do sandbox nos dois motores. Chave primária, unicidade e chave estrangeira não entram nesse
 DDL, porque o Parquet não as tem, o DuckDB as cobra na carga e o Redshift só as registra: quem as
 aplica é a auditoria da execução, com consultas derivadas dos mesmos modelos, e a reprovação impede
-a publicação. Os statements Core do pipeline continuam válidos: o cliente os submete a `run.sandbox.query`,
-`execute` ou `stream`, que os compilam pelo dialeto do motor com os parâmetros dele e os executam
+a publicação. Os statements Core do pipeline continuam válidos: o cliente os submete a `run.sandbox.query`
+ou `stream`, que os compilam pelo dialeto do motor com os parâmetros dele e os executam
 na conexão crua, e pode submetê-los a um `sqlalchemy.Connection` que ele mesmo crie fora da
 biblioteca, porque o contrato não exige do modelo nem do statement nada que um `Connection` não
 aceite (decisão do usuário de 2026-09-22). O texto SQL gerado por dialeto, com os parâmetros para
@@ -126,10 +126,12 @@ com backend pyarrow é o formato dos pipelines (declaração do usuário de 2026
 apoia-se na conversão barata, medida na subseção "A conversão para o pandas": 2,3 ms sem cópia
 para 300.000 linhas, 1,4 ms para um lote de 100.000; o pandas não entra nas dependências de
 execução. Cada motor tem uma sessão por execução sob um lock, e nenhum lock espera pelo código do
-cliente, porque o que usa a sessão termina sem esperar por ele e os lotes passam por um arquivo
-intermediário. No DuckDB, a saída é cada lote de `to_arrow_reader()` gravado num arquivo Arrow IPC
-com LZ4 por uma thread que roda a consulta sob o lock, e o cliente lê cada lote gravado enquanto a
-consulta continua; a entrada é um arquivo igual carregado num único `INSERT ... BY NAME`. No
+cliente, porque o que usa a sessão termina sem esperar por ele e os lotes esperam o cliente fora
+dela. No DuckDB, a saída é cada lote de `to_arrow_reader()` entregue por uma thread que roda a
+consulta sob o lock à memória, enquanto os lotes guardados cabem em 64 MiB, e a um arquivo Arrow IPC
+com LZ4 depois disso, e o cliente lê os lotes enquanto a consulta continua; a entrada é um arquivo
+Arrow IPC carregado no `close`, numa transação, com o `CREATE TABLE` e um único `INSERT ... BY NAME`
+(decisões do usuário de 2026-09-23). No
 Redshift, a saída são as tuplas que o driver materializa, fatiadas por `fetchmany`, ou os arquivos
 de um `UNLOAD`, e a entrada é Parquet no S3 mais `COPY ... MANIFEST`. O que roda em paralelo, sem as
 tabelas temporárias da sessão, abre uma sessão a mais com `run.sandbox.new_session()`.
@@ -138,8 +140,9 @@ tabelas temporárias da sessão, abre uma sessão a mais com `run.sandbox.new_se
 
 O pipeline lê com `run.sandbox.stream(statement_ou_texto, params, batch_size)`, que
 devolve um `BatchStream` (iterável de `RecordBatch` com `schema`, `read_next_batch`, `read_all`,
-`close`, gerenciador de contexto e `__arrow_c_stream__`), ou com `run.sandbox.query(statement)` e
-`run.sandbox.execute(texto, params)`, que devolvem a `pa.Table` de `stream(...).read_all()`; grava
+`close`, gerenciador de contexto e `__arrow_c_stream__`), ou com
+`run.sandbox.query(statement_ou_texto, params)`, que devolve a `pa.Table` de `stream(...).read_all()`
+e roda também o comando sem resultado (decisão do usuário de 2026-09-23, que tirou `execute`); grava
 com `with run.sandbox.loader(Modelo) as loader: loader.write(lote)`, ou com
 `run.sandbox.load(Modelo, data)`, que aceita `pa.Table`, `RecordBatch`, `RecordBatchReader` ou
 iterável de lotes e os passa ao mesmo `loader`. `query` compila o statement pelo dialeto, com os `bindparam` do
@@ -166,24 +169,31 @@ As medições, com a data e o ambiente de cada uma, estão em [`POC.md`](POC.md)
 por lotes mostrou", de 2026-09-20, e "O que a sessão única mostrou", de 2026-09-22), e as asserções
 em `test_duckdb.py`, `test_pyarrow.py` e `test_parallel.py`. O que elas fixaram:
 
-- **`stream` roda a consulta numa thread auxiliar, sob o lock, e grava cada lote num arquivo
-  intermediário assim que o DuckDB o entrega**; o cliente lê cada lote gravado, na sua thread,
-  enquanto a consulta continua. O leitor do DuckDB é esvaziado, sem erro, pelo comando seguinte na
-  mesma conexão, e por isso a thread o consome inteiro antes de soltar o lock, sem esperar pelo
-  cliente. O arquivo é Arrow IPC com LZ4, um terço do tamanho sem compressão. Numa consulta sem
-  operador bloqueante sobre 20.000.000 de linhas, o primeiro lote chegou em 5 ms, como no leitor
-  direto de um cursor próprio (3 ms), contra 472 ms quando o arquivo só era lido depois da consulta
-  inteira, e com 5 ms de trabalho do cliente por lote o total foi 0,939 s, contra 0,842 s e 1,330 s
-  (2026-09-23, [`POC.md`](POC.md)). A memória do lado Python fica no tamanho de um lote: 94 MB para
-  10.000.000 de linhas, contra 83 MB do leitor direto e 322 MB da tabela inteira.
+- **`stream` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à memória
+  enquanto os lotes guardados cabem em 64 MiB, e a um arquivo intermediário o lote que não cabe e os
+  seguintes** (decisão do usuário de 2026-09-23); o cliente lê a memória e depois o arquivo, na sua
+  thread, na ordem da consulta, enquanto ela continua. O leitor do DuckDB é esvaziado, sem erro, pelo
+  comando seguinte na mesma conexão, e por isso a thread o consome inteiro antes de soltar o lock,
+  sem esperar pelo cliente. O arquivo é Arrow IPC com LZ4, um terço do tamanho sem compressão. Numa
+  consulta sem operador bloqueante sobre 20.000.000 de linhas, com 13.333.333 no resultado, o
+  primeiro lote chegou em 4 ms, e o total foi 0,411 s sem trabalho do cliente, 0,673 s com 5 ms de
+  Python puro por lote e 0,411 s com pandas, contra 0,622 s, 0,965 s e 0,641 s quando todo lote
+  passava pelo arquivo com LZ4, e 0,399 s, 0,673 s e 0,408 s do leitor direto de um cursor próprio
+  (2026-09-23, [`POC.md`](POC.md)). A memória do lado Python fica no orçamento mais um lote: com o
+  cliente atrasado, 297 MB de pico com 96 lotes no arquivo; o arquivo sozinho manteve 10.000.000 de
+  linhas em 94 MB, contra 83 MB do leitor direto e 322 MB da tabela inteira.
 - **Dentro de `session()`, na mesma thread, a consulta roda na thread de quem chama**, porque a
   auxiliar esperaria o bloco, e o bloco o stream; o cliente lê o arquivo depois da consulta
   inteira. Toda espera por um lote tem prazo e confere o encerramento, a thread não referencia o
-  stream, e `close` (ou o fim do `with`) para a consulta no lote seguinte e apaga o arquivo; um
-  stream abandonado é coletado, a consulta para e o arquivo sai. O erro que a consulta encontra antes
-  do primeiro lote chega ao cliente na construção, como `duckdb.Error` ou como `OSError` com a
-  mensagem do DuckDB; o que ela encontra depois chega na leitura seguinte ao último lote gravado e
-  nas que vêm depois dela, nunca em silêncio.
+  stream, e `close` (ou o fim do `with`) cancela por `interrupt()` a consulta que ainda roda e apaga
+  o arquivo, e o `cleanup` do motor cancela o comando em curso antes de fechar a conexão (decisão do
+  usuário de 2026-09-23): o `close` depois do primeiro lote de uma varredura longa terminou em 7 a
+  10 ms, e o `cleanup` com uma ordenação em curso, em 2 ms. A thread marca o fim da consulta ainda
+  com o lock tomado, e o `interrupt()` do `close` nunca alcança o comando seguinte da sessão. Um
+  stream abandonado é coletado, a consulta para no lote seguinte e o arquivo sai. O erro que a
+  consulta encontra antes do primeiro lote chega ao cliente na construção, como `duckdb.Error` ou
+  como `OSError` com a mensagem do DuckDB; o que ela encontra depois chega na leitura seguinte ao
+  último lote entregue e nas que vêm depois dela, nunca em silêncio.
 - **O streaming limita a memória do lado Python, não a do DuckDB.** A consulta roda sob
   `memory_limit` e `temp_directory`, e uma ordenação materializa o resultado antes do primeiro lote.
   A ordem dos lotes é a da consulta: sem `ORDER BY`, com `preserve_insertion_order = false`, é
@@ -192,14 +202,18 @@ em `test_duckdb.py`, `test_pyarrow.py` e `test_parallel.py`. O que elas fixaram:
   limitado pelo estágio mais lento: 1,25x com o trabalho em pandas por lote e 1,55x com um laço
   Python puro, em 6.000.000 de linhas. Ler um lote é uma chamada nativa longa, e a thread auxiliar
   paga no máximo um intervalo de troca do GIL por lote ao lado do laço Python do cliente.
-- **`loader` grava os lotes num arquivo intermediário numa thread auxiliar e os insere num único
-  `INSERT ... BY NAME` no `close`**, sob o lock, enquanto o cliente prepara o lote seguinte: `write`
+- **`loader` grava os lotes num arquivo intermediário numa thread auxiliar e, no `close`, cria a
+  tabela e os insere num único `INSERT ... BY NAME`, numa transação**, sob o lock, enquanto o
+  cliente prepara o lote seguinte: `write`
   faz o `cast` do lote na thread do cliente, para o erro aparecer com o lote em mãos, e bloqueia
-  quando a fila está cheia; nada é visível antes do `INSERT`, e uma exceção dentro do `with`, um lote
-  recusado pelo `cast`, um erro do `INSERT` ou um loader abandonado não inserem nada. O comando único
+  quando a fila está cheia; nada existe antes do `close`, e uma exceção dentro do `with`, um lote
+  recusado pelo `cast`, um erro do `INSERT` ou um loader abandonado não deixam tabela. O comando único
   é o caminho rápido: um `INSERT` por lote custa cerca de 3,5 ms, e num banco em arquivo o pipeline
   de três estágios sobre 3.000.000 de linhas levou 0,400 s na sessão única, contra 0,565 s com um
-  cursor por stream e por loader e um `INSERT` por lote numa transação.
+  cursor por stream e por loader e um `INSERT` por lote numa transação. A abertura só confere o
+  nome, num cursor à parte e sem o lock, porque um `CREATE TABLE` sob o lock esperaria a consulta
+  inteira de um `stream` aberto antes: em 20.000.000 de linhas, o primeiro lote chegava em 0,811 s,
+  contra 0,006 s com a tabela criada no `close` (decisão do usuário de 2026-09-23).
 - **O `INSERT` único sobre um leitor alimentado por gerador Python não é o caminho**, embora seja um
   comando só e atômico: o `arrow_scan` do DuckDB puxa o fluxo por uma thread de leitura antecipada do
   Arrow, que chama o gerador em outra thread além do que o comando consumiu e depois da falha, e essa
@@ -356,7 +370,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   larga carrega o defeito também por `publish_partition`; o modelo cliente não tem nenhuma
   (2026-09-22, `POC.md`, `delta.md`).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
-  consultada mais de uma vez é materializada no DuckDB (`delta.md`).
+  consultada mais de uma vez é materializada no DuckDB (`delta.md`). O `delta_scan` poda partição
+  por `=`, por `IN` de um valor e por intervalo, e abre todos os arquivos com um `IN` de mais de um
+  valor ou um `OR` (2026-09-23, `POC.md`): um filtro de várias partições leva o intervalo delas ao
+  lado do `IN`.
 - Um programa que encerra logo depois de ler uma tabela Delta lê por `to_pyarrow_dataset()`, nunca
   por `to_pyarrow_table()`: o segundo deixa uma tarefa do Acero em voo, e o destrutor do pool de
   threads do Arrow espera por ela para sempre. Meio segundo de qualquer trabalho depois da leitura
@@ -409,10 +426,11 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   compartilhada sem lock entrega a uma thread o resultado da outra, sem erro: o lock é o que deixa
   várias threads usarem a sessão (`test_concurrency.py`).
 - Nenhum lock espera pelo código do cliente: a parte de cada primitiva que usa a sessão termina sem
-  esperar por ele. `stream` roda a consulta numa thread auxiliar, sob o lock, e grava cada lote num
-  arquivo intermediário assim que o motor o entrega, e o cliente lê cada lote gravado enquanto a
-  consulta continua; o `loader` grava os lotes num arquivo fora da sessão e o carrega num comando
-  só, sob o lock, no `close`. Por isso o cliente trabalha no lote atual enquanto a consulta produz o
+  esperar por ele. `stream` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à
+  memória, até o orçamento, ou a um arquivo intermediário, e o cliente lê os lotes enquanto a
+  consulta continua; o `loader` confere o nome na abertura sem a sessão, grava os lotes num arquivo
+  fora dela e, no `close`, cria a tabela e o carrega num comando só, sob o lock. Por isso o cliente
+  trabalha no lote atual enquanto a consulta produz o
   seguinte, ou enquanto a biblioteca grava o anterior, e nenhuma combinação de `stream`, `loader` e
   outras primitivas, de uma thread ou de várias, trava: outro comando espera só a consulta em curso
   (`test_parallel.py`, [`POC.md`](POC.md)).
@@ -428,13 +446,18 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   conexão com credencial própria e o `USE` no Redshift), fechada no fim do bloco. Ela vê o que a
   sessão principal confirmou e não as tabelas temporárias dela, e a ordem entre as duas é a dos
   commits: o cliente que lê numa sessão o que grava na outra espera o `close` do `loader` ou o fim
-  do comando. `run.ingest` de mais de uma tabela abre uma sessão a mais por tabela; quatro tabelas de 150.000 linhas
-  entraram em 0,017 s assim e em 0,066 s em série na sessão principal (`test_parallel.py`,
-  2026-09-23). No DuckDB, o pool `threads` é da instância e vale para todas as sessões, e a thread
-  que chama cada sessão também executa a consulta dela: com `threads` igual aos núcleos, o padrão,
-  uma varredura grande já ocupa a máquina, e a sessão a mais ganha nas consultas pequenas, nos
-  operadores que não se paralelizam e na espera do S3, onde a documentação do DuckDB recomenda
-  `threads` de 2 a 5 vezes os núcleos (2026-09-23, [`duckdb.md`](duckdb.md)). No Redshift, cada
+  do comando. O cursor da sessão a mais nasce sem o lock da principal, porque `cursor()` não
+  espera o comando em curso nela. `run.ingest` de mais de uma tabela abre uma sessão a mais por
+  tabela; quatro tabelas de 150.000 linhas entraram em 0,017 s assim e em 0,066 s em série na sessão
+  principal (`test_parallel.py`), e quatro de 8.000.000 de linhas, em 1,629 s contra 3,498 s com
+  `threads = 2` e em 1,037 s contra 1,382 s com 11, e o pico de memória subiu de 373 MB para
+  514 MB e de 803 MB para 917 MB (2026-09-23, `POC.md`). No DuckDB, o pool `threads` é da
+  instância e vale para todas as sessões, e a thread que chama cada sessão também executa a consulta
+  dela: com `threads` igual aos núcleos, o padrão, uma varredura grande em memória já ocupa a
+  máquina, a ingestão por `CREATE TABLE AS` sobre `delta_scan` não ocupa, e a sessão a mais ganha
+  nela, nas consultas pequenas, nos operadores que não se paralelizam e na espera do S3, onde a
+  documentação do DuckDB recomenda `threads` de 2 a 5 vezes os núcleos (2026-09-23,
+  [`duckdb.md`](duckdb.md)). No Redshift, cada
   sessão a mais pede a sua credencial temporária; dois `COPY` em conexões abertas dentro da tarefa
   levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
 - As chaves inteiras vêm de `run.next_ids(table, n)`: faixas contíguas sob lock, a partir de
@@ -559,7 +582,7 @@ ilustrativos.
 | --- | --- | --- |
 | 1. Abertura | Lê `_serialize_db/snapshots.json` e `serialize_db_publications`; abre cada tabela de entrada e registra a versão. | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
 | 2. Ingestão | DuckDB: views com os nomes dos modelos sobre `delta_scan(uri, version := 143)`; `cad_lancamentos` materializada com `WHERE data_base_str BETWEEN '2025-09-30' AND '2026-08-31'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos dessas partições em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
-| 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query` ou `execute`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
+| 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
 | 5. Publicação no Delta | `reconcile`; com `export_mode="register"`, `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD ... PARTITION BY (data_base_str)` do Redshift), depois das conferências; com `"rewrite"`, `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
 | 6. Publicação no Redshift | `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'`; controle atualizado. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
@@ -581,7 +604,7 @@ db = Database("s3://bucket/projeto/delta", environment="prod", metadata=Base.met
 with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento, partitions=run.previous_partitions(Lancamento, 12), materialize=True)
     run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada
-    compute_in_sandbox(run.sandbox)                                  # statements Core e texto gerado, por query e execute
+    compute_in_sandbox(run.sandbox)                                  # statements Core e texto gerado, por query
     entries = select(Lancamento).where(Lancamento.data_base_str == "2026-08-31")
     with run.sandbox.stream(entries, batch_size=100_000) as stream, run.sandbox.loader(LancamentoProjetado) as loader:
         for batch in stream:                                         # a biblioteca já lê o lote seguinte
