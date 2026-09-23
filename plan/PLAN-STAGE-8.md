@@ -78,10 +78,14 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
   inexistente vira `PublicationError`, com o comando de inicialização na mensagem, e a publicação
   para sem ter escrito nada. Depois lê, por tabela, a versão publicada em `serialize_db_publications`
   e a atual, chama `delta.version_diff` (todas as partições na primeira publicação), grava um
-  `copy_manifest` por partição em `publicacao/<execution_id>/<tabela>/<valor>.manifest`, aplica
+  `copy_manifest` por partição na URI `storage.uri_of(<ambiente>/publicacao/<execution_id>/<tabela>/<valor>.manifest)`, aplica
   `reconcile_published` quando o esquema Delta ganhou colunas, e roda `publication_transaction`,
   um comando por `execute`, com `BEGIN` e `COMMIT` explícitos; as tabelas correm num pool com uma
-  conexão por thread, limitadas pelas slots do WLM.
+  conexão por thread, limitadas pelas slots do WLM, com a política do `publish` da
+  [etapa 6](PLAN-STAGE-6.md): uma tabela entra no pool só com um worker livre e nenhuma falha, e a
+  falha sobe com o seu tipo e o resultado de cada tabela numa nota (`add_note`), porque entregar
+  todas de uma vez deixou o worker único pegar a tabela seguinte à que falhou (leitura de
+  2026-09-23, [`POC.md`](POC.md)). `run.publish_redshift` entra em `Execution` com esta etapa.
 - **`publication_transaction`** devolve a lista de comandos: `BEGIN`; `CREATE TABLE
   <esquema>.<ambiente>_<tabela>_staging` sem a coluna de partição; por partição, `DELETE FROM
   <publicada> WHERE <coluna> = '<valor>'`, `DELETE FROM <staging>`, `COPY <staging> FROM '<manifesto>'

@@ -73,10 +73,12 @@ do modelo e por partição, as tabelas sem partição antes das particionadas e 
 modelo (`cad_operacoes`, `rel_contrato_operacao`, `cad_contratos`, `cad_lancamentos`):
 `discover_partitions`, `partition_query` com os `CAST` para o contrato (`sql_type(coluna, "duckdb")`
 da etapa 1 dá o tipo de cada `CAST`, e `quoted` cita cada coluna, porque `cad_contratos.to` é
-palavra reservada e a consulta sem aspas falha no DuckDB), `contract_problems`, uma consulta que
+palavra reservada e a consulta sem aspas falha no DuckDB), `check_partition`, uma consulta que
 conta as linhas com `partition_source` diferente do valor do caminho, os nulos das colunas `NOT
 NULL` e os textos acima de `String(n)` em bytes (`strlen`; o `octet_length` do DuckDB só existe
-para `BLOB`) e recusa a partição por `ContractError` antes de gravar, nos dois modos; a gravação
+para `BLOB`) e recusa a partição por `ContractError` antes de gravar, nos dois modos, e acha as
+colunas `Double` com `NaN` ou infinito na partição, que saem sem mínimo e máximo no log e, em
+`--mode rewrite`, no rodapé (`writer_properties` com `statistics_enabled="NONE"`); a gravação
 em `--mode register` (o padrão), `COPY ... (FORMAT parquet, RETURN_STATS)` para
 `<raiz>/<tabela>/<coluna>=<valor>/carga_inicial_<uuid>.parquet` e a `AddAction` por
 `create_write_transaction` com `numRecords`, `nullCount` de toda coluna e mínimo e máximo das
@@ -89,9 +91,11 @@ da `sort_key` do modelo, salvo `--no-sort`; a retomada pelas partições já no 
 por partição, contagem e somas das colunas `Double` e `Numeric` como `DECIMAL(38, 6)`, a origem
 por `read_parquet` com `hive_partitioning` e o Delta por `delta_scan`, mais as conversões de tipo
 lidas do rodapé do primeiro arquivo e as entradas fora do padrão; cada partição imprime linhas,
-tempo e o RSS máximo do processo, e `--report` grava o JSON da execução. O script registra o mínimo e o máximo de toda coluna
-`Double`, e o relatório falha com `ConversionException` numa coluna com `NaN` ou infinito;
-`initial_load` segue a regra do `Double` não finito da [etapa 3](PLAN-STAGE-3.md). A tabela é criada por
+tempo e o RSS máximo do processo, e `--report` grava o JSON da execução. O script segue a regra do `Double` não finito da
+[etapa 3](PLAN-STAGE-3.md), e o relatório soma só os valores finitos e compara os não finitos
+contados nos dois lados. A versão que rodou no ambiente alvo registrava o mínimo e o máximo de
+toda coluna `Double`, e o relatório dela falharia com `ConversionException` numa coluna com `NaN`
+ou infinito. A tabela é criada por
 `DeltaTable.create` com `delta_schema`, o nome, o comentário e as retenções da etapa 3
 (`mode="ignore"`). O primeiro `delta_scan` sobre uma tabela criada por `delta_schema` leu toda
 coluna como nula por causa do `parquet.field.id` que o esquema Delta herdava do Arrow, corrigido
@@ -186,8 +190,11 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   `register_files` com o `RegisteredFile` da linha do `RETURN_STATS`; `rewrite` passa
   `con.execute(consulta).to_arrow_reader()` por `cast` e `publish_partition`. A conexão DuckDB é
   do motor DuckDB da etapa 4, aberta pela própria carga, sem `Execution`; um nulo numa coluna `NOT
-  NULL` é recusado pelo `cast` (`rewrite`) ou pela conferência de `nullCount` (`register`), com a
-  coluna e a partição na mensagem.
+  NULL` é recusado pelo `cast` (`rewrite`) ou pela conferência de nulos do rodapé de
+  `register_files` (`register`), com a coluna e o arquivo na mensagem. O `register_files` da
+  [etapa 3](PLAN-STAGE-3.md) traz o que o script não tinha: as conferências do rodapé de cada
+  arquivo e a releitura depois do commit, que varre as colunas da chave da partição pelos dois
+  leitores; o custo dela na partição de `cad_lancamentos` é uma leitura do relatório da carga.
 - **`load_report`** roda a mesma agregação nos dois lados, `count(*)`, `sum(CAST(<coluna> AS
   DECIMAL(38, 6)))` por coluna `Numeric` e, por coluna `Double`, a mesma soma só dos valores
   finitos (`CASE WHEN isfinite(<coluna>) THEN ... END`) com a contagem dos não finitos, agrupada
@@ -195,7 +202,12 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   (`hive_partitioning = true, hive_types_autocast = false` na origem, `delta_scan` no destino), e
   monta `LoadReport`; `matches` exige contagens e somas iguais em toda partição.
 - **`serialize-db load`** recebe `--table`, `--source`, `--partitions` e `--mode`, chama
-  `initial_load` e depois `load_report`, e sai com 1 quando `matches` é falso.
+  `initial_load` e depois `load_report`, e sai com 1 quando `matches` é falso. Ela reaproveita o que
+  a [etapa 6](PLAN-STAGE-6.md) pôs em `serialize_db.cli`: `--metadata` e `--root` com os padrões
+  `SERIALIZE_DB_*`, o `_name_argument` da regra da partição em `--partitions`, o `modulo:atributo`
+  que não importa como erro de uso, e o `logging` em `INFO`; `db` é o `Database` da etapa 6, e
+  `mode=None` segue a ordem de `Execution`: o argumento, `SERIALIZE_DB_EXPORT_MODE` e
+  `"register"`.
 
 ## Pré-requisitos e pós-condições
 

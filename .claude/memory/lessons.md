@@ -412,3 +412,23 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   leaving alone the files another session had modified. Read `git status -sb` and `git reflog -5`
   before creating a branch or committing, and agree by message on the order of edits to shared
   files. `CLAUDE.md`
+- **A test only the target can run is first run against a local stand-in** (2026-09-23). The six
+  stage 5 readings for the Redshift suite can run only in the target, where a run is rare. A
+  throwaway emulator (DuckDB in place of Redshift, with `UNLOAD` and `COPY` translated to
+  `read_parquet` and `pyarrow`, and a folder in place of S3, through a fake `boto3` client) ran
+  them before the commit and found a case that could never show what it was written for: the `NaN`
+  footer case filtered `valor > 2`, which a footer maximum of 3.0 lets through, while the pruning
+  loss of issue #59 appears only above the finite maximum (`valor > 3`). The same preparation found
+  that the plan's guard for the literal path, `compiled.binds`, is empty under `literal_binds`,
+  where a valueless `IN` list renders `IN (NULL)`: the guard walks the statement for
+  `BindParameter.required`. Run a target-only test against a local stand-in first, and give the
+  stand-in the target's contract where the test reads it (the emulator's first `description` and
+  `row_desc` disagreed, a defect of the emulator, not of the test). `plan/POC.md`,
+  `plan/PLAN-STAGE-5.md`
+
+- **A shared venv is restored with every group** (2026-09-23). While implementing stage 3 in a
+  checkout two other sessions used, the assistant pinned `boto3` in the runtime dependencies and ran
+  `uv sync --group dev`, the restore command the venv rule named; the sync removed the 29 packages
+  of the `docs` and `interactive` groups (pdoc, ipykernel) that the folder's venv carried, and
+  `uv sync --all-groups` put them back. The rule now names `--all-groups`, what
+  `prepare_offline.sh` runs.

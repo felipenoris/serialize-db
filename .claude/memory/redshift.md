@@ -94,6 +94,28 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   (`Cursor.truncated_row_desc`); precision is `((type_modifier - 4) >> 16) & 0xFFFF`. `RedshiftOID`
   lists `REAL` 700, `BPCHAR` 1042, `TEXT` 25, `UNKNOWN` 705 and `SUPER` 4000, which the driver reads
   as text (code reading of 2026-09-23). `plan/redshift.md`, `plan/PLAN-STAGE-5.md`
+- The literal text of the `stream` by `UNLOAD` (local probe of 2026-09-23): the
+  `RedshiftDialect_redshift_connector` default `paramstyle` (`format`) doubles `%` inside literals
+  and `named` does not, and `redshift_connector` sends a statement executed without parameters
+  unconverted (`has_bind_parameters`), so the engine compiles with `named`; both styles double the
+  single quote and the backslash (`_backslash_escapes`); `compiled.binds` is empty under
+  `literal_binds`, where a valueless `IN` list renders `IN (NULL)`, so the guard walks the statement
+  (`sqlalchemy.sql.visitors.iterate`) for `BindParameter.required`; `text().params()` refuses to
+  render (`CompileError ... with datatype NULL`) and `sa.bindparam(name, value=value, expanding=...)`
+  types each value. Whether Redshift reads the doubled backslash as one, in a plain statement and
+  inside the `UNLOAD` literal, is `test_stream_by_unload_with_literal_values`, not yet run in the
+  target. `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+- The stage 5 readings wait in `tests/proof_of_concept/test_redshift.py` for the next run in the
+  target (seven tests after `test_parallel_copy_and_unload_on_two_connections`, listed in
+  `plan/OPEN_QUESTIONS.md`); a local emulator ran their code on 2026-09-23. `plan/POC.md`
+- The stage 1 `ddl` and the stage 4 `audit_sql` cite tables without a schema, so on Redshift the
+  engine relies on `SET search_path TO <schema>` after `USE`, which never ran on the datashare
+  schema; the JSON column is `SUPER` in the Redshift DDL and the audit calls `is_valid_json` on it,
+  and one refused measure fails the whole rows check. `test_audit_sql_under_search_path_and_nan_comparison`
+  reads the `search_path`, `'NaN'::float8 = 'NaN'::float8` against the audit's `is_finite`
+  (`NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)`), each measure alone, a table
+  with planted defects beside the expected counters, and the client model's texts on empty tables.
+  `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
 
 ## The reading of 2026-09-21
 
@@ -192,3 +214,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   temporary tables; `run.ingest` of more than one table opens one per table. The suite's two
   parallel `COPY`s, each opening its connection inside the task, took 4.3 s and 3.8 s in the target
   on 2026-09-21. `plan/PLAN-STAGE-5.md`
+
+- Redshift's `COUNT` has no `FILTER (WHERE ...)` clause (`COUNT( * | expression )` in the docs, read
+  2026-09-23), so the audit counts with `count(CASE WHEN <defect> THEN 1 END)` on both engines; the
+  whole Redshift audit text, `is_finite` as `x NOT IN ('NaN'::float8, 'Infinity'::float8,
+  '-Infinity'::float8)` included, has not run in the target yet. `plan/PLAN-STAGE-4.md`,
+  `plan/OPEN_QUESTIONS.md`

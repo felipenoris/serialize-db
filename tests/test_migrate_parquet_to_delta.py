@@ -8,8 +8,10 @@ retomada depois de uma interrupção e o filtro de partições; os dois modos co
 relatório e os tipos
 do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem commit (valor da
 coluna de origem fora do caminho, nulo em coluna ``NOT NULL``, texto acima de ``String(n)``), nos
-dois modos; as estatísticas registradas, de inteiro, data, ``Double`` e texto; o relatório que
-acusa uma linha apagada; e a linha de comando sobre a base inteira, duas vezes. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+dois modos; as estatísticas registradas, de inteiro, data, ``Double`` e texto; a coluna
+``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, nos dois modos, com o
+relatório que soma só os finitos; o relatório que acusa uma linha apagada; e a linha de comando
+sobre a base inteira, duas vezes. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
@@ -451,6 +453,99 @@ def test_a_partition_off_the_contract_is_refused_without_commit(
     assert DeltaTable(uri).version() == 0
     assert list(Path(uri).rglob("*.parquet")) == []
 
+
+
+def with_a_value(number: float) -> Callable[[pa.Table], pa.Table]:
+    """A alteração que troca o ``valor`` da primeira linha por ``number``."""
+
+    def alter(chunk: pa.Table) -> pa.Table:
+        values = chunk.column("valor").to_pylist()
+        values[0] = number
+        return chunk.set_column(
+            chunk.schema.get_field_index("valor"), "valor", pa.array(values, pa.float64())
+        )
+
+    return alter
+
+
+def source_with_nonfinite(
+    local_location: LocalLocation, base: source.SourceBase
+) -> migrate.Location:
+    """Uma origem nova com ``cad_lancamentos`` inteira, um ``NaN`` no primeiro chunk da partição
+    2026-02-28 e um infinito no da 2026-03-31."""
+    new_root = Path(local_location.child(f"origem-{uuid.uuid4().hex[:8]}"))
+    shutil.copytree(base.root / "cad_lancamentos", new_root / "cad_lancamentos")
+    column = source.PARTITIONS["cad_lancamentos"].column
+    for value, number in (("2026-02-28", float("nan")), ("2026-03-31", float("inf"))):
+        first = new_root / "cad_lancamentos" / f"{column}={value}" / "chunk_0.parquet"
+        altered = with_a_value(number)(pq.read_table(first))
+        pq.write_table(
+            altered,
+            first,
+            version="1.0",
+            use_dictionary=False,
+            use_deprecated_int96_timestamps=True,
+        )
+    return migrate.open_location(str(new_root))
+
+
+def valor_has_min_max(path: str) -> bool:
+    """Verdadeiro quando algum grupo de linhas do arquivo tem mínimo e máximo de ``valor``."""
+    footer = pq.ParquetFile(path)
+    index = footer.schema_arrow.get_field_index("valor")
+    for group in range(footer.metadata.num_row_groups):
+        statistics = footer.metadata.row_group(group).column(index).statistics
+        if statistics is not None and statistics.has_min_max:
+            return True
+    return False
+
+
+@pytest.mark.parametrize("mode", ["register", "rewrite"])
+def test_nonfinite_double_leaves_min_max_out_of_its_partition(
+    base: source.SourceBase,
+    con: duckdb.DuckDBPyConnection,
+    local_location: LocalLocation,
+    mode: str,
+) -> None:
+    """As partições com ``NaN`` ou infinito em ``valor`` gravam a coluna sem mínimo e máximo no
+    log, e as outras ficam com os dois; o relatório soma só os finitos e conta os não finitos nos
+    dois lados; e o ``delta_scan`` devolve as duas linhas num filtro acima de todo número finito,
+    porque o DuckDB ordena o ``NaN`` e o infinito acima deles (issue #59)."""
+    origin = source_with_nonfinite(local_location, base)
+    root = migrate.open_location(local_location.child(f"delta-{uuid.uuid4().hex[:8]}"))
+    table = TABLES["cad_lancamentos"]
+    loaded, skipped = migrate.initial_load(con, table, origin, root, settings(mode=mode))
+    nonfinite_partitions = {"2026-02-28", "2026-03-31"}
+    for load in loaded:
+        expected = ("valor",) if load.value in nonfinite_partitions else ()
+        assert load.nonfinite_columns == expected, load.value
+
+    # O log: as partições dos não finitos sem o mínimo e o máximo de valor, as outras com eles.
+    uri = root.child("cad_lancamentos").uri
+    partition_by = schema.table_options(table).partition_by
+    for action in pa.table(DeltaTable(uri).get_add_actions(flatten=True)).to_pylist():
+        value = action[f"partition.{partition_by}"]
+        has_bounds = value not in nonfinite_partitions
+        assert (action["min.valor"] is not None) == has_bounds, value
+        assert (action["max.valor"] is not None) == has_bounds, value
+
+    # O rodapé: o arquivo da partição do NaN sai sem mínimo e máximo de valor nos dois modos (o
+    # COPY do DuckDB já omite os dois no grupo com NaN), e o de uma partição finita, com eles.
+    files = DeltaTable(uri).file_uris()
+    nan_file = next(path for path in files if f"{partition_by}=2026-02-28" in path)
+    finite_file = next(path for path in files if f"{partition_by}=2026-01-31" in path)
+    assert not valor_has_min_max(nan_file)
+    assert valor_has_min_max(finite_file)
+
+    # O relatório não falha no CAST para DECIMAL e confere os não finitos dos dois lados.
+    report = migrate.load_report(con, table, origin, root, loaded, skipped)
+    assert report.matches
+    for partition in report.partitions:
+        count = 1 if partition.value in nonfinite_partitions else 0
+        assert partition.source_nonfinite == partition.delta_nonfinite == {"valor": count}
+
+    query = f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 1e300"
+    assert con.execute(query).fetchone()[0] == 2
 
 def test_load_report_matches_and_detects_a_deleted_row(
     base: source.SourceBase,

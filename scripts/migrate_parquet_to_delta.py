@@ -13,15 +13,20 @@ modelo, as sem partição primeiro e as particionadas depois, na ordem do modelo
   o valor do caminho na coluna de partição;
 - a carga confere numa consulta que a coluna de origem da partição (``data``, ``data_base``),
   quando o modelo a declara em ``partition_source``, é igual ao valor do caminho em toda linha,
-  que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum texto passa do ``String(n)`` em bytes, e grava a partição no modo pedido: ``register`` roda
-  ``COPY ... TO`` na pasta da tabela com ``RETURN_STATS`` e registra o arquivo no log por
-  ``create_write_transaction``, com o ``nullCount`` de toda coluna e o mínimo e o máximo das
-  inteiras, de data, ``Double`` e texto; ``rewrite`` passa o leitor da consulta por ``cast`` e
-  ``write_deltalake``. Nos dois modos as linhas saem na ordem da ``sort_key`` do modelo, salvo
-  ``--no-sort``;
+  que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum texto passa do ``String(n)`` em bytes, e
+  a mesma consulta acha as colunas ``Double`` com ``NaN`` ou infinito na partição; depois grava a
+  partição no modo pedido: ``register`` roda ``COPY ... TO`` na pasta da tabela com
+  ``RETURN_STATS`` e registra o arquivo no log por ``create_write_transaction``, com o
+  ``nullCount`` de toda coluna e o mínimo e o máximo das inteiras, de data, ``Double`` e texto;
+  ``rewrite`` passa o leitor da consulta por ``cast`` e ``write_deltalake``. Nos dois modos uma
+  coluna ``Double`` com valor não finito na partição fica sem mínimo e máximo no log, e no rodapé
+  do ``rewrite``: o DuckDB ordena o ``NaN`` acima de todo número e perde a linha quando poda por um
+  máximo sem ele (issue #59, ``plan/PLAN-STAGE-3.md``). As linhas saem na ordem da ``sort_key`` do
+  modelo, salvo ``--no-sort``;
 - a retomada pula as partições já no log: a segunda execução não grava nada;
 - ``load_report`` compara contagem e somas por partição entre a origem e o Delta, as colunas
-  ``Double`` e ``Numeric`` somadas como ``DECIMAL(38, 6)``, e o script sai com 1 quando diferem.
+  ``Double`` e ``Numeric`` somadas como ``DECIMAL(38, 6)``, as ``Double`` só nos valores finitos e
+  com os não finitos contados à parte, e o script sai com 1 quando diferem.
 
 Uma partição fora do contrato interrompe a execução sem commit, com a tabela, a partição e a
 coluna na mensagem; a execução seguinte recomeça dela. As tabelas da origem fora do modelo
@@ -65,7 +70,7 @@ import resource
 import sys
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from decimal import Decimal
 from pathlib import Path
 
@@ -74,7 +79,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import sqlalchemy as sa
-from deltalake import DeltaTable, write_deltalake
+from deltalake import ColumnProperties, DeltaTable, WriterProperties, write_deltalake
 from deltalake.transaction import AddAction
 
 from serialize_db import schema
@@ -94,27 +99,33 @@ RETENTION = {
 
 @dataclasses.dataclass(frozen=True)
 class PartitionReport:
-    """Contagem e somas de uma partição, na origem e no Delta."""
+    """Contagem, somas e não finitos de uma partição, na origem e no Delta."""
 
     value: str | None
     source_rows: int | None
     delta_rows: int | None
     source_sums: dict[str, Decimal | None]
     delta_sums: dict[str, Decimal | None]
+    source_nonfinite: dict[str, int]
+    delta_nonfinite: dict[str, int]
 
     @property
     def matches(self) -> bool:
-        return self.source_rows == self.delta_rows and self.source_sums == self.delta_sums
+        same_rows = self.source_rows == self.delta_rows
+        same_sums = self.source_sums == self.delta_sums
+        return same_rows and same_sums and self.source_nonfinite == self.delta_nonfinite
 
 
 @dataclasses.dataclass(frozen=True)
 class PartitionLoad:
-    """Uma partição gravada agora: linhas, tempo e o RSS máximo do processo até ali."""
+    """Uma partição gravada agora: linhas, tempo, o RSS máximo do processo até ali e as colunas
+    ``Double`` que ficaram sem mínimo e máximo."""
 
     value: str | None
     rows: int
     seconds: float
     peak_rss_mb: float
+    nonfinite_columns: tuple[str, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -274,15 +285,29 @@ def ordered_select(query: str, columns: list[str], sort_key: tuple[str, ...]) ->
     return text
 
 
-def contract_problems(
-    con: duckdb.DuckDBPyConnection, query: str, table: sa.Table, value: str | None
-) -> list[str]:
-    """O que a partição tem fora do contrato, numa consulta só.
+@dataclasses.dataclass(frozen=True)
+class PartitionCheck:
+    """O que a consulta de conferência achou numa partição."""
 
-    Linhas com a coluna de origem da partição diferente do valor do caminho, quando o modelo
-    declara ``partition_source``, nulos nas colunas ``NOT NULL`` e textos acima do ``String(n)`` em
-    bytes, a medida do ``VARCHAR(n)`` do Redshift (``strlen`` no DuckDB conta bytes;
-    ``octet_length`` só existe para ``BLOB``).
+    problems: list[str]  # o que está fora do contrato; recusa a partição
+    nonfinite_columns: tuple[str, ...]  # as colunas Double com NaN ou infinito
+
+
+def double_columns(table: sa.Table) -> list[str]:
+    """As colunas de ponto flutuante do modelo; o contrato só tem ``Double``."""
+    return [column.name for column in table.columns if isinstance(column.type, sa.Float)]
+
+
+def check_partition(
+    con: duckdb.DuckDBPyConnection, query: str, table: sa.Table, value: str | None
+) -> PartitionCheck:
+    """A conferência da partição, numa consulta só.
+
+    Fora do contrato: linhas com a coluna de origem da partição diferente do valor do caminho,
+    quando o modelo declara ``partition_source``, nulos nas colunas ``NOT NULL`` e textos acima do
+    ``String(n)`` em bytes, a medida do ``VARCHAR(n)`` do Redshift (``strlen`` no DuckDB conta
+    bytes; ``octet_length`` só existe para ``BLOB``). E as colunas ``Double`` com ``NaN`` ou
+    infinito, que o contrato aceita e que ficam sem mínimo e máximo na gravação.
     """
     options = schema.table_options(table)
     measures = []
@@ -300,10 +325,19 @@ def contract_problems(
         if isinstance(column.type, sa.String) and column.type.length:
             measures.append(f"count(*) FILTER (WHERE strlen({name}) > {column.type.length})")
             labels.append(f"textos acima de String({column.type.length}) em {column.name}")
+    doubles = double_columns(table)
+    for name in doubles:
+        measures.append(f"count(*) FILTER (WHERE NOT isfinite({schema.quoted(name)}))")
     if not measures:
-        return []
+        return PartitionCheck([], ())
+
+    # As contagens do contrato vêm primeiro, na ordem de labels, e as dos não finitos depois.
     counts = con.execute(f"SELECT {', '.join(measures)} FROM ({query})").fetchone()
-    return [f"{count} {label}" for count, label in zip(counts, labels) if count]
+    contract_counts = counts[: len(labels)]
+    nonfinite_counts = counts[len(labels) :]
+    problems = [f"{count} {label}" for count, label in zip(contract_counts, labels) if count]
+    nonfinite = tuple(name for name, count in zip(doubles, nonfinite_counts) if count)
+    return PartitionCheck(problems, nonfinite)
 
 
 # ---------------------------------------------------------------- a gravação
@@ -362,9 +396,15 @@ def stat_converter(field_type: pa.DataType) -> Callable[[str], object] | None:
     return None
 
 
-def delta_stats(count: int, stats: dict[str, dict[str, str]], table: sa.Table) -> str:
+def delta_stats(
+    count: int,
+    stats: dict[str, dict[str, str]],
+    table: sa.Table,
+    columns_without_min_max: Collection[str] = (),
+) -> str:
     """O JSON de estatísticas da ação: ``numRecords``, ``nullCount`` de toda coluna e o mínimo e o
-    máximo dos tipos que ``stat_converter`` transcreve, a partir do texto do ``RETURN_STATS``."""
+    máximo dos tipos que ``stat_converter`` transcreve, a partir do texto do ``RETURN_STATS``; as
+    colunas de ``columns_without_min_max`` ficam sem mínimo e máximo."""
     typed: dict[str, dict[str, object]] = {"minValues": {}, "maxValues": {}, "nullCount": {}}
     for field in schema.arrow_schema(table):
         column = stats.get(field.name)
@@ -372,7 +412,7 @@ def delta_stats(count: int, stats: dict[str, dict[str, str]], table: sa.Table) -
             continue
         typed["nullCount"][field.name] = int(column["null_count"])
         convert = stat_converter(field.type)
-        if convert is None or "min" not in column:
+        if convert is None or "min" not in column or field.name in columns_without_min_max:
             continue
         typed["minValues"][field.name] = convert(column["min"])
         typed["maxValues"][field.name] = convert(column["max"])
@@ -415,9 +455,11 @@ def register_partition(
     value: str | None,
     query: str,
     settings: Settings,
+    nonfinite_columns: tuple[str, ...],
 ) -> int:
-    """Modo ``register``: o arquivo do ``COPY`` entra no log com as estatísticas, num commit
-    ``overwrite`` da partição; devolve as linhas gravadas."""
+    """Modo ``register``: o arquivo do ``COPY`` entra no log com as estatísticas, sem o mínimo e o
+    máximo de ``nonfinite_columns``, num commit ``overwrite`` da partição; devolve as linhas
+    gravadas. O rodapé do DuckDB já sai sem mínimo e máximo no grupo de linhas com ``NaN``."""
     options = schema.table_options(table)
     relative, written = copy_partition_file(con, destination, table, value, query, settings.sort)
     stats = {name.strip('"'): column for name, column in written["column_statistics"].items()}
@@ -427,7 +469,7 @@ def register_partition(
         partition_values={options.partition_by: value} if options.partition_by else {},
         modification_time=int(time.time() * 1000),
         data_change=True,
-        stats=delta_stats(written["count"], stats, table),
+        stats=delta_stats(written["count"], stats, table, nonfinite_columns),
     )
     partition_by = [options.partition_by] if options.partition_by else None
     partition_filters = [(options.partition_by, "=", value)] if options.partition_by else None
@@ -448,9 +490,11 @@ def rewrite_partition(
     value: str | None,
     query: str,
     settings: Settings,
+    nonfinite_columns: tuple[str, ...],
 ) -> int:
     """Modo ``rewrite``: o leitor da consulta passa por ``cast`` e ``write_deltalake`` substitui a
-    partição; devolve as linhas gravadas."""
+    partição, sem estatística de ``nonfinite_columns`` no rodapé nem no log; devolve as linhas
+    gravadas."""
     options = schema.table_options(table)
     columns = [column.name for column in table.columns]
     rows = con.execute(f"SELECT count(*) FROM ({query})").fetchone()[0]
@@ -465,9 +509,27 @@ def rewrite_partition(
         reader,
         mode="overwrite",
         predicate=predicate,
+        writer_properties=writer_properties(nonfinite_columns),
         storage_options=settings.storage_options or None,
     )
     return rows
+
+
+def writer_properties(columns_without_min_max: Collection[str]) -> WriterProperties | None:
+    """As propriedades do escritor do delta-rs que desligam a estatística das colunas: o rodapé
+    sai sem mínimo e máximo delas, e o log também, porque o delta-rs o copia do rodapé; ``None``
+    mantém o padrão.
+
+    Exemplo:
+
+        writer_properties(["valor"])   # WriterProperties com statistics_enabled="NONE" em valor
+        writer_properties([])          # None
+    """
+    if not columns_without_min_max:
+        return None
+    no_statistics = ColumnProperties(statistics_enabled="NONE")
+    column_properties = {name: no_statistics for name in columns_without_min_max}
+    return WriterProperties(column_properties=column_properties)
 
 
 def peak_rss_mb() -> float:
@@ -489,14 +551,16 @@ def load_partition(
     """Confere a partição contra o contrato e a grava no modo pedido."""
     started = time.perf_counter()
     query = partition_query(source_folder, table, value)
-    problems = contract_problems(con, query, table, value)
-    if problems:
-        raise ContractError(f"{table.name} partição {value}: {'; '.join(problems)}")
+    check = check_partition(con, query, table, value)
+    if check.problems:
+        raise ContractError(f"{table.name} partição {value}: {'; '.join(check.problems)}")
+    nonfinite = check.nonfinite_columns
     if settings.mode == "register":
-        rows = register_partition(con, delta, destination, table, value, query, settings)
+        rows = register_partition(con, delta, destination, table, value, query, settings, nonfinite)
     else:
-        rows = rewrite_partition(con, destination, table, value, query, settings)
-    return PartitionLoad(value, rows, time.perf_counter() - started, peak_rss_mb())
+        rows = rewrite_partition(con, destination, table, value, query, settings, nonfinite)
+    elapsed = time.perf_counter() - started
+    return PartitionLoad(value, rows, elapsed, peak_rss_mb(), nonfinite)
 
 
 def selected_values(
@@ -531,10 +595,13 @@ def initial_load(
         if value in already:
             continue
         load = load_partition(con, delta, destination, table, value, found[value], settings)
-        print(
+        line = (
             f"  {value}: {load.rows} linhas em {load.seconds:.1f} s; "
             f"RSS máximo do processo {load.peak_rss_mb:.0f} MB"
         )
+        if load.nonfinite_columns:
+            line += f"; sem mínimo e máximo: {', '.join(load.nonfinite_columns)}"
+        print(line)
         loaded.append(load)
     return loaded, skipped
 
@@ -553,21 +620,59 @@ def source_relation(folder: Location, options: schema.TableOptions) -> str:
     )
 
 
-def aggregate(
-    con: duckdb.DuckDBPyConnection, relation: str, partition_by: str | None, sums: list[str]
-) -> dict[str | None, tuple[int, dict[str, Decimal | None]]]:
-    """Contagem e somas por partição de ``relation``: ``{valor: (linhas, {coluna: soma})}``."""
+@dataclasses.dataclass(frozen=True)
+class Totals:
+    """Contagem, somas e não finitos de uma partição, num dos lados do relatório."""
+
+    rows: int | None  # None quando a partição falta desse lado
+    sums: dict[str, Decimal | None]
+    nonfinite: dict[str, int]
+
+
+def total_measures(sums: list[str], doubles: list[str]) -> list[str]:
+    """As agregações de uma partição: a contagem, a soma de cada coluna de ``sums`` como
+    ``DECIMAL(38, 6)`` e a contagem dos não finitos de cada coluna de ``doubles``.
+
+    A soma de uma coluna ``Double`` corre só sobre os valores finitos: o ``CAST`` de um ``NaN`` ou
+    de um infinito para ``DECIMAL`` falha com ``ConversionException`` (``plan/POC.md``).
+    """
     measures = ["count(*)"]
     for name in sums:
-        measures.append(f"sum(CAST({schema.quoted(name)} AS DECIMAL(38, 6)))")
+        quoted = schema.quoted(name)
+        decimal = f"CAST({quoted} AS DECIMAL(38, 6))"
+        if name in doubles:
+            measures.append(f"sum(CASE WHEN isfinite({quoted}) THEN {decimal} END)")
+        else:
+            measures.append(f"sum({decimal})")
+    for name in doubles:
+        measures.append(f"count(*) FILTER (WHERE NOT isfinite({schema.quoted(name)}))")
+    return measures
+
+
+def totals_from_row(row: tuple, sums: list[str], doubles: list[str]) -> Totals:
+    """As medidas de uma linha da agregação, na ordem de ``total_measures``."""
+    sum_values = row[1 : 1 + len(sums)]
+    nonfinite_values = row[1 + len(sums) :]
+    return Totals(row[0], dict(zip(sums, sum_values)), dict(zip(doubles, nonfinite_values)))
+
+
+def aggregate(
+    con: duckdb.DuckDBPyConnection,
+    relation: str,
+    partition_by: str | None,
+    sums: list[str],
+    doubles: list[str],
+) -> dict[str | None, Totals]:
+    """Contagem, somas e não finitos por partição de ``relation``: ``{valor: Totals}``."""
+    measures = ", ".join(total_measures(sums, doubles))
     if partition_by is None:
-        row = con.execute(f"SELECT {', '.join(measures)} FROM {relation}").fetchone()
-        return {None: (row[0], dict(zip(sums, row[1:])))}
+        row = con.execute(f"SELECT {measures} FROM {relation}").fetchone()
+        return {None: totals_from_row(row, sums, doubles)}
     key = schema.quoted(partition_by)
     rows = con.execute(
-        f"SELECT {key}, {', '.join(measures)} FROM {relation} GROUP BY 1 ORDER BY 1"
+        f"SELECT {key}, {measures} FROM {relation} GROUP BY 1 ORDER BY 1"
     ).fetchall()
-    return {row[0]: (row[1], dict(zip(sums, row[2:]))) for row in rows}
+    return {row[0]: totals_from_row(row[1:], sums, doubles) for row in rows}
 
 
 def load_report(
@@ -580,18 +685,32 @@ def load_report(
 ) -> LoadReport:
     """Contagem e somas por partição na origem e no Delta, as colunas ``Double`` e ``Numeric``
     somadas como ``DECIMAL(38, 6)`` de cada valor, porque a soma em ponto flutuante depende da
-    ordem e os valores são os mesmos dos dois lados."""
+    ordem e os valores são os mesmos dos dois lados; as ``Double`` só nos valores finitos, com os
+    não finitos contados à parte."""
     options = schema.table_options(table)
     sums = [column.name for column in table.columns if isinstance(column.type, sa.Numeric)]
+    doubles = double_columns(table)
     folder = source.child(table.name)
-    origin = aggregate(con, source_relation(folder, options), options.partition_by, sums)
+    origin_relation = source_relation(folder, options)
+    origin = aggregate(con, origin_relation, options.partition_by, sums, doubles)
     delta_relation = f"delta_scan('{root.child(table.name).uri}')"
-    written = aggregate(con, delta_relation, options.partition_by, sums)
+    written = aggregate(con, delta_relation, options.partition_by, sums, doubles)
+    missing = Totals(rows=None, sums={}, nonfinite={})
     partitions = []
     for value in sorted(set(origin) | set(written), key=str):
-        source_rows, source_sums = origin.get(value, (None, {}))
-        delta_rows, delta_sums = written.get(value, (None, {}))
-        partitions.append(PartitionReport(value, source_rows, delta_rows, source_sums, delta_sums))
+        before = origin.get(value, missing)
+        after = written.get(value, missing)
+        partitions.append(
+            PartitionReport(
+                value=value,
+                source_rows=before.rows,
+                delta_rows=after.rows,
+                source_sums=before.sums,
+                delta_sums=after.sums,
+                source_nonfinite=before.nonfinite,
+                delta_nonfinite=after.nonfinite,
+            )
+        )
     return LoadReport(
         table=table.name,
         partitions=tuple(partitions),
@@ -607,8 +726,9 @@ def print_report(report: LoadReport) -> None:
         if not partition.matches:
             print(
                 f"  DIFERENÇA em {partition.value}: origem {partition.source_rows} linhas "
-                f"{partition.source_sums}, Delta {partition.delta_rows} linhas "
-                f"{partition.delta_sums}"
+                f"{partition.source_sums} não finitos {partition.source_nonfinite}, Delta "
+                f"{partition.delta_rows} linhas {partition.delta_sums} não finitos "
+                f"{partition.delta_nonfinite}"
             )
     verdict = "contagens e somas iguais" if report.matches else "com diferenças"
     print(f"  relatório: {len(report.partitions)} partições conferidas, {verdict}")

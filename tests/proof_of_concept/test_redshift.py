@@ -16,9 +16,13 @@ arquivos gravados pelo delta-rs (o ``DECIMAL`` em ``INT64``, o ``timestamp_ntz``
 e o ``FILLRECORD``), o ``VARCHAR`` excedido, o ``SUPER``, o ``UNLOAD ... PARTITION BY`` registrado no
 Delta e lido pelo DuckDB, a Data API pelo ciclo de ``examples/redshift_data_api.py``, e o ``COPY`` e
 o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por tabela, o caminho de
-``publish_redshift`` da etapa 8. Os resultados que a documentação não fixa vão para o relatório da
-sessão; os que duas execuções limpas no ambiente alvo leram iguais são asserções. O que cada
-execução no ambiente alvo leu está em ``plan/POC.md``.
+``publish_redshift`` da etapa 8. As leituras que as decisões da etapa 5 de 2026-09-23 esperam
+vêm no fim: o ``UNLOAD`` sem ``PARTITION BY`` para a pasta Hive, o ``stream`` por ``UNLOAD`` com os
+valores como literais e os seus casos de borda, o ``row_desc`` de cada tipo, o custo de uma carga
+pequena por ``COPY``, o rodapé do ``UNLOAD`` com ``NaN`` (issue #59), e o texto da auditoria da etapa
+4 sob ``search_path`` no esquema do datashare, com a comparação do ``NaN``. Os resultados que a
+documentação não fixa vão para o relatório da sessão; os que duas execuções limpas no ambiente alvo
+leram iguais são asserções. O que cada execução no ambiente alvo leu está em ``plan/POC.md``.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ import io
 import json
 import os
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote
 
@@ -41,16 +46,23 @@ import pytest
 import sqlalchemy as sa
 from deltalake import DeltaTable, write_deltalake
 from deltalake.transaction import AddAction
+from redshift_connector.utils.oids import get_datatype_name
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql.elements import quoted_name
+from sqlalchemy.sql.visitors import iterate
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
+from client_model import Base as ClientBase
 from conftest import RedshiftSession, S3Location, connect_redshift, record
 from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
+from serialize_db import audit, schema, sql
 
 pytestmark = [pytest.mark.redshift, pytest.mark.s3]
 
 REDSHIFT = RedshiftDialect_redshift_connector()
+# O compilador do stream e do query da etapa 5: com paramstyle "named", o % dos literais não sai
+# dobrado, e o padrão "format" o dobra (sonda local de 2026-09-23, plan/POC.md).
+REDSHIFT_NAMED = RedshiftDialect_redshift_connector(paramstyle="named")
 
 
 @pytest.fixture(scope="session")
@@ -172,7 +184,7 @@ def test_session_and_named_parameters(redshift_session: RedshiftSession) -> None
 
 
 def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession) -> None:
-    """``fetchmany`` entrega o resultado em fatias, e cada fatia vira um ``RecordBatch`` com o esquema do statement: o caminho de ``stream`` no motor Redshift."""
+    """``fetchmany`` entrega o resultado em fatias, e cada fatia vira um ``RecordBatch`` com o esquema do statement: o caminho do cursor, que no motor Redshift é o do ``query``."""
     schema = pa.schema([("n", pa.int64()), ("valor", pa.decimal128(18, 2)), ("dia", pa.date32())])
     cursor = redshift_session.connection.cursor()
     cursor.execute(
@@ -184,7 +196,7 @@ def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession
     # O driver lê o resultado inteiro no execute: handle_messages só devolve em READY_FOR_QUERY, cada
     # DATA_ROW vai para cursor._cached_rows, e fetchmany fatia essa fila (redshift_connector 2.1.16,
     # core.py e cursor.py). A fila tinha as 5 linhas antes do primeiro fetchmany no ambiente alvo
-    # (2026-09-21, 13:35 e 13:39): o stream do motor limita a memória só por UNLOAD.
+    # (2026-09-21, 13:35 e 13:39): o stream do motor vai sempre por UNLOAD (decisão de 2026-09-23).
     record("redshift.driver.rows_cached_after_execute", len(cursor._cached_rows))
     assert len(cursor._cached_rows) == 5
 
@@ -577,8 +589,8 @@ def test_unload_partition_by_and_register(redshift_session: RedshiftSession, s3_
     assert duckdb_connection.execute(f"SELECT count(*) FROM delta_scan('{destination}')").fetchone()[0] == 6
 
     # Onde o UNLOAD recusa gravar sem ALLOWOVERWRITE: o mesmo prefixo, um prefixo pai com arquivos
-    # abaixo, e um subprefixo novo e vazio dentro de uma pasta com arquivos, que é o <uri>/<execution_id>/
-    # da etapa 5. Leituras: a etapa 5 fixa o destino pelo que elas disserem.
+    # abaixo, e um subprefixo novo e vazio dentro de uma pasta com arquivos, que é o destino novo por
+    # tentativa da etapa 5 (test_unload_to_a_hive_prefix_and_register). Leituras.
     parent = s3_location.child("redshift/unload")
     for label, target in (("same_prefix", f"{destination}/"), ("parent_prefix", f"{parent}/"), ("new_subprefix", f"{destination}/segunda/")):
         sql = f"UNLOAD ('{select}') TO '{target}' {session.credentials_clause()} FORMAT AS PARQUET PARTITION BY (mes)"
@@ -697,3 +709,583 @@ def test_parallel_copy_and_unload_on_two_connections(redshift_session: RedshiftS
     for destination in destinations:
         files = s3_location.data_files(destination)
         assert files and sum(pq.read_metadata(file).num_rows for file in files) == 1000
+
+
+# ---------------------------------------------------------------- as leituras da etapa 5
+
+
+def unload_text(select: str, destination: str, credentials: str) -> str:
+    """O ``UNLOAD`` da etapa 5: o ``select`` em Parquet para ``destination``, com manifesto verboso e ``PARALLEL OFF``.
+
+    O ``select`` entra como literal, com as aspas simples dobradas, e ``PARALLEL OFF`` grava em
+    série, na ordem do ``ORDER BY`` (``plan/redshift.md``). O texto devolvido carrega a cláusula de
+    credenciais: ele vai só para ``session.execute``, nunca para o relatório.
+    """
+    escaped = select.replace("'", "''")
+    return f"UNLOAD ('{escaped}') TO '{destination}/' {credentials} FORMAT AS PARQUET MANIFEST VERBOSE PARALLEL OFF"
+
+
+def read_manifest(location: S3Location, destination: str) -> dict | None:
+    """O manifesto que o ``UNLOAD`` gravou em ``<destination>/manifest``, ou ``None`` quando ele não existe."""
+    s3 = boto3.client("s3")
+    key = f"{destination.removeprefix(f's3://{location.bucket}/')}/manifest"
+    try:
+        body = s3.get_object(Bucket=location.bucket, Key=key)["Body"].read()
+    except s3.exceptions.NoSuchKey:
+        return None
+    return json.loads(body)
+
+
+def read_unloaded(location: S3Location, entries: list[dict]) -> pa.Table:
+    """As linhas dos arquivos do manifesto, na ordem das entradas, com o ``INT96`` lido em microssegundos."""
+    s3 = boto3.client("s3")
+    tables = []
+    for entry in entries:
+        key = entry["url"].removeprefix(f"s3://{location.bucket}/")
+        body = s3.get_object(Bucket=location.bucket, Key=key)["Body"].read()
+        tables.append(pq.read_table(io.BytesIO(body), coerce_int96_timestamp_unit="us"))
+    return pa.concat_tables(tables)
+
+
+def unbound_parameters(statement: sa.sql.ClauseElement) -> list[str]:
+    """Os ``bindparam`` do statement ainda sem valor: o guarda antes do ``literal_binds``.
+
+    Sob ``literal_binds``, ``compiled.binds`` sai vazio e o ``bindparam`` sem valor vira ``NULL``
+    calado, até num ``IN`` de lista (sonda local de 2026-09-23); o ``required`` de cada
+    ``BindParameter`` do statement é o estado que marca a falta.
+    """
+    names = []
+    for element in iterate(statement):
+        if isinstance(element, sa.BindParameter) and element.required:
+            names.append(element.key)
+    return names
+
+
+def footer_statistics(parquet: pq.ParquetFile, column: str) -> list[dict]:
+    """O mínimo e o máximo do rodapé de ``column`` em cada grupo de linhas, em texto (``repr``) para o relatório."""
+    index = parquet.schema_arrow.get_field_index(column)
+    groups = []
+    for group in range(parquet.metadata.num_row_groups):
+        statistics = parquet.metadata.row_group(group).column(index).statistics
+        if statistics is None or not statistics.has_min_max:
+            groups.append({"has_min_max": False})
+        else:
+            groups.append({"has_min_max": True, "min": repr(statistics.min), "max": repr(statistics.max)})
+    return groups
+
+
+def test_unload_to_a_hive_prefix_and_register(redshift_session: RedshiftSession, s3_location: S3Location, duckdb_connection: duckdb.DuckDBPyConnection) -> None:
+    """O ``UNLOAD`` sem ``PARTITION BY``, com a coluna de partição fora do ``select``, para ``mes=<valor>/<execution_id>_<uuid>/`` na pasta da tabela: o destino de ``export_partition`` da etapa 5.
+
+    A decisão do usuário de 2026-09-23 tirou o ``PARTITION BY`` e fez o destino novo por partição e
+    por tentativa. Os arquivos entram no Delta por ``AddAction`` com o caminho abaixo da pasta
+    Hive, e a sonda local de 2026-09-23 leu esse caminho no delta-rs e no ``delta_scan``
+    (``plan/POC.md``). O ``=`` no prefixo do ``UNLOAD``, o ``schema.elements`` do manifesto sem a
+    coluna de partição e o segundo ``UNLOAD`` no mesmo destino são leituras do ambiente alvo.
+    """
+    session = redshift_session
+    name = session.table("unload_hive")
+    table = contract_table(name, session.schema_prefix(), month=True)
+    session.execute(ddl(table))
+    rows = [
+        {
+            "id_operacao": i,
+            "data_ref": dt.datetime(2026, 1 + i % 2, 1, 12, 0),
+            "id_cliente": i % 3,
+            "valor": decimal.Decimal(i) / 100,
+            "descricao": f"linha {i}",
+            "mes": MONTHS[i % 2],
+        }
+        for i in range(6)
+    ]
+    session.execute(str(sa.insert(table).values(rows).compile(dialect=REDSHIFT_NAMED, compile_kwargs={"literal_binds": True})))
+
+    # 1. Um UNLOAD por partição, sem mes no select, para um prefixo novo dentro de mes=<valor>/.
+    destination = s3_location.child("redshift/unload_hive/operacoes")
+    columns = "id_operacao, data_ref, id_cliente, valor, descricao"
+    prefixes = {}
+    entries = []
+    for month in MONTHS:
+        prefix = f"{destination}/mes={month}/exec_poc_{uuid.uuid4().hex[:8]}"
+        prefixes[month] = prefix
+        select = f"select {columns} from {session.qualified(name)} where mes = '{month}' order by id_operacao"
+        unload = outcome(functools.partial(session.execute, unload_text(select, prefix, session.credentials_clause())))
+        record(f"redshift.unload_hive.unload.{month}", unload)
+        assert unload == "ok", unload
+
+        manifest = read_manifest(s3_location, prefix)
+        assert manifest is not None, f"o UNLOAD não gravou o manifesto em {prefix}"
+        listed = [element.get("name") for element in (manifest.get("schema") or {}).get("elements", [])]
+        record(f"redshift.unload_hive.manifest_columns.{month}", listed)
+        record(f"redshift.unload_hive.files.{month}", [entry["url"].removeprefix(f"{destination}/") for entry in manifest["entries"]])
+        entries.extend(manifest["entries"])
+    assert sum(entry["meta"]["record_count"] for entry in entries) == 6
+
+    # 2. O registro: cada arquivo vira uma AddAction com o caminho relativo à pasta da tabela, e a
+    # partição vem do primeiro segmento, mes=<valor>.
+    schema = pa.schema(
+        [
+            pa.field("id_operacao", pa.int64(), nullable=False),
+            pa.field("data_ref", pa.timestamp("us"), nullable=False),
+            pa.field("id_cliente", pa.int32(), nullable=False),
+            pa.field("valor", pa.decimal128(18, 2), nullable=False),
+            pa.field("descricao", pa.string()),
+            pa.field("mes", pa.string(), nullable=False),
+        ]
+    )
+    delta = DeltaTable.create(destination, schema, partition_by=["mes"])
+    actions = []
+    for entry in entries:
+        relative = entry["url"].removeprefix(f"{destination}/")
+        month = relative.split("/")[0].removeprefix("mes=")
+        actions.append(
+            AddAction(
+                path=relative,
+                size=entry["meta"]["content_length"],
+                partition_values={"mes": month},
+                modification_time=int(time.time() * 1000),
+                data_change=True,
+                stats=json.dumps({"numRecords": entry["meta"]["record_count"], "minValues": {}, "maxValues": {}, "nullCount": {}}),
+            )
+        )
+    delta.create_write_transaction(actions, mode="append", schema=delta.schema(), partition_by=["mes"])
+
+    # 3. A releitura pelos dois leitores, por partição.
+    assert DeltaTable(destination).to_pyarrow_table().num_rows == 6
+    counts = duckdb_connection.execute(f"SELECT mes, count(*) FROM delta_scan('{destination}') GROUP BY mes ORDER BY mes").fetchall()
+    record("redshift.unload_hive.delta_scan_counts", counts)
+    assert counts == [(MONTHS[0], 3), (MONTHS[1], 3)]
+
+    # 4. O destino novo por tentativa: o mesmo prefixo de novo, sem ALLOWOVERWRITE, e outro uuid na
+    # mesma pasta de partição. Leituras: a reexecução com o mesmo execution_id depende da segunda.
+    select = f"select {columns} from {session.qualified(name)} where mes = '{MONTHS[0]}'"
+    retry = f"{destination}/mes={MONTHS[0]}/exec_poc_{uuid.uuid4().hex[:8]}"
+    for label, target in (("same_attempt", prefixes[MONTHS[0]]), ("new_attempt", retry)):
+        record(f"redshift.unload_hive.destination.{label}", outcome(functools.partial(session.execute, unload_text(select, target, session.credentials_clause()))))
+
+
+def test_stream_by_unload_with_literal_values(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
+    """O ``stream`` da etapa 5 por ``UNLOAD``: os valores do cliente entram no texto como literais, e as linhas lidas dos arquivos são comparadas com as do ``query``, que leva os mesmos valores como parâmetros do driver.
+
+    O texto do ``UNLOAD`` é um literal e não recebe parâmetro. O dialeto com ``paramstyle="named"``
+    dobra a aspa simples, mantém o ``%`` e dobra a contrabarra, o escape do PostgreSQL (sonda local
+    de 2026-09-23, ``plan/POC.md``). Cada caso roda por três caminhos, que separam as hipóteses: os
+    parâmetros do driver, o texto com os literais direto no cursor e o mesmo texto dentro do
+    ``UNLOAD``. As comparações são leituras até duas execuções limpas no ambiente alvo.
+    """
+    session = redshift_session
+    name = session.table("stream")
+    table = sa.Table(
+        name,
+        sa.MetaData(schema=quoted_name(session.schema_prefix(), False)),
+        sa.Column("id", sa.BigInteger, nullable=False),
+        sa.Column("texto", sa.String(40)),
+        sa.Column("dia", sa.Date),
+        sa.Column("carimbo", sa.DateTime),
+        sa.Column("valor", sa.Numeric(18, 2)),
+        sa.Column("taxa", sa.Float),
+    )
+    session.execute(ddl(table))
+
+    # As linhas entram por parâmetro do driver, sem escape no texto.
+    texts = ["d'agua", "barra \\ invertida", "50% certo", "comum"]
+    for k, text in enumerate(texts):
+        values = (k, text, dt.date(2026, 8, 28 + k), dt.datetime(2026, 8, 28 + k, 12, 0, 0, 123456), decimal.Decimal(k) + decimal.Decimal("0.25"), k / 10)
+        session.execute(f"INSERT INTO {session.qualified(name)} VALUES (%s, %s, %s, %s, %s, %s)", values)
+
+    base = sa.select(table.c.id, table.c.texto, table.c.dia, table.c.carimbo, table.c.valor, table.c.taxa).order_by(table.c.id)
+    by_text = base.where(table.c.texto == sa.bindparam("texto"))
+
+    # O guarda: sem o valor, o bindparam fica marcado, e o literal_binds o renderizaria NULL calado.
+    assert unbound_parameters(by_text) == ["texto"]
+
+    cases = [
+        ("aspa", by_text, {"texto": "d'agua"}),
+        ("contrabarra", by_text, {"texto": "barra \\ invertida"}),
+        ("porcentagem", by_text, {"texto": "50% certo"}),
+        ("like", base.where(table.c.texto.like(sa.bindparam("padrao"))), {"padrao": "%'%"}),
+        (
+            "data_numero_lista",
+            base.where(table.c.dia >= sa.bindparam("dia")).where(table.c.valor > sa.bindparam("valor")).where(table.c.id.in_(sa.bindparam("ids", expanding=True))),
+            {"dia": dt.date(2026, 8, 29), "valor": decimal.Decimal("1.00"), "ids": [1, 2, 3]},
+        ),
+        (
+            "carimbo_taxa",
+            base.where(table.c.carimbo > sa.bindparam("carimbo")).where(table.c.taxa < sa.bindparam("taxa")),
+            {"carimbo": dt.datetime(2026, 8, 28, 12, 0, 0, 123456), "taxa": 0.25},
+        ),
+    ]
+    for label, statement, params in cases:
+        bound = statement.params(**params)
+        assert unbound_parameters(bound) == [], label
+
+        # 1. O query: os valores como parâmetros do driver, no estilo "named".
+        compiled = bound.compile(dialect=REDSHIFT_NAMED, compile_kwargs={"render_postcompile": True})
+        cursor = session.connection.cursor()
+        cursor.paramstyle = "named"
+        cursor.execute(str(compiled), compiled.construct_params())
+        by_cursor = [tuple(row) for row in cursor.fetchall()]
+        assert by_cursor, f"{label}: o query não achou linha, e a comparação não mediria nada"
+
+        # 2. O mesmo statement com os valores como literais, direto no cursor e dentro do UNLOAD.
+        literal = str(bound.compile(dialect=REDSHIFT_NAMED, compile_kwargs={"literal_binds": True, "render_postcompile": True}))
+        direct = reading(lambda: [tuple(row) for row in session.execute(literal)])
+        destination = s3_location.child(f"redshift/stream/{label}_{uuid.uuid4().hex[:8]}")
+        unload = outcome(functools.partial(session.execute, unload_text(literal, destination, session.credentials_clause())))
+        by_unload: object = unload
+        if unload == "ok":
+            manifest = read_manifest(s3_location, destination)
+            entries = manifest["entries"] if manifest else []
+            by_unload = [tuple(row.values()) for row in read_unloaded(s3_location, entries).to_pylist()] if entries else []
+
+        record(
+            f"redshift.stream.{label}",
+            {
+                "linhas": len(by_cursor),
+                "literal_no_cursor": "igual" if direct == by_cursor else repr(direct),
+                "unload": "igual" if by_unload == by_cursor else repr(by_unload),
+                "texto": literal.splitlines()[-1].strip(),
+            },
+        )
+
+
+def test_unload_limit_empty_result_temp_table_and_super(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
+    """Os casos de borda do ``stream`` por ``UNLOAD`` da etapa 5, todos leitura: o ``LIMIT`` no ``select`` externo, o resultado vazio, a tabela temporária da sessão e a coluna ``SUPER`` no Parquet.
+
+    A documentação recusa o ``LIMIT`` externo (``plan/redshift.md``), e a mensagem é a leitura. O
+    que o ``UNLOAD`` grava para um resultado vazio decide de onde sai o esquema do lote vazio.
+    """
+    session = redshift_session
+    name = session.table("borda")
+    qualified = session.qualified(name)
+    session.execute(f"CREATE TABLE {qualified} (id BIGINT NOT NULL, meta SUPER)")
+    session.execute(f"INSERT INTO {qualified} VALUES (1, JSON_PARSE(%s)), (2, JSON_PARSE(%s))", ('{"a": 1}', '{"b": [1, 2]}'))
+    s3 = boto3.client("s3")
+
+    # 1. O LIMIT no select externo.
+    limited = s3_location.child(f"redshift/borda/limite_{uuid.uuid4().hex[:8]}")
+    record("redshift.stream.outer_limit", outcome(functools.partial(session.execute, unload_text(f"select id from {qualified} order by id limit 1", limited, session.credentials_clause()))))
+
+    # 2. O resultado vazio: o comando, o manifesto e os objetos que ficam no prefixo.
+    empty = s3_location.child(f"redshift/borda/vazio_{uuid.uuid4().hex[:8]}")
+    record("redshift.stream.empty.unload", outcome(functools.partial(session.execute, unload_text(f"select id from {qualified} where id < 0", empty, session.credentials_clause()))))
+    manifest = read_manifest(s3_location, empty)
+    record("redshift.stream.empty.manifest", None if manifest is None else {"entries": len(manifest["entries"]), "schema": manifest.get("schema")})
+    listing = s3.list_objects_v2(Bucket=s3_location.bucket, Prefix=empty.removeprefix(f"s3://{s3_location.bucket}/") + "/")
+    objects = listing.get("Contents", [])
+    record("redshift.stream.empty.objects", [(item["Key"].rsplit("/", 1)[-1], item["Size"]) for item in objects])
+    for item in objects:
+        if item["Key"].endswith(".parquet"):
+            body = s3.get_object(Bucket=s3_location.bucket, Key=item["Key"])["Body"].read()
+            record("redshift.stream.empty.file_schema", " ".join(str(pq.read_schema(io.BytesIO(body))).split()))
+
+    # 3. A tabela temporária da sessão, lida pelo UNLOAD na mesma sessão. Ela morre com a sessão, e a
+    # limpeza da suíte não a apaga.
+    temporary = f"serialize_db_poc_{session.session_id}_temporaria"
+    session.execute(f"CREATE TEMP TABLE {temporary} AS SELECT id FROM {qualified}")
+    from_temporary = s3_location.child(f"redshift/borda/temporaria_{uuid.uuid4().hex[:8]}")
+    unloaded = outcome(functools.partial(session.execute, unload_text(f"select id from {temporary} order by id", from_temporary, session.credentials_clause())))
+    if unloaded == "ok":
+        manifest = read_manifest(s3_location, from_temporary)
+        unloaded = f"ok: {sum(entry['meta']['record_count'] for entry in manifest['entries']) if manifest else 'sem manifesto'} linhas"
+    record("redshift.stream.temp_table", unloaded)
+
+    # 4. A coluna SUPER no Parquet do UNLOAD: o tipo lido e os valores, em texto para o relatório.
+    super_prefix = s3_location.child(f"redshift/borda/super_{uuid.uuid4().hex[:8]}")
+    unloaded = outcome(functools.partial(session.execute, unload_text(f"select id, meta from {qualified} order by id", super_prefix, session.credentials_clause())))
+    record("redshift.stream.super.unload", unloaded)
+    if unloaded == "ok":
+        manifest = read_manifest(s3_location, super_prefix)
+        super_rows = read_unloaded(s3_location, manifest["entries"])
+        record("redshift.stream.super.type", str(super_rows.schema.field("meta").type))
+        record("redshift.stream.super.values", [repr(value) for value in super_rows.column("meta").to_pylist()])
+
+
+def test_row_description_oids_and_type_modifier(redshift_session: RedshiftSession) -> None:
+    """O OID e o ``type_modifier`` de cada coluna de um resultado: a tabela de ``schema_from_row_description`` da etapa 5.
+
+    O ``cursor.description`` do ``redshift_connector`` 2.1.16 devolve só o nome e o OID; o
+    ``type_modifier`` fica em ``cursor.ps["row_desc"]``, e o driver o usa para decodificar o
+    ``NUMERIC`` binário, com a escala ``(type_modifier - 4) & 0xFFFF`` (leitura do código de
+    2026-09-23, ``plan/POC.md``). O que o servidor manda para cada tipo do contrato, para ``SUPER``,
+    para os agregados e para os literais é leitura.
+    """
+    session = redshift_session
+    name = session.table("tipos")
+    qualified = session.qualified(name)
+    session.execute(
+        f"CREATE TABLE {qualified} (c_bigint BIGINT, c_integer INTEGER, c_smallint SMALLINT, c_double DOUBLE PRECISION, c_real REAL, "
+        "c_decimal DECIMAL(18, 2), c_varchar VARCHAR(40), c_char CHAR(2), c_date DATE, c_timestamp TIMESTAMP, c_timestamptz TIMESTAMPTZ, "
+        "c_boolean BOOLEAN, c_super SUPER)"
+    )
+    session.execute(
+        f"INSERT INTO {qualified} VALUES (1, 2, 3, 1.5, 2.5, 10.25, 'texto', 'AB', '2026-08-31', '2026-08-31 12:00:00', "
+        "'2026-08-31 12:00:00+00', true, JSON_PARSE(%s))",
+        ('{"a": 1}',),
+    )
+
+    selects = {
+        "colunas": f"select * from {qualified}",
+        "expressoes": (
+            "select count(*) as c_count, sum(c_decimal) as c_sum_decimal, avg(c_decimal) as c_avg_decimal, "
+            "sum(c_double) as c_sum_double, cast(sum(c_decimal) as decimal(38, 6)) as c_decimal_38_6, "
+            f"'literal' as c_text_literal, 1.5 as c_numeric_literal from {qualified}"
+        ),
+    }
+    for label, sql in selects.items():
+        cursor = session.connection.cursor()
+        cursor.execute(sql)
+        row = cursor.fetchone()
+        row_desc = cursor.ps["row_desc"]
+
+        # description e row_desc descrevem as mesmas colunas, com o mesmo OID (Cursor._getDescription).
+        assert [column[1] for column in cursor.description] == [field["type_oid"] for field in row_desc]
+
+        columns = []
+        for field, value in zip(row_desc, row):
+            modifier = field["type_modifier"]
+            column = {
+                "nome": field["label"].decode(),
+                "oid": field["type_oid"],
+                "tipo": reading(functools.partial(get_datatype_name, field["type_oid"])),  # ValueError num OID fora do enum
+                "type_modifier": modifier,
+                "python": type(value).__name__,
+            }
+            if field["type_oid"] == 1700 and modifier != -1:
+                column["precisao_escala"] = [((modifier - 4) >> 16) & 0xFFFF, (modifier - 4) & 0xFFFF]
+            columns.append(column)
+        record(f"redshift.row_desc.{label}", columns)
+
+
+def test_small_load_copy_cost(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
+    """O custo fixo de carregar 10 linhas, como leitura: o Parquet no S3 mais ``COPY``, o caminho do ``load`` da etapa 5, contra o ``INSERT`` de várias linhas que saiu dele.
+
+    A decisão do usuário de 2026-09-23 levou o ``load`` sempre pelo ``loader``; é esta leitura que
+    traria o ``INSERT`` de volta. O melhor de três de cada, na mesma tabela e com as mesmas linhas, e
+    o tempo do ``COPY`` inclui a gravação do arquivo no S3, como no ``loader``.
+    """
+    session = redshift_session
+    name = session.table("carga_pequena")
+    qualified = session.qualified(name)
+    table = sa.Table(
+        name,
+        sa.MetaData(schema=quoted_name(session.schema_prefix(), False)),
+        sa.Column("id", sa.BigInteger, nullable=False),
+        sa.Column("texto", sa.String(20)),
+        sa.Column("valor", sa.Float),
+    )
+    session.execute(ddl(table))
+    rows = [{"id": k, "texto": f"linha {k}", "valor": k / 10} for k in range(10)]
+    arrow_schema = pa.schema([pa.field("id", pa.int64(), nullable=False), pa.field("texto", pa.string()), pa.field("valor", pa.float64())])
+    data = pa.Table.from_pylist(rows, schema=arrow_schema)
+    key = f"{s3_location.prefix}/redshift/carga_pequena/lote.parquet"
+    s3 = boto3.client("s3")
+
+    def copy_rows() -> None:
+        """Grava o arquivo no S3 e roda o ``COPY``, como o ``close`` do ``loader``."""
+        buffer = io.BytesIO()
+        pq.write_table(data, buffer)
+        s3.put_object(Bucket=s3_location.bucket, Key=key, Body=buffer.getvalue())
+        session.execute(f"COPY {qualified} FROM 's3://{s3_location.bucket}/{key}' {session.credentials_clause()} FORMAT AS PARQUET")
+
+    insert = str(sa.insert(table).values(rows).compile(dialect=REDSHIFT_NAMED, compile_kwargs={"literal_binds": True}))
+
+    best = {}
+    for label, action in (("copy", copy_rows), ("insert", functools.partial(session.execute, insert))):
+        elapsed = []
+        for _ in range(3):
+            session.execute(f"TRUNCATE {qualified}")
+            started = time.perf_counter()
+            action()
+            elapsed.append(time.perf_counter() - started)
+            assert session.execute(f"select count(*) from {qualified}")[0][0] == 10
+        best[label] = min(elapsed)
+    record("redshift.load.small_copy", f"{best['copy']:.2f} s")
+    record("redshift.load.small_insert", f"{best['insert']:.2f} s")
+
+
+def test_unload_footer_statistics_with_nan(redshift_session: RedshiftSession, s3_location: S3Location, duckdb_connection: duckdb.DuckDBPyConnection) -> None:
+    """O mínimo e o máximo que o ``UNLOAD`` grava no rodapé de uma coluna ``DOUBLE PRECISION`` com ``NaN`` e com os infinitos, e o que o leitor Parquet do DuckDB poda com eles, tudo leitura (issue #59).
+
+    O Redshift aceita ``NaN``, ``Infinity`` e ``-Infinity`` em ``DOUBLE PRECISION``. O leitor Parquet
+    do DuckDB poda o grupo de linhas pelo máximo do rodapé e perde a linha do ``NaN`` quando o máximo
+    a deixa de fora (duckdb/duckdb#25521, ``plan/POC.md``). A biblioteca registra sem mínimo e máximo
+    a coluna ``Double`` com valor não finito (``plan/PLAN-STAGE-3.md``), mas o rodapé do arquivo
+    registrado é o do ``UNLOAD``. O ``NaN`` vai no início, no meio e no fim do grupo de linhas, pela
+    ordem de ``posicao``.
+    """
+    session = redshift_session
+    name = session.table("nao_finitos")
+    qualified = session.qualified(name)
+    session.execute(f"CREATE TABLE {qualified} (caso VARCHAR(10) NOT NULL, posicao INTEGER NOT NULL, valor DOUBLE PRECISION)")
+    session.execute(
+        f"INSERT INTO {qualified} VALUES ('nan', 1, 1.0), ('nan', 2, CAST('NaN' AS DOUBLE PRECISION)), ('nan', 3, 3.0), "
+        "('infinito', 1, 1.0), ('infinito', 2, CAST('Infinity' AS DOUBLE PRECISION)), ('infinito', 3, CAST('-Infinity' AS DOUBLE PRECISION))"
+    )
+
+    orders = {
+        "nan_inicio": ("nan", "case when posicao = 2 then 0 else 1 end, posicao"),
+        "nan_meio": ("nan", "posicao"),
+        "nan_fim": ("nan", "case when posicao = 2 then 1 else 0 end, posicao"),
+        "infinitos": ("infinito", "posicao"),
+    }
+    s3 = boto3.client("s3")
+    for label, (case, order) in orders.items():
+        destination = s3_location.child(f"redshift/nao_finitos/{label}_{uuid.uuid4().hex[:8]}")
+        select = f"select posicao, valor from {qualified} where caso = '{case}' order by {order}"
+        unloaded = outcome(functools.partial(session.execute, unload_text(select, destination, session.credentials_clause())))
+        if unloaded != "ok":
+            record(f"redshift.unload_nan.{label}", unloaded)
+            continue
+
+        manifest = read_manifest(s3_location, destination)
+        url = manifest["entries"][0]["url"]
+        body = s3.get_object(Bucket=s3_location.bucket, Key=url.removeprefix(f"s3://{s3_location.bucket}/"))["Body"].read()
+        parquet = pq.ParquetFile(io.BytesIO(body))
+
+        # O DuckDB ordena o NaN acima de todo número: valor > 3 conta a linha do NaN, e 0 é a linha
+        # perdida pela poda de um rodapé com máximo 3.0 (a leitura de 2026-09-23); nos infinitos,
+        # conta o Infinity.
+        above_three = duckdb_connection.execute(f"SELECT count(*) FROM read_parquet('{url}') WHERE valor > 3").fetchone()[0]
+        record(
+            f"redshift.unload_nan.{label}",
+            {
+                "ordem": [repr(value) for value in parquet.read().column("valor").to_pylist()],
+                "arquivos": len(manifest["entries"]),
+                "rodape": footer_statistics(parquet, "valor"),
+                "duckdb_valor_maior_que_3": above_three,
+            },
+        )
+
+
+def finite_text(expression: str) -> str:
+    """O ``is_finite`` da auditoria para o Redshift, aplicado a ``expression``: o texto que o motor roda."""
+    return str(audit.is_finite(sa.literal_column(expression)).compile(dialect=REDSHIFT_NAMED))
+
+
+def as_text(rows: list) -> list[list[str]]:
+    """As linhas de um resultado em texto, para o relatório."""
+    return [[str(value) for value in row] for row in rows]
+
+
+def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: RedshiftSession) -> None:
+    """O texto da auditoria da etapa 4 pelo caminho do motor da etapa 5, e como o Redshift compara o ``NaN``, tudo leitura.
+
+    O ``ddl`` da etapa 1 e o ``audit_sql`` citam as tabelas sem esquema, e o motor conta com o
+    ``search_path`` no esquema do datashare depois do ``USE``, que nunca rodou no ambiente alvo; o
+    caso roda numa conexão própria, com o ``SET search_path`` do ``connect`` da etapa 5. O
+    ``is_finite`` do Redshift é ``x NOT IN ('NaN'::float8, ...)``, que supõe o ``NaN`` igual a si
+    mesmo, como no PostgreSQL; pelo IEEE, o ``NaN`` passaria por finito, ``naofinito_valor`` contaria
+    só o infinito e a soma levaria o ``NaN`` ao ``CAST`` para ``NUMERIC(38, 6)``. A tabela
+    ``auditoria`` tem defeitos plantados e o esperado de cada contador ao lado da leitura; os textos
+    do modelo cliente rodam sobre as tabelas vazias, e cobrem ``to_char``, ``octet_length``, ``~`` e
+    ``count(CASE WHEN ...)``, que também nunca rodaram lá (``plan/OPEN_QUESTIONS.md``).
+    """
+    session = redshift_session
+    prefix = f"serialize_db_poc_{session.session_id}_"
+    _, connection = connect_redshift()
+    try:
+        cursor = connection.cursor()
+
+        def run(text: str) -> list:
+            """Executa ``text`` na conexão do caso e devolve as linhas, ou uma lista vazia."""
+            cursor.execute(text)
+            return cursor.fetchall() if cursor.description else []
+
+        def run_as_text(text: str) -> list[list[str]]:
+            """As linhas de ``text`` em texto, para o relatório."""
+            return as_text(run(text))
+
+        # 1. A comparação do NaN, que separa o PostgreSQL do IEEE, e o CAST que a soma evita.
+        comparisons = {
+            "nan_igual_nan": "select 'NaN'::float8 = 'NaN'::float8",
+            "finito.nan": "select " + finite_text("'NaN'::float8"),
+            "finito.infinito": "select " + finite_text("'Infinity'::float8"),
+            "finito.menos_infinito": "select " + finite_text("'-Infinity'::float8"),
+            "finito.numero": "select " + finite_text("1.5::float8"),
+            "finito.nulo": "select " + finite_text("cast(null as float8)"),
+            "cast_nan_numeric": "select cast('NaN'::float8 as numeric(38, 6))",
+            "soma_com_nan": "select sum(v) from (select 1.0::float8 as v union all select 'NaN'::float8) as t",
+        }
+        for label, text in comparisons.items():
+            record(f"redshift.audit.{label}", reading(functools.partial(run_as_text, text)))
+
+        # 2. O search_path no esquema do datashare: o que o connect da etapa 5 roda depois do USE.
+        record("redshift.audit.search_path", outcome(functools.partial(run, f"SET search_path TO {session.schema}")))
+        record("redshift.audit.current_schema", reading(functools.partial(run_as_text, "select current_schema()")))
+
+        # 3. A tabela com defeitos plantados, criada pelo ddl da etapa 1 com o nome sem esquema.
+        metadata = sa.MetaData()
+        model = sa.Table(
+            "auditoria",
+            metadata,
+            sa.Column("id", sa.BigInteger, primary_key=True),
+            sa.Column("data", sa.Date, nullable=False),
+            sa.Column("data_str", sa.String(10), nullable=False),
+            sa.Column("nome", sa.String(20)),
+            sa.Column("valor", sa.Double),
+            sa.Column("preco", sa.Numeric(18, 2)),
+            sa.Column("meta", sa.JSON),
+            info={"serialize_db": {"partition_by": ["data_str"], "partition_source": "data"}},
+        )
+        name = session.table("auditoria")
+        created = outcome(functools.partial(run, schema.ddl(model, "redshift", prefix=prefix)))
+        record("redshift.audit.create_unqualified", created)
+        assert created == "ok", created
+        # O nome sem esquema caiu no esquema do datashare: o nome em duas partes acha a tabela.
+        assert session.execute(f"select count(*) from {session.qualified(name)}")[0][0] == 0
+
+        # Na partição 2026-08-31: o id 2 repetido, o NaN e o infinito em valor, e a linha 4 com data
+        # fora da partição; a linha 5 está em outra partição, fora do escopo.
+        run(
+            f'INSERT INTO "{name}" VALUES '
+            "(1, '2026-08-31', '2026-08-31', 'a', 1.5, 10.25, JSON_PARSE('{\"a\": 1}')), "
+            "(2, '2026-08-31', '2026-08-31', 'b', CAST('NaN' AS DOUBLE PRECISION), 1.00, JSON_PARSE('{\"b\": 2}')), "
+            "(2, '2026-08-31', '2026-08-31', 'c', CAST('Infinity' AS DOUBLE PRECISION), 2.00, NULL), "
+            "(4, '2026-08-30', '2026-08-31', 'd', 3.0, 3.00, JSON_PARSE('{\"c\": 3}')), "
+            "(5, '2026-08-30', '2026-08-30', 'e', 4.0, 4.00, NULL)"
+        )
+        expected = {
+            "linhas": "4", "particao_data_str": "1", "naofinito_valor": "2", "total_valor": "4.500000",
+            "total_preco": "16.250000", "json_meta": "0", "texto_nome": "0", "valor_data_str": "0",
+        }
+
+        # 4. O texto de cada verificação, como o motor o roda; a de linhas também medida a medida,
+        # porque uma medida que o Redshift recusa derruba a consulta inteira.
+        partitions = ["2026-08-31"]
+        texts = audit.audit_sql(model, "redshift", partitions, prefix=prefix)
+        for check, text in texts.items():
+            record(f"redshift.audit.planted.{check}", reading(functools.partial(run_as_text, text)))
+        rows_check = audit.checks(model, partitions)[0]
+        measures = {}
+        for column in rows_check.statement.selected_columns:
+            if column.name == "data_str":
+                continue
+            single = sa.select(column).select_from(model).where(rows_check.statement.whereclause)
+            value = reading(functools.partial(run_as_text, sql.render(single, "redshift", metadata, prefix)))
+            measures[column.name] = value[0][0] if isinstance(value, list) else value
+        record("redshift.audit.planted.measures", measures)
+        record("redshift.audit.planted.expected", expected)
+        matches = {}
+        for label, value in expected.items():
+            matches[label] = measures.get(label) == value
+        record("redshift.audit.planted.matches", matches)
+        # A amostra da reprovação de particao_data_str: a linha 4.
+        sample = sql.render(audit.sample_statement(model, partitions, rows_check.counters["particao_data_str"]), "redshift", metadata, prefix)
+        record("redshift.audit.planted.sample", reading(functools.partial(run_as_text, sample)))
+
+        # 5. Os textos do modelo cliente sobre as tabelas vazias, criadas pelo ddl da etapa 1.
+        results = {}
+        for table in ClientBase.metadata.sorted_tables:
+            session.table(table.name)
+            outcome_of_ddl = outcome(functools.partial(run, schema.ddl(table, "redshift", prefix=prefix)))
+            if outcome_of_ddl != "ok":
+                results[table.name] = {"ddl": outcome_of_ddl}
+                continue
+            table_partitions = partitions if schema.table_options(table).partition_by else None
+            results[table.name] = {}
+            for check, text in audit.audit_sql(table, "redshift", table_partitions, prefix=prefix).items():
+                results[table.name][check] = outcome(functools.partial(run, text))
+        record("redshift.audit.client_model", results)
+    finally:
+        connection.close()

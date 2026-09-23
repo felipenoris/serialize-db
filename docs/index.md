@@ -5,7 +5,9 @@ dados e a conferência dos próprios modelos.
 
 Esta página explica o funcionamento geral do pacote, traz o tutorial de uso e a tabela de
 mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.schema`,
-`serialize_db.sql`, `serialize_db.errors` e `serialize_db.cli`.
+`serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
+`serialize_db.engine` (com o motor `serialize_db.engine.duckdb`), `serialize_db.execution`,
+`serialize_db.errors` e `serialize_db.cli`.
 
 ## Como o pacote funciona
 
@@ -28,10 +30,13 @@ mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.
 - **Todo identificador que a biblioteca emite vai entre aspas duplas**: nomes de coluna como `to` e
   `timestamp` são palavras reservadas do DuckDB e do Redshift.
 
-O que já existe são o módulo de esquema, `serialize_db.schema`, e o de texto SQL,
-`serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`. O
-armazenamento Delta, os motores, a auditoria, a execução e a publicação
-são as etapas seguintes do plano, na pasta `plan/` do repositório.
+O que já existe são o módulo de esquema, `serialize_db.schema`, o de texto SQL,
+`serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`, a camada
+de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3, a auditoria,
+`serialize_db.audit`, o motor DuckDB, `serialize_db.engine.duckdb`, e a execução,
+`serialize_db.execution`, com `serialize-db run` e `serialize-db audit`. O motor Redshift, a
+publicação para os clientes no Redshift, a carga inicial e a operação são as etapas seguintes do
+plano, na pasta `plan/` do repositório.
 
 ## Instalação
 
@@ -41,9 +46,12 @@ No repositório, o `uv` instala o Python 3.13, o pacote e as dependências:
 uv sync --group dev
 ```
 
-O pacote depende de `sqlalchemy`, `pyarrow`, `deltalake`, `duckdb` e dos dialetos `duckdb-engine`
-e `sqlalchemy-redshift`, que compilam o texto SQL de cada motor, nas versões fixadas em
-`pyproject.toml`.
+O pacote depende de `sqlalchemy`, `pyarrow`, `deltalake`, `duckdb`, `boto3`, que faz a escrita
+condicional do arquivo de controle no S3, e dos dialetos `duckdb-engine` e `sqlalchemy-redshift`,
+que compilam o texto SQL de cada motor, nas versões fixadas em `pyproject.toml`. O S3 precisa da
+região em `AWS_REGION` ou `AWS_DEFAULT_REGION`, e as credenciais vêm da cadeia padrão do ambiente;
+a extensão `delta` do DuckDB vem da pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao
+lado do ambiente virtual, sem download.
 
 ## Tutorial
 
@@ -267,6 +275,130 @@ serialize-db sql check --metadata pipeline.models:Base.metadata --statements pip
 `serialize_db.sql.read_sql` lê o arquivo versionado com o sentinela trocado pelo prefixo informado,
 a string vazia para as tabelas do contrato ou `exec_<id>_` para o sandbox de uma execução, e
 `serialize_db.sql.referenced_tables` lista as tabelas do contrato que um statement ou um texto cita.
+
+### Gravar as tabelas Delta
+
+`serialize_db.storage.Storage` é a raiz do banco, uma pasta local ou um prefixo `s3://`, e cada
+primitiva de `serialize_db.delta` recebe a URI da pasta da tabela e o `Storage`. A tabela nasce do
+modelo, e cada partição entra num commit que a substitui, com os metadados da execução:
+
+```python
+from serialize_db import delta, schema
+from serialize_db.storage import Storage
+
+storage = Storage.for_uri("s3://bucket/projeto/delta")
+uri = storage.uri_of("prod/cad_operacoes")
+delta.create_table(uri, table, storage)                         # versão 0, repetível
+metadata = delta.commit_metadata("exec-2026-09-05", {"cad_contratos": 88})
+version = delta.publish_partition(uri, table, "2026-08-31", schema.cast(data, table), metadata, storage)
+delta.version_diff(uri, version - 1, version, table, storage)   # {"2026-08-31"}
+```
+
+O valor de partição segue `serialize_db.schema.PARTITION_VALUE`, letra ou dígito no início e
+depois letras, dígitos, `_`, `.` e `-`, porque vira nome de pasta e literal SQL. Duas escritas da
+mesma partição a partir da mesma versão levantam `serialize_db.errors.ExecutionConflict`, e a
+segunda não commita. `serialize_db.delta.register_files` registra no log os arquivos que outro
+escritor gravou dentro da pasta da tabela, como o `COPY` do DuckDB, depois de conferir o rodapé de
+cada um, e relê a versão pelos dois leitores, desfazendo o commit numa diferença.
+
+`serialize_db.delta.reconcile` aplica ao log o que o modelo acrescentou (coluna anulável,
+`NOT NULL` relaxado, comentários) e recusa com `serialize_db.errors.SchemaDiffRefused` o que só
+`serialize_db.delta.rewrite` resolve, num commit: renomeação, remoção e mudança de tipo.
+`serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo de controle do
+ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva.
+
+### Rodar uma execução
+
+`serialize_db.Database` junta a raiz, o ambiente e os modelos, e `serialize_db.Execution` é o ciclo
+de uma execução: abre as tabelas do ambiente e fixa a versão de cada uma, cria o sandbox, e no fim
+o descarta. Entre os dois, o pipeline traz as tabelas, roda a lógica, audita e publica:
+
+```python
+import sqlalchemy as sa
+
+from serialize_db import Database, Execution
+
+db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
+with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as run:
+    run.ingest(Lancamento.__table__, partitions=run.previous_partitions(Lancamento.__table__, 12),
+               materialize=True)
+    with run.sandbox.stream(sa.select(Lancamento)) as stream, \
+            run.sandbox.loader(Projetado.__table__) as loader:
+        for batch in stream:
+            ids = run.next_ids(Projetado.__table__, batch.num_rows)   # faixa contígua, sob lock
+            loader.write(project(batch, ids))
+    run.audit(Projetado.__table__, ["2026-08-31"])                   # AuditFailed na reprovação
+    run.publish(Projetado.__table__, partitions=["2026-08-31"])      # overwrite por partição
+```
+
+`run.publish` exige a auditoria aprovada das partições na própria execução e recusa com
+`serialize_db.errors.ExecutionConflict` a tabela em que outra execução gravou dados depois da
+abertura. O `export_mode` sai do argumento de `publish`, do de `Execution`, de
+`SERIALIZE_DB_EXPORT_MODE` ou de `"register"`, nessa ordem. `run.snapshot("2026T3")` marca a
+execução: os commits levam o nome, e o encerramento sem erro grava as versões de todas as tabelas
+no arquivo de controle do ambiente.
+
+A linha de comando abre a mesma execução para uma função `modulo:funcao` que recebe `run`, e
+`serialize-db audit` imprime o texto das verificações de uma tabela ou roda a auditoria sobre a
+versão publicada:
+
+```shell
+serialize-db run --root s3://bucket/projeto/delta --environment prod --partition 2026-08-31 \
+    --metadata pipeline.models:Base.metadata pipeline.mensal:main
+serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --engine redshift --sql
+serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos \
+    --partitions 2026-08-31 --root s3://bucket/projeto/delta --environment prod
+```
+
+O `run` sai com 0 quando o pipeline termina, 1 na auditoria reprovada e 2 no conflito e no erro de
+uso; `--root`, `--environment`, `--engine` e `--export-mode` têm por padrão `SERIALIZE_DB_ROOT`,
+`SERIALIZE_DB_ENVIRONMENT` (`dev`), `SERIALIZE_DB_ENGINE` (`duckdb`) e `SERIALIZE_DB_EXPORT_MODE`.
+
+### Rodar o pipeline no sandbox DuckDB
+
+`serialize_db.engine.duckdb.DuckDBEngine` é o sandbox de uma execução: um banco em arquivo numa
+pasta temporária, apagado no `cleanup`, com uma sessão que várias threads usam uma de cada vez. A
+tabela Delta entra presa a uma versão, e os dados saem e voltam em lotes Arrow:
+
+```python
+import pyarrow as pa
+import sqlalchemy as sa
+
+from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
+
+with DuckDBEngine(DuckDBConfig(), "exec-2026-09-05", storage) as engine:
+    engine.ingest(Lancamento.__table__, uri, version, partitions=["2026-07-31", "2026-08-31"],
+                  materialize=True)
+    query = sa.select(Lancamento).where(Lancamento.data_base_str == sa.bindparam("particao"))
+    with engine.stream(query, {"particao": "2026-08-31"}) as stream, \
+            engine.loader(Projetado.__table__) as loader:
+        for batch in stream:                 # a consulta continua enquanto o cliente trabalha
+            loader.write(project(batch))     # cast aqui; a tabela nasce no close do loader
+```
+
+`query` devolve a `pa.Table` inteira, e `load` grava uma `pa.Table`, um lote, um leitor ou um
+iterável de lotes; um DataFrame é recusado com a conversão sem cópia na mensagem
+(`pa.Table.from_pandas(frame, preserve_index=False)`). O nome de cada tabela no sandbox tem um só
+dono: o `loader` recusa com `serialize_db.errors.SandboxError` o nome que o `ingest` ocupou, e
+`engine.published(table, uri, version)` lê a versão publicada sem ocupar nome. `with
+engine.session() as connection:` dá a conexão crua ao que as primitivas não cobrem, e `with
+engine.new_session() as other:` abre uma sessão a mais para o que roda em paralelo.
+
+### Auditar antes de publicar
+
+`engine.audit(table, partitions, uri, version)` roda as verificações que
+`serialize_db.audit.checks` deriva do modelo e devolve o `AuditReport`: nulo em coluna `NOT NULL`,
+texto acima de `String(n)` em bytes, JSON inválido, a partição fora da coluna de origem e do padrão
+de nome de pasta, a chave repetida na partição e, quando a chave não inclui a partição, contra as
+demais partições da versão publicada, e o órfão de chave estrangeira com `foreign_keys=True`. O
+relatório traz o SQL de cada verificação, até 20 linhas de amostra das reprovadas, as somas de
+controle e as colunas `Double` com `NaN` ou infinito, que a publicação grava sem mínimo e máximo.
+`serialize_db.audit.audit_sql(table, "redshift")` imprime o texto de cada verificação, para
+depuração.
+
+`engine.export_partition(table, uri, value, metadata, mode)` leva a partição auditada ao Delta:
+`"register"` registra o arquivo que o `COPY` do DuckDB gravou, depois das conferências do rodapé, e
+`"rewrite"` grava pelo `write_deltalake`.
 
 ## Tabela de mapeamento de tipos
 

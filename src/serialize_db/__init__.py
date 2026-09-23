@@ -3,7 +3,21 @@
 .. include:: ../../docs/index.md
 """
 
-from serialize_db import cli, errors, schema, sql
+from serialize_db import audit, cli, delta, engine, errors, execution, schema, sql, storage
 from serialize_db.cli import main
+from serialize_db.execution import Database, Execution
 
-__all__ = ["cli", "errors", "main", "schema", "sql"]
+__all__ = [
+    "Database",
+    "Execution",
+    "audit",
+    "cli",
+    "delta",
+    "engine",
+    "errors",
+    "execution",
+    "main",
+    "schema",
+    "sql",
+    "storage",
+]

@@ -126,3 +126,13 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   `test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`, six green
   runs, 2026-09-23, macOS). The table barrier left the plan for that reason. `plan/POC.md`,
   `plan/PLAN-STAGE-4.md`
+
+- A pool that receives every task at once cannot promise that nothing new starts after the first
+  failure: with one worker, the worker took the third table before the main loop saw the second
+  one fail, and `shutdown(cancel_futures=True)` came too late; the sketch in `test_parallel.py`
+  passed only because each task slept 0.5 s. `Execution.publish` submits a table only when a worker
+  is free and no failure arrived, and the failure goes up with its own type and each table's outcome
+  in a note (`add_note`) (2026-09-23). Under load, DuckDB can hand a stream's first batch only at the
+  end of the query (4.531 s in a three-process reproducer, with the second batch already in memory),
+  so a test that closes a stream "mid-query" asserts the thread ended and the session is free, with
+  the error null or the interrupt's. `plan/POC.md`, `plan/PLAN-STAGE-6.md`

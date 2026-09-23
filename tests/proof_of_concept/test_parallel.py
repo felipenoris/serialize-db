@@ -681,20 +681,26 @@ def test_batch_stream_spills_after_the_budget_and_keeps_the_order(local_location
 
 @pytest.mark.local
 def test_close_and_cleanup_interrupt_the_running_query(local_location: LocalLocation) -> None:
-    """O ``close`` cancela a consulta que ainda roda, em vez de esperar o lote seguinte, e a sessão continua usável; o ``cleanup`` cancela a ordenação de um stream cuja construção, noutra thread, ainda espera o primeiro lote. Os tempos são leituras."""
+    """O ``close`` depois do primeiro lote termina a thread em vez de esperar a consulta, e a sessão continua usável; o ``cleanup`` cancela a ordenação de um stream cuja construção, noutra thread, ainda espera o primeiro lote. Os tempos são leituras."""
     engine = SandboxEngine(folder=local_location.child("transbordo_interrupt"))
     Path(engine.folder).mkdir()
     engine.query("CREATE TABLE numeros AS SELECT range AS id FROM range(20_000_000)")
 
-    # Um filtro que acha linhas no começo e depois varre o resto sem achar: o lote seguinte demora.
-    stream = BatchStream(engine, "SELECT id FROM numeros WHERE id < 150000 OR md5(id::VARCHAR) = 'x'")
+    # Um filtro que acha linhas no começo e depois varre o resto sem achar: com o primeiro lote
+    # entregue cedo, o close cancela a varredura, e o erro da thread é o da interrupção. O primeiro
+    # lote pode sair só no fim da consulta, com a máquina carregada (4,5 s num reprodutor de três
+    # processos, leitura de 2026-09-23), e aí não há o que cancelar: o erro fica nulo, e o que vale nos
+    # dois casos é a thread terminada e a sessão livre logo depois do close.
+    stream = BatchStream(engine, "SELECT id FROM numeros WHERE id < 150000 OR md5(md5(id::VARCHAR)) = 'x'")
     stream.read_next_batch()
     started = time.perf_counter()
     stream.close()
     closed = time.perf_counter() - started
-    assert "INTERRUPT" in str(stream._spool.error).upper()  # InterruptException, ou OSError pelo leitor Arrow
+    error = stream._spool.error
+    assert error is None or "INTERRUPT" in str(error).upper()  # InterruptException, ou OSError pelo leitor Arrow
+    assert not stream._thread.is_alive() and closed < 1.0
     assert engine.query("SELECT count(*) AS n FROM numeros").column("n")[0].as_py() == 20_000_000
-    record("parallel.stream.close_interrupts", f"{closed:.3f} s do close ao fim da thread")
+    record("parallel.stream.close_interrupts", f"{closed:.3f} s do close ao fim da thread, erro {type(error).__name__}")
 
     # A construção de um stream com ORDER BY espera a ordenação inteira; o cleanup a cancela.
     outcome: dict[str, BaseException | None] = {}

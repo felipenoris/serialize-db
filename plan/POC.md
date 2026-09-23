@@ -2116,3 +2116,230 @@ exportação a um prefixo novo por partição e por tentativa, sem `PARTITION BY
 controle a ser criada só pelo usuário ([`PLAN-STAGE-8.md`](PLAN-STAGE-8.md)). Os comportamentos que
 isso supõe no ambiente alvo esperam a próxima execução da suíte
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que a regra do `Double` não finito mudou no script de migração
+
+Em 2026-09-23, no mesmo macOS, `scripts/migrate_parquet_to_delta.py` passou a seguir a regra da
+issue #59: `check_partition` acha, na mesma consulta que confere o contrato, as colunas `Double`
+com `NaN` ou infinito na partição, que saem sem mínimo e máximo no log (`register`) e no rodapé e no
+log (`rewrite`, `ColumnProperties(statistics_enabled="NONE")`); o relatório soma cada `Double` só
+nos valores finitos e compara os não finitos contados na origem e no Delta.
+
+- **A base fictícia** (`tests/source_db_projetado.py`), sem valor não finito, rodou pela linha de
+  comando antes e depois da mudança, nos dois modos: os relatórios JSON ficaram iguais sem os
+  campos novos e sem os tempos, os campos novos saíram todos zerados, e as estatísticas das 24
+  ações `add` do log saíram iguais.
+- **Uma origem com `NaN` e infinito** em `valor`, em duas partições de `cad_lancamentos`
+  (`test_migrate_parquet_to_delta.py::test_nonfinite_double_leaves_min_max_out_of_its_partition`,
+  nos dois modos): as duas partições sem o mínimo e o máximo de `valor` no log, as demais com eles;
+  o arquivo da partição do `NaN` sem os dois no rodapé nos dois modos, porque o `COPY` do DuckDB já
+  os omite no grupo com `NaN`; o relatório igual nos dois lados, com um não finito em cada uma das
+  duas partições; e `delta_scan ... WHERE valor > 1e300` devolveu as duas linhas.
+
+**Consequência**: [`PLAN-STAGE-7.md`](PLAN-STAGE-7.md) descreve o script com a regra, e o item da
+issue #59 em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) separa a versão que rodou no ambiente alvo.
+
+## O que as sondas locais dos casos da suíte Redshift mostraram
+
+Em 2026-09-23, no mesmo macOS (SQLAlchemy 2.0.54, sqlalchemy-redshift 1.0.0, redshift-connector
+2.1.16, deltalake 1.6.4, DuckDB 1.5.5, pyarrow 25.0.1), a preparação dos casos da etapa 5 para a
+próxima execução da suíte Redshift sondou o que dá para medir sem o Redshift.
+
+- **O texto do `stream` por `UNLOAD`.** O statement Core com os valores dados por `params` e
+  compilado com `literal_binds` e `render_postcompile` pelo `RedshiftDialect_redshift_connector`:
+  - o `paramstyle` padrão, `format`, dobra o `%` dos literais (`'50%% d''agua \\ fim'`), e
+    `named` o mantém (`'50% d''agua \\ fim'`); o `redshift_connector` manda sem conversão o texto
+    executado sem parâmetros (`Connection.execute`, `has_bind_parameters`), e o `%%` chegaria
+    assim ao servidor;
+  - a aspa simples sai dobrada e a contrabarra também, nos dois estilos: o dialeto tem
+    `_backslash_escapes` verdadeiro, o escape do PostgreSQL;
+  - a data sai `'2026-08-31'`, o timestamp `'2026-08-31 12:30:01.123456'`, o número `10.25`, o
+    `Float` `0.1` e o `IN` de lista `IN (1, 2, 3)`;
+  - `compiled.binds` sai vazio sob `literal_binds`, e um `IN` de lista sem valor saiu `IN (NULL)`,
+    com o `SAWarning` só na comparação; o percurso do statement (`sqlalchemy.sql.visitors.iterate`)
+    achou o `BindParameter` com `required`, que some depois de `params(ids=[1])`;
+  - o `text()` com `params` falhou com `CompileError: No literal value renderer is available for
+    literal value "d'agua \ barra" with datatype NULL`; com cada `bindparam` criado pelo valor
+    (`sa.bindparam(nome, value=valor, expanding=...)`), os tipos saíram `String`, `Date`,
+    `Integer`, `Numeric` e `DateTime`, e os literais iguais aos do statement Core;
+  - o `query` sem `literal_binds` sai `IN (:ids_1, :ids_2, :ids_3)`, e `construct_params()` dá os
+    nomes expandidos.
+- **O arquivo registrado abaixo da pasta Hive.** Numa tabela Delta local particionada por `mes`, os
+  arquivos gravados em `mes=<valor>/exec_42_<uuid>/0000_part_0<n>.parquet` e registrados por
+  `create_write_transaction` foram lidos pelo delta-rs (as 5 linhas, com `mes`) e pelo `delta_scan`
+  (3 e 2 linhas por partição, e o filtro por `mes` também). Um arquivo órfão numa subpasta dessas
+  não entrou no `vacuum` padrão, que só apaga o que o log removeu, e entrou no `vacuum(full=True)`.
+- **Os casos novos num emulador.** `test_unload_to_a_hive_prefix_and_register`,
+  `test_stream_by_unload_with_literal_values`, `test_unload_limit_empty_result_temp_table_and_super`,
+  `test_row_description_oids_and_type_modifier`, `test_small_load_copy_cost` e
+  `test_unload_footer_statistics_with_nan` rodaram contra um emulador descartável, o DuckDB no
+  lugar do Redshift (o `UNLOAD` e o `COPY` traduzidos para `read_parquet` e para o `pyarrow`) e
+  uma pasta no lugar do S3. O emulador confere só o código Python dos testes, e achou um defeito:
+  o caso do `NaN` filtrava `valor > 2`, que o máximo 3.0 do rodapé satisfaz, e não mostraria a linha
+  perdida pela poda; com `valor > 3`, o arquivo do pyarrow com o `NaN` no início, no meio e no fim
+  do grupo de linhas deu 0, a perda da issue #59. No DuckDB, que não trata a contrabarra como
+  escape, o caso da contrabarra saiu diferente pelo texto com literais e pelo `UNLOAD`, e o registro
+  do teste mostrou as duas listas.
+
+**Consequência**: [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) corrige o guarda do `stream`, que dizia
+ler `compiled.binds`, para o percurso do statement com `required`, como `render`, e registra o
+`paramstyle="named"` e o texto pronto com os `bindparam` tipados pelo valor. O que o Redshift faz
+com a contrabarra dobrada, dentro e fora do `UNLOAD`, e os demais casos esperam a próxima execução
+da suíte no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que a implementação da etapa 3 mostrou
+
+Em 2026-09-23, no mesmo macOS (deltalake 1.6.4, DuckDB 1.5.5, pyarrow 25.0.1, boto3 1.43.98), a
+implementação de `serialize_db.storage` e `serialize_db.delta` leu a API do delta-rs, do
+`pyarrow.fs` e do DuckDB antes de cada primitiva, e os casos entraram em `tests/test_storage.py` e
+`tests/test_delta.py`.
+
+- **O retry do delta-rs contra uma rede morta.** Num subprocesso despido (`HOME` inexistente,
+  credenciais fictícias, `AWS_EC2_METADATA_DISABLED`), `DeltaTable.is_deltatable` contra o endpoint
+  `http://10.255.255.1:9`, que não responde, desistiu em 57,0 s com as opções padrão, em 10,3 s com
+  `max_retries` 1 e `retry_timeout` 10 s, e em 10,3 s com `max_retries` 3 e o mesmo `retry_timeout`;
+  contra uma porta fechada em `127.0.0.1`, em 2,4 s, 0,3 s e 0,6 s. O `retry_timeout` é o teto, e
+  as três tentativas não o alongam.
+- **O `pyarrow.fs`.** `S3FileSystem(region=...)` nasceu em 0,014 s sem rede; no `LocalFileSystem`,
+  `delete_file` de um caminho ausente levanta `FileNotFoundError`, `copy_file` para uma pasta que
+  não existe falha, e `FileSelector(..., allow_not_found=True)` de uma pasta ausente devolve a lista
+  vazia. `Storage.delete` ignora o ausente, e `Storage.copy` cria a pasta local do destino.
+- **O esquema Delta e o `alter`.** Os tipos de `arrow_schema(table)` voltaram iguais de
+  `pa.schema(dt.schema())` em todos os tipos do contrato, com a nulidade; `create` aceita
+  `description=None`; `set_column_metadata` junta a chave nova às que o campo tinha, sem apagar; o
+  `Field` de `delta_schema` entra em `add_columns` com o comentário; e três `alter` seguidos no
+  mesmo objeto commitaram as versões 2, 3 e 4, com o objeto na última.
+- **A estatística desligada no rodapé.** Com `ColumnProperties(statistics_enabled="NONE")`, a coluna
+  do arquivo do delta-rs sai com `statistics` `None` no rodapé, não com `has_min_max` falso.
+- **A cópia profunda.** O esquema do leitor de `to_pyarrow_dataset().scanner().to_reader()` leva a
+  nulidade e os comentários da versão, e `write_deltalake(..., mode="error", name=...,
+  description=..., configuration=...)` nasceu na versão 0 com os três.
+- **As estatísticas achatadas.** `get_add_actions(flatten=True)` tipa `min.<coluna>` e
+  `max.<coluna>` pelo tipo da coluna (`date32`, `decimal128(18, 2)`, `timestamp[us]`), e
+  `partition.<coluna>` sai `string not null`.
+- **As conferências do registro.** Cada uma das dez recusas de `register_files` saiu pela
+  conferência pretendida, lidas as mensagens: tamanho, linhas do rodapé, pasta da partição,
+  `expected_rows`, caminho absoluto, coluna do contrato ausente, `valor` em `BYTE_ARRAY` no lugar de
+  `DOUBLE`, a coluna de partição dentro do arquivo, as colunas fora da ordem do contrato e 20 nulos
+  numa coluna `NOT NULL`, contados pelo rodapé. As três últimas conferências são da implementação:
+  o `COPY` do Redshift lê o Parquet por posição, e a [etapa 7](PLAN-STAGE-7.md) conta com a
+  recusa do nulo no modo `register`.
+- **A releitura.** Um registro com o máximo da chave abaixo do real passou pelas conferências do
+  rodapé, e o `read_back` o pegou pelo limite do log (`o log registra 101..105, e os dados têm
+  101..110`), voltou a versão por `restore` e deixou a partição com as 10 linhas anteriores.
+- **O `hive_partitioning` na leitura da exportação.** O `read_parquet` das pastas exportadas leu
+  `data_str=2026-07-31` como `DATE`; com `hive_types_autocast = false`, como texto, a mesma leitura de
+  `test_deltalake.py::test_initial_load_from_parquet_folders`.
+
+**Consequência**: [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md) troca a interface e os rascunhos pela seção
+"A implementação" e registra o que a implementação fixou: os métodos de caminho de `Storage`
+(`relative`, `uri_of`, `size`, `ensure_folder`, `open_input_file`), `duckdb_connect`, o `retry` de
+`storage_options` sem `timeout`, `table_exists` e `file_from_return_stats`, as três conferências
+novas, a releitura que compara o log com os leitores, e os não finitos de `rewrite`. A revisão das
+etapas 4 a 9 depois da etapa 3 levou a elas a interface de `Storage` e de `delta`.
+
+## O que a implementação da etapa 4 mostrou
+
+Em 2026-09-23, no mesmo macOS (DuckDB 1.5.5, duckdb-engine 0.17.0, sqlalchemy-redshift 1.0.0,
+SQLAlchemy 2.0.54), a implementação de `serialize_db.audit` e do motor DuckDB leu o compilador, o
+driver e a documentação antes de cada primitiva, e os casos entraram em `tests/test_audit.py` e
+`tests/test_engine_duckdb.py`.
+
+- **O `FILTER` nos agregados.** O texto do Redshift que o rascunho de 2026-09-21 imprimia levava
+  `count(*) FILTER (WHERE ...)`, e a sintaxe do `COUNT` na documentação do Redshift não tem a
+  cláusula (`COUNT( * | expression )`, `COUNT ( [ DISTINCT | ALL ] expression )`). A auditoria conta
+  por `count(CASE WHEN <defeito> THEN 1 END)`, que os dois motores aceitam, e o texto do DuckDB de
+  cada verificação do modelo cliente rodou num DuckDB em memória sobre o DDL da etapa 1.
+- **A regra padrão das funções.** Uma subclasse de `FunctionElement` com `@compiles` só para o
+  Redshift falhou no dialeto do DuckDB com `UnsupportedCompilationError`: o `duckdb_engine` compila
+  pelo `PGCompiler`, e a subclasse não tem regra padrão. Cada função da auditoria ganhou a regra
+  padrão, o nome com os argumentos, e `sa.func.json_valid` continuou uma `Function` comum.
+- **A ordem de inserção e o primeiro lote.** Com `preserve_insertion_order = false`, o ajuste do
+  motor, a consulta `WHERE id < 150000 OR md5(id::VARCHAR) = 'x'` sobre 20.000.000 de linhas deu o
+  primeiro lote só no fim com duas threads (1,093 s de 1,093 s), contra 0,373 s de 1,108 s com a
+  ordem preservada; com 11 threads, 0,289 s de 0,289 s contra 0,331 s de 0,339 s. O filtro de uma
+  partição entre doze deu o primeiro lote em 2 a 3 ms nos quatro ajustes, e o `CREATE TABLE AS` de
+  17.000.000 de linhas levou 0,533 s e 802 MB acima da base com a ordem livre, contra 0,908 s e
+  876 MB com ela (duas threads; com 11, 0,145 s e 808 MB contra 0,389 s e 955 MB), o melhor de três
+  para os tempos do stream. A consulta sem `ORDER BY` sai em ordem arbitrária, e o teste do
+  orçamento do stream, que conferia a ordem das linhas, passou a ordenar a consulta.
+- **O teste do cancelamento.** Com a ordem livre, a consulta rara do teste herdado de
+  `test_parallel.py` terminava antes do `close`, e o teste falhou em três de seis rodadas sem
+  erro de interrupção; com `SET preserve_insertion_order = true` só naquela sessão, o `close`
+  cancelou a consulta em 14 ms em seis rodadas seguidas.
+- **O driver.** `to_arrow_table()` de um `CREATE` ou de um `INSERT` devolve a tabela `Count`, e de
+  um `SET` ou de um `DROP`, `Success`; `cursor()` de um cursor abre outra conexão ao mesmo banco; o
+  banco em arquivo tem um `.wal` ao lado enquanto está aberto, e só o `.duckdb` depois do `close`.
+- **A carga do JSON inválido.** A coluna `JSON` do DuckDB recusa o texto inválido na carga, e o
+  teste da auditoria planta o JSON inválido numa tabela criada por `CREATE TABLE AS`, com a coluna em
+  `VARCHAR`: a verificação `json_*` serve à tabela que o pipeline cria por SQL e ao Redshift.
+
+**Consequência**: [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) troca a interface e os rascunhos pela seção
+"A implementação" e registra a contagem por `CASE`, a regra padrão das funções, o custo do primeiro
+lote com a ordem livre, `referenced` na auditoria do motor, `totals` e `rows` no relatório, o
+esquema do primeiro lote no `loader` e o `CAST` de cada coluna na exportação. O `is_finite` do
+Redshift, `x NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)`, espera uma execução
+no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que a implementação da etapa 6 mostrou
+
+Em 2026-09-23, no mesmo macOS (DuckDB 1.5.5, deltalake 1.6.4, Python 3.13), a implementação de
+`serialize_db.execution` e dos subcomandos `run` e `audit` rodou os casos de
+`tests/test_execution.py`, e a suíte local inteira rodou seis vezes seguidas para achar os testes
+instáveis.
+
+- **O pool da publicação.** Com todas as tabelas entregues ao `ThreadPoolExecutor` de uma vez, como
+  o `publish_all` de `test_parallel.py`, e um worker só, a falha da segunda tabela chegou ao laço
+  principal depois de o worker pegar a terceira: o `shutdown(cancel_futures=True)` não a cancelou, e
+  a terceira tabela publicou. O esboço só passava porque cada tarefa dormia 0,5 s. `Execution`
+  entrega uma tabela ao pool só com um worker livre e nenhuma falha, e o teste com um worker deu a
+  primeira concluída, a segunda com a falha e a terceira cancelada em cinco rodadas.
+- **A exceção com o resultado de cada tabela.** A falha sobe com o seu tipo e o resultado de cada
+  tabela numa nota (`BaseException.add_note`, Python 3.11 em diante), e a linha de comando traduz o
+  tipo no código de saída: `ExecutionConflict` em 2, `AuditFailed` em 1.
+- **O primeiro lote e o `close` sob carga.** O teste do cancelamento de `test_parallel.py`, e o do
+  motor que o repete, falharam uma vez em seis rodadas da suíte inteira, sem erro de interrupção, e
+  alongar a varredura com o `md5` duplo (1,37 s depois do primeiro lote, contra 0,74 s) não bastou.
+  Um reprodutor com três processos simultâneos, 15 tentativas cada, deu 44 interrupções e um caso em
+  que o primeiro lote só saiu no fim da consulta, aos 4,531 s, com o segundo já na memória: não
+  havia o que cancelar. Os dois testes passaram a conferir o que vale nos dois casos, a thread
+  terminada e a sessão livre em menos de 1 s depois do `close`, com o erro nulo ou o da interrupção,
+  e a suíte inteira passou seis vezes seguidas, com o `close` em 16 a 28 ms e o `OSError` da
+  interrupção em todas; o cancelamento estrito continua conferido pelo `cleanup` com a ordenação.
+- **A pasta temporária.** O `DuckDBEngine` padrão nasce numa pasta de `tempfile.mkdtemp`, fora da
+  raiz autorizada dos testes: os testes da execução constroem o motor com `temp_directory` sob a
+  raiz, e os da linha de comando apontam `tempfile.tempdir` para ela.
+
+**Consequência**: [`PLAN-STAGE-6.md`](PLAN-STAGE-6.md) troca a interface e o rascunho pela seção
+"A implementação" e registra o pool que entrega uma tabela por worker livre, a nota com o resultado
+de cada tabela, o snapshot só na execução sem erro, `referenced` na auditoria, o motor Redshift e
+`publish_redshift` fora da etapa até as etapas 5 e 8, e o `serialize-db audit` sobre um sandbox
+DuckDB próprio.
+
+## O que o texto da auditoria para o Redshift mostrou localmente
+
+Em 2026-09-23, no mesmo macOS, a preparação do caso da auditoria na suíte Redshift renderizou o
+texto de `audit_sql(..., "redshift")` e o DDL de `schema.ddl(..., "redshift")` para uma tabela com
+chave primária, partição com `partition_source`, `String(n)`, `Double`, `Numeric(18, 2)` e `JSON`.
+
+- **Os nomes saem sem esquema.** O DDL cria `"<prefixo>auditoria"` e o texto de cada verificação
+  cita `"<prefixo>auditoria"."<coluna>"`, sem o esquema: no Redshift, quem os resolve é o
+  `SET search_path TO <esquema>` do `connect` da etapa 5, depois do `USE`, que nunca rodou no
+  esquema do datashare. A suíte sempre citou as tabelas em duas partes.
+- **A coluna JSON vira `SUPER`, e a auditoria chama `is_valid_json` sobre ela.** A documentação do
+  `is_valid_json` fala de uma string [uncertain se aceita `SUPER`], e a verificação de linhas junta
+  todas as medidas numa consulta só: uma medida recusada derruba as demais.
+- **O resto do texto**: `count(CASE WHEN (...) THEN 1 END)` em cada contador,
+  `octet_length`, `~ '^[0-9A-Za-z][0-9A-Za-z_.-]*$'`, `to_char(<data>, 'YYYY-MM-DD')`, a soma
+  `sum(CASE WHEN (<valor> NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)) THEN
+  CAST(<valor> AS NUMERIC(38, 6)) END)` e a amostra por `LIMIT 20`.
+- **O emulador.** `test_audit_sql_under_search_path_and_nan_comparison` rodou no emulador local da
+  seção anterior, com o `SET search_path` traduzido para `USE` e macros do DuckDB no lugar de
+  `is_valid_json` e de `to_char`: a tabela com os defeitos plantados deu o esperado em cada contador
+  (4 linhas, 1 fora da partição, 2 não finitos, totais `4.500000` e `16.250000`), com o `NaN` igual
+  a si mesmo, como o DuckDB o compara, e os textos do modelo cliente rodaram sobre as tabelas vazias.
+
+**Consequência**: o caso lê no ambiente alvo o `search_path`, o `is_valid_json` sobre `SUPER`, a
+comparação do `NaN` e cada medida isolada ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), "O texto da
+auditoria no Redshift"), e [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) registra que o `search_path` resolve
+os nomes sem esquema.

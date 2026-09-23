@@ -246,7 +246,7 @@ research appends to the matching group.
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Rerun it whenever a dependency is added**; a new DuckDB extension, a Python version change or another runtime asset is added by hand. Only a folder prepared on Linux x86_64 serves the SageMaker space; the header is the operating procedure, and the extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`. |
 | `examples/` | The scripts the user ran in the target, kept as run: `redshift_native.py`, `redshift_data_api.py`, `redshift_copy_unload.py` (2026-09-20) and `redshift_manifest.py` (2026-09-21, the prerequisites of `export_partition`); `examples/README.md` says what each one fixes. The probe, the suite and stage 5 repeat their calls, and the target they fix is in `.claude/memory/redshift.md`. |
 | `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py` and `parquet_source.py` (`--sample N`), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
-| `scripts/` | `migrate_parquet_to_delta.py`, the early migration of stage 7 (2026-09-21): per table and partition, the DuckDB query with the contract casts, one query checking partition value, nulls and text lengths, `register` (`COPY ... RETURN_STATS` committed by `create_write_transaction`) or `rewrite` (`cast` and `write_deltalake`), the `sort_key` order, resume from the log, the count-and-sum report with time and RSS per partition and `--report` JSON; local folder or `s3://`. The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
+| `scripts/` | `migrate_parquet_to_delta.py`, the early migration of stage 7 (2026-09-21): per table and partition, the DuckDB query with the contract casts, one query checking partition value, nulls and text lengths and finding the `Double` columns with `NaN` or infinity, which lose min and max in the log and in the `rewrite` footer (issue #59), `register` (`COPY ... RETURN_STATS` committed by `create_write_transaction`) or `rewrite` (`cast` and `write_deltalake`), the `sort_key` order, resume from the log, the count-and-sum report (`Double` sums over finite values, non-finite values counted) with time and RSS per partition and `--report` JSON; local folder or `s3://`. The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
 | `plan/readings/` | The probe reports backing a statement in `plan/POC.md`, kept as they came out, indexed by `plan/readings/README.md`. |
 | `plan/guia.md` | ETL practices the pipeline follows: immutable partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `plan/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
@@ -262,7 +262,7 @@ research appends to the matching group.
 | `plan/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): one item per pending question, with the run or the decision that will close it; a closed item leaves the file when its answer lands in the owning document. |
 | `plan/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options, contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and Delta against Iceberg with the re-evaluation trigger. |
 | `plan/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `plan/PLAN-STAGE-<n>.md`. |
-| `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `_files.py` (private: writing and diffing the generated files of both) and `cli.py` (`serialize-db schema\|sql write\|check`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` and `plan/PLAN-STAGE-2.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
+| `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3), `audit.py`, `engine/__init__.py` (the `Engine` protocol) and `engine/duckdb.py` (stage 4), `execution.py` (stage 6), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, `run` and `audit`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` to `plan/PLAN-STAGE-4.md` and `plan/PLAN-STAGE-6.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
 | `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). The corrected copy is the client model in `tests/client_model/`. |
 | `tests/client_model/` | The client model (user decision of 2026-09-21): the corrected copy of `tests/reference_model/` that the tests hand to the package API as a client library would, the corrections listed in `plan/PLAN-STAGE-1.md` and checked by `tests/test_client_model.py`; `statements.py` holds the fictitious pipeline's Core statements (`STATEMENTS`), `schema/` and `sql/` the generated files. |
 | `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base and in the production base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py`; the material of the stage 7 test. It also holds the reference model's keys (`UNIQUE_KEYS`, `FOREIGN_KEYS`, `MODEL_NOT_NULL_DECLARED_NULLABLE`), which `tests/test_reference_model.py` checks against the model and the fixture satisfies. |
@@ -285,7 +285,9 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A script that resolves paths by pattern runs on both platforms before it is trusted**; it stops when
   the pattern matches nothing. macOS has no `timeout` command: time a subprocess from Python (2026-09-19).
 - **Nothing unpinned enters the project venv**: try a package in a scratch venv, read the versions after
-  any install (`probes/space.py` SP-9), restore with `uv sync --group dev` (2026-09-19).
+  any install (`probes/space.py` SP-9), restore with `uv sync --all-groups`, because `--group dev`
+  removes the `docs` and `interactive` groups another session in the folder may use (2026-09-19,
+  2026-09-23).
 - **The pytest layout has no `__init__.py`**: `tests/conftest.py` is imported as `conftest` and its folder
   lands on `sys.path`, so `from conftest import ...` and `from poc_delta import ...` work inside
   `tests/proof_of_concept/`; `pythonpath = ["scripts", "probes"]` in `pyproject.toml` puts the migration
@@ -425,9 +427,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   (2026-09-22).
 - **A library's warning is a reading, never a guard**: the valueless `bindparam` warns under
   `literal_binds` only in a `=` comparison and renders `NULL` silently in `LIKE`, `coalesce`,
-  `VALUES`, a `select` column and `text()`; guard on the state the library exposes
-  (`compiled.binds`, `required`), and probe every form the input takes before writing that a
-  behavior warns (2026-09-22).
+  `VALUES`, a `select` column and `text()`; guard on the state the library exposes, `required` on
+  each `BindParameter` of the statement (`compiled.binds` is empty under `literal_binds`, where a
+  valueless `IN` list renders `IN (NULL)`, 2026-09-23), and probe every form the input takes before
+  writing that a behavior warns (2026-09-22).
 - **A requirement is measured in the user's own words before it is reported kept**: "the client
   works while the connection does I/O" was reported kept when only the spool file's reading
   overlapped the client, and the query ran whole before the first batch; time the overlap the
@@ -466,6 +469,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   switch moves every session in the folder; another session's open `claude/` PR is the open PR the
   git rule names; add files by path, and agree by message on the order of edits to files two
   sessions touch (2026-09-23).
+- **A test only the target can run is first run against a local stand-in**: DuckDB for Redshift and
+  a folder for S3 check the test's own code before a target run is spent; the stand-in found a `NaN`
+  case filtering `valor > 2`, which the footer's 3.0 maximum lets through, so the pruning loss it
+  was written to show could never appear (2026-09-23).
 
 ## Naming conventions
 
@@ -510,8 +517,11 @@ Read `plan/CURRENT_STATE.md` (each stage and artifact as it is now), `plan/OPEN_
 awaits the user or a run), `plan/PLAN.md` and the stage file before planning a session; the dated
 measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/decisions.md`.
 
-- Stages 0, 1 and 2 are closed; the package has `errors`, `schema`, `sql`, `_files` and `cli`.
-  Stages 3 to 9 have no code. The review of stages 3 and 4 of 2026-09-23 corrected both stage files
+- Stages 0, 1 and 2 are closed, and stages 3, 4 and 6 were implemented on 2026-09-23 (`storage`,
+  `delta`, the partition rule in `schema`; `audit`, the `engine` protocol and the DuckDB engine;
+  `execution` with `Database`, `Execution`, `serialize-db run` and `serialize-db audit`, over the
+  DuckDB engine); the package has `errors`, `schema`, `sql`, `storage`, `delta`, `audit`,
+  `engine`, `execution`, `_files` and `cli`. Stages 5, 7, 8 and 9 have no code. The review of stages 3 and 4 of 2026-09-23 corrected both stage files
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as
   `FunctionElement`), and the user's answers of the same day closed stage 4: the `qmark` style, the
   audit key scope, the engine interface, the `loader` creating its table at `close`, the hybrid
@@ -531,8 +541,8 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
 - The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
   ran successfully there on the copy of the production base, and its reports, not yet available,
   carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the
-  default, and whether the other mode leaves stages 4, 5 and 7). Stages 3, 4 and 6 follow on local
-  folders, and stage 7 absorbs the script.
+  default, and whether the other mode leaves stages 4, 5 and 7). Stage 5 follows with the target's
+  suite run, and stage 7 absorbs the script over the stage 3, 4 and 6 modules.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still

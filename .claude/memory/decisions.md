@@ -512,3 +512,25 @@ goes. `initial_load` counts non-finite values in its partition check query, and 
 sums only finite values. Open: the footer the Redshift `UNLOAD` writes for a row group with `NaN`.
 `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`,
 `plan/PLAN-STAGE-7.md`, `plan/OPEN_QUESTIONS.md`
+
+## The implementation of stages 3, 4 and 6
+
+On 2026-09-23 the user approved aligning stage 6 with the issue #59 decision (`publish` hands the
+audit's `nonfinite_columns` to `export_partition`) and asked for stages 3, 4 and 6 to be implemented
+in full, reviewing the following stages after each one with what it taught. The three landed on PR
+#61 the same day, with a review commit after each. The assistant's choices, named in the report:
+`Storage` gained `relative`, `uri_of`, `size`, `ensure_folder`, `open_input_file` and
+`duckdb_connect`, and `storage_options` passes `max_retries=3` and `retry_timeout=10s` without
+`timeout`; `register_files` also refuses a file holding the partition column, columns out of the
+contract order and a null in a `NOT NULL` column by the footer's null count, and `read_back`
+compares the log's key bounds with what the readers read; `register_files` also drops a non-finite
+float extreme that reaches it outside `columns_without_min_max`, a guard against the invalid-JSON
+`Infinity` beside the issue #59 rule, which removed that special case from the plan; `rewrite` counts the non-finite `Double`
+per partition; the audit counts with `count(CASE WHEN ...)`, because Redshift's `COUNT` has no
+`FILTER`, and the engine's `audit` takes `referenced`; the publication pool hands a table to a free
+worker only, and a failure goes up with each table's outcome in a note; `Execution` refuses the
+`"redshift"` engine until stage 5, `publish_redshift` waits for stage 8, and the snapshot is
+written only when the execution ends without error; the two stream-cancellation tests assert the
+thread ended and the session is free, with the error null or the interrupt's. `plan/PLAN-STAGE-3.md`,
+`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`
+
