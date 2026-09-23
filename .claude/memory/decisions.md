@@ -623,3 +623,13 @@ there, `tests/test_source_db_projetado.py` and the 17 writing cases of `tests/te
 `local` and write under `SERIALIZE_DB_TEST_LOCAL_ROOT`, so the premise that `pytest` without a
 variable writes nothing holds (checked in a stripped environment). `plan/PLAN-STAGE-8.md`,
 `plan/PLAN-STAGE-9.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+
+The same day the user chose the source of the stage 8 distribution reading, after `probes/redshift.py`
+(`RS-8`) found `svv_table_info` denied to the role after the `USE` (42501): the published tables stay
+`DISTSTYLE AUTO`, and the reading after the first publication is the `EXPLAIN` of a typical join
+between published tables (`cad_lancamentos` with `cad_contas` on `id_conta`); an explicit `DISTKEY`
+enters by `ALTER TABLE ... ALTER DISTKEY` only when the plan shows `DS_BCAST_INNER` or `DS_DIST_BOTH`.
+Rejected: `SHOW TABLE`, which probably shows only `DISTSTYLE AUTO`, and asking the administrator for
+the view. `tests/proof_of_concept/test_redshift.py::test_explain_of_a_join_on_the_share` reads whether
+the role may run `EXPLAIN` on the datashare. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`,
+`plan/OPEN_QUESTIONS.md`

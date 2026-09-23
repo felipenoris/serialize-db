@@ -30,11 +30,11 @@ decisões de 2026-09-20 estão nas premissas de [`PLAN.md`](PLAN.md)). `String(n
 tirado das leituras, com folga, e o dono do modelo o revisa no código (decisão do usuário de
 2026-09-21); os índices não únicos e o `sqlite_strict` do original ficam de fora, porque motor
 algum da biblioteca os usa; `redshift` fica ausente de `Table.info`, a distribuição `AUTO` (decisão
-do usuário de 2026-09-21): a leitura da distribuição depois da primeira publicação
-([etapa 8](PLAN-STAGE-8.md)) diz o que o Redshift atribuiu a cada tabela, e uma chave de
-distribuição, se vier dessa leitura, entra por `ALTER TABLE`; o papel do projeto não lê
-`svv_table_info` depois do `USE` (probe de 2026-09-23), e a fonte da leitura é decisão pendente da
-etapa 8. `tests/test_client_model.py` confere a cópia contra o original: as tabelas e
+do usuário de 2026-09-21): o `EXPLAIN` de um join típico entre as tabelas publicadas, depois da
+primeira publicação ([etapa 8](PLAN-STAGE-8.md)), diz se os joins redistribuem linhas, e uma
+chave de distribuição só entra, por `ALTER TABLE`, quando o plano mostra `DS_BCAST_INNER` ou
+`DS_DIST_BOTH` (decisão do usuário de 2026-09-23); o papel do projeto não lê `svv_table_info`
+depois do `USE` (probe de 2026-09-23). `tests/test_client_model.py` confere a cópia contra o original: as tabelas e
 as colunas na mesma ordem, os tipos e as chaves mudados só onde previsto, sem `DEFERRABLE`,
 `autoincrement` nem índice não único, todo comentário presente, e a partição de cada tabela
 particionada igual à da base.
