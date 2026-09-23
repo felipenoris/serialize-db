@@ -73,10 +73,12 @@ do modelo e por partição, as tabelas sem partição antes das particionadas e 
 modelo (`cad_operacoes`, `rel_contrato_operacao`, `cad_contratos`, `cad_lancamentos`):
 `discover_partitions`, `partition_query` com os `CAST` para o contrato (`sql_type(coluna, "duckdb")`
 da etapa 1 dá o tipo de cada `CAST`, e `quoted` cita cada coluna, porque `cad_contratos.to` é
-palavra reservada e a consulta sem aspas falha no DuckDB), `contract_problems`, uma consulta que
+palavra reservada e a consulta sem aspas falha no DuckDB), `check_partition`, uma consulta que
 conta as linhas com `partition_source` diferente do valor do caminho, os nulos das colunas `NOT
 NULL` e os textos acima de `String(n)` em bytes (`strlen`; o `octet_length` do DuckDB só existe
-para `BLOB`) e recusa a partição por `ContractError` antes de gravar, nos dois modos; a gravação
+para `BLOB`) e recusa a partição por `ContractError` antes de gravar, nos dois modos, e acha as
+colunas `Double` com `NaN` ou infinito na partição, que saem sem mínimo e máximo no log e, em
+`--mode rewrite`, no rodapé (`writer_properties` com `statistics_enabled="NONE"`); a gravação
 em `--mode register` (o padrão), `COPY ... (FORMAT parquet, RETURN_STATS)` para
 `<raiz>/<tabela>/<coluna>=<valor>/carga_inicial_<uuid>.parquet` e a `AddAction` por
 `create_write_transaction` com `numRecords`, `nullCount` de toda coluna e mínimo e máximo das
@@ -89,9 +91,11 @@ da `sort_key` do modelo, salvo `--no-sort`; a retomada pelas partições já no 
 por partição, contagem e somas das colunas `Double` e `Numeric` como `DECIMAL(38, 6)`, a origem
 por `read_parquet` com `hive_partitioning` e o Delta por `delta_scan`, mais as conversões de tipo
 lidas do rodapé do primeiro arquivo e as entradas fora do padrão; cada partição imprime linhas,
-tempo e o RSS máximo do processo, e `--report` grava o JSON da execução. O script registra o mínimo e o máximo de toda coluna
-`Double`, e o relatório falha com `ConversionException` numa coluna com `NaN` ou infinito;
-`initial_load` segue a regra do `Double` não finito da [etapa 3](PLAN-STAGE-3.md). A tabela é criada por
+tempo e o RSS máximo do processo, e `--report` grava o JSON da execução. O script segue a regra do `Double` não finito da
+[etapa 3](PLAN-STAGE-3.md), e o relatório soma só os valores finitos e compara os não finitos
+contados nos dois lados. A versão que rodou no ambiente alvo registrava o mínimo e o máximo de
+toda coluna `Double`, e o relatório dela falharia com `ConversionException` numa coluna com `NaN`
+ou infinito. A tabela é criada por
 `DeltaTable.create` com `delta_schema`, o nome, o comentário e as retenções da etapa 3
 (`mode="ignore"`). O primeiro `delta_scan` sobre uma tabela criada por `delta_schema` leu toda
 coluna como nula por causa do `parquet.field.id` que o esquema Delta herdava do Arrow, corrigido

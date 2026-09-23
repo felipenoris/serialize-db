@@ -2116,3 +2116,25 @@ exportação a um prefixo novo por partição e por tentativa, sem `PARTITION BY
 controle a ser criada só pelo usuário ([`PLAN-STAGE-8.md`](PLAN-STAGE-8.md)). Os comportamentos que
 isso supõe no ambiente alvo esperam a próxima execução da suíte
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que a regra do `Double` não finito mudou no script de migração
+
+Em 2026-09-23, no mesmo macOS, `scripts/migrate_parquet_to_delta.py` passou a seguir a regra da
+issue #59: `check_partition` acha, na mesma consulta que confere o contrato, as colunas `Double`
+com `NaN` ou infinito na partição, que saem sem mínimo e máximo no log (`register`) e no rodapé e no
+log (`rewrite`, `ColumnProperties(statistics_enabled="NONE")`); o relatório soma cada `Double` só
+nos valores finitos e compara os não finitos contados na origem e no Delta.
+
+- **A base fictícia** (`tests/source_db_projetado.py`), sem valor não finito, rodou pela linha de
+  comando antes e depois da mudança, nos dois modos: os relatórios JSON ficaram iguais sem os
+  campos novos e sem os tempos, os campos novos saíram todos zerados, e as estatísticas das 24
+  ações `add` do log saíram iguais.
+- **Uma origem com `NaN` e infinito** em `valor`, em duas partições de `cad_lancamentos`
+  (`test_migrate_parquet_to_delta.py::test_nonfinite_double_leaves_min_max_out_of_its_partition`,
+  nos dois modos): as duas partições sem o mínimo e o máximo de `valor` no log, as demais com eles;
+  o arquivo da partição do `NaN` sem os dois no rodapé nos dois modos, porque o `COPY` do DuckDB já
+  os omite no grupo com `NaN`; o relatório igual nos dois lados, com um não finito em cada uma das
+  duas partições; e `delta_scan ... WHERE valor > 1e300` devolveu as duas linhas.
+
+**Consequência**: [`PLAN-STAGE-7.md`](PLAN-STAGE-7.md) descreve o script com a regra, e o item da
+issue #59 em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) separa a versão que rodou no ambiente alvo.

@@ -79,9 +79,9 @@ foi medido em [`POC.md`](POC.md).
     ([duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521), leituras de 2026-09-23,
     [`POC.md`](POC.md)).
   - As tabelas que a migração adiantada gravou no ambiente alvo, com o mínimo e o máximo do
-    `Double` registrados. O relatório dela soma cada coluna `Double` por `CAST` para
-    `DECIMAL(38, 6)`, que falha com `NaN` e infinito, e só `ContractError` é tratado: uma execução
-    completa sem erro indica tabelas sem valor não finito. Os relatórios da execução, ainda não
+    `Double` registrados. O relatório da versão que rodou lá somava cada coluna `Double` por `CAST`
+    para `DECIMAL(38, 6)`, que falha com `NaN` e infinito, e só `ContractError` era tratado: uma
+    execução completa sem erro indica tabelas sem valor não finito. O script já segue a regra. Os relatórios da execução, ainda não
     disponíveis, dizem quais tabelas rodaram; uma tabela fora deles pede a contagem de `isnan` e
     `isinf`.
   - Se a contagem de não finitos da auditoria reprova.
