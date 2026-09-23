@@ -425,9 +425,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   (2026-09-22).
 - **A library's warning is a reading, never a guard**: the valueless `bindparam` warns under
   `literal_binds` only in a `=` comparison and renders `NULL` silently in `LIKE`, `coalesce`,
-  `VALUES`, a `select` column and `text()`; guard on the state the library exposes
-  (`compiled.binds`, `required`), and probe every form the input takes before writing that a
-  behavior warns (2026-09-22).
+  `VALUES`, a `select` column and `text()`; guard on the state the library exposes, `required` on
+  each `BindParameter` of the statement (`compiled.binds` is empty under `literal_binds`, where a
+  valueless `IN` list renders `IN (NULL)`, 2026-09-23), and probe every form the input takes before
+  writing that a behavior warns (2026-09-22).
 - **A requirement is measured in the user's own words before it is reported kept**: "the client
   works while the connection does I/O" was reported kept when only the spool file's reading
   overlapped the client, and the query ran whole before the first batch; time the overlap the
@@ -466,6 +467,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   switch moves every session in the folder; another session's open `claude/` PR is the open PR the
   git rule names; add files by path, and agree by message on the order of edits to files two
   sessions touch (2026-09-23).
+- **A test only the target can run is first run against a local stand-in**: DuckDB for Redshift and
+  a folder for S3 check the test's own code before a target run is spent; the stand-in found a `NaN`
+  case filtering `valor > 2`, which the footer's 3.0 maximum lets through, so the pruning loss it
+  was written to show could never appear (2026-09-23).
 
 ## Naming conventions
 

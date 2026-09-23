@@ -75,7 +75,7 @@ Testes: `tests/test_engine_redshift.py` compara o SQL gerado (`COPY`, `INSERT ..
 mesma sequência com uma amostra no esquema autorizado, depois do
 `test_redshift.py` da [etapa 0](PLAN-STAGE-0.md). Provas de conceito: `test_redshift.py` (sessão e
 `paramstyle` nomeado, o `fetchmany` por lotes, banco do esquema e o `USE`, DDL, `COPY ... MANIFEST`, lista de
-colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API, o comando repetido depois de um `TRUNCATE` com e sem o cache do driver), `test_sqlalchemy.py`
+colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API, o comando repetido depois de um `TRUNCATE` com e sem o cache do driver; e as leituras das decisões de 2026-09-23, que ainda não rodaram no ambiente alvo: `test_unload_to_a_hive_prefix_and_register`, `test_stream_by_unload_with_literal_values`, `test_unload_limit_empty_result_temp_table_and_super`, `test_row_description_oids_and_type_modifier`, `test_small_load_copy_cost` e `test_unload_footer_statistics_with_nan`), `test_sqlalchemy.py`
 (`test_redshift_dialect_compiles_dml`, `test_three_part_name_needs_quoted_name_without_quotes`,
 `test_sandbox_copy_of_table_and_schema_files_diff`) e `test_stdlib.py::test_execution_identifiers`
 (o prefixo do sandbox).
@@ -187,16 +187,24 @@ class RedshiftEngine:
   (0,8 s a 1,9 s em 2026-09-21). O texto do `UNLOAD` é um literal que não recebe parâmetro, então os
   valores do cliente entram como literais: o statement Core é a cópia prefixada (`sql.prefixed` com
   `prefix=exec_<id>_`), com os valores dados por `statement.params(**params)` e os nomes conferidos
-  como no motor DuckDB, compilada pelo dialeto Redshift com `literal_binds=True` e
-  `render_postcompile=True`, que expande o `IN` de lista (sem ele o texto sai com
-  `__[POSTCOMPILE_...]`, leitura de 2026-09-23 no DuckDB, [etapa 4](PLAN-STAGE-4.md)); o texto
-  pronto (`sql.read_sql(..., prefix="exec_<id>_")`) passa por `sa.text(texto).bindparams(**params)`
-  e pelo mesmo compilador. Antes do comando, o motor confere que nenhum `bindparam` do statement
-  compilado ficou sem valor, pelo `required` de `compiled.binds`, porque sob `literal_binds` o
-  `bindparam` sem valor vira `NULL` calado fora de uma comparação por `=` (leitura de 2026-09-22,
-  [etapa 2](PLAN-STAGE-2.md)); as aspas simples do `select` são dobradas no literal do `UNLOAD`, e
-  o escape de `'` e `\` nos valores espera a próxima execução da suíte
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O `UNLOAD` roda na sessão do motor, sob o lock, na
+  como no motor DuckDB, compilada pelo dialeto Redshift com `paramstyle="named"`,
+  `literal_binds=True` e `render_postcompile=True`, que expande o `IN` de lista (sem ele o texto
+  sai com `__[POSTCOMPILE_...]`, leitura de 2026-09-23 no DuckDB, [etapa 4](PLAN-STAGE-4.md)). O
+  `paramstyle="named"` é o de `render` ([etapa 2](PLAN-STAGE-2.md)): com o padrão `format`, o
+  dialeto dobra o `%` dos literais (`'50%% certo'`), e o texto vai ao driver sem parâmetros, sem
+  conversão que o desfaça (sonda local e leitura do código de 2026-09-23, [`POC.md`](POC.md)). O
+  texto pronto (`sql.read_sql(..., prefix="exec_<id>_")`) passa por `sa.text(texto).bindparams(...)`
+  com cada `bindparam` tipado pelo valor, `sa.bindparam(nome, value=valor, expanding=...)`, e pelo
+  mesmo compilador: o `bindparam` de `text()` sem tipo não renderiza literal (`CompileError: No
+  literal value renderer is available ... with datatype NULL`). Antes do comando, o motor percorre
+  o statement e recusa todo `BindParameter` com `required`, como `render` faz: sob `literal_binds`,
+  `compiled.binds` sai vazio, e o `bindparam` sem valor vira `NULL` calado, até num `IN` de lista,
+  que sai `IN (NULL)` (leituras de 2026-09-22, [etapa 2](PLAN-STAGE-2.md), e de 2026-09-23). O
+  dialeto dobra a aspa simples e a contrabarra (`'d''agua'`, `'barra \\ invertida'`), o escape do
+  PostgreSQL, e as aspas simples do `select` são dobradas de novo no literal do `UNLOAD`; se o
+  Redshift lê a contrabarra dobrada como uma só, dentro e fora do `UNLOAD`, é leitura da próxima
+  execução da suíte (`test_stream_by_unload_with_literal_values`,
+  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O `UNLOAD` roda na sessão do motor, sob o lock, na
   thread de quem chama: numa thread auxiliar ele esperaria pelo lock que o cliente segura num bloco
   `session()`, enquanto o cliente espera o primeiro lote. A thread auxiliar só lê os arquivos do
   manifesto por `ParquetFile.iter_batches(batch_size)` pelo `Storage`, com
@@ -280,7 +288,7 @@ testes marcados `redshift` repetem a sequência com uma amostra no esquema autor
 | Destino por tentativa | `test_unload_destination_is_new_per_call` | Duas exportações da mesma partição e duas partições da mesma tabela, em `register` e em `rewrite`, recebem destinos distintos; em `register`, `<coluna>=<valor>/` é o primeiro segmento do caminho relativo à pasta da tabela. |
 | DDL da staging | `test_staging_ddl_without_partition_column` | A staging sem a coluna de partição; a tabela do sandbox com ela. |
 | Tabela do cursor | `test_table_from_cursor_by_columns` | Um cursor de mentira: a `pa.Table` com os tipos do esquema, igual ao caminho por dicionários. |
-| Valores literais | `test_stream_literal_values` | O texto do `UNLOAD` de um statement com texto, data, número e `IN` de lista; um `bindparam` sem valor recusado antes de qualquer comando; no alvo (`redshift`), valores com `'` e `\` voltam iguais, e o `stream` devolve as linhas de `query`. |
+| Valores literais | `test_stream_literal_values` | O texto do `UNLOAD` de um statement com texto, data, número e `IN` de lista, com o `%` sem dobrar; o texto pronto com os `bindparam` tipados pelo valor; um `bindparam` sem valor, também num `IN` de lista, recusado antes de qualquer comando; no alvo (`redshift`), valores com `'` e `\` voltam iguais, e o `stream` devolve as linhas de `query`. |
 | Sessão única | `test_statements_serialize_on_the_single_session` | Uma conexão de mentira que registra o início e o fim de cada comando: dois comandos de duas threads não se sobrepõem; um comando roda enquanto um `stream` ainda lê os arquivos, porque o lock solta no fim do `UNLOAD`; um `stream` aberto dentro de `session()`, na mesma thread, não trava; no alvo (`redshift`), a tabela temporária criada por `query` é lida pelo `UNLOAD` do `stream` seguinte. |
 | Sessão a mais | `test_new_session_sees_committed_tables` (`redshift`) | A sessão de `new_session` vê a tabela `exec_<id>_*` confirmada pela principal e recusa a temporária dela; duas ingestões em duas sessões terminam, e a principal lê as duas tabelas. |
 | Esquema de um texto | `test_schema_from_row_description` | Um `row_desc` de mentira: cada OID da tabela para o tipo Arrow; `NUMERIC` com a precisão e a escala do `type_modifier`; outro OID recusado com o nome da coluna; no alvo (`redshift`), o `row_desc` de um `select` com uma coluna de cada tipo do contrato, `SUPER`, `count(*)`, `sum` de `NUMERIC(18, 2)`, `sum` de `DOUBLE PRECISION` e um literal de texto. |

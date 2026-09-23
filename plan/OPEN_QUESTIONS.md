@@ -77,7 +77,9 @@ foi medido em [`POC.md`](POC.md).
     mede. O Redshift aceita `NaN` em `DOUBLE PRECISION`, e um rodapé com o máximo sem o `NaN`, como
     o do pyarrow, faz o leitor Parquet do DuckDB perder a linha mesmo com o log sem estatística
     ([duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521), leituras de 2026-09-23,
-    [`POC.md`](POC.md)).
+    [`POC.md`](POC.md)). `test_redshift.py::test_unload_footer_statistics_with_nan` lê o rodapé
+    com o `NaN` no início, no meio e no fim do grupo de linhas e com os infinitos, e o que o
+    `read_parquet` do DuckDB devolve para `valor > 3` sobre cada arquivo.
   - As tabelas que a migração adiantada gravou no ambiente alvo, com o mínimo e o máximo do
     `Double` registrados. O relatório da versão que rodou lá somava cada coluna `Double` por `CAST`
     para `DECIMAL(38, 6)`, que falha com `NaN` e infinito, e só `ContractError` era tratado: uma
@@ -107,19 +109,26 @@ foi medido em [`POC.md`](POC.md).
   correções.
 - **As leituras da etapa 5 na próxima execução da suíte Redshift.** As decisões do usuário de
   2026-09-23 ([etapa 5](PLAN-STAGE-5.md)) supõem comportamentos que ninguém executou no ambiente
-  alvo, e os casos entram em `tests/proof_of_concept/test_redshift.py` antes dessa execução:
-  - o `UNLOAD` sem `PARTITION BY` para um prefixo com `=`,
-    `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/`, o `schema.elements` do manifesto dele sem a
-    coluna de partição, o registro dos arquivos e a releitura pelo `delta_scan`;
-  - o `stream` por `UNLOAD`: valores literais com `'` e `\`, uma data, um número e um `IN` de lista,
-    o resultado igual ao do `query` do mesmo statement, uma coluna `SUPER` no Parquet do `UNLOAD`,
-    o que ele grava para um resultado vazio, de que depende o esquema do lote vazio, a mensagem que
-    recusa o `LIMIT` externo e a tabela temporária da sessão lida pelo `UNLOAD`;
-  - o `row_desc` de um `select` com uma coluna de cada tipo do contrato, `SUPER`, `count(*)`, `sum`
-    de `NUMERIC(18, 2)`, `sum` de `DOUBLE PRECISION` e um literal de texto, que fecha a tabela de
-    OIDs de `schema_from_row_description`;
-  - o tempo de um `load` de 10 linhas pelo `COPY`, como leitura: é o que traria de volta o `INSERT`
-    multilinha.
+  alvo. Os casos estão em `tests/proof_of_concept/test_redshift.py` e passaram, em 2026-09-23, por
+  um emulador local com o DuckDB no lugar do Redshift, que confere só o código dos testes
+  ([`POC.md`](POC.md)):
+  - `test_unload_to_a_hive_prefix_and_register`: o `UNLOAD` sem `PARTITION BY` para um prefixo com
+    `=`, `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/`, as colunas do `schema.elements` do
+    manifesto dele, o registro dos arquivos, a releitura pelo delta-rs e pelo `delta_scan`, e o
+    segundo `UNLOAD` no mesmo destino e num `uuid` novo;
+  - `test_stream_by_unload_with_literal_values`: a aspa, a contrabarra, o `%`, o `LIKE`, uma data,
+    um número, um `IN` de lista, um timestamp e um `Float`, cada caso pelos parâmetros do driver,
+    pelo texto com os literais direto no cursor e pelo mesmo texto dentro do `UNLOAD`; a
+    contrabarra, que o dialeto dobra, é a leitura que decide o caminho;
+  - `test_unload_limit_empty_result_temp_table_and_super`: a mensagem que recusa o `LIMIT` externo,
+    o que o `UNLOAD` grava para um resultado vazio, de que depende o esquema do lote vazio, a tabela
+    temporária da sessão lida pelo `UNLOAD` e a coluna `SUPER` no Parquet;
+  - `test_row_description_oids_and_type_modifier`: o `row_desc` de um `select` com uma coluna de
+    cada tipo do contrato e `SUPER`, e de outro com `count(*)`, `sum` e `avg` de `DECIMAL(18, 2)`,
+    `sum` de `DOUBLE PRECISION`, um `DECIMAL(38, 6)` e os literais de texto e de número, que fecha
+    a tabela de OIDs de `schema_from_row_description`;
+  - `test_small_load_copy_cost`: o melhor de três de um `load` de 10 linhas pelo `COPY` e pelo
+    `INSERT` de várias linhas, como leitura: é o que traria de volta o `INSERT` multilinha.
 
 ## Decisões de API pendentes por etapa
 

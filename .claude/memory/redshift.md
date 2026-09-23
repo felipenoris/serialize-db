@@ -94,6 +94,20 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   (`Cursor.truncated_row_desc`); precision is `((type_modifier - 4) >> 16) & 0xFFFF`. `RedshiftOID`
   lists `REAL` 700, `BPCHAR` 1042, `TEXT` 25, `UNKNOWN` 705 and `SUPER` 4000, which the driver reads
   as text (code reading of 2026-09-23). `plan/redshift.md`, `plan/PLAN-STAGE-5.md`
+- The literal text of the `stream` by `UNLOAD` (local probe of 2026-09-23): the
+  `RedshiftDialect_redshift_connector` default `paramstyle` (`format`) doubles `%` inside literals
+  and `named` does not, and `redshift_connector` sends a statement executed without parameters
+  unconverted (`has_bind_parameters`), so the engine compiles with `named`; both styles double the
+  single quote and the backslash (`_backslash_escapes`); `compiled.binds` is empty under
+  `literal_binds`, where a valueless `IN` list renders `IN (NULL)`, so the guard walks the statement
+  (`sqlalchemy.sql.visitors.iterate`) for `BindParameter.required`; `text().params()` refuses to
+  render (`CompileError ... with datatype NULL`) and `sa.bindparam(name, value=value, expanding=...)`
+  types each value. Whether Redshift reads the doubled backslash as one, in a plain statement and
+  inside the `UNLOAD` literal, is `test_stream_by_unload_with_literal_values`, not yet run in the
+  target. `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+- The stage 5 readings wait in `tests/proof_of_concept/test_redshift.py` for the next run in the
+  target (six tests after `test_parallel_copy_and_unload_on_two_connections`, listed in
+  `plan/OPEN_QUESTIONS.md`); a local emulator ran their code on 2026-09-23. `plan/POC.md`
 
 ## The reading of 2026-09-21
 

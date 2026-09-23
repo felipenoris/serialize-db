@@ -2138,3 +2138,51 @@ nos valores finitos e compara os não finitos contados na origem e no Delta.
 
 **Consequência**: [`PLAN-STAGE-7.md`](PLAN-STAGE-7.md) descreve o script com a regra, e o item da
 issue #59 em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) separa a versão que rodou no ambiente alvo.
+
+## O que as sondas locais dos casos da suíte Redshift mostraram
+
+Em 2026-09-23, no mesmo macOS (SQLAlchemy 2.0.54, sqlalchemy-redshift 1.0.0, redshift-connector
+2.1.16, deltalake 1.6.4, DuckDB 1.5.5, pyarrow 25.0.1), a preparação dos casos da etapa 5 para a
+próxima execução da suíte Redshift sondou o que dá para medir sem o Redshift.
+
+- **O texto do `stream` por `UNLOAD`.** O statement Core com os valores dados por `params` e
+  compilado com `literal_binds` e `render_postcompile` pelo `RedshiftDialect_redshift_connector`:
+  - o `paramstyle` padrão, `format`, dobra o `%` dos literais (`'50%% d''agua \\ fim'`), e
+    `named` o mantém (`'50% d''agua \\ fim'`); o `redshift_connector` manda sem conversão o texto
+    executado sem parâmetros (`Connection.execute`, `has_bind_parameters`), e o `%%` chegaria
+    assim ao servidor;
+  - a aspa simples sai dobrada e a contrabarra também, nos dois estilos: o dialeto tem
+    `_backslash_escapes` verdadeiro, o escape do PostgreSQL;
+  - a data sai `'2026-08-31'`, o timestamp `'2026-08-31 12:30:01.123456'`, o número `10.25`, o
+    `Float` `0.1` e o `IN` de lista `IN (1, 2, 3)`;
+  - `compiled.binds` sai vazio sob `literal_binds`, e um `IN` de lista sem valor saiu `IN (NULL)`,
+    com o `SAWarning` só na comparação; o percurso do statement (`sqlalchemy.sql.visitors.iterate`)
+    achou o `BindParameter` com `required`, que some depois de `params(ids=[1])`;
+  - o `text()` com `params` falhou com `CompileError: No literal value renderer is available for
+    literal value "d'agua \ barra" with datatype NULL`; com cada `bindparam` criado pelo valor
+    (`sa.bindparam(nome, value=valor, expanding=...)`), os tipos saíram `String`, `Date`,
+    `Integer`, `Numeric` e `DateTime`, e os literais iguais aos do statement Core;
+  - o `query` sem `literal_binds` sai `IN (:ids_1, :ids_2, :ids_3)`, e `construct_params()` dá os
+    nomes expandidos.
+- **O arquivo registrado abaixo da pasta Hive.** Numa tabela Delta local particionada por `mes`, os
+  arquivos gravados em `mes=<valor>/exec_42_<uuid>/0000_part_0<n>.parquet` e registrados por
+  `create_write_transaction` foram lidos pelo delta-rs (as 5 linhas, com `mes`) e pelo `delta_scan`
+  (3 e 2 linhas por partição, e o filtro por `mes` também). Um arquivo órfão numa subpasta dessas
+  não entrou no `vacuum` padrão, que só apaga o que o log removeu, e entrou no `vacuum(full=True)`.
+- **Os casos novos num emulador.** `test_unload_to_a_hive_prefix_and_register`,
+  `test_stream_by_unload_with_literal_values`, `test_unload_limit_empty_result_temp_table_and_super`,
+  `test_row_description_oids_and_type_modifier`, `test_small_load_copy_cost` e
+  `test_unload_footer_statistics_with_nan` rodaram contra um emulador descartável, o DuckDB no
+  lugar do Redshift (o `UNLOAD` e o `COPY` traduzidos para `read_parquet` e para o `pyarrow`) e
+  uma pasta no lugar do S3. O emulador confere só o código Python dos testes, e achou um defeito:
+  o caso do `NaN` filtrava `valor > 2`, que o máximo 3.0 do rodapé satisfaz, e não mostraria a linha
+  perdida pela poda; com `valor > 3`, o arquivo do pyarrow com o `NaN` no início, no meio e no fim
+  do grupo de linhas deu 0, a perda da issue #59. No DuckDB, que não trata a contrabarra como
+  escape, o caso da contrabarra saiu diferente pelo texto com literais e pelo `UNLOAD`, e o registro
+  do teste mostrou as duas listas.
+
+**Consequência**: [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) corrige o guarda do `stream`, que dizia
+ler `compiled.binds`, para o percurso do statement com `required`, como `render`, e registra o
+`paramstyle="named"` e o texto pronto com os `bindparam` tipados pelo valor. O que o Redshift faz
+com a contrabarra dobrada, dentro e fora do `UNLOAD`, e os demais casos esperam a próxima execução
+da suíte no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
