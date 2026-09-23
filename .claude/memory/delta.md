@@ -148,3 +148,8 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `parquet.field.id`; `schema_files` dumps the parsed document with `sort_keys=True` and
   `indent=2`, and the versioned `.delta.json` is that canonical text (2026-09-21). `plan/POC.md`,
   `plan/PLAN-STAGE-1.md`
+- `write_deltalake(dt, ...)` with the `DeltaTable` object leaves `dt.version()` at its own commit,
+  even with another writer's commit in between (1, then 3 with 2 written by another object);
+  `create_write_transaction` does not update the object, and `DeltaTable(uri).version()` after a
+  write returns the log's latest version, possibly another writer's (2026-09-22).
+  `plan/POC.md`, `plan/PLAN-STAGE-3.md`

@@ -82,13 +82,20 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   que o `cast` aceita em silêncio: o instante UTC vira hora local, e a hora local vira UTC (leitura
   de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, porque a
   conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso.
+- [Etapa 3](PLAN-STAGE-3.md): `expressions` em `rewrite`, o dicionário que dá a expressão de uma
+  coluna renomeada ou de uma coluna `NOT NULL` nova (proposto na revisão de 2026-09-22); `Storage`
+  sobre `pyarrow.fs`, sem as subclasses por armazenamento, com um ramo por armazenamento só na
+  escrita condicional (proposto na mesma revisão).
 - [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
   entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição
   (`<uri>/<execution_id>/<valor>/` com `PARTITION BY`, ou `<uri>/<coluna>=<valor>/<execution_id>/`
   sem ele), porque o `UNLOAD` confere o destino como prefixo.
 - [Etapa 6](PLAN-STAGE-6.md): `--metadata` na linha de comando; a chave de `next_ids` numa chave
-  composta; a barreira por tabela.
+  composta; a barreira por tabela; a aspa simples no valor da partição, que a validação de
+  `Execution` não exclui (sem `/`, `=`, espaço nem vazio) e que quebraria o predicado de
+  `publish_partition` e todo literal `'<valor>'` das etapas 4, 5 e 8. Proposto: recusá-la junto
+  com os demais, ou trocar a lista por `[0-9A-Za-z_.-]+`, que cobre `AAAA-MM-DD` e `2026-Q1`.
 - [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
   antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
   (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.

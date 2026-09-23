@@ -398,3 +398,8 @@ implementação usa `version_diff`, pela regra da estratégia.
   inteira; a alternativa é `Table.info["serialize_db"]["id_column"]`.
 - **[decisão] A barreira por tabela** para um cliente que esquece o `result()` de um `load`
   disparado numa thread continua fora das etapas ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- **[decisão] A aspa simples no valor da partição.** A validação recusa `/`, `=`, espaço e o vazio,
+  e deixa passar `'`, que quebra o predicado `<coluna> = '<valor>'` de `publish_partition`
+  ([etapa 3](PLAN-STAGE-3.md)) e todo literal `'<valor>'` das etapas 4, 5 e 8. Proposto (revisão de
+  2026-09-22): recusá-la junto com os demais, ou trocar a lista de recusas por `[0-9A-Za-z_.-]+`,
+  que cobre `AAAA-MM-DD` e `2026-Q1`.
