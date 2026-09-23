@@ -12,7 +12,7 @@ As primitivas são as da [etapa 3](PLAN-STAGE-3.md), mais a inicialização da t
 | Snapshot do banco | Na periodicidade do processo, por exemplo o fim do trimestre. | `run.snapshot("2026T3")` na execução marcada. |
 | Compactação | Antes de um snapshot, nunca depois. Também normaliza os arquivos que o `UNLOAD` gravou: `INT64` no lugar de `INT96` e de `FIXED_LEN_BYTE_ARRAY`, estatística em toda coluna ([etapa 3](PLAN-STAGE-3.md)). | `serialize-db compact --partitions ...`. |
 | `vacuum` | Mensal: lista com `keep_versions` do arquivo de controle, revisada, depois aplicada; `--full` de tempos em tempos para os órfãos. A retenção é de 400 dias (decisão do usuário de 2026-09-23), e `docs/index.md`, seção "Retenção dos arquivos removidos", diz como mudá-la. Num bucket versionado o espaço só é liberado pela regra `NoncurrentVersionExpiration`; `probes/bucket.py` (`BK-14`) mostra o acumulado. | `serialize-db vacuum [--apply] [--full]`. |
-| Arquivo | Anual: `deep_copy` dos snapshots mais velhos que o prazo da tabela viva para `arquivo/<nome>/<tabela>/`, a entrada sai de `snapshots.json`, a pasta recebe a regra de ciclo de vida. | `serialize-db archive <nome>`. |
+| Arquivo | Anual: `deep_copy` dos snapshots mais velhos que o prazo da tabela viva para `arquivo/<nome>/<tabela>/`, a entrada passa de `snapshots` para `archived` no mesmo arquivo, a pasta recebe a regra de ciclo de vida. | `serialize-db archive <nome>`. |
 | Exportação | Sob demanda: pastas Parquet por partição de um snapshot, `copy` ou `rewrite`. | `serialize-db export`. |
 | Auditoria avulsa | Depois de uma correção, e quando o SQL de uma verificação precisa ser lido. | `serialize-db audit --table ... [--sql]`. |
 | Monitoração | `history()` de cada tabela com os metadados da biblioteca. | `serialize-db history`. |
@@ -60,10 +60,13 @@ COMMANDS = {
   controle e recusa compactar uma tabela cujo snapshot mais recente é a versão atual, porque a
   compactação depois do snapshot dobra os arquivos que ele referencia.
 - **`archive`** lê a entrada do snapshot, roda `deep_copy(uri, versão, storage.uri_of(<ambiente>/arquivo/<nome>/<tabela>), storage)`
-  de cada tabela na versão registrada e tira a entrada de `snapshots.json` pela escrita condicional
-  (`read_snapshots` e `storage.write_text(if_match=...)`), como a tabela de rotinas diz:
-  `vacuum_keeping_snapshots` preserva as versões de toda entrada do controle, e a entrada arquivada
-  deixa de prendê-las.
+  de cada tabela na versão registrada e move a entrada de `snapshots` para a chave irmã `archived`
+  do mesmo arquivo, na escrita condicional (`read_snapshots` e `storage.write_text(if_match=...)`),
+  como a tabela de rotinas diz (decisão do usuário de 2026-09-23): `vacuum_keeping_snapshots` lê
+  só `snapshots`, então a entrada arquivada deixa de prender as versões e o registro do snapshot
+  fica no controle. `snapshot` passa a recusar um nome presente em `snapshots` ou em `archived`,
+  porque o nome dá a pasta `arquivo/<nome>/`; a recusa e o movimento entram em
+  `serialize_db.delta` com a rotina.
 - **`export`** chama `export_snapshot` com `--mode copy` ou `rewrite`; `--version` exporta uma
   versão antiga, com o DDL tirado do esquema daquela versão.
 - **`history`** imprime, por tabela, versão, operação, carimbo e os metadados
@@ -79,10 +82,10 @@ COMMANDS = {
 
 | Rotina | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
-| `snapshot` | Nome inédito; nenhuma execução aberta no ambiente. | A entrada com todas as tabelas; `ConflictError` se outro escritor mudou o controle. |
+| `snapshot` | Nome inédito em `snapshots` e em `archived`; nenhuma execução aberta no ambiente. | A entrada com todas as tabelas; `ConflictError` se outro escritor mudou o controle. |
 | `vacuum` | Controle legível. | Sem `--apply`, nenhuma exclusão; com ele, a versão de cada snapshot continua legível e as intermediárias fora da retenção somem. |
 | `compact` | Nenhum snapshot na versão atual da tabela. | Menos arquivos na partição; o mesmo conteúdo; um commit `OPTIMIZE` com `dataChange` falso. |
-| `archive` | Snapshot registrado. | Uma tabela nova na versão 0 por tabela do snapshot, com as mesmas somas; a entrada marcada. |
+| `archive` | Snapshot registrado. | Uma tabela nova na versão 0 por tabela do snapshot, com as mesmas somas; a entrada movida de `snapshots` para `archived`. |
 | `export` | Destino vazio. | Pastas `<coluna>=<valor>/` sem `_delta_log`; em `copy`, os mesmos bytes; em `rewrite`, o esquema atual em todos os arquivos. |
 | `history` | Nenhum. | Uma linha por commit, sem credencial. |
 
@@ -94,7 +97,7 @@ COMMANDS = {
 | --- | --- | --- |
 | Snapshot preso | `test_vacuum_keeps_the_snapshot_version` | Com retenção zero e o controle, a versão do snapshot lê e a intermediária falha; dentro da retenção nada é listado. |
 | Compactação antes | `test_compact_refuses_after_a_snapshot_on_the_current_version` | Recusa quando o snapshot é a versão atual; compacta antes; `dataChange` falso no commit. |
-| Cópia profunda | `test_archive_copies_each_table_with_the_same_sums` | Versão 0 no arquivo, somas iguais, entrada marcada. |
+| Cópia profunda | `test_archive_copies_each_table_with_the_same_sums` | Versão 0 no arquivo, somas iguais, a entrada em `archived` e fora de `snapshots`, o `vacuum` sem a versão arquivada em `keep_versions`, e `snapshot` recusando o mesmo nome. |
 | Exportação | `test_export_by_copy_and_by_rewrite` | Os dois modos e uma versão antiga. |
 | Histórico | `test_history_shows_library_metadata` | Os três metadados nos commits da biblioteca; nenhum nos de manutenção. |
 | Linha de comando | `test_cli_operation_commands` | Cada subcomando com os argumentos; `vacuum` sem `--apply` não apaga. |
@@ -214,14 +217,6 @@ history: {'version': 6, 'operation': 'WRITE', 'serialize_db_execution_id': 'exec
 
 ## Decisões pendentes
 
-- **[decisão] A entrada de um snapshot arquivado no controle.** Remover a entrada, como a rotina
-  `archive` descreve acima, perde o registro de que o snapshot existiu e libera o nome para um
-  snapshot novo, cujo arquivo colidiria com `arquivo/<nome>/`. A marca `"archived": true` dentro
-  da entrada guarda o registro, mas mistura um booleano no mapa tabela→versão que
-  `vacuum_keeping_snapshots` percorre, e ele teria de pulá-la. Proposto: mover a entrada de
-  `snapshots` para uma chave irmã `archived` do mesmo arquivo, na mesma escrita condicional:
-  `vacuum_keeping_snapshots` lê só `snapshots` e não muda, e `snapshot` recusa um nome presente em
-  qualquer das duas chaves.
-
-As decisões do usuário de 2026-09-23 sobre o lugar do runbook, `docs/operacao.md`, e a retenção
-de 400 dias do `vacuum` mensal estão escritas nas seções que as descrevem.
+Nenhuma. As decisões do usuário de 2026-09-23 sobre o lugar do runbook, `docs/operacao.md`, a
+retenção de 400 dias do `vacuum` mensal e a entrada do snapshot arquivado, movida para a chave
+irmã `archived`, estão escritas nas seções que as descrevem.

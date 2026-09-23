@@ -34,7 +34,7 @@ a cláusula de credenciais mascarada; integração marcada `redshift`. Provas de
 `test_stdlib.py::test_group_log_actions_by_partition` e
 `test_redshift.py::test_copy_manifest_from_delta_files` (a transação da publicação repete o `COPY`
 na staging e o `INSERT` com a partição) e `test_redshift_transactions.py` (duas publicações
-simultâneas no esquema do datashare, à espera do ambiente alvo).
+simultâneas no esquema do datashare e a staging temporária, à espera do ambiente alvo).
 
 ## Interface
 
@@ -242,7 +242,14 @@ segredo fora do texto impresso: True
 
 - **[decisão] A staging da publicação como tabela comum no datashare ou temporária no banco da
   conexão** ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o rascunho a cria e apaga dentro da
-  transação, no esquema do datashare.
+  transação, no esquema do datashare. A escrita de uma transação vai para um banco só no datashare
+  ([`redshift.md`](redshift.md)), e a documentação não diz em que banco fica a tabela temporária
+  criada depois do `USE`. `test_redshift_transactions.py` lê a staging temporária cheia dentro da
+  transação (`test_temporary_staging_filled_inside_the_transaction`) e cheia antes do `BEGIN`
+  (`test_temporary_staging_filled_before_the_transaction`), que tira da transação a carga da
+  staging e os locks durante ela (decisão do usuário de 2026-09-23). A execução no ambiente alvo
+  decide: a temporária quando um dos dois passar, e a comum com nome por execução quando nenhum
+  passar.
 - **[decisão] A fonte da leitura da distribuição atribuída.** O papel do projeto não lê
   `svv_table_info` depois do `USE` (`permission denied`, 42501, probe de 2026-09-23,
   [`POC.md`](POC.md)), e `test_published_tables_distribution_is_read` fica sem a visão que diria se

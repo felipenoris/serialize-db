@@ -610,3 +610,16 @@ for data sharing reads and writes", never measured in the target), the entry of 
 user asked for context), and the source of the distribution reading, which the probe of the same
 day found denied in `svv_table_info`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-9.md`,
 `plan/OPEN_QUESTIONS.md`, `docs/index.md`, `README.md`
+
+The user answered the three questions left open the same day. The publication staging: the two
+temporary-staging cases go into `tests/proof_of_concept/test_redshift_transactions.py`, one filling
+the temporary table inside the transaction and one before the `BEGIN` (outside the transaction, which
+then writes only to the datashare database and holds its locks shorter), and the target run decides:
+temporary when either passes, a regular staging named per execution when neither does. The archived
+snapshot's entry moves from `snapshots` to a sibling `archived` key of the control file in the same
+conditional write, and `snapshot` refuses a name present in either key (both enter
+`serialize_db.delta` with stage 9's `archive`). The pytest temporary folder: the tests that wrote
+there, `tests/test_source_db_projetado.py` and the 17 writing cases of `tests/test_probes.py`, are
+`local` and write under `SERIALIZE_DB_TEST_LOCAL_ROOT`, so the premise that `pytest` without a
+variable writes nothing holds (checked in a stripped environment). `plan/PLAN-STAGE-8.md`,
+`plan/PLAN-STAGE-9.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`

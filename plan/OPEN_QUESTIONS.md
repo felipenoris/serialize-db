@@ -77,15 +77,6 @@ foi medido em [`POC.md`](POC.md).
     execução completa sem erro indica tabelas sem valor não finito. O script já segue a regra. Os relatórios da execução, ainda não
     disponíveis, dizem quais tabelas rodaram; uma tabela fora deles pede a contagem de `isnan` e
     `isinf`.
-- **O `pytest` sem variável grava na pasta temporária do pytest.** A premissa de
-  [`PLAN.md`](PLAN.md) diz que `pytest` sem variável não grava arquivo algum, e o cabeçalho de
-  `tests/conftest.py` diz que fora das raízes informadas a sessão grava só `.pytest_cache/`; mas
-  `tests/test_source_db_projetado.py` grava a base fictícia inteira em `tmp_path_factory`, e
-  `tests/test_probes.py` grava relatórios em `tmp_path`, sem variável (revisão de 2026-09-22). A
-  decisão é do usuário: admitir a pasta temporária do pytest na premissa e no cabeçalho, ou marcar
-  esses testes `local` e gravar sob `SERIALIZE_DB_TEST_LOCAL_ROOT`. A marca não os tira da esteira
-  do GitHub: `tests.yml` define a raiz local, e `test_probes.py` já fica fora dela; um `pytest`
-  sem variável é que passa a pulá-los.
 - **O texto da auditoria no Redshift.** O texto de `serialize_db.audit.audit_sql(..., "redshift")`
   nunca rodou no Redshift: a contagem por `count(CASE WHEN ... THEN 1 END)`, que a documentação do
   `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o
@@ -144,9 +135,9 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
 - [Etapa 8](PLAN-STAGE-8.md): a staging da publicação como tabela comum no datashare ou temporária.
   A regra de que a escrita de uma transação vai para um banco só vem da página "Considerations for
   data sharing reads and writes" da AWS e nunca foi medida no ambiente alvo, e a página não diz em
-  que banco fica a tabela temporária criada depois do `USE` ([`redshift.md`](redshift.md)). A fonte
-  da leitura da distribuição atribuída, porque o papel do projeto não lê `svv_table_info` depois do
-  `USE` (`permission denied`, 42501, probe de 2026-09-23; a distribuição é `AUTO` desde a decisão
-  do usuário de 2026-09-21).
-- [Etapa 9](PLAN-STAGE-9.md): a entrada de um snapshot arquivado no controle, removida, marcada
-  com `"archived": true` ou movida para uma chave irmã `archived`, a proposta.
+  que banco fica a tabela temporária criada depois do `USE` ([`redshift.md`](redshift.md));
+  `test_redshift_transactions.py` lê a temporária cheia dentro da transação e antes do `BEGIN`, e
+  passou no substituto local em 2026-09-23, que só confere o código. A fonte da leitura da
+  distribuição atribuída, porque o papel do projeto não lê `svv_table_info` depois do `USE`
+  (`permission denied`, 42501, probe de 2026-09-23; a distribuição é `AUTO` desde a decisão do
+  usuário de 2026-09-21).

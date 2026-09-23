@@ -12,8 +12,9 @@ que a escrita por datashare aceita. O banco do datashare informou isolamento ``U
 alvo, e a escrita por datashare exige snapshot no banco do produtor. Estes testes medem o que o
 esquema do datashare faz.
 
-Cada cenário abre duas conexões próprias, A e B, pela resolução de ``connect_redshift``, e segue a
-sequência da etapa 8 com ``INSERT ... VALUES`` no lugar do ``COPY``, que toma o mesmo lock. A roda
+Cada cenário de concorrência abre duas conexões próprias, A e B, pela resolução de
+``connect_redshift``, e segue a sequência da etapa 8 com ``INSERT ... VALUES`` no lugar do ``COPY``,
+que toma o mesmo lock. A roda
 até o ponto de conflito e segura a transação aberta; B roda numa thread, e o relatório registra se B
 esperou, em que comando, o desfecho de cada comando dos dois e o estado final das tabelas. O
 ``COMMIT`` de A solta B. Nenhum desfecho do Redshift vira asserção antes de uma execução no ambiente
@@ -25,7 +26,10 @@ Os cenários: escritas em tabelas distintas (a ingestão em paralelo e ``publish
 conexão por tabela); dev e prod publicando ao mesmo tempo, com linhas distintas da tabela de
 controle; duas publicações da mesma tabela e partição, com a staging de nome fixo da etapa 8; o
 ``LOCK`` da tabela de controle no início da transação; e a linha de controle gravada por um
-``UPDATE`` condicionado à versão lida, como primeiro comando. As tabelas são
+``UPDATE`` condicionado à versão lida, como primeiro comando. Dois cenários de uma conexão só
+leem a staging temporária da publicação, cheia dentro da transação e antes do ``BEGIN``: a
+escrita de uma transação vai para um banco só no datashare, e a documentação não diz em que banco
+fica a tabela temporária criada depois do ``USE``. As tabelas são
 ``serialize_db_poc_<id>_*`` no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``, apagadas no fim da
 sessão pela fixture ``redshift_session``; nada vai ao S3.
 """
@@ -428,6 +432,90 @@ def test_two_publications_of_the_same_table(redshift_session: RedshiftSession) -
     expected = expected_control_row(a, b)
     assert rows["prod_x"] == expected
     assert partition_origin(session, tables.prod) == [expected[1]]
+
+
+def fill_temporary_staging(staging: str, execution_id: str) -> list[Step]:
+    """A staging temporária da sessão, sem a coluna de partição, cheia por ``INSERT`` no lugar do
+    ``COPY``."""
+    return [
+        Step(
+            "cria a staging temporária",
+            f"CREATE TEMP TABLE {staging} (id BIGINT, execution_id VARCHAR(127))",
+        ),
+        Step(
+            "enche a staging",
+            f"INSERT INTO {staging} VALUES (1, '{execution_id}'), (2, '{execution_id}')",
+        ),
+    ]
+
+
+def swap_from_staging(tables: Tables, staging: str, execution_id: str, version: int) -> list[Step]:
+    """A troca da partição de prod a partir da staging e a linha de controle, como a etapa 8 as
+    grava."""
+    return [
+        Step("apaga a partição", f"DELETE FROM {tables.prod} WHERE data_str = '{PARTITION}'"),
+        Step(
+            "insere a partição da staging",
+            f"INSERT INTO {tables.prod} SELECT id, execution_id, '{PARTITION}' FROM {staging}",
+        ),
+        *write_control_row(tables.control, "prod_x", version, execution_id),
+    ]
+
+
+def assert_publication_matches(session: RedshiftSession, tables: Tables,
+                               publisher: Participant) -> None:
+    """O estado final bate com o desfecho: a partição e a linha de controle de ``exec-a`` quando a
+    transação confirmou, as de ``exec-0`` quando não."""
+    expected = (2, "exec-a") if publisher.committed else (1, "exec-0")
+    assert control_rows(session, tables)["prod_x"] == expected
+    assert partition_origin(session, tables.prod) == [expected[1]]
+
+
+def test_temporary_staging_filled_inside_the_transaction(
+    redshift_session: RedshiftSession,
+) -> None:
+    """A publicação com a staging temporária criada e cheia dentro da transação.
+
+    Se a tabela temporária contar como o banco local, a transação escreve em dois bancos, e o
+    comando que a regra do datashare recusa, ou o ``COMMIT``, aparece no relatório.
+    """
+    session = redshift_session
+    tables = create_tables(session, "temporaria_dentro")
+    staging = f"serialize_db_poc_{session.session_id}_temporaria_dentro"
+    prefix = "redshift.transactions.temporaria_dentro"
+    with Participant("A") as a:
+        a.run([
+            begin(),
+            *fill_temporary_staging(staging, "exec-a"),
+            *swap_from_staging(tables, staging, "exec-a", 2),
+        ])
+        a.end_transaction()
+    a.report(prefix)
+    record(f"{prefix}.confirmada", a.committed)
+
+    assert_publication_matches(session, tables, a)
+
+
+def test_temporary_staging_filled_before_the_transaction(
+    redshift_session: RedshiftSession,
+) -> None:
+    """A publicação com a staging temporária cheia antes do ``BEGIN``, em autocommit.
+
+    A transação só escreve no banco do datashare, e a carga da staging, o ``COPY`` da etapa 8, fica
+    fora dela e dos locks que ela segura.
+    """
+    session = redshift_session
+    tables = create_tables(session, "temporaria_antes")
+    staging = f"serialize_db_poc_{session.session_id}_temporaria_antes"
+    prefix = "redshift.transactions.temporaria_antes"
+    with Participant("A") as a:
+        a.run(fill_temporary_staging(staging, "exec-a"))
+        a.run([begin(), *swap_from_staging(tables, staging, "exec-a", 2)])
+        a.end_transaction()
+    a.report(prefix)
+    record(f"{prefix}.confirmada", a.committed)
+
+    assert_publication_matches(session, tables, a)
 
 
 def test_lock_on_the_control_table(redshift_session: RedshiftSession) -> None:

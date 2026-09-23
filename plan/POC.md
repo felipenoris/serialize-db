@@ -2597,3 +2597,16 @@ eram do mesmo dia.
 400 dias, mantida pela decisão do usuário de 2026-09-23 ([`PLAN-STAGE-9.md`](PLAN-STAGE-9.md)), o
 bucket versionado que só libera espaço com `NoncurrentVersionExpiration`, e como mudar a janela do
 `vacuum` e a propriedade de uma tabela existente.
+
+## O que o pytest sem variável gravou
+
+Em 2026-09-23, no contêiner Linux x86_64, `test_source_db_projetado.py` (14 casos) e os 17 casos de
+`test_probes.py` que gravam o relatório ou arquivos fabricados passaram a `local`, gravando numa
+pasta nova sob `SERIALIZE_DB_TEST_LOCAL_ROOT` no lugar da pasta temporária do pytest (decisão do
+usuário de 2026-09-23). A suíte sem variável rodou num ambiente despido (`env -i`, `HOME` e `TMPDIR`
+em pastas vazias, os proxies numa porta fechada, `.venv/bin/python -m pytest -p no:cacheprovider`):
+187 aprovados e 279 pulados, as duas pastas continuaram vazias, e o repositório não ganhou arquivo.
+
+**Consequência**: a premissa de [`PLAN.md`](PLAN.md), `pytest` sem variável não grava arquivo algum,
+e o cabeçalho de `tests/conftest.py` valem como estão; [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
+perdeu o item da pasta temporária do pytest.
