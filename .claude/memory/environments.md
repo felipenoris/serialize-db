@@ -52,6 +52,15 @@ role denied the bucket-level reads as in the lab; the test root held one folder 
 table. Glue has one database with one Parquet table, Athena three workgroups; Lake Formation and S3
 Tables unreachable, so the re-evaluation trigger did not fire.
 
+The five probes ran again on 2026-09-23 (19:18 to 19:19 UTC, from `main`, Python 3.13.15, the venv
+prepared again with the `dev` group and moto 5.2.3): the space's instance changed to 4 vCPUs and
+15.4 GiB, 29.7 GiB free of 37.0 GiB, and DuckDB 1.5.5 defaults to 4 threads and a `memory_limit`
+of 12.3 GiB; the network, the credentials and the bucket read as on 2026-09-21. The IAM and KMS
+reach tests failed their 2 s TCP test and skipped the calls, Lake Formation timed out in 60.6 s
+and S3 Tables in 30.2 s, and `svv_table_info` is denied to the role after the `USE` (42501).
+The early migration's reports show a process peak of 19,595 MB, more than this instance's RAM,
+so the migration ran on a larger instance (`source-base.md`). `plan/POC.md`
+
 ## The prepared folder and the venv
 
 `pyproject.toml` declares no runtime dependencies and pins the `dev` group (SQLAlchemy, duckdb-engine,

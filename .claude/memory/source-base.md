@@ -85,7 +85,8 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   (19,595 MB) in date order; `rel_contrato_operacao` up to 4.2 s and 4,587 MB, `cad_operacoes` up
   to 3.2 s and 3,130 MB, `cad_contratos` up to 3.0 s and 2,000 MB, the unpartitioned tables under
   0.6 s at about 258 MB; about 53 s of loading in all. A 19,595 MB peak exceeds the 7.6 GiB of the
-  2026-09-21 reading (`environments.md`), so the run used a larger instance, whose default DuckDB
+  2026-09-21 reading and the 15.4 GiB of 2026-09-23 (`environments.md`), so the run used a larger
+  instance, whose default DuckDB
   `memory_limit` is 80% of its RAM: the peaks do not say whether a partition fits in 7.6 GiB, and
   only the first partition of each process is an isolated peak. `decisions.md`
 - The `export_mode` default and the load's sort still need `cad_lancamentos` in `rewrite` and with

@@ -156,9 +156,9 @@ tabelas vem de `svv_all_tables`, que cruza bancos. Depois do `USE`,
 função não serve de teste do privilégio num esquema de datashare, e a prova é o próprio `CREATE`.
 `information_schema.columns` também enxerga só o banco da conexão: depois do `USE` respondeu vazio
 para uma tabela recém-criada em `sbx_aco_decon` (suíte, 2026-09-21, cinco execuções); `svv_all_columns` cruza os
-bancos, e o `cursor.description` de um `select ... limit 0` descreve a tabela sem visão de catálogo. O
-que `svv_table_info` responde depois do `USE` ainda não foi lido; `probes/redshift.py` (`RS-5`,
-`RS-8`) lê as duas como leitura, sem reprovar.
+bancos, e o `cursor.description` de um `select ... limit 0` descreve a tabela sem visão de catálogo.
+Depois do `USE`, `svv_table_info` respondeu `permission denied for relation svv_table_info`
+(42501) ao papel do projeto (`probes/redshift.py`, `RS-8`, 2026-09-23).
 
 Os objetos de um datashare só aceitam escrita quando o produtor concede `INSERT`, `CREATE` e os
 demais privilégios ao datashare, e o consumidor precisa atender três requisitos:

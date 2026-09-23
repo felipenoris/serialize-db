@@ -101,5 +101,5 @@ entra.
 
 A suíte Redshift rodou antes da etapa 1, em 2026-09-21, e fixou a tabela de tipos de
 [`schema.md`](schema.md) antes de `cast` ser escrito; a etapa não tem decisão pendente. A leitura
-`RS-8` (`svv_table_info` depois do `USE`) fica com o probe, sem etapa que dependa dela
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+`RS-8` rodou em 2026-09-23: o papel do projeto não lê `svv_table_info` depois do `USE`
+(`permission denied`, 42501, [`POC.md`](POC.md)).

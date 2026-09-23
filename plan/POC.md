@@ -2531,3 +2531,35 @@ cenário sobre ela, com o mesmo teto de metade do acréscimo da tabela inteira. 
 `uv run`, os 37 MB do `uv`. Com a correção, as três sessões deram no Linux as contagens do macOS
 ([`CURRENT_STATE.md`](CURRENT_STATE.md)): 214 aprovados e 243 pulados sem variável, 383 e 74 com a
 raiz local, 456 e 1 com o substituto.
+
+## O que os probes mostraram no ambiente alvo em 2026-09-23
+
+Em 2026-09-23, entre 19:18 e 19:19 UTC, os cinco probes rodaram de novo no ambiente alvo, a partir
+da `main`, sobre a raiz `.../shared/serialize-db-tests`. Nenhuma checagem reprovou, e as chamadas
+que falharam são as leituras negadas ao papel, os serviços sem rota e o pacote `sagemaker_studio`,
+já conhecidos.
+
+- **A máquina** (`space.py`): 4 vCPUs, 15,4 GiB de memória e 29,7 GiB livres de 37,0 GiB num disco
+  só; o DuckDB 1.5.5 com 4 threads e `memory_limit` de 12,3 GiB. Em 2026-09-21 eram 2 vCPUs e
+  7,6 GiB: a instância do espaço mudou. A `.venv` traz o grupo `dev` com o moto 5.2.3 (`SP-9`), e a
+  rede é a mesma, sem proxy e sem internet, com os endpoints VPC de interface do STS, das três APIs
+  do Redshift, do Glue, do Athena, do Secrets Manager e do DataZone.
+- **`RS-8`** (`redshift.py`): depois do `USE datalake_rw_shared`, `svv_table_info` respondeu
+  `permission denied for relation svv_table_info` (42501) ao papel do projeto. `RS-19` passou pelo
+  critério novo, com `sbx_aco_decon.<tabela>` resolvendo e `current_database()` em `dev`, e `RS-5`
+  leu `USAGE` e `CREATE` falsos depois do `USE`, como em 2026-09-21. A credencial temporária do
+  workgroup vale uma hora (`RS-15`), e a de quem chama expirava em 56 minutos (`RS-18`).
+- **O teste de alcance** (`bucket.py`, `redshift.py`): o IAM e o KMS não conectaram por TCP em 2 s,
+  e `simulate_principal_policy` e `describe_key` não foram chamadas, contra 10 s e 80 s de espera
+  em 2026-09-21.
+- **O bucket** (`bucket.py`): SSE-KMS com bucket key (`BK-5`); sob a raiz dos probes, 219 versões
+  não correntes (1.388.530 bytes) e 219 marcadores de exclusão (`BK-14`); o ciclo de vida, a
+  política, os uploads multipart, o versionamento e o Object Lock negados, como em 2026-09-21. Em
+  `diagnose_aws.py`, o boto3, o delta-rs e o DuckDB listaram o prefixo.
+- **O catálogo** (`catalog.py`): o Glue com um banco e uma tabela Parquet, o Athena com três
+  workgroups, e o Lake Formation e o S3 Tables sem resposta (`ConnectTimeoutError` em 60,6 s e
+  30,2 s): o gatilho de reavaliação não disparou.
+
+**Consequência**: a leitura da distribuição atribuída da [etapa 8](PLAN-STAGE-8.md) precisa de uma
+fonte que o papel leia, e a escolha entrou nas decisões pendentes da etapa;
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perdeu os itens de `svv_table_info` e do teste de alcance.
