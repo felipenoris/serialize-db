@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Iterator
 
 import pyarrow.fs as pafs
 import pytest
@@ -21,8 +20,14 @@ from serialize_db.errors import ConflictError
 from serialize_db.storage import Storage, _proxy_settings, prepare_environment
 
 # As variáveis que Storage lê; cada teste sem gravar parte delas limpas.
-AWS_VARIABLES = ("AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ENDPOINT_URL", "AWS_SERVER_SIDE_ENCRYPTION",
-                 "AWS_SSE_KMS_KEY_ID", "AWS_SSE_BUCKET_KEY_ENABLED")
+AWS_VARIABLES = (
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_ENDPOINT_URL",
+    "AWS_SERVER_SIDE_ENCRYPTION",
+    "AWS_SSE_KMS_KEY_ID",
+    "AWS_SSE_BUCKET_KEY_ENABLED",
+)
 
 
 @pytest.fixture
@@ -35,25 +40,32 @@ def clean_aws(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
 
 @pytest.fixture(params=[pytest.param("local", marks=pytest.mark.local),
                         pytest.param("s3", marks=pytest.mark.s3)])
-def storage(request: pytest.FixtureRequest) -> Iterator[Storage]:
+def storage(request: pytest.FixtureRequest) -> Storage:
     """Uma raiz nova por teste, sob a pasta da sessão local ou sob o prefixo da sessão no bucket."""
     location = request.getfixturevalue(f"{request.param}_location")
-    yield Storage.for_uri(location.child(f"storage/{uuid.uuid4().hex[:8]}"))
+    return Storage.for_uri(location.child(f"storage/{uuid.uuid4().hex[:8]}"))
 
 
 def test_storage_for_uri(clean_aws: pytest.MonkeyPatch) -> None:
     """``s3://``, ``file://`` e caminho dão o sistema de arquivos certo e o caminho nele, sem rede;
     o S3 sem região e outro esquema são erro."""
+    # O S3, com a região da variável.
     clean_aws.setenv("AWS_REGION", "sa-east-1")
     s3 = Storage.for_uri("s3://bucket/projeto/delta/")
-    assert isinstance(s3.filesystem, pafs.S3FileSystem) and s3.filesystem.region == "sa-east-1"
-    assert (s3.uri, s3.path, s3.is_s3) == ("s3://bucket/projeto/delta", "bucket/projeto/delta", True)
+    assert isinstance(s3.filesystem, pafs.S3FileSystem)
+    assert s3.filesystem.region == "sa-east-1"
+    assert s3.uri == "s3://bucket/projeto/delta"
+    assert s3.path == "bucket/projeto/delta"
+    assert s3.is_s3
 
+    # O file:// e o caminho relativo, resolvidos para caminhos absolutos.
     local = Storage.for_uri("file:///tmp/serialize-db/delta")
-    assert isinstance(local.filesystem, pafs.LocalFileSystem) and not local.is_s3
+    assert isinstance(local.filesystem, pafs.LocalFileSystem)
+    assert not local.is_s3
     assert local.uri == local.path == os.path.realpath("/tmp/serialize-db/delta")
     assert Storage.for_uri("relativa/delta").uri == os.path.realpath("relativa/delta")
 
+    # Outro esquema e o S3 sem região são erro.
     with pytest.raises(ValueError, match="esquema"):
         Storage.for_uri("gs://bucket/delta")
     clean_aws.delenv("AWS_REGION")
@@ -66,7 +78,8 @@ def test_paths_relative_to_the_root(clean_aws: pytest.MonkeyPatch) -> None:
     caminho relativo e recusa a de fora; ``uri_of`` faz a volta."""
     clean_aws.setenv("AWS_REGION", "sa-east-1")
     storage = Storage.for_uri("s3://bucket/delta")
-    assert storage.join("prod/", "/cad_operacoes", "", "_delta_log") == "prod/cad_operacoes/_delta_log"
+    joined = storage.join("prod/", "/cad_operacoes", "", "_delta_log")
+    assert joined == "prod/cad_operacoes/_delta_log"
     assert storage.relative("s3://bucket/delta/prod/cad_operacoes/") == "prod/cad_operacoes"
     assert storage.relative("s3://bucket/delta") == ""
     assert storage.uri_of("prod/cad_operacoes") == "s3://bucket/delta/prod/cad_operacoes"
@@ -87,14 +100,17 @@ def test_storage_options_resolved_per_call(clean_aws: pytest.MonkeyPatch) -> Non
     clean_aws.setenv("AWS_REGION", "us-west-2")
     clean_aws.setenv("AWS_SERVER_SIDE_ENCRYPTION", "aws:kms")
     second = storage.storage_options()
-    assert second is not first and second["AWS_REGION"] == "us-west-2"
+    assert second is not first
+    assert second["AWS_REGION"] == "us-west-2"
     assert second["aws_server_side_encryption"] == "aws:kms"
     credentials = ("access", "secret", "token", "session")
-    assert not [key for key in second if any(word in key.lower() for word in credentials)]
+    for key in second:
+        for word in credentials:
+            assert word not in key.lower(), key
     assert Storage.for_uri("/tmp/delta").storage_options() == {}
 
 
-def test_prepare_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prepare_environment() -> None:
     """``NO_PROXY`` sai de ``no_proxy`` quando ausente ou vazia, a região vai nos dois sentidos, e
     a segunda chamada não muda nada."""
     environ = {"no_proxy": "169.254.170.2,localhost", "AWS_REGION": "us-west-2"}
@@ -117,7 +133,8 @@ def test_duckdb_proxy_settings_without_credentials_in_the_address() -> None:
     assert embedded == {"http_proxy": "proxy:3128", "http_proxy_username": "ana",
                         "http_proxy_password": "p@ss"}
     separate = _proxy_settings({"HTTP_PROXY": "proxy:3128", "username": "bia", "password": "x"})
-    assert separate["http_proxy_username"] == "bia" and separate["http_proxy_password"] == "x"
+    assert separate == {"http_proxy": "proxy:3128", "http_proxy_username": "bia",
+                        "http_proxy_password": "x"}
 
 
 def test_write_text_exclusive_create_and_if_match(storage: Storage) -> None:
@@ -151,7 +168,8 @@ def test_list_copy_delete(storage: Storage) -> None:
     storage.copy("t/p=a/1.parquet", "copia/p=a/1.parquet")
     assert storage.read_text("copia/p=a/1.parquet")[0] == "t/p=a/1.parquet"
     assert storage.size("copia/p=a/1.parquet") == len("t/p=a/1.parquet")
-    assert storage.exists("copia/p=a/1.parquet") and storage.size("ausente.parquet") is None
+    assert storage.exists("copia/p=a/1.parquet")
+    assert storage.size("ausente.parquet") is None
 
     storage.delete(["copia/p=a/1.parquet", "copia/ausente.parquet"])
     assert not storage.exists("copia/p=a/1.parquet")
@@ -169,5 +187,6 @@ def test_duckdb_connect_loads_delta(storage: Storage) -> None:
         secrets = connection.execute("SELECT name FROM duckdb_secrets()").fetchall()
     finally:
         connection.close()
-    assert ("delta",) in loaded and autoinstall is False
+    assert ("delta",) in loaded
+    assert autoinstall is False
     assert secrets == ([("serialize_db_s3",)] if storage.is_s3 else [])

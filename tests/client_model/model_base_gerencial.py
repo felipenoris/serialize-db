@@ -64,12 +64,14 @@ class Negocio(Base):
 
 
 class Operacao(Base):
-    """``cad_operacoes``: as operações de crédito de cada data-base, particionadas por ``data_str``, derivada de ``data``."""
+    """``cad_operacoes``: as operações de crédito de cada data-base, particionadas por ``data_str``,
+    derivada de ``data``."""
 
     __tablename__ = "cad_operacoes"
     __table_args__ = (
-        # UniqueConstraint, e não índice único: a chave estrangeira composta de rel_contrato_operacao
-        # aponta estas colunas, e o DuckDB e o Redshift exigem chave primária ou UNIQUE no alvo.
+        # UniqueConstraint, e não índice único: a chave estrangeira composta de
+        # rel_contrato_operacao aponta estas colunas, e o DuckDB e o Redshift exigem chave primária
+        # ou UNIQUE no alvo.
         UniqueConstraint("data", "operacao", name="uq_operacoes_data_operacao"),
         {
             "comment": "Operações de crédito por data-base",
@@ -139,7 +141,8 @@ class RelContratoOperacao(Base):
 
 
 class Contrato(Base):
-    """``cad_contratos``: os contratos de cada data-base, particionados por ``data_str``, derivada de ``data``."""
+    """``cad_contratos``: os contratos de cada data-base, particionados por ``data_str``, derivada
+    de ``data``."""
 
     __tablename__ = "cad_contratos"
     __table_args__ = (
