@@ -3,10 +3,12 @@
 Cada etapa acrescenta as suas: ``ContractError`` é a da etapa 1 (``schema``), ``SqlError`` a da
 etapa 2 (``sql``), ``ConflictError``, ``ExecutionConflict``, ``RegistrationRefused``,
 ``SchemaDiffRefused`` e ``LogUnavailable`` as da etapa 3 (``storage`` e ``delta``), que
-``serialize_db.delta`` levanta e a execução captura, e ``SandboxError`` a da etapa 4 (os motores).
+``serialize_db.delta`` levanta e a execução captura, ``SandboxError`` a da etapa 4 (os motores) e
+``AuditFailed`` a da etapa 6 (a execução).
 """
 
 __all__ = [
+    "AuditFailed",
     "ConflictError",
     "ContractError",
     "ExecutionConflict",
@@ -77,4 +79,12 @@ class SandboxError(ValueError):
     A mensagem nomeia o objeto e diz o que o cliente faz: ler a versão publicada por
     ``run.published(table)`` em vez de gravar no nome que o ``ingest`` ocupou, ou abrir um
     ``loader`` só por tabela.
+    """
+
+
+class AuditFailed(Exception):
+    """A auditoria reprovou, ou ``publish`` foi chamado sem a auditoria aprovada das partições.
+
+    A execução encerra sem tocar o Delta; a mensagem nomeia a tabela, as partições e as
+    verificações reprovadas, e o relatório, com o SQL e a amostra, vai para o log.
     """

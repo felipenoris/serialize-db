@@ -6,8 +6,8 @@ dados e a conferência dos próprios modelos.
 Esta página explica o funcionamento geral do pacote, traz o tutorial de uso e a tabela de
 mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.schema`,
 `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
-`serialize_db.engine` (com o motor `serialize_db.engine.duckdb`), `serialize_db.errors` e
-`serialize_db.cli`.
+`serialize_db.engine` (com o motor `serialize_db.engine.duckdb`), `serialize_db.execution`,
+`serialize_db.errors` e `serialize_db.cli`.
 
 ## Como o pacote funciona
 
@@ -33,8 +33,10 @@ mapeamento de tipos. A referência de cada módulo está no menu: `serialize_db.
 O que já existe são o módulo de esquema, `serialize_db.schema`, o de texto SQL,
 `serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`, a camada
 de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3, a auditoria,
-`serialize_db.audit`, e o motor DuckDB, `serialize_db.engine.duckdb`. O motor Redshift, a execução
-e a publicação são as etapas seguintes do plano, na pasta `plan/` do repositório.
+`serialize_db.audit`, o motor DuckDB, `serialize_db.engine.duckdb`, e a execução,
+`serialize_db.execution`, com `serialize-db run` e `serialize-db audit`. O motor Redshift, a
+publicação para os clientes no Redshift, a carga inicial e a operação são as etapas seguintes do
+plano, na pasta `plan/` do repositório.
 
 ## Instalação
 
@@ -304,6 +306,53 @@ cada um, e relê a versão pelos dois leitores, desfazendo o commit numa diferen
 `serialize_db.delta.rewrite` resolve, num commit: renomeação, remoção e mudança de tipo.
 `serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo de controle do
 ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva.
+
+### Rodar uma execução
+
+`serialize_db.Database` junta a raiz, o ambiente e os modelos, e `serialize_db.Execution` é o ciclo
+de uma execução: abre as tabelas do ambiente e fixa a versão de cada uma, cria o sandbox, e no fim
+o descarta. Entre os dois, o pipeline traz as tabelas, roda a lógica, audita e publica:
+
+```python
+import sqlalchemy as sa
+
+from serialize_db import Database, Execution
+
+db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
+with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as run:
+    run.ingest(Lancamento.__table__, partitions=run.previous_partitions(Lancamento.__table__, 12),
+               materialize=True)
+    with run.sandbox.stream(sa.select(Lancamento)) as stream, \
+            run.sandbox.loader(Projetado.__table__) as loader:
+        for batch in stream:
+            ids = run.next_ids(Projetado.__table__, batch.num_rows)   # faixa contígua, sob lock
+            loader.write(project(batch, ids))
+    run.audit(Projetado.__table__, ["2026-08-31"])                   # AuditFailed na reprovação
+    run.publish(Projetado.__table__, partitions=["2026-08-31"])      # overwrite por partição
+```
+
+`run.publish` exige a auditoria aprovada das partições na própria execução e recusa com
+`serialize_db.errors.ExecutionConflict` a tabela em que outra execução gravou dados depois da
+abertura. O `export_mode` sai do argumento de `publish`, do de `Execution`, de
+`SERIALIZE_DB_EXPORT_MODE` ou de `"register"`, nessa ordem. `run.snapshot("2026T3")` marca a
+execução: os commits levam o nome, e o encerramento sem erro grava as versões de todas as tabelas
+no arquivo de controle do ambiente.
+
+A linha de comando abre a mesma execução para uma função `modulo:funcao` que recebe `run`, e
+`serialize-db audit` imprime o texto das verificações de uma tabela ou roda a auditoria sobre a
+versão publicada:
+
+```shell
+serialize-db run --root s3://bucket/projeto/delta --environment prod --partition 2026-08-31 \
+    --metadata pipeline.models:Base.metadata pipeline.mensal:main
+serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --engine redshift --sql
+serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos \
+    --partitions 2026-08-31 --root s3://bucket/projeto/delta --environment prod
+```
+
+O `run` sai com 0 quando o pipeline termina, 1 na auditoria reprovada e 2 no conflito e no erro de
+uso; `--root`, `--environment`, `--engine` e `--export-mode` têm por padrão `SERIALIZE_DB_ROOT`,
+`SERIALIZE_DB_ENVIRONMENT` (`dev`), `SERIALIZE_DB_ENGINE` (`duckdb`) e `SERIALIZE_DB_EXPORT_MODE`.
 
 ### Rodar o pipeline no sandbox DuckDB
 

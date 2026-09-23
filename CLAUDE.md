@@ -262,7 +262,7 @@ research appends to the matching group.
 | `plan/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): one item per pending question, with the run or the decision that will close it; a closed item leaves the file when its answer lands in the owning document. |
 | `plan/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options, contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and Delta against Iceberg with the re-evaluation trigger. |
 | `plan/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `plan/PLAN-STAGE-<n>.md`. |
-| `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3), `audit.py`, `engine/__init__.py` (the `Engine` protocol) and `engine/duckdb.py` (stage 4), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` to `plan/PLAN-STAGE-4.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
+| `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3), `audit.py`, `engine/__init__.py` (the `Engine` protocol) and `engine/duckdb.py` (stage 4), `execution.py` (stage 6), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, `run` and `audit`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` to `plan/PLAN-STAGE-4.md` and `plan/PLAN-STAGE-6.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
 | `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). The corrected copy is the client model in `tests/client_model/`. |
 | `tests/client_model/` | The client model (user decision of 2026-09-21): the corrected copy of `tests/reference_model/` that the tests hand to the package API as a client library would, the corrections listed in `plan/PLAN-STAGE-1.md` and checked by `tests/test_client_model.py`; `statements.py` holds the fictitious pipeline's Core statements (`STATEMENTS`), `schema/` and `sql/` the generated files. |
 | `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base and in the production base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py`; the material of the stage 7 test. It also holds the reference model's keys (`UNIQUE_KEYS`, `FOREIGN_KEYS`, `MODEL_NOT_NULL_DECLARED_NULLABLE`), which `tests/test_reference_model.py` checks against the model and the fixture satisfies. |
@@ -517,10 +517,11 @@ Read `plan/CURRENT_STATE.md` (each stage and artifact as it is now), `plan/OPEN_
 awaits the user or a run), `plan/PLAN.md` and the stage file before planning a session; the dated
 measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/decisions.md`.
 
-- Stages 0, 1 and 2 are closed, and stages 3 and 4 were implemented on 2026-09-23 (`storage`,
-  `delta`, the partition rule in `schema`; `audit`, the `engine` protocol and the DuckDB engine);
-  the package has `errors`, `schema`, `sql`, `storage`, `delta`, `audit`, `engine`, `_files` and
-  `cli`. Stages 5 to 9 have no code. The review of stages 3 and 4 of 2026-09-23 corrected both stage files
+- Stages 0, 1 and 2 are closed, and stages 3, 4 and 6 were implemented on 2026-09-23 (`storage`,
+  `delta`, the partition rule in `schema`; `audit`, the `engine` protocol and the DuckDB engine;
+  `execution` with `Database`, `Execution`, `serialize-db run` and `serialize-db audit`, over the
+  DuckDB engine); the package has `errors`, `schema`, `sql`, `storage`, `delta`, `audit`,
+  `engine`, `execution`, `_files` and `cli`. Stages 5, 7, 8 and 9 have no code. The review of stages 3 and 4 of 2026-09-23 corrected both stage files
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as
   `FunctionElement`), and the user's answers of the same day closed stage 4: the `qmark` style, the
   audit key scope, the engine interface, the `loader` creating its table at `close`, the hybrid
@@ -540,8 +541,8 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
 - The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
   ran successfully there on the copy of the production base, and its reports, not yet available,
   carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the
-  default, and whether the other mode leaves stages 4, 5 and 7). Stage 6 follows on local folders,
-  and stage 7 absorbs the script.
+  default, and whether the other mode leaves stages 4, 5 and 7). Stage 5 follows with the target's
+  suite run, and stage 7 absorbs the script over the stage 3, 4 and 6 modules.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still

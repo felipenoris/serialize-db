@@ -2280,3 +2280,38 @@ lote com a ordem livre, `referenced` na auditoria do motor, `totals` e `rows` no
 esquema do primeiro lote no `loader` e o `CAST` de cada coluna na exportação. O `is_finite` do
 Redshift, `x NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)`, espera uma execução
 no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que a implementação da etapa 6 mostrou
+
+Em 2026-09-23, no mesmo macOS (DuckDB 1.5.5, deltalake 1.6.4, Python 3.13), a implementação de
+`serialize_db.execution` e dos subcomandos `run` e `audit` rodou os casos de
+`tests/test_execution.py`, e a suíte local inteira rodou seis vezes seguidas para achar os testes
+instáveis.
+
+- **O pool da publicação.** Com todas as tabelas entregues ao `ThreadPoolExecutor` de uma vez, como
+  o `publish_all` de `test_parallel.py`, e um worker só, a falha da segunda tabela chegou ao laço
+  principal depois de o worker pegar a terceira: o `shutdown(cancel_futures=True)` não a cancelou, e
+  a terceira tabela publicou. O esboço só passava porque cada tarefa dormia 0,5 s. `Execution`
+  entrega uma tabela ao pool só com um worker livre e nenhuma falha, e o teste com um worker deu a
+  primeira concluída, a segunda com a falha e a terceira cancelada em cinco rodadas.
+- **A exceção com o resultado de cada tabela.** A falha sobe com o seu tipo e o resultado de cada
+  tabela numa nota (`BaseException.add_note`, Python 3.11 em diante), e a linha de comando traduz o
+  tipo no código de saída: `ExecutionConflict` em 2, `AuditFailed` em 1.
+- **O primeiro lote e o `close` sob carga.** O teste do cancelamento de `test_parallel.py`, e o do
+  motor que o repete, falharam uma vez em seis rodadas da suíte inteira, sem erro de interrupção, e
+  alongar a varredura com o `md5` duplo (1,37 s depois do primeiro lote, contra 0,74 s) não bastou.
+  Um reprodutor com três processos simultâneos, 15 tentativas cada, deu 44 interrupções e um caso em
+  que o primeiro lote só saiu no fim da consulta, aos 4,531 s, com o segundo já na memória: não
+  havia o que cancelar. Os dois testes passaram a conferir o que vale nos dois casos, a thread
+  terminada e a sessão livre em menos de 1 s depois do `close`, com o erro nulo ou o da interrupção,
+  e a suíte inteira passou seis vezes seguidas, com o `close` em 16 a 28 ms e o `OSError` da
+  interrupção em todas; o cancelamento estrito continua conferido pelo `cleanup` com a ordenação.
+- **A pasta temporária.** O `DuckDBEngine` padrão nasce numa pasta de `tempfile.mkdtemp`, fora da
+  raiz autorizada dos testes: os testes da execução constroem o motor com `temp_directory` sob a
+  raiz, e os da linha de comando apontam `tempfile.tempdir` para ela.
+
+**Consequência**: [`PLAN-STAGE-6.md`](PLAN-STAGE-6.md) troca a interface e o rascunho pela seção
+"A implementação" e registra o pool que entrega uma tabela por worker livre, a nota com o resultado
+de cada tabela, o snapshot só na execução sem erro, `referenced` na auditoria, o motor Redshift e
+`publish_redshift` fora da etapa até as etapas 5 e 8, e o `serialize-db audit` sobre um sandbox
+DuckDB próprio.
