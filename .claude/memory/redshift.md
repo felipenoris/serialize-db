@@ -106,8 +106,16 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   inside the `UNLOAD` literal, is `test_stream_by_unload_with_literal_values`, not yet run in the
   target. `plan/PLAN-STAGE-5.md`, `plan/POC.md`
 - The stage 5 readings wait in `tests/proof_of_concept/test_redshift.py` for the next run in the
-  target (six tests after `test_parallel_copy_and_unload_on_two_connections`, listed in
+  target (seven tests after `test_parallel_copy_and_unload_on_two_connections`, listed in
   `plan/OPEN_QUESTIONS.md`); a local emulator ran their code on 2026-09-23. `plan/POC.md`
+- The stage 1 `ddl` and the stage 4 `audit_sql` cite tables without a schema, so on Redshift the
+  engine relies on `SET search_path TO <schema>` after `USE`, which never ran on the datashare
+  schema; the JSON column is `SUPER` in the Redshift DDL and the audit calls `is_valid_json` on it,
+  and one refused measure fails the whole rows check. `test_audit_sql_under_search_path_and_nan_comparison`
+  reads the `search_path`, `'NaN'::float8 = 'NaN'::float8` against the audit's `is_finite`
+  (`NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)`), each measure alone, a table
+  with planted defects beside the expected counters, and the client model's texts on empty tables.
+  `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
 
 ## The reading of 2026-09-21
 

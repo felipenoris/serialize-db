@@ -112,8 +112,17 @@ foi medido em [`POC.md`](POC.md).
   `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o operador
   POSIX `~` da regra da partição, e o `is_finite` como `x NOT IN ('NaN'::float8, 'Infinity'::float8,
   '-Infinity'::float8)`, que supõe o `NaN` igual a si mesmo, como no PostgreSQL
-  ([etapa 4](PLAN-STAGE-4.md)). A [etapa 5](PLAN-STAGE-5.md) roda esse texto, e um caso na suíte
-  Redshift, com uma linha de cada defeito e um `NaN`, o confere antes dela.
+  ([etapa 4](PLAN-STAGE-4.md)). A [etapa 5](PLAN-STAGE-5.md) roda esse texto, e
+  `test_redshift.py::test_audit_sql_under_search_path_and_nan_comparison` o confere antes dela, pelo
+  caminho do motor: o `ddl` da etapa 1 e o `audit_sql` citam as tabelas sem esquema, e o caso roda
+  numa conexão com `SET search_path` no esquema do datashare depois do `USE`, que também nunca
+  rodou lá. Ele lê a comparação do `NaN` que separa o PostgreSQL do IEEE (`'NaN'::float8 =
+  'NaN'::float8`, o `is_finite` do `NaN`, dos infinitos, de um número e do nulo, e o `CAST` do `NaN`
+  para `NUMERIC(38, 6)`), uma tabela com uma linha de cada defeito, um `NaN` e um infinito, com o
+  esperado de cada contador ao lado, cada medida da verificação de linhas isolada (uma medida
+  recusada derruba a consulta inteira, e a coluna JSON é `SUPER` no DDL do Redshift, que o
+  `is_valid_json` talvez recuse [uncertain]), e os textos do modelo cliente sobre as tabelas vazias.
+  Passou pelo emulador local em 2026-09-23 ([`POC.md`](POC.md)).
 - **As leituras da etapa 5 na próxima execução da suíte Redshift.** As decisões do usuário de
   2026-09-23 ([etapa 5](PLAN-STAGE-5.md)) supõem comportamentos que ninguém executou no ambiente
   alvo. Os casos estão em `tests/proof_of_concept/test_redshift.py` e passaram, em 2026-09-23, por

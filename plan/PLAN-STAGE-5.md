@@ -75,7 +75,7 @@ Testes: `tests/test_engine_redshift.py` compara o SQL gerado (`COPY`, `INSERT ..
 mesma sequência com uma amostra no esquema autorizado, depois do
 `test_redshift.py` da [etapa 0](PLAN-STAGE-0.md). Provas de conceito: `test_redshift.py` (sessão e
 `paramstyle` nomeado, o `fetchmany` por lotes, banco do esquema e o `USE`, DDL, `COPY ... MANIFEST`, lista de
-colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API, o comando repetido depois de um `TRUNCATE` com e sem o cache do driver; e as leituras das decisões de 2026-09-23, que ainda não rodaram no ambiente alvo: `test_unload_to_a_hive_prefix_and_register`, `test_stream_by_unload_with_literal_values`, `test_unload_limit_empty_result_temp_table_and_super`, `test_row_description_oids_and_type_modifier`, `test_small_load_copy_cost` e `test_unload_footer_statistics_with_nan`), `test_sqlalchemy.py`
+colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API, o comando repetido depois de um `TRUNCATE` com e sem o cache do driver; e as leituras das decisões de 2026-09-23, que ainda não rodaram no ambiente alvo: `test_unload_to_a_hive_prefix_and_register`, `test_stream_by_unload_with_literal_values`, `test_unload_limit_empty_result_temp_table_and_super`, `test_row_description_oids_and_type_modifier`, `test_small_load_copy_cost`, `test_unload_footer_statistics_with_nan` e `test_audit_sql_under_search_path_and_nan_comparison`), `test_sqlalchemy.py`
 (`test_redshift_dialect_compiles_dml`, `test_three_part_name_needs_quoted_name_without_quotes`,
 `test_sandbox_copy_of_table_and_schema_files_diff`) e `test_stdlib.py::test_execution_identifiers`
 (o prefixo do sandbox).
@@ -162,7 +162,10 @@ class RedshiftEngine:
   (`sbx_aco_decon` só existe no datashare) nem deixa criar (`has_database_privilege(dev, CREATE)`
   falso, `RS-9`). A tabela de controle da [etapa 8](PLAN-STAGE-8.md) é criada só pelo usuário, por
   `create_publications_table`. Depois vêm `SET search_path TO <esquema>` e
-  `cursor.paramstyle = "named"`.
+  `cursor.paramstyle = "named"`. O `search_path` é o que resolve os nomes sem esquema do `ddl` da
+  [etapa 1](PLAN-STAGE-1.md), do `render` e do `audit_sql`, e nunca rodou no esquema do datashare
+  depois do `USE`: `test_redshift.py::test_audit_sql_under_search_path_and_nan_comparison` o lê
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
   Uma conexão derrubada pelo servidor é reaberta uma vez por comando, com credencial nova, e a
   reconexão perde as tabelas temporárias da sessão, que o log nomeia. O motor guarda essa conexão e
   um `threading.RLock` que todo comando toma pelo tempo do comando, e o cliente usa a conexão direto

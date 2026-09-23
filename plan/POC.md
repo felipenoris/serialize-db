@@ -2315,3 +2315,31 @@ instáveis.
 de cada tabela, o snapshot só na execução sem erro, `referenced` na auditoria, o motor Redshift e
 `publish_redshift` fora da etapa até as etapas 5 e 8, e o `serialize-db audit` sobre um sandbox
 DuckDB próprio.
+
+## O que o texto da auditoria para o Redshift mostrou localmente
+
+Em 2026-09-23, no mesmo macOS, a preparação do caso da auditoria na suíte Redshift renderizou o
+texto de `audit_sql(..., "redshift")` e o DDL de `schema.ddl(..., "redshift")` para uma tabela com
+chave primária, partição com `partition_source`, `String(n)`, `Double`, `Numeric(18, 2)` e `JSON`.
+
+- **Os nomes saem sem esquema.** O DDL cria `"<prefixo>auditoria"` e o texto de cada verificação
+  cita `"<prefixo>auditoria"."<coluna>"`, sem o esquema: no Redshift, quem os resolve é o
+  `SET search_path TO <esquema>` do `connect` da etapa 5, depois do `USE`, que nunca rodou no
+  esquema do datashare. A suíte sempre citou as tabelas em duas partes.
+- **A coluna JSON vira `SUPER`, e a auditoria chama `is_valid_json` sobre ela.** A documentação do
+  `is_valid_json` fala de uma string [uncertain se aceita `SUPER`], e a verificação de linhas junta
+  todas as medidas numa consulta só: uma medida recusada derruba as demais.
+- **O resto do texto**: `count(CASE WHEN (...) THEN 1 END)` em cada contador,
+  `octet_length`, `~ '^[0-9A-Za-z][0-9A-Za-z_.-]*$'`, `to_char(<data>, 'YYYY-MM-DD')`, a soma
+  `sum(CASE WHEN (<valor> NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)) THEN
+  CAST(<valor> AS NUMERIC(38, 6)) END)` e a amostra por `LIMIT 20`.
+- **O emulador.** `test_audit_sql_under_search_path_and_nan_comparison` rodou no emulador local da
+  seção anterior, com o `SET search_path` traduzido para `USE` e macros do DuckDB no lugar de
+  `is_valid_json` e de `to_char`: a tabela com os defeitos plantados deu o esperado em cada contador
+  (4 linhas, 1 fora da partição, 2 não finitos, totais `4.500000` e `16.250000`), com o `NaN` igual
+  a si mesmo, como o DuckDB o compara, e os textos do modelo cliente rodaram sobre as tabelas vazias.
+
+**Consequência**: o caso lê no ambiente alvo o `search_path`, o `is_valid_json` sobre `SUPER`, a
+comparação do `NaN` e cada medida isolada ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), "O texto da
+auditoria no Redshift"), e [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) registra que o `search_path` resolve
+os nomes sem esquema.

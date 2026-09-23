@@ -19,7 +19,8 @@ o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por tabela, o caminho de
 ``publish_redshift`` da etapa 8. As leituras que as decisões da etapa 5 de 2026-09-23 esperam
 vêm no fim: o ``UNLOAD`` sem ``PARTITION BY`` para a pasta Hive, o ``stream`` por ``UNLOAD`` com os
 valores como literais e os seus casos de borda, o ``row_desc`` de cada tipo, o custo de uma carga
-pequena por ``COPY`` e o rodapé do ``UNLOAD`` com ``NaN`` (issue #59). Os resultados que a
+pequena por ``COPY``, o rodapé do ``UNLOAD`` com ``NaN`` (issue #59), e o texto da auditoria da etapa
+4 sob ``search_path`` no esquema do datashare, com a comparação do ``NaN``. Os resultados que a
 documentação não fixa vão para o relatório da sessão; os que duas execuções limpas no ambiente alvo
 leram iguais são asserções. O que cada execução no ambiente alvo leu está em ``plan/POC.md``.
 """
@@ -51,8 +52,10 @@ from sqlalchemy.sql.elements import quoted_name
 from sqlalchemy.sql.visitors import iterate
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
+from client_model import Base as ClientBase
 from conftest import RedshiftSession, S3Location, connect_redshift, record
 from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
+from serialize_db import audit, schema, sql
 
 pytestmark = [pytest.mark.redshift, pytest.mark.s3]
 
@@ -1153,3 +1156,136 @@ def test_unload_footer_statistics_with_nan(redshift_session: RedshiftSession, s3
                 "duckdb_valor_maior_que_3": above_three,
             },
         )
+
+
+def finite_text(expression: str) -> str:
+    """O ``is_finite`` da auditoria para o Redshift, aplicado a ``expression``: o texto que o motor roda."""
+    return str(audit.is_finite(sa.literal_column(expression)).compile(dialect=REDSHIFT_NAMED))
+
+
+def as_text(rows: list) -> list[list[str]]:
+    """As linhas de um resultado em texto, para o relatório."""
+    return [[str(value) for value in row] for row in rows]
+
+
+def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: RedshiftSession) -> None:
+    """O texto da auditoria da etapa 4 pelo caminho do motor da etapa 5, e como o Redshift compara o ``NaN``, tudo leitura.
+
+    O ``ddl`` da etapa 1 e o ``audit_sql`` citam as tabelas sem esquema, e o motor conta com o
+    ``search_path`` no esquema do datashare depois do ``USE``, que nunca rodou no ambiente alvo; o
+    caso roda numa conexão própria, com o ``SET search_path`` do ``connect`` da etapa 5. O
+    ``is_finite`` do Redshift é ``x NOT IN ('NaN'::float8, ...)``, que supõe o ``NaN`` igual a si
+    mesmo, como no PostgreSQL; pelo IEEE, o ``NaN`` passaria por finito, ``naofinito_valor`` contaria
+    só o infinito e a soma levaria o ``NaN`` ao ``CAST`` para ``NUMERIC(38, 6)``. A tabela
+    ``auditoria`` tem defeitos plantados e o esperado de cada contador ao lado da leitura; os textos
+    do modelo cliente rodam sobre as tabelas vazias, e cobrem ``to_char``, ``octet_length``, ``~`` e
+    ``count(CASE WHEN ...)``, que também nunca rodaram lá (``plan/OPEN_QUESTIONS.md``).
+    """
+    session = redshift_session
+    prefix = f"serialize_db_poc_{session.session_id}_"
+    _, connection = connect_redshift()
+    try:
+        cursor = connection.cursor()
+
+        def run(text: str) -> list:
+            """Executa ``text`` na conexão do caso e devolve as linhas, ou uma lista vazia."""
+            cursor.execute(text)
+            return cursor.fetchall() if cursor.description else []
+
+        def run_as_text(text: str) -> list[list[str]]:
+            """As linhas de ``text`` em texto, para o relatório."""
+            return as_text(run(text))
+
+        # 1. A comparação do NaN, que separa o PostgreSQL do IEEE, e o CAST que a soma evita.
+        comparisons = {
+            "nan_igual_nan": "select 'NaN'::float8 = 'NaN'::float8",
+            "finito.nan": "select " + finite_text("'NaN'::float8"),
+            "finito.infinito": "select " + finite_text("'Infinity'::float8"),
+            "finito.menos_infinito": "select " + finite_text("'-Infinity'::float8"),
+            "finito.numero": "select " + finite_text("1.5::float8"),
+            "finito.nulo": "select " + finite_text("cast(null as float8)"),
+            "cast_nan_numeric": "select cast('NaN'::float8 as numeric(38, 6))",
+            "soma_com_nan": "select sum(v) from (select 1.0::float8 as v union all select 'NaN'::float8) as t",
+        }
+        for label, text in comparisons.items():
+            record(f"redshift.audit.{label}", reading(functools.partial(run_as_text, text)))
+
+        # 2. O search_path no esquema do datashare: o que o connect da etapa 5 roda depois do USE.
+        record("redshift.audit.search_path", outcome(functools.partial(run, f"SET search_path TO {session.schema}")))
+        record("redshift.audit.current_schema", reading(functools.partial(run_as_text, "select current_schema()")))
+
+        # 3. A tabela com defeitos plantados, criada pelo ddl da etapa 1 com o nome sem esquema.
+        metadata = sa.MetaData()
+        model = sa.Table(
+            "auditoria",
+            metadata,
+            sa.Column("id", sa.BigInteger, primary_key=True),
+            sa.Column("data", sa.Date, nullable=False),
+            sa.Column("data_str", sa.String(10), nullable=False),
+            sa.Column("nome", sa.String(20)),
+            sa.Column("valor", sa.Double),
+            sa.Column("preco", sa.Numeric(18, 2)),
+            sa.Column("meta", sa.JSON),
+            info={"serialize_db": {"partition_by": ["data_str"], "partition_source": "data"}},
+        )
+        name = session.table("auditoria")
+        created = outcome(functools.partial(run, schema.ddl(model, "redshift", prefix=prefix)))
+        record("redshift.audit.create_unqualified", created)
+        assert created == "ok", created
+        # O nome sem esquema caiu no esquema do datashare: o nome em duas partes acha a tabela.
+        assert session.execute(f"select count(*) from {session.qualified(name)}")[0][0] == 0
+
+        # Na partição 2026-08-31: o id 2 repetido, o NaN e o infinito em valor, e a linha 4 com data
+        # fora da partição; a linha 5 está em outra partição, fora do escopo.
+        run(
+            f'INSERT INTO "{name}" VALUES '
+            "(1, '2026-08-31', '2026-08-31', 'a', 1.5, 10.25, JSON_PARSE('{\"a\": 1}')), "
+            "(2, '2026-08-31', '2026-08-31', 'b', CAST('NaN' AS DOUBLE PRECISION), 1.00, JSON_PARSE('{\"b\": 2}')), "
+            "(2, '2026-08-31', '2026-08-31', 'c', CAST('Infinity' AS DOUBLE PRECISION), 2.00, NULL), "
+            "(4, '2026-08-30', '2026-08-31', 'd', 3.0, 3.00, JSON_PARSE('{\"c\": 3}')), "
+            "(5, '2026-08-30', '2026-08-30', 'e', 4.0, 4.00, NULL)"
+        )
+        expected = {
+            "linhas": "4", "particao_data_str": "1", "naofinito_valor": "2", "total_valor": "4.500000",
+            "total_preco": "16.250000", "json_meta": "0", "texto_nome": "0", "valor_data_str": "0",
+        }
+
+        # 4. O texto de cada verificação, como o motor o roda; a de linhas também medida a medida,
+        # porque uma medida que o Redshift recusa derruba a consulta inteira.
+        partitions = ["2026-08-31"]
+        texts = audit.audit_sql(model, "redshift", partitions, prefix=prefix)
+        for check, text in texts.items():
+            record(f"redshift.audit.planted.{check}", reading(functools.partial(run_as_text, text)))
+        rows_check = audit.checks(model, partitions)[0]
+        measures = {}
+        for column in rows_check.statement.selected_columns:
+            if column.name == "data_str":
+                continue
+            single = sa.select(column).select_from(model).where(rows_check.statement.whereclause)
+            value = reading(functools.partial(run_as_text, sql.render(single, "redshift", metadata, prefix)))
+            measures[column.name] = value[0][0] if isinstance(value, list) else value
+        record("redshift.audit.planted.measures", measures)
+        record("redshift.audit.planted.expected", expected)
+        matches = {}
+        for label, value in expected.items():
+            matches[label] = measures.get(label) == value
+        record("redshift.audit.planted.matches", matches)
+        # A amostra da reprovação de particao_data_str: a linha 4.
+        sample = sql.render(audit.sample_statement(model, partitions, rows_check.counters["particao_data_str"]), "redshift", metadata, prefix)
+        record("redshift.audit.planted.sample", reading(functools.partial(run_as_text, sample)))
+
+        # 5. Os textos do modelo cliente sobre as tabelas vazias, criadas pelo ddl da etapa 1.
+        results = {}
+        for table in ClientBase.metadata.sorted_tables:
+            session.table(table.name)
+            outcome_of_ddl = outcome(functools.partial(run, schema.ddl(table, "redshift", prefix=prefix)))
+            if outcome_of_ddl != "ok":
+                results[table.name] = {"ddl": outcome_of_ddl}
+                continue
+            table_partitions = partitions if schema.table_options(table).partition_by else None
+            results[table.name] = {}
+            for check, text in audit.audit_sql(table, "redshift", table_partitions, prefix=prefix).items():
+                results[table.name][check] = outcome(functools.partial(run, text))
+        record("redshift.audit.client_model", results)
+    finally:
+        connection.close()
