@@ -7,8 +7,9 @@ particionado por ``data_base_str`` com a origem ``data_base``, com uma chave est
 
 Eles conferem a configuração e a sessão única, a sessão a mais, a ingestão presa à versão e a poda
 por intervalo, os parâmetros do statement, a versão publicada, o stream (o primeiro lote com a
-consulta rodando, o orçamento, o cancelamento, os erros), o loader (a transação no ``close``, o nome
-ocupado, a ordem do exemplo mensal), as formas por tabela, o ciclo com o pandas, a auditoria (cada
+consulta rodando, o orçamento, o cancelamento, os erros), o loader (a transação no ``close``, o
+loader abandonado, o nome ocupado, a ordem do exemplo mensal, o pipeline de três estágios, a leitura
+durante uma carga esquecida), as formas por tabela, o ciclo com o pandas, a auditoria (cada
 defeito, a dispensa da junção, a amostra, os não finitos, o órfão), a exportação nos dois modos e o
 pipeline de exemplo num banco em arquivo. A extensão ``delta`` do DuckDB precisa estar na pasta de
 extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
@@ -482,6 +483,7 @@ def test_stream_spills_after_the_budget_and_keeps_the_order(setup: Setup) -> Non
     para o arquivo, as linhas saem todas e na ordem, e o ``close`` apaga o arquivo."""
     engine = setup.engine
     create_numbers(engine)
+    # Um lote de 100.000 linhas de (BIGINT, VARCHAR curto) tem 1,8 MB: o orçamento guarda dois.
     budget = 2 * 1_900_000
     ids = []
     peak = 0
@@ -495,6 +497,10 @@ def test_stream_spills_after_the_budget_and_keeps_the_order(setup: Setup) -> Non
     assert spilled > 0
     assert peak <= budget
     assert spool_files(engine) == []
+
+    # Os lotes que foram ao arquivo e o pico em memória vão para o relatório.
+    record("engine.stream.spilled_batches",
+           f"{spilled} de 30 lotes no arquivo, com {peak / 1e6:.1f} MB de pico em memória")
 
 
 def sorting(observer: DuckDBEngine) -> bool:
@@ -541,13 +547,17 @@ def test_close_and_cleanup_interrupt_the_running_query(setup: Setup) -> None:
     assert count_of(engine, "numeros") == 20_000_000
 
     # O cleanup cancela a ordenação de um stream que outra thread ainda constrói: a thread
-    # principal espera a ordenação começar antes de chamar o cleanup.
+    # principal espera a ordenação começar antes de chamar o cleanup, e o tempo do cleanup vai para
+    # o relatório.
     with ThreadPoolExecutor(max_workers=1) as pool:
         construction = pool.submit(engine.stream, "SELECT id FROM numeros ORDER BY hash(id)")
         wait_for_the_sort(engine)
+        started = time.perf_counter()
         engine.cleanup()
+        cleaned = time.perf_counter() - started
         error = construction.exception(timeout=30)
     assert "INTERRUPT" in str(error).upper()
+    record("engine.cleanup_interrupts", f"{cleaned:.3f} s do cleanup com a ordenação em curso")
 
 
 # ---------------------------------------------------------------- o loader
@@ -593,6 +603,16 @@ def test_loader_creates_and_inserts_in_one_transaction_on_close(setup: Setup) ->
             loader.write(entries(MONTHS[0], 1, 10, PROJECTED).drop_columns(["valor"]))
     assert not engine.name_in_use("cad_segunda")
 
+    # O loader abandonado sem close: a thread termina e apaga o arquivo, e nada é criado.
+    abandoned = engine.loader(other)
+    abandoned.write(entries(MONTHS[0], 1, 10, PROJECTED))
+    thread = abandoned._thread
+    del abandoned
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert spool_files(engine) == []
+    assert not engine.name_in_use("cad_segunda")
+
     # O loader sem lote cria a tabela vazia.
     with engine.loader(other) as loader:
         pass
@@ -618,6 +638,84 @@ def test_loader_opened_after_a_stream_does_not_wait_for_its_query(setup: Setup) 
     assert count_of(engine, PROJECTED.name) == 3_000_000
 
 
+def pipeline_table(name: str) -> sa.Table:
+    """A saída do pipeline de três estágios: as colunas da fonte e o ``dobro`` do valor."""
+    return sa.Table(
+        name, sa.MetaData(),
+        sa.Column("id", sa.BigInteger),
+        sa.Column("valor", sa.Numeric(18, 2)),
+        sa.Column("s", sa.String(20)),
+        sa.Column("dobro", sa.Double),
+    )
+
+
+def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None:
+    """Leitura por ``stream``, trabalho do cliente por lote e escrita por ``loader`` numa sessão
+    única, sobre um banco em arquivo, produzem as mesmas linhas que a versão por lote sem threads e
+    que a versão por ``pa.Table``; os tempos são leituras do relatório."""
+    engine = setup.engine
+    engine.query(
+        "CREATE TABLE fonte AS SELECT range AS id, "
+        "CAST(((range * 7) % 1000) / 100.0 AS DECIMAL(18, 2)) AS valor, "
+        "'x' || range AS s FROM range(3_000_000)")
+    target = pa.schema([("id", pa.int64()), ("valor", pa.decimal128(18, 2)), ("s", pa.string()),
+                        ("dobro", pa.float64())])
+    engine.query(schema.ddl(pipeline_table("sequencial"), "duckdb"))
+    sql = "SELECT id, valor, s FROM fonte"
+
+    def work(data: pa.RecordBatch | pa.Table) -> pa.RecordBatch | pa.Table:
+        """O trabalho do cliente: o ``dobro`` do valor, calculado no pandas."""
+        frame = data.to_pandas(types_mapper=pd.ArrowDtype)
+        frame["dobro"] = (frame["valor"] * 2).astype("double[pyarrow]")
+        if isinstance(data, pa.Table):
+            return pa.Table.from_pandas(frame, preserve_index=False).cast(target)
+        return pa.RecordBatch.from_pandas(frame, preserve_index=False).cast(target)
+
+    def insert(name: str, data: pa.RecordBatch) -> None:
+        """Um ``INSERT ... BY NAME`` do lote na tabela ``name``, sob o lock da sessão."""
+        with engine.session() as connection:
+            connection.register("lote", data)
+            connection.execute(f"INSERT INTO {name} BY NAME SELECT * FROM lote")
+            connection.unregister("lote")
+
+    timings: dict[str, float] = {}
+
+    # A tabela inteira: to_arrow_table, o trabalho de uma vez, a carga de uma vez.
+    started = time.perf_counter()
+    engine.load(pipeline_table("por_tabela"), work(engine.query(sql)))
+    timings["por_tabela"] = time.perf_counter() - started
+
+    # Por lote, sem threads: dentro de session, o stream roda a consulta inteira na thread do
+    # cliente, e o trabalho e um INSERT por lote entram no mesmo bloco.
+    started = time.perf_counter()
+    with engine.session(), engine.stream(sql, batch_size=200_000) as stream:
+        for batch in stream:
+            insert("sequencial", work(batch))
+    timings["sequencial"] = time.perf_counter() - started
+
+    # Encadeado, na ordem do exemplo mensal: a consulta na thread do stream, o trabalho na thread
+    # do cliente, a escrita do arquivo na thread do loader, e o CREATE e o INSERT únicos no close.
+    started = time.perf_counter()
+    with (engine.stream(sql, batch_size=200_000) as stream,
+          engine.loader(pipeline_table("encadeado")) as loader):
+        for batch in stream:
+            loader.write(work(batch))
+    timings["encadeado"] = time.perf_counter() - started
+
+    # As três versões dão as mesmas linhas e somas; os tempos vão para o relatório.
+    totals = {}
+    for name in ("por_tabela", "sequencial", "encadeado"):
+        query = (f"SELECT count(*) AS n, sum(valor) AS v, sum(dobro::DECIMAL(18, 2)) AS d "
+                 f"FROM {name}")
+        totals[name] = engine.query(query).to_pylist()[0]
+    assert totals["por_tabela"] == totals["sequencial"] == totals["encadeado"]
+    assert totals["encadeado"]["n"] == 3_000_000
+    readings = []
+    for name, seconds in timings.items():
+        readings.append(f"{name} {seconds:.3f} s")
+    record("engine.timing.three_stage_pipeline_3M_rows", ", ".join(readings))
+
+
 def test_loader_refuses_a_name_in_use(setup: Setup) -> None:
     """O ``loader`` sobre a view do ``ingest``, sobre a tabela materializada e sobre a tabela de um
     ``loader`` anterior levanta ``SandboxError`` antes do primeiro lote, e o objeto não muda."""
@@ -632,6 +730,43 @@ def test_loader_refuses_a_name_in_use(setup: Setup) -> None:
             engine.loader(table)
     names = ("cad_lancamentos", "cad_materializada", PROJECTED.name)
     assert [count_of(engine, name) for name in names] == [10, 10, 5]
+
+
+def test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows(setup: Setup) -> None:
+    """Um ``load`` disparado numa thread sem ``result()`` não deixa a leitura ver dado velho: a
+    tabela só nasce no ``close`` do ``loader``, e o nome ocupado é recusado, então a leitura antes
+    da carga falha com ``CatalogException`` na sessão principal e numa sessão a mais."""
+    engine = setup.engine
+    missing = f"{PROJECTED.name} does not exist"
+    opened = threading.Event()
+    release = threading.Event()
+
+    def load() -> None:
+        with engine.loader(PROJECTED) as loader:
+            loader.write(entries(MONTHS[0], 1, 1000, PROJECTED))
+            opened.set()
+            assert release.wait(timeout=10)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(load)  # o cliente esquece o result()
+        assert opened.wait(timeout=10)
+
+        # A carga em voo: a leitura falha nas duas sessões, em vez de ver uma tabela vazia ou
+        # anterior.
+        with pytest.raises(duckdb.CatalogException, match=missing):
+            count_of(engine, PROJECTED.name)
+        with engine.new_session() as other:
+            with pytest.raises(duckdb.CatalogException, match=missing):
+                count_of(other, PROJECTED.name)
+        release.set()
+        future.result()
+
+    assert count_of(engine, PROJECTED.name) == 1000
+
+    # Uma segunda carga no mesmo nome é recusada: nenhuma tabela do sandbox tem estado anterior a
+    # ler.
+    with pytest.raises(SandboxError, match=PROJECTED.name):
+        engine.loader(PROJECTED)
 
 
 def test_query_and_load_match_stream_and_loader(setup: Setup) -> None:

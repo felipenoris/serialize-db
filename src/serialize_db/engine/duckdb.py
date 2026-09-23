@@ -163,9 +163,10 @@ def _compiled_statement(statement: sa.sql.ClauseElement,
 class _Spool:
     """O que a thread da consulta entrega ao cliente, protegido pela ``condition``.
 
-    ``in_memory`` guarda os lotes que cabem no orçamento; ``spilled`` conta os lotes gravados no
-    arquivo. Depois do primeiro lote no arquivo, todo lote seguinte vai para ele, para a ordem da
-    consulta se manter: o cliente esvazia a memória antes de ler o arquivo.
+    ``schema`` é o do leitor da consulta, que existe antes do primeiro lote; ``in_memory`` guarda os
+    lotes que cabem no orçamento, e ``memory_bytes`` o tamanho deles; ``spilled`` conta os lotes
+    gravados no arquivo. Depois do primeiro lote no arquivo, todo lote seguinte vai para ele, para a
+    ordem da consulta se manter: o cliente esvazia a memória antes de ler o arquivo.
     """
 
     condition: threading.Condition = dataclasses.field(default_factory=threading.Condition)
@@ -237,7 +238,7 @@ def _produce(engine: DuckDBEngine, text: str, arguments: Sequence[object] | Mapp
     Nunca espera pelo cliente: o lock sai quando o resultado acaba, quando ``stop`` chega ou quando
     o ``interrupt`` do ``close`` cancela a consulta. O fim é marcado ainda com o lock tomado, e o
     ``close`` nunca cancela o comando seguinte da sessão. Recebe só o que usa, nunca o stream, para
-    um stream abandonado ser coletado.
+    um stream abandonado ser coletado e o ``__del__`` ligar o ``stop``.
     """
     with engine.session() as connection:
         try:
@@ -310,7 +311,8 @@ class DuckDBStream:
 
     def _wait_for_batch(self) -> str | None:
         """Espera um lote não lido, em memória ou no arquivo; devolve de onde ele vem, ou ``None``
-        no fim. A espera tem prazo e confere o ``stop``."""
+        no fim. A espera tem prazo e confere o ``stop``: quem puxa o stream pode ser a thread de
+        leitura antecipada de um leitor nativo, e ela não fica presa aqui depois de um ``close``."""
         spool = self._spool
         with spool.condition:
             while not spool.in_memory and spool.spilled <= self._read_from_file and not spool.done:
@@ -394,8 +396,9 @@ class DuckDBStream:
 
 
 def _take(source: queue.Queue, stop: threading.Event) -> object | None:
-    """O próximo item da fila, esperando em fatias de 50 ms; ``None`` quando ``stop`` chega com a
-    fila vazia. Nenhum item da fila é ``None``."""
+    """O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o ``stop`` em
+    vez de ficar preso num ``get`` sem fim; ``None`` quando ``stop`` chega com a fila vazia. Nenhum
+    item da fila é ``None``."""
     while True:
         try:
             return source.get(timeout=0.05)
@@ -422,13 +425,19 @@ def _write_until_end(spill: _SpillFile, source: queue.Queue, closed: threading.E
 
 def _write_spool(spill: _SpillFile, source: queue.Queue, closed: threading.Event,
                  outcome: dict[str, object]) -> None:
-    """A thread do loader: grava no arquivo os lotes da fila, sem a sessão."""
+    """A thread do loader: grava no arquivo os lotes da fila, sem a sessão.
+
+    Um ``closed`` sem o fim da fila é um loader abandonado. Terminada com erro, o abandono, a
+    exceção do cliente ou um lote recusado, a thread apaga o arquivo, que nenhum ``INSERT`` vai ler.
+    """
     try:
         _write_until_end(spill, source, closed, outcome)
     except BaseException as error:  # noqa: BLE001 - relançado em close, ou no write seguinte
         outcome["error"] = error
     finally:
         spill.close()
+    if outcome["error"] is not None:
+        Path(spill.path).unlink(missing_ok=True)
 
 
 def _checked_batches(data: pa.RecordBatch | pa.Table) -> list[pa.RecordBatch]:
@@ -445,11 +454,12 @@ class DuckDBLoader:
 
     A abertura confere o nome num cursor à parte, sem o lock da sessão, e recusa com
     ``SandboxError`` o nome que o ``ingest`` ou outro ``loader`` ocupou. ``write`` faz o ``cast`` do
-    lote na thread do cliente e o põe numa fila limitada, e uma thread auxiliar grava os lotes num
-    arquivo Arrow IPC com LZ4, sem a sessão. ``close`` roda, sob o lock e numa transação, o
-    ``CREATE TABLE`` do modelo e um único ``INSERT ... BY NAME`` sobre o leitor do arquivo: nada
-    existe antes dele, e um erro desfaz os dois. Uma exceção dentro do ``with``, um lote recusado
-    pelo ``cast`` ou um loader abandonado apagam o arquivo sem criar a tabela.
+    lote na thread do cliente, para o erro aparecer com o lote em mãos, e o põe numa fila limitada,
+    que bloqueia quando está cheia; uma thread auxiliar grava os lotes num arquivo Arrow IPC com
+    LZ4, sem a sessão, enquanto o cliente prepara o lote seguinte. ``close`` roda, sob o lock e numa
+    transação, o ``CREATE TABLE`` do modelo e um único ``INSERT ... BY NAME`` sobre o leitor do
+    arquivo: nada existe antes dele, e um erro desfaz os dois. Uma exceção dentro do ``with``, um
+    lote recusado pelo ``cast`` ou um loader abandonado apagam o arquivo sem criar a tabela.
     """
 
     def __init__(self, engine: DuckDBEngine, table: sa.Table, queue_depth: int = 2) -> None:
