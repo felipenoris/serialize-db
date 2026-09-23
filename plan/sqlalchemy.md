@@ -47,7 +47,7 @@ dialeto na compilação: `Numeric(18, 2)` vira `NUMERIC(18, 2)` nos dois (`DECIM
 do DuckDB), `String(200)` vira `VARCHAR(200)` nos dois, e o catálogo do DuckDB descarta o
 comprimento. Os tipos específicos ficam em `sqlalchemy.dialects.<dialeto>` e nos dialetos externos
 (`sqlalchemy_redshift.dialect.SUPER`, `TIMESTAMPTZ`). `type_.with_variant(other_type, "<dialeto>")` troca o
-tipo num dialeto só. A [tabela de tipos do contrato](schema.md) fixa a correspondência com Arrow,
+tipo num dialeto só. A [tabela de tipos do contrato](../docs/index.md) fixa a correspondência com Arrow,
 Delta, DuckDB e Redshift.
 
 Restrições e índices são objetos: `PrimaryKeyConstraint`, `ForeignKey` na coluna ou

@@ -458,7 +458,8 @@ e cem `cursor()` mais `close()` levaram 0,4 ms. Sem `ORDER BY` o primeiro lote c
 consulta (3 ms em 20.000.000 de linhas); com `ORDER BY`, o `execute` só volta depois da ordenação
 inteira (2,4 s) e os lotes vêm em seguida. Um erro que a consulta encontra no meio da leitura chega
 ao Python como `OSError` com a mensagem do DuckDB, não como `duckdb.Error` (2026-09-20,
-`test_duckdb.py`, `test_parallel.py`).
+`test_duckdb.py`, `test_parallel.py`). A sessão única da biblioteca consome o leitor inteiro num
+arquivo antes do comando seguinte (2026-09-22, [`POC.md`](POC.md)).
 
 Parâmetros: `?` posicional, `$1` numerado e reutilizável, `$nome` nomeado com um dicionário. A API
 relacional (`con.sql(...)`, `con.table('operacoes').filter(...)`) monta consultas preguiçosas e
@@ -489,9 +490,11 @@ confere os lotes contra o esquema declarado, e o `arrow_scan` lê os buffers por
 lote com as colunas em outra ordem entra sem erro com os bytes trocados, `(1, 1.0)` lido como
 `(4607182418800017408, 5e-324)`; uma coluna a mais ou a menos falha com `ArrowArray struct has 3
 children, expected 2`. A nulidade do esquema Arrow não é conferida; a coluna `NOT NULL` da tabela é.
-A biblioteca faz o `cast` de cada lote antes de registrá-lo e insere lote a lote, um `RecordBatch` em
-memória por comando dentro de uma transação, cerca de 3,5 ms por comando, sem entregar gerador ao
-DuckDB (2026-09-20, `test_duckdb.py`, `test_parallel.py`).
+Um `INSERT` por lote, um `RecordBatch` em memória por comando dentro de uma transação, custa cerca
+de 3,5 ms por comando (2026-09-20). A biblioteca faz o `cast` de cada lote, grava os lotes num
+arquivo Arrow IPC com LZ4 fora da sessão e os insere num único comando sobre o leitor do arquivo,
+que é nativo e não traz a leitura antecipada de um gerador Python (2026-09-22, `test_duckdb.py`,
+`test_parallel.py`, [`POC.md`](POC.md)).
 
 Conflitos em chave primária ou `UNIQUE`:
 

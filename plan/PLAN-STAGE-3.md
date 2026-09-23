@@ -3,17 +3,20 @@
 A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PLAN.md`](PLAN.md), que
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
 
-`serialize_db.storage` esconde a diferença entre a pasta local e o S3; é a divisão de
-`tests/conftest.py` (`LocalLocation`, `S3Location`) levada à biblioteca. Toda primitiva de
-`serialize_db.delta` que toca o armazenamento recebe o `Storage`, que resolve `storage_options()` a
-cada chamada.
+`serialize_db.storage` esconde a diferença entre a pasta local e o S3 pelo sistema de arquivos do
+PyArrow (`pyarrow.fs`), que lista, lê, copia e apaga nos dois armazenamentos e é o que
+`scripts/migrate_parquet_to_delta.py` (`Location`) e `probes/parquet_source.py` usaram no ambiente
+alvo (decisão do usuário de 2026-09-22). `Storage` é um `dataclass` com a URI, o sistema de
+arquivos e o caminho nele, sem uma classe por armazenamento; só a escrita condicional do arquivo de
+controle tem um ramo por armazenamento. Toda primitiva de `serialize_db.delta` que toca o
+armazenamento recebe o `Storage`, que resolve `storage_options()` a cada chamada.
 
 | Primitiva | O que faz |
 | --- | --- |
-| `Storage.for_uri(uri)` | `LocalStorage` para um caminho ou `file://`, `S3Storage` para `s3://bucket/prefixo`. |
-| `join(*parts)`, `exists(path)`, `list_files(prefix, suffix)`, `delete(paths)` | Caminhos relativos à raiz; a listagem exclui `_delta_log/`. |
-| `read_text(path)`, `write_text(path, text, if_match=None, if_none_match=False)` | Escrita condicional: `IfMatch` e `IfNoneMatch` no S3 (412 vira `ConflictError`); `O_EXCL` e `os.replace` na pasta local. É a escrita de `_serialize_db/snapshots.json`. |
-| `copy(source, destination)` | `CopyObject` no S3, `shutil.copy2` na pasta local; a exportação sem ler dados. |
+| `Storage.for_uri(uri)` | `pafs.FileSystem.from_uri` para `s3://bucket/prefixo`, `pafs.LocalFileSystem` com o caminho resolvido para um caminho ou `file://`, como `open_location` do script. |
+| `join(*parts)`, `exists(path)`, `list_files(prefix, suffix)`, `delete(paths)` | Caminhos relativos à raiz, pelo `get_file_info` e pelo `delete_file` do sistema de arquivos; a listagem exclui `_delta_log/`. |
+| `read_text(path)`, `write_text(path, text, if_match=None, if_none_match=False)` | Escrita condicional, o único ramo por armazenamento: `put_object` do `boto3` com `IfMatch` ou `IfNoneMatch` no S3 (412 vira `ConflictError`), porque o `pyarrow.fs` não tem a condição nem devolve a etag; `O_EXCL` e `os.replace` na pasta local. É a escrita de `_serialize_db/snapshots.json`. |
+| `copy(source, destination)` | `copy_file` do sistema de arquivos, que no S3 é o `CopyObject`; a exportação sem ler dados. |
 | `storage_options()` | As opções do delta-rs: região, `AWS_ENDPOINT_URL`, `max_retries`, `retry_timeout`, `timeout` e as chaves de SSE quando configuradas; nunca credenciais (decisão do usuário de 2026-09-22). A cadeia padrão do delta-rs as resolve e as renova sozinha no `DeltaTable` que a execução guarda, enquanto um trio congelado expiraria em cerca de uma hora e circularia num dicionário que um log ou uma exceção imprime. Resolvidas a cada chamada, nunca guardadas. |
 | `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REGION` e `ENDPOINT`; só `LOAD delta` na pasta local. Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password` a partir de `HTTP_PROXY`, `username` e `password`, como `probelib.duckdb_proxy` faz nos probes: o DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3, não só o download de extensão ([`POC.md`](POC.md)). |
 | `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou vazia, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
@@ -34,7 +37,7 @@ solto, e `value` é o valor de uma partição, `None` numa tabela sem partição
 | `read_back(uri, table, value, expected_rows, storage)` | A releitura da versão recém-commitada pelos dois leitores, em conexão DuckDB própria; uma diferença volta a versão e levanta `RegistrationRefused`. |
 | `schema_diff(table, dt)` | O `SchemaDiff` entre `arrow_schema(table)` e `dt.schema()`: coluna nova anulável, `NOT NULL` relaxado, `CHECK` e comentário divergente são aditivos; coluna `NOT NULL` nova em tabela com dados, renomeação, remoção e mudança de tipo são destrutivos. |
 | `reconcile(uri, table, storage)` | Aplica o diff aditivo (`add_columns`, `drop_column_not_null`, `add_constraint`, `set_table_description` e `set_column_metadata`) e recusa o destrutivo com a mensagem que aponta `rewrite`. |
-| `rewrite(uri, table, storage, expressions=None)` | A tabela inteira com o esquema do contrato num único commit e sem predicado: `COPY ... PARTITION_BY (<coluna de partição>) ... RETURN_STATS` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. `expressions` dá, por coluna do contrato, a expressão sobre a versão atual que a preenche: o nome antigo numa renomeação, o valor de uma coluna `NOT NULL` nova. A conexão DuckDB é aberta aqui e configurada por `storage.duckdb_setup`, sem o motor da [etapa 4](PLAN-STAGE-4.md): `delta` não depende de `engine`. |
+| `rewrite(uri, table, storage, expressions=None)` | A tabela inteira com o esquema do contrato num único commit e sem predicado: `COPY ... PARTITION_BY (<coluna de partição>) ... RETURN_STATS` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. `expressions` dá, por coluna do contrato, a expressão sobre a versão atual que a preenche: o nome antigo numa renomeação, o valor de uma coluna `NOT NULL` nova (decisão do usuário de 2026-09-22). A conexão DuckDB é aberta aqui e configurada por `storage.duckdb_setup`, sem o motor da [etapa 4](PLAN-STAGE-4.md): `delta` não depende de `engine`. |
 | `copy_manifest(uri, version, partitions, destination, storage)` | O manifesto do `COPY` do Redshift (`url` e `meta.content_length` de `get_add_actions()`), gravado sob `publicacao/`. |
 | `version_diff(uri, published, current, table, storage)` | As partições com ações `add` ou `remove` de dados entre as duas versões, lidas do log; a compactação (`dataChange` falso) não conta. Um arquivo do log ausente é `LogUnavailable`, com a instrução de publicar a tabela inteira (decisão do usuário de 2026-09-22). |
 | `read_snapshots(storage, environment)`, `snapshot(storage, environment, name, versions)` | O arquivo de controle `_serialize_db/snapshots.json` do ambiente com a impressão digital, e a entrada `{name: versions}` gravada nele com `write_text(if_match=...)`. |
@@ -118,6 +121,7 @@ from typing import Literal
 
 import duckdb
 import pyarrow as pa
+import pyarrow.fs as pafs
 import sqlalchemy as sa
 from deltalake import DeltaTable
 
@@ -144,8 +148,11 @@ class LogUnavailable(Exception):
     """Um arquivo do log entre as duas versões não existe; a mensagem manda publicar a tabela inteira."""
 
 
+@dataclasses.dataclass(frozen=True)
 class Storage:
-    root: str
+    uri: str                         # a raiz como o DuckDB e o delta-rs a recebem
+    filesystem: pafs.FileSystem      # S3FileSystem ou LocalFileSystem
+    path: str                        # a raiz na forma do sistema de arquivos
 
     @staticmethod
     def for_uri(uri: str) -> "Storage": ...
@@ -158,10 +165,6 @@ class Storage:
     def delete(self, paths: list[str]) -> None: ...
     def storage_options(self) -> dict[str, str]: ...                            # região, endpoint, retry e SSE; nunca credenciais
     def duckdb_setup(self, connection: duckdb.DuckDBPyConnection) -> None: ...
-
-
-class LocalStorage(Storage): ...
-class S3Storage(Storage): ...
 
 
 def prepare_environment(environ: MutableMapping[str, str] = os.environ) -> dict[str, str]: ...
@@ -220,14 +223,19 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
   montados em variáveis nomeadas, e a versão lida do objeto `DeltaTable` que escreveu, nunca de
   `DeltaTable(uri).version()`, que devolve o último commit do log, talvez de outro escritor
   (leitura de 2026-09-22, [`POC.md`](POC.md)).
-- **`Storage.for_uri`** escolhe pela URI: `s3://` dá `S3Storage`, caminho ou `file://` dá
-  `LocalStorage`. Os caminhos das primitivas são relativos à raiz e `join` os monta com `/`.
+- **`Storage.for_uri`** repete `open_location` de `scripts/migrate_parquet_to_delta.py`:
+  `pafs.FileSystem.from_uri(uri)` para `s3://`, e para um caminho ou `file://` o
+  `pafs.LocalFileSystem()` com o caminho resolvido. Os caminhos das primitivas são relativos à raiz
+  e `join` os monta com `/`; `list_files` é `get_file_info(FileSelector(prefixo, recursive=True))`,
+  `delete` é `delete_file`, `copy` é `copy_file`, e os rodapés de `register_files` saem de
+  `pq.ParquetFile` sobre `open_input_file` do mesmo sistema de arquivos.
 - **`write_text`** é a escrita de `_serialize_db/snapshots.json`. Na pasta local, `if_none_match`
   é `os.open(O_CREAT | O_EXCL)` e `if_match` compara a impressão digital (`sha256` do conteúdo)
   antes de gravar num arquivo temporário e trocar por `os.replace`; a comparação e a troca não são
   atômicas entre processos, o que basta à pasta local, o ambiente dos testes e do desenvolvimento.
-  No S3, `PutObject` com `IfNoneMatch="*"` ou `IfMatch=<etag>`, atômico no servidor, e o 412 vira
-  `ConflictError`. `read_text` devolve o texto e a impressão para a escrita seguinte.
+  No S3, `put_object` do `boto3` com `IfNoneMatch="*"` ou `IfMatch=<etag>`, atômico no servidor, e
+  o 412 vira `ConflictError`; `read_text` lê pelo `get_object`, que devolve a etag. `read_text`
+  devolve o texto e a impressão para a escrita seguinte. É o único uso do `boto3` na etapa.
 - **`storage_options`** monta as opções do delta-rs a cada chamada: `AWS_REGION` de
   `AWS_REGION` ou `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL` quando presente, `max_retries` e
   `retry_timeout` para uma rede morta falhar em segundos, e as chaves de SSE quando configuradas.
@@ -345,7 +353,7 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
-| Armazenamento por URI | `test_storage_for_uri` (sem gravar) | `s3://`, `file://` e caminho dão a classe certa; outra URI é erro. |
+| Armazenamento por URI | `test_storage_for_uri` (sem gravar) | `s3://`, `file://` e caminho dão o sistema de arquivos certo (`S3FileSystem`, `LocalFileSystem`) e o caminho nele; outra URI é erro. |
 | Escrita condicional | `test_write_text_exclusive_create_and_if_match` | A segunda criação exclusiva e o `if_match` velho são `ConflictError`; o conteúdo final é o da escrita que venceu. |
 | Listagem, cópia e exclusão | `test_list_copy_delete` | `list_files` exclui `_delta_log/`; `copy` preserva bytes; `delete` de caminho ausente não falha. |
 | Opções do delta-rs | `test_storage_options_resolved_per_call` | Duas chamadas devolvem dicionários novos; a região vem da variável; `max_retries` presente; nenhuma chave de credencial no dicionário. |
@@ -373,128 +381,14 @@ O modo de `export_snapshot` fica como `Literal` na assinatura, sem apelido: `Exp
 
 ## Rascunhos executados
 
-Os dois rascunhos rodaram em 2026-09-21 com as versões fixadas, numa pasta temporária. O primeiro
-é o armazenamento local; o segundo, a camada Delta com o registro de um arquivo gravado como o
-`UNLOAD` grava (`INT96`, `FIXED_LEN_BYTE_ARRAY`), as recusas, `version_diff` pelo log e a
-reconciliação. O `delta_scan` precisa da extensão `delta` na pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`,
+O rascunho rodou em 2026-09-21 com as versões fixadas, numa pasta temporária: a camada Delta com o
+registro de um arquivo gravado como o `UNLOAD` grava (`INT96`, `FIXED_LEN_BYTE_ARRAY`), as recusas,
+`version_diff` pelo log e a reconciliação. O armazenamento sobre `pyarrow.fs` é o `Location` de
+`scripts/migrate_parquet_to_delta.py`, e a escrita condicional na pasta local está em
+`test_stdlib.py::test_exclusive_create_atomic_replace_and_fingerprint`. O `delta_scan` precisa da extensão `delta` na pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`,
 ou em `.duckdb/` da raiz do repositório. Eles são o registro do que rodou e provam o comportamento
 das APIs; a forma do módulo é a da primeira entrada da seção "Estratégia de implementação", e a
 versão depois de cada escrita vem do objeto que escreveu, não de `DeltaTable(uri).version()`.
-
-```python
-"""Etapa 3: o armazenamento local com a escrita condicional que o arquivo de controle exige, e a escolha por URI."""
-import dataclasses
-import hashlib
-import os
-import shutil
-import tempfile
-from pathlib import Path
-from urllib.parse import urlparse
-
-
-class ConflictError(Exception):
-    """A escrita condicional perdeu: outro escritor mudou o objeto (412 no S3, impressão digital diferente na pasta local)."""
-
-
-@dataclasses.dataclass(frozen=True)
-class Storage:
-    root: str
-
-    @staticmethod
-    def for_uri(uri: str) -> "Storage":
-        parsed = urlparse(uri)
-        if parsed.scheme == "s3":
-            return S3Storage(uri.rstrip("/"))
-        if parsed.scheme in ("", "file"):
-            return LocalStorage(str(Path(parsed.path if parsed.scheme else uri).expanduser().resolve()))
-        raise ValueError(f"URI sem armazenamento conhecido: {uri}")
-
-    def join(self, *parts: str) -> str:
-        return "/".join([self.root, *[part.strip("/") for part in parts if part]])
-
-
-class S3Storage(Storage):
-    """PutObject com IfNoneMatch='*' ou IfMatch=<etag>; 412 vira ConflictError; a etag é a impressão digital."""
-
-
-class LocalStorage(Storage):
-    @staticmethod
-    def fingerprint(path: str) -> str:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-    def read_text(self, path: str) -> tuple[str, str]:
-        """O texto e a impressão digital que write_text(if_match=...) exige de volta."""
-        target = self.join(path)
-        return Path(target).read_text(encoding="utf-8"), self.fingerprint(target)
-
-    def exists(self, path: str) -> bool:
-        return Path(self.join(path)).exists()
-
-    def write_text(self, path: str, text: str, if_match: str | None = None, if_none_match: bool = False) -> str:
-        target = Path(self.join(path))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if if_none_match:
-            try:
-                descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL)   # criação exclusiva: falha se existe
-            except FileExistsError:
-                raise ConflictError(f"{path} já existe") from None
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return self.fingerprint(target)
-        if if_match is not None and (not target.exists() or self.fingerprint(target) != if_match):
-            raise ConflictError(f"{path} mudou desde a leitura")
-        with tempfile.NamedTemporaryFile("w", dir=target.parent, delete=False, encoding="utf-8") as handle:
-            handle.write(text)
-        os.replace(handle.name, target)        # substituição atômica no mesmo sistema de arquivos
-        return self.fingerprint(target)
-
-    def list_files(self, prefix: str, suffix: str = "") -> list[str]:
-        base = Path(self.join(prefix))
-        return sorted(str(p.relative_to(self.root)) for p in base.rglob(f"*{suffix}") if p.is_file() and "_delta_log" not in p.relative_to(base).parts)
-
-    def copy(self, source: str, destination: str) -> None:
-        target = Path(self.join(destination))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(self.join(source), target)
-
-    def delete(self, paths: list[str]) -> None:
-        for path in paths:
-            Path(self.join(path)).unlink(missing_ok=True)
-
-
-print(type(Storage.for_uri("s3://bucket/projeto/delta")).__name__, type(Storage.for_uri("file:///dados/prod")).__name__, type(Storage.for_uri("/dados/prod")).__name__)
-with tempfile.TemporaryDirectory() as folder:
-    storage = Storage.for_uri(folder)
-    control = "prod/_serialize_db/snapshots.json"
-    first = storage.write_text(control, '{"snapshots": {}}', if_none_match=True)
-    try:
-        storage.write_text(control, "{}", if_none_match=True)
-    except ConflictError as error:
-        print("segunda criação exclusiva:", error)
-    text, fingerprint = storage.read_text(control)
-    assert fingerprint == first
-    second = storage.write_text(control, '{"snapshots": {"2026T3": {"cad_contas": 1}}}', if_match=fingerprint)
-    try:
-        storage.write_text(control, "{}", if_match=fingerprint)   # a impressão digital ficou velha
-    except ConflictError as error:
-        print("escrita com if_match velho:", error)
-    print("conteúdo final:", storage.read_text(control)[0], "| impressão nova difere:", second != first)
-    storage.copy(control, "arquivo/snapshots.json")
-    print("listagem:", storage.list_files("", ".json"))
-    storage.delete(["arquivo/snapshots.json"])
-    print("depois do delete:", storage.list_files("", ".json"))
-```
-
-Saída:
-
-```
-S3Storage LocalStorage LocalStorage
-segunda criação exclusiva: prod/_serialize_db/snapshots.json já existe
-escrita com if_match velho: prod/_serialize_db/snapshots.json mudou desde a leitura
-conteúdo final: {"snapshots": {"2026T3": {"cad_contas": 1}}} | impressão nova difere: True
-listagem: ['arquivo/snapshots.json', 'prod/_serialize_db/snapshots.json']
-depois do delete: ['prod/_serialize_db/snapshots.json']
-```
 
 ```python
 """Etapa 3: create_table, publish_partition, register_files com as conferências, version_diff pelo log e a reconciliação."""
@@ -733,28 +627,11 @@ não o seu texto.
 
 ## Decisões pendentes
 
-As quatro decisões da etapa tomadas pelo usuário em 2026-09-22 — o comentário da tabela em
-`description`, com `reconcile` sincronizando a descrição e os comentários de coluna;
-`storage_options` sem credencial alguma, pela cadeia padrão do delta-rs; o mínimo e o máximo das
-colunas inteiras, de data, `Double` e `String` em `register_files`; e `version_diff` recusando com
-`LogUnavailable` o log limpo — estão escritas na seção que descreve cada uma, e as sondagens que as
-mediram, em [`POC.md`](POC.md) e em `tests/proof_of_concept/test_deltalake.py`. A revisão de
-2026-09-22 deixou duas propostas à espera do usuário:
-
-- **`expressions` em `rewrite`.** Sem ela, `rewrite(uri, table)` só remove colunas e muda tipos:
-  a renomeação pede o nome antigo e a coluna `NOT NULL` nova pede um valor, e nenhum dos dois está
-  no modelo. A proposta, escrita na interface e na estratégia, é um dicionário opcional
-  `{coluna do contrato: expressão do DuckDB sobre a versão atual}`, a forma que a medição de
-  [`delta.md`](delta.md) usou (`valor AS valor_bruto`); a alternativa é deixar a renomeação e a
-  coluna nova com valor para uma reescrita que o cliente escreve com `register_files`.
-- **`Storage` sobre `pyarrow.fs`.** `pafs.FileSystem.from_uri` lista, lê, copia (`CopyObject` no
-  S3) e apaga nos dois armazenamentos, e já é o que `scripts/migrate_parquet_to_delta.py` usa
-  (`Location`), o que `register_files` usa para os rodapés e o que `probes/parquet_source.py` usou
-  no ambiente alvo em 2026-09-21 (a listagem em 0,1 s e os 205 rodapés). A proposta tira as
-  subclasses `LocalStorage` e `S3Storage`: `Storage` vira um `dataclass` com a URI, o sistema de
-  arquivos do PyArrow e o caminho nele, como o `Location` do script; só a escrita condicional de
-  `_serialize_db/snapshots.json` tem um ramo por armazenamento (`put_object` do `boto3` com
-  `IfMatch` ou `IfNoneMatch` no S3, `O_EXCL` e `os.replace` na pasta local), e `storage_options` e
-  `duckdb_setup` viram funções da URI. O que pesa contra: o `pyarrow.fs` tem a sua cadeia de
-  credenciais e de região, que a biblioteca passaria a configurar ao lado da do `boto3`, da do
-  delta-rs e da do `httpfs`.
+Nenhuma. As seis decisões da etapa, todas do usuário em 2026-09-22, estão escritas na seção que
+descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a
+descrição e os comentários de coluna; `storage_options` sem credencial alguma, pela cadeia padrão do
+delta-rs; o mínimo e o máximo das colunas inteiras, de data, `Double` e `String` em
+`register_files`; `version_diff` recusando com `LogUnavailable` o log limpo; `expressions` em
+`rewrite`, para a renomeação e a coluna `NOT NULL` nova; e `Storage` sobre `pyarrow.fs`, sem uma
+classe por armazenamento. As sondagens que mediram as quatro primeiras estão em [`POC.md`](POC.md) e
+em `tests/proof_of_concept/test_deltalake.py`.

@@ -74,6 +74,7 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   see it either, and the same connection object used from another thread can; `duckdb_tables()`
   lists it under catalog `temp`, schema `main`, `temporary` true, only in that connection
   (2026-09-22, DuckDB 1.5.5; the docs: session scoped, only the creating connection, in memory
-  with spill to `temp_directory`). The engine gives a cursor per thread, stream and loader, so the
-  sandboxes stay with regular tables; `schema.ddl(..., temporary=True)` exists at the user's
-  request and the plan does not use it. `plan/POC.md`, `plan/PLAN-STAGE-1.md`
+  with spill to `temp_directory`). The engine keeps one connection per execution under a lock
+  (user decision of 2026-09-22), so a temporary table the pipeline creates serves every later
+  command; the library's own sandbox tables stay regular, and `schema.ddl(..., temporary=True)`
+  exists at the user's request. `plan/POC.md`, `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`

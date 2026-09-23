@@ -9,8 +9,8 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 um `BatchStream` de `pa.RecordBatch` e `loader` recebe lotes por `write`; `query` e `execute` devolvem
 a `pa.Table` que `stream` montou, e `load` entrega ao `loader` os lotes de uma `pa.Table`, de um
 `RecordBatch`, de um `RecordBatchReader` ou de um iterável ([`PLAN.md`](PLAN.md), seção "A troca de
-dados com o código cliente"). Os esboços `BatchStream` e `Loader` de `test_parallel.py` são a
-referência da implementação.
+dados com o código cliente"). Os esboços `SandboxEngine`, `BatchStream` e `Loader` de
+`test_parallel.py`, na sessão única, são a referência da implementação.
 
 Chave primária, unicidade e chave estrangeira ficam fora do DDL dos dois sandboxes (`schema.md`), e
 a auditoria é onde elas são aplicadas. Cada verificação sai do `Table`, sem declaração adicional no
@@ -22,7 +22,7 @@ modelo:
 | Chave repetida | `table.primary_key` e os `UniqueConstraint`, mais o que `keys` acrescenta | As partições da execução quando as colunas da chave incluem a coluna de partição; a tabela inteira quando não incluem. |
 | Órfão de chave estrangeira | `table.foreign_keys` | Só com `foreign_keys=True`; a tabela referenciada entra na versão fixada pela execução. |
 | Partição fora da origem, e valor que não serve de nome de pasta | `partition_by` e `partition_source` de `table_options`: com `partition_source` declarado, a coluna de partição diferente de `strftime(<coluna de data>, '%Y-%m-%d')`; em toda tabela particionada, o valor vazio ou com `/`, `=` ou espaço (a partição é texto desde a decisão de 2026-09-22, e a data é o caso da base atual) | As partições da execução. |
-| Texto acima de `String(n)` e valor fora do `Numeric(18, 2)` | os tipos de `schema.md`; no Redshift, o `COPY` de uma string maior que o `VARCHAR` aborta (`Spectrum Scan Error` 15007, 2026-09-21), e esta verificação é a barreira | As partições da execução. |
+| Texto acima de `String(n)` e valor fora do `Numeric(18, 2)` | os tipos do contrato (`docs/index.md`); no Redshift, o `COPY` de uma string maior que o `VARCHAR` aborta (`Spectrum Scan Error` 15007, 2026-09-21), e esta verificação é a barreira | As partições da execução. |
 | Documento JSON inválido, ou acima de 65.535 bytes se a decisão da [etapa 8](PLAN-STAGE-8.md) fixar o teto | as colunas JSON, que nem o Arrow nem o Delta validam; o teto é o do `VARCHAR` da staging do Redshift e da string que o `COPY` de Parquet aceita numa coluna `SUPER` (2026-09-21) | As partições da execução. |
 | Totais de controle | as colunas `Numeric` e `Double`; as `Double` somadas como `DECIMAL(38, 6)` de cada valor, porque a soma em ponto flutuante depende da ordem | As partições da execução. |
 
@@ -47,16 +47,16 @@ registra a verificação como não executada.
 
 | Primitiva | DuckDB |
 | --- | --- |
-| `connect(config)` | Banco em arquivo `<temp_directory>/<execution_id>.duckdb`, e em memória só com `DuckDBConfig(database=":memory:")` (decisão do usuário de 2026-09-22); `temp_directory` omitido é uma pasta nova de `tempfile.mkdtemp`, apagada com o banco em `cleanup`, porque o padrão `.tmp` do DuckDB é relativo à pasta corrente; `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS` (ou `.duckdb/` da pasta preparada), `autoinstall_known_extensions` e `autoload_known_extensions` desligados; `storage.duckdb_setup`; `threads`, `temp_directory` e `preserve_insertion_order = false`; `memory_limit` só quando a configuração o informa, e o log registra na abertura o `current_setting('memory_limit')` que o DuckDB escolheu e o espaço livre de `temp_directory` (decisão do usuário de 2026-09-22); uma conexão por thread, o `cursor()` da raiz guardado num `threading.local` no primeiro uso e fechado em `cleanup`, e `connection` devolve a da thread. |
+| `connect(config)` | Banco em arquivo `<temp_directory>/<execution_id>.duckdb`, e em memória só com `DuckDBConfig(database=":memory:")` (decisão do usuário de 2026-09-22); `temp_directory` omitido é uma pasta nova de `tempfile.mkdtemp`, apagada com o banco em `cleanup`, porque o padrão `.tmp` do DuckDB é relativo à pasta corrente; `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS` (ou `.duckdb/` da pasta preparada), `autoinstall_known_extensions` e `autoload_known_extensions` desligados; `storage.duckdb_setup`; `threads`, `temp_directory` e `preserve_insertion_order = false`; `memory_limit` só quando a configuração o informa, e o log registra na abertura o `current_setting('memory_limit')` que o DuckDB escolheu e o espaço livre de `temp_directory` (decisão do usuário de 2026-09-22); uma conexão só, a sessão da execução, e um `threading.RLock` que todo comando toma pelo tempo do comando (decisão do usuário de 2026-09-22, a mesma do motor Redshift); `session()` dá a conexão crua ao cliente com o lock tomado pelo bloco. |
 | `ingest(table, uri, version, partitions=None, materialize=False)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou `CREATE TABLE ... AS SELECT ... FROM delta_scan(...) WHERE data_str IN (...)` com `materialize=True`. |
 | `published(table, uri, version)` | A versão fixada como origem de consulta, sem ocupar nome no sandbox: o `FromClause` com as colunas do contrato que compila para `delta_scan('<uri>', version := <v>)`. É por ele que o pipeline lê as partições publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader`, e é ele que a auditoria usa como `published` nas chaves que não incluem a coluna de partição (decisão do usuário de 2026-09-22). Sem versão fixada, numa tabela que ainda não existe, levanta `SandboxError` nomeando a tabela. |
-| `stream(statement_or_sql, params=None, batch_size=100_000, prefetch=2)` | Um statement Core com as tabelas do contrato trocadas pelas do sandbox por `sql.prefixed(prefix="")`, compilado pelo dialeto `duckdb` com `paramstyle="named"` e sem `literal_binds`, as constantes como parâmetros e os `bindparam` do cliente juntados por `construct_params(params)`, o marcador `:nome` em `$nome` pelo reescritor de `bind` (leitura de 2026-09-22, [`POC.md`](POC.md); `param` não é exigido); ou um texto pronto, gerado por `render` ou lido por `sql.read_sql(..., prefix="")`, com `:nome` em `$nome` por `sql.bind`; roda num `cursor()` próprio, sem `Session`, e devolve o `BatchStream`: iterável de `pa.RecordBatch` com os tipos do motor (`decimal128(18, 2)`, `date32`, JSON como `string`), `schema`, `read_next_batch`, `read_all`, `close`, gerenciador de contexto e `__arrow_c_stream__` (para `write_deltalake` e `RecordBatchReader.from_stream`, nunca para o `register` do DuckDB). Uma thread auxiliar puxa `prefetch` lotes de `to_arrow_reader(batch_size)` para uma fila limitada, com esperas com prazo e sem referência ao stream; `prefetch=0` dispensa a thread; `close` a interrompe e fecha o cursor; o erro da consulta chega na construção ou na leitura seguinte. |
-| `query(statement, **params)` | `stream(statement, params).read_all()`: a `pa.Table` com os tipos do motor. |
-| `execute(sql, params)` | `stream(sql, params).read_all()`; um comando sem resultado devolve a tabela `Count` ou `Success` do DuckDB. |
-| `loader(table, queue_depth=2)` | O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada por `ddl(table, "duckdb")`: um nome já ocupado, pela view do `ingest` ou pela tabela de um `loader` anterior, é recusado com `SandboxError` na abertura, antes do primeiro lote (decisão do usuário de 2026-09-22), e um laço por partição mantém um `loader` só aberto; `write(data)` aceita `pa.RecordBatch` ou `pa.Table`, faz `cast(batch, table)` na thread do cliente e põe o lote numa fila limitada; uma thread auxiliar, num `cursor()` próprio e numa transação explícita, registra cada lote e roda `INSERT ... BY NAME SELECT * FROM <lote>`, `commit` no `close` e `rollback` em qualquer erro, inclusive uma exceção dentro do `with` ou um loader abandonado; `close` relança o erro da thread; `rows` conta as linhas gravadas. Nada é visível antes do `commit`, e nenhum gerador Python é entregue ao DuckDB. |
+| `stream(statement_or_sql, params=None, batch_size=100_000, prefetch=2)` | Um statement Core com as tabelas do contrato trocadas pelas do sandbox por `sql.prefixed(prefix="")`, compilado pelo dialeto `duckdb` com `paramstyle="named"` e sem `literal_binds`, as constantes como parâmetros e os `bindparam` do cliente juntados por `construct_params(params)`, o marcador `:nome` em `$nome` pelo reescritor de `bind` (leitura de 2026-09-22, [`POC.md`](POC.md); `param` não é exigido); ou um texto pronto, gerado por `render` ou lido por `sql.read_sql(..., prefix="")`, com `:nome` em `$nome` por `sql.bind`; roda na sessão, sob o lock e sem `Session` do SQLAlchemy, e o resultado inteiro de `to_arrow_reader(batch_size)` vai para um arquivo Arrow IPC com LZ4 na pasta de transbordo; o lock sai com o arquivo fechado, e o motor devolve o `BatchStream`: iterável de `pa.RecordBatch` com os tipos do motor (`decimal128(18, 2)`, `date32`, JSON como `string`), `schema`, `read_next_batch`, `read_all`, `close`, gerenciador de contexto e `__arrow_c_stream__` (para `write_deltalake` e `RecordBatchReader.from_stream`, nunca para o `register` do DuckDB). Uma thread auxiliar lê o arquivo, sem a sessão, e põe `prefetch` lotes numa fila limitada, com esperas com prazo e sem referência ao stream; `prefetch=0` dispensa a thread; `close` a interrompe e apaga o arquivo; o erro da consulta chega na construção, e o de leitura do arquivo na leitura seguinte. |
+| `query(statement, **params)` | A consulta sob o lock, por `to_arrow_table()`: a `pa.Table` com os tipos do motor, igual a `stream(statement, params).read_all()`, sem arquivo. |
+| `execute(sql, params)` | O texto sob o lock, por `to_arrow_table()`; um comando sem resultado devolve a tabela `Count` ou `Success` do DuckDB. |
+| `loader(table, queue_depth=2)` | O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada por `ddl(table, "duckdb")`: um nome já ocupado, pela view do `ingest` ou pela tabela de um `loader` anterior, é recusado com `SandboxError` na abertura, antes do primeiro lote (decisão do usuário de 2026-09-22), e um laço por partição mantém um `loader` só aberto; `write(data)` aceita `pa.RecordBatch` ou `pa.Table`, faz `cast(batch, table)` na thread do cliente e põe o lote numa fila limitada; uma thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4 na pasta de transbordo, sem a sessão, e o `close` roda, sob o lock, um único `INSERT ... BY NAME SELECT * FROM <leitor do arquivo>`; uma exceção dentro do `with`, um lote recusado pelo `cast` ou um loader abandonado apagam o arquivo sem `INSERT`; `close` relança o erro da thread e o do `INSERT`; `rows` conta as linhas gravadas. Nada é visível antes do `INSERT`, um comando atômico, e o leitor que ele consome é o do arquivo, nativo: nenhum gerador Python é entregue ao DuckDB. |
 | `load(table, data)` | `data` é uma `pa.Table`, um `pa.RecordBatch`, um `RecordBatchReader` ou um iterável de lotes: `with loader(table) as l: for batch in ...: l.write(batch)`; outro tipo é recusado com a mensagem que aponta `pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. |
-| `audit(table, partitions, **opcoes)` | Roda o texto de `audit.audit_sql(table, "duckdb")` — `json_valid` e `strftime(data, '%Y-%m-%d')` são as funções do dialeto — e monta o `AuditReport`, com até 20 linhas inteiras de amostra por verificação reprovada (decisão do usuário de 2026-09-22): a verificação `linhas` é um `count(*) FILTER` por coluna e não tem linha para amostrar, então cada contador acima de zero ganha uma segunda consulta, `SELECT * ... WHERE <condição da coluna> LIMIT 20`, rodada só na reprovação; a comparação com as demais partições sai de `published` na versão fixada, e `passed` falso interrompe a execução. |
-| `export_partition(table, uri, value, metadata, mode=None, expected_rows=None)` | `mode` é a flag `export_mode` da [etapa 6](PLAN-STAGE-6.md) (`register` ou `rewrite`, `SERIALIZE_DB_EXPORT_MODE` por omissão, `register` sem ela), a mesma do motor Redshift ([etapa 5](PLAN-STAGE-5.md)) e da carga inicial ([etapa 7](PLAN-STAGE-7.md)). **`register`**: `COPY (SELECT <colunas do contrato, sem a de partição> FROM <sandbox> WHERE <coluna de partição> = '<valor>') TO '<uri>/<coluna de partição>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` mais `register_files` com as estatísticas de `RETURN_STATS`, as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois; a memória é constante (600 MB na reescrita medida em [`delta.md`](delta.md)). O `uuid` no nome impede uma reexecução com o mesmo `execution_id` de sobrescrever o arquivo que a versão anterior referencia. **`rewrite`**: o `RecordBatchReader` da partição, passado por `cast`, para `publish_partition`, num cursor próprio; o `write_deltalake` calcula estatística e nulidade, e a memória cresce com a partição (1.140 MB para 135 MB de Parquet na mesma medição). A mesma partição sai igual pelos dois, e o teste os compara. |
+| `audit(table, partitions, uri=None, version=None, **opcoes)` | `uri` e `version` são os da tabela fixada, e montam `published` e as tabelas referenciadas sem depender de `Execution`. Roda o texto de `audit.audit_sql(table, "duckdb")` — `json_valid` e `strftime(data, '%Y-%m-%d')` são as funções do dialeto — e monta o `AuditReport`, com até 20 linhas inteiras de amostra por verificação reprovada (decisão do usuário de 2026-09-22): a verificação `linhas` é um `count(*) FILTER` por coluna e não tem linha para amostrar, então cada contador acima de zero ganha uma segunda consulta, `SELECT * ... WHERE <condição da coluna> LIMIT 20`, rodada só na reprovação; a comparação com as demais partições sai de `published` na versão fixada, e `passed` falso interrompe a execução. |
+| `export_partition(table, uri, value, metadata, mode=None, expected_rows=None)` | `uri`, `metadata` e `expected_rows` vêm do chamador, porque o motor não conhece o `Database` e o commit precisa dos metadados. `mode` é a flag `export_mode` da [etapa 6](PLAN-STAGE-6.md) (`register` ou `rewrite`, `SERIALIZE_DB_EXPORT_MODE` por omissão, `register` sem ela), a mesma do motor Redshift ([etapa 5](PLAN-STAGE-5.md)) e da carga inicial ([etapa 7](PLAN-STAGE-7.md)). **`register`**: `COPY (SELECT <colunas do contrato, sem a de partição> FROM <sandbox> WHERE <coluna de partição> = '<valor>') TO '<uri>/<coluna de partição>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` mais `register_files` com as estatísticas de `RETURN_STATS`, as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois; a memória é constante (600 MB na reescrita medida em [`delta.md`](delta.md)). O `uuid` no nome impede uma reexecução com o mesmo `execution_id` de sobrescrever o arquivo que a versão anterior referencia. **`rewrite`**: o `stream` da partição, transbordado e passado por `cast`, para `publish_partition`; o `write_deltalake` calcula estatística e nulidade, e a memória cresce com a partição (1.140 MB para 135 MB de Parquet na mesma medição). A mesma partição sai igual pelos dois, e o teste os compara. |
 | `cleanup()` | Fecha a conexão e apaga o arquivo do banco e a pasta de transbordo. |
 
 Testes: `tests/test_audit.py`, sem gravar: o texto de cada verificação nos dois dialetos, o diff dos
@@ -67,9 +67,10 @@ Delta local criado no teste; o ciclo `query`, `to_pandas(types_mapper=pd.ArrowDt
 `load` com `decimal128(18, 2)` e `date32` mantidos, `load` recusando um DataFrame e o `loader`
 recusando o nome que a view do `ingest` ocupa, com a leitura da versão publicada por `published` no
 lugar; o ciclo por
-lotes: `stream` com `prefetch` enquanto o cursor da thread roda outros comandos, `stream` fechado no
-meio, `loader` que desfaz na exceção do cliente e no lote recusado pelo `cast`, `load` de um
-iterável e de uma `pa.Table` com o mesmo resultado, e `query` igual a `stream(...).read_all()`;
+lotes: `stream` com `prefetch` enquanto a sessão roda outros comandos, `stream` sobre uma tabela
+temporária, `stream` fechado no meio, `loader` que não insere nada na exceção do cliente e no lote
+recusado pelo `cast`, `load` de um iterável e de uma `pa.Table` com o mesmo resultado, e `query`
+igual a `stream(...).read_all()`;
 auditoria que reprova a chave repetida dentro da partição e a repetida contra uma partição já
 publicada, e o órfão de chave estrangeira com a tabela referenciada fora do sandbox; `execute` com
 `%` em literal. Provas de conceito: `test_duckdb.py` (configuração, Arrow na entrada e na saída, o
@@ -82,17 +83,21 @@ particionado, banco em arquivo, `test_audit_queries`), `poc_delta.py`
 (a view presa a `version := v` e o `to_arrow_reader()` no `write_deltalake` com predicado),
 `test_sqlalchemy.py::test_arrow_path_on_raw_connection`,
 `test_stdlib.py::test_engine_protocol_and_config_dataclass` e `test_concurrency.py` (o GIL liberado
-pelo DuckDB, pelo delta-rs e pelo PyArrow, um `cursor()` por thread, a conexão compartilhada que troca os
-resultados das threads, o arquivo do DuckDB recusado com outra configuração, dois comandos em dois cursores,
-o intervalo de troca do GIL pago por cada retomada ao lado de uma thread Python ocupada) e
-`test_parallel.py` (o motor com um cursor por thread, os esboços `BatchStream` e `Loader` com o
-pipeline de três estágios, a ingestão de quatro tabelas por `delta_scan` em paralelo, cargas Arrow e
-`COPY ... TO` em paralelo) e `test_pyarrow.py::test_record_batch_cast_and_conversions_share_buffers`.
+pelo DuckDB, pelo delta-rs e pelo PyArrow, um `cursor()` por thread, a conexão compartilhada sem lock
+que troca os resultados das threads, o arquivo do DuckDB recusado com outra configuração, dois
+comandos em dois cursores, o intervalo de troca do GIL pago por cada retomada ao lado de uma thread
+Python ocupada) e `test_parallel.py` (o motor com a sessão única, os esboços `BatchStream` e `Loader`
+com o transbordo em Arrow IPC e o pipeline de três estágios, a ingestão de quatro tabelas por
+`delta_scan` em cursores paralelos, o que a sessão única deixa de fazer, e cargas Arrow e
+`COPY ... TO` pedidos por quatro threads à sessão) e
+`test_pyarrow.py::test_record_batch_cast_and_conversions_share_buffers`; `test_duckdb.py` mede a
+memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 
 ## Interface
 
 ```python
 """Assinaturas de serialize_db.audit, serialize_db.engine e serialize_db.engine.duckdb; os corpos estão nos rascunhos abaixo."""
+import contextlib
 import dataclasses
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Literal, Protocol, runtime_checkable
@@ -165,10 +170,10 @@ class Loader(Protocol):
 
 @runtime_checkable
 class Engine(Protocol):
-    """A interface dos dois motores; Execution só depende dela. connection é a conexão crua da
-    thread no DuckDB e a sessão única do motor Redshift (etapa 5), para uma thread por vez."""
-    @property
-    def connection(self) -> object: ...
+    """A interface dos dois motores; Execution só depende dela. Cada motor guarda uma sessão por
+    execução sob um RLock que as primitivas tomam e soltam; session() dá a conexão crua com o lock
+    tomado pelo bloco, reentrante na mesma thread."""
+    def session(self) -> contextlib.AbstractContextManager[object]: ...
     def ingest(self, table: sa.Table, uri: str, version: int, partitions: list[str] | None = None, materialize: bool = False) -> None: ...
     def published(self, table: sa.Table, uri: str, version: int) -> sa.FromClause: ...
     def stream(self, statement_or_sql: sa.sql.ClauseElement | str, params: Mapping[str, object] | None = None, batch_size: int = 100_000, prefetch: int = 2) -> BatchStream: ...
@@ -193,12 +198,6 @@ class DuckDBConfig:
 class DuckDBEngine:
     def __init__(self, config: DuckDBConfig, execution_id: str, storage: object) -> None: ...
 ```
-
-Três mudanças em relação à tabela acima: `export_partition` recebe `uri`, `metadata` e
-`expected_rows`, porque o motor não conhece o `Database` e o commit precisa dos metadados; e
-`audit` recebe `uri` e `version` da tabela fixada, para montar `published` (`delta_scan(uri,
-version := v)`) e as tabelas referenciadas sem depender de `Execution`; e `published` entra no
-protocolo, porque o pipeline também o chama, por `run.published(table)` ([etapa 6](PLAN-STAGE-6.md)).
 
 ## Estratégia de implementação
 
@@ -233,10 +232,12 @@ protocolo, porque o pipeline também o chama, por `run.published(table)` ([etapa
   2026-09-22). O que o DuckDB escolheu (`current_setting('memory_limit')`) e o espaço livre de
   `temp_directory`, lido por `shutil.disk_usage`, vão para o log na abertura: é por ele que a
   primeira execução real mede quanto sobra para o pandas do cliente, que o limite do DuckDB não
-  cobre. `connection` devolve o `cursor()` da thread, criado no primeiro uso e guardado num
-  `threading.local`.
+  cobre. A conexão é a sessão da execução, e `session()` toma o `threading.RLock` e a dá ao
+  bloco; toda primitiva toma o mesmo lock pelo tempo do seu comando, e nenhuma o segura enquanto o
+  código do cliente roda. Os arquivos intermediários de `stream` e de `loader` ficam na pasta de
+  transbordo e saem no `close`.
 - **`ingest`** cria `VIEW <nome do modelo> AS SELECT * FROM delta_scan('<uri>', version := <v>)`,
-  ou `TABLE ... WHERE <coluna> IN (...)` com `materialize=True`, na conexão da thread.
+  ou `TABLE ... WHERE <coluna> IN (...)` com `materialize=True`, na sessão.
 - **`published`** devolve o `FromClause` que compila para `delta_scan('<uri>', version := <v>)`, com
   as colunas do contrato, e não cria objeto no sandbox: é a origem que a auditoria já precisa nas
   chaves fora da partição, e a que o pipeline usa para ler a tabela cujo nome no sandbox é a saída
@@ -246,9 +247,14 @@ protocolo, porque o pipeline também o chama, por `run.published(table)` ([etapa
   com `construct_params(params)` juntando as constantes e os `bindparam` do cliente e o marcador
   `:nome` reescrito em `$nome` (a sonda de 2026-09-22 rodou esse caminho no DuckDB); um texto
   pronto, já sem o sentinela, passa por `bind`; a consulta
-  roda num `cursor()` próprio com `to_arrow_reader(batch_size)`, e a thread auxiliar puxa `prefetch`
-  lotes para uma fila limitada, com esperas com prazo, sem referência ao stream, encerrada em `close`.
-- **`query` e `execute`** são `stream(...).read_all()`.
+  roda na sessão, sob o lock, com `to_arrow_reader(batch_size)`, e o resultado inteiro vai para um
+  arquivo Arrow IPC com LZ4 na pasta de transbordo; o lock sai com o arquivo fechado, e a thread
+  auxiliar lê o arquivo para uma fila de `prefetch` lotes, com esperas com prazo, sem referência ao
+  stream e sem a sessão, encerrada em `close`, que apaga o arquivo. A consulta termina antes do
+  primeiro lote; para 10.000.000 de linhas o arquivo fechou em 0,38 s, com 106 MB de memória
+  máxima, contra 0,32 s e 83 MB do leitor direto e 322 MB da tabela inteira (2026-09-22,
+  [`POC.md`](POC.md)).
+- **`query` e `execute`** rodam sob o lock e devolvem `to_arrow_table()`, sem arquivo.
 - **`loader`** é o `Loader` de `test_parallel.py`, com a recusa do nome ocupado na abertura:
   `duckdb_tables()` e `duckdb_views()` dizem o que existe, e um nome tomado levanta `SandboxError`
   com a mensagem que aponta `run.published(table)` para ler a versão publicada. O `CREATE TABLE IF
@@ -256,10 +262,12 @@ protocolo, porque o pipeline também o chama, por `run.published(table)` ([etapa
   seguinte morre com `Catalog Error: <nome> is not an table`, e sobre uma tabela de outro formato
   ele também passa, deixando o `INSERT ... BY NAME` preencher com nulo a coluna que sobra (leituras
   de 2026-09-22). Depois da guarda, `write` faz `cast(batch, table)` na thread do
-  cliente e enfileira; o nome com que a thread auxiliar registra cada lote não é o de uma tabela do
-  modelo, porque um lote registrado ocupa um nome de view (leitura de 2026-09-22); a thread auxiliar, num `cursor()` próprio, roda `CREATE TABLE
-  <nome> (ddl)`, `BEGIN`, um `INSERT INTO <nome> BY NAME SELECT * FROM lote` por lote e `COMMIT` no
-  `close`; qualquer erro faz `ROLLBACK` e sobe em `close` ou no `write` seguinte. `load` embrulha
+  cliente e enfileira. A abertura roda, sob o lock, `CREATE TABLE <nome> (ddl)`; a thread auxiliar
+  grava os lotes num arquivo Arrow IPC com LZ4, sem a sessão; o `close` registra o leitor do arquivo
+  com um nome único, que não é o de uma tabela do modelo, porque um leitor registrado ocupa um nome
+  de view (leitura de 2026-09-22), e roda, sob o lock, um único `INSERT INTO <nome> BY NAME SELECT *
+  FROM <leitor>`; qualquer erro apaga o arquivo sem `INSERT` e sobe em `close` ou no `write`
+  seguinte. `load` embrulha
   `loader` para `pa.Table`, `RecordBatch`, `RecordBatchReader` e iteráveis, e recusa o resto com a
   mensagem que aponta `pa.Table.from_pandas`.
 - **`audit`** roda `audit_sql(table, "duckdb", published=published(table, uri, version), ...)` e
@@ -275,19 +283,18 @@ protocolo, porque o pipeline também o chama, por `run.published(table)` ([etapa
   `delta.register_files` faz as conferências e o commit, com `expected_rows` do `count(*)` do
   sandbox. Com `mode="rewrite"`: `stream` da partição, `cast`, `delta.publish_partition`. O modo
   vem do argumento, de `SERIALIZE_DB_EXPORT_MODE` ou de `"register"`.
-- **`cleanup`** fecha os cursores das threads e a conexão raiz e apaga o arquivo do banco e a pasta
-  de transbordo.
+- **`cleanup`** fecha a conexão e apaga o arquivo do banco e a pasta de transbordo.
 
 ## Pré-requisitos e pós-condições
 
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
 | `checks`, `audit_sql` | Modelo aprovado por `check_models`; `published` informado quando alguma chave não inclui a coluna de partição. | Um `Check` por consulta, com o texto renderizável nos dois dialetos; sem conexão. |
-| `DuckDBEngine` | Extensões na pasta configurada. | Uma conexão raiz sobre o arquivo do banco; um cursor por thread no primeiro uso; nenhum download; o `memory_limit` do DuckDB e o espaço livre de `temp_directory` no log. |
+| `DuckDBEngine` | Extensões na pasta configurada. | Uma conexão sobre o arquivo do banco, a sessão, sob um `RLock`; nenhum download; o `memory_limit` do DuckDB e o espaço livre de `temp_directory` no log. |
 | `ingest` | Tabela Delta legível na versão pedida. | Uma view ou tabela com o nome do modelo, presa à versão; a tabela atual pode avançar sem afetar a leitura. |
 | `published` | Tabela Delta legível na versão fixada. | Um `FromClause` sobre essa versão; nenhum objeto no sandbox, e o nome do modelo livre para o `loader`. |
-| `stream` | Texto ou statement válido; parâmetros que fecham com o dicionário. | Lotes na ordem da consulta; o cursor da thread do cliente livre; a thread auxiliar encerrada em `close`; o erro da consulta no construtor ou no lote seguinte. |
-| `loader`, `load` | O nome da tabela livre no sandbox; lotes que passam por `cast`. | Nada visível antes do `commit`; tudo desfeito na exceção; `rows` igual às linhas escritas; `SandboxError` com o nome ocupado, sem criar nem alterar objeto algum. |
+| `stream` | Texto ou statement válido; parâmetros que fecham com o dicionário. | Lotes na ordem da consulta; a sessão livre durante a leitura; a thread auxiliar encerrada e o arquivo apagado em `close`; o erro da consulta no construtor, o de leitura no lote seguinte. |
+| `loader`, `load` | O nome da tabela livre no sandbox; lotes que passam por `cast`. | Nada visível antes do `INSERT` do `close`; nada inserido na exceção; `rows` igual às linhas escritas; `SandboxError` com o nome ocupado, sem criar nem alterar objeto algum. |
 | `audit` | Sandbox com a tabela; `uri` e `version` para as chaves fora da partição. | Um `AuditReport` com o SQL de cada verificação e até 20 linhas de amostra por verificação reprovada; nenhuma escrita. |
 | `export_partition` | Auditoria aprovada (conferida por `Execution.publish`); a pasta da partição gravável. | Uma versão nova no Delta com a partição substituída e as estatísticas registradas; a mesma partição sai igual pelos dois modos. |
 | `cleanup` | Nenhum. | Arquivo do banco e pasta de transbordo apagados; chamadas seguintes falham. |
@@ -304,11 +311,11 @@ criado no teste a partir do modelo cliente.
 | Chave estrangeira | `test_foreign_key_check_only_on_request` | Sem `foreign_keys=True` o nome está em `not_run`; com ele, o anti-join contra `referenced`. |
 | Arquivos | `test_audit_files_match_versioned` | Diff vazio contra a pasta versionada. |
 | Defeitos plantados | `test_audit_finds_each_defect` | O sandbox do rascunho: nulo, texto longo, partição errada, chave repetida dentro da partição e contra a publicada, chave única repetida contra a publicada. |
-| Conexão | `test_engine_config_and_per_thread_cursor` | `duckdb_settings()` com os valores pedidos, o `memory_limit` no padrão do DuckDB quando a configuração o omite, e o banco em arquivo dentro da pasta de `tempfile.mkdtemp`; três threads recebem três cursores; as tabelas criadas por uma thread são visíveis às outras. |
+| Sessão | `test_engine_config_and_single_session` | `duckdb_settings()` com os valores pedidos, o `memory_limit` no padrão do DuckDB quando a configuração o omite, e o banco em arquivo dentro da pasta de `tempfile.mkdtemp`; três threads usam a mesma sessão, uma de cada vez; a tabela temporária criada por uma é visível às outras; uma primitiva chamada dentro de `session()` não trava. |
 | Ingestão presa | `test_ingest_pins_the_version` | Um `append` na tabela depois da abertura não aparece na view nem na tabela materializada. |
 | Versão publicada | `test_published_reads_the_pinned_version` | `published` lê a versão fixada sem criar objeto no sandbox, e o `loader` da mesma tabela fica com o nome do modelo. |
-| Stream | `test_stream_prefetches_on_its_own_cursor` | Os casos de `test_parallel.py`: ordem, `prefetch`, `close` antecipado, erro da consulta, cursor do cliente livre. |
-| Loader | `test_loader_commits_at_close_and_rolls_back_on_error` | Nada visível antes do `close`; exceção do cliente, lote recusado pelo `cast` e erro do `INSERT` deixam a tabela como estava; `rows`. |
+| Stream | `test_stream_spools_and_frees_the_session` | Os casos de `test_parallel.py`: ordem, `prefetch`, `close` antecipado que apaga o arquivo, erro da consulta na construção, a sessão livre durante a leitura, a tabela temporária lida pelo stream. |
+| Loader | `test_loader_inserts_on_close_in_one_statement` | Nada visível antes do `close`; exceção do cliente, lote recusado pelo `cast` e erro do `INSERT` deixam a tabela como estava; `rows`. |
 | Nome ocupado | `test_loader_refuses_a_name_in_use` | O `loader` sobre a view do `ingest`, sobre a tabela do `ingest` materializado e sobre a tabela de um `loader` anterior levanta `SandboxError` antes do primeiro lote, e o objeto que estava lá não muda. |
 | Formas por tabela | `test_query_and_load_match_stream_and_loader` | `query` igual a `stream(...).read_all()`; `load` de `pa.Table`, `RecordBatch`, leitor e iterável com o mesmo resultado; DataFrame recusado com a mensagem. |
 | Ciclo pandas | `test_pandas_round_trip_keeps_contract_types` | `to_pandas(types_mapper=pd.ArrowDtype)` e `from_pandas` mantêm `decimal128(18, 2)` e `date32`. |
@@ -322,7 +329,9 @@ criado no teste a partir do modelo cliente.
 Os dois rascunhos rodaram em 2026-09-21 com as versões fixadas. O primeiro monta as verificações a
 partir de um `Table` com chave primária e chave única, imprime o texto de cada uma nos dois dialetos
 e as executa num DuckDB em memória com um defeito de cada tipo; a tabela `delta_scan` faz o papel da
-versão publicada. O segundo é o motor por partes.
+versão publicada. O segundo é o motor por partes, com o modelo de conexão anterior à sessão única (um
+cursor por thread num `threading.local`); a sessão única e os arquivos intermediários estão nos
+esboços de `test_parallel.py`.
 
 ```python
 """Etapa 4: as verificações da auditoria derivadas do Table, o texto por dialeto e a execução no DuckDB com defeitos plantados."""

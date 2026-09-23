@@ -319,7 +319,9 @@ executes under it and its helper thread only slices `fetchmany` (the driver mate
 result in `execute`), `loader` writes the Parquet outside it and runs the `COPY` under it;
 `ingest(max_workers)` serializes on that engine, `publish_redshift` keeps a connection per table,
 and a temporary table the pipeline creates in the session serves the next commands and is lost
-when the engine reconnects. The DuckDB engine keeps its cursor per thread, stream and loader.
+when the engine reconnects. The DuckDB engine keeps its cursor per thread, stream and loader
+(superseded later the same day: both engines keep a single session under a lock, section "The
+review of 2026-09-22 and the single session on both engines").
 `plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/serialize-db.md`
 
 The same day the user generalized the partition column: any text column `String(n)` partitions,
@@ -350,3 +352,22 @@ refuses a unique index as target and a swapped order, and Redshift documents the
 migration ran successfully in the target; its reports exist and are not available yet, so the
 `export_mode` default still waits for their numbers. `plan/PLAN.md`, `plan/PLAN-STAGE-2.md`,
 `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## The review of 2026-09-22 and the single session on both engines
+
+Later on 2026-09-22, answering the code review, the user accepted the rewrite of the environment
+premise in `plan/PLAN.md` (dev and prod never touch each other's tables; inside an environment one
+execution at a time, with the log ordering commits and `publish` aborting the second with
+`ExecutionConflict`; the shared `serialize_db_publications` as the exception) and the two stage 3
+proposals: `expressions` in `rewrite` (the old name in a rename, the value of a new `NOT NULL`
+column) and `Storage` over `pyarrow.fs` (a dataclass with the URI, the filesystem and the path, no
+class per storage, `boto3` only for the conditional write of `_serialize_db/snapshots.json`). The
+same day the user asked for one behavior on both engines: a single session per execution protected
+by a lock, so temporary tables are portable, keeping the streaming requirement (the client works on
+the current batch while the connection does I/O) and an API that handles the lock for the client.
+The probes of the same day showed it feasible with intermediate files (`.claude/memory/concurrency.md`),
+and the plan now has `session()` on both engines, `stream` and `loader` through Arrow IPC files on
+DuckDB, and `ingest` without `max_workers`. The user stated that the target may have any number of
+vCPUs and that the library must explore parallelism to scale; the 2 vCPUs read on 2026-09-21 are a
+reading, not a design premise. `plan/PLAN.md`, `plan/PLAN-STAGE-3.md` to `plan/PLAN-STAGE-6.md`,
+`plan/serialize-db.md`, `plan/POC.md`

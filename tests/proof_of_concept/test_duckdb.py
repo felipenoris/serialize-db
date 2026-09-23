@@ -188,6 +188,49 @@ def test_streaming_query_starts_before_the_end_and_bounds_memory() -> None:
     assert peaks["stream"]["peak_mb"] < peaks["table"]["peak_mb"] / 2
 
 
+# O stream da sessão única: o leitor inteiro gravado num arquivo Arrow IPC com LZ4, e o arquivo lido
+# lote a lote. Roda num subprocesso, como MEMORY_PROBE, para a memória máxima ser só dele.
+SPOOL_PROBE = r"""
+import json, os, resource, sys, time
+import duckdb, pyarrow as pa
+rows, folder = int(sys.argv[1]), sys.argv[2]
+con = duckdb.connect(config={"threads": 2})
+sql = f"SELECT range AS id, range % 97 AS m, 'x' || (range % 1000) AS s FROM range({rows})"
+path = os.path.join(folder, "transbordo.arrow")
+started = time.perf_counter()
+reader = con.execute(sql).to_arrow_reader(100_000)
+options = pa.ipc.IpcWriteOptions(compression="lz4")
+with pa.OSFile(path, "wb") as sink, pa.ipc.new_stream(sink, reader.schema, options=options) as writer:
+    for batch in reader:
+        writer.write_batch(batch)
+spooled = time.perf_counter() - started
+with pa.OSFile(path, "rb") as source:
+    n = sum(batch.num_rows for batch in pa.ipc.open_stream(source))
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1e6 if sys.platform == "darwin" else 1e3)
+print(json.dumps({"rows": n, "seconds": round(time.perf_counter() - started, 3), "spool_seconds": round(spooled, 3),
+                  "file_mb": round(os.path.getsize(path) / 1e6), "peak_mb": round(peak)}))
+"""
+
+
+@pytest.mark.local
+def test_spooled_stream_bounds_memory(local_location: LocalLocation) -> None:
+    """O resultado transbordado num arquivo Arrow IPC com LZ4 e lido lote a lote mantém o processo no tamanho de um lote, como o leitor direto, e a consulta termina antes do primeiro lote.
+
+    É o ``stream`` da sessão única (``test_parallel.py``): a consulta roda inteira sob o lock, e a
+    leitura do arquivo não usa a sessão. O tempo, o tamanho do arquivo e a memória máxima vão para o
+    relatório; a asserção é a mesma do leitor direto, menos da metade da memória da tabela inteira.
+    """
+    rows = 10_000_000
+    folder = Path(local_location.child("transbordo_memoria"))
+    folder.mkdir()
+    completed = subprocess.run([sys.executable, "-c", SPOOL_PROBE, str(rows), str(folder)], capture_output=True, text=True, check=True)
+    spooled = json.loads(completed.stdout)
+    table = json.loads(subprocess.run([sys.executable, "-c", MEMORY_PROBE, "table", str(rows)], capture_output=True, text=True, check=True).stdout)
+    record("duckdb.spooled_stream_10M_rows", f"{spooled['peak_mb']} MB em {spooled['seconds']} s ({spooled['spool_seconds']} s até o arquivo fechar, {spooled['file_mb']} MB de arquivo); a tabela inteira, {table['peak_mb']} MB")
+    assert spooled["rows"] == table["rows"] == rows
+    assert spooled["peak_mb"] < table["peak_mb"] / 2
+
+
 def test_insert_from_a_reader_is_one_statement_and_trusts_the_batches(con: duckdb.DuckDBPyConnection) -> None:
     """Um ``INSERT ... SELECT`` de um ``RecordBatchReader`` sobre um gerador Python é um comando só: a falha do gerador deixa a tabela como estava.
 

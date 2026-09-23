@@ -316,3 +316,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `p + 3 = 21` was a coincidence of the one case measured. Both rules were written from a single
   measurement and asserted on it. The fix measures text after the conversion to the contract type,
   and the tests feed each input type the pandas paths produce. `plan/POC.md`, `plan/PLAN-STAGE-1.md`
+- **A comparison between two designs runs both under the same conditions** (2026-09-22). The first
+  probe of the single session put the new design on a file-backed DuckDB database, the stage 4
+  default, against the cursor sketches of `test_parallel.py` on an in-memory one, and read the
+  three-stage pipeline six times slower (0.699 s against 0.110 s). Profiling the parts showed the
+  `INSERT` into a file database dominating; on the same database kind the single session with
+  Arrow IPC files was faster on a file (0.400 s against 0.565 s) and 20% slower in memory. A
+  timing that decides a design is taken best of three, on the same database, the same data and the
+  same batch size, for every alternative. `plan/POC.md`

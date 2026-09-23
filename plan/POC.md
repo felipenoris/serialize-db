@@ -65,6 +65,11 @@ da pasta e a abertura sem variáveis `AWS_*`. Os comportamentos do delta-rs que 
 (substituição por predicado, `schema_mode`, `add_columns`, cast no `append`, `restore`, `vacuum`,
 `keep_versions`, exportação por mês) foram verificados localmente e estão em `delta.md`.
 
+Em 2026-09-20, uma sessão no espaço com a raiz local e a raiz S3 gravou o relatório de
+`SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, e a execução das 04:52 UTC, depois das
+correções do dia, registrou 104 testes passados e 7 pulados em 35 s, com a limpeza das duas raízes
+(`local.cleanup`, `s3.cleanup`); sem variável, 63 passaram e 48 foram pulados.
+
 ## O que as leituras do ambiente mostraram
 
 O espaço do SageMaker Unified Studio, lido em 2026-09-19 e quatro vezes em 2026-09-20 pelos probes:
@@ -595,7 +600,8 @@ sondagem no scratchpad e as asserções acrescentadas a `test_pyarrow.py`, `test
 `test_parallel.py` mediram o que a troca de dados por `RecordBatch` exige. A revisão do plano está em
 [`PLAN.md`](PLAN.md), seção "A troca de dados com o código cliente", nas etapas
 [1](PLAN-STAGE-1.md), [3](PLAN-STAGE-3.md), [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e
-[6](PLAN-STAGE-6.md), e em [`serialize-db.md`](serialize-db.md), seção "Lotes em streaming".
+[6](PLAN-STAGE-6.md), e em [`serialize-db.md`](serialize-db.md), seção "Paralelismo". O desenho por
+cursor que ela mediu deu lugar à sessão única em 2026-09-22 (seção "O que a sessão única mostrou").
 
 - O leitor de `to_arrow_reader` num `cursor()` próprio entregou o snapshot da consulta (1.000.000 de
   linhas) enquanto outro cursor inseria dez linhas na mesma tabela, criava, alterava e apagava
@@ -738,8 +744,9 @@ Consequências no plano, nesta mesma unidade de trabalho:
 
 Em 2026-09-21, no macOS arm64 com deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, SQLAlchemy 2.0.54,
 duckdb-engine 0.17.0 e sqlalchemy-redshift 1.0.0, os rascunhos das etapas 1 a 9 rodaram no
-scratchpad e estão em cada `PLAN-STAGE-<n>.md`, seção "Rascunhos executados". O que eles mostraram
-além do que já estava medido:
+scratchpad; os das etapas 3 a 9 estão em cada `PLAN-STAGE-<n>.md`, seção "Rascunhos executados", e
+os das etapas 1 e 2 deram lugar aos módulos `serialize_db.schema` e `serialize_db.sql`. O que eles
+mostraram além do que já estava medido:
 
 - O commit de `optimize.compact` grava `dataChange` falso nas ações `add` e `remove`, com
   `partitionValues`; `version_diff` lê o log e ignora essas ações, então uma compactação não recarrega
@@ -1519,3 +1526,51 @@ deixa no objeto `DeltaTable`.
 casos em `tests/test_schema.py` que reprovavam no código anterior (seis) e passam no novo;
 `publish_partition` da etapa 3 escreve pelo objeto `DeltaTable` e devolve `dt.version()`, e
 `register_files` relê a versão depois do commit.
+
+## O que a sessão única mostrou
+
+Em 2026-09-22, no macOS (DuckDB 1.5.5 com `threads = 2`, PyArrow 25.0.1, pandas 3.0.6), as sondas no
+scratchpad e os esboços reescritos de `test_parallel.py` mediram se os dois motores podem ter uma
+sessão por execução sob um lock, como o usuário decidiu no mesmo dia, sem perder a troca por lotes
+em que o cliente trabalha no lote atual enquanto a biblioteca lê o seguinte ou grava o anterior.
+
+- **O leitor do DuckDB não sobrevive a outro comando na mesma conexão.** O comando seguinte o
+  esvazia, sem erro (`test_duckdb.py::test_arrow_reader_is_invalidated_by_the_next_command`, de
+  2026-09-20). Um stream que segurasse o leitor seguraria a sessão enquanto o cliente trabalha, e
+  o `close` de um `loader` aberto no mesmo `with`, que sai antes do stream, esperaria por ela. O
+  stream da sessão única consome o leitor inteiro num arquivo antes de soltar o lock.
+- **O arquivo intermediário.** Com Parquet nos dois sentidos, o pipeline de três estágios sobre
+  3.000.000 de linhas levou 0,699 s num banco em arquivo: o `ParquetWriter` padrão gastou 0,240 s e
+  o `INSERT ... BY NAME` de `read_parquet` 0,319 s. Com Arrow IPC, o resultado de 3.000.000 de linhas
+  foi gravado em 0,069 s e lido em 0,005 s, contra 0,054 s do leitor direto. Em 20.000.000 de linhas
+  de três colunas, o Arrow IPC sem compressão teve 478 MB (escrita 0,612 s, leitura 0,026 s), com LZ4
+  162 MB (0,697 s e 0,054 s) e com ZSTD 97 MB (0,791 s e 0,143 s): LZ4 é o formato do arquivo.
+- **A comparação justa.** A primeira sonda comparou a sessão única num banco em arquivo com os
+  esboços por cursor num banco em memória; no mesmo banco, melhor de três execuções do pipeline de
+  três estágios sobre 3.000.000 de linhas: em memória, 0,112 s por cursor contra 0,135 s na sessão
+  única com Arrow IPC; em arquivo, o padrão da [etapa 4](PLAN-STAGE-4.md), 0,565 s por cursor contra
+  0,400 s na sessão única, porque um `INSERT` único sobre o leitor do arquivo custa menos que um
+  `INSERT` por lote numa transação num banco em arquivo. Na suíte, sobre um banco em arquivo: 0,427 s
+  pela tabela inteira, 0,687 s lote a lote sem threads e 0,436 s encadeado.
+- **A memória.** 20.000.000 de linhas: a tabela inteira em 567 MB e 0,594 s, o leitor direto em
+  83 MB e 0,576 s, o arquivo sem compressão em 89 MB e 0,63 s. Na suíte, 10.000.000 de linhas: o
+  arquivo com LZ4 em 106 MB e 0,408 s (0,381 s até o arquivo fechar, 81 MB de arquivo), contra 83 MB
+  e 0,316 s do leitor direto e 322 MB e 0,341 s da tabela inteira. A consulta termina antes do
+  primeiro lote.
+- **O que não trava.** Um comando no meio de um stream, a tabela temporária lida pelo stream, a
+  saída antecipada do laço com o `loader` no mesmo `with` (0,013 s), duas threads de cliente com
+  stream e loader ao mesmo tempo (as duas terminaram com 1.000.000 de linhas cada, em 0,072 s) e uma
+  primitiva chamada dentro de `session()` na mesma thread, pelo `RLock`. Um stream de 10 linhas pelo
+  arquivo custou 0,3 ms.
+- **O que a sessão única deixa de fazer.** Quatro tabelas de 150.000 linhas ingeridas por
+  `delta_scan` em disco local levaram 0,061 s em série e 0,017 s em quatro cursores; quatro cargas
+  Arrow pedidas por quatro threads levaram 0,071 s, e quatro `COPY ... TO`, 0,029 s, em série na
+  sessão (`test_parallel.py`).
+
+**Consequência**: os dois motores têm uma sessão por execução sob um `RLock` que as primitivas tomam
+e soltam e que `session()` dá ao cliente; `stream` grava o resultado num arquivo Arrow IPC com LZ4
+antes de soltar o lock, o `loader` grava os lotes num arquivo fora da sessão e os insere num comando
+no `close`, e `query` e `execute` devolvem `to_arrow_table()` sob o lock ([`PLAN.md`](PLAN.md),
+etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [6](PLAN-STAGE-6.md)). A ingestão de várias
+tabelas passa a ser em série, e `max_workers` saiu de `ingest`; a medição no S3 está em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

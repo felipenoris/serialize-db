@@ -36,10 +36,23 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   error reaches Python as `OSError` with DuckDB's message. Objects with `__arrow_c_stream__` are
   accepted by `from_stream`, DuckDB `register` and `write_deltalake`. `plan/PLAN.md`, `plan/POC.md`,
   `plan/duckdb.md`, `tests/proof_of_concept/test_duckdb.py`, `test_pyarrow.py`, `test_parallel.py`
-- The Redshift engine keeps one session per execution under a `threading.Lock` (user decision of
-  2026-09-22), no connection per thread: `stream` takes the lock for `execute` only, because the
-  driver materializes the result there, `loader` writes the Parquet outside it and `COPY`s under
-  it, `ingest(max_workers)` serializes on that engine and `publish_redshift` keeps a connection
-  per table. A DuckDB temporary table is per connection and `cursor()` is a new connection
-  (2026-09-22), so the DuckDB engine keeps its cursor per thread, stream and loader, and both
-  sandboxes use regular tables. `plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+- Both engines keep one session per execution under a `threading.RLock` (user decision of
+  2026-09-22, first for Redshift, then for DuckDB the same day, so a temporary table serves every
+  later command on both engines); `session()` hands the raw connection to the client with the lock
+  held for the block, reentrant in the same thread, and the client never touches the lock. No lock
+  is held while client code runs: the session-bound part of each primitive runs in the calling
+  thread and never waits for the client. DuckDB `stream` consumes the whole `to_arrow_reader` into
+  an Arrow IPC file with LZ4 under the lock (the next command on the connection would empty the
+  reader) and the helper reads the file outside the session; `loader` writes an IPC file outside
+  the session and runs one `INSERT ... BY NAME` over the file's native reader in `close`. Redshift
+  `stream` runs `execute` under the lock in the calling thread (the driver materializes the result)
+  and the helper slices `fetchmany`; an `execute` on the helper thread would deadlock against a
+  client holding `session()`. Measured on 2026-09-22: the three-stage pipeline over 3,000,000 rows
+  on a file database took 0.400 s on the single session against 0.565 s with a cursor per stream
+  and loader (in memory, 0.135 s against 0.112 s); Parquet as the intermediate file cost 0.699 s;
+  LZ4 IPC for 20,000,000 rows is 162 MB against 478 MB uncompressed; 10,000,000 rows streamed
+  through the file peaked at 106 MB against 83 MB direct and 322 MB for the whole table. What the
+  single session gives up: four 150,000-row tables ingested by `delta_scan` took 0.061 s in series
+  against 0.017 s in four cursors, so `ingest` lost `max_workers`; S3 is unmeasured.
+  `publish_redshift` keeps a connection per table, outside the sandbox session. `plan/PLAN.md`,
+  `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/POC.md`, `tests/proof_of_concept/test_parallel.py`

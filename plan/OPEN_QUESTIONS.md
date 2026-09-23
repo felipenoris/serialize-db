@@ -52,6 +52,13 @@ foi medido em [`POC.md`](POC.md).
   migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. `export_mode="rewrite"` e `"register"` medem os dois caminhos em cada motor e na carga inicial
   (etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)), e a medição decide o
   padrão da flag.
+- **A ingestão de várias tabelas do S3 na sessão única.** Os dois motores rodam um comando por vez na
+  sessão (decisão do usuário de 2026-09-22), e a ingestão de várias tabelas ficou em série: em disco
+  local, quatro tabelas de 150.000 linhas levaram 0,061 s na sessão e 0,017 s em quatro cursores
+  ([`POC.md`](POC.md)). No S3 a latência domina e o ganho de ingerir em paralelo pode ser maior; a
+  primeira execução no ambiente alvo mede `ingest(materialize=True)` das tabelas do pipeline em
+  série, e, se compensar, a ingestão baixa os arquivos da versão fixada em paralelo fora da sessão e
+  carrega cada tabela sob o lock a partir da pasta local.
 - **O `pytest` sem variável grava na pasta temporária do pytest.** A premissa de
   [`PLAN.md`](PLAN.md) diz que `pytest` sem variável não grava arquivo algum, e o cabeçalho de
   `tests/conftest.py` diz que fora das raízes informadas a sessão grava só `.pytest_cache/`; mas
@@ -82,10 +89,6 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   que o `cast` aceita em silêncio: o instante UTC vira hora local, e a hora local vira UTC (leitura
   de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, porque a
   conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso.
-- [Etapa 3](PLAN-STAGE-3.md): `expressions` em `rewrite`, o dicionário que dá a expressão de uma
-  coluna renomeada ou de uma coluna `NOT NULL` nova (proposto na revisão de 2026-09-22); `Storage`
-  sobre `pyarrow.fs`, sem as subclasses por armazenamento, com um ramo por armazenamento só na
-  escrita condicional (proposto na mesma revisão).
 - [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
   entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição

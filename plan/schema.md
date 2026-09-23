@@ -86,22 +86,35 @@ ART precisam caber em memória durante a criação.
 
 ## Tipos no contrato
 
-| SQLAlchemy | Arrow | Delta | DuckDB | Redshift | Observação |
-| --- | --- | --- | --- | --- | --- |
-| `SmallInteger` | `int16` | `short` | `SMALLINT` | `SMALLINT` | O Parquet grava `int16` no tipo físico `INT32`. |
-| `Integer` | `int32` | `integer` | `INTEGER` | `INTEGER` | |
-| `BigInteger` | `int64` | `long` | `BIGINT` | `BIGINT` | Tipos sem sinal do Arrow e do DuckDB ficam fora do contrato. |
-| `Boolean` | `bool` | `boolean` | `BOOLEAN` | `BOOLEAN` | |
-| `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Descarregar e recarregar pelo Redshift pode perder precisão. O modelo de referência usa `Double` em toda coluna numérica (decisão de 2026-09-20); `Numeric(18, 2)` nas colunas contábeis é a melhoria futura. |
-| `Numeric(p, s)` | `decimal128(p, s)` | `decimal(p, s)` | `DECIMAL(p, s)` | `DECIMAL(p, s)` | `p` até 38. O delta-rs e o DuckDB gravam `DECIMAL(18, 2)` no tipo físico `INT64`; o PyArrow, em `FIXED_LEN_BYTE_ARRAY`. O `COPY` do `INT64` passou no ambiente alvo em 2026-09-21, com a soma conferida ([`POC.md`](POC.md)). |
-| `String(n)` | `string` | `string` | `VARCHAR(n)` | `VARCHAR(n)` | `n` em bytes no Redshift, e o `cast` mede o texto em bytes (decisão do usuário de 2026-09-21); auditoria de tamanho. O DuckDB aceita o comprimento e o ignora (`information_schema` lê `VARCHAR`). |
-| `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | `TEXT` no Redshift vira `VARCHAR(256)`; o `cast` recusa acima de 65.535 bytes (decisão do usuário de 2026-09-21). |
-| `Date` | `date32` | `date` | `DATE` | `DATE` | |
-| `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | O `INT96` da base de origem, obsoleto no formato Parquet, vira `INT64` de microssegundos na carga inicial, e o `COPY` desse `INT64` passou no ambiente alvo em 2026-09-21. Cast explícito de nanossegundos (padrão do pandas) para microssegundos; o delta-rs aceita nanossegundos e grava microssegundos em silêncio. `timestamp_ntz` exige o recurso `timestampNtz` (leitor 3, escritor 7), que o delta-rs habilita ao gravar e o DuckDB lê como `TIMESTAMP`. O `UNLOAD` do Redshift traz o `INT96` de volta na exportação, e um arquivo desses registrado na tabela `timestamp_ntz` é lido como `timestamp[us]` pelos dois leitores, com os valores intactos e sem estatística de mínimo e máximo (2026-09-21, [POC.md](POC.md)). |
-| `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Gravar sempre em UTC; o `timestamp` do Delta é ajustado a UTC, e um fuso diferente entra como o mesmo instante. O `UNLOAD` descarta o fuso. |
-| `Uuid` | `string` | `string` | `VARCHAR(36)` | `VARCHAR(36)` | O Redshift não tem tipo UUID; o contrato guarda o texto nos dois motores. |
-| `JSON()` | `string` | `string` | `JSON` | `SUPER` | Texto JSON é a forma de troca, sem a extensão `arrow.json`; a validação é do DuckDB na carga e do `JSON_PARSE` no Redshift. Detalhes na seção seguinte. |
-| `LargeBinary`, `ARRAY`, `Interval` | | | | | Fora do contrato até haver um caso de uso. |
+O mapeamento de cada tipo SQLAlchemy para o Arrow, o Delta, o DuckDB e o Redshift está na página
+principal da documentação do pacote ([`../docs/index.md`](../docs/index.md), seção "Tabela de
+mapeamento de tipos"), e o código que o aplica, em `serialize_db.schema` (`arrow_type`, `sql_type`).
+O que o plano acrescenta por tipo:
+
+- **`Double`**: descarregar e recarregar pelo Redshift pode perder precisão. O modelo de referência
+  usa `Double` em toda coluna numérica (decisão de 2026-09-20); `Numeric(18, 2)` nas colunas
+  contábeis é a melhoria futura.
+- **`Numeric(p, s)`**: o `COPY` do `DECIMAL(18, 2)` gravado em `INT64` pelo delta-rs e pelo DuckDB
+  passou no ambiente alvo em 2026-09-21, com a soma conferida ([`POC.md`](POC.md)).
+- **`String(n)`**: `n` é medido em bytes, como no `VARCHAR(n)` do Redshift, pelo `cast` e pela
+  auditoria de tamanho (decisão do usuário de 2026-09-21). O DuckDB aceita o comprimento e o ignora
+  (`information_schema` lê `VARCHAR`).
+- **`Text`**: `TEXT` no Redshift vira `VARCHAR(256)`, e por isso o contrato escreve `VARCHAR(65535)`;
+  o `cast` recusa acima de 65.535 bytes (decisão do usuário de 2026-09-21).
+- **`DateTime`**: o `INT96` da base de origem, obsoleto no formato Parquet, vira `INT64` de
+  microssegundos na carga inicial, e o `COPY` desse `INT64` passou no ambiente alvo em 2026-09-21.
+  O cast de nanossegundos (padrão do pandas) para microssegundos é explícito; o delta-rs aceita
+  nanossegundos e grava microssegundos em silêncio. `timestamp_ntz` exige o recurso `timestampNtz`
+  (leitor 3, escritor 7), que o delta-rs habilita ao gravar e o DuckDB lê como `TIMESTAMP`. O
+  `UNLOAD` do Redshift traz o `INT96` de volta na exportação, e um arquivo desses registrado na
+  tabela `timestamp_ntz` é lido como `timestamp[us]` pelos dois leitores, com os valores intactos e
+  sem estatística de mínimo e máximo (2026-09-21, [`POC.md`](POC.md)).
+- **`DateTime(timezone=True)`**: gravar sempre em UTC; o `timestamp` do Delta é ajustado a UTC, e um
+  fuso diferente entra como o mesmo instante. O `UNLOAD` descarta o fuso.
+- **`Uuid`**: o Redshift não tem tipo UUID; o contrato guarda o texto nos dois motores.
+- **`JSON`**: texto JSON é a forma de troca, sem a extensão `arrow.json`; a validação é do DuckDB na
+  carga e do `JSON_PARSE` no Redshift (seção seguinte).
+- **`Float`, `LargeBinary`, `ARRAY`, `Interval`**: fora do contrato até haver um caso de uso.
 
 ### Campos JSON
 
