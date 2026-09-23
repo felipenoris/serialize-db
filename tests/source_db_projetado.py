@@ -25,20 +25,21 @@ mesma seção 3), e ``write_source`` reproduz o que as leituras fixaram, com pou
   cada tabela.
 
 Os valores são fictícios, determinísticos e consistentes com o modelo de referência: toda chave
-estrangeira do modelo tem a linha referenciada, toda chave é única, e as quatro tabelas
-particionadas têm as mesmas quatro datas, para que cada ``data_base`` de ``cad_lancamentos`` tenha
-os seus ``cad_contratos`` (a leitura mostrou 2026-01-31 só em ``cad_lancamentos``).
-``rel_contrato_operacao`` é a relação N×N entre contratos e operações da mesma data: toda operação
-tem contratos, todo contrato está em uma ou duas operações, e ``fator_rateio`` reparte cada contrato
-entre as suas operações e soma 1 por contrato (leitura do usuário na base de produção, 2026-09-21).
-Os valores reproduzem o que a carga inicial tem de tratar: ``valor`` com três casas (o par extremo
-``±11846195394.628``), ``fator`` com cinco, ``data_assinatura`` nula em mais da metade das linhas,
-``meta`` sempre nula, ``id_lancamento`` até 1.113.599.996 em ``int32``, e as sete colunas de
-``cad_contratos`` declaradas anuláveis nos arquivos sem nulo algum. Os valores que diferem entre as
-duas bases são os da leitura de desenvolvimento: a de produção tem 113 linhas a menos, ids máximos
-menores (``id_lancamento`` até 952.517.158) e o extremo de ``valor`` em ``±11846195394.62801``. O
-``timestamp`` tem precisão de microssegundo; a parte sub-microssegundo da origem é desconhecida,
-porque o ``INT96`` não tem estatística.
+estrangeira do modelo tem a linha referenciada, toda chave é única, ``rel_contas_hierarquias`` é uma
+árvore de contas, sem conta pai de si mesma (leitura do usuário na base real, 2026-09-23), e as
+quatro tabelas particionadas têm as mesmas quatro datas, para que cada ``data_base`` de
+``cad_lancamentos`` tenha os seus ``cad_contratos`` (a leitura mostrou 2026-01-31 só em
+``cad_lancamentos``). ``rel_contrato_operacao`` é a relação N×N entre contratos e operações da mesma
+data: toda operação tem contratos, todo contrato está em uma ou duas operações, e ``fator_rateio``
+reparte cada contrato entre as suas operações e soma 1 por contrato (leitura do usuário na base de
+produção, 2026-09-21). Os valores reproduzem o que a carga inicial tem de tratar: ``valor`` com três
+casas (o par extremo ``±11846195394.628``), ``fator`` com cinco, ``data_assinatura`` nula em mais da
+metade das linhas, ``meta`` sempre nula, ``id_lancamento`` até 1.113.599.996 em ``int32``, e as sete
+colunas de ``cad_contratos`` declaradas anuláveis nos arquivos sem nulo algum. Os valores que
+diferem entre as duas bases são os da leitura de desenvolvimento: a de produção tem 113 linhas a
+menos, ids máximos menores (``id_lancamento`` até 952.517.158) e o extremo de ``valor`` em
+``±11846195394.62801``. O ``timestamp`` tem precisão de microssegundo; a parte sub-microssegundo da
+origem é desconhecida, porque o ``INT96`` não tem estatística.
 
 A partição de ``cad_lancamentos`` é por ``data_base``, não por ``data``: ``data`` é o mês projetado,
 sempre posterior a ``data_base``, até 2026-12-31.
@@ -462,17 +463,33 @@ def build_cad_contas() -> pa.Table:
 
 
 def build_rel_contas_hierarquias(accounts: pa.Table) -> pa.Table:
-    """93 relações na hierarquia 1: 93 filhos distintos, 32 pais distintos."""
+    """A hierarquia 1, uma árvore de contas contábeis: 93 relações, 93 filhos distintos e 32 pais
+    distintos, nenhuma conta pai de si mesma.
+
+    A raiz é a 32ª conta por id, a 35, a única que não é filha de nenhuma. A ordem é a raiz e depois
+    as demais contas por id; cada uma das 93 seguintes aponta para um pai entre as 32 primeiras da
+    ordem, sempre anterior a ela, dois ou três filhos por pai, o que dá cinco níveis sem ciclo. A
+    conta de id 1 é pai e filha, como na leitura de produção, em que ``id_parent`` e ``id_child``
+    começam em 1; as oito contas de id mais alto ficam fora da árvore.
+    """
     relation_count = 93
     parent_count = 32
     ids = accounts.column("id_conta").to_pylist()
-    children = ids[:relation_count]
-    parents = ids[:parent_count]
+    root = ids[parent_count - 1]
+    ordered = [root]
+    for account in ids:
+        if account != root:
+            ordered.append(account)
+    children = ordered[1:relation_count + 1]
+    parents = []
+    for position in range(relation_count):
+        # O filho está na posição position + 1 da ordem, e o pai numa posição anterior.
+        parents.append(ordered[position * parent_count // relation_count])
     return pa.table(
         {
             "id_rel_conta_hierarquia": list(range(1, relation_count + 1)),
             "id_hierarquia": [1] * relation_count,
-            "id_parent": [parents[position % parent_count] for position in range(relation_count)],
+            "id_parent": parents,
             "id_child": children,
         },
         schema=SCHEMAS["rel_contas_hierarquias"],

@@ -116,12 +116,6 @@ foi medido em [`POC.md`](POC.md).
   não é fechada quando B não conecta, e o erro sai cru do driver onde `test_redshift.py` usa
   `describe`; em `test_s3.py`, a docstring ainda diz que a suíte é pulada sem internet. A próxima
   execução das duas suítes no ambiente alvo vem com essas correções.
-- **As relações de `rel_contas_hierarquias` em que a conta é pai de si mesma.** Na base fictícia
-  (`tests/source_db_projetado.py`), as 32 primeiras das 93 relações da hierarquia 1 têm `id_parent`
-  igual a `id_child`, efeito de montar os pais pelas mesmas 32 primeiras contas dos filhos; as
-  leituras das duas bases reais contaram linhas e tipos, não essa relação. Pergunta ao usuário: a
-  base real tem essas linhas? Sem elas, a base fictícia troca os pais, e os testes que leem a
-  hierarquia conferem os valores novos.
 - **O texto da auditoria no Redshift.** O texto de `serialize_db.audit.audit_sql(..., "redshift")`
   nunca rodou no Redshift: a contagem por `count(CASE WHEN ... THEN 1 END)`, que a documentação do
   `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o operador

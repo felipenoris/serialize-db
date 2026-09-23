@@ -553,8 +553,11 @@ the report: `schema` gained the protected helpers three modules repeated (`liter
 `modulo:atributo` by `pkgutil.resolve_name`; a test cited by name in `plan/` was never split or
 renamed, only restructured in blocks; the abandoned `DuckDBLoader` deletes its spool file, as its
 docstring and stage 4 said; `tests/conftest.py` skips by marker, masks credentials at output time
-and names its root class `SessionRoot`; the target-only suites changed only in form. Not changed,
-reported instead: the three unused `Database` prefixes of stages 5, 8 and 9 (`staging_prefix`,
-`publication_prefix`, `archive_prefix`), the `sandbox_prefix` draft of stage 5 in `test_stdlib.py`,
-and `Database.__post_init__` writing `os.environ` in the tests. `plan/PLAN-STAGE-4.md`,
-`plan/CURRENT_STATE.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+and names its root class `SessionRoot`; the target-only suites changed only in form. Reported, not
+changed: `Database.__post_init__` writing `os.environ` in the tests. The user answered the report
+the same day: code the plan assigns to a later stage stays, even without a caller (the three
+`Database` prefixes of stages 5, 8 and 9, `staging_prefix`, `publication_prefix` and
+`archive_prefix`, and the `sandbox_prefix` draft of stage 5 in `test_stdlib.py`); in the real base
+`id_parent` and `id_child` always differ, and `rel_contas_hierarquias` implements a tree of
+accounting accounts, which the fixture now builds and `tests/test_source_db_projetado.py` checks.
+`plan/PLAN-STAGE-4.md`, `plan/CURRENT_STATE.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`

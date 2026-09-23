@@ -486,6 +486,8 @@ A new lesson adds its story there and its rule here, in the same commit.
   every parameter id: a case with the id `redshift` was skipped as the Redshift suite (2026-09-23).
 - **A test that runs a default which writes points the default at the authorized root first**:
   `DuckDBConfig()`'s `mkdtemp` wrote in the system temp folder from a `local` test (2026-09-23).
+- **Code the plan assigns to a later stage stays, even without a caller**: the no-speculative-code
+  rule covers code no stage plans (user decision of 2026-09-23).
 
 ## Naming conventions
 

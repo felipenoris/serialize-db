@@ -463,3 +463,8 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   first. The same review found `test_stdlib.py` leaving `NO_PROXY` and `AWS_DEFAULT_REGION` in the
   process, because `monkeypatch.delenv` on an absent variable records nothing to restore.
   `CLAUDE.md`, `plan/POC.md`
+- **Planned code is not speculative code** (2026-09-23). The code review reported the three
+  `Database` prefixes of stages 5, 8 and 9 (`staging_prefix`, `publication_prefix`,
+  `archive_prefix`) as code without a caller, against the style rule "nothing speculative", and
+  offered to remove them. The user decided that code the plan assigns to a later stage stays: the
+  rule covers code no stage plans. `CLAUDE.md`, `.claude/memory/decisions.md`

@@ -603,6 +603,40 @@ def test_rel_contrato_operacao_apportions_each_contract_among_its_operations(
     assert repeated == 0
 
 
+def path_to_root(parent_of: dict[int, int], account: int) -> list[int]:
+    """As contas da subida de ``account`` pelos pais, até a que não tem pai; um ciclo reprova."""
+    path = [account]
+    while path[-1] in parent_of:
+        parent = parent_of[path[-1]]
+        assert parent not in path, ("ciclo", path)
+        path.append(parent)
+    return path
+
+
+def test_rel_contas_hierarquias_is_a_tree_of_accounts(base: source.SourceBase) -> None:
+    """A hierarquia 1 é uma árvore de contas: nenhuma conta é pai de si mesma, cada conta tem um
+    pai só, há uma raiz, e a subida pelos pais leva toda conta até ela sem ciclo."""
+    hierarchy = pq.read_table(base.files["rel_contas_hierarquias"][0])
+    parents = hierarchy.column("id_parent").to_pylist()
+    children = hierarchy.column("id_child").to_pylist()
+    parent_of = dict(zip(children, parents, strict=True))
+
+    # Nenhuma conta é pai de si mesma, e cada filho aparece numa relação só.
+    for child, parent in parent_of.items():
+        assert child != parent, child
+    assert len(parent_of) == hierarchy.num_rows
+
+    # As contagens da leitura de desenvolvimento: 93 filhos e 32 pais distintos.
+    assert len(parent_of) == 93
+    assert len(set(parents)) == 32
+
+    # Uma raiz só, o pai que não é filho de ninguém, e toda conta sobe até ela.
+    roots = set(parents) - set(children)
+    assert len(roots) == 1
+    for child in children:
+        assert path_to_root(parent_of, child)[-1] in roots, child
+
+
 def test_schema_json_is_the_previous_library_control_and_matches_the_files(
     base: source.SourceBase,
 ) -> None:
