@@ -431,3 +431,11 @@ table at `close` in one transaction with the `INSERT`; the hybrid `stream` (batc
 `interrupt()` in the stream's `close` and in the engine's `cleanup`. Stage 4 has no decision
 awaiting the user. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`,
 `plan/PLAN.md`, `plan/POC.md`
+
+After merging PR #58 the user read PARQUET-1246 as the Parquet spec recommending no min and max for
+a column holding `NaN`, noted that DuckDB documents its own `NaN` convention, and proposed that the
+library follow the Parquet storage standard whatever DuckDB does (2026-09-23). The sources showed a
+different spec rule (min and max without the `NaN` plus `nan_count`), a Delta log outside the
+Parquet spec, and DuckDB losing the row through both layers; the recommendation awaiting the user is
+no `Double` min and max in the footer or the log. `plan/POC.md`, `plan/PLAN-STAGE-3.md`,
+`plan/OPEN_QUESTIONS.md`

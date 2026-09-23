@@ -679,7 +679,7 @@ em todo tipo (medido em 2026-09-22, delta-rs 1.6.4, [`POC.md`](POC.md)):
 
 | Tipo | O que o log guarda | Consequência na poda |
 | --- | --- | --- |
-| Inteiro, data, `double`, texto | O valor exato; `-1e+308`, `0.30000000000000004` e um texto de 41 caracteres saíram inteiros, `NaN` fica fora do mínimo e do máximo, e o infinito vira `null` | A poda acha a linha, menos a do `NaN` num filtro por intervalo do `delta_scan`: o DuckDB ordena o `NaN` acima de todo número, e `valor > 3` deu 0 linhas com o arquivo podado pelo máximo 2,0, enquanto `valor >= 2` deu 2 (2026-09-23) |
+| Inteiro, data, `double`, texto | O valor exato; `-1e+308`, `0.30000000000000004` e um texto de 41 caracteres saíram inteiros, `NaN` fica fora do mínimo e do máximo, e o infinito vira `null` | A poda acha a linha, menos a do `NaN` num filtro por intervalo do `delta_scan`: o DuckDB ordena o `NaN` acima de todo número, e `valor > 3` deu 0 linhas com o arquivo podado pelo máximo 2,0, enquanto `valor >= 2` deu 2 (2026-09-23). O rodapé do arquivo também tem o máximo sem o `NaN`, e o leitor Parquet do DuckDB poda o grupo de linhas por ele mesmo sem estatística no log |
 | `decimal(p, s)` | Um número JSON: `123456789012345.21` virou `123456789012345.2` | `WHERE valor = 123456789012345.21` devolveu **zero linhas** no delta-rs e no `delta_scan`, com a linha dentro do arquivo |
 | `timestamp` | O texto truncado em milissegundos: `2026-08-31 23:59:59.999999` virou `2026-08-31 23:59:59.999` | Os dois leitores acharam a linha mesmo assim |
 
@@ -687,6 +687,16 @@ O defeito do `decimal` é do escritor, então uma coluna `Numeric` larga gravada
 `write_deltalake` carrega a mesma poda; o modelo cliente não tem nenhuma, porque as colunas
 numéricas são `Double`. O `register_files` da [etapa 3](PLAN-STAGE-3.md) registra mínimo e máximo
 só dos quatro tipos exatos.
+
+O `NaN` segue convenções diferentes no rodapé Parquet e no log. A especificação do Parquet
+(`parquet.thrift`) manda o escritor deixar o `NaN` fora do mínimo e do máximo e, desde o
+PARQUET-2249 (2026-05-26), contá-lo em `nan_count`; o leitor sem `nan_count` supõe que pode haver
+`NaN`, e ignora o mínimo e o máximo numa busca que o `NaN` satisfaz. O protocolo Delta define
+`maxValues` como o maior valor válido do arquivo, sem contagem de `NaN`; o delta-kernel-rs grava o
+`NaN` como máximo, e o Delta Spark descarta o mínimo e o máximo de ponto flutuante que colhe do
+rodapé de escritores que deixam o `NaN` de fora (PR #7101, 2026-06-27). O delta-rs copia o máximo do
+rodapé para o log. O que a biblioteca grava no `Double` é a decisão pendente da
+[issue #59](https://github.com/felipenoris/serialize-db/issues/59), medida em [`POC.md`](POC.md).
 
 ## Exportação para Parquet
 
@@ -886,7 +896,8 @@ Comportamentos verificados:
   `min`, `max`, `null_count` por coluna, nomes entre aspas e valores em texto), que viram a
   `AddAction` do registro. O arquivo do DuckDB marca todas as colunas como `optional`; a nulidade
   continua garantida pelo esquema Delta e pela auditoria. Num `DOUBLE` com `NaN`, o `RETURN_STATS`
-  traz `has_nan: true` e o maior número como máximo, e o infinito sai `inf`; o texto longo sai
+  traz o maior número como máximo e `has_nan: true` só quando o `NaN` está no último grupo de linhas
+  do arquivo; o rodapé grava sem mínimo e máximo todo grupo com `NaN`. O infinito sai `inf`; o texto longo sai
   truncado em 256 caracteres, com o máximo de 255 e o último incrementado, acima do valor real, e o
   texto multibyte longo sai sem mínimo e máximo (2026-09-23).
 

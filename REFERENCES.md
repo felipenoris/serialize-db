@@ -25,6 +25,13 @@ Especificação, no repositório `apache/parquet-format`:
 - <https://github.com/apache/parquet-format/blob/master/Geospatial.md>
 - <https://github.com/apache/parquet-format/blob/master/CHANGES.md>
 
+O `NaN` nas estatísticas, consultado em 2026-09-23 (os tickets pela API REST do JIRA):
+
+- <https://issues.apache.org/jira/browse/PARQUET-1246>
+- <https://issues.apache.org/jira/browse/PARQUET-1222>
+- <https://github.com/apache/parquet-format/commits/master/src/main/thrift/parquet.thrift>: o commit
+  do PARQUET-2249, a ordem IEEE 754 e o `nan_count` (2026-05-26)
+
 Site do projeto:
 
 - <https://parquet.apache.org/docs/file-format/implementationstatus/>
@@ -419,6 +426,9 @@ Blog:
 Repositório `duckdb` no GitHub:
 
 - <https://github.com/duckdb/duckdb/issues/2755>
+- <https://github.com/duckdb/duckdb/issues/25521>
+- <https://github.com/duckdb/duckdb/issues/23921>
+- A busca de issues por `NaN` em `duckdb/duckdb` e `duckdb/duckdb-delta` (2026-09-23)
 
 Extensão `iceberg` no GitHub:
 
@@ -951,6 +961,18 @@ Interoperabilidade entre Delta e Iceberg (UniForm, XTable, convergência dos for
 - <https://xtable.apache.org/docs/how-to>
 - <https://www.databricks.com/blog/databricks-tabular>
 - <https://www.databricks.com/company/newsroom/press-releases/databricks-agrees-acquire-tabular-company-founded-original-creators-apache-iceberg> (404 em 2026-09-19)
+
+O `NaN` nas estatísticas do log, consultado em 2026-09-23 (o protocolo, acima, na seção "Per-file
+Statistics"):
+
+- <https://github.com/delta-io/delta-kernel-rs/blob/main/default-engine/src/stats.rs>
+- <https://github.com/delta-io/delta-kernel-rs/blob/main/kernel/src/scan/data_skipping.rs>
+- <https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/stats/StatsCollectionUtils.scala>
+- <https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/stats/StatisticsCollection.scala>
+- <https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/stats/DataSkippingReader.scala>
+- <https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaSQLConf.scala>
+- <https://github.com/delta-io/delta/pull/7101>
+- A busca de issues e PRs por `NaN` em `delta-io/delta-rs` e `delta-io/delta-kernel-rs`
 
 ## DuckLake
 

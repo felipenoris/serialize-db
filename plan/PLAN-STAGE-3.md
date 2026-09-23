@@ -80,14 +80,14 @@ o rodapé de cada arquivo, um GET por arquivo:
    mediu transcrevendo exato ([`POC.md`](POC.md), decisão do usuário do mesmo dia); `decimal` fica
    de fora porque o próprio delta-rs grava o mínimo e o máximo como número JSON e perde a linha na
    poda, e `timestamp` porque o valor sai truncado em milissegundos. O `Double` transcreve exato só
-   os valores finitos: com `NaN` na coluna, o `RETURN_STATS` dá `has_nan` e o maior número como
-   máximo, e o `delta_scan ... WHERE valor > 3` perdeu a linha que o DuckDB ordena acima de todo
-   número; o infinito entraria no JSON do log como `Infinity`, que não é JSON válido (leitura de
-   2026-09-23, [`POC.md`](POC.md)). O extremo infinito fica fora, como o escritor do delta-rs faz,
-   que grava `null` no lugar dele. O `NaN`, que o `cast` aceita (decisão do usuário de 2026-09-23),
-   é a questão aberta da [issue #59](https://github.com/felipenoris/serialize-db/issues/59), porque
-   o próprio delta-rs grava o máximo sem ele. O texto não tem exceção: o
-   `RETURN_STATS` trunca o máximo para cima, e omite o texto multibyte longo.
+   os valores finitos: com `NaN` na coluna, o máximo do `RETURN_STATS` fica sem ele, e o
+   `delta_scan ... WHERE valor > 3` perdeu a linha que o DuckDB ordena acima de todo número; o
+   `has_nan` só vê o `NaN` do último grupo de linhas do arquivo; o infinito entraria no JSON do log
+   como `Infinity`, que não é JSON válido (leituras de 2026-09-23, [`POC.md`](POC.md)). O extremo
+   infinito fica fora, como o escritor do delta-rs faz, que grava `null` no lugar dele. O `NaN`, que
+   o `cast` aceita (decisão do usuário de 2026-09-23), é a decisão pendente da
+   [issue #59](https://github.com/felipenoris/serialize-db/issues/59), no fim deste arquivo. O texto
+   não tem exceção: o `RETURN_STATS` trunca o máximo para cima, e omite o texto multibyte longo.
 
 A reprovação recusa o commit com o arquivo e a conferência na mensagem, e os arquivos ficam órfãos na
 pasta até `vacuum(full=True)`. Depois do commit, `read_back` lê a versão nova pelo delta-rs e pelo
@@ -644,14 +644,27 @@ não o seu texto.
 
 ## Decisões pendentes
 
-- **O mínimo e o máximo de uma coluna `Double` com `NaN`**, a
-  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). Os dois escritores deixam o
-  `NaN` fora do máximo, e o `delta_scan` perde a linha num filtro por intervalo quando poda o arquivo
-  (leitura de 2026-09-23, [`POC.md`](POC.md)); o `cast` aceita o `NaN` (decisão do usuário de
-  2026-09-23). Proposto: `register_files` omite o mínimo e o máximo da coluna quando o
-  `RETURN_STATS` traz `has_nan`, e o `publish_partition` continua com os do delta-rs. A migração
-  adiantada registrou o `Double` na base de produção, e a contagem de `isnan` por coluna `Double`
-  nas tabelas migradas, no ambiente alvo, diz se alguma já tem o defeito.
+- **O mínimo e o máximo de uma coluna `Double`**, a
+  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita o `NaN`
+  (decisão do usuário de 2026-09-23). O rodapé Parquet e o log Delta seguem convenções diferentes:
+  a especificação do Parquet deixa o `NaN` fora do mínimo e do máximo e o conta em `nan_count`; o
+  protocolo Delta não tem contagem de `NaN`, e o delta-kernel-rs e o Delta Spark tratam o `NaN` como
+  o maior valor. O DuckDB perde a linha do `NaN` num filtro por intervalo nas duas camadas: pelo
+  máximo sem o `NaN` que o delta-rs e o registro copiam para o log, e pelo máximo do rodapé do
+  delta-rs e do pyarrow, que o leitor Parquet do DuckDB usa para podar o grupo de linhas
+  ([duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521)). Tirar só o do log não
+  basta, e o `has_nan` do `RETURN_STATS` só vê o último grupo de linhas (leituras de 2026-09-23,
+  [`POC.md`](POC.md)). Proposto: nenhuma coluna `Double` com mínimo e máximo, no rodapé e no log.
+  `publish_partition` passa `ColumnProperties(statistics_enabled="NONE")` às colunas `Double` no
+  `write_deltalake`, e `register_files` omite os dois; o `COPY` do DuckDB já grava sem eles o grupo
+  de linhas com `NaN`. As duas especificações aceitam a estatística ausente, e o Delta Spark
+  descarta o mínimo e o máximo de ponto flutuante que colhe do rodapé desses escritores. O custo é a
+  poda por coluna `Double`, e nenhuma delas está em `partition_by` ou `sort_key` no modelo cliente.
+  A alternativa é manter o mínimo e o máximo sem o `NaN`, como a especificação do Parquet escreve, e
+  documentar que o resultado de um filtro por intervalo numa coluna `Double` com `NaN` depende da
+  disposição dos arquivos no DuckDB. A migração adiantada registrou o `Double` com o mínimo e o
+  máximo sem o `NaN`, e a contagem de `isnan` por coluna `Double` nas tabelas migradas, no ambiente
+  alvo, diz se alguma precisa regravar as estatísticas.
 
 As seis decisões da etapa tomadas pelo usuário em 2026-09-22 estão escritas na seção que
 descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a

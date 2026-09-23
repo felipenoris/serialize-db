@@ -76,16 +76,19 @@ foi medido em [`POC.md`](POC.md).
   execução.
 - **O `Double` não finito nas estatísticas do Delta**, a
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
-  infinito numa coluna `Double` (decisão do usuário de 2026-09-23), e os dois escritores do Delta
-  gravam o máximo do arquivo sem o `NaN`; o DuckDB ordena o `NaN` acima de todo número, e o
-  `delta_scan` responde a um filtro por intervalo conforme a poda: `valor > 3` deu 0 linhas com o
-  arquivo podado, e `valor >= 2` deu 2, com o `NaN` dentro (leituras de 2026-09-23,
-  [`POC.md`](POC.md)). A soma de controle da auditoria já soma só os finitos e conta os demais, e o
-  registro deixa fora o extremo infinito. Continuam abertos: a contagem de `isnan` e `isinf` nas
+  infinito numa coluna `Double` (decisão do usuário de 2026-09-23). O DuckDB ordena o `NaN` acima de
+  todo número e perde a linha dele num filtro por intervalo quando poda por um máximo sem o `NaN`: o
+  do log, que o delta-rs e o registro copiam do rodapé, e o do rodapé do delta-rs e do pyarrow, que o
+  leitor Parquet do DuckDB usa por grupo de linhas
+  ([duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521)). A especificação do Parquet
+  deixa o `NaN` fora do mínimo e do máximo e o conta em `nan_count`; o protocolo Delta não tem essa
+  contagem, e o delta-kernel-rs e o Delta Spark tratam o `NaN` como o maior valor (leituras de
+  2026-09-23, [`POC.md`](POC.md)). A soma de controle da auditoria já soma só os finitos e conta os
+  demais, e o registro deixa fora o extremo infinito. Continuam abertos: o mínimo e o máximo do
+  `Double` no rodapé e no log ([etapa 3](PLAN-STAGE-3.md)); a contagem de `isnan` e `isinf` nas
   colunas `Double` das tabelas que a migração adiantada gravou no ambiente alvo, com a busca por
-  `Infinity` nos arquivos do log delas; o que `register_files` grava numa coluna com `has_nan`
-  ([etapa 3](PLAN-STAGE-3.md)); se a contagem da auditoria reprova; e o aviso aos clientes da tabela
-  publicada.
+  `Infinity` nos arquivos do log delas; se a contagem da auditoria reprova; e o aviso aos clientes
+  da tabela publicada.
 - **O `pytest` sem variável grava na pasta temporária do pytest.** A premissa de
   [`PLAN.md`](PLAN.md) diz que `pytest` sem variável não grava arquivo algum, e o cabeçalho de
   `tests/conftest.py` diz que fora das raízes informadas a sessão grava só `.pytest_cache/`; mas
@@ -116,9 +119,12 @@ tomada sai daqui e do arquivo da etapa no mesmo commit.
   que o `cast` aceita em silêncio: o instante UTC vira hora local, e a hora local vira UTC (leitura
   de 2026-09-22, [`POC.md`](POC.md)). Proposto: recusar os dois com `ContractError`, porque a
   conversão muda o valor que o cliente vê e nenhuma coluna do modelo cliente tem fuso.
-- [Etapa 3](PLAN-STAGE-3.md): o mínimo e o máximo de uma coluna `Double` com `NaN`, da
-  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). Proposto: `register_files`
-  omite os dois quando o `RETURN_STATS` traz `has_nan`.
+- [Etapa 3](PLAN-STAGE-3.md): o mínimo e o máximo de uma coluna `Double`, da
+  [issue #59](https://github.com/felipenoris/serialize-db/issues/59). Proposto: nenhuma coluna
+  `Double` com mínimo e máximo, no rodapé Parquet e no log Delta
+  (`ColumnProperties(statistics_enabled="NONE")` no `write_deltalake`, os dois omitidos em
+  `register_files`). A alternativa é manter os dois sem o `NaN`, como a especificação do Parquet
+  escreve, e documentar a poda do DuckDB.
 - [Etapa 5](PLAN-STAGE-5.md): a confirmação do `USE` pela criação da tabela de controle; os limites
   entre `fetchmany` e `UNLOAD` e entre `INSERT` e `COPY`;
   a tabela de OIDs de `schema_from_description`; o destino de `export_partition` por partição

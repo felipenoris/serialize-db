@@ -449,6 +449,11 @@ A new lesson adds its story there and its rule here, in the same commit.
   hybrid stream's orphan-file race showed in three of six runs and never in the first, and a
   `__del__` read a field a failed `__init__` never set; run such tests several times, read the
   warnings, and set every field a finalizer reads before the first line that can raise (2026-09-23).
+- **A statistic is probed at every layer that prunes and in every row-group position, and a standard
+  is read in its current text**: the first `NaN` probe read only the Delta log over one-row-group
+  files, and missed DuckDB's Parquet reader pruning by the delta-rs and pyarrow footers and a
+  `has_nan` that sees only the last row group; the question came from a 2018 Java ticket, while the
+  spec changed in May 2026 (2026-09-23).
 
 ## Naming conventions
 
@@ -499,8 +504,9 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `FunctionElement`), and the user's answers of the same day closed stage 4: the `qmark` style, the
   audit key scope, the engine interface, the `loader` creating its table at `close`, the hybrid
   `stream` and `interrupt()`, the last three implemented in the `test_parallel.py` sketches. The
-  `cast` keeps accepting the non-finite `Double`; its pruning defect is issue #59 and the stage 3
-  `NaN` statistics wait on it (`.claude/memory/decisions.md`).
+  `cast` keeps accepting the non-finite `Double`; its pruning defect is issue #59, and the stage 3
+  recommendation of 2026-09-23, no `Double` min and max in the Parquet footer or the Delta log,
+  waits on the user (`.claude/memory/decisions.md`).
 - The next step is the report of the migration run in the target: `scripts/migrate_parquet_to_delta.py`
   ran successfully there on the copy of the production base, and its reports, not yet available,
   carry the `cad_lancamentos` partition measurement, the revision trigger of `export_mode` (the

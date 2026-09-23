@@ -1976,3 +1976,61 @@ verdes em todas.
 **Consequência**: [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) e [`PLAN.md`](PLAN.md) descrevem o stream
 híbrido, o cancelamento e o `loader` com a criação no `close`, e a etapa 4 não tem decisão
 pendente.
+
+## O que as fontes e as sondas do `NaN` nas estatísticas mostraram
+
+Em 2026-09-23, no mesmo macOS (DuckDB 1.5.5 com a extensão `delta` 45c4087, deltalake 1.6.4,
+pyarrow 25.0.1), a pergunta do usuário sobre o PARQUET-1246 foi lida nas fontes e medida por três
+sondas, repetidas com o mesmo resultado.
+
+- **A especificação do Parquet.** O PARQUET-1246 (2018, parquet-mr 1.10.0 e 1.8.3) mudou o caminho
+  de leitura da implementação Java: ignora o mínimo e o máximo de `float` e `double` quando eles são
+  `NaN`, porque o próprio parquet-mr gravava o `NaN` como máximo. O `parquet.thrift` manda o escritor
+  deixar o `NaN` fora do mínimo e do máximo (PARQUET-1222, parquet-format 2.10.0, 2022) e, desde o
+  PARQUET-2249 (commit de 2026-05-26), gravar `nan_count` mesmo quando zero; o leitor sem
+  `nan_count` supõe que pode haver `NaN`, e ignora o mínimo e o máximo numa busca que o `NaN`
+  satisfaz. Só uma coluna de valores todos `NaN` fica sem mínimo e máximo. A ordem nova
+  `IEEE_754_TOTAL_ORDER` põe o `NaN` positivo acima de todo número e mantém o mínimo e o máximo nos
+  valores que não são `NaN`.
+- **O protocolo Delta.** A estatística de arquivo fica no campo `stats` da ação `add`, texto JSON no
+  `_delta_log` (no checkpoint, texto JSON ou `stats_parsed` dentro de um Parquet); `maxValues` é o
+  maior valor válido do arquivo, sem contagem de `NaN` e sem menção a ele. O delta-kernel-rs grava o
+  `NaN` como máximo (`test_file_stats_accumulator_float_nan_ordering` em
+  `default-engine/src/stats.rs`) e não usa o mínimo e o máximo do rodapé numa coluna de partição de
+  ponto flutuante. O Delta Spark descarta o mínimo e o máximo de `float` e `double` que colhe do
+  rodapé de escritores que deixam o `NaN` de fora, como parquet-cpp, Arrow e pyarrow, e mantém os do
+  parquet-mr (PR #7101, 2026-06-27, `collectStats.skipFloatingPointFromFooter` ligado por padrão).
+  Nenhuma issue do delta-rs trata do máximo sem o `NaN` que ele copia para o log.
+- **Os escritores do rodapé.** Num grupo de linhas com `NaN`, o `COPY` do DuckDB grava o grupo sem
+  mínimo e máximo; o pyarrow (`parquet-cpp-arrow version 25.0.1`) e o delta-rs (`parquet-rs version
+  59.3.0`) gravam os dois sem o `NaN`. A tabela nativa do DuckDB guarda o `NaN` como máximo do
+  segmento (`[Min: 1.0, Max: nan]` em `pragma_storage_info`).
+- **O leitor Parquet do DuckDB.** Sobre `[1.5, NaN, 2.0]` e `[4, 5, 6]` em dois grupos de linhas,
+  `read_parquet(...) WHERE valor > 3` devolveu 3 linhas nos arquivos do pyarrow e do delta-rs e 4 no
+  do DuckDB; `valor + 0 > 3`, que não desce ao leitor, devolveu 4 nos três. O leitor poda pelo
+  máximo do rodapé um grupo que tem uma linha que o próprio DuckDB ordena acima de todo número, o que
+  a regra de leitura da especificação proíbe. É a issue
+  [duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521), aberta em 2026-09-09 e
+  marcada `reproduced`, que também mostra `!=` perdendo e `<=` ganhando a linha. A tabela nativa
+  devolveu 4.
+- **O `delta_scan`.** Sobre dois arquivos do DuckDB registrados, `[1.5, NaN, 2.0]` e `[4, 5, 6]`,
+  `valor > 3` devolveu 3 com o máximo 2,0 no log e 4 com o valor sem mínimo e máximo ou com o máximo
+  `null`. A propriedade `delta.dataSkippingStatsColumns` sem a coluna não muda a leitura de um log
+  que traz a estatística (3). O `write_deltalake` respeita a propriedade e grava o log sem o valor,
+  mas o rodapé continua com o máximo sem o `NaN`, e o `delta_scan` perdeu a linha pela poda do grupo
+  (3). Com `ColumnProperties(statistics_enabled="NONE")` na coluna, o rodapé e o log saem sem a
+  estatística do valor (o `nullCount` dele também sai), e o `delta_scan` e o `read_parquet`
+  devolveram 4.
+- **O `has_nan` do `RETURN_STATS`.** Em 4.096 linhas gravadas em dois grupos de 2.048, o `has_nan`
+  saiu falso com o `NaN` só no primeiro grupo (na linha 7 ou na linha 0) e verdadeiro com ele no
+  último grupo ou nos dois; o mínimo e o máximo cobrem os números dos dois grupos. Nenhuma issue do
+  DuckDB trata disso.
+
+**Consequência**: a proposta de `register_files` omitir o mínimo e o máximo quando o `RETURN_STATS`
+traz `has_nan` cai, e omitir só no log não protege o modo `rewrite`. A recomendação, que espera o
+usuário, é gravar o `Double` sem mínimo e máximo no rodapé e no log;
+[`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) e
+[`delta.md`](delta.md) descrevem a decisão pendente. Os casos entraram nas suítes de estudo:
+`test_duckdb.py::test_return_stats_has_nan_follows_only_the_last_row_group`,
+`test_duckdb.py::test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer` e
+`test_deltalake.py::test_float_statistics_off_keep_the_nan_row`.

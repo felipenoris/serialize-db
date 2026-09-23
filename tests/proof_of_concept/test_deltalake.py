@@ -13,8 +13,9 @@ exportação por cópia dos arquivos e a carga inicial de pastas Parquet; e aind
 (caminho, estatística, esquema do arquivo), o ``overwrite`` com ``partition_filters`` e a
 compactação que normaliza arquivos de outro escritor, a descrição e os comentários que atravessam o
 ``overwrite`` e mudam por ``alter``, o mínimo e o máximo que o próprio delta-rs grava por tipo, o
-``NaN`` e o infinito nas estatísticas registradas e nas do delta-rs, dois registros concorrentes da
-mesma partição e a poda do ``delta_scan`` por forma de predicado. Os
+``NaN`` e o infinito nas estatísticas registradas e nas do delta-rs, o ``Double`` sem estatística
+no rodapé e no log, dois registros concorrentes da mesma partição e a poda do ``delta_scan`` por
+forma de predicado. Os
 comportamentos estão descritos em ``plan/delta.md``; aqui eles viram asserções.
 """
 
@@ -35,7 +36,7 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
-from deltalake import CommitProperties, DeltaTable, QueryBuilder, Schema, write_deltalake
+from deltalake import ColumnProperties, CommitProperties, DeltaTable, QueryBuilder, Schema, WriterProperties, write_deltalake
 from deltalake.exceptions import CommitFailedError, DeltaError, SchemaMismatchError
 from deltalake.schema import Field, PrimitiveType
 from deltalake.transaction import AddAction
@@ -862,6 +863,50 @@ def test_nan_statistics_hide_rows_from_delta_scan(folder: Callable[[str], str]) 
     assert json.loads(log_actions(uri, 0)[-1]["add"]["stats"])["maxValues"]["valor"] is None
     con.close()
 
+
+
+def test_float_statistics_off_keep_the_nan_row(folder: Callable[[str], str]) -> None:
+    """Sem mínimo e máximo do ``Double`` no rodapé e no log, o ``delta_scan`` devolve a linha do ``NaN``; tirar só os do log não basta, porque o leitor Parquet do DuckDB poda o grupo de linhas pelo rodapé.
+
+    O delta-rs respeita ``delta.dataSkippingStatsColumns`` ao gravar o log, e o rodapé continua com o
+    máximo sem o ``NaN``; ``ColumnProperties(statistics_enabled="NONE")`` tira a estatística da
+    coluna dos dois. O arquivo do DuckDB já sai sem mínimo e máximo no grupo com ``NaN``, e
+    registrado sem os dois no log devolve a linha que ``test_nan_statistics_hide_rows_from_delta_scan``
+    perde. É a recomendação da issue #59.
+    """
+    con = connect_duckdb(("delta",))
+    table = pa.table({"id": pa.array([1, 2, 3, 4, 5, 6], pa.int64()), "valor": pa.array([1.5, float("nan"), 2.0, 4.0, 5.0, 6.0])})
+
+    def delta_scan_count(uri: str) -> int:
+        return con.execute(f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 3").fetchone()[0]
+
+    # O log sem o valor e o rodapé com o máximo 2.0 no grupo do NaN: o grupo é podado.
+    uri = folder("estatistica_so_no_rodape")
+    write_deltalake(uri, table, configuration={"delta.dataSkippingStatsColumns": "id"}, writer_properties=WriterProperties(max_row_group_size=3))
+    assert "valor" not in json.loads(log_actions(uri, 0)[-1]["add"]["stats"])["maxValues"]
+    assert delta_scan_count(uri) == 3
+
+    # Sem estatística do valor no rodapé nem no log: a linha volta.
+    uri = folder("sem_estatistica_do_double")
+    properties = WriterProperties(max_row_group_size=3, column_properties={"valor": ColumnProperties(statistics_enabled="NONE")})
+    write_deltalake(uri, table, writer_properties=properties)
+    stats = json.loads(log_actions(uri, 0)[-1]["add"]["stats"])
+    assert stats == {"numRecords": 6, "minValues": {"id": 1}, "maxValues": {"id": 6}, "nullCount": {"id": 0}}
+    assert delta_scan_count(uri) == 4
+
+    # O arquivo do DuckDB com [1.5, NaN, 2.0], registrado sem o mínimo e o máximo do valor.
+    uri = folder("registro_sem_minimo_e_maximo")
+    DeltaTable.create(uri, table.schema)
+    con.register("origem", table.slice(0, 3))
+    cursor = con.execute(f"COPY origem TO '{uri}/f.parquet' (FORMAT parquet, RETURN_STATS)")
+    columns = [column[0] for column in cursor.description]
+    row = dict(zip(columns, cursor.fetchone()))
+    stats = json.dumps({"numRecords": row["count"], "minValues": {"id": 1}, "maxValues": {"id": 3}, "nullCount": {"id": 0, "valor": 0}})
+    added = AddAction(path="f.parquet", size=row["file_size_bytes"], partition_values={}, modification_time=int(time.time() * 1000),
+                      data_change=True, stats=stats)
+    DeltaTable(uri).create_write_transaction([added], mode="append", schema=table.schema)
+    assert delta_scan_count(uri) == 1
+    con.close()
 
 def test_two_registrations_of_the_same_partition_conflict(folder: Callable[[str], str], two_months: pa.Table) -> None:
     """Dois ``create_write_transaction(mode="overwrite")`` da mesma partição, a partir da mesma versão: o segundo é ``CommitFailedError``, e a partição fica com o arquivo do primeiro.

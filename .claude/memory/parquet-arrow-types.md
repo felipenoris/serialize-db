@@ -13,6 +13,13 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   `decimal(p,s)`, `string`, `date`, `timestamp_ntz` (naive) and `timestamp` (UTC); a naive timestamp
   column raises the protocol to reader 3 / writer 7 with the `timestampNtz` feature, which DuckDB
   reads as `TIMESTAMP`. `plan/schema.md`, `plan/estrategia.md`
+- In a row group holding a `NaN`, DuckDB writes the float column without min and max; pyarrow and
+  delta-rs write both without the `NaN` (2026-09-23). The Parquet spec asks for the latter
+  (PARQUET-1222, parquet-format 2.10.0, 2022) and, since PARQUET-2249 (2026-05-26), for a
+  `nan_count` even when zero; a reader without `nan_count` must assume `NaN` may be present and
+  ignore min and max in a search the `NaN` satisfies. PARQUET-1246 (2018, parquet-mr 1.10.0) was a
+  Java reader fix that ignores a min or max that is itself `NaN`, not a rule to omit statistics.
+  `plan/POC.md`, `plan/delta.md`
 
 ## The type contract
 

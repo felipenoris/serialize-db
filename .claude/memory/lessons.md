@@ -378,3 +378,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   a warning in the suite's output. Run a new test of threads or finalizers several times in a row,
   read the warnings the run prints, and give every field a finalizer reads a value before the first
   line of `__init__` that can raise. `plan/POC.md`
+- **A statistic is probed at every layer that prunes and in every position of the file, and a
+  standard is read in its current text** (2026-09-23). The first `NaN` probe read only the Delta log
+  over one-row-group files, and missed that DuckDB's Parquet reader prunes by the footer of the
+  delta-rs and pyarrow writers, so removing the log statistics alone keeps the defect, and that
+  `has_nan` sees only the last row group, which sank the proposal built on it. The question itself
+  came from PARQUET-1246, a Java reader fix of 2018, while the spec's rule dates from 2022 and
+  changed in May 2026. Put the special value in the first, a middle and the last row group, read it
+  through the log and through `read_parquet`, and quote the spec file at its current commit.
+  `plan/POC.md`
