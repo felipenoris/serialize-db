@@ -9,10 +9,13 @@ conexão falsa do ``redshift_connector`` sobre um DuckDB em memória, que traduz
 que as suítes escrevem. ``stop`` encerra o moto no fim. O moto e o DuckDB guardam tudo em memória,
 e nada é gravado em disco.
 
-O substituto confere o código Python dos testes. Cada recusa que ele imita é uma leitura do
-ambiente alvo registrada em ``plan/POC.md``, e no resto o DuckDB responde do jeito dele. Os
-bloqueios entre transações, a criptografia do bucket, a Data API, as credenciais do contêiner e o
-proxy só o ambiente alvo mostra.
+O substituto confere o código Python dos testes. Cada recusa e cada comportamento que ele imita é
+uma leitura do ambiente alvo registrada em ``plan/POC.md``: a contrabarra como escape nos literais
+de texto, o ``UNLOAD`` de um resultado vazio sem manifesto nem arquivo e o ``is_valid_json`` que
+recusa ``SUPER``. No resto, o DuckDB responde do jeito dele. Os bloqueios entre transações, a
+criptografia do bucket, a Data API, as credenciais do contêiner, o proxy e a comparação do ``NaN``
+numa varredura de tabela, que no Redshift segue o IEEE e no DuckDB a regra do PostgreSQL, só o
+ambiente alvo mostra.
 
 Duas variáveis provocam falhas, para rodar lado a lado o código anterior e o corrigido de um
 tratamento de falha:
@@ -80,7 +83,8 @@ MACROS = (
     "CREATE OR REPLACE TEMP MACRO json_serialize(x) AS CAST(x AS VARCHAR)",
     "CREATE OR REPLACE TEMP MACRO json_typeof(x) AS lower(json_type(x))",
     "CREATE OR REPLACE TEMP MACRO json_size(x) AS strlen(CAST(x AS VARCHAR))",
-    "CREATE OR REPLACE TEMP MACRO is_valid_json(x) AS json_valid(x)",
+    "CREATE OR REPLACE TEMP MACRO is_valid_json(x) AS CASE WHEN typeof(x) = 'JSON' "
+    "THEN error('function is_valid_json(super) does not exist') ELSE json_valid(x) END",
     "CREATE OR REPLACE TEMP MACRO octet_length(x) AS strlen(CAST(x AS VARCHAR))",
     "CREATE OR REPLACE TEMP MACRO getdate() AS now()",
     "CREATE OR REPLACE TEMP MACRO has_schema_privilege(s, p) AS true",
@@ -130,9 +134,13 @@ COMMANDS = {
     "ROLLBACK",
 }
 
-# Uma região citada, '...' ou "...", com a aspa dobrada como escape; as traduções mexem só no texto
-# fora delas.
+# Uma região citada do DuckDB, '...' ou "...", com a aspa dobrada como escape; as traduções mexem só
+# no texto fora delas.
 QUOTED = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"")
+
+# Uma região citada do Redshift: o literal de texto, onde a aspa dobrada é uma aspa e a contrabarra
+# escapa o caractere seguinte, como no PostgreSQL 8.0, ou o nome entre aspas duplas.
+REDSHIFT_QUOTED = re.compile(r"'(?:[^'\\]|''|\\.)*'|\"(?:[^\"]|\"\")*\"", re.DOTALL)
 
 COPY_PATTERN = re.compile(
     r"COPY\s+(?P<table>[^\s(]+)\s*(?:\((?P<columns>[^)]*)\)\s*)?"
@@ -140,7 +148,8 @@ COPY_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 UNLOAD_PATTERN = re.compile(
-    r"UNLOAD\s*\(\s*'(?P<select>(?:[^']|'')*)'\s*\)\s*TO\s*'(?P<target>[^']+)'(?P<options>.*)$",
+    r"UNLOAD\s*\(\s*'(?P<select>(?:[^'\\]|''|\\.)*)'\s*\)\s*TO\s*'(?P<target>[^']+)'"
+    r"(?P<options>.*)$",
     re.IGNORECASE | re.DOTALL,
 )
 CREATE_TABLE_PATTERN = re.compile(
@@ -375,6 +384,8 @@ class Connection:
         self.pid = database.register(self)
         self.autocommit = False
         self.in_transaction = False
+        # As linhas do último UNLOAD que passou, o que pg_last_unload_count() devolve.
+        self.last_unload_count = 0
 
     def cursor(self) -> Cursor:
         """Um cursor novo nesta conexão."""
@@ -464,8 +475,8 @@ def session_command(connection: Connection, text: str) -> Result | None:
     ``None``.
 
     ``USE``, ``LOCK`` e ``SET statement_timeout`` passam sem efeito, ``SET search_path`` vale para
-    a conexão do DuckDB, e ``pg_backend_pid`` e ``pg_terminate_backend`` usam os pids do
-    substituto.
+    a conexão do DuckDB, ``pg_backend_pid`` e ``pg_terminate_backend`` usam os pids do substituto,
+    e ``pg_last_unload_count`` dá as linhas do último ``UNLOAD`` da conexão.
     """
     if re.match(r"(?:USE|LOCK)\b|SET\s+statement_timeout\b", text, re.IGNORECASE):
         return Result()
@@ -478,6 +489,9 @@ def session_command(connection: Connection, text: str) -> Result | None:
 
     if re.fullmatch(r"SELECT\s+pg_backend_pid\(\)", text, re.IGNORECASE):
         return single_value("pg_backend_pid", OIDS["INTEGER"], connection.pid)
+
+    if re.fullmatch(r"SELECT\s+pg_last_unload_count\(\)", text, re.IGNORECASE):
+        return single_value("pg_last_unload_count", OIDS["BIGINT"], connection.last_unload_count)
 
     terminate = re.fullmatch(r"SELECT\s+pg_terminate_backend\((\d+)\)", text, re.IGNORECASE)
     if terminate:
@@ -582,10 +596,38 @@ def without_physical_clauses(text: str) -> str:
     return re.sub(r"\bENCODE\s+\w+", "", text, flags=re.IGNORECASE)
 
 
+def literal_value(body: str) -> str:
+    """O valor de um literal de texto do Redshift, dado o que fica entre as aspas: a aspa dobrada é
+    uma aspa, e a contrabarra dá o caractere seguinte. As sequências ``\\n``, ``\\t`` e a octal,
+    que as suítes não escrevem, ficam de fora."""
+    characters = []
+    position = 0
+    while position < len(body):
+        character = body[position]
+        # A aspa dobrada e a contrabarra valem pelo caractere seguinte.
+        if character in ("'", "\\"):
+            position += 1
+            character = body[position]
+        characters.append(character)
+        position += 1
+    return "".join(characters)
+
+
+def duckdb_region(match: re.Match) -> str:
+    """Uma região citada do Redshift no DuckDB: o literal de texto com o mesmo valor, sem escape de
+    contrabarra, e o nome entre aspas duplas como está."""
+    region = match.group(0)
+    if region.startswith('"'):
+        return region
+    value = literal_value(region[1:-1])
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
 def to_duckdb(text: str, super_columns: set[str]) -> str:
-    """O SQL do Redshift no dialeto do DuckDB: sem as cláusulas físicas do DDL e, fora das regiões
-    citadas, ``SUPER`` como ``JSON`` e o caminho por ponto numa coluna ``SUPER``
-    (``meta.sistema``) como ``json_extract``."""
+    """O SQL do Redshift no dialeto do DuckDB: sem as cláusulas físicas do DDL, cada literal de
+    texto com o valor que o Redshift lê nele e, fora das regiões citadas, ``SUPER`` como ``JSON`` e
+    o caminho por ponto numa coluna ``SUPER`` (``meta.sistema``) como ``json_extract``."""
 
     def rewrite(part: str) -> str:
         part = re.sub(r"\bSUPER\b", "JSON", part, flags=re.IGNORECASE)
@@ -594,7 +636,8 @@ def to_duckdb(text: str, super_columns: set[str]) -> str:
             part = re.sub(path, rf"json_extract({column}, '$.\1')", part)
         return part
 
-    return outside_quotes(without_physical_clauses(text), rewrite)
+    duckdb_text = REDSHIFT_QUOTED.sub(duckdb_region, without_physical_clauses(text))
+    return outside_quotes(duckdb_text, rewrite)
 
 
 def named_to_dollar(part: str) -> str:
@@ -816,11 +859,12 @@ def copy_json_lines(connection: Connection, table: str, target: list[str],
 def unload(connection: Connection, text: str) -> Result:
     """O ``UNLOAD`` para Parquet, com ou sem ``PARTITION BY``, e o manifesto, com as recusas que o
     ambiente alvo mostrou (2026-09-21, ``plan/POC.md``): o ``LIMIT`` externo, e o destino com
-    arquivos sem ``ALLOWOVERWRITE``."""
+    arquivos sem ``ALLOWOVERWRITE``. O ``select`` é o valor do literal, com a contrabarra como
+    escape, e o resultado vazio não grava arquivo nem manifesto (leituras de 2026-09-23)."""
     match = UNLOAD_PATTERN.match(text)
     if match is None:
         raise server_error(f"UNLOAD fora do que o substituto conhece: {text[:80]}")
-    select = match.group("select").replace("''", "'")
+    select = literal_value(match.group("select"))
     target = match.group("target")
     options = option_words(match.group("options"))
 
@@ -838,6 +882,11 @@ def unload(connection: Connection, text: str) -> Result:
         data = connection.duckdb_connection.execute(translated).to_arrow_table()
     except duckdb.Error as error:
         raise server_error(first_line(error)) from None
+
+    # A contagem de pg_last_unload_count(); o resultado vazio para aqui, sem arquivo nem manifesto.
+    connection.last_unload_count = data.num_rows
+    if data.num_rows == 0:
+        return Result()
 
     files = unload_files(as_unloaded(data), target, options)
     entries = write_unloaded_files(files)

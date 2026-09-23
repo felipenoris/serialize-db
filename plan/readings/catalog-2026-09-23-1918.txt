@@ -1,0 +1,163 @@
+================================================================================
+catalog: os serviços de catálogo alcançáveis do espaço
+2026-09-23 19:18:42 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
+interpretador /home/<usuário>/work/projects/serialize-db/.venv/bin/python
+================================================================================
+REGION=sa-east-1
+
+
+################################################################################
+# 1. Rede
+################################################################################
+
+nome                                   endereços                                                     tipo
+glue.sa-east-1.amazonaws.com           10.x.x.x, 10.x.x.x, 10.x.x.x                       privado: endpoint VPC de interface com DNS privado
+athena.sa-east-1.amazonaws.com         10.x.x.x, 10.x.x.x, 10.x.x.x                      privado: endpoint VPC de interface com DNS privado
+lakeformation.sa-east-1.amazonaws.com  18.229.22.36, 52.67.17.32, 54.20.182.138, 54.232.118.113 ...  público: só pela internet ou pelo proxy
+s3tables.sa-east-1.amazonaws.com       3.2.80.0, 3.2.80.1, 3.2.80.2                                  público: só pela internet ou pelo proxy
+
+
+
+################################################################################
+# 2. Glue
+################################################################################
+
+$ glue.get_databases(MaxResults=50)
+[
+  {
+    "Name": "glue_db_<id>",
+    "LocationUri": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/dev/data/catalogs/",
+    "CatalogId": "<conta>",
+    "CreateTime": "2026-08-05 19:05:37+00:00"
+  }
+]
+(0.5 s)
+
+$ glue.get_tables(DatabaseName='glue_db_<id>', MaxResults=50)
+1 tabela(s)
+(0.1 s)
+
+banco                   tabela       formato  local
+glue_db_<id>  house-price  Parquet  s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/dev/local-uploads/1786066931453/
+
+$ glue.get_catalogs()
+[]
+(0.1 s)
+
+
+
+################################################################################
+# 3. Athena
+################################################################################
+
+$ athena.list_work_groups()
+[
+  {
+    "Name": "primary",
+    "State": "ENABLED",
+    "EngineVersion": {
+      "SelectedEngineVersion": "AUTO",
+      "EffectiveEngineVersion": "Athena engine version 3"
+    }
+  },
+  {
+    "Name": "sagemaker-studio-spark-workgroup-<projeto>",
+    "State": "ENABLED",
+    "EngineVersion": {
+      "SelectedEngineVersion": "Apache Spark version 3.5",
+      "EffectiveEngineVersion": "Apache Spark version 3.5"
+    }
+  },
+  {
+    "Name": "workgroup-<projeto>-<ambiente>",
+    "State": "ENABLED",
+    "EngineVersion": {
+      "SelectedEngineVersion": "AUTO",
+      "EffectiveEngineVersion": "Athena engine version 3"
+    }
+  }
+]
+(0.1 s)
+
+$ athena.get_work_group(WorkGroup='primary')
+!! FALHOU (0.0 s): o serviço respondeu com erro: ClientError: An error occurred (AccessDeniedException) when calling the GetWorkGroup operation: You are not authorized to perform: athena:GetWorkGroup on the resource. After your AWS administrator or you have updated your permissions, please try again.
+
+$ athena.get_work_group(WorkGroup='sagemaker-studio-spark-workgroup-<projeto>')
+{
+  "ResultConfiguration": null,
+  "EnforceWorkGroupConfiguration": true,
+  "EngineVersion": {
+    "SelectedEngineVersion": "Apache Spark version 3.5",
+    "EffectiveEngineVersion": "Apache Spark version 3.5"
+  },
+  "BytesScannedCutoffPerQuery": null
+}
+(0.1 s)
+
+ATHENA_RESULTS_sagemaker-studio-spark-workgroup-<projeto>=(sem local de resultados)
+$ athena.get_work_group(WorkGroup='workgroup-<projeto>-<ambiente>')
+{
+  "ResultConfiguration": {
+    "OutputLocation": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/dev/sys/athena/",
+    "EncryptionConfiguration": {
+      "EncryptionOption": "SSE_S3"
+    }
+  },
+  "EnforceWorkGroupConfiguration": true,
+  "EngineVersion": {
+    "SelectedEngineVersion": "AUTO",
+    "EffectiveEngineVersion": "Athena engine version 3"
+  },
+  "BytesScannedCutoffPerQuery": null
+}
+(0.0 s)
+
+ATHENA_RESULTS_workgroup-<projeto>-<ambiente>=s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/dev/sys/athena/
+
+
+################################################################################
+# 4. Lake Formation
+################################################################################
+
+$ lakeformation.list_resources()
+!! FALHOU (60.6 s): sem resposta: ConnectTimeoutError: Connect timeout on endpoint URL: "https://lakeformation.sa-east-1.amazonaws.com/ListResources"
+
+
+
+################################################################################
+# 5. S3 Tables
+################################################################################
+
+$ s3tables.list_table_buckets()
+!! FALHOU (30.2 s): sem resposta: ConnectTimeoutError: Connect timeout on endpoint URL: "https://s3tables.sa-east-1.amazonaws.com/buckets"
+
+
+
+################################################################################
+# 6. Checagens
+################################################################################
+
+RESULTADO  ID    O QUE                                    DETALHE
+note       CT-2  tabelas por formato no Glue              Parquet: 1
+note       CT-6  catálogos federados do Glue (Lakehouse)  nenhum
+note       CT-4  Lake Formation                           não lido: sem resposta (ConnectTimeoutError)
+note       CT-5  S3 Tables                                não lido: sem resposta (ConnectTimeoutError)
+pass       CT-1  Glue                                     respondeu com 1 banco(s)
+pass       CT-3  Athena                                   respondeu com 3 workgroup(s)
+
+
+
+################################################################################
+# 7. Chamadas que falharam
+################################################################################
+
+Cada entrada é uma chamada cujo resultado falta acima; um bloco vazio em outro lugar significa que a chamada passou e não devolveu nada.
+
+- athena.get_work_group(WorkGroup='primary')
+  o serviço respondeu com erro: ClientError: An error occurred (AccessDeniedException) when calling the GetWorkGroup operation: You are not authorized to perform: athena:GetWorkGroup on the resource. After your AWS administrator or you have updated your permissions, please try again.
+- lakeformation.list_resources()
+  sem resposta: ConnectTimeoutError: Connect timeout on endpoint URL: "https://lakeformation.sa-east-1.amazonaws.com/ListResources"
+- s3tables.list_table_buckets()
+  sem resposta: ConnectTimeoutError: Connect timeout on endpoint URL: "https://s3tables.sa-east-1.amazonaws.com/buckets"
+
+código de saída 1: 0 checagem(ns) reprovada(s), 3 chamada(s) falhada(s)

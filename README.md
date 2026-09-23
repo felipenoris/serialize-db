@@ -205,7 +205,13 @@ com o assistente.
 .venv/bin/python probes/catalog.py
 .venv/bin/python probes/parquet_source.py /caminho/da/base
 .venv/bin/python probes/parquet_source.py /caminho/da/base --text-bytes
+PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/delta/db_projetado
 ```
+
+`duckdb_threads.py` lê as tabelas Delta que a migração gravou, no `--root` dela, e mede a ingestão
+pelo motor DuckDB com cada valor de `threads`; o modelo é `client_model:Base.metadata`, com `tests`
+no `PYTHONPATH`, e `--threads`, `--partition`, `--tables` e `--repetitions` mudam o padrão. Ele roda
+depois da migração e leva alguns minutos com a partição de `cad_lancamentos`.
 
 O argumento `s3://bucket/prefixo` é a raiz que o probe fotografa; sem ele valem `SERIALIZE_DB_ROOT`
 e `SERIALIZE_DB_TEST_S3_ROOT`, nessa ordem. `redshift.py` conecta pelas variáveis

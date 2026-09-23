@@ -1,0 +1,675 @@
+{
+  "session.started_at": "2026-09-23T18:52:03+00:00",
+  "session.platform": "Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39",
+  "session.python": "3.13.15",
+  "session.packages": "deltalake 1.6.4, duckdb 1.5.5, pyarrow 25.0.1, boto3 1.43.98, sqlalchemy 2.0.54, pandas 3.0.6, pytest 9.1.1",
+  "session.markers": "redshift",
+  "redshift.connection_method": "credencial temporária do workgroup",
+  "redshift.schema": "datalake_rw_shared.sbx_aco_decon.<tabela>",
+  "redshift.version": "PostgreSQL 8.0.2 on i686-pc-linux-gnu, compiled by GCC gcc (GCC) 3.4.2 20041017 (Red Hat 3.4.2-6.fc3), Redshift 1.0.436211\u0000",
+  "redshift.current_user": "IAMR:<usuário>@<projeto>",
+  "redshift.current_schema": null,
+  "redshift.has_schema_privilege_create": false,
+  "redshift.driver.rows_cached_after_execute": 5,
+  "redshift.current_database": "dev",
+  "redshift.databases": "datalake_rw_shared=shared/UNKNOWN; dev=local/Snapshot Isolation",
+  "redshift.schema_location": "datalake_rw_shared.sbx_aco_decon=shared",
+  "redshift.slices": "ProgrammingError: 42501 permission denied for relation stv_slices",
+  "redshift.table_name": "sbx_aco_decon.serialize_db_poc_5ccf290f_nome_da_sessao",
+  "redshift.fully_qualified_name": "datalake_rw_shared.sbx_aco_decon.serialize_db_poc_5ccf290f_nome_da_sessao",
+  "redshift.ddl.information_schema_rows_after_use": 0,
+  "redshift.ddl.svv_all_columns": [
+    [
+      "id_operacao",
+      "bigint",
+      null,
+      64,
+      0
+    ],
+    [
+      "data_ref",
+      "timestamp without time zone",
+      null,
+      null,
+      null
+    ],
+    [
+      "id_cliente",
+      "integer",
+      null,
+      32,
+      0
+    ],
+    [
+      "valor",
+      "numeric",
+      null,
+      18,
+      2
+    ],
+    [
+      "descricao",
+      "character varying",
+      200,
+      null,
+      null
+    ],
+    [
+      "mes",
+      "character varying",
+      7,
+      null,
+      null
+    ],
+    [
+      "observacao",
+      "character varying",
+      256,
+      null,
+      null
+    ]
+  ],
+  "environment.no_proxy_as_found": "ausente",
+  "environment.no_proxy_exported": false,
+  "environment.aws_region": "sa-east-1",
+  "s3.root": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests",
+  "s3.session_prefix": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a",
+  "redshift.copy.manifest.manifest_2026-01": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/redshift/operacoes/mes=2026-01/part-00000-57cd28e9-a0b8-40c8-904e-a0b73bfdc156-c000.snappy.parquet",
+  "redshift.copy.manifest.manifest_2026-02": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/redshift/operacoes/mes=2026-02/part-00000-e1b5b083-5d17-4408-9f9e-3db6b763aa41-c000.snappy.parquet",
+  "redshift.copy.decimal_int64_and_timestamp_ntz": "ok",
+  "redshift.copy.manifest.manifest_antigo": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/redshift/operacoes_antigas/mes=2026-01/part-00000-424849f7-f868-4908-bede-cfcc539363dd-c000.snappy.parquet",
+  "redshift.copy.positional": "ProgrammingError: XX000 Spectrum Scan Error error: Spectrum Scan Error code: 15007 context: Unmatched number of columns between table and file. Table columns: 6, Data columns: 5, File name: https://s3.sa-east-1.amazonaws.com/bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/r query: 20513402[child_sequence:5] location: dory_ut",
+  "redshift.copy.column_list": "ok: 100 linhas, canal nulo em 100",
+  "redshift.copy.fillrecord": "ok: 100 linhas, canal nulo em 100",
+  "redshift.driver.cached_statement_after_truncate": "ProgrammingError: XX000 [Data Sharing] Error Code 34510: Concurrent DDL committed on datalake_rw_shared.sbx_aco_decon.serialize_db_poc_5ccf290f_cache between Prepare and Execute",
+  "redshift.driver.cached_statement_repeated": "ProgrammingError: XX000 [Data Sharing] Error Code 34510: Concurrent DDL committed on datalake_rw_shared.sbx_aco_decon.serialize_db_poc_5ccf290f_cache between Prepare and Execute",
+  "redshift.driver.cached_statement_after_alter": "ok",
+  "redshift.driver.cached_statement_after_truncate_local_temp": "ok",
+  "redshift.copy.manifest.manifest_texto_longo": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/redshift/texto_longo/mes=2026-01/part-00000-2a8935de-e341-4f63-b937-553f43a0ea9f-c000.snappy.parquet",
+  "redshift.copy.varchar_overflow": "ProgrammingError: XX000 Spectrum Scan Error error: Spectrum Scan Error code: 15007 context: The length of the data column descricao is longer than the length defined in the table. Table: 200, Data: 300, File name: https://s3.sa-east-1.amazonaws.com/bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/ser query: 20513490[child_sequence:5] location: dory_ut; sys_load_error_detail: Spectrum Scan Error. The length of the data column descricao is longer than the length defined in the table. Table: 200, Data: 300, File name: https://s3.sa-east-1.amazonaws.com/bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/redshift/texto_longo/mes%3D2026-01/part-00000-2a8935de-e341-4f63-b937-553f43a0ea9f-c000.snappy.parquet. (s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serial",
+  "redshift.copy.varchar_overflow_truncatecolumns": "ProgrammingError: 0A000 TRUNCATECOLUMNS argument is not supported for PARQUET based COPY",
+  "redshift.super.path_and_serialize": [
+    "\"A\"",
+    "{\"sistema\":\"A\",\"ativo\":true}"
+  ],
+  "redshift.super.insert_above_65535": "ok: json_size = 80901",
+  "redshift.super.copy_parquet_string_above_65535": "ProgrammingError: XX000 SUPER column in COPY query requires SERIALIZETOJSON option error: SUPER column in COPY query requires SERIALIZETOJSON option code: 8001 context: query: 20513521[child_sequence:5] location: scan_s3query_impl.cpp:2588 process: padbmaster [pid=1073766644]",
+  "redshift.super.copy_parquet_serializetojson": "ProgrammingError: XX000 1224 String value exceeds the max size of 65535 bytes (s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/redshift/super/documento.parquet) (pid:21117)",
+  "redshift.super.copy_json_auto_above_65535": "ok: object, json_size = 80901",
+  "duckdb.extension_directory": "/home/<usuário>/work/projects/serialize-db/.duckdb",
+  "duckdb.version": "1.5.5",
+  "duckdb.threads": 4,
+  "redshift.unload.partition_by": "ok",
+  "redshift.unload.manifest_schema": {
+    "elements": [
+      {
+        "name": "id_operacao",
+        "type": {
+          "base": "bigint"
+        }
+      },
+      {
+        "name": "data_ref",
+        "type": {
+          "base": "timestamp without time zone"
+        }
+      },
+      {
+        "name": "id_cliente",
+        "type": {
+          "base": "integer"
+        }
+      },
+      {
+        "name": "valor",
+        "type": {
+          "base": "numeric",
+          "max_precision": 18,
+          "max_scale": 2
+        }
+      },
+      {
+        "name": "descricao",
+        "type": {
+          "base": "character varying",
+          "max_length": 200
+        }
+      },
+      {
+        "name": "mes",
+        "type": {
+          "base": "character varying",
+          "max_length": 7
+        }
+      }
+    ]
+  },
+  "redshift.unload.files": [
+    "mes=2026-01/0000_part_00.parquet",
+    "mes=2026-02/0000_part_00.parquet"
+  ],
+  "redshift.unload.physical_types": {
+    "id_operacao": "INT64",
+    "data_ref": "INT96",
+    "id_cliente": "INT32",
+    "valor": "FIXED_LEN_BYTE_ARRAY",
+    "descricao": "BYTE_ARRAY"
+  },
+  "redshift.unload.schema": "<pyarrow._parquet.ParquetSchema object at 0x7f26dbce7980> required group field_id=-1 schema { optional int64 field_id=-1 id_operacao (Int(bitWidth=64, isSigned=true)); optional int96 field_id=-1 data_ref; optional int32 field_id=-1 id_cliente (Int(bitWidth=32, isSigned=true)); optional fixed_len_byte_array(8) field_id=-1 valor (Decimal(precision=18, scale=2)); optional binary field_id=-1 descricao (String); }",
+  "redshift.unload.has_min_max": true,
+  "redshift.unload.delta_rs_read": "ok",
+  "redshift.unload.destination.same_prefix": "ProgrammingError: XX000 Specified unload destination on S3 is not empty. Consider using a different bucket / prefix, manually removing the target files in S3, or using the ALLOWOVERWRITE option. error: Specified unload destination on S3 is not empty. Consider using a different bucket / prefix, manually removing the target files in S3, or using the ALLOWOVERWRITE option. code: 8001 context: Path pr",
+  "redshift.unload.destination.parent_prefix": "ProgrammingError: XX000 Specified unload destination on S3 is not empty. Consider using a different bucket / prefix, manually removing the target files in S3, or using the ALLOWOVERWRITE option. error: Specified unload destination on S3 is not empty. Consider using a different bucket / prefix, manually removing the target files in S3, or using the ALLOWOVERWRITE option. code: 8001 context: Path pr",
+  "redshift.unload.destination.new_subprefix": "ok",
+  "redshift.data_api.decimal_cell": "'10.25'",
+  "redshift.data_api.duration_ms": 448,
+  "redshift.copy.manifest.manifest_paralelo_0": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/redshift/paralelo_0/mes=2026-01/part-00000-a86d6702-e1b1-4d04-a0dd-32c81efbc2fc-c000.snappy.parquet",
+  "redshift.copy.manifest.manifest_paralelo_1": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/redshift/paralelo_1/mes=2026-02/part-00000-89c58e5a-8c87-4e9f-aa58-72e3430f9011-c000.snappy.parquet",
+  "redshift.parallel.copy_two_tables": "4.2 s",
+  "redshift.parallel.unload_two_tables": "1.6 s",
+  "redshift.unload_hive.unload.2026-01": "ok",
+  "redshift.unload_hive.manifest_columns.2026-01": [
+    "id_operacao",
+    "data_ref",
+    "id_cliente",
+    "valor",
+    "descricao"
+  ],
+  "redshift.unload_hive.files.2026-01": [
+    "mes=2026-01/exec_poc_204d8ab6/000.parquet"
+  ],
+  "redshift.unload_hive.unload.2026-02": "ok",
+  "redshift.unload_hive.manifest_columns.2026-02": [
+    "id_operacao",
+    "data_ref",
+    "id_cliente",
+    "valor",
+    "descricao"
+  ],
+  "redshift.unload_hive.files.2026-02": [
+    "mes=2026-02/exec_poc_834ac9df/000.parquet"
+  ],
+  "redshift.unload_hive.delta_scan_counts": [
+    [
+      "2026-01",
+      3
+    ],
+    [
+      "2026-02",
+      3
+    ]
+  ],
+  "redshift.unload_hive.destination.same_attempt": "ProgrammingError: XX000 Specified unload destination on S3 is not empty. Consider using a different bucket / prefix, manually removing the target files in S3, or using the ALLOWOVERWRITE option. error: Specified unload destination on S3 is not empty. Consider using a different bucket / prefix, manually removing the target files in S3, or using the ALLOWOVERWRITE option. code: 8001 context: Path pr",
+  "redshift.unload_hive.destination.new_attempt": "ok",
+  "redshift.stream.aspa": {
+    "linhas": 1,
+    "literal_no_cursor": "igual",
+    "unload": "igual",
+    "texto": "WHERE sbx_aco_decon.serialize_db_poc_5ccf290f_stream.texto = 'd''agua' ORDER BY sbx_aco_decon.serialize_db_poc_5ccf290f_stream.id"
+  },
+  "redshift.stream.outer_limit": "ProgrammingError: 42601 Limit clause is not supported: select id from sbx_aco_decon.serialize_db_poc_5ccf290f_borda order by id limit 1",
+  "redshift.stream.empty.unload": "ok",
+  "redshift.stream.empty.manifest": null,
+  "redshift.stream.empty.objects": [],
+  "redshift.stream.temp_table": "ok: 2 linhas",
+  "redshift.stream.super.unload": "ok",
+  "redshift.stream.super.type": "extension<arrow.json>",
+  "redshift.stream.super.values": [
+    "'{\"a\":1}'",
+    "'{\"b\":[1,2]}'"
+  ],
+  "redshift.row_desc.colunas": [
+    {
+      "nome": "c_bigint",
+      "oid": 20,
+      "tipo": "BIGINT",
+      "type_modifier": -1,
+      "python": "int"
+    },
+    {
+      "nome": "c_integer",
+      "oid": 23,
+      "tipo": "INTEGER",
+      "type_modifier": -1,
+      "python": "int"
+    },
+    {
+      "nome": "c_smallint",
+      "oid": 21,
+      "tipo": "SMALLINT",
+      "type_modifier": -1,
+      "python": "int"
+    },
+    {
+      "nome": "c_double",
+      "oid": 701,
+      "tipo": "FLOAT",
+      "type_modifier": -1,
+      "python": "float"
+    },
+    {
+      "nome": "c_real",
+      "oid": 700,
+      "tipo": "REAL",
+      "type_modifier": -1,
+      "python": "float"
+    },
+    {
+      "nome": "c_decimal",
+      "oid": 1700,
+      "tipo": "NUMERIC",
+      "type_modifier": 1179654,
+      "python": "Decimal",
+      "precisao_escala": [
+        18,
+        2
+      ]
+    },
+    {
+      "nome": "c_varchar",
+      "oid": 1043,
+      "tipo": "STRING",
+      "type_modifier": 44,
+      "python": "str"
+    },
+    {
+      "nome": "c_char",
+      "oid": 1042,
+      "tipo": "BPCHAR",
+      "type_modifier": 6,
+      "python": "str"
+    },
+    {
+      "nome": "c_date",
+      "oid": 1082,
+      "tipo": "DATE",
+      "type_modifier": -1,
+      "python": "date"
+    },
+    {
+      "nome": "c_timestamp",
+      "oid": 1114,
+      "tipo": "TIMESTAMP",
+      "type_modifier": -1,
+      "python": "datetime"
+    },
+    {
+      "nome": "c_timestamptz",
+      "oid": 1184,
+      "tipo": "TIMESTAMPTZ",
+      "type_modifier": -1,
+      "python": "datetime"
+    },
+    {
+      "nome": "c_boolean",
+      "oid": 16,
+      "tipo": "BOOLEAN",
+      "type_modifier": -1,
+      "python": "bool"
+    },
+    {
+      "nome": "c_super",
+      "oid": 4000,
+      "tipo": "SUPER",
+      "type_modifier": 16384000,
+      "python": "str"
+    }
+  ],
+  "redshift.row_desc.expressoes": [
+    {
+      "nome": "c_count",
+      "oid": 20,
+      "tipo": "BIGINT",
+      "type_modifier": -1,
+      "python": "int"
+    },
+    {
+      "nome": "c_sum_decimal",
+      "oid": 1700,
+      "tipo": "NUMERIC",
+      "type_modifier": 2490374,
+      "python": "Decimal",
+      "precisao_escala": [
+        38,
+        2
+      ]
+    },
+    {
+      "nome": "c_avg_decimal",
+      "oid": 1700,
+      "tipo": "NUMERIC",
+      "type_modifier": 2490374,
+      "python": "Decimal",
+      "precisao_escala": [
+        38,
+        2
+      ]
+    },
+    {
+      "nome": "c_sum_double",
+      "oid": 701,
+      "tipo": "FLOAT",
+      "type_modifier": -1,
+      "python": "float"
+    },
+    {
+      "nome": "c_decimal_38_6",
+      "oid": 1700,
+      "tipo": "NUMERIC",
+      "type_modifier": 2490378,
+      "python": "Decimal",
+      "precisao_escala": [
+        38,
+        6
+      ]
+    },
+    {
+      "nome": "c_text_literal",
+      "oid": 1043,
+      "tipo": "STRING",
+      "type_modifier": 11,
+      "python": "str"
+    },
+    {
+      "nome": "c_numeric_literal",
+      "oid": 1700,
+      "tipo": "NUMERIC",
+      "type_modifier": 131077,
+      "python": "Decimal",
+      "precisao_escala": [
+        2,
+        1
+      ]
+    }
+  ],
+  "redshift.load.small_copy": "0.91 s",
+  "redshift.load.small_insert": "0.53 s",
+  "redshift.unload_nan.nan_inicio": {
+    "ordem": [
+      "nan",
+      "1.0",
+      "3.0"
+    ],
+    "arquivos": 1,
+    "rodape": [
+      {
+        "has_min_max": true,
+        "min": "1.0",
+        "max": "3.0"
+      }
+    ],
+    "duckdb_valor_maior_que_3": 0
+  },
+  "redshift.unload_nan.nan_meio": {
+    "ordem": [
+      "1.0",
+      "nan",
+      "3.0"
+    ],
+    "arquivos": 1,
+    "rodape": [
+      {
+        "has_min_max": true,
+        "min": "1.0",
+        "max": "3.0"
+      }
+    ],
+    "duckdb_valor_maior_que_3": 0
+  },
+  "redshift.unload_nan.nan_fim": {
+    "ordem": [
+      "1.0",
+      "3.0",
+      "nan"
+    ],
+    "arquivos": 1,
+    "rodape": [
+      {
+        "has_min_max": true,
+        "min": "1.0",
+        "max": "3.0"
+      }
+    ],
+    "duckdb_valor_maior_que_3": 0
+  },
+  "redshift.unload_nan.infinitos": {
+    "ordem": [
+      "1.0",
+      "inf",
+      "-inf"
+    ],
+    "arquivos": 1,
+    "rodape": [
+      {
+        "has_min_max": true,
+        "min": "-inf",
+        "max": "inf"
+      }
+    ],
+    "duckdb_valor_maior_que_3": 1
+  },
+  "redshift.audit.nan_igual_nan": [
+    [
+      "True"
+    ]
+  ],
+  "redshift.audit.finito.nan": [
+    [
+      "False"
+    ]
+  ],
+  "redshift.audit.finito.infinito": [
+    [
+      "False"
+    ]
+  ],
+  "redshift.audit.finito.menos_infinito": [
+    [
+      "False"
+    ]
+  ],
+  "redshift.audit.finito.numero": [
+    [
+      "True"
+    ]
+  ],
+  "redshift.audit.finito.nulo": [
+    [
+      "None"
+    ]
+  ],
+  "redshift.audit.cast_nan_numeric": "ProgrammingError: 22P02 invalid input syntax for type numeric: \"nan\"",
+  "redshift.audit.soma_com_nan": [
+    [
+      "nan"
+    ]
+  ],
+  "redshift.audit.search_path": "ok",
+  "redshift.audit.current_schema": [
+    [
+      "None"
+    ]
+  ],
+  "redshift.audit.create_unqualified": "ok",
+  "redshift.audit.planted.linhas": "ProgrammingError: 42883 function is_valid_json(super) does not exist",
+  "redshift.audit.planted.chave_id": [
+    [
+      "2",
+      "2"
+    ]
+  ],
+  "redshift.audit.planted.measures": {
+    "linhas": "4",
+    "nulo_id": "0",
+    "nulo_data": "0",
+    "nulo_data_str": "0",
+    "texto_data_str": "0",
+    "texto_nome": "0",
+    "json_meta": "ProgrammingError: 42883 function is_valid_json(super) does not exist",
+    "valor_data_str": "0",
+    "particao_data_str": "1",
+    "total_valor": "ProgrammingError: XX000 NaN input (scale float to decimal) error: NaN input (scale float to decimal) code: 8001 context: query: 20513812[child_sequence:1] location: numeric_bound.cpp:137 process: query0_4046_20513814 [pid=22057]",
+    "total_preco": "16.250000",
+    "naofinito_valor": "1"
+  },
+  "redshift.audit.planted.expected": {
+    "linhas": "4",
+    "particao_data_str": "1",
+    "naofinito_valor": "2",
+    "total_valor": "4.500000",
+    "total_preco": "16.250000",
+    "json_meta": "0",
+    "texto_nome": "0",
+    "valor_data_str": "0"
+  },
+  "redshift.audit.planted.matches": {
+    "linhas": true,
+    "particao_data_str": true,
+    "naofinito_valor": false,
+    "total_valor": false,
+    "total_preco": true,
+    "json_meta": false,
+    "texto_nome": true,
+    "valor_data_str": true
+  },
+  "redshift.audit.planted.sample": [
+    [
+      "4",
+      "2026-08-30",
+      "2026-08-31",
+      "d",
+      "3.0",
+      "3.00",
+      "{\"c\":3}"
+    ]
+  ],
+  "redshift.audit.client_model": {
+    "cad_contas": {
+      "linhas": "ok",
+      "chave_id_conta": "ok",
+      "chave_numero": "ok"
+    },
+    "cad_contratos": {
+      "linhas": "ok",
+      "chave_id_contrato": "ok",
+      "chave_data_sistema_contrato": "ok"
+    },
+    "cad_operacoes": {
+      "linhas": "ok",
+      "chave_id_operacao": "ok",
+      "chave_data_operacao": "ok"
+    },
+    "dom_hierarquias_contas": {
+      "linhas": "ok",
+      "chave_id_hierarquia": "ok",
+      "chave_nome": "ok"
+    },
+    "dom_mensuracoes": {
+      "linhas": "ok",
+      "chave_id_mensuracao": "ok",
+      "chave_nome": "ok"
+    },
+    "dom_segmentos": {
+      "linhas": "ok",
+      "chave_id_segmento": "ok",
+      "chave_nome": "ok"
+    },
+    "dom_veiculos": {
+      "linhas": "ok",
+      "chave_id_veiculo": "ok",
+      "chave_nome": "ok"
+    },
+    "cad_aliquotas": {
+      "linhas": "ok",
+      "chave_id": "ok",
+      "chave_id_conta_origem_id_conta_destino": "ok"
+    },
+    "dom_negocios": {
+      "linhas": "ok",
+      "chave_id_negocio": "ok",
+      "chave_nome": "ok"
+    },
+    "rel_contas_hierarquias": {
+      "linhas": "ok",
+      "chave_id_rel_conta_hierarquia": "ok",
+      "chave_id_hierarquia_id_child": "ok"
+    },
+    "rel_contrato_operacao": {
+      "linhas": "ok",
+      "chave_id_rel_contrato_operacao": "ok"
+    },
+    "cad_lancamentos": {
+      "linhas": "ok",
+      "chave_id_lancamento": "ok"
+    }
+  },
+  "redshift.transactions.isolation.svv_redshift_databases": [
+    [
+      "datalake_rw_shared",
+      "shared",
+      "UNKNOWN"
+    ],
+    [
+      "dev",
+      "local",
+      "Snapshot Isolation"
+    ]
+  ],
+  "redshift.transactions.isolation.stv_db_isolation_level": "ProgrammingError: 42501 permission denied for relation stv_db_isolation_level",
+  "redshift.transactions.statement_timeout.A": "statement_timeout: 0.0 s",
+  "redshift.transactions.pid.A": "pid: 0.0 s, ([1073889495],)",
+  "redshift.transactions.statement_timeout.B": "statement_timeout: 0.0 s",
+  "redshift.transactions.pid.B": "pid: 0.0 s, ([1073791353],)",
+  "redshift.transactions.distintas.b_espera_a": "False (COMMIT)",
+  "redshift.transactions.distintas.A": "BEGIN: 0.0 s | apaga a partição: 0.7 s, linhas afetadas: 2 | insere a partição: 0.3 s, linhas afetadas: 2 | COMMIT: 0.4 s",
+  "redshift.transactions.distintas.B": "BEGIN: 0.0 s | apaga a partição: 0.4 s, linhas afetadas: 2 | insere a partição: 0.4 s, linhas afetadas: 2 | COMMIT: 0.4 s",
+  "redshift.transactions.ambientes.b_espera_a": "True (apaga a linha de controle)",
+  "redshift.transactions.ambientes.A": "BEGIN: 0.0 s | apaga a partição: 0.4 s, linhas afetadas: 2 | insere a partição: 0.3 s, linhas afetadas: 2 | apaga a linha de controle: 0.4 s, linhas afetadas: 1 | insere a linha de controle: 0.3 s, linhas afetadas: 1 | COMMIT: 0.3 s",
+  "redshift.transactions.ambientes.B": "BEGIN: 0.0 s | apaga a partição: 0.4 s, linhas afetadas: 2 | insere a partição: 0.2 s, linhas afetadas: 2 | apaga a linha de controle: 10.9 s, linhas afetadas: 1 | insere a linha de controle: 0.3 s, linhas afetadas: 1 | COMMIT: 0.3 s",
+  "redshift.transactions.ambientes.controle": {
+    "prod_x": [
+      2,
+      "exec-a"
+    ],
+    "dev_x": [
+      2,
+      "exec-b"
+    ]
+  },
+  "redshift.transactions.mesma_tabela.b_espera_a": "True (cria a staging)",
+  "redshift.transactions.mesma_tabela.A": "BEGIN: 0.0 s | cria a staging: 0.1 s | apaga a partição: 0.4 s, linhas afetadas: 2 | insere a partição: 0.3 s, linhas afetadas: 2 | apaga a linha de controle: 0.3 s, linhas afetadas: 1 | insere a linha de controle: 0.3 s, linhas afetadas: 1 | apaga a staging: 0.0 s | COMMIT: 0.2 s",
+  "redshift.transactions.mesma_tabela.B": "BEGIN: 0.0 s | cria a staging: 10.3 s | apaga a partição: erro em 0.8 s: ProgrammingError: XX000 1023 Serializable isolation violation on xid 170818430,transactions forming the cycle are: 170818430, 170818418 (pid:21341)",
+  "redshift.transactions.mesma_tabela.controle": {
+    "dev_x": [
+      1,
+      "exec-0"
+    ],
+    "prod_x": [
+      2,
+      "exec-a"
+    ]
+  },
+  "redshift.transactions.mesma_tabela.particao": [
+    "exec-a"
+  ],
+  "redshift.transactions.lock.A": "BEGIN: 0.0 s | LOCK: erro em 0.0 s: ProgrammingError: 0A000 Operation is not supported through datashares",
+  "redshift.transactions.condicional.b_espera_a": "True (atualiza a linha de controle se a versão é 1)",
+  "redshift.transactions.condicional.A": "BEGIN: 0.0 s | atualiza a linha de controle se a versão é 1: 1.0 s, linhas afetadas: 1 | COMMIT: 0.2 s",
+  "redshift.transactions.condicional.B": "BEGIN: 0.0 s | atualiza a linha de controle se a versão é 1: 11.2 s, linhas afetadas: 0",
+  "redshift.transactions.condicional.controle": {
+    "dev_x": [
+      1,
+      "exec-0"
+    ],
+    "prod_x": [
+      2,
+      "exec-a"
+    ]
+  },
+  "s3.cleanup": "66 objeto(s) apagado(s) sob s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a",
+  "redshift.cleanup": "47 de 47 tabela(s) apagada(s) de sbx_aco_decon",
+  "session.outcome": "24 passed, 1 failed, 0 error, 0 skipped",
+  "session.finished_at": "2026-09-23T18:55:56+00:00",
+  "session.duration_s": 233.0,
+  "failed.tests/proof_of_concept/test_redshift.py::test_stream_by_unload_with_literal_values": "AssertionError: o UNLOAD passou e não gravou o manifesto em s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db-tests/serialize-db-poc/4185600a/redshift/stream/contrabarra_8973f2f1 | assert None is not None"
+}

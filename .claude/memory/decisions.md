@@ -633,3 +633,65 @@ Rejected: `SHOW TABLE`, which probably shows only `DISTSTYLE AUTO`, and asking t
 the view. `tests/proof_of_concept/test_redshift.py::test_explain_of_a_join_on_the_share` reads whether
 the role may run `EXPLAIN` on the datashare. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`,
 `plan/OPEN_QUESTIONS.md`
+
+## The readings folder
+
+On 2026-09-23 the user decided that `plan/readings/` holds the reports of 2026-09-23, the three
+suite sessions and the five probes, in place of the older ones, with the environment's sensitive
+identifiers masked: the accounts, the database user and the personal folder, the role id and the
+SSO role suffix, the DataZone domain, project and environment ids, the KMS key, the datashare
+producer's namespace and the private addresses, each replaced by a placeholder the folder's
+`README.md` lists. The source-base reading of 2026-09-21 stays, masked, because no newer reading
+replaces it; the probe reports of 2026-09-21 stay out of git, and the older readings live in git
+history. The rule of the same day decides when a report leaves: once `plan/POC.md` and the stage
+file hold what it showed. The same identifiers remained elsewhere in the repository (`plan/POC.md`, the memory,
+`SUITE.md`, `examples/`, `tests/test_probes.py`) until the user's answer of the same day, in the
+section on the publication flow. `plan/readings/README.md`
+
+## The Redshift suite runs of 2026-09-23 and the stage 8 transaction
+
+On 2026-09-23 the user ran the three target-only suites from `main` (S3 at 18:48 UTC, Redshift at
+18:52 and 18:55) and approved registering their readings in `plan/` and fixing the tests in the
+open PR: the `UNLOAD` literal doubles the backslash as well as the quote, the stream test reads
+`pg_last_unload_count()` to tell an empty result from a missing manifest and records an empty
+`UNLOAD` instead of stopping, and the Redshift audit text compiles `is_finite` as the strict
+comparison with the infinities and `json_valid` as `true` on the `SUPER` column (the assistant's
+fixes, named in the report). For the stage 8 transaction the assistant offered (a) keeping the
+`DELETE`/`INSERT` of the control row and repeating the transaction on `1023`, or (b) opening the
+transaction with `UPDATE serialize_db_publications ... WHERE table_name = <t> AND delta_version =
+<version read>`, where 0 affected rows raises `ExecutionConflict` without a retry and a `1023` that
+still escapes from any command raises `ExecutionConflict` too; the user chose (b), and replaced it
+later the same day with the flow of the next section, as the answers on the first publication and
+on the two stage 5 proposals came. `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-5.md`,
+`plan/PLAN-STAGE-4.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+## The publication flow, the unpublish flow and the stage 5 answers of 2026-09-23
+
+Asked how the first publication of a table writes its control row, the user redesigned the stage 8
+transaction (2026-09-23): open the transaction, read the table's control row, identify the previous
+version, `INSERT` the row when there is none, and when there is one check the version and
+`UPDATE` it; and create an unpublish flow, similar but with `DELETE`. The assistant's reading,
+named in the report: the read is the transaction's first statement and fixes its snapshot; the
+check compares the version read with the Delta version the execution publishes (equal: nothing to
+publish, `ROLLBACK`; higher: `ExecutionConflict`; lower: `version_diff` between them); the control
+row is written last, after the partitions, because its `INSERT` or `UPDATE` holds the control
+table's lock until the end and the tables publish in parallel; the `UPDATE` stays conditioned on the
+version read, and its zero rows, a `1023` and the failed `CREATE TABLE` of a published table another
+first publication created are `ExecutionConflict`, without a retry. The unpublish flow reads the row
+the same way and, when present, runs `DROP TABLE` on the published table and `DELETE` of the row,
+conditioned on the version read, in one transaction (`unpublish_redshift`,
+`serialize-db publish --unpublish`); a destructive schema diff unpublishes and republishes. The
+concurrent behavior of the new sequence is a reading of
+`test_redshift_transactions.py::test_control_row_read_first_and_written_last`, added the same day.
+On stage 5 the user approved exporting by `rewrite` a partition with a non-finite `Double` whatever
+the `mode`, with a warning in the execution log (`log.warning`, the user's choice over
+`warnings.warn`) when the mode asked for `register`; approved the empty text stream's schema from
+`schema_from_row_description` of `select * from (<texto>) as t limit 0`; and kept `load` through the
+`loader` after the `COPY` cost reading. The user also asked to mask the environment's sensitive
+identifiers everywhere in the repository except `SUITE.md`: `plan/POC.md`, the memory, the bucket
+path of `examples/redshift_copy_unload.py` and `examples/redshift_manifest.py`, and the lab
+account in a fabricated ARN of `tests/test_probes.py`, which took the documentation's
+`123456789012`, carry the placeholders of `plan/readings/README.md` (the lab's got their own:
+`<conta do laboratório>`, `dzd-<domínio do laboratório>`, `<projeto do laboratório>`); git
+history keeps the old values. `plan/PLAN-STAGE-8.md`,
+`plan/PLAN-STAGE-5.md`, `plan/OPEN_QUESTIONS.md`

@@ -122,21 +122,25 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   agregado não o evita (leitura de 2026-09-23). A contagem entra no relatório sem reprovar, porque
   o `cast` aceita o `Double` não finito, e dá a lista `columns_without_min_max` da
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59) (decisões do usuário de
-  2026-09-23). No Redshift, `is_finite` sai `x NOT IN ('NaN'::float8, 'Infinity'::float8,
-  '-Infinity'::float8)`, que nenhuma execução no ambiente alvo conferiu. As funções com `@compiles` por dialeto
+  2026-09-23). No Redshift, `is_finite` sai `(x > '-Infinity'::float8 AND x < 'Infinity'::float8)`:
+  no ambiente alvo, em 2026-09-23, o `NaN` de uma constante saiu igual a si mesmo, como no
+  PostgreSQL, e o de uma varredura de tabela passou por `x NOT IN ('NaN'::float8, ...)`, como no
+  IEEE, e chegou ao `CAST` da soma; a comparação estrita dá falso ao `NaN` pelas duas regras e
+  espera a próxima execução da suíte ([`POC.md`](POC.md)). As funções com `@compiles` por dialeto
   fazem a portabilidade, e cada uma é subclasse de `FunctionElement` com `name`, como o `month_of`
-  de [`sqlalchemy.md`](sqlalchemy.md), e não de `GenericFunction`, a classe do rascunho de 2026-09-21, que
-  se registra em `sa.func` para o processo inteiro: depois dela, o `sa.func.json_valid` do próprio
-  cliente sai `is_valid_json` no Redshift, e a subclasse de `FunctionElement` deixa o `sa.func`
-  intacto (leitura de 2026-09-23). Cada uma tem também uma regra padrão, o nome com os argumentos:
-  sem ela a subclasse não compila fora dos dialetos que a declaram, e o dialeto do `duckdb_engine`
-  é um compilador do PostgreSQL (`UnsupportedCompilationError`, leitura de 2026-09-23).
-  `partition_text` é
+  de [`sqlalchemy.md`](sqlalchemy.md), e não de `GenericFunction`, a classe do rascunho de
+  2026-09-21, que se registra em `sa.func` para o processo inteiro: depois dela, o
+  `sa.func.json_valid` do próprio cliente sai pela regra da biblioteca no Redshift, e a subclasse
+  de `FunctionElement` deixa o `sa.func` intacto (leitura de 2026-09-23). Cada uma tem também uma
+  regra padrão, o nome com os argumentos: sem ela a subclasse não compila fora dos dialetos que a
+  declaram, e o dialeto do `duckdb_engine` é um compilador do PostgreSQL
+  (`UnsupportedCompilationError`, leitura de 2026-09-23). `partition_text` é
   `strftime(x, '%Y-%m-%d')` no DuckDB e `to_char(x, 'YYYY-MM-DD')` no Redshift; `json_valid` fica
-  no DuckDB e vira `is_valid_json` no Redshift; `text_bytes`, o comprimento em bytes que o
-  `String(n)` mede como o `VARCHAR(n)` do Redshift, é `strlen` no DuckDB e `octet_length` no
-  Redshift, porque o `length` dos dois conta caracteres e o `octet_length` do DuckDB só aceita
-  `BLOB`; `partition_value_valid`, a regra da partição, é `regexp_full_match(x,
+  no DuckDB e vira `true` no Redshift, onde a coluna JSON é `SUPER`, que sempre se serializa como
+  documento JSON e que o `is_valid_json` recusa (`42883`, 2026-09-23); `text_bytes`, o comprimento
+  em bytes que o `String(n)` mede como o `VARCHAR(n)` do Redshift, é `strlen` no DuckDB e
+  `octet_length` no Redshift, porque o `length` dos dois conta caracteres e o `octet_length` do
+  DuckDB só aceita `BLOB`; `partition_value_valid`, a regra da partição, é `regexp_full_match(x,
   '[0-9A-Za-z][0-9A-Za-z_.-]*')` no DuckDB, que concordou com o `re.fullmatch` do Python em doze
   valores (2026-09-23), e o operador POSIX `x ~ '^[0-9A-Za-z][0-9A-Za-z_.-]*$'` no Redshift. Uma
   consulta por chave (`GROUP BY ... HAVING count(*) > 1`) dentro das partições da execução, e,
@@ -170,7 +174,8 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   cobre. `threads` omitido fica no padrão do DuckDB, um por núcleo; ele é da instância, vale para a
   sessão principal e para as de `new_session()`, e muda em execução por `SET threads`. A leitura do
   S3 pede mais threads que núcleos, porque cada thread faz uma requisição HTTP por vez, e quantas é
-  o que a primeira execução no ambiente alvo mede ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A
+  o que `probes/duckdb_threads.py` mede no ambiente alvo, sobre as tabelas que a migração gravou
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A
   conexão é a sessão da execução, e `session()` toma o `threading.RLock` e a dá ao
   bloco; toda primitiva toma o mesmo lock pelo tempo do seu comando, e nenhuma espera pelo código do
   cliente com ele tomado. O motor guarda a thread que está dentro de `session()`, e é por ela que
@@ -301,7 +306,7 @@ uma chave única.
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
-| Texto das verificações | `test_audit_sql_per_dialect` | Cada `Check` do modelo cliente renderiza nos dois dialetos; `strftime` no DuckDB e `to_char` no Redshift; `json_valid` e `is_valid_json`; `strlen` e `octet_length`. |
+| Texto das verificações | `test_audit_sql_per_dialect` | Cada `Check` do modelo cliente renderiza nos dois dialetos; `strftime` no DuckDB e `to_char` no Redshift; `json_valid` e `true`; `strlen` e `octet_length`; `isfinite` e a comparação estrita com os infinitos, que `test_redshift_is_finite_under_the_postgresql_rule` roda no DuckDB sobre o `NaN`, os infinitos, um número e o nulo. |
 | Escopo da chave | `test_key_scope_follows_the_partition_column` | Chave com a coluna de partição ou a de `partition_source` gera uma consulta; sem elas, gera a segunda contra `published`; `key_scope="partition"` a suprime e o relatório registra; a chave primária inteira de uma coluna leva o `skip_when` do mínimo contra `published_max_key`. |
 | Chave estrangeira | `test_foreign_key_check_only_on_request` | Sem `foreign_keys=True` o nome está em `not_run`; com ele, o anti-join contra `referenced`. |
 | Defeitos plantados | `test_audit_finds_each_defect` | Nulo, texto acima do `String(n)` em bytes e dentro dele em caracteres, partição fora da origem, valor de partição fora da regra, JSON inválido numa tabela criada por SQL (a coluna `JSON` do DuckDB recusa o texto inválido na carga), chave repetida dentro da partição e contra a publicada. |

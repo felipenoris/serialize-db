@@ -185,18 +185,18 @@ informada, que mudou duas linhas. Os números abaixo saem delas, e o histórico 
 relatórios.
 
 **O que respondeu.** Workgroup `controladoria-wg` no namespace `controladoria-ns`, conta
-138071776059, capacidade base 8, sem acesso público e com roteamento VPC melhorado; nenhum cluster
+`<conta>`, capacidade base 8, sem acesso público e com roteamento VPC melhorado; nenhum cluster
 provisionado. Os três endpoints regionais do Redshift e o host do workgroup resolvem para IP privado
 (`10.100.x.x`): o ambiente alvo tem endpoint VPC de interface para todos, e `RS-14` passou, o que
 responde a dúvida que a leitura do laboratório deixou — a credencial temporária e a Data API
 funcionam ali sem internet. A porta 5439 abriu em 0,00 s. A credencial temporária saiu para o
-usuário `IAMR:user-533cbaba-...@3hpfa7636y4qor`, válida por uma hora, e a sessão abriu com ela. O
+usuário `IAMR:<usuário>@<projeto>`, válida por uma hora, e a sessão abriu com ela. O
 ciclo da Data API devolveu `select 1` em 23 ms. A versão é `1.0.436211`, muito acima do patch 186
 que a escrita em datashare exige. `SUPER` e `JSON_PARSE` respondem.
 
 **O esquema e o banco.** `svv_redshift_databases` mostra `dev` local com isolamento de snapshot e
 `datalake_rw_shared` do tipo `shared`, vindo do datashare `controladoria_rw_datashare` da conta
-produtora 390403891846, com isolamento `UNKNOWN`. `svv_all_schemas` põe `sbx_aco_decon` só nesse
+produtora `<conta do produtor>`, com isolamento `UNKNOWN`. `svv_all_schemas` põe `sbx_aco_decon` só nesse
 banco, tipo `shared`: o nome em três partes está confirmado, e `RS-16` passou. `svv_all_tables`
 lista três tabelas lá (`teste`, `teste3`, `new_table`), nenhuma com o prefixo da biblioteca, então a
 sessão lê o esquema. A ACL do banco compartilhado nomeia só a role administrativa do SSO, não a
@@ -465,7 +465,7 @@ partição de `cad_lancamentos` continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS
 
 Em 2026-09-21, às 13:54 UTC, `probes/parquet_source.py --sample 5000` leu no ambiente alvo a base de
 produção `db_projetado`
-(`s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`,
+(`s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`,
 `S3FileSystem`, a listagem em 0,1 s, os 205 rodapés lidos; o relatório está em
 [`readings/parquet_source-2026-09-21-1354.txt`](readings/parquet_source-2026-09-21-1354.txt)): 14
 pastas de tabela, 205 arquivos, 3.771.538.655 bytes, 187.340.531 linhas, `schema.json` solto na
@@ -658,7 +658,7 @@ cada stream e loader; e o `fetchmany` do `redshift_connector` entrou em
 
 Em 2026-09-21, entre 03:47 e 03:51 UTC, o usuário executou os cinco probes no ambiente alvo (Linux
 x86_64, Python 3.13.15, o `.venv` do projeto preparado por `prepare_offline.sh`), com a raiz
-`s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests`.
+`s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/serialize-db-tests`.
 Os relatórios estão em `secrets/probes-aws-bn/`, fora do git, por escolha do usuário
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); os números abaixo saem deles.
 
@@ -689,14 +689,14 @@ proxy sai de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) respondida: nada a fazer, 
 `prepare_environment` da [etapa 3](PLAN-STAGE-3.md) fica como está, para um ambiente que tenha só
 uma das variáveis.
 
-**O bucket** (`bucket.py`): `bndes-aco-models-138071776059` em `sa-east-1`, SSE-KMS pela chave
-`55dd0bd2-f2f2-44be-9a62-bd4264a2ef45` com bucket key, SSE-C bloqueado, acesso público bloqueado,
+**O bucket** (`bucket.py`): `bndes-aco-models-<conta>` em `sa-east-1`, SSE-KMS pela chave
+`<chave>` com bucket key, SSE-C bloqueado, acesso público bloqueado,
 versionado pela amostra (`VersionId` no marcador de pasta); o papel não lê versionamento, Object Lock,
 propriedade, ciclo de vida, política nem uploads incompletos, como no laboratório. Sob a raiz de
 testes há um marcador de pasta de 2026-09-20 e nada mais: nenhuma tabela Delta, nenhuma sessão da
 suíte, nenhuma versão não corrente. A suíte S3 ainda não rodou lá.
 
-**O catálogo** (`catalog.py`): o Glue tem o banco `glue_db_5feoihj3bbzkt7` com uma tabela Parquet e
+**O catálogo** (`catalog.py`): o Glue tem o banco `glue_db_<id>` com uma tabela Parquet e
 nenhum catálogo federado; o Athena tem três workgroups, com `GetWorkGroup` negado em `primary`; o
 Lake Formation e o S3 Tables não respondem. O gatilho de reavaliação de
 [`estrategia.md`](estrategia.md) não disparou.
@@ -827,7 +827,7 @@ mostraram além do que já estava medido:
 Em 2026-09-21, às 10:50 UTC, o usuário rodou `pytest -m redshift` no ambiente alvo (Linux x86_64,
 kernel 6.12 do Amazon Linux 2023, Python 3.13.15, o `.venv` da pasta preparada: deltalake 1.6.4,
 DuckDB 1.5.5, PyArrow 25.0.1, boto3 1.43.98, SQLAlchemy 2.0.54, pandas 3.0.6, pytest 9.1.1), com a
-raiz `s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/serialize-db-tests`
+raiz `s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/serialize-db-tests`
 e a credencial temporária do workgroup. A sessão durou 10,7 s: um teste passou e dez reprovaram. O
 relatório não entrou no git: cada leitura do ambiente que ele trazia se repete nas execuções
 limpas das 13:35 e das 13:39; a primeira tentativa não gravou o JSON e o usuário repetiu a suíte. O `conftest` criava o arquivo
@@ -857,7 +857,7 @@ JSON leva a mensagem de cada teste reprovado (`failed.<teste>`).
 **O que a execução respondeu**, apesar das reprovações:
 
 - A suíte conecta pelo caminho de `examples/redshift_native.py`: usuário
-  `IAMR:user-533cbaba-4061-70a6-7967-78dc06230c13@3hpfa7636y4qor`, versão `1.0.436211`, que o driver
+  `IAMR:<usuário>@<projeto>`, versão `1.0.436211`, que o driver
   devolve com um byte nulo no fim (`Redshift 1.0.436211\0`).
 - Depois do `USE`, `current_schema()` é nulo e `current_database()` continua `dev`, como no probe.
   `svv_redshift_databases` lista `datalake_rw_shared` como `shared` com isolamento `UNKNOWN` e `dev`
@@ -2610,3 +2610,122 @@ em pastas vazias, os proxies numa porta fechada, `.venv/bin/python -m pytest -p 
 **Consequência**: a premissa de [`PLAN.md`](PLAN.md), `pytest` sem variável não grava arquivo algum,
 e o cabeçalho de `tests/conftest.py` valem como estão; [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
 perdeu o item da pasta temporária do pytest.
+
+## O que as suítes mostraram no ambiente alvo em 2026-09-23
+
+Em 2026-09-23, no ambiente alvo (Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5, pyarrow 25.0.1,
+boto3 1.43.98, SQLAlchemy 2.0.54), a partir da `main`, a sessão `-m "not redshift"` rodou com as
+raízes local e S3 às 18:48 UTC, e a suíte `-m redshift` duas vezes, às 18:52 e às 18:55 UTC
+([`readings/`](readings/README.md)). Cada execução da suíte Redshift aprovou 24 casos e reprovou
+`test_stream_by_unload_with_literal_values` no caso da contrabarra. A segunda repetiu a primeira
+leitura a leitura, com outros tempos e ids; o `UNLOAD` paralelo nomeou `0000_part_00.parquet` e
+`0064_part_00.parquet`, e as leituras de 2026-09-21 se repetiram (o `COPY` posicional que reprova,
+o `FILLRECORD` com 100 linhas, o `34510` do cache do driver, o `SUPER` acima de 65.535 bytes só
+por `FORMAT JSON 'auto'`).
+
+- **O bucket.** Na sessão das 18:48, os 430 casos além das duas medições de memória (seção "O que
+  as suítes mostraram no Linux x86_64") passaram, entre eles os casos `s3` de `test_storage.py` e
+  `test_delta.py` e a suíte S3: o bucket com SSE-KMS e bucket key, o arquivo de dados do delta-rs
+  cifrado sem opção alguma, e a cadeia de credenciais do delta-rs nas cinco variantes, pelo papel do
+  contêiner. As 20 consultas pontuais levaram 5,9 s por `delta_scan`, 2,8 s por `ATTACH ...
+  PIN_SNAPSHOT`, 1,2 s por `read_parquet` e 0,020 s na tabela materializada.
+- **O `UNLOAD` para um prefixo com `=`** (`test_unload_to_a_hive_prefix_and_register`): sem
+  `PARTITION BY`, para `<uri>/mes=<valor>/exec_poc_<uuid>/`, passou nas duas partições, com o
+  arquivo `000.parquet` do `PARALLEL OFF`; o `schema.elements` do manifesto listou as cinco colunas
+  do `select`, sem a de partição; o registro e o `delta_scan` deram 3 linhas por partição; o segundo
+  `UNLOAD` no mesmo destino foi recusado (`Specified unload destination on S3 is not empty`) e o de
+  um `uuid` novo passou.
+- **A contrabarra no `stream` por `UNLOAD`.** O caso da aspa deu as mesmas linhas pelos três
+  caminhos, e o da contrabarra parou o teste: o `UNLOAD` passou sem gravar manifesto nem arquivo, e
+  os outros quatro casos não rodaram. A leitura casa com o literal do `UNLOAD` tratando a
+  contrabarra como escape, como a documentação mostra ao escapar a aspa do `select` com `\'`: com só
+  a aspa dobrada, a contrabarra que o dialeto dobrou chega ao `select` sem par, o literal interno a
+  consome, e o filtro não acha linha. O substituto local com essa regra reproduziu a falha com a
+  mesma mensagem.
+- **Os casos de borda do `UNLOAD`** (`test_unload_limit_empty_result_temp_table_and_super`): o
+  `LIMIT` no `select` externo foi recusado com `42601 Limit clause is not supported`; o `UNLOAD` de
+  um resultado vazio passou sem gravar manifesto nem objeto no prefixo; a tabela temporária da
+  sessão foi lida pelo `UNLOAD` na mesma sessão (2 linhas); e a coluna `SUPER` saiu no Parquet como
+  `extension<arrow.json>` no pyarrow, com o texto JSON de cada valor (`{"a":1}`). O `cast` do
+  contrato converte essa coluna em `string` (sonda local do mesmo dia).
+- **O `row_desc`** (`test_row_description_oids_and_type_modifier`): os OIDs 20, 23, 21, 701, 700,
+  1700, 1043, 1042, 1082, 1114, 1184, 16 e 4000 para `BIGINT`, `INTEGER`, `SMALLINT`,
+  `DOUBLE PRECISION`, `REAL`, `DECIMAL(18, 2)`, `VARCHAR(40)`, `CHAR(2)`, `DATE`, `TIMESTAMP`,
+  `TIMESTAMPTZ`, `BOOLEAN` e `SUPER`; o `type_modifier` 1.179.654 do `DECIMAL(18, 2)`, que a fórmula
+  do driver lê como precisão 18 e escala 2, 44 no `VARCHAR(40)`, 6 no `CHAR(2)`, 16.384.000 no
+  `SUPER` e -1 nos demais. O `count(*)` saiu `BIGINT`; o `sum` e o `avg` do `DECIMAL(18, 2)`,
+  `NUMERIC(38, 2)`; o `sum` do `DOUBLE PRECISION`, OID 701; o `CAST` para `DECIMAL(38, 6)`,
+  `NUMERIC(38, 6)`; o literal de texto, OID 1043 com `type_modifier` 11; e o literal `1.5`,
+  `NUMERIC(2, 1)`. O `SUPER` chega ao Python como `str`.
+- **A carga pequena** (`test_small_load_copy_cost`): o melhor de três de 10 linhas levou 0,91 s e
+  0,97 s pelo `COPY` e 0,53 s e 0,55 s pelo `INSERT` de várias linhas.
+- **O rodapé do `UNLOAD` com `NaN`** (`test_unload_footer_statistics_with_nan`): com `1.0`, `3.0` e
+  `NaN` num grupo de linhas, o `NaN` no início, no meio ou no fim, o rodapé saiu com mínimo 1.0 e
+  máximo 3.0, sem o `NaN`, e o `read_parquet` do DuckDB devolveu 0 linha para `valor > 3`: o leitor
+  podou o grupo pelo máximo e perdeu a linha do `NaN`, a perda da issue #59. Com `1.0`, `inf` e
+  `-inf`, o rodapé saiu com `-inf` e `inf`, e o DuckDB devolveu a linha do infinito. O `UNLOAD`
+  grava o rodapé como o pyarrow e o delta-rs.
+- **O texto da auditoria** (`test_audit_sql_under_search_path_and_nan_comparison`): numa conexão
+  própria, o `SET search_path` no esquema do datashare passou depois do `USE`, e o `CREATE TABLE`
+  do `ddl` com o nome sem esquema criou a tabela nele, achada pelo nome em duas partes;
+  `current_schema()` continuou nulo. Nas constantes, `'NaN'::float8 = 'NaN'::float8` deu
+  verdadeiro, o `is_finite` de então (`x NOT IN ('NaN'::float8, 'Infinity'::float8,
+  '-Infinity'::float8)`) deu falso ao `NaN` e aos infinitos, verdadeiro a 1,5 e nulo ao nulo, o
+  `CAST` do `NaN` para `NUMERIC(38, 6)` foi recusado (`22P02`) e a soma com um `NaN` deu `nan`. Na
+  tabela com os defeitos plantados, a verificação de linhas inteira foi recusada com
+  `42883 function is_valid_json(super) does not exist`; medida a medida, `naofinito_valor` contou 1
+  dos 2 não finitos e `total_valor` foi recusado com `NaN input (scale float to decimal)`: na
+  varredura da tabela o `NaN` passou pelo `NOT IN`, como no IEEE, e chegou ao `CAST`. As demais
+  medidas deram o esperado (4 linhas, 1 fora da partição, `total_preco` 16.250000), a chave
+  repetida saiu com o id 2 e a amostra com a linha 4. Os textos do modelo cliente, sem coluna JSON,
+  rodaram sobre as tabelas vazias.
+- **As transações simultâneas** (`test_redshift_transactions.py`: A segura a transação aberta por
+  10 s enquanto B roda numa thread, e o `COMMIT` de A solta B). O banco do datashare informou
+  isolamento `UNKNOWN`, e `stv_db_isolation_level` foi negada (42501). Escritas em tabelas
+  distintas confirmaram as duas, sem espera. Dev e prod gravando linhas distintas da tabela de
+  controle confirmaram as duas, e B esperou no `DELETE` da sua linha de controle até o `COMMIT` de A
+  (10,9 s e 11,1 s). Duas publicações da mesma tabela e partição: B esperou no `CREATE TABLE` da
+  staging de nome fixo (10,3 s e 10,8 s) e foi abortado no `DELETE` da partição com
+  `1023 Serializable isolation violation`, e a partição e a linha de controle ficaram as de A. O
+  `LOCK` da tabela de controle foi recusado com `0A000 Operation is not supported through
+  datashares`. O `UPDATE` da linha de controle condicionado à versão lida, como primeiro comando,
+  fez B esperar até o `COMMIT` de A (11,2 s e 11,0 s) e afetar 0 linhas.
+
+**Consequência**: o `unload_text` da suíte dobra a contrabarra além da aspa, como o `stream` da
+[etapa 5](PLAN-STAGE-5.md); o manifesto ausente depois de um `UNLOAD` que passou é o resultado
+vazio só quando `pg_last_unload_count()` lê 0 na mesma sessão, e o `stream` da suíte registra o
+caso vazio em vez de parar. O `is_finite` do Redshift virou a comparação estrita com os infinitos,
+falsa ao `NaN` pelas duas regras, e o `json_valid` virou `true` sobre a coluna `SUPER`
+([etapa 4](PLAN-STAGE-4.md)). O substituto local imita o escape da contrabarra, o `UNLOAD` vazio,
+`pg_last_unload_count()` e a recusa do `is_valid_json` sobre `SUPER`: o código anterior da suíte
+reprovou nele a contrabarra com a mensagem do ambiente alvo, e o texto anterior da auditoria teve a
+verificação de linhas recusada; a comparação do `NaN` pelo IEEE só o ambiente alvo mostra, e a
+suíte ganhou a leitura `nan_na_tabela`. As correções esperam duas execuções da suíte Redshift no
+ambiente alvo. A transação da publicação da [etapa 8](PLAN-STAGE-8.md) abre com o `UPDATE`
+condicionado (decisão do usuário de 2026-09-23), e o modo `register` da etapa 5 não cumpre a regra
+da issue #59 numa partição com `NaN`, porque o rodapé é o do Redshift: a proposta, à espera do
+usuário, é exportar essa partição por `rewrite` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que a validação local do probe das threads mostrou
+
+Em 2026-09-23, no contêiner Linux x86_64 com 4 vCPUs (DuckDB 1.5.5, deltalake 1.6.4, pyarrow
+25.0.1), `probes/duckdb_threads.py` rodou sobre a base fictícia de `tests/source_db_projetado.py`
+migrada por `scripts/migrate_parquet_to_delta.py` para uma pasta local e copiada para o moto do
+substituto, na partição 2026-06-30 de `cad_lancamentos`, `cad_contratos`, `cad_operacoes` e
+`rel_contrato_operacao` (60, 41, 30 e 52 linhas).
+
+- **Os valores padrão**: `threads` 4, 8, 12, 16 e 20, o padrão do DuckDB vezes 1 a 5, três
+  repetições, vinte configurações em processos novos em 25 s; as linhas lidas bateram com as do log
+  em todas (`DT-2`), e o DuckDB aplicou cada valor (`DT-3`). Os tempos, de 0,01 s a 0,06 s, não dizem
+  nada da leitura do S3.
+- **Só leitura sob a raiz**: a raiz comparada por `diff -r` com uma cópia feita antes ficou igual, e
+  nenhuma pasta `serialize_db_*` do motor sobrou na pasta temporária. O mesmo relatório saiu pela
+  URI `s3://` do moto, com o secret do DuckDB no endpoint do substituto.
+- **A configuração que falha**: com um arquivo apagado da partição de `cad_contratos` numa cópia da
+  raiz, as duas medidas de várias tabelas falharam com `IOException`, entraram na tabela com a
+  primeira linha do erro, em `DT-4` e na seção final, e o probe saiu com o código 1.
+
+**Consequência**: o probe é o instrumento do item das `threads` em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) e roda no ambiente alvo depois da migração dos comandos de
+`SUITE.md`, sobre o `--root` dela; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) o nomeia como a medição do
+padrão de `DuckDBConfig.threads`.

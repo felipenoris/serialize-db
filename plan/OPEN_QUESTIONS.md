@@ -41,81 +41,48 @@ foi medido em [`POC.md`](POC.md).
   requisição HTTP por thread, e a documentação recomenda `threads` de 2 a 5 vezes os núcleos para
   essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo, 4 no ambiente alvo em
   2026-09-23 (2 em 2026-09-21), e a sessão a mais de cada tabela de `run.ingest` só acrescenta a
-  thread que a chama. A primeira execução no ambiente alvo mede a ingestão por `delta_scan` do S3
-  com o padrão e com `threads` acima dos núcleos, e a medição decide o padrão de
-  `DuckDBConfig.threads` para uma raiz no S3 ([etapa 4](PLAN-STAGE-4.md)). A mesma execução mede a
-  ingestão de várias tabelas em sessões a mais: em disco local, num macOS de 11 núcleos, quatro
-  tabelas de 8.000.000 de linhas entraram em 1,629 s contra 3,498 s em série com `threads = 2`, e
-  parte do ganho veio das threads que chamam cada sessão, que o ambiente alvo, com 4 vCPUs, não tem
-  de sobra (2026-09-23, [`POC.md`](POC.md)).
-- **Duas transações simultâneas no esquema do datashare.** A publicação da
-  [etapa 8](PLAN-STAGE-8.md) grava a linha de controle em `serialize_db_publications`, a única
-  tabela que dois ambientes escrevem, e usa uma staging de nome fixo por ambiente e tabela. A
-  documentação prevê que o segundo `DELETE` espere o primeiro terminar e que, sob isolamento de
-  snapshot, linhas distintas confirmem as duas transações ([`redshift.md`](redshift.md)); o banco do
-  datashare informa isolamento `UNKNOWN`, e o `LOCK` não está na lista de comandos da escrita por
-  datashare. `tests/proof_of_concept/test_redshift_transactions.py` (`-m redshift`) mede os cenários
-  e espera uma execução no ambiente alvo: o substituto local de 2026-09-23 conferiu só o código
-  deles, porque o DuckDB não faz uma transação esperar a outra ([`POC.md`](POC.md)). O resultado
-  no ambiente alvo decide se a transação da etapa 8 fica como está ou ganha o `LOCK`, a nova
-  tentativa, o `UPDATE` condicionado à versão lida ou a staging por execução.
+  thread que a chama. `probes/duckdb_threads.py` mede no ambiente alvo, sobre as tabelas Delta que
+  a migração gravou, a ingestão pelo motor DuckDB com o padrão e com `threads` até 5 vezes os
+  núcleos, e a medição decide o padrão de `DuckDBConfig.threads` para uma raiz no S3
+  ([etapa 4](PLAN-STAGE-4.md)). O mesmo probe mede a ingestão de `cad_lancamentos`,
+  `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao` em série e numa sessão a mais por
+  tabela: em disco local, num macOS de 11 núcleos, quatro tabelas de 8.000.000 de linhas entraram
+  em 1,629 s contra 3,498 s em série com `threads = 2`, e parte do ganho veio das threads que
+  chamam cada sessão, que o ambiente alvo, com 4 vCPUs, não tem de sobra (2026-09-23,
+  [`POC.md`](POC.md)). O probe roda depois da migração dos comandos de `SUITE.md`.
 - **O `Double` não finito nas estatísticas do Delta**, a
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
   infinito numa coluna `Double`, e a biblioteca grava sem mínimo e máximo, no rodapé Parquet e no
   log Delta, as colunas `Double` com valor não finito em cada partição, pela contagem da auditoria
   (decisões do usuário de 2026-09-23, [etapa 3](PLAN-STAGE-3.md)). Continuam abertos:
-  - O rodapé que o `UNLOAD` do Redshift grava num grupo de linhas com `NaN`, que só o ambiente alvo
-    mede. O Redshift aceita `NaN` em `DOUBLE PRECISION`, e um rodapé com o máximo sem o `NaN`, como
-    o do pyarrow, faz o leitor Parquet do DuckDB perder a linha mesmo com o log sem estatística
-    ([duckdb/duckdb#25521](https://github.com/duckdb/duckdb/issues/25521), leituras de 2026-09-23,
-    [`POC.md`](POC.md)). `test_redshift.py::test_unload_footer_statistics_with_nan` lê o rodapé
-    com o `NaN` no início, no meio e no fim do grupo de linhas e com os infinitos, e o que o
-    `read_parquet` do DuckDB devolve para `valor > 3` sobre cada arquivo.
   - As tabelas que a migração adiantada gravou no ambiente alvo, com o mínimo e o máximo do
     `Double` registrados. O relatório da versão que rodou lá somava cada coluna `Double` por `CAST`
     para `DECIMAL(38, 6)`, que falha com `NaN` e infinito, e só `ContractError` era tratado: uma
     execução completa sem erro indica tabelas sem valor não finito. O script já segue a regra. Os relatórios da execução, ainda não
     disponíveis, dizem quais tabelas rodaram; uma tabela fora deles pede a contagem de `isnan` e
     `isinf`.
-- **O texto da auditoria no Redshift.** O texto de `serialize_db.audit.audit_sql(..., "redshift")`
-  nunca rodou no Redshift: a contagem por `count(CASE WHEN ... THEN 1 END)`, que a documentação do
-  `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o
-  `json_size` do teto de 65.535 bytes do documento JSON, o operador
-  POSIX `~` da regra da partição, e o `is_finite` como `x NOT IN ('NaN'::float8, 'Infinity'::float8,
-  '-Infinity'::float8)`, que supõe o `NaN` igual a si mesmo, como no PostgreSQL
-  ([etapa 4](PLAN-STAGE-4.md)). A [etapa 5](PLAN-STAGE-5.md) roda esse texto, e
-  `test_redshift.py::test_audit_sql_under_search_path_and_nan_comparison` o confere antes dela, pelo
-  caminho do motor: o `ddl` da etapa 1 e o `audit_sql` citam as tabelas sem esquema, e o caso roda
-  numa conexão com `SET search_path` no esquema do datashare depois do `USE`, que também nunca
-  rodou lá. Ele lê a comparação do `NaN` que separa o PostgreSQL do IEEE (`'NaN'::float8 =
-  'NaN'::float8`, o `is_finite` do `NaN`, dos infinitos, de um número e do nulo, e o `CAST` do `NaN`
-  para `NUMERIC(38, 6)`), uma tabela com uma linha de cada defeito, um `NaN` e um infinito, com o
-  esperado de cada contador ao lado, cada medida da verificação de linhas isolada (uma medida
-  recusada derruba a consulta inteira, e a coluna JSON é `SUPER` no DDL do Redshift, que o
-  `is_valid_json` talvez recuse [uncertain]), e os textos do modelo cliente sobre as tabelas vazias.
-  Passou pelo emulador local em 2026-09-23 ([`POC.md`](POC.md)).
-- **As leituras da etapa 5 na próxima execução da suíte Redshift.** As decisões do usuário de
-  2026-09-23 ([etapa 5](PLAN-STAGE-5.md)) supõem comportamentos que ninguém executou no ambiente
-  alvo. Os casos estão em `tests/proof_of_concept/test_redshift.py` e passaram, em 2026-09-23, por
-  um emulador local com o DuckDB no lugar do Redshift, que confere só o código dos testes
-  ([`POC.md`](POC.md)):
-  - `test_unload_to_a_hive_prefix_and_register`: o `UNLOAD` sem `PARTITION BY` para um prefixo com
-    `=`, `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/`, as colunas do `schema.elements` do
-    manifesto dele, o registro dos arquivos, a releitura pelo delta-rs e pelo `delta_scan`, e o
-    segundo `UNLOAD` no mesmo destino e num `uuid` novo;
-  - `test_stream_by_unload_with_literal_values`: a aspa, a contrabarra, o `%`, o `LIKE`, uma data,
-    um número, um `IN` de lista, um timestamp e um `Float`, cada caso pelos parâmetros do driver,
-    pelo texto com os literais direto no cursor e pelo mesmo texto dentro do `UNLOAD`; a
-    contrabarra, que o dialeto dobra, é a leitura que decide o caminho;
-  - `test_unload_limit_empty_result_temp_table_and_super`: a mensagem que recusa o `LIMIT` externo,
-    o que o `UNLOAD` grava para um resultado vazio, de que depende o esquema do lote vazio, a tabela
-    temporária da sessão lida pelo `UNLOAD` e a coluna `SUPER` no Parquet;
-  - `test_row_description_oids_and_type_modifier`: o `row_desc` de um `select` com uma coluna de
-    cada tipo do contrato e `SUPER`, e de outro com `count(*)`, `sum` e `avg` de `DECIMAL(18, 2)`,
-    `sum` de `DOUBLE PRECISION`, um `DECIMAL(38, 6)` e os literais de texto e de número, que fecha
-    a tabela de OIDs de `schema_from_row_description`;
-  - `test_small_load_copy_cost`: o melhor de três de um `load` de 10 linhas pelo `COPY` e pelo
-    `INSERT` de várias linhas, como leitura: é o que traria de volta o `INSERT` multilinha.
+- **O texto da auditoria no Redshift.** A suíte leu no ambiente alvo em 2026-09-23 o texto de
+  `serialize_db.audit.audit_sql(..., "redshift")` pelo caminho do motor da [etapa 5](PLAN-STAGE-5.md)
+  ([`POC.md`](POC.md)): o `search_path`, o `count(CASE WHEN ...)`, o `to_char`, o `octet_length` e o
+  `~` passaram, e o `is_valid_json` sobre `SUPER` (`42883`) e o `is_finite` por `NOT IN`, que deixou
+  passar o `NaN` da varredura da tabela, reprovaram. O texto novo, `true` no JSON e a comparação
+  estrita com os infinitos ([etapa 4](PLAN-STAGE-4.md)), espera duas execuções da suíte:
+  `test_audit_sql_under_search_path_and_nan_comparison` compara cada medida da tabela com os
+  defeitos plantados com o esperado, e `nan_na_tabela` lê a comparação do `NaN` na varredura. O
+  `json_size` do teto de 65.535 bytes do documento JSON (`texto_<coluna>`), que entrou depois
+  dessas execuções, espera as mesmas duas.
+- **As leituras da etapa 5 na próxima execução da suíte Redshift.** As execuções de 2026-09-23
+  responderam o prefixo com `=`, o `LIMIT` externo, o resultado vazio, a tabela temporária, o
+  `SUPER` no Parquet, o `row_desc` e o custo da carga pequena ([`POC.md`](POC.md),
+  [etapa 5](PLAN-STAGE-5.md)). Faltam:
+  - `test_stream_by_unload_with_literal_values`, que parou na contrabarra: o `UNLOAD` agora dobra a
+    contrabarra além da aspa, e os seis casos, a aspa, a contrabarra, o `%`, o `LIKE`, a data com o
+    número e o `IN` de lista, e o timestamp com o `Float`, esperam duas execuções pelos três
+    caminhos;
+  - `pg_last_unload_count()`, que separa o resultado vazio do manifesto que falta: a suíte o lê
+    depois do `UNLOAD` vazio e do da tabela temporária;
+  - o arquivo do `UNLOAD` com uma coluna `SUPER` registrado numa tabela Delta e lido pelo delta-rs
+    e pelo `delta_scan`, que nenhum caso da suíte grava ainda.
 - **O `ALTER COLUMN TYPE` no datashare.** A [etapa 8](PLAN-STAGE-8.md) trata a largura de
   `String(n)` que cresce como diff destrutivo, com recriação e recarga (decisão do usuário de
   2026-09-23), porque o comando não está na lista do que a escrita por datashare aceita e recusa
@@ -129,6 +96,15 @@ foi medido em [`POC.md`](POC.md).
   rodou `EXPLAIN` no esquema do datashare com o papel do projeto;
   `test_redshift.py::test_explain_of_a_join_on_the_share` lê o plano, ou a recusa, e os rótulos
   `DS_*` dele. O substituto local só confere o código.
+
+- **A publicação com a linha de controle lida no início da transação.** A etapa 8 lê a linha de
+  controle no início da transação e a grava no fim, por `INSERT` na primeira publicação e por
+  `UPDATE` condicionado à versão lida nas seguintes (decisão do usuário de 2026-09-23,
+  [etapa 8](PLAN-STAGE-8.md)). O que a segunda de duas publicações da mesma tabela recebe no
+  esquema do datashare, o `1023` ao apagar as linhas que a primeira trocou ou o `UPDATE` sem linha,
+  é leitura de `test_redshift_transactions.py::test_control_row_read_first_and_written_last` na
+  próxima execução da suíte Redshift; o substituto local conferiu só o código do caso
+  ([`POC.md`](POC.md)).
 
 ## Decisões de API pendentes por etapa
 

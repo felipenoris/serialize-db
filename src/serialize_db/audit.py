@@ -97,7 +97,9 @@ def _redshift_partition_text(element: partition_text, compiler: object, **kw: ob
 
 
 class json_valid(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
-    """Se o texto é um documento JSON: ``json_valid`` no DuckDB, ``is_valid_json`` no Redshift."""
+    """Se o texto é um documento JSON: ``json_valid`` no DuckDB; no Redshift, ``true``, porque a
+    coluna JSON é ``SUPER``, cujo valor sempre se serializa como documento JSON, e o
+    ``is_valid_json`` recusa ``SUPER`` (42883, leitura de 2026-09-23)."""
 
     name = "json_valid"
     type = sa.Boolean()
@@ -109,7 +111,7 @@ compiles(json_valid)(_by_name)
 
 @compiles(json_valid, "redshift")
 def _redshift_json_valid(element: json_valid, compiler: object, **kw: object) -> str:
-    return f"is_valid_json({compiler.process(element.clauses, **kw)})"
+    return "true"
 
 
 class text_bytes(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
@@ -181,8 +183,15 @@ def _redshift_partition_value_valid(element: partition_value_valid, compiler: ob
 
 
 class is_finite(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
-    """Se o ``Double`` é finito: ``isfinite`` no DuckDB; no Redshift, fora de ``NaN`` e dos
-    infinitos, que o ``DOUBLE PRECISION`` guarda e compara como valores."""
+    """Se o ``Double`` é finito: ``isfinite`` no DuckDB; no Redshift, estritamente entre os
+    infinitos.
+
+    O Redshift comparou o ``NaN`` igual a si mesmo numa constante, como o PostgreSQL, e diferente de
+    tudo na varredura de uma tabela, como o IEEE (leituras de 2026-09-23). A comparação estrita com
+    os infinitos dá falso ao ``NaN`` pelas duas regras: o PostgreSQL o põe acima de todo número, e
+    no IEEE toda comparação com ele é falsa. ``NOT IN ('NaN'::float8, ...)`` o dava por finito na
+    tabela.
+    """
 
     name = "isfinite"
     type = sa.Boolean()
@@ -195,7 +204,7 @@ compiles(is_finite)(_by_name)
 @compiles(is_finite, "redshift")
 def _redshift_is_finite(element: is_finite, compiler: object, **kw: object) -> str:
     value = compiler.process(element.clauses, **kw)
-    return f"({value} NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8))"
+    return f"({value} > '-Infinity'::float8 AND {value} < 'Infinity'::float8)"
 
 
 # ---------------------------------------------------------------- os tipos

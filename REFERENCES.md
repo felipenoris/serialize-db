@@ -65,6 +65,7 @@ Documentação:
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-usage-considerations.html>
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-billing.html>
 - <https://repost.aws/knowledge-center/redshift-temporary-tables-memory> (respondeu 403 em 2026-09-22)
+- <https://repost.aws/questions/QUIk7F9VwdRqmhQrjRfuVQ0w/redshift-removes-a-backslash-from-string-stored-in-a-varchar-field> (respondeu 403 em 2026-09-23)
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_TABLE_examples.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/performing-a-deep-copy.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_CREATE_SCHEMA.html>
@@ -249,6 +250,8 @@ banco de datashare), consultadas em 2026-09-20 a partir dos exemplos de `example
 - <https://docs.aws.amazon.com/redshift/latest/dg/c-the-query-plan.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/t_Creating_tables.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/PG_LAST_COPY_COUNT.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/PG_LAST_UNLOAD_COUNT.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_QUOTE_LITERAL.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_TABLE_INFO.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_ALTER_TABLE_RECOMMENDATIONS.html>
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/python-redshift-driver.html>
@@ -583,6 +586,10 @@ Semântica de restrições adiáveis, herdada pelos dialetos do DuckDB e do Reds
 
 - <https://www.postgresql.org/docs/current/sql-createtable.html>
 - <https://www.postgresql.org/docs/current/sql-set-constraints.html>
+
+O `NaN` igual a si mesmo e acima de todo número:
+
+- <https://www.postgresql.org/docs/current/datatype-numeric.html>
 
 ## PyIceberg
 

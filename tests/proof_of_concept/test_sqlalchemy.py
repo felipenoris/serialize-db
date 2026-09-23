@@ -576,9 +576,9 @@ def test_generic_function_subclass_registers_in_sa_func_for_the_whole_process() 
     inteiro; uma de ``FunctionElement``, com ``@compiles`` por dialeto, compila igual sem registro.
 
     Um ``json_valid`` da auditoria como ``GenericFunction``, com ``@compiles`` para o Redshift,
-    faria o ``sa.func.json_valid`` do próprio cliente sair ``is_valid_json`` no Redshift depois do
-    import da biblioteca. Os nomes das classes abaixo são únicos, para o registro que a primeira
-    deixa não alcançar outro teste.
+    faria o ``sa.func.json_valid`` do próprio cliente sair pela regra da auditoria no Redshift
+    depois do import da biblioteca. Os nomes das classes abaixo são únicos, para o registro que a
+    primeira deixa não alcançar outro teste.
     """
     column = sa.column("meta", sa.String)
     assert type(sa.func.serialize_db_sonda_len(column)) is Function

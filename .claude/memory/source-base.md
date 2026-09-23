@@ -22,7 +22,7 @@ Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `test
 
 ## The production base, read on 2026-09-21
 
-- The production base (`s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`),
+- The production base (`s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`),
   read in the target through `S3FileSystem` at 13:54 UTC with `--sample 5000`, the listing in 0.1 s
   (the report is in `plan/readings/parquet_source-2026-09-21-1354.txt`, committed by the user): the
   same structure as the dev base, section 3 identical column by column (checked by script against
@@ -60,9 +60,9 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
 
 ## The early migration in the target
 
-- `scripts/migrate_parquet_to_delta.py` ran in the target over the production base itself, read
-  only (the `--source` of `SUITE.md` is `databases/prd/db_projetado`, not a copy), one process and
-  one `--report` JSON per table, in a version from d2c545b (2026-09-21) to 8de3c8b
+- `scripts/migrate_parquet_to_delta.py` ran in the target over the copy of the production base in
+  the sandbox (`databases/prd/db_projetado`, the `--source` of `SUITE.md`), one process and one
+  `--report` JSON per table, in a version from d2c545b (2026-09-21) to 8de3c8b
   (2026-09-22), before the issue #59 rule of e2ed614: the user reported the success in the session
   of cea8a51 (2026-09-22) and handed the reports over on 2026-09-23. The JSON records neither the
   mode, the sort, the roots nor the machine; the script prints the DuckDB `threads` and

@@ -1,0 +1,211 @@
+================================================================================
+space: o espaço do SageMaker Unified Studio visto de dentro
+2026-09-23 19:18:13 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
+interpretador /home/<usuário>/work/projects/serialize-db/.venv/bin/python
+================================================================================
+
+
+################################################################################
+# 1. Identidade e credenciais
+################################################################################
+
+variável                                valor
+AWS_REGION                              sa-east-1
+AWS_DEFAULT_REGION                      sa-east-1
+AWS_PROFILE                             (ausente)
+AWS_ACCESS_KEY_ID                       (ausente)
+AWS_SESSION_TOKEN                       (ausente)
+AWS_CONTAINER_CREDENTIALS_RELATIVE_URI  definida
+AWS_CONTAINER_CREDENTIALS_FULL_URI      (ausente)
+AWS_WEB_IDENTITY_TOKEN_FILE             (ausente)
+AWS_ROLE_ARN                            (ausente)
+
+arquivo             estado
+~/.aws/config       ausente
+~/.aws/credentials  ausente
+
+$ boto3.Session().get_credentials()
+método container-role
+(0.0 s)
+
+CREDENTIAL_EXPIRY=2026-09-23 20:14:17+00:00 (daqui a 56 min)
+REGION=sa-east-1
+$ tcp 169.254.170.2:80 (endpoint de credenciais do contêiner)
+conectou em 0.00 s
+(0.0 s)
+
+$ tcp 169.254.169.254:80 (IMDS)
+não conectou: [Errno 22] Invalid argument
+(0.0 s)
+
+$ sts.get_caller_identity()
+{
+  "UserId": "<id do papel>:SageMaker",
+  "Account": "<conta>",
+  "Arn": "arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker"
+}
+(0.1 s)
+
+
+
+################################################################################
+# 2. Projeto do SageMaker Unified Studio
+################################################################################
+
+$ sagemaker_studio.Project() (neste interpretador ou no do sistema)
+!! FALHOU (1.7 s): RuntimeError: /home/<usuário>/work/projects/serialize-db/.venv/bin/python: ModuleNotFoundError: No module named 'sagemaker_studio'; /opt/conda/bin/python: botocore.exceptions.ProfileNotFound: The config profile (DomainExecutionRoleCreds) could not be found
+
+
+
+################################################################################
+# 3. Rede
+################################################################################
+
+variável     valor
+HTTP_PROXY   (ausente)
+HTTPS_PROXY  (ausente)
+http_proxy   (ausente)
+https_proxy  (ausente)
+NO_PROXY     (ausente)
+no_proxy     (ausente)
+
+nome                                         endereços                                                            tipo
+s3.sa-east-1.amazonaws.com                   3.5.232.139, 3.5.232.228, 3.5.233.12, 3.5.233.152 ...                público: gateway endpoint ou internet
+sts.sa-east-1.amazonaws.com                  10.x.x.x, 10.x.x.x, 10.x.x.x                              privado: endpoint VPC de interface com DNS privado
+redshift.sa-east-1.amazonaws.com             10.x.x.x, 10.x.x.x, 10.x.x.x                              privado: endpoint VPC de interface com DNS privado
+redshift-serverless.sa-east-1.amazonaws.com  10.x.x.x, 10.x.x.x, 10.x.x.x                               privado: endpoint VPC de interface com DNS privado
+redshift-data.sa-east-1.amazonaws.com        10.x.x.x, 10.x.x.x, 10.x.x.x                             privado: endpoint VPC de interface com DNS privado
+glue.sa-east-1.amazonaws.com                 10.x.x.x, 10.x.x.x, 10.x.x.x                              privado: endpoint VPC de interface com DNS privado
+athena.sa-east-1.amazonaws.com               10.x.x.x, 10.x.x.x, 10.x.x.x                             privado: endpoint VPC de interface com DNS privado
+kms.sa-east-1.amazonaws.com                  15.229.198.143, 15.229.198.147, 15.229.199.196, 15.229.200.148 ...   público: só pela internet ou pelo proxy
+secretsmanager.sa-east-1.amazonaws.com       10.x.x.x, 10.x.x.x, 10.x.x.x                              privado: endpoint VPC de interface com DNS privado
+sagemaker.sa-east-1.amazonaws.com            18.228.108.141, 18.229.57.63, 52.67.241.70                           público: só pela internet ou pelo proxy
+datazone.sa-east-1.amazonaws.com             10.x.x.x, 10.x.x.x, 10.x.x.x                               privado: endpoint VPC de interface com DNS privado
+s3.amazonaws.com                             16.15.163.218, 16.15.183.31, 16.15.191.102, 16.15.199.237 ...        público: gateway endpoint ou internet
+pypi.org                                     151.101.0.223, 151.101.128.223, 151.101.192.223, 151.101.64.223 ...  público: só pela internet ou pelo proxy
+github.com                                   4.228.31.150                                                         público: só pela internet ou pelo proxy
+
+$ tcp s3.sa-east-1.amazonaws.com:443
+conectou em 0.00 s
+(0.0 s)
+
+$ HEAD https://pypi.org/simple/ (pelo proxy do ambiente, se houver)
+sem resposta: URLError: <urlopen error [Errno 101] Network is unreachable>
+(20.0 s)
+
+
+
+################################################################################
+# 4. Máquina
+################################################################################
+
+item                                       valor
+plataforma                                 Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39
+cpus                                       4
+memória                                    15.4 GiB
+disco livre em repositório                 29.7 GiB de 37.0 GiB (/home/<usuário>/work/projects/serialize-db)
+disco livre em HOME                        29.7 GiB de 37.0 GiB (/home/<usuário>)
+disco livre em /tmp                        29.7 GiB de 37.0 GiB (/tmp)
+disco livre em pasta temporária do Python  29.7 GiB de 37.0 GiB (/tmp)
+arquivos abertos por processo (ulimit -n)  65536 (máximo 99999); o DuckDB abre um descritor por arquivo Parquet lido
+~/shared                                   ausente
+comando uv                                 /home/<usuário>/.local/bin/uv
+comando git                                /usr/bin/git
+comando gh                                 ausente
+comando aws                                /home/<usuário>/.local/bin/aws
+comando duckdb                             /home/<usuário>/.local/bin/duckdb
+
+
+
+################################################################################
+# 5. Python e pacotes
+################################################################################
+
+$ /opt/conda/bin/python (versões dos pacotes)
+{"version": "3.12.14", "deltalake": "1.6.3", "duckdb": "1.5.1", "pyarrow": "21.0.0", "boto3": "1.43.56", "botocore": "1.43.56", "redshift_connector": "2.1.10", "sqlalchemy": "2.0.52", "duckdb_engine": null, "sqlalchemy_redshift": null, "pandas": "2.3.3", "sqlglot": "30.17.0", "adbc_driver_postgresql": null, "pdoc": null, "sagemaker_studio": "1.1.32", "awswrangler": "3.17.1", "pytest": "9.1.1"}
+(0.1 s)
+
+pacote                  /home/<usuário>/work/projects/serialize-db/.venv/bin/python  /opt/conda/bin/python
+python                  3.13.15                                                  3.12.14
+deltalake               1.6.4                                                    1.6.3
+duckdb                  1.5.5                                                    1.5.1
+pyarrow                 25.0.1                                                   21.0.0
+boto3                   1.43.98                                                  1.43.56
+botocore                1.43.98                                                  1.43.56
+redshift_connector      2.1.16                                                   2.1.10
+sqlalchemy              2.0.54                                                   2.0.52
+duckdb_engine           0.17.0                                                   ausente
+sqlalchemy_redshift     1.0.0                                                    ausente
+pandas                  3.0.6                                                    2.3.3
+sqlglot                 30.18.0                                                  30.17.0
+adbc_driver_postgresql  ausente                                                  ausente
+pdoc                    16.0.0                                                   ausente
+sagemaker_studio        ausente                                                  1.1.32
+awswrangler             ausente                                                  3.17.1
+pytest                  9.1.1                                                    9.1.1
+
+
+
+################################################################################
+# 6. DuckDB
+################################################################################
+
+DUCKDB_EXTENSION_DIRECTORY=/home/<usuário>/work/projects/serialize-db/.duckdb
+DUCKDB_HTTP_PROXY=sem proxy no ambiente
+item                          valor
+versão                        1.5.5
+plataforma                    linux_amd64
+threads                       4
+memory_limit                  12.3 GiB
+temp_directory                .tmp
+extension_directory           /home/<usuário>/work/projects/serialize-db/.duckdb
+autoinstall_known_extensions  False
+autoload_known_extensions     False
+http_proxy                    -
+
+extensão  carregou  detalhe
+httpfs    sim       -
+delta     sim       -
+aws       sim       -
+parquet   sim       -
+json      sim       -
+
+$ duckdb_extensions()
+extensão  instalada  carregada  caminho                                                                                    versão
+aws       True       True       /home/<usuário>/work/projects/serialize-db/.duckdb/v1.5.5/linux_amd64/aws.duckdb_extension     efa54a9
+delta     True       True       /home/<usuário>/work/projects/serialize-db/.duckdb/v1.5.5/linux_amd64/delta.duckdb_extension   45c4087
+httpfs    True       True       /home/<usuário>/work/projects/serialize-db/.duckdb/v1.5.5/linux_amd64/httpfs.duckdb_extension  827222f
+json      True       True       (BUILT-IN)                                                                                 v1.5.5
+parquet   True       True       (BUILT-IN)                                                                                 v1.5.5
+(0.0 s)
+
+
+
+################################################################################
+# 7. Checagens
+################################################################################
+
+RESULTADO  ID     O QUE                                                      DETALHE
+note       SP-4   projeto do SageMaker                                       não lido: fora de um espaço ou sem o pacote sagemaker_studio
+note       SP-5   conexão Redshift no projeto                                não lida
+note       SP-7   internet                                                   inalcançável: esperado no ambiente destino
+pass       SP-1   credenciais do boto3                                       método container-role
+pass       SP-2   região do boto3                                            sa-east-1
+pass       SP-3   identidade pelo STS                                        arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker
+pass       SP-6   S3 regional por TCP                                        s3.sa-east-1.amazonaws.com
+pass       SP-8   Python 3.13 neste interpretador                            3.13.15
+pass       SP-9   dependências e grupo dev do pyproject neste interpretador  boto3 1.43.98, deltalake 1.6.4, duckdb 1.5.5, duckdb_engine 0.17.0, pyarrow 25.0.1, sqlalchemy 2.0.54, sqlalchemy_redshift 1.0.0, flask 3.1.3, flask_cors 6.0.5, moto 5.2.3, pandas 3.0.6, pytest 9.1.1, redshift_connector 2.1.16, sqlglot 30.18.0
+pass       SP-10  extensões do DuckDB                                        httpfs, delta, aws, parquet, json de /home/<usuário>/work/projects/serialize-db/.duckdb
+
+
+
+################################################################################
+# 8. Chamadas que falharam
+################################################################################
+
+Cada entrada é uma chamada cujo resultado falta acima; um bloco vazio em outro lugar significa que a chamada passou e não devolveu nada.
+
+- sagemaker_studio.Project() (neste interpretador ou no do sistema)
+  RuntimeError: /home/<usuário>/work/projects/serialize-db/.venv/bin/python: ModuleNotFoundError: No module named 'sagemaker_studio'; /opt/conda/bin/python: botocore.exceptions.ProfileNotFound: The config profile (DomainExecutionRoleCreds) could not be found
+
+código de saída 1: 0 checagem(ns) reprovada(s), 1 chamada(s) falhada(s)

@@ -210,10 +210,21 @@ outro caminho. A tabela `serialize_db_publications` é criada uma vez no esquema
    atual e devolve as partições com arquivos novos. Na primeira publicação, todas as partições.
 2. A reconciliação repete no Redshift o diff aditivo do Delta, `ALTER TABLE ADD COLUMN` no fim da
    tabela, porque o `COPY` é posicional; um diff destrutivo recria a tabela e recarrega tudo.
-3. Numa única transação, para cada tabela e partição: `DELETE` da partição, `COPY ... MANIFEST` na
-   staging, `INSERT ... SELECT *, '<valor>'` e a linha de `serialize_db_publications`. A transação dá aos
-   clientes a atomicidade entre tabelas que o Delta não tem.
+3. Numa transação por tabela (decisão do usuário de 2026-09-23): a leitura da linha de
+   `serialize_db_publications`, que identifica a versão anterior; sem linha, a primeira publicação;
+   com linha, a versão conferida contra a do Delta; para cada partição, `DELETE` da partição,
+   `COPY ... MANIFEST` na staging e `INSERT ... SELECT *, '<valor>'`; e no fim o `INSERT` da linha
+   de controle, ou o `UPDATE` condicionado à versão lida. A outra publicação que grava a tabela na
+   mesma janela sai com `ExecutionConflict`. A transação dá aos clientes a troca atômica das
+   partições de cada tabela junto com a sua linha de controle.
 4. Uma execução de correção publica só a partição corrigida.
+
+### Despublicação de uma tabela
+
+`serialize-db publish --unpublish <tabela>` tira a tabela dos clientes ([etapa 8](PLAN-STAGE-8.md),
+decisão do usuário de 2026-09-23): numa transação, a leitura da linha de controle e, com ela, o
+`DROP TABLE` da tabela publicada e o `DELETE` da linha, condicionado à versão lida. O Delta fica
+intacto, e a publicação seguinte recria a tabela com todas as partições.
 
 ### Correção de uma partição
 

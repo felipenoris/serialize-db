@@ -24,6 +24,7 @@ e os itens marcados como pendentes dependem da prova de conceito.
 | `SELECT "table", diststyle, sortkey1, unsorted, stats_off, tbl_rows, skew_rows, vacuum_sort_benefit FROM svv_table_info WHERE schema = '<esquema>';` | Estilo de distribuição, chave de ordenação, fração não ordenada, estatísticas desatualizadas, linhas, assimetria e ganho estimado de um `VACUUM SORT`. |
 | `SELECT * FROM svv_alter_table_recommendations;` | Recomendações do Advisor para chaves de distribuição e ordenação; visível só a superusuários. |
 | `SELECT pg_last_copy_count();` | Linhas carregadas pelo último `COPY` da sessão; `0` quando a carga falhou. |
+| `SELECT pg_last_unload_count();` | Linhas descarregadas pelo último `UNLOAD` concluído na sessão; `0` sem `UNLOAD` concluído ou quando o último falhou durante a descarga. |
 | `SELECT * FROM sys_load_error_detail ORDER BY start_time DESC LIMIT 20;` | Erros de carga, inclusive em workgroups serverless; `stl_load_errors` cobre só clusters provisionados e é negada a um usuário comum no ambiente alvo (SQLSTATE 42501, leitura de 2026-09-20), assim como `stv_slices`. |
 | `EXPLAIN <consulta>;` | Plano de execução, com os rótulos de redistribuição `DS_DIST_*`. |
 
@@ -269,6 +270,7 @@ que elementos com o mesmo nome podem ter semântica diferente. O que muda para o
 | Isolamento | Read committed por padrão. | Snapshot isolation por padrão em clusters e workgroups novos, com o nível serializável como opção; sob o serializável, o segundo de dois escritores conflitantes é abortado. |
 | Comprimento de `VARCHAR(n)` | Caracteres. | Bytes; um caractere UTF-8 pode ocupar até 4 bytes. `TEXT` vira `VARCHAR(256)`. |
 | Espaços finais | Significativos. | Ignorados na comparação de `VARCHAR`. |
+| `NaN` em `DOUBLE PRECISION` | Igual a si mesmo e acima de todo número. | Igual a si mesmo numa constante; diferente de tudo na varredura de uma tabela, como no IEEE: `x NOT IN ('NaN'::float8)` deixa passar o `NaN` da tabela (2026-09-23). |
 | Tamanho de comando | Sem limite prático. | 16 MB por comando SQL; 4 MB por linha de entrada no `COPY`. |
 | Identificadores | 63 bytes. | 127 bytes; 1.600 colunas por tabela. |
 | Subconsultas em `INSERT ... VALUES` de várias linhas | Aceitas. | Rejeitadas. |
@@ -893,8 +895,14 @@ trabalha sobre o snapshot confirmado quando ela o tomou. O que a documentação 
 
 A tabela de controle `serialize_db_publications` é a única que dois ambientes escrevem
 ([etapa 8](PLAN-STAGE-8.md)), e o banco do datashare informou isolamento `UNKNOWN` em
-`svv_redshift_databases` (2026-09-20). `tests/proof_of_concept/test_redshift_transactions.py` mede
-no esquema do datashare o que estas regras fazem com duas publicações simultâneas.
+`svv_redshift_databases` (2026-09-20). `tests/proof_of_concept/test_redshift_transactions.py` leu
+no esquema do datashare, em duas execuções de 2026-09-23 ([POC.md](POC.md)): escritas em tabelas
+distintas não esperam; linhas distintas da tabela de controle confirmam as duas transações, e o
+`DELETE` da segunda espera o `COMMIT` da primeira; o `CREATE TABLE` de um nome que outra transação
+criou espera o `COMMIT` dela; o `DELETE` das linhas que outra transação confirmada trocou recebe
+`1023 Serializable isolation violation`; o `LOCK` é recusado (`0A000 Operation is not supported
+through datashares`); e o `UPDATE` condicionado à versão lida espera o `COMMIT` da outra e afeta 0
+linhas. A etapa 8 lê a linha de controle no início da transação e a grava no fim.
 
 ## Ingestão de dados
 
@@ -1091,7 +1099,13 @@ Comportamento do `UNLOAD ... FORMAT AS PARQUET` segundo a documentação:
   `GZIP`, `BZIP2` nem `ZSTD`; `ENCRYPTED` só com SSE-KMS.
 - Colunas `TIMESTAMPTZ` perdem a informação de fuso; `VARBYTE`, `GEOMETRY` e `HLLSKETCH` só saem em
   texto ou CSV.
-- O `SELECT` externo não aceita `LIMIT`; aspas dentro da consulta são escapadas como `''`.
+- O `SELECT` externo não aceita `LIMIT` (`42601 Limit clause is not supported`, 2026-09-23). O
+  `SELECT` é um literal que trata a contrabarra como escape, como a documentação mostra ao
+  escapar a aspa com `\'`: a aspa e a contrabarra da consulta entram dobradas. Com só a aspa
+  dobrada, a contrabarra de um literal da consulta chegou sem par, e o filtro não achou a linha
+  (2026-09-23).
+- Um resultado vazio passa sem gravar arquivo nem manifesto (2026-09-23);
+  `pg_last_unload_count()` na mesma sessão separa esse caso de um manifesto que falta.
 - O Parquet é até 2 vezes mais rápido de descarregar e ocupa até 6 vezes menos espaço no S3 que
   texto.
 
@@ -1118,10 +1132,14 @@ ambiente alvo em 2026-09-21 e respondeu os três:
 | `DOUBLE PRECISION` | `DOUBLE` | nenhum |
 | `DECIMAL(18, 2)` | `FIXED_LEN_BYTE_ARRAY(8)` | `Decimal(precision=18, scale=2)` |
 | `TIMESTAMP` | `INT96` | nenhum |
+| `SUPER` | `BYTE_ARRAY` | `JSON`, lido pelo pyarrow como `extension<arrow.json>` com o texto de cada valor (2026-09-23) |
 
 Toda coluna sai `optional`, inclusive as declaradas `NOT NULL` na tabela de origem: a nulidade do
 Delta vem do esquema da tabela, não dos arquivos. As estatísticas de mínimo e máximo estão
-presentes, o que faz valer preencher `minValues` e `maxValues` na `AddAction`.
+presentes, o que faz valer preencher `minValues` e `maxValues` na `AddAction`. Num grupo de linhas
+com `NaN`, o mínimo e o máximo do `DOUBLE PRECISION` deixam o `NaN` de fora, como no rodapé do
+pyarrow, e o leitor Parquet do DuckDB poda o grupo pelo máximo e perde a linha; com os infinitos,
+o rodapé os traz (2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59)).
 
 Os dois tipos físicos que divergem do resto do projeto:
 

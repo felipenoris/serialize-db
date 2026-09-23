@@ -124,7 +124,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
 - **A script the user ran in the target outranks a plan written without one** (2026-09-20). Two
   connection scripts from the target replaced the plan's default (password) with the workgroup's
   temporary credential and moved the Data API out of the library. Keep such a script verbatim in
-  `examples/`, with its literal values, and make the probe and the suite repeat its calls instead of
+  `examples/`, with its literal values (the environment's identifiers masked since 2026-09-23), and make the probe and the suite repeat its calls instead of
   a variant nobody executed.
 - **Each tool in a script reads the proxy its own way** (2026-09-20). `prepare_offline.sh` got
   through `uv sync` and died on the DuckDB `INSTALL` with the same `HTTP_PROXY`: `uv` accepts
@@ -498,3 +498,22 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   with as little as 23 MB to spare; counted from the base, the table adds 243 MB, the reader 10 MB
   and the spool 37 to 45 MB. The macOS runs never exercised the parent's peak. `CLAUDE.md`,
   `plan/POC.md`
+- **A difference the stand-in shows is read against the target's documentation before it is blamed
+  on the stand-in** (2026-09-23). The first stand-in run of the stream case printed different rows
+  for the backslash through the literal text and through the `UNLOAD`, and the difference went into
+  `plan/POC.md` as DuckDB not treating the backslash as an escape. In the target the `UNLOAD` passed
+  and wrote nothing: its literal treats the backslash as an escape, as the `UNLOAD` pages show by
+  escaping a quote with `\'`, so the backslash the dialect had doubled reached the inner `select`
+  unpaired and the filter matched no row. The suite asserted the manifest of every `UNLOAD` that
+  passed, and an empty result writes none, so the test stopped there twice and lost four cases. The
+  stand-in now reads Redshift literals with the backslash escape and writes nothing for an empty
+  `UNLOAD`, the old code fails in it with the target's message, and the helper tells an empty
+  result from a missing manifest by `pg_last_unload_count()`. `CLAUDE.md`, `plan/POC.md`
+- **A predicate is probed on table rows as well as on constants, and a function with the type the
+  generated DDL gives its argument** (2026-09-23). The Redshift audit's `is_finite`,
+  `x NOT IN ('NaN'::float8, ...)`, was false for `NaN` on constants in the target and let the `NaN`
+  of the planted table through: Redshift compared `NaN` as PostgreSQL on constants and as IEEE in
+  the scan, so the count saw 1 of 2 non-finite values and the control total hit `NaN input (scale
+  float to decimal)`. The same run refused `is_valid_json` on the `SUPER` column that the stage 1
+  DDL gives a JSON column (42883), which `plan/POC.md` had marked [uncertain] without a probe of
+  that type; the refusal took down every measure of the rows check. `CLAUDE.md`, `plan/POC.md`

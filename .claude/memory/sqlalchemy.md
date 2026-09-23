@@ -88,8 +88,8 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   then `compile(..., compile_kwargs={"render_postcompile": True})` and `construct_params()`: lists
   and `bindparam(..., expanding=True)` expand; `params` ignores a name the statement lacks, and a
   missing value is `InvalidRequestError` at compile time. A `GenericFunction` subclass registers
-  its name in `sa.func` for the whole process (the client's `sa.func.json_valid` then compiles as
-  `is_valid_json` on Redshift); a `FunctionElement` subclass with `name` and `@compiles` per dialect
+  its name in `sa.func` for the whole process (the client's `sa.func.json_valid` then compiles by
+  the audit's Redshift rule); a `FunctionElement` subclass with `name` and `@compiles` per dialect
   does not (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_sqlalchemy.py`
 
 ## SQL tooling
