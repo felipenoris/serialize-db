@@ -534,3 +534,27 @@ written only when the execution ends without error; the two stream-cancellation 
 thread ended and the session is free, with the error null or the interrupt's. `plan/PLAN-STAGE-3.md`,
 `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`
 
+
+## The code review of 2026-09-23
+
+On 2026-09-23 the user asked for a review of `src/` and `tests/` against the repository's code rules
+(PEP 8, readability for a junior reader, no over-engineering, abstractions at the right level) and
+for the corrections. The same day the user decided to retire the drafts of package code from the
+study suites: the sketches `SandboxEngine`, `BatchStream` and `Loader` of
+`tests/proof_of_concept/test_parallel.py`, which `DuckDBStream` repeated line for line and which had
+already diverged from the engine (the sketch's `load` registered and ran `CREATE TABLE AS`), their
+seven twin tests, the copies of `arrow_schema` and `delta_schema` in `test_sqlalchemy.py`,
+`RangeAllocator` in `test_concurrency.py`, and the models in `test_stdlib.py` that still stated the
+old partition rule. The study suites keep only the facts of the external libraries; the unique
+cases moved to `tests/test_engine_duckdb.py` and `test_duckdb.py`. The assistant's choices, named in
+the report: `schema` gained the protected helpers three modules repeated (`literal`,
+`sequential_key`, `double_columns`, `foreign_keys_by_columns`, `TEXT_LIMIT`); `run.ingest` and
+`run.publish` share `_run_in_pool`; the CLI dispatches by `set_defaults(handler=...)` and resolves
+`modulo:atributo` by `pkgutil.resolve_name`; a test cited by name in `plan/` was never split or
+renamed, only restructured in blocks; the abandoned `DuckDBLoader` deletes its spool file, as its
+docstring and stage 4 said; `tests/conftest.py` skips by marker, masks credentials at output time
+and names its root class `SessionRoot`; the target-only suites changed only in form. Not changed,
+reported instead: the three unused `Database` prefixes of stages 5, 8 and 9 (`staging_prefix`,
+`publication_prefix`, `archive_prefix`), the `sandbox_prefix` draft of stage 5 in `test_stdlib.py`,
+and `Database.__post_init__` writing `os.environ` in the tests. `plan/PLAN-STAGE-4.md`,
+`plan/CURRENT_STATE.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`

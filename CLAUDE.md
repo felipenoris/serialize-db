@@ -245,7 +245,7 @@ research appends to the matching group.
 | `.github/` | `tests.yml` installs the DuckDB `delta` extension into `.duckdb/` and runs `tests/` without `tests/proof_of_concept/` and `tests/test_probes.py` on push and pull request; `docs.yml` publishes the `pdoc` site to <https://felipenoris.github.io/serialize-db/> on push to `main` (the repository's Pages source must be "GitHub Actions"). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Rerun it whenever a dependency is added**; a new DuckDB extension, a Python version change or another runtime asset is added by hand. Only a folder prepared on Linux x86_64 serves the SageMaker space; the header is the operating procedure, and the extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`. |
 | `examples/` | The scripts the user ran in the target, kept as run: `redshift_native.py`, `redshift_data_api.py`, `redshift_copy_unload.py` (2026-09-20) and `redshift_manifest.py` (2026-09-21, the prerequisites of `export_partition`); `examples/README.md` says what each one fixes. The probe, the suite and stage 5 repeat their calls, and the target they fix is in `.claude/memory/redshift.md`. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py` and `parquet_source.py` (`--sample N`), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, no network. |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py` and `parquet_source.py` (`--sample N`), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, with no network but one DNS lookup. |
 | `scripts/` | `migrate_parquet_to_delta.py`, the early migration of stage 7 (2026-09-21): per table and partition, the DuckDB query with the contract casts, one query checking partition value, nulls and text lengths and finding the `Double` columns with `NaN` or infinity, which lose min and max in the log and in the `rewrite` footer (issue #59), `register` (`COPY ... RETURN_STATS` committed by `create_write_transaction`) or `rewrite` (`cast` and `write_deltalake`), the `sort_key` order, resume from the log, the count-and-sum report (`Double` sums over finite values, non-finite values counted) with time and RSS per partition and `--report` JSON; local folder or `s3://`. The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
 | `plan/readings/` | The probe reports backing a statement in `plan/POC.md`, kept as they came out, indexed by `plan/readings/README.md`. |
 | `plan/guia.md` | ETL practices the pipeline follows: immutable partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
@@ -473,6 +473,19 @@ A new lesson adds its story there and its rule here, in the same commit.
   a folder for S3 check the test's own code before a target run is spent; the stand-in found a `NaN`
   case filtering `valor > 2`, which the footer's 3.0 maximum lets through, so the pruning loss it
   was written to show could never appear (2026-09-23).
+- **When a stage's module lands, the study suites keep only the external libraries' facts**: every
+  draft of package code leaves in the same unit of work, and its unique cases move to the package
+  tests; a draft kept beside its module drifts and measures a setup the module never runs (user
+  decision of 2026-09-23).
+- **Every behavior a docstring promises has an assertion that fails without it**: the abandoned
+  loader's spool deletion was in the docstring and in stage 4, untested and false; run the new
+  assertion against the old code before trusting it (2026-09-23).
+- **A secret is masked where it leaves**: the report's printed lines and its JSON go through the
+  mask, not the values that enter it, which may nest an error's `repr` in a dict (2026-09-23).
+- **A hook that selects tests by suite reads the marker, never `item.keywords`**, which also holds
+  every parameter id: a case with the id `redshift` was skipped as the Redshift suite (2026-09-23).
+- **A test that runs a default which writes points the default at the authorized root first**:
+  `DuckDBConfig()`'s `mkdtemp` wrote in the system temp folder from a `local` test (2026-09-23).
 
 ## Naming conventions
 
@@ -525,7 +538,7 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as
   `FunctionElement`), and the user's answers of the same day closed stage 4: the `qmark` style, the
   audit key scope, the engine interface, the `loader` creating its table at `close`, the hybrid
-  `stream` and `interrupt()`, the last three implemented in the `test_parallel.py` sketches. The
+  `stream` and `interrupt()`, the last three implemented in the engine. The
   `cast` keeps accepting the non-finite `Double`, and the user's decision of 2026-09-23 on issue
   #59 writes no min and max, in the Parquet footer or the Delta log, for the `Double` columns holding
   a non-finite value in each partition, from the audit's count (`columns_without_min_max`)
@@ -548,8 +561,11 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   to an intermediate file after it while the query runs, and its `close` interrupts a query still
   running; `loader` checks the name without the lock and creates and loads its table in one
   transaction at `close`; `session()` hands the raw connection, and `new_session()` opens an extra
-  session for parallel work, which `run.ingest` uses per table (2026-09-23). The reference sketches are
-  `SandboxEngine`, `BatchStream` and `Loader` in `tests/proof_of_concept/test_parallel.py`. The
+  session for parallel work, which `run.ingest` uses per table (2026-09-23). The engine is the
+  reference: the review of 2026-09-23 retired the sketches `SandboxEngine`, `BatchStream` and
+  `Loader` of `tests/proof_of_concept/test_parallel.py` and the other drafts of package code in the
+  study suites (user decision), and every line of `src/` and `tests/` outside the reference model
+  is at most 100 characters. The
   Redshift driver materializes a result in `execute` (`plan/redshift.md`), so `stream` there always
   goes through `UNLOAD` and `query` through the cursor (user decision of 2026-09-23).
 - `tests/proof_of_concept/test_redshift_transactions.py` waits for a run in the target: two

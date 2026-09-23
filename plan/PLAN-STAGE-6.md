@@ -34,10 +34,7 @@ também a que publica uma tabela em que outra execução gravou dados desde a ab
 `test_entry_point_by_import_string`, `test_command_line_parsing`, `test_execution_log`,
 `test_prepare_environment`, `test_json_control_file_and_commit_metadata`) e
 `test_deltalake.py::test_time_travel_and_restore` (os metadados de commit no histórico) e
-`test_concurrency.py` (os leitores Delta presos à versão carregada durante um `append`, as faixas de
-identificadores de um contador sob `Lock`), `test_parallel.py` (o pool que termina o que está em
-curso e cancela o resto, `max_key` pelas estatísticas, a leitura ao lado de um `load` esquecido numa
-thread, que falha em vez de ler dado velho) e
+`test_concurrency.py` (os leitores Delta presos à versão carregada durante um `append`) e
 `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log` (a
 codificação do valor de partição que a regra da partição evita).
 
@@ -109,8 +106,8 @@ motor (`"duckdb"`, `"redshift"`), ou um motor já construído, para os testes.
   `export_mode` resolvido em `mode` (`partitions=None` numa tabela sem partição é `[None]`) e, em
   `columns_without_min_max`, o `nonfinite_columns[valor]` da auditoria aprovada, ou todas as colunas
   `Double` da tabela com `audit=False`, e em `expected_rows` a contagem da auditoria, ou `None` com
-  `audit=False`; as tabelas correm num `ThreadPoolExecutor(max_workers)` com a política de
-  `publish_all` de `test_parallel.py`: na primeira falha nada novo começa, o que está em curso
+  `audit=False`; as tabelas correm num `ThreadPoolExecutor(max_workers)`, a mesma função de pool
+  que `ingest` usa com um worker por tabela: na primeira falha nada novo começa, o que está em curso
   termina, e a exceção da falha sobe com o resultado de cada tabela numa nota (concluída, falhou,
   cancelada), mantendo o seu tipo, que a linha de comando traduz no código de saída. Uma tabela só
   é entregue ao pool quando um worker está livre e nenhuma falha chegou: com todas entregues de uma

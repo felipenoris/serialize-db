@@ -458,7 +458,7 @@ e cem `cursor()` mais `close()` levaram 0,4 ms. Sem `ORDER BY` o primeiro lote c
 consulta (3 ms em 20.000.000 de linhas); com `ORDER BY`, o `execute` só volta depois da ordenação
 inteira (2,4 s) e os lotes vêm em seguida. Um erro que a consulta encontra no meio da leitura chega
 ao Python como `OSError` com a mensagem do DuckDB, não como `duckdb.Error` (2026-09-20,
-`test_duckdb.py`, `test_parallel.py`). A sessão única da biblioteca consome o leitor inteiro num
+`test_duckdb.py`, `tests/test_engine_duckdb.py`). A sessão única da biblioteca consome o leitor inteiro num
 arquivo antes do comando seguinte, lote a lote numa thread, e o cliente lê cada lote gravado
 enquanto a consulta continua (2026-09-23, [`POC.md`](POC.md)).
 
@@ -495,7 +495,7 @@ Um `INSERT` por lote, um `RecordBatch` em memória por comando dentro de uma tra
 de 3,5 ms por comando (2026-09-20). A biblioteca faz o `cast` de cada lote, grava os lotes num
 arquivo Arrow IPC com LZ4 fora da sessão e os insere num único comando sobre o leitor do arquivo,
 que é nativo e não traz a leitura antecipada de um gerador Python (2026-09-22, `test_duckdb.py`,
-`test_parallel.py`, [`POC.md`](POC.md)).
+`tests/test_engine_duckdb.py`, [`POC.md`](POC.md)).
 
 Conflitos em chave primária ou `UNIQUE`:
 

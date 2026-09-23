@@ -2070,7 +2070,7 @@ responderam às decisões pendentes da etapa 6, e os casos entraram nas suítes 
 a criar a tabela no `close`, na transação do `COPY` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)), e
 [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN.md`](PLAN.md), [`delta.md`](delta.md) e
 [`docs/index.md`](../docs/index.md) escrevem a regra. Os casos:
-`test_parallel.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` e
+`test_engine_duckdb.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` e
 `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`.
 
 ## O que a sonda do dataclass congelado de `Database` mostrou
@@ -2343,3 +2343,51 @@ chave primária, partição com `partition_source`, `String(n)`, `Double`, `Nume
 comparação do `NaN` e cada medida isolada ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), "O texto da
 auditoria no Redshift"), e [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) registra que o `search_path` resolve
 os nomes sem esquema.
+
+## O que a revisão do código de 2026-09-23 mostrou
+
+Em 2026-09-23, no mesmo macOS, a revisão de `src/` e de `tests/` contra as regras de código do
+repositório rodou cada arquivo alterado sem variável e com a raiz local, e as suítes de estudo
+perderam os rascunhos do pacote (decisão do usuário do mesmo dia). O que as execuções mostraram:
+
+- **O gancho que pula as suítes.** `pytest_collection_modifyitems` conferia `marker in
+  item.keywords`, e o id de um parâmetro entra nos keywords: o caso `[redshift]` de um teste
+  parametrizado por dialeto foi pulado como parte da suíte Redshift. O gancho confere a marca do
+  item (`get_closest_marker`), e a seleção dos 453 testes coletados saiu igual à anterior.
+- **A máscara do relatório.** `record` mascarava só um valor de texto, e o `repr` de um erro
+  guardado num dicionário passava. A máscara vai na saída, na impressão e no JSON: uma sessão com
+  credenciais falsas num dicionário, numa lista e num texto não as mostrou em nenhuma das duas, e o
+  JSON continuou válido.
+- **O loader abandonado.** A thread do loader terminava sem apagar o arquivo de transbordo, que
+  ficava até o `cleanup`, ao contrário do que a docstring e a [etapa 4](PLAN-STAGE-4.md) diziam. A
+  thread terminada com erro apaga o arquivo, e a asserção da pasta vazia falha no código anterior.
+- **Um teste gravava fora da raiz autorizada.** `test_temporary_folder_is_created_and_removed`
+  criava a pasta do `DuckDBConfig()` por `tempfile.mkdtemp`, na pasta temporária do sistema; o
+  teste aponta `tempfile.tempdir` para a raiz local.
+- **O ambiente que um teste deixava no processo.** O `test_prepare_environment` de
+  `test_stdlib.py` deixava `NO_PROXY` e `AWS_DEFAULT_REGION` definidas depois do teste: o `delenv`
+  de uma variável ausente não registra o que restaurar.
+- **A espera pela ordenação.** `duckdb_memory()`, lida numa sessão a mais, mostrou memória
+  `ORDER_BY` cerca de 13 ms depois do início da ordenação de 20.000.000 de linhas, e o `interrupt`
+  nesse ponto levantou `INTERRUPT Error: Interrupted!`; o teste do `cleanup` espera essa memória,
+  com prazo de 10 s, no lugar de um `sleep` de 0,2 s. O `close` do stream interrompeu em 0,026 a
+  0,030 s, com `OSError`.
+- **O erro de conversão no meio do stream** chegou como `OSError` do leitor Arrow, depois de 25 ou
+  26 lotes, nos dois orçamentos (seis execuções).
+- **Os casos que vieram dos esboços**, agora sobre o motor: 28 de 30 lotes foram ao arquivo, com
+  pico de 1,9 MB em memória; o `cleanup` levou 0,002 s; o pipeline de três estágios levou 0,55 a
+  0,58 s pela `pa.Table`, 0,75 a 0,88 s em série e 0,41 a 0,46 s encadeado (três execuções).
+- **A consulta DNS de `test_probes.py`.** Nomes `.invalid` sem cache levaram de 54 a 1.534 ms, a
+  faixa de nomes inexistentes de `example.com` (43 a 1.368 ms), e `localhost`, 0,3 ms: a consulta
+  chega ao servidor DNS, e a docstring do módulo a menciona.
+- **Os valores fixados em `test_deltalake.py`**, com o deltalake 1.6.4 no macOS arm64: o
+  `drop_column_not_null` grava a operação `CHANGE COLUMN` no histórico, e a leitura de uma versão
+  cujo arquivo o `vacuum` apagou levanta `FileNotFoundError`; falta a confirmação no Linux.
+- **A base fictícia refeita por linha.** Os construtores de `tests/source_db_projetado.py` passaram
+  a montar uma linha por dicionário; as 26 tabelas, com esquema, metadados, `-0.0` e `NaN`, e os 63
+  arquivos gravados saíram byte a byte iguais aos anteriores.
+
+**Consequência**: `src/serialize_db/engine/duckdb.py` apaga o arquivo do loader abandonado,
+`tests/conftest.py` confere a marca e mascara na saída, e [`CURRENT_STATE.md`](CURRENT_STATE.md)
+registra as contagens novas. As correções que mudam o comportamento das suítes que só rodam no
+ambiente alvo esperam uma execução lá ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

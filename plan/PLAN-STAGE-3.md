@@ -128,12 +128,11 @@ e `test_deltalake.py` inteiro: criação idempotente, predicado e nulidade, evol
 `create_write_transaction` não confere (caminho, estatística, esquema do arquivo) e o `overwrite`
 com `partition_filters`, a compactação que normaliza arquivos de outro escritor, `vacuum`,
 `version_diff` pelas ações `add` e `remove` com `dataChange` do log, compactação e checkpoint,
-exportação por cópia e a reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do
-DuckDB registrada num commit `overwrite` com esquema novo e o mínimo e o máximo dos tipos de
-`stat_converter`, que o DuckDB usa para podar; `test_parallel.py` (quatro tabelas lidas em paralelo,
-escritas em paralelo por tabela e por mês da mesma tabela com o conflito no mesmo mês, e `max_key`
-pelas estatísticas com a varredura de reserva); `tests/test_migrate_parquet_to_delta.py` (o registro
-com as estatísticas dos quatro tipos).
+e exportação por cópia; `test_parallel.py` (quatro tabelas lidas em paralelo, escritas em paralelo
+por tabela e por mês da mesma tabela com o conflito no mesmo mês);
+`tests/test_migrate_parquet_to_delta.py` (o registro com as estatísticas dos quatro tipos). A
+reescrita pelo `COPY ... APPEND true, FILENAME_PATTERN, RETURN_STATS` do DuckDB e `max_key` pelas
+estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
 
 ## Estratégia de implementação
 
@@ -183,9 +182,8 @@ com as estatísticas dos quatro tipos).
   `http_proxy`, `http_proxy_username` e `http_proxy_password` separados de `HTTP_PROXY` como
   `probelib.duckdb_proxy`. No ambiente alvo não há variável de proxy, e o bloco é vazio
   ([`POC.md`](POC.md), leitura de 2026-09-21).
-- **`prepare_environment`** é a função de `test_stdlib.py`: `NO_PROXY` de `no_proxy` quando a
-  maiúscula está ausente ou vazia, a região copiada nos dois sentidos, e o dicionário do que mudou
-  para o log.
+- **`prepare_environment`** exporta `NO_PROXY` de `no_proxy` quando a maiúscula está ausente ou
+  vazia, copia a região nos dois sentidos e devolve o dicionário do que mudou, para o log.
 - **`create_table`** é `DeltaTable.create(mode="ignore")` com `delta_schema(table)`,
   `partition_by` de `table_options`, o nome da tabela, o comentário da tabela em `description` e as
   duas propriedades de retenção. A descrição, o nome e os comentários de coluna atravessam todo
@@ -305,7 +303,7 @@ com as estatísticas dos quatro tipos).
 | Escrita condicional | `test_write_text_exclusive_create_and_if_match` | A segunda criação exclusiva e o `if_match` velho são `ConflictError`; o conteúdo final é o da escrita que venceu; o arquivo ausente é `FileNotFoundError`. |
 | Listagem, cópia e exclusão | `test_list_copy_delete` | `list_files` desce as pastas e exclui `_delta_log/`; `copy` preserva bytes; `delete` de caminho ausente não falha. |
 | Opções do delta-rs | `test_storage_options_resolved_per_call` (sem gravar) | Duas chamadas devolvem dicionários novos; a região vem da variável; `max_retries` presente; as chaves de SSE configuradas; nenhuma chave de credencial no dicionário. |
-| Ambiente | `test_prepare_environment` (sem gravar) | Os casos de `test_stdlib.py`, com `NO_PROXY` vazia tratada como ausente. |
+| Ambiente | `test_prepare_environment` (sem gravar) | `NO_PROXY` sai de `no_proxy` quando ausente ou vazia, a região vai nos dois sentidos, e a segunda chamada não muda nada. |
 | Proxy do DuckDB | `test_duckdb_proxy_settings_without_credentials_in_the_address` (sem gravar) | O endereço sem as credenciais, o usuário e a senha das variáveis ou do endereço, sem URL-encode. |
 | Conexão do DuckDB | `test_duckdb_connect_loads_delta` | A extensão `delta` carregada da pasta configurada, sem instalação automática, e o secret no S3. |
 | Criação | `test_create_table_is_idempotent` | Versão 0 nas duas chamadas; esquema, partição, retenções, nome e o comentário da tabela em `description` lidos do log. |

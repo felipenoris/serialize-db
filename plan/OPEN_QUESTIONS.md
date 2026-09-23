@@ -104,9 +104,24 @@ foi medido em [`POC.md`](POC.md).
   listagem do `list_objects_v2` com `storage.data_files()`, que sai do mesmo paginador (comparar
   com `DeltaTable(uri).file_uris()`), `test_data_file_encryption` aceita qualquer criptografia, e
   `test_boto3_credential_source` chama o STS antes de registrar a origem das credenciais, que se
-  perde quando o STS não responde; `connect_redshift` de `tests/conftest.py` tem 85 linhas com
-  duas funções aninhadas. A próxima execução das duas suítes no ambiente alvo vem com essas
-  correções.
+  perde quando o STS não responde. A revisão do código de 2026-09-23 mudou essas suítes só na forma
+  e em extrações mecânicas, e achou mais correções que mudam o comportamento na falha:
+  `test_redshift.py` trata o manifesto ausente de três modos (asserção, reserva e nenhuma
+  conferência), `on_own_connection` usa `count_from` como chave de modo, a fixture
+  `duckdb_connection` só recebe `AWS_REGION` pela ordem dos argumentos do teste, e a limpeza do
+  Redshift não registra nada quando dá certo; em `test_redshift_transactions.py`, a participante A
+  que falha antes do `COMMIT` não desfaz a transação antes de `finish`, e B pode esperar os 120 s
+  presa nos bloqueios de A, a chave `statement_timeout` do relatório é regravada por cada
+  participante, um `SELECT pg_backend_pid()` que falha faz `.result[0][0]` levantar `TypeError`, A
+  não é fechada quando B não conecta, e o erro sai cru do driver onde `test_redshift.py` usa
+  `describe`; em `test_s3.py`, a docstring ainda diz que a suíte é pulada sem internet. A próxima
+  execução das duas suítes no ambiente alvo vem com essas correções.
+- **As relações de `rel_contas_hierarquias` em que a conta é pai de si mesma.** Na base fictícia
+  (`tests/source_db_projetado.py`), as 32 primeiras das 93 relações da hierarquia 1 têm `id_parent`
+  igual a `id_child`, efeito de montar os pais pelas mesmas 32 primeiras contas dos filhos; as
+  leituras das duas bases reais contaram linhas e tipos, não essa relação. Pergunta ao usuário: a
+  base real tem essas linhas? Sem elas, a base fictícia troca os pais, e os testes que leem a
+  hierarquia conferem os valores novos.
 - **O texto da auditoria no Redshift.** O texto de `serialize_db.audit.audit_sql(..., "redshift")`
   nunca rodou no Redshift: a contagem por `count(CASE WHEN ... THEN 1 END)`, que a documentação do
   `COUNT` sustenta, o `to_char(x, 'YYYY-MM-DD')`, o `is_valid_json`, o `octet_length`, o operador
