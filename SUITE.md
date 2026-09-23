@@ -143,3 +143,15 @@ export TABELA=rel_contrato_operacao
 export AWS_DEFAULT_REGION=sa-east-1
 .venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH
 ```
+# Resultados
+
+```
+mkdir ~/output
+cd ~/work/projects/serialize-db
+
+mv relatorio_*.json ~/output
+mv probes/output/* ~/output
+tar -czf ~/output.tar.gz ~/output
+mv ~/output.tar.gz
+mv ~/output.tar.gz ~/volume/shared/fnoro/serialize-db
+```
