@@ -139,6 +139,10 @@ _SQL_TYPES: dict[str, dict[type, str]] = {
 }
 
 
+# Uma coluna de dados Arrow: a de um lote ou a de uma tabela.
+_ArrowColumn = pa.Array | pa.ChunkedArray
+
+
 # ---------------------------------------------------------------- o esquema Arrow e Delta
 
 
@@ -319,11 +323,11 @@ def table_options(table: sa.Table) -> TableOptions:
     :raises ContractError: mais de uma coluna de partição.
     """
     info = table.info.get("serialize_db", {})
-    partition = info.get("partition_by") or []
-    if len(partition) > 1:
+    partition_columns = info.get("partition_by") or []
+    if len(partition_columns) > 1:
         raise ContractError(
-            f"{table.name}: uma coluna de partição no máximo, recebidas {partition}")
-    partition_by = partition[0] if partition else None
+            f"{table.name}: uma coluna de partição no máximo, recebidas {partition_columns}")
+    partition_by = partition_columns[0] if partition_columns else None
     return TableOptions(
         partition_by=partition_by,
         partition_source=info.get("partition_source"),
@@ -495,7 +499,9 @@ def redshift_options(options: TableOptions) -> str:
     if options.sort_key:
         names = ", ".join(quoted(name) for name in options.sort_key)
         clauses.append(f"SORTKEY ({names})")
-    return " " + " ".join(clauses) if clauses else ""
+    if not clauses:
+        return ""
+    return " " + " ".join(clauses)
 
 
 def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", temporary: bool = False) -> str:
@@ -539,9 +545,8 @@ def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", temporary: bool = F
 # ---------------------------------------------------------------- o cast por lote
 
 
-def _contract_fields(
-    data: pa.Table | pa.RecordBatch, contract: pa.Schema, table: str
-) -> list[pa.Field]:
+def _contract_fields(data: pa.Table | pa.RecordBatch, contract: pa.Schema,
+                     table: str) -> list[pa.Field]:
     """Os campos do contrato presentes nos dados, na ordem do contrato; nenhum é erro."""
     present = []
     for field in contract:
@@ -552,9 +557,7 @@ def _contract_fields(
     return present
 
 
-def _refuse_double_out_of_scale(
-    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
-) -> None:
+def _refuse_double_out_of_scale(column: _ArrowColumn, field: pa.Field, table: str) -> None:
     """Um double numa coluna Numeric entra só quando ``pc.round`` o devolve igual."""
     rounded = pc.round(column, field.type.scale)
     # min_count=0: a tabela vazia de reader.schema.empty_table() passa; sem ele, pc.all dá nulo.
@@ -563,9 +566,7 @@ def _refuse_double_out_of_scale(
                             "arredonde no cliente antes de chamar")
 
 
-def _refuse_timestamp_with_time(
-    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
-) -> None:
+def _refuse_timestamp_with_time(column: _ArrowColumn, field: pa.Field, table: str) -> None:
     """Um timestamp numa coluna Date entra só quando a ida e volta o devolve igual."""
     round_trip = column.cast(field.type).cast(column.type)
     if not pc.all(pc.equal(round_trip, column), min_count=0).as_py():
@@ -573,9 +574,7 @@ def _refuse_timestamp_with_time(
                             "trunque no cliente")
 
 
-def _refuse_time_zone_change(
-    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
-) -> None:
+def _refuse_time_zone_change(column: _ArrowColumn, field: pa.Field, table: str) -> None:
     """Um timestamp entra só quando ele e a coluna têm fuso, ou nenhum dos dois tem.
 
     Tirar ou pôr o fuso muda a hora gravada, e cada camada o faz de um jeito: o ``cast`` do
@@ -590,21 +589,20 @@ def _refuse_time_zone_change(
                             "fuso; declare o fuso no cliente")
 
 
-def _refuse_nested_json(column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str) -> None:
+def _refuse_nested_json(column: _ArrowColumn, field: pa.Field, table: str) -> None:
     """Um documento JSON chega serializado; struct, list e map são recusados."""
     if pa.types.is_nested(column.type):
         raise ContractError(f"{table}.{field.name}: documento JSON como {column.type}; "
                             "serialize com json.dumps antes de chamar")
 
 
-def _longest_text(column: pa.Array | pa.ChunkedArray) -> int:
+def _longest_text(column: _ArrowColumn) -> int:
     """O maior valor da coluna em bytes; 0 numa coluna vazia ou só de nulos."""
     return pc.max(pc.binary_length(column)).as_py() or 0
 
 
-def _refuse_text_above_length(
-    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str, limit: int
-) -> None:
+def _refuse_text_above_length(column: _ArrowColumn, field: pa.Field, table: str,
+                              limit: int) -> None:
     """Texto acima de String(n), medido em bytes como o VARCHAR(n) do Redshift."""
     longest = _longest_text(column)
     if longest > limit:
@@ -612,9 +610,7 @@ def _refuse_text_above_length(
                             f"String({limit}) em bytes; corte o valor ou aumente o comprimento")
 
 
-def _refuse_text_above_varchar(
-    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
-) -> None:
+def _refuse_text_above_varchar(column: _ArrowColumn, field: pa.Field, table: str) -> None:
     """Texto acima do teto do VARCHAR do Redshift numa coluna Text, que não declara n."""
     longest = _longest_text(column)
     if longest > TEXT_LIMIT:
@@ -622,9 +618,7 @@ def _refuse_text_above_varchar(
                             f"{TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor")
 
 
-def _refuse_json_above_limit(
-    column: pa.Array | pa.ChunkedArray, field: pa.Field, table: str
-) -> None:
+def _refuse_json_above_limit(column: _ArrowColumn, field: pa.Field, table: str) -> None:
     """Documento JSON acima de 65.535 bytes, o maior que o ``COPY`` de Parquet leva a ``SUPER`` e
     que a staging ``VARCHAR`` da publicação no Redshift guarda."""
     longest = _longest_text(column)
@@ -633,12 +627,8 @@ def _refuse_json_above_limit(
                             f"teto de {TEXT_LIMIT} bytes do Redshift; reduza o documento")
 
 
-def _refuse_silent_losses(
-    column: pa.Array | pa.ChunkedArray,
-    field: pa.Field,
-    kind: sa.types.TypeEngine,
-    table: str,
-) -> None:
+def _refuse_silent_losses(column: _ArrowColumn, field: pa.Field, kind: sa.types.TypeEngine,
+                          table: str) -> None:
     """As perdas que ``cast(safe=True)`` não acusa, recusadas antes da conversão."""
     if pa.types.is_floating(column.type) and pa.types.is_decimal(field.type):
         _refuse_double_out_of_scale(column, field, table)
@@ -650,12 +640,8 @@ def _refuse_silent_losses(
         _refuse_nested_json(column, field, table)
 
 
-def _refuse_long_text(
-    column: pa.Array | pa.ChunkedArray,
-    field: pa.Field,
-    kind: sa.types.TypeEngine,
-    table: str,
-) -> None:
+def _refuse_long_text(column: _ArrowColumn, field: pa.Field, kind: sa.types.TypeEngine,
+                      table: str) -> None:
     """O texto acima do limite da coluna, medido em bytes na coluna já convertida para ``string``.
 
     A medida vem depois da conversão porque o texto chega em outros tipos Arrow: ``large_string``
@@ -672,9 +658,7 @@ def _refuse_long_text(
         _refuse_text_above_length(column, field, table, kind.length)
 
 
-def _converted(
-    column: pa.Array | pa.ChunkedArray, target: pa.DataType
-) -> pa.Array | pa.ChunkedArray:
+def _converted(column: _ArrowColumn, target: pa.DataType) -> _ArrowColumn:
     """A coluna no tipo do contrato por ``cast(safe=True)``.
 
     Um inteiro vai a ``decimal128(p, s)`` passando por ``decimal128(38, s)``: o cast direto exige
@@ -686,9 +670,8 @@ def _converted(
     return column.cast(target, safe=True)
 
 
-def _contract_column(
-    data: pa.Table | pa.RecordBatch, field: pa.Field, table: sa.Table
-) -> pa.Array | pa.ChunkedArray:
+def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field,
+                     table: sa.Table) -> _ArrowColumn:
     """A coluna dos dados no tipo do contrato: as perdas que ``safe=True`` não acusa são recusadas
     antes da conversão, e o texto longo depois dela."""
     column = data.column(field.name)
@@ -705,9 +688,8 @@ def _contract_column(
     return converted
 
 
-def _contract_arrays(
-    data: pa.Table | pa.RecordBatch, table: sa.Table
-) -> tuple[list[pa.Array | pa.ChunkedArray], pa.Schema]:
+def _contract_arrays(data: pa.Table | pa.RecordBatch,
+                     table: sa.Table) -> tuple[list[_ArrowColumn], pa.Schema]:
     """As colunas do contrato presentes, convertidas, e o esquema delas."""
     contract = arrow_schema(table)
     fields = _contract_fields(data, contract, table.name)
@@ -879,14 +861,17 @@ def check_models(metadata: sa.MetaData) -> list[str]:
 
     :param metadata: os modelos do cliente, como ``Base.metadata``.
     :return: a lista, um texto por violação; vazia nos modelos corretos.
-    :raises ContractError: uma tabela com mais de uma coluna de partição, recusada por
-        ``table_options`` em vez de listada.
     """
     problems = []
     for table in metadata.sorted_tables:
         for column in table.columns:
             problems.extend(_column_problems(column))
-        options = table_options(table)
+        # Sem opções legíveis, as regras das chaves e da partição não têm o que conferir.
+        try:
+            options = table_options(table)
+        except ContractError as error:
+            problems.append(str(error))
+            continue
         problems.extend(_key_problems(table, options))
         problems.extend(_partition_problems(table, options))
     return problems

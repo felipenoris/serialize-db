@@ -516,6 +516,21 @@ def test_check_models_finds_each_violation() -> None:
     assert [problem for problem in found if problem.startswith("tudo")] == []
 
 
+def test_check_models_lists_two_partition_columns() -> None:
+    """Duas colunas em `partition_by` entram na lista de violações, sem interromper a conferência
+    das outras tabelas."""
+    metadata = sa.MetaData()
+    sa.Table("duas", metadata,
+             sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+             sa.Column("a", sa.String(10)), sa.Column("b", sa.String(10)),
+             info={"serialize_db": {"partition_by": ["a", "b"]}})
+    sa.Table("sem_chave", metadata, sa.Column("nome", sa.String(10)))
+    assert schema.check_models(metadata) == [
+        "duas: uma coluna de partição no máximo, recebidas ['a', 'b']",
+        "sem_chave: sem chave primária e sem keys",
+    ]
+
+
 def test_partition_column_is_any_text_and_the_source_optional() -> None:
     """Uma coluna de texto de qualquer comprimento particiona sem `partition_source`;
     `partition_source` sem `partition_by` é violação."""
