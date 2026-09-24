@@ -247,9 +247,9 @@ research appends to the matching group.
 | `.github/` | `tests.yml` installs the DuckDB `delta` extension into `.duckdb/` and runs `tests/` without `tests/proof_of_concept/` and `tests/test_probes.py` on push and pull request; `docs.yml` publishes the `pdoc` site to <https://felipenoris.github.io/serialize-db/> on push to `main` (the repository's Pages source must be "GitHub Actions"). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Rerun it whenever a dependency is added**; a new DuckDB extension, a Python version change or another runtime asset is added by hand. Only a folder prepared on Linux x86_64 serves the SageMaker space; the header is the operating procedure, and the extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`. |
 | `examples/` | The scripts the user ran in the target, kept as run but for the masked identifiers in the bucket path: `redshift_native.py`, `redshift_data_api.py`, `redshift_copy_unload.py` (2026-09-20) and `redshift_manifest.py` (2026-09-21, the prerequisites of `export_partition`); `examples/README.md` says what each one fixes. The probe, the suite and stage 5 repeat their calls, and the target they fix is in `.claude/memory/redshift.md`. |
-| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py`, `parquet_source.py` (`--sample N`) and `duckdb_threads.py` (the `threads` of the DuckDB engine ingesting the migrated Delta tables, each configuration in a new process), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, with no network but one DNS lookup; its cases that write a report or fabricated files are `local`. |
-| `scripts/` | `migrate_parquet_to_delta.py`, the early migration of stage 7 (2026-09-21): per table and partition, the DuckDB query with the contract casts, one query checking partition value, nulls and text lengths and finding the `Double` columns with `NaN` or infinity, which lose min and max in the log and in the `rewrite` footer (issue #59), `register` (`COPY ... RETURN_STATS` committed by `create_write_transaction`) or `rewrite` (`cast` and `write_deltalake`), the `sort_key` order, resume from the log, the count-and-sum report (`Double` sums over finite values, non-finite values counted) with time and RSS per partition and `--report` JSON with the machine, and, by default, the measurement of every partition in the four write variants (`register`/`rewrite`, sorted or not), each in a new process with its own peak (`--no-measure` turns it off); local folder or `s3://`. The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
-| `plan/readings/` | The probe and suite reports a pending stage still consults, kept as they came out with the environment's sensitive identifiers masked, indexed by `plan/readings/README.md`: the suite and probe runs of 2026-09-23 and the production base reading of 2026-09-21. A report leaves once `plan/POC.md` and the stage file hold what it showed, and git history keeps it (user decisions of 2026-09-23). |
+| `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py`, `parquet_source.py` (`--sample N`) and `duckdb_threads.py` (the `threads` of the DuckDB engine ingesting the migrated Delta tables, each configuration in a new process with the external file cache off), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, with no network but one DNS lookup; its cases that write a report or fabricated files are `local`. |
+| `scripts/` | `migrate_parquet_to_delta.py`, the early migration of stage 7 (2026-09-21): per table and partition, the DuckDB query with the contract casts, one query checking partition value, nulls and text lengths and finding the `Double` columns with `NaN` or infinity, which lose min and max in the log and in the `rewrite` footer (issue #59), `register` (`COPY ... RETURN_STATS` committed by `create_write_transaction`) or `rewrite` (`cast` and `write_deltalake`), the `sort_key` order, resume from the log, the count-and-sum report (`Double` sums over finite values, non-finite values counted) with time and RSS per partition and `--report` JSON with the machine, and, by default, the measurement of every partition in the four write variants (`register`/`rewrite`, sorted or not), each in a new process with its own peak (`--no-measure` turns it off), and the `--report` JSON rewritten after each measurement and committed partition; local folder or `s3://`. The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
+| `plan/readings/` | The probe and suite reports a pending stage still consults, kept as they came out with the environment's sensitive identifiers masked, indexed by `plan/readings/README.md`: the suite runs of 2026-09-23 at 22:53, 22:56 and 23:01, the threads probe of 23:21, the probes of 19:18 and the production base reading of 2026-09-21. A report leaves once `plan/POC.md` and the stage file hold what it showed, and git history keeps it (user decisions of 2026-09-23). |
 | `plan/guia.md` | ETL practices the pipeline follows: immutable partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `plan/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `plan/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -267,7 +267,7 @@ research appends to the matching group.
 | `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3), `audit.py`, `engine/__init__.py` (the `Engine` protocol) and `engine/duckdb.py` (stage 4), `execution.py` (stage 6), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, `run` and `audit`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` to `plan/PLAN-STAGE-4.md` and `plan/PLAN-STAGE-6.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
 | `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). The corrected copy is the client model in `tests/client_model/`. |
 | `tests/client_model/` | The client model (user decision of 2026-09-21): the corrected copy of `tests/reference_model/` that the tests hand to the package API as a client library would, the corrections listed in `plan/PLAN-STAGE-1.md` and checked by `tests/test_client_model.py`; `statements.py` holds the fictitious pipeline's Core statements (`STATEMENTS`), `schema/` and `sql/` the generated files. |
-| `tests/emulator.py` | The local stand-in of S3 and Redshift for the target-only suites (user decision of 2026-09-23): with `SERIALIZE_DB_TEST_EMULATOR`, `tests/conftest.py` starts the moto server (`moto[s3]` and `flask` in the `emulator` group, out of `dev`) as a subprocess before collection, points the AWS variables and the suites' roots at it, and gives `connect_redshift` a fake `redshift_connector` connection over an in-memory DuckDB that translates the suites' Redshift SQL and imitates the refusals and behaviors read in the target (the backslash escape in literals, the empty `UNLOAD` writing nothing, `pg_last_unload_count()`, `is_valid_json` refusing `SUPER`); `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` and `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` provoke failures. It checks the tests' code, not the target's behavior; the command is in `README.md`. |
+| `tests/emulator.py` | The local stand-in of S3 and Redshift for the target-only suites (user decision of 2026-09-23): with `SERIALIZE_DB_TEST_EMULATOR`, `tests/conftest.py` starts the moto server (`moto[s3]` and `flask` in the `emulator` group, out of `dev`) as a subprocess before collection, points the AWS variables and the suites' roots at it, and gives `connect_redshift` a fake `redshift_connector` connection over an in-memory DuckDB that translates the suites' Redshift SQL and imitates the refusals and behaviors read in the target (the backslash escape in literals, the empty `UNLOAD` writing nothing, `pg_last_unload_count()`, `is_valid_json` refusing `SUPER`, `ALTER COLUMN ... TYPE` refused on the share); `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` and `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` provoke failures. It checks the tests' code, not the target's behavior; the command is in `README.md`. |
 | `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base and in the production base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py` (all `local`); the material of the stage 7 test. It also holds the reference model's keys (`UNIQUE_KEYS`, `FOREIGN_KEYS`, `MODEL_NOT_NULL_DECLARED_NULLABLE`), which `tests/test_reference_model.py` checks against the model and the fixture satisfies. |
 
 `plan/duckdb.md`, `plan/redshift.md` and `plan/delta.md` share a section order: data organization and
@@ -521,6 +521,15 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A SQL predicate is probed on table rows as well as constants, and a function in generated SQL
   with the type the generated DDL gives its argument**: Redshift compared `NaN` as PostgreSQL on
   constants and as IEEE in a table scan, and refused `is_valid_json` on `SUPER` (2026-09-23).
+- **The complement of a comparison with `NaN` is counted as total minus matches, never as the
+  negation, and a count is also read without rows**: in a Redshift scan neither the strict
+  infinity comparison nor its negation was true for `NaN`, and a `count(*)` of
+  `sys_load_error_detail` returned no row and stopped a probe section (2026-09-24).
+- **A repetition in the same process measures the caches the first run filled**: DuckDB's external
+  file cache served the threads probe's second and third reads from memory; turn caches off or
+  count requests at the source before a best of N stands for a remote read (2026-09-24).
+- **A long-running script writes its report as it goes**: the migration process that ended in
+  `cad_lancamentos` 2026-03-31 took the four-variant measurement with it (2026-09-24).
 
 ## Naming conventions
 
@@ -594,12 +603,14 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   the copy of the production base in the sandbox, in its version before issue #59, arrived on
   2026-09-23 and stay outside git and out of `plan/` at the user's request, so `plan/` still calls
   them unavailable; their findings are in `.claude/memory/source-base.md`: every table and
-  partition matched, and the production copy has no non-finite `Double`. The next step is the user's rerun of the `SUITE.md`
-  migration commands (every table, same parameters) with the latest script, which measures every
-  partition in the four write variants: the `cad_lancamentos` numbers are the revision trigger of
-  `export_mode` (the default, and whether the other mode leaves stages 4, 5 and 7) and of the
-  load's sort. Stage 5 follows with the target's suite run, and stage 7 absorbs the script over the
-  stage 3, 4 and 6 modules.
+  partition matched, and the production copy has no non-finite `Double`. The rerun of 2026-09-23 at
+  23:05, into a new root on a 4 vCPU and 16 GB machine, measured the four write variants of the
+  other partitioned tables (`register` faster, the sort costlier with smaller files, `plan/POC.md`)
+  and ended in `cad_lancamentos` 2026-03-31 (52,654,607 rows) without a report; the script now
+  rewrites its report after each step. That partition's measurement, on a machine with more
+  memory, is the revision trigger of `export_mode` and of the load's sort, with the assistant's
+  proposals (`register` by default, `rewrite` only for the stage 5 non-finite fallback, the load
+  sorted) awaiting the user. Stage 7 absorbs the script over the stage 3, 4 and 6 modules.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still
@@ -612,26 +623,28 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   is at most 100 characters. The
   Redshift driver materializes a result in `execute` (`plan/redshift.md`), so `stream` there always
   goes through `UNLOAD` and `query` through the cursor (user decision of 2026-09-23).
-- The three target-only suites ran in the target on 2026-09-23 from `main`: S3 passed, and the
-  Redshift suite failed twice only on the stream's backslash case. The fixes of the same day (the
-  `UNLOAD` literal doubling the backslash, `pg_last_unload_count()` for the empty result, the
-  Redshift audit's strict `is_finite` and `true` for JSON on `SUPER`) pass on the local stand-in
-  `tests/emulator.py`, which has no locks, no bucket encryption, no Data API and no IEEE `NaN`, and
-  wait for two Redshift suite runs in the target. After `test_redshift_transactions.py`, the user
-  decided on 2026-09-23 the stage 8 transaction: read the control row first, `INSERT` it on the
-  first publication or check the version and `UPDATE` it, written last; and an unpublish flow with
-  `DROP TABLE` and `DELETE` of the row. The file's two temporary-staging cases, added the same day,
-  wait for a run in the target, and the `-m "not redshift"` session there reads the `VmHWM` fix
-  of the memory measurements. `probes/duckdb_threads.py` measures the DuckDB `threads` over the
-  tables the first migration wrote and waits for a target run, never at the same time as the
-  migration rerun.
+- The three target-only suites ran in the target on 2026-09-23 from `main`, at 18:48 and again at
+  22:53 (S3, 445 passed with the `VmHWM` memory measurements) and 22:56 and 23:01 (Redshift, 30
+  passed each): the stream with literals, the empty `UNLOAD` with `pg_last_unload_count()` 0, the
+  temporary table and the `ALTER COLUMN ... TYPE` refused on the share are assertions now. The
+  stage 8 transaction the user decided (read the control row first, `INSERT` or check and
+  `UPDATE` it last; the unpublish flow with `DROP TABLE` and `DELETE`) read `1023` for the second
+  of two publications, and both temporary stagings committed. The Redshift audit's strict
+  comparison left `NaN` out of the sum but its negation did not count it, so the non-finite count
+  is `count(x) - count(finite)` and waits for two runs, as does the reading
+  `nan_na_tabela_detalhe`; the stand-in `tests/emulator.py` has no locks, no bucket encryption, no
+  Data API and none of Redshift's `NaN` scan behavior. `probes/duckdb_threads.py` ran at 23:21, but
+  DuckDB's external file cache served its later repetitions from memory; it now turns the cache off
+  and waits for a new run, never at the same time as a migration.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing
   tests are `local`), and the stage 8 distribution reading, the `EXPLAIN` of a typical join with
-  the tables at `AUTO`; the publication staging waits on the two temporary-staging cases of
-  `test_redshift_transactions.py` in the target, and the stage 7 defaults on the migration's
-  measurement (`plan/OPEN_QUESTIONS.md`, `.claude/memory/decisions.md`).
+  the tables at `AUTO`; the publication staging is temporary by the rule, with the point where it
+  fills awaiting the user, and the stage 7 defaults wait on the `cad_lancamentos` measurement
+  (`plan/OPEN_QUESTIONS.md`, `.claude/memory/decisions.md`). The user's instruction of 2026-09-23,
+  scalable AWS compute of the user's choosing and a plan optimized for parallel processing, enters
+  `plan/PLAN.md`: the machine is sized by the measurements.
 - The plan's unit is the partition (`publish_partition`, `partitions=`, `Execution(partition=...)`),
   a `String(n)` text column; the `AAAA-MM-DD` date is the current base's case, never the month.
 - The Redshift target is `sbx_aco_decon` in the datashare database `datalake_rw_shared`, reached by

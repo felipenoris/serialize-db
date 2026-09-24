@@ -23,7 +23,11 @@ padrão do DuckDB vezes 1 a 5. ``--repetitions`` é quantas vezes cada medida ro
 relatório dá cada repetição e a melhor.
 
 Cada configuração roda num processo novo (``spawn``), num motor ``DuckDBEngine`` novo, com o seu
-pico de memória (``VmHWM`` no Linux) ao lado da base depois das importações e da conexão:
+pico de memória (``VmHWM`` no Linux) ao lado da base depois das importações e da conexão. O cache de
+arquivos externos do DuckDB (``enable_external_file_cache``, ligado por padrão) guarda na memória os
+blocos lidos, e a segunda leitura do mesmo arquivo no mesmo processo não vai ao S3 (sonda no moto de
+2026-09-23): cada configuração o desliga, e cada repetição lê do armazenamento, como a leitura única
+de uma execução.
 
 - ``materializada``: a partição da primeira tabela por ``ingest(..., materialize=True)``, o
   ``CREATE TABLE AS`` sobre ``delta_scan``, apagada depois de cada repetição;
@@ -101,7 +105,7 @@ EXECUTION_ID = "sonda-threads"
 
 # As falhas de uma medição que entram no relatório sem parar o probe: o processo filho morto (a
 # falta de memória, por exemplo), o erro do DuckDB, do delta-rs e do armazenamento.
-MEASUREMENT_ERRORS = (BrokenProcessPool, duckdb.Error, DeltaError, OSError, MemoryError)
+MEASUREMENT_ERRORS = (BrokenProcessPool, duckdb.Error, DeltaError, OSError, MemoryError, RuntimeError)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -366,7 +370,12 @@ def measure(scenario: str, threads: int, inputs: list[TableInput], repetitions: 
     try:
         base = peak_rss_mb()
         with engine.session() as connection:
-            applied = connection.execute("SELECT current_setting('threads')").fetchone()[0]
+            # O cache é da instância: desligado aqui, vale também para as sessões a mais.
+            connection.execute("SET enable_external_file_cache = false")
+            applied, cached = connection.execute(
+                "SELECT current_setting('threads'), current_setting('enable_external_file_cache')").fetchone()
+        if cached:
+            raise RuntimeError("o DuckDB manteve o cache de arquivos externos ligado")
         seconds, rows = SCENARIOS[scenario](engine, inputs, repetitions)
         return Measurement(scenario, threads, seconds, int(applied), base, peak_rss_mb(), rows)
     finally:
@@ -471,8 +480,9 @@ def machine_section(report: Report, requested: list[int] | None, repetitions: in
     os valores medidos; nenhuma checagem. Devolve os valores de ``threads``."""
     report.h1("A máquina e o DuckDB")
     connection = duckdb.connect()
-    default_threads, memory_limit = connection.execute(
-        "SELECT current_setting('threads'), current_setting('memory_limit')").fetchone()
+    default_threads, memory_limit, file_cache = connection.execute(
+        "SELECT current_setting('threads'), current_setting('memory_limit'), "
+        "current_setting('enable_external_file_cache')").fetchone()
     connection.close()
     values = thread_values(int(default_threads), requested)
 
@@ -488,6 +498,7 @@ def machine_section(report: Report, requested: list[int] | None, repetitions: in
         ["pacotes", packages],
         ["threads padrão do DuckDB", str(default_threads)],
         ["memory_limit padrão do DuckDB", str(memory_limit)],
+        ["cache de arquivos externos", f"{'ligado' if file_cache else 'desligado'} por padrão; desligado nas medições"],
         ["threads medidas", ", ".join(str(value) for value in values)],
         ["repetições por configuração", str(repetitions)],
     ])

@@ -25,107 +25,70 @@ foi medido em [`POC.md`](POC.md).
   que o pipeline tenha criado na sessão. As credenciais que o `COPY`
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
   `COPY` mais longo que isso também não foi medido.
-- **A memória da partição de `cad_lancamentos`.** Cerca de 700 MB de Parquet e 35 milhões de linhas
-  por partição; a primeira carga real mede o `write_deltalake` de um leitor e o `COPY ...
-  RETURN_STATS` mais `register_files` antes de fixar o padrão ([etapa 7](PLAN-STAGE-7.md)); a
-  migração adiantada (`scripts/migrate_parquet_to_delta.py`, logo depois da etapa 1) é essa carga. O
-  script mede por padrão, antes da carga de cada tabela particionada, cada partição nas quatro
-  variantes de gravação (`register` e `rewrite`, com e sem a ordem da `sort_key`), cada uma num
-  processo novo, e a próxima execução dos comandos de todas as tabelas no ambiente alvo, com os
-  mesmos parâmetros, traz a medição (decisão do usuário de 2026-09-23). `export_mode="rewrite"` e
-  `"register"` medem os dois caminhos em cada motor e na carga inicial (etapas [4](PLAN-STAGE-4.md),
-  [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md)). O relatório da migração com essa medição é o gatilho
-  de revisão de [`PLAN.md`](PLAN.md): ele decide o padrão da flag e se o outro modo sai, em cada
-  motor e na carga inicial, e se a carga ordena pela `sort_key`.
+- **A medição de `cad_lancamentos` 2026-03-31 no ambiente alvo.** A migração de 2026-09-23 às
+  23:05, numa máquina de 4 vCPUs e 15.786 MB, mediu as quatro variantes de gravação das outras
+  tabelas particionadas: o `register` mais rápido que o `rewrite` e com pico menor, e a ordem da
+  `sort_key` mais cara no tempo e na memória, com arquivos menores ([`POC.md`](POC.md)). Em
+  `cad_lancamentos` o processo terminou na partição 2026-03-31, de 52.654.607 linhas, sem
+  relatório; a saída do terminal diz a causa. A falta de memória é a hipótese [uncertain]: a mesma
+  partição sintética passou num contêiner igual, com pico de 12.250 MB sob `memory_limit` de
+  10,6 GiB, e o processo do ambiente alvo, com `memory_limit` de 12,3 GiB, já tinha gravado duas
+  partições. O script regrava o relatório depois de cada passo, e a próxima execução de
+  `cad_lancamentos`, numa máquina com mais memória, traz a medição que é o gatilho de revisão de
+  [`PLAN.md`](PLAN.md): o padrão de `export_mode`, se o outro modo sai das etapas
+  [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md), e se a carga ordena pela
+  `sort_key`.
 - **O `threads` do DuckDB na leitura do S3.** O DuckDB lê arquivos remotos com E/S síncrona, uma
   requisição HTTP por thread, e a documentação recomenda `threads` de 2 a 5 vezes os núcleos para
-  essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo, 4 no ambiente alvo em
-  2026-09-23 (2 em 2026-09-21), e a sessão a mais de cada tabela de `run.ingest` só acrescenta a
-  thread que a chama. `probes/duckdb_threads.py` mede no ambiente alvo, sobre as tabelas Delta que
-  a migração gravou, a ingestão pelo motor DuckDB com o padrão e com `threads` até 5 vezes os
-  núcleos, e a medição decide o padrão de `DuckDBConfig.threads` para uma raiz no S3
-  ([etapa 4](PLAN-STAGE-4.md)). O mesmo probe mede a ingestão de `cad_lancamentos`,
-  `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao` em série e numa sessão a mais por
-  tabela: em disco local, num macOS de 11 núcleos, quatro tabelas de 8.000.000 de linhas entraram
-  em 1,629 s contra 3,498 s em série com `threads = 2`, e parte do ganho veio das threads que
-  chamam cada sessão, que o ambiente alvo, com 4 vCPUs, não tem de sobra (2026-09-23,
-  [`POC.md`](POC.md)). O probe lê as tabelas que a migração gravou no `--root` e não depende da
-  nova execução dos comandos de `SUITE.md`; os dois não rodam ao mesmo tempo, porque disputariam
-  as mesmas vCPUs.
-- **As medições de memória de `test_duckdb.py` no ambiente alvo.** Na sessão `-m "not redshift"`
-  de 2026-09-23 às 18:48 UTC, `test_streaming_query_bounds_memory` e
-  `test_spooled_stream_bounds_memory` reprovaram com 1.120 MB em todo cenário, porque o
-  `ru_maxrss` do subprocesso herdava o pico do pytest ([`POC.md`](POC.md)). A leitura por
-  `VmHWM`, com o acréscimo sobre a base depois das importações, entrou depois dessa sessão e
-  passou só no contêiner Linux; a próxima sessão `-m "not redshift"` de `SUITE.md` no ambiente
-  alvo a confirma.
+  essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo. A execução de
+  `probes/duckdb_threads.py` no ambiente alvo em 2026-09-23 às 23:21 ([`POC.md`](POC.md)) mediu a
+  materialização limitada pela CPU, mais lenta com mais threads, e a sessão a mais por tabela 1,25
+  vez mais rápida que a série com 4 threads. A leitura do S3 só a primeira repetição de cada
+  configuração fez, porque o cache de arquivos externos do DuckDB serviu as outras da memória:
+  nela, a leitura agregada de 393 MB levou 4,1 s com 4 threads e de 1,9 s a 2,1 s com 8 a 20. O
+  probe agora desliga o cache em cada configuração. A próxima execução, também numa máquina com
+  mais núcleos, decide o padrão de `DuckDBConfig.threads` para uma raiz no S3
+  ([etapa 4](PLAN-STAGE-4.md)) e mostra como a materialização escala com as vCPUs, que o usuário
+  escolhe (instrução de 2026-09-23: otimizar para o processamento paralelo). O probe e a migração
+  não rodam ao mesmo tempo, porque disputariam as mesmas vCPUs.
 - **O `Double` não finito nas estatísticas do Delta**, a
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
   infinito numa coluna `Double`, e a biblioteca grava sem mínimo e máximo, no rodapé Parquet e no
   log Delta, as colunas `Double` com valor não finito em cada partição, pela contagem da auditoria
-  (decisões do usuário de 2026-09-23, [etapa 3](PLAN-STAGE-3.md)). Continuam abertos:
-  - As tabelas que a migração adiantada gravou no ambiente alvo, com o mínimo e o máximo do
-    `Double` registrados. O relatório da versão que rodou lá somava cada coluna `Double` por `CAST`
-    para `DECIMAL(38, 6)`, que falha com `NaN` e infinito, e só `ContractError` era tratado: uma
-    execução completa sem erro indica tabelas sem valor não finito. O script já segue a regra. Os relatórios da execução, ainda não
-    disponíveis, dizem quais tabelas rodaram; uma tabela fora deles pede a contagem de `isnan` e
-    `isinf`.
-- **O texto da auditoria no Redshift.** A suíte leu no ambiente alvo em 2026-09-23 o texto de
-  `serialize_db.audit.audit_sql(..., "redshift")` pelo caminho do motor da [etapa 5](PLAN-STAGE-5.md)
-  ([`POC.md`](POC.md)): o `search_path`, o `count(CASE WHEN ...)`, o `to_char`, o `octet_length` e o
-  `~` passaram, e o `is_valid_json` sobre `SUPER` (`42883`) e o `is_finite` por `NOT IN`, que deixou
-  passar o `NaN` da varredura da tabela, reprovaram. O texto novo, `true` no JSON e a comparação
-  estrita com os infinitos ([etapa 4](PLAN-STAGE-4.md)), espera duas execuções da suíte:
-  `test_audit_sql_under_search_path_and_nan_comparison` compara cada medida da tabela com os
-  defeitos plantados com o esperado, e `nan_na_tabela` lê a comparação do `NaN` na varredura. O
-  `json_size` do teto de 65.535 bytes do documento JSON (`texto_<coluna>`), que entrou depois
-  dessas execuções, espera as mesmas duas.
-- **As leituras da etapa 5 na próxima execução da suíte Redshift.** As execuções de 2026-09-23
-  responderam o prefixo com `=`, o `LIMIT` externo, o resultado vazio, a tabela temporária, o
-  `SUPER` no Parquet, o `row_desc` e o custo da carga pequena ([`POC.md`](POC.md),
-  [etapa 5](PLAN-STAGE-5.md)). Faltam:
-  - `test_stream_by_unload_with_literal_values`, que parou na contrabarra: o `UNLOAD` agora dobra a
-    contrabarra além da aspa, e os seis casos, a aspa, a contrabarra, o `%`, o `LIKE`, a data com o
-    número e o `IN` de lista, e o timestamp com o `Float`, esperam duas execuções pelos três
-    caminhos;
-  - `pg_last_unload_count()`, que separa o resultado vazio do manifesto que falta: a suíte o lê
-    depois do `UNLOAD` vazio e do da tabela temporária;
-  - o arquivo do `UNLOAD` com uma coluna `SUPER` registrado numa tabela Delta e lido pelo delta-rs
-    e pelo `delta_scan`, que nenhum caso da suíte grava ainda.
-- **O `ALTER COLUMN TYPE` no datashare.** A [etapa 8](PLAN-STAGE-8.md) trata a largura de
-  `String(n)` que cresce como diff destrutivo, com recriação e recarga (decisão do usuário de
-  2026-09-23), porque o comando não está na lista do que a escrita por datashare aceita e recusa
-  coluna com chave. `test_redshift.py::test_alter_column_type_on_the_share` o lê numa coluna comum
-  e numa da chave primária informativa, com a largura em `svv_all_columns` e a inserção de dez
-  caracteres depois; o substituto local só confere o código, porque o DuckDB ignora a largura. Se
-  o datashare aceitar o aumento numa coluna comum, ele entra na etapa 8 como atalho da recriação.
-- **O `EXPLAIN` no datashare.** A leitura da distribuição da [etapa 8](PLAN-STAGE-8.md) é o
-  `EXPLAIN` de um join típico entre as tabelas publicadas, e a distribuição fica `AUTO` até o
-  plano mostrar `DS_BCAST_INNER` ou `DS_DIST_BOTH` (decisão do usuário de 2026-09-23). Ninguém
-  rodou `EXPLAIN` no esquema do datashare com o papel do projeto;
-  `test_redshift.py::test_explain_of_a_join_on_the_share` lê o plano, ou a recusa, e os rótulos
-  `DS_*` dele. O substituto local só confere o código.
-
-- **A publicação com a linha de controle lida no início da transação.** A etapa 8 lê a linha de
-  controle no início da transação e a grava no fim, por `INSERT` na primeira publicação e por
-  `UPDATE` condicionado à versão lida nas seguintes (decisão do usuário de 2026-09-23,
-  [etapa 8](PLAN-STAGE-8.md)). O que a segunda de duas publicações da mesma tabela recebe no
-  esquema do datashare, o `1023` ao apagar as linhas que a primeira trocou ou o `UPDATE` sem linha,
-  é leitura de `test_redshift_transactions.py::test_control_row_read_first_and_written_last` na
-  próxima execução da suíte Redshift; o substituto local conferiu só o código do caso
-  ([`POC.md`](POC.md)).
+  (decisões do usuário de 2026-09-23, [etapa 3](PLAN-STAGE-3.md)). Continua aberto:
+  - As tabelas da primeira migração, gravadas antes da regra, com o mínimo e o máximo do `Double`
+    registrados. A raiz nova de 2026-09-23 às 23:05, gravada pela regra, as substitui: onze das
+    doze tabelas terminaram nela sem valor não finito, e `cad_lancamentos` termina na próxima
+    execução.
+- **O texto da auditoria no Redshift.** As execuções de 2026-09-23 às 22:56 e às 23:01 rodaram o
+  texto de `serialize_db.audit.audit_sql(..., "redshift")` inteiro, com o `true` do JSON sobre
+  `SUPER`, e a soma de controle deixou o `NaN` e o infinito de fora; mas a negação da comparação
+  estrita com os infinitos não contou o `NaN` da varredura da tabela, e `naofinito_valor` deu 1 dos
+  2 ([`POC.md`](POC.md)). A contagem dos não finitos passou a ser a dos não nulos menos a dos
+  finitos, sem negação ([etapa 4](PLAN-STAGE-4.md)), e espera duas execuções da suíte:
+  `test_audit_sql_under_search_path_and_nan_comparison` compara cada medida com o esperado, e
+  `nan_na_tabela_detalhe` lê, na linha do `NaN`, cada comparação, a negação e o texto do valor. O
+  `json_size` do teto do documento JSON (`texto_<coluna>`) deu 0 na coluna `SUPER` da tabela com
+  os defeitos plantados, sem documento acima do teto.
+- **O arquivo do `UNLOAD` com uma coluna `SUPER` numa tabela Delta.** As execuções de 2026-09-23
+  leram o `SUPER` no Parquet do `UNLOAD` como `extension<arrow.json>`, com o texto de cada valor,
+  que o `cast` do contrato converte em `string` ([etapa 5](PLAN-STAGE-5.md)). Nenhum caso da suíte
+  registra esse arquivo numa tabela Delta e o lê pelo delta-rs e pelo `delta_scan`, o caminho do
+  `export_partition` em `register` de uma tabela com coluna JSON.
 
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga; o padrão de `export_mode` na carga;
-  antes da migração adiantada, o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo
-  (ou gravar em disco e subir pelo `boto3`) e a medição da partição de `cad_lancamentos`.
-- [Etapa 8](PLAN-STAGE-8.md): a staging da publicação como tabela comum no datashare ou temporária.
-  A regra de que a escrita de uma transação vai para um banco só vem da página "Considerations for
-  data sharing reads and writes" da AWS e nunca foi medida no ambiente alvo, e a página não diz em
-  que banco fica a tabela temporária criada depois do `USE` ([`redshift.md`](redshift.md));
-  `test_redshift_transactions.py` lê a temporária cheia dentro da transação e antes do `BEGIN`, e
-  passou no substituto local em 2026-09-23, que só confere o código.
+- [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga e o padrão de `export_mode` na
+  carga, com a medição de `cad_lancamentos` 2026-03-31 por vir; nas partições medidas em
+  2026-09-23, o `rewrite` levou de 1,14 a 1,52 vez o tempo do `register`, e a ordem custou de 1,23
+  a 1,63 vez o tempo e deixou os arquivos com 74% a 92% do tamanho. Proposto: `register` como
+  padrão nas etapas 4, 5 e 7, com o `rewrite` só na troca da etapa 5 para a partição com `Double`
+  não finito, e a carga ordenada pela `sort_key`.
+- [Etapa 8](PLAN-STAGE-8.md): em que ponto a staging temporária enche. As duas variantes
+  confirmaram no ambiente alvo em 2026-09-23, e pela regra decidida a staging é temporária.
+  Proposto: cheia dentro da transação, depois da leitura da linha de controle, como na sequência que
+  o usuário confirmou; a cheia antes do `BEGIN` tira a carga da transação, mas pede a versão lida
+  antes dela e de novo dentro dela.

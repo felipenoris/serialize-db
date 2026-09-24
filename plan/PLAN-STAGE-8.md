@@ -35,8 +35,8 @@ a cláusula de credenciais mascarada; integração marcada `redshift`. Provas de
 `test_stdlib.py::test_group_log_actions_by_partition` e
 `test_redshift.py::test_copy_manifest_from_delta_files` (a transação da publicação repete o `COPY`
 na staging e o `INSERT` com a partição) e `test_redshift_transactions.py` (duas publicações
-simultâneas no esquema do datashare, lidas em 2026-09-23, a linha de controle lida no início e
-gravada no fim e a staging temporária, as duas à espera da próxima execução).
+simultâneas no esquema do datashare, a linha de controle lida no início e gravada no fim e as
+duas stagings temporárias, lidas no ambiente alvo em 2026-09-23).
 
 ## Interface
 
@@ -100,8 +100,10 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 - **`control_read`** é `SELECT delta_version FROM <esquema>.serialize_db_publications WHERE
   table_name = '<ambiente>_<tabela>'`.
 - **`publication_statements`** devolve os comandos depois da leitura: na primeira publicação,
-  `CREATE TABLE <publicada>` por `published_ddl`; `CREATE TABLE
-  <esquema>.<ambiente>_<tabela>_staging` sem a coluna de partição; por partição,
+  `CREATE TABLE <publicada>` por `published_ddl`; `CREATE TEMP TABLE <ambiente>_<tabela>_staging`
+  sem a coluna de partição, no banco da conexão (a staging temporária confirmou no ambiente alvo
+  em 2026-09-23, cheia dentro da transação e antes do `BEGIN`, e a regra decidida a escolhe; em que
+  ponto ela enche é decisão pendente); por partição,
   `DELETE FROM <publicada> WHERE <coluna> = '<valor>'`, `DELETE FROM <staging>`, `COPY <staging>
   FROM '<manifesto>' <credenciais> FORMAT AS PARQUET MANIFEST FILLRECORD` (decisão do usuário de
   2026-09-23: o manifesto de uma partição pode listar arquivos anteriores e posteriores a uma
@@ -144,10 +146,11 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
   de 2026-09-23): a segunda de duas publicações da mesma tabela lê a versão antes do `COMMIT` da
   primeira e, depois dele, recebe `1023` ao apagar as linhas que a primeira trocou ou afeta 0 linhas
   no `UPDATE`, e as duas saídas são `ExecutionConflict`. A publicação nunca grava por cima de uma
-  versão mais nova, e o operador publica de novo depois de ler `publication_status`. O que o esquema
-  do datashare faz com essa sequência é leitura da próxima execução de
-  `test_redshift_transactions.py::test_control_row_read_first_and_written_last`
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  versão mais nova, e o operador publica de novo depois de ler `publication_status`. As execuções
+  de `test_redshift_transactions.py::test_control_row_read_first_and_written_last` de 2026-09-23
+  às 22:56 e às 23:01 leram a sequência: a segunda publicação leu a versão 1, esperou o `COMMIT`
+  da primeira por 10,1 s e 10,7 s no `DELETE` da partição e recebeu `1023`, e a partição e a linha
+  de controle ficaram as da primeira ([`POC.md`](POC.md)).
 - **`reconcile_published`** repete o diff aditivo com `ALTER TABLE ADD COLUMN <coluna> <tipo>` no
   fim da tabela, porque o `COPY` é posicional e recusa um arquivo com colunas a menos
   (`Unmatched number of columns`, 2026-09-21), e a staging nasce do esquema Delta; um diff destrutivo
@@ -160,8 +163,9 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
   publicada em `svv_all_columns` e a compara com a do modelo. O `ALTER TABLE ... ALTER COLUMN ...
   TYPE VARCHAR(n)` não está na lista do que a escrita por datashare aceita, recusa coluna com
   chave e as codificações `BYTEDICT`, `RUNLENGTH`, `TEXT255` e `TEXT32K`, e roda só fora de
-  transação ([`redshift.md`](redshift.md)); `test_redshift.py::test_alter_column_type_on_the_share`
-  o lê no esquema do datashare, e ele entra como atalho da recriação só depois dessa leitura.
+  transação ([`redshift.md`](redshift.md)); no esquema do datashare ele foi recusado com `0A000
+  Operation is not supported through datashares`, na coluna comum e na da chave, em 2026-09-23
+  (`test_redshift.py::test_alter_column_type_on_the_share`), e a recriação fica como o caminho.
 - **O documento JSON** tem o teto de 65.535 bytes no contrato (decisão do usuário de 2026-09-23):
   o `COPY` de Parquet com `SERIALIZETOJSON` recusa uma string maior em `SUPER` (`1224 String value
   exceeds the max size of 65535 bytes`, 2026-09-21), e a staging `VARCHAR(65535)` tem o mesmo teto.
@@ -196,7 +200,7 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 | Despublicação | `test_unpublish_drops_the_table_and_the_control_row` (`redshift`) | Depois de uma publicação, `unpublish_redshift` apaga a tabela publicada e a linha de controle numa transação; a segunda chamada não acha linha e devolve `None`; a publicação seguinte é uma primeira publicação. |
 | Falha no meio | `test_failed_copy_leaves_control_row_untouched` (`redshift`) | Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto. |
 | Estado | `test_publication_status_lists_pending_partitions` | A versão publicada, a atual e as partições pendentes por tabela. |
-| Redistribuição nos joins | `test_published_join_redistribution_is_read` (`redshift`) | O `EXPLAIN` de um join típico entre as tabelas publicadas, `cad_lancamentos` com `cad_contas` por `id_conta`, depois da primeira publicação: os rótulos `DS_*` de cada passo de join, como leitura, nunca como reprovação. O modelo cliente não declara `redshift` e a distribuição é `AUTO` (decisão do usuário de 2026-09-21); uma `distkey` explícita só entra, por `ALTER TABLE ... ALTER DISTKEY`, quando o plano mostra `DS_BCAST_INNER` ou `DS_DIST_BOTH` (decisão do usuário de 2026-09-23). A leitura é o `EXPLAIN` porque o papel do projeto não lê `svv_table_info` depois do `USE` (`permission denied`, 42501, probe de 2026-09-23, [`POC.md`](POC.md)). |
+| Redistribuição nos joins | `test_published_join_redistribution_is_read` (`redshift`) | O `EXPLAIN` de um join típico entre as tabelas publicadas, `cad_lancamentos` com `cad_contas` por `id_conta`, depois da primeira publicação: os rótulos `DS_*` de cada passo de join, como leitura, nunca como reprovação. O modelo cliente não declara `redshift` e a distribuição é `AUTO` (decisão do usuário de 2026-09-21); uma `distkey` explícita só entra, por `ALTER TABLE ... ALTER DISTKEY`, quando o plano mostra `DS_BCAST_INNER` ou `DS_DIST_BOTH` (decisão do usuário de 2026-09-23). A leitura é o `EXPLAIN` porque o papel do projeto não lê `svv_table_info` depois do `USE` (`permission denied`, 42501, probe de 2026-09-23, [`POC.md`](POC.md)); o papel rodou o `EXPLAIN` no esquema do datashare em 2026-09-23, com `DS_DIST_ALL_NONE` entre duas tabelas pequenas (`test_redshift.py::test_explain_of_a_join_on_the_share`). |
 
 ## Rascunhos executados
 
@@ -288,16 +292,15 @@ segredo fora do texto impresso: True
 
 ## Decisões pendentes
 
-- **[decisão] A staging da publicação como tabela comum no datashare ou temporária no banco da
-  conexão** ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o rascunho a cria e apaga dentro da
-  transação, no esquema do datashare. A escrita de uma transação vai para um banco só no datashare
-  ([`redshift.md`](redshift.md)), e a documentação não diz em que banco fica a tabela temporária
-  criada depois do `USE`. `test_redshift_transactions.py` lê a staging temporária cheia dentro da
-  transação (`test_temporary_staging_filled_inside_the_transaction`) e cheia antes do `BEGIN`
-  (`test_temporary_staging_filled_before_the_transaction`), que tira da transação a carga da
-  staging e os locks durante ela (decisão do usuário de 2026-09-23). A execução no ambiente alvo
-  decide: a temporária quando um dos dois passar, e a comum com nome por execução quando nenhum
-  passar.
+- **[decisão] Em que ponto a staging temporária enche** ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  A regra decidida em 2026-09-23 escolhe a temporária quando um dos casos de
+  `test_redshift_transactions.py` passa, e os dois confirmaram no ambiente alvo naquele dia:
+  `test_temporary_staging_filled_inside_the_transaction` e
+  `test_temporary_staging_filled_before_the_transaction` ([`POC.md`](POC.md)). Proposto: cheia
+  dentro da transação, depois da leitura da linha de controle, como na sequência que o usuário
+  confirmou. A cheia antes do `BEGIN` tira da transação a carga da staging e os locks durante ela,
+  mas calcula as partições por uma leitura da versão fora da transação, que a leitura de dentro
+  confere de novo. O rascunho abaixo ainda cria e apaga uma staging comum no esquema do datashare.
 
 As decisões do usuário de 2026-09-23 sobre o `FILLRECORD`, o teto do documento JSON, a largura
 de `VARCHAR(n)`, a leitura da distribuição pelo `EXPLAIN`, a transação da publicação e o fluxo de

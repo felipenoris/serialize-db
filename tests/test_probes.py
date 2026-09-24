@@ -919,6 +919,15 @@ def test_version_tuple_reads_the_patch_from_the_version_string() -> None:
     assert redshift.version_tuple("sem patch") is None
 
 
+def test_first_value_and_count_text_read_a_count_without_rows() -> None:
+    """Um ``count(*)`` sem linha, como o de ``sys_load_error_detail`` no ambiente alvo em
+    2026-09-23, vira leitura em vez de derrubar a seção da sessão."""
+    assert redshift.first_value((["count"], [(21,)])) == 21
+    assert redshift.first_value((["count"], [])) is None
+    assert redshift.count_text((["count"], [(0,)]), "no banco") == "0 no banco"
+    assert redshift.count_text((["count"], []), "no banco") == "a contagem não devolveu linha"
+
+
 def test_datashare_write_verdict_separates_unmet_from_unread() -> None:
     """Um requisito não atendido reprova; um requisito não lido vira ``note``, porque leitura negada
     não é requisito reprovado."""

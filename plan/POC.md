@@ -2729,3 +2729,101 @@ substituto, na partição 2026-06-30 de `cad_lancamentos`, `cad_contratos`, `cad
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) e roda no ambiente alvo depois da migração dos comandos de
 `SUITE.md`, sobre o `--root` dela; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) o nomeia como a medição do
 padrão de `DuckDBConfig.threads`.
+
+## O que a bateria de 2026-09-23 às 22:49 mostrou no ambiente alvo
+
+Em 2026-09-23, entre 22:49 e 23:36 UTC, o usuário rodou todos os comandos de `SUITE.md` no
+ambiente alvo, a partir da `main` com o #67, numa máquina de 4 vCPUs e 15.786 MB (Python 3.13.15,
+DuckDB 1.5.5 com `threads` 4 e `memory_limit` de 12,3 GiB, deltalake 1.6.4, pyarrow 25.0.1),
+com raízes novas sob a pasta pessoal: os cinco probes, a sessão `-m "not redshift"` com as raízes
+local e S3, a suíte Redshift duas vezes, a migração de cada tabela para uma raiz Delta nova e o
+probe das threads sobre ela ([`readings/`](readings/README.md)).
+
+- **Os probes.** `space.py`, `bucket.py`, `diagnose_aws.py` e `catalog.py` repetiram as leituras
+  das 19:18; o `SP-9` leu a `.venv` sem o grupo `emulator`, e o `bucket.py` leu a raiz nova, com
+  um marcador de pasta e nenhuma versão não corrente. O `redshift.py` parou a seção da sessão no
+  `sys_load_error_detail`: o `count(*)` dos últimos 30 dias voltou sem linha, o acesso à primeira
+  linha levantou `IndexError`, e `RS-5`, `RS-8`, `RS-12`, `RS-13`, `RS-16`, `RS-17` e `RS-19`
+  ficaram sem leitura nesta execução.
+- **A sessão `-m "not redshift"`** (22:53): 445 aprovados, entre eles as duas medições de memória
+  de `test_duckdb.py` pelo `VmHWM`: a tabela inteira com 338 MB, 243 MB acima da base, o leitor
+  em lotes com 105 MB, 10 MB acima, e o arquivo de transbordo com 118 MB, 23 MB acima.
+- **A suíte Redshift** (22:56 e 23:01): 30 aprovados em cada execução, as leituras iguais salvo
+  ids e tempos.
+  - O `stream` com literais deu as mesmas linhas pelos três caminhos nos seis casos, a
+    contrabarra incluída. O `UNLOAD` vazio passou sem manifesto nem objeto, com
+    `pg_last_unload_count()` 0, e o da tabela temporária com as 2 linhas e a contagem 2.
+  - O texto da auditoria rodou inteiro, com o `true` do JSON sobre `SUPER`. Na tabela com os
+    defeitos plantados, `total_valor` deu 4.500000, sem o `NaN` e o infinito, mas
+    `naofinito_valor` contou 1 dos 2: `NOT (valor > '-Infinity'::float8 AND valor <
+    'Infinity'::float8)` não contou o `NaN`. `nan_na_tabela` deu 0 e 0: na varredura, nem
+    `valor = 'NaN'::float8` nem `valor <> valor` foi verdadeiro para o `NaN`, que numa constante
+    era igual a si mesmo.
+  - O `ALTER TABLE ... ALTER COLUMN ... TYPE VARCHAR(10)` foi recusado com `0A000 Operation is not
+    supported through datashares` na coluna comum e na da chave, as larguras ficaram 5 e 5, e as
+    duas inserções de dez caracteres foram recusadas com `22001`.
+  - O papel rodou o `EXPLAIN` do join no esquema do datashare: `XN Hash Join DS_DIST_ALL_NONE`
+    entre as duas tabelas pequenas.
+  - As duas stagings temporárias, cheia dentro da transação e antes do `BEGIN`, confirmaram. Na
+    publicação que lê a linha de controle no início e a grava no fim, B leu a versão 1, esperou o
+    `COMMIT` de A por 10,1 s e 10,7 s no `DELETE` da partição e recebeu `1023`; a partição e a
+    linha de controle ficaram as de A. O `UPDATE` condicionado, as duas publicações da mesma
+    tabela, os dois ambientes e o `LOCK` repetiram as leituras das 18:52.
+  - Repetiram-se o `COPY` posicional recusado, a lista de colunas e o `FILLRECORD`, o `VARCHAR`
+    excedido, o `TRUNCATECOLUMNS` recusado no Parquet, o `34510` depois do `TRUNCATE`, as leituras
+    do `SUPER`, o rodapé do `UNLOAD` sem o `NaN` no máximo e o `read_parquet` do DuckDB perdendo a
+    linha. Os dois `COPY` em paralelo levaram 4,2 s e 3,3 s, os dois `UNLOAD` 1,4 s, a Data API
+    471 ms e 149 ms, e a carga de 10 linhas 0,83 s e 1,04 s pelo `COPY` contra 0,60 s e 0,61 s
+    pelo `INSERT`.
+- **A migração** (23:05 a 23:19, `register`, com a ordem da `sort_key` e a medição): onze das
+  doze tabelas carregaram cada partição com contagens, somas e não finitos iguais entre a origem e
+  o Delta, e nenhuma coluna `Double` com valor não finito. `cad_lancamentos` não deixou relatório:
+  o probe das threads leu a tabela na versão 2, com as partições 2026-01-31 e 2026-02-28, e o
+  processo terminou na 2026-03-31, de 52.654.607 linhas, sem gravar o JSON; a causa não está nos
+  arquivos. As partições medidas das outras três tabelas:
+
+  | Tabela e partição | Linhas | `register` ordenada | `rewrite` ordenada | `register` sem ordem | `rewrite` sem ordem |
+  | --- | --- | --- | --- | --- | --- |
+  | `cad_contratos` 2026-03-31 | 2.555.232 | 3,6 s, 1.024 MB, 30,6 MB | 5,0 s, 1.414 MB, 32,0 MB | 2,9 s, 1.001 MB, 37,7 MB | 4,0 s, 1.065 MB, 39,3 MB |
+  | `cad_operacoes` 2026-03-31 | 4.012.922 | 5,3 s, 1.639 MB, 46,3 MB | 7,4 s, 2.335 MB, 47,9 MB | 4,2 s, 1.519 MB, 62,2 MB | 5,5 s, 1.529 MB, 62,9 MB |
+  | `rel_contrato_operacao` 2026-03-31 | 13.637.568 | 13,1 s, 2.442 MB, 201,2 MB | 16,1 s, 2.689 MB, 208,9 MB em 3 arquivos | 8,1 s, 1.849 MB, 243,4 MB | 9,2 s, 1.720 MB, 251,1 MB em 3 arquivos |
+
+  Cada célula dá o tempo, o pico do processo filho e os bytes gravados, sobre uma base de 220 MB a
+  226 MB. Nas nove partições, o `rewrite` levou de 1,14 a 1,52 vez o tempo do `register` com a
+  ordem e de 1,14 a 1,46 vez sem ela, com o pico até 696 MB maior ordenado; a ordem custou de 1,23
+  a 1,63 vez o tempo do `register` e deixou os arquivos com 74% a 92% do tamanho.
+- **O probe das threads** (23:21), na partição 2026-02-28, a mais recente comum às quatro tabelas:
+  `cad_lancamentos` com 23.789.279 linhas e 393 MB num arquivo, e as quatro juntas com 30.001.596
+  linhas. A melhor de três repetições da `materializada` foi de 12,676 s com 4 threads, 13,454 s
+  com 8, 13,161 s com 12, 14,857 s com 16 e 18,018 s com 20, com o pico subindo de 1.590 MB a
+  3.125 MB; a `agregada`, de 1,162 s a 1,177 s em todos os valores. As várias tabelas levaram
+  19,547 s em série e 15,588 s em sessões a mais com 4 threads (1,25x), e mais threads pioraram as
+  duas. Nas repetições seguintes à primeira, o DuckDB leu da memória: o cache de arquivos externos
+  (`enable_external_file_cache`, ligado por padrão e global à instância) guarda os blocos lidos, e
+  no moto a primeira leitura de um arquivo por `delta_scan` fez 3 `GET` dele, a segunda e a
+  terceira nenhum, e a leitura com o cache desligado de novo 3 (sonda de 2026-09-24). A leitura do
+  S3 é a primeira repetição: a `agregada` levou 4,143 s com 4 threads e 2,013 s, 1,871 s, 1,895 s e
+  2,066 s com 8, 12, 16 e 20; a `materializada`, 15,713 s, 14,403 s, 13,973 s, 15,616 s e 18,862 s.
+
+Em 2026-09-24, no contêiner Linux x86_64 com 4 vCPUs e 16.095 MB (DuckDB com `memory_limit` de
+10,6 GiB), uma partição sintética de `cad_lancamentos` com as 52.654.607 linhas de 2026-03-31, as
+14 colunas do esquema da origem e 37 arquivos SNAPPY de um grupo de linhas cada (937 MB), passou
+pela migração local: `register` ordenada em 50,2 s com pico de 11.966 MB, `rewrite` ordenada em
+54,8 s com 12.357 MB em 12 arquivos, `register` sem ordem em 14,0 s com 4.517 MB e `rewrite` sem
+ordem em 24,2 s com 5.046 MB; a carga ordenada no processo principal levou 35,1 s com RSS máximo
+de 12.250 MB e terminou com contagens e somas iguais. Um `COPY` ordenado da mesma partição direto
+no DuckDB levou 17,2 s com pico de 10.196 MB sob `memory_limit` de 12,3 GiB e 17,4 s com 7.432 MB
+sob 6 GiB.
+
+**Consequência**: a igualdade dos três caminhos do `stream`, o `UNLOAD` vazio, a tabela temporária
+e a recusa do `ALTER COLUMN ... TYPE` viram asserções de `test_redshift.py`, e o substituto local
+imita a recusa. A [etapa 8](PLAN-STAGE-8.md) fica com a recriação para a largura de `VARCHAR(n)`,
+sem o atalho, com a staging temporária pela regra decidida e com o `1023` da publicação que perde a
+corrida como `ExecutionConflict`. A contagem dos não finitos da auditoria passa a ser a dos não
+nulos menos a dos finitos, sem negar `is_finite` ([etapa 4](PLAN-STAGE-4.md)), e a suíte ganha a
+leitura `nan_na_tabela_detalhe`. O `redshift.py` lê a contagem sem linha como leitura. O probe das
+threads desliga o cache de arquivos externos em cada configuração, e o script de migração regrava o
+relatório depois da medição de cada tabela e de cada partição gravada. A medição de
+`cad_lancamentos` 2026-03-31 no ambiente alvo, que decide o padrão de `export_mode` e a ordem da
+carga ([etapa 7](PLAN-STAGE-7.md)), e as `threads` pedem uma nova execução
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

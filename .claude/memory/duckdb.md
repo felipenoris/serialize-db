@@ -131,3 +131,18 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   maximum; both answer 4. The documented deviation is from IEEE 754, not from Parquet: `NaN` equals
   `NaN` and is greater than every float. `plan/POC.md`, `plan/delta.md`,
   `tests/proof_of_concept/test_duckdb.py`
+- DuckDB 1.5.5 has `enable_external_file_cache` on by default, `GLOBAL` in scope (a `SET` on the
+  connection holds for its cursors), and `duckdb_external_file_cache()` lists what it holds: on the
+  moto stand-in the first `delta_scan` of a file made 3 `GET` requests of the Parquet file, the
+  second and third none, and a read with the cache off 3 again (2026-09-24). A best of three in one
+  process measures the cache, not S3: the threads probe of 2026-09-23 read the 393 MB partition in
+  4.1 s with 4 threads and 1.9 s to 2.1 s with 8 to 20 in the first repetition, and 1.16 s in every
+  later one. Materializing it into the engine's file database took 12.7 s with 4 threads and got
+  slower above the cores, with the peak growing from 1,590 MB to 3,125 MB. `plan/POC.md`,
+  `probes/duckdb_threads.py`
+- A sorted write goes past `memory_limit`: in a 4 vCPU and 16,095 MB container (default limit
+  10.6 GiB), a synthetic 52,654,607-row partition with the `cad_lancamentos` source schema took
+  50.2 s and 11,966 MB in the migration's `register` sorted variant, 14.0 s and 4,517 MB unsorted,
+  and the sorted load 35.1 s with 12,250 MB; a plain sorted `COPY` of it peaked at 10,196 MB under a
+  12.3 GiB limit and 7,432 MB under 6 GiB, both in about 17 s (2026-09-24). `plan/POC.md`,
+  `plan/PLAN-STAGE-7.md`

@@ -42,7 +42,9 @@ próprio processo filho (``VmHWM`` no Linux), ao lado da base depois das importa
 É a medição de ``plan/OPEN_QUESTIONS.md`` que decide o padrão de ``export_mode`` e a ordem da
 carga, e o relatório leva também a máquina, as versões e as configurações do DuckDB
 (``describe_environment``). A variante que falha, até pela falta de memória que mata o processo
-filho, entra no relatório com o erro; ``--no-measure`` desliga a medição.
+filho, entra no relatório com o erro; ``--no-measure`` desliga a medição. Com ``--report``, o
+JSON é regravado depois da medição de cada tabela e de cada partição gravada, com a tabela da vez
+em ``in_progress``: um processo morto no meio da carga deixa o que já mediu e gravou.
 
 Origem e raiz aceitam pasta local ou ``s3://bucket/prefixo``: no S3 o DuckDB carrega ``httpfs``
 e ``aws`` da pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz
@@ -69,6 +71,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import importlib
 import importlib.metadata
 import json
@@ -618,9 +621,11 @@ def initial_load(
     source: Location,
     root: Location,
     settings: Settings,
+    progress: Callable[[list[PartitionLoad]], None] | None = None,
 ) -> tuple[list[PartitionLoad], list[str]]:
     """Grava no Delta cada partição da tabela ainda fora do log; devolve o que gravou e as
-    entradas da pasta da tabela fora do padrão."""
+    entradas da pasta da tabela fora do padrão. ``progress`` recebe as partições gravadas até ali,
+    depois de cada commit."""
     options = schema.table_options(table)
     destination = root.child(table.name)
     delta = create_table(destination, table, settings.storage_options)
@@ -643,6 +648,8 @@ def initial_load(
             line += f"; sem mínimo e máximo: {', '.join(load.nonfinite_columns)}"
         print(line)
         loaded.append(load)
+        if progress is not None:
+            progress(loaded)
     return loaded, skipped
 
 
@@ -906,6 +913,30 @@ def print_report(report: LoadReport) -> None:
         print(f"  ignorado fora do padrão: {entry}")
 
 
+def write_progress(
+    path: str,
+    reports: list[LoadReport],
+    environment: dict[str, object],
+    table: str,
+    measurements: list[VariantMeasurement],
+    loaded: list[PartitionLoad],
+) -> None:
+    """O relatório parcial, regravado depois da medição de cada tabela e de cada partição gravada:
+    um processo morto no meio da carga, pela falta de memória por exemplo, deixa as tabelas já
+    conferidas e, em ``in_progress``, a medição e as partições gravadas da tabela da vez. O
+    relatório final o substitui."""
+    document = {
+        "environment": environment,
+        "tables": [dataclasses.asdict(report) | {"matches": report.matches} for report in reports],
+        "in_progress": {
+            "table": table,
+            "measurements": [dataclasses.asdict(item) for item in measurements],
+            "loaded": [dataclasses.asdict(item) for item in loaded],
+        },
+    }
+    Path(path).write_text(json.dumps(document, indent=2, ensure_ascii=False, default=str))
+
+
 def write_report(
     path: str, reports: list[LoadReport], outside: list[str], environment: dict[str, object]
 ) -> None:
@@ -1111,7 +1142,14 @@ def main(argv: list[str] | None = None) -> int:
             measurements = []
             if arguments.measure:
                 measurements = measure_table(table, source, root, settings, uses_s3, region)
-            loaded, skipped = initial_load(con, table, source, root, settings)
+            progress = None
+            if arguments.report:
+                progress = functools.partial(
+                    write_progress, arguments.report, reports, environment, table.name,
+                    measurements,
+                )
+                progress([])
+            loaded, skipped = initial_load(con, table, source, root, settings, progress)
             report = load_report(con, table, source, root, loaded, skipped, measurements)
             print_report(report)
             reports.append(report)

@@ -101,3 +101,10 @@ to every document on 2026-09-19 ran under the same pinned versions.
   repository tags major versions only up to `v7`), the second passed the 105 package tests in
   about a minute with `@v10.2.0`. The corporate index left `pyproject.toml` the same day, and the
   `UV_CONFIG_FILE` workaround left the workflows with it. `plan/CURRENT_STATE.md`, `README.md`
+
+The battery of 2026-09-23 at 22:49 to 23:36 UTC ran on the same kind of machine (4 vCPUs, 15,786 MB,
+DuckDB `memory_limit` 12.3 GiB) with the venv without the `emulator` group (`SP-9`) and new roots
+under `.../shared/<usuário>/serialize-db/`: `serialize-db-tests` for the suites and probes and
+`delta/db_projetado` for the migration. The session container of this repository's cloud sessions
+is also 4 vCPUs and 16,095 MB (30 GiB free), where DuckDB picks a 10.6 GiB `memory_limit`: local
+reproductions of target memory behavior run on a comparable machine. `plan/POC.md`

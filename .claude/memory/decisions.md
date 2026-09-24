@@ -695,3 +695,21 @@ account in a fabricated ARN of `tests/test_probes.py`, which took the documentat
 `<conta do laboratório>`, `dzd-<domínio do laboratório>`, `<projeto do laboratório>`); git
 history keeps the old values. `plan/PLAN-STAGE-8.md`,
 `plan/PLAN-STAGE-5.md`, `plan/OPEN_QUESTIONS.md`
+
+## The battery of 2026-09-23 at 22:49 and the parallel-processing instruction
+
+On 2026-09-23 the user added to the user section of `CLAUDE.md` that the programs using the package
+run on scalable AWS compute of the user's choosing, and that the plan optimizes for parallel
+processing. The same evening the user ran every `SUITE.md` command from `main` with #67, on a
+4 vCPU and 16 GB machine, with new roots under the personal folder (`.../shared/<usuário>/serialize-db/`),
+handed over the reports and offered to rerun the whole battery on a more powerful machine if that
+yields more information. The user also confirmed the assistant's reading of the stage 8
+publication (the section above). From the results the assistant changed the Redshift audit count
+of non-finite values to `count(x) - count(finite)`, fixed the `redshift.py` crash on a `count(*)`
+without rows, made the threads probe turn off DuckDB's external file cache and the migration script
+rewrite its report after each step, turned the readings two clean runs confirmed into assertions
+and made the stand-in refuse `ALTER COLUMN ... TYPE`; it proposed, awaiting the user, `register` as
+the default `export_mode` with `rewrite` only for the stage 5 non-finite fallback, the load sorted
+by `sort_key`, and the temporary staging filled inside the transaction. The raw migration reports
+stayed out of git, as the first run's did; their numbers entered `plan/POC.md`.
+`plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`

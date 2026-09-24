@@ -262,3 +262,21 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   x < 'Infinity'::float8)`, false for `NaN` under both rules, and `json_valid` as `true`, because
   the JSON column is `SUPER`; the new text waits for the next suite run. `plan/PLAN-STAGE-4.md`,
   `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+- The suite runs of 2026-09-23 at 22:56 and 23:01 UTC (30 passed each, readings equal but ids and
+  times): the stream with literals gave the same rows by the three paths in the six cases, the
+  backslash doubled in the `UNLOAD` literal; the empty `UNLOAD` passed without manifest or object
+  and `pg_last_unload_count()` read 0, the temporary table's `UNLOAD` 2; `ALTER TABLE ... ALTER
+  COLUMN ... TYPE VARCHAR(10)` was refused on the share with `0A000 Operation is not supported
+  through datashares`, on a common and on a key column, and ten characters were refused with
+  `22001`; the role ran `EXPLAIN` on the share (`XN Hash Join DS_DIST_ALL_NONE` between two small
+  tables); both temporary stagings committed, filled inside the transaction and before the `BEGIN`;
+  in the publication that reads the control row first, the second transaction read version 1,
+  waited 10.1 s and 10.7 s at the partition `DELETE` and got `1023`. With the strict infinity
+  comparison the audit's sum left the `NaN` out (4.500000), but its negation did not count the
+  `NaN` either (`naofinito_valor` 1 of 2), and in the scan neither `valor = 'NaN'::float8` nor
+  `valor <> valor` was true (0 and 0): the count became `count(x) - count(CASE WHEN finite ...)`,
+  and `nan_na_tabela_detalhe` reads each comparison, the negation, `is null` and the text of the
+  `NaN` row. The `redshift.py` run of 22:49 got no row from `select count(*) from
+  sys_load_error_detail where start_time > ...` (12.8 s) and stopped the session section on
+  `IndexError` before `RS-5`, `RS-8`, `RS-12`, `RS-13`, `RS-16`, `RS-17` and `RS-19`.
+  `plan/POC.md`, `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-4.md`
