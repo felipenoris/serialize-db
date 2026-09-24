@@ -72,6 +72,7 @@ rel_contrato_operacao
 
 ```
 cd ~/work/projects/serialize-db
+mkdir probes/output
 
 export PYTHONPATH=tests
 export SOURCE_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
