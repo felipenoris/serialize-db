@@ -140,5 +140,5 @@ A new cloud session container (2026-09-24) starts without `.duckdb/`: the packag
 `SERIALIZE_DB_TEST_LOCAL_ROOT` failed on the missing `delta` extension until the GitHub
 workflow's command installed it (`duckdb.connect(config={'extension_directory': '.duckdb'})
 .execute('INSTALL delta')`), and the stand-in's `s3` cases also need `httpfs` and `aws` there.
-With the three, the local root gave 427 passed and 94 skipped, and the stand-in with the local
-root 520 passed and 1 skipped. `README.md`
+With the three, the local root gave 429 passed and 94 skipped, and the stand-in with the local
+root 522 passed and 1 skipped. `README.md`

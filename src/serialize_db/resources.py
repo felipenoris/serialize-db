@@ -85,15 +85,17 @@ def available_memory() -> int:
 
 
 def peak_rss_mb() -> float:
-    """O pico de memória residente do próprio processo até agora, em MB: no Linux, o ``VmHWM`` de
-    ``/proc/self/status``, em KB; fora dele, o ``ru_maxrss`` do processo, em bytes no macOS e em
-    KB nos outros Unix. Num processo filho, a leitura é a do filho, não a do pai.
+    """O pico de memória residente do próprio processo até agora. Num processo filho, a leitura é
+    a do filho, não a do pai.
 
     Exemplo:
 
     .. code-block:: python
 
         peak_rss_mb()   # 297.2 no script de migração, depois das importações
+
+    :return: o pico em MB. No Linux, lido do ``VmHWM`` de ``/proc/self/status``, em KB; fora
+        dele, do ``ru_maxrss`` do processo, em bytes no macOS e em KB nos outros Unix.
     """
     status = _PROC / "self" / "status"
     if status.exists():
