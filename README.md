@@ -57,6 +57,11 @@ a página principal, com o funcionamento geral, o tutorial, a retenção dos arq
 tabela de mapeamento de tipos. Cada
 exemplo de docstring abre com `.. code-block:: python`, ou `.. code-block:: shell` no da linha de
 comando: o `pdoc` só destaca o código dessa diretiva, e um bloco apenas indentado sai sem destaque.
+Cada função e método documenta os argumentos, o retorno e as exceções nos campos `:param nome:`,
+`:return:` e `:raises Excecao:` do fim da docstring, que o `pdoc` mostra nas seções "Parameters",
+"Returns" e "Raises"; o `pdoc` ignora `:returns:` e `:raise:`, e lê o nome de um campo `:param`
+ou `:raises` até o último dois-pontos da primeira linha, que por isso não leva outro. Cada campo de
+uma dataclass tem a sua docstring, que documenta o argumento do construtor.
 Para gerar o HTML estático, informe a pasta alvo em `-o`:
 
 ```

@@ -178,6 +178,9 @@ def control_ddl(schema: str) -> str:
 
         control_ddl("sbx_aco_decon")
         # CREATE TABLE "sbx_aco_decon"."serialize_db_publications" (table_name VARCHAR(127), ...)
+
+    :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
+    :return: o texto do comando, com a tabela qualificada pelo esquema.
     """
     return (f"CREATE TABLE {_qualified(schema, CONTROL_TABLE)} (table_name VARCHAR(127), "
             "delta_version BIGINT, execution_id VARCHAR(127), published_at TIMESTAMP)")
@@ -193,6 +196,13 @@ def control_read(schema: str, environment: str, table: sa.Table) -> str:
         control_read("sbx_aco_decon", "prod", Lancamento.__table__)
         # SELECT delta_version FROM "sbx_aco_decon"."serialize_db_publications"
         # WHERE table_name = 'prod_cad_lancamentos'
+
+    :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
+    :param environment: o ambiente, que prefixa o nome da tabela publicada,
+        ``<ambiente>_<tabela>``.
+    :param table: a tabela do modelo.
+    :return: o texto da consulta, que devolve ``delta_version`` numa linha, ou nenhuma linha
+        antes da primeira publicação.
     """
     return (f"SELECT delta_version FROM {_qualified(schema, CONTROL_TABLE)} "
             f"WHERE table_name = {literal(published_name(environment, table))}")
@@ -212,6 +222,14 @@ def published_ddl(schema: str, environment: str, table: sa.Table) -> str:
         #     ...
         #     PRIMARY KEY ("id_lancamento")
         # ) SORTKEY ("data_base", "id_lancamento")
+
+    :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
+    :param environment: o ambiente, que prefixa o nome da tabela publicada,
+        ``<ambiente>_<tabela>``.
+    :param table: a tabela do modelo.
+    :return: o texto do comando, com a tabela qualificada pelo esquema.
+    :raises ContractError: a tabela com um tipo de coluna fora do contrato ou com mais de uma
+        coluna de partição.
     """
     lines = []
     for column in table.columns:
@@ -238,14 +256,11 @@ def publication_statements(schema: str, environment: str, table: sa.Table,
                            published_version: int | None, execution_id: str,
                            credentials: str) -> list[str]:
     """Os comandos da transação depois da leitura da linha de controle, um por ``execute``, sem
-    ``BEGIN`` e ``COMMIT``: na primeira publicação (``published_version`` ``None``) o ``CREATE
-    TABLE`` da tabela publicada; a staging temporária sem a coluna de partição; por partição, o
-    ``DELETE`` dela e, quando o manifesto existe, o ``DELETE`` da staging, o ``COPY ... MANIFEST
-    FILLRECORD`` e o ``INSERT ... SELECT`` com o valor e ``JSON_PARSE``; o ``DROP`` da staging; e
-    por último a linha de controle, pelo ``INSERT`` ou pelo ``UPDATE`` condicionado à versão lida.
-
-    Uma partição sem manifesto foi removida no Delta e recebe só o ``DELETE``. Os textos do
-    ``COPY`` carregam a cláusula de credenciais.
+    ``BEGIN`` e ``COMMIT``: na primeira publicação o ``CREATE TABLE`` da tabela publicada; a
+    staging temporária sem a coluna de partição; por partição, o ``DELETE`` dela e, quando o
+    manifesto existe, o ``DELETE`` da staging, o ``COPY ... MANIFEST FILLRECORD`` e o
+    ``INSERT ... SELECT`` com o valor e ``JSON_PARSE``; o ``DROP`` da staging; e por último a
+    linha de controle, pelo ``INSERT`` ou pelo ``UPDATE`` condicionado à versão lida.
 
     Exemplo:
 
@@ -254,6 +269,24 @@ def publication_statements(schema: str, environment: str, table: sa.Table,
         publication_statements("sbx_aco_decon", "prod", Lancamento.__table__, ["2026-08-31"],
                                {"2026-08-31": "s3://bucket/prod/publicacao/exec-42/...manifest"},
                                58, 57, "exec-42", "IAM_ROLE default")
+
+    :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
+    :param environment: o ambiente, que prefixa o nome da tabela publicada,
+        ``<ambiente>_<tabela>``.
+    :param table: a tabela do modelo.
+    :param partitions: as partições que a publicação troca, na ordem dos comandos; ``None`` é a
+        tabela inteira, sem partição.
+    :param manifests: a URI do manifesto do ``COPY`` de cada partição com arquivo na versão, pelo
+        valor; uma partição sem manifesto foi removida no Delta e recebe só o ``DELETE``.
+    :param delta_version: a versão do Delta publicada, que a linha de controle grava.
+    :param published_version: a versão lida na linha de controle; ``None`` na primeira
+        publicação.
+    :param execution_id: a execução que publica, que a linha de controle grava.
+    :param credentials: a cláusula de credenciais, como ``IAM_ROLE default``, que os textos do
+        ``COPY`` carregam.
+    :return: os comandos, na ordem da transação.
+    :raises ContractError: a tabela com um tipo de coluna fora do contrato ou com mais de uma
+        coluna de partição.
     """
     name = published_name(environment, table)
     published = _qualified(schema, name)
@@ -293,6 +326,13 @@ def unpublication_statements(schema: str, environment: str, table: sa.Table,
     .. code-block:: python
 
         unpublication_statements("sbx_aco_decon", "prod", Lancamento.__table__, 58)
+
+    :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
+    :param environment: o ambiente, que prefixa o nome da tabela publicada,
+        ``<ambiente>_<tabela>``.
+    :param table: a tabela do modelo.
+    :param published_version: a versão lida na linha de controle.
+    :return: os comandos, na ordem da transação.
     """
     name = published_name(environment, table)
     return [
@@ -331,9 +371,7 @@ def _in_family(column: PublishedColumn) -> PublishedColumn:
 
 def reconcile_published(schema: str, environment: str, table: sa.Table,
                         columns: Sequence[PublishedColumn]) -> tuple[list[str], list[str]]:
-    """O diff entre o contrato e a tabela publicada, pelas colunas que ``svv_all_columns`` lista:
-    os ``ALTER TABLE ... ADD COLUMN`` do diff aditivo, no fim da tabela, e uma frase por
-    diferença destrutiva, que despublica a tabela para a publicação seguinte recriá-la.
+    """O diff entre o contrato e a tabela publicada.
 
     Aditivo: a coluna anulável nova. Destrutivo: a coluna removida, a coluna ``NOT NULL`` nova, o
     tipo que mudou e a largura de ``VARCHAR(n)``, a precisão ou a escala que mudaram, porque o
@@ -345,6 +383,16 @@ def reconcile_published(schema: str, environment: str, table: sa.Table,
 
         statements, destructive = reconcile_published("sbx_aco_decon", "prod",
                                                       Lancamento.__table__, columns)
+
+    :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
+    :param environment: o ambiente, que prefixa o nome da tabela publicada,
+        ``<ambiente>_<tabela>``.
+    :param table: a tabela do modelo.
+    :param columns: as colunas da tabela publicada como ``svv_all_columns`` as lista, com nome,
+        tipo, largura, precisão e escala, em ``PublishedColumn``.
+    :return: os ``ALTER TABLE ... ADD COLUMN`` do diff aditivo, no fim da tabela, e uma frase por
+        diferença destrutiva, que despublica a tabela para a publicação seguinte recriá-la.
+    :raises ContractError: a tabela com um tipo de coluna fora do contrato.
     """
     published = _qualified(schema, published_name(environment, table))
     existing = {column.name: _in_family(column) for column in columns}
@@ -612,14 +660,18 @@ def _version_to_publish(db: Database, table: sa.Table,
 
 
 def create_publications_table(config: RedshiftConfig) -> None:
-    """Cria a tabela de controle no esquema, uma vez, pelo usuário; a segunda chamada falha com a
-    mensagem do servidor, porque a tabela já existe.
+    """Cria a tabela de controle no esquema, uma vez, pelo usuário.
 
     Exemplo:
 
     .. code-block:: python
 
         create_publications_table(RedshiftConfig.from_environment())
+
+    :param config: a configuração do Redshift, com a conexão e o esquema.
+    :raises redshift_connector.Error: a segunda chamada falha com a mensagem do servidor, porque a
+        tabela já existe.
+    :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -631,14 +683,11 @@ def create_publications_table(config: RedshiftConfig) -> None:
 def publish_redshift(db: Database, config: RedshiftConfig, tables: Sequence[sa.Table],
                      execution_id: str, max_workers: int = 1,
                      versions: Mapping[str, int] | None = None) -> dict[str, int]:
-    """Publica as tabelas no Redshift e devolve ``{tabela: versão publicada}``.
+    """Publica as tabelas no Redshift.
 
-    Confere a tabela de controle antes de tudo (``PublicationError`` sem ela); depois, por
-    tabela, numa conexão própria do pool de ``max_workers``: a reconciliação da tabela publicada
-    que já existe e a transação da publicação, com a versão do Delta de ``versions`` (a fixada
-    pela execução) ou a atual. Uma tabela cuja versão publicada é a do Delta não muda; a versão
-    publicada mais nova, o ``UPDATE`` da linha de controle sem linha e o ``1023`` são
-    ``ExecutionConflict``, sem repetição. Na primeira falha nada novo começa, o que está em curso
+    Confere a tabela de controle antes de tudo; depois, por tabela, numa conexão própria do pool: a
+    reconciliação da tabela publicada que já existe e a transação da publicação. Uma tabela cuja
+    versão publicada é a do Delta não muda. Na primeira falha nada novo começa, o que está em curso
     termina, e a exceção leva o resultado de cada tabela numa nota. Cada tabela publicada vai ao
     log com as partições, o tempo e o pico de memória residente do processo.
 
@@ -648,6 +697,27 @@ def publish_redshift(db: Database, config: RedshiftConfig, tables: Sequence[sa.T
 
         publish_redshift(db, config, [Lancamento.__table__], "exec-2026-09-05")
         # {"cad_lancamentos": 58}
+
+    :param db: o banco, com a raiz Delta e o ambiente, que prefixa o nome das tabelas publicadas.
+    :param config: a configuração do Redshift, com a conexão, o esquema e o ``iam_role`` do
+        ``COPY``.
+    :param tables: as tabelas do modelo a publicar.
+    :param execution_id: a execução que publica, que a linha de controle grava; os manifestos do
+        ``COPY`` ficam em ``<ambiente>/publicacao/<execution_id>/``, sob a raiz.
+    :param max_workers: o tamanho do pool, quantas tabelas publicam ao mesmo tempo; o padrão 1
+        publica uma por vez.
+    :param versions: a versão do Delta por nome de tabela, a fixada pela execução; ``None``
+        publica a versão atual de cada tabela.
+    :return: ``{tabela: versão publicada}``.
+    :raises PublicationError: antes de qualquer escrita, sem a tabela de controle, ou com uma
+        tabela sem versão: fora de ``versions`` ou, sem ``versions``, fora do Delta do ambiente.
+    :raises ExecutionConflict: a versão publicada mais nova que a do Delta, o ``UPDATE`` da linha
+        de controle sem linha (ou o ``DELETE`` dela, na despublicação de um diff destrutivo), o
+        ``1023`` e a tabela publicada que outra primeira publicação criou, sem repetição.
+    :raises LogUnavailable: um arquivo do log entre a versão publicada e a do Delta não existe.
+    :raises SandboxError: sem ``iam_role`` em ``config`` e sem credenciais da AWS na sessão
+        ``boto3``, para o ``COPY``.
+    :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -665,14 +735,22 @@ def publish_redshift(db: Database, config: RedshiftConfig, tables: Sequence[sa.T
 def unpublish_redshift(db: Database, config: RedshiftConfig,
                        tables: Sequence[sa.Table]) -> dict[str, int | None]:
     """Despublica as tabelas: por tabela, uma transação com o ``DROP TABLE`` da tabela publicada
-    e o ``DELETE`` da linha de controle; devolve ``{tabela: versão que estava publicada}``, com
-    ``None`` na tabela que não estava. O Delta fica intacto.
+    e o ``DELETE`` da linha de controle. O Delta fica intacto.
 
     Exemplo:
 
     .. code-block:: python
 
         unpublish_redshift(db, config, [Lancamento.__table__])   # {"cad_lancamentos": 58}
+
+    :param db: o banco, com a raiz Delta e o ambiente, que prefixa o nome das tabelas publicadas.
+    :param config: a configuração do Redshift, com a conexão e o esquema.
+    :param tables: as tabelas do modelo a despublicar.
+    :return: ``{tabela: versão que estava publicada}``, com ``None`` na tabela que não estava.
+    :raises PublicationError: antes de qualquer escrita, sem a tabela de controle.
+    :raises ExecutionConflict: o ``DELETE`` da linha de controle sem linha e o ``1023``, sem
+        repetição.
+    :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -687,7 +765,7 @@ def unpublish_redshift(db: Database, config: RedshiftConfig,
 
 def publication_status(db: Database, config: RedshiftConfig) -> list[PublicationStatus]:
     """A versão publicada contra a atual de cada tabela do ambiente que existe no Delta, com as
-    partições pendentes: todas na tabela nunca publicada, as de ``version_diff`` nas outras.
+    partições pendentes.
 
     Exemplo:
 
@@ -695,6 +773,14 @@ def publication_status(db: Database, config: RedshiftConfig) -> list[Publication
 
         for status in publication_status(db, config):
             print(status.table, status.published_version, status.current_version)
+
+    :param db: o banco, com a raiz Delta e o ambiente, que prefixa o nome das tabelas publicadas.
+    :param config: a configuração do Redshift, com a conexão e o esquema.
+    :return: uma ``PublicationStatus`` por tabela, na ordem de ``db.tables()``; as partições
+        pendentes são todas na tabela nunca publicada, as de ``version_diff`` nas outras.
+    :raises PublicationError: sem a tabela de controle.
+    :raises LogUnavailable: um arquivo do log entre a versão publicada e a atual não existe.
+    :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
     """
     connection = _Connection(config)
     try:

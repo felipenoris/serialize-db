@@ -40,6 +40,30 @@ foi medido em [`POC.md`](POC.md).
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
+- **O `compact` e as colunas `Double` não finitas.** Numa sonda de 2026-09-24 na pasta local,
+  `serialize_db.delta.compact` juntou dois arquivos de uma partição, um deles com `NaN` em `valor`
+  e sem mínimo e máximo no log, num arquivo com `min.valor` 1.0 e `max.valor` 3.0
+  ([`POC.md`](POC.md)): o `optimize.compact` do delta-rs grava estatística em toda coluna, e a
+  decisão da issue #59 (sem mínimo e máximo na coluna `Double` com valor não finito) não vale na
+  partição compactada. Espera o usuário: passar ao `compact` as propriedades de escrita sem
+  estatística nessas colunas, recusar a compactação da partição com valor não finito, ou aceitar
+  ([etapa 9](PLAN-STAGE-9.md)).
+- **A contagem na troca do motor Redshift.** Com `columns_without_min_max`,
+  `RedshiftEngine.export_partition` leva a partição de volta por `publish_partition`, que não
+  confere `expected_rows`, e a partição sai sem a conferência de contagem que o registro faz; com
+  `Execution.publish(audit=False)` toda coluna `Double` entra na lista, e a tabela com `Double`
+  segue esse caminho ([etapa 5](PLAN-STAGE-5.md)). Lido no código em 2026-09-24; espera o
+  usuário.
+- **A versão da staging `_publicado` do motor Redshift.** `RedshiftEngine.published` carrega a
+  staging uma vez por execução pelo nome, sem a versão: chamada de novo com outra versão, depois de
+  `Execution.publish` avançar `versions`, devolve a staging da primeira, enquanto o motor DuckDB lê
+  a versão nova. Lido no código em 2026-09-24, sem sonda; espera o usuário.
+- **`check_models` e as colunas de partição.** Na tabela com mais de uma coluna em `partition_by`,
+  `check_models` levanta o `ContractError` de `table_options` em vez de listar a violação (sonda de
+  2026-09-24); a docstring registra o comportamento, e a correção espera o usuário.
+- **`SERIALIZE_DB_ENVIRONMENT` vazia na linha de comando.** `load` e as rotinas de operação leem
+  `os.environ.get("SERIALIZE_DB_ENVIRONMENT", "dev")`, e a variável vazia vira erro de uso;
+  `run`, `audit` e `publish` usam `dev` (sonda de 2026-09-24). Alinhar os dois espera o usuário.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela

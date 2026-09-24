@@ -170,15 +170,18 @@ class Storage:
 
         No S3, o ``S3FileSystem`` leva a região de ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``, a
         mesma que ``storage_options`` passa ao delta-rs, e o ``endpoint_override`` de
-        ``AWS_ENDPOINT_URL``; sem região é ``ValueError``, porque o PyArrow a buscaria na rede e o
-        delta-rs cairia em ``us-east-1``. Nada toca a rede na construção. O caminho local é
-        resolvido para absoluto. Outro esquema é ``ValueError``.
+        ``AWS_ENDPOINT_URL``. Nada toca a rede na construção.
 
         Exemplo:
 
         .. code-block:: python
 
             Storage.for_uri("file:///dados/delta").uri   # "/dados/delta"
+
+        :param uri: a raiz do banco; o caminho local é resolvido para absoluto.
+        :return: o armazenamento da raiz.
+        :raises ValueError: no S3 sem região, porque o PyArrow a buscaria na rede e o delta-rs
+            cairia em ``us-east-1``; e em outro esquema.
         """
         if uri.startswith("s3://"):
             return _s3_storage(uri)
@@ -195,13 +198,17 @@ class Storage:
     # ------------------------------------------------------------ caminhos
 
     def join(self, *parts: str) -> str:
-        """O caminho relativo à raiz com as partes juntadas por ``/``, sem barras nas pontas.
+        """O caminho relativo à raiz com as partes juntadas por ``/``.
 
         Exemplo:
 
         .. code-block:: python
 
             storage.join("prod/", "cad_operacoes", "_delta_log")   # "prod/cad_operacoes/_delta_log"
+
+        :param parts: os trechos do caminho; as barras nas pontas de cada um saem, e um trecho
+            vazio é ignorado.
+        :return: o caminho, sem barras nas pontas.
         """
         pieces = []
         for part in parts:
@@ -211,16 +218,18 @@ class Storage:
         return "/".join(pieces)
 
     def relative(self, uri: str) -> str:
-        """O caminho relativo à raiz de uma URI sob ela; a própria raiz dá ``""``.
-
-        Uma URI fora da raiz é ``ValueError``: as primitivas de ``serialize_db.delta`` só tocam o
-        que está sob a raiz do banco.
+        """O caminho relativo à raiz de uma URI sob ela.
 
         Exemplo:
 
         .. code-block:: python
 
             storage.relative(storage.uri + "/prod/cad_operacoes")   # "prod/cad_operacoes"
+
+        :param uri: a URI sob a raiz, com ou sem barra final.
+        :return: o caminho relativo; a própria raiz dá ``""``.
+        :raises ValueError: a URI fora da raiz, porque as primitivas de ``serialize_db.delta``
+            só tocam o que está sob a raiz do banco.
         """
         target = uri.rstrip("/")
         if target == self.uri:
@@ -230,7 +239,11 @@ class Storage:
         return target.removeprefix(self.uri + "/")
 
     def uri_of(self, path: str) -> str:
-        """A URI de um caminho relativo à raiz, como o delta-rs e o DuckDB a recebem."""
+        """A URI de um caminho relativo à raiz, como o delta-rs e o DuckDB a recebem.
+
+        :param path: o caminho relativo à raiz; ``""`` é a própria raiz.
+        :return: a URI, sem barra final.
+        """
         return f"{self.uri}/{path}" if path else self.uri
 
     def _full(self, path: str) -> str:
@@ -244,29 +257,44 @@ class Storage:
 
     def ensure_folder(self, path: str) -> None:
         """Cria a pasta na pasta local, porque o ``COPY`` do DuckDB para um arquivo não cria a pasta
-        dele; no S3 não há pasta a criar."""
+        dele; no S3 não há pasta a criar.
+
+        :param path: a pasta, relativa à raiz; as pastas acima dela também são criadas.
+        """
         if not self.is_s3:
             Path(self._full(path)).mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------ listagem, cópia e exclusão
 
     def exists(self, path: str) -> bool:
-        """Se o arquivo ou a pasta existe."""
+        """Se o arquivo ou a pasta existe.
+
+        :param path: o arquivo ou a pasta, relativo à raiz.
+        :return: ``True`` quando existe.
+        """
         info = self.filesystem.get_file_info(self._full(path))
         return info.type != pafs.FileType.NotFound
 
     def size(self, path: str) -> int | None:
-        """O tamanho do arquivo em bytes, ou ``None`` quando ele não existe ou não é arquivo."""
+        """O tamanho de um arquivo.
+
+        :param path: o arquivo, relativo à raiz.
+        :return: o tamanho em bytes, ou ``None`` quando ele não existe ou não é arquivo.
+        """
         info = self.filesystem.get_file_info(self._full(path))
         if info.type != pafs.FileType.File:
             return None
         return info.size
 
     def list_files(self, prefix: str, suffix: str = "") -> list[str]:
-        """Os arquivos sob ``prefix`` que terminam em ``suffix``, relativos à raiz e em ordem.
+        """Os arquivos sob ``prefix`` que terminam em ``suffix``.
 
         A listagem desce as subpastas e exclui ``_delta_log/``, onde os checkpoints também
-        terminam em ``.parquet``; um prefixo ausente dá a lista vazia.
+        terminam em ``.parquet``.
+
+        :param prefix: a pasta, relativa à raiz; um prefixo ausente dá a lista vazia.
+        :param suffix: o fim do nome, como ``.parquet``; vazio aceita todo arquivo.
+        :return: os caminhos relativos à raiz, em ordem.
         """
         selector = pafs.FileSelector(self._full(prefix), recursive=True, allow_not_found=True)
         files = []
@@ -286,6 +314,10 @@ class Storage:
         abandona depois de 3 segundos sem byte de resposta (``curlCode: 28``), o que interrompeu o
         arquivo de 32.218.190 linhas de ``cad_lancamentos`` no ambiente alvo em 2026-09-24
         (``plan/POC.md``). Na pasta local, ``copy_file``, com a pasta do destino criada.
+
+        :param source: o arquivo de origem, relativo à raiz.
+        :param destination: o caminho do arquivo copiado, relativo à raiz; um arquivo existente
+            nele é substituído.
         """
         if self.is_s3:
             source_bucket, source_key = self._bucket_and_key(source)
@@ -296,7 +328,10 @@ class Storage:
         self.filesystem.copy_file(self._full(source), self._full(destination))
 
     def delete(self, paths: list[str]) -> None:
-        """Apaga os arquivos; um caminho ausente não é erro."""
+        """Apaga os arquivos.
+
+        :param paths: os arquivos, relativos à raiz; um caminho ausente não é erro.
+        """
         for path in paths:
             try:
                 self.filesystem.delete_file(self._full(path))
@@ -305,21 +340,32 @@ class Storage:
 
     def open_input_file(self, path: str) -> object:
         """O arquivo aberto para leitura aleatória, como ``pq.ParquetFile`` o recebe: no S3, o
-        rodapé é lido por GET de intervalo."""
+        rodapé é lido por GET de intervalo.
+
+        :param path: o arquivo, relativo à raiz.
+        :return: o arquivo aberto do ``pyarrow.fs``, que quem chama fecha.
+        """
         return self.filesystem.open_input_file(self._full(path))
 
     def open_output_stream(self, path: str) -> object:
         """O arquivo aberto para escrita sequencial, como ``pq.ParquetWriter`` o recebe: no S3, um
-        upload em partes que termina no ``close``; na pasta local, a pasta do arquivo é criada."""
+        upload em partes que termina no ``close``.
+
+        :param path: o arquivo, relativo à raiz; na pasta local, a pasta do arquivo é criada.
+        :return: o fluxo de saída do ``pyarrow.fs``, que quem chama fecha.
+        """
         self._local_parent(path)
         return self.filesystem.open_output_stream(self._full(path))
 
     # ------------------------------------------------------------ a escrita condicional
 
     def read_text(self, path: str) -> tuple[str, str]:
-        """O texto do arquivo e a impressão digital dele: a etag no S3, o ``sha256`` na pasta local.
+        """O texto do arquivo e a impressão digital dele, a que ``write_text`` recebe em
+        ``if_match``.
 
-        Um arquivo ausente é ``FileNotFoundError`` nos dois armazenamentos.
+        :param path: o arquivo, relativo à raiz, em UTF-8.
+        :return: o texto e a impressão digital: a etag no S3, o ``sha256`` na pasta local.
+        :raises FileNotFoundError: o arquivo ausente, nos dois armazenamentos.
         """
         if self.is_s3:
             return self._read_s3(path)
@@ -329,14 +375,12 @@ class Storage:
 
     def write_text(self, path: str, text: str, if_match: str | None = None,
                    if_none_match: bool = False) -> str:
-        """Grava o texto por inteiro e devolve a impressão digital nova.
+        """Grava o texto por inteiro, com uma condição opcional.
 
-        ``if_none_match`` grava só se o arquivo não existe, e ``if_match`` só se a impressão
-        digital atual é a informada; quando a condição falha, nada é gravado e a escrita levanta
-        ``ConflictError``. No S3, ``put_object`` com ``IfNoneMatch="*"`` ou ``IfMatch=<etag>``,
-        atômico no servidor. Na pasta local, ``O_EXCL`` ou a comparação da impressão digital
-        seguida de ``os.replace`` de um arquivo temporário, que não é atômica entre processos e
-        basta à pasta local, o ambiente dos testes e do desenvolvimento.
+        No S3, ``put_object`` com ``IfNoneMatch="*"`` ou ``IfMatch=<etag>``, atômico no servidor.
+        Na pasta local, ``O_EXCL`` ou a comparação da impressão digital seguida de ``os.replace``
+        de um arquivo temporário, que não é atômica entre processos e basta à pasta local, o
+        ambiente dos testes e do desenvolvimento.
 
         Exemplo:
 
@@ -346,6 +390,14 @@ class Storage:
             first = storage.write_text(path, "{}", if_none_match=True)
             storage.write_text(path, "{}", if_none_match=True)
             # ConflictError: o arquivo já existe
+
+        :param path: o arquivo, relativo à raiz; na pasta local, a pasta dele é criada.
+        :param text: o conteúdo, gravado em UTF-8.
+        :param if_match: grava só se a impressão digital atual é a informada, a que
+            ``read_text`` devolveu.
+        :param if_none_match: grava só se o arquivo não existe.
+        :return: a impressão digital nova.
+        :raises ConflictError: a condição falhou; nada foi gravado.
         """
         if self.is_s3:
             return self._write_s3(path, text, if_match, if_none_match)
@@ -417,13 +469,11 @@ class Storage:
     # ------------------------------------------------------------ delta-rs e DuckDB
 
     def storage_options(self) -> dict[str, str]:
-        """As opções do delta-rs, montadas a cada chamada; vazias na pasta local.
+        """As opções do delta-rs, montadas a cada chamada.
 
-        No S3: ``AWS_REGION``, ``AWS_ENDPOINT_URL`` quando presente, ``max_retries`` e
-        ``retry_timeout`` para uma rede morta falhar em segundos, e as chaves de SSE das variáveis
-        do object_store quando configuradas. Nenhuma credencial: a cadeia padrão do delta-rs as
-        resolve e as renova no ``DeltaTable`` que a execução segura, enquanto um trio congelado
-        expiraria em cerca de uma hora e circularia num dicionário que um log imprime.
+        Nenhuma credencial: a cadeia padrão do delta-rs as resolve e as renova no ``DeltaTable``
+        que a execução segura, enquanto um trio congelado expiraria em cerca de uma hora e
+        circularia num dicionário que um log imprime.
 
         Exemplo:
 
@@ -431,6 +481,10 @@ class Storage:
 
             Storage.for_uri("s3://bucket/delta").storage_options()
             # {"AWS_REGION": "us-east-1", "max_retries": "3", "retry_timeout": "10s"}
+
+        :return: vazias na pasta local. No S3: ``AWS_REGION``, ``AWS_ENDPOINT_URL`` quando
+            presente, ``max_retries`` e ``retry_timeout`` para uma rede morta falhar em segundos,
+            e as chaves de SSE das variáveis do object_store quando configuradas.
         """
         if not self.is_s3:
             return {}
@@ -451,6 +505,8 @@ class Storage:
         o secret ``credential_chain`` com ``REFRESH auto``, a região e o endpoint de
         ``_duckdb_secret_options``, e o proxy de ``HTTP_PROXY`` sem as credenciais no endereço.
         As extensões vêm da pasta configurada na conexão; nada é baixado.
+
+        :param connection: a conexão aberta do DuckDB que recebe as extensões e o secret.
         """
         if not self.is_s3:
             connection.execute("LOAD delta")
@@ -467,10 +523,8 @@ class Storage:
         """Uma conexão do DuckDB com as extensões da pasta configurada, sem instalação automática,
         e ``duckdb_setup`` aplicado.
 
-        ``config`` acrescenta as opções da abertura (``threads``, ``temp_directory``,
-        ``memory_limit``). A instalação e a carga automáticas ficam desligadas: o ``LOAD`` de uma
-        extensão conhecida a baixaria para ``~/.duckdb`` sem aviso, e o ambiente alvo não tem
-        internet.
+        A instalação e a carga automáticas ficam desligadas: o ``LOAD`` de uma extensão conhecida
+        a baixaria para ``~/.duckdb`` sem aviso, e o ambiente alvo não tem internet.
 
         Exemplo:
 
@@ -479,6 +533,14 @@ class Storage:
             connection = storage.duckdb_connect()
             uri = storage.uri_of("prod/cad_operacoes")
             connection.execute(f"SELECT count(*) FROM delta_scan('{uri}')")
+
+        :param database: o arquivo do banco do DuckDB; o padrão, um banco em memória, é
+            ``:memory:``.
+        :param config: as opções da abertura (``threads``, ``temp_directory``,
+            ``memory_limit``), acrescentadas às da biblioteca.
+        :return: a conexão aberta, que quem chama fecha.
+        :raises duckdb.Error: uma extensão ausente da pasta configurada ou o secret recusado; a
+            conexão é fechada antes.
         """
         settings: dict[str, object] = {
             "autoinstall_known_extensions": False,
@@ -518,7 +580,7 @@ def _local_storage(uri: str) -> Storage:
 
 
 def prepare_environment(environ: MutableMapping[str, str] = os.environ) -> dict[str, str]:
-    """Acerta as variáveis que o delta-rs lê e devolve as que mudaram, para o log.
+    """Acerta as variáveis que o delta-rs lê.
 
     Exporta ``NO_PROXY`` a partir de ``no_proxy`` quando a maiúscula está ausente ou vazia: o
     cliente HTTP do delta-rs lê ``NO_PROXY`` antes de ``no_proxy``, e vazia ela anula as exceções e
@@ -531,6 +593,10 @@ def prepare_environment(environ: MutableMapping[str, str] = os.environ) -> dict[
     .. code-block:: python
 
         prepare_environment()   # {"NO_PROXY": "169.254.170.2,localhost"} na primeira chamada
+
+    :param environ: as variáveis, alteradas no lugar; o padrão é ``os.environ``, o que o
+        delta-rs lê.
+    :return: as variáveis que mudaram, com o valor novo, para o log.
     """
     changes: dict[str, str] = {}
     # Vazia conta como ausente: get devolve "" e a condição a substitui.

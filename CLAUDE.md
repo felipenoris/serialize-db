@@ -187,6 +187,44 @@ Test: would a junior data scientist on the team understand this snippet in a sin
 - Short docstring on public functions: what it does, inputs, and output.
 - Comments explain *why*, not *what*. Do not comment the obvious.
 
+### Docstrings
+
+The standard every public function, method and class follows (user decision of 2026-09-24), which
+`pdoc` renders with `--docformat restructuredtext`:
+
+- **Layout.** A summary line saying what the function does or returns, the behavior as prose, an
+  `Exemplo:` block opened by `.. code-block:: python` (or `shell`) on the public interface, and the
+  fields last, after a blank line.
+- **Fields.** `:param name:` for every parameter pdoc shows, in signature order, except `self` and
+  `cls` (`*parts` is `:param parts:`); `:return:` when the annotation is not `None`, and for a
+  context manager what `with` gives; one `:raises Exc:` per exception the function raises
+  deliberately, directly or through the package's own helpers, named as the module imports it. A
+  third-party exception that only propagates stays out, unless the reader acts on it (`duckdb.Error`
+  in `initial_load`, `Storage.duckdb_connect` and `DuckDBEngine`, `redshift_connector.Error` in
+  `RedshiftEngine.execute` and `create_publications_table`). pdoc reads only `param`, `return` and
+  `raises`, and ignores `:returns:` and `:raise:`.
+- **Field text.** pt-BR, starting lowercase and ending with a period: what the argument is, its
+  unit, its accepted values and what `None` or the default means; continuation lines indent four
+  spaces. The first line of a `:param` or `:raises` field holds no other colon, a quoted `s3://` or
+  `:memory:` included, because pdoc 16 reads the name up to the last colon of that line.
+- **One place per fact.** A sentence about one argument, the return or one exception lives in its
+  field, not in the prose too; the prose keeps what the function does as a whole, and a moved
+  sentence keeps every identifier, number and date.
+- **Constructors and attributes.** A dataclass documents its constructor by one docstring per field,
+  a string right after the field; a regular class documents its arguments in the `__init__`
+  docstring, and each public `self.x` gets a docstring right after the assignment. A
+  `typing.Protocol` says in its class docstring that the `(*args, **kwargs)` pdoc shows is the
+  `__init__` of `typing.Protocol`.
+- **Repeated interfaces.** The methods of `Engine` carry the full field list again in `DuckDBEngine`
+  and `RedshiftEngine`, with the same wording for the shared meaning and each engine's own detail.
+- **Model-level errors.** A `ContractError` that only a model outside the contract raises is listed
+  where the function derives text or a schema from the model (`serialize_db.schema`,
+  `published_ddl`, `publication_statements`, `reconcile_published`, `partition_query`), and left out
+  of the functions that orchestrate, because `check_models` refuses such a model first.
+- **Checks.** Every line stays within 100 characters, and the built site is read as the working
+  rules ask: a misread field shows as a bold name holding a colon, which
+  `grep -o '<strong>[^<]*:[^<]*</strong>'` over the built HTML finds.
+
 ### Data (pandas / SQL)
 - Prefer vectorized operations over loops and `.apply()`.
 - Never use `inplace=True`; reassign the result (`df = df.dropna()`).
@@ -243,7 +281,7 @@ research appends to the matching group.
 | File | Subject |
 | --- | --- |
 | `README.md` | `uv sync --group dev`, the `pdoc` build, and only the commands: the package tests (the GitHub workflow's command), the stand-in run of the target-only suites (`SERIALIZE_DB_TEST_EMULATOR`, `uv run --group emulator`, local only), the AWS tests (`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` switches the Redshift suite on, `-m "not redshift"` off), the variables table, the probe commands and the migration script's commands; the two workflow badges open it. What each test does lives in the header of its file, and the suites' writes, permissions and report in the header of `tests/conftest.py` (user decision of 2026-09-21). |
-| `docs/` | The package documentation for `pdoc` (user decision of 2026-09-21): `docs/index.md` is the main page, included by the docstring of `src/serialize_db/__init__.py`, with how the package works, the tutorial, the retention of removed files (the 400 days, the versioned bucket's `NoncurrentVersionExpiration`, how to change them) and the type mapping table; `docs/operacao.md` is the stage 9 runbook, included by the docstring of `src/serialize_db/cli.py`; `uv run pdoc serialize_db --docformat restructuredtext -o site` builds it. Docstring examples open with `.. code-block:: python` (or `shell`), the only form pdoc highlights. |
+| `docs/` | The package documentation for `pdoc` (user decision of 2026-09-21): `docs/index.md` is the main page, included by the docstring of `src/serialize_db/__init__.py`, with how the package works, the tutorial, the retention of removed files (the 400 days, the versioned bucket's `NoncurrentVersionExpiration`, how to change them) and the type mapping table; `docs/operacao.md` is the stage 9 runbook followed by the options of each `serialize-db` subcommand, included by the docstring of `src/serialize_db/cli.py`; `uv run pdoc serialize_db --docformat restructuredtext -o site` builds it. Docstring examples open with `.. code-block:: python` (or `shell`), the only form pdoc highlights, and the docstring standard is "Python Code Style", section "Docstrings". |
 | `.github/` | `tests.yml` installs the DuckDB `delta` extension into `.duckdb/` and runs `tests/` without `tests/proof_of_concept/` and `tests/test_probes.py` on push and pull request; `docs.yml` publishes the `pdoc` site to <https://felipenoris.github.io/serialize-db/> on push to `main` (the repository's Pages source must be "GitHub Actions"). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, every `pyproject.toml` group and extra in `.venv/` (`uv sync --all-groups --all-extras`), DuckDB extensions in `.duckdb/`, all links relative. **Rerun it whenever a dependency is added**; a new DuckDB extension, a Python version change or another runtime asset is added by hand. Only a folder prepared on Linux x86_64 serves the SageMaker space; the header is the operating procedure, and the extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`. |
 | `examples/` | The scripts the user ran in the target, kept as run but for the masked identifiers in the bucket path: `redshift_native.py`, `redshift_data_api.py`, `redshift_copy_unload.py` (2026-09-20) and `redshift_manifest.py` (2026-09-21, the prerequisites of `export_partition`); `examples/README.md` says what each one fixes. The probe, the suite and stage 5 repeat their calls, and the target they fix is in `.claude/memory/redshift.md`. |
@@ -561,6 +599,9 @@ A new lesson adds its story there and its rule here, in the same commit.
   `archive` and the first publication of the base ran in the target with no duration and no
   memory reading, because the CLI printed none; `compact`, `archive`, `export` and the
   publication print the time and the peak RSS per table since (user decision of 2026-09-24).
+- **A documentation convention is checked in the rendered page as well as in the source**: build
+  the pdoc site and read the fields it renders; pdoc 16 reads a `:param` or `:raises` name up to
+  the last colon of the field's first line, and a script over the source missed it (2026-09-24).
 
 ## Naming conventions
 
