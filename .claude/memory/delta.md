@@ -172,6 +172,16 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   statistics; the DDL of an old snapshot comes from that version's Delta schema, not from the
   current model. `plan/serialize-db.md`, `plan/delta.md`
 
+- The archive copies instead of rewriting (2026-09-24, user decision): `deep_copy` creates the
+  destination with `DeltaTable.create` from the version's own schema, name, description and
+  configuration, copies every file the version's log lists with `Storage.copy` to the same
+  relative path, and commits one `overwrite` per partition with `AddAction`s rebuilt from
+  `get_add_actions(flatten=False)` (`path`, `size_bytes`, `num_records`, the `null_count`, `min`,
+  `max` and `partition` structs), keeping min and max only for the exact types as `register_files`
+  does; the read-back is the row count by both readers against the sum of the actions, because an
+  archived version may carry a schema older than the current model. `history()` entries carry the
+  commit's custom metadata as top-level keys, newest first. `plan/PLAN-STAGE-9.md`, `plan/POC.md`
+
 ## Alternatives assessed
 
 - DuckLake inlines inserts of up to 10 rows into the catalog by default (`DATA_INLINING_ROW_LIMIT`),

@@ -86,6 +86,13 @@ foi medido em [`POC.md`](POC.md).
   e os órfãos das bases reais por `serialize-db audit --foreign-keys` sobre o Delta carregado (o
   `data_base` 2026-01-31 sem `cad_contratos`, o contrato `desemb-999` sem cadastro).
 
+- **A operação no ambiente alvo.** Os subcomandos da [etapa 9](PLAN-STAGE-9.md) rodaram só na
+  pasta local ([`POC.md`](POC.md)). No bucket, o `archive` copia cada arquivo por `CopyObject`
+  (`Storage.copy`) e confere a contagem da cópia pelos dois leitores, o `vacuum` lista e apaga
+  versões não correntes que só a regra `NoncurrentVersionExpiration` libera (o item acima), e a
+  compactação roda no escritor do delta-rs; a primeira execução das rotinas lá lê o tempo do
+  `archive` de `cad_lancamentos` e a memória da compactação de uma partição dela.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão

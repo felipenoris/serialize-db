@@ -3103,7 +3103,10 @@ duckdb 1.5.5, pyarrow 25.0.1, boto3 1.43.98, sqlalchemy 2.0.54, pandas 3.0.6, py
   com o OID 19, e o caso reprova nele com o motor anterior e passa com o corrigido; o caso
   registra o SQLSTATE e a mensagem da relação inexistente, `current_database()` e a presença da
   tabela de controle, e `test_ingest_stream_loader_export` registra a coluna JSON do arquivo do
-  `UNLOAD` lida pelo `delta_scan`.
+  `UNLOAD` lida pelo `delta_scan`. O valor de `current_database()` é leitura e nunca asserção:
+  ele continua `dev` depois do `USE`, que muda a resolução dos nomes e não o banco da sessão
+  (leitura de 2026-09-21, a regra "A state change is confirmed by the effect the caller depends
+  on" de `CLAUDE.md`), e o usuário lembrou isso em 2026-09-24.
 - **Nenhum caso da publicação rodou**: os oito erraram na fixture `local_location`,
   "SERIALIZE_DB_TEST_LOCAL_ROOT aponta para uma pasta inexistente:
   /home/<usuário>/serialize-db-local", em 1,2 s e 1,1 s, porque `SUITE.md` exporta a variável e a
@@ -3137,3 +3140,25 @@ e os 3 de `tests/test_migrate_parquet_to_delta.py` passam. O que a implementaç�
   recusas sem commit, o `Double` não finito e o relatório; os da medição saíram com ela, e o da
   conexão por tabela com os limites do ambiente é do motor (`tests/test_engine_duckdb.py`), que a
   carga abre por chamada.
+
+## O que a implementação da etapa 9 mostrou
+
+Os subcomandos `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`, `history` e
+`archive_snapshot` em `serialize_db.delta`, o `deep_copy` pela cópia e o registro e o runbook
+`docs/operacao.md` foram implementados em 2026-09-24 na pasta local; os 6 casos de
+`tests/test_operation.py` e os 70 de `tests/test_delta.py` passam. O que a implementação leu:
+
+- **`get_add_actions(flatten=False)` do delta-rs 1.6.4** traz `path`, `size_bytes`,
+  `modification_time`, `num_records` e os structs `null_count`, `min`, `max` (com os valores
+  tipados: `Decimal`, `date`, `datetime`) e `partition` (só numa tabela particionada), a sonda de
+  2026-09-24; `deep_copy` monta o `RegisteredFile` de cada ação a partir deles e registra as
+  estatísticas dos tipos exatos, como `register_files`.
+- **`DeltaTable.history()`** devolve os commits do mais recente ao mais antigo, com `version`,
+  `operation`, `timestamp` (milissegundos da época) e os metadados de `CommitProperties` como
+  chaves de primeiro nível: `history` os lê por nome e converte o instante para UTC.
+- **A cópia por registro termina numa versão por partição**, e não na 0 do `write_deltalake`:
+  `test_deep_copy_and_relocation` lê a versão 1 na cópia de uma versão com uma partição, com o
+  mesmo caminho, tamanho e extremos da origem.
+- **A recusa da compactação alcança a tabela sem partição**: o snapshot registra a versão atual de
+  toda tabela existente, então `compact --table cad_contas` logo depois de um snapshot é recusado
+  como o de uma tabela particionada; o caso do teste publicou uma versão nova antes.

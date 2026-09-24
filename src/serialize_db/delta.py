@@ -85,12 +85,14 @@ from serialize_db.storage import Storage
 __all__ = [
     "RegisteredFile",
     "SchemaDiff",
+    "archive_snapshot",
     "commit_metadata",
     "compact",
     "copy_manifest",
     "create_table",
     "deep_copy",
     "export_snapshot",
+    "history",
     "max_key",
     "open_table",
     "publish_partition",
@@ -691,15 +693,14 @@ def _check_file(storage: Storage, table_path: str, file: RegisteredFile, contrac
     _check_file_rows(footer, file)
 
 
-def _commit_actions(dt: DeltaTable, table: sa.Table, actions: list[AddAction],
-                    value: str | None, metadata: Mapping[str, str],
+def _commit_actions(dt: DeltaTable, name: str, partition_by: str | None,
+                    actions: list[AddAction], value: str | None, metadata: Mapping[str, str],
                     schema: object | None = None) -> None:
     """Um commit ``overwrite`` das ações: da partição de ``value``, ou da tabela inteira sem ele.
 
     ``CommitFailedError``, o de outro registro da mesma partição a partir da mesma versão, sobe
-    como ``ExecutionConflict``.
+    como ``ExecutionConflict``, com ``name`` na mensagem.
     """
-    partition_by = table_options(table).partition_by
     filters = None
     if partition_by and value is not None:
         filters = [(partition_by, "=", value)]
@@ -713,7 +714,7 @@ def _commit_actions(dt: DeltaTable, table: sa.Table, actions: list[AddAction],
             commit_properties=CommitProperties(custom_metadata=dict(metadata)),
         )
     except CommitFailedError as error:
-        raise ExecutionConflict(f"{table.name} partição {value}: {error}") from None
+        raise ExecutionConflict(f"{name} partição {value}: {error}") from None
 
 
 def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value: str | None,
@@ -757,7 +758,8 @@ def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value
     actions = []
     for file in files:
         actions.append(_add_action(file, contract, partition_by, value, columns_without_min_max))
-    _commit_actions(open_table(uri, storage), table, actions, value, metadata)
+    _commit_actions(open_table(uri, storage), table.name, partition_by, actions, value,
+                    metadata)
     # create_write_transaction não atualiza o objeto: a versão vem de uma leitura nova do log, que
     # com uma execução por ambiente é a do próprio commit.
     version = open_table(uri, storage).version()
@@ -1148,7 +1150,8 @@ def rewrite(uri: str, table: sa.Table, storage: Storage,
         _check_file(storage, table_path, file, contract, partition_by, value)
         actions.append(_add_action(file, contract, partition_by, value, nonfinite.get(value, ())))
         total += file.rows
-    _commit_actions(dt, table, actions, None, {}, schema=delta_schema(table))
+    _commit_actions(dt, table.name, table_options(table).partition_by, actions, None, {},
+                    schema=delta_schema(table))
     version = open_table(uri, storage).version()
     read_back(uri, table, None, total, storage)
     return version
@@ -1291,10 +1294,10 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
     """Grava no arquivo de controle do ambiente a entrada ``{name: versions}`` de um snapshot do
     banco e devolve o controle novo.
 
-    Um nome repetido é ``ValueError``. A escrita é condicional: ``if_match`` com a impressão da
-    leitura, ou ``if_none_match`` no primeiro snapshot, e outro escritor entre a leitura e a escrita
-    faz subir ``ConflictError``. As versões marcadas são as que ``vacuum_keeping_snapshots``
-    preserva.
+    Um nome presente em ``snapshots`` ou em ``archived`` é ``ValueError``, porque o nome dá a pasta
+    ``arquivo/<nome>/``. A escrita é condicional: ``if_match`` com a impressão da leitura, ou
+    ``if_none_match`` no primeiro snapshot, e outro escritor entre a leitura e a escrita faz subir
+    ``ConflictError``. As versões marcadas são as que ``vacuum_keeping_snapshots`` preserva.
 
     Exemplo:
 
@@ -1303,15 +1306,44 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
         snapshot(storage, "prod", "2026T3", {"cad_lancamentos": 143, "cad_contratos": 88})
     """
     control, fingerprint = read_snapshots(storage, environment)
-    if name in control["snapshots"]:
+    if name in control["snapshots"] or name in control.get("archived", {}):
         raise ValueError(f"{environment}: o snapshot {name} já existe")
     ordered = {}
     for table_name in sorted(versions):
         ordered[table_name] = versions[table_name]
     control["snapshots"][name] = ordered
+    _write_control(storage, environment, control, fingerprint)
+    return control
+
+
+def _write_control(storage: Storage, environment: str, control: Mapping,
+                   fingerprint: str | None) -> None:
+    """Grava o arquivo de controle na escrita condicional: ``if_match`` com a impressão da leitura,
+    ou ``if_none_match`` quando ele ainda não existe."""
     text = json.dumps(control, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     path = storage.join(environment, CONTROL_FILE)
     storage.write_text(path, text, if_match=fingerprint, if_none_match=fingerprint is None)
+
+
+def archive_snapshot(storage: Storage, environment: str, name: str) -> dict:
+    """Move a entrada do snapshot de ``snapshots`` para a chave irmã ``archived`` do arquivo de
+    controle, na escrita condicional, e devolve o controle novo.
+
+    O nome ausente de ``snapshots`` é ``ValueError``. A entrada arquivada deixa de prender as
+    versões no ``vacuum``, que lê só ``snapshots``, e continua a ocupar o nome: ``snapshot`` o
+    recusa, porque ele dá a pasta ``arquivo/<nome>/``.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        archive_snapshot(storage, "prod", "2026T3")["archived"]   # {"2026T3": {...}}
+    """
+    control, fingerprint = read_snapshots(storage, environment)
+    if name not in control["snapshots"]:
+        raise ValueError(f"{environment}: o snapshot {name} não está em snapshots")
+    control.setdefault("archived", {})[name] = control["snapshots"].pop(name)
+    _write_control(storage, environment, control, fingerprint)
     return control
 
 
@@ -1372,33 +1404,121 @@ def compact(uri: str, table: sa.Table, partitions: list[str], storage: Storage) 
     return open_table(uri, storage).optimize.compact(partition_filters=filters)
 
 
-def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int:
-    """Uma tabela nova em ``destination``, na versão 0, com os dados, o esquema, a partição, o nome,
-    a descrição e as propriedades de uma versão; devolve a versão da cópia.
+# Os metadados da biblioteca que history lê de cada commit.
+_METADATA_KEYS = ("serialize_db_execution_id", "serialize_db_input_versions",
+                  "serialize_db_snapshot")
 
-    A leitura vai em lotes pelo dataset Arrow, nunca por ``to_pyarrow_table``, que deixa uma tarefa
-    do Acero em voo num programa que termina logo depois. Um ``destination`` que já tem tabela é
-    erro.
+
+def history(uri: str, storage: Storage) -> list[dict]:
+    """Os commits da tabela, do mais recente ao mais antigo: ``version``, ``operation``,
+    ``timestamp`` (o instante, em UTC) e os metadados da biblioteca que o commit tem
+    (``serialize_db_execution_id``, ``serialize_db_input_versions``, ``serialize_db_snapshot``);
+    os commits de ``vacuum`` e de ``OPTIMIZE`` vêm sem eles.
 
     Exemplo:
 
     .. code-block:: python
 
-        deep_copy(uri, 143, storage.uri_of("prod/arquivo/2026T3/cad_lancamentos"), storage)   # 0
+        history(uri, storage)[0]
+        # {"version": 143, "operation": "WRITE", "timestamp": datetime(..., tzinfo=UTC),
+        #  "serialize_db_execution_id": "exec-2026-08-31", "serialize_db_input_versions": "{}"}
+    """
+    entries = []
+    for entry in open_table(uri, storage).history():
+        instant = datetime.datetime.fromtimestamp(entry["timestamp"] / 1000, datetime.timezone.utc)
+        record = {"version": entry["version"], "operation": entry["operation"],
+                  "timestamp": instant}
+        for key in _METADATA_KEYS:
+            if key in entry:
+                record[key] = entry[key]
+        entries.append(record)
+    return entries
+
+
+def _present(values: Mapping[str, object] | None) -> dict[str, object]:
+    """As entradas com valor de um dicionário de estatísticas da ação, ou vazio."""
+    return {name: value for name, value in (values or {}).items() if value is not None}
+
+
+def _copied_file(action: Mapping[str, object]) -> RegisteredFile:
+    """O arquivo de uma ação ``add`` da origem, como ``register_files`` o descreve: o caminho
+    relativo, o tamanho, as linhas e as estatísticas da própria ação."""
+    return RegisteredFile(
+        path=str(action["path"]),
+        size=int(action["size_bytes"]),
+        rows=int(action["num_records"]),
+        stats={"min": _present(action.get("min")), "max": _present(action.get("max")),
+               "null_count": _present(action.get("null_count"))},
+    )
+
+
+def _count_rows(uri: str, storage: Storage) -> tuple[int, int]:
+    """As linhas da tabela pelos dois leitores: o dataset do delta-rs e o ``delta_scan``."""
+    by_delta = open_table(uri, storage).to_pyarrow_dataset().count_rows()
+    connection = storage.duckdb_connect()
+    try:
+        row = connection.execute(f"SELECT count(*) FROM delta_scan({literal(uri)})").fetchone()
+    finally:
+        connection.close()
+    return by_delta, int(row[0])
+
+
+def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int:
+    """Uma tabela nova em ``destination`` com os arquivos, o esquema, a partição, o nome, a
+    descrição e as propriedades de uma versão, pela cópia dos arquivos de cada partição e o
+    registro deles; devolve a versão da cópia, uma por partição.
+
+    Os dados não passam pela máquina: cada arquivo que o log da versão lista é copiado por
+    ``Storage.copy`` (o ``CopyObject`` no S3) para o mesmo caminho relativo, e entra no log novo
+    com o tamanho, as linhas e as estatísticas da ação de origem, as dos tipos exatos, num commit
+    ``overwrite`` por partição, como ``register_files``; no fim, a contagem da cópia pelos dois
+    leitores é conferida contra a soma das ações, e a diferença é ``RegistrationRefused``. A
+    memória é a do log. Um ``destination`` que já tem tabela é erro.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        deep_copy(uri, 143, storage.uri_of("prod/arquivo/2026T3/cad_lancamentos"), storage)   # 4
     """
     source = open_table(uri, storage, version)
     metadata = source.metadata()
-    reader = source.to_pyarrow_dataset().scanner().to_reader()
-    write_deltalake(
+    partition_columns = metadata.partition_columns
+    partition_by = partition_columns[0] if partition_columns else None
+    contract = pa.schema(source.schema())
+    DeltaTable.create(
         destination,
-        reader,
+        source.schema(),
         mode="error",
-        partition_by=metadata.partition_columns or None,
+        partition_by=partition_columns or None,
         name=metadata.name,
         description=metadata.description,
         configuration=metadata.configuration,
         storage_options=_options(storage),
     )
+    source_path = storage.relative(uri)
+    target_path = storage.relative(destination)
+    by_partition: dict[str | None, list[dict]] = {}
+    for action in pa.table(source.get_add_actions(flatten=False)).to_pylist():
+        value = None
+        if partition_by is not None:
+            value = (action.get("partition") or {}).get(partition_by)
+        by_partition.setdefault(value, []).append(action)
+    total = 0
+    for value, group in by_partition.items():
+        actions = []
+        for action in group:
+            storage.copy(storage.join(source_path, action["path"]),
+                         storage.join(target_path, action["path"]))
+            actions.append(_add_action(_copied_file(action), contract, partition_by, value, ()))
+            total += int(action["num_records"])
+        # Cada commit resolve a versão no log do armazenamento: a tabela é reaberta por partição.
+        _commit_actions(open_table(destination, storage), str(metadata.name), partition_by,
+                        actions, value, {})
+    by_delta, by_duckdb = _count_rows(destination, storage)
+    if by_delta != total or by_duckdb != total:
+        raise RegistrationRefused(f"{destination}: a cópia tem {by_delta} linhas pelo delta-rs e "
+                                  f"{by_duckdb} pelo DuckDB, esperadas {total}")
     return open_table(destination, storage).version()
 
 

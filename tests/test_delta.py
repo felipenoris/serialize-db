@@ -800,19 +800,29 @@ def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) 
 
 
 def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:
-    """A cópia profunda nasce na versão 0 com as linhas, o esquema e a partição da versão; a pasta
-    copiada arquivo a arquivo abre na mesma versão nos dois leitores, porque o log guarda caminhos
-    relativos."""
+    """A cópia profunda copia os arquivos da versão e os registra, um commit por partição, com o
+    esquema, a partição, o nome e as estatísticas da origem; a pasta copiada arquivo a arquivo abre
+    na mesma versão nos dois leitores, porque o log guarda caminhos relativos."""
     publish(storage, uri, "2026-07-31", 1, 10)
     publish(storage, uri, "2026-08-31", 11, 10)
 
-    # A cópia profunda da versão 1.
+    # A cópia profunda da versão 1: o mesmo arquivo, no mesmo caminho relativo, com as mesmas
+    # estatísticas, e a tabela com um commit por partição.
     archive = storage.uri_of("prod/arquivo/2026T3/cad_operacoes")
-    assert delta.deep_copy(uri, 1, archive, storage) == 0
+    assert delta.deep_copy(uri, 1, archive, storage) == 1
     copy = delta.open_table(archive, storage)
     assert copy.to_pyarrow_dataset().count_rows() == 10
     assert copy.metadata().partition_columns == ["data_str"]
+    assert copy.metadata().name == "cad_operacoes"
     assert not pa.schema(copy.schema()).field("id_operacao").nullable
+    source_actions = pa.table(delta.open_table(uri, storage, 1).get_add_actions(flatten=True))
+    copied_actions = pa.table(copy.get_add_actions(flatten=True))
+    for column in ("path", "size_bytes", "num_records", "min.id_operacao", "max.id_operacao"):
+        assert copied_actions.column(column).equals(source_actions.column(column)), column
+    assert scan(storage, f"SELECT count(*), sum(id_operacao) FROM delta_scan('{archive}')") == \
+        [(10, 55)]
+    with pytest.raises(Exception):  # noqa: B017 - o erro do delta-rs num destino com tabela
+        delta.deep_copy(uri, 1, archive, storage)
 
     # A pasta copiada arquivo a arquivo.
     source = storage.relative(uri)
