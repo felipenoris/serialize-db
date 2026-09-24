@@ -890,8 +890,10 @@ builders, a column name like a `.values(...)` keyword; the duplication across te
 `test_reference_model.py` and `test_schema.py`, the two `rewrite_first_chunk`, the `exit_code`
 helpers), because a shared helper would move code between modules; and the `monkeypatch` of
 `delta.open_table`, `delta.read_snapshots` and `Storage.copy`, the only way to put a commit or a
-failure between two steps. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`,
-`docs/operacao.md`, `plan/POC.md`
+failure between two steps. After the merge the user approved, on 2026-09-24, the same reading in
+`scripts/migrate_parquet_to_delta.py`, whose `--environment` default took the empty variable as
+the environment `''` and failed with `ContractError`. `plan/PLAN-STAGE-1.md`,
+`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`, `docs/operacao.md`, `plan/POC.md`
 
 ## The read access of stage 10 (2026-09-24)
 

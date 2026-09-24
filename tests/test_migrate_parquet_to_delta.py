@@ -5,9 +5,10 @@ Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a 
 teste, com a pasta temporária do processo apontada para a pasta do teste, onde o motor DuckDB de
 cada chamada de ``initial_load`` abre o banco. Eles conferem a linha de comando sobre a base
 inteira, duas vezes, com o ambiente, cada tabela e o que ficou fora do modelo no relatório JSON; o
-relatório parcial de uma carga interrompida numa partição fora do contrato; e a recusa de um modelo
-que viola o contrato, sem ler a origem. A carga em si e o relatório de contagens e somas são de
-``serialize_db.load``, cobertos por ``tests/test_load.py``.
+relatório parcial de uma carga interrompida numa partição fora do contrato; a recusa de um modelo
+que viola o contrato, sem ler a origem; e o ambiente ``dsv`` com ``SERIALIZE_DB_ENVIRONMENT`` vazia.
+A carga em si e o relatório de contagens e somas são de ``serialize_db.load``, cobertos por
+``tests/test_load.py``.
 """
 
 from __future__ import annotations
@@ -161,3 +162,15 @@ def test_main_refuses_a_model_with_violations(base: source.SourceBase, folder: P
                       "--root", str(never_written), "--tables", "nada"])
     assert refusal.value.code == 2
     assert not never_written.exists()
+
+
+def test_empty_environment_variable_counts_as_absent(base: source.SourceBase, folder: Path,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """``SERIALIZE_DB_ENVIRONMENT`` vazia conta como ausente, como nos subcomandos de
+    ``serialize-db``: a tabela vai para o ambiente ``dsv``, e não para um ambiente vazio."""
+    monkeypatch.setenv("SERIALIZE_DB_ENVIRONMENT", "")
+    root = folder / "delta"
+    arguments = ["--metadata", "client_model:Base.metadata", "--source", str(base.root),
+                 "--root", str(root), "--tables", "cad_contas"]
+    assert migrate.main(arguments) == 0
+    assert (root / "dsv" / "cad_contas" / "_delta_log").is_dir()
