@@ -110,7 +110,7 @@ export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
 export SERIALIZE_DB_REDSHIFT_DATABASE=dev
 export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
 export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
-export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta/db_projetado
+export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta
 export PYTHONPATH=tests
 
 # 1. Uma vez por esquema: a tabela de controle serialize_db_publications.
@@ -129,6 +129,19 @@ export PYTHONPATH=tests
 # 4. O estado: versão publicada, versão atual e partições pendentes por tabela.
 .venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --status
+```
+
+# Exportação e Compact
+
+```
+# export por cópia (o padrão): os mesmos bytes dos arquivos da versão atual, sem o log
+.venv/bin/serialize-db export --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos --destination $TARGET_ROOT_PATH/prd/exportacao/carga-2026-09-24/cad_lancamentos
+
+# export por reescrita: um arquivo por partição pelo COPY do DuckDB, com os limites do ambiente
+.venv/bin/serialize-db export --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos --destination $TARGET_ROOT_PATH/prd/exportacao/carga-2026-09-24-reescrita/cad_lancamentos --mode rewrite
+
+# compact: exige --partitions numa tabela particionada
+.venv/bin/serialize-db compact --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos --partitions 2026-03-31
 ```
 
 # Resultados
