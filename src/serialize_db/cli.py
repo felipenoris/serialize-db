@@ -1,20 +1,22 @@
 """A linha de comando ``serialize-db``.
 
 Cada subcomando entra com a etapa que entrega a primitiva por trás dele: ``schema`` é o da
-etapa 1, ``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6 e ``publish`` o da etapa 8.
-``schema write`` grava os arquivos de esquema dos modelos e ``schema check`` compara os
-versionados com a geração nova, sem gravar; ``sql write`` grava o texto SQL de cada statement do
-pipeline em cada motor e ``sql check`` o compara com a geração nova. ``run`` abre uma execução e
-entrega a ``modulo:funcao`` do pipeline; ``audit`` imprime o texto das verificações de uma tabela
-(``--sql``) ou roda a auditoria sobre a versão publicada, no motor de ``--engine``; ``publish``
-publica no Redshift fora de uma execução, mostra o estado da publicação (``--status``), cria a
-tabela de controle (``--init``) ou despublica (``--unpublish``). Os modelos chegam por
-``--metadata modulo:atributo``, o caminho importável do ``MetaData`` do cliente, e os statements
-por ``--statements modulo:atributo``, o caminho importável do dicionário ``{nome: statement}`` do
-pipeline. ``--root``, ``--environment`` e ``--engine`` têm por padrão ``SERIALIZE_DB_ROOT``,
-``SERIALIZE_DB_ENVIRONMENT`` (``dev``) e ``SERIALIZE_DB_ENGINE`` (``duckdb``); a configuração do
-Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``, e ``run --redshift`` a dá a uma execução
-no motor DuckDB para ``run.publish_redshift``.
+etapa 1, ``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6, ``load`` o da etapa 7 e
+``publish`` o da etapa 8. ``schema write`` grava os arquivos de esquema dos modelos e
+``schema check`` compara os versionados com a geração nova, sem gravar; ``sql write`` grava o
+texto SQL de cada statement do pipeline em cada motor e ``sql check`` o compara com a geração
+nova. ``run`` abre uma execução e entrega a ``modulo:funcao`` do pipeline; ``audit`` imprime o
+texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a versão publicada, no
+motor de ``--engine``; ``load`` faz a carga inicial da base Parquet de origem (``--source``) nas
+tabelas Delta do ambiente, as sem partição antes das particionadas, e confere contagem e somas por
+partição; ``publish`` publica no Redshift fora de uma execução, mostra o estado da publicação
+(``--status``), cria a tabela de controle (``--init``) ou despublica (``--unpublish``). Os modelos
+chegam por ``--metadata modulo:atributo``, o caminho importável do ``MetaData`` do cliente, e os
+statements por ``--statements modulo:atributo``, o caminho importável do dicionário
+``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm por padrão
+``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dev``) e ``SERIALIZE_DB_ENGINE``
+(``duckdb``); a configuração do Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``, e
+``run --redshift`` a dá a uma execução no motor DuckDB para ``run.publish_redshift``.
 
 Exemplo:
 
@@ -29,6 +31,8 @@ Exemplo:
     serialize-db run --root s3://bucket/delta --environment prod --partition 2026-08-31 \\
         --metadata pipeline.models:Base.metadata pipeline.mensal:main
     serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
+    serialize-db load --root s3://bucket/delta --environment prod \\
+        --metadata pipeline.models:Base.metadata --source s3://bucket/db_projetado
     serialize-db publish --init
     serialize-db publish --root s3://bucket/delta --environment prod \\
         --metadata pipeline.models:Base.metadata --tables cad_lancamentos_projetados
@@ -36,8 +40,9 @@ Exemplo:
         --metadata pipeline.models:Base.metadata --status
 
 O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff
-impresso, e quando a auditoria reprova; 2 no erro de uso, no conflito de execução e na publicação
-sem a tabela de controle.
+impresso, quando a auditoria reprova e quando a carga acha uma partição fora do contrato ou uma
+diferença de contagem ou soma; 2 no erro de uso, no conflito de execução, na publicação sem a
+tabela de controle e na origem da carga ausente.
 """
 
 from __future__ import annotations
@@ -53,11 +58,12 @@ from collections.abc import Callable
 
 import sqlalchemy as sa
 
-from serialize_db import audit, delta, schema, sql
+from serialize_db import audit, delta, load, schema, sql
 from serialize_db.audit import AuditReport
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import AuditFailed, ContractError, ExecutionConflict, PublicationError
 from serialize_db.execution import Database, Execution
+from serialize_db.load import LoadReport
 
 __all__ = ["main"]
 
@@ -163,6 +169,27 @@ def _add_publish_parser(commands: argparse._SubParsersAction) -> None:
     publish.set_defaults(handler=_publish)
 
 
+def _add_load_parser(commands: argparse._SubParsersAction) -> None:
+    """``load``: a carga inicial da base Parquet de origem nas tabelas Delta do ambiente."""
+    root = os.environ.get("SERIALIZE_DB_ROOT")
+    load_command = commands.add_parser("load", help="a carga inicial da base Parquet de origem")
+    load_command.add_argument("--metadata", required=True, type=_resolve_metadata,
+                              help="o MetaData dos modelos, como pipeline.models:Base.metadata")
+    load_command.add_argument("--source", required=True,
+                              help="a raiz da base Parquet de origem, pasta local ou "
+                                   "s3://bucket/prefixo")
+    load_command.add_argument("--root", default=root, required=not root,
+                              help="a raiz das tabelas Delta; padrão SERIALIZE_DB_ROOT")
+    load_command.add_argument("--environment", type=_name_argument,
+                              default=os.environ.get("SERIALIZE_DB_ENVIRONMENT", "dev"))
+    load_command.add_argument("--tables", nargs="+", default=None,
+                              help="só estas tabelas do modelo; sem elas, todas, as sem partição "
+                                   "antes das particionadas")
+    load_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None,
+                              help="só estas partições; as tabelas sem partição ficam de fora")
+    load_command.set_defaults(handler=_load)
+
+
 def _add_audit_parser(commands: argparse._SubParsersAction) -> None:
     """``serialize-db audit``: o texto das verificações ou a auditoria da versão publicada."""
     audit_command = commands.add_parser("audit", help="a auditoria de uma tabela")
@@ -191,6 +218,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_run_parser(commands)
     _add_audit_parser(commands)
     _add_publish_parser(commands)
+    _add_load_parser(commands)
 
     schema_command = commands.add_parser("schema", help="os arquivos de esquema dos modelos")
     schema_actions = schema_command.add_subparsers(dest="action", required=True)
@@ -401,13 +429,65 @@ def _publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_load_report(report: LoadReport, loaded: list[str | None]) -> None:
+    """As linhas de uma tabela da carga: as partições gravadas agora, cada diferença, o veredito,
+    as conversões de tipo e o que ficou fora do padrão."""
+    values = ", ".join(str(value) for value in loaded)
+    written = f"{len(loaded)} partição(ões) gravada(s)"
+    print(f"{report.table}: {written}: {values}" if loaded else f"{report.table}: {written}")
+    for partition in report.partitions:
+        if not partition.matches:
+            print(f"  DIFERENÇA em {partition.value}: origem {partition.source_rows} linhas "
+                  f"{dict(partition.source_sums)} não finitos {dict(partition.source_nonfinite)}, "
+                  f"Delta {partition.delta_rows} linhas {dict(partition.delta_sums)} não finitos "
+                  f"{dict(partition.delta_nonfinite)}")
+    verdict = "contagens e somas iguais" if report.matches else "com diferenças"
+    print(f"  {len(report.partitions)} partição(ões) conferida(s), {verdict}")
+    if report.conversions:
+        print(f"  conversões: {', '.join(report.conversions)}")
+    for entry in report.skipped:
+        print(f"  fora do padrão: {entry}")
+
+
+def _load(args: argparse.Namespace) -> int:
+    """A carga inicial de cada tabela pedida, na ordem da carga, e o relatório de cada uma: 1 na
+    partição fora do contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato,
+    na tabela fora do modelo e na origem ausente."""
+    problems = schema.check_models(args.metadata)
+    if problems:
+        print("serialize-db load: modelo fora do contrato:", *problems, sep="\n  ",
+              file=sys.stderr)
+        return 2
+    db = Database(args.root, args.environment, args.metadata)
+    matches = True
+    try:
+        tables = load.load_order(_selected_tables(args.metadata, args.tables))
+        for table in tables:
+            loaded = load.initial_load(db, table, args.source, args.partitions)
+            report = load.load_report(db, table, args.source)
+            _print_load_report(report, loaded)
+            matches = matches and report.matches
+    except (argparse.ArgumentTypeError, FileNotFoundError) as error:
+        print(f"serialize-db load: {error}", file=sys.stderr)
+        return 2
+    except ContractError as error:
+        print(f"serialize-db load: {error}", file=sys.stderr)
+        return 1
+    outside = load.entries_outside_the_model(args.source, args.metadata)
+    if outside:
+        print(f"fora do modelo: {', '.join(outside)}")
+    verdict = "contagens e somas iguais" if matches else "com diferenças"
+    print(f"{len(tables)} tabela(s) conferida(s), {verdict}")
+    return 0 if matches else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Executa a linha de comando e devolve o código de saída.
 
     Cada subcomando guarda a sua função em ``handler`` (``set_defaults`` do ``argparse``).
     """
     args = _build_parser().parse_args(argv)
-    if args.command in ("run", "audit", "publish"):
+    if args.command in ("run", "audit", "publish", "load"):
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     return args.handler(args)
 

@@ -241,15 +241,18 @@ apontam para o mesmo esquema, com significados diferentes.
 
 # Migração da base Parquet para o Delta
 
-[`scripts/migrate_parquet_to_delta.py`](scripts/migrate_parquet_to_delta.py) é a migração
-adiantada da etapa 7: cada partição da base de origem vira um commit numa tabela Delta, e o
-relatório confere contagem e somas por partição. O que ele faz, o que recusa e como se mede a
-partição de `cad_lancamentos` estão no cabeçalho do script. Sobre a base fictícia, gravada em
-pasta local:
+A carga inicial é `serialize_db.load` (a etapa 7): cada partição da base de origem vira um commit
+numa tabela Delta sob `<raiz>/<ambiente>/<tabela>`, e o relatório confere contagem e somas por
+partição. `serialize-db load` roda as duas, e
+[`scripts/migrate_parquet_to_delta.py`](scripts/migrate_parquet_to_delta.py) é a ferramenta de
+operação sobre o pacote, com as linhas, o tempo e o pico de memória de cada partição impressos e o
+`--report` JSON regravado a cada partição gravada. O que a carga faz e o que recusa estão nas
+docstrings do módulo e no cabeçalho do script. Sobre a base fictícia, gravada em pasta local:
 
 ```
 PYTHONPATH=tests uv run python -c "from pathlib import Path; import source_db_projetado; source_db_projetado.write_source(Path('/pasta/db_projetado'))"
-PYTHONPATH=tests uv run python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta
+PYTHONPATH=tests uv run serialize-db load --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta --environment prod
+PYTHONPATH=tests uv run python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta --environment prod
 ```
 
 No ambiente alvo, com a pasta preparada, sobre a cópia da base de produção, uma tabela por vez e
@@ -257,13 +260,13 @@ o relatório em JSON:
 
 ```
 export AWS_DEFAULT_REGION=sa-east-1
-PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --source s3://bucket/prefixo/db_projetado --root s3://bucket/prefixo/delta --tables cad_contratos --report relatorio.json
+PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --environment prod --source s3://bucket/prefixo/db_projetado --root s3://bucket/prefixo/delta --tables cad_contratos --report relatorio.json
 ```
 
-`--partitions AAAA-MM-DD` carrega só as partições listadas, e `--no-sort` grava na ordem da
-origem. A segunda execução não grava nada: a carga recomeça das partições fora do log. A medição
-da gravação com e sem a ordem, descrita no cabeçalho do script, roda por padrão antes da carga de
-cada tabela particionada, também sobre as partições já no log, e `--no-measure` a desliga.
+`--partitions AAAA-MM-DD` carrega só as partições listadas, e `--tables` só as tabelas listadas,
+as sem partição antes das particionadas. A segunda execução não grava nada: a carga recomeça das
+partições fora do log. A auditoria de chaves estrangeiras vem depois da carga, por
+`serialize-db audit --foreign-keys`.
 
 # Exemplos: conectividade com o Redshift
 
