@@ -158,3 +158,13 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   117,667,407,519.194421, no non-finite `Double`. `history`, `snapshot carga-2026-09-24` (12
   tables) and `vacuum` (0 files) ran; `archive` died in the copy of the 2026-06-30 file
   (`aws-s3.md`). The raw report stays out of git. `plan/POC.md`
+- The load through the package again (2026-09-24, `started_at` 16:51:12 UTC, from `main` with
+  #73, the same machine and limits, `memory_limit` 14,036 MiB, the root loaded anew): every table
+  matched, 187,340,509 rows in 21 files; `cad_lancamentos` 19.9 s, 15.3 s, 31.8 s and 19.4 s (9%
+  to 15% less than at 14:16, nothing separates the cause) with the peak at 10,766 MB after the
+  first two partitions and 16,355 MB after 2026-03-31 (17% above the limit, 52% of the machine);
+  `rel_contrato_operacao` up to 11.0 s and 3,780 MB, `cad_operacoes` up to 6.5 s and 2,420 MB,
+  `cad_contratos` up to 5.1 s, the unpartitioned tables 2.1 s to 2.7 s; the audit read the same
+  as at 14:16. `history`, `snapshot`, `vacuum`, the whole `archive` (21 files, `aws-s3.md`) and
+  the publication of the 12 tables (`redshift.md`) followed. The raw report stays out of git.
+  `plan/POC.md`

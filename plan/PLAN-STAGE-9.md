@@ -94,12 +94,14 @@ do `pdoc`. O que a implementação mudou do plano:
   com a compactação, que reescrevem.
 - **`export`** chama `export_snapshot` com `--mode copy` ou `rewrite`; `--version` exporta uma
   versão antiga, com o DDL tirado do esquema daquela versão.
-- **No ambiente alvo** (2026-09-24, sobre a raiz da carga pelo pacote): `history`, `snapshot` e
-  `vacuum` rodaram; `archive` copiou três tabelas e morreu no `CopyObject` do arquivo da partição
-  2026-06-30 de `cad_lancamentos`, abandonado pelo SDK da AWS depois de 3 segundos sem resposta
-  ([`POC.md`](POC.md)), o que levou `Storage.copy` à transferência gerenciada do `boto3`
-  ([etapa 3](PLAN-STAGE-3.md)); a repetição, `export` e `compact` esperam
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- **No ambiente alvo** (2026-09-24, sobre a raiz da carga pelo pacote): na bateria das 12:38,
+  `history`, `snapshot` e `vacuum` rodaram, e `archive` copiou três tabelas e morreu no
+  `CopyObject` do arquivo da partição 2026-06-30 de `cad_lancamentos`, abandonado pelo SDK da AWS
+  depois de 3 segundos sem resposta ([`POC.md`](POC.md)), o que levou `Storage.copy` à
+  transferência gerenciada do `boto3` ([etapa 3](PLAN-STAGE-3.md)); na das 16:51, sobre a raiz
+  recarregada, os quatro rodaram inteiros, e `archive` copiou os 21 arquivos das 12 tabelas, um
+  commit por partição, e moveu a entrada para `archived`, sem imprimir a duração; `export`,
+  `compact` e a duração das rotinas esperam ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **`history`** imprime, por tabela, versão, operação, carimbo e os metadados
   `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`; os commits
   de `vacuum` (`VACUUM START`, `VACUUM END`) e de `OPTIMIZE` aparecem sem metadados.

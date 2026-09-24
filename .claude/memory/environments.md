@@ -72,6 +72,12 @@ minutes, the workgroup's in an hour), Lake Formation and S3 Tables timing out in
 root (`BK-14`). `catalog.py`, `bucket.py` and `space.py` exit with 1 because failed calls count,
 all of them expected readings; no check failed. `plan/POC.md`
 
+The battery of 2026-09-24 at 16:51 UTC (from `main` with #73, the root loaded anew) ran on the
+same machine, 16 vCPUs and 31,383 MB with 28,074 MB available (Python 3.13.15, DuckDB 1.5.5,
+deltalake 1.6.4, pyarrow 25.0.1, `sa-east-1`), and finished the whole `SUITE.md` flow: the load,
+the audit, `history`, `snapshot`, `vacuum`, `archive` and the publication of the whole base;
+`export`, `compact` and the threads probe did not run. `plan/POC.md`
+
 ## The prepared folder and the venv
 
 `pyproject.toml` declares no runtime dependencies and pins the `dev` group (SQLAlchemy, duckdb-engine,
