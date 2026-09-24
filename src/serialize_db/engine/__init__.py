@@ -1,10 +1,10 @@
 """Os motores da execução e a interface comum a eles.
 
 ``Engine`` é o protocolo que ``serialize_db.execution`` usa, com a mesma forma nos dois motores:
-``serialize_db.engine.duckdb`` (etapa 4) e o motor Redshift (etapa 5). Cada motor guarda uma sessão
-por execução sob um ``threading.RLock`` que as primitivas tomam e soltam; ``session()`` dá a
-conexão crua com o lock tomado pelo bloco, reentrante na mesma thread, e ``new_session()`` abre uma
-sessão a mais sobre o mesmo banco, para o que roda em paralelo.
+``serialize_db.engine.duckdb`` (etapa 4) e ``serialize_db.engine.redshift`` (etapa 5). Cada motor
+guarda uma sessão por execução sob um ``threading.RLock`` que as primitivas tomam e soltam;
+``session()`` dá a conexão crua com o lock tomado pelo bloco, reentrante na mesma thread, e
+``new_session()`` abre uma sessão a mais sobre o mesmo banco, para o que roda em paralelo.
 
 Os dados cruzam a fronteira em lotes Arrow: ``stream`` devolve um ``BatchStream`` de
 ``pa.RecordBatch``, e ``loader`` recebe lotes por ``write``; ``query`` devolve a ``pa.Table`` que
@@ -36,7 +36,7 @@ import sqlalchemy as sa
 
 from serialize_db.audit import AuditReport, KeyScope
 
-__all__ = ["BatchStream", "Engine", "Loader", "duckdb"]
+__all__ = ["BatchStream", "Engine", "Loader", "duckdb", "redshift"]
 
 
 class BatchStream(Protocol):

@@ -3023,3 +3023,44 @@ primeira migração. A contagem dos não finitos e a linha do `NaN` viram asser�
 como verdadeiro. Os itens da migração de `cad_lancamentos`, da metade da memória, das `threads`,
 do `Double` não finito e do texto da auditoria saem de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md);
 os relatórios estão em [`readings/`](readings/README.md), e os da migração ficam fora do git.
+
+## O que a implementação das etapas 5 e 8 mostrou
+
+As duas etapas foram implementadas em 2026-09-24 sobre o substituto local de `tests/emulator.py`
+(o moto e um DuckDB em memória), com os casos sem conexão sobre uma conexão de mentira; nenhum
+comando rodou no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O que a
+implementação leu das bibliotecas:
+
+- **`register_files` sem arquivo falha no delta-rs**: `create_write_transaction` com a lista de
+  ações vazia, em `overwrite` de uma partição, levanta `IndexError` (`deltalake` 1.6.4). O
+  `UNLOAD` de um resultado vazio não grava arquivo (leitura de 2026-09-23), então o motor
+  Redshift grava um Parquet sem linha com o esquema do contrato sem a coluna de partição e o
+  registra; a partição vazia entra no log como no motor DuckDB, cujo `COPY` grava o arquivo vazio.
+- **O PyArrow 25.0.1 não expõe a exatidão do mínimo e do máximo do rodapé**: `Statistics` não tem
+  `is_min_value_exact` nem `is_max_value_exact`, que o formato Parquet guarda desde 2.10 para o
+  texto truncado. `file_from_footer` leva ao log o mínimo e o máximo das colunas inteiras,
+  `Double` e de data, e o `null_count` de todas; o texto fica sem os dois, e o leitor não poda por
+  ele. A coluna `pa.json_(pa.string())`, como o PyArrow lê o tipo lógico `JSON`, converte para
+  `string` por `RecordBatch.cast` sem passar pelo `storage`.
+- **`Table.to_metadata(metadata, name=...)` do SQLAlchemy copia `info` e o comentário**: o motor
+  cria a staging `_publicado` pelo `ddl` do modelo com o nome trocado, com a `SORTKEY` e a chave
+  do contrato.
+- **O DuckDB cria a tabela sem esquema no primeiro esquema de `search_path`**, e uma tabela
+  temporária de mesmo nome vence a permanente: o substituto responde ao `ddl` sem esquema como o
+  Redshift respondeu no ambiente alvo em 2026-09-23. O conflito entre duas transações do DuckDB
+  (`TransactionContext Error: Conflict on tuple deletion!`, na segunda a apagar a mesma linha
+  depois do `COMMIT` da primeira) faz as vezes do `1023` do Redshift no substituto, que o mapeia
+  para essa mensagem, e a relação inexistente e a que já existe saem com `42P01` e `42P07`.
+- **O substituto lista `svv_all_columns` pelo DDL lembrado**, na grafia do Redshift (`character
+  varying`, `numeric`, `timestamp without time zone`, `double precision`, `super`), com a largura,
+  a precisão e a escala, porque o `information_schema` do DuckDB não guarda o `n` do `VARCHAR`. A
+  grafia do ambiente alvo é a leitura de `test_reconcile_published_on_the_target`.
+- **O teste da publicação simultânea** pausa toda conexão da segunda publicação depois da leitura
+  da linha de controle, pela porta `driver_connect` do motor, até a primeira confirmar: no
+  substituto a segunda recebe o conflito no `DELETE` da partição, como no ambiente alvo em
+  2026-09-23, e `publish_redshift` o devolve como `ExecutionConflict`.
+- **As contagens**: `tests/test_engine_redshift.py` tem 21 casos (15 sem conexão, 6 `redshift`)
+  e `tests/test_publication.py` 13 (5 sem conexão, 8 `redshift`); os 14 casos `redshift` passaram
+  no substituto local em 2026-09-24, com a publicação simultânea, a primeira publicação sobre os
+  arquivos exportados pelo motor DuckDB e o ciclo `ingest`, `stream`, `loader`, auditoria e
+  exportação pelo registro e pela troca.

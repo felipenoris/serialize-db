@@ -1,16 +1,20 @@
 """A linha de comando ``serialize-db``.
 
 Cada subcomando entra com a etapa que entrega a primitiva por trás dele: ``schema`` é o da
-etapa 1, ``sql`` o da etapa 2, e ``run`` e ``audit`` os da etapa 6. ``schema write`` grava os
-arquivos de esquema dos modelos e ``schema check`` compara os versionados com a geração nova, sem
-gravar; ``sql write`` grava o texto SQL de cada statement do pipeline em cada motor e ``sql check``
-o compara com a geração nova. ``run`` abre uma execução e entrega a ``modulo:funcao`` do pipeline;
-``audit`` imprime o texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a
-versão publicada. Os modelos chegam por ``--metadata modulo:atributo``, o caminho importável do
-``MetaData`` do cliente, e os statements por ``--statements modulo:atributo``, o caminho importável
-do dicionário ``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine``
-têm por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dev``) e
-``SERIALIZE_DB_ENGINE`` (``duckdb``).
+etapa 1, ``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6 e ``publish`` o da etapa 8.
+``schema write`` grava os arquivos de esquema dos modelos e ``schema check`` compara os
+versionados com a geração nova, sem gravar; ``sql write`` grava o texto SQL de cada statement do
+pipeline em cada motor e ``sql check`` o compara com a geração nova. ``run`` abre uma execução e
+entrega a ``modulo:funcao`` do pipeline; ``audit`` imprime o texto das verificações de uma tabela
+(``--sql``) ou roda a auditoria sobre a versão publicada, no motor de ``--engine``; ``publish``
+publica no Redshift fora de uma execução, mostra o estado da publicação (``--status``), cria a
+tabela de controle (``--init``) ou despublica (``--unpublish``). Os modelos chegam por
+``--metadata modulo:atributo``, o caminho importável do ``MetaData`` do cliente, e os statements
+por ``--statements modulo:atributo``, o caminho importável do dicionário ``{nome: statement}`` do
+pipeline. ``--root``, ``--environment`` e ``--engine`` têm por padrão ``SERIALIZE_DB_ROOT``,
+``SERIALIZE_DB_ENVIRONMENT`` (``dev``) e ``SERIALIZE_DB_ENGINE`` (``duckdb``); a configuração do
+Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``, e ``run --redshift`` a dá a uma execução
+no motor DuckDB para ``run.publish_redshift``.
 
 Exemplo:
 
@@ -25,14 +29,21 @@ Exemplo:
     serialize-db run --root s3://bucket/delta --environment prod --partition 2026-08-31 \\
         --metadata pipeline.models:Base.metadata pipeline.mensal:main
     serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
+    serialize-db publish --init
+    serialize-db publish --root s3://bucket/delta --environment prod \\
+        --metadata pipeline.models:Base.metadata --tables cad_lancamentos_projetados
+    serialize-db publish --root s3://bucket/delta --environment prod \\
+        --metadata pipeline.models:Base.metadata --status
 
 O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff
-impresso, e quando a auditoria reprova; 2 no erro de uso e no conflito de execução.
+impresso, e quando a auditoria reprova; 2 no erro de uso, no conflito de execução e na publicação
+sem a tabela de controle.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import os
 import pkgutil
@@ -45,7 +56,7 @@ import sqlalchemy as sa
 from serialize_db import audit, delta, schema, sql
 from serialize_db.audit import AuditReport
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
-from serialize_db.errors import AuditFailed, ContractError, ExecutionConflict
+from serialize_db.errors import AuditFailed, ContractError, ExecutionConflict, PublicationError
 from serialize_db.execution import Database, Execution
 
 __all__ = ["main"]
@@ -118,11 +129,38 @@ def _add_run_parser(commands: argparse._SubParsersAction) -> None:
                      default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb")
     run.add_argument("--partition", type=_name_argument, required=True)
     run.add_argument("--execution-id", type=_name_argument, default=None)
+    run.add_argument("--redshift", action="store_true",
+                     help="dá à execução a configuração das variáveis SERIALIZE_DB_REDSHIFT_*, "
+                          "para run.publish_redshift; com --engine redshift ela já entra")
     run.add_argument("--metadata", required=True, type=_resolve_metadata,
                      help="modulo:atributo com o MetaData dos modelos do pipeline")
     run.add_argument("pipeline", type=_resolve_function,
                      help="modulo:funcao que recebe a execução aberta")
     run.set_defaults(handler=_run)
+
+
+def _add_publish_parser(commands: argparse._SubParsersAction) -> None:
+    """``serialize-db publish``: a publicação no Redshift fora de uma execução, o estado, a
+    tabela de controle e a despublicação; a conexão vem de ``SERIALIZE_DB_REDSHIFT_*``."""
+    publish = commands.add_parser("publish", help="a publicação no Redshift fora de uma execução")
+    publish.add_argument("--metadata", type=_resolve_metadata, default=None,
+                         help="modulo:atributo com o MetaData dos modelos; dispensado por --init")
+    publish.add_argument("--root", default=os.environ.get("SERIALIZE_DB_ROOT"))
+    publish.add_argument("--environment", type=_name_argument,
+                         default=os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev")
+    publish.add_argument("--tables", nargs="+", default=None,
+                         help="as tabelas a publicar ou despublicar; sem ela, todas do modelo")
+    publish.add_argument("--max-workers", type=int, default=1)
+    publish.add_argument("--execution-id", type=_name_argument, default=None,
+                         help="o identificador gravado na linha de controle; sem ele, "
+                              "publicacao-<AAAA-MM-DD>-<uuid8>")
+    publish.add_argument("--init", action="store_true",
+                         help="cria a tabela de controle serialize_db_publications, uma vez")
+    publish.add_argument("--status", action="store_true",
+                         help="mostra a versão publicada e a atual de cada tabela")
+    publish.add_argument("--unpublish", action="store_true",
+                         help="despublica as tabelas: DROP TABLE e a linha de controle")
+    publish.set_defaults(handler=_publish)
 
 
 def _add_audit_parser(commands: argparse._SubParsersAction) -> None:
@@ -152,6 +190,7 @@ def _build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     _add_run_parser(commands)
     _add_audit_parser(commands)
+    _add_publish_parser(commands)
 
     schema_command = commands.add_parser("schema", help="os arquivos de esquema dos modelos")
     schema_actions = schema_command.add_subparsers(dest="action", required=True)
@@ -216,9 +255,14 @@ def _sql_check(args: argparse.Namespace) -> int:
 def _run(args: argparse.Namespace) -> int:
     """Abre a execução, entrega-a ao pipeline e devolve o código pelo resultado: 1 na auditoria
     reprovada, 2 no conflito e no motor que não serve."""
+    redshift = None
+    if args.redshift or args.engine == "redshift":
+        from serialize_db.engine.redshift import RedshiftConfig
+
+        redshift = RedshiftConfig.from_environment()
     try:
         execution = Execution(Database(args.root, args.environment, args.metadata), args.engine,
-                              args.partition, args.execution_id)
+                              args.partition, args.execution_id, redshift=redshift)
     except ContractError as error:
         print(f"serialize-db run: {error}", file=sys.stderr)
         return 2
@@ -249,8 +293,18 @@ def _print_report(report: AuditReport) -> None:
         print(f"partição {value}: {totals}")
 
 
+def _audit_engine(args: argparse.Namespace, db: Database, execution_id: str) -> object:
+    """O sandbox próprio da auditoria: o motor de ``--engine``."""
+    if args.engine == "redshift":
+        from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
+
+        return RedshiftEngine(RedshiftConfig.from_environment(), execution_id, db.storage,
+                              db.staging_prefix(execution_id))
+    return DuckDBEngine(DuckDBConfig(), execution_id, db.storage)
+
+
 def _audit_published(args: argparse.Namespace, table: sa.Table) -> int:
-    """A auditoria da versão publicada, num sandbox DuckDB próprio."""
+    """A auditoria da versão publicada, num sandbox próprio do motor de ``--engine``."""
     db = Database(args.root, args.environment, args.metadata)
     uri = db.uri(table)
     if not delta.table_exists(uri, db.storage):
@@ -264,7 +318,7 @@ def _audit_published(args: argparse.Namespace, table: sa.Table) -> int:
         if delta.table_exists(target, db.storage):
             target_version = delta.open_table(target, db.storage).version()
             referenced[constraint.referred_table.name] = (target, target_version)
-    with DuckDBEngine(DuckDBConfig(), f"auditoria-{uuid.uuid4().hex[:8]}", db.storage) as engine:
+    with _audit_engine(args, db, f"auditoria-{uuid.uuid4().hex[:8]}") as engine:
         engine.ingest(table, uri, version, args.partitions, materialize=True)
         report = engine.audit(table, args.partitions, uri, version, args.foreign_keys,
                               args.key_scope, referenced)
@@ -288,11 +342,63 @@ def _audit(args: argparse.Namespace) -> int:
     if not args.root:
         print("serialize-db audit: sem --sql, informe --root ou SERIALIZE_DB_ROOT", file=sys.stderr)
         return 2
-    if args.engine != "duckdb":
-        print("serialize-db audit: o motor redshift é a etapa 5, ainda não implementada",
+    return _audit_published(args, table)
+
+
+def _selected_tables(metadata: sa.MetaData, names: list[str] | None) -> list[sa.Table]:
+    """As tabelas de ``--tables`` no modelo, ou todas; um nome fora do modelo é erro de uso."""
+    if names is None:
+        return list(metadata.sorted_tables)
+    tables = []
+    for name in names:
+        table = metadata.tables.get(name)
+        if table is None:
+            raise argparse.ArgumentTypeError(f"a tabela {name} não está nos modelos")
+        tables.append(table)
+    return tables
+
+
+def _publish(args: argparse.Namespace) -> int:
+    """``--init`` cria a tabela de controle; ``--status`` mostra o estado; ``--unpublish``
+    despublica; sem os três, publica as tabelas. 2 no erro de uso, sem a tabela de controle e no
+    conflito."""
+    from serialize_db import publication
+    from serialize_db.engine.redshift import RedshiftConfig
+
+    config = RedshiftConfig.from_environment()
+    if args.init:
+        publication.create_publications_table(config)
+        print(f"{config.schema}.{publication.CONTROL_TABLE} criada")
+        return 0
+    if not args.root or args.metadata is None:
+        print("serialize-db publish: informe --metadata e --root ou SERIALIZE_DB_ROOT",
               file=sys.stderr)
         return 2
-    return _audit_published(args, table)
+    db = Database(args.root, args.environment, args.metadata)
+    try:
+        tables = _selected_tables(args.metadata, args.tables)
+        if args.status:
+            for status in publication.publication_status(db, config):
+                print(f"{status.table}: publicada {status.published_version}, atual "
+                      f"{status.current_version}, pendentes {list(status.pending_partitions)}")
+            return 0
+        if args.unpublish:
+            for name, version in publication.unpublish_redshift(db, config, tables).items():
+                print(f"{name}: {'não estava publicada' if version is None else version}")
+            return 0
+        today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+        execution_id = args.execution_id or f"publicacao-{today}-{uuid.uuid4().hex[:8]}"
+        results = publication.publish_redshift(db, config, tables, execution_id,
+                                               args.max_workers)
+        for name, version in results.items():
+            print(f"{name}: versão {version}")
+    except (argparse.ArgumentTypeError, PublicationError) as error:
+        print(f"serialize-db publish: {error}", file=sys.stderr)
+        return 2
+    except ExecutionConflict as error:
+        print(f"serialize-db publish: conflito: {error}", file=sys.stderr)
+        return 2
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -301,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
     Cada subcomando guarda a sua função em ``handler`` (``set_defaults`` do ``argparse``).
     """
     args = _build_parser().parse_args(argv)
-    if args.command in ("run", "audit"):
+    if args.command in ("run", "audit", "publish"):
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     return args.handler(args)
 

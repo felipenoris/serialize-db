@@ -83,3 +83,13 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
 - `timestamp[us, tz=...]` to naive `timestamp[us]` passes with `safe=True` and keeps the UTC
   instant as wall time; naive to tz-aware assumes UTC. `cast` accepts both today (pending decision
   in `plan/OPEN_QUESTIONS.md`). `plan/POC.md`
+
+## Footer statistics and the JSON logical type read by pyarrow 25 (2026-09-24)
+
+- `pyarrow._parquet.Statistics` in 25.0.1 has `has_min_max`, `min`, `max`, `null_count` and no
+  `is_min_value_exact`/`is_max_value_exact`, so a string's min and max cannot be told exact from
+  truncated; date statistics come back as `datetime.date`, strings as `str`. A Parquet `JSON`
+  logical type column reads as `pa.json_(pa.string())` (`extension<arrow.json>`), and
+  `RecordBatch.cast` to a `string` field converts it directly; DuckDB's `to_arrow_table()` of a
+  `JSON` column gives a plain `string`, and pyarrow writes it as a plain `String`, so the stand-in's
+  `UNLOAD` file of a `SUPER` column lacks the logical type the target writes. `plan/POC.md`

@@ -557,3 +557,13 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   stats finished in 5.4 ms before the thread got the GIL, and the ratio assertion failed. The
   thread now sets an event on its first iteration and the caller waits for it (the rule
   "A concurrency test is repeated before it is trusted" caught it on the repetition).
+
+- **A test over a fake connection runs where no credential exists** (2026-09-24). The six `local`
+  cases of `tests/test_engine_redshift.py` that run `COPY` or `UNLOAD` through `FakeConnection`
+  built the engine on a `RedshiftConfig` without `iam_role`, so `credentials_clause` asked `boto3`
+  for a credential; the session's container exports `AWS_ACCESS_KEY_ID` and
+  `AWS_SECRET_ACCESS_KEY`, the three pre-commit rounds passed, and the GitHub runner, with none,
+  failed them with `SandboxError` in the first run of PR #71. The test config now carries
+  `iam_role="default"`, the `boto3` path is exercised only by `test_credentials_clause_and_mask`
+  with variables it sets itself, and the pre-commit rounds run with the `AWS_*` variables
+  removed (the rule "Before a commit").

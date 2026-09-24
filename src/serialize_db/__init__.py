@@ -28,6 +28,7 @@ __all__ = [
     "errors",
     "execution",
     "main",
+    "publication",
     "resources",
     "schema",
     "sql",

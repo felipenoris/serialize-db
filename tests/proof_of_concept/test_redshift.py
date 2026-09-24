@@ -56,7 +56,6 @@ from deltalake.transaction import AddAction
 from redshift_connector.utils.oids import get_datatype_name
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql.elements import quoted_name
-from sqlalchemy.sql.visitors import iterate
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
 from client_model import Base as ClientBase
@@ -71,6 +70,7 @@ from conftest import (
 )
 from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
 from serialize_db import audit, schema, sql
+from serialize_db.engine import redshift
 
 pytestmark = [pytest.mark.redshift, pytest.mark.s3]
 
@@ -1014,20 +1014,11 @@ def test_parallel_copy_and_unload_on_two_connections(
 
 
 def unload_text(select: str, destination: str, credentials: str) -> str:
-    """O ``UNLOAD`` da etapa 5: o ``select`` em Parquet para ``destination``, com manifesto verboso
-    e ``PARALLEL OFF``.
-
-    O ``select`` entra como literal, com a contrabarra e a aspa simples dobradas: o literal do
-    ``UNLOAD`` trata a contrabarra como escape (o ``\\'OH\\'`` da documentação), e o ``select`` que
-    o dialeto já escapou chega intacto só assim. ``PARALLEL OFF`` grava em série, na ordem do
-    ``ORDER BY`` (``plan/redshift.md``). O texto devolvido carrega a cláusula de credenciais: ele
-    vai só para ``session.execute``, nunca para o relatório.
-    """
-    escaped = select.replace("\\", "\\\\").replace("'", "''")
-    return (
-        f"UNLOAD ('{escaped}') TO '{destination}/' {credentials} "
-        "FORMAT AS PARQUET MANIFEST VERBOSE PARALLEL OFF"
-    )
+    """O ``UNLOAD`` do ``stream`` da etapa 5, pelo motor: o ``select`` em Parquet para
+    ``destination``, com manifesto verboso e ``PARALLEL OFF``, a contrabarra e a aspa simples
+    dobradas no literal (leituras de 2026-09-23). O texto devolvido carrega a cláusula de
+    credenciais: ele vai só para ``session.execute``, nunca para o relatório."""
+    return redshift.unload_text(select, destination, credentials, parallel=False)
 
 
 def read_manifest(location: S3Location, destination: str) -> dict | None:
@@ -1089,17 +1080,11 @@ def read_unloaded(location: S3Location, entries: list[dict]) -> pa.Table:
 
 
 def unbound_parameters(statement: sa.sql.ClauseElement) -> list[str]:
-    """Os ``bindparam`` do statement ainda sem valor: o guarda antes do ``literal_binds``.
-
-    Sob ``literal_binds``, ``compiled.binds`` sai vazio e o ``bindparam`` sem valor vira ``NULL``
-    calado, até num ``IN`` de lista (sonda local de 2026-09-23); o ``required`` de cada
-    ``BindParameter`` do statement é o estado que marca a falta.
-    """
-    names = []
-    for element in iterate(statement):
-        if isinstance(element, sa.BindParameter) and element.required:
-            names.append(element.key)
-    return names
+    """Os ``bindparam`` do statement ainda sem valor, pelo guarda do pacote
+    (``sql.required_parameters``): sob ``literal_binds``, ``compiled.binds`` sai vazio e o
+    ``bindparam`` sem valor vira ``NULL`` calado, até num ``IN`` de lista (sonda local de
+    2026-09-23)."""
+    return sorted(sql.required_parameters(statement))
 
 
 def footer_statistics(parquet: pq.ParquetFile, column: str) -> list[dict]:

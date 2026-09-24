@@ -42,7 +42,9 @@ O `uv sync` instala em `.venv/` o Python 3.13, o pacote com as dependências de 
 `pyproject.toml` (`sqlalchemy`, `pyarrow`, `deltalake`, `duckdb` e os dialetos `duckdb-engine` e
 `sqlalchemy-redshift`, que compilam o texto SQL de cada motor) e o grupo `dev`: o `pytest` e as
 bibliotecas dos testes (`boto3`, `pandas`, `redshift-connector`, `sqlglot`), fixadas nas versões
-usadas pelos documentos em `plan/`. O grupo `docs` traz o
+usadas pelos documentos em `plan/`. O extra `redshift` fixa o driver do motor Redshift e da
+publicação, `redshift-connector==2.1.17` (`uv sync --extra redshift`; o grupo `dev` já o traz
+para os testes). O grupo `docs` traz o
 `pdoc`, e o grupo `emulator` traz o `moto` e o `flask` do substituto local das suítes do ambiente
 alvo (seção "Testes no substituto local"), fora do `dev` para que os testes padrão não os instalem.
 `UV_PYTHON_DOWNLOADS=automatic` só é necessário onde o `uv` está configurado para não baixar o
@@ -98,11 +100,14 @@ uv run python -c "import duckdb; duckdb.connect(config={'extension_directory': '
 
 `SERIALIZE_DB_TEST_EMULATOR` roda as suítes que só rodam no ambiente alvo sobre o substituto de
 [`tests/emulator.py`](tests/emulator.py): o moto no lugar do S3 e um DuckDB em memória no lugar do
-Redshift, sem credencial da AWS e sem gravar em disco. A sessão define as raízes das suítes S3 e
+Redshift, sem credencial da AWS e sem gravar em disco. Os casos `redshift` do motor Redshift e da
+publicação (`tests/test_engine_redshift.py`, `tests/test_publication.py`) rodam nele do mesmo
+jeito, com a conexão do substituto no lugar do driver. A sessão define as raízes das suítes S3 e
 Redshift. A esteira do GitHub não roda o substituto: ele roda na máquina de quem desenvolve, antes
 do push de uma mudança que toque o que essas suítes cobrem (`serialize_db.storage` e
-`serialize_db.delta` no S3, `serialize_db.audit` no Redshift, `tests/conftest.py`,
-`tests/emulator.py` e as próprias suítes).
+`serialize_db.delta` no S3, `serialize_db.audit`, `serialize_db.engine.redshift` e
+`serialize_db.publication` no Redshift, `tests/conftest.py`, `tests/emulator.py` e as próprias
+suítes).
 
 O moto e o `flask` vêm do grupo `emulator`, e `uv run --group emulator` os instala no `.venv/` antes
 de rodar; sem eles, a sessão para com a instrução. As extensões `httpfs`, `delta` e `aws` do DuckDB
@@ -118,7 +123,7 @@ done
 As três suítes do ambiente alvo no substituto:
 
 ```
-SERIALIZE_DB_TEST_EMULATOR=1 uv run --group emulator pytest tests/proof_of_concept/test_s3.py tests/proof_of_concept/test_redshift.py tests/proof_of_concept/test_redshift_transactions.py
+SERIALIZE_DB_TEST_EMULATOR=1 uv run --group emulator pytest tests/proof_of_concept/test_s3.py tests/proof_of_concept/test_redshift.py tests/proof_of_concept/test_redshift_transactions.py tests/test_engine_redshift.py tests/test_publication.py
 ```
 
 Com `SERIALIZE_DB_TEST_LOCAL_ROOT` também, a sessão roda todos os testes, e os testes `s3` do

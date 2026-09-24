@@ -67,8 +67,9 @@ export UV_MANAGED_PYTHON=1
 export UV_LINK_MODE=copy
 
 rm -rf .venv
-# Resolve e instala o pacote, as dependências de execução e todos os grupos (dev inclusive).
-uv sync --all-groups
+# Resolve e instala o pacote, as dependências de execução, os extras (o driver do Redshift) e
+# todos os grupos (dev inclusive).
+uv sync --all-groups --all-extras
 
 # O uv cria links absolutos: .venv/bin/python para o interpretador e .python/cpython-3.13-<plataforma>
 # para a pasta da versão completa. Links relativos sobrevivem à mudança de caminho da pasta (o `home` de

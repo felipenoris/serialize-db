@@ -293,6 +293,12 @@ class Storage:
         rodapé é lido por GET de intervalo."""
         return self.filesystem.open_input_file(self._full(path))
 
+    def open_output_stream(self, path: str) -> object:
+        """O arquivo aberto para escrita sequencial, como ``pq.ParquetWriter`` o recebe: no S3, um
+        upload em partes que termina no ``close``; na pasta local, a pasta do arquivo é criada."""
+        self._local_parent(path)
+        return self.filesystem.open_output_stream(self._full(path))
+
     # ------------------------------------------------------------ a escrita condicional
 
     def read_text(self, path: str) -> tuple[str, str]:

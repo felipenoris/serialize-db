@@ -21,6 +21,14 @@ dependencies = [
     "sqlalchemy-redshift==1.0.0",
 ]
 
+# O driver do Redshift entra pelo extra redshift, fixado porque o motor lê o type_modifier do
+# row_desc privado do driver (serialize_db.engine.redshift); o pacote sem o extra roda o motor
+# DuckDB e tudo o que não toca o Redshift.
+[project.optional-dependencies]
+redshift = [
+    "redshift-connector==2.1.17",
+]
+
 [project.scripts]
 serialize-db = "serialize_db:main"
 

@@ -777,3 +777,24 @@ partition's files of the snapshot version with `Storage.copy` and registers them
 DuckDB's limit (the DuckDB `COPY` rewrite stays with `export --mode rewrite` and compaction). The
 `deep_copy` code changes when stage 9 starts. `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`,
 `plan/OPEN_QUESTIONS.md`
+
+## The implementation of stages 5 and 8 (2026-09-24)
+
+On 2026-09-24 the user asked to implement stages 5 and 8 and answered three questions before the
+work started: the publication's connection is an explicit `RedshiftConfig` given by the client,
+`Execution(..., redshift=RedshiftConfig(...))`, and `publish_redshift` without it refuses with
+`PublicationError` (the assistant's reading, stated in the report: the `"redshift"` engine
+without the argument reads the `SERIALIZE_DB_REDSHIFT_*` variables and keeps that configuration
+on the execution; `serialize-db run --engine redshift` passes it, and `--redshift` passes it to a
+DuckDB execution); the commands of the new `redshift`-marked suites go in the report, and the user
+adds them to `SUITE.md`; and the `redshift` extra pins `redshift-connector==2.1.17`, the version
+installed in the development venv, whose source has the same `ps["row_desc"]` and `type_modifier`
+read in 2.1.16. The assistant's choices, named in the report: the audit's `_publicado` staging
+with every contract column, loaded only when the join runs (a positional `COPY` cannot load only
+the key columns); the `INSERT` from the staging with an explicit column list; the loader's
+temporary staging with `JSON_PARSE` for a table with a JSON column; the stream schema always from
+the `row_desc` of `select * from (...) limit 0`; `PARALLEL OFF` up to 5,000,000 rows, unmeasured;
+string min and max left out of the log for `UNLOAD` files; an empty partition registered through
+an empty file the engine writes; and the stage 8 suite publishing in a `poc<id>` environment,
+creating the control table only when absent and dropping it only in that case. `plan/PLAN-STAGE-5.md`,
+`plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-8.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`

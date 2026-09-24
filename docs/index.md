@@ -33,10 +33,11 @@ arquivos removidos e a tabela de mapeamento de tipos. A referência de cada mód
 O que já existe são o módulo de esquema, `serialize_db.schema`, o de texto SQL,
 `serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`, a camada
 de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3, a auditoria,
-`serialize_db.audit`, o motor DuckDB, `serialize_db.engine.duckdb`, e a execução,
-`serialize_db.execution`, com `serialize-db run` e `serialize-db audit`. O motor Redshift, a
-publicação para os clientes no Redshift, a carga inicial e a operação são as etapas seguintes do
-plano, na pasta `plan/` do repositório.
+`serialize_db.audit`, os dois motores, `serialize_db.engine.duckdb` e
+`serialize_db.engine.redshift`, a execução, `serialize_db.execution`, com `serialize-db run` e
+`serialize-db audit`, e a publicação para os clientes no Redshift, `serialize_db.publication`,
+com `serialize-db publish`. A carga inicial e a operação são as etapas seguintes do plano, na
+pasta `plan/` do repositório.
 
 ## Instalação
 
@@ -405,9 +406,82 @@ controle e as colunas `Double` com `NaN` ou infinito, que a publicação grava s
 `serialize_db.audit.audit_sql(table, "redshift")` imprime o texto de cada verificação, para
 depuração.
 
-`engine.export_partition(table, uri, value, metadata, mode)` leva a partição auditada ao Delta:
-`"register"` registra o arquivo que o `COPY` do DuckDB gravou, depois das conferências do rodapé, e
-`"rewrite"` grava pelo `write_deltalake`.
+`engine.export_partition(table, uri, value, metadata, expected_rows, columns_without_min_max)`
+leva a partição auditada ao Delta: o motor DuckDB registra o arquivo que o seu `COPY` gravou, e o
+motor Redshift os arquivos do seu `UNLOAD`, depois das conferências do rodapé; a partição com uma
+coluna `Double` de valor não finito sai do Redshift por `serialize_db.delta.publish_partition`,
+com um aviso no log, porque o rodapé do `UNLOAD` deixa o `NaN` fora do máximo.
+
+### Rodar o pipeline no sandbox Redshift
+
+`serialize_db.engine.redshift.RedshiftEngine` é o mesmo sandbox nas tabelas `exec_<id>_*` do
+esquema do Redshift: a conexão vem de `serialize_db.engine.redshift.RedshiftConfig`, a credencial
+temporária do workgroup serverless ou o par informado, com o `USE` no banco do datashare e o
+`search_path` no esquema; `RedshiftConfig.from_environment()` a lê das variáveis
+`SERIALIZE_DB_REDSHIFT_*`. O driver vem do extra `redshift`
+(`uv sync --extra redshift`, ou `--all-extras`). `ingest` carrega as partições por
+`COPY ... MANIFEST`, `stream` lê os arquivos de um `UNLOAD` no `staging/` da execução, `loader`
+grava um Parquet no `staging/` e o carrega por `COPY` no `close`, e `export_partition` registra os
+arquivos do `UNLOAD` na pasta da partição:
+
+```python
+from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
+
+config = RedshiftConfig(workgroup="controladoria-wg", database="dev",
+                        share_database="datalake_rw_shared", schema="sbx_aco_decon",
+                        region="sa-east-1")
+with RedshiftEngine(config, "exec-2026-09-05", storage, "prod/staging/exec-2026-09-05") as engine:
+    engine.ingest(Lancamento.__table__, uri, version, partitions=["2026-08-31"])
+    with engine.stream(sa.select(Lancamento)) as stream, \
+            engine.loader(Projetado.__table__) as loader:
+        for batch in stream:                 # os lotes vêm dos arquivos do UNLOAD
+            loader.write(project(batch))
+```
+
+Na execução, `Execution(db, "redshift", "2026-08-31", redshift=config)` constrói esse motor; sem
+`redshift`, a configuração vem das variáveis. Um texto SQL pronto cita as tabelas do sandbox pelo
+sentinela `{prefix}` (`"{prefix}cad_lancamentos"`), que o motor troca pelo prefixo da execução. O
+`COPY` e o `UNLOAD` levam as credenciais da sessão `boto3`, ou o `IAM_ROLE` da configuração; o
+texto que as carrega nunca vai a log, e `serialize_db.engine.redshift.mask` o mascara.
+
+### Publicar para os clientes no Redshift
+
+`serialize_db.publication` publica as tabelas `<ambiente>_<tabela>` no esquema do Redshift a
+partir do Delta, uma transação por tabela: a linha de `serialize_db_publications` lida no início
+diz a versão publicada, `serialize_db.delta.version_diff` diz as partições alteradas desde ela,
+cada uma entra por `COPY ... MANIFEST` numa staging temporária e `INSERT ... SELECT`, e a linha de
+controle é gravada por último. A tabela de controle é criada uma vez, pelo usuário:
+
+```shell
+serialize-db publish --init
+```
+
+Numa execução, `run.publish_redshift(table)` publica a versão que `run.publish` acabou de gravar,
+com a configuração `redshift` que a execução recebeu; fora dela, `serialize-db publish` publica a
+versão atual, mostra o estado e despublica:
+
+```python
+with Execution(db, "duckdb", "2026-08-31", redshift=RedshiftConfig.from_environment()) as run:
+    ...
+    run.publish(Projetado.__table__, partitions=["2026-08-31"])
+    run.publish_redshift(Projetado.__table__)        # só as partições alteradas
+```
+
+```shell
+serialize-db publish --root s3://bucket/projeto/delta --environment prod \
+    --metadata pipeline.models:Base.metadata --tables cad_lancamentos_projetados
+serialize-db publish --root s3://bucket/projeto/delta --environment prod \
+    --metadata pipeline.models:Base.metadata --status
+serialize-db publish --root s3://bucket/projeto/delta --environment prod \
+    --metadata pipeline.models:Base.metadata --unpublish --tables cad_lancamentos_projetados
+```
+
+Sem a tabela de controle, a publicação para com `serialize_db.errors.PublicationError` antes de
+qualquer escrita; duas publicações da mesma tabela ao mesmo tempo terminam com a segunda em
+`serialize_db.errors.ExecutionConflict`, sem repetição; uma coluna anulável nova no modelo entra
+na tabela publicada por `ALTER TABLE ... ADD COLUMN`, e um diff destrutivo (coluna removida, tipo
+ou largura de `VARCHAR(n)` que mudou) despublica a tabela e a recria inteira na publicação
+seguinte.
 
 ## Retenção dos arquivos removidos
 

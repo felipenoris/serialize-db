@@ -12,10 +12,15 @@ e nada é gravado em disco.
 O substituto confere o código Python dos testes. Cada recusa e cada comportamento que ele imita é
 uma leitura do ambiente alvo registrada em ``plan/POC.md``: a contrabarra como escape nos literais
 de texto, o ``UNLOAD`` de um resultado vazio sem manifesto nem arquivo, o ``is_valid_json`` que
-recusa ``SUPER`` e o ``ALTER COLUMN ... TYPE`` que o esquema do datashare recusa. No resto, o
-DuckDB responde do jeito dele. Os bloqueios entre transações, a criptografia do bucket, a Data
-API, as credenciais do contêiner, o proxy e a comparação do ``NaN`` numa varredura de tabela, que
-no DuckDB segue a regra do PostgreSQL e no Redshift não, só o ambiente alvo mostra.
+recusa ``SUPER`` e o ``ALTER COLUMN ... TYPE`` que o esquema do datashare recusa. A relação
+inexistente sai com o SQLSTATE ``42P01`` e a que já existe com ``42P07``, os do PostgreSQL, e o
+conflito entre duas transações do DuckDB sai com o ``1023`` do Redshift, a violação de isolamento
+serializável que a segunda publicação da mesma partição recebeu no ambiente alvo em 2026-09-23;
+``svv_all_columns`` lista as colunas com os tipos e as larguras do DDL que criou cada tabela, na
+grafia do Redshift. No resto, o DuckDB responde do jeito dele. Os bloqueios entre transações, a
+criptografia do bucket, a Data API, as credenciais do contêiner, o proxy e a comparação do ``NaN``
+numa varredura de tabela, que no DuckDB segue a regra do PostgreSQL e no Redshift não, só o ambiente
+alvo mostra.
 
 Duas variáveis provocam falhas, para rodar lado a lado o código anterior e o corrigido de um
 tratamento de falha:
@@ -104,11 +109,39 @@ SYSTEM_TABLES = (
     "AS t(database_name, database_type, database_isolation_level)",
     f"CREATE OR REPLACE TEMP VIEW svv_all_schemas AS SELECT '{SHARE_DATABASE}' AS database_name, "
     "schema_name, 'shared' AS schema_type FROM information_schema.schemata",
-    f"CREATE OR REPLACE TEMP VIEW svv_all_columns AS SELECT '{SHARE_DATABASE}' AS database_name, "
-    "table_schema AS schema_name, table_name, column_name, data_type, "
-    "character_maximum_length, numeric_precision, numeric_scale, ordinal_position "
-    "FROM information_schema.columns",
+    "CREATE OR REPLACE TEMP VIEW svv_all_columns AS SELECT * FROM main.emulador_colunas",
 )
+
+# As colunas de cada tabela criada, como svv_all_columns as lista no Redshift: o DDL lembrado dá o
+# tipo na grafia do Redshift, a largura do VARCHAR e a precisão e a escala do NUMERIC, que o
+# information_schema do DuckDB não guarda.
+COLUMNS_TABLE = (
+    "CREATE TABLE main.emulador_colunas (database_name VARCHAR, schema_name VARCHAR, "
+    "table_name VARCHAR, column_name VARCHAR, data_type VARCHAR, "
+    "character_maximum_length INTEGER, numeric_precision INTEGER, numeric_scale INTEGER, "
+    "ordinal_position INTEGER)"
+)
+
+# O nome de cada tipo do DDL em svv_all_columns, sem o parâmetro; o VARCHAR, o CHAR e o NUMERIC
+# levam a largura, ou a precisão e a escala, nas colunas próprias.
+DATA_TYPES = {
+    "BIGINT": "bigint",
+    "SMALLINT": "smallint",
+    "INTEGER": "integer",
+    "INT": "integer",
+    "BOOLEAN": "boolean",
+    "DOUBLE PRECISION": "double precision",
+    "REAL": "real",
+    "DATE": "date",
+    "TIMESTAMP": "timestamp without time zone",
+    "TIMESTAMPTZ": "timestamp with time zone",
+    "VARCHAR": "character varying",
+    "CHARACTER VARYING": "character varying",
+    "CHAR": "character",
+    "DECIMAL": "numeric",
+    "NUMERIC": "numeric",
+    "SUPER": "super",
+}
 
 # O OID de cada tipo do DuckDB no protocolo do Redshift; um tipo fora da lista sai como texto (25).
 # O JSON do DuckDB faz as vezes do SUPER, de OID 4000.
@@ -386,6 +419,8 @@ class Connection:
         self.in_transaction = False
         # As linhas do último UNLOAD que passou, o que pg_last_unload_count() devolve.
         self.last_unload_count = 0
+        # O esquema em que um CREATE TABLE sem esquema cai: o de SET search_path.
+        self.schema = "main"
 
     def cursor(self) -> Cursor:
         """Um cursor novo nesta conexão."""
@@ -416,6 +451,7 @@ def new_database() -> RedshiftDatabase:
     """Um DuckDB em memória com o esquema do substituto."""
     connection = duckdb.connect()
     connection.execute(f"CREATE SCHEMA {SCHEMA}")
+    connection.execute(COLUMNS_TABLE)
     return RedshiftDatabase(connection)
 
 
@@ -443,6 +479,20 @@ def first_line(error: Exception) -> str:
     return lines[0] if lines else type(error).__name__
 
 
+def duckdb_error(error: Exception) -> redshift_connector.ProgrammingError:
+    """O erro do DuckDB como erro do servidor: a relação inexistente com ``42P01`` e a que já
+    existe com ``42P07``, os SQLSTATE do PostgreSQL; o conflito entre duas transações com a
+    mensagem do ``1023`` do Redshift; o resto com ``XX000``."""
+    message = first_line(error)
+    if "does not exist" in message:
+        return server_error(message, "42P01")
+    if "already exists" in message:
+        return server_error(message, "42P07")
+    if isinstance(error, duckdb.TransactionException) or "Conflict on" in message:
+        return server_error(f"1023 Serializable isolation violation on table: {message}")
+    return server_error(message)
+
+
 def run_command(connection: Connection, operation: str, args: object, paramstyle: str) -> Result:
     """Roda um comando do Redshift: a falha provocada, os comandos de sessão, o ``COPY``, o
     ``UNLOAD`` e, no resto, o SQL traduzido para o DuckDB."""
@@ -461,9 +511,14 @@ def run_command(connection: Connection, operation: str, args: object, paramstyle
         return copy(connection, text)
     if first_word == "UNLOAD":
         return unload(connection, text)
+    result = run_in_duckdb(connection, text, args, paramstyle, first_word)
     if first_word == "CREATE":
-        remember_ddl(connection.database, without_physical_clauses(text))
-    return run_in_duckdb(connection, text, args, paramstyle, first_word)
+        remember_ddl(connection, without_physical_clauses(text))
+    if first_word == "DROP":
+        forget_ddl(connection, text)
+    if first_word == "ALTER":
+        remember_added_column(connection, text)
+    return result
 
 
 def raise_provoked_failure(text: str) -> None:
@@ -488,6 +543,7 @@ def session_command(connection: Connection, text: str) -> Result | None:
     if search_path:
         schema = search_path.group(1).strip()
         connection.duckdb_connection.execute(f"SET search_path = '{schema}'")
+        connection.schema = schema
         return Result()
 
     if re.fullmatch(r"SELECT\s+pg_backend_pid\(\)", text, re.IGNORECASE):
@@ -526,7 +582,7 @@ def run_in_duckdb(connection: Connection, text: str, args: object, paramstyle: s
         else:
             result = query_result(cursor)
     except duckdb.Error as error:
-        raise server_error(first_line(error)) from None
+        raise duckdb_error(error) from None
 
     # A transação aberta por BEGIN, que o rollback da limpeza desfaz.
     if first_word == "BEGIN":
@@ -692,28 +748,108 @@ def table_key(name: str) -> str:
     return name.split(".")[-1].strip('"').lower()
 
 
-def remember_ddl(database: RedshiftDatabase, text: str) -> None:
-    """Guarda o ``n`` de cada ``VARCHAR(n)`` e as colunas ``SUPER`` de um ``CREATE TABLE``, que o
-    ``COPY`` confere."""
+def table_schema(connection: Connection, name: str) -> str:
+    """O esquema de um nome de tabela: o qualificado, ou o da conexão."""
+    parts = name.split(".")
+    if len(parts) > 1:
+        return parts[-2].strip('"').lower()
+    return connection.schema.strip('"').lower()
+
+
+def column_definitions(body: str) -> list[tuple[str, str]]:
+    """O nome e o texto do tipo de cada coluna de um ``CREATE TABLE``; uma restrição de tabela
+    fica de fora."""
+    definitions = []
+    for definition in split_top_level(body):
+        parts = definition.strip().split(None, 1)
+        if len(parts) < 2 or parts[0].upper() in ("PRIMARY", "UNIQUE", "CONSTRAINT", "FOREIGN"):
+            continue
+        definitions.append((parts[0].strip('"').lower(), parts[1]))
+    return definitions
+
+
+def redshift_data_type(kind: str) -> tuple[str, int | None, int | None, int | None]:
+    """O tipo de uma coluna do DDL como ``svv_all_columns`` o lista: o nome na grafia do Redshift,
+    a largura do texto e a precisão e a escala do ``NUMERIC``; um tipo fora da lista sai como
+    está."""
+    upper = kind.strip().upper()
+    # O nome mais longo primeiro: DOUBLE PRECISION antes de DOUBLE, CHARACTER VARYING antes de
+    # CHARACTER.
+    name = None
+    for candidate in sorted(DATA_TYPES, key=len, reverse=True):
+        if re.match(rf"{candidate}\b", upper):
+            name = candidate
+            break
+    if name is None:
+        name = re.match(r"[A-Z]+", upper).group(0)
+    rest = upper[len(name):].strip()
+    match = re.match(r"\(([^)]*)\)", rest)
+    arguments = [part.strip() for part in (match.group(1) if match else "").split(",")
+                 if part.strip()]
+    data_type = DATA_TYPES.get(name, name.lower())
+    if data_type in ("character varying", "character") and arguments:
+        return data_type, int(arguments[0]), None, None
+    if data_type == "numeric" and len(arguments) == 2:
+        return data_type, None, int(arguments[0]), int(arguments[1])
+    return data_type, None, None, None
+
+
+def remember_ddl(connection: Connection, text: str) -> None:
+    """Guarda de um ``CREATE TABLE`` o ``n`` de cada ``VARCHAR(n)`` e as colunas ``SUPER``, que o
+    ``COPY`` confere, e as colunas em ``svv_all_columns``; a tabela temporária fica fora da
+    visão."""
     match = CREATE_TABLE_PATTERN.match(text)
     if match is None:
         return
-    lengths = {}
-    supers = set()
-    for definition in split_top_level(match.group("body")):
-        parts = definition.strip().split(None, 1)
-        if len(parts) < 2:
-            continue
-        column = parts[0].strip('"').lower()
-        kind = parts[1]
+    database = connection.database
+    definitions = column_definitions(match.group("body"))
+    table = table_key(match.group("name"))
+    database.varchar_lengths[table] = {}
+    database.super_columns[table] = set()
+    for column, kind in definitions:
         varchar = re.search(r"(?:VARCHAR|CHARACTER VARYING)\s*\((\d+)\)", kind, re.IGNORECASE)
         if varchar:
-            lengths[column] = int(varchar.group(1))
+            database.varchar_lengths[table][column] = int(varchar.group(1))
         if re.search(r"\bSUPER\b", kind, re.IGNORECASE):
-            supers.add(column)
-    table = table_key(match.group("name"))
-    database.varchar_lengths[table] = lengths
-    database.super_columns[table] = supers
+            database.super_columns[table].add(column)
+    if re.match(r"CREATE\s+TEMP", text, re.IGNORECASE):
+        return
+    schema = table_schema(connection, match.group("name"))
+    for position, (column, kind) in enumerate(definitions, 1):
+        data_type, length, precision, scale = redshift_data_type(kind)
+        database.duckdb_connection.execute(
+            "INSERT INTO main.emulador_colunas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [SHARE_DATABASE, schema, table, column, data_type, length, precision, scale,
+             position])
+
+
+def forget_ddl(connection: Connection, text: str) -> None:
+    """Tira de ``svv_all_columns`` as colunas de um ``DROP TABLE``."""
+    match = re.match(r"DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\S+)", text, re.IGNORECASE)
+    if match is None:
+        return
+    connection.database.duckdb_connection.execute(
+        "DELETE FROM main.emulador_colunas WHERE schema_name = ? AND table_name = ?",
+        [table_schema(connection, match.group(1)), table_key(match.group(1))])
+
+
+def remember_added_column(connection: Connection, text: str) -> None:
+    """Põe em ``svv_all_columns`` a coluna de um ``ALTER TABLE ... ADD COLUMN``, no fim."""
+    match = re.match(r"ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)\s+(.+)", text,
+                     re.IGNORECASE | re.DOTALL)
+    if match is None:
+        return
+    database = connection.database.duckdb_connection
+    schema = table_schema(connection, match.group(1))
+    table = table_key(match.group(1))
+    position = database.execute(
+        "SELECT coalesce(max(ordinal_position), 0) + 1 FROM main.emulador_colunas "
+        "WHERE schema_name = ? AND table_name = ?", [schema, table]).fetchone()[0]
+    data_type, length, precision, scale = redshift_data_type(match.group(3))
+    database.execute(
+        "INSERT INTO main.emulador_colunas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [SHARE_DATABASE, schema, table, match.group(2).strip('"').lower(), data_type, length,
+         precision, scale, position])
 
 
 def option_words(options: str) -> str:
@@ -826,7 +962,7 @@ def insert_arrow(connection: Connection, table: str, data: pa.Table) -> None:
     try:
         database.execute(f"INSERT INTO {table} ({names}) SELECT {names} FROM substituto_copia")
     except duckdb.Error as error:
-        raise server_error(first_line(error)) from None
+        raise duckdb_error(error) from None
     finally:
         database.unregister("substituto_copia")
 
@@ -884,7 +1020,7 @@ def unload(connection: Connection, text: str) -> Result:
     try:
         data = connection.duckdb_connection.execute(translated).to_arrow_table()
     except duckdb.Error as error:
-        raise server_error(first_line(error)) from None
+        raise duckdb_error(error) from None
 
     # A contagem de pg_last_unload_count(); o resultado vazio para aqui, sem arquivo nem manifesto.
     connection.last_unload_count = data.num_rows

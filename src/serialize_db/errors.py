@@ -3,8 +3,8 @@
 Cada etapa acrescenta as suas: ``ContractError`` é a da etapa 1 (``schema``), ``SqlError`` a da
 etapa 2 (``sql``), ``ConflictError``, ``ExecutionConflict``, ``RegistrationRefused``,
 ``SchemaDiffRefused`` e ``LogUnavailable`` as da etapa 3 (``storage`` e ``delta``), que
-``serialize_db.delta`` levanta e a execução captura, ``SandboxError`` a da etapa 4 (os motores) e
-``AuditFailed`` a da etapa 6 (a execução).
+``serialize_db.delta`` levanta e a execução captura, ``SandboxError`` a da etapa 4 (os motores),
+``AuditFailed`` a da etapa 6 (a execução) e ``PublicationError`` a da etapa 8 (a publicação).
 """
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     "ContractError",
     "ExecutionConflict",
     "LogUnavailable",
+    "PublicationError",
     "RegistrationRefused",
     "SandboxError",
     "SchemaDiffRefused",
@@ -87,4 +88,13 @@ class AuditFailed(Exception):
 
     A execução encerra sem tocar o Delta; a mensagem nomeia a tabela, as partições e as
     verificações reprovadas, e o relatório, com o SQL e a amostra, vai para o log.
+    """
+
+
+class PublicationError(Exception):
+    """A publicação no Redshift não pode começar: a tabela de controle ``serialize_db_publications``
+    não existe no esquema, ou a execução não recebeu a configuração do Redshift.
+
+    A mensagem diz o que o operador faz: ``serialize-db publish --init`` cria a tabela de controle
+    uma vez, e ``Execution(..., redshift=RedshiftConfig(...))`` dá a configuração.
     """

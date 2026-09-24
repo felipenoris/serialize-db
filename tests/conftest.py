@@ -730,6 +730,34 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
     return method, connection
 
 
+def redshift_config() -> object:
+    """A ``RedshiftConfig`` das suítes do motor e da publicação: as variáveis
+    ``SERIALIZE_DB_REDSHIFT_*`` com o esquema da suíte e, no substituto local, um par informado de
+    mentira, porque a conexão vem da fixture ``redshift_driver``."""
+    import dataclasses
+
+    from serialize_db.engine.redshift import RedshiftConfig
+
+    config = dataclasses.replace(RedshiftConfig.from_environment(), schema=redshift_schema())
+    if emulator_enabled():
+        return dataclasses.replace(config, host="substituto", user="substituto",
+                                   password="substituto")
+    return config
+
+
+@pytest.fixture
+def redshift_driver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No substituto local, a conexão de ``emulator.connect()`` no lugar do ``redshift_connector``,
+    pela porta ``driver_connect`` do motor; no ambiente alvo, nada muda."""
+    if not emulator_enabled():
+        return
+    import emulator
+
+    from serialize_db.engine import redshift
+
+    monkeypatch.setattr(redshift, "driver_connect", lambda login: emulator.connect())
+
+
 def describe_error(error: Exception) -> str:
     """O tipo e a mensagem de um erro para o relatório; num erro do ``redshift_connector``, o
     SQLSTATE, o campo ``M`` e o detalhe ``D`` numa linha só."""

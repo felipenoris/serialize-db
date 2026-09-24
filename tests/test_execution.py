@@ -40,7 +40,13 @@ from conftest import LocalLocation
 from serialize_db import cli, delta, schema
 from serialize_db.audit import AuditReport
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
-from serialize_db.errors import AuditFailed, ContractError, ExecutionConflict, SandboxError
+from serialize_db.errors import (
+    AuditFailed,
+    ContractError,
+    ExecutionConflict,
+    PublicationError,
+    SandboxError,
+)
 from serialize_db.execution import Database, Execution
 from serialize_db.storage import Storage
 
@@ -539,6 +545,30 @@ def conflicting_pipeline(run: Execution) -> None:
     run.publish(ENTRIES, partitions=[run.partition], audit=False)
 
 
+def redshift_pipeline(run: Execution) -> None:
+    """Um pipeline que só confere o motor e a configuração do Redshift que a execução recebeu."""
+    from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
+
+    assert isinstance(run.redshift, RedshiftConfig)
+    assert run.redshift.schema == "esquema"
+    assert isinstance(run.sandbox, RedshiftEngine) or run.redshift is not None
+
+
+class IdleConnection:
+    """Uma conexão do ``redshift_connector`` de mentira que aceita todo comando sem resposta."""
+
+    autocommit = False
+
+    def cursor(self) -> IdleConnection:
+        return self
+
+    def execute(self, text: str, params: object = None) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
 def exit_code(arguments: list[str]) -> int | str | None:
     """O código do ``SystemExit`` com que ``serialize-db`` recusa os argumentos."""
     with pytest.raises(SystemExit) as exit_info:
@@ -575,6 +605,30 @@ def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
     removed = [*common, "--partition", "2026-08-31", "--export-mode", "register", projected]
     assert exit_code(removed) == 2
     assert "Traceback" not in capsys.readouterr().err
+
+
+def test_cli_run_hands_the_redshift_config_to_the_execution(
+    db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--engine redshift`` constrói o motor Redshift com as variáveis ``SERIALIZE_DB_REDSHIFT_*``
+    e dá a configuração à execução; ``--redshift`` a dá a uma execução no motor DuckDB; sem os
+    dois, ``publish_redshift`` é ``PublicationError``."""
+    from serialize_db.engine import redshift
+
+    monkeypatch.setattr(redshift, "driver_connect", lambda login: IdleConnection())
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    for name, value in (("HOST", "host"), ("USER", "usuario"), ("PASSWORD", "senha"),
+                        ("SCHEMA", "esquema"), ("SHARE_DATABASE", "compartilhado")):
+        monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", value)
+    common = ["run", "--root", db.root, "--environment", "prod", "--partition", "2026-08-31",
+              "--metadata", "test_execution:Base.metadata", "test_execution:redshift_pipeline"]
+    assert cli.main([*common, "--engine", "redshift"]) == 0
+    assert cli.main([*common, "--redshift"]) == 0
+
+    with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
+        assert run.redshift is None
+        with pytest.raises(PublicationError, match="redshift=RedshiftConfig"):
+            run.publish_redshift(PROJECTED)
 
 
 def test_cli_audit_prints_the_sql_and_audits_the_published_version(
