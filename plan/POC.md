@@ -3352,3 +3352,25 @@ Em 2026-09-24, a revisão das docstrings e de `docs/` rodou sondas na pasta loca
 - O `pdoc` 16 lê o nome de um campo `:param` ou `:raises` até o último dois-pontos da primeira
   linha do campo, mesmo o de um `s3://` citado, e ignora `:returns:` e `:raise:`; a primeira linha
   de cada campo fica sem outro dois-pontos.
+
+## O que a revisão do código de 2026-09-24 mostrou
+
+Em 2026-09-24, a revisão de `src/` e dos testes do pacote contra as regras de código de
+`CLAUDE.md` rodou as três execuções da suíte depois de cada grupo de mudanças, no Linux x86_64 do
+contêiner:
+
+- A base fictícia de `tests/source_db_projetado.py` saiu idêntica byte a byte, 63 arquivos com o
+  mesmo SHA-256 do conjunto, gravada pela versão do `HEAD` e pela revisada, que trocou nomes,
+  constantes e expressões sem mudar o que o gerador sorteia.
+- A leitura de uma versão cujo arquivo o `vacuum` apagou levantou `FileNotFoundError` no leitor do
+  PyArrow numa pasta local (deltalake 1.6.4, PyArrow 25.0.1); `tests/test_operation.py`, só
+  `local`, confere essa classe, e `tests/test_delta.py`, que roda também no S3, fica com
+  `Exception`.
+- O pipeline de `--redshift` de `tests/test_execution.py` juntava por `or` uma condição que a
+  asserção anterior já tornava verdadeira, e o motor de cada opção ficava sem conferência; um
+  pipeline por opção confere o `RedshiftEngine` e o `DuckDBEngine`.
+- `read_as_the_probe`, de `tests/test_source_db_projetado.py`, repetia a leitura de
+  `parquet_source.footer_columns`, com a mesma saída nos 62 arquivos Parquet da base; o teste lê
+  cada arquivo pela função do probe.
+- As contagens: sem variável, 209 passam e 316 são pulados; com a raiz local, 431 e 94; com o
+  substituto local, 524 e 1 ([`CURRENT_STATE.md`](CURRENT_STATE.md)).

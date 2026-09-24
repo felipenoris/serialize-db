@@ -86,12 +86,15 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import pytest
+
+if TYPE_CHECKING:
+    from serialize_db.engine.redshift import RedshiftConfig
 
 # Fatos e medições coletados pelos testes; impressos no fim da sessão e gravados em JSON.
 REPORT: dict[str, object] = {}
@@ -751,18 +754,15 @@ def connect_redshift(*, statement_cache: bool = False) -> tuple[str, object]:
     return method, connection
 
 
-def redshift_config() -> object:
+def redshift_config() -> RedshiftConfig:
     """A ``RedshiftConfig`` das suítes do motor e da publicação: as variáveis
     ``SERIALIZE_DB_REDSHIFT_*`` com o esquema da suíte e, no substituto local, um par informado de
     mentira, porque a conexão vem da fixture ``redshift_driver``."""
-    import dataclasses
-
     from serialize_db.engine.redshift import RedshiftConfig
 
-    config = dataclasses.replace(RedshiftConfig.from_environment(), schema=redshift_schema())
+    config = replace(RedshiftConfig.from_environment(), schema=redshift_schema())
     if emulator_enabled():
-        return dataclasses.replace(config, host="substituto", user="substituto",
-                                   password="substituto")
+        return replace(config, host="substituto", user="substituto", password="substituto")
     return config
 
 
@@ -787,8 +787,10 @@ def describe_error(error: Exception) -> str:
         parts = [str(detail.get("C", "")), str(detail["M"])]
         if detail.get("D"):
             # O detalhe D vem entre linhas de hífens; as palavras só de hífens saem do texto.
-            parts.append(" ".join(word for word in str(detail["D"]).split() if set(word) != {"-"}))
-        return f"{type(error).__name__}: {' '.join(part for part in parts if part)}"[:400]
+            words = [word for word in str(detail["D"]).split() if set(word) != {"-"}]
+            parts.append(" ".join(words))
+        described = " ".join(part for part in parts if part)
+        return f"{type(error).__name__}: {described}"[:400]
 
     # Uma exceção sem mensagem tem o texto vazio, e o relatório leva só o tipo dela.
     lines = str(error).splitlines()
@@ -863,7 +865,9 @@ def failure_message(report: pytest.TestReport, limit: int = 300) -> str:
     crash = getattr(report.longrepr, "reprcrash", None)
     text = crash.message if crash is not None else str(report.longrepr)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return " | ".join(lines[:2])[:limit] if lines else report.outcome
+    if not lines:
+        return report.outcome
+    return " | ".join(lines[:2])[:limit]
 
 
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:

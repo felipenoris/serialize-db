@@ -799,8 +799,8 @@ def redshift_data_type(kind: str) -> tuple[str, int | None, int | None, int | No
         name = re.match(r"[A-Z]+", upper).group(0)
     rest = upper[len(name):].strip()
     match = re.match(r"\(([^)]*)\)", rest)
-    arguments = [part.strip() for part in (match.group(1) if match else "").split(",")
-                 if part.strip()]
+    inside_parentheses = match.group(1) if match else ""
+    arguments = [part.strip() for part in inside_parentheses.split(",") if part.strip()]
     data_type = DATA_TYPES.get(name, name.lower())
     if data_type in ("character varying", "character") and arguments:
         return data_type, int(arguments[0]), None, None
@@ -993,18 +993,20 @@ def copy_json_lines(connection: Connection, table: str, target: list[str],
             continue
         document = json.loads(line)
         names = [name for name in target if name in document]
-        values = []
-        for name in names:
-            value = document[name]
-            if name in supers:
-                value = json.dumps(value)
-            values.append(value)
+        values = [document_value(document, name, supers) for name in names]
         quoted = ", ".join(f'"{name}"' for name in names)
         placeholders = ", ".join("?" for _ in names)
         connection.duckdb_connection.execute(
             f"INSERT INTO {table} ({quoted}) VALUES ({placeholders})", values)
         count += 1
     return Result(rowcount=count)
+
+
+def document_value(document: dict, name: str, supers: set[str]) -> object:
+    """O valor de uma chave do documento para o ``INSERT``; numa coluna ``SUPER``, serializado."""
+    if name in supers:
+        return json.dumps(document[name])
+    return document[name]
 
 
 # ------------------------------------------------------------ o UNLOAD

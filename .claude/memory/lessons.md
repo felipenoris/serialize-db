@@ -613,3 +613,18 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   raiz: as primitivas` rendered a bold "ValueError: a URI fora da raiz", and ``:memory:`` broke
   another field. An agent reading the built HTML found them, with 19 more in the engine files;
   the checker flags a second colon on a field's first line since.
+- **`git reset --soft` leaves the whole diff in the index** (2026-09-24). To fold two document
+  edits into the review's local commits, the assistant reset them with `--soft`, added a group of
+  paths and committed: the commit took every staged file, the next two commits found nothing to
+  add, and the split had to be redone after `git reset --mixed`. A diff is split into commits from
+  an empty index, and `git diff --cached --stat` is read before each commit.
+- **A test double of a library function takes the arguments the callers may pass by name**
+  (2026-09-24). The review turned the optional arguments of `delta.register_files` into keywords
+  at the call sites, and the fake of `test_interrupted_load_resumes`, which took `*arguments`,
+  failed with `TypeError` in the local suite. Before changing how a function is called, grep the
+  tests for `monkeypatch.setattr(<module>, "<function>"` and make each double forward `**options`.
+- **An assertion that joins conditions hides one of them** (2026-09-24). The `--redshift`
+  pipeline of `tests/test_execution.py` asserted `isinstance(run.sandbox, RedshiftEngine) or
+  run.redshift is not None` right after asserting `run.redshift` a `RedshiftConfig`, so the engine
+  of either option went unchecked; a review agent found it. The review split every
+  `assert A and B` of the package tests as well, whose failure does not say which side broke.

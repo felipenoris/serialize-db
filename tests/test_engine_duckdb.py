@@ -19,7 +19,7 @@ extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 from __future__ import annotations
 
 import dataclasses
-import datetime as dt
+import datetime
 import decimal
 import json
 import re
@@ -70,7 +70,7 @@ class Lancamento(Base):
     __table_args__ = {"info": LANCAMENTO_INFO}
     id_lancamento: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=False)
     id_conta: Mapped[int] = mapped_column(sa.BigInteger, sa.ForeignKey("cad_contas.id_conta"))
-    data_base: Mapped[dt.date] = mapped_column(sa.Date)
+    data_base: Mapped[datetime.date] = mapped_column(sa.Date)
     valor: Mapped[float] = mapped_column(sa.Double)
     preco: Mapped[decimal.Decimal | None] = mapped_column(sa.Numeric(18, 2))
     area: Mapped[str | None] = mapped_column(sa.String(10))
@@ -85,7 +85,7 @@ class Projetado(Base):
     __table_args__ = (sa.UniqueConstraint("codigo"), {"info": LANCAMENTO_INFO})
     id_lancamento: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=False)
     id_conta: Mapped[int] = mapped_column(sa.BigInteger)
-    data_base: Mapped[dt.date] = mapped_column(sa.Date)
+    data_base: Mapped[datetime.date] = mapped_column(sa.Date)
     valor: Mapped[float] = mapped_column(sa.Double)
     preco: Mapped[decimal.Decimal | None] = mapped_column(sa.Numeric(18, 2))
     area: Mapped[str | None] = mapped_column(sa.String(10))
@@ -132,24 +132,27 @@ def setup(local_location: LocalLocation) -> Iterator[Setup]:
 
 
 def account_of(entry_id: int) -> int:
-    """A conta do lançamento ``entry_id`` em ``entries``: 1, 2 e 3 em rodízio."""
+    """A conta do lançamento ``entry_id`` em ``entry_rows``: 1, 2 e 3 em rodízio."""
     return 1 + entry_id % 3
 
 
-def entries(value: str, start: int, count: int, table: sa.Table = ENTRIES,
-            valor: list[float] | None = None, area: str | None = "TI") -> pa.Table:
+def entry_rows(value: str, start: int, count: int, table: sa.Table = ENTRIES,
+               valor: list[float] | None = None, area: str | None = "TI") -> pa.Table:
     """``count`` lançamentos da partição ``value`` com ids a partir de ``start``, no contrato."""
     ids = list(range(start, start + count))
+    if valor is None:
+        valor = [entry_id / 4 for entry_id in ids]
     data = pa.table({
         "id_lancamento": pa.array(ids, pa.int64()),
-        "id_conta": pa.array([account_of(k) for k in ids], pa.int64()),
-        "data_base": pa.array([dt.date.fromisoformat(value)] * count, pa.date32()),
-        "valor": pa.array(valor if valor is not None else [k / 4 for k in ids], pa.float64()),
-        "preco": pa.array([decimal.Decimal(k) / 100 for k in ids], pa.decimal128(18, 2)),
+        "id_conta": pa.array([account_of(entry_id) for entry_id in ids], pa.int64()),
+        "data_base": pa.array([datetime.date.fromisoformat(value)] * count, pa.date32()),
+        "valor": pa.array(valor, pa.float64()),
+        "preco": pa.array([decimal.Decimal(entry_id) / 100 for entry_id in ids],
+                          pa.decimal128(18, 2)),
         "area": pa.array([area] * count, pa.string()),
-        "meta": pa.array([json.dumps({"k": k}) for k in ids]),
+        "meta": pa.array([json.dumps({"k": entry_id}) for entry_id in ids]),
         "to": pa.array(["SP"] * count),
-        "codigo": pa.array([f"L{k:06d}" for k in ids]),
+        "codigo": pa.array([f"L{entry_id:06d}" for entry_id in ids]),
         "data_base_str": pa.array([value] * count),
     })
     return schema.cast(data, table)
@@ -162,7 +165,7 @@ def published_table(setup: Setup, table: sa.Table, months: list[str], rows: int 
     delta.create_table(uri, table, setup.storage)
     version = 0
     for index, month in enumerate(months):
-        data = entries(month, 1 + index * rows, rows, table)
+        data = entry_rows(month, 1 + index * rows, rows, table)
         version = delta.publish_partition(uri, table, month, data, METADATA, setup.storage)
     return version
 
@@ -219,15 +222,15 @@ def test_engine_config_and_single_session(setup: Setup, monkeypatch: pytest.Monk
     assert database.exists()
 
     # Três threads usam a mesma sessão.
-    def create(k: int) -> None:
-        engine.query(f"CREATE TABLE t{k} AS SELECT {k} AS k")
+    def create(number: int) -> None:
+        engine.query(f"CREATE TABLE t{number} AS SELECT {number} AS k")
 
-    threads = [threading.Thread(target=create, args=(k,)) for k in range(3)]
+    threads = [threading.Thread(target=create, args=(number,)) for number in range(3)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
-    assert [count_of(engine, f"t{k}") for k in range(3)] == [1, 1, 1]
+    assert [count_of(engine, f"t{number}") for number in range(3)] == [1, 1, 1]
 
     # A tabela temporária criada numa thread vale para as outras.
     engine.query("CREATE TEMP TABLE temporaria AS SELECT range AS id FROM range(10)")
@@ -320,7 +323,7 @@ def test_ingest_pins_the_version(setup: Setup) -> None:
     materialized = ENTRIES.to_metadata(sa.MetaData(), name="cad_lancamentos_materializada")
     engine.ingest(ENTRIES, uri, version)
     engine.ingest(materialized, uri, version, materialize=True)
-    later = entries(MONTHS[2], 500, 50)
+    later = entry_rows(MONTHS[2], 500, 50)
     delta.publish_partition(uri, ENTRIES, MONTHS[2], later, METADATA, setup.storage)
     assert count_of(engine, "cad_lancamentos") == 200
     assert count_of(engine, "cad_lancamentos_materializada") == 200
@@ -360,13 +363,13 @@ def test_published_reads_the_pinned_version(setup: Setup) -> None:
     engine = setup.engine
     uri = setup.uri(PROJECTED)
     source = engine.published(PROJECTED, uri, version)
-    later = entries(MONTHS[2], 900, 5, PROJECTED)
+    later = entry_rows(MONTHS[2], 900, 5, PROJECTED)
     delta.publish_partition(uri, PROJECTED, MONTHS[2], later, METADATA, setup.storage)
     top = sa.func.max(source.c.id_lancamento).label("topo")
     statement = sa.select(sa.func.count().label("n"), top)
     assert engine.query(statement).to_pylist() == [{"n": 200, "topo": 200}]
     assert not engine.name_in_use(PROJECTED.name)
-    engine.load(PROJECTED, entries(MONTHS[5], 1000, 3, PROJECTED))
+    engine.load(PROJECTED, entry_rows(MONTHS[5], 1000, 3, PROJECTED))
     assert count_of(engine, PROJECTED.name) == 3
     with pytest.raises(SandboxError, match="ainda não existe"):
         engine.published(PROJECTED, uri, None)
@@ -379,7 +382,7 @@ def test_statement_parameters_expand_in_lists(setup: Setup) -> None:
     """Um statement com ``IN`` de lista, ``NOT IN`` e ``bindparam`` expansível roda por ``query`` e
     por ``stream``; um nome a mais ou a menos é ``SqlError`` antes de rodar."""
     engine = setup.engine
-    engine.load(ENTRIES, entries(MONTHS[0], 1, 30))
+    engine.load(ENTRIES, entry_rows(MONTHS[0], 1, 30))
     statement = (
         sa.select(ENTRIES.c.id_lancamento)
         .where(ENTRIES.c.id_conta.in_([1, 2]), ENTRIES.c.id_lancamento.notin_([1, 4]),
@@ -406,8 +409,8 @@ def test_query_keeps_percent_literals(setup: Setup) -> None:
     """``LIKE 'A%'`` num statement e num texto pronto chega ao DuckDB como está, e o texto pronto
     recebe os parâmetros por ``:nome``."""
     engine = setup.engine
-    abc = entries(MONTHS[0], 1, 3, area="ABC")
-    xyz = entries(MONTHS[0], 10, 2, area="XYZ")
+    abc = entry_rows(MONTHS[0], 1, 3, area="ABC")
+    xyz = entry_rows(MONTHS[0], 10, 2, area="XYZ")
     engine.load(ENTRIES, pa.concat_tables([abc, xyz]))
     statement = sa.select(sa.func.count().label("n")).where(ENTRIES.c.area.like("A%"))
     assert engine.query(statement).column("n")[0].as_py() == 3
@@ -448,7 +451,7 @@ def test_stream_delivers_each_batch_while_the_query_runs(setup: Setup) -> None:
             total += pc.sum(batch.column("id")).as_py()
         assert stream._spool.spilled == 0
     assert seen == 2_000_000
-    assert total == sum(k for k in range(3_000_000) if k % 3 != 0)
+    assert total == sum(number for number in range(3_000_000) if number % 3 != 0)
     assert spool_files(engine) == []
     reading = f"{first_batch:.3f} s, com a consulta rodando: {query_running}"
     record("engine.stream.first_batch", reading)
@@ -587,8 +590,8 @@ def test_loader_creates_and_inserts_in_one_transaction_on_close(setup: Setup) ->
     engine = setup.engine
     visible = []
     with engine.loader(PROJECTED) as loader:
-        for k in range(5):
-            loader.write(entries(MONTHS[0], 1 + k * 100, 100, PROJECTED))
+        for index in range(5):
+            loader.write(entry_rows(MONTHS[0], 1 + index * 100, 100, PROJECTED))
             visible.append(engine.name_in_use(PROJECTED.name))
     assert loader.rows == 500
     assert set(visible) == {False}
@@ -599,17 +602,17 @@ def test_loader_creates_and_inserts_in_one_transaction_on_close(setup: Setup) ->
     other = PROJECTED.to_metadata(sa.MetaData(), name="cad_segunda")
     with pytest.raises(ValueError, match="falha do cliente"):
         with engine.loader(other) as loader:
-            loader.write(entries(MONTHS[0], 1, 10, PROJECTED))
+            loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
             raise ValueError("falha do cliente")
     assert not engine.name_in_use("cad_segunda")
 
     # O lote recusado pelo cast não deixa tabela.
-    long_area = entries(MONTHS[0], 11, 1, PROJECTED)
+    long_area = entry_rows(MONTHS[0], 11, 1, PROJECTED)
     area_index = long_area.schema.get_field_index("area")
     long_area = long_area.set_column(area_index, "area", pa.array(["x" * 11]))
     with pytest.raises(ContractError, match="texto de"):
         with engine.loader(other) as loader:
-            loader.write(entries(MONTHS[0], 1, 10, PROJECTED))
+            loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
             loader.write(long_area)
     assert not engine.name_in_use("cad_segunda")
 
@@ -617,12 +620,12 @@ def test_loader_creates_and_inserts_in_one_transaction_on_close(setup: Setup) ->
     # CREATE.
     with pytest.raises(duckdb.ConstraintException):
         with engine.loader(other) as loader:
-            loader.write(entries(MONTHS[0], 1, 10, PROJECTED).drop_columns(["valor"]))
+            loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED).drop_columns(["valor"]))
     assert not engine.name_in_use("cad_segunda")
 
     # O loader abandonado sem close: a thread termina e apaga o arquivo, e nada é criado.
     abandoned = engine.loader(other)
-    abandoned.write(entries(MONTHS[0], 1, 10, PROJECTED))
+    abandoned.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
     thread = abandoned._thread
     del abandoned
     thread.join(timeout=2)
@@ -741,7 +744,7 @@ def test_loader_refuses_a_name_in_use(setup: Setup) -> None:
     engine.ingest(ENTRIES, setup.uri(ENTRIES), version)
     materialized = ENTRIES.to_metadata(sa.MetaData(), name="cad_materializada")
     engine.ingest(materialized, setup.uri(ENTRIES), version, materialize=True)
-    engine.load(PROJECTED, entries(MONTHS[0], 1, 5, PROJECTED))
+    engine.load(PROJECTED, entry_rows(MONTHS[0], 1, 5, PROJECTED))
     for table in (ENTRIES, materialized, PROJECTED):
         with pytest.raises(SandboxError, match="run.published"):
             engine.loader(table)
@@ -760,7 +763,7 @@ def test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows(setup: S
 
     def load() -> None:
         with engine.loader(PROJECTED) as loader:
-            loader.write(entries(MONTHS[0], 1, 1000, PROJECTED))
+            loader.write(entry_rows(MONTHS[0], 1, 1000, PROJECTED))
             opened.set()
             assert release.wait(timeout=10)
 
@@ -778,6 +781,7 @@ def test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows(setup: S
         release.set()
         future.result()
 
+    # A carga terminada.
     assert count_of(engine, PROJECTED.name) == 1000
 
     # Uma segunda carga no mesmo nome é recusada: nenhuma tabela do sandbox tem estado anterior a
@@ -790,7 +794,7 @@ def test_query_and_load_match_stream_and_loader(setup: Setup) -> None:
     """``query`` é ``stream(...).read_all()``; ``load`` de ``pa.Table``, lote, leitor e iterável dá
     o mesmo resultado; o DataFrame é recusado com a mensagem que aponta ``from_pandas``."""
     engine = setup.engine
-    data = entries(MONTHS[0], 1, 1000, PROJECTED)
+    data = entry_rows(MONTHS[0], 1, 1000, PROJECTED)
     reader = pa.RecordBatchReader.from_batches(data.schema, data.to_batches(max_chunksize=100))
     forms = {
         "tabela": data,
@@ -825,7 +829,7 @@ def test_pandas_round_trip_keeps_contract_types(setup: Setup) -> None:
     """``to_pandas(types_mapper=pd.ArrowDtype)`` e ``from_pandas`` mantêm ``decimal128(18, 2)`` e
     ``date32`` no caminho ``query``, lógica em pandas e ``load``."""
     engine = setup.engine
-    engine.load(ENTRIES, entries(MONTHS[0], 1, 100))
+    engine.load(ENTRIES, entry_rows(MONTHS[0], 1, 100))
     frame = engine.query(sa.select(ENTRIES)).to_pandas(types_mapper=pd.ArrowDtype)
     assert str(frame["preco"].dtype) == "decimal128(18, 2)[pyarrow]"
     assert str(frame["data_base"].dtype) == "date32[day][pyarrow]"
@@ -835,7 +839,7 @@ def test_pandas_round_trip_keeps_contract_types(setup: Setup) -> None:
     assert loaded.schema.field("preco").type == pa.decimal128(18, 2)
     assert loaded.schema.field("data_base").type == pa.date32()
     total = engine.query('SELECT sum(preco) AS p FROM "cad_lancamentos_projetados"')
-    expected = sum(decimal.Decimal(k) / 100 for k in range(1, 101))
+    expected = sum(decimal.Decimal(entry_id) / 100 for entry_id in range(1, 101))
     assert total.column("p")[0].as_py() == expected
 
 
@@ -848,12 +852,12 @@ def test_audit_finds_each_defect(setup: Setup) -> None:
     chave repetida na partição e contra a publicada, e chave única repetida contra a publicada."""
     version = published_table(setup, PROJECTED, MONTHS[:2], rows=10)
     engine = setup.engine
-    good = entries(MONTHS[2], 100, 7, PROJECTED)
+    good = entry_rows(MONTHS[2], 100, 7, PROJECTED)
     batch = good.to_pylist()
     batch[0]["id_lancamento"] = batch[1]["id_lancamento"]  # repetida na partição
     batch[2]["id_lancamento"] = 3  # repetida contra a publicada
     batch[3]["area"] = "ação ação"  # 9 caracteres, 13 bytes
-    batch[4]["data_base"] = dt.date(2026, 7, 31)  # fora da origem da partição
+    batch[4]["data_base"] = datetime.date(2026, 7, 31)  # fora da origem da partição
     batch[5]["meta"] = "{nao json"  # JSON inválido
     batch[6]["meta"] = json.dumps({"k": "x" * 65527})  # 65.536 bytes
     # A coluna JSON do DuckDB recusa o texto inválido na carga: a tabela nasce por CTAS, com meta em
@@ -896,9 +900,9 @@ def test_audit_unique_key_against_the_published_version(setup: Setup) -> None:
     reprova pela consulta contra ``published``."""
     uri = setup.uri(PROJECTED)
     delta.create_table(uri, PROJECTED, setup.storage)
-    published = entries(MONTHS[0], 1, 3, PROJECTED)
+    published = entry_rows(MONTHS[0], 1, 3, PROJECTED)
     version = delta.publish_partition(uri, PROJECTED, MONTHS[0], published, METADATA, setup.storage)
-    repeated = entries(MONTHS[1], 100, 1, PROJECTED).to_pylist()[0]
+    repeated = entry_rows(MONTHS[1], 100, 1, PROJECTED).to_pylist()[0]
     repeated["codigo"] = published.column("codigo")[0].as_py()
     setup.engine.load(PROJECTED, pa.Table.from_pylist([repeated], schema=published.schema))
     report = setup.engine.audit(PROJECTED, [MONTHS[1]], uri, version)
@@ -914,7 +918,7 @@ def test_audit_skips_the_published_join_above_max_key(setup: Setup) -> None:
     version = published_table(setup, PROJECTED, MONTHS[:2], rows=10)
     engine = setup.engine
     uri = setup.uri(PROJECTED)
-    engine.load(PROJECTED, entries(MONTHS[2], 1000, 5, PROJECTED))
+    engine.load(PROJECTED, entry_rows(MONTHS[2], 1000, 5, PROJECTED))
     report = engine.audit(PROJECTED, [MONTHS[2]], uri, version)
     skipped = result_of(report, "chave_id_lancamento_publicada")
     assert skipped.passed
@@ -923,7 +927,7 @@ def test_audit_skips_the_published_join_above_max_key(setup: Setup) -> None:
 
     # Com chaves abaixo do max_key, a junção roda e acha as cinco repetições.
     engine.query('DROP TABLE "cad_lancamentos_projetados"')
-    engine.load(PROJECTED, entries(MONTHS[2], 15, 5, PROJECTED))
+    engine.load(PROJECTED, entry_rows(MONTHS[2], 15, 5, PROJECTED))
     joined_report = engine.audit(PROJECTED, [MONTHS[2]], uri, version)
     joined = result_of(joined_report, "chave_id_lancamento_publicada")
     assert joined.reason == ""
@@ -935,7 +939,7 @@ def test_audit_report_samples_failing_rows(setup: Setup) -> None:
     aprovada não traz amostra; ``sql()`` junta os textos; os não finitos entram sem reprovar."""
     engine = setup.engine
     with_nan = [float("nan")] + [1.0] * 29
-    data = entries(MONTHS[0], 1, 30, PROJECTED, valor=with_nan).to_pylist()
+    data = entry_rows(MONTHS[0], 1, 30, PROJECTED, valor=with_nan).to_pylist()
     for row in data:
         if row["id_lancamento"] <= 25:
             row["area"] = "x" * 11
@@ -961,7 +965,7 @@ def test_audit_orphan_against_a_referenced_table_outside_the_sandbox(setup: Setu
     ``referenced``, e o órfão aparece; sem o argumento, a verificação fica em ``not_run``."""
     accounts_version = published_accounts(setup, ["A", "B"])
     engine = setup.engine
-    engine.load(ENTRIES, entries(MONTHS[0], 1, 6))  # id_conta 1, 2 e 3: a conta 3 não existe
+    engine.load(ENTRIES, entry_rows(MONTHS[0], 1, 6))  # id_conta 1, 2 e 3: a conta 3 não existe
     referenced = {"cad_contas": (setup.uri(ACCOUNTS), accounts_version)}
     report = engine.audit(ENTRIES, [MONTHS[0]], foreign_keys=True, referenced=referenced)
     orphans = result_of(report, "orfao_id_conta")
@@ -989,8 +993,8 @@ def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
     chave, o arquivo leva o ``execution_id`` no nome, e ``expected_rows`` diferente recusa sem
     commit."""
     engine = setup.engine
-    with_nan = [float("nan")] + [k / 4 for k in range(2, 1001)]
-    engine.load(PROJECTED, entries(MONTHS[1], 1, 1000, PROJECTED, valor=with_nan))
+    with_nan = [float("nan")] + [entry_id / 4 for entry_id in range(2, 1001)]
+    engine.load(PROJECTED, entry_rows(MONTHS[1], 1, 1000, PROJECTED, valor=with_nan))
     uri = setup.uri(PROJECTED)
     delta.create_table(uri, PROJECTED, setup.storage)
     version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000,
@@ -1029,6 +1033,7 @@ def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:
     projected_uri = setup.uri(PROJECTED)
     delta.create_table(projected_uri, PROJECTED, setup.storage)
 
+    # A ingestão, o join em lotes para o loader, a auditoria e a exportação.
     engine.ingest(ENTRIES, setup.uri(ENTRIES), entries_version, partitions=MONTHS, materialize=True)
     engine.ingest(ACCOUNTS, setup.uri(ACCOUNTS), accounts_version)
     statement = (

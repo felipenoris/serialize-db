@@ -19,9 +19,10 @@ coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
 from __future__ import annotations
 
 import dataclasses
-import datetime as dt
+import datetime
 import decimal
 import io
+import itertools
 import json
 import logging
 import re
@@ -38,7 +39,7 @@ import redshift_connector
 import sqlalchemy as sa
 
 from conftest import LocalLocation, S3Location, record, redshift_config
-from lancamentos_model import ACCOUNTS, ENTRIES, MONTHS, PROJECTED, entries
+from lancamentos_model import ACCOUNTS, ENTRIES, MONTHS, PROJECTED, account_rows, entry_rows
 from serialize_db import delta, schema
 from serialize_db.engine import Engine, redshift
 from serialize_db.engine.redshift import (
@@ -133,7 +134,8 @@ class Command:
 class FakeConnection:
     """A conexão de mentira: registra cada comando com o instante, dorme ``delay`` segundos por
     comando, sabe que tabelas existem, responde ``pg_last_unload_count()`` e, num ``UNLOAD``, grava
-    ``unload_rows`` num Parquet da pasta local com o manifesto, como o Redshift faria."""
+    ``unload_rows`` num Parquet da pasta local com o manifesto, como o Redshift faria; com
+    ``fail``, cada comando recebe esse erro."""
 
     def __init__(self, storage: Storage | None = None, unload_rows: pa.Table | None = None,
                  existing: set[str] = frozenset(), delay: float = 0.0,
@@ -146,6 +148,7 @@ class FakeConnection:
         self.commands: list[Command] = []
         self.last_unload_count = 0
         self.write_manifest = True
+        self.fail: Exception | None = None
         self.autocommit = False
         self.closed = False
 
@@ -164,6 +167,8 @@ class FakeConnection:
             raise redshift_connector.InterfaceError("BrokenPipe: server socket closed")
         time.sleep(self.delay)
         try:
+            if self.fail is not None:
+                raise self.fail
             return self._answer(text)
         finally:
             command.finished = time.perf_counter()
@@ -173,18 +178,19 @@ class FakeConnection:
         if first == "UNLOAD":
             self._unload(text)
             return [], []
-        if match := re.fullmatch(r'SELECT 1 FROM "esquema"\."(\w+)" LIMIT 0', text):
-            if match.group(1) in self.existing:
+        existence = re.fullmatch(r'SELECT 1 FROM "esquema"\."(\w+)" LIMIT 0', text)
+        if existence is not None:
+            if existence.group(1) in self.existing:
                 return [], []
-            raise server_error(f"Relation {match.group(1)} does not exist in the database.")
+            raise server_error(f"Relation {existence.group(1)} does not exist in the database.")
         if text == "SELECT pg_last_unload_count()":
-            return row_desc_of(pa.schema([("pg_last_unload_count", pa.int64())])), \
-                [[self.last_unload_count]]
+            count_schema = pa.schema([("pg_last_unload_count", pa.int64())])
+            return row_desc_of(count_schema), [[self.last_unload_count]]
         if text.startswith("SELECT * FROM (") and text.endswith(") AS t LIMIT 0"):
             return row_desc_of(self.unload_rows.schema), []
         if text.startswith("SELECT count(*) FROM"):
-            return row_desc_of(pa.schema([("count", pa.int64())])), \
-                [[self.unload_rows.num_rows]]
+            count_schema = pa.schema([("count", pa.int64())])
+            return row_desc_of(count_schema), [[self.unload_rows.num_rows]]
         if first == "CREATE":
             self.existing.add(re.search(r'"(\w+)"', text).group(1))
         return [], []
@@ -259,8 +265,8 @@ def test_credentials_clause_and_mask(monkeypatch: pytest.MonkeyPatch) -> None:
     tira os valores, e a nota de um erro leva o comando mascarado."""
     assert redshift.credentials_clause(CONFIG) == "IAM_ROLE default"
     arn = "arn:aws:iam::123456789012:role/papel"
-    assert redshift.credentials_clause(dataclasses.replace(CONFIG, iam_role=arn)) == \
-        f"IAM_ROLE '{arn}'"
+    with_arn = dataclasses.replace(CONFIG, iam_role=arn)
+    assert redshift.credentials_clause(with_arn) == f"IAM_ROLE '{arn}'"
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIACHAVE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "segredo")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "token")
@@ -270,16 +276,11 @@ def test_credentials_clause_and_mask(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mask(clause) == "ACCESS_KEY_ID '***' SECRET_ACCESS_KEY '***' SESSION_TOKEN '***'"
     assert "segredo" not in mask(redshift.copy_text("t", "s3://b/m", clause, manifest=True))
 
+    # O erro do servidor leva o comando mascarado na nota.
     connection = FakeConnection()
-    connection.existing = set()
     engine = fake_engine(monkeypatch, connection)
     text = redshift.copy_text('"esquema"."x"', "s3://b/m", clause, manifest=True)
-    connection.drop_next = 0
-
-    def refuse(text: str) -> tuple[list, list]:
-        raise server_error("Spectrum Scan Error")
-
-    connection._answer = refuse
+    connection.fail = server_error("Spectrum Scan Error")
     with pytest.raises(redshift_connector.ProgrammingError) as failure:
         engine.execute(text)
     assert failure.value.__notes__ == [f"comando: {mask(text)}"]
@@ -300,6 +301,7 @@ def test_copy_insert_unload_text() -> None:
         "FORMAT AS PARQUET FILLRECORD")
     assert "COMPUPDATE" not in copied
 
+    # O INSERT da staging com a lista de colunas e o valor da partição.
     inserted = redshift.insert_from_staging('"esquema"."t"', '"esquema"."t_staging"', ENTRIES,
                                             "2026-08-31")
     columns = ", ".join(f'"{name}"' for name in ENTRIES.c.keys())
@@ -311,6 +313,7 @@ def test_copy_insert_unload_text() -> None:
     assert '"codigo", "data_base_str" FROM' in redshift.insert_from_staging(
         "t", "s", ENTRIES, None)
 
+    # O UNLOAD com as aspas e a barra do literal dobradas.
     select = "select \"texto\" from \"t\" where \"texto\" = 'd''agua' and x = 'barra \\\\ n'"
     unloaded = redshift.unload_text(select, "s3://b/prod/t/data_base_str=2026-08-31/e_1",
                                     credentials, parallel=False)
@@ -333,7 +336,8 @@ def test_staging_ddl_without_partition_column() -> None:
     assert '"meta" VARCHAR(65535)' in staging
     assert '"carimbo" TIMESTAMP' in staging
     assert "data_base_str" not in staging
-    assert "NOT NULL" not in staging and "SORTKEY" not in staging
+    assert "NOT NULL" not in staging
+    assert "SORTKEY" not in staging
     temporary = redshift.staging_ddl(ENTRIES, '"t_carga"', ENTRIES.columns, temporary=True)
     assert temporary.startswith('CREATE TEMP TABLE "t_carga" (')
     assert '"data_base_str" VARCHAR(10)' in temporary
@@ -349,12 +353,14 @@ def test_table_from_cursor_by_columns() -> None:
     arrow_schema = pa.schema([("id", pa.int64()), ("valor", pa.decimal128(18, 2)),
                               ("dia", pa.date32()), ("area", pa.string()),
                               ("carimbo", pa.timestamp("us"))])
-    rows = [[k, decimal.Decimal(k) / 4, dt.date(2026, 8, 28 + k),
-             f"area {k}", dt.datetime(2026, 8, 28 + k, 12)] for k in range(3)]
+    rows = []
+    for day in range(3):
+        rows.append([day, decimal.Decimal(day) / 4, datetime.date(2026, 8, 28 + day), f"area {day}",
+                     datetime.datetime(2026, 8, 28 + day, 12)])
     connection = FakeConnection()
     cursor = connection.cursor()
     cursor.ps = {"row_desc": row_desc_of(arrow_schema)}
-    cursor.description = [(f.name, 0, None, None, None, None, None) for f in arrow_schema]
+    cursor.description = [(field.name, 0, None, None, None, None, None) for field in arrow_schema]
     cursor._rows = [list(row) for row in rows]
     table = redshift.table_from_cursor(cursor)
     assert table.schema.equals(arrow_schema)
@@ -362,9 +368,11 @@ def test_table_from_cursor_by_columns() -> None:
     by_dicts = pa.Table.from_pylist([dict(zip(names, row)) for row in rows], schema=arrow_schema)
     assert table.equals(by_dicts)
 
+    # O resultado vazio fica com o esquema; sem description, sem coluna.
     cursor._rows = []
     empty = redshift.table_from_cursor(cursor)
-    assert empty.num_rows == 0 and empty.schema.equals(arrow_schema)
+    assert empty.num_rows == 0
+    assert empty.schema.equals(arrow_schema)
     cursor.description = None
     assert redshift.table_from_cursor(cursor).num_columns == 0
 
@@ -420,7 +428,7 @@ def test_stream_literal_values(monkeypatch: pytest.MonkeyPatch) -> None:
                ENTRIES.c.id_lancamento.in_(sa.bindparam("ids", expanding=True)))
         .order_by(ENTRIES.c.id_lancamento)
     )
-    params = {"padrao": "50% d'agua \\ n", "dia": dt.date(2026, 8, 29),
+    params = {"padrao": "50% d'agua \\ n", "dia": datetime.date(2026, 8, 29),
               "preco": decimal.Decimal("1.00"), "ids": [1, 2, 3]}
     literal = redshift.literal_text(statement, params, PREFIX)
     assert f'FROM "{PREFIX}cad_lancamentos"' in literal
@@ -430,33 +438,37 @@ def test_stream_literal_values(monkeypatch: pytest.MonkeyPatch) -> None:
     assert '"id_lancamento" IN (1, 2, 3)' in literal
     assert ":" not in literal.split("FROM")[1]
 
+    # O texto com o sentinela e os parâmetros nomeados.
     text = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos" WHERE "area" = :area '
             'AND "id_lancamento" IN :ids AND "data_base" > :dia')
     from_text = redshift.literal_text(text, {"area": "a'b", "ids": [4, 5],
-                                             "dia": dt.date(2026, 1, 1)}, PREFIX)
+                                             "dia": datetime.date(2026, 1, 1)}, PREFIX)
     assert from_text == (f'SELECT "id_lancamento" FROM "{PREFIX}cad_lancamentos" WHERE "area" = '
                          "'a''b' AND \"id_lancamento\" IN (4, 5) AND \"data_base\" > '2026-01-01'")
 
+    # Os parâmetros sem valor são SqlError antes de qualquer comando.
     connection = FakeConnection()
     engine = fake_engine(monkeypatch, connection)
     before = len(connection.commands)
     with pytest.raises(SqlError, match="padrao"):
-        engine.stream(statement, {"dia": dt.date(2026, 8, 29), "preco": decimal.Decimal("1"),
+        engine.stream(statement, {"dia": datetime.date(2026, 8, 29), "preco": decimal.Decimal("1"),
                                   "ids": [1]})
     with pytest.raises(SqlError, match="ids"):
         engine.stream(sa.select(ENTRIES).where(ENTRIES.c.id_lancamento.in_(
             sa.bindparam("ids", expanding=True))))
     with pytest.raises(SqlError, match="area"):
-        engine.stream(text, {"ids": [1], "dia": dt.date(2026, 1, 1)})
+        engine.stream(text, {"ids": [1], "dia": datetime.date(2026, 1, 1)})
     assert len(connection.commands) == before
 
     # O query: os valores como parâmetros do driver, no estilo named, e o IN expandido.
     compiled, values = redshift.compiled_for_cursor(statement, params, PREFIX)
     assert set(values) == {"padrao", "dia", "preco", "ids_1", "ids_2", "ids_3"}
-    assert "(:ids_1, :ids_2, :ids_3)" in compiled and ":padrao" in compiled
-    bound, bound_values = redshift.compiled_for_cursor(text, {"area": "x", "ids": [1],
-                                                             "dia": dt.date(2026, 1, 1)}, PREFIX)
-    assert f'"{PREFIX}cad_lancamentos"' in bound and bound_values["area"] == "x"
+    assert "(:ids_1, :ids_2, :ids_3)" in compiled
+    assert ":padrao" in compiled
+    text_params = {"area": "x", "ids": [1], "dia": datetime.date(2026, 1, 1)}
+    bound, bound_values = redshift.compiled_for_cursor(text, text_params, PREFIX)
+    assert f'"{PREFIX}cad_lancamentos"' in bound
+    assert bound_values["area"] == "x"
 
 
 @pytest.mark.local
@@ -466,7 +478,7 @@ def test_stream_empty_result(monkeypatch: pytest.MonkeyPatch,
     ``pg_last_unload_count()`` em 0, o ``stream`` sai sem lote e com o esquema do ``row_desc``; com
     2, a falta do manifesto sobe com a contagem."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
-    empty = entries(MONTHS[0], 1, 0)
+    empty = entry_rows(MONTHS[0], 1, 0)
     connection = FakeConnection(storage, unload_rows=empty)
     engine = fake_engine(monkeypatch, connection, storage)
     with engine.stream(sa.select(ENTRIES)) as stream:
@@ -476,11 +488,14 @@ def test_stream_empty_result(monkeypatch: pytest.MonkeyPatch,
         assert list(stream) == []
         assert stream.read_all().num_rows == 0
     texts = connection.texts()
-    assert texts[-3].startswith("SELECT * FROM (SELECT") and texts[-3].endswith(") AS t LIMIT 0")
-    assert texts[-2].startswith("UNLOAD ('SELECT") and "PARALLEL OFF" in texts[-2]
+    assert texts[-3].startswith("SELECT * FROM (SELECT")
+    assert texts[-3].endswith(") AS t LIMIT 0")
+    assert texts[-2].startswith("UNLOAD ('SELECT")
+    assert "PARALLEL OFF" in texts[-2]
     assert texts[-1] == "SELECT pg_last_unload_count()"
 
-    connection.unload_rows = entries(MONTHS[0], 1, 2)
+    # Linhas descarregadas sem manifesto: FileNotFoundError.
+    connection.unload_rows = entry_rows(MONTHS[0], 1, 2)
     connection.write_manifest = False
     with pytest.raises(FileNotFoundError, match="2 linha"):
         engine.stream(sa.select(ENTRIES))
@@ -492,7 +507,7 @@ def test_stream_reads_the_unloaded_file_in_the_statement_schema(
     """Os lotes vêm do arquivo do ``UNLOAD``, com o ``INT96`` em microssegundos e cada lote no
     esquema do ``row_desc``; ``close`` apaga o prefixo do stream, e ``read_all`` dá as linhas."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
-    rows = entries(MONTHS[0], 1, 250)
+    rows = entry_rows(MONTHS[0], 1, 250)
     connection = FakeConnection(storage, unload_rows=rows)
     engine = fake_engine(monkeypatch, connection, storage)
     with engine.stream(sa.select(ENTRIES), batch_size=100) as stream:
@@ -513,19 +528,24 @@ def test_statements_serialize_on_the_single_session(monkeypatch: pytest.MonkeyPa
     lê os arquivos, porque o lock solta no fim do ``UNLOAD``; um ``stream`` aberto dentro de
     ``session()``, na mesma thread, não trava; e ``new_session`` abre outra conexão."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
-    connection = FakeConnection(storage, unload_rows=entries(MONTHS[0], 1, 300), delay=0.05)
+    connection = FakeConnection(storage, unload_rows=entry_rows(MONTHS[0], 1, 300), delay=0.05)
     engine = fake_engine(monkeypatch, connection, storage)
     assert isinstance(engine, Engine)
 
-    threads = [threading.Thread(target=engine.query, args=(f"SELECT {k}",)) for k in range(3)]
+    # Três comandos de três threads.
+    threads = []
+    for number in range(3):
+        threads.append(threading.Thread(target=engine.query, args=(f"SELECT {number}",)))
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
+    # Cada comando termina antes de o seguinte começar.
     windows = sorted((command.started, command.finished) for command in connection.commands[-3:])
-    for (_, finished), (started, _) in zip(windows, windows[1:]):
-        assert finished <= started
+    for previous, following in itertools.pairwise(windows):
+        assert previous[1] <= following[0]
 
+    # Um comando enquanto o stream ainda lê os arquivos.
     with engine.stream(sa.select(ENTRIES), batch_size=10) as stream:
         first = stream.read_next_batch()
         started = time.perf_counter()
@@ -534,11 +554,14 @@ def test_statements_serialize_on_the_single_session(monkeypatch: pytest.MonkeyPa
         assert first.num_rows == 10
         assert sum(batch.num_rows for batch in stream) == 290
 
+    # Um stream dentro de session(), na mesma thread.
     with engine.session():
         with engine.stream(sa.select(ENTRIES)) as inner:
             assert inner.read_all().num_rows == 300
 
+    # new_session abre outra conexão, com o USE e o search_path, e a fecha na saída.
     connections = []
+
     def open_fake(login: dict) -> FakeConnection:
         connections.append(FakeConnection(storage))
         return connections[-1]
@@ -546,9 +569,10 @@ def test_statements_serialize_on_the_single_session(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(redshift, "driver_connect", open_fake)
     with engine.new_session() as other:
         other.query("SELECT 2")
-    assert len(connections) == 1 and connections[0].closed
-    assert [mask(c.text) for c in connections[0].commands] == [
-        "USE compartilhado", "SET search_path TO esquema", "SELECT 2"]
+    assert len(connections) == 1
+    assert connections[0].closed
+    assert connections[0].texts() == ["USE compartilhado", "SET search_path TO esquema",
+                                      "SELECT 2"]
 
 
 def test_connection_dropped_by_the_server_is_reopened_once(
@@ -563,17 +587,18 @@ def test_connection_dropped_by_the_server_is_reopened_once(
     first.drop_next = 1
     with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
         engine.query("SELECT 1")
-    assert first.closed and engine._connection is not first
-    assert [mask(c.text) for c in engine._connection.commands] == [
-        "USE compartilhado", "SET search_path TO esquema", "SELECT 1"]
+    assert first.closed
+    assert engine._connection is not first
+    assert engine._connection.texts() == ["USE compartilhado", "SET search_path TO esquema",
+                                          "SELECT 1"]
     assert "derrubada" in caplog.text
 
+    # Dentro de uma transação o erro sobe, com o ROLLBACK tentado.
     with pytest.raises(redshift_connector.InterfaceError):
         with engine.transaction():
             engine._connection.drop_next = 1
             engine.execute("SELECT 2")
-    assert [mask(c.text) for c in engine._connection.commands][-3:] == ["BEGIN", "SELECT 2",
-                                                                          "ROLLBACK"]
+    assert engine._connection.texts()[-3:] == ["BEGIN", "SELECT 2", "ROLLBACK"]
 
 
 @pytest.mark.local
@@ -589,9 +614,10 @@ def test_loader_writes_the_file_and_creates_the_table_in_a_transaction(
     with pytest.raises(SandboxError, match="ocupado"):
         engine.loader(ENTRIES)
 
+    # O close cria e carrega a tabela numa transação.
     with engine.loader(PROJECTED) as loader:
-        loader.write(entries(MONTHS[0], 1, 10, PROJECTED))
-        loader.write(entries(MONTHS[0], 11, 5, PROJECTED).to_batches()[0])
+        loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+        loader.write(entry_rows(MONTHS[0], 11, 5, PROJECTED).to_batches()[0])
     assert loader.rows == 15
     assert storage.list_files(f"prod/staging/{EXECUTION_ID}") == []
     texts = connection.texts()
@@ -608,7 +634,7 @@ def test_loader_writes_the_file_and_creates_the_table_in_a_transaction(
 
     # A tabela sem coluna JSON recebe o COPY direto.
     connection.existing.discard(f"{PREFIX}cad_contas")
-    engine.load(ACCOUNTS, pa.table({"id_conta": pa.array([1], pa.int64()), "numero": ["A"]}))
+    engine.load(ACCOUNTS, account_rows(["A"]))
     assert connection.texts()[-2].startswith(f'COPY "esquema"."{PREFIX}cad_contas"\nFROM ')
 
     # Uma exceção dentro do with: o arquivo sai e nada é criado.
@@ -616,7 +642,7 @@ def test_loader_writes_the_file_and_creates_the_table_in_a_transaction(
     before = len(connection.commands)
     with pytest.raises(RuntimeError, match="plantado"):
         with engine.loader(PROJECTED) as loader:
-            loader.write(entries(MONTHS[0], 1, 10, PROJECTED))
+            loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
             raise RuntimeError("erro plantado")
     assert connection.texts()[before:] == [
         f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0']
@@ -644,13 +670,14 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     uri = storage.uri_of("prod/cad_lancamentos")
     delta.create_table(uri, ENTRIES, storage)
     for index, month in enumerate(MONTHS):
-        delta.publish_partition(uri, ENTRIES, month, entries(month, 1 + index * 10, 10), METADATA,
-                                storage)
+        month_rows = entry_rows(month, 1 + index * 10, 10)
+        delta.publish_partition(uri, ENTRIES, month, month_rows, METADATA, storage)
     connection = FakeConnection(storage)
     engine = fake_engine(monkeypatch, connection, storage)
     with pytest.raises(SandboxError, match="versão"):
         engine.ingest(ENTRIES, uri, None)
 
+    # Duas partições pedidas, uma sem arquivo: um COPY e um INSERT.
     engine.ingest(ENTRIES, uri, 2, partitions=[MONTHS[1], "2026-09-30"])
     texts = connection.texts()
     name = f"{PREFIX}cad_lancamentos"
@@ -684,6 +711,7 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     with pytest.raises(SandboxError):
         engine.published(ENTRIES, uri, None)
 
+    # O cleanup apaga as tabelas e o staging/.
     engine.cleanup()
     dropped = [text for text in connection.texts() if text.startswith("DROP TABLE IF EXISTS")]
     assert dropped[-2:] == [f'DROP TABLE IF EXISTS "esquema"."{name}"',
@@ -705,11 +733,12 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     uri = storage.uri_of("prod/cad_lancamentos_projetados")
     delta.create_table(uri, PROJECTED, storage)
-    rows = entries(MONTHS[1], 1, 1000, PROJECTED)
+    rows = entry_rows(MONTHS[1], 1, 1000, PROJECTED)
     unloaded = rows.drop_columns(["data_base_str"])
     connection = FakeConnection(storage, unload_rows=unloaded)
     engine = fake_engine(monkeypatch, connection, storage)
 
+    # O registro dos arquivos do UNLOAD.
     version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000)
     assert version == 1
     unload = [text for text in connection.texts() if text.startswith("UNLOAD")][-1]
@@ -724,7 +753,8 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     pattern = re.escape(uri) + rf"/data_base_str={MONTHS[1]}/{EXECUTION_ID}_[0-9a-f]{{32}}/"
     assert re.fullmatch(pattern, destination)
     files = storage.list_files(storage.relative(uri), ".parquet")
-    assert len(files) == 1 and files[0].startswith(
+    assert len(files) == 1
+    assert files[0].startswith(
         f"prod/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/{EXECUTION_ID}_")
     read = delta.open_table(uri, storage).to_pyarrow_table()
     assert read.num_rows == 1000
@@ -742,13 +772,15 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     assert len(destinations) == 2
 
     # A troca: o destino no staging e publish_partition, com o aviso.
-    with_nan = rows.set_column(rows.schema.get_field_index("valor"), "valor",
-                               pa.array([float("nan")] + [k / 4 for k in range(2, 1001)]))
+    values = [float("nan")] + [number / 4 for number in range(2, 1001)]
+    with_nan = rows.set_column(rows.schema.get_field_index("valor"), "valor", pa.array(values))
     connection.unload_rows = with_nan.drop_columns(["data_base_str"])
     with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
-        version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, 1000, ["valor"])
+        version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000,
+                                          columns_without_min_max=["valor"])
     assert version == 2
-    assert "publish_partition" in caplog.text and "['valor']" in caplog.text
+    assert "publish_partition" in caplog.text
+    assert "['valor']" in caplog.text
     unload = [text for text in connection.texts() if text.startswith("UNLOAD")][-1]
     destination = re.search(r"TO '([^']+)'", unload).group(1)
     assert destination.startswith(storage.uri_of(
@@ -756,7 +788,8 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     stats = pa.table(delta.open_table(uri, storage).get_add_actions(flatten=True))
     assert stats.column("max.valor").null_count == 1
     read = delta.open_table(uri, storage).to_pyarrow_table()
-    assert read.num_rows == 1000 and pc.sum(pc.is_nan(read.column("valor"))).as_py() == 1
+    assert read.num_rows == 1000
+    assert pc.sum(pc.is_nan(read.column("valor"))).as_py() == 1
     assert read.column("data_base_str").unique().to_pylist() == [MONTHS[1]]
 
     # A partição vazia: nenhum arquivo do UNLOAD, um arquivo sem linha registrado.
@@ -804,7 +837,7 @@ def published_table(target: Target, table: sa.Table, months: list[str], rows: in
     delta.create_table(uri, table, target.storage)
     version = 0
     for index, month in enumerate(months):
-        data = entries(month, 1 + index * rows, rows, table)
+        data = entry_rows(month, 1 + index * rows, rows, table)
         version = delta.publish_partition(uri, table, month, data, METADATA, target.storage)
     return version
 
@@ -854,6 +887,7 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     engine.ingest(ENTRIES, uri, entries_version, partitions=[MONTHS[1]])
     assert count_of(engine, f"{engine.prefix}cad_lancamentos") == 120
 
+    # O mesmo resultado pelo query e pelo stream.
     statement = (sa.select(ENTRIES).where(ENTRIES.c.data_base_str == sa.bindparam("particao"),
                                           ENTRIES.c.to == "SP")
                  .order_by(ENTRIES.c.id_lancamento))
@@ -870,8 +904,8 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     assert by_query.column("carimbo").type == pa.timestamp("us")
 
     # O loader grava a projeção; o nome ocupado é recusado.
-    with engine.stream(statement, params, batch_size=40) as stream, \
-            engine.loader(PROJECTED) as loader:
+    with (engine.stream(statement, params, batch_size=40) as stream,
+          engine.loader(PROJECTED) as loader):
         for batch in stream:
             loader.write(batch)
     assert loader.rows == 120
@@ -884,8 +918,7 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     delta.create_table(projected_uri, PROJECTED, storage)
     accounts_uri = target.uri(ACCOUNTS)
     delta.create_table(accounts_uri, ACCOUNTS, storage)
-    ids = pa.array([1, 2, 3], pa.int64())
-    accounts = schema.cast(pa.table({"id_conta": ids, "numero": ["A", "B", "C"]}), ACCOUNTS)
+    accounts = account_rows(["A", "B", "C"])
     accounts_version = delta.publish_partition(accounts_uri, ACCOUNTS, None, accounts, METADATA,
                                                storage)
     report = engine.audit(PROJECTED, [MONTHS[1]], projected_uri, 0)
@@ -893,7 +926,8 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     assert [result.name for result in report.results] == [
         "linhas", "chave_id_lancamento", "chave_id_lancamento_publicada", "chave_codigo",
         "chave_codigo_publicada"]
-    assert report.rows(MONTHS[1]) == 120 and report.nonfinite_columns[MONTHS[1]] == ()
+    assert report.rows(MONTHS[1]) == 120
+    assert report.nonfinite_columns[MONTHS[1]] == ()
     # A tabela publicada vazia dispensa a junção da chave sequencial e carrega a staging só para
     # a chave codigo; a chave estrangeira de cad_lancamentos entra pela versão fixada de
     # cad_contas, carregada em _publicado quando o anti-join roda.
@@ -905,7 +939,8 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     assert count_of(engine, f"{engine.prefix}cad_lancamentos_publicado") == 240
 
     # A exportação pelo registro: o arquivo do UNLOAD na pasta da partição, lido pelos leitores.
-    version = engine.export_partition(PROJECTED, projected_uri, MONTHS[1], METADATA, 120, ())
+    version = engine.export_partition(PROJECTED, projected_uri, MONTHS[1], METADATA,
+                                      expected_rows=120)
     assert version == 1
     files = storage.list_files(storage.relative(projected_uri), ".parquet")
     assert len(files) >= 1
@@ -927,24 +962,27 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     record("redshift.engine.delta_scan_meta", {"tipo": meta_scan[0], "valor": str(meta_scan[1])})
 
     # A troca: a partição com NaN pela máquina local, com as mesmas linhas e o aviso.
-    with_nan = entries(MONTHS[0], 1, 120, PROJECTED,
-                       valor=[float("nan")] + [k / 4 for k in range(2, 121)])
+    with_nan = entry_rows(MONTHS[0], 1, 120, PROJECTED,
+                          valor=[float("nan")] + [number / 4 for number in range(2, 121)])
     engine.execute(f"DELETE FROM {target.qualified('cad_lancamentos_projetados')}")
     engine.execute(f"DROP TABLE {target.qualified('cad_lancamentos_projetados')}")
     engine._created.remove(f"{engine.prefix}cad_lancamentos_projetados")
     engine.load(PROJECTED, with_nan)
     with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
-        version = engine.export_partition(PROJECTED, projected_uri, MONTHS[0], METADATA, 120,
-                                          ["valor"])
-    assert version == 2 and "publish_partition" in caplog.text
+        version = engine.export_partition(PROJECTED, projected_uri, MONTHS[0], METADATA,
+                                          expected_rows=120, columns_without_min_max=["valor"])
+    assert version == 2
+    assert "publish_partition" in caplog.text
     read = delta.open_table(projected_uri, storage).to_pyarrow_table()
     assert read.num_rows == 240
     nan_rows = read.filter(pc.is_nan(read.column("valor")))
-    assert nan_rows.num_rows == 1 and nan_rows.column("data_base_str")[0].as_py() == MONTHS[0]
+    assert nan_rows.num_rows == 1
+    assert nan_rows.column("data_base_str")[0].as_py() == MONTHS[0]
     stats = pa.table(delta.open_table(projected_uri, storage).get_add_actions(flatten=True))
     by_partition = dict(zip(stats.column("partition.data_base_str").to_pylist(),
                             stats.column("max.valor").to_pylist()))
-    assert by_partition[MONTHS[0]] is None and by_partition[MONTHS[1]] == 60.0
+    assert by_partition[MONTHS[0]] is None
+    assert by_partition[MONTHS[1]] == 60.0
 
     # O cleanup: nenhuma tabela exec_<id>_* e o staging vazio.
     engine.cleanup()
@@ -966,7 +1004,7 @@ def test_loader_creates_the_table_at_close(target: Target,
     engine = target.engine
     name = f"{engine.prefix}cad_lancamentos_projetados"
     with engine.loader(PROJECTED) as loader:
-        loader.write(entries(MONTHS[0], 1, 10, PROJECTED))
+        loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
         assert not engine.name_in_use(name)
     assert count_of(engine, name) == 10
     engine.execute(f"DROP TABLE {engine.qualified(name)}")
@@ -978,12 +1016,13 @@ def test_loader_creates_the_table_at_close(target: Target,
 
     monkeypatch.setattr(redshift, "copy_text", broken_copy)
     with pytest.raises(Exception):  # noqa: B017 - o erro do COPY: do servidor ou do S3
-        engine.load(PROJECTED, entries(MONTHS[0], 1, 10, PROJECTED))
+        engine.load(PROJECTED, entry_rows(MONTHS[0], 1, 10, PROJECTED))
     monkeypatch.undo()
     assert not engine.name_in_use(name)
     if name in engine._created:
         engine._created.remove(name)
 
+    # O loader sem lote cria a tabela vazia.
     with engine.loader(PROJECTED):
         pass
     assert count_of(engine, name) == 0
@@ -998,8 +1037,7 @@ def test_new_session_sees_committed_tables(target: Target) -> None:
     version = published_table(target, ENTRIES, MONTHS, rows=20)
     accounts_uri = target.uri(ACCOUNTS)
     delta.create_table(accounts_uri, ACCOUNTS, target.storage)
-    accounts = schema.cast(pa.table({"id_conta": pa.array([1, 2, 3], pa.int64()),
-                                     "numero": ["A", "B", "C"]}), ACCOUNTS)
+    accounts = account_rows(["A", "B", "C"])
     accounts_version = delta.publish_partition(accounts_uri, ACCOUNTS, None, accounts, METADATA,
                                                target.storage)
     temporary = f"{engine.prefix}temporaria"
@@ -1033,7 +1071,7 @@ def test_stream_literal_values_on_the_target(target: Target) -> None:
     agregados."""
     engine = target.engine
     texts = ["d'agua", "barra \\ invertida", "50% certo", "comum"]
-    rows = entries(MONTHS[0], 1, 4, PROJECTED)
+    rows = entry_rows(MONTHS[0], 1, 4, PROJECTED)
     rows = rows.set_column(rows.schema.get_field_index("codigo"), "codigo", pa.array(texts))
     engine.load(PROJECTED, rows)
     for text in texts:
@@ -1042,27 +1080,32 @@ def test_stream_literal_values_on_the_target(target: Target) -> None:
         by_query = engine.query(statement, {"texto": text})
         with engine.stream(statement, {"texto": text}) as stream:
             by_stream = stream.read_all()
-        assert by_query.num_rows == 1 and by_stream.equals(by_query), text
+        assert by_query.num_rows == 1, text
+        assert by_stream.equals(by_query), text
     like = sa.select(PROJECTED.c.id_lancamento).where(PROJECTED.c.codigo.like(sa.bindparam("p")))
     with engine.stream(like, {"p": "%'%"}) as stream:
         assert stream.read_all().column("id_lancamento").to_pylist() == [1]
 
+    # O resultado vazio fica com as colunas.
     none = sa.select(PROJECTED).where(PROJECTED.c.id_lancamento < 0)
     with engine.stream(none) as stream:
         empty = stream.read_all()
-    assert empty.num_rows == 0 and empty.schema.names == PROJECTED.c.keys()
+    assert empty.num_rows == 0
+    assert empty.schema.names == PROJECTED.c.keys()
 
+    # O stream lê a tabela temporária da sessão.
     temporary = f"{engine.prefix}temporaria"
     engine.query(f"CREATE TEMP TABLE {temporary} AS SELECT 2 AS x")
     with engine.stream(f"SELECT x FROM {temporary}") as stream:
         assert stream.read_all().column("x").to_pylist() == [2]
 
+    # Os tipos que o row_desc descreve.
     described = engine.query(
         'select count(*) as c_count, sum("preco") as c_sum, sum("valor") as c_sum_double, '
         f"'literal' as c_text, 1.5 as c_numeric "
         f"from {target.qualified('cad_lancamentos_projetados')}")
-    record("redshift.engine.row_desc", {name: str(kind) for name, kind
-                                        in zip(described.schema.names, described.schema.types)})
+    types_by_column = {field.name: str(field.type) for field in described.schema}
+    record("redshift.engine.row_desc", types_by_column)
     assert described.column("c_count").to_pylist() == [4]
     assert pa.types.is_decimal(described.column("c_sum").type)
 
@@ -1073,14 +1116,13 @@ def test_small_load_copy_cost(target: Target) -> None:
     """O tempo de um ``load`` de 10 linhas pelo ``loader``, como leitura, nunca como reprovação."""
     engine = target.engine
     name = f"{engine.prefix}cad_contas"
-    accounts = schema.cast(pa.table({"id_conta": pa.array(range(1, 11), pa.int64()),
-                                     "numero": [f"C{k}" for k in range(10)]}), ACCOUNTS)
-    best = None
+    accounts = account_rows([f"C{index}" for index in range(10)])
+    # O melhor de três cargas, cada uma numa tabela nova.
+    elapsed = []
     for _ in range(3):
         started = time.perf_counter()
         engine.load(ACCOUNTS, accounts)
-        elapsed = time.perf_counter() - started
-        best = elapsed if best is None else min(best, elapsed)
+        elapsed.append(time.perf_counter() - started)
         engine.execute(f"DROP TABLE {engine.qualified(name)}")
         engine._created.remove(name)
-    record("redshift.engine.small_load", f"{best:.2f} s")
+    record("redshift.engine.small_load", f"{min(elapsed):.2f} s")

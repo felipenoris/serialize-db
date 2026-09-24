@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import collections
 import dataclasses
-import datetime as dt
+import datetime
 import decimal
 import json
 import re
@@ -65,10 +65,10 @@ class Operacao(Base):
     }
     id_operacao: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=False,
                                              comment="Identificador")
-    data: Mapped[dt.date] = mapped_column(sa.Date)
+    data: Mapped[datetime.date] = mapped_column(sa.Date)
     valor: Mapped[float | None] = mapped_column(sa.Double)
     preco: Mapped[decimal.Decimal | None] = mapped_column(sa.Numeric(18, 2))
-    carimbo: Mapped[dt.datetime | None] = mapped_column(sa.DateTime)
+    carimbo: Mapped[datetime.datetime | None] = mapped_column(sa.DateTime)
     to: Mapped[str | None] = mapped_column(sa.String(2))
     descricao: Mapped[str | None] = mapped_column(sa.String(200))
     data_str: Mapped[str] = mapped_column(sa.String(10), comment="Partição AAAA-MM-DD")
@@ -103,16 +103,19 @@ def uri(storage: Storage) -> str:
 
 def rows(value: str, start: int, count: int, valor: list[float] | None = None) -> pa.Table:
     """``count`` operações da partição ``value`` com ids a partir de ``start``, no contrato."""
-    day = dt.date.fromisoformat(value)
+    day = datetime.date.fromisoformat(value)
     ids = list(range(start, start + count))
+    if valor is None:
+        valor = [operation_id / 4 for operation_id in ids]
     data = pa.table({
         "id_operacao": pa.array(ids, pa.int64()),
         "data": pa.array([day] * count, pa.date32()),
-        "valor": pa.array(valor if valor is not None else [k / 4 for k in ids], pa.float64()),
-        "preco": pa.array([decimal.Decimal(k) / 100 for k in ids], pa.decimal128(18, 2)),
-        "carimbo": pa.array([dt.datetime(2026, 8, 31, 12, 30)] * count, pa.timestamp("us")),
+        "valor": pa.array(valor, pa.float64()),
+        "preco": pa.array([decimal.Decimal(operation_id) / 100 for operation_id in ids],
+                          pa.decimal128(18, 2)),
+        "carimbo": pa.array([datetime.datetime(2026, 8, 31, 12, 30)] * count, pa.timestamp("us")),
         "to": pa.array(["SP"] * count),
-        "descricao": pa.array([f"operação {k}" for k in ids]),
+        "descricao": pa.array([f"operação {operation_id}" for operation_id in ids]),
         "data_str": pa.array([value] * count),
     })
     return schema.cast(data, OPERACOES)
@@ -130,10 +133,14 @@ def current_values(storage: Storage, uri: str, column: str) -> list:
     return dataset.to_table(columns=[column]).column(column).to_pylist()
 
 
+def log_path(storage: Storage, uri: str, version: int) -> str:
+    """O arquivo do commit ``version`` no log, relativo à raiz."""
+    return storage.join(storage.relative(uri), "_delta_log", f"{version:020d}.json")
+
+
 def log_actions(storage: Storage, uri: str, version: int) -> list[dict]:
     """As ações do commit ``version``, uma por linha do log."""
-    path = storage.join(storage.relative(uri), "_delta_log", f"{version:020d}.json")
-    text, _ = storage.read_text(path)
+    text, _ = storage.read_text(log_path(storage, uri, version))
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
@@ -151,7 +158,7 @@ def action_kinds(storage: Storage, uri: str, version: int) -> list[str]:
     ``metaData``, ``commitInfo``."""
     kinds = []
     for action in log_actions(storage, uri, version):
-        kinds.append(list(action)[0])
+        kinds.append(list(action.keys())[0])
     return kinds
 
 
@@ -186,6 +193,12 @@ def scan(storage: Storage, text: str) -> list[tuple]:
     """As linhas de uma consulta numa conexão DuckDB própria, configurada pelo armazenamento."""
     with storage.duckdb_connect() as connection:
         return connection.execute(text).fetchall()
+
+
+def channels(ids: list[int], names: list[str]) -> pa.Table:
+    """Os canais pedidos, no contrato de ``dom_canais``."""
+    data = pa.table({"id_canal": pa.array(ids, pa.int64()), "nome": names})
+    return schema.cast(data, CANAIS)
 
 
 # ---------------------------------------------------------------- criação e publicação
@@ -225,9 +238,10 @@ def test_publish_partition_replaces_only_its_partition(storage: Storage, uri: st
     again = publish(storage, uri, "2026-08-31", 201, 50)
     assert (first, second, again) == (1, 2, 3)
 
+    # A primeira partição intacta e os metadados no history.
     partitions = current_values(storage, uri, "data_str")
     assert collections.Counter(partitions) == {"2026-07-31": 100, "2026-08-31": 50}
-    history = delta.open_table(uri, storage).history(1)[0]
+    history = delta.open_table(uri, storage).history(limit=1)[0]
     assert history["serialize_db_execution_id"] == "exec-2026-09-05"
     assert json.loads(history["serialize_db_input_versions"]) == {"cad_contratos": 88}
 
@@ -273,10 +287,9 @@ def test_publish_partition_without_partition_replaces_the_table(storage: Storage
     """``value=None`` numa tabela sem partição troca a tabela inteira; um valor nela é recusado."""
     uri = storage.uri_of("prod/dom_canais")
     delta.create_table(uri, CANAIS, storage)
-    data = pa.table({"id_canal": pa.array([1, 2], pa.int64()), "nome": ["app", "web"]})
-    delta.publish_partition(uri, CANAIS, None, schema.cast(data, CANAIS), METADATA, storage)
-    replacement = pa.table({"id_canal": pa.array([3], pa.int64()), "nome": ["agência"]})
-    replaced = schema.cast(replacement, CANAIS)
+    first = channels([1, 2], ["app", "web"])
+    delta.publish_partition(uri, CANAIS, None, first, METADATA, storage)
+    replaced = channels([3], ["agência"])
     assert delta.publish_partition(uri, CANAIS, None, replaced, METADATA, storage) == 2
     current = delta.open_table(uri, storage).to_pyarrow_dataset().to_table()
     assert current.column("nome").to_pylist() == ["agência"]
@@ -320,12 +333,14 @@ def test_register_files_registers_an_unload_like_file(storage: Storage, uri: str
     file = write_external_file(storage, uri, relative, data)
     footer_path = storage.join(storage.relative(uri), file.path)
     footer = pq.ParquetFile(storage.open_input_file(footer_path))
-    physical = {}
+    physical_type_by_column = {}
     for index in range(len(footer.schema)):
         column = footer.schema.column(index)
-        physical[column.name] = column.physical_type
-    assert (physical["carimbo"], physical["preco"]) == ("INT96", "FIXED_LEN_BYTE_ARRAY")
+        physical_type_by_column[column.name] = column.physical_type
+    physical_types = (physical_type_by_column["carimbo"], physical_type_by_column["preco"])
+    assert physical_types == ("INT96", "FIXED_LEN_BYTE_ARRAY")
 
+    # O commit leva o mínimo e o máximo só da chave.
     version = delta.register_files(uri, OPERACOES, [file], "2026-08-31", METADATA, storage,
                                    expected_rows=50)
     assert version == 2
@@ -334,14 +349,15 @@ def test_register_files_registers_an_unload_like_file(storage: Storage, uri: str
     assert stats["minValues"] == {"id_operacao": 101}
     assert stats["maxValues"] == {"id_operacao": 150}
 
+    # Os dois leitores devolvem as linhas em timestamp[us].
     table = delta.open_table(uri, storage)
-    read = table.to_pyarrow_dataset().to_table()
-    assert read.num_rows == 50
-    assert read.schema.field("carimbo").type == pa.timestamp("us")
+    read_by_pyarrow = table.to_pyarrow_dataset().to_table()
+    assert read_by_pyarrow.num_rows == 50
+    assert read_by_pyarrow.schema.field("carimbo").type == pa.timestamp("us")
     query = (f"SELECT count(*), max(id_operacao), typeof(carimbo) FROM delta_scan('{uri}') "
              "GROUP BY ALL")
     assert scan(storage, query) == [(50, 150, "TIMESTAMP")]
-    assert table.history(1)[0]["serialize_db_execution_id"] == "exec-2026-09-05"
+    assert table.history(limit=1)[0]["serialize_db_execution_id"] == "exec-2026-09-05"
 
 
 # Um registro: os arquivos, o valor registrado e ``expected_rows``.
@@ -424,7 +440,7 @@ def test_read_back_restores_on_a_difference(storage: Storage, uri: str) -> None:
         delta.register_files(uri, OPERACOES, [lying], "2026-08-31", METADATA, storage)
     table = delta.open_table(uri, storage)
     assert table.version() == 3
-    assert table.history(1)[0]["operation"] == "RESTORE"
+    assert table.history(limit=1)[0]["operation"] == "RESTORE"
     ids = current_values(storage, uri, "id_operacao")
     assert sorted(ids) == list(range(1, 11))
 
@@ -435,9 +451,10 @@ def test_file_from_return_stats_and_registered_stats_prune(storage: Storage, uri
     ``timestamp`` ficam sem mínimo e máximo."""
     publish(storage, uri, "2026-07-31", 1, 10)
     target = f"{uri}/data_str=2026-08-31/exec-42_ab12.parquet"
+    source = rows("2026-08-31", 101, 100).drop_columns(["data_str"])
+    storage.ensure_folder(storage.join(storage.relative(uri), "data_str=2026-08-31"))
     with storage.duckdb_connect() as connection:
-        connection.register("origem", rows("2026-08-31", 101, 100).drop_columns(["data_str"]))
-        storage.ensure_folder(storage.join(storage.relative(uri), "data_str=2026-08-31"))
+        connection.register("origem", source)
         cursor = connection.execute(f"COPY origem TO '{target}' (FORMAT parquet, RETURN_STATS)")
         names = [column[0] for column in cursor.description]
         row = dict(zip(names, cursor.fetchone()))
@@ -448,6 +465,7 @@ def test_file_from_return_stats_and_registered_stats_prune(storage: Storage, uri
     assert "preco" not in file.stats["max"]
     assert "carimbo" not in file.stats["max"]
 
+    # O registro e a poda do delta_scan.
     delta.register_files(uri, OPERACOES, [file], "2026-08-31", METADATA, storage,
                          expected_rows=100)
     registered = pa.table(delta.open_table(uri, storage).get_add_actions(flatten=True))
@@ -495,8 +513,8 @@ def test_nonfinite_double_columns_leave_min_max_out(storage: Storage, uri: str) 
     july_folder = storage.join(storage.relative(uri), "data_str=2026-07-31")
     july_file = storage.list_files(july_folder, ".parquet")[0]
     footer = pq.ParquetFile(storage.open_input_file(july_file)).metadata
-    valor = footer.schema.names.index("valor")
-    statistics = footer.row_group(0).column(valor).statistics
+    valor_index = footer.schema.names.index("valor")
+    statistics = footer.row_group(0).column(valor_index).statistics
     assert statistics is None or not statistics.has_min_max
 
     # A poda do delta_scan, lida pelos arquivos que o DuckDB abre.
@@ -567,10 +585,11 @@ def test_reconcile_adds_nullable_column_and_relaxes_not_null(storage: Storage, u
     assert current.names[-1] == "canal"
     assert current.field("canal").metadata[b"comment"] == b"Canal"
     assert current.field("data").nullable
-    assert table.to_pyarrow_dataset().to_table(columns=["canal"]).column("canal").null_count == 10
+    assert current_values(storage, uri, "canal") == [None] * 10
     previous = pa.schema(delta.open_table(uri, storage, version=1).schema())
     assert "canal" not in previous.names
 
+    # A segunda chamada não commita.
     version = table.version()
     assert not delta.reconcile(uri, model, storage).changes
     assert delta.open_table(uri, storage).version() == version
@@ -673,7 +692,7 @@ def test_version_diff_counts_data_changes_only(storage: Storage, uri: str) -> No
     # A tabela sem partição.
     canais = storage.uri_of("prod/dom_canais")
     delta.create_table(canais, CANAIS, storage)
-    data = schema.cast(pa.table({"id_canal": pa.array([1], pa.int64()), "nome": ["app"]}), CANAIS)
+    data = channels([1], ["app"])
     delta.publish_partition(canais, CANAIS, None, data, METADATA, storage)
     assert delta.version_diff(canais, 0, 1, CANAIS, storage) == {None}
 
@@ -683,7 +702,7 @@ def test_version_diff_refuses_a_cleaned_log(storage: Storage, uri: str) -> None:
     completa na mensagem."""
     for value in ("2026-07-31", "2026-08-31"):
         publish(storage, uri, value, 1, 5)
-    storage.delete([storage.join(storage.relative(uri), "_delta_log", f"{1:020d}.json")])
+    storage.delete([log_path(storage, uri, 1)])
     with pytest.raises(LogUnavailable, match="publique a tabela inteira"):
         delta.version_diff(uri, 0, 2, OPERACOES, storage)
     assert delta.version_diff(uri, 1, 2, OPERACOES, storage) == {"2026-08-31"}
@@ -738,7 +757,8 @@ def test_compact_before_snapshot(storage: Storage, uri: str) -> None:
     """Os arquivos pequenos de uma partição viram um; a partição com um arquivo só não commita."""
     publish(storage, uri, "2026-07-31", 1, 10)
     for start in (100, 200, 300):
-        write_deltalake(delta.open_table(uri, storage), rows("2026-08-31", start, 5), mode="append")
+        appended = rows("2026-08-31", start, 5)
+        write_deltalake(delta.open_table(uri, storage), appended, mode="append")
     metrics = delta.compact(uri, OPERACOES, ["2026-08-31"], storage)
     assert (metrics["numFilesAdded"], metrics["numFilesRemoved"]) == (1, 3)
     version = delta.open_table(uri, storage).version()
@@ -749,9 +769,10 @@ def test_compact_before_snapshot(storage: Storage, uri: str) -> None:
 
 def exported_measures(storage: Storage, folder: str) -> list[tuple]:
     """Linhas e soma de ``id_operacao`` por partição dos arquivos exportados em ``folder``."""
-    files = (f"read_parquet('{storage.uri_of(folder)}/*/*.parquet', "
-             "hive_partitioning = true, hive_types_autocast = false)")
-    query = f"SELECT data_str, count(*), sum(id_operacao) FROM {files} GROUP BY 1 ORDER BY 1"
+    parquet_source = (f"read_parquet('{storage.uri_of(folder)}/*/*.parquet', "
+                      "hive_partitioning = true, hive_types_autocast = false)")
+    query = (f"SELECT data_str, count(*), sum(id_operacao) FROM {parquet_source} "
+             "GROUP BY 1 ORDER BY 1")
     return scan(storage, query)
 
 
@@ -762,6 +783,7 @@ def test_export_snapshot_copy_and_rewrite(storage: Storage, uri: str) -> None:
     publish(storage, uri, "2026-08-31", 11, 10)
     publish(storage, uri, "2026-08-31", 21, 5)
 
+    # A versão atual pelos dois modos e a versão 2 por cópia.
     copy_folder = "prod/exportacao/copia"
     rewrite_folder = "prod/exportacao/reescrita"
     old_folder = "prod/exportacao/antiga"
@@ -775,6 +797,7 @@ def test_export_snapshot_copy_and_rewrite(storage: Storage, uri: str) -> None:
     for path in copied + rewritten:
         assert re.search(r"/data_str=2026-0[78]-31/", path), path
 
+    # As mesmas linhas nos dois modos; a versão 2 com o agosto antigo.
     expected = [("2026-07-31", 10, 55), ("2026-08-31", 5, 115)]
     assert exported_measures(storage, copy_folder) == expected
     assert exported_measures(storage, rewrite_folder) == expected
@@ -788,14 +811,18 @@ def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) 
     publish(storage, uri, "2026-08-31", 11, 10)
     destination = storage.uri_of("prod/publicacao/exec-42/cad_operacoes/2026-08-31.manifest")
     assert delta.copy_manifest(uri, 2, ["2026-08-31"], destination, storage) == destination
-    manifest = json.loads(storage.read_text(storage.relative(destination))[0])
-    [entry] = manifest["entries"]
+    text, _ = storage.read_text(storage.relative(destination))
+    manifest = json.loads(text)
+    assert len(manifest["entries"]) == 1
+    entry = manifest["entries"][0]
     assert entry["url"].startswith(f"{uri}/data_str=2026-08-31/")
     assert entry["mandatory"] is True
     assert entry["meta"]["content_length"] == storage.size(storage.relative(entry["url"]))
-    all_partitions = storage.uri_of("prod/publicacao/tudo.manifest")
-    everything = delta.copy_manifest(uri, 2, None, all_partitions, storage)
-    text, _ = storage.read_text(storage.relative(everything))
+
+    # O manifesto de todas as partições.
+    whole_table_destination = storage.uri_of("prod/publicacao/tudo.manifest")
+    whole_table_manifest = delta.copy_manifest(uri, 2, None, whole_table_destination, storage)
+    text, _ = storage.read_text(storage.relative(whole_table_manifest))
     assert len(json.loads(text)["entries"]) == 2
 
 
@@ -817,12 +844,13 @@ def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:
     assert copy.metadata().partition_columns == ["data_str"]
     assert copy.metadata().name == "cad_operacoes"
     assert not pa.schema(copy.schema()).field("id_operacao").nullable
-    source_actions = pa.table(delta.open_table(uri, storage, 1).get_add_actions(flatten=True))
+    version_1 = delta.open_table(uri, storage, version=1)
+    version_1_actions = pa.table(version_1.get_add_actions(flatten=True))
     copied_actions = pa.table(copy.get_add_actions(flatten=True))
     for column in ("path", "size_bytes", "num_records", "min.id_operacao", "max.id_operacao"):
-        assert copied_actions.column(column).equals(source_actions.column(column)), column
-    assert scan(storage, f"SELECT count(*), sum(id_operacao) FROM delta_scan('{archive}')") == \
-        [(10, 55)]
+        assert copied_actions.column(column).equals(version_1_actions.column(column)), column
+    totals = f"SELECT count(*), sum(id_operacao) FROM delta_scan('{archive}')"
+    assert scan(storage, totals) == [(10, 55)]
 
     # A repetição sobre a cópia completa não commita; a cópia da versão 2 sobre a da versão 1
     # continua de onde a primeira parou, com um commit só da partição que falta; a versão 1 sobre a
@@ -831,13 +859,14 @@ def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:
     assert delta.deep_copy(uri, 2, archive, storage) == 2
     added = [action["add"]["path"] for action in log_actions(storage, archive, 2)
              if "add" in action]
-    source_actions = pa.table(delta.open_table(uri, storage, 2).get_add_actions(flatten=True))
-    august = [path for path in source_actions.column("path").to_pylist()
-              if path.startswith("data_str=2026-08-31/")]
-    assert added == august and len(august) == 1
-    continued = delta.open_table(archive, storage)
-    assert sorted(pa.table(continued.get_add_actions(flatten=True)).column("path").to_pylist()) \
-        == sorted(source_actions.column("path").to_pylist())
+    version_2 = delta.open_table(uri, storage, version=2)
+    version_2_actions = pa.table(version_2.get_add_actions(flatten=True))
+    version_2_paths = version_2_actions.column("path").to_pylist()
+    august = [path for path in version_2_paths if path.startswith("data_str=2026-08-31/")]
+    assert len(august) == 1
+    assert added == august
+    continued = pa.table(delta.open_table(archive, storage).get_add_actions(flatten=True))
+    assert sorted(continued.column("path").to_pylist()) == sorted(version_2_paths)
     assert scan(storage, f"SELECT count(*) FROM delta_scan('{archive}')") == [(20,)]
     with pytest.raises(RegistrationRefused, match="fora da versão 1"):
         delta.deep_copy(uri, 1, archive, storage)

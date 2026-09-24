@@ -48,7 +48,7 @@ sempre posterior a ``data_base``, até 2026-12-31.
 from __future__ import annotations
 
 import calendar
-import datetime as dt
+import datetime
 import json
 import random
 import shutil
@@ -297,8 +297,8 @@ MODEL_NOT_NULL_DECLARED_NULLABLE: dict[str, list[str]] = {
 SOURCE_SYSTEMS = (15, 43, 89)
 MAX_ENTRY_ID = 1_113_599_996
 EXTREME_AMOUNT = 11846195394.628
-WRITE_TIMESTAMP = dt.datetime(2026, 3, 18, 16, 53, 22, 296000)
-PROJECTION_HORIZON = dt.date(2026, 12, 31)
+WRITE_TIMESTAMP = datetime.datetime(2026, 3, 18, 16, 53, 22, 296000)
+PROJECTION_HORIZON = datetime.date(2026, 12, 31)
 
 SEGMENT_NAMES = (
     "Crédito e Serviços",
@@ -337,6 +337,10 @@ DEPARTMENTS = ("DCRED2", "DEPRI", "JUCRE")
 FINANCIAL_INSTRUMENTS = ("AEROPORTOS DE PRIMEIRO CICLO", "TURISMO, COMÉRCIO E SERVIÇOS")
 FUNDING_SOURCE_FAMILIES = ("FAT", "FMM", "FMC", "BND")
 FUNDING_SOURCES = (2277, 3964, 2300, 4199, 1112, 8014, 9023)
+ACCOUNT_LETTERS = "ABCDEFGHIJKLMNOPQRST"
+ADDITIONAL_COSTS = (14.4, 14.3, 15.3, 0.0, -0.25)
+BASIC_SPREADS = (1.2, 0.5, 0.8)
+BNDES_RATES = (1.4, 0.6, 1.0, 1.2, 16.1)
 CURRENCY_UNITS = (185, 604, 202, 777, 19, 145, 143)
 TO_CODES = ("01", "ZB", "ZD", "RC", "02", "RI", "05", "ZT")
 RATE_ORIGIN_ACCOUNTS = (10, 106, 31, 8, 34, 9, 4, 47, 103, 20, 5, 19, 43)
@@ -358,17 +362,19 @@ class SourceBase:
     partition_rows: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
-def month_ends_after(date: dt.date) -> list[dt.date]:
+def month_ends_after(date: datetime.date) -> list[datetime.date]:
     """Os fins de mês depois de ``date`` até ``PROJECTION_HORIZON``: os meses que um lançamento de
     ``data_base = date`` projeta."""
     ends = []
-    year, month = date.year, date.month
+    year = date.year
+    month = date.month
     while True:
         month += 1
         if month == 13:
-            year, month = year + 1, 1
+            year += 1
+            month = 1
         last_day = calendar.monthrange(year, month)[1]
-        month_end = dt.date(year, month, last_day)
+        month_end = datetime.date(year, month, last_day)
         if month_end > PROJECTION_HORIZON:
             return ends
         ends.append(month_end)
@@ -398,11 +404,14 @@ def written_by_pandas(table_name: str, value: str | None = None) -> bool:
     """
     if table_name in OUTSIDE_MODEL:
         return False
-    return table_name not in PARTITIONS or value != PARTITIONS[table_name].values[-1]
+    if table_name not in PARTITIONS:
+        return True
+    last_partition = PARTITIONS[table_name].values[-1]
+    return value != last_partition
 
 
 def write_chunks(
-    folder: Path, table: pa.Table, chunk_rows: int = CHUNK_ROWS, pandas_key: bool = True
+    folder: Path, table: pa.Table, pandas_key: bool, chunk_rows: int = CHUNK_ROWS
 ) -> list[Path]:
     """Grava ``table`` em ``folder`` como ``chunk_0.parquet``, ``chunk_1.parquet``, ...,
     ``chunk_rows`` linhas por arquivo."""
@@ -436,12 +445,13 @@ def write_chunks(
 def build_cad_contas() -> pa.Table:
     """102 contas com ids entre 1 e 106, ``numero`` único de 3 a 13 caracteres e nomes que se
     repetem."""
-    ids = [i for i in range(1, 107) if i not in (2, 3, 7, 105)]
+    missing_ids = (2, 3, 7, 105)
+    account_ids = [account_id for account_id in range(1, 107) if account_id not in missing_ids]
     rows = []
-    for position, account_id in enumerate(ids):
+    for position, account_id in enumerate(account_ids):
         # Uma letra a cada seis contas, e o número cresce com a profundidade: A.1, A.2, A.3.2, ...,
         # A.6.5.1.2.3.
-        letter = "ABCDEFGHIJKLMNOPQRST"[position // 6]
+        letter = ACCOUNT_LETTERS[position // 6]
         depth = position % 6
         number = f"{letter}.{depth + 1}"
         if depth >= 2:
@@ -509,7 +519,7 @@ def build_cad_aliquotas() -> pa.Table:
                 "id_conta_origem": origin,
                 "id_conta_destino": destination,
                 "data_fim_validade": None,
-                "data_inicio_validade": dt.date(2024, 1, 1),
+                "data_inicio_validade": datetime.date(2024, 1, 1),
                 "fator": RATE_FACTORS[position % len(RATE_FACTORS)],
             }
         )
@@ -572,12 +582,13 @@ def build_meta_update_status() -> pa.Table:
 
     # Os ids da leitura, e depois do último um id novo para cada entrada que a leitura não tinha.
     first_new_id = UPDATE_STATUS_IDS[-1] + 1
-    new_ids = range(first_new_id, first_new_id + len(entries) - len(UPDATE_STATUS_IDS))
+    new_id_count = len(entries) - len(UPDATE_STATUS_IDS)
+    new_ids = range(first_new_id, first_new_id + new_id_count)
     ids = list(UPDATE_STATUS_IDS) + list(new_ids)
-    started = dt.datetime(2026, 4, 9, 20, 0, 23, 978000)
+    started = datetime.datetime(2026, 4, 9, 20, 0, 23, 978000)
     timestamps = []
     for position in range(len(entries)):
-        timestamps.append(started + dt.timedelta(days=position * 7, seconds=position * 61))
+        timestamps.append(started + datetime.timedelta(days=position * 7, seconds=position * 61))
     return pa.table(
         {
             "id_update_status": ids,
@@ -600,7 +611,7 @@ def operation_rates(position: int) -> dict[str, float | None]:
     múltiplo de 3. Nas outras, ``spread_total`` é o ``spread_basico`` mais 0,1, e uma em 20 grava
     ``spread_basico`` como zero negativo sem mudar o ``spread_total``.
     """
-    additional_cost = (14.4, 14.3, 15.3, 0.0, -0.25)[position % 5]
+    additional_cost = ADDITIONAL_COSTS[position % 5]
     if position % 40 == 7:
         cost_without_rates = additional_cost if position % 3 == 0 else None
         return {
@@ -612,14 +623,15 @@ def operation_rates(position: int) -> dict[str, float | None]:
             "custo_adicional": cost_without_rates,
         }
 
-    basic_spread = (1.2, 0.5, 0.8)[position % 3]
+    basic_spread = BASIC_SPREADS[position % 3]
     total_spread = round(basic_spread + 0.1, 2)
-    bndes_rate = (1.4, 0.6, 1.0, 1.2, 16.1)[position % 5]
+    bndes_rate = BNDES_RATES[position % 5]
+    total_rate = round(bndes_rate + total_spread + (position % 7) * 0.37, 2)
     return {
         "spread_basico": -0.0 if position % 20 == 5 else basic_spread,
         "spread_risco": 0.1,
         "spread_total": total_spread,
-        "taxa_total": round(bndes_rate + total_spread + (position % 7) * 0.37, 2),
+        "taxa_total": total_rate,
         "taxa_bndes": bndes_rate,
         "custo_adicional": additional_cost,
     }
@@ -646,7 +658,7 @@ def operation_row(
     instrument = None if position % 3 == 0 else FINANCIAL_INSTRUMENTS[position % 2]
     return {
         "id_operacao": operation_id,
-        "data": dt.date.fromisoformat(value),
+        "data": datetime.date.fromisoformat(value),
         "operacao": operation,
         "legado": position % 10 == 0,
         "area": OPERATION_AREAS[position % 4],
@@ -679,24 +691,25 @@ def contract_row(
     ``contrato`` é ``desemb-<data>-<n>`` em uma linha a cada cinco, e numérico nas outras;
     ``data_assinatura`` é nula em 7 de cada 13 linhas.
     """
-    month = dt.date.fromisoformat(value)
-    first_amortization = month + dt.timedelta(days=30 * (position % 12 + 1))
+    month = datetime.date.fromisoformat(value)
+    first_amortization = month + datetime.timedelta(days=30 * (position % 12 + 1))
     # Um sorteio por linha, mesmo nas três em quatro que não o usam: a sequência do gerador fixa os
     # valores de cad_lancamentos, que sorteia depois.
     drawn_rate = round(rng.uniform(0.5, 27.5), 4)
-    fixed_rate = (-0.0, 2.5, drawn_rate, 27.5)[position % 4]
+    fixed_rates = (-0.0, 2.5, drawn_rate, 27.5)
+    fixed_rate = fixed_rates[position % 4]
     if position % 5 == 4:
         contract = disbursement_code(value, position)
     else:
         contract = str(10000495031 + month_index * 10000 + position * 53)
     if position % 13 in (1, 4, 6, 8, 11, 12):
-        signature_date = month - dt.timedelta(days=(position * 37) % 20000)
+        signature_date = month - datetime.timedelta(days=(position * 37) % 20000)
     else:
         signature_date = None
     if position % 50 == 3:
-        last_amortization = dt.date(2099, 12, 15)
+        last_amortization = datetime.date(2099, 12, 15)
     else:
-        last_amortization = first_amortization + dt.timedelta(days=365 * (position % 20 + 1))
+        last_amortization = first_amortization + datetime.timedelta(days=365 * (position % 20 + 1))
     family = None if position % 45 == 44 else FUNDING_SOURCE_FAMILIES[position % 4]
     stage = None if position % 30 == 29 else 1 + position % 3
     return {
@@ -763,7 +776,7 @@ def build_rel_contrato_operacao(
     tables = {}
     next_id = 2951753
     for value in PARTITION_VALUES:
-        month = dt.date.fromisoformat(value)
+        month = datetime.date.fromisoformat(value)
         contract_rows = contracts[value].to_pylist()
         operation_names = operations[value].column("operacao").to_pylist()
         rows = []
@@ -785,9 +798,11 @@ def build_rel_contrato_operacao(
 
 def evenly_spaced_ids(count: int, largest: int) -> list[int]:
     """``count`` ids crescentes de 1 a ``largest``, espaçados por igual."""
+    span = largest - 1
+    intervals = count - 1
     ids = []
-    for i in range(count):
-        ids.append(1 + round(i * (largest - 1) / (count - 1)))
+    for position in range(count):
+        ids.append(1 + round(position * span / intervals))
     return ids
 
 
@@ -821,14 +836,15 @@ def build_cad_lancamentos(
     área).
     """
     total = sum(ROWS_PER_PARTITION["cad_lancamentos"].values())
-    entry_ids = iter(evenly_spaced_ids(total, MAX_ENTRY_ID))
+    entry_ids = evenly_spaced_ids(total, MAX_ENTRY_ID)
+    next_entry = 0
     postable = postable_account_ids(accounts)
     tables = {}
     for partition_index, value in enumerate(PARTITION_VALUES):
-        base = dt.date.fromisoformat(value)
+        base = datetime.date.fromisoformat(value)
         horizon = month_ends_after(base)
         contract_rows = contracts[value].to_pylist()
-        written_at = WRITE_TIMESTAMP + dt.timedelta(
+        written_at = WRITE_TIMESTAMP + datetime.timedelta(
             days=partition_index, seconds=partition_index * 37
         )
         count = ROWS_PER_PARTITION["cad_lancamentos"][value]
@@ -838,7 +854,7 @@ def build_cad_lancamentos(
             no_contract = position % 50 == 21
             rows.append(
                 {
-                    "id_lancamento": next(entry_ids),
+                    "id_lancamento": entry_ids[next_entry],
                     "id_veiculo": 1,
                     "id_conta": postable[position % len(postable)],
                     "data": horizon[position % len(horizon)],
@@ -854,6 +870,7 @@ def build_cad_lancamentos(
                     "area": None if position % 400 == 186 else ENTRY_AREAS[position % 4],
                 }
             )
+            next_entry += 1
         tables[value] = pa.Table.from_pylist(rows, schema=SCHEMAS["cad_lancamentos"])
     return tables
 
@@ -888,25 +905,26 @@ def write_source(root: Path) -> SourceBase:
     ``schema.json`` solto na raiz."""
     root.mkdir(parents=True, exist_ok=True)
     source = SourceBase(root=root)
-    for table, content in build_tables().items():
-        folder = root / table
+    for table_name, content in build_tables().items():
+        folder = root / table_name
         if isinstance(content, pa.Table):
             # Toda tabela sem partição da origem cabe num único chunk_0.parquet.
-            pandas_key = written_by_pandas(table)
-            source.files[table] = write_chunks(
-                folder, content, chunk_rows=content.num_rows, pandas_key=pandas_key
+            pandas_key = written_by_pandas(table_name)
+            source.files[table_name] = write_chunks(
+                folder, content, pandas_key=pandas_key, chunk_rows=content.num_rows
             )
-            source.rows[table] = content.num_rows
+            source.rows[table_name] = content.num_rows
             continue
-        partition = PARTITIONS[table]
-        source.files[table] = []
-        source.partition_rows[table] = {}
-        for value, data in content.items():
+        partition = PARTITIONS[table_name]
+        source.files[table_name] = []
+        source.partition_rows[table_name] = {}
+        for value, partition_table in content.items():
             partition_folder = folder / f"{partition.column}={value}"
-            pandas_key = written_by_pandas(table, value)
-            source.files[table].extend(write_chunks(partition_folder, data, pandas_key=pandas_key))
-            source.partition_rows[table][value] = data.num_rows
-        source.rows[table] = sum(source.partition_rows[table].values())
+            pandas_key = written_by_pandas(table_name, value)
+            partition_files = write_chunks(partition_folder, partition_table, pandas_key=pandas_key)
+            source.files[table_name].extend(partition_files)
+            source.partition_rows[table_name][value] = partition_table.num_rows
+        source.rows[table_name] = sum(source.partition_rows[table_name].values())
 
     # O controle de esquema da biblioteca anterior, como está na raiz da base real; a carga o
     # ignora.

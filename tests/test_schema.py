@@ -11,7 +11,7 @@ memória.
 
 from __future__ import annotations
 
-import datetime as dt
+import datetime
 import decimal
 import json
 from pathlib import Path
@@ -104,9 +104,9 @@ EXPECTED_REDSHIFT_DDL = """CREATE TABLE "tudo" (
 ) DISTSTYLE KEY DISTKEY ("id") SORTKEY ("data", "nome")"""
 
 # A tabela mudada para os testes do diff e da linha de comando: `cad_operacoes` com uma coluna a
-# mais no fim; `changed` é importável como `test_schema:changed` pela linha de comando.
-changed = sa.MetaData()
-CHANGED_TABLE = ClientBase.metadata.tables["cad_operacoes"].to_metadata(changed)
+# mais no fim; a linha de comando importa o MetaData como `test_schema:CHANGED_METADATA`.
+CHANGED_METADATA = sa.MetaData()
+CHANGED_TABLE = ClientBase.metadata.tables["cad_operacoes"].to_metadata(CHANGED_METADATA)
 CHANGED_TABLE.append_column(sa.Column("canal", sa.String(20), comment="Origem do lançamento"))
 
 
@@ -128,7 +128,8 @@ class Ruim(RuimBase):
         sa.ForeignKey("tudo.id", deferrable=True, initially="DEFERRED"),
         comment="Referência",
     )
-    data_tudo: Mapped[dt.date] = mapped_column(sa.Date, comment="Alvo de índice único, sem chave")
+    data_tudo: Mapped[datetime.date] = mapped_column(sa.Date,
+                                                     comment="Alvo de índice único, sem chave")
     nome_tudo: Mapped[str] = mapped_column(
         sa.String(100), comment="Alvo de índice único, sem chave"
     )
@@ -162,11 +163,18 @@ def test_arrow_schema_maps_every_contract_type() -> None:
 @pytest.mark.parametrize(
     "kind", [sa.Float, sa.LargeBinary, sa.ARRAY(sa.Integer), sa.Interval], ids=str
 )
-def test_arrow_schema_refuses_foreign_types(kind: sa.types.TypeEngine) -> None:
+def test_arrow_schema_refuses_foreign_types(
+    kind: type[sa.types.TypeEngine] | sa.types.TypeEngine
+) -> None:
     """Um tipo fora da tabela de tipos é ``ContractError`` com a tabela e a coluna."""
     table = sa.Table("estranha", sa.MetaData(), sa.Column("campo", kind, comment="Fora"))
     with pytest.raises(ContractError, match="estranha.campo: tipo fora do contrato"):
         schema.arrow_schema(table)
+
+
+def delta_document(table: sa.Table) -> dict:
+    """O esquema Delta da tabela como documento JSON."""
+    return json.loads(schema.delta_schema(table).to_json())
 
 
 def test_delta_schema_json_matches_versioned_file() -> None:
@@ -178,10 +186,12 @@ def test_delta_schema_json_matches_versioned_file() -> None:
     files = schema.schema_files(ClientBase.metadata)
     for table in ClientBase.metadata.sorted_tables:
         versioned = (SCHEMA_DIRECTORY / f"{table.name}.delta.json").read_text(encoding="utf-8")
-        generated = json.loads(schema.delta_schema(table).to_json())
+        generated = delta_document(table)
         assert json.loads(versioned) == generated, table.name
         assert files[f"{table.name}.delta.json"] == versioned, table.name
-    tudo_fields = json.loads(schema.delta_schema(TUDO).to_json())["fields"]
+
+    # Os tipos e o comentário de TUDO no documento Delta.
+    tudo_fields = delta_document(TUDO)["fields"]
     fields = {field["name"]: field for field in tudo_fields}
     assert fields["timestamp"]["type"] == "timestamp_ntz"
     assert fields["carimbo_utc"]["type"] == "timestamp"
@@ -196,7 +206,7 @@ def test_delta_schema_carries_no_field_id() -> None:
     como nula, qualquer que seja o escritor do arquivo (leitura de 2026-09-21); o comentário fica.
     """
     for table in ClientBase.metadata.sorted_tables:
-        for field in json.loads(schema.delta_schema(table).to_json())["fields"]:
+        for field in delta_document(table)["fields"]:
             assert "parquet.field.id" not in field["metadata"], (table.name, field["name"])
             assert field["metadata"]["comment"], (table.name, field["name"])
     assert schema.arrow_schema(TUDO).field("id").metadata[b"PARQUET:field_id"] == b"1"
@@ -320,7 +330,7 @@ def test_ddl_temporary_table() -> None:
         temporary = schema.ddl(TUDO, dialect, prefix="exec_42_", temporary=True)
         assert temporary.startswith('CREATE TEMP TABLE "exec_42_tudo" (')
         permanent = schema.ddl(TUDO, dialect, prefix="exec_42_")
-        assert temporary.replace("CREATE TEMP TABLE", "CREATE TABLE", 1) == permanent
+        assert temporary.replace("CREATE TEMP TABLE", "CREATE TABLE", count=1) == permanent
     connection = duckdb.connect()
     connection.execute(schema.ddl(TUDO, "duckdb", temporary=True))
     listed = connection.execute(
@@ -339,7 +349,7 @@ ACCEPTED_BATCH = pa.RecordBatch.from_pydict({
     "nome": pa.array(["a", "b"], pa.large_string()),
     "id": pa.array([1, 2], pa.int32()),
     "valor": pa.array([10, 20], pa.int64()),
-    "data": pa.array([dt.datetime(2026, 8, 31), dt.datetime(2026, 8, 31)], pa.timestamp("ns")),
+    "data": pa.array([datetime.datetime(2026, 8, 31)] * 2, pa.timestamp("ns")),
     "data_str": ["2026-08-31", "2026-08-31"],
     "extra": [1, 2],
 })
@@ -349,39 +359,42 @@ ACCEPTED_BATCH = pa.RecordBatch.from_pydict({
 def test_cast_reorders_and_normalizes(kind: str) -> None:
     """Colunas fora de ordem, `large_string`, nanossegundo zero e inteiro em Numeric entram."""
     data = ACCEPTED_BATCH if kind == "batch" else pa.Table.from_batches([ACCEPTED_BATCH])
-    done = schema.cast(data, TUDO)
-    assert type(done) is type(data)
-    assert done.schema.names == ["id", "data", "nome", "valor", "data_str"]
-    assert done.schema.field("id").type == pa.int64()
-    assert done.schema.field("data").type == pa.date32()
-    assert done.schema.field("nome").type == pa.string()
-    assert done.column("valor").to_pylist() == [decimal.Decimal("10.00"), decimal.Decimal("20.00")]
-    assert done.schema.metadata == {b"serialize_db_table": b"tudo"}
+    converted = schema.cast(data, TUDO)
+    assert type(converted) is type(data)
+    assert converted.schema.names == ["id", "data", "nome", "valor", "data_str"]
+    assert converted.schema.field("id").type == pa.int64()
+    assert converted.schema.field("data").type == pa.date32()
+    assert converted.schema.field("nome").type == pa.string()
+    expected_amounts = [decimal.Decimal("10.00"), decimal.Decimal("20.00")]
+    assert converted.column("valor").to_pylist() == expected_amounts
+    assert converted.schema.metadata == {b"serialize_db_table": b"tudo"}
 
 
 def test_cast_reader_converts_batch_by_batch() -> None:
     """Um leitor de dois lotes sai como leitor no contrato; a tabela vazia passa."""
     # O leitor de dois lotes.
     reader = pa.RecordBatchReader.from_batches(ACCEPTED_BATCH.schema, [ACCEPTED_BATCH] * 2)
-    done = schema.cast(reader, TUDO)
-    assert isinstance(done, pa.RecordBatchReader)
-    assert done.schema.names == ["id", "data", "nome", "valor", "data_str"]
-    assert done.read_all().num_rows == 4
+    converted = schema.cast(reader, TUDO)
+    assert isinstance(converted, pa.RecordBatchReader)
+    assert converted.schema.names == ["id", "data", "nome", "valor", "data_str"]
+    assert converted.read_all().num_rows == 4
 
     # A tabela vazia do mesmo esquema.
     empty = schema.cast(ACCEPTED_BATCH.schema.empty_table(), TUDO)
     assert empty.num_rows == 0
-    assert empty.schema.names == done.schema.names
+    assert empty.schema.names == converted.schema.names
 
 
 @pytest.mark.parametrize("text_type", [pa.string(), pa.large_string()], ids=str)
 def test_cast_measures_text_against_the_varchar_ceiling(text_type: pa.DataType) -> None:
     """Numa coluna `Text`, 65.535 bytes passam e 65.536 são recusados, em `string` e em
     `large_string`, o tipo do `str` do pandas 3."""
-    accepted = schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65535], text_type)), TUDO)
+    at_ceiling = batch_of_tudo(observacao=pa.array(["x" * 65535], text_type))
+    above = batch_of_tudo(observacao=pa.array(["x" * 65536], text_type))
+    accepted = schema.cast(at_ceiling, TUDO)
     assert accepted.column("observacao").to_pylist() == ["x" * 65535]
     with pytest.raises(ContractError) as error:
-        schema.cast(batch_of_tudo(observacao=pa.array(["x" * 65536], text_type)), TUDO)
+        schema.cast(above, TUDO)
     assert "tudo.observacao" in str(error.value)
     assert "65536" in str(error.value)
 
@@ -404,11 +417,11 @@ def test_cast_keeps_the_instant_between_time_zones() -> None:
     """Um `timestamp` de outro fuso numa coluna com fuso entra no mesmo instante, em UTC. Sem fuso
     dos dois lados é que a hora mudaria: o mesmo 12:00 UTC saiu 09:00 do `CAST` do DuckDB, na
     sessão `America/Sao_Paulo`, e 12:00 do `cast` do PyArrow (leitura de 2026-09-23)."""
-    instant = dt.datetime(2026, 8, 31, 12, tzinfo=dt.timezone.utc)
+    instant = datetime.datetime(2026, 8, 31, 12, tzinfo=datetime.timezone.utc)
     local = pa.array([instant], pa.timestamp("us", tz="America/Sao_Paulo"))
-    done = schema.cast(batch_of_tudo(carimbo_utc=local), TUDO)
-    assert done.schema.field("carimbo_utc").type == pa.timestamp("us", tz="UTC")
-    assert done.column("carimbo_utc").to_pylist() == [instant]
+    converted = schema.cast(batch_of_tudo(carimbo_utc=local), TUDO)
+    assert converted.schema.field("carimbo_utc").type == pa.timestamp("us", tz="UTC")
+    assert converted.column("carimbo_utc").to_pylist() == [instant]
 
 
 def test_cast_integer_into_numeric_of_any_precision() -> None:
@@ -423,21 +436,25 @@ def test_cast_integer_into_numeric_of_any_precision() -> None:
     )
     integers = pa.array([1, 999], pa.int64())
     batch = pa.RecordBatch.from_pydict({"pequeno": integers, "fino": integers, "largo": integers})
-    done = schema.cast(batch, table)
+    converted = schema.cast(batch, table)
     expected = [decimal.Decimal("1.00"), decimal.Decimal("999.00")]
-    assert done.column("pequeno").to_pylist() == expected
-    assert done.schema.field("fino").type == pa.decimal128(10, 4)
-    assert done.schema.field("largo").type == pa.decimal128(38, 2)
+    assert converted.column("pequeno").to_pylist() == expected
+    assert converted.schema.field("fino").type == pa.decimal128(10, 4)
+    assert converted.schema.field("largo").type == pa.decimal128(38, 2)
     too_large = pa.RecordBatch.from_pydict({"pequeno": pa.array([1000], pa.int64())})
     with pytest.raises(ContractError, match="decimais.pequeno"):
         schema.cast(too_large, table)
 
 
+# O meio-dia de 2026-08-31, sem fuso e em UTC, dos timestamps recusados.
+NOON = datetime.datetime(2026, 8, 31, 12)
+NOON_UTC = datetime.datetime(2026, 8, 31, 12, tzinfo=datetime.timezone.utc)
+
 REFUSED_BATCHES = {
     "nulo em NOT NULL": (batch_of_tudo(id=pa.array([1, None], pa.int64())), "id"),
     "double fora da escala": (batch_of_tudo(valor=pa.array([1.236])), "valor"),
     "hora numa coluna Date": (
-        batch_of_tudo(data=pa.array([dt.datetime(2026, 8, 31, 12)], pa.timestamp("us"))), "data"),
+        batch_of_tudo(data=pa.array([NOON], pa.timestamp("us"))), "data"),
     "struct em JSON": (batch_of_tudo(meta=pa.array([{"k": 1}])), "meta"),
     "texto acima de String(100)": (batch_of_tudo(nome=pa.array(["x" * 101])), "nome"),
     "texto acima de String(2) em bytes": (batch_of_tudo(to=pa.array(["ãã"])), "to"),
@@ -454,11 +471,10 @@ REFUSED_BATCHES = {
     "nanossegundo não nulo": (
         batch_of_tudo(timestamp=pa.array([1], pa.timestamp("ns"))), "timestamp"),
     "fuso numa coluna sem fuso": (
-        batch_of_tudo(timestamp=pa.array(
-            [dt.datetime(2026, 8, 31, 12, tzinfo=dt.timezone.utc)], pa.timestamp("us", tz="UTC"))),
+        batch_of_tudo(timestamp=pa.array([NOON_UTC], pa.timestamp("us", tz="UTC"))),
         "timestamp"),
     "sem fuso numa coluna com fuso": (
-        batch_of_tudo(carimbo_utc=pa.array([dt.datetime(2026, 8, 31, 12)], pa.timestamp("us"))),
+        batch_of_tudo(carimbo_utc=pa.array([NOON], pa.timestamp("us"))),
         "carimbo_utc"),
     "estouro de inteiro": (batch_of_tudo(parcelas=pa.array([40000], pa.int32())), "parcelas"),
     "tipo sem conversão": (batch_of_tudo(sistema=pa.array([{"a": 1}])), "sistema"),
@@ -483,16 +499,17 @@ def test_cast_keeps_doubles_of_the_reference_model() -> None:
     # A coluna Double, sem arredondamento.
     lancamentos = ClientBase.metadata.tables["cad_lancamentos"]
     batch = pa.RecordBatch.from_pydict({"valor": pa.array([2.675, 11846195394.62801])})
-    done = schema.cast(batch, lancamentos)
-    assert done.schema.field("valor").type == pa.float64()
-    assert done.column("valor").to_pylist() == [2.675, 11846195394.62801]
+    converted = schema.cast(batch, lancamentos)
+    assert converted.schema.field("valor").type == pa.float64()
+    assert converted.column("valor").to_pylist() == [2.675, 11846195394.62801]
 
     # O double de escala exata em Numeric(18, 2).
     exact = schema.cast(batch_of_tudo(valor=pa.array([1.25, 2.5])), TUDO)
     assert exact.column("valor").to_pylist() == [decimal.Decimal("1.25"), decimal.Decimal("2.50")]
 
     # O nanossegundo zero em DateTime, que sai em microssegundos.
-    accepted = schema.cast(batch_of_tudo(timestamp=pa.array([1000], pa.timestamp("ns"))), TUDO)
+    zero_nanoseconds = batch_of_tudo(timestamp=pa.array([1000], pa.timestamp("ns")))
+    accepted = schema.cast(zero_nanoseconds, TUDO)
     assert accepted.schema.field("timestamp").type == pa.timestamp("us")
 
 
@@ -546,6 +563,7 @@ def test_partition_column_is_any_text_and_the_source_optional() -> None:
     options = schema.table_options(regions)
     assert (options.partition_by, options.partition_source) == ("regiao", None)
 
+    # partition_source sem partition_by.
     orphan = sa.Table(
         "sem_particao",
         sa.MetaData(),
@@ -629,9 +647,11 @@ def test_check_models_lists_the_reference_model_defects() -> None:
     for table in tables:
         columns.extend(table.columns)
         foreign_keys.extend(table.foreign_key_constraints)
-    strings = [
-        column for column in columns if type(column.type) is sa.String and not column.type.length
-    ]
+    # `type(...) is sa.String` deixa de fora o Text, subclasse de String.
+    strings = []
+    for column in columns:
+        if type(column.type) is sa.String and not column.type.length:
+            strings.append(column)
     deferrable = [key for key in foreign_keys if key.deferrable]
     unkeyed = [key for key in foreign_keys if not references_a_key(key)]
     assert counts == {
@@ -672,7 +692,7 @@ def test_schema_files_match_versioned() -> None:
 
 def test_check_schema_files_reports_a_changed_model() -> None:
     """Uma coluna acrescentada aparece no diff dos três formatos."""
-    diff = schema.check_schema_files(changed, str(SCHEMA_DIRECTORY))
+    diff = schema.check_schema_files(CHANGED_METADATA, str(SCHEMA_DIRECTORY))
     added = [line for line in diff if line.startswith("+") and "canal" in line]
     assert len(added) == 3
     assert '+    "canal" VARCHAR(20)' in added
@@ -697,12 +717,15 @@ def test_cli_schema_check_reads_the_versioned_files(capsys: pytest.CaptureFixtur
     assert main(["schema", "check", "--metadata", "client_model:Base.metadata", directory]) == 0
     assert "atualizados" in capsys.readouterr().out
 
-    assert main(["schema", "check", "--metadata", "test_schema:changed", directory]) == 1
+    # O modelo mudado: saída 1 e o diff impresso.
+    changed = ["schema", "check", "--metadata", "test_schema:CHANGED_METADATA", directory]
+    assert main(changed) == 1
     assert '+    "canal" VARCHAR(20)' in capsys.readouterr().out
 
-    with pytest.raises(SystemExit) as exit_code:
+    # Sem --metadata, ou com um que não é MetaData: saída 2.
+    with pytest.raises(SystemExit) as exit_info:
         main(["schema", "check", directory])
-    assert exit_code.value.code == 2
-    with pytest.raises(SystemExit) as exit_code:
+    assert exit_info.value.code == 2
+    with pytest.raises(SystemExit) as exit_info:
         main(["schema", "check", "--metadata", "client_model:Base", directory])
-    assert exit_code.value.code == 2
+    assert exit_info.value.code == 2

@@ -10,7 +10,7 @@ estrangeiras só com ``foreign_keys=True``; a recusa do valor de partição fora
 
 from __future__ import annotations
 
-import datetime as dt
+import datetime
 
 import duckdb
 import pyarrow as pa
@@ -41,7 +41,7 @@ class Evento(EventoBase):
         "info": {"serialize_db": {"partition_by": ["data_str"], "partition_source": "data"}},
     }
     id_evento: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=False)
-    data: Mapped[dt.date] = mapped_column(sa.Date)
+    data: Mapped[datetime.date] = mapped_column(sa.Date)
     valor: Mapped[float] = mapped_column(sa.Double)
     documento: Mapped[dict | None] = mapped_column(sa.JSON)
     nota: Mapped[str | None] = mapped_column(sa.Text)
@@ -121,7 +121,7 @@ def test_audit_sql_per_dialect() -> None:
         assert 'NOT isfinite("cad_eventos"."valor")' not in rows_text, dialect
 
     # As funções da auditoria não se registram em sa.func: o cliente continua com as suas.
-    assert type(sa.func.json_valid(sa.column("x"))) is sa.sql.functions.Function
+    assert type(sa.func.json_valid(sa.column("documento"))) is sa.sql.functions.Function
 
 
 def test_redshift_is_finite_under_the_postgresql_rule() -> None:
@@ -129,10 +129,12 @@ def test_redshift_is_finite_under_the_postgresql_rule() -> None:
     ao nulo pela regra do PostgreSQL, que o DuckDB segue: o ``NaN`` igual a si mesmo e acima de todo
     número. O que o Redshift faz com o ``NaN`` na varredura de uma tabela só o ambiente alvo mostra
     (``test_audit_sql_under_search_path_and_nan_comparison``)."""
-    finite = audit.is_finite(sa.column("v"))
-    text = str(finite.compile(dialect=RedshiftDialect_redshift_connector(paramstyle="named")))
-    values = pa.table({"v": pa.array([float("nan"), float("inf"), float("-inf"), 1.5, None])})
+    finite = audit.is_finite(sa.column("valor"))
+    dialect = RedshiftDialect_redshift_connector(paramstyle="named")
+    text = str(finite.compile(dialect=dialect))
+    values = pa.table({"valor": pa.array([float("nan"), float("inf"), float("-inf"), 1.5, None])})
 
+    # O texto do Redshift rodando no DuckDB sobre o NaN, os infinitos, um número e o nulo.
     connection = duckdb.connect()
     connection.register("valores", values)
     rows = connection.execute(f"SELECT {text} FROM valores").fetchall()
@@ -191,11 +193,12 @@ def test_key_scope_follows_the_partition_column() -> None:
 
     # A tabela sem partição, que a execução substitui inteira, não compara com as demais partições.
     accounts = CLIENT_TABLES["cad_contas"]
-    account_checks = audit.checks(accounts, None, published=published_source(accounts))
+    account_checks = audit.checks(accounts, partitions=None,
+                                  published=published_source(accounts))
     assert names_of(account_checks) == ["linhas", "chave_id_conta", "chave_numero"]
 
     # A auditoria da tabela inteira também não compara com as demais partições.
-    whole_table_checks = audit.checks(contracts, None, published=published)
+    whole_table_checks = audit.checks(contracts, partitions=None, published=published)
     assert "chave_id_contrato_publicada" not in names_of(whole_table_checks)
 
 

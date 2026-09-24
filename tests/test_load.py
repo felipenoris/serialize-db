@@ -15,7 +15,7 @@ o órfão sem barrar a carga; e ``serialize-db load`` sobre a base inteira, duas
 
 from __future__ import annotations
 
-import datetime as dt
+import datetime
 import re
 import shutil
 import tempfile
@@ -75,15 +75,18 @@ def origin_of(base: source.SourceBase) -> str:
 
 def add_actions(db: Database, name: str) -> list[dict]:
     """As ações ``add`` da versão atual da tabela, achatadas."""
-    dt_ = delta.open_table(db.uri(TABLES[name]), db.storage)
-    return pa.table(dt_.get_add_actions(flatten=True)).to_pylist()
+    dt = delta.open_table(db.uri(TABLES[name]), db.storage)
+    return pa.table(dt.get_add_actions(flatten=True)).to_pylist()
 
 
 def physical_types(path: str) -> dict[str, str]:
     """O tipo físico de cada coluna do arquivo Parquet."""
     parquet_schema = pq.ParquetFile(path).schema
-    return {parquet_schema.column(index).name: parquet_schema.column(index).physical_type
-            for index in range(len(parquet_schema))}
+    types = {}
+    for index in range(len(parquet_schema)):
+        column = parquet_schema.column(index)
+        types[column.name] = column.physical_type
+    return types
 
 
 def key_values(row: dict[str, object], key: list[str]) -> tuple[object, ...]:
@@ -111,7 +114,8 @@ def test_discover_partitions_and_skipped_entries(base: source.SourceBase, folder
         partitioned.append(name)
         assert list(found) == PARTITION_VALUES, name
         assert found["2026-02-28"] == f"{base.root}/{name}/{partition_by}=2026-02-28", name
-    assert len(partitioned) == 4 and len(TABLES) == 12
+    assert len(partitioned) == 4
+    assert len(TABLES) == 12
 
     # A base é do módulo inteiro: o que o teste acrescenta sai mesmo se a asserção falhar.
     operations = base.root / "cad_operacoes"
@@ -130,6 +134,7 @@ def test_discover_partitions_and_skipped_entries(base: source.SourceBase, folder
     assert list(found) == [*PARTITION_VALUES, "2026-Q1"]
     assert skipped == ("data_str=2026 Q1", "notas.txt")
 
+    # As entradas da origem fora do modelo, e a tabela sem pasta.
     assert load.entries_outside_the_model(origin, Base.metadata) == OUTSIDE_MODEL
     with pytest.raises(FileNotFoundError, match="cad_contas"):
         load.discover_partitions(str(folder / "vazia"), TABLES["cad_contas"])
@@ -159,8 +164,9 @@ def test_partition_query_casts_to_the_contract(base: source.SourceBase, db: Data
         counted = connection.execute(f"SELECT count(*) FROM ({contracts_query})").fetchone()[0]
     contract_schema = arrow_schema(table)
     assert query_schema.names == contract_schema.names
-    assert [str(field.type) for field in query_schema] == \
-        [str(field.type) for field in contract_schema]
+    query_types = [str(field.type) for field in query_schema]
+    contract_types = [str(field.type) for field in contract_schema]
+    assert query_types == contract_types
     assert str(query_schema.field("id_lancamento").type) == "int64"
     assert str(query_schema.field("timestamp").type) == "timestamp[us]"
     assert path_values == [("2026-01-31",)]
@@ -179,33 +185,38 @@ def test_initial_load_loads_every_partition_once(base: source.SourceBase, db: Da
     origin = origin_of(base)
     table = TABLES["cad_contratos"]
     assert load.initial_load(db, table, origin, config=config) == PARTITION_VALUES
-    dt_ = delta.open_table(db.uri(table), db.storage)
-    assert dt_.version() == len(PARTITION_VALUES)
-    metadata = dt_.metadata()
+    dt = delta.open_table(db.uri(table), db.storage)
+    assert dt.version() == len(PARTITION_VALUES)
+    metadata = dt.metadata()
     assert metadata.name == "cad_contratos"
     assert metadata.partition_columns == ["data_str"]
     assert metadata.description == table.comment
     assert metadata.configuration == delta.RETENTION
-    assert dt_.history(1)[0]["serialize_db_execution_id"].startswith("carga-")
+    assert dt.history(limit=1)[0]["serialize_db_execution_id"].startswith("carga-")
     rows_by_value = {action["partition.data_str"]: action["num_records"]
                      for action in add_actions(db, "cad_contratos")}
     assert rows_by_value == base.partition_rows["cad_contratos"]
 
+    # A segunda carga não grava nada.
     assert load.initial_load(db, table, origin, config=config) == []
     assert delta.open_table(db.uri(table), db.storage).version() == len(PARTITION_VALUES)
 
+    # A tabela sem partição carrega uma vez, com o valor None.
     accounts = TABLES["cad_contas"]
     assert load.initial_load(db, accounts, origin, config=config) == [None]
     assert load.initial_load(db, accounts, origin, config=config) == []
     assert delta.open_table(db.uri(accounts), db.storage).version() == 1
     assert add_actions(db, "cad_contas")[0]["num_records"] == base.rows["cad_contas"]
 
+    # partitions filtra as partições e deixa de fora a tabela sem partição; a passagem seguinte
+    # carrega o resto.
     operations = TABLES["cad_operacoes"]
     only = ["2026-02-28"]
-    assert load.initial_load(db, operations, origin, only, config) == ["2026-02-28"]
-    assert load.initial_load(db, TABLES["cad_aliquotas"], origin, only, config) == []
-    assert load.initial_load(db, operations, origin, config=config) == \
-        ["2026-01-31", "2026-03-31", "2026-06-30"]
+    assert load.initial_load(db, operations, origin, partitions=only, config=config) == only
+    rates = TABLES["cad_aliquotas"]
+    assert load.initial_load(db, rates, origin, partitions=only, config=config) == []
+    rest = load.initial_load(db, operations, origin, config=config)
+    assert rest == ["2026-01-31", "2026-03-31", "2026-06-30"]
 
 
 def test_interrupted_load_resumes(base: source.SourceBase, db: Database, config: DuckDBConfig,
@@ -240,13 +251,14 @@ def test_keys_are_int64_and_timestamps_are_microseconds(base: source.SourceBase,
     """O Delta lê ``int64`` e ``timestamp[us]``, e o arquivo gravado tem ``INT64`` onde a origem
     tinha ``INT32`` e ``INT96``, sem a coluna de partição, com o ``execution_id`` no nome."""
     table = TABLES["cad_lancamentos"]
-    load.initial_load(db, table, origin_of(base), ["2026-02-28"], config)
-    dt_ = delta.open_table(db.uri(table), db.storage)
-    delta_schema = pa.schema(dt_.schema())
+    load.initial_load(db, table, origin_of(base), partitions=["2026-02-28"], config=config)
+    dt = delta.open_table(db.uri(table), db.storage)
+    delta_schema = pa.schema(dt.schema())
     assert str(delta_schema.field("id_lancamento").type) == "int64"
     assert str(delta_schema.field("timestamp").type) == "timestamp[us]"
 
-    (written,) = dt_.file_uris()
+    # O arquivo gravado: o execution_id no nome e os tipos físicos contra os da origem.
+    (written,) = dt.file_uris()
     assert re.search(r"/data_base_str=2026-02-28/carga-[0-9a-f]{8}_[0-9a-f]{32}\.parquet$",
                      written)
     types = physical_types(written)
@@ -264,7 +276,7 @@ def test_rows_are_written_in_sort_key_order(base: source.SourceBase, db: Databas
     table = TABLES["cad_lancamentos"]
     sort_columns = list(table_options(table).sort_key)
     assert sort_columns == ["data_base", "id_mensuracao", "id_veiculo", "id_conta"]
-    load.initial_load(db, table, origin_of(base), ["2026-01-31"], config)
+    load.initial_load(db, table, origin_of(base), partitions=["2026-01-31"], config=config)
 
     (written,) = delta.open_table(db.uri(table), db.storage).file_uris()
     rows = pq.read_table(written, columns=sort_columns).to_pylist()
@@ -272,6 +284,7 @@ def test_rows_are_written_in_sort_key_order(base: source.SourceBase, db: Databas
     assert len(written_keys) == base.partition_rows["cad_lancamentos"]["2026-01-31"]
     assert written_keys == sorted(written_keys)
 
+    # A origem tem as mesmas linhas em outra ordem.
     partition_folder = base.root / "cad_lancamentos" / "data_base_str=2026-01-31"
     chunks = sorted(partition_folder.glob("*.parquet"))
     source_rows = pa.concat_tables(
@@ -328,7 +341,7 @@ def assert_refused_without_commit(db: Database, config: DuckDBConfig, origin: st
 @pytest.mark.parametrize(
     ("table", "column", "value", "fragment"),
     [
-        pytest.param("cad_operacoes", "data", dt.date(2026, 3, 31),
+        pytest.param("cad_operacoes", "data", datetime.date(2026, 3, 31),
                      "1 linhas com data diferente de 2026-02-28", id="off_the_path"),
         pytest.param("cad_contratos", "to", "ABC", "1 textos acima de String(2) em to",
                      id="above_the_length"),
@@ -412,13 +425,14 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     assert has_min_max(finite_file, "valor")
 
     # O relatório não falha no CAST para DECIMAL e confere os não finitos dos dois lados.
-    report = load.load_report(db, table, origin, config)
+    report = load.load_report(db, table, origin, config=config)
     assert report.matches
     for partition in report.partitions:
         count = 1 if partition.value in nonfinite_partitions else 0
         assert partition.source_nonfinite == {"valor": count}, partition.value
         assert partition.delta_nonfinite == {"valor": count}, partition.value
 
+    # O delta_scan devolve as duas linhas não finitas num filtro por intervalo.
     with db.storage.duckdb_connect() as connection:
         query = f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 1e300"
         assert connection.execute(query).fetchone()[0] == 2
@@ -434,21 +448,23 @@ def test_load_report_matches_and_detects_a_difference(base: source.SourceBase, d
     origin = origin_of(base)
     for name in ("cad_aliquotas", "cad_operacoes"):
         load.initial_load(db, TABLES[name], origin, config=config)
-        report = load.load_report(db, TABLES[name], origin, config)
+        report = load.load_report(db, TABLES[name], origin, config=config)
         assert report.matches, name
         assert report.skipped == (), name
 
-    rates_report = load.load_report(db, TABLES["cad_aliquotas"], origin, config)
+    # A tabela sem partição, com as conversões; a tabela não carregada não confere.
+    rates_report = load.load_report(db, TABLES["cad_aliquotas"], origin, config=config)
     assert [partition.value for partition in rates_report.partitions] == [None]
     assert rates_report.partitions[0].source_rows == base.rows["cad_aliquotas"]
     assert rates_report.partitions[0].source_sums.keys() == {"fator"}
     assert rates_report.conversions == ("id: int32 -> int64", "id_conta_origem: int32 -> int64",
                                         "id_conta_destino: int32 -> int64")
-    entries_report = load.load_report(db, TABLES["cad_lancamentos"], origin, config)
+    entries_report = load.load_report(db, TABLES["cad_lancamentos"], origin, config=config)
     assert not entries_report.matches
     assert all(partition.delta_rows is None for partition in entries_report.partitions)
     assert "timestamp: INT96 -> timestamp[us]" in entries_report.conversions
 
+    # Uma linha apagada do Delta aparece como diferença na partição dela.
     uri = db.uri(TABLES["cad_operacoes"])
     with db.storage.duckdb_connect() as connection:
         deleted_id = connection.execute(
@@ -456,7 +472,7 @@ def test_load_report_matches_and_detects_a_difference(base: source.SourceBase, d
         ).fetchone()[0]
     delta.open_table(uri, db.storage).delete(
         f"data_str = '2026-03-31' AND id_operacao = {deleted_id}")
-    report = load.load_report(db, TABLES["cad_operacoes"], origin, config)
+    report = load.load_report(db, TABLES["cad_operacoes"], origin, config=config)
     assert not report.matches
     differing = [partition for partition in report.partitions if not partition.matches]
     assert [partition.value for partition in differing] == ["2026-03-31"]
@@ -471,8 +487,9 @@ def test_foreign_key_orphans_are_reported_not_blocking(base: source.SourceBase, 
     origin = origin_of(base)
     for table in load.load_order(db.tables()):
         load.initial_load(db, table, origin, config=config)
-        assert load.load_report(db, table, origin, config).matches, table.name
+        assert load.load_report(db, table, origin, config=config).matches, table.name
 
+    # Uma conta apagada depois da carga deixa lançamentos órfãos.
     entries = TABLES["cad_lancamentos"]
     entries_uri = db.uri(entries)
     accounts_uri = db.uri(TABLES["cad_contas"])
@@ -482,11 +499,12 @@ def test_foreign_key_orphans_are_reported_not_blocking(base: source.SourceBase, 
             "WHERE data_base_str = '2026-01-31'").fetchone()[0]
     delta.open_table(accounts_uri, db.storage).delete(f"id_conta = {orphaned_account}")
 
+    # A auditoria das chaves estrangeiras sobre a versão fixada de cada tabela referenciada.
     referenced = {}
     for constraint in entries.foreign_key_constraints:
-        target = constraint.referred_table
-        referenced[target.name] = (db.uri(target), delta.open_table(db.uri(target),
-                                                                     db.storage).version())
+        target_uri = db.uri(constraint.referred_table)
+        target_version = delta.open_table(target_uri, db.storage).version()
+        referenced[constraint.referred_table.name] = (target_uri, target_version)
     version = delta.open_table(entries_uri, db.storage).version()
     with DuckDBEngine(config, "auditoria", db.storage) as engine:
         engine.ingest(entries, entries_uri, version, ["2026-01-31"])
@@ -495,9 +513,10 @@ def test_foreign_key_orphans_are_reported_not_blocking(base: source.SourceBase, 
     assert not report.passed
     by_name = {result.name: result for result in report.results}
     assert by_name["orfao_id_conta"].defects >= 1
-    other_orphans = [name for name in by_name if name.startswith("orfao_") and
-                     name != "orfao_id_conta"]
-    assert other_orphans and all(by_name[name].passed for name in other_orphans)
+    orphan_checks = [name for name in by_name if name.startswith("orfao_")]
+    other_orphans = [name for name in orphan_checks if name != "orfao_id_conta"]
+    assert other_orphans
+    assert all(by_name[name].passed for name in other_orphans)
 
 
 # ---------------------------------------------------------------- a linha de comando
@@ -516,35 +535,39 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     common = ["load", "--metadata", "client_model:Base.metadata", "--source", origin_of(base),
               "--environment", "prod"]
     assert cli.main([*common, "--root", root]) == 0
-    out = capsys.readouterr().out
-    assert "fora do modelo: alembic_version, meta_update_status, schema.json" in out
-    assert "12 tabela(s) conferida(s), contagens e somas iguais" in out
-    assert out.index("cad_contas: 1 partição(ões) gravada(s): None") < \
-        out.index("cad_operacoes: 4 partição(ões) gravada(s): 2026-01-31")
-    assert "conversões: id_lancamento: int32 -> int64" in out
+    printed = capsys.readouterr().out
+    assert "fora do modelo: alembic_version, meta_update_status, schema.json" in printed
+    assert "12 tabela(s) conferida(s), contagens e somas iguais" in printed
+    unpartitioned_line = printed.index("cad_contas: 1 partição(ões) gravada(s): None")
+    partitioned_line = printed.index("cad_operacoes: 4 partição(ões) gravada(s): 2026-01-31")
+    assert unpartitioned_line < partitioned_line
+    assert "conversões: id_lancamento: int32 -> int64" in printed
     assert Path(root, "prod", "cad_lancamentos", "_delta_log").is_dir()
 
+    # A segunda execução não grava nada.
     assert cli.main([*common, "--root", root]) == 0
-    out = capsys.readouterr().out
-    assert out.count("0 partição(ões) gravada(s)") == 12
+    printed = capsys.readouterr().out
+    assert printed.count("0 partição(ões) gravada(s)") == 12
 
     # Uma partição só de uma tabela: as outras faltam no Delta, e o relatório acusa.
     partial_root = str(folder / "parcial")
     partial = [*common, "--root", partial_root, "--tables", "cad_contratos",
                "--partitions", "2026-02-28"]
     assert cli.main(partial) == 1
-    out = capsys.readouterr().out
-    assert "cad_contratos: 1 partição(ões) gravada(s): 2026-02-28" in out
-    assert "DIFERENÇA em 2026-01-31: origem 38 linhas" in out
-    assert "1 tabela(s) conferida(s), com diferenças" in out
+    printed = capsys.readouterr().out
+    assert "cad_contratos: 1 partição(ões) gravada(s): 2026-02-28" in printed
+    assert "DIFERENÇA em 2026-01-31: origem 38 linhas" in printed
+    assert "1 tabela(s) conferida(s), com diferenças" in printed
 
     # A partição fora do contrato: saída 1 com a mensagem, sem traceback.
-    defective = source_with_defect(folder, base, "cad_operacoes", "data", dt.date(2026, 3, 31))
+    off_the_path = datetime.date(2026, 3, 31)
+    defective = source_with_defect(folder, base, "cad_operacoes", "data", off_the_path)
     refused = ["load", "--metadata", "client_model:Base.metadata", "--source", defective,
                "--root", str(folder / "recusada"), "--tables", "cad_operacoes"]
     assert cli.main(refused) == 1
-    err = capsys.readouterr().err
-    assert "serialize-db load: cad_operacoes partição 2026-02-28: 1 linhas com data" in err
+    printed_errors = capsys.readouterr().err
+    refusal = "serialize-db load: cad_operacoes partição 2026-02-28: 1 linhas com data"
+    assert refusal in printed_errors
 
     # Os erros de uso: o modelo de referência viola o contrato, a tabela fora do modelo e a
     # origem sem a pasta da tabela.
@@ -556,5 +579,6 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     assert cli.main([*common, "--root", root, "--tables", "nada"]) == 2
     assert "a tabela nada não está nos modelos" in capsys.readouterr().err
     assert cli.main([*common[:3], "--source", str(folder / "vazia"), "--root", root]) == 2
-    err = capsys.readouterr().err
-    assert "a pasta da tabela não existe na origem" in err and "Traceback" not in err
+    printed_errors = capsys.readouterr().err
+    assert "a pasta da tabela não existe na origem" in printed_errors
+    assert "Traceback" not in printed_errors

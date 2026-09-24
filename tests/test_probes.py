@@ -21,9 +21,8 @@ nome inexistente sob ``example.com``, contra 0,3 ms de ``localhost``).
 from __future__ import annotations
 
 import contextlib
-import datetime as dt
+import datetime
 import io
-import os
 import socket
 import sys
 import types
@@ -46,8 +45,8 @@ import redshift
 import space
 from conftest import LocalLocation
 
-NOW = dt.datetime(2026, 9, 20, 3, 44, tzinfo=dt.timezone.utc)
-MINUTE = dt.timedelta(minutes=1)
+NOW = datetime.datetime(2026, 9, 20, 3, 44, tzinfo=datetime.timezone.utc)
+MINUTE = datetime.timedelta(minutes=1)
 PROXY_URL_WITH_PASSWORD = "http://usuario:se%40nha@proxy01.exemplo.net:8080"
 HIDDEN_PROXY_URL = "http://***@proxy01.exemplo.net:8080"
 
@@ -339,7 +338,8 @@ def test_duckdb_proxy_splits_the_address_from_the_credentials() -> None:
 def test_duckdb_proxy_reads_only_the_variable_duckdb_reads() -> None:
     """Sem ``HTTP_PROXY`` nada é configurado: as demais grafias, que o DuckDB ignora, entram na
     leitura."""
-    assert probelib.duckdb_proxy({}) == probelib.DuckDBProxy({}, "sem proxy no ambiente")
+    no_proxy = probelib.DuckDBProxy(settings={}, reading="sem proxy no ambiente")
+    assert probelib.duckdb_proxy({}) == no_proxy
 
     proxy = probelib.duckdb_proxy(
         {"http_proxy": "http://p:3128", "https_proxy": "http://p:3128", "HTTP_PROXY": ""}
@@ -418,9 +418,9 @@ def test_report_exit_code(
 ) -> None:
     """O código de saída: 2 com checagem reprovada, senão 1 com chamada falhada, senão 0."""
     with make_report(folder, monkeypatch) as report:
-        record = {"pass": report.ok, "fail": report.fail}
+        record_check = {"pass": report.ok, "fail": report.fail}
         for kind in kinds:
-            record[kind]("T-1", "o que", "detalhe")
+            record_check[kind]("T-1", "o que", "detalhe")
         if failing:
             assert report.call("falha()", denied_call) is None
             assert report.last_reason == "negado (AccessDenied)"
@@ -676,7 +676,7 @@ def test_principal_arn_turns_an_assumed_role_into_the_role() -> None:
 def test_mount_state_follows_the_link_and_reads_proc_mounts(folder: Path) -> None:
     """``~/shared`` é um link para a montagem; o estado vem do caminho real em ``/proc/mounts``, com
     o tipo e ``rw`` ou ``ro``."""
-    real = Path(os.path.realpath(folder / "shared"))
+    real = (folder / "shared").resolve()
     real.mkdir()
     link = folder / "link"
     link.symlink_to(real)
@@ -689,9 +689,11 @@ def test_mount_state_follows_the_link_and_reads_proc_mounts(folder: Path) -> Non
     mounts.write_text(mounted_rw)
     assert space.mount_state(link, str(mounts)) == f"montada, tipo fuse.s3fs, rw (link para {real})"
 
+    # A montagem só de leitura, pelo caminho real.
     mounts.write_text(f"s3fs {real} fuse.s3fs ro,nosuid 0 0\n")
     assert space.mount_state(real, str(mounts)) == "montada, tipo fuse.s3fs, ro"
 
+    # O caminho ausente, e o existente sem montagem.
     assert space.mount_state(folder / "nothere", str(mounts)) == "ausente"
     assert space.mount_state(real, str(folder / "nomounts")) == "existe, sem montagem"
 
@@ -878,15 +880,17 @@ def test_copy_principals_follow_the_iam_role_variable() -> None:
 def test_credential_text_shows_the_key_prefix_the_token_and_the_expiry() -> None:
     """``RS-18``: o prefixo da chave, se há ``SESSION_TOKEN`` e quando as credenciais expiram; o
     segredo nunca entra."""
-    now = dt.datetime(2026, 9, 20, 20, 0, tzinfo=dt.timezone.utc)
-    text = redshift.credential_text("AKIAEXEMPLO", "token", now + dt.timedelta(minutes=42), now)
+    now = datetime.datetime(2026, 9, 20, 20, 0, tzinfo=datetime.timezone.utc)
+    in_42_minutes = now + datetime.timedelta(minutes=42)
+    text = redshift.credential_text("AKIAEXEMPLO", "token", in_42_minutes, now)
     assert text == (
         "chave AKIA…, SESSION_TOKEN presente, expira 2026-09-20 20:42:00+00:00 (daqui a 42 min)"
     )
     assert "EXEMPLO" not in text
     without_token = redshift.credential_text("AKIAEXEMPLO", None, None, now)
     assert without_token == "chave AKIA…, SESSION_TOKEN ausente"
-    expired = redshift.credential_text("AKIAEXEMPLO", "token", now - dt.timedelta(minutes=5), now)
+    five_minutes_ago = now - datetime.timedelta(minutes=5)
+    expired = redshift.credential_text("AKIAEXEMPLO", "token", five_minutes_ago, now)
     assert "(há 5 min)" in expired
 
 
@@ -1035,7 +1039,8 @@ def test_iam_roles_separate_the_default_from_the_ones_merely_attached() -> None:
     assert redshift.iam_roles(clusters, {}) == (["arn:padrao"], ["arn:outro"])
 
     # O namespace serverless do ambiente alvo: sem padrão e sem associado.
-    assert redshift.iam_roles(None, {"ns": {"defaultIamRoleArn": None, "iamRoles": []}}) == ([], [])
+    target_namespaces = {"ns": {"defaultIamRoleArn": None, "iamRoles": []}}
+    assert redshift.iam_roles(None, target_namespaces) == ([], [])
 
     # Associado sem padrão: IAM_ROLE default não resolve, e o ARN precisa ser informado.
     attached_only = redshift.iam_roles(None, {"ns": {"iamRoles": ["arn:associado"]}})
@@ -1093,11 +1098,14 @@ def column(
 
 # A coluna valor em decimal128(18, 2), como o Parquet a grava: FIXED_LEN_BYTE_ARRAY e Decimal.
 DECIMAL_AMOUNT_COLUMN = column(
-    "valor", "decimal128(18, 2)", physical="FIXED_LEN_BYTE_ARRAY", logical="Decimal(18,2)"
+    "valor",
+    arrow_type="decimal128(18, 2)",
+    physical="FIXED_LEN_BYTE_ARRAY",
+    logical="Decimal(18,2)",
 )
 
 
-def reading(
+def file_reading(
     path: str, statistics: dict | None = None, columns: list | None = None
 ) -> parquet_source.FileReading:
     """O rodapé fabricado de um arquivo, com a partição derivada do caminho como o probe faz."""
@@ -1165,14 +1173,15 @@ def test_schema_difference_names_missing_extra_retyped_and_reordered() -> None:
     trocada."""
     reference = [
         column("id"),
-        column("valor", "double", physical="DOUBLE"),
-        column("mes", "string", physical="BYTE_ARRAY", logical="String"),
+        column("valor", arrow_type="double", physical="DOUBLE"),
+        column("mes", arrow_type="string", physical="BYTE_ARRAY", logical="String"),
     ]
 
     missing = parquet_source.schema_difference(reference, reference[:2])
     assert ["mes", "ausente", "string no majoritário", "-"] in missing
 
-    execution_id = column("id_execucao", "string", physical="BYTE_ARRAY", logical="String")
+    execution_id = column("id_execucao", arrow_type="string", physical="BYTE_ARRAY",
+                          logical="String")
     extra = parquet_source.schema_difference(reference, [*reference, execution_id])
     assert extra == [["id_execucao", "a mais", "-", "string"]]
 
@@ -1205,7 +1214,10 @@ def test_merge_statistics_sums_rows_and_keeps_the_extremes() -> None:
     july = {"valor": {"rows": 100, "nulls": 3, "min": 5, "max": 50, "distinct": 40}}
     august = {"valor": {"rows": 200, "nulls": 0, "min": 1, "max": 30, "distinct": 70}}
     merged = parquet_source.merge_statistics(
-        [reading("mes=2026-07/a.parquet", july), reading("mes=2026-08/b.parquet", august)]
+        [
+            file_reading("mes=2026-07/a.parquet", statistics=july),
+            file_reading("mes=2026-08/b.parquet", statistics=august),
+        ]
     )
     amount_statistics = merged["valor"]
     assert amount_statistics["rows"] == 300
@@ -1241,7 +1253,10 @@ def test_merge_statistics_counts_the_files_without_min_and_max() -> None:
     }
     with_bounds = {"descricao": {"rows": 10, "nulls": 2, "min": "a", "max": "z", "distinct": None}}
     merged = parquet_source.merge_statistics(
-        [reading("a.parquet", without_bounds), reading("b.parquet", with_bounds)]
+        [
+            file_reading("a.parquet", statistics=without_bounds),
+            file_reading("b.parquet", statistics=with_bounds),
+        ]
     )
     description_statistics = merged["descricao"]
     assert description_statistics["without"] == 1
@@ -1251,7 +1266,8 @@ def test_merge_statistics_counts_the_files_without_min_and_max() -> None:
 
     # Sem nulo conhecido em arquivo algum, a contagem fica sem verdicto em vez de sair como zero.
     unknown_nulls = {"x": {"rows": 10, "nulls": None, "min": 1, "max": 2, "distinct": None}}
-    unknown = parquet_source.merge_statistics([reading("a.parquet", unknown_nulls)])
+    unknown_reading = file_reading("a.parquet", statistics=unknown_nulls)
+    unknown = parquet_source.merge_statistics([unknown_reading])
     assert unknown["x"]["nulls_known"] is False
 
 
@@ -1263,13 +1279,14 @@ def test_measure_text_batch_counts_bytes_and_characters() -> None:
     # "ação" tem 4 caracteres e 6 bytes em UTF-8: o ç e o ã levam dois cada.
     assert measured["nome"] == {"rows": 3, "nulls": 1, "bytes": 6, "chars": 4}
 
-    parquet_source.measure_text_batch(measured, pa.RecordBatch.from_pydict({"nome": ["x" * 9]}))
+    # Um texto maior troca o maior visto.
+    long_batch = pa.RecordBatch.from_pydict({"nome": ["x" * 9]})
+    parquet_source.measure_text_batch(measured, long_batch)
     assert measured["nome"] == {"rows": 4, "nulls": 1, "bytes": 9, "chars": 9}
 
     # Um lote só de nulos soma as linhas e não mexe no maior texto.
-    parquet_source.measure_text_batch(
-        measured, pa.RecordBatch.from_pydict({"nome": pa.array([None], pa.string())})
-    )
+    null_batch = pa.RecordBatch.from_pydict({"nome": pa.array([None], pa.string())})
+    parquet_source.measure_text_batch(measured, null_batch)
     assert measured["nome"] == {"rows": 5, "nulls": 2, "bytes": 9, "chars": 9}
 
 
@@ -1288,9 +1305,9 @@ def test_partition_values_lists_each_value_once_in_order() -> None:
     trouxeram."""
     values = parquet_source.partition_values(
         [
-            reading("mes=2026-07/a.parquet"),
-            reading("mes=2026-07/b.parquet"),
-            reading("mes=2026-06/c.parquet"),
+            file_reading("mes=2026-07/a.parquet"),
+            file_reading("mes=2026-07/b.parquet"),
+            file_reading("mes=2026-06/c.parquet"),
         ]
     )
     assert values == {"mes": ["2026-07", "2026-06"]}
@@ -1307,10 +1324,11 @@ def test_text_columns_lists_the_text_columns_once() -> None:
         column("nome", arrow_type="string"),
         column("meta", arrow_type="large_string"),
     ]
-    first = reading("a.parquet", columns=first_columns)
-    second = reading("b.parquet", columns=second_columns)
+    first = file_reading("a.parquet", columns=first_columns)
+    second = file_reading("b.parquet", columns=second_columns)
     assert parquet_source.text_columns([first, second]) == ["nome", "meta"]
-    assert parquet_source.text_columns([reading("c.parquet", columns=[column("id")])]) == []
+    without_text = file_reading("c.parquet", columns=[column("id")])
+    assert parquet_source.text_columns([without_text]) == []
 
 
 def test_parse_reads_the_root_and_the_options() -> None:
@@ -1331,13 +1349,15 @@ def test_parse_reads_the_root_and_the_options() -> None:
     assert parquet_source.parse(["probe", "/base", "--desconhecida"]) is None
 
 
-# ---------------------------------------------------------------- duckdb_threads.py
+# --------------------------------------------------------------------------------------------------
+# duckdb_threads.py: os valores de threads, a partição comum, os totais do log e as medições
 
 
 def threads_input(name: str, rows: int) -> duckdb_threads.TableInput:
     """Uma tabela medida fabricada, sem partição, com as linhas que o log diz ter."""
     table = sa.Table(name, sa.MetaData(), sa.Column("id", sa.BigInteger))
-    return duckdb_threads.TableInput(table, f"/delta/{name}", 3, None, 1, 100, rows)
+    return duckdb_threads.TableInput(table=table, uri=f"/delta/{name}", version=3, partitions=None,
+                                     files=1, bytes=100, rows=rows)
 
 
 def test_thread_values_multiply_the_default_or_take_the_requested() -> None:
@@ -1401,8 +1421,10 @@ def test_measurement_rows_and_fastest_configuration() -> None:
     curto da configuração que falhou; a mais rápida ignora a que falhou."""
     inputs = [threads_input("cad_lancamentos", 10), threads_input("cad_contratos", 5)]
     measurements = [
-        duckdb_threads.Measurement("materializada", 4, [2.0, 1.0], 4, 100, 150, 10),
-        duckdb_threads.Measurement("materializada", 8, [0.5], 8, 100, 160, 10),
+        duckdb_threads.Measurement("materializada", 4, seconds=[2.0, 1.0], threads_read=4,
+                                   base_mb=100, peak_mb=150, rows=10),
+        duckdb_threads.Measurement("materializada", 8, seconds=[0.5], threads_read=8,
+                                   base_mb=100, peak_mb=160, rows=10),
         duckdb_threads.Measurement(
             "materializada", 12, error="OutOfMemoryException: sem memória\nmais"
         ),
@@ -1412,6 +1434,7 @@ def test_measurement_rows_and_fastest_configuration() -> None:
     assert duckdb_threads.expected_rows("materializada", inputs) == 10
     assert duckdb_threads.expected_rows("em série", inputs) == 15
 
+    # Com a referência em 4 threads.
     rows = duckdb_threads.measurement_rows(measurements, inputs, 4)
     assert rows[1][3:6] == ["1.000", "2.000, 1.000", "1.00x"]
     assert rows[2][3:6] == ["0.500", "0.500", "2.00x"]
@@ -1431,9 +1454,12 @@ def test_measurement_checks_flag_rows_threads_and_failed_configurations(
     aplicou, e ``DT-4`` registra a configuração que falhou, que também vai para a seção final."""
     inputs = [threads_input("cad_lancamentos", 10)]
     measurements = [
-        duckdb_threads.Measurement("materializada", 4, [1.0], 4, 100, 150, 10),
-        duckdb_threads.Measurement("materializada", 8, [1.0], 8, 100, 150, 9),
-        duckdb_threads.Measurement("agregada", 4, [1.0], 2, 100, 150, 10),
+        duckdb_threads.Measurement("materializada", 4, seconds=[1.0], threads_read=4,
+                                   base_mb=100, peak_mb=150, rows=10),
+        duckdb_threads.Measurement("materializada", 8, seconds=[1.0], threads_read=8,
+                                   base_mb=100, peak_mb=150, rows=9),
+        duckdb_threads.Measurement("agregada", 4, seconds=[1.0], threads_read=2,
+                                   base_mb=100, peak_mb=150, rows=10),
         duckdb_threads.Measurement("agregada", 8, error="IOException: sem arquivo"),
     ]
     with make_report(folder, monkeypatch) as report:
@@ -1444,7 +1470,9 @@ def test_measurement_checks_flag_rows_threads_and_failed_configurations(
         assert report.failures == [("agregada com threads=8", "IOException: sem arquivo")]
         assert report.finish() == 2
 
-    passing = [duckdb_threads.Measurement("materializada", 4, [1.0], 4, 100, 150, 10)]
+    # Sem reprovação nem falha, a saída é 0.
+    passing = [duckdb_threads.Measurement("materializada", 4, seconds=[1.0], threads_read=4,
+                                          base_mb=100, peak_mb=150, rows=10)]
     with make_report(folder, monkeypatch) as report:
         duckdb_threads.measurement_checks(report, passing, inputs)
         assert report.finish() == 0
