@@ -3,12 +3,12 @@
 ``Storage`` guarda a raiz do banco: a URI que o delta-rs e o DuckDB recebem, o sistema de arquivos
 do ``pyarrow.fs`` que lista, lê, copia e apaga nos dois armazenamentos, e o caminho da raiz nele.
 Os métodos recebem caminhos relativos à raiz, montados com ``/`` por ``join``; ``relative`` leva
-uma URI sob a raiz ao caminho relativo. Dois métodos têm um ramo por armazenamento: a escrita
-condicional do arquivo de controle, ``put_object`` do ``boto3`` com ``IfMatch`` ou ``IfNoneMatch``
-no S3, porque o ``pyarrow.fs`` não tem a condição nem devolve a etag, e ``O_EXCL`` ou a impressão
-digital com ``os.replace`` na pasta local; e a cópia, a transferência gerenciada do ``boto3`` no
-S3, porque o ``CopyObject`` único do ``copy_file`` do PyArrow é abandonado pelo SDK da AWS depois
-de 3 segundos sem resposta num objeto grande.
+uma URI sob a raiz ao caminho relativo. Dois grupos de métodos têm um ramo por armazenamento: a
+escrita condicional do arquivo de controle (``create_text`` e ``write_text``), ``put_object`` do
+``boto3`` com ``IfNoneMatch`` ou ``IfMatch`` no S3, porque o ``pyarrow.fs`` não tem a condição nem
+devolve a etag, e ``O_EXCL`` ou a impressão digital com ``os.replace`` na pasta local; e a cópia, a
+transferência gerenciada do ``boto3`` no S3, porque o ``CopyObject`` único do ``copy_file`` do
+PyArrow é abandonado pelo SDK da AWS depois de 3 segundos sem resposta num objeto grande.
 
 ``storage_options`` monta a cada chamada as opções do delta-rs, sem credencial alguma: a cadeia
 padrão do delta-rs as resolve e as renova no ``DeltaTable`` que a execução segura.
@@ -24,7 +24,7 @@ Exemplo, numa pasta local:
 
     storage = Storage.for_uri("/dados/delta")
     path = storage.join("prod", "_serialize_db", "snapshots.json")
-    fingerprint = storage.write_text(path, "{}", if_none_match=True)
+    fingerprint = storage.create_text(path, "{}")
     text, fingerprint = storage.read_text(path)
     storage.write_text(path, '{"snapshots": {}}', if_match=fingerprint)
     storage.relative("/dados/delta/prod/cad_operacoes")   # "prod/cad_operacoes"
@@ -44,6 +44,7 @@ from pathlib import Path
 import boto3
 import botocore.exceptions
 import duckdb
+import pyarrow as pa
 import pyarrow.fs as pafs
 
 from serialize_db.errors import ConflictError
@@ -97,10 +98,15 @@ def _proxy_settings(environ: Mapping[str, str]) -> dict[str, str]:
     url = (environ.get("HTTP_PROXY") or "").strip()
     if not url:
         return {}
-    parts = urllib.parse.urlsplit(url if "//" in url else "//" + url, scheme="http")
+    # Sem "//", o urlsplit leria o endereço como caminho.
+    if "//" not in url:
+        url = "//" + url
+    parts = urllib.parse.urlsplit(url, scheme="http")
     if not parts.hostname:
         return {}
-    address = parts.hostname + (f":{parts.port}" if parts.port else "")
+    address = parts.hostname
+    if parts.port:
+        address += f":{parts.port}"
     settings = {"http_proxy": address}
     user = environ.get("username") or urllib.parse.unquote(parts.username or "")
     password = environ.get("password") or urllib.parse.unquote(parts.password or "")
@@ -241,6 +247,12 @@ class Storage:
     def uri_of(self, path: str) -> str:
         """A URI de um caminho relativo à raiz, como o delta-rs e o DuckDB a recebem.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            storage.uri_of("prod/cad_operacoes")   # "s3://bucket/delta/prod/cad_operacoes"
+
         :param path: o caminho relativo à raiz; ``""`` é a própria raiz.
         :return: a URI, sem barra final.
         """
@@ -259,6 +271,12 @@ class Storage:
         """Cria a pasta na pasta local, porque o ``COPY`` do DuckDB para um arquivo não cria a pasta
         dele; no S3 não há pasta a criar.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            storage.ensure_folder("prod/cad_operacoes/data_str=2026-08-31")
+
         :param path: a pasta, relativa à raiz; as pastas acima dela também são criadas.
         """
         if not self.is_s3:
@@ -269,6 +287,12 @@ class Storage:
     def exists(self, path: str) -> bool:
         """Se o arquivo ou a pasta existe.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            storage.exists("prod/cad_operacoes/_delta_log")   # True numa tabela criada
+
         :param path: o arquivo ou a pasta, relativo à raiz.
         :return: ``True`` quando existe.
         """
@@ -277,6 +301,13 @@ class Storage:
 
     def size(self, path: str) -> int | None:
         """O tamanho de um arquivo.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            storage.size("prod/cad_operacoes/data_str=2026-08-31/exec-42_ab12.parquet")
+            # 4096
 
         :param path: o arquivo, relativo à raiz.
         :return: o tamanho em bytes, ou ``None`` quando ele não existe ou não é arquivo.
@@ -291,6 +322,13 @@ class Storage:
 
         A listagem desce as subpastas e exclui ``_delta_log/``, onde os checkpoints também
         terminam em ``.parquet``.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            storage.list_files("prod/cad_operacoes", ".parquet")
+            # ["prod/cad_operacoes/data_str=2026-08-31/exec-42_ab12.parquet", ...]
 
         :param prefix: a pasta, relativa à raiz; um prefixo ausente dá a lista vazia.
         :param suffix: o fim do nome, como ``.parquet``; vazio aceita todo arquivo.
@@ -315,6 +353,14 @@ class Storage:
         arquivo de 32.218.190 linhas de ``cad_lancamentos`` no ambiente alvo em 2026-09-24
         (``plan/POC.md``). Na pasta local, ``copy_file``, com a pasta do destino criada.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            storage.copy("prod/cad_operacoes/data_str=2026-08-31/exec-42_ab12.parquet",
+                         "prod/arquivo/2026T3/cad_operacoes/data_str=2026-08-31/"
+                         "exec-42_ab12.parquet")
+
         :param source: o arquivo de origem, relativo à raiz.
         :param destination: o caminho do arquivo copiado, relativo à raiz; um arquivo existente
             nele é substituído.
@@ -330,6 +376,12 @@ class Storage:
     def delete(self, paths: list[str]) -> None:
         """Apaga os arquivos.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            storage.delete(storage.list_files("prod/staging/exec-42"))
+
         :param paths: os arquivos, relativos à raiz; um caminho ausente não é erro.
         """
         for path in paths:
@@ -338,18 +390,32 @@ class Storage:
             except FileNotFoundError:
                 continue
 
-    def open_input_file(self, path: str) -> object:
+    def open_input_file(self, path: str) -> pa.NativeFile:
         """O arquivo aberto para leitura aleatória, como ``pq.ParquetFile`` o recebe: no S3, o
         rodapé é lido por GET de intervalo.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with storage.open_input_file(path) as source:
+                rows = pq.ParquetFile(source).metadata.num_rows
 
         :param path: o arquivo, relativo à raiz.
         :return: o arquivo aberto do ``pyarrow.fs``, que quem chama fecha.
         """
         return self.filesystem.open_input_file(self._full(path))
 
-    def open_output_stream(self, path: str) -> object:
+    def open_output_stream(self, path: str) -> pa.NativeFile:
         """O arquivo aberto para escrita sequencial, como ``pq.ParquetWriter`` o recebe: no S3, um
         upload em partes que termina no ``close``.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with storage.open_output_stream("prod/staging/exec-42/lote.parquet") as sink:
+                pq.write_table(table, sink)
 
         :param path: o arquivo, relativo à raiz; na pasta local, a pasta do arquivo é criada.
         :return: o fluxo de saída do ``pyarrow.fs``, que quem chama fecha.
@@ -363,6 +429,12 @@ class Storage:
         """O texto do arquivo e a impressão digital dele, a que ``write_text`` recebe em
         ``if_match``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            text, fingerprint = storage.read_text("prod/_serialize_db/snapshots.json")
+
         :param path: o arquivo, relativo à raiz, em UTF-8.
         :return: o texto e a impressão digital: a etag no S3, o ``sha256`` na pasta local.
         :raises FileNotFoundError: o arquivo ausente, nos dois armazenamentos.
@@ -373,54 +445,82 @@ class Storage:
         content = full.read_bytes()
         return content.decode("utf-8"), _fingerprint(content)
 
-    def write_text(self, path: str, text: str, if_match: str | None = None,
-                   if_none_match: bool = False) -> str:
-        """Grava o texto por inteiro, com uma condição opcional.
+    def create_text(self, path: str, text: str) -> str:
+        """Grava o texto num arquivo que ainda não existe.
 
-        No S3, ``put_object`` com ``IfNoneMatch="*"`` ou ``IfMatch=<etag>``, atômico no servidor.
-        Na pasta local, ``O_EXCL`` ou a comparação da impressão digital seguida de ``os.replace``
-        de um arquivo temporário, que não é atômica entre processos e basta à pasta local, o
-        ambiente dos testes e do desenvolvimento.
+        No S3, ``put_object`` com ``IfNoneMatch="*"``, atômico no servidor; na pasta local, a
+        abertura com ``O_EXCL``.
 
         Exemplo:
 
         .. code-block:: python
 
             path = "prod/_serialize_db/snapshots.json"
-            first = storage.write_text(path, "{}", if_none_match=True)
-            storage.write_text(path, "{}", if_none_match=True)
-            # ConflictError: o arquivo já existe
+            first = storage.create_text(path, "{}")
+            storage.create_text(path, "{}")   # ConflictError: o arquivo já existe
+
+        :param path: o arquivo, relativo à raiz; na pasta local, a pasta dele é criada.
+        :param text: o conteúdo, gravado em UTF-8.
+        :return: a impressão digital do arquivo gravado.
+        :raises ConflictError: o arquivo já existe; nada foi gravado.
+        """
+        if self.is_s3:
+            return self._put_s3(path, text, {"IfNoneMatch": "*"})
+        return self._create_local(path, text)
+
+    def write_text(self, path: str, text: str, if_match: str | None = None) -> str:
+        """Grava o texto por inteiro, substituindo o arquivo, com a condição opcional de ele não ter
+        mudado desde a leitura.
+
+        No S3, ``put_object``, com ``IfMatch=<etag>`` quando a condição vem, atômico no servidor.
+        Na pasta local, a comparação da impressão digital seguida de ``os.replace`` de um arquivo
+        temporário, que não é atômica entre processos e basta à pasta local, o ambiente dos testes
+        e do desenvolvimento.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            text, fingerprint = storage.read_text(path)
+            storage.write_text(path, '{"snapshots": {}}', if_match=fingerprint)
 
         :param path: o arquivo, relativo à raiz; na pasta local, a pasta dele é criada.
         :param text: o conteúdo, gravado em UTF-8.
         :param if_match: grava só se a impressão digital atual é a informada, a que
-            ``read_text`` devolveu.
-        :param if_none_match: grava só se o arquivo não existe.
+            ``read_text`` devolveu; ``None`` grava sem condição.
         :return: a impressão digital nova.
         :raises ConflictError: a condição falhou; nada foi gravado.
         """
-        if self.is_s3:
-            return self._write_s3(path, text, if_match, if_none_match)
-        return self._write_local(path, text, if_match, if_none_match)
+        if not self.is_s3:
+            return self._replace_local(path, text, if_match)
+        condition = {}
+        if if_match is not None:
+            condition["IfMatch"] = if_match
+        return self._put_s3(path, text, condition)
 
-    def _write_local(self, path: str, text: str, if_match: str | None,
-                     if_none_match: bool) -> str:
-        """A escrita condicional na pasta local."""
+    def _create_local(self, path: str, text: str) -> str:
+        """A criação na pasta local, pela abertura exclusiva ``O_EXCL``."""
         full = Path(self._full(path))
         full.parent.mkdir(parents=True, exist_ok=True)
         content = text.encode("utf-8")
-        if if_none_match:
-            try:
-                descriptor = os.open(full, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-            except FileExistsError:
-                raise ConflictError(f"{path} já existe") from None
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(content)
-            return _fingerprint(content)
+        try:
+            descriptor = os.open(full, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        except FileExistsError:
+            raise ConflictError(f"{path} já existe") from None
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+        return _fingerprint(content)
+
+    def _replace_local(self, path: str, text: str, if_match: str | None) -> str:
+        """A substituição na pasta local, com a impressão digital conferida quando ``if_match``
+        vem."""
+        full = Path(self._full(path))
+        full.parent.mkdir(parents=True, exist_ok=True)
         if if_match is not None:
             current = _fingerprint(full.read_bytes()) if full.exists() else None
             if current != if_match:
                 raise ConflictError(f"{path} mudou desde a leitura")
+        content = text.encode("utf-8")
         # O arquivo temporário na mesma pasta: os.replace troca de uma vez.
         with tempfile.NamedTemporaryFile("wb", dir=full.parent, delete=False) as handle:
             handle.write(content)
@@ -449,14 +549,10 @@ class Storage:
             raise
         return response["Body"].read().decode("utf-8"), response["ETag"]
 
-    def _write_s3(self, path: str, text: str, if_match: str | None, if_none_match: bool) -> str:
-        """O ``put_object`` com a condição pedida; o 412 vira ``ConflictError``."""
+    def _put_s3(self, path: str, text: str, condition: Mapping[str, str]) -> str:
+        """O ``put_object`` com a condição, ``IfNoneMatch`` ou ``IfMatch``; o 412 vira
+        ``ConflictError``."""
         bucket, key = self._bucket_and_key(path)
-        condition = {}
-        if if_none_match:
-            condition["IfNoneMatch"] = "*"
-        if if_match is not None:
-            condition["IfMatch"] = if_match
         try:
             response = self._s3_client().put_object(
                 Bucket=bucket, Key=key, Body=text.encode("utf-8"), **condition)
@@ -505,6 +601,14 @@ class Storage:
         o secret ``credential_chain`` com ``REFRESH auto``, a região e o endpoint de
         ``_duckdb_secret_options``, e o proxy de ``HTTP_PROXY`` sem as credenciais no endereço.
         As extensões vêm da pasta configurada na conexão; nada é baixado.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            connection = duckdb.connect(config={"extension_directory": ".duckdb"})
+            storage.duckdb_setup(connection)
+            connection.execute(f"SELECT count(*) FROM delta_scan('{uri}')")
 
         :param connection: a conexão aberta do DuckDB que recebe as extensões e o secret.
         """
@@ -574,8 +678,8 @@ def _s3_storage(uri: str) -> Storage:
 
 def _local_storage(uri: str) -> Storage:
     """O armazenamento numa pasta local, com o caminho absoluto resolvido."""
-    raw = urllib.parse.urlsplit(uri).path if uri.startswith("file://") else uri
-    resolved = str(Path(raw).expanduser().resolve())
+    local_path = urllib.parse.urlsplit(uri).path if uri.startswith("file://") else uri
+    resolved = str(Path(local_path).expanduser().resolve())
     return Storage(resolved, pafs.LocalFileSystem(), resolved)
 
 

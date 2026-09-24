@@ -160,16 +160,16 @@ def test_duckdb_secret_options_for_an_endpoint(clean_aws: pytest.MonkeyPatch) ->
     assert _duckdb_secret_options() == https
 
 
-def test_write_text_exclusive_create_and_if_match(storage: Storage) -> None:
-    """A segunda criação exclusiva e o ``if_match`` velho são ``ConflictError`` sem gravar; o
+def test_create_text_and_write_text_if_match(storage: Storage) -> None:
+    """A segunda ``create_text`` e o ``if_match`` velho são ``ConflictError`` sem gravar; o
     conteúdo final é o da escrita que venceu, e o arquivo ausente é ``FileNotFoundError``."""
     path = storage.join("prod", "_serialize_db", "snapshots.json")
     with pytest.raises(FileNotFoundError):
         storage.read_text(path)
 
-    first = storage.write_text(path, '{"snapshots": {}}', if_none_match=True)
+    first = storage.create_text(path, '{"snapshots": {}}')
     with pytest.raises(ConflictError):
-        storage.write_text(path, "{}", if_none_match=True)
+        storage.create_text(path, "{}")
     text, fingerprint = storage.read_text(path)
     assert (text, fingerprint) == ('{"snapshots": {}}', first)
 
