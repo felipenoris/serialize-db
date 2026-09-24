@@ -152,6 +152,5 @@ cd ~/work/projects/serialize-db
 mv relatorio_*.json ~/output
 mv probes/output/* ~/output
 tar -czf ~/output.tar.gz ~/output
-mv ~/output.tar.gz
 mv ~/output.tar.gz ~/volume/shared/fnoro/serialize-db
 ```
