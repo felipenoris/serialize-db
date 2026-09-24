@@ -385,6 +385,7 @@ def test_schema_from_row_description() -> None:
         {"label": b"c_char", "type_oid": 1042, "type_modifier": 6},
         {"label": b"c_text", "type_oid": 25, "type_modifier": -1},
         {"label": b"c_unknown", "type_oid": 705, "type_modifier": -1},
+        {"label": b"c_name", "type_oid": 19, "type_modifier": -1},
         {"label": b"c_date", "type_oid": 1082, "type_modifier": -1},
         {"label": b"c_timestamp", "type_oid": 1114, "type_modifier": -1},
         {"label": b"c_timestamptz", "type_oid": 1184, "type_modifier": -1},
@@ -396,7 +397,7 @@ def test_schema_from_row_description() -> None:
         ("c_double", pa.float64()), ("c_real", pa.float32()),
         ("c_decimal", pa.decimal128(18, 2)), ("c_sum", pa.decimal128(38, 2)),
         ("c_varchar", pa.string()), ("c_char", pa.string()), ("c_text", pa.string()),
-        ("c_unknown", pa.string()), ("c_date", pa.date32()),
+        ("c_unknown", pa.string()), ("c_name", pa.string()), ("c_date", pa.date32()),
         ("c_timestamp", pa.timestamp("us")), ("c_timestamptz", pa.timestamp("us", "UTC")),
         ("c_boolean", pa.bool_()), ("c_super", pa.string()),
     ])
@@ -818,17 +819,24 @@ def count_of(engine: RedshiftEngine, name: str) -> int:
 @pytest.mark.s3
 def test_connect_uses_share_database(target: Target) -> None:
     """Depois do ``USE``, o ``CREATE TABLE`` de uma tabela ``exec_<id>_*`` por nome em duas partes
-    passa, nenhum comando da conexão cria ``serialize_db_publications``, e ``current_database()``
-    é registrado como leitura."""
+    passa e ``name_in_use`` lê o nome livre; leituras: o SQLSTATE e a mensagem da relação
+    inexistente, ``current_database()``, que o Redshift descreve com o tipo ``name`` (OID 19), e
+    a presença da tabela de controle, que nenhum comando da conexão cria."""
     engine = target.engine
     name = f"{engine.prefix}conexao"
     engine.execute(f"CREATE TABLE {engine.qualified(name)} (id BIGINT)")
     engine.register_created(name)
     assert engine.name_in_use(name)
     assert not engine.name_in_use(f"{engine.prefix}nada")
+    with pytest.raises(redshift_connector.Error) as missing:
+        engine.execute(f"SELECT 1 FROM {engine.qualified(engine.prefix + 'nada')} LIMIT 0")
+    fields = missing.value.args[0]
+    record("redshift.engine.relation_missing",
+           {"sqlstate": fields.get("C"), "message": str(fields.get("M"))})
     record("redshift.engine.current_database",
            engine.query("select current_database()").column(0)[0].as_py())
-    assert not engine.name_in_use("serialize_db_publications") or True
+    record("redshift.engine.control_table_present",
+           engine.name_in_use("serialize_db_publications"))
 
 
 @pytest.mark.redshift
@@ -910,7 +918,11 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     with storage.duckdb_connect() as connection:
         counted = connection.execute(
             f"SELECT count(*), sum(valor) FROM delta_scan('{projected_uri}')").fetchone()
+        meta_scan = connection.execute(
+            f"SELECT typeof(meta), meta FROM delta_scan('{projected_uri}') "
+            "WHERE id_lancamento = 121").fetchone()
     assert counted[0] == 120
+    record("redshift.engine.delta_scan_meta", {"tipo": meta_scan[0], "valor": str(meta_scan[1])})
 
     # A troca: a partição com NaN pela máquina local, com as mesmas linhas e o aviso.
     with_nan = entries(MONTHS[0], 1, 120, PROJECTED,

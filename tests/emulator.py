@@ -17,10 +17,11 @@ inexistente sai com o SQLSTATE ``42P01`` e a que já existe com ``42P07``, os do
 conflito entre duas transações do DuckDB sai com o ``1023`` do Redshift, a violação de isolamento
 serializável que a segunda publicação da mesma partição recebeu no ambiente alvo em 2026-09-23;
 ``svv_all_columns`` lista as colunas com os tipos e as larguras do DDL que criou cada tabela, na
-grafia do Redshift. No resto, o DuckDB responde do jeito dele. Os bloqueios entre transações, a
-criptografia do bucket, a Data API, as credenciais do contêiner, o proxy e a comparação do ``NaN``
-numa varredura de tabela, que no DuckDB segue a regra do PostgreSQL e no Redshift não, só o ambiente
-alvo mostra.
+grafia do Redshift, e ``current_database()`` é descrito com o tipo ``name`` (OID 19), que o
+Redshift dá aos identificadores do catálogo. No resto, o DuckDB responde do jeito dele. Os
+bloqueios entre transações, a criptografia do bucket, a Data API, as credenciais do contêiner, o
+proxy e a comparação do ``NaN`` numa varredura de tabela, que no DuckDB segue a regra do
+PostgreSQL e no Redshift não, só o ambiente alvo mostra.
 
 Duas variáveis provocam falhas, para rodar lado a lado o código anterior e o corrigido de um
 tratamento de falha:
@@ -160,6 +161,8 @@ OIDS = {
 }
 TEXT_OID = 25
 NUMERIC_OID = 1700
+# O tipo dos identificadores do catálogo, o de current_database() no ambiente alvo (2026-09-24).
+NAME_OID = 19
 
 # Os comandos que não devolvem linhas; num INSERT, UPDATE ou DELETE, o DuckDB devolve a contagem.
 COMMANDS = {
@@ -534,7 +537,8 @@ def session_command(connection: Connection, text: str) -> Result | None:
 
     ``USE``, ``LOCK`` e ``SET statement_timeout`` passam sem efeito, ``SET search_path`` vale para
     a conexão do DuckDB, ``pg_backend_pid`` e ``pg_terminate_backend`` usam os pids do substituto,
-    e ``pg_last_unload_count`` dá as linhas do último ``UNLOAD`` da conexão.
+    ``pg_last_unload_count`` dá as linhas do último ``UNLOAD`` da conexão, e
+    ``current_database()`` sai com o OID do tipo ``name``, como no Redshift.
     """
     if re.match(r"(?:USE|LOCK)\b|SET\s+statement_timeout\b", text, re.IGNORECASE):
         return Result()
@@ -548,6 +552,11 @@ def session_command(connection: Connection, text: str) -> Result | None:
 
     if re.fullmatch(r"SELECT\s+pg_backend_pid\(\)", text, re.IGNORECASE):
         return single_value("pg_backend_pid", OIDS["INTEGER"], connection.pid)
+
+    if re.fullmatch(r"SELECT\s+current_database\(\)", text, re.IGNORECASE):
+        duckdb_connection = connection.duckdb_connection
+        (database,) = duckdb_connection.execute("SELECT current_database()").fetchone()
+        return single_value("current_database", NAME_OID, database)
 
     if re.fullmatch(r"SELECT\s+pg_last_unload_count\(\)", text, re.IGNORECASE):
         return single_value("pg_last_unload_count", OIDS["BIGINT"], connection.last_unload_count)

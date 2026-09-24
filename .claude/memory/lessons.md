@@ -567,3 +567,19 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `iam_role="default"`, the `boto3` path is exercised only by `test_credentials_clause_and_mask`
   with variables it sets itself, and the pre-commit rounds run with the `AWS_*` variables
   removed (the rule "Before a commit").
+
+- **A test that uses a suite's fixture carries the suite's marker** (2026-09-24). The eight
+  target cases of `tests/test_publication.py` reached `local_location` through their `target`
+  fixture, which builds the DuckDB engine's `temp_directory` under the local root, and carried
+  only `redshift` and `s3`: `pytest -m redshift` without the variable errors instead of skipping,
+  and the first target run, whose `SERIALIZE_DB_TEST_LOCAL_ROOT` pointed at a folder the machine
+  did not have, lost all eight in 1.2 s while the engine suite ran. The stand-in rounds had the
+  variable set and never showed it. The cases carry `local` now, and `tests/conftest.py` refuses
+  at collection a test whose fixture closure holds a suite fixture without its marker
+  (`SUITE_FIXTURES`, `pytest_itemcollected`, `UsageError`), proved by a throwaway test.
+- **A catalog function's result type is outside the contract until a run reads it** (2026-09-24).
+  `test_connect_uses_share_database` recorded `current_database()` through the typed `query`, and
+  the target described the column as `name` (OID 19), which the type map lacked: the reading
+  failed the case before its last assertion, in both rounds. `NAME` maps to `string` now, the
+  stand-in imitates the OID, and the case records the SQLSTATE of the missing relation too, which
+  `name_in_use` had accepted without saying whether `42P01` or the message matched.

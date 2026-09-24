@@ -13,7 +13,8 @@ Cada suíte escreve só onde o usuário autoriza pela variável de ambiente, e a
 autorização: sem ela a suíte é pulada, com o motivo no relatório da sessão, e ``pytest`` sem
 variável alguma não executa nenhum teste que grave arquivos ou crie tabelas. Com a autorização dada,
 o que impede a escrita é falha: pasta local inexistente, raiz S3 sem credencial ou sem acesso,
-Redshift sem conexão.
+Redshift sem conexão. Um teste que usa a fixture de uma suíte, direta ou por outra fixture,
+leva o marcador dela, e a coleta recusa o que não leva (``SUITE_FIXTURES``).
 
 Variáveis de ambiente lidas:
 
@@ -267,6 +268,26 @@ USAGE = {
         "chama)",
     ),
 }
+
+
+# A fixture de cada suíte e o marcador que o teste que a usa precisa levar: sem o marcador, a
+# seleção por -m e o pulo pela variável ausente não o alcançam, e a fixture falha no lugar deles.
+SUITE_FIXTURES = {
+    "local_location": "local",
+    "s3_location": "s3",
+    "redshift_session": "redshift",
+    "redshift_driver": "redshift",
+}
+
+
+def pytest_itemcollected(item: pytest.Item) -> None:
+    """Recusa a coleta de um teste que usa a fixture de uma suíte, direta ou por outra fixture,
+    sem o marcador dela."""
+    names = getattr(item, "fixturenames", ())
+    for fixture, marker in SUITE_FIXTURES.items():
+        if fixture in names and item.get_closest_marker(marker) is None:
+            raise pytest.UsageError(
+                f"{item.nodeid} usa a fixture {fixture} sem o marcador {marker}")
 
 
 @pytest.hookimpl(trylast=True)

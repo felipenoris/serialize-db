@@ -121,6 +121,7 @@ _ARROW_BY_OID = {
     int(RedshiftOID.BPCHAR): pa.string(),
     int(RedshiftOID.VARCHAR): pa.string(),
     int(RedshiftOID.TEXT): pa.string(),
+    int(RedshiftOID.NAME): pa.string(),  # os identificadores do catálogo: current_database()
     int(RedshiftOID.UNKNOWN): pa.string(),
     int(RedshiftOID.SUPER): pa.string(),
     int(RedshiftOID.DATE): pa.date32(),
@@ -450,10 +451,10 @@ def schema_from_row_description(row_desc: Sequence[Mapping[str, object]]) -> pa.
 
     ``BOOLEAN`` em ``bool``; ``SMALLINT``, ``INTEGER`` e ``BIGINT`` em ``int16``, ``int32`` e
     ``int64``; ``REAL`` e ``FLOAT`` em ``float32`` e ``float64``; ``NUMERIC`` em
-    ``decimal128(p, s)`` pelo ``type_modifier``; ``CHAR``, ``VARCHAR``, ``TEXT``, ``UNKNOWN`` e
-    ``SUPER`` em ``string``; ``DATE`` em ``date32``; ``TIMESTAMP`` em ``timestamp[us]``;
-    ``TIMESTAMPTZ`` em ``timestamp[us, UTC]``. Outro OID, e um ``NUMERIC`` sem modificador, são
-    ``SandboxError`` com o nome da coluna.
+    ``decimal128(p, s)`` pelo ``type_modifier``; ``CHAR``, ``VARCHAR``, ``TEXT``, ``NAME``,
+    ``UNKNOWN`` e ``SUPER`` em ``string``; ``DATE`` em ``date32``; ``TIMESTAMP`` em
+    ``timestamp[us]``; ``TIMESTAMPTZ`` em ``timestamp[us, UTC]``. Outro OID, e um ``NUMERIC``
+    sem modificador, são ``SandboxError`` com o nome da coluna.
 
     Exemplo:
 

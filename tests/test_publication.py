@@ -6,10 +6,11 @@ despublicação, a conferência da versão lida (igual, mais nova, o ``UPDATE`` 
 e a tabela publicada que outra primeira publicação criou), a reconciliação pelas colunas de
 ``svv_all_columns`` e o estado, sobre uma conexão de mentira que registra os comandos e responde
 a linha de controle (os que gravam um Delta na pasta local são ``local``). Os casos marcados
-``redshift`` publicam no esquema de
-``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` a partir de um Delta sob ``SERIALIZE_DB_TEST_S3_ROOT``, num
-ambiente ``poc<id>`` próprio, cujas tabelas publicadas e linhas de controle saem no fim; a tabela
-de controle é criada quando não existe e apagada só nesse caso. No substituto local
+``redshift``, ``s3`` e ``local`` publicam no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` a
+partir de um Delta sob ``SERIALIZE_DB_TEST_S3_ROOT``, exportado pelo motor DuckDB com o
+``temp_directory`` sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``, num ambiente ``poc<id>`` próprio, cujas
+tabelas publicadas e linhas de controle saem no fim; a tabela de controle é criada quando não
+existe e apagada só nesse caso. No substituto local
 (``SERIALIZE_DB_TEST_EMULATOR``), a conexão é a de ``tests/emulator.py``, e o ``1023`` da
 publicação simultânea vem do conflito entre duas transações do DuckDB. O modelo é o de
 ``tests/lancamentos_model.py``.
@@ -505,6 +506,7 @@ def control_rows(target: Target) -> dict[str, tuple[int, str]]:
 
 @pytest.mark.redshift
 @pytest.mark.s3
+@pytest.mark.local
 def test_first_publication_loads_every_partition(target: Target) -> None:
     """Sem linha de controle, a tabela publicada criada, todas as partições e o ``INSERT`` da
     linha de controle, numa transação, sobre os arquivos que o motor DuckDB exportou pelo
@@ -533,6 +535,7 @@ def test_first_publication_loads_every_partition(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
+@pytest.mark.local
 def test_publish_only_changed_partitions(target: Target) -> None:
     """Duas publicações: a segunda, depois de uma partição alterada, troca só essa partição, e a
     linha de controle passa à versão nova; a partição removida no Delta sai da tabela
@@ -608,6 +611,7 @@ class PausingConnection:
 
 @pytest.mark.redshift
 @pytest.mark.s3
+@pytest.mark.local
 def test_concurrent_publication_raises_execution_conflict(target: Target,
                                                           monkeypatch: pytest.MonkeyPatch) -> None:
     """Duas publicações da mesma tabela a partir da mesma versão lida: a segunda levanta
@@ -658,6 +662,7 @@ def test_concurrent_publication_raises_execution_conflict(target: Target,
 
 @pytest.mark.redshift
 @pytest.mark.s3
+@pytest.mark.local
 def test_unpublish_drops_the_table_and_the_control_row(target: Target) -> None:
     """Depois de uma publicação, ``unpublish_redshift`` apaga a tabela publicada e a linha de
     controle numa transação; a segunda chamada não acha linha e devolve ``None``; a publicação
@@ -679,6 +684,7 @@ def test_unpublish_drops_the_table_and_the_control_row(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
+@pytest.mark.local
 def test_failed_copy_leaves_control_row_untouched(target: Target,
                                                   monkeypatch: pytest.MonkeyPatch) -> None:
     """Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto."""
@@ -713,6 +719,7 @@ def test_failed_copy_leaves_control_row_untouched(target: Target,
 
 @pytest.mark.redshift
 @pytest.mark.s3
+@pytest.mark.local
 def test_reconcile_published_on_the_target(target: Target) -> None:
     """A tabela publicada igual ao modelo não tem diff na leitura de ``svv_all_columns``; uma
     coluna anulável nova entra por ``ADD COLUMN`` e a publicação seguinte a preenche; a largura
@@ -761,6 +768,7 @@ def test_reconcile_published_on_the_target(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
+@pytest.mark.local
 def test_published_join_redistribution_is_read(target: Target) -> None:
     """O ``EXPLAIN`` de um join típico entre as tabelas publicadas, ``cad_lancamentos`` com
     ``cad_contas`` por ``id_conta``, depois da primeira publicação: os rótulos ``DS_*`` de cada
@@ -781,6 +789,7 @@ def test_published_join_redistribution_is_read(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
+@pytest.mark.local
 def test_execution_publishes_to_redshift_and_the_cli(target: Target,
                                                      monkeypatch: pytest.MonkeyPatch,
                                                      capsys: pytest.CaptureFixture) -> None:
