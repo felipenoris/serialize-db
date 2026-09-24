@@ -174,7 +174,7 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
 - **`query`** compila a cópia prefixada pelo dialeto Redshift com `paramstyle="named"`, sem
   `literal_binds` e com `render_postcompile=True`; `construct_params()` dá os valores e o marcador
   `:nome` fica como o `redshift_connector` o lê com `cursor.paramstyle = "named"`; o texto pronto
-  passa por `bind(style="redshift")`. O resultado do `fetchall` vira a `pa.Table` **por colunas**:
+  passa por `bind(dialect="redshift")`. O resultado do `fetchall` vira a `pa.Table` **por colunas**:
   `zip(*rows)` e `pa.array(coluna, type=campo.type)`, com o esquema do statement ou o de
   `schema_from_row_description`. O rascunho mediu 0,03 s por colunas contra 0,10 s por dicionários
   em 200.000 linhas.
