@@ -3064,3 +3064,54 @@ implementação leu das bibliotecas:
   no substituto local em 2026-09-24, com a publicação simultânea, a primeira publicação sobre os
   arquivos exportados pelo motor DuckDB e o ciclo `ingest`, `stream`, `loader`, auditoria e
   exportação pelo registro e pela troca.
+
+## O que a primeira bateria das etapas 5 e 8 mostrou no ambiente alvo
+
+O usuário rodou em 2026-09-24, a partir da `main` com o #71, os quatro comandos que o relatório
+da implementação listou: `tests/test_engine_redshift.py` com `-m redshift` às 05:10 e às 05:12 UTC
+e `tests/test_publication.py` com `-m redshift` às 05:13, duas vezes cada, com
+`SERIALIZE_DB_TEST_REPORT` (Linux 6.12 do Amazon Linux 2023, Python 3.13.15, deltalake 1.6.4,
+duckdb 1.5.5, pyarrow 25.0.1, boto3 1.43.98, sqlalchemy 2.0.54, pandas 3.0.6, pytest 9.1.1,
+`sa-east-1`, sem proxy). Os achados estão aqui e os relatórios ficam fora de `plan/readings/`.
+
+- **Cinco dos seis casos do motor passaram nas duas rodadas** (116,5 s e 80,6 s), a primeira vez
+  que um comando do motor rodou lá: `test_ingest_stream_loader_export` (o `ingest` de uma partição
+  por `COPY ... MANIFEST FILLRECORD` de um Delta gravado pelo delta-rs no bucket; o `stream` por
+  `UNLOAD` em lotes de 50, 50 e 20 igual ao `query`, com a coluna JSON, o `DECIMAL(18, 2)` e o
+  `timestamp[us]`; o `loader` por `COPY` com o nome ocupado recusado; a auditoria com a staging
+  `_publicado` e a chave estrangeira pela versão fixada de `cad_contas`; o `export_partition` pelo
+  registro do arquivo do `UNLOAD`, lido pelo delta-rs com a coluna JSON como texto e contado pelo
+  `delta_scan`; a troca por `publish_partition` na partição com `NaN`, com o `max.valor` ausente
+  nela e 60.0 na outra; o `cleanup` sem tabela `exec_<id>_*` e com o `staging/` vazio);
+  `test_loader_creates_the_table_at_close` (a relação inexistente antes do `close`, o `COPY` de um
+  arquivo ausente desfazendo o `CREATE TABLE`, o `loader` sem lote criando a tabela vazia);
+  `test_new_session_sees_committed_tables` (duas ingestões em duas sessões, em threads, e a tabela
+  temporária invisível à outra sessão); `test_stream_literal_values_on_the_target` (os literais
+  com `'`, `\` e `%`, o stream vazio com o esquema, a tabela temporária lida pelo `UNLOAD`
+  seguinte); e `test_small_load_copy_cost` (1,56 s e 1,46 s o melhor de três `load` de 10 linhas
+  pelo `loader`). O `row_desc` dos agregados: `count(*)` em `int64`, `sum` de `DECIMAL(18, 2)` em
+  `decimal128(38, 2)`, `sum` de `DOUBLE PRECISION` em `double`, o literal de texto em `string` e
+  `1.5` em `decimal128(2, 1)`, como a suíte de estudo leu em 2026-09-23. A limpeza apagou 39
+  objetos por sessão.
+- **`select current_database()` reprovou `test_connect_uses_share_database` nas duas rodadas**: o
+  Redshift descreve a coluna com o tipo `name` (OID 19, `type_size` 128), o tipo dos
+  identificadores do catálogo, que o mapa de `schema_from_row_description` não tinha, e `query`
+  recusou com `SandboxError: current_database: tipo NAME (OID 19) fora do contrato`. As asserções
+  anteriores do caso passaram: o `CREATE TABLE` por nome em duas partes depois do `USE` e
+  `name_in_use` com o nome livre, sem dizer se pelo SQLSTATE `42P01` ou pela mensagem.
+  Consequências: `NAME` entra no mapa como `string`; o substituto descreve `current_database()`
+  com o OID 19, e o caso reprova nele com o motor anterior e passa com o corrigido; o caso
+  registra o SQLSTATE e a mensagem da relação inexistente, `current_database()` e a presença da
+  tabela de controle, e `test_ingest_stream_loader_export` registra a coluna JSON do arquivo do
+  `UNLOAD` lida pelo `delta_scan`.
+- **Nenhum caso da publicação rodou**: os oito erraram na fixture `local_location`,
+  "SERIALIZE_DB_TEST_LOCAL_ROOT aponta para uma pasta inexistente:
+  /home/<usuário>/serialize-db-local", em 1,2 s e 1,1 s, porque `SUITE.md` exporta a variável e a
+  pasta do `mkdir` dele não existia na máquina. Os casos usam a pasta local pelo `temp_directory`
+  do motor DuckDB que exporta os arquivos que a publicação lê, mas levavam só os marcadores
+  `redshift` e `s3`: sem a variável, `pytest -m redshift` os erraria no lugar de pulá-los. Eles
+  levam o marcador `local` agora, e `tests/conftest.py` recusa na coleta um teste que usa a
+  fixture de uma suíte sem o marcador dela (`SUITE_FIXTURES`). O `COPY` do Redshift sobre o
+  arquivo do `COPY` do DuckDB, a grafia de `svv_all_columns`, o `1023` pela biblioteca e o
+  `EXPLAIN` da junção esperam a repetição com a pasta criada
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

@@ -37,7 +37,8 @@ testes `redshift` desta etapa o exercitam sobre arquivos exportados pelo motor D
 | `serialize-db publish` | A publicação fora de uma execução, por exemplo depois de uma correção; `--status` mostra `publication_status`, `--init` roda `create_publications_table`, e `--unpublish TABELA ...` roda `unpublish_redshift`. |
 
 Testes: o SQL da transação comparado com texto esperado, sem conexão, com o nome em duas partes e
-a cláusula de credenciais mascarada; integração marcada `redshift`. Provas de conceito:
+a cláusula de credenciais mascarada; integração marcada `redshift`, `s3` e `local`, porque os
+arquivos publicados saem do motor DuckDB com o `temp_directory` na pasta local. Provas de conceito:
 `test_deltalake.py::test_version_diff_reads_data_changes_in_the_log`,
 `test_stdlib.py::test_group_log_actions_by_partition` e
 `test_redshift.py::test_copy_manifest_from_delta_files` (a transação da publicação repete o `COPY`

@@ -188,9 +188,11 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
   mesmo atributo (decisão do usuário de 2026-09-24). Os OIDs vêm de
   `redshift_connector.utils.oids.RedshiftOID`: `BOOLEAN` em `bool`; `SMALLINT`, `INTEGER` e
   `BIGINT` em `int16`, `int32` e `int64`; `REAL` e `FLOAT` em `float32` e `float64`; `NUMERIC` em
-  `decimal128(p, s)`; `CHAR`, `BPCHAR`, `VARCHAR`, `TEXT` e `UNKNOWN` em `string`; `DATE` em
-  `date32`; `TIMESTAMP` em `timestamp[us]`; `TIMESTAMPTZ` em `timestamp[us, UTC]`; e `SUPER` em
-  `string`, como o JSON do motor DuckDB. Outro OID, e um `NUMERIC` sem `type_modifier`, são
+  `decimal128(p, s)`; `CHAR`, `BPCHAR`, `VARCHAR`, `TEXT`, `NAME` e `UNKNOWN` em `string`; `DATE`
+  em `date32`; `TIMESTAMP` em `timestamp[us]`; `TIMESTAMPTZ` em `timestamp[us, UTC]`; e `SUPER` em
+  `string`, como o JSON do motor DuckDB. `NAME` (OID 19) é o tipo dos identificadores do catálogo,
+  o de `current_database()`, que reprovou a primeira execução no alvo em 2026-09-24
+  ([`POC.md`](POC.md)). Outro OID, e um `NUMERIC` sem `type_modifier`, são
   recusados com `SandboxError`, que nomeia a coluna e o tipo (`get_datatype_name`). Uma precisão e
   uma escala fixas quebrariam: `pa.array` com `decimal128(18, 2)` recusou um valor de escala 6 e um
   de 17 dígitos inteiros (2026-09-23, [`POC.md`](POC.md)). A suíte leu o `row_desc` no ambiente

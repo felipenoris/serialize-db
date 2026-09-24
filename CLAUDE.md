@@ -542,6 +542,15 @@ A new lesson adds its story there and its rule here, in the same commit.
   secret stores the key at `CREATE SECRET` and renews nothing without `REFRESH auto`; list every
   client that copies the credential, with the expiry the probe read beside the run's length
   (2026-09-24).
+- **A test that uses a suite's fixture carries the suite's marker**: the publication's target
+  cases reached `local_location` through their `target` fixture with only `redshift` and `s3`,
+  so `pytest -m redshift` without the variable errors instead of skipping; `tests/conftest.py`
+  refuses at collection a test whose fixture closure holds a suite fixture without its marker
+  (`SUITE_FIXTURES`), and a new suite fixture enters that table (2026-09-24).
+- **A catalog function's result type is outside the contract until a run reads it**:
+  `current_database()` is `name` (OID 19), and its reading through the typed `query` failed
+  the case before its last assertion; read a system function last in a case, or through the
+  raw `row_desc` (2026-09-24).
 
 ## Naming conventions
 
@@ -597,10 +606,16 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `Execution(..., redshift=RedshiftConfig(...))` with `publish_redshift`, `serialize-db publish`,
   `serialize-db run --redshift` and `--engine redshift`, `serialize-db audit --engine redshift`);
   their `redshift`-marked cases (6 in `tests/test_engine_redshift.py`, 8 in
-  `tests/test_publication.py`) passed on the stand-in and have not run in the target
-  (`plan/OPEN_QUESTIONS.md` lists what that first run reads: the Redshift `COPY` of a DuckDB-written
-  file, the `svv_all_columns` spelling, the `42P01` of a missing relation, the `1023` through the
-  library, the `PARALLEL OFF` threshold of 5,000,000 rows, an unmeasured choice). The user decided
+  `tests/test_publication.py`) passed on the stand-in. The first target run of 2026-09-24 at
+  05:10 passed five of the six engine cases (`COPY ... MANIFEST`, `UNLOAD`, the loader, the
+  audit, the export by registration, the `NaN` swap) and failed `current_database()`, described
+  as `name` (OID 19), mapped to `string` since; the publication cases did not run because the
+  target's local root folder was missing (they carry `local` now), and `plan/OPEN_QUESTIONS.md`
+  lists what their first run reads: the Redshift `COPY` of a DuckDB-written file, the
+  `svv_all_columns` spelling, the `1023` through the library, the `EXPLAIN` of the join; the
+  `42P01` of a missing relation and the JSON column through `delta_scan` are recorded by the
+  engine suite's repetition, and the `PARALLEL OFF` threshold of 5,000,000 rows stays an
+  unmeasured choice. The user decided
   on 2026-09-24 the explicit `RedshiftConfig` for the publication (`Execution(...,
   redshift=...)`; without it `publish_redshift` refuses), the new suites' commands listed in the
   report rather than added to `SUITE.md`, and `redshift-connector==2.1.17` in the `redshift`

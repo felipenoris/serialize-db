@@ -41,7 +41,10 @@ foi medido em [`POC.md`](POC.md).
   registra esse arquivo numa tabela Delta e o lê pelo delta-rs e pelo `delta_scan`, o caminho do
   `export_partition` de uma tabela com coluna JSON. Um arquivo do `COPY` do DuckDB com o mesmo tipo
   lógico `JSON`, registrado pelo motor DuckDB, foi lido como texto pelos dois leitores (sonda de
-  2026-09-24, [`POC.md`](POC.md)); falta o arquivo do `UNLOAD`.
+  2026-09-24, [`POC.md`](POC.md)). A primeira bateria no alvo, de 2026-09-24 às 05:10, registrou
+  pelo `export_partition` o arquivo do `UNLOAD` de `cad_lancamentos_projetados`, com a coluna
+  serializada por `JSON_SERIALIZE`, e o delta-rs a leu como texto; o `delta_scan` só contou as
+  linhas, e a repetição registra a coluna por ele (`redshift.engine.delta_scan_meta`).
 - **O `COPY` do Redshift sobre o arquivo do `COPY` do DuckDB.** A publicação da
   [etapa 8](PLAN-STAGE-8.md) lê os arquivos do registro, gravados pelo `COPY` do DuckDB desde a
   decisão de 2026-09-24: `DECIMAL` até 18 dígitos em `INT64`, `TIMESTAMP` em `INT64` de
@@ -49,20 +52,25 @@ foi medido em [`POC.md`](POC.md).
   `PLAIN` e SNAPPY (sonda de 2026-09-24, [`POC.md`](POC.md)). O `COPY ... MANIFEST` do ambiente
   alvo carregou em 2026-09-21 arquivos do delta-rs, com o `DECIMAL(18, 2)` e o `timestamp_ntz` em
   `INT64`; um arquivo do DuckDB, e a coluna JSON com o tipo lógico numa staging `VARCHAR(65535)`,
-  esperam os testes `redshift` da etapa 8 sobre arquivos exportados pelo motor DuckDB.
-- **As etapas 5 e 8 no ambiente alvo.** O motor Redshift e a publicação foram implementados em
-  2026-09-24 e passaram no substituto local; nenhum comando deles rodou no ambiente alvo. A
-  primeira execução de `tests/test_engine_redshift.py` e `tests/test_publication.py` com
-  `-m redshift` lá lê: o `COPY` do Redshift sobre os arquivos do `COPY` do DuckDB
-  (`test_first_publication_loads_every_partition`, o item abaixo); a grafia de `svv_all_columns`
+  esperam os testes `redshift` da etapa 8 sobre arquivos exportados pelo motor DuckDB, que a
+  bateria de 2026-09-24 às 05:13 não alcançou (a pasta local ausente, [`POC.md`](POC.md)).
+- **As etapas 5 e 8 no ambiente alvo.** O motor Redshift rodou lá pela primeira vez em 2026-09-24
+  às 05:10: cinco dos seis casos de `tests/test_engine_redshift.py` passaram nas duas rodadas, e
+  `current_database()` reprovou o sexto pelo tipo `name` (OID 19), corrigido no mapa de tipos
+  ([`POC.md`](POC.md)). A repetição lê o SQLSTATE da relação inexistente, `42P01`, que
+  `name_in_use` e a conferência da tabela de controle esperam ao lado da mensagem `does not exist`
+  (`redshift.engine.relation_missing`: o nome livre passou sem dizer qual dos dois), e a coluna
+  JSON do arquivo do `UNLOAD` pelo `delta_scan` (o item acima). A primeira execução de
+  `tests/test_publication.py` com `-m redshift`, que às 05:13 errou na pasta local ausente, lê: o
+  `COPY` do Redshift sobre os arquivos do `COPY` do DuckDB
+  (`test_first_publication_loads_every_partition`, o item acima); a grafia de `svv_all_columns`
   na reconciliação (`test_reconcile_published_on_the_target`, que exige diff nenhum na tabela igual
-  ao modelo); o SQLSTATE da relação inexistente, `42P01`, que `name_in_use` e a conferência da
-  tabela de controle esperam ao lado da mensagem `does not exist`; o `1023` da publicação simultânea
-  pela publicação da biblioteca (`test_concurrent_publication_raises_execution_conflict`); o
-  `PARALLEL OFF` até 5.000.000 linhas na exportação, um valor não medido; o arquivo do `UNLOAD` com
-  a coluna `SUPER` serializada em texto registrado no Delta (o item abaixo); e a reconexão depois
-  de uma queda do servidor, que nenhum teste provoca lá. A suíte publica num ambiente `poc<id>` e
-  cria a tabela de controle quando ela não existe, apagando-a só nesse caso.
+  ao modelo); o `1023` da publicação simultânea pela publicação da biblioteca
+  (`test_concurrent_publication_raises_execution_conflict`); e o `EXPLAIN` da junção entre tabelas
+  publicadas (`test_published_join_redistribution_is_read`). Ficam sem medida o `PARALLEL OFF` até
+  5.000.000 linhas na exportação e a reconexão depois de uma queda do servidor, que nenhum teste
+  provoca lá. A suíte publica num ambiente `poc<id>` e cria a tabela de controle quando ela não
+  existe, apagando-a só nesse caso.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
