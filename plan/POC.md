@@ -1937,7 +1937,7 @@ etapas 3 e 4.
 
 **Consequência**: [`PLAN-STAGE-1.md`](PLAN-STAGE-1.md) registra, na decisão do `Double` não finito,
 que o `CAST` da soma de controle fica; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) propõe o híbrido com
-64 MiB, à espera do usuário.
+64 MiB, que o usuário aprovou em 2026-09-23.
 
 ## O que os esboços do stream híbrido, do cancelamento e do loader mostraram
 
@@ -2912,10 +2912,9 @@ x86_64 (DuckDB 1.5.5, `httpfs` e `aws` de `.duckdb/`, uma chave de mentira nas v
   `CHAIN 'sts'` e `'web_identity'` a ligam sozinhos, por serem credenciais curtas; quando a
   renovação acontece, a página não diz, e uma conexão atravessando a expiração não foi medida.
 
-**Consequência**: a proposta, à espera do usuário, é criar os dois secrets com `REFRESH auto`; a
-conexão da carga de `cad_lancamentos` na próxima migração, a mais longa da bateria, pode atravessar
-a rotação da credencial de quem chama ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md),
-[etapa 3](PLAN-STAGE-3.md)).
+**Consequência**: os dois secrets levam `REFRESH auto` (decisão do usuário de 2026-09-24,
+[etapa 3](PLAN-STAGE-3.md)); a renovação numa conexão que atravessa a rotação da credencial do
+contêiner só uma execução longa no alvo mostra ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
 ## O que o arquivo do `COPY` do DuckDB mostrou
 

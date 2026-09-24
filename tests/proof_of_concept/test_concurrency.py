@@ -61,21 +61,26 @@ def large_table(con: duckdb.DuckDBPyConnection) -> pa.Table:
 def python_rate_during(action: Callable[[], object]) -> tuple[float, float]:
     """Roda ``action`` nesta thread enquanto outra conta iterações Python.
 
-    Devolve a duração da ação e as iterações por segundo do laço. A thread contadora para em
+    Devolve a duração da ação e as iterações por segundo do laço. A ação só começa depois da
+    primeira iteração do laço, porque uma ação curta terminaria antes de a thread contadora ganhar
+    o GIL (200 ``os.stat`` em 5 ms, numa execução de 2026-09-24). A thread contadora para em
     ``finally``: uma exceção na ação não a deixa girando.
     """
     stop = threading.Event()
+    running = threading.Event()
     rate: dict[str, float] = {}
 
     def count() -> None:
         iterations = 0
         started = time.perf_counter()
+        running.set()
         while not stop.is_set():
             iterations += 1
         rate["value"] = iterations / (time.perf_counter() - started)
 
     counter = threading.Thread(target=count)
     counter.start()
+    running.wait()
     started = time.perf_counter()
     try:
         action()

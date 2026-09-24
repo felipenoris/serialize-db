@@ -21,10 +21,10 @@ foi medido em [`POC.md`](POC.md).
   renova pela cadeia padrão o `DeltaTable` que a execução segura. O secret `credential_chain` do
   DuckDB, de `storage.duckdb_setup` e do script de migração, guarda a chave e o token resolvidos no
   `CREATE SECRET`, e a documentação da extensão `aws` pede `REFRESH auto` para a credencial que
-  expira ([`POC.md`](POC.md), sonda de 2026-09-24): a proposta, à espera do usuário, é criar o
-  secret com `REFRESH auto`. A conexão da carga de uma tabela do script vive do fim da medição ao
-  relatório da carga, e a de `cad_lancamentos`, a mais longa da bateria, pode atravessar a rotação
-  da credencial de quem chama, que às 22:50 de 2026-09-23 expirava em 46 minutos (`RS-18`). O
+  expira ([`POC.md`](POC.md), sonda de 2026-09-24): os dois secrets levam `REFRESH auto` desde a
+  decisão do usuário de 2026-09-24, e a renovação numa conexão que atravessa a rotação da
+  credencial do contêiner, que às 22:50 de 2026-09-23 expirava em 46 minutos (`RS-18`), só uma
+  execução longa no alvo mostra. O
   `S3FileSystem` do `Storage`, que o `stream` e o `loader` do motor Redshift e a leitura dos
   rodapés usam, guarda a cadeia de credenciais do SDK da AWS, que renova a credencial do contêiner
   por conta própria; nenhuma execução mediu essa renovação. A credencial do Redshift
@@ -50,19 +50,12 @@ foi medido em [`POC.md`](POC.md).
   alvo carregou em 2026-09-21 arquivos do delta-rs, com o `DECIMAL(18, 2)` e o `timestamp_ntz` em
   `INT64`; um arquivo do DuckDB, e a coluna JSON com o tipo lógico numa staging `VARCHAR(65535)`,
   esperam os testes `redshift` da etapa 8 sobre arquivos exportados pelo motor DuckDB.
-- **A memória do `archive` e da compactação.** O `deep_copy` da [etapa 3](PLAN-STAGE-3.md)
-  reescreve a tabela inteira pelo `write_deltalake`, cuja memória cresce com a tabela fora do
-  `memory_limit` do DuckDB (1.140 MB para 12.000.000 de linhas e 1.960 MB para 24.000.000,
-  [`delta.md`](delta.md)); `cad_lancamentos` tem 141.901.795 linhas. A proposta da
-  [etapa 9](PLAN-STAGE-9.md), à espera do usuário, é o `archive` partição a partição pelo `COPY`
-  do DuckDB sob `environment_limits` e `register_files`, o caminho que `delta.md` mediu com memória
-  constante. A compactação pelo `optimize.compact` do delta-rs também roda fora do `memory_limit`,
-  e a memória dela numa partição de `cad_lancamentos` não foi medida.
+- **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
+  DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
+  `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
+  cópia dos arquivos de cada partição e o registro deles (decisão do usuário de 2026-09-24).
 
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit.
-
-- [Etapa 9](PLAN-STAGE-9.md): o `archive` partição a partição pelo caminho do registro, no lugar
-  do `deep_copy` da tabela inteira pelo `write_deltalake`.
+tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente.

@@ -549,5 +549,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   script, stores `key_id`, `secret` and `session_token` at `CREATE SECRET` (`duckdb_secrets()`),
   while `RS-18` read the caller's credential expiring 46 minutes later and the script's load
   connection lives from the end of the measurement to the load report. DuckDB 1.5.5 accepts
-  `REFRESH auto`, which the aws extension docs prescribe for credentials that expire; the proposal
-  awaits the user.
+  `REFRESH auto`, which the aws extension docs prescribe for credentials that expire; the user
+  approved it on 2026-09-24.
+
+- **A helper thread's contention is confirmed before the timed call starts** (2026-09-24). The GIL
+  measurement started its busy thread and timed 200 `os.stat` at once; in one of four sessions the
+  stats finished in 5.4 ms before the thread got the GIL, and the ratio assertion failed. The
+  thread now sets an event on its first iteration and the caller waits for it (the rule
+  "A concurrency test is repeated before it is trusted" caught it on the repetition).

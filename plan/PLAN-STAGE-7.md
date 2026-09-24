@@ -136,8 +136,8 @@ na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
   do mesmo tamanho ([`POC.md`](POC.md)): a carga ordenada da maior partição pede uma máquina de
   32 GB, e a sem ordem cabe em 16 GB; o script regrava o relatório depois de cada passo.
   Essa conexão vive do fim da medição ao relatório da carga, e o secret dela guarda a
-  credencial resolvida na abertura: a proposta de `REFRESH auto` no secret espera o usuário
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). Na execução de 2026-09-23, `cad_lancamentos` rodou
+  credencial resolvida na abertura: ele leva `REFRESH auto` (decisão do usuário de 2026-09-24,
+  [etapa 3](PLAN-STAGE-3.md)). Na execução de 2026-09-23, `cad_lancamentos` rodou
   sozinho na máquina, entre `cad_contratos` e `cad_operacoes`, na ordem de `SUITE.md`, e o probe
   das threads veio depois, às 23:21.
   Numa partição sintética com as mesmas linhas e colunas, num contêiner de 4 vCPUs e 16.095 MB, a

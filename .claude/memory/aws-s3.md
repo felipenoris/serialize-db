@@ -50,7 +50,8 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   secret, and the aws extension docs say some endpoints need periodic refreshing, which
   `REFRESH auto` requests and `CHAIN 'sts'` and `'web_identity'` switch on by themselves (probe of
   2026-09-24; when the refresh runs, the page does not say). `storage.duckdb_setup` and the
-  migration script create the secret without it; the proposal awaits the user. `plan/POC.md`,
+  migration script create the secret with `REFRESH auto` (user decision of 2026-09-24); a
+  connection crossing the container credential's rotation is still unmeasured. `plan/POC.md`,
   `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-3.md`
 
 ## The target's network, read on 2026-09-21

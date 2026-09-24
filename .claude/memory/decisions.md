@@ -763,3 +763,17 @@ CPUs by the probe's reading, as the plan had assigned to that run, closed the op
 `cad_lancamentos` migration, the half-memory fraction, the threads, the non-finite `Double` and the
 Redshift audit text, and turned the audit readings into assertions; the migration reports stay out
 of git. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-7.md`
+
+## REFRESH auto on the DuckDB secret and the archive by copy and registration (2026-09-24)
+
+On 2026-09-24 the user asked for the pending decisions to be explained and approved both
+recommendations: the DuckDB `credential_chain` secret of `storage.duckdb_setup` and of the
+migration script is created with `REFRESH auto`, because it stores the credential resolved at
+`CREATE SECRET` and the container's expires in about an hour (implemented the same day; a
+connection crossing the rotation is still unmeasured); and stage 9's `archive` copies each
+partition's files of the snapshot version with `Storage.copy` and registers them with
+`register_files` on a table made by `create_table`, one commit per partition, in place of
+`deep_copy` by `write_deltalake` over the whole table, whose memory grows with the table outside
+DuckDB's limit (the DuckDB `COPY` rewrite stays with `export --mode rewrite` and compaction). The
+`deep_copy` code changes when stage 9 starts. `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`,
+`plan/OPEN_QUESTIONS.md`

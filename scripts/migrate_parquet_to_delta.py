@@ -50,9 +50,10 @@ tabela da vez em ``in_progress``: um processo morto no meio da carga deixa o que
 
 Origem e raiz aceitam pasta local ou ``s3://bucket/prefixo``: no S3 o DuckDB carrega ``httpfs``
 e ``aws`` da pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz
-do repositório) e cria um secret ``credential_chain`` com a região de ``AWS_REGION`` ou
-``AWS_DEFAULT_REGION``, e o delta-rs recebe a mesma região. O ambiente alvo não tem variável de
-proxy, e o script não faz a separação de ``HTTP_PROXY`` que os probes fazem.
+do repositório) e cria um secret ``credential_chain`` com ``REFRESH auto``, porque a credencial
+do contêiner expira em cerca de uma hora e o secret a guarda resolvida na criação, e com a região
+de ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``; o delta-rs recebe a mesma região. O ambiente alvo
+não tem variável de proxy, e o script não faz a separação de ``HTTP_PROXY`` que os probes fazem.
 
 Sobre a base fictícia de ``tests/source_db_projetado.py``, em pasta local:
 
@@ -955,7 +956,7 @@ def extension_directory() -> str | None:
 def connect_duckdb(uses_s3: bool, region: str | None) -> duckdb.DuckDBPyConnection:
     """A conexão com as extensões da pasta configurada, sem instalação automática, e com o
     ``threads`` e o ``memory_limit`` lidos do ambiente na abertura; com o S3, ``httpfs``, ``aws``
-    e o secret ``credential_chain`` da região."""
+    e o secret ``credential_chain`` da região, com ``REFRESH auto`` para a credencial que expira."""
     config: dict[str, object] = {
         "autoinstall_known_extensions": False,
         "autoload_known_extensions": False,
@@ -970,7 +971,8 @@ def connect_duckdb(uses_s3: bool, region: str | None) -> duckdb.DuckDBPyConnecti
         con.execute("LOAD httpfs")
         con.execute("LOAD aws")
         con.execute(
-            f"CREATE SECRET migracao (TYPE s3, PROVIDER credential_chain, REGION '{region}')"
+            "CREATE SECRET migracao "
+            f"(TYPE s3, PROVIDER credential_chain, REFRESH auto, REGION '{region}')"
         )
     return con
 

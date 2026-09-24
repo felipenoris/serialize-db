@@ -211,7 +211,9 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
 - `deep_copy` (stage 3) is `write_deltalake` over the reader of the whole table at a version, so
   its memory grows with the table outside DuckDB's limit: by the 2026-09-23 measurement (1,140 MB
   for 12,000,000 rows, 1,960 MB for 24,000,000) a copy of `cad_lancamentos` (141,901,795 rows) would
-  need about 11 GB, unmeasured; stage 9 proposes the archive partition by partition through the
-  DuckDB `COPY` under `environment_limits` and `register_files`, awaiting the user (2026-09-24).
-  `optimize.compact` runs in delta-rs too, with its default parallel tasks, memory unmeasured.
+  need about 11 GB, unmeasured; the user decided on 2026-09-24 that stage 9 replaces its body by
+  `Storage.copy` of each partition's files and `register_files` on a table made by `create_table`,
+  one commit per partition, no data through the machine, files identical to the source (the
+  DuckDB `COPY` path stays for `export --mode rewrite` and compaction). `optimize.compact` runs in
+  delta-rs too, with its default parallel tasks, memory unmeasured.
   `plan/PLAN-STAGE-9.md`, `plan/OPEN_QUESTIONS.md`

@@ -632,11 +632,12 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   than none at 16 threads, and the threads probe with the cache off fixed `threads` at the
   process's CPUs: materialization best there, worse at half and at double, the S3 read 1.4x
   faster at triple; the audit's non-finite count and the `NaN` row are assertions
-  (`plan/POC.md`). `REFRESH auto` on the DuckDB secret, which stores the credential resolved
-  at `CREATE SECRET`, awaits the user (`plan/OPEN_QUESTIONS.md`), as does the stage 9 `archive`
-  partition by partition through the register path, because `deep_copy` by `write_deltalake` grows
-  with the table outside `memory_limit`; the Redshift `COPY` of a DuckDB-written file waits for
-  the stage 8 tests. Stage 7 absorbs the script over the stage 3, 4 and 6 modules.
+  (`plan/POC.md`). The user approved on 2026-09-24 `REFRESH auto` on the DuckDB secret, which
+  stores the credential resolved at `CREATE SECRET` (in `storage.duckdb_setup` and the script),
+  and the stage 9 `archive` by copying each partition's files and registering them, in place of
+  `deep_copy` by `write_deltalake`, whose memory grows with the table outside `memory_limit` (the
+  code changes when stage 9 starts); the Redshift `COPY` of a DuckDB-written file waits for the
+  stage 8 tests. Stage 7 absorbs the script over the stage 3, 4 and 6 modules.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still

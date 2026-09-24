@@ -148,3 +148,9 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   335 MB (242 to 243 MB over the base), the direct reader 102 MB (9 to 10 MB), the spool 130 to
   138 MB (37 to 45 MB, 81 MB of file); PyArrow imported by `to_arrow_reader` mid-query left the
   reader at 103 MB over a 53 MB base. `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`
+
+- `python_rate_during` (the GIL helper of `tests/proof_of_concept/test_concurrency.py`) waits for
+  the counter thread's first iteration before timing the action: without the wait, 200 `os.stat`
+  finished in 5.4 ms before the thread got the GIL, `beside` came out below `shorter` and
+  `test_gil_reacquisition_waits_the_switch_interval` failed once in four sessions on 2026-09-24
+  (usually 0.08 s to 0.75 s beside the loop); five runs passed after the wait. `plan/POC.md`
