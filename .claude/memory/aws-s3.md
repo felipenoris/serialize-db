@@ -44,6 +44,14 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   2.4, 0.3 and 0.6 s. `serialize_db.storage` passes `max_retries=3` and `retry_timeout=10s`: the
   timeout is the ceiling, and the retries cover a passing S3 error. `plan/POC.md`,
   `plan/PLAN-STAGE-3.md`
+- DuckDB 1.5.5's `credential_chain` secret stores `key_id`, `secret` and `session_token` resolved
+  at `CREATE SECRET` (`duckdb_secrets()` shows them, redacted), and nothing renews them; `REFRESH
+  auto` is accepted with and without `CHAIN`, adds `refresh_info={'refresh': auto, ...}` to the
+  secret, and the aws extension docs say some endpoints need periodic refreshing, which
+  `REFRESH auto` requests and `CHAIN 'sts'` and `'web_identity'` switch on by themselves (probe of
+  2026-09-24; when the refresh runs, the page does not say). `storage.duckdb_setup` and the
+  migration script create the secret without it; the proposal awaits the user. `plan/POC.md`,
+  `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-3.md`
 
 ## The target's network, read on 2026-09-21
 

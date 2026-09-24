@@ -542,3 +542,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   other projects and asked for limits read from the environment; the engine and the script now
   take half the memory still available and the process's CPUs at each opening, and the script
   opens one connection per table.
+- **A credential renewal is designed per client that holds a copy** (2026-09-24). The one-hour
+  credentials item covered delta-rs, which resolves the chain per call, and the Redshift driver,
+  which reconnects per command, and the review of the 2026-09-23 22:49 readings found the third
+  copy: DuckDB's `credential_chain` secret, created by `storage.duckdb_setup` and by the migration
+  script, stores `key_id`, `secret` and `session_token` at `CREATE SECRET` (`duckdb_secrets()`),
+  while `RS-18` read the caller's credential expiring 46 minutes later and the script's load
+  connection lives from the end of the measurement to the load report. DuckDB 1.5.5 accepts
+  `REFRESH auto`, which the aws extension docs prescribe for credentials that expire; the proposal
+  awaits the user.

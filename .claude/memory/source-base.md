@@ -117,3 +117,12 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   now opens every DuckDB connection with half the memory still available and gives each table its
   own connection; the rerun of `cad_lancamentos` confirms the partition fits. `plan/POC.md`,
   `plan/PLAN-STAGE-7.md`
+- The second migration ran one process per table in the order of `SUITE.md` (alphabetical):
+  `cad_lancamentos` ran alone between `cad_contratos`, whose report was written at 23:06 UTC, and
+  `cad_operacoes`, which started at 23:14:58, and the threads probe came after, at 23:21: by the
+  sequence of `SUITE.md`, the kernel's kill owes nothing to the probe. The loads in the main
+  process, one connection across
+  the whole table: `rel_contrato_operacao` 2.2 s, 13.3 s and 11.3 s with the process peak at 508,
+  2,459 and 2,712 MB, growing on the third partition although it is smaller than the second;
+  `cad_operacoes` 4.3 s to 5.1 s and up to 1,801 MB; `cad_contratos` 3.2 s to 3.6 s and up to
+  1,142 MB; the unpartitioned tables 0.4 s to 0.6 s at about 270 MB. `plan/POC.md`

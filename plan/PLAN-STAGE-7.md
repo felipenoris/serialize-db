@@ -129,6 +129,11 @@ na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
   a memória ao fechar, e o RSS de uma conexão ficou em 1.188 MB depois do `DROP` da tabela que a
   consulta ordenada criou e voltou a 208 MB no `close` ([`POC.md`](POC.md)). A próxima execução de
   `cad_lancamentos` confirma que a partição cabe; o script regrava o relatório depois de cada passo.
+  Essa conexão vive do fim da medição ao relatório da carga, e o secret dela guarda a
+  credencial resolvida na abertura: a proposta de `REFRESH auto` no secret espera o usuário
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). Na execução de 2026-09-23, `cad_lancamentos` rodou
+  sozinho na máquina, entre `cad_contratos` e `cad_operacoes`, na ordem de `SUITE.md`, e o probe
+  das threads veio depois, às 23:21.
   Numa partição sintética com as mesmas linhas e colunas, num contêiner de 4 vCPUs e 16.095 MB, a
   ordem multiplicou o tempo do `register` por 3,6 (50,2 s contra 14,0 s) e o pico por 2,6
   (11.966 MB contra 4.517 MB), e o `COPY` ordenado direto no DuckDB levou 17,4 s com pico de

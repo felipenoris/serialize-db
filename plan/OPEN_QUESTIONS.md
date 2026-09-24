@@ -17,7 +17,14 @@ foi medido em [`POC.md`](POC.md).
 - **Credenciais de uma hora.** Nenhuma execução mais longa que uma emissão rodou ainda; a
   [etapa 3](PLAN-STAGE-3.md) resolve `storage_options` a cada chamada e não põe credencial nele
   (decisão do usuário de 2026-09-22), e a primeira execução longa no espaço confirma que o delta-rs
-  renova pela cadeia padrão o `DeltaTable` que a execução segura. A credencial do Redshift
+  renova pela cadeia padrão o `DeltaTable` que a execução segura. O secret `credential_chain` do
+  DuckDB, de `storage.duckdb_setup` e do script de migração, guarda a chave e o token resolvidos no
+  `CREATE SECRET`, e a documentação da extensão `aws` pede `REFRESH auto` para a credencial que
+  expira ([`POC.md`](POC.md), sonda de 2026-09-24): a proposta, à espera do usuário, é criar o
+  secret com `REFRESH auto`. A conexão da carga de uma tabela do script vive do fim da medição ao
+  relatório da carga, e a de `cad_lancamentos`, a mais longa da bateria, pode atravessar a rotação
+  da credencial de quem chama, que às 22:50 de 2026-09-23 expirava em 46 minutos (`RS-18`). A
+  credencial do Redshift
   tem o mesmo teto (`GetCredentials`, 3600 segundos), e o serverless encerra a sessão ociosa há
   3.600 s e a transação inativa há 21.600 s ([`redshift.md`](redshift.md)): o que acontece com uma
   conexão aberta quando a senha expira, e se ela cai no meio de um `COPY`, ainda não foi medido; o

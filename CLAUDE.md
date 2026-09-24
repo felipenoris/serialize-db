@@ -535,6 +535,11 @@ A new lesson adds its story there and its rule here, in the same commit.
   count requests at the source before a best of N stands for a remote read (2026-09-24).
 - **A long-running script writes its report as it goes**: the migration process that ended in
   `cad_lancamentos` 2026-03-31 took the four-variant measurement with it (2026-09-24).
+- **A credential renewal is designed per client that holds a copy**: delta-rs resolves the chain
+  per call and `redshift_connector` reconnects per command, while DuckDB's `credential_chain`
+  secret stores the key at `CREATE SECRET` and renews nothing without `REFRESH auto`; list every
+  client that copies the credential, with the expiry the probe read beside the run's length
+  (2026-09-24).
 
 ## Naming conventions
 
@@ -623,7 +628,9 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   keeps `publish_partition`), the load sorted by `sort_key` and the stage 8 staging filled inside
   the transaction; the script loads and measures by the registration only.
   The next target runs are the migration of `cad_lancamentos` and the threads probe, now with a
-  half-the-CPUs round. Stage 7 absorbs the script over the stage 3, 4 and 6 modules.
+  half-the-CPUs round; `REFRESH auto` on the DuckDB secret, which stores the credential resolved
+  at `CREATE SECRET`, awaits the user (`plan/OPEN_QUESTIONS.md`). Stage 7 absorbs the script over
+  the stage 3, 4 and 6 modules.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still

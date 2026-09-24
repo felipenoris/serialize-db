@@ -184,7 +184,10 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
   `http`: sem as duas opções, o moto em `127.0.0.1` não respondeu ao DuckDB ([`POC.md`](POC.md),
   sonda de 2026-09-23). Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password`
   separados de `HTTP_PROXY` como `probelib.duckdb_proxy`. No ambiente alvo não há variável de
-  proxy, e o bloco é vazio ([`POC.md`](POC.md), leitura de 2026-09-21).
+  proxy, e o bloco é vazio ([`POC.md`](POC.md), leitura de 2026-09-21). O secret guarda a chave e
+  o token resolvidos no `CREATE SECRET`, e a documentação da extensão `aws` pede `REFRESH auto`
+  para a credencial que expira: a proposta de criá-lo com `REFRESH auto` espera o usuário
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), sonda de 2026-09-24).
 - **`prepare_environment`** exporta `NO_PROXY` de `no_proxy` quando a maiúscula está ausente ou
   vazia, copia a região nos dois sentidos e devolve o dicionário do que mudou, para o log.
 - **`create_table`** é `DeltaTable.create(mode="ignore")` com `delta_schema(table)`,
