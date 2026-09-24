@@ -3,7 +3,7 @@
 O runbook das rotinas de operação do banco Delta, cada uma um subcomando de `serialize-db` sobre
 as primitivas de `serialize_db.delta`, com o que conferir antes e o que esperar depois. Todos os
 subcomandos recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--environment`
-(`SERIALIZE_DB_ENVIRONMENT`, `dev`), e saem com 0 quando terminam e com 2 no erro de uso, no nome
+(`SERIALIZE_DB_ENVIRONMENT`, `dsv`), e saem com 0 quando terminam e com 2 no erro de uso, no nome
 repetido ou ausente e no conflito de escrita do arquivo de controle. `compact`, `archive` e
 `export` imprimem por tabela o tempo e o pico de memória residente do processo (`VmHWM`), a
 medida da rotina na tabela com que a máquina é dimensionada; a publicação a põe na linha de log
@@ -157,7 +157,7 @@ com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
 | --- | --- | --- |
 | `--metadata modulo:atributo` | obrigatória | O caminho importável do `MetaData` dos modelos, como `pipeline.models:Base.metadata`. |
 | `--root` | `SERIALIZE_DB_ROOT` | A raiz das tabelas Delta, pasta local ou `s3://bucket/prefixo`; obrigatória sem a variável. |
-| `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dev`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
+| `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dsv`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
 
 `run`, `load` e as rotinas de operação (`snapshot`, `vacuum`, `compact`, `archive`, `export` e
 `history`) recebem as três; `audit` e `publish` também, com `--root` e, em `publish`,

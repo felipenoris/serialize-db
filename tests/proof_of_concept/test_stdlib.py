@@ -264,7 +264,7 @@ def build_parser(environ: Mapping[str, str]) -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="executa o pipeline de uma partição")
     root = environ.get("SERIALIZE_DB_ROOT")
     run.add_argument("--root", default=root, required=not root)
-    run.add_argument("--environment", default=environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev")
+    run.add_argument("--environment", default=environ.get("SERIALIZE_DB_ENVIRONMENT") or "dsv")
     run.add_argument(
         "--engine",
         choices=["duckdb", "redshift"],
@@ -301,7 +301,7 @@ def test_command_line_parsing() -> None:
     assert (args.command, args.root, args.environment, args.engine) == (
         "run",
         "s3://bucket/projeto/delta",
-        "dev",
+        "dsv",
         "duckdb",
     )
     assert args.partition == "2026-08-31"

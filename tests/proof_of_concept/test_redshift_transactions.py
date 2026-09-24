@@ -23,7 +23,7 @@ confirmada deixou as suas linhas e a abortada nenhuma. Uma thread que não termi
 ``COMMIT`` de A é registrada como presa, e a sessão dela é encerrada por ``pg_terminate_backend``.
 
 Os cenários: escritas em tabelas distintas (a ingestão em paralelo e ``publish_redshift`` com uma
-conexão por tabela); dev e prd publicando ao mesmo tempo, com linhas distintas da tabela de
+conexão por tabela); dsv e prd publicando ao mesmo tempo, com linhas distintas da tabela de
 controle; duas publicações da mesma tabela e partição, com a staging de nome fixo da etapa 8; o
 ``LOCK`` da tabela de controle no início da transação; a linha de controle gravada por um
 ``UPDATE`` condicionado à versão lida, como primeiro comando; e a publicação que a etapa 8 adotou,
@@ -179,11 +179,11 @@ class Tables:
 
     control: str
     prd: str
-    dev: str
+    dsv: str
 
 
 def create_tables(session: RedshiftSession, scenario: str) -> Tables:
-    """A tabela de controle de ``serialize_db_publications`` com prd e dev na versão 1, e uma
+    """A tabela de controle de ``serialize_db_publications`` com prd e dsv na versão 1, e uma
     tabela de dados por ambiente com a partição publicada."""
     control = session.qualified(session.table(f"{scenario}_controle"))
     session.execute(
@@ -192,11 +192,11 @@ def create_tables(session: RedshiftSession, scenario: str) -> Tables:
     )
     session.execute(
         f"INSERT INTO {control} VALUES ('prd_x', 1, 'exec-0', getdate()), "
-        "('dev_x', 1, 'exec-0', getdate())"
+        "('dsv_x', 1, 'exec-0', getdate())"
     )
 
     names = []
-    for environment in ("prd", "dev"):
+    for environment in ("prd", "dsv"):
         name = session.qualified(session.table(f"{scenario}_{environment}_x"))
         session.execute(
             f"CREATE TABLE {name} (id BIGINT NOT NULL, execution_id VARCHAR(127) NOT NULL, "
@@ -207,7 +207,7 @@ def create_tables(session: RedshiftSession, scenario: str) -> Tables:
         )
         names.append(name)
 
-    return Tables(control=control, prd=names[0], dev=names[1])
+    return Tables(control=control, prd=names[0], dsv=names[1])
 
 
 def begin() -> Step:
@@ -353,15 +353,15 @@ def test_writes_to_distinct_tables(redshift_session: RedshiftSession) -> None:
         prefix,
         [begin(), *replace_partition(tables.prd, "exec-a")],
         [begin()],
-        [*replace_partition(tables.dev, "exec-b"), commit()],
+        [*replace_partition(tables.dsv, "exec-b"), commit()],
     )
 
     assert partition_origin(session, tables.prd) == (["exec-a"] if a.committed else ["exec-0"])
-    assert partition_origin(session, tables.dev) == (["exec-b"] if b.committed else ["exec-0"])
+    assert partition_origin(session, tables.dsv) == (["exec-b"] if b.committed else ["exec-0"])
 
 
 def test_two_environments_write_distinct_control_rows(redshift_session: RedshiftSession) -> None:
-    """prd e dev publicam ao mesmo tempo: tabelas de dados distintas e linhas distintas da tabela
+    """prd e dsv publicam ao mesmo tempo: tabelas de dados distintas e linhas distintas da tabela
     de controle.
 
     A sequência é a da etapa 8: a versão publicada lida antes da transação, a partição trocada e a
@@ -380,8 +380,8 @@ def test_two_environments_write_distinct_control_rows(redshift_session: Redshift
             *replace_partition(tables.prd, "exec-a"),
             *write_control_row(tables.control, "prd_x", 2, "exec-a"),
         ],
-        [begin(), *replace_partition(tables.dev, "exec-b")],
-        [*write_control_row(tables.control, "dev_x", 2, "exec-b"), commit()],
+        [begin(), *replace_partition(tables.dsv, "exec-b")],
+        [*write_control_row(tables.control, "dsv_x", 2, "exec-b"), commit()],
     )
     rows = control_rows(session, tables)
     record(f"{prefix}.controle", rows)
@@ -389,9 +389,9 @@ def test_two_environments_write_distinct_control_rows(redshift_session: Redshift
     # O estado final bate com os desfechos: cada ambiente tem a partição e a linha de quem
     # confirmou.
     assert rows["prd_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
-    assert rows["dev_x"] == ((2, "exec-b") if b.committed else (1, "exec-0"))
+    assert rows["dsv_x"] == ((2, "exec-b") if b.committed else (1, "exec-0"))
     assert partition_origin(session, tables.prd) == (["exec-a"] if a.committed else ["exec-0"])
-    assert partition_origin(session, tables.dev) == (["exec-b"] if b.committed else ["exec-0"])
+    assert partition_origin(session, tables.dsv) == (["exec-b"] if b.committed else ["exec-0"])
 
 
 def test_two_publications_of_the_same_table(redshift_session: RedshiftSession) -> None:

@@ -230,9 +230,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="a raiz da origem, pasta local ou s3://bucket/prefixo")
     parser.add_argument("--root", required=True,
                         help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo")
-    parser.add_argument("--environment", default=os.environ.get("SERIALIZE_DB_ENVIRONMENT", "dev"),
+    parser.add_argument("--environment", default=os.environ.get("SERIALIZE_DB_ENVIRONMENT", "dsv"),
                         help="o ambiente sob a raiz, a pasta das tabelas (padrão: "
-                             "SERIALIZE_DB_ENVIRONMENT, senão dev)")
+                             "SERIALIZE_DB_ENVIRONMENT, senão dsv)")
     parser.add_argument("--tables", nargs="+", metavar="TABELA", help="só estas tabelas do modelo")
     parser.add_argument("--partitions", nargs="+", metavar="AAAA-MM-DD", default=None,
                         help="só estas partições; as tabelas sem partição ficam de fora")

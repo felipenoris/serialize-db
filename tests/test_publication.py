@@ -256,11 +256,11 @@ def test_publication_statements_text() -> None:
     assert len(following) == 8
 
     # A tabela sem partição: o DELETE inteiro e o INSERT sem literal.
-    whole = publication.publication_statements(SCHEMA, "dev", ACCOUNTS, [None],
+    whole = publication.publication_statements(SCHEMA, "dsv", ACCOUNTS, [None],
                                                {None: "s3://b/m"}, 3, None, "exec-3",
                                                "IAM_ROLE default")
-    assert whole[2] == f'DELETE FROM "{SCHEMA}"."dev_cad_contas"'
-    assert whole[5].endswith('SELECT "id_conta", "numero" FROM "dev_cad_contas_staging"')
+    assert whole[2] == f'DELETE FROM "{SCHEMA}"."dsv_cad_contas"'
+    assert whole[5].endswith('SELECT "id_conta", "numero" FROM "dsv_cad_contas_staging"')
 
     # A leitura da linha de controle e a despublicação.
     assert publication.control_read(SCHEMA, "prd", ENTRIES) == (

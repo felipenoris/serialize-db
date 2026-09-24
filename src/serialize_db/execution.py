@@ -1,6 +1,6 @@
 """A execução de um pipeline: o banco (``Database``) e o ciclo de uma execução (``Execution``).
 
-``Database`` junta a raiz do banco, o ambiente (``prd``, ``dev``) e o ``MetaData`` dos modelos do
+``Database`` junta a raiz do banco, o ambiente (``prd``, ``dsv``) e o ``MetaData`` dos modelos do
 cliente, e monta os caminhos: a pasta de cada tabela é ``<raiz>/<ambiente>/<tabela>``. ``Execution``
 é o gerenciador de contexto de uma execução: na entrada abre toda tabela do ambiente, fixa a versão
 de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava o snapshot marcado e o
@@ -106,7 +106,7 @@ class Database:
     ``file://``; o S3 sem região e outro esquema são ``ValueError`` no primeiro uso de
     ``storage``."""
     environment: str
-    """O ambiente, ``prd`` ou ``dev``: as execuções de um não tocam as tabelas do outro. Fora da
+    """O ambiente, ``prd`` ou ``dsv``: as execuções de um não tocam as tabelas do outro. Fora da
     regra da partição, a construção é ``ContractError``."""
     metadata: sa.MetaData
     """O ``MetaData`` dos modelos do cliente: as tabelas que a execução abre e reconcilia."""

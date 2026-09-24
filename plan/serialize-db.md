@@ -295,8 +295,8 @@ Para publicar no Hive ou para sair do Delta.
 1. A pasta do ambiente é copiada inteira, com `_delta_log/` de cada tabela e `_serialize_db/`, por
    `aws s3 sync` entre prefixos ou entre disco e S3; os caminhos do log e do arquivo de controle são
    relativos, e a cópia abre onde estiver, na mesma versão.
-2. Um ambiente de desenvolvimento nasce de uma cópia de produção: `Database(root, environment="dev", metadata=Base.metadata)`
-   aponta para a pasta copiada, e as tabelas publicadas levam o prefixo `dev_`.
+2. Um ambiente de desenvolvimento nasce de uma cópia de produção: `Database(root, environment="dsv", metadata=Base.metadata)`
+   aponta para a pasta copiada, e as tabelas publicadas levam o prefixo `dsv_`.
 3. Execuções de ambientes diferentes não conflitam, porque gravam tabelas diferentes; a concorrência
    que resta é entre execuções do mesmo ambiente, que o log serializa.
 

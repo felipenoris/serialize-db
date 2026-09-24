@@ -395,7 +395,7 @@ serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamen
 
 O `run` sai com 0 quando o pipeline termina, 1 na auditoria reprovada e 2 no conflito e no erro de
 uso; `--root`, `--environment` e `--engine` têm por padrão `SERIALIZE_DB_ROOT`,
-`SERIALIZE_DB_ENVIRONMENT` (`dev`) e `SERIALIZE_DB_ENGINE` (`duckdb`).
+`SERIALIZE_DB_ENVIRONMENT` (`dsv`) e `SERIALIZE_DB_ENGINE` (`duckdb`).
 
 ### Rodar o pipeline no sandbox DuckDB
 

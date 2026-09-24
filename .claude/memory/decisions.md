@@ -44,7 +44,7 @@ the partition and never the month; every numeric column stays `Double`, with no 
 fixed-precision `Numeric` (the package supports `Numeric`, and moving `valor` to `Numeric(18, 2)` is
 a future improvement); integer keys become `int64` in the Delta; `INT96` timestamps become `INT64`
 and their precision does not matter; nullability follows the model until the migration proves it
-problematic; the dev base's orphans are ignored and the test base is consistent, with the N×N
+problematic; the dsv base's orphans are ignored and the test base is consistent, with the N×N
 `rel_contrato_operacao` whose `fator_rateio` sums to 1 per contract (per operation until the user's measurement of 2026-09-21 on the production base corrected the direction); `alembic_version` and
 `meta_update_status` are ignored; `schema.json` at the source root is the previous library's schema
 control in SQLAlchemy-reflection form, not Arrow. On 2026-09-20 the user also fixed the Redshift
@@ -355,7 +355,7 @@ migration ran successfully in the target; its reports exist and are not availabl
 ## The review of 2026-09-22 and the single session on both engines
 
 Later on 2026-09-22, answering the code review, the user accepted the rewrite of the environment
-premise in `plan/PLAN.md` (dev and prd never touch each other's tables; inside an environment one
+premise in `plan/PLAN.md` (dsv and prd never touch each other's tables; inside an environment one
 execution at a time, with the log ordering commits and `publish` aborting the second with
 `ExecutionConflict`; the shared `serialize_db_publications` as the exception) and the two stage 3
 proposals: `expressions` in `rewrite` (the old name in a rename, the value of a new `NOT NULL`
@@ -938,8 +938,8 @@ The user asked to replace `prod` with `prd` wherever the plan, the code, the exa
 the dated records of what ran, because the target still holds them: the 14:16 load into
 `<root>/prod/`, the 16:51 publication as `prod_<table>`, the transaction runs of 2026-09-23 and
 the stage 10 probe's `prod_` prefix, in `plan/POC.md`, `plan/CURRENT_STATE.md`,
-`plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`, `CLAUDE.md` and the memory. What becomes of the
-target's `prod` environment waits on the user. `plan/OPEN_QUESTIONS.md`
+`plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`, `CLAUDE.md` and the memory. The user deletes
+the target's `prod` artifacts (the section on `dsv`). `plan/POC.md`
 
 ## The snapshot channel and the closed stage 10 decisions (2026-09-24)
 
@@ -981,3 +981,22 @@ without S3, which runs `query` and not `stream`; the assistant's reading, stated
 `Database.open_redshift` takes the same `config=None`, since it calls the function. Everything
 else stays as planned or implemented, the `metadata` of `open_redshift` included.
 `plan/PLAN-STAGE-10.md`, `plan/POC.md`
+
+## The development environment named `dsv` and the target's `prod` artifacts (2026-09-24)
+
+The user asked to rename the development environment `dev` to `dsv`, the name of the source
+base's folder (`databases/dsv/`). The assistant renamed the default of `--environment` in
+`serialize-db` and in the migration script, the docstrings of `Database`, `docs/`, the plan's
+examples (`Database(root, environment="dsv", ...)`, the `dsv_` prefix), the tests (the
+`dsv_cad_contas` of `tests/test_publication.py`, and the `dsv` table and `dsv_x` control row of
+`tests/proof_of_concept/test_redshift_transactions.py`) and the memory's label of the source
+base's dsv reading. `dev` stays as the Redshift database of the connection
+(`RedshiftConfig.database`, `SERIALIZE_DB_REDSHIFT_DATABASE`, `current_database()`), the
+dependency group, the SageMaker project's `dev/` prefix, `/dev/null`, SQLMesh's `tabela__dev`,
+`plan/readings/` and the dated records: the transaction runs of 2026-09-23 with dev and prod in
+`plan/PLAN-STAGE-8.md`, and the probe of 2026-09-24 where `serialize-db audit` used `dev`. No
+target run relied on the default: `SUITE.md` passes `--environment prd` everywhere. The same day
+the user answered the open item on the target's `prod` environment: the user deletes every
+artifact of the base named `prod` there (the `<root>/prod/` folder, the `prod_<table>` tables
+and their `serialize_db_publications` rows), and the item left `plan/OPEN_QUESTIONS.md`.
+`CLAUDE.md`, `plan/serialize-db.md`, `docs/operacao.md`

@@ -21,7 +21,7 @@ versão de uma tabela, sem o log; ``history`` lista os commits de uma tabela com
 biblioteca. Os modelos chegam por ``--metadata modulo:atributo``, o caminho importável do
 ``MetaData`` do cliente, e os statements por ``--statements modulo:atributo``, o caminho importável
 do dicionário ``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm
-por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dev``) e ``SERIALIZE_DB_ENGINE``
+por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dsv``) e ``SERIALIZE_DB_ENGINE``
 (``duckdb``); a configuração do Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``, e
 ``run --redshift`` a dá a uma execução no motor DuckDB para ``run.publish_redshift``.
 
@@ -156,8 +156,8 @@ def _name_argument(text: str) -> str:
 
 def _environment_default() -> str:
     """O padrão de ``--environment`` em todo subcomando: ``SERIALIZE_DB_ENVIRONMENT``, com a
-    variável vazia lida como ausente, ou ``dev``."""
-    return os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev"
+    variável vazia lida como ausente, ou ``dsv``."""
+    return os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dsv"
 
 
 def _add_database_arguments(parser: argparse.ArgumentParser) -> None:

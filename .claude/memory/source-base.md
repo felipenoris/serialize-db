@@ -4,7 +4,7 @@ Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `test
 
 ## The development base, read on 2026-09-20
 
-- The source base (dev, 2026-09-20, `/mnt/bndes_grupos_bases_analise_financeira/databases/dsv/db_projetado`
+- The source base (dsv, 2026-09-20, `/mnt/bndes_grupos_bases_analise_financeira/databases/dsv/db_projetado`
   in the space): 14 tables, 205 files, 3,757,237,689 bytes, 187,340,644 rows, written by pandas
   through parquet-cpp-arrow with format 1.0, no dictionary, `INT96` timestamps and the `pandas`
   footer key in every file; Hive partitions `data_str=<YYYY-MM-DD>` (`data_base_str` for
@@ -25,7 +25,7 @@ Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `test
 - The production base (`s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`),
   read in the target through `S3FileSystem` at 13:54 UTC with `--sample 5000`, the listing in 0.1 s
   (the report is in `plan/readings/parquet_source-2026-09-21-1354.txt`, committed by the user): the
-  same structure as the dev base, section 3 identical column by column (checked by script against
+  same structure as the dsv base, section 3 identical column by column (checked by script against
   the transcription in `tests/test_source_db_projetado.py`), the same partitions, layout, seven
   columns without statistics and `schema.json`; 14 tables, 205 files, 3,771,538,655 bytes,
   187,340,531 rows. The differences are data: 113 rows fewer (`cad_contas` 97 for 102 and `numero`
@@ -35,11 +35,11 @@ Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `test
   `id_lancamento` 952,517,158 for 1,113,599,996, `id_rel_contrato_operacao` 490,576,085 for
   556,941,030, the minimums equal); `cad_aliquotas.id` 1 to 26 for 2 to 16 with the same pairs and
   factors; `valor` extremes `±11846195394.62801` for `±11846195394.628`; `meta_update_status` ids up
-  to 161 and the last load on 2026-09-14 (dev: 182 and 2026-09-03); and the `pandas` footer key in
+  to 161 and the last load on 2026-09-14 (dsv: 182 and 2026-09-03); and the `pandas` footer key in
   part of the files (`cad_contratos` 5/8, `cad_lancamentos` 111/144, `cad_operacoes` 9/13,
   `rel_contrato_operacao` 16/30, none in `alembic_version` and `meta_update_status`; the files
   without it are 3, 4 and 14 in the three `data_str` tables, the size of one partition each, and
-  the report does not say which). The reference model matches it as it matches dev, no `NOT NULL`
+  the report does not say which). The reference model matches it as it matches dsv, no `NOT NULL`
   column of the model has a null, and the composite foreign-key orphans repeat (`data_base`
   2026-01-31 without `cad_contratos`, `desemb-999`). `plan/POC.md`, `plan/PLAN-STAGE-7.md`
 
@@ -56,7 +56,7 @@ row count per partition. It does not rescue the foreign key `cad_contratos` decl
 `rel_contrato_operacao`: with N operations per contract, `(data, sistema, contrato)` is still not
 unique at the target. `plan/POC.md`
 
-The fictitious Parquet source base `db_projetado`, reproducing the structure common to the two readings (section 3, the partitions, the `chunk_<n>` files, the `INT96` timestamps, the layout): the 14 tables with the read columns, types and nullability (12 match the reference model; `alembic_version` and `meta_update_status` are outside it), the Hive partitions, and the previous library's real `schema.json` at the root (`source_db_projetado_schema.json`). The values that differ between the bases follow the dev reading (`valor` with three decimals, `fator` with five, `id_lancamento` up to 1,113,599,996, the `meta_update_status` ids). The `pandas` footer key follows the production base: `written_by_pandas` leaves the last partition of each partitioned table and the two control tables without it, so every partitioned table has files of both kinds; the probe run on the fixture on 2026-09-21 printed section 3 identical to the transcription and the footer table with the mix. The data is consistent with the reference model (unique keys, every foreign key satisfied, the four dates in every partitioned table, `rel_contas_hierarquias` a tree of accounting accounts, one root and five levels, with no account its own parent (the user stated on 2026-09-23 that in the real base `id_parent` and `id_child` always differ and that the table implements a tree of accounting accounts), the N×N `rel_contrato_operacao` with `fator_rateio` 1 or 1/2, dyadic, summing to 1 per contract, since a contract is in one or two operations; the builders make one dict per row since the review of 2026-09-23, with the written base byte-identical). `write_source(root)` returns the files and row counts; `tests/test_source_db_projetado.py` checks the written files against the transcribed section 3 of the report, the model's keys and the schema control, and `tests/test_reference_model.py` reads the reference model through SQLAlchemy (with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules) and checks it against `SCHEMAS` and the transcribed keys. The material of the stage 7 test.
+The fictitious Parquet source base `db_projetado`, reproducing the structure common to the two readings (section 3, the partitions, the `chunk_<n>` files, the `INT96` timestamps, the layout): the 14 tables with the read columns, types and nullability (12 match the reference model; `alembic_version` and `meta_update_status` are outside it), the Hive partitions, and the previous library's real `schema.json` at the root (`source_db_projetado_schema.json`). The values that differ between the bases follow the dsv reading (`valor` with three decimals, `fator` with five, `id_lancamento` up to 1,113,599,996, the `meta_update_status` ids). The `pandas` footer key follows the production base: `written_by_pandas` leaves the last partition of each partitioned table and the two control tables without it, so every partitioned table has files of both kinds; the probe run on the fixture on 2026-09-21 printed section 3 identical to the transcription and the footer table with the mix. The data is consistent with the reference model (unique keys, every foreign key satisfied, the four dates in every partitioned table, `rel_contas_hierarquias` a tree of accounting accounts, one root and five levels, with no account its own parent (the user stated on 2026-09-23 that in the real base `id_parent` and `id_child` always differ and that the table implements a tree of accounting accounts), the N×N `rel_contrato_operacao` with `fator_rateio` 1 or 1/2, dyadic, summing to 1 per contract, since a contract is in one or two operations; the builders make one dict per row since the review of 2026-09-23, with the written base byte-identical). `write_source(root)` returns the files and row counts; `tests/test_source_db_projetado.py` checks the written files against the transcribed section 3 of the report, the model's keys and the schema control, and `tests/test_reference_model.py` reads the reference model through SQLAlchemy (with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules) and checks it against `SCHEMAS` and the transcribed keys. The material of the stage 7 test.
 
 ## The early migration in the target
 
