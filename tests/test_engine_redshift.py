@@ -55,8 +55,11 @@ from serialize_db.storage import Storage
 EXECUTION_ID = "exec-2026-09-05"
 PREFIX = "exec_exec_2026_09_05_"
 METADATA = delta.commit_metadata(EXECUTION_ID, {"cad_contas": 1})
+# O iam_role evita a credencial do boto3 no COPY e no UNLOAD da conexão de mentira: o runner do
+# GitHub não tem nenhuma; só test_credentials_clause_and_mask exercita o caminho do boto3.
 CONFIG = RedshiftConfig(host="host", user="usuario", password="senha", database="dev",
-                        share_database="compartilhado", schema="esquema", region="sa-east-1")
+                        share_database="compartilhado", schema="esquema", region="sa-east-1",
+                        iam_role="default")
 
 # O OID e o type_modifier de cada tipo Arrow, como o row_desc do driver os traz.
 OID_OF = {
@@ -254,8 +257,7 @@ def test_sandbox_prefix_normalizes_and_limits() -> None:
 def test_credentials_clause_and_mask(monkeypatch: pytest.MonkeyPatch) -> None:
     """``IAM_ROLE`` com ARN e ``default``; as três chaves da sessão sem ``iam_role``; ``mask``
     tira os valores, e a nota de um erro leva o comando mascarado."""
-    assert redshift.credentials_clause(dataclasses.replace(CONFIG, iam_role="default")) == \
-        "IAM_ROLE default"
+    assert redshift.credentials_clause(CONFIG) == "IAM_ROLE default"
     arn = "arn:aws:iam::123456789012:role/papel"
     assert redshift.credentials_clause(dataclasses.replace(CONFIG, iam_role=arn)) == \
         f"IAM_ROLE '{arn}'"
@@ -263,7 +265,7 @@ def test_credentials_clause_and_mask(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "segredo")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "token")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
-    clause = redshift.credentials_clause(CONFIG)
+    clause = redshift.credentials_clause(dataclasses.replace(CONFIG, iam_role=None))
     assert clause == "ACCESS_KEY_ID 'AKIACHAVE' SECRET_ACCESS_KEY 'segredo' SESSION_TOKEN 'token'"
     assert mask(clause) == "ACCESS_KEY_ID '***' SECRET_ACCESS_KEY '***' SESSION_TOKEN '***'"
     assert "segredo" not in mask(redshift.copy_text("t", "s3://b/m", clause, manifest=True))

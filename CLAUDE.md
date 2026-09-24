@@ -297,7 +297,9 @@ A new lesson adds its story there and its rule here, in the same commit.
   script and the probes on `sys.path` too, so module basenames stay unique across `tests/`,
   `tests/proof_of_concept/`, `scripts/` and `probes/`.
 - **Before a commit**: `uv run pytest` with no variables and again with `SERIALIZE_DB_TEST_LOCAL_ROOT` set
-  to the scratchpad, both green; before a push that touches what the target-only suites cover
+  to the scratchpad, both green and both with the `AWS_*` variables removed (`env -u AWS_ACCESS_KEY_ID
+  -u AWS_SECRET_ACCESS_KEY AWS_EC2_METADATA_DISABLED=true`), because this container exports a
+  credential and the GitHub runner has none (2026-09-24); before a push that touches what the target-only suites cover
   (`storage` and `delta` on S3, `audit` on Redshift, `tests/conftest.py`, `tests/emulator.py`, the
   suites themselves), the three suites on the stand-in, `SERIALIZE_DB_TEST_EMULATOR=1 uv run --group
   emulator pytest ...` as in `README.md`, which the GitHub workflow does not run (user decision of
