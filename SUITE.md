@@ -85,7 +85,20 @@ export AWS_DEFAULT_REGION=sa-east-1
     --root $TARGET_ROOT_PATH \
     --report probes/output/carga_inicial_delta.json
 
+.venv/bin/serialize-db audit \
+    --root $TARGET_ROOT_PATH \
+    --environment prod \
+    --metadata client_model:Base.metadata \
+    --table cad_lancamentos \
+    --partitions 2026-01-31 \
+    --foreign-keys
+
 .venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH
+
+.venv/bin/serialize-db history --root $TARGET_ROOT_PATH --environment prod --metadata client_model:Base.metadata --table cad_lancamentos
+.venv/bin/serialize-db snapshot --root $TARGET_ROOT_PATH --environment prod --metadata client_model:Base.metadata --name carga-2026-09-24
+.venv/bin/serialize-db vacuum --root $TARGET_ROOT_PATH --environment prod --metadata client_model:Base.metadata
+.venv/bin/serialize-db archive --root $TARGET_ROOT_PATH --environment prod --metadata client_model:Base.metadata --name carga-2026-09-24
 ```
 
 # Resultados
