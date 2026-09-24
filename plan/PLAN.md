@@ -161,9 +161,10 @@ um DataFrame, uma lista de linhas ou uma instância ORM; a mensagem que recusa u
 só dono: `loader` recusa com `SandboxError` um nome que o `ingest` ou outro `loader` já ocupou, e a
 tabela que a execução grava é lida na versão publicada por `run.published(Modelo)`, que não cria
 objeto no sandbox (decisões do usuário de 2026-09-22). Dentro da biblioteca, o que não cabe na
-memória corre por `RecordBatchReader` (`export_partition` e a carga inicial em
-`export_mode="rewrite"`, para `publish_partition`), cada um lendo o seu arquivo intermediário; o registro em `register`
-e a `rewrite` da tabela vão pelo `COPY ... (RETURN_STATS)` do DuckDB, sem passar pelo Python. O exemplo de uso, `stream` e `loader` dentro de uma
+memória corre por `RecordBatchReader` (a troca do motor Redshift para `publish_partition` na
+partição com `Double` não finito), cada um lendo o seu arquivo intermediário; o registro da
+partição e a `rewrite` da tabela vão pelo `COPY ... (RETURN_STATS)` do DuckDB, sem passar pelo
+Python. O exemplo de uso, `stream` e `loader` dentro de uma
 execução, está na seção "Pipeline de atualização mensal".
 
 ### O que as sondagens fixaram em cada primitiva
@@ -355,14 +356,14 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - Dois `overwrite` da mesma partição conflitam (`CommitFailedError`); partições diferentes e
   `append` entram. Uma execução por ambiente por vez, e o conflito é o sinal de que houve duas; a ação `txn`
   não impede repetição, e a idempotência é do `overwrite` por partição (`delta.md`).
-- A biblioteca escreve por um único caminho, delta-rs ou `COPY ... (RETURN_STATS)` mais
-  `create_write_transaction`, escolhido por `export_mode`: o `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de
-  partição dentro do arquivo e quebraria o `COPY` posicional (`delta.md`). O usuário aprovou em
-  2026-09-24 o `register` como padrão nas etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e
-  [7](PLAN-STAGE-7.md), com o `rewrite` só na troca da etapa 5 para a partição com `Double` não
-  finito, depois das partições medidas no ambiente alvo em 2026-09-23, em que o `rewrite` levou de
-  1,14 a 1,52 vez o tempo do `register` (`POC.md`); se o `rewrite` sai das etapas 4 e 7, com o seu
-  código, a flag e os testes, espera o usuário ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- A biblioteca escreve uma partição pelo registro do arquivo que o motor gravou, o
+  `COPY ... (RETURN_STATS)` do DuckDB ou o `UNLOAD` do Redshift mais `create_write_transaction`: o
+  `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de partição dentro do arquivo e quebraria
+  o `COPY` posicional (`delta.md`). O usuário aprovou em 2026-09-24 o registro como padrão nas
+  etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md), depois das partições
+  medidas no ambiente alvo em 2026-09-23, em que o `rewrite` levou de 1,14 a 1,52 vez o tempo do
+  registro (`POC.md`), e tirou o `rewrite` das etapas 4 e 7, com a flag `export_mode`; o
+  `write_deltalake` fica só na troca da etapa 5 para a partição com `Double` não finito.
 - As regras que mantêm o `COPY` do Redshift lendo os arquivos e a saída do Delta aberta: sem vetores
   de exclusão, sem column mapping, sem `Identity`, caminhos relativos no log e nunca um arquivo
   registrado por URI absoluta (`delta.md`, `estrategia.md`).
@@ -413,9 +414,8 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   15.786 MB em 2026-09-23, com cerca de 30 GiB livres num disco só para `HOME`, `/tmp` e o
   repositório: o motor DuckDB nasce em arquivo, com `temp_directory` conferido e os limites lidos
   do ambiente na abertura, as CPUs do processo e metade da memória que ele ainda pode usar,
-  registrados no log (instrução do usuário de 2026-09-24), e
-  `export_mode="register"` é o caminho das partições grandes (etapas [4](PLAN-STAGE-4.md) e
-  [7](PLAN-STAGE-7.md)). Os programas que usam o pacote rodam em computação escalável da AWS, que o
+  registrados no log (instrução do usuário de 2026-09-24), e o registro do arquivo do `COPY` é o
+  caminho das partições (etapas [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md)). Os programas que usam o pacote rodam em computação escalável da AWS, que o
   usuário escolhe, e o plano otimiza para o processamento paralelo (instrução do usuário de
   2026-09-23): o tamanho da máquina é dimensionado pelas medições, e não o contrário.
 - Um campo JSON é `string` no esquema Arrow do contrato, sem a extensão `arrow.json`, `string` no
@@ -526,14 +526,14 @@ o `__all__` para o `pdoc` não o mostrar. O privado é usado só dentro do módu
 `serialize_db.schema` deixou no `__all__` os nomes que o cliente chama e prefixou os demais
 (`_cast_batch`, `_contract_column`, `_ARROW_TYPES`); `serialize_db.cli` declara só `main`,
 `serialize_db.errors` as exceções que o cliente captura, e `serialize_db.delta` deixa fora do
-`__all__` a protegida `file_from_return_stats`, que o motor DuckDB usa.
+`__all__` a protegida `file_from_return_stats`, que o motor DuckDB usa. O `__all__` de um pacote lista
+também os seus submódulos públicos, porque o `pdoc` só documenta os que ele nomeia:
+`serialize_db.engine` lista `duckdb`, e `tests/test_package.py` confere cada pacote.
 
 Configuração: argumentos explícitos de `Database` e da linha de comando, com as variáveis
 `SERIALIZE_DB_ROOT`, `SERIALIZE_DB_ENVIRONMENT`, `SERIALIZE_DB_ENGINE`,
-`SERIALIZE_DB_DUCKDB_EXTENSIONS`, `SERIALIZE_DB_EXPORT_MODE` (`register` ou `rewrite`, como a partição
-que um motor gravou entra no Delta, etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e
-[7](PLAN-STAGE-7.md)) e `SERIALIZE_DB_REDSHIFT_*` (as de `probes/redshift.py`) como padrão; nenhum
-arquivo de configuração.
+`SERIALIZE_DB_DUCKDB_EXTENSIONS` e `SERIALIZE_DB_REDSHIFT_*` (as de `probes/redshift.py`) como
+padrão; nenhum arquivo de configuração.
 
 Testes: `tests/` na raiz testa o pacote, um módulo de teste por módulo do pacote;
 `tests/proof_of_concept/` guarda as provas de conceito e os testes das bibliotecas externas,
@@ -602,7 +602,7 @@ ilustrativos.
 | 2. Ingestão | DuckDB: views com os nomes dos modelos sobre `delta_scan(uri, version := 143)`; `cad_lancamentos` materializada com `WHERE data_base_str BETWEEN '2025-09-30' AND '2026-08-31'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos dessas partições em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
 | 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
-| 5. Publicação no Delta | `reconcile`; com `export_mode="register"`, `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD` do Redshift para `data_base_str=2026-08-31/<execution_id>_<uuid>/`), depois das conferências; com `"rewrite"`, `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
+| 5. Publicação no Delta | `reconcile`; `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD` do Redshift para `data_base_str=2026-08-31/<execution_id>_<uuid>/`), depois das conferências; no motor Redshift, a partição com `Double` não finito troca para `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
 | 6. Publicação no Redshift | Confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; a transação lê a linha de controle, 57, e `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'` e o `UPDATE` da linha de controle de 57 para 58. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
 | 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
@@ -644,10 +644,9 @@ correção de uma partição antiga é a mesma chamada com outra `partition` e u
 `publish_redshift` recarrega só essa partição, e as versões intermediárias entre snapshots do banco
 saem no `vacuum` mensal. A execução no Redshift é o mesmo ciclo com `engine="redshift"`: o sandbox
 são as tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a publicação sai por `UNLOAD` mais
-`register_files` (`export_mode="register"`, sem passar pela máquina local) ou mais
-`publish_partition` (`"rewrite"`). `export_mode` é a flag do usuário de 2026-09-21 e vale para os dois
-motores e para a carga inicial: `register` registra o arquivo que o motor gravou, depois das
-conferências da etapa 3; `rewrite` grava pelo `write_deltalake`, que confere tudo e paga a memória.
+`register_files`, sem passar pela máquina local, ou, na partição com `Double` não finito, mais
+`publish_partition`, que grava pelo `write_deltalake`, confere tudo e paga a memória (decisões do
+usuário de 2026-09-23 e 2026-09-24, [etapa 5](PLAN-STAGE-5.md)).
 
 ## Ordem do trabalho
 

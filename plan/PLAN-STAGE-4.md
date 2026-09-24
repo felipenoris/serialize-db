@@ -66,12 +66,12 @@ registra a verificação como não executada.
 | `loader(table, queue_depth=2)` | O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada por `ddl(table, "duckdb")` no `close`: um nome já ocupado, pela view do `ingest` ou pela tabela de um `loader` anterior, é recusado com `SandboxError` na abertura, antes do primeiro lote (decisão do usuário de 2026-09-22), por uma leitura do catálogo num cursor próprio, sem o lock da sessão (decisão do usuário de 2026-09-23), e um laço por partição mantém um `loader` só aberto; `write(data)` aceita `pa.RecordBatch` ou `pa.Table`, faz `cast(batch, table)` na thread do cliente e põe o lote numa fila limitada; uma thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4 na pasta de transbordo, sem a sessão, e o `close` roda, sob o lock e numa transação, o `CREATE TABLE` e um único `INSERT ... BY NAME SELECT * FROM <leitor do arquivo>`; uma exceção dentro do `with`, um lote recusado pelo `cast` ou um loader abandonado apagam o arquivo sem criar a tabela, e um erro do `INSERT` desfaz o `CREATE`; `close` relança o erro da thread e o do `INSERT`; `rows` conta as linhas gravadas. O arquivo nasce com o esquema do primeiro lote convertido, e um lote com outro conjunto de colunas é `ContractError`; o `loader` sem lote cria a tabela vazia. Nada existe antes do `close`, e o leitor que o `INSERT` consome é o do arquivo, nativo: nenhum gerador Python é entregue ao DuckDB. |
 | `load(table, data)` | `data` é uma `pa.Table`, um `pa.RecordBatch`, um `RecordBatchReader` ou um iterável de lotes: `with loader(table) as l: for batch in ...: l.write(batch)`; outro tipo é recusado com a mensagem que aponta `pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. |
 | `audit(table, partitions, uri=None, version=None, foreign_keys=False, key_scope=None, referenced=None)` | `uri` e `version` são os da tabela fixada, e montam `published` e o `published_max_key` de `delta.max_key` sem depender de `Execution`; `referenced` dá, por nome de tabela, a URI e a versão fixada da tabela referenciada que o sandbox não tem, e a que o sandbox tem entra pelo nome do modelo. Roda o texto de `sql.render(check.statement, "duckdb", metadata, prefix="")` de cada verificação — `json_valid` e `strftime(data, '%Y-%m-%d')` são as funções do dialeto — e monta o `AuditReport`, com até 20 linhas inteiras de amostra por verificação reprovada (decisão do usuário de 2026-09-22): a verificação `linhas` conta por coluna e não tem linha para amostrar, então cada contador acima de zero ganha uma segunda consulta, `SELECT * ... WHERE <condição da coluna> LIMIT 20`, rodada só na reprovação; a comparação com as demais partições sai de `published` na versão fixada, e `passed` falso interrompe a execução. |
-| `export_partition(table, uri, value, metadata, mode, expected_rows=None, columns_without_min_max=())` | `uri`, `metadata` e `expected_rows` vêm do chamador, porque o motor não conhece o `Database` e o commit precisa dos metadados. `mode` é a flag `export_mode` já resolvida pela [etapa 6](PLAN-STAGE-6.md) (`register` ou `rewrite`; o motor não lê `SERIALIZE_DB_EXPORT_MODE`, decisão do usuário de 2026-09-23), a mesma do motor Redshift ([etapa 5](PLAN-STAGE-5.md)) e da carga inicial ([etapa 7](PLAN-STAGE-7.md)). `columns_without_min_max`, as colunas `Double` com valor não finito na partição, vem de `run.publish` e vai a `register_files` ou a `publish_partition`. **`register`**: `COPY (SELECT <cada coluna do contrato em CAST para o tipo dele, sem a de partição> FROM <sandbox> WHERE <coluna de partição> = '<valor>' ORDER BY <sort_key>) TO '<uri>/<coluna de partição>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)`, com a contagem do sandbox no mesmo bloco da sessão, mais `register_files` com as estatísticas de `RETURN_STATS`, as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois; a memória é constante (600 MB na reescrita medida em [`delta.md`](delta.md)). O `uuid` no nome impede uma reexecução com o mesmo `execution_id` de sobrescrever o arquivo que a versão anterior referencia. **`rewrite`**: o leitor do DuckDB da partição, `to_arrow_reader` sob o lock, passado por `cast` a `publish_partition`, sem `stream` nem arquivo, porque ali não há trabalho do cliente para sobrepor (decisão do usuário de 2026-09-23); o lock fica tomado pela escrita, como no `COPY` do `register`, o `write_deltalake` calcula estatística e nulidade, e a memória cresce com a partição (1.140 MB para 135 MB de Parquet na mesma medição). A mesma partição sai igual pelos dois, e o teste os compara. |
+| `export_partition(table, uri, value, metadata, expected_rows=None, columns_without_min_max=())` | `uri`, `metadata` e `expected_rows` vêm do chamador, porque o motor não conhece o `Database` e o commit precisa dos metadados. A partição entra no Delta pelo registro do arquivo que o motor gravou, o padrão que o usuário aprovou em 2026-09-24 para as etapas 4, 5 e 7; o `rewrite` saiu do motor DuckDB, com a flag `export_mode` (decisão do usuário do mesmo dia). `columns_without_min_max`, as colunas `Double` com valor não finito na partição, vem de `run.publish` e vai a `register_files`. O registro: `COPY (SELECT <cada coluna do contrato em CAST para o tipo dele, sem a de partição> FROM <sandbox> WHERE <coluna de partição> = '<valor>' ORDER BY <sort_key>) TO '<uri>/<coluna de partição>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)`, com a contagem do sandbox no mesmo bloco da sessão, mais `register_files` com as estatísticas de `RETURN_STATS`, as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois; a memória é constante (600 MB na reescrita medida em [`delta.md`](delta.md)). O `uuid` no nome impede uma reexecução com o mesmo `execution_id` de sobrescrever o arquivo que a versão anterior referencia. O `write_deltalake` de um leitor, o caminho que saiu, crescia com a partição (1.140 MB para 135 MB de Parquet na mesma medição). |
 | `cleanup()` | Cancela por `interrupt()` o comando em curso, fecha a conexão e apaga o arquivo do banco, o seu `.wal` e a pasta de transbordo, e a pasta de `tempfile.mkdtemp`; o banco de um caminho que a configuração informou fica. Numa sessão a mais, fecha só o cursor; a segunda chamada não faz nada. |
 
 Testes: `tests/test_audit.py`, sem gravar: o texto de cada verificação nos dois dialetos, a chave
 lida do `primary_key` do modelo e o escopo escolhido pelas colunas da chave. `tests/test_engine_duckdb.py` sob a raiz local: o pipeline de exemplo (doze partições
-materializadas e dimensões em view, um `select` com `join`, auditoria, com `nonfinite_columns` numa partição com `NaN`, exportação da partição nos dois modos com as mesmas linhas e sem o mínimo e o máximo dessa coluna) sobre um
+materializadas e dimensões em view, um `select` com `join`, auditoria, com `nonfinite_columns` numa partição com `NaN`, exportação da partição pelo registro do arquivo do `COPY`, sem o mínimo e o máximo dessa coluna) sobre um
 Delta local criado no teste; o ciclo `query`, `to_pandas(types_mapper=pd.ArrowDtype)`, `from_pandas` e
 `load` com `decimal128(18, 2)` e `date32` mantidos, `load` recusando um DataFrame e o `loader`
 recusando o nome que a view do `ingest` ocupa, com a leitura da versão publicada por `published` no
@@ -282,7 +282,7 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   `published_max_key` vem de `delta.max_key` sobre `delta.open_table(uri, storage, version)` quando
   a chave primária é inteira, de uma coluna e fora do escopo da partição; o `skip_when` de uma
   verificação roda antes dela e, verdadeiro, a aprova sem rodá-la, com o motivo no relatório.
-- **`export_partition`** com `mode="register"`: `COPY (SELECT <colunas do contrato na ordem dele,
+- **`export_partition`**: `COPY (SELECT <colunas do contrato na ordem dele,
   sem a de partição> FROM <sandbox> WHERE <coluna> = '<valor>' ORDER BY <sort_key>) TO
   '<uri>/<coluna>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)`, com a pasta
   da partição criada antes por `storage.ensure_folder` na raiz local, porque o `COPY` para um arquivo
@@ -291,8 +291,7 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   `max` dos tipos que transcrevem exato), e `delta.register_files` faz as conferências, o commit e a
   releitura, com `expected_rows` do `count(*)` do sandbox. A ordem das colunas e a coluna de
   partição fora do arquivo são conferências de `register_files` ([etapa 3](PLAN-STAGE-3.md)): o
-  `COPY` posicional do Redshift leria o arquivo fora delas. Com `mode="rewrite"`: sob o lock, o `to_arrow_reader` da partição passado por `cast` a
-  `delta.publish_partition`, sem `stream` nem arquivo. O modo chega resolvido por `Execution`.
+  `COPY` posicional do Redshift leria o arquivo fora delas.
 - **`cleanup`** chama `interrupt()` na conexão antes de tomar o lock, porque a execução acabou e o
   comando em curso, de um stream que ninguém lê, é cancelado em vez de esperado (2 ms com uma
   ordenação em curso, decisão do usuário de 2026-09-23); depois fecha a conexão e apaga o arquivo do
@@ -310,7 +309,7 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 | `stream` | Texto ou statement válido; parâmetros que fecham com o dicionário. | Lotes na ordem da consulta, o primeiro antes do fim de uma consulta sem operador bloqueante; no máximo o orçamento de 64 MiB de lotes em memória; a sessão livre quando a consulta acaba, sem esperar o cliente; a consulta cancelada e o arquivo apagado em `close`; o erro anterior ao primeiro lote no construtor, o posterior na leitura seguinte ao último lote entregue. |
 | `loader`, `load` | O nome da tabela livre no sandbox; lotes que passam por `cast`. | Nada existe antes do `close`, que cria a tabela e insere numa transação; nenhuma tabela na exceção, no lote recusado ou no erro do `INSERT`; `rows` igual às linhas escritas; `SandboxError` com o nome ocupado, sem criar nem alterar objeto algum. |
 | `audit` | Sandbox com a tabela; `uri` e `version` para as chaves fora da partição. | Um `AuditReport` com o SQL de cada verificação e até 20 linhas de amostra por verificação reprovada; nenhuma escrita. |
-| `export_partition` | Auditoria aprovada (conferida por `Execution.publish`); a pasta da partição gravável. | Uma versão nova no Delta com a partição substituída e as estatísticas registradas; a mesma partição sai igual pelos dois modos. |
+| `export_partition` | Auditoria aprovada (conferida por `Execution.publish`); a pasta da partição gravável. | Uma versão nova no Delta com a partição substituída e as estatísticas registradas. |
 | `cleanup` | Nenhum. | O comando em curso cancelado; arquivo do banco e pasta de transbordo apagados; chamadas seguintes falham. |
 
 ## Testes por caso
@@ -346,7 +345,7 @@ uma chave única.
 | Nome ocupado | `test_loader_refuses_a_name_in_use` | O `loader` sobre a view do `ingest`, sobre a tabela do `ingest` materializado e sobre a tabela de um `loader` anterior levanta `SandboxError` antes do primeiro lote, e o objeto que estava lá não muda. |
 | Formas por tabela | `test_query_and_load_match_stream_and_loader` | `query` de um statement e de um texto igual a `stream(...).read_all()`; `load` de `pa.Table`, `RecordBatch`, leitor e iterável com o mesmo resultado; DataFrame recusado com a mensagem. |
 | Ciclo pandas | `test_pandas_round_trip_keeps_contract_types` | `to_pandas(types_mapper=pd.ArrowDtype)` e `from_pandas` mantêm `decimal128(18, 2)` e `date32`. |
-| Exportação | `test_export_partition_modes_produce_the_same_partition` | `register` e `rewrite` sobre a mesma partição dão as mesmas linhas e somas; `register` poda pela estatística (`Scanning Files: 0/n`); `expected_rows` diferente recusa. |
+| Exportação | `test_export_partition_registers_the_copy_file` | A partição registrada tem as linhas e as somas do sandbox, sem o mínimo e o máximo da coluna com `NaN`; o Delta poda pela estatística da chave (`Scanning Files: 0/n`); o arquivo leva o `execution_id` no nome; `expected_rows` diferente recusa sem commit. |
 | Pipeline de exemplo | `test_example_pipeline_in_a_file_backed_database` | Doze partições materializadas, dimensões em view, um `select` com `join`, auditoria, exportação; o arquivo `.duckdb` apagado por `cleanup`. |
 | Dispensa da junção | `test_audit_skips_the_published_join_above_max_key` | Com as chaves da execução acima do `max_key` da versão fixada, a junção com as demais partições não roda e o relatório diz por quê; com uma chave abaixo dele, a junção roda e acha a repetição. |
 | Amostra | `test_audit_report_samples_failing_rows` | Até 20 linhas inteiras por verificação reprovada; a de `linhas` busca as suas numa segunda consulta por contador acima de zero, e uma verificação aprovada não traz amostra; o `NaN` entra em `nonfinite_columns` sem reprovar. |
@@ -355,8 +354,8 @@ uma chave única.
 ## A implementação
 
 Os módulos `serialize_db.audit`, `serialize_db.engine` (o protocolo `Engine`, `BatchStream`,
-`Loader` e `ExportMode`) e `serialize_db.engine.duckdb` (`DuckDBConfig`, `DuckDBEngine`, e o
-`DuckDBStream` e o `DuckDBLoader` dele), com `SandboxError` em `serialize_db.errors`, e os casos de
+e `Loader`) e `serialize_db.engine.duckdb` (`DuckDBConfig`, `DuckDBEngine`, `environment_limits`
+e o `DuckDBStream` e o `DuckDBLoader` dele), com `SandboxError` em `serialize_db.errors`, e os casos de
 `tests/test_audit.py` e `tests/test_engine_duckdb.py` substituem a interface e os rascunhos
 executados em 2026-09-21: as assinaturas e as docstrings estão no código e na documentação do
 `pdoc`. A sessão a mais de `new_session` é um `DuckDBEngine(..., parent=motor)`. O que a
@@ -365,20 +364,16 @@ implementação mostrou está em [`POC.md`](POC.md), seção
 
 ## Decisões pendentes
 
-- **[decisão] Se o `rewrite` sai de `export_partition`**, com a flag `export_mode` e os testes dele,
-  depois da aprovação de 2026-09-24 do `register` como padrão; a decisão cobre as etapas 4 e 7 e
-  está na [etapa 7](PLAN-STAGE-7.md) e em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
-
-As decisões que o usuário tomou em 2026-09-23 sobre as propostas da revisão estão escritas
-nas seções que as descrevem: o estilo `qmark` no caminho do statement Core; o escopo das chaves da
-auditoria pela coluna de `partition_source` e pelo `skip_when` contra o `max_key` da versão fixada;
-a interface do motor, com `query(statement_or_sql, params=None)` no lugar de `query` e `execute`, o
-`mode` de `export_partition` resolvido em `Execution`, os argumentos nomeados no lugar de
-`**options`, `checks` sem `prefix` e o `rewrite` de `export_partition` sem `stream`; o `loader` que
-confere o nome num cursor próprio e cria a tabela no `close`, numa transação; o `stream` híbrido,
-com os lotes em memória até 64 MiB e o arquivo com LZ4 depois; e o `interrupt()` no `close` do
-stream e no `cleanup`. O motor implementa as três últimas, e `tests/test_engine_duckdb.py` tem os
-casos de cada uma.
+Nenhuma. A decisão do usuário de 2026-09-24 que tirou o `rewrite` de `export_partition`, com a flag
+`export_mode`, está escrita na seção que a descreve. As decisões que o usuário tomou em 2026-09-23
+sobre as propostas da revisão estão escritas nas seções que as descrevem: o estilo `qmark` no
+caminho do statement Core; o escopo das chaves da auditoria pela coluna de `partition_source` e pelo
+`skip_when` contra o `max_key` da versão fixada; a interface do motor, com `query(statement_or_sql,
+params=None)` no lugar de `query` e `execute`, os argumentos nomeados no lugar de `**options` e
+`checks` sem `prefix`; o `loader` que confere o nome num cursor próprio e cria a tabela no `close`,
+numa transação; o `stream` híbrido, com os lotes em memória até 64 MiB e o arquivo com LZ4 depois; e
+o `interrupt()` no `close` do stream e no `cleanup`. O motor implementa as três últimas, e
+`tests/test_engine_duckdb.py` tem os casos de cada uma.
 
 As quatro decisões que o usuário tomou em 2026-09-22 — o `loader` recusando com `SandboxError` um
 nome já ocupado no sandbox, o `memory_limit` no padrão do DuckDB, o banco em arquivo com

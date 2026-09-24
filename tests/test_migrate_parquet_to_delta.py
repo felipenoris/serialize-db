@@ -4,17 +4,17 @@ Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a 
 ``tests/source_db_projetado.py`` numa pasta da sessão e as tabelas Delta em outras, uma raiz por
 teste. Eles conferem a descoberta das partições e do que fica fora do modelo; a consulta que leva a
 partição ao contrato, com ``to`` entre aspas; a carga de cada partição uma vez só, a retomada
-depois de uma interrupção e o filtro de partições; os dois modos com o mesmo relatório e os tipos
-do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem commit (valor da coluna
-de origem fora do caminho, nulo em coluna ``NOT NULL``, texto acima de ``String(n)``), nos dois
-modos; as estatísticas registradas, de inteiro, data, ``Double`` e texto; a coluna ``Double`` com
-``NaN`` ou infinito sem mínimo e máximo na partição dela, nos dois modos, com o relatório que soma
-só os finitos; o relatório que acusa uma linha apagada; a linha de comando sobre a base inteira,
-duas vezes, com o ambiente no relatório; uma conexão por tabela com os limites lidos do ambiente; e
-a medição das variantes, cada uma num processo novo, com o pico do processo filho abaixo do
-processo do teste, também na segunda execução do mesmo comando e com a variante que falha
-registrada. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
-(``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
+depois de uma interrupção e o filtro de partições; o relatório e os tipos do contrato nos arquivos
+gravados; a ordem da ``sort_key``; as recusas sem commit (valor da coluna de origem fora do
+caminho, nulo em coluna ``NOT NULL``, texto acima de ``String(n)``); as estatísticas registradas,
+de inteiro, data, ``Double`` e texto; a coluna ``Double`` com ``NaN`` ou infinito sem mínimo e
+máximo na partição dela, com o relatório que soma só os finitos; o relatório que acusa uma linha
+apagada; a linha de comando sobre a base inteira, duas vezes, com o ambiente no relatório; uma
+conexão por tabela com os limites lidos do ambiente; e a medição com e sem a ordem, cada variante
+num processo novo, com o pico do processo filho abaixo do processo do teste, também na segunda
+execução do mesmo comando e com a variante que falha registrada. A extensão ``delta`` do DuckDB
+precisa estar na pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz
+do repositório).
 """
 
 from __future__ import annotations
@@ -49,9 +49,9 @@ OUTSIDE_MODEL = ["alembic_version", "meta_update_status", "schema.json"]
 PARTITION_VALUES = list(source.PARTITION_VALUES)
 
 
-def settings(mode: str = "register", partitions: tuple[str, ...] = ()) -> migrate.Settings:
+def settings(partitions: tuple[str, ...] = ()) -> migrate.Settings:
     """As configurações de uma execução local, sem S3, com as linhas na ordem da ``sort_key``."""
-    return migrate.Settings(mode=mode, sort=True, partitions=partitions, storage_options={})
+    return migrate.Settings(sort=True, partitions=partitions, storage_options={})
 
 
 def unique_child(local_location: LocalLocation, prefix: str) -> str:
@@ -273,32 +273,24 @@ def test_interrupted_load_resumes(
     assert DeltaTable(uri).version() == 4
 
 
-def test_both_modes_give_the_same_report_and_the_contract_types(
+def test_load_gives_the_report_and_the_contract_types(
     base: source.SourceBase,
     origin: migrate.Location,
     con: duckdb.DuckDBPyConnection,
-    local_location: LocalLocation,
+    root: migrate.Location,
 ) -> None:
-    """``register`` e ``rewrite`` sobre ``cad_lancamentos`` dão o mesmo relatório, o Delta lê
-    ``int64`` e ``timestamp[us]``, e o arquivo do ``COPY`` tem ``INT64`` onde a origem tinha
-    ``INT32`` e ``INT96``."""
+    """A carga de ``cad_lancamentos`` dá o relatório de cada partição, o Delta lê ``int64`` e
+    ``timestamp[us]``, e o arquivo do ``COPY`` tem ``INT64`` onde a origem tinha ``INT32`` e
+    ``INT96``."""
     table = TABLES["cad_lancamentos"]
-    reports = {}
-    roots = {}
-    for mode in ("register", "rewrite"):
-        roots[mode] = migrate.open_location(local_location.child(f"delta-modo-{mode}"))
-        loaded, skipped = migrate.initial_load(
-            con, table, origin, roots[mode], settings(mode=mode)
-        )
-        reports[mode] = migrate.load_report(con, table, origin, roots[mode], loaded, skipped)
-        assert reports[mode].matches, mode
-        assert loaded_values(reports[mode].loaded) == PARTITION_VALUES, mode
-        delta_schema = pa.schema(DeltaTable(roots[mode].child("cad_lancamentos").uri).schema())
-        assert str(delta_schema.field("id_lancamento").type) == "int64", mode
-        assert str(delta_schema.field("timestamp").type) == "timestamp[us]", mode
+    loaded, skipped = migrate.initial_load(con, table, origin, root, settings())
+    report = migrate.load_report(con, table, origin, root, loaded, skipped)
+    assert report.matches
+    assert loaded_values(report.loaded) == PARTITION_VALUES
+    delta_schema = pa.schema(DeltaTable(root.child("cad_lancamentos").uri).schema())
+    assert str(delta_schema.field("id_lancamento").type) == "int64"
+    assert str(delta_schema.field("timestamp").type) == "timestamp[us]"
 
-    assert reports["register"].partitions == reports["rewrite"].partitions
-    report = reports["register"]
     assert [partition.value for partition in report.partitions] == PARTITION_VALUES
     assert [partition.source_rows for partition in report.partitions] == [
         base.partition_rows["cad_lancamentos"][value] for value in PARTITION_VALUES
@@ -314,7 +306,7 @@ def test_both_modes_give_the_same_report_and_the_contract_types(
         "id_negocio: int32 -> int64",
     )
 
-    written = sorted(DeltaTable(roots["register"].child("cad_lancamentos").uri).file_uris())
+    written = sorted(DeltaTable(root.child("cad_lancamentos").uri).file_uris())
     assert len(written) == len(PARTITION_VALUES)
     assert all("/carga_inicial_" in path for path in written)
     types = physical_types(written[0])
@@ -454,7 +446,6 @@ def source_with_defect(
         ),
     ],
 )
-@pytest.mark.parametrize("mode", ["register", "rewrite"])
 def test_a_partition_off_the_contract_is_refused_without_commit(
     base: source.SourceBase,
     con: duckdb.DuckDBPyConnection,
@@ -464,10 +455,9 @@ def test_a_partition_off_the_contract_is_refused_without_commit(
     column: str,
     value: object,
     fragment: str,
-    mode: str,
 ) -> None:
     """Cada defeito é ``ContractError`` com a tabela, a partição e a coluna, antes de qualquer
-    gravação: a versão fica em 0 e a pasta da tabela não tem arquivo Parquet, nos dois modos.
+    gravação: a versão fica em 0 e a pasta da tabela não tem arquivo Parquet.
 
     Os defeitos, na primeira linha: ``data`` fora do valor do caminho da partição; ``sistema``
     nulo, ``NOT NULL`` no modelo e anulável nos arquivos; ``to`` de três bytes, coluna
@@ -475,7 +465,7 @@ def test_a_partition_off_the_contract_is_refused_without_commit(
     """
     origin = source_with_defect(local_location, base, table, column, value)
     with pytest.raises(ContractError, match=re.escape(fragment)) as refusal:
-        migrate.initial_load(con, TABLES[table], origin, root, settings(mode=mode))
+        migrate.initial_load(con, TABLES[table], origin, root, settings())
     assert str(refusal.value).startswith(f"{table} partição 2026-02-28: ")
     uri = root.child(table).uri
     assert DeltaTable(uri).version() == 0
@@ -508,13 +498,11 @@ def has_min_max(path: str, column: str) -> bool:
     return False
 
 
-@pytest.mark.parametrize("mode", ["register", "rewrite"])
 def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     base: source.SourceBase,
     con: duckdb.DuckDBPyConnection,
     local_location: LocalLocation,
     root: migrate.Location,
-    mode: str,
 ) -> None:
     """As partições com ``NaN`` ou infinito em ``valor`` gravam a coluna sem mínimo e máximo no
     log, e as outras ficam com os dois; o relatório soma só os finitos e conta os não finitos nos
@@ -522,7 +510,7 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     porque o DuckDB ordena o ``NaN`` e o infinito acima deles (issue #59)."""
     origin = source_with_nonfinite(local_location, base)
     table = TABLES["cad_lancamentos"]
-    loaded, skipped = migrate.initial_load(con, table, origin, root, settings(mode=mode))
+    loaded, skipped = migrate.initial_load(con, table, origin, root, settings())
     nonfinite_partitions = {"2026-02-28", "2026-03-31"}
     for load in loaded:
         expected = ("valor",) if load.value in nonfinite_partitions else ()
@@ -538,8 +526,8 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
         assert (action["min.valor"] is not None) == has_bounds, value
         assert (action["max.valor"] is not None) == has_bounds, value
 
-    # O rodapé: o arquivo da partição do NaN sai sem mínimo e máximo de valor nos dois modos (o
-    # COPY do DuckDB já omite os dois no grupo com NaN), e o de uma partição finita, com eles.
+    # O rodapé: o arquivo da partição do NaN sai sem mínimo e máximo de valor (o COPY do DuckDB
+    # omite os dois no grupo com NaN), e o de uma partição finita, com eles.
     files = DeltaTable(uri).file_uris()
     nan_file = next(path for path in files if f"{partition_by}=2026-02-28" in path)
     finite_file = next(path for path in files if f"{partition_by}=2026-01-31" in path)
@@ -746,10 +734,10 @@ def test_each_table_loads_in_its_own_connection_with_the_environment_limits(
 def test_measurement_runs_every_variant_even_with_the_partition_in_the_log(
     base: source.SourceBase, local_location: LocalLocation, capsys: pytest.CaptureFixture
 ) -> None:
-    """A medição grava a partição pedida nas quatro variantes, cada uma num processo novo, antes
-    da carga e de novo quando a partição já está no log, como na segunda execução do mesmo
-    comando; a tabela descartável sai da raiz. As outras partições ficam fora do Delta, e o
-    relatório as acusa: saída 1."""
+    """A medição grava a partição pedida com e sem a ordem da ``sort_key``, cada variante num
+    processo novo, antes da carga e de novo quando a partição já está no log, como na segunda
+    execução do mesmo comando; a tabela descartável sai da raiz. As outras partições ficam fora do
+    Delta, e o relatório as acusa: saída 1."""
     root = unique_child(local_location, "delta")
     report_path = Path(unique_child(local_location, "relatorio-medicao") + ".json")
     value = PARTITION_VALUES[0]
@@ -773,15 +761,15 @@ def test_measurement_runs_every_variant_even_with_the_partition_in_the_log(
     ballast[::4096] = b"\x01" * (len(ballast) // 4096)
     for run in range(2):
         assert migrate.main(argv) == 1
-        assert f"medição {value} rewrite sem ordem" in capsys.readouterr().out
+        assert f"medição {value} sem ordem" in capsys.readouterr().out
         table = json.loads(report_path.read_text())["tables"][0]
         assert len(table["loaded"]) == (1 if run == 0 else 0)
 
         # Cada variante gravou as linhas da partição, uma vez, sem erro.
         partitions = {partition["value"]: partition for partition in table["partitions"]}
         measurements = table["measurements"]
-        variants = [(measurement["mode"], measurement["sort"]) for measurement in measurements]
-        assert variants == list(migrate.VARIANTS)
+        variants = [measurement["sort"] for measurement in measurements]
+        assert variants == list(migrate.SORT_VARIANTS)
         for measurement in measurements:
             assert measurement["error"] is None
             assert measurement["value"] == value
@@ -800,16 +788,14 @@ def test_a_failed_variant_enters_the_measurement_with_its_error(
 ) -> None:
     """A variante que falha no processo filho entra na medição com o erro, e as seguintes rodam;
     a tabela descartável de cada uma sai da pasta. Uma pasta de partição ausente faz o
-    ``read_parquet`` falhar nas quatro."""
+    ``read_parquet`` falhar nas duas."""
     table = TABLES["cad_contratos"]
     missing = origin.child(table.name).child("data_str=2099-12-31")
     scratch = root.child("_medicao_cad_contratos")
     measurements = migrate.measure_partition(
         table, missing, scratch, "2099-12-31", settings(), uses_s3=False, region=None
     )
-    assert [(measurement.mode, measurement.sort) for measurement in measurements] == list(
-        migrate.VARIANTS
-    )
+    assert [measurement.sort for measurement in measurements] == list(migrate.SORT_VARIANTS)
     for measurement in measurements:
         assert measurement.error.startswith("IOException: "), measurement.error
         assert measurement.rows is None

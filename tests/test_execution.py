@@ -176,10 +176,10 @@ class FakeEngine:
                            not_run=(), nonfinite_columns=nonfinite, totals=totals)
 
     def export_partition(self, table: sa.Table, uri: str, value: str | None, metadata: dict,
-                         mode: str, expected_rows: int | None = None,
+                         expected_rows: int | None = None,
                          columns_without_min_max: tuple = ()) -> int:
         self.calls.append("export")
-        self.exports.append({"table": table.name, "value": value, "mode": mode,
+        self.exports.append({"table": table.name, "value": value,
                              "expected_rows": expected_rows,
                              "columns_without_min_max": tuple(columns_without_min_max)})
         data = rows(table, value, range(1, 4))
@@ -454,7 +454,6 @@ def test_publish_passes_the_nonfinite_columns_to_the_export(db: Database, folder
         run.publish(PROJECTED, partitions=["2026-09-30"], audit=False)
     exports = engine.exports
     assert [export["value"] for export in exports] == ["2026-07-31", "2026-08-31", "2026-09-30"]
-    assert [export["mode"] for export in exports] == ["register", "register", "register"]
     assert [export["expected_rows"] for export in exports] == [3, 3, None]
     nonfinite = [export["columns_without_min_max"] for export in exports]
     assert nonfinite == [("valor",), (), ("valor",)]
@@ -472,28 +471,6 @@ def test_publish_passes_the_nonfinite_columns_to_the_export(db: Database, folder
     june = actions.filter(pc.equal(actions.column("partition.data_base_str"), "2026-06-30"))
     assert june.column("max.valor").null_count == 1
     assert june.column("max.id_lancamento").to_pylist() == [102]
-
-
-@pytest.mark.parametrize(("execution_mode", "variable", "publish_mode", "expected"), [
-    (None, None, None, "register"),
-    (None, "rewrite", None, "rewrite"),
-    ("register", "rewrite", None, "register"),
-    ("register", "rewrite", "rewrite", "rewrite"),
-])
-def test_export_mode_resolution(db: Database, monkeypatch: pytest.MonkeyPatch,
-                                execution_mode: str | None, variable: str | None,
-                                publish_mode: str | None, expected: str) -> None:
-    """O argumento de ``publish`` vence o de ``Execution``, que vence ``SERIALIZE_DB_EXPORT_MODE``,
-    que vence ``register``; um modo fora dos dois é ``ContractError``."""
-    monkeypatch.delenv("SERIALIZE_DB_EXPORT_MODE", raising=False)
-    if variable is not None:
-        monkeypatch.setenv("SERIALIZE_DB_EXPORT_MODE", variable)
-    engine = FakeEngine(db.storage)
-    with Execution(db, engine, "2026-08-31", export_mode=execution_mode) as run:
-        run.publish(PROJECTED, partitions=["2026-08-31"], audit=False, export_mode=publish_mode)
-    assert engine.exports[0]["mode"] == expected
-    with pytest.raises(ContractError, match="export_mode"):
-        Execution(db, FakeEngine(db.storage), "2026-08-31", export_mode="copy")
 
 
 def test_commit_metadata_in_history(db: Database) -> None:
@@ -573,8 +550,8 @@ def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
                                             monkeypatch: pytest.MonkeyPatch,
                                             capsys: pytest.CaptureFixture) -> None:
     """``serialize-db run`` sai com 0 no pipeline que publica, 1 na auditoria reprovada e 2 no
-    conflito, na partição e no ``execution_id`` fora da regra e sem ``--metadata``, sem traceback; o
-    ``--export-mode`` chega a ``Execution``."""
+    conflito, na partição e no ``execution_id`` fora da regra, sem ``--metadata`` e com o
+    ``--export-mode`` que saiu da linha de comando, sem traceback."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     common = ["run", "--root", db.root, "--environment", "prod",
@@ -582,10 +559,7 @@ def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
     projected = "test_execution:projected_pipeline"
 
     # O resultado do pipeline no código de saída.
-    arguments = [*common, "--partition", "2026-08-31", "--export-mode", "rewrite", projected]
-    assert cli.main(arguments) == 0
-    history = delta.open_table(db.uri(PROJECTED), db.storage).history(1)[0]
-    assert history["operation"] == "WRITE"  # rewrite grava pelo write_deltalake
+    assert cli.main([*common, "--partition", "2026-08-31", projected]) == 0
     repeated_key = "test_execution:repeated_key_pipeline"
     assert cli.main([*common, "--partition", "2026-07-31", repeated_key]) == 1
     conflicting = "test_execution:conflicting_pipeline"
@@ -598,6 +572,8 @@ def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
     assert exit_code(["run", "--root", db.root, "--partition", "2026-08-31", projected]) == 2
     missing = "test_execution:missing_pipeline"
     assert exit_code([*common, "--partition", "2026-08-31", missing]) == 2
+    removed = [*common, "--partition", "2026-08-31", "--export-mode", "register", projected]
+    assert exit_code(removed) == 2
     assert "Traceback" not in capsys.readouterr().err
 
 

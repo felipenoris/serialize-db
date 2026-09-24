@@ -40,7 +40,6 @@ import dataclasses
 import datetime
 import functools
 import logging
-import os
 import threading
 import time
 import uuid
@@ -54,7 +53,7 @@ from deltalake import DeltaTable
 
 from serialize_db import delta
 from serialize_db.audit import AuditReport, KeyScope
-from serialize_db.engine import Engine, ExportMode
+from serialize_db.engine import Engine
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import AuditFailed, ContractError, ExecutionConflict, SandboxError
 from serialize_db.schema import (
@@ -68,8 +67,6 @@ from serialize_db.storage import Storage, prepare_environment
 __all__ = ["Database", "Execution"]
 
 log = logging.getLogger("serialize_db.execution")
-
-_EXPORT_MODES = ("register", "rewrite")
 
 
 # ---------------------------------------------------------------- o banco
@@ -157,13 +154,6 @@ def _new_execution_id() -> str:
     """``exec-<AAAA-MM-DD>-<uuid8>``, com a data em UTC."""
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     return f"exec-{today}-{uuid.uuid4().hex[:8]}"
-
-
-def _checked_mode(mode: str) -> ExportMode:
-    """O ``export_mode`` entre ``register`` e ``rewrite``."""
-    if mode not in _EXPORT_MODES:
-        raise ContractError(f"export_mode {mode!r}: use 'register' ou 'rewrite'")
-    return mode
 
 
 def _checked_partitions(partitions: Sequence[str] | None) -> list[str] | None:
@@ -279,8 +269,7 @@ class Execution:
     """O ciclo de uma execução: as versões fixadas, o sandbox, a auditoria e a publicação.
 
     ``engine`` é o nome do motor (``"duckdb"``) ou um motor já construído, para os testes.
-    ``execution_id`` ausente vira ``exec-<AAAA-MM-DD>-<uuid8>``. ``export_mode`` é o modo dos
-    ``publish`` que não informam o seu.
+    ``execution_id`` ausente vira ``exec-<AAAA-MM-DD>-<uuid8>``.
 
     Exemplo:
 
@@ -291,12 +280,11 @@ class Execution:
     """
 
     def __init__(self, db: Database, engine: str | Engine, partition: str,
-                 execution_id: str | None = None, export_mode: ExportMode | None = None) -> None:
+                 execution_id: str | None = None) -> None:
         self.db = db
         self.partition = _checked_partition(partition, db)
         self.execution_id = check_partition_value(execution_id or _new_execution_id())
         self._engine = engine
-        self._export_mode = _checked_mode(export_mode) if export_mode is not None else None
         self.versions: dict[str, int | None] = {}
         self.sandbox: Engine | None = None
         self._read: dict[str, int] = {}
@@ -533,15 +521,6 @@ class Execution:
 
     # ------------------------------------------------------------ a publicação
 
-    def _resolved_mode(self, export_mode: ExportMode | None) -> ExportMode:
-        """O modo, nesta ordem: o argumento de ``publish``, o de ``Execution``,
-        ``SERIALIZE_DB_EXPORT_MODE`` e ``"register"``."""
-        if export_mode is not None:
-            return _checked_mode(export_mode)
-        if self._export_mode is not None:
-            return self._export_mode
-        return _checked_mode(os.environ.get("SERIALIZE_DB_EXPORT_MODE") or "register")
-
     def _values(self, table: sa.Table, partitions: list[str] | None) -> list[str | None]:
         """As partições a publicar: as pedidas, ou ``[None]`` numa tabela sem partição."""
         partition_by = table_options(table).partition_by
@@ -587,8 +566,8 @@ class Execution:
         with self._lock:
             self.versions[table.name] = current
 
-    def _publish_table(self, table: sa.Table, values: list[str | None], report: AuditReport | None,
-                       mode: ExportMode) -> int:
+    def _publish_table(self, table: sa.Table, values: list[str | None],
+                       report: AuditReport | None) -> int:
         """A reconciliação e a exportação de cada partição de uma tabela; devolve a versão final."""
         uri = self._uri(table)
         self._check_no_data_change(table, uri)
@@ -606,7 +585,7 @@ class Execution:
             else:
                 expected = report.rows(value)
                 nonfinite = report.nonfinite_columns.get(value, ())
-            version = self.sandbox.export_partition(table, uri, value, metadata, mode, expected,
+            version = self.sandbox.export_partition(table, uri, value, metadata, expected,
                                                     nonfinite)
             with self._lock:
                 self.versions[table.name] = version
@@ -614,17 +593,17 @@ class Execution:
         return version
 
     def publish(self, *tables: sa.Table, partitions: list[str] | None = None, audit: bool = True,
-                max_workers: int = 1, export_mode: ExportMode | None = None) -> dict[str, int]:
+                max_workers: int = 1) -> dict[str, int]:
         """Leva as partições auditadas de cada tabela ao Delta e devolve ``{tabela: versão}``.
 
         Exige a auditoria aprovada de cada tabela nessas partições na própria execução;
         ``audit=False`` dispensa a exigência e fica no log. Uma alteração de dados na tabela desde
         a versão fixada é ``ExecutionConflict`` sem commit. Depois ``create_table`` se não existe,
-        ``reconcile`` e ``export_partition`` por partição, no ``export_mode`` resolvido, com a
-        contagem da auditoria em ``expected_rows`` e as colunas ``Double`` com valor não finito sem
-        mínimo e máximo (todas as ``Double`` com ``audit=False``). As tabelas correm num pool de
-        ``max_workers``: na primeira falha nada novo começa, o que está em curso termina, e a
-        exceção leva o resultado de cada tabela numa nota.
+        ``reconcile`` e ``export_partition`` por partição, que registra no log o arquivo que o
+        motor gravou, com a contagem da auditoria em ``expected_rows`` e as colunas ``Double`` com
+        valor não finito sem mínimo e máximo (todas as ``Double`` com ``audit=False``). As tabelas
+        correm num pool de ``max_workers``: na primeira falha nada novo começa, o que está em curso
+        termina, e a exceção leva o resultado de cada tabela numa nota.
 
         Exemplo:
 
@@ -633,13 +612,12 @@ class Execution:
             run.publish(Projetado.__table__, partitions=["2026-08-31"])   # {"cad_...": 58}
         """
         checked = _checked_partitions(partitions)
-        mode = self._resolved_mode(export_mode)
         # As partições e a auditoria de toda tabela são conferidas antes do primeiro commit.
         tasks = []
         for table in tables:
             values = self._values(table, checked)
             report = self._approved(table, checked, audit)
-            task = functools.partial(self._publish_table, table, values, report, mode)
+            task = functools.partial(self._publish_table, table, values, report)
             tasks.append((table.name, task))
         with self._step("publish"):
             return _run_in_pool(tasks, max_workers)

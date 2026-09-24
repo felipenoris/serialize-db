@@ -737,3 +737,19 @@ lack of RAM; approved the three proposals (`register` as the default in stages 4
 read); and merged PR #68. Whether `rewrite` leaves stages 4 and 7, with the `export_mode` flag and
 its tests, was put to the user (proposed: remove it). `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-7.md`,
 `plan/PLAN-STAGE-8.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+## The rewrite leaves stages 4 and 7, and the engine page enters the pdoc site (2026-09-24)
+
+On 2026-09-24 the user answered "sim, tire o rewrite das etapas 4 e 7" and asked for the pdoc fix,
+after merging PR #69. The DuckDB engine's `export_partition` registers the `COPY` file only; the
+`ExportMode` type, the `mode` argument of the `Engine` protocol, `Execution(export_mode=...)`,
+`publish(export_mode=...)`, `serialize-db run --export-mode` and `SERIALIZE_DB_EXPORT_MODE` left
+with their tests; `delta.publish_partition` stays for the stage 5 swap of a partition with a
+non-finite `Double`, which now always logs its warning because no mode asks for the registration.
+The migration script lost `--mode` and the `rewrite` measurement variants: it loads by the
+registration and measures each partition with and without the sort (`SORT_VARIANTS`); the plan
+text had proposed keeping the `rewrite` variants until stage 7 absorbs the script, and the
+assistant removed them to match the user's answer. `serialize_db.engine.__all__` lists `duckdb`,
+because pdoc documents only the submodules a package's `__all__` names, and the site had no engine
+page since stage 4; `tests/test_package.py` checks every package. `plan/PLAN-STAGE-4.md`,
+`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-7.md`, `plan/PLAN.md`

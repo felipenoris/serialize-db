@@ -8,10 +8,11 @@ literal e vira nome de pasta.
 
 O ciclo de uma tabela: ``create_table`` a cria do modelo, ``reconcile`` aplica o diff aditivo do
 modelo e recusa o destrutivo, que só ``rewrite`` resolve, num commit. Uma partição entra por um de
-dois caminhos, escolhidos pelo ``export_mode`` da execução: ``publish_partition`` grava os dados
-pelo escritor do delta-rs, que confere tudo e paga a memória; ``register_files`` registra no log os
-arquivos que outro escritor gravou na pasta da tabela, depois das conferências do rodapé de cada
-arquivo e com a releitura pelos dois leitores depois do commit. ``version_diff`` lê no log as
+dois caminhos: ``register_files`` registra no log os arquivos que outro escritor gravou na pasta da
+tabela, depois das conferências do rodapé de cada arquivo e com a releitura pelos dois leitores
+depois do commit, e é o caminho dos motores; ``publish_partition`` grava os dados pelo escritor do
+delta-rs, que confere tudo e paga a memória, e é o do motor Redshift para a partição com ``Double``
+não finito, cujo rodapé do ``UNLOAD`` deixa o ``NaN`` fora do máximo. ``version_diff`` lê no log as
 partições alteradas entre duas versões, ``copy_manifest`` monta o manifesto do ``COPY`` do Redshift,
 e ``snapshot`` marca no arquivo de controle do ambiente as versões de um snapshot do banco, que
 ``vacuum_keeping_snapshots`` preserva. ``compact``, ``deep_copy`` e ``export_snapshot`` são a

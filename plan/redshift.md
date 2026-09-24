@@ -1319,8 +1319,8 @@ Depois do commit a versão é relida pelo delta-rs e pelo `delta_scan`, e uma di
 
 A alternativa sem registro é reler os arquivos do `UNLOAD` e gravar por `write_deltalake`, que faz
 essas conferências sozinho e normaliza os tipos físicos, ao custo de passar os dados pela máquina
-local: é o `export_mode="rewrite"` da [etapa 5](PLAN-STAGE-5.md), ao lado do registro
-(`"register"`), e a mesma partição sai igual pelos dois.
+local: é a troca da [etapa 5](PLAN-STAGE-5.md) para `publish_partition` na partição com `Double`
+não finito, cujo rodapé do `UNLOAD` deixa o `NaN` fora do máximo.
 
 ## Recomendações de performance
 

@@ -31,8 +31,8 @@ foi medido em [`POC.md`](POC.md).
   algumas vezes, sob o `memory_limit` padrão do DuckDB, 12,3 GiB ([`POC.md`](POC.md)). O script
   abre agora cada conexão com metade da memória que o processo ainda pode usar e com as CPUs dele,
   e a carga de cada tabela na sua conexão, fechada no fim ([etapa 7](PLAN-STAGE-7.md)). A próxima
-  execução de `cad_lancamentos` confirma que a partição cabe e traz a medição das quatro variantes
-  dela; o script regrava o relatório depois de cada passo.
+  execução de `cad_lancamentos` confirma que a partição cabe e traz a medição dela com e sem a
+  ordem; o script regrava o relatório depois de cada passo.
 - **A metade da memória disponível no `memory_limit`.** O motor DuckDB e o script tiram o
   `memory_limit` da memória que o processo ainda pode usar na abertura, pela instrução do usuário
   de 2026-09-24; a metade vem da documentação do DuckDB, que pede de 50% a 60% quando o sistema
@@ -77,15 +77,9 @@ foi medido em [`POC.md`](POC.md).
   leram o `SUPER` no Parquet do `UNLOAD` como `extension<arrow.json>`, com o texto de cada valor,
   que o `cast` do contrato converte em `string` ([etapa 5](PLAN-STAGE-5.md)). Nenhum caso da suíte
   registra esse arquivo numa tabela Delta e o lê pelo delta-rs e pelo `delta_scan`, o caminho do
-  `export_partition` em `register` de uma tabela com coluna JSON.
+  `export_partition` de uma tabela com coluna JSON.
 
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit.
-
-- [Etapa 7](PLAN-STAGE-7.md): se o `rewrite` sai das etapas 4 e 7, com a flag `export_mode` de
-  `Execution`, de `serialize-db run` e de `SERIALIZE_DB_EXPORT_MODE` e os testes dele, depois da
-  aprovação de 2026-09-24 do `register` como padrão nas etapas 4, 5 e 7 e do `rewrite` só na troca
-  da etapa 5 para a partição com `Double` não finito. Proposto: tirá-lo, com `publish_partition` na
-  troca da etapa 5 e as variantes da medição no script até a etapa 7 absorvê-lo.
+tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente.

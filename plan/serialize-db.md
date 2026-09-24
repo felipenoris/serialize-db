@@ -138,10 +138,9 @@ Delta. A origem é a base de `data_str=<AAAA-MM-DD>/chunk_<n>.parquet` lida em 2
 1. `create_table(uri, table)` para cada modelo, na pasta do ambiente.
 2. Para cada partição da origem, o DuckDB ou o PyArrow lê os Parquet da pasta, a coluna de partição
    recebe o valor do caminho, as chaves passam de `int32` a `int64`, o `timestamp` `INT96` é
-   truncado a microssegundos, as colunas `double` entram como estão, `cast` converte para o
-   contrato e a partição entra conforme `export_mode`: `register` registra por `register_files` o
-   arquivo do `COPY ... (RETURN_STATS)` do DuckDB, `rewrite` grava por `publish_partition` a partir
-   do leitor, sem a tabela inteira na memória ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)). Uma
+   truncado a microssegundos, as colunas `double` entram como estão, e a partição entra pelo
+   registro, por `register_files`, do arquivo do `COPY ... (RETURN_STATS)` do DuckDB, sem a tabela
+   inteira na memória ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)). Uma
    carga interrompida recomeça da partição seguinte à última publicada.
 3. O relatório compara contagens e somas por partição entre a origem e o Delta; a carga só termina
    quando os dois coincidem.
@@ -165,9 +164,8 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
    sandbox, não no Delta. O nome de uma tabela no sandbox é do `ingest` ou do `loader`, nunca dos
    dois: a tabela que a execução grava é lida na versão publicada por `run.published(table)`.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
-5. `run.publish` reconcilia o esquema, substitui cada partição num commit (`export_mode`: `register`
-   registra o arquivo do `COPY ... (RETURN_STATS)` depois das conferências da
-   [etapa 3](PLAN-STAGE-3.md), `rewrite` grava pelo `write_deltalake`) com
+5. `run.publish` reconcilia o esquema, substitui cada partição num commit (o registro do arquivo
+   do `COPY ... (RETURN_STATS)` depois das conferências da [etapa 3](PLAN-STAGE-3.md)) com
    `serialize_db_execution_id` e `serialize_db_input_versions`, e avança `versions[table]`. Um
    `CommitFailedError` na mesma partição significa outra execução publicando a mesma tabela, e a
    execução aborta; ela também aborta quando a versão da tabela avançou desde a abertura, para que
@@ -192,10 +190,10 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
    `stream` e das tuplas do cursor em `query`.
 4. `run.audit` roda as mesmas consultas no Redshift.
 5. `run.publish` grava cada partição por `UNLOAD ... MANIFEST VERBOSE`, sem `PARTITION BY`, num
-   prefixo novo por tentativa, `<coluna>=<valor>/<execution_id>_<uuid>/`, e, conforme
-   `export_mode`, registra os arquivos por `register_files` depois das conferências da
-   [etapa 3](PLAN-STAGE-3.md) (`register`: os dados não passam pela máquina local) ou os relê pelo
-   leitor da [etapa 7](PLAN-STAGE-7.md) e grava por `publish_partition` (`rewrite`).
+   prefixo novo por tentativa, `<coluna>=<valor>/<execution_id>_<uuid>/`, e registra os arquivos
+   por `register_files` depois das conferências da [etapa 3](PLAN-STAGE-3.md), sem os dados passarem
+   pela máquina local; a partição com `Double` não finito troca para a releitura pelo leitor da
+   [etapa 7](PLAN-STAGE-7.md) e a gravação por `publish_partition`.
 6. `run.publish_redshift` carrega as tabelas `prod_*` a partir do Delta, pelo mesmo caminho da
    execução no DuckDB, e `cleanup` apaga as tabelas do sandbox e o staging.
 

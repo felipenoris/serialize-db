@@ -8,9 +8,9 @@ o compara com a geração nova. ``run`` abre uma execução e entrega a ``modulo
 ``audit`` imprime o texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a
 versão publicada. Os modelos chegam por ``--metadata modulo:atributo``, o caminho importável do
 ``MetaData`` do cliente, e os statements por ``--statements modulo:atributo``, o caminho importável
-do dicionário ``{nome: statement}`` do pipeline. ``--root``, ``--environment``, ``--engine`` e
-``--export-mode`` têm por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dev``),
-``SERIALIZE_DB_ENGINE`` (``duckdb``) e ``SERIALIZE_DB_EXPORT_MODE`` (``register``).
+do dicionário ``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine``
+têm por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dev``) e
+``SERIALIZE_DB_ENGINE`` (``duckdb``).
 
 Exemplo:
 
@@ -116,9 +116,6 @@ def _add_run_parser(commands: argparse._SubParsersAction) -> None:
                      default=os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev")
     run.add_argument("--engine", choices=["duckdb", "redshift"],
                      default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb")
-    run.add_argument("--export-mode", choices=["register", "rewrite"], default=None,
-                     help="o modo dos publish que não informam o seu; "
-                          "padrão SERIALIZE_DB_EXPORT_MODE")
     run.add_argument("--partition", type=_name_argument, required=True)
     run.add_argument("--execution-id", type=_name_argument, default=None)
     run.add_argument("--metadata", required=True, type=_resolve_metadata,
@@ -221,7 +218,7 @@ def _run(args: argparse.Namespace) -> int:
     reprovada, 2 no conflito e no motor que não serve."""
     try:
         execution = Execution(Database(args.root, args.environment, args.metadata), args.engine,
-                              args.partition, args.execution_id, args.export_mode)
+                              args.partition, args.execution_id)
     except ContractError as error:
         print(f"serialize-db run: {error}", file=sys.stderr)
         return 2
