@@ -870,7 +870,7 @@ function level, every module keeping its place; and a defect the review finds is
 assertion that fails on the old code and named in the report when small, and goes to
 `plan/OPEN_QUESTIONS.md` when large. Under the last answer the review closed two pending items:
 `check_models` lists a table with two partition columns instead of raising, and an empty
-`SERIALIZE_DB_ENVIRONMENT` means `dev` in every subcommand, as it did in `run`, `audit` and
+`SERIALIZE_DB_ENVIRONMENT` counts as absent in every subcommand, as it did in `run`, `audit` and
 `publish`. The assistant's choices, named in the report: `Storage.create_text` in place of
 `write_text(if_none_match=True)`; `bind(sql, params, dialect)`; `sql.bound_statement`, the helpers
 the two engines repeated in `serialize_db.engine` (`batches_of`, `checked_batches`, `take`,

@@ -265,7 +265,7 @@ def table_exists(uri: str, storage: Storage) -> bool:
 
     .. code-block:: python
 
-        table_exists(storage.uri_of("prod/cad_operacoes"), storage)   # True depois de create_table
+        table_exists(storage.uri_of("prd/cad_operacoes"), storage)   # True depois de create_table
 
     :param uri: a URI da pasta, sob a raiz do banco.
     :param storage: o armazenamento da raiz do banco.

@@ -251,7 +251,7 @@ class Storage:
 
         .. code-block:: python
 
-            storage.uri_of("prod/cad_operacoes")   # "s3://bucket/delta/prod/cad_operacoes"
+            storage.uri_of("prd/cad_operacoes")   # "s3://bucket/delta/prd/cad_operacoes"
 
         :param path: o caminho relativo à raiz; ``""`` é a própria raiz.
         :return: a URI, sem barra final.
@@ -275,7 +275,7 @@ class Storage:
 
         .. code-block:: python
 
-            storage.ensure_folder("prod/cad_operacoes/data_str=2026-08-31")
+            storage.ensure_folder("prd/cad_operacoes/data_str=2026-08-31")
 
         :param path: a pasta, relativa à raiz; as pastas acima dela também são criadas.
         """
@@ -291,7 +291,7 @@ class Storage:
 
         .. code-block:: python
 
-            storage.exists("prod/cad_operacoes/_delta_log")   # True numa tabela criada
+            storage.exists("prd/cad_operacoes/_delta_log")   # True numa tabela criada
 
         :param path: o arquivo ou a pasta, relativo à raiz.
         :return: ``True`` quando existe.
@@ -306,7 +306,7 @@ class Storage:
 
         .. code-block:: python
 
-            storage.size("prod/cad_operacoes/data_str=2026-08-31/exec-42_ab12.parquet")
+            storage.size("prd/cad_operacoes/data_str=2026-08-31/exec-42_ab12.parquet")
             # 4096
 
         :param path: o arquivo, relativo à raiz.
@@ -327,8 +327,8 @@ class Storage:
 
         .. code-block:: python
 
-            storage.list_files("prod/cad_operacoes", ".parquet")
-            # ["prod/cad_operacoes/data_str=2026-08-31/exec-42_ab12.parquet", ...]
+            storage.list_files("prd/cad_operacoes", ".parquet")
+            # ["prd/cad_operacoes/data_str=2026-08-31/exec-42_ab12.parquet", ...]
 
         :param prefix: a pasta, relativa à raiz; um prefixo ausente dá a lista vazia.
         :param suffix: o fim do nome, como ``.parquet``; vazio aceita todo arquivo.
@@ -357,8 +357,8 @@ class Storage:
 
         .. code-block:: python
 
-            storage.copy("prod/cad_operacoes/data_str=2026-08-31/exec-42_ab12.parquet",
-                         "prod/arquivo/2026T3/cad_operacoes/data_str=2026-08-31/"
+            storage.copy("prd/cad_operacoes/data_str=2026-08-31/exec-42_ab12.parquet",
+                         "prd/arquivo/2026T3/cad_operacoes/data_str=2026-08-31/"
                          "exec-42_ab12.parquet")
 
         :param source: o arquivo de origem, relativo à raiz.
@@ -380,7 +380,7 @@ class Storage:
 
         .. code-block:: python
 
-            storage.delete(storage.list_files("prod/staging/exec-42"))
+            storage.delete(storage.list_files("prd/staging/exec-42"))
 
         :param paths: os arquivos, relativos à raiz; um caminho ausente não é erro.
         """
@@ -414,7 +414,7 @@ class Storage:
 
         .. code-block:: python
 
-            with storage.open_output_stream("prod/staging/exec-42/lote.parquet") as sink:
+            with storage.open_output_stream("prd/staging/exec-42/lote.parquet") as sink:
                 pq.write_table(table, sink)
 
         :param path: o arquivo, relativo à raiz; na pasta local, a pasta do arquivo é criada.
@@ -433,7 +433,7 @@ class Storage:
 
         .. code-block:: python
 
-            text, fingerprint = storage.read_text("prod/_serialize_db/snapshots.json")
+            text, fingerprint = storage.read_text("prd/_serialize_db/snapshots.json")
 
         :param path: o arquivo, relativo à raiz, em UTF-8.
         :return: o texto e a impressão digital: a etag no S3, o ``sha256`` na pasta local.

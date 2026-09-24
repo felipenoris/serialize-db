@@ -1322,8 +1322,8 @@ class RedshiftEngine:
 
         .. code-block:: python
 
-            engine.unloaded_paths("prod/staging/exec-42/stream/ab12")
-            # ["prod/staging/exec-42/stream/ab12/0000_part_00.parquet"]
+            engine.unloaded_paths("prd/staging/exec-42/stream/ab12")
+            # ["prd/staging/exec-42/stream/ab12/0000_part_00.parquet"]
 
         :param prefix: o destino do ``UNLOAD``, relativo à raiz.
         :return: os caminhos, relativos à raiz; sem manifesto, a lista vazia quando
@@ -1736,7 +1736,7 @@ class RedshiftEngine:
 
         .. code-block:: python
 
-            staging = "prod/staging/exec-2026-09-05"
+            staging = "prd/staging/exec-2026-09-05"
             engine = RedshiftEngine(config, "exec-2026-09-05", storage, staging)
             try:
                 engine.ingest(Operacao.__table__, uri, 3)

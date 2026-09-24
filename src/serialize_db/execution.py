@@ -129,7 +129,7 @@ class Database:
 
         .. code-block:: python
 
-            db.uri(Lancamento.__table__)   # "s3://bucket/projeto/delta/prod/cad_lancamentos"
+            db.uri(Lancamento.__table__)   # "s3://bucket/projeto/delta/prd/cad_lancamentos"
 
         :param table: a tabela do modelo.
         :return: a URI ``<raiz>/<ambiente>/<tabela>``, sem barra final.
@@ -143,7 +143,7 @@ class Database:
 
         .. code-block:: python
 
-            db.control_path()   # "prod/_serialize_db/snapshots.json"
+            db.control_path()   # "prd/_serialize_db/snapshots.json"
 
         :return: o caminho relativo à raiz.
         """
@@ -156,7 +156,7 @@ class Database:
 
         .. code-block:: python
 
-            db.staging_prefix("exec-2026-09-05")   # "prod/staging/exec-2026-09-05"
+            db.staging_prefix("exec-2026-09-05")   # "prd/staging/exec-2026-09-05"
 
         :param execution_id: o identificador da execução.
         :return: o prefixo ``<ambiente>/staging/<execution_id>``, relativo à raiz.
@@ -170,7 +170,7 @@ class Database:
 
         .. code-block:: python
 
-            db.publication_prefix("exec-2026-09-05")   # "prod/publicacao/exec-2026-09-05"
+            db.publication_prefix("exec-2026-09-05")   # "prd/publicacao/exec-2026-09-05"
 
         :param execution_id: o identificador da execução que publica.
         :return: o prefixo ``<ambiente>/publicacao/<execution_id>``, relativo à raiz.
@@ -184,7 +184,7 @@ class Database:
 
         .. code-block:: python
 
-            db.archive_prefix("2026T3")   # "prod/arquivo/2026T3"
+            db.archive_prefix("2026T3")   # "prd/arquivo/2026T3"
 
         :param name: o nome do snapshot.
         :return: o caminho ``<ambiente>/arquivo/<nome>``, relativo à raiz.

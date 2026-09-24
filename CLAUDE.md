@@ -753,23 +753,16 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   target run of `tests/test_publication.py` of 2026-09-24 at 13:05. Stage 7 absorbed the script on 2026-09-24.
 - The code review of `src/` and the package tests of 2026-09-24, at the user's request, applied the
   code rules and the docstring standard at the function level: `check_models` lists a table with
-  two partition columns, an empty `SERIALIZE_DB_ENVIRONMENT` means `dev` in every subcommand,
+  two partition columns, an empty `SERIALIZE_DB_ENVIRONMENT` counts as absent in every subcommand,
   `Storage.create_text` and `bind(sql, params, dialect)` replace the old names, and the helpers the
   engines repeated moved to `serialize_db.engine`, `sql` and `audit`; what it kept and why is in
   `.claude/memory/decisions.md`.
 - Stage 10, the read access and the snapshot channel (`plan/PLAN-STAGE-10.md`), was planned on
-  2026-09-24 at the user's request, with every decision closed the same day: the `channels` key
-  of the control file with `default`, moved only by `serialize-db channel --name default
-  --snapshot <name>`, and the reserved `current` channel for the current version;
-  `serialize-db publish` only by `--snapshot` or `--channel`, a rollback to an older snapshot
-  included, and `run.publish_redshift` and `serialize-db run --redshift` removed; and
-  `serialize_db.reader` with `db.open_delta()` (DuckDB views over the `default` snapshot, a named
-  or archived one, or `current`, `materialize` of tables and partitions, and a `weakref.finalize`
-  that deletes the temporary folder of a reader left open), `db.open_redshift()` and
-  `serialize_db.reader.open_redshift(...)`, which read the `SERIALIZE_DB_REDSHIFT_*` variables
-  when `config` is `None` and run only `query` without the client's own `UNLOAD` destination.
-  The interface review of the same day kept everything else (`.claude/memory/decisions.md`).
-  No code yet.
+  2026-09-24 at the user's request, with every decision closed the same day and the interface
+  review of that day (`.claude/memory/decisions.md`): the `default` channel moved only by
+  `serialize-db channel`, the reserved `current` channel, `serialize-db publish` by `--snapshot`
+  or `--channel` without `run.publish_redshift`, and `serialize_db.reader` with `db.open_delta()`,
+  `db.open_redshift()` and `serialize_db.reader.open_redshift(...)`. No code yet.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still

@@ -337,12 +337,12 @@ def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixtu
 def test_empty_environment_variable_counts_as_absent(db: Database, capsys: pytest.CaptureFixture,
                                                      monkeypatch: pytest.MonkeyPatch) -> None:
     """``SERIALIZE_DB_ENVIRONMENT`` vazia conta como ausente, como em ``run``, ``audit`` e
-    ``publish``: o ambiente é ``dev``, e não um erro de uso."""
+    ``publish``: o ambiente é ``dsv``, e não um erro de uso."""
     monkeypatch.setenv("SERIALIZE_DB_ENVIRONMENT", "")
     arguments = ["snapshot", "--root", db.root, "--metadata", METADATA, "--name", "2026T3"]
     assert cli.main(arguments) == 0
     assert "snapshot 2026T3 gravado com 0 tabela(s)" in capsys.readouterr().out
-    control, _ = delta.read_snapshots(db.storage, "dev")
+    control, _ = delta.read_snapshots(db.storage, "dsv")
     assert control["snapshots"] == {"2026T3": {}}
 
 
