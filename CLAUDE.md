@@ -631,7 +631,9 @@ prefix: the commit keys `serialize_db_execution_id`, `serialize_db_input_version
 `serialize_db_execution_id`, and the Redshift control table
 `serialize_db_publications(table_name, delta_version, execution_id, published_at)`, whose columns
 stay unprefixed because the table name is the namespace. `snapshot` is an accepted loanword in
-prose. Every variable the project requires starts with `SERIALIZE_DB_` (`SERIALIZE_DB_ROOT` and the
+prose. The production environment is `prd` (user decision of 2026-09-24): examples, commands,
+docstrings and tests use it, and the dated records of the target runs before the decision keep
+the `prod` they ran with. Every variable the project requires starts with `SERIALIZE_DB_` (`SERIALIZE_DB_ROOT` and the
 library's own, `SERIALIZE_DB_REDSHIFT_*`, `SERIALIZE_DB_TEST_*`, `SERIALIZE_DB_DUCKDB_EXTENSIONS`);
 the unprefixed ones the probes and the suites read are third-party standards (`AWS_REGION`,
 `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL*`, `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, the proxy

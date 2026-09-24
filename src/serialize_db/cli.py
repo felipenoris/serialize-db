@@ -35,21 +35,21 @@ Exemplo:
         --statements pipeline.queries:STATEMENTS sql/
     serialize-db sql check --metadata pipeline.models:Base.metadata \\
         --statements pipeline.queries:STATEMENTS sql/
-    serialize-db run --root s3://bucket/delta --environment prod --partition 2026-08-31 \\
+    serialize-db run --root s3://bucket/delta --environment prd --partition 2026-08-31 \\
         --metadata pipeline.models:Base.metadata pipeline.mensal:main
     serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
-    serialize-db load --root s3://bucket/delta --environment prod \\
+    serialize-db load --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --source s3://bucket/db_projetado
     serialize-db publish --init
-    serialize-db publish --root s3://bucket/delta --environment prod \\
+    serialize-db publish --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --tables cad_lancamentos_projetados
-    serialize-db publish --root s3://bucket/delta --environment prod \\
+    serialize-db publish --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --status
-    serialize-db snapshot --root s3://bucket/delta --environment prod \\
+    serialize-db snapshot --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --name 2026T3
-    serialize-db vacuum --root s3://bucket/delta --environment prod \\
+    serialize-db vacuum --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --apply
-    serialize-db history --root s3://bucket/delta --environment prod \\
+    serialize-db history --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --table cad_lancamentos
 
 O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff

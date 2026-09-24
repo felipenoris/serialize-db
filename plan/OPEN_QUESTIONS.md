@@ -79,6 +79,13 @@ foi medido em [`POC.md`](POC.md).
   o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o caminho de
   credencial que serve a ele.
 
+- **O ambiente `prod` no ambiente alvo.** A carga das 14:16 e a bateria das 16:51 de 2026-09-24
+  gravaram o banco em `<raiz>/prod/` e publicaram as 12 tabelas como `prod_<tabela>`, com as
+  linhas delas em `serialize_db_publications` ([`POC.md`](POC.md)). O ambiente de produção é
+  `prd` desde a decisão do usuário do mesmo dia, e os comandos de `SUITE.md` gravam em
+  `<raiz>/prd/` e publicam `prd_<tabela>`. Espera o usuário: despublicar o `prod`
+  (`serialize-db publish --unpublish --environment prod`) e apagar a pasta, ou mantê-lo.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão

@@ -58,8 +58,8 @@ def folder(local_location: LocalLocation) -> Path:
 
 @pytest.fixture
 def db(folder: Path) -> Database:
-    """O banco do teste, numa raiz Delta nova, no ambiente ``prod``."""
-    return Database(str(folder / "delta"), "prod", Base.metadata)
+    """O banco do teste, numa raiz Delta nova, no ambiente ``prd``."""
+    return Database(str(folder / "delta"), "prd", Base.metadata)
 
 
 @pytest.fixture
@@ -533,7 +533,7 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = str(folder / "delta")
     common = ["load", "--metadata", "client_model:Base.metadata", "--source", origin_of(base),
-              "--environment", "prod"]
+              "--environment", "prd"]
     assert cli.main([*common, "--root", root]) == 0
     printed = capsys.readouterr().out
     assert "fora do modelo: alembic_version, meta_update_status, schema.json" in printed
@@ -542,7 +542,7 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     partitioned_line = printed.index("cad_operacoes: 4 partição(ões) gravada(s): 2026-01-31")
     assert unpartitioned_line < partitioned_line
     assert "conversões: id_lancamento: int32 -> int64" in printed
-    assert Path(root, "prod", "cad_lancamentos", "_delta_log").is_dir()
+    assert Path(root, "prd", "cad_lancamentos", "_delta_log").is_dir()
 
     # A segunda execução não grava nada.
     assert cli.main([*common, "--root", root]) == 0

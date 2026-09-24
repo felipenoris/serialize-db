@@ -81,14 +81,14 @@ export AWS_DEFAULT_REGION=sa-east-1
 
 .venv/bin/python scripts/migrate_parquet_to_delta.py \
     --metadata client_model:Base.metadata \
-    --environment prod \
+    --environment prd \
     --source $SOURCE_PATH \
     --root $TARGET_ROOT_PATH \
     --report probes/output/carga_inicial_delta.json
 
 .venv/bin/serialize-db audit \
     --root $TARGET_ROOT_PATH \
-    --environment prod \
+    --environment prd \
     --metadata client_model:Base.metadata \
     --table cad_lancamentos \
     --partitions 2026-01-31 \
@@ -96,10 +96,10 @@ export AWS_DEFAULT_REGION=sa-east-1
 
 .venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH
 
-.venv/bin/serialize-db history --root $TARGET_ROOT_PATH --environment prod --metadata client_model:Base.metadata --table cad_lancamentos
-.venv/bin/serialize-db snapshot --root $TARGET_ROOT_PATH --environment prod --metadata client_model:Base.metadata --name carga-2026-09-24
-.venv/bin/serialize-db vacuum --root $TARGET_ROOT_PATH --environment prod --metadata client_model:Base.metadata
-.venv/bin/serialize-db archive --root $TARGET_ROOT_PATH --environment prod --metadata client_model:Base.metadata --name carga-2026-09-24
+.venv/bin/serialize-db history --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos
+.venv/bin/serialize-db snapshot --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --name carga-2026-09-24
+.venv/bin/serialize-db vacuum --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata
+.venv/bin/serialize-db archive --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --name carga-2026-09-24
 ```
 
 # Publicação Delta -> Redshift
@@ -119,15 +119,15 @@ export PYTHONPATH=tests
 .venv/bin/serialize-db publish --init
 
 # 2. Primeiro uma tabela pequena, para validar o caminho no alvo.
-.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prod \
+.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --tables cad_contas
 
 # 3. A base inteira, uma conexão por tabela em paralelo.
-.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prod \
+.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --max-workers 4
 
 # 4. O estado: versão publicada, versão atual e partições pendentes por tabela.
-.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prod \
+.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --status
 ```
 

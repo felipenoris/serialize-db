@@ -57,7 +57,7 @@ def folder(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> Pa
 def db(folder: Path) -> Database:
     """O banco do teste: os lançamentos nas duas partições, versões 1 e 2, e as contas, versão 1,
     cada commit com o ``execution_id`` da biblioteca."""
-    database = Database(str(folder / "delta"), "prod", Base.metadata)
+    database = Database(str(folder / "delta"), "prd", Base.metadata)
     delta.create_table(database.uri(ENTRIES), ENTRIES, database.storage)
     for index, month in enumerate(MONTHS, start=1):
         publish(database, ENTRIES, month, entry_rows(month, 1 + index * 10, 10), f"exec-{index}")
@@ -75,7 +75,7 @@ def publish(db: Database, table: sa.Table, value: str | None, data: pa.Table,
 
 def common_arguments(db: Database) -> list[str]:
     """Os argumentos comuns dos subcomandos da operação."""
-    return ["--root", db.root, "--environment", "prod", "--metadata", METADATA]
+    return ["--root", db.root, "--environment", "prd", "--metadata", METADATA]
 
 
 def exit_code(arguments: list[str]) -> int | str | None:
@@ -114,7 +114,7 @@ def test_snapshot_records_every_table_and_history_shows_the_metadata(
     assert "cad_lancamentos: versão 2" in printed
     assert "cad_contas: versão 1" in printed
     assert "snapshot 2026T3 gravado com 2 tabela(s)" in printed
-    control, _ = delta.read_snapshots(db.storage, "prod")
+    control, _ = delta.read_snapshots(db.storage, "prd")
     assert control["snapshots"] == {"2026T3": {"cad_contas": 1, "cad_lancamentos": 2}}
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 2
     assert "já existe" in capsys.readouterr().err
@@ -233,8 +233,8 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     assert "versão 1 no arquivo" in printed
     assert "snapshot 2026T3 movido para archived" in printed
 
-    archived_entries_uri = storage.uri_of("prod/arquivo/2026T3/cad_lancamentos")
-    archived_accounts_uri = storage.uri_of("prod/arquivo/2026T3/cad_contas")
+    archived_entries_uri = storage.uri_of("prd/arquivo/2026T3/cad_lancamentos")
+    archived_accounts_uri = storage.uri_of("prd/arquivo/2026T3/cad_contas")
     archived_entries = delta.open_table(archived_entries_uri, storage)
     assert archived_entries.version() == 2
     assert delta.open_table(archived_accounts_uri, storage).version() == 1
@@ -246,7 +246,7 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     copied = pa.schema(archived_entries.schema())
     assert not copied.field("id_lancamento").nullable
     assert archived_entries.metadata().name == "cad_lancamentos"
-    control, _ = delta.read_snapshots(storage, "prod")
+    control, _ = delta.read_snapshots(storage, "prd")
     assert control["snapshots"] == {}
     assert control["archived"] == {"2026T3": {"cad_contas": 1, "cad_lancamentos": 2}}
 
@@ -259,17 +259,17 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     assert "não está em snapshots" in capsys.readouterr().err
 
     # Um snapshot com uma tabela que já não existe na raiz é recusado antes de qualquer cópia.
-    delta.snapshot(storage, "prod", "2026T0", {"cad_contas": 1, "sumida": 4})
+    delta.snapshot(storage, "prd", "2026T0", {"cad_contas": 1, "sumida": 4})
     assert cli.main(["archive", *common_arguments(db), "--name", "2026T0"]) == 2
     assert "sumida não existe em" in capsys.readouterr().err
-    control, _ = delta.read_snapshots(storage, "prod")
+    control, _ = delta.read_snapshots(storage, "prd")
     assert control["snapshots"] == {"2026T0": {"cad_contas": 1, "sumida": 4}}
-    assert not Path(storage.uri_of("prod/arquivo/2026T0")).exists()
+    assert not Path(storage.uri_of("prd/arquivo/2026T0")).exists()
 
     # Um arquivamento interrompido na terceira cópia, o segundo arquivo de cad_lancamentos, deixa
     # cad_contas inteira e uma partição registrada; a repetição pula as duas, copia a que falta e
     # move a entrada.
-    delta.snapshot(storage, "prod", "2026T4", {"cad_contas": 1, "cad_lancamentos": 3})
+    delta.snapshot(storage, "prd", "2026T4", {"cad_contas": 1, "cad_lancamentos": 3})
     copies = []
     original_copy = Storage.copy
 
@@ -284,9 +284,9 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
         patch.setattr(Storage, "copy", copy_until_the_third)
         with pytest.raises(OSError, match="cópia interrompida"):
             cli.main(["archive", *common_arguments(db), "--name", "2026T4"])
-    resumed_entries_uri = storage.uri_of("prod/arquivo/2026T4/cad_lancamentos")
+    resumed_entries_uri = storage.uri_of("prd/arquivo/2026T4/cad_lancamentos")
     assert delta.open_table(resumed_entries_uri, storage).version() == 1
-    control, _ = delta.read_snapshots(storage, "prod")
+    control, _ = delta.read_snapshots(storage, "prd")
     assert "2026T4" in control["snapshots"]
     capsys.readouterr()  # descarta a saída do arquivamento interrompido
 
@@ -298,9 +298,9 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     assert count_and_sum(db, resumed_entries_uri) == count_and_sum(db, entries_uri)
     resumed_files = files_of_version(db, resumed_entries_uri)
     assert resumed_files == files_of_version(db, entries_uri, version=3)
-    resumed_accounts_uri = storage.uri_of("prod/arquivo/2026T4/cad_contas")
+    resumed_accounts_uri = storage.uri_of("prd/arquivo/2026T4/cad_contas")
     assert files_of_version(db, resumed_accounts_uri) == accounts_files
-    control, _ = delta.read_snapshots(storage, "prod")
+    control, _ = delta.read_snapshots(storage, "prd")
     assert control["archived"]["2026T4"] == {"cad_contas": 1, "cad_lancamentos": 3}
 
 
@@ -310,16 +310,16 @@ def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixtu
     storage = db.storage
     # Por cópia, por reescrita e de uma versão antiga.
     export = ["export", *common_arguments(db), "--table", "cad_lancamentos", "--destination"]
-    copy_uri = storage.uri_of("prod/exportacao/copia")
+    copy_uri = storage.uri_of("prd/exportacao/copia")
     assert cli.main([*export, copy_uri]) == 0
     assert re.search(r"cad_lancamentos: 2 arquivo\(s\) em .*, em \d+\.\d s; "
                      r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
-    rewrite_uri = storage.uri_of("prod/exportacao/reescrita")
+    rewrite_uri = storage.uri_of("prd/exportacao/reescrita")
     assert cli.main([*export, rewrite_uri, "--mode", "rewrite"]) == 0
-    assert cli.main([*export, storage.uri_of("prod/exportacao/antiga"), "--version", "1"]) == 0
+    assert cli.main([*export, storage.uri_of("prd/exportacao/antiga"), "--version", "1"]) == 0
     assert "1 arquivo(s) em" in capsys.readouterr().out.splitlines()[-1]
     for folder_name in ("copia", "reescrita"):
-        files = storage.list_files(f"prod/exportacao/{folder_name}", ".parquet")
+        files = storage.list_files(f"prd/exportacao/{folder_name}", ".parquet")
         assert len(files) == 2
         assert all("/data_base_str=2026-0" in path for path in files)
     with storage.duckdb_connect() as connection:
@@ -356,7 +356,7 @@ def test_cli_operation_usage_errors(db: Database, capsys: pytest.CaptureFixture)
     projected_history = ["history", *common_arguments(db), "--table", "cad_lancamentos_projetados"]
     assert cli.main(projected_history) == 2
     assert cli.main(["export", *common_arguments(db), "--table", "cad_lancamentos_projetados",
-                     "--destination", db.storage.uri_of("prod/exportacao/x")]) == 2
+                     "--destination", db.storage.uri_of("prd/exportacao/x")]) == 2
     printed_errors = capsys.readouterr().err
     assert "não existe" in printed_errors
     assert "Traceback" not in printed_errors

@@ -17,7 +17,7 @@ Tomadas em 2026-09-24, na conversa que propôs a etapa:
 - O leitor é um objeto próprio, aberto a partir do `Database`, com a implementação em
   `serialize_db.reader` e os nomes `open_delta` e `open_redshift`. Ele não é `Execution`, que fixa
   partição e `execution_id`, grava snapshot e publica. Ele também não é uma `Connection` do
-  SQLAlchemy, que devolve linhas e não troca `cad_lancamentos` por `prod_cad_lancamentos`.
+  SQLAlchemy, que devolve linhas e não troca `cad_lancamentos` por `prd_cad_lancamentos`.
 - O resultado é Arrow, como nos motores: `query` devolve a `pa.Table`, e
   `to_pandas(types_mapper=pd.ArrowDtype)` a leva ao pandas, pela regra da troca de dados de
   2026-09-20 ([`PLAN.md`](PLAN.md), seção "A troca de dados com o código cliente").
@@ -80,7 +80,7 @@ from serialize_db import Database
 from serialize_db.engine.redshift import RedshiftConfig
 from serialize_db.reader import open_redshift
 
-db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
+db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
 
 with db.open_delta() as reader:                     # o último snapshot
     reader.materialize(Conta.__table__)
@@ -95,7 +95,7 @@ with db.open_redshift(RedshiftConfig.from_environment()) as reader:   # o time
     frame = reader.query(stmt).to_pandas(types_mapper=pd.ArrowDtype)
 
 config = RedshiftConfig.from_environment()          # o cliente, sem acesso à raiz Delta
-with open_redshift(Base.metadata, "prod", config, "s3://bucket-do-cliente/tmp") as reader:
+with open_redshift(Base.metadata, "prd", config, "s3://bucket-do-cliente/tmp") as reader:
     with reader.stream(stmt) as batches:            # resultado grande, pelo UNLOAD
         for batch in batches:
             work(batch)

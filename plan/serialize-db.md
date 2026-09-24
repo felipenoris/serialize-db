@@ -113,7 +113,7 @@ lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
 | --- | --- | --- | --- |
 | Metadados de commit | `commitInfo` de cada commit da biblioteca. | `serialize_db_execution_id`; `serialize_db_input_versions`, o JSON `{tabela: versão}` das versões lidas, fixado na abertura da execução; `serialize_db_snapshot` só na execução que marca um snapshot. | `publish_partition` e `register_files`, por `CommitProperties(custom_metadata=...)`. |
 | Arquivo de controle | `<ambiente>/_serialize_db/snapshots.json`. | `{"snapshots": {nome: {tabela: versão}}}`, com todas as tabelas do ambiente, lidas ou gravadas, e `"archived"` com as entradas dos snapshots arquivados, no mesmo formato ([etapa 9](PLAN-STAGE-9.md)). | `snapshot`, com `IfMatch`; `archive` move a entrada. |
-| Tabela de controle | `serialize_db_publications(table_name, delta_version, execution_id, published_at)` no esquema do Redshift; `table_name` leva o prefixo do ambiente, como `prod_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga; a tabela é criada uma vez pelo usuário, por `create_publications_table`. |
+| Tabela de controle | `serialize_db_publications(table_name, delta_version, execution_id, published_at)` no esquema do Redshift; `table_name` leva o prefixo do ambiente, como `prd_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga; a tabela é criada uma vez pelo usuário, por `create_publications_table`. |
 
 O registro durável de uma execução é o `commitInfo` das tabelas que ela gravou; o relatório da
 auditoria e o resumo da execução vão para o log do processo, não para `_serialize_db/`.
@@ -194,7 +194,7 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
    por `register_files` depois das conferências da [etapa 3](PLAN-STAGE-3.md), sem os dados passarem
    pela máquina local; a partição com `Double` não finito troca para a releitura pelo leitor da
    [etapa 7](PLAN-STAGE-7.md) e a gravação por `publish_partition`.
-6. `run.publish_redshift` carrega as tabelas `prod_*` a partir do Delta, pelo mesmo caminho da
+6. `run.publish_redshift` carrega as tabelas `prd_*` a partir do Delta, pelo mesmo caminho da
    execução no DuckDB, e `cleanup` apaga as tabelas do sandbox e o staging.
 
 ### Publicação para clientes no Redshift

@@ -39,7 +39,7 @@ Exemplo:
 
     config = RedshiftConfig(workgroup="controladoria-wg", share_database="datalake_rw_shared",
                             schema="sbx_aco_decon", region="sa-east-1")
-    staging = "prod/staging/exec-2026-09-05"
+    staging = "prd/staging/exec-2026-09-05"
     with RedshiftEngine(config, "exec-2026-09-05", storage, staging) as engine:
         engine.ingest(Lancamento.__table__, uri, 143, partitions=["2026-07-31", "2026-08-31"])
         engine.query(sa.select(sa.func.count()).select_from(Lancamento.__table__))
@@ -891,7 +891,7 @@ class RedshiftEngine:
     .. code-block:: python
 
         engine = RedshiftEngine(RedshiftConfig.from_environment(), "exec-2026-09-05", storage,
-                                "prod/staging/exec-2026-09-05")
+                                "prd/staging/exec-2026-09-05")
         try:
             engine.ingest(Operacao.__table__, uri, 3)
             print(engine.query("SELECT count(*) FROM {prefix}cad_operacoes"))

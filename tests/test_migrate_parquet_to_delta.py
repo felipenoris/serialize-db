@@ -72,7 +72,7 @@ def test_main_migrates_the_whole_base(base: source.SourceBase, folder: Path,
     root = str(folder / "delta")
     report_path = folder / "relatorio-migracao.json"
     arguments = ["--metadata", "client_model:Base.metadata", "--source", str(base.root),
-                 "--root", root, "--environment", "prod", "--report", str(report_path)]
+                 "--root", root, "--environment", "prd", "--report", str(report_path)]
     assert migrate.main(arguments) == 0
     printed = capsys.readouterr().out
     first_line = printed.splitlines()[0]
@@ -80,7 +80,7 @@ def test_main_migrates_the_whole_base(base: source.SourceBase, folder: Path,
     assert "memory_limit" in first_line
     assert "fora do modelo: alembic_version, meta_update_status, schema.json" in printed
     assert "12 tabelas conferidas, contagens e somas iguais" in printed
-    assert Path(root, "prod", "cad_lancamentos", "_delta_log").is_dir()
+    assert Path(root, "prd", "cad_lancamentos", "_delta_log").is_dir()
 
     # O relatório: o ambiente, a ordem, as contagens e as partições.
     document = json.loads(report_path.read_text())
@@ -88,7 +88,7 @@ def test_main_migrates_the_whole_base(base: source.SourceBase, folder: Path,
     assert environment["cpus"] > 0
     assert environment["memory_total_mb"] > 0
     assert {"threads", "memory_limit"} <= set(environment["duckdb_limits"])
-    assert environment["arguments"]["environment"] == "prod"
+    assert environment["arguments"]["environment"] == "prd"
     table_order = [table["table"] for table in document["tables"]]
     assert table_order[-4:] == ["cad_operacoes", "rel_contrato_operacao", "cad_contratos",
                                 "cad_lancamentos"]

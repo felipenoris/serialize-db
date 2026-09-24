@@ -191,7 +191,7 @@ def execution(engine: FakeEngine) -> Iterator[FakeEngine]:
     que acontecer."""
     # A abertura fica dentro do try: uma ingestão que falha também descarta o sandbox.
     try:
-        engine.ingest("cad_lancamentos", "/dados/prod/cad_lancamentos", 143)
+        engine.ingest("cad_lancamentos", "/dados/prd/cad_lancamentos", 143)
         yield engine
     finally:
         engine.cleanup()
@@ -202,7 +202,7 @@ def test_context_manager_cleans_up_on_failure() -> None:
     vários recursos."""
     engine = FakeEngine()
     with execution(engine) as run:
-        assert run.calls == [("cad_lancamentos", "/dados/prod/cad_lancamentos", 143)]
+        assert run.calls == [("cad_lancamentos", "/dados/prd/cad_lancamentos", 143)]
     assert engine.cleaned
 
     # AuditFailed é a exceção da biblioteca para a auditoria reprovada.
@@ -403,23 +403,23 @@ def test_json_control_file_and_commit_metadata() -> None:
 def test_storage_uris() -> None:
     """``urllib.parse`` separa bucket e prefixo; ``PurePosixPath`` junta chaves; ``Path`` cuida da
     pasta local."""
-    parts = urllib.parse.urlparse("s3://awsds-sandbox/dzd/projeto/dev/prod/cad_lancamentos")
+    parts = urllib.parse.urlparse("s3://awsds-sandbox/dzd/projeto/dev/prd/cad_lancamentos")
     assert parts.scheme == "s3"
     assert parts.netloc == "awsds-sandbox"
-    assert parts.path.lstrip("/") == "dzd/projeto/dev/prod/cad_lancamentos"
+    assert parts.path.lstrip("/") == "dzd/projeto/dev/prd/cad_lancamentos"
 
     # As chaves do S3 usam / independentemente do sistema; PurePosixPath as compõe sem tocar o
     # disco.
-    key = PurePosixPath("dzd/projeto/dev") / "prod" / "cad_lancamentos" / "_delta_log"
-    assert str(key) == "dzd/projeto/dev/prod/cad_lancamentos/_delta_log"
-    assert key.relative_to("dzd/projeto/dev").parts == ("prod", "cad_lancamentos", "_delta_log")
+    key = PurePosixPath("dzd/projeto/dev") / "prd" / "cad_lancamentos" / "_delta_log"
+    assert str(key) == "dzd/projeto/dev/prd/cad_lancamentos/_delta_log"
+    assert key.relative_to("dzd/projeto/dev").parts == ("prd", "cad_lancamentos", "_delta_log")
 
     # A pasta local: caminho absoluto ou file://, os dois aceitos pelo delta-rs.
-    local = Path("/dados/prod/cad_lancamentos")
+    local = Path("/dados/prd/cad_lancamentos")
     assert urllib.parse.urlparse(str(local)).scheme == ""
     assert local.is_absolute()
-    assert local.as_uri() == "file:///dados/prod/cad_lancamentos"
-    assert Path(urllib.parse.urlparse("file:///dados/prod").path) == Path("/dados/prod")
+    assert local.as_uri() == "file:///dados/prd/cad_lancamentos"
+    assert Path(urllib.parse.urlparse("file:///dados/prd").path) == Path("/dados/prd")
 
 
 def partition_of(file_action: dict) -> str:

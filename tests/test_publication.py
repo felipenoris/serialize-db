@@ -143,7 +143,7 @@ def use_fake(monkeypatch: pytest.MonkeyPatch, connection: FakeConnection) -> Non
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
 
 
-def local_db(local_location: LocalLocation, environment: str = "prod") -> Database:
+def local_db(local_location: LocalLocation, environment: str = "prd") -> Database:
     """Um banco numa pasta nova, com o modelo das suítes."""
     root = local_location.child(f"publicacao/{uuid.uuid4().hex[:8]}")
     return Database(root, environment, Base.metadata)
@@ -214,13 +214,13 @@ def test_publication_statements_text() -> None:
     """Os comandos da primeira publicação e de uma seguinte, um por item, com a linha de controle
     por último, sem ``BEGIN``, ``COMMIT``, ``TRUNCATE`` nem ``COMPUPDATE``, nomes em duas partes e
     credenciais mascaradas; ``control_read``, ``published_ddl`` e ``unpublication_statements``."""
-    manifests = {MONTHS[1]: "s3://b/prod/publicacao/exec-1/cad_lancamentos/2026-08-31.manifest"}
+    manifests = {MONTHS[1]: "s3://b/prd/publicacao/exec-1/cad_lancamentos/2026-08-31.manifest"}
     credentials = "ACCESS_KEY_ID 'AKIA' SECRET_ACCESS_KEY 'segredo' SESSION_TOKEN 'token'"
-    first = publication.publication_statements(SCHEMA, "prod", ENTRIES, [MONTHS[1]], manifests,
+    first = publication.publication_statements(SCHEMA, "prd", ENTRIES, [MONTHS[1]], manifests,
                                                58, None, "exec-1", credentials)
-    published = f'"{SCHEMA}"."prod_cad_lancamentos"'
-    staging = '"prod_cad_lancamentos_staging"'
-    assert first[0] == publication.published_ddl(SCHEMA, "prod", ENTRIES)
+    published = f'"{SCHEMA}"."prd_cad_lancamentos"'
+    staging = '"prd_cad_lancamentos_staging"'
+    assert first[0] == publication.published_ddl(SCHEMA, "prd", ENTRIES)
     assert first[0].startswith(f'CREATE TABLE {published} (\n    "id_lancamento" BIGINT NOT NULL,')
     assert '    PRIMARY KEY ("id_lancamento")\n) SORTKEY ("data_base", "id_lancamento")' in first[0]
     assert first[1].startswith(f"CREATE TEMP TABLE {staging} (")
@@ -233,7 +233,7 @@ def test_publication_statements_text() -> None:
     assert first[5].startswith(f"INSERT INTO {published} (")
     assert f"JSON_PARSE(\"meta\"), \"to\", \"codigo\", '{MONTHS[1]}' FROM {staging}" in first[5]
     assert first[6] == f"DROP TABLE {staging}"
-    assert first[7] == (f"INSERT INTO {CONTROL} VALUES ('prod_cad_lancamentos', 58, 'exec-1', "
+    assert first[7] == (f"INSERT INTO {CONTROL} VALUES ('prd_cad_lancamentos', 58, 'exec-1', "
                         "getdate())")
     assert len(first) == 8
     joined = "\n".join(mask(text) for text in first)
@@ -244,14 +244,14 @@ def test_publication_statements_text() -> None:
 
     # A publicação seguinte: sem o CREATE TABLE, a partição removida só com o DELETE, e o UPDATE
     # condicionado à versão lida.
-    following = publication.publication_statements(SCHEMA, "prod", ENTRIES,
+    following = publication.publication_statements(SCHEMA, "prd", ENTRIES,
                                                    [MONTHS[0], MONTHS[1]], manifests, 58, 57,
                                                    "exec-2", credentials)
     assert following[0].startswith("CREATE TEMP TABLE")
     assert following[1] == f"DELETE FROM {published} WHERE \"data_base_str\" = '{MONTHS[0]}'"
     assert following[2] == f"DELETE FROM {published} WHERE \"data_base_str\" = '{MONTHS[1]}'"
     assert following[-1] == (f"UPDATE {CONTROL} SET delta_version = 58, execution_id = 'exec-2', "
-                             "published_at = getdate() WHERE table_name = 'prod_cad_lancamentos' "
+                             "published_at = getdate() WHERE table_name = 'prd_cad_lancamentos' "
                              "AND delta_version = 57")
     assert len(following) == 8
 
@@ -263,11 +263,11 @@ def test_publication_statements_text() -> None:
     assert whole[5].endswith('SELECT "id_conta", "numero" FROM "dev_cad_contas_staging"')
 
     # A leitura da linha de controle e a despublicação.
-    assert publication.control_read(SCHEMA, "prod", ENTRIES) == (
-        f"SELECT delta_version FROM {CONTROL} WHERE table_name = 'prod_cad_lancamentos'")
-    assert publication.unpublication_statements(SCHEMA, "prod", ENTRIES, 58) == [
+    assert publication.control_read(SCHEMA, "prd", ENTRIES) == (
+        f"SELECT delta_version FROM {CONTROL} WHERE table_name = 'prd_cad_lancamentos'")
+    assert publication.unpublication_statements(SCHEMA, "prd", ENTRIES, 58) == [
         f"DROP TABLE {published}",
-        f"DELETE FROM {CONTROL} WHERE table_name = 'prod_cad_lancamentos' AND delta_version = 58",
+        f"DELETE FROM {CONTROL} WHERE table_name = 'prd_cad_lancamentos' AND delta_version = 58",
     ]
 
 
@@ -281,14 +281,14 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     db = local_db(local_location)
     published_entries(db, MONTHS)   # a versão 2
 
-    connection = FakeConnection(rows={"prod_cad_lancamentos": 2})
+    connection = FakeConnection(rows={"prd_cad_lancamentos": 2})
     use_fake(monkeypatch, connection)
     assert publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1") == {ENTRIES.name: 2}
     assert connection.texts()[-3:] == [
-        "BEGIN", publication.control_read(SCHEMA, "prod", ENTRIES), "ROLLBACK"]
+        "BEGIN", publication.control_read(SCHEMA, "prd", ENTRIES), "ROLLBACK"]
 
     # A versão lida acima da do Delta.
-    connection = FakeConnection(rows={"prod_cad_lancamentos": 3})
+    connection = FakeConnection(rows={"prd_cad_lancamentos": 3})
     use_fake(monkeypatch, connection)
     with pytest.raises(ExecutionConflict, match="mais nova"):
         publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1")
@@ -298,7 +298,7 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     uri = db.uri(ENTRIES)
     delta.publish_partition(uri, ENTRIES, MONTHS[1], entry_rows(MONTHS[1], 100, 5), METADATA,
                             db.storage)   # a versão 3
-    connection = FakeConnection(rows={"prod_cad_lancamentos": 2})
+    connection = FakeConnection(rows={"prd_cad_lancamentos": 2})
     use_fake(monkeypatch, connection)
     assert publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1") == {ENTRIES.name: 3}
     texts = connection.texts()
@@ -306,25 +306,25 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     assert texts[-2].startswith(f"UPDATE {CONTROL} SET delta_version = 3")
     assert texts[-2].endswith("AND delta_version = 2")
     deletes = [text for text in texts if text.startswith(f'DELETE FROM "{SCHEMA}"')]
-    assert deletes == [f'DELETE FROM "{SCHEMA}"."prod_cad_lancamentos" '
+    assert deletes == [f'DELETE FROM "{SCHEMA}"."prd_cad_lancamentos" '
                        f"WHERE \"data_base_str\" = '{MONTHS[1]}'"]
     assert len(connection.texts("COPY")) == 1
     manifest_uri = re.search(r"FROM '([^']+)'", connection.texts("COPY")[0]).group(1)
     assert manifest_uri == db.storage.uri_of(
-        f"prod/publicacao/exec-1/cad_lancamentos/{MONTHS[1]}.manifest")
+        f"prd/publicacao/exec-1/cad_lancamentos/{MONTHS[1]}.manifest")
     manifest = json.loads(db.storage.read_text(db.storage.relative(manifest_uri))[0])
     assert len(manifest["entries"]) == 1
 
     # O UPDATE sem linha, o 1023 e a tabela que outra primeira publicação criou.
     for label, connection in (
-        ("mudou desde a leitura", FakeConnection(rows={"prod_cad_lancamentos": 2},
+        ("mudou desde a leitura", FakeConnection(rows={"prd_cad_lancamentos": 2},
                                                  update_rowcount=0)),
-        ("1023", FakeConnection(rows={"prod_cad_lancamentos": 2}, fail=(
+        ("1023", FakeConnection(rows={"prd_cad_lancamentos": 2}, fail=(
             r"^DELETE FROM \"esquema\"", server_error(
                 "1023 DETAIL: Serializable isolation violation on table - 12345")))),
         ("outra primeira publicação", FakeConnection(fail=(
             r"^CREATE TABLE \"esquema\"", server_error(
-                'Relation "prod_cad_lancamentos" already exists', "42P07")))),
+                'Relation "prd_cad_lancamentos" already exists', "42P07")))),
     ):
         use_fake(monkeypatch, connection)
         with pytest.raises(ExecutionConflict, match=label):
@@ -358,22 +358,22 @@ def test_reconcile_published_add_column_and_recreate() -> None:
         PublishedColumn("codigo", "character varying", 20, None, None),
         PublishedColumn("data_base_str", "character varying", 10, None, None),
     ]
-    assert publication.reconcile_published(SCHEMA, "prod", ENTRIES, columns) == ([], [])
+    assert publication.reconcile_published(SCHEMA, "prd", ENTRIES, columns) == ([], [])
     spelled = [dataclasses.replace(columns[3], data_type="timestamp"),
                dataclasses.replace(columns[6], data_type="varchar"),
                dataclasses.replace(columns[5], data_type="decimal")]
     respelled = spelled + columns[:3] + [columns[4]] + columns[7:]
-    assert publication.reconcile_published(SCHEMA, "prod", ENTRIES, respelled) == ([], [])
+    assert publication.reconcile_published(SCHEMA, "prd", ENTRIES, respelled) == ([], [])
 
     # As colunas NOT NULL novas são destrutivas; a anulável nova sai por ADD COLUMN.
-    statements, destructive = publication.reconcile_published(SCHEMA, "prod", ENTRIES,
+    statements, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES,
                                                               columns[:-2])
     assert destructive == ["codigo: coluna NOT NULL nova", "data_base_str: coluna NOT NULL nova"]
     assert statements == []
     without_area = [column for column in columns if column.name != "area"]
-    statements, destructive = publication.reconcile_published(SCHEMA, "prod", ENTRIES,
+    statements, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES,
                                                               without_area)
-    assert statements == [f'ALTER TABLE "{SCHEMA}"."prod_cad_lancamentos" ADD COLUMN '
+    assert statements == [f'ALTER TABLE "{SCHEMA}"."prd_cad_lancamentos" ADD COLUMN '
                           '"area" VARCHAR(10)']
     assert destructive == []
 
@@ -383,7 +383,7 @@ def test_reconcile_published_add_column_and_recreate() -> None:
     changed[5] = dataclasses.replace(columns[5], scale=4)
     changed[4] = dataclasses.replace(columns[4], data_type="real")
     changed.append(PublishedColumn("extra", "integer", None, None, None))
-    _, destructive = publication.reconcile_published(SCHEMA, "prod", ENTRIES, changed)
+    _, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES, changed)
     assert [line.split(":")[0] for line in destructive] == ["valor", "preco", "area", "extra"]
     assert destructive[-1] == "extra: removida do modelo"
 
@@ -402,19 +402,19 @@ def test_publication_status_lists_pending_partitions(monkeypatch: pytest.MonkeyP
                             db.storage)
     delta.publish_partition(db.uri(ENTRIES), ENTRIES, MONTHS[1], entry_rows(MONTHS[1], 100, 5),
                             METADATA, db.storage)
-    connection = FakeConnection(rows={"prod_cad_lancamentos": 2, "prod_cad_contas": 1})
+    connection = FakeConnection(rows={"prd_cad_lancamentos": 2, "prd_cad_contas": 1})
     use_fake(monkeypatch, connection)
     statuses = publication.publication_status(db, CONFIG)
     assert statuses == [
-        publication.PublicationStatus("prod_cad_contas", 1, 1, ()),
-        publication.PublicationStatus("prod_cad_lancamentos", 2, 3, (MONTHS[1],)),
+        publication.PublicationStatus("prd_cad_contas", 1, 1, ()),
+        publication.PublicationStatus("prd_cad_lancamentos", 2, 3, (MONTHS[1],)),
     ]
     connection = FakeConnection()
     use_fake(monkeypatch, connection)
     statuses = publication.publication_status(db, CONFIG)
     assert statuses == [
-        publication.PublicationStatus("prod_cad_contas", None, 1, (None,)),
-        publication.PublicationStatus("prod_cad_lancamentos", None, 3, tuple(MONTHS)),
+        publication.PublicationStatus("prd_cad_contas", None, 1, (None,)),
+        publication.PublicationStatus("prd_cad_lancamentos", None, 3, tuple(MONTHS)),
     ]
 
 

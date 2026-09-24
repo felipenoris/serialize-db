@@ -95,8 +95,8 @@ def storage(request: pytest.FixtureRequest) -> Storage:
 
 @pytest.fixture
 def uri(storage: Storage) -> str:
-    """A pasta de ``cad_operacoes`` no ambiente ``prod``, com a tabela criada."""
-    table_uri = storage.uri_of("prod/cad_operacoes")
+    """A pasta de ``cad_operacoes`` no ambiente ``prd``, com a tabela criada."""
+    table_uri = storage.uri_of("prd/cad_operacoes")
     delta.create_table(table_uri, OPERACOES, storage)
     return table_uri
 
@@ -207,7 +207,7 @@ def channels(ids: list[int], names: list[str]) -> pa.Table:
 def test_create_table_is_idempotent(storage: Storage) -> None:
     """Versão 0 nas duas chamadas; o esquema do contrato, a partição, as retenções, o nome e o
     comentário da tabela em ``description`` lidos do log."""
-    uri = storage.uri_of("prod/cad_operacoes")
+    uri = storage.uri_of("prd/cad_operacoes")
     assert not delta.table_exists(uri, storage)
     assert delta.create_table(uri, OPERACOES, storage).version() == 0
     table = delta.create_table(uri, OPERACOES, storage)
@@ -285,7 +285,7 @@ def test_publish_partition_returns_its_own_version(storage: Storage, uri: str,
 
 def test_publish_partition_without_partition_replaces_the_table(storage: Storage) -> None:
     """``value=None`` numa tabela sem partição troca a tabela inteira; um valor nela é recusado."""
-    uri = storage.uri_of("prod/dom_canais")
+    uri = storage.uri_of("prd/dom_canais")
     delta.create_table(uri, CANAIS, storage)
     first = channels([1, 2], ["app", "web"])
     delta.publish_partition(uri, CANAIS, None, first, METADATA, storage)
@@ -690,7 +690,7 @@ def test_version_diff_counts_data_changes_only(storage: Storage, uri: str) -> No
     assert delta.version_diff(uri, 6, 6, OPERACOES, storage) == set()
 
     # A tabela sem partição.
-    canais = storage.uri_of("prod/dom_canais")
+    canais = storage.uri_of("prd/dom_canais")
     delta.create_table(canais, CANAIS, storage)
     data = channels([1], ["app"])
     delta.publish_partition(canais, CANAIS, None, data, METADATA, storage)
@@ -713,32 +713,32 @@ def test_snapshot_control_file_is_written_conditionally(storage: Storage,
     """O primeiro snapshot cria o arquivo, o segundo o atualiza; o nome repetido é erro, o nome
     fora da regra da partição é ``ContractError`` sem gravar, e a escrita concorrente é
     ``ConflictError``."""
-    assert delta.read_snapshots(storage, "prod") == ({"snapshots": {}}, None)
-    delta.snapshot(storage, "prod", "2026T2", {"cad_operacoes": 3, "dom_canais": 1})
-    control = delta.snapshot(storage, "prod", "2026T3", {"cad_operacoes": 5})
+    assert delta.read_snapshots(storage, "prd") == ({"snapshots": {}}, None)
+    delta.snapshot(storage, "prd", "2026T2", {"cad_operacoes": 3, "dom_canais": 1})
+    control = delta.snapshot(storage, "prd", "2026T3", {"cad_operacoes": 5})
     expected = {"snapshots": {"2026T2": {"cad_operacoes": 3, "dom_canais": 1},
                               "2026T3": {"cad_operacoes": 5}}}
     assert control == expected
-    assert delta.read_snapshots(storage, "prod")[0] == control
+    assert delta.read_snapshots(storage, "prd")[0] == control
     with pytest.raises(ValueError, match="já existe"):
-        delta.snapshot(storage, "prod", "2026T3", {"cad_operacoes": 6})
+        delta.snapshot(storage, "prd", "2026T3", {"cad_operacoes": 6})
 
     # O espaço e a barra ficam fora da regra da partição: a barra aninharia a pasta
     # arquivo/<nome>/ do archive. O arquivo de controle continua como estava.
     for name in ["2026 T4", "release/2026"]:
         with pytest.raises(ContractError, match="regra da partição"):
-            delta.snapshot(storage, "prod", name, {"cad_operacoes": 6})
-    assert delta.read_snapshots(storage, "prod")[0] == control
+            delta.snapshot(storage, "prd", name, {"cad_operacoes": 6})
+    assert delta.read_snapshots(storage, "prd")[0] == control
 
     # Outro escritor grava entre a leitura e a escrita: a impressão digital lida ficou velha, e o
     # snapshot perdedor não grava nada.
-    stale = delta.read_snapshots(storage, "prod")
-    delta.snapshot(storage, "prod", "2026T4", {"cad_operacoes": 7})
+    stale = delta.read_snapshots(storage, "prd")
+    delta.snapshot(storage, "prd", "2026T4", {"cad_operacoes": 7})
     with monkeypatch.context() as patch:
         patch.setattr(delta, "read_snapshots", lambda *args, **kwargs: stale)
         with pytest.raises(ConflictError):
-            delta.snapshot(storage, "prod", "2026T5", {"cad_operacoes": 8})
-    current, _ = delta.read_snapshots(storage, "prod")
+            delta.snapshot(storage, "prd", "2026T5", {"cad_operacoes": 8})
+    current, _ = delta.read_snapshots(storage, "prd")
     assert list(current["snapshots"]) == ["2026T2", "2026T3", "2026T4"]
 
 
@@ -747,7 +747,7 @@ def test_vacuum_keeps_snapshot_versions(storage: Storage, uri: str) -> None:
     intermediária perde o arquivo; dentro da retenção nada é listado."""
     for start in (1, 11, 21, 31):
         publish(storage, uri, "2026-08-31", start, 10)
-    control = delta.snapshot(storage, "prod", "2026T3", {"cad_operacoes": 2})
+    control = delta.snapshot(storage, "prd", "2026T3", {"cad_operacoes": 2})
     assert delta.vacuum_keeping_snapshots(uri, control, "cad_operacoes", storage) == []
     listed = delta.vacuum_keeping_snapshots(uri, control, "cad_operacoes", storage,
                                             retention_hours=0)
@@ -792,9 +792,9 @@ def test_export_snapshot_copy_and_rewrite(storage: Storage, uri: str) -> None:
     publish(storage, uri, "2026-08-31", 21, 5)
 
     # A versão atual pelos dois modos e a versão 2 por cópia.
-    copy_folder = "prod/exportacao/copia"
-    rewrite_folder = "prod/exportacao/reescrita"
-    old_folder = "prod/exportacao/antiga"
+    copy_folder = "prd/exportacao/copia"
+    rewrite_folder = "prd/exportacao/reescrita"
+    old_folder = "prd/exportacao/antiga"
     copied = delta.export_snapshot(uri, OPERACOES, storage.uri_of(copy_folder), storage)
     rewritten = delta.export_snapshot(uri, OPERACOES, storage.uri_of(rewrite_folder), storage,
                                       mode="rewrite")
@@ -817,7 +817,7 @@ def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) 
     pedidas, com ``mandatory`` verdadeiro."""
     publish(storage, uri, "2026-07-31", 1, 10)
     publish(storage, uri, "2026-08-31", 11, 10)
-    destination = storage.uri_of("prod/publicacao/exec-42/cad_operacoes/2026-08-31.manifest")
+    destination = storage.uri_of("prd/publicacao/exec-42/cad_operacoes/2026-08-31.manifest")
     assert delta.copy_manifest(uri, 2, ["2026-08-31"], destination, storage) == destination
     text, _ = storage.read_text(storage.relative(destination))
     manifest = json.loads(text)
@@ -828,7 +828,7 @@ def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) 
     assert entry["meta"]["content_length"] == storage.size(storage.relative(entry["url"]))
 
     # O manifesto de todas as partições.
-    whole_table_destination = storage.uri_of("prod/publicacao/tudo.manifest")
+    whole_table_destination = storage.uri_of("prd/publicacao/tudo.manifest")
     whole_table_manifest = delta.copy_manifest(uri, 2, None, whole_table_destination, storage)
     text, _ = storage.read_text(storage.relative(whole_table_manifest))
     assert len(json.loads(text)["entries"]) == 2
@@ -845,7 +845,7 @@ def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:
 
     # A cópia profunda da versão 1: o mesmo arquivo, no mesmo caminho relativo, com as mesmas
     # estatísticas, e a tabela com um commit por partição.
-    archive = storage.uri_of("prod/arquivo/2026T3/cad_operacoes")
+    archive = storage.uri_of("prd/arquivo/2026T3/cad_operacoes")
     assert delta.deep_copy(uri, 1, archive, storage) == 1
     copy = delta.open_table(archive, storage)
     assert copy.to_pyarrow_dataset().count_rows() == 10

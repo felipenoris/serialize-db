@@ -28,7 +28,7 @@ Na periodicidade do processo, por exemplo o fim do trimestre, dentro da execuç�
 cada tabela do ambiente:
 
 ```shell
-serialize-db snapshot --root s3://bucket/projeto/delta --environment prod \
+serialize-db snapshot --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --name 2026T3
 ```
 
@@ -45,7 +45,7 @@ referencia. Ela junta os arquivos pequenos das partições pedidas e normaliza o
 gravou (`INT64` no lugar de `INT96` e de `FIXED_LEN_BYTE_ARRAY`, estatística em toda coluna):
 
 ```shell
-serialize-db compact --root s3://bucket/projeto/delta --environment prod \
+serialize-db compact --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --table cad_lancamentos_projetados \
     --partitions 2026-07-31 2026-08-31
 ```
@@ -64,11 +64,11 @@ aplicada; `--full` de tempos em tempos para os órfãos das escritas interrompid
 recusados:
 
 ```shell
-serialize-db vacuum --root s3://bucket/projeto/delta --environment prod \
+serialize-db vacuum --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata
-serialize-db vacuum --root s3://bucket/projeto/delta --environment prod \
+serialize-db vacuum --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --apply
-serialize-db vacuum --root s3://bucket/projeto/delta --environment prod \
+serialize-db vacuum --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --apply --full
 ```
 
@@ -87,7 +87,7 @@ do ambiente, pela cópia dos arquivos de cada partição e o registro deles, sem
 pela máquina, e a entrada passa de `snapshots` para `archived` no mesmo arquivo de controle:
 
 ```shell
-serialize-db archive --root s3://bucket/projeto/delta --environment prod \
+serialize-db archive --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --name 2026T3
 ```
 
@@ -105,9 +105,9 @@ puladas, e só o que falta é copiado.
 Sob demanda: as pastas Parquet `<coluna>=<valor>/` de uma versão da tabela, sem o log, sob a raiz:
 
 ```shell
-serialize-db export --root s3://bucket/projeto/delta --environment prod \
+serialize-db export --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --table cad_lancamentos_projetados \
-    --destination s3://bucket/projeto/delta/prod/exportacao/2026T3/cad_lancamentos_projetados \
+    --destination s3://bucket/projeto/delta/prd/exportacao/2026T3/cad_lancamentos_projetados \
     --version 143 --mode copy
 ```
 
@@ -120,7 +120,7 @@ todos; o tempo e o pico de RSS do processo impressos; `--version` ausente é a v
 Depois de uma correção, e quando o SQL de uma verificação precisa ser lido:
 
 ```shell
-serialize-db audit --root s3://bucket/projeto/delta --environment prod \
+serialize-db audit --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --table cad_lancamentos --foreign-keys
 serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
 ```
@@ -132,7 +132,7 @@ Depois: o veredito de cada verificação, com as amostras; 1 quando alguma repro
 O histórico de uma tabela com os metadados da biblioteca:
 
 ```shell
-serialize-db history --root s3://bucket/projeto/delta --environment prod \
+serialize-db history --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --table cad_lancamentos
 ```
 

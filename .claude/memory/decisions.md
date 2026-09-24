@@ -355,7 +355,7 @@ migration ran successfully in the target; its reports exist and are not availabl
 ## The review of 2026-09-22 and the single session on both engines
 
 Later on 2026-09-22, answering the code review, the user accepted the rewrite of the environment
-premise in `plan/PLAN.md` (dev and prod never touch each other's tables; inside an environment one
+premise in `plan/PLAN.md` (dev and prd never touch each other's tables; inside an environment one
 execution at a time, with the log ordering commits and `publish` aborting the second with
 `ExecutionConflict`; the shared `serialize_db_publications` as the exception) and the two stage 3
 proposals: `expressions` in `rewrite` (the old name in a rename, the value of a new `NOT NULL`
@@ -902,7 +902,7 @@ others views over the Delta files) and from the base published in Redshift. The 
 proposed, and the user accepted, a reader object opened from `Database` and implemented in
 `serialize_db.reader`, named `open_delta` and `open_redshift`; neither `Execution` (partition,
 `execution_id`, snapshot, publication) nor a SQLAlchemy `Connection` (rows, and no
-`cad_lancamentos` to `prod_cad_lancamentos` mapping); the same `query`, `stream` and `session()`
+`cad_lancamentos` to `prd_cad_lancamentos` mapping); the same `query`, `stream` and `session()`
 as the engines, `materialize` only on Delta. The user's answers of the same day: the two
 sources serve different teams, and clients with read-only access to the published Redshift
 base give their own `UNLOAD` destination; the latest snapshot is the Delta reader's default,
@@ -928,3 +928,15 @@ and break or nest the archive's `arquivo/<name>/`; the user asked for the fix, a
 `delta.snapshot` raises `ContractError` for such a name before reading the control file
 (`test_snapshot_control_file_is_written_conditionally`). `plan/PLAN-STAGE-3.md`,
 `plan/CURRENT_STATE.md`
+
+## The production environment named `prd` (2026-09-24)
+
+The user asked to replace `prod` with `prd` wherever the plan, the code, the examples and
+`SUITE.md` reference the production environment; the source base already sits under
+`databases/prd/`. The assistant renamed 293 references (docstrings, `docs/`, `README.md`,
+`SUITE.md`, the script's header, the tests, the study suites and the plan's examples) and kept
+the dated records of what ran, because the target still holds them: the 14:16 load into
+`<root>/prod/`, the 16:51 publication as `prod_<table>`, the transaction runs of 2026-09-23 and
+the stage 10 probe's `prod_` prefix, in `plan/POC.md`, `plan/CURRENT_STATE.md`,
+`plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`, `CLAUDE.md` and the memory. What becomes of the
+target's `prod` environment waits on the user. `plan/OPEN_QUESTIONS.md`

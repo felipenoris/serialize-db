@@ -26,12 +26,12 @@ Sobre a base fictícia de ``tests/source_db_projetado.py``, em pasta local:
 
     PYTHONPATH=tests uv run python scripts/migrate_parquet_to_delta.py \\
         --metadata client_model:Base.metadata --source /pasta/db_projetado \\
-        --root /pasta/delta --environment prod
+        --root /pasta/delta --environment prd
 
 No ambiente alvo, com a pasta preparada, sobre a cópia da base de produção:
 
     PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py \\
-        --metadata client_model:Base.metadata --environment prod \\
+        --metadata client_model:Base.metadata --environment prd \\
         --source s3://bucket/prefixo/db_projetado --root s3://bucket/prefixo/delta \\
         --tables cad_contratos --report relatorio.json
 

@@ -603,7 +603,7 @@ os substituem, como nas etapas 1 e 2:
 
 ## Pipeline de atualização mensal
 
-Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, partição de referência
+Uma execução de exemplo: `exec-2026-09-05`, ambiente `prd`, motor DuckDB, partição de referência
 `2026-08-31` (`data_base_str`). As entradas são `cad_lancamentos` (as doze partições até
 2026-08-31), `cad_contratos`, `cad_operacoes`, `rel_contrato_operacao` e as tabelas `dom_*`; a saída
 ilustrativa é `cad_lancamentos` do banco projetado, partição 2026-08-31. Os números de versão são
@@ -616,7 +616,7 @@ ilustrativos.
 | 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
 | 5. Publicação no Delta | `reconcile`; `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD` do Redshift para `data_base_str=2026-08-31/<execution_id>_<uuid>/`), depois das conferências; no motor Redshift, a partição com `Double` não finito troca para `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
-| 6. Publicação no Redshift | Confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; a transação lê a linha de controle, 57, e `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'` e o `UPDATE` da linha de controle de 57 para 58. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
+| 6. Publicação no Redshift | Confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; a transação lê a linha de controle, 57, e `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'` e o `UPDATE` da linha de controle de 57 para 58. | `prd_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
 | 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
 
@@ -631,7 +631,7 @@ from serialize_db import Database, Execution
 from pipeline import compute_in_sandbox, project
 from pipeline.models import Base, Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
 
-db = Database("s3://bucket/projeto/delta", environment="prod", metadata=Base.metadata)
+db = Database("s3://bucket/projeto/delta", environment="prd", metadata=Base.metadata)
 with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento, partitions=run.previous_partitions(Lancamento, 12), materialize=True)
     run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada

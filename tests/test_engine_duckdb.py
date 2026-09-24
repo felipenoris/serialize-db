@@ -112,8 +112,8 @@ class Setup:
     folder: Path
 
     def uri(self, table: sa.Table) -> str:
-        """A pasta da tabela no ambiente ``prod``."""
-        return self.storage.uri_of(f"prod/{table.name}")
+        """A pasta da tabela no ambiente ``prd``."""
+        return self.storage.uri_of(f"prd/{table.name}")
 
     def database_file(self) -> Path:
         """O banco em arquivo do sandbox, que o ``cleanup`` apaga."""
@@ -1012,7 +1012,7 @@ def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
     plan = scan(setup.storage, query)[0][1]
     assert "Scanning Files: 0/1" in plan
     files = setup.storage.list_files(setup.storage.relative(uri), ".parquet")
-    folder = f"prod/{PROJECTED.name}/data_base_str={MONTHS[1]}/"
+    folder = f"prd/{PROJECTED.name}/data_base_str={MONTHS[1]}/"
     assert files[0].startswith(folder)
     pattern = re.escape(EXECUTION_ID) + r"_[0-9a-f]{32}\.parquet"
     assert re.fullmatch(pattern, files[0].removeprefix(folder))

@@ -23,11 +23,11 @@ Exemplo, numa pasta local:
     from serialize_db.storage import Storage
 
     storage = Storage.for_uri("/dados/delta")
-    path = storage.join("prod", "_serialize_db", "snapshots.json")
+    path = storage.join("prd", "_serialize_db", "snapshots.json")
     fingerprint = storage.create_text(path, "{}")
     text, fingerprint = storage.read_text(path)
     storage.write_text(path, '{"snapshots": {}}', if_match=fingerprint)
-    storage.relative("/dados/delta/prod/cad_operacoes")   # "prod/cad_operacoes"
+    storage.relative("/dados/delta/prd/cad_operacoes")   # "prd/cad_operacoes"
 """
 
 from __future__ import annotations
@@ -159,7 +159,7 @@ class Storage:
         storage = Storage.for_uri("s3://bucket/projeto/delta")
         storage.uri                      # "s3://bucket/projeto/delta"
         storage.path                     # "bucket/projeto/delta"
-        storage.list_files("prod/cad_operacoes", ".parquet")
+        storage.list_files("prd/cad_operacoes", ".parquet")
     """
 
     uri: str
@@ -210,7 +210,7 @@ class Storage:
 
         .. code-block:: python
 
-            storage.join("prod/", "cad_operacoes", "_delta_log")   # "prod/cad_operacoes/_delta_log"
+            storage.join("prd/", "cad_operacoes", "_delta_log")   # "prd/cad_operacoes/_delta_log"
 
         :param parts: os trechos do caminho; as barras nas pontas de cada um saem, e um trecho
             vazio é ignorado.
@@ -230,7 +230,7 @@ class Storage:
 
         .. code-block:: python
 
-            storage.relative(storage.uri + "/prod/cad_operacoes")   # "prod/cad_operacoes"
+            storage.relative(storage.uri + "/prd/cad_operacoes")   # "prd/cad_operacoes"
 
         :param uri: a URI sob a raiz, com ou sem barra final.
         :return: o caminho relativo; a própria raiz dá ``""``.
@@ -455,7 +455,7 @@ class Storage:
 
         .. code-block:: python
 
-            path = "prod/_serialize_db/snapshots.json"
+            path = "prd/_serialize_db/snapshots.json"
             first = storage.create_text(path, "{}")
             storage.create_text(path, "{}")   # ConflictError: o arquivo já existe
 
@@ -635,7 +635,7 @@ class Storage:
         .. code-block:: python
 
             connection = storage.duckdb_connect()
-            uri = storage.uri_of("prod/cad_operacoes")
+            uri = storage.uri_of("prd/cad_operacoes")
             connection.execute(f"SELECT count(*) FROM delta_scan('{uri}')")
 
         :param database: o arquivo do banco do DuckDB; o padrão, um banco em memória, é

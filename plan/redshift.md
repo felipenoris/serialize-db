@@ -466,10 +466,10 @@ events = sa.Table("eventos", sa.MetaData(),
 print(CreateTable(events).compile(dialect=RedshiftDialect_redshift_connector()))
 # CREATE TABLE eventos (id_evento BIGINT NOT NULL, meta SUPER, PRIMARY KEY (id_evento))
 
-load_sql = """INSERT INTO prod_eventos (id_evento, meta, mes)
+load_sql = """INSERT INTO prd_eventos (id_evento, meta, mes)
 SELECT id_evento, JSON_PARSE(meta), '2026-08' FROM staging_eventos"""
 unload_sql = """UNLOAD ('SELECT id_evento, JSON_SERIALIZE(meta) AS meta, mes FROM exec_42_eventos')
-TO 's3://bucket/prod/eventos/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
+TO 's3://bucket/prd/eventos/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
 FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE"""
 ```
 
@@ -1026,14 +1026,14 @@ def month_manifest(dt: DeltaTable, month: str) -> tuple[dict, int]:
                 for path, size in zip(actions["path"].to_pylist(), actions["size_bytes"].to_pylist())]
     return {"entries": entries}, pc.sum(actions["num_records"]).as_py()
 
-destination = Operacao.__table__.to_metadata(sa.MetaData(), name="prod_operacoes")
-staging = sa.Table("prod_operacoes_staging", destination.metadata,
+destination = Operacao.__table__.to_metadata(sa.MetaData(), name="prd_operacoes")
+staging = sa.Table("prd_operacoes_staging", destination.metadata,
                    *[sa.Column(c.name, c.type, nullable=c.nullable) for c in destination.columns if c.name != "mes"],
                    prefixes=["TEMPORARY"])
 transaction = [
     sa.delete(destination).where(destination.c.mes == "2026-08"),
     CreateTable(staging),
-    sa.text("COPY prod_operacoes_staging FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest' "
+    sa.text("COPY prd_operacoes_staging FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest' "
             "IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST"),
     sa.insert(destination).from_select(list(destination.columns.keys()),
                                    sa.select(*staging.c, sa.literal("2026-08", sa.String(7)).label("mes"))),
@@ -1046,14 +1046,14 @@ valor a comparar com `pg_last_copy_count()` antes do `commit`. Os quatro comando
 (`engine.begin()`) e compilam para:
 
 ```sql
-DELETE FROM prod_operacoes WHERE prod_operacoes.mes = '2026-08'
-CREATE TEMPORARY TABLE prod_operacoes_staging (id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL,
+DELETE FROM prd_operacoes WHERE prd_operacoes.mes = '2026-08'
+CREATE TEMPORARY TABLE prd_operacoes_staging (id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL,
     id_cliente BIGINT NOT NULL, valor NUMERIC(18, 2) NOT NULL, descricao VARCHAR(200))
-COPY prod_operacoes_staging FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest'
+COPY prd_operacoes_staging FROM 's3://bucket/publicacao/exec-42/operacoes/2026-08.manifest'
     IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST
-INSERT INTO prod_operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes)
-    SELECT prod_operacoes_staging.id_operacao, prod_operacoes_staging.data_ref, prod_operacoes_staging.id_cliente,
-        prod_operacoes_staging.valor, prod_operacoes_staging.descricao, '2026-08' AS mes FROM prod_operacoes_staging
+INSERT INTO prd_operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes)
+    SELECT prd_operacoes_staging.id_operacao, prd_operacoes_staging.data_ref, prd_operacoes_staging.id_cliente,
+        prd_operacoes_staging.valor, prd_operacoes_staging.descricao, '2026-08' AS mes FROM prd_operacoes_staging
 ```
 
 A staging temporária dispensa a codificação e as restrições do modelo: tabelas temporárias recebem
@@ -1174,9 +1174,9 @@ manifesto, reduzida aos campos que a biblioteca lê, no leiaute que a documenta�
 ```json
 {
   "entries": [
-    {"url": "s3://bucket/prod/operacoes/mes=2026-08/0000_part_00.parquet",
+    {"url": "s3://bucket/prd/operacoes/mes=2026-08/0000_part_00.parquet",
      "meta": {"content_length": 33554432, "record_count": 180000}},
-    {"url": "s3://bucket/prod/operacoes/mes=2026-08/0001_part_00.parquet",
+    {"url": "s3://bucket/prd/operacoes/mes=2026-08/0001_part_00.parquet",
      "meta": {"content_length": 22369621, "record_count": 120000}}
   ],
   "schema": {"elements": [
@@ -1202,7 +1202,7 @@ query = (sa.select(Operacao.__table__).where(Operacao.mes == "2026-08")
             .order_by(Operacao.data_ref, Operacao.id_operacao))
 inner_sql = sql(query).replace("'", "''")
 unload = (f"UNLOAD ('{inner_sql}')\n"
-          "TO 's3://bucket/prod/operacoes/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'\n"
+          "TO 's3://bucket/prd/operacoes/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'\n"
           "FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE")
 
 def check_manifest(manifest: dict, expected_columns: list[str]) -> int:
@@ -1224,7 +1224,7 @@ print(check_manifest(json.loads(sample), without_partition))     # 300000
 UNLOAD ('SELECT operacoes.id_operacao, operacoes.data_ref, operacoes.id_cliente, operacoes.valor, operacoes.descricao, operacoes.mes
 FROM operacoes
 WHERE operacoes.mes = ''2026-08'' ORDER BY operacoes.data_ref, operacoes.id_operacao')
-TO 's3://bucket/prod/operacoes/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
+TO 's3://bucket/prd/operacoes/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
 FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE
 ```
 
