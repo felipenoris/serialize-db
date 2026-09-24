@@ -212,13 +212,18 @@ def create_table(uri: str, table: sa.Table, storage: Storage) -> DeltaTable:
     ``DeltaTable.create(mode="ignore")`` com ``delta_schema(table)``, a coluna de partição, o nome
     da tabela, o comentário da tabela em ``description`` e as retenções: o log por 3.650 dias e os
     arquivos removidos por 400. Sem vetores de exclusão nem column mapping, que o ``COPY`` do
-    Redshift não lê. A chamada repetida devolve a tabela como está.
+    Redshift não lê.
 
     Exemplo:
 
     .. code-block:: python
 
         create_table(uri, Operacao.__table__, storage).version()   # 0
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param table: a tabela do modelo.
+    :param storage: o armazenamento da raiz do banco.
+    :return: a tabela; a chamada repetida a devolve como está.
     """
     partition_by = table_options(table).partition_by
     return DeltaTable.create(
@@ -234,20 +239,29 @@ def create_table(uri: str, table: sa.Table, storage: Storage) -> DeltaTable:
 
 
 def open_table(uri: str, storage: Storage, version: int | None = None) -> DeltaTable:
-    """A tabela numa versão, a última sem ``version``; a execução abre cada tabela uma vez e guarda
-    o objeto e a versão.
+    """A tabela numa versão; a execução abre cada tabela uma vez e guarda o objeto e a versão.
 
     Exemplo:
 
     .. code-block:: python
 
         open_table(uri, storage, version=3).version()   # 3
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param storage: o armazenamento da raiz do banco.
+    :param version: a versão carregada; ``None`` é a última.
+    :return: a tabela carregada na versão.
     """
     return DeltaTable(uri, version=version, storage_options=_options(storage))
 
 
 def table_exists(uri: str, storage: Storage) -> bool:
-    """Se há uma tabela Delta na pasta: a pasta sem ``_delta_log/`` não é tabela."""
+    """Se há uma tabela Delta na pasta.
+
+    :param uri: a URI da pasta, sob a raiz do banco.
+    :param storage: o armazenamento da raiz do banco.
+    :return: ``True`` quando há; a pasta sem ``_delta_log/`` não é tabela.
+    """
     return DeltaTable.is_deltatable(uri, storage_options=_options(storage))
 
 
@@ -268,13 +282,17 @@ def max_key(dt: DeltaTable, column: str) -> int:
 
     O máximo de ``max.<coluna>`` das ações ``add``, sem ler dados; a varredura da coluna quando um
     arquivo não tem a estatística, porque a estatística registrada é verdadeira ou omitida, nunca
-    falsa; 0 na tabela vazia.
+    falsa.
 
     Exemplo:
 
     .. code-block:: python
 
         max_key(open_table(uri, storage), "id_operacao")   # 1000
+
+    :param dt: a tabela aberta por ``open_table``.
+    :param column: o nome da coluna inteira, como a chave sequencial.
+    :return: o maior valor; 0 na tabela vazia.
     """
     # get_add_actions devolve uma tabela arro3; pa.table a converte sem cópia.
     actions = pa.table(dt.get_add_actions(flatten=True))
@@ -291,10 +309,6 @@ def commit_metadata(execution_id: str, input_versions: Mapping[str, int],
                     snapshot: str | None = None) -> dict[str, str]:
     """Os metadados que a execução grava em cada commit, todos texto.
 
-    ``serialize_db_execution_id``, ``serialize_db_input_versions`` (o JSON das versões lidas, com as
-    chaves ordenadas) e, só na execução marcada, ``serialize_db_snapshot``. Eles aparecem no
-    ``history`` da tabela.
-
     Exemplo:
 
     .. code-block:: python
@@ -302,6 +316,13 @@ def commit_metadata(execution_id: str, input_versions: Mapping[str, int],
         commit_metadata("exec-2026-09-05", {"cad_contratos": 88})
         # {"serialize_db_execution_id": "exec-2026-09-05",
         #  "serialize_db_input_versions": '{"cad_contratos": 88}'}
+
+    :param execution_id: o identificador da execução.
+    :param input_versions: a versão lida de cada tabela de entrada, pelo nome da tabela.
+    :param snapshot: o nome do snapshot da execução marcada; ``None`` nas outras.
+    :return: ``serialize_db_execution_id``, ``serialize_db_input_versions`` (o JSON das versões
+        lidas, com as chaves ordenadas) e, só na execução marcada, ``serialize_db_snapshot``;
+        eles aparecem no ``history`` da tabela.
     """
     metadata = {
         "serialize_db_execution_id": execution_id,
@@ -348,17 +369,10 @@ def _partition_predicate(partition_by: str | None, value: str | None) -> str | N
 def publish_partition(uri: str, table: sa.Table, value: str | None, data: object,
                       metadata: Mapping[str, str], storage: Storage,
                       columns_without_min_max: Collection[str] = ()) -> int:
-    """Substitui a partição pelos dados num commit, pelo escritor do delta-rs, e devolve a versão
-    do próprio commit.
+    """Substitui a partição pelos dados num commit, pelo escritor do delta-rs.
 
-    ``data`` é uma ``pa.Table``, um lote, um ``RecordBatchReader`` ou um objeto com
-    ``__arrow_c_stream__``, já passado por ``cast`` e com a coluna de partição; sem ela é
-    ``ContractError``, antes de gravar. ``write_deltalake(mode="overwrite", predicate=...)`` sobre o
-    objeto ``DeltaTable``, que depois da escrita está na versão do próprio commit mesmo com o commit
-    de outro escritor no meio. ``value=None`` numa tabela sem partição substitui a tabela. As
-    colunas de ``columns_without_min_max``, as ``Double`` com valor não finito na partição, saem sem
-    mínimo e máximo no rodapé e no log (issue #59). ``CommitFailedError`` sobe como
-    ``ExecutionConflict``.
+    ``write_deltalake(mode="overwrite", predicate=...)`` sobre o objeto ``DeltaTable``, que depois
+    da escrita está na versão do próprio commit mesmo com o commit de outro escritor no meio.
 
     Exemplo:
 
@@ -367,6 +381,21 @@ def publish_partition(uri: str, table: sa.Table, value: str | None, data: object
         version = publish_partition(uri, Operacao.__table__, "2026-08-31", data,
                                     commit_metadata("exec-42", {}), storage,
                                     columns_without_min_max=["valor"])
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param table: a tabela do modelo.
+    :param value: o valor da partição, na regra de ``schema.PARTITION_VALUE``; ``value=None`` numa
+        tabela sem partição substitui a tabela.
+    :param data: uma ``pa.Table``, um lote, um ``RecordBatchReader`` ou um objeto com
+        ``__arrow_c_stream__``, já passado por ``cast`` e com a coluna de partição.
+    :param metadata: os metadados do commit, de ``commit_metadata``.
+    :param storage: o armazenamento da raiz do banco.
+    :param columns_without_min_max: as colunas que saem sem mínimo e máximo no rodapé e no log, as
+        ``Double`` com valor não finito na partição (issue #59).
+    :return: a versão do próprio commit.
+    :raises ContractError: ``value`` ausente numa tabela particionada, presente numa tabela sem
+        partição ou fora da regra; os dados sem a coluna de partição, antes de gravar.
+    :raises ExecutionConflict: o commit falhou no delta-rs com ``CommitFailedError``.
     """
     value = _checked_value(table, value)
     arrow = _as_arrow(data)
@@ -724,22 +753,18 @@ def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value
                    metadata: Mapping[str, str], storage: Storage, expected_rows: int | None = None,
                    columns_without_min_max: Collection[str] = ()) -> int:
     """Registra no log, num commit ``overwrite`` da partição, arquivos que outro escritor gravou
-    dentro da pasta da tabela, e devolve a versão do commit.
+    dentro da pasta da tabela.
 
     ``create_write_transaction`` grava a ação como a recebe, e os leitores obedecem à ação, não ao
     arquivo; por isso cada arquivo passa antes pelas conferências do rodapé, um GET por arquivo: o
     arquivo existe com o tamanho declarado; o esquema do rodapé tem cada coluna do contrato, na
     ordem dele, num tipo físico que os leitores leem como o lógico, e não tem a coluna de partição;
     as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o caminho está na pasta da
-    partição; as linhas do rodapé são as declaradas, e a soma é ``expected_rows`` quando o chamador
-    tem a contagem da fonte. A reprovação é ``RegistrationRefused``, sem commit, e o arquivo fica
-    órfão até ``vacuum(full=True)``.
+    partição; as linhas do rodapé são as declaradas.
 
     A ação leva ``numRecords``, o ``nullCount`` e o mínimo e o máximo das colunas inteiras, de data,
-    ``Double`` e texto, menos as de ``columns_without_min_max``, as ``Double`` com valor não finito
-    na partição (issue #59). Depois do commit, ``read_back`` relê a versão pelos dois leitores e a
-    desfaz na diferença. Um segundo registro da mesma partição a partir da mesma versão é
-    ``ExecutionConflict``.
+    ``Double`` e texto. Depois do commit, ``read_back`` relê a versão pelos dois leitores e a
+    desfaz na diferença.
 
     Exemplo:
 
@@ -748,6 +773,25 @@ def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value
         file = RegisteredFile("data_str=2026-08-31/exec-42_ab12.parquet", 4096, 1000, stats)
         register_files(uri, Operacao.__table__, [file], "2026-08-31",
                        commit_metadata("exec-42", {}), storage, expected_rows=1000)
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param table: a tabela do modelo.
+    :param files: os arquivos que o escritor declarou, com o caminho relativo à pasta da tabela.
+    :param value: o valor da partição, na regra de ``schema.PARTITION_VALUE``; ``None`` numa
+        tabela sem partição.
+    :param metadata: os metadados do commit, de ``commit_metadata``.
+    :param storage: o armazenamento da raiz do banco.
+    :param expected_rows: a contagem da fonte, quando o chamador a tem, que a soma das linhas
+        dos arquivos tem de igualar; ``None`` não confere a soma.
+    :param columns_without_min_max: as colunas cujo mínimo e máximo ficam fora da ação, as
+        ``Double`` com valor não finito na partição (issue #59).
+    :return: a versão do commit.
+    :raises ContractError: ``value`` ausente numa tabela particionada, presente numa tabela sem
+        partição ou fora da regra.
+    :raises ValueError: ``uri`` fora da raiz de ``storage``.
+    :raises RegistrationRefused: uma conferência reprovou, sem commit, e o arquivo fica órfão até
+        ``vacuum(full=True)``; ou a releitura reprovou e desfez o commit.
+    :raises ExecutionConflict: um segundo registro da mesma partição a partir da mesma versão.
     """
     value = _checked_value(table, value)
     partition_by = table_options(table).partition_by
@@ -882,12 +926,18 @@ def read_back(uri: str, table: sa.Table, value: str | None, expected_rows: int,
     """Relê a versão recém-commitada pelos dois leitores e a desfaz quando eles discordam.
 
     O delta-rs, pelo dataset Arrow, e o ``delta_scan`` do DuckDB, numa conexão própria, contam as
-    linhas e leem o menor e o maior valor de cada coluna da primeira chave do modelo na partição
-    (na tabela inteira com ``value=None``). A releitura pega o que as conferências do rodapé não
-    veem, um leitor que não lê o arquivo como o outro (o ``parquet.field.id`` no esquema Delta fez o
-    ``delta_scan`` ler toda coluna como nula com a contagem certa), e uma estatística do log que
-    podaria o arquivo certo. Uma diferença chama ``restore(version - 1)`` e levanta
-    ``RegistrationRefused`` com as leituras.
+    linhas e leem o menor e o maior valor de cada coluna da primeira chave do modelo na partição.
+    A releitura pega o que as conferências do rodapé não veem, um leitor que não lê o arquivo como
+    o outro (o ``parquet.field.id`` no esquema Delta fez o ``delta_scan`` ler toda coluna como nula
+    com a contagem certa), e uma estatística do log que podaria o arquivo certo.
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param table: a tabela do modelo.
+    :param value: o valor da partição relida; ``value=None`` relê a tabela inteira.
+    :param expected_rows: as linhas que o log e os dois leitores têm de contar.
+    :param storage: o armazenamento da raiz do banco.
+    :raises RegistrationRefused: uma diferença entre os leitores, o log e ``expected_rows``,
+        depois de ``restore(version - 1)``; a mensagem traz as leituras.
     """
     dt = open_table(uri, storage)
     version = dt.version()
@@ -946,6 +996,12 @@ def schema_diff(table: sa.Table, dt: DeltaTable) -> SchemaDiff:
     .. code-block:: python
 
         schema_diff(Operacao.__table__, open_table(uri, storage)).changes   # False
+
+    :param table: a tabela do modelo.
+    :param dt: a tabela aberta por ``open_table``.
+    :return: o diff, separado em aditivo e destrutivo.
+    :raises ContractError: uma ``CheckConstraint`` do modelo sem nome, porque o Delta guarda o
+        ``CHECK`` pelo nome.
     """
     contract = arrow_schema(table)
     current = pa.schema(dt.schema())
@@ -1000,8 +1056,7 @@ def _check_constraint_texts(table: sa.Table, names: Collection[str]) -> dict[str
 
 
 def reconcile(uri: str, table: sa.Table, storage: Storage) -> SchemaDiff:
-    """Aplica o diff aditivo entre o modelo e a tabela e devolve o diff; o destrutivo é
-    ``SchemaDiffRefused``, sem alteração, com a lista e a instrução de ``rewrite``.
+    """Aplica o diff aditivo entre o modelo e a tabela.
 
     Cada parte é um commit só de metadados: ``add_columns`` com o campo do esquema Delta do
     contrato, comentário incluído; ``drop_column_not_null``; ``add_constraint``;
@@ -1013,6 +1068,14 @@ def reconcile(uri: str, table: sa.Table, storage: Storage) -> SchemaDiff:
     .. code-block:: python
 
         reconcile(uri, Operacao.__table__, storage).add   # os campos acrescentados
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param table: a tabela do modelo.
+    :param storage: o armazenamento da raiz do banco.
+    :return: o diff aplicado.
+    :raises SchemaDiffRefused: o diff destrutivo, sem alteração; a mensagem traz a lista e a
+        instrução de ``rewrite``.
+    :raises ContractError: uma ``CheckConstraint`` do modelo sem nome, como em ``schema_diff``.
     """
     dt = open_table(uri, storage)
     diff = schema_diff(table, dt)
@@ -1112,24 +1175,36 @@ def _written_partition(row: Mapping[str, object], partition_by: str | None) -> s
 def rewrite(uri: str, table: sa.Table, storage: Storage,
             expressions: Mapping[str, str] | None = None) -> int:
     """Reescreve a tabela inteira com o esquema do contrato num único commit, sem predicado, com
-    memória constante; devolve a versão do commit.
+    memória constante.
 
     O ``COPY ... PARTITION_BY ... RETURN_STATS`` do DuckDB lê a versão atual por ``delta_scan`` e
     grava arquivos novos na pasta da tabela, que entram num ``create_write_transaction(mode=
     "overwrite", schema=delta_schema(table))``, depois das conferências de ``register_files``; a
     versão anterior continua legível com o esquema antigo, e ``read_back`` roda depois do commit.
-    ``expressions`` dá, por coluna do contrato, a expressão SQL do DuckDB sobre a versão atual que a
-    preenche: o nome antigo numa renomeação, o valor de uma coluna ``NOT NULL`` nova. Cada coluna
-    sai em ``CAST`` para o tipo do contrato, e a remoção é a coluna que o contrato não tem mais.
-    Uma coluna do contrato ausente da versão atual e fora de ``expressions`` falha no ``COPY``,
-    antes de qualquer commit. As colunas ``Double`` com valor não finito em cada partição ficam sem
-    mínimo e máximo no log. ``CommitFailedError`` sobe como ``ExecutionConflict``.
+    Cada coluna sai em ``CAST`` para o tipo do contrato, e a remoção é a coluna que o contrato não
+    tem mais. As colunas ``Double`` com valor não finito em cada partição ficam sem mínimo e
+    máximo no log.
 
     Exemplo:
 
     .. code-block:: python
 
         rewrite(uri, Operacao.__table__, storage, expressions={"valor": '"valor_bruto"'})
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param table: a tabela do modelo.
+    :param storage: o armazenamento da raiz do banco.
+    :param expressions: por coluna do contrato, a expressão SQL do DuckDB sobre a versão atual que
+        a preenche: o nome antigo numa renomeação, o valor de uma coluna ``NOT NULL`` nova. Uma
+        coluna do contrato ausente da versão atual e fora de ``expressions`` falha no ``COPY``,
+        antes de qualquer commit. ``None`` preenche cada coluna pelo próprio nome.
+    :return: a versão do commit.
+    :raises ContractError: uma chave de ``expressions`` fora das colunas do modelo, que seria
+        ignorada.
+    :raises ValueError: ``uri`` fora da raiz de ``storage``.
+    :raises RegistrationRefused: uma conferência de ``register_files`` reprovou um arquivo novo,
+        sem commit; ou a releitura reprovou e desfez o commit.
+    :raises ExecutionConflict: o commit falhou no delta-rs com ``CommitFailedError``.
     """
     expressions = dict(expressions or {})
     _check_expressions(table, expressions)
@@ -1190,15 +1265,25 @@ def version_diff(uri: str, published: int, current: int, table: sa.Table,
 
     Lê os arquivos ``_delta_log/<versão>.json`` pelo ``Storage`` e recolhe a partição das ações
     ``add`` e ``remove`` com ``dataChange`` verdadeiro; a compactação grava ``dataChange`` falso e
-    não conta. Numa tabela sem partição, ``{None}`` quando houve alteração. Um arquivo do log
-    ausente é ``LogUnavailable``, com a instrução de publicar a tabela inteira: a limpeza que o
-    apagaria também torna ilegível a versão publicada.
+    não conta.
 
     Exemplo:
 
     .. code-block:: python
 
         version_diff(uri, 57, 58, Operacao.__table__, storage)   # {"2026-08-31"}
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param published: a versão publicada.
+    :param current: a versão atual.
+    :param table: a tabela do modelo.
+    :param storage: o armazenamento da raiz do banco.
+    :return: os valores das partições alteradas, vazio com ``published`` igual a ``current``;
+        numa tabela sem partição, ``{None}`` quando houve alteração.
+    :raises ValueError: ``published`` depois de ``current``, ou ``uri`` fora da raiz de
+        ``storage``.
+    :raises LogUnavailable: um arquivo do log ausente, com a instrução de publicar a tabela
+        inteira: a limpeza que o apagaria também torna ilegível a versão publicada.
     """
     if published > current:
         raise ValueError(f"versão publicada {published} depois da atual {current}")
@@ -1242,11 +1327,10 @@ def _in_partitions(action: Mapping[str, object], partition_columns: list[str],
 def copy_manifest(uri: str, version: int, partitions: list[str] | None, destination: str,
                   storage: Storage) -> str:
     """Grava o manifesto do ``COPY ... MANIFEST`` do Redshift com os arquivos da versão nas
-    partições pedidas (todas com ``None``) e devolve a URI dele.
+    partições pedidas.
 
     Cada entrada é ``{"url": "<pasta da tabela>/<path>", "mandatory": true, "meta":
-    {"content_length": <size_bytes>}}``, das ações ``add`` da versão; ``destination`` é a URI do
-    manifesto sob a raiz, em ``publicacao/`` ou ``staging/``.
+    {"content_length": <size_bytes>}}``, das ações ``add`` da versão.
 
     Exemplo:
 
@@ -1255,6 +1339,16 @@ def copy_manifest(uri: str, version: int, partitions: list[str] | None, destinat
         copy_manifest(uri, 58, ["2026-08-31"],
                       storage.uri_of("prod/publicacao/exec-42/cad_operacoes/2026-08-31.manifest"),
                       storage)
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param version: a versão cujos arquivos entram.
+    :param partitions: os valores das partições pedidas, todas com ``None``; numa tabela sem
+        partição, todo arquivo entra.
+    :param destination: a URI do manifesto sob a raiz, em ``publicacao/`` ou ``staging/``; um
+        manifesto existente é substituído.
+    :param storage: o armazenamento da raiz do banco.
+    :return: a URI do manifesto, ``destination``.
+    :raises ValueError: ``destination`` fora da raiz de ``storage``.
     """
     dt = open_table(uri, storage, version)
     partition_columns = dt.metadata().partition_columns
@@ -1275,8 +1369,7 @@ def copy_manifest(uri: str, version: int, partitions: list[str] | None, destinat
 
 
 def read_snapshots(storage: Storage, environment: str) -> tuple[dict, str | None]:
-    """O arquivo de controle dos snapshots do ambiente e a impressão digital dele, para a escrita
-    condicional seguinte; ``({"snapshots": {}}, None)`` quando ele ainda não existe.
+    """O arquivo de controle dos snapshots do ambiente e a impressão digital dele.
 
     Exemplo:
 
@@ -1284,6 +1377,11 @@ def read_snapshots(storage: Storage, environment: str) -> tuple[dict, str | None
 
         control, fingerprint = read_snapshots(storage, "prod")
         control["snapshots"]   # {"2026T3": {"cad_lancamentos": 143, ...}}
+
+    :param storage: o armazenamento da raiz do banco.
+    :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
+    :return: o controle e a impressão digital, para a escrita condicional seguinte;
+        ``({"snapshots": {}}, None)`` quando ele ainda não existe.
     """
     path = storage.join(environment, CONTROL_FILE)
     try:
@@ -1295,18 +1393,26 @@ def read_snapshots(storage: Storage, environment: str) -> tuple[dict, str | None
 
 def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[str, int]) -> dict:
     """Grava no arquivo de controle do ambiente a entrada ``{name: versions}`` de um snapshot do
-    banco e devolve o controle novo.
+    banco.
 
-    Um nome presente em ``snapshots`` ou em ``archived`` é ``ValueError``, porque o nome dá a pasta
-    ``arquivo/<nome>/``. A escrita é condicional: ``if_match`` com a impressão da leitura, ou
-    ``if_none_match`` no primeiro snapshot, e outro escritor entre a leitura e a escrita faz subir
-    ``ConflictError``. As versões marcadas são as que ``vacuum_keeping_snapshots`` preserva.
+    A escrita é condicional: ``if_match`` com a impressão da leitura, ou ``if_none_match`` no
+    primeiro snapshot.
 
     Exemplo:
 
     .. code-block:: python
 
         snapshot(storage, "prod", "2026T3", {"cad_lancamentos": 143, "cad_contratos": 88})
+
+    :param storage: o armazenamento da raiz do banco.
+    :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
+    :param name: o nome do snapshot.
+    :param versions: a versão de cada tabela, pelo nome da tabela; as versões marcadas são as que
+        ``vacuum_keeping_snapshots`` preserva.
+    :return: o controle novo.
+    :raises ValueError: um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a
+        pasta ``arquivo/<nome>/``.
+    :raises ConflictError: outro escritor entre a leitura e a escrita.
     """
     control, fingerprint = read_snapshots(storage, environment)
     if name in control["snapshots"] or name in control.get("archived", {}):
@@ -1330,17 +1436,23 @@ def _write_control(storage: Storage, environment: str, control: Mapping,
 
 def archive_snapshot(storage: Storage, environment: str, name: str) -> dict:
     """Move a entrada do snapshot de ``snapshots`` para a chave irmã ``archived`` do arquivo de
-    controle, na escrita condicional, e devolve o controle novo.
+    controle, na escrita condicional.
 
-    O nome ausente de ``snapshots`` é ``ValueError``. A entrada arquivada deixa de prender as
-    versões no ``vacuum``, que lê só ``snapshots``, e continua a ocupar o nome: ``snapshot`` o
-    recusa, porque ele dá a pasta ``arquivo/<nome>/``.
+    A entrada arquivada deixa de prender as versões no ``vacuum``, que lê só ``snapshots``, e
+    continua a ocupar o nome: ``snapshot`` o recusa, porque ele dá a pasta ``arquivo/<nome>/``.
 
     Exemplo:
 
     .. code-block:: python
 
         archive_snapshot(storage, "prod", "2026T3")["archived"]   # {"2026T3": {...}}
+
+    :param storage: o armazenamento da raiz do banco.
+    :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
+    :param name: o nome do snapshot.
+    :return: o controle novo.
+    :raises ValueError: o nome ausente de ``snapshots``.
+    :raises ConflictError: outro escritor entre a leitura e a escrita.
     """
     control, fingerprint = read_snapshots(storage, environment)
     if name not in control["snapshots"]:
@@ -1353,12 +1465,7 @@ def archive_snapshot(storage: Storage, environment: str, name: str) -> dict:
 def vacuum_keeping_snapshots(uri: str, control: Mapping, table_name: str, storage: Storage,
                              retention_hours: int = 9600, apply: bool = False,
                              full: bool = False) -> list[str]:
-    """O ``vacuum`` da tabela que preserva os arquivos das versões dos snapshots do banco; lista
-    por padrão e apaga com ``apply=True``.
-
-    ``keep_versions`` sai das versões da tabela em ``control["snapshots"]``; ``full=True`` inclui
-    os arquivos órfãos. Dentro da retenção, 400 dias por padrão, nada é listado, mesmo com versões
-    intermediárias: é a janela em que toda versão continua legível.
+    """O ``vacuum`` da tabela que preserva os arquivos das versões dos snapshots do banco.
 
     Exemplo:
 
@@ -1366,6 +1473,19 @@ def vacuum_keeping_snapshots(uri: str, control: Mapping, table_name: str, storag
 
         control, _ = read_snapshots(storage, "prod")
         vacuum_keeping_snapshots(uri, control, "cad_lancamentos", storage)   # a lista, sem apagar
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param control: o arquivo de controle, como ``read_snapshots`` o devolve; ``keep_versions``
+        sai das versões da tabela em ``control["snapshots"]``.
+    :param table_name: o nome da tabela nas entradas do controle.
+    :param storage: o armazenamento da raiz do banco.
+    :param retention_hours: a retenção em horas, aceita abaixo da
+        ``delta.deletedFileRetentionDuration`` da tabela; o padrão são 400 dias. Dentro da
+        retenção nada é listado, mesmo com versões intermediárias: é a janela em que toda versão
+        continua legível.
+    :param apply: ``True`` apaga os arquivos; o padrão só os lista.
+    :param full: ``full=True`` inclui os arquivos órfãos.
+    :return: os arquivos listados, ou os apagados com ``apply=True``, relativos à pasta da tabela.
     """
     kept = set()
     for versions in control.get("snapshots", {}).values():
@@ -1385,8 +1505,8 @@ def vacuum_keeping_snapshots(uri: str, control: Mapping, table_name: str, storag
 
 
 def compact(uri: str, table: sa.Table, partitions: list[str], storage: Storage) -> dict:
-    """Junta os arquivos pequenos das partições pelo ``optimize.compact`` do delta-rs e devolve as
-    métricas; uma partição com um arquivo só não commita.
+    """Junta os arquivos pequenos das partições pelo ``optimize.compact`` do delta-rs; uma
+    partição com um arquivo só não commita.
 
     A reescrita sai pelo escritor do delta-rs: os arquivos de outro escritor que ela junta perdem o
     ``INT96`` e o ``FIXED_LEN_BYTE_ARRAY`` e ganham estatística em toda coluna. O commit grava
@@ -1397,6 +1517,14 @@ def compact(uri: str, table: sa.Table, partitions: list[str], storage: Storage) 
     .. code-block:: python
 
         compact(uri, Operacao.__table__, ["2026-08-31"], storage)["numFilesRemoved"]
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param table: a tabela do modelo.
+    :param partitions: os valores das partições, na regra de ``schema.PARTITION_VALUE``; numa
+        tabela sem partição, ignorados, e a tabela inteira é compactada.
+    :param storage: o armazenamento da raiz do banco.
+    :return: as métricas do ``optimize.compact``, como ``numFilesAdded`` e ``numFilesRemoved``.
+    :raises ContractError: um valor de ``partitions`` fora da regra da partição.
     """
     partition_by = table_options(table).partition_by
     filters = None
@@ -1413,10 +1541,7 @@ _METADATA_KEYS = ("serialize_db_execution_id", "serialize_db_input_versions",
 
 
 def history(uri: str, storage: Storage) -> list[dict]:
-    """Os commits da tabela, do mais recente ao mais antigo: ``version``, ``operation``,
-    ``timestamp`` (o instante, em UTC) e os metadados da biblioteca que o commit tem
-    (``serialize_db_execution_id``, ``serialize_db_input_versions``, ``serialize_db_snapshot``);
-    os commits de ``vacuum`` e de ``OPTIMIZE`` vêm sem eles.
+    """Os commits da tabela, do mais recente ao mais antigo.
 
     Exemplo:
 
@@ -1425,6 +1550,15 @@ def history(uri: str, storage: Storage) -> list[dict]:
         history(uri, storage)[0]
         # {"version": 143, "operation": "WRITE", "timestamp": datetime(..., tzinfo=UTC),
         #  "serialize_db_execution_id": "exec-2026-08-31", "serialize_db_input_versions": "{}"}
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param storage: o armazenamento da raiz do banco.
+    :return: um dicionário por commit, com ``version``, ``operation``, ``timestamp`` (o instante,
+        em UTC) e os metadados da biblioteca que o commit tem (``serialize_db_execution_id``,
+        ``serialize_db_input_versions``, ``serialize_db_snapshot``), que só os commits das
+        partições de uma execução levam; os de ``create_table``, ``reconcile``, ``rewrite`` e
+        ``deep_copy``, o ``restore`` de ``read_back``, os de ``vacuum`` e os de ``OPTIMIZE`` vêm
+        sem eles.
     """
     entries = []
     for entry in open_table(uri, storage).history():
@@ -1509,25 +1643,36 @@ def _copy_destination(destination: str, source: DeltaTable, storage: Storage) ->
 def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int:
     """Uma tabela nova em ``destination`` com os arquivos, o esquema, a partição, o nome, a
     descrição e as propriedades de uma versão, pela cópia dos arquivos de cada partição e o
-    registro deles; devolve a versão da cópia, uma por partição.
+    registro deles.
 
-    Os dados não passam pela máquina: cada arquivo que o log da versão lista é copiado por
-    ``Storage.copy`` para o mesmo caminho relativo, e entra no log novo com o tamanho, as linhas e
-    as estatísticas da ação de origem, as dos tipos exatos, num commit ``overwrite`` por partição,
+    Cada arquivo que o log da versão lista é copiado por ``Storage.copy`` para o mesmo caminho
+    relativo, sem os dados passarem pela máquina no S3, e entra no log novo com o tamanho, as linhas
+    e as estatísticas da ação de origem, as dos tipos exatos, num commit ``overwrite`` por partição,
     como ``register_files``; no fim, a contagem da cópia pelos dois leitores é conferida contra a
-    soma das ações, e a diferença é ``RegistrationRefused``. A memória é a do log. Cada partição
-    copiada vai ao log com o número de arquivos e o tempo da cópia.
+    soma das ações. A memória é a do log. Cada partição copiada vai ao log com o número de
+    arquivos e o tempo da cópia.
 
     A repetição continua uma cópia interrompida: com tabela em ``destination``, a partição cujos
-    arquivos ela já registra é pulada, sem commit, e as outras são copiadas; a repetição sobre a
-    cópia completa devolve a mesma versão. Um destino que registra um arquivo que a versão não
-    lista guarda outra tabela e é ``RegistrationRefused``.
+    arquivos ela já registra é pulada, sem commit, e as outras são copiadas.
 
     Exemplo:
 
     .. code-block:: python
 
         deep_copy(uri, 143, storage.uri_of("prod/arquivo/2026T3/cad_lancamentos"), storage)   # 4
+
+    :param uri: a URI da pasta da tabela de origem, sob a raiz do banco.
+    :param version: a versão copiada.
+    :param destination: a URI da pasta da cópia, sob a raiz do banco.
+    :param storage: o armazenamento da raiz do banco.
+    :return: a versão da cópia, que ganha uma versão por partição copiada; a repetição sobre a
+        cópia completa devolve a mesma versão.
+    :raises RegistrationRefused: um destino que registra um arquivo que a versão não lista, que
+        guarda outra tabela; ou, no fim, a contagem da cópia pelos dois leitores diferente da
+        soma das ações.
+    :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``.
+    :raises ExecutionConflict: o commit de uma partição falhou no delta-rs com
+        ``CommitFailedError``.
     """
     source = open_table(uri, storage, version)
     metadata = source.metadata()
@@ -1598,12 +1743,8 @@ def _export_by_rewrite(dt: DeltaTable, uri: str, table: sa.Table, destination: s
 def export_snapshot(uri: str, table: sa.Table, destination: str, storage: Storage,
                     version: int | None = None,
                     mode: Literal["copy", "rewrite"] = "copy") -> list[str]:
-    """Exporta uma versão da tabela como pastas ``<coluna>=<valor>/`` de Parquet, sem o log, e
-    devolve as URIs dos arquivos gravados.
-
-    ``copy`` copia os arquivos que o log lista, sem ler dados (o ``CopyObject`` no S3); cada arquivo
-    guarda o esquema da sua escrita. ``rewrite`` reescreve pelo ``COPY`` particionado do DuckDB, com
-    o esquema da versão em todos. ``version=None`` é a atual.
+    """Exporta uma versão da tabela como arquivos Parquet, sem o log, nas pastas
+    ``<coluna>=<valor>/`` numa tabela particionada.
 
     Exemplo:
 
@@ -1611,6 +1752,18 @@ def export_snapshot(uri: str, table: sa.Table, destination: str, storage: Storag
 
         export_snapshot(uri, Operacao.__table__, storage.uri_of("prod/exportacao/2026T3"), storage,
                         version=143)
+
+    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param table: a tabela do modelo, lida só no modo ``rewrite``.
+    :param destination: a URI da pasta da exportação, sob a raiz do banco.
+    :param storage: o armazenamento da raiz do banco.
+    :param version: a versão exportada; ``version=None`` é a atual.
+    :param mode: ``copy`` copia os arquivos que o log lista, sem ler dados (no S3, o
+        ``CopyObject`` ou o ``UploadPartCopy`` de ``Storage.copy``); cada arquivo guarda o esquema
+        da sua escrita. ``rewrite`` reescreve pelo ``COPY`` particionado do DuckDB, com o esquema
+        da versão em todos.
+    :return: as URIs dos arquivos gravados, em ordem.
+    :raises ValueError: no modo ``copy``, ``uri`` ou ``destination`` fora da raiz de ``storage``.
     """
     dt = open_table(uri, storage, version)
     if mode == "copy":

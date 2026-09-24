@@ -3320,3 +3320,33 @@ do usuário do mesmo dia, `compact`, `archive` e `export` imprimem por tabela o 
 RSS do processo, a publicação os põe no log de cada tabela e `deep_copy` registra o tempo de cada
 partição; a leitura é `serialize_db.resources.peak_rss_mb`, que o script de migração passa a
 importar.
+
+## O que a revisão da documentação mostrou
+
+Em 2026-09-24, a revisão das docstrings e de `docs/` rodou sondas na pasta local, com deltalake
+1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1:
+
+- Os exemplos do tutorial de `docs/index.md` (o modelo, `check_models`, `arrow_schema`, o DDL dos
+  dois motores, `cast`, `render`, `bind`, `create_table`, `publish_partition`, `version_diff` e
+  as propriedades de retenção) e a tabela de tipos devolvem o que a página mostra.
+- O `cast` recusa com `ContractError` em dois textos: a instrução ao cliente nas perdas que o cast
+  seguro do PyArrow não acusa (o `double` fora da escala, a hora numa coluna `Date`, o fuso, o JSON
+  aninhado, o texto longo) e o texto do PyArrow nas outras (`Casting field 'id' with null values to
+  non-nullable`, `Rescaling Decimal value would cause data loss`, `Decimal value does not fit in
+  precision 18`, `would lose data`, `not in range`, `Unsupported cast`). A página dizia a
+  instrução em todas, e o parágrafo foi corrigido.
+- A carga inicial falha fora do `ContractError` quando um valor não converte para o tipo do
+  contrato (`ConversionException`) ou uma coluna do contrato falta nos arquivos
+  (`BinderException`), sem commit: a tabela ficou na versão 0 e sem arquivo de dados.
+- Só os commits das partições de uma execução levam os metadados da biblioteca: `CREATE TABLE`, o
+  `ADD COLUMN` de `reconcile`, o `WRITE` de `rewrite` e os commits da cópia de `deep_copy` vieram
+  sem eles, e `history` e o runbook diziam só `vacuum` e `OPTIMIZE`.
+- `delta.compact` numa partição de dois arquivos, um com `NaN` em `valor` e sem mínimo e máximo no
+  log, gravou um arquivo com `min.valor` 1.0 e `max.valor` 3.0: a compactação devolve a estatística
+  que a decisão da issue #59 tira ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- `check_models` levantou `ContractError` na tabela com duas colunas de partição, em vez de listar
+  a violação; com `SERIALIZE_DB_ENVIRONMENT` vazia, `serialize-db history` saiu com erro de uso e
+  `serialize-db audit` usou `dev` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- O `pdoc` 16 lê o nome de um campo `:param` ou `:raises` até o último dois-pontos da primeira
+  linha do campo, mesmo o de um `s3://` citado, e ignora `:returns:` e `:raise:`; a primeira linha
+  de cada campo fica sem outro dois-pontos.

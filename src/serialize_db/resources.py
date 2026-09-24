@@ -41,15 +41,17 @@ _MEMORY_FILES = {
 
 
 def available_cpus() -> int:
-    """As CPUs que o processo pode usar: as da afinidade do processo (``os.process_cpu_count``,
-    que a variável ``PYTHON_CPU_COUNT`` sobrepõe), limitadas pela menor cota de CPU do cgroup,
-    arredondada para cima como o DuckDB arredonda.
+    """As CPUs que o processo pode usar.
 
     Exemplo:
 
     .. code-block:: python
 
         available_cpus()   # 4 numa máquina de 4 vCPUs sem cota; 2 num contêiner com cota de 1,5
+
+    :return: as CPUs da afinidade do processo (``os.process_cpu_count``, que a variável
+        ``PYTHON_CPU_COUNT`` sobrepõe), limitadas pela menor cota de CPU do cgroup, arredondada
+        para cima como o DuckDB arredonda; ao menos 1.
     """
     cpus = os.process_cpu_count() or 1
     quota = _cgroup_cpu_quota()
@@ -59,16 +61,18 @@ def available_cpus() -> int:
 
 
 def available_memory() -> int:
-    """A memória que o processo ainda pode usar, em bytes: a menor entre a física, a disponível no
-    sistema (``MemAvailable`` de ``/proc/meminfo``, que conta como livre o cache de arquivos que o
-    kernel devolve) e a folga do cgroup (o limite menos o uso fora do cache de arquivos). A memória
-    que os processos da máquina já ocupam, o próprio incluído, fica de fora.
+    """A memória que o processo ainda pode usar. A memória que os processos da máquina já ocupam,
+    o próprio incluído, fica de fora.
 
     Exemplo:
 
     .. code-block:: python
 
         available_memory() / 2**30   # 14.7 numa máquina de 16 GiB com pouco em uso
+
+    :return: em bytes, a menor entre a física, a disponível no sistema (``MemAvailable`` de
+        ``/proc/meminfo``, que conta como livre o cache de arquivos que o kernel devolve) e a
+        folga do cgroup (o limite menos o uso fora do cache de arquivos).
     """
     readings = [os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")]
     system = _meminfo_available()

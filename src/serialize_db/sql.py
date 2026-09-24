@@ -113,7 +113,7 @@ def _prefixed_copy(table: sa.Table, prefix: str) -> sa.Table:
 
 def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
              prefix: str = SENTINEL) -> sa.sql.ClauseElement:
-    """O statement com cada tabela do contrato trocada pela cópia prefixada; o original não muda.
+    """O statement com cada tabela do contrato trocada pela cópia prefixada.
 
     A cópia de cada tabela de ``metadata`` leva o prefixo no nome e cada coluna com nome e tipo,
     tudo entre aspas; chaves e índices ficam de fora, porque um ``SELECT`` ou um
@@ -127,6 +127,13 @@ def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
 
         str(prefixed(sa.select(accounts.c.numero), metadata, "exec_42_"))
         # SELECT "exec_42_cad_contas"."numero" FROM "exec_42_cad_contas"
+
+    :param statement: o statement Core; o original não muda.
+    :param metadata: os modelos do cliente, como ``Base.metadata``; uma tabela fora deles fica
+        como está.
+    :param prefix: o prefixo do nome de cada tabela do contrato; o padrão é o sentinela
+        ``{prefix}``.
+    :return: o statement novo.
     """
     copies = {}
     for table in metadata.tables.values():
@@ -192,10 +199,7 @@ def render(statement: sa.sql.ClauseElement, dialect: Dialect, metadata: sa.MetaD
     O statement é compilado sobre a cópia prefixada (``prefixed``) pelo dialeto do motor com
     ``paramstyle="named"``, que não dobra o ``%`` dos literais. O ``bindparam`` sem valor é o
     parâmetro de execução, que ``bind`` reescreve para o motor; o ``bindparam`` com valor sai como
-    constante, e um nome de parâmetro fora de ``[a-z_][a-z0-9_]*`` é ``SqlError``. O texto sai com
-    o sentinela ``{prefix}`` dentro das aspas de cada tabela do contrato; ``prefix=""`` dá o texto
-    sobre as tabelas do contrato, e ``prefix="exec_42_"`` o texto sobre o sandbox dessa execução.
-    Nenhuma linha termina em espaço.
+    constante.
 
     Exemplo:
 
@@ -203,6 +207,17 @@ def render(statement: sa.sql.ClauseElement, dialect: Dialect, metadata: sa.MetaD
 
         render(statement, "redshift", metadata, prefix="exec_42_")
         # SELECT "exec_42_cad_contas"."numero", ... WHERE ... = :data_base_str ...
+
+    :param statement: o statement Core; o original não muda.
+    :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
+    :param metadata: os modelos do cliente, como ``Base.metadata``; uma tabela fora deles fica
+        como está.
+    :param prefix: o prefixo do nome de cada tabela do contrato, dentro das aspas; o padrão deixa
+        no texto o sentinela ``{prefix}``, ``prefix=""`` dá o texto sobre as tabelas do contrato,
+        e ``prefix="exec_42_"`` o texto sobre o sandbox dessa execução.
+    :return: o texto; nenhuma linha termina em espaço.
+    :raises SqlError: um nome de parâmetro fora de ``[a-z_][a-z0-9_]*``, que ``bind`` não leria
+        no texto.
     """
     copy = _parameters_as_placeholders(prefixed(statement, metadata, prefix))
     compiled = copy.compile(dialect=_DIALECTS[dialect], compile_kwargs={"literal_binds": True})
@@ -226,12 +241,9 @@ def _placeholders(sql: str) -> set[str]:
 def bind(sql: str, params: dict[str, object], style: Dialect) -> tuple[str, dict[str, object]]:
     """O texto com ``:nome`` reescrito para o marcador do motor e o dicionário conferido.
 
-    O marcador vira ``$nome`` no estilo ``duckdb`` e fica ``:nome`` no ``redshift``, que o
-    ``redshift_connector`` lê com ``cursor.paramstyle = "named"``. Toda região citada passa
-    intacta, entre aspas simples ou duplas: ``'12:30'``, ``valor::DECIMAL(18, 2)`` e a coluna
-    ``"taxa :base"`` não mudam. Um texto que ainda traz o sentinela ``{prefix}`` é ``SqlError``,
-    e um dicionário com parâmetro faltante ou sobrando também. Nenhum valor entra no texto: o
-    dicionário vai ao driver.
+    Toda região citada passa intacta, entre aspas simples ou duplas: ``'12:30'``,
+    ``valor::DECIMAL(18, 2)`` e a coluna ``"taxa :base"`` não mudam. Nenhum valor entra no texto:
+    o dicionário vai ao driver.
 
     Exemplo:
 
@@ -239,6 +251,14 @@ def bind(sql: str, params: dict[str, object], style: Dialect) -> tuple[str, dict
 
         bind('SELECT 1 WHERE "data_str" = :data_str', {"data_str": "2026-08-31"}, "duckdb")
         # ('SELECT 1 WHERE "data_str" = $data_str', {'data_str': '2026-08-31'})
+
+    :param sql: o texto com os parâmetros por nome, como ``read_sql`` o devolve.
+    :param params: o valor de cada parâmetro do texto, por nome.
+    :param style: o motor. O marcador vira ``$nome`` no estilo ``duckdb`` e fica como está no
+        ``redshift``, que o ``redshift_connector`` lê com ``cursor.paramstyle = "named"``.
+    :return: o texto reescrito e uma cópia de ``params``.
+    :raises SqlError: um texto que ainda traz o sentinela ``{prefix}``, ou um dicionário com
+        parâmetro faltante ou sobrando.
     """
     if SENTINEL in sql:
         raise SqlError(
@@ -270,6 +290,9 @@ def referenced_tables(statement_or_sql: sa.sql.ClauseElement | str) -> set[str]:
 
         referenced_tables(statement)                            # {"cad_contas", "cad_lancamentos"}
         referenced_tables(render(statement, "duckdb", metadata))   # o mesmo conjunto
+
+    :param statement_or_sql: o statement Core, ou o texto gerado com o sentinela.
+    :return: os nomes das tabelas.
     """
     if isinstance(statement_or_sql, str):
         return set(_SENTINEL_TABLE.findall(statement_or_sql))
@@ -284,10 +307,8 @@ def referenced_tables(statement_or_sql: sa.sql.ClauseElement | str) -> set[str]:
 
 
 def sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData) -> dict[str, str]:
-    """Os arquivos de texto SQL de cada statement, em memória: o conteúdo por nome de arquivo.
+    """Os arquivos de texto SQL de cada statement, em memória.
 
-    ``<nome>.duckdb.sql`` e ``<nome>.redshift.sql`` são o texto de cada motor, sempre com o
-    sentinela ``{prefix}`` e com ``\\n`` final, porque o arquivo versionado serve a qualquer alvo.
     O pipeline os versiona no seu repositório, e o diff contra a geração nova mostra o que uma
     mudança de modelo ou de statement altera em cada motor.
 
@@ -297,6 +318,14 @@ def sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData
 
         sorted(sql_files({"total_por_conta": statement}, metadata))
         # ["total_por_conta.duckdb.sql", "total_por_conta.redshift.sql"]
+
+    :param statements: os statements Core por nome, que dá nome aos arquivos.
+    :param metadata: os modelos do cliente, como ``Base.metadata``; uma tabela fora deles fica
+        como está.
+    :return: o conteúdo por nome de arquivo: ``<nome>.duckdb.sql`` e ``<nome>.redshift.sql`` são
+        o texto de cada motor, sempre com o sentinela ``{prefix}`` e com ``\\n`` final, porque o
+        arquivo versionado serve a qualquer alvo.
+    :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
     """
     files = {}
     for name, statement in statements.items():
@@ -307,7 +336,7 @@ def sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData
 
 def write_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData,
                     directory: str) -> list[str]:
-    """Grava ``sql_files`` em ``directory``, criada se preciso, e devolve os caminhos gravados.
+    """Grava ``sql_files`` em ``directory``.
 
     Exemplo:
 
@@ -315,6 +344,13 @@ def write_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
 
         write_sql_files({"total_por_conta": statement}, metadata, "sql")
         # ["sql/total_por_conta.duckdb.sql", "sql/total_por_conta.redshift.sql"]
+
+    :param statements: os statements Core por nome, que dá nome aos arquivos.
+    :param metadata: os modelos do cliente, como ``Base.metadata``; uma tabela fora deles fica
+        como está.
+    :param directory: a pasta local dos arquivos versionados, criada se preciso.
+    :return: os caminhos gravados, em ordem de nome.
+    :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
     """
     return write_files(sql_files(statements, metadata), directory)
 
@@ -323,13 +359,21 @@ def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
                     directory: str) -> list[str]:
     """O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
 
-    Vazio quando nada mudou; um arquivo ausente aparece inteiro como acrescentado. Nada é gravado.
+    Nada é gravado.
 
     Exemplo:
 
     .. code-block:: python
 
         check_sql_files({"total_por_conta": statement}, metadata, "sql")   # [] quando atualizados
+
+    :param statements: os statements Core por nome, que dá nome aos arquivos.
+    :param metadata: os modelos do cliente, como ``Base.metadata``; uma tabela fora deles fica
+        como está.
+    :param directory: a pasta local dos arquivos versionados.
+    :return: as linhas do diff; vazio quando nada mudou, e um arquivo ausente aparece inteiro
+        como acrescentado.
+    :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
     """
     return diff_files(sql_files(statements, metadata), directory)
 
@@ -337,9 +381,7 @@ def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
 def read_sql(directory: str, name: str, dialect: Dialect, prefix: str) -> str:
     """O texto versionado com o sentinela trocado pelo prefixo informado, pronto para ``bind``.
 
-    ``prefix`` é obrigatório, porque quem chama sabe o alvo: a string vazia para as tabelas do
-    contrato, ``exec_<id>_`` para o sandbox da execução. Nenhuma outra primitiva preenche o
-    sentinela.
+    Nenhuma outra primitiva preenche o sentinela.
 
     Exemplo:
 
@@ -347,6 +389,14 @@ def read_sql(directory: str, name: str, dialect: Dialect, prefix: str) -> str:
 
         read_sql("sql", "total_por_conta", "duckdb", prefix="exec_42_")
         # SELECT "exec_42_cad_contas"."numero", ...
+
+    :param directory: a pasta local dos arquivos versionados.
+    :param name: o nome do statement, que dá nome ao arquivo.
+    :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
+    :param prefix: o prefixo no lugar do sentinela, a string vazia para as tabelas do contrato ou
+        ``exec_<id>_`` para o sandbox da execução; obrigatório, porque quem chama sabe o alvo.
+    :return: o texto do arquivo ``<name>.duckdb.sql`` ou ``<name>.redshift.sql`` de
+        ``directory``.
     """
     path = os.path.join(directory, f"{name}.{dialect}.sql")
     with open(path, encoding="utf-8") as handle:

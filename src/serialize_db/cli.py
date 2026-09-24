@@ -3,11 +3,12 @@
 Cada subcomando entra com a etapa que entrega a primitiva por trás dele: ``schema`` é o da etapa 1,
 ``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6, ``load`` o da etapa 7, ``publish`` o da
 etapa 8 e ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e ``history`` os da etapa
-9, o runbook abaixo. ``schema write`` grava os arquivos de esquema dos modelos e ``schema check``
-compara os versionados com a geração nova, sem gravar; ``sql write`` grava o texto SQL de cada
-statement do pipeline em cada motor e ``sql check`` o compara com a geração nova. ``run`` abre uma
-execução e entrega a ``modulo:funcao`` do pipeline; ``audit`` imprime o texto das verificações de
-uma tabela (``--sql``) ou roda a auditoria sobre a versão publicada, no motor de ``--engine``;
+9, com o runbook abaixo, seguido das opções de cada subcomando. ``schema write`` grava os arquivos
+de esquema dos modelos e ``schema check`` compara os versionados com a geração nova, sem gravar;
+``sql write`` grava o texto SQL de cada statement do pipeline em cada motor e ``sql check`` o
+compara com a geração nova. ``run`` abre uma execução e entrega a ``modulo:funcao`` do pipeline;
+``audit`` imprime o texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a
+versão publicada, no motor de ``--engine``;
 ``load`` faz a carga inicial da base Parquet de origem (``--source``) nas tabelas Delta do
 ambiente, as sem partição antes das particionadas, e confere contagem e somas por partição;
 ``publish`` publica no Redshift fora de uma execução, mostra o estado da publicação (``--status``),
@@ -53,9 +54,11 @@ Exemplo:
 
 O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff
 impresso, quando a auditoria reprova e quando a carga acha uma partição fora do contrato ou uma
-diferença de contagem ou soma; 2 no erro de uso, no conflito de execução, na publicação sem a
-tabela de controle, na origem da carga ausente, no snapshot repetido ou ausente, na compactação
-depois de um snapshot na versão atual e no destino da exportação não vazio ou fora da raiz.
+diferença de contagem ou soma; 2 no erro de uso, na tabela fora do modelo ou sem Delta, na
+partição acima do ``String(n)`` da coluna de partição, no conflito de execução, na publicação sem
+a tabela de controle, no modelo fora do contrato e na origem ausente da carga, no snapshot
+repetido ou ausente, na compactação depois de um snapshot na versão atual e no destino da
+exportação não vazio ou fora da raiz.
 
 .. include:: ../../docs/operacao.md
 """
@@ -745,9 +748,16 @@ def _history(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Executa a linha de comando e devolve o código de saída.
+    """Executa a linha de comando.
 
-    Cada subcomando guarda a sua função em ``handler`` (``set_defaults`` do ``argparse``).
+    Cada subcomando guarda a sua função em ``handler`` (``set_defaults`` do ``argparse``). Fora de
+    ``schema`` e ``sql``, o log vai ao stderr a partir do nível ``INFO``.
+
+    :param argv: os argumentos, sem o nome do programa; ``None`` lê ``sys.argv``.
+    :return: o código de saída: 0 quando o comando termina, 1 e 2 nos casos que a documentação
+        do módulo lista.
+    :raises SystemExit: o erro de uso que o ``argparse`` detecta, com o código 2, e ``--help``,
+        com o código 0.
     """
     args = _build_parser().parse_args(argv)
     if args.command not in ("schema", "sql"):

@@ -135,3 +135,10 @@ The battery of 2026-09-24 at 01:41 to 02:19 UTC ran on a 16 vCPU (two per physic
 each opening), 29.7 GiB free of 37.0 GiB, the same roots under `.../shared/<usuário>/serialize-db/`
 and `main` with #69; the whole migration finished there, `cad_lancamentos` peaking at 16,430 MB.
 `plan/POC.md`
+
+A new cloud session container (2026-09-24) starts without `.duckdb/`: the package tests with
+`SERIALIZE_DB_TEST_LOCAL_ROOT` failed on the missing `delta` extension until the GitHub
+workflow's command installed it (`duckdb.connect(config={'extension_directory': '.duckdb'})
+.execute('INSTALL delta')`), and the stand-in's `s3` cases also need `httpfs` and `aws` there.
+With the three, the local root gave 427 passed and 94 skipped, and the stand-in with the local
+root 520 passed and 1 skipped. `README.md`

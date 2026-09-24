@@ -146,8 +146,7 @@ def arrow_type(column: sa.Column) -> pa.DataType:
     """O tipo Arrow da coluna, pela tabela de tipos do contrato.
 
     ``Numeric(p, s)`` vira ``decimal128(p, s)``; ``DateTime`` vira ``timestamp[us]``, com
-    ``tz="UTC"`` quando o tipo tem fuso; os demais seguem a tabela. Um tipo fora dela (``Float``,
-    ``LargeBinary``, ``ARRAY``, ``Interval``) é ``ContractError``, com a tabela e a coluna.
+    ``tz="UTC"`` quando o tipo tem fuso; os demais seguem a tabela.
 
     Exemplo:
 
@@ -155,6 +154,11 @@ def arrow_type(column: sa.Column) -> pa.DataType:
 
         arrow_type(Operacao.__table__.c.id_operacao)   # int64
         arrow_type(Operacao.__table__.c.data)          # date32[day]
+
+    :param column: a coluna do modelo.
+    :return: o tipo Arrow.
+    :raises ContractError: um tipo fora da tabela (``Float``, ``LargeBinary``, ``ARRAY``,
+        ``Interval``), com a tabela e a coluna na mensagem.
     """
     kind = column.type
     # Numeric leva precisão e escala; Float e Double derivam de Numeric e ficam fora deste ramo.
@@ -180,10 +184,6 @@ def _arrow_field(column: sa.Column, position: int) -> pa.Field:
 def arrow_schema(table: sa.Table) -> pa.Schema:
     """O esquema Arrow da tabela: um campo por coluna, na ordem do modelo.
 
-    Cada campo leva a nulidade, ``PARQUET:field_id`` pela posição e o comentário da coluna em
-    ``metadata``; o esquema leva o nome da tabela em ``serialize_db_table``. Um campo JSON é
-    ``string``, sem a extensão ``arrow.json``.
-
     Exemplo:
 
     .. code-block:: python
@@ -191,6 +191,12 @@ def arrow_schema(table: sa.Table) -> pa.Schema:
         schema = arrow_schema(Operacao.__table__)
         schema.field("id_operacao").nullable        # False
         schema.field("valor").metadata[b"comment"]  # b"Valor"
+
+    :param table: a tabela do modelo.
+    :return: o esquema, com o nome da tabela em ``serialize_db_table``; cada campo leva a
+        nulidade, ``PARQUET:field_id`` pela posição e o comentário da coluna em ``metadata``. Um
+        campo JSON é ``string``, sem a extensão ``arrow.json``.
+    :raises ContractError: uma coluna de tipo fora do contrato.
     """
     fields = []
     for position, column in enumerate(table.columns, start=1):
@@ -212,6 +218,10 @@ def delta_schema(table: sa.Table) -> DeltaSchema:
     .. code-block:: python
 
         delta_schema(Operacao.__table__).to_json()   # {"type": "struct", "fields": [...]}
+
+    :param table: a tabela do modelo.
+    :return: o ``deltalake.Schema``.
+    :raises ContractError: uma coluna de tipo fora do contrato.
     """
     fields = []
     for field in arrow_schema(table):
@@ -296,15 +306,17 @@ def _adjusted_keys(keys: list[tuple[str, ...]], info: dict) -> tuple[tuple[str, 
 def table_options(table: sa.Table) -> TableOptions:
     """As opções físicas da tabela, lidas de ``Table.info["serialize_db"]``.
 
-    Sem ``partition_by`` a tabela não tem partição; mais de uma coluna de partição é
-    ``ContractError``. ``keys`` reúne a chave primária, as ``UniqueConstraint`` e os índices
-    únicos, ajustados por ``keys["add"]`` e ``keys["drop"]``, sempre listas de colunas.
-
     Exemplo:
 
     .. code-block:: python
 
         table_options(Operacao.__table__).sort_key   # ("data", "id_operacao")
+
+    :param table: a tabela do modelo.
+    :return: as opções: sem ``partition_by`` a tabela não tem partição, e ``keys`` reúne a chave
+        primária, as ``UniqueConstraint`` e os índices únicos, ajustados por ``keys["add"]`` e
+        ``keys["drop"]``, sempre listas de colunas.
+    :raises ContractError: mais de uma coluna de partição.
     """
     info = table.info.get("serialize_db", {})
     partition = info.get("partition_by") or []
@@ -364,7 +376,7 @@ _PARTITION_VALUE = re.compile(PARTITION_VALUE)
 
 
 def check_partition_value(value: str) -> str:
-    """O valor, quando segue ``PARTITION_VALUE`` por inteiro; ``ContractError`` quando não segue.
+    """O valor, quando segue ``PARTITION_VALUE`` por inteiro.
 
     Exemplo:
 
@@ -373,6 +385,10 @@ def check_partition_value(value: str) -> str:
         check_partition_value("2026-08-31")   # "2026-08-31"
         check_partition_value("2026-Q1")      # "2026-Q1"
         check_partition_value("d'agua")       # ContractError
+
+    :param value: o valor da partição, ou um nome sob a mesma regra, como o ``execution_id``.
+    :return: o próprio valor.
+    :raises ContractError: o valor fora da regra, ou que não é ``str``.
     """
     if not isinstance(value, str) or not _PARTITION_VALUE.fullmatch(value):
         raise ContractError(
@@ -391,13 +407,18 @@ def sql_type(column: sa.Column, dialect: Dialect) -> str:
     DuckDB aceita e ignora o comprimento; o Redshift o aplica em bytes); ``VARCHAR`` e
     ``VARCHAR(65535)`` para ``Text``; ``VARCHAR(36)`` para ``Uuid``; ``JSON`` e ``SUPER`` para
     ``JSON``; ``DOUBLE`` e ``DOUBLE PRECISION`` para ``Double``; ``TIMESTAMP`` ou ``TIMESTAMPTZ``
-    para ``DateTime``. Um tipo fora do contrato é ``ContractError``.
+    para ``DateTime``.
 
     Exemplo:
 
     .. code-block:: python
 
         sql_type(Operacao.__table__.c.valor, "redshift")   # "DOUBLE PRECISION"
+
+    :param column: a coluna do modelo.
+    :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
+    :return: o nome do tipo.
+    :raises ContractError: um tipo fora do contrato.
     """
     kind = column.type
     arrow = arrow_type(column)      # recusa o tipo fora do contrato antes de qualquer texto
@@ -424,6 +445,9 @@ def quoted(name: str) -> str:
     .. code-block:: python
 
         quoted("to")   # '"to"'
+
+    :param name: o identificador, sem aspas.
+    :return: o identificador citado, ``"<name>"``.
     """
     return f'"{name}"'
 
@@ -448,6 +472,11 @@ def column_ddl(column: sa.Column, dialect: Dialect) -> str:
     .. code-block:: python
 
         column_ddl(Operacao.__table__.c.id_operacao, "duckdb")   # '"id_operacao" BIGINT NOT NULL'
+
+    :param column: a coluna do modelo.
+    :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
+    :return: a linha, sem indentação nem vírgula; ``NOT NULL`` só na coluna que não aceita nulo.
+    :raises ContractError: um tipo fora do contrato.
     """
     text = f"{quoted(column.name)} {sql_type(column, dialect)}"
     if not column.nullable:
@@ -472,12 +501,8 @@ def redshift_options(options: TableOptions) -> str:
 def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", temporary: bool = False) -> str:
     """O ``CREATE TABLE`` da tabela no motor, gerado como texto.
 
-    Colunas, tipos e ``NOT NULL``, todo identificador entre aspas; ``DISTSTYLE``, ``DISTKEY`` e
-    ``SORTKEY`` no Redshift, de ``table_options``. Sem chave, ``DEFERRABLE``, ``Identity``,
-    ``CHECK``, ``DEFAULT`` nem comentário: as chaves são da auditoria, e o comentário vai no
-    esquema Delta. ``prefix`` renomeia a tabela para o sandbox, dentro das aspas, e ``temporary``
-    emite ``CREATE TEMP TABLE``, a tabela que dura a sessão: no DuckDB só a conexão que a criou a
-    vê, e um ``cursor()`` é outra conexão.
+    Sem chave, ``DEFERRABLE``, ``Identity``, ``CHECK``, ``DEFAULT`` nem comentário: as chaves são
+    da auditoria, e o comentário vai no esquema Delta.
 
     Exemplo:
 
@@ -488,6 +513,18 @@ def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", temporary: bool = F
         #     "id_operacao" BIGINT NOT NULL,
         #     ...
         # ) SORTKEY ("data", "id_operacao")
+
+    :param table: a tabela do modelo.
+    :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
+    :param prefix: o prefixo do nome da tabela, dentro das aspas, que a renomeia para o sandbox;
+        o padrão, vazio, mantém o nome.
+    :param temporary: ``True`` emite ``CREATE TEMP TABLE``, a tabela que dura a sessão; no DuckDB
+        só a conexão que a criou a vê, e um ``cursor()`` é outra conexão.
+    :return: o texto, sem ``;`` nem ``\\n`` no fim: colunas, tipos e ``NOT NULL``, todo
+        identificador entre aspas; ``DISTSTYLE``, ``DISTKEY`` e ``SORTKEY`` no Redshift, de
+        ``table_options``.
+    :raises ContractError: uma coluna de tipo fora do contrato; no Redshift, também mais de uma
+        coluna de partição.
     """
     lines = []
     for column in table.columns:
@@ -715,20 +752,13 @@ def _cast_reader(reader: pa.RecordBatchReader, table: sa.Table) -> pa.RecordBatc
 def cast(
     data: pa.Table | pa.RecordBatch | pa.RecordBatchReader, table: sa.Table
 ) -> pa.Table | pa.RecordBatch | pa.RecordBatchReader:
-    """Os dados no esquema do contrato da tabela, devolvidos no mesmo tipo em que chegaram.
+    """Os dados no esquema do contrato da tabela.
 
     Só as colunas do contrato presentes entram, na ordem do contrato; as ausentes ficam para quem
     grava. Cada coluna é convertida com ``safe=True`` (``large_string``, ``string_view`` e
     dicionário para ``string``, timestamps a microssegundos, inteiro em ``Numeric``), e as perdas
-    que o cast seguro não acusa são recusadas: ``double`` fora da escala de um ``Numeric``,
-    ``timestamp`` com hora numa coluna ``Date``, ``timestamp`` com fuso numa coluna ``DateTime``
-    sem fuso e o inverso, documento JSON como ``struct``, texto acima de ``String(n)`` em bytes, e
-    texto numa coluna ``Text`` ou documento JSON acima de 65.535 bytes, o teto do Redshift. Um
-    ``timestamp`` com outro fuso numa coluna com fuso entra no mesmo instante, em UTC. Nulo em
-    coluna ``NOT NULL``, escala perdida, nanossegundo não nulo,
-    estouro de inteiro, um tipo sem conversão para o do contrato e um lote sem coluna alguma do
-    contrato também são ``ContractError``, com a tabela, a coluna e a instrução ao cliente na
-    mensagem. Um ``RecordBatchReader`` sai como leitor que converte lote a lote.
+    que o cast seguro não acusa são recusadas. Um ``timestamp`` com outro fuso numa coluna com
+    fuso entra no mesmo instante, em UTC.
 
     Exemplo:
 
@@ -739,6 +769,20 @@ def cast(
                                             "data_str": ["2026-08-31"], "extra": [0]})
         cast(batch, Operacao.__table__).schema.names
         # ["id_operacao", "data", "valor", "data_str"]
+
+    :param data: os dados, com as colunas pelo nome do modelo.
+    :param table: a tabela do modelo.
+    :return: os dados no mesmo tipo em que chegaram; um ``RecordBatchReader`` sai como leitor que
+        converte lote a lote.
+    :raises ContractError: nulo em coluna ``NOT NULL``, escala perdida, nanossegundo não nulo,
+        estouro de inteiro, um tipo sem conversão para o do contrato, um lote sem coluna alguma
+        do contrato ou uma coluna do modelo de tipo fora do contrato; ou uma perda que o cast
+        seguro não acusa, com a instrução ao cliente na mensagem: ``double`` fora da escala de um
+        ``Numeric``, ``timestamp`` com hora numa coluna ``Date``, ``timestamp`` com fuso numa
+        coluna ``DateTime`` sem fuso e o inverso, documento JSON como ``struct``, texto acima de
+        ``String(n)`` em bytes, e texto numa coluna ``Text`` ou documento JSON acima de 65.535
+        bytes, o teto do Redshift. A mensagem traz a tabela e a coluna. Num leitor, a recusa de
+        um valor sai na leitura do lote, e as demais, na chamada.
     """
     if isinstance(data, pa.RecordBatchReader):
         return _cast_reader(data, table)
@@ -816,7 +860,7 @@ def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
 
 
 def check_models(metadata: sa.MetaData) -> list[str]:
-    """As violações do contrato nos modelos, um texto por violação; vazia nos modelos corretos.
+    """As violações do contrato nos modelos.
 
     As regras: tipo fora da tabela de tipos; ``autoincrement`` numa chave inteira (o padrão
     ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; chave estrangeira
@@ -832,6 +876,11 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     .. code-block:: python
 
         assert check_models(Base.metadata) == []
+
+    :param metadata: os modelos do cliente, como ``Base.metadata``.
+    :return: a lista, um texto por violação; vazia nos modelos corretos.
+    :raises ContractError: uma tabela com mais de uma coluna de partição, recusada por
+        ``table_options`` em vez de listada.
     """
     problems = []
     for table in metadata.sorted_tables:
@@ -857,10 +906,8 @@ def _delta_schema_json(table: sa.Table) -> str:
 
 
 def schema_files(metadata: sa.MetaData) -> dict[str, str]:
-    """Os arquivos de esquema de cada tabela, em memória: o conteúdo por nome de arquivo.
+    """Os arquivos de esquema de cada tabela, em memória.
 
-    ``<tabela>.delta.json`` é o esquema Delta em JSON canônico, ``<tabela>.duckdb.sql`` e
-    ``<tabela>.redshift.sql`` são o ``CREATE TABLE`` de cada motor; todo texto termina em ``\\n``.
     O cliente os versiona no repositório do pipeline, e o diff contra a geração nova mostra o que
     uma mudança de modelo altera em cada motor.
 
@@ -870,6 +917,13 @@ def schema_files(metadata: sa.MetaData) -> dict[str, str]:
 
         sorted(schema_files(Base.metadata))
         # ["cad_operacoes.delta.json", "cad_operacoes.duckdb.sql", "cad_operacoes.redshift.sql"]
+
+    :param metadata: os modelos do cliente, como ``Base.metadata``.
+    :return: o conteúdo por nome de arquivo: ``<tabela>.delta.json`` é o esquema Delta em JSON
+        canônico, ``<tabela>.duckdb.sql`` e ``<tabela>.redshift.sql`` são o ``CREATE TABLE`` de
+        cada motor; todo texto termina em ``\\n``.
+    :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
+        coluna de partição.
     """
     files = {}
     for table in metadata.sorted_tables:
@@ -880,13 +934,19 @@ def schema_files(metadata: sa.MetaData) -> dict[str, str]:
 
 
 def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
-    """Grava ``schema_files`` em ``directory``, criada se preciso, e devolve os caminhos gravados.
+    """Grava ``schema_files`` em ``directory``.
 
     Exemplo:
 
     .. code-block:: python
 
         write_schema_files(Base.metadata, "schema")   # ["schema/cad_operacoes.delta.json", ...]
+
+    :param metadata: os modelos do cliente, como ``Base.metadata``.
+    :param directory: a pasta local dos arquivos versionados, criada se preciso.
+    :return: os caminhos gravados, em ordem de nome.
+    :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
+        coluna de partição.
     """
     return write_files(schema_files(metadata), directory)
 
@@ -894,12 +954,19 @@ def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
 def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
     """O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
 
-    Vazio quando nada mudou; um arquivo ausente aparece inteiro como acrescentado. Nada é gravado.
+    Nada é gravado.
 
     Exemplo:
 
     .. code-block:: python
 
         check_schema_files(Base.metadata, "schema")   # [] quando os arquivos estão atualizados
+
+    :param metadata: os modelos do cliente, como ``Base.metadata``.
+    :param directory: a pasta local dos arquivos versionados.
+    :return: as linhas do diff; vazio quando nada mudou, e um arquivo ausente aparece inteiro
+        como acrescentado.
+    :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
+        coluna de partição.
     """
     return diff_files(schema_files(metadata), directory)

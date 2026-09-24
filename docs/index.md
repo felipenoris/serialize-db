@@ -4,10 +4,13 @@ biblioteca deriva deles o esquema Arrow e Delta, o DDL de cada motor, a convers�
 dados e a conferência dos próprios modelos.
 
 Esta página explica o funcionamento geral do pacote, traz o tutorial de uso, a retenção dos
-arquivos removidos e a tabela de mapeamento de tipos. A referência de cada módulo está no menu:
-`serialize_db.schema`, `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`,
-`serialize_db.audit`, `serialize_db.engine` (com o motor `serialize_db.engine.duckdb`),
-`serialize_db.execution`, `serialize_db.errors` e `serialize_db.cli`.
+arquivos removidos e a tabela de mapeamento de tipos. A referência de cada módulo, com os
+argumentos, o retorno e as exceções de cada função, está no menu: `serialize_db.schema`,
+`serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
+`serialize_db.engine` (com os motores `serialize_db.engine.duckdb` e
+`serialize_db.engine.redshift`), `serialize_db.resources`, `serialize_db.execution`,
+`serialize_db.load`, `serialize_db.publication`, `serialize_db.errors` e `serialize_db.cli`, com o
+runbook da operação e as opções de cada subcomando da linha de comando.
 
 ## Como o pacote funciona
 
@@ -193,14 +196,16 @@ done = schema.cast(batch, table)
 done.schema.names   # ["id_operacao", "data", "operacao", "valor", "data_str"]
 ```
 
-O que `cast` recusa, com `serialize_db.errors.ContractError` e a instrução ao cliente na mensagem:
-nulo em coluna `NOT NULL`, `double` fora da escala de um `Numeric`, `timestamp` com hora numa
-coluna `Date`, `timestamp` com fuso numa coluna `DateTime` sem fuso e o inverso, documento JSON como
-`struct`, texto acima de `String(n)` (medido em bytes, como o `VARCHAR(n)` do Redshift), texto numa
-coluna `Text` ou documento JSON acima de 65.535 bytes, o teto do Redshift, escala perdida num
-decimal, inteiro que não cabe na precisão de um `Numeric`, nanossegundo não nulo num timestamp,
-estouro de inteiro, um tipo sem conversão para o do contrato (`struct` numa coluna `Integer`) e um
-lote sem coluna alguma do contrato. O texto é medido depois da conversão para `string`, então o
+`cast` recusa com `serialize_db.errors.ContractError`, com a tabela e a coluna na mensagem. As
+perdas que o cast seguro do PyArrow não acusa vêm com a instrução ao cliente: `double` fora da
+escala de um `Numeric`, `timestamp` com hora numa coluna `Date`, `timestamp` com fuso numa coluna
+`DateTime` sem fuso e o inverso, documento JSON como `struct`, `list` ou `map`, texto acima de
+`String(n)` (medido em bytes, como o `VARCHAR(n)` do Redshift) e texto numa coluna `Text` ou
+documento JSON acima de 65.535 bytes, o teto do Redshift. As que o cast seguro acusa vêm com o
+texto do PyArrow: nulo em coluna `NOT NULL`, escala perdida num decimal, inteiro que não cabe na
+precisão de um `Numeric`, nanossegundo não nulo num timestamp, estouro de inteiro e um tipo sem
+conversão para o do contrato (`struct` numa coluna `Integer`). O lote sem coluna alguma do
+contrato é recusado com a lista das colunas que chegaram. O texto é medido depois da conversão para `string`, então o
 `large_string` do `str` do pandas 3, o `string_view` e o dicionário da `category` passam pela mesma
 medida. Um `double` entra numa coluna `Numeric` só quando `round` o devolve igual; numa coluna
 `Double` ele entra como chega. O fuso é recusado porque tirá-lo ou pô-lo muda a hora gravada, e
@@ -336,7 +341,9 @@ for table in load.load_order(db.tables()):
 ```
 
 Uma partição fora do contrato é `serialize_db.errors.ContractError` antes de qualquer gravação, com
-a tabela, a partição e a coluna, e a chamada seguinte recomeça dela. Na linha de comando:
+a tabela, a partição e a coluna, e a chamada seguinte recomeça dela; um valor que não converte para
+o tipo do contrato, ou uma coluna do contrato ausente dos arquivos, falha no `COPY` com o erro do
+DuckDB, também sem commit. Na linha de comando:
 
 ```
 serialize-db load --root s3://bucket/projeto/delta --environment prod \

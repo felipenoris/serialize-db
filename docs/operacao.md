@@ -138,5 +138,127 @@ serialize-db history --root s3://bucket/projeto/delta --environment prod \
 
 Depois: uma linha por commit, do mais recente ao mais antigo, com a versão, a operação, o
 instante em UTC e `serialize_db_execution_id`, `serialize_db_input_versions` e
-`serialize_db_snapshot` quando o commit os tem; os commits de `vacuum` (`VACUUM START`,
-`VACUUM END`) e de `OPTIMIZE` vêm sem eles.
+`serialize_db_snapshot` quando o commit os tem, o que só os commits das partições de uma execução
+fazem: a criação da tabela, a reconciliação do esquema, a reescrita, a cópia do arquivo, o
+`restore` de uma releitura reprovada, o `vacuum` (`VACUUM START`, `VACUUM END`) e o `OPTIMIZE`
+vêm sem eles.
+
+## Opções da linha de comando
+
+As opções de cada subcomando de `serialize-db`. Um valor de partição, um `--execution-id`, um
+`--name` e o ambiente seguem a regra da partição, `[0-9A-Za-z][0-9A-Za-z_.-]*`, e o valor fora
+dela é erro de uso. A conexão do Redshift, em `publish`, em `run --redshift` e nos subcomandos
+com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
+(`serialize_db.engine.redshift.RedshiftConfig.from_environment`).
+
+### Opções comuns
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--metadata modulo:atributo` | obrigatória | O caminho importável do `MetaData` dos modelos, como `pipeline.models:Base.metadata`. |
+| `--root` | `SERIALIZE_DB_ROOT` | A raiz das tabelas Delta, pasta local ou `s3://bucket/prefixo`; obrigatória sem a variável. |
+| `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dev` | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
+
+`run`, `load` e as rotinas de operação (`snapshot`, `vacuum`, `compact`, `archive`, `export` e
+`history`) recebem as três; `audit` e `publish` também, com `--root` e, em `publish`,
+`--metadata` dispensáveis nos casos descritos nas seções deles; `schema` e `sql` recebem só
+`--metadata`.
+
+### `schema write` e `schema check`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `directory` (posicional) | obrigatória | A pasta dos arquivos de esquema, que `write` grava e `check` compara com a geração nova. |
+
+### `sql write` e `sql check`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--statements modulo:atributo` | obrigatória | O caminho importável do dicionário `{nome: statement}` do pipeline. |
+| `directory` (posicional) | obrigatória | A pasta dos arquivos de texto SQL, que `write` grava e `check` compara com a geração nova. |
+
+### `run`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `pipeline` (posicional) | obrigatória | `modulo:funcao`, a função que recebe a execução aberta. |
+| `--partition` | obrigatória | O valor da partição da execução. |
+| `--engine` | `SERIALIZE_DB_ENGINE`, senão `duckdb` | O motor do sandbox: `duckdb` ou `redshift`. |
+| `--execution-id` | `exec-<AAAA-MM-DD>-<uuid8>`, com a data em UTC | O identificador da execução. |
+| `--redshift` | desligada | Dá à execução a configuração do Redshift, para `run.publish_redshift`; com `--engine redshift` ela já entra. |
+
+### `audit`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--table` | obrigatória | A tabela do modelo auditada. |
+| `--partitions` | todas | As partições auditadas; sem ela, a tabela inteira. |
+| `--foreign-keys` | desligada | Confere as chaves estrangeiras contra a versão atual de cada tabela referenciada. |
+| `--key-scope` | nenhum | `partition` suprime a verificação da chave contra a versão publicada; `table` a faz também na chave com a coluna de `partition_source`. |
+| `--engine` | `SERIALIZE_DB_ENGINE`, senão `duckdb` | O dialeto do texto e o motor da auditoria: `duckdb` ou `redshift`. |
+| `--sql` | desligada | Imprime o texto das verificações, sem conexão nem armazenamento. |
+| `--root` | `SERIALIZE_DB_ROOT` | Obrigatória sem `--sql`. |
+
+### `load`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--source` | obrigatória | A raiz da base Parquet de origem, pasta local ou `s3://bucket/prefixo`. |
+| `--tables` | todas do modelo | As tabelas carregadas, na ordem da carga: as sem partição antes das particionadas. |
+| `--partitions` | todas | As partições carregadas; com ela, as tabelas sem partição ficam de fora. |
+
+### `publish`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--init` | desligada | Cria a tabela de controle `serialize_db_publications`, uma vez; dispensa `--metadata` e `--root`. |
+| `--status` | desligada | Mostra a versão publicada, a atual e as partições pendentes de cada tabela do modelo que existe no ambiente. |
+| `--unpublish` | desligada | Despublica as tabelas: `DROP TABLE` e a linha de controle. |
+| `--tables` | todas do modelo | As tabelas publicadas ou despublicadas. |
+| `--max-workers` | 1 | As tabelas publicadas ao mesmo tempo, cada uma na sua conexão. |
+| `--execution-id` | `publicacao-<AAAA-MM-DD>-<uuid8>`, com a data em UTC | O identificador gravado na linha de controle. |
+| `--metadata`, `--root` | obrigatórias | Dispensadas por `--init`. |
+
+`--init`, `--status` e `--unpublish` valem nesta ordem; sem nenhuma delas, o comando publica.
+
+### `snapshot`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--name` | obrigatória | O nome do snapshot, inédito em `snapshots` e em `archived` do arquivo de controle. |
+
+### `vacuum`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--apply` | desligada | Apaga os arquivos listados; sem ela, só lista. |
+| `--full` | desligada | Inclui os arquivos órfãos, que nenhuma versão do log referencia. |
+| `--retention-hours` | 9600, os 400 dias | A retenção, em horas. |
+
+### `compact`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--table` | obrigatória | A tabela do modelo compactada. |
+| `--partitions` | a tabela inteira | As partições compactadas; obrigatória numa tabela particionada. |
+
+### `archive`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--name` | obrigatória | O snapshot arquivado, registrado em `snapshots`. |
+
+### `export`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--table` | obrigatória | A tabela do modelo exportada. |
+| `--destination` | obrigatória | A URI da pasta de destino, vazia e sob a raiz. |
+| `--version` | a atual | A versão exportada. |
+| `--mode` | `copy` | `copy` copia os arquivos que o log da versão lista; `rewrite` grava um arquivo por partição pelo `COPY` do DuckDB. |
+
+### `history`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--table` | obrigatória | A tabela do modelo cujos commits são listados. |

@@ -605,3 +605,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   format, the publication carries them on each table's log line, `deep_copy` logs each
   partition's copy time, and `peak_rss_mb` moved from the script to `serialize_db.resources`.
   The reading in the target is still pending.
+- **A documentation convention is checked in the rendered page as well as in the source**
+  (2026-09-24). The `:param`/`:return:`/`:raises` convention was checked by a script over the
+  docstrings (a field per argument, every old code span kept, the code unchanged), and the model
+  module written by hand passed it with broken fields: pdoc 16 reads a `:param` or `:raises`
+  name up to the last colon of the field's first line, so `:raises ValueError: a URI fora da
+  raiz: as primitivas` rendered a bold "ValueError: a URI fora da raiz", and ``:memory:`` broke
+  another field. An agent reading the built HTML found them, with 19 more in the engine files;
+  the checker flags a second colon on a field's first line since.

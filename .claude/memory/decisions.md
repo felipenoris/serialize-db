@@ -831,3 +831,27 @@ publication, whose CLI line is a summary printed at the end; `peak_rss_mb` in
 `serialize_db.resources`, read from `_PROC / "self/status"` so the tests fabricate it, with the
 script importing it; and, beyond the ask, the copy time of each partition on `deep_copy`'s log
 line. `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-9.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## The arguments, returns and exceptions in the docstrings (2026-09-24)
+
+On 2026-09-24 the user asked for a review of the project documentation covering every argument
+of every function the pdoc site shows, and answered before the work: the arguments as reST field
+lists at the end of the docstring (`:param name:`, which pdoc renders under the English heading
+"Parameters"), with `:return:` and `:raises Exc:` for the return value and the exceptions; the
+methods of the `Engine` protocol carry the full list again in `DuckDBEngine` and
+`RedshiftEngine`, so each page reads alone; the dataclass constructors are documented by one
+docstring per field, the existing pattern, with the missing ones completed, not by `:param` in the
+class docstring; the options of each `serialize-db` subcommand go to `docs/operacao.md`; the
+review covers `docs/index.md` and `docs/operacao.md` against the code; and no test enforces the
+fields. The assistant's choices, named in the report: the public instance attributes of the
+regular classes (`Execution`, `RedshiftEngine`) got docstrings as the dataclass fields did, and the
+protocols' `(*args, **kwargs)` signature, the `__init__` of `typing.Protocol`, is explained in the
+class docstring instead of documented; the argument paragraphs of the `Execution`, `DuckDBEngine`
+and `RedshiftEngine` class docstrings moved into the `__init__` fields; a `ContractError` that
+only a model outside the contract raises is listed where the function derives text or a schema
+from the model (`serialize_db.schema`, `published_ddl`, `publication_statements`,
+`reconcile_published`, `partition_query`) and left out of the functions that orchestrate; and a
+third-party exception that only propagates stays out, except `duckdb.Error` where a failed
+conversion or a missing extension surfaces (`initial_load`, `Storage.duckdb_connect`,
+`DuckDBEngine`). The code divergences the review found wait on the user in
+`plan/OPEN_QUESTIONS.md`. `docs/operacao.md`, `docs/index.md`, `plan/POC.md`

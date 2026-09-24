@@ -98,8 +98,12 @@ class Database:
     """
 
     root: str
+    """A raiz do banco, como ``Storage.for_uri`` a recebe: ``s3://bucket/prefixo``, um caminho ou
+    ``file://``; o S3 sem região e outro esquema são ``ValueError`` no primeiro uso de
+    ``storage``."""
     environment: str
-    """O ambiente, ``prod`` ou ``dev``: as execuções de um não tocam as tabelas do outro."""
+    """O ambiente, ``prod`` ou ``dev``: as execuções de um não tocam as tabelas do outro. Fora da
+    regra da partição, a construção é ``ContractError``."""
     metadata: sa.MetaData
     """O ``MetaData`` dos modelos do cliente: as tabelas que a execução abre e reconcilia."""
 
@@ -115,27 +119,50 @@ class Database:
         return Storage.for_uri(self.root)
 
     def uri(self, table: sa.Table) -> str:
-        """A pasta da tabela, ``<raiz>/<ambiente>/<tabela>``, sem barra final."""
+        """A pasta da tabela.
+
+        :param table: a tabela do modelo.
+        :return: a URI ``<raiz>/<ambiente>/<tabela>``, sem barra final.
+        """
         return self.storage.uri_of(self.storage.join(self.environment, table.name))
 
     def control_path(self) -> str:
-        """O arquivo de controle dos snapshots do ambiente, relativo à raiz."""
+        """O arquivo de controle dos snapshots do ambiente.
+
+        :return: o caminho relativo à raiz.
+        """
         return self.storage.join(self.environment, delta.CONTROL_FILE)
 
     def staging_prefix(self, execution_id: str) -> str:
-        """Os arquivos intermediários de uma execução, relativos à raiz."""
+        """Os arquivos intermediários de uma execução.
+
+        :param execution_id: o identificador da execução.
+        :return: o prefixo ``<ambiente>/staging/<execution_id>``, relativo à raiz.
+        """
         return self.storage.join(self.environment, "staging", execution_id)
 
     def publication_prefix(self, execution_id: str) -> str:
-        """Os manifestos da publicação no Redshift de uma execução, relativos à raiz."""
+        """Os manifestos da publicação no Redshift de uma execução.
+
+        :param execution_id: o identificador da execução que publica.
+        :return: o prefixo ``<ambiente>/publicacao/<execution_id>``, relativo à raiz.
+        """
         return self.storage.join(self.environment, "publicacao", execution_id)
 
     def archive_prefix(self, name: str) -> str:
-        """A pasta de arquivo de um snapshot do banco, relativa à raiz."""
+        """A pasta de arquivo de um snapshot do banco.
+
+        :param name: o nome do snapshot.
+        :return: o caminho ``<ambiente>/arquivo/<nome>``, relativo à raiz.
+        """
         return self.storage.join(self.environment, "arquivo", name)
 
     def tables(self) -> list[sa.Table]:
-        """As tabelas dos modelos, na ordem das chaves estrangeiras."""
+        """As tabelas dos modelos.
+
+        :return: as tabelas na ordem das chaves estrangeiras, a referenciada antes da que a
+            referencia.
+        """
         return list(self.metadata.sorted_tables)
 
 
@@ -190,12 +217,6 @@ def _sequential_key(table: sa.Table) -> sa.Column:
 class Execution:
     """O ciclo de uma execução: as versões fixadas, o sandbox, a auditoria e a publicação.
 
-    ``engine`` é o nome do motor (``"duckdb"`` ou ``"redshift"``) ou um motor já construído, para
-    os testes. ``execution_id`` ausente vira ``exec-<AAAA-MM-DD>-<uuid8>``. ``redshift`` é a
-    configuração do Redshift (``serialize_db.engine.redshift.RedshiftConfig``), a do motor
-    ``"redshift"`` e a de ``publish_redshift``: o motor ``"redshift"`` sem ela lê as variáveis
-    ``SERIALIZE_DB_REDSHIFT_*``, e ``publish_redshift`` sem ela é ``PublicationError``.
-
     Exemplo:
 
     .. code-block:: python
@@ -206,13 +227,42 @@ class Execution:
 
     def __init__(self, db: Database, engine: str | Engine, partition: str,
                  execution_id: str | None = None, redshift: object | None = None) -> None:
+        """Guarda os parâmetros da execução, com a partição e o ``execution_id`` conferidos; nada
+        é aberto antes da entrada do ``with``.
+
+        :param db: o banco da execução.
+        :param engine: o nome do motor, ``"duckdb"`` ou ``"redshift"``, ou um motor já
+            construído, para os testes; um nome desconhecido é ``ContractError`` na entrada do
+            ``with``.
+        :param partition: a partição da execução, que segue ``schema.PARTITION_VALUE`` e cabe, em
+            bytes, no ``String(n)`` de cada coluna de partição do modelo.
+        :param execution_id: o identificador da execução, que segue ``schema.PARTITION_VALUE``;
+            ausente, vira ``exec-<AAAA-MM-DD>-<uuid8>``, com a data em UTC.
+        :param redshift: a configuração do Redshift
+            (``serialize_db.engine.redshift.RedshiftConfig``), a do motor ``"redshift"`` e a de
+            ``publish_redshift``; o motor ``"redshift"`` sem ela lê as variáveis
+            ``SERIALIZE_DB_REDSHIFT_*``, e no motor ``"duckdb"`` sem ela ``publish_redshift`` é
+            ``PublicationError``.
+        :raises ContractError: a partição ou o ``execution_id`` fora da regra da partição, ou a
+            partição acima do ``String(n)`` de uma coluna de partição.
+        """
         self.db = db
+        """O banco: a raiz, o ambiente e os modelos do cliente."""
         self.partition = _checked_partition(partition, db)
+        """A partição da execução."""
         self.execution_id = check_partition_value(execution_id or _new_execution_id())
+        """O identificador da execução, que vai aos metadados de cada commit e aos nomes do
+        sandbox."""
         self._engine = engine
         self.redshift = redshift
+        """A configuração do Redshift: a recebida, ou, no motor ``"redshift"`` sem ela, a das
+        variáveis ``SERIALIZE_DB_REDSHIFT_*``, lida na entrada do ``with``."""
         self.versions: dict[str, int | None] = {}
+        """A versão fixada de cada tabela do ambiente, pelo nome, ``None`` na que não existe: a
+        entrada do ``with`` as lê, e ``publish`` avança a de cada tabela que grava."""
         self.sandbox: Engine | None = None
+        """O motor da execução, onde o pipeline roda ``stream``, ``loader``, ``query`` e
+        ``load``; ``None`` até a entrada do ``with``, e fechado na saída."""
         self._read: dict[str, int] = {}
         self._written: dict[str, int] = {}
         self._tables: dict[str, DeltaTable] = {}
@@ -303,14 +353,19 @@ class Execution:
             return self.versions.get(table.name)
 
     def previous_partitions(self, table: sa.Table, n: int) -> list[str]:
-        """Os ``n`` últimos valores de partição da tabela até a partição da execução, inclusive, na
-        ordem de texto, lidos das ações ``add`` da versão fixada; vazio numa tabela que não existe.
+        """Os ``n`` últimos valores de partição da tabela até a partição da execução, inclusive.
 
         Exemplo:
 
         .. code-block:: python
 
             run.previous_partitions(Lancamento.__table__, 12)   # ["2025-09-30", ..., "2026-08-31"]
+
+        :param table: a tabela particionada do modelo.
+        :param n: quantos valores, no máximo; zero ou negativo dá a lista vazia.
+        :return: os valores na ordem de texto, lidos das ações ``add`` da versão fixada, ou a lista
+            vazia numa tabela que não existe.
+        :raises ContractError: a tabela sem partição.
         """
         partition_by = table_options(table).partition_by
         if partition_by is None:
@@ -345,7 +400,7 @@ class Execution:
 
     def ingest(self, *tables: sa.Table, partitions: list[str] | None = None,
                materialize: bool = False) -> None:
-        """Traz as tabelas ao sandbox na versão fixada; sem ``partitions``, a tabela inteira.
+        """Traz as tabelas ao sandbox na versão fixada.
 
         Uma tabela entra na sessão principal; mais de uma entram todas em paralelo, cada uma numa
         sessão a mais do motor, e a chamada volta quando todas terminam. Uma falha não cancela as
@@ -356,6 +411,16 @@ class Execution:
         .. code-block:: python
 
             run.ingest(Contrato.__table__, Operacao.__table__)   # views sobre a versão fixada
+
+        :param tables: as tabelas do modelo.
+        :param partitions: os valores de partição a trazer, pela regra da partição; ``None`` traz
+            a tabela inteira.
+        :param materialize: no DuckDB, uma tabela em vez de uma view; no Redshift a tabela é
+            sempre carregada.
+        :raises ContractError: um valor fora da regra da partição, ou ``partitions`` numa tabela
+            sem partição.
+        :raises SandboxError: a tabela sem versão fixada, que não existe no ambiente, ou o nome
+            dela já ocupado no sandbox.
         """
         checked = _checked_partitions(partitions)
         with self._step("ingest"):
@@ -370,7 +435,12 @@ class Execution:
 
     def published(self, table: sa.Table) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: é por ela
-        que o pipeline lê as partições publicadas da tabela que ele mesmo grava."""
+        que o pipeline lê as partições publicadas da tabela que ele mesmo grava.
+
+        :param table: a tabela do modelo.
+        :return: o ``FromClause`` com as colunas do contrato.
+        :raises SandboxError: a tabela sem versão fixada, que ainda não existe.
+        """
         return self.sandbox.published(table, self._uri(table), self._version(table))
 
     def _first_id(self, table: sa.Table, key: sa.Column) -> int:
@@ -383,15 +453,19 @@ class Execution:
         """Uma faixa de ``n`` inteiros contíguos da chave sequencial, acima do maior da versão
         fixada.
 
-        A chave é a chave primária inteira de uma coluna; outra chave é ``ContractError``. O maior
-        valor é lido uma vez por tabela, das estatísticas do log; a tabela nova começa em 1. As
-        faixas de threads paralelas não se sobrepõem, e as de uma reexecução diferem.
+        O maior valor é lido uma vez por tabela, das estatísticas do log. As faixas de threads
+        paralelas não se sobrepõem, e as de uma reexecução diferem.
 
         Exemplo:
 
         .. code-block:: python
 
             ids = run.next_ids(Projetado.__table__, batch.num_rows)   # range(1001, 1101)
+
+        :param table: a tabela do modelo, cuja chave é a chave primária inteira de uma coluna.
+        :param n: o tamanho da faixa.
+        :return: a faixa; na tabela nova, a primeira começa em 1.
+        :raises ContractError: outra chave, ou ``n`` negativo.
         """
         key = _sequential_key(table)
         if n < 0:
@@ -417,7 +491,7 @@ class Execution:
 
     def audit(self, table: sa.Table, partitions: list[str] | None, foreign_keys: bool = False,
               key_scope: KeyScope | None = None) -> AuditReport:
-        """Roda a auditoria do motor e guarda o relatório aprovado; a reprovação é ``AuditFailed``.
+        """Roda a auditoria do motor e guarda o relatório aprovado.
 
         O relatório, com o SQL de cada verificação e as amostras, vai para o log. A contagem por
         partição e as colunas ``Double`` com valor não finito do relatório aprovado são as que
@@ -428,6 +502,21 @@ class Execution:
         .. code-block:: python
 
             run.audit(Projetado.__table__, ["2026-08-31"], foreign_keys=True)
+
+        :param table: a tabela do modelo, carregada no sandbox.
+        :param partitions: as partições da execução, pela regra da partição;
+            ``partitions=None`` audita a tabela inteira do sandbox.
+        :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
+            chave estrangeira, a chave sem a linha referenciada, procurada na tabela do sandbox ou
+            na versão fixada da referenciada.
+        :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_publicada``, a da
+            chave contra as demais partições da versão publicada: o padrão a faz na chave sem a
+            coluna de partição e sem a de ``partition_source``, ``key_scope="partition"`` a
+            suprime, e ``key_scope="table"`` a faz também na chave com a coluna de
+            ``partition_source``.
+        :return: o relatório aprovado.
+        :raises ContractError: um valor de ``partitions`` fora da regra da partição.
+        :raises AuditFailed: a reprovação.
         """
         checked = _checked_partitions(partitions)
         version = self._version(table)
@@ -526,22 +615,41 @@ class Execution:
 
     def publish(self, *tables: sa.Table, partitions: list[str] | None = None, audit: bool = True,
                 max_workers: int = 1) -> dict[str, int]:
-        """Leva as partições auditadas de cada tabela ao Delta e devolve ``{tabela: versão}``.
+        """Leva as partições auditadas de cada tabela ao Delta.
 
-        Exige a auditoria aprovada de cada tabela nessas partições na própria execução;
-        ``audit=False`` dispensa a exigência e fica no log. Uma alteração de dados na tabela desde
-        a versão fixada é ``ExecutionConflict`` sem commit. Depois ``create_table`` se não existe,
-        ``reconcile`` e ``export_partition`` por partição, que registra no log o arquivo que o
-        motor gravou, com a contagem da auditoria em ``expected_rows`` e as colunas ``Double`` com
-        valor não finito sem mínimo e máximo (todas as ``Double`` com ``audit=False``). As tabelas
-        correm num pool de ``max_workers``: na primeira falha nada novo começa, o que está em curso
-        termina, e a exceção leva o resultado de cada tabela numa nota.
+        As partições e a auditoria de toda tabela são conferidas antes do primeiro commit. Depois,
+        por tabela, ``create_table`` se não existe, ``reconcile`` e ``export_partition`` por
+        partição, que registra no log o arquivo que o motor gravou, com a contagem da auditoria em
+        ``expected_rows`` e as colunas ``Double`` com valor não finito sem mínimo e máximo (todas
+        as ``Double`` com ``audit=False``). As tabelas correm num pool de ``max_workers``: na
+        primeira falha nada novo começa, o que está em curso termina, e a exceção leva o resultado
+        de cada tabela numa nota.
 
         Exemplo:
 
         .. code-block:: python
 
             run.publish(Projetado.__table__, partitions=["2026-08-31"])   # {"cad_...": 58}
+
+        :param tables: as tabelas do modelo, com as partições no sandbox.
+        :param partitions: os valores de partição a publicar; ``None`` numa tabela sem partição,
+            que é substituída inteira.
+        :param audit: ``audit=False`` dispensa a exigência da auditoria aprovada, com um aviso no
+            log.
+        :param max_workers: quantas tabelas correm ao mesmo tempo.
+        :return: ``{tabela: versão}``, com a versão do último commit de cada tabela.
+        :raises ContractError: um valor de ``partitions`` fora da regra da partição,
+            ``partitions`` numa tabela sem partição, ou ``None`` numa tabela particionada.
+        :raises AuditFailed: uma tabela sem a auditoria aprovada nessas partições, na mesma ordem,
+            na própria execução.
+        :raises ExecutionConflict: uma alteração de dados na tabela desde a versão fixada,
+            conferida antes de qualquer commit nela (a compactação e os commits só de metadados
+            não contam), ou o commit de outro escritor na mesma partição durante a exportação.
+        :raises SchemaDiffRefused: o diff entre o modelo e a tabela é destrutivo, e ``reconcile``
+            não altera a tabela.
+        :raises RegistrationRefused: uma conferência do arquivo exportado reprovou antes do commit,
+            ou a releitura reprovou depois dele e a tabela voltou à versão anterior.
+        :raises LogUnavailable: um arquivo do log entre a versão fixada e a atual não existe.
         """
         checked = _checked_partitions(partitions)
         # As partições e a auditoria de toda tabela são conferidas antes do primeiro commit.
@@ -555,13 +663,12 @@ class Execution:
             return run_in_pool(tasks, max_workers)
 
     def publish_redshift(self, *tables: sa.Table, max_workers: int = 1) -> dict[str, int]:
-        """Publica no Redshift a versão fixada de cada tabela e devolve ``{tabela: versão}``.
+        """Publica no Redshift a versão fixada de cada tabela.
 
-        A configuração é a ``redshift`` da execução; sem ela é ``PublicationError``, sem tocar
-        o Redshift. Cada tabela corre numa conexão própria do pool de ``max_workers``, com a
-        transação da publicação (``serialize_db.publication.publish_redshift``): só as partições
-        alteradas desde a versão publicada trocam, e a tabela publicada na versão fixada não
-        muda. A tabela que a execução ainda não gravou no Delta é ``PublicationError``.
+        A configuração é a ``redshift`` da execução. Cada tabela corre numa conexão própria do
+        pool de ``max_workers``, com a transação da publicação
+        (``serialize_db.publication.publish_redshift``): só as partições alteradas desde a versão
+        publicada trocam, e a tabela publicada na versão fixada não muda.
 
         Exemplo:
 
@@ -569,6 +676,18 @@ class Execution:
 
             run.publish(Projetado.__table__, partitions=["2026-08-31"])
             run.publish_redshift(Projetado.__table__)   # {"cad_...": 58}
+
+        :param tables: as tabelas do modelo.
+        :param max_workers: quantas tabelas correm ao mesmo tempo.
+        :return: ``{tabela: versão}``, com a versão do Delta publicada em cada tabela.
+        :raises PublicationError: a execução sem a configuração ``redshift``, sem tocar o
+            Redshift; o esquema sem a tabela de controle ``serialize_db_publications``; ou a
+            tabela sem versão fixada, que não existia no ambiente na abertura e que a execução
+            ainda não gravou no Delta.
+        :raises ExecutionConflict: a versão publicada mais nova que a fixada, a linha de controle
+            alterada desde a leitura, ou outra publicação da mesma tabela ao mesmo tempo (o
+            ``1023``, ou a tabela publicada criada por outra primeira publicação).
+        :raises LogUnavailable: um arquivo do log entre a versão publicada e a fixada não existe.
         """
         if self.redshift is None:
             raise PublicationError("publish_redshift precisa da configuração do Redshift: "
@@ -591,6 +710,10 @@ class Execution:
         .. code-block:: python
 
             run.snapshot("2026T3")
+
+        :param name: o nome do snapshot, pela regra da partição; um nome já presente no arquivo de
+            controle é ``ValueError`` na saída do ``with``, depois dos commits.
+        :raises ContractError: o nome fora da regra da partição.
         """
         check_partition_value(name)
         with self._lock:

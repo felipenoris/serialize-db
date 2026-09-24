@@ -595,8 +595,7 @@ def _batches_of(data: object) -> Iterator[pa.RecordBatch]:
 
 
 def environment_limits() -> dict[str, object]:
-    """O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada: as CPUs que o
-    processo pode usar e metade da memória que ele ainda pode usar, por
+    """O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada, por
     ``serialize_db.resources``. O motor os aplica na abertura quando a configuração os omite.
 
     Exemplo:
@@ -605,6 +604,9 @@ def environment_limits() -> dict[str, object]:
 
         environment_limits()   # {'threads': 4, 'memory_limit': '7306MiB'} em 4 vCPUs e 16 GiB
         duckdb.connect(config=environment_limits())
+
+    :return: as opções da conexão do DuckDB: em ``threads``, as CPUs que o processo pode usar;
+        em ``memory_limit``, metade da memória que ele ainda pode usar, em MiB.
     """
     memory_limit = int(available_memory() * _MEMORY_FRACTION)
     return {"threads": available_cpus(), "memory_limit": f"{memory_limit // 2**20}MiB"}
@@ -655,9 +657,6 @@ def _connection_settings(config: DuckDBConfig, folder: str) -> dict[str, object]
 class DuckDBEngine:
     """O sandbox DuckDB de uma execução: um banco, uma sessão e um ``RLock``.
 
-    ``parent`` é o motor de que esta sessão a mais depende, dado por ``new_session``: a sessão
-    abre sobre ``cursor()`` da conexão dele, com o seu lock, e o seu ``cleanup`` fecha só o cursor.
-
     Exemplo:
 
     .. code-block:: python
@@ -672,8 +671,23 @@ class DuckDBEngine:
 
     def __init__(self, config: DuckDBConfig, execution_id: str, storage: Storage,
                  parent: DuckDBEngine | None = None) -> None:
+        """Abre o banco do sandbox e a sessão da execução.
+
+        :param config: a configuração do sandbox.
+        :param execution_id: o identificador da execução, na regra da partição; nomeia o banco
+            padrão e a pasta de transbordo.
+        :param storage: o armazenamento da raiz do banco, que abre a conexão com as extensões e
+            lê e grava o Delta.
+        :param parent: o motor principal, de que esta sessão a mais depende, dado por
+            ``new_session``; a sessão abre sobre ``cursor()`` da conexão dele, com o seu lock, e
+            o seu ``cleanup`` fecha só o cursor. ``None`` abre o banco.
+        :raises ContractError: ``execution_id`` fora da regra da partição.
+        :raises duckdb.Error: uma extensão ausente da pasta configurada ou o secret recusado, na
+            abertura da conexão.
+        """
         self._config = config
         self.execution_id = check_partition_value(execution_id)
+        """O identificador da execução, na regra da partição (``schema.PARTITION_VALUE``)."""
         self._storage = storage
         self._lock = threading.RLock()
         self._owner: int | None = None
@@ -710,7 +724,11 @@ class DuckDBEngine:
     def session(self) -> Iterator[duckdb.DuckDBPyConnection]:
         """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
         chamada dentro do bloco não trava, e um ``stream`` aberto nele roda a consulta na thread
-        do bloco."""
+        do bloco.
+
+        :return: o gerenciador de contexto cujo ``with`` dá a ``duckdb.DuckDBPyConnection`` da
+            sessão.
+        """
         with self._lock:
             outer_owner = self._owner
             self._owner = threading.get_ident()
@@ -720,13 +738,20 @@ class DuckDBEngine:
                 self._owner = outer_owner
 
     def holds_session(self) -> bool:
-        """Se a thread que chama está dentro de ``session()``."""
+        """Se a thread que chama está dentro de ``session()``.
+
+        :return: ``True`` dentro do bloco.
+        """
         return self._owner == threading.get_ident()
 
     def new_session(self) -> DuckDBEngine:
-        """Uma sessão a mais sobre o mesmo banco, gerenciador de contexto: vê o que a sessão
-        principal confirmou e não as tabelas temporárias dela. O cursor nasce sem o lock da
-        principal, porque ``cursor()`` não espera o comando em curso nela."""
+        """Uma sessão a mais sobre o mesmo banco: vê o que a sessão principal confirmou e não as
+        tabelas temporárias dela. O cursor nasce sem o lock da principal, porque ``cursor()`` não
+        espera o comando em curso nela.
+
+        :return: o motor da sessão a mais, gerenciador de contexto, com o seu lock; o
+            ``cleanup`` dele fecha só essa sessão, o cursor.
+        """
         return DuckDBEngine(self._config, self.execution_id, self._storage, parent=self)
 
     def interrupt(self) -> None:
@@ -735,12 +760,20 @@ class DuckDBEngine:
         self._connection.interrupt()
 
     def spool_path(self, kind: str) -> str:
-        """Um caminho novo na pasta de transbordo, para o arquivo de um stream ou de um loader."""
+        """Um caminho novo na pasta de transbordo, para o arquivo de um stream ou de um loader.
+
+        :param kind: o início do nome do arquivo, ``stream`` ou ``loader``.
+        :return: o caminho ``<kind>_<uuid>.arrow`` na pasta de transbordo.
+        """
         return os.path.join(self._spool_folder, f"{kind}_{uuid.uuid4().hex}.arrow")
 
     def name_in_use(self, name: str) -> bool:
         """Se uma tabela ou view confirmada tem o nome, lido num cursor à parte, sem o lock da
-        sessão: a abertura de um ``loader`` não espera a consulta de um ``stream`` aberto antes."""
+        sessão: a abertura de um ``loader`` não espera a consulta de um ``stream`` aberto antes.
+
+        :param name: o nome da tabela ou da view, sem aspas.
+        :return: ``True`` quando o nome está ocupado.
+        """
         cursor = self._connection.cursor()
         try:
             found = cursor.execute(
@@ -774,16 +807,28 @@ class DuckDBEngine:
     def ingest(self, table: sa.Table, uri: str, version: int, partitions: list[str] | None = None,
                materialize: bool = False) -> None:
         """Uma view com o nome do modelo sobre a versão fixada da tabela Delta, ou uma tabela com
-        ``materialize=True``; com ``partitions``, só essas partições.
+        ``materialize=True``.
 
-        Um commit na tabela depois da abertura não muda o que a view lê. O nome ocupado é
-        ``SandboxError``.
+        Um commit na tabela depois da abertura não muda o que a view lê.
 
         Exemplo:
 
         .. code-block:: python
 
             engine.ingest(Lancamento.__table__, uri, 143, partitions=previous, materialize=True)
+
+        :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
+        :param uri: a URI da tabela Delta.
+        :param version: a versão fixada da tabela, lida por
+            ``delta_scan(uri, version := v)``.
+        :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
+            nenhuma.
+        :param materialize: ``True`` copia os dados para uma tabela do sandbox; com ``False``, a
+            view lê o Delta no lugar.
+        :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,
+            sem versão (``version=None``).
+        :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
+            da partição.
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela não existe no Delta")
@@ -797,11 +842,7 @@ class DuckDBEngine:
             connection.execute(text)
 
     def published(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
-        """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: o
-        ``FromClause`` com as colunas do contrato que compila para
-        ``delta_scan(uri, version := v)``.
-
-        Numa tabela que ainda não existe, sem versão, é ``SandboxError``.
+        """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox.
 
         Exemplo:
 
@@ -809,6 +850,13 @@ class DuckDBEngine:
 
             previous = engine.published(Projetada.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
+
+        :param table: a tabela do modelo, que dá as colunas.
+        :param uri: a URI da tabela Delta.
+        :param version: a versão fixada.
+        :return: o ``FromClause`` com as colunas do contrato, para os statements Core, que
+            compila para ``delta_scan(uri, version := v)``.
+        :raises SandboxError: numa tabela que ainda não existe, sem versão (``version=None``).
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão publicada, a tabela ainda não existe")
@@ -830,8 +878,7 @@ class DuckDBEngine:
 
     def query(self, statement_or_sql: sa.sql.ClauseElement | str,
               params: Mapping[str, object] | None = None) -> pa.Table:
-        """O resultado inteiro como ``pa.Table``, sob o lock; um comando sem resultado devolve a
-        tabela ``Count`` ou ``Success`` do DuckDB.
+        """O resultado inteiro como ``pa.Table``, sob o lock.
 
         Exemplo:
 
@@ -839,6 +886,16 @@ class DuckDBEngine:
 
             engine.query(sa.select(tabela).where(tabela.c.data_str == sa.bindparam("p")),
                          {"p": "2026-08-31"})
+
+        :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
+            compila para o sandbox, ou um texto pronto no SQL do motor, com os parâmetros como
+            ``:nome``; o texto cita as tabelas pelo nome do modelo.
+        :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
+            statement ou dos marcadores do texto.
+        :return: a tabela do resultado; um comando sem resultado devolve a tabela ``Count`` ou
+            ``Success`` do DuckDB.
+        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
+            texto, ou o texto ainda traz o sentinela ``{prefix}``.
         """
         text, arguments = self._compiled(statement_or_sql, params)
         with self.session() as connection:
@@ -856,6 +913,20 @@ class DuckDBEngine:
             with engine.stream(sa.select(tabela), batch_size=100_000) as stream:
                 for batch in stream:
                     work(batch)
+
+        :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
+            compila para o sandbox, ou um texto pronto no SQL do motor, com os parâmetros como
+            ``:nome``; o texto cita as tabelas pelo nome do modelo.
+        :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
+            statement ou dos marcadores do texto.
+        :param batch_size: o máximo de linhas de cada lote, passado ao leitor Arrow do DuckDB
+            (``to_arrow_reader``).
+        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` cancela a
+            consulta que ainda roda e apaga o arquivo de transbordo.
+        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
+            texto, ou o texto ainda traz o sentinela ``{prefix}``.
+        :raises duckdb.Error: a consulta que falha antes do primeiro lote; o erro depois dele
+            sobe na leitura seguinte ao último lote entregue.
         """
         text, arguments = self._compiled(statement_or_sql, params)
         return DuckDBStream(self, text, arguments, batch_size)
@@ -870,6 +941,13 @@ class DuckDBEngine:
 
             with engine.loader(Projetada.__table__) as loader:
                 loader.write(batch)
+
+        :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
+        :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
+            cheia, o ``write`` bloqueia.
+        :return: o ``Loader`` da tabela, que guarda os lotes num arquivo Arrow IPC da pasta de
+            transbordo até o ``close`` e os insere num único ``INSERT ... BY NAME``.
+        :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou.
         """
         return DuckDBLoader(self, table, queue_depth)
 
@@ -877,14 +955,21 @@ class DuckDBEngine:
         self, table: sa.Table,
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
-        """Grava os lotes numa tabela nova pelo ``loader`` e devolve as linhas; um DataFrame é
-        ``ContractError`` com a conversão sem cópia na mensagem.
+        """Grava os lotes numa tabela nova pelo ``loader``.
 
         Exemplo:
 
         .. code-block:: python
 
             engine.load(Projetada.__table__, pa.Table.from_pandas(frame, preserve_index=False))
+
+        :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
+        :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
+            iterável de ``pa.RecordBatch``.
+        :return: as linhas gravadas.
+        :raises ContractError: um DataFrame, com a conversão sem cópia na mensagem, ou outro
+            tipo em ``data``; ou um lote que o ``cast`` recusa, e a tabela não é criada.
+        :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou.
         """
         batches = _batches_of(data)
         with self.loader(table) as loader:
@@ -978,13 +1063,7 @@ class DuckDBEngine:
               version: int | None = None, foreign_keys: bool = False,
               key_scope: KeyScope | None = None,
               referenced: Mapping[str, tuple[str, int]] | None = None) -> AuditReport:
-        """Roda as verificações do contrato sobre a tabela do sandbox e devolve o relatório.
-
-        ``uri`` e ``version`` são os da tabela fixada pela execução: dão a versão publicada, que as
-        chaves fora da partição comparam, e o ``max_key`` do ``skip_when``. ``referenced`` dá, por
-        tabela, a URI e a versão fixada da tabela referenciada que o sandbox não tem, para as
-        chaves estrangeiras com ``foreign_keys=True``. A reprovação não levanta aqui: ``passed`` é
-        falso, e ``Execution.audit`` levanta ``AuditFailed``.
+        """Roda as verificações do contrato sobre a tabela do sandbox.
 
         Exemplo:
 
@@ -992,6 +1071,24 @@ class DuckDBEngine:
 
             report = engine.audit(Projetada.__table__, ["2026-08-31"], uri, 57)
             report.passed, report.nonfinite_columns
+
+        :param table: a tabela do modelo, no sandbox.
+        :param partitions: as partições da execução; ``None`` audita a tabela inteira do
+            sandbox.
+        :param uri: a URI da tabela fixada pela execução; com ``version``, dá a versão
+            publicada, que as chaves fora da partição comparam, e o ``max_key`` do
+            ``skip_when``.
+        :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a chave publicada
+            não roda.
+        :param foreign_keys: ``True`` confere as chaves estrangeiras, contra a tabela
+            referenciada do sandbox ou contra a versão de ``referenced``.
+        :param key_scope: o escopo da unicidade; ``"partition"`` suprime a chave publicada, e
+            ``"table"`` a confere também na chave com a coluna de ``partition_source``.
+        :param referenced: por tabela, a URI e a versão fixada da tabela referenciada que o
+            sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``.
+        :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
+            ``Execution.audit`` levanta ``AuditFailed``.
+        :raises ContractError: um valor de ``partitions`` fora da regra da partição.
         """
         published = None
         published_max_key = None
@@ -1049,13 +1146,11 @@ class DuckDBEngine:
     def export_partition(self, table: sa.Table, uri: str, value: str | None,
                          metadata: Mapping[str, str], expected_rows: int | None = None,
                          columns_without_min_max: Collection[str] = ()) -> int:
-        """Leva a partição do sandbox ao Delta e devolve a versão do commit.
+        """Leva a partição do sandbox ao Delta.
 
         A partição sai por ``COPY ... (RETURN_STATS)`` num arquivo novo dentro da pasta dela e entra
         no log por ``register_files``, com as conferências, o commit e a releitura, em memória
-        constante. ``expected_rows``, a contagem da auditoria, confere as linhas; sem ela, a
-        contagem do sandbox. As colunas de ``columns_without_min_max`` saem sem mínimo e máximo
-        (issue #59).
+        constante.
 
         Exemplo:
 
@@ -1063,6 +1158,22 @@ class DuckDBEngine:
 
             engine.export_partition(Projetada.__table__, uri, "2026-08-31",
                                     delta.commit_metadata("exec-42", versions))
+
+        :param table: a tabela do modelo, no sandbox.
+        :param uri: a URI da tabela Delta, sob a raiz do armazenamento.
+        :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
+        :param metadata: os metadados do commit, de ``delta.commit_metadata``.
+        :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
+            registrados; sem ela, a contagem do sandbox.
+        :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
+            que saem sem mínimo e máximo (issue #59).
+        :return: a versão do commit.
+        :raises ContractError: o valor fora da regra da partição, ``None`` numa tabela
+            particionada, ou um valor numa tabela sem partição.
+        :raises RegistrationRefused: uma conferência dos arquivos reprovou, sem commit, ou a
+            releitura desfez o commit.
+        :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
+        :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
         """
         partition_by = table_options(table).partition_by
         if partition_by is not None:
@@ -1093,7 +1204,8 @@ class DuckDBEngine:
     # ------------------------------------------------------------ o encerramento
 
     def cleanup(self) -> None:
-        """Cancela o comando em curso, fecha a conexão e apaga o banco e a pasta de transbordo.
+        """Cancela o comando em curso, fecha a conexão e apaga a pasta de transbordo, o banco
+        temporário (``DuckDBConfig.database`` ``None``) e a pasta que o motor criou.
 
         Numa sessão a mais, fecha só o cursor. A segunda chamada não faz nada.
         """

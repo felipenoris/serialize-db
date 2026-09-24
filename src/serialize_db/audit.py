@@ -240,6 +240,7 @@ class CheckResult:
     """O resultado de uma verificação no relatório."""
 
     name: str
+    """O nome da verificação, o de ``Check.name``."""
     sql: str
     """O texto que o motor rodou."""
     defects: int
@@ -247,6 +248,7 @@ class CheckResult:
     sample: pa.Table
     """Até 20 linhas reprovadas; vazia na aprovação."""
     passed: bool
+    """Se a verificação passou: sem defeito, ou dispensada pelo ``skip_when``."""
     reason: str = ""
     """Por que a verificação foi aprovada sem rodar, quando o ``skip_when`` a dispensou."""
 
@@ -266,8 +268,11 @@ class AuditReport:
     """
 
     table: str
+    """O nome da tabela auditada."""
     partitions: tuple[str, ...] | None
+    """As partições auditadas; ``None`` quando a auditoria cobriu a tabela inteira do sandbox."""
     results: tuple[CheckResult, ...]
+    """O resultado de cada verificação da lista de ``checks``, na ordem dela."""
     not_run: tuple[str, ...]
     """As verificações que não rodaram, com o motivo: ``orfao_*`` sem ``foreign_keys=True``, a chave
     publicada com ``key_scope="partition"`` ou sem versão publicada."""
@@ -284,14 +289,22 @@ class AuditReport:
         return all(result.passed for result in self.results)
 
     def sql(self) -> str:
-        """O texto de todas as verificações, uma por bloco com o nome em comentário."""
+        """O texto de todas as verificações.
+
+        :return: uma verificação por bloco, com o nome em comentário, e uma linha em branco entre
+            os blocos.
+        """
         blocks = []
         for result in self.results:
             blocks.append(f"-- {result.name}\n{result.sql}")
         return "\n\n".join(blocks)
 
     def rows(self, value: str | None) -> int:
-        """As linhas da partição na auditoria, 0 quando ela não tem linha."""
+        """As linhas da partição na auditoria.
+
+        :param value: o valor de partição; ``None`` numa tabela sem partição.
+        :return: a contagem da verificação de linhas, 0 quando a partição não tem linha.
+        """
         return int(self.totals.get(value, {}).get("linhas", 0))
 
 
@@ -495,15 +508,6 @@ def checks(table: sa.Table, partitions: Sequence[str] | None = None, foreign_key
            published_max_key: int | None = None) -> list[Check]:
     """As verificações do contrato para as partições da execução, sobre a tabela do modelo.
 
-    ``partitions=None`` audita a tabela inteira do sandbox. ``published`` é a versão publicada da
-    tabela, a origem das demais partições na verificação de chave que não inclui a coluna de
-    partição nem a de ``partition_source``; ``key_scope="partition"`` a suprime, e
-    ``key_scope="table"`` a faz também na chave com a coluna de ``partition_source``.
-    ``referenced`` dá, por nome de tabela, a origem da linha referenciada de cada chave
-    estrangeira, que só é conferida com ``foreign_keys=True``. ``published_max_key``, o
-    ``max_key`` da versão publicada, dá à chave primária inteira de uma coluna o ``skip_when``.
-    As verificações que não rodam ficam fora da lista, e o relatório do motor as registra.
-
     Exemplo:
 
     .. code-block:: python
@@ -511,6 +515,25 @@ def checks(table: sa.Table, partitions: Sequence[str] | None = None, foreign_key
         names = [check.name for check in checks(Operacao.__table__, ["2026-08-31"],
                                                 published=published)]
         # ["linhas", "chave_id_operacao", "chave_id_operacao_publicada"]
+
+    :param table: a tabela do modelo.
+    :param partitions: as partições da execução, pela regra da partição; ``partitions=None``
+        audita a tabela inteira do sandbox.
+    :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
+        chave estrangeira, a chave sem a linha referenciada.
+    :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_publicada``, a da
+        chave contra as demais partições da versão publicada: o padrão a faz na chave sem a coluna
+        de partição e sem a de ``partition_source``, ``key_scope="partition"`` a suprime, e
+        ``key_scope="table"`` a faz também na chave com a coluna de ``partition_source``.
+    :param published: a versão publicada da tabela, a origem das demais partições na verificação
+        ``chave_<colunas>_publicada``, que sem ela não roda.
+    :param referenced: por nome de tabela, a origem da linha referenciada de cada chave
+        estrangeira, que só é conferida com ``foreign_keys=True``.
+    :param published_max_key: o ``max_key`` da versão publicada, que dá à chave primária inteira
+        de uma coluna o ``skip_when``.
+    :return: a verificação de linhas, as de chave e as de órfão, nessa ordem; as verificações que
+        não rodam ficam fora da lista, e o relatório do motor as registra.
+    :raises ContractError: um valor de ``partitions`` fora da regra da partição.
     """
     return checks_and_not_run(table, partitions, foreign_keys, key_scope, published, referenced,
                               published_max_key)[0]
@@ -543,11 +566,8 @@ def audit_sql(table: sa.Table, dialect: Dialect, partitions: Sequence[str] | Non
               published: sa.FromClause | None = None,
               referenced: Mapping[str, sa.FromClause] | None = None,
               prefix: str = sql.SENTINEL) -> dict[str, str]:
-    """``{nome: texto}`` de cada verificação no dialeto, por ``sql.render`` com o prefixo pedido,
-    sem conexão e sem motor: o SQL que a auditoria roda, para depuração.
-
-    Com o prefixo padrão o texto sai com o sentinela ``{prefix}``; ``prefix=""`` dá o texto sobre as
-    tabelas do contrato, o que o motor DuckDB roda.
+    """O texto de cada verificação no dialeto, por ``sql.render`` com o prefixo pedido, sem conexão
+    e sem motor: o SQL que a auditoria roda, para depuração.
 
     Exemplo:
 
@@ -555,6 +575,25 @@ def audit_sql(table: sa.Table, dialect: Dialect, partitions: Sequence[str] | Non
 
         audit_sql(Operacao.__table__, "duckdb", ["2026-08-31"], prefix="")["linhas"]
         # 'SELECT "cad_operacoes"."data_str", count(*) AS linhas, ...'
+
+    :param table: a tabela do modelo.
+    :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
+    :param partitions: as partições da execução, pela regra da partição; ``partitions=None``
+        audita a tabela inteira do sandbox.
+    :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
+        chave estrangeira, a chave sem a linha referenciada.
+    :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_publicada``, a da
+        chave contra as demais partições da versão publicada: o padrão a faz na chave sem a coluna
+        de partição e sem a de ``partition_source``, ``key_scope="partition"`` a suprime, e
+        ``key_scope="table"`` a faz também na chave com a coluna de ``partition_source``.
+    :param published: a versão publicada da tabela, a origem das demais partições na verificação
+        ``chave_<colunas>_publicada``, que sem ela não roda.
+    :param referenced: por nome de tabela, a origem da linha referenciada de cada chave
+        estrangeira, que só é conferida com ``foreign_keys=True``.
+    :param prefix: o prefixo das tabelas no texto; o padrão deixa nele o sentinela ``{prefix}``,
+        e ``prefix=""`` dá o texto sobre as tabelas do contrato, o que o motor DuckDB roda.
+    :return: ``{nome: texto}``, na ordem de ``checks``.
+    :raises ContractError: um valor de ``partitions`` fora da regra da partição.
     """
     texts = {}
     for check in checks(table, partitions, foreign_keys, key_scope, published, referenced):
