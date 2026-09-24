@@ -3345,9 +3345,10 @@ Em 2026-09-24, a revisão das docstrings e de `docs/` rodou sondas na pasta loca
   log, gravou um arquivo com `min.valor` 1.0 e `max.valor` 3.0: a compactação devolve a estatística
   que a decisão da issue #59 tira ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - `check_models` levantou `ContractError` na tabela com duas colunas de partição, em vez de listar
-  a violação, e a revisão de código de 2026-09-24 a pôs na lista ([etapa 1](PLAN-STAGE-1.md)); com
-  `SERIALIZE_DB_ENVIRONMENT` vazia, `serialize-db history` saiu com erro de uso e
-  `serialize-db audit` usou `dev` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  a violação; com `SERIALIZE_DB_ENVIRONMENT` vazia, `serialize-db history` saiu com erro de uso e
+  `serialize-db audit` usou `dev`. A revisão de código de 2026-09-24 corrigiu os dois: a violação
+  entra na lista ([etapa 1](PLAN-STAGE-1.md)), e a variável vazia vale `dev` em todo subcomando
+  ([`docs/operacao.md`](../docs/operacao.md)).
 - O `pdoc` 16 lê o nome de um campo `:param` ou `:raises` até o último dois-pontos da primeira
   linha do campo, mesmo o de um `s3://` citado, e ignora `:returns:` e `:raise:`; a primeira linha
   de cada campo fica sem outro dois-pontos.

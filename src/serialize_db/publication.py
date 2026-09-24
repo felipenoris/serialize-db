@@ -69,6 +69,7 @@ from serialize_db.schema import (
     sql_type,
     table_options,
 )
+from serialize_db.storage import Storage
 
 if TYPE_CHECKING:
     from serialize_db.execution import Database
@@ -347,16 +348,25 @@ def unpublication_statements(schema: str, environment: str, table: sa.Table,
 
 def _expected_column(column: sa.Column) -> PublishedColumn:
     """A coluna do contrato como ``svv_all_columns`` a listaria, na família do tipo."""
+    # O texto do tipo é o nome, com um número entre parênteses (a largura) ou dois (a precisão e
+    # a escala): "BIGINT", "VARCHAR(20)", "DECIMAL(18, 2)".
     text = sql_type(column, "redshift")
     match = re.fullmatch(r"([A-Z ]+?)(?:\((\d+)(?:, (\d+))?\))?", text)
-    family = _TYPE_FAMILIES[match.group(1).lower()]
-    first = int(match.group(2)) if match.group(2) else None
-    second = int(match.group(3)) if match.group(3) else None
+    type_name, first_number, second_number = match.groups()
+    family = _TYPE_FAMILIES[type_name.lower()]
     if family in ("varchar", "char"):
-        return PublishedColumn(column.name, family, first, None, None)
+        return PublishedColumn(column.name, family, _optional_int(first_number), None, None)
     if family == "decimal":
-        return PublishedColumn(column.name, family, None, first, second)
+        return PublishedColumn(column.name, family, None, _optional_int(first_number),
+                               _optional_int(second_number))
     return PublishedColumn(column.name, family, None, None, None)
+
+
+def _optional_int(value: object) -> int | None:
+    """O inteiro de um número lido como texto ou do catálogo; ``None`` quando não há valor."""
+    if value is None:
+        return None
+    return int(value)
 
 
 def _in_family(column: PublishedColumn) -> PublishedColumn:
@@ -400,14 +410,13 @@ def reconcile_published(schema: str, environment: str, table: sa.Table,
     destructive = []
     for column in table.columns:
         expected = _expected_column(column)
-        if column.name not in existing:
-            if column.nullable:
-                statements.append(f"ALTER TABLE {published} ADD COLUMN "
-                                  f"{column_ddl(column, 'redshift')}")
-            else:
-                destructive.append(f"{column.name}: coluna NOT NULL nova")
-            continue
-        if existing[column.name] != expected:
+        is_new = column.name not in existing
+        if is_new and column.nullable:
+            statements.append(f"ALTER TABLE {published} ADD COLUMN "
+                              f"{column_ddl(column, 'redshift')}")
+        elif is_new:
+            destructive.append(f"{column.name}: coluna NOT NULL nova")
+        elif existing[column.name] != expected:
             destructive.append(f"{column.name}: {existing[column.name]} na tabela publicada, "
                                f"{expected} no modelo")
     for name in existing:
@@ -488,10 +497,8 @@ def _published_columns(connection: _Connection, config: RedshiftConfig, environm
         f"AND table_name = {literal(name)} ORDER BY ordinal_position")
     columns = []
     for column_name, data_type, length, precision, scale in rows:
-        columns.append(PublishedColumn(str(column_name), str(data_type),
-                                       None if length is None else int(length),
-                                       None if precision is None else int(precision),
-                                       None if scale is None else int(scale)))
+        columns.append(PublishedColumn(str(column_name), str(data_type), _optional_int(length),
+                                       _optional_int(precision), _optional_int(scale)))
     if not columns:
         log.warning("%s existe, e svv_all_columns não lista as colunas dela: a reconciliação "
                     "não rodou", name)
@@ -523,10 +530,11 @@ def _unpublish_table(connection: _Connection, config: RedshiftConfig, environmen
         if published is None:
             connection.rollback()
             return None
-        statements = unpublication_statements(config.schema, environment, table, published)
-        for statement in statements:
-            cursor = connection.execute(statement)
-        if cursor.rowcount == 0:
+        drop, delete_control = unpublication_statements(config.schema, environment, table,
+                                                        published)
+        connection.execute(drop)
+        deleted = connection.execute(delete_control)
+        if deleted.rowcount == 0:
             raise ExecutionConflict(f"{table.name}: a linha de controle mudou desde a leitura "
                                     f"(versão lida {published})")
         connection.execute("COMMIT")
@@ -560,7 +568,7 @@ def _reconcile(connection: _Connection, config: RedshiftConfig, environment: str
 
 
 def _partitions_to_publish(uri: str, table: sa.Table, published: int | None, version: int,
-                           storage: object) -> tuple[list[str | None], list[str | None]]:
+                           storage: Storage) -> tuple[list[str | None], list[str | None]]:
     """As partições que a publicação troca e, entre elas, as que têm arquivo na versão: todas na
     primeira publicação, as de ``version_diff`` nas seguintes."""
     partition_by = table_options(table).partition_by
@@ -589,57 +597,71 @@ def _write_manifests(db: Database, table: sa.Table, values: Sequence[str | None]
 
 def _run_publication(connection: _Connection, table: sa.Table, statements: Sequence[str],
                      published: int | None) -> None:
-    """Os comandos da transação, um por ``execute``; o ``UPDATE`` da linha de controle que não
-    afeta linha é ``ExecutionConflict``."""
-    for statement in statements:
-        cursor = connection.execute(statement)
-    if published is not None and cursor.rowcount == 0:
+    """Os comandos da transação, um por ``execute``; o último grava a linha de controle, e o
+    ``UPDATE`` dela que não afeta linha é ``ExecutionConflict``."""
+    *changes, control_statement = statements
+    for statement in changes:
+        connection.execute(statement)
+    control = connection.execute(control_statement)
+    if published is not None and control.rowcount == 0:
         raise ExecutionConflict(f"{table.name}: a linha de controle mudou desde a leitura "
                                 f"(versão lida {published})")
+
+
+def _publication_transaction(connection: _Connection, db: Database, config: RedshiftConfig,
+                             table: sa.Table, execution_id: str,
+                             version: int) -> list[str | None] | None:
+    """A transação da publicação de uma tabela: a linha de controle lida, as partições trocadas e
+    a linha gravada; devolve as partições trocadas, ou ``None`` quando a versão já está
+    publicada e nada muda."""
+    environment = db.environment
+    connection.execute("BEGIN")
+    try:
+        published = _read_control(connection, config.schema, environment, table)
+        if published == version:
+            connection.rollback()
+            return None
+        if published is not None and published > version:
+            raise ExecutionConflict(f"{table.name}: a versão publicada {published} é mais nova "
+                                    f"que a versão {version} do Delta desta execução")
+        changed, with_files = _partitions_to_publish(db.uri(table), table, published, version,
+                                                     db.storage)
+        manifests = _write_manifests(db, table, with_files, execution_id, version)
+        statements = publication_statements(config.schema, environment, table, changed,
+                                            manifests, version, published, execution_id,
+                                            credentials_clause(config))
+        _run_publication(connection, table, statements, published)
+        connection.execute("COMMIT")
+    except redshift_connector.Error as error:
+        connection.rollback()
+        conflict = _conflict(error, table)
+        if conflict is not None:
+            raise conflict from error
+        raise
+    except BaseException:
+        connection.rollback()
+        raise
+    return changed
 
 
 def _publish_table(db: Database, config: RedshiftConfig, table: sa.Table, execution_id: str,
                    version: int) -> int:
     """A publicação de uma tabela, numa conexão própria: a reconciliação e a transação, com o
     tempo e o pico de RSS do processo na linha de log da tabela publicada."""
-    environment = db.environment
     started = time.perf_counter()
     connection = _Connection(config)
     try:
-        _reconcile(connection, config, environment, table)
-        connection.execute("BEGIN")
-        try:
-            published = _read_control(connection, config.schema, environment, table)
-            if published == version:
-                connection.rollback()
-                log.info("%s: a versão %s já está publicada", table.name, version)
-                return version
-            if published is not None and published > version:
-                raise ExecutionConflict(f"{table.name}: a versão publicada {published} é mais "
-                                        f"nova que a versão {version} do Delta desta execução")
-            changed, with_files = _partitions_to_publish(db.uri(table), table, published,
-                                                         version, db.storage)
-            manifests = _write_manifests(db, table, with_files, execution_id, version)
-            statements = publication_statements(config.schema, environment, table, changed,
-                                                manifests, version, published, execution_id,
-                                                credentials_clause(config))
-            _run_publication(connection, table, statements, published)
-            connection.execute("COMMIT")
-        except redshift_connector.Error as error:
-            connection.rollback()
-            conflict = _conflict(error, table)
-            if conflict is not None:
-                raise conflict from error
-            raise
-        except BaseException:
-            connection.rollback()
-            raise
-        log.info("%s publicada na versão %s: partições %s, em %.1f s; RSS máximo do processo "
-                 "%.0f MB", table.name, version, changed, time.perf_counter() - started,
-                 peak_rss_mb())
-        return version
+        _reconcile(connection, config, db.environment, table)
+        changed = _publication_transaction(connection, db, config, table, execution_id, version)
     finally:
         connection.close()
+    if changed is None:
+        log.info("%s: a versão %s já está publicada", table.name, version)
+        return version
+    log.info("%s publicada na versão %s: partições %s, em %.1f s; RSS máximo do processo "
+             "%.0f MB", table.name, version, changed, time.perf_counter() - started,
+             peak_rss_mb())
+    return version
 
 
 def _version_to_publish(db: Database, table: sa.Table,
@@ -787,16 +809,22 @@ def publication_status(db: Database, config: RedshiftConfig) -> list[Publication
         _check_control_table(connection, config.schema)
         statuses = []
         for table in db.tables():
-            uri = db.uri(table)
-            if not delta.table_exists(uri, db.storage):
-                continue
-            current = delta.open_table(uri, db.storage).version()
-            published = _read_control(connection, config.schema, db.environment, table)
-            pending: list[str | None] = []
-            if published is None or published < current:
-                pending, _ = _partitions_to_publish(uri, table, published, current, db.storage)
-            statuses.append(PublicationStatus(published_name(db.environment, table), published,
-                                              current, tuple(pending)))
+            if delta.table_exists(db.uri(table), db.storage):
+                statuses.append(_table_status(connection, db, config, table))
         return statuses
     finally:
         connection.close()
+
+
+def _table_status(connection: _Connection, db: Database, config: RedshiftConfig,
+                  table: sa.Table) -> PublicationStatus:
+    """A situação da publicação de uma tabela que existe no Delta: as partições pendentes são
+    todas na tabela nunca publicada, e as de ``version_diff`` na publicada numa versão antiga."""
+    uri = db.uri(table)
+    current = delta.open_table(uri, db.storage).version()
+    published = _read_control(connection, config.schema, db.environment, table)
+    pending: list[str | None] = []
+    if published is None or published < current:
+        pending, _ = _partitions_to_publish(uri, table, published, current, db.storage)
+    return PublicationStatus(published_name(db.environment, table), published, current,
+                             tuple(pending))

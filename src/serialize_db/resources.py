@@ -99,8 +99,8 @@ def peak_rss_mb() -> float:
     """
     status = _PROC / "self" / "status"
     if status.exists():
-        kilobytes = re.search(r"^VmHWM:\s+(\d+)", status.read_text(), re.MULTILINE).group(1)
-        return int(kilobytes) / 1024
+        found = re.search(r"^VmHWM:\s+(\d+)", status.read_text(), re.MULTILINE)
+        return int(found.group(1)) / 1024
     maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     unit = 1024 * 1024 if sys.platform == "darwin" else 1024
     return maxrss / unit
@@ -133,24 +133,35 @@ def _cgroup_memory_room() -> int | None:
 
 
 def _cgroup_cpu_quota() -> float | None:
-    """A menor cota de CPU nos cgroups do processo, em CPUs: ``cpu.max`` no v2 e
-    ``cpu.cfs_quota_us`` sobre ``cpu.cfs_period_us`` no v1; ``None`` sem cota."""
+    """A menor cota de CPU nos cgroups do processo, em CPUs; ``None`` sem cota."""
     quotas = []
     for folder, version in _cgroup_folders("cpu"):
         if version == 2:
-            # "max 100000" sem cota, "150000 100000" com uma cota de 1,5 CPU.
-            fields = _read_fields(folder / "cpu.max")
-            if len(fields) != 2 or fields[0] == "max":
-                continue
-            quota, period = int(fields[0]), int(fields[1])
+            quota = _cpu_quota_v2(folder)
         else:
-            quota = _read_number(folder / "cpu.cfs_quota_us")
-            period = _read_number(folder / "cpu.cfs_period_us")
-            # O v1 escreve -1 sem cota.
-            if quota is None or period is None or quota <= 0:
-                continue
-        quotas.append(quota / period)
+            quota = _cpu_quota_v1(folder)
+        if quota is not None:
+            quotas.append(quota)
     return min(quotas, default=None)
+
+
+def _cpu_quota_v2(folder: Path) -> float | None:
+    """A cota de ``cpu.max`` no cgroup v2, em CPUs: ``"max 100000"`` sem cota e
+    ``"150000 100000"`` com uma cota de 1,5 CPU; ``None`` sem cota."""
+    fields = _read_fields(folder / "cpu.max")
+    if len(fields) != 2 or fields[0] == "max":
+        return None
+    return int(fields[0]) / int(fields[1])
+
+
+def _cpu_quota_v1(folder: Path) -> float | None:
+    """A cota do cgroup v1, ``cpu.cfs_quota_us`` sobre ``cpu.cfs_period_us``, em CPUs; ``None``
+    sem cota, que o v1 escreve como -1."""
+    quota = _read_number(folder / "cpu.cfs_quota_us")
+    period = _read_number(folder / "cpu.cfs_period_us")
+    if quota is None or period is None or quota <= 0:
+        return None
+    return quota / period
 
 
 def _cgroup_folders(controller: str) -> list[tuple[Path, int]]:

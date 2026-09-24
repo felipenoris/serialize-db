@@ -58,9 +58,6 @@ foi medido em [`POC.md`](POC.md).
   staging uma vez por execução pelo nome, sem a versão: chamada de novo com outra versão, depois de
   `Execution.publish` avançar `versions`, devolve a staging da primeira, enquanto o motor DuckDB lê
   a versão nova. Lido no código em 2026-09-24, sem sonda; espera o usuário.
-- **`SERIALIZE_DB_ENVIRONMENT` vazia na linha de comando.** `load` e as rotinas de operação leem
-  `os.environ.get("SERIALIZE_DB_ENVIRONMENT", "dev")`, e a variável vazia vira erro de uso;
-  `run`, `audit` e `publish` usam `dev` (sonda de 2026-09-24). Alinhar os dois espera o usuário.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela

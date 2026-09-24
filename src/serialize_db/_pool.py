@@ -11,6 +11,8 @@ import dataclasses
 from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 
+__all__: list[str] = []
+
 # Uma tarefa do pool: o nome da tabela e a função que a processa.
 Task = tuple[str, Callable[[], object]]
 
@@ -25,14 +27,13 @@ def _outcome(future: Future) -> str:
     return f"falhou: {type(error).__name__}: {error}"
 
 
-def _raise_with_outcomes(outcomes: Mapping[str, str], error: BaseException) -> None:
-    """Relança a exceção com o resultado de cada tabela numa nota: os commits feitos ficam, porque o
-    Delta não tem transação entre tabelas."""
+def _outcomes_note(outcomes: Mapping[str, str]) -> str:
+    """A nota da exceção com o resultado de cada tabela: os commits feitos ficam, porque o Delta não
+    tem transação entre tabelas."""
     lines = []
     for name, outcome in sorted(outcomes.items()):
         lines.append(f"{name}: {outcome}")
-    error.add_note("resultado por tabela: " + "; ".join(lines))
-    raise error
+    return "resultado por tabela: " + "; ".join(lines)
 
 
 def _outcomes_of(futures: Mapping[Future, str]) -> dict[str, str]:
@@ -58,7 +59,8 @@ class _PoolState:
         """Começa as tarefas que cabem nos workers livres, enquanto não houve falha."""
         while waiting and self.failure is None and len(self.running) < self.workers:
             name, action = waiting.pop(0)
-            self.running[self.pool.submit(action)] = name
+            future = self.pool.submit(action)
+            self.running[future] = name
 
     def collect(self) -> None:
         """Espera a próxima tarefa terminar e guarda a primeira falha."""
@@ -87,7 +89,8 @@ def run_in_pool(tasks: list[Task], max_workers: int) -> dict[str, object]:
     for name, _ in waiting:
         outcomes[name] = "cancelada"
     if state.failure is not None:
-        _raise_with_outcomes(outcomes, state.failure)
+        state.failure.add_note(_outcomes_note(outcomes))
+        raise state.failure
     results = {}
     for future, name in state.finished.items():
         results[name] = future.result()

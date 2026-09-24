@@ -171,6 +171,7 @@ def _entries(storage: Storage, prefix: str) -> list[pafs.FileInfo]:
 
 
 def _base_name(info: pafs.FileInfo) -> str:
+    """O nome da entrada, a chave da ordenação de ``_entries``."""
     return info.base_name
 
 
@@ -398,6 +399,27 @@ def _wanted_values(found: Mapping[str | None, str],
     return [value for value in found if value in partitions]
 
 
+def _load_partition(engine: DuckDBEngine, storage: Storage, table: sa.Table, uri: str,
+                    value: str | None, folder: str, metadata: Mapping[str, str]) -> None:
+    """Grava uma partição no Delta: a conferência da consulta, o ``COPY`` para um arquivo novo e
+    o registro dele, com o tempo no log. Uma partição fora do contrato é ``ContractError`` antes
+    de qualquer gravação."""
+    started = time.perf_counter()
+    query = partition_query(folder, table, value)
+    with engine.session() as connection:
+        check = _check_partition(connection, query, table, value)
+        if check.problems:
+            raise ContractError(f"{table.name} partição {value}: {'; '.join(check.problems)}")
+        file = _copy_partition(connection, storage, table, uri, value, query, engine.execution_id)
+    delta.register_files(uri, table, [file], value, metadata, storage, expected_rows=check.rows,
+                         columns_without_min_max=check.nonfinite_columns)
+    log.info("%s %s: %d linhas em %.1f s", table.name, value, check.rows,
+             time.perf_counter() - started)
+    if check.nonfinite_columns:
+        log.info("%s %s: sem mínimo e máximo em %s", table.name, value,
+                 ", ".join(check.nonfinite_columns))
+
+
 def initial_load(db: Database, table: sa.Table, source: str,
                  partitions: Sequence[str] | None = None,
                  config: DuckDBConfig | None = None) -> list[str | None]:
@@ -438,35 +460,19 @@ def initial_load(db: Database, table: sa.Table, source: str,
     dt = delta.create_table(uri, table, storage)
     found, _ = discover_partitions(source, table)
     already = set(delta.partition_values(dt, options.partition_by))
-    wanted = _wanted_values(found, partitions)
     log.info("%s: %d partições na origem, %d no log", table.name, len(found), len(already))
+    missing = []
+    for value in _wanted_values(found, partitions):
+        if value not in already:
+            missing.append(value)
     execution_id = f"carga-{uuid.uuid4().hex[:8]}"
     metadata = delta.commit_metadata(execution_id, {})
-    loaded: list[str | None] = []
     with DuckDBEngine(config or DuckDBConfig(), execution_id, storage) as engine:
         with engine.session() as connection:
             _source_setup(connection, db, source)
-        for value in wanted:
-            if value in already:
-                continue
-            started = time.perf_counter()
-            query = partition_query(found[value], table, value)
-            with engine.session() as connection:
-                check = _check_partition(connection, query, table, value)
-                if check.problems:
-                    raise ContractError(f"{table.name} partição {value}: "
-                                        f"{'; '.join(check.problems)}")
-                file = _copy_partition(connection, storage, table, uri, value, query,
-                                       execution_id)
-            delta.register_files(uri, table, [file], value, metadata, storage, check.rows,
-                                 check.nonfinite_columns)
-            log.info("%s %s: %d linhas em %.1f s", table.name, value, check.rows,
-                     time.perf_counter() - started)
-            if check.nonfinite_columns:
-                log.info("%s %s: sem mínimo e máximo em %s", table.name, value,
-                         ", ".join(check.nonfinite_columns))
-            loaded.append(value)
-    return loaded
+        for value in missing:
+            _load_partition(engine, storage, table, uri, value, found[value], metadata)
+    return missing
 
 
 # ---------------------------------------------------------------- o relatório
@@ -526,6 +532,39 @@ def _source_relation(folder: str, partition_by: str | None) -> str:
             "hive_partitioning = true, hive_types_autocast = false)")
 
 
+def _delta_totals(connection: duckdb.DuckDBPyConnection, db: Database, table: sa.Table,
+                  sums: list[str], doubles: list[str]) -> dict[str | None, _Totals]:
+    """Contagem, somas e não finitos por partição no Delta; vazio na tabela ainda fora dele, que
+    tem toda partição só na origem."""
+    uri = db.uri(table)
+    if not delta.table_exists(uri, db.storage):
+        return {}
+    partition_by = table_options(table).partition_by
+    return _aggregate(connection, f"delta_scan({literal(uri)})", partition_by, sums, doubles)
+
+
+def _partition_reports(
+    in_source: Mapping[str | None, _Totals], in_delta: Mapping[str | None, _Totals],
+) -> tuple[PartitionReport, ...]:
+    """Uma conferência por partição presente num dos lados, em ordem de texto do valor; o lado
+    em que a partição falta fica com ``None`` nas linhas."""
+    absent = _Totals(rows=None, sums={}, nonfinite={})
+    reports = []
+    for value in sorted(set(in_source) | set(in_delta), key=str):
+        source_totals = in_source.get(value, absent)
+        delta_totals = in_delta.get(value, absent)
+        reports.append(PartitionReport(
+            value=value,
+            source_rows=source_totals.rows,
+            delta_rows=delta_totals.rows,
+            source_sums=source_totals.sums,
+            delta_sums=delta_totals.sums,
+            source_nonfinite=source_totals.nonfinite,
+            delta_nonfinite=delta_totals.nonfinite,
+        ))
+    return tuple(reports)
+
+
 def _conversions(source: str, table: sa.Table) -> tuple[str, ...]:
     """As conversões de tipo da origem para o contrato, lidas no rodapé do primeiro arquivo da
     tabela: ``"id_contrato: int32 -> int64"``, ``"carimbo: INT96 -> timestamp[us]"``."""
@@ -582,29 +621,12 @@ def load_report(db: Database, table: sa.Table, source: str,
     _, skipped = discover_partitions(source, table)
     folder = Storage.for_uri(source).uri_of(table.name)
     execution_id = f"relatorio-{uuid.uuid4().hex[:8]}"
-    uri = db.uri(table)
+    source_relation = _source_relation(folder, options.partition_by)
     with DuckDBEngine(config or DuckDBConfig(), execution_id, db.storage) as engine:
         with engine.session() as connection:
             _source_setup(connection, db, source)
-            origin = _aggregate(connection, _source_relation(folder, options.partition_by),
-                                options.partition_by, sums, doubles)
-            written: dict[str | None, _Totals] = {}
-            # A tabela ainda fora do Delta tem toda partição só na origem.
-            if delta.table_exists(uri, db.storage):
-                written = _aggregate(connection, f"delta_scan({literal(uri)})",
-                                     options.partition_by, sums, doubles)
-    missing = _Totals(rows=None, sums={}, nonfinite={})
-    partitions = []
-    for value in sorted(set(origin) | set(written), key=str):
-        before = origin.get(value, missing)
-        after = written.get(value, missing)
-        partitions.append(PartitionReport(
-            value=value,
-            source_rows=before.rows,
-            delta_rows=after.rows,
-            source_sums=before.sums,
-            delta_sums=after.sums,
-            source_nonfinite=before.nonfinite,
-            delta_nonfinite=after.nonfinite,
-        ))
-    return LoadReport(table.name, tuple(partitions), skipped, _conversions(source, table))
+            in_source = _aggregate(connection, source_relation, options.partition_by, sums,
+                                   doubles)
+            in_delta = _delta_totals(connection, db, table, sums, doubles)
+    partitions = _partition_reports(in_source, in_delta)
+    return LoadReport(table.name, partitions, skipped, _conversions(source, table))

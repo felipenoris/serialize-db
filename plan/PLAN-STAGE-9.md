@@ -138,6 +138,7 @@ do `pdoc`. O que a implementação mudou do plano:
 | Arquivo | `test_archive_copies_each_table_with_the_same_sums` | Uma versão por partição no arquivo, os mesmos arquivos e as mesmas somas da versão registrada, a entrada em `archived` e fora de `snapshots`, o `vacuum` sem a versão arquivada em `keep_versions`, `snapshot` recusando o mesmo nome, `archive` recusando o nome ausente e pulando a tabela já arquivada, com o tempo e o pico de RSS na linha de cada tabela. |
 | Exportação | `test_export_by_copy_and_by_rewrite` | Os dois modos e uma versão antiga; o destino não vazio e o destino fora da raiz recusados; a linha impressa com o tempo e o pico de RSS. |
 | Erros de uso | `test_cli_operation_usage_errors` | O nome ausente, o modo desconhecido, a tabela fora do modelo e a tabela sem Delta, sem traceback. |
+| Ambiente padrão | `test_empty_environment_variable_counts_as_absent` | `SERIALIZE_DB_ENVIRONMENT` vazia vale `dev`, como em `run`, `audit` e `publish`, e não um erro de uso. |
 | Cópia profunda | `tests/test_delta.py::test_deep_copy_and_relocation` | O mesmo arquivo, caminho, tamanho e extremos da origem na cópia, uma versão por partição, as mesmas somas; a repetição sem commit, a cópia da versão 2 sobre a da 1 só com a partição que falta, e a versão 1 sobre a cópia da 2 recusada. |
 
 ## Decisões pendentes

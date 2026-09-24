@@ -217,12 +217,12 @@ def test_interrupted_load_resumes(base: source.SourceBase, db: Database, config:
     original = delta.register_files
     attempts: list[str | None] = []
 
-    def failing_on_the_third(uri: str, table_: object, files: list, value: str | None,
-                             *arguments: object) -> int:
+    def failing_on_the_third(uri: str, registered: object, files: list, value: str | None,
+                             *arguments: object, **options: object) -> int:
         attempts.append(value)
         if len(attempts) == 3:
             raise RuntimeError("interrompida")
-        return original(uri, table_, files, value, *arguments)
+        return original(uri, registered, files, value, *arguments, **options)
 
     monkeypatch.setattr(delta, "register_files", failing_on_the_third)
     with pytest.raises(RuntimeError, match="interrompida"):

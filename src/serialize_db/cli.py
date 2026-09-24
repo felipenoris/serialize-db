@@ -74,11 +74,13 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 
 from serialize_db import audit, delta, load, schema, sql
 from serialize_db.audit import AuditReport
+from serialize_db.engine import Engine
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import (
     AuditFailed,
@@ -90,6 +92,9 @@ from serialize_db.errors import (
 from serialize_db.execution import Database, Execution
 from serialize_db.load import LoadReport
 from serialize_db.resources import peak_rss_mb
+
+if TYPE_CHECKING:
+    from serialize_db.publication import PublicationStatus
 
 __all__ = ["main"]
 
@@ -149,14 +154,28 @@ def _name_argument(text: str) -> str:
         raise argparse.ArgumentTypeError(str(error)) from None
 
 
+def _environment_default() -> str:
+    """O padrão de ``--environment`` em todo subcomando: ``SERIALIZE_DB_ENVIRONMENT``, com a
+    variável vazia lida como ausente, ou ``dev``."""
+    return os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev"
+
+
+def _add_database_arguments(parser: argparse.ArgumentParser) -> None:
+    """``--metadata``, ``--root`` e ``--environment`` obrigatórios, com os padrões
+    ``SERIALIZE_DB_*``: os de ``run``, de ``load`` e das rotinas de operação."""
+    root = os.environ.get("SERIALIZE_DB_ROOT")
+    parser.add_argument("--metadata", required=True, type=_resolve_metadata,
+                        help="o MetaData dos modelos, como pipeline.models:Base.metadata")
+    parser.add_argument("--root", default=root, required=not root,
+                        help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo; "
+                             "padrão SERIALIZE_DB_ROOT")
+    parser.add_argument("--environment", type=_name_argument, default=_environment_default())
+
+
 def _add_run_parser(commands: argparse._SubParsersAction) -> None:
     """``serialize-db run``, com as variáveis ``SERIALIZE_DB_*`` como padrão."""
-    root = os.environ.get("SERIALIZE_DB_ROOT")
     run = commands.add_parser("run", help="executa o pipeline de uma partição")
-    run.add_argument("--root", default=root, required=not root,
-                     help="a raiz do banco, pasta local ou s3://bucket/prefixo")
-    run.add_argument("--environment", type=_name_argument,
-                     default=os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev")
+    _add_database_arguments(run)
     run.add_argument("--engine", choices=["duckdb", "redshift"],
                      default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb")
     run.add_argument("--partition", type=_name_argument, required=True)
@@ -164,8 +183,6 @@ def _add_run_parser(commands: argparse._SubParsersAction) -> None:
     run.add_argument("--redshift", action="store_true",
                      help="dá à execução a configuração das variáveis SERIALIZE_DB_REDSHIFT_*, "
                           "para run.publish_redshift; com --engine redshift ela já entra")
-    run.add_argument("--metadata", required=True, type=_resolve_metadata,
-                     help="modulo:atributo com o MetaData dos modelos do pipeline")
     run.add_argument("pipeline", type=_resolve_function,
                      help="modulo:funcao que recebe a execução aberta")
     run.set_defaults(handler=_run)
@@ -178,8 +195,7 @@ def _add_publish_parser(commands: argparse._SubParsersAction) -> None:
     publish.add_argument("--metadata", type=_resolve_metadata, default=None,
                          help="modulo:atributo com o MetaData dos modelos; dispensado por --init")
     publish.add_argument("--root", default=os.environ.get("SERIALIZE_DB_ROOT"))
-    publish.add_argument("--environment", type=_name_argument,
-                         default=os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev")
+    publish.add_argument("--environment", type=_name_argument, default=_environment_default())
     publish.add_argument("--tables", nargs="+", default=None,
                          help="as tabelas a publicar ou despublicar; sem ela, todas do modelo")
     publish.add_argument("--max-workers", type=int, default=1)
@@ -197,35 +213,17 @@ def _add_publish_parser(commands: argparse._SubParsersAction) -> None:
 
 def _add_load_parser(commands: argparse._SubParsersAction) -> None:
     """``load``: a carga inicial da base Parquet de origem nas tabelas Delta do ambiente."""
-    root = os.environ.get("SERIALIZE_DB_ROOT")
     load_command = commands.add_parser("load", help="a carga inicial da base Parquet de origem")
-    load_command.add_argument("--metadata", required=True, type=_resolve_metadata,
-                              help="o MetaData dos modelos, como pipeline.models:Base.metadata")
+    _add_database_arguments(load_command)
     load_command.add_argument("--source", required=True,
                               help="a raiz da base Parquet de origem, pasta local ou "
                                    "s3://bucket/prefixo")
-    load_command.add_argument("--root", default=root, required=not root,
-                              help="a raiz das tabelas Delta; padrão SERIALIZE_DB_ROOT")
-    load_command.add_argument("--environment", type=_name_argument,
-                              default=os.environ.get("SERIALIZE_DB_ENVIRONMENT", "dev"))
     load_command.add_argument("--tables", nargs="+", default=None,
                               help="só estas tabelas do modelo; sem elas, todas, as sem partição "
                                    "antes das particionadas")
     load_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None,
                               help="só estas partições; as tabelas sem partição ficam de fora")
     load_command.set_defaults(handler=_load)
-
-
-def _add_database_arguments(parser: argparse.ArgumentParser) -> None:
-    """``--metadata``, ``--root`` e ``--environment`` das rotinas de operação, com os padrões
-    ``SERIALIZE_DB_*``."""
-    root = os.environ.get("SERIALIZE_DB_ROOT")
-    parser.add_argument("--metadata", required=True, type=_resolve_metadata,
-                        help="o MetaData dos modelos, como pipeline.models:Base.metadata")
-    parser.add_argument("--root", default=root, required=not root,
-                        help="a raiz das tabelas Delta; padrão SERIALIZE_DB_ROOT")
-    parser.add_argument("--environment", type=_name_argument,
-                        default=os.environ.get("SERIALIZE_DB_ENVIRONMENT", "dev"))
 
 
 def _add_operation_parsers(commands: argparse._SubParsersAction) -> None:
@@ -293,7 +291,7 @@ def _add_audit_parser(commands: argparse._SubParsersAction) -> None:
                                     "armazenamento")
     audit_command.add_argument("--root", default=os.environ.get("SERIALIZE_DB_ROOT"))
     audit_command.add_argument("--environment", type=_name_argument,
-                               default=os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev")
+                               default=_environment_default())
     audit_command.set_defaults(handler=_audit)
 
 
@@ -408,7 +406,7 @@ def _print_report(report: AuditReport) -> None:
         print(f"partição {value}: {totals}")
 
 
-def _audit_engine(args: argparse.Namespace, db: Database, execution_id: str) -> object:
+def _audit_engine(args: argparse.Namespace, db: Database, execution_id: str) -> Engine:
     """O sandbox próprio da auditoria: o motor de ``--engine``."""
     if args.engine == "redshift":
         from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
@@ -493,20 +491,15 @@ def _publish(args: argparse.Namespace) -> int:
     try:
         tables = _selected_tables(args.metadata, args.tables)
         if args.status:
-            for status in publication.publication_status(db, config):
-                print(f"{status.table}: publicada {status.published_version}, atual "
-                      f"{status.current_version}, pendentes {list(status.pending_partitions)}")
-            return 0
-        if args.unpublish:
-            for name, version in publication.unpublish_redshift(db, config, tables).items():
-                print(f"{name}: {'não estava publicada' if version is None else version}")
-            return 0
-        today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-        execution_id = args.execution_id or f"publicacao-{today}-{uuid.uuid4().hex[:8]}"
-        results = publication.publish_redshift(db, config, tables, execution_id,
-                                               args.max_workers)
-        for name, version in results.items():
-            print(f"{name}: versão {version}")
+            _print_statuses(publication.publication_status(db, config))
+        elif args.unpublish:
+            _print_unpublished(publication.unpublish_redshift(db, config, tables))
+        else:
+            published = publication.publish_redshift(db, config, tables,
+                                                     _publication_id(args.execution_id),
+                                                     args.max_workers)
+            for name, version in published.items():
+                print(f"{name}: versão {version}")
     except (argparse.ArgumentTypeError, PublicationError) as error:
         print(f"serialize-db publish: {error}", file=sys.stderr)
         return 2
@@ -516,12 +509,38 @@ def _publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def _publication_id(execution_id: str | None) -> str:
+    """O ``--execution-id`` da publicação, ou ``publicacao-<AAAA-MM-DD>-<uuid8>`` sem ele, com a
+    data em UTC."""
+    if execution_id:
+        return execution_id
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    return f"publicacao-{today}-{uuid.uuid4().hex[:8]}"
+
+
+def _print_statuses(statuses: list[PublicationStatus]) -> None:
+    """Uma linha por tabela: a versão publicada, a atual e as partições pendentes."""
+    for status in statuses:
+        print(f"{status.table}: publicada {status.published_version}, atual "
+              f"{status.current_version}, pendentes {list(status.pending_partitions)}")
+
+
+def _print_unpublished(versions: dict[str, int | None]) -> None:
+    """Uma linha por tabela despublicada: a versão que estava publicada."""
+    for name, version in versions.items():
+        if version is None:
+            print(f"{name}: não estava publicada")
+        else:
+            print(f"{name}: {version}")
+
+
 def _print_load_report(report: LoadReport, loaded: list[str | None]) -> None:
     """As linhas de uma tabela da carga: as partições gravadas agora, cada diferença, o veredito,
     as conversões de tipo e o que ficou fora do padrão."""
-    values = ", ".join(str(value) for value in loaded)
-    written = f"{len(loaded)} partição(ões) gravada(s)"
-    print(f"{report.table}: {written}: {values}" if loaded else f"{report.table}: {written}")
+    written = f"{report.table}: {len(loaded)} partição(ões) gravada(s)"
+    if loaded:
+        written += ": " + ", ".join(str(value) for value in loaded)
+    print(written)
     for partition in report.partitions:
         if not partition.matches:
             print(f"  DIFERENÇA em {partition.value}: origem {partition.source_rows} linhas "
@@ -737,14 +756,19 @@ def _history(args: argparse.Namespace) -> int:
         return 2
     _, uri = found
     for entry in delta.history(uri, db.storage):
-        instant = entry["timestamp"].isoformat(timespec="seconds")
-        line = f"{entry['version']} {entry['operation']} {instant}"
-        for key in ("serialize_db_execution_id", "serialize_db_input_versions",
-                    "serialize_db_snapshot"):
-            if key in entry:
-                line += f" {key}={entry[key]}"
-        print(line)
+        print(_history_line(entry))
     return 0
+
+
+def _history_line(entry: dict) -> str:
+    """A linha de um commit: a versão, a operação, o instante em UTC e os metadados da biblioteca
+    que ele tem, na ordem de ``delta.history``."""
+    instant = entry["timestamp"].isoformat(timespec="seconds")
+    line = f"{entry['version']} {entry['operation']} {instant}"
+    for key, value in entry.items():
+        if key.startswith("serialize_db_"):
+            line += f" {key}={value}"
+    return line
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -752,6 +776,13 @@ def main(argv: list[str] | None = None) -> int:
 
     Cada subcomando guarda a sua função em ``handler`` (``set_defaults`` do ``argparse``). Fora de
     ``schema`` e ``sql``, o log vai ao stderr a partir do nível ``INFO``.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        main(["schema", "check", "--metadata", "pipeline.models:Base.metadata", "schema/"])
+        # 0 com os arquivos atualizados; 1 com o diff impresso
 
     :param argv: os argumentos, sem o nome do programa; ``None`` lê ``sys.argv``.
     :return: o código de saída: 0 quando o comando termina, 1 e 2 nos casos que a documentação
