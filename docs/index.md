@@ -36,8 +36,9 @@ de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3
 `serialize_db.audit`, os dois motores, `serialize_db.engine.duckdb` e
 `serialize_db.engine.redshift`, a execução, `serialize_db.execution`, com `serialize-db run` e
 `serialize-db audit`, a publicação para os clientes no Redshift, `serialize_db.publication`,
-com `serialize-db publish`, e a carga inicial da base Parquet atual, `serialize_db.load`, com
-`serialize-db load`. A operação é a etapa seguinte do plano, na pasta `plan/` do repositório.
+com `serialize-db publish`, a carga inicial da base Parquet atual, `serialize_db.load`, com
+`serialize-db load`, e a operação, `serialize-db snapshot`, `vacuum`, `compact`, `archive`,
+`export` e `history`, com o runbook na página de `serialize_db.cli`.
 
 ## Instalação
 
@@ -529,8 +530,8 @@ ficam no armazenamento até o `vacuum`, e enquanto ficam a versão que os usa co
 `<ambiente>/_serialize_db/snapshots.json` continuam legíveis qualquer que seja a retenção. A chamada
 vale pelo `retention_hours` informado, e a propriedade da tabela vale para quem roda o `vacuum` do
 delta-rs sem esse argumento. Em regime, cada tabela guarda cerca de 13 meses (400/30) de partições
-substituídas além da versão atual. A rotina mensal que chama o `vacuum` de cada tabela é da
-operação, uma das etapas seguintes do plano.
+substituídas além da versão atual. A rotina mensal que chama o `vacuum` de cada tabela é
+`serialize-db vacuum`, no runbook da página de `serialize_db.cli`.
 
 **O bucket versionado.** Num bucket com versionamento, o `vacuum` não libera espaço: cada objeto
 apagado vira uma versão não corrente, invisível à listagem e cobrada até que uma regra de ciclo de

@@ -45,10 +45,10 @@ solto, e `value` é o valor de uma partição, `None` numa tabela sem partição
 | `rewrite(uri, table, storage, expressions=None)` | A tabela inteira com o esquema do contrato num único commit e sem predicado: `COPY ... PARTITION_BY (<coluna de partição>) ... RETURN_STATS` do DuckDB a partir de `delta_scan` mais `create_write_transaction(mode="overwrite", schema=...)`, com memória constante. `expressions` dá, por coluna do contrato, a expressão sobre a versão atual que a preenche: o nome antigo numa renomeação, o valor de uma coluna `NOT NULL` nova (decisão do usuário de 2026-09-22). A conexão DuckDB é aberta aqui e configurada por `storage.duckdb_setup`, sem o motor da [etapa 4](PLAN-STAGE-4.md): `delta` não depende de `engine`. `CommitFailedError` sobe como `ExecutionConflict`. |
 | `copy_manifest(uri, version, partitions, destination, storage)` | O manifesto do `COPY` do Redshift (`url` e `meta.content_length` de `get_add_actions()`, `mandatory` verdadeiro), gravado na URI `destination` sob `publicacao/` ou `staging/`; devolve a URI. |
 | `version_diff(uri, published, current, table, storage)` | As partições com ações `add` ou `remove` de dados entre as duas versões, lidas do log; a compactação (`dataChange` falso) não conta. Um arquivo do log ausente é `LogUnavailable`, com a instrução de publicar a tabela inteira (decisão do usuário de 2026-09-22). |
-| `read_snapshots(storage, environment)`, `snapshot(storage, environment, name, versions)` | O arquivo de controle `_serialize_db/snapshots.json` do ambiente com a impressão digital, `({"snapshots": {}}, None)` quando ele ainda não existe, e a entrada `{name: versions}` gravada nele com `write_text(if_match=...)`, ou `if_none_match` no primeiro; o nome repetido é `ValueError`. |
+| `read_snapshots(storage, environment)`, `snapshot(storage, environment, name, versions)` | O arquivo de controle `_serialize_db/snapshots.json` do ambiente com a impressão digital, `({"snapshots": {}}, None)` quando ele ainda não existe, e a entrada `{name: versions}` gravada nele com `write_text(if_match=...)`, ou `if_none_match` no primeiro; o nome presente em `snapshots` ou em `archived` é `ValueError`. `archive_snapshot(storage, environment, name)` move a entrada de `snapshots` para a chave irmã `archived` na mesma escrita condicional, e `history(uri, storage)` lista os commits com os metadados da biblioteca ([etapa 9](PLAN-STAGE-9.md)). |
 | `vacuum_keeping_snapshots(uri, control, table_name, storage, retention_hours=9600, apply=False, full=False)` | `vacuum` com `keep_versions` das versões do arquivo de controle; lista por padrão e apaga com `apply=True`. |
 | `compact(uri, table, partitions, storage)` | `optimize.compact` das partições com arquivos pequenos, antes de um snapshot. A reescrita sai pelo escritor do delta-rs: os arquivos do `UNLOAD` que ela junta perdem o `INT96` e o `FIXED_LEN_BYTE_ARRAY` e ganham estatística em toda coluna (`test_deltalake.py::test_compact_rewrites_files_from_another_writer`). |
-| `deep_copy(uri, version, destination, storage)` | Tabela nova na URI `destination` com os dados, o esquema (nulidade e comentários inclusive), a partição, o nome, a descrição e as propriedades de uma versão, para a pasta de arquivo. Hoje um `write_deltalake` do leitor da tabela inteira, na versão 0; a [etapa 9](PLAN-STAGE-9.md) o troca pela cópia dos arquivos da versão, partição a partição, e o registro deles por `register_files` na tabela criada por `create_table` (decisão do usuário de 2026-09-24), porque a memória do escritor do delta-rs cresce com a tabela. |
+| `deep_copy(uri, version, destination, storage)` | Tabela nova na URI `destination` com os arquivos, o esquema (nulidade e comentários inclusive), a partição, o nome, a descrição e as propriedades de uma versão, para a pasta de arquivo: cada arquivo que o log da versão lista copiado por `Storage.copy` para o mesmo caminho relativo e registrado com as estatísticas da própria ação de origem, num commit por partição, e a contagem da cópia conferida pelos dois leitores (decisão do usuário de 2026-09-24, [etapa 9](PLAN-STAGE-9.md)), porque a memória do `write_deltalake` do leitor da tabela inteira cresce com a tabela; a cópia termina numa versão por partição. |
 | `export_snapshot(uri, table, destination, storage, version=None, mode="copy")` | Pastas `<coluna de partição>=<valor>/` sem o log na URI `destination`: `copy` copia os arquivos que o log lista; `rewrite` reescreve pelo `COPY` particionado do DuckDB; devolve as URIs gravadas. |
 
 `scripts/migrate_parquet_to_delta.py`, a migração adiantada da [etapa 7](PLAN-STAGE-7.md), já tem
@@ -267,7 +267,7 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
   conta os não finitos de cada coluna `Double` por partição, e essas colunas saem sem mínimo e
   máximo no log de cada arquivo da partição (issue #59). As ações passam pelas mesmas conferências
   de `register_files`, e `read_back` roda depois, na tabela inteira.
-- **`snapshot`** lê o arquivo de controle com a impressão, recusa um nome repetido, grava com
+- **`snapshot`** lê o arquivo de controle com a impressão, recusa um nome presente em `snapshots` ou em `archived`, grava com
   `if_match` (ou `if_none_match` no primeiro) e devolve o controle novo; `ConflictError` sobe.
 - **`vacuum_keeping_snapshots`** monta `keep_versions` das versões do controle para a tabela e
   chama `vacuum(retention_hours, enforce_retention_duration=False, dry_run=not apply,
@@ -275,15 +275,16 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
   versões intermediárias: a retenção de 400 dias é a janela em que toda versão continua legível.
 - **`compact`** é `optimize.compact(partition_filters=[(coluna, "in", partitions)])`; a operação
   com um só arquivo na partição não commita, e o chamador lê a versão antes e depois.
-- **`deep_copy`** grava `write_deltalake(destination, DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader(), mode="error", partition_by=..., name=..., description=..., configuration=...)`,
-  nunca `to_pyarrow_table`, pela regra de encerramento de [`PLAN.md`](PLAN.md); o esquema do
-  dataset leva a nulidade e os comentários da versão (leitura de 2026-09-23), e `mode="error"`
-  recusa um destino que já tem tabela. A memória do `write_deltalake` cresce com a tabela, fora do
-  `memory_limit` do DuckDB (1.140 MB para 12.000.000 de linhas, [`delta.md`](delta.md)): a
-  [etapa 9](PLAN-STAGE-9.md) troca o corpo pela cópia dos arquivos de cada partição por
-  `Storage.copy`, sem os dados passarem pela máquina, e pelo `register_files` deles, com as
-  conferências do rodapé, um commit por partição (decisão do usuário de 2026-09-24); a cópia
-  deixa de nascer na versão 0, e `test_deep_copy_and_relocation` passa a ler a versão final.
+- **`deep_copy`** cria o destino por `DeltaTable.create` com o esquema, o nome, a descrição e as
+  propriedades da versão (`mode="error"` recusa um destino que já tem tabela), copia cada arquivo
+  que `get_add_actions(flatten=False)` lista por `Storage.copy`, para o mesmo caminho relativo, e
+  o registra num commit `overwrite` por partição com a `AddAction` montada da ação de origem
+  (tamanho, linhas, `nullCount` e o mínimo e o máximo dos tipos exatos), sem os dados passarem
+  pela máquina; no fim confere a contagem da cópia pelos dois leitores contra a soma das ações,
+  e a diferença é `RegistrationRefused`. É a troca que a [etapa 9](PLAN-STAGE-9.md) fez em
+  2026-09-24 (decisão do usuário) no lugar do `write_deltalake` do leitor da tabela inteira, cuja
+  memória cresce com a tabela, fora do `memory_limit` do DuckDB (1.140 MB para 12.000.000 de
+  linhas, [`delta.md`](delta.md)).
 - **`export_snapshot`** copia os arquivos que `get_add_actions()` lista no layout
   `<coluna>=<valor>/` por `Storage.copy` (`mode="copy"`), ou reescreve pelo `COPY` particionado do
   DuckDB (`mode="rewrite"`); um snapshot antigo usa `DeltaTable(uri, version=v)`.
@@ -342,7 +343,7 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
 | Compactação | `test_compact_before_snapshot` | Arquivos pequenos de uma partição virando um; a partição com um arquivo não commita. |
 | Exportação | `test_export_snapshot_copy_and_rewrite` | Os dois modos produzem `<coluna>=<valor>/` com as mesmas linhas; `copy` copia só o que o log lista; uma versão antiga exporta o que ela tinha. |
 | Manifesto | `test_copy_manifest_lists_the_files_of_a_version` | A URL, o tamanho e `mandatory` de cada arquivo da versão nas partições pedidas, e de todos sem elas. |
-| Cópia e realocação | `test_deep_copy_and_relocation` | A cópia profunda nasce na versão 0 com a nulidade do esquema; a pasta copiada abre na mesma versão nos dois leitores. |
+| Cópia e realocação | `test_deep_copy_and_relocation` | A cópia profunda tem o mesmo arquivo, caminho, tamanho e extremos da versão, uma versão por partição e a nulidade do esquema, e recusa o destino com tabela; a pasta copiada abre na mesma versão nos dois leitores. |
 
 ## A implementação
 

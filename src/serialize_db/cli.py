@@ -1,20 +1,26 @@
 """A linha de comando ``serialize-db``.
 
-Cada subcomando entra com a etapa que entrega a primitiva por trás dele: ``schema`` é o da
-etapa 1, ``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6, ``load`` o da etapa 7 e
-``publish`` o da etapa 8. ``schema write`` grava os arquivos de esquema dos modelos e
-``schema check`` compara os versionados com a geração nova, sem gravar; ``sql write`` grava o
-texto SQL de cada statement do pipeline em cada motor e ``sql check`` o compara com a geração
-nova. ``run`` abre uma execução e entrega a ``modulo:funcao`` do pipeline; ``audit`` imprime o
-texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a versão publicada, no
-motor de ``--engine``; ``load`` faz a carga inicial da base Parquet de origem (``--source``) nas
-tabelas Delta do ambiente, as sem partição antes das particionadas, e confere contagem e somas por
-partição; ``publish`` publica no Redshift fora de uma execução, mostra o estado da publicação
-(``--status``), cria a tabela de controle (``--init``) ou despublica (``--unpublish``). Os modelos
-chegam por ``--metadata modulo:atributo``, o caminho importável do ``MetaData`` do cliente, e os
-statements por ``--statements modulo:atributo``, o caminho importável do dicionário
-``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm por padrão
-``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dev``) e ``SERIALIZE_DB_ENGINE``
+Cada subcomando entra com a etapa que entrega a primitiva por trás dele: ``schema`` é o da etapa 1,
+``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6, ``load`` o da etapa 7, ``publish`` o da
+etapa 8 e ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e ``history`` os da etapa
+9, o runbook abaixo. ``schema write`` grava os arquivos de esquema dos modelos e ``schema check``
+compara os versionados com a geração nova, sem gravar; ``sql write`` grava o texto SQL de cada
+statement do pipeline em cada motor e ``sql check`` o compara com a geração nova. ``run`` abre uma
+execução e entrega a ``modulo:funcao`` do pipeline; ``audit`` imprime o texto das verificações de
+uma tabela (``--sql``) ou roda a auditoria sobre a versão publicada, no motor de ``--engine``;
+``load`` faz a carga inicial da base Parquet de origem (``--source``) nas tabelas Delta do
+ambiente, as sem partição antes das particionadas, e confere contagem e somas por partição;
+``publish`` publica no Redshift fora de uma execução, mostra o estado da publicação (``--status``),
+cria a tabela de controle (``--init``) ou despublica (``--unpublish``). ``snapshot`` grava a versão
+atual de cada tabela do ambiente no arquivo de controle; ``vacuum`` lista, ou apaga com
+``--apply``, os arquivos fora da retenção e das versões dos snapshots; ``compact`` junta os
+arquivos pequenos das partições de uma tabela; ``archive`` copia as tabelas de um snapshot para
+``arquivo/<nome>/`` e move a entrada para ``archived``; ``export`` grava as pastas Parquet de uma
+versão de uma tabela, sem o log; ``history`` lista os commits de uma tabela com os metadados da
+biblioteca. Os modelos chegam por ``--metadata modulo:atributo``, o caminho importável do
+``MetaData`` do cliente, e os statements por ``--statements modulo:atributo``, o caminho importável
+do dicionário ``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm
+por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dev``) e ``SERIALIZE_DB_ENGINE``
 (``duckdb``); a configuração do Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``, e
 ``run --redshift`` a dá a uma execução no motor DuckDB para ``run.publish_redshift``.
 
@@ -38,11 +44,20 @@ Exemplo:
         --metadata pipeline.models:Base.metadata --tables cad_lancamentos_projetados
     serialize-db publish --root s3://bucket/delta --environment prod \\
         --metadata pipeline.models:Base.metadata --status
+    serialize-db snapshot --root s3://bucket/delta --environment prod \\
+        --metadata pipeline.models:Base.metadata --name 2026T3
+    serialize-db vacuum --root s3://bucket/delta --environment prod \\
+        --metadata pipeline.models:Base.metadata --apply
+    serialize-db history --root s3://bucket/delta --environment prod \\
+        --metadata pipeline.models:Base.metadata --table cad_lancamentos
 
 O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff
 impresso, quando a auditoria reprova e quando a carga acha uma partição fora do contrato ou uma
 diferença de contagem ou soma; 2 no erro de uso, no conflito de execução, na publicação sem a
-tabela de controle e na origem da carga ausente.
+tabela de controle, na origem da carga ausente, no snapshot repetido ou ausente, na compactação
+depois de um snapshot na versão atual e no destino da exportação não vazio ou fora da raiz.
+
+.. include:: ../../docs/operacao.md
 """
 
 from __future__ import annotations
@@ -61,7 +76,13 @@ import sqlalchemy as sa
 from serialize_db import audit, delta, load, schema, sql
 from serialize_db.audit import AuditReport
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
-from serialize_db.errors import AuditFailed, ContractError, ExecutionConflict, PublicationError
+from serialize_db.errors import (
+    AuditFailed,
+    ConflictError,
+    ContractError,
+    ExecutionConflict,
+    PublicationError,
+)
 from serialize_db.execution import Database, Execution
 from serialize_db.load import LoadReport
 
@@ -190,6 +211,66 @@ def _add_load_parser(commands: argparse._SubParsersAction) -> None:
     load_command.set_defaults(handler=_load)
 
 
+def _add_database_arguments(parser: argparse.ArgumentParser) -> None:
+    """``--metadata``, ``--root`` e ``--environment`` das rotinas de operação, com os padrões
+    ``SERIALIZE_DB_*``."""
+    root = os.environ.get("SERIALIZE_DB_ROOT")
+    parser.add_argument("--metadata", required=True, type=_resolve_metadata,
+                        help="o MetaData dos modelos, como pipeline.models:Base.metadata")
+    parser.add_argument("--root", default=root, required=not root,
+                        help="a raiz das tabelas Delta; padrão SERIALIZE_DB_ROOT")
+    parser.add_argument("--environment", type=_name_argument,
+                        default=os.environ.get("SERIALIZE_DB_ENVIRONMENT", "dev"))
+
+
+def _add_operation_parsers(commands: argparse._SubParsersAction) -> None:
+    """Os subcomandos da operação: ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export``
+    e ``history``."""
+    snapshot = commands.add_parser("snapshot",
+                                   help="o snapshot do banco com a versão atual de cada tabela")
+    _add_database_arguments(snapshot)
+    snapshot.add_argument("--name", required=True, type=_name_argument)
+    snapshot.set_defaults(handler=_snapshot)
+
+    vacuum = commands.add_parser("vacuum",
+                                 help="os arquivos fora da retenção e das versões dos snapshots")
+    _add_database_arguments(vacuum)
+    vacuum.add_argument("--apply", action="store_true", help="apaga os arquivos listados")
+    vacuum.add_argument("--full", action="store_true", help="inclui os arquivos órfãos")
+    vacuum.add_argument("--retention-hours", type=int, default=9600,
+                        help="a retenção em horas; padrão 9600, os 400 dias")
+    vacuum.set_defaults(handler=_vacuum)
+
+    compact_command = commands.add_parser("compact",
+                                          help="junta os arquivos pequenos das partições")
+    _add_database_arguments(compact_command)
+    compact_command.add_argument("--table", required=True)
+    compact_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None)
+    compact_command.set_defaults(handler=_compact)
+
+    archive = commands.add_parser("archive",
+                                  help="copia as tabelas de um snapshot para arquivo/<nome>/")
+    _add_database_arguments(archive)
+    archive.add_argument("--name", required=True, type=_name_argument)
+    archive.set_defaults(handler=_archive)
+
+    export = commands.add_parser("export",
+                                 help="as pastas Parquet de uma versão da tabela, sem o log")
+    _add_database_arguments(export)
+    export.add_argument("--table", required=True)
+    export.add_argument("--destination", required=True,
+                        help="a URI da pasta de destino, vazia e sob a raiz")
+    export.add_argument("--version", type=int, default=None, help="a versão; padrão a atual")
+    export.add_argument("--mode", choices=["copy", "rewrite"], default="copy")
+    export.set_defaults(handler=_export)
+
+    history = commands.add_parser("history",
+                                  help="os commits de uma tabela com os metadados da biblioteca")
+    _add_database_arguments(history)
+    history.add_argument("--table", required=True)
+    history.set_defaults(handler=_history)
+
+
 def _add_audit_parser(commands: argparse._SubParsersAction) -> None:
     """``serialize-db audit``: o texto das verificações ou a auditoria da versão publicada."""
     audit_command = commands.add_parser("audit", help="a auditoria de uma tabela")
@@ -219,6 +300,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_audit_parser(commands)
     _add_publish_parser(commands)
     _add_load_parser(commands)
+    _add_operation_parsers(commands)
 
     schema_command = commands.add_parser("schema", help="os arquivos de esquema dos modelos")
     schema_actions = schema_command.add_subparsers(dest="action", required=True)
@@ -481,13 +563,180 @@ def _load(args: argparse.Namespace) -> int:
     return 0 if matches else 1
 
 
+# ---------------------------------------------------------------- a operação
+
+
+def _existing_tables(db: Database) -> dict[str, tuple[sa.Table, str]]:
+    """As tabelas do modelo que existem no ambiente: ``{nome: (tabela, URI)}``."""
+    found = {}
+    for table in db.tables():
+        uri = db.uri(table)
+        if delta.table_exists(uri, db.storage):
+            found[table.name] = (table, uri)
+    return found
+
+
+def _existing_table(args: argparse.Namespace, db: Database,
+                    command: str) -> tuple[sa.Table, str] | None:
+    """A tabela de ``--table`` no modelo e a URI dela no ambiente, ou ``None`` com a mensagem
+    impressa quando ela não está no modelo ou não tem Delta."""
+    table = args.metadata.tables.get(args.table)
+    if table is None:
+        print(f"serialize-db {command}: a tabela {args.table} não está nos modelos",
+              file=sys.stderr)
+        return None
+    uri = db.uri(table)
+    if not delta.table_exists(uri, db.storage):
+        print(f"serialize-db {command}: {table.name} não existe em {uri}", file=sys.stderr)
+        return None
+    return table, uri
+
+
+def _snapshot(args: argparse.Namespace) -> int:
+    """A entrada do snapshot com a versão atual de cada tabela do ambiente; 2 no nome repetido e
+    no conflito de escrita."""
+    db = Database(args.root, args.environment, args.metadata)
+    versions = {}
+    for name, (_, uri) in _existing_tables(db).items():
+        versions[name] = delta.open_table(uri, db.storage).version()
+    try:
+        delta.snapshot(db.storage, db.environment, args.name, versions)
+    except (ValueError, ConflictError) as error:
+        print(f"serialize-db snapshot: {error}", file=sys.stderr)
+        return 2
+    for name, version in sorted(versions.items()):
+        print(f"{name}: versão {version}")
+    print(f"snapshot {args.name} gravado com {len(versions)} tabela(s)")
+    return 0
+
+
+def _vacuum(args: argparse.Namespace) -> int:
+    """A lista, ou a exclusão com ``--apply``, dos arquivos de cada tabela fora da retenção e das
+    versões dos snapshots."""
+    db = Database(args.root, args.environment, args.metadata)
+    control, _ = delta.read_snapshots(db.storage, db.environment)
+    verb = "apagado(s)" if args.apply else "a apagar"
+    for name, (_, uri) in _existing_tables(db).items():
+        listed = delta.vacuum_keeping_snapshots(uri, control, name, db.storage,
+                                                args.retention_hours, args.apply, args.full)
+        print(f"{name}: {len(listed)} arquivo(s) {verb}")
+        for path in listed:
+            print(f"    {path}")
+    return 0
+
+
+def _compact(args: argparse.Namespace) -> int:
+    """A compactação das partições pedidas; 2 na tabela fora do modelo ou sem Delta, na tabela
+    particionada sem ``--partitions`` e no snapshot na versão atual da tabela."""
+    db = Database(args.root, args.environment, args.metadata)
+    found = _existing_table(args, db, "compact")
+    if found is None:
+        return 2
+    table, uri = found
+    if schema.table_options(table).partition_by is not None and not args.partitions:
+        print("serialize-db compact: informe --partitions numa tabela particionada",
+              file=sys.stderr)
+        return 2
+    current = delta.open_table(uri, db.storage).version()
+    control, _ = delta.read_snapshots(db.storage, db.environment)
+    for name, versions in control["snapshots"].items():
+        if versions.get(table.name) == current:
+            print(f"serialize-db compact: o snapshot {name} está na versão atual {current} de "
+                  f"{table.name}; compacte antes de um snapshot", file=sys.stderr)
+            return 2
+    metrics = delta.compact(uri, table, args.partitions or [], db.storage)
+    print(f"{table.name}: {metrics['numFilesAdded']} arquivo(s) gravado(s), "
+          f"{metrics['numFilesRemoved']} removido(s)")
+    return 0
+
+
+def _archive(args: argparse.Namespace) -> int:
+    """A cópia de cada tabela do snapshot para ``arquivo/<nome>/`` e a entrada movida para
+    ``archived``; 2 no snapshot ausente de ``snapshots``, na tabela do snapshot que já não existe
+    na raiz e no conflito de escrita."""
+    db = Database(args.root, args.environment, args.metadata)
+    storage = db.storage
+    control, _ = delta.read_snapshots(storage, db.environment)
+    entry = control["snapshots"].get(args.name)
+    if entry is None:
+        print(f"serialize-db archive: o snapshot {args.name} não está em snapshots",
+              file=sys.stderr)
+        return 2
+    pending = []
+    for name, version in sorted(entry.items()):
+        source = storage.uri_of(storage.join(db.environment, name))
+        destination = storage.uri_of(storage.join(db.archive_prefix(args.name), name))
+        # A repetição de um arquivo interrompido pula o que a execução anterior já copiou.
+        if delta.table_exists(destination, storage):
+            print(f"{name}: já no arquivo, {destination}")
+            continue
+        if not delta.table_exists(source, storage):
+            print(f"serialize-db archive: {name} não existe em {source}", file=sys.stderr)
+            return 2
+        pending.append((name, version, source, destination))
+    # Toda tabela conferida antes da primeira cópia: um snapshot com uma tabela sumida não deixa
+    # um arquivo pela metade.
+    for name, version, source, destination in pending:
+        copied = delta.deep_copy(source, version, destination, storage)
+        print(f"{name}: versão {version} copiada para {destination}, versão {copied} no arquivo")
+    try:
+        delta.archive_snapshot(storage, db.environment, args.name)
+    except (ValueError, ConflictError) as error:
+        print(f"serialize-db archive: {error}", file=sys.stderr)
+        return 2
+    print(f"snapshot {args.name} movido para archived")
+    return 0
+
+
+def _export(args: argparse.Namespace) -> int:
+    """A exportação de uma versão da tabela para pastas Parquet sem o log; 2 na tabela fora do
+    modelo ou sem Delta e no destino fora da raiz ou não vazio."""
+    db = Database(args.root, args.environment, args.metadata)
+    found = _existing_table(args, db, "export")
+    if found is None:
+        return 2
+    table, uri = found
+    try:
+        relative = db.storage.relative(args.destination)
+    except ValueError as error:
+        print(f"serialize-db export: {error}", file=sys.stderr)
+        return 2
+    if db.storage.list_files(relative):
+        print(f"serialize-db export: destino não vazio: {args.destination}", file=sys.stderr)
+        return 2
+    files = delta.export_snapshot(uri, table, args.destination, db.storage, args.version,
+                                  args.mode)
+    version = "" if args.version is None else f" da versão {args.version}"
+    print(f"{table.name}: {len(files)} arquivo(s) em {args.destination}{version}")
+    return 0
+
+
+def _history(args: argparse.Namespace) -> int:
+    """Uma linha por commit da tabela, do mais recente ao mais antigo: a versão, a operação, o
+    instante em UTC e os metadados da biblioteca que o commit tem."""
+    db = Database(args.root, args.environment, args.metadata)
+    found = _existing_table(args, db, "history")
+    if found is None:
+        return 2
+    _, uri = found
+    for entry in delta.history(uri, db.storage):
+        instant = entry["timestamp"].isoformat(timespec="seconds")
+        line = f"{entry['version']} {entry['operation']} {instant}"
+        for key in ("serialize_db_execution_id", "serialize_db_input_versions",
+                    "serialize_db_snapshot"):
+            if key in entry:
+                line += f" {key}={entry[key]}"
+        print(line)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Executa a linha de comando e devolve o código de saída.
 
     Cada subcomando guarda a sua função em ``handler`` (``set_defaults`` do ``argparse``).
     """
     args = _build_parser().parse_args(argv)
-    if args.command in ("run", "audit", "publish", "load"):
+    if args.command not in ("schema", "sql"):
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     return args.handler(args)
 

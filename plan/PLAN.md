@@ -676,4 +676,4 @@ usuário de 2026-09-23 e 2026-09-24, [etapa 5](PLAN-STAGE-5.md)).
    conexão de `examples/`; as etapas 5 e 8 vêm depois das etapas 3, 4 e 6, com essa conexão.
 6. Etapa 7, implementada em 2026-09-24 sobre a base fictícia, com o script de migração fino sobre
    o pacote e a carga pelo pacote ainda por rodar no ambiente alvo; etapa 9 por último, com o
-   runbook.
+   runbook, implementada no mesmo dia na pasta local.

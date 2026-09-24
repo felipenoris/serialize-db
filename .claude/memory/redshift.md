@@ -309,7 +309,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   by delta-rs), the `NaN` swap, two ingests in two sessions, and a 10-row `load` at 1.5 s.
   `select current_database()` is described as `name` (OID 19, `type_size` 128), the catalog
   identifier type, which `schema_from_row_description` refused; `NAME` maps to `string` since,
-  and the stand-in describes `current_database()` with OID 19. The publication suite did not run:
+  and the stand-in describes `current_database()` with OID 19. Its value stays `dev` after the
+  `USE` (reading of 2026-09-21, recalled by the user on 2026-09-24): the test records it and
+  never asserts it. The publication suite did not run:
   the target's `SERIALIZE_DB_TEST_LOCAL_ROOT` folder was missing. `plan/POC.md`
 - A positional `COPY` cannot load a subset of a file's columns (the column list must match the
   file's count, reading of 2026-09-21), so the audit's published staging carries every contract

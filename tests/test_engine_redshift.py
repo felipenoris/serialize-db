@@ -819,9 +819,11 @@ def count_of(engine: RedshiftEngine, name: str) -> int:
 @pytest.mark.s3
 def test_connect_uses_share_database(target: Target) -> None:
     """Depois do ``USE``, o ``CREATE TABLE`` de uma tabela ``exec_<id>_*`` por nome em duas partes
-    passa e ``name_in_use`` lê o nome livre; leituras: o SQLSTATE e a mensagem da relação
-    inexistente, ``current_database()``, que o Redshift descreve com o tipo ``name`` (OID 19), e
-    a presença da tabela de controle, que nenhum comando da conexão cria."""
+    passa e ``name_in_use`` lê o nome livre; leituras, nunca asserções: o SQLSTATE e a mensagem da
+    relação inexistente, ``current_database()``, que o Redshift descreve com o tipo ``name``
+    (OID 19) e que continua ``dev`` depois do ``USE``, porque o ``USE`` muda a resolução dos nomes
+    e não o banco da sessão (leitura de 2026-09-21), e a presença da tabela de controle, que nenhum
+    comando da conexão cria."""
     engine = target.engine
     name = f"{engine.prefix}conexao"
     engine.execute(f"CREATE TABLE {engine.qualified(name)} (id BIGINT)")
