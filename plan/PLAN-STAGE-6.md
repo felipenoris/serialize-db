@@ -5,6 +5,11 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 
 `serialize_db.execution` é o ciclo de uma execução; `serialize_db.cli` o expõe.
 
+A [etapa 10](PLAN-STAGE-10.md) tira desta etapa `run.publish_redshift` e `serialize-db run
+--redshift` (decisão do usuário de 2026-09-24): a publicação no Redshift passa a ser só
+`serialize-db publish`, depois da execução, por snapshot ou canal. As linhas abaixo descrevem o
+código até essa implementação.
+
 | Primitiva | O que faz |
 | --- | --- |
 | `Database(root, environment, metadata)` | A raiz do banco, o ambiente (`prd`, `dev`, pela regra da partição, porque vira nome de pasta) e o `MetaData` dos modelos; `uri(table)` é `<root>/<ambiente>/<tabela>` a partir da raiz que `Storage.for_uri` normalizou, sem barra final, porque os caminhos das etapas 3 a 5 acrescentam `/<coluna>=<valor>/`, mais o arquivo de controle e os prefixos `staging/`, `publicacao/` e `arquivo/`; chama `prepare_environment`, e `storage` é o `Storage.for_uri(root)`, criado no primeiro uso. As opções do delta-rs saem de `storage.storage_options()` a cada chamada, sem credencial ([etapa 3](PLAN-STAGE-3.md)). |

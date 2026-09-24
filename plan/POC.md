@@ -3404,4 +3404,5 @@ diz qual snapshot é o último.
 
 **Consequências**: o [arquivo da etapa 10](PLAN-STAGE-10.md) cria as views pelo `ingest` do motor,
 materializa pela troca numa transação e documenta o `IN` de vários valores, que o leitor não
-reescreve; a data do snapshot é a decisão pendente A, em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+reescreve; o snapshot padrão, que o arquivo de controle não identifica, passou a ser o canal
+`default` da etapa, movido por `serialize-db channel` (decisões do usuário do mesmo dia).

@@ -73,11 +73,12 @@ foi medido em [`POC.md`](POC.md).
   publicação os põe no log de cada tabela e `deep_copy` registra o tempo de cada partição, e a
   próxima execução lá os lê; a continuação de uma cópia interrompida só o substituto exercitou.
 
-- **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) depende de duas
-  leituras que a pasta local não dá: o tempo de abertura do leitor Delta sobre as 12 tabelas da
-  raiz carregada, com uma view por tabela (8,7 ms por view na pasta local, [`POC.md`](POC.md)), e
-  o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o caminho de
-  credencial que serve a ele.
+- **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) depende de leituras
+  que a pasta local não dá: o tempo de abertura do leitor Delta sobre as 12 tabelas da raiz
+  carregada, com uma view por tabela (8,7 ms por view na pasta local, [`POC.md`](POC.md)); a
+  publicação por `--channel default` e a volta a um snapshot anterior ao publicado; e o `UNLOAD`
+  de um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial
+  que serve a ele.
 
 - **O ambiente `prod` no ambiente alvo.** A carga das 14:16 e a bateria das 16:51 de 2026-09-24
   gravaram o banco em `<raiz>/prod/` e publicaram as 12 tabelas como `prod_<tabela>`, com as
@@ -89,19 +90,5 @@ foi medido em [`POC.md`](POC.md).
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit. Só o arquivo da
-[etapa 10](PLAN-STAGE-10.md) tem itens nessa seção; os que esperam o usuário fora dos arquivos de
-etapa estão na lista acima.
-
-- **A data do snapshot.** O arquivo de controle não diz qual snapshot é o último: as entradas não
-  têm data, e as chaves saem em ordem alfabética. A proposta é a chave irmã `created_at`, gravada
-  por `delta.snapshot`, e a alternativa, um ponteiro `latest`.
-- **A forma do modo da versão atual.** A proposta é `db.open_delta(current=True)`, e a alternativa
-  pela regra das flags booleanas é `db.open_delta_current()`.
-- **A entrada do cliente do Redshift.** A proposta é
-  `serialize_db.reader.open_redshift(metadata, environment, config, unload_to)`, sem `Database`,
-  ao lado de `Database.open_redshift(config, unload_to=None)` para o time.
-- **O snapshot arquivado.** A proposta é ler a cópia em `arquivo/<nome>/<tabela>` quando o
-  nome pedido está em `archived`, e a alternativa, recusá-lo. No ambiente alvo, o único
-  snapshot, `carga-2026-09-24`, está em `archived` desde a bateria das 16:51, e o leitor sem
-  argumento não acha snapshot lá.
+tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente; os
+itens que esperam o usuário fora dos arquivos de etapa estão na lista acima.

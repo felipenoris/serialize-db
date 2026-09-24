@@ -940,3 +940,25 @@ the dated records of what ran, because the target still holds them: the 14:16 lo
 the stage 10 probe's `prod_` prefix, in `plan/POC.md`, `plan/CURRENT_STATE.md`,
 `plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`, `CLAUDE.md` and the memory. What becomes of the
 target's `prod` environment waits on the user. `plan/OPEN_QUESTIONS.md`
+
+## The snapshot channel and the closed stage 10 decisions (2026-09-24)
+
+The "latest snapshot" had no answer in the control file (no date, sorted keys), and the user
+opened the naming model: a unique, simple default, and several "exercises" of the base like
+stream channels or the dsv and prd environments, possibly branches. The assistant proposed
+free immutable snapshot names, a movable pointer per environment, and environments for the
+exercises that diverge in data, because a Delta table's history is linear and has no branches.
+The user's answers of the same day: only a dedicated command moves the `default` pointer,
+unrelated to publication; only `default` for now; Redshift has no channel, and publication
+takes `--snapshot <name>` or `--channel <name>` (`--channel default`); no branch operation
+now. On the reformulated questions: the current version of each table is the reserved
+channel `current` in the reader (`open_delta(channel="current")`) and in publication
+(`--channel current`), and `run.publish_redshift` and `serialize-db run --redshift` leave, so
+publication is always `serialize-db publish` after the execution; the reader reads an archived
+snapshot from its copy in `arquivo/<name>/<table>`; the command is `serialize-db channel --name
+default --snapshot <name>`, the name explicit from the start; and after reading the trade-offs
+the user kept both Redshift entries, `serialize_db.reader.open_redshift(metadata, environment,
+config, unload_to)` for the client and `db.open_redshift(config)` for the team. The user had
+first read `open_delta(channel="default")` as the current-version mode; it is the default
+snapshot, and `current` names the other mode. `plan/PLAN-STAGE-10.md`, `plan/PLAN.md`,
+`plan/serialize-db.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-8.md`

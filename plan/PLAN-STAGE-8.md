@@ -10,6 +10,12 @@ em duas partes depois do `USE <banco>` que a conexão roda, e a escrita obedece 
 aceita ([`redshift.md`](redshift.md)): `COPY` sem cláusula `COMPUPDATE`, a escrita de uma transação
 num banco só, e um comando múltiplo apenas dentro de um bloco de transação. A tabela de controle
 mora no mesmo banco das tabelas publicadas, e a transação da publicação abre com `BEGIN` explícito.
+
+A [etapa 10](PLAN-STAGE-10.md) muda a entrada desta etapa (decisões do usuário de 2026-09-24):
+`serialize-db publish` passa a exigir `--snapshot <nome>` ou `--channel <nome>`, com `current`
+para a versão atual; `run.publish_redshift` sai; e a volta a um snapshot anterior ao publicado
+troca as partições alteradas entre as duas versões. As linhas abaixo descrevem o código até essa
+implementação.
 O `COPY` e o `UNLOAD` levam a cláusula de credenciais da [etapa 5](PLAN-STAGE-5.md).
 
 O `COPY ... MANIFEST` numa tabela de datashare passou no ambiente alvo em 2026-09-21, 500.000 linhas

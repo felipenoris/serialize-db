@@ -1,4 +1,4 @@
-# Etapa 10: acesso de leitura
+# Etapa 10: acesso de leitura e canal do snapshot
 
 A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PLAN.md`](PLAN.md), que
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
@@ -9,6 +9,9 @@ tabela, e a base publicada no Redshift, pelas tabelas `<ambiente>_<tabela>` da
 [etapa 8](PLAN-STAGE-8.md). O módulo é `serialize_db.reader`. O time que tem o `Database` entra por
 `db.open_delta()` e `db.open_redshift(config)`; o cliente que só enxerga o Redshift entra por
 `serialize_db.reader.open_redshift`, sem `Database`. O mesmo statement roda nas duas origens.
+
+A etapa também dá nome ao snapshot padrão: o canal `default` do ambiente, que um comando próprio
+move. A publicação no Redshift passa a escolher o snapshot pelo nome ou pelo canal.
 
 ## As decisões do usuário
 
@@ -23,20 +26,44 @@ Tomadas em 2026-09-24, na conversa que propôs a etapa:
   2026-09-20 ([`PLAN.md`](PLAN.md), seção "A troca de dados com o código cliente").
 - As duas origens servem a times diferentes. Os clientes com acesso só de leitura à base publicada
   no Redshift informam um destino próprio para o `UNLOAD`.
-- A versão padrão do leitor Delta é o último snapshot do ambiente, e outro modo lê a versão atual
-  de cada tabela.
+- A versão padrão do leitor Delta é a do snapshot padrão do ambiente, e outro modo lê a versão
+  atual de cada tabela.
 - A materialização de parte das partições é permitida: o nome do modelo passa a ter só essas
   partições.
 
+Tomadas no mesmo dia, nas respostas ao modelo dos snapshots:
+
+- O nome do snapshot continua livre dentro da regra da partição, imutável e único.
+- O snapshot padrão é o que o canal `default` do ambiente aponta. Só um comando próprio move o
+  canal, sem vínculo com a publicação, e a etapa começa só com o `default`.
+- O Redshift não tem canal. `serialize-db publish` recebe `--snapshot <nome>`, que escolhe o
+  snapshot explicitamente, ou `--channel <nome>` (`--channel default`), que publica o snapshot
+  do canal.
+- O exercício que diverge nos dados é um ambiente (dsv, prd), e nenhuma operação que crie um
+  ambiente a partir de um snapshot entra agora.
+- A versão atual de cada tabela, sem snapshot, é o canal reservado `current`, no leitor
+  (`open_delta(channel="current")`) e na publicação (`--channel current`); o comando do canal
+  não o move.
+- `run.publish_redshift` e `serialize-db run --redshift` saem: a publicação no Redshift é sempre
+  `serialize-db publish`, depois da execução.
+- O leitor Delta lê o snapshot arquivado pela cópia em `arquivo/<nome>/<tabela>`.
+- O comando que move o canal é `serialize-db channel --name default --snapshot <nome>`, com o
+  nome do canal explícito desde já.
+- O leitor Redshift tem duas entradas: `serialize_db.reader.open_redshift(metadata, environment,
+  config, unload_to)` para o cliente sem a raiz Delta e `db.open_redshift(config)` para o time.
+
 ## Interface
 
-As assinaturas em aberto estão em "Decisões pendentes": a forma do modo da versão atual (B) e a
-entrada do cliente do Redshift (C).
-
 ```python
+# serialize_db/delta.py
+def set_channel(storage: Storage, environment: str, name: str, snapshot: str) -> dict: ...
+def channel_snapshot(control: Mapping, name: str) -> str: ...
+def snapshot_versions(control: Mapping, name: str) -> dict[str, int]: ...
+
+
 # serialize_db/execution.py
 class Database:
-    def open_delta(self, snapshot: str | None = None, current: bool = False,
+    def open_delta(self, snapshot: str | None = None, channel: str | None = None,
                    config: DuckDBConfig | None = None) -> DeltaReader: ...
     def open_redshift(self, config: RedshiftConfig,
                       unload_to: str | None = None) -> RedshiftReader: ...
@@ -48,7 +75,7 @@ def open_redshift(metadata: sa.MetaData, environment: str, config: RedshiftConfi
 
 
 class DeltaReader:
-    snapshot: str | None                          # o snapshot lido; None no modo da versão atual
+    snapshot: str | None                          # o snapshot lido; None no canal current
     versions: dict[str, int]                      # a versão de cada tabela com view
     materialized: dict[str, list[str] | None]     # as tabelas locais e as partições de cada uma
 
@@ -82,13 +109,13 @@ from serialize_db.reader import open_redshift
 
 db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
 
-with db.open_delta() as reader:                     # o último snapshot
+with db.open_delta() as reader:                     # o snapshot do canal default
     reader.materialize(Conta.__table__)
     reader.materialize(Lancamento.__table__, partitions=["2026-08-31"])
     frame = reader.query(stmt).to_pandas(types_mapper=pd.ArrowDtype)
     reader.versions                                 # {"cad_lancamentos": 143, ...}
 
-reader = db.open_delta(current=True)                # a versão atual, sem with, num caderno
+reader = db.open_delta(channel="current")          # a versão atual, sem with, num caderno
 reader.close()
 
 with db.open_redshift(RedshiftConfig.from_environment()) as reader:   # o time
@@ -101,21 +128,76 @@ with open_redshift(Base.metadata, "prd", config, "s3://bucket-do-cliente/tmp") a
             work(batch)
 ```
 
+A linha de comando, com as opções de `--root`, `--environment` e `--metadata` omitidas:
+
+```shell
+serialize-db snapshot --name 2026T3                     # marca as versões atuais
+serialize-db channel --name default --snapshot 2026T3   # "default: 2026T2 -> 2026T3"
+serialize-db channel                                    # mostra os canais
+serialize-db publish --channel default                  # o snapshot do default
+serialize-db publish --snapshot 2026T2                  # um snapshot pelo nome
+serialize-db publish --channel current                  # a versão atual de cada tabela
+```
+
 ## Estratégia de implementação
+
+### O canal do snapshot
+
+- **O arquivo de controle** ganha a chave irmã `channels`, ao lado de `snapshots` e `archived`:
+  `{"channels": {"default": "2026T3"}}`. O mapa por nome guarda o `default` hoje e aceita outro
+  canal depois sem mudar o formato.
+- **O canal `current`** é reservado e não fica no arquivo: ele resolve para a versão atual de cada
+  tabela do modelo que existe no ambiente, lida como `serialize-db snapshot` a lê.
+- **`set_channel(storage, environment, name, snapshot)`** aponta o canal para o snapshot na
+  escrita condicional do arquivo de controle e devolve o controle novo. O nome fora da regra da
+  partição e o nome `current` são `ContractError`; o snapshot ausente de `snapshots` é
+  `ValueError`, também o que está em `archived`, porque o `vacuum` deixa de preservar as versões
+  dele; outro escritor entre a leitura e a escrita é `ConflictError`.
+- **`channel_snapshot(control, name)`** devolve o snapshot do canal, e o canal ausente é
+  `ContractError` com o comando que o cria. **`snapshot_versions(control, name)`** devolve as
+  versões do snapshot, e o nome ausente de `snapshots` é `ContractError`. O leitor e a publicação
+  usam as duas.
+- **`archive_snapshot`** recusa com `ValueError` o snapshot que um canal aponta: o canal precisa
+  ser movido antes.
+- **`serialize-db channel --name <canal> --snapshot <nome>`** aponta o canal e imprime o snapshot
+  anterior e o novo; sem opções, imprime os canais. O comando sai com 0 ao terminar e 2 no nome
+  fora da regra, no `current`, no snapshot ausente ou arquivado e no conflito de escrita, como os da
+  [etapa 9](PLAN-STAGE-9.md). Nenhum outro caminho move o canal: nem `Execution.snapshot`, nem
+  `serialize-db snapshot`, nem a publicação.
+
+### A publicação por snapshot
+
+- **`serialize-db publish`** publica só com `--snapshot <nome>` ou `--channel <nome>`, que o
+  `argparse` torna excludentes, e um dos dois é obrigatório; `--init`, `--status` e `--unpublish`
+  não os recebem. As versões são as de `snapshot_versions`, que `publication.publish_redshift`
+  já recebe em `versions`; `--channel current` passa as versões atuais.
+- **O snapshot arquivado** é recusado, e a tabela do modelo ausente do snapshot é
+  `PublicationError` com o nome do snapshot.
+- **A volta a um snapshot anterior ao publicado** troca as partições alteradas entre as duas
+  versões. Hoje `version_diff` recusa a versão publicada posterior à pedida (`ValueError`); a
+  publicação passa a chamá-lo com a menor e a maior das duas. A partição que só a versão
+  publicada tem sai pelo `DELETE`, sem `COPY`, como já acontece com a partição removida.
+- **A publicação dentro da execução sai**: `Execution.publish_redshift` e `serialize-db run
+  --redshift` deixam o pacote, e o argumento `redshift` de `Execution` fica só para o motor
+  `"redshift"`. A execução grava no Delta e marca o snapshot; a publicação vem depois, pela
+  linha de comando. As [etapas 6](PLAN-STAGE-6.md) e [8](PLAN-STAGE-8.md), `docs/`, os testes e
+  `SUITE.md` mudam com a implementação desta etapa.
 
 ### O leitor Delta
 
 - **As versões** são lidas na abertura, em três modos:
-  - Sem argumento, o leitor usa o último snapshot do arquivo de controle
-    `<ambiente>/_serialize_db/snapshots.json` (`delta.read_snapshots`). A escolha depende da data
-    que `delta.snapshot` passa a gravar (decisão pendente A). O ambiente sem snapshot é
-    `ContractError`, e a mensagem aponta o modo da versão atual.
+  - Sem argumento, o leitor usa o snapshot do canal `default` do arquivo de controle
+    `<ambiente>/_serialize_db/snapshots.json`, por `channel_snapshot` e `snapshot_versions`. O
+    ambiente sem o canal é `ContractError`, e a mensagem aponta `serialize-db channel` e o canal
+    `current`.
   - Com `snapshot="2026T3"`, o leitor usa a entrada com esse nome, e o nome ausente é
-    `ContractError`. O nome em `archived` depende da decisão pendente D: o `vacuum` deixa de
-    preservar as versões do snapshot arquivado, e a cópia dele fica em
-    `arquivo/<nome>/<tabela>`.
-  - Com `current=True`, o leitor usa a versão atual de cada tabela do modelo que existe no ambiente,
-    como `Execution` na abertura; `snapshot` e `current` juntos são `ContractError`.
+    `ContractError`. O nome em `archived` abre as views sobre a cópia em
+    `arquivo/<nome>/<tabela>`, na versão atual de cada cópia, que não muda depois do `archive`
+    (decisão do usuário): o `vacuum` deixa de preservar as versões do snapshot arquivado na
+    tabela viva.
+  - Com `channel="default"`, o leitor usa o snapshot do canal, como sem argumento; com
+    `channel="current"`, a versão atual de cada tabela do modelo que existe no ambiente, como
+    `Execution` na abertura. `snapshot` e `channel` juntos são `ContractError`.
 - **O motor** é um `DuckDBEngine` com o `DuckDBConfig` recebido. O padrão é o da execução: os
   limites lidos do ambiente e uma pasta temporária nova. O identificador é
   `reader-<AAAA-MM-DD>-<uuid8>`, e o `storage` é o do `Database`.
@@ -178,6 +260,9 @@ with open_redshift(Base.metadata, "prd", config, "s3://bucket-do-cliente/tmp") a
 - **O leitor Delta** precisa de leitura na raiz do banco (as tabelas e o arquivo de controle) e da
   extensão `delta` do DuckDB. Ele grava só na pasta temporária do motor, apagada no `close`, e nada
   na raiz.
+- **`serialize-db channel`** precisa de leitura e gravação do arquivo de controle, e grava só ele.
+- **A publicação por snapshot** lê as versões do snapshot, que o `vacuum` preserva enquanto a
+  entrada está em `snapshots`.
 - **O leitor Redshift** precisa de `SELECT` nas tabelas publicadas do esquema. Para `stream`,
   precisa também do `UNLOAD` com o papel de `config.iam_role` ou as credenciais da sessão `boto3`,
   e de gravação, leitura e exclusão em `unload_to`. Nada é criado no esquema.
@@ -186,11 +271,11 @@ with open_redshift(Base.metadata, "prd", config, "s3://bucket-do-cliente/tmp") a
 
 `tests/test_reader.py`, sob a raiz local (`local`):
 
-- O último snapshot pela data, entre dois snapshots gravados; um único snapshot sem data; mais de
-  um snapshot sem data e nenhum com data, `ContractError`; o ambiente sem snapshot,
-  `ContractError`.
-- O snapshot nomeado; o nome ausente, `ContractError`; o nome arquivado, pela decisão D.
-- A versão atual; `snapshot` com `current`, `ContractError`.
+- O snapshot do canal `default`, depois de o canal passar de um snapshot a outro; o ambiente sem o
+  canal, `ContractError`.
+- O snapshot nomeado; o nome ausente, `ContractError`; o nome arquivado, lido da cópia em
+  `arquivo/<nome>/`, com as mesmas linhas do snapshot antes do `archive`.
+- O canal `current` lê a versão atual; `snapshot` com `channel`, `ContractError`.
 - Um commit depois da abertura não aparece na leitura.
 - A tabela criada depois do snapshot fica sem view, e a consulta que a cita é `ContractError`.
 - `materialize` da tabela inteira e de parte das partições: as linhas, `materialized`, a troca
@@ -202,7 +287,21 @@ with open_redshift(Base.metadata, "prd", config, "s3://bucket-do-cliente/tmp") a
 - A poda pela view no log `FileSystem` do DuckDB: o `=` e o `BETWEEN` abrem só as pastas das
   partições, e o `IN` de dois valores abre todas.
 - O `close` apaga o banco, e a segunda chamada não faz nada.
-- `delta.snapshot` grava a data, em `tests/test_delta.py`.
+
+`tests/test_delta.py`, nas duas raízes: `set_channel` aponta e move o canal e recusa o nome fora
+da regra, o nome `current`, o snapshot ausente e o arquivado; a escrita concorrente é
+`ConflictError`; `channel_snapshot` e `snapshot_versions` recusam o que não existe; e
+`archive_snapshot` recusa o snapshot de um canal.
+
+`tests/test_operation.py`, sob a raiz local: `serialize-db channel --name default --snapshot`
+move o canal, imprime o anterior e o novo e mostra os canais; o snapshot ausente e o nome
+`current` saem com 2.
+
+`tests/test_publication.py`, com `redshift`, `s3` e `local`: a publicação por `--channel default`,
+por `--snapshot` e por `--channel current`; a volta a um snapshot anterior troca só as partições
+alteradas entre as duas versões, com a partição que só a versão publicada tinha apagada; o
+snapshot arquivado é recusado sem escrita no Redshift; e a publicação sem nenhum dos dois, ou com
+os dois, é erro de uso.
 
 `tests/test_reader.py`, sem conexão: o texto compilado com o prefixo `<ambiente>_` e a regra de
 leitura comum no leitor Redshift, sobre a conexão de mentira de `tests/test_engine_redshift.py`.
@@ -217,6 +316,8 @@ Delta para o mesmo statement, e `stream` o mesmo de `query`. Depois do `close`, 
 
 - **O tempo de abertura do leitor Delta** sobre as 12 tabelas da raiz carregada, com as views em
   paralelo. Só a pasta local foi medida: 8,7 ms por view (sonda de 2026-09-24).
+- **A publicação por `--channel default`** sobre a raiz de `SUITE.md` e a volta a um snapshot
+  anterior, com o tempo e o pico de RSS por tabela que a publicação registra.
 - **O `UNLOAD` do cliente** para um bucket próprio com um usuário do Redshift só de leitura. A
   execução mostra se o `UNLOAD` é aceito para quem só tem `SELECT` e qual caminho de credencial
   serve, o `iam_role` do cliente ou as credenciais da sessão. Ela precisa de um papel de cliente no
@@ -224,27 +325,6 @@ Delta para o mesmo statement, e `stream` o mesmo de `query`. Depois do `close`, 
 
 ## Decisões pendentes
 
-- **A. A data do snapshot.** O arquivo de controle guarda `{nome: {tabela: versão}}` sem data, e
-  `_write_control` grava as chaves em ordem alfabética, então nada nele diz qual snapshot é o
-  último. A proposta é que `delta.snapshot` grave o instante UTC numa chave irmã `created_at`
-  (`{"created_at": {"2026T3": "2026-09-24T14:16:00+00:00"}}`), como `archived`. O último snapshot
-  seria o de `created_at` mais recente em `snapshots`, e uma entrada sem data (gravada antes da
-  mudança) seria mais antiga que qualquer outra com data. Mais de uma entrada sem data e nenhuma
-  com data seria `ContractError`, que pede o nome. A alternativa é um ponteiro `latest` que
-  `delta.snapshot` atualiza. No ambiente alvo, o único snapshot, `carga-2026-09-24`, foi para
-  `archived` na bateria das 16:51 ([`POC.md`](POC.md)): sem snapshot novo, o leitor sem
-  argumento é `ContractError` lá, e só o modo da versão atual lê a raiz.
-- **B. A forma do modo da versão atual.** A proposta é `db.open_delta(current=True)`: um método para
-  a origem Delta, com os três modos na mesma docstring. A alternativa, pela regra do repositório que
-  prefere funções separadas a flags booleanas, é `db.open_delta_current()`.
-- **C. A entrada do cliente do Redshift.** A proposta é
-  `serialize_db.reader.open_redshift(metadata, environment, config, unload_to)`, com `unload_to`
-  obrigatório, porque o cliente não tem a raiz Delta que o `Database` exige, e
-  `Database.open_redshift(config, unload_to=None)` para o time, com o padrão
-  `<raiz>/<ambiente>/staging`. Ela espera a confirmação do usuário.
-- **D. O snapshot arquivado.** O `archive` copia cada tabela do snapshot para
-  `arquivo/<nome>/<tabela>` e move a entrada para `archived`, e o `vacuum` deixa de preservar
-  as versões dela na tabela viva. A proposta é que `open_delta(snapshot=<nome arquivado>)` crie
-  as views sobre a cópia, na versão atual de cada cópia, que não muda depois do `archive`; o
-  último snapshot do modo sem argumento continua a ser procurado só em `snapshots`. A
-  alternativa é recusar o nome arquivado com `ContractError`.
+Nenhuma. As decisões do usuário de 2026-09-24 sobre o canal, a versão atual, a publicação fora
+da execução, o snapshot arquivado, o comando do canal e as entradas do leitor Redshift estão
+escritas nas seções que as descrevem.
