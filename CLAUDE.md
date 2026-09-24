@@ -638,8 +638,13 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `docs/operacao.md`. In the target on 2026-09-24 `history`, `snapshot` and `vacuum` ran, and
   `archive` died in pyarrow's single `CopyObject` of a `cad_lancamentos` file (the AWS SDK's
   3-second low-speed limit): `Storage.copy` on S3 is boto3's managed copy since, `deep_copy`
-  resumes an interrupted copy, `archive` no longer skips a table present in the archive, and the
-  rerun there is pending. The
+  resumes an interrupted copy and `archive` no longer skips a table present in the archive. The
+  battery of 16:51 the same day, on the root loaded anew (`cad_lancamentos` 19.9 s to 31.8 s per
+  partition, peak 16,355 MB), ran the whole flow: `archive` copied the 21 files of the 12 tables
+  through the managed transfer and moved the entry, and `serialize-db publish` (`--init`,
+  `--tables cad_contas`, `--max-workers 4`, `--status`) put the 12 tables in Redshift as
+  `prod_<table>`, `cad_lancamentos` at version 4 with 141,901,795 rows; `export`, `compact` and
+  the routines' durations, which the CLI does not print, stay unmeasured. The
   DuckDB engine and the migration script take `threads` and `memory_limit` from the environment at
   each opening (user instruction of 2026-09-24, replacing the 2026-09-22 DuckDB default). The review of stages 3 and 4 of 2026-09-23 corrected both stage files
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as

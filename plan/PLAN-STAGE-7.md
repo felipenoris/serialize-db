@@ -142,7 +142,9 @@ base de produção, na raiz `<raiz>/prod/<tabela>`: as 12 tabelas com contagens 
 `cad_lancamentos` em 22,7 s, 16,8 s, 36,9 s e 22,7 s com o pico do processo em 16.198 MB sob
 `memory_limit` de 14.030 MiB, numa máquina de 16 vCPUs e 31.383 MB, e a auditoria com
 `--foreign-keys` sobre 2026-01-31 leu os 989.852 órfãos de `orfao_data_base_sistema_contrato`, o
-`data_base` sem `cad_contratos` ([`POC.md`](POC.md)).
+`data_base` sem `cad_contratos` ([`POC.md`](POC.md)). A repetição das 16:51, sobre a raiz
+recarregada, leu o mesmo, com `cad_lancamentos` em 19,9 s, 15,3 s, 31,8 s e 19,4 s e o pico em
+16.355 MB sob `memory_limit` de 14.036 MiB ([`POC.md`](POC.md)).
 
 ## A implementação
 

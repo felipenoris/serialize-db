@@ -21,7 +21,9 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   had copied; pyarrow exposes no option for that limit. `Storage.copy` on S3 is boto3's managed
   `copy` since (`CopyObject` up to 8 MiB, `UploadPartCopy` in 8 MiB parts above, 10 threads,
   botocore's retries per part); moto 5.2.3 serves `UploadPartCopy`, and `test_list_copy_delete`
-  copies a 9 MiB object in both roots. `plan/POC.md`, `plan/PLAN-STAGE-3.md`
+  copies a 9 MiB object in both roots. The rerun of 2026-09-24 at 16:51, on the root loaded anew,
+  copied the 21 files of the 12 tables through the managed transfer, the four `cad_lancamentos`
+  files included, with no error and no duration printed. `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 
 ## Credentials, region and proxy in the clients
 

@@ -23,9 +23,9 @@ Os arquivos que a publicação lê são os do registro, gravados pelo `COPY` do 
 [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md), decisão do usuário de 2026-09-24): `DECIMAL` até 18
 dígitos em `INT64`, `TIMESTAMP` em `INT64` de microssegundos, `DATE` em `INT32`, o campo JSON em
 `BYTE_ARRAY` com o tipo lógico `JSON`, codificação `PLAIN` e SNAPPY (sonda de 2026-09-24,
-[`POC.md`](POC.md)). O `COPY` do Redshift de um arquivo assim não rodou no ambiente alvo, e os
-testes `redshift` desta etapa o exercitam sobre arquivos exportados pelo motor DuckDB
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+[`POC.md`](POC.md)). O `COPY` do Redshift de um arquivo assim passou no ambiente alvo em
+2026-09-24: na suíte desta etapa, às 13:05, sobre arquivos exportados pelo motor DuckDB, e na
+publicação da base inteira, às 16:51, sobre os arquivos da carga ([`POC.md`](POC.md)).
 
 | Primitiva | O que faz |
 | --- | --- |

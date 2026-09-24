@@ -326,6 +326,14 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   published; two published tables at `AUTO` join with `DS_DIST_ALL_NONE`; the `UNLOAD` file's
   `SUPER` column registered by `export_partition` reads as `VARCHAR` text through `delta_scan`; a
   10-row `load` took 1.66 s to 2.06 s. `plan/POC.md`, `plan/readings/`
+- The publication of the whole base (2026-09-24, the 16:51 battery, from `main` with #73):
+  `publish --init` created `sbx_aco_decon.serialize_db_publications`, `--tables cad_contas`
+  published version 1, `--max-workers 4` skipped it ("a versão 1 já está publicada") and
+  published the other 11 tables with every partition, `cad_lancamentos` at version 4 with
+  141,901,795 rows through `COPY ... MANIFEST` over the files the load's DuckDB `COPY` wrote, and
+  `--status` read the 12 tables as `prod_<table>` with published equal to current and no pending
+  partition; the CLI prints no duration, so nothing of the publication's time was read.
+  `plan/POC.md`
 - A positional `COPY` cannot load a subset of a file's columns (the column list must match the
   file's count, reading of 2026-09-21), so the audit's published staging carries every contract
   column and is the same `exec_<id>_<tabela>_publicado` as `published()`, loaded once per

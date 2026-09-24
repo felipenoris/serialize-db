@@ -45,14 +45,13 @@ foi medido em [`POC.md`](POC.md).
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
   cópia dos arquivos de cada partição e o registro deles (decisão do usuário de 2026-09-24).
 
-- **A operação no ambiente alvo.** Em 2026-09-24, sobre a raiz que a carga pelo pacote acabara de
-  gravar, `history`, `snapshot` e `vacuum` rodaram, e `archive` copiou três tabelas e morreu no
-  `CopyObject` de um arquivo de `cad_lancamentos`, abandonado pelo SDK da AWS depois de 3 segundos
-  sem resposta ([`POC.md`](POC.md)); `Storage.copy` passou à transferência gerenciada do `boto3`, e
-  `deep_copy` continua a cópia interrompida. A repetição de `serialize-db archive --name
-  carga-2026-09-24` lá lê a cópia de `cad_lancamentos` pelo `UploadPartCopy` e o seu tempo, e as
-  partições já registradas puladas; `export`, `compact` (a memória da compactação, o item acima) e a
-  publicação da base inteira no Redshift (`serialize-db publish`) ainda não rodaram lá.
+- **A operação no ambiente alvo.** Em 2026-09-24 às 16:51, sobre a raiz recarregada, a carga, a
+  auditoria, `history`, `snapshot`, `vacuum`, `archive` (os 21 arquivos das 12 tabelas pela
+  transferência gerenciada do `boto3`) e a publicação da base inteira no Redshift rodaram sem erro
+  ([`POC.md`](POC.md)). `export` e `compact` (a memória da compactação, o item acima) ainda não
+  rodaram lá, e a duração do `archive` e a da publicação de `cad_lancamentos` ficaram sem
+  leitura, porque a linha de comando não imprime tempo; a continuação de uma cópia interrompida
+  só o substituto exercitou.
 
 ## Decisões de API pendentes por etapa
 

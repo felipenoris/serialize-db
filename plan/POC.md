@@ -3261,3 +3261,59 @@ relação inexistente com `XX000` e a mensagem do alvo. [`OPEN_QUESTIONS.md`](OP
 perdeu a carga pelo pacote, as etapas 5 e 8, o arquivo do `UNLOAD` com `SUPER` e o `COPY` do
 arquivo do DuckDB; a repetição do `archive` no alvo, o `export`, o `compact` e a publicação da base
 inteira ficam nele.
+
+## O que a bateria de 2026-09-24 às 16:51 mostrou no ambiente alvo
+
+Em 2026-09-24, a partir de 16:51 UTC, o usuário rodou de novo os comandos de `SUITE.md` no
+ambiente alvo, a partir da `main` com o #73 (as linhas `INFO serialize_db.delta: ... copiada` são
+do código novo), na mesma máquina de 16 vCPUs e 31.383 MB, com 28.074 MB disponíveis (Python
+3.13.15, DuckDB 1.5.5, deltalake 1.6.4, pyarrow 25.0.1, `sa-east-1`), sobre a raiz de `SUITE.md`
+sem nada da bateria das 12:38: o `history` de `cad_lancamentos` tem só os cinco commits da carga,
+com o `CREATE TABLE` às 16:52:40 UTC, `snapshot` aceitou de novo o nome `carga-2026-09-24`, e
+`archive` copiou toda tabela inteira, sem partição pulada nem recusa. A carga, a auditoria,
+`history`, `snapshot`, `vacuum`, `archive` e a publicação da base inteira no Redshift terminaram
+sem erro; a saída do terminal e o relatório da carga ficam fora de `plan/`, com os achados aqui. O
+probe das threads, `export` e `compact` não rodaram.
+
+- **A carga pelo pacote** (`scripts/migrate_parquet_to_delta.py --environment prod`, `started_at`
+  16:51:12): as 12 tabelas, 187.340.509 linhas em 21 arquivos, um por partição, com contagens e
+  somas iguais em toda partição (`matches` verdadeiro nas 12) e `alembic_version`,
+  `meta_update_status` e `schema.json` fora do modelo; `environment_limits` deu 16 threads e
+  `memory_limit` de 14.036 MiB. As partições de `cad_lancamentos` entraram em 19,9 s, 15,3 s,
+  31,8 s e 19,4 s (33.239.719, 23.789.279, 52.654.607 e 32.218.190 linhas), de 9% a 15% menos que
+  às 14:16, na mesma máquina e com os mesmos limites, sem medição que separe a causa; o pico do
+  processo foi 10.766 MB depois das duas primeiras e 16.355 MB depois da 2026-03-31, 17% acima do
+  limite e 52% da memória da máquina (16.198 MB às 14:16). `rel_contrato_operacao` até 11,0 s e
+  3.780 MB, `cad_operacoes` até 6,5 s e 2.420 MB, `cad_contratos` até 5,1 s, e as tabelas sem
+  partição de 2,1 s a 2,7 s; as 21 partições somam 162,5 s.
+- **A auditoria** (`serialize-db audit --table cad_lancamentos --partitions 2026-01-31
+  --foreign-keys`, o sandbox em `/tmp` com `memory_limit` de 13,7 GiB e 16 threads): o mesmo
+  resultado das 14:16, leitura a leitura: `linhas`, as duas chaves e cinco chaves estrangeiras
+  aprovadas, `orfao_data_base_sistema_contrato` reprovada com os 989.852 órfãos conhecidos, e as
+  medidas da partição iguais (33.239.719 linhas, `total_valor` 117.667.407.519,194421, nenhum
+  `Double` não finito).
+- **`history`, `snapshot` e `vacuum`**: os cinco commits de `cad_lancamentos`, das 16:52:40 às
+  16:53:54, os quatro `WRITE` com `serialize_db_execution_id=carga-<id>`; o snapshot
+  `carga-2026-09-24` com as 12 tabelas nas versões atuais (`cad_lancamentos` 4, `cad_contratos`,
+  `cad_operacoes` e `rel_contrato_operacao` 3, as outras 1); 0 arquivos a apagar em todas.
+- **`archive --name carga-2026-09-24`**, a primeira execução inteira no alvo: as 12 tabelas
+  copiadas para `<raiz>/prod/arquivo/carga-2026-09-24/<tabela>`, os 21 arquivos pela transferência
+  gerenciada do `boto3`, os quatro de `cad_lancamentos` inclusive, que o `CopyObject` único do
+  PyArrow não atravessou na bateria das 12:38; um commit por partição, as partições na ordem
+  inversa da carga (`2026-06-30`, `2026-03-31`, `2026-02-28`), a versão no arquivo igual à da
+  origem em toda tabela, e a entrada movida para `archived` no fim. A continuação de uma cópia
+  interrompida, que `test_archive_copies_each_table_with_the_same_sums` prova no substituto, não
+  foi exercitada lá, porque o arquivo estava vazio. A rotina não imprime tempo: a duração da cópia
+  ficou sem leitura.
+- **A publicação da base inteira** (`serialize-db publish`, a primeira da base real pela
+  biblioteca): `--init` criou `sbx_aco_decon.serialize_db_publications`; `--tables cad_contas`
+  publicou a versão 1 (`partições [None]`); `--max-workers 4` pulou `cad_contas` (`a versão 1 já
+  está publicada`) e publicou as outras 11, as particionadas com todas as partições e
+  `cad_lancamentos` na versão 4 com as quatro (141.901.795 linhas), o `COPY ... MANIFEST` sobre
+  os arquivos que o `COPY` do DuckDB da carga gravou; `--status` leu as 12 com a versão publicada
+  igual à atual e nenhuma partição pendente, sob os nomes `prod_<tabela>`. A rotina não imprime
+  tempo: a duração da publicação, `cad_lancamentos` inclusive, ficou sem leitura.
+
+**Consequências**: [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perdeu a repetição do `archive` e a
+publicação da base inteira; ficam nele `export`, `compact` e as durações do `archive` e do
+`publish`, que a linha de comando não imprime. Nenhum código mudou.
