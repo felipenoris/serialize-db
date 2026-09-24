@@ -854,4 +854,6 @@ from the model (`serialize_db.schema`, `published_ddl`, `publication_statements`
 third-party exception that only propagates stays out, except `duckdb.Error` where a failed
 conversion or a missing extension surfaces (`initial_load`, `Storage.duckdb_connect`,
 `DuckDBEngine`). The code divergences the review found wait on the user in
-`plan/OPEN_QUESTIONS.md`. `docs/operacao.md`, `docs/index.md`, `plan/POC.md`
+`plan/OPEN_QUESTIONS.md`. The same day the user asked for the standard in `CLAUDE.md`, which holds
+it in "Python Code Style", section "Docstrings". `docs/operacao.md`, `docs/index.md`,
+`plan/POC.md`
