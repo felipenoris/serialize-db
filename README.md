@@ -209,8 +209,9 @@ PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/d
 ```
 
 `duckdb_threads.py` lê as tabelas Delta que a migração gravou, no `--root` dela, e mede a ingestão
-pelo motor DuckDB com cada valor de `threads`; o modelo é `client_model:Base.metadata`, com `tests`
-no `PYTHONPATH`, e `--threads`, `--partition`, `--tables` e `--repetitions` mudam o padrão. Ele roda
+pelo motor DuckDB com cada valor de `threads`, da metade das CPUs do processo a cinco vezes elas; o
+modelo é `client_model:Base.metadata`, com `tests` no `PYTHONPATH`, e `--threads`, `--partition`,
+`--tables` e `--repetitions` mudam o padrão. Ele roda
 depois da migração, nunca ao mesmo tempo que ela, e levou cerca de 15 minutos no ambiente alvo em
 2026-09-23, com a partição 2026-02-28 de `cad_lancamentos`; no S3, pede a região em `AWS_REGION` ou
 `AWS_DEFAULT_REGION`.

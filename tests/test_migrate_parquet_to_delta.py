@@ -3,17 +3,18 @@
 Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a base de
 ``tests/source_db_projetado.py`` numa pasta da sessão e as tabelas Delta em outras, uma raiz por
 teste. Eles conferem a descoberta das partições e do que fica fora do modelo; a consulta que leva a
-partição ao contrato, com ``to`` entre aspas; a carga de cada partição uma vez só, a retomada depois
-de uma interrupção e o filtro de partições; os dois modos com o mesmo relatório e os tipos do
-contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem commit (valor da coluna de
-origem fora do caminho, nulo em coluna ``NOT NULL``, texto acima de ``String(n)``), nos dois modos;
-as estatísticas registradas, de inteiro, data, ``Double`` e texto; a coluna ``Double`` com ``NaN``
-ou infinito sem mínimo e máximo na partição dela, nos dois modos, com o relatório que soma só os
-finitos; o relatório que acusa uma linha apagada; a linha de comando sobre a base inteira, duas
-vezes, com o ambiente no relatório; e a medição das variantes, cada uma num processo novo, com o
-pico do processo filho abaixo do processo do teste, também na segunda execução do mesmo comando e
-com a variante que falha registrada. A extensão ``delta`` do DuckDB precisa estar na pasta de
-extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
+partição ao contrato, com ``to`` entre aspas; a carga de cada partição uma vez só, a retomada
+depois de uma interrupção e o filtro de partições; os dois modos com o mesmo relatório e os tipos
+do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem commit (valor da coluna
+de origem fora do caminho, nulo em coluna ``NOT NULL``, texto acima de ``String(n)``), nos dois
+modos; as estatísticas registradas, de inteiro, data, ``Double`` e texto; a coluna ``Double`` com
+``NaN`` ou infinito sem mínimo e máximo na partição dela, nos dois modos, com o relatório que soma
+só os finitos; o relatório que acusa uma linha apagada; a linha de comando sobre a base inteira,
+duas vezes, com o ambiente no relatório; uma conexão por tabela com os limites lidos do ambiente; e
+a medição das variantes, cada uma num processo novo, com o pico do processo filho abaixo do
+processo do teste, também na segunda execução do mesmo comando e com a variante que falha
+registrada. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+(``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
 from __future__ import annotations
@@ -37,8 +38,9 @@ import migrate_parquet_to_delta as migrate
 import source_db_projetado as source
 from client_model import Base
 from conftest import LocalLocation
-from serialize_db import schema
+from serialize_db import resources, schema
 from serialize_db.errors import ContractError
+from serialize_db.resources import available_cpus
 
 pytestmark = pytest.mark.local
 
@@ -682,6 +684,65 @@ def test_report_keeps_the_progress_of_an_interrupted_load(
     assert document["environment"]["arguments"]["tables"] == ["cad_operacoes"]
 
 
+def test_each_table_loads_in_its_own_connection_with_the_environment_limits(
+    base: source.SourceBase, local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cada conexão abre com os limites lidos do ambiente, aqui metade dos 2 GiB disponíveis e a
+    cota de uma CPU num ``/proc`` e num cgroup fabricados: a que descreve o ambiente e uma por
+    tabela, todas fechadas no fim, e o relatório leva as configurações da carga de cada tabela."""
+    machine = Path(unique_child(local_location, "maquina"))
+    fabricated = {
+        "proc/meminfo": "MemAvailable:   2097152 kB\n",
+        "proc/self/cgroup": "0::/\n",
+        "cgroup/cpu.max": "100000 100000\n",
+    }
+    for relative, text in fabricated.items():
+        (machine / relative).parent.mkdir(parents=True, exist_ok=True)
+        (machine / relative).write_text(text)
+    monkeypatch.setattr(resources, "_PROC", machine / "proc")
+    monkeypatch.setattr(resources, "_CGROUP_ROOT", machine / "cgroup")
+
+    # As conexões que o script abre, guardadas para conferir que fecharam.
+    opened = []
+    connect = migrate.connect_duckdb
+
+    def recording_connect(uses_s3: bool, region: str | None) -> duckdb.DuckDBPyConnection:
+        connection = connect(uses_s3, region)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(migrate, "connect_duckdb", recording_connect)
+    report_path = Path(unique_child(local_location, "relatorio-limites") + ".json")
+    argv = [
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        str(base.root),
+        "--root",
+        unique_child(local_location, "delta"),
+        "--tables",
+        "cad_contratos",
+        "cad_operacoes",
+        "--report",
+        str(report_path),
+        "--no-measure",
+    ]
+    assert migrate.main(argv) == 0
+    assert len(opened) == 3
+    for connection in opened:
+        with pytest.raises(duckdb.ConnectionException):
+            connection.execute("SELECT 1")
+
+    document = json.loads(report_path.read_text())
+    environment = document["environment"]
+    assert environment["cpus_available"] == 1
+    assert environment["memory_available_mb"] == 2048
+    assert environment["duckdb_settings"]["memory_limit"] == "1.0 GiB"
+    for table in document["tables"]:
+        limits = table["duckdb_settings"]
+        assert (limits["memory_limit"], limits["threads"]) == ("1.0 GiB", "1")
+
+
 def test_measurement_runs_every_variant_even_with_the_partition_in_the_log(
     base: source.SourceBase, local_location: LocalLocation, capsys: pytest.CaptureFixture
 ) -> None:
@@ -727,6 +788,9 @@ def test_measurement_runs_every_variant_even_with_the_partition_in_the_log(
             assert measurement["rows"] == partitions[value]["source_rows"]
             assert 0 < measurement["base_mb"] <= measurement["peak_mb"] < 512
             assert measurement["files"] >= 1 and measurement["bytes"] > 0
+            # O processo filho lê os limites da máquina, sem o /proc fabricado de outro teste.
+            assert measurement["memory_limit"].endswith("iB")
+            assert measurement["threads"] == str(available_cpus())
         assert not Path(root, "_medicao_cad_contratos").exists()
     del ballast
 

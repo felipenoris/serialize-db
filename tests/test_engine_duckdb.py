@@ -5,14 +5,15 @@ sandbox e a pasta de transbordo ficam numa pasta nova por teste. O modelo é o d
 particionado por ``data_base_str`` com a origem ``data_base``, com uma chave estrangeira para
 ``Conta``, e ``Projetado``, a tabela que o pipeline grava, com as mesmas colunas.
 
-Eles conferem a configuração e a sessão única, a sessão a mais, a ingestão presa à versão e a poda
-por intervalo, os parâmetros do statement, a versão publicada, o stream (o primeiro lote com a
-consulta rodando, o orçamento, o cancelamento, os erros), o loader (a transação no ``close``, o
-loader abandonado, o nome ocupado, a ordem do exemplo mensal, o pipeline de três estágios, a leitura
-durante uma carga esquecida), as formas por tabela, o ciclo com o pandas, a auditoria (cada
-defeito, a dispensa da junção, a amostra, os não finitos, o órfão), a exportação nos dois modos e o
-pipeline de exemplo num banco em arquivo. A extensão ``delta`` do DuckDB precisa estar na pasta de
-extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
+Eles conferem a configuração com os limites lidos do ambiente e a sessão única, a sessão a mais, a
+ingestão presa à versão e a poda por intervalo, os parâmetros do statement, a versão publicada, o
+stream (o primeiro lote com a consulta rodando, o orçamento, o cancelamento, os erros), o loader (a
+transação no ``close``, o loader abandonado, o nome ocupado, a ordem do exemplo mensal, o pipeline
+de três estágios, a leitura durante uma carga esquecida), as formas por tabela, o ciclo com o
+pandas, a auditoria (cada defeito, a dispensa da junção, a amostra, os não finitos, o órfão), a
+exportação nos dois modos e o pipeline de exemplo num banco em arquivo. A extensão ``delta`` do
+DuckDB precisa estar na pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/``
+na raiz do repositório).
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from conftest import LocalLocation, opened_partition_folders, record
-from serialize_db import delta, schema
+from serialize_db import delta, resources, schema
 from serialize_db.audit import AuditReport, CheckResult
 from serialize_db.engine import Engine
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine, DuckDBStream
@@ -202,10 +203,11 @@ def result_of(report: AuditReport, name: str) -> CheckResult:
 # ---------------------------------------------------------------- a sessão
 
 
-def test_engine_config_and_single_session(setup: Setup) -> None:
-    """As configurações pedidas, o ``memory_limit`` no padrão do DuckDB e o banco em arquivo dentro
-    da pasta; três threads usam a mesma sessão, a tabela temporária de uma vale para as outras, uma
-    primitiva dentro de ``session()`` não trava, e ``cleanup`` apaga o banco e o transbordo."""
+def test_engine_config_and_single_session(setup: Setup, monkeypatch: pytest.MonkeyPatch) -> None:
+    """As configurações pedidas, os limites lidos do ambiente quando a configuração os omite e o
+    banco em arquivo dentro da pasta; três threads usam a mesma sessão, a tabela temporária de uma
+    vale para as outras, uma primitiva dentro de ``session()`` não trava, e ``cleanup`` apaga o
+    banco e o transbordo."""
     engine = setup.engine
     assert isinstance(engine, Engine)
     settings_query = ("SELECT name, value FROM duckdb_settings() "
@@ -239,12 +241,27 @@ def test_engine_config_and_single_session(setup: Setup) -> None:
         assert count_of(engine, "dentro") == 1
         assert engine.holds_session()
 
-    # O memory_limit no padrão do DuckDB, noutro motor.
-    other_config = DuckDBConfig(temp_directory=str(setup.folder / "outro"))
-    other = DuckDBEngine(other_config, "exec-2026-09-06", setup.storage)
-    limit = other.query("SELECT current_setting('memory_limit') AS m").column("m")[0].as_py()
-    other.cleanup()
-    assert limit.endswith("iB")
+    # Os limites lidos do ambiente, noutro motor: metade dos 2 GiB disponíveis e a cota de uma
+    # CPU, num /proc e num cgroup fabricados; o memory_limit informado fica no lugar do lido.
+    machine = setup.folder / "maquina"
+    fabricated = {
+        "proc/meminfo": "MemAvailable:   2097152 kB\n",
+        "proc/self/cgroup": "0::/\n",
+        "cgroup/cpu.max": "100000 100000\n",
+    }
+    for relative, text in fabricated.items():
+        (machine / relative).parent.mkdir(parents=True, exist_ok=True)
+        (machine / relative).write_text(text)
+    monkeypatch.setattr(resources, "_PROC", machine / "proc")
+    monkeypatch.setattr(resources, "_CGROUP_ROOT", machine / "cgroup")
+    limits_query = "SELECT current_setting('memory_limit') AS m, current_setting('threads') AS t"
+    for memory_limit, expected in [(None, "1.0 GiB"), ("768MiB", "768.0 MiB")]:
+        other_config = DuckDBConfig(memory_limit=memory_limit,
+                                    temp_directory=str(setup.folder / "outro"))
+        other = DuckDBEngine(other_config, "exec-2026-09-06", setup.storage)
+        limits = other.query(limits_query).to_pylist()[0]
+        other.cleanup()
+        assert limits == {"m": expected, "t": 1}
     assert not (setup.folder / "outro" / "exec-2026-09-06.duckdb").exists()
 
     # O cleanup apaga o banco e o transbordo e fecha a sessão.

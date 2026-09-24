@@ -236,7 +236,7 @@ The budget above is never a reason to drop a fact: what does not fit here goes t
 Read the file listed here before researching its subject again. Each document names the pages it
 came from, and `REFERENCES.md` collects every URL consulted so far, grouped by subject: Parquet
 format, Redshift, DuckDB, PyArrow, SQLAlchemy, pandas, PyIceberg, Glue Data Catalog, Athena, Lake
-Formation, SageMaker Unified Studio, S3, the Python standard library, Python packages, Delta Lake, DuckLake, Hudi, SQL tooling
+Formation, SageMaker Unified Studio, S3, the Python standard library, Linux and EC2, Python packages, Delta Lake, DuckLake, Hudi, SQL tooling
 (SQLGlot, SQLMesh, dbt, Ibis, dlt), data-contract tools, Rust/PyO3 and consulted repositories. New
 research appends to the matching group.
 
@@ -264,7 +264,7 @@ research appends to the matching group.
 | `plan/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): one item per pending question, with the run or the decision that will close it; a closed item leaves the file when its answer lands in the owning document. |
 | `plan/estrategia.md` | Rationale and comparisons only: the premises, table layers without a catalog service against the requirements, the Redshift path by `COPY ... MANIFEST`, the SQL layer options, contract and audit tools, why Alembic leaves, the Rust/PyO3 assessment, why each layer was chosen or rejected, and Delta against Iceberg with the re-evaluation trigger. |
 | `plan/serialize-db.md` | The library's modeling: features, own metadata (commit keys, `_serialize_db/snapshots.json`, `serialize_db_publications`), the flow of each use case, and the parallelism section (what the library guarantees, parallel reads and writes per technology, the client's `Future` dependencies, `next_ids`, pure-Python work beside the library's threads); the primitives live in `plan/PLAN-STAGE-<n>.md`. |
-| `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3), `audit.py`, `engine/__init__.py` (the `Engine` protocol) and `engine/duckdb.py` (stage 4), `execution.py` (stage 6), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, `run` and `audit`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` to `plan/PLAN-STAGE-4.md` and `plan/PLAN-STAGE-6.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
+| `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3), `audit.py`, `engine/__init__.py` (the `Engine` protocol), `engine/duckdb.py` and `resources.py` (stage 4: the CPUs and memory the process may use, cgroup-aware, behind `environment_limits`), `execution.py` (stage 6), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, `run` and `audit`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` to `plan/PLAN-STAGE-4.md` and `plan/PLAN-STAGE-6.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies and the groups. |
 | `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). The corrected copy is the client model in `tests/client_model/`. |
 | `tests/client_model/` | The client model (user decision of 2026-09-21): the corrected copy of `tests/reference_model/` that the tests hand to the package API as a client library would, the corrections listed in `plan/PLAN-STAGE-1.md` and checked by `tests/test_client_model.py`; `statements.py` holds the fictitious pipeline's Core statements (`STATEMENTS`), `schema/` and `sql/` the generated files. |
 | `tests/emulator.py` | The local stand-in of S3 and Redshift for the target-only suites (user decision of 2026-09-23): with `SERIALIZE_DB_TEST_EMULATOR`, `tests/conftest.py` starts the moto server (`moto[s3]` and `flask` in the `emulator` group, out of `dev`) as a subprocess before collection, points the AWS variables and the suites' roots at it, and gives `connect_redshift` a fake `redshift_connector` connection over an in-memory DuckDB that translates the suites' Redshift SQL and imitates the refusals and behaviors read in the target (the backslash escape in literals, the empty `UNLOAD` writing nothing, `pg_last_unload_count()`, `is_valid_json` refusing `SUPER`, `ALTER COLUMN ... TYPE` refused on the share); `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` and `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` provoke failures. It checks the tests' code, not the target's behavior; the command is in `README.md`. |
@@ -521,6 +521,11 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A SQL predicate is probed on table rows as well as constants, and a function in generated SQL
   with the type the generated DDL gives its argument**: Redshift compared `NaN` as PostgreSQL on
   constants and as IEEE in a table scan, and refused `is_valid_json` on `SUPER` (2026-09-23).
+- **A resource limit is read from the environment when the connection opens, never fixed in code
+  nor left at a default sized to the whole machine**: the CPUs the process may use and half the
+  memory still available (`environment_limits`), because DuckDB's 80% default let the kernel kill
+  the `cad_lancamentos` migration; and a long-lived process closes its DuckDB connection per unit
+  of work, because DuckDB returns memory only on `close` (user instruction of 2026-09-24).
 - **The complement of a comparison with `NaN` is counted as total minus matches, never as the
   negation, and a count is also read without rows**: in a Redshift scan neither the strict
   infinity comparison nor its negation was true for `NaN`, and a `count(*)` of
@@ -578,7 +583,9 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `delta`, the partition rule in `schema`; `audit`, the `engine` protocol and the DuckDB engine;
   `execution` with `Database`, `Execution`, `serialize-db run` and `serialize-db audit`, over the
   DuckDB engine); the package has `errors`, `schema`, `sql`, `storage`, `delta`, `audit`,
-  `engine`, `execution`, `_files` and `cli`. Stages 5, 7, 8 and 9 have no code. The review of stages 3 and 4 of 2026-09-23 corrected both stage files
+  `engine`, `resources`, `execution`, `_files` and `cli`. Stages 5, 7, 8 and 9 have no code. The
+  DuckDB engine and the migration script take `threads` and `memory_limit` from the environment at
+  each opening (user instruction of 2026-09-24, replacing the 2026-09-22 DuckDB default). The review of stages 3 and 4 of 2026-09-23 corrected both stage files
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as
   `FunctionElement`), and the user's answers of the same day closed stage 4: the `qmark` style, the
   audit key scope, the engine interface, the `loader` creating its table at `close`, the hybrid
@@ -606,11 +613,14 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   partition matched, and the production copy has no non-finite `Double`. The rerun of 2026-09-23 at
   23:05, into a new root on a 4 vCPU and 16 GB machine, measured the four write variants of the
   other partitioned tables (`register` faster, the sort costlier with smaller files, `plan/POC.md`)
-  and ended in `cad_lancamentos` 2026-03-31 (52,654,607 rows) without a report; the script now
-  rewrites its report after each step. That partition's measurement, on a machine with more
-  memory, is the revision trigger of `export_mode` and of the load's sort, with the assistant's
-  proposals (`register` by default, `rewrite` only for the stage 5 non-finite fallback, the load
-  sorted) awaiting the user. Stage 7 absorbs the script over the stage 3, 4 and 6 modules.
+  and was killed by the kernel for lack of memory in `cad_lancamentos` 2026-03-31 (52,654,607 rows;
+  the user saw `Killed`), under DuckDB's default 12.3 GiB; the script now rewrites its report after
+  each step, opens every connection with the environment limits and gives each table its own
+  connection. The user approved on 2026-09-24 `register` as the default in stages 4, 5 and 7 with
+  `rewrite` only in the stage 5 non-finite swap, the load sorted by `sort_key` and the stage 8
+  staging filled inside the transaction; whether `rewrite` leaves stages 4 and 7 awaits the user.
+  The next target runs are the migration of `cad_lancamentos` and the threads probe, now with a
+  half-the-CPUs round. Stage 7 absorbs the script over the stage 3, 4 and 6 modules.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still
@@ -634,15 +644,16 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   is `count(x) - count(finite)` and waits for two runs, as does the reading
   `nan_na_tabela_detalhe`; the stand-in `tests/emulator.py` has no locks, no bucket encryption, no
   Data API and none of Redshift's `NaN` scan behavior. `probes/duckdb_threads.py` ran at 23:21, but
-  DuckDB's external file cache served its later repetitions from memory; it now turns the cache off
-  and waits for a new run, never at the same time as a migration.
+  DuckDB's external file cache served its later repetitions from memory; it now turns the cache off,
+  measures half the CPUs too (user request of 2026-09-24) and waits for a new run, never at the
+  same time as a migration.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing
   tests are `local`), and the stage 8 distribution reading, the `EXPLAIN` of a typical join with
-  the tables at `AUTO`; the publication staging is temporary by the rule, with the point where it
-  fills awaiting the user, and the stage 7 defaults wait on the `cad_lancamentos` measurement
-  (`plan/OPEN_QUESTIONS.md`, `.claude/memory/decisions.md`). The user's instruction of 2026-09-23,
+  the tables at `AUTO`; the publication staging is temporary by the rule and fills inside the
+  transaction (user decision of 2026-09-24) (`plan/OPEN_QUESTIONS.md`,
+  `.claude/memory/decisions.md`). The user's instruction of 2026-09-23,
   scalable AWS compute of the user's choosing and a plan optimized for parallel processing, enters
   `plan/PLAN.md`: the machine is sized by the measurements.
 - The plan's unit is the partition (`publish_partition`, `partitions=`, `Execution(partition=...)`),

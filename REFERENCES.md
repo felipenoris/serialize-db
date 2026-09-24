@@ -500,6 +500,23 @@ Escrita particionada (`COPY ... PARTITION_BY`), consultada em 2026-09-19:
 - <https://duckdb.org/docs/stable/data/partitioning/partitioned_writes>
 - <https://duckdb.org/docs/current/data/partitioning/partitioned_writes.html>
 
+A memória, as threads e o cgroup, consultados em 2026-09-24 (os limites lidos do ambiente):
+
+- <https://duckdb.org/2024/07/09/memory-management>
+- <https://duckdb.org/docs/current/guides/performance/oom>
+- <https://duckdb.org/docs/lts/guides/troubleshooting/oom_errors>
+- <https://duckdb.org/docs/current/guides/performance/environment>
+- <https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads>
+- <https://duckdb.org/docs/current/configuration/overview>
+- <https://duckdb.org/2025/05/21/announcing-duckdb-130>
+- <https://duckdb.org/2025/09/24/sorting-again>
+- <https://github.com/duckdb/duckdb/issues/15080> (o limite do cgroup v2 lido errado na 1.1.3)
+- <https://github.com/duckdb/duckdb/pull/16608> (a leitura do cgroup v1 e v2, memória e CPU, na 1.3)
+- <https://raw.githubusercontent.com/duckdb/duckdb/v1.5.0/src/common/cgroups.cpp>
+- <https://github.com/duckdb/duckdb/issues/7651>
+- <https://github.com/duckdb/duckdb/discussions/16781>
+- <https://github.com/milaboratory/platforma/pull/1848> (o limite do DuckDB tirado da memória livre)
+
 ## PyArrow
 
 - <https://arrow.apache.org/docs/python/parquet.html>
@@ -871,6 +888,19 @@ Escritas condicionais (`If-None-Match`, `If-Match`):
 
 - <https://docs.python.org/3/library/warnings.html> (`catch_warnings` altera o estado global do
   módulo e não é seguro com threads sem `context_aware_warnings`, do Python 3.14)
+- <https://docs.python.org/3.13/library/os.html> (a página veio cortada antes de
+  `process_cpu_count`, 2026-09-24)
+- <https://docs.python.org/3.13/whatsnew/3.13.html> (`os.process_cpu_count` e `PYTHON_CPU_COUNT`)
+
+## Linux e EC2
+
+As CPUs e a memória de um processo, consultadas em 2026-09-24:
+
+- <https://docs.kernel.org/admin-guide/cgroup-v2.html> (`cpu.max`, `memory.max`, `memory.current`,
+  `memory.stat` e `/proc/self/cgroup`)
+- <https://docs.kernel.org/filesystems/proc.html> (`MemAvailable`)
+- <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-optimize-cpu.html> (cada vCPU é uma
+  thread de um núcleo nas instâncias com SMT)
 
 ## Pacotes Python
 

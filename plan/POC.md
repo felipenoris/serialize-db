@@ -2827,3 +2827,50 @@ relatório depois da medição de cada tabela e de cada partição gravada. A me
 `cad_lancamentos` 2026-03-31 no ambiente alvo, que decide o padrão de `export_mode` e a ordem da
 carga ([etapa 7](PLAN-STAGE-7.md)), e as `threads` pedem uma nova execução
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que os limites do DuckDB lidos do ambiente mostraram
+
+Em 2026-09-24, depois da bateria de 2026-09-23:
+
+- **A migração de `cad_lancamentos` morreu por falta de memória.** O usuário viu `Killed` no
+  terminal algumas vezes, na parte de `cad_lancamentos` da migração de 2026-09-23 às 23:05: o kernel
+  matou o processo, numa máquina de 15.786 MB com o `memory_limit` padrão do DuckDB, 12,3 GiB. É o
+  segundo tipo de falta de memória do guia do DuckDB 1.4, o processo morto pelo sistema, para o
+  qual a documentação pede o limite em 50% a 60% da memória, porque parte das operações foge do
+  gerenciador de buffers; o primeiro tipo é a `OutOfMemoryException` do próprio DuckDB
+  (`failed to pin block of size ...`). A documentação pede também de 1 a 4 GB por thread, com o
+  mínimo de 125 MB.
+- **O DuckDB 1.5.5 lê o cgroup v1.** Num contêiner Linux de 4 vCPUs com `MemTotal` de
+  16.481.980 kB e limite de cgroup v1 de 14.345.912.320 bytes na pasta do processo, o padrão foi
+  `memory_limit` de 10,6 GiB, 80% do limite, e 4 threads. A leitura do cgroup, v1 e v2, com a
+  cota de CPU arredondada para cima, entrou na versão 1.3 (duckdb/duckdb#16608); a 1.1.3 lia a
+  memória da máquina hospedeira no contêiner (duckdb/duckdb#15080).
+- **A leitura do pacote no mesmo contêiner**: `available_cpus()` deu 4 (sem cota de CPU),
+  `available_memory()` deu 14.197.641.216 bytes, a folga do cgroup, abaixo do `MemAvailable` de
+  16.083.521.536, e `environment_limits()` deu `threads` 4 e `memory_limit` de 6.761 MiB, que o
+  DuckDB mostra como 6,6 GiB. O `/proc/self/cgroup` do contêiner tem o `memory` do v1 numa pasta
+  própria e a linha `0::/` do v2 sem controlador.
+- **O DuckDB só devolve a memória ao fechar a conexão.** Num processo que partiu de 191 MB, um
+  `CREATE TABLE ... AS SELECT ... ORDER BY` de 20.000.000 de linhas de um Parquet local deixou o RSS
+  em 1.188 MB; depois do `DROP TABLE`, 1.188 MB; depois do `close`, 208 MB. Na leitura desse
+  arquivo local, o cache de arquivos externos guardou 1.042 entradas e 271.906 bytes.
+- **A migração da base fictícia com os limites novos**: as 12 tabelas terminaram com contagens e
+  somas iguais em 70 s, cada conexão da carga com `memory_limit` de 6,6 GiB e 4 threads e cada
+  variante da medição, num processo filho, com 6,5 GiB.
+- **O probe das threads com a rodada da metade**: sobre as tabelas dessa migração, com uma
+  repetição, as 24 configurações (2, 4, 8, 12, 16 e 20 threads nos quatro cenários) leram as linhas
+  do log e aplicaram as threads pedidas; a razão compara com as 4 threads do padrão do motor. O
+  contêiner tem uma thread por núcleo físico (`thread_siblings_list` da CPU 0 e o `lscpu`).
+- **As vCPUs da AWS**: nas instâncias com SMT, cada vCPU é uma thread de um núcleo físico, e o
+  `m5.xlarge` tem 2 núcleos e 4 vCPUs; o T2, o C7a, o M7a, o R7a, os Mac e os Graviton não mudam as
+  threads por núcleo (documentação do EC2, "CPU options").
+
+**Consequência**: o motor DuckDB e o script de migração abrem cada conexão com os limites lidos do
+ambiente (`environment_limits`, sobre `serialize_db.resources`): `threads` nas CPUs que o processo
+pode usar e `memory_limit` na metade da memória que ele ainda pode usar, no lugar do padrão do
+DuckDB (instrução do usuário de 2026-09-24, que troca a decisão de 2026-09-22). A carga de cada
+tabela do script tem a sua conexão, fechada no fim, e o relatório leva os limites de cada carga e
+de cada variante. O probe das threads mede também a metade das CPUs. As revisões estão em
+[`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), [`PLAN.md`](PLAN.md) e
+[`duckdb.md`](duckdb.md); a próxima execução de `cad_lancamentos` no ambiente alvo confirma a
+metade ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

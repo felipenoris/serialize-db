@@ -111,3 +111,9 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   1.23 to 1.63 times the `register` time with files at 74% to 92% of the size; `rel_contrato_operacao`
   2026-03-31 (13,637,568 rows) took 13.1 s and 2,442 MB sorted in `register`. The raw reports stay
   out of git; the numbers are in `plan/POC.md`. `decisions.md`
+- The `cad_lancamentos` load of the second migration died for lack of memory: the user did not keep
+  the terminal output but saw `Killed` several times in that part (2026-09-24), the kernel's OOM
+  killer, under DuckDB's default `memory_limit` of 12.3 GiB on the 15,786 MB machine. The script
+  now opens every DuckDB connection with half the memory still available and gives each table its
+  own connection; the rerun of `cad_lancamentos` confirms the partition fits. `plan/POC.md`,
+  `plan/PLAN-STAGE-7.md`

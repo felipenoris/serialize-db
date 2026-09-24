@@ -199,6 +199,9 @@ em `test_duckdb.py`, `test_pyarrow.py` e `tests/test_engine_duckdb.py`. O que el
   último lote entregue e nas que vêm depois dela, nunca em silêncio.
 - **O streaming limita a memória do lado Python, não a do DuckDB.** A consulta roda sob
   `memory_limit` e `temp_directory`, e uma ordenação materializa o resultado antes do primeiro lote.
+  O `memory_limit` e as `threads` saem do ambiente na abertura do motor, metade da memória que o
+  processo ainda pode usar e as CPUs dele, porque a máquina muda de tamanho e parte das alocações
+  do DuckDB foge do limite (instrução do usuário de 2026-09-24, [etapa 4](PLAN-STAGE-4.md)).
   A ordem dos lotes é a da consulta: sem `ORDER BY`, com `preserve_insertion_order = false`, é
   arbitrária.
 - **O ganho do encadeamento é o trabalho do cliente escondido atrás da leitura e da escrita**,
@@ -354,12 +357,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   não impede repetição, e a idempotência é do `overwrite` por partição (`delta.md`).
 - A biblioteca escreve por um único caminho, delta-rs ou `COPY ... (RETURN_STATS)` mais
   `create_write_transaction`, escolhido por `export_mode`: o `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de
-  partição dentro do arquivo e quebraria o `COPY` posicional (`delta.md`). O gatilho de revisão
-  do `export_mode` é o relatório da migração no ambiente alvo com a partição de `cad_lancamentos`
-  nos dois modos (tempo, RSS máximo e linhas, [etapa 7](PLAN-STAGE-7.md)): com ele o plano fixa o
-  padrão e decide, em cada motor e na carga inicial, se o outro modo sai das etapas
-  [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md), com o seu código e os seus
-  testes.
+  partição dentro do arquivo e quebraria o `COPY` posicional (`delta.md`). O usuário aprovou em
+  2026-09-24 o `register` como padrão nas etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e
+  [7](PLAN-STAGE-7.md), com o `rewrite` só na troca da etapa 5 para a partição com `Double` não
+  finito, depois das partições medidas no ambiente alvo em 2026-09-23, em que o `rewrite` levou de
+  1,14 a 1,52 vez o tempo do `register` (`POC.md`); se o `rewrite` sai das etapas 4 e 7, com o seu
+  código, a flag e os testes, espera o usuário ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - As regras que mantêm o `COPY` do Redshift lendo os arquivos e a saída do Delta aberta: sem vetores
   de exclusão, sem column mapping, sem `Identity`, caminhos relativos no log e nunca um arquivo
   registrado por URI absoluta (`delta.md`, `estrategia.md`).
@@ -408,8 +411,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   SSE-KMS do bucket é aplicada pelo S3, e a permissão sobre a raiz é provada pela primeira escrita,
   não por simulação. A máquina tinha 2 vCPUs e 7,6 GiB de memória em 2026-09-21 e 4 vCPUs e
   15.786 MB em 2026-09-23, com cerca de 30 GiB livres num disco só para `HOME`, `/tmp` e o
-  repositório: o motor DuckDB nasce em arquivo, com `temp_directory` conferido e o `memory_limit`
-  que o DuckDB escolhe registrado no log (decisão do usuário de 2026-09-22), e
+  repositório: o motor DuckDB nasce em arquivo, com `temp_directory` conferido e os limites lidos
+  do ambiente na abertura, as CPUs do processo e metade da memória que ele ainda pode usar,
+  registrados no log (instrução do usuário de 2026-09-24), e
   `export_mode="register"` é o caminho das partições grandes (etapas [4](PLAN-STAGE-4.md) e
   [7](PLAN-STAGE-7.md)). Os programas que usam o pacote rodam em computação escalável da AWS, que o
   usuário escolhe, e o plano otimiza para o processamento paralelo (instrução do usuário de
@@ -460,8 +464,8 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   `threads = 2` e em 1,037 s contra 1,382 s com 11, e o pico de memória subiu de 373 MB para
   514 MB e de 803 MB para 917 MB (2026-09-23, `POC.md`). No DuckDB, o pool `threads` é da
   instância e vale para todas as sessões, e a thread que chama cada sessão também executa a consulta
-  dela: com `threads` igual aos núcleos, o padrão, uma varredura grande em memória já ocupa a
-  máquina, a ingestão por `CREATE TABLE AS` sobre `delta_scan` não ocupa, e a sessão a mais ganha
+  dela: com `threads` igual às CPUs do processo, o padrão, uma varredura grande em memória já
+  ocupa a máquina, a ingestão por `CREATE TABLE AS` sobre `delta_scan` não ocupa, e a sessão a mais ganha
   nela, nas consultas pequenas, nos operadores que não se paralelizam e na espera do S3, onde a
   documentação do DuckDB recomenda `threads` de 2 a 5 vezes os núcleos (2026-09-23,
   [`duckdb.md`](duckdb.md)). No ambiente alvo, com 4 vCPUs, quatro tabelas de 30.001.596 linhas
@@ -495,6 +499,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.storage` | 3 | Os dois armazenamentos pelo `pyarrow.fs`: URIs, listagem, leitura, cópia, a escrita condicional do arquivo de controle (`boto3` no S3), `storage_options` e o secret do DuckDB. |
 | `serialize_db.delta` | 3 | A camada Delta: criação, publicação por partição, registro de arquivos, reconciliação, reescrita, manifesto, diferença de versões, snapshots, `vacuum`, compactação, cópia profunda, exportação. |
 | `serialize_db.audit` | 4 | As verificações derivadas do contrato: chaves, nulos, limites de tipo, JSON e totais; o texto SQL por dialeto e o `AuditReport`. |
+| `serialize_db.resources` | 4 | As CPUs e a memória que o processo pode usar, lidas do ambiente a cada chamada, com o cgroup v1 e v2 no Linux: a fonte dos limites do motor DuckDB (instrução do usuário de 2026-09-24). |
 | `serialize_db.engine` | 4 e 5 | O protocolo `Engine` e os motores `duckdb` e `redshift`, com a mesma interface. |
 | `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução. |
 | `serialize_db.load` | 7 | A carga inicial dos Parquet atuais. |

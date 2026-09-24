@@ -1341,10 +1341,24 @@ def threads_input(name: str, rows: int) -> duckdb_threads.TableInput:
 
 
 def test_thread_values_multiply_the_default_or_take_the_requested() -> None:
-    """Sem pedido, o padrão do DuckDB vezes 1 a 5; os valores pedidos saem em ordem, sem
-    repetição."""
-    assert duckdb_threads.thread_values(4, None) == [4, 8, 12, 16, 20]
+    """Sem pedido, o padrão do motor vezes 0,5 e 1 a 5, a metade arredondada para baixo e no
+    mínimo 1; os valores pedidos saem em ordem, sem repetição. A razão compara com o padrão quando
+    ele é medido, senão com o primeiro valor."""
+    assert duckdb_threads.thread_values(4, None) == [2, 4, 8, 12, 16, 20]
+    assert duckdb_threads.thread_values(3, None) == [1, 3, 6, 9, 12, 15]
+    assert duckdb_threads.thread_values(1, None) == [1, 2, 3, 4, 5]
     assert duckdb_threads.thread_values(4, [8, 2, 8]) == [2, 8]
+    assert duckdb_threads.reference_threads([2, 4, 8], 4) == 4
+    assert duckdb_threads.reference_threads([2, 8], 4) == 2
+
+
+def test_threads_per_core_counts_the_siblings_of_cpu0() -> None:
+    """As threads de um núcleo físico pela lista das irmãs da CPU 0, em lista ou em faixa."""
+    assert duckdb_threads.threads_per_core("0,2\n") == 2
+    assert duckdb_threads.threads_per_core("0-1") == 2
+    assert duckdb_threads.threads_per_core("0") == 1
+    assert duckdb_threads.threads_per_core("") is None
+    assert duckdb_threads.threads_per_core(None) is None
 
 
 def test_latest_common_partition_needs_the_value_in_every_table() -> None:
@@ -1383,8 +1397,8 @@ def test_best_speedup_and_short_error() -> None:
 
 
 def test_measurement_rows_and_fastest_configuration() -> None:
-    """A tabela de uma seção compara cada linha com o primeiro valor do cenário e traz o erro curto
-    da configuração que falhou; a mais rápida ignora a que falhou."""
+    """A tabela de uma seção compara cada linha com o valor de referência do cenário e traz o erro
+    curto da configuração que falhou; a mais rápida ignora a que falhou."""
     inputs = [threads_input("cad_lancamentos", 10), threads_input("cad_contratos", 5)]
     measurements = [
         duckdb_threads.Measurement("materializada", 4, [2.0, 1.0], 4, 100, 150, 10),
@@ -1398,11 +1412,15 @@ def test_measurement_rows_and_fastest_configuration() -> None:
     assert duckdb_threads.expected_rows("materializada", inputs) == 10
     assert duckdb_threads.expected_rows("em série", inputs) == 15
 
-    rows = duckdb_threads.measurement_rows(measurements, inputs)
+    rows = duckdb_threads.measurement_rows(measurements, inputs, 4)
     assert rows[1][3:6] == ["1.000", "2.000, 1.000", "1.00x"]
     assert rows[2][3:6] == ["0.500", "0.500", "2.00x"]
     assert rows[3][4] == "OutOfMemoryException: sem memória"
     assert rows[3][-1] == "10"
+
+    # Com a referência em 8 threads, a linha de 4 fica mais lenta que ela.
+    rows = duckdb_threads.measurement_rows(measurements, inputs, 8)
+    assert [row[5] for row in rows[1:3]] == ["0.50x", "1.00x"]
 
 
 @pytest.mark.local

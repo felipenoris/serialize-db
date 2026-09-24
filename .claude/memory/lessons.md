@@ -533,3 +533,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   missed it; `count(x) - count(CASE WHEN finite THEN 1 END)` holds whatever the engine does with
   the comparison. A probe that reads a count also reads a count without rows: `count(*)` on
   `sys_load_error_detail` came back empty and stopped a probe section.
+- **A default sized to the whole machine is wrong for a process that shares it** (2026-09-24). The
+  migration kept DuckDB's `memory_limit` default, 80% of the memory DuckDB detects, in a parent
+  process whose connection lived across all tables while measurement children opened their own
+  80% instances; DuckDB's RSS passes its limit by 13% to 21% in a sorted `COPY` and stays at its
+  peak until the connection closes (1,188 MB after `DROP TABLE`, 208 MB after `close`), and the
+  kernel killed the `cad_lancamentos` load on a 15,786 MB machine. The user had met the same in
+  other projects and asked for limits read from the environment; the engine and the script now
+  take half the memory still available and the process's CPUs at each opening, and the script
+  opens one connection per table.

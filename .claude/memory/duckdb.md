@@ -146,3 +146,21 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   and the sorted load 35.1 s with 12,250 MB; a plain sorted `COPY` of it peaked at 10,196 MB under a
   12.3 GiB limit and 7,432 MB under 6 GiB, both in about 17 s (2026-09-24). `plan/POC.md`,
   `plan/PLAN-STAGE-7.md`
+- Memory and threads against the environment (2026-09-24): DuckDB reads the cgroup memory limit
+  (`memory.limit_in_bytes` in v1, `memory.max` in v2) and the CPU quota (`cpu.cfs_quota_us` over
+  `cpu.cfs_period_us`, or `cpu.max`, rounded up) since 1.3 (duckdb/duckdb#16608, merged
+  2025-03-14); 1.1.3 read the host's memory in a container (duckdb/duckdb#15080). In the session
+  container, with a cgroup v1 limit of 14,345,912,320 bytes in the process folder, DuckDB 1.5.5
+  defaulted to `memory_limit` 10.6 GiB (80% of it) and 4 threads. The 1.4 out-of-memory guide
+  separates DuckDB's `OutOfMemoryException` (`failed to pin block of size ...`) from the process
+  killed by the OS (`Killed`), and for the latter sets `memory_limit` at 50% to 60% of memory,
+  because some operations bypass the buffer manager; ART indexes are not buffer-managed, and
+  `list()` and `string_agg()` do not spill. The environment guide asks at least 125 MB per thread
+  and 1 to 4 GB per thread (1 to 2 for aggregations, 3 to 4 for joins). The sort rewritten in 1.4
+  (blog of 2025-09-24) spills sorted runs page by page into the spillable page layout of the hash
+  join and aggregation and merges them k-way. DuckDB returns a connection's memory to the OS only on
+  `close`: a sorted `CREATE TABLE AS` of 20,000,000 rows from a local Parquet file left RSS at
+  1,188 MB (from 191 MB), still 1,188 MB after `DROP TABLE`, and 208 MB after `close`; the external
+  file cache held 1,042 entries and 271,906 bytes after reading that local file. `memory_limit`
+  takes `'6771MiB'` and `'7516192768B'`, shown as `6.6 GiB` and `7.0 GiB`; `'768MiB'` shows as
+  `768.0 MiB`. `plan/duckdb.md`, `plan/POC.md`, `src/serialize_db/resources.py`

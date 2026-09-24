@@ -743,25 +743,40 @@ tabela Delta ([delta.md](delta.md)).
 - Uma conexão reutilizada; abrir e fechar a cada consulta descarta caches de dados e metadados.
 - Memória: mínimo de 125 MB por thread; recomendação de 1 a 4 GB por thread (1 a 2 GB para
   agregações, 3 a 4 GB para joins); com falta de memória, reduzir `threads`, baixar `memory_limit`
-  para 50 a 60 % da RAM e desligar `preserve_insertion_order`.
+  para 50 a 60 % da RAM e desligar `preserve_insertion_order`. O guia de falta de memória da versão
+  1.4 separa a `OutOfMemoryException` do DuckDB (`failed to pin block of size ...`) do processo
+  morto pelo sistema, com `Killed` no terminal, e é para o segundo caso que pede de 50% a 60%:
+  parte das operações foge do gerenciador de buffers e reserva memória além do limite. Os índices
+  ART ficam fora dele, e `list()` e `string_agg()` não transbordam para o disco. A ordenação
+  refeita na versão 1.4 usa o layout de páginas que transborda do hash join e da agregação, grava os
+  runs ordenados no disco página a página e os junta por k-way merge; no DuckDB 1.5.5, o RSS do
+  `COPY` ordenado de 52.654.607 linhas passou do limite em 13% a 21% ([`POC.md`](POC.md),
+  2026-09-24).
 - Disco: SSD ou NVMe; EBS serve; a documentação desaconselha o formato nativo em modo leitura e
   escrita sobre NFS e SMB.
 
-Os limites entram na abertura da conexão ou por `SET`:
+Os limites entram na abertura da conexão ou por `SET`. A máquina muda de tamanho, e o pacote os
+lê do ambiente na abertura, nunca de um valor fixo (instrução do usuário de 2026-09-24):
+`environment_limits()`, de `serialize_db.engine.duckdb`, dá `threads` igual às CPUs que o processo
+pode usar e `memory_limit` igual a metade da memória que ele ainda pode usar, pelas leituras de
+`serialize_db.resources` ([etapa 4](PLAN-STAGE-4.md)). Num contêiner Linux de 4 vCPUs com limite
+de cgroup de 13,4 GiB (2026-09-24):
 
 ```python
 # Memória, threads e pasta de transbordo definidos na abertura da conexão e conferidos no catálogo.
 import duckdb
+from serialize_db.engine.duckdb import environment_limits
 
+limits = environment_limits()   # as CPUs do processo e metade da memória que ele ainda pode usar
+# {'threads': 4, 'memory_limit': '6771MiB'}
 con = duckdb.connect("sandbox.duckdb", config={
-    "memory_limit": "8GB",                    # 50 a 60 % da RAM quando a memória falta
-    "threads": 4,                             # 1 a 4 GB por thread
+    **limits,
     "temp_directory": "sandbox_tmp",          # transbordo das operações maiores que a memória
     "preserve_insertion_order": False,        # libera o reordenamento e reduz a memória
 })
 con.sql("SELECT name, value FROM duckdb_settings() WHERE name IN "
         "('memory_limit', 'threads', 'temp_directory', 'preserve_insertion_order') ORDER BY name").fetchall()
-# [('memory_limit', '7.4 GiB'), ('preserve_insertion_order', 'false'), ('temp_directory', 'sandbox_tmp'), ('threads', '4')]
+# [('memory_limit', '6.6 GiB'), ('preserve_insertion_order', 'false'), ('temp_directory', 'sandbox_tmp'), ('threads', '4')]
 con.execute("SET threads = 2; SET memory_limit = '4GB'")     # ajuste em tempo de execução
 con.sql("SELECT current_setting('threads'), current_setting('memory_limit')").fetchone()   # (2, '3.7 GiB')
 ```
@@ -769,7 +784,21 @@ con.sql("SELECT current_setting('threads'), current_setting('memory_limit')").fe
 O `memory_limit` só aceita valor com unidade: `'60%'` e `'60'` são recusados com `Parser Error:
 Unknown unit for memory` (DuckDB 1.5.5, 2026-09-22), e quem quer uma fração da máquina a calcula
 antes. O padrão é 80% da memória que o DuckDB detecta: 14,3 GiB numa máquina que o `os.sysconf` do
-Python lê como 18,0 GiB, e 6,1 GiB dos 7,6 GiB do ambiente alvo.
+Python lê como 18,0 GiB, e 6,1 GiB dos 7,6 GiB do ambiente alvo. Desde a versão 1.3 (a PR
+duckdb/duckdb#16608, de 2025-03-14), a detecção lê o limite de memória do cgroup, em
+`memory.limit_in_bytes` no v1 e em `memory.max` no v2, e o padrão de `threads` lê a cota de CPU,
+`cpu.cfs_quota_us` sobre `cpu.cfs_period_us` ou `cpu.max`, arredondada para cima; a versão 1.1.3
+lia a memória da máquina hospedeira dentro do contêiner (duckdb/duckdb#15080). No contêiner de 4
+vCPUs com limite de cgroup v1 de 14.345.912.320 bytes, o DuckDB 1.5.5 escolheu 10,6 GiB, 80% do
+limite, e 4 threads (2026-09-24). Os 80% supõem o DuckDB sozinho no processo e na máquina: o
+PyArrow, o delta-rs e o código do cliente ficam fora do limite, e um processo com o limite
+anterior ainda aberto segura a memória dele.
+
+O DuckDB só devolve ao sistema a memória de uma conexão quando ela fecha: depois de um
+`CREATE TABLE ... AS SELECT ... ORDER BY` de 20.000.000 de linhas de um Parquet local, o RSS do
+processo ficou em 1.188 MB, continuou em 1.188 MB depois do `DROP TABLE` e voltou a 208 MB no
+`close` (partindo de 191 MB, 2026-09-24). Um script que roda consultas pesadas por unidade de
+trabalho e mede outro processo entre elas fecha a conexão por unidade.
 
 Sem `temp_directory`, um banco em arquivo transborda para `<arquivo>.tmp` ao lado dele e um banco em
 memória para `.tmp` no diretório corrente; `max_temp_directory_size` limita o transbordo a 90 % do
@@ -945,8 +974,11 @@ class AlembicDuckDBImpl(DefaultImpl):
   TABLE`, `ALTER TABLE`, `DROP`, `COMMENT ON`, `CREATE INDEX`, `CREATE SEQUENCE`, `INSERT`,
   `UPDATE`, `DELETE`, `MERGE INTO`, transações, concorrência, restrições, índices, compatibilidade
   com PostgreSQL, guias de performance (esquema, indexação, joins, ajuste de cargas, ambiente,
-  memória), guias do cliente Python (ingestão, conversão, pandas, Arrow, polars, DB-API, tipos) e
-  `COPY`.
+  memória, falta de memória), guias do cliente Python (ingestão, conversão, pandas, Arrow, polars,
+  DB-API, tipos) e `COPY`.
+- Blog do DuckDB: a gestão de memória (<https://duckdb.org/2024/07/09/memory-management>), a versão
+  1.3 com o cache de arquivos externos (<https://duckdb.org/2025/05/21/announcing-duckdb-130>) e a
+  ordenação refeita da versão 1.4 (<https://duckdb.org/2025/09/24/sorting-again>).
 - Documentação do SQLAlchemy 2.0: <https://docs.sqlalchemy.org/en/20/>.
 - Repositório do dialeto `duckdb_engine`: <https://github.com/Mause/duckdb_engine>.
 - Documentação do pandas sobre `read_sql`, `to_sql` e o backend pyarrow:

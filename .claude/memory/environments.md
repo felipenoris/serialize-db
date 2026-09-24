@@ -108,3 +108,10 @@ under `.../shared/<usuário>/serialize-db/`: `serialize-db-tests` for the suites
 `delta/db_projetado` for the migration. The session container of this repository's cloud sessions
 is also 4 vCPUs and 16,095 MB (30 GiB free), where DuckDB picks a 10.6 GiB `memory_limit`: local
 reproductions of target memory behavior run on a comparable machine. `plan/POC.md`
+
+The session container (2026-09-24) is cgroup v1 for memory: `/proc/self/cgroup` puts `memory` in a
+folder of its own (`/process_api/<id>/claude-code-bash`) with `memory.limit_in_bytes`
+14,345,912,320, the mount root unlimited, and a `0::/` v2 line with no controller; `MemTotal`
+16,481,980 kB, no CPU quota, one thread per core (`lscpu`, `smt/control` `notsupported`).
+`available_memory()` reads 14,197,641,216 bytes there (the cgroup room) and `environment_limits()`
+gives 4 threads and 6,761 MiB. `plan/POC.md`
