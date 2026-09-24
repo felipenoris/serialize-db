@@ -33,17 +33,18 @@ máximos menores (`id_lancamento` 952.517.158 em vez de 1.113.599.996) e cinco c
 `cad_lancamentos` tem 2,83 GB em quatro partições, cerca de 35 milhões de linhas e 700 MB de Parquet
 por partição. O `write_deltalake` de um `RecordBatchReader` cresceu com a entrada na medição da
 reescrita (1.140 MB de RSS para 135 MB de Parquet, [`delta.md`](delta.md)), e o
-`COPY ... RETURN_STATS` do DuckDB mais `create_write_transaction` ficou em 600 MB: a carga vai por
-`export_mode="register"`, o padrão que o usuário aprovou em 2026-09-24 para as etapas 4, 5 e 7
-depois das partições medidas em 2026-09-23 ([`POC.md`](POC.md)), e ordena cada partição pela
-`sort_key` (decisão do usuário do mesmo dia). A auditoria de chave estrangeira não é barreira da
+`COPY ... RETURN_STATS` do DuckDB mais `create_write_transaction` ficou em 600 MB: a carga
+registra o arquivo do `COPY`, o padrão que o usuário aprovou em 2026-09-24 para as etapas 4, 5 e 7
+depois das partições medidas em 2026-09-23 ([`POC.md`](POC.md)), sem o `rewrite`, que saiu da
+etapa com a flag `export_mode`, e ordena cada partição pela `sort_key` (decisões do usuário do
+mesmo dia). A auditoria de chave estrangeira não é barreira da
 carga: as duas bases têm `cad_lancamentos` de `data_base` 2026-01-31 sem `cad_contratos` dessa data
 e o contrato `desemb-999` sem cadastro, inconsistências ignoradas por decisão de 2026-09-20, e o
 relatório registra os órfãos.
 
 | Primitiva | O que faz |
 | --- | --- |
-| `initial_load(db, table, source, partitions=None, mode=None)` | `create_table`; descobre as partições da pasta da tabela (`<coluna>=<valor>/`, a coluna de partição do contrato, ou o arquivo único na raiz da tabela) e, para cada uma, o DuckDB lê `read_parquet('<partição>/*.parquet')`, a pasta inteira e nunca a ordem dos nomes, sem `hive_partitioning` (com ele o DuckDB converte `data_str` a `DATE`), confere, quando o modelo declara `partition_source` (`data`, ou `data_base`), que ela é igual ao valor do caminho em toda linha, e acrescenta a coluna de partição com esse valor. As conversões que a origem exige são aplicadas antes do `cast` e registradas no relatório: as chaves de `int32` a `int64`, sem perda, e o `timestamp` `INT96` de nanossegundos a microssegundos (`coerce_int96_timestamp_unit="us"` no PyArrow; o `TIMESTAMP` do DuckDB já trunca; a precisão perdida não importa, decisão de 2026-09-20). As colunas `double` entram como estão, e a nulidade é a do modelo: um nulo numa coluna `NOT NULL` é recusado pelo `cast`, com a coluna e a partição na mensagem. `cast` converte para o contrato e `mode`, a flag `export_mode` da [etapa 6](PLAN-STAGE-6.md), decide a gravação: `rewrite` grava por `publish_partition`; `register` roda `COPY (<a mesma consulta>) TO '<uri>/<coluna>=<valor>/<nome único>.parquet' (FORMAT parquet, RETURN_STATS)` e registra por `register_files`, com as conferências da [etapa 3](PLAN-STAGE-3.md). Uma carga interrompida recomeça da partição seguinte à última publicada; `partitions` filtra as partições encontradas. As tabelas fora do modelo (`alembic_version`, `meta_update_status`) e o que não é Parquet (`schema.json`) ficam fora da carga e entram no relatório. A consulta que confere a partição conta também os valores não finitos de cada coluna `Double`, e as colunas com contagem acima de zero vão a `publish_partition` ou a `register_files` em `columns_without_min_max` (decisão do usuário de 2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59)). |
+| `initial_load(db, table, source, partitions=None)` | `create_table`; descobre as partições da pasta da tabela (`<coluna>=<valor>/`, a coluna de partição do contrato, ou o arquivo único na raiz da tabela) e, para cada uma, o DuckDB lê `read_parquet('<partição>/*.parquet')`, a pasta inteira e nunca a ordem dos nomes, sem `hive_partitioning` (com ele o DuckDB converte `data_str` a `DATE`), confere, quando o modelo declara `partition_source` (`data`, ou `data_base`), que ela é igual ao valor do caminho em toda linha, e acrescenta a coluna de partição com esse valor. As conversões que a origem exige são aplicadas antes do `cast` e registradas no relatório: as chaves de `int32` a `int64`, sem perda, e o `timestamp` `INT96` de nanossegundos a microssegundos (`coerce_int96_timestamp_unit="us"` no PyArrow; o `TIMESTAMP` do DuckDB já trunca; a precisão perdida não importa, decisão de 2026-09-20). As colunas `double` entram como estão, e a nulidade é a do modelo: um nulo numa coluna `NOT NULL` é recusado pelo `cast`, com a coluna e a partição na mensagem. `cast` converte para o contrato, e a gravação roda `COPY (<a mesma consulta>) TO '<uri>/<coluna>=<valor>/<nome único>.parquet' (FORMAT parquet, RETURN_STATS)` e registra por `register_files`, com as conferências da [etapa 3](PLAN-STAGE-3.md). Uma carga interrompida recomeça da partição seguinte à última publicada; `partitions` filtra as partições encontradas. As tabelas fora do modelo (`alembic_version`, `meta_update_status`) e o que não é Parquet (`schema.json`) ficam fora da carga e entram no relatório. A consulta que confere a partição conta também os valores não finitos de cada coluna `Double`, e as colunas com contagem acima de zero vão a `publish_partition` ou a `register_files` em `columns_without_min_max` (decisão do usuário de 2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59)). |
 | `load_report(db, table, source)` | Contagem e somas por partição, na origem e no Delta: as colunas `double` somadas como `DECIMAL(38, 6)` de cada valor finito, com os não finitos contados à parte, porque a soma em ponto flutuante depende da ordem, os valores são os mesmos dos dois lados e o `CAST` de um `NaN` ou de um infinito falha com `ConversionException` (leitura de 2026-09-23); as `Numeric`, quando existirem, como estão. A carga só termina quando coincidem. |
 | `serialize-db load` | `--table`, `--source` e `--partitions`. |
 
@@ -53,8 +54,7 @@ e não os tipos (`INT96`, chaves em `int32`), e ele não é o caminho.
 Depois da carga os leitores abrem o Delta, e as pastas de origem ficam como cópia até a primeira
 publicação no Redshift. Testes: `tests/test_load.py` sobre a base fictícia de
 `tests/source_db_projetado.py`, gravada sob a raiz local, incluindo a carga interrompida, as chaves
-em `int64`, o `timestamp` truncado, os dois modos com as mesmas contagens e somas, o relatório de
-contagens e somas e as tabelas puladas. Provas
+em `int64`, o `timestamp` truncado, o relatório de contagens e somas e as tabelas puladas. Provas
 de conceito:
 `test_deltalake.py::test_initial_load_from_parquet_folders` (cada pasta lida sem
 `hive_partitioning`, com o valor do caminho na coluna de partição, a chave em `BIGINT` e o `double`
@@ -77,25 +77,20 @@ da etapa 1 dá o tipo de cada `CAST`, e `quoted` cita cada coluna, porque `cad_c
 palavra reservada e a consulta sem aspas falha no DuckDB), `check_partition`, uma consulta que
 conta as linhas com `partition_source` diferente do valor do caminho, os nulos das colunas `NOT
 NULL` e os textos acima de `String(n)` em bytes (`strlen`; o `octet_length` do DuckDB só existe
-para `BLOB`) e recusa a partição por `ContractError` antes de gravar, nos dois modos, e acha as
-colunas `Double` com `NaN` ou infinito na partição, que saem sem mínimo e máximo no log e, em
-`--mode rewrite`, no rodapé (`writer_properties` com `statistics_enabled="NONE"`); a gravação
-em `--mode register` (o padrão), `COPY ... (FORMAT parquet, RETURN_STATS)` para
-`<raiz>/<tabela>/<coluna>=<valor>/carga_inicial_<uuid>.parquet` e a `AddAction` por
-`create_write_transaction` com `numRecords`, `nullCount` de toda coluna e mínimo e máximo das
-colunas inteiras, de data, `Double` e texto, os tipos que a [etapa 3](PLAN-STAGE-3.md) registra
-(decisão do usuário de 2026-09-22), ou em `--mode rewrite`, o leitor da consulta por `cast` e
-`write_deltalake`
-com predicado (o `cast` fica como segunda guarda: uma exceção do leitor volta de
-`write_deltalake` como `DeltaError`, com a mensagem original dentro do texto); as linhas na ordem
+para `BLOB`) e recusa a partição por `ContractError` antes de gravar, e acha as colunas `Double`
+com `NaN` ou infinito na partição, que saem sem mínimo e máximo no log; a gravação, `COPY ...
+(FORMAT parquet, RETURN_STATS)` para `<raiz>/<tabela>/<coluna>=<valor>/carga_inicial_<uuid>.parquet`
+e a `AddAction` por `create_write_transaction` com `numRecords`, `nullCount` de toda coluna e
+mínimo e máximo das colunas inteiras, de data, `Double` e texto, os tipos que a
+[etapa 3](PLAN-STAGE-3.md) registra (decisão do usuário de 2026-09-22); as linhas na ordem
 da `sort_key` do modelo, salvo `--no-sort`; a retomada pelas partições já no log; `load_report`
 por partição, contagem e somas das colunas `Double` e `Numeric` como `DECIMAL(38, 6)`, a origem
 por `read_parquet` com `hive_partitioning` e o Delta por `delta_scan`, mais as conversões de tipo
 lidas do rodapé do primeiro arquivo e as entradas fora do padrão; cada partição imprime linhas,
 tempo e o pico de memória do processo, e `--report` grava o JSON da execução, com a máquina, as
 versões e as configurações do DuckDB. Antes da carga de cada tabela particionada, o script mede
-cada partição pedida, esteja ela no log ou não, nas quatro variantes de gravação (`register` e
-`rewrite`, com e sem a ordem da `sort_key`): cada variante roda num processo novo e grava numa
+cada partição pedida, esteja ela no log ou não, com e sem a ordem da `sort_key`: cada variante roda
+num processo novo e grava numa
 tabela descartável sob `<raiz>/_medicao_<tabela>/`, apagada logo depois, e o relatório leva as
 linhas, o tempo, a memória do processo depois das importações e o pico dele (`VmHWM` no Linux),
 os arquivos e os bytes, ou o erro da variante que falhou; `--no-measure` desliga a medição. O
@@ -109,18 +104,18 @@ coluna como nula por causa do `parquet.field.id` que o esquema Delta herdava do 
 na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
 
 - O script rodou sobre `tests/source_db_projetado.py` em pasta local, o material do teste desta
-  etapa: `tests/test_migrate_parquet_to_delta.py` (25 casos, marcador `local`) cobre a
-  descoberta, a consulta, a carga uma vez só com a retomada e o filtro, os dois modos com o
-  mesmo relatório, a ordem da `sort_key`, as três recusas sem commit nos dois modos, o relatório
-  que acusa uma linha apagada, a linha de comando sobre a base inteira, duas vezes, o relatório
-  parcial de uma carga interrompida, uma conexão por tabela com os limites lidos do ambiente e a
-  medição das variantes, também com a partição já no log.
+  etapa: `tests/test_migrate_parquet_to_delta.py` (21 casos, marcador `local`) cobre a
+  descoberta, a consulta, a carga uma vez só com a retomada e o filtro, o relatório e os tipos do
+  contrato, a ordem da `sort_key`, as três recusas sem commit, o relatório que acusa uma linha
+  apagada, a linha de comando sobre a base inteira, duas vezes, o relatório parcial de uma carga
+  interrompida, uma conexão por tabela com os limites lidos do ambiente e a medição com e sem a
+  ordem, também com a partição já no log.
 - O usuário copia a base de produção para um prefixo do bucket do projeto separado da raiz das
   tabelas Delta (`aws s3 sync`, a mesma estrutura de pastas): a carga só lê, e a cópia congela o
   snapshot lido em 2026-09-21, enquanto a base de produção muda a cada carga mensal (a última em
   2026-09-14).
-- O `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB gravou no ambiente alvo, em
-  `--mode register`, as partições das onze tabelas que terminaram a migração de 2026-09-23 às
+- O `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB gravou no ambiente alvo as partições das
+  onze tabelas que terminaram a migração de 2026-09-23 às
   23:05, com contagens e somas iguais às da origem ([`POC.md`](POC.md)); gravar em disco e subir
   pelo `boto3` fica de fora.
 - A maior partição de `cad_lancamentos`, 2026-03-31, com 52.654.607 linhas, não terminou: numa
@@ -132,8 +127,19 @@ na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
   (`serialize_db.engine.duckdb.environment_limits`, instrução do usuário de 2026-09-24), e a carga
   de cada tabela tem a sua conexão, aberta depois da medição e fechada no fim: o DuckDB só devolve
   a memória ao fechar, e o RSS de uma conexão ficou em 1.188 MB depois do `DROP` da tabela que a
-  consulta ordenada criou e voltou a 208 MB no `close` ([`POC.md`](POC.md)). A próxima execução de
-  `cad_lancamentos` confirma que a partição cabe; o script regrava o relatório depois de cada passo.
+  consulta ordenada criou e voltou a 208 MB no `close` ([`POC.md`](POC.md)). Em 2026-09-24, numa
+  máquina de 16 vCPUs e 31.159 MB, com `memory_limit` de 13,4 GiB e 16 threads, as quatro partições
+  entraram em 6,4 s, 5,4 s, 10,1 s e 6,4 s, com o pico do processo em 9.678 MB depois das duas
+  primeiras e 16.430 MB depois da 2026-03-31, 20% acima do limite e 53% da memória da máquina, e
+  contagens e somas iguais; a medição da 2026-03-31 deu 10,6 s e 15.126 MB ordenada e 12,5 s e
+  7.540 MB sem ordem, e a ordem foi mais rápida nas quatro partições com 16 threads, com arquivos
+  do mesmo tamanho ([`POC.md`](POC.md)): a carga ordenada da maior partição pede uma máquina de
+  32 GB, e a sem ordem cabe em 16 GB; o script regrava o relatório depois de cada passo.
+  Essa conexão vive do fim da medição ao relatório da carga, e o secret dela guarda a
+  credencial resolvida na abertura: ele leva `REFRESH auto` (decisão do usuário de 2026-09-24,
+  [etapa 3](PLAN-STAGE-3.md)). Na execução de 2026-09-23, `cad_lancamentos` rodou
+  sozinho na máquina, entre `cad_contratos` e `cad_operacoes`, na ordem de `SUITE.md`, e o probe
+  das threads veio depois, às 23:21.
   Numa partição sintética com as mesmas linhas e colunas, num contêiner de 4 vCPUs e 16.095 MB, a
   ordem multiplicou o tempo do `register` por 3,6 (50,2 s contra 14,0 s) e o pico por 2,6
   (11.966 MB contra 4.517 MB), e o `COPY` ordenado direto no DuckDB levou 17,4 s com pico de
@@ -151,11 +157,7 @@ ferramenta de operação.
 ```python
 """Assinaturas de serialize_db.load; os corpos estão no rascunho abaixo."""
 import dataclasses
-from typing import Literal
-
 import sqlalchemy as sa
-
-ExportMode = Literal["register", "rewrite"]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -183,7 +185,7 @@ class LoadReport:
 
 def discover_partitions(source: str, table: sa.Table, storage: object) -> dict[str | None, str]: ...
 def partition_query(folder: str, table: sa.Table, value: str | None) -> str: ...
-def initial_load(db: object, table: sa.Table, source: str, partitions: list[str] | None = None, mode: ExportMode | None = None) -> list[str]: ...
+def initial_load(db: object, table: sa.Table, source: str, partitions: list[str] | None = None) -> list[str]: ...
 def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
 ```
 
@@ -205,14 +207,16 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   `get_add_actions` e pula cada uma delas (a retomada); para cada partição pendente, confere
   `count(*) ... WHERE <coluna> <> strftime(<partition_source>, '%Y-%m-%d')` igual a zero quando o
   modelo declara `partition_source`, conta os valores não finitos de cada coluna `Double` para
-  `columns_without_min_max`, e grava
-  conforme `mode`: `register` roda `COPY (SELECT <colunas sem a de partição> FROM (<consulta>)) TO
-  '<uri>/<coluna>=<valor>/carga_inicial_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` e chama
-  `register_files` com o `RegisteredFile` da linha do `RETURN_STATS`; `rewrite` passa
-  `con.execute(consulta).to_arrow_reader()` por `cast` e `publish_partition`. A conexão DuckDB é
-  do motor DuckDB da etapa 4, aberta pela própria carga, sem `Execution`; um nulo numa coluna `NOT
-  NULL` é recusado pelo `cast` (`rewrite`) ou pela conferência de nulos do rodapé de
-  `register_files` (`register`), com a coluna e o arquivo na mensagem. O `register_files` da
+  `columns_without_min_max`, e grava: `COPY (SELECT <colunas sem a de partição> FROM (<consulta>))
+  TO '<uri>/<coluna>=<valor>/carga_inicial_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` e
+  `register_files` com o `RegisteredFile` da linha do `RETURN_STATS`. A conexão DuckDB é do motor
+  DuckDB da etapa 4, aberta pela própria carga, sem `Execution`, uma por tabela e fechada no fim
+  dela, porque o DuckDB devolve a memória só no `close`, com `threads` e `memory_limit` de
+  `environment_limits`; as `threads` da leitura da origem no S3 seguem o padrão do motor, que o
+  probe das threads decide ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); um nulo numa coluna
+  `NOT NULL` é
+  recusado pela conferência de nulos do rodapé de `register_files`, com a coluna e o arquivo na
+  mensagem. O `register_files` da
   [etapa 3](PLAN-STAGE-3.md) traz o que o script não tinha: as conferências do rodapé de cada
   arquivo e a releitura depois do commit, que varre as colunas da chave da partição pelos dois
   leitores; o custo dela na partição de `cad_lancamentos` é uma leitura do relatório da carga.
@@ -222,13 +226,11 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   pela coluna de partição
   (`hive_partitioning = true, hive_types_autocast = false` na origem, `delta_scan` no destino), e
   monta `LoadReport`; `matches` exige contagens e somas iguais em toda partição.
-- **`serialize-db load`** recebe `--table`, `--source`, `--partitions` e `--mode`, chama
+- **`serialize-db load`** recebe `--table`, `--source` e `--partitions`, chama
   `initial_load` e depois `load_report`, e sai com 1 quando `matches` é falso. Ela reaproveita o que
   a [etapa 6](PLAN-STAGE-6.md) pôs em `serialize_db.cli`: `--metadata` e `--root` com os padrões
   `SERIALIZE_DB_*`, o `_name_argument` da regra da partição em `--partitions`, o `modulo:atributo`
-  que não importa como erro de uso, e o `logging` em `INFO`; `db` é o `Database` da etapa 6, e
-  `mode=None` segue a ordem de `Execution`: o argumento, `SERIALIZE_DB_EXPORT_MODE` e
-  `"register"`.
+  que não importa como erro de uso, e o `logging` em `INFO`; `db` é o `Database` da etapa 6.
 
 ## Pré-requisitos e pós-condições
 
@@ -250,7 +252,6 @@ local.
 | Consulta | `test_partition_query_casts_to_the_contract` | O esquema Arrow do `SELECT` é `arrow_schema(table)`; `id_lancamento` em `int64`, `timestamp` em `[us]`, `data_str` presente. |
 | Carga | `test_initial_load_loads_every_partition_once` | Primeira passagem carrega todas; segunda, nenhuma; `--partitions` filtra. |
 | Interrupção | `test_interrupted_load_resumes` | Uma exceção injetada depois da segunda partição; a chamada seguinte carrega só as restantes. |
-| Modos | `test_both_modes_give_the_same_counts_and_sums` | `register` e `rewrite` sobre a mesma tabela dão o mesmo `LoadReport`. |
 | Tipos | `test_keys_are_int64_and_timestamps_are_microseconds` | O Delta lê `int64` e `timestamp[us]`; o arquivo gravado tem `INT64` onde a origem tinha `INT32` e `INT96`. |
 | Partição divergente | `test_source_value_different_from_the_path_aborts` | Uma linha com `data` fora do valor do caminho aborta a partição, sem commit. |
 | Nulo em `NOT NULL` | `test_null_in_not_null_column_is_refused` | As sete colunas de `cad_contratos` com um nulo plantado: recusa com coluna e partição. |
@@ -388,16 +389,12 @@ tipos físicos gravados: {'id_contrato': 'INT64', 'data': 'INT32', 'contrato': '
 
 ## Decisões pendentes
 
-- **[decisão] Se o `rewrite` sai das etapas 4 e 7** ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O
-  usuário aprovou em 2026-09-24 o `register` como padrão nas etapas 4, 5 e 7, com o `rewrite` só
-  na troca da [etapa 5](PLAN-STAGE-5.md) para a partição com `Double` não finito. Falta dizer se o
-  `rewrite` deixa de ser escolha no motor DuckDB e na carga, com a flag `export_mode` de
-  `Execution`, de `serialize-db run` e de `SERIALIZE_DB_EXPORT_MODE` e os testes dele, ou se fica
-  como opção fora do padrão. Proposto: tirá-lo das etapas 4 e 7, com `publish_partition` na troca
-  da etapa 5 e as variantes da medição no script até a etapa 7 absorvê-lo.
-
-As decisões do usuário de 2026-09-24 sobre a carga, a ordem pela `sort_key` e o `register` como
-padrão, estão escritas no começo deste arquivo. Nas nove partições medidas no ambiente alvo em
+Nenhuma. As decisões do usuário de 2026-09-24 sobre a carga estão escritas no começo deste
+arquivo: a ordem pela `sort_key` e o registro do arquivo do `COPY`, com o `rewrite` fora das etapas
+4 e 7, junto com a flag `export_mode` de `Execution`, de `serialize-db run` e de
+`SERIALIZE_DB_EXPORT_MODE`; o `publish_partition` fica para a troca da [etapa 5](PLAN-STAGE-5.md)
+na partição com `Double` não finito, e o script carrega e mede só pelo registro, com e sem a
+ordem. Nas nove partições medidas no ambiente alvo em
 2026-09-23, o `rewrite` levou de 1,14 a 1,52 vez o tempo do `register`, com o pico até 696 MB maior
 na gravação ordenada, e a ordem custou de 1,23 a 1,63 vez o tempo do `register` e deixou os
 arquivos com 74% a 92% do tamanho ([`POC.md`](POC.md)).

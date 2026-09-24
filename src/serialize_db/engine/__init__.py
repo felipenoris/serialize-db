@@ -29,18 +29,14 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Collection, Iterable, Iterator, Mapping
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import pyarrow as pa
 import sqlalchemy as sa
 
 from serialize_db.audit import AuditReport, KeyScope
 
-__all__ = ["BatchStream", "Engine", "ExportMode", "Loader"]
-
-ExportMode = Literal["register", "rewrite"]
-"""Como uma partição que o motor gravou entra no Delta: ``register`` registra no log o arquivo que
-o motor gravou, depois das conferências da etapa 3; ``rewrite`` grava pelo ``write_deltalake``."""
+__all__ = ["BatchStream", "Engine", "Loader", "duckdb"]
 
 
 class BatchStream(Protocol):
@@ -96,7 +92,6 @@ class Engine(Protocol):
               key_scope: KeyScope | None = None,
               referenced: Mapping[str, tuple[str, int]] | None = None) -> AuditReport: ...
     def export_partition(self, table: sa.Table, uri: str, value: str | None,
-                         metadata: Mapping[str, str], mode: ExportMode,
-                         expected_rows: int | None = None,
+                         metadata: Mapping[str, str], expected_rows: int | None = None,
                          columns_without_min_max: Collection[str] = ()) -> int: ...
     def cleanup(self) -> None: ...

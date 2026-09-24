@@ -23,7 +23,7 @@ As primitivas:
   a forma por tabela;
 - ``audit`` roda as verificações de ``serialize_db.audit`` e monta o ``AuditReport``;
 - ``export_partition`` leva uma partição do sandbox ao Delta, por ``register_files`` do arquivo do
-  ``COPY ... RETURN_STATS`` ou por ``publish_partition`` do leitor.
+  ``COPY ... RETURN_STATS``.
 
 Um statement Core é compilado pela cópia prefixada de ``sql.prefixed``, com todo nome entre aspas,
 pelo dialeto do DuckDB no estilo ``qmark``, com os valores do cliente dados por ``params`` e a lista
@@ -66,8 +66,7 @@ from sqlalchemy.sql.visitors import iterate
 
 from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
-from serialize_db.engine import ExportMode
-from serialize_db.errors import ContractError, RegistrationRefused, SandboxError, SqlError
+from serialize_db.errors import ContractError, SandboxError, SqlError
 from serialize_db.resources import available_cpus, available_memory
 from serialize_db.schema import (
     cast,
@@ -1033,13 +1032,13 @@ class DuckDBEngine:
 
     # ------------------------------------------------------------ a exportação
 
-    def _partition_select(self, table: sa.Table, value: str | None, with_partition: bool) -> str:
+    def _partition_select(self, table: sa.Table, value: str | None) -> str:
         """O ``SELECT`` da partição no sandbox, cada coluna do contrato em ``CAST`` para o tipo
-        dele, na ordem da ``sort_key``; com ``with_partition=False``, sem a coluna de partição."""
+        dele, na ordem da ``sort_key``, sem a coluna de partição, que o caminho do arquivo leva."""
         options = table_options(table)
         columns = []
         for column in table.columns:
-            if column.name == options.partition_by and not with_partition:
+            if column.name == options.partition_by:
                 continue
             name = quoted(column.name)
             columns.append(f"CAST({name} AS {sql_type(column, 'duckdb')}) AS {name}")
@@ -1058,12 +1057,29 @@ class DuckDBEngine:
             text += f" WHERE {quoted(partition_by)} = {literal(value)}"
         return text
 
-    def _export_register(self, table: sa.Table, uri: str, value: str | None,
-                         metadata: Mapping[str, str], expected_rows: int | None,
-                         columns_without_min_max: Collection[str]) -> int:
-        """O ``COPY ... RETURN_STATS`` da partição para um arquivo novo na pasta dela, registrado
-        por ``register_files`` com as conferências, o commit e a releitura."""
+    def export_partition(self, table: sa.Table, uri: str, value: str | None,
+                         metadata: Mapping[str, str], expected_rows: int | None = None,
+                         columns_without_min_max: Collection[str] = ()) -> int:
+        """Leva a partição do sandbox ao Delta e devolve a versão do commit.
+
+        A partição sai por ``COPY ... (RETURN_STATS)`` num arquivo novo dentro da pasta dela e entra
+        no log por ``register_files``, com as conferências, o commit e a releitura, em memória
+        constante. ``expected_rows``, a contagem da auditoria, confere as linhas; sem ela, a
+        contagem do sandbox. As colunas de ``columns_without_min_max`` saem sem mínimo e máximo
+        (issue #59).
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.export_partition(Projetada.__table__, uri, "2026-08-31",
+                                    delta.commit_metadata("exec-42", versions))
+        """
         partition_by = table_options(table).partition_by
+        if partition_by is not None:
+            check_partition_value(value)
+
+        # Um arquivo novo na pasta da partição, com o execution_id no nome.
         table_path = self._storage.relative(uri)
         name = f"{self.execution_id}_{uuid.uuid4().hex}.parquet"
         relative = name
@@ -1071,7 +1087,9 @@ class DuckDBEngine:
             relative = f"{partition_by}={value}/{name}"
             self._storage.ensure_folder(self._storage.join(table_path, f"{partition_by}={value}"))
         target = self._storage.uri_of(self._storage.join(table_path, relative))
-        select = self._partition_select(table, value, with_partition=False)
+
+        # O COPY grava o arquivo e devolve as estatísticas que o registro confere.
+        select = self._partition_select(table, value)
         with self.session() as connection:
             count = connection.execute(self._count_text(table, value)).fetchone()[0]
             cursor = connection.execute(
@@ -1082,51 +1100,6 @@ class DuckDBEngine:
         expected = expected_rows if expected_rows is not None else count
         return delta.register_files(uri, table, [file], value, metadata, self._storage, expected,
                                     columns_without_min_max)
-
-    def _export_rewrite(self, table: sa.Table, uri: str, value: str | None,
-                        metadata: Mapping[str, str], expected_rows: int | None,
-                        columns_without_min_max: Collection[str]) -> int:
-        """O leitor da partição passado por ``cast`` a ``publish_partition``, sob o lock: a escrita
-        consome o leitor antes de o lock sair, porque o comando seguinte o esvaziaria."""
-        select = self._partition_select(table, value, with_partition=True)
-        with self.session() as connection:
-            count = connection.execute(self._count_text(table, value)).fetchone()[0]
-            if expected_rows is not None and count != expected_rows:
-                raise RegistrationRefused(f"{table.name} partição {value}: {count} linhas no "
-                                          f"sandbox, {expected_rows} esperadas")
-            reader = connection.execute(select).to_arrow_reader()
-            return delta.publish_partition(uri, table, value, cast(reader, table), metadata,
-                                           self._storage, columns_without_min_max)
-
-    def export_partition(self, table: sa.Table, uri: str, value: str | None,
-                         metadata: Mapping[str, str], mode: ExportMode,
-                         expected_rows: int | None = None,
-                         columns_without_min_max: Collection[str] = ()) -> int:
-        """Leva a partição do sandbox ao Delta e devolve a versão do commit.
-
-        ``mode`` é o ``export_mode`` resolvido pela execução: ``"register"`` grava a partição por
-        ``COPY ... (RETURN_STATS)`` num arquivo novo dentro da pasta dela e a registra por
-        ``register_files``, com memória constante; ``"rewrite"`` passa o leitor da partição a
-        ``publish_partition``, e a memória cresce com a partição. ``expected_rows``, a contagem da
-        auditoria, confere as linhas; sem ela, a contagem do sandbox. As colunas de
-        ``columns_without_min_max`` saem sem mínimo e máximo (issue #59).
-
-        Exemplo:
-
-        .. code-block:: python
-
-            engine.export_partition(Projetada.__table__, uri, "2026-08-31",
-                                    delta.commit_metadata("exec-42", versions), "register")
-        """
-        if table_options(table).partition_by is not None:
-            check_partition_value(value)
-        if mode == "register":
-            return self._export_register(table, uri, value, metadata, expected_rows,
-                                         columns_without_min_max)
-        if mode == "rewrite":
-            return self._export_rewrite(table, uri, value, metadata, expected_rows,
-                                        columns_without_min_max)
-        raise ValueError(f"export_mode {mode!r}: use 'register' ou 'rewrite'")
 
     # ------------------------------------------------------------ o encerramento
 

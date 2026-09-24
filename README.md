@@ -255,10 +255,9 @@ export AWS_DEFAULT_REGION=sa-east-1
 PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --source s3://bucket/prefixo/db_projetado --root s3://bucket/prefixo/delta --tables cad_contratos --report relatorio.json
 ```
 
-`--partitions AAAA-MM-DD` carrega só as partições listadas, `--mode rewrite` grava pelo
-`write_deltalake` em vez do `COPY` do DuckDB registrado no log, e `--no-sort` grava na ordem da
+`--partitions AAAA-MM-DD` carrega só as partições listadas, e `--no-sort` grava na ordem da
 origem. A segunda execução não grava nada: a carga recomeça das partições fora do log. A medição
-das variantes de gravação, descrita no cabeçalho do script, roda por padrão antes da carga de
+da gravação com e sem a ordem, descrita no cabeçalho do script, roda por padrão antes da carga de
 cada tabela particionada, também sobre as partições já no log, e `--no-measure` a desliga.
 
 # Exemplos: conectividade com o Redshift

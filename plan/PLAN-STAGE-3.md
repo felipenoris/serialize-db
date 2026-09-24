@@ -21,7 +21,7 @@ da tabela, que `relative` leva ao caminho relativo à raiz.
 | `copy(source, destination)` | `copy_file` do sistema de arquivos, que no S3 é o `CopyObject`; a exportação sem ler dados. |
 | `storage_options()` | As opções do delta-rs: região, `AWS_ENDPOINT_URL`, `max_retries` 3 e `retry_timeout` 10 s, e as chaves de SSE das variáveis do object_store (`AWS_SERVER_SIDE_ENCRYPTION`, `AWS_SSE_KMS_KEY_ID`, `AWS_SSE_BUCKET_KEY_ENABLED`) quando configuradas; vazias na pasta local; nunca credenciais (decisão do usuário de 2026-09-22). A cadeia padrão do delta-rs as resolve e as renova sozinha no `DeltaTable` que a execução guarda, enquanto um trio congelado expiraria em cerca de uma hora e circularia num dicionário que um log ou uma exceção imprime. Resolvidas a cada chamada, nunca guardadas. |
 | `duckdb_connect(database=":memory:", config=None)` | A conexão do DuckDB com `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao lado do ambiente virtual (a pasta que `prepare_offline.sh` cria), `autoinstall_known_extensions` e `autoload_known_extensions` desligados, as opções de `config` e `duckdb_setup` aplicado; é a conexão de `rewrite`, `read_back` e `export_snapshot`, e a do motor da [etapa 4](PLAN-STAGE-4.md). |
-| `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REGION` e, com `AWS_ENDPOINT_URL`, `ENDPOINT` sem o esquema, `URL_STYLE 'path'` e, num endpoint `http`, `USE_SSL false`; só `LOAD delta` na pasta local. Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password` a partir de `HTTP_PROXY`, `username` e `password`, como `probelib.duckdb_proxy` faz nos probes: o DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3, não só o download de extensão ([`POC.md`](POC.md)). |
+| `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REFRESH auto` (decisão do usuário de 2026-09-24: o secret guarda a credencial resolvida no `CREATE SECRET`, e a do contêiner expira em cerca de uma hora) e `REGION` e, com `AWS_ENDPOINT_URL`, `ENDPOINT` sem o esquema, `URL_STYLE 'path'` e, num endpoint `http`, `USE_SSL false`; só `LOAD delta` na pasta local. Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password` a partir de `HTTP_PROXY`, `username` e `password`, como `probelib.duckdb_proxy` faz nos probes: o DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3, não só o download de extensão ([`POC.md`](POC.md)). |
 | `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou vazia, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
 
 `serialize_db.delta` é a camada de tabela; `uri` é a pasta da tabela, `table` o `Table` do modelo,
@@ -48,7 +48,7 @@ solto, e `value` é o valor de uma partição, `None` numa tabela sem partição
 | `read_snapshots(storage, environment)`, `snapshot(storage, environment, name, versions)` | O arquivo de controle `_serialize_db/snapshots.json` do ambiente com a impressão digital, `({"snapshots": {}}, None)` quando ele ainda não existe, e a entrada `{name: versions}` gravada nele com `write_text(if_match=...)`, ou `if_none_match` no primeiro; o nome repetido é `ValueError`. |
 | `vacuum_keeping_snapshots(uri, control, table_name, storage, retention_hours=9600, apply=False, full=False)` | `vacuum` com `keep_versions` das versões do arquivo de controle; lista por padrão e apaga com `apply=True`. |
 | `compact(uri, table, partitions, storage)` | `optimize.compact` das partições com arquivos pequenos, antes de um snapshot. A reescrita sai pelo escritor do delta-rs: os arquivos do `UNLOAD` que ela junta perdem o `INT96` e o `FIXED_LEN_BYTE_ARRAY` e ganham estatística em toda coluna (`test_deltalake.py::test_compact_rewrites_files_from_another_writer`). |
-| `deep_copy(uri, version, destination, storage)` | Tabela nova na URI `destination`, na versão 0, com os dados, o esquema (nulidade e comentários inclusive), a partição, o nome, a descrição e as propriedades de uma versão, para a pasta de arquivo. |
+| `deep_copy(uri, version, destination, storage)` | Tabela nova na URI `destination` com os dados, o esquema (nulidade e comentários inclusive), a partição, o nome, a descrição e as propriedades de uma versão, para a pasta de arquivo. Hoje um `write_deltalake` do leitor da tabela inteira, na versão 0; a [etapa 9](PLAN-STAGE-9.md) o troca pela cópia dos arquivos da versão, partição a partição, e o registro deles por `register_files` na tabela criada por `create_table` (decisão do usuário de 2026-09-24), porque a memória do escritor do delta-rs cresce com a tabela. |
 | `export_snapshot(uri, table, destination, storage, version=None, mode="copy")` | Pastas `<coluna de partição>=<valor>/` sem o log na URI `destination`: `copy` copia os arquivos que o log lista; `rewrite` reescreve pelo `COPY` particionado do DuckDB; devolve as URIs gravadas. |
 
 `scripts/migrate_parquet_to_delta.py`, a migração adiantada da [etapa 7](PLAN-STAGE-7.md), já tem
@@ -184,7 +184,12 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
   `http`: sem as duas opções, o moto em `127.0.0.1` não respondeu ao DuckDB ([`POC.md`](POC.md),
   sonda de 2026-09-23). Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password`
   separados de `HTTP_PROXY` como `probelib.duckdb_proxy`. No ambiente alvo não há variável de
-  proxy, e o bloco é vazio ([`POC.md`](POC.md), leitura de 2026-09-21).
+  proxy, e o bloco é vazio ([`POC.md`](POC.md), leitura de 2026-09-21). O secret guarda a chave e
+  o token resolvidos no `CREATE SECRET`, e a documentação da extensão `aws` pede `REFRESH auto`
+  para a credencial que expira: o secret leva `REFRESH auto` (decisão do usuário de 2026-09-24,
+  sonda do mesmo dia em [`POC.md`](POC.md)); a renovação numa conexão que atravessa a rotação da
+  credencial do contêiner só uma execução longa no alvo mostra
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **`prepare_environment`** exporta `NO_PROXY` de `no_proxy` quando a maiúscula está ausente ou
   vazia, copia a região nos dois sentidos e devolve o dicionário do que mudou, para o log.
 - **`create_table`** é `DeltaTable.create(mode="ignore")` com `delta_schema(table)`,
@@ -273,7 +278,12 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
 - **`deep_copy`** grava `write_deltalake(destination, DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader(), mode="error", partition_by=..., name=..., description=..., configuration=...)`,
   nunca `to_pyarrow_table`, pela regra de encerramento de [`PLAN.md`](PLAN.md); o esquema do
   dataset leva a nulidade e os comentários da versão (leitura de 2026-09-23), e `mode="error"`
-  recusa um destino que já tem tabela.
+  recusa um destino que já tem tabela. A memória do `write_deltalake` cresce com a tabela, fora do
+  `memory_limit` do DuckDB (1.140 MB para 12.000.000 de linhas, [`delta.md`](delta.md)): a
+  [etapa 9](PLAN-STAGE-9.md) troca o corpo pela cópia dos arquivos de cada partição por
+  `Storage.copy`, sem os dados passarem pela máquina, e pelo `register_files` deles, com as
+  conferências do rodapé, um commit por partição (decisão do usuário de 2026-09-24); a cópia
+  deixa de nascer na versão 0, e `test_deep_copy_and_relocation` passa a ler a versão final.
 - **`export_snapshot`** copia os arquivos que `get_add_actions()` lista no layout
   `<coluna>=<valor>/` por `Storage.copy` (`mode="copy"`), ou reescreve pelo `COPY` particionado do
   DuckDB (`mode="rewrite"`); um snapshot antigo usa `DeltaTable(uri, version=v)`.

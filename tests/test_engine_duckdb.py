@@ -11,9 +11,9 @@ stream (o primeiro lote com a consulta rodando, o orçamento, o cancelamento, os
 transação no ``close``, o loader abandonado, o nome ocupado, a ordem do exemplo mensal, o pipeline
 de três estágios, a leitura durante uma carga esquecida), as formas por tabela, o ciclo com o
 pandas, a auditoria (cada defeito, a dispensa da junção, a amostra, os não finitos, o órfão), a
-exportação nos dois modos e o pipeline de exemplo num banco em arquivo. A extensão ``delta`` do
-DuckDB precisa estar na pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/``
-na raiz do repositório).
+exportação pelo registro do arquivo do ``COPY`` e o pipeline de exemplo num banco em arquivo. A
+extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+(``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
 from __future__ import annotations
@@ -983,45 +983,40 @@ def exported_totals(storage: Storage, uri: str) -> list[tuple]:
     return scan(storage, query)
 
 
-def test_export_partition_modes_produce_the_same_partition(setup: Setup) -> None:
-    """``register`` e ``rewrite`` sobre a mesma partição dão as mesmas linhas e somas; o
-    ``register`` poda pela estatística, sem o mínimo e o máximo da coluna com ``NaN``;
-    ``expected_rows`` diferente recusa nos dois modos."""
+def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
+    """A partição sai pelo ``COPY ... RETURN_STATS`` e entra no log com as linhas e as somas do
+    sandbox, sem o mínimo e o máximo da coluna com ``NaN``; o Delta poda pela estatística da
+    chave, o arquivo leva o ``execution_id`` no nome, e ``expected_rows`` diferente recusa sem
+    commit."""
     engine = setup.engine
     with_nan = [float("nan")] + [k / 4 for k in range(2, 1001)]
     engine.load(PROJECTED, entries(MONTHS[1], 1, 1000, PROJECTED, valor=with_nan))
-    modes = ("register", "rewrite")
-    uris = {mode: setup.storage.uri_of(f"prod/{mode}/{PROJECTED.name}") for mode in modes}
-    for mode, uri in uris.items():
-        delta.create_table(uri, PROJECTED, setup.storage)
-        version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, mode,
-                                          expected_rows=1000, columns_without_min_max=["valor"])
-        assert version == 1
-    totals = [exported_totals(setup.storage, uri) for uri in uris.values()]
-    assert totals[0] == totals[1] == [(1000, decimal.Decimal("5005.00"), 500500, 1)]
-    for uri in uris.values():
-        stats = pa.table(delta.open_table(uri, setup.storage).get_add_actions(flatten=True))
-        assert stats.column("max.valor").null_count == stats.num_rows
-        assert stats.column("max.id_lancamento").to_pylist() == [1000]
+    uri = setup.uri(PROJECTED)
+    delta.create_table(uri, PROJECTED, setup.storage)
+    version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000,
+                                      columns_without_min_max=["valor"])
+    assert version == 1
+    assert exported_totals(setup.storage, uri) == [(1000, decimal.Decimal("5005.00"), 500500, 1)]
+    stats = pa.table(delta.open_table(uri, setup.storage).get_add_actions(flatten=True))
+    assert stats.column("max.valor").null_count == stats.num_rows
+    assert stats.column("max.id_lancamento").to_pylist() == [1000]
 
-    # O register poda pela estatística da chave, e o arquivo leva o execution_id no nome.
-    register_uri = uris["register"]
-    query = (f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{register_uri}') "
+    # A poda pela estatística da chave, e o arquivo com o execution_id no nome.
+    query = (f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}') "
              "WHERE id_lancamento > 5000")
     # O EXPLAIN ANALYZE devolve uma linha, com o plano na segunda coluna.
     plan = scan(setup.storage, query)[0][1]
     assert "Scanning Files: 0/1" in plan
-    files = setup.storage.list_files(setup.storage.relative(register_uri), ".parquet")
-    folder = f"prod/register/{PROJECTED.name}/data_base_str={MONTHS[1]}/"
+    files = setup.storage.list_files(setup.storage.relative(uri), ".parquet")
+    folder = f"prod/{PROJECTED.name}/data_base_str={MONTHS[1]}/"
     assert files[0].startswith(folder)
     pattern = re.escape(EXECUTION_ID) + r"_[0-9a-f]{32}\.parquet"
     assert re.fullmatch(pattern, files[0].removeprefix(folder))
 
-    # expected_rows diferente recusa nos dois modos, sem commit.
-    for mode, uri in uris.items():
-        with pytest.raises(RegistrationRefused):
-            engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, mode, expected_rows=999)
-        assert delta.open_table(uri, setup.storage).version() == 1
+    # expected_rows diferente recusa, sem commit.
+    with pytest.raises(RegistrationRefused):
+        engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=999)
+    assert delta.open_table(uri, setup.storage).version() == 1
 
 
 def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:
@@ -1050,7 +1045,7 @@ def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:
     assert report.passed, report.results
     expected_rows = report.rows(MONTHS[-1])
     nonfinite = report.nonfinite_columns.get(MONTHS[-1], ())
-    version = engine.export_partition(PROJECTED, projected_uri, MONTHS[-1], METADATA, "register",
+    version = engine.export_partition(PROJECTED, projected_uri, MONTHS[-1], METADATA,
                                       expected_rows=expected_rows,
                                       columns_without_min_max=nonfinite)
     assert version == 1

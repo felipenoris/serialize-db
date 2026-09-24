@@ -109,16 +109,21 @@ def _proxy_settings(environ: Mapping[str, str]) -> dict[str, str]:
 
 
 def _duckdb_secret_options() -> list[str]:
-    """As opções do secret S3 do DuckDB: a cadeia de credenciais e a região; com
+    """As opções do secret S3 do DuckDB: a cadeia de credenciais com renovação, a região e, com
     ``AWS_ENDPOINT_URL``, o endereço sem o esquema, o endereço por caminho e, num endpoint
     ``http``, ``USE_SSL false``.
 
-    O DuckDB não lê ``AWS_ENDPOINT_URL``. Sem ``URL_STYLE 'path'`` o bucket vira subdomínio do
-    endereço, que num IP não resolve, e sem ``USE_SSL false`` a conexão a um endpoint ``http``
-    tenta TLS e falha (sonda de 2026-09-23 contra o moto, ``plan/POC.md``). O endereço por caminho
-    é o que o delta-rs e o PyArrow usam com um endpoint próprio.
+    O secret guarda a credencial resolvida no ``CREATE SECRET``, e a do contêiner expira em cerca
+    de uma hora: ``REFRESH auto`` pede a renovação que a documentação da extensão ``aws`` prevê
+    para a credencial que expira (decisão do usuário de 2026-09-24). O DuckDB não lê
+    ``AWS_ENDPOINT_URL``. Sem ``URL_STYLE 'path'`` o bucket vira subdomínio do endereço, que num
+    IP não resolve, e sem ``USE_SSL false`` a conexão a um endpoint ``http`` tenta TLS e falha
+    (sonda de 2026-09-23 contra o moto, ``plan/POC.md``). O endereço por caminho é o que o
+    delta-rs e o PyArrow usam com um endpoint próprio.
     """
-    options = ["TYPE s3", "PROVIDER credential_chain", f"REGION {literal(_region())}"]
+    options = [
+        "TYPE s3", "PROVIDER credential_chain", "REFRESH auto", f"REGION {literal(_region())}",
+    ]
     endpoint = _endpoint()
     if not endpoint:
         return options
@@ -422,9 +427,9 @@ class Storage:
         """Carrega as extensões que a raiz pede e, no S3, cria o secret da cadeia de credenciais.
 
         Na pasta local, só ``LOAD delta``. No S3, ``LOAD httpfs``, ``LOAD delta`` e ``LOAD aws``,
-        o secret ``credential_chain`` com a região e o endpoint de ``_duckdb_secret_options``, e o
-        proxy de ``HTTP_PROXY`` sem as credenciais no endereço. As extensões vêm da pasta
-        configurada na conexão; nada é baixado.
+        o secret ``credential_chain`` com ``REFRESH auto``, a região e o endpoint de
+        ``_duckdb_secret_options``, e o proxy de ``HTTP_PROXY`` sem as credenciais no endereço.
+        As extensões vêm da pasta configurada na conexão; nada é baixado.
         """
         if not self.is_s3:
             connection.execute("LOAD delta")

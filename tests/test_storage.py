@@ -143,10 +143,11 @@ def test_duckdb_proxy_settings_without_credentials_in_the_address() -> None:
 
 
 def test_duckdb_secret_options_for_an_endpoint(clean_aws: pytest.MonkeyPatch) -> None:
-    """Sem ``AWS_ENDPOINT_URL``, a cadeia de credenciais e a região; com ele, o endereço sem o
-    esquema e o endereço por caminho, e ``USE_SSL false`` só num endpoint ``http``."""
+    """Sem ``AWS_ENDPOINT_URL``, a cadeia de credenciais com ``REFRESH auto`` e a região; com ele,
+    o endereço sem o esquema e o endereço por caminho, e ``USE_SSL false`` só num endpoint
+    ``http``."""
     clean_aws.setenv("AWS_REGION", "sa-east-1")
-    chain = ["TYPE s3", "PROVIDER credential_chain", "REGION 'sa-east-1'"]
+    chain = ["TYPE s3", "PROVIDER credential_chain", "REFRESH auto", "REGION 'sa-east-1'"]
     assert _duckdb_secret_options() == chain
 
     # O endpoint http de um serviço compatível num IP, como o moto do substituto local.

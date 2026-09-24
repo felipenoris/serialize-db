@@ -737,3 +737,43 @@ lack of RAM; approved the three proposals (`register` as the default in stages 4
 read); and merged PR #68. Whether `rewrite` leaves stages 4 and 7, with the `export_mode` flag and
 its tests, was put to the user (proposed: remove it). `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-7.md`,
 `plan/PLAN-STAGE-8.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+## The rewrite leaves stages 4 and 7, and the engine page enters the pdoc site (2026-09-24)
+
+On 2026-09-24 the user answered "sim, tire o rewrite das etapas 4 e 7" and asked for the pdoc fix,
+after merging PR #69. The DuckDB engine's `export_partition` registers the `COPY` file only; the
+`ExportMode` type, the `mode` argument of the `Engine` protocol, `Execution(export_mode=...)`,
+`publish(export_mode=...)`, `serialize-db run --export-mode` and `SERIALIZE_DB_EXPORT_MODE` left
+with their tests; `delta.publish_partition` stays for the stage 5 swap of a partition with a
+non-finite `Double`, which now always logs its warning because no mode asks for the registration.
+The migration script lost `--mode` and the `rewrite` measurement variants: it loads by the
+registration and measures each partition with and without the sort (`SORT_VARIANTS`); the plan
+text had proposed keeping the `rewrite` variants until stage 7 absorbs the script, and the
+assistant removed them to match the user's answer. `serialize_db.engine.__all__` lists `duckdb`,
+because pdoc documents only the submodules a package's `__all__` names, and the site had no engine
+page since stage 4; `tests/test_package.py` checks every package. `plan/PLAN-STAGE-4.md`,
+`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-7.md`, `plan/PLAN.md`
+
+## The battery of 2026-09-24 at 01:41 on a 16 vCPU machine
+
+On 2026-09-24 the user reran every `SUITE.md` command from `main` (fa734eb, with #69) on a 16 vCPU
+and 31,159 MB machine, handed over the reports and asked to analyze them and propagate the
+revisions to the plan and the code. The assistant fixed `DuckDBConfig.threads` at the process's
+CPUs by the probe's reading, as the plan had assigned to that run, closed the open items on the
+`cad_lancamentos` migration, the half-memory fraction, the threads, the non-finite `Double` and the
+Redshift audit text, and turned the audit readings into assertions; the migration reports stay out
+of git. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-7.md`
+
+## REFRESH auto on the DuckDB secret and the archive by copy and registration (2026-09-24)
+
+On 2026-09-24 the user asked for the pending decisions to be explained and approved both
+recommendations: the DuckDB `credential_chain` secret of `storage.duckdb_setup` and of the
+migration script is created with `REFRESH auto`, because it stores the credential resolved at
+`CREATE SECRET` and the container's expires in about an hour (implemented the same day; a
+connection crossing the rotation is still unmeasured); and stage 9's `archive` copies each
+partition's files of the snapshot version with `Storage.copy` and registers them with
+`register_files` on a table made by `create_table`, one commit per partition, in place of
+`deep_copy` by `write_deltalake` over the whole table, whose memory grows with the table outside
+DuckDB's limit (the DuckDB `COPY` rewrite stays with `export --mode rewrite` and compaction). The
+`deep_copy` code changes when stage 9 starts. `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`,
+`plan/OPEN_QUESTIONS.md`

@@ -248,7 +248,7 @@ research appends to the matching group.
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, every `pyproject.toml` group in `.venv/` (`uv sync --all-groups`), DuckDB extensions in `.duckdb/`, all links relative. **Rerun it whenever a dependency is added**; a new DuckDB extension, a Python version change or another runtime asset is added by hand. Only a folder prepared on Linux x86_64 serves the SageMaker space; the header is the operating procedure, and the extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`. |
 | `examples/` | The scripts the user ran in the target, kept as run but for the masked identifiers in the bucket path: `redshift_native.py`, `redshift_data_api.py`, `redshift_copy_unload.py` (2026-09-20) and `redshift_manifest.py` (2026-09-21, the prerequisites of `export_partition`); `examples/README.md` says what each one fixes. The probe, the suite and stage 5 repeat their calls, and the target they fix is in `.claude/memory/redshift.md`. |
 | `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py`, `parquet_source.py` (`--sample N`) and `duckdb_threads.py` (the `threads` of the DuckDB engine ingesting the migrated Delta tables, each configuration in a new process with the external file cache off), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, with no network but one DNS lookup; its cases that write a report or fabricated files are `local`. |
-| `scripts/` | `migrate_parquet_to_delta.py`, the early migration of stage 7 (2026-09-21): per table and partition, the DuckDB query with the contract casts, one query checking partition value, nulls and text lengths and finding the `Double` columns with `NaN` or infinity, which lose min and max in the log and in the `rewrite` footer (issue #59), `register` (`COPY ... RETURN_STATS` committed by `create_write_transaction`) or `rewrite` (`cast` and `write_deltalake`), the `sort_key` order, resume from the log, the count-and-sum report (`Double` sums over finite values, non-finite values counted) with time and RSS per partition and `--report` JSON with the machine, and, by default, the measurement of every partition in the four write variants (`register`/`rewrite`, sorted or not), each in a new process with its own peak (`--no-measure` turns it off), and the `--report` JSON rewritten after each measurement and committed partition; local folder or `s3://`. The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
+| `scripts/` | `migrate_parquet_to_delta.py`, the early migration of stage 7 (2026-09-21): per table and partition, the DuckDB query with the contract casts, one query checking partition value, nulls and text lengths and finding the `Double` columns with `NaN` or infinity, which lose min and max in the log and in the `rewrite` footer (issue #59), the `COPY ... RETURN_STATS` file committed by `create_write_transaction`, the `sort_key` order, resume from the log, the count-and-sum report (`Double` sums over finite values, non-finite values counted) with time and RSS per partition and `--report` JSON with the machine, and, by default, the measurement of every partition sorted and unsorted, each in a new process with its own peak (`--no-measure` turns it off), the `--report` JSON rewritten after each measurement and committed partition, and every DuckDB connection opened with `environment_limits`, one per table; local folder or `s3://`. The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
 | `plan/readings/` | The probe and suite reports a pending stage still consults, kept as they came out with the environment's sensitive identifiers masked, indexed by `plan/readings/README.md`: the suite runs of 2026-09-23 at 22:53, 22:56 and 23:01, the threads probe of 23:21, the probes of 19:18 and the production base reading of 2026-09-21. A report leaves once `plan/POC.md` and the stage file hold what it showed, and git history keeps it (user decisions of 2026-09-23). |
 | `plan/guia.md` | ETL practices the pipeline follows: immutable partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `plan/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
@@ -535,6 +535,11 @@ A new lesson adds its story there and its rule here, in the same commit.
   count requests at the source before a best of N stands for a remote read (2026-09-24).
 - **A long-running script writes its report as it goes**: the migration process that ended in
   `cad_lancamentos` 2026-03-31 took the four-variant measurement with it (2026-09-24).
+- **A credential renewal is designed per client that holds a copy**: delta-rs resolves the chain
+  per call and `redshift_connector` reconnects per command, while DuckDB's `credential_chain`
+  secret stores the key at `CREATE SECRET` and renews nothing without `REFRESH auto`; list every
+  client that copies the credential, with the expiry the probe read beside the run's length
+  (2026-09-24).
 
 ## Naming conventions
 
@@ -547,7 +552,9 @@ decisions of 2026-09-19). Each module separates three levels of name (user decis
 interface client code imports, which `pdoc` documents; protected, used by another module of the
 library; private, used only inside its module. The module's `__all__` lists the public names and
 only those, so a module with a protected name declares `__all__` and `pdoc` leaves the protected
-one out; protected is unprefixed all the same, and private carries the `_` prefix. A key under `_serialize_db/` carries no prefix (`snapshots` in
+one out; protected is unprefixed all the same, and private carries the `_` prefix. A package's
+`__all__` also lists its public submodules, because `pdoc` documents only the submodules it names
+(`serialize_db.engine` lists `duckdb`; `tests/test_package.py` checks every package). A key under `_serialize_db/` carries no prefix (`snapshots` in
 `_serialize_db/snapshots.json`); everything else the library writes carries the `serialize_db_`
 prefix: the commit keys `serialize_db_execution_id`, `serialize_db_input_versions` and
 `serialize_db_snapshot`, the Parquet footer keys `serialize_db_version` and
@@ -603,7 +610,7 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `NUMERIC` type from the driver's `type_modifier`, and the export without `PARTITION BY` to a prefix
   new per attempt. The suite runs of 2026-09-23 in the target read most of what they need (the `=`
   prefix, the empty `UNLOAD` writing nothing, the `row_desc`, the `SUPER` file), and the user's
-  answers of the same day export by `rewrite`, with a `log.warning`, a partition with a non-finite
+  answers of the same day export through `publish_partition`, with a `log.warning`, a partition with a non-finite
   `Double` (the `UNLOAD` footer leaves `NaN` out of the maximum), take the empty text stream's
   schema from a `limit 0` query and keep `load` through the `loader`.
 - The reports of `scripts/migrate_parquet_to_delta.py`, which ran successfully in the target over
@@ -616,11 +623,21 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   and was killed by the kernel for lack of memory in `cad_lancamentos` 2026-03-31 (52,654,607 rows;
   the user saw `Killed`), under DuckDB's default 12.3 GiB; the script now rewrites its report after
   each step, opens every connection with the environment limits and gives each table its own
-  connection. The user approved on 2026-09-24 `register` as the default in stages 4, 5 and 7 with
-  `rewrite` only in the stage 5 non-finite swap, the load sorted by `sort_key` and the stage 8
-  staging filled inside the transaction; whether `rewrite` leaves stages 4 and 7 awaits the user.
-  The next target runs are the migration of `cad_lancamentos` and the threads probe, now with a
-  half-the-CPUs round. Stage 7 absorbs the script over the stage 3, 4 and 6 modules.
+  connection. The user decided on 2026-09-24 the registration as the default in stages 4, 5 and
+  7, `rewrite` out of stages 4 and 7 with the `export_mode` flag (only the stage 5 non-finite swap
+  keeps `publish_partition`), the load sorted by `sort_key` and the stage 8 staging filled inside
+  the transaction; the script loads and measures by the registration only.
+  The battery of 2026-09-24 at 01:41 (`main` with #69, 16 vCPUs and 31,159 MB) finished the whole
+  migration, `cad_lancamentos` peaking at 16,430 MB under a 13.4 GiB limit with the sort faster
+  than none at 16 threads, and the threads probe with the cache off fixed `threads` at the
+  process's CPUs: materialization best there, worse at half and at double, the S3 read 1.4x
+  faster at triple; the audit's non-finite count and the `NaN` row are assertions
+  (`plan/POC.md`). The user approved on 2026-09-24 `REFRESH auto` on the DuckDB secret, which
+  stores the credential resolved at `CREATE SECRET` (in `storage.duckdb_setup` and the script),
+  and the stage 9 `archive` by copying each partition's files and registering them, in place of
+  `deep_copy` by `write_deltalake`, whose memory grows with the table outside `memory_limit` (the
+  code changes when stage 9 starts); the Redshift `COPY` of a DuckDB-written file waits for the
+  stage 8 tests. Stage 7 absorbs the script over the stage 3, 4 and 6 modules.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still
@@ -645,8 +662,8 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `nan_na_tabela_detalhe`; the stand-in `tests/emulator.py` has no locks, no bucket encryption, no
   Data API and none of Redshift's `NaN` scan behavior. `probes/duckdb_threads.py` ran at 23:21, but
   DuckDB's external file cache served its later repetitions from memory; it now turns the cache off,
-  measures half the CPUs too (user request of 2026-09-24) and waits for a new run, never at the
-  same time as a migration.
+  measures half the CPUs too (user request of 2026-09-24), and its run of 2026-09-24 at 02:02 on
+  16 vCPUs fixed the default at the process's CPUs.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing

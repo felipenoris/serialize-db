@@ -1937,7 +1937,7 @@ etapas 3 e 4.
 
 **Consequência**: [`PLAN-STAGE-1.md`](PLAN-STAGE-1.md) registra, na decisão do `Double` não finito,
 que o `CAST` da soma de controle fica; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) propõe o híbrido com
-64 MiB, à espera do usuário.
+64 MiB, que o usuário aprovou em 2026-09-23.
 
 ## O que os esboços do stream híbrido, do cancelamento e do loader mostraram
 
@@ -2700,11 +2700,13 @@ falsa ao `NaN` pelas duas regras, e o `json_valid` virou `true` sobre a coluna `
 `pg_last_unload_count()` e a recusa do `is_valid_json` sobre `SUPER`: o código anterior da suíte
 reprovou nele a contrabarra com a mensagem do ambiente alvo, e o texto anterior da auditoria teve a
 verificação de linhas recusada; a comparação do `NaN` pelo IEEE só o ambiente alvo mostra, e a
-suíte ganhou a leitura `nan_na_tabela`. As correções esperam duas execuções da suíte Redshift no
-ambiente alvo. A transação da publicação da [etapa 8](PLAN-STAGE-8.md) abre com o `UPDATE`
-condicionado (decisão do usuário de 2026-09-23), e o modo `register` da etapa 5 não cumpre a regra
-da issue #59 numa partição com `NaN`, porque o rodapé é o do Redshift: a proposta, à espera do
-usuário, é exportar essa partição por `rewrite` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+suíte ganhou a leitura `nan_na_tabela`. As correções passaram nas execuções seguintes: a
+contrabarra às 22:56 e às 23:01, a contagem dos não finitos em 2026-09-24. A transação da
+publicação da [etapa 8](PLAN-STAGE-8.md) abre com o `UPDATE`
+condicionado (decisão do usuário de 2026-09-23), e o registro dos arquivos do `UNLOAD` da etapa 5
+não cumpre a regra da issue #59 numa partição com `NaN`, porque o rodapé é o do Redshift: o usuário
+decidiu no mesmo dia exportar essa partição pela troca para `publish_partition`, com aviso no log
+([etapa 5](PLAN-STAGE-5.md)).
 
 ## O que a validação local do probe das threads mostrou
 
@@ -2747,7 +2749,16 @@ probe das threads sobre ela ([`readings/`](readings/README.md)).
   ficaram sem leitura nesta execução.
 - **A sessão `-m "not redshift"`** (22:53): 445 aprovados, entre eles as duas medições de memória
   de `test_duckdb.py` pelo `VmHWM`: a tabela inteira com 338 MB, 243 MB acima da base, o leitor
-  em lotes com 105 MB, 10 MB acima, e o arquivo de transbordo com 118 MB, 23 MB acima.
+  em lotes com 105 MB, 10 MB acima, e o arquivo de transbordo com 118 MB, 23 MB acima. O motor
+  DuckDB no ambiente alvo: o primeiro lote do `stream` em 0,014 s com a consulta rodando, 27 de 30
+  lotes no arquivo de transbordo com 1,9 MB de pico em memória, o `close` do stream interrompendo
+  a consulta em 0,017 s, com `OSError`, o `cleanup` interrompendo a ordenação em curso em 0,021 s,
+  e o pipeline de três estágios sobre
+  3.000.000 de linhas em 1,533 s por tabela, 2,069 s em série e 1,205 s encadeado. As 20 consultas
+  pontuais levaram 5,4 s por `delta_scan`, 2,7 s por `ATTACH ... PIN_SNAPSHOT`, 1,2 s por
+  `read_parquet` e 0,018 s na tabela materializada. A limpeza apagou 200 objetos sob a raiz nova,
+  e as das duas sessões Redshift 77 e 73: cada um vira uma versão não corrente e um marcador de
+  exclusão no bucket versionado, onde `BK-14` não achava nenhuma às 22:50.
 - **A suíte Redshift** (22:56 e 23:01): 30 aprovados em cada execução, as leituras iguais salvo
   ids e tempos.
   - O `stream` com literais deu as mesmas linhas pelos três caminhos nos seis casos, a
@@ -2775,12 +2786,20 @@ probe das threads sobre ela ([`readings/`](readings/README.md)).
     linha. Os dois `COPY` em paralelo levaram 4,2 s e 3,3 s, os dois `UNLOAD` 1,4 s, a Data API
     471 ms e 149 ms, e a carga de 10 linhas 0,83 s e 1,04 s pelo `COPY` contra 0,60 s e 0,61 s
     pelo `INSERT`.
-- **A migração** (23:05 a 23:19, `register`, com a ordem da `sort_key` e a medição): onze das
-  doze tabelas carregaram cada partição com contagens, somas e não finitos iguais entre a origem e
-  o Delta, e nenhuma coluna `Double` com valor não finito. `cad_lancamentos` não deixou relatório:
-  o probe das threads leu a tabela na versão 2, com as partições 2026-01-31 e 2026-02-28, e o
-  processo terminou na 2026-03-31, de 52.654.607 linhas, sem gravar o JSON; a causa não está nos
-  arquivos. As partições medidas das outras três tabelas:
+- **A migração** (23:05 a 23:19, um processo por tabela na ordem de `SUITE.md`, `register`, com
+  a ordem da `sort_key` e a medição): onze das doze tabelas carregaram cada partição com
+  contagens, somas e não finitos iguais entre a origem e o Delta, e nenhuma coluna `Double` com
+  valor não finito. `cad_lancamentos` rodou entre `cad_contratos`, cujo relatório saiu às 23:06,
+  e `cad_operacoes`, que começou às 23:14:58, sozinho na máquina pela sequência de `SUITE.md`, e
+  não deixou relatório: o
+  probe das threads leu a tabela na versão 2, com as partições 2026-01-31 e 2026-02-28, e o
+  processo terminou na 2026-03-31, de 52.654.607 linhas, sem gravar o JSON, morto pelo kernel por
+  falta de memória (seção "O que os limites do DuckDB lidos do ambiente mostraram"). A carga no
+  processo principal, numa conexão aberta a tabela inteira: `rel_contrato_operacao` levou 2,2 s,
+  13,3 s e 11,3 s nas três partições, com o pico do processo em 508 MB, 2.459 MB e 2.712 MB, acima
+  do anterior também na terceira, menor que a segunda; `cad_operacoes` de 4,3 s a 5,1 s com o pico
+  até 1.801 MB; `cad_contratos` de 3,2 s a 3,6 s até 1.142 MB; as tabelas sem partição de 0,4 s a
+  0,6 s, a cerca de 270 MB. As partições medidas das outras três tabelas:
 
   | Tabela e partição | Linhas | `register` ordenada | `rewrite` ordenada | `register` sem ordem | `rewrite` sem ordem |
   | --- | --- | --- | --- | --- | --- |
@@ -2823,9 +2842,9 @@ corrida como `ExecutionConflict`. A contagem dos não finitos da auditoria passa
 nulos menos a dos finitos, sem negar `is_finite` ([etapa 4](PLAN-STAGE-4.md)), e a suíte ganha a
 leitura `nan_na_tabela_detalhe`. O `redshift.py` lê a contagem sem linha como leitura. O probe das
 threads desliga o cache de arquivos externos em cada configuração, e o script de migração regrava o
-relatório depois da medição de cada tabela e de cada partição gravada. A medição de
-`cad_lancamentos` 2026-03-31 no ambiente alvo, que decide o padrão de `export_mode` e a ordem da
-carga ([etapa 7](PLAN-STAGE-7.md)), e as `threads` pedem uma nova execução
+relatório depois da medição de cada tabela e de cada partição gravada. A migração de
+`cad_lancamentos` no ambiente alvo, com os limites lidos do ambiente e a medição com e sem a ordem
+([etapa 7](PLAN-STAGE-7.md)), e as `threads` pedem uma nova execução
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
 ## O que os limites do DuckDB lidos do ambiente mostraram
@@ -2872,5 +2891,135 @@ DuckDB (instrução do usuário de 2026-09-24, que troca a decisão de 2026-09-2
 tabela do script tem a sua conexão, fechada no fim, e o relatório leva os limites de cada carga e
 de cada variante. O probe das threads mede também a metade das CPUs. As revisões estão em
 [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), [`PLAN.md`](PLAN.md) e
-[`duckdb.md`](duckdb.md); a próxima execução de `cad_lancamentos` no ambiente alvo confirma a
-metade ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+[`duckdb.md`](duckdb.md); a execução de `cad_lancamentos` de 2026-09-24 confirmou a metade, com o
+pico da carga 20% acima do limite (seção "O que a bateria de 2026-09-24 às 01:41 mostrou no
+ambiente alvo").
+
+## O que o secret do DuckDB mostrou
+
+Em 2026-09-24, na releitura da bateria de 2026-09-23: `space.py` e `RS-18` leram às 22:50 a
+credencial de quem chama expirando 46 minutos depois, e a carga de uma tabela do script de migração
+vive numa conexão só, do fim da medição ao relatório da carga. Uma sonda no contêiner Linux
+x86_64 (DuckDB 1.5.5, `httpfs` e `aws` de `.duckdb/`, uma chave de mentira nas variáveis `AWS_*`):
+
+- **O secret `credential_chain` guarda a credencial resolvida no `CREATE SECRET`.**
+  `duckdb_secrets()` mostra `key_id`, `secret` e `session_token` dentro do secret; nada no secret
+  criado por `storage.duckdb_setup` e pelo script pede a renovação quando ela expira.
+- **`REFRESH auto` é aceito.** `CREATE SECRET (TYPE s3, PROVIDER credential_chain, REGION ...,
+  REFRESH auto)` passou, com e sem `CHAIN 'env'`, e o secret ganhou
+  `refresh_info={'refresh': auto, 'region': ...}`. A documentação da extensão `aws` diz que alguns
+  endpoints exigem a renovação periódica da credencial, que `REFRESH auto` a pede, e que
+  `CHAIN 'sts'` e `'web_identity'` a ligam sozinhos, por serem credenciais curtas; quando a
+  renovação acontece, a página não diz, e uma conexão atravessando a expiração não foi medida.
+
+**Consequência**: os dois secrets levam `REFRESH auto` (decisão do usuário de 2026-09-24,
+[etapa 3](PLAN-STAGE-3.md)); a renovação numa conexão que atravessa a rotação da credencial do
+contêiner só uma execução longa no alvo mostra ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que o arquivo do `COPY` do DuckDB mostrou
+
+Em 2026-09-24, no contêiner Linux x86_64 (DuckDB 1.5.5, deltalake 1.6.4, pyarrow 25.0.1), duas
+sondas sobre o arquivo do registro, o que a publicação da [etapa 8](PLAN-STAGE-8.md) carrega no
+Redshift desde a decisão de 2026-09-24:
+
+- **Os tipos físicos.** Um `COPY ... (FORMAT parquet, RETURN_STATS)` de uma coluna de cada tipo do
+  contrato gravou formato 1.0, SNAPPY e codificação `PLAIN` em toda coluna: `BIGINT` em `INT64`,
+  `DECIMAL(18, 2)` em `INT64` e `DECIMAL(38, 6)` em `FIXED_LEN_BYTE_ARRAY`, `DOUBLE` em `DOUBLE`,
+  `DATE` em `INT32`, `TIMESTAMP` em `INT64` de microssegundos, `VARCHAR` em `BYTE_ARRAY` com o tipo
+  lógico `String`, `BOOLEAN` em `BOOLEAN` e `JSON` em `BYTE_ARRAY` com o tipo lógico `JSON`, que o
+  pyarrow lê como `extension<arrow.json>`.
+- **O campo JSON pelo registro.** Numa tabela com uma coluna `sa.JSON`, `string` no esquema Delta,
+  `export_partition` do motor DuckDB gravou a coluna com o tipo lógico `JSON` (`CAST` para o `JSON`
+  do DuckDB), `register_files` aceitou o arquivo, porque confere o tipo físico, e os dois leitores
+  leram o texto de cada documento: `delta_scan` como `VARCHAR` e o delta-rs como `string`.
+
+**Consequência**: o `DECIMAL(18, 2)` e o `TIMESTAMP` do registro têm os tipos físicos que o
+`COPY ... MANIFEST` do Redshift carregou de arquivos do delta-rs em 2026-09-21, e o `COPY` sobre um
+arquivo do DuckDB, com a coluna JSON com o tipo lógico numa staging `VARCHAR(65535)`, espera os
+testes `redshift` da etapa 8 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O item do arquivo do
+`UNLOAD` com coluna `SUPER` numa tabela Delta fica só com o registro do arquivo do `UNLOAD`: um
+arquivo com o mesmo tipo lógico, gravado pelo DuckDB, os dois leitores leram como texto.
+
+## O que a bateria de 2026-09-24 às 01:41 mostrou no ambiente alvo
+
+Em 2026-09-24, entre 01:41 e 02:19 UTC, o usuário rodou de novo os comandos de `SUITE.md` no
+ambiente alvo, a partir da `main` com o #69, numa máquina de 16 vCPUs, duas por núcleo físico, e
+31.159 MB (Python 3.13.15, DuckDB 1.5.5 com o padrão de 16 threads e `memory_limit` de 24,3 GiB,
+deltalake 1.6.4, pyarrow 25.0.1), nas mesmas raízes sob a pasta pessoal; `environment_limits` deu
+16 threads e de 13,1 GiB a 13,6 GiB, a metade dos 27 GB a 28 GB disponíveis a cada abertura
+([`readings/`](readings/README.md)).
+
+- **Os probes.** `space.py`, `diagnose_aws.py` e `catalog.py` repetiram as leituras, com a máquina
+  nova. `redshift.py` leu a seção da sessão inteira: `sys_load_error_detail` respondeu 25 erros de
+  carga em 30 dias em 1,5 s (`RS-12`), nenhum esquema externo (`RS-13`), `svv_all_tables` com duas
+  tabelas no esquema, nenhuma com o prefixo da biblioteca (`RS-8`), `svv_table_info` negada depois
+  do `USE` (42501), `has_schema_privilege` falso para `USAGE` e `CREATE`, `RS-19` pelo `USE`, e a
+  credencial de quem chama expirando em 49 minutos (`RS-18`); nenhuma chamada falhou. `bucket.py`
+  achou sob a raiz nova 366 versões não correntes (16.345.479 bytes) e 358 marcadores de exclusão,
+  o rastro das três sessões de 2026-09-23 (`BK-14`).
+- **A sessão `-m "not redshift"`** (01:43): 454 aprovados. As medições de memória repetiram a
+  leitura (a tabela inteira 244 MB acima da base, o leitor em lotes 11 MB, o arquivo de transbordo
+  24 MB). O cache de arquivos externos, ligado por padrão, guardou 5 entradas e 3.458.366 bytes
+  depois da primeira leitura e as mesmas depois da segunda. Com 16 threads, quatro sessões juntas
+  levaram 0,094 s contra 0,025 s de uma (3,77x), e com `threads = 1` as quatro levaram o mesmo que
+  uma (0,201 s contra 0,197 s), porque a thread que chama cada sessão executa a consulta dela. O
+  pipeline de três estágios sobre 3.000.000 de linhas levou 1,276 s por tabela, 1,710 s em série e
+  0,949 s encadeado; a leitura antecipada do Arrow puxou 19 lotes antes da falha do `INSERT`, e
+  25 meio segundo depois, contra 7 e 12 com 4 vCPUs. As 20 consultas pontuais levaram 4,9 s por
+  `delta_scan`, 2,5 s por `ATTACH ... PIN_SNAPSHOT`, 1,1 s por `read_parquet` e 0,014 s na tabela
+  materializada; a limpeza apagou 200 objetos.
+- **A suíte Redshift** (01:46 e 01:49): 30 aprovados em cada execução, as leituras iguais salvo
+  ids e tempos. `naofinito_valor` contou 2 dos 2 pela contagem dos não nulos menos os finitos, e
+  cada medida bateu com o esperado; na linha do `NaN`, `valor > '-Infinity'::float8`,
+  `valor < 'Infinity'::float8`, a negação da primeira e o `is null` dela deram falso, e o texto do
+  valor `NaN`: na varredura o Redshift compara o `NaN` como o IEEE, falso em toda comparação, e a
+  negação também falsa casa com a negação reescrita como `<=`, sem sonda que a confirme. As
+  limpezas apagaram 74 e 75 objetos.
+- **A migração** (01:53 a 02:02, um processo por tabela, `register` ordenado com a medição das
+  quatro variantes da época): as doze tabelas carregaram cada partição com contagens, somas e não
+  finitos iguais entre a origem e o Delta, e nenhuma coluna `Double` com valor não finito.
+  `cad_lancamentos` (01:55 a 01:59) entrou com `memory_limit` de 13,4 GiB e 16 threads: 2026-01-31
+  (33.239.719 linhas) em 6,4 s, 2026-02-28 (23.789.279) em 5,4 s, 2026-03-31 (52.654.607) em 10,1 s
+  e 2026-06-30 (32.218.190) em 6,4 s, com o pico do processo em 9.678 MB depois das duas primeiras
+  e 16.430 MB depois da terceira, 20% acima do limite e 53% da memória da máquina. As partições
+  medidas de `cad_lancamentos`, cada variante num processo novo com o limite lido na abertura:
+
+  | Partição | Linhas | `register` ordenada | `rewrite` ordenada | `register` sem ordem | `rewrite` sem ordem |
+  | --- | --- | --- | --- | --- | --- |
+  | 2026-01-31 | 33.239.719 | 7,0 s, 10.190 MB, 551,1 MB | 15,0 s, 11.430 MB, 568,7 MB em 6 arquivos | 8,8 s, 8.650 MB, 551,3 MB | 13,9 s, 4.981 MB, 568,9 MB em 6 arquivos |
+  | 2026-02-28 | 23.789.279 | 5,4 s, 7.413 MB, 392,9 MB | 11,1 s, 8.873 MB, 405,9 MB em 5 arquivos | 6,7 s, 6.539 MB, 393,0 MB | 10,5 s, 4.322 MB, 406,1 MB em 5 arquivos |
+  | 2026-03-31 | 52.654.607 | 10,6 s, 15.126 MB, 903,7 MB | 22,4 s, 16.367 MB, 935,3 MB em 10 arquivos | 12,5 s, 7.540 MB, 905,7 MB | 20,2 s, 6.331 MB, 936,6 MB em 10 arquivos |
+  | 2026-06-30 | 32.218.190 | 6,6 s, 9.782 MB, 542,2 MB | 14,5 s, 11.048 MB, 561,2 MB em 6 arquivos | 8,9 s, 8.214 MB, 545,2 MB | 13,5 s, 5.258 MB, 564,1 MB em 6 arquivos |
+
+  Cada célula dá o tempo, o pico do processo filho e os bytes gravados, sobre uma base de 226 MB a
+  227 MB. Com 16 threads, a ordem pela `sort_key` foi mais rápida que a sua falta nas quatro
+  partições de `cad_lancamentos` (de 0,79 a 0,85 do tempo), com arquivos do mesmo tamanho, e mais
+  lenta nas outras três tabelas particionadas (de 1,1 a 1,4 vez, com arquivos de 74% a 92%); a
+  causa não foi medida. O `rewrite` levou de 1,4 a 2,1 vezes o tempo do `register`, com o pico
+  maior ordenado e menor sem ordem. Os picos com 16 threads passaram dos de 4 vCPUs:
+  `rel_contrato_operacao` 2026-03-31 em 3.121 MB contra 2.442 MB no `register` ordenado, e a carga
+  da tabela em 3.486 MB contra 2.712 MB, em 4,7 s contra 13,3 s; `cad_contratos` e `cad_operacoes`
+  carregaram em 2,1 s a 2,9 s por partição.
+- **O probe das threads** (02:02 a 02:19), com o cache de arquivos externos desligado, na partição
+  2026-06-30 (`cad_lancamentos` com 32.218.190 linhas e 542 MB num arquivo, as quatro tabelas com
+  51.238.647 linhas), 8, 16, 32, 48, 64 e 80 threads, a razão sobre as 16 do padrão do motor. A
+  `materializada` levou 7,847 s com 8 threads, 7,008 s com 16, 11,133 s com 32, 14,214 s com 48,
+  17,066 s com 64 e 15,794 s com 80, com o pico do processo de 1.880 MB a 6.427 MB; a `agregada`,
+  a leitura do S3, 2,033 s com 8, 1,194 s com 16, 0,877 s com 32, 0,843 s com 48, 0,874 s com 64
+  e 0,892 s com 80. As quatro tabelas levaram 17,516 s em série e 9,292 s em sessões a mais com 16
+  threads (1,89x), e mais threads pioraram as duas (27,2 s a 35,7 s em série; 9,9 s a 12,6 s em
+  sessões a mais).
+
+**Consequência**: `DuckDBConfig.threads` fica nas CPUs que o processo pode usar, o padrão de
+`environment_limits`: a ingestão materializa, e a metade das CPUs e o dobro delas perdem nela; a
+leitura agregada do S3 ganha 1,4 vez com o triplo, para quem a pedir na configuração
+([etapa 4](PLAN-STAGE-4.md)). A metade da memória disponível no `memory_limit` fica: o `COPY`
+ordenado da maior partição passou do limite em 11% no processo filho e a carga em 20%, dentro da
+máquina. A carga ordenada da maior partição de `cad_lancamentos` pede uma máquina de 32 GB, e a
+sem ordem cabe em 16 GB ([etapa 7](PLAN-STAGE-7.md), [`PLAN.md`](PLAN.md)). A raiz Delta de
+2026-09-24 tem as doze tabelas pela regra da issue #59, sem valor não finito, e substitui a
+primeira migração. A contagem dos não finitos e a linha do `NaN` viram asserções de
+`test_redshift.py`, a linha só no ambiente alvo, porque o DuckDB do substituto lê `NaN > -inf`
+como verdadeiro. Os itens da migração de `cad_lancamentos`, da metade da memória, das `threads`,
+do `Double` não finito e do texto da auditoria saem de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md);
+os relatórios estão em [`readings/`](readings/README.md), e os da migração ficam fora do git.

@@ -280,3 +280,12 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   sys_load_error_detail where start_time > ...` (12.8 s) and stopped the session section on
   `IndexError` before `RS-5`, `RS-8`, `RS-12`, `RS-13`, `RS-16`, `RS-17` and `RS-19`.
   `plan/POC.md`, `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-4.md`
+
+- The suite runs of 2026-09-24 at 01:46 and 01:49 UTC (30 passed each): `naofinito_valor` counted
+  2 of 2 by `count(x) - count(CASE WHEN finite ...)`, every measure matched the expected, and on
+  the `NaN` row `valor > '-Infinity'::float8`, `valor < 'Infinity'::float8`, `NOT (valor >
+  '-Infinity'::float8)` and `(valor > '-Infinity'::float8) IS NULL` were all false, the text
+  `NaN`; both are assertions now, the row only in the target, because the stand-in's DuckDB reads
+  `NaN > -inf` as true. `redshift.py` at 01:41 read the whole session section: 25 load errors in
+  30 days in `sys_load_error_detail` (1.5 s), no external schema, two tables in the schema, none
+  with the library prefix. `plan/POC.md`, `plan/PLAN-STAGE-4.md`

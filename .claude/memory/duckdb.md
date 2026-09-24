@@ -164,3 +164,14 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   file cache held 1,042 entries and 271,906 bytes after reading that local file. `memory_limit`
   takes `'6771MiB'` and `'7516192768B'`, shown as `6.6 GiB` and `7.0 GiB`; `'768MiB'` shows as
   `768.0 MiB`. `plan/duckdb.md`, `plan/POC.md`, `src/serialize_db/resources.py`
+
+- Threads against the machine (target, 2026-09-24, 16 vCPUs of 8 physical cores, external file
+  cache off, partition 2026-06-30 of `cad_lancamentos`, 542 MB, 32,218,190 rows): materializing
+  into the file database took 7.8 s with 8 threads, 7.0 s with 16, 11.1 s with 32 and 14.2 s to
+  17.1 s with 48 to 80, the process peak from 1,880 MB to 6,427 MB; the aggregated S3 read 2.03 s
+  with 8, 1.19 s with 16, 0.88 s with 32 and 0.84 s to 0.89 s with 48 to 80; the four tables 17.5 s
+  in series and 9.3 s in extra sessions with 16 threads (1.89x), worse with more. `threads` stays
+  at the process's CPUs. A sorted `COPY` of the `cad_lancamentos` partitions with 16 threads was
+  faster than the unsorted one (10.6 s against 12.5 s for 52,654,607 rows) at the cost of memory
+  (15,126 MB against 7,540 MB), with files of the same size, unlike the other tables; with 4 vCPUs
+  the sorted synthetic partition took 3.6 times the unsorted. `plan/POC.md`, `plan/PLAN-STAGE-4.md`

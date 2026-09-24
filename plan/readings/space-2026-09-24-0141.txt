@@ -1,6 +1,6 @@
 ================================================================================
 space: o espaço do SageMaker Unified Studio visto de dentro
-2026-09-23 19:18:13 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
+2026-09-24 01:41:54 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
 interpretador /home/<usuário>/work/projects/serialize-db/.venv/bin/python
 ================================================================================
 
@@ -28,7 +28,7 @@ $ boto3.Session().get_credentials()
 método container-role
 (0.0 s)
 
-CREDENTIAL_EXPIRY=2026-09-23 20:14:17+00:00 (daqui a 56 min)
+CREDENTIAL_EXPIRY=2026-09-24 02:30:39+00:00 (daqui a 49 min)
 REGION=sa-east-1
 $ tcp 169.254.170.2:80 (endpoint de credenciais do contêiner)
 conectou em 0.00 s
@@ -53,7 +53,7 @@ $ sts.get_caller_identity()
 ################################################################################
 
 $ sagemaker_studio.Project() (neste interpretador ou no do sistema)
-!! FALHOU (1.7 s): RuntimeError: /home/<usuário>/work/projects/serialize-db/.venv/bin/python: ModuleNotFoundError: No module named 'sagemaker_studio'; /opt/conda/bin/python: botocore.exceptions.ProfileNotFound: The config profile (DomainExecutionRoleCreds) could not be found
+!! FALHOU (1.0 s): RuntimeError: /home/<usuário>/work/projects/serialize-db/.venv/bin/python: ModuleNotFoundError: No module named 'sagemaker_studio'; /opt/conda/bin/python: botocore.exceptions.ProfileNotFound: The config profile (DomainExecutionRoleCreds) could not be found
 
 
 
@@ -70,7 +70,7 @@ NO_PROXY     (ausente)
 no_proxy     (ausente)
 
 nome                                         endereços                                                            tipo
-s3.sa-east-1.amazonaws.com                   3.5.232.139, 3.5.232.228, 3.5.233.12, 3.5.233.152 ...                público: gateway endpoint ou internet
+s3.sa-east-1.amazonaws.com                   16.12.1.8, 3.5.232.233, 3.5.233.122, 3.5.233.80 ...                  público: gateway endpoint ou internet
 sts.sa-east-1.amazonaws.com                  10.x.x.x, 10.x.x.x, 10.x.x.x                              privado: endpoint VPC de interface com DNS privado
 redshift.sa-east-1.amazonaws.com             10.x.x.x, 10.x.x.x, 10.x.x.x                              privado: endpoint VPC de interface com DNS privado
 redshift-serverless.sa-east-1.amazonaws.com  10.x.x.x, 10.x.x.x, 10.x.x.x                               privado: endpoint VPC de interface com DNS privado
@@ -81,7 +81,7 @@ kms.sa-east-1.amazonaws.com                  15.229.198.143, 15.229.198.147, 15.
 secretsmanager.sa-east-1.amazonaws.com       10.x.x.x, 10.x.x.x, 10.x.x.x                              privado: endpoint VPC de interface com DNS privado
 sagemaker.sa-east-1.amazonaws.com            18.228.108.141, 18.229.57.63, 52.67.241.70                           público: só pela internet ou pelo proxy
 datazone.sa-east-1.amazonaws.com             10.x.x.x, 10.x.x.x, 10.x.x.x                               privado: endpoint VPC de interface com DNS privado
-s3.amazonaws.com                             16.15.163.218, 16.15.183.31, 16.15.191.102, 16.15.199.237 ...        público: gateway endpoint ou internet
+s3.amazonaws.com                             16.15.162.251, 16.15.213.220, 16.15.238.109, 16.15.245.51 ...        público: gateway endpoint ou internet
 pypi.org                                     151.101.0.223, 151.101.128.223, 151.101.192.223, 151.101.64.223 ...  público: só pela internet ou pelo proxy
 github.com                                   4.228.31.150                                                         público: só pela internet ou pelo proxy
 
@@ -90,7 +90,7 @@ conectou em 0.00 s
 (0.0 s)
 
 $ HEAD https://pypi.org/simple/ (pelo proxy do ambiente, se houver)
-sem resposta: URLError: <urlopen error [Errno 101] Network is unreachable>
+sem resposta: URLError: <urlopen error [Errno 99] Cannot assign requested address>
 (20.0 s)
 
 
@@ -101,8 +101,8 @@ sem resposta: URLError: <urlopen error [Errno 101] Network is unreachable>
 
 item                                       valor
 plataforma                                 Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39
-cpus                                       4
-memória                                    15.4 GiB
+cpus                                       16
+memória                                    30.4 GiB
 disco livre em repositório                 29.7 GiB de 37.0 GiB (/home/<usuário>/work/projects/serialize-db)
 disco livre em HOME                        29.7 GiB de 37.0 GiB (/home/<usuário>)
 disco livre em /tmp                        29.7 GiB de 37.0 GiB (/tmp)
@@ -155,8 +155,8 @@ DUCKDB_HTTP_PROXY=sem proxy no ambiente
 item                          valor
 versão                        1.5.5
 plataforma                    linux_amd64
-threads                       4
-memory_limit                  12.3 GiB
+threads                       16
+memory_limit                  24.3 GiB
 temp_directory                .tmp
 extension_directory           /home/<usuário>/work/projects/serialize-db/.duckdb
 autoinstall_known_extensions  False
@@ -194,7 +194,7 @@ pass       SP-2   região do boto3                                            sa
 pass       SP-3   identidade pelo STS                                        arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker
 pass       SP-6   S3 regional por TCP                                        s3.sa-east-1.amazonaws.com
 pass       SP-8   Python 3.13 neste interpretador                            3.13.15
-pass       SP-9   dependências e grupo dev do pyproject neste interpretador  boto3 1.43.98, deltalake 1.6.4, duckdb 1.5.5, duckdb_engine 0.17.0, pyarrow 25.0.1, sqlalchemy 2.0.54, sqlalchemy_redshift 1.0.0, flask 3.1.3, flask_cors 6.0.5, moto 5.2.3, pandas 3.0.6, pytest 9.1.1, redshift_connector 2.1.16, sqlglot 30.18.0
+pass       SP-9   dependências e grupo dev do pyproject neste interpretador  boto3 1.43.98, deltalake 1.6.4, duckdb 1.5.5, duckdb_engine 0.17.0, pyarrow 25.0.1, sqlalchemy 2.0.54, sqlalchemy_redshift 1.0.0, pandas 3.0.6, pytest 9.1.1, redshift_connector 2.1.16, sqlglot 30.18.0
 pass       SP-10  extensões do DuckDB                                        httpfs, delta, aws, parquet, json de /home/<usuário>/work/projects/serialize-db/.duckdb
 
 

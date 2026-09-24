@@ -1,10 +1,10 @@
 ================================================================================
-bucket: o bucket bndes-aco-models-<conta> sob dzd-<domínio>/<projeto>/shared/serialize-db-tests
-2026-09-23 19:18:36 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
+bucket: o bucket bndes-aco-models-<conta> sob dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests
+2026-09-24 01:42:15 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
 interpretador /home/<usuário>/work/projects/serialize-db/.venv/bin/python
 ================================================================================
 BUCKET=bndes-aco-models-<conta>
-PREFIX=dzd-<domínio>/<projeto>/shared/serialize-db-tests
+PREFIX=dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests
 REGION=sa-east-1
 
 
@@ -18,10 +18,10 @@ $ s3.head_bucket(Bucket='bndes-aco-models-<conta>')
   "x-amz-access-point-alias": "false",
   "x-amz-bucket-arn": "arn:aws:s3:::bndes-aco-models-<conta>"
 }
-(0.1 s)
+(0.0 s)
 
 BUCKET_REGION=sa-east-1
-DNS bndes-aco-models-<conta>.s3.sa-east-1.amazonaws.com: 3.5.232.194, 3.5.232.202, 3.5.232.234, 3.5.232.26 ... (público: gateway endpoint ou internet)
+DNS bndes-aco-models-<conta>.s3.sa-east-1.amazonaws.com: 3.5.232.222, 3.5.232.70, 3.5.233.106, 3.5.233.125 ... (público: gateway endpoint ou internet)
 
 $ s3.get_bucket_versioning()
 !! FALHOU (0.0 s): o serviço respondeu com erro: AccessDenied: An error occurred (AccessDenied) when calling the GetBucketVersioning operation: User: arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker is not authorized to perform: s3:GetBucketVersioning on resource: "arn:aws:s3:::bndes-aco-models-<conta>" becau
@@ -79,21 +79,37 @@ $ s3.get_bucket_lifecycle_configuration()
 # 3. Inventário sob a raiz
 ################################################################################
 
-LISTING_PREFIX=dzd-<domínio>/<projeto>/shared/serialize-db-tests/
-$ s3.list_objects_v2(Bucket='bndes-aco-models-<conta>', Prefix='dzd-<domínio>/<projeto>/shared/serialize-db-tests/')
-0 objetos
+LISTING_PREFIX=dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests/
+$ s3.list_objects_v2(Bucket='bndes-aco-models-<conta>', Prefix='dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests/')
+1 objetos
 (0.0 s)
 
-pasta  objetos  bytes  GiB
-total  0        0      0.000
+pasta                objetos  bytes  GiB
+(marcador de pasta)  1        0      0.000
+total                1        0      0.000
 
 classe de armazenamento  objetos
+STANDARD                 1
+
+objeto mais recente: dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests/ em 2026-09-23 22:45:01+00:00
 
 (nenhuma pasta com _delta_log sob a raiz)
 
+$ s3.head_object(Key='dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests/')
+{
+  "ServerSideEncryption": "aws:kms",
+  "SSEKMSKeyId": "arn:aws:kms:sa-east-1:<conta>:key/<chave>",
+  "BucketKeyEnabled": true,
+  "StorageClass": null,
+  "ContentLength": 0,
+  "LastModified": "2026-09-23 22:45:01+00:00",
+  "VersionId": "icQtDEBRu1N2k1Wy1pp5IVwDhGFEP0Fw"
+}
+(0.0 s)
+
 $ s3.list_object_versions(Prefix=raiz)
-0 versões correntes, 219 não correntes, 219 marcadores de exclusão
-(0.1 s)
+1 versões correntes, 366 não correntes, 358 marcadores de exclusão
+(0.2 s)
 
 
 
@@ -110,7 +126,7 @@ $ sts.get_caller_identity()
 (0.1 s)
 
 PRINCIPAL=arn:aws:iam::<conta>:role/datazone_usr_role_<projeto>_<ambiente>
-alcance do IAM: iam.amazonaws.com (44.216.202.179):443 não conectou: timed out
+alcance do IAM: iam.amazonaws.com (44.216.198.20):443 não conectou: timed out
 
 
 
@@ -144,9 +160,10 @@ note       BK-12  Object Lock                               não lido: negado (A
 note       BK-3   expiração sob a raiz                      regras não lidas: negado (AccessDenied); confirme com quem administra o bucket
 note       BK-6   tabelas Delta sob a raiz                  0
 note       BK-13  sessões da suíte S3 sob a raiz            nenhuma
-note       BK-14  versões não correntes sob a raiz          219 (1388530 bytes) e 219 marcadores de exclusão, invisíveis à listagem comum e cobrados até uma regra NoncurrentVersionExpiration os remover
-note       BK-4   versionamento                             não lido: pela API, negado (AccessDenied), e nenhuma amostra com VersionId
-note       BK-8   permissões sob a raiz                     iam:SimulatePrincipalPolicy sem chamada: o IAM não respondeu ao teste TCP; nesta execução passaram: ListBucket sob a raiz; PutObject e DeleteObject só a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) prova
+note       BK-7   criptografia de uma amostra               aws:kms arn:aws:kms:sa-east-1:<conta>:key/<chave>; bucket key True; versionado True
+note       BK-14  versões não correntes sob a raiz          366 (16345479 bytes) e 358 marcadores de exclusão, invisíveis à listagem comum e cobrados até uma regra NoncurrentVersionExpiration os remover
+note       BK-4   versionamento                             pela API, negado (AccessDenied); a amostra tem VersionId: ativo; cada DeleteObject do vacuum deixa uma versão não corrente, que só uma regra NoncurrentVersionExpiration remove (BK-14 conta o acumulado); confirme a regra com quem administra o bucket
+note       BK-8   permissões sob a raiz                     iam:SimulatePrincipalPolicy sem chamada: o IAM não respondeu ao teste TCP; nesta execução passaram: ListBucket sob a raiz, HeadObject de uma amostra; PutObject e DeleteObject só a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) prova
 note       BK-9   chave KMS                                 describe_key sem chamada: o KMS não respondeu ao teste TCP (kms.sa-east-1.amazonaws.com (15.229.198.143):443 não conectou: timed out); a escrita da suíte S3 diz se a chave serve
 note       BK-10  política do bucket                        não lida: negado (AccessDenied); um Deny condicionado a cabeçalho de criptografia ou a TLS valeria para o delta-rs e o DuckDB
 note       BK-11  uploads multipart incompletos sob a raiz  não lidos: negado (AccessDenied); as sobras de escritas interrompidas só uma regra AbortIncompleteMultipartUpload limpa

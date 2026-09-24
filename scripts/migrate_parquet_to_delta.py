@@ -15,14 +15,12 @@ modelo, as sem partição primeiro e as particionadas depois, na ordem do modelo
   quando o modelo a declara em ``partition_source``, é igual ao valor do caminho em toda linha,
   que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum texto passa do ``String(n)`` em bytes, e
   a mesma consulta acha as colunas ``Double`` com ``NaN`` ou infinito na partição; depois grava a
-  partição no modo pedido: ``register`` roda ``COPY ... TO`` na pasta da tabela com
-  ``RETURN_STATS`` e registra o arquivo no log por ``create_write_transaction``, com o
-  ``nullCount`` de toda coluna e o mínimo e o máximo das inteiras, de data, ``Double`` e texto;
-  ``rewrite`` passa o leitor da consulta por ``cast`` e ``write_deltalake``. Nos dois modos uma
-  coluna ``Double`` com valor não finito na partição fica sem mínimo e máximo no log, e no rodapé
-  do ``rewrite``: o DuckDB ordena o ``NaN`` acima de todo número e perde a linha quando poda por um
-  máximo sem ele (issue #59, ``plan/PLAN-STAGE-3.md``). As linhas saem na ordem da ``sort_key`` do
-  modelo, salvo ``--no-sort``;
+  partição: ``COPY ... TO`` na pasta da tabela com ``RETURN_STATS``, e o arquivo entra no log por
+  ``create_write_transaction``, com o ``nullCount`` de toda coluna e o mínimo e o máximo das
+  inteiras, de data, ``Double`` e texto. Uma coluna ``Double`` com valor não finito na partição
+  fica sem mínimo e máximo no log: o DuckDB ordena o ``NaN`` acima de todo número e perde a linha
+  quando poda por um máximo sem ele (issue #59, ``plan/PLAN-STAGE-3.md``). As linhas saem na ordem
+  da ``sort_key`` do modelo, salvo ``--no-sort``;
 - a retomada pula as partições já no log: a segunda execução não grava nada;
 - ``load_report`` compara contagem e somas por partição entre a origem e o Delta, as colunas
   ``Double`` e ``Numeric`` somadas como ``DECIMAL(38, 6)``, as ``Double`` só nos valores finitos e
@@ -35,27 +33,27 @@ no relatório. A auditoria de chaves estrangeiras é da etapa 7, não daqui.
 
 Cada partição carregada imprime as linhas, o tempo e o pico de memória do processo até ali. Antes
 da carga de cada tabela particionada, ``measure_table`` mede a gravação de cada partição pedida,
-esteja ela no log ou não, nas quatro variantes de ``VARIANTS`` (``register`` e ``rewrite``, com e
-sem a ordem da ``sort_key``): cada variante roda num processo novo, pelo ``spawn``, e grava numa
-tabela descartável sob ``<raiz>/_medicao_<tabela>/``, apagada logo depois; o pico de memória é o do
-próprio processo filho (``VmHWM`` no Linux), ao lado da base depois das importações e da conexão. A
-medição dá o custo de cada modo e da ordem da ``sort_key`` em cada partição, e o relatório leva
-também a máquina, as versões e as configurações do DuckDB (``describe_environment``). Cada conexão
-do DuckDB, a de cada tabela e a de cada variante, abre com os limites lidos do ambiente naquele
-momento (``serialize_db.engine.duckdb.environment_limits``): as CPUs que o processo pode usar e
-metade da memória que ele ainda pode usar. A carga de cada tabela abre a sua conexão depois da
-medição e a fecha no fim, porque o DuckDB só devolve a memória ao fechar: a medição da tabela
-seguinte e os limites da próxima conexão leem a máquina sem ela. A variante que falha, até pela
-falta de memória que mata o processo filho, entra no relatório com o erro; ``--no-measure`` desliga
-a medição. Com ``--report``, o JSON é regravado depois da medição de cada tabela e de cada partição
-gravada, com a tabela da vez em ``in_progress``: um processo morto no meio da carga deixa o que já
-mediu e gravou.
+esteja ela no log ou não, com e sem a ordem da ``sort_key`` (``SORT_VARIANTS``): cada variante roda
+num processo novo, pelo ``spawn``, e grava numa tabela descartável sob
+``<raiz>/_medicao_<tabela>/``, apagada logo depois; o pico de memória é o do próprio processo filho
+(``VmHWM`` no Linux), ao lado da base depois das importações e da conexão. A medição dá o custo da
+ordem em cada partição e o pico contra o ``memory_limit``, e o relatório leva também a máquina, as
+versões e as configurações do DuckDB (``describe_environment``). Cada conexão do DuckDB, a de cada
+tabela e a de cada variante, abre com os limites lidos do ambiente naquele momento
+(``serialize_db.engine.duckdb.environment_limits``): as CPUs que o processo pode usar e metade da
+memória que ele ainda pode usar. A carga de cada tabela abre a sua conexão depois da medição e a
+fecha no fim, porque o DuckDB só devolve a memória ao fechar: a medição da tabela seguinte e os
+limites da próxima conexão leem a máquina sem ela. A variante que falha, até pela falta de memória
+que mata o processo filho, entra no relatório com o erro; ``--no-measure`` desliga a medição. Com
+``--report``, o JSON é regravado depois da medição de cada tabela e de cada partição gravada, com a
+tabela da vez em ``in_progress``: um processo morto no meio da carga deixa o que já mediu e gravou.
 
 Origem e raiz aceitam pasta local ou ``s3://bucket/prefixo``: no S3 o DuckDB carrega ``httpfs``
 e ``aws`` da pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz
-do repositório) e cria um secret ``credential_chain`` com a região de ``AWS_REGION`` ou
-``AWS_DEFAULT_REGION``, e o delta-rs recebe a mesma região. O ambiente alvo não tem variável de
-proxy, e o script não faz a separação de ``HTTP_PROXY`` que os probes fazem.
+do repositório) e cria um secret ``credential_chain`` com ``REFRESH auto``, porque a credencial
+do contêiner expira em cerca de uma hora e o secret a guarda resolvida na criação, e com a região
+de ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``; o delta-rs recebe a mesma região. O ambiente alvo
+não tem variável de proxy, e o script não faz a separação de ``HTTP_PROXY`` que os probes fazem.
 
 Sobre a base fictícia de ``tests/source_db_projetado.py``, em pasta local:
 
@@ -100,7 +98,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import sqlalchemy as sa
-from deltalake import ColumnProperties, DeltaTable, WriterProperties, write_deltalake
+from deltalake import DeltaTable
 from deltalake.exceptions import DeltaError
 from deltalake.transaction import AddAction
 
@@ -160,7 +158,6 @@ class VariantMeasurement:
     ``error`` quando a variante falhou."""
 
     value: str | None
-    mode: str
     sort: bool
     rows: int | None = None
     seconds: float | None = None
@@ -196,7 +193,6 @@ class LoadReport:
 class Settings:
     """O que a linha de comando fixa para a execução inteira."""
 
-    mode: str
     sort: bool
     partitions: tuple[str, ...]
     storage_options: dict[str, str]
@@ -505,9 +501,9 @@ def register_partition(
     settings: Settings,
     nonfinite_columns: tuple[str, ...],
 ) -> int:
-    """Modo ``register``: o arquivo do ``COPY`` entra no log com as estatísticas, sem o mínimo e o
-    máximo de ``nonfinite_columns``, num commit ``overwrite`` da partição; devolve as linhas
-    gravadas. O rodapé do DuckDB já sai sem mínimo e máximo no grupo de linhas com ``NaN``."""
+    """O arquivo do ``COPY`` entra no log com as estatísticas, sem o mínimo e o máximo de
+    ``nonfinite_columns``, num commit ``overwrite`` da partição; devolve as linhas gravadas. O
+    rodapé do DuckDB já sai sem mínimo e máximo no grupo de linhas com ``NaN``."""
     options = schema.table_options(table)
     relative, written = copy_partition_file(con, destination, table, value, query, settings.sort)
     stats = {name.strip('"'): column for name, column in written["column_statistics"].items()}
@@ -529,55 +525,6 @@ def register_partition(
         partition_filters=partition_filters,
     )
     return written["count"]
-
-
-def rewrite_partition(
-    con: duckdb.DuckDBPyConnection,
-    destination: Location,
-    table: sa.Table,
-    value: str | None,
-    query: str,
-    settings: Settings,
-    nonfinite_columns: tuple[str, ...],
-) -> int:
-    """Modo ``rewrite``: o leitor da consulta passa por ``cast`` e ``write_deltalake`` substitui a
-    partição, sem estatística de ``nonfinite_columns`` no rodapé nem no log; devolve as linhas
-    gravadas."""
-    options = schema.table_options(table)
-    columns = [column.name for column in table.columns]
-    rows = con.execute(f"SELECT count(*) FROM ({query})").fetchone()[0]
-    select = ordered_select(query, columns, options.sort_key if settings.sort else ())
-    # Nenhum outro comando na conexão até o leitor ser consumido: o comando seguinte o esvazia.
-    reader = schema.cast(con.execute(select).to_arrow_reader(), table)
-    predicate = None
-    if options.partition_by:
-        predicate = f"{schema.quoted(options.partition_by)} = '{value}'"
-    write_deltalake(
-        destination.uri,
-        reader,
-        mode="overwrite",
-        predicate=predicate,
-        writer_properties=writer_properties(nonfinite_columns),
-        storage_options=settings.storage_options or None,
-    )
-    return rows
-
-
-def writer_properties(columns_without_min_max: Collection[str]) -> WriterProperties | None:
-    """As propriedades do escritor do delta-rs que desligam a estatística das colunas: o rodapé
-    sai sem mínimo e máximo delas, e o log também, porque o delta-rs o copia do rodapé; ``None``
-    mantém o padrão.
-
-    Exemplo:
-
-        writer_properties(["valor"])   # WriterProperties com statistics_enabled="NONE" em valor
-        writer_properties([])          # None
-    """
-    if not columns_without_min_max:
-        return None
-    no_statistics = ColumnProperties(statistics_enabled="NONE")
-    column_properties = {name: no_statistics for name in columns_without_min_max}
-    return WriterProperties(column_properties=column_properties)
 
 
 def peak_rss_mb() -> float:
@@ -603,17 +550,14 @@ def load_partition(
     source_folder: Location,
     settings: Settings,
 ) -> PartitionLoad:
-    """Confere a partição contra o contrato e a grava no modo pedido."""
+    """Confere a partição contra o contrato e a grava pelo ``COPY`` registrado no log."""
     started = time.perf_counter()
     query = partition_query(source_folder, table, value)
     check = check_partition(con, query, table, value)
     if check.problems:
         raise ContractError(f"{table.name} partição {value}: {'; '.join(check.problems)}")
     nonfinite = check.nonfinite_columns
-    if settings.mode == "register":
-        rows = register_partition(con, delta, destination, table, value, query, settings, nonfinite)
-    else:
-        rows = rewrite_partition(con, destination, table, value, query, settings, nonfinite)
+    rows = register_partition(con, delta, destination, table, value, query, settings, nonfinite)
     elapsed = time.perf_counter() - started
     return PartitionLoad(value, rows, elapsed, peak_rss_mb(), nonfinite)
 
@@ -667,8 +611,8 @@ def initial_load(
 
 # ---------------------------------------------------------------- a medição das variantes
 
-# As variantes que a medição grava de cada partição: os dois modos, com e sem a ordem da sort_key.
-VARIANTS = (("register", True), ("rewrite", True), ("register", False), ("rewrite", False))
+# As variantes que a medição grava de cada partição: com e sem a ordem da sort_key.
+SORT_VARIANTS = (True, False)
 
 # As falhas de uma variante que entram no relatório sem parar a execução: o processo filho morto
 # (a falta de memória, por exemplo), o erro do DuckDB, do delta-rs e do armazenamento.
@@ -684,9 +628,8 @@ def measure_variant(
     uses_s3: bool,
     region: str | None,
 ) -> VariantMeasurement:
-    """Grava a partição numa tabela descartável, no modo e na ordem de ``settings``, e mede o
-    processo; roda num processo novo, e a base é a memória dele depois das importações e da
-    conexão."""
+    """Grava a partição numa tabela descartável, na ordem de ``settings``, e mede o processo;
+    roda num processo novo, e a base é a memória dele depois das importações e da conexão."""
     con = connect_duckdb(uses_s3, region)
     base = peak_rss_mb()
     limits = duckdb_settings(con)
@@ -699,7 +642,6 @@ def measure_variant(
     actions = pa.table(written.get_add_actions(flatten=True))
     return VariantMeasurement(
         value=value,
-        mode=settings.mode,
         sort=settings.sort,
         rows=load.rows,
         seconds=round(load.seconds, 3),
@@ -722,7 +664,7 @@ def remove_folder(location: Location) -> None:
 def print_measurement(measurement: VariantMeasurement) -> None:
     """A linha de uma variante medida."""
     order = "ordenada" if measurement.sort else "sem ordem"
-    label = f"  medição {measurement.value} {measurement.mode} {order}"
+    label = f"  medição {measurement.value} {order}"
     if measurement.error:
         print(f"{label}: {measurement.error}")
         return
@@ -743,14 +685,15 @@ def measure_partition(
     uses_s3: bool,
     region: str | None,
 ) -> list[VariantMeasurement]:
-    """Mede a gravação da partição em cada variante de ``VARIANTS``, cada uma num processo novo e
-    numa tabela sob ``scratch`` apagada logo depois; a variante que falha entra com o erro."""
+    """Mede a gravação da partição em cada variante de ``SORT_VARIANTS``, cada uma num processo
+    novo e numa tabela sob ``scratch`` apagada logo depois; a variante que falha entra com o
+    erro."""
     context = multiprocessing.get_context("spawn")
     measurements = []
-    for mode, sort in VARIANTS:
-        variant = dataclasses.replace(settings, mode=mode, sort=sort)
+    for sort in SORT_VARIANTS:
+        variant = dataclasses.replace(settings, sort=sort)
         order = "ordenada" if sort else "sem_ordem"
-        destination = scratch.child(f"{value}_{mode}_{order}")
+        destination = scratch.child(f"{value}_{order}")
         try:
             # Um processo por variante: o pico de memória de cada uma é só dela.
             with ProcessPoolExecutor(max_workers=1, mp_context=context) as executor:
@@ -761,7 +704,7 @@ def measure_partition(
                 measurement = future.result()
         except MEASUREMENT_ERRORS as error:
             message = f"{type(error).__name__}: {error}"
-            measurement = VariantMeasurement(value, mode, sort, error=message)
+            measurement = VariantMeasurement(value, sort, error=message)
         finally:
             remove_folder(destination)
         print_measurement(measurement)
@@ -1013,7 +956,7 @@ def extension_directory() -> str | None:
 def connect_duckdb(uses_s3: bool, region: str | None) -> duckdb.DuckDBPyConnection:
     """A conexão com as extensões da pasta configurada, sem instalação automática, e com o
     ``threads`` e o ``memory_limit`` lidos do ambiente na abertura; com o S3, ``httpfs``, ``aws``
-    e o secret ``credential_chain`` da região."""
+    e o secret ``credential_chain`` da região, com ``REFRESH auto`` para a credencial que expira."""
     config: dict[str, object] = {
         "autoinstall_known_extensions": False,
         "autoload_known_extensions": False,
@@ -1028,7 +971,8 @@ def connect_duckdb(uses_s3: bool, region: str | None) -> duckdb.DuckDBPyConnecti
         con.execute("LOAD httpfs")
         con.execute("LOAD aws")
         con.execute(
-            f"CREATE SECRET migracao (TYPE s3, PROVIDER credential_chain, REGION '{region}')"
+            "CREATE SECRET migracao "
+            f"(TYPE s3, PROVIDER credential_chain, REFRESH auto, REGION '{region}')"
         )
     return con
 
@@ -1070,7 +1014,6 @@ def describe_environment(
             "root": arguments.root,
             "tables": arguments.tables,
             "partitions": arguments.partitions,
-            "mode": arguments.mode,
             "sort": arguments.sort,
             "measure": arguments.measure,
         },
@@ -1107,12 +1050,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="só estas partições; as tabelas sem partição ficam de fora",
     )
     parser.add_argument(
-        "--mode",
-        choices=("register", "rewrite"),
-        default="register",
-        help="register: o COPY do DuckDB registrado no log; rewrite: write_deltalake",
-    )
-    parser.add_argument(
         "--sort",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -1122,9 +1059,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--measure",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="antes da carga, medir cada partição das tabelas particionadas em register e rewrite, "
-        "com e sem a ordem da sort_key, cada variante num processo novo e numa tabela descartável "
-        "sob a raiz (padrão)",
+        help="antes da carga, medir cada partição das tabelas particionadas com e sem a ordem da "
+        "sort_key, cada variante num processo novo e numa tabela descartável sob a raiz (padrão)",
     )
     parser.add_argument(
         "--report", metavar="ARQUIVO.json", help="grava o relatório da execução em JSON"
@@ -1149,7 +1085,6 @@ def main(argv: list[str] | None = None) -> int:
     if uses_s3 and not region:
         parser.error("o S3 precisa da região em AWS_REGION ou AWS_DEFAULT_REGION")
     settings = Settings(
-        mode=arguments.mode,
         sort=arguments.sort,
         partitions=tuple(arguments.partitions),
         storage_options={"AWS_REGION": region} if uses_s3 else {},

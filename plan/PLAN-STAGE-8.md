@@ -19,6 +19,13 @@ caminho da publicação, e o manifesto é o que impede o `COPY` de ler também o
 anteriores, que o prefixo da partição guarda até o `vacuum` ([`delta.md`](delta.md)). A alternativa
 que existia enquanto a pergunta estava aberta, copiar os arquivos da versão para
 `staging/<execution_id>/` por `storage.copy` e carregar esse prefixo, deixa de ser necessária.
+Os arquivos que a publicação lê são os do registro, gravados pelo `COPY` do DuckDB (etapas
+[4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md), decisão do usuário de 2026-09-24): `DECIMAL` até 18
+dígitos em `INT64`, `TIMESTAMP` em `INT64` de microssegundos, `DATE` em `INT32`, o campo JSON em
+`BYTE_ARRAY` com o tipo lógico `JSON`, codificação `PLAIN` e SNAPPY (sonda de 2026-09-24,
+[`POC.md`](POC.md)). O `COPY` do Redshift de um arquivo assim não rodou no ambiente alvo, e os
+testes `redshift` desta etapa o exercitam sobre arquivos exportados pelo motor DuckDB
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
 | Primitiva | O que faz |
 | --- | --- |
@@ -196,7 +203,7 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 | Conferência da versão | `test_publish_checks_the_version_read` (sem conexão) | Uma conexão de mentira: a versão lida igual à do Delta encerra a transação por `ROLLBACK` sem outro comando; a lida acima dela é `ExecutionConflict`; o `rowcount` 0 do `UPDATE` e o `1023` são `ExecutionConflict`, e nenhum comando se repete. |
 | Reconciliação | `test_reconcile_published_add_column_and_recreate` | `ADD COLUMN` no aditivo; no destrutivo e na largura de `VARCHAR(n)` que muda no modelo, a despublicação, e a publicação seguinte com o DDL com chave e todas as partições. |
 | Diferença | `test_publish_only_changed_partitions` (`redshift`) | Duas publicações: a segunda, depois de uma partição alterada, emite um `DELETE` e um `COPY` só dela. |
-| Primeira publicação | `test_first_publication_loads_every_partition` (`redshift`) | Sem linha de controle, a tabela publicada criada, todas as partições e o `INSERT` da linha de controle, numa transação. |
+| Primeira publicação | `test_first_publication_loads_every_partition` (`redshift`) | Sem linha de controle, a tabela publicada criada, todas as partições e o `INSERT` da linha de controle, numa transação. Os arquivos das partições são os que o motor DuckDB exportou pelo registro, com uma coluna `Numeric(18, 2)`, uma `DateTime` e uma coluna JSON: a leitura do `COPY` do Redshift sobre o arquivo do `COPY` do DuckDB, com o tipo lógico `JSON` numa staging `VARCHAR(65535)`. |
 | Publicação simultânea | `test_concurrent_publication_raises_execution_conflict` (`redshift`) | Duas publicações da mesma tabela a partir da mesma versão lida: a segunda levanta `ExecutionConflict`, pelo `1023` ou pelo `UPDATE` sem linha; a partição e a linha de controle ficam as da primeira. |
 | Despublicação | `test_unpublish_drops_the_table_and_the_control_row` (`redshift`) | Depois de uma publicação, `unpublish_redshift` apaga a tabela publicada e a linha de controle numa transação; a segunda chamada não acha linha e devolve `None`; a publicação seguinte é uma primeira publicação. |
 | Falha no meio | `test_failed_copy_leaves_control_row_untouched` (`redshift`) | Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto. |

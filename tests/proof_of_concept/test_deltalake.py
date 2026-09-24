@@ -476,7 +476,7 @@ def test_duckdb_view_pins_version_and_reader_feeds_write(
     assert con.execute("SELECT count(*) FROM pinned").fetchone()[0] == 1000
     assert con.execute("SELECT count(*) FROM current").fetchone()[0] == 1010
 
-    # export_partition em modo rewrite: o resultado de uma consulta sai em lotes e substitui a
+    # O caminho de publish_partition: o resultado de uma consulta sai em lotes e substitui a
     # partição na tabela publicada.
     target = folder("target")
     write_deltalake(target, two_months, mode="append", partition_by=["mes"])

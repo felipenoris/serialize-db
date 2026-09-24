@@ -338,8 +338,8 @@ with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as ru
 
 `run.publish` exige a auditoria aprovada das partições na própria execução e recusa com
 `serialize_db.errors.ExecutionConflict` a tabela em que outra execução gravou dados depois da
-abertura. O `export_mode` sai do argumento de `publish`, do de `Execution`, de
-`SERIALIZE_DB_EXPORT_MODE` ou de `"register"`, nessa ordem. `run.snapshot("2026T3")` marca a
+abertura. Cada partição sai do sandbox num arquivo que o motor grava e entra no log por
+`serialize_db.delta.register_files`, depois das conferências. `run.snapshot("2026T3")` marca a
 execução: os commits levam o nome, e o encerramento sem erro grava as versões de todas as tabelas
 no arquivo de controle do ambiente.
 
@@ -356,8 +356,8 @@ serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamen
 ```
 
 O `run` sai com 0 quando o pipeline termina, 1 na auditoria reprovada e 2 no conflito e no erro de
-uso; `--root`, `--environment`, `--engine` e `--export-mode` têm por padrão `SERIALIZE_DB_ROOT`,
-`SERIALIZE_DB_ENVIRONMENT` (`dev`), `SERIALIZE_DB_ENGINE` (`duckdb`) e `SERIALIZE_DB_EXPORT_MODE`.
+uso; `--root`, `--environment` e `--engine` têm por padrão `SERIALIZE_DB_ROOT`,
+`SERIALIZE_DB_ENVIRONMENT` (`dev`) e `SERIALIZE_DB_ENGINE` (`duckdb`).
 
 ### Rodar o pipeline no sandbox DuckDB
 
