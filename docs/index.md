@@ -35,9 +35,9 @@ O que já existe são o módulo de esquema, `serialize_db.schema`, o de texto SQ
 de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3, a auditoria,
 `serialize_db.audit`, os dois motores, `serialize_db.engine.duckdb` e
 `serialize_db.engine.redshift`, a execução, `serialize_db.execution`, com `serialize-db run` e
-`serialize-db audit`, e a publicação para os clientes no Redshift, `serialize_db.publication`,
-com `serialize-db publish`. A carga inicial e a operação são as etapas seguintes do plano, na
-pasta `plan/` do repositório.
+`serialize-db audit`, a publicação para os clientes no Redshift, `serialize_db.publication`,
+com `serialize-db publish`, e a carga inicial da base Parquet atual, `serialize_db.load`, com
+`serialize-db load`. A operação é a etapa seguinte do plano, na pasta `plan/` do repositório.
 
 ## Instalação
 
@@ -312,6 +312,35 @@ cada um, e relê a versão pelos dois leitores, desfazendo o commit numa diferen
 `serialize_db.delta.rewrite` resolve, num commit: renomeação, remoção e mudança de tipo.
 `serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo de controle do
 ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva.
+
+### Carregar a base Parquet atual
+
+`serialize_db.load` leva a base Parquet de hoje, uma pasta por tabela com as partições Hive
+`<coluna>=<valor>/`, para as tabelas Delta do ambiente, uma partição por commit, sem tocar a
+origem. `serialize_db.load.initial_load` cria a tabela do contrato, pula as partições já no log,
+confere cada uma das outras (o valor do caminho na coluna de origem, os nulos das colunas
+`NOT NULL`, os textos acima de `String(n)`) e a grava pelo `COPY` do DuckDB, na ordem da
+`sort_key`, registrando o arquivo no log; `serialize_db.load.load_report` confere contagem e somas
+por partição entre a origem e o Delta:
+
+```python
+from serialize_db import load
+from serialize_db.execution import Database
+
+db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
+for table in load.load_order(db.tables()):
+    load.initial_load(db, table, "s3://bucket/projeto/db_projetado")   # as partições gravadas
+    report = load.load_report(db, table, "s3://bucket/projeto/db_projetado")
+    assert report.matches, report
+```
+
+Uma partição fora do contrato é `serialize_db.errors.ContractError` antes de qualquer gravação, com
+a tabela, a partição e a coluna, e a chamada seguinte recomeça dela. Na linha de comando:
+
+```
+serialize-db load --root s3://bucket/projeto/delta --environment prod \
+    --metadata pipeline.models:Base.metadata --source s3://bucket/projeto/db_projetado
+```
 
 ### Rodar uma execução
 

@@ -76,6 +76,16 @@ foi medido em [`POC.md`](POC.md).
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
   cópia dos arquivos de cada partição e o registro deles (decisão do usuário de 2026-09-24).
 
+- **A carga inicial pelo pacote no ambiente alvo.** `serialize_db.load` e o script fino sobre ele
+  rodaram só sobre a base fictícia, na pasta local ([`POC.md`](POC.md)); as execuções do script no
+  alvo, em 2026-09-23 e 2026-09-24, foram da versão anterior, sobre o `deltalake` e o DuckDB diretos,
+  numa raiz `<raiz>/<tabela>`. A primeira execução do script sobre a cópia da base de produção lê:
+  a raiz `<raiz>/<ambiente>/<tabela>` de `Database`, com `--environment`; o custo das conferências
+  do rodapé e da releitura de `register_files` na partição 2026-03-31 de `cad_lancamentos`
+  (52.654.607 linhas), que o script anterior não fazia; a abertura de um motor DuckDB por partição;
+  e os órfãos das bases reais por `serialize-db audit --foreign-keys` sobre o Delta carregado (o
+  `data_base` 2026-01-31 sem `cad_contratos`, o contrato `desemb-999` sem cadastro).
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão

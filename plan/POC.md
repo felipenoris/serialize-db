@@ -3115,3 +3115,25 @@ duckdb 1.5.5, pyarrow 25.0.1, boto3 1.43.98, sqlalchemy 2.0.54, pandas 3.0.6, py
   arquivo do `COPY` do DuckDB, a grafia de `svv_all_columns`, o `1023` pela biblioteca e o
   `EXPLAIN` da junção esperam a repetição com a pasta criada
   ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+## O que a implementação da etapa 7 mostrou
+
+`serialize_db.load`, `serialize-db load` e o script fino foram implementados em 2026-09-24 sobre a
+base fictícia de `tests/source_db_projetado.py`, na pasta local; os 20 casos de `tests/test_load.py`
+e os 3 de `tests/test_migrate_parquet_to_delta.py` passam. O que a implementação leu:
+
+- **`get_add_actions` do delta-rs 1.6.4 devolve uma tabela `arro3`**, sem `to_pylist`: o script
+  a converte por `pa.table`, como `delta.partition_values` já fazia. O `fetch_arrow_table()` de uma
+  conexão do DuckDB 1.5.5 avisa que está obsoleto em favor de `to_arrow_table()`.
+- **`delta_scan` sobre a pasta de uma tabela que não existe é `IOException`**
+  (`InvalidTableLocationError`): `load_report` só agrega o lado do Delta quando `table_exists`, e a
+  tabela ainda fora do Delta sai com `None` nas linhas dele em toda partição.
+- **Uma chamada de `initial_load` por partição** custa a abertura de um motor DuckDB por partição
+  (o banco e o transbordo numa pasta nova, fechados no fim) e uma leitura do log; sobre a base
+  fictícia inteira, 12 tabelas e 24 partições, a linha de comando do script leva cerca de 8 s, e a
+  de `serialize-db load`, com uma chamada por tabela, cerca de 5 s.
+- **Os casos do script que cobriam a carga foram para `tests/test_load.py`**: a descoberta, a
+  consulta, a carga uma vez só com a retomada e o filtro, os tipos, a ordem da `sort_key`, as
+  recusas sem commit, o `Double` não finito e o relatório; os da medição saíram com ela, e o da
+  conexão por tabela com os limites do ambiente é do motor (`tests/test_engine_duckdb.py`), que a
+  carga abre por chamada.

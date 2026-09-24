@@ -90,12 +90,14 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   `memory_limit` is 80% of its RAM: the peaks do not say whether a partition fits in 7.6 GiB, and
   only the first partition of each process is an isolated peak. `decisions.md`
 - The `export_mode` default and the load's sort still need `cad_lancamentos` in `rewrite` and with
-  `--no-sort`: the user declined separate runs, and the script now measures, before each
+  `--no-sort`: the user declined separate runs, and the script measured, before each
   partitioned table's load, every requested partition in the four variants (`register` and
   `rewrite`, with and without the `sort_key` order), each in a new process with its own peak and a
-  scratch table under `<root>/_medicao_<table>/`, also when the partition is already in the log
-  (the script resumes from the log and would skip a loaded partition); the report carries the
-  machine. The user reruns the `SUITE.md` commands, every table with the same parameters. Nothing
+  scratch table under `<root>/_medicao_<table>/`, also when the partition was already in the log
+  (the script resumes from the log and would skip a loaded partition); the report carried the
+  machine. The user reran the `SUITE.md` commands, every table with the same parameters, on
+  2026-09-23 and 2026-09-24, and the measurement left the script on 2026-09-24 (user decision,
+  `decisions.md`). Nothing
   else needs a rerun: since d2c545b the Delta schema changed
   only in the comments of `rel_contrato_operacao` (7261f0a), which `delta.reconcile` applies as
   additive, and the `register` versions before 8de3c8b (2026-09-22) logged min and max only for

@@ -674,4 +674,6 @@ usuário de 2026-09-23 e 2026-09-24, [etapa 5](PLAN-STAGE-5.md)).
    `tests/proof_of_concept/` e os testes `-m s3` das etapas 3 e 4 no bucket.
 5. O `test_redshift.py` da etapa 0 rodou limpo duas vezes no ambiente alvo em 2026-09-21, pela
    conexão de `examples/`; as etapas 5 e 8 vêm depois das etapas 3, 4 e 6, com essa conexão.
-6. Etapa 7 quando os Parquet de origem estiverem acessíveis; etapa 9 por último, com o runbook.
+6. Etapa 7, implementada em 2026-09-24 sobre a base fictícia, com o script de migração fino sobre
+   o pacote e a carga pelo pacote ainda por rodar no ambiente alvo; etapa 9 por último, com o
+   runbook.

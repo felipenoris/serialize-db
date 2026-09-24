@@ -798,3 +798,23 @@ string min and max left out of the log for `UNLOAD` files; an empty partition re
 an empty file the engine writes; and the stage 8 suite publishing in a `poc<id>` environment,
 creating the control table only when absent and dropping it only in that case. `plan/PLAN-STAGE-5.md`,
 `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-8.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## Stage 7 over the package and the measurement out of the script (2026-09-24)
+
+After the first target battery of stages 5 and 8 (05:10 UTC), the user asked to analyze the
+results, review the code, propagate the corrections to the plan, implement the remaining stages
+where possible, review code, documentation and tests, and review the migration script, "which could
+be based on this package". Two questions were answered before the work: the script uses the
+package as `serialize_db.load` with the plan's primitives (`discover_partitions`,
+`partition_query`, `initial_load`, `load_report`) plus `serialize-db load`, and the script stays
+thin, keeping only what the plan leaves out of the package (the `--report` JSON with the machine
+and the per-partition progress); and the measurement of the sorted and unsorted variants leaves
+the script, because the 2026-09-24 battery measured the four `cad_lancamentos` partitions in both
+variants and the `sort_key` order is decided (`plan/POC.md` keeps the numbers). The assistant's
+choices, named in the report: the partition check before the `COPY` (no orphan file on a
+contract refusal), `config` on `initial_load` and `load_report` for the tests' engine folder,
+`--tables` instead of `--table` on `serialize-db load`, the root layout
+`<root>/<environment>/<table>` of `Database` (the script gains `--environment`), one `initial_load`
+call per partition in the script for the progress JSON, and the foreign-key audit left to
+`serialize-db audit --foreign-keys` after the load. `plan/PLAN-STAGE-7.md`, `plan/CURRENT_STATE.md`,
+`plan/OPEN_QUESTIONS.md`, `plan/POC.md`
