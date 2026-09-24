@@ -40,6 +40,14 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   view back, and two swaps in parallel cursors of one connection ran without conflict (DuckDB
   1.5.5, local folder, 2026-09-24). `plan/POC.md`, `plan/PLAN-STAGE-10.md`
 
+- A view whose definition holds the `ingest` partition filter (`BETWEEN` from the lowest to the
+  highest value beside the `IN`) prunes like `ingest`: with no client filter it opened the
+  range's folders; with `data = '2026-08-31'`, only that folder; a value inside the range but
+  outside the `IN` opened its folder and returned 0 rows, and a value outside the range opened
+  none. `CREATE TABLE ... AS SELECT *` over the view opened the range's folders (DuckDB 1.5.5,
+  deltalake 1.6.4, a four-partition table written by `write_deltalake`, local folder,
+  2026-09-24). `plan/POC.md`
+
 ## Proxy
 
 - DuckDB has `http_proxy`, `http_proxy_username` and `http_proxy_password` and nothing like

@@ -7,7 +7,7 @@ A etapa dá ao código cliente que tem o modelo a leitura da base por statements
 resultado em Arrow, em duas origens: a base Delta, por um DuckDB no processo com uma view por
 tabela, e a base publicada no Redshift, pelas tabelas `<ambiente>_<tabela>` da
 [etapa 8](PLAN-STAGE-8.md). O módulo é `serialize_db.reader`. O time que tem o `Database` entra por
-`db.open_delta()` e `db.open_redshift(config)`; o cliente que só enxerga o Redshift entra por
+`db.open_delta()` e `db.open_redshift()`; o cliente que só enxerga o Redshift entra por
 `serialize_db.reader.open_redshift`, sem `Database`. O mesmo statement roda nas duas origens.
 
 A etapa também dá nome ao snapshot padrão: o canal `default` do ambiente, que um comando próprio
@@ -49,8 +49,18 @@ Tomadas no mesmo dia, nas respostas ao modelo dos snapshots:
 - O leitor Delta lê o snapshot arquivado pela cópia em `arquivo/<nome>/<tabela>`.
 - O comando que move o canal é `serialize-db channel --name default --snapshot <nome>`, com o
   nome do canal explícito desde já.
-- O leitor Redshift tem duas entradas: `serialize_db.reader.open_redshift(metadata, environment,
-  config, unload_to)` para o cliente sem a raiz Delta e `db.open_redshift(config)` para o time.
+- O leitor Redshift tem duas entradas: `serialize_db.reader.open_redshift` para o cliente sem a
+  raiz Delta e `db.open_redshift` para o time.
+
+Tomadas no mesmo dia, na revisão da interface pela simplicidade de uso:
+
+- `config` e `unload_to` do leitor Redshift aceitam `None`. Com `config=None`, o leitor lê
+  `RedshiftConfig.from_environment()`. Sem `unload_to`, o cliente sem S3 roda `query`, e `stream`
+  é `ContractError`.
+- O leitor Delta que não foi fechado apaga a pasta temporária do motor quando é coletado ou quando
+  o interpretador termina normalmente.
+- Ficam como estão o `metadata` de `open_redshift`, o par `snapshot` e `channel` de `open_delta` e
+  a materialização parcial por `materialize(..., partitions=...)`.
 
 ## Interface
 
@@ -65,13 +75,13 @@ def snapshot_versions(control: Mapping, name: str) -> dict[str, int]: ...
 class Database:
     def open_delta(self, snapshot: str | None = None, channel: str | None = None,
                    config: DuckDBConfig | None = None) -> DeltaReader: ...
-    def open_redshift(self, config: RedshiftConfig,
+    def open_redshift(self, config: RedshiftConfig | None = None,
                       unload_to: str | None = None) -> RedshiftReader: ...
 
 
 # serialize_db/reader.py
-def open_redshift(metadata: sa.MetaData, environment: str, config: RedshiftConfig,
-                  unload_to: str) -> RedshiftReader: ...
+def open_redshift(metadata: sa.MetaData, environment: str, config: RedshiftConfig | None = None,
+                  unload_to: str | None = None) -> RedshiftReader: ...
 
 
 class DeltaReader:
@@ -104,7 +114,6 @@ O uso, com o `stmt` de um `select` Core ou ORM do modelo:
 import pandas as pd
 
 from serialize_db import Database
-from serialize_db.engine.redshift import RedshiftConfig
 from serialize_db.reader import open_redshift
 
 db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
@@ -116,13 +125,15 @@ with db.open_delta() as reader:                     # o snapshot do canal defaul
     reader.versions                                 # {"cad_lancamentos": 143, ...}
 
 reader = db.open_delta(channel="current")          # a versão atual, sem with, num caderno
-reader.close()
+reader.close()                                      # sem ele, a coleta apaga a pasta temporária
 
-with db.open_redshift(RedshiftConfig.from_environment()) as reader:   # o time
+with db.open_redshift() as reader:                  # o time, com SERIALIZE_DB_REDSHIFT_*
     frame = reader.query(stmt).to_pandas(types_mapper=pd.ArrowDtype)
 
-config = RedshiftConfig.from_environment()          # o cliente, sem acesso à raiz Delta
-with open_redshift(Base.metadata, "prd", config, "s3://bucket-do-cliente/tmp") as reader:
+with open_redshift(Base.metadata, "prd") as reader: # o cliente sem S3: só query
+    frame = reader.query(stmt).to_pandas(types_mapper=pd.ArrowDtype)
+
+with open_redshift(Base.metadata, "prd", unload_to="s3://bucket-do-cliente/tmp") as reader:
     with reader.stream(stmt) as batches:            # resultado grande, pelo UNLOAD
         for batch in batches:
             work(batch)
@@ -222,14 +233,25 @@ serialize-db publish --channel current                  # a versão atual de cad
 - **`close()`** chama o `cleanup` do motor, que apaga o banco e a pasta de transbordo; a segunda
   chamada não faz nada. O DuckDB só devolve a memória no `close` (instrução do usuário de
   2026-09-24), e a docstring avisa o usuário de caderno.
+- **O leitor não fechado** tem o mesmo `cleanup` num `weakref.finalize`, que roda quando o objeto é
+  coletado ou quando o interpretador termina normalmente; sem ele, a pasta `serialize_db_*` do
+  motor, com o `.duckdb` e as tabelas materializadas, ficaria no disco depois do processo. O
+  finalizador guarda o motor, não o leitor, para não impedir a coleta, e o `close` o chama, então o
+  `cleanup` roda uma vez só. O processo encerrado por sinal não o roda.
 
 ### O leitor Redshift
 
-- **`open_redshift(metadata, environment, config, unload_to)`** abre um `RedshiftEngine` sobre a
-  conexão de `config`, com o prefixo `<ambiente>_` no lugar de `exec_<id>_`, o `Storage` de
-  `unload_to` e a pasta `<id do leitor>` sob ele. O motor ganha o argumento `prefix`, que tem
-  `sandbox_prefix(execution_id)` por padrão. `Database.open_redshift(config, unload_to=None)` chama
-  a função com `db.metadata`, `db.environment` e, sem `unload_to`, `<raiz>/<ambiente>/staging`.
+- **`open_redshift(metadata, environment, config=None, unload_to=None)`** abre um
+  `RedshiftEngine` sobre a conexão de `config`, com o prefixo `<ambiente>_` no lugar de
+  `exec_<id>_`, o `Storage` de `unload_to` e a pasta `<id do leitor>` sob ele. O motor ganha o
+  argumento `prefix`, que tem `sandbox_prefix(execution_id)` por padrão.
+- **`config=None`** lê `RedshiftConfig.from_environment()`, as variáveis `SERIALIZE_DB_REDSHIFT_*`,
+  como o motor `"redshift"` de `Execution` e a linha de comando.
+- **Sem `unload_to`**, o cliente sem S3 roda `query`, e `stream` é `ContractError`, que cita
+  `unload_to`, antes de qualquer comando no servidor. O motor abre sem armazenamento: `storage` e
+  `staging_prefix` aceitam `None`, que só o leitor passa, e o `cleanup` não toca arquivos.
+- **`Database.open_redshift(config=None, unload_to=None)`** chama a função com `db.metadata`,
+  `db.environment`, o mesmo `config` e, sem `unload_to`, `<raiz>/<ambiente>/staging`.
 - **`query`** vai pelo caminho do cursor do motor (`compiled_for_cursor` com o prefixo). O driver
   materializa o resultado no `execute`, e o motor monta a `pa.Table` a partir de objetos Python:
   o caminho serve a resultados pequenos.
@@ -265,7 +287,8 @@ serialize-db publish --channel current                  # a versão atual de cad
   entrada está em `snapshots`.
 - **O leitor Redshift** precisa de `SELECT` nas tabelas publicadas do esquema. Para `stream`,
   precisa também do `UNLOAD` com o papel de `config.iam_role` ou as credenciais da sessão `boto3`,
-  e de gravação, leitura e exclusão em `unload_to`. Nada é criado no esquema.
+  e de gravação, leitura e exclusão em `unload_to`; sem `unload_to`, o leitor não toca o S3. Nada
+  é criado no esquema.
 
 ## Testes por caso
 
@@ -287,6 +310,8 @@ serialize-db publish --channel current                  # a versão atual de cad
 - A poda pela view no log `FileSystem` do DuckDB: o `=` e o `BETWEEN` abrem só as pastas das
   partições, e o `IN` de dois valores abre todas.
 - O `close` apaga o banco, e a segunda chamada não faz nada.
+- O leitor sem `close`: `del` e `gc.collect()` apagam a pasta temporária do motor; depois do
+  `close`, o finalizador não roda de novo.
 
 `tests/test_delta.py`, nas duas raízes: `set_channel` aponta e move o canal e recusa o nome fora
 da regra, o nome `current`, o snapshot ausente e o arquivado; a escrita concorrente é
@@ -304,7 +329,9 @@ snapshot arquivado é recusado sem escrita no Redshift; e a publicação sem nen
 os dois, é erro de uso.
 
 `tests/test_reader.py`, sem conexão: o texto compilado com o prefixo `<ambiente>_` e a regra de
-leitura comum no leitor Redshift, sobre a conexão de mentira de `tests/test_engine_redshift.py`.
+leitura comum no leitor Redshift, sobre a conexão de mentira de `tests/test_engine_redshift.py`;
+`config=None` com as variáveis `SERIALIZE_DB_REDSHIFT_*` do `monkeypatch`; e, sem `unload_to`,
+`query` roda e `stream` é `ContractError` sem comando no servidor.
 
 `tests/test_reader.py`, com `redshift`, `s3` e `local`, no substituto local e no ambiente alvo: a
 publicação de `Lancamento` num ambiente `poc<id>`, como `tests/test_publication.py`, e o leitor de
@@ -326,5 +353,5 @@ Delta para o mesmo statement, e `stream` o mesmo de `query`. Depois do `close`, 
 ## Decisões pendentes
 
 Nenhuma. As decisões do usuário de 2026-09-24 sobre o canal, a versão atual, a publicação fora
-da execução, o snapshot arquivado, o comando do canal e as entradas do leitor Redshift estão
-escritas nas seções que as descrevem.
+da execução, o snapshot arquivado, o comando do canal, as entradas do leitor Redshift e a revisão
+da interface estão escritas nas seções que as descrevem.

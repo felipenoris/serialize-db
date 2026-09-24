@@ -335,9 +335,11 @@ O acesso de leitura da [etapa 10](PLAN-STAGE-10.md), planejado em 2026-09-24.
 3. `reader.materialize` troca a view de uma tabela consultada muitas vezes por uma tabela local,
    inteira ou com parte das partições.
 4. O cliente que só enxerga o Redshift abre o leitor das tabelas `<ambiente>_<tabela>` por
-   `serialize_db.reader.open_redshift`, com um destino próprio para o `UNLOAD` de `stream`, e o time
-   por `db.open_redshift(config)`; o mesmo statement roda nas duas origens.
-5. O `close` apaga o banco local do leitor Delta, ou os arquivos do `UNLOAD` do leitor Redshift.
+   `serialize_db.reader.open_redshift`, e o time por `db.open_redshift()`; sem `config`, a conexão
+   vem das variáveis `SERIALIZE_DB_REDSHIFT_*`. O `stream` pede um destino próprio para o
+   `UNLOAD`, sem o qual o cliente sem S3 roda só `query`. O mesmo statement roda nas duas origens.
+5. O `close` apaga o banco local do leitor Delta, ou os arquivos do `UNLOAD` do leitor Redshift; o
+   leitor Delta não fechado apaga o banco quando é coletado ou quando o interpretador termina.
 
 ## Paralelismo
 

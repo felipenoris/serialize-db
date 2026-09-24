@@ -762,9 +762,12 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `serialize-db publish` only by `--snapshot` or `--channel`, a rollback to an older snapshot
   included, and `run.publish_redshift` and `serialize-db run --redshift` removed; and
   `serialize_db.reader` with `db.open_delta()` (DuckDB views over the `default` snapshot, a named
-  or archived one, or `current`, and `materialize` of tables and partitions),
-  `db.open_redshift(config)` and `serialize_db.reader.open_redshift(...)` with the client's own
-  `UNLOAD` destination. No code yet.
+  or archived one, or `current`, `materialize` of tables and partitions, and a `weakref.finalize`
+  that deletes the temporary folder of a reader left open), `db.open_redshift()` and
+  `serialize_db.reader.open_redshift(...)`, which read the `SERIALIZE_DB_REDSHIFT_*` variables
+  when `config` is `None` and run only `query` without the client's own `UNLOAD` destination.
+  The interface review of the same day kept everything else (`.claude/memory/decisions.md`).
+  No code yet.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still

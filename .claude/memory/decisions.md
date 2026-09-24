@@ -962,3 +962,22 @@ config, unload_to)` for the client and `db.open_redshift(config)` for the team. 
 first read `open_delta(channel="default")` as the current-version mode; it is the default
 snapshot, and `current` names the other mode. `plan/PLAN-STAGE-10.md`, `plan/PLAN.md`,
 `plan/serialize-db.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-8.md`
+
+## The review of the stage 10 interface (2026-09-24)
+
+The user asked for a critique of stage 10 by the simplicity of the client API. The assistant
+proposed: in `serialize_db.reader.open_redshift`, no `metadata` (the engine takes it from the
+statement), `unload_to` only for `stream` and `config` from the environment; the partition cut
+at `open_delta(partitions=...)`, so that `materialize` never changes a result (a probe of the
+same day read such a view pruning like `ingest`); one name in `open_delta` in place of the
+`snapshot` and `channel` pair; and a `weakref.finalize` on a Delta reader left open. Asked to
+look for the same problem in the rest of the API, it proposed defaults in
+`publication.publish_redshift` (`execution_id`, `tables`, `snapshot=` or `channel=`), `config`
+from the environment in the publication, the `metadata` of `serialize_db.sql` derived from the
+statement, `[run.partition]` as the default of `run.audit` and `run.publish`, and one `config=`
+for the engine of `Execution`. The user adopted only the finalizer and, in `open_redshift`,
+`config=None` reading `RedshiftConfig.from_environment()` and `unload_to=None` for a client
+without S3, which runs `query` and not `stream`; the assistant's reading, stated in the report:
+`Database.open_redshift` takes the same `config=None`, since it calls the function. Everything
+else stays as planned or implemented, the `metadata` of `open_redshift` included.
+`plan/PLAN-STAGE-10.md`, `plan/POC.md`

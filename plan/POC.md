@@ -3406,3 +3406,15 @@ diz qual snapshot é o último.
 materializa pela troca numa transação e documenta o `IN` de vários valores, que o leitor não
 reescreve; o snapshot padrão, que o arquivo de controle não identifica, passou a ser o canal
 `default` da etapa, movido por `serialize-db channel` (decisões do usuário do mesmo dia).
+
+No mesmo dia e ambiente, na revisão da interface da etapa, uma sonda leu uma view cuja definição
+tem o filtro de partições do `ingest` (o `BETWEEN` do menor ao maior valor ao lado do `IN`), sobre
+uma tabela de quatro partições gravada por `write_deltalake` (deltalake 1.6.4). A view poda como o
+`ingest`: sem filtro do cliente, abriu as pastas do intervalo; com `data = '2026-08-31'`, só essa
+pasta; o valor do intervalo fora do `IN` abriu a pasta dele e deu 0 linhas, e o valor fora do
+intervalo não abriu nenhuma. O `CREATE TABLE ... AS SELECT *` sobre a view abriu as pastas do
+intervalo.
+
+**Consequência**: nenhuma no plano. A sonda sustentava o recorte de partições na abertura do
+leitor, que o usuário não adotou: a materialização parcial continua em
+`materialize(..., partitions=...)`.
