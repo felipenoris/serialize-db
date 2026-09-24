@@ -748,8 +748,9 @@ os nomes físicos `col-<uuid>` nos arquivos; o projeto não o habilita.
 
 Copiar pelo log é a opção que não lê dados. A lista `get_add_actions()` do snapshot dá o caminho
 relativo de cada arquivo vivo, já no layout Hive `mes=2026-02/part-....parquet`, e o valor da
-partição. Copiar exatamente esses arquivos, sem o log, produz a pasta por mês; no S3 é um
-`CopyObject` por arquivo, sem baixar. O `path` da ação `add` é uma URI, decodificada com `unquote`
+partição. Copiar exatamente esses arquivos, sem o log, produz a pasta por mês; no S3 é a
+transferência gerenciada do `boto3` por arquivo (`CopyObject` ou `UploadPartCopy`), sem baixar. O
+`path` da ação `add` é uma URI, decodificada com `unquote`
 antes de usar.
 
 ```python

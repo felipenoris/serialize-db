@@ -1,0 +1,34 @@
+{
+  "session.started_at": "2026-09-24T13:01:49+00:00",
+  "session.platform": "Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39",
+  "session.python": "3.13.15",
+  "session.packages": "deltalake 1.6.4, duckdb 1.5.5, pyarrow 25.0.1, boto3 1.43.98, sqlalchemy 2.0.54, pandas 3.0.6, pytest 9.1.1",
+  "session.markers": "redshift",
+  "environment.no_proxy_as_found": "ausente",
+  "environment.no_proxy_exported": false,
+  "environment.aws_region": "sa-east-1",
+  "s3.root": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests",
+  "s3.session_prefix": "s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests/serialize-db-poc/a016c81f",
+  "redshift.engine.relation_missing": {
+    "sqlstate": "XX000",
+    "message": "Relation exec_poc_25acb345_nada does not exist in the database."
+  },
+  "redshift.engine.current_database": "dev",
+  "redshift.engine.control_table_present": false,
+  "redshift.engine.delta_scan_meta": {
+    "tipo": "VARCHAR",
+    "valor": "{\"k\":121}"
+  },
+  "redshift.engine.row_desc": {
+    "c_count": "int64",
+    "c_sum": "decimal128(38, 2)",
+    "c_sum_double": "double",
+    "c_text": "string",
+    "c_numeric": "decimal128(2, 1)"
+  },
+  "redshift.engine.small_load": "1.92 s",
+  "s3.cleanup": "39 objeto(s) apagado(s) sob s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests/serialize-db-poc/a016c81f",
+  "session.outcome": "6 passed, 0 failed, 0 error, 0 skipped",
+  "session.finished_at": "2026-09-24T13:03:25+00:00",
+  "session.duration_s": 95.5
+}

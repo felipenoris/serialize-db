@@ -300,8 +300,10 @@ ambiente de desenvolvimento, cujo fonte tem o mesmo `ps["row_desc"]` e o mesmo `
 lidos em 2.1.16 (decisão do usuário de 2026-09-24), e a porta `driver_connect` é onde os testes
 trocam o driver pela conexão do substituto local. O que a implementação mostrou está em
 [`POC.md`](POC.md), seção "O que a implementação das etapas 5 e 8 mostrou"; os casos `redshift`
-passaram no substituto local e esperam a primeira execução no ambiente alvo
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+passaram no substituto local e, no ambiente alvo em 2026-09-24, cinco de seis às 05:10 e os seis
+às 13:01 e 13:03, com a relação inexistente respondida com o SQLSTATE `XX000` e a mensagem
+`Relation <nome> does not exist in the database.`, que `relation_missing` reconhece pela mensagem
+([`POC.md`](POC.md)).
 
 O que a implementação mudou em relação ao texto das seções acima, com o motivo:
 
@@ -341,5 +343,6 @@ exportação sem `PARTITION BY`, num prefixo novo por partição e por tentativa
 `Double` não finito exportada pela troca para `publish_partition`, com o aviso no log; a decisão de
 2026-09-24 tirou o `mode` de `export_partition`.
 As execuções de 2026-09-23 às 22:56 e às 23:01 leram o que elas pediam ao ambiente alvo, salvo o
-arquivo do `UNLOAD` com coluna `SUPER` registrado numa tabela Delta
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+arquivo do `UNLOAD` com coluna `SUPER` registrado numa tabela Delta, que a suíte do motor leu em
+2026-09-24: o delta-rs e o `delta_scan` dão a coluna como texto, `VARCHAR` com o JSON serializado
+([`POC.md`](POC.md)).

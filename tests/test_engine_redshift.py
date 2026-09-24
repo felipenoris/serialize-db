@@ -176,7 +176,7 @@ class FakeConnection:
         if match := re.fullmatch(r'SELECT 1 FROM "esquema"\."(\w+)" LIMIT 0', text):
             if match.group(1) in self.existing:
                 return [], []
-            raise server_error(f'relation "{match.group(1)}" does not exist', "42P01")
+            raise server_error(f"Relation {match.group(1)} does not exist in the database.")
         if text == "SELECT pg_last_unload_count()":
             return row_desc_of(pa.schema([("pg_last_unload_count", pa.int64())])), \
                 [[self.last_unload_count]]

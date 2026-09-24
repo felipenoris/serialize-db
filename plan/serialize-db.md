@@ -271,8 +271,8 @@ intacto, e a publicação seguinte recria a tabela com todas as partições.
 Para publicar no Hive ou para sair do Delta.
 
 1. O snapshot atual usa `export_snapshot(uri, destination)`: `mode="copy"` copia os arquivos que
-   `get_add_actions()` lista, já no layout `<coluna>=<valor>/part-....parquet`, sem ler dados; no S3, um
-   `CopyObject` por arquivo. Serve quando os leitores casam colunas por nome ou quando nenhum
+   `get_add_actions()` lista, já no layout `<coluna>=<valor>/part-....parquet`, sem ler dados; no S3, a
+   transferência gerenciada do `boto3` por arquivo. Serve quando os leitores casam colunas por nome ou quando nenhum
    `ADD COLUMN` aconteceu desde a última reescrita de todas as partições.
 2. `mode="rewrite"` normaliza: o DuckDB lê por `delta_scan` e grava um `COPY` particionado, com
    todos os arquivos no esquema atual e a coluna de partição fora deles.

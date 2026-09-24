@@ -181,7 +181,8 @@ def test_write_text_exclusive_create_and_if_match(storage: Storage) -> None:
 
 def test_list_copy_delete(storage: Storage) -> None:
     """``list_files`` desce as pastas, filtra pelo sufixo e exclui ``_delta_log/``; ``copy``
-    preserva os bytes; ``delete`` de um caminho ausente não falha."""
+    preserva os bytes, também acima do limiar multipart do ``boto3``; ``delete`` de um caminho
+    ausente não falha."""
     for name in ("t/p=a/1.parquet", "t/p=b/2.parquet", "t/_delta_log/00.checkpoint.parquet",
                  "t/_delta_log/00000000000000000000.json"):
         storage.write_text(name, name)
@@ -193,6 +194,12 @@ def test_list_copy_delete(storage: Storage) -> None:
     assert storage.size("copia/p=a/1.parquet") == len("t/p=a/1.parquet")
     assert storage.exists("copia/p=a/1.parquet")
     assert storage.size("ausente.parquet") is None
+
+    # Acima do limiar multipart do boto3, 8 MiB, a cópia no S3 é um UploadPartCopy em duas partes.
+    large = 9 * 1024 * 1024
+    storage.write_text("t/p=c/grande.parquet", "x" * large)
+    storage.copy("t/p=c/grande.parquet", "copia/p=c/grande.parquet")
+    assert storage.size("copia/p=c/grande.parquet") == large
 
     storage.delete(["copia/p=a/1.parquet", "copia/ausente.parquet"])
     assert not storage.exists("copia/p=a/1.parquet")

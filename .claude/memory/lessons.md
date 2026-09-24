@@ -583,3 +583,16 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   failed the case before its last assertion, in both rounds. `NAME` maps to `string` now, the
   stand-in imitates the OID, and the case records the SQLSTATE of the missing relation too, which
   `name_in_use` had accepted without saying whether `42P01` or the message matched.
+- **A single-request S3 call on a large object is bounded by the SDK's low-speed limit, and a
+  routine that copies many files is proved resumable** (2026-09-24). The first `serialize-db
+  archive` in the target copied three tables and died in `cad_lancamentos`: `Storage.copy` was
+  pyarrow's `copy_file`, one `CopyObject`, and the AWS C++ SDK abandoned it after 3 s without a
+  byte while S3 copied the 32-million-row file server-side (`curlCode: 28`); the suites never met
+  it because their files are small, and the larger 2026-03-31 file had copied moments before, so
+  the limit is about S3's response latency, not the size alone. The fix routes S3 copies through
+  boto3's managed transfer (`UploadPartCopy` in 8 MiB parts). Running the new resume test against
+  the old code showed a second defect the failure had exposed: `archive` skipped any destination
+  table that existed, so the rerun would have printed "já no arquivo" for the half-copied
+  `cad_lancamentos` and moved the snapshot entry to `archived`; `deep_copy` now skips only the
+  partitions the destination registers and refuses a destination holding files outside the
+  version.

@@ -249,7 +249,7 @@ research appends to the matching group.
 | `examples/` | The scripts the user ran in the target, kept as run but for the masked identifiers in the bucket path: `redshift_native.py`, `redshift_data_api.py`, `redshift_copy_unload.py` (2026-09-20) and `redshift_manifest.py` (2026-09-21, the prerequisites of `export_partition`); `examples/README.md` says what each one fixes. The probe, the suite and stage 5 repeat their calls, and the target they fix is in `.claude/memory/redshift.md`. |
 | `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py`, `parquet_source.py` (`--sample N`) and `duckdb_threads.py` (the `threads` of the DuckDB engine ingesting the migrated Delta tables, each configuration in a new process with the external file cache off), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, with no network but one DNS lookup; its cases that write a report or fabricated files are `local`. |
 | `scripts/` | `migrate_parquet_to_delta.py`, the operator's tool for the stage 7 initial load, thin over `serialize_db.load` since 2026-09-24 (user decision): per table in `load_order`, `initial_load` partition by partition with rows, time and the process's peak RSS printed, `load_report` and `entries_outside_the_model`; `--report` writes the JSON with the machine, the versions, the DuckDB limits read from the environment and the arguments, rewritten after each committed partition with the current table in `in_progress`; `--environment` names the folder under the root (`<root>/<environment>/<table>`); local folder or `s3://`. The measurement of the sorted and unsorted variants left with the same decision (its numbers are in `plan/POC.md`). The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
-| `plan/readings/` | The probe and suite reports a pending stage still consults, kept as they came out with the environment's sensitive identifiers masked, indexed by `plan/readings/README.md`: the suite runs of 2026-09-23 at 22:53, 22:56 and 23:01, the threads probe of 23:21, the probes of 19:18 and the production base reading of 2026-09-21. A report leaves once `plan/POC.md` and the stage file hold what it showed, and git history keeps it (user decisions of 2026-09-23). |
+| `plan/readings/` | The probe and suite reports a pending stage still consults, kept as they came out with the environment's sensitive identifiers masked, indexed by `plan/readings/README.md`: the engine and publication suite runs of 2026-09-24 at 13:01 and 13:05, the suite runs of 2026-09-24 at 01:43, 01:46 and 01:49, the threads probe of 02:02, the probes of 2026-09-24 at 01:41 and of 2026-09-23 at 19:18, and the production base reading of 2026-09-21. A report leaves once `plan/POC.md` and the stage file hold what it showed, and git history keeps it (user decisions of 2026-09-23). |
 | `plan/guia.md` | ETL practices the pipeline follows: immutable partitions with idempotent replacement, write-audit-publish, the schema contract, and the open question about committing metadata atomically on S3. |
 | `plan/schema.md` | DDL from the ORM models, `Table.info["serialize_db"]` (`partition_by`, `sort_key`, `redshift`), constraint policy per backend, the type table from SQLAlchemy to Arrow, Delta, DuckDB and Redshift, SQL portability between the engines, and the JSON field per layer. |
 | `plan/parquet.md` | Parquet file layout and every metadata structure, inspection with DuckDB and with PyArrow, partitioning, query optimization by layer, and import and export in DuckDB and in Redshift. |
@@ -267,7 +267,7 @@ research appends to the matching group.
 | `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3; `history`, `archive_snapshot` and the copy-and-register `deep_copy` of stage 9), `audit.py`, `engine/__init__.py` (the `Engine` protocol), `engine/duckdb.py` and `resources.py` (stage 4: the CPUs and memory the process may use, cgroup-aware, behind `environment_limits`), `engine/redshift.py` (stage 5: `RedshiftConfig`, `RedshiftEngine`, `sandbox_prefix`, `schema_from_row_description`, `mask`, and the protected `connect`, `credentials_clause`, `staging_ddl`, `insert_from_staging`, `copy_text`, `unload_text` and error readers the publication reuses; `driver_connect` is the seam the tests replace with the stand-in), `execution.py` (stage 6, with `redshift=` and `publish_redshift`), `load.py` (stage 7: `discover_partitions`, `partition_query`, `initial_load` on a DuckDB engine per call with the partition check before the `COPY ... RETURN_STATS` and `register_files`, `load_report`, `load_order`, the protected `entries_outside_the_model`), `publication.py` (stage 8: the control table, the per-table transaction, unpublish, `reconcile_published`, `publication_status`), `_pool.py` (private: the per-table task pool of `execution` and `publication`), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, `run`, `audit`, `load`, `publish` and the stage 9 `snapshot`, `vacuum`, `compact`, `archive`, `export` and `history`, only `main` public). What each does is in the docstrings, in `plan/PLAN-STAGE-1.md` to `plan/PLAN-STAGE-8.md`, and in `plan/CURRENT_STATE.md`; `pyproject.toml` pins the runtime dependencies, the `redshift` extra (`redshift-connector==2.1.17`, imported only when the Redshift engine or the publication enters) and the groups. |
 | `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). The corrected copy is the client model in `tests/client_model/`. |
 | `tests/client_model/` | The client model (user decision of 2026-09-21): the corrected copy of `tests/reference_model/` that the tests hand to the package API as a client library would, the corrections listed in `plan/PLAN-STAGE-1.md` and checked by `tests/test_client_model.py`; `statements.py` holds the fictitious pipeline's Core statements (`STATEMENTS`), `schema/` and `sql/` the generated files. |
-| `tests/emulator.py` | The local stand-in of S3 and Redshift for the target-only suites (user decision of 2026-09-23): with `SERIALIZE_DB_TEST_EMULATOR`, `tests/conftest.py` starts the moto server (`moto[s3]` and `flask` in the `emulator` group, out of `dev`) as a subprocess before collection, points the AWS variables and the suites' roots at it, and gives `connect_redshift` a fake `redshift_connector` connection over an in-memory DuckDB that translates the suites' Redshift SQL and imitates the refusals and behaviors read in the target (the backslash escape in literals, the empty `UNLOAD` writing nothing, `pg_last_unload_count()`, `is_valid_json` refusing `SUPER`, `ALTER COLUMN ... TYPE` refused on the share, the missing relation as `42P01` and the existing one as `42P07`, DuckDB's transaction conflict as the `1023` message, `svv_all_columns` from the remembered DDL in Redshift's spelling); `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` and `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` provoke failures. It checks the tests' code, not the target's behavior; the command is in `README.md`. `conftest.redshift_config()` and the `redshift_driver` fixture give the engine and publication suites (`tests/test_engine_redshift.py`, `tests/test_publication.py`, over the model of `tests/lancamentos_model.py`) the stand-in connection through `driver_connect`. |
+| `tests/emulator.py` | The local stand-in of S3 and Redshift for the target-only suites (user decision of 2026-09-23): with `SERIALIZE_DB_TEST_EMULATOR`, `tests/conftest.py` starts the moto server (`moto[s3]` and `flask` in the `emulator` group, out of `dev`) as a subprocess before collection, points the AWS variables and the suites' roots at it, and gives `connect_redshift` a fake `redshift_connector` connection over an in-memory DuckDB that translates the suites' Redshift SQL and imitates the refusals and behaviors read in the target (the backslash escape in literals, the empty `UNLOAD` writing nothing, `pg_last_unload_count()`, `is_valid_json` refusing `SUPER`, `ALTER COLUMN ... TYPE` refused on the share, the missing relation as `XX000` with the target's `Relation <name> does not exist in the database.` and the existing one as `42P07`, DuckDB's transaction conflict as the `1023` message, `svv_all_columns` from the remembered DDL in Redshift's spelling); `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` and `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` provoke failures. It checks the tests' code, not the target's behavior; the command is in `README.md`. `conftest.redshift_config()` and the `redshift_driver` fixture give the engine and publication suites (`tests/test_engine_redshift.py`, `tests/test_publication.py`, over the model of `tests/lancamentos_model.py`) the stand-in connection through `driver_connect`. |
 | `tests/source_db_projetado.py` | The fictitious Parquet source base `db_projetado`, reproducing the structure `probes/parquet_source.py` read in the dev base and in the production base (`.claude/memory/source-base.md`), checked by `tests/test_source_db_projetado.py` (all `local`); the material of the stage 7 test. It also holds the reference model's keys (`UNIQUE_KEYS`, `FOREIGN_KEYS`, `MODEL_NOT_NULL_DECLARED_NULLABLE`), which `tests/test_reference_model.py` checks against the model and the fixture satisfies. |
 
 `plan/duckdb.md`, `plan/redshift.md` and `plan/delta.md` share a section order: data organization and
@@ -551,6 +551,12 @@ A new lesson adds its story there and its rule here, in the same commit.
   `current_database()` is `name` (OID 19), and its reading through the typed `query` failed
   the case before its last assertion; read a system function last in a case, or through the
   raw `row_desc` (2026-09-24).
+- **A single-request S3 call on a large object is bounded by the SDK's low-speed limit, and a
+  routine that copies many files is proved resumable**: pyarrow's `copy_file` is one
+  `CopyObject`, which the AWS C++ SDK abandons after 3 s without a byte (`curlCode: 28`) while
+  S3 copies server-side, so `Storage.copy` on S3 goes through boto3's managed transfer; and the
+  new assertion run against the old code showed the rerun of `archive` moving the snapshot entry
+  over a half-copied table (2026-09-24).
 
 ## Naming conventions
 
@@ -610,23 +616,30 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   05:10 passed five of the six engine cases (`COPY ... MANIFEST`, `UNLOAD`, the loader, the
   audit, the export by registration, the `NaN` swap) and failed `current_database()`, described
   as `name` (OID 19), mapped to `string` since; the publication cases did not run because the
-  target's local root folder was missing (they carry `local` now), and `plan/OPEN_QUESTIONS.md`
-  lists what their first run reads: the Redshift `COPY` of a DuckDB-written file, the
-  `svv_all_columns` spelling, the `1023` through the library, the `EXPLAIN` of the join; the
-  `42P01` of a missing relation and the JSON column through `delta_scan` are recorded by the
-  engine suite's repetition, and the `PARALLEL OFF` threshold of 5,000,000 rows stays an
-  unmeasured choice. The user decided
+  target's local root folder was missing (they carry `local` now). The battery of 2026-09-24 at
+  12:38 passed the six engine cases and the eight publication cases twice each: the Redshift
+  `COPY` of DuckDB-written files, the `svv_all_columns` spelling, the `1023` through the library
+  as `ExecutionConflict`, the `EXPLAIN` of the join (`DS_DIST_ALL_NONE`), the missing relation as
+  `XX000` with `Relation <name> does not exist in the database.` (the stand-in imitates it since)
+  and the JSON column of the `UNLOAD` file as `VARCHAR` through `delta_scan`; the `PARALLEL OFF`
+  threshold of 5,000,000 rows stays an unmeasured choice. The user decided
   on 2026-09-24 the explicit `RedshiftConfig` for the publication (`Execution(...,
   redshift=...)`; without it `publish_redshift` refuses), the new suites' commands listed in the
   report rather than added to `SUITE.md`, and `redshift-connector==2.1.17` in the `redshift`
   extra. Stage 7 was implemented on 2026-09-24 over the fixture base (`serialize_db.load`,
   `serialize-db load`, the migration script thin over the package without the variant
-  measurement, both user decisions of that day); the load through the package has not run in
-  the target, and the target's root layout becomes `<root>/<environment>/<table>`. Stage 9 was
+  measurement, both user decisions of that day); the load through the package ran in the target on
+  2026-09-24 at 14:16 in the root layout `<root>/<environment>/<table>`: the 12 tables matched,
+  `cad_lancamentos` peaked at 16,198 MB under a 14,030 MiB limit, and the audit with
+  `--foreign-keys` read the known 989,852 orphans of 2026-01-31. Stage 9 was
   implemented the same day in the local folder: `serialize-db snapshot|vacuum|compact|archive|
   export|history`, `delta.history`, `delta.archive_snapshot`, `deep_copy` by copying each
   partition's files and registering them with the version's own statistics, and the runbook
-  `docs/operacao.md`; no routine has run in the target. The
+  `docs/operacao.md`. In the target on 2026-09-24 `history`, `snapshot` and `vacuum` ran, and
+  `archive` died in pyarrow's single `CopyObject` of a `cad_lancamentos` file (the AWS SDK's
+  3-second low-speed limit): `Storage.copy` on S3 is boto3's managed copy since, `deep_copy`
+  resumes an interrupted copy, `archive` no longer skips a table present in the archive, and the
+  rerun there is pending. The
   DuckDB engine and the migration script take `threads` and `memory_limit` from the environment at
   each opening (user instruction of 2026-09-24, replacing the 2026-09-22 DuckDB default). The review of stages 3 and 4 of 2026-09-23 corrected both stage files
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as
@@ -672,8 +685,8 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   stores the credential resolved at `CREATE SECRET` (in `storage.duckdb_setup` and the script),
   and the stage 9 `archive` by copying each partition's files and registering them, in place of
   `deep_copy` by `write_deltalake`, whose memory grows with the table outside `memory_limit`
-  (implemented with stage 9 on 2026-09-24); the Redshift `COPY` of a DuckDB-written file waits for the
-  first target run of `tests/test_publication.py`. Stage 7 absorbed the script on 2026-09-24.
+  (implemented with stage 9 on 2026-09-24); the Redshift `COPY` of a DuckDB-written file passed in the
+  target run of `tests/test_publication.py` of 2026-09-24 at 13:05. Stage 7 absorbed the script on 2026-09-24.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still

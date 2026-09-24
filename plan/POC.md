@@ -3162,3 +3162,102 @@ Os subcomandos `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`,
 - **A recusa da compactação alcança a tabela sem partição**: o snapshot registra a versão atual de
   toda tabela existente, então `compact --table cad_contas` logo depois de um snapshot é recusado
   como o de uma tabela particionada; o caso do teste publicou uma versão nova antes.
+
+## O que a bateria de 2026-09-24 às 12:38 mostrou no ambiente alvo
+
+Em 2026-09-24, entre 12:38 e 14:25 UTC, o usuário rodou os comandos de `SUITE.md` no ambiente
+alvo, a partir da `main` com o #72, numa máquina de 16 vCPUs e 31.383 MB, com 28.061 MB
+disponíveis (Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.4, pyarrow 25.0.1, boto3 1.43.98,
+sqlalchemy 2.0.54, pandas 3.0.6, pytest 9.1.1, `sa-east-1`, sem proxy), com a pasta local criada,
+e em seguida a carga pelo pacote, a auditoria e as rotinas da operação sobre a cópia da base de
+produção. Os relatórios das suítes do motor e da publicação estão em
+[`readings/`](readings/README.md); os dos probes e o da carga ficam fora de `plan/`, com os achados
+aqui. O probe das threads e a publicação Delta para Redshift não rodaram.
+
+- **Os probes** repetiram as leituras de 2026-09-23 e de 01:41: `space.py` com 16 vCPUs, a `.venv`
+  completa (`SP-9`) e sem internet (`SP-7`); `diagnose_aws.py` com os três clientes listando o
+  prefixo; `redshift.py` sem chamada falhada, com a credencial de quem chama expirando em 36
+  minutos (`RS-18`) e a temporária do workgroup em uma hora (`RS-15`); `bucket.py` com 907 versões
+  não correntes (32.966.477 bytes) e 859 marcadores de exclusão sob a raiz dos testes (`BK-14`,
+  contra 366 e 358 às 01:42), as leituras negadas de sempre e o IAM e o KMS sem conexão TCP;
+  `catalog.py` com o Glue de um banco e uma tabela, os três workgroups do Athena com `GetWorkGroup`
+  negado em `primary`, e o Lake Formation e o S3 Tables sem rota (`ConnectTimeoutError` em 60,3 s
+  e 30,4 s), que resolvem para endereços públicos. O código de saída 1 de `catalog.py`, `bucket.py`
+  e `space.py` conta as chamadas que falharam, todas leituras esperadas; nenhuma checagem reprovou.
+- **A sessão `-m "not redshift"`** (12:41, 182,8 s): 477 aprovados de 521 coletados, os 44
+  `redshift` de fora; as leituras de memória, do cache de arquivos externos, do stream e do
+  pipeline como às 01:43 (`engine.stream.first_batch` 0,010 s com a consulta rodando, 27 de 30
+  lotes no arquivo, o pipeline de três estágios em 1,222 s por tabela, 1,611 s em série e 0,929 s
+  encadeado).
+- **A sessão `-m redshift`** (12:44 e 12:53, 549,8 s e 514,6 s): 44 aprovados nas duas rodadas,
+  os 30 das suítes de estudo como às 01:46, mais os 6 do motor e os 8 da publicação, que rodaram
+  junto pela primeira vez; as leituras das suítes de estudo repetiram, o `1023` da segunda
+  transação inclusive.
+- **A suíte do motor Redshift** (13:01 e 13:03, 95,5 s e 103,5 s): 6 aprovados nas duas rodadas,
+  `current_database()` incluído, pelo tipo `name` no mapa. A relação inexistente responde o
+  SQLSTATE `XX000` com a mensagem `Relation <nome> does not exist in the database.`, não o `42P01`
+  do PostgreSQL, e `relation_missing` a reconheceu pela mensagem (`redshift.engine.relation_missing`);
+  `current_database()` continua `dev` depois do `USE`; a tabela de controle não existia no esquema
+  no início da sessão; a coluna JSON do arquivo do `UNLOAD` registrado por `export_partition` sai
+  do `delta_scan` como `VARCHAR` com o texto `{"k":121}` (`redshift.engine.delta_scan_meta`), o
+  mesmo texto que o delta-rs lê; o `load` de 10 linhas levou 2,06 s, 1,77 s, 1,92 s e 1,66 s nas
+  quatro sessões, o melhor de três em cada uma.
+- **A suíte da publicação** (13:05 e 13:08, 180,8 s e 175,2 s): 8 aprovados nas duas rodadas, a
+  primeira vez que a publicação da biblioteca rodou no Redshift.
+  `test_first_publication_loads_every_partition` publicou 80 linhas de 2 partições exportadas pelo
+  motor DuckDB (`redshift.publication.first`): o `COPY ... MANIFEST` do Redshift carregou os
+  arquivos do `COPY` do DuckDB, com o `DECIMAL(18, 2)` em `INT64`, o `TIMESTAMP` em `INT64` de
+  microssegundos, o `DATE` em `INT32` e o campo JSON com o tipo lógico `JSON` numa staging
+  `VARCHAR(65535)`; a publicação simultânea saiu como `ExecutionConflict` com o `1023` do servidor
+  (`redshift.publication.concurrent`); o `COPY` que falha sai como `ProgrammingError` e nada é
+  publicado; `svv_all_columns` descreve a tabela publicada com `bigint`, `date`, `timestamp without
+  time zone`, `double precision`, `numeric` com precisão 18 e escala 2, `character varying` com a
+  largura e `super`, a grafia que a reconciliação compara, sem diff
+  (`redshift.publication.svv_all_columns`); e a junção de duas tabelas publicadas em `AUTO` roda com
+  `DS_DIST_ALL_NONE` (`redshift.publication.join_plan`).
+- **A carga pelo pacote** (`scripts/migrate_parquet_to_delta.py --environment prod`, 14:16 a
+  14:19): as 12 tabelas do modelo entraram na raiz `<raiz>/prod/<tabela>`, com contagens e somas
+  iguais em toda partição, e `alembic_version`, `meta_update_status` e `schema.json` ficaram fora
+  do modelo; `environment_limits` deu 16 threads e `memory_limit` de 14.030 MiB. As partições de
+  `cad_lancamentos` entraram em 22,7 s, 16,8 s, 36,9 s e 22,7 s (33.239.719, 23.789.279, 52.654.607
+  e 32.218.190 linhas), com o pico do processo em 11.419 MB depois das duas primeiras e 16.198 MB
+  depois da 2026-03-31, 15% acima do limite e 52% da memória da máquina, contra 16.430 MB às 01:53;
+  `rel_contrato_operacao` até 11,9 s e 3.691 MB, `cad_operacoes` até 6,5 s e 2.376 MB,
+  `cad_contratos` até 5,5 s, e as tabelas sem partição de 2,1 s a 5,5 s, o tempo da abertura do
+  motor por partição. O tempo a mais da 2026-03-31, 36,9 s contra 10,1 s às 01:53, cabe nas duas
+  leituras da partição que o pacote acrescentou, a conferência na origem antes do `COPY` e a
+  releitura da cópia pelos dois leitores; nenhuma medição separou as parcelas.
+- **A auditoria** (`serialize-db audit --table cad_lancamentos --partitions 2026-01-31
+  --foreign-keys`, o sandbox em `/tmp` com `memory_limit` de 13,7 GiB e 16 threads): `linhas`,
+  `chave_id_lancamento`, `chave_id_lancamento_publicada` e cinco chaves estrangeiras aprovadas, e
+  `orfao_data_base_sistema_contrato` reprovada com 989.852 chaves distintas sem cadastro, o órfão
+  conhecido da base real, porque `cad_contratos` não tem a partição 2026-01-31 (a leitura de
+  2026-09-21, [`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)). As medidas da partição: 33.239.719 linhas,
+  nenhum nulo nas colunas `NOT NULL`, `total_valor` 117.667.407.519,194421 e nenhum `Double` não
+  finito, iguais às do relatório da carga.
+- **A operação**: `history` listou os cinco commits de `cad_lancamentos`, o `CREATE TABLE` sem
+  metadados e os quatro `WRITE` com `serialize_db_execution_id=carga-<id>` e
+  `serialize_db_input_versions={}`; `snapshot --name carga-2026-09-24` gravou as 12 tabelas nas
+  versões atuais; `vacuum` listou 0 arquivos em todas, o que cabe a uma raiz recém-carregada;
+  `archive --name carga-2026-09-24` copiou `cad_aliquotas`, `cad_contas` e `cad_contratos` e morreu
+  em `cad_lancamentos`, no `CopyObject` do arquivo da partição 2026-06-30 (32.218.190 linhas), com
+  `OSError: ... AWS Error NETWORK_CONNECTION during CopyObject operation: curlCode: 28, Timeout was
+  reached; Details: Operation too slow. Less than 1 bytes/sec transferred the last 3 seconds`. O
+  `copy_file` do `S3FileSystem` é um `CopyObject` só, o S3 copia o objeto no servidor antes de
+  responder, e o SDK da AWS em C++ abandona a chamada quando 3 segundos passam sem byte de resposta;
+  o PyArrow não expõe esse limite. A entrada do snapshot ficou em `snapshots`, e o arquivo, pela
+  metade.
+
+**Consequências**: `Storage.copy` no S3 passa a ser a transferência gerenciada do `boto3`
+(`CopyObject` até 8 MiB e `UploadPartCopy` em partes de 8 MiB acima, em paralelo e com a repetição
+por parte do botocore), e `test_list_copy_delete` copia 9 MiB nas duas raízes, no moto pelo
+`UploadPartCopy`; `deep_copy` continua uma cópia interrompida, pulando as partições que o destino
+já registra e recusando o destino que registra um arquivo fora da versão; e `serialize-db archive`
+deixou de pular a tabela presente em `arquivo/<nome>/`, um defeito que a falha expôs, porque a
+repetição teria dado a `cad_lancamentos` pela metade como arquivada e movido a entrada.
+`test_deep_copy_and_relocation` e `test_archive_copies_each_table_with_the_same_sums` cobrem a
+repetição, a continuação e a recusa, e reprovaram no código anterior. O substituto local responde a
+relação inexistente com `XX000` e a mensagem do alvo. [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
+perdeu a carga pelo pacote, as etapas 5 e 8, o arquivo do `UNLOAD` com `SUPER` e o `COPY` do
+arquivo do DuckDB; a repetição do `archive` no alvo, o `export`, o `compact` e a publicação da base
+inteira ficam nele.

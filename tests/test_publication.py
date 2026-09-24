@@ -101,7 +101,8 @@ class FakeConnection:
         if text == f"SELECT 1 FROM {CONTROL} LIMIT 0":
             if self.control_table:
                 return [], -1
-            raise server_error('relation "serialize_db_publications" does not exist', "42P01")
+            raise server_error("Relation serialize_db_publications does not exist in the "
+                               "database.")
         if match := re.fullmatch(rf"SELECT delta_version FROM {re.escape(CONTROL)} "
                                  r"WHERE table_name = '(\w+)'", text):
             name = match.group(1)
@@ -109,7 +110,7 @@ class FakeConnection:
         if match := re.fullmatch(rf'SELECT 1 FROM "{SCHEMA}"\."(\w+)" LIMIT 0', text):
             if match.group(1) in self.rows:
                 return [], -1
-            raise server_error(f'relation "{match.group(1)}" does not exist', "42P01")
+            raise server_error(f"Relation {match.group(1)} does not exist in the database.")
         if text.startswith("SELECT column_name, data_type"):
             return list(self.columns), -1
         if text.startswith("UPDATE") or text.startswith("DELETE FROM " + CONTROL):

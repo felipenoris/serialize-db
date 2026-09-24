@@ -653,7 +653,8 @@ def _compact(args: argparse.Namespace) -> int:
 def _archive(args: argparse.Namespace) -> int:
     """A cópia de cada tabela do snapshot para ``arquivo/<nome>/`` e a entrada movida para
     ``archived``; 2 no snapshot ausente de ``snapshots``, na tabela do snapshot que já não existe
-    na raiz e no conflito de escrita."""
+    na raiz e no conflito de escrita. A repetição depois de uma interrupção continua a cópia:
+    ``deep_copy`` pula as partições já registradas no arquivo."""
     db = Database(args.root, args.environment, args.metadata)
     storage = db.storage
     control, _ = delta.read_snapshots(storage, db.environment)
@@ -666,10 +667,6 @@ def _archive(args: argparse.Namespace) -> int:
     for name, version in sorted(entry.items()):
         source = storage.uri_of(storage.join(db.environment, name))
         destination = storage.uri_of(storage.join(db.archive_prefix(args.name), name))
-        # A repetição de um arquivo interrompido pula o que a execução anterior já copiou.
-        if delta.table_exists(destination, storage):
-            print(f"{name}: já no arquivo, {destination}")
-            continue
         if not delta.table_exists(source, storage):
             print(f"serialize-db archive: {name} não existe em {source}", file=sys.stderr)
             return 2

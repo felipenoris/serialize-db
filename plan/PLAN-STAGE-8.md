@@ -190,8 +190,10 @@ e o argumento `redshift` de `Execution`, o subcomando `serialize-db publish` e o
 assinaturas e as docstrings estão no código e na documentação do `pdoc`. O pool das tabelas saiu
 de `serialize_db.execution` para o módulo privado `serialize_db._pool`, que a execução e a
 publicação usam. O que a implementação mostrou está em [`POC.md`](POC.md), seção "O que a
-implementação das etapas 5 e 8 mostrou"; os casos `redshift` passaram no substituto local e
-esperam a primeira execução no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+implementação das etapas 5 e 8 mostrou"; os casos `redshift` passaram no substituto local e, em
+2026-09-24 às 13:05 e 13:08, no ambiente alvo, os oito nas duas rodadas: o `COPY` do Redshift
+sobre os arquivos do `COPY` do DuckDB, o `1023` como `ExecutionConflict`, a grafia de
+`svv_all_columns` sem diff e a junção com `DS_DIST_ALL_NONE` ([`POC.md`](POC.md)).
 
 O que a implementação fixou além do texto das seções acima:
 
@@ -211,8 +213,10 @@ O que a implementação fixou além do texto das seções acima:
   time zone` e `timestamp`), com a largura, a precisão e a escala: a coluna anulável nova entra por
   `ALTER TABLE ... ADD COLUMN`, fora da transação; a coluna removida, a `NOT NULL` nova e o tipo,
   a largura ou a escala que mudaram despublicam a tabela, e a publicação que segue é uma primeira
-  publicação. A grafia de `svv_all_columns` no ambiente alvo é leitura da primeira execução lá
-  (`test_reconcile_published_on_the_target`, [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  publicação. A grafia de `svv_all_columns` no ambiente alvo, lida em 2026-09-24 por
+  `test_reconcile_published_on_the_target`: `bigint`, `date`, `timestamp without time zone`,
+  `double precision`, `numeric` com a precisão e a escala, `character varying` com a largura e
+  `super` ([`POC.md`](POC.md)).
 - **A partição removida no Delta** (`version_diff` a devolve pelo `remove`) recebe só o `DELETE`,
   e a tabela sem partição troca a tabela inteira.
 - **O `1023`, o `UPDATE` sem linha, o `DELETE` da linha de controle sem linha e a tabela publicada

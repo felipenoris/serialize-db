@@ -13,15 +13,16 @@ O substituto confere o código Python dos testes. Cada recusa e cada comportamen
 uma leitura do ambiente alvo registrada em ``plan/POC.md``: a contrabarra como escape nos literais
 de texto, o ``UNLOAD`` de um resultado vazio sem manifesto nem arquivo, o ``is_valid_json`` que
 recusa ``SUPER`` e o ``ALTER COLUMN ... TYPE`` que o esquema do datashare recusa. A relação
-inexistente sai com o SQLSTATE ``42P01`` e a que já existe com ``42P07``, os do PostgreSQL, e o
-conflito entre duas transações do DuckDB sai com o ``1023`` do Redshift, a violação de isolamento
-serializável que a segunda publicação da mesma partição recebeu no ambiente alvo em 2026-09-23;
-``svv_all_columns`` lista as colunas com os tipos e as larguras do DDL que criou cada tabela, na
-grafia do Redshift, e ``current_database()`` é descrito com o tipo ``name`` (OID 19), que o
-Redshift dá aos identificadores do catálogo. No resto, o DuckDB responde do jeito dele. Os
+inexistente sai como no ambiente alvo (leitura de 2026-09-24), o SQLSTATE ``XX000`` com a mensagem
+``Relation <nome> does not exist in the database.``, a que já existe com o ``42P07`` do PostgreSQL,
+e o conflito entre duas transações do DuckDB sai com o ``1023`` do Redshift, a violação de
+isolamento serializável que a segunda publicação da mesma partição recebeu no ambiente alvo em
+2026-09-23; ``svv_all_columns`` lista as colunas com os tipos e as larguras do DDL que criou cada
+tabela, na grafia do Redshift, e ``current_database()`` é descrito com o tipo ``name`` (OID 19),
+que o Redshift dá aos identificadores do catálogo. No resto, o DuckDB responde do jeito dele. Os
 bloqueios entre transações, a criptografia do bucket, a Data API, as credenciais do contêiner, o
-proxy e a comparação do ``NaN`` numa varredura de tabela, que no DuckDB segue a regra do
-PostgreSQL e no Redshift não, só o ambiente alvo mostra.
+proxy e a comparação do ``NaN`` numa varredura de tabela, que no DuckDB segue a regra do PostgreSQL
+e no Redshift não, só o ambiente alvo mostra.
 
 Duas variáveis provocam falhas, para rodar lado a lado o código anterior e o corrigido de um
 tratamento de falha:
@@ -483,12 +484,17 @@ def first_line(error: Exception) -> str:
 
 
 def duckdb_error(error: Exception) -> redshift_connector.ProgrammingError:
-    """O erro do DuckDB como erro do servidor: a relação inexistente com ``42P01`` e a que já
-    existe com ``42P07``, os SQLSTATE do PostgreSQL; o conflito entre duas transações com a
-    mensagem do ``1023`` do Redshift; o resto com ``XX000``."""
+    """O erro do DuckDB como erro do servidor: a relação inexistente com o ``XX000`` e a mensagem
+    ``Relation <nome> does not exist in the database.`` do Redshift, a que já existe com o
+    ``42P07`` do PostgreSQL; o conflito entre duas transações com a mensagem do ``1023`` do
+    Redshift; o resto com ``XX000``."""
     message = first_line(error)
+    missing = re.search(r"with name (\S+) does not exist", message)
+    if missing is not None:
+        name = missing.group(1).strip('"')
+        return server_error(f"Relation {name} does not exist in the database.")
     if "does not exist" in message:
-        return server_error(message, "42P01")
+        return server_error(message)
     if "already exists" in message:
         return server_error(message, "42P07")
     if isinstance(error, duckdb.TransactionException) or "Conflict on" in message:

@@ -90,8 +90,9 @@ serialize-db archive --root s3://bucket/projeto/delta --environment prod \
 Antes: o snapshot registrado em `snapshots`; a pasta `arquivo/<nome>/` recebe a regra de ciclo de
 vida do bucket. Depois: uma tabela nova por tabela do snapshot, com uma versão por partição, os
 mesmos arquivos e as mesmas somas; a entrada em `archived`, que `vacuum` não prende mais, e
-`snapshot` recusando o nome, porque ele dá a pasta. Uma tabela já no arquivo é pulada, e o comando
-se repete depois de uma interrupção.
+`snapshot` recusando o nome, porque ele dá a pasta. O comando se repete depois de uma interrupção
+e continua de onde parou: a tabela já inteira no arquivo e a partição já registrada nele são
+puladas, e só o que falta é copiado.
 
 ### Exportação
 

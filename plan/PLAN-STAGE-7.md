@@ -137,7 +137,12 @@ relatório dela falharia com `ConversionException` numa coluna com `NaN` ou infi
 Os tipos do modelo cliente ficam fechados antes da execução: mudá-los depois é reescrever o
 Delta. A `sort_key` de cada tabela particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
 2026-09-21); o log do Delta não a guarda, e mudá-la depois é reordenar as partições que interessam.
-A carga pelo pacote ainda não rodou no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+A carga pelo pacote rodou no ambiente alvo em 2026-09-24 às 14:16, pelo script, sobre a cópia da
+base de produção, na raiz `<raiz>/prod/<tabela>`: as 12 tabelas com contagens e somas iguais,
+`cad_lancamentos` em 22,7 s, 16,8 s, 36,9 s e 22,7 s com o pico do processo em 16.198 MB sob
+`memory_limit` de 14.030 MiB, numa máquina de 16 vCPUs e 31.383 MB, e a auditoria com
+`--foreign-keys` sobre 2026-01-31 leu os 989.852 órfãos de `orfao_data_base_sistema_contrato`, o
+`data_base` sem `cad_contratos` ([`POC.md`](POC.md)).
 
 ## A implementação
 
