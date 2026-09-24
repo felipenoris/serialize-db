@@ -257,7 +257,7 @@ The budget above is never a reason to drop a fact: what does not fit here goes t
 
 | Memory file | Read it before |
 | --- | --- |
-| `.claude/memory/decisions.md` | Planning or implementing any stage: what the user stated and decided, with dates (the pipeline outside this repo, the batch boundary, the partition unit, the Redshift target, `export_mode`, the test layout). |
+| `.claude/memory/decisions.md` | Planning or implementing any stage: what the user stated and decided, with dates (the pipeline outside this repo, the batch boundary, the partition unit, the Redshift target, `export_mode`, the test layout, the read access). |
 | `.claude/memory/lessons.md` | Adding a lesson, or when the reason behind a working rule matters: the dated stories. |
 | `.claude/memory/delta.md` | Code on `serialize_db.delta` or the `deltalake` package: delta-rs behavior, `create_write_transaction`, schema evolution, conflicts, vacuum and log retention, performance, the alternatives assessed. |
 | `.claude/memory/duckdb.md` | Code on `engine.duckdb`, `storage.duckdb_setup` or a probe that opens DuckDB: Arrow in and out, `COPY`, proxy, Python API. |
@@ -296,7 +296,7 @@ research appends to the matching group.
 | `plan/sqlalchemy.md` | SQLAlchemy as the schema contract: metadata, reflection, deferrable constraints, Core and ORM for DDL and DML, server-generated keys, SQL generation per dialect (`compile`, dialect objects and paramstyles, `literal_binds`, `render_postcompile`, `create_mock_engine`, `echo`), the `Numeric` float conversion, the verdict per part, the recommendation without the compatibility premise and the generated SQL text as the optional migration path out of SQLAlchemy (`param`, `prefixed`, `render`, `write_sql_files`, `read_sql`, `bind`), the engines compiling the Core statement with the client's parameters by default (user decision of 2026-09-22). |
 | `plan/delta.md` | Delta Lake as the source of truth: folder layout and log actions, Delta versus Iceberg, the implementations and the delta-rs gaps, S3 requirements, types and JSON, table creation from the model, schema evolution with the measured rename/drop rewrite, transactions, conflicts and restore, DML, ingestion and export, pipeline steps, DuckDB and Redshift access, performance, relocation and SQLAlchemy support. |
 | `plan/PLAN.md` | The plan (pt-BR): the decisions with the premises behind them, the streaming `pa.RecordBatch` boundary with client code and its measured hazards, the rules every stage obeys, the package layout with dependencies, configuration and test policy, the table of stages 0 to 9 with delivery and acceptance criterion, the monthly pipeline with the `Execution` API, and the order of work. |
-| `plan/PLAN-STAGE-0.md` to `plan/PLAN-STAGE-9.md` | One file per stage, indexed in `plan/PLAN.md`: the primitives with signature and behavior, the strategy, the prerequisites and postconditions, the tests per case, the proofs of concept that exercise each API and `Decisões pendentes` (mirrored in `plan/OPEN_QUESTIONS.md`); stages 3 to 9 also keep `Interface` (signature stubs) and `Rascunhos executados` (the code that ran on 2026-09-21 and its output), which the module and its tests replace once a stage is implemented, as in stages 1 and 2. Stage 0 holds the Redshift items of the proof of concept and the probes that precede any stage on AWS. |
+| `plan/PLAN-STAGE-0.md` to `plan/PLAN-STAGE-10.md` | One file per stage, indexed in `plan/PLAN.md`: the primitives with signature and behavior, the strategy, the prerequisites and postconditions, the tests per case, the proofs of concept that exercise each API and `Decisões pendentes` (mirrored in `plan/OPEN_QUESTIONS.md`); stages 3 to 9 also keep `Interface` (signature stubs) and `Rascunhos executados` (the code that ran on 2026-09-21 and its output), which the module and its tests replace once a stage is implemented, as in stages 1 and 2. Stage 0 holds the Redshift items of the proof of concept and the probes that precede any stage on AWS; stage 10, the read access, is planned with `Interface` and without code. |
 | `plan/CURRENT_STATE.md` | Where the implementation stands (pt-BR): the situation of each stage, and the repository artifact by artifact, including the reference model's defects and each suite's last pass and skip counts. |
 | `plan/POC.md` | What each run showed (pt-BR), with the date of each measurement and its consequence in the plan. |
 | `plan/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): one item per pending question, with the run or the decision that will close it; a closed item leaves the file when its answer lands in the owning document. |
@@ -753,6 +753,14 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `Storage.create_text` and `bind(sql, params, dialect)` replace the old names, and the helpers the
   engines repeated moved to `serialize_db.engine`, `sql` and `audit`; what it kept and why is in
   `.claude/memory/decisions.md`.
+- Stage 10, the read access (`plan/PLAN-STAGE-10.md`), was planned on 2026-09-24 at the user's
+  request: `serialize_db.reader` with `db.open_delta()` (DuckDB views over the latest snapshot, a
+  named one or the current version, and `materialize` of tables and partitions) and
+  `db.open_redshift(config)` over the published `<environment>_<table>` tables, with a client's
+  own `UNLOAD` destination; its code waits on the pending decisions A to D in
+  `plan/OPEN_QUESTIONS.md` (the snapshot date the control file lacks, the current-version form,
+  the client entry without `Database`, the archived snapshot, which is the target's only one
+  since the 16:51 battery).
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still

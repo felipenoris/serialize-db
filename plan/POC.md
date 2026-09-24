@@ -3374,3 +3374,34 @@ contêiner:
   cada arquivo pela função do probe.
 - As contagens: sem variável, 209 passam e 316 são pulados; com a raiz local, 431 e 94; com o
   substituto local, 524 e 1 ([`CURRENT_STATE.md`](CURRENT_STATE.md)).
+
+## O que as sondas do acesso de leitura mostraram
+
+Em 2026-09-24, numa pasta local do contêiner de desenvolvimento (Linux x86_64), com DuckDB 1.5.5,
+deltalake 1.6.4, PyArrow 25.0.1 e SQLAlchemy 2.0.54, as sondas da
+[etapa 10](PLAN-STAGE-10.md) rodaram sobre uma tabela Delta de quatro partições gravada por
+`delta.publish_partition`:
+
+- **A view sobre `delta_scan(uri, version := v)` lê o log na criação**: uma abertura de arquivo, em
+  8,7 ms, e nenhuma de Parquet. A versão inexistente falha no `CREATE VIEW`, com `IOException`
+  (`LogSegment end version 4 not the same as the specified end version 9`).
+- **A poda pela view é a do `delta_scan` direto**: o `=` e o `BETWEEN` abriram só as pastas das
+  partições pedidas, o `IN` de um valor também, e o `IN` de dois valores abriu as quatro, pela view
+  e direto; o `IN` ao lado do `BETWEEN` abriu as três do intervalo.
+- **A troca da view por tabela numa transação** (`BEGIN`, `DROP VIEW`, `CREATE TABLE ... AS
+  SELECT`) devolveu a view com as 40 linhas no `ROLLBACK` e deixou a tabela com as 10 linhas da
+  partição pedida no `COMMIT`. Duas trocas em cursores paralelos da mesma conexão terminaram sem
+  erro.
+- **A versão anterior a uma coluna nova** expõe as colunas dela: `delta_scan(..., version := 0)`
+  deu `a` e `b`, e a coluna `c` da versão 1 foi `BinderException` na consulta que a cita.
+- **O statement ORM compila para as tabelas publicadas** por `compiled_for_cursor` e
+  `literal_text` do motor Redshift com o prefixo `prod_`, a junção e o `IN` de lista inclusive
+  (`FROM "prod_cad_contas" JOIN "prod_cad_lancamentos"`), o mesmo nome de `published_name`.
+
+A leitura do código achou o que o leitor não pode supor: `_write_control` grava o arquivo de
+controle com as chaves em ordem alfabética, e a entrada de um snapshot não tem data, então nada nele
+diz qual snapshot é o último.
+
+**Consequências**: o [arquivo da etapa 10](PLAN-STAGE-10.md) cria as views pelo `ingest` do motor,
+materializa pela troca numa transação e documenta o `IN` de vários valores, que o leitor não
+reescreve; a data do snapshot é a decisão pendente A, em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

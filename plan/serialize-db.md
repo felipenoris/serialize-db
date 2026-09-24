@@ -313,6 +313,22 @@ A opção de migração para fora do SQLAlchemy, não o caminho padrão (decisã
    2026-09-21); consulta nova nasce
    em texto, no dialeto do DuckDB, com os testes nos dois motores ([`estrategia.md`](estrategia.md)).
 
+### Consulta da base pelo cliente
+
+O acesso de leitura da [etapa 10](PLAN-STAGE-10.md), planejado em 2026-09-24.
+
+1. O time abre o leitor Delta por `db.open_delta()`: as versões do último snapshot, de um snapshot
+   nomeado ou a atual, e um DuckDB com uma view por tabela sobre `delta_scan` nessas versões.
+2. O cliente submete o `select` Core ou ORM do modelo a `reader.query`, que devolve a `pa.Table`,
+   ou a `reader.stream`, que devolve os lotes; `to_pandas(types_mapper=pd.ArrowDtype)` leva o
+   resultado ao pandas.
+3. `reader.materialize` troca a view de uma tabela consultada muitas vezes por uma tabela local,
+   inteira ou com parte das partições.
+4. O cliente que só enxerga o Redshift abre o leitor das tabelas `<ambiente>_<tabela>` por
+   `serialize_db.reader.open_redshift`, com um destino próprio para o `UNLOAD` de `stream`; o mesmo
+   statement roda nas duas origens.
+5. O `close` apaga o banco local do leitor Delta, ou os arquivos do `UNLOAD` do leitor Redshift.
+
 ## Paralelismo
 
 A biblioteca não tem scheduler, grafo de tarefas nem API assíncrona: nenhum dos quatro drivers

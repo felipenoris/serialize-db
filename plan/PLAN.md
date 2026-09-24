@@ -4,7 +4,7 @@ Este documento registra o que a biblioteca é e como ela chega lá: as decisões
 o código cliente, as regras que as etapas obedecem, a organização do pacote, as etapas de
 implementação e o pipeline de atualização mensal. O plano de cada etapa, com as primitivas do
 módulo, os testes e as provas de conceito que o exercitam, está num arquivo próprio, de
-[`PLAN-STAGE-0.md`](PLAN-STAGE-0.md) a [`PLAN-STAGE-9.md`](PLAN-STAGE-9.md), que a seção "Etapas"
+[`PLAN-STAGE-0.md`](PLAN-STAGE-0.md) a [`PLAN-STAGE-10.md`](PLAN-STAGE-10.md), que a seção "Etapas"
 indexa. O estado da implementação, com
 a situação de cada etapa e o que cada artefato contém, está em
 [`CURRENT_STATE.md`](CURRENT_STATE.md); o resultado das provas de conceito, das suítes e dos probes,
@@ -512,6 +512,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução. |
 | `serialize_db.load` | 7 | A carga inicial dos Parquet atuais. |
 | `serialize_db.publication` | 8 | A publicação para clientes: a tabela de controle, a transação por tabela, a despublicação, a reconciliação das tabelas publicadas e o estado da publicação. |
+| `serialize_db.reader` | 10 | O acesso de leitura por statements Core com o resultado em Arrow: o leitor Delta, um DuckDB com uma view por tabela no último snapshot, num snapshot nomeado ou na versão atual, com a materialização de tabelas e partições, e o leitor Redshift, sobre as tabelas publicadas `<ambiente>_<tabela>`. |
 | `serialize_db.cli` | 1 a 9 | `serialize-db run`, `schema`, `sql`, `audit`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`: cada subcomando entra com a etapa que entrega a primitiva por trás dele (`schema` na 1, `sql` na 2), e a etapa 6 monta o `run` e o despacho comum. |
 
 Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`, `deltalake`, `duckdb`,
@@ -564,7 +565,8 @@ raiz do seu repositório) são comparados por teste com uma geração nova, sem 
 ## Etapas
 
 Cada etapa entrega um módulo com testes. As etapas 1 a 4 e 6 rodam em pastas locais, sem AWS; a
-etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parquet de origem.
+etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parquet de origem; o
+leitor Delta da etapa 10 roda em pasta local, e o leitor Redshift exige a conexão.
 
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
@@ -578,6 +580,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | 7. Carga inicial | Migração dos Parquet atuais por tabela e por partição, com relatório; `initial_load` absorve a migração adiantada de `scripts/migrate_parquet_to_delta.py`, que vem logo depois da etapa 1. | Contagens e somas por partição iguais entre origem e Delta. |
 | 8. Publicação para clientes | Tabelas `<ambiente>_*` no Redshift, `version_diff`, transação única, `serialize_db_publications`, despublicação. | Uma partição alterada recarrega só essa partição. |
 | 9. Operação | Snapshots, `vacuum`, compactação, arquivo, exportação, `history`, runbook, `pdoc`. | Runbook escrito e testes de manutenção passando. |
+| 10. Acesso de leitura | `serialize_db.reader`, `Database.open_delta` e `Database.open_redshift`: o statement Core do cliente lido na base Delta, por views do DuckDB sobre o snapshot, e na base publicada no Redshift, com o resultado em Arrow. | O mesmo statement devolve o mesmo resultado no leitor Delta e no leitor Redshift; o leitor Delta lê o último snapshot sem argumento e a versão atual no outro modo, e a materialização parcial deixa no nome só as partições pedidas. |
 
 O plano de cada etapa está num arquivo próprio, que fixa as primitivas do módulo, a estratégia de
 implementação de cada primitiva, os pré-requisitos e as pós-condições, os testes por caso, as
@@ -596,6 +599,7 @@ os substituem, como nas etapas 1 e 2:
 - [Etapa 7: carga inicial](PLAN-STAGE-7.md)
 - [Etapa 8: publicação para clientes](PLAN-STAGE-8.md)
 - [Etapa 9: operação](PLAN-STAGE-9.md)
+- [Etapa 10: acesso de leitura](PLAN-STAGE-10.md)
 
 ## Pipeline de atualização mensal
 
@@ -677,3 +681,6 @@ usuário de 2026-09-23 e 2026-09-24, [etapa 5](PLAN-STAGE-5.md)).
 6. Etapa 7, implementada em 2026-09-24 sobre a base fictícia, com o script de migração fino sobre
    o pacote e a carga pelo pacote ainda por rodar no ambiente alvo; etapa 9 por último, com o
    runbook, implementada no mesmo dia na pasta local.
+7. Etapa 10, pedida pelo usuário em 2026-09-24 depois das etapas 1 a 9: o leitor Delta na pasta
+   local e o leitor Redshift no substituto local, depois no ambiente alvo. A implementação espera
+   as decisões pendentes do arquivo da etapa.

@@ -30,6 +30,16 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   is not truncated (200 characters came back whole), and an all-null column carries no `min`/`max`.
   `plan/POC.md`, `scripts/migrate_parquet_to_delta.py`
 
+- A view over `delta_scan(uri, version := v)` binds at `CREATE VIEW`: it read the log (one file
+  open, 8.7 ms, no Parquet) and a missing version failed there with `IOException` (`LogSegment
+  end version 4 not the same as the specified end version 9`). A filter through the view prunes
+  as on `delta_scan` itself: `=`, `BETWEEN` and a one-value `IN` open only their partition
+  folders, a two-value `IN` opens every folder, and the `IN` beside the range opens the range.
+  An old version exposes its own columns: a column added later is `BinderException`. `BEGIN`,
+  `DROP VIEW`, `CREATE TABLE ... AS SELECT` swaps a view for a table, the `ROLLBACK` brings the
+  view back, and two swaps in parallel cursors of one connection ran without conflict (DuckDB
+  1.5.5, local folder, 2026-09-24). `plan/POC.md`, `plan/PLAN-STAGE-10.md`
+
 ## Proxy
 
 - DuckDB has `http_proxy`, `http_proxy_username` and `http_proxy_password` and nothing like

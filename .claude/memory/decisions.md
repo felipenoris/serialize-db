@@ -893,3 +893,27 @@ helpers), because a shared helper would move code between modules; and the `monk
 failure between two steps. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`,
 `docs/operacao.md`, `plan/POC.md`
 
+## The read access of stage 10 (2026-09-24)
+
+The user asked to use the package also to mediate access to the base: a client that has the
+model submits a SQLAlchemy `select` and gets an Arrow result, easily converted to pandas, from
+the Delta base (a DuckDB database like the pipeline's, with some tables materialized and the
+others views over the Delta files) and from the base published in Redshift. The assistant
+proposed, and the user accepted, a reader object opened from `Database` and implemented in
+`serialize_db.reader`, named `open_delta` and `open_redshift`; neither `Execution` (partition,
+`execution_id`, snapshot, publication) nor a SQLAlchemy `Connection` (rows, and no
+`cad_lancamentos` to `prod_cad_lancamentos` mapping); the same `query`, `stream` and `session()`
+as the engines, `materialize` only on Delta. The user's answers of the same day: the two
+sources serve different teams, and clients with read-only access to the published Redshift
+base give their own `UNLOAD` destination; the latest snapshot is the Delta reader's default,
+and another mode must read the current version; a partial materialization (a subset of
+partitions under the model's name) is allowed. The assistant's proposals awaiting the user:
+`created_at` in a sibling key of the snapshot control file, because the entries carry no date
+and `_write_control` sorts the keys, so nothing tells which snapshot is the latest (A);
+`db.open_delta(current=True)` for the current version, against `db.open_delta_current()` under
+the boolean-flag rule (B); `serialize_db.reader.open_redshift(metadata, environment, config,
+unload_to)` for the client without the Delta root, beside `Database.open_redshift(config,
+unload_to=None)` (C); and reading an archived snapshot from its copy in
+`arquivo/<name>/<table>` at the copy's current version, against refusing the name (D), because
+the target's only snapshot, `carga-2026-09-24`, moved to `archived` in the 16:51 battery.
+`plan/PLAN-STAGE-10.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
