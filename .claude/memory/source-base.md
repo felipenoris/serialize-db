@@ -142,3 +142,19 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   the sort still costs 1.1 to 1.4 times and shrinks the files to 74% to 92%. With 16 threads
   `rel_contrato_operacao` 2026-03-31 loaded in 4.7 s with a 3,251 MB peak (13.3 s and 2,459 MB with
   4 vCPUs). The raw reports stay out of git. `plan/POC.md`, `plan/PLAN-STAGE-7.md`
+
+- The load through the package (2026-09-24, 14:16 to 14:19 UTC, `scripts/migrate_parquet_to_delta.py
+  --environment prod` from `main` with #72, one process, an engine per partition with 16 threads
+  and a 14,030 MiB `memory_limit` on a 16 vCPU and 31,383 MB machine with 28,061 MB available):
+  every table matched in counts and sums, into `<root>/prod/<table>`; `cad_lancamentos` 22.7 s,
+  16.8 s, 36.9 s and 22.7 s with the process peak at 11,419 MB after the first two partitions and
+  16,198 MB after 2026-03-31 (against 10.1 s and 16,430 MB in the 01:53 run: the package checks
+  the source partition before the `COPY` and re-reads the copy through both readers);
+  `rel_contrato_operacao` up to 11.9 s and 3,691 MB, `cad_operacoes` up to 6.5 s and 2,376 MB,
+  `cad_contratos` up to 5.5 s, the unpartitioned tables 2.1 s to 5.5 s each. `serialize-db audit
+  --table cad_lancamentos --partitions 2026-01-31 --foreign-keys` approved the row and key checks
+  and five foreign keys and failed `orfao_data_base_sistema_contrato` with 989,852 distinct keys,
+  the known absence of a 2026-01-31 partition in `cad_contratos`; `total_valor`
+  117,667,407,519.194421, no non-finite `Double`. `history`, `snapshot carga-2026-09-24` (12
+  tables) and `vacuum` (0 files) ran; `archive` died in the copy of the 2026-06-30 file
+  (`aws-s3.md`). The raw report stays out of git. `plan/POC.md`

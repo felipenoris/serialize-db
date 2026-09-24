@@ -65,6 +65,13 @@ and S3 Tables in 30.2 s, and `svv_table_info` is denied to the role after the `U
 The early migration's reports show a process peak of 19,595 MB, more than this instance's RAM,
 so the migration ran on a larger instance (`source-base.md`). `plan/POC.md`
 
+The battery of 2026-09-24 at 12:38 UTC (from `main` with #72) ran on 16 vCPUs and 31,383 MB with
+28,061 MB available, the same network and credentials (the caller's credential expiring in 36
+minutes, the workgroup's in an hour), Lake Formation and S3 Tables timing out in 60.3 s and
+30.4 s, and 907 non-current versions (32,966,477 bytes) with 859 delete markers under the test
+root (`BK-14`). `catalog.py`, `bucket.py` and `space.py` exit with 1 because failed calls count,
+all of them expected readings; no check failed. `plan/POC.md`
+
 ## The prepared folder and the venv
 
 `pyproject.toml` declares no runtime dependencies and pins the `dev` group (SQLAlchemy, duckdb-engine,

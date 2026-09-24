@@ -313,6 +313,19 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `USE` (reading of 2026-09-21, recalled by the user on 2026-09-24): the test records it and
   never asserts it. The publication suite did not run:
   the target's `SERIALIZE_DB_TEST_LOCAL_ROOT` folder was missing. `plan/POC.md`
+- The battery of 2026-09-24 at 12:38 (the folder created) passed the six engine cases (13:01,
+  13:03) and the eight publication cases (13:05, 13:08) twice each. Readings: a missing relation
+  answers SQLSTATE `XX000` with `Relation <name> does not exist in the database.`, not `42P01`
+  (`relation_missing` matched by the message; the stand-in imitates the target's form since);
+  `svv_all_columns` spells the published table `bigint`, `date`, `timestamp without time zone`,
+  `double precision`, `numeric` (18, 2), `character varying` with the width and `super`, and the
+  reconciliation found no diff; the Redshift `COPY ... MANIFEST` loaded the DuckDB-written files
+  (`DECIMAL` in `INT64`, `TIMESTAMP` in `INT64` microseconds, `DATE` in `INT32`, the JSON column
+  through the `VARCHAR(65535)` staging); the concurrent publication surfaced as
+  `ExecutionConflict` carrying the `1023`; a failed `COPY` is a `ProgrammingError` with nothing
+  published; two published tables at `AUTO` join with `DS_DIST_ALL_NONE`; the `UNLOAD` file's
+  `SUPER` column registered by `export_partition` reads as `VARCHAR` text through `delta_scan`; a
+  10-row `load` took 1.66 s to 2.06 s. `plan/POC.md`, `plan/readings/`
 - A positional `COPY` cannot load a subset of a file's columns (the column list must match the
   file's count, reading of 2026-09-21), so the audit's published staging carries every contract
   column and is the same `exec_<id>_<tabela>_publicado` as `published()`, loaded once per
@@ -324,7 +337,8 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   needs `SERIALIZETOJSON`, never read on a small string; the export serializes the column with
   `JSON_SERIALIZE` so the `UNLOAD` file carries text. `plan/PLAN-STAGE-5.md`
 - The stand-in maps DuckDB's `TransactionContext Error: Conflict on tuple deletion!` to the
-  `1023` message, catalog `does not exist` to `42P01` and `already exists` to `42P07`, and lists
+  `1023` message, catalog `does not exist` to `XX000` with the target's `Relation <name> does not
+  exist in the database.` (since 2026-09-24; `42P01` before) and `already exists` to `42P07`, and lists
   `svv_all_columns` from the DDL it remembers, in Redshift's spelling; the concurrent publication
   test pauses every connection of the second publication after its control-row read through the
   `driver_connect` seam. `plan/POC.md`, `tests/emulator.py`

@@ -180,7 +180,13 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `max` and `partition` structs), keeping min and max only for the exact types as `register_files`
   does; the read-back is the row count by both readers against the sum of the actions, because an
   archived version may carry a schema older than the current model. `history()` entries carry the
-  commit's custom metadata as top-level keys, newest first. `plan/PLAN-STAGE-9.md`, `plan/POC.md`
+  commit's custom metadata as top-level keys, newest first. Since 2026-09-24 `deep_copy` resumes
+  an interrupted copy: with a table at the destination it skips the partitions whose files the
+  destination already registers (no commit), copies the others, and refuses with
+  `RegistrationRefused` a destination registering a file the version does not list; the repeat
+  over a complete copy returns the same version, and `serialize-db archive` calls it for every
+  table instead of skipping an existing destination, which had let a half-copied table pass as
+  archived. `plan/PLAN-STAGE-9.md`, `plan/POC.md`
 
 ## Alternatives assessed
 

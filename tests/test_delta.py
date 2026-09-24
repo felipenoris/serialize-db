@@ -801,8 +801,10 @@ def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) 
 
 def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:
     """A cópia profunda copia os arquivos da versão e os registra, um commit por partição, com o
-    esquema, a partição, o nome e as estatísticas da origem; a pasta copiada arquivo a arquivo abre
-    na mesma versão nos dois leitores, porque o log guarda caminhos relativos."""
+    esquema, a partição, o nome e as estatísticas da origem; a repetição não commita, a cópia de
+    uma versão sobre a de uma anterior copia só a partição que falta, e o destino que registra um
+    arquivo fora da versão é recusado; a pasta copiada arquivo a arquivo abre na mesma versão nos
+    dois leitores, porque o log guarda caminhos relativos."""
     publish(storage, uri, "2026-07-31", 1, 10)
     publish(storage, uri, "2026-08-31", 11, 10)
 
@@ -821,7 +823,23 @@ def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:
         assert copied_actions.column(column).equals(source_actions.column(column)), column
     assert scan(storage, f"SELECT count(*), sum(id_operacao) FROM delta_scan('{archive}')") == \
         [(10, 55)]
-    with pytest.raises(Exception):  # noqa: B017 - o erro do delta-rs num destino com tabela
+
+    # A repetição sobre a cópia completa não commita; a cópia da versão 2 sobre a da versão 1
+    # continua de onde a primeira parou, com um commit só da partição que falta; a versão 1 sobre a
+    # cópia da 2 é recusada, porque o destino registra um arquivo que ela não lista.
+    assert delta.deep_copy(uri, 1, archive, storage) == 1
+    assert delta.deep_copy(uri, 2, archive, storage) == 2
+    added = [action["add"]["path"] for action in log_actions(storage, archive, 2)
+             if "add" in action]
+    source_actions = pa.table(delta.open_table(uri, storage, 2).get_add_actions(flatten=True))
+    august = [path for path in source_actions.column("path").to_pylist()
+              if path.startswith("data_str=2026-08-31/")]
+    assert added == august and len(august) == 1
+    continued = delta.open_table(archive, storage)
+    assert sorted(pa.table(continued.get_add_actions(flatten=True)).column("path").to_pylist()) \
+        == sorted(source_actions.column("path").to_pylist())
+    assert scan(storage, f"SELECT count(*) FROM delta_scan('{archive}')") == [(20,)]
+    with pytest.raises(RegistrationRefused, match="fora da versão 1"):
         delta.deep_copy(uri, 1, archive, storage)
 
     # A pasta copiada arquivo a arquivo.

@@ -12,6 +12,16 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `etag`), `DeleteObject` for vacuum, KMS actions only with SSE-KMS; no lifecycle expiration under
   table prefixes; versioning and Object Lock unnecessary. SSE keys in `storage_options`:
   `aws_server_side_encryption`, `aws_sse_kms_key_id`, `aws_sse_bucket_key_enabled`. `plan/delta.md`
+- A `CopyObject` of a large object can outlast the AWS C++ SDK's low-speed limit:
+  `S3FileSystem.copy_file` (pyarrow 25.0.1) is one `CopyObject`, S3 copies server-side before it
+  answers, and the SDK gives up after 3 s without a byte (`AWS Error NETWORK_CONNECTION during
+  CopyObject operation: curlCode: 28, Timeout was reached; Details: Operation too slow. Less than
+  1 bytes/sec transferred the last 3 seconds`), which killed the target's `archive` on the
+  32,218,190-row file of `cad_lancamentos` 2026-06-30 on 2026-09-24 after three smaller tables
+  had copied; pyarrow exposes no option for that limit. `Storage.copy` on S3 is boto3's managed
+  `copy` since (`CopyObject` up to 8 MiB, `UploadPartCopy` in 8 MiB parts above, 10 threads,
+  botocore's retries per part); moto 5.2.3 serves `UploadPartCopy`, and `test_list_copy_delete`
+  copies a 9 MiB object in both roots. `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 
 ## Credentials, region and proxy in the clients
 

@@ -42,6 +42,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
+import logging
 import math
 import time
 import uuid
@@ -81,6 +82,8 @@ from serialize_db.schema import (
     table_options,
 )
 from serialize_db.storage import Storage
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "RegisteredFile",
@@ -1463,17 +1466,61 @@ def _count_rows(uri: str, storage: Storage) -> tuple[int, int]:
     return by_delta, int(row[0])
 
 
+def _actions_by_partition(dt: DeltaTable, partition_by: str | None) -> dict[str | None, list]:
+    """As ações ``add`` da versão, com os structs de estatísticas, agrupadas pelo valor da
+    partição; uma tabela sem partição fica toda sob ``None``."""
+    by_partition: dict[str | None, list] = {}
+    for action in pa.table(dt.get_add_actions(flatten=False)).to_pylist():
+        value = None
+        if partition_by is not None:
+            value = (action.get("partition") or {}).get(partition_by)
+        by_partition.setdefault(value, []).append(action)
+    return by_partition
+
+
+def _copy_destination(destination: str, source: DeltaTable, storage: Storage) -> set[str]:
+    """A tabela do destino da cópia e os caminhos que ela já registra: criada com o esquema, a
+    partição, o nome, a descrição e as propriedades da origem quando não existe; aberta quando
+    existe, para continuar uma cópia interrompida, e recusada quando registra um arquivo que a
+    versão de origem não lista, porque guarda outra tabela."""
+    metadata = source.metadata()
+    if not table_exists(destination, storage):
+        DeltaTable.create(
+            destination,
+            source.schema(),
+            mode="error",
+            partition_by=metadata.partition_columns or None,
+            name=metadata.name,
+            description=metadata.description,
+            configuration=metadata.configuration,
+            storage_options=_options(storage),
+        )
+        return set()
+    existing = open_table(destination, storage)
+    registered = set(pa.table(existing.get_add_actions(flatten=True)).column("path").to_pylist())
+    listed = set(pa.table(source.get_add_actions(flatten=True)).column("path").to_pylist())
+    foreign = sorted(registered - listed)
+    if foreign:
+        raise RegistrationRefused(f"{destination}: o destino registra {len(foreign)} arquivo(s) "
+                                  f"fora da versão {source.version()} da origem: {foreign[0]}")
+    return registered
+
+
 def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int:
     """Uma tabela nova em ``destination`` com os arquivos, o esquema, a partição, o nome, a
     descrição e as propriedades de uma versão, pela cópia dos arquivos de cada partição e o
     registro deles; devolve a versão da cópia, uma por partição.
 
     Os dados não passam pela máquina: cada arquivo que o log da versão lista é copiado por
-    ``Storage.copy`` (o ``CopyObject`` no S3) para o mesmo caminho relativo, e entra no log novo
-    com o tamanho, as linhas e as estatísticas da ação de origem, as dos tipos exatos, num commit
-    ``overwrite`` por partição, como ``register_files``; no fim, a contagem da cópia pelos dois
-    leitores é conferida contra a soma das ações, e a diferença é ``RegistrationRefused``. A
-    memória é a do log. Um ``destination`` que já tem tabela é erro.
+    ``Storage.copy`` para o mesmo caminho relativo, e entra no log novo com o tamanho, as linhas e
+    as estatísticas da ação de origem, as dos tipos exatos, num commit ``overwrite`` por partição,
+    como ``register_files``; no fim, a contagem da cópia pelos dois leitores é conferida contra a
+    soma das ações, e a diferença é ``RegistrationRefused``. A memória é a do log.
+
+    A repetição continua uma cópia interrompida: com tabela em ``destination``, a partição cujos
+    arquivos ela já registra é pulada, sem commit, e as outras são copiadas; a repetição sobre a
+    cópia completa devolve a mesma versão. Um destino que registra um arquivo que a versão não
+    lista guarda outra tabela e é ``RegistrationRefused``.
 
     Exemplo:
 
@@ -1486,35 +1533,25 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
     partition_columns = metadata.partition_columns
     partition_by = partition_columns[0] if partition_columns else None
     contract = pa.schema(source.schema())
-    DeltaTable.create(
-        destination,
-        source.schema(),
-        mode="error",
-        partition_by=partition_columns or None,
-        name=metadata.name,
-        description=metadata.description,
-        configuration=metadata.configuration,
-        storage_options=_options(storage),
-    )
+    registered = _copy_destination(destination, source, storage)
     source_path = storage.relative(uri)
     target_path = storage.relative(destination)
-    by_partition: dict[str | None, list[dict]] = {}
-    for action in pa.table(source.get_add_actions(flatten=False)).to_pylist():
-        value = None
-        if partition_by is not None:
-            value = (action.get("partition") or {}).get(partition_by)
-        by_partition.setdefault(value, []).append(action)
     total = 0
-    for value, group in by_partition.items():
+    for value, group in _actions_by_partition(source, partition_by).items():
+        total += sum(int(action["num_records"]) for action in group)
+        label = "tabela inteira" if value is None else f"partição {value}"
+        if all(action["path"] in registered for action in group):
+            log.info("%s: %s já no destino", metadata.name, label)
+            continue
         actions = []
         for action in group:
             storage.copy(storage.join(source_path, action["path"]),
                          storage.join(target_path, action["path"]))
             actions.append(_add_action(_copied_file(action), contract, partition_by, value, ()))
-            total += int(action["num_records"])
         # Cada commit resolve a versão no log do armazenamento: a tabela é reaberta por partição.
         _commit_actions(open_table(destination, storage), str(metadata.name), partition_by,
                         actions, value, {})
+        log.info("%s: %s copiada, %d arquivo(s)", metadata.name, label, len(actions))
     by_delta, by_duckdb = _count_rows(destination, storage)
     if by_delta != total or by_duckdb != total:
         raise RegistrationRefused(f"{destination}: a cópia tem {by_delta} linhas pelo delta-rs e "

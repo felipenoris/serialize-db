@@ -3,10 +3,12 @@
 ``Storage`` guarda a raiz do banco: a URI que o delta-rs e o DuckDB recebem, o sistema de arquivos
 do ``pyarrow.fs`` que lista, lê, copia e apaga nos dois armazenamentos, e o caminho da raiz nele.
 Os métodos recebem caminhos relativos à raiz, montados com ``/`` por ``join``; ``relative`` leva
-uma URI sob a raiz ao caminho relativo. Só a escrita condicional do arquivo de controle tem um ramo
-por armazenamento: ``put_object`` do ``boto3`` com ``IfMatch`` ou ``IfNoneMatch`` no S3, porque o
-``pyarrow.fs`` não tem a condição nem devolve a etag, e ``O_EXCL`` ou a impressão digital com
-``os.replace`` na pasta local.
+uma URI sob a raiz ao caminho relativo. Dois métodos têm um ramo por armazenamento: a escrita
+condicional do arquivo de controle, ``put_object`` do ``boto3`` com ``IfMatch`` ou ``IfNoneMatch``
+no S3, porque o ``pyarrow.fs`` não tem a condição nem devolve a etag, e ``O_EXCL`` ou a impressão
+digital com ``os.replace`` na pasta local; e a cópia, a transferência gerenciada do ``boto3`` no
+S3, porque o ``CopyObject`` único do ``copy_file`` do PyArrow é abandonado pelo SDK da AWS depois
+de 3 segundos sem resposta num objeto grande.
 
 ``storage_options`` monta a cada chamada as opções do delta-rs, sem credencial alguma: a cadeia
 padrão do delta-rs as resolve e as renova no ``DeltaTable`` que a execução segura.
@@ -276,7 +278,20 @@ class Storage:
         return sorted(files)
 
     def copy(self, source: str, destination: str) -> None:
-        """Copia um arquivo sem passar os dados pelo Python: o ``CopyObject`` no S3."""
+        """Copia um arquivo sem passar os dados pelo Python.
+
+        No S3, a transferência gerenciada do ``boto3``: um ``CopyObject`` até 8 MiB e, acima, um
+        upload multipart de ``UploadPartCopy`` em partes de 8 MiB, em paralelo e com a repetição
+        por parte do botocore. O ``copy_file`` do PyArrow é um ``CopyObject`` só, que o SDK da AWS
+        abandona depois de 3 segundos sem byte de resposta (``curlCode: 28``), o que interrompeu o
+        arquivo de 32.218.190 linhas de ``cad_lancamentos`` no ambiente alvo em 2026-09-24
+        (``plan/POC.md``). Na pasta local, ``copy_file``, com a pasta do destino criada.
+        """
+        if self.is_s3:
+            source_bucket, source_key = self._bucket_and_key(source)
+            bucket, key = self._bucket_and_key(destination)
+            self._s3_client().copy({"Bucket": source_bucket, "Key": source_key}, bucket, key)
+            return
         self._local_parent(destination)
         self.filesystem.copy_file(self._full(source), self._full(destination))
 

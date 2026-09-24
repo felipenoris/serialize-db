@@ -324,8 +324,10 @@ def _server_fields(error: BaseException) -> Mapping[str, object]:
 
 
 def relation_missing(error: BaseException) -> bool:
-    """Se o erro do servidor é a relação inexistente, o SQLSTATE ``42P01`` ou a mensagem que o diz;
-    protegida: o nome livre no sandbox e a tabela de controle ausente."""
+    """Se o erro do servidor é a relação inexistente: a mensagem ``does not exist``, que o Redshift
+    responde com o SQLSTATE ``XX000`` (``Relation <nome> does not exist in the database.``, leitura
+    de 2026-09-24), ou o ``42P01`` do PostgreSQL; protegida: o nome livre no sandbox e a tabela de
+    controle ausente."""
     fields = _server_fields(error)
     return fields.get("C") == "42P01" or "does not exist" in str(fields.get("M", ""))
 

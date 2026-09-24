@@ -26,6 +26,7 @@ from conftest import LocalLocation
 from lancamentos_model import ACCOUNTS, ENTRIES, MONTHS, PROJECTED, Base, accounts, entries
 from serialize_db import cli, delta
 from serialize_db.execution import Database
+from serialize_db.storage import Storage
 
 pytestmark = pytest.mark.local
 
@@ -186,12 +187,12 @@ def test_compact_refuses_after_a_snapshot_on_the_current_version(
     assert cli.main(["compact", *common(db), "--table", "nada"]) == 2
 
 
-def test_archive_copies_each_table_with_the_same_sums(db: Database,
-                                                      capsys: pytest.CaptureFixture) -> None:
+def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pytest.CaptureFixture,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
     """``archive`` copia cada tabela do snapshot na versão registrada, com os mesmos arquivos e as
     mesmas somas e uma versão por partição, move a entrada para ``archived``, solta a versão no
-    ``vacuum``, ocupa o nome em ``snapshot``, pula a tabela já arquivada na repetição e recusa o
-    snapshot com uma tabela que já não existe."""
+    ``vacuum``, ocupa o nome em ``snapshot``, recusa o snapshot com uma tabela que já não existe e,
+    repetido depois de uma interrupção, continua a cópia de onde ela parou."""
     storage = db.storage
     entries_uri = db.uri(ENTRIES)
     assert cli.main(["snapshot", *common(db), "--name", "2026T3"]) == 0
@@ -236,17 +237,36 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database,
                                                                                "sumida": 4}}
     assert not Path(storage.uri_of("prod/arquivo/2026T0")).exists()
 
-    # A repetição de um arquivo interrompido pula a tabela já no arquivo.
+    # Um arquivamento interrompido na terceira cópia, o segundo arquivo de cad_lancamentos, deixa
+    # cad_contas inteira e uma partição registrada; a repetição pula as duas, copia a que falta e
+    # move a entrada.
     delta.snapshot(storage, "prod", "2026T4", {"cad_contas": 1, "cad_lancamentos": 3})
-    Path(storage.uri_of("prod/arquivo/2026T4")).mkdir(parents=True)
-    assert delta.deep_copy(db.uri(ACCOUNTS), 1, storage.uri_of("prod/arquivo/2026T4/cad_contas"),
-                           storage) == 1
+    copies = []
+    original_copy = Storage.copy
+
+    def copy_until_the_third(self: Storage, source: str, destination: str) -> None:
+        copies.append(destination)
+        if len(copies) == 3:
+            raise OSError("cópia interrompida")
+        original_copy(self, source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Storage, "copy", copy_until_the_third)
+        with pytest.raises(OSError, match="cópia interrompida"):
+            cli.main(["archive", *common(db), "--name", "2026T4"])
+    later = storage.uri_of("prod/arquivo/2026T4/cad_lancamentos")
+    assert delta.open_table(later, storage).version() == 1
+    assert "2026T4" in delta.read_snapshots(storage, "prod")[0]["snapshots"]
+    capsys.readouterr()
     assert cli.main(["archive", *common(db), "--name", "2026T4"]) == 0
     out = capsys.readouterr().out
-    assert "cad_contas: já no arquivo" in out and "cad_lancamentos: versão 3 copiada" in out
-    later = storage.uri_of("prod/arquivo/2026T4/cad_lancamentos")
+    assert "cad_contas: versão 1 copiada" in out and "cad_lancamentos: versão 3 copiada" in out
     assert measures(db, later) == measures(db, entries_uri)
     assert add_paths(db, later) == add_paths(db, entries_uri, 3)
+    assert add_paths(db, storage.uri_of("prod/arquivo/2026T4/cad_contas")) == \
+        add_paths(db, db.uri(ACCOUNTS))
+    assert delta.read_snapshots(storage, "prod")[0]["archived"]["2026T4"] == \
+        {"cad_contas": 1, "cad_lancamentos": 3}
 
 
 def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixture) -> None:
