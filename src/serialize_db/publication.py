@@ -807,11 +807,8 @@ def publication_status(db: Database, config: RedshiftConfig) -> list[Publication
     connection = _Connection(config)
     try:
         _check_control_table(connection, config.schema)
-        statuses = []
-        for table in db.tables():
-            if delta.table_exists(db.uri(table), db.storage):
-                statuses.append(_table_status(connection, db, config, table))
-        return statuses
+        existing = [table for table in db.tables() if delta.table_exists(db.uri(table), db.storage)]
+        return [_table_status(connection, db, config, table) for table in existing]
     finally:
         connection.close()
 

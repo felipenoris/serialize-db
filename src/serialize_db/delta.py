@@ -1606,16 +1606,21 @@ def history(uri: str, storage: Storage) -> list[dict]:
         ``deep_copy``, o ``restore`` de ``read_back``, os de ``vacuum`` e os de ``OPTIMIZE`` vêm
         sem eles.
     """
-    entries = []
+    commits = []
     for entry in open_table(uri, storage).history():
-        instant = datetime.datetime.fromtimestamp(entry["timestamp"] / 1000, datetime.timezone.utc)
-        record = {"version": entry["version"], "operation": entry["operation"],
-                  "timestamp": instant}
-        for key in _METADATA_KEYS:
-            if key in entry:
-                record[key] = entry[key]
-        entries.append(record)
-    return entries
+        commits.append(_commit_record(entry))
+    return commits
+
+
+def _commit_record(entry: Mapping[str, object]) -> dict:
+    """Um commit do ``history`` do delta-rs: a versão, a operação, o instante em UTC e os
+    metadados da biblioteca que ele tem."""
+    instant = datetime.datetime.fromtimestamp(entry["timestamp"] / 1000, datetime.timezone.utc)
+    record = {"version": entry["version"], "operation": entry["operation"], "timestamp": instant}
+    for key in _METADATA_KEYS:
+        if key in entry:
+            record[key] = entry[key]
+    return record
 
 
 def _present(values: Mapping[str, object] | None) -> dict[str, object]:

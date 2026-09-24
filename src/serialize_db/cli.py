@@ -495,11 +495,9 @@ def _publish(args: argparse.Namespace) -> int:
         elif args.unpublish:
             _print_unpublished(publication.unpublish_redshift(db, config, tables))
         else:
-            published = publication.publish_redshift(db, config, tables,
-                                                     _publication_id(args.execution_id),
-                                                     args.max_workers)
-            for name, version in published.items():
-                print(f"{name}: versão {version}")
+            execution_id = _publication_id(args.execution_id)
+            _print_published(publication.publish_redshift(db, config, tables, execution_id,
+                                                          args.max_workers))
     except (argparse.ArgumentTypeError, PublicationError) as error:
         print(f"serialize-db publish: {error}", file=sys.stderr)
         return 2
@@ -523,6 +521,12 @@ def _print_statuses(statuses: list[PublicationStatus]) -> None:
     for status in statuses:
         print(f"{status.table}: publicada {status.published_version}, atual "
               f"{status.current_version}, pendentes {list(status.pending_partitions)}")
+
+
+def _print_published(versions: dict[str, int]) -> None:
+    """Uma linha por tabela publicada: a versão do Delta que ela tem agora."""
+    for name, version in versions.items():
+        print(f"{name}: versão {version}")
 
 
 def _print_unpublished(versions: dict[str, int | None]) -> None:

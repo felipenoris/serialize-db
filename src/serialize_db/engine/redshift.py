@@ -1747,14 +1747,19 @@ class RedshiftEngine:
             return
         self._closed = True
         if self._parent is None:
-            for name in list(self._created):
-                try:
-                    self.execute(f"DROP TABLE IF EXISTS {self.qualified(name)}")
-                except redshift_connector.Error as error:
-                    log.warning("sandbox %s: %s não apagada (%s)", self.execution_id, name, error)
+            self._drop_created()
             self.storage.delete(self.storage.list_files(self.staging_prefix))
         with self._lock:
             self._connection.close()
+
+    def _drop_created(self) -> None:
+        """Apaga as tabelas que a execução criou, uma por comando; a que o ``DROP`` não alcança
+        fica nomeada no log."""
+        for name in list(self._created):
+            try:
+                self.execute(f"DROP TABLE IF EXISTS {self.qualified(name)}")
+            except redshift_connector.Error as error:
+                log.warning("sandbox %s: %s não apagada (%s)", self.execution_id, name, error)
 
     def __enter__(self) -> RedshiftEngine:
         return self
