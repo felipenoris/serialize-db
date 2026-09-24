@@ -58,6 +58,7 @@ FUNCTION_TEXTS = {
         """strlen(CAST("cad_eventos"."documento" AS VARCHAR)) > 65535""",
         """regexp_full_match("cad_eventos"."data_str", '[0-9A-Za-z][0-9A-Za-z_.-]*')""",
         """isfinite("cad_eventos"."valor")""",
+        """count("cad_eventos"."valor") - count(CASE WHEN isfinite("cad_eventos"."valor") THEN""",
         "count(CASE WHEN",
         "AS NUMERIC(38, 6)",
     ],
@@ -69,6 +70,7 @@ FUNCTION_TEXTS = {
         "~ '^[0-9A-Za-z][0-9A-Za-z_.-]*$'",
         "> '-Infinity'::float8 AND",
         "< 'Infinity'::float8)",
+        """count("cad_eventos"."valor") - count(CASE WHEN ("cad_eventos"."valor" > '-Infinity'""",
     ],
 }
 
@@ -108,12 +110,15 @@ def test_audit_sql_per_dialect() -> None:
             connection.execute(text).fetchall()
     connection.close()
 
-    # As funções de cada motor no texto da verificação de linhas de Evento.
+    # As funções de cada motor no texto da verificação de linhas de Evento; a condição de finito
+    # nunca entra negada, porque o Redshift não deu verdadeiro à negação para o NaN de uma tabela.
     for dialect, fragments in FUNCTION_TEXTS.items():
         texts = audit.audit_sql(Evento.__table__, dialect, PARTITIONS, prefix="")
         rows_text = texts["linhas"]
         for fragment in fragments:
             assert fragment in rows_text, (dialect, fragment)
+        assert 'NOT ("cad_eventos"."valor"' not in rows_text, dialect
+        assert 'NOT isfinite("cad_eventos"."valor")' not in rows_text, dialect
 
     # As funções da auditoria não se registram em sa.func: o cliente continua com as suas.
     assert type(sa.func.json_valid(sa.column("x"))) is sa.sql.functions.Function
@@ -122,8 +127,8 @@ def test_audit_sql_per_dialect() -> None:
 def test_redshift_is_finite_under_the_postgresql_rule() -> None:
     """O ``is_finite`` do Redshift dá falso ao ``NaN`` e aos infinitos, verdadeiro ao número e nulo
     ao nulo pela regra do PostgreSQL, que o DuckDB segue: o ``NaN`` igual a si mesmo e acima de todo
-    número. A regra do IEEE, que o Redshift aplica na varredura de uma tabela, só o ambiente alvo
-    mostra (``test_audit_sql_under_search_path_and_nan_comparison``)."""
+    número. O que o Redshift faz com o ``NaN`` na varredura de uma tabela só o ambiente alvo mostra
+    (``test_audit_sql_under_search_path_and_nan_comparison``)."""
     finite = audit.is_finite(sa.column("v"))
     text = str(finite.compile(dialect=RedshiftDialect_redshift_connector(paramstyle="named")))
     values = pa.table({"v": pa.array([float("nan"), float("inf"), float("-inf"), 1.5, None])})

@@ -1214,8 +1214,9 @@ def test_stream_by_unload_with_literal_values(
     dobra a aspa simples, mantém o ``%`` e dobra a contrabarra, o escape do PostgreSQL (sonda local
     de 2026-09-23, ``plan/POC.md``), e ``unload_text`` dobra as duas de novo. Cada caso roda por
     três caminhos, que separam as hipóteses: os parâmetros do driver, o texto com os literais direto
-    no cursor e o mesmo texto dentro do ``UNLOAD``. Um ``UNLOAD`` sem linha é leitura, e o caso
-    seguinte roda. As comparações são leituras até duas execuções limpas no ambiente alvo.
+    no cursor e o mesmo texto dentro do ``UNLOAD``. Cada caso é registrado antes da comparação, e
+    todos rodam antes da asserção: as execuções de 2026-09-23 às 22:56 e às 23:01 UTC leram os três
+    caminhos iguais em todo caso.
     """
     session = redshift_session
     name = session.table("stream")
@@ -1273,6 +1274,7 @@ def test_stream_by_unload_with_literal_values(
             {"carimbo": dt.datetime(2026, 8, 28, 12, 0, 0, 123456), "taxa": 0.25},
         ),
     ]
+    mismatches = []
     for label, statement, params in cases:
         bound = statement.params(**params)
         assert unbound_parameters(bound) == [], label
@@ -1318,18 +1320,23 @@ def test_stream_by_unload_with_literal_values(
                 "texto": literal.splitlines()[-1].strip(),
             },
         )
+        if direct != by_cursor or by_unload != by_cursor:
+            mismatches.append(label)
+
+    # As execuções de 2026-09-23 às 22:56 e às 23:01 UTC leram os três caminhos iguais em todo caso.
+    assert not mismatches, f"caminhos diferentes do cursor em {mismatches}"
 
 
 def test_unload_limit_empty_result_temp_table_and_super(
     redshift_session: RedshiftSession, s3_location: S3Location
 ) -> None:
-    """Os casos de borda do ``stream`` por ``UNLOAD`` da etapa 5, todos leitura: o ``LIMIT`` no
-    ``select`` externo, o resultado vazio, a tabela temporária da sessão e a coluna ``SUPER`` no
-    Parquet.
+    """Os casos de borda do ``stream`` por ``UNLOAD`` da etapa 5: o ``LIMIT`` no ``select`` externo,
+    o resultado vazio, a tabela temporária da sessão e a coluna ``SUPER`` no Parquet.
 
     A documentação recusa o ``LIMIT`` externo (``plan/redshift.md``), e a mensagem é a leitura. O
-    ``UNLOAD`` de um resultado vazio não gravou manifesto nem arquivo (leitura de 2026-09-23), e
-    ``pg_last_unload_count()`` é o que separa esse caso do manifesto que falta.
+    ``UNLOAD`` de um resultado vazio não grava manifesto nem arquivo, e ``pg_last_unload_count()``
+    dá 0 nele, o que separa esse caso do manifesto que falta; a tabela temporária da sessão é lida
+    pelo ``UNLOAD``. As execuções de 2026-09-23 leram os dois casos iguais, e eles são asserção.
     """
     session = redshift_session
     name = session.table("borda")
@@ -1359,20 +1366,19 @@ def test_unload_limit_empty_result_temp_table_and_super(
 
     # 2. O resultado vazio: o comando, o manifesto e os objetos que ficam no prefixo.
     empty = s3_location.child(f"redshift/borda/vazio_{uuid.uuid4().hex[:8]}")
-    record(
-        "redshift.stream.empty.unload",
-        outcome(
-            functools.partial(
-                session.execute,
-                unload_text(
-                    f"select id from {qualified} where id < 0",
-                    empty,
-                    session.credentials_clause(),
-                ),
-            )
-        ),
+    empty_unload = outcome(
+        functools.partial(
+            session.execute,
+            unload_text(
+                f"select id from {qualified} where id < 0",
+                empty,
+                session.credentials_clause(),
+            ),
+        )
     )
-    record("redshift.stream.empty.unload_count", unload_count(session))
+    record("redshift.stream.empty.unload", empty_unload)
+    empty_count = unload_count(session)
+    record("redshift.stream.empty.unload_count", empty_count)
     manifest = read_manifest(s3_location, empty)
     record(
         "redshift.stream.empty.manifest",
@@ -1395,6 +1401,11 @@ def test_unload_limit_empty_result_temp_table_and_super(
                 "redshift.stream.empty.file_schema",
                 " ".join(str(pq.read_schema(io.BytesIO(body))).split()),
             )
+    # O UNLOAD vazio passou sem manifesto nem objeto em quatro execuções de 2026-09-23, e com
+    # pg_last_unload_count() 0 nas duas que o leram.
+    assert empty_unload == "ok", empty_unload
+    assert empty_count == 0, empty_count
+    assert manifest is None and objects == [], (manifest, objects)
 
     # 3. A tabela temporária da sessão, lida pelo UNLOAD na mesma sessão. Ela morre com a sessão, e
     # a limpeza da suíte não a apaga.
@@ -1411,12 +1422,16 @@ def test_unload_limit_empty_result_temp_table_and_super(
             ),
         )
     )
-    if unloaded == "ok":
-        counted = unload_count(session)
-        manifest = unloaded_manifest(session, s3_location, from_temporary)
-        unloaded_count = sum(entry["meta"]["record_count"] for entry in manifest["entries"])
-        unloaded = f"ok: {unloaded_count} linhas, pg_last_unload_count() {counted!r}"
-    record("redshift.stream.temp_table", unloaded)
+    assert unloaded == "ok", unloaded
+    counted = unload_count(session)
+    manifest = unloaded_manifest(session, s3_location, from_temporary)
+    unloaded_count = sum(entry["meta"]["record_count"] for entry in manifest["entries"])
+    record(
+        "redshift.stream.temp_table",
+        f"ok: {unloaded_count} linhas, pg_last_unload_count() {counted!r}",
+    )
+    # A tabela temporária da sessão foi lida pelo UNLOAD, com as duas linhas, em quatro execuções.
+    assert unloaded_count == 2 and counted == 2, (unloaded_count, counted)
 
     # 4. A coluna SUPER no Parquet do UNLOAD: o tipo lido e os valores, em texto para o relatório.
     super_prefix = s3_location.child(f"redshift/borda/super_{uuid.uuid4().hex[:8]}")
@@ -1659,12 +1674,15 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
     O ``ddl`` da etapa 1 e o ``audit_sql`` citam as tabelas sem esquema, e o motor conta com o
     ``search_path`` no esquema do datashare depois do ``USE``, que passou no ambiente alvo em
     2026-09-23; o caso roda numa conexão própria, com o ``SET search_path`` do ``connect`` da
-    etapa 5. O ``is_finite`` do Redshift é a comparação estrita com os infinitos, falsa ao ``NaN``
-    pela regra do PostgreSQL e pela do IEEE: em 2026-09-23, a constante comparou o ``NaN`` igual a
-    si mesmo e a varredura da tabela não, e ``NOT IN ('NaN'::float8, ...)`` contou só o infinito e
-    levou o ``NaN`` ao ``CAST`` para ``NUMERIC(38, 6)``; ``nan_na_tabela`` lê a regra da varredura.
-    A tabela ``auditoria`` tem defeitos plantados e o esperado de cada contador ao lado da leitura;
-    os textos do modelo cliente rodam sobre as tabelas vazias (``plan/OPEN_QUESTIONS.md``).
+    etapa 5. O ``is_finite`` do Redshift é a comparação estrita com os infinitos. Em 2026-09-23 a
+    constante comparou o ``NaN`` igual a si mesmo; na varredura da tabela, ``NOT IN
+    ('NaN'::float8, ...)`` contou só o infinito e levou o ``NaN`` ao ``CAST`` para
+    ``NUMERIC(38, 6)``, e a comparação estrita deixou o ``NaN`` fora da soma, mas a negação dela
+    também não o contou. A contagem dos não finitos passou a ser a dos não nulos menos a dos
+    finitos; ``nan_na_tabela`` e ``nan_na_tabela_detalhe`` leem a regra da varredura na linha do
+    ``NaN``. A tabela ``auditoria`` tem defeitos plantados e o esperado de cada contador ao lado da
+    leitura; os textos do modelo cliente rodam sobre as tabelas vazias
+    (``plan/OPEN_QUESTIONS.md``).
     """
     session = redshift_session
     prefix = f"serialize_db_poc_{session.session_id}_"
@@ -1747,6 +1765,18 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
             f'count(case when valor <> valor then 1 end) from "{name}"'
         )
         record("redshift.audit.nan_na_tabela", reading(functools.partial(run_as_text, nan_in_scan)))
+        # As comparações do NaN na projeção da linha 2: nulas, com o is null verdadeiro, dizem que a
+        # comparação é desconhecida; falsas, com a negação também falsa, que o otimizador reescreve
+        # a negação; e o texto do NaN.
+        nan_detail = (
+            "select valor > '-Infinity'::float8, valor < 'Infinity'::float8, "
+            "not (valor > '-Infinity'::float8), (valor > '-Infinity'::float8) is null, "
+            f"cast(valor as varchar) from \"{name}\" where nome = 'b'"
+        )
+        record(
+            "redshift.audit.nan_na_tabela_detalhe",
+            reading(functools.partial(run_as_text, nan_detail)),
+        )
         expected = {
             "linhas": "4", "particao_data_str": "1", "naofinito_valor": "2",
             "total_valor": "4.500000", "total_preco": "16.250000", "json_meta": "0",
@@ -1812,8 +1842,10 @@ def test_alter_column_type_on_the_share(redshift_session: RedshiftSession) -> No
     A etapa 8 trata a largura de ``String(n)`` que cresce como diff destrutivo, com recriação e
     recarga, e esta leitura diz se o comando entra depois como atalho (decisão do usuário de
     2026-09-23): ele não está na lista do que a escrita por datashare aceita, e a documentação o
-    recusa numa coluna com chave. O desfecho de cada comando, a largura em ``svv_all_columns`` e a
-    inserção de um valor de dez caracteres, o efeito de que a publicação depende, são leituras.
+    recusa numa coluna com chave. As execuções de 2026-09-23 às 22:56 e às 23:01 UTC recusaram os
+    dois comandos com ``0A000 Operation is not supported through datashares``, e a recusa é
+    asserção; a largura em ``svv_all_columns`` e a inserção de um valor de dez caracteres ficam
+    como leitura.
     """
     session = redshift_session
     name = session.table("largura")
@@ -1837,8 +1869,10 @@ def test_alter_column_type_on_the_share(redshift_session: RedshiftSession) -> No
         "common_column": f"ALTER TABLE {qualified} ALTER COLUMN nome TYPE VARCHAR(10)",
         "key_column": f"ALTER TABLE {qualified} ALTER COLUMN codigo TYPE VARCHAR(10)",
     }
+    refusals = {}
     for label, command in commands.items():
-        record(f"redshift.alter_type.{label}", outcome(functools.partial(session.execute, command)))
+        refusals[label] = outcome(functools.partial(session.execute, command))
+        record(f"redshift.alter_type.{label}", refusals[label])
     record("redshift.alter_type.widths_after", reading(widths))
     inserts = {
         "insert_common_column": f"INSERT INTO {qualified} VALUES ('def', 'abcdefghij')",
@@ -1846,6 +1880,8 @@ def test_alter_column_type_on_the_share(redshift_session: RedshiftSession) -> No
     }
     for label, command in inserts.items():
         record(f"redshift.alter_type.{label}", outcome(functools.partial(session.execute, command)))
+    for label, refusal in refusals.items():
+        assert "0A000" in refusal, (label, refusal)
 
 
 def test_explain_of_a_join_on_the_share(redshift_session: RedshiftSession) -> None:

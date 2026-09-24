@@ -116,17 +116,20 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   atual), e a soma de controle de
   cada coluna `Double` e `Numeric` como `DECIMAL(38, 6)`. A soma de uma coluna `Double` corre só
   sobre os valores finitos, `sum(CASE WHEN isfinite(x) THEN CAST(x AS DECIMAL(38, 6)) END)` no
-  DuckDB, e a consulta conta à parte os não finitos de cada coluna, que dão `nonfinite_columns`:
+  DuckDB, e a consulta conta à parte os não finitos de cada coluna, os não nulos menos os finitos,
+  `count(x) - count(CASE WHEN isfinite(x) THEN 1 END)`, que dão `nonfinite_columns`:
   o `CAST` de um `NaN` ou de um infinito para
   `DECIMAL` falha com `ConversionException` e derrubaria a verificação inteira, e um filtro do
   agregado não o evita (leitura de 2026-09-23). A contagem entra no relatório sem reprovar, porque
   o `cast` aceita o `Double` não finito, e dá a lista `columns_without_min_max` da
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59) (decisões do usuário de
-  2026-09-23). No Redshift, `is_finite` sai `(x > '-Infinity'::float8 AND x < 'Infinity'::float8)`:
-  no ambiente alvo, em 2026-09-23, o `NaN` de uma constante saiu igual a si mesmo, como no
-  PostgreSQL, e o de uma varredura de tabela passou por `x NOT IN ('NaN'::float8, ...)`, como no
-  IEEE, e chegou ao `CAST` da soma; a comparação estrita dá falso ao `NaN` pelas duas regras e
-  espera a próxima execução da suíte ([`POC.md`](POC.md)). As funções com `@compiles` por dialeto
+  2026-09-23). No Redshift, `is_finite` sai `(x > '-Infinity'::float8 AND x < 'Infinity'::float8)`.
+  No ambiente alvo, em 2026-09-23, o `NaN` de uma constante saiu igual a si mesmo, como no
+  PostgreSQL; o de uma varredura de tabela passou por `x NOT IN ('NaN'::float8, ...)` e chegou ao
+  `CAST` da soma, e depois a comparação estrita o deixou fora da soma, mas a negação dela também
+  não o contou ([`POC.md`](POC.md)). Por isso a condição só entra afirmada, na soma e na contagem
+  dos finitos, e a contagem dos não finitos espera duas execuções da suíte. As funções com
+  `@compiles` por dialeto
   fazem a portabilidade, e cada uma é subclasse de `FunctionElement` com `name`, como o `month_of`
   de [`sqlalchemy.md`](sqlalchemy.md), e não de `GenericFunction`, a classe do rascunho de
   2026-09-21, que se registra em `sa.func` para o processo inteiro: depois dela, o
@@ -173,9 +176,14 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   primeira execução real mede quanto sobra para o pandas do cliente, que o limite do DuckDB não
   cobre. `threads` omitido fica no padrão do DuckDB, um por núcleo; ele é da instância, vale para a
   sessão principal e para as de `new_session()`, e muda em execução por `SET threads`. A leitura do
-  S3 pede mais threads que núcleos, porque cada thread faz uma requisição HTTP por vez, e quantas é
-  o que `probes/duckdb_threads.py` mede no ambiente alvo, sobre as tabelas que a migração gravou
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A
+  S3 pede mais threads que núcleos, porque cada thread faz uma requisição HTTP por vez, e a
+  materialização num banco em arquivo pede a CPU: no ambiente alvo, com 4 vCPUs, em 2026-09-23,
+  `probes/duckdb_threads.py` leu a partição de 393 MB em 4,1 s com 4 threads e em 1,9 s a 2,1 s
+  com 8 a 20, e a materializou em 12,7 s com 4 threads e em 13,2 s a 18,0 s com mais
+  ([`POC.md`](POC.md)). O padrão fica um por núcleo até a nova execução do probe, também numa
+  máquina com mais núcleos ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O cache de arquivos
+  externos do DuckDB fica ligado, o padrão: uma segunda leitura do mesmo arquivo na execução não
+  volta ao S3. A
   conexão é a sessão da execução, e `session()` toma o `threading.RLock` e a dá ao
   bloco; toda primitiva toma o mesmo lock pelo tempo do seu comando, e nenhuma espera pelo código do
   cliente com ele tomado. O motor guarda a thread que está dentro de `session()`, e é por ela que
@@ -306,7 +314,7 @@ uma chave única.
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
-| Texto das verificações | `test_audit_sql_per_dialect` | Cada `Check` do modelo cliente renderiza nos dois dialetos; `strftime` no DuckDB e `to_char` no Redshift; `json_valid` e `true`; `strlen` e `octet_length`; `isfinite` e a comparação estrita com os infinitos, que `test_redshift_is_finite_under_the_postgresql_rule` roda no DuckDB sobre o `NaN`, os infinitos, um número e o nulo. |
+| Texto das verificações | `test_audit_sql_per_dialect` | Cada `Check` do modelo cliente renderiza nos dois dialetos; `strftime` no DuckDB e `to_char` no Redshift; `json_valid` e `true`; `strlen` e `octet_length`; `isfinite` e a comparação estrita com os infinitos, que `test_redshift_is_finite_under_the_postgresql_rule` roda no DuckDB sobre o `NaN`, os infinitos, um número e o nulo; os não finitos como `count(x)` menos a contagem dos finitos, sem a condição negada. |
 | Escopo da chave | `test_key_scope_follows_the_partition_column` | Chave com a coluna de partição ou a de `partition_source` gera uma consulta; sem elas, gera a segunda contra `published`; `key_scope="partition"` a suprime e o relatório registra; a chave primária inteira de uma coluna leva o `skip_when` do mínimo contra `published_max_key`. |
 | Chave estrangeira | `test_foreign_key_check_only_on_request` | Sem `foreign_keys=True` o nome está em `not_run`; com ele, o anti-join contra `referenced`. |
 | Defeitos plantados | `test_audit_finds_each_defect` | Nulo, texto acima do `String(n)` em bytes e dentro dele em caracteres, partição fora da origem, valor de partição fora da regra, JSON inválido numa tabela criada por SQL (a coluna `JSON` do DuckDB recusa o texto inválido na carga), chave repetida dentro da partição e contra a publicada. |

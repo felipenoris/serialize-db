@@ -645,6 +645,43 @@ def test_main_migrates_the_whole_base(
     assert all(table["loaded"] == [] for table in document["tables"])
 
 
+def test_report_keeps_the_progress_of_an_interrupted_load(
+    base: source.SourceBase, local_location: LocalLocation, capsys: pytest.CaptureFixture
+) -> None:
+    """Uma carga interrompida em 2026-03-31 deixa no relatório a tabela da vez em ``in_progress``,
+    com as partições já gravadas: o JSON é regravado a cada commit. O processo de
+    ``cad_lancamentos`` que morreu no ambiente alvo em 2026-09-23 não deixou relatório algum."""
+    new_root = Path(unique_child(local_location, "origem"))
+    shutil.copytree(base.root / "cad_operacoes", new_root / "cad_operacoes")
+    rewrite_first_chunk(
+        new_root / "cad_operacoes" / "data_str=2026-03-31", "data", dt.date(2026, 2, 28)
+    )
+    report_path = Path(local_location.child(f"relatorio-{uuid.uuid4().hex[:8]}.json"))
+    argv = [
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        str(new_root),
+        "--root",
+        unique_child(local_location, "delta"),
+        "--tables",
+        "cad_operacoes",
+        "--report",
+        str(report_path),
+        "--no-measure",
+    ]
+    assert migrate.main(argv) == 1
+    assert "ContractError: cad_operacoes partição 2026-03-31" in capsys.readouterr().err
+
+    document = json.loads(report_path.read_text())
+    progress = document["in_progress"]
+    assert progress["table"] == "cad_operacoes"
+    assert progress["measurements"] == []
+    assert [load["value"] for load in progress["loaded"]] == ["2026-01-31", "2026-02-28"]
+    assert document["tables"] == []
+    assert document["environment"]["arguments"]["tables"] == ["cad_operacoes"]
+
+
 def test_measurement_runs_every_variant_even_with_the_partition_in_the_log(
     base: source.SourceBase, local_location: LocalLocation, capsys: pytest.CaptureFixture
 ) -> None:

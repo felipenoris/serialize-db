@@ -406,11 +406,14 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   Athena, o Secrets Manager e o DataZone por endpoints de interface; o IAM, o KMS, o Lake
   Formation e o S3 Tables não respondem. A biblioteca não chama o IAM nem o KMS: a criptografia
   SSE-KMS do bucket é aplicada pelo S3, e a permissão sobre a raiz é provada pela primeira escrita,
-  não por simulação. A máquina tem 2 vCPUs, 7,6 GiB de memória e 29,8 GiB livres num disco só
-  para `HOME`, `/tmp` e o repositório: o motor DuckDB nasce em arquivo, com `temp_directory`
-  conferido e o `memory_limit` que o DuckDB escolhe registrado no log (decisão do usuário de
-  2026-09-22), e `export_mode="register"` é o caminho das partições grandes
-  (etapas [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md)).
+  não por simulação. A máquina tinha 2 vCPUs e 7,6 GiB de memória em 2026-09-21 e 4 vCPUs e
+  15.786 MB em 2026-09-23, com cerca de 30 GiB livres num disco só para `HOME`, `/tmp` e o
+  repositório: o motor DuckDB nasce em arquivo, com `temp_directory` conferido e o `memory_limit`
+  que o DuckDB escolhe registrado no log (decisão do usuário de 2026-09-22), e
+  `export_mode="register"` é o caminho das partições grandes (etapas [4](PLAN-STAGE-4.md) e
+  [7](PLAN-STAGE-7.md)). Os programas que usam o pacote rodam em computação escalável da AWS, que o
+  usuário escolhe, e o plano otimiza para o processamento paralelo (instrução do usuário de
+  2026-09-23): o tamanho da máquina é dimensionado pelas medições, e não o contrário.
 - Um campo JSON é `string` no esquema Arrow do contrato, sem a extensão `arrow.json`, `string` no
   Delta e texto nos arquivos; `JSON` no DuckDB e `SUPER` no Redshift são tipos do motor, aplicados na
   carga; a auditoria confere `json_valid` antes de publicar, porque nem o Arrow nem o Delta validam
@@ -461,7 +464,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   máquina, a ingestão por `CREATE TABLE AS` sobre `delta_scan` não ocupa, e a sessão a mais ganha
   nela, nas consultas pequenas, nos operadores que não se paralelizam e na espera do S3, onde a
   documentação do DuckDB recomenda `threads` de 2 a 5 vezes os núcleos (2026-09-23,
-  [`duckdb.md`](duckdb.md)). No Redshift, cada
+  [`duckdb.md`](duckdb.md)). No ambiente alvo, com 4 vCPUs, quatro tabelas de 30.001.596 linhas
+  juntas entraram em 15,588 s em sessões a mais e em 19,547 s em série, e a materialização ficou
+  limitada pela CPU, mais lenta com `threads` acima dos núcleos (2026-09-23, `POC.md`). No Redshift, cada
   sessão a mais pede a sua credencial temporária; dois `COPY` em conexões abertas dentro da tarefa
   levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
 - As chaves sequenciais, a chave primária inteira de uma coluna, vêm de `run.next_ids(table, n)`:

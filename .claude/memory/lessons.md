@@ -517,3 +517,19 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   float to decimal)`. The same run refused `is_valid_json` on the `SUPER` column that the stage 1
   DDL gives a JSON column (42883), which `plan/POC.md` had marked [uncertain] without a probe of
   that type; the refusal took down every measure of the rows check. `CLAUDE.md`, `plan/POC.md`
+- **A repetition in the same process measures the caches the first run filled** (2026-09-24). The
+  threads probe took the best of three repetitions per configuration, each in a new process but the
+  three in one: DuckDB's external file cache served repetitions two and three from memory, and the
+  S3 read, 4.1 s against 1.9 s, showed only in the first. The moto request log settled it (3 `GET`,
+  then none). Turn the cache off, or count requests at the source, before a best of N stands for a
+  remote read.
+- **A long-running script writes its report as it goes** (2026-09-24). The migration wrote its JSON
+  at the end, and the process that ended in the largest partition of `cad_lancamentos` took with it
+  the four-variant measurement the plan waited on. The report is now rewritten after each
+  measurement and each committed partition.
+- **The complement of a comparison with `NaN` is counted as total minus matches, never as the
+  negation** (2026-09-24). In a Redshift table scan, the strict comparison with the infinities was
+  not true for `NaN`, so the sum left it out, and its negation was not true either, so the count
+  missed it; `count(x) - count(CASE WHEN finite THEN 1 END)` holds whatever the engine does with
+  the comparison. A probe that reads a count also reads a count without rows: `count(*)` on
+  `sys_load_error_detail` came back empty and stopped a probe section.

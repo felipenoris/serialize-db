@@ -11,11 +11,11 @@ e nada é gravado em disco.
 
 O substituto confere o código Python dos testes. Cada recusa e cada comportamento que ele imita é
 uma leitura do ambiente alvo registrada em ``plan/POC.md``: a contrabarra como escape nos literais
-de texto, o ``UNLOAD`` de um resultado vazio sem manifesto nem arquivo e o ``is_valid_json`` que
-recusa ``SUPER``. No resto, o DuckDB responde do jeito dele. Os bloqueios entre transações, a
-criptografia do bucket, a Data API, as credenciais do contêiner, o proxy e a comparação do ``NaN``
-numa varredura de tabela, que no Redshift segue o IEEE e no DuckDB a regra do PostgreSQL, só o
-ambiente alvo mostra.
+de texto, o ``UNLOAD`` de um resultado vazio sem manifesto nem arquivo, o ``is_valid_json`` que
+recusa ``SUPER`` e o ``ALTER COLUMN ... TYPE`` que o esquema do datashare recusa. No resto, o
+DuckDB responde do jeito dele. Os bloqueios entre transações, a criptografia do bucket, a Data
+API, as credenciais do contêiner, o proxy e a comparação do ``NaN`` numa varredura de tabela, que
+no DuckDB segue a regra do PostgreSQL e no Redshift não, só o ambiente alvo mostra.
 
 Duas variáveis provocam falhas, para rodar lado a lado o código anterior e o corrigido de um
 tratamento de falha:
@@ -451,6 +451,9 @@ def run_command(connection: Connection, operation: str, args: object, paramstyle
     first_word = words[0].upper() if words else ""
 
     raise_provoked_failure(text)
+    # O esquema do datashare recusa o ALTER COLUMN ... TYPE (2026-09-23, plan/POC.md).
+    if re.match(r"ALTER\s+TABLE\s+\S+\s+ALTER\s+COLUMN\s+\S+\s+TYPE\b", text, re.IGNORECASE):
+        raise server_error("Operation is not supported through datashares", "0A000")
     answered = session_command(connection, text)
     if answered is not None:
         return answered

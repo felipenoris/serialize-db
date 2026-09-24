@@ -101,3 +101,13 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   additive, and the `register` versions before 8de3c8b (2026-09-22) logged min and max only for
   integers and dates, which costs pruning on `Double` and text columns, not correctness.
   `decisions.md`
+- The second migration (2026-09-23, 23:05 to 23:19 UTC, the script from `main` with #67, a new root
+  under the personal folder, `register`, sorted, measured, a 4 vCPU and 15,786 MB machine with
+  DuckDB `memory_limit` 12.3 GiB): eleven tables loaded every partition with counts, sums and
+  non-finite counts equal to the source and no non-finite `Double`; `cad_lancamentos` left no
+  report and its table ended at version 2 with 2026-01-31 and 2026-02-28, the process ending in
+  2026-03-31 (52,654,607 rows) for a cause the files do not show. The measured partitions:
+  `rewrite` took 1.14 to 1.52 times the `register` time sorted and 1.14 to 1.46 unsorted, the sort
+  1.23 to 1.63 times the `register` time with files at 74% to 92% of the size; `rel_contrato_operacao`
+  2026-03-31 (13,637,568 rows) took 13.1 s and 2,442 MB sorted in `register`. The raw reports stay
+  out of git; the numbers are in `plan/POC.md`. `decisions.md`

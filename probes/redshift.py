@@ -505,6 +505,21 @@ def render_rows(found: tuple[list[str], list[tuple]]) -> str:
     return tabulate([columns, *[[str(value) for value in row] for row in rows]]) if rows else "(nenhuma linha)"
 
 
+def first_value(found: tuple[list[str], list[tuple]]) -> object | None:
+    """O primeiro valor da primeira linha, ou ``None`` quando a consulta não devolveu linha: um
+    ``count(*)`` de ``sys_load_error_detail`` voltou sem linha no ambiente alvo (2026-09-23)."""
+    _, rows = found
+    return rows[0][0] if rows and rows[0] else None
+
+
+def count_text(found: tuple[list[str], list[tuple]], unit: str) -> str:
+    """A contagem de uma consulta ``count(*)`` para o relatório, ou a falta da linha como leitura."""
+    count = first_value(found)
+    if count is None:
+        return "a contagem não devolveu linha"
+    return f"{count} {unit}"
+
+
 def column_value(columns: list[str], row: tuple, name: str) -> object | None:
     """O valor de uma coluna pelo nome, ou ``None`` quando a visão de sistema não tem essa coluna."""
     return row[columns.index(name)] if name in columns else None
@@ -697,18 +712,18 @@ def session(report: Report, target: Target) -> None:
     # provisionados e é negada a um usuário comum, então fica de reserva.
     detail = report.call("sys_load_error_detail dos últimos 30 dias", lambda: query("select count(*) from sys_load_error_detail where start_time > dateadd(day, -30, getdate())"), render=render_rows, expected=True)
     if detail is not None:
-        report.note("RS-12", "diagnóstico do COPY", f"sys_load_error_detail legível: {detail[1][0][0]} erro(s) de carga em 30 dias")
+        report.note("RS-12", "diagnóstico do COPY", f"sys_load_error_detail legível: {count_text(detail, 'erro(s) de carga em 30 dias')}")
     else:
         errors = report.call("stl_load_errors dos últimos 30 dias", lambda: query("select count(*) from stl_load_errors where starttime > dateadd(day, -30, getdate())"), render=render_rows, expected=True)
         if errors is not None:
-            report.note("RS-12", "diagnóstico do COPY", f"stl_load_errors legível: {errors[1][0][0]} erro(s) de carga em 30 dias")
+            report.note("RS-12", "diagnóstico do COPY", f"stl_load_errors legível: {count_text(errors, 'erro(s) de carga em 30 dias')}")
         else:
             report.note("RS-12", "diagnóstico do COPY", "nem sys_load_error_detail nem stl_load_errors legíveis: o motivo de um COPY reprovado virá do administrador")
 
     # RS-13: a biblioteca não usa esquemas externos; a contagem mostra se o Glue chegou ao Redshift.
     external = report.call("svv_external_schemas", lambda: query("select count(*) from svv_external_schemas"), render=render_rows, expected=True)
     if external is not None:
-        report.note("RS-13", "esquemas externos (Spectrum)", f"{external[1][0][0]} no banco; a biblioteca não os usa, e a contagem mostra se o Glue chegou ao Redshift")
+        report.note("RS-13", "esquemas externos (Spectrum)", f"{count_text(external, 'no banco')}; a biblioteca não os usa, e a contagem mostra se o Glue chegou ao Redshift")
     else:
         report.note("RS-13", "esquemas externos (Spectrum)", f"não lidos: {report.last_reason}")
 

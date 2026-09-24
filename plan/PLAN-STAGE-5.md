@@ -75,7 +75,7 @@ Testes: `tests/test_engine_redshift.py` compara o SQL gerado (`COPY`, `INSERT ..
 mesma sequência com uma amostra no esquema autorizado, depois do
 `test_redshift.py` da [etapa 0](PLAN-STAGE-0.md). Provas de conceito: `test_redshift.py` (sessão e
 `paramstyle` nomeado, o `fetchmany` por lotes, banco do esquema e o `USE`, DDL, `COPY ... MANIFEST`, lista de
-colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API, o comando repetido depois de um `TRUNCATE` com e sem o cache do driver; e as leituras das decisões de 2026-09-23, que ainda não rodaram no ambiente alvo: `test_unload_to_a_hive_prefix_and_register`, `test_stream_by_unload_with_literal_values`, `test_unload_limit_empty_result_temp_table_and_super`, `test_row_description_oids_and_type_modifier`, `test_small_load_copy_cost`, `test_unload_footer_statistics_with_nan` e `test_audit_sql_under_search_path_and_nan_comparison`), `test_sqlalchemy.py`
+colunas e `FILLRECORD`, `VARCHAR`, `SUPER`, `UNLOAD`, ciclo da Data API, o comando repetido depois de um `TRUNCATE` com e sem o cache do driver; e as leituras das decisões de 2026-09-23, lidas no ambiente alvo naquele dia: `test_unload_to_a_hive_prefix_and_register`, `test_stream_by_unload_with_literal_values`, `test_unload_limit_empty_result_temp_table_and_super`, `test_row_description_oids_and_type_modifier`, `test_small_load_copy_cost`, `test_unload_footer_statistics_with_nan` e `test_audit_sql_under_search_path_and_nan_comparison`), `test_sqlalchemy.py`
 (`test_redshift_dialect_compiles_dml`, `test_three_part_name_needs_quoted_name_without_quotes`,
 `test_sandbox_copy_of_table_and_schema_files_diff`) e `test_stdlib.py::test_execution_identifiers`
 (o prefixo do sandbox).
@@ -212,8 +212,9 @@ class RedshiftEngine:
   dialeto dobra a aspa simples e a contrabarra (`'d''agua'`, `'barra \\ invertida'`), o escape do
   PostgreSQL, e o literal do `UNLOAD` dobra as duas de novo, porque também trata a contrabarra como
   escape: com só a aspa dobrada, o `UNLOAD` do caso da contrabarra passou sem achar linha no
-  ambiente alvo (2026-09-23, [`POC.md`](POC.md)), e a forma corrigida espera a próxima execução da
-  suíte (`test_stream_by_unload_with_literal_values`, [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  ambiente alvo, e com as duas dobradas os seis casos de `test_stream_by_unload_with_literal_values`
+  deram as mesmas linhas pelos três caminhos nas execuções de 2026-09-23 às 22:56 e às 23:01
+  ([`POC.md`](POC.md)).
   O `UNLOAD` roda na sessão do motor, sob o lock, na
   thread de quem chama: numa thread auxiliar ele esperaria pelo lock que o cliente segura num bloco
   `session()`, enquanto o cliente espera o primeiro lote. A thread auxiliar só lê os arquivos do
@@ -223,7 +224,8 @@ class RedshiftEngine:
   `extension<arrow.json>`, com o texto JSON (leitura de 2026-09-23), e sai em `string`, o tipo do
   JSON no motor DuckDB; o `cast` do contrato faz essa conversão (sonda local de 2026-09-23). Sem
   manifesto depois do `UNLOAD`, o motor lê `pg_last_unload_count()` na mesma sessão, ainda sob o
-  lock: 0 é o resultado vazio, que o `UNLOAD` não grava, e o `stream` sai sem lote, com o esquema
+  lock: 0 é o resultado vazio, que o `UNLOAD` não grava (as execuções de 2026-09-23 leram 0 no
+  `UNLOAD` vazio e 2 no da tabela temporária de duas linhas), e o `stream` sai sem lote, com o esquema
   do statement ou, no texto, o de `schema_from_row_description` sobre o texto por
   `select * from (<texto>) as t limit 0` no cursor (decisão do usuário de 2026-09-23); outra contagem sobe
   como o `FileNotFoundError` da leitura do manifesto, com a contagem na mensagem.
@@ -266,9 +268,12 @@ class RedshiftEngine:
   (decisão do usuário de 2026-09-23).
 - **`audit`** roda `audit_sql(table, "redshift", prefix=exec_<id>_, published=<staging>)`; as
   demais partições e a tabela referenciada entram em stagings só com as colunas da chave, por
-  `COPY ... MANIFEST` da versão fixada. O texto do Redshift conta o `Double` não finito pela
-  comparação estrita com os infinitos e dá `true` ao JSON da coluna `SUPER`, que o `is_valid_json`
-  recusa (leituras de 2026-09-23, [etapa 4](PLAN-STAGE-4.md)).
+  `COPY ... MANIFEST` da versão fixada. O texto do Redshift soma o `Double` onde a comparação
+  estrita com os infinitos é verdadeira, conta os não finitos como os não nulos menos os finitos,
+  sem negar a comparação, que na varredura de uma tabela não deu verdadeiro ao `NaN`, e dá `true`
+  ao JSON da coluna `SUPER`, que o `is_valid_json` recusa (leituras de 2026-09-23,
+  [etapa 4](PLAN-STAGE-4.md)). É essa contagem que dá `columns_without_min_max` e a troca para
+  `rewrite` da partição com `Double` não finito.
 - **`export_partition`** começa por `UNLOAD ('<select do contrato sem a coluna de partição>') TO
   '<destino>/' <credenciais> FORMAT AS PARQUET MANIFEST VERBOSE`, sem `PARTITION BY` (decisão do
   usuário de 2026-09-23), com `PARALLEL OFF` quando a partição cabe num arquivo (o `UNLOAD` fragmenta
@@ -502,5 +507,7 @@ usuário ([etapa 8](PLAN-STAGE-8.md)); `stream` sempre por `UNLOAD` e `query` pe
 esquema do `stream` vazio de um texto pelo `limit 0`; `load` sempre pelo `loader`, mantido depois da
 leitura do custo do `COPY`; a precisão e a escala do `NUMERIC` pelo `type_modifier` do driver; a
 exportação sem `PARTITION BY`, num prefixo novo por partição e por tentativa; e a partição com
-`Double` não finito exportada por `rewrite`, com o aviso no log quando o `mode` pedia `register`. O que a próxima execução da
-suíte no ambiente alvo lê para elas está em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+`Double` não finito exportada por `rewrite`, com o aviso no log quando o `mode` pedia `register`.
+As execuções de 2026-09-23 às 22:56 e às 23:01 leram o que elas pediam ao ambiente alvo, salvo o
+arquivo do `UNLOAD` com coluna `SUPER` registrado numa tabela Delta
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

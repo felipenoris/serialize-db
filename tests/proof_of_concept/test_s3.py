@@ -4,8 +4,9 @@ Cada teste responde a um item da etapa 0 (``plan/PLAN-STAGE-0.md``): as credenci
 encontra, a escrita e a leitura no bucket, o put condicional, o ``vacuum`` e o tempo do
 ``delta_scan``. Os testes comuns aos dois armazenamentos vêm de ``poc_delta.py``; os deste módulo
 cobrem o que só existe no S3: a origem das credenciais, a cadeia de credenciais do delta-rs e a
-forma da reserva que a biblioteca não usa, o put condicional, a criptografia dos arquivos e as
-chamadas do ``boto3`` que a biblioteca usa (listar, copiar, apagar). As medições vão para o
+forma da reserva que a biblioteca não usa, o put condicional, a criptografia dos arquivos, o cache
+de arquivos externos do DuckDB sobre o que ele leu do bucket e as chamadas do ``boto3`` que a
+biblioteca usa (listar, copiar, apagar). As medições vão para o
 relatório impresso no fim da sessão (``conftest.py``). A suíte escreve só sob a raiz informada em
 ``SERIALIZE_DB_TEST_S3_ROOT``: sem ela é pulada, e com ela falta de credencial ou de acesso ao
 bucket é falha.
@@ -244,6 +245,37 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         record("s3.default_encryption", reference.get("ServerSideEncryption"))
         assert data_file.get("ServerSideEncryption") == reference.get("ServerSideEncryption")
         assert data_file.get("SSEKMSKeyId") == reference.get("SSEKMSKeyId")
+
+    def test_external_file_cache_serves_the_second_read(
+        self, storage: S3Location, table_uri: str
+    ) -> None:
+        """O cache de arquivos externos do DuckDB, ligado por padrão, guarda os blocos que o
+        ``delta_scan`` leu do S3, e a segunda leitura na mesma instância não acrescenta nada a ele.
+
+        No moto, a primeira leitura de um arquivo fez 3 ``GET`` dele, a segunda nenhum, e a leitura
+        com o cache desligado de novo 3 (sonda de 2026-09-24): um melhor de N no mesmo processo mede
+        o cache, e ``probes/duckdb_threads.py`` o desliga em cada configuração.
+        """
+        # Uma instância nova, para o cache começar vazio; o de duckdb_connection é da sessão.
+        connection = connect_duckdb(("httpfs", "delta", "aws"))
+        connection.execute(duckdb_s3_secret("cache"))
+        cache = "SELECT count(*), coalesce(sum(nr_bytes), 0) FROM duckdb_external_file_cache()"
+        read = f"SELECT count(*), max(valor) FROM delta_scan('{table_uri}')"
+        try:
+            enabled = connection.execute(
+                "SELECT current_setting('enable_external_file_cache')").fetchone()[0]
+            connection.execute(read).fetchall()
+            after_first = connection.execute(cache).fetchone()
+            connection.execute(read).fetchall()
+            after_second = connection.execute(cache).fetchone()
+        finally:
+            connection.close()
+        record("duckdb.external_file_cache", {
+            "padrao": enabled, "primeira_leitura": after_first, "segunda_leitura": after_second,
+        })
+        assert enabled is True
+        assert after_first[1] > 0, after_first
+        assert after_second == after_first, (after_first, after_second)
 
     def test_boto3_list_copy_delete(self, storage: S3Location, table_uri: str) -> None:
         """Listar, copiar e apagar objetos: o que ``export_snapshot(mode="copy")`` e a limpeza fazem

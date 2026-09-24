@@ -186,11 +186,11 @@ class is_finite(FunctionElement):  # noqa: N801 - o nome da classe é o da funç
     """Se o ``Double`` é finito: ``isfinite`` no DuckDB; no Redshift, estritamente entre os
     infinitos.
 
-    O Redshift comparou o ``NaN`` igual a si mesmo numa constante, como o PostgreSQL, e diferente de
-    tudo na varredura de uma tabela, como o IEEE (leituras de 2026-09-23). A comparação estrita com
-    os infinitos dá falso ao ``NaN`` pelas duas regras: o PostgreSQL o põe acima de todo número, e
-    no IEEE toda comparação com ele é falsa. ``NOT IN ('NaN'::float8, ...)`` o dava por finito na
-    tabela.
+    O Redshift comparou o ``NaN`` igual a si mesmo numa constante, como o PostgreSQL, e lá a
+    comparação estrita com os infinitos dá falso a ele. Na varredura de uma tabela, nem essa
+    comparação nem a negação dela deram verdadeiro ao ``NaN``, e ``NOT IN ('NaN'::float8, ...)`` o
+    deu por finito (leituras de 2026-09-23). A condição só entra afirmada: a soma de controle corre
+    onde ela é verdadeira, e os não finitos são os não nulos menos os finitos (``_totals``).
     """
 
     name = "isfinite"
@@ -334,7 +334,9 @@ def _totals(table: sa.Table) -> list[sa.ColumnElement]:
     """As somas de controle como ``DECIMAL(38, 6)`` e a contagem dos não finitos de cada ``Double``.
 
     A soma de uma coluna ``Double`` corre só nos valores finitos: o ``CAST`` de um ``NaN`` ou de um
-    infinito para ``DECIMAL`` falha, e o ``FILTER`` do agregado não o evita.
+    infinito para ``DECIMAL`` falha, e o ``FILTER`` do agregado não o evita. Os não finitos são os
+    não nulos menos os finitos, sem negar ``is_finite``: na varredura de uma tabela, o Redshift não
+    deu verdadeiro à negação para o ``NaN``.
     """
     sums = []
     nonfinite = []
@@ -343,7 +345,7 @@ def _totals(table: sa.Table) -> list[sa.ColumnElement]:
         if isinstance(column.type, sa.Double):
             finite = sa.case((is_finite(column), as_decimal))
             sums.append(sa.func.sum(finite).label(f"total_{column.name}"))
-            not_finite = _count_where(sa.not_(is_finite(column)))
+            not_finite = sa.func.count(column) - _count_where(is_finite(column))
             nonfinite.append(not_finite.label(f"naofinito_{column.name}"))
         elif isinstance(column.type, sa.Numeric):
             sums.append(sa.func.sum(as_decimal).label(f"total_{column.name}"))

@@ -117,14 +117,18 @@ na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
   tabelas Delta (`aws s3 sync`, a mesma estrutura de pastas): a carga só lê, e a cópia congela o
   snapshot lido em 2026-09-21, enquanto a base de produção muda a cada carga mensal (a última em
   2026-09-14).
-- Duas medições: o `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB no ambiente alvo, que a
-  primeira partição de `cad_contratos` em `--mode register` faz (a alternativa é gravar em disco,
-  29,8 GiB livres, e subir pelo `boto3`), e a memória e o tempo de uma partição de
-  `cad_lancamentos` (35 milhões de linhas, cerca de 700 MB de Parquet) na instância do ambiente
-  alvo, a medição de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que decide o padrão de
-  `export_mode` e a ordem da carga: a medição das variantes que o script faz por padrão, na
-  execução dos comandos de todas as tabelas com os mesmos parâmetros (decisão do usuário de
-  2026-09-23).
+- O `COPY ... TO 's3://...' (RETURN_STATS)` do DuckDB gravou no ambiente alvo, em
+  `--mode register`, as partições das onze tabelas que terminaram a migração de 2026-09-23 às
+  23:05, com contagens e somas iguais às da origem ([`POC.md`](POC.md)); gravar em disco e subir
+  pelo `boto3` fica de fora.
+- A memória e o tempo da maior partição de `cad_lancamentos`, 2026-03-31, com 52.654.607 linhas,
+  faltam: o processo daquela execução terminou nela sem relatório, numa máquina de 4 vCPUs e
+  15.786 MB, depois de gravar 2026-01-31 e 2026-02-28. É a medição de
+  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que decide o padrão de `export_mode` e a ordem da carga,
+  e a próxima execução, numa máquina com mais memória, a traz; o script regrava o relatório depois
+  de cada passo. Numa partição sintética com as mesmas linhas e colunas, num contêiner de 4 vCPUs e
+  16.095 MB, a ordem multiplicou o tempo do `register` por 3,6 (50,2 s contra 14,0 s) e o pico por
+  2,6 (11.966 MB contra 4.517 MB).
 
 Os tipos do modelo cliente ficam fechados antes da execução: mudá-los depois é reescrever o
 Delta. A `sort_key` de cada tabela particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
@@ -376,13 +380,15 @@ tipos físicos gravados: {'id_contrato': 'INT64', 'data': 'INT32', 'contrato': '
 ## Decisões pendentes
 
 - **[decisão] A `sort_key` na consulta da carga.** O `COPY` sem `ORDER BY` grava na ordem dos
-  arquivos; ordenar pela `sort_key` do modelo melhora a poda e custa uma ordenação por partição, que
-  em `cad_lancamentos` é de 35 milhões de linhas sob `memory_limit`. A `sort_key` de cada tabela
-  particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md), 2026-09-21); a medição da
-  partição de `cad_lancamentos` com e sem o `ORDER BY` decide se a carga ordena.
-- **[decisão] O padrão de `export_mode` na carga**, `register` até a medição da partição de
-  `cad_lancamentos` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o ambiente alvo tem 7,6 GiB, e o
-  `write_deltalake` de um leitor cresceu com a entrada (1.140 MB para 135 MB de Parquet). A
-  migração adiantada faz essa medição, e o relatório dela é o gatilho de revisão de
-  [`PLAN.md`](PLAN.md): com ele o plano fixa o padrão e decide se o outro modo sai das etapas 4, 5 e
-  7.
+  arquivos; ordenar pela `sort_key` do modelo melhora a poda e custa uma ordenação por partição. A
+  `sort_key` de cada tabela particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
+  2026-09-21). Nas nove partições medidas no ambiente alvo em 2026-09-23, a ordem custou de 1,23 a
+  1,63 vez o tempo do `register` e deixou os arquivos com 74% a 92% do tamanho; na partição
+  sintética de 52.654.607 linhas, 3,6 vezes o tempo e 2,6 vezes o pico ([`POC.md`](POC.md)).
+  Proposto: ordenar, com a máquina dimensionada pela medição de `cad_lancamentos` 2026-03-31.
+- **[decisão] O padrão de `export_mode` na carga.** Nas partições medidas em 2026-09-23, o
+  `rewrite` levou de 1,14 a 1,52 vez o tempo do `register`, com o pico até 696 MB maior na
+  gravação ordenada ([`POC.md`](POC.md)). Proposto: `register` como padrão nas etapas 4, 5 e 7, com
+  o `rewrite` só na troca da [etapa 5](PLAN-STAGE-5.md) para a partição com `Double` não finito. A
+  medição de `cad_lancamentos` 2026-03-31, que falta ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)), é
+  o gatilho de revisão de [`PLAN.md`](PLAN.md) que fecha as duas decisões.
