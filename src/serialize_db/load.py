@@ -37,7 +37,7 @@ Exemplo:
     from serialize_db import load
     from serialize_db.execution import Database
 
-    db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
+    db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
     for table in load.load_order(db.tables()):
         load.initial_load(db, table, "s3://bucket/projeto/db_projetado")
         report = load.load_report(db, table, "s3://bucket/projeto/db_projetado")

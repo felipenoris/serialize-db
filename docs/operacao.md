@@ -3,7 +3,7 @@
 O runbook das rotinas de operação do banco Delta, cada uma um subcomando de `serialize-db` sobre
 as primitivas de `serialize_db.delta`, com o que conferir antes e o que esperar depois. Todos os
 subcomandos recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--environment`
-(`SERIALIZE_DB_ENVIRONMENT`, `dev`), e saem com 0 quando terminam e com 2 no erro de uso, no nome
+(`SERIALIZE_DB_ENVIRONMENT`, `dsv`), e saem com 0 quando terminam e com 2 no erro de uso, no nome
 repetido ou ausente e no conflito de escrita do arquivo de controle. `compact`, `archive` e
 `export` imprimem por tabela o tempo e o pico de memória residente do processo (`VmHWM`), a
 medida da rotina na tabela com que a máquina é dimensionada; a publicação a põe na linha de log
@@ -28,7 +28,7 @@ Na periodicidade do processo, por exemplo o fim do trimestre, dentro da execuç�
 cada tabela do ambiente:
 
 ```shell
-serialize-db snapshot --root s3://bucket/projeto/delta --environment prod \
+serialize-db snapshot --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --name 2026T3
 ```
 
@@ -45,7 +45,7 @@ referencia. Ela junta os arquivos pequenos das partições pedidas e normaliza o
 gravou (`INT64` no lugar de `INT96` e de `FIXED_LEN_BYTE_ARRAY`, estatística em toda coluna):
 
 ```shell
-serialize-db compact --root s3://bucket/projeto/delta --environment prod \
+serialize-db compact --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --table cad_lancamentos_projetados \
     --partitions 2026-07-31 2026-08-31
 ```
@@ -64,11 +64,11 @@ aplicada; `--full` de tempos em tempos para os órfãos das escritas interrompid
 recusados:
 
 ```shell
-serialize-db vacuum --root s3://bucket/projeto/delta --environment prod \
+serialize-db vacuum --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata
-serialize-db vacuum --root s3://bucket/projeto/delta --environment prod \
+serialize-db vacuum --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --apply
-serialize-db vacuum --root s3://bucket/projeto/delta --environment prod \
+serialize-db vacuum --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --apply --full
 ```
 
@@ -87,7 +87,7 @@ do ambiente, pela cópia dos arquivos de cada partição e o registro deles, sem
 pela máquina, e a entrada passa de `snapshots` para `archived` no mesmo arquivo de controle:
 
 ```shell
-serialize-db archive --root s3://bucket/projeto/delta --environment prod \
+serialize-db archive --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --name 2026T3
 ```
 
@@ -105,9 +105,9 @@ puladas, e só o que falta é copiado.
 Sob demanda: as pastas Parquet `<coluna>=<valor>/` de uma versão da tabela, sem o log, sob a raiz:
 
 ```shell
-serialize-db export --root s3://bucket/projeto/delta --environment prod \
+serialize-db export --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --table cad_lancamentos_projetados \
-    --destination s3://bucket/projeto/delta/prod/exportacao/2026T3/cad_lancamentos_projetados \
+    --destination s3://bucket/projeto/delta/prd/exportacao/2026T3/cad_lancamentos_projetados \
     --version 143 --mode copy
 ```
 
@@ -120,7 +120,7 @@ todos; o tempo e o pico de RSS do processo impressos; `--version` ausente é a v
 Depois de uma correção, e quando o SQL de uma verificação precisa ser lido:
 
 ```shell
-serialize-db audit --root s3://bucket/projeto/delta --environment prod \
+serialize-db audit --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --table cad_lancamentos --foreign-keys
 serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
 ```
@@ -132,7 +132,7 @@ Depois: o veredito de cada verificação, com as amostras; 1 quando alguma repro
 O histórico de uma tabela com os metadados da biblioteca:
 
 ```shell
-serialize-db history --root s3://bucket/projeto/delta --environment prod \
+serialize-db history --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --table cad_lancamentos
 ```
 
@@ -157,7 +157,7 @@ com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
 | --- | --- | --- |
 | `--metadata modulo:atributo` | obrigatória | O caminho importável do `MetaData` dos modelos, como `pipeline.models:Base.metadata`. |
 | `--root` | `SERIALIZE_DB_ROOT` | A raiz das tabelas Delta, pasta local ou `s3://bucket/prefixo`; obrigatória sem a variável. |
-| `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dev`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
+| `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dsv`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
 
 `run`, `load` e as rotinas de operação (`snapshot`, `vacuum`, `compact`, `archive`, `export` e
 `history`) recebem as três; `audit` e `publish` também, com `--root` e, em `publish`,

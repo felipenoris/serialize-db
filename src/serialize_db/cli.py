@@ -21,7 +21,7 @@ versão de uma tabela, sem o log; ``history`` lista os commits de uma tabela com
 biblioteca. Os modelos chegam por ``--metadata modulo:atributo``, o caminho importável do
 ``MetaData`` do cliente, e os statements por ``--statements modulo:atributo``, o caminho importável
 do dicionário ``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm
-por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dev``) e ``SERIALIZE_DB_ENGINE``
+por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dsv``) e ``SERIALIZE_DB_ENGINE``
 (``duckdb``); a configuração do Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``, e
 ``run --redshift`` a dá a uma execução no motor DuckDB para ``run.publish_redshift``.
 
@@ -35,21 +35,21 @@ Exemplo:
         --statements pipeline.queries:STATEMENTS sql/
     serialize-db sql check --metadata pipeline.models:Base.metadata \\
         --statements pipeline.queries:STATEMENTS sql/
-    serialize-db run --root s3://bucket/delta --environment prod --partition 2026-08-31 \\
+    serialize-db run --root s3://bucket/delta --environment prd --partition 2026-08-31 \\
         --metadata pipeline.models:Base.metadata pipeline.mensal:main
     serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
-    serialize-db load --root s3://bucket/delta --environment prod \\
+    serialize-db load --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --source s3://bucket/db_projetado
     serialize-db publish --init
-    serialize-db publish --root s3://bucket/delta --environment prod \\
+    serialize-db publish --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --tables cad_lancamentos_projetados
-    serialize-db publish --root s3://bucket/delta --environment prod \\
+    serialize-db publish --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --status
-    serialize-db snapshot --root s3://bucket/delta --environment prod \\
+    serialize-db snapshot --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --name 2026T3
-    serialize-db vacuum --root s3://bucket/delta --environment prod \\
+    serialize-db vacuum --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --apply
-    serialize-db history --root s3://bucket/delta --environment prod \\
+    serialize-db history --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --table cad_lancamentos
 
 O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff
@@ -156,8 +156,8 @@ def _name_argument(text: str) -> str:
 
 def _environment_default() -> str:
     """O padrão de ``--environment`` em todo subcomando: ``SERIALIZE_DB_ENVIRONMENT``, com a
-    variável vazia lida como ausente, ou ``dev``."""
-    return os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev"
+    variável vazia lida como ausente, ou ``dsv``."""
+    return os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dsv"
 
 
 def _add_database_arguments(parser: argparse.ArgumentParser) -> None:

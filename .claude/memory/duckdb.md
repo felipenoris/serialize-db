@@ -30,6 +30,24 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   is not truncated (200 characters came back whole), and an all-null column carries no `min`/`max`.
   `plan/POC.md`, `scripts/migrate_parquet_to_delta.py`
 
+- A view over `delta_scan(uri, version := v)` binds at `CREATE VIEW`: it read the log (one file
+  open, 8.7 ms, no Parquet) and a missing version failed there with `IOException` (`LogSegment
+  end version 4 not the same as the specified end version 9`). A filter through the view prunes
+  as on `delta_scan` itself: `=`, `BETWEEN` and a one-value `IN` open only their partition
+  folders, a two-value `IN` opens every folder, and the `IN` beside the range opens the range.
+  An old version exposes its own columns: a column added later is `BinderException`. `BEGIN`,
+  `DROP VIEW`, `CREATE TABLE ... AS SELECT` swaps a view for a table, the `ROLLBACK` brings the
+  view back, and two swaps in parallel cursors of one connection ran without conflict (DuckDB
+  1.5.5, local folder, 2026-09-24). `plan/POC.md`, `plan/PLAN-STAGE-10.md`
+
+- A view whose definition holds the `ingest` partition filter (`BETWEEN` from the lowest to the
+  highest value beside the `IN`) prunes like `ingest`: with no client filter it opened the
+  range's folders; with `data = '2026-08-31'`, only that folder; a value inside the range but
+  outside the `IN` opened its folder and returned 0 rows, and a value outside the range opened
+  none. `CREATE TABLE ... AS SELECT *` over the view opened the range's folders (DuckDB 1.5.5,
+  deltalake 1.6.4, a four-partition table written by `write_deltalake`, local folder,
+  2026-09-24). `plan/POC.md`
+
 ## Proxy
 
 - DuckDB has `http_proxy`, `http_proxy_username` and `http_proxy_password` and nothing like

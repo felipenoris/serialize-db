@@ -83,13 +83,13 @@ def test_paths_relative_to_the_root(clean_aws: pytest.MonkeyPatch) -> None:
     caminho relativo e recusa a de fora; ``uri_of`` faz a volta."""
     clean_aws.setenv("AWS_REGION", "sa-east-1")
     storage = Storage.for_uri("s3://bucket/delta")
-    joined = storage.join("prod/", "/cad_operacoes", "", "_delta_log")
-    assert joined == "prod/cad_operacoes/_delta_log"
-    assert storage.relative("s3://bucket/delta/prod/cad_operacoes/") == "prod/cad_operacoes"
+    joined = storage.join("prd/", "/cad_operacoes", "", "_delta_log")
+    assert joined == "prd/cad_operacoes/_delta_log"
+    assert storage.relative("s3://bucket/delta/prd/cad_operacoes/") == "prd/cad_operacoes"
     assert storage.relative("s3://bucket/delta") == ""
-    assert storage.uri_of("prod/cad_operacoes") == "s3://bucket/delta/prod/cad_operacoes"
+    assert storage.uri_of("prd/cad_operacoes") == "s3://bucket/delta/prd/cad_operacoes"
     with pytest.raises(ValueError, match="fora da raiz"):
-        storage.relative("s3://bucket/delta2/prod")
+        storage.relative("s3://bucket/delta2/prd")
 
 
 def test_storage_options_resolved_per_call(clean_aws: pytest.MonkeyPatch) -> None:
@@ -165,7 +165,7 @@ def test_duckdb_secret_options_for_an_endpoint(clean_aws: pytest.MonkeyPatch) ->
 def test_create_text_and_write_text_if_match(storage: Storage) -> None:
     """A segunda ``create_text`` e o ``if_match`` velho são ``ConflictError`` sem gravar; o
     conteúdo final é o da escrita que venceu, e o arquivo ausente é ``FileNotFoundError``."""
-    path = storage.join("prod", "_serialize_db", "snapshots.json")
+    path = storage.join("prd", "_serialize_db", "snapshots.json")
     with pytest.raises(FileNotFoundError):
         storage.read_text(path)
 

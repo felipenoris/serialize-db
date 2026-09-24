@@ -73,7 +73,15 @@ foi medido em [`POC.md`](POC.md).
   publicação os põe no log de cada tabela e `deep_copy` registra o tempo de cada partição, e a
   próxima execução lá os lê; a continuação de uma cópia interrompida só o substituto exercitou.
 
+- **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) depende de leituras
+  que a pasta local não dá: o tempo de abertura do leitor Delta sobre as 12 tabelas da raiz
+  carregada, com uma view por tabela (8,7 ms por view na pasta local, [`POC.md`](POC.md)); a
+  publicação por `--channel default` e a volta a um snapshot anterior ao publicado; e o `UNLOAD`
+  de um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial
+  que serve a ele.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente.
+tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente; os
+itens que esperam o usuário fora dos arquivos de etapa estão na lista acima.

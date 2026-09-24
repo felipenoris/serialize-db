@@ -4,7 +4,7 @@ Este documento registra o que a biblioteca é e como ela chega lá: as decisões
 o código cliente, as regras que as etapas obedecem, a organização do pacote, as etapas de
 implementação e o pipeline de atualização mensal. O plano de cada etapa, com as primitivas do
 módulo, os testes e as provas de conceito que o exercitam, está num arquivo próprio, de
-[`PLAN-STAGE-0.md`](PLAN-STAGE-0.md) a [`PLAN-STAGE-9.md`](PLAN-STAGE-9.md), que a seção "Etapas"
+[`PLAN-STAGE-0.md`](PLAN-STAGE-0.md) a [`PLAN-STAGE-10.md`](PLAN-STAGE-10.md), que a seção "Etapas"
 indexa. O estado da implementação, com
 a situação de cada etapa e o que cada artefato contém, está em
 [`CURRENT_STATE.md`](CURRENT_STATE.md); o resultado das provas de conceito, das suítes e dos probes,
@@ -505,14 +505,15 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto gerado pela tabela de tipos com todo identificador entre aspas, opções físicas, cast seguro, arquivos gerados. |
 | `serialize_db.sql` | 2 | A cópia prefixada dos statements Core que os motores compilam, e o texto SQL por dialeto, a opção de migração para fora do SQLAlchemy: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos pelo `pyarrow.fs`: URIs, listagem, leitura, cópia, a escrita condicional do arquivo de controle (`boto3` no S3), `storage_options` e o secret do DuckDB. |
-| `serialize_db.delta` | 3 | A camada Delta: criação, publicação por partição, registro de arquivos, reconciliação, reescrita, manifesto, diferença de versões, snapshots, `vacuum`, compactação, cópia profunda, exportação. |
+| `serialize_db.delta` | 3 | A camada Delta: criação, publicação por partição, registro de arquivos, reconciliação, reescrita, manifesto, diferença de versões, snapshots e o canal do snapshot (etapa 10), `vacuum`, compactação, cópia profunda, exportação. |
 | `serialize_db.audit` | 4 | As verificações derivadas do contrato: chaves, nulos, limites de tipo, JSON e totais; o texto SQL por dialeto e o `AuditReport`. |
 | `serialize_db.resources` | 4 | As CPUs e a memória que o processo pode usar, lidas do ambiente a cada chamada, com o cgroup v1 e v2 no Linux: a fonte dos limites do motor DuckDB (instrução do usuário de 2026-09-24). |
 | `serialize_db.engine` | 4 e 5 | O protocolo `Engine` e os motores `duckdb` e `redshift`, com a mesma interface. |
-| `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução. |
+| `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução; a etapa 10 acrescenta `Database.open_delta` e `Database.open_redshift` e tira `Execution.publish_redshift`. |
 | `serialize_db.load` | 7 | A carga inicial dos Parquet atuais. |
-| `serialize_db.publication` | 8 | A publicação para clientes: a tabela de controle, a transação por tabela, a despublicação, a reconciliação das tabelas publicadas e o estado da publicação. |
-| `serialize_db.cli` | 1 a 9 | `serialize-db run`, `schema`, `sql`, `audit`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export` e `history`: cada subcomando entra com a etapa que entrega a primitiva por trás dele (`schema` na 1, `sql` na 2), e a etapa 6 monta o `run` e o despacho comum. |
+| `serialize_db.publication` | 8 | A publicação para clientes: a tabela de controle, a transação por tabela, a despublicação, a reconciliação das tabelas publicadas e o estado da publicação; a etapa 10 a faz escolher o snapshot pelo nome ou pelo canal. |
+| `serialize_db.reader` | 10 | O acesso de leitura por statements Core com o resultado em Arrow: o leitor Delta, um DuckDB com uma view por tabela no snapshot do canal `default`, num snapshot nomeado, arquivado inclusive, ou na versão atual (o canal `current`), com a materialização de tabelas e partições, e o leitor Redshift, sobre as tabelas publicadas `<ambiente>_<tabela>`. |
+| `serialize_db.cli` | 1 a 10 | `serialize-db run`, `schema`, `sql`, `audit`, `load`, `publish`, `snapshot`, `vacuum`, `compact`, `archive`, `export`, `history` e `channel`: cada subcomando entra com a etapa que entrega a primitiva por trás dele (`schema` na 1, `sql` na 2), e a etapa 6 monta o `run` e o despacho comum. |
 
 Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`, `deltalake`, `duckdb`,
 `pyarrow` e `boto3`, nas versões fixadas pelos documentos; `duckdb-engine` e `sqlalchemy-redshift`
@@ -564,7 +565,8 @@ raiz do seu repositório) são comparados por teste com uma geração nova, sem 
 ## Etapas
 
 Cada etapa entrega um módulo com testes. As etapas 1 a 4 e 6 rodam em pastas locais, sem AWS; a
-etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parquet de origem.
+etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parquet de origem; o
+leitor Delta da etapa 10 roda em pasta local, e o leitor Redshift exige a conexão.
 
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
@@ -578,6 +580,7 @@ etapa 5 e a parte Redshift da etapa 0 exigem a conexão; a etapa 7 exige os Parq
 | 7. Carga inicial | Migração dos Parquet atuais por tabela e por partição, com relatório; `initial_load` absorve a migração adiantada de `scripts/migrate_parquet_to_delta.py`, que vem logo depois da etapa 1. | Contagens e somas por partição iguais entre origem e Delta. |
 | 8. Publicação para clientes | Tabelas `<ambiente>_*` no Redshift, `version_diff`, transação única, `serialize_db_publications`, despublicação. | Uma partição alterada recarrega só essa partição. |
 | 9. Operação | Snapshots, `vacuum`, compactação, arquivo, exportação, `history`, runbook, `pdoc`. | Runbook escrito e testes de manutenção passando. |
+| 10. Acesso de leitura e canal do snapshot | O canal `default` no arquivo de controle, `serialize-db channel`, a publicação por `--snapshot` ou `--channel` sem `run.publish_redshift`, e `serialize_db.reader` com `Database.open_delta` e `Database.open_redshift`: o statement Core do cliente lido na base Delta, por views do DuckDB sobre o snapshot, e na base publicada no Redshift, com o resultado em Arrow. | O mesmo statement devolve o mesmo resultado no leitor Delta e no leitor Redshift depois de `serialize-db publish --channel default`; o leitor Delta lê o snapshot do `default` sem argumento e a versão atual com o canal `current`, e a materialização parcial deixa no nome só as partições pedidas. |
 
 O plano de cada etapa está num arquivo próprio, que fixa as primitivas do módulo, a estratégia de
 implementação de cada primitiva, os pré-requisitos e as pós-condições, os testes por caso, as
@@ -596,10 +599,11 @@ os substituem, como nas etapas 1 e 2:
 - [Etapa 7: carga inicial](PLAN-STAGE-7.md)
 - [Etapa 8: publicação para clientes](PLAN-STAGE-8.md)
 - [Etapa 9: operação](PLAN-STAGE-9.md)
+- [Etapa 10: acesso de leitura e canal do snapshot](PLAN-STAGE-10.md)
 
 ## Pipeline de atualização mensal
 
-Uma execução de exemplo: `exec-2026-09-05`, ambiente `prod`, motor DuckDB, partição de referência
+Uma execução de exemplo: `exec-2026-09-05`, ambiente `prd`, motor DuckDB, partição de referência
 `2026-08-31` (`data_base_str`). As entradas são `cad_lancamentos` (as doze partições até
 2026-08-31), `cad_contratos`, `cad_operacoes`, `rel_contrato_operacao` e as tabelas `dom_*`; a saída
 ilustrativa é `cad_lancamentos` do banco projetado, partição 2026-08-31. Os números de versão são
@@ -612,9 +616,9 @@ ilustrativos.
 | 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
 | 5. Publicação no Delta | `reconcile`; `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD` do Redshift para `data_base_str=2026-08-31/<execution_id>_<uuid>/`), depois das conferências; no motor Redshift, a partição com `Double` não finito troca para `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
-| 6. Publicação no Redshift | Confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; a transação lê a linha de controle, 57, e `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'` e o `UPDATE` da linha de controle de 57 para 58. | `prod_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
-| 7. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
-| 8. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir os passos 5 e 6 reproduz o mesmo estado. |
+| 6. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
+| 7. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir o passo 5 reproduz o mesmo estado. |
+| 8. Publicação no Redshift, depois da execução | `serialize-db channel --name default --snapshot 2026T3` quando a execução marcou o snapshot, e `serialize-db publish --channel default`; sem snapshot, `serialize-db publish --channel current` ([etapa 10](PLAN-STAGE-10.md)). A publicação confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; a transação lê a linha de controle, 57, e `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'` e o `UPDATE` da linha de controle de 57 para 58. | `prd_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
 
 A API da etapa 6:
 
@@ -627,7 +631,7 @@ from serialize_db import Database, Execution
 from pipeline import compute_in_sandbox, project
 from pipeline.models import Base, Contrato, Lancamento, LancamentoProjetado, Operacao, RelContratoOperacao
 
-db = Database("s3://bucket/projeto/delta", environment="prod", metadata=Base.metadata)
+db = Database("s3://bucket/projeto/delta", environment="prd", metadata=Base.metadata)
 with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento, partitions=run.previous_partitions(Lancamento, 12), materialize=True)
     run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada
@@ -641,7 +645,13 @@ with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2
             loader.write(pa.RecordBatch.from_pandas(projected, preserve_index=False))        # cast aqui; o lote anterior entra na thread do loader
     run.audit(LancamentoProjetado, partitions=["2026-08-31"])          # exigida por publish
     run.publish(LancamentoProjetado, partitions=["2026-08-31"])        # overwrite por partição, metadados
-    run.publish_redshift(LancamentoProjetado)                        # só as partições alteradas
+```
+
+A publicação no Redshift vem depois da execução, pela linha de comando:
+
+```shell
+serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --channel current   # só as partições alteradas
 ```
 
 O passo 3 usa a API da seção "A troca de dados com o código cliente": o exemplo mostra `stream` e
@@ -650,7 +660,7 @@ O passo 3 usa a API da seção "A troca de dados com o código cliente": o exemp
 Uma reexecução com o mesmo `execution_id` repete os `overwrite` das mesmas partições e produz as
 mesmas linhas; os ids podem diferir, porque `next_ids` recomeça do máximo da versão fixada. Uma
 correção de uma partição antiga é a mesma chamada com outra `partition` e um `execution_id` novo:
-`publish_redshift` recarrega só essa partição, e as versões intermediárias entre snapshots do banco
+`serialize-db publish` recarrega só essa partição, e as versões intermediárias entre snapshots do banco
 saem no `vacuum` mensal. A execução no Redshift é o mesmo ciclo com `engine="redshift"`: o sandbox
 são as tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a publicação sai por `UNLOAD` mais
 `register_files`, sem passar pela máquina local, ou, na partição com `Double` não finito, mais
@@ -677,3 +687,6 @@ usuário de 2026-09-23 e 2026-09-24, [etapa 5](PLAN-STAGE-5.md)).
 6. Etapa 7, implementada em 2026-09-24 sobre a base fictícia, com o script de migração fino sobre
    o pacote e a carga pelo pacote ainda por rodar no ambiente alvo; etapa 9 por último, com o
    runbook, implementada no mesmo dia na pasta local.
+7. Etapa 10, pedida pelo usuário em 2026-09-24 depois das etapas 1 a 9: o leitor Delta na pasta
+   local e o leitor Redshift no substituto local, depois no ambiente alvo, com o canal e a
+   publicação por snapshot; o usuário fechou as decisões dela no mesmo dia.

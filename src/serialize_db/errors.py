@@ -64,8 +64,8 @@ class ConflictError(Exception):
 
     .. code-block:: python
 
-        storage.create_text("prod/_serialize_db/snapshots.json", "{}")
-        storage.create_text("prod/_serialize_db/snapshots.json", "{}")   # ConflictError
+        storage.create_text("prd/_serialize_db/snapshots.json", "{}")
+        storage.create_text("prd/_serialize_db/snapshots.json", "{}")   # ConflictError
     """
 
 

@@ -28,7 +28,7 @@ Exemplo, numa pasta local:
     from serialize_db.storage import Storage
 
     storage = Storage.for_uri("/dados/delta")
-    uri = storage.uri_of("prod/cad_operacoes")
+    uri = storage.uri_of("prd/cad_operacoes")
     delta.create_table(uri, Operacao.__table__, storage)
     data = schema.cast(pa.table({...}), Operacao.__table__)
     metadata = delta.commit_metadata("exec-2026-09-05", {"cad_contratos": 88})
@@ -265,7 +265,7 @@ def table_exists(uri: str, storage: Storage) -> bool:
 
     .. code-block:: python
 
-        table_exists(storage.uri_of("prod/cad_operacoes"), storage)   # True depois de create_table
+        table_exists(storage.uri_of("prd/cad_operacoes"), storage)   # True depois de create_table
 
     :param uri: a URI da pasta, sob a raiz do banco.
     :param storage: o armazenamento da raiz do banco.
@@ -1382,7 +1382,7 @@ def copy_manifest(uri: str, version: int, partitions: list[str] | None, destinat
     .. code-block:: python
 
         copy_manifest(uri, 58, ["2026-08-31"],
-                      storage.uri_of("prod/publicacao/exec-42/cad_operacoes/2026-08-31.manifest"),
+                      storage.uri_of("prd/publicacao/exec-42/cad_operacoes/2026-08-31.manifest"),
                       storage)
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
@@ -1421,7 +1421,7 @@ def read_snapshots(storage: Storage, environment: str) -> tuple[dict, str | None
 
     .. code-block:: python
 
-        control, fingerprint = read_snapshots(storage, "prod")
+        control, fingerprint = read_snapshots(storage, "prd")
         control["snapshots"]   # {"2026T3": {"cad_lancamentos": 143, ...}}
 
     :param storage: o armazenamento da raiz do banco.
@@ -1448,18 +1448,21 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
 
     .. code-block:: python
 
-        snapshot(storage, "prod", "2026T3", {"cad_lancamentos": 143, "cad_contratos": 88})
+        snapshot(storage, "prd", "2026T3", {"cad_lancamentos": 143, "cad_contratos": 88})
 
     :param storage: o armazenamento da raiz do banco.
     :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
-    :param name: o nome do snapshot.
+    :param name: o nome do snapshot, pela regra da partição (``schema.PARTITION_VALUE``).
     :param versions: a versão de cada tabela, pelo nome da tabela; as versões marcadas são as que
         ``vacuum_keeping_snapshots`` preserva.
     :return: o controle novo.
+    :raises ContractError: o nome fora da regra da partição, antes de ler o arquivo de controle.
     :raises ValueError: um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a
         pasta ``arquivo/<nome>/``.
     :raises ConflictError: outro escritor entre a leitura e a escrita.
     """
+    # O nome vira chave do arquivo de controle e pasta do archive; a recusa vem antes da leitura.
+    check_partition_value(name)
     control, fingerprint = read_snapshots(storage, environment)
     if name in control["snapshots"] or name in control.get("archived", {}):
         raise ValueError(f"{environment}: o snapshot {name} já existe")
@@ -1491,7 +1494,7 @@ def archive_snapshot(storage: Storage, environment: str, name: str) -> dict:
 
     .. code-block:: python
 
-        archive_snapshot(storage, "prod", "2026T3")["archived"]   # {"2026T3": {...}}
+        archive_snapshot(storage, "prd", "2026T3")["archived"]   # {"2026T3": {...}}
 
     :param storage: o armazenamento da raiz do banco.
     :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
@@ -1517,7 +1520,7 @@ def vacuum_keeping_snapshots(uri: str, control: Mapping, table_name: str, storag
 
     .. code-block:: python
 
-        control, _ = read_snapshots(storage, "prod")
+        control, _ = read_snapshots(storage, "prd")
         vacuum_keeping_snapshots(uri, control, "cad_lancamentos", storage)   # a lista, sem apagar
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
@@ -1710,7 +1713,7 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
 
     .. code-block:: python
 
-        deep_copy(uri, 143, storage.uri_of("prod/arquivo/2026T3/cad_lancamentos"), storage)   # 4
+        deep_copy(uri, 143, storage.uri_of("prd/arquivo/2026T3/cad_lancamentos"), storage)   # 4
 
     :param uri: a URI da pasta da tabela de origem, sob a raiz do banco.
     :param version: a versão copiada.
@@ -1802,7 +1805,7 @@ def export_snapshot(uri: str, table: sa.Table, destination: str, storage: Storag
 
     .. code-block:: python
 
-        export_snapshot(uri, Operacao.__table__, storage.uri_of("prod/exportacao/2026T3"), storage,
+        export_snapshot(uri, Operacao.__table__, storage.uri_of("prd/exportacao/2026T3"), storage,
                         version=143)
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.

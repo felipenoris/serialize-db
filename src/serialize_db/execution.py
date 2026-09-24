@@ -1,6 +1,6 @@
 """A execução de um pipeline: o banco (``Database``) e o ciclo de uma execução (``Execution``).
 
-``Database`` junta a raiz do banco, o ambiente (``prod``, ``dev``) e o ``MetaData`` dos modelos do
+``Database`` junta a raiz do banco, o ambiente (``prd``, ``dsv``) e o ``MetaData`` dos modelos do
 cliente, e monta os caminhos: a pasta de cada tabela é ``<raiz>/<ambiente>/<tabela>``. ``Execution``
 é o gerenciador de contexto de uma execução: na entrada abre toda tabela do ambiente, fixa a versão
 de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava o snapshot marcado e o
@@ -23,7 +23,7 @@ Exemplo:
 
     from serialize_db.execution import Database, Execution
 
-    db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
+    db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
     with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as run:
         previous = run.previous_partitions(Lancamento.__table__, 12)
         run.ingest(Lancamento.__table__, partitions=previous, materialize=True)
@@ -96,9 +96,9 @@ class Database:
 
     .. code-block:: python
 
-        db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
-        db.uri(Lancamento.__table__)   # "s3://bucket/projeto/delta/prod/cad_lancamentos"
-        db.control_path()              # "prod/_serialize_db/snapshots.json"
+        db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
+        db.uri(Lancamento.__table__)   # "s3://bucket/projeto/delta/prd/cad_lancamentos"
+        db.control_path()              # "prd/_serialize_db/snapshots.json"
     """
 
     root: str
@@ -106,7 +106,7 @@ class Database:
     ``file://``; o S3 sem região e outro esquema são ``ValueError`` no primeiro uso de
     ``storage``."""
     environment: str
-    """O ambiente, ``prod`` ou ``dev``: as execuções de um não tocam as tabelas do outro. Fora da
+    """O ambiente, ``prd`` ou ``dsv``: as execuções de um não tocam as tabelas do outro. Fora da
     regra da partição, a construção é ``ContractError``."""
     metadata: sa.MetaData
     """O ``MetaData`` dos modelos do cliente: as tabelas que a execução abre e reconcilia."""
@@ -129,7 +129,7 @@ class Database:
 
         .. code-block:: python
 
-            db.uri(Lancamento.__table__)   # "s3://bucket/projeto/delta/prod/cad_lancamentos"
+            db.uri(Lancamento.__table__)   # "s3://bucket/projeto/delta/prd/cad_lancamentos"
 
         :param table: a tabela do modelo.
         :return: a URI ``<raiz>/<ambiente>/<tabela>``, sem barra final.
@@ -143,7 +143,7 @@ class Database:
 
         .. code-block:: python
 
-            db.control_path()   # "prod/_serialize_db/snapshots.json"
+            db.control_path()   # "prd/_serialize_db/snapshots.json"
 
         :return: o caminho relativo à raiz.
         """
@@ -156,7 +156,7 @@ class Database:
 
         .. code-block:: python
 
-            db.staging_prefix("exec-2026-09-05")   # "prod/staging/exec-2026-09-05"
+            db.staging_prefix("exec-2026-09-05")   # "prd/staging/exec-2026-09-05"
 
         :param execution_id: o identificador da execução.
         :return: o prefixo ``<ambiente>/staging/<execution_id>``, relativo à raiz.
@@ -170,7 +170,7 @@ class Database:
 
         .. code-block:: python
 
-            db.publication_prefix("exec-2026-09-05")   # "prod/publicacao/exec-2026-09-05"
+            db.publication_prefix("exec-2026-09-05")   # "prd/publicacao/exec-2026-09-05"
 
         :param execution_id: o identificador da execução que publica.
         :return: o prefixo ``<ambiente>/publicacao/<execution_id>``, relativo à raiz.
@@ -184,7 +184,7 @@ class Database:
 
         .. code-block:: python
 
-            db.archive_prefix("2026T3")   # "prod/arquivo/2026T3"
+            db.archive_prefix("2026T3")   # "prd/arquivo/2026T3"
 
         :param name: o nome do snapshot.
         :return: o caminho ``<ambiente>/arquivo/<nome>``, relativo à raiz.

@@ -299,7 +299,7 @@ from serialize_db import delta, schema
 from serialize_db.storage import Storage
 
 storage = Storage.for_uri("s3://bucket/projeto/delta")
-uri = storage.uri_of("prod/cad_operacoes")
+uri = storage.uri_of("prd/cad_operacoes")
 delta.create_table(uri, table, storage)                         # versão 0, repetível
 metadata = delta.commit_metadata("exec-2026-09-05", {"cad_contratos": 88})
 version = delta.publish_partition(uri, table, "2026-08-31", schema.cast(data, table), metadata, storage)
@@ -333,7 +333,7 @@ por partição entre a origem e o Delta:
 from serialize_db import load
 from serialize_db.execution import Database
 
-db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
+db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
 for table in load.load_order(db.tables()):
     load.initial_load(db, table, "s3://bucket/projeto/db_projetado")   # as partições gravadas
     report = load.load_report(db, table, "s3://bucket/projeto/db_projetado")
@@ -346,7 +346,7 @@ o tipo do contrato, ou uma coluna do contrato ausente dos arquivos, falha no `CO
 DuckDB, também sem commit. Na linha de comando:
 
 ```
-serialize-db load --root s3://bucket/projeto/delta --environment prod \
+serialize-db load --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --source s3://bucket/projeto/db_projetado
 ```
 
@@ -361,7 +361,7 @@ import sqlalchemy as sa
 
 from serialize_db import Database, Execution
 
-db = Database("s3://bucket/projeto/delta", "prod", Base.metadata)
+db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
 with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento.__table__, partitions=run.previous_partitions(Lancamento.__table__, 12),
                materialize=True)
@@ -386,16 +386,16 @@ A linha de comando abre a mesma execução para uma função `modulo:funcao` que
 versão publicada:
 
 ```shell
-serialize-db run --root s3://bucket/projeto/delta --environment prod --partition 2026-08-31 \
+serialize-db run --root s3://bucket/projeto/delta --environment prd --partition 2026-08-31 \
     --metadata pipeline.models:Base.metadata pipeline.mensal:main
 serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --engine redshift --sql
 serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos \
-    --partitions 2026-08-31 --root s3://bucket/projeto/delta --environment prod
+    --partitions 2026-08-31 --root s3://bucket/projeto/delta --environment prd
 ```
 
 O `run` sai com 0 quando o pipeline termina, 1 na auditoria reprovada e 2 no conflito e no erro de
 uso; `--root`, `--environment` e `--engine` têm por padrão `SERIALIZE_DB_ROOT`,
-`SERIALIZE_DB_ENVIRONMENT` (`dev`) e `SERIALIZE_DB_ENGINE` (`duckdb`).
+`SERIALIZE_DB_ENVIRONMENT` (`dsv`) e `SERIALIZE_DB_ENGINE` (`duckdb`).
 
 ### Rodar o pipeline no sandbox DuckDB
 
@@ -467,7 +467,7 @@ from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 config = RedshiftConfig(workgroup="controladoria-wg", database="dev",
                         share_database="datalake_rw_shared", schema="sbx_aco_decon",
                         region="sa-east-1")
-with RedshiftEngine(config, "exec-2026-09-05", storage, "prod/staging/exec-2026-09-05") as engine:
+with RedshiftEngine(config, "exec-2026-09-05", storage, "prd/staging/exec-2026-09-05") as engine:
     engine.ingest(Lancamento.__table__, uri, version, partitions=["2026-08-31"])
     with engine.stream(sa.select(Lancamento)) as stream, \
             engine.loader(Projetado.__table__) as loader:
@@ -506,11 +506,11 @@ with Execution(db, "duckdb", "2026-08-31", redshift=RedshiftConfig.from_environm
 ```
 
 ```shell
-serialize-db publish --root s3://bucket/projeto/delta --environment prod \
+serialize-db publish --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --tables cad_lancamentos_projetados
-serialize-db publish --root s3://bucket/projeto/delta --environment prod \
+serialize-db publish --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --status
-serialize-db publish --root s3://bucket/projeto/delta --environment prod \
+serialize-db publish --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --unpublish --tables cad_lancamentos_projetados
 ```
 

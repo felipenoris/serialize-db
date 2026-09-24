@@ -191,7 +191,7 @@ def execution(engine: FakeEngine) -> Iterator[FakeEngine]:
     que acontecer."""
     # A abertura fica dentro do try: uma ingestão que falha também descarta o sandbox.
     try:
-        engine.ingest("cad_lancamentos", "/dados/prod/cad_lancamentos", 143)
+        engine.ingest("cad_lancamentos", "/dados/prd/cad_lancamentos", 143)
         yield engine
     finally:
         engine.cleanup()
@@ -202,7 +202,7 @@ def test_context_manager_cleans_up_on_failure() -> None:
     vários recursos."""
     engine = FakeEngine()
     with execution(engine) as run:
-        assert run.calls == [("cad_lancamentos", "/dados/prod/cad_lancamentos", 143)]
+        assert run.calls == [("cad_lancamentos", "/dados/prd/cad_lancamentos", 143)]
     assert engine.cleaned
 
     # AuditFailed é a exceção da biblioteca para a auditoria reprovada.
@@ -264,7 +264,7 @@ def build_parser(environ: Mapping[str, str]) -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="executa o pipeline de uma partição")
     root = environ.get("SERIALIZE_DB_ROOT")
     run.add_argument("--root", default=root, required=not root)
-    run.add_argument("--environment", default=environ.get("SERIALIZE_DB_ENVIRONMENT") or "dev")
+    run.add_argument("--environment", default=environ.get("SERIALIZE_DB_ENVIRONMENT") or "dsv")
     run.add_argument(
         "--engine",
         choices=["duckdb", "redshift"],
@@ -301,7 +301,7 @@ def test_command_line_parsing() -> None:
     assert (args.command, args.root, args.environment, args.engine) == (
         "run",
         "s3://bucket/projeto/delta",
-        "dev",
+        "dsv",
         "duckdb",
     )
     assert args.partition == "2026-08-31"
@@ -403,23 +403,23 @@ def test_json_control_file_and_commit_metadata() -> None:
 def test_storage_uris() -> None:
     """``urllib.parse`` separa bucket e prefixo; ``PurePosixPath`` junta chaves; ``Path`` cuida da
     pasta local."""
-    parts = urllib.parse.urlparse("s3://awsds-sandbox/dzd/projeto/dev/prod/cad_lancamentos")
+    parts = urllib.parse.urlparse("s3://awsds-sandbox/dzd/projeto/dev/prd/cad_lancamentos")
     assert parts.scheme == "s3"
     assert parts.netloc == "awsds-sandbox"
-    assert parts.path.lstrip("/") == "dzd/projeto/dev/prod/cad_lancamentos"
+    assert parts.path.lstrip("/") == "dzd/projeto/dev/prd/cad_lancamentos"
 
     # As chaves do S3 usam / independentemente do sistema; PurePosixPath as compõe sem tocar o
     # disco.
-    key = PurePosixPath("dzd/projeto/dev") / "prod" / "cad_lancamentos" / "_delta_log"
-    assert str(key) == "dzd/projeto/dev/prod/cad_lancamentos/_delta_log"
-    assert key.relative_to("dzd/projeto/dev").parts == ("prod", "cad_lancamentos", "_delta_log")
+    key = PurePosixPath("dzd/projeto/dev") / "prd" / "cad_lancamentos" / "_delta_log"
+    assert str(key) == "dzd/projeto/dev/prd/cad_lancamentos/_delta_log"
+    assert key.relative_to("dzd/projeto/dev").parts == ("prd", "cad_lancamentos", "_delta_log")
 
     # A pasta local: caminho absoluto ou file://, os dois aceitos pelo delta-rs.
-    local = Path("/dados/prod/cad_lancamentos")
+    local = Path("/dados/prd/cad_lancamentos")
     assert urllib.parse.urlparse(str(local)).scheme == ""
     assert local.is_absolute()
-    assert local.as_uri() == "file:///dados/prod/cad_lancamentos"
-    assert Path(urllib.parse.urlparse("file:///dados/prod").path) == Path("/dados/prod")
+    assert local.as_uri() == "file:///dados/prd/cad_lancamentos"
+    assert Path(urllib.parse.urlparse("file:///dados/prd").path) == Path("/dados/prd")
 
 
 def partition_of(file_action: dict) -> str:

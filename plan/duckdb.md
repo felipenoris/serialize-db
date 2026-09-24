@@ -627,7 +627,7 @@ execução:
 # Meses da tabela Delta carregados no sandbox: snapshot fixado, filtro por partição e tabela local.
 import duckdb
 
-uri = "s3://bucket/prod/cad_operacoes"                 # ou o caminho de uma pasta local
+uri = "s3://bucket/prd/cad_operacoes"                 # ou o caminho de uma pasta local
 con = duckdb.connect("sandbox.duckdb")
 con.execute("INSTALL delta; LOAD delta;")
 con.execute(f"ATTACH '{uri}' AS fonte (TYPE delta, PIN_SNAPSHOT true)")

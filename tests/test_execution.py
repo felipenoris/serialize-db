@@ -112,7 +112,7 @@ def folder(local_location: LocalLocation) -> Path:
 @pytest.fixture
 def db(folder: Path) -> Database:
     """O banco do teste, com a tabela de entrada publicada em quatro meses, ids 1 a 40."""
-    database = Database(str(folder / "delta"), "prod", Base.metadata)
+    database = Database(str(folder / "delta"), "prd", Base.metadata)
     uri = database.uri(ENTRIES)
     delta.create_table(uri, ENTRIES, database.storage)
     for index, month in enumerate(MONTHS[:4]):
@@ -238,7 +238,7 @@ def test_execution_opens_every_table_and_fixes_versions(
     assert match.group(1) in (before, after)
 
     # A pasta da tabela.
-    assert db.uri(ENTRIES) == db.storage.uri + "/prod/cad_lancamentos"
+    assert db.uri(ENTRIES) == db.storage.uri + "/prd/cad_lancamentos"
     assert not db.uri(ENTRIES).endswith("/")
 
 
@@ -422,7 +422,7 @@ def test_publish_with_two_workers_matches_one(db: Database, folder: Path) -> Non
     terminarem e leva o resultado de cada uma numa nota."""
     results = {}
     for workers in (1, 2):
-        database = Database(str(folder / f"delta_{workers}"), "prod", Base.metadata)
+        database = Database(str(folder / f"delta_{workers}"), "prd", Base.metadata)
         with Execution(database, FakeEngine(database.storage), "2026-08-31") as run:
             results[workers] = run.publish(ENTRIES, PROJECTED, partitions=["2026-08-31"],
                                            audit=False, max_workers=workers)
@@ -434,7 +434,7 @@ def test_publish_with_two_workers_matches_one(db: Database, folder: Path) -> Non
     entries_copy = ENTRIES.to_metadata(metadata)
     projected_copy = PROJECTED.to_metadata(metadata)
     extra = PROJECTED.to_metadata(metadata, name="cad_extra")
-    database = Database(str(folder / "delta_falha"), "prod", metadata)
+    database = Database(str(folder / "delta_falha"), "prd", metadata)
     engine = FailingEngine(database.storage)
     with Execution(database, engine, "2026-08-31") as run:
         with pytest.raises(ExecutionConflict, match="conflito plantado") as failure:
@@ -508,9 +508,9 @@ def test_snapshot_writes_the_control_file_at_exit(db: Database) -> None:
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         run.snapshot("2026T3")
         run.publish(PROJECTED, partitions=["2026-08-31"], audit=False)
-        _, fingerprint = delta.read_snapshots(db.storage, "prod")
+        _, fingerprint = delta.read_snapshots(db.storage, "prd")
         assert fingerprint is None  # só no encerramento
-    control, _ = delta.read_snapshots(db.storage, "prod")
+    control, _ = delta.read_snapshots(db.storage, "prd")
     versions = {"cad_lancamentos": 4, "cad_lancamentos_projetados": 1}
     assert control == {"snapshots": {"2026T3": versions}}
 
@@ -519,7 +519,7 @@ def test_snapshot_writes_the_control_file_at_exit(db: Database) -> None:
         with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
             run.snapshot("2026T4")
             raise RuntimeError("falha do pipeline")
-    control, _ = delta.read_snapshots(db.storage, "prod")
+    control, _ = delta.read_snapshots(db.storage, "prd")
     assert list(control["snapshots"]) == ["2026T3"]
 
 
@@ -601,7 +601,7 @@ def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
     ``--export-mode`` que saiu da linha de comando, sem traceback."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
-    common = ["run", "--root", db.root, "--environment", "prod",
+    common = ["run", "--root", db.root, "--environment", "prd",
               "--metadata", "test_execution:Base.metadata"]
     projected = "test_execution:projected_pipeline"
 
@@ -637,7 +637,7 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
     for name, value in (("HOST", "host"), ("USER", "usuario"), ("PASSWORD", "senha"),
                         ("SCHEMA", "esquema"), ("SHARE_DATABASE", "compartilhado")):
         monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", value)
-    common = ["run", "--root", db.root, "--environment", "prod", "--partition", "2026-08-31",
+    common = ["run", "--root", db.root, "--environment", "prd", "--partition", "2026-08-31",
               "--metadata", "test_execution:Base.metadata"]
     redshift_engine = [*common, "--engine", "redshift", "test_execution:redshift_engine_pipeline"]
     assert cli.main(redshift_engine) == 0
@@ -666,7 +666,7 @@ def test_cli_audit_prints_the_sql_and_audits_the_published_version(
     assert '"{prefix}cad_lancamentos"' in printed
 
     # A auditoria da versão publicada.
-    assert cli.main([*entries_audit, "--root", db.root, "--environment", "prod"]) == 0
+    assert cli.main([*entries_audit, "--root", db.root, "--environment", "prd"]) == 0
     printed = capsys.readouterr().out
     assert "cad_lancamentos na versão 4:" in printed
     assert "chave_id_lancamento_publicada: aprovada" in printed

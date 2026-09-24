@@ -256,8 +256,8 @@ docstrings do módulo e no cabeçalho do script. Sobre a base fictícia, gravada
 
 ```
 PYTHONPATH=tests uv run python -c "from pathlib import Path; import source_db_projetado; source_db_projetado.write_source(Path('/pasta/db_projetado'))"
-PYTHONPATH=tests uv run serialize-db load --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta --environment prod
-PYTHONPATH=tests uv run python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta --environment prod
+PYTHONPATH=tests uv run serialize-db load --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta --environment prd
+PYTHONPATH=tests uv run python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta --environment prd
 ```
 
 No ambiente alvo, com a pasta preparada, sobre a cópia da base de produção, uma tabela por vez e
@@ -265,7 +265,7 @@ o relatório em JSON:
 
 ```
 export AWS_DEFAULT_REGION=sa-east-1
-PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --environment prod --source s3://bucket/prefixo/db_projetado --root s3://bucket/prefixo/delta --tables cad_contratos --report relatorio.json
+PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --environment prd --source s3://bucket/prefixo/db_projetado --root s3://bucket/prefixo/delta --tables cad_contratos --report relatorio.json
 ```
 
 `--partitions AAAA-MM-DD` carrega só as partições listadas, e `--tables` só as tabelas listadas,

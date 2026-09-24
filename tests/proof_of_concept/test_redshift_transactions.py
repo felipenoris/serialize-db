@@ -23,7 +23,7 @@ confirmada deixou as suas linhas e a abortada nenhuma. Uma thread que não termi
 ``COMMIT`` de A é registrada como presa, e a sessão dela é encerrada por ``pg_terminate_backend``.
 
 Os cenários: escritas em tabelas distintas (a ingestão em paralelo e ``publish_redshift`` com uma
-conexão por tabela); dev e prod publicando ao mesmo tempo, com linhas distintas da tabela de
+conexão por tabela); dsv e prd publicando ao mesmo tempo, com linhas distintas da tabela de
 controle; duas publicações da mesma tabela e partição, com a staging de nome fixo da etapa 8; o
 ``LOCK`` da tabela de controle no início da transação; a linha de controle gravada por um
 ``UPDATE`` condicionado à versão lida, como primeiro comando; e a publicação que a etapa 8 adotou,
@@ -178,12 +178,12 @@ class Tables:
     sessão os cita."""
 
     control: str
-    prod: str
-    dev: str
+    prd: str
+    dsv: str
 
 
 def create_tables(session: RedshiftSession, scenario: str) -> Tables:
-    """A tabela de controle de ``serialize_db_publications`` com prod e dev na versão 1, e uma
+    """A tabela de controle de ``serialize_db_publications`` com prd e dsv na versão 1, e uma
     tabela de dados por ambiente com a partição publicada."""
     control = session.qualified(session.table(f"{scenario}_controle"))
     session.execute(
@@ -191,12 +191,12 @@ def create_tables(session: RedshiftSession, scenario: str) -> Tables:
         "execution_id VARCHAR(127) NOT NULL, published_at TIMESTAMP NOT NULL)"
     )
     session.execute(
-        f"INSERT INTO {control} VALUES ('prod_x', 1, 'exec-0', getdate()), "
-        "('dev_x', 1, 'exec-0', getdate())"
+        f"INSERT INTO {control} VALUES ('prd_x', 1, 'exec-0', getdate()), "
+        "('dsv_x', 1, 'exec-0', getdate())"
     )
 
     names = []
-    for environment in ("prod", "dev"):
+    for environment in ("prd", "dsv"):
         name = session.qualified(session.table(f"{scenario}_{environment}_x"))
         session.execute(
             f"CREATE TABLE {name} (id BIGINT NOT NULL, execution_id VARCHAR(127) NOT NULL, "
@@ -207,7 +207,7 @@ def create_tables(session: RedshiftSession, scenario: str) -> Tables:
         )
         names.append(name)
 
-    return Tables(control=control, prod=names[0], dev=names[1])
+    return Tables(control=control, prd=names[0], dsv=names[1])
 
 
 def begin() -> Step:
@@ -351,17 +351,17 @@ def test_writes_to_distinct_tables(redshift_session: RedshiftSession) -> None:
     a, b = run_scenario(
         session,
         prefix,
-        [begin(), *replace_partition(tables.prod, "exec-a")],
+        [begin(), *replace_partition(tables.prd, "exec-a")],
         [begin()],
-        [*replace_partition(tables.dev, "exec-b"), commit()],
+        [*replace_partition(tables.dsv, "exec-b"), commit()],
     )
 
-    assert partition_origin(session, tables.prod) == (["exec-a"] if a.committed else ["exec-0"])
-    assert partition_origin(session, tables.dev) == (["exec-b"] if b.committed else ["exec-0"])
+    assert partition_origin(session, tables.prd) == (["exec-a"] if a.committed else ["exec-0"])
+    assert partition_origin(session, tables.dsv) == (["exec-b"] if b.committed else ["exec-0"])
 
 
 def test_two_environments_write_distinct_control_rows(redshift_session: RedshiftSession) -> None:
-    """prod e dev publicam ao mesmo tempo: tabelas de dados distintas e linhas distintas da tabela
+    """prd e dsv publicam ao mesmo tempo: tabelas de dados distintas e linhas distintas da tabela
     de controle.
 
     A sequência é a da etapa 8: a versão publicada lida antes da transação, a partição trocada e a
@@ -377,25 +377,25 @@ def test_two_environments_write_distinct_control_rows(redshift_session: Redshift
         prefix,
         [
             begin(),
-            *replace_partition(tables.prod, "exec-a"),
-            *write_control_row(tables.control, "prod_x", 2, "exec-a"),
+            *replace_partition(tables.prd, "exec-a"),
+            *write_control_row(tables.control, "prd_x", 2, "exec-a"),
         ],
-        [begin(), *replace_partition(tables.dev, "exec-b")],
-        [*write_control_row(tables.control, "dev_x", 2, "exec-b"), commit()],
+        [begin(), *replace_partition(tables.dsv, "exec-b")],
+        [*write_control_row(tables.control, "dsv_x", 2, "exec-b"), commit()],
     )
     rows = control_rows(session, tables)
     record(f"{prefix}.controle", rows)
 
     # O estado final bate com os desfechos: cada ambiente tem a partição e a linha de quem
     # confirmou.
-    assert rows["prod_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
-    assert rows["dev_x"] == ((2, "exec-b") if b.committed else (1, "exec-0"))
-    assert partition_origin(session, tables.prod) == (["exec-a"] if a.committed else ["exec-0"])
-    assert partition_origin(session, tables.dev) == (["exec-b"] if b.committed else ["exec-0"])
+    assert rows["prd_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
+    assert rows["dsv_x"] == ((2, "exec-b") if b.committed else (1, "exec-0"))
+    assert partition_origin(session, tables.prd) == (["exec-a"] if a.committed else ["exec-0"])
+    assert partition_origin(session, tables.dsv) == (["exec-b"] if b.committed else ["exec-0"])
 
 
 def test_two_publications_of_the_same_table(redshift_session: RedshiftSession) -> None:
-    """Duas publicações de prod da mesma tabela e partição, com a staging de nome fixo da etapa 8.
+    """Duas publicações de prd da mesma tabela e partição, com a staging de nome fixo da etapa 8.
 
     O ``CREATE TABLE`` da staging abre o snapshot de cada transação. B cria a mesma staging e troca
     a mesma partição enquanto A segura a sua transação aberta: o relatório diz onde B espera (o
@@ -413,8 +413,8 @@ def test_two_publications_of_the_same_table(redshift_session: RedshiftSession) -
                 "cria a staging",
                 f"CREATE TABLE {staging} (id BIGINT, execution_id VARCHAR(127))",
             ),
-            *replace_partition(tables.prod, execution_id),
-            *write_control_row(tables.control, "prod_x", version, execution_id),
+            *replace_partition(tables.prd, execution_id),
+            *write_control_row(tables.control, "prd_x", version, execution_id),
             Step("apaga a staging", f"DROP TABLE {staging}"),
         ]
 
@@ -427,12 +427,12 @@ def test_two_publications_of_the_same_table(redshift_session: RedshiftSession) -
     )
     rows = control_rows(session, tables)
     record(f"{prefix}.controle", rows)
-    record(f"{prefix}.particao", partition_origin(session, tables.prod))
+    record(f"{prefix}.particao", partition_origin(session, tables.prd))
 
     # A última transação confirmada é a dona da partição e da linha de controle.
     expected = expected_control_row(a, b)
-    assert rows["prod_x"] == expected
-    assert partition_origin(session, tables.prod) == [expected[1]]
+    assert rows["prd_x"] == expected
+    assert partition_origin(session, tables.prd) == [expected[1]]
 
 
 def fill_temporary_staging(staging: str, execution_id: str) -> list[Step]:
@@ -451,15 +451,15 @@ def fill_temporary_staging(staging: str, execution_id: str) -> list[Step]:
 
 
 def swap_from_staging(tables: Tables, staging: str, execution_id: str, version: int) -> list[Step]:
-    """A troca da partição de prod a partir da staging e a linha de controle, como a etapa 8 as
+    """A troca da partição de prd a partir da staging e a linha de controle, como a etapa 8 as
     grava."""
     return [
-        Step("apaga a partição", f"DELETE FROM {tables.prod} WHERE data_str = '{PARTITION}'"),
+        Step("apaga a partição", f"DELETE FROM {tables.prd} WHERE data_str = '{PARTITION}'"),
         Step(
             "insere a partição da staging",
-            f"INSERT INTO {tables.prod} SELECT id, execution_id, '{PARTITION}' FROM {staging}",
+            f"INSERT INTO {tables.prd} SELECT id, execution_id, '{PARTITION}' FROM {staging}",
         ),
-        *write_control_row(tables.control, "prod_x", version, execution_id),
+        *write_control_row(tables.control, "prd_x", version, execution_id),
     ]
 
 
@@ -468,8 +468,8 @@ def assert_publication_matches(session: RedshiftSession, tables: Tables,
     """O estado final bate com o desfecho: a partição e a linha de controle de ``exec-a`` quando a
     transação confirmou, as de ``exec-0`` quando não."""
     expected = (2, "exec-a") if publisher.committed else (1, "exec-0")
-    assert control_rows(session, tables)["prod_x"] == expected
-    assert partition_origin(session, tables.prod) == [expected[1]]
+    assert control_rows(session, tables)["prd_x"] == expected
+    assert partition_origin(session, tables.prd) == [expected[1]]
 
 
 def test_temporary_staging_filled_inside_the_transaction(
@@ -534,12 +534,12 @@ def test_lock_on_the_control_table(redshift_session: RedshiftSession) -> None:
         a.run([begin(), Step("LOCK", f"LOCK {tables.control}")])
         if a.failed:
             a.report(prefix)
-            assert control_rows(session, tables)["prod_x"] == (1, "exec-0")
+            assert control_rows(session, tables)["prd_x"] == (1, "exec-0")
             return
         a.run(
             [
-                *replace_partition(tables.prod, "exec-a"),
-                *write_control_row(tables.control, "prod_x", 2, "exec-a"),
+                *replace_partition(tables.prd, "exec-a"),
+                *write_control_row(tables.control, "prd_x", 2, "exec-a"),
             ]
         )
         b.run([begin()])
@@ -548,10 +548,10 @@ def test_lock_on_the_control_table(redshift_session: RedshiftSession) -> None:
                 Step("LOCK", f"LOCK {tables.control}"),
                 Step(
                     "lê a versão publicada",
-                    f"SELECT delta_version FROM {tables.control} WHERE table_name = 'prod_x'",
+                    f"SELECT delta_version FROM {tables.control} WHERE table_name = 'prd_x'",
                 ),
-                *replace_partition(tables.prod, "exec-b"),
-                *write_control_row(tables.control, "prod_x", 3, "exec-b"),
+                *replace_partition(tables.prd, "exec-b"),
+                *write_control_row(tables.control, "prd_x", 3, "exec-b"),
                 commit(),
             ]
         )
@@ -565,7 +565,7 @@ def test_lock_on_the_control_table(redshift_session: RedshiftSession) -> None:
     record(f"{prefix}.controle", rows)
 
     expected = expected_control_row(a, b)
-    assert rows["prod_x"] == expected
+    assert rows["prd_x"] == expected
 
 
 def test_conditional_update_of_the_control_row(redshift_session: RedshiftSession) -> None:
@@ -586,7 +586,7 @@ def test_conditional_update_of_the_control_row(redshift_session: RedshiftSession
             "atualiza a linha de controle se a versão é 1",
             f"UPDATE {tables.control} SET delta_version = {version}, "
             f"execution_id = '{execution_id}', published_at = getdate() "
-            "WHERE table_name = 'prod_x' AND delta_version = 1",
+            "WHERE table_name = 'prd_x' AND delta_version = 1",
         )
 
     a, b = run_scenario(
@@ -600,7 +600,7 @@ def test_conditional_update_of_the_control_row(redshift_session: RedshiftSession
     record(f"{prefix}.controle", rows)
 
     # B nunca confirma aqui: o fechamento da conexão desfaz a transação dele.
-    assert rows["prod_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
+    assert rows["prd_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
 
 
 def test_control_row_read_first_and_written_last(redshift_session: RedshiftSession) -> None:
@@ -621,14 +621,14 @@ def test_control_row_read_first_and_written_last(redshift_session: RedshiftSessi
         return [
             Step(
                 "lê a linha de controle",
-                f"SELECT delta_version FROM {tables.control} WHERE table_name = 'prod_x'",
+                f"SELECT delta_version FROM {tables.control} WHERE table_name = 'prd_x'",
             ),
-            *replace_partition(tables.prod, execution_id),
+            *replace_partition(tables.prd, execution_id),
             Step(
                 "atualiza a linha de controle se a versão é 1",
                 f"UPDATE {tables.control} SET delta_version = {version}, "
                 f"execution_id = '{execution_id}', published_at = getdate() "
-                "WHERE table_name = 'prod_x' AND delta_version = 1",
+                "WHERE table_name = 'prd_x' AND delta_version = 1",
             ),
         ]
 
@@ -641,8 +641,8 @@ def test_control_row_read_first_and_written_last(redshift_session: RedshiftSessi
     )
     rows = control_rows(session, tables)
     record(f"{prefix}.controle", rows)
-    record(f"{prefix}.particao", partition_origin(session, tables.prod))
+    record(f"{prefix}.particao", partition_origin(session, tables.prd))
 
     # B nunca confirma aqui: a partição e a linha de controle são as de A, quando A confirmou.
-    assert rows["prod_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
-    assert partition_origin(session, tables.prod) == (["exec-a"] if a.committed else ["exec-0"])
+    assert rows["prd_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
+    assert partition_origin(session, tables.prd) == (["exec-a"] if a.committed else ["exec-0"])

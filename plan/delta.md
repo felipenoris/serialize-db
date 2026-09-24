@@ -597,7 +597,7 @@ import pyarrow as pa
 from deltalake import DeltaTable, write_deltalake
 
 options = {"AWS_REGION": "sa-east-1"}          # credenciais: ambiente, IMDS, contêiner ou explícitas
-uri = "s3://bucket/prod/cad_operacoes"
+uri = "s3://bucket/prd/cad_operacoes"
 
 # INSERT: acrescenta arquivos; o esquema Arrow precisa casar com o da tabela.
 write_deltalake(uri, data, mode="append", storage_options=options)
@@ -870,10 +870,10 @@ mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends 
 INSTALL delta; LOAD delta;
 CREATE SECRET (TYPE s3, PROVIDER credential_chain);                      -- credenciais da sessão
 
-SELECT mes, count(*) FROM delta_scan('s3://bucket/prod/cad_operacoes') WHERE mes >= '2026-07' GROUP BY 1;
-SELECT count(*) FROM delta_scan('s3://bucket/prod/cad_operacoes', version := 12);
+SELECT mes, count(*) FROM delta_scan('s3://bucket/prd/cad_operacoes') WHERE mes >= '2026-07' GROUP BY 1;
+SELECT count(*) FROM delta_scan('s3://bucket/prd/cad_operacoes', version := 12);
 
-ATTACH 's3://bucket/prod/cad_operacoes' AS cad_operacoes (TYPE delta, PIN_SNAPSHOT true);
+ATTACH 's3://bucket/prd/cad_operacoes' AS cad_operacoes (TYPE delta, PIN_SNAPSHOT true);
 SELECT * FROM cad_operacoes AT (VERSION => 12) LIMIT 5;
 CREATE TABLE trabalho AS SELECT * FROM cad_operacoes WHERE mes IN ('2026-07', '2026-08');
 
@@ -932,13 +932,13 @@ def manifest(dt: DeltaTable, months: set[str]) -> bytes:
 
 ```sql
 BEGIN;
-DELETE FROM prod_cad_operacoes WHERE mes = '2026-08';
+DELETE FROM prd_cad_operacoes WHERE mes = '2026-08';
 CREATE TEMPORARY TABLE staging_cad_operacoes (                             -- sem a coluna mes
     id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL, id_cliente BIGINT NOT NULL,
     valor NUMERIC(18, 2) NOT NULL, descricao VARCHAR(200));
 COPY staging_cad_operacoes FROM 's3://bucket/publicacao/exec-42/cad_operacoes/2026-08.manifest'
     IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST;
-INSERT INTO prod_cad_operacoes SELECT *, '2026-08' FROM staging_cad_operacoes;
+INSERT INTO prd_cad_operacoes SELECT *, '2026-08' FROM staging_cad_operacoes;
 COMMIT;
 ```
 
@@ -955,7 +955,7 @@ Escrita de volta, quando o sandbox é o Redshift:
 ```sql
 UNLOAD ('SELECT id_operacao, data_ref, id_cliente, valor, descricao, mes
          FROM exec_42_cad_operacoes WHERE mes = ''2026-08''')
-TO 's3://bucket/prod/cad_operacoes/'
+TO 's3://bucket/prd/cad_operacoes/'
 IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
 FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE;
 ```
@@ -1157,12 +1157,12 @@ cópia só dos Parquet perde a tabela. Com `aws s3 sync` ou `cp --recursive` ent
 estrutura relativa se mantém.
 
 ```bash
-aws s3 sync s3://bucket/projeto/delta/prod/ s3://bucket/copias/2026-09-19/prod/
+aws s3 sync s3://bucket/projeto/delta/prd/ s3://bucket/copias/2026-09-19/prd/
 ```
 
 ```python
 # A cópia abre onde estiver, com a mesma versão; nenhum caminho precisa ser reescrito.
-DeltaTable("s3://bucket/copias/2026-09-19/prod/cad_operacoes").version()
+DeltaTable("s3://bucket/copias/2026-09-19/prd/cad_operacoes").version()
 ```
 
 O Iceberg é o contraste: `metadata.json` guarda o `location` da tabela, e os manifests guardam o

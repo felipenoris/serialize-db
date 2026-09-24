@@ -36,8 +36,8 @@ módulo, em `PLAN-STAGE-<n>.md`.
   e as primitivas podem ser chamadas de qualquer thread; cada motor tem uma sessão por execução sob
   um lock reentrante, e cada comando usa o paralelismo do motor. Os dados cruzam a fronteira em
   lotes `RecordBatch`: `stream` lê o lote seguinte e `loader` grava o anterior enquanto o cliente
-  trabalha no atual, e `query` e `load` são as formas por `pa.Table`; `publish` e
-  `publish_redshift` aceitam `max_workers`. A seção "Paralelismo" diz como operar em cada cenário.
+  trabalha no atual, e `query` e `load` são as formas por `pa.Table`; `publish` e a publicação no
+  Redshift aceitam `max_workers`. A seção "Paralelismo" diz como operar em cada cenário.
 - **Restrições aplicadas por consulta.** Nem o Parquet nem o Delta têm chave primária, unicidade ou
   chave estrangeira, e o Redshift só as registra. A auditoria da execução as aplica com consultas
   derivadas dos próprios modelos, e o texto SQL de cada verificação pode ser impresso ou gravado,
@@ -112,8 +112,8 @@ lê a versão de cada tabela em `snapshots.json`, lista os arquivos com
 | Registro | Onde | Conteúdo | Quem grava |
 | --- | --- | --- | --- |
 | Metadados de commit | `commitInfo` de cada commit da biblioteca. | `serialize_db_execution_id`; `serialize_db_input_versions`, o JSON `{tabela: versão}` das versões lidas, fixado na abertura da execução; `serialize_db_snapshot` só na execução que marca um snapshot. | `publish_partition` e `register_files`, por `CommitProperties(custom_metadata=...)`. |
-| Arquivo de controle | `<ambiente>/_serialize_db/snapshots.json`. | `{"snapshots": {nome: {tabela: versão}}}`, com todas as tabelas do ambiente, lidas ou gravadas, e `"archived"` com as entradas dos snapshots arquivados, no mesmo formato ([etapa 9](PLAN-STAGE-9.md)). | `snapshot`, com `IfMatch`; `archive` move a entrada. |
-| Tabela de controle | `serialize_db_publications(table_name, delta_version, execution_id, published_at)` no esquema do Redshift; `table_name` leva o prefixo do ambiente, como `prod_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga; a tabela é criada uma vez pelo usuário, por `create_publications_table`. |
+| Arquivo de controle | `<ambiente>/_serialize_db/snapshots.json`. | `{"snapshots": {nome: {tabela: versão}}}`, com todas as tabelas do ambiente, lidas ou gravadas, e `"archived"` com as entradas dos snapshots arquivados, no mesmo formato ([etapa 9](PLAN-STAGE-9.md)); `"channels"` com o snapshot de cada canal, `{"default": "2026T3"}` ([etapa 10](PLAN-STAGE-10.md)). | `snapshot`, com `IfMatch`; `archive` move a entrada; `serialize-db channel` aponta o canal. |
+| Tabela de controle | `serialize_db_publications(table_name, delta_version, execution_id, published_at)` no esquema do Redshift; `table_name` leva o prefixo do ambiente, como `prd_cad_lancamentos`. | Versão do Delta carregada em cada tabela publicada. | `publish_redshift`, na transação da carga; a tabela é criada uma vez pelo usuário, por `create_publications_table`. |
 
 O registro durável de uma execução é o `commitInfo` das tabelas que ela gravou; o relatório da
 auditoria e o resumo da execução vão para o log do processo, não para `_serialize_db/`.
@@ -170,7 +170,9 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
    `CommitFailedError` na mesma partição significa outra execução publicando a mesma tabela, e a
    execução aborta; ela também aborta quando a versão da tabela avançou desde a abertura, para que
    duas execuções abertas na mesma versão não publiquem a mesma faixa de identificadores.
-6. `run.publish_redshift` carrega as partições alteradas de todas as tabelas numa transação.
+6. Depois da execução, `serialize-db publish --channel current`, ou `--channel default` depois de
+   `serialize-db channel` apontar o snapshot marcado, carrega no Redshift as partições alteradas
+   ([etapa 10](PLAN-STAGE-10.md)).
 7. No encerramento, o sandbox é descartado e o resumo vai para o log. Repetir a execução com o
    mesmo `execution_id` repete os mesmos `overwrite` e produz as mesmas linhas; os identificadores
    podem diferir, porque `run.next_ids` recomeça do máximo da versão fixada.
@@ -194,18 +196,22 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
    por `register_files` depois das conferências da [etapa 3](PLAN-STAGE-3.md), sem os dados passarem
    pela máquina local; a partição com `Double` não finito troca para a releitura pelo leitor da
    [etapa 7](PLAN-STAGE-7.md) e a gravação por `publish_partition`.
-6. `run.publish_redshift` carrega as tabelas `prod_*` a partir do Delta, pelo mesmo caminho da
-   execução no DuckDB, e `cleanup` apaga as tabelas do sandbox e o staging.
+6. `cleanup` apaga as tabelas do sandbox e o staging, e depois da execução `serialize-db publish`
+   carrega as tabelas `prd_*` a partir do Delta, pelo mesmo caminho da execução no DuckDB.
 
 ### Publicação para clientes no Redshift
 
 As tabelas publicadas têm o prefixo do ambiente e são derivadas do Delta; nada é escrito nelas por
 outro caminho. A tabela `serialize_db_publications` é criada uma vez no esquema pelo usuário, por
 `serialize-db publish --init`, e a publicação para sem escrever nada quando ela não existe
-([etapa 8](PLAN-STAGE-8.md), decisão do usuário de 2026-09-23).
+([etapa 8](PLAN-STAGE-8.md), decisão do usuário de 2026-09-23). A publicação roda fora da execução,
+por `serialize-db publish`, e escolhe as versões por `--snapshot <nome>` ou `--channel <nome>`:
+`default` é o snapshot que `serialize-db channel` apontou, e `current` a versão atual de cada tabela
+([etapa 10](PLAN-STAGE-10.md)).
 
 1. `version_diff` compara, para cada tabela, a versão em `serialize_db_publications` com a versão
-   atual e devolve as partições com arquivos novos. Na primeira publicação, todas as partições.
+   escolhida e devolve as partições com arquivos alterados, nos dois sentidos: a volta a um
+   snapshot anterior troca as mesmas partições. Na primeira publicação, todas as partições.
 2. A reconciliação repete no Redshift o diff aditivo do Delta, `ALTER TABLE ADD COLUMN` no fim da
    tabela, porque o `COPY` é posicional; um diff destrutivo recria a tabela e recarrega tudo.
 3. Numa transação por tabela (decisão do usuário de 2026-09-23): a leitura da linha de
@@ -229,7 +235,7 @@ intacto, e a publicação seguinte recria a tabela com todas as partições.
 1. A mesma `Execution`, com a partição a corrigir e um `execution_id` novo.
 2. `run.publish` substitui a partição nas tabelas afetadas; a versão anterior continua legível até o
    `vacuum`, dentro dos 400 dias de retenção.
-3. `run.publish_redshift` recarrega só essa partição.
+3. `serialize-db publish --channel current` recarrega só essa partição.
 4. As versões intermediárias entre snapshots do banco saem no `vacuum` mensal.
 
 ### Evolução do esquema
@@ -254,6 +260,9 @@ intacto, e a publicação seguinte recria a tabela com todas as partições.
    commit leva `serialize_db_snapshot`, e no encerramento `snapshot` grava em
    `_serialize_db/snapshots.json` a versão de todas as tabelas do ambiente, as gravadas na versão
    nova e as só lidas na versão fixada.
+   `serialize-db channel --name default --snapshot 2026T3` aponta depois o canal `default`, o
+   snapshot que o leitor abre sem argumento e que `serialize-db publish --channel default`
+   publica; `archive` recusa o snapshot de um canal ([etapa 10](PLAN-STAGE-10.md)).
 2. `compact` roda antes do snapshot, nunca depois, porque a compactação reescreve arquivos que o
    snapshot continua referenciando.
 3. Mensalmente, `vacuum_keeping_snapshots` lista com `keep_versions` lido do arquivo de controle,
@@ -286,8 +295,8 @@ Para publicar no Hive ou para sair do Delta.
 1. A pasta do ambiente é copiada inteira, com `_delta_log/` de cada tabela e `_serialize_db/`, por
    `aws s3 sync` entre prefixos ou entre disco e S3; os caminhos do log e do arquivo de controle são
    relativos, e a cópia abre onde estiver, na mesma versão.
-2. Um ambiente de desenvolvimento nasce de uma cópia de produção: `Database(root, environment="dev", metadata=Base.metadata)`
-   aponta para a pasta copiada, e as tabelas publicadas levam o prefixo `dev_`.
+2. Um ambiente de desenvolvimento nasce de uma cópia de produção: `Database(root, environment="dsv", metadata=Base.metadata)`
+   aponta para a pasta copiada, e as tabelas publicadas levam o prefixo `dsv_`.
 3. Execuções de ambientes diferentes não conflitam, porque gravam tabelas diferentes; a concorrência
    que resta é entre execuções do mesmo ambiente, que o log serializa.
 
@@ -312,6 +321,25 @@ A opção de migração para fora do SQLAlchemy, não o caminho padrão (decisã
    os motores compilam pelo dialeto o statement Core que recebem (decisão do usuário de
    2026-09-21); consulta nova nasce
    em texto, no dialeto do DuckDB, com os testes nos dois motores ([`estrategia.md`](estrategia.md)).
+
+### Consulta da base pelo cliente
+
+O acesso de leitura da [etapa 10](PLAN-STAGE-10.md), planejado em 2026-09-24.
+
+1. O time abre o leitor Delta por `db.open_delta()`: as versões do snapshot do canal `default`, de
+   um snapshot nomeado, arquivado inclusive, ou a atual (`channel="current"`), e um DuckDB com uma
+   view por tabela sobre `delta_scan` nessas versões.
+2. O cliente submete o `select` Core ou ORM do modelo a `reader.query`, que devolve a `pa.Table`,
+   ou a `reader.stream`, que devolve os lotes; `to_pandas(types_mapper=pd.ArrowDtype)` leva o
+   resultado ao pandas.
+3. `reader.materialize` troca a view de uma tabela consultada muitas vezes por uma tabela local,
+   inteira ou com parte das partições.
+4. O cliente que só enxerga o Redshift abre o leitor das tabelas `<ambiente>_<tabela>` por
+   `serialize_db.reader.open_redshift`, e o time por `db.open_redshift()`; sem `config`, a conexão
+   vem das variáveis `SERIALIZE_DB_REDSHIFT_*`. O `stream` pede um destino próprio para o
+   `UNLOAD`, sem o qual o cliente sem S3 roda só `query`. O mesmo statement roda nas duas origens.
+5. O `close` apaga o banco local do leitor Delta, ou os arquivos do `UNLOAD` do leitor Redshift; o
+   leitor Delta não fechado apaga o banco quando é coletado ou quando o interpretador termina.
 
 ## Paralelismo
 
@@ -391,7 +419,8 @@ e os exemplos do Redshift em `test_redshift.py`.
   passo não usa as tabelas temporárias da principal, os comandos também correm juntos. Cada `load` e cada `query` gravam
   tabelas distintas, e cada comando é confirmado ao terminar, então nada fica meio gravado para a
   leitura seguinte.
-- **Publicação no Redshift.** `run.publish_redshift(*tables, max_workers=n)`: um `COPY` por tabela,
+- **Publicação no Redshift.** `serialize-db publish --max-workers n`, sobre
+  `publication.publish_redshift`: um `COPY` por tabela,
   uma conexão por tabela, fora da sessão do sandbox, limitados pelas slots do WLM. Dois `COPY` na
   mesma tabela serializam.
 

@@ -225,7 +225,7 @@ def fake_engine(monkeypatch: pytest.MonkeyPatch, connection: FakeConnection,
     """O motor sobre a conexão de mentira, com o ``staging/`` da execução na raiz local."""
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
     root = storage if storage is not None else Storage.for_uri("/tmp/sem-uso")
-    return RedshiftEngine(CONFIG, EXECUTION_ID, root, f"prod/staging/{EXECUTION_ID}")
+    return RedshiftEngine(CONFIG, EXECUTION_ID, root, f"prd/staging/{EXECUTION_ID}")
 
 
 # ---------------------------------------------------------------- a configuração e os textos
@@ -293,9 +293,9 @@ def test_copy_insert_unload_text() -> None:
     com manifesto verboso, sem ``PARTITION BY``, ``PARALLEL OFF`` opcional e o ``select`` com a
     aspa e a contrabarra dobradas; nomes em duas partes."""
     credentials = "IAM_ROLE default"
-    copied = redshift.copy_text('"esquema"."t_staging"', "s3://b/prod/staging/e/t/m.manifest",
+    copied = redshift.copy_text('"esquema"."t_staging"', "s3://b/prd/staging/e/t/m.manifest",
                                 credentials, manifest=True)
-    assert copied == ('COPY "esquema"."t_staging"\nFROM \'s3://b/prod/staging/e/t/m.manifest\'\n'
+    assert copied == ('COPY "esquema"."t_staging"\nFROM \'s3://b/prd/staging/e/t/m.manifest\'\n'
                       "IAM_ROLE default\nFORMAT AS PARQUET MANIFEST FILLRECORD")
     assert redshift.copy_text("t", "s3://b/f.parquet", credentials, manifest=False).endswith(
         "FORMAT AS PARQUET FILLRECORD")
@@ -315,12 +315,12 @@ def test_copy_insert_unload_text() -> None:
 
     # O UNLOAD com as aspas e a barra do literal dobradas.
     select = "select \"texto\" from \"t\" where \"texto\" = 'd''agua' and x = 'barra \\\\ n'"
-    unloaded = redshift.unload_text(select, "s3://b/prod/t/data_base_str=2026-08-31/e_1",
+    unloaded = redshift.unload_text(select, "s3://b/prd/t/data_base_str=2026-08-31/e_1",
                                     credentials, parallel=False)
     assert unloaded == (
         "UNLOAD ('select \"texto\" from \"t\" where \"texto\" = ''d''''agua'' "
         "and x = ''barra \\\\\\\\ n''')\n"
-        "TO 's3://b/prod/t/data_base_str=2026-08-31/e_1/'\nIAM_ROLE default\n"
+        "TO 's3://b/prd/t/data_base_str=2026-08-31/e_1/'\nIAM_ROLE default\n"
         "FORMAT AS PARQUET MANIFEST VERBOSE PARALLEL OFF")
     assert "PARTITION BY" not in unloaded
     assert redshift.unload_text(select, "s3://b/x/", credentials, parallel=True).endswith(
@@ -582,7 +582,7 @@ def test_connection_dropped_by_the_server_is_reopened_once(
     ``ROLLBACK`` tentado."""
     connections = [FakeConnection(), FakeConnection()]
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
-    engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prod/staging")
+    engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
     first = engine._connection
     first.drop_next = 1
     with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
@@ -619,7 +619,7 @@ def test_loader_writes_the_file_and_creates_the_table_in_a_transaction(
         loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
         loader.write(entry_rows(MONTHS[0], 11, 5, PROJECTED).to_batches()[0])
     assert loader.rows == 15
-    assert storage.list_files(f"prod/staging/{EXECUTION_ID}") == []
+    assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
     texts = connection.texts()
     start = texts.index("BEGIN")
     assert texts[start + 1].startswith(f'CREATE TABLE "{PREFIX}cad_lancamentos_projetados" (')
@@ -646,7 +646,7 @@ def test_loader_writes_the_file_and_creates_the_table_in_a_transaction(
             raise RuntimeError("erro plantado")
     assert connection.texts()[before:] == [
         f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0']
-    assert storage.list_files(f"prod/staging/{EXECUTION_ID}") == []
+    assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
 
     # O lote recusado pelo cast.
     with pytest.raises(ContractError):
@@ -667,7 +667,7 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     não roda; o nome ocupado e a tabela sem versão são ``SandboxError``; ``published`` carrega a
     versão inteira em ``_publicado`` uma vez; ``cleanup`` apaga as tabelas e o ``staging/``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
-    uri = storage.uri_of("prod/cad_lancamentos")
+    uri = storage.uri_of("prd/cad_lancamentos")
     delta.create_table(uri, ENTRIES, storage)
     for index, month in enumerate(MONTHS):
         month_rows = entry_rows(month, 1 + index * 10, 10)
@@ -687,7 +687,7 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     copies = [text for text in texts if text.startswith("COPY")]
     assert len(copies) == 1
     manifest_uri = re.search(r"FROM '([^']+)'", copies[0]).group(1)
-    staging_folder = storage.uri_of(f"prod/staging/{EXECUTION_ID}/cad_lancamentos/")
+    staging_folder = storage.uri_of(f"prd/staging/{EXECUTION_ID}/cad_lancamentos/")
     assert manifest_uri.startswith(staging_folder)
     assert "FORMAT AS PARQUET MANIFEST FILLRECORD" in copies[0]
     manifest = json.loads(storage.read_text(storage.relative(manifest_uri))[0])
@@ -716,7 +716,7 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     dropped = [text for text in connection.texts() if text.startswith("DROP TABLE IF EXISTS")]
     assert dropped[-2:] == [f'DROP TABLE IF EXISTS "esquema"."{name}"',
                             f'DROP TABLE IF EXISTS "esquema"."{name}_publicado"']
-    assert storage.list_files(f"prod/staging/{EXECUTION_ID}") == []
+    assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
     assert connection.closed
 
 
@@ -731,7 +731,7 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     ``columns_without_min_max``, o destino no ``staging/`` e a partição por ``publish_partition``,
     com o aviso no log; a partição vazia entra por um arquivo sem linha."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
-    uri = storage.uri_of("prod/cad_lancamentos_projetados")
+    uri = storage.uri_of("prd/cad_lancamentos_projetados")
     delta.create_table(uri, PROJECTED, storage)
     rows = entry_rows(MONTHS[1], 1, 1000, PROJECTED)
     unloaded = rows.drop_columns(["data_base_str"])
@@ -755,7 +755,7 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     files = storage.list_files(storage.relative(uri), ".parquet")
     assert len(files) == 1
     assert files[0].startswith(
-        f"prod/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/{EXECUTION_ID}_")
+        f"prd/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/{EXECUTION_ID}_")
     read = delta.open_table(uri, storage).to_pyarrow_table()
     assert read.num_rows == 1000
     assert read.schema.field("carimbo").type == pa.timestamp("us")
@@ -784,7 +784,7 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     unload = [text for text in connection.texts() if text.startswith("UNLOAD")][-1]
     destination = re.search(r"TO '([^']+)'", unload).group(1)
     assert destination.startswith(storage.uri_of(
-        f"prod/staging/{EXECUTION_ID}/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/"))
+        f"prd/staging/{EXECUTION_ID}/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/"))
     stats = pa.table(delta.open_table(uri, storage).get_add_actions(flatten=True))
     assert stats.column("max.valor").null_count == 1
     read = delta.open_table(uri, storage).to_pyarrow_table()
@@ -812,7 +812,7 @@ class Target:
     execution_id: str
 
     def uri(self, table: sa.Table) -> str:
-        return self.storage.uri_of(f"prod/{table.name}")
+        return self.storage.uri_of(f"prd/{table.name}")
 
     def qualified(self, suffix: str) -> str:
         return self.engine.qualified(self.engine.prefix + suffix)
@@ -825,7 +825,7 @@ def target(s3_location: S3Location, redshift_driver: None) -> Iterator[Target]:
     storage = Storage.for_uri(s3_location.child(f"engine/{uuid.uuid4().hex[:8]}"))
     execution_id = f"poc-{uuid.uuid4().hex[:8]}"
     engine = RedshiftEngine(redshift_config(), execution_id, storage,
-                            f"prod/staging/{execution_id}")
+                            f"prd/staging/{execution_id}")
     yield Target(storage, engine, execution_id)
     engine.cleanup()
 
@@ -944,7 +944,7 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     assert version == 1
     files = storage.list_files(storage.relative(projected_uri), ".parquet")
     assert len(files) >= 1
-    assert files[0].startswith(f"prod/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/"
+    assert files[0].startswith(f"prd/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/"
                                f"{target.execution_id}_")
     read = delta.open_table(projected_uri, storage).to_pyarrow_table().sort_by("id_lancamento")
     assert read.num_rows == 120
@@ -986,13 +986,13 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
 
     # O cleanup: nenhuma tabela exec_<id>_* e o staging vazio.
     engine.cleanup()
-    other = RedshiftEngine(redshift_config(), target.execution_id + "b", storage, "prod/staging/x")
+    other = RedshiftEngine(redshift_config(), target.execution_id + "b", storage, "prd/staging/x")
     try:
         for suffix in ("cad_lancamentos", "cad_lancamentos_projetados", "cad_contas_publicado"):
             assert not other.name_in_use(f"{engine.prefix}{suffix}")
     finally:
         other.cleanup()
-    assert storage.list_files(f"prod/staging/{target.execution_id}") == []
+    assert storage.list_files(f"prd/staging/{target.execution_id}") == []
 
 
 @pytest.mark.redshift

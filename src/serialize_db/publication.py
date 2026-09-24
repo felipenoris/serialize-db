@@ -131,7 +131,7 @@ class PublicationStatus:
     .. code-block:: python
 
         publication_status(db, config)[0]
-        # PublicationStatus(table="prod_cad_lancamentos", published_version=57,
+        # PublicationStatus(table="prd_cad_lancamentos", published_version=57,
         #                   current_version=58, pending_partitions=("2026-08-31",))
     """
 
@@ -194,9 +194,9 @@ def control_read(schema: str, environment: str, table: sa.Table) -> str:
 
     .. code-block:: python
 
-        control_read("sbx_aco_decon", "prod", Lancamento.__table__)
+        control_read("sbx_aco_decon", "prd", Lancamento.__table__)
         # SELECT delta_version FROM "sbx_aco_decon"."serialize_db_publications"
-        # WHERE table_name = 'prod_cad_lancamentos'
+        # WHERE table_name = 'prd_cad_lancamentos'
 
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
     :param environment: o ambiente, que prefixa o nome da tabela publicada,
@@ -217,8 +217,8 @@ def published_ddl(schema: str, environment: str, table: sa.Table) -> str:
 
     .. code-block:: python
 
-        print(published_ddl("sbx_aco_decon", "prod", Lancamento.__table__))
-        # CREATE TABLE "sbx_aco_decon"."prod_cad_lancamentos" (
+        print(published_ddl("sbx_aco_decon", "prd", Lancamento.__table__))
+        # CREATE TABLE "sbx_aco_decon"."prd_cad_lancamentos" (
         #     "id_lancamento" BIGINT NOT NULL,
         #     ...
         #     PRIMARY KEY ("id_lancamento")
@@ -267,8 +267,8 @@ def publication_statements(schema: str, environment: str, table: sa.Table,
 
     .. code-block:: python
 
-        publication_statements("sbx_aco_decon", "prod", Lancamento.__table__, ["2026-08-31"],
-                               {"2026-08-31": "s3://bucket/prod/publicacao/exec-42/...manifest"},
+        publication_statements("sbx_aco_decon", "prd", Lancamento.__table__, ["2026-08-31"],
+                               {"2026-08-31": "s3://bucket/prd/publicacao/exec-42/...manifest"},
                                58, 57, "exec-42", "IAM_ROLE default")
 
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
@@ -326,7 +326,7 @@ def unpublication_statements(schema: str, environment: str, table: sa.Table,
 
     .. code-block:: python
 
-        unpublication_statements("sbx_aco_decon", "prod", Lancamento.__table__, 58)
+        unpublication_statements("sbx_aco_decon", "prd", Lancamento.__table__, 58)
 
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
     :param environment: o ambiente, que prefixa o nome da tabela publicada,
@@ -391,7 +391,7 @@ def reconcile_published(schema: str, environment: str, table: sa.Table,
 
     .. code-block:: python
 
-        statements, destructive = reconcile_published("sbx_aco_decon", "prod",
+        statements, destructive = reconcile_published("sbx_aco_decon", "prd",
                                                       Lancamento.__table__, columns)
 
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.

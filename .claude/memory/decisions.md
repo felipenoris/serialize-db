@@ -44,7 +44,7 @@ the partition and never the month; every numeric column stays `Double`, with no 
 fixed-precision `Numeric` (the package supports `Numeric`, and moving `valor` to `Numeric(18, 2)` is
 a future improvement); integer keys become `int64` in the Delta; `INT96` timestamps become `INT64`
 and their precision does not matter; nullability follows the model until the migration proves it
-problematic; the dev base's orphans are ignored and the test base is consistent, with the N×N
+problematic; the dsv base's orphans are ignored and the test base is consistent, with the N×N
 `rel_contrato_operacao` whose `fator_rateio` sums to 1 per contract (per operation until the user's measurement of 2026-09-21 on the production base corrected the direction); `alembic_version` and
 `meta_update_status` are ignored; `schema.json` at the source root is the previous library's schema
 control in SQLAlchemy-reflection form, not Arrow. On 2026-09-20 the user also fixed the Redshift
@@ -355,7 +355,7 @@ migration ran successfully in the target; its reports exist and are not availabl
 ## The review of 2026-09-22 and the single session on both engines
 
 Later on 2026-09-22, answering the code review, the user accepted the rewrite of the environment
-premise in `plan/PLAN.md` (dev and prod never touch each other's tables; inside an environment one
+premise in `plan/PLAN.md` (dsv and prd never touch each other's tables; inside an environment one
 execution at a time, with the log ordering commits and `publish` aborting the second with
 `ExecutionConflict`; the shared `serialize_db_publications` as the exception) and the two stage 3
 proposals: `expressions` in `rewrite` (the old name in a rename, the value of a new `NOT NULL`
@@ -870,7 +870,7 @@ function level, every module keeping its place; and a defect the review finds is
 assertion that fails on the old code and named in the report when small, and goes to
 `plan/OPEN_QUESTIONS.md` when large. Under the last answer the review closed two pending items:
 `check_models` lists a table with two partition columns instead of raising, and an empty
-`SERIALIZE_DB_ENVIRONMENT` means `dev` in every subcommand, as it did in `run`, `audit` and
+`SERIALIZE_DB_ENVIRONMENT` counts as absent in every subcommand, as it did in `run`, `audit` and
 `publish`. The assistant's choices, named in the report: `Storage.create_text` in place of
 `write_text(if_none_match=True)`; `bind(sql, params, dialect)`; `sql.bound_statement`, the helpers
 the two engines repeated in `serialize_db.engine` (`batches_of`, `checked_batches`, `take`,
@@ -893,3 +893,110 @@ helpers), because a shared helper would move code between modules; and the `monk
 failure between two steps. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`,
 `docs/operacao.md`, `plan/POC.md`
 
+## The read access of stage 10 (2026-09-24)
+
+The user asked to use the package also to mediate access to the base: a client that has the
+model submits a SQLAlchemy `select` and gets an Arrow result, easily converted to pandas, from
+the Delta base (a DuckDB database like the pipeline's, with some tables materialized and the
+others views over the Delta files) and from the base published in Redshift. The assistant
+proposed, and the user accepted, a reader object opened from `Database` and implemented in
+`serialize_db.reader`, named `open_delta` and `open_redshift`; neither `Execution` (partition,
+`execution_id`, snapshot, publication) nor a SQLAlchemy `Connection` (rows, and no
+`cad_lancamentos` to `prd_cad_lancamentos` mapping); the same `query`, `stream` and `session()`
+as the engines, `materialize` only on Delta. The user's answers of the same day: the two
+sources serve different teams, and clients with read-only access to the published Redshift
+base give their own `UNLOAD` destination; the latest snapshot is the Delta reader's default,
+and another mode must read the current version; a partial materialization (a subset of
+partitions under the model's name) is allowed. The assistant's proposals awaiting the user:
+`created_at` in a sibling key of the snapshot control file, because the entries carry no date
+and `_write_control` sorts the keys, so nothing tells which snapshot is the latest (A);
+`db.open_delta(current=True)` for the current version, against `db.open_delta_current()` under
+the boolean-flag rule (B); `serialize_db.reader.open_redshift(metadata, environment, config,
+unload_to)` for the client without the Delta root, beside `Database.open_redshift(config,
+unload_to=None)` (C); and reading an archived snapshot from its copy in
+`arquivo/<name>/<table>` at the copy's current version, against refusing the name (D), because
+the target's only snapshot, `carga-2026-09-24`, moved to `archived` in the 16:51 battery.
+`plan/PLAN-STAGE-10.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## The snapshot name rule in `delta.snapshot` (2026-09-24)
+
+The user asked what may name a snapshot and whether it is a free string. The answer: the
+partition rule `[0-9A-Za-z][0-9A-Za-z_.-]*`, checked by `Execution.snapshot` and the
+`--name` of `serialize-db snapshot` and `archive`, and a name never reused, even archived.
+The public `delta.snapshot` wrote any name, so `2026 T3` or `a/b` could enter the control file
+and break or nest the archive's `arquivo/<name>/`; the user asked for the fix, and
+`delta.snapshot` raises `ContractError` for such a name before reading the control file
+(`test_snapshot_control_file_is_written_conditionally`). `plan/PLAN-STAGE-3.md`,
+`plan/CURRENT_STATE.md`
+
+## The production environment named `prd` (2026-09-24)
+
+The user asked to replace `prod` with `prd` wherever the plan, the code, the examples and
+`SUITE.md` reference the production environment; the source base already sits under
+`databases/prd/`. The assistant renamed 293 references (docstrings, `docs/`, `README.md`,
+`SUITE.md`, the script's header, the tests, the study suites and the plan's examples) and kept
+the dated records of what ran, because the target still holds them: the 14:16 load into
+`<root>/prod/`, the 16:51 publication as `prod_<table>`, the transaction runs of 2026-09-23 and
+the stage 10 probe's `prod_` prefix, in `plan/POC.md`, `plan/CURRENT_STATE.md`,
+`plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`, `CLAUDE.md` and the memory. The user deletes
+the target's `prod` artifacts (the section on `dsv`). `plan/POC.md`
+
+## The snapshot channel and the closed stage 10 decisions (2026-09-24)
+
+The "latest snapshot" had no answer in the control file (no date, sorted keys), and the user
+opened the naming model: a unique, simple default, and several "exercises" of the base like
+stream channels or the dsv and prd environments, possibly branches. The assistant proposed
+free immutable snapshot names, a movable pointer per environment, and environments for the
+exercises that diverge in data, because a Delta table's history is linear and has no branches.
+The user's answers of the same day: only a dedicated command moves the `default` pointer,
+unrelated to publication; only `default` for now; Redshift has no channel, and publication
+takes `--snapshot <name>` or `--channel <name>` (`--channel default`); no branch operation
+now. On the reformulated questions: the current version of each table is the reserved
+channel `current` in the reader (`open_delta(channel="current")`) and in publication
+(`--channel current`), and `run.publish_redshift` and `serialize-db run --redshift` leave, so
+publication is always `serialize-db publish` after the execution; the reader reads an archived
+snapshot from its copy in `arquivo/<name>/<table>`; the command is `serialize-db channel --name
+default --snapshot <name>`, the name explicit from the start; and after reading the trade-offs
+the user kept both Redshift entries, `serialize_db.reader.open_redshift(metadata, environment,
+config, unload_to)` for the client and `db.open_redshift(config)` for the team. The user had
+first read `open_delta(channel="default")` as the current-version mode; it is the default
+snapshot, and `current` names the other mode. `plan/PLAN-STAGE-10.md`, `plan/PLAN.md`,
+`plan/serialize-db.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-8.md`
+
+## The review of the stage 10 interface (2026-09-24)
+
+The user asked for a critique of stage 10 by the simplicity of the client API. The assistant
+proposed: in `serialize_db.reader.open_redshift`, no `metadata` (the engine takes it from the
+statement), `unload_to` only for `stream` and `config` from the environment; the partition cut
+at `open_delta(partitions=...)`, so that `materialize` never changes a result (a probe of the
+same day read such a view pruning like `ingest`); one name in `open_delta` in place of the
+`snapshot` and `channel` pair; and a `weakref.finalize` on a Delta reader left open. Asked to
+look for the same problem in the rest of the API, it proposed defaults in
+`publication.publish_redshift` (`execution_id`, `tables`, `snapshot=` or `channel=`), `config`
+from the environment in the publication, the `metadata` of `serialize_db.sql` derived from the
+statement, `[run.partition]` as the default of `run.audit` and `run.publish`, and one `config=`
+for the engine of `Execution`. The user adopted only the finalizer and, in `open_redshift`,
+`config=None` reading `RedshiftConfig.from_environment()` and `unload_to=None` for a client
+without S3, which runs `query` and not `stream`; the assistant's reading, stated in the report:
+`Database.open_redshift` takes the same `config=None`, since it calls the function. Everything
+else stays as planned or implemented, the `metadata` of `open_redshift` included.
+`plan/PLAN-STAGE-10.md`, `plan/POC.md`
+
+## The development environment named `dsv` and the target's `prod` artifacts (2026-09-24)
+
+The user asked to rename the development environment `dev` to `dsv`, the name of the source
+base's folder (`databases/dsv/`). The assistant renamed the default of `--environment` in
+`serialize-db` and in the migration script, the docstrings of `Database`, `docs/`, the plan's
+examples (`Database(root, environment="dsv", ...)`, the `dsv_` prefix), the tests (the
+`dsv_cad_contas` of `tests/test_publication.py`, and the `dsv` table and `dsv_x` control row of
+`tests/proof_of_concept/test_redshift_transactions.py`) and the memory's label of the source
+base's dsv reading. `dev` stays as the Redshift database of the connection
+(`RedshiftConfig.database`, `SERIALIZE_DB_REDSHIFT_DATABASE`, `current_database()`), the
+dependency group, the SageMaker project's `dev/` prefix, `/dev/null`, SQLMesh's `tabela__dev`,
+`plan/readings/` and the dated records: the transaction runs of 2026-09-23 with dev and prod in
+`plan/PLAN-STAGE-8.md`, and the probe of 2026-09-24 where `serialize-db audit` used `dev`. No
+target run relied on the default: `SUITE.md` passes `--environment prd` everywhere. The same day
+the user answered the open item on the target's `prod` environment: the user deletes every
+artifact of the base named `prod` there (the `<root>/prod/` folder, the `prod_<table>` tables
+and their `serialize_db_publications` rows), and the item left `plan/OPEN_QUESTIONS.md`.
+`CLAUDE.md`, `plan/serialize-db.md`, `docs/operacao.md`
