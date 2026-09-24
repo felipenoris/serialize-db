@@ -38,13 +38,18 @@ da carga de cada tabela particionada, ``measure_table`` mede a gravação de cad
 esteja ela no log ou não, nas quatro variantes de ``VARIANTS`` (``register`` e ``rewrite``, com e
 sem a ordem da ``sort_key``): cada variante roda num processo novo, pelo ``spawn``, e grava numa
 tabela descartável sob ``<raiz>/_medicao_<tabela>/``, apagada logo depois; o pico de memória é o do
-próprio processo filho (``VmHWM`` no Linux), ao lado da base depois das importações e da conexão.
-É a medição de ``plan/OPEN_QUESTIONS.md`` que decide o padrão de ``export_mode`` e a ordem da
-carga, e o relatório leva também a máquina, as versões e as configurações do DuckDB
-(``describe_environment``). A variante que falha, até pela falta de memória que mata o processo
-filho, entra no relatório com o erro; ``--no-measure`` desliga a medição. Com ``--report``, o
-JSON é regravado depois da medição de cada tabela e de cada partição gravada, com a tabela da vez
-em ``in_progress``: um processo morto no meio da carga deixa o que já mediu e gravou.
+próprio processo filho (``VmHWM`` no Linux), ao lado da base depois das importações e da conexão. A
+medição dá o custo de cada modo e da ordem da ``sort_key`` em cada partição, e o relatório leva
+também a máquina, as versões e as configurações do DuckDB (``describe_environment``). Cada conexão
+do DuckDB, a de cada tabela e a de cada variante, abre com os limites lidos do ambiente naquele
+momento (``serialize_db.engine.duckdb.environment_limits``): as CPUs que o processo pode usar e
+metade da memória que ele ainda pode usar. A carga de cada tabela abre a sua conexão depois da
+medição e a fecha no fim, porque o DuckDB só devolve a memória ao fechar: a medição da tabela
+seguinte e os limites da próxima conexão leem a máquina sem ela. A variante que falha, até pela
+falta de memória que mata o processo filho, entra no relatório com o erro; ``--no-measure`` desliga
+a medição. Com ``--report``, o JSON é regravado depois da medição de cada tabela e de cada partição
+gravada, com a tabela da vez em ``in_progress``: um processo morto no meio da carga deixa o que já
+mediu e gravou.
 
 Origem e raiz aceitam pasta local ou ``s3://bucket/prefixo``: no S3 o DuckDB carrega ``httpfs``
 e ``aws`` da pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz
@@ -100,7 +105,9 @@ from deltalake.exceptions import DeltaError
 from deltalake.transaction import AddAction
 
 from serialize_db import schema
+from serialize_db.engine.duckdb import environment_limits
 from serialize_db.errors import ContractError
+from serialize_db.resources import available_cpus, available_memory
 
 PARTITION_FOLDER = re.compile(r"(?P<column>[a-z_]+)=(?P<value>[^/=]+)")
 
@@ -149,7 +156,8 @@ class PartitionLoad:
 class VariantMeasurement:
     """Uma variante da gravação de uma partição, medida num processo novo: as linhas, o tempo da
     conferência e da gravação, a memória do processo depois das importações e da conexão e o pico
-    dele, os arquivos e os bytes gravados; ``error`` quando a variante falhou."""
+    dele, os arquivos e os bytes gravados, o ``memory_limit`` e as ``threads`` da conexão;
+    ``error`` quando a variante falhou."""
 
     value: str | None
     mode: str
@@ -160,19 +168,23 @@ class VariantMeasurement:
     peak_mb: float | None = None
     files: int | None = None
     bytes: int | None = None
+    memory_limit: str | None = None
+    threads: str | None = None
     error: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
 class LoadReport:
     """O relatório de uma tabela: as partições conferidas, o que foi gravado agora, as entradas
-    fora do padrão, as conversões de tipo da origem para o contrato e a medição das variantes."""
+    fora do padrão, as conversões de tipo da origem para o contrato, a medição das variantes e as
+    configurações do DuckDB da carga."""
 
     table: str
     partitions: tuple[PartitionReport, ...]
     loaded: tuple[PartitionLoad, ...]
     skipped: tuple[str, ...]
     conversions: tuple[str, ...]
+    duckdb_settings: dict[str, str]
     measurements: tuple[VariantMeasurement, ...] = ()
 
     @property
@@ -677,6 +689,7 @@ def measure_variant(
     conexão."""
     con = connect_duckdb(uses_s3, region)
     base = peak_rss_mb()
+    limits = duckdb_settings(con)
     delta = create_table(destination, table, settings.storage_options)
     load = load_partition(con, delta, destination, table, value, source_folder, settings)
     con.close()
@@ -694,6 +707,8 @@ def measure_variant(
         peak_mb=round(load.peak_rss_mb),
         files=actions.num_rows,
         bytes=sum(actions.column("size_bytes").to_pylist()),
+        memory_limit=limits["memory_limit"],
+        threads=limits["threads"],
     )
 
 
@@ -714,7 +729,8 @@ def print_measurement(measurement: VariantMeasurement) -> None:
     print(
         f"{label}: {measurement.rows} linhas em {measurement.seconds:.1f} s; pico do processo "
         f"{measurement.peak_mb:.0f} MB sobre a base de {measurement.base_mb:.0f} MB; "
-        f"{measurement.files} arquivo(s), {measurement.bytes / 2**20:.0f} MB"
+        f"{measurement.files} arquivo(s), {measurement.bytes / 2**20:.0f} MB; memory_limit "
+        f"{measurement.memory_limit}, {measurement.threads} threads"
     )
 
 
@@ -892,6 +908,7 @@ def load_report(
         skipped=tuple(skipped),
         conversions=conversions(first_partition_folder(folder, options), table),
         measurements=tuple(measurements or ()),
+        duckdb_settings=duckdb_settings(con),
     )
 
 
@@ -907,6 +924,8 @@ def print_report(report: LoadReport) -> None:
             )
     verdict = "contagens e somas iguais" if report.matches else "com diferenças"
     print(f"  relatório: {len(report.partitions)} partições conferidas, {verdict}")
+    limits = report.duckdb_settings
+    print(f"  DuckDB da carga: memory_limit {limits['memory_limit']}, {limits['threads']} threads")
     if report.conversions:
         print(f"  conversões: {', '.join(report.conversions)}")
     for entry in report.skipped:
@@ -992,11 +1011,13 @@ def extension_directory() -> str | None:
 
 
 def connect_duckdb(uses_s3: bool, region: str | None) -> duckdb.DuckDBPyConnection:
-    """A conexão com as extensões da pasta configurada, sem instalação automática; com o S3,
-    ``httpfs``, ``aws`` e o secret ``credential_chain`` da região."""
+    """A conexão com as extensões da pasta configurada, sem instalação automática, e com o
+    ``threads`` e o ``memory_limit`` lidos do ambiente na abertura; com o S3, ``httpfs``, ``aws``
+    e o secret ``credential_chain`` da região."""
     config: dict[str, object] = {
         "autoinstall_known_extensions": False,
         "autoload_known_extensions": False,
+        **environment_limits(),
     }
     directory = extension_directory()
     if directory:
@@ -1039,7 +1060,9 @@ def describe_environment(
         "platform": platform.platform(),
         "python": platform.python_version(),
         "cpus": os.cpu_count(),
+        "cpus_available": available_cpus(),
         "memory_total_mb": round(physical_memory / 2**20),
+        "memory_available_mb": round(available_memory() / 2**20),
         "packages": {name: importlib.metadata.version(name) for name in packages},
         "duckdb_settings": duckdb_settings(con),
         "arguments": {
@@ -1134,11 +1157,15 @@ def main(argv: list[str] | None = None) -> int:
     con = connect_duckdb(uses_s3, region)
     print_duckdb_settings(con)
     environment = describe_environment(con, arguments)
-    print(f"{environment['cpus']} CPUs, {environment['memory_total_mb']} MB de memória")
+    con.close()
+    print(
+        f"{environment['cpus']} CPUs, {environment['memory_total_mb']} MB de memória, "
+        f"{environment['memory_available_mb']} MB disponíveis"
+    )
     reports = []
     try:
         for table in tables_in_load_order(metadata, arguments.tables):
-            # A medição vem antes da carga, com o processo principal ainda sem consulta pesada.
+            # A medição vem antes da carga, com o processo principal sem conexão aberta.
             measurements = []
             if arguments.measure:
                 measurements = measure_table(table, source, root, settings, uses_s3, region)
@@ -1149,15 +1176,18 @@ def main(argv: list[str] | None = None) -> int:
                     measurements,
                 )
                 progress([])
-            loaded, skipped = initial_load(con, table, source, root, settings, progress)
-            report = load_report(con, table, source, root, loaded, skipped, measurements)
+            # A conexão da tabela: fechada no fim, devolve a memória do DuckDB à máquina.
+            con = connect_duckdb(uses_s3, region)
+            try:
+                loaded, skipped = initial_load(con, table, source, root, settings, progress)
+                report = load_report(con, table, source, root, loaded, skipped, measurements)
+            finally:
+                con.close()
             print_report(report)
             reports.append(report)
     except ContractError as error:
         print(f"ContractError: {error}", file=sys.stderr)
         return 1
-    finally:
-        con.close()
     outside = entries_outside_the_model(source, metadata)
     if outside:
         print(f"fora do modelo: {', '.join(outside)}")

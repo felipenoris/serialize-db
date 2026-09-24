@@ -6,7 +6,9 @@ primitiva toma pelo tempo do seu comando: uma tabela temporária que o pipeline 
 comandos seguintes, de qualquer thread, e nenhuma primitiva espera pelo código do cliente com o
 lock tomado. ``session()`` dá a conexão crua ao bloco, com o lock tomado e reentrante na mesma
 thread; ``new_session()`` abre um motor sobre ``cursor()`` da conexão, uma sessão a mais sobre o
-mesmo banco, com o seu lock.
+mesmo banco, com o seu lock. Os limites da instância saem do ambiente na abertura, quando a
+configuração os omite (``environment_limits``): ``threads`` são as CPUs que o processo pode usar, e
+``memory_limit`` é metade da memória que ele ainda pode usar.
 
 As primitivas:
 
@@ -33,7 +35,7 @@ Exemplo:
 
     from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 
-    with DuckDBEngine(DuckDBConfig(threads=4), "exec-2026-09-05", storage) as engine:
+    with DuckDBEngine(DuckDBConfig(), "exec-2026-09-05", storage) as engine:
         engine.ingest(Lancamento.__table__, uri, 143, partitions=["2026-07-31", "2026-08-31"])
         engine.query(sa.select(sa.func.count()).select_from(Lancamento.__table__))
 """
@@ -66,6 +68,7 @@ from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
 from serialize_db.engine import ExportMode
 from serialize_db.errors import ContractError, RegistrationRefused, SandboxError, SqlError
+from serialize_db.resources import available_cpus, available_memory
 from serialize_db.schema import (
     cast,
     check_partition_value,
@@ -79,7 +82,7 @@ from serialize_db.schema import (
 )
 from serialize_db.storage import Storage
 
-__all__ = ["DuckDBConfig", "DuckDBEngine"]
+__all__ = ["DuckDBConfig", "DuckDBEngine", "environment_limits"]
 
 log = logging.getLogger("serialize_db.engine.duckdb")
 
@@ -90,6 +93,12 @@ _QMARK = duckdb_engine.Dialect(paramstyle="qmark")
 # O arquivo de transbordo: Arrow IPC em formato de fluxo, com LZ4, um terço do tamanho sem
 # compressão (2026-09-22).
 _SPOOL_OPTIONS = pa.ipc.IpcWriteOptions(compression="lz4")
+
+# A fração da memória disponível que vai para o memory_limit. A documentação do DuckDB pede de 50%
+# a 60% da memória quando o sistema mata o processo, porque parte das alocações foge do limite: no
+# COPY ordenado, o RSS do processo passou do limite em 13% a 21% (2026-09-24). A outra metade fica
+# para o PyArrow, o delta-rs e o código do cliente.
+_MEMORY_FRACTION = 0.5
 
 # O orçamento de memória de cada stream: 64 MiB de lotes guardados à espera do cliente; com o
 # cliente atrasado, o pico do processo ficou em 297 MB, contra 522 MB com 256 MiB (2026-09-23).
@@ -597,6 +606,22 @@ def _batches_of(data: object) -> Iterator[pa.RecordBatch]:
 # ---------------------------------------------------------------- o motor
 
 
+def environment_limits() -> dict[str, object]:
+    """O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada: as CPUs que o
+    processo pode usar e metade da memória que ele ainda pode usar, por
+    ``serialize_db.resources``. O motor os aplica na abertura quando a configuração os omite.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        environment_limits()   # {'threads': 4, 'memory_limit': '7306MiB'} em 4 vCPUs e 16 GiB
+        duckdb.connect(config=environment_limits())
+    """
+    memory_limit = int(available_memory() * _MEMORY_FRACTION)
+    return {"threads": available_cpus(), "memory_limit": f"{memory_limit // 2**20}MiB"}
+
+
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class DuckDBConfig:
     """A configuração do sandbox DuckDB.
@@ -605,7 +630,7 @@ class DuckDBConfig:
 
     .. code-block:: python
 
-        DuckDBConfig(threads=8, temp_directory="/dados/sandbox")
+        DuckDBConfig(temp_directory="/dados/sandbox")
         DuckDBConfig(database=":memory:")   # em memória, só por pedido
     """
 
@@ -613,10 +638,11 @@ class DuckDBConfig:
     """``None``: ``<temp_directory>/<execution_id>.duckdb``, apagado em ``cleanup``;
     ``":memory:"`` só por pedido; outro caminho é usado e mantido."""
     threads: int | None = None
-    """As threads da instância; ``None`` fica no padrão do DuckDB, um por núcleo."""
+    """As threads da instância; ``None`` são as CPUs que o processo pode usar na abertura
+    (``environment_limits``)."""
     memory_limit: str | None = None
-    """Com unidade (``"4GiB"``); ``None`` fica no padrão do DuckDB, 80% da memória, registrado no
-    log."""
+    """Com unidade (``"4GiB"``); ``None`` é metade da memória que o processo ainda pode usar na
+    abertura (``environment_limits``). O valor aplicado vai para o log."""
     temp_directory: str | None = None
     """A pasta do banco, do transbordo do DuckDB e dos arquivos de ``stream`` e ``loader``;
     ``None`` é uma pasta nova de ``tempfile.mkdtemp``, apagada em ``cleanup``."""
@@ -625,8 +651,10 @@ class DuckDBConfig:
 
 
 def _connection_settings(config: DuckDBConfig, folder: str) -> dict[str, object]:
-    """As opções da abertura da conexão, as informadas e as fixas do motor."""
+    """As opções da abertura da conexão: as fixas do motor, os limites lidos do ambiente e, no
+    lugar deles, os que a configuração informa."""
     settings: dict[str, object] = {"temp_directory": folder, "preserve_insertion_order": False}
+    settings.update(environment_limits())
     if config.threads is not None:
         settings["threads"] = config.threads
     if config.memory_limit is not None:
@@ -681,7 +709,7 @@ class DuckDBEngine:
         self._log_opening()
 
     def _log_opening(self) -> None:
-        """O ``memory_limit`` que o DuckDB escolheu e o espaço livre da pasta, para o log."""
+        """O ``memory_limit`` e as ``threads`` aplicados e o espaço livre da pasta, para o log."""
         row = self._connection.execute(
             "SELECT current_setting('memory_limit'), current_setting('threads')").fetchone()
         free = shutil.disk_usage(self._folder).free / 2**30

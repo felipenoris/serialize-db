@@ -101,9 +101,10 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
   table_name = '<ambiente>_<tabela>'`.
 - **`publication_statements`** devolve os comandos depois da leitura: na primeira publicação,
   `CREATE TABLE <publicada>` por `published_ddl`; `CREATE TEMP TABLE <ambiente>_<tabela>_staging`
-  sem a coluna de partição, no banco da conexão (a staging temporária confirmou no ambiente alvo
-  em 2026-09-23, cheia dentro da transação e antes do `BEGIN`, e a regra decidida a escolhe; em que
-  ponto ela enche é decisão pendente); por partição,
+  sem a coluna de partição, no banco da conexão, cheia dentro da transação, depois da leitura da
+  linha de controle (a staging temporária confirmou no ambiente alvo em 2026-09-23, cheia dentro
+  da transação e antes do `BEGIN`; a regra decidida a escolhe, e o usuário decidiu em 2026-09-24
+  que ela enche dentro da transação); por partição,
   `DELETE FROM <publicada> WHERE <coluna> = '<valor>'`, `DELETE FROM <staging>`, `COPY <staging>
   FROM '<manifesto>' <credenciais> FORMAT AS PARQUET MANIFEST FILLRECORD` (decisão do usuário de
   2026-09-23: o manifesto de uma partição pode listar arquivos anteriores e posteriores a uma
@@ -292,16 +293,10 @@ segredo fora do texto impresso: True
 
 ## Decisões pendentes
 
-- **[decisão] Em que ponto a staging temporária enche** ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
-  A regra decidida em 2026-09-23 escolhe a temporária quando um dos casos de
-  `test_redshift_transactions.py` passa, e os dois confirmaram no ambiente alvo naquele dia:
-  `test_temporary_staging_filled_inside_the_transaction` e
-  `test_temporary_staging_filled_before_the_transaction` ([`POC.md`](POC.md)). Proposto: cheia
-  dentro da transação, depois da leitura da linha de controle, como na sequência que o usuário
-  confirmou. A cheia antes do `BEGIN` tira da transação a carga da staging e os locks durante ela,
-  mas calcula as partições por uma leitura da versão fora da transação, que a leitura de dentro
-  confere de novo. O rascunho abaixo ainda cria e apaga uma staging comum no esquema do datashare.
-
-As decisões do usuário de 2026-09-23 sobre o `FILLRECORD`, o teto do documento JSON, a largura
-de `VARCHAR(n)`, a leitura da distribuição pelo `EXPLAIN`, a transação da publicação e o fluxo de
-despublicar estão escritas nas seções que as descrevem.
+A etapa não tem decisão pendente. As decisões do usuário de 2026-09-23 sobre o `FILLRECORD`, o
+teto do documento JSON, a largura de `VARCHAR(n)`, a leitura da distribuição pelo `EXPLAIN`, a
+transação da publicação e o fluxo de despublicar, e a de 2026-09-24 sobre a staging temporária
+cheia dentro da transação, depois da leitura da linha de controle, estão escritas nas seções que
+as descrevem; os dois casos de `test_redshift_transactions.py` confirmaram as duas variantes no
+ambiente alvo em 2026-09-23 ([`POC.md`](POC.md)). O rascunho da seção "Rascunhos executados" ainda
+cria e apaga uma staging comum no esquema do datashare.

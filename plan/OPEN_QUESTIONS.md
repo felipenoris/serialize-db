@@ -25,32 +25,35 @@ foi medido em [`POC.md`](POC.md).
   que o pipeline tenha criado na sessão. As credenciais que o `COPY`
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
   `COPY` mais longo que isso também não foi medido.
-- **A medição de `cad_lancamentos` 2026-03-31 no ambiente alvo.** A migração de 2026-09-23 às
-  23:05, numa máquina de 4 vCPUs e 15.786 MB, mediu as quatro variantes de gravação das outras
-  tabelas particionadas: o `register` mais rápido que o `rewrite` e com pico menor, e a ordem da
-  `sort_key` mais cara no tempo e na memória, com arquivos menores ([`POC.md`](POC.md)). Em
-  `cad_lancamentos` o processo terminou na partição 2026-03-31, de 52.654.607 linhas, sem
-  relatório; a saída do terminal diz a causa. A falta de memória é a hipótese [uncertain]: a mesma
-  partição sintética passou num contêiner igual, com pico de 12.250 MB sob `memory_limit` de
-  10,6 GiB, e o processo do ambiente alvo, com `memory_limit` de 12,3 GiB, já tinha gravado duas
-  partições. O script regrava o relatório depois de cada passo, e a próxima execução de
-  `cad_lancamentos`, numa máquina com mais memória, traz a medição que é o gatilho de revisão de
-  [`PLAN.md`](PLAN.md): o padrão de `export_mode`, se o outro modo sai das etapas
-  [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md), e se a carga ordena pela
-  `sort_key`.
+- **A migração de `cad_lancamentos` 2026-03-31 no ambiente alvo.** Na migração de 2026-09-23 às
+  23:05, numa máquina de 4 vCPUs e 15.786 MB, o kernel matou o processo na partição 2026-03-31, de
+  52.654.607 linhas, depois de gravar 2026-01-31 e 2026-02-28: o usuário viu `Killed` no terminal
+  algumas vezes, sob o `memory_limit` padrão do DuckDB, 12,3 GiB ([`POC.md`](POC.md)). O script
+  abre agora cada conexão com metade da memória que o processo ainda pode usar e com as CPUs dele,
+  e a carga de cada tabela na sua conexão, fechada no fim ([etapa 7](PLAN-STAGE-7.md)). A próxima
+  execução de `cad_lancamentos` confirma que a partição cabe e traz a medição das quatro variantes
+  dela; o script regrava o relatório depois de cada passo.
+- **A metade da memória disponível no `memory_limit`.** O motor DuckDB e o script tiram o
+  `memory_limit` da memória que o processo ainda pode usar na abertura, pela instrução do usuário
+  de 2026-09-24; a metade vem da documentação do DuckDB, que pede de 50% a 60% quando o sistema
+  mata o processo, e do RSS que passou do limite em 13% a 21% no `COPY` ordenado
+  ([etapa 4](PLAN-STAGE-4.md)). O pico da execução de `cad_lancamentos` no ambiente alvo, que o
+  relatório dá ao lado do limite de cada carga e de cada variante, confirma a fração ou pede outra.
 - **O `threads` do DuckDB na leitura do S3.** O DuckDB lê arquivos remotos com E/S síncrona, uma
   requisição HTTP por thread, e a documentação recomenda `threads` de 2 a 5 vezes os núcleos para
-  essa leitura ([`duckdb.md`](duckdb.md)); o padrão é um por núcleo. A execução de
-  `probes/duckdb_threads.py` no ambiente alvo em 2026-09-23 às 23:21 ([`POC.md`](POC.md)) mediu a
-  materialização limitada pela CPU, mais lenta com mais threads, e a sessão a mais por tabela 1,25
-  vez mais rápida que a série com 4 threads. A leitura do S3 só a primeira repetição de cada
-  configuração fez, porque o cache de arquivos externos do DuckDB serviu as outras da memória:
-  nela, a leitura agregada de 393 MB levou 4,1 s com 4 threads e de 1,9 s a 2,1 s com 8 a 20. O
-  probe agora desliga o cache em cada configuração. A próxima execução, também numa máquina com
-  mais núcleos, decide o padrão de `DuckDBConfig.threads` para uma raiz no S3
-  ([etapa 4](PLAN-STAGE-4.md)) e mostra como a materialização escala com as vCPUs, que o usuário
-  escolhe (instrução de 2026-09-23: otimizar para o processamento paralelo). O probe e a migração
-  não rodam ao mesmo tempo, porque disputariam as mesmas vCPUs.
+  essa leitura ([`duckdb.md`](duckdb.md)); o padrão do motor são as CPUs que o processo pode usar. A
+  execução de `probes/duckdb_threads.py` no ambiente alvo em 2026-09-23 às 23:21
+  ([`POC.md`](POC.md)) mediu a materialização limitada pela CPU, mais lenta com mais threads, e a
+  sessão a mais por tabela 1,25 vez mais rápida que a série com 4 threads. A leitura do S3 só a
+  primeira repetição de cada configuração fez, porque o cache de arquivos externos do DuckDB serviu
+  as outras da memória: nela, a leitura agregada de 393 MB levou 4,1 s com 4 threads e de 1,9 s a
+  2,1 s com 8 a 20. O probe agora desliga o cache em cada configuração e mede também a metade das
+  CPUs, uma thread por núcleo físico nas instâncias x86 da AWS com SMT (pedido do usuário de
+  2026-09-24). A próxima execução, também numa máquina com mais núcleos, decide o padrão de
+  `DuckDBConfig.threads` para uma raiz no S3 ([etapa 4](PLAN-STAGE-4.md)) e mostra como a
+  materialização escala com as vCPUs, que o usuário escolhe (instrução de 2026-09-23: otimizar para
+  o processamento paralelo). O probe e a migração não rodam ao mesmo tempo, porque disputariam as
+  mesmas vCPUs.
 - **O `Double` não finito nas estatísticas do Delta**, a
   [issue #59](https://github.com/felipenoris/serialize-db/issues/59). O `cast` aceita `NaN` e
   infinito numa coluna `Double`, e a biblioteca grava sem mínimo e máximo, no rodapé Parquet e no
@@ -81,14 +84,8 @@ foi medido em [`POC.md`](POC.md).
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit.
 
-- [Etapa 7](PLAN-STAGE-7.md): a `sort_key` na consulta da carga e o padrão de `export_mode` na
-  carga, com a medição de `cad_lancamentos` 2026-03-31 por vir; nas partições medidas em
-  2026-09-23, o `rewrite` levou de 1,14 a 1,52 vez o tempo do `register`, e a ordem custou de 1,23
-  a 1,63 vez o tempo e deixou os arquivos com 74% a 92% do tamanho. Proposto: `register` como
-  padrão nas etapas 4, 5 e 7, com o `rewrite` só na troca da etapa 5 para a partição com `Double`
-  não finito, e a carga ordenada pela `sort_key`.
-- [Etapa 8](PLAN-STAGE-8.md): em que ponto a staging temporária enche. As duas variantes
-  confirmaram no ambiente alvo em 2026-09-23, e pela regra decidida a staging é temporária.
-  Proposto: cheia dentro da transação, depois da leitura da linha de controle, como na sequência que
-  o usuário confirmou; a cheia antes do `BEGIN` tira a carga da transação, mas pede a versão lida
-  antes dela e de novo dentro dela.
+- [Etapa 7](PLAN-STAGE-7.md): se o `rewrite` sai das etapas 4 e 7, com a flag `export_mode` de
+  `Execution`, de `serialize-db run` e de `SERIALIZE_DB_EXPORT_MODE` e os testes dele, depois da
+  aprovação de 2026-09-24 do `register` como padrão nas etapas 4, 5 e 7 e do `rewrite` só na troca
+  da etapa 5 para a partição com `Double` não finito. Proposto: tirá-lo, com `publish_partition` na
+  troca da etapa 5 e as variantes da medição no script até a etapa 7 absorvê-lo.

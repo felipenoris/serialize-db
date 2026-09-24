@@ -57,7 +57,7 @@ registra a verificação como não executada.
 
 | Primitiva | DuckDB |
 | --- | --- |
-| `connect(config)` | Banco em arquivo `<temp_directory>/<execution_id>.duckdb`, e em memória só com `DuckDBConfig(database=":memory:")` (decisão do usuário de 2026-09-22); `temp_directory` omitido é uma pasta nova de `tempfile.mkdtemp`, apagada com o banco em `cleanup`, porque o padrão `.tmp` do DuckDB é relativo à pasta corrente; a conexão de `storage.duckdb_connect(<arquivo do banco>, config)` da [etapa 3](PLAN-STAGE-3.md), que resolve `extension_directory` (`DuckDBConfig.extension_directory`, senão `SERIALIZE_DB_DUCKDB_EXTENSIONS`, senão `.duckdb/` ao lado do ambiente virtual), desliga `autoinstall_known_extensions` e `autoload_known_extensions` e aplica `duckdb_setup`; `threads`, `temp_directory` e `preserve_insertion_order = false`; `memory_limit` só quando a configuração o informa, e o log registra na abertura o `current_setting('memory_limit')` que o DuckDB escolheu e o espaço livre de `temp_directory` (decisão do usuário de 2026-09-22); uma conexão só, a sessão da execução, e um `threading.RLock` que todo comando toma pelo tempo do comando (decisão do usuário de 2026-09-22, a mesma do motor Redshift); `session()` dá a conexão crua ao cliente com o lock tomado pelo bloco. |
+| `connect(config)` | Banco em arquivo `<temp_directory>/<execution_id>.duckdb`, e em memória só com `DuckDBConfig(database=":memory:")` (decisão do usuário de 2026-09-22); `temp_directory` omitido é uma pasta nova de `tempfile.mkdtemp`, apagada com o banco em `cleanup`, porque o padrão `.tmp` do DuckDB é relativo à pasta corrente; a conexão de `storage.duckdb_connect(<arquivo do banco>, config)` da [etapa 3](PLAN-STAGE-3.md), que resolve `extension_directory` (`DuckDBConfig.extension_directory`, senão `SERIALIZE_DB_DUCKDB_EXTENSIONS`, senão `.duckdb/` ao lado do ambiente virtual), desliga `autoinstall_known_extensions` e `autoload_known_extensions` e aplica `duckdb_setup`; `temp_directory`, `preserve_insertion_order = false` e os limites lidos do ambiente na abertura, quando a configuração os omite (`environment_limits`): `threads` são as CPUs que o processo pode usar e `memory_limit` é metade da memória que ele ainda pode usar, por `serialize_db.resources` (instrução do usuário de 2026-09-24); o log registra na abertura o `memory_limit` e as `threads` aplicados e o espaço livre de `temp_directory`; uma conexão só, a sessão da execução, e um `threading.RLock` que todo comando toma pelo tempo do comando (decisão do usuário de 2026-09-22, a mesma do motor Redshift); `session()` dá a conexão crua ao cliente com o lock tomado pelo bloco. |
 | `new_session()` | Uma sessão a mais sobre o mesmo banco: um motor sobre `cursor()` da conexão, com o seu `RLock`, as mesmas primitivas e a mesma pasta de transbordo, gerenciador de contexto. Ele vê o que a sessão principal confirmou e não as tabelas temporárias dela; o fim do `with` e o `cleanup` dele fecham só essa conexão. `run.ingest` abre uma por tabela, e o cliente a usa para o que roda em paralelo ([`PLAN.md`](PLAN.md), seção "Regras que as etapas obedecem"). |
 | `ingest(table, uri, version, partitions=None, materialize=False)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou `CREATE TABLE ... AS SELECT ... FROM delta_scan(...)` com `materialize=True`; com `partitions`, as duas filtram por `<coluna> BETWEEN '<menor>' AND '<maior>' AND <coluna> IN (...)`, porque o `delta_scan` poda por `=` e por intervalo e abre todos os arquivos com um `IN` de mais de um valor (leitura de 2026-09-23). |
 | `published(table, uri, version)` | A versão fixada como origem de consulta, sem ocupar nome no sandbox: o `FromClause` com as colunas do contrato que compila para `delta_scan('<uri>', version := <v>)`. É por ele que o pipeline lê as partições publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader`, e é ele que a auditoria usa como `published` nas chaves que não incluem a coluna de partição (decisão do usuário de 2026-09-22). Sem versão fixada, numa tabela que ainda não existe, levanta `SandboxError` nomeando a tabela. |
@@ -161,37 +161,45 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 - **`AuditReport`** guarda por verificação o SQL rodado, a contagem e uma amostra; `passed` é a
   conjunção; `sql()` concatena os textos para o log da execução.
 - **`DuckDBEngine.__init__`** abre a conexão raiz por `storage.duckdb_connect(<arquivo do banco>,
-  config)` da [etapa 3](PLAN-STAGE-3.md), com `threads`, `temp_directory`,
-  `preserve_insertion_order = false` e, quando a configuração os informa, `memory_limit` e
-  `extension_directory`; a etapa 3 resolve a pasta de extensões, desliga a instalação e a carga
-  automáticas e aplica `duckdb_setup`. O banco é um arquivo em `<temp_directory>/<execution_id>.duckdb` por
-  padrão: no ambiente alvo a máquina tem 7,6 GiB de memória, 2 vCPUs e 29,8 GiB livres num só
-  disco, e uma tabela materializada de doze partições de `cad_lancamentos` não cabe em memória, cabe
-  em disco ([`POC.md`](POC.md), leitura de 2026-09-21). `temp_directory` omitido é uma pasta de
-  `tempfile.mkdtemp`, e `cleanup` apaga a pasta com o banco dentro. O `memory_limit` fica no padrão
-  do DuckDB, 80% da memória, e só é ajustado quando a configuração o informa, em bytes ou com
-  unidade, porque o DuckDB recusa porcentagem (`Unknown unit for memory: '%'`, leitura de
-  2026-09-22). O que o DuckDB escolheu (`current_setting('memory_limit')`) e o espaço livre de
-  `temp_directory`, lido por `shutil.disk_usage`, vão para o log na abertura: é por ele que a
-  primeira execução real mede quanto sobra para o pandas do cliente, que o limite do DuckDB não
-  cobre. `threads` omitido fica no padrão do DuckDB, um por núcleo; ele é da instância, vale para a
-  sessão principal e para as de `new_session()`, e muda em execução por `SET threads`. A leitura do
-  S3 pede mais threads que núcleos, porque cada thread faz uma requisição HTTP por vez, e a
-  materialização num banco em arquivo pede a CPU: no ambiente alvo, com 4 vCPUs, em 2026-09-23,
-  `probes/duckdb_threads.py` leu a partição de 393 MB em 4,1 s com 4 threads e em 1,9 s a 2,1 s
-  com 8 a 20, e a materializou em 12,7 s com 4 threads e em 13,2 s a 18,0 s com mais
-  ([`POC.md`](POC.md)). O padrão fica um por núcleo até a nova execução do probe, também numa
-  máquina com mais núcleos ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O cache de arquivos
-  externos do DuckDB fica ligado, o padrão: uma segunda leitura do mesmo arquivo na execução não
-  volta ao S3. A
-  conexão é a sessão da execução, e `session()` toma o `threading.RLock` e a dá ao
-  bloco; toda primitiva toma o mesmo lock pelo tempo do seu comando, e nenhuma espera pelo código do
-  cliente com ele tomado. O motor guarda a thread que está dentro de `session()`, e é por ela que
-  `stream` sabe quando roda a consulta na thread de quem chama. `new_session()` devolve um motor
-  sobre `cursor()` da conexão, com o seu lock e a mesma pasta de transbordo; o `cleanup` dele fecha
-  só o cursor. O cursor nasce sem o lock da sessão principal: `cursor()` voltou em 0,04 ms com uma
-  ordenação em curso na conexão (leitura de 2026-09-23), e a sessão a mais pedida durante um
-  comando longo não espera por ele.
+  config)` da [etapa 3](PLAN-STAGE-3.md), com `temp_directory`, `preserve_insertion_order = false`,
+  `threads` e `memory_limit` e, quando a configuração a informa, `extension_directory`; a etapa 3
+  resolve a pasta de extensões, desliga a instalação e a carga automáticas e aplica `duckdb_setup`.
+  O banco é um arquivo em `<temp_directory>/<execution_id>.duckdb` por padrão: no ambiente alvo a
+  máquina tem 7,6 GiB de memória, 2 vCPUs e 29,8 GiB livres num só disco, e uma tabela materializada
+  de doze partições de `cad_lancamentos` não cabe em memória, cabe em disco ([`POC.md`](POC.md),
+  leitura de 2026-09-21). `temp_directory` omitido é uma pasta de `tempfile.mkdtemp`, e `cleanup`
+  apaga a pasta com o banco dentro. Os limites da instância saem do ambiente na abertura, nunca de
+  um valor fixo, porque a máquina muda de tamanho (instrução do usuário de 2026-09-24):
+  `environment_limits()` dá `threads` igual às CPUs que o processo pode usar e `memory_limit` igual
+  a metade da memória que ele ainda pode usar, em MiB, porque o DuckDB recusa porcentagem (`Unknown
+  unit for memory: '%'`, leitura de 2026-09-22). As leituras são de `serialize_db.resources`:
+  `available_cpus()` é a afinidade do processo (`os.process_cpu_count`) limitada pela menor cota de
+  CPU do cgroup, arredondada para cima; `available_memory()` é a menor entre a memória física, o
+  `MemAvailable` de `/proc/meminfo` e a folga do cgroup, o limite menos o uso fora do cache de
+  arquivos, no v1 e no v2, pelo menor limite no caminho do cgroup até a raiz. A metade segue a
+  documentação do DuckDB, que pede de 50% a 60% da memória quando o sistema mata o processo, porque
+  parte das alocações foge do limite: no `COPY` ordenado, o RSS do processo passou do limite em 13%
+  a 21%, e com o padrão do DuckDB, 80% da memória, o kernel matou a migração de `cad_lancamentos` no
+  ambiente alvo (leituras de 2026-09-24, [`POC.md`](POC.md)); a outra metade fica para o PyArrow, o
+  delta-rs e o pandas do cliente, que o limite do DuckDB não cobre. Um `threads` ou um
+  `memory_limit` na configuração fica no lugar do lido. Os valores aplicados e o espaço livre de
+  `temp_directory`, lido por `shutil.disk_usage`, vão para o log na abertura. `threads` é da
+  instância, vale para a sessão principal e para as de `new_session()`, e muda em execução por `SET
+  threads`. A leitura do S3 pede mais threads que núcleos, porque cada thread faz uma requisição
+  HTTP por vez, e a materialização num banco em arquivo pede a CPU: no ambiente alvo, com 4 vCPUs,
+  em 2026-09-23, `probes/duckdb_threads.py` leu a partição de 393 MB em 4,1 s com 4 threads e em 1,9
+  s a 2,1 s com 8 a 20, e a materializou em 12,7 s com 4 threads e em 13,2 s a 18,0 s com mais
+  ([`POC.md`](POC.md)). O padrão fica nas CPUs que o processo pode usar até a nova execução do
+  probe, que mede também a metade delas e roda numa máquina com mais núcleos
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O cache de arquivos externos do DuckDB fica ligado, o
+  padrão: uma segunda leitura do mesmo arquivo na execução não volta ao S3. A conexão é a sessão da
+  execução, e `session()` toma o `threading.RLock` e a dá ao bloco; toda primitiva toma o mesmo lock
+  pelo tempo do seu comando, e nenhuma espera pelo código do cliente com ele tomado. O motor guarda
+  a thread que está dentro de `session()`, e é por ela que `stream` sabe quando roda a consulta na
+  thread de quem chama. `new_session()` devolve um motor sobre `cursor()` da conexão, com o seu lock
+  e a mesma pasta de transbordo; o `cleanup` dele fecha só o cursor. O cursor nasce sem o lock da
+  sessão principal: `cursor()` voltou em 0,04 ms com uma ordenação em curso na conexão (leitura de
+  2026-09-23), e a sessão a mais pedida durante um comando longo não espera por ele.
   Os arquivos intermediários de `stream` e de `loader` ficam na pasta de transbordo e saem no
   `close`.
 - **`ingest`** cria `VIEW <nome do modelo> AS SELECT * FROM delta_scan('<uri>', version := <v>)`,
@@ -295,7 +303,7 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
 | `checks`, `audit_sql` | Modelo aprovado por `check_models`; `published` informado quando alguma chave não inclui a coluna de partição. | Um `Check` por consulta, com o texto renderizável nos dois dialetos; sem conexão. |
-| `DuckDBEngine` | Extensões na pasta configurada. | Uma conexão sobre o arquivo do banco, a sessão, sob um `RLock`; nenhum download; o `memory_limit` do DuckDB e o espaço livre de `temp_directory` no log. |
+| `DuckDBEngine` | Extensões na pasta configurada. | Uma conexão sobre o arquivo do banco, a sessão, sob um `RLock`; nenhum download; o `memory_limit` e as `threads` lidos do ambiente, ou os informados, e o espaço livre de `temp_directory` no log. |
 | `ingest` | Tabela Delta legível na versão pedida. | Uma view ou tabela com o nome do modelo, presa à versão; a tabela atual pode avançar sem afetar a leitura. |
 | `published` | Tabela Delta legível na versão fixada. | Um `FromClause` sobre essa versão; nenhum objeto no sandbox, e o nome do modelo livre para o `loader`. |
 | `new_session` | O motor aberto. | Outra conexão ao mesmo banco, com o seu lock; o que a sessão principal confirmou visível, as tabelas temporárias dela não; o fim do `with` fecha só essa conexão. |
@@ -322,7 +330,7 @@ uma chave única.
 | Órfão | `test_audit_orphan_against_a_referenced_table_outside_the_sandbox` | Com `foreign_keys=True`, a tabela referenciada fora do sandbox entra pela versão fixada de `referenced` e o órfão aparece; sem o argumento, a verificação fica em `not_run`. |
 | Regra da partição | `test_partition_values_follow_the_rule` | O valor fora da regra é recusado antes de qualquer texto. |
 | Pasta temporária | `test_temporary_folder_is_created_and_removed` | Sem `temp_directory`, a pasta nova sai inteira no `cleanup`. |
-| Sessão | `test_engine_config_and_single_session` | `duckdb_settings()` com os valores pedidos, o `memory_limit` no padrão do DuckDB quando a configuração o omite, e o banco em arquivo dentro da pasta de `tempfile.mkdtemp`; três threads usam a mesma sessão, uma de cada vez; a tabela temporária criada por uma é visível às outras; uma primitiva chamada dentro de `session()` não trava. |
+| Sessão | `test_engine_config_and_single_session` | `duckdb_settings()` com os valores pedidos; sem eles, metade da memória disponível e a cota de CPU de um `/proc` e de um cgroup fabricados, e o `memory_limit` informado no lugar do lido; o banco em arquivo dentro da pasta de `tempfile.mkdtemp`; três threads usam a mesma sessão, uma de cada vez; a tabela temporária criada por uma é visível às outras; uma primitiva chamada dentro de `session()` não trava. |
 | Sessão a mais | `test_new_session_runs_beside_the_main_one` | A sessão de `new_session` vê a tabela confirmada pela principal e não a temporária dela, roda enquanto a principal está num bloco `session()`, e a principal vê o que ela confirma; o fim do `with` fecha só o cursor, e o arquivo do banco continua. |
 | Ingestão presa | `test_ingest_pins_the_version` | Um `append` na tabela depois da abertura não aparece na view nem na tabela materializada. |
 | Poda da ingestão | `test_ingest_opens_only_the_range_of_partitions` | A ingestão de partições contíguas e de uma lista salteada abre só os arquivos do intervalo, lidos pelo log `FileSystem` do DuckDB, e traz só as linhas pedidas. |
@@ -357,7 +365,11 @@ implementação mostrou está em [`POC.md`](POC.md), seção
 
 ## Decisões pendentes
 
-Nenhuma. As decisões que o usuário tomou em 2026-09-23 sobre as propostas da revisão estão escritas
+- **[decisão] Se o `rewrite` sai de `export_partition`**, com a flag `export_mode` e os testes dele,
+  depois da aprovação de 2026-09-24 do `register` como padrão; a decisão cobre as etapas 4 e 7 e
+  está na [etapa 7](PLAN-STAGE-7.md) e em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+As decisões que o usuário tomou em 2026-09-23 sobre as propostas da revisão estão escritas
 nas seções que as descrevem: o estilo `qmark` no caminho do statement Core; o escopo das chaves da
 auditoria pela coluna de `partition_source` e pelo `skip_when` contra o `max_key` da versão fixada;
 a interface do motor, com `query(statement_or_sql, params=None)` no lugar de `query` e `execute`, o
@@ -371,7 +383,8 @@ casos de cada uma.
 As quatro decisões que o usuário tomou em 2026-09-22 — o `loader` recusando com `SandboxError` um
 nome já ocupado no sandbox, o `memory_limit` no padrão do DuckDB, o banco em arquivo com
 `temp_directory` em pasta nova, e a amostra de até 20 linhas inteiras por verificação reprovada —
-estão escritas, cada uma, na seção que a descreve. A recusa do `loader` trouxe duas
+estão escritas, cada uma, na seção que a descreve; a instrução do usuário de 2026-09-24 trocou o
+`memory_limit` no padrão do DuckDB pelos limites lidos do ambiente. A recusa do `loader` trouxe duas
 decisões do mesmo dia: `published(table, uri, version)` no protocolo dos dois motores, por onde o
 pipeline lê as partições publicadas da tabela que ele grava, e `SandboxError` como a exceção da
 etapa em `serialize_db.errors`.

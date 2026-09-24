@@ -362,7 +362,10 @@ uso; `--root`, `--environment`, `--engine` e `--export-mode` têm por padrão `S
 ### Rodar o pipeline no sandbox DuckDB
 
 `serialize_db.engine.duckdb.DuckDBEngine` é o sandbox de uma execução: um banco em arquivo numa
-pasta temporária, apagado no `cleanup`, com uma sessão que várias threads usam uma de cada vez. A
+pasta temporária, apagado no `cleanup`, com uma sessão que várias threads usam uma de cada vez. Os
+limites do DuckDB saem da máquina na abertura: `threads` são as CPUs que o processo pode usar e
+`memory_limit` é metade da memória que ele ainda pode usar, lidas por `serialize_db.resources` com
+o limite do cgroup de um contêiner; `DuckDBConfig(threads=..., memory_limit=...)` os troca. A
 tabela Delta entra presa a uma versão, e os dados saem e voltam em lotes Arrow:
 
 ```python

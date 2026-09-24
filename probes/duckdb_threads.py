@@ -1,5 +1,5 @@
-"""O ``threads`` do DuckDB na ingestão das tabelas Delta: o padrão, um por núcleo, contra valores
-acima dos núcleos, e a sessão a mais por tabela de ``run.ingest``.
+"""O ``threads`` do DuckDB na ingestão das tabelas Delta: o padrão do motor, as CPUs que o processo
+pode usar, contra a metade delas e valores acima delas, e a sessão a mais por tabela de ``run.ingest``.
 
 O DuckDB lê arquivo remoto com E/S síncrona, uma requisição HTTP por thread, e a documentação
 recomenda ``threads`` de 2 a 5 vezes os núcleos para essa leitura (``plan/duckdb.md``). Este probe
@@ -19,11 +19,12 @@ Uso:
 ``cad_lancamentos``, ``cad_contratos``, ``cad_operacoes`` e ``rel_contrato_operacao``.
 ``--partition`` é a partição lida em cada tabela particionada, por padrão a mais recente comum a
 elas; uma tabela sem partição é lida inteira. ``--threads`` são os valores medidos, por padrão o
-padrão do DuckDB vezes 1 a 5. ``--repetitions`` é quantas vezes cada medida roda, 3 por padrão; o
+padrão do motor vezes 0,5 e 1 a 5: nas instâncias x86 da AWS com SMT, cada núcleo físico tem duas
+vCPUs, e a metade é uma thread por núcleo. ``--repetitions`` é quantas vezes cada medida roda, 3 por padrão; o
 relatório dá cada repetição e a melhor.
 
-Cada configuração roda num processo novo (``spawn``), num motor ``DuckDBEngine`` novo, com o seu
-pico de memória (``VmHWM`` no Linux) ao lado da base depois das importações e da conexão. O cache de
+Cada configuração roda num processo novo (``spawn``), num motor ``DuckDBEngine`` novo, com o
+``memory_limit`` que ele lê do ambiente na abertura e o seu pico de memória (``VmHWM`` no Linux) ao lado da base depois das importações e da conexão. O cache de
 arquivos externos do DuckDB (``enable_external_file_cache``, ligado por padrão) guarda na memória os
 blocos lidos, e a segunda leitura do mesmo arquivo no mesmo processo não vai ao S3 (sonda no moto de
 2026-09-23): cada configuração o desliga, e cada repetição lê do armazenamento, como a leitura única
@@ -45,7 +46,8 @@ motor, que o ``cleanup`` apaga no fim dela, e o relatório sai no terminal e em
 Seções:
 
 1. As tabelas: a versão, as partições e, na partição medida, os arquivos, os bytes e as linhas do log.
-2. A máquina: os núcleos, a memória, o disco da pasta temporária, o padrão do DuckDB e os valores medidos.
+2. A máquina: as CPUs, as threads por núcleo, a memória, o disco da pasta temporária, os limites do motor e
+   do DuckDB e os valores medidos.
 3. Uma tabela: ``materializada`` e ``agregada`` por valor de ``threads``.
 4. Várias tabelas: ``em série`` e ``sessões a mais`` por valor de ``threads``.
 
@@ -79,7 +81,8 @@ import sqlalchemy as sa
 from deltalake.exceptions import DeltaError
 
 from serialize_db import delta
-from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
+from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine, environment_limits
+from serialize_db.resources import available_memory
 from serialize_db.schema import quoted, table_options
 from serialize_db.storage import Storage, prepare_environment
 
@@ -92,9 +95,13 @@ DEFAULT_TABLES = ("cad_lancamentos", "cad_contratos", "cad_operacoes", "rel_cont
 DEFAULT_METADATA = "client_model:Base.metadata"
 DEFAULT_REPETITIONS = 3
 
-# O padrão do DuckDB, um por núcleo, vezes cada um: a faixa de 2 a 5 vezes os núcleos que a
-# documentação recomenda para arquivo remoto, ao lado do padrão.
-MULTIPLIERS = (1, 2, 3, 4, 5)
+# O padrão do motor, as CPUs que o processo pode usar, vezes cada um: a metade, uma thread por núcleo
+# físico nas instâncias x86 da AWS com SMT, o padrão e a faixa de 2 a 5 vezes que a documentação do
+# DuckDB recomenda para arquivo remoto.
+MULTIPLIERS = (0.5, 1, 2, 3, 4, 5)
+
+# A lista das CPUs que dividem o núcleo físico da CPU 0, no Linux.
+SIBLINGS_FILE = Path("/sys/devices/system/cpu/cpu0/topology/thread_siblings_list")
 
 # As medidas de cada seção, na ordem do relatório.
 SINGLE_TABLE_SCENARIOS = ("materializada", "agregada")
@@ -142,11 +149,32 @@ class Measurement:
 
 
 def thread_values(default_threads: int, requested: list[int] | None) -> list[int]:
-    """Os valores de ``threads`` medidos, em ordem e sem repetição: os pedidos, ou o padrão do
-    DuckDB vezes 1 a 5."""
+    """Os valores de ``threads`` medidos, em ordem e sem repetição: os pedidos, ou o padrão do motor
+    vezes 0,5 e 1 a 5, a metade arredondada para baixo e no mínimo 1."""
     if requested:
         return sorted(set(requested))
-    return [default_threads * multiplier for multiplier in MULTIPLIERS]
+    values = {max(1, int(default_threads * multiplier)) for multiplier in MULTIPLIERS}
+    return sorted(values)
+
+
+def reference_threads(values: list[int], default_threads: int) -> int:
+    """O valor de ``threads`` contra o qual a razão compara: o padrão do motor quando ele é medido,
+    senão o primeiro valor medido."""
+    if default_threads in values:
+        return default_threads
+    return values[0]
+
+
+def threads_per_core(siblings: str | None) -> int | None:
+    """As threads de um núcleo físico pela lista das CPUs irmãs da CPU 0 (``"0,2"`` e ``"0-1"``
+    são duas, ``"0"`` é uma); ``None`` sem a lista, fora do Linux."""
+    if not siblings or not siblings.strip():
+        return None
+    count = 0
+    for part in siblings.strip().split(","):
+        first, _, last = part.partition("-")
+        count += int(last or first) - int(first) + 1
+    return count
 
 
 def latest_common_partition(values_by_table: dict[str, set[str]]) -> str | None:
@@ -204,18 +232,19 @@ def expected_rows(scenario: str, inputs: list[TableInput]) -> int:
     return sum(item.rows for item in inputs)
 
 
-def measurement_rows(measurements: list[Measurement], inputs: list[TableInput]) -> list[list[str]]:
+def measurement_rows(measurements: list[Measurement], inputs: list[TableInput], reference: int) -> list[list[str]]:
     """As linhas da tabela de uma seção: por cenário e valor de ``threads``, as threads aplicadas,
-    a melhor repetição, cada repetição, a razão sobre o primeiro valor do cenário, a memória e as
-    linhas lidas contra as do log."""
+    a melhor repetição, cada repetição, a razão sobre o valor ``reference`` do cenário, a memória e
+    as linhas lidas contra as do log."""
     rows = [["CENÁRIO", "THREADS", "APLICADAS", "MELHOR S", "REPETIÇÕES S", "RAZÃO", "BASE MB", "PICO MB",
              "LINHAS LIDAS", "LINHAS DO LOG"]]
-    reference: dict[str, float | None] = {}
+    # A razão compara com a melhor repetição do cenário no valor de referência, o padrão do motor.
+    reference_seconds: dict[str, float | None] = {}
+    for measurement in measurements:
+        if measurement.threads == reference and not measurement.error:
+            reference_seconds[measurement.scenario] = best(measurement.seconds)
     for measurement in measurements:
         fastest = best(measurement.seconds)
-        # A razão compara com o primeiro valor medido do cenário, o padrão do DuckDB quando ele é medido.
-        if measurement.scenario not in reference:
-            reference[measurement.scenario] = fastest
         if measurement.error:
             rows.append([measurement.scenario, str(measurement.threads), "-", "-",
                          short_error(measurement.error), "-", "-", "-", "-",
@@ -228,7 +257,7 @@ def measurement_rows(measurements: list[Measurement], inputs: list[TableInput]) 
             str(measurement.threads_read),
             f"{fastest:.3f}",
             repetitions,
-            speedup(reference[measurement.scenario], fastest),
+            speedup(reference_seconds.get(measurement.scenario), fastest),
             f"{measurement.base_mb:.0f}",
             f"{measurement.peak_mb:.0f}",
             str(measurement.rows),
@@ -475,17 +504,23 @@ def tables_section(report: Report, storage: Storage, tables: list[sa.Table], req
     return inputs
 
 
-def machine_section(report: Report, requested: list[int] | None, repetitions: int) -> list[int]:
-    """Seção 2: os núcleos, a memória, o disco da pasta temporária do motor, o padrão do DuckDB e
-    os valores medidos; nenhuma checagem. Devolve os valores de ``threads``."""
+def machine_section(report: Report, requested: list[int] | None, repetitions: int) -> tuple[list[int], int]:
+    """Seção 2: as CPUs, as threads por núcleo, a memória, o disco da pasta temporária do motor, os
+    limites que o motor lê do ambiente, os padrões do DuckDB e os valores medidos; nenhuma
+    checagem. Devolve os valores de ``threads`` e o de referência da razão."""
     report.h1("A máquina e o DuckDB")
     connection = duckdb.connect()
-    default_threads, memory_limit, file_cache = connection.execute(
+    duckdb_threads, duckdb_memory_limit, file_cache = connection.execute(
         "SELECT current_setting('threads'), current_setting('memory_limit'), "
         "current_setting('enable_external_file_cache')").fetchone()
     connection.close()
-    values = thread_values(int(default_threads), requested)
+    limits = environment_limits()
+    default_threads = int(limits["threads"])
+    values = thread_values(default_threads, requested)
+    reference = reference_threads(values, default_threads)
 
+    siblings = SIBLINGS_FILE.read_text() if SIBLINGS_FILE.is_file() else None
+    per_core = threads_per_core(siblings)
     memory_mb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**20
     temporary = tempfile.gettempdir()
     free_gib = shutil.disk_usage(temporary).free / 2**30
@@ -493,50 +528,59 @@ def machine_section(report: Report, requested: list[int] | None, repetitions: in
     report.table([
         ["LEITURA", "VALOR"],
         ["núcleos (os.cpu_count)", str(os.cpu_count())],
+        ["CPUs do processo (available_cpus)", str(default_threads)],
+        ["threads por núcleo físico (CPU 0)", str(per_core) if per_core else "(sem a lista)"],
         ["memória", f"{memory_mb:.0f} MB"],
+        ["memória disponível (available_memory)", f"{available_memory() / 2**20:.0f} MB"],
         ["pasta temporária do motor", f"{temporary}, {free_gib:.1f} GiB livres"],
         ["pacotes", packages],
-        ["threads padrão do DuckDB", str(default_threads)],
-        ["memory_limit padrão do DuckDB", str(memory_limit)],
+        ["threads e memory_limit do motor", f"{default_threads}, {limits['memory_limit']}"],
+        ["threads e memory_limit padrão do DuckDB", f"{duckdb_threads}, {duckdb_memory_limit}"],
         ["cache de arquivos externos", f"{'ligado' if file_cache else 'desligado'} por padrão; desligado nas medições"],
         ["threads medidas", ", ".join(str(value) for value in values)],
+        ["referência da razão", f"threads={reference}"],
         ["repetições por configuração", str(repetitions)],
     ])
-    return values
+    return values, reference
 
 
-def single_table_section(report: Report, values: list[int], inputs: list[TableInput], repetitions: int, root: str) -> list[Measurement]:
+def single_table_section(report: Report, values: list[int], reference: int, inputs: list[TableInput], repetitions: int,
+                         root: str) -> list[Measurement]:
     """Seção 3: a partição da primeira tabela ``materializada`` e ``agregada`` com cada valor de
-    ``threads``; checagem ``DT-5`` e as medições para ``DT-2`` a ``DT-4``."""
+    ``threads``, a razão sobre o valor ``reference``; checagem ``DT-5`` e as medições para ``DT-2``
+    a ``DT-4``."""
     report.h1(f"Uma tabela: {inputs[0].table.name}")
     report.line("materializada: ingest(..., materialize=True), o CREATE TABLE AS sobre delta_scan, apagada a cada repetição.")
     report.line("agregada: a view de ingest lida inteira por SELECT count(*), max(COLUMNS(*)), sem gravar.")
-    report.line("RAZÃO: a melhor repetição do primeiro valor de threads dividida pela desta linha; acima de 1 é mais rápido.\n")
+    report.line(f"RAZÃO: a melhor repetição com threads={reference}, o padrão do motor, dividida pela desta linha; "
+                "acima de 1 é mais rápido.\n")
     measurements = run_scenarios(SINGLE_TABLE_SCENARIOS, values, inputs, repetitions, root)
-    report.table(measurement_rows(measurements, inputs))
+    report.table(measurement_rows(measurements, inputs, reference))
 
-    # A leitura que decide o padrão: o valor de threads mais rápido de cada cenário contra o primeiro.
+    # A leitura que decide o padrão: o valor de threads mais rápido de cada cenário contra a referência.
     readings = []
     for scenario in SINGLE_TABLE_SCENARIOS:
         found = fastest_configuration(measurements, scenario)
-        first = fastest_configuration([item for item in measurements if item.threads == values[0]], scenario)
-        if found is None or first is None:
+        default = fastest_configuration([item for item in measurements if item.threads == reference], scenario)
+        if found is None or default is None:
             readings.append(f"{scenario}: sem medição completa")
             continue
         readings.append(f"{scenario}: melhor com threads={found[0]}, {found[1]:.3f} s, "
-                        f"{speedup(first[1], found[1])} sobre threads={values[0]}")
+                        f"{speedup(default[1], found[1])} sobre threads={reference}")
     report.note("DT-5", "threads de uma tabela", "; ".join(readings))
     return measurements
 
 
-def many_tables_section(report: Report, values: list[int], inputs: list[TableInput], repetitions: int, root: str) -> list[Measurement]:
+def many_tables_section(report: Report, values: list[int], reference: int, inputs: list[TableInput], repetitions: int,
+                        root: str) -> list[Measurement]:
     """Seção 4: as tabelas ``em série`` na sessão principal e em ``sessões a mais`` com cada valor
-    de ``threads``; checagem ``DT-6`` e as medições para ``DT-2`` a ``DT-4``."""
+    de ``threads``, a razão da tabela sobre o valor ``reference``; checagem ``DT-6`` e as medições
+    para ``DT-2`` a ``DT-4``."""
     report.h1("Várias tabelas: " + ", ".join(item.table.name for item in inputs))
     report.line("em série: cada tabela materializada depois da outra na sessão principal.")
     report.line("sessões a mais: cada tabela materializada numa sessão a mais, todas juntas, como run.ingest.\n")
     measurements = run_scenarios(MANY_TABLES_SCENARIOS, values, inputs, repetitions, root)
-    report.table(measurement_rows(measurements, inputs))
+    report.table(measurement_rows(measurements, inputs, reference))
 
     # A leitura das sessões a mais: com cada valor de threads, o tempo em série sobre o das sessões.
     readings = []
@@ -593,7 +637,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--metadata", default=DEFAULT_METADATA, help=f"o MetaData do modelo, {DEFAULT_METADATA} por padrão")
     parser.add_argument("--tables", nargs="+", default=list(DEFAULT_TABLES), metavar="TABELA", help="as tabelas medidas, a primeira a grande")
     parser.add_argument("--partition", metavar="AAAA-MM-DD", help="a partição lida; por padrão a mais recente comum às tabelas")
-    parser.add_argument("--threads", nargs="+", type=int, metavar="N", help="os valores medidos; por padrão o padrão do DuckDB vezes 1 a 5")
+    parser.add_argument("--threads", nargs="+", type=int, metavar="N",
+                        help="os valores medidos; por padrão as CPUs que o processo pode usar vezes 0,5 e 1 a 5")
     parser.add_argument("--repetitions", type=int, default=DEFAULT_REPETITIONS, help=f"repetições por configuração, {DEFAULT_REPETITIONS} por padrão")
     return parser
 
@@ -618,9 +663,9 @@ def main(argv: list[str]) -> int:
     inputs = tables_section(report, storage, tables, arguments.partition)
     if inputs is None:
         return report.finish()
-    values = machine_section(report, arguments.threads, arguments.repetitions)
-    measurements = single_table_section(report, values, inputs, arguments.repetitions, storage.uri)
-    measurements += many_tables_section(report, values, inputs, arguments.repetitions, storage.uri)
+    values, reference = machine_section(report, arguments.threads, arguments.repetitions)
+    measurements = single_table_section(report, values, reference, inputs, arguments.repetitions, storage.uri)
+    measurements += many_tables_section(report, values, reference, inputs, arguments.repetitions, storage.uri)
     measurement_checks(report, measurements, inputs)
     return report.finish()
 

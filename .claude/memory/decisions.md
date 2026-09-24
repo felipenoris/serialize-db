@@ -713,3 +713,27 @@ the default `export_mode` with `rewrite` only for the stage 5 non-finite fallbac
 by `sort_key`, and the temporary staging filled inside the transaction. The raw migration reports
 stayed out of git, as the first run's did; their numbers entered `plan/POC.md`.
 `plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`
+
+## The environment-derived DuckDB limits and the approvals of 2026-09-24
+
+On 2026-09-24 the user pointed to <https://duckdb.org/2024/07/09/memory-management>, asked for more
+recent articles, said they had had to set `memory_limit` in other projects to avoid running out of
+memory, and instructed: the target may have a different memory size, so no specific memory or
+thread value is fixed in code; the limits are chosen from what the environment has available. This
+replaces the stage 4 decision of 2026-09-22 that left `memory_limit` at DuckDB's default. The
+assistant added `serialize_db.resources` (`available_cpus`: affinity capped by the cgroup CPU quota,
+rounded up; `available_memory`: the smallest of physical memory, `MemAvailable` and the cgroup room,
+v1 and v2, the tightest ancestor winning) and `engine.duckdb.environment_limits` (`threads` = the
+CPUs, `memory_limit` = half the memory still available, in MiB), which the engine applies when
+`DuckDBConfig` omits them and the migration script applies at every connection, one per table. The
+half is the assistant's choice from DuckDB's out-of-memory guide (50% to 60% when the OS kills the
+process) and the measured 13% to 21% overshoot; the `cad_lancamentos` rerun confirms it
+(`plan/OPEN_QUESTIONS.md`). The same day the user asked the threads probe for a round at half the
+machine's cores beside the 1x to 5x rounds; said the terminal output of the `cad_lancamentos` run
+was not kept but `Killed` showed several times in that part, the kernel killing the process for
+lack of RAM; approved the three proposals (`register` as the default in stages 4, 5 and 7 with
+`rewrite` only in the stage 5 swap for a non-finite `Double` partition, the load sorted by
+`sort_key`, the stage 8 temporary staging filled inside the transaction after the control row
+read); and merged PR #68. Whether `rewrite` leaves stages 4 and 7, with the `export_mode` flag and
+its tests, was put to the user (proposed: remove it). `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-7.md`,
+`plan/PLAN-STAGE-8.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`

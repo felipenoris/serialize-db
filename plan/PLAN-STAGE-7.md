@@ -33,9 +33,10 @@ máximos menores (`id_lancamento` 952.517.158 em vez de 1.113.599.996) e cinco c
 `cad_lancamentos` tem 2,83 GB em quatro partições, cerca de 35 milhões de linhas e 700 MB de Parquet
 por partição. O `write_deltalake` de um `RecordBatchReader` cresceu com a entrada na medição da
 reescrita (1.140 MB de RSS para 135 MB de Parquet, [`delta.md`](delta.md)), e o
-`COPY ... RETURN_STATS` do DuckDB mais `create_write_transaction` ficou em 600 MB: a partição de
-`cad_lancamentos` vai por `export_mode="register"`, e a primeira carga de uma partição real mede os
-dois modos antes de fixar o padrão da flag. A auditoria de chave estrangeira não é barreira da
+`COPY ... RETURN_STATS` do DuckDB mais `create_write_transaction` ficou em 600 MB: a carga vai por
+`export_mode="register"`, o padrão que o usuário aprovou em 2026-09-24 para as etapas 4, 5 e 7
+depois das partições medidas em 2026-09-23 ([`POC.md`](POC.md)), e ordena cada partição pela
+`sort_key` (decisão do usuário do mesmo dia). A auditoria de chave estrangeira não é barreira da
 carga: as duas bases têm `cad_lancamentos` de `data_base` 2026-01-31 sem `cad_contratos` dessa data
 e o contrato `desemb-999` sem cadastro, inconsistências ignoradas por decisão de 2026-09-20, e o
 relatório registra os órfãos.
@@ -108,11 +109,12 @@ coluna como nula por causa do `parquet.field.id` que o esquema Delta herdava do 
 na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
 
 - O script rodou sobre `tests/source_db_projetado.py` em pasta local, o material do teste desta
-  etapa: `tests/test_migrate_parquet_to_delta.py` (23 casos, marcador `local`) cobre a
+  etapa: `tests/test_migrate_parquet_to_delta.py` (25 casos, marcador `local`) cobre a
   descoberta, a consulta, a carga uma vez só com a retomada e o filtro, os dois modos com o
   mesmo relatório, a ordem da `sort_key`, as três recusas sem commit nos dois modos, o relatório
-  que acusa uma linha apagada, a linha de comando sobre a base inteira, duas vezes, e a medição
-  das variantes, também com a partição já no log.
+  que acusa uma linha apagada, a linha de comando sobre a base inteira, duas vezes, o relatório
+  parcial de uma carga interrompida, uma conexão por tabela com os limites lidos do ambiente e a
+  medição das variantes, também com a partição já no log.
 - O usuário copia a base de produção para um prefixo do bucket do projeto separado da raiz das
   tabelas Delta (`aws s3 sync`, a mesma estrutura de pastas): a carga só lê, e a cópia congela o
   snapshot lido em 2026-09-21, enquanto a base de produção muda a cada carga mensal (a última em
@@ -121,14 +123,21 @@ na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
   `--mode register`, as partições das onze tabelas que terminaram a migração de 2026-09-23 às
   23:05, com contagens e somas iguais às da origem ([`POC.md`](POC.md)); gravar em disco e subir
   pelo `boto3` fica de fora.
-- A memória e o tempo da maior partição de `cad_lancamentos`, 2026-03-31, com 52.654.607 linhas,
-  faltam: o processo daquela execução terminou nela sem relatório, numa máquina de 4 vCPUs e
-  15.786 MB, depois de gravar 2026-01-31 e 2026-02-28. É a medição de
-  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) que decide o padrão de `export_mode` e a ordem da carga,
-  e a próxima execução, numa máquina com mais memória, a traz; o script regrava o relatório depois
-  de cada passo. Numa partição sintética com as mesmas linhas e colunas, num contêiner de 4 vCPUs e
-  16.095 MB, a ordem multiplicou o tempo do `register` por 3,6 (50,2 s contra 14,0 s) e o pico por
-  2,6 (11.966 MB contra 4.517 MB).
+- A maior partição de `cad_lancamentos`, 2026-03-31, com 52.654.607 linhas, não terminou: numa
+  máquina de 4 vCPUs e 15.786 MB, depois de gravar 2026-01-31 e 2026-02-28, o kernel matou o
+  processo por falta de memória, com o `Killed` no terminal que o usuário viu algumas vezes
+  (2026-09-24), sob o `memory_limit` padrão do DuckDB, 12,3 GiB. O script abre agora cada conexão
+  com os limites lidos do ambiente naquele momento, `threads` nas CPUs que o processo pode usar e
+  `memory_limit` na metade da memória que ele ainda pode usar
+  (`serialize_db.engine.duckdb.environment_limits`, instrução do usuário de 2026-09-24), e a carga
+  de cada tabela tem a sua conexão, aberta depois da medição e fechada no fim: o DuckDB só devolve
+  a memória ao fechar, e o RSS de uma conexão ficou em 1.188 MB depois do `DROP` da tabela que a
+  consulta ordenada criou e voltou a 208 MB no `close` ([`POC.md`](POC.md)). A próxima execução de
+  `cad_lancamentos` confirma que a partição cabe; o script regrava o relatório depois de cada passo.
+  Numa partição sintética com as mesmas linhas e colunas, num contêiner de 4 vCPUs e 16.095 MB, a
+  ordem multiplicou o tempo do `register` por 3,6 (50,2 s contra 14,0 s) e o pico por 2,6
+  (11.966 MB contra 4.517 MB), e o `COPY` ordenado direto no DuckDB levou 17,4 s com pico de
+  7.432 MB sob 6 GiB, contra 17,2 s sob 12,3 GiB.
 
 Os tipos do modelo cliente ficam fechados antes da execução: mudá-los depois é reescrever o
 Delta. A `sort_key` de cada tabela particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
@@ -379,16 +388,16 @@ tipos físicos gravados: {'id_contrato': 'INT64', 'data': 'INT32', 'contrato': '
 
 ## Decisões pendentes
 
-- **[decisão] A `sort_key` na consulta da carga.** O `COPY` sem `ORDER BY` grava na ordem dos
-  arquivos; ordenar pela `sort_key` do modelo melhora a poda e custa uma ordenação por partição. A
-  `sort_key` de cada tabela particionada está decidida ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
-  2026-09-21). Nas nove partições medidas no ambiente alvo em 2026-09-23, a ordem custou de 1,23 a
-  1,63 vez o tempo do `register` e deixou os arquivos com 74% a 92% do tamanho; na partição
-  sintética de 52.654.607 linhas, 3,6 vezes o tempo e 2,6 vezes o pico ([`POC.md`](POC.md)).
-  Proposto: ordenar, com a máquina dimensionada pela medição de `cad_lancamentos` 2026-03-31.
-- **[decisão] O padrão de `export_mode` na carga.** Nas partições medidas em 2026-09-23, o
-  `rewrite` levou de 1,14 a 1,52 vez o tempo do `register`, com o pico até 696 MB maior na
-  gravação ordenada ([`POC.md`](POC.md)). Proposto: `register` como padrão nas etapas 4, 5 e 7, com
-  o `rewrite` só na troca da [etapa 5](PLAN-STAGE-5.md) para a partição com `Double` não finito. A
-  medição de `cad_lancamentos` 2026-03-31, que falta ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)), é
-  o gatilho de revisão de [`PLAN.md`](PLAN.md) que fecha as duas decisões.
+- **[decisão] Se o `rewrite` sai das etapas 4 e 7** ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O
+  usuário aprovou em 2026-09-24 o `register` como padrão nas etapas 4, 5 e 7, com o `rewrite` só
+  na troca da [etapa 5](PLAN-STAGE-5.md) para a partição com `Double` não finito. Falta dizer se o
+  `rewrite` deixa de ser escolha no motor DuckDB e na carga, com a flag `export_mode` de
+  `Execution`, de `serialize-db run` e de `SERIALIZE_DB_EXPORT_MODE` e os testes dele, ou se fica
+  como opção fora do padrão. Proposto: tirá-lo das etapas 4 e 7, com `publish_partition` na troca
+  da etapa 5 e as variantes da medição no script até a etapa 7 absorvê-lo.
+
+As decisões do usuário de 2026-09-24 sobre a carga, a ordem pela `sort_key` e o `register` como
+padrão, estão escritas no começo deste arquivo. Nas nove partições medidas no ambiente alvo em
+2026-09-23, o `rewrite` levou de 1,14 a 1,52 vez o tempo do `register`, com o pico até 696 MB maior
+na gravação ordenada, e a ordem custou de 1,23 a 1,63 vez o tempo do `register` e deixou os
+arquivos com 74% a 92% do tamanho ([`POC.md`](POC.md)).
