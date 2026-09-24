@@ -102,6 +102,7 @@ def test_storage_options_resolved_per_call(clean_aws: pytest.MonkeyPatch) -> Non
     first = storage.storage_options()
     assert first == {"AWS_REGION": "sa-east-1", "max_retries": "3", "retry_timeout": "10s"}
 
+    # A chamada seguinte relê as variáveis.
     clean_aws.setenv("AWS_REGION", "us-west-2")
     clean_aws.setenv("AWS_SERVER_SIDE_ENCRYPTION", "aws:kms")
     second = storage.storage_options()
@@ -155,24 +156,27 @@ def test_duckdb_secret_options_for_an_endpoint(clean_aws: pytest.MonkeyPatch) ->
     http = [*chain, "ENDPOINT '127.0.0.1:5055'", "URL_STYLE 'path'", "USE_SSL false"]
     assert _duckdb_secret_options() == http
 
+    # O endpoint https, com SSL.
     clean_aws.setenv("AWS_ENDPOINT_URL", "https://minio.exemplo:9000")
     https = [*chain, "ENDPOINT 'minio.exemplo:9000'", "URL_STYLE 'path'"]
     assert _duckdb_secret_options() == https
 
 
-def test_write_text_exclusive_create_and_if_match(storage: Storage) -> None:
-    """A segunda criação exclusiva e o ``if_match`` velho são ``ConflictError`` sem gravar; o
+def test_create_text_and_write_text_if_match(storage: Storage) -> None:
+    """A segunda ``create_text`` e o ``if_match`` velho são ``ConflictError`` sem gravar; o
     conteúdo final é o da escrita que venceu, e o arquivo ausente é ``FileNotFoundError``."""
     path = storage.join("prod", "_serialize_db", "snapshots.json")
     with pytest.raises(FileNotFoundError):
         storage.read_text(path)
 
-    first = storage.write_text(path, '{"snapshots": {}}', if_none_match=True)
+    # A criação condicional.
+    first = storage.create_text(path, '{"snapshots": {}}')
     with pytest.raises(ConflictError):
-        storage.write_text(path, "{}", if_none_match=True)
+        storage.create_text(path, "{}")
     text, fingerprint = storage.read_text(path)
     assert (text, fingerprint) == ('{"snapshots": {}}', first)
 
+    # A escrita condicional pela impressão digital lida.
     second = storage.write_text(path, '{"snapshots": {"2026T3": {}}}', if_match=fingerprint)
     with pytest.raises(ConflictError):
         storage.write_text(path, "{}", if_match=fingerprint)
@@ -189,6 +193,7 @@ def test_list_copy_delete(storage: Storage) -> None:
     assert storage.list_files("t", ".parquet") == ["t/p=a/1.parquet", "t/p=b/2.parquet"]
     assert storage.list_files("ausente") == []
 
+    # A cópia de um arquivo pequeno, e o tamanho do ausente.
     storage.copy("t/p=a/1.parquet", "copia/p=a/1.parquet")
     assert storage.read_text("copia/p=a/1.parquet")[0] == "t/p=a/1.parquet"
     assert storage.size("copia/p=a/1.parquet") == len("t/p=a/1.parquet")
@@ -201,6 +206,7 @@ def test_list_copy_delete(storage: Storage) -> None:
     storage.copy("t/p=c/grande.parquet", "copia/p=c/grande.parquet")
     assert storage.size("copia/p=c/grande.parquet") == large
 
+    # A exclusão, com um caminho ausente.
     storage.delete(["copia/p=a/1.parquet", "copia/ausente.parquet"])
     assert not storage.exists("copia/p=a/1.parquet")
 
@@ -208,15 +214,12 @@ def test_list_copy_delete(storage: Storage) -> None:
 def test_duckdb_connect_loads_delta(storage: Storage) -> None:
     """A conexão sai com a extensão ``delta`` da pasta configurada, sem instalação automática; no
     S3, com o secret da cadeia de credenciais."""
-    connection = storage.duckdb_connect()
-    try:
+    with storage.duckdb_connect() as connection:
         loaded = connection.execute(
             "SELECT extension_name FROM duckdb_extensions() WHERE loaded ORDER BY 1").fetchall()
         autoinstall = connection.execute(
             "SELECT current_setting('autoinstall_known_extensions')").fetchone()[0]
         secrets = connection.execute("SELECT name FROM duckdb_secrets()").fetchall()
-    finally:
-        connection.close()
     assert ("delta",) in loaded
     assert autoinstall is False
     assert secrets == ([("serialize_db_s3",)] if storage.is_s3 else [])

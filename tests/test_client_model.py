@@ -61,7 +61,8 @@ def unique_indexes(table: sa.Table) -> set[tuple[str, ...]]:
 def expected_type(reference_column: sa.Column) -> type:
     """O tipo que a cópia declara para a coluna do original: ``BigInteger`` na chave inteira e na
     coluna que aponta para uma, e o mesmo tipo nas demais."""
-    if isinstance(reference_column.type, sa.Integer) and references_a_primary_key(reference_column):
+    is_integer = isinstance(reference_column.type, sa.Integer)
+    if is_integer and references_a_primary_key(reference_column):
         return sa.BigInteger
     return type(reference_column.type)
 
@@ -69,9 +70,9 @@ def expected_type(reference_column: sa.Column) -> type:
 def column_pairs() -> list[tuple[str, sa.Column, sa.Column]]:
     """Cada coluna do original ao lado da mesma coluna na cópia, com o nome da tabela."""
     pairs = []
-    for name, client in ClientBase.metadata.tables.items():
+    for name, client_table in ClientBase.metadata.tables.items():
         for reference_column in REFERENCE_TABLES[name].columns:
-            pairs.append((name, reference_column, client.c[reference_column.name]))
+            pairs.append((name, reference_column, client_table.c[reference_column.name]))
     return pairs
 
 
@@ -93,12 +94,12 @@ def foreign_keys(table: sa.Table) -> set[tuple[tuple[str, ...], str, tuple[str, 
 def test_the_tables_and_columns_are_the_references_with_the_partition_column_last() -> None:
     """As 12 tabelas do original, cada coluna na mesma posição, e a coluna de partição no fim."""
     assert sorted(ClientBase.metadata.tables) == sorted(REFERENCE_TABLES)
-    for name, client in ClientBase.metadata.tables.items():
+    for name, client_table in ClientBase.metadata.tables.items():
         expected = [column.name for column in REFERENCE_TABLES[name].columns]
         partition = partition_column(name)
         if partition is not None:
             expected.append(partition)
-        assert [column.name for column in client.columns] == expected, name
+        assert [column.name for column in client_table.columns] == expected, name
 
 
 def test_types_and_nullability_change_only_where_the_plan_says() -> None:
@@ -106,11 +107,12 @@ def test_types_and_nullability_change_only_where_the_plan_says() -> None:
 
     A nulidade de cada coluna é a do original.
     """
-    for name, reference_column, column in column_pairs():
-        assert column.nullable == reference_column.nullable, (name, column.name)
-        assert type(column.type) is expected_type(reference_column), (name, column.name)
+    for name, reference_column, client_column in column_pairs():
+        where = (name, client_column.name)
+        assert client_column.nullable == reference_column.nullable, where
+        assert type(client_column.type) is expected_type(reference_column), where
         if isinstance(reference_column.type, sa.String):
-            assert column.type.length, (name, column.name)
+            assert client_column.type.length, where
 
 
 # A chave estrangeira do original que o modelo cliente não tem: o destino não é único, porque o
@@ -127,19 +129,20 @@ def test_keys_are_the_references_without_deferrable_and_without_autoincrement() 
     colunas não únicas; nenhum índice, porque a cópia declara os únicos como
     ``UniqueConstraint``."""
     assert REMOVED_FOREIGN_KEY in foreign_keys(REFERENCE_TABLES["cad_contratos"])
-    for name, client in ClientBase.metadata.tables.items():
-        reference = REFERENCE_TABLES[name]
-        client_primary = [column.name for column in client.primary_key.columns]
-        reference_primary = [column.name for column in reference.primary_key.columns]
+    for name, client_table in ClientBase.metadata.tables.items():
+        reference_table = REFERENCE_TABLES[name]
+        client_primary = [column.name for column in client_table.primary_key.columns]
+        reference_primary = [column.name for column in reference_table.primary_key.columns]
         assert client_primary == reference_primary, name
-        assert unique_keys(client) == unique_keys(reference), name
-        assert foreign_keys(client) == foreign_keys(reference) - {REMOVED_FOREIGN_KEY}, name
-        for constraint in client.foreign_key_constraints:
+        assert unique_keys(client_table) == unique_keys(reference_table), name
+        kept_foreign_keys = foreign_keys(reference_table) - {REMOVED_FOREIGN_KEY}
+        assert foreign_keys(client_table) == kept_foreign_keys, name
+        for constraint in client_table.foreign_key_constraints:
             assert constraint.deferrable is None, (name, constraint.name)
             assert constraint.initially is None, (name, constraint.name)
-        for column in client.primary_key.columns:
+        for column in client_table.primary_key.columns:
             assert column.autoincrement is False, (name, column.name)
-        assert not client.indexes, name
+        assert not client_table.indexes, name
 
 
 # Os índices únicos do original que a cópia declara como UniqueConstraint: as chaves estrangeiras
@@ -157,12 +160,15 @@ def test_the_composite_foreign_key_targets_are_unique_constraints() -> None:
     for name, columns in UNIQUE_CONSTRAINTS_FROM_INDEXES.items():
         assert columns in unique_indexes(REFERENCE_TABLES[name]), name
         assert columns in unique_constraints(ClientBase.metadata.tables[name]), name
+
+    # O DuckDB cria o modelo inteiro.
     engine = sa.create_engine("duckdb:///:memory:")
+    query = sa.text("SELECT table_name FROM duckdb_tables()")
     with engine.begin() as connection:
         ClientBase.metadata.create_all(connection)
-        rows = connection.execute(sa.text("SELECT table_name FROM duckdb_tables()")).fetchall()
+        created = connection.execute(query).scalars().all()
     engine.dispose()
-    assert sorted(row[0] for row in rows) == sorted(ClientBase.metadata.tables)
+    assert sorted(created) == sorted(ClientBase.metadata.tables)
 
 
 def test_every_table_and_column_has_a_comment() -> None:
@@ -187,8 +193,8 @@ def test_the_partitioned_tables_declare_the_partition_the_base_has() -> None:
         partition = source.PARTITIONS[name]
         assert options["partition_by"] == [partition.column], name
         assert options["partition_source"] == partition.source, name
-        last = list(table.columns)[-1]
-        assert last.name == partition.column, name
-        assert last.type.length == 10, name
-        assert not last.nullable, name
+        last_column = list(table.columns)[-1]
+        assert last_column.name == partition.column, name
+        assert last_column.type.length == 10, name
+        assert not last_column.nullable, name
         assert set(options["sort_key"]) <= set(table.columns.keys()), name

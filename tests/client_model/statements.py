@@ -70,8 +70,11 @@ APPORTIONMENT_BY_OPERATION = (
             ENTRIES.c.data_base_str == APPORTIONMENTS.c.data_str,
         ),
     )
-    .where(ENTRIES.c.data_base_str == PARTITION, ENTRIES.c.area.like("TI%"),
-           ENTRIES.c.area != "1:2")
+    .where(
+        ENTRIES.c.data_base_str == PARTITION,
+        ENTRIES.c.area.like("TI%"),
+        ENTRIES.c.area != "1:2",
+    )
     .group_by(APPORTIONMENTS.c.operacao)
     .order_by(APPORTIONMENTS.c.operacao)
 )
@@ -100,18 +103,16 @@ ENTRIES_BY_CONTRACT = (
 
 # Os veículos que os lançamentos da partição citam e a dimensão ainda não tem, com um nome
 # provisório; o alvo do INSERT aparece de novo na subconsulta do NOT EXISTS.
-NEW_VEHICLES = sa.insert(VEHICLES).from_select(
-    ["id_veiculo", "nome"],
-    sa.select(
-        ENTRIES.c.id_veiculo,
-        (sa.literal("veículo ") + sa.cast(ENTRIES.c.id_veiculo, sa.String(20))).label("nome"),
-    )
+PROVISIONAL_NAME = sa.literal("veículo ") + sa.cast(ENTRIES.c.id_veiculo, sa.String(20))
+CITED_VEHICLES = (
+    sa.select(ENTRIES.c.id_veiculo, PROVISIONAL_NAME.label("nome"))
     .where(
         ENTRIES.c.data_base_str == PARTITION,
         ~sa.exists().where(VEHICLES.c.id_veiculo == ENTRIES.c.id_veiculo),
     )
-    .distinct(),
+    .distinct()
 )
+NEW_VEHICLES = sa.insert(VEHICLES).from_select(["id_veiculo", "nome"], CITED_VEHICLES)
 
 STATEMENTS = {
     "saldos_por_conta": BALANCE_BY_ACCOUNT,

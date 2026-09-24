@@ -857,3 +857,39 @@ conversion or a missing extension surfaces (`initial_load`, `Storage.duckdb_conn
 `plan/OPEN_QUESTIONS.md`. The same day the user asked for the standard in `CLAUDE.md`, which holds
 it in "Python Code Style", section "Docstrings". `docs/operacao.md`, `docs/index.md`,
 `plan/POC.md`
+
+## The code review of 2026-09-24
+
+On 2026-09-24 the user asked for a review of `src/` and `tests/` against the code rules and the
+docstring standard of `CLAUDE.md`, with the refactors applied, and answered the assistant's
+questions before the work: the tests reviewed are the package's (the `test_*.py` files of `tests/`,
+`conftest.py`, `emulator.py`, `client_model/`, `lancamentos_model.py`, `source_db_projetado.py`),
+with `tests/proof_of_concept/` and `tests/reference_model/` out; public names may be renamed, with
+`docs/`, `plan/`, `README.md` and `SUITE.md` updated in the same commit; the refactor stays at the
+function level, every module keeping its place; and a defect the review finds is fixed with an
+assertion that fails on the old code and named in the report when small, and goes to
+`plan/OPEN_QUESTIONS.md` when large. Under the last answer the review closed two pending items:
+`check_models` lists a table with two partition columns instead of raising, and an empty
+`SERIALIZE_DB_ENVIRONMENT` means `dev` in every subcommand, as it did in `run`, `audit` and
+`publish`. The assistant's choices, named in the report: `Storage.create_text` in place of
+`write_text(if_none_match=True)`; `bind(sql, params, dialect)`; `sql.bound_statement`, the helpers
+the two engines repeated in `serialize_db.engine` (`batches_of`, `checked_batches`, `take`,
+`ARROW_ONLY`) and the rows check reading in `audit` (`readings_by_partition`,
+`failing_counters`); an `Exemplo:` block in every public function, method and exception; and
+`import datetime` in place of `import datetime as dt` in the tests, where `dt` names a
+`DeltaTable` as in `src/`. Kept on purpose: the name `dt` for a `DeltaTable`, the two loader
+classes, which share their shape but not their storage, and the pytest `monkeypatch` of the
+`driver_connect` seam. In the tests the review split every `assert A and B`, passed optional
+arguments by name (`version=`, `limit=`, `prefix=`, `partitions=`, `seconds=`), renamed the row
+builders of `tests/lancamentos_model.py` and `tests/test_engine_duckdb.py` to `entry_rows` and
+`account_rows`, split the `--redshift` pipeline of `tests/test_execution.py` in two so each checks
+its engine, and made `tests/test_source_db_projetado.py` read each file through
+`parquet_source.footer_columns`. Kept on purpose in the tests: the `valor` keyword of the row
+builders, a column name like a `.values(...)` keyword; the duplication across test modules (the
+`storage` and `folder` fixtures, the model-key helpers of `test_client_model.py`,
+`test_reference_model.py` and `test_schema.py`, the two `rewrite_first_chunk`, the `exit_code`
+helpers), because a shared helper would move code between modules; and the `monkeypatch` of
+`delta.open_table`, `delta.read_snapshots` and `Storage.copy`, the only way to put a commit or a
+failure between two steps. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`,
+`docs/operacao.md`, `plan/POC.md`
+

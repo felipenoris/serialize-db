@@ -33,9 +33,9 @@ ARROW_TYPES = (
 
 def arrow_type_in_files(column: sa.Column) -> pa.DataType:
     """O tipo Arrow da coluna do modelo nos arquivos, pela tabela ``ARROW_TYPES``."""
-    for sa_type, arrow in ARROW_TYPES:
+    for sa_type, arrow_type in ARROW_TYPES:
         if isinstance(column.type, sa_type):
-            return arrow
+            return arrow_type
     raise AssertionError(
         f"{column.table.name}.{column.name}: o tipo {column.type!r} não está em ARROW_TYPES")
 
@@ -45,9 +45,9 @@ def column_fields() -> list[tuple[str, sa.Column, pa.Field]]:
     tabela."""
     fields = []
     for name, table in sorted(ReferenceBase.metadata.tables.items()):
-        read = source.SCHEMAS[name]
+        read_schema = source.SCHEMAS[name]
         for column in table.columns:
-            fields.append((name, column, read.field(column.name)))
+            fields.append((name, column, read_schema.field(column.name)))
     return fields
 
 
@@ -68,7 +68,8 @@ def test_the_model_tables_are_the_read_tables_column_by_column() -> None:
     """As 12 tabelas do modelo existem nos arquivos com as mesmas colunas, na mesma ordem e nos
     mesmos tipos."""
     tables = ReferenceBase.metadata.tables
-    assert sorted(tables) == sorted(set(source.SCHEMAS) - set(source.OUTSIDE_MODEL))
+    read_tables = set(source.SCHEMAS) - set(source.OUTSIDE_MODEL)
+    assert sorted(tables) == sorted(read_tables)
     for name, table in sorted(tables.items()):
         assert [column.name for column in table.columns] == source.SCHEMAS[name].names, name
     for name, column, field in column_fields():

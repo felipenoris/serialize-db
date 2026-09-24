@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 
 import duckdb_engine
 import sqlalchemy as sa
@@ -169,6 +170,38 @@ def required_parameters(statement: sa.sql.ClauseElement) -> set[str]:
     return names
 
 
+def _statement_metadata(statement: sa.sql.ClauseElement) -> sa.MetaData | None:
+    """O ``MetaData`` das tabelas do contrato que o statement cita, o que ``prefixed`` recebe;
+    ``None`` num statement sem ``sa.Table``."""
+    for table in find_tables(statement, include_crud=True):
+        if isinstance(table, sa.Table):
+            return table.metadata
+    return None
+
+
+def bound_statement(statement: sa.sql.ClauseElement, params: Mapping[str, object] | None,
+                    prefix: str) -> sa.sql.ClauseElement:
+    """A cópia prefixada do statement com os valores do cliente; protegida, o começo do caminho de
+    compilação dos dois motores.
+
+    Os nomes de ``params`` fecham com os ``bindparam`` sem valor, ou é ``SqlError``: ``params``
+    ignora o nome a mais, e o valor que falta seria ``InvalidRequestError`` na compilação. As
+    tabelas do contrato são as do ``MetaData`` da primeira ``sa.Table`` que o statement cita.
+    """
+    values = dict(params or {})
+    required = required_parameters(statement)
+    if required != set(values):
+        raise SqlError(f"parâmetros do statement {sorted(required)} e do dicionário "
+                       f"{sorted(values)} não fecham")
+    bound = statement
+    if values:
+        bound = statement.params(**values)
+    metadata = _statement_metadata(bound)
+    if metadata is None:
+        return bound
+    return prefixed(bound, metadata, prefix=prefix)
+
+
 # ---------------------------------------------------------------- o texto por motor
 
 
@@ -219,8 +252,10 @@ def render(statement: sa.sql.ClauseElement, dialect: Dialect, metadata: sa.MetaD
     :raises SqlError: um nome de parâmetro fora de ``[a-z_][a-z0-9_]*``, que ``bind`` não leria
         no texto.
     """
-    copy = _parameters_as_placeholders(prefixed(statement, metadata, prefix))
-    compiled = copy.compile(dialect=_DIALECTS[dialect], compile_kwargs={"literal_binds": True})
+    prefixed_statement = prefixed(statement, metadata, prefix)
+    with_placeholders = _parameters_as_placeholders(prefixed_statement)
+    compiled = with_placeholders.compile(dialect=_DIALECTS[dialect],
+                                         compile_kwargs={"literal_binds": True})
     # O compilador deixa um espaço antes de cada quebra de linha; sem ele o arquivo versionado
     # sobrevive a um editor que apara o fim das linhas.
     lines = []
@@ -238,7 +273,7 @@ def _placeholders(sql: str) -> set[str]:
     return names
 
 
-def bind(sql: str, params: dict[str, object], style: Dialect) -> tuple[str, dict[str, object]]:
+def bind(sql: str, params: dict[str, object], dialect: Dialect) -> tuple[str, dict[str, object]]:
     """O texto com ``:nome`` reescrito para o marcador do motor e o dicionário conferido.
 
     Toda região citada passa intacta, entre aspas simples ou duplas: ``'12:30'``,
@@ -254,8 +289,9 @@ def bind(sql: str, params: dict[str, object], style: Dialect) -> tuple[str, dict
 
     :param sql: o texto com os parâmetros por nome, como ``read_sql`` o devolve.
     :param params: o valor de cada parâmetro do texto, por nome.
-    :param style: o motor. O marcador vira ``$nome`` no estilo ``duckdb`` e fica como está no
-        ``redshift``, que o ``redshift_connector`` lê com ``cursor.paramstyle = "named"``.
+    :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``. O marcador vira ``$nome`` no
+        ``duckdb`` e fica como está no ``redshift``, que o ``redshift_connector`` lê com
+        ``cursor.paramstyle = "named"``.
     :return: o texto reescrito e uma cópia de ``params``.
     :raises SqlError: um texto que ainda traz o sentinela ``{prefix}``, ou um dicionário com
         parâmetro faltante ou sobrando.
@@ -267,7 +303,7 @@ def bind(sql: str, params: dict[str, object], style: Dialect) -> tuple[str, dict
     if names != set(params):
         raise SqlError(
             f"parâmetros do texto {sorted(names)} e do dicionário {sorted(params)} não fecham")
-    marker = _MARKERS[style]
+    marker = _MARKERS[dialect]
 
     def rewrite(match: re.Match) -> str:
         if match.group("name") is None:

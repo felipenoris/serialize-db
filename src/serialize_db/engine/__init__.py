@@ -28,6 +28,9 @@ Exemplo, com o motor DuckDB:
 from __future__ import annotations
 
 import contextlib
+import itertools
+import queue
+import threading
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from typing import Protocol, runtime_checkable
 
@@ -35,8 +38,14 @@ import pyarrow as pa
 import sqlalchemy as sa
 
 from serialize_db.audit import AuditReport, KeyScope
+from serialize_db.errors import ContractError
 
 __all__ = ["BatchStream", "Engine", "Loader", "duckdb", "redshift"]
+
+# A mensagem que recusa o que não é Arrow e aponta a conversão sem cópia.
+ARROW_ONLY = ("recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iterável de lotes; um "
+              "DataFrame vira pa.Table.from_pandas(frame, preserve_index=False) ou "
+              "pa.RecordBatch.from_pandas(frame, preserve_index=False)")
 
 
 class BatchStream(Protocol):
@@ -44,6 +53,15 @@ class BatchStream(Protocol):
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        with engine.stream(sa.select(Lancamento)) as stream:
+            stream.schema.names   # as colunas, antes do primeiro lote
+            for batch in stream:
+                work(batch)
     """
 
     schema: pa.Schema
@@ -54,6 +72,12 @@ class BatchStream(Protocol):
 
         O erro que a consulta ou a leitura encontra sobe depois do último lote entregue.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            first = stream.read_next_batch()
+
         :return: o lote, no esquema ``schema``.
         :raises StopIteration: no fim dos lotes.
         """
@@ -63,12 +87,25 @@ class BatchStream(Protocol):
     def read_all(self) -> pa.Table:
         """Os lotes que faltam numa ``pa.Table``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            rest = stream.read_all()
+
         :return: a tabela, no esquema ``schema``; vazia depois do último lote.
         """
 
     def close(self) -> None:
         """Para a consulta ou a leitura que ainda roda e apaga os arquivos do stream; a sessão
-        continua usável."""
+        continua usável.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            stream.close()   # o with do stream chama close na saída
+        """
 
     def __enter__(self) -> BatchStream: ...
     def __exit__(self, *exc: object) -> None: ...
@@ -80,6 +117,14 @@ class Loader(Protocol):
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        with engine.loader(Projetado.__table__) as loader:
+            loader.write(batch)
+        loader.rows   # as linhas da tabela criada
     """
 
     rows: int
@@ -89,6 +134,12 @@ class Loader(Protocol):
         """Converte os lotes pelo contrato, na thread de quem chama, e os põe na fila da
         gravação, que bloqueia quando está cheia.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            loader.write(batch)
+
         :param data: um ``pa.RecordBatch`` ou uma ``pa.Table``.
         :raises ContractError: ``data`` de outro tipo; ou um lote que o ``cast`` recusa, ou com
             colunas diferentes das do primeiro lote, e então o loader não cria a tabela.
@@ -97,6 +148,12 @@ class Loader(Protocol):
     def close(self) -> None:
         """Cria a tabela do modelo e carrega os lotes gravados numa transação: um erro desfaz
         os dois.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            loader.close()   # o with do loader chama close na saída
 
         :raises ContractError: o lote que o ``write`` recusou; nada é criado.
         """
@@ -111,6 +168,17 @@ class Engine(Protocol):
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        def project_entries(engine: Engine) -> int:
+            with (engine.stream(sa.select(Lancamento)) as stream,
+                  engine.loader(Projetado.__table__) as loader):
+                for batch in stream:
+                    loader.write(project(batch))
+            return loader.rows
     """
 
     execution_id: str
@@ -120,12 +188,26 @@ class Engine(Protocol):
         """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
         chamada dentro do bloco não trava.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.session() as connection:
+                engine.query("SELECT 1")   # a primitiva dentro do bloco não trava
+
         :return: o gerenciador de contexto cujo ``with`` dá a conexão do driver.
         """
 
     def new_session(self) -> Engine:
         """Uma sessão a mais sobre o mesmo banco, com o seu lock, para o que roda em paralelo:
         vê o que a sessão principal confirmou e não as tabelas temporárias dela.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.new_session() as session:
+                session.ingest(Contrato.__table__, uri, 88)
 
         :return: o motor da sessão a mais, gerenciador de contexto; o ``cleanup`` dele fecha só
             essa sessão.
@@ -138,6 +220,12 @@ class Engine(Protocol):
                materialize: bool = False) -> None:
         """Leva ao sandbox as partições pedidas da versão fixada da tabela Delta, com o nome do
         modelo.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.ingest(Lancamento.__table__, uri, 143, partitions=["2026-08-31"])
 
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
         :param uri: a URI da tabela Delta.
@@ -156,6 +244,13 @@ class Engine(Protocol):
         """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
         sandbox.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            previous = engine.published(Projetado.__table__, uri, 57)
+            engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
+
         :param table: a tabela do modelo, que dá as colunas.
         :param uri: a URI da tabela Delta.
         :param version: a versão fixada.
@@ -168,6 +263,14 @@ class Engine(Protocol):
                batch_size: int = 100_000) -> BatchStream:
         """Os lotes da consulta, lidos na ordem dela enquanto o cliente trabalha no lote
         anterior.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.stream(sa.select(Lancamento), batch_size=50_000) as stream:
+                for batch in stream:
+                    work(batch)
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
             compila para o sandbox, ou um texto pronto no SQL do motor, com os parâmetros como
@@ -185,6 +288,12 @@ class Engine(Protocol):
               params: Mapping[str, object] | None = None) -> pa.Table:
         """O resultado inteiro como ``pa.Table``, sob o lock.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.query(sa.select(sa.func.count()).select_from(Lancamento.__table__))
+
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
             compila para o sandbox, ou um texto pronto no SQL do motor, com os parâmetros como
             ``:nome``.
@@ -199,6 +308,13 @@ class Engine(Protocol):
         """O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada e
         carregada no ``close``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.loader(Projetado.__table__) as loader:
+                loader.write(batch)
+
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
@@ -211,6 +327,12 @@ class Engine(Protocol):
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
         """Grava os lotes numa tabela nova pelo ``loader``.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.load(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
@@ -226,6 +348,13 @@ class Engine(Protocol):
               key_scope: KeyScope | None = None,
               referenced: Mapping[str, tuple[str, int]] | None = None) -> AuditReport:
         """Roda as verificações do contrato sobre a tabela do sandbox.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            report = engine.audit(Projetado.__table__, ["2026-08-31"], uri, 57)
+            report.passed
 
         :param table: a tabela do modelo, no sandbox.
         :param partitions: as partições da execução; ``None`` audita a tabela inteira do
@@ -251,6 +380,13 @@ class Engine(Protocol):
                          columns_without_min_max: Collection[str] = ()) -> int:
         """Leva a partição do sandbox ao Delta num commit.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.export_partition(Projetado.__table__, uri, "2026-08-31",
+                                    delta.commit_metadata("exec-42", versions), expected_rows=1000)
+
         :param table: a tabela do modelo, no sandbox.
         :param uri: a URI da tabela Delta, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
@@ -270,4 +406,59 @@ class Engine(Protocol):
 
     def cleanup(self) -> None:
         """Fecha a sessão e apaga o que a execução criou no sandbox; numa sessão a mais, fecha
-        só ela. A segunda chamada não faz nada."""
+        só ela. A segunda chamada não faz nada.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.cleanup()   # o with do motor chama cleanup na saída
+        """
+
+
+# ---------------------------------------------------------------- os lotes e as filas dos motores
+
+
+def batches_of(data: object) -> Iterator[pa.RecordBatch]:
+    """Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de lotes; protegida,
+    para o ``load`` dos motores. Outro tipo, um DataFrame inclusive, é ``ContractError`` antes de
+    qualquer carga."""
+    if isinstance(data, pa.Table):
+        return iter(data.to_batches())
+    if isinstance(data, pa.RecordBatch):
+        return iter([data])
+    if isinstance(data, pa.RecordBatchReader):
+        return iter(data)
+    if isinstance(data, (str, bytes)) or not isinstance(data, Iterable):
+        raise ContractError(f"load {ARROW_ONLY}; recebido {type(data).__name__}")
+    # O primeiro item decide se o iterável é de lotes; ele volta à frente dos demais.
+    iterator = iter(data)
+    first = next(iterator, None)
+    if first is None:
+        return iter([])
+    if not isinstance(first, pa.RecordBatch):
+        raise ContractError(f"load {ARROW_ONLY}; recebido {type(data).__name__}")
+    return itertools.chain([first], iterator)
+
+
+def checked_batches(data: pa.RecordBatch | pa.Table) -> list[pa.RecordBatch]:
+    """Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; protegida, para o ``write`` dos
+    loaders. Outro tipo é ``ContractError``."""
+    if isinstance(data, pa.Table):
+        return data.to_batches()
+    if isinstance(data, pa.RecordBatch):
+        return [data]
+    raise ContractError(f"loader.write {ARROW_ONLY}; recebido {type(data).__name__}")
+
+
+def take(source: queue.Queue, stop: threading.Event) -> object | None:
+    """O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o ``stop`` em
+    vez de ficar preso num ``get`` sem fim; protegida, para as threads dos motores. ``None`` quando
+    ``stop`` chega com a fila vazia; nenhum item da fila é ``None``."""
+    while True:
+        try:
+            return source.get(timeout=0.05)
+        except queue.Empty:
+            pass
+        if stop.is_set():
+            return None

@@ -42,7 +42,8 @@ def diff_files(files: dict[str, str], directory: str) -> list[str]:
     diff = []
     for name, content in sorted(files.items()):
         path = os.path.join(directory, name)
-        diff.extend(difflib.unified_diff(
-            _versioned_text(path).splitlines(), content.splitlines(),
-            fromfile=path, tofile=f"{path} (gerado)", lineterm=""))
+        versioned_lines = _versioned_text(path).splitlines()
+        generated_lines = content.splitlines()
+        diff.extend(difflib.unified_diff(versioned_lines, generated_lines, fromfile=path,
+                                         tofile=f"{path} (gerado)", lineterm=""))
     return diff

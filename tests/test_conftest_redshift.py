@@ -22,7 +22,12 @@ from conftest import connect_redshift
 REDSHIFT_VARIABLES = ("DATABASE", "HOST", "PORT", "USER", "PASSWORD", "WORKGROUP", "SHARE_DATABASE")
 
 # As variáveis da conexão pelo par informado, sem SHARE_DATABASE e sem WORKGROUP.
-HOST_AND_PASSWORD = {"DATABASE": "dev", "HOST": "host", "USER": "usuario", "PASSWORD": "senha"}
+INFORMED_PAIR_VARIABLES = {
+    "DATABASE": "dev",
+    "HOST": "host",
+    "USER": "usuario",
+    "PASSWORD": "senha",
+}
 
 
 class FakeCursor:
@@ -31,7 +36,7 @@ class FakeCursor:
     def __init__(self, connection: FakeConnection) -> None:
         self.connection = connection
 
-    def execute(self, sql: str, params: object = None) -> None:
+    def execute(self, sql: str) -> None:
         self.connection.statements.append((sql, self.connection.autocommit))
 
 
@@ -39,8 +44,8 @@ class FakeConnection:
     """Uma conexão do ``redshift_connector`` fabricada: nasce com o autocommit desligado, como a
     real."""
 
-    def __init__(self, **kwargs: object) -> None:
-        self.kwargs = kwargs
+    def __init__(self, **arguments: object) -> None:
+        self.arguments = arguments
         self.autocommit = False
         self.statements: list[tuple[str, bool]] = []
 
@@ -70,12 +75,12 @@ def test_connect_redshift_turns_autocommit_on_before_the_use(
         monkeypatch: pytest.MonkeyPatch) -> None:
     """O ``USE`` é o primeiro comando da sessão e já corre com o autocommit ligado: nenhuma
     transação fica aberta."""
-    use_fake_driver(monkeypatch, {**HOST_AND_PASSWORD, "SHARE_DATABASE": "compartilhado"})
+    use_fake_driver(monkeypatch, {**INFORMED_PAIR_VARIABLES, "SHARE_DATABASE": "compartilhado"})
 
     method, connection = connect_redshift()
 
     assert method == "par informado"
-    assert connection.kwargs == {
+    assert connection.arguments == {
         "host": "host",
         "port": 5439,
         "user": "usuario",
@@ -91,11 +96,11 @@ def test_connect_redshift_with_statement_cache_keeps_the_driver_default(
         monkeypatch: pytest.MonkeyPatch) -> None:
     """``statement_cache=True`` deixa o cache do driver como vem: é a conexão que reproduz o
     ``34510`` na suíte."""
-    use_fake_driver(monkeypatch, HOST_AND_PASSWORD)
+    use_fake_driver(monkeypatch, INFORMED_PAIR_VARIABLES)
 
     _, connection = connect_redshift(statement_cache=True)
 
-    assert "max_prepared_statements" not in connection.kwargs
+    assert "max_prepared_statements" not in connection.arguments
     assert connection.autocommit is True
 
 
@@ -103,7 +108,7 @@ def test_connect_redshift_without_share_database_runs_no_use(
         monkeypatch: pytest.MonkeyPatch) -> None:
     """Sem ``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE`` a sessão fica no banco da conexão, ainda com o
     autocommit ligado."""
-    use_fake_driver(monkeypatch, HOST_AND_PASSWORD)
+    use_fake_driver(monkeypatch, INFORMED_PAIR_VARIABLES)
 
     _, connection = connect_redshift()
 

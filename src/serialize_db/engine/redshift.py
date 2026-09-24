@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-import itertools
 import json
 import logging
 import os
@@ -66,19 +65,18 @@ import redshift_connector
 import sqlalchemy as sa
 from redshift_connector.utils.oids import RedshiftOID, get_datatype_name
 from sqlalchemy.sql import quoted_name
-from sqlalchemy.sql.util import find_tables
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
 from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
+from serialize_db.engine import batches_of, checked_batches, take
 from serialize_db.engine.duckdb import environment_limits
-from serialize_db.errors import ContractError, SandboxError, SqlError
+from serialize_db.errors import ContractError, SandboxError
 from serialize_db.schema import (
     arrow_schema,
     cast,
     check_partition_value,
     ddl,
-    double_columns,
     literal,
     quoted,
     sequential_key,
@@ -129,11 +127,6 @@ _ARROW_BY_OID = {
     int(RedshiftOID.TIMESTAMPTZ): pa.timestamp("us", "UTC"),
 }
 _NUMERIC_OID = int(RedshiftOID.NUMERIC)
-
-# A mensagem que recusa o que não é Arrow e aponta a conversão sem cópia.
-_ARROW_ONLY = ("recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iterável de lotes; um "
-               "DataFrame vira pa.Table.from_pandas(frame, preserve_index=False) ou "
-               "pa.RecordBatch.from_pandas(frame, preserve_index=False)")
 
 _END = object()
 
@@ -190,6 +183,13 @@ class RedshiftConfig:
         """A configuração das variáveis ``SERIALIZE_DB_REDSHIFT_*`` (``WORKGROUP``, ``DATABASE``,
         ``SHARE_DATABASE``, ``SCHEMA``, ``IAM_ROLE``, ``HOST``, ``PORT``, ``USER``, ``PASSWORD``) e
         da região em ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            config = RedshiftConfig.from_environment()
+            config.schema   # "sbx_aco_decon" com SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
 
         :param environ: as variáveis lidas; o padrão é ``os.environ``. A variável vazia conta
             como ausente.
@@ -518,43 +518,19 @@ def table_from_cursor(cursor: object) -> pa.Table:
 # ---------------------------------------------------------------- a compilação
 
 
-def _statement_metadata(statement: sa.sql.ClauseElement) -> sa.MetaData | None:
-    """O ``MetaData`` das tabelas do contrato que o statement cita, o que ``sql.prefixed``
-    recebe."""
-    for table in find_tables(statement, include_crud=True):
-        if isinstance(table, sa.Table):
-            return table.metadata
-    return None
-
-
-def _bound_statement(statement: sa.sql.ClauseElement, params: Mapping[str, object] | None,
-                     prefix: str) -> sa.sql.ClauseElement:
-    """A cópia prefixada do statement com os valores do cliente; os nomes de ``params`` fecham com
-    os ``bindparam`` sem valor, ou é ``SqlError``."""
-    values = dict(params or {})
-    required = sql.required_parameters(statement)
-    if required != set(values):
-        raise SqlError(f"parâmetros do statement {sorted(required)} e do dicionário "
-                       f"{sorted(values)} não fecham")
-    bound = statement.params(**values) if values else statement
-    metadata = _statement_metadata(bound)
-    if metadata is not None:
-        bound = sql.prefixed(bound, metadata, prefix=prefix)
-    return bound
-
-
 def _text_with_values(text: str, params: Mapping[str, object] | None,
                       prefix: str) -> sa.sql.ClauseElement:
     """Um texto pronto como statement com cada ``bindparam`` tipado pelo valor, para o caminho dos
     literais: o sentinela vira o prefixo, e ``sql.bind`` confere os marcadores; uma lista entra
     expansível, no ``IN``."""
-    bound_text, values = sql.bind(text.replace(sql.SENTINEL, prefix), dict(params or {}),
-                                  "redshift")
+    prefixed_text = text.replace(sql.SENTINEL, prefix)
+    bound_text, values = sql.bind(prefixed_text, dict(params or {}), "redshift")
     parameters = []
     for name, value in values.items():
-        expanding = isinstance(value, (list, tuple, set))
-        parameters.append(sa.bindparam(name, value=list(value) if expanding else value,
-                                       expanding=expanding))
+        if isinstance(value, (list, tuple, set)):
+            parameters.append(sa.bindparam(name, value=list(value), expanding=True))
+        else:
+            parameters.append(sa.bindparam(name, value=value))
     return sa.text(bound_text).bindparams(*parameters)
 
 
@@ -567,7 +543,7 @@ def compiled_for_cursor(statement_or_sql: sa.sql.ClauseElement | str,
     if isinstance(statement_or_sql, str):
         return sql.bind(statement_or_sql.replace(sql.SENTINEL, prefix), dict(params or {}),
                         "redshift")
-    bound = _bound_statement(statement_or_sql, params, prefix)
+    bound = sql.bound_statement(statement_or_sql, params, prefix)
     compiled = bound.compile(dialect=_NAMED, compile_kwargs={"render_postcompile": True})
     return str(compiled), dict(compiled.construct_params())
 
@@ -579,25 +555,13 @@ def literal_text(statement_or_sql: sa.sql.ClauseElement | str, params: Mapping[s
     if isinstance(statement_or_sql, str):
         statement = _text_with_values(statement_or_sql, params, prefix)
     else:
-        statement = _bound_statement(statement_or_sql, params, prefix)
+        statement = sql.bound_statement(statement_or_sql, params, prefix)
     compiled = statement.compile(
         dialect=_NAMED, compile_kwargs={"literal_binds": True, "render_postcompile": True})
     return str(compiled).strip().rstrip(";")
 
 
 # ---------------------------------------------------------------- o stream
-
-
-def _take(source: queue.Queue, stop: threading.Event) -> object | None:
-    """O próximo item da fila, esperando em fatias de 50 ms para perceber o ``stop``; ``None``
-    quando ``stop`` chega com a fila vazia. Nenhum item da fila é ``None``."""
-    while True:
-        try:
-            return source.get(timeout=0.05)
-        except queue.Empty:
-            pass
-        if stop.is_set():
-            return None
 
 
 def _put(sink: queue.Queue, item: object, stop: threading.Event) -> bool:
@@ -612,17 +576,23 @@ def _put(sink: queue.Queue, item: object, stop: threading.Event) -> bool:
     return False
 
 
+def _unloaded_batches(storage: Storage, paths: Sequence[str],
+                      batch_size: int) -> Iterator[pa.RecordBatch]:
+    """Os lotes dos arquivos do ``UNLOAD``, arquivo a arquivo, lidos pelo ``Storage`` com o
+    ``INT96`` em microssegundos."""
+    for path in paths:
+        footer = pq.ParquetFile(storage.open_input_file(path), coerce_int96_timestamp_unit="us")
+        yield from footer.iter_batches(batch_size)
+
+
 def _read_unloaded(storage: Storage, paths: Sequence[str], schema: pa.Schema, batch_size: int,
                    sink: queue.Queue, stop: threading.Event) -> None:
-    """A thread do stream: lê os lotes dos arquivos do ``UNLOAD`` pelo ``Storage``, com o
-    ``INT96`` em microssegundos, cada lote no esquema do statement, e os entrega à fila; a
-    exceção da leitura vai à fila, e o fim é ``_END``."""
+    """A thread do stream: entrega à fila cada lote dos arquivos do ``UNLOAD`` no esquema do
+    statement, e ``_END`` no fim; a exceção da leitura vai à fila."""
     try:
-        for path in paths:
-            footer = pq.ParquetFile(storage.open_input_file(path), coerce_int96_timestamp_unit="us")
-            for batch in footer.iter_batches(batch_size):
-                if not _put(sink, batch.cast(schema), stop):
-                    return
+        for batch in _unloaded_batches(storage, paths, batch_size):
+            if not _put(sink, batch.cast(schema), stop):
+                return
         _put(sink, _END, stop)
     except Exception as error:  # noqa: BLE001 - o erro da leitura vai ao cliente
         _put(sink, error, stop)
@@ -665,7 +635,7 @@ class RedshiftStream:
         ele aconteceu."""
         if self._finished:
             raise StopIteration
-        item = _take(self._queue, self._stop)
+        item = take(self._queue, self._stop)
         if item is None or item is _END:
             self._finished = True
             raise StopIteration
@@ -738,7 +708,7 @@ def _write_until_end(sink: _ParquetSink, source: queue.Queue, closed: threading.
                      outcome: dict[str, object]) -> None:
     """Grava cada lote tirado da fila até o fim dela; a exceção que o cliente pôs na fila, e o
     loader abandonado, sobem daqui."""
-    item = _take(source, closed)
+    item = take(source, closed)
     while item is not _END:
         if item is None:
             raise RuntimeError("loader encerrado sem close")
@@ -746,7 +716,7 @@ def _write_until_end(sink: _ParquetSink, source: queue.Queue, closed: threading.
             raise item
         sink.write(item)
         outcome["rows"] += item.num_rows
-        item = _take(source, closed)
+        item = take(source, closed)
 
 
 def _write_parquet(sink: _ParquetSink, source: queue.Queue, closed: threading.Event,
@@ -764,15 +734,6 @@ def _write_parquet(sink: _ParquetSink, source: queue.Queue, closed: threading.Ev
         sink.close()
     if outcome["error"] is not None:
         sink.storage.delete([sink.path])
-
-
-def _checked_batches(data: pa.RecordBatch | pa.Table) -> list[pa.RecordBatch]:
-    """Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; outro tipo é ``ContractError``."""
-    if isinstance(data, pa.Table):
-        return data.to_batches()
-    if isinstance(data, pa.RecordBatch):
-        return [data]
-    raise ContractError(f"loader.write {_ARROW_ONLY}; recebido {type(data).__name__}")
 
 
 def _json_columns(table: sa.Table) -> list[str]:
@@ -848,7 +809,7 @@ class RedshiftLoader:
     def write(self, data: pa.RecordBatch | pa.Table) -> None:
         """Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um lote recusado
         faz o loader não criar a tabela."""
-        for batch in _checked_batches(data):
+        for batch in checked_batches(data):
             try:
                 converted = self._converted(batch)
             except ContractError as error:
@@ -905,26 +866,6 @@ class RedshiftLoader:
 
     def __del__(self) -> None:
         self._closed.set()
-
-
-def _batches_of(data: object) -> Iterator[pa.RecordBatch]:
-    """Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de lotes; outro
-    tipo, um DataFrame inclusive, é ``ContractError`` antes de qualquer carga."""
-    if isinstance(data, pa.Table):
-        return iter(data.to_batches())
-    if isinstance(data, pa.RecordBatch):
-        return iter([data])
-    if isinstance(data, pa.RecordBatchReader):
-        return iter(data)
-    if isinstance(data, (str, bytes)) or not isinstance(data, Iterable):
-        raise ContractError(f"load {_ARROW_ONLY}; recebido {type(data).__name__}")
-    iterator = iter(data)
-    first = next(iterator, None)
-    if first is None:
-        return iter([])
-    if not isinstance(first, pa.RecordBatch):
-        raise ContractError(f"load {_ARROW_ONLY}; recebido {type(data).__name__}")
-    return itertools.chain([first], iterator)
 
 
 # ---------------------------------------------------------------- o motor
@@ -1013,6 +954,14 @@ class RedshiftEngine:
         """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
         chamada dentro do bloco não trava.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.session():
+                engine.execute("CREATE TEMP TABLE ids (id BIGINT)")
+                engine.query("SELECT count(*) FROM ids")   # a primitiva dentro do bloco não trava
+
         :return: o gerenciador de contexto cujo ``with`` dá a conexão do ``redshift_connector``
             da sessão, com o autocommit ligado.
         """
@@ -1027,6 +976,14 @@ class RedshiftEngine:
     def holds_session(self) -> bool:
         """Se a thread que chama está dentro de ``session()``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.session():
+                engine.holds_session()   # True
+            engine.holds_session()       # False
+
         :return: ``True`` dentro do bloco.
         """
         return self._owner == threading.get_ident()
@@ -1035,6 +992,13 @@ class RedshiftEngine:
         """Uma sessão a mais: outra conexão pelo caminho de ``connect``, com credencial própria, o
         ``USE`` e o ``search_path``, e o seu lock; vê as tabelas ``exec_<id>_*`` que a principal
         confirmou e não as temporárias dela.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.new_session() as session:
+                session.ingest(Contrato.__table__, uri, 88)
 
         :return: o motor da sessão a mais, gerenciador de contexto; o ``cleanup`` dele fecha só
             essa sessão, a conexão dela.
@@ -1067,6 +1031,13 @@ class RedshiftEngine:
         credencial nova, e o comando é repetido, fora de transação. A reconexão perde a tabela
         temporária que o pipeline tenha criado na sessão, e o log avisa da perda.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            name = engine.qualified(engine.prefix + "cad_lancamentos")
+            engine.execute(f"SELECT count(*) FROM {name}").fetchone()   # [120]
+
         :param text: o comando no SQL do Redshift, com cada parâmetro marcado como
             ``:nome``.
         :param params: os valores dos marcadores, por nome; ``None`` sem marcador.
@@ -1093,6 +1064,14 @@ class RedshiftEngine:
         """``BEGIN`` e ``COMMIT`` em volta do bloco, sob o lock; uma exceção sai por ``ROLLBACK``.
         Protegida, para o loader.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.transaction():
+                engine.execute(ddl(Projetado.__table__, "redshift", prefix=engine.prefix))
+                engine.register_created(engine.prefix + "cad_lancamentos_projetados")
+
         :return: o gerenciador de contexto da transação; o ``with`` dá ``None``.
         """
         with self.session():
@@ -1111,6 +1090,13 @@ class RedshiftEngine:
     def qualified(self, name: str) -> str:
         """O nome em duas partes que resolve depois do ``USE``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.qualified("exec_exec_42_cad_contas")
+            # '"sbx_aco_decon"."exec_exec_42_cad_contas"'
+
         :param name: o nome da tabela no esquema, sem aspas.
         :return: ``"<esquema>"."<nome>"``, com o esquema da configuração.
         """
@@ -1119,6 +1105,12 @@ class RedshiftEngine:
     def register_created(self, name: str) -> None:
         """Anota uma tabela do sandbox para o ``DROP`` do ``cleanup``; protegida.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.register_created(engine.prefix + "cad_lancamentos_projetados")
+
         :param name: o nome da tabela no esquema, sem aspas.
         """
         self._created.append(name)
@@ -1126,6 +1118,12 @@ class RedshiftEngine:
     def name_in_use(self, name: str) -> bool:
         """Se uma tabela com o nome existe no esquema, por ``select 1 ... limit 0`` sob o lock: o
         erro de relação inexistente é o nome livre.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.name_in_use(engine.prefix + "cad_lancamentos")   # True depois do ingest
 
         :param name: o nome da tabela no esquema, sem aspas, com o prefixo ``exec_<id>_`` numa
             tabela do sandbox.
@@ -1304,6 +1302,12 @@ class RedshiftEngine:
         """O esquema do resultado de um texto, pelo ``row_desc`` de ``select * from (<texto>) as t
         limit 0``; protegida, para o stream.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.result_schema("SELECT 1 AS um").names   # ["um"]
+
         :param text: a consulta no SQL do Redshift, sem marcador de parâmetro.
         :return: o esquema Arrow de ``schema_from_row_description``.
         :raises SandboxError: uma coluna do resultado num tipo fora do contrato.
@@ -1313,6 +1317,13 @@ class RedshiftEngine:
 
     def unloaded_paths(self, prefix: str) -> list[str]:
         """Os arquivos que o ``UNLOAD`` para ``prefix`` gravou, pelo manifesto; protegida.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.unloaded_paths("prod/staging/exec-42/stream/ab12")
+            # ["prod/staging/exec-42/stream/ab12/0000_part_00.parquet"]
 
         :param prefix: o destino do ``UNLOAD``, relativo à raiz.
         :return: os caminhos, relativos à raiz; sem manifesto, a lista vazia quando
@@ -1404,7 +1415,7 @@ class RedshiftEngine:
         :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou; ou, sem
             ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         """
-        batches = _batches_of(data)
+        batches = batches_of(data)
         with self.loader(table) as loader:
             for batch in batches:
                 loader.write(batch)
@@ -1459,23 +1470,8 @@ class RedshiftEngine:
         """A verificação de linhas: o resultado, as leituras por partição e os não finitos."""
         text = self._text(check.statement, table)
         rows = self.query(text).to_pylist()
-        partition_by = table_options(table).partition_by
-        doubles = double_columns(table)
-        totals = {}
-        nonfinite = {}
-        # Uma linha por partição: o valor dela é a chave, e as demais colunas são as leituras.
-        for row in rows:
-            value = row[partition_by] if partition_by else None
-            readings = {name: reading for name, reading in row.items() if name != partition_by}
-            totals[value] = readings
-            nonfinite[value] = tuple(name for name in doubles if readings[f"naofinito_{name}"])
-        failing = []
-        defects = 0
-        for label in check.counters:
-            counted = sum(readings[label] for readings in totals.values())
-            defects += counted
-            if counted:
-                failing.append(label)
+        totals, nonfinite = audit.readings_by_partition(rows, table)
+        defects, failing = audit.failing_counters(check.counters, totals)
         sample = self._rows_sample(table, check, partitions, failing)
         return CheckResult(check.name, text, defects, sample, defects == 0), totals, nonfinite
 
@@ -1639,8 +1635,9 @@ class RedshiftEngine:
         paths = self._unload(table, value, prefix, count)
         files = self._registered_files(table, table_path, prefix, paths)
         expected = expected_rows if expected_rows is not None else count
-        return delta.register_files(uri, table, files, value, metadata, self.storage, expected,
-                                    columns_without_min_max)
+        return delta.register_files(uri, table, files, value, metadata, self.storage,
+                                    expected_rows=expected,
+                                    columns_without_min_max=columns_without_min_max)
 
     def _swap_reader(self, connection: object, table: sa.Table, value: str | None,
                      paths: Sequence[str]) -> pa.RecordBatchReader | pa.Table:
@@ -1675,7 +1672,7 @@ class RedshiftEngine:
         try:
             reader = self._swap_reader(connection, table, value, paths)
             return delta.publish_partition(uri, table, value, reader, metadata, self.storage,
-                                           columns_without_min_max)
+                                           columns_without_min_max=columns_without_min_max)
         finally:
             connection.close()
 
@@ -1733,19 +1730,36 @@ class RedshiftEngine:
         """Apaga as tabelas ``exec_<id>_*`` que a execução criou, uma por comando, os objetos de
         ``staging/<execution_id>/`` e fecha a sessão; uma tabela que o ``DROP`` não alcança fica
         nomeada no log. Numa sessão a mais, fecha só a conexão dela. A segunda chamada não faz
-        nada."""
+        nada.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            staging = "prod/staging/exec-2026-09-05"
+            engine = RedshiftEngine(config, "exec-2026-09-05", storage, staging)
+            try:
+                engine.ingest(Operacao.__table__, uri, 3)
+            finally:
+                engine.cleanup()
+        """
         if self._closed:
             return
         self._closed = True
         if self._parent is None:
-            for name in list(self._created):
-                try:
-                    self.execute(f"DROP TABLE IF EXISTS {self.qualified(name)}")
-                except redshift_connector.Error as error:
-                    log.warning("sandbox %s: %s não apagada (%s)", self.execution_id, name, error)
+            self._drop_created()
             self.storage.delete(self.storage.list_files(self.staging_prefix))
         with self._lock:
             self._connection.close()
+
+    def _drop_created(self) -> None:
+        """Apaga as tabelas que a execução criou, uma por comando; a que o ``DROP`` não alcança
+        fica nomeada no log."""
+        for name in list(self._created):
+            try:
+                self.execute(f"DROP TABLE IF EXISTS {self.qualified(name)}")
+            except redshift_connector.Error as error:
+                log.warning("sandbox %s: %s não apagada (%s)", self.execution_id, name, error)
 
     def __enter__(self) -> RedshiftEngine:
         return self

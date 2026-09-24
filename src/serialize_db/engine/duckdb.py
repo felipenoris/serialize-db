@@ -45,7 +45,6 @@ from __future__ import annotations
 import collections
 import contextlib
 import dataclasses
-import itertools
 import logging
 import os
 import queue
@@ -54,6 +53,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from typing import Literal
 from pathlib import Path
 
 import duckdb
@@ -61,17 +61,16 @@ import duckdb_engine
 import pyarrow as pa
 import sqlalchemy as sa
 from sqlalchemy.sql import quoted_name
-from sqlalchemy.sql.util import find_tables
 
 from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
-from serialize_db.errors import ContractError, SandboxError, SqlError
+from serialize_db.engine import batches_of, checked_batches, take
+from serialize_db.errors import ContractError, SandboxError
 from serialize_db.resources import available_cpus, available_memory
 from serialize_db.schema import (
     cast,
     check_partition_value,
     ddl,
-    double_columns,
     literal,
     quoted,
     sequential_key,
@@ -102,11 +101,6 @@ _MEMORY_FRACTION = 0.5
 # cliente atrasado, o pico do processo ficou em 297 MB, contra 522 MB com 256 MiB (2026-09-23).
 _MEMORY_BUDGET = 64 * 2**20
 
-# A mensagem que recusa o que não é Arrow e aponta a conversão sem cópia.
-_ARROW_ONLY = ("recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iterável de lotes; um "
-               "DataFrame vira pa.Table.from_pandas(frame, preserve_index=False) ou "
-               "pa.RecordBatch.from_pandas(frame, preserve_index=False)")
-
 _END = object()
 
 
@@ -118,33 +112,14 @@ def _delta_scan(uri: str, version: int) -> str:
 # ---------------------------------------------------------------- a compilação
 
 
-def _statement_metadata(statement: sa.sql.ClauseElement) -> sa.MetaData | None:
-    """O ``MetaData`` das tabelas do contrato que o statement cita, o que ``sql.prefixed``
-    recebe."""
-    for table in find_tables(statement, include_crud=True):
-        if isinstance(table, sa.Table):
-            return table.metadata
-    return None
-
-
 def _compiled_statement(statement: sa.sql.ClauseElement,
                         params: Mapping[str, object] | None) -> tuple[str, list[object]]:
     """O texto do DuckDB e a lista posicional de um statement Core com os valores do cliente.
 
-    Os nomes de ``params`` fecham com os ``bindparam`` sem valor, ou é ``SqlError``: ``params``
-    ignora o nome a mais, e o valor que falta seria ``InvalidRequestError``. A cópia prefixada põe
-    todo nome entre aspas; ``render_postcompile`` expande o ``IN`` de lista e o ``bindparam``
-    expansível.
+    ``sql.bound_statement`` confere ``params`` e põe todo nome entre aspas na cópia prefixada;
+    ``render_postcompile`` expande o ``IN`` de lista e o ``bindparam`` expansível.
     """
-    values = dict(params or {})
-    required = sql.required_parameters(statement)
-    if required != set(values):
-        raise SqlError(f"parâmetros do statement {sorted(required)} e do dicionário "
-                       f"{sorted(values)} não fecham")
-    bound = statement.params(**values) if values else statement
-    metadata = _statement_metadata(bound)
-    if metadata is not None:
-        bound = sql.prefixed(bound, metadata, prefix="")
+    bound = sql.bound_statement(statement, params, prefix="")
     compiled = bound.compile(dialect=_QMARK, compile_kwargs={"render_postcompile": True})
     constructed = compiled.construct_params()
     arguments = []
@@ -306,7 +281,7 @@ class DuckDBStream:
             raise self._spool.error
         self.schema = self._spool.schema
 
-    def _wait_for_batch(self) -> str | None:
+    def _wait_for_batch(self) -> Literal["memory", "file"] | None:
         """Espera um lote não lido, em memória ou no arquivo; devolve de onde ele vem, ou ``None``
         no fim. A espera tem prazo e confere o ``stop``: quem puxa o stream pode ser a thread de
         leitura antecipada de um leitor nativo, e ela não fica presa aqui depois de um ``close``."""
@@ -392,24 +367,11 @@ class DuckDBStream:
 # ---------------------------------------------------------------- o loader
 
 
-def _take(source: queue.Queue, stop: threading.Event) -> object | None:
-    """O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o ``stop`` em
-    vez de ficar preso num ``get`` sem fim; ``None`` quando ``stop`` chega com a fila vazia. Nenhum
-    item da fila é ``None``."""
-    while True:
-        try:
-            return source.get(timeout=0.05)
-        except queue.Empty:
-            pass
-        if stop.is_set():
-            return None
-
-
 def _write_until_end(spill: _SpillFile, source: queue.Queue, closed: threading.Event,
                      outcome: dict[str, object]) -> None:
     """Grava cada lote tirado da fila até o fim dela; a exceção que o cliente pôs na fila, e o
     loader abandonado, sobem daqui."""
-    item = _take(source, closed)
+    item = take(source, closed)
     while item is not _END:
         if item is None:
             raise RuntimeError("loader encerrado sem close")
@@ -417,7 +379,7 @@ def _write_until_end(spill: _SpillFile, source: queue.Queue, closed: threading.E
             raise item
         spill.write(item, item.schema)
         outcome["rows"] += item.num_rows
-        item = _take(source, closed)
+        item = take(source, closed)
 
 
 def _write_spool(spill: _SpillFile, source: queue.Queue, closed: threading.Event,
@@ -435,15 +397,6 @@ def _write_spool(spill: _SpillFile, source: queue.Queue, closed: threading.Event
         spill.close()
     if outcome["error"] is not None:
         Path(spill.path).unlink(missing_ok=True)
-
-
-def _checked_batches(data: pa.RecordBatch | pa.Table) -> list[pa.RecordBatch]:
-    """Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; outro tipo é ``ContractError``."""
-    if isinstance(data, pa.Table):
-        return data.to_batches()
-    if isinstance(data, pa.RecordBatch):
-        return [data]
-    raise ContractError(f"loader.write {_ARROW_ONLY}; recebido {type(data).__name__}")
 
 
 class DuckDBLoader:
@@ -512,7 +465,7 @@ class DuckDBLoader:
     def write(self, data: pa.RecordBatch | pa.Table) -> None:
         """Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um lote recusado
         faz o loader não criar a tabela."""
-        for batch in _checked_batches(data):
+        for batch in checked_batches(data):
             try:
                 converted = self._converted(batch)
             except ContractError as error:
@@ -569,26 +522,6 @@ class DuckDBLoader:
 
     def __del__(self) -> None:
         self._closed.set()
-
-
-def _batches_of(data: object) -> Iterator[pa.RecordBatch]:
-    """Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de lotes; outro
-    tipo, um DataFrame inclusive, é ``ContractError`` antes de qualquer carga."""
-    if isinstance(data, pa.Table):
-        return iter(data.to_batches())
-    if isinstance(data, pa.RecordBatch):
-        return iter([data])
-    if isinstance(data, pa.RecordBatchReader):
-        return iter(data)
-    if isinstance(data, (str, bytes)) or not isinstance(data, Iterable):
-        raise ContractError(f"load {_ARROW_ONLY}; recebido {type(data).__name__}")
-    iterator = iter(data)
-    first = next(iterator, None)
-    if first is None:
-        return iter([])
-    if not isinstance(first, pa.RecordBatch):
-        raise ContractError(f"load {_ARROW_ONLY}; recebido {type(data).__name__}")
-    return itertools.chain([first], iterator)
 
 
 # ---------------------------------------------------------------- o motor
@@ -726,6 +659,14 @@ class DuckDBEngine:
         chamada dentro do bloco não trava, e um ``stream`` aberto nele roda a consulta na thread
         do bloco.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.session() as connection:
+                connection.execute("CREATE TEMP TABLE ids AS SELECT range AS id FROM range(10)")
+                engine.query("SELECT count(*) FROM ids")   # a primitiva dentro do bloco não trava
+
         :return: o gerenciador de contexto cujo ``with`` dá a ``duckdb.DuckDBPyConnection`` da
             sessão.
         """
@@ -740,6 +681,14 @@ class DuckDBEngine:
     def holds_session(self) -> bool:
         """Se a thread que chama está dentro de ``session()``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.session():
+                engine.holds_session()   # True
+            engine.holds_session()       # False
+
         :return: ``True`` dentro do bloco.
         """
         return self._owner == threading.get_ident()
@@ -749,6 +698,13 @@ class DuckDBEngine:
         tabelas temporárias dela. O cursor nasce sem o lock da principal, porque ``cursor()`` não
         espera o comando em curso nela.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.new_session() as session:
+                session.ingest(Contrato.__table__, uri, 88)
+
         :return: o motor da sessão a mais, gerenciador de contexto, com o seu lock; o
             ``cleanup`` dele fecha só essa sessão, o cursor.
         """
@@ -756,11 +712,24 @@ class DuckDBEngine:
 
     def interrupt(self) -> None:
         """Cancela o comando em curso na conexão; não toma o lock, que está com quem roda o
-        comando."""
+        comando.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.interrupt()   # a consulta em curso na sessão para com erro
+        """
         self._connection.interrupt()
 
     def spool_path(self, kind: str) -> str:
         """Um caminho novo na pasta de transbordo, para o arquivo de um stream ou de um loader.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.spool_path("stream")   # ".../exec-2026-09-05_transbordo/stream_<uuid>.arrow"
 
         :param kind: o início do nome do arquivo, ``stream`` ou ``loader``.
         :return: o caminho ``<kind>_<uuid>.arrow`` na pasta de transbordo.
@@ -770,6 +739,12 @@ class DuckDBEngine:
     def name_in_use(self, name: str) -> bool:
         """Se uma tabela ou view confirmada tem o nome, lido num cursor à parte, sem o lock da
         sessão: a abertura de um ``loader`` não espera a consulta de um ``stream`` aberto antes.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.name_in_use("cad_lancamentos")   # True depois do ingest
 
         :param name: o nome da tabela ou da view, sem aspas.
         :return: ``True`` quando o nome está ocupado.
@@ -971,7 +946,7 @@ class DuckDBEngine:
             tipo em ``data``; ou um lote que o ``cast`` recusa, e a tabela não é criada.
         :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou.
         """
-        batches = _batches_of(data)
+        batches = batches_of(data)
         with self.loader(table) as loader:
             for batch in batches:
                 loader.write(batch)
@@ -1014,23 +989,8 @@ class DuckDBEngine:
         """A verificação de linhas: o resultado, as leituras por partição e os não finitos."""
         text = self._text(check.statement, table)
         rows = self.query(text).to_pylist()
-        partition_by = table_options(table).partition_by
-        doubles = double_columns(table)
-        totals = {}
-        nonfinite = {}
-        # Uma linha por partição: o valor dela é a chave, e as demais colunas são as leituras.
-        for row in rows:
-            value = row[partition_by] if partition_by else None
-            readings = {name: reading for name, reading in row.items() if name != partition_by}
-            totals[value] = readings
-            nonfinite[value] = tuple(name for name in doubles if readings[f"naofinito_{name}"])
-        failing = []
-        defects = 0
-        for label in check.counters:
-            counted = sum(readings[label] for readings in totals.values())
-            defects += counted
-            if counted:
-                failing.append(label)
+        totals, nonfinite = audit.readings_by_partition(rows, table)
+        defects, failing = audit.failing_counters(check.counters, totals)
         sample = self._rows_sample(table, check, partitions, failing)
         return CheckResult(check.name, text, defects, sample, defects == 0), totals, nonfinite
 
@@ -1198,8 +1158,9 @@ class DuckDBEngine:
             row = dict(zip(names, cursor.fetchone()))
         file = delta.file_from_return_stats(row, table, self._storage.uri_of(table_path))
         expected = expected_rows if expected_rows is not None else count
-        return delta.register_files(uri, table, [file], value, metadata, self._storage, expected,
-                                    columns_without_min_max)
+        return delta.register_files(uri, table, [file], value, metadata, self._storage,
+                                    expected_rows=expected,
+                                    columns_without_min_max=columns_without_min_max)
 
     # ------------------------------------------------------------ o encerramento
 
@@ -1208,6 +1169,16 @@ class DuckDBEngine:
         temporário (``DuckDBConfig.database`` ``None``) e a pasta que o motor criou.
 
         Numa sessão a mais, fecha só o cursor. A segunda chamada não faz nada.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine = DuckDBEngine(DuckDBConfig(), "exec-2026-09-05", storage)
+            try:
+                engine.ingest(Operacao.__table__, uri, 3)
+            finally:
+                engine.cleanup()
         """
         if self._closed:
             return

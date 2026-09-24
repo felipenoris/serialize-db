@@ -64,9 +64,11 @@ def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(machine: Pa
         "cgroup/app/memory.stat": f"anon {GIB // 2}\nfile {GIB}\n",
         "cgroup/app/cpu.max": "150000 100000\n",
     })
-    assert resources.available_memory() == 7 * GIB // 2
+    # O limite de 4 GiB menos o uso de 1,5 GiB, com 1 GiB de cache de arquivos de volta.
+    assert resources.available_memory() == 4 * GIB - 3 * GIB // 2 + GIB
     assert resources.available_cpus() == 2
 
+    # Um MemAvailable menor que a folga ganha dela.
     fabricate(machine, {"proc/meminfo": meminfo(GIB)})
     assert resources.available_memory() == GIB
 
@@ -84,7 +86,8 @@ def test_the_tightest_ancestor_wins(machine: Path) -> None:
         "cgroup/pai/filho/memory.current": f"{GIB // 4}\n",
         "cgroup/pai/filho/cpu.max": "50000 100000\n",
     })
-    assert resources.available_memory() == 3 * GIB // 2
+    # O limite de 2 GiB do pai menos o uso de 0,5 GiB.
+    assert resources.available_memory() == 2 * GIB - GIB // 2
     assert resources.available_cpus() == 1
 
 
@@ -106,15 +109,17 @@ def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(machine: 
         "cgroup/cpu/cpu.cfs_quota_us": "250000\n",
         "cgroup/cpu/cpu.cfs_period_us": "100000\n",
     })
-    assert resources.available_memory() == 5 * GIB // 2
+    # O limite de 3 GiB da montagem menos o uso de 1 GiB, com 0,5 GiB de total_cache de volta.
+    assert resources.available_memory() == 3 * GIB - GIB + GIB // 2
     assert resources.available_cpus() == 3
 
 
-def test_without_proc_the_physical_memory_and_the_python_cpus(machine: Path) -> None:
+@pytest.mark.usefixtures("machine")
+def test_without_proc_the_physical_memory_and_the_python_cpus() -> None:
     """Sem ``/proc/meminfo`` nem ``/proc/self/cgroup``, como fora do Linux, a memória é a física e
     as CPUs são as da afinidade."""
-    physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    assert resources.available_memory() == physical
+    physical_memory = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    assert resources.available_memory() == physical_memory
     assert resources.available_cpus() == 8
 
 

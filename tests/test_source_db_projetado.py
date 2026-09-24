@@ -16,7 +16,7 @@ fora do git, e a transcrição é o que o teste guarda dela. A base é o materia
 
 from __future__ import annotations
 
-import datetime as dt
+import datetime
 import json
 import re
 from pathlib import Path
@@ -28,6 +28,7 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 import pytest
 
+import parquet_source
 import source_db_projetado as source
 from conftest import LocalLocation
 
@@ -187,6 +188,8 @@ OBSERVED_TABLES = [
 # As tabelas do modelo sem partição, uma linha cada no registro das cargas: as cinco dom_*,
 # cad_contas, cad_aliquotas e rel_contas_hierarquias.
 UNPARTITIONED_MODEL_TABLE_COUNT = 8
+# As partições das tabelas particionadas: uma linha de meta_update_status por partição.
+PARTITION_COUNT = len(OBSERVED_PARTITION_COLUMNS) * len(PARTITION_VALUES)
 
 # Os tipos do controle de esquema da biblioteca anterior e o tipo Arrow que os arquivos têm.
 SQL_TYPES = {
@@ -209,36 +212,29 @@ def parse_observed(text: str) -> dict[str, list[tuple[str, ...]]]:
     for block in text.strip().split("\n\n"):
         lines = block.splitlines()
         table = lines[0].strip()
-        schemas[table] = [tuple(re.split(r"\s{2,}", line.strip())) for line in lines[2:]]
+        rows = []
+        for line in lines[2:]:
+            cells = re.split(r"\s{2,}", line.strip())
+            rows.append(tuple(cells))
+        schemas[table] = rows
     return schemas
 
 
 def read_as_the_probe(path: Path) -> list[tuple[str, ...]]:
-    """As sete células do relatório para cada coluna de um arquivo, lidas do rodapé.
-
-    Reproduz a leitura que ``parquet_source.footer_columns`` faz do esquema Arrow e das folhas do
-    esquema Parquet, sem importar o probe.
-    """
-    parquet = pq.ParquetFile(path)
-    leaves = {}
-    for index in range(len(parquet.schema)):
-        leaf = parquet.schema.column(index)
-        leaves[leaf.path] = leaf
+    """As sete células do relatório para cada coluna de um arquivo, lidas do rodapé por
+    ``parquet_source.footer_columns``, a leitura do probe."""
     rows = []
-    for field in parquet.schema_arrow:
-        leaf = leaves[field.name]
-        field_metadata = field.metadata or {}
-        field_id = field_metadata.get(b"PARQUET:field_id", b"").decode() or "-"
-        nullability = "nulo" if field.nullable else "NÃO NULO"
+    for column in parquet_source.footer_columns(pq.ParquetFile(path)):
+        nullability = "nulo" if column.nullable else "NÃO NULO"
         rows.append(
             (
-                field.name,
-                str(field.type),
+                column.name,
+                column.arrow_type,
                 nullability,
-                leaf.physical_type,
-                str(leaf.logical_type),
-                str(leaf.converted_type),
-                field_id,
+                column.physical,
+                column.logical,
+                column.converted,
+                column.field_id,
             )
         )
     return rows
@@ -304,8 +300,7 @@ def test_root_has_the_table_folders_and_the_loose_file(base: source.SourceBase) 
     # demais.
     assert set(source.OUTSIDE_MODEL) < set(OBSERVED_TABLES)
     assert base.rows["alembic_version"] == 1
-    partition_count = len(OBSERVED_PARTITION_COLUMNS) * len(PARTITION_VALUES)
-    status_rows = UNPARTITIONED_MODEL_TABLE_COUNT + partition_count
+    status_rows = UNPARTITIONED_MODEL_TABLE_COUNT + PARTITION_COUNT
     assert base.rows["meta_update_status"] == status_rows
 
 
@@ -315,6 +310,7 @@ def test_every_file_has_the_schema_the_probe_reported(base: source.SourceBase) -
     observed = parse_observed(OBSERVED_SCHEMAS)
     assert sorted(observed) == OBSERVED_TABLES
 
+    # Cada arquivo lido pelo probe.
     for table, columns in observed.items():
         for path in base.files[table]:
             assert read_as_the_probe(path) == columns, path
@@ -341,7 +337,7 @@ def test_transcription_has_the_type_counts_of_the_report() -> None:
 def assert_partition_files(folder: Path, partition: source.Partition, value: str) -> None:
     """Os arquivos da partição ``value`` não trazem a coluna do caminho e têm ``value`` na coluna de
     origem em toda linha."""
-    expected = [dt.date.fromisoformat(value)]
+    expected = [datetime.date.fromisoformat(value)]
     for path in files_under(folder / f"{partition.column}={value}"):
         data = pq.read_table(path)
         assert partition.column not in data.column_names, path
@@ -380,13 +376,15 @@ def test_chunks_are_numbered_from_zero_without_padding(base: source.SourceBase) 
             files = files_under(partition_folder)
             numbers = sorted(chunk_number(path) for path in files)
             assert numbers == list(range(len(files))), partition_folder
-            rows = {chunk_number(path): pq.read_metadata(path).num_rows for path in files}
+            rows_by_chunk = {chunk_number(path): pq.read_metadata(path).num_rows for path in files}
             # Todo chunk antes do último tem CHUNK_ROWS linhas; o último, de 1 a CHUNK_ROWS.
-            full = numbers[:-1]
-            last = numbers[-1]
-            assert all(rows[number] == source.CHUNK_ROWS for number in full), partition_folder
-            assert 0 < rows[last] <= source.CHUNK_ROWS, partition_folder
+            full_chunks = numbers[:-1]
+            last_chunk = numbers[-1]
+            for number in full_chunks:
+                assert rows_by_chunk[number] == source.CHUNK_ROWS, (partition_folder, number)
+            assert 0 < rows_by_chunk[last_chunk] <= source.CHUNK_ROWS, partition_folder
 
+    # A ordem alfabética põe chunk_10 antes de chunk_2.
     january = base.root / "cad_lancamentos" / "data_base_str=2026-01-31"
     names = sorted(path.name for path in january.iterdir())
     assert "chunk_11.parquet" in names
@@ -419,9 +417,10 @@ def assert_file_layout(table: str, path: Path) -> None:
     assert metadata.format_version == "1.0", path
     assert metadata.created_by.startswith("parquet-cpp-arrow"), path
 
+    # O valor da partição vem da pasta <coluna>=<valor>.
     value = None
     if table in OBSERVED_PARTITION_COLUMNS:
-        value = path.parent.name.partition("=")[2]
+        value = path.parent.name.removeprefix(f"{OBSERVED_PARTITION_COLUMNS[table]}=")
     expected_keys = {b"pandas"} if source.written_by_pandas(table, value) else set()
     assert footer_keys(path) == expected_keys, path
     assert_column_chunks(path, metadata.row_group(0))
@@ -439,10 +438,8 @@ def test_physical_layout_matches_the_reading(base: source.SourceBase) -> None:
     for table in source.OUTSIDE_MODEL:
         assert not footer_keys(base.files[table][0]), table
     for table in OBSERVED_PARTITION_COLUMNS:
-        has_pandas_key = set()
-        for path in base.files[table]:
-            has_pandas_key.add(b"pandas" in footer_keys(path))
-        assert has_pandas_key == {True, False}, table
+        files_with_key = [path for path in base.files[table] if b"pandas" in footer_keys(path)]
+        assert 0 < len(files_with_key) < len(base.files[table]), table
 
 
 def test_cad_lancamentos_values_reproduce_what_the_initial_load_handles(
@@ -456,7 +453,8 @@ def test_cad_lancamentos_values_reproduce_what_the_initial_load_handles(
     # produção); o par extremo está presente.
     amounts = entries.column("valor")
     assert amounts.type == pa.float64()
-    more_than_two_decimals = pc.sum(pc.not_equal(pc.round(amounts, 2), amounts)).as_py()
+    rounded_to_cents = pc.round(amounts, 2)
+    more_than_two_decimals = pc.sum(pc.not_equal(rounded_to_cents, amounts)).as_py()
     assert more_than_two_decimals > entries.num_rows // 2
     assert pc.max(amounts).as_py() == source.EXTREME_AMOUNT
     assert pc.min(amounts).as_py() == -source.EXTREME_AMOUNT
@@ -477,7 +475,8 @@ def test_cad_lancamentos_values_reproduce_what_the_initial_load_handles(
 
     # ``data`` é o mês projetado, sempre depois de ``data_base`` e até 2026-12-31; ``meta`` é sempre
     # nula.
-    assert pc.all(pc.greater(entries.column("data"), entries.column("data_base"))).as_py()
+    projected_after_base = pc.greater(entries.column("data"), entries.column("data_base"))
+    assert pc.all(projected_after_base).as_py()
     assert pc.max(entries.column("data")).as_py() == source.PROJECTION_HORIZON
     assert entries.column("meta").null_count == entries.num_rows
 
@@ -516,10 +515,11 @@ def test_unpartitioned_values_reproduce_what_the_initial_load_handles(
     status = pq.read_table(base.files["meta_update_status"][0])
     partition_texts = status.column("partition").to_pylist()
     partitions = [json.loads(text) for text in partition_texts if text is not None]
-    assert len(partitions) == len(OBSERVED_PARTITION_COLUMNS) * len(PARTITION_VALUES)
+    assert len(partitions) == PARTITION_COUNT
     assert status.column("partition").null_count == UNPARTITIONED_MODEL_TABLE_COUNT
     assert {"data_base": {"__type__": "date", "value": "2026-01-31"}} in partitions
 
+    # A revisão do Alembic.
     alembic = pq.read_table(base.files["alembic_version"][0])
     assert alembic.column("version_num").to_pylist() == [source.ALEMBIC_REVISION]
 
@@ -542,13 +542,13 @@ def test_the_base_satisfies_the_reference_model(base: source.SourceBase) -> None
     for child, columns, parent, referenced in source.FOREIGN_KEYS:
         column_pairs = zip(columns, referenced, strict=True)
         condition = " AND ".join(
-            f'c."{child_column}" = p."{parent_column}"'
+            f'filha."{child_column}" = referenciada."{parent_column}"'
             for child_column, parent_column in column_pairs
         )
-        not_null = " AND ".join(f'c."{child_column}" IS NOT NULL' for child_column in columns)
+        not_null = " AND ".join(f'filha."{child_column}" IS NOT NULL' for child_column in columns)
         orphans = connection.execute(
-            f"SELECT count(*) FROM {child} c WHERE {not_null} "
-            f"AND NOT EXISTS (SELECT 1 FROM {parent} p WHERE {condition})"
+            f"SELECT count(*) FROM {child} filha WHERE {not_null} "
+            f"AND NOT EXISTS (SELECT 1 FROM {parent} referenciada WHERE {condition})"
         ).fetchone()[0]
         assert orphans == 0, (child, columns, parent)
 
@@ -578,8 +578,9 @@ def test_rel_contrato_operacao_apportions_each_contract_among_its_operations(
     # Toda operação está na relação (o modelo só declara a chave estrangeira no sentido contrário,
     # dos contratos).
     without_contract = connection.execute(
-        "SELECT count(*) FROM cad_operacoes o WHERE NOT EXISTS "
-        "(SELECT 1 FROM rel_contrato_operacao r WHERE r.data = o.data AND r.operacao = o.operacao)"
+        "SELECT count(*) FROM cad_operacoes operacoes WHERE NOT EXISTS "
+        "(SELECT 1 FROM rel_contrato_operacao relacao "
+        "WHERE relacao.data = operacoes.data AND relacao.operacao = operacoes.operacao)"
     ).fetchone()[0]
     assert without_contract == 0
 
@@ -693,7 +694,9 @@ def test_both_readers_see_the_partition_column_from_the_path(base: source.Source
         ).fetchall()
         assert dict(counted) == base.partition_rows[table], table
 
+        # O PyArrow lê o valor do caminho como texto.
         dataset = ds.dataset(base.root / table, format="parquet", partitioning="hive")
         assert dataset.schema.field(column).type == pa.string(), table
         assert dataset.count_rows() == base.rows[table], table
-        assert set(dataset.schema.names) == set(source.SCHEMAS[table].names) | {column}, table
+        expected_names = set(source.SCHEMAS[table].names) | {column}
+        assert set(dataset.schema.names) == expected_names, table

@@ -50,7 +50,9 @@ from serialize_db.schema import (
     PARTITION_VALUE,
     TEXT_LIMIT,
     Dialect,
+    TableOptions,
     check_partition_value,
+    double_columns,
     foreign_keys_by_columns,
     sequential_key,
     table_options,
@@ -237,7 +239,15 @@ class Check:
 
 @dataclasses.dataclass(frozen=True)
 class CheckResult:
-    """O resultado de uma verificação no relatório."""
+    """O resultado de uma verificação no relatório.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        result = engine.audit(Operacao.__table__, ["2026-08-31"]).results[0]
+        result.name, result.passed, result.defects   # ("linhas", True, 0)
+    """
 
     name: str
     """O nome da verificação, o de ``Check.name``."""
@@ -291,6 +301,12 @@ class AuditReport:
     def sql(self) -> str:
         """O texto de todas as verificações.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            print(report.sql())   # cada verificação com o nome num comentário e o texto dela
+
         :return: uma verificação por bloco, com o nome em comentário, e uma linha em branco entre
             os blocos.
         """
@@ -301,6 +317,12 @@ class AuditReport:
 
     def rows(self, value: str | None) -> int:
         """As linhas da partição na auditoria.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            report.rows("2026-08-31")   # 1000
 
         :param value: o valor de partição; ``None`` numa tabela sem partição.
         :return: a contagem da verificação de linhas, 0 quando a partição não tem linha.
@@ -451,12 +473,27 @@ def _orphans(table: sa.Table, constraint: sa.ForeignKeyConstraint, referenced: s
     """As linhas da execução cuja chave estrangeira não acha a linha referenciada."""
     local = [table.c[column.name] for column in constraint.columns]
     remote = [referenced.c[element.column.name] for element in constraint.elements]
-    matches = sa.and_(*[there == here for here, there in zip(local, remote)])
+    pairs = zip(local, remote, strict=True)
+    matches = sa.and_(*[remote_column == local_column for local_column, remote_column in pairs])
     present = sa.and_(*[column.isnot(None) for column in local])
     missing = ~sa.exists(sa.select(sa.literal(1)).select_from(referenced).where(matches))
     statement = sa.select(*local).where(_scope(table, partitions), present, missing).distinct()
     label = _key_label([column.name for column in constraint.columns])
     return Check(f"orfao_{label}", statement, "alguma linha")
+
+
+def _needs_published_check(options: TableOptions, key: Sequence[str],
+                           partitions: Sequence[str] | None, key_scope: KeyScope | None) -> bool:
+    """Se a chave pede a verificação contra as demais partições da versão publicada: só numa
+    tabela particionada, com as partições da execução, e numa chave sem a coluna de partição; a
+    chave com a coluna de ``partition_source`` só com ``key_scope="table"``."""
+    if options.partition_by is None or partitions is None:
+        return False
+    if options.partition_by in key:
+        return False
+    if options.partition_source in key and key_scope != "table":
+        return False
+    return True
 
 
 def _key_checks(table: sa.Table, partitions: Sequence[str] | None, key_scope: KeyScope | None,
@@ -468,11 +505,9 @@ def _key_checks(table: sa.Table, partitions: Sequence[str] | None, key_scope: Ke
     not_run = []
     for key in options.keys:
         found.append(_key_within(table, key, partitions))
-        name = f"chave_{_key_label(key)}_publicada"
-        in_partition = options.partition_by in key
-        in_source = options.partition_source in key and key_scope != "table"
-        if options.partition_by is None or partitions is None or in_partition or in_source:
+        if not _needs_published_check(options, key, partitions, key_scope):
             continue
+        name = f"chave_{_key_label(key)}_publicada"
         if key_scope == "partition":
             not_run.append(f"{name} (key_scope=partition)")
         elif published is None:
@@ -535,8 +570,9 @@ def checks(table: sa.Table, partitions: Sequence[str] | None = None, foreign_key
         não rodam ficam fora da lista, e o relatório do motor as registra.
     :raises ContractError: um valor de ``partitions`` fora da regra da partição.
     """
-    return checks_and_not_run(table, partitions, foreign_keys, key_scope, published, referenced,
-                              published_max_key)[0]
+    found, _ = checks_and_not_run(table, partitions, foreign_keys, key_scope, published,
+                                  referenced, published_max_key)
+    return found
 
 
 def checks_and_not_run(table: sa.Table, partitions: Sequence[str] | None, foreign_keys: bool,
@@ -552,6 +588,44 @@ def checks_and_not_run(table: sa.Table, partitions: Sequence[str] | None, foreig
     keys, keys_not_run = _key_checks(table, partitions, key_scope, published, published_max_key)
     orphans, orphans_not_run = _foreign_key_checks(table, partitions, foreign_keys, referenced)
     return found + keys + orphans, keys_not_run + orphans_not_run
+
+
+def readings_by_partition(
+    rows: Sequence[Mapping[str, object]], table: sa.Table,
+) -> tuple[dict[str | None, dict[str, object]], dict[str | None, tuple[str, ...]]]:
+    """As leituras da verificação de linhas por valor de partição e as colunas ``Double`` com valor
+    não finito em cada partição; protegida, para o relatório dos motores.
+
+    Cada linha do resultado é uma partição: o valor da coluna de partição é a chave, ``None`` numa
+    tabela sem partição, e as demais colunas são as leituras (a contagem, os contadores, as somas e
+    os não finitos).
+    """
+    partition_by = table_options(table).partition_by
+    doubles = double_columns(table)
+    totals = {}
+    nonfinite = {}
+    for row in rows:
+        value = row[partition_by] if partition_by else None
+        readings = {name: reading for name, reading in row.items() if name != partition_by}
+        totals[value] = readings
+        nonfinite[value] = tuple(name for name in doubles if readings[f"naofinito_{name}"])
+    return totals, nonfinite
+
+
+def failing_counters(
+    counters: Mapping[str, sa.ColumnElement],
+    totals: Mapping[str | None, Mapping[str, object]],
+) -> tuple[int, list[str]]:
+    """A soma dos contadores de defeito em todas as partições e os rótulos dos contadores acima de
+    zero; protegida, para o relatório dos motores."""
+    defects = 0
+    failing = []
+    for label in counters:
+        counted = sum(readings[label] for readings in totals.values())
+        defects += counted
+        if counted:
+            failing.append(label)
+    return defects, failing
 
 
 def sample_statement(table: sa.Table, partitions: Sequence[str] | None,

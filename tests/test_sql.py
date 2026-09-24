@@ -74,9 +74,9 @@ DRAFT_ENTRY_ROWS = [
 DRAFT_ACCOUNT_ROWS = [{"id_conta": 7, "numero": "1.1"}, {"id_conta": 9, "numero": "1:2"}]
 
 # Os statements mudados para os testes do diff e da linha de comando: `saldos_por_conta` com uma
-# coluna a mais; `changed` é importável como `test_sql:changed` pela linha de comando.
-changed = dict(STATEMENTS)
-changed["saldos_por_conta"] = STATEMENTS["saldos_por_conta"].add_columns(
+# coluna a mais; a linha de comando os importa como `test_sql:CHANGED_STATEMENTS`.
+CHANGED_STATEMENTS = dict(STATEMENTS)
+CHANGED_STATEMENTS["saldos_por_conta"] = STATEMENTS["saldos_por_conta"].add_columns(
     sa.func.count().label("lancamentos"))
 
 
@@ -176,8 +176,12 @@ def test_render_writes_a_bindparam_without_value_as_placeholder() -> None:
         DRAFT_ENTRIES.c.area == sa.bindparam("area"))
     assert sql.render(statement, "duckdb", DRAFT_METADATA, prefix="").endswith('"area" = :area')
     assert "area" in statement.compile().binds
+
+    # Num text() também.
     fragment = sa.select(DRAFT_ENTRIES.c.id_conta).where(sa.text('"area" = :area'))
     assert sql.render(fragment, "redshift", DRAFT_METADATA, prefix="").endswith('"area" = :area')
+
+    # Com valor, constante; com um nome inválido, SqlError.
     with_value = sa.select(DRAFT_ENTRIES.c.id_conta).where(
         DRAFT_ENTRIES.c.area == sa.bindparam("area", value="RH"))
     assert sql.render(with_value, "duckdb", DRAFT_METADATA).endswith("\"area\" = 'RH'")
@@ -208,8 +212,8 @@ def test_bind_leaves_quoted_literals_and_casts_alone() -> None:
     """`'TI:%'`, `'12:30'` e `valor::DECIMAL(18, 2)` intactos; só o `:nome` do dicionário muda."""
     text = "SELECT valor::DECIMAL(18, 2), '12:30' FROM t WHERE k = :k AND area LIKE 'TI:%'"
     params = {"k": 1}
-    for style, marker in (("duckdb", "$"), ("redshift", ":")):
-        bound, values = sql.bind(text, params, style)
+    for dialect, marker in (("duckdb", "$"), ("redshift", ":")):
+        bound, values = sql.bind(text, params, dialect)
         assert bound == text.replace(" :k", f" {marker}k")
         assert values == params
         assert values is not params
@@ -256,7 +260,7 @@ def test_prefixed_replaces_every_contract_table() -> None:
     insert = sa.insert(DRAFT_ACCOUNTS).from_select(["id_conta", "numero"], entry_areas)
     for statement in (TOTAL_BY_ACCOUNT, insert):
         before = sql.referenced_tables(statement)
-        copy = sql.prefixed(statement, DRAFT_METADATA, "exec_42_")
+        copy = sql.prefixed(statement, DRAFT_METADATA, prefix="exec_42_")
         assert sql.referenced_tables(copy) == {f"exec_42_{name}" for name in before}
         assert sql.referenced_tables(statement) == before
         assert "exec_42_" not in str(statement)
@@ -268,7 +272,7 @@ def test_prefixed_replaces_every_contract_table() -> None:
         '"exec_42_cad_lancamentos"."id_conta", "exec_42_cad_lancamentos"."area" '
         'FROM "exec_42_cad_lancamentos"')
     # O alvo do INSERT do pipeline fictício e a subconsulta do NOT EXISTS também são trocados.
-    copy = sql.prefixed(STATEMENTS["veiculos_novos"], ClientBase.metadata, "exec_42_")
+    copy = sql.prefixed(STATEMENTS["veiculos_novos"], ClientBase.metadata, prefix="exec_42_")
     assert sql.referenced_tables(copy) == {"exec_42_cad_lancamentos", "exec_42_dom_veiculos"}
 
 
@@ -302,7 +306,7 @@ def test_sql_files_match_versioned() -> None:
 
 def test_check_sql_files_reports_a_changed_statement() -> None:
     """Uma coluna acrescentada ao statement aparece no diff dos dois motores."""
-    diff = sql.check_sql_files(changed, ClientBase.metadata, str(SQL_DIRECTORY))
+    diff = sql.check_sql_files(CHANGED_STATEMENTS, ClientBase.metadata, str(SQL_DIRECTORY))
     added = [line for line in diff if line.startswith("+") and "count(*) AS lancamentos" in line]
     assert len(added) == 2
     assert any(line.startswith("+++ ") and line.endswith("(gerado)") for line in diff)
@@ -319,6 +323,7 @@ def test_read_sql_fills_the_sentinel() -> None:
     bound, _ = sql.bind(sandbox, PARTITION_PARAMS, "redshift")
     assert '"data_base_str" = :data_base_str' in bound
 
+    # O arquivo versionado ainda traz o sentinela.
     versioned = (SQL_DIRECTORY / "saldos_por_conta.duckdb.sql").read_text(encoding="utf-8")
     with pytest.raises(SqlError, match="ainda traz o sentinela"):
         sql.bind(versioned, PARTITION_PARAMS, "duckdb")
@@ -345,17 +350,19 @@ def test_cli_sql_check_reads_the_versioned_files(capsys: pytest.CaptureFixture) 
                  "--statements", "client_model.statements:STATEMENTS", directory]) == 0
     assert "atualizados" in capsys.readouterr().out
 
+    # O statement mudado: saída 1 e o diff impresso.
     assert main(["sql", "check", "--metadata", "client_model:Base.metadata",
-                 "--statements", "test_sql:changed", directory]) == 1
+                 "--statements", "test_sql:CHANGED_STATEMENTS", directory]) == 1
     assert "count(*) AS lancamentos" in capsys.readouterr().out
 
-    with pytest.raises(SystemExit) as exit_code:
+    # Sem --statements, ou com um que não é dicionário: saída 2.
+    with pytest.raises(SystemExit) as exit_info:
         main(["sql", "check", "--metadata", "client_model:Base.metadata", directory])
-    assert exit_code.value.code == 2
-    with pytest.raises(SystemExit) as exit_code:
+    assert exit_info.value.code == 2
+    with pytest.raises(SystemExit) as exit_info:
         main(["sql", "check", "--metadata", "client_model:Base.metadata",
               "--statements", "client_model:Base", directory])
-    assert exit_code.value.code == 2
+    assert exit_info.value.code == 2
 
 
 # ---------------------------------------------------------------- o texto do Redshift analisável

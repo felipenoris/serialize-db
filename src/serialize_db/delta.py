@@ -47,7 +47,7 @@ import math
 import time
 import uuid
 from collections.abc import Callable, Collection, Mapping
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -82,6 +82,9 @@ from serialize_db.schema import (
     table_options,
 )
 from serialize_db.storage import Storage
+
+if TYPE_CHECKING:
+    import duckdb
 
 log = logging.getLogger(__name__)
 
@@ -257,6 +260,12 @@ def open_table(uri: str, storage: Storage, version: int | None = None) -> DeltaT
 
 def table_exists(uri: str, storage: Storage) -> bool:
     """Se há uma tabela Delta na pasta.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        table_exists(storage.uri_of("prod/cad_operacoes"), storage)   # True depois de create_table
 
     :param uri: a URI da pasta, sob a raiz do banco.
     :param storage: o armazenamento da raiz do banco.
@@ -457,16 +466,16 @@ def file_from_return_stats(row: Mapping[str, object], table: sa.Table, uri: str)
     minimum: dict[str, object] = {}
     maximum: dict[str, object] = {}
     nulls: dict[str, int] = {}
-    for quoted_name, values in row["column_statistics"].items():
-        name = quoted_name.strip('"')
+    for quoted_column, statistics in row["column_statistics"].items():
+        name = quoted_column.strip('"')
         if name not in contract.names:
             continue
-        nulls[name] = int(values["null_count"])
+        nulls[name] = int(statistics["null_count"])
         convert = _stat_converter(contract.field(name).type)
-        if convert is None or "min" not in values or "max" not in values:
+        if convert is None or "min" not in statistics or "max" not in statistics:
             continue
-        minimum[name] = convert(values["min"])
-        maximum[name] = convert(values["max"])
+        minimum[name] = convert(statistics["min"])
+        maximum[name] = convert(statistics["max"])
     return RegisteredFile(
         path=_relative_file(str(row["filename"]), uri),
         size=int(row["file_size_bytes"]),
@@ -725,28 +734,31 @@ def _check_file(storage: Storage, table_path: str, file: RegisteredFile, contrac
     _check_file_rows(footer, file)
 
 
-def _commit_actions(dt: DeltaTable, name: str, partition_by: str | None,
+def _commit_actions(dt: DeltaTable, table_name: str, partition_by: str | None,
                     actions: list[AddAction], value: str | None, metadata: Mapping[str, str],
                     schema: object | None = None) -> None:
     """Um commit ``overwrite`` das ações: da partição de ``value``, ou da tabela inteira sem ele.
 
-    ``CommitFailedError``, o de outro registro da mesma partição a partir da mesma versão, sobe
-    como ``ExecutionConflict``, com ``name`` na mensagem.
+    ``schema`` é o esquema Delta do commit; ``None`` mantém o da tabela. ``CommitFailedError``, o
+    de outro registro da mesma partição a partir da mesma versão, sobe como ``ExecutionConflict``,
+    com ``table_name`` na mensagem.
     """
     filters = None
     if partition_by and value is not None:
         filters = [(partition_by, "=", value)]
+    if schema is None:
+        schema = dt.schema()
     try:
         dt.create_write_transaction(
             actions,
             mode="overwrite",
-            schema=schema if schema is not None else dt.schema(),
+            schema=schema,
             partition_by=[partition_by] if partition_by else None,
             partition_filters=filters,
             commit_properties=CommitProperties(custom_metadata=dict(metadata)),
         )
     except CommitFailedError as error:
-        raise ExecutionConflict(f"{name} partição {value}: {error}") from None
+        raise ExecutionConflict(f"{table_name} partição {value}: {error}") from None
 
 
 def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value: str | None,
@@ -805,8 +817,8 @@ def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value
     actions = []
     for file in files:
         actions.append(_add_action(file, contract, partition_by, value, columns_without_min_max))
-    _commit_actions(open_table(uri, storage), table.name, partition_by, actions, value,
-                    metadata)
+    dt = open_table(uri, storage)
+    _commit_actions(dt, table.name, partition_by, actions, value=value, metadata=metadata)
     # create_write_transaction não atualiza o objeto: a versão vem de uma leitura nova do log, que
     # com uma execução por ambiente é a do próprio commit.
     version = open_table(uri, storage).version()
@@ -849,7 +861,11 @@ def _duckdb_reading(uri: str, version: int, table: sa.Table, value: str | None,
         row = connection.execute(text).fetchone()
     finally:
         connection.close()
-    return _Reading(row[0], tuple(row[1::2]), tuple(row[2::2]))
+    # A linha é a contagem seguida de min e max alternados, um par por coluna da chave.
+    rows = row[0]
+    minimums = tuple(row[1::2])
+    maximums = tuple(row[2::2])
+    return _Reading(rows, minimums, maximums)
 
 
 def _arrow_reading(dt: DeltaTable, table: sa.Table, value: str | None,
@@ -861,18 +877,25 @@ def _arrow_reading(dt: DeltaTable, table: sa.Table, value: str | None,
         condition = ds.field(partition_by) == value
     scanner = dt.to_pyarrow_dataset().scanner(columns=list(keys), filter=condition)
     rows = 0
-    lows: list[list[object]] = [[] for _ in keys]
-    highs: list[list[object]] = [[] for _ in keys]
+    lows: dict[str, list[object]] = {name: [] for name in keys}
+    highs: dict[str, list[object]] = {name: [] for name in keys}
     for batch in scanner.to_batches():
         rows += batch.num_rows
-        for index, name in enumerate(keys):
-            extremes = pc.min_max(batch.column(name))
-            if extremes["min"].is_valid:
-                lows[index].append(extremes["min"].as_py())
-                highs[index].append(extremes["max"].as_py())
-    minimum = tuple(min(values) if values else None for values in lows)
-    maximum = tuple(max(values) if values else None for values in highs)
+        _collect_extremes(batch, lows, highs)
+    minimum = tuple(min(lows[name], default=None) for name in keys)
+    maximum = tuple(max(highs[name], default=None) for name in keys)
     return _Reading(rows, minimum, maximum)
+
+
+def _collect_extremes(batch: pa.RecordBatch, lows: dict[str, list[object]],
+                      highs: dict[str, list[object]]) -> None:
+    """Acrescenta a ``lows`` e a ``highs`` o menor e o maior valor de cada coluna do lote; uma
+    coluna só de nulos no lote não acrescenta nada."""
+    for name in lows:
+        extremes = pc.min_max(batch.column(name))
+        if extremes["min"].is_valid:
+            lows[name].append(extremes["min"].as_py())
+            highs[name].append(extremes["max"].as_py())
 
 
 def _log_reading(dt: DeltaTable, table: sa.Table, value: str | None,
@@ -893,7 +916,8 @@ def _log_reading(dt: DeltaTable, table: sa.Table, value: str | None,
 
 
 def _read_back_problems(table: sa.Table, keys: tuple[str, ...], expected_rows: int,
-                        log: _Reading, arrow: _Reading, engine: _Reading) -> list[str]:
+                        log_reading: _Reading, arrow_reading: _Reading,
+                        duckdb_reading: _Reading) -> list[str]:
     """As diferenças entre os leitores, o log e a contagem esperada.
 
     As linhas iguais nos quatro; o menor e o maior valor de cada coluna da chave iguais nos dois
@@ -901,17 +925,19 @@ def _read_back_problems(table: sa.Table, keys: tuple[str, ...], expected_rows: i
     lidos: um máximo abaixo do lido podaria o arquivo que tem a linha.
     """
     problems = []
-    counts = {"esperadas": expected_rows, "log": log.rows, "delta-rs": arrow.rows,
-              "delta_scan": engine.rows}
+    counts = {"esperadas": expected_rows, "log": log_reading.rows,
+              "delta-rs": arrow_reading.rows, "delta_scan": duckdb_reading.rows}
     if len(set(counts.values())) > 1:
         problems.append(f"linhas {counts}")
-    if (arrow.minimum, arrow.maximum) != (engine.minimum, engine.maximum):
-        problems.append(f"chave {keys}: delta-rs {arrow.minimum}..{arrow.maximum}, "
-                        f"delta_scan {engine.minimum}..{engine.maximum}")
+    arrow_extremes = (arrow_reading.minimum, arrow_reading.maximum)
+    duckdb_extremes = (duckdb_reading.minimum, duckdb_reading.maximum)
+    if arrow_extremes != duckdb_extremes:
+        problems.append(f"chave {keys}: delta-rs {arrow_reading.minimum}..{arrow_reading.maximum}"
+                        f", delta_scan {duckdb_reading.minimum}..{duckdb_reading.maximum}")
     contract = arrow_schema(table)
     for index, name in enumerate(keys):
-        low, high = log.minimum[index], log.maximum[index]
-        read_low, read_high = arrow.minimum[index], arrow.maximum[index]
+        low, high = log_reading.minimum[index], log_reading.maximum[index]
+        read_low, read_high = arrow_reading.minimum[index], arrow_reading.maximum[index]
         exact = _exact_statistic(contract.field(name).type)
         if not exact or low is None or high is None or read_low is None:
             continue
@@ -931,6 +957,12 @@ def read_back(uri: str, table: sa.Table, value: str | None, expected_rows: int,
     o outro (o ``parquet.field.id`` no esquema Delta fez o ``delta_scan`` ler toda coluna como nula
     com a contagem certa), e uma estatística do log que podaria o arquivo certo.
 
+    Exemplo:
+
+    .. code-block:: python
+
+        read_back(uri, Operacao.__table__, "2026-08-31", 1000, storage)   # None quando concordam
+
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
     :param table: a tabela do modelo.
     :param value: o valor da partição relida; ``value=None`` relê a tabela inteira.
@@ -942,10 +974,11 @@ def read_back(uri: str, table: sa.Table, value: str | None, expected_rows: int,
     dt = open_table(uri, storage)
     version = dt.version()
     keys = table_options(table).keys[0]
-    log = _log_reading(dt, table, value, keys)
-    arrow = _arrow_reading(dt, table, value, keys)
-    engine = _duckdb_reading(uri, version, table, value, keys, storage)
-    problems = _read_back_problems(table, keys, expected_rows, log, arrow, engine)
+    log_reading = _log_reading(dt, table, value, keys)
+    arrow_reading = _arrow_reading(dt, table, value, keys)
+    duckdb_reading = _duckdb_reading(uri, version, table, value, keys, storage)
+    problems = _read_back_problems(table, keys, expected_rows, log_reading, arrow_reading,
+                                   duckdb_reading)
     if not problems:
         return
     dt.restore(version - 1)
@@ -1118,7 +1151,7 @@ def _rewrite_select(table: sa.Table, expressions: Mapping[str, str], source: str
     return f"SELECT {', '.join(columns)} FROM {source}"
 
 
-def _nonfinite_by_partition(connection: object, table: sa.Table,
+def _nonfinite_by_partition(connection: duckdb.DuckDBPyConnection, table: sa.Table,
                             select: str) -> dict[str | None, tuple[str, ...]]:
     """As colunas ``Double`` com valor não finito em cada partição do ``SELECT``, que ficam sem
     mínimo e máximo no log (issue #59)."""
@@ -1139,12 +1172,13 @@ def _nonfinite_by_partition(connection: object, table: sa.Table,
         rows = connection.execute(
             f"SELECT {quoted(partition_by)}, {counts} FROM ({select}) GROUP BY 1").fetchall()
     found = {}
-    for row in rows:
-        found[row[0]] = tuple(name for name, count in zip(doubles, row[1:]) if count)
+    for value, *counts in rows:
+        found[value] = tuple(name for name, count in zip(doubles, counts) if count)
     return found
 
 
-def _copy_rewrite(connection: object, uri: str, table: sa.Table, select: str) -> list[dict]:
+def _copy_rewrite(connection: duckdb.DuckDBPyConnection, uri: str, table: sa.Table,
+                  select: str) -> list[dict]:
     """O ``COPY ... RETURN_STATS`` da tabela inteira para arquivos novos na pasta dela: particionado
     por ``PARTITION_BY``, que tira a coluna de partição dos arquivos, ou um arquivo só."""
     partition_by = table_options(table).partition_by
@@ -1170,6 +1204,26 @@ def _written_partition(row: Mapping[str, object], partition_by: str | None) -> s
         return None
     partition_keys = dict(row["partition_keys"] or {})
     return partition_keys.get(partition_by)
+
+
+def _rewritten_actions(
+    written: list[dict], table: sa.Table, uri: str, storage: Storage,
+    nonfinite: Mapping[str | None, tuple[str, ...]],
+) -> tuple[list[AddAction], int]:
+    """As ações dos arquivos que o ``COPY`` da reescrita gravou, cada arquivo depois das
+    conferências de ``register_files``, e a soma das linhas deles."""
+    partition_by = table_options(table).partition_by
+    contract = arrow_schema(table)
+    table_path = storage.relative(uri)
+    actions = []
+    total = 0
+    for row in written:
+        file = file_from_return_stats(row, table, uri)
+        value = _written_partition(row, partition_by)
+        _check_file(storage, table_path, file, contract, partition_by, value)
+        actions.append(_add_action(file, contract, partition_by, value, nonfinite.get(value, ())))
+        total += file.rows
+    return actions, total
 
 
 def rewrite(uri: str, table: sa.Table, storage: Storage,
@@ -1208,7 +1262,6 @@ def rewrite(uri: str, table: sa.Table, storage: Storage,
     """
     expressions = dict(expressions or {})
     _check_expressions(table, expressions)
-    partition_by = table_options(table).partition_by
     dt = open_table(uri, storage)
     source = f"delta_scan({literal(uri)}, version := {dt.version()})"
     select = _rewrite_select(table, expressions, source)
@@ -1218,17 +1271,9 @@ def rewrite(uri: str, table: sa.Table, storage: Storage,
         written = _copy_rewrite(connection, uri, table, select)
     finally:
         connection.close()
-    contract = arrow_schema(table)
-    table_path = storage.relative(uri)
-    actions = []
-    total = 0
-    for row in written:
-        file = file_from_return_stats(row, table, uri)
-        value = _written_partition(row, partition_by)
-        _check_file(storage, table_path, file, contract, partition_by, value)
-        actions.append(_add_action(file, contract, partition_by, value, nonfinite.get(value, ())))
-        total += file.rows
-    _commit_actions(dt, table.name, table_options(table).partition_by, actions, None, {},
+    actions, total = _rewritten_actions(written, table, uri, storage, nonfinite)
+    partition_by = table_options(table).partition_by
+    _commit_actions(dt, table.name, partition_by, actions, value=None, metadata={},
                     schema=delta_schema(table))
     version = open_table(uri, storage).version()
     read_back(uri, table, None, total, storage)
@@ -1361,7 +1406,8 @@ def copy_manifest(uri: str, version: int, partitions: list[str] | None, destinat
             "mandatory": True,
             "meta": {"content_length": action["size_bytes"]},
         })
-    storage.write_text(storage.relative(destination), json.dumps({"entries": entries}, indent=2))
+    manifest = json.dumps({"entries": entries}, indent=2)
+    storage.write_text(storage.relative(destination), manifest)
     return destination
 
 
@@ -1395,8 +1441,8 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
     """Grava no arquivo de controle do ambiente a entrada ``{name: versions}`` de um snapshot do
     banco.
 
-    A escrita é condicional: ``if_match`` com a impressão da leitura, ou ``if_none_match`` no
-    primeiro snapshot.
+    A escrita é condicional: ``Storage.create_text`` no primeiro snapshot, e ``if_match`` com a
+    impressão da leitura nos seguintes.
 
     Exemplo:
 
@@ -1417,21 +1463,21 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
     control, fingerprint = read_snapshots(storage, environment)
     if name in control["snapshots"] or name in control.get("archived", {}):
         raise ValueError(f"{environment}: o snapshot {name} já existe")
-    ordered = {}
-    for table_name in sorted(versions):
-        ordered[table_name] = versions[table_name]
-    control["snapshots"][name] = ordered
+    control["snapshots"][name] = dict(sorted(versions.items()))
     _write_control(storage, environment, control, fingerprint)
     return control
 
 
 def _write_control(storage: Storage, environment: str, control: Mapping,
                    fingerprint: str | None) -> None:
-    """Grava o arquivo de controle na escrita condicional: ``if_match`` com a impressão da leitura,
-    ou ``if_none_match`` quando ele ainda não existe."""
+    """Grava o arquivo de controle na escrita condicional: ``create_text`` quando ele ainda não
+    existe, ``write_text`` com ``if_match`` e a impressão da leitura depois."""
     text = json.dumps(control, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     path = storage.join(environment, CONTROL_FILE)
-    storage.write_text(path, text, if_match=fingerprint, if_none_match=fingerprint is None)
+    if fingerprint is None:
+        storage.create_text(path, text)
+    else:
+        storage.write_text(path, text, if_match=fingerprint)
 
 
 def archive_snapshot(storage: Storage, environment: str, name: str) -> dict:
@@ -1560,16 +1606,21 @@ def history(uri: str, storage: Storage) -> list[dict]:
         ``deep_copy``, o ``restore`` de ``read_back``, os de ``vacuum`` e os de ``OPTIMIZE`` vêm
         sem eles.
     """
-    entries = []
+    commits = []
     for entry in open_table(uri, storage).history():
-        instant = datetime.datetime.fromtimestamp(entry["timestamp"] / 1000, datetime.timezone.utc)
-        record = {"version": entry["version"], "operation": entry["operation"],
-                  "timestamp": instant}
-        for key in _METADATA_KEYS:
-            if key in entry:
-                record[key] = entry[key]
-        entries.append(record)
-    return entries
+        commits.append(_commit_record(entry))
+    return commits
+
+
+def _commit_record(entry: Mapping[str, object]) -> dict:
+    """Um commit do ``history`` do delta-rs: a versão, a operação, o instante em UTC e os
+    metadados da biblioteca que ele tem."""
+    instant = datetime.datetime.fromtimestamp(entry["timestamp"] / 1000, datetime.timezone.utc)
+    record = {"version": entry["version"], "operation": entry["operation"], "timestamp": instant}
+    for key in _METADATA_KEYS:
+        if key in entry:
+            record[key] = entry[key]
+    return record
 
 
 def _present(values: Mapping[str, object] | None) -> dict[str, object]:
@@ -1696,8 +1747,9 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
                          storage.join(target_path, action["path"]))
             actions.append(_add_action(_copied_file(action), contract, partition_by, value, ()))
         # Cada commit resolve a versão no log do armazenamento: a tabela é reaberta por partição.
-        _commit_actions(open_table(destination, storage), str(metadata.name), partition_by,
-                        actions, value, {})
+        destination_table = open_table(destination, storage)
+        _commit_actions(destination_table, str(metadata.name), partition_by, actions, value=value,
+                        metadata={})
         log.info("%s: %s copiada, %d arquivo(s) em %.1f s", metadata.name, label, len(actions),
                  time.perf_counter() - started)
     by_delta, by_duckdb = _count_rows(destination, storage)
@@ -1724,7 +1776,7 @@ def _export_by_rewrite(dt: DeltaTable, uri: str, table: sa.Table, destination: s
     """A versão reescrita pelo ``COPY`` particionado do DuckDB: um arquivo por partição, sem a
     coluna de partição dentro dele."""
     partition_by = table_options(table).partition_by
-    source = f"SELECT * FROM delta_scan({literal(uri)}, version := {dt.version()})"
+    select = f"SELECT * FROM delta_scan({literal(uri)}, version := {dt.version()})"
     if partition_by is None:
         storage.ensure_folder(storage.relative(destination))
         target = f"{destination}/data.parquet"
@@ -1734,7 +1786,7 @@ def _export_by_rewrite(dt: DeltaTable, uri: str, table: sa.Table, destination: s
         options = f"FORMAT parquet, PARTITION_BY ({quoted(partition_by)}), RETURN_STATS"
     connection = storage.duckdb_connect()
     try:
-        rows = connection.execute(f"COPY ({source}) TO {literal(target)} ({options})").fetchall()
+        rows = connection.execute(f"COPY ({select}) TO {literal(target)} ({options})").fetchall()
     finally:
         connection.close()
     return sorted(str(row[0]) for row in rows)

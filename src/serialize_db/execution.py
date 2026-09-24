@@ -46,6 +46,7 @@ import time
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import sqlalchemy as sa
@@ -70,6 +71,9 @@ from serialize_db.schema import (
     table_options,
 )
 from serialize_db.storage import Storage, prepare_environment
+
+if TYPE_CHECKING:
+    from serialize_db.engine.redshift import RedshiftConfig
 
 __all__ = ["Database", "Execution"]
 
@@ -121,6 +125,12 @@ class Database:
     def uri(self, table: sa.Table) -> str:
         """A pasta da tabela.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            db.uri(Lancamento.__table__)   # "s3://bucket/projeto/delta/prod/cad_lancamentos"
+
         :param table: a tabela do modelo.
         :return: a URI ``<raiz>/<ambiente>/<tabela>``, sem barra final.
         """
@@ -129,12 +139,24 @@ class Database:
     def control_path(self) -> str:
         """O arquivo de controle dos snapshots do ambiente.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            db.control_path()   # "prod/_serialize_db/snapshots.json"
+
         :return: o caminho relativo à raiz.
         """
         return self.storage.join(self.environment, delta.CONTROL_FILE)
 
     def staging_prefix(self, execution_id: str) -> str:
         """Os arquivos intermediários de uma execução.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            db.staging_prefix("exec-2026-09-05")   # "prod/staging/exec-2026-09-05"
 
         :param execution_id: o identificador da execução.
         :return: o prefixo ``<ambiente>/staging/<execution_id>``, relativo à raiz.
@@ -144,6 +166,12 @@ class Database:
     def publication_prefix(self, execution_id: str) -> str:
         """Os manifestos da publicação no Redshift de uma execução.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            db.publication_prefix("exec-2026-09-05")   # "prod/publicacao/exec-2026-09-05"
+
         :param execution_id: o identificador da execução que publica.
         :return: o prefixo ``<ambiente>/publicacao/<execution_id>``, relativo à raiz.
         """
@@ -152,6 +180,12 @@ class Database:
     def archive_prefix(self, name: str) -> str:
         """A pasta de arquivo de um snapshot do banco.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            db.archive_prefix("2026T3")   # "prod/arquivo/2026T3"
+
         :param name: o nome do snapshot.
         :return: o caminho ``<ambiente>/arquivo/<nome>``, relativo à raiz.
         """
@@ -159,6 +193,12 @@ class Database:
 
     def tables(self) -> list[sa.Table]:
         """As tabelas dos modelos.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            [table.name for table in db.tables()]   # ["cad_contas", ..., "cad_lancamentos"]
 
         :return: as tabelas na ordem das chaves estrangeiras, a referenciada antes da que a
             referencia.
@@ -226,7 +266,8 @@ class Execution:
     """
 
     def __init__(self, db: Database, engine: str | Engine, partition: str,
-                 execution_id: str | None = None, redshift: object | None = None) -> None:
+                 execution_id: str | None = None,
+                 redshift: RedshiftConfig | None = None) -> None:
         """Guarda os parâmetros da execução, com a partição e o ``execution_id`` conferidos; nada
         é aberto antes da entrada do ``with``.
 
@@ -380,7 +421,9 @@ class Execution:
         for value in sorted(values):
             if value <= self.partition:
                 up_to_partition.append(value)
-        return up_to_partition[-n:] if n > 0 else []
+        if n <= 0:
+            return []
+        return up_to_partition[-n:]
 
     def _ingest_one(self, engine: Engine, table: sa.Table, partitions: list[str] | None,
                     materialize: bool) -> None:
@@ -436,6 +479,13 @@ class Execution:
     def published(self, table: sa.Table) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: é por ela
         que o pipeline lê as partições publicadas da tabela que ele mesmo grava.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            previous = run.published(Projetado.__table__)
+            run.sandbox.query(sa.select(sa.func.max(previous.c.id_projetado)))
 
         :param table: a tabela do modelo.
         :return: o ``FromClause`` com as colunas do contrato.
@@ -606,8 +656,9 @@ class Execution:
             else:
                 expected = report.rows(value)
                 nonfinite = report.nonfinite_columns.get(value, ())
-            version = self.sandbox.export_partition(table, uri, value, metadata, expected,
-                                                    nonfinite)
+            version = self.sandbox.export_partition(table, uri, value, metadata,
+                                                    expected_rows=expected,
+                                                    columns_without_min_max=nonfinite)
             with self._lock:
                 self.versions[table.name] = version
                 self._written[table.name] = version

@@ -19,7 +19,7 @@ precisa estar na pasta de extensões.
 from __future__ import annotations
 
 import contextlib
-import datetime as dt
+import datetime
 import json
 import logging
 import re
@@ -63,7 +63,7 @@ class Lancamento(Base):
     __tablename__ = "cad_lancamentos"
     __table_args__ = {"info": INFO}
     id_lancamento: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=False)
-    data_base: Mapped[dt.date] = mapped_column(sa.Date)
+    data_base: Mapped[datetime.date] = mapped_column(sa.Date)
     valor: Mapped[float] = mapped_column(sa.Double)
     data_base_str: Mapped[str] = mapped_column(sa.String(10))
 
@@ -72,7 +72,7 @@ class Projetado(Base):
     __tablename__ = "cad_lancamentos_projetados"
     __table_args__ = {"info": INFO}
     id_lancamento: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=False)
-    data_base: Mapped[dt.date] = mapped_column(sa.Date)
+    data_base: Mapped[datetime.date] = mapped_column(sa.Date)
     valor: Mapped[float] = mapped_column(sa.Double)
     data_base_str: Mapped[str] = mapped_column(sa.String(10))
 
@@ -90,10 +90,12 @@ MONTHS = ["2026-05-31", "2026-06-30", "2026-07-31", "2026-08-31", "2026-09-30"]
 
 def rows(table: sa.Table, value: str, ids: range, valor: list[float] | None = None) -> pa.Table:
     """Linhas da partição ``value`` com os ids pedidos, no contrato da tabela."""
+    if valor is None:
+        valor = [entry_id / 2 for entry_id in ids]
     data = pa.table({
         "id_lancamento": pa.array(list(ids), pa.int64()),
-        "data_base": pa.array([dt.date.fromisoformat(value)] * len(ids), pa.date32()),
-        "valor": pa.array(valor if valor is not None else [k / 2 for k in ids], pa.float64()),
+        "data_base": pa.array([datetime.date.fromisoformat(value)] * len(ids), pa.date32()),
+        "valor": pa.array(valor, pa.float64()),
         "data_base_str": pa.array([value] * len(ids)),
     })
     return schema.cast(data, table)
@@ -228,9 +230,9 @@ def test_execution_opens_every_table_and_fixes_versions(
     assert engine.calls[-1] == "cleanup"
 
     # O execution_id gerado leva a data em UTC, lida antes e depois da construção.
-    before = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    before = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     generated = Execution(db, FakeEngine(db.storage), "2026-08-31").execution_id
-    after = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    after = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     match = re.fullmatch(r"exec-(\d{4}-\d{2}-\d{2})-[0-9a-f]{8}", generated)
     assert match
     assert match.group(1) in (before, after)
@@ -271,17 +273,18 @@ def test_previous_partitions_up_to_the_execution_partition(db: Database) -> None
             run.previous_partitions(Composta.__table__, 1)
 
 
+def take_ids(run: Execution, ranges: list[range]) -> None:
+    """Pede 50 faixas de 3 ids de ``cad_lancamentos``, como uma thread do pipeline."""
+    for _ in range(50):
+        ranges.append(run.next_ids(ENTRIES, 3))
+
+
 def test_next_ids_are_disjoint_across_threads(db: Database) -> None:
     """Duas threads têm faixas disjuntas, a primeira acima do máximo das estatísticas; a tabela nova
     começa em 1; a chave composta é ``ContractError``."""
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         ranges: list[range] = []
-
-        def take() -> None:
-            for _ in range(50):
-                ranges.append(run.next_ids(ENTRIES, 3))
-
-        threads = [threading.Thread(target=take) for _ in range(2)]
+        threads = [threading.Thread(target=take_ids, args=(run, ranges)) for _ in range(2)]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -307,9 +310,10 @@ def test_ingest_of_several_tables_uses_extra_sessions(db: Database, folder: Path
     engine = engine_for(db, folder, "exec-1")
     with Execution(db, engine, "2026-08-31", "exec-1") as run:
         run.ingest(ENTRIES, PROJECTED, partitions=[MONTHS[0]])
-        counts = run.sandbox.query("SELECT (SELECT count(*) FROM cad_lancamentos) AS a, "
-                                   "(SELECT count(*) FROM cad_lancamentos_projetados) AS b")
-        assert counts.to_pylist() == [{"a": 10, "b": 5}]
+        counts = run.sandbox.query(
+            "SELECT (SELECT count(*) FROM cad_lancamentos) AS lancamentos, "
+            "(SELECT count(*) FROM cad_lancamentos_projetados) AS projetados")
+        assert counts.to_pylist() == [{"lancamentos": 10, "projetados": 5}]
 
     # No motor de mentira: uma sessão a mais por tabela, fora da thread principal, e a falha de
     # rel_composta, que não existe, leva o resultado de cad_lancamentos na nota.
@@ -348,7 +352,8 @@ def test_failed_audit_leaves_the_delta_untouched(db: Database, folder: Path) -> 
     with pytest.raises(AuditFailed, match="chave_id_lancamento"):
         with Execution(db, engine, "2026-08-31", "exec-1") as run:
             # Cada id duas vezes.
-            repeated = pa.concat_tables([rows(PROJECTED, "2026-08-31", range(1, 4))] * 2)
+            once = rows(PROJECTED, "2026-08-31", range(1, 4))
+            repeated = pa.concat_tables([once, once])
             run.sandbox.load(PROJECTED, repeated)
             run.audit(PROJECTED, ["2026-08-31"])
             run.publish(PROJECTED, partitions=["2026-08-31"])
@@ -465,8 +470,8 @@ def test_publish_passes_the_nonfinite_columns_to_the_export(db: Database, folder
     assert nonfinite == [("valor",), (), ("valor",)]
 
     # No motor DuckDB.
-    real = engine_for(db, folder, "exec-nan")
-    with Execution(db, real, "2026-08-31", "exec-nan") as run:
+    duckdb_engine = engine_for(db, folder, "exec-nan")
+    with Execution(db, duckdb_engine, "2026-08-31", "exec-nan") as run:
         with_nan = rows(PROJECTED, "2026-06-30", range(100, 103), valor=[1.0, float("nan"), 2.0])
         run.sandbox.load(PROJECTED, with_nan)
         report = run.audit(PROJECTED, ["2026-06-30"])
@@ -484,7 +489,7 @@ def test_commit_metadata_in_history(db: Database) -> None:
     ``serialize_db_snapshot`` só na execução marcada."""
     with Execution(db, FakeEngine(db.storage), "2026-08-31", "exec-comum") as run:
         run.publish(PROJECTED, partitions=["2026-08-31"], audit=False)
-    history = delta.open_table(db.uri(PROJECTED), db.storage).history(1)[0]
+    history = delta.open_table(db.uri(PROJECTED), db.storage).history(limit=1)[0]
     assert history["serialize_db_execution_id"] == "exec-comum"
     assert "serialize_db_snapshot" not in history
     assert json.loads(history["serialize_db_input_versions"]) == {"cad_lancamentos": 4}
@@ -493,7 +498,7 @@ def test_commit_metadata_in_history(db: Database) -> None:
     with Execution(db, FakeEngine(db.storage), "2026-08-31", "exec-marcada") as run:
         run.snapshot("2026T3")
         run.publish(PROJECTED, partitions=["2026-08-31"], audit=False)
-    marked = delta.open_table(db.uri(PROJECTED), db.storage).history(1)[0]
+    marked = delta.open_table(db.uri(PROJECTED), db.storage).history(limit=1)[0]
     assert marked["serialize_db_snapshot"] == "2026T3"
 
 
@@ -532,7 +537,8 @@ def projected_pipeline(run: Execution) -> None:
 
 def repeated_key_pipeline(run: Execution) -> None:
     """Um pipeline que grava uma chave repetida e reprova na auditoria."""
-    repeated = pa.concat_tables([rows(PROJECTED, run.partition, range(1, 3))] * 2)
+    once = rows(PROJECTED, run.partition, range(1, 3))
+    repeated = pa.concat_tables([once, once])
     run.sandbox.load(PROJECTED, repeated)
     run.audit(PROJECTED, [run.partition])
 
@@ -545,13 +551,24 @@ def conflicting_pipeline(run: Execution) -> None:
     run.publish(ENTRIES, partitions=[run.partition], audit=False)
 
 
-def redshift_pipeline(run: Execution) -> None:
-    """Um pipeline que só confere o motor e a configuração do Redshift que a execução recebeu."""
+def redshift_engine_pipeline(run: Execution) -> None:
+    """O pipeline de ``--engine redshift``: confere o motor Redshift e a configuração do ambiente
+    que a execução recebeu."""
     from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 
+    assert isinstance(run.sandbox, RedshiftEngine)
     assert isinstance(run.redshift, RedshiftConfig)
     assert run.redshift.schema == "esquema"
-    assert isinstance(run.sandbox, RedshiftEngine) or run.redshift is not None
+
+
+def duckdb_with_redshift_pipeline(run: Execution) -> None:
+    """O pipeline de ``--redshift``: confere o motor DuckDB e a configuração do Redshift que a
+    execução recebeu."""
+    from serialize_db.engine.redshift import RedshiftConfig
+
+    assert isinstance(run.sandbox, DuckDBEngine)
+    assert isinstance(run.redshift, RedshiftConfig)
+    assert run.redshift.schema == "esquema"
 
 
 class IdleConnection:
@@ -621,10 +638,13 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
                         ("SCHEMA", "esquema"), ("SHARE_DATABASE", "compartilhado")):
         monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", value)
     common = ["run", "--root", db.root, "--environment", "prod", "--partition", "2026-08-31",
-              "--metadata", "test_execution:Base.metadata", "test_execution:redshift_pipeline"]
-    assert cli.main([*common, "--engine", "redshift"]) == 0
-    assert cli.main([*common, "--redshift"]) == 0
+              "--metadata", "test_execution:Base.metadata"]
+    redshift_engine = [*common, "--engine", "redshift", "test_execution:redshift_engine_pipeline"]
+    assert cli.main(redshift_engine) == 0
+    duckdb_engine = [*common, "--redshift", "test_execution:duckdb_with_redshift_pipeline"]
+    assert cli.main(duckdb_engine) == 0
 
+    # Sem as duas opções, a execução não tem a configuração.
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         assert run.redshift is None
         with pytest.raises(PublicationError, match="redshift=RedshiftConfig"):
@@ -637,16 +657,19 @@ def test_cli_audit_prints_the_sql_and_audits_the_published_version(
     """``serialize-db audit --sql`` imprime o texto das verificações no dialeto, sem armazenamento;
     sem ``--sql``, audita a versão publicada e sai com 0 na aprovação."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
-    metadata = ["audit", "--metadata", "test_execution:Base.metadata"]
-    base = [*metadata, "--table", "cad_lancamentos"]
-    assert cli.main([*base, "--engine", "redshift", "--partitions", "2026-08-31", "--sql"]) == 0
+    audit_command = ["audit", "--metadata", "test_execution:Base.metadata"]
+    entries_audit = [*audit_command, "--table", "cad_lancamentos", "--partitions", "2026-08-31"]
+    assert cli.main([*entries_audit, "--engine", "redshift", "--sql"]) == 0
     printed = capsys.readouterr().out
     assert "-- linhas" in printed
     assert "to_char(" in printed
     assert '"{prefix}cad_lancamentos"' in printed
-    published = [*base, "--partitions", "2026-08-31", "--root", db.root, "--environment", "prod"]
-    assert cli.main(published) == 0
+
+    # A auditoria da versão publicada.
+    assert cli.main([*entries_audit, "--root", db.root, "--environment", "prod"]) == 0
     printed = capsys.readouterr().out
     assert "cad_lancamentos na versão 4:" in printed
     assert "chave_id_lancamento_publicada: aprovada" in printed
-    assert cli.main([*metadata, "--table", "nao_existe", "--sql"]) == 2
+
+    # A tabela fora do modelo.
+    assert cli.main([*audit_command, "--table", "nao_existe", "--sql"]) == 2
