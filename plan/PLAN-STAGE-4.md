@@ -31,7 +31,8 @@ modelo:
 Uma chave primária não é por partição: conferi-la só nas partições da execução não é unicidade.
 Quando as colunas da chave não incluem a coluna de partição, a verificação compara o sandbox com as
 demais partições da versão fixada — `delta_scan(uri, version := v) WHERE data_str NOT IN (...)` no
-DuckDB, uma staging só com as colunas da chave, carregada por `COPY ... MANIFEST`, no Redshift. Custa
+DuckDB, a staging `_publicado` de `published`, com todas as colunas do contrato, carregada por
+`COPY ... MANIFEST`, no Redshift (o `COPY` posicional não carrega só as colunas da chave). Custa
 uma passagem nas colunas da chave da tabela inteira; `key_scope="partition"` a reduz às partições da
 execução, e a escolha entra no relatório. Duas regras dispensam a passagem (decisão do usuário de
 2026-09-23). A chave que inclui a coluna de `partition_source` fica nas partições da execução, porque a
@@ -41,8 +42,8 @@ primária inteira de uma coluna, que `next_ids` preenche acima do máximo da ver
 junção quando o menor valor das partições da execução passa do `max_key` dessa versão, lido das
 estatísticas do log sem ler dados: a verificação leva a consulta desse mínimo em `skip_when`, que o
 motor roda antes e que, verdadeira, aprova a verificação sem rodá-la, com o motivo no relatório. No
-Redshift, a staging das colunas da chave só é carregada quando a junção roda, e o `cad_lancamentos`
-da base de produção tem 141.901.795 linhas.
+Redshift, a staging `_publicado` só é carregada quando a junção roda, e o `cad_lancamentos` da
+base de produção tem 141.901.795 linhas.
 
 A chave estrangeira precisa da tabela referenciada, e só o que o pipeline usa é ingerido:
 `foreign_keys=True` ingere a coluna referenciada das tabelas que faltarem no sandbox, na versão

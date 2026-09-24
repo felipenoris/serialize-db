@@ -50,6 +50,19 @@ foi medido em [`POC.md`](POC.md).
   alvo carregou em 2026-09-21 arquivos do delta-rs, com o `DECIMAL(18, 2)` e o `timestamp_ntz` em
   `INT64`; um arquivo do DuckDB, e a coluna JSON com o tipo lógico numa staging `VARCHAR(65535)`,
   esperam os testes `redshift` da etapa 8 sobre arquivos exportados pelo motor DuckDB.
+- **As etapas 5 e 8 no ambiente alvo.** O motor Redshift e a publicação foram implementados em
+  2026-09-24 e passaram no substituto local; nenhum comando deles rodou no ambiente alvo. A
+  primeira execução de `tests/test_engine_redshift.py` e `tests/test_publication.py` com
+  `-m redshift` lá lê: o `COPY` do Redshift sobre os arquivos do `COPY` do DuckDB
+  (`test_first_publication_loads_every_partition`, o item abaixo); a grafia de `svv_all_columns`
+  na reconciliação (`test_reconcile_published_on_the_target`, que exige diff nenhum na tabela igual
+  ao modelo); o SQLSTATE da relação inexistente, `42P01`, que `name_in_use` e a conferência da
+  tabela de controle esperam ao lado da mensagem `does not exist`; o `1023` da publicação simultânea
+  pela publicação da biblioteca (`test_concurrent_publication_raises_execution_conflict`); o
+  `PARALLEL OFF` até 5.000.000 linhas na exportação, um valor não medido; o arquivo do `UNLOAD` com
+  a coluna `SUPER` serializada em texto registrado no Delta (o item abaixo); e a reconexão depois
+  de uma queda do servidor, que nenhum teste provoca lá. A suíte publica num ambiente `poc<id>` e
+  cria a tabela de controle quando ela não existe, apagando-a só nesse caso.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela

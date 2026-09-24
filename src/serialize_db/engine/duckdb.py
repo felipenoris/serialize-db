@@ -62,7 +62,6 @@ import pyarrow as pa
 import sqlalchemy as sa
 from sqlalchemy.sql import quoted_name
 from sqlalchemy.sql.util import find_tables
-from sqlalchemy.sql.visitors import iterate
 
 from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
@@ -119,16 +118,6 @@ def _delta_scan(uri: str, version: int) -> str:
 # ---------------------------------------------------------------- a compilação
 
 
-def _required_parameters(statement: sa.sql.ClauseElement) -> set[str]:
-    """Os nomes dos ``bindparam`` sem valor do statement, pelo percurso de todos os nós: sem
-    ``literal_binds``, ``compiled.binds`` também os marca, mas ``params`` ignora o nome a mais."""
-    names = set()
-    for element in iterate(statement):
-        if isinstance(element, sa.BindParameter) and element.required:
-            names.add(element.key)
-    return names
-
-
 def _statement_metadata(statement: sa.sql.ClauseElement) -> sa.MetaData | None:
     """O ``MetaData`` das tabelas do contrato que o statement cita, o que ``sql.prefixed``
     recebe."""
@@ -148,7 +137,7 @@ def _compiled_statement(statement: sa.sql.ClauseElement,
     expansível.
     """
     values = dict(params or {})
-    required = _required_parameters(statement)
+    required = sql.required_parameters(statement)
     if required != set(values):
         raise SqlError(f"parâmetros do statement {sorted(required)} e do dicionário "
                        f"{sorted(values)} não fecham")

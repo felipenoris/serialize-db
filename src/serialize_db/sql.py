@@ -57,7 +57,7 @@ import duckdb_engine
 import sqlalchemy as sa
 from sqlalchemy.sql import quoted_name
 from sqlalchemy.sql.util import find_tables
-from sqlalchemy.sql.visitors import replacement_traverse
+from sqlalchemy.sql.visitors import iterate, replacement_traverse
 from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 
 from serialize_db._files import diff_files, write_files
@@ -141,6 +141,25 @@ def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
         return None
 
     return replacement_traverse(statement, {}, replace)
+
+
+# ---------------------------------------------------------------- os parâmetros sem valor
+
+
+def required_parameters(statement: sa.sql.ClauseElement) -> set[str]:
+    """Os nomes dos ``bindparam`` sem valor do statement, pelo percurso de todos os nós; protegida,
+    o guarda dos motores antes de compilar.
+
+    Sob ``literal_binds``, ``compiled.binds`` sai vazio e o ``bindparam`` sem valor vira ``NULL``
+    calado, até num ``IN`` de lista; sem ``literal_binds``, ``compiled.binds`` o marca, mas
+    ``statement.params`` ignora um nome a mais. O ``required`` de cada ``BindParameter`` é o estado
+    que marca a falta (leituras de 2026-09-22 e 2026-09-23).
+    """
+    names = set()
+    for element in iterate(statement):
+        if isinstance(element, sa.BindParameter) and element.required:
+            names.add(element.key)
+    return names
 
 
 # ---------------------------------------------------------------- o texto por motor

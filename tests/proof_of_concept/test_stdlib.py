@@ -66,29 +66,13 @@ def test_partition_values_in_text_order() -> None:
     assert dt.datetime(2026, 8, 31, 23, 59).strftime("%Y-%m-%d") == "2026-08-31"
 
 
-def sandbox_prefix(execution_id: str) -> str:
-    """``exec_<id>_`` com o identificador reduzido a ``[a-z0-9_]``, dentro dos 127 bytes de um
-    identificador do Redshift."""
-    normalized = re.sub(r"[^a-z0-9_]", "_", execution_id.lower())
-    prefix = f"exec_{normalized}_"
-
-    longest_table = 63  # a maior tabela do modelo cabe depois do prefixo
-    if len(prefix.encode()) + longest_table > 127:
-        raise ValueError(f"identificador longo demais para o Redshift: {execution_id}")
-
-    return prefix
-
-
 def test_execution_identifiers() -> None:
     """Identificadores únicos e nomes válidos nos dois motores: ``uuid``, ``re`` e o instante em
-    UTC."""
+    UTC; o prefixo do sandbox é o de ``serialize_db.engine.redshift.sandbox_prefix``, que
+    reduz o identificador a ``[a-z0-9_]`` por ``re.sub``."""
     generated = uuid.uuid4().hex[:8]
     assert re.fullmatch(r"[0-9a-f]{8}", generated)
-
-    assert sandbox_prefix("exec-2026-09-05") == "exec_exec_2026_09_05_"
-    assert sandbox_prefix("Correção/Agosto") == "exec_corre__o_agosto_"
-    with pytest.raises(ValueError):
-        sandbox_prefix("x" * 70)
+    assert re.sub(r"[^a-z0-9_]", "_", "Correção/Agosto".lower()) == "corre__o_agosto"
 
     # published_at e os carimbos do log: sempre em UTC, com o fuso explícito.
     stamp = dt.datetime.now(dt.timezone.utc)

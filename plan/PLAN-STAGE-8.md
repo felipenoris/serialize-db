@@ -31,7 +31,7 @@ testes `redshift` desta etapa o exercitam sobre arquivos exportados pelo motor D
 | --- | --- |
 | `serialize_db_publications` | Uma só para todos os ambientes, criada uma vez no esquema pelo usuário, antes da primeira publicação: `CREATE TABLE <esquema>.serialize_db_publications (table_name VARCHAR(127), delta_version BIGINT, execution_id VARCHAR(127), published_at TIMESTAMP)`, sem `IF NOT EXISTS`. Nenhum caminho do pipeline a cria (decisão do usuário de 2026-09-23). |
 | `create_publications_table(config)` | A inicialização da tabela de controle: abre uma sessão pelo `connect` da [etapa 5](PLAN-STAGE-5.md) e roda `control_ddl`; a segunda chamada falha com a mensagem do servidor, porque a tabela já existe. |
-| `run.publish_redshift(*tables)` | Começa conferindo que a tabela de controle existe, e sem ela levanta `PublicationError`, que aponta `serialize-db publish --init`, antes de qualquer escrita. Depois, a reconciliação de cada tabela publicada que já existe (`ALTER TABLE ADD COLUMN` no fim, porque o `COPY` é posicional; recriação e recarga no diff destrutivo) e uma transação por tabela (decisão do usuário de 2026-09-23): `BEGIN`; a leitura da linha de controle da tabela, que identifica a versão anterior; sem linha, a primeira publicação, com a tabela publicada criada e todas as partições; com linha, a versão lida conferida contra a do Delta e `version_diff` entre as duas; por partição, `DELETE` da partição, `COPY ... MANIFEST` na staging e `INSERT ... SELECT *, '<valor>'`; e no fim o `INSERT` da linha de controle, sem linha, ou o `UPDATE` dela, condicionado à versão lida. |
+| `run.publish_redshift(*tables, max_workers=1)` | Começa conferindo que a tabela de controle existe, e sem ela levanta `PublicationError`, que aponta `serialize-db publish --init`, antes de qualquer escrita. Depois, a reconciliação de cada tabela publicada que já existe (`ALTER TABLE ADD COLUMN` no fim, porque o `COPY` é posicional; recriação e recarga no diff destrutivo) e uma transação por tabela (decisão do usuário de 2026-09-23): `BEGIN`; a leitura da linha de controle da tabela, que identifica a versão anterior; sem linha, a primeira publicação, com a tabela publicada criada e todas as partições; com linha, a versão lida conferida contra a do Delta e `version_diff` entre as duas; por partição, `DELETE` da partição, `COPY ... MANIFEST` na staging e `INSERT ... SELECT *, '<valor>'`; e no fim o `INSERT` da linha de controle, sem linha, ou o `UPDATE` dela, condicionado à versão lida. |
 | `run.unpublish_redshift(*tables)` | O fluxo de despublicar (decisão do usuário de 2026-09-23): a mesma conferência da tabela de controle e uma transação por tabela: `BEGIN`; a leitura da linha de controle; sem linha, nada a despublicar; com linha, `DROP TABLE` da tabela publicada e `DELETE` da linha de controle, condicionado à versão lida. O Delta fica intacto. |
 | `publication_status(db)` | A versão publicada contra a atual de cada tabela, para o operador, com a mesma conferência da tabela de controle. |
 | `serialize-db publish` | A publicação fora de uma execução, por exemplo depois de uma correção; `--status` mostra `publication_status`, `--init` roda `create_publications_table`, e `--unpublish TABELA ...` roda `unpublish_redshift`. |
@@ -44,39 +44,6 @@ a cláusula de credenciais mascarada; integração marcada `redshift`. Provas de
 na staging e o `INSERT` com a partição) e `test_redshift_transactions.py` (duas publicações
 simultâneas no esquema do datashare, a linha de controle lida no início e gravada no fim e as
 duas stagings temporárias, lidas no ambiente alvo em 2026-09-23).
-
-## Interface
-
-O módulo é `serialize_db.publication`, novo na organização do pacote: a publicação usa o motor
-Redshift e a camada Delta, e `Execution.publish_redshift` a chama.
-
-```python
-"""Assinaturas de serialize_db.publication; os corpos estão no rascunho abaixo."""
-import dataclasses
-
-import sqlalchemy as sa
-
-
-@dataclasses.dataclass(frozen=True)
-class PublicationStatus:
-    table: str                      # <ambiente>_<tabela>
-    published_version: int | None   # None: nunca publicada
-    current_version: int
-    pending_partitions: tuple[str | None, ...]
-
-
-def control_ddl(schema: str) -> str: ...
-def create_publications_table(config: object) -> None: ...   # uma vez no esquema, pelo usuário; RedshiftConfig da etapa 5
-def control_read(schema: str, environment: str, table: sa.Table) -> str: ...   # o select da linha de controle
-def publication_statements(schema: str, environment: str, table: sa.Table, partitions: list[str | None], manifests: dict[str | None, str],
-                           delta_version: int, published_version: int | None, execution_id: str,
-                           credentials: str) -> list[str]: ...   # published_version None: primeira publicação
-def unpublication_statements(schema: str, environment: str, table: sa.Table, published_version: int) -> list[str]: ...
-def reconcile_published(schema: str, environment: str, table: sa.Table, diff: object) -> list[str]: ...
-def publish_redshift(db: object, engine: object, tables: list[sa.Table], execution_id: str, max_workers: int = 1) -> dict[str, int]: ...
-def unpublish_redshift(db: object, engine: object, tables: list[sa.Table]) -> dict[str, int | None]: ...   # None: não estava publicada
-def publication_status(db: object, engine: object) -> list[PublicationStatus]: ...
-```
 
 ## Estratégia de implementação
 
@@ -201,102 +168,57 @@ def publication_status(db: object, engine: object) -> list[PublicationStatus]: .
 | Tabela de controle | `test_publish_requires_the_control_table` (sem conexão) | Uma conexão de mentira em que o `select ... limit 0` falha com relação inexistente: `publish_redshift` e `publication_status` levantam `PublicationError` com o comando de inicialização e não rodam outro comando; `control_ddl` sem `IF NOT EXISTS`. |
 | Texto da transação | `test_publication_statements_text` (sem conexão) | Os comandos da primeira publicação (`CREATE TABLE` da tabela publicada e `INSERT` da linha de controle) e de uma seguinte (`UPDATE ... AND delta_version = <lida>`), um por item, com a linha de controle por último, sem `BEGIN`, `COMMIT`, `TRUNCATE` nem `COMPUPDATE`, nomes em duas partes, credenciais mascaradas no que vai a log; `control_read` e `unpublication_statements` com o nome em duas partes. |
 | Conferência da versão | `test_publish_checks_the_version_read` (sem conexão) | Uma conexão de mentira: a versão lida igual à do Delta encerra a transação por `ROLLBACK` sem outro comando; a lida acima dela é `ExecutionConflict`; o `rowcount` 0 do `UPDATE` e o `1023` são `ExecutionConflict`, e nenhum comando se repete. |
-| Reconciliação | `test_reconcile_published_add_column_and_recreate` | `ADD COLUMN` no aditivo; no destrutivo e na largura de `VARCHAR(n)` que muda no modelo, a despublicação, e a publicação seguinte com o DDL com chave e todas as partições. |
+| Reconciliação | `test_reconcile_published_add_column_and_recreate` (sem conexão) e `test_reconcile_published_on_the_target` (`redshift`) | `ADD COLUMN` no aditivo; no destrutivo e na largura de `VARCHAR(n)` que muda no modelo, a despublicação, e a publicação seguinte com o DDL com chave e todas as partições; no alvo, a tabela igual ao modelo sem diff na leitura de `svv_all_columns`, a coluna nova preenchida pela partição alterada e a largura que muda recriando a tabela. |
 | Diferença | `test_publish_only_changed_partitions` (`redshift`) | Duas publicações: a segunda, depois de uma partição alterada, emite um `DELETE` e um `COPY` só dela. |
 | Primeira publicação | `test_first_publication_loads_every_partition` (`redshift`) | Sem linha de controle, a tabela publicada criada, todas as partições e o `INSERT` da linha de controle, numa transação. Os arquivos das partições são os que o motor DuckDB exportou pelo registro, com uma coluna `Numeric(18, 2)`, uma `DateTime` e uma coluna JSON: a leitura do `COPY` do Redshift sobre o arquivo do `COPY` do DuckDB, com o tipo lógico `JSON` numa staging `VARCHAR(65535)`. |
 | Publicação simultânea | `test_concurrent_publication_raises_execution_conflict` (`redshift`) | Duas publicações da mesma tabela a partir da mesma versão lida: a segunda levanta `ExecutionConflict`, pelo `1023` ou pelo `UPDATE` sem linha; a partição e a linha de controle ficam as da primeira. |
 | Despublicação | `test_unpublish_drops_the_table_and_the_control_row` (`redshift`) | Depois de uma publicação, `unpublish_redshift` apaga a tabela publicada e a linha de controle numa transação; a segunda chamada não acha linha e devolve `None`; a publicação seguinte é uma primeira publicação. |
 | Falha no meio | `test_failed_copy_leaves_control_row_untouched` (`redshift`) | Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto. |
-| Estado | `test_publication_status_lists_pending_partitions` | A versão publicada, a atual e as partições pendentes por tabela. |
+| Estado | `test_publication_status_lists_pending_partitions` (sem conexão) | A versão publicada, a atual e as partições pendentes por tabela; a tabela fora do Delta fica de fora. |
+| Execução e linha de comando | `test_execution_publishes_to_redshift_and_the_cli` (`redshift`) | `Execution(..., redshift=config)` no motor DuckDB publica no Delta e no Redshift; `serialize-db publish --status`, a publicação por `--tables`, `--unpublish` e a tabela fora do modelo, pela linha de comando. |
 | Redistribuição nos joins | `test_published_join_redistribution_is_read` (`redshift`) | O `EXPLAIN` de um join típico entre as tabelas publicadas, `cad_lancamentos` com `cad_contas` por `id_conta`, depois da primeira publicação: os rótulos `DS_*` de cada passo de join, como leitura, nunca como reprovação. O modelo cliente não declara `redshift` e a distribuição é `AUTO` (decisão do usuário de 2026-09-21); uma `distkey` explícita só entra, por `ALTER TABLE ... ALTER DISTKEY`, quando o plano mostra `DS_BCAST_INNER` ou `DS_DIST_BOTH` (decisão do usuário de 2026-09-23). A leitura é o `EXPLAIN` porque o papel do projeto não lê `svv_table_info` depois do `USE` (`permission denied`, 42501, probe de 2026-09-23, [`POC.md`](POC.md)); o papel rodou o `EXPLAIN` no esquema do datashare em 2026-09-23, com `DS_DIST_ALL_NONE` entre duas tabelas pequenas (`test_redshift.py::test_explain_of_a_join_on_the_share`). |
 
-## Rascunhos executados
+## A implementação
 
-O rascunho monta o texto da transação e da reconciliação; compilado, não executado num cluster
-(2026-09-21). O `IF NOT EXISTS` do `control_ddl` dele saiu com a decisão do usuário de 2026-09-23,
-o `FILLRECORD` da decisão do mesmo dia falta no `COPY` dele, e a linha de controle por `DELETE` e
-`INSERT` no fim da transação deu lugar à leitura dela no início e ao `INSERT` ou ao `UPDATE` no
-fim.
+O módulo `serialize_db.publication` (`PublicationStatus`, `CONTROL_TABLE`, `control_ddl`,
+`control_read`, `published_ddl`, `publication_statements`, `unpublication_statements`,
+`reconcile_published`, `create_publications_table`, `publish_redshift`, `unpublish_redshift` e
+`publication_status`), `PublicationError` em `serialize_db.errors`, `Execution.publish_redshift`
+e o argumento `redshift` de `Execution`, o subcomando `serialize-db publish` e os casos de
+`tests/test_publication.py` substituem a interface e o rascunho executado em 2026-09-21: as
+assinaturas e as docstrings estão no código e na documentação do `pdoc`. O pool das tabelas saiu
+de `serialize_db.execution` para o módulo privado `serialize_db._pool`, que a execução e a
+publicação usam. O que a implementação mostrou está em [`POC.md`](POC.md), seção "O que a
+implementação das etapas 5 e 8 mostrou"; os casos `redshift` passaram no substituto local e
+esperam a primeira execução no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
-```python
-"""Etapa 8: a transação da publicação como texto, a partir do diff de versões e das ações add; compilado, não executado."""
-import json
-import re
+O que a implementação fixou além do texto das seções acima:
 
-SCHEMA, ENVIRONMENT = "sbx_aco_decon", "prod"
-CONTROL = "serialize_db_publications"
-
-
-def mask(sql: str) -> str:
-    return re.sub(r"(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)\s+'[^']*'", r"\1 '***'", sql)
-
-
-def control_ddl() -> str:
-    return f"CREATE TABLE IF NOT EXISTS {SCHEMA}.{CONTROL} (table_name VARCHAR(127) NOT NULL, delta_version BIGINT NOT NULL, execution_id VARCHAR(127) NOT NULL, published_at TIMESTAMP NOT NULL);"
-
-
-def publication_transaction(table: str, partition_by: str, partitions: list[str], manifests: dict[str, str], delta_version: int, execution_id: str,
-                            staging_ddl: str, credentials: str, super_columns: list[str] = ()) -> list[str]:
-    """Um comando por chamada, dentro de BEGIN ... COMMIT: DELETE da partição, COPY MANIFEST na staging, INSERT com a partição, a linha de controle."""
-    published, staging = f"{SCHEMA}.{ENVIRONMENT}_{table}", f"{SCHEMA}.{ENVIRONMENT}_{table}_staging"
-    commands = ["BEGIN;", staging_ddl.format(name=staging)]
-    for value in partitions:
-        commands += [
-            f"DELETE FROM {published} WHERE {partition_by} = '{value}';",
-            f"DELETE FROM {staging};",                       # não TRUNCATE: o local confirma a transação sozinho
-            f"COPY {staging}\nFROM '{manifests[value]}'\n{credentials}\nFORMAT AS PARQUET MANIFEST;",
-            f"INSERT INTO {published}\nSELECT *, '{value}' AS {partition_by} FROM {staging};",
-        ]
-    commands += [
-        f"DELETE FROM {SCHEMA}.{CONTROL} WHERE table_name = '{ENVIRONMENT}_{table}';",
-        f"INSERT INTO {SCHEMA}.{CONTROL} VALUES ('{ENVIRONMENT}_{table}', {delta_version}, '{execution_id}', getdate());",
-        f"DROP TABLE {staging};",
-        "COMMIT;",
-    ]
-    return commands
-
-
-def reconcile_published_ddl(table: str, added: list[tuple[str, str]], destructive: bool) -> list[str]:
-    published = f"{SCHEMA}.{ENVIRONMENT}_{table}"
-    if destructive:
-        return [f"DROP TABLE IF EXISTS {published};", "-- recriação pelo DDL do contrato e recarga de todas as partições"]
-    return [f"ALTER TABLE {published} ADD COLUMN {name} {kind};" for name, kind in added]
-
-
-credentials = "ACCESS_KEY_ID 'AKIA' SECRET_ACCESS_KEY 'segredo' SESSION_TOKEN 'token'"
-staging_ddl = "CREATE TABLE {name} (id_lancamento BIGINT NOT NULL, data_base DATE NOT NULL, valor DOUBLE PRECISION NOT NULL);"
-manifests = {"2026-08-31": "s3://bucket/prod/publicacao/exec-2026-09-05/cad_lancamentos/2026-08-31.manifest"}
-print(control_ddl())
-for command in publication_transaction("cad_lancamentos", "data_base_str", ["2026-08-31"], manifests, 58, "exec-2026-09-05", staging_ddl, credentials):
-    print(mask(command))
-print("\n".join(reconcile_published_ddl("cad_lancamentos", [("canal", "VARCHAR(20)")], destructive=False)))
-print("\n".join(reconcile_published_ddl("cad_lancamentos", [], destructive=True)))
-print("segredo fora do texto impresso:", all("segredo" not in mask(c) for c in publication_transaction("t", "p", ["v"], {"v": "m"}, 1, "e", staging_ddl, credentials)))
-```
-
-Saída:
-
-```
-CREATE TABLE IF NOT EXISTS sbx_aco_decon.serialize_db_publications (table_name VARCHAR(127) NOT NULL, delta_version BIGINT NOT NULL, execution_id VARCHAR(127) NOT NULL, published_at TIMESTAMP NOT NULL);
-BEGIN;
-CREATE TABLE sbx_aco_decon.prod_cad_lancamentos_staging (id_lancamento BIGINT NOT NULL, data_base DATE NOT NULL, valor DOUBLE PRECISION NOT NULL);
-DELETE FROM sbx_aco_decon.prod_cad_lancamentos WHERE data_base_str = '2026-08-31';
-DELETE FROM sbx_aco_decon.prod_cad_lancamentos_staging;
-COPY sbx_aco_decon.prod_cad_lancamentos_staging
-FROM 's3://bucket/prod/publicacao/exec-2026-09-05/cad_lancamentos/2026-08-31.manifest'
-ACCESS_KEY_ID '***' SECRET_ACCESS_KEY '***' SESSION_TOKEN '***'
-FORMAT AS PARQUET MANIFEST;
-INSERT INTO sbx_aco_decon.prod_cad_lancamentos
-SELECT *, '2026-08-31' AS data_base_str FROM sbx_aco_decon.prod_cad_lancamentos_staging;
-DELETE FROM sbx_aco_decon.serialize_db_publications WHERE table_name = 'prod_cad_lancamentos';
-INSERT INTO sbx_aco_decon.serialize_db_publications VALUES ('prod_cad_lancamentos', 58, 'exec-2026-09-05', getdate());
-DROP TABLE sbx_aco_decon.prod_cad_lancamentos_staging;
-COMMIT;
-ALTER TABLE sbx_aco_decon.prod_cad_lancamentos ADD COLUMN canal VARCHAR(20);
-DROP TABLE IF EXISTS sbx_aco_decon.prod_cad_lancamentos;
--- recriação pelo DDL do contrato e recarga de todas as partições
-segredo fora do texto impresso: True
-```
+- **A conexão de `publish_redshift` é uma `RedshiftConfig`** (decisão do usuário de 2026-09-24):
+  `publish_redshift(db, config, tables, execution_id, max_workers=1, versions=None)` abre uma
+  conexão por tabela pelo `connect` da [etapa 5](PLAN-STAGE-5.md), e `Execution.publish_redshift`
+  usa a configuração `redshift` que a execução recebeu, `Execution(..., redshift=RedshiftConfig(...))`;
+  sem ela, `PublicationError`, sem tocar o Redshift. O motor `"redshift"` sem a configuração a lê
+  das variáveis `SERIALIZE_DB_REDSHIFT_*` e a guarda na execução. Na linha de comando,
+  `serialize-db run --engine redshift` a dá à execução, e `serialize-db run --redshift` a dá a uma
+  execução no motor DuckDB.
+- **A versão publicada é a fixada pela execução** (`versions`), e fora de uma execução, no
+  `serialize-db publish`, a atual do Delta; a tabela que não existe no Delta é `PublicationError`.
+- **A reconciliação lê `svv_all_columns`** pelo esquema e pelo nome da tabela publicada, depois de
+  `select 1 ... limit 0` confirmar que ela existe, e compara cada coluna com o contrato por
+  famílias de tipo (`character varying` e `varchar`, `numeric` e `decimal`, `timestamp without
+  time zone` e `timestamp`), com a largura, a precisão e a escala: a coluna anulável nova entra por
+  `ALTER TABLE ... ADD COLUMN`, fora da transação; a coluna removida, a `NOT NULL` nova e o tipo,
+  a largura ou a escala que mudaram despublicam a tabela, e a publicação que segue é uma primeira
+  publicação. A grafia de `svv_all_columns` no ambiente alvo é leitura da primeira execução lá
+  (`test_reconcile_published_on_the_target`, [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- **A partição removida no Delta** (`version_diff` a devolve pelo `remove`) recebe só o `DELETE`,
+  e a tabela sem partição troca a tabela inteira.
+- **O `1023`, o `UPDATE` sem linha, o `DELETE` da linha de controle sem linha e a tabela publicada
+  que outra primeira publicação criou (`42P07`)** saem como `ExecutionConflict` depois do
+  `ROLLBACK`; outro erro do servidor sobe como veio, com o comando mascarado numa nota.
+- **A suíte no ambiente alvo publica num ambiente `poc<id>` próprio**, cujas tabelas e linhas de
+  controle saem no fim; ela cria a tabela de controle quando não existe e a apaga só nesse caso.
 
 ## Decisões pendentes
 

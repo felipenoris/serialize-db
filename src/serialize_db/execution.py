@@ -6,8 +6,9 @@ cliente, e monta os caminhos: a pasta de cada tabela é ``<raiz>/<ambiente>/<tab
 de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava o snapshot marcado e o
 resumo no log. Entre os dois, o pipeline chama as primitivas: ``ingest`` traz as tabelas presas à
 versão fixada, ``sandbox`` é o motor onde ele roda ``stream``, ``loader``, ``query`` e ``load``,
-``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o contrato e ``publish`` leva as
-partições auditadas ao Delta.
+``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o contrato, ``publish`` leva as
+partições auditadas ao Delta e ``publish_redshift`` as leva aos clientes no Redshift, com a
+configuração ``redshift`` que a execução recebe.
 
 As primitivas podem ser chamadas de qualquer thread: cada comando do motor corre na sessão única,
 sob o lock dela, e o estado mutável da execução (as versões, as auditorias aprovadas, o alocador)
@@ -43,8 +44,7 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 
 import pyarrow as pa
@@ -52,10 +52,17 @@ import sqlalchemy as sa
 from deltalake import DeltaTable
 
 from serialize_db import delta
+from serialize_db._pool import run_in_pool
 from serialize_db.audit import AuditReport, KeyScope
 from serialize_db.engine import Engine
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
-from serialize_db.errors import AuditFailed, ContractError, ExecutionConflict, SandboxError
+from serialize_db.errors import (
+    AuditFailed,
+    ContractError,
+    ExecutionConflict,
+    PublicationError,
+    SandboxError,
+)
 from serialize_db.schema import (
     check_partition_value,
     double_columns,
@@ -177,99 +184,17 @@ def _sequential_key(table: sa.Table) -> sa.Column:
     return key
 
 
-# ---------------------------------------------------------------- o pool das tabelas
-
-# Uma tarefa do pool: o nome da tabela e a função que a processa.
-_Task = tuple[str, Callable[[], object]]
-
-
-def _outcome(future: Future) -> str:
-    """O resultado de uma tarefa terminada ou cancelada, para a nota da exceção."""
-    if future.cancelled():
-        return "cancelada"
-    error = future.exception()
-    if error is None:
-        return "concluída"
-    return f"falhou: {type(error).__name__}: {error}"
-
-
-def _raise_with_outcomes(outcomes: Mapping[str, str], error: BaseException) -> None:
-    """Relança a exceção com o resultado de cada tabela numa nota: os commits feitos ficam, porque o
-    Delta não tem transação entre tabelas."""
-    lines = []
-    for name, outcome in sorted(outcomes.items()):
-        lines.append(f"{name}: {outcome}")
-    error.add_note("resultado por tabela: " + "; ".join(lines))
-    raise error
-
-
-def _outcomes_of(futures: Mapping[Future, str]) -> dict[str, str]:
-    """O resultado de cada tarefa terminada, pelo nome da tabela."""
-    outcomes = {}
-    for future, name in futures.items():
-        outcomes[name] = _outcome(future)
-    return outcomes
-
-
-@dataclasses.dataclass
-class _PoolState:
-    """O estado do pool das tabelas: uma tarefa começa só com um worker livre e nenhuma falha,
-    então, na primeira falha, o que está em curso termina e o que não começou fica de fora."""
-
-    pool: ThreadPoolExecutor
-    workers: int
-    running: dict[Future, str] = dataclasses.field(default_factory=dict)
-    finished: dict[Future, str] = dataclasses.field(default_factory=dict)
-    failure: BaseException | None = None
-
-    def start(self, waiting: list[_Task]) -> None:
-        """Começa as tarefas que cabem nos workers livres, enquanto não houve falha."""
-        while waiting and self.failure is None and len(self.running) < self.workers:
-            name, action = waiting.pop(0)
-            self.running[self.pool.submit(action)] = name
-
-    def collect(self) -> None:
-        """Espera a próxima tarefa terminar e guarda a primeira falha."""
-        done, _ = wait(self.running, return_when=FIRST_COMPLETED)
-        for future in done:
-            self.finished[future] = self.running.pop(future)
-            if future.exception() is not None and self.failure is None:
-                self.failure = future.exception()
-
-
-def _run_in_pool(tasks: list[_Task], max_workers: int) -> dict[str, object]:
-    """Roda as tarefas num pool de ``max_workers`` e devolve o resultado de cada uma pelo nome.
-
-    Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em
-    curso terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de cada
-    tarefa numa nota. Com um worker por tarefa, todas começam juntas e todas terminam.
-    """
-    waiting = list(tasks)
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        state = _PoolState(pool, max_workers)
-        state.start(waiting)
-        while state.running:
-            state.collect()
-            state.start(waiting)
-    outcomes = _outcomes_of(state.finished)
-    for name, _ in waiting:
-        outcomes[name] = "cancelada"
-    if state.failure is not None:
-        _raise_with_outcomes(outcomes, state.failure)
-    results = {}
-    for future, name in state.finished.items():
-        results[name] = future.result()
-    return results
-
-
 # ---------------------------------------------------------------- a execução
 
 
 class Execution:
     """O ciclo de uma execução: as versões fixadas, o sandbox, a auditoria e a publicação.
 
-    ``engine`` é o nome do motor (``"duckdb"``) ou um motor já construído, para os testes.
-    ``execution_id`` ausente vira ``exec-<AAAA-MM-DD>-<uuid8>``.
+    ``engine`` é o nome do motor (``"duckdb"`` ou ``"redshift"``) ou um motor já construído, para
+    os testes. ``execution_id`` ausente vira ``exec-<AAAA-MM-DD>-<uuid8>``. ``redshift`` é a
+    configuração do Redshift (``serialize_db.engine.redshift.RedshiftConfig``), a do motor
+    ``"redshift"`` e a de ``publish_redshift``: o motor ``"redshift"`` sem ela lê as variáveis
+    ``SERIALIZE_DB_REDSHIFT_*``, e ``publish_redshift`` sem ela é ``PublicationError``.
 
     Exemplo:
 
@@ -280,11 +205,12 @@ class Execution:
     """
 
     def __init__(self, db: Database, engine: str | Engine, partition: str,
-                 execution_id: str | None = None) -> None:
+                 execution_id: str | None = None, redshift: object | None = None) -> None:
         self.db = db
         self.partition = _checked_partition(partition, db)
         self.execution_id = check_partition_value(execution_id or _new_execution_id())
         self._engine = engine
+        self.redshift = redshift
         self.versions: dict[str, int | None] = {}
         self.sandbox: Engine | None = None
         self._read: dict[str, int] = {}
@@ -328,7 +254,13 @@ class Execution:
         if self._engine == "duckdb":
             return DuckDBEngine(DuckDBConfig(), self.execution_id, self.db.storage)
         if self._engine == "redshift":
-            raise ContractError("o motor redshift é a etapa 5, ainda não implementada")
+            # O driver do Redshift é o extra "redshift": o módulo entra só quando o motor entra.
+            from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
+
+            if self.redshift is None:
+                self.redshift = RedshiftConfig.from_environment()
+            return RedshiftEngine(self.redshift, self.execution_id, self.db.storage,
+                                  self.db.staging_prefix(self.execution_id))
         raise ContractError(f"motor {self._engine!r}: use 'duckdb' ou 'redshift'")
 
     def __enter__(self) -> Execution:
@@ -434,7 +366,7 @@ class Execution:
             for table in tables:
                 task = functools.partial(self._ingest_in_new_session, table, checked, materialize)
                 tasks.append((table.name, task))
-            _run_in_pool(tasks, max_workers=max(len(tables), 1))
+            run_in_pool(tasks, max_workers=max(len(tables), 1))
 
     def published(self, table: sa.Table) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: é por ela
@@ -620,7 +552,35 @@ class Execution:
             task = functools.partial(self._publish_table, table, values, report)
             tasks.append((table.name, task))
         with self._step("publish"):
-            return _run_in_pool(tasks, max_workers)
+            return run_in_pool(tasks, max_workers)
+
+    def publish_redshift(self, *tables: sa.Table, max_workers: int = 1) -> dict[str, int]:
+        """Publica no Redshift a versão fixada de cada tabela e devolve ``{tabela: versão}``.
+
+        A configuração é a ``redshift`` da execução; sem ela é ``PublicationError``, sem tocar
+        o Redshift. Cada tabela corre numa conexão própria do pool de ``max_workers``, com a
+        transação da publicação (``serialize_db.publication.publish_redshift``): só as partições
+        alteradas desde a versão publicada trocam, e a tabela publicada na versão fixada não
+        muda. A tabela que a execução ainda não gravou no Delta é ``PublicationError``.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            run.publish(Projetado.__table__, partitions=["2026-08-31"])
+            run.publish_redshift(Projetado.__table__)   # {"cad_...": 58}
+        """
+        if self.redshift is None:
+            raise PublicationError("publish_redshift precisa da configuração do Redshift: "
+                                   "Execution(..., redshift=RedshiftConfig(...))")
+        from serialize_db import publication
+
+        with self._lock:
+            versions = {name: version for name, version in self.versions.items()
+                        if version is not None}
+        with self._step("publish_redshift"):
+            return publication.publish_redshift(self.db, self.redshift, list(tables),
+                                                self.execution_id, max_workers, versions)
 
     def snapshot(self, name: str) -> None:
         """Marca a execução: ``serialize_db_snapshot`` nos commits seguintes e, no encerramento sem

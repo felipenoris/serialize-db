@@ -289,3 +289,31 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `NaN > -inf` as true. `redshift.py` at 01:41 read the whole session section: 25 load errors in
   30 days in `sys_load_error_detail` (1.5 s), no external schema, two tables in the schema, none
   with the library prefix. `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+
+## The engine and the publication as implemented (2026-09-24)
+
+- `serialize_db.engine.redshift` and `serialize_db.publication` were written on 2026-09-24 and
+  ran only on the stand-in; no command of theirs reached the target. What the code assumes about
+  the target and the first target run reads: a missing relation answers SQLSTATE `42P01` or a
+  message with `does not exist` (`relation_missing`, used by `name_in_use` and the control table
+  check); an existing one `42P07` or `already exists`; the `1023` text of a serializable
+  violation; `svv_all_columns.data_type` spelled `character varying`, `numeric`, `timestamp
+  without time zone`, `double precision`, `super` (the publication compares by type family, so
+  `varchar`, `decimal` and `timestamp` also match); the manifest of an `UNLOAD` to a prefix with
+  `=` keeps the `=` unencoded and names the `PARALLEL OFF` file `000.parquet` (target reading of
+  2026-09-24, `redshift.unload_hive.files`). `plan/PLAN-STAGE-5.md`, `plan/OPEN_QUESTIONS.md`
+- A positional `COPY` cannot load a subset of a file's columns (the column list must match the
+  file's count, reading of 2026-09-21), so the audit's published staging carries every contract
+  column and is the same `exec_<id>_<tabela>_publicado` as `published()`, loaded once per
+  execution and only when a check that cites it runs. The stream's schema comes from the
+  `row_desc` of `select * from (<texto>) as t limit 0`, and each batch of the `UNLOAD` file is
+  cast to it (`INT96` coerced to microseconds, `SUPER` as text). `plan/PLAN-STAGE-5.md`
+- The loader of a table with a JSON column loads through a `CREATE TEMP TABLE` staging with the
+  JSON in `VARCHAR(65535)` and `INSERT ... JSON_PARSE`, because the Parquet `COPY` into `SUPER`
+  needs `SERIALIZETOJSON`, never read on a small string; the export serializes the column with
+  `JSON_SERIALIZE` so the `UNLOAD` file carries text. `plan/PLAN-STAGE-5.md`
+- The stand-in maps DuckDB's `TransactionContext Error: Conflict on tuple deletion!` to the
+  `1023` message, catalog `does not exist` to `42P01` and `already exists` to `42P07`, and lists
+  `svv_all_columns` from the DDL it remembers, in Redshift's spelling; the concurrent publication
+  test pauses every connection of the second publication after its control-row read through the
+  `driver_connect` seam. `plan/POC.md`, `tests/emulator.py`

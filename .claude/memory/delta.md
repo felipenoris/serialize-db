@@ -217,3 +217,14 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   DuckDB `COPY` path stays for `export --mode rewrite` and compaction). `optimize.compact` runs in
   delta-rs too, with its default parallel tasks, memory unmeasured.
   `plan/PLAN-STAGE-9.md`, `plan/OPEN_QUESTIONS.md`
+
+## The registration of UNLOAD files (2026-09-24)
+
+- `create_write_transaction` with an empty action list, in an `overwrite` of a partition, raises
+  `IndexError` (`deltalake` 1.6.4): `register_files` needs at least one file, so the Redshift
+  engine writes an empty Parquet file with the contract schema minus the partition column for an
+  empty partition and registers it. `file_from_footer` (protected) reads `null_count` for every
+  contract column and min and max for integer, `Double` and date columns only: pyarrow 25.0.1
+  exposes no `is_min_value_exact`, and a string's footer min and max may be truncated.
+  `partition_values` (protected) lists the partitions with files in a version. `plan/POC.md`,
+  `plan/PLAN-STAGE-5.md`

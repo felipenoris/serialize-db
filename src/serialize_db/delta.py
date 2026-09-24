@@ -441,6 +441,60 @@ def file_from_return_stats(row: Mapping[str, object], table: sa.Table, uri: str)
     )
 
 
+def _footer_statistics(footer: pq.ParquetFile, index: int) -> tuple[int, object, object]:
+    """A soma dos nulos e o mínimo e o máximo da coluna ``index`` nos grupos de linhas do rodapé;
+    o mínimo e o máximo ficam ``None`` quando algum grupo não os tem."""
+    nulls = 0
+    minimum = None
+    maximum = None
+    complete = True
+    for group in range(footer.metadata.num_row_groups):
+        statistics = footer.metadata.row_group(group).column(index).statistics
+        if statistics is None:
+            complete = False
+            continue
+        if statistics.has_null_count:
+            nulls += statistics.null_count
+        if not statistics.has_min_max:
+            complete = False
+            continue
+        minimum = statistics.min if minimum is None else min(minimum, statistics.min)
+        maximum = statistics.max if maximum is None else max(maximum, statistics.max)
+    if not complete:
+        return nulls, None, None
+    return nulls, minimum, maximum
+
+
+def file_from_footer(footer: pq.ParquetFile, path: str, size: int, rows: int,
+                     table: sa.Table) -> RegisteredFile:
+    """O arquivo que outro escritor gravou dentro da pasta da tabela, como o ``UNLOAD`` do
+    Redshift, descrito pelo rodapé Parquet dele; protegida, para o motor Redshift.
+
+    ``path`` é relativo à pasta da tabela, ``size`` e ``rows`` são os que o manifesto declara. O
+    ``null_count`` entra de toda coluna do contrato com estatística em todos os grupos de linhas, e
+    o mínimo e o máximo só das colunas inteiras, ``Double`` e de data: o rodapé pode guardar o
+    mínimo e o máximo de um texto truncados, e o PyArrow 25 não expõe a marca de exatidão do
+    Parquet, então o texto fica sem os dois, e o leitor não poda por ele.
+    """
+    contract = arrow_schema(table)
+    names = footer.schema_arrow.names
+    minimum: dict[str, object] = {}
+    maximum: dict[str, object] = {}
+    nulls: dict[str, int] = {}
+    for field in contract:
+        if field.name not in names:
+            continue
+        null_count, low, high = _footer_statistics(footer, names.index(field.name))
+        nulls[field.name] = null_count
+        convert = _stat_converter(field.type)
+        if convert is None or pa.types.is_string(field.type) or low is None or high is None:
+            continue
+        minimum[field.name] = convert(low)
+        maximum[field.name] = convert(high)
+    return RegisteredFile(path=path, size=int(size), rows=int(rows),
+                          stats={"min": minimum, "max": maximum, "null_count": nulls})
+
+
 def _exact_statistic(field_type: pa.DataType) -> bool:
     """Se o mínimo e o máximo do tipo transcrevem exato no log: inteiro, data, ``Double`` e
     texto."""
@@ -1155,6 +1209,19 @@ def version_diff(uri: str, published: int, current: int, table: sa.Table,
                 f"{published} e {current} não podem ser lidas, publique a tabela inteira") from None
         changed.update(_changed_partitions(text, partition_by))
     return changed
+
+
+def partition_values(dt: DeltaTable, partition_by: str | None) -> list[str | None]:
+    """Os valores de partição com algum arquivo na versão carregada, em ordem de texto; numa tabela
+    sem partição, ``[None]`` quando ela tem arquivo e ``[]`` quando não tem. Protegida, para os
+    motores e a publicação, que carregam uma partição por vez."""
+    actions = pa.table(dt.get_add_actions(flatten=True))
+    if actions.num_rows == 0:
+        return []
+    if partition_by is None:
+        return [None]
+    values = set(actions.column(f"partition.{partition_by}").to_pylist())
+    return sorted(values)
 
 
 def _in_partitions(action: Mapping[str, object], partition_columns: list[str],

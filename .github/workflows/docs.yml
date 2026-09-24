@@ -29,7 +29,7 @@ jobs:
           python-version: "3.13"
 
       - name: Instalar o pacote e o pdoc
-        run: uv sync --group docs
+        run: uv sync --group docs --extra redshift
 
       - name: Gerar a documentação
         run: uv run pdoc serialize_db --docformat restructuredtext -o site

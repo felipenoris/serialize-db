@@ -455,8 +455,9 @@ def column_ddl(column: sa.Column, dialect: Dialect) -> str:
     return text
 
 
-def _redshift_options(options: TableOptions) -> str:
-    """As cláusulas físicas do Redshift depois do parêntese: DISTSTYLE, DISTKEY e SORTKEY."""
+def redshift_options(options: TableOptions) -> str:
+    """As cláusulas físicas do Redshift depois do parêntese: DISTSTYLE, DISTKEY e SORTKEY;
+    protegida, para o DDL das tabelas publicadas."""
     clauses = []
     if options.redshift.get("diststyle"):
         clauses.append(f"DISTSTYLE {options.redshift['diststyle']}")
@@ -494,7 +495,7 @@ def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", temporary: bool = F
     keyword = "CREATE TEMP TABLE" if temporary else "CREATE TABLE"
     text = f"{keyword} {quoted(prefix + table.name)} (\n" + ",\n".join(lines) + "\n)"
     if dialect == "redshift":
-        text += _redshift_options(table_options(table))
+        text += redshift_options(table_options(table))
     return text
 
 

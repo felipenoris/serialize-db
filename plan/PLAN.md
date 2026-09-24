@@ -519,8 +519,9 @@ Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`,
 ficam no grupo `dev` até a etapa 2 e entram nas dependências de execução com ela, porque `render`
 compila por esses dialetos (decisão do usuário de 2026-09-21, [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md))
 e os motores chamam `render` em tempo de execução (a etapa 1 gera o DDL pela tabela de tipos, sem
-dialeto); `redshift-connector==2.1.16` entra no extra `redshift`, fixado porque o motor lê o
-`type_modifier` do `row_desc` privado do driver ([etapa 5](PLAN-STAGE-5.md)), e `sqlglot`
+dialeto); `redshift-connector==2.1.17` entra no extra `redshift`, fixado porque o motor lê o
+`type_modifier` do `row_desc` privado do driver ([etapa 5](PLAN-STAGE-5.md); a versão do ambiente
+de desenvolvimento, decisão do usuário de 2026-09-24), e `sqlglot`
 no grupo `dev`; o pandas fica no grupo `dev`, para o teste do ciclo com `ArrowDtype`, porque a
 biblioteca não o importa. `prepare_offline.sh` passa a instalar os extras (`--all-extras`) e é rodado
 de novo a cada mudança.
