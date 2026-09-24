@@ -53,100 +53,41 @@ SERIALIZE_DB_TEST_REPORT=probes/output/publication_2.json .venv/bin/python -m py
 
 # Migração Parquet -> Delta
 
+Tabelas:
+
+```
+cad_aliquotas
+cad_contas
+cad_contratos
+cad_lancamentos
+cad_operacoes
+dom_hierarquias_contas
+dom_mensuracoes
+dom_negocios
+dom_segmentos
+dom_veiculos
+rel_contas_hierarquias
+rel_contrato_operacao
+```
+
 ```
 cd ~/work/projects/serialize-db
 
 export PYTHONPATH=tests
 export SOURCE_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
 export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta/db_projetado
-
-export TABELA=cad_aliquotas
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=cad_contas
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=cad_contratos
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=cad_lancamentos
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=cad_operacoes
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=dom_hierarquias_contas
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=dom_mensuracoes
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=dom_negocios
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=dom_segmentos
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=dom_veiculos
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=rel_contas_hierarquias
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
-export TABELA=rel_contrato_operacao
-.venv/bin/python scripts/migrate_parquet_to_delta.py \
-    --metadata client_model:Base.metadata \
-    --source $SOURCE_PATH \
-    --root   $TARGET_ROOT_PATH \
-    --tables "${TABELA}" --report "relatorio_${TABELA}.json"
-
 export AWS_DEFAULT_REGION=sa-east-1
+
+.venv/bin/python scripts/migrate_parquet_to_delta.py \
+    --metadata client_model:Base.metadata \
+    --environment prod \
+    --source $SOURCE_PATH \
+    --root $TARGET_ROOT_PATH \
+    --report probes/output/carga_inicial_delta.json
+
 .venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH
 ```
+
 # Resultados
 
 ```
