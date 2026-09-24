@@ -4,7 +4,10 @@ O runbook das rotinas de operação do banco Delta, cada uma um subcomando de `s
 as primitivas de `serialize_db.delta`, com o que conferir antes e o que esperar depois. Todos os
 subcomandos recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--environment`
 (`SERIALIZE_DB_ENVIRONMENT`, `dev`), e saem com 0 quando terminam e com 2 no erro de uso, no nome
-repetido ou ausente e no conflito de escrita do arquivo de controle.
+repetido ou ausente e no conflito de escrita do arquivo de controle. `compact`, `archive` e
+`export` imprimem por tabela o tempo e o pico de memória residente do processo (`VmHWM`), a
+medida da rotina na tabela com que a máquina é dimensionada; a publicação a põe na linha de log
+de cada tabela.
 
 ### Tabela de controle da publicação
 
@@ -50,8 +53,9 @@ serialize-db compact --root s3://bucket/projeto/delta --environment prod \
 Antes: o arquivo de controle sem snapshot na versão atual da tabela (o comando confere e recusa);
 a memória da máquina, porque a reescrita roda no escritor do delta-rs, fora do `memory_limit` do
 DuckDB, e a memória dela numa partição de `cad_lancamentos` não foi medida. Depois: `numFilesAdded`
-e `numFilesRemoved` impressos, um commit `OPTIMIZE` com `dataChange` falso, que
-`serialize_db.delta.version_diff` não conta; uma partição com um só arquivo não commita.
+e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a medida da memória da
+compactação; um commit `OPTIMIZE` com `dataChange` falso, que `serialize_db.delta.version_diff`
+não conta; uma partição com um só arquivo não commita.
 
 ### `vacuum`
 
@@ -89,8 +93,10 @@ serialize-db archive --root s3://bucket/projeto/delta --environment prod \
 
 Antes: o snapshot registrado em `snapshots`; a pasta `arquivo/<nome>/` recebe a regra de ciclo de
 vida do bucket. Depois: uma tabela nova por tabela do snapshot, com uma versão por partição, os
-mesmos arquivos e as mesmas somas; a entrada em `archived`, que `vacuum` não prende mais, e
-`snapshot` recusando o nome, porque ele dá a pasta. O comando se repete depois de uma interrupção
+mesmos arquivos e as mesmas somas, cada tabela impressa com o tempo da cópia e o pico de RSS do
+processo, e o tempo de cada partição no log; a entrada em `archived`, que `vacuum` não prende
+mais, e `snapshot` recusando o nome, porque ele dá a pasta. O comando se repete depois de uma
+interrupção
 e continua de onde parou: a tabela já inteira no arquivo e a partição já registrada nele são
 puladas, e só o que falta é copiado.
 
@@ -107,7 +113,7 @@ serialize-db export --root s3://bucket/projeto/delta --environment prod \
 
 Antes: o destino vazio e sob a raiz. Depois: em `copy`, os mesmos bytes dos arquivos que o log da
 versão lista; em `rewrite`, um arquivo por partição pelo `COPY` do DuckDB, com o esquema da versão em
-todos; `--version` ausente é a versão atual.
+todos; o tempo e o pico de RSS do processo impressos; `--version` ausente é a versão atual.
 
 ### Auditoria avulsa
 

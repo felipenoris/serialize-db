@@ -4,15 +4,17 @@ O pacote roda em máquinas de tamanhos diferentes, e os limites do DuckDB saem d
 de um valor fixo no código (``serialize_db.engine.duckdb.environment_limits``). No Linux, as
 leituras respeitam o cgroup do processo, v1 e v2, com que um contêiner limita as CPUs e a memória
 abaixo das da máquina, e o menor limite no caminho do cgroup até a raiz é o que vale. Fora do Linux,
-vale a memória física e as CPUs que o Python lê.
+vale a memória física e as CPUs que o Python lê. ``peak_rss_mb`` lê o pico de memória residente
+do próprio processo, a medida que o script de migração, os subcomandos de operação e a publicação
+imprimem por tabela.
 
 Exemplo:
 
 .. code-block:: python
 
-    from serialize_db.resources import available_cpus, available_memory
+    from serialize_db.resources import available_cpus, available_memory, peak_rss_mb
 
-    print(available_cpus(), f"{available_memory() / 2**30:.1f} GiB")
+    print(available_cpus(), f"{available_memory() / 2**30:.1f} GiB", f"{peak_rss_mb():.0f} MB")
 """
 
 from __future__ import annotations
@@ -20,9 +22,11 @@ from __future__ import annotations
 import math
 import os
 import re
+import resource
+import sys
 from pathlib import Path
 
-__all__ = ["available_cpus", "available_memory"]
+__all__ = ["available_cpus", "available_memory", "peak_rss_mb"]
 
 # As raízes lidas; os testes as trocam por pastas fabricadas.
 _PROC = Path("/proc")
@@ -74,6 +78,26 @@ def available_memory() -> int:
     if room is not None:
         readings.append(room)
     return min(readings)
+
+
+def peak_rss_mb() -> float:
+    """O pico de memória residente do próprio processo até agora, em MB: no Linux, o ``VmHWM`` de
+    ``/proc/self/status``, em KB; fora dele, o ``ru_maxrss`` do processo, em bytes no macOS e em
+    KB nos outros Unix. Num processo filho, a leitura é a do filho, não a do pai.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        peak_rss_mb()   # 297.2 no script de migração, depois das importações
+    """
+    status = _PROC / "self" / "status"
+    if status.exists():
+        kilobytes = re.search(r"^VmHWM:\s+(\d+)", status.read_text(), re.MULTILINE).group(1)
+        return int(kilobytes) / 1024
+    maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    unit = 1024 * 1024 if sys.platform == "darwin" else 1024
+    return maxrss / unit
 
 
 def _meminfo_available() -> int | None:

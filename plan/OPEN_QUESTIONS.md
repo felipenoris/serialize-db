@@ -50,8 +50,10 @@ foi medido em [`POC.md`](POC.md).
   transferência gerenciada do `boto3`) e a publicação da base inteira no Redshift rodaram sem erro
   ([`POC.md`](POC.md)). `export` e `compact` (a memória da compactação, o item acima) ainda não
   rodaram lá, e a duração do `archive` e a da publicação de `cad_lancamentos` ficaram sem
-  leitura, porque a linha de comando não imprime tempo; a continuação de uma cópia interrompida
-  só o substituto exercitou.
+  leitura, porque a linha de comando não imprimia tempo: desde a decisão do usuário do mesmo dia,
+  `compact`, `archive` e `export` imprimem por tabela o tempo e o pico de RSS do processo, a
+  publicação os põe no log de cada tabela e `deep_copy` registra o tempo de cada partição, e a
+  próxima execução lá os lê; a continuação de uma cópia interrompida só o substituto exercitou.
 
 ## Decisões de API pendentes por etapa
 

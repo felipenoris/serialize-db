@@ -332,8 +332,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   published the other 11 tables with every partition, `cad_lancamentos` at version 4 with
   141,901,795 rows through `COPY ... MANIFEST` over the files the load's DuckDB `COPY` wrote, and
   `--status` read the 12 tables as `prod_<table>` with published equal to current and no pending
-  partition; the CLI prints no duration, so nothing of the publication's time was read.
-  `plan/POC.md`
+  partition; the CLI printed no duration then, so nothing of the publication's time was read;
+  since the user's decision of the same day each published table's log line carries the
+  partitions, the time and the process's peak RSS. `plan/POC.md`
 - A positional `COPY` cannot load a subset of a file's columns (the column list must match the
   file's count, reading of 2026-09-21), so the audit's published staging carries every contract
   column and is the same `exec_<id>_<tabela>_publicado` as `published()`, loaded once per

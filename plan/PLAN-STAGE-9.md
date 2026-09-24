@@ -79,29 +79,34 @@ do `pdoc`. O que a implementação mudou do plano:
   removido passa dela.
 - **`compact`** confere o arquivo de controle e recusa a tabela cujo snapshot é a versão atual,
   porque a compactação depois do snapshot dobra os arquivos que ele referencia; depois roda
-  `optimize.compact` das partições pedidas e imprime `numFilesAdded` e `numFilesRemoved`; uma
-  partição com um só arquivo não commita. A compactação roda no escritor do delta-rs, fora do
+  `optimize.compact` das partições pedidas e imprime `numFilesAdded` e `numFilesRemoved` com o
+  tempo e o pico de RSS do processo (decisão do usuário de 2026-09-24); uma partição com um só
+  arquivo não commita. A compactação roda no escritor do delta-rs, fora do
   `memory_limit` do DuckDB, com as tarefas paralelas do padrão do delta-rs; a memória dela numa
   partição de `cad_lancamentos` não foi medida ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **`archive`** lê a entrada do snapshot, roda `deep_copy(<ambiente>/<tabela>, versão,
-  <ambiente>/arquivo/<nome>/<tabela>, storage)` de cada tabela na versão registrada, e move a
-  entrada de `snapshots` para a chave irmã `archived` do mesmo arquivo por
-  `archive_snapshot`, na escrita condicional (decisão do usuário de 2026-09-23):
+  <ambiente>/arquivo/<nome>/<tabela>, storage)` de cada tabela na versão registrada, imprime
+  por tabela o tempo e o pico de RSS do processo, com o tempo de cada partição no log de
+  `deep_copy` (decisão do usuário de 2026-09-24), e move a entrada de `snapshots` para a chave
+  irmã `archived` do mesmo arquivo por `archive_snapshot`, na escrita condicional (decisão do
+  usuário de 2026-09-23):
   `vacuum_keeping_snapshots` lê só `snapshots`, então a entrada arquivada deixa de prender as
   versões e o registro do snapshot fica no controle. Os dados não passam pela máquina, a memória é a
   dos rodapés e do log, e os arquivos ficam idênticos aos da origem, com o `INT96` e o
   `FIXED_LEN_BYTE_ARRAY` do `UNLOAD` inclusive; a normalização fica com `export --mode rewrite` e
   com a compactação, que reescrevem.
-- **`export`** chama `export_snapshot` com `--mode copy` ou `rewrite`; `--version` exporta uma
-  versão antiga, com o DDL tirado do esquema daquela versão.
+- **`export`** chama `export_snapshot` com `--mode copy` ou `rewrite` e imprime o tempo e o pico
+  de RSS do processo; `--version` exporta uma versão antiga, com o DDL tirado do esquema daquela
+  versão.
 - **No ambiente alvo** (2026-09-24, sobre a raiz da carga pelo pacote): na bateria das 12:38,
   `history`, `snapshot` e `vacuum` rodaram, e `archive` copiou três tabelas e morreu no
   `CopyObject` do arquivo da partição 2026-06-30 de `cad_lancamentos`, abandonado pelo SDK da AWS
   depois de 3 segundos sem resposta ([`POC.md`](POC.md)), o que levou `Storage.copy` à
   transferência gerenciada do `boto3` ([etapa 3](PLAN-STAGE-3.md)); na das 16:51, sobre a raiz
   recarregada, os quatro rodaram inteiros, e `archive` copiou os 21 arquivos das 12 tabelas, um
-  commit por partição, e moveu a entrada para `archived`, sem imprimir a duração; `export`,
-  `compact` e a duração das rotinas esperam ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  commit por partição, e moveu a entrada para `archived`, sem imprimir a duração, que as rotinas
+  imprimem desde a decisão do usuário do mesmo dia; `export`, `compact` e a leitura das medidas lá
+  esperam ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **`history`** imprime, por tabela, versão, operação, carimbo e os metadados
   `serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`; os commits
   de `vacuum` (`VACUUM START`, `VACUUM END`) e de `OPTIMIZE` aparecem sem metadados.
@@ -129,9 +134,9 @@ do `pdoc`. O que a implementação mudou do plano:
 | --- | --- | --- |
 | Snapshot e histórico | `test_snapshot_records_every_table_and_history_shows_the_metadata` | A entrada com a versão atual de cada tabela existente; o nome repetido recusado; o `history` do mais recente ao mais antigo, com os três metadados nos commits da biblioteca e nenhum no `CREATE TABLE`. |
 | Snapshot preso | `test_vacuum_keeps_the_snapshot_version` | Dentro da retenção nada é listado; com retenção zero, o arquivo da versão anterior ao snapshot é listado e, com `--apply`, apagado; a versão do snapshot lê e a anterior falha. |
-| Compactação antes | `test_compact_refuses_after_a_snapshot_on_the_current_version` | Recusa quando o snapshot é a versão atual, também na tabela sem partição; compacta depois de uma versão nova, num commit `OPTIMIZE` que `version_diff` não conta; `--partitions` exigido na tabela particionada; a tabela fora do modelo é erro de uso. |
-| Arquivo | `test_archive_copies_each_table_with_the_same_sums` | Uma versão por partição no arquivo, os mesmos arquivos e as mesmas somas da versão registrada, a entrada em `archived` e fora de `snapshots`, o `vacuum` sem a versão arquivada em `keep_versions`, `snapshot` recusando o mesmo nome, `archive` recusando o nome ausente e pulando a tabela já arquivada. |
-| Exportação | `test_export_by_copy_and_by_rewrite` | Os dois modos e uma versão antiga; o destino não vazio e o destino fora da raiz recusados. |
+| Compactação antes | `test_compact_refuses_after_a_snapshot_on_the_current_version` | Recusa quando o snapshot é a versão atual, também na tabela sem partição; compacta depois de uma versão nova, num commit `OPTIMIZE` que `version_diff` não conta; `--partitions` exigido na tabela particionada; a tabela fora do modelo é erro de uso; a linha impressa com o tempo e o pico de RSS. |
+| Arquivo | `test_archive_copies_each_table_with_the_same_sums` | Uma versão por partição no arquivo, os mesmos arquivos e as mesmas somas da versão registrada, a entrada em `archived` e fora de `snapshots`, o `vacuum` sem a versão arquivada em `keep_versions`, `snapshot` recusando o mesmo nome, `archive` recusando o nome ausente e pulando a tabela já arquivada, com o tempo e o pico de RSS na linha de cada tabela. |
+| Exportação | `test_export_by_copy_and_by_rewrite` | Os dois modos e uma versão antiga; o destino não vazio e o destino fora da raiz recusados; a linha impressa com o tempo e o pico de RSS. |
 | Erros de uso | `test_cli_operation_usage_errors` | O nome ausente, o modo desconhecido, a tabela fora do modelo e a tabela sem Delta, sem traceback. |
 | Cópia profunda | `tests/test_delta.py::test_deep_copy_and_relocation` | O mesmo arquivo, caminho, tamanho e extremos da origem na cópia, uma versão por partição, as mesmas somas; a repetição sem commit, a cópia da versão 2 sobre a da 1 só com a partição que falta, e a versão 1 sobre a cópia da 2 recusada. |
 

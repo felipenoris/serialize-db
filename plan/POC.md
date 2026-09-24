@@ -3315,5 +3315,8 @@ probe das threads, `export` e `compact` não rodaram.
   tempo: a duração da publicação, `cad_lancamentos` inclusive, ficou sem leitura.
 
 **Consequências**: [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perdeu a repetição do `archive` e a
-publicação da base inteira; ficam nele `export`, `compact` e as durações do `archive` e do
-`publish`, que a linha de comando não imprime. Nenhum código mudou.
+publicação da base inteira; ficam nele `export`, `compact` e a leitura das medidas. Pela decisão
+do usuário do mesmo dia, `compact`, `archive` e `export` imprimem por tabela o tempo e o pico de
+RSS do processo, a publicação os põe no log de cada tabela e `deep_copy` registra o tempo de cada
+partição; a leitura é `serialize_db.resources.peak_rss_mb`, que o script de migração passa a
+importar.

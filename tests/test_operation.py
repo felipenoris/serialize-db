@@ -14,6 +14,7 @@ de comando.
 
 from __future__ import annotations
 
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -165,7 +166,8 @@ def test_compact_refuses_after_a_snapshot_on_the_current_version(
     delta.publish_partition(uri, PROJECTED, MONTHS[0], entries(MONTHS[0], 50, 10, PROJECTED),
                             delta.commit_metadata("exec-2", {}), storage)
     assert cli.main([*compact, "--partitions", MONTHS[1]]) == 0
-    assert "1 arquivo(s) gravado(s), 3 removido(s)" in capsys.readouterr().out
+    assert re.search(r"1 arquivo\(s\) gravado\(s\), 3 removido\(s\), em \d+\.\d s; "
+                     r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
     current = delta.open_table(uri, storage).version()
     assert current == 6
     assert delta.version_diff(uri, 5, 6, PROJECTED, storage) == set()
@@ -203,7 +205,8 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
 
     assert cli.main(["archive", *common(db), "--name", "2026T3"]) == 0
     out = capsys.readouterr().out
-    assert "cad_lancamentos: versão 2 copiada para" in out and "versão 2 no arquivo" in out
+    assert re.search(r"cad_lancamentos: versão 2 copiada para .*, versão 2 no arquivo, "
+                     r"em \d+\.\d s; RSS máximo do processo \d+ MB", out)
     assert "cad_contas: versão 1 copiada para" in out and "versão 1 no arquivo" in out
     assert "snapshot 2026T3 movido para archived" in out
 
@@ -276,7 +279,8 @@ def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixtu
     export = ["export", *common(db), "--table", "cad_lancamentos", "--destination"]
     copy_uri = storage.uri_of("prod/exportacao/copia")
     assert cli.main([*export, copy_uri]) == 0
-    assert "cad_lancamentos: 2 arquivo(s) em" in capsys.readouterr().out
+    assert re.search(r"cad_lancamentos: 2 arquivo\(s\) em .*, em \d+\.\d s; "
+                     r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
     rewritten = storage.uri_of("prod/exportacao/reescrita")
     assert cli.main([*export, rewritten, "--mode", "rewrite"]) == 0
     assert cli.main([*export, storage.uri_of("prod/exportacao/antiga"), "--version", "1"]) == 0

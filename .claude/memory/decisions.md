@@ -818,3 +818,16 @@ contract refusal), `config` on `initial_load` and `load_report` for the tests' e
 call per partition in the script for the progress JSON, and the foreign-key audit left to
 `serialize-db audit --foreign-keys` after the load. `plan/PLAN-STAGE-7.md`, `plan/CURRENT_STATE.md`,
 `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## The routines print their measure (2026-09-24)
+
+After the 16:51 battery ran the whole `archive` and the publication of the base with no duration
+printed, the assistant proposed that `archive`, `publish`, `export` and `compact` print the time
+and the peak RSS per table, like the migration script, and the user answered "Pode implementar a
+duração e o pico de RSS por tabela." The assistant's choices, named in the report: the measure on
+the CLI's printed line for `compact`, `archive` and `export` (`em <s> s; RSS máximo do processo
+<MB> MB`, the script's format), on the per-table log line of `publish_redshift` for the
+publication, whose CLI line is a summary printed at the end; `peak_rss_mb` in
+`serialize_db.resources`, read from `_PROC / "self/status"` so the tests fabricate it, with the
+script importing it; and, beyond the ask, the copy time of each partition on `deep_copy`'s log
+line. `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-9.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`

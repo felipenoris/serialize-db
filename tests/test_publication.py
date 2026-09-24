@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import re
 import tempfile
 import threading
@@ -508,15 +509,19 @@ def control_rows(target: Target) -> dict[str, tuple[int, str]]:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_first_publication_loads_every_partition(target: Target) -> None:
+def test_first_publication_loads_every_partition(target: Target,
+                                                 caplog: pytest.LogCaptureFixture) -> None:
     """Sem linha de controle, a tabela publicada criada, todas as partições e o ``INSERT`` da
     linha de controle, numa transação, sobre os arquivos que o motor DuckDB exportou pelo
-    registro, com ``Numeric(18, 2)``, ``DateTime`` e a coluna JSON; a publicação repetida na
-    mesma versão não muda nada."""
+    registro, com ``Numeric(18, 2)``, ``DateTime`` e a coluna JSON, e a tabela no log com as
+    partições, o tempo e o pico de RSS; a publicação repetida na mesma versão não muda nada."""
     db = target.db
     version = export_with_duckdb(target, PROJECTED, MONTHS)
-    assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-1") == {
-        PROJECTED.name: version}
+    with caplog.at_level(logging.INFO, logger="serialize_db.publication"):
+        assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-1") == {
+            PROJECTED.name: version}
+    assert re.search(rf"{PROJECTED.name} publicada na versão {version}: partições \[.*\], "
+                     r"em \d+\.\d s; RSS máximo do processo \d+ MB", caplog.text)
     rows = published_rows(target, PROJECTED)
     assert {value: len(items) for value, items in rows.items()} == {MONTHS[0]: 40, MONTHS[1]: 40}
     expected = entries(MONTHS[1], 41, 40, PROJECTED)

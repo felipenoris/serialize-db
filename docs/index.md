@@ -480,7 +480,8 @@ texto que as carrega nunca vai a log, e `serialize_db.engine.redshift.mask` o ma
 partir do Delta, uma transação por tabela: a linha de `serialize_db_publications` lida no início
 diz a versão publicada, `serialize_db.delta.version_diff` diz as partições alteradas desde ela,
 cada uma entra por `COPY ... MANIFEST` numa staging temporária e `INSERT ... SELECT`, e a linha de
-controle é gravada por último. A tabela de controle é criada uma vez, pelo usuário:
+controle é gravada por último; cada tabela publicada vai ao log com as partições, o tempo e o pico
+de memória residente do processo. A tabela de controle é criada uma vez, pelo usuário:
 
 ```shell
 serialize-db publish --init

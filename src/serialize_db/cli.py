@@ -68,6 +68,7 @@ import logging
 import os
 import pkgutil
 import sys
+import time
 import uuid
 from collections.abc import Callable
 
@@ -85,6 +86,7 @@ from serialize_db.errors import (
 )
 from serialize_db.execution import Database, Execution
 from serialize_db.load import LoadReport
+from serialize_db.resources import peak_rss_mb
 
 __all__ = ["main"]
 
@@ -625,9 +627,17 @@ def _vacuum(args: argparse.Namespace) -> int:
     return 0
 
 
+def _measure(started: float) -> str:
+    """O tempo desde ``started`` e o pico de memória residente do processo, no formato do script
+    de migração: a medida da rotina na tabela, para dimensionar a máquina."""
+    seconds = time.perf_counter() - started
+    return f"em {seconds:.1f} s; RSS máximo do processo {peak_rss_mb():.0f} MB"
+
+
 def _compact(args: argparse.Namespace) -> int:
-    """A compactação das partições pedidas; 2 na tabela fora do modelo ou sem Delta, na tabela
-    particionada sem ``--partitions`` e no snapshot na versão atual da tabela."""
+    """A compactação das partições pedidas, com o tempo e o pico de RSS impressos; 2 na tabela
+    fora do modelo ou sem Delta, na tabela particionada sem ``--partitions`` e no snapshot na
+    versão atual da tabela."""
     db = Database(args.root, args.environment, args.metadata)
     found = _existing_table(args, db, "compact")
     if found is None:
@@ -644,17 +654,19 @@ def _compact(args: argparse.Namespace) -> int:
             print(f"serialize-db compact: o snapshot {name} está na versão atual {current} de "
                   f"{table.name}; compacte antes de um snapshot", file=sys.stderr)
             return 2
+    started = time.perf_counter()
     metrics = delta.compact(uri, table, args.partitions or [], db.storage)
     print(f"{table.name}: {metrics['numFilesAdded']} arquivo(s) gravado(s), "
-          f"{metrics['numFilesRemoved']} removido(s)")
+          f"{metrics['numFilesRemoved']} removido(s), {_measure(started)}")
     return 0
 
 
 def _archive(args: argparse.Namespace) -> int:
-    """A cópia de cada tabela do snapshot para ``arquivo/<nome>/`` e a entrada movida para
-    ``archived``; 2 no snapshot ausente de ``snapshots``, na tabela do snapshot que já não existe
-    na raiz e no conflito de escrita. A repetição depois de uma interrupção continua a cópia:
-    ``deep_copy`` pula as partições já registradas no arquivo."""
+    """A cópia de cada tabela do snapshot para ``arquivo/<nome>/``, com o tempo e o pico de RSS
+    impressos por tabela, e a entrada movida para ``archived``; 2 no snapshot ausente de
+    ``snapshots``, na tabela do snapshot que já não existe na raiz e no conflito de escrita. A
+    repetição depois de uma interrupção continua a cópia: ``deep_copy`` pula as partições já
+    registradas no arquivo."""
     db = Database(args.root, args.environment, args.metadata)
     storage = db.storage
     control, _ = delta.read_snapshots(storage, db.environment)
@@ -674,8 +686,10 @@ def _archive(args: argparse.Namespace) -> int:
     # Toda tabela conferida antes da primeira cópia: um snapshot com uma tabela sumida não deixa
     # um arquivo pela metade.
     for name, version, source, destination in pending:
+        started = time.perf_counter()
         copied = delta.deep_copy(source, version, destination, storage)
-        print(f"{name}: versão {version} copiada para {destination}, versão {copied} no arquivo")
+        print(f"{name}: versão {version} copiada para {destination}, versão {copied} no arquivo, "
+              f"{_measure(started)}")
     try:
         delta.archive_snapshot(storage, db.environment, args.name)
     except (ValueError, ConflictError) as error:
@@ -686,8 +700,9 @@ def _archive(args: argparse.Namespace) -> int:
 
 
 def _export(args: argparse.Namespace) -> int:
-    """A exportação de uma versão da tabela para pastas Parquet sem o log; 2 na tabela fora do
-    modelo ou sem Delta e no destino fora da raiz ou não vazio."""
+    """A exportação de uma versão da tabela para pastas Parquet sem o log, com o tempo e o pico
+    de RSS impressos; 2 na tabela fora do modelo ou sem Delta e no destino fora da raiz ou não
+    vazio."""
     db = Database(args.root, args.environment, args.metadata)
     found = _existing_table(args, db, "export")
     if found is None:
@@ -701,10 +716,12 @@ def _export(args: argparse.Namespace) -> int:
     if db.storage.list_files(relative):
         print(f"serialize-db export: destino não vazio: {args.destination}", file=sys.stderr)
         return 2
+    started = time.perf_counter()
     files = delta.export_snapshot(uri, table, args.destination, db.storage, args.version,
                                   args.mode)
     version = "" if args.version is None else f" da versão {args.version}"
-    print(f"{table.name}: {len(files)} arquivo(s) em {args.destination}{version}")
+    print(f"{table.name}: {len(files)} arquivo(s) em {args.destination}{version}, "
+          f"{_measure(started)}")
     return 0
 
 
