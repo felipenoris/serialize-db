@@ -1452,14 +1452,17 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
 
     :param storage: o armazenamento da raiz do banco.
     :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
-    :param name: o nome do snapshot.
+    :param name: o nome do snapshot, pela regra da partição (``schema.PARTITION_VALUE``).
     :param versions: a versão de cada tabela, pelo nome da tabela; as versões marcadas são as que
         ``vacuum_keeping_snapshots`` preserva.
     :return: o controle novo.
+    :raises ContractError: o nome fora da regra da partição, antes de ler o arquivo de controle.
     :raises ValueError: um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a
         pasta ``arquivo/<nome>/``.
     :raises ConflictError: outro escritor entre a leitura e a escrita.
     """
+    # O nome vira chave do arquivo de controle e pasta do archive; a recusa vem antes da leitura.
+    check_partition_value(name)
     control, fingerprint = read_snapshots(storage, environment)
     if name in control["snapshots"] or name in control.get("archived", {}):
         raise ValueError(f"{environment}: o snapshot {name} já existe")

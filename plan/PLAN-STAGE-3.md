@@ -339,7 +339,7 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
 | Reescrita | `test_rewrite_in_one_commit_keeps_previous_version_readable` | Um commit, o esquema novo, as linhas iguais e a versão anterior legível; uma coluna renomeada por `expressions` lê os valores da antiga; o `Double` com `NaN` sem mínimo e máximo na partição dele; uma coluna do contrato ausente e fora de `expressions` falha sem commit. |
 | Diferença de versões | `test_version_diff_counts_data_changes_only` | Substituição e remoção contam, compactação e reconciliação não, `published == current` dá vazio; `{None}` na tabela sem partição. |
 | Log ausente | `test_version_diff_refuses_a_cleaned_log` | Um arquivo do log apagado entre as duas versões dá `LogUnavailable`, com a publicação completa na mensagem. |
-| Snapshot | `test_snapshot_control_file_is_written_conditionally` | O nome repetido é erro; a escrita concorrente é `ConflictError`. |
+| Snapshot | `test_snapshot_control_file_is_written_conditionally` | O nome repetido é erro; o nome fora da regra da partição (`2026 T4`, `release/2026`) é `ContractError`, sem gravar; a escrita concorrente é `ConflictError`. |
 | `vacuum` | `test_vacuum_keeps_snapshot_versions` | Com retenção zero e `keep_versions`, a versão do snapshot lê e a intermediária falha; dentro da retenção nada é listado. |
 | Compactação | `test_compact_before_snapshot` | Arquivos pequenos de uma partição virando um; a partição com um arquivo não commita. |
 | Exportação | `test_export_snapshot_copy_and_rewrite` | Os dois modos produzem `<coluna>=<valor>/` com as mesmas linhas; `copy` copia só o que o log lista; uma versão antiga exporta o que ela tinha. |

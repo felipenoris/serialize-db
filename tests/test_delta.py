@@ -710,8 +710,9 @@ def test_version_diff_refuses_a_cleaned_log(storage: Storage, uri: str) -> None:
 
 def test_snapshot_control_file_is_written_conditionally(storage: Storage,
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
-    """O primeiro snapshot cria o arquivo, o segundo o atualiza; o nome repetido é erro, e a escrita
-    concorrente é ``ConflictError``."""
+    """O primeiro snapshot cria o arquivo, o segundo o atualiza; o nome repetido é erro, o nome
+    fora da regra da partição é ``ContractError`` sem gravar, e a escrita concorrente é
+    ``ConflictError``."""
     assert delta.read_snapshots(storage, "prod") == ({"snapshots": {}}, None)
     delta.snapshot(storage, "prod", "2026T2", {"cad_operacoes": 3, "dom_canais": 1})
     control = delta.snapshot(storage, "prod", "2026T3", {"cad_operacoes": 5})
@@ -721,6 +722,13 @@ def test_snapshot_control_file_is_written_conditionally(storage: Storage,
     assert delta.read_snapshots(storage, "prod")[0] == control
     with pytest.raises(ValueError, match="já existe"):
         delta.snapshot(storage, "prod", "2026T3", {"cad_operacoes": 6})
+
+    # O espaço e a barra ficam fora da regra da partição: a barra aninharia a pasta
+    # arquivo/<nome>/ do archive. O arquivo de controle continua como estava.
+    for name in ["2026 T4", "release/2026"]:
+        with pytest.raises(ContractError, match="regra da partição"):
+            delta.snapshot(storage, "prod", name, {"cad_operacoes": 6})
+    assert delta.read_snapshots(storage, "prod")[0] == control
 
     # Outro escritor grava entre a leitura e a escrita: a impressão digital lida ficou velha, e o
     # snapshot perdedor não grava nada.

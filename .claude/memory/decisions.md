@@ -917,3 +917,14 @@ unload_to=None)` (C); and reading an archived snapshot from its copy in
 `arquivo/<name>/<table>` at the copy's current version, against refusing the name (D), because
 the target's only snapshot, `carga-2026-09-24`, moved to `archived` in the 16:51 battery.
 `plan/PLAN-STAGE-10.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## The snapshot name rule in `delta.snapshot` (2026-09-24)
+
+The user asked what may name a snapshot and whether it is a free string. The answer: the
+partition rule `[0-9A-Za-z][0-9A-Za-z_.-]*`, checked by `Execution.snapshot` and the
+`--name` of `serialize-db snapshot` and `archive`, and a name never reused, even archived.
+The public `delta.snapshot` wrote any name, so `2026 T3` or `a/b` could enter the control file
+and break or nest the archive's `arquivo/<name>/`; the user asked for the fix, and
+`delta.snapshot` raises `ContractError` for such a name before reading the control file
+(`test_snapshot_control_file_is_written_conditionally`). `plan/PLAN-STAGE-3.md`,
+`plan/CURRENT_STATE.md`
