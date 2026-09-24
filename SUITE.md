@@ -101,6 +101,35 @@ export AWS_DEFAULT_REGION=sa-east-1
 .venv/bin/serialize-db archive --root $TARGET_ROOT_PATH --environment prod --metadata client_model:Base.metadata --name carga-2026-09-24
 ```
 
+# Publicação Delta -> Redshift
+
+```
+export AWS_DEFAULT_REGION=sa-east-1
+export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
+export SERIALIZE_DB_REDSHIFT_DATABASE=dev
+export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
+export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
+export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta/db_projetado
+export PYTHONPATH=tests
+
+# 1. Uma vez por esquema: a tabela de controle serialize_db_publications.
+#    Sem ela, publish recusa com PublicationError; a segunda chamada falha
+#    porque a tabela já existe (sem IF NOT EXISTS, por decisão sua).
+.venv/bin/serialize-db publish --init
+
+# 2. Primeiro uma tabela pequena, para validar o caminho no alvo.
+.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prod \
+    --metadata client_model:Base.metadata --tables cad_contas
+
+# 3. A base inteira, uma conexão por tabela em paralelo.
+.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prod \
+    --metadata client_model:Base.metadata --max-workers 4
+
+# 4. O estado: versão publicada, versão atual e partições pendentes por tabela.
+.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prod \
+    --metadata client_model:Base.metadata --status
+```
+
 # Resultados
 
 ```
