@@ -1515,7 +1515,8 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
     ``Storage.copy`` para o mesmo caminho relativo, e entra no log novo com o tamanho, as linhas e
     as estatísticas da ação de origem, as dos tipos exatos, num commit ``overwrite`` por partição,
     como ``register_files``; no fim, a contagem da cópia pelos dois leitores é conferida contra a
-    soma das ações, e a diferença é ``RegistrationRefused``. A memória é a do log.
+    soma das ações, e a diferença é ``RegistrationRefused``. A memória é a do log. Cada partição
+    copiada vai ao log com o número de arquivos e o tempo da cópia.
 
     A repetição continua uma cópia interrompida: com tabela em ``destination``, a partição cujos
     arquivos ela já registra é pulada, sem commit, e as outras são copiadas; a repetição sobre a
@@ -1543,6 +1544,7 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
         if all(action["path"] in registered for action in group):
             log.info("%s: %s já no destino", metadata.name, label)
             continue
+        started = time.perf_counter()
         actions = []
         for action in group:
             storage.copy(storage.join(source_path, action["path"]),
@@ -1551,7 +1553,8 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
         # Cada commit resolve a versão no log do armazenamento: a tabela é reaberta por partição.
         _commit_actions(open_table(destination, storage), str(metadata.name), partition_by,
                         actions, value, {})
-        log.info("%s: %s copiada, %d arquivo(s)", metadata.name, label, len(actions))
+        log.info("%s: %s copiada, %d arquivo(s) em %.1f s", metadata.name, label, len(actions),
+                 time.perf_counter() - started)
     by_delta, by_duckdb = _count_rows(destination, storage)
     if by_delta != total or by_duckdb != total:
         raise RegistrationRefused(f"{destination}: a cópia tem {by_delta} linhas pelo delta-rs e "

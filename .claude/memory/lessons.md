@@ -596,3 +596,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `cad_lancamentos` and moved the snapshot entry to `archived`; `deep_copy` now skips only the
   partitions the destination registers and refuses a destination holding files outside the
   version.
+- **A routine the runbook asks the operator to size prints its own measure** (2026-09-24). The
+  runbook told the operator to compare the machine's memory with the routine's measure on the
+  largest table, and the 16:51 battery ran the whole `archive` (21 files) and the publication of
+  the 12 tables in the target without a single duration or memory reading, because only the
+  migration script printed them. The user approved the proposal the same day: `compact`,
+  `archive` and `export` print the time and the process's peak RSS per table in the script's
+  format, the publication carries them on each table's log line, `deep_copy` logs each
+  partition's copy time, and `peak_rss_mb` moved from the script to `serialize_db.resources`.
+  The reading in the target is still pending.

@@ -37,6 +37,7 @@ import dataclasses
 import functools
 import logging
 import re
+import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -59,6 +60,7 @@ from serialize_db.engine.redshift import (
     staging_ddl,
 )
 from serialize_db.errors import ExecutionConflict, PublicationError
+from serialize_db.resources import peak_rss_mb
 from serialize_db.schema import (
     column_ddl,
     literal,
@@ -550,8 +552,10 @@ def _run_publication(connection: _Connection, table: sa.Table, statements: Seque
 
 def _publish_table(db: Database, config: RedshiftConfig, table: sa.Table, execution_id: str,
                    version: int) -> int:
-    """A publicação de uma tabela, numa conexão própria: a reconciliação e a transação."""
+    """A publicação de uma tabela, numa conexão própria: a reconciliação e a transação, com o
+    tempo e o pico de RSS do processo na linha de log da tabela publicada."""
     environment = db.environment
+    started = time.perf_counter()
     connection = _Connection(config)
     try:
         _reconcile(connection, config, environment, table)
@@ -582,7 +586,9 @@ def _publish_table(db: Database, config: RedshiftConfig, table: sa.Table, execut
         except BaseException:
             connection.rollback()
             raise
-        log.info("%s publicada na versão %s: partições %s", table.name, version, changed)
+        log.info("%s publicada na versão %s: partições %s, em %.1f s; RSS máximo do processo "
+                 "%.0f MB", table.name, version, changed, time.perf_counter() - started,
+                 peak_rss_mb())
         return version
     finally:
         connection.close()
@@ -633,7 +639,8 @@ def publish_redshift(db: Database, config: RedshiftConfig, tables: Sequence[sa.T
     pela execução) ou a atual. Uma tabela cuja versão publicada é a do Delta não muda; a versão
     publicada mais nova, o ``UPDATE`` da linha de controle sem linha e o ``1023`` são
     ``ExecutionConflict``, sem repetição. Na primeira falha nada novo começa, o que está em curso
-    termina, e a exceção leva o resultado de cada tabela numa nota.
+    termina, e a exceção leva o resultado de cada tabela numa nota. Cada tabela publicada vai ao
+    log com as partições, o tempo e o pico de memória residente do processo.
 
     Exemplo:
 

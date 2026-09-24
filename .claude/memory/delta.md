@@ -188,7 +188,9 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   table instead of skipping an existing destination, which had let a half-copied table pass as
   archived. In the target on 2026-09-24 at 16:51 the whole `archive` copied the 21 files of the
   12 tables (one commit per partition, the partitions in the reverse order of the load) and moved
-  the entry; the resume path ran only on the stand-in. `plan/PLAN-STAGE-9.md`, `plan/POC.md`
+  the entry; the resume path ran only on the stand-in. Since the user's decision of the same day
+  `deep_copy` logs each partition's copy time, and `serialize-db archive` prints the time and the
+  peak RSS per table. `plan/PLAN-STAGE-9.md`, `plan/POC.md`
 
 ## Alternatives assessed
 

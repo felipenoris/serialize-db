@@ -48,8 +48,6 @@ import importlib.metadata
 import json
 import os
 import platform
-import re
-import resource
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -64,7 +62,7 @@ from serialize_db.engine.duckdb import environment_limits
 from serialize_db.errors import ContractError
 from serialize_db.execution import Database
 from serialize_db.load import LoadReport
-from serialize_db.resources import available_cpus, available_memory
+from serialize_db.resources import available_cpus, available_memory, peak_rss_mb
 
 # ---------------------------------------------------------------- o relatório
 
@@ -92,16 +90,6 @@ class TableReport:
         document["matches"] = self.report.matches
         document["loaded"] = [dataclasses.asdict(item) for item in self.loaded]
         return document
-
-
-def peak_rss_mb() -> float:
-    """O pico de memória residente do próprio processo até agora, em MB: no Linux, o ``VmHWM`` de
-    ``/proc/self/status``, em KB; no macOS, o ``ru_maxrss``, em bytes."""
-    if sys.platform == "darwin":
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
-    status = Path("/proc/self/status").read_text()
-    kilobytes = re.search(r"^VmHWM:\s+(\d+)", status, re.MULTILINE).group(1)
-    return int(kilobytes) / 1024
 
 
 # ---------------------------------------------------------------- a carga

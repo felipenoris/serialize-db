@@ -5,12 +5,16 @@ Os testes gravam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``) as pa
 Eles conferem o cgroup v2 com a folga que devolve o cache de arquivos e a cota arredondada para
 cima, o ``MemAvailable`` menor que a folga, o ancestral mais apertado, o cgroup v1 com a pasta do
 processo e o contêiner que monta o próprio cgroup como raiz, e a máquina sem ``/proc``, que fica
-com a memória física e as CPUs do Python.
+com a memória física e as CPUs do Python. O pico de memória residente é lido de um
+``/proc/self/status`` fabricado, sem ele, e num processo filho que toca 64 MiB.
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+import textwrap
 import uuid
 from pathlib import Path
 
@@ -112,3 +116,31 @@ def test_without_proc_the_physical_memory_and_the_python_cpus(machine: Path) -> 
     physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
     assert resources.available_memory() == physical
     assert resources.available_cpus() == 8
+
+
+def test_peak_rss_mb_reads_vmhwm_from_the_process_status(machine: Path) -> None:
+    """O pico de memória residente é o ``VmHWM`` de ``/proc/self/status``, em KB, convertido em
+    MB; sem o arquivo, fora do Linux, é o ``ru_maxrss`` do processo, positivo."""
+    fabricate(machine, {
+        "proc/self/status": "Name:\tpython\nVmHWM:\t 1234567 kB\nVmRSS:\t   4096 kB\n",
+    })
+    assert resources.peak_rss_mb() == pytest.approx(1234567 / 1024)
+    (machine / "proc" / "self" / "status").unlink()
+    assert resources.peak_rss_mb() > 0
+
+
+def test_peak_rss_mb_is_the_peak_of_the_process_itself() -> None:
+    """Num processo novo, a leitura cresce com a memória que ele mesmo toca: 64 MiB escritos
+    página a página sobem o pico em pelo menos 48 MB."""
+    program = textwrap.dedent("""
+        from serialize_db.resources import peak_rss_mb
+        before = peak_rss_mb()
+        buffer = bytearray(64 * 2**20)
+        for offset in range(0, len(buffer), 4096):
+            buffer[offset] = 1
+        print(before, peak_rss_mb())
+    """)
+    completed = subprocess.run([sys.executable, "-c", program], check=True,
+                               capture_output=True, text=True)
+    before, after = (float(value) for value in completed.stdout.split())
+    assert after - before >= 48
