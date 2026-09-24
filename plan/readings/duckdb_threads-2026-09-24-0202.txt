@@ -1,0 +1,126 @@
+================================================================================
+duckdb_threads: o threads do DuckDB na ingestão das tabelas Delta em s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/delta/db_projetado
+2026-09-24 02:02:33 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
+interpretador /home/<usuário>/work/projects/serialize-db/.venv/bin/python
+================================================================================
+Só leitura sob a raiz: nada é criado, alterado ou apagado nela; o banco de cada configuração fica na pasta temporária do motor e sai no cleanup.
+
+
+################################################################################
+# 1. As tabelas
+################################################################################
+
+$ ler o log de s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/delta/db_projetado/cad_lancamentos
+versão 4, 4 arquivo(s)
+(0.2 s)
+
+$ ler o log de s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/delta/db_projetado/cad_contratos
+versão 3, 3 arquivo(s)
+(0.1 s)
+
+$ ler o log de s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/delta/db_projetado/cad_operacoes
+versão 3, 3 arquivo(s)
+(0.1 s)
+
+$ ler o log de s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/delta/db_projetado/rel_contrato_operacao
+versão 3, 3 arquivo(s)
+(0.2 s)
+
+PARTICAO=2026-06-30
+TABELA                 VERSÃO  COLUNA DE PARTIÇÃO  PARTIÇÕES  ARQUIVOS LIDOS  MB LIDOS  LINHAS LIDAS
+cad_lancamentos        4       data_base_str       4          1               542       32218190
+cad_contratos          3       data_str            3          1               26        2102179
+cad_operacoes          3       data_str            3          1               43        3645289
+rel_contrato_operacao  3       data_str            3          1               197       13272989
+
+
+
+################################################################################
+# 2. A máquina e o DuckDB
+################################################################################
+
+LEITURA                                  VALOR
+núcleos (os.cpu_count)                   16
+CPUs do processo (available_cpus)        16
+threads por núcleo físico (CPU 0)        2
+memória                                  31159 MB
+memória disponível (available_memory)    27382 MB
+pasta temporária do motor                /tmp, 29.7 GiB livres
+pacotes                                  duckdb 1.5.5, deltalake 1.6.4, pyarrow 25.0.1
+threads e memory_limit do motor          16, 13691MiB
+threads e memory_limit padrão do DuckDB  16, 24.3 GiB
+cache de arquivos externos               ligado por padrão; desligado nas medições
+threads medidas                          8, 16, 32, 48, 64, 80
+referência da razão                      threads=16
+repetições por configuração              3
+
+
+
+################################################################################
+# 3. Uma tabela: cad_lancamentos
+################################################################################
+
+materializada: ingest(..., materialize=True), o CREATE TABLE AS sobre delta_scan, apagada a cada repetição.
+agregada: a view de ingest lida inteira por SELECT count(*), max(COLUMNS(*)), sem gravar.
+RAZÃO: a melhor repetição com threads=16, o padrão do motor, dividida pela desta linha; acima de 1 é mais rápido.
+
+CENÁRIO        THREADS  APLICADAS  MELHOR S  REPETIÇÕES S            RAZÃO  BASE MB  PICO MB  LINHAS LIDAS  LINHAS DO LOG
+materializada  8        8          7.847     9.018, 7.847, 8.657     0.89x  227      1880     32218190      32218190
+materializada  16       16         7.008     7.200, 7.077, 7.008     1.00x  227      2910     32218190      32218190
+materializada  32       32         11.133    11.173, 11.536, 11.133  0.63x  227      4606     32218190      32218190
+materializada  48       48         14.214    14.356, 14.214, 14.782  0.49x  227      6058     32218190      32218190
+materializada  64       64         17.066    17.066, 17.190, 18.580  0.41x  227      6245     32218190      32218190
+materializada  80       80         15.794    18.642, 15.794, 16.394  0.44x  228      6427     32218190      32218190
+agregada       8        8          2.033     2.038, 2.059, 2.033     0.59x  226      450      32218190      32218190
+agregada       16       16         1.194     1.257, 1.194, 1.260     1.00x  226      661      32218190      32218190
+agregada       32       32         0.877     1.008, 0.906, 0.877     1.36x  227      944      32218190      32218190
+agregada       48       48         0.843     1.019, 0.870, 0.843     1.42x  227      1191     32218190      32218190
+agregada       64       64         0.874     0.939, 0.874, 0.879     1.37x  227      1398     32218190      32218190
+agregada       80       80         0.892     1.063, 0.960, 0.892     1.34x  228      1664     32218190      32218190
+
+
+
+################################################################################
+# 4. Várias tabelas: cad_lancamentos, cad_contratos, cad_operacoes, rel_contrato_operacao
+################################################################################
+
+em série: cada tabela materializada depois da outra na sessão principal.
+sessões a mais: cada tabela materializada numa sessão a mais, todas juntas, como run.ingest.
+
+CENÁRIO         THREADS  APLICADAS  MELHOR S  REPETIÇÕES S            RAZÃO  BASE MB  PICO MB  LINHAS LIDAS  LINHAS DO LOG
+em série        8        8          19.218    19.318, 19.218, 19.890  0.91x  226      1856     51238647      51238647
+em série        16       16         17.516    17.629, 17.516, 17.708  1.00x  227      2905     51238647      51238647
+em série        32       32         27.162    28.321, 27.802, 27.162  0.64x  228      4599     51238647      51238647
+em série        48       48         31.382    32.601, 32.417, 31.382  0.56x  227      6127     51238647      51238647
+em série        64       64         35.050    35.050, 35.694, 36.525  0.50x  227      6315     51238647      51238647
+em série        80       80         35.686    35.686, 36.441, 36.259  0.49x  227      6460     51238647      51238647
+sessões a mais  8        8          10.737    10.737, 11.581, 11.363  0.87x  227      2450     51238647      51238647
+sessões a mais  16       16         9.292     9.292, 9.715, 9.408     1.00x  227      3404     51238647      51238647
+sessões a mais  32       32         10.571    12.267, 10.632, 10.571  0.88x  227      4461     51238647      51238647
+sessões a mais  48       48         9.928     10.165, 11.336, 9.928   0.94x  227      5219     51238647      51238647
+sessões a mais  64       64         9.968     9.968, 12.723, 19.857   0.93x  227      6614     51238647      51238647
+sessões a mais  80       80         12.648    12.686, 12.648, 13.163  0.73x  227      4981     51238647      51238647
+
+
+
+################################################################################
+# 5. Checagens
+################################################################################
+
+RESULTADO  ID    O QUE                          DETALHE
+note       DT-5  threads de uma tabela          materializada: melhor com threads=16, 7.008 s, 1.00x sobre threads=16; agregada: melhor com threads=48, 0.843 s, 1.42x sobre threads=16
+note       DT-6  sessões a mais sobre em série  o tempo em série dividido pelo das sessões a mais; threads=8: 1.79x; threads=16: 1.89x; threads=32: 2.57x; threads=48: 3.16x; threads=64: 3.52x; threads=80: 2.82x
+pass       DT-1  tabelas e partição             4 tabela(s) na partição 2026-06-30
+pass       DT-2  linhas lidas                   24 configuração(ões) leram as linhas do log
+pass       DT-3  threads aplicadas              o DuckDB aplicou cada valor pedido
+pass       DT-4  configurações medidas          24 configuração(ões) terminaram
+
+
+
+################################################################################
+# 6. Chamadas que falharam
+################################################################################
+
+Nenhuma. Toda chamada deste relatório passou.
+
+código de saída 0: 0 checagem(ns) reprovada(s), 0 chamada(s) falhada(s)

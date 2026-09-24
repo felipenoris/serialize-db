@@ -627,8 +627,12 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   7, `rewrite` out of stages 4 and 7 with the `export_mode` flag (only the stage 5 non-finite swap
   keeps `publish_partition`), the load sorted by `sort_key` and the stage 8 staging filled inside
   the transaction; the script loads and measures by the registration only.
-  The next target runs are the migration of `cad_lancamentos` and the threads probe, now with a
-  half-the-CPUs round; `REFRESH auto` on the DuckDB secret, which stores the credential resolved
+  The battery of 2026-09-24 at 01:41 (`main` with #69, 16 vCPUs and 31,159 MB) finished the whole
+  migration, `cad_lancamentos` peaking at 16,430 MB under a 13.4 GiB limit with the sort faster
+  than none at 16 threads, and the threads probe with the cache off fixed `threads` at the
+  process's CPUs: materialization best there, worse at half and at double, the S3 read 1.4x
+  faster at triple; the audit's non-finite count and the `NaN` row are assertions
+  (`plan/POC.md`). `REFRESH auto` on the DuckDB secret, which stores the credential resolved
   at `CREATE SECRET`, awaits the user (`plan/OPEN_QUESTIONS.md`), as does the stage 9 `archive`
   partition by partition through the register path, because `deep_copy` by `write_deltalake` grows
   with the table outside `memory_limit`; the Redshift `COPY` of a DuckDB-written file waits for
@@ -657,8 +661,8 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `nan_na_tabela_detalhe`; the stand-in `tests/emulator.py` has no locks, no bucket encryption, no
   Data API and none of Redshift's `NaN` scan behavior. `probes/duckdb_threads.py` ran at 23:21, but
   DuckDB's external file cache served its later repetitions from memory; it now turns the cache off,
-  measures half the CPUs too (user request of 2026-09-24) and waits for a new run, never at the
-  same time as a migration.
+  measures half the CPUs too (user request of 2026-09-24), and its run of 2026-09-24 at 02:02 on
+  16 vCPUs fixed the default at the process's CPUs.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing

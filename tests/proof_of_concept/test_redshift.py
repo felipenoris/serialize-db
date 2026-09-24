@@ -66,6 +66,7 @@ from conftest import (
     connect_redshift,
     describe_error,
     duckdb_s3_secret,
+    emulator_enabled,
     record,
 )
 from poc_delta import MONTHS, ROWS, connect_duckdb, sample_table
@@ -1669,7 +1670,7 @@ def as_text(rows: list) -> list[list[str]]:
 
 def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: RedshiftSession) -> None:
     """O texto da auditoria da etapa 4 pelo caminho do motor da etapa 5, e como o Redshift compara o
-    ``NaN``, tudo leitura.
+    ``NaN``.
 
     O ``ddl`` da etapa 1 e o ``audit_sql`` citam as tabelas sem esquema, e o motor conta com o
     ``search_path`` no esquema do datashare depois do ``USE``, que passou no ambiente alvo em
@@ -1680,9 +1681,11 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
     ``NUMERIC(38, 6)``, e a comparação estrita deixou o ``NaN`` fora da soma, mas a negação dela
     também não o contou. A contagem dos não finitos passou a ser a dos não nulos menos a dos
     finitos; ``nan_na_tabela`` e ``nan_na_tabela_detalhe`` leem a regra da varredura na linha do
-    ``NaN``. A tabela ``auditoria`` tem defeitos plantados e o esperado de cada contador ao lado da
-    leitura; os textos do modelo cliente rodam sobre as tabelas vazias
-    (``plan/OPEN_QUESTIONS.md``).
+    ``NaN``. As execuções de 2026-09-24 às 01:46 e às 01:49 leram ``naofinito_valor`` 2 e, na
+    linha do ``NaN``, as quatro comparações falsas e o texto ``NaN``: cada contador é asserção, e a
+    linha do ``NaN`` só no ambiente alvo, porque o DuckDB do substituto lê ``NaN > -inf`` como
+    verdadeiro. A tabela ``auditoria`` tem defeitos plantados e o esperado de cada contador ao lado
+    da leitura; os textos do modelo cliente rodam sobre as tabelas vazias.
     """
     session = redshift_session
     prefix = f"serialize_db_poc_{session.session_id}_"
@@ -1773,10 +1776,10 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
             "not (valor > '-Infinity'::float8), (valor > '-Infinity'::float8) is null, "
             f"cast(valor as varchar) from \"{name}\" where nome = 'b'"
         )
-        record(
-            "redshift.audit.nan_na_tabela_detalhe",
-            reading(functools.partial(run_as_text, nan_detail)),
-        )
+        detail = reading(functools.partial(run_as_text, nan_detail))
+        record("redshift.audit.nan_na_tabela_detalhe", detail)
+        if not emulator_enabled():
+            assert detail == [["False", "False", "False", "False", "NaN"]]
         expected = {
             "linhas": "4", "particao_data_str": "1", "naofinito_valor": "2",
             "total_valor": "4.500000", "total_preco": "16.250000", "json_meta": "0",
@@ -1805,6 +1808,7 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
         for label, value in expected.items():
             matches[label] = measures.get(label) == value
         record("redshift.audit.planted.matches", matches)
+        assert all(matches.values()), matches
         # A amostra da reprovação de particao_data_str: a linha 4.
         sample = sql.render(
             audit.sample_statement(model, partitions, rows_check.counters["particao_data_str"]),

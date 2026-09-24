@@ -753,3 +753,13 @@ assistant removed them to match the user's answer. `serialize_db.engine.__all__`
 because pdoc documents only the submodules a package's `__all__` names, and the site had no engine
 page since stage 4; `tests/test_package.py` checks every package. `plan/PLAN-STAGE-4.md`,
 `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-7.md`, `plan/PLAN.md`
+
+## The battery of 2026-09-24 at 01:41 on a 16 vCPU machine
+
+On 2026-09-24 the user reran every `SUITE.md` command from `main` (fa734eb, with #69) on a 16 vCPU
+and 31,159 MB machine, handed over the reports and asked to analyze them and propagate the
+revisions to the plan and the code. The assistant fixed `DuckDBConfig.threads` at the process's
+CPUs by the probe's reading, as the plan had assigned to that run, closed the open items on the
+`cad_lancamentos` migration, the half-memory fraction, the threads, the non-finite `Double` and the
+Redshift audit text, and turned the audit readings into assertions; the migration reports stay out
+of git. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-7.md`

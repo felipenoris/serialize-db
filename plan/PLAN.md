@@ -410,8 +410,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   Athena, o Secrets Manager e o DataZone por endpoints de interface; o IAM, o KMS, o Lake
   Formation e o S3 Tables não respondem. A biblioteca não chama o IAM nem o KMS: a criptografia
   SSE-KMS do bucket é aplicada pelo S3, e a permissão sobre a raiz é provada pela primeira escrita,
-  não por simulação. A máquina tinha 2 vCPUs e 7,6 GiB de memória em 2026-09-21 e 4 vCPUs e
-  15.786 MB em 2026-09-23, com cerca de 30 GiB livres num disco só para `HOME`, `/tmp` e o
+  não por simulação. A máquina tinha 2 vCPUs e 7,6 GiB de memória em 2026-09-21, 4 vCPUs e
+  15.786 MB em 2026-09-23 e 16 vCPUs e 31.159 MB em 2026-09-24, quando a migração inteira terminou,
+  com o pico de 16.430 MB na carga ordenada da maior partição de `cad_lancamentos`, sempre com
+  cerca de 30 GiB livres num disco só para `HOME`, `/tmp` e o
   repositório: o motor DuckDB nasce em arquivo, com `temp_directory` conferido e os limites lidos
   do ambiente na abertura, as CPUs do processo e metade da memória que ele ainda pode usar,
   registrados no log (instrução do usuário de 2026-09-24), e o registro do arquivo do `COPY` é o
@@ -470,7 +472,11 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   documentação do DuckDB recomenda `threads` de 2 a 5 vezes os núcleos (2026-09-23,
   [`duckdb.md`](duckdb.md)). No ambiente alvo, com 4 vCPUs, quatro tabelas de 30.001.596 linhas
   juntas entraram em 15,588 s em sessões a mais e em 19,547 s em série, e a materialização ficou
-  limitada pela CPU, mais lenta com `threads` acima dos núcleos (2026-09-23, `POC.md`). No Redshift, cada
+  limitada pela CPU, mais lenta com `threads` acima dos núcleos (2026-09-23, `POC.md`); com 16
+  vCPUs e o cache de arquivos desligado, a materialização foi melhor com 16 threads, pior com 8 e
+  com 32 a 80, a leitura agregada do S3 1,4 vez mais rápida com 48, e as sessões a mais 1,89 vez
+  mais rápidas que a série: o padrão são as CPUs do processo (2026-09-24, `POC.md`). No Redshift,
+  cada
   sessão a mais pede a sua credencial temporária; dois `COPY` em conexões abertas dentro da tarefa
   levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
 - As chaves sequenciais, a chave primária inteira de uma coluna, vêm de `run.next_ids(table, n)`:

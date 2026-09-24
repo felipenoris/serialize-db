@@ -115,3 +115,10 @@ folder of its own (`/process_api/<id>/claude-code-bash`) with `memory.limit_in_b
 16,481,980 kB, no CPU quota, one thread per core (`lscpu`, `smt/control` `notsupported`).
 `available_memory()` reads 14,197,641,216 bytes there (the cgroup room) and `environment_limits()`
 gives 4 threads and 6,761 MiB. `plan/POC.md`
+
+The battery of 2026-09-24 at 01:41 to 02:19 UTC ran on a 16 vCPU (two per physical core) and
+31,159 MB instance, DuckDB defaulting to 16 threads and a 24.3 GiB `memory_limit`,
+`environment_limits` giving 16 threads and 13.1 to 13.6 GiB (half of the 27 to 28 GB available at
+each opening), 29.7 GiB free of 37.0 GiB, the same roots under `.../shared/<usuário>/serialize-db/`
+and `main` with #69; the whole migration finished there, `cad_lancamentos` peaking at 16,430 MB.
+`plan/POC.md`

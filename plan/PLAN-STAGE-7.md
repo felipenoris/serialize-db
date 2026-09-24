@@ -127,8 +127,14 @@ na etapa 1 no mesmo dia ([`POC.md`](POC.md)). Antes do alvo, três coisas:
   (`serialize_db.engine.duckdb.environment_limits`, instrução do usuário de 2026-09-24), e a carga
   de cada tabela tem a sua conexão, aberta depois da medição e fechada no fim: o DuckDB só devolve
   a memória ao fechar, e o RSS de uma conexão ficou em 1.188 MB depois do `DROP` da tabela que a
-  consulta ordenada criou e voltou a 208 MB no `close` ([`POC.md`](POC.md)). A próxima execução de
-  `cad_lancamentos` confirma que a partição cabe; o script regrava o relatório depois de cada passo.
+  consulta ordenada criou e voltou a 208 MB no `close` ([`POC.md`](POC.md)). Em 2026-09-24, numa
+  máquina de 16 vCPUs e 31.159 MB, com `memory_limit` de 13,4 GiB e 16 threads, as quatro partições
+  entraram em 6,4 s, 5,4 s, 10,1 s e 6,4 s, com o pico do processo em 9.678 MB depois das duas
+  primeiras e 16.430 MB depois da 2026-03-31, 20% acima do limite e 53% da memória da máquina, e
+  contagens e somas iguais; a medição da 2026-03-31 deu 10,6 s e 15.126 MB ordenada e 12,5 s e
+  7.540 MB sem ordem, e a ordem foi mais rápida nas quatro partições com 16 threads, com arquivos
+  do mesmo tamanho ([`POC.md`](POC.md)): a carga ordenada da maior partição pede uma máquina de
+  32 GB, e a sem ordem cabe em 16 GB; o script regrava o relatório depois de cada passo.
   Essa conexão vive do fim da medição ao relatório da carga, e o secret dela guarda a
   credencial resolvida na abertura: a proposta de `REFRESH auto` no secret espera o usuário
   ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). Na execução de 2026-09-23, `cad_lancamentos` rodou

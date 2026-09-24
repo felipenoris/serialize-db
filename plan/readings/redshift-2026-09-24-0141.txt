@@ -1,6 +1,6 @@
 ================================================================================
 redshift: o Redshift do projeto visto de dentro
-2026-09-23 19:18:02 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
+2026-09-24 01:41:45 +0000; Linux-6.12.103-127.188.amzn2023.x86_64-x86_64-with-glibc2.39; python 3.13.15
 interpretador /home/<usuário>/work/projects/serialize-db/.venv/bin/python
 ================================================================================
 
@@ -22,7 +22,7 @@ SERIALIZE_DB_REDSHIFT_IAM_ROLE        (ausente)
 SERIALIZE_DB_REDSHIFT_CONNECTION      (ausente)
 
 $ sagemaker_studio.Project().connections
--- SEM RESULTADO (1.7 s): RuntimeError: /home/<usuário>/work/projects/serialize-db/.venv/bin/python: ModuleNotFoundError: No module named 'sagemaker_studio'; /opt/conda/bin/python: botocore.exceptions.ProfileNotFound: The config profile (DomainExecutionRoleCreds) could not be found
+-- SEM RESULTADO (1.0 s): RuntimeError: /home/<usuário>/work/projects/serialize-db/.venv/bin/python: ModuleNotFoundError: No module named 'sagemaker_studio'; /opt/conda/bin/python: botocore.exceptions.ProfileNotFound: The config profile (DomainExecutionRoleCreds) could not be found
 
 REDSHIFT_WORKGROUP=controladoria-wg
 REDSHIFT_HOST=None
@@ -64,8 +64,8 @@ workgroup         estado     endpoint                                           
 controladoria-wg  AVAILABLE  controladoria-wg.<conta>.sa-east-1.redshift-serverless.amazonaws.com:5439  controladoria-ns  8           False    True
 
 $ redshift-data: execute_statement + describe_statement + get_statement_result ({'Database': 'dev', 'WorkgroupName': 'controladoria-wg'}) select 1
-['?column?'] = [[1]] em 23 ms
-(1.2 s)
+['?column?'] = [[1]] em 24 ms
+(1.3 s)
 
 
 
@@ -90,12 +90,12 @@ conectou em 0.00 s
 ################################################################################
 
 $ redshift-serverless.get_credentials(workgroupName='controladoria-wg', dbName='dev', durationSeconds=3600)
-dbUser=IAMR:<usuário>@<projeto> expira 2026-09-23 20:18:06.304000+00:00
+dbUser=IAMR:<usuário>@<projeto> expira 2026-09-24 02:41:48.369000+00:00
 (0.1 s)
 
 $ redshift_connector.connect(...)
 conectou por credencial temporária do workgroup
-(0.2 s)
+(0.1 s)
 
 $ select version()
 version
@@ -149,8 +149,8 @@ False      True
 
 $ sys_load_error_detail dos últimos 30 dias
 count
-21
-(1.7 s)
+25
+(1.5 s)
 
 $ svv_external_schemas
 count
@@ -166,7 +166,7 @@ dev                 1               local          None                         
 $ svv_all_schemas, linhas do esquema 'sbx_aco_decon'
 database_name       schema_name    schema_owner  schema_type  schema_acl  source_database  schema_option
 datalake_rw_shared  sbx_aco_decon  100           shared       -           -                -
-(0.2 s)
+(0.1 s)
 
 REDSHIFT_TABLE_NAME=sbx_aco_decon.<tabela>
 REDSHIFT_TABLE_FULL_NAME=datalake_rw_shared.sbx_aco_decon.<tabela>
@@ -181,17 +181,17 @@ dev
 REDSHIFT_CURRENT_DATABASE=dev
 $ svv_all_tables, uma tabela de datalake_rw_shared.sbx_aco_decon para resolver por nome em duas partes
 table_name
-new_table
+teste
 (0.1 s)
 
-$ select 1 from sbx_aco_decon.new_table where false (resolução depois do USE)
+$ select 1 from sbx_aco_decon.teste where false (resolução depois do USE)
 [
   [
     "?column?"
   ],
   []
 ]
-(0.7 s)
+(0.1 s)
 
 $ has_schema_privilege('sbx_aco_decon', USAGE | CREATE) depois do USE
 usage  create
@@ -201,7 +201,6 @@ False  False
 $ svv_all_tables, linhas de datalake_rw_shared.sbx_aco_decon
 database_name       schema_name    table_name  table_type  table_acl  remarks
 datalake_rw_shared  sbx_aco_decon  teste       TABLE       -          -
-datalake_rw_shared  sbx_aco_decon  new_table   TABLE       -          -
 datalake_rw_shared  sbx_aco_decon  teste3      TABLE       -          -
 (1.2 s)
 
@@ -215,15 +214,15 @@ $ svv_table_info do esquema 'sbx_aco_decon' depois do USE
 ################################################################################
 
 $ boto3.Session().get_credentials()
-chave ASIA…, SESSION_TOKEN presente, expira 2026-09-23 20:14:17+00:00 (daqui a 56 min)
+chave ASIA…, SESSION_TOKEN presente, expira 2026-09-24 02:30:39+00:00 (daqui a 49 min)
 (0.0 s)
 
-S3_ROOT=s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/serialize-db-tests (por argumento)
+S3_ROOT=s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/<usuário>/serialize-db/serialize-db-tests (por argumento)
 $ sts.get_caller_identity()
 arn:aws:sts::<conta>:assumed-role/datazone_usr_role_<projeto>_<ambiente>/SageMaker
 (0.0 s)
 
-alcance do IAM: iam.amazonaws.com (44.216.202.179):443 não conectou: timed out
+alcance do IAM: iam.amazonaws.com (44.216.198.20):443 não conectou: timed out
 
 
 
@@ -235,22 +234,22 @@ RESULTADO  ID     O QUE                                           DETALHE
 note       RS-6   papel IAM para COPY e UNLOAD                    nenhum papel associado ao namespace: IAM_ROLE não funciona nem com ARN explícito, e o COPY e o UNLOAD levam as credenciais de quem chama (RS-18, RS-11)
 note       RS-10  Data API                                        ciclo completo responde: caminho alternativo por HTTPS, sem a porta 5439
 note       RS-9   privilégios no banco da conexão                 dev: CREATE=False (esquema externo impossível), TEMP=True (staging temporária possível)
-note       RS-12  diagnóstico do COPY                             sys_load_error_detail legível: 21 erro(s) de carga em 30 dias
+note       RS-12  diagnóstico do COPY                             sys_load_error_detail legível: 25 erro(s) de carga em 30 dias
 note       RS-13  esquemas externos (Spectrum)                    0 no banco; a biblioteca não os usa, e a contagem mostra se o Glue chegou ao Redshift
 note       RS-17  escrita no banco do datashare                   patch 1.0.436211 contra 1.0.78890 (serverless): atende; isolamento (UNKNOWN, do banco do produtor): não lido; slices: não lido; o que a sessão não lê, o CREATE TABLE da suíte testa
 note       RS-5   privilégios no esquema                          sbx_aco_decon: USAGE=False, CREATE=False depois do USE; num esquema compartilhado quem concede é o produtor, e o CREATE da suíte é o teste
-note       RS-8   tabelas com o prefixo da biblioteca no esquema  0 de 3 tabelas em datalake_rw_shared.sbx_aco_decon
-note       RS-11  alcance do COPY sobre a raiz                    simulação sem chamada: o IAM não respondeu ao teste TCP (iam.amazonaws.com (44.216.202.179):443 não conectou: timed out); o primeiro COPY da suíte Redshift é o teste
+note       RS-8   tabelas com o prefixo da biblioteca no esquema  0 de 2 tabelas em datalake_rw_shared.sbx_aco_decon
+note       RS-11  alcance do COPY sobre a raiz                    simulação sem chamada: o IAM não respondeu ao teste TCP (iam.amazonaws.com (44.216.198.20):443 não conectou: timed out); o primeiro COPY da suíte Redshift é o teste
 pass       RS-1   conexão configurada                             por variáveis
 pass       RS-2   API do Redshift serverless                      GetWorkgroup respondeu por controladoria-wg
 pass       RS-14  APIs do Redshift sem internet                   endpoints VPC de interface: a credencial temporária do workgroup e a Data API funcionam sem internet
 pass       RS-3   host por TCP                                    controladoria-wg.<conta>.sa-east-1.redshift-serverless.amazonaws.com:5439
-pass       RS-15  credencial temporária do workgroup              dbUser=IAMR:<usuário>@<projeto> expira 2026-09-23 20:18:06.304000+00:00
+pass       RS-15  credencial temporária do workgroup              dbUser=IAMR:<usuário>@<projeto> expira 2026-09-24 02:41:48.369000+00:00
 pass       RS-4   sessão                                          aberta por credencial temporária do workgroup; a credencial derivada da identidade IAM pode ter criado o usuário do banco
 pass       RS-7   SUPER e JSON_PARSE                              disponíveis
 pass       RS-16  banco do esquema do projeto                     datalake_rw_shared (shared): USE nele e sbx_aco_decon.<tabela> na sessão (RS-19); datalake_rw_shared.sbx_aco_decon.<tabela> de outro banco, como a Data API
-pass       RS-19  USE no banco do datashare                       sbx_aco_decon.new_table resolveu depois do USE datalake_rw_shared; current_database() respondeu dev, que não reflete a troca
-pass       RS-18  credenciais de quem chama                       chave ASIA…, SESSION_TOKEN presente, expira 2026-09-23 20:14:17+00:00 (daqui a 56 min): o COPY e o UNLOAD as levam no texto do comando, que nunca vai para log
+pass       RS-19  USE no banco do datashare                       sbx_aco_decon.teste resolveu depois do USE datalake_rw_shared; current_database() respondeu dev, que não reflete a troca
+pass       RS-18  credenciais de quem chama                       chave ASIA…, SESSION_TOKEN presente, expira 2026-09-24 02:30:39+00:00 (daqui a 49 min): o COPY e o UNLOAD as levam no texto do comando, que nunca vai para log
 
 
 

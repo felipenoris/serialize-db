@@ -126,3 +126,17 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   2,459 and 2,712 MB, growing on the third partition although it is smaller than the second;
   `cad_operacoes` 4.3 s to 5.1 s and up to 1,801 MB; `cad_contratos` 3.2 s to 3.6 s and up to
   1,142 MB; the unpartitioned tables 0.4 s to 0.6 s at about 270 MB. `plan/POC.md`
+
+- The third migration (2026-09-24, 01:53 to 02:02 UTC, `main` with #69, one process per table on
+  a 16 vCPU and 31,159 MB machine, `memory_limit` 13.1 to 13.6 GiB and 16 threads, `register`
+  sorted with the four-variant measurement): every table matched, `cad_lancamentos` included, with
+  no non-finite `Double`; its loads took 6.4 s, 5.4 s, 10.1 s and 6.4 s for 2026-01-31, 2026-02-28,
+  2026-03-31 and 2026-06-30, the process peak 9,678 MB after the first two and 16,430 MB after
+  2026-03-31 (20% above the 13.4 GiB limit, 53% of the machine). Its measured partitions:
+  `register` sorted 7.0, 5.4, 10.6 and 6.6 s with peaks of 10,190, 7,413, 15,126 and 9,782 MB;
+  unsorted 8.8, 6.7, 12.5 and 8.9 s with 8,650, 6,539, 7,540 and 8,214 MB; `rewrite` 1.4 to 2.1
+  times the `register` time; sorted and unsorted files the same size (903,7 MB
+  against 905,7 MB for 2026-03-31), unlike the other three partitioned tables, where
+  the sort still costs 1.1 to 1.4 times and shrinks the files to 74% to 92%. With 16 threads
+  `rel_contrato_operacao` 2026-03-31 loaded in 4.7 s with a 3,251 MB peak (13.3 s and 2,459 MB with
+  4 vCPUs). The raw reports stay out of git. `plan/POC.md`, `plan/PLAN-STAGE-7.md`

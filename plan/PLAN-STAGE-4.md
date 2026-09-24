@@ -128,8 +128,8 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   PostgreSQL; o de uma varredura de tabela passou por `x NOT IN ('NaN'::float8, ...)` e chegou ao
   `CAST` da soma, e depois a comparação estrita o deixou fora da soma, mas a negação dela também
   não o contou ([`POC.md`](POC.md)). Por isso a condição só entra afirmada, na soma e na contagem
-  dos finitos, e a contagem dos não finitos espera duas execuções da suíte. As funções com
-  `@compiles` por dialeto
+  dos finitos, e as execuções de 2026-09-24 às 01:46 e às 01:49 contaram 2 dos 2 não finitos,
+  asserção desde então. As funções com `@compiles` por dialeto
   fazem a portabilidade, e cada uma é subclasse de `FunctionElement` com `name`, como o `month_of`
   de [`sqlalchemy.md`](sqlalchemy.md), e não de `GenericFunction`, a classe do rascunho de
   2026-09-21, que se registra em `sa.func` para o processo inteiro: depois dela, o
@@ -188,10 +188,14 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   threads`. A leitura do S3 pede mais threads que núcleos, porque cada thread faz uma requisição
   HTTP por vez, e a materialização num banco em arquivo pede a CPU: no ambiente alvo, com 4 vCPUs,
   em 2026-09-23, `probes/duckdb_threads.py` leu a partição de 393 MB em 4,1 s com 4 threads e em 1,9
-  s a 2,1 s com 8 a 20, e a materializou em 12,7 s com 4 threads e em 13,2 s a 18,0 s com mais
-  ([`POC.md`](POC.md)). O padrão fica nas CPUs que o processo pode usar até a nova execução do
-  probe, que mede também a metade delas e roda numa máquina com mais núcleos
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O cache de arquivos externos do DuckDB fica ligado, o
+  s a 2,1 s com 8 a 20, e a materializou em 12,7 s com 4 threads e em 13,2 s a 18,0 s com mais; com
+  16 vCPUs de 8 núcleos físicos e o cache de arquivos externos desligado, em 2026-09-24, leu a
+  partição de 542 MB em 2,03 s com 8 threads, 1,19 s com 16 e 0,84 s a 0,89 s com 48 a 80, e a
+  materializou em 7,8 s com 8, 7,0 s com 16 e 11,1 s a 17,1 s com 32 a 80, com o pico do processo
+  de 1.880 MB a 6.427 MB ([`POC.md`](POC.md)). O padrão são as CPUs que o processo pode usar,
+  decidido por essa execução: a ingestão materializa, e a metade das CPUs e o dobro delas perdem
+  nela; a leitura agregada do S3 ganha 1,4 vez com o triplo, para quem a pedir em
+  `DuckDBConfig.threads`. O cache de arquivos externos do DuckDB fica ligado, o
   padrão: uma segunda leitura do mesmo arquivo na execução não volta ao S3. A conexão é a sessão da
   execução, e `session()` toma o `threading.RLock` e a dá ao bloco; toda primitiva toma o mesmo lock
   pelo tempo do seu comando, e nenhuma espera pelo código do cliente com ele tomado. O motor guarda
