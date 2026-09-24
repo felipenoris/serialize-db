@@ -2914,3 +2914,27 @@ x86_64 (DuckDB 1.5.5, `httpfs` e `aws` de `.duckdb/`, uma chave de mentira nas v
 conexão da carga de `cad_lancamentos` na próxima migração, a mais longa da bateria, pode atravessar
 a rotação da credencial de quem chama ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md),
 [etapa 3](PLAN-STAGE-3.md)).
+
+## O que o arquivo do `COPY` do DuckDB mostrou
+
+Em 2026-09-24, no contêiner Linux x86_64 (DuckDB 1.5.5, deltalake 1.6.4, pyarrow 25.0.1), duas
+sondas sobre o arquivo do registro, o que a publicação da [etapa 8](PLAN-STAGE-8.md) carrega no
+Redshift desde a decisão de 2026-09-24:
+
+- **Os tipos físicos.** Um `COPY ... (FORMAT parquet, RETURN_STATS)` de uma coluna de cada tipo do
+  contrato gravou formato 1.0, SNAPPY e codificação `PLAIN` em toda coluna: `BIGINT` em `INT64`,
+  `DECIMAL(18, 2)` em `INT64` e `DECIMAL(38, 6)` em `FIXED_LEN_BYTE_ARRAY`, `DOUBLE` em `DOUBLE`,
+  `DATE` em `INT32`, `TIMESTAMP` em `INT64` de microssegundos, `VARCHAR` em `BYTE_ARRAY` com o tipo
+  lógico `String`, `BOOLEAN` em `BOOLEAN` e `JSON` em `BYTE_ARRAY` com o tipo lógico `JSON`, que o
+  pyarrow lê como `extension<arrow.json>`.
+- **O campo JSON pelo registro.** Numa tabela com uma coluna `sa.JSON`, `string` no esquema Delta,
+  `export_partition` do motor DuckDB gravou a coluna com o tipo lógico `JSON` (`CAST` para o `JSON`
+  do DuckDB), `register_files` aceitou o arquivo, porque confere o tipo físico, e os dois leitores
+  leram o texto de cada documento: `delta_scan` como `VARCHAR` e o delta-rs como `string`.
+
+**Consequência**: o `DECIMAL(18, 2)` e o `TIMESTAMP` do registro têm os tipos físicos que o
+`COPY ... MANIFEST` do Redshift carregou de arquivos do delta-rs em 2026-09-21, e o `COPY` sobre um
+arquivo do DuckDB, com a coluna JSON com o tipo lógico numa staging `VARCHAR(65535)`, espera os
+testes `redshift` da etapa 8 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). O item do arquivo do
+`UNLOAD` com coluna `SUPER` numa tabela Delta fica só com o registro do arquivo do `UNLOAD`: um
+arquivo com o mesmo tipo lógico, gravado pelo DuckDB, os dois leitores leram como texto.

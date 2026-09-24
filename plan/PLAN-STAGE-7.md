@@ -204,7 +204,11 @@ def load_report(db: object, table: sa.Table, source: str) -> LoadReport: ...
   `columns_without_min_max`, e grava: `COPY (SELECT <colunas sem a de partição> FROM (<consulta>))
   TO '<uri>/<coluna>=<valor>/carga_inicial_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)` e
   `register_files` com o `RegisteredFile` da linha do `RETURN_STATS`. A conexão DuckDB é do motor
-  DuckDB da etapa 4, aberta pela própria carga, sem `Execution`; um nulo numa coluna `NOT NULL` é
+  DuckDB da etapa 4, aberta pela própria carga, sem `Execution`, uma por tabela e fechada no fim
+  dela, porque o DuckDB devolve a memória só no `close`, com `threads` e `memory_limit` de
+  `environment_limits`; as `threads` da leitura da origem no S3 seguem o padrão do motor, que o
+  probe das threads decide ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); um nulo numa coluna
+  `NOT NULL` é
   recusado pela conferência de nulos do rodapé de `register_files`, com a coluna e o arquivo na
   mensagem. O `register_files` da
   [etapa 3](PLAN-STAGE-3.md) traz o que o script não tinha: as conferências do rodapé de cada

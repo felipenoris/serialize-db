@@ -208,3 +208,10 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `create_write_transaction` does not update the object, and `DeltaTable(uri).version()` after a
   write returns the log's latest version, possibly another writer's (2026-09-22).
   `plan/POC.md`, `plan/PLAN-STAGE-3.md`
+- `deep_copy` (stage 3) is `write_deltalake` over the reader of the whole table at a version, so
+  its memory grows with the table outside DuckDB's limit: by the 2026-09-23 measurement (1,140 MB
+  for 12,000,000 rows, 1,960 MB for 24,000,000) a copy of `cad_lancamentos` (141,901,795 rows) would
+  need about 11 GB, unmeasured; stage 9 proposes the archive partition by partition through the
+  DuckDB `COPY` under `environment_limits` and `register_files`, awaiting the user (2026-09-24).
+  `optimize.compact` runs in delta-rs too, with its default parallel tasks, memory unmeasured.
+  `plan/PLAN-STAGE-9.md`, `plan/OPEN_QUESTIONS.md`

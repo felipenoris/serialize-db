@@ -276,7 +276,10 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
 - **`deep_copy`** grava `write_deltalake(destination, DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader(), mode="error", partition_by=..., name=..., description=..., configuration=...)`,
   nunca `to_pyarrow_table`, pela regra de encerramento de [`PLAN.md`](PLAN.md); o esquema do
   dataset leva a nulidade e os comentários da versão (leitura de 2026-09-23), e `mode="error"`
-  recusa um destino que já tem tabela.
+  recusa um destino que já tem tabela. A memória do `write_deltalake` cresce com a tabela, fora do
+  `memory_limit` do DuckDB (1.140 MB para 12.000.000 de linhas, [`delta.md`](delta.md)), e a
+  [etapa 9](PLAN-STAGE-9.md) propõe ao usuário o `archive` partição a partição pelo `COPY` do
+  DuckDB e `register_files` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **`export_snapshot`** copia os arquivos que `get_add_actions()` lista no layout
   `<coluna>=<valor>/` por `Storage.copy` (`mode="copy"`), ou reescreve pelo `COPY` particionado do
   DuckDB (`mode="rewrite"`); um snapshot antigo usa `DeltaTable(uri, version=v)`.

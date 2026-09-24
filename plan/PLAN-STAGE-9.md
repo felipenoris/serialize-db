@@ -58,7 +58,10 @@ COMMANDS = {
 - **`compact`** roda `optimize.compact` das partições pedidas e imprime `numFilesAdded` e
   `numFilesRemoved`; uma partição com um só arquivo não commita. O comando confere o arquivo de
   controle e recusa compactar uma tabela cujo snapshot mais recente é a versão atual, porque a
-  compactação depois do snapshot dobra os arquivos que ele referencia.
+  compactação depois do snapshot dobra os arquivos que ele referencia. A compactação roda no
+  escritor do delta-rs, fora do `memory_limit` do DuckDB, com as tarefas paralelas do padrão do
+  delta-rs; a memória dela numa partição de `cad_lancamentos` não foi medida
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **`archive`** lê a entrada do snapshot, roda `deep_copy(uri, versão, storage.uri_of(<ambiente>/arquivo/<nome>/<tabela>), storage)`
   de cada tabela na versão registrada e move a entrada de `snapshots` para a chave irmã `archived`
   do mesmo arquivo, na escrita condicional (`read_snapshots` e `storage.write_text(if_match=...)`),
@@ -66,7 +69,15 @@ COMMANDS = {
   só `snapshots`, então a entrada arquivada deixa de prender as versões e o registro do snapshot
   fica no controle. `snapshot` passa a recusar um nome presente em `snapshots` ou em `archived`,
   porque o nome dá a pasta `arquivo/<nome>/`; a recusa e o movimento entram em
-  `serialize_db.delta` com a rotina.
+  `serialize_db.delta` com a rotina. O `deep_copy` da [etapa 3](PLAN-STAGE-3.md) é um
+  `write_deltalake` do leitor da tabela inteira, cuja memória cresce com a tabela, fora do
+  `memory_limit` (1.140 MB para 12.000.000 de linhas e 1.960 MB para 24.000.000,
+  [`delta.md`](delta.md)): para `cad_lancamentos`, de 141.901.795 linhas, a leitura linear dá
+  cerca de 11 GB, sem medição, acima da metade da memória da máquina de 2026-09-23. A proposta, à
+  espera do usuário, é copiar partição a partição pelo caminho do registro, o
+  `COPY ... (RETURN_STATS)` do DuckDB sob `environment_limits` e `register_files` na tabela criada
+  por `create_table`, que [`delta.md`](delta.md) mediu com memória constante
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **`export`** chama `export_snapshot` com `--mode copy` ou `rewrite`; `--version` exporta uma
   versão antiga, com o DDL tirado do esquema daquela versão.
 - **`history`** imprime, por tabela, versão, operação, carimbo e os metadados
@@ -75,8 +86,9 @@ COMMANDS = {
 - **O runbook** entra em `docs/operacao.md`, publicado pelo `pdoc` com a docstring de
   `serialize_db.cli` que o inclui (decisão do usuário de 2026-09-23), ao lado da seção "Retenção
   dos arquivos removidos" de `docs/index.md`: uma seção por rotina com o comando, o que conferir
-  antes (o arquivo de controle, o espaço, a última publicação) e o que esperar depois (a versão, a
-  lista do `vacuum`, o `history`).
+  antes (o arquivo de controle, o espaço em disco, a memória da máquina contra a medida da rotina
+  na maior tabela, a última publicação) e o que esperar depois (a versão, a lista do `vacuum`, o
+  `history`).
 
 ## Pré-requisitos e pós-condições
 
@@ -217,6 +229,12 @@ history: {'version': 6, 'operation': 'WRITE', 'serialize_db_execution_id': 'exec
 
 ## Decisões pendentes
 
-Nenhuma. As decisões do usuário de 2026-09-23 sobre o lugar do runbook, `docs/operacao.md`, a
-retenção de 400 dias do `vacuum` mensal e a entrada do snapshot arquivado, movida para a chave
-irmã `archived`, estão escritas nas seções que as descrevem.
+- **O `archive` partição a partição pelo caminho do registro.** O `deep_copy` da
+  [etapa 3](PLAN-STAGE-3.md) reescreve a tabela inteira pelo `write_deltalake`, cuja memória cresce
+  com a tabela fora do `memory_limit`; a proposta é a cópia por partição pelo `COPY` do DuckDB sob
+  `environment_limits` e `register_files`, na seção "Estratégia de implementação"
+  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+As decisões do usuário de 2026-09-23 sobre o lugar do runbook, `docs/operacao.md`, a retenção de
+400 dias do `vacuum` mensal e a entrada do snapshot arquivado, movida para a chave irmã `archived`,
+estão escritas nas seções que as descrevem.

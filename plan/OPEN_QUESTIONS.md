@@ -23,8 +23,10 @@ foi medido em [`POC.md`](POC.md).
   expira ([`POC.md`](POC.md), sonda de 2026-09-24): a proposta, à espera do usuário, é criar o
   secret com `REFRESH auto`. A conexão da carga de uma tabela do script vive do fim da medição ao
   relatório da carga, e a de `cad_lancamentos`, a mais longa da bateria, pode atravessar a rotação
-  da credencial de quem chama, que às 22:50 de 2026-09-23 expirava em 46 minutos (`RS-18`). A
-  credencial do Redshift
+  da credencial de quem chama, que às 22:50 de 2026-09-23 expirava em 46 minutos (`RS-18`). O
+  `S3FileSystem` do `Storage`, que o `stream` e o `loader` do motor Redshift e a leitura dos
+  rodapés usam, guarda a cadeia de credenciais do SDK da AWS, que renova a credencial do contêiner
+  por conta própria; nenhuma execução mediu essa renovação. A credencial do Redshift
   tem o mesmo teto (`GetCredentials`, 3600 segundos), e o serverless encerra a sessão ociosa há
   3.600 s e a transação inativa há 21.600 s ([`redshift.md`](redshift.md)): o que acontece com uma
   conexão aberta quando a senha expira, e se ela cai no meio de um `COPY`, ainda não foi medido; o
@@ -84,9 +86,30 @@ foi medido em [`POC.md`](POC.md).
   leram o `SUPER` no Parquet do `UNLOAD` como `extension<arrow.json>`, com o texto de cada valor,
   que o `cast` do contrato converte em `string` ([etapa 5](PLAN-STAGE-5.md)). Nenhum caso da suíte
   registra esse arquivo numa tabela Delta e o lê pelo delta-rs e pelo `delta_scan`, o caminho do
-  `export_partition` de uma tabela com coluna JSON.
+  `export_partition` de uma tabela com coluna JSON. Um arquivo do `COPY` do DuckDB com o mesmo tipo
+  lógico `JSON`, registrado pelo motor DuckDB, foi lido como texto pelos dois leitores (sonda de
+  2026-09-24, [`POC.md`](POC.md)); falta o arquivo do `UNLOAD`.
+- **O `COPY` do Redshift sobre o arquivo do `COPY` do DuckDB.** A publicação da
+  [etapa 8](PLAN-STAGE-8.md) lê os arquivos do registro, gravados pelo `COPY` do DuckDB desde a
+  decisão de 2026-09-24: `DECIMAL` até 18 dígitos em `INT64`, `TIMESTAMP` em `INT64` de
+  microssegundos, `DATE` em `INT32` e o campo JSON em `BYTE_ARRAY` com o tipo lógico `JSON`, com
+  `PLAIN` e SNAPPY (sonda de 2026-09-24, [`POC.md`](POC.md)). O `COPY ... MANIFEST` do ambiente
+  alvo carregou em 2026-09-21 arquivos do delta-rs, com o `DECIMAL(18, 2)` e o `timestamp_ntz` em
+  `INT64`; um arquivo do DuckDB, e a coluna JSON com o tipo lógico numa staging `VARCHAR(65535)`,
+  esperam os testes `redshift` da etapa 8 sobre arquivos exportados pelo motor DuckDB.
+- **A memória do `archive` e da compactação.** O `deep_copy` da [etapa 3](PLAN-STAGE-3.md)
+  reescreve a tabela inteira pelo `write_deltalake`, cuja memória cresce com a tabela fora do
+  `memory_limit` do DuckDB (1.140 MB para 12.000.000 de linhas e 1.960 MB para 24.000.000,
+  [`delta.md`](delta.md)); `cad_lancamentos` tem 141.901.795 linhas. A proposta da
+  [etapa 9](PLAN-STAGE-9.md), à espera do usuário, é o `archive` partição a partição pelo `COPY`
+  do DuckDB sob `environment_limits` e `register_files`, o caminho que `delta.md` mediu com memória
+  constante. A compactação pelo `optimize.compact` do delta-rs também roda fora do `memory_limit`,
+  e a memória dela numa partição de `cad_lancamentos` não foi medida.
 
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente.
+tomada sai daqui e do arquivo da etapa no mesmo commit.
+
+- [Etapa 9](PLAN-STAGE-9.md): o `archive` partição a partição pelo caminho do registro, no lugar
+  do `deep_copy` da tabela inteira pelo `write_deltalake`.

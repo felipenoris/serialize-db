@@ -629,8 +629,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   the transaction; the script loads and measures by the registration only.
   The next target runs are the migration of `cad_lancamentos` and the threads probe, now with a
   half-the-CPUs round; `REFRESH auto` on the DuckDB secret, which stores the credential resolved
-  at `CREATE SECRET`, awaits the user (`plan/OPEN_QUESTIONS.md`). Stage 7 absorbs the script over
-  the stage 3, 4 and 6 modules.
+  at `CREATE SECRET`, awaits the user (`plan/OPEN_QUESTIONS.md`), as does the stage 9 `archive`
+  partition by partition through the register path, because `deep_copy` by `write_deltalake` grows
+  with the table outside `memory_limit`; the Redshift `COPY` of a DuckDB-written file waits for
+  the stage 8 tests. Stage 7 absorbs the script over the stage 3, 4 and 6 modules.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still

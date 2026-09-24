@@ -20,6 +20,14 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   ignore min and max in a search the `NaN` satisfies. PARQUET-1246 (2018, parquet-mr 1.10.0) was a
   Java reader fix that ignores a min or max that is itself `NaN`, not a rule to omit statistics.
   `plan/POC.md`, `plan/delta.md`
+- DuckDB 1.5.5 `COPY ... (FORMAT parquet)` writes format 1.0, SNAPPY and `PLAIN`: `DECIMAL(18, 2)`
+  as `INT64` and `DECIMAL(38, 6)` as `FIXED_LEN_BYTE_ARRAY`, `TIMESTAMP` as `INT64` µs, `DATE` as
+  `INT32`, `VARCHAR` as `BYTE_ARRAY` `String`, `BOOLEAN`, `DOUBLE`, and `JSON` as `BYTE_ARRAY`
+  with the `JSON` logical type, which pyarrow reads as `extension<arrow.json>`; the engine's
+  `export_partition` casts a `sa.JSON` column to DuckDB `JSON`, `register_files` accepts the file
+  (physical type only), and `delta_scan` reads it as `VARCHAR` text, delta-rs as `string` (probe
+  of 2026-09-24). The Redshift `COPY` of a DuckDB-written file has not run in the target.
+  `plan/POC.md`, `plan/PLAN-STAGE-8.md`, `plan/OPEN_QUESTIONS.md`
 
 ## The type contract
 
