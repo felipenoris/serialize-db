@@ -11,6 +11,7 @@ estrangeiras só com ``foreign_keys=True``; a recusa do valor de partição fora
 from __future__ import annotations
 
 import datetime
+import uuid
 
 import duckdb
 import pyarrow as pa
@@ -122,6 +123,41 @@ def test_audit_sql_per_dialect() -> None:
 
     # As funções da auditoria não se registram em sa.func: o cliente continua com as suas.
     assert type(sa.func.json_valid(sa.column("documento"))) is sa.sql.functions.Function
+
+
+def test_rows_check_measures_uuid_text() -> None:
+    """A verificação de linhas conta o texto de uma coluna ``Uuid`` acima dos 36 bytes do
+    ``VARCHAR(36)``, com ``strlen`` no DuckDB e ``octet_length`` no Redshift sobre o ``CAST``
+    para texto. O texto do DuckDB roda sobre o DDL da etapa 1, com o texto canônico, o nulo e um
+    texto de 37 bytes, e sobre a coluna ``UUID`` nativa de uma tabela criada por SQL, que o
+    ``strlen`` sem o ``CAST`` recusa com ``Binder Error`` (leitura de 2026-09-25)."""
+    table = sa.Table(
+        "cad_chaves", sa.MetaData(),
+        sa.Column("id_chave", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("chave", sa.Uuid),
+    )
+    duckdb_text = audit.audit_sql(table, "duckdb", prefix="")["linhas"]
+    redshift_text = audit.audit_sql(table, "redshift", prefix="")["linhas"]
+    assert """strlen(CAST("cad_chaves"."chave" AS VARCHAR)) > 36""" in duckdb_text
+    assert """octet_length(CAST("cad_chaves"."chave" AS VARCHAR)) > 36""" in redshift_text
+
+    # O texto do DuckDB sobre as três linhas da tabela do DDL.
+    canonical = str(uuid.UUID(int=1))
+    connection = duckdb.connect()
+    connection.execute(schema.ddl(table, "duckdb"))
+    connection.execute("INSERT INTO cad_chaves VALUES (1, ?), (2, NULL), (3, ?)",
+                       [canonical, canonical + "x"])
+    counters = connection.execute(duckdb_text).to_arrow_table()
+    assert counters.column("linhas").to_pylist() == [3]
+    assert counters.column("texto_chave").to_pylist() == [1]
+
+    # O mesmo texto sobre a coluna UUID nativa, que a exportação converte em VARCHAR(36).
+    connection.execute("DROP TABLE cad_chaves")
+    connection.execute(
+        "CREATE TABLE cad_chaves AS SELECT 1::BIGINT AS id_chave, gen_random_uuid() AS chave")
+    native = connection.execute(duckdb_text).to_arrow_table()
+    connection.close()
+    assert native.column("texto_chave").to_pylist() == [0]
 
 
 def test_redshift_is_finite_under_the_postgresql_rule() -> None:

@@ -96,14 +96,24 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
 
 ## The type table read against the code (2026-09-25)
 
-- `arrow_type` and `sql_type` match by `isinstance`: `Unicode`, `CHAR(n)` (emitted as
-  `VARCHAR(n)`) and `Enum` take the `String(n)` row, `Enum`'s `n` being its longest value and its
-  list never checked; `Numeric()` is `decimal128(18, 0)`; `Numeric(39, s)` raises pyarrow's
-  `ValueError` out of `check_models`. `Time` and `REAL` are refused. `plan/POC.md`
-- `cast` turns the `arrow.uuid` that `pa.array` and `from_pandas` infer from `uuid.UUID` into a
-  `string` of the 16 raw bytes: random UUIDs fail with `Invalid UTF8 payload`; `Uuid` text is not
-  measured against `VARCHAR(36)` by `cast` or the audit. Pending user decision in
-  `plan/OPEN_QUESTIONS.md`. `plan/POC.md`
+- `arrow_type` and `sql_type` match by `isinstance`: `Unicode` and `CHAR(n)` (emitted as
+  `VARCHAR(n)`) take the `String(n)` row; `Numeric()` is `decimal128(18, 0)`. `Enum` derives from
+  `String` and `Numeric(39, s)` made pyarrow raise `ValueError` out of `check_models`; since the
+  user's decision of 2026-09-25 `arrow_type` refuses both with `ContractError`, which
+  `check_models` lists. `Time` and `REAL` are refused. `plan/POC.md`
+- PyArrow's own cast turns the `arrow.uuid` that `pa.array` and `from_pandas` infer from
+  `uuid.UUID` into a `string` of the 16 raw bytes: random UUIDs fail with `Invalid UTF8 payload`
+  and an all-ASCII one enters as 16 characters. PyArrow 25.0.1 has `pa.UuidType`, no
+  `pa.types.is_uuid` and no hex function; `cast(pa.binary(16))` gives the raw bytes of an `Array`
+  or a `ChunkedArray`. Since the user's decision of 2026-09-25, `cast` writes the canonical text by
+  `bytes.hex` (1.0 s per million values against 3.7 s by `str(uuid.UUID)`) and `cast` and the audit
+  refuse `Uuid` text above 36 bytes. A DuckDB native `UUID` column (a table made by SQL with
+  `gen_random_uuid()`) refuses `strlen` and `octet_length` with a Binder Error, so the audit
+  measures `strlen(CAST(x AS VARCHAR))`; its `COPY` writes `FIXED_LEN_BYTE_ARRAY` with the `UUID`
+  logical type (read back as `arrow.uuid`), and a query's Arrow output gives `string`.
+  `plan/POC.md`
+- `Numeric(10, 12)` and `Numeric(38, -1)` pass `check_models`, and `delta_schema` raises delta-rs's
+  generic `Exception`; pending user decision in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`
 - A `DateTime` column makes delta-rs create the table at reader 3 / writer 7 with `timestampNtz`;
   without it, 1 / 2. `delta_scan` gives `VARCHAR` for `JSON` (the DDL tables say `JSON`), and
   DuckDB's Arrow output labels `TIMESTAMPTZ` with the session `TimeZone`. DuckDB and delta-rs write

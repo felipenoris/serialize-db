@@ -10,11 +10,11 @@ As verificações:
 
 - **linhas**: uma consulta, agrupada pela coluna de partição numa tabela particionada, que conta
   por coluna o nulo em ``NOT NULL``, o texto acima de ``String(n)`` em bytes, o texto de uma coluna
-  ``Text`` e o documento JSON acima de 65.535 bytes, o teto do Redshift, o JSON inválido, a
-  coluna de partição diferente da derivação de ``partition_source`` e o valor de partição fora de
-  ``schema.PARTITION_VALUE``; e que soma cada coluna ``Numeric`` e ``Double`` como
-  ``DECIMAL(38, 6)`` (a ``Double`` só nos valores finitos) e conta à parte os não finitos, uma
-  leitura que não reprova;
+  ``Uuid`` acima de 36 bytes, o texto de uma coluna ``Text`` e o documento JSON acima de 65.535
+  bytes, o teto do Redshift, o JSON inválido, a coluna de partição diferente da derivação de
+  ``partition_source`` e o valor de partição fora de ``schema.PARTITION_VALUE``; e que soma cada
+  coluna ``Numeric`` e ``Double`` como ``DECIMAL(38, 6)`` (a ``Double`` só nos valores finitos) e
+  conta à parte os não finitos, uma leitura que não reprova;
 - **chave_<colunas>**: a chave repetida nas partições da execução, uma consulta por chave;
 - **chave_<colunas>_publicada**: a chave repetida entre as partições da execução e as demais da
   versão publicada, quando a chave não inclui a coluna de partição nem a de ``partition_source``;
@@ -49,6 +49,7 @@ from serialize_db import sql
 from serialize_db.schema import (
     PARTITION_VALUE,
     TEXT_LIMIT,
+    UUID_LENGTH,
     Dialect,
     TableOptions,
     check_partition_value,
@@ -358,6 +359,11 @@ def _defect_counters(table: sa.Table) -> dict[str, sa.ColumnElement]:
             counters[f"texto_{column.name}"] = text_bytes(column) > TEXT_LIMIT
         elif isinstance(column.type, sa.String) and column.type.length:
             counters[f"texto_{column.name}"] = text_bytes(column) > column.type.length
+        elif isinstance(column.type, sa.Uuid):
+            # O CAST leva a texto a coluna UUID nativa que o pipeline cria no DuckDB por SQL
+            # (gen_random_uuid()), que o strlen não aceita e a exportação converte em VARCHAR(36).
+            as_text = sa.cast(column, sa.String())
+            counters[f"texto_{column.name}"] = text_bytes(as_text) > UUID_LENGTH
     # Os contadores da partição: o valor fora da regra e o que difere da data de partition_source.
     if options.partition_by is not None:
         partition = table.c[options.partition_by]
