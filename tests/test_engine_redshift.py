@@ -729,7 +729,8 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     partição e com o JSON serializado, e o arquivo como o Redshift o gravou (``INT96``) no log, com
     as linhas conferidas; dois destinos distintos para a mesma partição. A troca: com
     ``columns_without_min_max``, o destino no ``staging/`` e a partição por ``publish_partition``,
-    com o aviso no log; a partição vazia entra por um arquivo sem linha."""
+    com o aviso no log; a partição vazia entra por um arquivo sem linha; o valor numa tabela sem
+    partição recusa antes do ``UNLOAD``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     uri = storage.uri_of("prd/cad_lancamentos_projetados")
     delta.create_table(uri, PROJECTED, storage)
@@ -797,6 +798,12 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=0)
     assert version == 3
     assert delta.open_table(uri, storage).to_pyarrow_table().num_rows == 0
+
+    # O valor numa tabela sem partição recusa antes de qualquer comando.
+    commands = len(connection.commands)
+    with pytest.raises(ContractError, match="tabela sem partição recebeu o valor"):
+        engine.export_partition(ACCOUNTS, storage.uri_of("prd/cad_contas"), MONTHS[1], METADATA)
+    assert len(connection.commands) == commands
     engine.cleanup()
 
 

@@ -1,10 +1,11 @@
-"""As exceções da biblioteca, num módulo sem dependências.
+"""As exceções da biblioteca, num módulo sem dependências, que os outros importam sem ciclo.
 
 Cada etapa acrescenta as suas: ``ContractError`` é a da etapa 1 (``schema``), ``SqlError`` a da
 etapa 2 (``sql``), ``ConflictError``, ``ExecutionConflict``, ``RegistrationRefused``,
-``SchemaDiffRefused`` e ``LogUnavailable`` as da etapa 3 (``storage`` e ``delta``), que
-``serialize_db.delta`` levanta e a execução captura, ``SandboxError`` a da etapa 4 (os motores),
-``AuditFailed`` a da etapa 6 (a execução) e ``PublicationError`` a da etapa 8 (a publicação).
+``SchemaDiffRefused`` e ``LogUnavailable`` as da etapa 3 (``storage`` e ``delta``), que a
+execução deixa chegar ao cliente, ``SandboxError`` a da etapa 4 (os motores), ``AuditFailed`` a
+da etapa 6 (a execução) e ``PublicationError`` a da etapa 8 (a publicação). A linha de comando
+captura ``ConflictError`` e ``ExecutionConflict`` e sai com 2.
 """
 
 __all__ = [
@@ -22,10 +23,12 @@ __all__ = [
 
 
 class ContractError(ValueError):
-    """Dados ou modelo fora do contrato.
+    """Dados, modelo ou configuração fora do contrato.
 
     A mensagem nomeia a tabela e a coluna e diz o que o cliente faz antes de chamar de novo:
-    arredondar, truncar, serializar, declarar ``String(n)``.
+    arredondar, truncar, serializar, declarar ``String(n)``. Na configuração, nomeia o que falta
+    ou sobra: o ``RedshiftConfig`` sem conexão, o ``execution_id`` longo demais para o prefixo do
+    sandbox do Redshift.
 
     Exemplo:
 
@@ -134,11 +137,13 @@ class LogUnavailable(Exception):
 
 
 class SandboxError(ValueError):
-    """Um nome já ocupado no sandbox, ou um objeto do sandbox que não serve ao que foi pedido.
+    """Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido, ou o
+    motor Redshift sem as credenciais que o ``COPY`` e o ``UNLOAD`` pedem.
 
     A mensagem nomeia o objeto; o cliente lê a versão publicada por ``run.published(table)`` em
     vez de gravar no nome que o ``ingest`` ocupou, como a mensagem do ``loader`` indica, ou abre
-    um ``loader`` só por tabela.
+    um ``loader`` só por tabela. Sem ``iam_role`` na configuração, as credenciais vêm da sessão
+    ``boto3``, e a mensagem diz onde ela procurou.
 
     Exemplo:
 

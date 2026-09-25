@@ -63,7 +63,7 @@ interactive = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# A migração adiantada e os probes são scripts fora do pacote: as pastas entram no caminho de
+# O script da migração e os probes ficam fora do pacote: as pastas entram no caminho de
 # importação, e tests/test_migrate_parquet_to_delta.py e tests/test_probes.py os importam pelo nome.
 pythonpath = ["scripts", "probes"]
 markers = [

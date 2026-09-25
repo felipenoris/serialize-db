@@ -3842,3 +3842,43 @@ testes, com `SERIALIZE_DB_TEST_EMULATOR` e `SERIALIZE_DB_TEST_LOCAL_ROOT` e sem 
 
 **Consequências**: `pyproject.toml` fixa boto3 1.43.102 e sqlglot 30.19.0, e a SQLAlchemy fica em
 2.0.54; a adoção da 2.1 espera o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que as correções dos achados da revisão mostraram
+
+Em 2026-09-25, na mesma pasta local do contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e
+16 GB), com deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1 e redshift-connector 2.1.17 e sem as
+variáveis `AWS_*`, as sondas repetiram os casos dos achados sobre o código corrigido, e cada
+asserção nova dos testes reprovou no código de antes.
+
+- **O `nullCount` de uma coluna sem estatística no rodapé, por leitor.** Um timestamp em `INT96`,
+  5 linhas com 3 nulos, registrado por `file_from_footer` com o `nullCount` 0 (o código de antes)
+  e sem ele (o corrigido). Com o 0, `quando IS NULL` leu 0 linhas pelo dataset do delta-rs, 0 pelo
+  `DeltaTable.scan(predicate=...)` e 0 pelo `QueryBuilder`, contra 3 pelo `delta_scan`; sem ele,
+  3 pelo `scan`, pelo `QueryBuilder` e pelo `delta_scan`, e 0 pelo dataset, o defeito da
+  [issue #85](https://github.com/felipenoris/serialize-db/issues/85). `quando IS NOT NULL` leu 5
+  pelo dataset e 2 pelos outros três nos dois casos.
+- **Os códigos de saída da CLI.** Os seis casos da sonda anterior, por subprocesso, saíram com 2
+  e a mensagem, sem traceback: `run --engine redshift` sem conexão e com o `--execution-id` de 60
+  caracteres, `publish --init`, `publish --status` e `audit --engine redshift` sem conexão, e
+  `load --source gs://bucket/origem`.
+- **As ações de uma tabela particionada sem arquivos** trouxeram 0 linhas e a coluna
+  `partition.data_str` também no deltalake 1.6.6, lido num ambiente à parte, como no 1.6.4.
+- **As asserções novas no código de antes**: a CLI saiu com o traceback do `ContractError` e do
+  `ValueError`; `file_from_footer` deu `null_count` 0 ao `INT96`; o `export_partition` do motor
+  DuckDB deixou o arquivo `exec-2026-09-05_<uuid>.parquet` na pasta de `cad_contas`, fora do log, e
+  o do motor Redshift rodou três comandos antes da recusa; `channel_snapshot(control, "current")`
+  sugeriu `serialize-db channel --name current`; `export_snapshot(mode="rewrite")` gravou fora da
+  raiz sem erro; e `publish_redshift` com a tabela fora de `versions` disse que ela não existe
+  no ambiente.
+- **O caso de estudo do GIL**, `test_gil_reacquisition_waits_the_switch_interval`, reprovou
+  numa das duas rodadas da suíte inteira no substituto: os 200 `os.stat` levaram 0,011 s ao lado
+  do laço e 0,018 s com o intervalo de troca dez vezes menor, e a asserção pede menos da metade
+  do primeiro. Na outra rodada leu 0,256 s e 0,016 s, e em cinco repetições isoladas de 0,022 s
+  a 0,482 s e de 0,010 s a 0,024 s, com 0,3 ms a 0,4 ms sozinho.
+
+**Consequências**: `file_from_footer` deixa fora do `nullCount` do log a coluna sem a contagem em
+algum grupo de linhas, e as etapas [3](PLAN-STAGE-3.md) e [5](PLAN-STAGE-5.md) dizem isso; o
+`scan` e o `QueryBuilder` do delta-rs, que leem certo sem mínimo e máximo, liam errado o `IS NULL`
+com o zero. As outras correções estão nas etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md),
+[6](PLAN-STAGE-6.md), [7](PLAN-STAGE-7.md), [8](PLAN-STAGE-8.md), [9](PLAN-STAGE-9.md) e
+[10](PLAN-STAGE-10.md).

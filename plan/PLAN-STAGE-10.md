@@ -124,9 +124,10 @@ O que a implementação fixou além do texto das seções abaixo:
   `ValueError`, também o que está em `archived`, porque o `vacuum` deixa de preservar as versões
   dele; outro escritor entre a leitura e a escrita é `ConflictError`.
 - **`channel_snapshot(control, name)`** devolve o snapshot do canal, e o canal ausente é
-  `ContractError` com o comando que o cria. **`snapshot_versions(control, name)`** devolve as
-  versões do snapshot, e o nome ausente de `snapshots` é `ContractError`. O leitor e a publicação
-  usam as duas.
+  `ContractError` com o comando que o cria; o canal `current` também, porque não aponta snapshot, e
+  o leitor e `serialize-db publish` o tratam antes de chamá-la.
+  **`snapshot_versions(control, name)`** devolve as versões do snapshot, e o nome ausente de
+  `snapshots` é `ContractError`. O leitor e a publicação usam as duas.
 - **`archive_snapshot`** recusa com `ValueError` o snapshot que um canal aponta: o canal precisa
   ser movido antes.
 - **`serialize-db channel --name <canal> --snapshot <nome>`** aponta o canal e imprime o snapshot
@@ -274,8 +275,9 @@ O que a implementação fixou além do texto das seções abaixo:
 
 `tests/test_delta.py`, nas duas raízes: `set_channel` aponta e move o canal e recusa o nome fora
 da regra, o nome `current`, o snapshot ausente e o arquivado; a escrita concorrente é
-`ConflictError`; `channel_snapshot` e `snapshot_versions` recusam o que não existe; e
-`archive_snapshot` recusa o snapshot de um canal.
+`ConflictError`; `channel_snapshot` e `snapshot_versions` recusam o que não existe, e
+`channel_snapshot` o canal `current`, que não fica no arquivo; e `archive_snapshot` recusa o
+snapshot de um canal.
 
 `tests/test_operation.py`, sob a raiz local: `serialize-db channel --name default --snapshot`
 move o canal, imprime o anterior e o novo e mostra os canais; o snapshot ausente e o nome

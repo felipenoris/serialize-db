@@ -990,8 +990,8 @@ def exported_totals(storage: Storage, uri: str) -> list[tuple]:
 def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
     """A partição sai pelo ``COPY ... RETURN_STATS`` e entra no log com as linhas e as somas do
     sandbox, sem o mínimo e o máximo da coluna com ``NaN``; o Delta poda pela estatística da
-    chave, o arquivo leva o ``execution_id`` no nome, e ``expected_rows`` diferente recusa sem
-    commit."""
+    chave, o arquivo leva o ``execution_id`` no nome, ``expected_rows`` diferente recusa sem
+    commit, e o valor numa tabela sem partição recusa antes do ``COPY``, sem arquivo."""
     engine = setup.engine
     with_nan = [float("nan")] + [entry_id / 4 for entry_id in range(2, 1001)]
     engine.load(PROJECTED, entry_rows(MONTHS[1], 1, 1000, PROJECTED, valor=with_nan))
@@ -1021,6 +1021,15 @@ def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
     with pytest.raises(RegistrationRefused):
         engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=999)
     assert delta.open_table(uri, setup.storage).version() == 1
+
+    # O valor numa tabela sem partição recusa antes do COPY, sem arquivo na pasta da tabela.
+    accounts_uri = setup.uri(ACCOUNTS)
+    engine.ingest(ACCOUNTS, accounts_uri, published_accounts(setup, ["A", "B"]),
+                  materialize=True)
+    with pytest.raises(ContractError, match="tabela sem partição recebeu o valor"):
+        engine.export_partition(ACCOUNTS, accounts_uri, MONTHS[1], METADATA)
+    account_files = setup.storage.list_files(setup.storage.relative(accounts_uri), ".parquet")
+    assert len(account_files) == 1
 
 
 def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:

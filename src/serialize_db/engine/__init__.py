@@ -216,8 +216,8 @@ class Engine(Protocol):
     def __enter__(self) -> Engine: ...
     def __exit__(self, *exc: object) -> None: ...
 
-    def ingest(self, table: sa.Table, uri: str, version: int, partitions: list[str] | None = None,
-               materialize: bool = False) -> None:
+    def ingest(self, table: sa.Table, uri: str, version: int | None,
+               partitions: list[str] | None = None, materialize: bool = False) -> None:
         """Leva ao sandbox as partições pedidas da versão fixada da tabela Delta, com o nome do
         modelo.
 
@@ -229,7 +229,7 @@ class Engine(Protocol):
 
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
         :param uri: a URI da tabela Delta.
-        :param version: a versão fixada da tabela.
+        :param version: a versão fixada da tabela; ``None``, a tabela sem versão no Delta.
         :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
             nenhuma.
         :param materialize: ``True`` copia os dados para uma tabela do sandbox; com ``False``, o

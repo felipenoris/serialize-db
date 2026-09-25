@@ -227,8 +227,9 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
   com um `uuid`. No registro, o destino é `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/`,
   e cada entrada do manifesto vira um `RegisteredFile` com `path` relativo à pasta da tabela,
   `content_length`, `record_count` e as estatísticas do rodapé, lido por `storage.open_input_file`:
-  o `null_count` de cada coluna e o mínimo e o máximo dos tipos que transcrevem exato, somados os
-  grupos de linhas, uma função que esta etapa acrescenta a `serialize_db.delta` ao lado de
+  o `null_count` de cada coluna que o rodapé conta em todos os grupos de linhas e o mínimo e o
+  máximo dos tipos que transcrevem exato, somados os grupos de linhas, uma função que esta etapa
+  acrescenta a `serialize_db.delta` ao lado de
   `file_from_return_stats` da [etapa 3](PLAN-STAGE-3.md); `register_files` confere e commita, com
   `expected_rows` do `count(*)` do sandbox, e relê. O `select` do `UNLOAD` lista as colunas do
   contrato na ordem dele e sem a de partição, porque `register_files` recusa o arquivo com a coluna
@@ -270,7 +271,7 @@ testes marcados `redshift` repetem a sequência com uma amostra no esquema autor
 | Prefixo | `test_sandbox_prefix_normalizes_and_limits` | `[a-z0-9_]`, 127 bytes. |
 | Cláusula de credenciais | `test_credentials_clause_and_mask` | `IAM_ROLE` com ARN e `default`; as três chaves da sessão sem `iam_role`; `mask` tira os valores; nenhuma exceção carrega o texto sem máscara. |
 | Comandos | `test_copy_insert_unload_text` | `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` sem `COMPUPDATE` ([etapa 8](PLAN-STAGE-8.md)); `INSERT ... SELECT *, '<valor>'`; `UNLOAD ... MANIFEST VERBOSE` sem `PARTITION BY`, o `select` da exportação sem a coluna de partição, `PARALLEL OFF` opcional na exportação e fixo no `stream`, a contrabarra e as aspas do `select` dobradas; nomes em duas partes. |
-| Exportação, troca e destino por tentativa | `test_export_registers_the_unloaded_files_and_swaps_on_nonfinite` (`local`) | Uma conexão de mentira que grava o arquivo do `UNLOAD` na pasta local: o registro em `<coluna>=<valor>/<execution_id>_<uuid>/` com o `select` sem a coluna de partição e o JSON serializado, o arquivo `INT96` no log com as linhas conferidas e sem o mínimo e o máximo do texto, `expected_rows` diferente recusado, dois destinos distintos para a mesma partição; com `columns_without_min_max` não vazio, o destino no `staging/`, `publish_partition` e o `WARNING` com a tabela, a partição e as colunas, e `expected_rows` diferente desfazendo o commit com `RegistrationRefused`; a partição vazia registrada por um arquivo sem linha. |
+| Exportação, troca e destino por tentativa | `test_export_registers_the_unloaded_files_and_swaps_on_nonfinite` (`local`) | Uma conexão de mentira que grava o arquivo do `UNLOAD` na pasta local: o registro em `<coluna>=<valor>/<execution_id>_<uuid>/` com o `select` sem a coluna de partição e o JSON serializado, o arquivo `INT96` no log com as linhas conferidas e sem o mínimo e o máximo do texto, `expected_rows` diferente recusado, dois destinos distintos para a mesma partição; com `columns_without_min_max` não vazio, o destino no `staging/`, `publish_partition` e o `WARNING` com a tabela, a partição e as colunas, e `expected_rows` diferente desfazendo o commit com `RegistrationRefused`; a partição vazia registrada por um arquivo sem linha; o valor numa tabela sem partição recusado antes de qualquer comando. |
 | Ingestão e `published` | `test_ingest_loads_each_partition_through_the_staging` (`local`) | Por partição, o manifesto no `staging/`, o `DELETE` da staging, o `COPY ... MANIFEST FILLRECORD` e o `INSERT` com a lista de colunas; a partição sem arquivo não roda; o nome ocupado e a tabela sem versão são `SandboxError`; `published` carrega a versão inteira em `_publicado_<versão>` uma vez, e outra versão numa staging nova; `cleanup` apaga as tabelas e o `staging/`. |
 | Loader sem conexão | `test_loader_writes_the_file_and_creates_the_table_in_a_transaction` (`local`) | O nome ocupado recusado; o arquivo no `staging/` pela thread auxiliar; `BEGIN`, o `CREATE TABLE`, a staging temporária com o `COPY` e o `INSERT ... JSON_PARSE`, `COMMIT`, e o arquivo apagado; a tabela sem JSON pelo `COPY` direto; a exceção no `with` e o lote recusado sem tabela; o DataFrame recusado. |
 | Reconexão | `test_connection_dropped_by_the_server_is_reopened_once` | O `InterfaceError` do driver reabre a conexão uma vez, com o `USE` e o `search_path`, e repete o comando; dentro de uma transação o erro sobe, com o `ROLLBACK` tentado. |
@@ -330,7 +331,9 @@ O que a implementação mudou em relação ao texto das seções acima, com o mo
   acima disso o `UNLOAD` fragmenta por slice; o valor não foi medido no ambiente alvo.
 - **O rodapé do `UNLOAD` dá ao log o mínimo e o máximo das colunas inteiras, `Double` e de data**,
   e não do texto: o rodapé pode guardar o texto truncado, e o PyArrow 25 não expõe a marca de
-  exatidão do Parquet; o `null_count` entra de toda coluna.
+  exatidão do Parquet; o `null_count` entra de toda coluna que o rodapé conta em todos os grupos
+  de linhas, e a coluna sem a contagem, como o timestamp `INT96`, fica fora do `nullCount` do log,
+  porque o leitor que poda por ele leria zero nulos (leitura de 2026-09-25, [`POC.md`](POC.md)).
 - **A partição vazia entra por um arquivo sem linha**, gravado pelo motor com o esquema do contrato
   sem a coluna de partição, porque o `UNLOAD` de um resultado vazio não grava arquivo e o
   `register_files` sem arquivo falha no delta-rs.

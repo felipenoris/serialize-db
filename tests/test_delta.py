@@ -361,6 +361,33 @@ def test_register_files_registers_an_unload_like_file(storage: Storage, uri: str
     assert table.history(limit=1)[0]["serialize_db_execution_id"] == "exec-2026-09-05"
 
 
+def test_file_from_footer_leaves_out_the_null_count_the_footer_lacks(storage: Storage,
+                                                                     uri: str) -> None:
+    """A coluna sem estatística no rodapé, como o timestamp ``INT96`` do ``UNLOAD``, fica fora do
+    ``null_count`` de ``file_from_footer`` e do ``nullCount`` do log, e o ``IS NULL`` pelo
+    ``scan`` do delta-rs lê os nulos dela; a chave, com estatística, entra com o zero."""
+    data = rows("2026-08-31", 101, 5).drop_columns(["data_str"])
+    stamps = pa.array([datetime.datetime(2026, 8, 31, 12, 30), None, None, None, None],
+                      pa.timestamp("us"))
+    data = data.set_column(data.schema.get_field_index("carimbo"), "carimbo", stamps)
+    relative = "data_str=2026-08-31/exec-42_cd34/0000_part_00.parquet"
+    write_external_file(storage, uri, relative, data)
+    footer_path = storage.join(storage.relative(uri), relative)
+    footer = pq.ParquetFile(storage.open_input_file(footer_path))
+    file = delta.file_from_footer(footer, relative, storage.size(footer_path), 5, OPERACOES)
+    assert "carimbo" not in file.stats["null_count"]
+    assert file.stats["null_count"]["id_operacao"] == 0
+
+    # O log sem o nullCount da coluna, e o scan do delta-rs sem podar o arquivo por ele.
+    delta.register_files(uri, OPERACOES, [file], "2026-08-31", METADATA, storage,
+                         expected_rows=5)
+    stats = added_stats(storage, uri, 1)[0]
+    assert "carimbo" not in stats["nullCount"]
+    table = delta.open_table(uri, storage)
+    null_rows = sum(batch.num_rows for batch in table.scan(predicate="carimbo IS NULL"))
+    assert null_rows == 4
+
+
 # Um registro: os arquivos, o valor registrado e ``expected_rows``.
 Registration = tuple[list[RegisteredFile], str, int | None]
 
@@ -747,8 +774,9 @@ def test_channel_points_to_a_snapshot_and_refuses(storage: Storage,
                                                   monkeypatch: pytest.MonkeyPatch) -> None:
     """``set_channel`` aponta e move o canal sob a chave ``channels``, ``channel_snapshot`` o lê e
     ``snapshot_versions`` dá uma cópia da entrada; são recusados o snapshot ausente ou arquivado,
-    o nome fora da regra da partição, o canal ``current``, o canal e o snapshot que não existem, o
-    ``archive`` do snapshot de um canal e a escrita concorrente."""
+    o nome fora da regra da partição, o canal ``current`` no ``set_channel`` e no
+    ``channel_snapshot``, o canal e o snapshot que não existem, o ``archive`` do snapshot de um
+    canal e a escrita concorrente."""
     with pytest.raises(ValueError, match="não está em snapshots"):
         delta.set_channel(storage, "prd", "default", "2026T2")
     delta.snapshot(storage, "prd", "2026T2", {"cad_operacoes": 3, "dom_canais": 1})
@@ -776,6 +804,8 @@ def test_channel_points_to_a_snapshot_and_refuses(storage: Storage,
         delta.set_channel(storage, "prd", "default", "2026T2")
     with pytest.raises(ContractError, match="serialize-db channel --name outro"):
         delta.channel_snapshot(control, "outro")
+    with pytest.raises(ContractError, match="não fica no arquivo de controle"):
+        delta.channel_snapshot(control, delta.CURRENT_CHANNEL)
     with pytest.raises(ContractError, match="arquivado"):
         delta.snapshot_versions(delta.read_snapshots(storage, "prd")[0], "2026T2")
     with pytest.raises(ContractError, match="não existe"):
@@ -838,7 +868,8 @@ def exported_measures(storage: Storage, folder: str) -> list[tuple]:
 
 def test_export_snapshot_copy_and_rewrite(storage: Storage, uri: str) -> None:
     """Os dois modos produzem ``<coluna>=<valor>/`` com as mesmas linhas; ``copy`` copia só os
-    arquivos que o log lista, e uma versão antiga exporta o que ela tinha."""
+    arquivos que o log lista, uma versão antiga exporta o que ela tinha, e o destino fora da raiz
+    recusa nos dois modos, sem gravar."""
     publish(storage, uri, "2026-07-31", 1, 10)
     publish(storage, uri, "2026-08-31", 11, 10)
     publish(storage, uri, "2026-08-31", 21, 5)
@@ -862,6 +893,13 @@ def test_export_snapshot_copy_and_rewrite(storage: Storage, uri: str) -> None:
     assert exported_measures(storage, copy_folder) == expected
     assert exported_measures(storage, rewrite_folder) == expected
     assert exported_measures(storage, old_folder)[1] == ("2026-08-31", 10, 155)
+
+    # O destino fora da raiz, ao lado dela, recusa nos dois modos sem gravar.
+    outside = storage.uri + "-fora"
+    for mode in ("copy", "rewrite"):
+        with pytest.raises(ValueError, match="fora da raiz"):
+            delta.export_snapshot(uri, OPERACOES, outside, storage, mode=mode)
+    assert Storage.for_uri(outside).list_files("") == []
 
 
 def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) -> None:

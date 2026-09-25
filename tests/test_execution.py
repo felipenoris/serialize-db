@@ -258,13 +258,19 @@ def test_execution_refuses_an_invalid_partition(db: Database, value: str) -> Non
 
 
 def test_previous_partitions_up_to_the_execution_partition(db: Database) -> None:
-    """Só valores até a partição da execução, os ``n`` últimos, na ordem de texto."""
+    """Só valores até a partição da execução, os ``n`` últimos, na ordem de texto; a tabela
+    ausente e a tabela sem arquivos dão a lista vazia."""
     with Execution(db, FakeEngine(db.storage), "2026-07-31") as run:
         assert run.previous_partitions(ENTRIES, 2) == ["2026-06-30", "2026-07-31"]
         assert run.previous_partitions(ENTRIES, 12) == ["2026-05-31", "2026-06-30", "2026-07-31"]
         assert run.previous_partitions(PROJECTED, 3) == []
         with pytest.raises(ContractError, match="sem partição"):
             run.previous_partitions(Composta.__table__, 1)
+
+    # A tabela criada, sem arquivos.
+    delta.create_table(db.uri(PROJECTED), PROJECTED, db.storage)
+    with Execution(db, FakeEngine(db.storage), "2026-07-31") as run:
+        assert run.previous_partitions(PROJECTED, 3) == []
 
 
 def take_ids(run: Execution, ranges: list[range]) -> None:
@@ -631,6 +637,38 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         assert run.redshift is None
         assert not hasattr(run, "publish_redshift")
+
+
+def test_cli_exits_with_2_on_the_redshift_config_without_connection(
+    db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """``run`` e ``audit`` com ``--engine redshift`` e ``publish --init`` saem com 2, sem
+    traceback, na configuração do Redshift sem conexão; com ela, ``run`` sai com 2 no
+    ``--execution-id`` que não deixa 63 bytes ao nome no prefixo do sandbox."""
+    from serialize_db.engine import redshift
+
+    monkeypatch.setattr(redshift, "driver_connect", lambda login: IdleConnection())
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    for name in ("WORKGROUP", "HOST", "USER", "PASSWORD"):
+        monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
+    common = ["--root", db.root, "--environment", "prd",
+              "--metadata", "test_execution:Base.metadata"]
+    run = ["run", *common, "--partition", "2026-08-31", "--engine", "redshift"]
+    assert cli.main([*run, "test_execution:redshift_engine_pipeline"]) == 2
+    audit = ["audit", *common, "--table", "cad_lancamentos", "--engine", "redshift"]
+    assert cli.main(audit) == 2
+    assert cli.main(["publish", "--init"]) == 2
+    printed_errors = capsys.readouterr().err
+    assert printed_errors.count("RedshiftConfig sem conexão") == 3
+
+    # Com a conexão, o execution_id longo demais para o prefixo do sandbox.
+    for name, value in (("HOST", "host"), ("USER", "usuario"), ("PASSWORD", "senha")):
+        monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", value)
+    long_id = ["--execution-id", "x" * 60, "test_execution:redshift_engine_pipeline"]
+    assert cli.main([*run, *long_id]) == 2
+    printed_errors += capsys.readouterr().err
+    assert "não deixa 63 bytes ao nome" in printed_errors
+    assert "Traceback" not in printed_errors
 
 
 def test_cli_audit_prints_the_sql_and_audits_the_published_version(

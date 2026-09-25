@@ -205,9 +205,10 @@ def _options(storage: Storage) -> dict[str, str] | None:
     return storage.storage_options() or None
 
 
-def _checked_value(table: sa.Table, value: str | None) -> str | None:
+def checked_value(table: sa.Table, value: str | None) -> str | None:
     """O valor de partição conferido: obrigatório e na regra da partição numa tabela particionada,
-    ``None`` numa tabela sem partição."""
+    ``None`` numa tabela sem partição; protegida, para o ``export_partition`` dos motores, que o
+    confere antes de gravar o arquivo."""
     partition_by = table_options(table).partition_by
     if partition_by is None:
         if value is not None:
@@ -415,7 +416,7 @@ def publish_partition(uri: str, table: sa.Table, value: str | None, data: object
         partição ou fora da regra; os dados sem a coluna de partição, antes de gravar.
     :raises ExecutionConflict: o commit falhou no delta-rs com ``CommitFailedError``.
     """
-    value = _checked_value(table, value)
+    value = checked_value(table, value)
     arrow = _as_arrow(data)
     partition_by = table_options(table).partition_by
     if partition_by and partition_by not in arrow.schema.names:
@@ -494,28 +495,34 @@ def file_from_return_stats(row: Mapping[str, object], table: sa.Table, uri: str)
     )
 
 
-def _footer_statistics(footer: pq.ParquetFile, index: int) -> tuple[int, object, object]:
+def _footer_statistics(footer: pq.ParquetFile, index: int) -> tuple[int | None, object, object]:
     """A soma dos nulos e o mínimo e o máximo da coluna ``index`` nos grupos de linhas do rodapé;
-    o mínimo e o máximo ficam ``None`` quando algum grupo não os tem."""
+    a soma fica ``None`` quando algum grupo não tem a contagem de nulos, porque o leitor não pode
+    supor zero, e o mínimo e o máximo ficam ``None`` quando algum grupo não os tem."""
     nulls = 0
+    counted = True
     minimum = None
     maximum = None
     complete = True
     for group in range(footer.metadata.num_row_groups):
         statistics = footer.metadata.row_group(group).column(index).statistics
         if statistics is None:
+            counted = False
             complete = False
             continue
         if statistics.has_null_count:
             nulls += statistics.null_count
+        else:
+            counted = False
         if not statistics.has_min_max:
             complete = False
             continue
         minimum = statistics.min if minimum is None else min(minimum, statistics.min)
         maximum = statistics.max if maximum is None else max(maximum, statistics.max)
+    total_nulls = nulls if counted else None
     if not complete:
-        return nulls, None, None
-    return nulls, minimum, maximum
+        return total_nulls, None, None
+    return total_nulls, minimum, maximum
 
 
 def file_from_footer(footer: pq.ParquetFile, path: str, size: int, rows: int,
@@ -524,10 +531,10 @@ def file_from_footer(footer: pq.ParquetFile, path: str, size: int, rows: int,
     Redshift, descrito pelo rodapé Parquet dele; protegida, para o motor Redshift.
 
     ``path`` é relativo à pasta da tabela, ``size`` e ``rows`` são os que o manifesto declara. O
-    ``null_count`` entra de toda coluna do contrato com estatística em todos os grupos de linhas, e
-    o mínimo e o máximo só das colunas inteiras, ``Double`` e de data: o rodapé pode guardar o
-    mínimo e o máximo de um texto truncados, e o PyArrow 25 não expõe a marca de exatidão do
-    Parquet, então o texto fica sem os dois, e o leitor não poda por ele.
+    ``null_count`` entra de toda coluna do contrato com a contagem de nulos em todos os grupos de
+    linhas, e o mínimo e o máximo só das colunas inteiras, ``Double`` e de data: o rodapé pode
+    guardar o mínimo e o máximo de um texto truncados, e o PyArrow 25 não expõe a marca de exatidão
+    do Parquet, então o texto fica sem os dois, e o leitor não poda por ele.
     """
     contract = arrow_schema(table)
     names = footer.schema_arrow.names
@@ -538,7 +545,9 @@ def file_from_footer(footer: pq.ParquetFile, path: str, size: int, rows: int,
         if field.name not in names:
             continue
         null_count, low, high = _footer_statistics(footer, names.index(field.name))
-        nulls[field.name] = null_count
+        # A coluna sem a contagem de nulos em algum grupo fica fora do nullCount do log.
+        if null_count is not None:
+            nulls[field.name] = null_count
         convert = _stat_converter(field.type)
         if convert is None or pa.types.is_string(field.type) or low is None or high is None:
             continue
@@ -815,7 +824,7 @@ def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value
         ``vacuum(full=True)``; ou a releitura reprovou e desfez o commit.
     :raises ExecutionConflict: um segundo registro da mesma partição a partir da mesma versão.
     """
-    value = _checked_value(table, value)
+    value = checked_value(table, value)
     partition_by = table_options(table).partition_by
     contract = arrow_schema(table)
     table_path = storage.relative(uri)
@@ -1589,8 +1598,13 @@ def channel_snapshot(control: Mapping, name: str) -> str:
     :param name: o nome do canal.
     :return: o nome do snapshot.
     :raises ContractError: o canal ausente; a mensagem traz o ``serialize-db channel`` que o cria
-        e o canal ``current``, que lê a versão atual sem canal no arquivo.
+        e o canal ``current``, que lê a versão atual sem canal no arquivo. O próprio ``current``
+        também, porque não aponta snapshot.
     """
+    # O canal reservado não fica no arquivo, e set_channel recusa criá-lo.
+    if name == CURRENT_CHANNEL:
+        raise ContractError(f"o canal {CURRENT_CHANNEL} não fica no arquivo de controle: ele é a "
+                            "versão atual de cada tabela, sem snapshot")
     snapshot = control.get("channels", {}).get(name)
     if snapshot is None:
         raise ContractError(f"o canal {name} não existe no arquivo de controle; aponte-o com "
@@ -1930,9 +1944,13 @@ def export_snapshot(uri: str, table: sa.Table, destination: str, storage: Storag
         da sua escrita. ``rewrite`` reescreve pelo ``COPY`` particionado do DuckDB, com o esquema
         da versão em todos.
     :return: as URIs dos arquivos gravados, em ordem.
-    :raises ValueError: no modo ``copy``, ``uri`` ou ``destination`` fora da raiz de ``storage``;
-        no ``rewrite`` de uma tabela sem partição, ``destination`` fora da raiz.
+    :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``, nos dois modos,
+        antes de qualquer escrita.
     """
+    # Os dois caminhos conferidos antes de gravar: o COPY particionado do DuckDB grava onde
+    # recebe, fora da raiz também.
+    storage.relative(uri)
+    storage.relative(destination)
     dt = open_table(uri, storage, version)
     if mode == "copy":
         return _export_by_copy(dt, uri, destination, storage)

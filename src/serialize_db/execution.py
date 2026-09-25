@@ -468,11 +468,10 @@ class Execution:
             raise ContractError(f"{table.name}: tabela sem partição")
         if table.name not in self._tables:
             return []
-        # get_add_actions devolve uma tabela arro3; pa.table a converte.
+        # get_add_actions devolve uma tabela arro3; pa.table a converte. Sem arquivos, a coluna da
+        # partição vem vazia.
         actions = pa.table(self._tables[table.name].get_add_actions(flatten=True))
-        values = set()
-        if actions.num_rows:
-            values = set(actions.column(f"partition.{partition_by}").to_pylist())
+        values = set(actions.column(f"partition.{partition_by}").to_pylist())
         up_to_partition = []
         for value in sorted(values):
             if value <= self.partition:
@@ -729,10 +728,11 @@ class Execution:
         As partições e a auditoria de toda tabela são conferidas antes do primeiro commit. Depois,
         por tabela, ``create_table`` se não existe, ``reconcile`` e ``export_partition`` por
         partição, que registra no log o arquivo que o motor gravou, com a contagem da auditoria em
-        ``expected_rows`` e as colunas ``Double`` com valor não finito sem mínimo e máximo (todas
-        as ``Double`` com ``audit=False``). As tabelas correm num pool de ``max_workers``: na
-        primeira falha nada novo começa, o que está em curso termina, e a exceção leva o resultado
-        de cada tabela numa nota.
+        ``expected_rows`` e as colunas ``Double`` com valor não finito sem mínimo e máximo (todas as
+        ``Double`` com ``audit=False``); no motor Redshift, a partição com essas colunas volta por
+        ``publish_partition``, que grava o arquivo de novo. As tabelas correm num pool de
+        ``max_workers``: na primeira falha nada novo começa, o que está em curso termina, e a
+        exceção leva o resultado de cada tabela numa nota.
 
         Exemplo:
 

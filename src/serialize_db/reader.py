@@ -347,7 +347,7 @@ class DeltaReader:
     def stream(self, statement_or_sql: sa.sql.ClauseElement | str,
                params: Mapping[str, object] | None = None,
                batch_size: int = 100_000) -> BatchStream:
-        """Os lotes da consulta enquanto ela roda, pelo ``stream`` do motor, com a memória
+        """Os lotes da consulta enquanto ela roda, pelo ``DuckDBEngine.stream``, com a memória
         limitada a 64 MiB de lotes.
 
         Exemplo:
@@ -364,8 +364,8 @@ class DeltaReader:
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :param batch_size: o máximo de linhas de cada lote.
-        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` cancela a
-            consulta que ainda roda e apaga o arquivo de transbordo.
+        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``BatchStream.close``
+            cancela a consulta que ainda roda e apaga o arquivo de transbordo.
         :raises ContractError: um statement Core que não é consulta, ou que cita uma tabela do
             modelo sem view no leitor, sem chamar o motor.
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
@@ -524,8 +524,8 @@ class RedshiftReader:
             statement ou dos marcadores do texto; os valores entram como literais, porque o
             ``UNLOAD`` não recebe parâmetro.
         :param batch_size: o máximo de linhas de cada lote, lido de cada arquivo do ``UNLOAD``.
-        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` apaga os
-            arquivos do ``UNLOAD`` deste stream.
+        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``BatchStream.close``
+            apaga os arquivos do ``UNLOAD`` deste stream.
         :raises ContractError: um statement Core que não é consulta, ou o leitor sem
             ``unload_to``, antes de qualquer comando no servidor.
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do

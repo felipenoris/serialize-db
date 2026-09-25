@@ -194,8 +194,8 @@ def test_publish_requires_the_control_table(monkeypatch: pytest.MonkeyPatch,
                                             local_location: LocalLocation) -> None:
     """Sem a tabela de controle, ``publish_redshift``, ``unpublish_redshift`` e
     ``publication_status`` levantam ``PublicationError`` com o comando de inicialização e não
-    rodam outro comando; ``control_ddl`` sem ``IF NOT EXISTS``; a tabela fora do Delta também é
-    ``PublicationError``."""
+    rodam outro comando; ``control_ddl`` sem ``IF NOT EXISTS``; a tabela fora do Delta e a tabela
+    fora de ``versions`` também são ``PublicationError``, cada uma com a sua mensagem."""
     db = local_db(local_location)
     published_entries(db, MONTHS)
     connection = FakeConnection(control_table=False)
@@ -224,6 +224,8 @@ def test_publish_requires_the_control_table(monkeypatch: pytest.MonkeyPatch,
     use_fake(monkeypatch, connection)
     with pytest.raises(PublicationError, match="não existe no ambiente"):
         publication.publish_redshift(db, CONFIG, [PROJECTED], "exec-1")
+    with pytest.raises(PublicationError, match="fora das versões pedidas"):
+        publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1", versions={"outra": 1})
     publication.create_publications_table(CONFIG)
     assert connection.texts("CREATE") == [publication.control_ddl(SCHEMA)]
 

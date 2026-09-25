@@ -58,7 +58,9 @@ do `pdoc`. O que a implementação mudou do plano:
   entrada se move só depois da última cópia. A primeira versão pulava a tabela presente em
   `arquivo/<nome>/`, e teria dado por arquivada a `cad_lancamentos` pela metade que a falha de
   2026-09-24 deixou no alvo ([`POC.md`](POC.md)).
-- **`export`** exige o destino sob a raiz (`Storage.relative`) e vazio (`list_files`).
+- **`export`** exige o destino sob a raiz (`Storage.relative`) e vazio (`list_files`), e
+  `export_snapshot` confere a origem e o destino sob a raiz nos dois modos antes de gravar,
+  porque o `COPY` particionado do DuckDB grava onde recebe.
 - **`history`** devolve o instante do commit como `datetime` em UTC, e a linha de comando o imprime
   em ISO 8601; `get_add_actions(flatten=False)` traz `path`, `size_bytes`, `modification_time`,
   `num_records` e os structs `null_count`, `min`, `max` e `partition`, e `history()` do delta-rs
