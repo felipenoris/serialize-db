@@ -854,7 +854,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            previous = engine.published(Projetada.__table__, uri, 57)
+            previous = engine.published(Projetado.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
@@ -945,7 +945,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            with engine.loader(Projetada.__table__) as loader:
+            with engine.loader(Projetado.__table__) as loader:
                 loader.write(batch)
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
@@ -967,7 +967,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            engine.load(Projetada.__table__, pa.Table.from_pandas(frame, preserve_index=False))
+            engine.load(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
@@ -1060,7 +1060,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            report = engine.audit(Projetada.__table__, ["2026-08-31"], uri, 57)
+            report = engine.audit(Projetado.__table__, ["2026-08-31"], uri, 57)
             report.passed, report.nonfinite_columns
 
         :param table: a tabela do modelo, no sandbox.
@@ -1147,7 +1147,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            engine.export_partition(Projetada.__table__, uri, "2026-08-31",
+            engine.export_partition(Projetado.__table__, uri, "2026-08-31",
                                     delta.commit_metadata("exec-42", versions))
 
         :param table: a tabela do modelo, no sandbox.
