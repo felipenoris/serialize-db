@@ -3754,3 +3754,46 @@ estatísticas já gravadas, mas o `write_deltalake` deixa de gravar as das colun
 de `delta.py`, isso tira da releitura (`read_back`) a conferência do log numa chave de fora da
 propriedade e da cópia do `archive` (`deep_copy`) as estatísticas das colunas de fora. A escolha e
 a troca da versão fixada pela 1.6.6 esperam o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a troca das versões das dependências mostrou
+
+Em 2026-09-25, no contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB, Python 3.13.12), a
+API JSON do PyPI tinha versões novas de três dependências fixadas em `pyproject.toml`, fora o
+deltalake: boto3 1.43.102 (o pino era 1.43.98), sqlglot 30.19.0 (30.18.0) e SQLAlchemy 2.1.0
+(2.0.54), publicada em 2026-09-24. As outras estavam na última versão: DuckDB 1.5.5 (a 2.0.0 só em
+pré-lançamentos `dev`), duckdb-engine 0.17.0, PyArrow 25.0.1, sqlalchemy-redshift 1.0.0,
+redshift-connector 2.1.17, pandas 3.0.6, flask 3.1.3, flask-cors 6.0.5, moto 5.2.3 e pdoc 16.0.0;
+os limites inferiores resolveram pytest 9.1.1 e ipykernel 7.3.0, e o intervalo do `uv_build`, a
+0.12.19. As extensões do DuckDB 1.5.5 instaladas nesse dia, `aws` efa54a9, `delta` 45c4087 e
+`httpfs` 827222f, são as que o espaço leu em 2026-09-24 às 01:41. A sessão inteira de testes, com
+`SERIALIZE_DB_TEST_EMULATOR` e `SERIALIZE_DB_TEST_LOCAL_ROOT` e sem as variáveis `AWS_*`, rodou numa
+cópia do repositório para cada troca.
+
+- **boto3 e sqlglot.** Com boto3 1.43.102 e sqlglot 30.19.0, 553 casos passaram e 1 foi pulado, o
+  da Data API sem `SERIALIZE_DB_REDSHIFT_WORKGROUP`. O botocore, que o boto3 traz sem pino, veio
+  1.43.102 também com o pino antigo, porque o `uv.lock` fica fora do git.
+- **O `params()` da SQLAlchemy 2.1.** Com a 2.1.0 no lugar da 2.0.54, 8 casos falharam e 545
+  passaram. O `params()` dos statements executáveis passou a guardar os valores no statement, em vez
+  de copiar cada `bindparam` com o valor: o `required` do `bindparam` segue verdadeiro, e a
+  compilação com `literal_binds` escreve o valor como `NULL`, com o `SAWarning` em `=`, `>=` e no
+  `IN` expansível e sem ele no `LIKE`. O `stream` do motor Redshift pelo `UNLOAD` (`literal_text`)
+  rodou com `IN (NULL)` e leu 0 linhas em `test_stream_literal_values`,
+  `test_ingest_stream_loader_export` e `test_stream_literal_values_on_the_target` de
+  `tests/test_engine_redshift.py`, e o guarda de `test_stream_by_unload_with_literal_values`, de
+  `tests/proof_of_concept/test_redshift.py`, achou o `bindparam` marcado depois do `params()`.
+- **O `IN` expansível.** O `construct_params()` de um statement com `bindparam` expansível e
+  `params()`, compilado com `render_postcompile`, levantou `InvalidRequestError` ("can't construct
+  new parameters when render_postcompile is used") no `query` do motor DuckDB
+  (`test_statement_parameters_expand_in_lists`) e em
+  `test_in_list_needs_render_postcompile_on_the_engine_path`; numa sonda, o `compiled_for_cursor`
+  do motor Redshift levantou o mesmo.
+- **O `Double` fora de `Numeric`.** `Float` e `Double` deixaram de derivar de `Numeric`, e o
+  `load_report` deixou de somar a coluna `Double` `fator` de `cad_aliquotas`
+  (`test_load_report_matches_and_detects_a_difference`), porque `load.py` escolhe as colunas
+  somadas por `isinstance(..., sa.Numeric)`.
+- **A reflexão do duckdb-engine.** A consulta da reflexão do dialeto PostgreSQL da 2.1 junta
+  `pg_catalog.pg_collation`, que o DuckDB não tem, e o `get_columns` do duckdb-engine 0.17.0 falhou
+  em `test_create_all_and_reflection`; o pacote não usa reflexão.
+
+**Consequências**: `pyproject.toml` fixa boto3 1.43.102 e sqlglot 30.19.0, e a SQLAlchemy fica em
+2.0.54; a adoção da 2.1 espera o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

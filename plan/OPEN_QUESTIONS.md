@@ -105,6 +105,16 @@ foi medido em [`POC.md`](POC.md).
   por tabela; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o
   caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
 
+- **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
+  de 2026-09-25 ([`POC.md`](POC.md)), e o pino fica em 2.0.54. O `params()` novo guarda os
+  valores no statement: a compilação com `literal_binds` os escreve como `NULL`, e o `stream` do
+  motor Redshift pelo `UNLOAD` roda com eles nulos, sem erro; o `construct_params()` de um `IN`
+  expansível compilado com `render_postcompile` levanta `InvalidRequestError` no motor DuckDB e
+  no cursor do motor Redshift. O `Double` deixou de derivar de `Numeric`, e o `load_report` para
+  de somar as colunas `Double`. A reflexão do duckdb-engine 0.17.0 também falha na 2.1, fora do
+  pacote. Espera o usuário: adaptar o pacote à 2.1 (`bound_statement`, de `serialize_db.sql`, que
+  passa os valores por `params()`, e as colunas que o `load_report` soma) ou manter a 2.0.54.
+
 ## Achados da revisão dos comentários e da documentação
 
 A revisão de 2026-09-25 (PR #82) mudou só comentários, docstrings e prosa de `src/`, `scripts/`,
