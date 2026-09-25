@@ -14,9 +14,11 @@ from __future__ import annotations
 import datetime
 import decimal
 import json
+import uuid
 from pathlib import Path
 
 import duckdb
+import pandas as pd
 import pyarrow as pa
 import pytest
 import sqlalchemy as sa
@@ -136,6 +138,10 @@ class Ruim(RuimBase):
     mes: Mapped[str] = mapped_column(sa.Text, comment="Partição sem comprimento")
     nome: Mapped[str] = mapped_column(sa.String, comment="Nome sem comprimento")
     peso: Mapped[bytes] = mapped_column(sa.LargeBinary, comment="Fora do contrato")
+    situacao: Mapped[str] = mapped_column(sa.Enum("ativa", "encerrada", name="situacao"),
+                                          comment="Enum, cuja lista nada confere")
+    saldo: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(39, 2),
+                                                   comment="Acima dos 38 dígitos do DECIMAL")
 
 
 # A tabela referenciada por Ruim, no mesmo MetaData, para a chave estrangeira resolver.
@@ -161,15 +167,29 @@ def test_arrow_schema_maps_every_contract_type() -> None:
 
 
 @pytest.mark.parametrize(
-    "kind", [sa.Float, sa.LargeBinary, sa.ARRAY(sa.Integer), sa.Interval], ids=str
+    "kind",
+    [sa.Float, sa.LargeBinary, sa.ARRAY(sa.Integer), sa.Interval,
+     pytest.param(sa.Enum("a", "b", name="letra"), id="Enum")],
+    ids=str,
 )
 def test_arrow_schema_refuses_foreign_types(
     kind: type[sa.types.TypeEngine] | sa.types.TypeEngine
 ) -> None:
-    """Um tipo fora da tabela de tipos é ``ContractError`` com a tabela e a coluna."""
+    """Um tipo fora da tabela de tipos é ``ContractError`` com a tabela e a coluna; o ``Enum``
+    também, embora derive de ``String``, porque nada confere a lista de valores."""
     table = sa.Table("estranha", sa.MetaData(), sa.Column("campo", kind, comment="Fora"))
     with pytest.raises(ContractError, match="estranha.campo: tipo fora do contrato"):
         schema.arrow_schema(table)
+
+
+def test_arrow_schema_refuses_numeric_above_38_digits() -> None:
+    """``Numeric(39, 2)`` é ``ContractError`` com a tabela e a coluna, no lugar do ``ValueError``
+    do ``decimal128`` do PyArrow (leitura de 2026-09-25); ``Numeric(38, 2)`` passa."""
+    widest = sa.Table("larga", sa.MetaData(), sa.Column("valor", sa.Numeric(38, 2)))
+    assert schema.arrow_schema(widest).field("valor").type == pa.decimal128(38, 2)
+    above = sa.Table("larga", sa.MetaData(), sa.Column("valor", sa.Numeric(39, 2)))
+    with pytest.raises(ContractError, match="larga.valor: Numeric de precisão 39 acima de 38"):
+        schema.arrow_schema(above)
 
 
 def delta_document(table: sa.Table) -> dict:
@@ -424,6 +444,36 @@ def test_cast_keeps_the_instant_between_time_zones() -> None:
     assert converted.column("carimbo_utc").to_pylist() == [instant]
 
 
+# Os UUIDs do teste de cast: o de 16 bytes ASCII, que o cast do PyArrow levava a 16 caracteres, o
+# nulo, o de bytes nulos e um aleatório.
+UUIDS = [uuid.UUID(bytes=b"abcdefghijklmnop"), None, uuid.UUID(int=0), uuid.uuid4()]
+
+
+@pytest.mark.parametrize("kind", ["batch", "pandas", "reader"])
+def test_cast_turns_uuid_into_its_canonical_text(kind: str) -> None:
+    """Um `uuid.UUID`, que o PyArrow e o pandas inferem como `arrow.uuid`, entra numa coluna de
+    texto como `str(valor)`, o nulo inclusive. O cast do PyArrow converte a extensão pelos 16
+    bytes: o UUID aleatório saía recusado como UTF-8 inválido, e o de bytes ASCII entrava como
+    16 caracteres (leitura de 2026-09-25)."""
+    columns = {"chave": UUIDS, "observacao": UUIDS}
+    batch = pa.RecordBatch.from_pydict(columns)
+    assert isinstance(batch.schema.field("chave").type, pa.UuidType)
+    if kind == "batch":
+        converted = schema.cast(batch, TUDO)
+    elif kind == "pandas":
+        frame = pa.Table.from_pandas(pd.DataFrame(columns), preserve_index=False)
+        assert isinstance(frame.schema.field("chave").type, pa.UuidType)
+        converted = schema.cast(frame, TUDO)
+    else:
+        reader = pa.RecordBatchReader.from_batches(batch.schema, [batch])
+        converted = schema.cast(reader, TUDO).read_all()
+    expected = [None if value is None else str(value) for value in UUIDS]
+    assert expected[0] == "61626364-6566-6768-696a-6b6c6d6e6f70"
+    assert converted.schema.field("chave").type == pa.string()
+    assert converted.column("chave").to_pylist() == expected
+    assert converted.column("observacao").to_pylist() == expected
+
+
 def test_cast_integer_into_numeric_of_any_precision() -> None:
     """Um `int64` entra em `Numeric(p, s)` de qualquer precisão quando o valor cabe em `p`, e é
     recusado quando não cabe; o cast direto do PyArrow exige que `p` comporte todo o `int64`
@@ -465,6 +515,8 @@ REFUSED_BATCHES = {
         batch_of_tudo(to=pa.array(["xyz"], pa.string_view())), "to"),
     "dicionário acima de String(2)": (
         batch_of_tudo(to=pa.array(["xyz"]).dictionary_encode()), "to"),
+    "texto acima dos 36 bytes do Uuid": (
+        batch_of_tudo(chave=pa.array([str(uuid.UUID(int=1)) + "x"])), "chave"),
     "escala perdida": (
         batch_of_tudo(valor=pa.array([decimal.Decimal("1.234")], pa.decimal128(20, 3))), "valor"),
     "inteiro acima da precisão": (batch_of_tudo(valor=pa.array([10**17], pa.int64())), "valor"),
@@ -524,6 +576,9 @@ def test_check_models_finds_each_violation() -> None:
         "ruim.id: chave inteira com autoincrement; declare autoincrement=False",
         "ruim.nome: String sem comprimento; declare String(n) ou Text",
         "ruim.peso: tipo fora do contrato: LargeBinary()",
+        "ruim.situacao: tipo fora do contrato: Enum('ativa', 'encerrada', name='situacao'); "
+        "nada confere a lista do Enum, declare String(n)",
+        "ruim.saldo: Numeric de precisão 39 acima de 38, o teto do DECIMAL dos motores e do Delta",
         "ruim: chave estrangeira em ['data_tudo', 'nome_tudo'] aponta tudo ['data', 'nome'], "
         "sem chave primária nem UniqueConstraint nessas colunas",
         "ruim: chave estrangeira DEFERRABLE em ['id_tudo']",

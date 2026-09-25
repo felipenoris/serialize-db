@@ -3937,11 +3937,34 @@ local leram o que o código faz com cada tipo.
   precision" da documentação do `UNLOAD` não cita formato, e as suítes do motor, da publicação e do
   leitor gravam `valor` em múltiplos de 0,25, exatos em qualquer formato.
 
+- **A correção do `Uuid`.** Na mesma data, com pandas 3.0.6, o `cast` da `main` aceitou o UUID de
+  16 bytes ASCII (`uuid.UUID(bytes=b"abcdefghijklmnop")`) como o texto `abcdefghijklmnop` e um
+  texto de 40 bytes na coluna `Uuid`. O PyArrow 25.0.1 não tem função de hexadecimal
+  (`pc.list_functions()`), nem `pa.types.is_uuid`; tem `pa.UuidType`, e `cast(pa.binary(16))`
+  devolve os 16 bytes de um `Array` e de um `ChunkedArray`. Num milhão de UUIDs, o melhor de três
+  deu 3,7 a 4,0 s por `str(uuid.UUID)` e 1,0 a 1,1 s por `bytes.hex` com os hífens, o mesmo texto;
+  o `pa.array` do cliente sobre os `uuid.UUID` levou 2,72 s. Uma coluna `UUID` nativa do DuckDB,
+  que uma tabela criada por SQL tem (`gen_random_uuid()`), recusou `strlen` e `octet_length`
+  ("No function matches the given name and argument types 'strlen(UUID)'") e aceitou
+  `strlen(CAST(x AS VARCHAR))`, 36; o `COPY` dela gravou `FIXED_LEN_BYTE_ARRAY` com o tipo lógico
+  `UUID`, que o PyArrow leu como `arrow.uuid`, e a saída Arrow de uma consulta a trouxe em
+  `string`.
+- **A escala do `Numeric`.** `Numeric(10, 12)` e `Numeric(38, -1)` passaram em `check_models`, e o
+  `delta_schema` levantou a `Exception` genérica do delta-rs ("Invalid decimal: scale must be in
+  range 0..10 inclusive, found: 12." e "Invalid decimal: Negative scales are not supported in
+  Delta"); o DuckDB recusou `DECIMAL(10, 12)` ("DECIMAL type scale cannot be greater than width")
+  e `DECIMAL(39, 2)` ("DECIMAL type width must be between 1 and 38").
+
 **Consequências**: a tabela de `docs/index.md` passou a dizer a regra das subclasses, o padrão do
 `Numeric`, os tipos físicos por escritor, o `timestampNtz`, o `INT96` do `UNLOAD`, o `NaN` do
-`Double`, o JSON em `VARCHAR` no `delta_scan`, o texto do `Uuid` e o tipo Arrow dos resultados. O
-`Uuid`, o `Enum` e o `Numeric` acima de 38 esperam o usuário em
-[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+`Double`, o JSON em `VARCHAR` no `delta_scan`, o texto do `Uuid` e o tipo Arrow dos resultados. Por
+decisão do usuário de 2026-09-25, o `cast` leva o `arrow.uuid` ao texto canônico por `bytes.hex` e
+recusa o texto acima de 36 bytes numa coluna `Uuid`, a auditoria mede o mesmo sobre o `CAST` para
+texto, que a coluna `UUID` nativa do DuckDB exige, e `arrow_type` recusa o `Enum` e o `Numeric` de
+precisão acima de 38, que `check_models` lista ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
+[`PLAN-STAGE-4.md`](PLAN-STAGE-4.md)); `test_schema.py` passou de 51 a 57 casos e `test_audit.py`
+de 5 a 6, e os 7 casos novos e o caso mudado de `check_models` falharam no código anterior. A
+escala fora de 0 à precisão espera o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
 
 ## O que a troca das versões das dependências mostrou
 

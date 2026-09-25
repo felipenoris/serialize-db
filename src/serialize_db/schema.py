@@ -110,6 +110,10 @@ _ARROW_TYPES: tuple[tuple[type, pa.DataType], ...] = (
 # O teto do VARCHAR no Redshift, em bytes: o limite de uma coluna Text, que não declara n.
 TEXT_LIMIT = 65535
 
+# O comprimento do texto canônico de um UUID, em bytes: 32 dígitos hexadecimais e 4 hífens, o
+# VARCHAR(36) de uma coluna Uuid.
+UUID_LENGTH = 36
+
 # O nome de cada tipo sem parâmetro em cada motor; Numeric, String e DateTime saem de sql_type.
 # A ordem importa como em _ARROW_TYPES: sql_type devolve o primeiro tipo que casa por
 # isinstance, e BigInteger e SmallInteger derivam de Integer.
@@ -122,7 +126,7 @@ _SQL_TYPES: dict[str, dict[type, str]] = {
         sa.Double: "DOUBLE",
         sa.Date: "DATE",
         sa.Text: "VARCHAR",
-        sa.Uuid: "VARCHAR(36)",
+        sa.Uuid: f"VARCHAR({UUID_LENGTH})",
         sa.JSON: "JSON",
     },
     "redshift": {
@@ -133,7 +137,7 @@ _SQL_TYPES: dict[str, dict[type, str]] = {
         sa.Double: "DOUBLE PRECISION",
         sa.Date: "DATE",
         sa.Text: f"VARCHAR({TEXT_LIMIT})",
-        sa.Uuid: "VARCHAR(36)",
+        sa.Uuid: f"VARCHAR({UUID_LENGTH})",
         sa.JSON: "SUPER",
     },
 }
@@ -144,6 +148,17 @@ _ArrowColumn = pa.Array | pa.ChunkedArray
 
 
 # ---------------------------------------------------------------- o esquema Arrow e Delta
+
+
+def _decimal_type(column: sa.Column) -> pa.DataType:
+    """O ``decimal128`` de uma coluna ``Numeric``: sem precisão, 18; sem escala, 0."""
+    precision = column.type.precision or 18
+    # O DECIMAL do DuckDB, do Redshift e do Delta vai até 38 dígitos, e o decimal128 do PyArrow
+    # levanta ValueError acima disso.
+    if precision > 38:
+        raise ContractError(f"{column.table.name}.{column.name}: Numeric de precisão {precision} "
+                            "acima de 38, o teto do DECIMAL dos motores e do Delta")
+    return pa.decimal128(precision, column.type.scale or 0)
 
 
 def arrow_type(column: sa.Column) -> pa.DataType:
@@ -162,12 +177,17 @@ def arrow_type(column: sa.Column) -> pa.DataType:
     :param column: a coluna do modelo.
     :return: o tipo Arrow.
     :raises ContractError: um tipo fora da tabela (``Float``, ``LargeBinary``, ``ARRAY``,
-        ``Interval``), com a tabela e a coluna na mensagem.
+        ``Interval``), o ``Enum``, que deriva de ``String`` sem que nada confira a lista de
+        valores, e o ``Numeric`` de precisão acima de 38, com a tabela e a coluna na mensagem.
     """
     kind = column.type
+    # Enum deriva de String, mas nem o DDL, nem cast, nem a auditoria conferem a lista de valores.
+    if isinstance(kind, sa.Enum):
+        raise ContractError(f"{column.table.name}.{column.name}: tipo fora do contrato: {kind!r}; "
+                            "nada confere a lista do Enum, declare String(n)")
     # Numeric leva precisão e escala; Float e Double derivam de Numeric e ficam fora deste ramo.
     if isinstance(kind, sa.Numeric) and not isinstance(kind, sa.Float):
-        return pa.decimal128(kind.precision or 18, kind.scale or 0)
+        return _decimal_type(column)
     if isinstance(kind, sa.DateTime):
         timezone = "UTC" if kind.timezone else None
         return pa.timestamp("us", tz=timezone)
@@ -627,6 +647,14 @@ def _refuse_json_above_limit(column: _ArrowColumn, field: pa.Field, table: str) 
                             f"teto de {TEXT_LIMIT} bytes do Redshift; reduza o documento")
 
 
+def _refuse_text_above_uuid(column: _ArrowColumn, field: pa.Field, table: str) -> None:
+    """Texto acima dos 36 bytes do ``VARCHAR(36)`` numa coluna ``Uuid``."""
+    longest = _longest_text(column)
+    if longest > UUID_LENGTH:
+        raise ContractError(f"{table}.{field.name}: texto de {longest} bytes acima dos "
+                            f"{UUID_LENGTH} bytes de um Uuid; passe o uuid.UUID ou str(valor)")
+
+
 def _refuse_silent_losses(column: _ArrowColumn, field: pa.Field, kind: sa.types.TypeEngine,
                           table: str) -> None:
     """As perdas que ``cast(safe=True)`` não acusa, recusadas antes da conversão."""
@@ -656,15 +684,40 @@ def _refuse_long_text(column: _ArrowColumn, field: pa.Field, kind: sa.types.Type
         _refuse_text_above_varchar(column, field, table)
     elif isinstance(kind, sa.String) and kind.length:
         _refuse_text_above_length(column, field, table, kind.length)
+    elif isinstance(kind, sa.Uuid):
+        _refuse_text_above_uuid(column, field, table)
+
+
+def _uuid_as_text(column: _ArrowColumn) -> pa.Array:
+    """O ``arrow.uuid`` no texto canônico de ``str(uuid.UUID)``: os 32 dígitos hexadecimais
+    minúsculos dos 16 bytes, em grupos de 8, 4, 4, 4 e 12 separados por hífen.
+
+    O texto sai de ``bytes.hex`` e não de ``str(uuid.UUID)``, que levou quatro vezes mais tempo
+    num milhão de valores (leitura de 2026-09-25).
+    """
+    texts = []
+    for raw in column.cast(pa.binary(16)).to_pylist():
+        if raw is None:
+            texts.append(None)
+            continue
+        digits = raw.hex()
+        texts.append(f"{digits[:8]}-{digits[8:12]}-{digits[12:16]}-{digits[16:20]}-{digits[20:]}")
+    return pa.array(texts, pa.string())
 
 
 def _converted(column: _ArrowColumn, target: pa.DataType) -> _ArrowColumn:
     """A coluna no tipo do contrato por ``cast(safe=True)``.
 
-    Um inteiro vai a ``decimal128(p, s)`` passando por ``decimal128(38, s)``: o cast direto exige
-    que ``p`` comporte qualquer valor do tipo inteiro (19 dígitos mais a escala num ``int64``),
-    não só os valores presentes; o segundo cast confere se cada valor cabe em ``p``.
+    O ``arrow.uuid``, o tipo que o PyArrow e o pandas inferem de um ``uuid.UUID``, vai ao texto
+    canônico: o cast do PyArrow o leva a ``string`` pelos 16 bytes do valor, que quase sempre
+    saem recusados como UTF-8 inválido, e o UUID de 16 bytes ASCII entra como 16 caracteres
+    (leitura de 2026-09-25). Um inteiro vai a ``decimal128(p, s)`` passando por
+    ``decimal128(38, s)``: o cast direto exige que ``p`` comporte qualquer valor do tipo inteiro
+    (19 dígitos mais a escala num ``int64``), não só os valores presentes; o segundo cast confere
+    se cada valor cabe em ``p``.
     """
+    if isinstance(column.type, pa.UuidType) and pa.types.is_string(target):
+        return _uuid_as_text(column)
     if pa.types.is_integer(column.type) and pa.types.is_decimal(target):
         column = column.cast(pa.decimal128(38, target.scale), safe=True)
     return column.cast(target, safe=True)
@@ -740,7 +793,9 @@ def cast(
     grava. Cada coluna é convertida com ``safe=True`` (``large_string``, ``string_view`` e
     dicionário para ``string``, timestamps a microssegundos, inteiro em ``Numeric``), e as perdas
     que o cast seguro não acusa são recusadas. Um ``timestamp`` com outro fuso numa coluna com
-    fuso entra no mesmo instante, em UTC.
+    fuso entra no mesmo instante, em UTC. Um ``uuid.UUID``, que o PyArrow e o pandas inferem como
+    ``arrow.uuid``, entra numa coluna de texto como ``str(valor)``, o texto canônico de 36
+    caracteres.
 
     Exemplo:
 
@@ -762,9 +817,10 @@ def cast(
         seguro não acusa, com a instrução ao cliente na mensagem: ``double`` fora da escala de um
         ``Numeric``, ``timestamp`` com hora numa coluna ``Date``, ``timestamp`` com fuso numa
         coluna ``DateTime`` sem fuso e o inverso, documento JSON como ``struct``, texto acima de
-        ``String(n)`` em bytes, e texto numa coluna ``Text`` ou documento JSON acima de 65.535
-        bytes, o teto do Redshift. A mensagem traz a tabela e a coluna. Num leitor, a recusa de
-        um valor sai na leitura do lote, e as demais, na chamada.
+        ``String(n)`` em bytes, texto numa coluna ``Uuid`` acima de 36 bytes, e texto numa coluna
+        ``Text`` ou documento JSON acima de 65.535 bytes, o teto do Redshift. A mensagem traz a
+        tabela e a coluna. Num leitor, a recusa de um valor sai na leitura do lote, e as demais,
+        na chamada.
     """
     if isinstance(data, pa.RecordBatchReader):
         return _cast_reader(data, table)
@@ -844,14 +900,14 @@ def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
 def check_models(metadata: sa.MetaData) -> list[str]:
     """As violações do contrato nos modelos.
 
-    As regras: tipo fora da tabela de tipos; ``autoincrement`` numa chave inteira (o padrão
-    ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; chave estrangeira
-    ``DEFERRABLE``, ou cujas colunas apontadas não são a chave primária nem uma
-    ``UniqueConstraint`` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB
-    nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
-    ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave primária e
-    sem ``keys``. O comentário de tabela e de coluna é opcional; o da coluna, quando existe, vai
-    para o esquema Arrow e para o Delta.
+    As regras: tipo fora da tabela de tipos, o ``Enum`` e o ``Numeric`` de precisão acima de 38
+    inclusive; ``autoincrement`` numa chave inteira (o padrão ``"auto"`` inclusive); ``Identity``;
+    ``String`` sem comprimento; chave estrangeira ``DEFERRABLE``, ou cujas colunas apontadas não
+    são a chave primária nem uma ``UniqueConstraint`` da tabela apontada, na mesma ordem (um
+    índice único não serve no DuckDB nem no Redshift); ``partition_by`` sem a coluna ou com a
+    coluna fora de ``String(n)``, ``partition_source`` que a tabela não tem ou sem
+    ``partition_by``; tabela sem chave primária e sem ``keys``. O comentário de tabela e de coluna
+    é opcional; o da coluna, quando existe, vai para o esquema Arrow e para o Delta.
 
     Exemplo:
 

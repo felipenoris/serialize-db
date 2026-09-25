@@ -1150,3 +1150,18 @@ of `rewrite`, `read_back`, `export_snapshot` and the stage 5 swap keeping the op
 each lasts a table or a partition; the `stream` helper thread ending the stream with the entry's
 error; and `probes/credentials.py` reading DuckDB through the engine, whose target run is pending.
 `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## The types the contract accepted without checking (2026-09-25)
+
+The review of the type table in `docs/index.md` (PR #89) found three gaps in `serialize_db.schema`
+and put them in `plan/OPEN_QUESTIONS.md`. After PR #89 merged, the user asked the assistant to
+check that the checkout matched `main` and, the item still being open, to implement the suggested
+fix: `cast` takes the `arrow.uuid` that PyArrow and pandas infer from a `uuid.UUID` to the
+canonical text of `str(value)` (by `bytes.hex`, four times faster than `str(uuid.UUID)` on a million
+values) and refuses text above 36 bytes in a `Uuid` column, and the audit counts the same;
+`arrow_type` refuses `Enum`, which derives from `String` while nothing checks its list, and a
+`Numeric` of precision above 38, which PyArrow refused with `ValueError`, and `check_models` lists
+both. The same probes found `Numeric(10, 12)` and `Numeric(38, -1)` passing `check_models` and
+failing in `delta_schema`; that rule stays out of the fix and waits on the user.
+`plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/schema.md`, `docs/index.md`,
+`plan/OPEN_QUESTIONS.md`, `plan/POC.md`

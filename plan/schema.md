@@ -95,7 +95,8 @@ O que o plano acrescenta por tipo:
   usa `Double` em toda coluna numérica (decisão de 2026-09-20); `Numeric(18, 2)` nas colunas
   contábeis é a melhoria futura.
 - **`Numeric(p, s)`**: o `COPY` do `DECIMAL(18, 2)` gravado em `INT64` pelo delta-rs e pelo DuckDB
-  passou no ambiente alvo em 2026-09-21, com a soma conferida ([`POC.md`](POC.md)).
+  passou no ambiente alvo em 2026-09-21, com a soma conferida ([`POC.md`](POC.md)). A precisão
+  acima de 38 é violação em `check_models` (decisão do usuário de 2026-09-25).
 - **`String(n)`**: `n` é medido em bytes, como no `VARCHAR(n)` do Redshift, pelo `cast` e pela
   auditoria de tamanho (decisão do usuário de 2026-09-21). O DuckDB aceita o comprimento e o ignora
   (`information_schema` lê `VARCHAR`).
@@ -111,10 +112,16 @@ O que o plano acrescenta por tipo:
   sem estatística de mínimo e máximo (2026-09-21, [`POC.md`](POC.md)).
 - **`DateTime(timezone=True)`**: gravar sempre em UTC; o `timestamp` do Delta é ajustado a UTC, e um
   fuso diferente entra como o mesmo instante. O `UNLOAD` descarta o fuso.
-- **`Uuid`**: o Redshift não tem tipo UUID; o contrato guarda o texto nos dois motores.
+- **`Uuid`**: o Redshift não tem tipo UUID; o contrato guarda o texto nos dois motores. O `cast`
+  converte o `uuid.UUID`, que o PyArrow e o pandas inferem como `arrow.uuid`, no texto de
+  `str(valor)`; ele recusa e a auditoria reprova o texto acima de 36 bytes (decisão do usuário
+  de 2026-09-25).
 - **`JSON`**: texto JSON é a forma de troca, sem a extensão `arrow.json`; a validação é do DuckDB na
   carga e do `JSON_PARSE` no Redshift (seção seguinte).
 - **`Float`, `LargeBinary`, `ARRAY`, `Interval`**: fora do contrato até haver um caso de uso.
+- **`Enum`**: fora do contrato, embora derive de `String`, porque nem o DDL, nem o `cast`, nem a
+  auditoria conferem a lista de valores; o modelo declara `String(n)` (decisão do usuário de
+  2026-09-25).
 
 ### Campos JSON
 
