@@ -4185,7 +4185,10 @@ entraram em `probes/consistencia/` no mesmo dia, a pedido do usuário, com os co
 do ambiente alvo em `SUITE.md` (`probes/README.md` as descreve), e a versão do repositório repetiu
 as mesmas leituras na pasta local e no substituto, com o sinal do zero, as estatísticas que
 `deep_copy` não registra e as atualizações perdidas do arquivo de controle impressos como leituras
-conhecidas, sem reprovar a checagem; nenhuma rodou no ambiente alvo.
+conhecidas, sem reprovar a checagem; a repetição depois do rebase sobre a `main` de 2026-09-25, com
+as oito ao mesmo tempo, achou a janela de `publish` entre a conferência da versão fixada e o commit,
+que a seção D da sonda da execução reproduz e imprime como leitura conhecida; nenhuma rodou no
+ambiente alvo.
 
 - **Os tipos pela fronteira do motor DuckDB** (`probe_types.py`): 2.000 linhas de uma tabela com
   toda coluna do contrato por `load`, `query`, `export_partition` e `publish_partition`, lidas
@@ -4228,12 +4231,29 @@ conhecidas, sem reprovar a checagem; nenhuma rodou no ambiente alvo.
   (`max` 80.000, `next_ids` a partir de 80.001) e publicava agosto de novo e setembro, leu 80.000
   linhas em toda leitura, antes e depois do commit; `version_diff(4, 6)` deu as duas partições; o
   canal `default` em `t1` seguiu lendo agosto com os ids antigos enquanto `current` lia os
-  novos. Duas execuções abertas na mesma versão, `exec-c` e `exec-d`, publicando a mesma
-  partição em threads: uma commitou (versão 7) e a outra recebeu `ExecutionConflict` com a
-  mensagem do delta-rs (`a concurrent transaction deleted data this operation read`); a
-  partição ficou com um arquivo só, o da vencedora, os ids sem repetição, e o arquivo do `COPY`
-  da perdedora ficou na pasta da partição fora do log, o órfão que `register_files` documenta e
-  `vacuum(full=True)` lista.
+  novos. Duas execuções abertas na mesma versão, `exec-c` e `exec-d`, publicando a mesma partição em
+  threads: nas rodadas antes do rebase sobre a `main` de 2026-09-25, uma commitou (versão 7) e a
+  outra recebeu `ExecutionConflict` com a mensagem do delta-rs (`a concurrent transaction deleted
+  data this operation read`), a partição ficou com um arquivo só, o da vencedora, os ids sem
+  repetição, e o arquivo do `COPY` da perdedora ficou na pasta da partição fora do log, o órfão que
+  `register_files` documenta e `vacuum(full=True)` lista; nas rodadas depois dele, com as oito
+  sondas ao mesmo tempo e sozinha, as duas commitaram em sequência (versões 7 e 8), sem
+  `ExecutionConflict`, e o arquivo da segunda substituiu o da primeira, com os dados certos:
+  `publish` confere por `version_diff` que nada mudou desde a versão fixada antes do `reconcile` e
+  do `export_partition`, e `register_files` abre a tabela de novo, na versão atual, logo antes do
+  `create_write_transaction`, de modo que um commit de dados entre a conferência e essa abertura
+  escapa aos dois; o resultado depende do intervalo entre o commit de uma e a abertura da tabela
+  pela outra, e a sonda imprime a leitura. A seção D reproduz a janela sem depender do tempo:
+  `exec-e` com um motor cujo `export_partition` espera um sinal, e `exec-f` publicando setembro
+  inteira enquanto ela espera; `exec-e` seguiu e commitou (versão 10 sobre a 9 de `exec-f`), quando
+  a docstring de `publish` promete `ExecutionConflict`, com um arquivo só na partição, o dela, os
+  dados iguais à projeção e os ids sem repetição. No delta-rs 1.6.6,
+  `create_write_transaction(mode="overwrite", partition_filters=...)` sobre um `DeltaTable` aberto
+  antes do commit intermediário falhou com `CommitFailedError` depois de um `overwrite` da mesma
+  partição (`a concurrent transaction deleted data this operation read`) e de uma mudança de esquema
+  por `alter.add_columns` (`Metadata changed since last commit`), e passou depois de uma gravação em
+  outra partição, de uma compactação da mesma partição (`optimize.compact`, `numFilesRemoved` 2) e
+  de um commit só de metadados (`custom_metadata` sem ações).
 - **As rotinas Delta** (`probe_delta_ops.py`): três escritores numa tabela (`publish_partition`,
   o `export_partition` do motor DuckDB e dois `write_deltalake(mode="append")` numa partição de
   dois arquivos), lidos iguais pelo dataset e pelo `delta_scan`; `compact` juntou os dois
@@ -4293,8 +4313,9 @@ conhecidas, sem reprovar a checagem; nenhuma rodou no ambiente alvo.
   esses valores dos dados para seguir. Na base de produção `valor` chega a `±1,18e10`, e a soma
   de 141.901.795 linhas fica em 1e18, longe do teto.
 
-**Consequências**: quatro itens em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), que esperam a
-decisão do usuário: o sinal do zero pelo `COPY` do DuckDB, a soma de controle acima de 1e32, a
-escrita condicional local entre threads e a nota do `NaN` pelo pandas em `docs/index.md`. O fuso
-da sessão, o órfão da publicação perdedora e as estatísticas da cópia arquivada já estão
-documentados; a reserialização do JSON pelo `SUPER` é uma leitura do substituto.
+**Consequências**: cinco itens em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), que esperam a decisão do
+usuário: o sinal do zero pelo `COPY` do DuckDB, a soma de controle acima de 1e32, a escrita
+condicional local entre threads, a nota do `NaN` pelo pandas em `docs/index.md` e a janela de
+`publish` entre a conferência da versão fixada e o commit. O fuso da sessão, o órfão da publicação
+perdedora e as estatísticas da cópia arquivada já estão documentados; a reserialização do JSON pelo
+`SUPER` é uma leitura do substituto.

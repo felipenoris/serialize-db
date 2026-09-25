@@ -159,6 +159,24 @@ usuário: corrigir, ou aceitar como está.
   tabela de tipos de `docs/index.md` diz que ele entra como chega, com `NaN`; isso vale para o
   Arrow, e pelo pandas o `NaN` vira nulo antes de `cast`, que numa coluna `NOT NULL` o recusa.
   Opção: uma frase na seção do `DataFrame` de `docs/index.md`.
+- **A janela entre a conferência da versão fixada e o commit de `publish`.**
+  `_check_no_data_change` confere por `version_diff` que nenhuma alteração de dados entrou na
+  tabela desde a versão fixada, e `register_files` abre a tabela de novo, na versão atual, logo
+  antes do `create_write_transaction` (`publish_partition` abre do mesmo jeito): um commit de dados
+  de outra execução na mesma partição entre a conferência e essa abertura, durante o `reconcile` e
+  o `COPY` de `export_partition`, passa sem `ExecutionConflict`, e o commit seguinte substitui a
+  partição da outra execução sem aviso, quando a docstring de `publish` e a
+  [etapa 6](PLAN-STAGE-6.md) prometem `ExecutionConflict`. A sonda da execução reproduz a janela na
+  seção D (`exec-e` parada em `export_partition` enquanto `exec-f` publica) e a viu na disputa da
+  seção C sob carga. No delta-rs 1.6.6, `create_write_transaction(mode="overwrite",
+  partition_filters=...)` sobre um `DeltaTable` aberto na versão fixada falha com
+  `CommitFailedError` quando um `overwrite` da mesma partição entrou depois dela (`a concurrent
+  transaction deleted data this operation read`) e quando o esquema mudou (`Metadata changed since
+  last commit`), e passa com uma gravação em outra partição, uma compactação da mesma partição e um
+  commit só de metadados no meio. Opções: `register_files` e `publish_partition` abrirem a tabela
+  na versão fixada pela execução, atualizada depois do `reconcile`, que commita a mudança de
+  esquema, o que entrega o `ExecutionConflict` prometido pelo próprio delta-rs; ou a docstring de
+  `publish` dizer que a conferência não cobre a janela, com uma execução por ambiente de cada vez.
 
 ## Decisões de API pendentes por etapa
 

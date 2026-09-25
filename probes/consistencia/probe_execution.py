@@ -2,8 +2,9 @@
 de borda; numa execução, o pipeline em threads, uma por partição, cada uma com o seu ``stream``
 da entrada escrevendo em dois ``loader`` com ids de ``next_ids``, a auditoria e dois ``publish``
 ao mesmo tempo; um leitor ``current`` aberto e consultado enquanto outra execução ingere,
-lê ``published`` e publica de novo, com os canais ``default`` e ``current``; e duas execuções
-abertas na mesma versão publicando a mesma partição em threads.
+lê ``published`` e publica de novo, com os canais ``default`` e ``current``; duas execuções
+abertas na mesma versão publicando a mesma partição em threads; e uma execução parada entre a
+conferência da versão fixada e o commit enquanto outra publica a mesma partição.
 
 .. code-block:: shell
 
@@ -32,6 +33,7 @@ from serialize_db import delta, schema
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import ExecutionConflict
 from serialize_db.execution import Database, Execution
+from serialize_db.storage import Storage
 
 INFO = {"serialize_db": {"partition_by": ["data_str"], "partition_source": "data",
                          "sort_key": ["data", "id"]}}
@@ -373,60 +375,161 @@ def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table]
     report_known("B o leitor preso enquanto exec-b escreve; os canais", problems)
 
 
-def check_race_c(db: Database, folder: Path, seeds: dict[str, pa.Table]) -> None:
-    """Seção C: ``exec-c`` e ``exec-d`` abertas na mesma versão publicam setembro em threads:
-    uma commita e a outra recebe ``ExecutionConflict``; a partição fica com um arquivo só, o da
-    vencedora, e o arquivo do ``COPY`` da perdedora é o órfão fora do log."""
+def publish_outcome(run: Execution, name: str, outcomes: dict[str, object]) -> None:
+    """O resultado de ``publish`` de setembro em ``outcomes[name]``: o dicionário de versões, ou o
+    ``ExecutionConflict``."""
+    try:
+        outcomes[name] = run.publish(PROJ, partitions=[NEW_MONTH])
+    except ExecutionConflict as error:
+        outcomes[name] = error
+
+
+def prepare_september(run: Execution) -> None:
+    """A entrada ingerida, setembro projetado no ``loader`` e auditado, sem publicar."""
+    run.ingest(ENTRADA)
+    with run.sandbox.loader(PROJ) as loader:
+        pipeline(run, [NEW_MONTH], [PROJ], {PROJ.name: loader})
+    run.audit(PROJ, [NEW_MONTH])
+
+
+def last_committer(outcomes: dict[str, object], committers: list[str]) -> str:
+    """A execução do commit de maior versão entre as que commitaram."""
+    versions = {}
+    for name in committers:
+        versions[name] = outcomes[name][PROJ.name]
+    return max(versions, key=versions.get)
+
+
+def check_september(db: Database, folder: Path, seeds: dict[str, pa.Table], label: str,
+                    version: int, committers: list[str],
+                    outcomes: dict[str, object]) -> list[str]:
+    """As conferências de setembro depois de uma disputa: a versão esperada, um arquivo só no
+    log, o do último commit, os órfãos da pasta impressos, os dados iguais à projeção e os ids
+    sem repetição."""
     problems = []
-    outcomes: dict[str, object] = {}
-    with ExitStack() as stack:
-        runs = {}
-        for name in ("exec-c", "exec-d"):
-            runs[name] = stack.enter_context(Execution(db, engine_for(db, folder, name),
-                                                       NEW_MONTH, name))
-        for name, run in runs.items():
-            run.ingest(ENTRADA)
-            with run.sandbox.loader(PROJ) as loader:
-                pipeline(run, [NEW_MONTH], [PROJ], {PROJ.name: loader})
-            run.audit(PROJ, [NEW_MONTH])
-
-        def publish(name: str) -> None:
-            try:
-                outcomes[name] = runs[name].publish(PROJ, partitions=[NEW_MONTH])
-            except ExecutionConflict as error:
-                outcomes[name] = error
-
-        threads = [threading.Thread(target=publish, args=(name,)) for name in runs]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-    winners = [name for name, outcome in outcomes.items() if isinstance(outcome, dict)]
-    losers = [name for name, outcome in outcomes.items()
-              if isinstance(outcome, ExecutionConflict)]
-    print(f"   resultados: {outcomes}")
-    if len(winners) != 1 or len(losers) != 1:
-        problems.append(f"C: vencedoras {winners}, perdedoras {losers}")
     table = delta.open_table(db.uri(PROJ), db.storage)
-    if table.version() != 7:
-        problems.append(f"C: versão {table.version()}")
+    if table.version() != version:
+        problems.append(f"{label}: versão {table.version()}, esperada {version}")
     actions = pa.table(table.get_add_actions(flatten=True))
     september = actions.filter(pc.field("partition.data_str") == NEW_MONTH)
     if september.num_rows != 1:
-        problems.append(f"C: arquivos de setembro {september.num_rows}")
+        problems.append(f"{label}: arquivos de setembro {september.num_rows}")
     paths = set(september.column("path").to_pylist())
-    if winners and not all(winners[0] in path for path in paths):
-        problems.append(f"C: o arquivo de setembro não é da vencedora: {paths}")
+    if committers:
+        last = last_committer(outcomes, committers)
+        if not all(last in path for path in paths):
+            problems.append(f"{label}: o arquivo de setembro não é do último commit ({last}): "
+                            f"{paths}")
     partition_folder = folder / "delta" / "prd" / PROJ.name / f"data_str={NEW_MONTH}"
     on_disk = {f"data_str={NEW_MONTH}/{p.name}" for p in partition_folder.glob("*.parquet")}
     print(f"   arquivos na pasta da partição {len(on_disk)}, órfãos {sorted(on_disk - paths)}")
     found = read_current(db, folder, PROJ, NEW_MONTH)
     problems += compare(projected_expected(seeds[NEW_MONTH]), found, key="id_entrada",
-                        label="C setembro")
+                        label=f"{label} setembro")
     all_ids = read_arrow(db, PROJ).column("id").to_pylist()
     if len(set(all_ids)) != len(all_ids):
-        problems.append("C: ids repetidos")
+        problems.append(f"{label}: ids repetidos")
+    return problems
+
+
+def check_race_c(db: Database, folder: Path, seeds: dict[str, pa.Table]) -> None:
+    """Seção C: ``exec-c`` e ``exec-d`` abertas na mesma versão publicam setembro em threads.
+    Quando os dois commits se sobrepõem no delta-rs, um commita e o outro recebe
+    ``ExecutionConflict``; quando o ``register_files`` da segunda abre a tabela depois do commit
+    da primeira, as duas commitam em sequência, a janela da seção D. Nos dois casos a partição
+    fica com um arquivo só, o do último commit, e o arquivo do ``COPY`` de cada outra execução
+    é um órfão fora do log."""
+    problems = []
+    outcomes: dict[str, object] = {}
+    start = delta.open_table(db.uri(PROJ), db.storage).version()
+    with ExitStack() as stack:
+        runs = {}
+        for name in ("exec-c", "exec-d"):
+            runs[name] = stack.enter_context(Execution(db, engine_for(db, folder, name),
+                                                       NEW_MONTH, name))
+        for run in runs.values():
+            prepare_september(run)
+        threads = [threading.Thread(target=publish_outcome, args=(run, name, outcomes))
+                   for name, run in runs.items()]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    committers = [name for name, outcome in outcomes.items() if isinstance(outcome, dict)]
+    losers = [name for name, outcome in outcomes.items()
+              if isinstance(outcome, ExecutionConflict)]
+    print(f"   resultados: {outcomes}")
+    if len(committers) == 1 and len(losers) == 1:
+        print("   leitura: os commits se sobrepuseram no delta-rs; uma commitou e a outra recebeu "
+              "ExecutionConflict")
+    elif len(committers) == 2:
+        print("   leitura: os commits não se sobrepuseram no delta-rs; as duas commitaram em "
+              "sequência (a janela da seção D)")
+    else:
+        problems.append(f"C: commitaram {committers}, perderam {losers}")
+    problems += check_september(db, folder, seeds, "C", start + len(committers), committers,
+                                outcomes)
     report_known("C duas execuções disputando a mesma partição", problems)
+
+
+class PausingEngine(DuckDBEngine):
+    """O motor DuckDB de ``exec-e``: ``export_partition`` avisa que chegou e espera o sinal, o
+    que põe o commit de outra execução entre a conferência da versão fixada de ``publish`` e a
+    abertura da tabela em ``register_files``."""
+
+    def __init__(self, config: DuckDBConfig, execution_id: str, storage: Storage,
+                 reached: threading.Event, gate: threading.Event) -> None:
+        super().__init__(config, execution_id, storage)
+        self.reached = reached
+        self.gate = gate
+
+    def export_partition(self, *args: object, **kwargs: object) -> int:
+        self.reached.set()
+        self.gate.wait(timeout=120)
+        return super().export_partition(*args, **kwargs)
+
+
+def check_window_d(db: Database, folder: Path, seeds: dict[str, pa.Table]) -> None:
+    """Seção D: ``exec-e`` e ``exec-f`` abertas na mesma versão; ``exec-e`` para entre a
+    conferência da versão fixada e o commit, ``exec-f`` publica setembro inteira nesse intervalo
+    e ``exec-e`` segue. A docstring de ``publish`` promete ``ExecutionConflict`` a ``exec-e``; a
+    leitura conhecida é o commit dela, que substitui a partição de ``exec-f`` sem aviso
+    (``plan/OPEN_QUESTIONS.md``)."""
+    problems = []
+    outcomes: dict[str, object] = {}
+    reached, gate = threading.Event(), threading.Event()
+    start = delta.open_table(db.uri(PROJ), db.storage).version()
+    with ExitStack() as stack:
+        config = DuckDBConfig(temp_directory=str(folder / "sandbox_exec-e"))
+        engine = PausingEngine(config, "exec-e", db.storage, reached, gate)
+        paused = stack.enter_context(Execution(db, engine, NEW_MONTH, "exec-e"))
+        other = stack.enter_context(Execution(db, engine_for(db, folder, "exec-f"), NEW_MONTH,
+                                              "exec-f"))
+        prepare_september(paused)
+        prepare_september(other)
+        thread = threading.Thread(target=publish_outcome, args=(paused, "exec-e", outcomes))
+        thread.start()
+        if not reached.wait(timeout=120):
+            problems.append("D: exec-e não chegou a export_partition")
+        publish_outcome(other, "exec-f", outcomes)
+        gate.set()
+        thread.join()
+    print(f"   resultados: {outcomes}")
+    paused_outcome = outcomes.get("exec-e")
+    other_outcome = outcomes.get("exec-f")
+    if isinstance(paused_outcome, ExecutionConflict) and isinstance(other_outcome, dict):
+        print("   exec-e recebeu ExecutionConflict, como a docstring de publish promete")
+        committers = ["exec-f"]
+    elif isinstance(paused_outcome, dict) and isinstance(other_outcome, dict):
+        print("   achado conhecido: exec-e commitou depois de exec-f sem ExecutionConflict, e o "
+              "arquivo dela substituiu o de exec-f (plan/OPEN_QUESTIONS.md)")
+        committers = ["exec-f", "exec-e"]
+    else:
+        problems.append(f"D: resultados {outcomes}")
+        committers = [name for name, outcome in outcomes.items() if isinstance(outcome, dict)]
+    problems += check_september(db, folder, seeds, "D", start + len(committers), committers,
+                                outcomes)
+    report_known("D uma execução parada entre a conferência da versão e o commit", problems)
 
 
 def main() -> None:
@@ -439,6 +542,7 @@ def main() -> None:
     delta.set_channel(db.storage, "prd", "default", "t1")
     check_pinned_reader_b(db, folder, seeds, expected_a)
     check_race_c(db, folder, seeds)
+    check_window_d(db, folder, seeds)
     versions = {t.name: delta.open_table(db.uri(t), db.storage).version() for t in db.tables()}
     print("versões finais:", versions)
     finish(folder)
