@@ -12,7 +12,7 @@ requires-python = ">=3.13"
 # (decisão do usuário de 2026-09-21), e duckdb-engine importa o duckdb. O boto3 faz a escrita
 # condicional do arquivo de controle no S3 (serialize_db.storage).
 dependencies = [
-    "boto3==1.43.98",
+    "boto3==1.43.102",
     "deltalake==1.6.6",
     "duckdb==1.5.5",
     "duckdb-engine==0.17.0",
@@ -43,7 +43,7 @@ dev = [
     "pytest>=8.4",
     "redshift-connector>=2.1",
     "sqlalchemy==2.0.54",
-    "sqlglot==30.18.0",
+    "sqlglot==30.19.0",
 ]
 # O substituto local do S3 e do Redshift (tests/emulator.py), que roda as suítes do ambiente alvo
 # fora dele com SERIALIZE_DB_TEST_EMULATOR: o servidor do moto roda sobre o Flask. Fica fora do dev

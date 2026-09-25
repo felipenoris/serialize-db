@@ -50,9 +50,10 @@ foi medido em [`POC.md`](POC.md).
 - **O `deltalake` 1.6.6 no ambiente alvo.** `pyproject.toml` fixa `deltalake==1.6.6` desde
   2026-09-25, e as sessões locais e o substituto leram nela os mesmos números da 1.6.4
   ([`POC.md`](POC.md)). A pasta do ambiente alvo rodou as baterias de 2026-09-24 com a 1.6.4 e só
-  recebe a 1.6.6 quando `prepare_offline.sh` roda de novo. O substituto dá chaves estáticas ao
-  delta-rs, e a cadeia de credenciais do contêiner, cujas crates da AWS mudaram na 1.6.6, só a
-  suíte S3 no alvo exercita. Espera o usuário: preparar a pasta de novo e rodar a suíte S3 no alvo.
+  recebe a 1.6.6, com o boto3 1.43.102 e o sqlglot 30.19.0, quando `prepare_offline.sh` roda de
+  novo. O substituto dá chaves estáticas ao delta-rs, e a cadeia de credenciais do contêiner, cujas
+  crates da AWS mudaram na 1.6.6, só a suíte S3 no alvo exercita. Espera o usuário: preparar a pasta
+  de novo e rodar a suíte S3 no alvo.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
@@ -100,6 +101,16 @@ foi medido em [`POC.md`](POC.md).
   `--channel default` e a volta a um snapshot anterior ao publicado, com o tempo e o pico de RSS
   por tabela; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o
   caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
+
+- **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
+  de 2026-09-25 ([`POC.md`](POC.md)), e o pino fica em 2.0.54. O `params()` novo guarda os
+  valores no statement: a compilação com `literal_binds` os escreve como `NULL`, e o `stream` do
+  motor Redshift pelo `UNLOAD` roda com eles nulos, sem erro; o `construct_params()` de um `IN`
+  expansível compilado com `render_postcompile` levanta `InvalidRequestError` no motor DuckDB e
+  no cursor do motor Redshift. O `Double` deixou de derivar de `Numeric`, e o `load_report` para
+  de somar as colunas `Double`. A reflexão do duckdb-engine 0.17.0 também falha na 2.1, fora do
+  pacote. Espera o usuário: adaptar o pacote à 2.1 (`bound_statement`, de `serialize_db.sql`, que
+  passa os valores por `params()`, e as colunas que o `load_report` soma) ou manter a 2.0.54.
 
 ## Achados da revisão dos comentários e da documentação
 

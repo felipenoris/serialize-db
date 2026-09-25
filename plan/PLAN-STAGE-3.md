@@ -168,7 +168,7 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
   No S3, `put_object` do `boto3` com `IfNoneMatch="*"` (`create_text`) ou `IfMatch=<etag>`, atômico no servidor, e
   o 412 vira `ConflictError`; `read_text` lê pelo `get_object`, que devolve a etag. `read_text`
   devolve o texto e a impressão para a escrita seguinte. É o único uso do `boto3` na etapa, que o
-  leva às dependências de execução fixado em 1.43.98, a versão do `uv.lock`, e roda
+  leva às dependências de execução, fixado em `pyproject.toml`, e roda
   `prepare_offline.sh` de novo.
 - **`storage_options`** monta as opções do delta-rs a cada chamada: `AWS_REGION` de `AWS_REGION` ou
   `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL` quando presente, `max_retries` 3 e `retry_timeout` 10 s,

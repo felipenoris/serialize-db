@@ -126,3 +126,16 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   with `UnsupportedCompilationError` elsewhere, the `duckdb_engine` dialect included, which compiles
   through the `PGCompiler`; `serialize_db.audit` gives each of its functions a default rule, the
   name with its arguments (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+
+## SQLAlchemy 2.1
+
+- SQLAlchemy 2.1.0 (2026-09-24) broke the package in the whole test session of 2026-09-25 (8
+  failed, 545 passed), and the pin stays at 2.0.54 until the user decides. The new
+  `ExecutableStatement.params()` stores the values on the statement instead of cloning each
+  `bindparam`: `required` stays true after it, and `literal_binds` renders the values as `NULL`
+  (an `SAWarning` for `=`, `>=` and the expanding `IN`, none for `LIKE`), so the Redshift
+  `stream` by `UNLOAD` ran with `IN (NULL)`; `construct_params()` after `render_postcompile` of an
+  expanding `bindparam` raises `InvalidRequestError` in the DuckDB engine and the Redshift cursor.
+  `Float` and `Double` no longer derive from `Numeric`, so `load_report` drops the `Double`
+  columns from its sums; and the duckdb-engine 0.17.0 reflection fails on
+  `pg_catalog.pg_collation`. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`

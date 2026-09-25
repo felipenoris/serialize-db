@@ -600,6 +600,11 @@ Dialeto do DuckDB, no repositório `Mause/duckdb_engine`:
 - <https://github.com/Mause/duckdb_engine/blob/main/duckdb_engine/datatypes.py>
 - <https://github.com/Mause/duckdb_engine/blob/main/duckdb_engine/config.py>
 
+Documentação da versão 2.1, lida em 2026-09-25 para a troca da versão fixada:
+
+- <https://docs.sqlalchemy.org/en/21/changelog/migration_21.html>
+- <https://docs.sqlalchemy.org/en/21/changelog/changelog_21.html>
+
 ## pandas
 
 - <https://pandas.pydata.org/docs/reference/api/pandas.read_sql.html>
@@ -980,6 +985,18 @@ API JSON do PyPI e os pacotes-fonte, consultados em 2026-09-25 para a troca do d
 API do crates.io (`https://crates.io/api/v1/crates/<crate>`), consultada em 2026-09-19 para
 `object_store`, `parquet`, `arrow`, `pyo3`, `pyo3-arrow`, `deltalake`, `delta_kernel`, `duckdb`,
 `datafusion`, `hudi`, `iceberg`, `lance`, `maturin`, `sqlparser` e `polars`.
+
+API JSON do PyPI, consultada em 2026-09-25 para as versões novas das dependências diretas:
+<https://pypi.org/pypi/boto3/json>, <https://pypi.org/pypi/botocore/json>,
+<https://pypi.org/pypi/s3transfer/json>, <https://pypi.org/pypi/deltalake/json>,
+<https://pypi.org/pypi/duckdb/json>, <https://pypi.org/pypi/duckdb-engine/json>,
+<https://pypi.org/pypi/pyarrow/json>, <https://pypi.org/pypi/sqlalchemy/json>,
+<https://pypi.org/pypi/sqlalchemy-redshift/json>, <https://pypi.org/pypi/redshift-connector/json>,
+<https://pypi.org/pypi/pandas/json>, <https://pypi.org/pypi/pytest/json>,
+<https://pypi.org/pypi/sqlglot/json>, <https://pypi.org/pypi/flask/json>,
+<https://pypi.org/pypi/flask-cors/json>, <https://pypi.org/pypi/moto/json>,
+<https://pypi.org/pypi/pdoc/json>, <https://pypi.org/pypi/ipykernel/json> e
+<https://pypi.org/pypi/uv-build/json>.
 
 ## Delta Lake
 
