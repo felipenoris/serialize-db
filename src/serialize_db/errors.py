@@ -42,8 +42,8 @@ class SqlError(ValueError):
     """Um statement que não vira texto executável, ou um texto cujos parâmetros não fecham.
 
     A mensagem nomeia o parâmetro de nome inválido, os parâmetros em falta ou sobrando ou o
-    sentinela que ficou no texto, e diz o que o cliente faz: renomear o ``bindparam``, completar o
-    dicionário, ler o texto por ``read_sql``.
+    sentinela que ficou no texto; o cliente renomeia o ``bindparam``, completa o dicionário ou lê
+    o texto por ``read_sql``, que só a mensagem do sentinela indica.
 
     Exemplo:
 
@@ -72,8 +72,10 @@ class ConflictError(Exception):
 class ExecutionConflict(Exception):
     """Outra execução gravou a mesma partição, ou avançou a tabela com dados desde a abertura.
 
-    É o ``CommitFailedError`` do delta-rs num ``overwrite`` ou num registro de arquivos, e a
-    versão fixada que ficou para trás. Nenhum commit foi feito pela chamada que falhou.
+    É o ``CommitFailedError`` do delta-rs num ``overwrite`` ou num registro de arquivos, a versão
+    fixada que ficou para trás e, na publicação no Redshift, a linha de controle que mudou desde a
+    leitura, o ``1023`` e a tabela publicada que outra primeira publicação criou. Nenhum commit foi
+    feito pela chamada que falhou.
 
     Exemplo:
 
@@ -90,8 +92,9 @@ class RegistrationRefused(Exception):
     """Uma conferência de ``register_files`` reprovou antes do commit, ou a releitura reprovou
     depois dele e ``restore`` voltou a versão anterior.
 
-    A mensagem nomeia o arquivo e a conferência; o arquivo fica órfão na pasta da tabela até um
-    ``vacuum(full=True)``.
+    A mensagem nomeia a conferência e, nas de cada arquivo, o arquivo; os arquivos ficam órfãos na
+    pasta da tabela até um ``vacuum(full=True)``. ``deep_copy`` também a levanta, no destino que
+    registra um arquivo fora da versão copiada e na contagem da cópia diferente da soma das ações.
 
     Exemplo:
 
@@ -104,9 +107,9 @@ class RegistrationRefused(Exception):
 
 
 class SchemaDiffRefused(Exception):
-    """O diff entre o modelo e a tabela Delta é destrutivo: renomeação, remoção, mudança de tipo
-    ou coluna ``NOT NULL`` nova numa tabela com dados. A mensagem lista cada diferença e aponta
-    ``rewrite``.
+    """O diff entre o modelo e a tabela Delta é destrutivo: renomeação, remoção, mudança de tipo,
+    ``NOT NULL`` numa coluna anulável ou coluna ``NOT NULL`` nova numa tabela com dados. A mensagem
+    lista cada diferença e aponta ``rewrite``.
 
     Exemplo:
 
@@ -133,16 +136,17 @@ class LogUnavailable(Exception):
 class SandboxError(ValueError):
     """Um nome já ocupado no sandbox, ou um objeto do sandbox que não serve ao que foi pedido.
 
-    A mensagem nomeia o objeto e diz o que o cliente faz: ler a versão publicada por
-    ``run.published(table)`` em vez de gravar no nome que o ``ingest`` ocupou, ou abrir um
-    ``loader`` só por tabela.
+    A mensagem nomeia o objeto; o cliente lê a versão publicada por ``run.published(table)`` em
+    vez de gravar no nome que o ``ingest`` ocupou, como a mensagem do ``loader`` indica, ou abre
+    um ``loader`` só por tabela.
 
     Exemplo:
 
     .. code-block:: python
 
         engine.ingest(Lancamento.__table__, uri, 143)
-        engine.ingest(Lancamento.__table__, uri, 143)   # SandboxError: o nome está ocupado
+        engine.ingest(Lancamento.__table__, uri, 143)
+        # SandboxError: cad_lancamentos: o nome já está ocupado no sandbox
     """
 
 
@@ -167,7 +171,7 @@ class PublicationError(Exception):
     snapshot pedido ou não existe no ambiente.
 
     A mensagem diz o que o operador faz: ``serialize-db publish --init`` cria a tabela de controle
-    uma vez, e ``--tables`` deixa de fora a tabela sem versão.
+    uma vez, e, no ``serialize-db publish``, ``--tables`` deixa de fora a tabela sem versão.
 
     Exemplo:
 

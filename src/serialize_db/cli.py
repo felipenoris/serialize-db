@@ -156,7 +156,8 @@ def _resolve_function(spec: str) -> Callable[..., object]:
 
 
 def _name_argument(text: str) -> str:
-    """Um valor de partição, um ``execution_id`` ou um ambiente, pela regra da partição."""
+    """Um valor de partição, um ``execution_id``, um ambiente ou o nome de um snapshot ou de um
+    canal, pela regra da partição."""
     try:
         return schema.check_partition_value(text)
     except ContractError as error:
@@ -240,8 +241,8 @@ def _add_load_parser(commands: argparse._SubParsersAction) -> None:
 
 
 def _add_operation_parsers(commands: argparse._SubParsersAction) -> None:
-    """Os subcomandos da operação: ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export``
-    e ``history``."""
+    """Os subcomandos da operação: ``snapshot``, ``channel``, ``vacuum``, ``compact``,
+    ``archive``, ``export`` e ``history``."""
     snapshot = commands.add_parser("snapshot",
                                    help="o snapshot do banco com a versão atual de cada tabela")
     _add_database_arguments(snapshot)
@@ -393,6 +394,7 @@ def _run(args: argparse.Namespace) -> int:
     reprovada, 2 no conflito e no motor que não serve."""
     redshift = None
     if args.engine == "redshift":
+        # O driver do Redshift é o extra "redshift": o módulo entra só quando o motor entra.
         from serialize_db.engine.redshift import RedshiftConfig
 
         redshift = RedshiftConfig.from_environment()
@@ -432,6 +434,7 @@ def _print_report(report: AuditReport) -> None:
 def _audit_engine(args: argparse.Namespace, db: Database, execution_id: str) -> Engine:
     """O sandbox próprio da auditoria: o motor de ``--engine``."""
     if args.engine == "redshift":
+        # O driver do Redshift é o extra "redshift": o módulo entra só quando o motor entra.
         from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 
         return RedshiftEngine(RedshiftConfig.from_environment(), execution_id, db.storage,
@@ -500,6 +503,7 @@ def _publish(args: argparse.Namespace) -> int:
     ``--channel``, um dos dois obrigatório. 2 no erro de uso, sem a tabela de controle, no
     snapshot ou no canal ausente, no snapshot arquivado, na tabela fora do snapshot e no
     conflito."""
+    # O driver do Redshift é o extra "redshift": os módulos entram só no subcomando publish.
     from serialize_db import publication
     from serialize_db.engine.redshift import RedshiftConfig
 
@@ -791,6 +795,7 @@ def _archive(args: argparse.Namespace) -> int:
         print(f"serialize-db archive: o snapshot {args.name} não está em snapshots",
               file=sys.stderr)
         return 2
+    # Os canais conferidos antes da cópia: archive_snapshot só os confere depois dela.
     pointing = delta.channels_pointing(control, args.name)
     if pointing:
         print(f"serialize-db archive: o snapshot {args.name} é o do canal {', '.join(pointing)}; "
