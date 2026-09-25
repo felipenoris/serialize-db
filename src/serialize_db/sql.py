@@ -102,8 +102,8 @@ _SENTINEL_TABLE = re.compile(r"\{prefix\}(\w+)")
 def _prefixed_copy(table: sa.Table, prefix: str) -> sa.Table:
     """A cópia da tabela com o prefixo no nome e só nomes e tipos, o que um DML compilado usa.
 
-    Todo nome vai citado, como no DDL da etapa 1: o texto não depende da lista de palavras
-    reservadas do dialeto, e o sentinela fica dentro das aspas.
+    Todo nome vai citado, como no DDL de ``serialize_db.schema``: o texto não depende da lista de
+    palavras reservadas do dialeto, e o sentinela fica dentro das aspas.
     """
     columns = []
     for column in table.columns:

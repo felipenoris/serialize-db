@@ -29,7 +29,7 @@ O ``COPY`` e o ``UNLOAD`` levam a cláusula de credenciais de ``IAM_ROLE`` ou da
 sessão ``boto3``, montada por comando; o texto que a carrega passa por ``mask`` antes de qualquer
 log ou exceção. Um statement Core é compilado pela cópia prefixada de ``sql.prefixed`` pelo dialeto
 do Redshift com ``paramstyle="named"``; um texto pronto troca o sentinela ``{prefix}`` pelo prefixo
-do sandbox e passa por ``sql.bind``.
+do motor (``exec_<id>_`` no sandbox, ``<ambiente>_`` no leitor Redshift) e passa por ``sql.bind``.
 
 Exemplo:
 
@@ -95,7 +95,7 @@ log = logging.getLogger("serialize_db.engine.redshift")
 _NAMED = RedshiftDialect_redshift_connector(paramstyle="named")
 
 # O teto de um identificador do Redshift, em bytes, e o espaço que o prefixo deixa ao nome da
-# tabela e aos sufixos _staging e _publicado.
+# tabela e aos sufixos _staging, _publicado e _carga.
 _IDENTIFIER_BYTES = 127
 _TABLE_NAME_BYTES = 63
 
@@ -508,6 +508,7 @@ def table_from_cursor(cursor: object) -> pa.Table:
         return pa.table({})
     schema = schema_from_row_description(cursor.ps["row_desc"])
     rows = cursor.fetchall()
+    # O resultado sem linha recebe uma coluna vazia por campo, que zip(*rows) não daria.
     columns = list(zip(*rows)) if rows else [() for _ in schema]
     arrays = []
     for column, field in zip(columns, schema):
@@ -558,6 +559,7 @@ def literal_text(statement_or_sql: sa.sql.ClauseElement | str, params: Mapping[s
         statement = sql.bound_statement(statement_or_sql, params, prefix)
     compiled = statement.compile(
         dialect=_NAMED, compile_kwargs={"literal_binds": True, "render_postcompile": True})
+    # O texto sai sem o espaço e o ponto e vírgula finais: ele entra numa subconsulta e no UNLOAD.
     return str(compiled).strip().rstrip(";")
 
 
@@ -873,8 +875,8 @@ class RedshiftLoader:
 
 @dataclasses.dataclass(frozen=True)
 class _PublishedStaging:
-    """A versão fixada de uma tabela que a auditoria pode precisar: carregada só quando uma
-    verificação que a cita roda."""
+    """A staging ``_publicado`` da versão fixada de uma tabela: ``published`` a carrega na hora, e
+    a auditoria só quando uma verificação que a cita roda."""
 
     table: sa.Table
     name: str
@@ -908,8 +910,8 @@ class RedshiftEngine:
         :param execution_id: o identificador da execução, na regra da partição; dá o prefixo
             ``exec_<id>_`` das tabelas do sandbox.
         :param storage: o armazenamento da raiz do banco, onde ficam o Delta e os arquivos que o
-            ``COPY`` lê e o ``UNLOAD`` grava; ``None`` só no leitor Redshift sem ``unload_to``,
-            que roda ``query`` e nada que toque arquivos.
+            ``COPY`` lê e o ``UNLOAD`` grava, ou, no leitor Redshift, o de ``unload_to``; ``None``
+            só no leitor sem ``unload_to``, que roda ``query`` e nada que toque arquivos.
         :param staging_prefix: a pasta dos arquivos intermediários da execução, relativa à raiz,
             como ``<ambiente>/staging/<execution_id>``; ``None`` com ``storage`` ``None``.
         :param parent: o motor principal, de que esta sessão a mais depende, dado por
@@ -931,7 +933,8 @@ class RedshiftEngine:
         """O prefixo das tabelas no esquema: ``exec_<id>_`` no sandbox, ``<ambiente>_`` no
         leitor Redshift."""
         self.storage = storage
-        """O armazenamento da raiz do banco; ``None`` no leitor Redshift sem ``unload_to``."""
+        """O armazenamento da raiz do banco, ou o de ``unload_to`` no leitor Redshift; ``None`` no
+        leitor sem ``unload_to``."""
         self.staging_prefix = storage.join(staging_prefix) if storage is not None else None
         """A pasta dos arquivos intermediários da execução, relativa à raiz, que o ``cleanup``
         esvazia; ``None`` sem armazenamento."""
@@ -941,6 +944,7 @@ class RedshiftEngine:
         self._in_transaction = False
         self._parent = parent
         self._pending: dict[str, _PublishedStaging] = {}
+        # A sessão a mais divide com a principal as tabelas a apagar e as stagings já carregadas.
         if parent is not None:
             self._created = parent._created
             self._loaded = parent._loaded
@@ -1170,11 +1174,13 @@ class RedshiftEngine:
         """A tabela ``name`` criada com o DDL do modelo e carregada com as partições ``values`` da
         versão fixada, por uma staging sem a coluna de partição, apagada no fim."""
         staging = f"{name}_staging"
+        # A cópia do modelo leva name sem o prefixo, que o ddl acrescenta.
         model = table.to_metadata(sa.MetaData(), name=name.removeprefix(self.prefix))
         self.execute(ddl(model, "redshift", prefix=self.prefix))
         self.register_created(name)
         self.execute(staging_ddl(table, self.qualified(staging), columns_without_partition(table)))
         self.register_created(staging)
+        # A staging sai do registro só depois do DROP: a que ele não alcança fica para o cleanup.
         try:
             for value in values:
                 self._copy_partition(table, name, staging, uri, version, value)
@@ -1259,7 +1265,7 @@ class RedshiftEngine:
 
         .. code-block:: python
 
-            previous = engine.published(Projetada.__table__, uri, 57)
+            previous = engine.published(Projetado.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
@@ -1291,7 +1297,7 @@ class RedshiftEngine:
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
             compila para o sandbox, ou um texto pronto no SQL do motor, com os parâmetros como
-            ``:nome``; o sentinela ``{prefix}`` do texto vira o prefixo do sandbox.
+            ``:nome``; o sentinela ``{prefix}`` do texto vira o prefixo do motor (``prefix``).
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :return: a tabela do resultado, montada por colunas com o esquema do ``row_desc``; um
@@ -1329,7 +1335,7 @@ class RedshiftEngine:
         .. code-block:: python
 
             engine.unloaded_paths("prd/staging/exec-42/stream/ab12")
-            # ["prd/staging/exec-42/stream/ab12/0000_part_00.parquet"]
+            # ["prd/staging/exec-42/stream/ab12/000.parquet"]
 
         :param prefix: o destino do ``UNLOAD``, relativo à raiz.
         :return: os caminhos, relativos à raiz; sem manifesto, a lista vazia quando
@@ -1362,7 +1368,7 @@ class RedshiftEngine:
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
             compila para o sandbox, ou um texto pronto no SQL do motor, com os parâmetros como
-            ``:nome``; o sentinela ``{prefix}`` do texto vira o prefixo do sandbox.
+            ``:nome``; o sentinela ``{prefix}`` do texto vira o prefixo do motor (``prefix``).
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto. Os valores do cliente entram como literais,
             porque o ``UNLOAD`` não recebe parâmetro.
@@ -1391,7 +1397,7 @@ class RedshiftEngine:
 
         .. code-block:: python
 
-            with engine.loader(Projetada.__table__) as loader:
+            with engine.loader(Projetado.__table__) as loader:
                 loader.write(batch)
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox, com o
@@ -1414,7 +1420,7 @@ class RedshiftEngine:
 
         .. code-block:: python
 
-            engine.load(Projetada.__table__, pa.Table.from_pandas(frame, preserve_index=False))
+            engine.load(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox, com o
             prefixo ``exec_<id>_``.
@@ -1522,7 +1528,7 @@ class RedshiftEngine:
 
         .. code-block:: python
 
-            report = engine.audit(Projetada.__table__, ["2026-08-31"], uri, 57)
+            report = engine.audit(Projetado.__table__, ["2026-08-31"], uri, 57)
             report.passed, report.nonfinite_columns
 
         :param table: a tabela do modelo, no sandbox.
@@ -1603,6 +1609,7 @@ class RedshiftEngine:
     def _unload(self, table: sa.Table, value: str | None, prefix: str, count: int) -> list[str]:
         """O ``UNLOAD`` da partição para o prefixo, em série até ``_PARALLEL_OFF_ROWS`` linhas, e os
         arquivos gravados, relativos à raiz."""
+        # O lock fica do UNLOAD à leitura do manifesto: o pg_last_unload_count() é o deste UNLOAD.
         with self.session():
             self.execute(unload_text(self._partition_select(table, value),
                                      self.storage.uri_of(prefix), credentials_clause(self.config),
@@ -1639,6 +1646,7 @@ class RedshiftEngine:
                   columns_without_min_max: Collection[str], count: int) -> int:
         """O registro: o ``UNLOAD`` para ``<uri>/<coluna>=<valor>/<execution_id>_<uuid>/`` e o
         commit dos arquivos como o Redshift os gravou."""
+        # Um prefixo novo por chamada: o UNLOAD recusa o destino que já tem objetos.
         partition_by = table_options(table).partition_by
         table_path = self.storage.relative(uri)
         folder = f"{partition_by}={value}" if partition_by is not None else ""
@@ -1679,6 +1687,7 @@ class RedshiftEngine:
                     "publish_partition, e os dados passam pela máquina local", table.name, value,
                     sorted(columns_without_min_max))
         paths = self._unload(table, value, prefix, count)
+        # Uma conexão do DuckDB por partição, nos limites do ambiente: o close devolve a memória.
         connection = self.storage.duckdb_connect(config=environment_limits())
         try:
             reader = self._swap_reader(connection, table, value, paths)
@@ -1703,7 +1712,7 @@ class RedshiftEngine:
 
         .. code-block:: python
 
-            engine.export_partition(Projetada.__table__, uri, "2026-08-31",
+            engine.export_partition(Projetado.__table__, uri, "2026-08-31",
                                     delta.commit_metadata("exec-42", versions))
 
         :param table: a tabela do modelo, no sandbox.

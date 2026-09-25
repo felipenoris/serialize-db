@@ -1,10 +1,10 @@
-"""O espaço do SageMaker Unified Studio visto de dentro: identidade, projeto, rede, máquina, Python e DuckDB.
+"""O espaço do SageMaker Unified Studio: identidade, projeto, rede, máquina, Python e DuckDB.
 
 Uso, em qualquer ambiente:
 
     .venv/bin/python probes/space.py
 
-Só leitura. O relatório sai no terminal e em ``probes/output/space_<data-hora>.txt``. Seções:
+O probe só lê. O relatório sai no terminal e em ``probes/output/space_<data-hora>.txt``. Seções:
 
 1. Identidade e credenciais: o método do ``boto3``, a região como o ``boto3`` a resolve, o endpoint
    de credenciais do contêiner, o IMDS e o STS.
@@ -12,17 +12,19 @@ Só leitura. O relatório sai no terminal e em ``probes/output/space_<data-hora>
    lido neste interpretador ou no do sistema, porque o pacote não entra no venv.
 3. Rede: variáveis de proxy, DNS dos endpoints regionais (IP privado indica endpoint VPC de
    interface com DNS privado), TCP até o S3 regional e até o proxy, e a internet por HTTPS.
-4. Máquina: CPUs, memória, disco, a pasta compartilhada e os comandos disponíveis.
+4. Máquina: CPUs, memória, disco, o limite de arquivos abertos, a pasta compartilhada e os
+   comandos disponíveis.
 5. Python e pacotes: este interpretador e o do sistema, com as versões dos pacotes do projeto,
    conferidas contra as dependências de execução e o grupo ``dev`` de ``pyproject.toml``.
-6. DuckDB: versão, plataforma, threads, memória e as extensões que carregam da pasta configurada,
-   com a instalação automática desligada.
+6. DuckDB: versão, plataforma, threads, memória, o proxy da sessão e as extensões que carregam da
+   pasta configurada, com a instalação automática desligada.
 
-Cada seção é uma função com o mesmo nome, na ordem acima, que documenta as checagens que emite
-(``SP-1`` a ``SP-10``); ``main`` as chama uma a uma, e uma seção que quebra não cala as outras.
+Cada seção é uma função, na ordem acima (``identity``, ``project``, ``network``, ``machine``,
+``python_packages``, ``duckdb_section``), que documenta as checagens que emite (``SP-1`` a
+``SP-10``); ``main`` as chama uma a uma, e uma seção que quebra não cala as outras.
 
-Chamadas: ``sts:GetCallerIdentity`` e as que ``sagemaker_studio`` faz para ler o projeto. Nada é
-criado. Códigos de saída: 0 checagens ok, 1 alguma chamada falhou, 2 alguma checagem reprovou.
+Chamadas: ``sts:GetCallerIdentity`` e as que ``sagemaker_studio`` faz para ler o projeto. Códigos
+de saída: 0 checagens ok, 1 alguma chamada falhou, 2 alguma checagem reprovou.
 """
 
 from __future__ import annotations
@@ -57,15 +59,16 @@ from probelib import (  # noqa: E402
     tcp_probe,
 )
 
-# Os pacotes lidos em cada interpretador: os fixados pelo projeto (as dependências de execução e o grupo
-# `dev` de pyproject.toml), os que a suíte de estudo usa, os opcionais das etapas seguintes (ADBC para leitura
-# do Redshift, pdoc para a documentação) e os que o espaço já traz.
+# Os pacotes lidos em cada interpretador: os fixados pelo projeto (as dependências de execução e o
+# grupo dev de pyproject.toml), os que a suíte de estudo usa, os opcionais que o grupo dev não
+# traz (ADBC para leitura do Redshift, o pdoc do grupo docs) e os que o espaço já traz.
 PACKAGES = (
     "deltalake", "duckdb", "pyarrow", "boto3", "botocore", "redshift_connector", "sqlalchemy", "duckdb_engine",
     "sqlalchemy_redshift", "pandas", "sqlglot", "adbc_driver_postgresql", "pdoc", "sagemaker_studio", "awswrangler", "pytest",
 )
 
-# Os serviços cujo endpoint regional é resolvido na seção de rede: os que a biblioteca e os probes chamam.
+# Os serviços cujo endpoint regional é resolvido na seção de rede: os que a biblioteca e os probes
+# chamam.
 ENDPOINT_SERVICES = ("s3", "sts", "redshift", "redshift-serverless", "redshift-data", "glue", "athena", "kms", "secretsmanager", "sagemaker", "datazone")
 
 # As extensões do DuckDB que a biblioteca carrega; as duas últimas vêm embutidas no binário.
@@ -80,7 +83,8 @@ CREDENTIAL_VARIABLES = (
 # Os comandos que o trabalho no espaço usa; ausência é leitura, não falha.
 TOOLS = ("uv", "git", "gh", "aws", "duckdb")
 
-# Programa rodado no interpretador do sistema para ler as versões dos pacotes de lá; recebe os nomes como argumentos.
+# O programa que lê as versões dos pacotes no interpretador do sistema; recebe os nomes como
+# argumentos.
 VERSIONS_PROBE = r"""
 import importlib.metadata, json, sys
 out = {"version": sys.version.split()[0]}
@@ -97,7 +101,10 @@ print(json.dumps(out))
 
 
 def package_version(name: str) -> str | None:
-    """Versão instalada de ``name`` neste interpretador, aceitando o nome com ``_`` ou ``-``; ``None`` quando ausente."""
+    """A versão instalada de ``name`` neste interpretador, ou ``None`` quando ausente.
+
+    O nome vale com ``_`` ou com ``-``.
+    """
     for candidate in (name, name.replace("_", "-"), name.replace("-", "_")):
         try:
             return importlib.metadata.version(candidate)
@@ -107,13 +114,16 @@ def package_version(name: str) -> str | None:
 
 
 def pinned_requirements() -> dict[str, str | None]:
-    """Os pacotes das dependências de execução e do grupo ``dev`` de ``pyproject.toml`` pelo nome de importação,
-    com a versão quando ela é ``==``."""
+    """Os pacotes das dependências de execução e do grupo ``dev`` de ``pyproject.toml``.
+
+    A chave é o nome de importação e o valor, a versão quando ela é ``==``.
+    """
     with open(probelib.REPO_ROOT / "pyproject.toml", "rb") as handle:
         pyproject = tomllib.load(handle)
     entries = pyproject.get("project", {}).get("dependencies", []) + pyproject.get("dependency-groups", {}).get("dev", [])
 
-    # "deltalake==1.6.4" vira {"deltalake": "1.6.4"}; "boto3" vira {"boto3": None}; nomes com "-" viram "_".
+    # "deltalake==1.6.4" vira {"deltalake": "1.6.4"}; "boto3" vira {"boto3": None}; nomes com "-"
+    # viram "_".
     found: dict[str, str | None] = {}
     for entry in entries:
         match = re.match(r"\s*([A-Za-z0-9_.-]+)\s*(?:==\s*([^\s;,]+))?", entry) if isinstance(entry, str) else None
@@ -123,19 +133,24 @@ def pinned_requirements() -> dict[str, str | None]:
 
 
 def identity(report: Report) -> None:
-    """Seção 1, identidade e credenciais: ``SP-1`` (credenciais), ``SP-2`` (região) e ``SP-3`` (STS)."""
+    """Seção 1, identidade e credenciais.
+
+    Checagens: ``SP-1`` (credenciais), ``SP-2`` (região) e ``SP-3`` (STS).
+    """
     import boto3
 
     report.h1("Identidade e credenciais")
     report.table([["variável", "valor"], *environment_rows(CREDENTIAL_VARIABLES)])
 
+    # Os arquivos de configuração do boto3 em ~/.aws: só a existência, sem ler o conteúdo.
     aws_folder = Path.home() / ".aws"
     report.table([
         ["arquivo", "estado"],
         *[[f"~/.aws/{name}", "existe" if (aws_folder / name).is_file() else "ausente"] for name in ("config", "credentials")],
     ])
 
-    # SP-1: o boto3 encontra credenciais, e por qual método (variáveis, perfil, contêiner, instância).
+    # SP-1: o boto3 encontra credenciais, e por qual método (variáveis, perfil, contêiner ou
+    # instância).
     session = boto3.Session()
     credentials = report.call(
         "boto3.Session().get_credentials()",
@@ -145,8 +160,9 @@ def identity(report: Report) -> None:
     if credentials:
         report.ok("SP-1", "credenciais do boto3", f"método {credentials.method}")
 
-        # Credenciais temporárias expiram; o boto3 e o delta-rs renovam as do contêiner, e uma execução longa depende disso.
-        # O mesmo instante lido em duas execuções seguidas diz quanto dura cada emissão.
+        # As credenciais temporárias expiram; o boto3 e o delta-rs renovam as do contêiner, e uma
+        # execução longa depende disso. O mesmo instante lido em duas execuções seguidas diz quanto
+        # dura cada emissão.
         expiry = getattr(credentials, "_expiry_time", None)
         if expiry and getattr(expiry, "tzinfo", None):
             minutes = (expiry - datetime.now(timezone.utc)).total_seconds() / 60
@@ -167,12 +183,14 @@ def identity(report: Report) -> None:
     else:
         report.fail("SP-2", "região", "nenhuma variável nem perfil a define")
 
-    # Os dois endereços link-local são leituras: o espaço bloqueia o IMDS, e o endpoint do contêiner só existe com a variável.
+    # Os dois endereços link-local são leituras: o espaço bloqueia o IMDS, e o endpoint do contêiner
+    # só existe com a variável.
     if os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"):
         report.call("tcp 169.254.170.2:80 (endpoint de credenciais do contêiner)", lambda: tcp_probe("169.254.170.2", 80, 2), render=str)
     report.call("tcp 169.254.169.254:80 (IMDS)", lambda: tcp_probe("169.254.169.254", 80, 2), render=str)
 
-    # SP-3: o STS responde com a identidade; sem resposta é leitura, porque o destino pode não ter o endpoint.
+    # SP-3: o STS responde com a identidade; a falta de resposta é leitura, porque o destino pode
+    # não ter o endpoint.
     caller = report.call(
         "sts.get_caller_identity()",
         lambda: session.client("sts", region_name=resolved, config=short_config(5, 10, 1)).get_caller_identity(),
@@ -184,10 +202,14 @@ def identity(report: Report) -> None:
 
 
 def project(report: Report) -> None:
-    """Seção 2, o projeto do SageMaker Unified Studio: ``SP-4`` (projeto lido) e ``SP-5`` (conexão Redshift)."""
+    """Seção 2, o projeto do SageMaker Unified Studio.
+
+    Checagens: ``SP-4`` (projeto lido) e ``SP-5`` (conexão Redshift).
+    """
     report.h1("Projeto do SageMaker Unified Studio")
 
-    # A leitura roda sagemaker_studio no primeiro interpretador que tem o pacote (probelib.PROJECT_PROBE).
+    # A leitura roda sagemaker_studio no primeiro interpretador que tem o pacote
+    # (probelib.PROJECT_PROBE).
     result = report.call(
         "sagemaker_studio.Project() (neste interpretador ou no do sistema)",
         probelib.project_snapshot,
@@ -212,7 +234,8 @@ def project(report: Report) -> None:
         if "REDSHIFT" in str(item.get("type", "")).upper():
             report.line(f"conexão {item.get('name')}:\n{pretty(item, limit=80)}\n")
 
-    # SP-4: o projeto foi lido; SP-5: a conexão Redshift do projeto, o atalho para as variáveis da etapa 5.
+    # SP-4: o projeto foi lido; SP-5: a conexão Redshift do projeto, o atalho para as variáveis da
+    # etapa 5.
     summary = ", ".join(f"{item.get('name')} ({item.get('type')})" for item in connections) or "nenhuma"
     report.ok("SP-4", "projeto do SageMaker", f"{data.get('name')}; conexões: {summary}")
 
@@ -224,11 +247,15 @@ def project(report: Report) -> None:
 
 
 def network(report: Report) -> None:
-    """Seção 3, rede: proxy, DNS, ``SP-6`` (TCP até o S3 regional) e ``SP-7`` (internet, como leitura)."""
+    """Seção 3, rede: proxy, DNS, ``SP-6`` (TCP até o S3 regional) e ``SP-7`` (internet).
+
+    ``SP-7`` é leitura, nunca reprovação.
+    """
     report.h1("Rede")
     report.table([["variável", "valor"], *environment_rows(probelib.PROXY_VARIABLES)])
 
-    # DNS: IP privado indica endpoint VPC de interface; pypi.org e github.com dizem se há DNS para a internet.
+    # O DNS: um IP privado indica endpoint VPC de interface; pypi.org e github.com dizem se há DNS
+    # para a internet.
     resolved = region()
     names = [f"{service}.{resolved}.amazonaws.com" for service in ENDPOINT_SERVICES] if resolved else []
     names += ["s3.amazonaws.com", "pypi.org", "github.com"]
@@ -268,9 +295,10 @@ def network(report: Report) -> None:
 
 
 def mount_state(path: Path, mounts: str = "/proc/mounts") -> str:
-    """``montada`` com o tipo e o modo (``rw`` ou ``ro``) de ``/proc/mounts``, ou ``existe, sem montagem``.
+    """O estado de ``path``: ``ausente``, ``montada`` com tipo e modo, ou ``existe, sem montagem``.
 
-    Segue o link simbólico antes de perguntar, porque ``os.path.ismount`` responde False a um link.
+    O tipo e o modo (``rw`` ou ``ro``) vêm de ``/proc/mounts``. A função segue o link simbólico
+    antes de perguntar, porque ``os.path.ismount`` responde False a um link.
     """
     if not path.exists():
         return "ausente"
@@ -278,7 +306,8 @@ def mount_state(path: Path, mounts: str = "/proc/mounts") -> str:
     real = Path(os.path.realpath(path))
     origin = f" (link para {real})" if real != path else ""
 
-    # Cada linha de /proc/mounts: dispositivo, ponto de montagem, tipo, opções separadas por vírgula.
+    # Cada linha de /proc/mounts traz dispositivo, ponto de montagem, tipo e as opções separadas
+    # por vírgula.
     kinds: dict[str, str] = {}
     try:
         with open(mounts, encoding="utf-8") as handle:
@@ -298,16 +327,22 @@ def mount_state(path: Path, mounts: str = "/proc/mounts") -> str:
 
 
 def machine(report: Report) -> None:
-    """Seção 4, a máquina: CPUs, memória, disco, limite de arquivos abertos, ``~/shared`` e comandos; só leituras."""
+    """Seção 4, a máquina, só com leituras e sem checagem.
+
+    A tabela traz as CPUs, a memória, o disco, o limite de arquivos abertos, ``~/shared`` e os
+    comandos.
+    """
     report.h1("Máquina")
     rows: list[list[object]] = [["item", "valor"], ["plataforma", platform.platform()], ["cpus", os.cpu_count()]]
 
+    # A memória física: o número de páginas vezes o tamanho de cada uma.
     try:
         rows.append(["memória", f"{os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 2**30:.1f} GiB"])
     except (ValueError, OSError, AttributeError):
         rows.append(["memória", "não lida"])
 
-    # O sandbox do DuckDB e a pasta de transbordo ficam na pasta temporária; o espaço livre dela limita a execução.
+    # O sandbox do DuckDB e a pasta de transbordo ficam na pasta temporária; o espaço livre dela
+    # limita a execução.
     disks = (
         ("repositório", probelib.REPO_ROOT),
         ("HOME", Path.home()),
@@ -318,7 +353,8 @@ def machine(report: Report) -> None:
         usage = shutil.disk_usage(path)
         rows.append([f"disco livre em {label}", f"{usage.free / 2**30:.1f} GiB de {usage.total / 2**30:.1f} GiB ({path})"])
 
-    # O DuckDB abre um descritor por arquivo Parquet lido; um limite baixo derruba uma consulta grande.
+    # O DuckDB abre um descritor por arquivo Parquet lido; um limite baixo derruba uma consulta
+    # grande.
     try:
         import resource
 
@@ -334,10 +370,15 @@ def machine(report: Report) -> None:
 
 
 def python_packages(report: Report) -> None:
-    """Seção 5, Python e pacotes: ``SP-8`` (Python 3.13) e ``SP-9`` (as dependências de execução e o grupo ``dev`` de ``pyproject.toml``)."""
+    """Seção 5, Python e pacotes: ``SP-8`` e ``SP-9``.
+
+    ``SP-8`` confere o Python 3.13; ``SP-9``, as dependências de execução e o grupo ``dev`` de
+    ``pyproject.toml``.
+    """
     report.h1("Python e pacotes")
 
-    # Uma coluna por interpretador: este, e cada candidato do sistema lido por subprocesso (VERSIONS_PROBE).
+    # Uma coluna por interpretador: este, e cada candidato do sistema lido por subprocesso
+    # (VERSIONS_PROBE).
     columns: list[tuple[str, dict[str, str | None]]] = []
     here: dict[str, str | None] = {"version": platform.python_version()}
     for name in PACKAGES:
@@ -364,8 +405,8 @@ def python_packages(report: Report) -> None:
     else:
         report.fail("SP-8", "Python 3.13 neste interpretador", f"{here['version']}: o projeto fixa 3.13")
 
-    # SP-9: as dependências de execução e o grupo dev de pyproject.toml são a referência: cada pacote presente, e
-    # na versão fixada quando ela é ``==``.
+    # SP-9: as dependências de execução e o grupo dev de pyproject.toml são a referência: cada
+    # pacote presente, e na versão fixada quando ela é ==.
     requirements = pinned_requirements()
     installed = {name: here[name] if name in here else package_version(name) for name in requirements}
     wrong = [
@@ -380,28 +421,36 @@ def python_packages(report: Report) -> None:
 
 
 def duckdb_section(report: Report) -> None:
-    """Seção 6, DuckDB: configuração da conexão, o proxy separado das credenciais e ``SP-10`` (as extensões carregam da pasta configurada)."""
+    """Seção 6, DuckDB: a configuração da conexão, o proxy e ``SP-10`` (as extensões carregam).
+
+    O proxy entra com o endereço separado das credenciais, e as extensões carregam da pasta
+    configurada.
+    """
     import duckdb
 
     report.h1("DuckDB")
 
-    # A pasta de extensões é a mesma regra da suíte: SERIALIZE_DB_DUCKDB_EXTENSIONS, senão .duckdb/ do repositório.
+    # A pasta de extensões segue a regra da suíte: SERIALIZE_DB_DUCKDB_EXTENSIONS, senão .duckdb/
+    # do repositório.
     local = probelib.REPO_ROOT / ".duckdb"
     directory = os.environ.get("SERIALIZE_DB_DUCKDB_EXTENSIONS") or (str(local) if local.is_dir() else None)
     report.value("DUCKDB_EXTENSION_DIRECTORY", directory or "(padrão do DuckDB)")
 
-    # A instalação automática fica desligada: o LOAD de uma extensão conhecida baixaria a extensão sem aviso.
+    # A instalação automática fica desligada: o LOAD de uma extensão conhecida baixaria a extensão
+    # sem aviso.
     config: dict[str, object] = {"autoinstall_known_extensions": False, "autoload_known_extensions": False}
     if directory:
         config["extension_directory"] = directory
     connection = duckdb.connect(config=config)
 
-    # O DuckDB recusa o endereço de proxy com as credenciais embutidas; aqui elas vão em configurações à parte.
+    # O DuckDB recusa o endereço de proxy com as credenciais embutidas; aqui elas vão em
+    # configurações à parte.
     proxy = probelib.duckdb_proxy()
     for setting, value in proxy.settings.items():
         connection.execute(f"SET {setting} = ?", [value])
     report.value("DUCKDB_HTTP_PROXY", proxy.reading)
 
+    # A versão, a plataforma e as configurações que a conexão aplicou.
     rows: list[list[object]] = [["item", "valor"], ["versão", duckdb.__version__], ["plataforma", connection.execute("PRAGMA platform").fetchone()[0]]]
     for setting in ("threads", "memory_limit", "temp_directory", "extension_directory", "autoinstall_known_extensions", "autoload_known_extensions", "http_proxy"):
         rows.append([setting, connection.execute(f"SELECT current_setting('{setting}')").fetchone()[0]])
@@ -420,6 +469,7 @@ def duckdb_section(report: Report) -> None:
     report.table(rows)
 
     def render_extensions(found: list[tuple]) -> str:
+        """As extensões como tabela: nome, instalada, carregada, caminho e versão."""
         return probelib.tabulate([["extensão", "instalada", "carregada", "caminho", "versão"], *[[str(cell) for cell in row] for row in found]])
 
     report.call(

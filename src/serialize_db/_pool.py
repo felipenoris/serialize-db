@@ -1,4 +1,4 @@
-"""Privado: o pool de tarefas por tabela que a execução e a publicação usam.
+"""Privado: o pool de tarefas por tabela que a execução, a publicação e o leitor usam.
 
 Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em curso
 terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de cada tarefa
@@ -86,6 +86,7 @@ def run_in_pool(tasks: list[Task], max_workers: int) -> dict[str, object]:
             state.collect()
             state.start(waiting)
     outcomes = _outcomes_of(state.finished)
+    # As tarefas que sobraram em waiting nunca começaram e entram na nota como canceladas.
     for name, _ in waiting:
         outcomes[name] = "cancelada"
     if state.failure is not None:

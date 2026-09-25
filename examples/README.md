@@ -60,11 +60,11 @@ os apaga.
 
 ## Acrescentar um exemplo
 
-O script fica como foi executado, com os valores literais que funcionaram, e ganha um docstring em
+O script fica como foi executado, com os valores literais que funcionaram, e ganha uma docstring em
 português dizendo o que ele prova, quando rodou e onde o resultado está registrado. Um exemplo que
 contradiz um documento dispara a revisão desse documento na mesma unidade de trabalho.
 
-Um script ainda não executado entra só como próximo experimento, dito no docstring e numa seção
+Um script ainda não executado entra só como próximo experimento, dito na docstring e numa seção
 própria fora da tabela, e com uma pergunta em aberto que ele fecha; sem isso, ele não pertence a
 esta pasta, porque o probe e a suíte repetem daqui o que foi executado, não o que foi imaginado.
 Depois de rodar, ele passa para a tabela com o que mostrou.

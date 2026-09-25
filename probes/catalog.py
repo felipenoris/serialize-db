@@ -8,21 +8,21 @@ Uso:
 
     .venv/bin/python probes/catalog.py
 
-Só leitura. O relatório sai no terminal e em ``probes/output/catalog_<data-hora>.txt``. Seções:
+O probe só lê. O relatório sai no terminal e em ``probes/output/catalog_<data-hora>.txt``. Seções:
 
 1. Rede: DNS dos endpoints regionais (IP privado indica endpoint VPC de interface com DNS privado).
 2. Glue: bancos, tabelas com formato (Iceberg, Parquet, Delta) e catálogos federados (Lakehouse).
-3. Athena: workgroups e o local de resultados do primário.
+3. Athena: workgroups e o local de resultados dos primeiros.
 4. Lake Formation: locais registrados.
 5. S3 Tables: table buckets.
 
 Cada seção é uma função, na ordem acima, que documenta as checagens que emite (``CT-1`` a
 ``CT-6``); ``main`` as chama uma a uma, e uma seção que quebra não cala as outras. Uma negação é
-leitura (``note``): o papel do projeto não ter o serviço é a resposta esperada hoje.
+leitura (``note``): sem o serviço habilitado para o papel do projeto, ela é a resposta esperada.
 
 Chamadas: ``glue:GetDatabases``, ``GetTables``, ``GetCatalogs``; ``athena:ListWorkGroups``,
-``GetWorkGroup``; ``lakeformation:ListResources``; ``s3tables:ListTableBuckets``. Nada é criado.
-Códigos de saída: 0 checagens ok, 1 alguma chamada falhou, 2 alguma checagem reprovou.
+``GetWorkGroup``; ``lakeformation:ListResources``; ``s3tables:ListTableBuckets``. Códigos de saída:
+0 checagens ok, 1 alguma chamada falhou, 2 alguma checagem reprovou.
 """
 
 from __future__ import annotations
@@ -57,7 +57,11 @@ def network(report: Report, resolved: str | None) -> None:
 
 
 def table_format(table: dict) -> str:
-    """O formato de uma tabela do Glue: Iceberg, Delta ou Parquet pelos parâmetros e pelo descritor; senão a classificação."""
+    """O formato de uma tabela do Glue: Iceberg, Delta ou Parquet, ou então a classificação.
+
+    Iceberg, Delta e Parquet saem dos parâmetros e do descritor de armazenamento; sem nenhum deles,
+    vale a classificação, o tipo da tabela ou ``-``.
+    """
     parameters = table.get("Parameters", {})
     descriptor = table.get("StorageDescriptor", {})
     if parameters.get("table_type", "").upper() == "ICEBERG":
@@ -70,7 +74,10 @@ def table_format(table: dict) -> str:
 
 
 def glue(report: Report, resolved: str | None) -> None:
-    """Seção 2, Glue: ``CT-1`` (responde), ``CT-2`` (tabelas por formato) e ``CT-6`` (catálogos federados)."""
+    """Seção 2, Glue.
+
+    Checagens: ``CT-1`` (responde), ``CT-2`` (tabelas por formato) e ``CT-6`` (catálogos federados).
+    """
     import boto3
 
     report.h1("Glue")
@@ -88,7 +95,8 @@ def glue(report: Report, resolved: str | None) -> None:
     else:
         report.ok("CT-1", "Glue", f"respondeu com {len(databases)} banco(s)")
 
-        # CT-2: as tabelas dos primeiros bancos, com o formato; uma tabela Iceberg é o gatilho de reavaliação.
+        # CT-2: as tabelas dos primeiros bancos, com o formato; uma tabela Iceberg é o gatilho de
+        # reavaliação.
         formats: dict[str, int] = {}
         rows = [["banco", "tabela", "formato", "local"]]
         for database in databases[:MAX_DATABASES]:
@@ -124,6 +132,7 @@ def athena(report: Report, resolved: str | None) -> None:
     report.h1("Athena")
     client = boto3.client("athena", region_name=resolved, config=short_config())
 
+    # CT-3: os workgroups visíveis ao papel; a negação é leitura e encerra a seção.
     groups = report.call(
         "athena.list_work_groups()",
         lambda: client.list_work_groups().get("WorkGroups", []),
@@ -134,8 +143,14 @@ def athena(report: Report, resolved: str | None) -> None:
         return
     report.ok("CT-3", "Athena", f"respondeu com {len(groups)} workgroup(s)")
 
-    # O local de resultados de cada workgroup diz onde uma consulta do Athena gravaria; o GetWorkGroup pode ser negado.
+    # O local de resultados de cada workgroup diz onde uma consulta do Athena gravaria; o
+    # GetWorkGroup pode ser negado.
     def render_group(found: dict) -> str:
+        """Os campos da configuração do workgroup que o relatório mostra, em JSON.
+
+        São ``ResultConfiguration``, ``EnforceWorkGroupConfiguration``, ``EngineVersion`` e
+        ``BytesScannedCutoffPerQuery``.
+        """
         configuration = found.get("Configuration", {})
         return pretty({key: configuration.get(key) for key in ("ResultConfiguration", "EnforceWorkGroupConfiguration", "EngineVersion", "BytesScannedCutoffPerQuery")})
 
@@ -169,7 +184,10 @@ def lake_formation(report: Report, resolved: str | None) -> None:
 
 
 def s3_tables(report: Report, resolved: str | None) -> None:
-    """Seção 5, S3 Tables: ``CT-5``, os table buckets, ou a negação; um table bucket é o gatilho de reavaliação."""
+    """Seção 5, S3 Tables: ``CT-5``, os table buckets, ou a negação.
+
+    Um table bucket é o gatilho de reavaliação.
+    """
     import boto3
 
     report.h1("S3 Tables")

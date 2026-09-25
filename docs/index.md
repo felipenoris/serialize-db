@@ -9,15 +9,17 @@ argumentos, o retorno e as exceções de cada função, está no menu: `serializ
 `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
 `serialize_db.engine` (com os motores `serialize_db.engine.duckdb` e
 `serialize_db.engine.redshift`), `serialize_db.resources`, `serialize_db.execution`,
-`serialize_db.load`, `serialize_db.publication`, `serialize_db.errors` e `serialize_db.cli`, com o
-runbook da operação e as opções de cada subcomando da linha de comando.
+`serialize_db.load`, `serialize_db.publication`, `serialize_db.reader`, `serialize_db.errors` e
+`serialize_db.cli`, com o runbook da operação e as opções de cada subcomando da linha de comando.
 
 ## Como o pacote funciona
 
 - **O contrato é o modelo.** O cliente declara as tabelas em SQLAlchemy (`DeclarativeBase`,
-  `mapped_column`), com comentários de documentação opcionais nas tabelas e colunas e as opções físicas em
-  `Table.info["serialize_db"]`. O pacote não contém modelo algum; ele recebe `Base.metadata`.
-- **A fonte da verdade são as tabelas Delta Lake**, em disco local ou no S3. O esquema Delta de cada tabela sai do modelo.
+  `mapped_column`), com comentários de documentação opcionais nas tabelas e colunas e as opções
+  físicas em `Table.info["serialize_db"]`. O pacote não contém modelo algum; ele recebe
+  `Base.metadata`.
+- **A fonte da verdade são as tabelas Delta Lake**, em disco local ou no S3. O esquema Delta de cada
+  tabela sai do modelo.
 - **O DuckDB e o Redshift são sandboxes**: cada execução cria as tabelas de que precisa a partir do
   DDL do modelo, carrega os dados, roda o pipeline, audita e publica. O DDL de cada motor sai do
   modelo pela tabela de tipos abaixo, sem os dialetos do SQLAlchemy.
@@ -33,7 +35,7 @@ runbook da operação e as opções de cada subcomando da linha de comando.
 - **Todo identificador que a biblioteca emite vai entre aspas duplas**: nomes de coluna como `to` e
   `timestamp` são palavras reservadas do DuckDB e do Redshift.
 
-O que já existe são o módulo de esquema, `serialize_db.schema`, o de texto SQL,
+O pacote tem o módulo de esquema, `serialize_db.schema`, o de texto SQL,
 `serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`, a camada
 de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3, a auditoria,
 `serialize_db.audit`, os dois motores, `serialize_db.engine.duckdb` e
@@ -206,13 +208,13 @@ documento JSON acima de 65.535 bytes, o teto do Redshift. As que o cast seguro a
 texto do PyArrow: nulo em coluna `NOT NULL`, escala perdida num decimal, inteiro que não cabe na
 precisão de um `Numeric`, nanossegundo não nulo num timestamp, estouro de inteiro e um tipo sem
 conversão para o do contrato (`struct` numa coluna `Integer`). O lote sem coluna alguma do
-contrato é recusado com a lista das colunas que chegaram. O texto é medido depois da conversão para `string`, então o
-`large_string` do `str` do pandas 3, o `string_view` e o dicionário da `category` passam pela mesma
-medida. Um `double` entra numa coluna `Numeric` só quando `round` o devolve igual; numa coluna
-`Double` ele entra como chega. O fuso é recusado porque tirá-lo ou pô-lo muda a hora gravada, e
-cada camada o faz de um jeito: o mesmo 12:00 UTC vira 12:00 no `cast` do PyArrow e 09:00 no `CAST`
-do DuckDB com a sessão em `America/Sao_Paulo`. O cliente converte antes de chamar, no pandas com
-`serie.dt.tz_convert("America/Sao_Paulo").dt.tz_localize(None)`, ou no SQL do sandbox. Um
+contrato é recusado com a lista das colunas que chegaram. O texto é medido depois da conversão para
+`string`, então o `large_string` do `str` do pandas 3, o `string_view` e o dicionário da `category`
+passam pela mesma medida. Um `double` entra numa coluna `Numeric` só quando `round` o devolve igual;
+numa coluna `Double` ele entra como chega. O fuso é recusado porque tirá-lo ou pô-lo muda a hora
+gravada, e cada camada o faz de um jeito: o mesmo 12:00 UTC vira 12:00 no `cast` do PyArrow e 09:00
+no `CAST` do DuckDB com a sessão em `America/Sao_Paulo`. O cliente converte antes de chamar, no
+pandas com `serie.dt.tz_convert("America/Sao_Paulo").dt.tz_localize(None)`, ou no SQL do sandbox. Um
 `timestamp` de outro fuso numa coluna com fuso entra no mesmo instante, em UTC.
 
 ### Versionar os arquivos de esquema
@@ -226,10 +228,10 @@ serialize-db schema write --metadata pipeline.models:Base.metadata schema/
 serialize-db schema check --metadata pipeline.models:Base.metadata schema/
 ```
 
-`--metadata` recebe `modulo:atributo`, o caminho importável do `MetaData`. O `check` sai com 0 quando
-os arquivos estão atualizados, 1 com o diff impresso quando há diferença, e 2 no erro de uso. Em
-Python, `serialize_db.schema.write_schema_files` e `serialize_db.schema.check_schema_files` fazem o
-mesmo.
+`--metadata` recebe `modulo:atributo`, o caminho importável do `MetaData`. O `check` sai com 0
+quando os arquivos estão atualizados, 1 com o diff impresso quando há diferença, e 2 no erro de uso.
+Em Python, `serialize_db.schema.write_schema_files` e `serialize_db.schema.check_schema_files` fazem
+o mesmo.
 
 ### Gerar o texto SQL de cada motor
 
@@ -263,10 +265,10 @@ WHERE "{prefix}cad_operacoes"."data_str" = :data_str AND "{prefix}cad_operacoes"
 ```
 
 Um `bindparam` com valor sai como constante, e um nome de parâmetro fora de `[a-z_][a-z0-9_]*` é
-recusado com `serialize_db.errors.SqlError`. Na execução, `serialize_db.sql.bind` reescreve o marcador para o estilo
-do motor (`$nome` no DuckDB, `:nome` no `redshift_connector` com `paramstyle = "named"`) e confere
-o dicionário de parâmetros; toda região citada passa intacta, e um texto que ainda traz o sentinela
-é recusado:
+recusado com `serialize_db.errors.SqlError`. Na execução, `serialize_db.sql.bind` reescreve o
+marcador para o estilo do motor (`$nome` no DuckDB, `:nome` no `redshift_connector` com
+`paramstyle = "named"`) e confere o dicionário de parâmetros; toda região citada passa intacta, e
+um texto que ainda traz o sentinela é recusado:
 
 ```python
 import duckdb
@@ -346,7 +348,7 @@ a tabela, a partição e a coluna, e a chamada seguinte recomeça dela; um valor
 o tipo do contrato, ou uma coluna do contrato ausente dos arquivos, falha no `COPY` com o erro do
 DuckDB, também sem commit. Na linha de comando:
 
-```
+```shell
 serialize-db load --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --source s3://bucket/projeto/db_projetado
 ```
@@ -525,9 +527,9 @@ Redshift, e `--tables` deixa a tabela de fora.
 Sem a tabela de controle, a publicação para com `serialize_db.errors.PublicationError` antes de
 qualquer escrita; duas publicações da mesma tabela ao mesmo tempo terminam com a segunda em
 `serialize_db.errors.ExecutionConflict`, sem repetição; uma coluna anulável nova no modelo entra
-na tabela publicada por `ALTER TABLE ... ADD COLUMN`, e um diff destrutivo (coluna removida, tipo
-ou largura de `VARCHAR(n)` que mudou) despublica a tabela e a recria inteira na publicação
-seguinte.
+na tabela publicada por `ALTER TABLE ... ADD COLUMN`, e um diff destrutivo (coluna removida,
+coluna `NOT NULL` nova, tipo ou largura de `VARCHAR(n)` que mudou) despublica a tabela e a recria
+inteira na mesma publicação.
 
 ### Ler a base com o modelo
 
@@ -658,6 +660,6 @@ em cada motor. Um tipo fora desta tabela é recusado por `check_models` e por `a
 | `Float`, `LargeBinary`, `ARRAY`, `Interval` | | | | | Fora do contrato. |
 
 Cada campo Arrow leva a nulidade da coluna, o comentário em `metadata` e `PARQUET:field_id` pela
-posição; o esquema leva o nome da tabela em `serialize_db_table`. O esquema Delta é derivado do Arrow
-pelo delta-rs, com os comentários preservados e sem o `PARQUET:field_id`: com ele no esquema Delta, o
-`delta_scan` do DuckDB lê toda coluna como nula.
+posição; o esquema leva o nome da tabela em `serialize_db_table`. O esquema Delta é derivado do
+Arrow pelo delta-rs, com os comentários preservados e sem o `PARQUET:field_id`: com ele no esquema
+Delta, o `delta_scan` do DuckDB lê toda coluna como nula.

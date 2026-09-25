@@ -331,11 +331,13 @@ def _check_partition(connection: duckdb.DuckDBPyConnection, query: str, table: s
     options = table_options(table)
     measures = ["count(*)"]
     labels = []
+    # A coluna de partição igual à data de origem em toda linha, quando o modelo declara a origem.
     if options.partition_by and options.partition_source:
         partition = quoted(options.partition_by)
         source = quoted(options.partition_source)
         measures.append(f"count(*) FILTER (WHERE {partition} <> strftime({source}, '%Y-%m-%d'))")
         labels.append(f"linhas com {options.partition_source} diferente de {value}")
+    # Os nulos nas colunas NOT NULL e os textos acima de String(n), coluna a coluna.
     for column in table.columns:
         name = quoted(column.name)
         if not column.nullable and column.name != options.partition_by:
@@ -344,6 +346,7 @@ def _check_partition(connection: duckdb.DuckDBPyConnection, query: str, table: s
         if isinstance(column.type, sa.String) and column.type.length:
             measures.append(f"count(*) FILTER (WHERE strlen({name}) > {column.type.length})")
             labels.append(f"textos acima de String({column.type.length}) em {column.name}")
+    # Os não finitos de cada coluna Double, uma leitura que não reprova a partição.
     doubles = double_columns(table)
     for name in doubles:
         measures.append(f"count(*) FILTER (WHERE NOT isfinite({quoted(name)}))")
@@ -458,6 +461,7 @@ def initial_load(db: Database, table: sa.Table, source: str,
     uri = db.uri(table)
     storage = db.storage
     dt = delta.create_table(uri, table, storage)
+    # As partições pedidas que a origem tem e o log ainda não.
     found, _ = discover_partitions(source, table)
     already = set(delta.partition_values(dt, options.partition_by))
     log.info("%s: %d partições na origem, %d no log", table.name, len(found), len(already))
@@ -465,8 +469,10 @@ def initial_load(db: Database, table: sa.Table, source: str,
     for value in _wanted_values(found, partitions):
         if value not in already:
             missing.append(value)
+    # Um execution_id por chamada, no nome dos arquivos e nos metadados de cada commit.
     execution_id = f"carga-{uuid.uuid4().hex[:8]}"
     metadata = delta.commit_metadata(execution_id, {})
+    # O motor da chamada, com o secret da origem no S3, grava as partições em série, um commit cada.
     with DuckDBEngine(config or DuckDBConfig(), execution_id, storage) as engine:
         with engine.session() as connection:
             _source_setup(connection, db, source)
@@ -573,9 +579,11 @@ def _conversions(source: str, table: sa.Table) -> tuple[str, ...]:
     if not files:
         return ()
     footer = pq.ParquetFile(storage.open_input_file(files[0]))
+    # O tipo físico de cada coluna, que nomeia o timestamp INT96 na frase da conversão.
     physical = {}
     for index in range(len(footer.schema)):
         physical[footer.schema.column(index).name] = footer.schema.column(index).physical_type
+    # As colunas do contrato cujo tipo no arquivo difere do tipo do contrato.
     contract = arrow_schema(table)
     found = []
     for field in footer.schema_arrow:
@@ -616,12 +624,14 @@ def load_report(db: Database, table: sa.Table, source: str,
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
     """
     options = table_options(table)
+    # As colunas somadas são as Numeric, as Double inclusive, porque Double deriva de Numeric.
     sums = [column.name for column in table.columns if isinstance(column.type, sa.Numeric)]
     doubles = double_columns(table)
     _, skipped = discover_partitions(source, table)
     folder = Storage.for_uri(source).uri_of(table.name)
     execution_id = f"relatorio-{uuid.uuid4().hex[:8]}"
     source_relation = _source_relation(folder, options.partition_by)
+    # A origem e o Delta agregados na mesma sessão, com o secret da origem quando ela está no S3.
     with DuckDBEngine(config or DuckDBConfig(), execution_id, db.storage) as engine:
         with engine.session() as connection:
             _source_setup(connection, db, source)

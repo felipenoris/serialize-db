@@ -20,7 +20,7 @@ Exemplo, com o motor DuckDB:
     with DuckDBEngine(DuckDBConfig(), "exec-2026-09-05", storage) as engine:
         engine.ingest(Operacao.__table__, uri, version, partitions=["2026-08-31"])
         with engine.stream(sa.select(Operacao)) as stream, \\
-                engine.loader(Projetada.__table__) as loader:
+                engine.loader(Projetado.__table__) as loader:
             for batch in stream:
                 loader.write(project(batch))
 """

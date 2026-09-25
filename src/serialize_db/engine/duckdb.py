@@ -1,14 +1,14 @@
 """O motor DuckDB: o sandbox da execução num banco em arquivo, com uma sessão sob um lock.
 
-O banco nasce em ``<temp_directory>/<execution_id>.duckdb``, e ``cleanup`` o apaga com a pasta de
-transbordo. O motor guarda uma conexão, a sessão da execução, e um ``threading.RLock`` que toda
-primitiva toma pelo tempo do seu comando: uma tabela temporária que o pipeline crie vale para os
-comandos seguintes, de qualquer thread, e nenhuma primitiva espera pelo código do cliente com o
-lock tomado. ``session()`` dá a conexão crua ao bloco, com o lock tomado e reentrante na mesma
-thread; ``new_session()`` abre um motor sobre ``cursor()`` da conexão, uma sessão a mais sobre o
-mesmo banco, com o seu lock. Os limites da instância saem do ambiente na abertura, quando a
-configuração os omite (``environment_limits``): ``threads`` são as CPUs que o processo pode usar, e
-``memory_limit`` é metade da memória que ele ainda pode usar.
+O banco nasce em ``temp_directory``, num arquivo de nome ``<execution_id>`` e extensão ``duckdb``, e
+``cleanup`` o apaga com a pasta de transbordo. O motor guarda uma conexão, a sessão da execução, e
+um ``threading.RLock`` que toda primitiva toma pelo tempo do seu comando: uma tabela temporária que
+o pipeline crie vale para os comandos seguintes, de qualquer thread, e nenhuma primitiva espera pelo
+código do cliente com o lock tomado. ``session()`` dá a conexão crua ao bloco, com o lock tomado e
+reentrante na mesma thread; ``new_session()`` abre um motor sobre ``cursor()`` da conexão, uma
+sessão a mais sobre o mesmo banco, com o seu lock. Os limites da instância saem do ambiente na
+abertura, quando a configuração os omite (``environment_limits``): ``threads`` são as CPUs que o
+processo pode usar, e ``memory_limit`` é metade da memória que ele ainda pode usar.
 
 As primitivas:
 
@@ -101,6 +101,7 @@ _MEMORY_FRACTION = 0.5
 # cliente atrasado, o pico do processo ficou em 297 MB, contra 522 MB com 256 MiB (2026-09-23).
 _MEMORY_BUDGET = 64 * 2**20
 
+# O fim da fila do loader: sem falha, o close o põe depois do último lote.
 _END = object()
 
 
@@ -183,7 +184,7 @@ def _announce_spilled(spool: _Spool) -> None:
 
 @dataclasses.dataclass
 class _SpillFile:
-    """O arquivo de transbordo de um stream, aberto no primeiro lote que não cabe no orçamento."""
+    """O arquivo de transbordo de um stream ou de um loader."""
 
     path: str
     sink: pa.OSFile | None = None
@@ -227,8 +228,8 @@ def _produce(engine: DuckDBEngine, text: str, arguments: Sequence[object] | Mapp
     """
     with engine.session() as connection:
         try:
-            # Um close que chegou antes da consulta: o interrupt, com a conexão ociosa, não a
-            # alcançaria.
+            # O stop do __del__ de uma construção que falhou chega antes da consulta, que o
+            # interrupt, com a conexão ociosa, não alcançaria.
             if stop.is_set():
                 return
             reader = connection.execute(text, arguments).to_arrow_reader(batch_size)
@@ -282,6 +283,7 @@ class DuckDBStream:
         spill = _SpillFile(self._path)
         arguments_of_produce = (engine, text, arguments, batch_size, spill, budget, self._stop,
                                 self._spool)
+        # Uma thread auxiliar esperaria o lock, que o bloco de session() desta thread segura.
         if engine.holds_session():
             _produce(*arguments_of_produce)
         else:
@@ -451,7 +453,7 @@ class DuckDBLoader:
 
     @property
     def error(self) -> BaseException | None:
-        """O erro da thread auxiliar ou o lote recusado, quando houve."""
+        """O erro da thread auxiliar ou o do lote recusado, quando houve."""
         return self._refused or self._outcome["error"]
 
     def _put(self, item: object) -> bool:
@@ -524,6 +526,7 @@ class DuckDBLoader:
                 self._create_and_insert()
         finally:
             Path(self._spill.path).unlink(missing_ok=True)
+        # A exceção do cliente sobe pelo with; sem ela, sobe o erro da thread ou do lote recusado.
         if error is None and self.error is not None:
             raise self.error
 
@@ -571,8 +574,8 @@ class DuckDBConfig:
     """
 
     database: str | None = None
-    """``None``: ``<temp_directory>/<execution_id>.duckdb``, apagado em ``cleanup``;
-    ``":memory:"`` só por pedido; outro caminho é usado e mantido."""
+    """``None``: o arquivo de nome ``<execution_id>`` e extensão ``duckdb`` em ``temp_directory``,
+    apagado em ``cleanup``; ``":memory:"`` só por pedido; outro caminho é usado e mantido."""
     threads: int | None = None
     """As threads da instância; ``None`` são as CPUs que o processo pode usar na abertura
     (``environment_limits``)."""
@@ -784,7 +787,7 @@ class DuckDBEngine:
         .. code-block:: python
 
             engine.partition_filter(Lancamento.__table__, ["2026-08-31", "2026-07-31"])
-            # ' WHERE "data_base_str" BETWEEN \'2026-07-31\' AND \'2026-08-31\' AND ...'
+            # ' WHERE "data_base_str" BETWEEN \\'2026-07-31\\' AND \\'2026-08-31\\' AND ...'
 
         :param table: a tabela do modelo.
         :param partitions: os valores de partição, pela regra da partição; ``None`` dá o texto
@@ -851,7 +854,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            previous = engine.published(Projetada.__table__, uri, 57)
+            previous = engine.published(Projetado.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
@@ -942,7 +945,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            with engine.loader(Projetada.__table__) as loader:
+            with engine.loader(Projetado.__table__) as loader:
                 loader.write(batch)
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
@@ -964,7 +967,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            engine.load(Projetada.__table__, pa.Table.from_pandas(frame, preserve_index=False))
+            engine.load(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
@@ -1057,7 +1060,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            report = engine.audit(Projetada.__table__, ["2026-08-31"], uri, 57)
+            report = engine.audit(Projetado.__table__, ["2026-08-31"], uri, 57)
             report.passed, report.nonfinite_columns
 
         :param table: a tabela do modelo, no sandbox.
@@ -1144,7 +1147,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            engine.export_partition(Projetada.__table__, uri, "2026-08-31",
+            engine.export_partition(Projetado.__table__, uri, "2026-08-31",
                                     delta.commit_metadata("exec-42", versions))
 
         :param table: a tabela do modelo, no sandbox.
@@ -1211,6 +1214,7 @@ class DuckDBEngine:
         if self._closed:
             return
         self._closed = True
+        # O interrupt vem antes do lock, que o comando em curso segura até ser cancelado.
         self._connection.interrupt()
         with self._lock:
             self._connection.close()

@@ -345,9 +345,11 @@ def _defect_counters(table: sa.Table) -> dict[str, sa.ColumnElement]:
     """A condição de cada contador de defeito da verificação de linhas, pelo rótulo."""
     options = table_options(table)
     counters = {}
+    # Os contadores de cada coluna: o nulo em NOT NULL, o JSON inválido e o texto acima do limite.
     for column in table.columns:
         if not column.nullable:
             counters[f"nulo_{column.name}"] = column.is_(None)
+        # Text é subclasse de String e vem antes: o limite dela é o teto do VARCHAR do Redshift.
         if isinstance(column.type, sa.JSON):
             invalid = sa.not_(json_valid(column))
             counters[f"json_{column.name}"] = sa.and_(column.isnot(None), invalid)
@@ -356,6 +358,7 @@ def _defect_counters(table: sa.Table) -> dict[str, sa.ColumnElement]:
             counters[f"texto_{column.name}"] = text_bytes(column) > TEXT_LIMIT
         elif isinstance(column.type, sa.String) and column.type.length:
             counters[f"texto_{column.name}"] = text_bytes(column) > column.type.length
+    # Os contadores da partição: o valor fora da regra e o que difere da data de partition_source.
     if options.partition_by is not None:
         partition = table.c[options.partition_by]
         counters[f"valor_{options.partition_by}"] = sa.not_(partition_value_valid(partition))
@@ -377,6 +380,7 @@ def _totals(table: sa.Table) -> list[sa.ColumnElement]:
     nonfinite = []
     for column in table.columns:
         as_decimal = sa.cast(column, sa.Numeric(38, 6))
+        # Double deriva de Numeric e por isso vem antes do ramo das Numeric.
         if isinstance(column.type, sa.Double):
             finite = sa.case((is_finite(column), as_decimal))
             sums.append(sa.func.sum(finite).label(f"total_{column.name}"))
@@ -403,6 +407,7 @@ def _rows_check(table: sa.Table, partitions: Sequence[str] | None) -> Check:
     for label, condition in counters.items():
         measures.append(_count_where(condition).label(label))
     measures.extend(_totals(table))
+    # Uma linha só numa tabela sem partição, e uma por partição numa particionada.
     if partition_by is None:
         statement = sa.select(*measures).where(_scope(table, partitions))
     else:
@@ -475,6 +480,7 @@ def _orphans(table: sa.Table, constraint: sa.ForeignKeyConstraint, referenced: s
     remote = [referenced.c[element.column.name] for element in constraint.elements]
     pairs = zip(local, remote, strict=True)
     matches = sa.and_(*[remote_column == local_column for local_column, remote_column in pairs])
+    # Uma chave com coluna nula não aponta linha alguma e fica fora da verificação.
     present = sa.and_(*[column.isnot(None) for column in local])
     missing = ~sa.exists(sa.select(sa.literal(1)).select_from(referenced).where(matches))
     statement = sa.select(*local).where(_scope(table, partitions), present, missing).distinct()

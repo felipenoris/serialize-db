@@ -1,7 +1,7 @@
 """A execução de um pipeline: o banco (``Database``) e o ciclo de uma execução (``Execution``).
 
 ``Database`` junta a raiz do banco, o ambiente (``prd``, ``dsv``) e o ``MetaData`` dos modelos do
-cliente, monta os caminhos, a pasta de cada tabela é ``<raiz>/<ambiente>/<tabela>``, e abre os
+cliente, monta os caminhos (a pasta de cada tabela é ``<raiz>/<ambiente>/<tabela>``) e abre os
 leitores de ``serialize_db.reader`` por ``open_delta`` e ``open_redshift``. ``Execution`` é o
 gerenciador de contexto de uma execução: na entrada abre toda tabela do ambiente, fixa a versão
 de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava o snapshot marcado e o
@@ -12,9 +12,9 @@ partições auditadas ao Delta; a publicação aos clientes no Redshift é ``ser
 depois da execução.
 
 As primitivas podem ser chamadas de qualquer thread: cada comando do motor corre na sessão única,
-sob o lock dela, e o estado mutável da execução (as versões, as auditorias aprovadas, o alocador)
-fica sob um lock próprio. A partição e o ``execution_id`` seguem ``schema.PARTITION_VALUE``, porque
-viram nome de pasta e literal SQL.
+sob o lock dela, ou numa sessão a mais do ``ingest`` de várias tabelas, e o estado mutável da
+execução (as versões, as auditorias aprovadas, o alocador) fica sob um lock próprio. A partição e o
+``execution_id`` seguem ``schema.PARTITION_VALUE``, porque viram nome de pasta e literal SQL.
 
 Exemplo:
 
@@ -88,10 +88,9 @@ log = logging.getLogger("serialize_db.execution")
 class Database:
     """A raiz do banco, o ambiente e os modelos do cliente.
 
-    O ambiente é um nome de pasta e segue a regra da partição. ``storage`` nasce no primeiro uso, e
-    a pasta local relativa vira absoluta: ``uri`` parte da raiz normalizada, a URI que o delta-rs e
-    o DuckDB recebem. Os prefixos são caminhos relativos à raiz, os que os métodos de ``Storage``
-    recebem.
+    ``storage`` nasce no primeiro uso, e a pasta local relativa vira absoluta: ``uri`` parte da raiz
+    normalizada, a URI que o delta-rs e o DuckDB recebem. Os prefixos são caminhos relativos à raiz,
+    os que os métodos de ``Storage`` recebem.
 
     Exemplo:
 
@@ -107,8 +106,8 @@ class Database:
     ``file://``; o S3 sem região e outro esquema são ``ValueError`` no primeiro uso de
     ``storage``."""
     environment: str
-    """O ambiente, ``prd`` ou ``dsv``: as execuções de um não tocam as tabelas do outro. Fora da
-    regra da partição, a construção é ``ContractError``."""
+    """O ambiente, ``prd`` ou ``dsv``, um nome de pasta: as execuções de um não tocam as tabelas do
+    outro. Fora da regra da partição, a construção é ``ContractError``."""
     metadata: sa.MetaData
     """O ``MetaData`` dos modelos do cliente: as tabelas que a execução abre e reconcilia."""
 
@@ -256,6 +255,7 @@ class Database:
             pasta do leitor.
         :raises ContractError: a configuração sem conexão, sem ``workgroup`` e sem ``host``,
             ``user`` e ``password``.
+        :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
         """
         if unload_to is None:
             unload_to = self.storage.uri_of(self.storage.join(self.environment, "staging"))
@@ -468,6 +468,7 @@ class Execution:
             raise ContractError(f"{table.name}: tabela sem partição")
         if table.name not in self._tables:
             return []
+        # get_add_actions devolve uma tabela arro3; pa.table a converte.
         actions = pa.table(self._tables[table.name].get_add_actions(flatten=True))
         values = set()
         if actions.num_rows:
@@ -558,8 +559,9 @@ class Execution:
         """Uma faixa de ``n`` inteiros contíguos da chave sequencial, acima do maior da versão
         fixada.
 
-        O maior valor é lido uma vez por tabela, das estatísticas do log. As faixas de threads
-        paralelas não se sobrepõem, e as de uma reexecução diferem.
+        O maior valor é lido uma vez por tabela, das estatísticas do log, ou da coluna quando um
+        arquivo não as tem. As faixas de threads paralelas não se sobrepõem, e as de uma
+        reexecução diferem.
 
         Exemplo:
 
@@ -679,6 +681,7 @@ class Execution:
         só de metadados ou de manutenção atualiza a versão fixada. A tabela ausente nasce aqui."""
         storage = self.db.storage
         pinned = self._version(table)
+        # O diff da tabela ausente na abertura parte da versão 0, a da criação.
         if pinned is None:
             delta.create_table(uri, table, storage)
             pinned = 0
@@ -758,7 +761,6 @@ class Execution:
         :raises LogUnavailable: um arquivo do log entre a versão fixada e a atual não existe.
         """
         checked = _checked_partitions(partitions)
-        # As partições e a auditoria de toda tabela são conferidas antes do primeiro commit.
         tasks = []
         for table in tables:
             values = self._values(table, checked)
@@ -772,13 +774,13 @@ class Execution:
         """Marca a execução: ``serialize_db_snapshot`` nos commits seguintes e, no encerramento sem
         erro, a entrada do snapshot com a versão de toda tabela do ambiente.
 
+        O snapshot não move o canal ``default``: ``serialize-db channel`` o aponta depois.
+
         Exemplo:
 
         .. code-block:: python
 
             run.snapshot("2026T3")
-
-        O snapshot não move o canal ``default``: ``serialize-db channel`` o aponta depois.
 
         :param name: o nome do snapshot, pela regra da partição; um nome já presente no arquivo de
             controle é ``ValueError`` na saída do ``with``, depois dos commits.

@@ -11,8 +11,8 @@ seções numeradas, cada chamada ecoada acima do seu resultado ou do seu erro, i
 reaproveitados como `NOME=valor`, a tabela de checagens (`fail` primeiro, depois `note`, depois
 `pass`) e a seção final "Chamadas que falharam", para um bloco vazio nunca significar "negado".
 Uma chamada marcada `expected` sai como `-- SEM RESULTADO` e fica fora dessa seção e do código de
-saída: a visão de sistema negada a um usuário comum e o pacote ausente fora de um espaço são leitura
-do ambiente, não defeito a corrigir.
+saída: a visão de sistema negada a um usuário comum e o pacote ausente fora de um espaço são
+leituras do ambiente.
 Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma checagem reprovou.
 
 Um relatório que uma etapa pendente ainda consulta é guardado em `plan/readings/`, indexado por
@@ -33,9 +33,9 @@ PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/d
 
 | Script | O que lê | Chamadas | Saída |
 | --- | --- | --- | --- |
-| `space.py` | O espaço visto de dentro: método e expiração das credenciais do `boto3` (com o tempo restante), região como o `boto3` a resolve, endpoint de credenciais do contêiner, IMDS, STS; o projeto por `sagemaker_studio.Project()` (papel, chave KMS, raiz S3, uma linha por conexão e os dados completos das conexões Redshift), lido neste interpretador ou no do sistema; DNS dos endpoints regionais e se resolvem para IP privado (endpoint VPC de interface), TCP até o S3 e o proxy, internet; CPUs, memória, disco (repositório, `HOME`, `/tmp` e a pasta temporária do Python, onde fica o sandbox), limite de arquivos abertos, `~/shared` (montagem pelo caminho real e por `/proc/mounts`, com o tipo e `rw` ou `ro`), comandos; Python e pacotes deste interpretador e do sistema contra as dependências de execução e o grupo `dev` de `pyproject.toml` (cada pacote presente, e na versão fixada quando ela é `==`), mais os opcionais das etapas seguintes (ADBC, pdoc); DuckDB com as extensões que carregam da pasta configurada, sem instalação automática, e o proxy da sessão, com o endereço separado das credenciais. | `sts:GetCallerIdentity`; as chamadas que `sagemaker_studio` faz. | `output/space_*.txt` |
+| `space.py` | O espaço visto de dentro: método e expiração das credenciais do `boto3` (com o tempo restante), região como o `boto3` a resolve, endpoint de credenciais do contêiner, IMDS, STS; o projeto por `sagemaker_studio.Project()` (papel, chave KMS, raiz S3, uma linha por conexão e os dados completos das conexões Redshift), lido neste interpretador ou no do sistema; DNS dos endpoints regionais e se resolvem para IP privado (endpoint VPC de interface), TCP até o S3 e o proxy, internet; CPUs, memória, disco (repositório, `HOME`, `/tmp` e a pasta temporária do Python, onde fica o sandbox), limite de arquivos abertos, `~/shared` (montagem pelo caminho real e por `/proc/mounts`, com o tipo e `rw` ou `ro`), comandos; Python e pacotes deste interpretador e do sistema contra as dependências de execução e o grupo `dev` de `pyproject.toml` (cada pacote presente, e na versão fixada quando ela é `==`), mais os opcionais que o grupo `dev` não traz (ADBC, pdoc); DuckDB com as extensões que carregam da pasta configurada, sem instalação automática, e o proxy da sessão, com o endereço separado das credenciais. | `sts:GetCallerIdentity`; as chamadas que `sagemaker_studio` faz. | `output/space_*.txt` |
 | `bucket.py` | O bucket sob a raiz: região, versionamento (pela API ou, com ela negada, pelo `VersionId` de uma amostra, com a consequência para o `vacuum`), criptografia padrão, Object Lock com o custo para o `vacuum`, bloqueio de acesso público, propriedade de objetos; as regras de ciclo de vida e se alguma expiração alcança a raiz; o inventário sob a raiz por pasta de primeiro nível, as tabelas Delta (pastas com `_delta_log`, com arquivos de dados, bytes, commits no log, checkpoints e último objeto), as sessões da suíte S3 (`serialize-db-poc/<id>`) que ainda existem, classes de armazenamento, objeto mais recente, a criptografia de uma amostra e o que o versionamento acumulou sob a raiz (versões não correntes e marcadores de exclusão, invisíveis à listagem comum); as permissões do papel sob a raiz pela simulação de política do IAM (`ListBucket`, `GetObject`, `PutObject`, `DeleteObject`, `AbortMultipartUpload`, `kms:GenerateDataKey`, `kms:Decrypt`) ou, com a simulação negada ou o IAM sem resposta ao teste de alcance, o que a própria execução provou; a chave KMS padrão, pedida ao KMS só quando ele responde; a política do bucket com os `Deny` condicionados; os uploads multipart incompletos. | `s3:HeadBucket`, `GetBucketVersioning`, `GetBucketEncryption`, `GetObjectLockConfiguration`, `GetPublicAccessBlock`, `GetBucketOwnershipControls`, `GetBucketLifecycleConfiguration`, `ListBucket`, `ListBucketVersions`, `HeadObject`, `GetBucketPolicy`, `ListMultipartUploads`; `sts:GetCallerIdentity`; `iam:SimulatePrincipalPolicy`; `kms:DescribeKey`. | `output/bucket_*.txt` |
-| `diagnose_aws.py` | O acesso que a suíte S3 exige: variáveis, região como o `boto3` e o delta-rs a resolvem, DNS, credenciais, a listagem de `<raiz>/serialize-db-poc/` pelo `boto3`, pelo delta-rs (como encontrado e, com `NO_PROXY` ausente ou vazia ao lado de `no_proxy`, como a suíte, com `NO_PROXY` exportada de `no_proxy`) e pelo DuckDB (este com as subpastas, porque `*` não cruza `/`, e com o proxy separado das credenciais), e o STS; o resumo diz se a suíte precisa de manutenção. Formato próprio, anterior a `probelib.py`. | `s3:ListBucket`, `sts:GetCallerIdentity`. | `output/diagnose_aws_*.txt` |
+| `diagnose_aws.py` | O acesso que a suíte S3 exige: variáveis, região como o `boto3` e o delta-rs a resolvem, DNS, credenciais, a listagem de `<raiz>/serialize-db-poc/` pelo `boto3`, pelo delta-rs (como encontrado e, com `NO_PROXY` ausente ou vazia ao lado de `no_proxy`, como a suíte, com `NO_PROXY` exportada de `no_proxy`) e pelo DuckDB (este com as subpastas, porque `*` não cruza `/`, e com o proxy separado das credenciais), e o STS; o resumo diz se a suíte precisa de manutenção. Formato próprio, sem o `Report` de `probelib.py`. | `s3:ListBucket`, `sts:GetCallerIdentity`. | `output/diagnose_aws_*.txt` |
 | `redshift.py` | O Redshift visto de dentro: as variáveis `SERIALIZE_DB_REDSHIFT_*` e a conexão Redshift do projeto, com os dados dela como dicionário (banco, workgroup, URL JDBC e o secret de usuário e senha, lido sem imprimir a senha); o workgroup configurado lido por `GetWorkgroup`, que dá o endereço da conexão, o namespace com o papel IAM padrão e os associados, a lista de workgroups e os clusters provisionados como fotografia (o ambiente alvo não tem nenhum); a Data API pelo ciclo completo de `examples/redshift_data_api.py` com `select 1`, o caminho alternativo à porta 5439; DNS e TCP, e se as APIs têm endpoint VPC de interface, sem o qual a credencial temporária e a Data API dependem da internet; a sessão aberta como `examples/redshift_native.py` (`GetWorkgroup`, `GetCredentials`, `redshift_connector.connect`) ou pelo par informado em `_USER` e `_PASSWORD` na mesma chamada, e nela, antes do `USE`, a versão (o patch), usuário, banco, `search_path`, esquemas, `SUPER`, as configurações da sessão, os privilégios no banco da conexão (`CREATE`, `TEMP`), `sys_load_error_detail` e os esquemas externos; os bancos visíveis e em qual deles está o esquema do projeto, os três requisitos da escrita num datashare, o `USE` no banco do datashare conferido pela resolução de um nome em duas partes, porque `current_database()` não reflete a troca, (`examples/redshift_copy_unload.py`) e, depois dele, os privilégios no esquema e as tabelas com o prefixo da biblioteca; as credenciais de quem chama com a expiração, e o alcance sobre a raiz S3 informada, pela simulação de política do IAM da identidade que a biblioteca manda ao S3: quem chama, ou o papel de `_IAM_ROLE`. Só consulta visões de sistema e troca o banco da sessão com `USE`; a credencial derivada da identidade IAM pode criar o usuário do banco, e a checagem `RS-4` o diz. | `redshift-serverless:GetWorkgroup`, `GetCredentials`, `GetNamespace`, `ListWorkgroups`; `redshift:DescribeClusters`; `redshift-data:ExecuteStatement`, `DescribeStatement`, `GetStatementResult`; `secretsmanager:GetSecretValue` para o secret da conexão do projeto; `sts:GetCallerIdentity`; `iam:SimulatePrincipalPolicy`; consultas `select` e `USE` no banco. | `output/redshift_*.txt` |
 | `catalog.py` | O gatilho de reavaliação de `plan/estrategia.md`: se o Glue (bancos, tabelas por formato, catálogos federados), o Athena (workgroups), o Lake Formation (locais registrados) e o S3 Tables respondem ao papel do projeto. | `glue:GetDatabases`, `GetTables`, `GetCatalogs`; `athena:ListWorkGroups`, `GetWorkGroup`; `lakeformation:ListResources`; `s3tables:ListTableBuckets`. | `output/catalog_*.txt` |
 | `duckdb_threads.py` | O `threads` do DuckDB na ingestão das tabelas Delta que a migração gravou (o `--root` dela): por valor de `threads`, o padrão do motor, as CPUs que o processo pode usar, vezes 0,5 e 1 a 5 (a metade é uma thread por núcleo físico nas instâncias x86 da AWS com SMT), cada configuração num processo novo com o motor `DuckDBEngine` do pacote e o `memory_limit` que ele lê do ambiente, a partição da primeira tabela `materializada` (`ingest(..., materialize=True)`) e `agregada` pela view (`SELECT count(*), max(COLUMNS(*))`), e as tabelas `em série` na sessão principal e em `sessões a mais`, uma por tabela, como `run.ingest`; o melhor de três de cada medida, com o cache de arquivos externos do DuckDB desligado para cada repetição ler do armazenamento, o pico de memória do processo sobre a base e as linhas lidas contra as do log; a razão compara com o padrão do motor, e a seção da máquina dá as threads por núcleo físico, a memória disponível e os limites do motor e do DuckDB. O banco de cada configuração fica na pasta temporária do motor e sai no `cleanup`. | As leituras do delta-rs e do DuckDB sob a raiz (`ListBucket`, `GetObject`). | `output/duckdb_threads_*.txt` |
@@ -46,10 +46,10 @@ PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/d
 leitura do projeto por `sagemaker_studio` no primeiro interpretador que tem o pacote
 (`project_snapshot`, com os dados de cada conexão convertidos em dicionário) e o mascaramento de
 segredos na saída. DNS, TCP e a internet são leituras nas tabelas, nunca chamadas falhadas: no
-ambiente destino, sem internet, `pypi.org` não resolve e o IMDS não responde, e isso não é falha do
-probe; um IP público é rotulado como possível gateway endpoint só para o S3 e o DynamoDB, e como
-dependente da internet ou do proxy para os demais serviços. Cada chamada que falha deixa o motivo
-curto (`negado (AccessDenied)`, `sem resposta`, `erro local`) na checagem que a interpreta. O pacote
+ambiente destino, sem internet, `pypi.org` não resolve e o IMDS não responde; um IP público é
+rotulado como possível gateway endpoint só para o S3 e o DynamoDB, e como dependente da internet ou
+do proxy para os demais serviços. Cada chamada que falha deixa o motivo curto
+(`negado (AccessDenied)`, `sem resposta`, `erro local`) na checagem que a interpreta. O pacote
 `sagemaker-studio` não entra no projeto: ele arrasta `deltalake`, `duckdb` e `pandas` sem versão
 fixa, e numa instalação de teste rebaixou o `duckdb` para 1.5.1.
 
@@ -75,7 +75,7 @@ biblioteca ([`PLAN.md`](../plan/PLAN.md)), `SERIALIZE_DB_REDSHIFT_*` para a cone
 variáveis sem prefixo que os probes leem são padrões de terceiros, lidos por quem os define e não
 pelo projeto: `AWS_REGION` e `AWS_DEFAULT_REGION` (botocore e delta-rs), `AWS_ENDPOINT_URL*`,
 `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `HTTP_PROXY`, `HTTPS_PROXY` e `NO_PROXY` nas duas grafias.
-Renomeá-las quebraria as bibliotecas que as consultam, então elas ficam como estão.
+Renomeá-las quebraria as bibliotecas que as consultam.
 
 A raiz S3 que um probe fotografa sai de `probelib.s3_root`, na ordem argumento, `SERIALIZE_DB_ROOT`
 (a raiz da biblioteca, onde ela escreveria) e `SERIALIZE_DB_TEST_S3_ROOT` (a autorização da suíte
@@ -90,7 +90,7 @@ sessão como `note`. `AWS_DEFAULT_REGION` é a variável que o botocore lê; sem
 APIs do Redshift são procuradas na região errada. O JSON de `SERIALIZE_DB_TEST_REPORT` da suíte
 acompanha os relatórios dos probes na conversa.
 
-## Onde está a resposta
+## O script e a checagem de cada pergunta
 
 | Pergunta | Script e checagem |
 | --- | --- |
@@ -141,7 +141,7 @@ acompanha os relatórios dos probes na conversa.
 
 ## Acrescentar um probe
 
-- Só leitura. Um script que altera algo não pertence a esta pasta.
+- O probe só lê: um script que altera algo não pertence a esta pasta.
 - Construa sobre `probelib.py`: `Report` para o arquivo, as seções, as chamadas ecoadas, as
   checagens e o código de saída; `short_config` em todo cliente `boto3`, porque sem rede o padrão
   espera 60 s por tentativa; `run_python` para o que precisa de espera limitada (delta-rs, DuckDB).
@@ -151,8 +151,8 @@ acompanha os relatórios dos probes na conversa.
   feita; com proxy configurado o teste direto não decide, e a chamada é feita.
 - Uma seção por assunto, numerada pelo `Report`; identificadores reaproveitados como `NOME=valor`;
   toda chamada por `report.call`, para a falha ir para a seção final.
-- Checagens com prefixo próprio de duas letras (`SP`, `BK`, `RS`, `CT`, `PQ`, `DT`), `note` para o ausente e
-  `fail` para o que impede a biblioteca.
+- Checagens com prefixo próprio de duas letras (`SP`, `BK`, `RS`, `CT`, `PQ`, `DT`), `note` para o
+  ausente e `fail` para o que impede a biblioteca.
 - Uma seção que quebra não cala as outras: `main` captura a exceção e a registra como falha.
 - Uma função por seção, na ordem do relatório, com docstring que nomeia a seção e as checagens que
   ela emite; dentro dela, um bloco por checagem, precedido do comentário que diz a regra aplicada e

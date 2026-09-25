@@ -35,8 +35,9 @@ serialize-db snapshot --root s3://bucket/projeto/delta --environment prd \
 Antes: nenhuma execução aberta no ambiente, porque a entrada leva a versão atual de cada tabela,
 e um nome inédito em `snapshots` e em `archived` do arquivo de controle
 `<ambiente>/_serialize_db/snapshots.json`. Depois: a entrada `{nome: {tabela: versão}}` gravada na
-escrita condicional; outro escritor entre a leitura e a escrita dá `serialize_db.errors.ConflictError`,
-e o comando se repete. As versões marcadas ficam legíveis qualquer que seja a retenção do `vacuum`.
+escrita condicional; outro escritor entre a leitura e a escrita dá
+`serialize_db.errors.ConflictError`, e o comando se repete. As versões marcadas ficam legíveis
+qualquer que seja a retenção do `vacuum`.
 
 ### Canal do snapshot
 
@@ -130,14 +131,13 @@ serialize-db archive --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --name 2026T3
 ```
 
-Antes: o snapshot registrado em `snapshots` e apontado por nenhum canal, que `serialize-db
-channel` move antes; a pasta `arquivo/<nome>/` recebe a regra de ciclo de vida do bucket. Depois: uma tabela nova por tabela do snapshot, com uma versão por partição, os
-mesmos arquivos e as mesmas somas, cada tabela impressa com o tempo da cópia e o pico de RSS do
-processo, e o tempo de cada partição no log; a entrada em `archived`, que `vacuum` não prende
-mais, e `snapshot` recusando o nome, porque ele dá a pasta. O comando se repete depois de uma
-interrupção
-e continua de onde parou: a tabela já inteira no arquivo e a partição já registrada nele são
-puladas, e só o que falta é copiado.
+Antes: o snapshot registrado em `snapshots` e apontado por nenhum canal, que `serialize-db channel`
+move antes; a pasta `arquivo/<nome>/` recebe a regra de ciclo de vida do bucket. Depois: uma tabela
+nova por tabela do snapshot, com uma versão por partição, os mesmos arquivos e as mesmas somas, cada
+tabela impressa com o tempo da cópia e o pico de RSS do processo, e o tempo de cada partição no log;
+a entrada em `archived`, que `vacuum` não prende mais, e `snapshot` recusando o nome, porque ele dá
+a pasta. O comando se repete depois de uma interrupção e continua de onde parou: a tabela já inteira
+no arquivo e a partição já registrada nele são puladas, e só o que falta é copiado.
 
 ### Exportação
 
@@ -151,8 +151,8 @@ serialize-db export --root s3://bucket/projeto/delta --environment prd \
 ```
 
 Antes: o destino vazio e sob a raiz. Depois: em `copy`, os mesmos bytes dos arquivos que o log da
-versão lista; em `rewrite`, um arquivo por partição pelo `COPY` do DuckDB, com o esquema da versão em
-todos; o tempo e o pico de RSS do processo impressos; `--version` ausente é a versão atual.
+versão lista; em `rewrite`, um arquivo por partição pelo `COPY` do DuckDB, com o esquema da versão
+em todos; o tempo e o pico de RSS do processo impressos; `--version` ausente é a versão atual.
 
 ### Auditoria avulsa
 
@@ -185,9 +185,9 @@ vêm sem eles.
 ## Opções da linha de comando
 
 As opções de cada subcomando de `serialize-db`. Um valor de partição, um `--execution-id`, um
-`--name` e o ambiente seguem a regra da partição, `[0-9A-Za-z][0-9A-Za-z_.-]*`, e o valor fora
-dela é erro de uso. A conexão do Redshift, em `publish` e nos subcomandos com
-`--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
+`--name`, um `--snapshot`, um `--channel` e o ambiente seguem a regra da partição,
+`[0-9A-Za-z][0-9A-Za-z_.-]*`, e o valor fora dela é erro de uso. A conexão do Redshift, em `publish`
+e nos subcomandos com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
 (`serialize_db.engine.redshift.RedshiftConfig.from_environment`).
 
 ### Opções comuns

@@ -1003,6 +1003,33 @@ artifact of the base named `prod` there (the `<root>/prod/` folder, the `prod_<t
 and their `serialize_db_publications` rows), and the item left `plan/OPEN_QUESTIONS.md`.
 `CLAUDE.md`, `plan/serialize-db.md`, `docs/operacao.md`
 
+## The review of comments and documentation (2026-09-25)
+
+On 2026-09-25 the user asked for a review of the project's documentation and code comments
+against the repository's standards, with a comment above each logical block where it helps to
+understand the code, and the corrections applied. The user's answers before the work: the scope
+is `src/`, `scripts/`, `probes/`, the READMEs and `docs/`, with `tests/` and `plan/` out; and the
+files stage 10 changed waited for PR #80, reviewed after its merge in a second pass of the same
+PR, one commit per module. The criterion the assistant stated and applied: one short line above
+each logical block of a function with several steps, saying what the block does and the
+constraint it obeys; nothing in a short function whose docstring already describes the step, and
+no comment that repeats the docstring. The review changed no code: every edited `.py` file keeps
+the syntax tree of `main` with the bare strings removed, printed and logged text included, so a
+wrong message is a finding and not an edit. The findings that are code or printed text wait for
+the user, listed in the PR description: the CLI ends with a traceback and exit 1 on the
+`ContractError` of `run --engine redshift` without a connection (its docstring and stage 6 say
+2), of `publish --init` and of `audit --engine redshift`, and on the exceptions `initial_load`
+documents, in `load`; `export_snapshot(mode="rewrite")` of a partitioned table writes outside the
+root without an error; `file_from_footer` registers `nullCount` 0 for a column without footer
+statistics, and `statistics_enabled="NONE"` drops the `nullCount` with the min and max, which the
+review's probes read as `IS NULL` returning 0 through the delta-rs dataset and the true count
+through `delta_scan`, the `INT96` timestamp of the `UNLOAD` among the columns without statistics;
+`deep_copy` reopens the destination table per partition, which the commit does not need
+(`plan/POC.md`, the review of 2026-09-21); and the `probes/diagnose_aws.py` summary still prints
+that the suite does not hand `AWS_ENDPOINT_URL` to DuckDB, which its docstring no longer says.
+`plan/OPEN_QUESTIONS.md` stayed out while PR #81 changes it. `src/`, `scripts/`, `probes/`,
+`README.md`, `examples/README.md`, `probes/README.md`, `docs/`
+
 ## The stage 10 implementation (2026-09-25)
 
 The user asked for stage 10 implemented as planned, with a question only on a real ambiguity;
