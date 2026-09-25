@@ -97,6 +97,9 @@ O que a implementação fixou além do texto das seções abaixo:
 - **`Database.open_redshift` sem `unload_to`** grava em `<raiz>/<ambiente>/staging/<id do
   leitor>/`, e `open_redshift` sem ele abre o motor sem armazenamento; o identificador é
   `reader-<AAAA-MM-DD>-<uuid8>` nos dois leitores.
+- **`unload_to` aceita uma pasta local** (decisão do usuário de 2026-09-25): o `UNLOAD` real
+  grava só no S3, e a pasta local serve ao substituto; no alvo, o `stream` sobre uma pasta
+  local chega ao servidor antes de falhar, caso que não rodou lá.
 - **A volta a um snapshot anterior** chama `version_diff(uri, min, max)` entre a versão publicada
   e a pedida, e a transação da publicação deixou de recusar a versão lida acima da pedida; o
   `UPDATE` da linha de controle continua condicionado à versão lida.

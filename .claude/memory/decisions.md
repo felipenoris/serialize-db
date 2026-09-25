@@ -1118,7 +1118,9 @@ that item became the fix, implemented while the answer was pending. The user the
 the clause built once per table for now, because a credential that expires in the middle of the
 transaction corrupts no data and at most the operator repeats the publication, and to re-evaluate it
 when `probes/credentials.py` runs in the target; the fix left the PR, and `plan/PLAN-STAGE-8.md`
-records the behavior. The local `unload_to` and `deep_copy` reopening the destination stay in
-`plan/OPEN_QUESTIONS.md` until the answer. The items that wait on a target run, the delta-rs dataset
-filter (issue #85), the `deltalake` upgrade (another thread) and the bucket rule stayed out.
-`plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-8.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+records the behavior. After asking for their context and side effects, the user also kept the local
+`unload_to` of the Redshift reader and `deep_copy` reopening the destination per partition as they
+are, which `plan/PLAN-STAGE-10.md` and `plan/PLAN-STAGE-9.md` record. The items that wait on a
+target run, the delta-rs dataset filter (issue #85), the `deltalake` upgrade (another thread) and
+the bucket rule stayed out. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-8.md`,
+`plan/PLAN-STAGE-9.md`, `plan/PLAN-STAGE-10.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`

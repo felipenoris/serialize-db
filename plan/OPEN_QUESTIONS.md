@@ -131,10 +131,6 @@ etapas; os itens abaixo esperam o usuário: corrigir, ou aceitar como está.
   dos subcomandos (`docs/operacao.md`), enquanto a origem fora dos armazenamentos da biblioteca e
   o `ExecutionConflict` saem com 2 e uma linha. Espera o usuário: uma linha com a mensagem, sem o
   traceback que mostra onde a carga parou, ou o traceback como está.
-- **O `unload_to` local do leitor Redshift.** `RedshiftReader` aceita `unload_to` numa pasta
-  local, e o `UNLOAD` real grava só no S3; o caminho local serve ao substituto.
-- **A reabertura do destino em `deep_copy`.** `deep_copy` reabre a tabela de destino a cada
-  partição, e o commit não precisa disso (a revisão de 2026-09-21 em [`POC.md`](POC.md)).
 - **Os probes.** Uma correção num probe espera uma rodada no alvo que compare o relatório de antes
   com o de depois. `Report.finish` de `probelib.py` e `redshift.py` têm ternários aninhados;
   `redshift.py` usa `getattr` dinâmico, trabalha antes de um retorno antecipado e, com `space.py`,
