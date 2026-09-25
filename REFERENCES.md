@@ -32,6 +32,15 @@ O `NaN` nas estatísticas, consultado em 2026-09-23 (os tickets pela API REST do
 - <https://github.com/apache/parquet-format/commits/master/src/main/thrift/parquet.thrift>: o commit
   do PARQUET-2249, a ordem IEEE 754 e o `nan_count` (2026-05-26)
 
+O CRC da página, o único checksum do formato, consultado em 2026-09-25 nos escritores que o pacote
+usa:
+
+- <https://github.com/apache/arrow-rs/blob/59.3.0/parquet/src/column/page.rs>: o `crc: None` fixo
+  do cabeçalho da página, o escritor do delta-rs
+- <https://github.com/duckdb/duckdb/blob/v1.5.5/extension/parquet/writer/primitive_column_writer.cpp>,
+  `extension/parquet/column_reader.cpp` e `extension/parquet/parquet_writer.cpp` na mesma tag: o
+  `COPY` do DuckDB sem `crc`
+
 Site do projeto:
 
 - <https://parquet.apache.org/docs/file-format/implementationstatus/>
@@ -523,6 +532,8 @@ A memória, as threads e o cgroup, consultados em 2026-09-24 (os limites lidos d
 - <https://arrow.apache.org/docs/python/dataset.html>
 - <https://github.com/apache/arrow/tree/main/docs/source/python/parquet>: fonte das páginas
   `parquet.rst`, `parquet_datasets.rst`, `parquet_type_handling.rst` e `parquet_encryption.rst`
+- <https://arrow.apache.org/docs/python/generated/pyarrow.parquet.write_table.html>:
+  `write_page_checksum`, o CRC da página, desligado por padrão (2026-09-25)
 
 A garantia do fragmento e a simplificação do filtro por ela, consultadas em 2026-09-25:
 
@@ -900,6 +911,12 @@ Escritas condicionais (`If-None-Match`, `If-Match`):
 - <https://docs.aws.amazon.com/boto3/latest/reference/services/s3/client/put_object.html>
 - <https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes-enforce.html>
 - <https://aws.amazon.com/about-aws/whats-new/2024/11/amazon-s3-enforcement-conditional-write-operations-general-purpose-buckets/>
+
+A integridade dos objetos, consultada em 2026-09-25 (o CRC64NVME do objeto inteiro e o ETag que
+não é MD5 sob SSE-KMS nem no multipart):
+
+- <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html>
+- <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity-upload.html>
 
 ## Biblioteca padrão do Python
 
