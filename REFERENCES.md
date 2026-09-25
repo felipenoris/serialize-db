@@ -524,6 +524,18 @@ A memória, as threads e o cgroup, consultados em 2026-09-24 (os limites lidos d
 - <https://github.com/apache/arrow/tree/main/docs/source/python/parquet>: fonte das páginas
   `parquet.rst`, `parquet_datasets.rst`, `parquet_type_handling.rst` e `parquet_encryption.rst`
 
+A garantia do fragmento e a simplificação do filtro por ela, consultadas em 2026-09-25:
+
+- <https://arrow.apache.org/docs/python/generated/pyarrow.dataset.FileSystemDataset.html>
+- <https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Fragment.html>
+- <https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetFileFormat.html>
+- <https://raw.githubusercontent.com/apache/arrow/main/python/pyarrow/_dataset.pyx>, e na tag
+  `apache-arrow-25.0.1`
+- <https://raw.githubusercontent.com/apache/arrow/apache-arrow-25.0.1/cpp/src/arrow/compute/expression.cc>
+  e `expression_internal.h` na mesma pasta
+- <https://github.com/apache/arrow/issues/51491>
+- <https://github.com/apache/arrow/pull/48716>
+
 ## SQLAlchemy
 
 Documentação da versão 2.0:
@@ -954,6 +966,9 @@ API JSON do PyPI, consultada em 2026-09-19 para a estratégia de implementação
   <https://pypi.org/pypi/pypika/json>, <https://pypi.org/pypi/dlt/json>,
   <https://pypi.org/pypi/dagster/json>, <https://pypi.org/pypi/prefect/json>
 
+API JSON do PyPI, consultada em 2026-09-25 para as versões retiradas do deltalake:
+<https://pypi.org/pypi/deltalake/json>.
+
 API do crates.io (`https://crates.io/api/v1/crates/<crate>`), consultada em 2026-09-19 para
 `object_store`, `parquet`, `arrow`, `pyo3`, `pyo3-arrow`, `deltalake`, `delta_kernel`, `duckdb`,
 `datafusion`, `hudi`, `iceberg`, `lance`, `maturin`, `sqlparser` e `polars`.
@@ -1027,9 +1042,61 @@ O filtro do dataset do delta-rs sobre as colunas sem mínimo e máximo no log, c
 
 - <https://github.com/delta-io/delta-rs/blob/main/python/src/lib.rs>
 - <https://raw.githubusercontent.com/delta-io/delta-rs/main/python/src/lib.rs>
-  (`filestats_to_expression_next`)
-- <https://github.com/delta-io/delta-rs/issues/3032>
-- A busca na web por `filestats_to_expression` e pelo filtro do `to_pyarrow_dataset` sem linhas
+  (`filestats_to_expression_next`), e o mesmo caminho nas tags `python-v0.24.0`, `python-v0.25.0`,
+  `python-v1.6.4`, `python-v1.6.5` e `python-v1.6.6`
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/python/deltalake/table.py>, e nas tags
+  `python-v1.6.4` e `python-v1.6.6`
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/python/deltalake/query.py>
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/crates/core/src/kernel/snapshot/log_data.rs>,
+  e na tag `python-v1.6.4`
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/crates/core/src/kernel/snapshot/iterators.rs>
+  (`iterators/mod.rs` deu 404), `snapshot/mod.rs` e `kernel/mod.rs`
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/crates/core/src/writer/stats.rs>
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/crates/core/src/table/config.rs>
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/python/tests/test_table_read.py>, e
+  `test_stats.py`, `test_writer.py` e `test_writerproperties.py` na mesma pasta
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/CHANGELOG.md>
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/mkdocs.yml>
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/docs/usage/querying-delta-tables.md>, e
+  sob `docs/`: `how-delta-lake-works/delta-lake-file-skipping.md`,
+  `usage/delta-lake-best-practices.md`, `integrations/delta-lake-polars.md`,
+  `integrations/delta-lake-arrow.md`, `integrations/delta-lake-pandas.md`,
+  `integrations/delta-lake-datafusion.md` e `api/query.md`
+- <https://raw.githubusercontent.com/delta-io/delta/master/PROTOCOL.md> (a seção "Per-file
+  Statistics")
+- <https://docs.delta.io/latest/table-properties.html>
+- <https://docs.delta.io/latest/optimizations-oss.html>
+- <https://github.com/delta-io/delta-rs/issues/3032>, também pela API do GitHub
+  (<https://api.github.com/repos/delta-io/delta-rs/issues/3032> e o `/comments` dela)
+- As issues `1496`, `2427`, `3014`, `3173`, `3201`, `3905`, `4398`, `4490` e `4659` de
+  <https://github.com/delta-io/delta-rs/issues>
+- <https://github.com/delta-io/delta-rs/pull/3210>; o `.diff` dela em
+  <https://patch-diff.githubusercontent.com/raw/delta-io/delta-rs/pull/3210.diff> respondeu "The
+  server is unavailable at this time."
+- As PRs `1520` (e o `/files` dela), `3288`, `4499`, `4666`, `4675`, `4690`, `4693` e `4757` de
+  <https://github.com/delta-io/delta-rs/pulls>
+- As versões <https://github.com/delta-io/delta-rs/releases/tag/python-v1.6.6>, `python-v1.6.5`,
+  `python-v1.6.4` e `python-v0.25.0`
+- O modelo de issue do delta-rs,
+  <https://raw.githubusercontent.com/delta-io/delta-rs/main/.github/ISSUE_TEMPLATE/bug_report.yml> e
+  `config.yml` na mesma pasta (`bug_report.md` deu 404)
+- As buscas de issues do GitHub em `delta-io/delta-rs` por `to_pyarrow_dataset stats`,
+  `partition_expression`, `pyarrow filter` entre as abertas, `filestats_to_expression`,
+  `to_pyarrow_dataset` entre as abertas e `"is_not_null" OR "is not null" pyarrow`, e a de PRs por
+  `dataset_partitions`
+- A lista de issues e PRs do delta-rs pela API do ecosyste.ms,
+  <https://issues.ecosyste.ms/api/v1/hosts/GitHub/repositories/delta-io%2Fdelta-rs/issues?per_page=100&page=1>,
+  das páginas 1 a 56, e a issue 3032 por
+  <https://issues.ecosyste.ms/api/v1/hosts/GitHub/repositories/delta-io%2Fdelta-rs/issues/3032>
+- <https://docs.pola.rs/api/python/stable/reference/api/polars.scan_delta.html>
+- <https://raw.githubusercontent.com/pola-rs/polars/main/py-polars/src/polars/io/delta/__init__.py>,
+  e `functions.py`, `_dataset.py` e `_utils.py` na mesma pasta; `py-polars/polars/io/delta.py`,
+  `py-polars/src/polars/io/delta.py` e `py-polars/polars/io/delta/__init__.py` deram 404
+- <https://raw.githubusercontent.com/pola-rs/polars/main/crates/polars-plan/src/plans/aexpr/predicates/skip_batches.rs>
+- A busca na web por `filestats_to_expression`, pelo filtro do `to_pyarrow_dataset` sem linhas com
+  as estatísticas ausentes, pela issue #3032, pela garantia com `null[double]`, pelas propriedades
+  `dataSkippingNumIndexedCols` e `dataSkippingStatsColumns`, pelo `SimplifyWithGuarantee` do Arrow
+  com o literal nulo e pelo `statistics_enabled="NONE"` com o `to_pyarrow_table` vazio
 
 ## DuckLake
 

@@ -51,10 +51,12 @@ foi medido em [`POC.md`](POC.md).
   versão fixada em `pyproject.toml`, que `deltalake==1.6.4` está retirada (yanked) do PyPI, com o
   motivo "Issue: #4784", e a instalou assim mesmo ([`POC.md`](POC.md)). A issue #4784 do delta-rs,
   lida em 2026-09-25, é um `MERGE` numa tabela com o change data feed ligado que insere uma linha
-  toda nula para cada linha que o predicado de `when_not_matched_insert` recusa, e afeta a 1.6.4
-  e a 1.6.5; o pacote não usa `MERGE` nem o change data feed (busca por `.merge(`,
+  toda nula para cada linha que o predicado de `when_not_matched_insert` recusa, e afeta a 1.6.4 e a
+  1.6.5; o pacote não usa `MERGE` nem o change data feed (busca por `.merge(`,
   `enableChangeDataFeed`, `change_data_feed` e `load_cdf` em `src/`, `scripts/`, `tests/` e
-  `probes/`). A versão que corrige não foi lida, e a troca da versão fixada espera o usuário.
+  `probes/`). A 1.6.5 também está retirada, e a 1.6.6, de 2026-09-24, traz a correção (PR #4785) e
+  não está retirada ([`POC.md`](POC.md)). Espera o usuário: trocar a versão fixada pela 1.6.6, com
+  as suítes rodadas nela.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
@@ -74,12 +76,17 @@ foi medido em [`POC.md`](POC.md).
   troca do motor Redshift e no `compact` da [etapa 9](PLAN-STAGE-9.md). O `delta_scan` dos
   motores e do leitor Delta e o `COPY` do Redshift leem certo, e o pacote filtra o dataset do
   delta-rs só pela coluna da partição (`read_back`), fora da perda. Com
-  `delta.dataSkippingStatsColumns` sem as três colunas, a mesma sonda leu 2, 2 e 1; a propriedade
-  também limita as estatísticas que o `write_deltalake` grava. A issue #3032 do delta-rs, aberta
-  em 2024-11-25 e fechada com o rótulo `mre-needed`, relata o mesmo sintoma num filtro fora da
-  partição, sem a causa. Espera o usuário: pôr essa propriedade nas tabelas, gravar no log mínimo
-  e máximo que não percam linha nesses tipos, documentar o `delta_scan` como o leitor das tabelas,
-  ou levar o defeito ao delta-rs.
+  `delta.dataSkippingStatsColumns` sem as três colunas, a mesma sonda leu 2, 2 e 1, e o `delta_scan`
+  seguiu podando pelas estatísticas que o log já guarda; a propriedade faz o `write_deltalake`
+  gravar só as estatísticas das colunas dela e o `get_add_actions` esconder as outras. A issue #3032
+  do delta-rs, aberta em 2024-11-25 e fechada com o rótulo `mre-needed`, relata o mesmo sintoma num
+  filtro fora da partição, sem a causa; nenhuma issue aberta trata do caso, e o defeito segue na
+  1.6.6 e no `main`. O `DeltaTable.scan`, o `QueryBuilder` e o `scan_delta` do Polars leem certo, e
+  `docs/index.md`, seção "Ler a base com o modelo", lista os leitores ([`POC.md`](POC.md)). Espera o
+  usuário: pôr a propriedade nas tabelas, com as colunas inteiras e de data, que todo caminho de
+  escrita grava com mínimo e máximo; gravar no log mínimo e máximo largos, que o protocolo aceita
+  com `tightBounds` falso, nos tipos que o registro omite e nas `Double` da issue #59; ou deixar o
+  pacote como está. O defeito vai ao delta-rs numa issue com o exemplo mínimo, que o usuário abre.
 
 - **A operação no ambiente alvo.** Em 2026-09-24, nas baterias das 16:51 e das 23:25, a carga, a
   auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`

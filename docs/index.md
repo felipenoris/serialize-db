@@ -574,6 +574,19 @@ tabelas durante uma publicação pode ler versões diferentes. O leitor roda só
 todos os arquivos com um `IN` de mais de um valor sozinho. O DuckDB só devolve a memória no
 `close`; o leitor sem `close` apaga a pasta temporária quando é coletado.
 
+Fora do pacote, o `delta_scan` do DuckDB, o `DeltaTable.scan(predicate=...)` e o `QueryBuilder` do
+deltalake e o `scan_delta` do Polars leem as tabelas com filtro certo. O dataset Arrow do delta-rs
+erra o filtro numa coluna sem mínimo e máximo no log do arquivo: `DeltaTable.to_pyarrow_dataset()`
+com filtro, `to_pyarrow_table` e `to_pandas` com `filters` e o `scan_delta(..., use_pyarrow=True)`
+do Polars pulam esse arquivo num filtro de valor. Quando o log também não tem o `nullCount` da
+coluna, o dataset e o Polars com `use_pyarrow=True` pulam o arquivo num `IS NULL`, e o `IS NOT NULL`
+do dataset traz os nulos dele; o DuckDB sobre esse dataset erra parte dos filtros (deltalake 1.6.4 e
+1.6.6, em 2026-09-25). `serialize_db.delta.register_files`, que o `export_partition` dos motores e o
+`initial_load` usam, deixa sem mínimo e máximo as colunas `Numeric`, `DateTime` e `Boolean` e o
+texto dos arquivos do `UNLOAD`; ele e `serialize_db.delta.publish_partition` deixam sem os dois as
+`Double` com valor não finito na partição. O filtro nas outras colunas e a leitura sem filtro saem
+certos.
+
 ## Retenção dos arquivos removidos
 
 Um commit que substitui uma partição tira do log os arquivos da versão anterior sem apagá-los: eles
