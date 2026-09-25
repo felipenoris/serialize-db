@@ -39,8 +39,8 @@ Os fatos que o resumo usa:
   pede manutenção.
 - Proxy. Nada na suíte exige proxy; sem as variáveis, nada a fazer. Com elas, das duas linhas do
   delta-rs, a segunda, com ``NO_PROXY`` exportada de ``no_proxy``, é a que vale para a suíte.
-- Endpoint. Com ``AWS_ENDPOINT_URL``, o ``boto3`` e o delta-rs o usam, e a suíte não o passa ao
-  secret do DuckDB.
+- Endpoint. Com ``AWS_ENDPOINT_URL``, o ``boto3``, o delta-rs e o secret do DuckDB da suíte, pelas
+  opções de ``Storage.duckdb_setup``, o usam.
 
 Sem rede, o diagnóstico leva um minuto e meio: o ``boto3`` desiste em 11 s, o delta-rs em 10 s
 (``max_retries`` e ``retry_timeout`` em ``storage_options``) e o DuckDB no teto de 60 s do
