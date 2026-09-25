@@ -1,5 +1,6 @@
 """A operação da etapa 9: ``serialize-db snapshot``, ``vacuum``, ``compact``, ``archive``,
-``export`` e ``history`` sobre as primitivas de ``serialize_db.delta``.
+``export`` e ``history`` sobre as primitivas de ``serialize_db.delta``, e o ``serialize-db
+channel`` da etapa 10.
 
 Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): o banco de
 ``tests/lancamentos_model.py`` numa raiz por teste, com a pasta temporária do processo apontada
@@ -8,8 +9,9 @@ com os metadados da biblioteca; o ``vacuum`` que preserva a versão do snapshot 
 da retenção; a compactação recusada depois de um snapshot na versão atual e feita antes, com o
 commit sem alteração de dados; o arquivo que copia cada tabela do snapshot com os mesmos arquivos e
 as mesmas somas, move a entrada para ``archived``, solta a versão no ``vacuum`` e ocupa o nome; a
-exportação por cópia e por reescrita, de uma versão antiga inclusive; e os erros de uso da linha
-de comando.
+exportação por cópia e por reescrita, de uma versão antiga inclusive; o canal apontado, movido
+e listado, e o ``archive`` recusado no snapshot de um canal; e os erros de uso da linha de
+comando.
 """
 
 from __future__ import annotations
@@ -332,6 +334,42 @@ def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixtu
     assert "destino não vazio" in capsys.readouterr().err
     assert cli.main([*export, "/fora/da/raiz"]) == 2
     assert "fora da raiz" in capsys.readouterr().err
+
+
+def test_channel_points_moves_and_lists(db: Database, capsys: pytest.CaptureFixture) -> None:
+    """``channel --name --snapshot`` aponta o canal e imprime o snapshot anterior e o novo, e sem
+    argumentos lista os canais; saem com 2 o snapshot ausente, o canal ``current``, um só dos dois
+    argumentos e o ``archive`` do snapshot de um canal, que não copia nada."""
+    assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 0
+    assert cli.main(["channel", *common_arguments(db)]) == 0
+    assert capsys.readouterr().out.endswith("nenhum canal em prd\n")
+    assert cli.main(["channel", *common_arguments(db), "--name", "default",
+                     "--snapshot", "2026T3"]) == 0
+    assert capsys.readouterr().out == "default: (nenhum) -> 2026T3\n"
+    assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T4"]) == 0
+    assert cli.main(["channel", *common_arguments(db), "--name", "default",
+                     "--snapshot", "2026T4"]) == 0
+    assert capsys.readouterr().out.endswith("default: 2026T3 -> 2026T4\n")
+    assert cli.main(["channel", *common_arguments(db)]) == 0
+    assert capsys.readouterr().out == "default: 2026T4\n"
+    control, _ = delta.read_snapshots(db.storage, "prd")
+    assert control["channels"] == {"default": "2026T4"}
+
+    # Os erros: o snapshot ausente, o canal current, um só argumento e o archive do canal.
+    assert cli.main(["channel", *common_arguments(db), "--name", "default",
+                     "--snapshot", "2026T9"]) == 2
+    assert "não está em snapshots" in capsys.readouterr().err
+    assert cli.main(["channel", *common_arguments(db), "--name", "current",
+                     "--snapshot", "2026T3"]) == 2
+    assert "reservado" in capsys.readouterr().err
+    assert cli.main(["channel", *common_arguments(db), "--name", "default"]) == 2
+    assert "juntos" in capsys.readouterr().err
+    assert cli.main(["archive", *common_arguments(db), "--name", "2026T4"]) == 2
+    printed_errors = capsys.readouterr().err
+    assert "canal default" in printed_errors
+    assert "Traceback" not in printed_errors
+    assert not Path(db.root, "prd", "arquivo").exists()
+    assert delta.read_snapshots(db.storage, "prd")[0] == control
 
 
 def test_empty_environment_variable_counts_as_absent(db: Database, capsys: pytest.CaptureFixture,

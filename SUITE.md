@@ -118,17 +118,58 @@ export PYTHONPATH=tests
 #    porque a tabela já existe (sem IF NOT EXISTS, por decisão sua).
 .venv/bin/serialize-db publish --init
 
-# 2. Primeiro uma tabela pequena, para validar o caminho no alvo.
-.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
-    --metadata client_model:Base.metadata --tables cad_contas
+# 2. O snapshot da carga e o canal default apontado para ele: a publicação e o leitor
+#    Delta sem argumento leem esse snapshot. "serialize-db channel" sem opções lista os canais.
+.venv/bin/serialize-db snapshot --root $TARGET_ROOT_PATH --environment prd \
+    --metadata client_model:Base.metadata --name carga-2026-09-25
+.venv/bin/serialize-db channel --root $TARGET_ROOT_PATH --environment prd \
+    --metadata client_model:Base.metadata --name default --snapshot carga-2026-09-25
+.venv/bin/serialize-db channel --root $TARGET_ROOT_PATH --environment prd \
+    --metadata client_model:Base.metadata
 
-# 3. A base inteira, uma conexão por tabela em paralelo.
+# 3. Primeiro uma tabela pequena, para validar o caminho no alvo; publish exige
+#    --snapshot <nome> ou --channel <nome> (default, current).
 .venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
-    --metadata client_model:Base.metadata --max-workers 4
+    --metadata client_model:Base.metadata --tables cad_contas --channel default
 
-# 4. O estado: versão publicada, versão atual e partições pendentes por tabela.
+# 4. A base inteira, uma conexão por tabela em paralelo.
+.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
+    --metadata client_model:Base.metadata --max-workers 4 --channel default
+
+# 5. O estado: versão publicada, versão atual e partições pendentes por tabela.
 .venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --status
+
+# 6. A versão atual sem snapshot (--channel current) e a volta a um snapshot pelo nome, que
+#    troca só as partições alteradas entre as duas versões.
+.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
+    --metadata client_model:Base.metadata --channel current
+.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
+    --metadata client_model:Base.metadata --snapshot carga-2026-09-25 --tables cad_contas
+```
+
+# Acesso de leitura
+
+```
+# O leitor Delta sobre o snapshot do canal default e o leitor Redshift sobre as tabelas
+# publicadas, com o mesmo statement; o tempo de abertura das 12 views é a leitura pendente.
+PYTHONPATH=tests .venv/bin/python - <<'PY'
+import os
+import time
+import sqlalchemy as sa
+from client_model import Base
+from serialize_db import Database
+
+db = Database(os.environ["TARGET_ROOT_PATH"], "prd", Base.metadata)
+contas = Base.metadata.tables["cad_contas"]
+statement = sa.select(sa.func.count()).select_from(contas)
+started = time.perf_counter()
+with db.open_delta() as reader:
+    print(f"leitor Delta aberto em {time.perf_counter() - started:.3f} s: {reader.versions}")
+    print("delta:", reader.query(statement).to_pylist())
+with db.open_redshift() as reader:
+    print("redshift:", reader.query(statement).to_pylist())
+PY
 ```
 
 # Exportação e Compact

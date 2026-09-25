@@ -15,8 +15,9 @@ delta-rs, que confere tudo e paga a memória, e é o do motor Redshift para a pa
 não finito, cujo rodapé do ``UNLOAD`` deixa o ``NaN`` fora do máximo. ``version_diff`` lê no log as
 partições alteradas entre duas versões, ``copy_manifest`` monta o manifesto do ``COPY`` do Redshift,
 e ``snapshot`` marca no arquivo de controle do ambiente as versões de um snapshot do banco, que
-``vacuum_keeping_snapshots`` preserva. ``compact``, ``deep_copy`` e ``export_snapshot`` são a
-operação.
+``vacuum_keeping_snapshots`` preserva; ``set_channel`` aponta um canal do ambiente para um
+snapshot, e ``channel_snapshot`` e ``snapshot_versions`` leem o canal e as versões para o leitor
+e a publicação. ``compact``, ``deep_copy`` e ``export_snapshot`` são a operação.
 
 Exemplo, numa pasta local:
 
@@ -92,6 +93,7 @@ __all__ = [
     "RegisteredFile",
     "SchemaDiff",
     "archive_snapshot",
+    "channel_snapshot",
     "commit_metadata",
     "compact",
     "copy_manifest",
@@ -108,7 +110,9 @@ __all__ = [
     "register_files",
     "rewrite",
     "schema_diff",
+    "set_channel",
     "snapshot",
+    "snapshot_versions",
     "table_exists",
     "vacuum_keeping_snapshots",
     "version_diff",
@@ -124,6 +128,11 @@ RETENTION = {
 
 # O arquivo de controle dos snapshots do banco, na raiz de cada ambiente.
 CONTROL_FILE = "_serialize_db/snapshots.json"
+
+# O canal que o leitor Delta lê sem argumento, e o canal reservado que resolve para a versão atual
+# de cada tabela e não fica no arquivo de controle.
+DEFAULT_CHANNEL = "default"
+CURRENT_CHANNEL = "current"
 
 
 # ---------------------------------------------------------------- os tipos
@@ -1500,15 +1509,118 @@ def archive_snapshot(storage: Storage, environment: str, name: str) -> dict:
     :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
     :param name: o nome do snapshot.
     :return: o controle novo.
-    :raises ValueError: o nome ausente de ``snapshots``.
+    :raises ValueError: o nome ausente de ``snapshots``, ou o snapshot que um canal aponta, que
+        ``set_channel`` move antes.
     :raises ConflictError: outro escritor entre a leitura e a escrita.
     """
     control, fingerprint = read_snapshots(storage, environment)
     if name not in control["snapshots"]:
         raise ValueError(f"{environment}: o snapshot {name} não está em snapshots")
+    pointing = channels_pointing(control, name)
+    if pointing:
+        raise ValueError(f"{environment}: o snapshot {name} é o do canal {', '.join(pointing)}; "
+                         "mova o canal antes (serialize-db channel)")
     control.setdefault("archived", {})[name] = control["snapshots"].pop(name)
     _write_control(storage, environment, control, fingerprint)
     return control
+
+
+def channels_pointing(control: Mapping, snapshot: str) -> list[str]:
+    """Os canais que apontam o snapshot, em ordem de nome; protegida, para ``archive_snapshot`` e
+    ``serialize-db archive``, que recusam o snapshot de um canal."""
+    pointing = []
+    for name, target in control.get("channels", {}).items():
+        if target == snapshot:
+            pointing.append(name)
+    return sorted(pointing)
+
+
+def set_channel(storage: Storage, environment: str, name: str, snapshot: str) -> dict:
+    """Aponta o canal ``name`` do ambiente para o snapshot, na escrita condicional do arquivo de
+    controle, sob a chave irmã ``channels``.
+
+    O canal ``default`` é o snapshot que o leitor Delta lê sem argumento e que ``serialize-db
+    publish --channel default`` publica; só esta função, por ``serialize-db channel``, o move.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        set_channel(storage, "prd", "default", "2026T3")["channels"]   # {"default": "2026T3"}
+
+    :param storage: o armazenamento da raiz do banco.
+    :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
+    :param name: o nome do canal, pela regra da partição (``schema.PARTITION_VALUE``); o canal
+        ``current`` é reservado, a versão atual de cada tabela, e não fica no arquivo.
+    :param snapshot: o nome do snapshot, presente em ``snapshots``.
+    :return: o controle novo.
+    :raises ContractError: o nome do canal fora da regra da partição, ou o nome ``current``,
+        antes de ler o arquivo de controle.
+    :raises ValueError: o snapshot ausente de ``snapshots``, o arquivado inclusive, porque o
+        ``vacuum`` deixa de preservar as versões dele.
+    :raises ConflictError: outro escritor entre a leitura e a escrita.
+    """
+    check_partition_value(name)
+    if name == CURRENT_CHANNEL:
+        raise ContractError(f"o canal {CURRENT_CHANNEL} é reservado: ele é a versão atual de cada "
+                            "tabela, e nada o move")
+    control, fingerprint = read_snapshots(storage, environment)
+    if snapshot in control.get("archived", {}):
+        raise ValueError(f"{environment}: o snapshot {snapshot} está arquivado, e o vacuum não "
+                         "preserva as versões dele")
+    if snapshot not in control["snapshots"]:
+        raise ValueError(f"{environment}: o snapshot {snapshot} não está em snapshots")
+    control.setdefault("channels", {})[name] = snapshot
+    _write_control(storage, environment, control, fingerprint)
+    return control
+
+
+def channel_snapshot(control: Mapping, name: str) -> str:
+    """O snapshot que o canal aponta no arquivo de controle.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        control, _ = read_snapshots(storage, "prd")
+        channel_snapshot(control, "default")   # "2026T3"
+
+    :param control: o arquivo de controle, como ``read_snapshots`` o devolve.
+    :param name: o nome do canal.
+    :return: o nome do snapshot.
+    :raises ContractError: o canal ausente; a mensagem traz o ``serialize-db channel`` que o cria
+        e o canal ``current``, que lê a versão atual sem canal no arquivo.
+    """
+    snapshot = control.get("channels", {}).get(name)
+    if snapshot is None:
+        raise ContractError(f"o canal {name} não existe no arquivo de controle; aponte-o com "
+                            f"serialize-db channel --name {name} --snapshot <nome>, ou leia a "
+                            f"versão atual pelo canal {CURRENT_CHANNEL}")
+    return snapshot
+
+
+def snapshot_versions(control: Mapping, name: str) -> dict[str, int]:
+    """As versões de um snapshot presente em ``snapshots`` do arquivo de controle.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        snapshot_versions(control, "2026T3")   # {"cad_contratos": 88, "cad_lancamentos": 143}
+
+    :param control: o arquivo de controle, como ``read_snapshots`` o devolve.
+    :param name: o nome do snapshot.
+    :return: a versão de cada tabela, pelo nome da tabela, numa cópia da entrada.
+    :raises ContractError: o nome ausente de ``snapshots``; a mensagem diz quando ele está em
+        ``archived``, que só o leitor Delta lê, pela cópia em ``arquivo/<nome>/``.
+    """
+    versions = control.get("snapshots", {}).get(name)
+    if versions is None:
+        if name in control.get("archived", {}):
+            raise ContractError(f"o snapshot {name} está arquivado: só o leitor Delta o lê, pela "
+                                f"cópia em arquivo/{name}/")
+        raise ContractError(f"o snapshot {name} não existe no arquivo de controle")
+    return dict(versions)
 
 
 def vacuum_keeping_snapshots(uri: str, control: Mapping, table_name: str, storage: Storage,

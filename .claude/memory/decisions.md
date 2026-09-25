@@ -1002,3 +1002,29 @@ the user answered the open item on the target's `prod` environment: the user del
 artifact of the base named `prod` there (the `<root>/prod/` folder, the `prod_<table>` tables
 and their `serialize_db_publications` rows), and the item left `plan/OPEN_QUESTIONS.md`.
 `CLAUDE.md`, `plan/serialize-db.md`, `docs/operacao.md`
+
+## The stage 10 implementation (2026-09-25)
+
+The user asked for stage 10 implemented as planned, with a question only on a real ambiguity;
+the plan had no pending decision, so the assistant implemented it without one. The choices the
+plan left to the implementation, kept in `plan/PLAN-STAGE-10.md` ("A implementação"):
+`serialize_db.reader` names each reader `reader-<date>-<8 hex>`, the id of its DuckDB folder, of
+its Redshift staging and of its `UNLOAD` files; `Database.open_redshift` unloads under
+`<environment>/staging/<reader_id>` of the base's storage by default; the guard against `stream`
+without a destination lives in `RedshiftEngine.stream` (`ContractError` naming `unload_to`), not
+in the reader; a snapshot's versions are read from `snapshots` or from `archived`, so an archived
+snapshot opens with views over `<environment>/arquivo/<name>/<table>`; the views open and the
+materialization swaps in parallel through `_pool.run_in_pool`, one session per table, after every
+table's check; a reader not closed drops its engine folder by `weakref.finalize(self,
+engine.cleanup)`; `_check_readable` refuses only the model's tables the snapshot leaves out, by
+`sql.referenced_tables`, and leaves a text statement to DuckDB's own `CatalogException`.
+`serialize-db publish` refuses `--snapshot` with `--channel`, either with `--init`, `--status` or
+`--unpublish`, and neither without those, all with exit code 2 and one line; the revert reads the
+partitions from `version_diff(uri, min(published, version), max(published, version))`, and
+`_write_manifests` writes a manifest only for a partition with files, so a removed partition gets
+only its `DELETE`; `serialize-db archive` refuses the snapshot a channel points to before copying.
+The reader's tests import the publication suite's `Target`, `target` and `export_with_duckdb`
+(`from test_publication import ...`), so the `redshift` case of `tests/test_reader.py` publishes as
+the publication suite does. The pdoc build read four fields wrong (`:param channel:`, `:param db:`
+and one `:raises ContractError:` with a second colon on the first line), corrected before the
+commit. `plan/PLAN-STAGE-10.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`

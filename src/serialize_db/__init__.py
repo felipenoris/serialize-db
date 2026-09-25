@@ -30,6 +30,7 @@ __all__ = [
     "load",
     "main",
     "publication",
+    "reader",
     "resources",
     "schema",
     "sql",

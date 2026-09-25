@@ -2,15 +2,17 @@
 amostra no esquema.
 
 Os casos sem conexão conferem a tabela de controle exigida, o texto da transação e da
-despublicação, a conferência da versão lida (igual, mais nova, o ``UPDATE`` sem linha, o ``1023``
-e a tabela publicada que outra primeira publicação criou), a reconciliação pelas colunas de
-``svv_all_columns`` e o estado, sobre uma conexão de mentira que registra os comandos e responde
-a linha de controle (os que gravam um Delta na pasta local são ``local``). Os casos marcados
-``redshift``, ``s3`` e ``local`` publicam no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` a
-partir de um Delta sob ``SERIALIZE_DB_TEST_S3_ROOT``, exportado pelo motor DuckDB com o
-``temp_directory`` sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``, num ambiente ``poc<id>`` próprio, cujas
-tabelas publicadas e linhas de controle saem no fim; a tabela de controle é criada quando não
-existe e apagada só nesse caso. No substituto local
+despublicação, a conferência da versão lida (igual; abaixo; acima da pedida, com as versões de
+um snapshot, a volta da publicação; o ``UPDATE`` sem linha, o ``1023`` e a tabela publicada que
+outra primeira publicação criou), a reconciliação pelas colunas de ``svv_all_columns`` e o
+estado, sobre uma conexão de mentira que registra os comandos e responde a linha de controle (os
+que gravam um Delta na pasta local são ``local``). Os casos marcados ``redshift``, ``s3`` e
+``local`` publicam no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` a partir de um Delta sob
+``SERIALIZE_DB_TEST_S3_ROOT``, exportado pelo motor DuckDB com o ``temp_directory`` sob
+``SERIALIZE_DB_TEST_LOCAL_ROOT``, num ambiente ``poc<id>`` próprio, cujas tabelas publicadas e
+linhas de controle saem no fim; a tabela de controle é criada quando não existe e apagada só
+nesse caso; o último deles roda ``serialize-db publish`` pelo canal ``default``, por
+``--snapshot``, de volta a um snapshot anterior e pelo canal ``current``. No substituto local
 (``SERIALIZE_DB_TEST_EMULATOR``), a conexão é a de ``tests/emulator.py``, e o ``1023`` da
 publicação simultânea vem do conflito entre duas transações do DuckDB. O modelo é o de
 ``tests/lancamentos_model.py``.
@@ -49,7 +51,7 @@ from serialize_db.engine import redshift
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.engine.redshift import RedshiftConfig, mask
 from serialize_db.errors import ExecutionConflict, PublicationError
-from serialize_db.execution import Database, Execution
+from serialize_db.execution import Database
 from serialize_db.publication import PublishedColumn
 from serialize_db.storage import Storage
 
@@ -161,6 +163,29 @@ def published_entries(db: Database, months: list[str], rows: int = 30,
     return version
 
 
+def partition_files(db: Database, uri: str, version: int, value: str) -> list[str]:
+    """Os nomes dos arquivos de uma partição numa versão da tabela, em ordem."""
+    dt = delta.open_table(uri, db.storage, version=version)
+    names = []
+    for path in dt.file_uris():
+        if f"data_base_str={value}" in path:
+            names.append(path.rsplit("/", 1)[-1])
+    return sorted(names)
+
+
+def manifest_files(manifest: dict) -> list[str]:
+    """Os nomes dos arquivos de um manifesto do ``COPY``, em ordem."""
+    return sorted(entry["url"].rsplit("/", 1)[-1] for entry in manifest["entries"])
+
+
+def exit_code(arguments: list[str]) -> int | str | None:
+    """O código de saída de ``main``, também quando o ``argparse`` encerra o processo."""
+    try:
+        return cli.main(arguments)
+    except SystemExit as error:
+        return error.code
+
+
 # ---------------------------------------------------------------- sem conexão
 
 
@@ -169,8 +194,8 @@ def test_publish_requires_the_control_table(monkeypatch: pytest.MonkeyPatch,
                                             local_location: LocalLocation) -> None:
     """Sem a tabela de controle, ``publish_redshift``, ``unpublish_redshift`` e
     ``publication_status`` levantam ``PublicationError`` com o comando de inicialização e não
-    rodam outro comando; ``control_ddl`` sem ``IF NOT EXISTS``; a tabela fora do Delta e a
-    execução sem configuração também são ``PublicationError``."""
+    rodam outro comando; ``control_ddl`` sem ``IF NOT EXISTS``; a tabela fora do Delta também é
+    ``PublicationError``."""
     db = local_db(local_location)
     published_entries(db, MONTHS)
     connection = FakeConnection(control_table=False)
@@ -201,13 +226,6 @@ def test_publish_requires_the_control_table(monkeypatch: pytest.MonkeyPatch,
         publication.publish_redshift(db, CONFIG, [PROJECTED], "exec-1")
     publication.create_publications_table(CONFIG)
     assert connection.texts("CREATE") == [publication.control_ddl(SCHEMA)]
-
-    # A execução sem redshift=RedshiftConfig recusa publicar.
-    sandbox = DuckDBConfig(temp_directory=str(Path(db.root).parent / "sandbox"))
-    engine = DuckDBEngine(sandbox, "exec-2", db.storage)
-    with Execution(db, engine, MONTHS[0]) as run:
-        with pytest.raises(PublicationError, match="redshift=RedshiftConfig"):
-            run.publish_redshift(ENTRIES)
 
 
 def test_publication_statements_text() -> None:
@@ -275,9 +293,11 @@ def test_publication_statements_text() -> None:
 def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
                                          local_location: LocalLocation) -> None:
     """A versão lida igual à do Delta encerra a transação por ``ROLLBACK`` sem outro comando; a
-    lida acima dela é ``ExecutionConflict``; o ``rowcount`` 0 do ``UPDATE``, o ``1023`` e a tabela
-    publicada que outra primeira publicação criou são ``ExecutionConflict`` com ``ROLLBACK``, e
-    nenhum comando se repete; a lida abaixo publica só as partições de ``version_diff``."""
+    lida abaixo publica só as partições de ``version_diff``; a lida acima da pedida, com as
+    versões de um snapshot, publica as partições alteradas entre as duas com os arquivos da
+    versão pedida e volta a linha de controle; o ``rowcount`` 0 do ``UPDATE``, o ``1023`` e a
+    tabela publicada que outra primeira publicação criou são ``ExecutionConflict`` com
+    ``ROLLBACK``, e nenhum comando se repete."""
     db = local_db(local_location)
     published_entries(db, MONTHS)   # a versão 2
 
@@ -286,13 +306,6 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     assert publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1") == {ENTRIES.name: 2}
     assert connection.texts()[-3:] == [
         "BEGIN", publication.control_read(SCHEMA, "prd", ENTRIES), "ROLLBACK"]
-
-    # A versão lida acima da do Delta.
-    connection = FakeConnection(rows={"prd_cad_lancamentos": 3})
-    use_fake(monkeypatch, connection)
-    with pytest.raises(ExecutionConflict, match="mais nova"):
-        publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1")
-    assert connection.texts()[-1] == "ROLLBACK"
 
     # A versão lida abaixo: só a partição alterada, e o UPDATE por último.
     uri = db.uri(ENTRIES)
@@ -313,7 +326,25 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     assert manifest_uri == db.storage.uri_of(
         f"prd/publicacao/exec-1/cad_lancamentos/{MONTHS[1]}.manifest")
     manifest = json.loads(db.storage.read_text(db.storage.relative(manifest_uri))[0])
-    assert len(manifest["entries"]) == 1
+    assert manifest_files(manifest) == partition_files(db, uri, 3, MONTHS[1])
+
+    # A versão lida acima da pedida, com as versões de um snapshot: a volta à versão 2 publica
+    # a mesma partição com o arquivo da versão 2, e o UPDATE confere a versão 3 lida.
+    connection = FakeConnection(rows={"prd_cad_lancamentos": 3})
+    use_fake(monkeypatch, connection)
+    reverted = publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-r",
+                                            versions={ENTRIES.name: 2})
+    assert reverted == {ENTRIES.name: 2}
+    texts = connection.texts()
+    assert texts[-1] == "COMMIT"
+    assert texts[-2].startswith(f"UPDATE {CONTROL} SET delta_version = 2")
+    assert texts[-2].endswith("AND delta_version = 3")
+    assert [text for text in texts if text.startswith(f'DELETE FROM "{SCHEMA}"')] == deletes
+    manifest_uri = re.search(r"FROM '([^']+)'", connection.texts("COPY")[0]).group(1)
+    assert manifest_uri == db.storage.uri_of(
+        f"prd/publicacao/exec-r/cad_lancamentos/{MONTHS[1]}.manifest")
+    manifest = json.loads(db.storage.read_text(db.storage.relative(manifest_uri))[0])
+    assert manifest_files(manifest) == partition_files(db, uri, 2, MONTHS[1])
 
     # O UPDATE sem linha, o 1023 e a tabela que outra primeira publicação criou.
     for label, connection in (
@@ -843,23 +874,19 @@ def test_published_join_redistribution_is_read(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_execution_publishes_to_redshift_and_the_cli(target: Target,
-                                                     monkeypatch: pytest.MonkeyPatch,
-                                                     capsys: pytest.CaptureFixture) -> None:
-    """``Execution(..., redshift=config)`` no motor DuckDB publica no Delta e no Redshift;
-    ``serialize-db publish --status`` e ``--unpublish`` seguem pela linha de comando."""
+def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
+                                                           monkeypatch: pytest.MonkeyPatch,
+                                                           capsys: pytest.CaptureFixture) -> None:
+    """``serialize-db publish`` publica as versões do snapshot do canal ``default``, as de um
+    snapshot pelo nome, de volta a um anterior, e a versão atual pelo canal ``current``;
+    ``--status`` e ``--unpublish`` seguem pela linha de comando; saem com 2 o snapshot arquivado,
+    a tabela fora do snapshot, a chamada sem ``--snapshot`` nem ``--channel`` ou com os dois,
+    ``--status`` com um deles, o canal sem snapshot e a tabela fora do modelo."""
     db = target.db
-    config = DuckDBConfig(threads=2, temp_directory=str(target.folder / "execucao"))
-    engine = DuckDBEngine(config, "exec-run", db.storage)
-    delta.create_table(db.uri(PROJECTED), PROJECTED, db.storage)
-    with Execution(db, engine, MONTHS[1], "exec-run", redshift=target.config) as run:
-        run.sandbox.load(PROJECTED, entry_rows(MONTHS[1], 1, 25, PROJECTED))
-        run.audit(PROJECTED, [MONTHS[1]])
-        assert run.publish(PROJECTED, partitions=[MONTHS[1]]) == {PROJECTED.name: 1}
-        assert run.publish_redshift(PROJECTED) == {PROJECTED.name: 1}
-    assert len(published_rows(target, PROJECTED)[MONTHS[1]]) == 25
-    assert control_rows(target) == {f"{target.environment}_{PROJECTED.name}": (1, "exec-run")}
-
+    environment = target.environment
+    export_with_duckdb(target, PROJECTED, MONTHS)   # a versão 2
+    delta.snapshot(db.storage, environment, "A", {PROJECTED.name: 2})
+    delta.set_channel(db.storage, environment, delta.DEFAULT_CHANNEL, "A")
     for name, value in (("SCHEMA", target.config.schema), ("HOST", target.config.host),
                         ("USER", target.config.user), ("PASSWORD", target.config.password),
                         ("WORKGROUP", target.config.workgroup)):
@@ -868,15 +895,64 @@ def test_execution_publishes_to_redshift_and_the_cli(target: Target,
         else:
             monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", str(value))
     monkeypatch.setattr(tempfile, "tempdir", str(target.folder))
-    common = ["publish", "--root", db.root, "--environment", target.environment,
-              "--metadata", "lancamentos_model:Base.metadata"]
+    common = ["publish", "--root", db.root, "--environment", environment,
+              "--metadata", "lancamentos_model:Base.metadata", "--tables", PROJECTED.name]
+    published = f"{environment}_{PROJECTED.name}"
+
+    # O canal default: o snapshot A, a versão 2.
+    assert cli.main([*common, "--channel", "default", "--execution-id", "exec-a"]) == 0
+    assert "versão 2" in capsys.readouterr().out
+    rows = published_rows(target, PROJECTED)
+    assert {month: len(rows[month]) for month in rows} == {MONTHS[0]: 40, MONTHS[1]: 40}
+    assert control_rows(target) == {published: (2, "exec-a")}
+
+    # O snapshot B, duas versões à frente: a partição 1 trocada e um mês novo.
+    uri = db.uri(PROJECTED)
+    delta.publish_partition(uri, PROJECTED, MONTHS[1], entry_rows(MONTHS[1], 1000, 7, PROJECTED),
+                            METADATA, db.storage)   # a versão 3
+    delta.publish_partition(uri, PROJECTED, "2026-09-30",
+                            entry_rows("2026-09-30", 2000, 5, PROJECTED), METADATA,
+                            db.storage)   # a versão 4
+    delta.snapshot(db.storage, environment, "B", {PROJECTED.name: 4})
+    assert cli.main([*common, "--snapshot", "B", "--execution-id", "exec-b"]) == 0
+    rows = published_rows(target, PROJECTED)
+    assert {month: len(rows[month]) for month in rows} == {MONTHS[0]: 40, MONTHS[1]: 7,
+                                                           "2026-09-30": 5}
+    assert control_rows(target) == {published: (4, "exec-b")}
+
+    # A volta ao snapshot A: a partição 1 volta às 40 linhas, e o mês novo sai.
+    assert cli.main([*common, "--snapshot", "A", "--execution-id", "exec-r"]) == 0
+    rows = published_rows(target, PROJECTED)
+    assert {month: len(rows[month]) for month in rows} == {MONTHS[0]: 40, MONTHS[1]: 40}
+    assert [row[0] for row in rows[MONTHS[1]]] == list(range(41, 81))
+    assert control_rows(target) == {published: (2, "exec-r")}
+
+    # O canal current: a versão atual, a 4, e o estado.
+    assert cli.main([*common, "--channel", "current", "--execution-id", "exec-c"]) == 0
+    assert control_rows(target) == {published: (4, "exec-c")}
     assert cli.main([*common, "--status"]) == 0
-    printed = capsys.readouterr().out
-    assert f"{target.environment}_{PROJECTED.name}: publicada 1, atual 1, pendentes []" in printed
-    assert cli.main([*common, "--tables", PROJECTED.name, "--execution-id", "exec-cli"]) == 0
-    assert "versão 1" in capsys.readouterr().out
-    assert cli.main([*common, "--unpublish", "--tables", PROJECTED.name]) == 0
-    assert f"{PROJECTED.name}: 1" in capsys.readouterr().out
+    assert f"{published}: publicada 4, atual 4, pendentes []" in capsys.readouterr().out
+
+    # O snapshot arquivado, a tabela fora do snapshot e os erros de uso, sem traceback.
+    delta.set_channel(db.storage, environment, delta.DEFAULT_CHANNEL, "B")
+    delta.archive_snapshot(db.storage, environment, "A")
+    assert cli.main([*common, "--snapshot", "A"]) == 2
+    assert "arquivado" in capsys.readouterr().err
+    assert control_rows(target) == {published: (4, "exec-c")}
+    assert cli.main([*common[:-2], "--tables", ENTRIES.name, "--snapshot", "B"]) == 2
+    assert "fora do snapshot B" in capsys.readouterr().err
+    assert cli.main(common) == 2
+    assert "--snapshot <nome> ou --channel" in capsys.readouterr().err
+    assert exit_code([*common, "--snapshot", "B", "--channel", "current"]) == 2
+    assert cli.main([*common, "--status", "--channel", "current"]) == 2
+    assert cli.main([*common, "--channel", "nada"]) == 2
+    assert "o canal nada não existe" in capsys.readouterr().err
+    assert cli.main([*common[:-2], "--tables", "nao_existe", "--channel", "current"]) == 2
+    printed_errors = capsys.readouterr().err
+    assert "não está nos modelos" in printed_errors
+    assert "Traceback" not in printed_errors
+
+    # A despublicação.
+    assert cli.main([*common, "--unpublish"]) == 0
+    assert f"{PROJECTED.name}: 4" in capsys.readouterr().out
     assert control_rows(target) == {}
-    assert cli.main([*common, "--tables", "nao_existe"]) == 2
-    assert "não está nos modelos" in capsys.readouterr().err

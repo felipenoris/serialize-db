@@ -11,8 +11,9 @@ tabela sem partição e o conflito de dois escritores; o registro de um arquivo 
 grava, as recusas das conferências, a releitura que desfaz o commit e as estatísticas que podam; a
 coluna ``Double`` com valor não finito sem mínimo e máximo; a reconciliação aditiva, a dos
 comentários e a recusa da destrutiva; a reescrita num commit; a diferença de versões pelo log e a
-recusa do log limpo; o arquivo de controle dos snapshots; o ``vacuum`` que preserva os snapshots; a
-compactação; a exportação nos dois modos; e a pasta copiada que abre na mesma versão. A extensão
+recusa do log limpo; o arquivo de controle dos snapshots e os canais dele; o ``vacuum`` que
+preserva os snapshots; a compactação; a exportação nos dois modos; e a pasta copiada que abre na
+mesma versão. A extensão
 ``delta`` do DuckDB precisa estar na pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão
 ``.duckdb/`` na raiz do repositório).
 """
@@ -740,6 +741,57 @@ def test_snapshot_control_file_is_written_conditionally(storage: Storage,
             delta.snapshot(storage, "prd", "2026T5", {"cad_operacoes": 8})
     current, _ = delta.read_snapshots(storage, "prd")
     assert list(current["snapshots"]) == ["2026T2", "2026T3", "2026T4"]
+
+
+def test_channel_points_to_a_snapshot_and_refuses(storage: Storage,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    """``set_channel`` aponta e move o canal sob a chave ``channels``, ``channel_snapshot`` o lê e
+    ``snapshot_versions`` dá uma cópia da entrada; são recusados o snapshot ausente ou arquivado,
+    o nome fora da regra da partição, o canal ``current``, o canal e o snapshot que não existem, o
+    ``archive`` do snapshot de um canal e a escrita concorrente."""
+    with pytest.raises(ValueError, match="não está em snapshots"):
+        delta.set_channel(storage, "prd", "default", "2026T2")
+    delta.snapshot(storage, "prd", "2026T2", {"cad_operacoes": 3, "dom_canais": 1})
+    delta.snapshot(storage, "prd", "2026T3", {"cad_operacoes": 5})
+    control = delta.set_channel(storage, "prd", "default", "2026T2")
+    assert control["channels"] == {"default": "2026T2"}
+    control = delta.set_channel(storage, "prd", "default", "2026T3")
+    assert control["channels"] == {"default": "2026T3"}
+    assert delta.read_snapshots(storage, "prd")[0] == control
+    assert delta.channel_snapshot(control, "default") == "2026T3"
+    versions = delta.snapshot_versions(control, "2026T2")
+    assert versions == {"cad_operacoes": 3, "dom_canais": 1}
+    versions["cad_operacoes"] = 99
+    assert control["snapshots"]["2026T2"]["cad_operacoes"] == 3
+
+    # As recusas, sem mudar o arquivo de controle.
+    with pytest.raises(ContractError, match="regra da partição"):
+        delta.set_channel(storage, "prd", "2026 T4", "2026T3")
+    with pytest.raises(ContractError, match="reservado"):
+        delta.set_channel(storage, "prd", delta.CURRENT_CHANNEL, "2026T3")
+    with pytest.raises(ValueError, match="canal default"):
+        delta.archive_snapshot(storage, "prd", "2026T3")
+    delta.archive_snapshot(storage, "prd", "2026T2")
+    with pytest.raises(ValueError, match="arquivado"):
+        delta.set_channel(storage, "prd", "default", "2026T2")
+    with pytest.raises(ContractError, match="serialize-db channel --name outro"):
+        delta.channel_snapshot(control, "outro")
+    with pytest.raises(ContractError, match="arquivado"):
+        delta.snapshot_versions(delta.read_snapshots(storage, "prd")[0], "2026T2")
+    with pytest.raises(ContractError, match="não existe"):
+        delta.snapshot_versions(control, "2026T9")
+    assert delta.read_snapshots(storage, "prd")[0]["channels"] == {"default": "2026T3"}
+
+    # Outro escritor grava entre a leitura e a escrita: o canal perdedor não grava nada.
+    stale = delta.read_snapshots(storage, "prd")
+    delta.snapshot(storage, "prd", "2026T4", {"cad_operacoes": 7})
+    with monkeypatch.context() as patch:
+        patch.setattr(delta, "read_snapshots", lambda *args, **kwargs: stale)
+        with pytest.raises(ConflictError):
+            delta.set_channel(storage, "prd", "default", "2026T3")
+    current, _ = delta.read_snapshots(storage, "prd")
+    assert current["channels"] == {"default": "2026T3"}
+    assert list(current["snapshots"]) == ["2026T3", "2026T4"]
 
 
 def test_vacuum_keeps_snapshot_versions(storage: Storage, uri: str) -> None:

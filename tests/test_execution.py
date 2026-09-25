@@ -40,13 +40,7 @@ from conftest import LocalLocation
 from serialize_db import cli, delta, schema
 from serialize_db.audit import AuditReport
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
-from serialize_db.errors import (
-    AuditFailed,
-    ContractError,
-    ExecutionConflict,
-    PublicationError,
-    SandboxError,
-)
+from serialize_db.errors import AuditFailed, ContractError, ExecutionConflict, SandboxError
 from serialize_db.execution import Database, Execution
 from serialize_db.storage import Storage
 
@@ -561,16 +555,6 @@ def redshift_engine_pipeline(run: Execution) -> None:
     assert run.redshift.schema == "esquema"
 
 
-def duckdb_with_redshift_pipeline(run: Execution) -> None:
-    """O pipeline de ``--redshift``: confere o motor DuckDB e a configuração do Redshift que a
-    execução recebeu."""
-    from serialize_db.engine.redshift import RedshiftConfig
-
-    assert isinstance(run.sandbox, DuckDBEngine)
-    assert isinstance(run.redshift, RedshiftConfig)
-    assert run.redshift.schema == "esquema"
-
-
 class IdleConnection:
     """Uma conexão do ``redshift_connector`` de mentira que aceita todo comando sem resposta."""
 
@@ -628,8 +612,8 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
     db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``--engine redshift`` constrói o motor Redshift com as variáveis ``SERIALIZE_DB_REDSHIFT_*``
-    e dá a configuração à execução; ``--redshift`` a dá a uma execução no motor DuckDB; sem os
-    dois, ``publish_redshift`` é ``PublicationError``."""
+    e dá a configuração à execução; no motor DuckDB a execução não tem a configuração, e a
+    publicação saiu dela: ``--redshift`` é um erro de uso."""
     from serialize_db.engine import redshift
 
     monkeypatch.setattr(redshift, "driver_connect", lambda login: IdleConnection())
@@ -641,14 +625,12 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
               "--metadata", "test_execution:Base.metadata"]
     redshift_engine = [*common, "--engine", "redshift", "test_execution:redshift_engine_pipeline"]
     assert cli.main(redshift_engine) == 0
-    duckdb_engine = [*common, "--redshift", "test_execution:duckdb_with_redshift_pipeline"]
-    assert cli.main(duckdb_engine) == 0
+    assert exit_code([*common, "--redshift", "test_execution:projected_pipeline"]) == 2
 
-    # Sem as duas opções, a execução não tem a configuração.
+    # No motor DuckDB, a execução não tem a configuração nem a publicação.
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         assert run.redshift is None
-        with pytest.raises(PublicationError, match="redshift=RedshiftConfig"):
-            run.publish_redshift(PROJECTED)
+        assert not hasattr(run, "publish_redshift")
 
 
 def test_cli_audit_prints_the_sql_and_audits_the_published_version(

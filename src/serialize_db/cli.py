@@ -2,8 +2,9 @@
 
 Cada subcomando entra com a etapa que entrega a primitiva por trás dele: ``schema`` é o da etapa 1,
 ``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6, ``load`` o da etapa 7, ``publish`` o da
-etapa 8 e ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e ``history`` os da etapa
-9, com o runbook abaixo, seguido das opções de cada subcomando. ``schema write`` grava os arquivos
+etapa 8, ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e ``history`` os da etapa
+9 e ``channel`` o da etapa 10, com o runbook abaixo, seguido das opções de cada subcomando.
+``schema write`` grava os arquivos
 de esquema dos modelos e ``schema check`` compara os versionados com a geração nova, sem gravar;
 ``sql write`` grava o texto SQL de cada statement do pipeline em cada motor e ``sql check`` o
 compara com a geração nova. ``run`` abre uma execução e entrega a ``modulo:funcao`` do pipeline;
@@ -11,9 +12,12 @@ compara com a geração nova. ``run`` abre uma execução e entrega a ``modulo:f
 versão publicada, no motor de ``--engine``;
 ``load`` faz a carga inicial da base Parquet de origem (``--source``) nas tabelas Delta do
 ambiente, as sem partição antes das particionadas, e confere contagem e somas por partição;
-``publish`` publica no Redshift fora de uma execução, mostra o estado da publicação (``--status``),
-cria a tabela de controle (``--init``) ou despublica (``--unpublish``). ``snapshot`` grava a versão
-atual de cada tabela do ambiente no arquivo de controle; ``vacuum`` lista, ou apaga com
+``publish`` publica no Redshift o snapshot de ``--snapshot`` ou do canal de ``--channel``
+(``current`` é a versão atual de cada tabela), mostra o estado da publicação (``--status``), cria
+a tabela de controle (``--init``) ou despublica (``--unpublish``). ``snapshot`` grava a versão
+atual de cada tabela do ambiente no arquivo de controle; ``channel`` aponta um canal do ambiente
+para um snapshot, o ``default`` que o leitor Delta lê sem argumento, ou lista os canais;
+``vacuum`` lista, ou apaga com
 ``--apply``, os arquivos fora da retenção e das versões dos snapshots; ``compact`` junta os
 arquivos pequenos das partições de uma tabela; ``archive`` copia as tabelas de um snapshot para
 ``arquivo/<nome>/`` e move a entrada para ``archived``; ``export`` grava as pastas Parquet de uma
@@ -22,8 +26,7 @@ biblioteca. Os modelos chegam por ``--metadata modulo:atributo``, o caminho impo
 ``MetaData`` do cliente, e os statements por ``--statements modulo:atributo``, o caminho importável
 do dicionário ``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm
 por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dsv``) e ``SERIALIZE_DB_ENGINE``
-(``duckdb``); a configuração do Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``, e
-``run --redshift`` a dá a uma execução no motor DuckDB para ``run.publish_redshift``.
+(``duckdb``); a configuração do Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``.
 
 Exemplo:
 
@@ -42,11 +45,15 @@ Exemplo:
         --metadata pipeline.models:Base.metadata --source s3://bucket/db_projetado
     serialize-db publish --init
     serialize-db publish --root s3://bucket/delta --environment prd \\
-        --metadata pipeline.models:Base.metadata --tables cad_lancamentos_projetados
+        --metadata pipeline.models:Base.metadata --channel default
+    serialize-db publish --root s3://bucket/delta --environment prd \\
+        --metadata pipeline.models:Base.metadata --snapshot 2026T2 --tables cad_lancamentos
     serialize-db publish --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --status
     serialize-db snapshot --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --name 2026T3
+    serialize-db channel --root s3://bucket/delta --environment prd \\
+        --metadata pipeline.models:Base.metadata --name default --snapshot 2026T3
     serialize-db vacuum --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --apply
     serialize-db history --root s3://bucket/delta --environment prd \\
@@ -56,9 +63,11 @@ O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra d
 impresso, quando a auditoria reprova e quando a carga acha uma partição fora do contrato ou uma
 diferença de contagem ou soma; 2 no erro de uso, na tabela fora do modelo ou sem Delta, na
 partição acima do ``String(n)`` da coluna de partição, no conflito de execução, na publicação sem
-a tabela de controle, no modelo fora do contrato e na origem ausente da carga, no snapshot
-repetido ou ausente, na compactação depois de um snapshot na versão atual e no destino da
-exportação não vazio ou fora da raiz.
+a tabela de controle, sem ``--snapshot`` nem ``--channel``, do snapshot ou do canal ausente, do
+snapshot arquivado ou da tabela fora do snapshot, no modelo fora do contrato e na origem ausente
+da carga, no snapshot repetido ou ausente, no canal sem ``--name`` e ``--snapshot`` juntos, no
+canal ``current``, na compactação depois de um snapshot na versão atual, no arquivo do snapshot de
+um canal e no destino da exportação não vazio ou fora da raiz.
 
 .. include:: ../../docs/operacao.md
 """
@@ -180,22 +189,26 @@ def _add_run_parser(commands: argparse._SubParsersAction) -> None:
                      default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb")
     run.add_argument("--partition", type=_name_argument, required=True)
     run.add_argument("--execution-id", type=_name_argument, default=None)
-    run.add_argument("--redshift", action="store_true",
-                     help="dá à execução a configuração das variáveis SERIALIZE_DB_REDSHIFT_*, "
-                          "para run.publish_redshift; com --engine redshift ela já entra")
     run.add_argument("pipeline", type=_resolve_function,
                      help="modulo:funcao que recebe a execução aberta")
     run.set_defaults(handler=_run)
 
 
 def _add_publish_parser(commands: argparse._SubParsersAction) -> None:
-    """``serialize-db publish``: a publicação no Redshift fora de uma execução, o estado, a
-    tabela de controle e a despublicação; a conexão vem de ``SERIALIZE_DB_REDSHIFT_*``."""
-    publish = commands.add_parser("publish", help="a publicação no Redshift fora de uma execução")
+    """``serialize-db publish``: a publicação no Redshift de um snapshot, pelo nome ou pelo canal,
+    o estado, a tabela de controle e a despublicação; a conexão vem de
+    ``SERIALIZE_DB_REDSHIFT_*``."""
+    publish = commands.add_parser("publish", help="a publicação no Redshift de um snapshot")
     publish.add_argument("--metadata", type=_resolve_metadata, default=None,
                          help="modulo:atributo com o MetaData dos modelos; dispensado por --init")
     publish.add_argument("--root", default=os.environ.get("SERIALIZE_DB_ROOT"))
     publish.add_argument("--environment", type=_name_argument, default=_environment_default())
+    which = publish.add_mutually_exclusive_group()
+    which.add_argument("--snapshot", type=_name_argument, default=None,
+                       help="publica as versões deste snapshot do arquivo de controle")
+    which.add_argument("--channel", type=_name_argument, default=None,
+                       help="publica o snapshot deste canal; current é a versão atual de cada "
+                            "tabela")
     publish.add_argument("--tables", nargs="+", default=None,
                          help="as tabelas a publicar ou despublicar; sem ela, todas do modelo")
     publish.add_argument("--max-workers", type=int, default=1)
@@ -234,6 +247,16 @@ def _add_operation_parsers(commands: argparse._SubParsersAction) -> None:
     _add_database_arguments(snapshot)
     snapshot.add_argument("--name", required=True, type=_name_argument)
     snapshot.set_defaults(handler=_snapshot)
+
+    channel = commands.add_parser("channel",
+                                  help="aponta um canal do ambiente para um snapshot, ou lista "
+                                       "os canais")
+    _add_database_arguments(channel)
+    channel.add_argument("--name", type=_name_argument, default=None,
+                         help="o canal, como default; com --snapshot")
+    channel.add_argument("--snapshot", type=_name_argument, default=None,
+                         help="o snapshot que o canal passa a apontar, presente em snapshots")
+    channel.set_defaults(handler=_channel)
 
     vacuum = commands.add_parser("vacuum",
                                  help="os arquivos fora da retenção e das versões dos snapshots")
@@ -369,7 +392,7 @@ def _run(args: argparse.Namespace) -> int:
     """Abre a execução, entrega-a ao pipeline e devolve o código pelo resultado: 1 na auditoria
     reprovada, 2 no conflito e no motor que não serve."""
     redshift = None
-    if args.redshift or args.engine == "redshift":
+    if args.engine == "redshift":
         from serialize_db.engine.redshift import RedshiftConfig
 
         redshift = RedshiftConfig.from_environment()
@@ -473,11 +496,22 @@ def _selected_tables(metadata: sa.MetaData, names: list[str] | None) -> list[sa.
 
 def _publish(args: argparse.Namespace) -> int:
     """``--init`` cria a tabela de controle; ``--status`` mostra o estado; ``--unpublish``
-    despublica; sem os três, publica as tabelas. 2 no erro de uso, sem a tabela de controle e no
+    despublica; sem os três, publica as tabelas no snapshot de ``--snapshot`` ou do canal de
+    ``--channel``, um dos dois obrigatório. 2 no erro de uso, sem a tabela de controle, no
+    snapshot ou no canal ausente, no snapshot arquivado, na tabela fora do snapshot e no
     conflito."""
     from serialize_db import publication
     from serialize_db.engine.redshift import RedshiftConfig
 
+    chosen = args.snapshot is not None or args.channel is not None
+    if (args.init or args.status or args.unpublish) and chosen:
+        print("serialize-db publish: --init, --status e --unpublish não recebem --snapshot nem "
+              "--channel", file=sys.stderr)
+        return 2
+    if not (args.init or args.status or args.unpublish) and not chosen:
+        print("serialize-db publish: informe --snapshot <nome> ou --channel <nome> (default, "
+              "current)", file=sys.stderr)
+        return 2
     config = RedshiftConfig.from_environment()
     if args.init:
         publication.create_publications_table(config)
@@ -495,16 +529,37 @@ def _publish(args: argparse.Namespace) -> int:
         elif args.unpublish:
             _print_unpublished(publication.unpublish_redshift(db, config, tables))
         else:
+            versions = _versions_to_publish(db, args, tables)
             execution_id = _publication_id(args.execution_id)
             _print_published(publication.publish_redshift(db, config, tables, execution_id,
-                                                          args.max_workers))
-    except (argparse.ArgumentTypeError, PublicationError) as error:
+                                                          args.max_workers, versions))
+    except (argparse.ArgumentTypeError, PublicationError, ContractError) as error:
         print(f"serialize-db publish: {error}", file=sys.stderr)
         return 2
     except ExecutionConflict as error:
         print(f"serialize-db publish: conflito: {error}", file=sys.stderr)
         return 2
     return 0
+
+
+def _versions_to_publish(db: Database, args: argparse.Namespace,
+                         tables: list[sa.Table]) -> dict[str, int]:
+    """As versões que ``publish`` grava: as do snapshot de ``--snapshot`` ou do canal de
+    ``--channel``, e a versão atual de cada tabela do ambiente com ``--channel current``; a
+    tabela pedida sem versão é ``PublicationError`` com a origem."""
+    if args.channel == delta.CURRENT_CHANNEL:
+        versions = _current_versions(db)
+        source = f"da versão atual do ambiente {db.environment}"
+    else:
+        control, _ = delta.read_snapshots(db.storage, db.environment)
+        name = args.snapshot or delta.channel_snapshot(control, args.channel)
+        versions = delta.snapshot_versions(control, name)
+        source = f"do snapshot {name}"
+    missing = [table.name for table in tables if table.name not in versions]
+    if missing:
+        raise PublicationError(f"{', '.join(missing)}: fora {source}; --tables deixa de fora a "
+                               "tabela sem versão")
+    return versions
 
 
 def _publication_id(execution_id: str | None) -> str:
@@ -620,13 +675,20 @@ def _existing_table(args: argparse.Namespace, db: Database,
     return table, uri
 
 
+def _current_versions(db: Database) -> dict[str, int]:
+    """A versão atual de cada tabela do modelo que existe no ambiente: a entrada de ``snapshot``
+    e as versões do canal ``current`` da publicação."""
+    versions = {}
+    for name, (_, uri) in _existing_tables(db).items():
+        versions[name] = delta.open_table(uri, db.storage).version()
+    return versions
+
+
 def _snapshot(args: argparse.Namespace) -> int:
     """A entrada do snapshot com a versão atual de cada tabela do ambiente; 2 no nome repetido e
     no conflito de escrita."""
     db = Database(args.root, args.environment, args.metadata)
-    versions = {}
-    for name, (_, uri) in _existing_tables(db).items():
-        versions[name] = delta.open_table(uri, db.storage).version()
+    versions = _current_versions(db)
     try:
         delta.snapshot(db.storage, db.environment, args.name, versions)
     except (ValueError, ConflictError) as error:
@@ -635,6 +697,34 @@ def _snapshot(args: argparse.Namespace) -> int:
     for name, version in sorted(versions.items()):
         print(f"{name}: versão {version}")
     print(f"snapshot {args.name} gravado com {len(versions)} tabela(s)")
+    return 0
+
+
+def _channel(args: argparse.Namespace) -> int:
+    """Com ``--name`` e ``--snapshot``, aponta o canal e imprime o snapshot anterior e o novo; sem
+    os dois, lista os canais do ambiente. 2 com um só dos dois, no canal ``current``, no snapshot
+    ausente ou arquivado e no conflito de escrita."""
+    if (args.name is None) != (args.snapshot is None):
+        print("serialize-db channel: informe --name e --snapshot juntos, ou nenhum dos dois para "
+              "listar os canais", file=sys.stderr)
+        return 2
+    db = Database(args.root, args.environment, args.metadata)
+    control, _ = delta.read_snapshots(db.storage, db.environment)
+    channels = control.get("channels", {})
+    if args.name is None:
+        if not channels:
+            print(f"nenhum canal em {db.environment}")
+        for name, snapshot in sorted(channels.items()):
+            print(f"{name}: {snapshot}")
+        return 0
+    previous = channels.get(args.name, "(nenhum)")
+    try:
+        # ContractError, do canal current, é um ValueError.
+        delta.set_channel(db.storage, db.environment, args.name, args.snapshot)
+    except (ValueError, ConflictError) as error:
+        print(f"serialize-db channel: {error}", file=sys.stderr)
+        return 2
+    print(f"{args.name}: {previous} -> {args.snapshot}")
     return 0
 
 
@@ -690,9 +780,9 @@ def _compact(args: argparse.Namespace) -> int:
 def _archive(args: argparse.Namespace) -> int:
     """A cópia de cada tabela do snapshot para ``arquivo/<nome>/``, com o tempo e o pico de RSS
     impressos por tabela, e a entrada movida para ``archived``; 2 no snapshot ausente de
-    ``snapshots``, na tabela do snapshot que já não existe na raiz e no conflito de escrita. A
-    repetição depois de uma interrupção continua a cópia: ``deep_copy`` pula as partições já
-    registradas no arquivo."""
+    ``snapshots`` ou apontado por um canal, na tabela do snapshot que já não existe na raiz e no
+    conflito de escrita. A repetição depois de uma interrupção continua a cópia: ``deep_copy``
+    pula as partições já registradas no arquivo."""
     db = Database(args.root, args.environment, args.metadata)
     storage = db.storage
     control, _ = delta.read_snapshots(storage, db.environment)
@@ -700,6 +790,11 @@ def _archive(args: argparse.Namespace) -> int:
     if entry is None:
         print(f"serialize-db archive: o snapshot {args.name} não está em snapshots",
               file=sys.stderr)
+        return 2
+    pointing = delta.channels_pointing(control, args.name)
+    if pointing:
+        print(f"serialize-db archive: o snapshot {args.name} é o do canal {', '.join(pointing)}; "
+              "mova o canal antes (serialize-db channel)", file=sys.stderr)
         return 2
     pending = []
     for name, version in sorted(entry.items()):

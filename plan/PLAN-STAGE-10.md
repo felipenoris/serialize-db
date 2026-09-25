@@ -62,93 +62,52 @@ Tomadas no mesmo dia, na revisão da interface pela simplicidade de uso:
 - Ficam como estão o `metadata` de `open_redshift`, o par `snapshot` e `channel` de `open_delta` e
   a materialização parcial por `materialize(..., partitions=...)`.
 
-## Interface
+## A implementação
 
-```python
-# serialize_db/delta.py
-def set_channel(storage: Storage, environment: str, name: str, snapshot: str) -> dict: ...
-def channel_snapshot(control: Mapping, name: str) -> str: ...
-def snapshot_versions(control: Mapping, name: str) -> dict[str, int]: ...
+O módulo `serialize_db.reader` (`DeltaReader`, `RedshiftReader` e `open_redshift`),
+`Database.open_delta` e `Database.open_redshift` em `serialize_db.execution`, `set_channel`,
+`channel_snapshot`, `snapshot_versions` e a protegida `channels_pointing` em `serialize_db.delta`,
+o subcomando `serialize-db channel`, o `serialize-db publish` por `--snapshot` ou `--channel`, e
+os casos de `tests/test_reader.py`, `tests/test_delta.py`, `tests/test_operation.py`,
+`tests/test_execution.py` e `tests/test_publication.py` substituem a interface planejada em
+2026-09-24: as assinaturas, o uso e as docstrings estão no código, em `docs/index.md` (seção
+"Ler a base com o modelo") e na documentação do `pdoc`. `Execution.publish_redshift` e
+`serialize-db run --redshift` saíram em 2026-09-25. O que a implementação mostrou está em
+[`POC.md`](POC.md), seção "O que a implementação da etapa 10 mostrou"; as leituras que só o
+ambiente alvo dá ficam na seção "As execuções no ambiente alvo".
 
+O que a implementação fixou além do texto das seções abaixo:
 
-# serialize_db/execution.py
-class Database:
-    def open_delta(self, snapshot: str | None = None, channel: str | None = None,
-                   config: DuckDBConfig | None = None) -> DeltaReader: ...
-    def open_redshift(self, config: RedshiftConfig | None = None,
-                      unload_to: str | None = None) -> RedshiftReader: ...
-
-
-# serialize_db/reader.py
-def open_redshift(metadata: sa.MetaData, environment: str, config: RedshiftConfig | None = None,
-                  unload_to: str | None = None) -> RedshiftReader: ...
-
-
-class DeltaReader:
-    snapshot: str | None                          # o snapshot lido; None no canal current
-    versions: dict[str, int]                      # a versão de cada tabela com view
-    materialized: dict[str, list[str] | None]     # as tabelas locais e as partições de cada uma
-
-    def materialize(self, *tables: sa.Table, partitions: list[str] | None = None) -> None: ...
-    def query(self, statement_or_sql: sa.sql.ClauseElement | str,
-              params: Mapping[str, object] | None = None) -> pa.Table: ...
-    def stream(self, statement_or_sql: sa.sql.ClauseElement | str,
-               params: Mapping[str, object] | None = None,
-               batch_size: int = 100_000) -> BatchStream: ...
-    def session(self) -> contextlib.AbstractContextManager[duckdb.DuckDBPyConnection]: ...
-    def close(self) -> None: ...                  # e __enter__, __exit__
-
-
-class RedshiftReader:
-    environment: str
-
-    def query(...) -> pa.Table: ...               # as assinaturas do DeltaReader
-    def stream(...) -> BatchStream: ...
-    def session(self) -> contextlib.AbstractContextManager[object]: ...
-    def close(self) -> None: ...                  # e __enter__, __exit__
-```
-
-O uso, com o `stmt` de um `select` Core ou ORM do modelo:
-
-```python
-import pandas as pd
-
-from serialize_db import Database
-from serialize_db.reader import open_redshift
-
-db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
-
-with db.open_delta() as reader:                     # o snapshot do canal default
-    reader.materialize(Conta.__table__)
-    reader.materialize(Lancamento.__table__, partitions=["2026-08-31"])
-    frame = reader.query(stmt).to_pandas(types_mapper=pd.ArrowDtype)
-    reader.versions                                 # {"cad_lancamentos": 143, ...}
-
-reader = db.open_delta(channel="current")          # a versão atual, sem with, num caderno
-reader.close()                                      # sem ele, a coleta apaga a pasta temporária
-
-with db.open_redshift() as reader:                  # o time, com SERIALIZE_DB_REDSHIFT_*
-    frame = reader.query(stmt).to_pandas(types_mapper=pd.ArrowDtype)
-
-with open_redshift(Base.metadata, "prd") as reader: # o cliente sem S3: só query
-    frame = reader.query(stmt).to_pandas(types_mapper=pd.ArrowDtype)
-
-with open_redshift(Base.metadata, "prd", unload_to="s3://bucket-do-cliente/tmp") as reader:
-    with reader.stream(stmt) as batches:            # resultado grande, pelo UNLOAD
-        for batch in batches:
-            work(batch)
-```
-
-A linha de comando, com as opções de `--root`, `--environment` e `--metadata` omitidas:
-
-```shell
-serialize-db snapshot --name 2026T3                     # marca as versões atuais
-serialize-db channel --name default --snapshot 2026T3   # "default: 2026T2 -> 2026T3"
-serialize-db channel                                    # mostra os canais
-serialize-db publish --channel default                  # o snapshot do default
-serialize-db publish --snapshot 2026T2                  # um snapshot pelo nome
-serialize-db publish --channel current                  # a versão atual de cada tabela
-```
+- **O motor sem armazenamento** guarda a recusa do `stream`: `RedshiftEngine.stream` levanta
+  `ContractError`, que cita `unload_to`, quando `storage` é `None`, antes de qualquer comando, e o
+  `cleanup` não lista arquivos; o leitor só repassa. `RedshiftEngine` ganhou `prefix`, e
+  `storage` e `staging_prefix` aceitam `None` juntos.
+- **`materialize` confere toda tabela antes da primeira troca**: a view ausente, `partitions`
+  numa tabela sem partição e o valor fora da regra são `ContractError` sem que tabela alguma
+  troque; as trocas correm em paralelo, uma sessão a mais por tabela, e `materialized` guarda a
+  lista de partições como o cliente a passou.
+- **A regra de leitura no leitor Delta** confere só as tabelas do statement Core que estão em
+  `db.metadata.tables` (`sql.referenced_tables`); um texto pronto e uma tabela temporária de
+  `session()` passam ao motor como estão.
+- **As versões do snapshot arquivado** são a versão atual de cada cópia em `arquivo/<nome>/`,
+  lida na abertura; `reader.versions` as traz, e a view cita a cópia.
+- **O finalizador** guarda o `cleanup` do motor, e `close()` o chama: o `cleanup` roda uma vez,
+  no `close` ou na coleta, e a segunda chamada não faz nada; o motor de `DuckDBConfig()` nasce em
+  `tempfile.mkdtemp(prefix="serialize_db_")`, a pasta que a coleta apaga.
+- **`Database.open_redshift` sem `unload_to`** grava em `<raiz>/<ambiente>/staging/<id do
+  leitor>/`, e `open_redshift` sem ele abre o motor sem armazenamento; o identificador é
+  `reader-<AAAA-MM-DD>-<uuid8>` nos dois leitores.
+- **A volta a um snapshot anterior** chama `version_diff(uri, min, max)` entre a versão publicada
+  e a pedida, e a transação da publicação deixou de recusar a versão lida acima da pedida; o
+  `UPDATE` da linha de controle continua condicionado à versão lida.
+- **`serialize-db publish`** sai com 2, sem escrita no Redshift, na chamada sem `--snapshot` nem
+  `--channel`, com `--init`, `--status` ou `--unpublish` ao lado de um deles, no canal ausente,
+  no snapshot ausente ou arquivado e na tabela pedida sem versão (`PublicationError`, que
+  `--tables` contorna); `serialize-db archive` recusa o snapshot de um canal antes de copiar.
+- **`tests/test_reader.py`** usa a fixture `target` e `export_with_duckdb` de
+  `tests/test_publication.py` no caso `redshift`, e a conexão de mentira de
+  `tests/test_engine_redshift.py` nos casos sem conexão; a poda pela view é medida pelo log
+  `FileSystem` do DuckDB, por caso parametrizado (`=`, `BETWEEN`, `IN` salteado).
 
 ## Estratégia de implementação
 
@@ -341,10 +300,14 @@ Delta para o mesmo statement, e `stream` o mesmo de `query`. Depois do `close`, 
 
 ## As execuções no ambiente alvo
 
+Pendentes depois da implementação de 2026-09-25, com os comandos em `SUITE.md` (seções
+"Publicação Delta -> Redshift" e "Acesso de leitura"):
+
 - **O tempo de abertura do leitor Delta** sobre as 12 tabelas da raiz carregada, com as views em
   paralelo. Só a pasta local foi medida: 8,7 ms por view (sonda de 2026-09-24).
 - **A publicação por `--channel default`** sobre a raiz de `SUITE.md` e a volta a um snapshot
-  anterior, com o tempo e o pico de RSS por tabela que a publicação registra.
+  anterior, com o tempo e o pico de RSS por tabela que a publicação registra; no substituto, a
+  volta trocou só as partições alteradas entre as duas versões (2026-09-25, [`POC.md`](POC.md)).
 - **O `UNLOAD` do cliente** para um bucket próprio com um usuário do Redshift só de leitura. A
   execução mostra se o `UNLOAD` é aceito para quem só tem `SELECT` e qual caminho de credencial
   serve, o `iam_role` do cliente ou as credenciais da sessão. Ela precisa de um papel de cliente no

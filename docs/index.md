@@ -40,8 +40,9 @@ de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3
 `serialize_db.engine.redshift`, a execução, `serialize_db.execution`, com `serialize-db run` e
 `serialize-db audit`, a publicação para os clientes no Redshift, `serialize_db.publication`,
 com `serialize-db publish`, a carga inicial da base Parquet atual, `serialize_db.load`, com
-`serialize-db load`, e a operação, `serialize-db snapshot`, `vacuum`, `compact`, `archive`,
-`export` e `history`, com o runbook na página de `serialize_db.cli`.
+`serialize-db load`, a operação, `serialize-db snapshot`, `vacuum`, `compact`, `archive`,
+`export`, `history` e `channel`, com o runbook na página de `serialize_db.cli`, e o acesso de
+leitura à base com o modelo, `serialize_db.reader`, por `db.open_delta()` e `db.open_redshift()`.
 
 ## Instalação
 
@@ -379,7 +380,9 @@ with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as ru
 abertura. Cada partição sai do sandbox num arquivo que o motor grava e entra no log por
 `serialize_db.delta.register_files`, depois das conferências. `run.snapshot("2026T3")` marca a
 execução: os commits levam o nome, e o encerramento sem erro grava as versões de todas as tabelas
-no arquivo de controle do ambiente.
+no arquivo de controle do ambiente; `serialize-db channel --name default --snapshot 2026T3` aponta
+depois o canal `default`, o snapshot que o leitor Delta lê sem argumento e que
+`serialize-db publish --channel default` publica.
 
 A linha de comando abre a mesma execução para uma função `modulo:funcao` que recebe `run`, e
 `serialize-db audit` imprime o texto das verificações de uma tabela ou roda a auditoria sobre a
@@ -494,25 +497,30 @@ de memória residente do processo. A tabela de controle é criada uma vez, pelo 
 serialize-db publish --init
 ```
 
-Numa execução, `run.publish_redshift(table)` publica a versão que `run.publish` acabou de gravar,
-com a configuração `redshift` que a execução recebeu; fora dela, `serialize-db publish` publica a
-versão atual, mostra o estado e despublica:
-
-```python
-with Execution(db, "duckdb", "2026-08-31", redshift=RedshiftConfig.from_environment()) as run:
-    ...
-    run.publish(Projetado.__table__, partitions=["2026-08-31"])
-    run.publish_redshift(Projetado.__table__)        # só as partições alteradas
-```
+A publicação vem depois da execução, pela linha de comando, que escolhe as versões por
+`--snapshot <nome>` ou `--channel <nome>`: `default` é o snapshot que `serialize-db channel`
+apontou, e `current` a versão atual de cada tabela, sem snapshot; `--status` mostra o estado, e
+`--unpublish` despublica:
 
 ```shell
+serialize-db channel --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --name default --snapshot 2026T3
 serialize-db publish --root s3://bucket/projeto/delta --environment prd \
-    --metadata pipeline.models:Base.metadata --tables cad_lancamentos_projetados
+    --metadata pipeline.models:Base.metadata --channel default
+serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --snapshot 2026T2 --tables cad_lancamentos_projetados
+serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --channel current
 serialize-db publish --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --status
 serialize-db publish --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --unpublish --tables cad_lancamentos_projetados
 ```
+
+A publicação de um snapshot anterior ao publicado volta a tabela: as partições alteradas entre as
+duas versões recebem os arquivos da versão pedida, e a partição que só a versão publicada tinha
+sai. O snapshot arquivado e a tabela do modelo fora do snapshot são erro de uso, sem escrita no
+Redshift, e `--tables` deixa a tabela de fora.
 
 Sem a tabela de controle, a publicação para com `serialize_db.errors.PublicationError` antes de
 qualquer escrita; duas publicações da mesma tabela ao mesmo tempo terminam com a segunda em
@@ -520,6 +528,49 @@ qualquer escrita; duas publicações da mesma tabela ao mesmo tempo terminam com
 na tabela publicada por `ALTER TABLE ... ADD COLUMN`, e um diff destrutivo (coluna removida, tipo
 ou largura de `VARCHAR(n)` que mudou) despublica a tabela e a recria inteira na publicação
 seguinte.
+
+### Ler a base com o modelo
+
+`serialize_db.reader` lê a base para quem tem o modelo, com o mesmo statement Core nas duas
+origens e o resultado em Arrow. `db.open_delta()` abre um DuckDB no processo com uma view por
+tabela do modelo sobre o snapshot do canal `default`; `snapshot=` lê um snapshot pelo nome, o
+arquivado pela cópia em `arquivo/<nome>/`, e `channel="current"` a versão atual de cada tabela.
+`db.open_redshift()` e `serialize_db.reader.open_redshift` leem as tabelas publicadas
+`<ambiente>_<tabela>`, a segunda para o cliente sem a raiz Delta:
+
+```python
+import pandas as pd
+import sqlalchemy as sa
+
+from serialize_db.reader import open_redshift
+
+statement = sa.select(Lancamento).where(Lancamento.data_base_str == "2026-08-31")
+
+with db.open_delta() as reader:                        # o snapshot do canal default
+    reader.materialize(Conta.__table__)
+    reader.materialize(Lancamento.__table__, partitions=["2026-07-31", "2026-08-31"])
+    frame = reader.query(statement).to_pandas(types_mapper=pd.ArrowDtype)
+    reader.versions                                    # {"cad_contas": 1, "cad_lancamentos": 143}
+
+reader = db.open_delta(channel="current")             # a versão atual, sem with, num caderno
+reader.close()                                         # sem ele, a coleta apaga a pasta temporária
+
+with open_redshift(Base.metadata, "prd") as reader:   # SERIALIZE_DB_REDSHIFT_*, só query
+    frame = reader.query(statement).to_pandas(types_mapper=pd.ArrowDtype)
+
+with open_redshift(Base.metadata, "prd", unload_to="s3://bucket-do-cliente/tmp") as reader:
+    with reader.stream(statement) as batches:          # o resultado grande, pelo UNLOAD
+        for batch in batches:
+            work(batch)
+```
+
+Cada view fica presa à versão lida na abertura, e a leitura entre tabelas é consistente num
+snapshot; no Redshift, cada tabela é publicada na sua transação, e uma consulta que junta duas
+tabelas durante uma publicação pode ler versões diferentes. O leitor roda só `Select` e
+`CompoundSelect`; um comando, como uma tabela temporária, vai pela conexão de `session()`. O
+`delta_scan` poda as partições por `=`, por `BETWEEN` e pelo `IN` ao lado de um intervalo, e abre
+todos os arquivos com um `IN` de mais de um valor sozinho. O DuckDB só devolve a memória no
+`close`; o leitor sem `close` apaga a pasta temporária quando é coletado.
 
 ## Retenção dos arquivos removidos
 

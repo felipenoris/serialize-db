@@ -6,13 +6,16 @@ A tabela de controle é uma só para todos os ambientes, criada uma vez no esque
 cria, e ``publish_redshift`` recusa publicar sem ela, antes de qualquer escrita. A publicação de
 cada tabela é uma transação, numa conexão própria: ``BEGIN``; a leitura da linha de controle, que
 identifica a versão publicada e fixa o snapshot; sem linha, a primeira publicação, com a tabela
-publicada criada e todas as partições; com linha, a versão lida conferida contra a do Delta e
-``version_diff`` entre as duas; por partição, ``DELETE`` da partição, ``COPY ... MANIFEST`` numa
+publicada criada e todas as partições; com linha, ``version_diff`` entre a versão lida e a pedida,
+a menor e a maior delas, o que também volta a tabela a um snapshot anterior ao publicado; por
+partição, ``DELETE`` da partição e, quando a versão pedida a tem, ``COPY ... MANIFEST`` numa
 staging temporária e ``INSERT ... SELECT`` com o valor; e por último o ``INSERT`` da linha de
 controle, ou o ``UPDATE`` dela condicionado à versão lida, cujas 0 linhas, como o ``1023`` e a
 tabela publicada que outra primeira publicação criou, saem como ``ExecutionConflict``. As tabelas
 correm num pool, uma conexão por tabela. ``unpublish_redshift`` apaga a tabela publicada e a linha
-de controle numa transação, e ``publication_status`` compara a versão publicada com a atual.
+de controle numa transação, e ``publication_status`` compara a versão publicada com a atual. As
+versões vêm de um snapshot do arquivo de controle, por ``serialize-db publish --snapshot`` ou
+``--channel``, ou são as atuais.
 
 O ``COPY`` leva a cláusula de credenciais do motor Redshift, montada por comando; nenhum texto
 que a carregue vai a log. Todo comando cita a tabela por nome em duas partes, depois do ``USE``
@@ -570,12 +573,14 @@ def _reconcile(connection: _Connection, config: RedshiftConfig, environment: str
 def _partitions_to_publish(uri: str, table: sa.Table, published: int | None, version: int,
                            storage: Storage) -> tuple[list[str | None], list[str | None]]:
     """As partições que a publicação troca e, entre elas, as que têm arquivo na versão: todas na
-    primeira publicação, as de ``version_diff`` nas seguintes."""
+    primeira publicação, as de ``version_diff`` entre a menor e a maior das duas versões nas
+    seguintes, o que serve à volta a uma versão anterior à publicada."""
     partition_by = table_options(table).partition_by
     available = delta.partition_values(delta.open_table(uri, storage, version), partition_by)
     if published is None:
         return list(available), list(available)
-    changed = sorted(delta.version_diff(uri, published, version, table, storage), key=str)
+    changed = sorted(delta.version_diff(uri, min(published, version), max(published, version),
+                                        table, storage), key=str)
     return changed, [value for value in changed if value in available]
 
 
@@ -621,9 +626,6 @@ def _publication_transaction(connection: _Connection, db: Database, config: Reds
         if published == version:
             connection.rollback()
             return None
-        if published is not None and published > version:
-            raise ExecutionConflict(f"{table.name}: a versão publicada {published} é mais nova "
-                                    f"que a versão {version} do Delta desta execução")
         changed, with_files = _partitions_to_publish(db.uri(table), table, published, version,
                                                      db.storage)
         manifests = _write_manifests(db, table, with_files, execution_id, version)
@@ -709,9 +711,11 @@ def publish_redshift(db: Database, config: RedshiftConfig, tables: Sequence[sa.T
 
     Confere a tabela de controle antes de tudo; depois, por tabela, numa conexão própria do pool: a
     reconciliação da tabela publicada que já existe e a transação da publicação. Uma tabela cuja
-    versão publicada é a do Delta não muda. Na primeira falha nada novo começa, o que está em curso
-    termina, e a exceção leva o resultado de cada tabela numa nota. Cada tabela publicada vai ao
-    log com as partições, o tempo e o pico de memória residente do processo.
+    versão publicada é a pedida não muda; uma versão anterior à publicada volta a tabela a ela,
+    trocando as partições alteradas entre as duas, e a partição que só a versão publicada tem sai
+    pelo ``DELETE``. Na primeira falha nada novo começa, o que está em curso termina, e a exceção
+    leva o resultado de cada tabela numa nota. Cada tabela publicada vai ao log com as partições,
+    o tempo e o pico de memória residente do processo.
 
     Exemplo:
 
@@ -728,15 +732,15 @@ def publish_redshift(db: Database, config: RedshiftConfig, tables: Sequence[sa.T
         ``COPY`` ficam em ``<ambiente>/publicacao/<execution_id>/``, sob a raiz.
     :param max_workers: o tamanho do pool, quantas tabelas publicam ao mesmo tempo; o padrão 1
         publica uma por vez.
-    :param versions: a versão do Delta por nome de tabela, a fixada pela execução; ``None``
-        publica a versão atual de cada tabela.
+    :param versions: a versão do Delta por nome de tabela, as de um snapshot do arquivo de
+        controle (``delta.snapshot_versions``); ``None`` publica a versão atual de cada tabela.
     :return: ``{tabela: versão publicada}``.
     :raises PublicationError: antes de qualquer escrita, sem a tabela de controle, ou com uma
         tabela sem versão: fora de ``versions`` ou, sem ``versions``, fora do Delta do ambiente.
-    :raises ExecutionConflict: a versão publicada mais nova que a do Delta, o ``UPDATE`` da linha
-        de controle sem linha (ou o ``DELETE`` dela, na despublicação de um diff destrutivo), o
-        ``1023`` e a tabela publicada que outra primeira publicação criou, sem repetição.
-    :raises LogUnavailable: um arquivo do log entre a versão publicada e a do Delta não existe.
+    :raises ExecutionConflict: o ``UPDATE`` da linha de controle sem linha (ou o ``DELETE`` dela,
+        na despublicação de um diff destrutivo), o ``1023`` e a tabela publicada que outra
+        primeira publicação criou, sem repetição.
+    :raises LogUnavailable: um arquivo do log entre a versão publicada e a pedida não existe.
     :raises SandboxError: sem ``iam_role`` em ``config`` e sem credenciais da AWS na sessão
         ``boto3``, para o ``COPY``.
     :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
