@@ -163,10 +163,11 @@ class AuditFailed(Exception):
 
 class PublicationError(Exception):
     """A publicação no Redshift não pode começar: a tabela de controle ``serialize_db_publications``
-    não existe no esquema, ou a execução não recebeu a configuração do Redshift.
+    não existe no esquema, ou uma tabela do modelo não tem versão a publicar, porque não está no
+    snapshot pedido ou não existe no ambiente.
 
     A mensagem diz o que o operador faz: ``serialize-db publish --init`` cria a tabela de controle
-    uma vez, e ``Execution(..., redshift=RedshiftConfig(...))`` dá a configuração.
+    uma vez, e ``--tables`` deixa de fora a tabela sem versão.
 
     Exemplo:
 

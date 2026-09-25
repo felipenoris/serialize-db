@@ -18,8 +18,8 @@ serialize-db publish --init
 ```
 
 Antes: as variáveis `SERIALIZE_DB_REDSHIFT_*` da conexão. Depois: a tabela
-`serialize_db_publications` no esquema; sem ela, `serialize-db publish` e
-`Execution.publish_redshift` recusam publicar com `serialize_db.errors.PublicationError`.
+`serialize_db_publications` no esquema; sem ela, `serialize-db publish` recusa publicar com
+`serialize_db.errors.PublicationError`.
 
 ### Snapshot do banco
 
@@ -37,6 +37,45 @@ e um nome inédito em `snapshots` e em `archived` do arquivo de controle
 `<ambiente>/_serialize_db/snapshots.json`. Depois: a entrada `{nome: {tabela: versão}}` gravada na
 escrita condicional; outro escritor entre a leitura e a escrita dá `serialize_db.errors.ConflictError`,
 e o comando se repete. As versões marcadas ficam legíveis qualquer que seja a retenção do `vacuum`.
+
+### Canal do snapshot
+
+Depois do snapshot que os clientes vão ler, o canal `default` do ambiente aponta para ele: é o
+snapshot que o leitor Delta abre sem argumento e que `serialize-db publish --channel default`
+publica. Só este comando o move:
+
+```shell
+serialize-db channel --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --name default --snapshot 2026T3
+serialize-db channel --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata
+```
+
+Antes: o snapshot em `snapshots` do arquivo de controle, não arquivado. Depois: o canal sob a
+chave `channels` do mesmo arquivo, impresso com o snapshot anterior e o novo
+(`default: 2026T2 -> 2026T3`); sem `--name` e `--snapshot`, o comando lista os canais. O canal
+`current` é reservado, a versão atual de cada tabela, e nada o move; o `archive` recusa o
+snapshot de um canal até o canal ser movido.
+
+### Publicação no Redshift
+
+Depois da execução, com o snapshot escolhido pelo canal ou pelo nome:
+
+```shell
+serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --channel default --max-workers 4
+serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --status
+```
+
+Antes: a tabela de controle no esquema, as variáveis `SERIALIZE_DB_REDSHIFT_*` e, com
+`--channel default`, o canal apontado. Depois: cada tabela do modelo presente no snapshot na
+versão dele no Redshift, só com as partições alteradas desde a versão publicada, e a linha de
+controle com a versão e o `--execution-id`; a tabela do modelo fora do snapshot é erro de uso, e
+`--tables` a deixa de fora. A publicação de um snapshot anterior ao publicado volta a tabela: as
+partições alteradas entre as duas versões recebem os arquivos da versão pedida, e a partição que
+só a versão publicada tinha sai. `--channel current` publica a versão atual de cada tabela, sem
+snapshot.
 
 ### Compactação
 
@@ -91,8 +130,8 @@ serialize-db archive --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --name 2026T3
 ```
 
-Antes: o snapshot registrado em `snapshots`; a pasta `arquivo/<nome>/` recebe a regra de ciclo de
-vida do bucket. Depois: uma tabela nova por tabela do snapshot, com uma versão por partição, os
+Antes: o snapshot registrado em `snapshots` e apontado por nenhum canal, que `serialize-db
+channel` move antes; a pasta `arquivo/<nome>/` recebe a regra de ciclo de vida do bucket. Depois: uma tabela nova por tabela do snapshot, com uma versão por partição, os
 mesmos arquivos e as mesmas somas, cada tabela impressa com o tempo da cópia e o pico de RSS do
 processo, e o tempo de cada partição no log; a entrada em `archived`, que `vacuum` não prende
 mais, e `snapshot` recusando o nome, porque ele dá a pasta. O comando se repete depois de uma
@@ -147,8 +186,8 @@ vêm sem eles.
 
 As opções de cada subcomando de `serialize-db`. Um valor de partição, um `--execution-id`, um
 `--name` e o ambiente seguem a regra da partição, `[0-9A-Za-z][0-9A-Za-z_.-]*`, e o valor fora
-dela é erro de uso. A conexão do Redshift, em `publish`, em `run --redshift` e nos subcomandos
-com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
+dela é erro de uso. A conexão do Redshift, em `publish` e nos subcomandos com
+`--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
 (`serialize_db.engine.redshift.RedshiftConfig.from_environment`).
 
 ### Opções comuns
@@ -159,8 +198,8 @@ com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
 | `--root` | `SERIALIZE_DB_ROOT` | A raiz das tabelas Delta, pasta local ou `s3://bucket/prefixo`; obrigatória sem a variável. |
 | `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dsv`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
 
-`run`, `load` e as rotinas de operação (`snapshot`, `vacuum`, `compact`, `archive`, `export` e
-`history`) recebem as três; `audit` e `publish` também, com `--root` e, em `publish`,
+`run`, `load` e as rotinas de operação (`snapshot`, `channel`, `vacuum`, `compact`, `archive`,
+`export` e `history`) recebem as três; `audit` e `publish` também, com `--root` e, em `publish`,
 `--metadata` dispensáveis nos casos descritos nas seções deles; `schema` e `sql` recebem só
 `--metadata`.
 
@@ -185,7 +224,6 @@ com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
 | `--partition` | obrigatória | O valor da partição da execução. |
 | `--engine` | `SERIALIZE_DB_ENGINE`, senão `duckdb` | O motor do sandbox: `duckdb` ou `redshift`. |
 | `--execution-id` | `exec-<AAAA-MM-DD>-<uuid8>`, com a data em UTC | O identificador da execução. |
-| `--redshift` | desligada | Dá à execução a configuração do Redshift, para `run.publish_redshift`; com `--engine redshift` ela já entra. |
 
 ### `audit`
 
@@ -214,18 +252,29 @@ com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
 | `--init` | desligada | Cria a tabela de controle `serialize_db_publications`, uma vez; dispensa `--metadata` e `--root`. |
 | `--status` | desligada | Mostra a versão publicada, a atual e as partições pendentes de cada tabela do modelo que existe no ambiente. |
 | `--unpublish` | desligada | Despublica as tabelas: `DROP TABLE` e a linha de controle. |
-| `--tables` | todas do modelo | As tabelas publicadas ou despublicadas. |
+| `--snapshot` | nenhum | O snapshot publicado, pelo nome, registrado em `snapshots`; o arquivado é erro de uso. |
+| `--channel` | nenhum | O canal cujo snapshot é publicado: `default`, ou `current`, a versão atual de cada tabela do modelo que existe no ambiente. |
+| `--tables` | todas do modelo | As tabelas publicadas ou despublicadas; a tabela do modelo sem versão no snapshot é erro de uso, e a opção a deixa de fora. |
 | `--max-workers` | 1 | As tabelas publicadas ao mesmo tempo, cada uma na sua conexão. |
 | `--execution-id` | `publicacao-<AAAA-MM-DD>-<uuid8>`, com a data em UTC | O identificador gravado na linha de controle. |
 | `--metadata`, `--root` | obrigatórias | Dispensadas por `--init`. |
 
-`--init`, `--status` e `--unpublish` valem nesta ordem; sem nenhuma delas, o comando publica.
+`--init`, `--status` e `--unpublish` valem nesta ordem e não recebem `--snapshot` nem
+`--channel`; sem nenhuma delas, o comando publica as versões de `--snapshot` ou de `--channel`,
+um dos dois obrigatório e excludentes.
 
 ### `snapshot`
 
 | Opção | Padrão | Descrição |
 | --- | --- | --- |
 | `--name` | obrigatória | O nome do snapshot, inédito em `snapshots` e em `archived` do arquivo de controle. |
+
+### `channel`
+
+| Opção | Padrão | Descrição |
+| --- | --- | --- |
+| `--name` | nenhum | O canal apontado, pela regra da partição; `current` é reservado e é erro de uso. Vai com `--snapshot`; sem os dois, o comando lista os canais do ambiente. |
+| `--snapshot` | nenhum | O snapshot apontado, registrado em `snapshots`; o ausente e o arquivado são erro de uso. |
 
 ### `vacuum`
 

@@ -3484,3 +3484,56 @@ já conhecidas dos probes.
 `archive` e da publicação no item da operação no ambiente alvo, que fica com o `compact` de uma
 partição de vários arquivos; o item das versões não correntes ganhou a leitura de `BK-14`.
 Nenhum arquivo do plano muda.
+
+## O que a implementação da etapa 10 mostrou
+
+`serialize_db.reader`, os canais do arquivo de controle (`delta.set_channel`, `channel_snapshot`,
+`snapshot_versions`), `serialize-db channel` e `serialize-db publish` por `--snapshot` ou
+`--channel` foram implementados em 2026-09-25 no contêiner de desenvolvimento (Linux x86_64,
+Python 3.13.12, DuckDB 1.5.5, deltalake 1.6.4, PyArrow 25.0.1, pandas 3.0.6, SQLAlchemy 2.0.54,
+pytest 9.1.1), na pasta local e no substituto local; os 16 casos de `tests/test_reader.py`
+passam, 13 `local`, 2 sem conexão e o `redshift` no substituto. O que os casos leram:
+
+- **A poda pela view do leitor é a do `delta_scan`**, lida no log `FileSystem` do DuckDB por
+  `opened_partition_folders` sobre `cad_lancamentos` em três meses: `data_base_str = '2026-07-31'`
+  abriu só a pasta desse mês, o `BETWEEN` dos dois primeiros abriu as duas e o `IN` do primeiro e
+  do terceiro abriu as três, como a sonda de 2026-09-24; o leitor não reescreve o `IN`.
+- **Os tipos do `query` são os do contrato**: os tipos Arrow das 30 linhas lidas pela view são os
+  de `schema.arrow_schema`, campo a campo, a nulidade à parte; `stream` com `batch_size=7`
+  entregou lotes de até 7 linhas, as mesmas 30; `to_pandas(types_mapper=pd.ArrowDtype)` deu
+  `decimal128(18, 2)[pyarrow]` ao decimal e `date32[day][pyarrow]` à data.
+- **A materialização que falha deixa a view**: com os arquivos Parquet de um mês apagados depois
+  da abertura, `materialize` sobe o `duckdb.Error` do `CREATE TABLE ... AS SELECT` pelo pool, o
+  `ROLLBACK` devolve a view, `materialized` fica vazio e a view responde pelos meses com arquivo.
+- **O finalizador apaga a pasta do motor**: `close` chama `DuckDBEngine.cleanup` uma vez, contado
+  por um `monkeypatch`, e a pasta `serialize_db_*` some; o leitor não fechado some com a pasta no
+  `del` seguido de `gc.collect()`, pelo `weakref.finalize`.
+- **A tabela criada depois do snapshot não tem view**: `cad_lancamentos_projetados`, publicada
+  depois do snapshot `2026T3`, fica fora de `versions`; o statement Core que a cita é
+  `ContractError` com o nome da tabela e do snapshot em `query`, `stream` e `materialize`, o texto
+  pronto que a cita é `CatalogException` do DuckDB, e pelo canal `current` ela entra na versão 1.
+- **A volta a um snapshot anterior, no substituto** (`serialize-db publish --snapshot A`, com a
+  versão 4 de `cad_lancamentos_projetados` publicada pelo snapshot `B` e `A` na versão 2)
+  republicou o mês trocado na versão 3 pelos arquivos da versão 2, as 40 linhas de ids 41 a 80 no
+  lugar das 7, apagou o mês `2026-09-30` da versão 4, sem manifesto, e gravou a linha de controle
+  `(2, exec-r)`; `--channel current` publicou a 4 de novo e `--status` leu `publicada 4, atual 4,
+  pendentes []`. Sobre a conexão de mentira, o `UPDATE` da volta termina em `AND delta_version =
+  3` e o manifesto do mês fica em `prd/publicacao/exec-r/cad_lancamentos/<mês>.manifest` com os
+  arquivos da versão 2.
+- **Os erros de uso saem com 2 e uma linha, sem Traceback**: o snapshot arquivado, a tabela fora
+  do snapshot, a chamada sem `--snapshot` nem `--channel` ou com os dois, `--status --channel
+  current`, o canal sem snapshot e a tabela fora do modelo; `serialize-db archive` do snapshot do
+  canal `default` sai com 2 antes de copiar, sem criar `prd/arquivo`.
+- **O leitor Redshift dá as linhas do leitor Delta, no substituto**: as 40 linhas de um mês de
+  `cad_lancamentos` publicado, por `query` e por `stream` com `batch_size=25`, são as do leitor
+  Delta na versão atual, e o `close` deixa vazias a pasta do leitor sob `unload_to` e a de
+  `staging/<reader_id>` do banco em `db.open_redshift`.
+
+As rodadas antes do commit, no mesmo contêiner: `uv run pytest` sem variável, 211 aprovados e 334
+pulados em 24,6 s; com `SERIALIZE_DB_TEST_LOCAL_ROOT`, 449 aprovados e 96 pulados em 99,6 s; com a
+raiz local e `SERIALIZE_DB_TEST_EMULATOR`, as seis suítes do alvo em 91 aprovados e 1 pulado em
+30,9 s, e tudo em 544 aprovados e 1 pulado, o teste da Data API, em 138,8 s.
+
+**Consequências**: o [arquivo da etapa 10](PLAN-STAGE-10.md) trocou a `Interface` pela descrição
+da implementação, como as etapas anteriores; nenhuma leitura contradisse o plano, e as leituras que
+só o ambiente alvo dá estão em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

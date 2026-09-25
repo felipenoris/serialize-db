@@ -899,36 +899,42 @@ class RedshiftEngine:
             engine.cleanup()
     """
 
-    def __init__(self, config: RedshiftConfig, execution_id: str, storage: Storage,
-                 staging_prefix: str, parent: RedshiftEngine | None = None) -> None:
+    def __init__(self, config: RedshiftConfig, execution_id: str, storage: Storage | None,
+                 staging_prefix: str | None, parent: RedshiftEngine | None = None,
+                 prefix: str | None = None) -> None:
         """Abre a sessão da execução no esquema, pelo caminho de ``connect``.
 
         :param config: a configuração do Redshift.
         :param execution_id: o identificador da execução, na regra da partição; dá o prefixo
             ``exec_<id>_`` das tabelas do sandbox.
         :param storage: o armazenamento da raiz do banco, onde ficam o Delta e os arquivos que o
-            ``COPY`` lê e o ``UNLOAD`` grava.
+            ``COPY`` lê e o ``UNLOAD`` grava; ``None`` só no leitor Redshift sem ``unload_to``,
+            que roda ``query`` e nada que toque arquivos.
         :param staging_prefix: a pasta dos arquivos intermediários da execução, relativa à raiz,
-            como ``<ambiente>/staging/<execution_id>``.
+            como ``<ambiente>/staging/<execution_id>``; ``None`` com ``storage`` ``None``.
         :param parent: o motor principal, de que esta sessão a mais depende, dado por
             ``new_session``; a sessão abre outra conexão, com o seu lock, vê as tabelas que a
             principal confirmou, e o seu ``cleanup`` fecha só essa conexão. ``None`` no motor
             principal.
-        :raises ContractError: ``execution_id`` fora da regra da partição ou longo demais para o
-            prefixo; ou a configuração sem conexão: sem ``workgroup``, e sem ``host``, ``user`` e
-            ``password``.
+        :param prefix: o prefixo das tabelas do esquema que os statements citam; ``None`` é
+            ``sandbox_prefix(execution_id)``, o ``exec_<id>_`` do sandbox, e o leitor Redshift
+            passa ``<ambiente>_``, o das tabelas publicadas.
+        :raises ContractError: ``execution_id`` fora da regra da partição ou, sem ``prefix``,
+            longo demais para o prefixo; ou a configuração sem conexão: sem ``workgroup``, e sem
+            ``host``, ``user`` e ``password``.
         """
         self.config = config
         """A configuração da conexão, do ``COPY`` e do ``UNLOAD``."""
         self.execution_id = check_partition_value(execution_id)
         """O identificador da execução, na regra da partição (``schema.PARTITION_VALUE``)."""
-        self.prefix = sandbox_prefix(execution_id)
-        """O prefixo ``exec_<id>_`` das tabelas do sandbox no esquema."""
+        self.prefix = prefix if prefix is not None else sandbox_prefix(execution_id)
+        """O prefixo das tabelas no esquema: ``exec_<id>_`` no sandbox, ``<ambiente>_`` no
+        leitor Redshift."""
         self.storage = storage
-        """O armazenamento da raiz do banco."""
-        self.staging_prefix = storage.join(staging_prefix)
+        """O armazenamento da raiz do banco; ``None`` no leitor Redshift sem ``unload_to``."""
+        self.staging_prefix = storage.join(staging_prefix) if storage is not None else None
         """A pasta dos arquivos intermediários da execução, relativa à raiz, que o ``cleanup``
-        esvazia."""
+        esvazia; ``None`` sem armazenamento."""
         self._lock = threading.RLock()
         self._owner: int | None = None
         self._closed = False
@@ -1004,7 +1010,7 @@ class RedshiftEngine:
             essa sessão, a conexão dela.
         """
         return RedshiftEngine(self.config, self.execution_id, self.storage, self.staging_prefix,
-                              parent=self)
+                              parent=self, prefix=self.prefix)
 
     def _reconnect(self) -> None:
         """A conexão reaberta com credencial nova, no lugar da que o servidor derrubou."""
@@ -1364,12 +1370,17 @@ class RedshiftEngine:
             o último lote de cada arquivo pode ser menor.
         :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` apaga os
             arquivos do ``UNLOAD``.
+        :raises ContractError: o motor sem armazenamento (``storage`` ``None``), antes de
+            qualquer comando no servidor: o leitor Redshift o recebe em ``unload_to``.
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
             texto.
         :raises SandboxError: uma coluna do resultado num tipo fora do contrato; ou, sem
             ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
+        if self.storage is None:
+            raise ContractError("stream precisa de um armazenamento para os arquivos do UNLOAD, "
+                                "e o motor abriu sem ele: o leitor Redshift o recebe em unload_to")
         return RedshiftStream(self, literal_text(statement_or_sql, params, self.prefix), batch_size)
 
     def loader(self, table: sa.Table, queue_depth: int = 2) -> RedshiftLoader:
@@ -1728,9 +1739,9 @@ class RedshiftEngine:
 
     def cleanup(self) -> None:
         """Apaga as tabelas ``exec_<id>_*`` que a execução criou, uma por comando, os objetos de
-        ``staging/<execution_id>/`` e fecha a sessão; uma tabela que o ``DROP`` não alcança fica
-        nomeada no log. Numa sessão a mais, fecha só a conexão dela. A segunda chamada não faz
-        nada.
+        ``staging/<execution_id>/`` (nenhum arquivo sem armazenamento) e fecha a sessão; uma
+        tabela que o ``DROP`` não alcança fica nomeada no log. Numa sessão a mais, fecha só a
+        conexão dela. A segunda chamada não faz nada.
 
         Exemplo:
 
@@ -1748,7 +1759,8 @@ class RedshiftEngine:
         self._closed = True
         if self._parent is None:
             self._drop_created()
-            self.storage.delete(self.storage.list_files(self.staging_prefix))
+            if self.storage is not None:
+                self.storage.delete(self.storage.list_files(self.staging_prefix))
         with self._lock:
             self._connection.close()
 

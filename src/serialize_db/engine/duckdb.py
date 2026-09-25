@@ -104,8 +104,21 @@ _MEMORY_BUDGET = 64 * 2**20
 _END = object()
 
 
-def _delta_scan(uri: str, version: int) -> str:
-    """A leitura da tabela Delta presa a uma versão, no texto do DuckDB."""
+def delta_scan(uri: str, version: int) -> str:
+    """A leitura da tabela Delta presa a uma versão, no texto do DuckDB; protegida, para o leitor
+    Delta, que monta o ``CREATE TABLE`` da materialização com ela.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        delta_scan("s3://bucket/prd/cad_operacoes", 3)
+        # "delta_scan('s3://bucket/prd/cad_operacoes', version := 3)"
+
+    :param uri: a URI da tabela Delta.
+    :param version: a versão fixada.
+    :return: a chamada ``delta_scan(uri, version := v)``, com a URI como literal.
+    """
     return f"delta_scan({literal(uri)}, version := {int(version)})"
 
 
@@ -761,10 +774,25 @@ class DuckDBEngine:
 
     # ------------------------------------------------------------ a leitura do Delta
 
-    def _partition_filter(self, table: sa.Table, partitions: Sequence[str] | None) -> str:
+    def partition_filter(self, table: sa.Table, partitions: Sequence[str] | None) -> str:
         """O ``WHERE`` das partições: o intervalo delas ao lado do ``IN``, porque o ``delta_scan``
         poda por ``=`` e por intervalo e abre todos os arquivos com um ``IN`` de mais de um
-        valor."""
+        valor; protegido, para o leitor Delta, que monta o ``CREATE TABLE`` da materialização.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.partition_filter(Lancamento.__table__, ["2026-08-31", "2026-07-31"])
+            # ' WHERE "data_base_str" BETWEEN \'2026-07-31\' AND \'2026-08-31\' AND ...'
+
+        :param table: a tabela do modelo.
+        :param partitions: os valores de partição, pela regra da partição; ``None`` dá o texto
+            vazio, e a lista vazia ``WHERE false``.
+        :return: a cláusula, com o espaço inicial, para depois do ``delta_scan``.
+        :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
+            da partição.
+        """
         if partitions is None:
             return ""
         partition_by = table_options(table).partition_by
@@ -810,9 +838,9 @@ class DuckDBEngine:
         if self.name_in_use(table.name):
             raise SandboxError(f"{table.name}: o nome já está ocupado no sandbox")
         kind = "TABLE" if materialize else "VIEW"
-        where = self._partition_filter(table, partitions)
+        where = self.partition_filter(table, partitions)
         text = (f"CREATE {kind} {quoted(table.name)} AS SELECT * FROM "
-                f"{_delta_scan(uri, version)}{where}")
+                f"{delta_scan(uri, version)}{where}")
         with self.session() as connection:
             connection.execute(text)
 
@@ -838,7 +866,7 @@ class DuckDBEngine:
         columns = []
         for column in table.columns:
             columns.append(sa.column(quoted_name(column.name, quote=True), column.type))
-        source = sa.table(quoted_name(_delta_scan(uri, version), quote=False), *columns)
+        source = sa.table(quoted_name(delta_scan(uri, version), quote=False), *columns)
         return source.alias(quoted_name(f"{table.name}_publicado", quote=True))
 
     # ------------------------------------------------------------ consulta, stream e carga

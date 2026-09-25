@@ -72,12 +72,13 @@ foi medido em [`POC.md`](POC.md).
   arquivos e a memória dela (o item acima) esperam uma partição com mais de um arquivo; a
   continuação de uma cópia interrompida do `archive` só o substituto exercitou.
 
-- **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) depende de leituras
-  que a pasta local não dá: o tempo de abertura do leitor Delta sobre as 12 tabelas da raiz
-  carregada, com uma view por tabela (8,7 ms por view na pasta local, [`POC.md`](POC.md)); a
-  publicação por `--channel default` e a volta a um snapshot anterior ao publicado; e o `UNLOAD`
-  de um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial
-  que serve a ele.
+- **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md), implementada em
+  2026-09-25 na pasta local e no substituto, espera as leituras que só o alvo dá, com os comandos
+  em `SUITE.md`: o tempo de abertura do leitor Delta sobre as 12 tabelas da raiz carregada, com
+  uma view por tabela (8,7 ms por view na pasta local, [`POC.md`](POC.md)); a publicação por
+  `--channel default` e a volta a um snapshot anterior ao publicado, com o tempo e o pico de RSS
+  por tabela; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o
+  caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
 
 ## Decisões de API pendentes por etapa
 

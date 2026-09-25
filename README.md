@@ -105,9 +105,10 @@ uv run python -c "import duckdb; duckdb.connect(config={'extension_directory': '
 
 `SERIALIZE_DB_TEST_EMULATOR` roda as suítes que só rodam no ambiente alvo sobre o substituto de
 [`tests/emulator.py`](tests/emulator.py): o moto no lugar do S3 e um DuckDB em memória no lugar do
-Redshift, sem credencial da AWS e sem gravar em disco. Os casos `redshift` do motor Redshift e da
-publicação (`tests/test_engine_redshift.py`, `tests/test_publication.py`) rodam nele do mesmo
-jeito, com a conexão do substituto no lugar do driver. A sessão define as raízes das suítes S3 e
+Redshift, sem credencial da AWS e sem gravar em disco. Os casos `redshift` do motor Redshift, da
+publicação e do leitor (`tests/test_engine_redshift.py`, `tests/test_publication.py`,
+`tests/test_reader.py`) rodam nele do mesmo jeito, com a conexão do substituto no lugar do
+driver. A sessão define as raízes das suítes S3 e
 Redshift. A esteira do GitHub não roda o substituto: ele roda na máquina de quem desenvolve, antes
 do push de uma mudança que toque o que essas suítes cobrem (`serialize_db.storage` e
 `serialize_db.delta` no S3, `serialize_db.audit`, `serialize_db.engine.redshift` e
@@ -128,7 +129,7 @@ done
 As três suítes do ambiente alvo no substituto:
 
 ```
-SERIALIZE_DB_TEST_EMULATOR=1 uv run --group emulator pytest tests/proof_of_concept/test_s3.py tests/proof_of_concept/test_redshift.py tests/proof_of_concept/test_redshift_transactions.py tests/test_engine_redshift.py tests/test_publication.py
+SERIALIZE_DB_TEST_EMULATOR=1 uv run --group emulator pytest tests/proof_of_concept/test_s3.py tests/proof_of_concept/test_redshift.py tests/proof_of_concept/test_redshift_transactions.py tests/test_engine_redshift.py tests/test_publication.py tests/test_reader.py
 ```
 
 Com `SERIALIZE_DB_TEST_LOCAL_ROOT` também, a sessão roda todos os testes, e os testes `s3` do

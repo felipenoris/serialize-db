@@ -1,14 +1,15 @@
 """A execução de um pipeline: o banco (``Database``) e o ciclo de uma execução (``Execution``).
 
 ``Database`` junta a raiz do banco, o ambiente (``prd``, ``dsv``) e o ``MetaData`` dos modelos do
-cliente, e monta os caminhos: a pasta de cada tabela é ``<raiz>/<ambiente>/<tabela>``. ``Execution``
-é o gerenciador de contexto de uma execução: na entrada abre toda tabela do ambiente, fixa a versão
+cliente, monta os caminhos, a pasta de cada tabela é ``<raiz>/<ambiente>/<tabela>``, e abre os
+leitores de ``serialize_db.reader`` por ``open_delta`` e ``open_redshift``. ``Execution`` é o
+gerenciador de contexto de uma execução: na entrada abre toda tabela do ambiente, fixa a versão
 de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava o snapshot marcado e o
 resumo no log. Entre os dois, o pipeline chama as primitivas: ``ingest`` traz as tabelas presas à
 versão fixada, ``sandbox`` é o motor onde ele roda ``stream``, ``loader``, ``query`` e ``load``,
-``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o contrato, ``publish`` leva as
-partições auditadas ao Delta e ``publish_redshift`` as leva aos clientes no Redshift, com a
-configuração ``redshift`` que a execução recebe.
+``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o contrato e ``publish`` leva as
+partições auditadas ao Delta; a publicação aos clientes no Redshift é ``serialize-db publish``,
+depois da execução.
 
 As primitivas podem ser chamadas de qualquer thread: cada comando do motor corre na sessão única,
 sob o lock dela, e o estado mutável da execução (as versões, as auditorias aprovadas, o alocador)
@@ -61,9 +62,9 @@ from serialize_db.errors import (
     AuditFailed,
     ContractError,
     ExecutionConflict,
-    PublicationError,
     SandboxError,
 )
+from serialize_db.reader import DeltaReader, RedshiftReader, open_redshift
 from serialize_db.schema import (
     check_partition_value,
     double_columns,
@@ -205,6 +206,61 @@ class Database:
         """
         return list(self.metadata.sorted_tables)
 
+    def open_delta(self, snapshot: str | None = None, channel: str | None = None,
+                   config: DuckDBConfig | None = None) -> DeltaReader:
+        """O leitor da base Delta (``serialize_db.reader.DeltaReader``): um DuckDB no processo
+        com uma view por tabela do modelo, presa à versão do snapshot lido.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with db.open_delta() as reader:                  # o snapshot do canal default
+                reader.query(sa.select(Conta))
+            reader = db.open_delta(channel="current")        # a versão atual, num caderno
+            reader.close()
+
+        :param snapshot: o nome de um snapshot do ambiente; o arquivado é lido pela cópia em
+            ``arquivo/<nome>/``. ``None`` lê o canal.
+        :param channel: o canal do ambiente, ``"default"``, o mesmo que sem argumento, ou
+            ``"current"``, a versão atual de cada tabela do modelo que existe no ambiente.
+        :param config: a configuração do DuckDB; ``None`` é ``DuckDBConfig()``, os limites lidos
+            do ambiente e uma pasta temporária nova, apagada no ``close``.
+        :return: o leitor, gerenciador de contexto; sem ``close``, a coleta dele apaga a pasta
+            temporária do motor.
+        :raises ContractError: ``snapshot`` e ``channel`` juntos; o ambiente sem o canal, com o
+            ``serialize-db channel`` que o cria e o canal ``current`` na mensagem; ou o snapshot
+            que não existe.
+        :raises duckdb.Error: a extensão ``delta`` ausente da pasta configurada, ou uma versão
+            do snapshot que a tabela não tem mais, na criação da view.
+        """
+        return DeltaReader(self, snapshot, channel, config)
+
+    def open_redshift(self, config: RedshiftConfig | None = None,
+                      unload_to: str | None = None) -> RedshiftReader:
+        """O leitor da base publicada no Redshift (``serialize_db.reader.RedshiftReader``), pelas
+        tabelas ``<ambiente>_<tabela>`` do esquema.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with db.open_redshift() as reader:   # SERIALIZE_DB_REDSHIFT_*, o UNLOAD em staging/
+                reader.query(sa.select(Conta))
+
+        :param config: a configuração do Redshift; ``None`` lê as variáveis
+            ``SERIALIZE_DB_REDSHIFT_*``.
+        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``; ``None`` é
+            ``<raiz>/<ambiente>/staging``, sob a qual o leitor grava em ``<id do leitor>/``.
+        :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia a
+            pasta do leitor.
+        :raises ContractError: a configuração sem conexão, sem ``workgroup`` e sem ``host``,
+            ``user`` e ``password``.
+        """
+        if unload_to is None:
+            unload_to = self.storage.uri_of(self.storage.join(self.environment, "staging"))
+        return open_redshift(self.metadata, self.environment, config, unload_to)
+
 
 # ---------------------------------------------------------------- as regras de entrada
 
@@ -280,10 +336,8 @@ class Execution:
         :param execution_id: o identificador da execução, que segue ``schema.PARTITION_VALUE``;
             ausente, vira ``exec-<AAAA-MM-DD>-<uuid8>``, com a data em UTC.
         :param redshift: a configuração do Redshift
-            (``serialize_db.engine.redshift.RedshiftConfig``), a do motor ``"redshift"`` e a de
-            ``publish_redshift``; o motor ``"redshift"`` sem ela lê as variáveis
-            ``SERIALIZE_DB_REDSHIFT_*``, e no motor ``"duckdb"`` sem ela ``publish_redshift`` é
-            ``PublicationError``.
+            (``serialize_db.engine.redshift.RedshiftConfig``) do motor ``"redshift"``, que sem
+            ela lê as variáveis ``SERIALIZE_DB_REDSHIFT_*``; o motor ``"duckdb"`` não a usa.
         :raises ContractError: a partição ou o ``execution_id`` fora da regra da partição, ou a
             partição acima do ``String(n)`` de uma coluna de partição.
         """
@@ -296,8 +350,9 @@ class Execution:
         sandbox."""
         self._engine = engine
         self.redshift = redshift
-        """A configuração do Redshift: a recebida, ou, no motor ``"redshift"`` sem ela, a das
-        variáveis ``SERIALIZE_DB_REDSHIFT_*``, lida na entrada do ``with``."""
+        """A configuração do Redshift do motor ``"redshift"``: a recebida, ou a das variáveis
+        ``SERIALIZE_DB_REDSHIFT_*``, lida na entrada do ``with``; ``None`` no motor ``"duckdb"``
+        sem ela."""
         self.versions: dict[str, int | None] = {}
         """A versão fixada de cada tabela do ambiente, pelo nome, ``None`` na que não existe: a
         entrada do ``with`` as lê, e ``publish`` avança a de cada tabela que grava."""
@@ -713,45 +768,6 @@ class Execution:
         with self._step("publish"):
             return run_in_pool(tasks, max_workers)
 
-    def publish_redshift(self, *tables: sa.Table, max_workers: int = 1) -> dict[str, int]:
-        """Publica no Redshift a versão fixada de cada tabela.
-
-        A configuração é a ``redshift`` da execução. Cada tabela corre numa conexão própria do
-        pool de ``max_workers``, com a transação da publicação
-        (``serialize_db.publication.publish_redshift``): só as partições alteradas desde a versão
-        publicada trocam, e a tabela publicada na versão fixada não muda.
-
-        Exemplo:
-
-        .. code-block:: python
-
-            run.publish(Projetado.__table__, partitions=["2026-08-31"])
-            run.publish_redshift(Projetado.__table__)   # {"cad_...": 58}
-
-        :param tables: as tabelas do modelo.
-        :param max_workers: quantas tabelas correm ao mesmo tempo.
-        :return: ``{tabela: versão}``, com a versão do Delta publicada em cada tabela.
-        :raises PublicationError: a execução sem a configuração ``redshift``, sem tocar o
-            Redshift; o esquema sem a tabela de controle ``serialize_db_publications``; ou a
-            tabela sem versão fixada, que não existia no ambiente na abertura e que a execução
-            ainda não gravou no Delta.
-        :raises ExecutionConflict: a versão publicada mais nova que a fixada, a linha de controle
-            alterada desde a leitura, ou outra publicação da mesma tabela ao mesmo tempo (o
-            ``1023``, ou a tabela publicada criada por outra primeira publicação).
-        :raises LogUnavailable: um arquivo do log entre a versão publicada e a fixada não existe.
-        """
-        if self.redshift is None:
-            raise PublicationError("publish_redshift precisa da configuração do Redshift: "
-                                   "Execution(..., redshift=RedshiftConfig(...))")
-        from serialize_db import publication
-
-        with self._lock:
-            versions = {name: version for name, version in self.versions.items()
-                        if version is not None}
-        with self._step("publish_redshift"):
-            return publication.publish_redshift(self.db, self.redshift, list(tables),
-                                                self.execution_id, max_workers, versions)
-
     def snapshot(self, name: str) -> None:
         """Marca a execução: ``serialize_db_snapshot`` nos commits seguintes e, no encerramento sem
         erro, a entrada do snapshot com a versão de toda tabela do ambiente.
@@ -761,6 +777,8 @@ class Execution:
         .. code-block:: python
 
             run.snapshot("2026T3")
+
+        O snapshot não move o canal ``default``: ``serialize-db channel`` o aponta depois.
 
         :param name: o nome do snapshot, pela regra da partição; um nome já presente no arquivo de
             controle é ``ValueError`` na saída do ``with``, depois dos commits.

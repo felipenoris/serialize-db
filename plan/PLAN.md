@@ -509,7 +509,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.audit` | 4 | As verificações derivadas do contrato: chaves, nulos, limites de tipo, JSON e totais; o texto SQL por dialeto e o `AuditReport`. |
 | `serialize_db.resources` | 4 | As CPUs e a memória que o processo pode usar, lidas do ambiente a cada chamada, com o cgroup v1 e v2 no Linux: a fonte dos limites do motor DuckDB (instrução do usuário de 2026-09-24). |
 | `serialize_db.engine` | 4 e 5 | O protocolo `Engine` e os motores `duckdb` e `redshift`, com a mesma interface. |
-| `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução; a etapa 10 acrescenta `Database.open_delta` e `Database.open_redshift` e tira `Execution.publish_redshift`. |
+| `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução; a etapa 10 acrescentou `Database.open_delta` e `Database.open_redshift` e tirou `Execution.publish_redshift`. |
 | `serialize_db.load` | 7 | A carga inicial dos Parquet atuais. |
 | `serialize_db.publication` | 8 | A publicação para clientes: a tabela de controle, a transação por tabela, a despublicação, a reconciliação das tabelas publicadas e o estado da publicação; a etapa 10 a faz escolher o snapshot pelo nome ou pelo canal. |
 | `serialize_db.reader` | 10 | O acesso de leitura por statements Core com o resultado em Arrow: o leitor Delta, um DuckDB com uma view por tabela no snapshot do canal `default`, num snapshot nomeado, arquivado inclusive, ou na versão atual (o canal `current`), com a materialização de tabelas e partições, e o leitor Redshift, sobre as tabelas publicadas `<ambiente>_<tabela>`. |
