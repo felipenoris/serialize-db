@@ -1056,3 +1056,17 @@ restores the previous version and raises `RegistrationRefused`. The alternatives
 the `UNLOAD` files' rows before the commit, which misses a loss in the delta-rs write, and
 documenting the gap. The code does not follow the decision yet. `plan/PLAN-STAGE-5.md`,
 `plan/CURRENT_STATE.md`
+
+## The version of the Redshift engine's `_publicado` staging (2026-09-25)
+
+The user decided the open item on `RedshiftEngine.published`, which loads the staging
+`exec_<id>_<tabela>_publicado` once per execution, keyed by the name alone: called again with
+another version, after `run.publish` advances `versions`, it returned the first version's staging,
+while the DuckDB engine reads the new version through `delta_scan(uri, version := v)`. The staging
+name carries the version, `exec_<id>_<tabela>_publicado_<versão>`, so each requested version gets
+its own staging, loaded whole, and every copy stays in the schema until `cleanup`; the audit's
+staging is the same one when the versions match. The alternatives were refusing another version
+with `SandboxError`, which refuses on Redshift what DuckDB accepts, and reloading the same
+staging, which changes what an earlier `FromClause` reads. Before deciding, the user asked what a
+staging is. The code does not follow the decision yet. `plan/PLAN-STAGE-5.md`,
+`plan/PLAN-STAGE-6.md`, `plan/CURRENT_STATE.md`

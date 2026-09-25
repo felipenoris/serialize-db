@@ -45,10 +45,6 @@ foi medido em [`POC.md`](POC.md).
   versão fixada em `pyproject.toml`, que `deltalake==1.6.4` está retirada (yanked) do PyPI, com o
   motivo "Issue: #4784", e a instalou assim mesmo ([`POC.md`](POC.md)). O motivo e a versão que a
   substitui não foram lidos.
-- **A versão da staging `_publicado` do motor Redshift.** `RedshiftEngine.published` carrega a
-  staging uma vez por execução pelo nome, sem a versão: chamada de novo com outra versão, depois de
-  `Execution.publish` avançar `versions`, devolve a staging da primeira, enquanto o motor DuckDB lê
-  a versão nova. Lido no código em 2026-09-24, sem sonda; espera o usuário.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
