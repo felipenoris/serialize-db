@@ -112,8 +112,14 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   measures `strlen(CAST(x AS VARCHAR))`; its `COPY` writes `FIXED_LEN_BYTE_ARRAY` with the `UUID`
   logical type (read back as `arrow.uuid`), and a query's Arrow output gives `string`.
   `plan/POC.md`
-- `Numeric(10, 12)` and `Numeric(38, -1)` pass `check_models`, and `delta_schema` raises delta-rs's
-  generic `Exception`; pending user decision in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`
+- The `Numeric` limits (2026-09-25): PyArrow's `decimal128` refuses a precision outside 1..38 with
+  `ValueError` and accepts a negative scale or one above the precision; delta-rs refuses those
+  with a generic `Exception` ("scale must be in range 0..10 inclusive, found: 12", "Negative
+  scales are not supported in Delta"); DuckDB refuses them in the DDL and accepts
+  `DECIMAL(38, 38)`; the Redshift documentation caps the scale at the precision and at 37, unread
+  in the target. `_decimal_type` refuses a precision outside 1..38 and a scale outside
+  0..min(p, 37) with `ContractError`, which `check_models` lists (the user chose the scale rule;
+  the floor of 1 and the cap of 37 came from the assistant). `plan/POC.md`
 - A `DateTime` column makes delta-rs create the table at reader 3 / writer 7 with `timestampNtz`;
   without it, 1 / 2. `delta_scan` gives `VARCHAR` for `JSON` (the DDL tables say `JSON`), and
   DuckDB's Arrow output labels `TIMESTAMPTZ` with the session `TimeZone`. DuckDB and delta-rs write

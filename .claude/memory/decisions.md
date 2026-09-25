@@ -1162,6 +1162,10 @@ values) and refuses text above 36 bytes in a `Uuid` column, and the audit counts
 `arrow_type` refuses `Enum`, which derives from `String` while nothing checks its list, and a
 `Numeric` of precision above 38, which PyArrow refused with `ValueError`, and `check_models` lists
 both. The same probes found `Numeric(10, 12)` and `Numeric(38, -1)` passing `check_models` and
-failing in `delta_schema`; that rule stays out of the fix and waits on the user.
-`plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/schema.md`, `docs/index.md`,
-`plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+failing in `delta_schema`; on a decision card the assistant recommended listing the scale outside
+0 to the precision beside the precision above 38, in the same PR, and the user chose it on
+2026-09-25. Two limits of the same rule came from the assistant and were named in the report: the
+precision below 1, which made `check_models` raise PyArrow's `ValueError`, and the scale above
+37, the Redshift documentation's maximum, unread in the target.
+`plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/schema.md`, `plan/redshift.md`,
+`docs/index.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`

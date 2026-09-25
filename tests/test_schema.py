@@ -142,6 +142,8 @@ class Ruim(RuimBase):
                                           comment="Enum, cuja lista nada confere")
     saldo: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(39, 2),
                                                    comment="Acima dos 38 dígitos do DECIMAL")
+    taxa: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(10, 12),
+                                                  comment="Escala acima da precisão")
 
 
 # A tabela referenciada por Ruim, no mesmo MetaData, para a chave estrangeira resolver.
@@ -182,14 +184,33 @@ def test_arrow_schema_refuses_foreign_types(
         schema.arrow_schema(table)
 
 
-def test_arrow_schema_refuses_numeric_above_38_digits() -> None:
-    """``Numeric(39, 2)`` é ``ContractError`` com a tabela e a coluna, no lugar do ``ValueError``
-    do ``decimal128`` do PyArrow (leitura de 2026-09-25); ``Numeric(38, 2)`` passa."""
-    widest = sa.Table("larga", sa.MetaData(), sa.Column("valor", sa.Numeric(38, 2)))
-    assert schema.arrow_schema(widest).field("valor").type == pa.decimal128(38, 2)
-    above = sa.Table("larga", sa.MetaData(), sa.Column("valor", sa.Numeric(39, 2)))
-    with pytest.raises(ContractError, match="larga.valor: Numeric de precisão 39 acima de 38"):
-        schema.arrow_schema(above)
+@pytest.mark.parametrize(
+    ("precision", "scale", "message"),
+    [
+        pytest.param(39, 2, "Numeric de precisão 39 fora de 1 a 38", id="Numeric(39, 2)"),
+        pytest.param(-1, 0, "Numeric de precisão -1 fora de 1 a 38", id="Numeric(-1, 0)"),
+        pytest.param(10, 12, r"Numeric\(10, 12\) com escala fora de 0 a 10", id="Numeric(10, 12)"),
+        pytest.param(38, -1, r"Numeric\(38, -1\) com escala fora de 0 a 37", id="Numeric(38, -1)"),
+        pytest.param(38, 38, r"Numeric\(38, 38\) com escala fora de 0 a 37", id="Numeric(38, 38)"),
+    ],
+)
+def test_arrow_schema_refuses_numeric_outside_the_decimal(
+    precision: int, scale: int, message: str
+) -> None:
+    """A precisão fora de 1 a 38 e a escala fora de 0 à precisão, até 37, são ``ContractError``
+    com a tabela e a coluna, no lugar do ``ValueError`` do PyArrow e da ``Exception`` genérica do
+    delta-rs (leituras de 2026-09-25)."""
+    table = sa.Table("larga", sa.MetaData(), sa.Column("valor", sa.Numeric(precision, scale)))
+    with pytest.raises(ContractError, match=f"larga.valor: {message}"):
+        schema.arrow_schema(table)
+
+
+@pytest.mark.parametrize(("precision", "scale"), [(38, 2), (38, 37), (10, 10), (1, 0)], ids=str)
+def test_arrow_schema_accepts_numeric_at_the_decimal_limits(precision: int, scale: int) -> None:
+    """Os extremos da precisão e da escala passam no Arrow e no esquema Delta."""
+    table = sa.Table("larga", sa.MetaData(), sa.Column("valor", sa.Numeric(precision, scale)))
+    assert schema.arrow_schema(table).field("valor").type == pa.decimal128(precision, scale)
+    assert delta_document(table)["fields"][0]["type"] == f"decimal({precision},{scale})"
 
 
 def delta_document(table: sa.Table) -> dict:
@@ -578,7 +599,10 @@ def test_check_models_finds_each_violation() -> None:
         "ruim.peso: tipo fora do contrato: LargeBinary()",
         "ruim.situacao: tipo fora do contrato: Enum('ativa', 'encerrada', name='situacao'); "
         "nada confere a lista do Enum, declare String(n)",
-        "ruim.saldo: Numeric de precisão 39 acima de 38, o teto do DECIMAL dos motores e do Delta",
+        "ruim.saldo: Numeric de precisão 39 fora de 1 a 38, o intervalo do DECIMAL dos motores e "
+        "do Delta",
+        "ruim.taxa: Numeric(10, 12) com escala fora de 0 a 10, o intervalo do DECIMAL dos motores "
+        "e do Delta",
         "ruim: chave estrangeira em ['data_tudo', 'nome_tudo'] aponta tudo ['data', 'nome'], "
         "sem chave primária nem UniqueConstraint nessas colunas",
         "ruim: chave estrangeira DEFERRABLE em ['id_tudo']",
