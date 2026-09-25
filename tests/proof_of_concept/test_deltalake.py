@@ -13,11 +13,12 @@ o checkpoint, a exportação por cópia dos arquivos e a carga inicial de pastas
 compactação que normaliza arquivos de outro escritor, a descrição e os comentários que atravessam o
 ``overwrite`` e mudam por ``alter``, o mínimo e o máximo que o próprio delta-rs grava por tipo, o
 ``NaN`` e o infinito nas estatísticas registradas e nas do delta-rs, o ``Double`` sem estatística
-no rodapé e no log, também por partição, dois registros concorrentes da mesma partição, a poda do
-``delta_scan`` por forma de predicado, e o valor de partição codificado na pasta e no log, com a
-aspa que quebra o predicado. Os comportamentos estão descritos em ``plan/delta.md``; aqui eles
-viram asserções. A reescrita pelo ``COPY`` particionado e o registro com as estatísticas do
-``RETURN_STATS`` são os de ``serialize_db.delta``, testados em ``tests/test_delta.py``.
+no rodapé e no log, também por partição, o filtro do dataset do delta-rs sobre a coluna sem mínimo
+e máximo no log, dois registros concorrentes da mesma partição, a poda do ``delta_scan`` por forma
+de predicado, e o valor de partição codificado na pasta e no log, com a aspa que quebra o
+predicado. Os comportamentos estão descritos em ``plan/delta.md``; aqui eles viram asserções. A
+reescrita pelo ``COPY`` particionado e o registro com as estatísticas do ``RETURN_STATS`` são os
+de ``serialize_db.delta``, testados em ``tests/test_delta.py``.
 """
 
 from __future__ import annotations
@@ -1142,6 +1143,58 @@ def test_float_statistics_off_per_partition_keep_the_nan_row_and_the_pruning(
     assert con.execute(above_three).fetchone()[0] == 1  # o NaN de agosto
     # Setembro podado pelo máximo 2.5.
     assert opened_partition_folders(con, "particao") == {"particao=2026-08-31"}
+
+
+def test_dataset_filter_loses_rows_on_a_column_without_min_max(
+    folder: Callable[[str], str], con: duckdb.DuckDBPyConnection
+) -> None:
+    """O dataset do delta-rs perde as linhas de um filtro sobre uma coluna que o log deixa sem
+    mínimo e máximo, e o ``delta_scan`` não.
+
+    ``to_pyarrow_dataset()`` dá a cada fragmento a garantia que monta das estatísticas do log: o
+    mínimo e o máximo nulos entram como ``valor >= null`` e ``valor <= null``, e o ``is_null`` da
+    coluna só entra com o ``nullCount`` entre zero e as linhas do arquivo. O PyArrow simplifica o
+    filtro contra a garantia e pula o arquivo. ``delta.dataSkippingStatsColumns`` sem a coluna a
+    tira da garantia.
+    """
+    ids = pa.array([1, 2, 3, 4, 5], pa.int64())
+    values = pa.array([1.0, 2.0, None, None, None], pa.float64())
+    table = pa.table({"id": ids, "valor": values})
+
+    def counts(uri: str, condition: ds.Expression, text: str) -> tuple[int, int]:
+        """As linhas do filtro pelo dataset do delta-rs e pelo ``delta_scan``."""
+        dataset = DeltaTable(uri).to_pyarrow_dataset()
+        query = f"SELECT count(*) FROM delta_scan('{uri}') WHERE {text}"
+        return dataset.to_table(filter=condition).num_rows, con.execute(query).fetchone()[0]
+
+    # Sem estatística do valor: o log não traz o nullCount, e o dataset perde as linhas dos
+    # filtros sobre o valor, não as do filtro sobre o id.
+    uri = folder("filtro_sem_estatistica")
+    no_statistics = {"valor": ColumnProperties(statistics_enabled="NONE")}
+    write_deltalake(uri, table, writer_properties=WriterProperties(column_properties=no_statistics))
+    assert added_stats(uri, 0)[0]["nullCount"] == {"id": 0}
+    fragment = next(iter(DeltaTable(uri).to_pyarrow_dataset().get_fragments()))
+    assert "valor >= null" in str(fragment.partition_expression)
+    assert counts(uri, pc.field("valor") > 1.5, "valor > 1.5") == (0, 1)
+    assert counts(uri, pc.field("valor").is_null(), "valor IS NULL") == (0, 3)
+    assert counts(uri, pc.field("id") > 3, "id > 3") == (2, 2)
+
+    # Com o nullCount no log e sem o mínimo e o máximo, como o registro grava o decimal: o IS NULL
+    # acha os nulos, e o intervalo continua perdendo a linha.
+    registered = folder("filtro_com_null_count")
+    DeltaTable.create(registered, table.schema)
+    pq.write_table(table, f"{registered}/f.parquet")
+    stats = {"numRecords": 5, "minValues": {"id": 1}, "maxValues": {"id": 5},
+             "nullCount": {"id": 0, "valor": 3}}
+    added = add_action("f.parquet", Path(registered, "f.parquet").stat().st_size, {}, stats)
+    DeltaTable(registered).create_write_transaction([added], mode="append", schema=table.schema)
+    assert counts(registered, pc.field("valor").is_null(), "valor IS NULL") == (3, 3)
+    assert counts(registered, pc.field("valor") > 1.5, "valor > 1.5") == (0, 1)
+
+    # Fora de delta.dataSkippingStatsColumns, a coluna sai da garantia, e os leitores concordam.
+    DeltaTable(uri).alter.set_table_properties({"delta.dataSkippingStatsColumns": "id"})
+    assert counts(uri, pc.field("valor") > 1.5, "valor > 1.5") == (1, 1)
+    assert counts(uri, pc.field("valor").is_null(), "valor IS NULL") == (3, 3)
 
 
 def test_two_registrations_of_the_same_partition_conflict(

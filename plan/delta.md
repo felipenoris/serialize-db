@@ -696,6 +696,14 @@ O defeito do `decimal` é do escritor, então uma coluna `Numeric` larga gravada
 numéricas são `Double`. O `register_files` da [etapa 3](PLAN-STAGE-3.md) registra mínimo e máximo
 só dos quatro tipos exatos.
 
+A coluna sem mínimo e máximo no log deixa de podar no `delta_scan`, e o dataset do delta-rs a lê
+como garantia: `to_pyarrow_dataset()` monta a de cada fragmento com `coluna >= null` e
+`coluna <= null`, e o PyArrow pula o arquivo em todo filtro de valor sobre ela, como
+`to_pyarrow_table` e `to_pandas` com `filters`. Sem o `nullCount` da coluna no log, o `IS NULL`
+também pula o arquivo, e o `IS NOT NULL` o devolve inteiro, nulos incluídos. O
+`delta.dataSkippingStatsColumns` sem a coluna a tira da garantia (sonda de 2026-09-25,
+[`POC.md`](POC.md), [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
 O `NaN` segue convenções diferentes no rodapé Parquet e no log. A especificação do Parquet
 (`parquet.thrift`) manda o escritor deixar o `NaN` fora do mínimo e do máximo e, desde o
 PARQUET-2249 (2026-05-26), contá-lo em `nan_count`; o leitor sem `nan_count` supõe que pode haver

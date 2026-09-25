@@ -3628,3 +3628,129 @@ conexão do DuckDB que atravessa a expiração da chave guardada no secret falha
 A sonda lê no alvo, em cerca de uma hora, a renovação de cada cliente segurado, com o controle dos
 clientes novos, e a pergunta continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md); o
 [arquivo da etapa 3](PLAN-STAGE-3.md) cita esta leitura.
+
+## O que as sondas dos achados da revisão mostraram
+
+Em 2026-09-25, numa pasta local do contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB),
+com deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1 e redshift-connector 2.1.17 e sem as variáveis
+`AWS_*`, as sondas conferiram os achados da revisão dos comentários e da documentação que dependem
+do comportamento, e a do `nullCount` achou a perda de linhas no dataset do delta-rs.
+
+- **Os códigos de saída da CLI.** Por subprocesso, sobre uma raiz com `cad_contas` do modelo de
+  `tests/lancamentos_model.py`: `run --engine redshift` sem as variáveis `SERIALIZE_DB_REDSHIFT_*`,
+  e com a conexão informada e um `--execution-id` de 60 caracteres, saíram com o traceback do
+  `ContractError` e o código 1; `publish --init` e `audit --engine redshift` sem conexão, também;
+  `publish --status` sem conexão saiu com 2 e a mensagem, sem traceback; e `load --source
+  gs://bucket/origem` saiu com o traceback do `ValueError` e 1.
+- **O `nullCount` de uma coluna sem estatística no rodapé.** O PyArrow gravou um timestamp em
+  `INT96` (`use_deprecated_int96_timestamps=True`), 5 linhas com 3 nulos, com `statistics` `None`
+  na coluna; `file_from_footer` deu `null_count` 0 a ela, e `register_files` commitou a versão 1
+  com esse `nullCount`. `quando IS NULL` leu 0 linhas pelo `DeltaTable.to_pyarrow_dataset()` e 3
+  pelo `delta_scan`.
+- **O `Double` sem estatística.** `publish_partition` com `columns_without_min_max=["valor"]`
+  sobre `[1.0, NaN, null, null, null]` gravou o rodapé sem estatística de `valor` e o log sem o
+  mínimo, o máximo e o `nullCount` dela. Pelo dataset do delta-rs, `valor IS NULL`, `valor > 0` e
+  `valor = 1.0` leram 0 linhas, e `valor IS NOT NULL` leu as 5, os três nulos incluídos; o
+  `delta_scan` leu 3 em `valor IS NULL`. Com a estatística gravada, sobre `[1.0, 2.0, null, null,
+  null]` e o `nullCount` 3, os dois leitores leram 3.
+- **O arquivo registrado pelo motor DuckDB.** `DuckDBEngine.export_partition` de uma tabela com
+  `Numeric(18, 2)`, `DateTime`, `Boolean`, `String(10)` e `Double` registrou o log sem o mínimo e o
+  máximo das três primeiras. `valor > 1`, `quando > '2025-12-31'` e `legado = true` leram 0, 0 e 0
+  linhas pelo dataset do delta-rs, contra 2, 2 e 1 pelo `delta_scan`; `nome = 'a'` e `taxa > 1`
+  leram 1 e 1 pelos dois; `valor IS NULL`, com o `nullCount` 1 no log, leu 1 pelos dois. O
+  `to_pyarrow_table` e o `to_pandas` com `filters=[("valor", ">", Decimal("1.00"))]` leram 0; o
+  DuckDB sobre o dataset registrado por `con.register` leu 2 em `valor > 1` e 0 no filtro de
+  `quando`.
+- **A garantia do fragmento.** O `partition_expression` do arquivo sem estatística trazia
+  `(valor >= null[double])` e `(valor <= null[double])`, e o do arquivo `INT96`, `is_valid(quando)`.
+  O `filestats_to_expression_next` de `python/src/lib.rs`, lido no `main` do delta-rs em
+  2026-09-25, monta `>=` e `<=` de cada mínimo e máximo sem conferir o nulo, põe `is_valid` com o
+  `nullCount` 0 e só acrescenta `or is_null` com o `nullCount` entre zero e as linhas do arquivo;
+  as colunas são as de `delta.dataSkippingStatsColumns` ou as primeiras de
+  `delta.dataSkippingNumIndexedCols`.
+- **O filtro pela partição.** Numa tabela particionada por `particao`, com `valor` gravado sem
+  estatística, a garantia de cada fragmento trazia `particao == "a"` ao lado de
+  `valor >= null[double]`; `particao == 'a'`, `particao == 'b'` e `id > 3` leram as 2, 3 e 2
+  linhas certas pelo dataset do delta-rs, e `valor > 1.5` leu 0 de 2. O `read_back` de
+  `delta.py`, que filtra o dataset só pela coluna da partição, fica fora da perda.
+- **A perda por arquivo e o `nullCount`.** Numa tabela com a partição `a` gravada com a
+  estatística de `valor` e a `b` sem ela, como a regra da issue #59 por partição, a leitura sem
+  filtro e `particao = 'b'` trouxeram as mesmas 6 e 3 linhas pelo dataset do delta-rs e pelo
+  `delta_scan`; `valor > 1.5` trouxe 1 linha, só da `a`, contra 2; `valor IS NULL`, 1 contra 3; e
+  `valor IS NOT NULL`, 5 contra 3, com os dois nulos da `b`. Num arquivo registrado sem mínimo e
+  máximo e com o `nullCount` 3 de 5, `IS NULL` e `IS NOT NULL` trouxeram os certos 3 e 2, e
+  `valor > 1.5`, 0 de 1. Numa coluna toda nula gravada pelo `write_deltalake`, com o `nullCount`
+  igual às linhas, a garantia trazia `is_null(valor)`, e os três filtros leram certo.
+- **A propriedade `delta.dataSkippingStatsColumns`.** Com `id,nome,taxa`, posta por
+  `alter.set_table_properties` na tabela registrada, a garantia deixou `valor`, `quando` e
+  `legado` de fora, e os três filtros leram 2, 2 e 1 pelo dataset do delta-rs.
+- **O arquivo órfão do `export_partition`.** `DuckDBEngine.export_partition` com o valor
+  `2026-08-31` numa tabela sem partição levantou o `ContractError` de `register_files` depois do
+  `COPY`, e o arquivo `sonda_<uuid>.parquet` ficou na pasta da tabela, fora do log.
+- **As ações de uma tabela particionada sem arquivos.** `get_add_actions(flatten=True)` de uma
+  tabela criada por `create_table` devolveu 0 linhas com a coluna `partition.data_str`, e o
+  conjunto dos valores saiu vazio.
+
+**Consequências**: o código se afasta da [etapa 6](PLAN-STAGE-6.md) nos códigos de saída, e
+`file_from_footer` supõe zero no `null_count` que falta, o que [`parquet.md`](parquet.md) proíbe
+ao leitor. A frase da [etapa 3](PLAN-STAGE-3.md) de que a estatística ausente só deixa de podar
+vale para o `delta_scan` e não para o dataset do delta-rs, e foi revista; [`delta.md`](delta.md)
+ganhou o comportamento na seção "As estatísticas por tipo", e
+`tests/proof_of_concept/test_deltalake.py`, o caso dele. Os achados esperam o usuário em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a pesquisa do filtro do dataset do delta-rs mostrou
+
+Em 2026-09-25, no contêiner da seção anterior, a pesquisa leu o código, as issues, as versões e a
+documentação do delta-rs e do PyArrow, e as sondas leram os outros leitores das tabelas e o efeito
+de `delta.dataSkippingStatsColumns`, com deltalake 1.6.4 no venv do projeto e, num ambiente à parte
+(`uv run --no-project`), deltalake 1.6.6 e Polars 1.44.2, todos com PyArrow 25.0.1.
+
+- **Os leitores que leem certo.** Na tabela da seção anterior com a partição `a` gravada com a
+  estatística de `valor` e a `b` sem ela, `valor > 1.5`, `valor IS NULL` e `valor IS NOT NULL`
+  leram as certas 2, 3 e 3 linhas pelo `DeltaTable.scan(predicate=...)`, pelo `QueryBuilder`
+  (DataFusion) e pelo `scan_delta` do Polars 1.44.2. Com `use_pyarrow=True`, o Polars leu 1 em
+  `valor > 1.5` e em `valor IS NULL`, como o dataset, e as 3 certas em `valor IS NOT NULL`, contra
+  as 5 do dataset. A 1.6.6 leu os mesmos números numa tabela igual, por todos os leitores.
+- **A versão 1.6.6.** O deltalake 1.6.6, publicado em 2026-09-24 e o mais novo no PyPI, montou a
+  mesma garantia `(valor >= null[double])` e `(valor <= null[double])` num arquivo de
+  `[1.0, 2.0, null, null, null]` gravado com `ColumnProperties(statistics_enabled="NONE")` em
+  `valor`: `to_pyarrow_table` e `to_pandas` com `filters=[("valor", ">", 1.5)]` leram 0 linhas, e
+  o dataset leu 0 em `IS NULL` e 5 em `IS NOT NULL`, contra os certos 1, 3 e 2; o `QueryBuilder`
+  leu 1. A 1.6.4 leu o mesmo. O `filestats_to_expression_next` de `python/src/lib.rs` é idêntico
+  nas tags `python-v1.6.4`, `python-v1.6.5` e `python-v1.6.6` e no `main`; nele e nas tags
+  `python-v0.24.0` e `python-v0.25.0`, só o valor da partição passa pela conferência do nulo, e o
+  mínimo e o máximo não.
+- **As issues do delta-rs.** Nenhuma issue aberta trata do limite nulo na garantia do dataset. A
+  PR #3210, de 2025-02-12, entrou na 0.25.0: ela limitou a garantia às colunas de
+  `delta.dataSkippingStatsColumns` ou às primeiras `delta.dataSkippingNumIndexedCols` e fechou as
+  issues #3201 e #3173, das colunas fora das estatísticas. A #3032 ("Filter expressions not being
+  applied"), aberta em 2024-11-25, foi fechada em 2025-02-15 com os rótulos `bug` e `mre-needed`.
+- **A propriedade e a poda do `delta_scan`.** Numa tabela de dois arquivos, com `valor` em
+  `[1, 2]` e em `[10, 20]` e a estatística dele no log, `valor > 5` abriu 1 dos 2 arquivos no
+  `delta_scan` antes e depois de `delta.dataSkippingStatsColumns` = `id`, e contou as 2 linhas
+  certas: o DuckDB segue podando pelo que o log já guarda. O dataset do delta-rs deixou `valor`
+  fora da garantia, `((is_valid(id) and (id >= 3)) and (id <= 4))`, e leu as 2.
+- **A escrita depois da propriedade.** O `write_deltalake` seguinte gravou no log o mínimo, o
+  máximo e o `nullCount` só de `id`, e o `get_add_actions`, com `flatten=True` e com
+  `flatten=False`, passou a mostrar só as estatísticas de `id`, também nos dois arquivos cujo log
+  guarda as de `valor`.
+- **O protocolo Delta.** O `PROTOCOL.md` de `delta-io/delta`, lido em 2026-09-25, deixa as
+  estatísticas opcionais na ação `add`, diz que o mínimo e o máximo de uma coluna toda nula não
+  carregam informação e aceita limites largos com `tightBounds` falso: um mínimo menor ou igual a
+  todo valor válido do arquivo e um máximo maior ou igual.
+- **A versão retirada.** O PyPI marca a 1.6.4 (2026-09-18) e a 1.6.5 (2026-09-21) como retiradas
+  com o motivo `Issue: #4784`: o `MERGE` numa tabela com o CDF ligado insere uma linha toda nula
+  por linha da origem que o predicado de `when_not_matched_insert` recusa, regressão da 1.6.4 que a
+  1.6.5 manteve. A 1.6.6 traz a correção (PR #4785, "fix: cdf merge regression") e não está
+  retirada. Nenhum arquivo de `src/`, `tests/`, `scripts/` e `probes/` chama `merge` ou lê o CDF.
+
+**Consequências**: nenhuma versão do delta-rs corrige o defeito, e a proteção fica com o pacote e
+com a documentação: [`docs/index.md`](../docs/index.md), seção "Ler a base com o modelo", passou a
+listar os leitores que leem certo com filtro e os que perdem linhas. A propriedade
+`delta.dataSkippingStatsColumns` protege o dataset sem tirar a poda do `delta_scan` pelas
+estatísticas já gravadas, mas o `write_deltalake` deixa de gravar as das colunas de fora (o
+`compact`, que escreve pelo delta-rs, não foi medido), e o `get_add_actions` as esconde; pelo código
+de `delta.py`, isso tira da releitura (`read_back`) a conferência do log numa chave de fora da
+propriedade e da cópia do `archive` (`deep_copy`) as estatísticas das colunas de fora. A escolha e
+a troca da versão fixada pela 1.6.6 esperam o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

@@ -636,3 +636,13 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   changing one step (`fetchone` or `fetchall`, the secrets query with or without a parameter),
   isolated the cause. When two instruments disagree, run variants that differ in one step, and
   consume every result the measured connection returns.
+- **A statistic left out for safety is read back through every reader of the format**
+  (2026-09-25). Stage 3 left the min and max of `decimal` and `timestamp` out of the log, because
+  a wrong bound prunes the file that holds the row, and wrote that an absent statistic only stops
+  pruning; no probe read an absent one through the delta-rs dataset. Verifying a `nullCount`
+  finding of the comment review, a filter through `DeltaTable.to_pyarrow_dataset()` read 0 rows
+  on a column without min and max: delta-rs turns each absent bound into the guarantee
+  `column >= null`, and PyArrow skips the file. The package filters that reader only by the
+  partition column, whose guarantee is the partition value, so no suite saw it. Read an omitted
+  statistic through `delta_scan`, the delta-rs dataset and `read_parquet`, with a filter on the
+  column itself. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`

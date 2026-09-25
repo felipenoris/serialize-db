@@ -139,11 +139,59 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   statistics_enabled="NONE")}))` writes the merged file without the min, max and `nullCount` of
   `valor` in the log and without its footer statistics, keeping the other columns'. `deltalake`
   1.6.4 is yanked on PyPI with the reason "Issue: #4784": `uv` warns and still installs the
-  pinned version (2026-09-25). delta-rs #4784 is a `MERGE` on a table with the change data feed
-  on inserting an all-null row for each row a `when_not_matched_insert` predicate rejects,
-  affecting 1.6.4 and 1.6.5 (read by the documentation review on 2026-09-25); the package uses
-  neither `MERGE` nor the change data feed. `plan/POC.md`, `plan/PLAN-STAGE-9.md`,
-  `plan/OPEN_QUESTIONS.md`
+  pinned version (2026-09-25). delta-rs #4784 is a `MERGE` on a table with the change data feed on
+  inserting an all-null row for each row a `when_not_matched_insert` predicate rejects, affecting
+  1.6.4 and 1.6.5 (read by the documentation review on 2026-09-25); 1.6.5 is also yanked, and 1.6.6
+  (2026-09-24, not yanked) fixes it with PR #4785; the package uses neither `MERGE` nor the change
+  data feed. `plan/POC.md`, `plan/PLAN-STAGE-9.md`, `plan/OPEN_QUESTIONS.md`
+
+- `to_pyarrow_dataset()` gives each fragment a `partition_expression` built from the file's log
+  statistics, and a null min or max becomes `column >= null` or `column <= null`, so PyArrow skips
+  the file for any value filter on that column (`filestats_to_expression_next` in
+  `python/src/lib.rs`, read on delta-rs `main` on 2026-09-25); a `nullCount` of 0 adds `is_valid`,
+  and only a `nullCount` between zero and the file's rows adds `or is_null`. On 2026-09-25, a file
+  registered by the DuckDB engine, whose log has no min and max for `Numeric(18, 2)`, `DateTime` and
+  `Boolean`, read 0 rows for `valor > 1`, `quando > '2025-12-31'` and `legado = true` through the
+  dataset, and 0 for `valor > 1` through `to_pyarrow_table` and `to_pandas` with `filters`, against
+  2, 2 and 1 through `delta_scan`; DuckDB over the dataset registered by `con.register` read 2 for
+  `valor > 1` and 0 for the timestamp filter. A `Double` written with
+  `ColumnProperties(statistics_enabled="NONE")` read 0 for `valor IS NULL`, `valor > 0` and
+  `valor = 1.0`, and all 5 rows for `valor IS NOT NULL`. In a table partitioned by `particao` with
+  that `valor`, `particao == 'a'`, `particao == 'b'` and `id > 3` read the right 2, 3 and 2 rows
+  through the dataset, and `valor > 1.5` read 0 of 2: the loss is only in a filter on the column
+  itself, and `_arrow_reading` in `delta.py` filters the dataset only by the partition column. The
+  loss is per file: with partition `a` written with `valor` statistics and `b` without,
+  `valor > 1.5` read 1 of 2, `valor IS NULL` 1 of 3 and `valor IS NOT NULL` 5 against 3, the nulls
+  of `b` included; a registered file with `nullCount` 3 of 5 and no min and max read `IS NULL` and
+  `IS NOT NULL` right (3 and 2) and `valor > 1.5` 0 of 1, and an all-null column (`nullCount` equal
+  to the rows) gets `is_null(valor)` in the guarantee and reads right.
+  `delta.dataSkippingStatsColumns` without the affected columns leaves them out of the guarantee,
+  and the engine file's filters read 2, 2 and 1. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`,
+  `tests/proof_of_concept/test_deltalake.py`
+
+- The dataset filter defect has no fix upstream on 2026-09-25: `filestats_to_expression_next` is
+  identical in the tags `python-v1.6.4`, `python-v1.6.5` and `python-v1.6.6` and on `main`, and in
+  it and in the tags `python-v0.24.0` and `python-v0.25.0` only the partition value is checked for
+  null, never the min or the max. PR #3210, of 2025-02-12 and in 0.25.0, limited the guarantee to
+  the columns of `delta.dataSkippingStatsColumns` or the first `delta.dataSkippingNumIndexedCols`
+  and closed #3201 and #3173, the columns outside the statistics; #3032 ("Filter expressions not
+  being applied", opened 2024-11-25) was closed on 2025-02-15 with the labels `bug` and
+  `mre-needed`, and no open issue covers the null bound. On the table with partition `a` written
+  with `valor` statistics and `b` without, `valor > 1.5`, `valor IS NULL` and `valor IS NOT NULL`
+  read the right 2, 3 and 3 through `DeltaTable.scan(predicate=...)`, `QueryBuilder` (DataFusion)
+  and the native `scan_delta` of Polars 1.44.2, and Polars with `use_pyarrow=True` read 1 for
+  `valor > 1.5` and for `valor IS NULL`, as the dataset, and the right 3 for `valor IS NOT NULL`,
+  against the dataset's 5; 1.6.6 read the same numbers on an equal table. deltalake 1.6.6 read 0 for
+  `valor > 1.5` through `to_pyarrow_table` and `to_pandas` with `filters`, 0 for `IS NULL` and 5 for
+  `IS NOT NULL` on `[1.0, 2.0, null, null, null]` written without `valor` statistics, against 1, 3
+  and 2, as 1.6.4 did, and `QueryBuilder` read 1. With `delta.dataSkippingStatsColumns` = `id` on a
+  two-file table, `delta_scan` still opened 1 of 2 files for `valor > 5` from the statistics already
+  in the log, the next `write_deltalake` wrote min, max and `nullCount` only for `id`, and
+  `get_add_actions`, with `flatten=True` and `flatten=False`, showed only `id` statistics, also for
+  the older files whose log keeps `valor`'s. The protocol makes the statistics optional and accepts
+  wide bounds with `tightBounds` false. `docs/index.md`, section "Ler a base com o modelo", lists
+  the readers that filter right and the ones that lose rows. `plan/POC.md`,
+  `plan/OPEN_QUESTIONS.md`, `REFERENCES.md`
 
 ## Performance measured
 
