@@ -1124,3 +1124,13 @@ are, which `plan/PLAN-STAGE-10.md` and `plan/PLAN-STAGE-9.md` record. The items 
 target run, the delta-rs dataset filter (issue #85), the `deltalake` upgrade (another thread) and
 the bucket rule stayed out. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-8.md`,
 `plan/PLAN-STAGE-9.md`, `plan/PLAN-STAGE-10.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+
+## The traceback of `serialize-db load` (2026-09-25)
+
+The review of 2026-09-25 found that `serialize-db load` ends with a traceback and exit 1 on the
+`duckdb.Error` and the `RegistrationRefused` that `initial_load` documents, like every unhandled
+error of the subcommands, while the source outside the library's storages and the
+`ExecutionConflict` end with exit 2 and one line. On a decision card the assistant recommended one
+line with the table and the message, keeping exit 1; the user chose on 2026-09-25 to keep the
+traceback, and the code does not change.
+`plan/PLAN-STAGE-7.md`
