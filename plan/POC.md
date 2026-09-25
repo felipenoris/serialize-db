@@ -3953,7 +3953,13 @@ local leram o que o código faz com cada tipo.
   `delta_schema` levantou a `Exception` genérica do delta-rs ("Invalid decimal: scale must be in
   range 0..10 inclusive, found: 12." e "Invalid decimal: Negative scales are not supported in
   Delta"); o DuckDB recusou `DECIMAL(10, 12)` ("DECIMAL type scale cannot be greater than width")
-  e `DECIMAL(39, 2)` ("DECIMAL type width must be between 1 and 38").
+  e `DECIMAL(39, 2)` ("DECIMAL type width must be between 1 and 38"). A sonda seguinte, na mesma
+  data, leu o `Numeric(-1, 0)` derrubando `check_models` com o `ValueError` do PyArrow
+  ("precision should be between 1 and 38"), e o `DECIMAL(38, 38)`, o `DECIMAL(10, 10)` e o
+  `DECIMAL(1, 0)` aceitos pelo PyArrow, pelo delta-rs e pelo DuckDB, que recusou o
+  `DECIMAL(38, -1)` ("DECIMAL type scale must be between 0 and 38"). A documentação do Redshift
+  ("Numeric types") limita a escala à precisão e a 37; o `DECIMAL(38, 38)` fica sem leitura no
+  alvo.
 
 **Consequências**: a tabela de `docs/index.md` passou a dizer a regra das subclasses, o padrão do
 `Numeric`, os tipos físicos por escritor, o `timestampNtz`, o `INT96` do `UNLOAD`, o `NaN` do
@@ -3963,8 +3969,11 @@ recusa o texto acima de 36 bytes numa coluna `Uuid`, a auditoria mede o mesmo so
 texto, que a coluna `UUID` nativa do DuckDB exige, e `arrow_type` recusa o `Enum` e o `Numeric` de
 precisão acima de 38, que `check_models` lista ([`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
 [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md)); `test_schema.py` passou de 51 a 57 casos e `test_audit.py`
-de 5 a 6, e os 7 casos novos e o caso mudado de `check_models` falharam no código anterior. A
-escala fora de 0 à precisão espera o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+de 5 a 6, e os 7 casos novos e o caso mudado de `check_models` falharam no código anterior. Por
+outra decisão do usuário da mesma data, `check_models` lista também a escala fora de 0 à precisão;
+a regra cobre a precisão de 1 a 38, que tira o `ValueError` do `Numeric(-1, 0)`, e a escala até
+37, pela documentação do Redshift. `test_schema.py` passou a 65 casos, e os 5 casos de recusa e o
+caso mudado de `check_models` falharam no código anterior.
 
 ## O que a troca das versões das dependências mostrou
 

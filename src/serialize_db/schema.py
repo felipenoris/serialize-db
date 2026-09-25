@@ -152,13 +152,21 @@ _ArrowColumn = pa.Array | pa.ChunkedArray
 
 def _decimal_type(column: sa.Column) -> pa.DataType:
     """O ``decimal128`` de uma coluna ``Numeric``: sem precisão, 18; sem escala, 0."""
+    name = f"{column.table.name}.{column.name}"
     precision = column.type.precision or 18
-    # O DECIMAL do DuckDB, do Redshift e do Delta vai até 38 dígitos, e o decimal128 do PyArrow
-    # levanta ValueError acima disso.
-    if precision > 38:
-        raise ContractError(f"{column.table.name}.{column.name}: Numeric de precisão {precision} "
-                            "acima de 38, o teto do DECIMAL dos motores e do Delta")
-    return pa.decimal128(precision, column.type.scale or 0)
+    scale = column.type.scale or 0
+    # O DECIMAL do DuckDB, do Redshift e do Delta vai de 1 a 38 dígitos, e o decimal128 do PyArrow
+    # levanta ValueError fora disso.
+    if precision < 1 or precision > 38:
+        raise ContractError(f"{name}: Numeric de precisão {precision} fora de 1 a 38, o intervalo "
+                            "do DECIMAL dos motores e do Delta")
+    # O DuckDB e o Delta aceitam a escala de 0 à precisão, e o Redshift até 37; o decimal128 do
+    # PyArrow aceita a escala negativa e a acima da precisão.
+    largest_scale = min(precision, 37)
+    if scale < 0 or scale > largest_scale:
+        raise ContractError(f"{name}: Numeric({precision}, {scale}) com escala fora de 0 a "
+                            f"{largest_scale}, o intervalo do DECIMAL dos motores e do Delta")
+    return pa.decimal128(precision, scale)
 
 
 def arrow_type(column: sa.Column) -> pa.DataType:
@@ -178,7 +186,8 @@ def arrow_type(column: sa.Column) -> pa.DataType:
     :return: o tipo Arrow.
     :raises ContractError: um tipo fora da tabela (``Float``, ``LargeBinary``, ``ARRAY``,
         ``Interval``), o ``Enum``, que deriva de ``String`` sem que nada confira a lista de
-        valores, e o ``Numeric`` de precisão acima de 38, com a tabela e a coluna na mensagem.
+        valores, e o ``Numeric`` de precisão fora de 1 a 38 ou de escala fora de 0 à precisão
+        (até 37, a do Redshift), com a tabela e a coluna na mensagem.
     """
     kind = column.type
     # Enum deriva de String, mas nem o DDL, nem cast, nem a auditoria conferem a lista de valores.
@@ -900,14 +909,15 @@ def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
 def check_models(metadata: sa.MetaData) -> list[str]:
     """As violações do contrato nos modelos.
 
-    As regras: tipo fora da tabela de tipos, o ``Enum`` e o ``Numeric`` de precisão acima de 38
-    inclusive; ``autoincrement`` numa chave inteira (o padrão ``"auto"`` inclusive); ``Identity``;
-    ``String`` sem comprimento; chave estrangeira ``DEFERRABLE``, ou cujas colunas apontadas não
-    são a chave primária nem uma ``UniqueConstraint`` da tabela apontada, na mesma ordem (um
-    índice único não serve no DuckDB nem no Redshift); ``partition_by`` sem a coluna ou com a
-    coluna fora de ``String(n)``, ``partition_source`` que a tabela não tem ou sem
-    ``partition_by``; tabela sem chave primária e sem ``keys``. O comentário de tabela e de coluna
-    é opcional; o da coluna, quando existe, vai para o esquema Arrow e para o Delta.
+    As regras: tipo fora da tabela de tipos, inclusive o ``Enum`` e o ``Numeric`` de precisão fora
+    de 1 a 38 ou de escala fora de 0 à precisão (até 37, a do Redshift); ``autoincrement`` numa
+    chave inteira (o padrão ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; chave
+    estrangeira ``DEFERRABLE``, ou cujas colunas apontadas não são a chave primária nem uma
+    ``UniqueConstraint`` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB
+    nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
+    ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave primária e
+    sem ``keys``. O comentário de tabela e de coluna é opcional; o da coluna, quando existe, vai
+    para o esquema Arrow e para o Delta.
 
     Exemplo:
 

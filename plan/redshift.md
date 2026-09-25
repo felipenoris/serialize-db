@@ -363,12 +363,12 @@ compila o DDL pelo dialeto: `sql_type` da [etapa 1](PLAN-STAGE-1.md) escreve `VA
 
 ### DECIMAL com escala fixa
 
-`DECIMAL(precisao, escala)` guarda até 38 dígitos; a precisão padrão é 18 e a escala padrão é 0. A
-representação depende da precisão: até 19 dígitos, inteiro de 8 bytes; de 20 a 38, inteiro de 16
-bytes, que ocupa o dobro em disco e torna as consultas mais lentas. A documentação pede que a precisão
-máxima não seja atribuída sem necessidade. `DECIMAL(18, 2)`, o tipo do contrato para valores
-contábeis, fica em 8 bytes nos dois bancos; o `decimal128(18, 2)` do Arrow, que o representa nos
-arquivos e na memória, ocupa 16 bytes por valor.
+`DECIMAL(precisao, escala)` guarda até 38 dígitos; a precisão padrão é 18 e a escala padrão é 0, e
+a escala vai de 0 à precisão, até 37. A representação depende da precisão: até 19 dígitos, inteiro
+de 8 bytes; de 20 a 38, inteiro de 16 bytes, que ocupa o dobro em disco e torna as consultas mais
+lentas. A documentação pede que a precisão máxima não seja atribuída sem necessidade.
+`DECIMAL(18, 2)`, o tipo do contrato para valores contábeis, fica em 8 bytes nos dois bancos; o
+`decimal128(18, 2)` do Arrow, que o representa nos arquivos e na memória, ocupa 16 bytes por valor.
 
 Regras de carga documentadas:
 

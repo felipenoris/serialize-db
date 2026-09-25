@@ -96,7 +96,8 @@ O que o plano acrescenta por tipo:
   contábeis é a melhoria futura.
 - **`Numeric(p, s)`**: o `COPY` do `DECIMAL(18, 2)` gravado em `INT64` pelo delta-rs e pelo DuckDB
   passou no ambiente alvo em 2026-09-21, com a soma conferida ([`POC.md`](POC.md)). A precisão
-  acima de 38 é violação em `check_models` (decisão do usuário de 2026-09-25).
+  fora de 1 a 38 e a escala fora de 0 a `p`, até 37, o maior `s` do Redshift, são violações em
+  `check_models` (decisões do usuário de 2026-09-25).
 - **`String(n)`**: `n` é medido em bytes, como no `VARCHAR(n)` do Redshift, pelo `cast` e pela
   auditoria de tamanho (decisão do usuário de 2026-09-21). O DuckDB aceita o comprimento e o ignora
   (`information_schema` lê `VARCHAR`).

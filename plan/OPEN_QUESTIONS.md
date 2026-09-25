@@ -104,12 +104,6 @@ foi medido em [`POC.md`](POC.md).
   pacote. Espera o usuário: adaptar o pacote à 2.1 (`bound_statement`, de `serialize_db.sql`, que
   passa os valores por `params()`, e as colunas que o `load_report` soma) ou manter a 2.0.54.
 
-- **A escala do `Numeric` fora de 0 à precisão.** `Numeric(10, 12)` e `Numeric(38, -1)` passam em
-  `check_models`, e o `delta_schema` os recusa com a `Exception` genérica do delta-rs ("scale must
-  be in range 0..10 inclusive, found: 12" e "Negative scales are not supported in Delta"); o
-  DuckDB recusa o `DECIMAL(10, 12)` do DDL (leituras de 2026-09-25, [`POC.md`](POC.md)). Espera o
-  usuário: listar a escala fora de 0 à precisão como violação, junto da precisão acima de 38.
-
 ## Achados da revisão dos comentários e da documentação
 
 A revisão de 2026-09-25 (PR #82) mudou só comentários, docstrings e prosa de `src/`, `scripts/`,
