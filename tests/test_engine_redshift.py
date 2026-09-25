@@ -665,7 +665,8 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     """Por partição, o manifesto no ``staging/``, o ``DELETE`` da staging, o ``COPY ... MANIFEST
     FILLRECORD`` e o ``INSERT`` com o valor; a staging apagada no fim; a partição sem arquivo
     não roda; o nome ocupado e a tabela sem versão são ``SandboxError``; ``published`` carrega a
-    versão inteira em ``_publicado`` uma vez; ``cleanup`` apaga as tabelas e o ``staging/``."""
+    versão inteira em ``_publicado_<versão>`` uma vez, e outra versão numa staging nova;
+    ``cleanup`` apaga as tabelas e o ``staging/``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     uri = storage.uri_of("prd/cad_lancamentos")
     delta.create_table(uri, ENTRIES, storage)
@@ -703,7 +704,7 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     # published: a versão inteira, uma vez.
     source = engine.published(ENTRIES, uri, 2)
     assert str(sa.select(source.c.id_lancamento)).startswith(
-        f'SELECT "{PREFIX}cad_lancamentos_publicado"."id_lancamento"')
+        f'SELECT "{PREFIX}cad_lancamentos_publicado_2"."id_lancamento"')
     copies = [text for text in connection.texts() if text.startswith("COPY")]
     assert len(copies) == 3
     engine.published(ENTRIES, uri, 2)
@@ -711,11 +712,18 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     with pytest.raises(SandboxError):
         engine.published(ENTRIES, uri, None)
 
+    # Outra versão numa staging nova, com a partição única da versão 1.
+    older = engine.published(ENTRIES, uri, 1)
+    assert str(sa.select(older.c.id_lancamento)).startswith(
+        f'SELECT "{PREFIX}cad_lancamentos_publicado_1"."id_lancamento"')
+    assert len([text for text in connection.texts() if text.startswith("COPY")]) == 4
+
     # O cleanup apaga as tabelas e o staging/.
     engine.cleanup()
     dropped = [text for text in connection.texts() if text.startswith("DROP TABLE IF EXISTS")]
-    assert dropped[-2:] == [f'DROP TABLE IF EXISTS "esquema"."{name}"',
-                            f'DROP TABLE IF EXISTS "esquema"."{name}_publicado"']
+    assert dropped[-3:] == [f'DROP TABLE IF EXISTS "esquema"."{name}"',
+                            f'DROP TABLE IF EXISTS "esquema"."{name}_publicado_2"',
+                            f'DROP TABLE IF EXISTS "esquema"."{name}_publicado_1"']
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
     assert connection.closed
 
@@ -729,7 +737,9 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     partição e com o JSON serializado, e o arquivo como o Redshift o gravou (``INT96``) no log, com
     as linhas conferidas; dois destinos distintos para a mesma partição. A troca: com
     ``columns_without_min_max``, o destino no ``staging/`` e a partição por ``publish_partition``,
-    com o aviso no log; a partição vazia entra por um arquivo sem linha."""
+    com o aviso no log e a releitura, que desfaz o commit na contagem diferente; a partição vazia
+    entra por um arquivo sem linha; o valor numa tabela sem partição recusa antes do
+    ``UNLOAD``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     uri = storage.uri_of("prd/cad_lancamentos_projetados")
     delta.create_table(uri, PROJECTED, storage)
@@ -797,6 +807,19 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=0)
     assert version == 3
     assert delta.open_table(uri, storage).to_pyarrow_table().num_rows == 0
+
+    # A troca relê a partição: a contagem diferente desfaz o commit.
+    connection.unload_rows = with_nan.drop_columns(["data_base_str"])
+    with pytest.raises(RegistrationRefused, match="releitura"):
+        engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=999,
+                                columns_without_min_max=["valor"])
+    assert delta.open_table(uri, storage).to_pyarrow_table().num_rows == 0
+
+    # O valor numa tabela sem partição recusa antes de qualquer comando.
+    commands = len(connection.commands)
+    with pytest.raises(ContractError, match="tabela sem partição recebeu o valor"):
+        engine.export_partition(ACCOUNTS, storage.uri_of("prd/cad_contas"), MONTHS[1], METADATA)
+    assert len(connection.commands) == commands
     engine.cleanup()
 
 
@@ -930,13 +953,14 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     assert report.nonfinite_columns[MONTHS[1]] == ()
     # A tabela publicada vazia dispensa a junção da chave sequencial e carrega a staging só para
     # a chave codigo; a chave estrangeira de cad_lancamentos entra pela versão fixada de
-    # cad_contas, carregada em _publicado quando o anti-join roda.
+    # cad_contas, carregada em _publicado_<versão> quando o anti-join roda.
     orphans = engine.audit(ENTRIES, [MONTHS[1]], uri, entries_version, foreign_keys=True,
                            referenced={"cad_contas": (accounts_uri, accounts_version)})
     assert orphans.passed, orphans.results
     assert [result.name for result in orphans.results][-1] == "orfao_id_conta"
-    assert count_of(engine, f"{engine.prefix}cad_contas_publicado") == 3
-    assert count_of(engine, f"{engine.prefix}cad_lancamentos_publicado") == 240
+    assert count_of(engine, f"{engine.prefix}cad_contas_publicado_{accounts_version}") == 3
+    entries_staging = f"{engine.prefix}cad_lancamentos_publicado_{entries_version}"
+    assert count_of(engine, entries_staging) == 240
 
     # A exportação pelo registro: o arquivo do UNLOAD na pasta da partição, lido pelos leitores.
     version = engine.export_partition(PROJECTED, projected_uri, MONTHS[1], METADATA,
@@ -988,7 +1012,8 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     engine.cleanup()
     other = RedshiftEngine(redshift_config(), target.execution_id + "b", storage, "prd/staging/x")
     try:
-        for suffix in ("cad_lancamentos", "cad_lancamentos_projetados", "cad_contas_publicado"):
+        for suffix in ("cad_lancamentos", "cad_lancamentos_projetados",
+                       f"cad_contas_publicado_{accounts_version}"):
             assert not other.name_in_use(f"{engine.prefix}{suffix}")
     finally:
         other.cleanup()

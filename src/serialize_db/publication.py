@@ -17,10 +17,11 @@ de controle numa transação, e ``publication_status`` compara a versão publica
 versões vêm de um snapshot do arquivo de controle, por ``serialize-db publish --snapshot`` ou
 ``--channel``, ou são as atuais.
 
-O ``COPY`` leva a cláusula de credenciais do motor Redshift, montada por comando; nenhum texto
-que a carregue vai a log. Todo comando cita a tabela publicada e a de controle por nome em duas
-partes, depois do ``USE`` que a conexão roda, e a staging temporária pelo nome só, sem
-``COMPUPDATE`` e sem ``TRUNCATE``, o que um datashare aceita.
+O ``COPY`` leva a cláusula de credenciais do motor Redshift, montada uma vez por tabela, antes
+dos comandos da transação; nenhum texto que a carregue vai a log. Todo comando cita a tabela
+publicada e a de controle por nome em duas partes, depois do ``USE`` que a conexão roda, e a
+staging temporária pelo nome só, sem ``COMPUPDATE`` e sem ``TRUNCATE``, o que um datashare
+aceita.
 
 Exemplo:
 
@@ -81,6 +82,7 @@ if TYPE_CHECKING:
 __all__ = [
     "CONTROL_TABLE",
     "PublicationStatus",
+    "PublishedColumn",
     "control_ddl",
     "control_read",
     "create_publications_table",
@@ -152,20 +154,33 @@ class PublicationStatus:
 
 @dataclasses.dataclass(frozen=True)
 class PublishedColumn:
-    """Uma coluna de uma tabela publicada, como ``svv_all_columns`` a lista."""
+    """Uma coluna de uma tabela publicada, como ``svv_all_columns`` a lista.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        PublishedColumn("preco", "numeric", None, 18, 2)
+    """
 
     name: str
+    """O nome da coluna, o ``column_name`` do catálogo."""
     data_type: str
+    """O tipo, o ``data_type`` do catálogo, como ``bigint``, ``numeric`` ou
+    ``character varying``."""
     length: int | None
+    """A largura do texto, o ``character_maximum_length``; ``None`` quando o catálogo não a traz."""
     precision: int | None
+    """A precisão numérica, o ``numeric_precision``; ``None`` quando o catálogo não a traz."""
     scale: int | None
+    """A escala numérica, o ``numeric_scale``; ``None`` quando o catálogo não a traz."""
 
 
 # ---------------------------------------------------------------- o texto dos comandos
 
 
-def published_name(environment: str, table: sa.Table) -> str:
-    """``<ambiente>_<tabela>``, o nome da tabela publicada; protegida."""
+def _published_name(environment: str, table: sa.Table) -> str:
+    """``<ambiente>_<tabela>``, o nome da tabela publicada."""
     return f"{environment}_{table.name}"
 
 
@@ -211,7 +226,7 @@ def control_read(schema: str, environment: str, table: sa.Table) -> str:
         antes da primeira publicação.
     """
     return (f"SELECT delta_version FROM {_qualified(schema, CONTROL_TABLE)} "
-            f"WHERE table_name = {literal(published_name(environment, table))}")
+            f"WHERE table_name = {literal(_published_name(environment, table))}")
 
 
 def published_ddl(schema: str, environment: str, table: sa.Table) -> str:
@@ -243,7 +258,7 @@ def published_ddl(schema: str, environment: str, table: sa.Table) -> str:
     key = [quoted(column.name) for column in table.primary_key.columns]
     if key:
         lines.append(f"    PRIMARY KEY ({', '.join(key)})")
-    name = _qualified(schema, published_name(environment, table))
+    name = _qualified(schema, _published_name(environment, table))
     return (f"CREATE TABLE {name} (\n" + ",\n".join(lines) + "\n)"
             + redshift_options(table_options(table)))
 
@@ -294,7 +309,7 @@ def publication_statements(schema: str, environment: str, table: sa.Table,
     :raises ContractError: a tabela com um tipo de coluna fora do contrato ou com mais de uma
         coluna de partição.
     """
-    name = published_name(environment, table)
+    name = _published_name(environment, table)
     published = _qualified(schema, name)
     staging = quoted(f"{name}_staging")
     statements = []
@@ -340,7 +355,7 @@ def unpublication_statements(schema: str, environment: str, table: sa.Table,
     :param published_version: a versão lida na linha de controle.
     :return: os comandos, na ordem da transação.
     """
-    name = published_name(environment, table)
+    name = _published_name(environment, table)
     return [
         f"DROP TABLE {_qualified(schema, name)}",
         f"DELETE FROM {_qualified(schema, CONTROL_TABLE)} WHERE table_name = {literal(name)} "
@@ -410,7 +425,7 @@ def reconcile_published(schema: str, environment: str, table: sa.Table,
         recriá-la.
     :raises ContractError: a tabela com um tipo de coluna fora do contrato.
     """
-    published = _qualified(schema, published_name(environment, table))
+    published = _qualified(schema, _published_name(environment, table))
     existing = {column.name: _in_family(column) for column in columns}
     statements = []
     destructive = []
@@ -490,7 +505,7 @@ def _published_columns(connection: _Connection, config: RedshiftConfig, environm
                        table: sa.Table) -> list[PublishedColumn]:
     """As colunas da tabela publicada em ``svv_all_columns``, na ordem; vazia quando a tabela
     não existe."""
-    name = published_name(environment, table)
+    name = _published_name(environment, table)
     try:
         connection.execute(f"SELECT 1 FROM {_qualified(config.schema, name)} LIMIT 0")
     except redshift_connector.Error as error:
@@ -677,15 +692,15 @@ def _version_to_publish(db: Database, table: sa.Table,
     tabela sem versão, fora de ``versions`` ou inexistente no ambiente, é ``PublicationError``."""
     if versions is not None:
         version = versions.get(table.name)
-    else:
-        uri = db.uri(table)
-        version = None
-        if delta.table_exists(uri, db.storage):
-            version = delta.open_table(uri, db.storage).version()
-    if version is None:
+        if version is None:
+            raise PublicationError(f"{table.name}: a tabela está fora das versões pedidas, e não "
+                                   "há o que publicar")
+        return version
+    uri = db.uri(table)
+    if not delta.table_exists(uri, db.storage):
         raise PublicationError(f"{table.name}: a tabela não existe no ambiente {db.environment}, "
                                "e não há o que publicar")
-    return version
+    return delta.open_table(uri, db.storage).version()
 
 
 def create_publications_table(config: RedshiftConfig) -> None:
@@ -832,5 +847,5 @@ def _table_status(connection: _Connection, db: Database, config: RedshiftConfig,
     pending: list[str | None] = []
     if published is None or published < current:
         pending, _ = _partitions_to_publish(uri, table, published, current, db.storage)
-    return PublicationStatus(published_name(db.environment, table), published, current,
+    return PublicationStatus(_published_name(db.environment, table), published, current,
                              tuple(pending))

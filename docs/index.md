@@ -20,9 +20,10 @@ argumentos, o retorno e as exceções de cada função, está no menu: `serializ
   `Base.metadata`.
 - **A fonte da verdade são as tabelas Delta Lake**, em disco local ou no S3. O esquema Delta de cada
   tabela sai do modelo.
-- **O DuckDB e o Redshift são sandboxes**: cada execução cria as tabelas de que precisa a partir do
-  DDL do modelo, carrega os dados, roda o pipeline, audita e publica. O DDL de cada motor sai do
-  modelo pela tabela de tipos abaixo, sem os dialetos do SQLAlchemy.
+- **O DuckDB e o Redshift são sandboxes**: cada execução leva ao sandbox as tabelas de entrada,
+  como view ou cópia do `delta_scan` no DuckDB e por `COPY` numa tabela do DDL do modelo no
+  Redshift, roda o pipeline, que grava as de saída em tabelas do DDL do modelo, audita e publica.
+  O DDL de cada motor sai do modelo pela tabela de tipos abaixo, sem os dialetos do SQLAlchemy.
 - **Os dados atravessam a fronteira em lotes Arrow** (`pyarrow.RecordBatch`, `pyarrow.Table` ou
   `pyarrow.RecordBatchReader`), e `serialize_db.schema.cast` leva cada lote ao esquema do contrato
   ou o recusa com a instrução ao cliente.

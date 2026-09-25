@@ -182,7 +182,7 @@ class Held:
 
 
 # --------------------------------------------------------------------------------------------------
-# Funções puras: as chaves, os instantes, a espera e os verdictos
+# Funções puras: as chaves, os instantes, a espera e os vereditos
 
 
 def now() -> datetime.datetime:
@@ -252,7 +252,7 @@ def wait_deadline(start: datetime.datetime, expiries: list[datetime.datetime | N
 
 def held_verdict(readings: list[Reading],
                  expiry: datetime.datetime | None) -> tuple[str, str]:
-    """O verdicto de um cliente segurado pelas leituras feitas depois da expiração da credencial
+    """O veredito de um cliente segurado pelas leituras feitas depois da expiração da credencial
     que ele resolveu na abertura: ``pass`` quando todas passaram, ``fail`` quando alguma falhou e
     ``note`` sem expiração conhecida ou sem leitura depois dela."""
     if expiry is None:
@@ -286,7 +286,7 @@ def key_change(keys: list[tuple[datetime.datetime, str | None]]) -> datetime.dat
 
 def key_verdict(keys: list[tuple[datetime.datetime, str | None]],
                 expiry: datetime.datetime | None) -> tuple[str, str]:
-    """O verdicto de uma chave montada a cada uso, como a da cláusula, pelas rodadas depois da
+    """O veredito de uma chave montada a cada uso, como a da cláusula, pelas rodadas depois da
     expiração da chave do início: ``pass`` quando cada uma leva outra chave, ``fail`` quando
     alguma ainda leva a do início e ``note`` sem chave, sem expiração ou sem chave lida depois
     dela."""
@@ -309,7 +309,7 @@ def key_verdict(keys: list[tuple[datetime.datetime, str | None]],
 
 
 def record(report: Report, status: str, check_id: str, what: str, detail: str) -> None:
-    """Registra uma checagem pelo verdicto: ``pass``, ``fail`` ou ``note``."""
+    """Registra uma checagem pelo veredito: ``pass``, ``fail`` ou ``note``."""
     if status == "pass":
         report.ok(check_id, what, detail)
     elif status == "fail":
@@ -704,7 +704,7 @@ def checks(report: Report, storage: Storage, rounds: list[Round], controls: list
         report.ok("CR-1", "credencial do contêiner",
                   f"chave {first.container_key}, expira às {clock(expiry)}")
 
-    # CR-2: a espera precisa passar das duas expirações para os verdictos valerem.
+    # CR-2: a espera precisa passar das duas expirações para os vereditos valerem.
     expiries = [value for value in (expiry, held.redshift_expiry) if value is not None]
     detail = f"a espera {ending}, com {len(rounds)} rodada(s)"
     if not expiries:
@@ -732,7 +732,7 @@ def checks(report: Report, storage: Storage, rounds: list[Round], controls: list
             text += "; o cliente novo também falhou, e a falha é do ambiente"
         record(report, status, check_id, client, text)
 
-    # CR-9: a chave do secret do DuckDB é leitura, e o verdicto do DuckDB está em CR-4 e CR-5.
+    # CR-9: a chave do secret do DuckDB é leitura, e o veredito do DuckDB está em CR-4 e CR-5.
     secret_changed = key_change([(item.at, item.secret_key) for item in rounds])
     if first.secret_key is None:
         report.note("CR-9", "chave do secret do DuckDB", "sem secret do S3")
@@ -822,7 +822,7 @@ def main(argv: list[str]) -> int:
     ending = wait_section(report, held, config, rounds, deadline, reason,
                           datetime.timedelta(minutes=arguments.interval_minutes), expiry)
 
-    # O controle, a linha do tempo e os verdictos, com as conexões fechadas no fim.
+    # O controle, a linha do tempo e os vereditos, com as conexões fechadas no fim.
     controls = control_section(report, storage, sample, config, held)
     timeline_section(report, rounds, list(held.readers), expiry)
     checks(report, storage, rounds, controls, held, config, ending)

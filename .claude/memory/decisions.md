@@ -1069,7 +1069,10 @@ the statistics of clean partitions too. Before deciding, the user asked where th
 why the log already marks the columns, and whether the library's own writers reach the case; the
 probes of the same day found it only after a `rewrite` of a table with more than 100 partitions
 whose partitions have several files, which today only the Redshift engine writes. The code does not
-follow the decision yet. `plan/PLAN-STAGE-9.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+follow the decision yet: asked on 2026-09-25 whether to implement it with the two Redshift
+decisions below, the user kept it for the choice of issue #85, because a partition compacted
+without statistics widens what the delta-rs dataset filter reads wrong. `plan/PLAN-STAGE-9.md`,
+`plan/POC.md`, `plan/CURRENT_STATE.md`, `plan/OPEN_QUESTIONS.md`
 
 ## The count check of the Redshift engine's swap (2026-09-25)
 
@@ -1081,8 +1084,8 @@ runs `read_back` after it). After `publish_partition`, `_swap` runs `delta.read_
 `expected_rows` or, without it, the sandbox's `count(*)`, as the registration does; a difference
 restores the previous version and raises `RegistrationRefused`. The alternatives were comparing
 the `UNLOAD` files' rows before the commit, which misses a loss in the delta-rs write, and
-documenting the gap. The code does not follow the decision yet. `plan/PLAN-STAGE-5.md`,
-`plan/CURRENT_STATE.md`
+documenting the gap. `_swap` follows it since the corrections after PR #84 (2026-09-25).
+`plan/PLAN-STAGE-5.md`, `plan/CURRENT_STATE.md`
 
 ## The version of the Redshift engine's `_publicado` staging (2026-09-25)
 
@@ -1095,5 +1098,29 @@ its own staging, loaded whole, and every copy stays in the schema until `cleanup
 staging is the same one when the versions match. The alternatives were refusing another version
 with `SandboxError`, which refuses on Redshift what DuckDB accepts, and reloading the same
 staging, which changes what an earlier `FromClause` reads. Before deciding, the user asked what a
-staging is. The code does not follow the decision yet. `plan/PLAN-STAGE-5.md`,
-`plan/PLAN-STAGE-6.md`, `plan/CURRENT_STATE.md`
+staging is. `published` follows it since the corrections after PR #84 (2026-09-25).
+`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/CURRENT_STATE.md`
+
+## The corrections after PR #84 (2026-09-25)
+
+After merging PR #84, the user asked for the items of `plan/OPEN_QUESTIONS.md` analyzed and the
+corrections applied where no decision of theirs was needed. The assistant corrected the review
+findings the stage files already fixed (the CLI exit codes, the `nullCount` of `file_from_footer`,
+the API edges, the names and annotations, the docstrings and pages) and asked two questions on
+decision cards. The user chose to implement in the same PR only the two Redshift decisions of PR #81
+(`read_back` after the swap and the staging named by the version), leaving the compaction for issue
+#85. The second card asked whether to keep as they are the publication's credentials clause built
+once per table, the local `unload_to` the Redshift reader accepts and `deep_copy` reopening the
+destination per partition. The user asked for context on the first, and the answer corrected the
+card: the fix needs no change to the signature of `publication_statements`, because the statements
+can carry a marker that each `COPY` swaps for a fresh clause, so the assistant's recommendation for
+that item became the fix, implemented while the answer was pending. The user then decided to accept
+the clause built once per table for now, because a credential that expires in the middle of the
+transaction corrupts no data and at most the operator repeats the publication, and to re-evaluate it
+when `probes/credentials.py` runs in the target; the fix left the PR, and `plan/PLAN-STAGE-8.md`
+records the behavior. After asking for their context and side effects, the user also kept the local
+`unload_to` of the Redshift reader and `deep_copy` reopening the destination per partition as they
+are, which `plan/PLAN-STAGE-10.md` and `plan/PLAN-STAGE-9.md` record. The items that wait on a
+target run, the delta-rs dataset filter (issue #85), the `deltalake` upgrade (another thread) and
+the bucket rule stayed out. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-8.md`,
+`plan/PLAN-STAGE-9.md`, `plan/PLAN-STAGE-10.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`

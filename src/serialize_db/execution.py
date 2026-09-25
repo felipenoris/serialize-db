@@ -249,8 +249,14 @@ class Database:
 
         :param config: a configuração do Redshift; ``None`` lê as variáveis
             ``SERIALIZE_DB_REDSHIFT_*``.
-        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``; ``None`` é
-            ``<raiz>/<ambiente>/staging``, sob a qual o leitor grava em ``<id do leitor>/``.
+        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
+            leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` é
+            ``<raiz>/<ambiente>/staging``. Na conexão com o Redshift, pelo ``workgroup`` ou pelo
+            ``host``, e na do substituto local das suítes, só uma pasta ``s3://bucket/prefixo``
+            serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam nela até o ``close`` do
+            stream e o do leitor, e uma pasta local, como o padrão de uma raiz local, faz o
+            primeiro ``stream`` falhar, sem arquivo gravado. Uma pasta local só serve à conexão
+            de mentira dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
         :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia a
             pasta do leitor.
         :raises ContractError: a configuração sem conexão, sem ``workgroup`` e sem ``host``,
@@ -468,11 +474,10 @@ class Execution:
             raise ContractError(f"{table.name}: tabela sem partição")
         if table.name not in self._tables:
             return []
-        # get_add_actions devolve uma tabela arro3; pa.table a converte.
+        # get_add_actions devolve uma tabela arro3; pa.table a converte. Sem arquivos, a coluna da
+        # partição vem vazia.
         actions = pa.table(self._tables[table.name].get_add_actions(flatten=True))
-        values = set()
-        if actions.num_rows:
-            values = set(actions.column(f"partition.{partition_by}").to_pylist())
+        values = set(actions.column(f"partition.{partition_by}").to_pylist())
         up_to_partition = []
         for value in sorted(values):
             if value <= self.partition:
@@ -729,10 +734,11 @@ class Execution:
         As partições e a auditoria de toda tabela são conferidas antes do primeiro commit. Depois,
         por tabela, ``create_table`` se não existe, ``reconcile`` e ``export_partition`` por
         partição, que registra no log o arquivo que o motor gravou, com a contagem da auditoria em
-        ``expected_rows`` e as colunas ``Double`` com valor não finito sem mínimo e máximo (todas
-        as ``Double`` com ``audit=False``). As tabelas correm num pool de ``max_workers``: na
-        primeira falha nada novo começa, o que está em curso termina, e a exceção leva o resultado
-        de cada tabela numa nota.
+        ``expected_rows`` e as colunas ``Double`` com valor não finito sem mínimo e máximo (todas as
+        ``Double`` com ``audit=False``); no motor Redshift, a partição com essas colunas volta por
+        ``publish_partition``, que grava o arquivo de novo. As tabelas correm num pool de
+        ``max_workers``: na primeira falha nada novo começa, o que está em curso termina, e a
+        exceção leva o resultado de cada tabela numa nota.
 
         Exemplo:
 

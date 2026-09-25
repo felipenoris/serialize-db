@@ -61,10 +61,12 @@ Exemplo:
 
 O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff
 impresso, quando a auditoria reprova e quando a carga acha uma partição fora do contrato ou uma
-diferença de contagem ou soma; 2 no erro de uso, na tabela fora do modelo ou sem Delta, na
-partição acima do ``String(n)`` da coluna de partição, no conflito de execução, na publicação sem
-a tabela de controle, sem ``--snapshot`` nem ``--channel``, do snapshot ou do canal ausente, do
-snapshot arquivado ou da tabela fora do snapshot, no modelo fora do contrato e na origem ausente
+diferença de contagem ou soma; 2 no erro de uso, na configuração do Redshift sem conexão, na
+tabela fora do modelo ou sem Delta, na partição acima do ``String(n)`` da coluna de partição, no
+``execution_id`` longo demais para o prefixo do sandbox do Redshift, no ``ContractError`` do
+pipeline, no conflito da execução e da carga, na publicação sem a tabela de controle, sem
+``--snapshot`` nem ``--channel``, do snapshot ou do canal ausente, do snapshot arquivado ou da
+tabela fora do snapshot, no modelo fora do contrato e na origem ausente ou fora dos armazenamentos
 da carga, no snapshot repetido ou ausente, no canal sem ``--name`` e ``--snapshot`` juntos, no
 canal ``current``, na compactação depois de um snapshot na versão atual, no arquivo do snapshot de
 um canal e no destino da exportação não vazio ou fora da raiz.
@@ -101,6 +103,7 @@ from serialize_db.errors import (
 from serialize_db.execution import Database, Execution
 from serialize_db.load import LoadReport
 from serialize_db.resources import peak_rss_mb
+from serialize_db.storage import Storage
 
 if TYPE_CHECKING:
     from serialize_db.publication import PublicationStatus
@@ -391,7 +394,9 @@ def _sql_check(args: argparse.Namespace) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     """Abre a execução, entrega-a ao pipeline e devolve o código pelo resultado: 1 na auditoria
-    reprovada, 2 no conflito e no motor que não serve."""
+    reprovada, 2 no conflito e no ``ContractError`` da abertura ou do pipeline, como o motor que
+    não serve, a configuração do Redshift sem conexão e o ``execution_id`` longo demais para o
+    prefixo do sandbox."""
     redshift = None
     if args.engine == "redshift":
         # O driver do Redshift é o extra "redshift": o módulo entra só quando o motor entra.
@@ -401,12 +406,12 @@ def _run(args: argparse.Namespace) -> int:
     try:
         execution = Execution(Database(args.root, args.environment, args.metadata), args.engine,
                               args.partition, args.execution_id, redshift=redshift)
+        # A entrada do with abre o motor, que confere a conexão e o prefixo do sandbox.
+        with execution as run:
+            args.pipeline(run)
     except ContractError as error:
         print(f"serialize-db run: {error}", file=sys.stderr)
         return 2
-    try:
-        with execution as run:
-            args.pipeline(run)
     except AuditFailed as error:
         print(f"serialize-db run: auditoria reprovada: {error}", file=sys.stderr)
         return 1
@@ -443,7 +448,8 @@ def _audit_engine(args: argparse.Namespace, db: Database, execution_id: str) -> 
 
 
 def _audit_published(args: argparse.Namespace, table: sa.Table) -> int:
-    """A auditoria da versão publicada, num sandbox próprio do motor de ``--engine``."""
+    """A auditoria da versão publicada, num sandbox próprio do motor de ``--engine``: 1 na
+    auditoria reprovada, 2 na tabela sem Delta e na configuração do Redshift sem conexão."""
     db = Database(args.root, args.environment, args.metadata)
     uri = db.uri(table)
     if not delta.table_exists(uri, db.storage):
@@ -457,7 +463,13 @@ def _audit_published(args: argparse.Namespace, table: sa.Table) -> int:
         if delta.table_exists(target, db.storage):
             target_version = delta.open_table(target, db.storage).version()
             referenced[constraint.referred_table.name] = (target, target_version)
-    with _audit_engine(args, db, f"auditoria-{uuid.uuid4().hex[:8]}") as engine:
+    # O motor Redshift confere a conexão ao nascer, e a configuração sem ela é erro de uso.
+    try:
+        sandbox = _audit_engine(args, db, f"auditoria-{uuid.uuid4().hex[:8]}")
+    except ContractError as error:
+        print(f"serialize-db audit: {error}", file=sys.stderr)
+        return 2
+    with sandbox as engine:
         engine.ingest(table, uri, version, args.partitions, materialize=True)
         report = engine.audit(table, args.partitions, uri, version, args.foreign_keys,
                               args.key_scope, referenced)
@@ -500,9 +512,9 @@ def _selected_tables(metadata: sa.MetaData, names: list[str] | None) -> list[sa.
 def _publish(args: argparse.Namespace) -> int:
     """``--init`` cria a tabela de controle; ``--status`` mostra o estado; ``--unpublish``
     despublica; sem os três, publica as tabelas no snapshot de ``--snapshot`` ou do canal de
-    ``--channel``, um dos dois obrigatório. 2 no erro de uso, sem a tabela de controle, no
-    snapshot ou no canal ausente, no snapshot arquivado, na tabela fora do snapshot e no
-    conflito."""
+    ``--channel``, um dos dois obrigatório. 2 no erro de uso, na configuração do Redshift sem
+    conexão, sem a tabela de controle, no snapshot ou no canal ausente, no snapshot arquivado, na
+    tabela fora do snapshot e no conflito."""
     # O driver do Redshift é o extra "redshift": os módulos entram só no subcomando publish.
     from serialize_db import publication
     from serialize_db.engine.redshift import RedshiftConfig
@@ -518,7 +530,11 @@ def _publish(args: argparse.Namespace) -> int:
         return 2
     config = RedshiftConfig.from_environment()
     if args.init:
-        publication.create_publications_table(config)
+        try:
+            publication.create_publications_table(config)
+        except ContractError as error:
+            print(f"serialize-db publish: {error}", file=sys.stderr)
+            return 2
         print(f"{config.schema}.{publication.CONTROL_TABLE} criada")
         return 0
     if not args.root or args.metadata is None:
@@ -621,11 +637,18 @@ def _print_load_report(report: LoadReport, loaded: list[str | None]) -> None:
 def _load(args: argparse.Namespace) -> int:
     """A carga inicial de cada tabela pedida, na ordem da carga, e o relatório de cada uma: 1 na
     partição fora do contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato,
-    na tabela fora do modelo e na origem ausente."""
+    na tabela fora do modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no
+    conflito."""
     problems = schema.check_models(args.metadata)
     if problems:
         print("serialize-db load: modelo fora do contrato:", *problems, sep="\n  ",
               file=sys.stderr)
+        return 2
+    # A origem num esquema que a biblioteca não lê, ou no S3 sem região, é erro de uso.
+    try:
+        Storage.for_uri(args.source)
+    except ValueError as error:
+        print(f"serialize-db load: {error}", file=sys.stderr)
         return 2
     db = Database(args.root, args.environment, args.metadata)
     matches = True
@@ -642,6 +665,9 @@ def _load(args: argparse.Namespace) -> int:
     except ContractError as error:
         print(f"serialize-db load: {error}", file=sys.stderr)
         return 1
+    except ExecutionConflict as error:
+        print(f"serialize-db load: conflito: {error}", file=sys.stderr)
+        return 2
     outside = load.entries_outside_the_model(args.source, args.metadata)
     if outside:
         print(f"fora do modelo: {', '.join(outside)}")

@@ -14,11 +14,12 @@ As primitivas:
 
 - ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, por
   ``COPY ... MANIFEST`` numa staging sem a coluna de partição e um ``INSERT`` com o valor dela;
-  ``published`` carrega a versão fixada em ``exec_<id>_<tabela>_publicado`` e a devolve como
-  origem de consulta;
-- ``stream`` roda ``UNLOAD ... PARALLEL OFF`` para ``staging/<execution_id>/stream/<uuid>/`` na
-  thread de quem chama e lê os arquivos numa thread auxiliar, dois lotes à frente do cliente;
-  ``query`` devolve a ``pa.Table`` do cursor, montada por colunas;
+  ``published`` carrega a versão fixada em ``exec_<id>_<tabela>_publicado_<versão>`` e a devolve
+  como origem de consulta;
+- ``stream`` roda ``UNLOAD ... PARALLEL OFF`` para ``stream/<uuid>/`` sob o ``staging_prefix``
+  (``<ambiente>/staging/<execution_id>/`` no sandbox, ``<id do leitor>/`` sob o ``unload_to`` do
+  leitor Redshift) na thread de quem chama e lê os arquivos numa thread auxiliar, dois lotes à
+  frente do cliente; ``query`` devolve a ``pa.Table`` do cursor, montada por colunas;
 - ``loader`` grava os lotes num Parquet do ``staging/`` numa thread auxiliar e, no ``close``,
   cria a tabela e roda o ``COPY`` numa transação; ``load`` é a forma por tabela;
 - ``audit`` roda as verificações de ``serialize_db.audit`` e monta o ``AuditReport``;
@@ -605,10 +606,10 @@ class RedshiftStream:
 
     A construção roda, sob o lock e na thread de quem chama, a leitura do esquema do resultado
     (``select * from (<texto>) as t limit 0``) e o ``UNLOAD ... PARALLEL OFF`` para
-    ``staging/<execution_id>/stream/<uuid>/``; sem manifesto, ``pg_last_unload_count()`` na mesma
-    sessão separa o resultado vazio, sem lote, da falta do manifesto, que sobe. Depois, uma thread
-    lê os arquivos pelo ``Storage`` e entrega cada lote, no esquema do statement, a uma fila de
-    dois lotes, enquanto o cliente trabalha no anterior. ``close`` apaga o prefixo do stream.
+    ``stream/<uuid>/`` sob o ``staging_prefix`` do motor; sem manifesto, ``pg_last_unload_count()``
+    na mesma sessão separa o resultado vazio, sem lote, da falta do manifesto, que sobe. Depois, uma
+    thread lê os arquivos pelo ``Storage`` e entrega cada lote, no esquema do statement, a uma fila
+    de dois lotes, enquanto o cliente trabalha no anterior. ``close`` apaga o prefixo do stream.
     ``__arrow_c_stream__`` entrega os lotes a ``write_deltalake`` e a
     ``RecordBatchReader.from_stream``.
     """
@@ -875,8 +876,8 @@ class RedshiftLoader:
 
 @dataclasses.dataclass(frozen=True)
 class _PublishedStaging:
-    """A staging ``_publicado`` da versão fixada de uma tabela: ``published`` a carrega na hora, e
-    a auditoria só quando uma verificação que a cita roda."""
+    """A staging ``_publicado_<versão>`` da versão fixada de uma tabela: ``published`` a carrega
+    na hora, e a auditoria só quando uma verificação que a cita roda."""
 
     table: sa.Table
     name: str
@@ -954,7 +955,7 @@ class RedshiftEngine:
             self._loaded: set[str] = set()
             self._loaded_lock = threading.Lock()
         self._connection = connect(config)
-        log.info("sandbox %s aberto no esquema %s com o prefixo %s", self.execution_id,
+        log.info("sessão %s aberta no esquema %s com o prefixo %s", self.execution_id,
                  config.schema, self.prefix)
 
     # ------------------------------------------------------------ a sessão
@@ -1018,7 +1019,9 @@ class RedshiftEngine:
 
     def _reconnect(self) -> None:
         """A conexão reaberta com credencial nova, no lugar da que o servidor derrubou."""
-        with contextlib.suppress(Exception):
+        # O close da conexão derrubada levanta o InterfaceError do driver ou o OSError do socket,
+        # e a conexão já não serve.
+        with contextlib.suppress(redshift_connector.Error, OSError):
             self._connection.close()
         self._connection = connect(self.config)
 
@@ -1202,8 +1205,8 @@ class RedshiftEngine:
         wanted = sorted(check_partition_value(value) for value in partitions)
         return [value for value in wanted if value in available]
 
-    def ingest(self, table: sa.Table, uri: str, version: int, partitions: list[str] | None = None,
-               materialize: bool = False) -> None:
+    def ingest(self, table: sa.Table, uri: str, version: int | None,
+               partitions: list[str] | None = None, materialize: bool = False) -> None:
         """A tabela ``exec_<id>_<tabela>`` com as partições pedidas da versão fixada:
         ``COPY ... MANIFEST FILLRECORD`` numa staging sem a coluna de partição e um ``INSERT`` com
         o valor dela por partição.
@@ -1219,7 +1222,7 @@ class RedshiftEngine:
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox, com o prefixo
             ``exec_<id>_``.
         :param uri: a URI da tabela Delta.
-        :param version: a versão fixada da tabela.
+        :param version: a versão fixada da tabela; ``None``, a tabela sem versão no Delta.
         :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
             nenhuma.
         :param materialize: não muda nada, porque o Redshift não lê o Delta no lugar, e a
@@ -1246,7 +1249,7 @@ class RedshiftEngine:
         return sa.table(quoted_name(name, quote=True), *columns)
 
     def _ensure_loaded(self, staging: _PublishedStaging) -> None:
-        """A staging ``_publicado`` carregada uma vez por execução, entre as sessões."""
+        """A staging ``_publicado_<versão>`` carregada uma vez por execução, entre as sessões."""
         with self._loaded_lock:
             if staging.name in self._loaded:
                 return
@@ -1258,8 +1261,10 @@ class RedshiftEngine:
 
     def published(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
-        sandbox: a staging ``exec_<id>_<tabela>_publicado``, carregada uma vez por execução com
-        todas as partições da versão.
+        sandbox: a staging ``exec_<id>_<tabela>_publicado_<versão>``, carregada uma vez por
+        execução e por versão com todas as partições dela. Outra versão, depois de
+        ``run.publish`` avançar ``versions``, entra numa staging nova, e as duas ficam no esquema
+        até o ``cleanup``.
 
         Exemplo:
 
@@ -1278,9 +1283,14 @@ class RedshiftEngine:
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão publicada, a tabela ainda não existe")
-        staging = _PublishedStaging(table, f"{self.prefix}{table.name}_publicado", uri, version)
+        staging = self._published_staging(table, uri, version)
         self._ensure_loaded(staging)
         return self._source(table, staging.name)
+
+    def _published_staging(self, table: sa.Table, uri: str, version: int) -> _PublishedStaging:
+        """A staging da versão, com a versão no nome: cada versão pedida tem a sua."""
+        name = f"{self.prefix}{table.name}_publicado_{version}"
+        return _PublishedStaging(table, name, uri, version)
 
     # ------------------------------------------------------------ consulta, stream e carga
 
@@ -1450,7 +1460,7 @@ class RedshiftEngine:
 
     def _pending_source(self, table: sa.Table, uri: str, version: int) -> sa.FromClause:
         """A versão fixada como origem de consulta, carregada só quando uma verificação a cita."""
-        staging = _PublishedStaging(table, f"{self.prefix}{table.name}_publicado", uri, version)
+        staging = self._published_staging(table, uri, version)
         self._pending[staging.name] = staging
         return self._source(table, staging.name)
 
@@ -1677,9 +1687,11 @@ class RedshiftEngine:
         return cast(connection.execute(text).to_arrow_reader(100_000), table)
 
     def _swap(self, table: sa.Table, uri: str, value: str | None, metadata: Mapping[str, str],
-              columns_without_min_max: Collection[str], count: int) -> int:
-        """A troca: o ``UNLOAD`` para o ``staging/`` e a partição de volta por
-        ``publish_partition``, que grava sem mínimo e máximo as colunas com valor não finito."""
+              expected_rows: int | None, columns_without_min_max: Collection[str],
+              count: int) -> int:
+        """A troca: o ``UNLOAD`` para o ``staging/``, a partição de volta por
+        ``publish_partition``, que grava sem mínimo e máximo as colunas com valor não finito, e a
+        releitura por ``read_back``, como no registro."""
         partition_by = table_options(table).partition_by
         folder = f"{partition_by}={value}" if partition_by is not None else ""
         prefix = self.storage.join(self.staging_prefix, table.name, folder, uuid.uuid4().hex)
@@ -1691,10 +1703,14 @@ class RedshiftEngine:
         connection = self.storage.duckdb_connect(config=environment_limits())
         try:
             reader = self._swap_reader(connection, table, value, paths)
-            return delta.publish_partition(uri, table, value, reader, metadata, self.storage,
-                                           columns_without_min_max=columns_without_min_max)
+            version = delta.publish_partition(uri, table, value, reader, metadata, self.storage,
+                                              columns_without_min_max=columns_without_min_max)
         finally:
             connection.close()
+        # O log e os dois leitores contam as linhas da partição; a diferença desfaz o commit.
+        expected = expected_rows if expected_rows is not None else count
+        delta.read_back(uri, table, value, expected, self.storage)
+        return version
 
     def export_partition(self, table: sa.Table, uri: str, value: str | None,
                          metadata: Mapping[str, str], expected_rows: int | None = None,
@@ -1719,9 +1735,9 @@ class RedshiftEngine:
         :param uri: a URI da tabela Delta, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
         :param metadata: os metadados do commit, de ``delta.commit_metadata``.
-        :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
-            registrados; sem ela, a contagem do sandbox. A volta por ``publish_partition`` não
-            a usa e não confere contagem.
+        :param expected_rows: a contagem da auditoria, que o registro confere nos arquivos antes
+            do commit e os dois caminhos conferem na releitura depois dele; sem ela, a contagem do
+            sandbox.
         :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
             que saem sem mínimo e máximo.
         :return: a versão do commit.
@@ -1735,22 +1751,24 @@ class RedshiftEngine:
             ``UNLOAD``.
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
-        partition_by = table_options(table).partition_by
-        if partition_by is not None:
-            check_partition_value(value)
+        # O valor conferido antes do UNLOAD: os arquivos de um valor recusado no registro
+        # ficariam na pasta da tabela, fora do log.
+        value = delta.checked_value(table, value)
         count = self._count(table, value)
         if columns_without_min_max:
-            return self._swap(table, uri, value, metadata, columns_without_min_max, count)
+            return self._swap(table, uri, value, metadata, expected_rows, columns_without_min_max,
+                              count)
         return self._register(table, uri, value, metadata, expected_rows, columns_without_min_max,
                               count)
 
     # ------------------------------------------------------------ o encerramento
 
     def cleanup(self) -> None:
-        """Apaga as tabelas ``exec_<id>_*`` que a execução criou, uma por comando, os objetos de
-        ``staging/<execution_id>/`` (nenhum arquivo sem armazenamento) e fecha a sessão; uma
-        tabela que o ``DROP`` não alcança fica nomeada no log. Numa sessão a mais, fecha só a
-        conexão dela. A segunda chamada não faz nada.
+        """Apaga as tabelas ``exec_<id>_*`` que a execução criou, uma por comando, os objetos do
+        ``staging_prefix`` (``<ambiente>/staging/<execution_id>/`` no sandbox, ``<id do leitor>/``
+        sob o ``unload_to`` do leitor; nenhum sem armazenamento) e fecha a sessão; uma tabela que o
+        ``DROP`` não alcança fica nomeada no log. Numa sessão a mais, fecha só a conexão dela. A
+        segunda chamada não faz nada.
 
         Exemplo:
 

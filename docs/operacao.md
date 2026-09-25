@@ -1,13 +1,16 @@
 ## Operação
 
-O runbook das rotinas de operação do banco Delta, cada uma um subcomando de `serialize-db` sobre
-as primitivas de `serialize_db.delta`, com o que conferir antes e o que esperar depois. Todos os
-subcomandos recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--environment`
-(`SERIALIZE_DB_ENVIRONMENT`, `dsv`), e saem com 0 quando terminam e com 2 no erro de uso, no nome
-repetido ou ausente e no conflito de escrita do arquivo de controle. `compact`, `archive` e
-`export` imprimem por tabela o tempo e o pico de memória residente do processo (`VmHWM`), a
-medida da rotina na tabela com que a máquina é dimensionada; a publicação a põe na linha de log
-de cada tabela.
+O runbook das rotinas de operação do banco Delta, cada uma um subcomando de `serialize-db` sobre as
+primitivas de `serialize_db.delta`, com o que conferir antes e o que esperar depois. Os subcomandos
+recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--environment`
+(`SERIALIZE_DB_ENVIRONMENT`, `dsv`), menos `publish --init`, que lê só as variáveis
+`SERIALIZE_DB_REDSHIFT_*`. Saem com 0 quando terminam; com 1 na auditoria reprovada, na carga com
+diferença de contagem ou soma ou com partição fora do contrato, e no erro sem tratamento, que
+imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem conexão, no nome
+repetido ou ausente e no conflito com outro escritor, no arquivo de controle ou na tabela.
+`compact`, `archive` e `export` imprimem por tabela o tempo e o pico de memória residente do
+processo (`VmHWM`), a medida da rotina na tabela com que a máquina é dimensionada; a publicação a
+põe na linha de log de cada tabela.
 
 ### Tabela de controle da publicação
 

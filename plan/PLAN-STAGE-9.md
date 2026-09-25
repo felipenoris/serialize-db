@@ -50,7 +50,10 @@ do `pdoc`. O que a implementação mudou do plano:
   0, e `_commit_actions` recebe o nome e a coluna de partição no lugar da tabela do SQLAlchemy.
   A repetição continua uma cópia interrompida: com tabela no destino, a partição cujos arquivos
   ela já registra é pulada, sem commit, e um destino que registra um arquivo fora da versão é
-  `RegistrationRefused` (a falha de 2026-09-24 no alvo, [`POC.md`](POC.md)).
+  `RegistrationRefused` (a falha de 2026-09-24 no alvo, [`POC.md`](POC.md)). A cópia reabre a
+  tabela de destino antes do commit de cada partição, o que o commit não exige, porque ele
+  resolve a versão pelo log no armazenamento (a sonda de 2026-09-21 em [`POC.md`](POC.md)); a
+  reabertura custa uma leitura do log por partição e fica (decisão do usuário de 2026-09-25).
 - **`compact`** recusa também a tabela sem partição cujo snapshot está na versão atual, e exige
   `--partitions` numa tabela particionada; a tabela sem partição com um arquivo só não commita.
 - **`archive`** chama `deep_copy` em toda tabela do snapshot, e a repetição de um arquivamento
@@ -58,7 +61,9 @@ do `pdoc`. O que a implementação mudou do plano:
   entrada se move só depois da última cópia. A primeira versão pulava a tabela presente em
   `arquivo/<nome>/`, e teria dado por arquivada a `cad_lancamentos` pela metade que a falha de
   2026-09-24 deixou no alvo ([`POC.md`](POC.md)).
-- **`export`** exige o destino sob a raiz (`Storage.relative`) e vazio (`list_files`).
+- **`export`** exige o destino sob a raiz (`Storage.relative`) e vazio (`list_files`), e
+  `export_snapshot` confere a origem e o destino sob a raiz nos dois modos antes de gravar,
+  porque o `COPY` particionado do DuckDB grava onde recebe.
 - **`history`** devolve o instante do commit como `datetime` em UTC, e a linha de comando o imprime
   em ISO 8601; `get_add_actions(flatten=False)` traz `path`, `size_bytes`, `modification_time`,
   `num_records` e os structs `null_count`, `min`, `max` e `partition`, e `history()` do delta-rs
@@ -92,7 +97,9 @@ do `pdoc`. O que a implementação mudou do plano:
   coluna `Double` só de nulos num arquivo também sai do log sem mínimo e máximo, e perde a
   estatística na partição compactada. O caso chega ao `compact` depois de um `rewrite` de uma
   tabela com mais de 100 partições e partições de vários arquivos ([`POC.md`](POC.md)); o código
-  ainda não segue a decisão ([`CURRENT_STATE.md`](CURRENT_STATE.md)).
+  ainda não segue a decisão, que espera a escolha da issue #85 sobre as colunas sem mínimo e
+  máximo (decisão do usuário de 2026-09-25, [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md),
+  [`CURRENT_STATE.md`](CURRENT_STATE.md)).
 - **`archive`** lê a entrada do snapshot, roda `deep_copy(<ambiente>/<tabela>, versão,
   <ambiente>/arquivo/<nome>/<tabela>, storage)` de cada tabela na versão registrada, imprime
   por tabela o tempo e o pico de RSS do processo, com o tempo de cada partição no log de

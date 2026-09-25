@@ -31,7 +31,7 @@ from client_model import Base
 from conftest import LocalLocation
 from serialize_db import cli, delta, load
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
-from serialize_db.errors import ContractError
+from serialize_db.errors import ContractError, ExecutionConflict
 from serialize_db.execution import Database
 from serialize_db.schema import arrow_schema, table_options
 
@@ -522,13 +522,19 @@ def test_foreign_key_orphans_are_reported_not_blocking(base: source.SourceBase, 
 # ---------------------------------------------------------------- a linha de comando
 
 
+def conflicting_load(*args: object, **options: object) -> list[str | None]:
+    """Um ``initial_load`` que encontra outro registro da mesma partição."""
+    raise ExecutionConflict("outro registro de cad_contas")
+
+
 def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Path,
                                              monkeypatch: pytest.MonkeyPatch,
                                              capsys: pytest.CaptureFixture) -> None:
     """``serialize-db load`` sobre a base inteira: as tabelas sem partição antes das
     particionadas, as três entradas fora do modelo, saída 0; a segunda execução não grava nada;
     1 na partição fora do contrato e no relatório com diferença; 2 no modelo fora do contrato, na
-    tabela fora do modelo e na origem ausente, sem traceback."""
+    tabela fora do modelo, na origem ausente ou num esquema que a biblioteca não lê e no conflito,
+    sem traceback."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = str(folder / "delta")
@@ -581,4 +587,15 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     assert cli.main([*common[:3], "--source", str(folder / "vazia"), "--root", root]) == 2
     printed_errors = capsys.readouterr().err
     assert "a pasta da tabela não existe na origem" in printed_errors
+
+    # A origem num esquema que a biblioteca não lê.
+    assert cli.main([*common[:3], "--source", "gs://bucket/origem", "--root", root]) == 2
+    printed_errors += capsys.readouterr().err
+    assert "gs://bucket/origem: esquema fora dos armazenamentos" in printed_errors
+
+    # O conflito com outro registro da mesma partição.
+    monkeypatch.setattr(load, "initial_load", conflicting_load)
+    assert cli.main([*common, "--root", root, "--tables", "cad_contas"]) == 2
+    printed_errors += capsys.readouterr().err
+    assert "serialize-db load: conflito: outro registro de cad_contas" in printed_errors
     assert "Traceback" not in printed_errors

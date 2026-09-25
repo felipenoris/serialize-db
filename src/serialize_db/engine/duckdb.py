@@ -551,7 +551,8 @@ def environment_limits() -> dict[str, object]:
 
     .. code-block:: python
 
-        environment_limits()   # {'threads': 4, 'memory_limit': '7306MiB'} em 4 vCPUs e 16 GiB
+        # Num contêiner com 4 CPUs e 13,2 GiB disponíveis:
+        environment_limits()   # {'threads': 4, 'memory_limit': '6761MiB'}
         duckdb.connect(config=environment_limits())
 
     :return: as opções da conexão do DuckDB: em ``threads``, as CPUs que o processo pode usar;
@@ -810,8 +811,8 @@ class DuckDBEngine:
         return (f" WHERE {column} BETWEEN {literal(values[0])} AND {literal(values[-1])} "
                 f"AND {column} IN ({listed})")
 
-    def ingest(self, table: sa.Table, uri: str, version: int, partitions: list[str] | None = None,
-               materialize: bool = False) -> None:
+    def ingest(self, table: sa.Table, uri: str, version: int | None,
+               partitions: list[str] | None = None, materialize: bool = False) -> None:
         """Uma view com o nome do modelo sobre a versão fixada da tabela Delta, ou uma tabela com
         ``materialize=True``.
 
@@ -826,7 +827,7 @@ class DuckDBEngine:
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
         :param uri: a URI da tabela Delta.
         :param version: a versão fixada da tabela, lida por
-            ``delta_scan(uri, version := v)``.
+            ``delta_scan(uri, version := v)``; ``None``, a tabela sem versão no Delta.
         :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
             nenhuma.
         :param materialize: ``True`` copia os dados para uma tabela do sandbox; com ``False``, a
@@ -1166,9 +1167,10 @@ class DuckDBEngine:
         :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
         """
+        # O valor conferido antes do COPY: o arquivo de um valor recusado no registro ficaria
+        # na pasta da tabela, fora do log.
+        value = delta.checked_value(table, value)
         partition_by = table_options(table).partition_by
-        if partition_by is not None:
-            check_partition_value(value)
 
         # Um arquivo novo na pasta da partição, com o execution_id no nome.
         table_path = self._storage.relative(uri)

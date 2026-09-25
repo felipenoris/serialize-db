@@ -347,7 +347,7 @@ class DeltaReader:
     def stream(self, statement_or_sql: sa.sql.ClauseElement | str,
                params: Mapping[str, object] | None = None,
                batch_size: int = 100_000) -> BatchStream:
-        """Os lotes da consulta enquanto ela roda, pelo ``stream`` do motor, com a memória
+        """Os lotes da consulta enquanto ela roda, pelo ``DuckDBEngine.stream``, com a memória
         limitada a 64 MiB de lotes.
 
         Exemplo:
@@ -364,8 +364,8 @@ class DeltaReader:
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :param batch_size: o máximo de linhas de cada lote.
-        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` cancela a
-            consulta que ainda roda e apaga o arquivo de transbordo.
+        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``BatchStream.close``
+            cancela a consulta que ainda roda e apaga o arquivo de transbordo.
         :raises ContractError: um statement Core que não é consulta, ou que cita uma tabela do
             modelo sem view no leitor, sem chamar o motor.
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
@@ -444,10 +444,14 @@ class RedshiftReader:
             tabelas publicadas.
         :param config: a configuração do Redshift; ``None`` lê as variáveis
             ``SERIALIZE_DB_REDSHIFT_*`` (``RedshiftConfig.from_environment``).
-        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``,
-            ``s3://bucket/prefixo`` ou uma pasta local, sob a qual o leitor grava em
-            ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa ``stream`` fora, e o
-            leitor não toca arquivo algum.
+        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
+            leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa ``stream``
+            fora, e o leitor não toca arquivo algum. Na conexão com o Redshift, pelo ``workgroup``
+            ou pelo ``host``, e na do substituto local das suítes, só uma pasta
+            ``s3://bucket/prefixo`` serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam
+            nela até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro
+            ``stream`` falhar, sem arquivo gravado. Uma pasta local só serve à conexão de mentira
+            dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
         :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem
             conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``.
         :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
@@ -524,8 +528,8 @@ class RedshiftReader:
             statement ou dos marcadores do texto; os valores entram como literais, porque o
             ``UNLOAD`` não recebe parâmetro.
         :param batch_size: o máximo de linhas de cada lote, lido de cada arquivo do ``UNLOAD``.
-        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` apaga os
-            arquivos do ``UNLOAD`` deste stream.
+        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``BatchStream.close``
+            apaga os arquivos do ``UNLOAD`` deste stream.
         :raises ContractError: um statement Core que não é consulta, ou o leitor sem
             ``unload_to``, antes de qualquer comando no servidor.
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
@@ -590,8 +594,14 @@ def open_redshift(metadata: sa.MetaData, environment: str, config: RedshiftConfi
     :param environment: o ambiente publicado, ``prd`` ou ``dsv``.
     :param config: a configuração do Redshift; ``None`` lê as variáveis
         ``SERIALIZE_DB_REDSHIFT_*``.
-    :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, num bucket ou
-        numa pasta do cliente; ``None`` deixa ``stream`` fora.
+    :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
+        leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa
+        ``stream`` fora, e o leitor não toca arquivo algum. Na conexão com o Redshift, pelo
+        ``workgroup`` ou pelo ``host``, e na do substituto local das suítes, só uma pasta
+        ``s3://bucket/prefixo`` serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam nela
+        até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro ``stream``
+        falhar, sem arquivo gravado. Uma pasta local só serve à conexão de mentira dos testes do
+        pacote, que grava o arquivo pelo armazenamento do leitor.
     :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia
         ``<unload_to>/<id do leitor>/``.
     :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem

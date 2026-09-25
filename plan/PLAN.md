@@ -501,7 +501,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 | Módulo | Etapa | Conteúdo |
 | --- | --- | --- |
-| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `LogUnavailable`, `SandboxError`, `AuditFailed`, `PublicationError`), num módulo sem dependências, porque `delta` levanta o que `execution` captura. |
+| `serialize_db.errors` | 1 | As exceções da biblioteca (`ContractError`, `SqlError`, `ConflictError`, `ExecutionConflict`, `RegistrationRefused`, `SchemaDiffRefused`, `LogUnavailable`, `SandboxError`, `AuditFailed`, `PublicationError`), num módulo sem dependências, que os outros importam sem ciclo; a execução deixa as da etapa 3 chegarem ao cliente, e a linha de comando captura `ConflictError` e `ExecutionConflict`. |
 | `serialize_db.schema` | 1 | O esquema a partir dos modelos: Arrow, Delta, DDL por dialeto gerado pela tabela de tipos com todo identificador entre aspas, opções físicas, cast seguro, arquivos gerados. |
 | `serialize_db.sql` | 2 | A cópia prefixada dos statements Core que os motores compilam, e o texto SQL por dialeto, a opção de migração para fora do SQLAlchemy: parâmetro, prefixo, renderização, arquivos gerados. |
 | `serialize_db.storage` | 3 | Os dois armazenamentos pelo `pyarrow.fs`: URIs, listagem, leitura, cópia, a escrita condicional do arquivo de controle (`boto3` no S3), `storage_options` e o secret do DuckDB. |

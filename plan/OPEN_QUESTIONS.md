@@ -36,13 +36,17 @@ foi medido em [`POC.md`](POC.md).
   motor da [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela temporária
   que o pipeline tenha criado na sessão. As credenciais que o `COPY`
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
-  `COPY` mais longo que isso também não foi medido. `probes/credentials.py` segura esses
-  clientes, menos o `COPY`, até passar a expiração da credencial do contêiner e a da senha do
-  Redshift, em cerca de uma hora, e lê cada um a cada cinco minutos. No substituto de
-  2026-09-25, com chaves de 70 s, o `delta_scan` falhou com a chave vencida do secret, e só o
-  `read_parquet` a renovou, numa renovação que a consulta seguinte desfaz quando o resultado
-  fica aberto ([`POC.md`](POC.md)); se o alvo repetir isso, a biblioteca precisa renovar o
-  secret do DuckDB por conta própria, e a forma de renovar espera o usuário.
+  `COPY` mais longo que isso também não foi medido. A publicação monta a cláusula uma vez por tabela
+  e a repete em todo `COPY` da transação, o que o usuário aceitou até a rodada de
+  `probes/credentials.py` no alvo (decisão de 2026-09-25, [etapa 8](PLAN-STAGE-8.md)): o relatório
+  diz quando a chave da cláusula troca e quando expira, para comparar com os 153,9 s da publicação
+  de `cad_lancamentos` em 2026-09-24. `probes/credentials.py` segura esses clientes, menos o `COPY`,
+  até passar a expiração da credencial do contêiner e a da senha do Redshift, em cerca de uma hora,
+  e lê cada um a cada cinco minutos. No substituto de 2026-09-25, com chaves de 70 s, o `delta_scan`
+  falhou com a chave vencida do secret, e só o `read_parquet` a renovou, numa renovação que a
+  consulta seguinte desfaz quando o resultado fica aberto ([`POC.md`](POC.md)); se o alvo repetir
+  isso, a biblioteca precisa renovar o secret do DuckDB por conta própria, e a forma de renovar
+  espera o usuário.
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
@@ -84,7 +88,9 @@ foi medido em [`POC.md`](POC.md).
   escrita grava com mínimo e máximo; gravar no log mínimo e máximo largos, que o protocolo aceita
   com `tightBounds` falso, nos tipos que o registro omite e nas `Double` da issue #59; ou deixar o
   pacote como está. A issue #85 acompanha o item, com um exemplo autocontido que reproduz a perda.
-  O defeito vai ao delta-rs numa issue com o exemplo mínimo, que o usuário abre.
+  O defeito vai ao delta-rs numa issue com o exemplo mínimo, que o usuário abre. O `compact` das
+  `Double` sem mínimo e máximo da [etapa 9](PLAN-STAGE-9.md) espera esta escolha (decisão do
+  usuário de 2026-09-25).
 
 - **A operação no ambiente alvo.** Em 2026-09-24, nas baterias das 16:51 e das 23:25, a carga, a
   auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`
@@ -115,61 +121,16 @@ foi medido em [`POC.md`](POC.md).
 ## Achados da revisão dos comentários e da documentação
 
 A revisão de 2026-09-25 (PR #82) mudou só comentários, docstrings e prosa de `src/`, `scripts/`,
-`probes/`, dos READMEs e de `docs/`. Os itens abaixo pedem mudança de código, de texto impresso ou
-de arquivo fora dela, e cada um espera o usuário: corrigir, ou aceitar como está. Foram lidos no
-código da `main` e, onde o item diz, sondados na pasta local em 2026-09-25 ([`POC.md`](POC.md)).
+`probes/`, dos READMEs e de `docs/`, e os achados que pediam mudança de código, de texto impresso
+ou de arquivo fora dela foram lidos no código da `main` e sondados na pasta local em 2026-09-25
+([`POC.md`](POC.md)). Os corrigidos saíram daqui para o código, os testes e os arquivos das
+etapas; os itens abaixo esperam o usuário: corrigir, ou aceitar como está.
 
-- **Os códigos de saída da CLI.** O `ContractError` da entrada da execução escapa do `try` de
-  `cli._run` e sai com traceback e código 1, sondado em `run --engine redshift` sem conexão e,
-  com ela, num `--execution-id` de 60 caracteres, que não deixa os 63 bytes do prefixo; a
-  docstring de `_run` e a [etapa 6](PLAN-STAGE-6.md) dizem 2. Na sonda, saem do mesmo jeito
-  `publish --init` e `audit --engine redshift` sem conexão, e `load --source gs://...`, pelo
-  `ValueError` de `initial_load`, que documenta ainda `duckdb.Error`, `RegistrationRefused` e
-  `ExecutionConflict` sem captura na CLI; `publish --status` sem conexão sai com 2. No `audit`,
-  esse 1 se confunde com o da auditoria reprovada. A abertura de `docs/operacao.md` diz que todo
-  subcomando recebe `--metadata` e sai com 0 ou 2, e `publish --init` dispensa `--metadata`, e
-  `audit` sai com 1 na reprovação.
-- **O `nullCount` de `file_from_footer`.** A coluna sem estatística no rodapé, como o timestamp
-  `INT96` do `UNLOAD`, entra no log com `nullCount` 0, e a docstring, `RegisteredFile.stats` e
-  [`parquet.md`](parquet.md) a deixam de fora; com esse 0, o dataset do delta-rs leu 0 linhas em
-  `IS NULL`, contra 3 pelo `delta_scan` (sonda). O `statistics_enabled="NONE"` de
-  `delta._writer_properties` tira também o `nullCount` da coluna, com a mesma leitura.
-- **As bordas da API.** `delta.export_snapshot(mode="rewrite")` numa tabela particionada grava fora
-  da raiz sem erro, e só a CLI confere o destino antes. `DuckDBEngine.export_partition` com um
-  valor numa tabela sem partição grava o arquivo e só então levanta o `ContractError` de
-  `register_files`, e o arquivo fica na pasta da tabela, fora do log (sonda). A mensagem de
-  `delta.channel_snapshot(control, "current")` sugere `serialize-db channel --name current`, que
-  `set_channel` recusa; só a chamada direta chega a ela. `publish_redshift` com uma tabela fora de
-  `versions` diz que a tabela não existe no ambiente. `RedshiftReader` aceita `unload_to` numa
-  pasta local, e o `UNLOAD` real grava só no S3; o caminho local serve ao substituto.
-- **As credenciais da publicação.** `publication._publication_transaction` monta
-  `credentials_clause` uma vez por tabela e a põe em todo `COPY` da transação, e a
-  [etapa 5](PLAN-STAGE-5.md) pede a cláusula montada por comando, porque as credenciais expiram; a
-  publicação de `cad_lancamentos` levou 153,9 s em 2026-09-24.
-- **Os nomes, as anotações e as guardas.** `PublishedColumn` fica fora do `__all__` de
-  `serialize_db.publication` e está na assinatura pública de `reconcile_published`;
-  `published_name` se diz protegida, e só o módulo a usa. O `version: int` de `ingest` aceita
-  `None` nos dois motores, que o recusam com `SandboxError`. `RedshiftEngine._reconnect` usa
-  `contextlib.suppress(Exception)`, contra a regra do `except Exception` sem relançar.
-  `deep_copy` reabre a tabela de destino a cada partição, e o commit não precisa disso (a revisão
-  de 2026-09-21 em [`POC.md`](POC.md)). A guarda `if actions.num_rows:` de
-  `Execution.previous_partitions` não muda o resultado: numa tabela sem arquivos,
-  `get_add_actions(flatten=True)` já traz a coluna `partition.<coluna>` vazia (sonda).
-- **As docstrings e as páginas que o código desmente.** A docstring de `serialize_db.errors` diz
-  que a execução captura as exceções de `serialize_db.delta`, e [`PLAN.md`](PLAN.md) dá o mesmo
-  motivo ao módulo; a execução não captura nenhuma, a CLI captura `ConflictError` e
-  `ExecutionConflict`, e nenhum módulo captura `RegistrationRefused`, `SchemaDiffRefused` e
-  `LogUnavailable`. Os resumos de `ContractError` e de `SandboxError` não cobrem a configuração
-  sem conexão, o `execution_id` longo demais para o prefixo e as credenciais ausentes do `COPY`,
-  que o código levanta com elas. A prosa de `Execution.publish` diz que `export_partition`
-  registra o arquivo, e no motor Redshift a partição com `Double` não finito passa por
-  `publish_partition`. As docstrings de `engine/redshift.py` citam `staging/<execution_id>/...`,
-  que não é o layout do `unload_to` do leitor, e o log do construtor chama de sandbox a sessão do
-  leitor. O pdoc liga "o `stream` do motor" de `reader.py` a `DeltaReader.stream`, e "o `close`"
-  do `:return:` dos dois `stream` ao `close` do leitor. O `'7306MiB'` do exemplo de
-  `environment_limits` não tem leitura que o confirme. `docs/index.md` diz que cada execução cria
-  as tabelas "a partir do DDL do modelo", e o `ingest` do DuckDB abre as de entrada como view ou
-  `CREATE ... AS SELECT` de `delta_scan`.
+- **Os erros sem tratamento de `serialize-db load`.** O `duckdb.Error` e o `RegistrationRefused`
+  que `initial_load` documenta saem com o traceback e o código 1, como todo erro sem tratamento
+  dos subcomandos (`docs/operacao.md`), enquanto a origem fora dos armazenamentos da biblioteca e
+  o `ExecutionConflict` saem com 2 e uma linha. Espera o usuário: uma linha com a mensagem, sem o
+  traceback que mostra onde a carga parou, ou o traceback como está.
 - **Os probes.** Uma correção num probe espera uma rodada no alvo que compare o relatório de antes
   com o de depois. `Report.finish` de `probelib.py` e `redshift.py` têm ternários aninhados;
   `redshift.py` usa `getattr` dinâmico, trabalha antes de um retorno antecipado e, com `space.py`,
@@ -182,13 +143,6 @@ código da `main` e, onde o item diz, sondados na pasta local em 2026-09-25 ([`P
   resposta", e o arquivo repete helpers de `probelib.py`. `main` de `duckdb_threads.py` não tem as
   guardas de seção, e um `--metadata` que não importa sai com traceback e código 1. As
   justificativas dos `noqa` não terminam em ponto.
-- **Os arquivos fora da revisão.** [`PLAN-STAGE-8.md`](PLAN-STAGE-8.md) ficou atrás da etapa 10: o
-  parágrafo da transação e a pós-condição de `publish_redshift` tratam a versão publicada acima
-  da pedida como `ExecutionConflict`, e a publicação volta a ela por `version_diff(min, max)`; a
-  tabela dos testes cita `test_execution_publishes_to_redshift_and_the_cli`, que não existe mais,
-  e o fim do arquivo cita a seção "Rascunhos executados", que saiu. `tests/test_probes.py`
-  escreve "verdicto" num comentário, e o comentário "A migração adiantada" de `pyproject.toml`
-  narra história.
 
 ## Decisões de API pendentes por etapa
 

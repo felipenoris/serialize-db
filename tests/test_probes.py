@@ -7,7 +7,7 @@ DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o i
 Lock, o ciclo de vida, a montagem de ``~/shared``, o formato das tabelas do Glue, os parâmetros da
 conexão Redshift, no ``duckdb_threads.py``, os valores de ``threads``, a partição comum, os totais
 do log, a tabela das medições e as checagens delas e, no ``credentials.py``, a impressão digital das
-chaves, a espera, os verdictos dos clientes segurados e das chaves, a linha do tempo, as checagens e
+chaves, a espera, os vereditos dos clientes segurados e das chaves, a linha do tempo, as checagens e
 a sonda inteira sobre uma tabela Delta local. Um ``Report`` grava em ``probes/output/``;
 ``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes
 que gravam, o relatório e os arquivos fabricados, são ``local``: gravam numa pasta nova sob
@@ -1269,7 +1269,7 @@ def test_merge_statistics_counts_the_files_without_min_and_max() -> None:
     assert description_statistics["max"] == "z"
     assert description_statistics["nulls"] == 2
 
-    # Sem nulo conhecido em arquivo algum, a contagem fica sem verdicto em vez de sair como zero.
+    # Sem nulo conhecido em arquivo algum, a contagem fica sem veredito em vez de sair como zero.
     unknown_nulls = {"x": {"rows": 10, "nulls": None, "min": 1, "max": 2, "distinct": None}}
     unknown_reading = file_reading("a.parquet", statistics=unknown_nulls)
     unknown = parquet_source.merge_statistics([unknown_reading])
@@ -1484,7 +1484,7 @@ def test_measurement_checks_flag_rows_threads_and_failed_configurations(
 
 
 # --------------------------------------------------------------------------------------------------
-# credentials.py: as chaves, a espera, os verdictos, a linha do tempo e as checagens
+# credentials.py: as chaves, a espera, os vereditos, a linha do tempo e as checagens
 
 # O secret_string de duckdb_secrets() para o secret de Storage.duckdb_setup, como o DuckDB 1.5.5
 # o imprime, com uma chave fabricada.

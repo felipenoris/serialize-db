@@ -97,6 +97,12 @@ O que a implementação fixou além do texto das seções abaixo:
 - **`Database.open_redshift` sem `unload_to`** grava em `<raiz>/<ambiente>/staging/<id do
   leitor>/`, e `open_redshift` sem ele abre o motor sem armazenamento; o identificador é
   `reader-<AAAA-MM-DD>-<uuid8>` nos dois leitores.
+- **`unload_to` aceita uma pasta local** (decisão do usuário de 2026-09-25), que serve só à
+  conexão de mentira de `tests/test_engine_redshift.py`, a que grava o arquivo pelo
+  armazenamento do leitor. O `UNLOAD` do Redshift grava só no S3, e o do substituto das suítes
+  também, pelo moto: nele, uma pasta local falha no `ParamValidationError` do boto3 antes de
+  gravar ([`POC.md`](POC.md)), e no alvo o caso não rodou. A docstring de `unload_to` diz o
+  que cada conexão aceita.
 - **A volta a um snapshot anterior** chama `version_diff(uri, min, max)` entre a versão publicada
   e a pedida, e a transação da publicação deixou de recusar a versão lida acima da pedida; o
   `UPDATE` da linha de controle continua condicionado à versão lida.
@@ -124,9 +130,10 @@ O que a implementação fixou além do texto das seções abaixo:
   `ValueError`, também o que está em `archived`, porque o `vacuum` deixa de preservar as versões
   dele; outro escritor entre a leitura e a escrita é `ConflictError`.
 - **`channel_snapshot(control, name)`** devolve o snapshot do canal, e o canal ausente é
-  `ContractError` com o comando que o cria. **`snapshot_versions(control, name)`** devolve as
-  versões do snapshot, e o nome ausente de `snapshots` é `ContractError`. O leitor e a publicação
-  usam as duas.
+  `ContractError` com o comando que o cria; o canal `current` também, porque não aponta snapshot, e
+  o leitor e `serialize-db publish` o tratam antes de chamá-la.
+  **`snapshot_versions(control, name)`** devolve as versões do snapshot, e o nome ausente de
+  `snapshots` é `ContractError`. O leitor e a publicação usam as duas.
 - **`archive_snapshot`** recusa com `ValueError` o snapshot que um canal aponta: o canal precisa
   ser movido antes.
 - **`serialize-db channel --name <canal> --snapshot <nome>`** aponta o canal e imprime o snapshot
@@ -274,8 +281,9 @@ O que a implementação fixou além do texto das seções abaixo:
 
 `tests/test_delta.py`, nas duas raízes: `set_channel` aponta e move o canal e recusa o nome fora
 da regra, o nome `current`, o snapshot ausente e o arquivado; a escrita concorrente é
-`ConflictError`; `channel_snapshot` e `snapshot_versions` recusam o que não existe; e
-`archive_snapshot` recusa o snapshot de um canal.
+`ConflictError`; `channel_snapshot` e `snapshot_versions` recusam o que não existe, e
+`channel_snapshot` o canal `current`, que não fica no arquivo; e `archive_snapshot` recusa o
+snapshot de um canal.
 
 `tests/test_operation.py`, sob a raiz local: `serialize-db channel --name default --snapshot`
 move o canal, imprime o anterior e o novo e mostra os canais; o snapshot ausente e o nome
