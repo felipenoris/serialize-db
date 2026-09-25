@@ -559,8 +559,9 @@ class Execution:
         """Uma faixa de ``n`` inteiros contíguos da chave sequencial, acima do maior da versão
         fixada.
 
-        O maior valor é lido uma vez por tabela, das estatísticas do log. As faixas de threads
-        paralelas não se sobrepõem, e as de uma reexecução diferem.
+        O maior valor é lido uma vez por tabela, das estatísticas do log, ou da coluna quando um
+        arquivo não as tem. As faixas de threads paralelas não se sobrepõem, e as de uma
+        reexecução diferem.
 
         Exemplo:
 

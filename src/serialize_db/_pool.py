@@ -1,4 +1,4 @@
-"""Privado: o pool de tarefas por tabela que a execução e a publicação usam.
+"""Privado: o pool de tarefas por tabela que a execução, a publicação e o leitor usam.
 
 Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em curso
 terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de cada tarefa

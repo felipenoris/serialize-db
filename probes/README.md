@@ -151,8 +151,8 @@ acompanha os relatórios dos probes na conversa.
   feita; com proxy configurado o teste direto não decide, e a chamada é feita.
 - Uma seção por assunto, numerada pelo `Report`; identificadores reaproveitados como `NOME=valor`;
   toda chamada por `report.call`, para a falha ir para a seção final.
-- Checagens com prefixo próprio de duas letras (`SP`, `BK`, `RS`, `CT`, `PQ`, `DT`), `note` para o ausente e
-  `fail` para o que impede a biblioteca.
+- Checagens com prefixo próprio de duas letras (`SP`, `BK`, `RS`, `CT`, `PQ`, `DT`), `note` para o
+  ausente e `fail` para o que impede a biblioteca.
 - Uma seção que quebra não cala as outras: `main` captura a exceção e a registra como falha.
 - Uma função por seção, na ordem do relatório, com docstring que nomeia a seção e as checagens que
   ela emite; dentro dela, um bloco por checagem, precedido do comentário que diz a regra aplicada e
