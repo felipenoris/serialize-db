@@ -550,7 +550,9 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   while `RS-18` read the caller's credential expiring 46 minutes later and the script's load
   connection lives from the end of the measurement to the load report. DuckDB 1.5.5 accepts
   `REFRESH auto`, which the aws extension docs prescribe for credentials that expire; the user
-  approved it on 2026-09-24.
+  approved it on 2026-09-24. The target read on 2026-09-25 that only `httpfs` triggers it, never
+  `delta_scan`, and the user chose that day the secret with `boto3`'s key, recreated by the DuckDB
+  engine at each session entry.
 
 - **A helper thread's contention is confirmed before the timed call starts** (2026-09-24). The GIL
   measurement started its busy thread and timed 200 `os.stat` at once; in one of four sessions the

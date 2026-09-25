@@ -21,7 +21,7 @@ da tabela, que `relative` leva ao caminho relativo à raiz.
 | `copy(source, destination)` | Na pasta local, `copy_file`; no S3, a transferência gerenciada do `boto3`, `CopyObject` até 8 MiB e `UploadPartCopy` em partes de 8 MiB acima, com a repetição por parte, porque o `CopyObject` único do `copy_file` é abandonado pelo SDK da AWS depois de 3 s sem resposta (leitura de 2026-09-24, [`POC.md`](POC.md)); a exportação e o arquivo sem ler dados. |
 | `storage_options()` | As opções do delta-rs: região, `AWS_ENDPOINT_URL`, `max_retries` 3 e `retry_timeout` 10 s, e as chaves de SSE das variáveis do object_store (`AWS_SERVER_SIDE_ENCRYPTION`, `AWS_SSE_KMS_KEY_ID`, `AWS_SSE_BUCKET_KEY_ENABLED`) quando configuradas; vazias na pasta local; nunca credenciais (decisão do usuário de 2026-09-22). A cadeia padrão do delta-rs as resolve e as renova sozinha no `DeltaTable` que a execução guarda, enquanto um trio congelado expiraria em cerca de uma hora e circularia num dicionário que um log ou uma exceção imprime. Resolvidas a cada chamada, nunca guardadas. |
 | `duckdb_connect(database=":memory:", config=None)` | A conexão do DuckDB com `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao lado do ambiente virtual (a pasta que `prepare_offline.sh` cria), `autoinstall_known_extensions` e `autoload_known_extensions` desligados, as opções de `config` e `duckdb_setup` aplicado; é a conexão de `rewrite`, `read_back` e `export_snapshot`, e a do motor da [etapa 4](PLAN-STAGE-4.md). |
-| `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta; LOAD aws` e o secret `credential_chain` com `REFRESH auto` (decisão do usuário de 2026-09-24: o secret guarda a credencial resolvida no `CREATE SECRET`, e a do contêiner expira em cerca de uma hora) e `REGION` e, com `AWS_ENDPOINT_URL`, `ENDPOINT` sem o esquema, `URL_STYLE 'path'` e, num endpoint `http`, `USE_SSL false`; só `LOAD delta` na pasta local. Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password` a partir de `HTTP_PROXY`, `username` e `password`, como `probelib.duckdb_proxy` faz nos probes: o DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3, não só o download de extensão ([`POC.md`](POC.md)). |
+| `duckdb_setup(connection)` | `LOAD httpfs; LOAD delta` e o secret `serialize_db_s3` com `KEY_ID`, `SECRET` e `SESSION_TOKEN` da credencial que a cadeia do `boto3` resolve naquele momento, passados como parâmetros do comando, fora do texto que o erro de sintaxe do DuckDB repete (decisão do usuário de 2026-09-25: o secret guarda a chave até ser recriado, e o motor DuckDB o recria quando a chave troca) e `REGION` e, com `AWS_ENDPOINT_URL`, `ENDPOINT` sem o esquema, `URL_STYLE 'path'` e, num endpoint `http`, `USE_SSL false`; só `LOAD delta` na pasta local; sem credencial na cadeia, `botocore.exceptions.NoCredentialsError`. Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password` a partir de `HTTP_PROXY`, `username` e `password`, como `probelib.duckdb_proxy` faz nos probes: o DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3, não só o download de extensão ([`POC.md`](POC.md)). |
 | `prepare_environment()` | Exporta `NO_PROXY` a partir de `no_proxy` quando a maiúscula está ausente ou vazia, copia a região entre `AWS_REGION` e `AWS_DEFAULT_REGION` nos dois sentidos, respeita `AWS_ENDPOINT_URL`; devolve o que mudou, para o log. Chamada por `Database`. |
 
 `serialize_db.delta` é a camada de tabela; `uri` é a pasta da tabela, `table` o `Table` do modelo,
@@ -182,21 +182,27 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
   cadeia depende do `NO_PROXY` que `prepare_environment` exporta, e o ambiente alvo não tem proxy
   ([`POC.md`](POC.md), leitura de 2026-09-21). `test_delta_rs_storage_options_fallback` continua
   medindo a forma das credenciais congeladas, para o dia em que um ambiente quebrar a cadeia.
-- **`duckdb_setup`** roda `LOAD httpfs; LOAD delta; LOAD aws` e cria o secret `credential_chain`
-  com a região e o endpoint quando a raiz é S3, e só `LOAD delta` na pasta local. O DuckDB não lê
+- **`duckdb_setup`** roda `LOAD httpfs; LOAD delta` e cria o secret `serialize_db_s3` com a chave,
+  o segredo e o token da credencial do `boto3`, a região e o endpoint quando a raiz é S3, e só
+  `LOAD delta` na pasta local. O DuckDB não lê
   `AWS_ENDPOINT_URL`, e com um endpoint o secret leva o endereço sem o esquema, o endereço por
   caminho (`URL_STYLE 'path'`) que o delta-rs e o PyArrow usam, e `USE_SSL false` num endpoint
   `http`: sem as duas opções, o moto em `127.0.0.1` não respondeu ao DuckDB ([`POC.md`](POC.md),
   sonda de 2026-09-23). Aplica `http_proxy`, `http_proxy_username` e `http_proxy_password`
   separados de `HTTP_PROXY` como `probelib.duckdb_proxy`. No ambiente alvo não há variável de
-  proxy, e o bloco é vazio ([`POC.md`](POC.md), leitura de 2026-09-21). O secret guarda a chave e
-  o token resolvidos no `CREATE SECRET`, e a documentação da extensão `aws` pede `REFRESH auto`
-  para a credencial que expira: o secret leva `REFRESH auto` (decisão do usuário de 2026-09-24,
-  sonda do mesmo dia em [`POC.md`](POC.md)). Só o `httpfs` renova esse secret: no substituto e no
-  alvo, em 2026-09-25, o `delta_scan` de uma conexão aberta falhou uma vez depois que a chave
-  guardada no secret expirou, e voltou a ler depois que um `read_parquet` o renovou. No alvo, a
-  chave que o contêiner entrega expira de 29 a 60 minutos depois ([`POC.md`](POC.md)), e a forma
-  de a biblioteca renovar o secret antes do `delta_scan` espera o usuário (abaixo).
+  proxy, e o bloco é vazio ([`POC.md`](POC.md), leitura de 2026-09-21). O secret guarda a chave
+  até ser recriado. O `credential_chain` com `REFRESH auto`, a forma de 2026-09-24, só era renovado
+  pelo `httpfs`: no substituto e no alvo, em 2026-09-25, o `delta_scan` de uma conexão aberta
+  falhou uma vez depois que a chave guardada no secret expirou ([`POC.md`](POC.md)). O usuário
+  decidiu em 2026-09-25 o secret com a chave do `boto3`: `renew_duckdb_secret(connection,
+  credentials)`, protegida, lê o `key_id` que `duckdb_secrets()` mostra sem redação e recria o
+  secret quando ele difere da chave de `credentials.get_frozen_credentials()`, que o botocore
+  troca quando faltam menos de 15 minutos para a expiração. O motor DuckDB da
+  [etapa 4](PLAN-STAGE-4.md) segura a credencial de `aws_credentials()`, também protegida, e chama
+  a recriação na entrada de cada sessão, o que cobre a execução, o leitor Delta e a carga da
+  [etapa 7](PLAN-STAGE-7.md). As conexões de `rewrite`, `read_back`, `export_snapshot` e da troca
+  da [etapa 5](PLAN-STAGE-5.md) duram uma tabela ou uma partição e ficam com a chave da abertura.
+  A extensão `aws`, que servia ao `credential_chain`, saiu de `duckdb_setup`.
 - **`prepare_environment`** exporta `NO_PROXY` de `no_proxy` quando a maiúscula está ausente ou
   vazia, copia a região nos dois sentidos e devolve o dicionário do que mudou, para o log.
 - **`create_table`** é `DeltaTable.create(mode="ignore")` com `delta_schema(table)`,
@@ -301,7 +307,7 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
 | `create_text`, `write_text` | `create_text` num caminho ausente, ou `write_text` com `if_match` e a impressão da última leitura. | O arquivo gravado por inteiro e a impressão nova devolvida; `ConflictError` sem alteração quando a condição falha. |
-| `storage_options`, `duckdb_setup` | Região em `AWS_REGION` ou `AWS_DEFAULT_REGION` para o S3; extensões na pasta configurada. | Opções sem credencial alguma e secret de cadeia; nenhum download de extensão. |
+| `storage_options`, `duckdb_setup` | Região em `AWS_REGION` ou `AWS_DEFAULT_REGION` para o S3; credencial na cadeia do `boto3`; extensões na pasta configurada. | Opções sem credencial alguma e o secret com a chave da credencial do `boto3`; nenhum download de extensão. |
 | `create_table` | Modelo aprovado por `check_models`. | Tabela na versão 0 com o esquema Delta do contrato, a partição, as retenções, o nome e o comentário da tabela em `description`; a chamada repetida não muda a versão. |
 | `publish_partition` | `data` passado por `cast`, com a coluna de partição; a versão atual da tabela sem dados novos desde a fixada (conferido por `Execution.publish`); o valor validado pela etapa 6. | Uma versão nova com os arquivos da partição e os metadados de commit, devolvida pelo objeto que escreveu; as demais partições intactas; `ExecutionConflict` sem commit no conflito. |
 | `register_files` | Arquivos gravados dentro da pasta da tabela, com o rodapé legível. | Um commit `overwrite` da partição com uma ação por arquivo, ou `RegistrationRefused` sem commit e com o arquivo e a conferência na mensagem. |
@@ -326,8 +332,9 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
 | Opções do delta-rs | `test_storage_options_resolved_per_call` (sem gravar) | Duas chamadas devolvem dicionários novos; a região vem da variável; `max_retries` presente; as chaves de SSE configuradas; nenhuma chave de credencial no dicionário. |
 | Ambiente | `test_prepare_environment` (sem gravar) | `NO_PROXY` sai de `no_proxy` quando ausente ou vazia, a região vai nos dois sentidos, e a segunda chamada não muda nada. |
 | Proxy do DuckDB | `test_duckdb_proxy_settings_without_credentials_in_the_address` (sem gravar) | O endereço sem as credenciais, o usuário e a senha das variáveis ou do endereço, sem URL-encode. |
-| Secret do DuckDB | `test_duckdb_secret_options_for_an_endpoint` (sem gravar) | Sem `AWS_ENDPOINT_URL`, a cadeia de credenciais e a região; com ele, o endereço sem o esquema e `URL_STYLE 'path'`, e `USE_SSL false` só num endpoint `http`. |
-| Conexão do DuckDB | `test_duckdb_connect_loads_delta` | A extensão `delta` carregada da pasta configurada, sem instalação automática, e o secret no S3. |
+| Secret do DuckDB | `test_duckdb_secret_options_for_an_endpoint` (sem gravar) | A região; com `AWS_ENDPOINT_URL`, o endereço sem o esquema e `URL_STYLE 'path'`, e `USE_SSL false` só num endpoint `http`. |
+| Recriação do secret | `test_renew_duckdb_secret_follows_the_key` (sem gravar; pulado sem a extensão `httpfs` na pasta de extensões) | O secret criado sem um anterior, mantido com a mesma chave e recriado quando a chave da credencial troca, com a região, sem o segredo nem o token no `secret_string`, e a chave, o segredo e o token fora do texto dos comandos. |
+| Conexão do DuckDB | `test_duckdb_connect_loads_delta` | A extensão `delta` carregada da pasta configurada, sem instalação automática, e, no S3, o secret com a chave que a cadeia do `boto3` resolve. |
 | Criação | `test_create_table_is_idempotent` | Versão 0 nas duas chamadas; esquema, partição, retenções, nome e o comentário da tabela em `description` lidos do log. |
 | Substituição | `test_publish_partition_replaces_only_its_partition` | Duas partições, a segunda republicada: a primeira intacta, uma versão por chamada, os metadados no `history`; o valor fora da regra e os dados sem a coluna de partição recusados antes de gravar. |
 | Versão devolvida | `test_publish_partition_returns_its_own_version` | Com o commit de outro escritor entre a abertura e a escrita, a versão devolvida é a do próprio commit; os dados chegam por `__arrow_c_stream__`. |
@@ -366,12 +373,8 @@ mostraram" e "O que a implementação da etapa 3 mostrou".
 
 ## Decisões pendentes
 
-- **A renovação do secret do DuckDB antes do `delta_scan`.** O motor DuckDB de uma execução e o
-  leitor Delta aberto há mais tempo que a chave guardada no secret falham no primeiro
-  `delta_scan` depois da expiração, a menos que uma leitura pelo `httpfs` tenha renovado o secret
-  antes (leitura de 2026-09-25 no alvo, [`POC.md`](POC.md)). As formas em
-  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md): recriar o secret com a chave que o `boto3` segura
-  quando ela troca, recriar o secret `credential_chain` pela idade, ou documentar o limite.
+Nenhuma. A renovação do secret do DuckDB, decidida pelo usuário em 2026-09-25, está na descrição
+de `duckdb_setup`.
 
 As seis decisões da etapa tomadas pelo usuário em 2026-09-22 estão escritas na seção que
 descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a

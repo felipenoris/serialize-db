@@ -1,7 +1,8 @@
 # Os testes do pacote serialize_db: tests/ sem tests/proof_of_concept/ e sem tests/test_probes.py,
 # sobre o DuckDB em memória e arquivos locais, sem S3 nem Redshift. As provas de conceito, os
-# exemplos e os probes ficam fora. A extensão delta do DuckDB, que os testes da migração leem pelo
-# delta_scan, é instalada em .duckdb/ na raiz do repositório, a pasta que os testes procuram.
+# exemplos e os probes ficam fora. As extensões delta e httpfs do DuckDB, que os testes da migração
+# leem pelo delta_scan e os do secret do S3 carregam, são instaladas em .duckdb/ na raiz do
+# repositório, a pasta que os testes procuram.
 name: Testes do pacote
 
 on:
@@ -29,10 +30,10 @@ jobs:
       - name: Instalar o pacote e as dependências de teste
         run: uv sync --group dev
 
-      - name: Instalar a extensão delta do DuckDB em .duckdb/
+      - name: Instalar as extensões delta e httpfs do DuckDB em .duckdb/
         run: >-
           uv run python -c
-          "import duckdb; duckdb.connect(config={'extension_directory': '.duckdb'}).execute('INSTALL delta')"
+          "import duckdb; duckdb.connect(config={'extension_directory': '.duckdb'}).execute('INSTALL delta').execute('INSTALL httpfs')"
 
       - name: Preparar a raiz local dos testes que gravam arquivos
         run: mkdir -p "$SERIALIZE_DB_TEST_LOCAL_ROOT"

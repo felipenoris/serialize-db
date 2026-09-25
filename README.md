@@ -93,12 +93,13 @@ dos probes), sobre o DuckDB em memória e arquivos locais, sem AWS. É o que a e
 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py
 ```
 
-Os testes da migração leem o Delta pelo `delta_scan` e precisam da extensão `delta` do DuckDB em
-`.duckdb/` na raiz do repositório, ou na pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`;
-`prepare_offline.sh` a instala lá, e com internet basta:
+Os testes da migração leem o Delta pelo `delta_scan` e precisam da extensão `delta` do DuckDB, e
+os do secret do S3, da `httpfs`, em `.duckdb/` na raiz do repositório, ou na pasta de
+`SERIALIZE_DB_DUCKDB_EXTENSIONS`; sem a `httpfs`, estes são pulados. `prepare_offline.sh` as
+instala lá, e com internet basta:
 
 ```
-uv run python -c "import duckdb; duckdb.connect(config={'extension_directory': '.duckdb'}).execute('INSTALL delta')"
+uv run python -c "import duckdb; duckdb.connect(config={'extension_directory': '.duckdb'}).execute('INSTALL delta').execute('INSTALL httpfs')"
 ```
 
 ## Testes no substituto local
@@ -116,12 +117,12 @@ do push de uma mudança que toque o que essas suítes cobrem (`serialize_db.stor
 suítes).
 
 O moto e o `flask` vêm do grupo `emulator`, e `uv run --group emulator` os instala no `.venv/` antes
-de rodar; sem eles, a sessão para com a instrução. As extensões `httpfs`, `delta` e `aws` do DuckDB
+de rodar; sem eles, a sessão para com a instrução. As extensões `httpfs` e `delta` do DuckDB
 vêm de `.duckdb/`, e com `SERIALIZE_DB_DUCKDB_EXTENSIONS=.duckdb` a suíte instala lá as que faltam;
 com internet, a instalação direta é:
 
 ```
-for extension in httpfs delta aws; do
+for extension in httpfs delta; do
   uv run python -c "import duckdb; duckdb.connect(config={'extension_directory': '.duckdb'}).execute('INSTALL $extension')"
 done
 ```

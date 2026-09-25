@@ -1134,3 +1134,19 @@ error of the subcommands, while the source outside the library's storages and th
 line with the table and the message, keeping exit 1; the user chose on 2026-09-25 to keep the
 traceback, and the code does not change.
 `plan/PLAN-STAGE-7.md`
+
+## The DuckDB secret with the key of the `boto3` credential (2026-09-25)
+
+After the target battery of 2026-09-25 read DuckDB's `delta_scan` failing once past the expiry of
+the key its `credential_chain` secret held, the assistant asked on a decision card how to renew the
+secret: recreate it with the key `boto3` renews when it changes (recommended), recreate the
+`credential_chain` secret past 15 minutes of age, or document the limit. The user chose "Chave
+boto3" at 20:36 UTC. The assistant's choices, named in the report: the recreation at the entry of
+each `session()` that takes the lock, never in a reentrant one, which may hold an open transaction;
+one secret lock shared by the `new_session()` cursors; the comparison by the `key_id` that
+`duckdb_secrets()` shows; the key, secret and token passed as parameters of `CREATE SECRET`, out of
+the text a DuckDB syntax error repeats; the `aws` extension out of `duckdb_setup`; the connections
+of `rewrite`, `read_back`, `export_snapshot` and the stage 5 swap keeping the opening key, since
+each lasts a table or a partition; the `stream` helper thread ending the stream with the entry's
+error; and `probes/credentials.py` reading DuckDB through the engine, whose target run is pending.
+`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`

@@ -282,7 +282,7 @@ research appends to the matching group.
 | --- | --- |
 | `README.md` | `uv sync --group dev`, the `pdoc` build, and only the commands: the package tests (the GitHub workflow's command), the stand-in run of the target-only suites (`SERIALIZE_DB_TEST_EMULATOR`, `uv run --group emulator`, local only), the AWS tests (`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` switches the Redshift suite on, `-m "not redshift"` off), the variables table, the probe commands and the migration script's commands; the two workflow badges open it. What each test does lives in the header of its file, and the suites' writes, permissions and report in the header of `tests/conftest.py` (user decision of 2026-09-21). |
 | `docs/` | The package documentation for `pdoc` (user decision of 2026-09-21): `docs/index.md` is the main page, included by the docstring of `src/serialize_db/__init__.py`, with how the package works, the tutorial, the retention of removed files (the 400 days, the versioned bucket's `NoncurrentVersionExpiration`, how to change them) and the type mapping table; `docs/operacao.md` is the stage 9 runbook followed by the options of each `serialize-db` subcommand, included by the docstring of `src/serialize_db/cli.py`; `uv run pdoc serialize_db --docformat restructuredtext -o site` builds it. Docstring examples open with `.. code-block:: python` (or `shell`), the only form pdoc highlights, and the docstring standard is "Python Code Style", section "Docstrings". |
-| `.github/` | `tests.yml` installs the DuckDB `delta` extension into `.duckdb/` and runs `tests/` without `tests/proof_of_concept/` and `tests/test_probes.py` on push and pull request; `docs.yml` publishes the `pdoc` site to <https://felipenoris.github.io/serialize-db/> on push to `main` (the repository's Pages source must be "GitHub Actions"). |
+| `.github/` | `tests.yml` installs the DuckDB `delta` and `httpfs` extensions into `.duckdb/` and runs `tests/` without `tests/proof_of_concept/` and `tests/test_probes.py` on push and pull request; `docs.yml` publishes the `pdoc` site to <https://felipenoris.github.io/serialize-db/> on push to `main` (the repository's Pages source must be "GitHub Actions"). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, every `pyproject.toml` group and extra in `.venv/` (`uv sync --all-groups --all-extras`), DuckDB extensions in `.duckdb/`, all links relative. **Rerun it whenever a dependency is added**; a new DuckDB extension, a Python version change or another runtime asset is added by hand. Only a folder prepared on Linux x86_64 serves the SageMaker space; the header is the operating procedure, and the extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`. |
 | `examples/` | The scripts the user ran in the target, kept as run but for the masked identifiers in the bucket path: `redshift_native.py`, `redshift_data_api.py`, `redshift_copy_unload.py` (2026-09-20) and `redshift_manifest.py` (2026-09-21, the prerequisites of `export_partition`); `examples/README.md` says what each one fixes. The probe, the suite and stage 5 repeat their calls, and the target they fix is in `.claude/memory/redshift.md`. |
 | `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py`, `parquet_source.py` (`--sample N`), `duckdb_threads.py` (the `threads` of the DuckDB engine ingesting the migrated Delta tables, each configuration in a new process with the external file cache off) and `credentials.py` (the library's clients held past the credential's expiry, about an hour), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, with no network but one DNS lookup; its cases that write a report or fabricated files are `local`. |
@@ -579,10 +579,10 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A long-running script writes its report as it goes**: the migration process that ended in
   `cad_lancamentos` 2026-03-31 took the four-variant measurement with it (2026-09-24).
 - **A credential renewal is designed per client that holds a copy**: delta-rs resolves the chain
-  per call and `redshift_connector` reconnects per command, while DuckDB's `credential_chain`
-  secret stores the key at `CREATE SECRET` and renews nothing without `REFRESH auto`; list every
-  client that copies the credential, with the expiry the probe read beside the run's length
-  (2026-09-24).
+  per call and `redshift_connector` reconnects per command, while a DuckDB secret stores the key
+  at `CREATE SECRET`, and `REFRESH auto` renewed it only in `httpfs`, never in `delta_scan`; list
+  every client that copies the credential, with the expiry the probe read beside the run's length
+  (2026-09-24, 2026-09-25).
 - **A test that uses a suite's fixture carries the suite's marker**: the publication's target
   cases reached `local_location` through their `target` fixture with only `redshift` and `s3`,
   so `pytest -m redshift` without the variable errors instead of skipping; `tests/conftest.py`
@@ -756,12 +756,12 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   than none at 16 threads, and the threads probe with the cache off fixed `threads` at the
   process's CPUs: materialization best there, worse at half and at double, the S3 read 1.4x
   faster at triple; the audit's non-finite count and the `NaN` row are assertions
-  (`plan/POC.md`). The user approved on 2026-09-24 `REFRESH auto` on the DuckDB secret, which
-  stores the credential resolved at `CREATE SECRET` (in `storage.duckdb_setup` and the script),
-  and the stage 9 `archive` by copying each partition's files and registering them, in place of
-  `deep_copy` by `write_deltalake`, whose memory grows with the table outside `memory_limit`
-  (implemented with stage 9 on 2026-09-24); the Redshift `COPY` of a DuckDB-written file passed in the
-  target run of `tests/test_publication.py` of 2026-09-24 at 13:05. Stage 7 absorbed the script on 2026-09-24.
+  (`plan/POC.md`). The user approved on 2026-09-24 `REFRESH auto` on the DuckDB secret, replaced
+  on 2026-09-25, and the stage 9 `archive` by copying each partition's files and registering
+  them, in place of `deep_copy` by `write_deltalake`, whose memory grows with the table outside
+  `memory_limit` (implemented with stage 9 on 2026-09-24); the Redshift `COPY` of a DuckDB-written
+  file passed in the target run of `tests/test_publication.py` of 2026-09-24 at 13:05. Stage 7
+  absorbed the script on 2026-09-24.
 - The code review of `src/` and the package tests of 2026-09-24, at the user's request, applied the
   code rules and the docstring standard at the function level: `check_models` lists a table with
   two partition columns, an empty `SERIALIZE_DB_ENVIRONMENT` counts as absent in every subcommand,
@@ -794,8 +794,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   reader's 12 views in 0.645 s. `probes/credentials.py` read there delta-rs, `S3FileSystem` and
   `boto3` renewing the container credential, which rotates about every 30.6 minutes, the open
   Redshift connection outliving its password, and DuckDB's `delta_scan` failing once after the key
-  its secret holds expired, since only `httpfs` triggers `REFRESH auto`: how the library renews
-  the secret awaits the user (`plan/OPEN_QUESTIONS.md`). The target runs of 2026-09-23 are in
+  its secret holds expired, since only `httpfs` triggers `REFRESH auto`. The user chose the same
+  day the secret with `boto3`'s key, which the DuckDB engine recreates at each session entry when
+  it changes; the probe reads it through the engine, and its target run is pending
+  (`plan/OPEN_QUESTIONS.md`). The target runs of 2026-09-23 are in
   `.claude/memory/environments.md`.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,

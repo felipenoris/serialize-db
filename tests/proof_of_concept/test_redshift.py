@@ -63,8 +63,8 @@ from conftest import (
     RedshiftSession,
     S3Location,
     connect_redshift,
+    create_duckdb_s3_secret,
     describe_error,
-    duckdb_s3_secret,
     emulator_enabled,
     record,
 )
@@ -92,12 +92,12 @@ SERVICE_ERRORS = (
 
 @pytest.fixture(scope="session")
 def duckdb_connection(s3_location: S3Location) -> Iterator[duckdb.DuckDBPyConnection]:
-    """Conexão com ``httpfs``, ``delta`` e ``aws`` e um secret S3 pela cadeia de credenciais,
-    com as opções de ``Storage.duckdb_setup``, fechada no fim da sessão."""
+    """Conexão com ``httpfs`` e ``delta`` e um secret S3 com a chave da credencial do
+    ``boto3``, com as opções de ``Storage.duckdb_setup``, fechada no fim da sessão."""
     # s3_location roda antes do secret: pelo proxy_environment, AWS_REGION e NO_PROXY estão no
     # ambiente, e require_s3_access conferiu o acesso à raiz.
-    connection = connect_duckdb(("httpfs", "delta", "aws"))
-    connection.execute(duckdb_s3_secret("poc"))
+    connection = connect_duckdb(("httpfs", "delta"))
+    create_duckdb_s3_secret(connection)
 
     yield connection
     connection.close()

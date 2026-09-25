@@ -20,24 +20,21 @@ foi medido em [`POC.md`](POC.md).
   retenção.
 - **Credenciais de uma hora.** A primeira execução mais longa que uma emissão,
   `probes/credentials.py` no alvo em 2026-09-25 ([`POC.md`](POC.md)), leu o delta-rs, o
-  `S3FileSystem` e o `boto3` renovando a credencial do contêiner e a conexão Redshift aberta
-  seguindo depois da expiração da senha de `GetCredentials` (3.600 s). O secret `credential_chain`
-  do DuckDB, de `storage.duckdb_setup` e do script de migração, guardou a chave da abertura até ela
-  expirar: o primeiro `delta_scan` depois disso falhou, e só o `read_parquet` da mesma rodada, pelo
-  `httpfs`, renovou o secret de `REFRESH auto`, como no substituto, onde a consulta seguinte desfez
-  a renovação quando o resultado do `read_parquet` ficou aberto por `fetchone()`, a forma de várias
-  contagens da biblioteca. O contêiner troca a chave a cada cerca de 30,6 minutos, e, se cada chave
-  vale uma hora, a que a cadeia entrega tem de 29 a 60 minutos pela frente: o motor DuckDB de uma
-  execução e o leitor Delta abertos por mais tempo que isso falham no primeiro `delta_scan` depois
-  da expiração. Espera o usuário: a forma de a biblioteca renovar o secret antes do `delta_scan`,
-  por exemplo recriá-lo com a chave que o `boto3` segura quando ela troca (o botocore renova a
-  credencial do contêiner entre 15 e 10 minutos antes da expiração), recriar o secret
-  `credential_chain` pela idade, ou documentar o limite. A cláusula do `COPY` e do `UNLOAD`, montada
-  uma vez por tabela na publicação, leva uma chave com cerca de 29 minutos ou mais pela frente,
-  contra os 153,9 s da publicação de `cad_lancamentos` em 2026-09-24, e a decisão de 2026-09-25 da
-  [etapa 8](PLAN-STAGE-8.md) fica. Seguem sem medida o `COPY` mais longo que a credencial que ele
-  leva, a queda de uma conexão Redshift no meio de um `COPY` e a sessão ociosa e a transação inativa
-  do serverless, encerradas depois de 3.600 s e 21.600 s ([`redshift.md`](redshift.md)); o motor da
+  `S3FileSystem` e o `boto3` renovando a credencial do contêiner, a conexão Redshift aberta
+  seguindo depois da expiração da senha de `GetCredentials` (3.600 s) e o `delta_scan` do DuckDB
+  falhando uma vez depois que a chave do secret `credential_chain` expirou. Por decisão do usuário
+  de 2026-09-25, o secret leva desde então a chave da credencial do `boto3`, e o motor DuckDB o
+  recria na entrada de cada sessão quando ela troca ([etapa 3](PLAN-STAGE-3.md),
+  [etapa 4](PLAN-STAGE-4.md)); no substituto de chaves de 70 s, o motor leu em todas as rodadas
+  ([`POC.md`](POC.md)). Espera uma rodada no alvo: `probes/credentials.py`, que lê o DuckDB pelo
+  motor desde então, com o comando em `SUITE.md`. Seguem sem medida um comando do DuckDB mais longo
+  que os 15 minutos que a chave tem pela frente, no mínimo, na entrada da sessão (o botocore a
+  renova entre 15 e 10 minutos antes da expiração), o `COPY` mais longo que a credencial que ele
+  leva, a queda de uma conexão Redshift no meio de um `COPY` e a sessão ociosa e a transação
+  inativa do serverless, encerradas depois de 3.600 s e 21.600 s ([`redshift.md`](redshift.md)).
+  A cláusula do `COPY` e do `UNLOAD`, montada uma vez por tabela na publicação, leva uma chave com
+  cerca de 29 minutos ou mais pela frente, contra os 153,9 s da publicação de `cad_lancamentos` em
+  2026-09-24, e a decisão de 2026-09-25 da [etapa 8](PLAN-STAGE-8.md) fica; o motor da
   [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela temporária que o
   pipeline tenha criado na sessão.
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
@@ -135,7 +132,7 @@ e os arquivos das etapas; o item abaixo espera uma rodada no alvo.
   endpoint de API quando não há região, e o rótulo de `pg_settings` omite `wlm_query_slot_count`,
   que a consulta lê. O resumo impresso de `diagnose_aws.py` diz que a suíte não passa
   `AWS_ENDPOINT_URL` ao DuckDB, com "manutenção necessária", e a suíte passa
-  (`duckdb_s3_secret` de `tests/conftest.py`); `describe` rotula um erro local como "sem
+  (`create_duckdb_s3_secret` de `tests/conftest.py`); `describe` rotula um erro local como "sem
   resposta", e o arquivo repete helpers de `probelib.py`. `main` de `duckdb_threads.py` não tem as
   guardas de seção, e um `--metadata` que não importa sai com traceback e código 1. As
   justificativas dos `noqa` não terminam em ponto.
@@ -143,6 +140,5 @@ e os arquivos das etapas; o item abaixo espera uma rodada no alvo.
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 3](PLAN-STAGE-3.md) tem uma: a
-renovação do secret do DuckDB, no item das credenciais de uma hora acima. Os outros itens que
-esperam o usuário estão na lista acima.
+tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente; os itens
+que esperam o usuário estão na lista acima.

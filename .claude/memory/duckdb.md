@@ -119,6 +119,12 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   stays open, the next statement on the connection rolls it back with the refresh, and
   `duckdb_secrets()` shows the old key again (DuckDB 1.5.5, four rounds per variant, with and
   without a parameter in the secrets query, 2026-09-25). `plan/POC.md`
+- A secret belongs to the database instance: the cursors of `cursor()` see the one another
+  recreates, and eight cursors running `CREATE OR REPLACE SECRET` at once, unlocked, got `Catalog
+  write-write conflict on alter with "serialize_db_s3"` in 1,249 of 1,600 attempts; the engine
+  shares one secret lock among the sessions of a database. For a secret with an explicit key
+  (`provider=config`), `duckdb_secrets()` shows `key_id` unredacted and `secret` and
+  `session_token` redacted (DuckDB 1.5.5, 2026-09-25). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
 
 ## Catalog names and limits
 

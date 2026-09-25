@@ -10,6 +10,11 @@ sessão a mais sobre o mesmo banco, com o seu lock. Os limites da instância sae
 abertura, quando a configuração os omite (``environment_limits``): ``threads`` são as CPUs que o
 processo pode usar, e ``memory_limit`` é metade da memória que ele ainda pode usar.
 
+No S3, o motor segura a credencial do ``boto3`` e, na entrada de cada sessão, recria o secret do
+S3 quando a chave dela trocou: o secret guarda a chave da criação, e o ``delta_scan`` não o
+renova. O botocore troca a chave a que faltam menos de 15 minutos, e um comando que dure mais que
+isso depois da entrada ainda pode falhar com a chave vencida.
+
 As primitivas:
 
 - ``ingest`` cria uma view (ou tabela, com ``materialize=True``) com o nome do modelo sobre
@@ -77,7 +82,7 @@ from serialize_db.schema import (
     sql_type,
     table_options,
 )
-from serialize_db.storage import Storage
+from serialize_db.storage import Storage, aws_credentials, renew_duckdb_secret
 
 __all__ = ["DuckDBConfig", "DuckDBEngine", "environment_limits"]
 
@@ -223,10 +228,18 @@ def _produce(engine: DuckDBEngine, text: str, arguments: Sequence[object] | Mapp
 
     Nunca espera pelo cliente: o lock sai quando o resultado acaba, quando ``stop`` chega ou quando
     o ``interrupt`` do ``close`` cancela a consulta. O fim é marcado ainda com o lock tomado, e o
-    ``close`` nunca cancela o comando seguinte da sessão. Recebe só o que usa, nunca o stream, para
-    um stream abandonado ser coletado e o ``__del__`` ligar o ``stop``.
+    ``close`` nunca cancela o comando seguinte da sessão. A entrada da sessão que falha, na
+    recriação do secret do S3, marca o fim com o erro, sem o lock, que ela não tomou. Recebe só o
+    que usa, nunca o stream, para um stream abandonado ser coletado e o ``__del__`` ligar o
+    ``stop``.
     """
-    with engine.session() as connection:
+    with contextlib.ExitStack() as stack:
+        try:
+            connection = stack.enter_context(engine.session())
+        except Exception as error:  # noqa: BLE001 - o erro da entrada vai ao cliente
+            spool.error = error
+            _finish(spool, spill, stop)
+            return
         try:
             # O stop do __del__ de uma construção que falhou chega antes da consulta, que o
             # interrupt, com a conexão ociosa, não alcançaria.
@@ -634,6 +647,8 @@ class DuckDBEngine:
         :raises ContractError: ``execution_id`` fora da regra da partição.
         :raises duckdb.Error: uma extensão ausente da pasta configurada ou o secret recusado, na
             abertura da conexão.
+        :raises botocore.exceptions.NoCredentialsError: no S3, a cadeia do ``boto3`` não achou
+            credencial.
         """
         self._config = config
         self.execution_id = check_partition_value(execution_id)
@@ -648,8 +663,15 @@ class DuckDBEngine:
             self._spool_folder = parent._spool_folder
             self._database = parent._database
             self._owns_folder = False
+            self._credentials = parent._credentials
+            self._secret_lock = parent._secret_lock
             self._connection = parent._connection.cursor()
             return
+        # A credencial que o secret do S3 acompanha, resolvida antes da pasta e do banco. O lock do
+        # secret é um só para todas as sessões do banco: duas recriações ao mesmo tempo conflitam
+        # no catálogo do DuckDB.
+        self._credentials = aws_credentials() if storage.is_s3 else None
+        self._secret_lock = threading.Lock()
         self._owns_folder = config.temp_directory is None
         self._folder = config.temp_directory or tempfile.mkdtemp(prefix="serialize_db_")
         os.makedirs(self._folder, exist_ok=True)
@@ -676,6 +698,10 @@ class DuckDBEngine:
         chamada dentro do bloco não trava, e um ``stream`` aberto nele roda a consulta na thread
         do bloco.
 
+        No S3, a entrada que toma o lock recria antes o secret do S3 quando a chave da credencial
+        do ``boto3`` trocou; a entrada reentrante não o toca, porque o bloco pode ter uma transação
+        aberta.
+
         Exemplo:
 
         .. code-block:: python
@@ -689,11 +715,24 @@ class DuckDBEngine:
         """
         with self._lock:
             outer_owner = self._owner
+            if outer_owner is None:
+                self._renew_secret()
             self._owner = threading.get_ident()
             try:
                 yield self._connection
             finally:
                 self._owner = outer_owner
+
+    def _renew_secret(self) -> None:
+        """Recria o secret do S3 quando a chave da credencial do ``boto3`` trocou, sob o lock do
+        secret, comum a todas as sessões do banco; na pasta local, nada."""
+        if self._credentials is None:
+            return
+        with self._secret_lock:
+            renewed = renew_duckdb_secret(self._connection, self._credentials)
+        if renewed:
+            log.info("sandbox %s: secret do S3 recriado com a chave nova do boto3",
+                     self.execution_id)
 
     def holds_session(self) -> bool:
         """Se a thread que chama está dentro de ``session()``.

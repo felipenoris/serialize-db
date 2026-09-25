@@ -2,7 +2,8 @@
 
 Os testes sem gravar rodam sem variável: a construção por URI sem rede, os caminhos relativos, as
 opções do delta-rs resolvidas a cada chamada e sem credencial, o ambiente que o delta-rs lê, e o
-proxy e o secret do DuckDB. Os que gravam rodam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador
+proxy, o secret do DuckDB e a recriação dele quando a chave troca, esta com a extensão ``httpfs``
+na pasta de extensões. Os que gravam rodam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador
 ``local``) e, com ``SERIALIZE_DB_TEST_S3_ROOT``, os mesmos no bucket (marcador ``s3``): a escrita
 condicional do arquivo de controle, a listagem, a cópia e a exclusão, e a conexão do DuckDB com a
 extensão ``delta`` da pasta configurada.
@@ -10,18 +11,24 @@ extensão ``delta`` da pasta configurada.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import uuid
 
+import botocore.credentials
+import duckdb
 import pyarrow.fs as pafs
 import pytest
 
+from conftest import duckdb_test_config, require_duckdb_extension
 from serialize_db.errors import ConflictError
 from serialize_db.storage import (
     Storage,
     _duckdb_secret_options,
     _proxy_settings,
+    aws_credentials,
     prepare_environment,
+    renew_duckdb_secret,
 )
 
 # As variáveis que Storage lê; cada teste sem gravar parte delas limpas.
@@ -144,22 +151,75 @@ def test_duckdb_proxy_settings_without_credentials_in_the_address() -> None:
 
 
 def test_duckdb_secret_options_for_an_endpoint(clean_aws: pytest.MonkeyPatch) -> None:
-    """Sem ``AWS_ENDPOINT_URL``, a cadeia de credenciais com ``REFRESH auto`` e a região; com ele,
-    o endereço sem o esquema e o endereço por caminho, e ``USE_SSL false`` só num endpoint
-    ``http``."""
+    """Sem ``AWS_ENDPOINT_URL``, só a região; com ele, o endereço sem o esquema e o endereço por
+    caminho, e ``USE_SSL false`` só num endpoint ``http``."""
     clean_aws.setenv("AWS_REGION", "sa-east-1")
-    chain = ["TYPE s3", "PROVIDER credential_chain", "REFRESH auto", "REGION 'sa-east-1'"]
-    assert _duckdb_secret_options() == chain
+    region = ["REGION 'sa-east-1'"]
+    assert _duckdb_secret_options() == region
 
     # O endpoint http de um serviço compatível num IP, como o moto do substituto local.
     clean_aws.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:5055")
-    http = [*chain, "ENDPOINT '127.0.0.1:5055'", "URL_STYLE 'path'", "USE_SSL false"]
+    http = [*region, "ENDPOINT '127.0.0.1:5055'", "URL_STYLE 'path'", "USE_SSL false"]
     assert _duckdb_secret_options() == http
 
     # O endpoint https, com SSL.
     clean_aws.setenv("AWS_ENDPOINT_URL", "https://minio.exemplo:9000")
-    https = [*chain, "ENDPOINT 'minio.exemplo:9000'", "URL_STYLE 'path'"]
+    https = [*region, "ENDPOINT 'minio.exemplo:9000'", "URL_STYLE 'path'"]
     assert _duckdb_secret_options() == https
+
+
+@dataclasses.dataclass
+class RecordingConnection:
+    """Uma conexão do DuckDB que guarda o texto de cada comando que passa por ela."""
+
+    connection: duckdb.DuckDBPyConnection
+    texts: list[str] = dataclasses.field(default_factory=list)
+
+    def execute(self, text: str,
+                parameters: list[object] | None = None) -> duckdb.DuckDBPyConnection:
+        self.texts.append(text)
+        return self.connection.execute(text, parameters)
+
+
+def stored_secret(connection: duckdb.DuckDBPyConnection) -> str:
+    """O ``secret_string`` do secret do S3, que mostra a chave e mascara o segredo e o token."""
+    rows = connection.execute(
+        "SELECT secret_string FROM duckdb_secrets() WHERE name = 'serialize_db_s3'").fetchall()
+    assert len(rows) == 1
+    return rows[0][0]
+
+
+def test_renew_duckdb_secret_follows_the_key(clean_aws: pytest.MonkeyPatch) -> None:
+    """O secret é criado sem um anterior, fica com a mesma chave e é recriado quando a chave da
+    credencial troca, com a região do ambiente e sem mostrar o segredo nem o token; a chave, o
+    segredo e o token ficam fora do texto dos comandos."""
+    require_duckdb_extension("httpfs")
+    clean_aws.setenv("AWS_REGION", "sa-east-1")
+    credentials = botocore.credentials.Credentials("AKIAPRIMEIRA", "segredo-um", "token-um")
+    with duckdb.connect(config=duckdb_test_config()) as connection:
+        connection.execute("LOAD httpfs")
+        recorder = RecordingConnection(connection)
+        created = renew_duckdb_secret(recorder, credentials)
+        kept = renew_duckdb_secret(recorder, credentials)
+        first = stored_secret(connection)
+
+        # A chave que a credencial passa a dar, como a do contêiner depois da troca.
+        credentials.access_key = "AKIASEGUNDA"
+        credentials.secret_key = "segredo-dois"
+        renewed = renew_duckdb_secret(recorder, credentials)
+        second = stored_secret(connection)
+    assert created is True
+    assert kept is False
+    assert ";key_id=AKIAPRIMEIRA;" in first
+    assert renewed is True
+    assert ";key_id=AKIASEGUNDA;" in second
+    assert ";region=sa-east-1;" in second
+    assert "segredo-dois" not in second
+    assert "token-um" not in second
+    commands = " ".join(recorder.texts)
+    assert "CREATE OR REPLACE SECRET" in commands
+    for value in ("AKIAPRIMEIRA", "segredo-um", "token-um", "AKIASEGUNDA", "segredo-dois"):
+        assert value not in commands
 
 
 def test_create_text_and_write_text_if_match(storage: Storage) -> None:
@@ -213,13 +273,17 @@ def test_list_copy_delete(storage: Storage) -> None:
 
 def test_duckdb_connect_loads_delta(storage: Storage) -> None:
     """A conexão sai com a extensão ``delta`` da pasta configurada, sem instalação automática; no
-    S3, com o secret da cadeia de credenciais."""
+    S3, com o secret na chave que a cadeia do ``boto3`` resolve."""
     with storage.duckdb_connect() as connection:
         loaded = connection.execute(
             "SELECT extension_name FROM duckdb_extensions() WHERE loaded ORDER BY 1").fetchall()
         autoinstall = connection.execute(
             "SELECT current_setting('autoinstall_known_extensions')").fetchone()[0]
         secrets = connection.execute("SELECT name FROM duckdb_secrets()").fetchall()
+        secret = stored_secret(connection) if storage.is_s3 else None
     assert ("delta",) in loaded
     assert autoinstall is False
     assert secrets == ([("serialize_db_s3",)] if storage.is_s3 else [])
+    if secret is not None:
+        key = aws_credentials().get_frozen_credentials().access_key
+        assert f";key_id={key};" in secret

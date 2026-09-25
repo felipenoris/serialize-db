@@ -918,6 +918,12 @@ Comportamentos verificados:
   do arquivo; o rodapé grava sem mínimo e máximo todo grupo com `NaN`. O infinito sai `inf`; o texto longo sai
   truncado em 256 caracteres, com o máximo de 255 e o último incrementado, acima do valor real, e o
   texto multibyte longo sai sem mínimo e máximo (2026-09-23).
+- O secret guarda a chave resolvida no `CREATE SECRET`, e o `delta_scan` lê o log com ela, sem
+  renová-la: numa conexão mais longa que a credencial do contêiner, o primeiro `delta_scan` depois
+  da expiração falhou com `DeltaKernel ObjectStoreError (8)`, e o `REFRESH auto` do
+  `credential_chain` só renovou o secret numa leitura pelo `httpfs` (2026-09-25,
+  [`POC.md`](POC.md)). A biblioteca cria o secret com a chave da credencial do `boto3` e o motor
+  DuckDB o recria quando ela troca ([etapa 3](PLAN-STAGE-3.md)).
 
 ## Manipulação a partir do Redshift
 
