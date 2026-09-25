@@ -3873,11 +3873,12 @@ asserção nova dos testes reprovou no código de antes.
 - **As decisões de 2026-09-25 no motor Redshift, no código de antes**: `published` devolveu a
   staging `_publicado` sem a versão, e a troca com `expected_rows=999` commitou 1.000 linhas sem
   reprovar.
-- **O caso de estudo do GIL**, `test_gil_reacquisition_waits_the_switch_interval`, reprovou
-  numa das duas rodadas da suíte inteira no substituto: os 200 `os.stat` levaram 0,011 s ao lado
-  do laço e 0,018 s com o intervalo de troca dez vezes menor, e a asserção pede menos da metade
-  do primeiro. Na outra rodada leu 0,256 s e 0,016 s, e em cinco repetições isoladas de 0,022 s
-  a 0,482 s e de 0,010 s a 0,024 s, com 0,3 ms a 0,4 ms sozinho.
+- **O caso de estudo do GIL**, `test_gil_reacquisition_waits_the_switch_interval`, reprovou em
+  duas sessões da suíte inteira, uma no substituto e outra com a raiz local, e passou nas demais
+  do mesmo dia: os 200 `os.stat` levaram 0,011 s e 0,026 s ao lado do laço, e 0,018 s e 0,029 s
+  com o intervalo de troca dez vezes menor, e a asserção pede menos da metade do primeiro. Numa
+  sessão aprovada leu 0,256 s e 0,016 s, e em dez repetições isoladas, todas aprovadas, de
+  0,022 s a 0,482 s e de 0,010 s a 0,024 s, com 0,3 ms a 0,5 ms sozinho.
 
 **Consequências**: `file_from_footer` deixa fora do `nullCount` do log a coluna sem a contagem em
 algum grupo de linhas, e as etapas [3](PLAN-STAGE-3.md) e [5](PLAN-STAGE-5.md) dizem isso; o
