@@ -5,10 +5,10 @@ A tabela de controle é uma só para todos os ambientes, criada uma vez no esque
 (``create_publications_table`` ou ``serialize-db publish --init``); nenhum caminho do pipeline a
 cria, e ``publish_redshift`` recusa publicar sem ela, antes de qualquer escrita. A publicação de
 cada tabela é uma transação, numa conexão própria: ``BEGIN``; a leitura da linha de controle, que
-identifica a versão publicada e fixa o snapshot; sem linha, a primeira publicação, com a tabela
-publicada criada e todas as partições; com linha, ``version_diff`` entre a versão lida e a pedida,
-a menor e a maior delas, o que também volta a tabela a um snapshot anterior ao publicado; por
-partição, ``DELETE`` da partição e, quando a versão pedida a tem, ``COPY ... MANIFEST`` numa
+identifica a versão publicada e fixa o snapshot da transação; sem linha, a primeira publicação, com
+a tabela publicada criada e todas as partições; com linha, ``version_diff`` entre a versão lida e a
+pedida, a menor e a maior delas, o que também volta a tabela a um snapshot anterior ao publicado;
+por partição, ``DELETE`` da partição e, quando a versão pedida a tem, ``COPY ... MANIFEST`` numa
 staging temporária e ``INSERT ... SELECT`` com o valor; e por último o ``INSERT`` da linha de
 controle, ou o ``UPDATE`` dela condicionado à versão lida, cujas 0 linhas, como o ``1023`` e a
 tabela publicada que outra primeira publicação criou, saem como ``ExecutionConflict``. As tabelas
@@ -18,8 +18,9 @@ versões vêm de um snapshot do arquivo de controle, por ``serialize-db publish 
 ``--channel``, ou são as atuais.
 
 O ``COPY`` leva a cláusula de credenciais do motor Redshift, montada por comando; nenhum texto
-que a carregue vai a log. Todo comando cita a tabela por nome em duas partes, depois do ``USE``
-que a conexão roda, sem ``COMPUPDATE`` e sem ``TRUNCATE``, o que um datashare aceita.
+que a carregue vai a log. Todo comando cita a tabela publicada e a de controle por nome em duas
+partes, depois do ``USE`` que a conexão roda, e a staging temporária pelo nome só, sem
+``COMPUPDATE`` e sem ``TRUNCATE``, o que um datashare aceita.
 
 Exemplo:
 
@@ -145,7 +146,8 @@ class PublicationStatus:
     current_version: int
     """A versão atual do Delta."""
     pending_partitions: tuple[str | None, ...]
-    """As partições que a próxima publicação troca; ``(None,)`` numa tabela sem partição."""
+    """As partições que a próxima publicação troca; ``(None,)`` na tabela sem partição que ela troca
+    inteira."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -494,6 +496,7 @@ def _published_columns(connection: _Connection, config: RedshiftConfig, environm
         if relation_missing(error):
             return []
         raise
+    # svv_all_columns cruza os bancos: information_schema.columns não lista a tabela depois do USE.
     rows = connection.rows(
         "SELECT column_name, data_type, character_maximum_length, numeric_precision, "
         f"numeric_scale FROM svv_all_columns WHERE schema_name = {literal(config.schema)} "
@@ -668,8 +671,8 @@ def _publish_table(db: Database, config: RedshiftConfig, table: sa.Table, execut
 
 def _version_to_publish(db: Database, table: sa.Table,
                         versions: Mapping[str, int] | None) -> int:
-    """A versão do Delta que a publicação grava: a fixada pela execução, ou a atual; a tabela
-    sem versão, que não existe no ambiente, é ``PublicationError``."""
+    """A versão do Delta que a publicação grava: a de ``versions``, ou a atual sem ``versions``; a
+    tabela sem versão, fora de ``versions`` ou inexistente no ambiente, é ``PublicationError``."""
     if versions is not None:
         version = versions.get(table.name)
     else:
