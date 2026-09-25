@@ -463,6 +463,8 @@ def read_round(held: Held, config: RedshiftConfig) -> Round:
     """Uma rodada: cada cliente segurado lê, e as três chaves são lidas no mesmo momento."""
     started = now()
     readings = [read_once(client, action) for client, action in held.readers.items()]
+
+    # As chaves logo depois das leituras; a que falta fica None, e a rodada segue.
     credential = optional(container_credential)
     container_key, container_expiry = None, None
     if credential is not None:
@@ -507,6 +509,7 @@ def configuration_section(report: Report, storage: Storage, changed: dict[str, s
 def open_s3_clients(report: Report, storage: Storage, held: Held) -> tuple[str, str] | None:
     """Abre o ``DeltaTable``, a conexão do DuckDB, o ``S3FileSystem`` e o ``boto3``; devolve o menor
     arquivo e o último commit do log, relativos à tabela, ou ``None`` sem a tabela."""
+    # A tabela dá o arquivo e o commit que os outros clientes leem; sem ela, nada abre.
     dt = report.call(f"delta.open_table({storage.uri!r}, storage)",
                      functools.partial(delta.open_table, storage.uri, storage),
                      render=lambda table: f"versão {table.version()}")
@@ -519,6 +522,7 @@ def open_s3_clients(report: Report, storage: Storage, held: Held) -> tuple[str, 
     commit = f"_delta_log/{dt.version():020d}.json"
     held.readers[DELTA_RS] = functools.partial(read_delta_table, dt)
 
+    # O DuckDB lê a tabela pela extensão delta e o menor arquivo pelo httpfs, nessa ordem.
     connection = report.call("storage.duckdb_connect(), sem o cache de arquivos externos",
                              functools.partial(open_duckdb, storage), render=None)
     if connection is not None:
@@ -528,6 +532,8 @@ def open_s3_clients(report: Report, storage: Storage, held: Held) -> tuple[str, 
         held.readers[DUCKDB_PARQUET] = functools.partial(
             read_count, connection, f"read_parquet({literal(storage.uri_of(sample))})")
 
+    # O S3FileSystem do Storage, o mesmo em todas as rodadas, e o boto3, com um cliente por
+    # chamada na sessão padrão.
     held.readers[PYARROW] = functools.partial(read_footer, storage, sample)
     held.readers[BOTO3] = functools.partial(read_log_commit, storage, commit)
     return sample, commit
@@ -543,6 +549,8 @@ def open_redshift(report: Report, config: RedshiftConfig, held: Held) -> None:
         return
     held.redshift = connection
     held.readers[REDSHIFT] = functools.partial(read_redshift, connection)
+
+    # Só a credencial temporária do workgroup expira; o par informado não.
     informed_pair = config.host and config.user and config.password
     if config.workgroup and not informed_pair:
         held.redshift_expiry = now() + datetime.timedelta(seconds=REDSHIFT_PASSWORD_SECONDS)
@@ -553,6 +561,7 @@ def clients_section(report: Report, storage: Storage,
                     config: RedshiftConfig) -> tuple[Held, list[Round], tuple[str, str] | None]:
     """Seção 2: a credencial do contêiner, a abertura de cada cliente e a primeira rodada."""
     report.h1("Os clientes")
+    # A credencial do contêiner antes de abrir os clientes, que a resolvem cada um a seu modo.
     credential = report.call("boto3.Session().get_credentials()", container_credential,
                              render=describe_credential)
     if credential is not None and credential[3] is not None:
@@ -565,6 +574,7 @@ def clients_section(report: Report, storage: Storage,
     if not held.readers:
         return held, [], files
 
+    # A primeira rodada, logo depois da abertura, é a referência das seguintes.
     first = read_round(held, config)
     report.h2("A primeira rodada")
     report.table([["CLIENTE", "RESULTADO", "SEGUNDOS", "DETALHE"],
@@ -637,6 +647,7 @@ def control_section(report: Report, storage: Storage, sample: str, config: Redsh
                     held: Held) -> list[Reading]:
     """Seção 4: os clientes novos, abertos depois da espera, com a credencial daquele momento."""
     report.h1("O controle")
+    # Um Storage novo, para o S3FileSystem e o boto3 resolverem a credencial de agora.
     fresh_storage = Storage.for_uri(storage.uri)
     actions: dict[str, Callable[[], str]] = {
         DELTA_RS: functools.partial(read_fresh_delta_table, fresh_storage),
@@ -662,6 +673,8 @@ def timeline_section(report: Report, rounds: list[Round], clients: list[str],
     report.line(f"EXPIRAÇÃO conta a partir da expiração da credencial do contêiner lida no "
                 f"início ({clock(expiry)}); as chaves são impressões digitais")
     report.table(timeline_rows(rounds, clients, expiry))
+
+    # Cada falha com o motivo inteiro, que a tabela não mostra.
     failed = [reading for item in rounds for reading in item.readings if not reading.ok]
     if not failed:
         report.line("Nenhuma leitura falhou.")
@@ -789,6 +802,7 @@ def main(argv: list[str]) -> int:
     report.line("Só leitura: o log e um arquivo de dados da tabela e select 1 no Redshift; "
                 "nada é criado, alterado ou apagado.")
 
+    # A configuração e a abertura dos clientes; sem a tabela, o relatório fecha aqui.
     config = configuration_section(report, storage, changed, arguments)
     held, rounds, files = clients_section(report, storage, config)
     if files is None or not rounds:
@@ -808,6 +822,7 @@ def main(argv: list[str]) -> int:
     ending = wait_section(report, held, config, rounds, deadline, reason,
                           datetime.timedelta(minutes=arguments.interval_minutes), expiry)
 
+    # O controle, a linha do tempo e os verdictos, com as conexões fechadas no fim.
     controls = control_section(report, storage, sample, config, held)
     timeline_section(report, rounds, list(held.readers), expiry)
     checks(report, storage, rounds, controls, held, config, ending)
