@@ -12,52 +12,38 @@ foi medido em [`POC.md`](POC.md).
   sob a raiz dos probes em 2026-09-23; 366 versões, 16.345.479 bytes, com 358 marcadores sob a
   raiz nova em 2026-09-24 às 01:42, depois das três sessões de 2026-09-23; e 907 versões,
   32.966.477 bytes, com 859 marcadores às 12:39 do mesmo dia; e 1.943 versões, 50.394.018 bytes,
-  com 1.823 marcadores às 23:26, [`POC.md`](POC.md)), e a regra
+  com 1.823 marcadores às 23:26; e 2.980 versões, 86.695.363 bytes, com 2.788 marcadores em
+  2026-09-25 às 17:26, [`POC.md`](POC.md)), e a regra
   `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
   para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
   `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
   retenção.
-- **Credenciais de uma hora.** Nenhuma execução mais longa que uma emissão rodou ainda; a
-  [etapa 3](PLAN-STAGE-3.md) resolve `storage_options` a cada chamada e não põe credencial nele
-  (decisão do usuário de 2026-09-22), e a primeira execução longa no espaço confirma que o delta-rs
-  renova pela cadeia padrão o `DeltaTable` que a execução segura. O secret `credential_chain` do
-  DuckDB, de `storage.duckdb_setup` e do script de migração, guarda a chave e o token resolvidos no
-  `CREATE SECRET`, e a documentação da extensão `aws` pede `REFRESH auto` para a credencial que
-  expira ([`POC.md`](POC.md), sonda de 2026-09-24): os dois secrets levam `REFRESH auto` desde a
-  decisão do usuário de 2026-09-24, e a renovação numa conexão que atravessa a rotação da
-  credencial do contêiner, que às 22:50 de 2026-09-23 expirava em 46 minutos (`RS-18`), só uma
-  execução longa no alvo mostra. O
-  `S3FileSystem` do `Storage`, que o `stream` e o `loader` do motor Redshift e a leitura dos
-  rodapés usam, guarda a cadeia de credenciais do SDK da AWS, que renova a credencial do contêiner
-  por conta própria; nenhuma execução mediu essa renovação. A credencial do Redshift
-  tem o mesmo teto (`GetCredentials`, 3600 segundos), e o serverless encerra a sessão ociosa há
-  3.600 s e a transação inativa há 21.600 s ([`redshift.md`](redshift.md)): o que acontece com uma
-  conexão aberta quando a senha expira, e se ela cai no meio de um `COPY`, ainda não foi medido; o
-  motor da [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela temporária
-  que o pipeline tenha criado na sessão. As credenciais que o `COPY`
-  e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
-  `COPY` mais longo que isso também não foi medido. A publicação monta a cláusula uma vez por tabela
-  e a repete em todo `COPY` da transação, o que o usuário aceitou até a rodada de
-  `probes/credentials.py` no alvo (decisão de 2026-09-25, [etapa 8](PLAN-STAGE-8.md)): o relatório
-  diz quando a chave da cláusula troca e quando expira, para comparar com os 153,9 s da publicação
-  de `cad_lancamentos` em 2026-09-24. `probes/credentials.py` segura esses clientes, menos o `COPY`,
-  até passar a expiração da credencial do contêiner e a da senha do Redshift, em cerca de uma hora,
-  e lê cada um a cada cinco minutos. No substituto de 2026-09-25, com chaves de 70 s, o `delta_scan`
-  falhou com a chave vencida do secret, e só o `read_parquet` a renovou, numa renovação que a
-  consulta seguinte desfaz quando o resultado fica aberto ([`POC.md`](POC.md)); se o alvo repetir
-  isso, a biblioteca precisa renovar o secret do DuckDB por conta própria, e a forma de renovar
-  espera o usuário.
+- **Credenciais de uma hora.** A primeira execução mais longa que uma emissão,
+  `probes/credentials.py` no alvo em 2026-09-25 ([`POC.md`](POC.md)), leu o delta-rs, o
+  `S3FileSystem` e o `boto3` renovando a credencial do contêiner e a conexão Redshift aberta
+  seguindo depois da expiração da senha de `GetCredentials` (3.600 s). O secret `credential_chain`
+  do DuckDB, de `storage.duckdb_setup` e do script de migração, guardou a chave da abertura até ela
+  expirar: o primeiro `delta_scan` depois disso falhou, e só o `read_parquet` da mesma rodada, pelo
+  `httpfs`, renovou o secret de `REFRESH auto`, como no substituto, onde a consulta seguinte desfez
+  a renovação quando o resultado do `read_parquet` ficou aberto por `fetchone()`, a forma de várias
+  contagens da biblioteca. O contêiner troca a chave a cada cerca de 30,6 minutos, e, se cada chave
+  vale uma hora, a que a cadeia entrega tem de 29 a 60 minutos pela frente: o motor DuckDB de uma
+  execução e o leitor Delta abertos por mais tempo que isso falham no primeiro `delta_scan` depois
+  da expiração. Espera o usuário: a forma de a biblioteca renovar o secret antes do `delta_scan`,
+  por exemplo recriá-lo com a chave que o `boto3` segura quando ela troca (o botocore renova a
+  credencial do contêiner entre 15 e 10 minutos antes da expiração), recriar o secret
+  `credential_chain` pela idade, ou documentar o limite. A cláusula do `COPY` e do `UNLOAD`, montada
+  uma vez por tabela na publicação, leva uma chave com cerca de 29 minutos ou mais pela frente,
+  contra os 153,9 s da publicação de `cad_lancamentos` em 2026-09-24, e a decisão de 2026-09-25 da
+  [etapa 8](PLAN-STAGE-8.md) fica. Seguem sem medida o `COPY` mais longo que a credencial que ele
+  leva, a queda de uma conexão Redshift no meio de um `COPY` e a sessão ociosa e a transação inativa
+  do serverless, encerradas depois de 3.600 s e 21.600 s ([`redshift.md`](redshift.md)); o motor da
+  [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela temporária que o
+  pipeline tenha criado na sessão.
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
-- **O `deltalake` 1.6.6 no ambiente alvo.** `pyproject.toml` fixa `deltalake==1.6.6` desde
-  2026-09-25, e as sessões locais e o substituto leram nela os mesmos números da 1.6.4
-  ([`POC.md`](POC.md)). A pasta do ambiente alvo rodou as baterias de 2026-09-24 com a 1.6.4 e só
-  recebe a 1.6.6, com o boto3 1.43.102 e o sqlglot 30.19.0, quando `prepare_offline.sh` roda de
-  novo. O substituto dá chaves estáticas ao delta-rs, e a cadeia de credenciais do contêiner, cujas
-  crates da AWS mudaram na 1.6.6, só a suíte S3 no alvo exercita. Espera o usuário: preparar a pasta
-  de novo e rodar a suíte S3 no alvo.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
@@ -96,17 +82,20 @@ foi medido em [`POC.md`](POC.md).
   auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`
   rodaram sem erro, com o tempo e o pico de RSS de `archive`, `export` e da publicação lidos às
   23:25 ([`POC.md`](POC.md)). O `compact` rodou só sobre a partição 2026-03-31 de
-  `cad_lancamentos`, que tem um arquivo só e não commita: a compactação de uma partição de vários
-  arquivos e a memória dela (o item acima) esperam uma partição com mais de um arquivo; a
-  continuação de uma cópia interrompida do `archive` só o substituto exercitou.
+  `cad_lancamentos`, que tem um arquivo só e não commita, e em 2026-09-25 saiu com a recusa
+  prevista, porque `SUITE.md` o roda depois de um snapshot na versão atual: a compactação de uma
+  partição de vários arquivos e a memória dela (o item acima) esperam uma partição com mais de um
+  arquivo, que a carga não grava, e um `compact` antes do snapshot; a continuação de uma cópia
+  interrompida do `archive` só o substituto exercitou.
 
-- **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md), implementada em
-  2026-09-25 na pasta local e no substituto, espera as leituras que só o alvo dá, com os comandos
-  em `SUITE.md`: o tempo de abertura do leitor Delta sobre as 12 tabelas da raiz carregada, com
-  uma view por tabela (8,7 ms por view na pasta local, [`POC.md`](POC.md)); a publicação por
-  `--channel default` e a volta a um snapshot anterior ao publicado, com o tempo e o pico de RSS
-  por tabela; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o
-  caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
+- **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo na
+  bateria de 2026-09-25 ([`POC.md`](POC.md)): o leitor Delta abriu as 12 views da raiz carregada
+  em 0,645 s, e as suítes passaram a publicação por canal e por snapshot, com a volta a um
+  snapshot anterior, e a comparação dos dois leitores, com o `stream` do leitor Redshift pelo
+  `UNLOAD`. Esperam: a publicação da base inteira por `--channel default` e a volta a um snapshot
+  anterior ao publicado, com o tempo e o pico de RSS por tabela, com os comandos em `SUITE.md`; e
+  o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o caminho de
+  credencial que serve a ele, que precisa de um papel de cliente no alvo.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25 ([`POC.md`](POC.md)), e o pino fica em 2.0.54. O `params()` novo guarda os
@@ -154,5 +143,6 @@ e os arquivos das etapas; o item abaixo espera uma rodada no alvo.
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente; os
-itens que esperam o usuário fora dos arquivos de etapa estão na lista acima.
+tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 3](PLAN-STAGE-3.md) tem uma: a
+renovação do secret do DuckDB, no item das credenciais de uma hora acima. Os outros itens que
+esperam o usuário estão na lista acima.

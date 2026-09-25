@@ -78,6 +78,32 @@ deltalake 1.6.4, pyarrow 25.0.1, `sa-east-1`), and finished the whole `SUITE.md`
 the audit, `history`, `snapshot`, `vacuum`, `archive` and the publication of the whole base;
 `export`, `compact` and the threads probe did not run. `plan/POC.md`
 
+The three target-only suites ran in the target on 2026-09-23 from `main`, at 18:48 and again at
+22:53 (S3, 445 passed with the `VmHWM` memory measurements) and 22:56 and 23:01 (Redshift, 30
+passed each): the stream with literals, the empty `UNLOAD` with `pg_last_unload_count()` 0, the
+temporary table and the `ALTER COLUMN ... TYPE` refused on the share are assertions now. The
+stage 8 transaction the user decided (read the control row first, `INSERT` or check and
+`UPDATE` it last; the unpublish flow with `DROP TABLE` and `DELETE`) read `1023` for the second
+of two publications, and both temporary stagings committed. The Redshift audit's strict
+comparison left `NaN` out of the sum but its negation did not count it, so the non-finite count
+is `count(x) - count(finite)` and waits for two runs, as does the reading
+`nan_na_tabela_detalhe`; the stand-in `tests/emulator.py` has no locks, no bucket encryption, no
+Data API and none of Redshift's `NaN` scan behavior. `probes/duckdb_threads.py` ran at 23:21, but
+DuckDB's external file cache served its later repetitions from memory; it now turns the cache off,
+measures half the CPUs too (user request of 2026-09-24), and its run of 2026-09-24 at 02:02 on
+16 vCPUs fixed the default at the process's CPUs. `plan/POC.md`
+
+The battery of 2026-09-25 at 17:25 to 19:37 UTC (from `main` of the day, the folder prepared
+again: deltalake 1.6.6, boto3 1.43.102, `redshift_connector` 2.1.17 and sqlglot 30.19.0 by
+`SP-9`) ran on 8 vCPUs and 15,505 MB (Python 3.13.15, DuckDB 1.5.5, pyarrow 25.0.1), DuckDB
+defaulting to 8 threads and a 12.1 GiB `memory_limit`, and `environment_limits` giving 8 threads
+and 6,227 MiB in the load (half of 12,454 MB available); the caller's credential expiring in 52
+minutes (`RS-18`), 45 load errors in 30 days (`RS-12`), 2,980 non-current versions (86,695,363
+bytes) and 2,788 delete markers under the test root (`BK-14`), Lake Formation and S3 Tables
+timing out in 60.7 s and 30.3 s. Every suite case passed; `duckdb_threads.py` stopped at `DT-1`
+because `SUITE.md` passed the root without `prd`, and `compact` refused the partition because a
+snapshot pointed at the current version. `plan/POC.md`
+
 ## The prepared folder and the venv
 
 `pyproject.toml` declares no runtime dependencies and pins the `dev` group (SQLAlchemy, duckdb-engine,

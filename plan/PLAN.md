@@ -392,13 +392,15 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   consulta o perfil (`credential_source = EcsContainer`, aviso `aws_config::profile::credentials`)
   mas encontra o contêiner sem ele (`HOME` vazio e `AWS_REGION` bastaram). A região precisa estar
   em `AWS_REGION` ou `AWS_DEFAULT_REGION`; as credenciais vêm do ambiente, do contêiner ou do IMDS,
-  pela cadeia padrão, que as renova no `DeltaTable` que a execução segura; o secret do DuckDB, que
-  guarda a credencial resolvida no `CREATE SECRET`, leva `REFRESH auto` (decisão do usuário de
-  2026-09-24, [etapa 3](PLAN-STAGE-3.md)). `storage_options` leva a
-  região, o endpoint, as chaves de SSE e `max_retries` e `retry_timeout`, para uma rede morta falhar
-  em 10 s em vez de 59 s, e credencial alguma (decisão do usuário de 2026-09-22): um trio congelado
-  expiraria em cerca de uma hora no meio de uma execução longa e circularia num dicionário que um log
-  ou uma exceção imprime (`README.md`, `delta.md`).
+  pela cadeia padrão, que as renova no `DeltaTable` que a execução segura (leitura de 2026-09-25 no
+  alvo); o secret do DuckDB, que guarda a credencial resolvida no `CREATE SECRET`, leva
+  `REFRESH auto` (decisão do usuário de 2026-09-24, [etapa 3](PLAN-STAGE-3.md)), que só uma
+  leitura pelo `httpfs` aciona: no alvo, o `delta_scan` falhou uma vez com a chave vencida, e a
+  renovação antes dele espera o usuário ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  `storage_options` leva a região, o endpoint, as chaves de SSE e `max_retries` e `retry_timeout`,
+  para uma rede morta falhar em 10 s em vez de 59 s, e credencial alguma (decisão do usuário de
+  2026-09-22): um trio congelado expiraria em cerca de uma hora no meio de uma execução longa e
+  circularia num dicionário que um log ou uma exceção imprime (`README.md`, `delta.md`).
 - O cliente HTTP do delta-rs lê `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias e `NO_PROXY` antes de
   `no_proxy`; vazia, `NO_PROXY` anula as exceções e a chamada ao endpoint de credenciais vai pelo
   proxy (403). `prepare_environment` exporta `NO_PROXY` de `no_proxy` quando a maiúscula está
