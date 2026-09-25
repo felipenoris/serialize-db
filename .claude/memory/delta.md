@@ -147,22 +147,27 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
 
 - `to_pyarrow_dataset()` gives each fragment a `partition_expression` built from the file's log
   statistics, and a null min or max becomes `column >= null` or `column <= null`, so PyArrow skips
-  the file for any filter on that column (`filestats_to_expression_next` in `python/src/lib.rs`,
-  read on delta-rs `main` on 2026-09-25); a `nullCount` of 0 adds `is_valid`, and only a
-  `nullCount` between zero and the file's rows adds `or is_null`. On 2026-09-25, a file registered
-  by the DuckDB engine, whose log has no min and max for `Numeric(18, 2)`, `DateTime` and
+  the file for any value filter on that column (`filestats_to_expression_next` in
+  `python/src/lib.rs`, read on delta-rs `main` on 2026-09-25); a `nullCount` of 0 adds `is_valid`,
+  and only a `nullCount` between zero and the file's rows adds `or is_null`. On 2026-09-25, a file
+  registered by the DuckDB engine, whose log has no min and max for `Numeric(18, 2)`, `DateTime` and
   `Boolean`, read 0 rows for `valor > 1`, `quando > '2025-12-31'` and `legado = true` through the
   dataset, and 0 for `valor > 1` through `to_pyarrow_table` and `to_pandas` with `filters`, against
   2, 2 and 1 through `delta_scan`; DuckDB over the dataset registered by `con.register` read 2 for
   `valor > 1` and 0 for the timestamp filter. A `Double` written with
   `ColumnProperties(statistics_enabled="NONE")` read 0 for `valor IS NULL`, `valor > 0` and
-  `valor = 1.0`, and all 5 rows for `valor IS NOT NULL`. In a table partitioned by `particao`
-  with that `valor`, `particao == 'a'`, `particao == 'b'` and `id > 3` read the right 2, 3 and 2
-  rows through the dataset, and `valor > 1.5` read 0 of 2: the loss is only in a filter on the
-  column itself, and `_arrow_reading` in `delta.py` filters the dataset only by the partition
-  column. `delta.dataSkippingStatsColumns` without the affected columns leaves them out of the
-  guarantee, and the engine file's filters read 2, 2 and 1. `plan/POC.md`,
-  `plan/OPEN_QUESTIONS.md`, `tests/proof_of_concept/test_deltalake.py`
+  `valor = 1.0`, and all 5 rows for `valor IS NOT NULL`. In a table partitioned by `particao` with
+  that `valor`, `particao == 'a'`, `particao == 'b'` and `id > 3` read the right 2, 3 and 2 rows
+  through the dataset, and `valor > 1.5` read 0 of 2: the loss is only in a filter on the column
+  itself, and `_arrow_reading` in `delta.py` filters the dataset only by the partition column. The
+  loss is per file: with partition `a` written with `valor` statistics and `b` without,
+  `valor > 1.5` read 1 of 2, `valor IS NULL` 1 of 3 and `valor IS NOT NULL` 5 against 3, the nulls
+  of `b` included; a registered file with `nullCount` 3 of 5 and no min and max read `IS NULL` and
+  `IS NOT NULL` right (3 and 2) and `valor > 1.5` 0 of 1, and an all-null column (`nullCount` equal
+  to the rows) gets `is_null(valor)` in the guarantee and reads right.
+  `delta.dataSkippingStatsColumns` without the affected columns leaves them out of the guarantee,
+  and the engine file's filters read 2, 2 and 1. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`,
+  `tests/proof_of_concept/test_deltalake.py`
 
 ## Performance measured
 

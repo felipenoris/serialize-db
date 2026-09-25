@@ -3673,6 +3673,14 @@ do comportamento, e a do `nullCount` achou a perda de linhas no dataset do delta
   `valor >= null[double]`; `particao == 'a'`, `particao == 'b'` e `id > 3` leram as 2, 3 e 2
   linhas certas pelo dataset do delta-rs, e `valor > 1.5` leu 0 de 2. O `read_back` de
   `delta.py`, que filtra o dataset só pela coluna da partição, fica fora da perda.
+- **A perda por arquivo e o `nullCount`.** Numa tabela com a partição `a` gravada com a
+  estatística de `valor` e a `b` sem ela, como a regra da issue #59 por partição, a leitura sem
+  filtro e `particao = 'b'` trouxeram as mesmas 6 e 3 linhas pelo dataset do delta-rs e pelo
+  `delta_scan`; `valor > 1.5` trouxe 1 linha, só da `a`, contra 2; `valor IS NULL`, 1 contra 3; e
+  `valor IS NOT NULL`, 5 contra 3, com os dois nulos da `b`. Num arquivo registrado sem mínimo e
+  máximo e com o `nullCount` 3 de 5, `IS NULL` e `IS NOT NULL` trouxeram os certos 3 e 2, e
+  `valor > 1.5`, 0 de 1. Numa coluna toda nula gravada pelo `write_deltalake`, com o `nullCount`
+  igual às linhas, a garantia trazia `is_null(valor)`, e os três filtros leram certo.
 - **A propriedade `delta.dataSkippingStatsColumns`.** Com `id,nome,taxa`, posta por
   `alter.set_table_properties` na tabela registrada, a garantia deixou `valor`, `quando` e
   `legado` de fora, e os três filtros leram 2, 2 e 1 pelo dataset do delta-rs.

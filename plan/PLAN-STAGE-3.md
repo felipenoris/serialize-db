@@ -88,7 +88,8 @@ o rodapé de cada arquivo, um GET por arquivo:
 5. `numRecords` do rodapé; `minValues` e `maxValues` das colunas inteiras, de data, `Double` e
    `String`, omitidos nas demais e nas que o rodapé não traz: no `delta_scan`, uma estatística
    ausente só deixa de podar, e uma errada poda o arquivo certo. O dataset do delta-rs
-   (`to_pyarrow_dataset`) perde as linhas de todo filtro sobre a coluna sem mínimo e máximo
+   (`to_pyarrow_dataset`) perde as linhas do arquivo sem mínimo e máximo de uma coluna em todo
+   filtro de valor sobre ela, e com o `nullCount` do registro lê certo o `IS NULL` e o `IS NOT NULL`
    (sonda de 2026-09-25, [`POC.md`](POC.md), [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). Os quatro
    tipos são os que a sondagem de 2026-09-22 mediu transcrevendo exato ([`POC.md`](POC.md),
    decisão do usuário do mesmo dia); `decimal` fica de fora porque o próprio delta-rs grava o
