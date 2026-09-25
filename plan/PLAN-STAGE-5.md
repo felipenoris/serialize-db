@@ -184,8 +184,8 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
   `type_modifier` de cada entrada de `cursor.ps["row_desc"]`, que o próprio driver usa para
   decodificar o `NUMERIC` binário: escala `(type_modifier - 4) & 0xFFFF` e precisão
   `((type_modifier - 4) >> 16) & 0xFFFF` (leitura do código, 2026-09-23, [`POC.md`](POC.md)). O
-  atributo é privado, e o extra `redshift` fixa `redshift-connector==2.1.17`, cujo fonte tem o
-  mesmo atributo (decisão do usuário de 2026-09-24). Os OIDs vêm de
+  atributo é privado, e as dependências de execução fixam `redshift-connector==2.1.17`, cujo fonte
+  tem o mesmo atributo (decisão do usuário de 2026-09-24). Os OIDs vêm de
   `redshift_connector.utils.oids.RedshiftOID`: `BOOLEAN` em `bool`; `SMALLINT`, `INTEGER` e
   `BIGINT` em `int16`, `int32` e `int64`; `REAL` e `FLOAT` em `float32` e `float64`; `NUMERIC` em
   `decimal128(p, s)`; `CHAR`, `BPCHAR`, `VARCHAR`, `TEXT`, `NAME` e `UNKNOWN` em `string`; `DATE`
@@ -300,11 +300,11 @@ auxiliares protegidos que a [etapa 8](PLAN-STAGE-8.md) reaproveita (`connect`,
 `tests/test_engine_redshift.py` substituem a interface e os rascunhos executados em 2026-09-21: as
 assinaturas e as docstrings estão no código e na documentação do `pdoc`. O motor entrou em
 `Execution` pelo nome `"redshift"` e no `serialize-db audit --engine redshift`
-([etapa 6](PLAN-STAGE-6.md)), o extra `redshift` fixa `redshift-connector==2.1.17`, a versão do
-ambiente de desenvolvimento, cujo fonte tem o mesmo `ps["row_desc"]` e o mesmo `type_modifier`
-lidos em 2.1.16 (decisão do usuário de 2026-09-24), e a porta `driver_connect` é onde os testes
-trocam o driver pela conexão do substituto local. O que a implementação mostrou está em
-[`POC.md`](POC.md), seção "O que a implementação das etapas 5 e 8 mostrou"; os casos `redshift`
+([etapa 6](PLAN-STAGE-6.md)), as dependências de execução fixam `redshift-connector==2.1.17`, a
+versão do ambiente de desenvolvimento, cujo fonte tem o mesmo `ps["row_desc"]` e o mesmo
+`type_modifier` lidos em 2.1.16 (decisão do usuário de 2026-09-24), e a porta `driver_connect` é
+onde os testes trocam o driver pela conexão do substituto local. O que a implementação mostrou está
+em [`POC.md`](POC.md), seção "O que a implementação das etapas 5 e 8 mostrou"; os casos `redshift`
 passaram no substituto local e, no ambiente alvo em 2026-09-24, cinco de seis às 05:10 e os seis
 às 13:01 e 13:03, com a relação inexistente respondida com o SQLSTATE `XX000` e a mensagem
 `Relation <nome> does not exist in the database.`, que `relation_missing` reconhece pela mensagem

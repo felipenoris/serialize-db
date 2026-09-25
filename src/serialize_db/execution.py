@@ -406,7 +406,7 @@ class Execution:
         if self._engine == "duckdb":
             return DuckDBEngine(DuckDBConfig(), self.execution_id, self.db.storage)
         if self._engine == "redshift":
-            # O driver do Redshift é o extra "redshift": o módulo entra só quando o motor entra.
+            # O módulo do Redshift entra só com o motor: importar o pacote não carrega o driver.
             from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 
             if self.redshift is None:

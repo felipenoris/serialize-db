@@ -7,26 +7,22 @@ authors = [
     { name = "Felipe Noronha", email = "felipenoris@gmail.com" }
 ]
 requires-python = ">=3.13"
-# As dependências de execução, nas versões fixadas pelos documentos e pelas suítes de estudo. Os
-# dialetos duckdb-engine e sqlalchemy-redshift são os compiladores de serialize_db.sql.render
+# As dependências de execução, nas versões fixadas pelos documentos e pelas suítes de estudo, são
+# tudo o que a interface pública usa: o uv sync do projeto cliente as instala sem grupo nem extra.
+# Os dialetos duckdb-engine e sqlalchemy-redshift são os compiladores de serialize_db.sql.render
 # (decisão do usuário de 2026-09-21), e duckdb-engine importa o duckdb. O boto3 faz a escrita
-# condicional do arquivo de controle no S3 (serialize_db.storage).
+# condicional do arquivo de controle no S3 (serialize_db.storage). O redshift-connector é o driver
+# do motor Redshift, da publicação e do leitor Redshift, fixado porque o motor lê o type_modifier
+# do row_desc privado do driver (serialize_db.engine.redshift).
 dependencies = [
     "boto3==1.43.102",
     "deltalake==1.6.6",
     "duckdb==1.5.5",
     "duckdb-engine==0.17.0",
     "pyarrow==25.0.1",
+    "redshift-connector==2.1.17",
     "sqlalchemy==2.0.54",
     "sqlalchemy-redshift==1.0.0",
-]
-
-# O driver do Redshift entra pelo extra redshift, fixado porque o motor lê o type_modifier do
-# row_desc privado do driver (serialize_db.engine.redshift); o pacote sem o extra roda o motor
-# DuckDB e tudo o que não toca o Redshift.
-[project.optional-dependencies]
-redshift = [
-    "redshift-connector==2.1.17",
 ]
 
 [project.scripts]

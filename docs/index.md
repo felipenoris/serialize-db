@@ -49,20 +49,34 @@ leitura à base com o modelo, `serialize_db.reader`, por `db.open_delta()` e `db
 
 ## Instalação
 
-No repositório, o `uv` instala o Python 3.13, o pacote e as dependências:
+Um projeto cliente declara o pacote como dependência uma vez, pela pasta do repositório ou pelo
+endereço git, e daí em diante o `uv sync` do projeto instala tudo o que a interface pública usa:
 
 ```shell
-uv sync --group dev
+uv add ../serialize-db                                   # a pasta do repositório
+uv add git+https://github.com/felipenoris/serialize-db   # ou o endereço git
+uv sync
 ```
 
-O pacote depende de `sqlalchemy`, `pyarrow`, `deltalake`, `duckdb`, `boto3`, que faz a escrita
-condicional do arquivo de controle no S3, e dos dialetos `duckdb-engine` e `sqlalchemy-redshift`,
-que compilam o texto SQL de cada motor, nas versões fixadas em `pyproject.toml`. O S3 precisa da
-região em `AWS_REGION` ou `AWS_DEFAULT_REGION`, e as credenciais vêm da cadeia padrão do ambiente;
-as extensões `delta` e, no S3, `httpfs` do DuckDB vêm da pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`,
-ou de `.duckdb/` ao lado do ambiente virtual, sem download. O DuckDB lê o S3 com a chave que a
-cadeia do `boto3` resolve, e a execução e o leitor Delta a trocam antes de cada comando quando o
-`boto3` a renova; um comando só mais longo que a validade da chave ainda falha.
+O projeto cliente pede o Python 3.13 ou mais novo, como o pacote (`uv init --python 3.13`); com um
+`requires-python` que aceita versões anteriores, o `uv add` recusa o pacote. As dependências que o
+`uv sync` instala são as de execução, nas versões fixadas em `pyproject.toml`: `sqlalchemy`,
+`pyarrow`, `deltalake`, `duckdb`, `boto3`, que faz a escrita condicional do arquivo de controle no
+S3, os dialetos `duckdb-engine` e `sqlalchemy-redshift`, que compilam o texto SQL de cada motor, e
+`redshift-connector`, o driver do motor Redshift, da publicação e do leitor Redshift. Os grupos de
+`pyproject.toml`, `dev` entre eles, servem ao desenvolvimento do pacote e nunca vão para o projeto
+cliente. O pacote não importa o pandas: o cliente que converte o resultado com `to_pandas`, como no
+tutorial, declara o pandas no próprio projeto.
+
+No repositório, o `uv sync` instala o Python 3.13, o pacote e o grupo `dev`, o dos testes, que o
+`uv` inclui por padrão; `uv sync --no-dev` instala só o pacote e as dependências de execução.
+
+O S3 precisa da região em `AWS_REGION` ou `AWS_DEFAULT_REGION`, e as credenciais vêm da cadeia
+padrão do ambiente; as extensões `delta` e, no S3, `httpfs` do DuckDB vêm da pasta de
+`SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao lado do ambiente virtual, sem download. O
+DuckDB lê o S3 com a chave que a cadeia do `boto3` resolve, e a execução e o leitor Delta a trocam
+antes de cada comando quando o `boto3` a renova; um comando só mais longo que a validade da chave
+ainda falha.
 
 ## Tutorial
 
@@ -463,11 +477,10 @@ com um aviso no log, porque o rodapé do `UNLOAD` deixa o `NaN` fora do máximo.
 esquema do Redshift: a conexão vem de `serialize_db.engine.redshift.RedshiftConfig`, a credencial
 temporária do workgroup serverless ou o par informado, com o `USE` no banco do datashare e o
 `search_path` no esquema; `RedshiftConfig.from_environment()` a lê das variáveis
-`SERIALIZE_DB_REDSHIFT_*`. O driver vem do extra `redshift`
-(`uv sync --extra redshift`, ou `--all-extras`). `ingest` carrega as partições por
-`COPY ... MANIFEST`, `stream` lê os arquivos de um `UNLOAD` no `staging/` da execução, `loader`
-grava um Parquet no `staging/` e o carrega por `COPY` no `close`, e `export_partition` registra os
-arquivos do `UNLOAD` na pasta da partição:
+`SERIALIZE_DB_REDSHIFT_*`. `ingest` carrega as partições por `COPY ... MANIFEST`, `stream` lê os
+arquivos de um `UNLOAD` no `staging/` da execução, `loader` grava um Parquet no `staging/` e o
+carrega por `COPY` no `close`, e `export_partition` registra os arquivos do `UNLOAD` na pasta da
+partição:
 
 ```python
 from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine

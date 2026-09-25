@@ -456,7 +456,7 @@ class RedshiftReader:
             conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``.
         :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
         """
-        # O driver do Redshift é o extra "redshift": o módulo entra só quando o leitor entra.
+        # O módulo do Redshift entra só com o leitor: importar o pacote não carrega o driver.
         from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 
         self.environment = check_partition_value(environment)

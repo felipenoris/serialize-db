@@ -522,12 +522,14 @@ Dependências: `pyproject.toml` passa a declarar as de execução, `sqlalchemy`,
 ficam no grupo `dev` até a etapa 2 e entram nas dependências de execução com ela, porque `render`
 compila por esses dialetos (decisão do usuário de 2026-09-21, [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md))
 e os motores chamam `render` em tempo de execução (a etapa 1 gera o DDL pela tabela de tipos, sem
-dialeto); `redshift-connector==2.1.17` entra no extra `redshift`, fixado porque o motor lê o
-`type_modifier` do `row_desc` privado do driver ([etapa 5](PLAN-STAGE-5.md); a versão do ambiente
-de desenvolvimento, decisão do usuário de 2026-09-24), e `sqlglot`
-no grupo `dev`; o pandas fica no grupo `dev`, para o teste do ciclo com `ArrowDtype`, porque a
-biblioteca não o importa. `prepare_offline.sh` passa a instalar os extras (`--all-extras`) e é rodado
-de novo a cada mudança.
+dialeto); `redshift-connector==2.1.17` entra nas dependências de execução, fixado porque o motor lê
+o `type_modifier` do `row_desc` privado do driver ([etapa 5](PLAN-STAGE-5.md); a versão do
+ambiente de desenvolvimento, decisão do usuário de 2026-09-24), e `sqlglot` no grupo `dev`; o
+pandas fica no grupo `dev`, para o teste do ciclo com `ArrowDtype`, porque a biblioteca não o
+importa. As dependências de execução são tudo o que a interface pública usa, e o `uv sync` do
+projeto cliente as instala sem grupo nem extra: os grupos nunca vão para quem depende do pacote
+(decisão do usuário de 2026-09-25, [`POC.md`](POC.md)). `prepare_offline.sh` instala todos os
+grupos e os extras e é rodado de novo a cada mudança.
 
 Nomes: cada módulo separa três níveis (decisões do usuário de 2026-09-21). O público é a
 interface que o código cliente importa, e está obrigatoriamente na documentação do `pdoc`. O
