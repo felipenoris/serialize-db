@@ -210,7 +210,10 @@ na documentação do `pdoc`. O que a implementação mudou do plano:
 - **`serialize-db load`** confere o modelo por `check_models`, seleciona as tabelas como
   `serialize-db publish` e as ordena por `load_order`, chama `initial_load` e depois `load_report`
   de cada uma, imprime o relatório e sai com 1 quando `matches` é falso ou uma partição está fora
-  do contrato. Ela reaproveita o que a [etapa 6](PLAN-STAGE-6.md) pôs em `serialize_db.cli`:
+  do contrato. O `duckdb.Error` e o `RegistrationRefused` que `initial_load` documenta saem com o
+  traceback, que mostra em que passo a carga parou, e com o código 1, como todo erro sem tratamento
+  dos subcomandos ([`operacao.md`](../docs/operacao.md), decisão do usuário de 2026-09-25). O
+  subcomando reaproveita o que a [etapa 6](PLAN-STAGE-6.md) pôs em `serialize_db.cli`:
   `--metadata`, `--root` e `--environment` com os padrões `SERIALIZE_DB_*`, o `_name_argument` da
   regra da partição em `--partitions`, o `modulo:atributo` que não importa como erro de uso, e o
   `logging` em `INFO`; `db` é o `Database` da etapa 6.

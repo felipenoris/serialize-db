@@ -135,14 +135,9 @@ foi medido em [`POC.md`](POC.md).
 A revisão de 2026-09-25 (PR #82) mudou só comentários, docstrings e prosa de `src/`, `scripts/`,
 `probes/`, dos READMEs e de `docs/`, e os achados que pediam mudança de código, de texto impresso
 ou de arquivo fora dela foram lidos no código da `main` e sondados na pasta local em 2026-09-25
-([`POC.md`](POC.md)). Os corrigidos saíram daqui para o código, os testes e os arquivos das
-etapas; os itens abaixo esperam o usuário: corrigir, ou aceitar como está.
+([`POC.md`](POC.md)). Os corrigidos e os aceitos como estão saíram daqui para o código, os testes
+e os arquivos das etapas; o item abaixo espera uma rodada no alvo.
 
-- **Os erros sem tratamento de `serialize-db load`.** O `duckdb.Error` e o `RegistrationRefused`
-  que `initial_load` documenta saem com o traceback e o código 1, como todo erro sem tratamento
-  dos subcomandos (`docs/operacao.md`), enquanto a origem fora dos armazenamentos da biblioteca e
-  o `ExecutionConflict` saem com 2 e uma linha. Espera o usuário: uma linha com a mensagem, sem o
-  traceback que mostra onde a carga parou, ou o traceback como está.
 - **Os probes.** Uma correção num probe espera uma rodada no alvo que compare o relatório de antes
   com o de depois. `Report.finish` de `probelib.py` e `redshift.py` têm ternários aninhados;
   `redshift.py` usa `getattr` dinâmico, trabalha antes de um retorno antecipado e, com `space.py`,
