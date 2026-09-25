@@ -1,10 +1,10 @@
-"""A estrutura da base atual em Parquet particionado: uma pasta por tabela, lida arquivo por arquivo.
+"""A estrutura da base em Parquet particionado: uma pasta por tabela, lida arquivo por arquivo.
 
 A base de origem da carga inicial (etapa 7) é um conjunto de pastas Parquet. Este probe fotografa a
 estrutura dela para duas perguntas: quais são os campos, os tipos e as faixas de valores de cada
 tabela, de modo que um script de teste possa gerar uma base fictícia com a mesma forma; e se todos
-os arquivos de todas as partições de uma tabela têm o mesmo esquema, que é o que quebra uma leitura
-posicional.
+os arquivos de todas as partições de uma tabela têm o mesmo esquema, porque um esquema divergente
+quebra uma leitura posicional.
 
 Uso:
 
@@ -13,14 +13,15 @@ Uso:
 ``<raiz>`` é a pasta que contém uma subpasta por tabela, ou uma URI (``s3://bucket/prefixo``); cada
 subpasta tem um arquivo Parquet ou uma árvore de partições com vários. ``--sample N`` lê as N
 primeiras linhas de um arquivo por tabela para medir cardinalidade e comprimento de texto, em
-caracteres e em bytes, que o rodapé não guarda; sem ele nenhuma página de dados é lida. ``--files N`` limita quantos arquivos de
-cada tabela aparecem na listagem por arquivo, sem limitar quantos são lidos. ``--text-bytes`` lê
-as colunas de texto de todos os arquivos, linha por linha, e mede o maior valor de cada coluna em
-bytes e em caracteres: é a medida do ``String(n)`` do contrato, e a varredura é longa.
+caracteres e em bytes, que o rodapé não guarda; sem ele e sem ``--text-bytes``, nenhuma página de
+dados é lida. ``--files N`` limita quantos arquivos de cada tabela aparecem na listagem por arquivo,
+sem limitar quantos são lidos. ``--text-bytes`` lê as colunas de texto de todos os arquivos, linha
+por linha, e mede o maior valor de cada coluna em bytes e em caracteres: é a medida do ``String(n)``
+do contrato, e a varredura é longa.
 
-Só leitura. Todo arquivo da base é aberto por ``open_input_file``, e o relatório sai no terminal e
-em ``probes/output/parquet_source_<data-hora>.txt``, dentro do repositório. Nada é criado, alterado
-ou apagado sob a raiz.
+O probe só lê a raiz: todo arquivo da base é aberto por ``open_input_file``, e nada é criado,
+alterado ou apagado sob ela. O relatório sai no terminal e em
+``probes/output/parquet_source_<data-hora>.txt``, dentro do repositório.
 
 Seções:
 
@@ -32,10 +33,13 @@ Seções:
 6. Estatísticas por coluna: nulos, mínimo, máximo e distintos, somados do rodapé de cada arquivo.
 7. Layout físico: row groups, compressão, codificação, escritor e metadados do rodapé.
 8. Amostra de valores: só com ``--sample``.
+9. Comprimento de texto: só com ``--text-bytes``.
 
-Cada seção é uma função, na ordem acima, que documenta as checagens que emite (``PQ-1`` a ``PQ-9``);
-``main`` as chama uma a uma, e uma seção que quebra não cala as outras. Códigos de saída: 0 quando
-toda checagem passou, 1 quando alguma leitura falhou, 2 quando alguma checagem reprovou.
+Cada seção é uma função, na ordem acima, que documenta as checagens que emite, de ``PQ-1`` a
+``PQ-9``; ``main`` lista a raiz (a raiz que não lista reprova ``PQ-1``), lê os rodapés, emite
+``PQ-8`` (arquivo ilegível) e chama as seções uma a uma, e uma seção que quebra não cala as outras.
+Códigos de saída: 0 quando toda checagem passou, 1 quando alguma leitura falhou, 2 quando alguma
+checagem reprovou ou o uso está errado.
 """
 
 from __future__ import annotations
@@ -53,7 +57,8 @@ from probelib import Report, describe_error  # noqa: E402
 # Um segmento de caminho no layout Hive: mes=2026-08. Um segmento que não casa é um nível sem nome.
 HIVE_SEGMENT = re.compile(r"^([^=/]+)=(.*)$")
 
-# Quantos arquivos de cada tabela a listagem por arquivo mostra, e quantos valores distintos a amostra lista.
+# Quantos arquivos de cada tabela a listagem por arquivo mostra, quantos valores distintos a amostra
+# e a seção de partições listam, e quantas linhas cada lote da medida de texto lê.
 DEFAULT_FILE_ROWS = 20
 MAX_LISTED_VALUES = 25
 TEXT_BATCH_ROWS = 100_000
@@ -61,7 +66,7 @@ TEXT_BATCH_ROWS = 100_000
 
 @dataclasses.dataclass
 class Column:
-    """Uma coluna de um arquivo, pelo esquema Arrow e pela folha correspondente do esquema Parquet."""
+    """Uma coluna de um arquivo, pelo esquema Arrow e pela sua folha no esquema Parquet."""
 
     name: str
     arrow_type: str
@@ -76,7 +81,7 @@ class Column:
 class FileReading:
     """O rodapé de um arquivo Parquet: o esquema, o layout e as estatísticas de cada coluna."""
 
-    path: str  # relativo à pasta da tabela
+    path: str  # O caminho relativo à pasta da tabela.
     size: int
     rows: int
     row_groups: int
@@ -91,7 +96,7 @@ class FileReading:
     statistics: dict[str, dict[str, Any]]
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Funções puras: o caminho, o esquema como chave, a soma das estatísticas e a formatação
 
 
@@ -133,12 +138,19 @@ def logical_label(text: str) -> str:
 
 
 def schema_key(columns: list[Column]) -> tuple[tuple[str, str, bool, str, str], ...]:
-    """O esquema como chave comparável: nome, tipo Arrow, nulidade, tipo físico e tipo lógico, na ordem."""
+    """O esquema como chave comparável, coluna a coluna e na ordem do arquivo.
+
+    Cada coluna entra com o nome, o tipo Arrow, a nulidade, o tipo físico e o tipo lógico.
+    """
     return tuple((column.name, column.arrow_type, column.nullable, column.physical, column.logical) for column in columns)
 
 
 def schema_difference(reference: list[Column], other: list[Column]) -> list[list[str]]:
-    """As linhas que explicam por que dois esquemas diferem: coluna ausente, a mais, trocada de tipo ou de posição."""
+    """As linhas que explicam por que dois esquemas diferem.
+
+    Cada linha é uma coluna ausente, a mais, com outro tipo, outra nulidade ou outro tipo físico;
+    sem nenhuma delas, uma linha única registra a mesma lista de colunas em outra ordem.
+    """
     by_name = {column.name: column for column in reference}
     other_by_name = {column.name: column for column in other}
     rows: list[list[str]] = []
@@ -159,7 +171,7 @@ def schema_difference(reference: list[Column], other: list[Column]) -> list[list
         if name not in by_name:
             rows.append([name, "a mais", "-", other_by_name[name].arrow_type])
 
-    # Mesmas colunas e mesmos tipos, mas em outra ordem: quebra toda leitura posicional, como o COPY do Redshift.
+    # As mesmas colunas em outra ordem quebram toda leitura posicional, como o COPY do Redshift.
     if not rows and [column.name for column in reference] != [column.name for column in other]:
         rows.append(["(todas)", "ordem", ", ".join(column.name for column in reference), ", ".join(column.name for column in other)])
     return rows
@@ -212,7 +224,11 @@ def better_extreme(edge: str, value: Any, current: Any) -> bool:
 
 
 def format_value(value: Any, limit: int = 44) -> str:
-    """Um valor de estatística legível numa célula: bytes decodificados, texto sem quebra, cortado em ``limit``."""
+    """Um valor de estatística legível numa célula, cortado em ``limit`` caracteres.
+
+    ``None`` vira ``-``; bytes saem decodificados em UTF-8, ou em hexadecimal quando não
+    decodificam; o texto troca quebras de linha e tabulações pelas sequências de escape.
+    """
     if value is None:
         return "-"
     if isinstance(value, (bytes, bytearray)):
@@ -237,12 +253,15 @@ def partition_values(readings: list[FileReading]) -> dict[str, list[str]]:
     return values
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # A leitura: o sistema de arquivos, a listagem e o rodapé de cada arquivo
 
 
 def open_root(uri: str) -> tuple[Any, str, str]:
-    """O sistema de arquivos e o caminho da raiz; aceita um caminho local ou uma URI como ``s3://``."""
+    """O sistema de arquivos, o caminho da raiz e o nome do sistema de arquivos.
+
+    ``uri`` é um caminho local ou uma URI como ``s3://bucket/prefixo``.
+    """
     import pyarrow.fs as pafs
 
     if "://" in uri:
@@ -253,10 +272,11 @@ def open_root(uri: str) -> tuple[Any, str, str]:
 
 
 def list_root(filesystem: Any, root: str) -> tuple[dict[str, list[tuple[str, int]]], list[str]]:
-    """Uma entrada por pasta de tabela, com ``(caminho relativo, bytes)`` de cada Parquet, e o que não é Parquet.
+    """As pastas de tabela, com ``(caminho relativo, bytes)`` de cada Parquet, e os outros arquivos.
 
-    A listagem é recursiva e só lê metadados de diretório. Um arquivo solto na raiz, fora de uma
-    pasta de tabela, entra em ``outros``, porque a base é uma pasta por tabela.
+    A listagem é recursiva e só lê metadados de diretório. Os outros arquivos são os de outra
+    extensão dentro de uma tabela e os soltos na raiz, fora de uma pasta de tabela, porque a base é
+    uma pasta por tabela.
     """
     import pyarrow.fs as pafs
 
@@ -291,6 +311,7 @@ def read_footer(filesystem: Any, root: str, table: str, relative: str, size: int
         metadata = parquet.metadata
         statistics, compression, encodings = row_group_statistics(metadata)
 
+        # Os metadados chave-valor do rodapé, que o Arrow expõe no esquema, como texto.
         footer = {}
         for key, value in (parquet.schema_arrow.metadata or {}).items():
             footer[key.decode(errors="replace")] = value.decode(errors="replace")
@@ -383,7 +404,11 @@ def merge_row_group(entry: dict[str, Any], statistic: Any) -> None:
 
 
 def sample_table(filesystem: Any, root: str, table: str, relative: str, rows: int) -> dict[str, dict[str, Any]]:
-    """Mede num lote de até ``rows`` linhas o que o rodapé não guarda: cardinalidade e comprimento de texto."""
+    """Mede no primeiro lote de até ``rows`` linhas o que o rodapé não guarda.
+
+    São a cardinalidade, os valores quando poucos e o comprimento de texto, em caracteres e em
+    bytes; um arquivo sem linha dá ``{}``.
+    """
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
@@ -424,7 +449,10 @@ def text_columns(collected: list[FileReading]) -> list[str]:
 
 
 def text_lengths(filesystem: Any, root: str, table: str, collected: list[FileReading], names: list[str]) -> dict[str, dict[str, int]]:
-    """Mede em todas as linhas de todos os arquivos o maior texto de cada coluna, em bytes e em caracteres."""
+    """O maior texto de cada coluna, em bytes e em caracteres, com as linhas e os nulos.
+
+    A medida percorre todas as linhas de todos os arquivos da tabela.
+    """
     measured = {name: {"rows": 0, "nulls": 0, "bytes": 0, "chars": 0} for name in names}
     for reading in collected:
         measure_file_text(filesystem, f"{root}/{table}/{reading.path}", measured, names)
@@ -464,16 +492,20 @@ def measure_text_batch(measured: dict[str, dict[str, int]], batch: Any) -> None:
         entry["chars"] = max(entry["chars"], pc.max(pc.utf8_length(column)).as_py())
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # As seções do relatório
 
 
 def root_section(report: Report, filesystem_name: str, root: str, tables: dict[str, list[tuple[str, int]]], others: list[str]) -> None:
-    """Seção 1, a raiz: ``PQ-1``, as pastas de tabela; ``PQ-2``, as pastas sem Parquet; e o que não é Parquet."""
+    """Seção 1, a raiz: as pastas de tabela e os arquivos que não são Parquet.
+
+    Checagens: ``PQ-1`` (as pastas de tabela) e ``PQ-2`` (as pastas sem Parquet).
+    """
     report.h1("A raiz")
     report.value("FILESYSTEM", filesystem_name)
     report.value("ROOT", root)
 
+    # O resumo da listagem e PQ-1, que passa aqui: a raiz que não lista reprova em main.
     files = sum(len(found) for found in tables.values())
     total = sum(size for found in tables.values() for _, size in found)
     report.table(
@@ -487,6 +519,7 @@ def root_section(report: Report, filesystem_name: str, root: str, tables: dict[s
     )
     report.ok("PQ-1", "raiz lida", f"{len(tables)} pasta(s) de tabela, {files} arquivo(s) Parquet, {total} bytes")
 
+    # PQ-2: toda pasta de tabela precisa de um Parquet; uma pasta sem nenhum reprova.
     empty = sorted(name for name, found in tables.items() if not found)
     if empty:
         report.fail("PQ-2", "pasta sem Parquet", f"{len(empty)}: {', '.join(empty[:10])}")
@@ -502,13 +535,16 @@ def root_section(report: Report, filesystem_name: str, root: str, tables: dict[s
 
 
 def tables_section(report: Report, readings: dict[str, list[FileReading]], file_rows: int) -> dict[str, list[list[FileReading]]]:
-    """Seção 2, as tabelas: uma linha por tabela, a listagem por arquivo e ``PQ-3``, o esquema uniforme.
+    """Seção 2, as tabelas: uma linha por tabela e a listagem por arquivo.
+
+    Checagens: ``PQ-3`` (o esquema uniforme).
 
     Devolve, por tabela, os grupos de arquivos que compartilham esquema, do maior para o menor; o
     primeiro grupo é o majoritário, contra o qual a seção 4 compara os demais.
     """
     report.h1("As tabelas")
 
+    # Os arquivos de cada tabela agrupados pelo esquema, e a linha da tabela no resumo.
     groups: dict[str, list[list[FileReading]]] = {}
     rows: list[list[Any]] = [["tabela", "arquivos", "bytes", "linhas", "colunas", "partição", "partições", "esquemas"]]
     for table, found in sorted(readings.items()):
@@ -534,6 +570,7 @@ def tables_section(report: Report, readings: dict[str, list[FileReading]], file_
         )
     report.table(rows)
 
+    # PQ-3: todo arquivo de uma tabela tem o mesmo esquema; mais de um esquema reprova.
     divergent = sorted(table for table, ordered in groups.items() if len(ordered) > 1)
     if divergent:
         report.fail("PQ-3", "esquema uniforme por tabela", f"{len(divergent)} tabela(s) com esquemas diferentes: {', '.join(divergent)}")
@@ -562,10 +599,14 @@ def tables_section(report: Report, readings: dict[str, list[FileReading]], file_
 
 
 def schema_section(report: Report, groups: dict[str, list[list[FileReading]]]) -> None:
-    """Seção 3, o esquema de cada tabela: ``PQ-7``, os tipos encontrados na base, e ``PQ-9``, as tabelas vazias."""
+    """Seção 3, o esquema de cada tabela, pelo grupo majoritário.
+
+    Checagens: ``PQ-7`` (os tipos encontrados na base) e ``PQ-9`` (as tabelas vazias).
+    """
     report.h1("O esquema de cada tabela")
     report.line("O esquema do grupo majoritário: o tipo Arrow é o que um leitor devolve, o físico e o lógico são o que está gravado.\n")
 
+    # Por tabela, o esquema do grupo majoritário, somando os tipos e anotando as tabelas sem linha.
     types: Counter[str] = Counter()
     empty: list[str] = []
     for table, ordered in sorted(groups.items()):
@@ -595,10 +636,12 @@ def schema_section(report: Report, groups: dict[str, list[list[FileReading]]]) -
         for column in reference.columns:
             types[f"{column.arrow_type} ({column.physical}/{column.logical})"] += 1
 
+    # PQ-7: os tipos distintos da base, contados por coluna, como leitura.
     report.h2("Os tipos encontrados na base")
     report.table([["tipo Arrow (físico/lógico)", "colunas"], *[[name, count] for name, count in types.most_common()]])
     report.note("PQ-7", "tipos da base", f"{len(types)} tipo(s) distinto(s) em {sum(types.values())} coluna(s)")
 
+    # PQ-9: uma tabela com arquivo e sem linha é leitura.
     if empty:
         report.note("PQ-9", "tabela com arquivo e sem linha", f"{len(empty)}: {', '.join(empty)}")
     else:
@@ -606,7 +649,10 @@ def schema_section(report: Report, groups: dict[str, list[list[FileReading]]]) -
 
 
 def divergence_section(report: Report, groups: dict[str, list[list[FileReading]]]) -> None:
-    """Seção 4, as divergências: para cada tabela com mais de um esquema, o que muda e em quais arquivos."""
+    """Seção 4, as divergências de esquema, sem checagem.
+
+    Para cada tabela com mais de um esquema, o que muda em cada grupo e em quais arquivos.
+    """
     report.h1("Divergências de esquema entre os arquivos")
     divergent = {table: ordered for table, ordered in sorted(groups.items()) if len(ordered) > 1}
     if not divergent:
@@ -630,10 +676,15 @@ def divergence_section(report: Report, groups: dict[str, list[list[FileReading]]
 
 
 def partition_section(report: Report, readings: dict[str, list[FileReading]], groups: dict[str, list[list[FileReading]]]) -> None:
-    """Seção 5, as partições: ``PQ-4``, o layout uniforme por tabela, e ``PQ-5``, a coluna de partição dentro do arquivo."""
+    """Seção 5, as partições.
+
+    Checagens: ``PQ-4`` (o layout uniforme por tabela) e ``PQ-5`` (a coluna de partição dentro do
+    arquivo).
+    """
     report.h1("As partições")
     report.line("A coluna de partição vive no caminho; se ela também está dentro do arquivo, um leitor que junta os dois a vê duas vezes.\n")
 
+    # Por tabela, os estilos e as profundidades de partição e as colunas que o arquivo repete.
     mixed: list[str] = []
     inside: list[str] = []
     for table, found in sorted(readings.items()):
@@ -663,11 +714,13 @@ def partition_section(report: Report, readings: dict[str, list[FileReading]], gr
             rows.append([name, len(found_values), "sim" if in_file else "não", sample])
         report.table(rows)
 
+    # PQ-4: um estilo e uma profundidade de partição por tabela; a mistura reprova.
     if mixed:
         report.fail("PQ-4", "layout de partição uniforme", f"{len(mixed)} tabela(s) misturam profundidade ou estilo: {', '.join(mixed)}")
     else:
         report.ok("PQ-4", "layout de partição uniforme", "cada tabela usa um só estilo e uma só profundidade de partição")
 
+    # PQ-5: a coluna de partição dentro do arquivo é leitura; o delta-rs a grava só no caminho.
     if inside:
         report.note("PQ-5", "coluna de partição dentro do arquivo", f"{len(inside)}: {', '.join(inside[:10])}")
     else:
@@ -675,10 +728,14 @@ def partition_section(report: Report, readings: dict[str, list[FileReading]], gr
 
 
 def statistics_section(report: Report, readings: dict[str, list[FileReading]]) -> None:
-    """Seção 6, as estatísticas por coluna: ``PQ-6``, se o rodapé traz mínimo e máximo de toda coluna."""
+    """Seção 6, as estatísticas por coluna, somadas do rodapé de cada arquivo.
+
+    Checagens: ``PQ-6`` (se o rodapé traz mínimo e máximo de toda coluna).
+    """
     report.h1("Estatísticas por coluna")
     report.line("Somadas do rodapé de todos os arquivos da tabela. `distintos` é o maior valor visto num arquivo, um piso da cardinalidade; `sem min/max` conta os arquivos sem a estatística naquela coluna.\n")
 
+    # Uma tabela de estatísticas por tabela; without e total contam as colunas da base para PQ-6.
     without = 0
     total = 0
     for table, found in sorted(readings.items()):
@@ -706,6 +763,7 @@ def statistics_section(report: Report, readings: dict[str, list[FileReading]]) -
             )
         report.table(rows)
 
+    # PQ-6: uma coluna com algum arquivo sem mínimo e máximo é leitura.
     if without:
         report.note("PQ-6", "mínimo e máximo no rodapé", f"{without} de {total} coluna(s) da base têm arquivo sem a estatística")
     else:
@@ -713,7 +771,10 @@ def statistics_section(report: Report, readings: dict[str, list[FileReading]]) -
 
 
 def layout_section(report: Report, readings: dict[str, list[FileReading]]) -> None:
-    """Seção 7, o layout físico: row groups, compressão, codificação, escritor e metadados do rodapé."""
+    """Seção 7, o layout físico, sem checagem.
+
+    Mostra os row groups, a compressão, a codificação, o escritor e os metadados do rodapé.
+    """
     report.h1("Layout físico")
 
     rows: list[list[Any]] = [["tabela", "row groups", "linhas por row group", "compressão", "codificação", "escritor", "versão"]]
@@ -749,7 +810,11 @@ def layout_section(report: Report, readings: dict[str, list[FileReading]]) -> No
 
 
 def sample_section(report: Report, measured: dict[str, dict[str, dict[str, Any]]], rows: int) -> None:
-    """Seção 8, a amostra: cardinalidade, nulos e comprimento de texto nas primeiras linhas de um arquivo por tabela."""
+    """Seção 8, a amostra, sem checagem.
+
+    Mostra a cardinalidade, os nulos e o comprimento de texto nas primeiras linhas de um arquivo por
+    tabela.
+    """
     report.h1("Amostra de valores")
     if not measured:
         report.line("Não pedida. `--sample N` lê as N primeiras linhas de um arquivo por tabela para medir o que o rodapé não guarda.")
@@ -778,7 +843,10 @@ def sample_section(report: Report, measured: dict[str, dict[str, dict[str, Any]]
 
 
 def text_length_section(report: Report, lengths: dict[str, dict[str, dict[str, int]]]) -> None:
-    """Seção 9, o comprimento de texto: o maior valor de cada coluna de texto em todas as linhas."""
+    """Seção 9, o comprimento de texto, sem checagem.
+
+    Mostra o maior valor de cada coluna de texto em todas as linhas.
+    """
     report.h1("Comprimento de texto")
     if not lengths:
         report.line("Não pedido. `--text-bytes` lê as colunas de texto de todo arquivo e mede o maior valor de cada uma.")
@@ -804,11 +872,12 @@ def text_length_section(report: Report, lengths: dict[str, dict[str, dict[str, i
         )
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
+# Os argumentos e main
 
 
 def parse(argv: list[str]) -> tuple[str, int, int, bool] | None:
-    """A raiz, a amostra, o limite da listagem e se mede o texto; ``None`` quando o uso está errado."""
+    """A raiz, a amostra, o limite da listagem e se mede o texto, ou ``None`` com o uso errado."""
     root = ""
     sample = 0
     files = DEFAULT_FILE_ROWS
@@ -843,6 +912,7 @@ def main(argv: list[str]) -> int:
     report = Report("parquet_source", f"a estrutura da base Parquet em {root}")
     report.line("Só leitura: cada arquivo é aberto por open_input_file, e nada sob a raiz é criado, alterado ou apagado.")
 
+    # PQ-1: a raiz que não lista reprova e encerra o probe.
     listing = report.call(f"listar {root} recursivamente", lambda: list_root(filesystem, root), render=lambda result: f"{len(result[0])} pasta(s) de tabela, {sum(len(found) for found in result[0].values())} arquivo(s) Parquet")
     if listing is None:
         report.fail("PQ-1", "raiz lida", f"não listada: {report.last_reason}")
@@ -855,14 +925,16 @@ def main(argv: list[str]) -> int:
     for table, found in sorted(tables.items()):
         collected: list[FileReading] = []
         for relative, size in sorted(found):
+            # Um arquivo ilegível é diagnóstico e não interrompe a leitura.
             try:
                 collected.append(read_footer(filesystem, root, table, relative, size))
-            except Exception as error:  # noqa: BLE001 - um arquivo ilegível é diagnóstico, não interrompe a leitura
+            except Exception as error:  # noqa: BLE001
                 unreadable.append(f"{table}/{relative}: {describe_error(error)}")
                 report.failures.append((f"rodapé de {table}/{relative}", describe_error(error)))
         readings[table] = collected
     report.line(f"rodapés lidos: {sum(len(found) for found in readings.values())} arquivo(s), {len(unreadable)} ilegível(is)\n")
 
+    # A amostra, só com --sample: as primeiras linhas do primeiro arquivo lido de cada tabela.
     measured: dict[str, dict[str, dict[str, Any]]] = {}
     if sample:
         for table, collected in sorted(readings.items()):
@@ -873,6 +945,7 @@ def main(argv: list[str]) -> int:
             except Exception as error:  # noqa: BLE001
                 report.failures.append((f"amostra de {table}", describe_error(error)))
 
+    # A medida de texto, só com --text-bytes: todas as linhas das colunas de texto de cada tabela.
     lengths: dict[str, dict[str, dict[str, int]]] = {}
     if text_bytes:
         for table, collected in sorted(readings.items()):
@@ -905,6 +978,7 @@ def main(argv: list[str]) -> int:
     guarded(sample_section, measured, sample)
     guarded(text_length_section, lengths)
 
+    # PQ-8: um rodapé ilegível reprova; o erro de cada um está na seção final.
     if unreadable:
         report.fail("PQ-8", "arquivo ilegível", f"{len(unreadable)}: {unreadable[0]}")
     else:

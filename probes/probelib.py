@@ -1,29 +1,33 @@
-"""Formato comum dos probes: relatório em seções, chamadas ecoadas, checagens e a seção final de falhas.
+"""Formato comum dos probes: seções, chamadas ecoadas, checagens e a seção final de falhas.
 
 Um probe fotografa o ambiente sem alterá-lo. O relatório sai no terminal e em
 ``probes/output/<nome>_<data-hora>.txt``, pasta fora do git, para ser colado na conversa com o
-assistente: um cabeçalho com data, plataforma e interpretador; seções numeradas; cada chamada
-ecoada acima do seu resultado ou do seu erro, que também vai para a seção final "Chamadas que
-falharam", para um bloco vazio nunca significar "negado", a menos que a chamada seja marcada
-``expected``, quando a falha é leitura (a visão negada a um usuário comum) e sai como
-``-- SEM RESULTADO``; identificadores reaproveitados como
-``NOME=valor``; tabelas alinhadas; e a tabela de checagens, ``fail`` primeiro, depois ``note``,
-depois ``pass``. Códigos de saída: 0 quando toda checagem passou, 1 quando alguma chamada
-falhou, 2 quando alguma checagem reprovou.
+assistente. Ele traz um cabeçalho com data, plataforma e interpretador, seções numeradas,
+identificadores reaproveitados como ``NOME=valor``, tabelas alinhadas e a tabela de checagens,
+``fail`` primeiro, depois ``note``, depois ``pass``.
+
+Cada chamada é ecoada acima do seu resultado ou do seu erro, e o erro também vai para a seção
+final "Chamadas que falharam", para um bloco vazio nunca significar "negado". A chamada marcada
+``expected`` é a exceção: a falha dela é leitura (a visão negada a um usuário comum), sai como
+``-- SEM RESULTADO`` e fica fora da seção final. Códigos de saída: 0 quando toda checagem passou,
+1 quando alguma chamada falhou, 2 quando alguma checagem reprovou.
 
 O arquivo se organiza assim:
 
 - as constantes de caminhos e de variáveis;
 - ``Tee``, que duplica a saída no terminal e no arquivo;
-- a classificação dos erros do ``boto3`` (``answered``, ``unanswered``, ``error_code``,
-  ``describe_error``, ``reason``): "o serviço respondeu com erro" e "sem resposta" são verdictos
-  diferentes, e só o segundo pede manutenção da rede;
+- as esperas curtas do ``boto3`` (``short_config``) e a classificação dos seus erros
+  (``answered``, ``unanswered``, ``error_code``, ``describe_error``, ``reason``): "o serviço
+  respondeu com erro" e "sem resposta" são vereditos diferentes, e só o segundo pede manutenção da
+  rede;
+- o ARN da simulação de política (``principal_arn``), a raiz S3 (``s3_root``, ``NO_ROOT``) e a
+  região (``region``);
 - o proxy do DuckDB (``DuckDBProxy``, ``split_proxy``, ``hide_credentials``, ``duckdb_proxy``), que
   recusa o endereço com as credenciais embutidas e precisa delas em configurações à parte;
-- as leituras de rede (``resolve``, ``tcp_open``, ``tcp_probe``, ``public_label``, ``dns_rows``),
-  que nunca contam como chamada falhada;
+- as leituras de rede (``resolve``, ``tcp_open``, ``tcp_probe``, ``endpoint_reachable``,
+  ``public_label``, ``dns_rows``), que nunca contam como chamada falhada;
 - a formatação (``mask``, ``pretty``, ``tabulate``, ``environment_rows``), com os segredos
-  mascarados;
+  mascarados, e ``run_python``, o subprocesso com espera limitada;
 - ``Report``, o relatório em construção;
 - a leitura do projeto do SageMaker Unified Studio por ``sagemaker_studio`` num subprocesso
   (``PROJECT_PROBE``, ``python_candidates``, ``project_snapshot``) e as funções que tornam as
@@ -48,20 +52,24 @@ from typing import Any, NamedTuple, TypeVar
 
 T = TypeVar("T")
 
-# Onde o relatório é gravado (pasta fora do git) e a raiz do repositório, para ler pyproject.toml e .duckdb/.
+# A pasta onde o relatório é gravado, fora do git, e a raiz do repositório, de onde se leem
+# pyproject.toml e .duckdb/.
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Uma chave com um destes nomes tem o valor trocado por *** na saída; a variável só mostra presença.
+# Uma chave com um destes nomes tem o valor trocado por *** na saída; uma variável com um deles só
+# mostra presença.
 SECRET_PATTERN = re.compile(r"secret|password|token|credential|private", re.IGNORECASE)
 
-# As variáveis de proxy nas duas grafias: o delta-rs lê NO_PROXY e, só quando ela está ausente, no_proxy; uma NO_PROXY vazia anula as exceções.
+# As variáveis de proxy nas duas grafias. O delta-rs lê NO_PROXY e, só quando ela está ausente,
+# no_proxy; uma NO_PROXY vazia anula as exceções.
 PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
 
-# O DuckDB lê só esta variável, nesta grafia, para HTTP e para HTTPS, e a interpreta na hora do pedido; as demais não têm efeito sobre ele.
+# A única variável de proxy que o DuckDB lê, nesta grafia, para HTTP e para HTTPS, na hora do
+# pedido; as demais não têm efeito sobre ele.
 DUCKDB_PROXY_VARIABLE = "HTTP_PROXY"
 
-# Só o S3 e o DynamoDB têm gateway endpoint; um IP público de outro serviço depende da internet ou do proxy.
+# Os serviços que têm gateway endpoint.
 GATEWAY_SERVICES = ("s3", "dynamodb")
 
 
@@ -86,12 +94,15 @@ class Tee:
         self.file.close()
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Erros do boto3: o serviço respondeu, não respondeu, ou o erro é local
 
 
 def short_config(connect: float = 5, read: float = 15, attempts: int = 2) -> Any:
-    """``botocore.config.Config`` com esperas curtas: sem rede, o padrão do boto3 é 60 s por tentativa."""
+    """Um ``botocore.config.Config`` com esperas curtas.
+
+    Sem rede, o padrão do boto3 espera 60 s por tentativa.
+    """
     import botocore.config
 
     return botocore.config.Config(
@@ -112,7 +123,10 @@ def answered(error: BaseException) -> bool:
 
 
 def unanswered(error: BaseException) -> bool:
-    """Se o boto3 não obteve resposta (rede, proxy, tempo esgotado), e não um erro local como credencial ausente."""
+    """Se o boto3 não obteve resposta (rede, proxy, tempo esgotado).
+
+    Um erro local, como a credencial ausente, não conta.
+    """
     try:
         import botocore.exceptions
     except ImportError:
@@ -134,8 +148,11 @@ def error_code(error: BaseException) -> str | None:
 
 
 def describe_error(error: BaseException) -> str:
-    """Erro numa linha; para o boto3, diz se o serviço respondeu com erro, se não houve resposta ou se o erro é local."""
-    # Sem códigos de cor do terminal e sem quebras de linha, cortado para caber na seção final.
+    """O erro numa linha, com o prefixo que diz se o serviço respondeu com erro ou não respondeu.
+
+    Um erro local, ou de outra biblioteca que não o boto3, sai sem prefixo.
+    """
+    # O texto sem as cores do terminal nem quebras de linha, cortado para caber na seção final.
     text = re.sub(r"\x1b\[[0-9;]*m", "", " ".join(str(error).split()))[:300]
 
     if answered(error):
@@ -146,7 +163,10 @@ def describe_error(error: BaseException) -> str:
 
 
 def reason(error: BaseException) -> str:
-    """Motivo curto de uma falha, para a checagem que a interpreta: negado, outro erro do serviço, sem resposta ou erro local."""
+    """O motivo curto de uma falha, para a checagem que a interpreta.
+
+    O motivo é ``negado``, outro erro do serviço, ``sem resposta`` ou ``erro local``.
+    """
     code = error_code(error)
     if code:
         denied = any(word in code for word in ("AccessDenied", "Unauthorized", "Forbidden", "NotAuthorized"))
@@ -159,7 +179,10 @@ def reason(error: BaseException) -> str:
 
 
 def principal_arn(caller_arn: str) -> str:
-    """O ARN que a simulação de política aceita: o papel por trás de um assumed-role, ou o próprio usuário."""
+    """O ARN que a simulação de política aceita.
+
+    Um assumed-role vira o ARN do papel por trás dele; qualquer outro ARN volta como veio.
+    """
     if ":assumed-role/" in caller_arn:
         account = caller_arn.split(":")[4]
         role = caller_arn.split(":assumed-role/")[1].split("/")[0]
@@ -172,8 +195,8 @@ def s3_root(argv: list[str]) -> tuple[str, str]:
 
     A ordem é o argumento da linha de comando, ``SERIALIZE_DB_ROOT`` (a raiz da biblioteca, onde ela
     escreveria) e ``SERIALIZE_DB_TEST_S3_ROOT`` (a autorização da suíte S3, que costuma apontar para
-    o mesmo lugar). Uma ``SERIALIZE_DB_ROOT`` de pasta local é ignorada, porque estes probes leem S3.
-    Devolve ``("", "nada")`` quando nenhuma das três diz onde olhar.
+    o mesmo lugar). Uma ``SERIALIZE_DB_ROOT`` de pasta local é ignorada, porque estes probes leem
+    S3. Devolve ``("", "nada")`` quando nenhuma das três diz onde olhar.
     """
     candidates = [
         (argv[1] if len(argv) > 1 else "", "argumento"),
@@ -183,8 +206,9 @@ def s3_root(argv: list[str]) -> tuple[str, str]:
     for value, source in candidates:
         if value.startswith("s3://"):
             return value.rstrip("/"), source
+        # Um argumento que não é s3:// volta como veio: o probe o aponta, em vez de ignorá-lo.
         if value and source == "argumento":
-            return value.rstrip("/"), source  # um argumento errado é dito pelo probe, não ignorado em silêncio
+            return value.rstrip("/"), source
 
     return "", "nada"
 
@@ -200,7 +224,7 @@ def region() -> str | None:
     return boto3.Session().region_name or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # O proxy do DuckDB: o endereço de um lado, o usuário e a senha do outro
 
 
@@ -212,11 +236,12 @@ class DuckDBProxy(NamedTuple):
 
 
 def split_proxy(url: str) -> tuple[str, str, str]:
-    """``url`` do proxy em endereço sem credenciais, usuário e senha, com URL-decode.
+    """Divide o ``url`` do proxy em endereço sem credenciais, usuário e senha, com URL-decode.
 
     O endereço volta vazio quando não há host ou a porta não é um número; o esquema é opcional.
     """
     try:
+        # Sem "//", o urlsplit leria o host como esquema e o resto como caminho.
         parts = urllib.parse.urlsplit(url if "//" in url else "//" + url, scheme="http")
         port = parts.port
     except ValueError:
@@ -248,7 +273,8 @@ def duckdb_proxy(environ: Mapping[str, str] | None = None) -> DuckDBProxy:
 
     Só ``HTTP_PROXY`` é lida, a mesma variável e a mesma grafia que o DuckDB lê: as configurações
     não têm exceção equivalente a ``NO_PROXY``, e tirar o endereço de outra variável mandaria ao
-    proxy o tráfego que hoje sai direto. As demais grafias presentes entram na leitura.
+    proxy o tráfego que o DuckDB, sem elas, manda direto. As demais grafias presentes entram na
+    leitura.
     """
     environ = os.environ if environ is None else environ
 
@@ -272,12 +298,15 @@ def duckdb_proxy(environ: Mapping[str, str] | None = None) -> DuckDBProxy:
     return DuckDBProxy(settings, f"{address}, {'com usuário e senha' if user else 'sem credenciais'}")
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Rede: DNS e TCP como leituras, nunca como chamadas falhadas
 
 
 def resolve(name: str, port: int = 443) -> tuple[list[str], bool]:
-    """Endereços IP de ``name`` e se todos são privados (endpoint VPC de interface com DNS privado)."""
+    """Os endereços IP de ``name`` e se todos são privados.
+
+    Todos privados indicam endpoint VPC de interface com DNS privado.
+    """
     addresses = sorted({info[4][0] for info in socket.getaddrinfo(name, port, type=socket.SOCK_STREAM)})
     private = bool(addresses) and all(ipaddress.ip_address(address).is_private for address in addresses)
     return addresses, private
@@ -291,7 +320,10 @@ def tcp_open(host: str, port: int, timeout: float = 5) -> float:
 
 
 def tcp_probe(host: str, port: int, timeout: float = 5) -> str:
-    """Abrir uma conexão TCP como leitura: ``conectou em N s`` ou ``não conectou: erro``, sem levantar exceção."""
+    """Abre uma conexão TCP como leitura: ``conectou em N s`` ou ``não conectou: erro``.
+
+    O erro do socket vira o texto da leitura, sem exceção.
+    """
     try:
         return f"conectou em {tcp_open(host, port, timeout):.2f} s"
     except OSError as error:
@@ -299,13 +331,13 @@ def tcp_probe(host: str, port: int, timeout: float = 5) -> str:
 
 
 def endpoint_reachable(client: Any, timeout: float = 2) -> tuple[bool, str]:
-    """Se o endpoint de um cliente boto3 aceita conexão TCP dentro de ``timeout``, e a leitura que o diz.
+    """Se o endpoint de um cliente boto3 aceita conexão TCP em ``timeout``, e a leitura que o diz.
 
     Um serviço sem endpoint VPC e sem internet gasta ``connect_timeout`` em cada endereço que o nome
     resolve, vezes as tentativas: no ambiente alvo, em 2026-09-21, ``simulate_principal_policy``
     esperou 10 s e ``describe_key`` 80 s por nada, com ``short_config()`` em 5 s e duas tentativas.
-    O teste vai a um endereço só, e custa ``timeout`` uma vez. Com proxy configurado a conexão direta
-    não responde pelo alcance, e a chamada é feita.
+    O teste vai a um endereço só, e custa ``timeout`` uma vez. Com proxy configurado, a conexão
+    direta não responde pelo alcance, e a chamada é feita.
     """
     if any(os.environ.get(name) for name in PROXY_VARIABLES if "NO_PROXY" not in name.upper()):
         return True, "proxy configurado: a conexão direta não responde pelo alcance"
@@ -320,15 +352,18 @@ def endpoint_reachable(client: Any, timeout: float = 2) -> tuple[bool, str]:
     except OSError as error:
         return False, f"{parts.hostname} não resolve: {error}"
 
-    # O endereço, nunca o nome: socket.create_connection percorre todos os endereços do nome e gasta
-    # o tempo limite em cada um, que é justamente o custo que este teste existe para evitar.
+    # O endereço, e não o nome: com o nome, socket.create_connection tentaria cada endereço que ele
+    # resolve, com o tempo limite em cada um.
     where = parts.hostname if addresses[0] == parts.hostname else f"{parts.hostname} ({addresses[0]})"
     reading = tcp_probe(addresses[0], port, timeout)
     return reading.startswith("conectou"), f"{where}:{port} {reading}"
 
 
 def public_label(name: str) -> str:
-    """Tipo de um nome que resolve para IP público: só o S3 e o DynamoDB têm gateway endpoint; os demais dependem da internet ou do proxy."""
+    """O tipo de um nome que resolve para IP público.
+
+    Só o S3 e o DynamoDB têm gateway endpoint; os demais dependem da internet ou do proxy.
+    """
     # O serviço é o primeiro rótulo (s3.us-west-2...) ou o segundo (bucket.s3.us-west-2...).
     labels = name.lower().split(".")
     gateway = labels[0] in GATEWAY_SERVICES or (len(labels) > 1 and labels[1] in GATEWAY_SERVICES)
@@ -336,9 +371,10 @@ def public_label(name: str) -> str:
 
 
 def dns_rows(names: Iterable[str]) -> tuple[list[list[str]], dict[str, bool | None]]:
-    """Linhas da tabela de DNS e, por nome, se resolveu para IP privado; ``None`` quando não resolve.
+    """As linhas da tabela de DNS e, por nome, se ele resolveu para IP privado.
 
-    Um nome que não resolve é uma leitura, não uma chamada falhada: sem internet, ``pypi.org`` não resolve.
+    Um nome que não resolve fica com ``None`` e é uma leitura, não uma chamada falhada: sem
+    internet, ``pypi.org`` não resolve.
     """
     rows: list[list[str]] = []
     private_by_name: dict[str, bool | None] = {}
@@ -360,7 +396,7 @@ def dns_rows(names: Iterable[str]) -> tuple[list[list[str]], dict[str, bool | No
     return rows, private_by_name
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Formatação: JSON legível, tabelas alinhadas e segredos mascarados
 
 
@@ -377,7 +413,10 @@ def mask(data: Any) -> Any:
 
 
 def pretty(data: Any, limit: int = 120) -> str:
-    """JSON legível de uma resposta, sem ``ResponseMetadata`` e sem segredos, cortado em ``limit`` linhas."""
+    """O JSON legível de uma resposta, sem ``ResponseMetadata`` e sem segredos.
+
+    O texto é cortado em ``limit`` linhas.
+    """
     if isinstance(data, dict):
         data = {key: value for key, value in data.items() if key != "ResponseMetadata"}
 
@@ -428,20 +467,23 @@ def environment_rows(names: Iterable[str]) -> list[list[str]]:
         if value is None:
             rows.append([name, "(ausente)"])
         elif value == "":
-            # Vazia não é ausente: um cliente que lê NO_PROXY antes de no_proxy fica sem exceção alguma.
+            # Uma variável vazia não é ausente: um cliente que lê NO_PROXY antes de no_proxy fica
+            # sem exceção alguma.
             rows.append([name, "(vazia)"])
         elif name != name.upper() and name.upper() in names and value == os.environ.get(name.upper()):
-            # A minúscula igual à maiúscula (no_proxy e NO_PROXY) sai uma vez; a lista tem 1.500 caracteres.
+            # A minúscula igual à maiúscula (no_proxy e NO_PROXY) sai uma vez: a lista de exceções
+            # tem 1.500 caracteres.
             rows.append([name, f"(igual a {name.upper()})"])
         elif SECRET_PATTERN.search(name) or name in ("AWS_ACCESS_KEY_ID",):
             rows.append([name, "definida"])
         else:
-            # O endereço de proxy costuma trazer o usuário e a senha embutidos, e o relatório é colado na conversa.
+            # O endereço de proxy costuma trazer o usuário e a senha embutidos, e o relatório é
+            # colado na conversa.
             rows.append([name, hide_credentials(value) if "proxy" in name.lower() else value])
     return rows
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # O relatório
 
 
@@ -459,7 +501,8 @@ class Report:
         self.tee = Tee(self.path)
         self.checks: list[tuple[str, str, str, str]] = []
         self.failures: list[tuple[str, str]] = []
-        self.last_reason = "sem falha"  # motivo curto da última chamada que falhou, para a checagem que a interpreta
+        # O motivo curto da última chamada que falhou, para a checagem que a interpreta.
+        self.last_reason = "sem falha"
         self.section_number = 0
 
         # Tudo o que o probe imprime vai para o terminal e para o arquivo; finish() desfaz o desvio.
@@ -484,25 +527,26 @@ class Report:
         print(text)
 
     def value(self, name: str, value: object) -> None:
-        """Identificador reaproveitado, como ``BUCKET=nome``, para o leitor refazer uma chamada à mão."""
+        """Um identificador reaproveitado, como ``BUCKET=nome``, para refazer uma chamada à mão."""
         print(f"{name}={value}")
 
     def table(self, rows: Iterable[Iterable[Any] | str]) -> None:
-        """Uma tabela alinhada, com a primeira linha como cabeçalho, seguida de uma linha em branco."""
+        """Uma tabela alinhada, a primeira linha como cabeçalho, e uma linha em branco depois."""
         print(tabulate(rows))
         print()
 
     def call(self, label: str, action: Callable[[], T], render: Callable[[Any], str] | None = pretty, expected: bool = False) -> T | None:
-        """Ecoa ``label``, executa ``action`` e imprime o resultado ou o erro; a falha vai para a seção final.
+        """Ecoa ``label``, executa ``action`` e imprime o resultado ou o erro.
 
-        Devolve o resultado de ``action``, ou ``None`` quando ela levantou exceção; nesse caso
-        ``last_reason`` guarda o motivo curto para a checagem que interpreta a falha. ``render``
-        transforma o resultado em texto (``pretty`` por padrão; ``None`` não imprime nada).
+        Devolve o resultado de ``action``, ou ``None`` quando ela levantou exceção; nesse caso a
+        falha vai para a seção final, e ``last_reason`` guarda o motivo curto para a checagem que a
+        interpreta. ``render`` transforma o resultado em texto (``pretty`` por padrão; ``None`` não
+        imprime nada).
 
         ``expected=True`` marca a chamada cuja falha é leitura, não defeito: a visão de sistema
         negada a um usuário comum, o pacote ausente fora de um espaço. Ela aparece no lugar e deixa
-        ``last_reason`` para a checagem que a interpreta, mas fica fora da seção final e do código de
-        saída, que existem para o que precisa de manutenção.
+        ``last_reason`` para a checagem que a interpreta, mas fica fora da seção final e do código
+        de saída, que existem para o que precisa de manutenção.
         """
         print(f"$ {label}")
         started = time.perf_counter()
@@ -533,11 +577,15 @@ class Report:
         self.checks.append(("fail", check_id, what, detail))
 
     def note(self, check_id: str, what: str, detail: str) -> None:
-        """Leitura registrada sem verdicto: o ausente, o negado, o que só a próxima etapa decide."""
+        """Leitura registrada sem veredito: o ausente, o negado, o que só a próxima etapa decide."""
         self.checks.append(("note", check_id, what, detail))
 
     def finish(self) -> int:
-        """Imprime as checagens e as chamadas que falharam, fecha o arquivo e devolve o código de saída."""
+        """Imprime as checagens e as chamadas que falharam e devolve o código de saída.
+
+        O arquivo do relatório é fechado no fim.
+        """
+        # A tabela de checagens: fail primeiro, depois note, depois pass.
         self.h1("Checagens")
         rows: list[list[str]] = [["RESULTADO", "ID", "O QUE", "DETALHE"]]
         for kind in ("fail", "note", "pass"):
@@ -552,22 +600,26 @@ class Report:
         else:
             print("Nenhuma. Toda chamada deste relatório passou.")
 
+        # O código de saída: 2 com alguma checagem reprovada, senão 1 com alguma chamada falhada,
+        # senão 0.
         failed_checks = sum(1 for check in self.checks if check[0] == "fail")
         code = 2 if failed_checks else 1 if self.failures else 0
         print(f"\ncódigo de saída {code}: {failed_checks} checagem(ns) reprovada(s), {len(self.failures)} chamada(s) falhada(s)")
 
-        # Devolve o stdout que o construtor desviou; no probe é o terminal, no pytest o capture.
+        # O sys.stdout volta ao que o construtor desviou: no probe, o terminal; no pytest, o
+        # capture.
         sys.stdout = self.tee.terminal
         self.tee.close()
         print(f"resultado gravado em {self.path}")
         return code
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # O projeto do SageMaker Unified Studio, lido por sagemaker_studio num subprocesso
 
-# O pacote sagemaker_studio não entra no venv do projeto (arrasta versões sem fixação); o probe o procura em cada
-# interpretador candidato e roda este programa nele. A saída é um JSON com o projeto e uma linha por conexão.
+# O programa que lê o projeto, rodado em cada interpretador candidato: o pacote sagemaker_studio
+# não entra no venv do projeto, porque arrasta versões sem fixação. A saída é um JSON com o projeto
+# e uma linha por conexão.
 PROJECT_PROBE = r"""
 import ast, json, sys
 from sagemaker_studio import Project
@@ -639,7 +691,11 @@ print(json.dumps({
 
 
 def python_candidates() -> list[str]:
-    """Interpretadores onde ``sagemaker_studio`` pode existir: este, o do sistema do espaço e o ``python3`` do PATH."""
+    """Os interpretadores onde ``sagemaker_studio`` pode existir, sem repetição e sem os ausentes.
+
+    São este, o do sistema do espaço (``/opt/conda/bin/python``) e o ``python3`` do caminho padrão
+    do sistema (``os.defpath``).
+    """
     import shutil
 
     candidates = [sys.executable, "/opt/conda/bin/python", shutil.which("python3", path=os.defpath) or ""]
@@ -651,10 +707,12 @@ def python_candidates() -> list[str]:
 
 
 def project_snapshot(timeout: float = 90) -> tuple[dict[str, Any], str]:
-    """Lê o projeto do SageMaker Unified Studio com ``sagemaker_studio`` no primeiro interpretador que o tem.
+    """Lê o projeto do SageMaker Unified Studio com ``sagemaker_studio``.
 
-    Devolve os dados e o interpretador usado; levanta ``RuntimeError`` quando nenhum interpretador tem o
-    pacote ou quando a leitura falha em todos (fora de um espaço, por exemplo).
+    A leitura roda ``PROJECT_PROBE`` em cada interpretador de ``python_candidates`` até o primeiro
+    que a completa. Devolve os dados e o interpretador usado; levanta ``RuntimeError`` quando nenhum
+    interpretador tem o pacote ou quando a leitura falha em todos (fora de um espaço, por exemplo),
+    com a última linha do erro de cada um.
     """
     errors = []
     for executable in python_candidates():
@@ -669,7 +727,10 @@ def project_snapshot(timeout: float = 90) -> tuple[dict[str, Any], str]:
 
 
 def find_values(data: Any, names: Iterable[str]) -> dict[str, Any]:
-    """Primeiro valor de cada chave em ``names`` numa estrutura aninhada, em qualquer profundidade."""
+    """O primeiro valor não vazio de cada chave de ``names`` numa estrutura aninhada.
+
+    A busca desce por dicionários, listas e tuplas, em qualquer profundidade.
+    """
     wanted = set(names)
     found: dict[str, Any] = {}
 
@@ -687,18 +748,25 @@ def find_values(data: Any, names: Iterable[str]) -> dict[str, Any]:
     return found
 
 
-# O dado que distingue uma conexão na tabela, na ordem de preferência: URI S3, workgroup, banco, URL JDBC, host.
+# O dado que distingue uma conexão na tabela, na ordem de preferência: URI S3, workgroup, banco,
+# URL JDBC, host e versão do Glue.
 CONNECTION_DETAILS = ("s3_uri", "workgroup_name", "database_name", "jdbc_url", "host", "glue_version")
 
 
 def connection_rows(connections: Iterable[dict[str, Any]]) -> list[list[str]]:
-    """Uma linha por conexão do projeto: nome, tipo, endpoint e o dado que a distingue (URI S3, workgroup, banco)."""
+    """Uma linha por conexão do projeto: nome, tipo, endpoint e o dado que a distingue.
+
+    O dado é o primeiro de ``CONNECTION_DETAILS`` que a conexão traz, como a URI S3, o workgroup ou
+    o banco.
+    """
     rows: list[list[str]] = []
     for item in connections:
+        # Os endpoints com host, como host:porta separados por ponto e vírgula.
         endpoints = item.get("physical_endpoints") or []
         shown = "; ".join(f"{endpoint.get('host')}:{endpoint.get('port')}" for endpoint in endpoints if endpoint.get("host")) or "-"
 
-        # O detalhe vem dos dados da conexão; sem eles, do nome da conexão Glue do endpoint; sem nada, o erro da leitura.
+        # O detalhe vem dos dados da conexão; sem eles, do nome da conexão Glue do endpoint; sem
+        # nada, do erro da leitura.
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
         detail = next((f"{key}={data[key]}" for key in CONNECTION_DETAILS if data.get(key)), None)
         detail = detail or next(

@@ -1,10 +1,10 @@
-"""O ``threads`` do DuckDB na ingestão das tabelas Delta: o padrão do motor, as CPUs que o processo
-pode usar, contra a metade delas e valores acima delas, e a sessão a mais por tabela de ``run.ingest``.
+"""O ``threads`` do DuckDB na ingestão das tabelas Delta: o padrão do motor, as CPUs do processo,
+contra a metade delas e valores acima delas, e a sessão a mais por tabela de ``run.ingest``.
 
 O DuckDB lê arquivo remoto com E/S síncrona, uma requisição HTTP por thread, e a documentação
 recomenda ``threads`` de 2 a 5 vezes os núcleos para essa leitura (``plan/duckdb.md``). Este probe
-mede, sobre as tabelas Delta que a migração adiantada grava (``scripts/migrate_parquet_to_delta.py``),
-a ingestão pelo motor DuckDB do pacote com cada valor de ``threads``: é a medição que decide o padrão
+mede, sobre as tabelas Delta que a migração grava (``scripts/migrate_parquet_to_delta.py``), a
+ingestão pelo motor DuckDB do pacote com cada valor de ``threads``: é a medição que decide o padrão
 de ``DuckDBConfig.threads`` numa raiz no S3 (etapa 4) e o que a sessão a mais por tabela de
 ``run.ingest`` ganha no ambiente alvo (etapa 6).
 
@@ -20,15 +20,15 @@ Uso:
 ``--partition`` é a partição lida em cada tabela particionada, por padrão a mais recente comum a
 elas; uma tabela sem partição é lida inteira. ``--threads`` são os valores medidos, por padrão o
 padrão do motor vezes 0,5 e 1 a 5: nas instâncias x86 da AWS com SMT, cada núcleo físico tem duas
-vCPUs, e a metade é uma thread por núcleo. ``--repetitions`` é quantas vezes cada medida roda, 3 por padrão; o
-relatório dá cada repetição e a melhor.
+vCPUs, e a metade é uma thread por núcleo. ``--repetitions`` é quantas vezes cada medida roda, 3 por
+padrão; o relatório dá cada repetição e a melhor.
 
 Cada configuração roda num processo novo (``spawn``), num motor ``DuckDBEngine`` novo, com o
-``memory_limit`` que ele lê do ambiente na abertura e o seu pico de memória (``VmHWM`` no Linux) ao lado da base depois das importações e da conexão. O cache de
-arquivos externos do DuckDB (``enable_external_file_cache``, ligado por padrão) guarda na memória os
-blocos lidos, e a segunda leitura do mesmo arquivo no mesmo processo não vai ao S3 (sonda no moto de
-2026-09-23): cada configuração o desliga, e cada repetição lê do armazenamento, como a leitura única
-de uma execução.
+``memory_limit`` que ele lê do ambiente na abertura; o relatório dá o seu pico de memória (``VmHWM``
+no Linux) ao lado da base, medida depois das importações e da conexão. O cache de arquivos externos
+do DuckDB (``enable_external_file_cache``, ligado por padrão) guarda na memória os blocos lidos, e a
+segunda leitura do mesmo arquivo no mesmo processo não vai ao S3 (sonda no moto de 2026-09-23): cada
+configuração o desliga, e cada repetição lê do armazenamento, como a leitura única de uma execução.
 
 - ``materializada``: a partição da primeira tabela por ``ingest(..., materialize=True)``, o
   ``CREATE TABLE AS`` sobre ``delta_scan``, apagada depois de cada repetição;
@@ -38,22 +38,24 @@ de uma execução.
 - ``sessões a mais``: cada tabela materializada numa sessão a mais (``new_session()``), todas
   juntas, como ``run.ingest`` de várias tabelas.
 
-Só leitura sob a raiz: as tabelas são lidas pelo ``delta_scan`` e pelo log do delta-rs, e nada é
+O probe só lê a raiz: as tabelas são lidas pelo ``delta_scan`` e pelo log do delta-rs, e nada é
 criado, alterado ou apagado nela. O banco do DuckDB de cada configuração fica na pasta temporária do
 motor, que o ``cleanup`` apaga no fim dela, e o relatório sai no terminal e em
 ``probes/output/duckdb_threads_<data-hora>.txt``; o andamento sai no terminal, fora do relatório.
 
 Seções:
 
-1. As tabelas: a versão, as partições e, na partição medida, os arquivos, os bytes e as linhas do log.
-2. A máquina: as CPUs, as threads por núcleo, a memória, o disco da pasta temporária, os limites do motor e
-   do DuckDB e os valores medidos.
+1. As tabelas: a versão, as partições e, na partição medida, os arquivos, os bytes e as linhas
+   do log.
+2. A máquina: as CPUs, as threads por núcleo, a memória, o disco da pasta temporária, os limites
+   do motor e do DuckDB e os valores medidos.
 3. Uma tabela: ``materializada`` e ``agregada`` por valor de ``threads``.
 4. Várias tabelas: ``em série`` e ``sessões a mais`` por valor de ``threads``.
 
-Cada seção é uma função, na ordem acima, que documenta as checagens que emite (``DT-1`` a ``DT-6``);
-``main`` as chama uma a uma. Códigos de saída: 0 quando toda checagem passou, 1 quando alguma
-leitura falhou, 2 quando alguma checagem reprovou.
+Cada seção é uma função, na ordem acima, que documenta as checagens que emite (``DT-1``, ``DT-5`` e
+``DT-6``), e ``measurement_checks`` emite ``DT-2`` a ``DT-4`` sobre todas as medições; ``main`` as
+chama uma a uma. Códigos de saída: 0 quando toda checagem passou, 1 quando alguma leitura falhou, 2
+quando alguma checagem reprovou.
 """
 
 from __future__ import annotations
@@ -89,15 +91,15 @@ from serialize_db.storage import Storage, prepare_environment
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from probelib import Report, tabulate  # noqa: E402
 
-# As tabelas medidas por padrão: a grande primeiro, depois as que o pipeline mensal lê com ela na
-# mesma partição.
+# Os padrões da linha de comando: as tabelas medidas, a grande primeiro e depois as que o pipeline
+# mensal lê com ela na mesma partição; o modelo; as repetições de cada configuração.
 DEFAULT_TABLES = ("cad_lancamentos", "cad_contratos", "cad_operacoes", "rel_contrato_operacao")
 DEFAULT_METADATA = "client_model:Base.metadata"
 DEFAULT_REPETITIONS = 3
 
-# O padrão do motor, as CPUs que o processo pode usar, vezes cada um: a metade, uma thread por núcleo
-# físico nas instâncias x86 da AWS com SMT, o padrão e a faixa de 2 a 5 vezes que a documentação do
-# DuckDB recomenda para arquivo remoto.
+# O padrão do motor, as CPUs que o processo pode usar, vezes cada um: a metade, uma thread por
+# núcleo físico nas instâncias x86 da AWS com SMT, o padrão e a faixa de 2 a 5 vezes que a
+# documentação do DuckDB recomenda para arquivo remoto.
 MULTIPLIERS = (0.5, 1, 2, 3, 4, 5)
 
 # A lista das CPUs que dividem o núcleo físico da CPU 0, no Linux.
@@ -144,7 +146,7 @@ class Measurement:
     error: str = ""
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Funções puras: os valores medidos, a partição, os totais do log e a formatação
 
 
@@ -279,7 +281,7 @@ def fastest_configuration(measurements: list[Measurement], scenario: str) -> tup
     return found
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # A medição, num processo novo
 
 
@@ -329,7 +331,7 @@ def time_materialized(engine: DuckDBEngine, inputs: list[TableInput], repetition
 
 
 def time_aggregated(engine: DuckDBEngine, inputs: list[TableInput], repetitions: int) -> tuple[list[float], int]:
-    """A primeira tabela pela view de ``ingest``, lida inteira por ``max(COLUMNS(*))``, sem gravar."""
+    """A primeira tabela lida inteira pela view de ``ingest`` e ``max(COLUMNS(*))``, sem gravar."""
     item = inputs[0]
     engine.ingest(item.table, item.uri, item.version, item.partitions)
     text = f"SELECT count(*), max(COLUMNS(*)) FROM {quoted(item.table.name)}"
@@ -436,7 +438,7 @@ def run_scenarios(scenarios: tuple[str, ...], values: list[int], inputs: list[Ta
     return measurements
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # As seções do relatório
 
 
@@ -464,6 +466,8 @@ def tables_section(report: Report, storage: Storage, tables: list[sa.Table], req
     arquivos, os bytes e as linhas da partição medida; checagem ``DT-1``. Devolve as entradas das
     medições, ou ``None`` quando uma tabela ou a partição falta."""
     report.h1("As tabelas")
+
+    # DT-1: o log de cada tabela abre; a que não abre reprova, e o probe termina sem medir.
     logs: dict[str, tuple[int, pa.Table]] = {}
     for table in tables:
         read = report.call(f"ler o log de {storage.uri_of(table.name)}", lambda: read_log(storage, table),
@@ -473,7 +477,8 @@ def tables_section(report: Report, storage: Storage, tables: list[sa.Table], req
             return None
         logs[table.name] = read
 
-    # A partição medida: a pedida, ou a mais recente comum às tabelas particionadas.
+    # A partição medida: a pedida, ou a mais recente comum às tabelas particionadas; ausente numa
+    # delas, DT-1 reprova.
     values_by_table: dict[str, set[str]] = {}
     for table in tables:
         column = table_options(table).partition_by
@@ -509,16 +514,21 @@ def machine_section(report: Report, requested: list[int] | None, repetitions: in
     limites que o motor lê do ambiente, os padrões do DuckDB e os valores medidos; nenhuma
     checagem. Devolve os valores de ``threads`` e o de referência da razão."""
     report.h1("A máquina e o DuckDB")
+
+    # Os padrões de uma conexão do DuckDB sem configuração, para comparar com os do motor.
     connection = duckdb.connect()
     duckdb_threads, duckdb_memory_limit, file_cache = connection.execute(
         "SELECT current_setting('threads'), current_setting('memory_limit'), "
         "current_setting('enable_external_file_cache')").fetchone()
     connection.close()
+
+    # Os limites que o motor lê do ambiente, e deles os valores medidos e a referência da razão.
     limits = environment_limits()
     default_threads = int(limits["threads"])
     values = thread_values(default_threads, requested)
     reference = reference_threads(values, default_threads)
 
+    # As CPUs irmãs da CPU 0, a memória física, o disco livre da pasta temporária e os pacotes.
     siblings = SIBLINGS_FILE.read_text() if SIBLINGS_FILE.is_file() else None
     per_core = threads_per_core(siblings)
     memory_mb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**20
@@ -557,7 +567,7 @@ def single_table_section(report: Report, values: list[int], reference: int, inpu
     measurements = run_scenarios(SINGLE_TABLE_SCENARIOS, values, inputs, repetitions, root)
     report.table(measurement_rows(measurements, inputs, reference))
 
-    # A leitura que decide o padrão: o valor de threads mais rápido de cada cenário contra a referência.
+    # DT-5 é a leitura que decide o padrão: o valor mais rápido de cada cenário contra a referência.
     readings = []
     for scenario in SINGLE_TABLE_SCENARIOS:
         found = fastest_configuration(measurements, scenario)
@@ -582,7 +592,8 @@ def many_tables_section(report: Report, values: list[int], reference: int, input
     measurements = run_scenarios(MANY_TABLES_SCENARIOS, values, inputs, repetitions, root)
     report.table(measurement_rows(measurements, inputs, reference))
 
-    # A leitura das sessões a mais: com cada valor de threads, o tempo em série sobre o das sessões.
+    # DT-6 é a leitura das sessões a mais: com cada valor de threads, o tempo em série sobre o das
+    # sessões.
     readings = []
     for threads in values:
         same = [item for item in measurements if item.threads == threads]
@@ -630,6 +641,7 @@ def measurement_checks(report: Report, measurements: list[Measurement], inputs: 
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """O parser da linha de comando, com os padrões de cada opção."""
     parser = argparse.ArgumentParser(
         description="Mede a ingestão das tabelas Delta pelo motor DuckDB com cada valor de threads, "
         "numa tabela e em várias, em série e em sessões a mais.")
@@ -644,6 +656,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str]) -> int:
+    # Os argumentos e as tabelas pedidas no modelo; uma tabela fora dele é erro de uso.
     parser = build_parser()
     arguments = parser.parse_args(argv[1:])
     metadata = resolve_metadata(arguments.metadata)
@@ -660,6 +673,7 @@ def main(argv: list[str]) -> int:
     if changed:
         report.line(f"variáveis acertadas por prepare_environment: {', '.join(sorted(changed))}")
 
+    # As seções em ordem; sem as tabelas e a partição (DT-1), nada é medido.
     inputs = tables_section(report, storage, tables, arguments.partition)
     if inputs is None:
         return report.finish()

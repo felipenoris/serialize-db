@@ -1,4 +1,4 @@
-"""O Redshift do projeto visto de dentro: como o ambiente o expõe, se responde e o que a sessão enxerga.
+"""O Redshift do projeto visto de dentro: como o ambiente o expõe, se responde e o que a sessão vê.
 
 Uso:
 
@@ -7,15 +7,15 @@ Uso:
 A raiz S3, pelo argumento, por ``SERIALIZE_DB_ROOT`` ou por ``SERIALIZE_DB_TEST_S3_ROOT``
 (``probelib.s3_root``), serve à simulação de quem alcança o S3 no ``COPY`` e no ``UNLOAD``.
 
-Só leitura: conecta, consulta visões de sistema e troca o banco da sessão com ``USE``, sem criar,
+O probe só lê: conecta, consulta visões de sistema e troca o banco da sessão com ``USE``, sem criar,
 alterar ou apagar nada no banco. A credencial temporária do workgroup (``GetCredentials``) cria o
 usuário do banco quando ele ainda não existe; é o único efeito colateral possível, e a checagem
 ``RS-4`` o aponta. O relatório sai no terminal e em ``probes/output/redshift_<data-hora>.txt``.
 
 A conexão repete ``examples/redshift_native.py``, executado no ambiente alvo em 2026-09-20:
 ``redshift-serverless:GetWorkgroup`` dá o endereço e a porta, ``GetCredentials`` dá o par usuário e
-senha derivado da identidade IAM, e ``redshift_connector.connect`` abre a sessão com esse par. Um par
-informado em ``_USER`` e ``_PASSWORD``, ou lido do secret da conexão do projeto, entra na mesma
+senha derivado da identidade IAM, e ``redshift_connector.connect`` abre a sessão com esse par. Um
+par informado em ``_USER`` e ``_PASSWORD``, ou lido do secret da conexão do projeto, entra na mesma
 chamada. O IAM interno do ``redshift_connector`` e o cluster provisionado não são caminhos deste
 probe: ninguém os executou no ambiente alvo, que não tem cluster.
 
@@ -36,7 +36,7 @@ Seções:
    datashare; o ``USE`` nesse banco (``examples/redshift_copy_unload.py``) e, depois dele, os
    privilégios no esquema e as tabelas com o prefixo da biblioteca.
 5. Quem alcança o S3 no ``COPY`` e no ``UNLOAD``: as credenciais de quem chama, ou o papel de
-   ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, e o alcance sobre a raiz S3 pela simulação de política do IAM.
+   ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, e o alcance sobre a raiz pela simulação de política do IAM.
 
 Cada seção é uma função, na ordem acima, que documenta as checagens que emite (``RS-1`` a
 ``RS-19``). A seção 1 devolve um ``Target`` com os parâmetros de conexão reunidos; as seguintes o
@@ -85,16 +85,18 @@ from probelib import (  # noqa: E402
     tcp_open,
 )
 
-# Os sufixos das variáveis SERIALIZE_DB_REDSHIFT_*, na ordem em que a tabela os mostra: o caminho executado primeiro.
+# Os sufixos das variáveis SERIALIZE_DB_REDSHIFT_*, na ordem em que a tabela os mostra: primeiro os
+# do caminho executado.
 VARIABLES = ("WORKGROUP", "DATABASE", "SHARE_DATABASE", "SCHEMA", "HOST", "PORT", "USER", "PASSWORD", "IAM_ROLE", "CONNECTION")
 
-# As APIs do Redshift cujo endpoint regional a seção de rede resolve; sem endpoint VPC, dependem da internet.
+# As APIs do Redshift cujo endpoint regional a seção de rede resolve; sem endpoint VPC, elas
+# dependem da internet.
 SERVICES = ("redshift", "redshift-serverless", "redshift-data")
 
 # O prefixo das tabelas que a biblioteca cria no esquema do projeto.
 TABLE_PREFIX = "serialize_db"
 
-# As chaves, em snake_case e em camelCase, com que a conexão do projeto guarda os parâmetros de conexão.
+# As chaves, em snake_case e em camelCase, com que a conexão do projeto guarda seus parâmetros.
 CONNECTION_KEYS = (
     "host", "port", "database_name", "databaseName", "workgroup_name", "workgroupName", "db_user", "dbUser", "username",
     "password", "jdbc_url", "jdbcUrl", "secret_arn", "secretArn",
@@ -124,8 +126,8 @@ class Target:
 
     ``source`` diz de onde vieram (``variáveis``, ``conexão <nome> do projeto`` ou ``nada``).
     ``database`` é o banco da conexão e ``share_database`` o banco que guarda o esquema do projeto
-    quando ele vem de um datashare: a sessão roda ``USE`` nele e cita ``esquema.tabela``, e o nome em
-    três partes fica para uma sessão aberta em outro banco, como a da Data API. ``iam_role`` é o
+    quando ele vem de um datashare: a sessão roda ``USE`` nele e cita ``esquema.tabela``, e o nome
+    em três partes fica para uma sessão aberta em outro banco, como a da Data API. ``iam_role`` é o
     papel de ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``; ``namespace_roles`` recebe da seção das APIs os
     papéis IAM padrão e os associados ao namespace, ou fica ``None`` quando ela não os leu, para a
     seção 5 dizer quem alcança o S3.
@@ -144,11 +146,14 @@ class Target:
     namespace_roles: tuple[list[str], list[str]] | None = None
 
     def qualified(self, name: str) -> str:
-        """O nome como a sessão o cita depois do ``USE``: ``esquema.tabela``, ou só a tabela sem esquema."""
+        """O nome como a sessão o cita depois do ``USE``.
+
+        É ``esquema.tabela``, ou só a tabela quando o alvo não tem esquema.
+        """
         return ".".join(part for part in (self.schema, name) if part)
 
     def fully_qualified(self, name: str) -> str:
-        """O nome em três partes, para uma sessão aberta em outro banco: ``banco.esquema.tabela``."""
+        """O nome em três partes de uma sessão aberta em outro banco: ``banco.esquema.tabela``."""
         return ".".join(part for part in (self.schema_database(), self.schema, name) if part)
 
     def schema_database(self) -> str | None:
@@ -156,19 +161,24 @@ class Target:
         return self.share_database or self.database
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Seção 1: a configuração
 
 
 def target_from_connection(report: Report, target: Target, chosen: dict) -> None:
-    """Preenche ``target`` com os dados da conexão Redshift do projeto, quando as variáveis não o fizeram."""
-    # Os dados da conexão chegam como dicionário (probelib.PROJECT_PROBE); as chaves variam entre snake_case e
-    # camelCase, e a URL JDBC traz host, porta e banco quando os campos diretos faltam.
+    """Preenche ``target`` com os dados da conexão Redshift do projeto.
+
+    Nada muda quando as variáveis já preencheram o alvo (``target.source`` diferente de ``nada``).
+    """
+    # Os dados da conexão chegam como dicionário (probelib.PROJECT_PROBE); as chaves variam entre
+    # snake_case e camelCase, e a URL JDBC traz host, porta e banco quando os campos diretos faltam.
     found = find_values(chosen, CONNECTION_KEYS)
     jdbc = re.match(r"jdbc:redshift\w*://([^:/]+):(\d+)/([^?;]+)", str(found.get("jdbc_url") or found.get("jdbcUrl") or ""))
     if target.source != "nada":
         return
 
+    # Cada campo toma a primeira fonte que o traz: a variável, o endpoint, o campo direto e a URL
+    # JDBC; a porta da variável, ou 5439, só vale sem as outras três.
     endpoint = (chosen.get("physical_endpoints") or [{}])[0]
     target.host = endpoint.get("host") or found.get("host") or (jdbc.group(1) if jdbc else None)
     target.port = int(endpoint.get("port") or found.get("port") or (jdbc.group(2) if jdbc else target.port))
@@ -178,7 +188,8 @@ def target_from_connection(report: Report, target: Target, chosen: dict) -> None
     target.password = target.password or found.get("password")
     target.source = f"conexão {chosen.get('name')} do projeto"
 
-    # A conexão criada no Studio guarda usuário e senha num secret; ler o secret é uma leitura, e a senha não é impressa.
+    # A conexão criada no Studio guarda usuário e senha num secret; o probe lê o secret e imprime só
+    # as chaves, nunca a senha.
     secret = found.get("secret_arn") or found.get("secretArn")
     if secret and not target.password:
         import boto3
@@ -194,7 +205,10 @@ def target_from_connection(report: Report, target: Target, chosen: dict) -> None
 
 
 def configuration(report: Report) -> Target:
-    """Seção 1: ``RS-1``, de onde vem a conexão: as variáveis, a conexão Redshift do projeto, ou nada."""
+    """Seção 1, a configuração.
+
+    Checagens: ``RS-1`` (a origem da conexão: as variáveis, a conexão Redshift do projeto ou nada).
+    """
     report.h1("Configuração")
     report.table([["variável", "valor"], *environment_rows([f"SERIALIZE_DB_REDSHIFT_{name}" for name in VARIABLES])])
 
@@ -213,9 +227,9 @@ def configuration(report: Report) -> Target:
     if target.host or target.workgroup:
         target.source = "variáveis"
 
-    # As conexões do projeto, uma linha cada; a conexão Redshift escolhida é a de SERIALIZE_DB_REDSHIFT_CONNECTION ou a única.
-    # A conexão do projeto é um atalho para as variáveis: fora de um espaço do Studio, o pacote não
-    # existe e a leitura falha, o que é leitura do ambiente e não defeito a corrigir.
+    # As conexões do projeto, uma linha cada, e a conexão Redshift escolhida: a de
+    # SERIALIZE_DB_REDSHIFT_CONNECTION ou a única. Fora de um espaço do Studio, o pacote
+    # sagemaker_studio não existe, e a falha é leitura.
     result = report.call("sagemaker_studio.Project().connections", probelib.project_snapshot, render=lambda found: f"lido com {found[1]}", expected=True)
     if result is not None:
         data, _ = result
@@ -240,12 +254,14 @@ def configuration(report: Report) -> Target:
     for name in ("workgroup", "host", "port", "database", "share_database", "user", "schema", "iam_role"):
         report.value(f"REDSHIFT_{name.upper()}", getattr(target, name))
 
-    # O nome que a biblioteca escreve no SQL depois do USE, e o nome em três partes de uma sessão aberta em outro banco.
+    # O nome que a biblioteca escreve no SQL depois do USE, e o nome em três partes de uma sessão
+    # aberta em outro banco.
     if target.schema:
         report.value("REDSHIFT_TABLE_NAME", target.qualified("<tabela>"))
         if target.schema_database():
             report.value("REDSHIFT_TABLE_FULL_NAME", target.fully_qualified("<tabela>"))
 
+    # RS-1: a conexão vem das variáveis ou da conexão do projeto; sem as duas, a checagem é leitura.
     if target.source == "nada":
         report.note("RS-1", "conexão configurada", "nada: informe SERIALIZE_DB_REDSHIFT_* ou crie a conexão Redshift no projeto")
     else:
@@ -253,7 +269,7 @@ def configuration(report: Report) -> Target:
     return target
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Seção 2: as APIs
 
 
@@ -300,9 +316,10 @@ def iam_roles(clusters: dict | None, namespaces: dict[str, dict]) -> tuple[list[
     """Os papéis IAM que ``IAM_ROLE`` aceitaria: os padrão e os apenas associados, sem repetição.
 
     Um papel só serve ao ``COPY`` quando está associado ao cluster ou ao namespace, e o padrão é o
-    que ``IAM_ROLE default`` usa. Sem nenhum associado, nem um ARN explícito funciona, e é isso que
-    ``RS-6`` separa.
+    que ``IAM_ROLE default`` usa. Sem nenhum associado, nem um ARN explícito funciona, e ``RS-6``
+    aponta esse caso.
     """
+    # Os papéis de cada cluster provisionado e de cada namespace serverless.
     defaults, attached = [], []
     for cluster in (clusters or {}).get("Clusters", []):
         defaults.append(cluster.get("DefaultIamRoleArn"))
@@ -311,6 +328,7 @@ def iam_roles(clusters: dict | None, namespaces: dict[str, dict]) -> tuple[list[
         defaults.append(namespace.get("defaultIamRoleArn"))
         attached += list(namespace.get("iamRoles", []))
 
+    # Os papéis padrão saem da lista dos associados, e cada lista perde os vazios e as repetições.
     defaults = [role for role in defaults if role]
     attached = [role for role in attached if role and role not in defaults]
     return list(dict.fromkeys(defaults)), list(dict.fromkeys(attached))
@@ -330,6 +348,7 @@ def data_api_select(client: object, parameters: dict, sql: str, timeout: float =
     """
     statement = client.execute_statement(Sql=sql, **parameters)["Id"]
 
+    # A espera consulta o estado a cada 0,5 s, até um estado final ou o fim do prazo.
     deadline = time.monotonic() + timeout
     while True:
         described = client.describe_statement(Id=statement)
@@ -342,6 +361,7 @@ def data_api_select(client: object, parameters: dict, sql: str, timeout: float =
     if described["Status"] != "FINISHED":
         raise RuntimeError(f"{described['Status']}: {described.get('Error', 'erro sem detalhe')}")
 
+    # As páginas do resultado; os nomes das colunas vêm da primeira.
     columns: list[str] = []
     rows: list[list[object]] = []
     for page in client.get_paginator("get_statement_result").paginate(Id=statement):
@@ -352,7 +372,11 @@ def data_api_select(client: object, parameters: dict, sql: str, timeout: float =
 
 
 def apis(report: Report, target: Target) -> None:
-    """Seção 2: ``RS-2`` (a API do serverless responde), ``RS-6`` (papel IAM do namespace para ``COPY`` e ``UNLOAD``) e ``RS-10`` (Data API)."""
+    """Seção 2, as APIs.
+
+    Checagens: ``RS-2`` (a API do serverless responde), ``RS-6`` (papel IAM do namespace para
+    ``COPY`` e ``UNLOAD``) e ``RS-10`` (Data API).
+    """
     import boto3
 
     report.h1("APIs do Redshift")
@@ -360,8 +384,8 @@ def apis(report: Report, target: Target) -> None:
     config = short_config()
     serverless = boto3.client("redshift-serverless", region_name=resolved, config=config)
 
-    # Os clusters provisionados são fotografia: o ambiente alvo não tem nenhum e a biblioteca só chama a API do
-    # serverless, então a leitura negada é leitura.
+    # Os clusters provisionados são fotografia, e a negação é leitura: o ambiente alvo não tem
+    # nenhum, e a biblioteca só chama a API do serverless.
     clusters = report.call("redshift.describe_clusters()", lambda: boto3.client("redshift", region_name=resolved, config=config).describe_clusters(), render=None, expected=True)
     if clusters is not None:
         rows = cluster_rows(clusters)
@@ -370,7 +394,10 @@ def apis(report: Report, target: Target) -> None:
     namespaces: dict[str, dict] = {}
 
     def read_namespace(name: str | None) -> None:
-        """Lê o namespace de um workgroup: é ele que guarda o banco e os papéis IAM que RS-6 separa."""
+        """Lê e mostra o namespace de um workgroup, uma vez por nome.
+
+        O namespace guarda o banco e os papéis IAM que ``RS-6`` separa.
+        """
         if not name or name in namespaces:
             return
         namespace = report.call(
@@ -385,9 +412,9 @@ def apis(report: Report, target: Target) -> None:
                 [namespace.get("namespaceName"), namespace.get("dbName"), namespace.get("defaultIamRoleArn") or "-", ", ".join(namespace.get("iamRoles", [])) or "-", namespace.get("kmsKeyId") or "-"],
             ])
 
-    # GetWorkgroup é o passo 1 de examples/redshift_native.py: dá o endereço e a porta da conexão, e a
-    # biblioteca depende dele. ListWorkgroups é a fotografia da conta, que a biblioteca não chama; sem
-    # workgroup configurado, ela é o que diz ao leitor o que informar.
+    # GetWorkgroup é o passo 1 de examples/redshift_native.py: dá o endereço e a porta da conexão, e
+    # a biblioteca depende dele. ListWorkgroups é a fotografia da conta, que a biblioteca não chama;
+    # sem workgroup configurado, ela diz ao leitor o que informar.
     workgroup = None
     workgroup_reason: str | None = None
     if target.workgroup:
@@ -412,8 +439,8 @@ def apis(report: Report, target: Target) -> None:
         for item in workgroups.get("workgroups", []):
             read_namespace(item.get("namespaceName"))
 
-    # RS-2: a conexão depende de GetWorkgroup (e de GetCredentials, RS-15); sem workgroup configurado,
-    # ListWorkgroups diz o que há para informar.
+    # RS-2: a conexão depende de GetWorkgroup (e de GetCredentials, RS-15); sem workgroup
+    # configurado, ListWorkgroups diz o que há para informar.
     if target.workgroup:
         if workgroup is not None:
             report.ok("RS-2", "API do Redshift serverless", f"GetWorkgroup respondeu por {target.workgroup}")
@@ -425,9 +452,9 @@ def apis(report: Report, target: Target) -> None:
         report.note("RS-2", "API do Redshift serverless", f"ListWorkgroups: {list_reason}; informe SERIALIZE_DB_REDSHIFT_WORKGROUP para GetWorkgroup ser lido")
 
     # RS-6: IAM_ROLE só aceita papel associado ao cluster ou ao namespace; o padrão é o que IAM_ROLE
-    # default usa. A biblioteca só emite IAM_ROLE com SERIALIZE_DB_REDSHIFT_IAM_ROLE: sem ela, o COPY e
-    # o UNLOAD levam as credenciais de quem chama (RS-18), o caminho de examples/redshift_copy_unload.py,
-    # que é o único possível quando o namespace não tem papel nenhum.
+    # default usa. A biblioteca só emite IAM_ROLE com SERIALIZE_DB_REDSHIFT_IAM_ROLE: sem ela, o
+    # COPY e o UNLOAD levam as credenciais de quem chama (RS-18), o caminho de
+    # examples/redshift_copy_unload.py, o único possível quando o namespace não tem papel nenhum.
     defaults, attached = iam_roles(clusters, namespaces)
     if clusters is not None or namespaces:
         target.namespace_roles = (defaults, attached)
@@ -447,8 +474,9 @@ def apis(report: Report, target: Target) -> None:
         if names:
             report.line(f"para conectar, informe SERIALIZE_DB_REDSHIFT_WORKGROUP com um de: {', '.join(str(name) for name in names)}, e SERIALIZE_DB_REDSHIFT_DATABASE")
 
-    # RS-10: a Data API executa SQL por HTTPS, sem a porta 5439: o caminho de reserva se a rede fechar a
-    # porta. O ciclo é o de examples/redshift_data_api.py, com select 1, que não lê dado nenhum do banco.
+    # RS-10: a Data API executa SQL por HTTPS, sem a porta 5439: o caminho de reserva se a rede
+    # fechar a porta. O ciclo é o de examples/redshift_data_api.py, com select 1, que não lê dado
+    # nenhum do banco.
     if target.database and target.workgroup:
         data = boto3.client("redshift-data", region_name=resolved, config=config)
         parameters = {"Database": target.database, "WorkgroupName": target.workgroup}
@@ -462,13 +490,15 @@ def apis(report: Report, target: Target) -> None:
         report.note("RS-10", "Data API", "não testada: precisa de SERIALIZE_DB_REDSHIFT_DATABASE e de _WORKGROUP")
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Seção 3: a rede
 
 
 def network(report: Report, target: Target) -> None:
     """Seção 3: ``RS-14`` (as APIs têm endpoint VPC) e ``RS-3`` (TCP até o host)."""
     report.h1("Rede")
+
+    # Os endpoints regionais das APIs e o host, resolvidos pelo DNS.
     resolved = region()
     names = [f"{service}.{resolved}.amazonaws.com" for service in SERVICES] if resolved else []
     if target.host:
@@ -476,7 +506,8 @@ def network(report: Report, target: Target) -> None:
     rows, private = dns_rows(names)
     report.table([["nome", "endereços", "tipo"], *rows])
 
-    # RS-14: sem internet, as APIs só respondem por endpoint VPC de interface; a porta 5439 do workgroup fica dentro da VPC.
+    # RS-14: sem internet, as APIs só respondem por endpoint VPC de interface; a porta 5439 do
+    # workgroup fica dentro da VPC.
     api_names = names[: len(SERVICES)]
     public_names = [name for name in api_names if not private.get(name)]
     if api_names and not public_names:
@@ -495,7 +526,7 @@ def network(report: Report, target: Target) -> None:
         report.note("RS-3", "host por TCP", "sem host conhecido; o endereço vem de GetWorkgroup (seção 2) ou de SERIALIZE_DB_REDSHIFT_HOST")
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Seção 4: a sessão
 
 
@@ -506,14 +537,16 @@ def render_rows(found: tuple[list[str], list[tuple]]) -> str:
 
 
 def first_value(found: tuple[list[str], list[tuple]]) -> object | None:
-    """O primeiro valor da primeira linha, ou ``None`` quando a consulta não devolveu linha: um
-    ``count(*)`` de ``sys_load_error_detail`` voltou sem linha no ambiente alvo (2026-09-23)."""
+    """O primeiro valor da primeira linha, ou ``None`` quando a consulta não devolveu linha.
+
+    Um ``count(*)`` de ``sys_load_error_detail`` voltou sem linha no ambiente alvo (2026-09-23).
+    """
     _, rows = found
     return rows[0][0] if rows and rows[0] else None
 
 
 def count_text(found: tuple[list[str], list[tuple]], unit: str) -> str:
-    """A contagem de uma consulta ``count(*)`` para o relatório, ou a falta da linha como leitura."""
+    """A contagem de uma consulta ``count(*)`` com a unidade, ou a falta da linha como leitura."""
     count = first_value(found)
     if count is None:
         return "a contagem não devolveu linha"
@@ -521,7 +554,7 @@ def count_text(found: tuple[list[str], list[tuple]], unit: str) -> str:
 
 
 def column_value(columns: list[str], row: tuple, name: str) -> object | None:
-    """O valor de uma coluna pelo nome, ou ``None`` quando a visão de sistema não tem essa coluna."""
+    """O valor de uma coluna pelo nome, ou ``None`` quando a visão de sistema não a tem."""
     return row[columns.index(name)] if name in columns else None
 
 
@@ -540,7 +573,7 @@ def matching_rows(found: tuple[list[str], list[tuple]], **wanted: str) -> list[t
 
 
 def version_tuple(text: str) -> tuple[int, ...] | None:
-    """Os três números do patch em ``version()`` (``Redshift 1.0.78890``), ou ``None`` quando não estão lá."""
+    """Os três números do patch em ``version()`` (``Redshift 1.0.78890``), ou ``None`` sem eles."""
     found = re.search(r"Redshift (\d+)\.(\d+)\.(\d+)", text)
     return tuple(int(part) for part in found.groups()) if found else None
 
@@ -551,16 +584,17 @@ def credential_summary(credentials: dict) -> str:
 
 
 def datashare_write_verdict(version: tuple[int, ...] | None, kind: str, isolation: object | None, slices: int | None) -> tuple[str, str]:
-    """Se o consumidor pode escrever no banco do datashare: patch mínimo, isolamento de snapshot e slices.
+    """O veredito da escrita no banco do datashare: patch mínimo, isolamento de snapshot e slices.
 
     Devolve ``("ok" | "fail" | "note", texto)``, um requisito por trecho. Um requisito que a sessão
-    não leu entra como ``não lido`` e não reprova sozinho: leitura negada não é requisito reprovado.
-    O isolamento exigido é o do banco que recebe a escrita, que fica no produtor: num banco de
-    datashare a coluna vem ``UNKNOWN`` (leitura de 2026-09-20), e isso é ausência de leitura, não
-    isolamento serializável.
+    não leu entra como ``não lido`` e não reprova sozinho. O isolamento exigido é o do banco que
+    recebe a escrita, que fica no produtor: num banco de datashare a coluna vem ``UNKNOWN`` (leitura
+    de 2026-09-20), e esse valor conta como ausência de leitura, não como isolamento serializável.
     """
     minimum = DATASHARE_WRITE_VERSION.get(kind, DATASHARE_WRITE_VERSION["serverless"])
     known_isolation = None if isolation is None or str(isolation).strip().lower() in ("", "unknown") else str(isolation)
+
+    # Os requisitos, com o texto e o resultado: True atende, False não atende, None não lido.
     checks: list[tuple[str, bool | None]] = [
         (
             f"patch {'.'.join(str(part) for part in version)} contra {'.'.join(str(part) for part in minimum)} ({kind})" if version else "patch",
@@ -584,11 +618,16 @@ def datashare_write_verdict(version: tuple[int, ...] | None, kind: str, isolatio
 
 
 def session(report: Report, target: Target) -> None:
-    """Seção 4: ``RS-15`` (credencial temporária do workgroup), ``RS-4`` (a sessão abre), ``RS-7`` (``SUPER``),
-    ``RS-9`` (privilégios no banco da conexão), ``RS-12`` (diagnóstico do ``COPY``), ``RS-13`` (esquemas
-    externos), ``RS-16`` (o banco do esquema do projeto), ``RS-17`` (escrita num banco de datashare),
-    ``RS-19`` (``USE`` no banco do datashare), ``RS-5`` (privilégios no esquema) e ``RS-8`` (tabelas da
-    biblioteca). As leituras do banco da conexão vêm antes do ``USE``, que troca o banco da sessão."""
+    """Seção 4, a sessão.
+
+    Checagens: ``RS-15`` (credencial temporária do workgroup), ``RS-4`` (a sessão abre), ``RS-7``
+    (``SUPER``), ``RS-9`` (privilégios no banco da conexão), ``RS-12`` (diagnóstico do ``COPY``),
+    ``RS-13`` (esquemas externos), ``RS-16`` (o banco do esquema do projeto), ``RS-17`` (escrita num
+    banco de datashare), ``RS-19`` (``USE`` no banco do datashare), ``RS-5`` (privilégios no
+    esquema) e ``RS-8`` (tabelas da biblioteca).
+
+    As leituras do banco da conexão vêm antes do ``USE``, que troca o banco da sessão.
+    """
     report.h1("Sessão")
     if target.source == "nada":
         report.line("sem configuração, nada a conectar (RS-1)")
@@ -603,9 +642,9 @@ def session(report: Report, target: Target) -> None:
 
     resolved = region()
 
-    # RS-15: a credencial temporária do workgroup, o passo 2 de examples/redshift_native.py. O usuário
-    # sai da identidade IAM (IAMR:<papel>), entra em PUBLIC e a senha dura no máximo uma hora; sem
-    # durationSeconds seriam 900 segundos. A senha fica fora do relatório.
+    # RS-15: a credencial temporária do workgroup, o passo 2 de examples/redshift_native.py. O
+    # usuário sai da identidade IAM (IAMR:<papel>), entra em PUBLIC e a senha dura no máximo uma
+    # hora; sem durationSeconds seriam 900 segundos. A senha fica fora do relatório.
     temporary = False
     if target.user and target.password:
         report.note("RS-15", "credencial temporária do workgroup", "não pedida: usuário e senha vieram das variáveis ou da conexão do projeto")
@@ -625,11 +664,11 @@ def session(report: Report, target: Target) -> None:
         else:
             report.fail("RS-15", "credencial temporária do workgroup", f"{report.last_reason}; sem ela a sessão precisa do par em _USER e _PASSWORD")
 
-    # RS-4: o passo 3 de examples/redshift_native.py, a mesma chamada de tests/conftest.py, com o par da
-    # credencial temporária ou o informado. O timeout do redshift_connector vale para conectar e para
-    # ler: 10 s abortaram sys_load_error_detail no ambiente alvo (2026-09-20) e a conexão não voltou a
-    # servir, e o primeiro comando de uma sessão lá custou 10,8 s (o USE de 2026-09-21); 30 s bastam
-    # para as visões de sistema que o probe lê.
+    # RS-4: o passo 3 de examples/redshift_native.py, a mesma chamada de tests/conftest.py, com o
+    # par da credencial temporária ou o informado. O timeout do redshift_connector vale para
+    # conectar e para ler: 10 s abortaram sys_load_error_detail no ambiente alvo (2026-09-20) e a
+    # conexão não voltou a servir, e o primeiro comando de uma sessão lá custou 10,8 s (o USE de
+    # 2026-09-21); 30 s bastam para as visões de sistema que o probe lê.
     def connect() -> tuple[str, object]:
         if not (target.host and target.user and target.password):
             raise RuntimeError("faltam parâmetros: o endereço vem de GetWorkgroup e o par de GetCredentials (RS-15), ou de _HOST, _USER e _PASSWORD")
@@ -646,7 +685,7 @@ def session(report: Report, target: Target) -> None:
 
     # Um tempo limite de leitura fecha o socket do redshift_connector, e toda consulta seguinte
     # devolveria "cannot read from timed out object": a primeira perda é registrada, e as demais
-    # leituras dizem que a conexão caiu em vez de repetir um erro que não explica nada.
+    # leituras dizem que a conexão caiu, em vez de repetir esse erro.
     lost: list[str] = []
 
     def query(sql: str, params: tuple = ()) -> tuple[list[str], list[tuple]]:
@@ -655,8 +694,8 @@ def session(report: Report, target: Target) -> None:
         cursor = connection.cursor()
         try:
             cursor.execute(sql, params)
-            rows = cursor.fetchall() if cursor.description else []  # USE não devolve linhas
-        except OSError:  # TimeoutError é OSError: o socket não volta a servir
+            rows = cursor.fetchall() if cursor.description else []  # O USE não devolve linhas.
+        except OSError:  # TimeoutError é OSError: o socket não volta a servir.
             lost.append(" ".join(sql.split())[:60])
             raise
         return [column[0] for column in cursor.description or []], rows
@@ -668,6 +707,7 @@ def session(report: Report, target: Target) -> None:
     if version and version[1]:
         report.value("REDSHIFT_VERSION", ".".join(str(part) for part in patch) if patch else str(version[1][0][0])[:80])
 
+    # Quem é a sessão: usuário, banco e esquema correntes, search_path e os esquemas visíveis.
     report.call("select current_user, current_database(), current_schema()", lambda: query("select current_user, current_database(), current_schema()"), render=render_rows)
     report.call("show search_path", lambda: query("show search_path"), render=render_rows)
     report.call(
@@ -683,14 +723,16 @@ def session(report: Report, target: Target) -> None:
     else:
         report.note("RS-7", "SUPER e JSON_PARSE", "falhou; ver a seção final")
 
-    # As configurações que mudam o comportamento do SQL gerado: datas, fuso, tempo limite e sensibilidade a maiúsculas.
+    # As configurações que mudam o comportamento do SQL gerado (datas, fuso, tempo limite,
+    # search_path e sensibilidade a maiúsculas) e wlm_query_slot_count.
     report.call(
         "pg_settings (datestyle, timezone, statement_timeout, search_path, enable_case_sensitive_identifier)",
         lambda: query("select name, setting from pg_settings where name in ('datestyle', 'timezone', 'statement_timeout', 'search_path', 'enable_case_sensitive_identifier', 'wlm_query_slot_count') order by 1"),
         render=render_rows,
     )
     # pg_settings do serverless não trouxe timezone nem enable_case_sensitive_identifier (leitura de
-    # 2026-09-20); SHOW responde pelas duas, e a segunda decide como os identificadores são citados.
+    # 2026-09-20); SHOW responde pelas duas, e o probe lê a segunda, que decide como os
+    # identificadores são citados.
     report.call("show enable_case_sensitive_identifier", lambda: query("show enable_case_sensitive_identifier"), render=render_rows, expected=True)
     report.call("pg_user do usuário atual", lambda: query("select usename, usesuper, usecreatedb from pg_user where usename = current_user"), render=render_rows)
 
@@ -727,9 +769,9 @@ def session(report: Report, target: Target) -> None:
     else:
         report.note("RS-13", "esquemas externos (Spectrum)", f"não lidos: {report.last_reason}")
 
-    # RS-16: os bancos que a sessão enxerga e em qual deles está o esquema do projeto. Um banco de tipo
-    # shared vem de datashare: a sessão roda USE nele (RS-19) e cita esquema.tabela; o nome em três
-    # partes fica para uma sessão aberta em outro banco, como a da Data API.
+    # RS-16: os bancos que a sessão enxerga e em qual deles está o esquema do projeto. Um banco de
+    # tipo shared vem de datashare: a sessão roda USE nele (RS-19) e cita esquema.tabela; o nome em
+    # três partes fica para uma sessão aberta em outro banco, como a da Data API.
     databases = report.call("svv_redshift_databases", lambda: query("select * from svv_redshift_databases order by 1"), render=render_rows)
     schema = target.schema
     schema_kind: str | None = None
@@ -753,7 +795,8 @@ def session(report: Report, target: Target) -> None:
             report.fail("RS-16", "banco do esquema do projeto", f"{schema} não aparece em svv_all_schemas: a sessão não o enxerga")
         else:
             schema_database, schema_kind = places[0]
-            # Sem a variável, o alvo toma o banco da leitura, para o USE e o nome em três partes saírem certos.
+            # Sem a variável, o alvo toma o banco da leitura, para o USE e o nome em três partes
+            # saírem certos.
             if schema_kind.lower() == "shared" and not target.share_database:
                 target.share_database = schema_database
                 report.line(f"SERIALIZE_DB_REDSHIFT_SHARE_DATABASE ausente; a leitura diz {schema_database}")
@@ -768,11 +811,11 @@ def session(report: Report, target: Target) -> None:
             report.value("REDSHIFT_TABLE_NAME", target.qualified("<tabela>"))
             report.value("REDSHIFT_TABLE_FULL_NAME", target.fully_qualified("<tabela>"))
 
-    # RS-17: escrever num banco de datashare exige o patch 186 (1.0.78890 no serverless, 1.0.78881 no
-    # provisionado), isolamento de snapshot no banco que recebe a escrita e 64 slices ou mais no
-    # consumidor. Sem um deles, o CREATE, o COPY e o INSERT da publicação são recusados. O que a sessão
-    # não lê (stv_slices é negada a um usuário comum, e o isolamento do produtor vem UNKNOWN) não
-    # reprova: o CREATE TABLE da suíte é o teste, e passou no ambiente alvo em 2026-09-20.
+    # RS-17: escrever num banco de datashare exige o patch 186 (1.0.78890 no serverless, 1.0.78881
+    # no provisionado), isolamento de snapshot no banco que recebe a escrita e 64 slices ou mais no
+    # consumidor. Sem um deles, o CREATE, o COPY e o INSERT da publicação são recusados. O que a
+    # sessão não lê (stv_slices é negada a um usuário comum, e o isolamento do produtor vem UNKNOWN)
+    # não reprova: o CREATE TABLE da suíte é o teste, e passou no ambiente alvo em 2026-09-20.
     if not schema_kind:
         report.note("RS-17", "escrita no banco do datashare", "banco do esquema não lido (RS-16)")
     elif schema_kind.lower() != "shared":
@@ -789,10 +832,10 @@ def session(report: Report, target: Target) -> None:
         )
         getattr(report, status)("RS-17", "escrita no banco do datashare", verdict)
 
-    # RS-19: depois do USE, esquema.tabela resolve no banco do datashare, que é como o CREATE, o COPY e
-    # o UNLOAD passaram (examples/redshift_copy_unload.py e redshift_manifest.py, este com os dois
-    # comandos de manifesto em 2026-09-21) e como tests/conftest.py abre cada conexão. A prova da troca
-    # é resolver um nome em duas partes de uma tabela que svv_all_tables lista no esquema:
+    # RS-19: depois do USE, esquema.tabela resolve no banco do datashare, que é como o CREATE, o
+    # COPY e o UNLOAD passaram (examples/redshift_copy_unload.py e redshift_manifest.py, este com os
+    # dois comandos de manifesto em 2026-09-21) e como tests/conftest.py abre cada conexão. A prova
+    # da troca é resolver um nome em duas partes de uma tabela que svv_all_tables lista no esquema:
     # current_database() continuou respondendo o banco da conexão depois do USE (ambiente alvo,
     # 2026-09-21), então ele é leitura, não critério. Nada é criado, alterado nem apagado.
     share = target.share_database
@@ -825,12 +868,11 @@ def session(report: Report, target: Target) -> None:
             else:
                 report.fail("RS-19", "USE no banco do datashare", f"{target.qualified(probe_table)} não resolveu depois do USE {share}: {report.last_reason}; a biblioteca depende da troca")
 
-    # RS-5 e RS-8: no esquema do projeto, USAGE e CREATE, e quantas tabelas já têm o prefixo da
-    # biblioteca. has_schema_privilege e svv_table_info enxergam o banco da sessão: num esquema local
-    # respondem direto; num compartilhado, só depois do USE, e o que respondem lá ainda não foi lido no
-    # ambiente alvo, então uma resposta negativa é leitura e não reprovação, porque quem concede
-    # USAGE e CREATE é o produtor e o CREATE TABLE da suíte é o teste. svv_all_tables cruza bancos e é a
-    # lista provada num esquema compartilhado.
+    # RS-5 e RS-8: USAGE e CREATE no esquema, e as tabelas com o prefixo da biblioteca.
+    # has_schema_privilege e svv_table_info enxergam o banco da sessão, e num esquema compartilhado
+    # só depois do USE: lá, no ambiente alvo em 2026-09-23, a primeira respondeu USAGE e CREATE
+    # falsos onde o CREATE TABLE dos exemplos passou, e a segunda foi negada (42501). Uma resposta
+    # negativa lá é leitura, e svv_all_tables, que cruza bancos, é a lista provada.
     shared = bool(schema_kind) and schema_kind.lower() == "shared"
     if not schema:
         report.note("RS-5", "privilégios no esquema", "sem SERIALIZE_DB_REDSHIFT_SCHEMA")
@@ -869,7 +911,8 @@ def session(report: Report, target: Target) -> None:
                 for row in (matching_rows(found, database_name=schema_database or "", schema_name=schema) if found else [])
             ]
             where = f"{schema_database}.{schema}"
-            # Depois do USE, svv_table_info é leitura a mais: as linhas e o tamanho, que svv_all_tables não traz, e se ela alcança o esquema.
+            # Depois do USE, svv_table_info é leitura a mais: as linhas e o tamanho, que
+            # svv_all_tables não traz, e se ela alcança o esquema.
             if used_share:
                 report.call(
                     f"svv_table_info do esquema {schema!r} depois do USE",
@@ -895,12 +938,16 @@ def session(report: Report, target: Target) -> None:
     connection.close()
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # Seção 5: quem alcança o S3
 
 
 class Principal(NamedTuple):
-    """Uma identidade que a seção 5 simula: o rótulo, o ARN, o que a impede antes do S3 e o que ficou sem leitura."""
+    """Uma identidade que a seção 5 simula.
+
+    ``label`` é o rótulo, ``arn`` o ARN, ``blocker`` o que a impede antes do S3 e ``doubt`` o que
+    ficou sem leitura.
+    """
 
     label: str
     arn: str
@@ -909,7 +956,10 @@ class Principal(NamedTuple):
 
 
 def caller_credentials() -> tuple[object, object | None]:
-    """As credenciais da sessão ``boto3`` congeladas e a expiração que o provedor expõe, ou ``None``."""
+    """As credenciais congeladas da sessão ``boto3`` e a expiração que o provedor expõe.
+
+    A expiração é ``None`` quando o provedor não a expõe; sem credenciais, levanta ``RuntimeError``.
+    """
     import boto3
 
     found = boto3.Session().get_credentials()
@@ -919,7 +969,10 @@ def caller_credentials() -> tuple[object, object | None]:
 
 
 def credential_text(access_key: str, token: str | None, expiry: object | None, now: datetime) -> str:
-    """O que o relatório diz das credenciais de quem chama: o prefixo da chave, se há ``SESSION_TOKEN`` e quando expiram; o segredo nunca."""
+    """O que o relatório diz das credenciais de quem chama.
+
+    São o prefixo da chave, se há ``SESSION_TOKEN`` e quando expiram; o segredo nunca entra.
+    """
     text = f"chave {access_key[:4]}…, SESSION_TOKEN {'presente' if token else 'ausente'}"
     if isinstance(expiry, datetime) and expiry.tzinfo is not None:
         minutes = (expiry - now).total_seconds() / 60
@@ -928,12 +981,12 @@ def credential_text(access_key: str, token: str | None, expiry: object | None, n
 
 
 def copy_principals(iam_role: str | None, namespace_roles: tuple[list[str], list[str]] | None, caller_arn: str | None) -> tuple[list[Principal], str | None]:
-    """Quem alcança o S3 no ``COPY`` e no ``UNLOAD``, para a simulação, ou o motivo de não haver ninguém.
+    """Quem alcança o S3 no ``COPY`` e no ``UNLOAD``, ou o motivo de não haver ninguém a simular.
 
-    Sem ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, o comando leva as credenciais de quem chama, e a identidade
-    simulada é a do STS, como papel. Com ``default``, é o papel padrão do namespace; com um ARN, é
-    ele, e um ARN que o namespace não tem ganha o bloqueio, porque o Redshift só aceita papel
-    associado; um namespace que a seção 2 não leu deixa a dúvida.
+    Sem ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, o comando leva as credenciais de quem chama, e a
+    identidade simulada é a do STS, como papel. Com ``default``, é o papel padrão do namespace; com
+    um ARN, é ele, e um ARN que o namespace não tem ganha o bloqueio, porque o Redshift só aceita
+    papel associado; um namespace que a seção 2 não leu deixa a dúvida.
     """
     if not iam_role:
         if caller_arn:
@@ -957,14 +1010,19 @@ def copy_principals(iam_role: str | None, namespace_roles: tuple[list[str], list
 
 
 def copy_role(report: Report, target: Target) -> None:
-    """Seção 5: ``RS-18`` (as credenciais de quem chama) e ``RS-11`` (se quem vai alcançar o S3 no ``COPY`` e no ``UNLOAD`` tem permissão sob a raiz, pela simulação de política do IAM)."""
+    """Seção 5, quem alcança o S3.
+
+    Checagens: ``RS-18`` (as credenciais de quem chama) e ``RS-11`` (se quem vai alcançar o S3 no
+    ``COPY`` e no ``UNLOAD`` tem permissão sob a raiz, pela simulação de política do IAM).
+    """
     import boto3
 
     report.h1("Quem alcança o S3 no COPY e no UNLOAD")
 
     # RS-18: sem SERIALIZE_DB_REDSHIFT_IAM_ROLE, o COPY e o UNLOAD levam as credenciais da sessão no
-    # texto do comando (examples/redshift_copy_unload.py). Elas expiram, e um comando montado antes da
-    # renovação falha: a biblioteca as pede a cada comando, e a expiração diz quanto um COPY pode durar.
+    # texto do comando (examples/redshift_copy_unload.py). Elas expiram, e um comando montado antes
+    # da renovação falha: a biblioteca as pede a cada comando, e a expiração diz quanto um COPY
+    # pode durar.
     frozen = report.call(
         "boto3.Session().get_credentials()",
         caller_credentials,
@@ -980,6 +1038,7 @@ def copy_role(report: Report, target: Target) -> None:
         else:
             report.ok("RS-18", "credenciais de quem chama", f"{text}: o COPY e o UNLOAD as levam no texto do comando, que nunca vai para log")
 
+    # A raiz S3 que a simulação avalia; sem uma raiz s3://, RS-11 é leitura.
     root, source = probelib.s3_root(sys.argv)
     if not root.startswith("s3://"):
         report.line(probelib.NO_ROOT)
@@ -987,8 +1046,8 @@ def copy_role(report: Report, target: Target) -> None:
         return
     report.value("S3_ROOT", f"{root} (por {source})")
 
-    # Quem a simulação avalia é quem a biblioteca vai mandar ao S3: a identidade da sessão, ou o papel
-    # que SERIALIZE_DB_REDSHIFT_IAM_ROLE nomeia. Os demais papéis do namespace ficam em RS-6.
+    # Quem a simulação avalia é quem a biblioteca vai mandar ao S3: a identidade da sessão, ou o
+    # papel que SERIALIZE_DB_REDSHIFT_IAM_ROLE nomeia. Os demais papéis do namespace ficam em RS-6.
     caller_arn = None
     if not target.iam_role:
         caller = report.call(
@@ -1008,7 +1067,8 @@ def copy_role(report: Report, target: Target) -> None:
     resources = [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"]
     iam = boto3.client("iam", config=short_config(2, 5, 1))
 
-    # O IAM não tem endpoint VPC em todo ambiente; sem o teste, cada simulação espera por endereço resolvido.
+    # O IAM não tem endpoint VPC em todo ambiente; sem o teste, cada simulação esperaria o tempo
+    # limite em cada endereço resolvido.
     alcance, leitura = probelib.endpoint_reachable(iam)
     report.line(f"alcance do IAM: {leitura}\n")
     if not alcance:
@@ -1016,8 +1076,11 @@ def copy_role(report: Report, target: Target) -> None:
         return
 
     def render_decisions(found: dict) -> str:
+        """As decisões da simulação como tabela: a ação e a decisão."""
         return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])
 
+    # RS-11: uma ação negada ou um bloqueio reprovam; uma dúvida ou a simulação que falha ficam
+    # como leitura.
     for principal in principals:
         who = f"{principal.label} ({principal.arn})"
         if principal.blocker:
@@ -1041,7 +1104,7 @@ def copy_role(report: Report, target: Target) -> None:
             report.ok("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}")
 
 
-# ---------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------
 # main
 
 
