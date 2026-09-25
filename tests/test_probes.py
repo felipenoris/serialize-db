@@ -28,6 +28,7 @@ import hashlib
 import io
 import socket
 import sys
+import tempfile
 import types
 import uuid
 from collections.abc import Iterator
@@ -1687,11 +1688,13 @@ def test_credentials_probe_reads_a_local_table_in_every_round(
     folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A sonda inteira sobre uma tabela Delta local, com uma espera de menos de um segundo: cada
-    cliente lê em cada rodada, os clientes novos leem, nada reprova sem credencial a expirar e a
-    saída é 0."""
+    cliente lê em cada rodada, os clientes novos leem, nada reprova sem credencial a expirar, a
+    saída é 0 e a pasta de cada motor DuckDB, criada na pasta temporária do processo, sai no
+    fim."""
     table = folder / "tabela"
     write_deltalake(str(table), pa.table({"id": [1, 2]}))
     monkeypatch.setattr(probelib, "OUTPUT_DIR", folder)
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.setattr(credentials, "prepare_environment", no_environment_change)
     monkeypatch.setattr(credentials, "container_credential", no_container_credential)
     monkeypatch.setattr(credentials, "credentials_clause", fabricated_clause)
@@ -1714,3 +1717,4 @@ def test_credentials_probe_reads_a_local_table_in_every_round(
     assert every_client in text
     assert "Nenhuma leitura falhou." in text
     assert "4 cliente(s) novo(s) leram" in text
+    assert list(folder.glob("serialize_db_*")) == []

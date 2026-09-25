@@ -4037,3 +4037,66 @@ com o zero. As outras correções estão nas etapas [4](PLAN-STAGE-4.md), [5](PL
 [6](PLAN-STAGE-6.md), [7](PLAN-STAGE-7.md), [8](PLAN-STAGE-8.md), [9](PLAN-STAGE-9.md) e
 [10](PLAN-STAGE-10.md); a troca relê a partição, e `published` carrega cada versão numa staging
 própria ([etapa 5](PLAN-STAGE-5.md)).
+
+## O que a renovação do secret do DuckDB mostrou
+
+Em 2026-09-25, no contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB), com DuckDB 1.5.5
+(`httpfs` e `delta` de `.duckdb/`), deltalake 1.6.6, PyArrow 25.0.1, boto3 1.43.102 e botocore
+1.43.103, as sondas leram o secret do DuckDB para a renovação que o usuário decidiu no mesmo dia, e
+um substituto rodou o código anterior e o novo lado a lado.
+
+- **O secret é do banco.** Os cursores de `cursor()` sobre a mesma conexão veem o secret que um
+  deles recria, e oito cursores recriando o secret ao mesmo tempo, sem lock, deram `Catalog
+  write-write conflict on alter with "serialize_db_s3"` em 1.249 de 1.600 tentativas. O motor
+  divide um lock do secret entre as sessões do banco.
+- **O `key_id` do secret é legível.** Num secret com a chave explícita (`provider=config`),
+  `duckdb_secrets()` mostra o `key_id` sem redação e o `secret` e o `session_token` redigidos, e
+  `renew_duckdb_secret` compara esse `key_id` com a chave da credencial do `boto3`.
+- **A conferência custa meio milissegundo por sessão.** A entrada de `session()` num motor sobre
+  uma raiz S3, com a chave inalterada, levou 485 µs, a leitura de `duckdb_secrets()`, contra
+  1,2 µs numa pasta local (melhor de 3 séries de 2.000 entradas).
+- **O `CREATE SECRET` aceita parâmetros.** `KEY_ID ?` e `SECRET ?` com os valores passados à parte
+  criaram o secret com a chave dada, e um erro de sintaxe no comando repetiu a linha dele com o
+  segredo escrito nela (`Parser Error: syntax error at or near "REGION"`): a biblioteca passa a
+  chave, o segredo e o token como parâmetros.
+- **O botocore troca a chave antes da expiração.** O `RefreshableCredentials` pede uma credencial
+  nova quando faltam menos de 900 s e espera por ela quando faltam menos de 600 s: a chave que o
+  secret recebe na entrada da sessão tem pelo menos 15 minutos pela frente, ou 10 quando a
+  renovação opcional falha.
+- **O motor no substituto.** O moto com uma tabela `cad_contas`, um endpoint de credenciais de
+  contêiner (`AWS_CONTAINER_CREDENTIALS_FULL_URI`) que troca a chave a cada 40 s, cada uma válida
+  por 70 s, e um proxy S3 que responde `400 ExpiredToken` à requisição assinada com a chave
+  vencida. Por 200 s, um motor DuckDB com uma view sobre o `delta_scan` e uma conexão crua de
+  `Storage.duckdb_connect()`, abertos no início e lidos a cada 10 s: no código anterior, os dois
+  falharam a partir de 72 s com `IO Error: DeltaKernel ObjectStoreError (8)`, o secret preso na
+  primeira chave, que a cadeia da extensão `aws` leu do endpoint do contêiner; no novo, o motor
+  leu em todas as rodadas, com o secret na chave nova em 41 s, 83 s, 123 s e 164 s, e a conexão
+  crua, que nada renova, falhou a partir de 72 s. O proxy recusou 39 requisições, todas com a
+  primeira chave.
+- **A sonda no substituto.** Com um IMDS local servindo as mesmas chaves ao delta-rs, que não lê o
+  endpoint do contêiner (`AWS_METADATA_ENDPOINT`), `probes/credentials.py` rodou a cada 12 s até
+  45 s depois da expiração da primeira chave, a sonda e o pacote do commit anterior e os de agora
+  lado a lado. Na anterior, o `delta_scan` da conexão segurada falhou em 2 das 4 rodadas depois da
+  expiração, cada vez que a chave guardada no secret vencia, e o `read_parquet` da mesma rodada
+  renovou o secret, como no alvo: `CR-4` reprovou e a saída foi 2. Na de agora, o motor leu nas 10
+  rodadas, o secret passou à chave nova na primeira rodada depois da troca, 29 s antes da
+  expiração da primeira chave, e a saída foi 0. O delta-rs, o `S3FileSystem` e o `boto3` leram em
+  todas as rodadas das duas, e o proxy recusou 12 requisições, com a primeira e a segunda chave.
+- **As asserções novas no código mudado.** Sem o lock comum, o caso das quatro sessões concorrentes
+  reprovou com o `Catalog write-write conflict`; com a recriação também na entrada reentrante, o
+  secret trocou de chave dentro do bloco (`AKIATERCEIRA` no lugar de `AKIASEGUNDA`); sem a
+  recriação, os dois casos locais do motor reprovaram; com a entrada da sessão fora do tratamento de
+  erro da thread auxiliar, a construção do `stream` esperou sem fim, e o prazo de 10 s do caso a
+  pegou; com a chave, o segredo e o token escritos no texto do comando, o caso de
+  `renew_duckdb_secret` os achou nele; e sem o fechamento do motor da sonda, a pasta dele ficou na
+  pasta temporária do teste.
+- **As sessões do pytest**, sem as variáveis `AWS_*`: sem variável, 218 passaram e 343 foram
+  pulados; com a raiz local, 463 e 98; com a raiz local e o substituto, 560 passaram e só o teste
+  da Data API foi pulado. Os casos novos do secret pedem a extensão `httpfs`, que a esteira do
+  GitHub passa a instalar.
+
+**Consequências**: o secret leva a chave da credencial do `boto3`, e o motor DuckDB o recria na
+entrada de cada sessão quando ela troca, sob um lock comum às sessões do banco (decisão do usuário
+de 2026-09-25). As etapas [3](PLAN-STAGE-3.md), [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md),
+[`PLAN.md`](PLAN.md), [`delta.md`](delta.md) e `docs/index.md` foram revistos; a rodada de
+`probes/credentials.py` no alvo fecha o item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

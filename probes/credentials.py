@@ -18,10 +18,10 @@ espera passar a última das duas expirações, mais ``--margin-minutes``, com o 
 
 - ``delta-rs``: o ``DeltaTable`` de ``delta.open_table``, que a execução guarda, por
   ``update_incremental``, que lista o log, e pela primeira linha do dataset, que lê um arquivo;
-- ``duckdb delta_scan`` e ``duckdb read_parquet``: a conexão de ``Storage.duckdb_connect``, com o
-  secret ``credential_chain`` e ``REFRESH auto`` de ``duckdb_setup`` e o cache de arquivos externos
-  desligado, pela extensão ``delta`` sobre a tabela e pelo ``httpfs`` sobre o menor arquivo, nessa
-  ordem, cada contagem lida até o fim;
+- ``duckdb delta_scan`` e ``duckdb read_parquet``: o ``DuckDBEngine`` que a execução segura, num
+  banco em memória e com o cache de arquivos externos desligado, pela extensão ``delta`` sobre a
+  tabela e pelo ``httpfs`` sobre o menor arquivo, nessa ordem, cada contagem numa sessão do motor,
+  cuja entrada recria o secret do S3 quando a chave do ``boto3`` trocou, e lida até o fim;
 - ``pyarrow``: o ``S3FileSystem`` de ``Storage``, pelo rodapé do menor arquivo;
 - ``boto3``: ``Storage.read_text`` do último commit do log, com um cliente novo por chamada na
   sessão padrão do ``boto3``;
@@ -41,7 +41,8 @@ Depois da espera, clientes novos repetem as leituras: é o controle que separa "
 não renovou a credencial" de "o ambiente perdeu o acesso".
 
 Só leitura: a sonda lê o log e um arquivo de dados da tabela e roda ``select 1`` no Redshift, e
-nada é criado, alterado ou apagado. A escrita do DuckDB no S3 (o ``COPY ... TO`` da exportação) e
+nada é criado, alterado ou apagado; o motor DuckDB cria a sua pasta de transbordo numa pasta nova de
+``tempfile.mkdtemp`` e a apaga no fim. A escrita do DuckDB no S3 (o ``COPY ... TO`` da exportação) e
 um ``COPY`` mais longo que a credencial ficam fora. O relatório sai no terminal e em
 ``probes/output/credentials_<data-hora>.txt``, uma linha por rodada durante a espera; ``Ctrl-C``
 encerra a espera, e o relatório fecha com o que foi lido.
@@ -82,12 +83,12 @@ from typing import TypeVar
 
 import boto3
 import botocore.credentials
-import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 from deltalake import DeltaTable
 
 from serialize_db import delta
+from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.engine.redshift import RedshiftConfig, connect, credentials_clause
 from serialize_db.schema import literal
 from serialize_db.storage import Storage, prepare_environment
@@ -172,8 +173,8 @@ class Held:
 
     readers: dict[str, Callable[[], str]] = dataclasses.field(default_factory=dict)
     """A leitura de cada cliente, pelo nome, na ordem da linha do tempo."""
-    duckdb: duckdb.DuckDBPyConnection | None = None
-    """A conexão do DuckDB, de onde sai a chave guardada no secret."""
+    duckdb: DuckDBEngine | None = None
+    """O motor DuckDB, de onde sai a chave guardada no secret."""
     redshift: object | None = None
     """A conexão do Redshift."""
     redshift_expiry: datetime.datetime | None = None
@@ -387,28 +388,30 @@ def read_delta_table(dt: DeltaTable) -> str:
     return f"versão {dt.version()}, {rows} linha lida"
 
 
-def open_duckdb(storage: Storage) -> duckdb.DuckDBPyConnection:
-    """A conexão de ``Storage.duckdb_connect`` com o cache de arquivos externos desligado, para
-    cada leitura ir ao armazenamento."""
-    connection = storage.duckdb_connect()
-    connection.execute("SET enable_external_file_cache = false")
-    return connection
+def open_duckdb(storage: Storage) -> DuckDBEngine:
+    """O motor DuckDB de uma execução, num banco em memória e com o cache de arquivos externos
+    desligado, para cada leitura ir ao armazenamento."""
+    engine = DuckDBEngine(DuckDBConfig(database=":memory:"), "credentials", storage)
+    with engine.session() as connection:
+        connection.execute("SET enable_external_file_cache = false")
+    return engine
 
 
-def read_count(connection: duckdb.DuckDBPyConnection, source: str) -> str:
-    """As linhas de uma função de leitura do DuckDB, como ``delta_scan('<uri>')``.
-
-    O resultado é lido até o fim, o que encerra a consulta: o secret que o ``httpfs`` renova numa
-    consulta só fica quando ela termina, e a consulta deixada aberta por ``fetchone`` é desfeita
-    pela seguinte, com a renovação."""
-    rows = connection.execute(f"SELECT count(*) FROM {source}").fetchall()[0][0]
+def read_count(engine: DuckDBEngine, source: str) -> str:
+    """As linhas de uma função de leitura do DuckDB, como ``delta_scan('<uri>')``, numa sessão do
+    motor: a entrada recria o secret do S3 quando a chave do ``boto3`` trocou, e o resultado é lido
+    até o fim, o que encerra a consulta."""
+    with engine.session() as connection:
+        rows = connection.execute(f"SELECT count(*) FROM {source}").fetchall()[0][0]
     return f"{rows} linhas"
 
 
-def duckdb_secret_key(connection: duckdb.DuckDBPyConnection) -> str | None:
-    """A impressão digital da chave que o secret do S3 guarda; ``None`` sem o secret."""
-    rows = connection.execute("SELECT secret_string FROM duckdb_secrets() WHERE name = ?",
-                              [DUCKDB_SECRET]).fetchall()
+def duckdb_secret_key(engine: DuckDBEngine) -> str | None:
+    """A impressão digital da chave que o secret do S3 do motor guarda, lida numa sessão, depois da
+    recriação que a entrada faz; ``None`` sem o secret."""
+    with engine.session() as connection:
+        rows = connection.execute("SELECT secret_string FROM duckdb_secrets() WHERE name = ?",
+                                  [DUCKDB_SECRET]).fetchall()
     if not rows:
         return None
     return fingerprint(secret_key_id(rows[0][0]))
@@ -522,15 +525,15 @@ def open_s3_clients(report: Report, storage: Storage, held: Held) -> tuple[str, 
     commit = f"_delta_log/{dt.version():020d}.json"
     held.readers[DELTA_RS] = functools.partial(read_delta_table, dt)
 
-    # O DuckDB lê a tabela pela extensão delta e o menor arquivo pelo httpfs, nessa ordem.
-    connection = report.call("storage.duckdb_connect(), sem o cache de arquivos externos",
-                             functools.partial(open_duckdb, storage), render=None)
-    if connection is not None:
-        held.duckdb = connection
+    # O motor DuckDB lê a tabela pela extensão delta e o menor arquivo pelo httpfs, nessa ordem.
+    engine = report.call("DuckDBEngine num banco em memória, sem o cache de arquivos externos",
+                         functools.partial(open_duckdb, storage), render=None)
+    if engine is not None:
+        held.duckdb = engine
         held.readers[DUCKDB_DELTA] = functools.partial(
-            read_count, connection, f"delta_scan({literal(storage.uri)})")
+            read_count, engine, f"delta_scan({literal(storage.uri)})")
         held.readers[DUCKDB_PARQUET] = functools.partial(
-            read_count, connection, f"read_parquet({literal(storage.uri_of(sample))})")
+            read_count, engine, f"read_parquet({literal(storage.uri_of(sample))})")
 
     # O S3FileSystem do Storage, o mesmo em todas as rodadas, e o boto3, com um cliente por
     # chamada na sessão padrão.
@@ -626,12 +629,9 @@ def read_fresh_delta_table(storage: Storage) -> str:
 
 
 def read_fresh_duckdb(storage: Storage, source: str) -> str:
-    """Uma conexão nova do DuckDB, a contagem e o fechamento."""
-    connection = open_duckdb(storage)
-    try:
-        return read_count(connection, source)
-    finally:
-        connection.close()
+    """Um motor DuckDB novo, a contagem e o fechamento."""
+    with open_duckdb(storage) as engine:
+        return read_count(engine, source)
 
 
 def read_fresh_redshift(config: RedshiftConfig) -> str:
@@ -763,7 +763,7 @@ def checks(report: Report, storage: Storage, rounds: list[Round], controls: list
 def close_clients(held: Held) -> None:
     """Fecha as conexões seguradas; o erro de uma não impede o fechamento da outra."""
     if held.duckdb is not None:
-        held.duckdb.close()
+        held.duckdb.cleanup()
     if held.redshift is not None:
         # A conexão que o servidor derrubou levanta no fechamento.
         with contextlib.suppress(Exception):

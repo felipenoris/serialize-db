@@ -205,6 +205,16 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   e a mesma pasta de transbordo; o `cleanup` dele fecha só o cursor. O cursor nasce sem o lock da
   sessão principal: `cursor()` voltou em 0,04 ms com uma ordenação em curso na conexão (leitura de
   2026-09-23), e a sessão a mais pedida durante um comando longo não espera por ele.
+  No S3, o motor segura a credencial de `aws_credentials()` da [etapa 3](PLAN-STAGE-3.md),
+  resolvida antes da pasta e do banco, e a entrada de `session()` que toma o lock chama
+  `renew_duckdb_secret`, que recria o secret quando a chave da credencial trocou (decisão do
+  usuário de 2026-09-25); a entrada reentrante não o toca, porque o bloco pode ter uma transação
+  aberta. As sessões de `new_session()` dividem a credencial e um lock do secret: sem o lock
+  comum, oito cursores do mesmo banco recriando o secret deram `Catalog write-write conflict on
+  alter with "serialize_db_s3"` em 1.249 de 1.600 tentativas (sonda de 2026-09-25,
+  [`POC.md`](POC.md)). A entrada que falha na thread auxiliar do `stream` marca o fim com o erro,
+  que a construção levanta. Um comando que dure mais que a chave do secret depois da entrada ainda
+  falha com a chave vencida.
   Os arquivos intermediários de `stream` e de `loader` ficam na pasta de transbordo e saem no
   `close`.
 - **`ingest`** cria `VIEW <nome do modelo> AS SELECT * FROM delta_scan('<uri>', version := <v>)`,
@@ -307,7 +317,7 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
 | `checks`, `audit_sql` | Modelo aprovado por `check_models`; `published` informado quando alguma chave não inclui a coluna de partição. | Um `Check` por consulta, com o texto renderizável nos dois dialetos; sem conexão. |
-| `DuckDBEngine` | Extensões na pasta configurada. | Uma conexão sobre o arquivo do banco, a sessão, sob um `RLock`; nenhum download; o `memory_limit` e as `threads` lidos do ambiente, ou os informados, e o espaço livre de `temp_directory` no log. |
+| `DuckDBEngine` | Extensões na pasta configurada; no S3, credencial na cadeia do `boto3`. | Uma conexão sobre o arquivo do banco, a sessão, sob um `RLock`; nenhum download; o `memory_limit` e as `threads` lidos do ambiente, ou os informados, e o espaço livre de `temp_directory` no log. |
 | `ingest` | Tabela Delta legível na versão pedida. | Uma view ou tabela com o nome do modelo, presa à versão; a tabela atual pode avançar sem afetar a leitura. |
 | `published` | Tabela Delta legível na versão fixada. | Um `FromClause` sobre essa versão; nenhum objeto no sandbox, e o nome do modelo livre para o `loader`. |
 | `new_session` | O motor aberto. | Outra conexão ao mesmo banco, com o seu lock; o que a sessão principal confirmou visível, as tabelas temporárias dela não; o fim do `with` fecha só essa conexão. |
@@ -336,6 +346,9 @@ uma chave única.
 | Pasta temporária | `test_temporary_folder_is_created_and_removed` | Sem `temp_directory`, a pasta nova sai inteira no `cleanup`. |
 | Sessão | `test_engine_config_and_single_session` | `duckdb_settings()` com os valores pedidos; sem eles, metade da memória disponível e a cota de CPU de um `/proc` e de um cgroup fabricados, e o `memory_limit` informado no lugar do lido; o banco em arquivo dentro da pasta de `tempfile.mkdtemp`; três threads usam a mesma sessão, uma de cada vez; a tabela temporária criada por uma é visível às outras; uma primitiva chamada dentro de `session()` não trava. |
 | Sessão a mais | `test_new_session_runs_beside_the_main_one` | A sessão de `new_session` vê a tabela confirmada pela principal e não a temporária dela, roda enquanto a principal está num bloco `session()`, e a principal vê o que ela confirma; o fim do `with` fecha só o cursor, e o arquivo do banco continua. |
+| Recriação do secret | `test_session_recreates_the_s3_secret_when_the_key_changes` (pulado sem a extensão `httpfs`) | Numa raiz S3 que o teste não lê, com uma credencial cuja chave o teste troca: nenhuma recriação com a chave da abertura; uma só entre quatro sessões de `new_session` que entram ao mesmo tempo; nenhuma na primitiva chamada dentro de `session()` e uma na entrada seguinte; e uma na entrada do `stream`, pela thread auxiliar. |
+| Entrada que falha | `test_stream_raises_the_error_of_the_session_entry` (pulado sem a extensão `httpfs`) | A credencial vencida cujo endpoint não responde: `query` levanta o `CredentialRetrievalError`, e a construção do `stream` o levanta em vez de esperar o primeiro lote. |
+| Chave vencida no bucket | `test_delta_scan_reads_after_the_secret_holds_a_stale_key` (`local` e `s3`) | Com uma chave que o S3 não conhece posta no secret dentro de um bloco, a entrada seguinte o recria com a chave da credencial que o motor segura, e a view sobre o `delta_scan` conta as linhas. |
 | Ingestão presa | `test_ingest_pins_the_version` | Um `append` na tabela depois da abertura não aparece na view nem na tabela materializada. |
 | Poda da ingestão | `test_ingest_opens_only_the_range_of_partitions` | A ingestão de partições contíguas e de uma lista salteada abre só os arquivos do intervalo, lidos pelo log `FileSystem` do DuckDB, e traz só as linhas pedidas. |
 | Parâmetros | `test_statement_parameters_expand_in_lists` | Um statement com `IN` de lista, `NOT IN` e `bindparam(..., expanding=True)` roda por `query` e por `stream`; um nome de parâmetro a mais ou a menos é `SqlError` antes de rodar. |

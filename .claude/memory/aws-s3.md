@@ -62,9 +62,8 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   secret, and the aws extension docs say some endpoints need periodic refreshing, which
   `REFRESH auto` requests and `CHAIN 'sts'` and `'web_identity'` switch on by themselves (probe of
   2026-09-24; when the refresh runs, the page does not say). `storage.duckdb_setup` and the
-  migration script create the secret with `REFRESH auto` (user decision of 2026-09-24); a
-  connection crossing the container credential's rotation was read in the target on 2026-09-25
-  (below). `plan/POC.md`,
+  migration script created the secret with `REFRESH auto` (user decision of 2026-09-24) until the
+  target read on 2026-09-25 that only `httpfs` triggers it (below). `plan/POC.md`,
   `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-3.md`
 - In the stand-in of 2026-09-25 (moto behind a proxy answering `400 ExpiredToken` to a key past
   its 70 s lifetime, a local IMDS issuing a new key every 40 s, because delta-rs ignored
@@ -90,8 +89,19 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `_delta_log/_last_checkpoint`), the same round's `read_parquet` read, the secret moved to the
   new key, and `delta_scan` read in the three later rounds. `credentials_clause` followed the
   container key from 18:53:55 on (a new `boto3` session per call). botocore refreshes a held
-  container credential 15 minutes (advisory) to 10 minutes (mandatory) before its expiry. How
-  the library renews the DuckDB secret awaits the user. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  container credential 15 minutes (advisory) to 10 minutes (mandatory) before its expiry.
+  `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+- The user chose on 2026-09-25 (card "Chave boto3") the DuckDB secret built from the key of the
+  `boto3` credential (`storage.aws_credentials`; `KEY_ID ?`, `SECRET ?` and `SESSION_TOKEN ?` as
+  command parameters, since a DuckDB syntax error repeats the command's line; without the `aws`
+  extension), which the DuckDB engine recreates at the entry of each session when the key
+  changed (`renew_duckdb_secret`, comparing the `key_id` that `duckdb_secrets()` shows). In the
+  stand-in of that day, with a container credentials endpoint (`AWS_CONTAINER_CREDENTIALS_FULL_URI`,
+  a key every 40 s, each valid 70 s) and a local IMDS for delta-rs (`AWS_METADATA_ENDPOINT`), the
+  old engine failed from 72 s and the new one read every round; `probes/credentials.py`, which
+  reads DuckDB through the engine since, failed `CR-4` on the old code and passed on the new.
+  With `FULL_URI`, `S3FileSystem` and `boto3` renewed, unlike the IMDS stand-in. The target run
+  of the probe is pending. `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `plan/OPEN_QUESTIONS.md`
 
 ## The target's network, read on 2026-09-21
 

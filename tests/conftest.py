@@ -63,7 +63,7 @@ pytest.
 O que cada suíte exige do ambiente: a suíte S3 precisa de credenciais da AWS que o ``boto3``
 encontre (papel do contêiner ou da instância, variáveis ``AWS_*`` ou perfil), das permissões
 ``s3:ListBucket``, ``s3:GetObject``, ``s3:PutObject`` e ``s3:DeleteObject`` sob o prefixo (e as
-de KMS quando o bucket usa SSE-KMS), e das extensões ``httpfs``, ``delta`` e ``aws`` do DuckDB. A
+de KMS quando o bucket usa SSE-KMS), e das extensões ``httpfs`` e ``delta`` do DuckDB. A
 suíte local precisa só da extensão ``delta``. A suíte Redshift precisa de
 ``redshift-serverless:GetWorkgroup`` e ``GetCredentials`` no workgroup, do ``GRANT`` que deixa o
 usuário criar tabelas no esquema, e de ``redshift-data:ExecuteStatement``, ``DescribeStatement`` e
@@ -203,12 +203,41 @@ def duckdb_extension_directory() -> str | None:
     return str(local) if local.is_dir() else None
 
 
-def duckdb_s3_secret(name: str) -> str:
-    """O ``CREATE SECRET`` S3 do DuckDB com as opções de ``Storage.duckdb_setup``: a cadeia de
-    credenciais, a região e, com ``AWS_ENDPOINT_URL``, o endpoint, como no substituto local."""
-    from serialize_db.storage import _duckdb_secret_options
+def duckdb_test_config() -> dict[str, object]:
+    """As opções de uma conexão do DuckDB de teste: a pasta de extensões configurada, e a
+    instalação e a carga automáticas desligadas."""
+    config: dict[str, object] = {
+        "autoinstall_known_extensions": False,
+        "autoload_known_extensions": False,
+    }
+    directory = duckdb_extension_directory()
+    if directory:
+        config["extension_directory"] = directory
+    return config
 
-    return f"CREATE SECRET {name} ({', '.join(_duckdb_secret_options())})"
+
+def require_duckdb_extension(name: str) -> None:
+    """Pula o teste quando a extensão ``name`` do DuckDB não está na pasta de extensões."""
+    import duckdb
+
+    connection = duckdb.connect(config=duckdb_test_config())
+    try:
+        connection.execute(f"LOAD {name}")
+    except duckdb.IOException as error:
+        pytest.skip(f"extensão {name} do DuckDB fora da pasta de extensões: "
+                    f"{str(error).splitlines()[0]}")
+    finally:
+        connection.close()
+
+
+def create_duckdb_s3_secret(connection: object) -> None:
+    """Cria na conexão o secret S3 de ``Storage.duckdb_setup``: a chave que a cadeia do ``boto3``
+    resolve agora, a região e, com ``AWS_ENDPOINT_URL``, o endpoint, como no substituto local. O
+    secret guarda essa chave pela sessão, e a suíte S3 levou 225,5 s no ambiente alvo em
+    2026-09-25."""
+    from serialize_db.storage import _create_duckdb_secret, aws_credentials
+
+    _create_duckdb_secret(connection, aws_credentials().get_frozen_credentials())
 
 
 def local_root() -> Path | None:
@@ -256,7 +285,7 @@ USAGE = {
     "s3": (
         "SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest -m s3",
         "grava só em serialize-db-poc/<id>/ sob o prefixo e o apaga no fim; precisa de credenciais "
-        "que o boto3 encontre e das extensões httpfs, delta e aws do DuckDB",
+        "que o boto3 encontre e das extensões httpfs e delta do DuckDB",
     ),
     "redshift": (
         "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=esquema SERIALIZE_DB_REDSHIFT_WORKGROUP=workgroup "

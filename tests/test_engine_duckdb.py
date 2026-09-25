@@ -22,6 +22,7 @@ import dataclasses
 import datetime
 import decimal
 import json
+import logging
 import re
 import tempfile
 import threading
@@ -31,6 +32,8 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import botocore.credentials
+import botocore.exceptions
 import duckdb
 import pandas as pd
 import pyarrow as pa
@@ -39,13 +42,19 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from conftest import LocalLocation, opened_partition_folders, record
+from conftest import (
+    LocalLocation,
+    S3Location,
+    opened_partition_folders,
+    record,
+    require_duckdb_extension,
+)
 from serialize_db import delta, resources, schema
 from serialize_db.audit import AuditReport, CheckResult
 from serialize_db.engine import Engine
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine, DuckDBStream
 from serialize_db.errors import ContractError, RegistrationRefused, SandboxError, SqlError
-from serialize_db.storage import Storage
+from serialize_db.storage import Storage, _create_duckdb_secret, aws_credentials
 
 pytestmark = pytest.mark.local
 
@@ -309,6 +318,142 @@ def test_new_session_runs_beside_the_main_one(setup: Setup) -> None:
         other.query("CREATE TABLE da_outra AS SELECT 1 AS x")
     assert count_of(engine, "da_outra") == 1
     assert setup.database_file().exists()
+
+
+# ---------------------------------------------------------------- o secret do S3
+
+
+def stored_key(connection: duckdb.DuckDBPyConnection) -> str:
+    """A chave que o secret do S3 guarda, do ``secret_string`` de ``duckdb_secrets()``."""
+    rows = connection.execute(
+        "SELECT secret_string FROM duckdb_secrets() WHERE name = 'serialize_db_s3'").fetchall()
+    return re.search(r"(?:^|;)key_id=([^;]*)", rows[0][0]).group(1)
+
+
+def renewals(caplog: pytest.LogCaptureFixture) -> int:
+    """Quantas vezes o motor recriou o secret do S3, pelo log."""
+    return sum(1 for entry in caplog.records if "secret do S3 recriado" in entry.getMessage())
+
+
+def engine_over_s3(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch,
+                   opening: object, held: object) -> DuckDBEngine:
+    """O motor sobre uma raiz S3 que o teste não lê, com o sandbox na raiz local: ``opening`` é a
+    credencial da cadeia na abertura da conexão, e ``held`` a que o motor segura."""
+    require_duckdb_extension("httpfs")
+    monkeypatch.setenv("AWS_REGION", "sa-east-1")
+    monkeypatch.setattr("serialize_db.storage.aws_credentials", lambda: opening)
+    monkeypatch.setattr("serialize_db.engine.duckdb.aws_credentials", lambda: held)
+    folder = Path(local_location.child(f"engine_s3/{uuid.uuid4().hex[:8]}"))
+    config = DuckDBConfig(threads=2, temp_directory=str(folder))
+    return DuckDBEngine(config, EXECUTION_ID, Storage.for_uri("s3://sem-acesso/delta"))
+
+
+def test_session_recreates_the_s3_secret_when_the_key_changes(
+        local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture) -> None:
+    """Numa raiz S3, a entrada da sessão recria o secret quando a chave da credencial troca, uma
+    vez só entre sessões concorrentes; a entrada reentrante não o toca, e a do ``stream``, na
+    thread auxiliar, também o recria."""
+    caplog.set_level(logging.INFO, logger="serialize_db.engine.duckdb")
+    credentials = botocore.credentials.Credentials("AKIAPRIMEIRA", "segredo", "token")
+    with engine_over_s3(local_location, monkeypatch, credentials, credentials) as engine:
+        # A chave da abertura: nada a recriar.
+        engine.query("SELECT 1")
+        assert renewals(caplog) == 0
+
+        # A chave troca, e quatro sessões entram ao mesmo tempo: uma recria o secret, e as outras
+        # o encontram recriado. Sem o lock comum, as recriações conflitariam no catálogo.
+        credentials.access_key = "AKIASEGUNDA"
+        sessions = [engine.new_session() for _ in range(4)]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(session.query, "SELECT 1 AS um") for session in sessions]
+            results = [future.result(timeout=30) for future in futures]
+        for session in sessions:
+            session.cleanup()
+        assert [result.column("um")[0].as_py() for result in results] == [1, 1, 1, 1]
+        assert renewals(caplog) == 1
+
+        # Dentro do bloco, a primitiva reentrante não recria; a entrada seguinte, sim.
+        with engine.session() as connection:
+            assert stored_key(connection) == "AKIASEGUNDA"
+            credentials.access_key = "AKIATERCEIRA"
+            engine.query("SELECT 1")
+            assert stored_key(connection) == "AKIASEGUNDA"
+        engine.query("SELECT 1")
+        assert renewals(caplog) == 2
+
+        # O stream entra na sessão pela thread auxiliar.
+        credentials.access_key = "AKIAQUARTA"
+        with engine.stream("SELECT range AS i FROM range(3)") as stream:
+            assert stream.read_all().num_rows == 3
+        assert renewals(caplog) == 3
+        with engine.session() as connection:
+            assert stored_key(connection) == "AKIAQUARTA"
+
+
+def unreachable_endpoint() -> dict[str, str]:
+    """O endpoint de credenciais que não responde, pedido pela credencial vencida."""
+    raise botocore.exceptions.CredentialRetrievalError(
+        provider="container-role", error_msg="o endpoint de credenciais não respondeu")
+
+
+def test_stream_raises_the_error_of_the_session_entry(local_location: LocalLocation,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    """A credencial vencida cujo endpoint não responde faz a entrada da sessão falhar: ``query``
+    levanta o erro, e o ``stream``, cuja sessão entra na thread auxiliar, o levanta na construção
+    em vez de esperar pelo primeiro lote."""
+    opening = botocore.credentials.Credentials("AKIAABERTURA", "segredo", "token")
+    expired = botocore.credentials.RefreshableCredentials.create_from_metadata(
+        metadata={"access_key": "AKIAVENCIDA", "secret_key": "segredo", "token": "token",
+                  "expiry_time": "2026-01-01T00:00:00+00:00"},
+        refresh_using=unreachable_endpoint, method="container-role")
+    with engine_over_s3(local_location, monkeypatch, opening, expired) as engine:
+        with pytest.raises(botocore.exceptions.CredentialRetrievalError):
+            engine.query("SELECT 1")
+
+        # A construção numa thread à parte, com prazo: sem o fim marcado pela thread auxiliar, ela
+        # esperaria o primeiro lote para sempre.
+        outcome: dict[str, BaseException] = {}
+
+        def open_stream() -> None:
+            try:
+                engine.stream("SELECT 1 AS um")
+            except botocore.exceptions.CredentialRetrievalError as error:
+                outcome["error"] = error
+
+        opener = threading.Thread(target=open_stream, daemon=True)
+        opener.start()
+        opener.join(timeout=10)
+        assert not opener.is_alive()
+        assert "error" in outcome
+
+
+@pytest.mark.s3
+def test_delta_scan_reads_after_the_secret_holds_a_stale_key(
+        local_location: LocalLocation, s3_location: S3Location,
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """No bucket, um secret com uma chave que o S3 não conhece faz o papel da chave vencida: a
+    entrada da sessão seguinte o recria com a chave da credencial do ``boto3``, e o ``delta_scan``
+    lê a tabela; no ambiente alvo, sem a recriação, o S3 recusaria a chave."""
+    # A credencial da cadeia resolvida uma vez: o teste sabe a chave que o motor segura.
+    frozen = aws_credentials().get_frozen_credentials()
+    held = botocore.credentials.Credentials(frozen.access_key, frozen.secret_key, frozen.token)
+    monkeypatch.setattr("serialize_db.engine.duckdb.aws_credentials", lambda: held)
+    folder = Path(local_location.child(f"engine_s3/{uuid.uuid4().hex[:8]}"))
+    storage = Storage.for_uri(s3_location.child(f"engine_s3/{uuid.uuid4().hex[:8]}"))
+    config = DuckDBConfig(threads=2, temp_directory=str(folder))
+    with DuckDBEngine(config, EXECUTION_ID, storage) as engine:
+        version = published_accounts(Setup(storage, engine, folder), ["A", "B", "C"])
+        engine.ingest(ACCOUNTS, storage.uri_of("prd/cad_contas"), version)
+
+        # A chave desconhecida entra dentro do bloco, depois da entrada que a conferiria.
+        stale = botocore.credentials.ReadOnlyCredentials("AKIAVENCIDA", "vencida", None)
+        with engine.session() as connection:
+            _create_duckdb_secret(connection, stale)
+            assert stored_key(connection) == "AKIAVENCIDA"
+        assert count_of(engine, "cad_contas") == 3
+        with engine.session() as connection:
+            assert stored_key(connection) == held.access_key
 
 
 # ---------------------------------------------------------------- a leitura do Delta

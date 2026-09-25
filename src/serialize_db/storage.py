@@ -13,7 +13,8 @@ PyArrow é abandonado pelo SDK da AWS depois de 3 segundos sem resposta num obje
 ``storage_options`` monta a cada chamada as opções do delta-rs, sem credencial alguma: a cadeia
 padrão do delta-rs as resolve e as renova no ``DeltaTable`` que a execução segura.
 ``duckdb_connect`` abre uma conexão do DuckDB com as extensões da pasta configurada, e
-``duckdb_setup`` carrega as extensões e cria o secret do S3 numa conexão já aberta.
+``duckdb_setup`` carrega as extensões e cria o secret do S3 numa conexão já aberta, com a chave
+da credencial do ``boto3`` naquele momento; o motor DuckDB recria o secret quando a chave troca.
 ``prepare_environment`` acerta as variáveis que o delta-rs lê antes da primeira abertura de tabela.
 
 Exemplo, numa pasta local:
@@ -35,6 +36,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
+import re
 import sys
 import tempfile
 import urllib.parse
@@ -42,6 +44,7 @@ from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 
 import boto3
+import botocore.credentials
 import botocore.exceptions
 import duckdb
 import pyarrow as pa
@@ -64,6 +67,9 @@ _SSE_VARIABLES = {
     "AWS_SSE_KMS_KEY_ID": "aws_sse_kms_key_id",
     "AWS_SSE_BUCKET_KEY_ENABLED": "aws_sse_bucket_key_enabled",
 }
+
+# O nome do secret do S3 que duckdb_setup cria e renew_duckdb_secret recria.
+_DUCKDB_SECRET = "serialize_db_s3"
 
 
 def _region() -> str | None:
@@ -117,21 +123,15 @@ def _proxy_settings(environ: Mapping[str, str]) -> dict[str, str]:
 
 
 def _duckdb_secret_options() -> list[str]:
-    """As opções do secret S3 do DuckDB: a cadeia de credenciais com renovação, a região e, com
-    ``AWS_ENDPOINT_URL``, o endereço sem o esquema, o endereço por caminho e, num endpoint
-    ``http``, ``USE_SSL false``.
+    """As opções do secret S3 do DuckDB fora da credencial: a região e, com ``AWS_ENDPOINT_URL``,
+    o endereço sem o esquema, o endereço por caminho e, num endpoint ``http``, ``USE_SSL false``.
 
-    O secret guarda a credencial resolvida no ``CREATE SECRET``, e a do contêiner expira em cerca
-    de uma hora: ``REFRESH auto`` pede a renovação que a documentação da extensão ``aws`` prevê
-    para a credencial que expira (decisão do usuário de 2026-09-24). O DuckDB não lê
-    ``AWS_ENDPOINT_URL``. Sem ``URL_STYLE 'path'`` o bucket vira subdomínio do endereço, que num
-    IP não resolve, e sem ``USE_SSL false`` a conexão a um endpoint ``http`` tenta TLS e falha
-    (sonda de 2026-09-23 contra o moto, ``plan/POC.md``). O endereço por caminho é o que o
-    delta-rs e o PyArrow usam com um endpoint próprio.
+    O DuckDB não lê ``AWS_ENDPOINT_URL``. Sem ``URL_STYLE 'path'`` o bucket vira subdomínio do
+    endereço, que num IP não resolve, e sem ``USE_SSL false`` a conexão a um endpoint ``http``
+    tenta TLS e falha (sonda de 2026-09-23 contra o moto, ``plan/POC.md``). O endereço por caminho
+    é o que o delta-rs e o PyArrow usam com um endpoint próprio.
     """
-    options = [
-        "TYPE s3", "PROVIDER credential_chain", "REFRESH auto", f"REGION {literal(_region())}",
-    ]
+    options = [f"REGION {literal(_region())}"]
     endpoint = _endpoint()
     if not endpoint:
         return options
@@ -141,6 +141,75 @@ def _duckdb_secret_options() -> list[str]:
     if parts.scheme == "http":
         options.append("USE_SSL false")
     return options
+
+
+def _create_duckdb_secret(connection: duckdb.DuckDBPyConnection,
+                          credentials: botocore.credentials.ReadOnlyCredentials) -> None:
+    """Cria o secret do S3, ou o substitui, com a chave de ``credentials`` e as opções de
+    ``_duckdb_secret_options``.
+
+    A chave, o segredo e o token vão como parâmetros do comando, fora do texto, que o erro de
+    sintaxe do DuckDB repete."""
+    options = ["TYPE s3", "KEY_ID ?", "SECRET ?"]
+    parameters = [credentials.access_key, credentials.secret_key]
+    if credentials.token:
+        options.append("SESSION_TOKEN ?")
+        parameters.append(credentials.token)
+    options.extend(_duckdb_secret_options())
+    connection.execute(f"CREATE OR REPLACE SECRET {_DUCKDB_SECRET} ({', '.join(options)})",
+                       parameters)
+
+
+def _secret_key_id(connection: duckdb.DuckDBPyConnection) -> str | None:
+    """A chave que o secret do S3 guarda, lida do ``secret_string`` de ``duckdb_secrets()``, que
+    no DuckDB 1.5.5 mostra ``key_id`` sem redação; ``None`` sem o secret."""
+    rows = connection.execute("SELECT secret_string FROM duckdb_secrets() WHERE name = ?",
+                              [_DUCKDB_SECRET]).fetchall()
+    if not rows:
+        return None
+    found = re.search(r"(?:^|;)key_id=([^;]*)", rows[0][0])
+    if found is None:
+        return None
+    return found.group(1)
+
+
+def aws_credentials() -> botocore.credentials.Credentials:
+    """A credencial da cadeia padrão do ``boto3``, resolvida numa sessão nova; protegida, para o
+    motor DuckDB, que a segura pela execução.
+
+    A do contêiner é uma ``RefreshableCredentials``: o ``get_frozen_credentials`` dela pede outra
+    ao endpoint quando faltam menos de 15 minutos para a expiração. A das variáveis ``AWS_*`` sem
+    expiração é fixa.
+
+    :return: a credencial da cadeia.
+    :raises botocore.exceptions.NoCredentialsError: a cadeia não achou papel, variáveis ``AWS_*``
+        nem perfil.
+    """
+    credentials = boto3.Session().get_credentials()
+    if credentials is None:
+        raise botocore.exceptions.NoCredentialsError()
+    return credentials
+
+
+def renew_duckdb_secret(connection: duckdb.DuckDBPyConnection,
+                        credentials: botocore.credentials.Credentials) -> bool:
+    """Recria o secret do S3 quando a chave guardada nele não é a que ``credentials`` dá agora;
+    protegida, para o motor DuckDB, que a chama na entrada de cada sessão.
+
+    O secret guarda a chave da criação, e o ``delta_scan`` não o renova: no ambiente alvo, o
+    ``delta_scan`` falhou depois que a chave guardada expirou, com a credencial do ``boto3`` já em
+    outra chave (2026-09-25, ``plan/POC.md``).
+
+    :param connection: a conexão do DuckDB, com o ``httpfs`` carregado; o secret vale para a
+        instância do banco, com todos os cursores dela.
+    :param credentials: a credencial que o secret acompanha, a de ``aws_credentials``.
+    :return: ``True`` quando o secret foi recriado.
+    """
+    frozen = credentials.get_frozen_credentials()
+    if _secret_key_id(connection) == frozen.access_key:
+        return False
+    _create_duckdb_secret(connection, frozen)
+    return True
 
 
 def _fingerprint(content: bytes) -> str:
@@ -595,12 +664,15 @@ class Storage:
         return options
 
     def duckdb_setup(self, connection: duckdb.DuckDBPyConnection) -> None:
-        """Carrega as extensões que a raiz pede e, no S3, cria o secret da cadeia de credenciais.
+        """Carrega as extensões que a raiz pede e, no S3, cria o secret com a chave da credencial
+        do ``boto3``.
 
-        Na pasta local, só ``LOAD delta``. No S3, ``LOAD httpfs``, ``LOAD delta`` e ``LOAD aws``,
-        o secret ``credential_chain`` com ``REFRESH auto``, a região e o endpoint de
-        ``_duckdb_secret_options``, e o proxy de ``HTTP_PROXY`` sem as credenciais no endereço.
-        As extensões vêm da pasta configurada na conexão; nada é baixado.
+        Na pasta local, só ``LOAD delta``. No S3, ``LOAD httpfs`` e ``LOAD delta``, o secret
+        ``serialize_db_s3`` com a chave, o segredo e o token que a cadeia do ``boto3`` resolve
+        agora, a região e o endpoint, e o proxy de ``HTTP_PROXY`` sem as credenciais no endereço.
+        O secret guarda essa chave até ser recriado: uma conexão que dura mais que ela precisa
+        recriá-lo, como o motor DuckDB faz. As extensões vêm da pasta configurada na conexão; nada
+        é baixado.
 
         Exemplo:
 
@@ -611,16 +683,17 @@ class Storage:
             connection.execute(f"SELECT count(*) FROM delta_scan('{uri}')")
 
         :param connection: a conexão aberta do DuckDB que recebe as extensões e o secret.
+        :raises botocore.exceptions.NoCredentialsError: no S3, a cadeia do ``boto3`` não achou
+            credencial.
         """
         if not self.is_s3:
             connection.execute("LOAD delta")
             return
-        for extension in ("httpfs", "delta", "aws"):
+        for extension in ("httpfs", "delta"):
             connection.execute(f"LOAD {extension}")
         for name, value in _proxy_settings(os.environ).items():
             connection.execute(f"SET {name} = {literal(value)}")
-        options = ", ".join(_duckdb_secret_options())
-        connection.execute(f"CREATE OR REPLACE SECRET serialize_db_s3 ({options})")
+        _create_duckdb_secret(connection, aws_credentials().get_frozen_credentials())
 
     def duckdb_connect(self, database: str = ":memory:",
                        config: Mapping[str, object] | None = None) -> duckdb.DuckDBPyConnection:
@@ -645,6 +718,8 @@ class Storage:
         :return: a conexão aberta, que quem chama fecha.
         :raises duckdb.Error: uma extensão ausente da pasta configurada ou o secret recusado; a
             conexão é fechada antes.
+        :raises botocore.exceptions.NoCredentialsError: no S3, a cadeia do ``boto3`` não achou
+            credencial; a conexão é fechada antes.
         """
         settings: dict[str, object] = {
             "autoinstall_known_extensions": False,
@@ -657,7 +732,7 @@ class Storage:
         connection = duckdb.connect(database, config=settings)
         try:
             self.duckdb_setup(connection)
-        except duckdb.Error:
+        except (duckdb.Error, botocore.exceptions.BotoCoreError):
             connection.close()
             raise
         return connection

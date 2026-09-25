@@ -125,10 +125,10 @@ relatório dela falharia com `ConversionException` numa coluna com `NaN` ou infi
   7.540 MB sem ordem, e a ordem foi mais rápida nas quatro partições com 16 threads, com arquivos
   do mesmo tamanho ([`POC.md`](POC.md)): a carga ordenada da maior partição pede uma máquina de
   32 GB, e a sem ordem cabe em 16 GB; o script regrava o relatório depois de cada passo.
-  O secret da conexão guarda a credencial resolvida na abertura e leva `REFRESH auto` (decisão do
-  usuário de 2026-09-24, [etapa 3](PLAN-STAGE-3.md)). Na execução de 2026-09-23, `cad_lancamentos` rodou
-  sozinho na máquina, entre `cad_contratos` e `cad_operacoes`, na ordem de `SUITE.md`, e o probe
-  das threads veio depois, às 23:21.
+  O secret da conexão leva a chave da credencial do `boto3`, e o motor o recria na entrada de cada
+  sessão quando ela troca (decisão do usuário de 2026-09-25, [etapa 3](PLAN-STAGE-3.md)). Na
+  execução de 2026-09-23, `cad_lancamentos` rodou sozinho na máquina, entre `cad_contratos` e
+  `cad_operacoes`, na ordem de `SUITE.md`, e o probe das threads veio depois, às 23:21.
   Numa partição sintética com as mesmas linhas e colunas, num contêiner de 4 vCPUs e 16.095 MB, a
   ordem multiplicou o tempo do `register` por 3,6 (50,2 s contra 14,0 s) e o pico por 2,6
   (11.966 MB contra 4.517 MB), e o `COPY` ordenado direto no DuckDB levou 17,4 s com pico de

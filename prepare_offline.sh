@@ -94,7 +94,8 @@ for link in .python/cpython-*; do
     fi
 done
 
-# Extensões do DuckDB que o pacote e os testes carregam; `credential_chain` puxa a extensão aws.
+# Extensões do DuckDB que o pacote, os testes e os probes carregam; a aws serve ao
+# `credential_chain` dos probes (`diagnose_aws.py`).
 # Acrescente aqui toda extensão nova que o código passar a usar.
 duckdb_extensions="httpfs delta aws"
 .venv/bin/python - "$root/.duckdb" $duckdb_extensions <<'PY'

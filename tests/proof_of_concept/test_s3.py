@@ -11,7 +11,7 @@ relatório impresso no fim da sessão (``conftest.py``). A suíte escreve só so
 ``SERIALIZE_DB_TEST_S3_ROOT``: sem ela é pulada, e com ela falta de credencial ou de acesso ao
 bucket é falha.
 
-As extensões ``httpfs``, ``delta`` e ``aws`` do DuckDB vêm da pasta de extensões (``.duckdb/`` do
+As extensões ``httpfs`` e ``delta`` do DuckDB vêm da pasta de extensões (``.duckdb/`` do
 repositório, preparada por ``prepare_offline.sh``, ou a pasta padrão do DuckDB), e nada é baixado
 sem pedido: sem uma delas os testes que a usam são pulados, com ou sem internet, e com
 ``SERIALIZE_DB_DUCKDB_EXTENSIONS`` a suíte a instala nessa pasta.
@@ -31,7 +31,7 @@ import pyarrow as pa
 import pytest
 from deltalake import DeltaTable, write_deltalake
 
-from conftest import S3Location, duckdb_s3_secret, record
+from conftest import S3Location, create_duckdb_s3_secret, record
 from poc_delta import DeltaProofOfConcept, connect_duckdb, write_sample_table
 from probelib import hide_credentials
 
@@ -87,15 +87,15 @@ def table_uri(storage: S3Location) -> str:
 
 @pytest.fixture(scope="session")
 def duckdb_connection(storage: S3Location) -> duckdb.DuckDBPyConnection:
-    """Conexão com ``httpfs``, ``delta`` e ``aws`` carregadas e um secret S3 pela cadeia de
-    credenciais."""
+    """Conexão com ``httpfs`` e ``delta`` carregadas e um secret S3 com a chave da credencial
+    do ``boto3``."""
     # storage roda antes do secret: pelo s3_location, proxy_environment exporta AWS_REGION e
     # NO_PROXY, e require_s3_access confere o acesso à raiz.
-    connection = connect_duckdb(("httpfs", "delta", "aws"))
+    connection = connect_duckdb(("httpfs", "delta"))
 
-    # O secret credential_chain usa a mesma resolução do SDK da AWS (ambiente, contêiner, perfil,
+    # O secret leva a chave que a cadeia do boto3 resolve agora (ambiente, contêiner, perfil,
     # IMDS), com as opções de Storage.duckdb_setup: a região e o endpoint de AWS_ENDPOINT_URL.
-    connection.execute(duckdb_s3_secret("poc"))
+    create_duckdb_s3_secret(connection)
 
     return connection
 
@@ -257,8 +257,8 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         o cache, e ``probes/duckdb_threads.py`` o desliga em cada configuração.
         """
         # Uma instância nova, para o cache começar vazio; o de duckdb_connection é da sessão.
-        connection = connect_duckdb(("httpfs", "delta", "aws"))
-        connection.execute(duckdb_s3_secret("cache"))
+        connection = connect_duckdb(("httpfs", "delta"))
+        create_duckdb_s3_secret(connection)
         cache = "SELECT count(*), coalesce(sum(nr_bytes), 0) FROM duckdb_external_file_cache()"
         read = f"SELECT count(*), max(valor) FROM delta_scan('{table_uri}')"
         try:

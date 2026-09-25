@@ -59,8 +59,10 @@ O pacote depende de `sqlalchemy`, `pyarrow`, `deltalake`, `duckdb`, `boto3`, que
 condicional do arquivo de controle no S3, e dos dialetos `duckdb-engine` e `sqlalchemy-redshift`,
 que compilam o texto SQL de cada motor, nas versões fixadas em `pyproject.toml`. O S3 precisa da
 região em `AWS_REGION` ou `AWS_DEFAULT_REGION`, e as credenciais vêm da cadeia padrão do ambiente;
-a extensão `delta` do DuckDB vem da pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao
-lado do ambiente virtual, sem download.
+as extensões `delta` e, no S3, `httpfs` do DuckDB vêm da pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`,
+ou de `.duckdb/` ao lado do ambiente virtual, sem download. O DuckDB lê o S3 com a chave que a
+cadeia do `boto3` resolve, e a execução e o leitor Delta a trocam antes de cada comando quando o
+`boto3` a renova; um comando só mais longo que a validade da chave ainda falha.
 
 ## Tutorial
 
