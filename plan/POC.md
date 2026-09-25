@@ -3798,6 +3798,54 @@ dá chaves estáticas ao delta-rs e não passa pela cadeia de credenciais do con
 da AWS mudaram: a suíte S3 no ambiente alvo, com a pasta preparada de novo, espera o usuário no
 mesmo documento.
 
+## O que a revisão da tabela de tipos mostrou
+
+Em 2026-09-25, no contêiner de desenvolvimento (Linux x86_64, Python 3.13.12, SQLAlchemy 2.0.54,
+PyArrow 25.0.1, DuckDB 1.5.5, deltalake 1.6.6), a tabela de mapeamento de tipos de
+`docs/index.md` foi lida contra `serialize_db.schema`, os motores e o registro, e sondas na pasta
+local leram o que o código faz com cada tipo.
+
+- **As subclasses.** `arrow_type` e `sql_type` buscam o tipo por `isinstance`: `Unicode(20)` e
+  `CHAR(2)` saíram `VARCHAR(20)` e `VARCHAR(2)` nos dois motores, `UnicodeText` e `Text(100)`
+  saíram `VARCHAR` e `VARCHAR(65535)`, `TIMESTAMP(timezone=True)`, `DATETIME`, `UUID`,
+  `DOUBLE_PRECISION`, `NUMERIC` e `DECIMAL` seguiram o tipo de que derivam, e `check_models` não
+  listou nenhum. `Float`, `REAL`, `Time`, `Interval`, `LargeBinary`, `ARRAY` e `PickleType` saíram
+  como tipo fora do contrato.
+- **O `Enum`.** `Enum("a", "bbb")` saiu `string` e `VARCHAR(3)`, sem violação em `check_models`;
+  `cast` aceitou `"zzz"`, fora da lista, e recusou `"zzzz"`, acima de `String(3)`. A auditoria
+  mede só o comprimento dele.
+- **O `Numeric` sem precisão.** `Numeric()` saiu `decimal128(18, 0)` e `DECIMAL(18, 0)` nos dois
+  motores, e `Numeric(10)`, `DECIMAL(10, 0)`. `Numeric(39, 2)` levantou o `ValueError` do PyArrow
+  ("precision should be between 1 and 38") em `arrow_type` e em `check_models`, que não o listou.
+- **O `Uuid`.** Um `uuid.UUID` vira `extension<arrow.uuid>` em `pa.array` e em
+  `pa.Table.from_pandas`, e `cast` converte a extensão para `string` pelos 16 bytes: de 200 UUIDs
+  pseudoaleatórios, 199 foram recusados com `ContractError: u.c_uuid: Invalid UTF8 payload`, e o
+  UUID de bytes nulos entrou como 16 caracteres `\x00`. Um texto de 50 bytes entrou na coluna
+  `Uuid`, `VARCHAR(36)` no DDL, porque nem `cast` nem a auditoria medem o `Uuid`.
+- **O protocolo.** A tabela com uma coluna `DateTime` nasceu de `delta.create_table` com leitor
+  3, escritor 7 e o recurso `timestampNtz`; a tabela com só uma `DateTime(timezone=True)`, com
+  leitor 1 e escritor 2.
+- **Os tipos no DuckDB.** A view do `ingest` sobre o `delta_scan` leu `String(10)`, `Text`, `Uuid`
+  e `JSON` como `VARCHAR` e `DateTime(timezone=True)` como `TIMESTAMP WITH TIME ZONE`; a tabela do
+  `loader`, criada pelo DDL do modelo, leu `JSON` como `JSON` e `String(10)` como `VARCHAR`. `->>`,
+  `json_extract` e `json_valid` leram o JSON em `VARCHAR`. A saída Arrow das duas trouxe o JSON em
+  `string` e o `TIMESTAMPTZ` com o fuso da sessão (`Etc/UTC` no contêiner, `America/Sao_Paulo`
+  depois de `SET TimeZone`), que `cast` levou a UTC no mesmo instante.
+- **Os tipos físicos.** O delta-rs e o `COPY` do DuckDB gravaram `decimal(9,2)` em `INT32`,
+  `decimal(18,2)` em `INT64` e `decimal(20,4)` em `FIXED_LEN_BYTE_ARRAY`; o PyArrow gravou
+  `decimal(9,2)` e `decimal(18,2)` em `FIXED_LEN_BYTE_ARRAY`. O `COPY` do DuckDB gravou a coluna
+  `JSON` com o tipo lógico `JSON`, e o delta-rs, com `String`.
+- **O `Double` no Redshift.** O `redshift_connector` 2.1.17 lê o `FLOAT8` em formato binário
+  (`float8_recv`), e o pacote carrega e descarrega em Parquet. O aviso "Loss of floating-point
+  precision" da documentação do `UNLOAD` não cita formato, e as suítes do motor, da publicação e do
+  leitor gravam `valor` em múltiplos de 0,25, exatos em qualquer formato.
+
+**Consequências**: a tabela de `docs/index.md` passou a dizer a regra das subclasses, o padrão do
+`Numeric`, os tipos físicos por escritor, o `timestampNtz`, o `INT96` do `UNLOAD`, o `NaN` do
+`Double`, o JSON em `VARCHAR` no `delta_scan`, o texto do `Uuid` e o tipo Arrow dos resultados. O
+`Uuid`, o `Enum` e o `Numeric` acima de 38 esperam o usuário em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
 ## O que a troca das versões das dependências mostrou
 
 Em 2026-09-25, no contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB, Python 3.13.12), a
