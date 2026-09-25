@@ -628,3 +628,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   run.redshift is not None` right after asserting `run.redshift` a `RedshiftConfig`, so the engine
   of either option went unchecked; a review agent found it. The review split every
   `assert A and B` of the package tests as well, whose failure does not say which side broke.
+- **A reading that runs statements on the connection it measures is part of the measurement**
+  (2026-09-25). The first version of `probes/credentials.py` read each DuckDB count with
+  `fetchone()`, which left the `read_parquet` query open; the next statement rolled it back
+  with the secret it had refreshed, and the probe read the key never changing, while a
+  script reading with `fetchall()` read the renewal. Four variants run side by side, each
+  changing one step (`fetchone` or `fetchall`, the secrets query with or without a parameter),
+  isolated the cause. When two instruments disagree, run variants that differ in one step, and
+  consume every result the measured connection returns.

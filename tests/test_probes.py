@@ -5,8 +5,10 @@ puras, testadas aqui com respostas fabricadas: a classificação dos erros do ``
 DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o inventário do bucket
 (tabelas Delta, sessões da suíte, versões não correntes), o versionamento pela amostra, o Object
 Lock, o ciclo de vida, a montagem de ``~/shared``, o formato das tabelas do Glue, os parâmetros da
-conexão Redshift e, no ``duckdb_threads.py``, os valores de ``threads``, a partição comum, os totais
-do log, a tabela das medições e as checagens delas. Um ``Report`` grava em ``probes/output/``;
+conexão Redshift, no ``duckdb_threads.py``, os valores de ``threads``, a partição comum, os totais
+do log, a tabela das medições e as checagens delas e, no ``credentials.py``, a impressão digital das
+chaves, a espera, os verdictos dos clientes segurados e das chaves, a linha do tempo, as checagens e
+a sonda inteira sobre uma tabela Delta local. Um ``Report`` grava em ``probes/output/``;
 ``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes
 que gravam, o relatório e os arquivos fabricados, são ``local``: gravam numa pasta nova sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do ``parquet_source.py`` não abre arquivo
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import hashlib
 import io
 import socket
 import sys
@@ -34,9 +37,11 @@ import botocore.exceptions
 import pyarrow as pa
 import pytest
 import sqlalchemy as sa
+from deltalake import write_deltalake
 
 import bucket
 import catalog
+import credentials
 import diagnose_aws
 import duckdb_threads
 import parquet_source
@@ -1476,3 +1481,236 @@ def test_measurement_checks_flag_rows_threads_and_failed_configurations(
     with make_report(folder, monkeypatch) as report:
         duckdb_threads.measurement_checks(report, passing, inputs)
         assert report.finish() == 0
+
+
+# --------------------------------------------------------------------------------------------------
+# credentials.py: as chaves, a espera, os verdictos, a linha do tempo e as checagens
+
+# O secret_string de duckdb_secrets() para o secret de Storage.duckdb_setup, como o DuckDB 1.5.5
+# o imprime, com uma chave fabricada.
+SECRET_STRING = (
+    "name=serialize_db_s3;type=s3;provider=credential_chain;serializable=true;"
+    "scope=s3://,s3n://,s3a://;endpoint=s3.amazonaws.com;key_id=ASIAEXEMPLO;"
+    "refresh_info={'region': us-east-1, 'refresh': auto};region=us-east-1;secret=redacted;"
+    "session_token=redacted"
+)
+
+
+def credential_reading(client: str, minutes: float, ok: bool = True,
+                       detail: str = "4 linhas") -> credentials.Reading:
+    """Uma leitura fabricada de ``client``, ``minutes`` minutos depois de ``NOW``."""
+    return credentials.Reading(client, NOW + minutes * MINUTE, ok, detail, 0.1)
+
+
+def credential_round(minutes: float, readings: list[credentials.Reading],
+                     container_key: str | None = "aaaa1111", secret_key: str | None = "aaaa1111",
+                     clause_key: str | None = "aaaa1111") -> credentials.Round:
+    """Uma rodada fabricada ``minutes`` minutos depois de ``NOW``, com a credencial do contêiner
+    expirando 60 minutos depois de ``NOW``."""
+    return credentials.Round(NOW + minutes * MINUTE, readings, container_key, NOW + 60 * MINUTE,
+                             secret_key, clause_key)
+
+
+def test_fingerprint_identifies_a_key_without_showing_it() -> None:
+    """A impressão digital são os oito primeiros caracteres hexadecimais do ``sha256`` da chave:
+    a mesma chave dá a mesma, chaves diferentes dão outras; sem chave, ``None``."""
+    expected = hashlib.sha256(b"ASIAEXEMPLO1").hexdigest()[:8]
+    assert credentials.fingerprint("ASIAEXEMPLO1") == expected
+    assert credentials.fingerprint("ASIAEXEMPLO2") != expected
+    assert credentials.fingerprint(None) is None
+    assert credentials.fingerprint("") is None
+
+
+def test_secret_and_clause_keys_come_from_the_texts_duckdb_and_the_clause_give() -> None:
+    """O ``key_id`` do ``secret_string`` de ``duckdb_secrets()`` e o ``ACCESS_KEY_ID`` da cláusula
+    de ``credentials_clause``; sem a chave, ``None``."""
+    assert credentials.secret_key_id(SECRET_STRING) == "ASIAEXEMPLO"
+    assert credentials.secret_key_id("name=vazio;type=s3;provider=config;region=us-east-1") is None
+    assert credentials.secret_key_id("name=vazio;key_id=;region=us-east-1") is None
+    clause = "ACCESS_KEY_ID 'ASIAEXEMPLO' SECRET_ACCESS_KEY 'segredo' SESSION_TOKEN 'token'"
+    assert credentials.clause_key_id(clause) == "ASIAEXEMPLO"
+    assert credentials.clause_key_id("IAM_ROLE default") is None
+
+
+def test_wait_deadline_passes_the_last_expiry_by_the_margin_up_to_the_ceiling() -> None:
+    """A espera vai até a última expiração mais a margem, limitada pelo teto; o tempo fixo
+    substitui as duas, e sem expiração não há espera."""
+    margin = 3 * MINUTE
+    ceiling = 90 * MINUTE
+    last = NOW + 60 * MINUTE
+
+    deadline, reason = credentials.wait_deadline(NOW, [NOW + 50 * MINUTE, None, last], margin,
+                                                 ceiling, None)
+    assert deadline == NOW + 63 * MINUTE
+    assert reason == f"a expiração das {credentials.clock(last)} mais a margem"
+
+    late = NOW + 120 * MINUTE
+    deadline, reason = credentials.wait_deadline(NOW, [late], margin, ceiling, None)
+    assert deadline == NOW + ceiling
+    assert reason == (f"o teto de --max-wait-minutes, antes da expiração das "
+                      f"{credentials.clock(late)}")
+
+    deadline, _reason = credentials.wait_deadline(NOW, [last], margin, ceiling, 2 * MINUTE)
+    assert deadline == NOW + 2 * MINUTE
+
+    deadline, reason = credentials.wait_deadline(NOW, [None, None], margin, ceiling, None)
+    assert deadline == NOW
+    assert reason == "nenhuma credencial com expiração: nada a esperar"
+
+
+def test_held_verdict_judges_only_the_readings_after_the_expiry() -> None:
+    """O cliente segurado passa quando toda leitura depois da expiração passou e reprova na
+    primeira que falhou, com o motivo dela; sem expiração ou sem leitura depois dela, é nota, e a
+    falha anterior à expiração só é contada."""
+    expiry = NOW + 60 * MINUTE
+    failed_before = credential_reading("pyarrow", 30, ok=False, detail="ConnectTimeout")
+    passed_after = credential_reading("pyarrow", 62)
+    failed_after = credential_reading("pyarrow", 65, ok=False, detail="ExpiredToken")
+
+    status, _text = credentials.held_verdict([passed_after], None)
+    assert status == "note"
+
+    status, text = credentials.held_verdict([failed_before], expiry)
+    assert status == "note"
+    assert text.endswith("; 1 falha(s) antes da expiração")
+
+    status, text = credentials.held_verdict([failed_before, passed_after, failed_after], expiry)
+    assert status == "fail"
+    assert text.startswith("1 de 2 leitura(s) depois da expiração")
+    assert "a primeira +5 min: ExpiredToken" in text
+
+    status, text = credentials.held_verdict([failed_before, passed_after], expiry)
+    assert status == "pass"
+    assert "a última +2 min" in text
+
+
+def test_key_verdict_needs_another_key_in_every_round_after_the_expiry() -> None:
+    """A chave montada a cada uso passa quando toda rodada depois da expiração leva outra chave e
+    reprova quando alguma ainda leva a do início; a rodada que não leu a chave não conta."""
+    expiry = NOW + 60 * MINUTE
+    renewed = [(NOW, "aaaa1111"), (NOW + 55 * MINUTE, "bbbb2222"),
+               (NOW + 65 * MINUTE, "bbbb2222")]
+    assert credentials.key_change(renewed) == NOW + 55 * MINUTE
+    status, text = credentials.key_verdict(renewed, expiry)
+    assert status == "pass"
+    assert "(-5 min da expiração" in text
+
+    stale = [(NOW, "aaaa1111"), (NOW + 65 * MINUTE, "aaaa1111")]
+    assert credentials.key_change(stale) is None
+    status, _text = credentials.key_verdict(stale, expiry)
+    assert status == "fail"
+
+    # A chave que falta numa rodada não é troca, e sem chave lida depois da expiração é nota.
+    unread = [(NOW, "aaaa1111"), (NOW + 30 * MINUTE, None), (NOW + 65 * MINUTE, None)]
+    assert credentials.key_change(unread) is None
+    status, _text = credentials.key_verdict(unread, expiry)
+    assert status == "note"
+
+    assert credentials.key_verdict([(NOW, None)], expiry)[0] == "note"
+    assert credentials.key_verdict(renewed, None)[0] == "note"
+    assert credentials.key_verdict(renewed[:2], expiry)[0] == "note"
+
+
+def test_timeline_rows_and_round_line_show_each_client_and_the_keys() -> None:
+    """A linha do tempo tem uma linha por rodada e uma coluna por cliente, ``-`` onde o cliente não
+    leu, e as chaves pela impressão digital; a linha da rodada traz o mesmo."""
+    clients = [credentials.DELTA_RS, credentials.DUCKDB_DELTA]
+    rounds = [
+        credential_round(0, [credential_reading(credentials.DELTA_RS, 0),
+                             credential_reading(credentials.DUCKDB_DELTA, 0)]),
+        credential_round(65, [credential_reading(credentials.DUCKDB_DELTA, 65, ok=False)],
+                         container_key="bbbb2222", secret_key=None),
+    ]
+    expiry = NOW + 60 * MINUTE
+    rows = credentials.timeline_rows(rounds, clients, expiry)
+    assert rows[0] == ["HORA", "EXPIRAÇÃO", *clients, "CONTÊINER", "ATÉ", "SECRET", "CLÁUSULA"]
+    assert rows[1][1:4] == ["-60 min", "ok", "ok"]
+    assert rows[2][1:] == ["+5 min", "-", "FALHOU", "bbbb2222", credentials.clock(expiry), "-",
+                           "aaaa1111"]
+
+    line = credentials.round_line(rounds[1], expiry)
+    assert line.startswith(f"{credentials.clock(rounds[1].at)} (+5 min): duckdb delta_scan FALHOU;")
+    assert line.endswith("secret -, cláusula aaaa1111")
+
+
+@pytest.mark.local
+def test_credential_checks_blame_a_held_client_only_when_a_new_one_reads(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``CR-4`` reprova o ``delta_scan`` segurado que falha depois da expiração quando o cliente
+    novo lê; ``CR-6`` fica nota quando o cliente novo também falha; ``CR-10`` reprova a cláusula
+    que ainda leva a chave expirada, e ``CR-11`` o cliente novo que falhou."""
+    first = [credential_reading(credentials.DUCKDB_DELTA, 0),
+             credential_reading(credentials.PYARROW, 0)]
+    after = [credential_reading(credentials.DUCKDB_DELTA, 65, ok=False, detail="ExpiredToken"),
+             credential_reading(credentials.PYARROW, 65, ok=False, detail="ExpiredToken")]
+    rounds = [credential_round(0, first),
+              credential_round(65, after, container_key="bbbb2222")]
+    controls = [credential_reading(credentials.DUCKDB_DELTA, 66),
+                credential_reading(credentials.PYARROW, 66, ok=False, detail="AccessDenied")]
+    # As checagens leem só os nomes dos clientes abertos.
+    held = credentials.Held(readers={credentials.DUCKDB_DELTA: str, credentials.PYARROW: str})
+    storage = types.SimpleNamespace(is_s3=True)
+    config = types.SimpleNamespace(iam_role=None)
+
+    with make_report(folder, monkeypatch) as report:
+        credentials.checks(report, storage, rounds, controls, held, config, "terminou")
+        assert statuses(report, "CR-1") == ["pass"]
+        assert statuses(report, "CR-2") == ["pass"]
+        assert checks(report, "CR-3") == ["cliente não aberto"]
+        assert statuses(report, "CR-4") == ["fail"]
+        assert statuses(report, "CR-6") == ["note"]
+        assert checks(report, "CR-6")[0].endswith("a falha é do ambiente")
+        assert checks(report, "CR-9") == ["a chave aaaa1111 não trocou em 2 rodada(s)"]
+        assert statuses(report, "CR-10") == ["fail"]
+        assert checks(report, "CR-11") == ["falharam: pyarrow"]
+        assert report.finish() == 2
+
+
+def no_environment_change() -> dict[str, str]:
+    """``prepare_environment`` sem mexer em ``os.environ``."""
+    return {}
+
+
+def no_container_credential() -> tuple[None, None, bool, None]:
+    """``container_credential`` sem credencial, como numa máquina sem papel."""
+    return None, None, False, None
+
+
+def fabricated_clause(config: object) -> str:
+    """``credentials_clause`` com uma chave fabricada, sem consultar a cadeia do ``boto3``."""
+    return "ACCESS_KEY_ID 'AKIAEXEMPLO' SECRET_ACCESS_KEY 'segredo'"
+
+
+@pytest.mark.local
+def test_credentials_probe_reads_a_local_table_in_every_round(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sonda inteira sobre uma tabela Delta local, com uma espera de menos de um segundo: cada
+    cliente lê em cada rodada, os clientes novos leem, nada reprova sem credencial a expirar e a
+    saída é 0."""
+    table = folder / "tabela"
+    write_deltalake(str(table), pa.table({"id": [1, 2]}))
+    monkeypatch.setattr(probelib, "OUTPUT_DIR", folder)
+    monkeypatch.setattr(credentials, "prepare_environment", no_environment_change)
+    monkeypatch.setattr(credentials, "container_credential", no_container_credential)
+    monkeypatch.setattr(credentials, "credentials_clause", fabricated_clause)
+    for name in ("SERIALIZE_DB_REDSHIFT_WORKGROUP", "SERIALIZE_DB_REDSHIFT_HOST",
+                 "SERIALIZE_DB_REDSHIFT_IAM_ROLE"):
+        monkeypatch.delenv(name, raising=False)
+
+    stdout = sys.stdout
+    try:
+        code = credentials.main(["credentials.py", str(table), "--wait-minutes", "0.01",
+                                 "--interval-minutes", "0.004"])
+    finally:
+        sys.stdout = stdout
+
+    assert code == 0
+    text = next(folder.glob("credentials_*.txt")).read_text()
+    every_client = ("delta-rs ok, duckdb delta_scan ok, duckdb read_parquet ok, pyarrow ok, "
+                    "boto3 ok; contêiner - até -, secret -, cláusula "
+                    f"{credentials.fingerprint('AKIAEXEMPLO')}")
+    assert every_client in text
+    assert "Nenhuma leitura falhou." in text
+    assert "4 cliente(s) novo(s) leram" in text

@@ -36,7 +36,13 @@ foi medido em [`POC.md`](POC.md).
   motor da [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela temporária
   que o pipeline tenha criado na sessão. As credenciais que o `COPY`
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
-  `COPY` mais longo que isso também não foi medido.
+  `COPY` mais longo que isso também não foi medido. `probes/credentials.py` segura esses
+  clientes, menos o `COPY`, até passar a expiração da credencial do contêiner e a da senha do
+  Redshift, em cerca de uma hora, e lê cada um a cada cinco minutos. No substituto de
+  2026-09-25, com chaves de 70 s, o `delta_scan` falhou com a chave vencida do secret, e só o
+  `read_parquet` a renovou, numa renovação que a consulta seguinte desfaz quando o resultado
+  fica aberto ([`POC.md`](POC.md)); se o alvo repetir isso, a biblioteca precisa renovar o
+  secret do DuckDB por conta própria, e a forma de renovar espera o usuário.
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
