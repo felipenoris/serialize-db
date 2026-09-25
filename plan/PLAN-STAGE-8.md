@@ -230,6 +230,12 @@ O que a implementação fixou além do texto das seções acima:
 - **O `1023`, o `UPDATE` sem linha, o `DELETE` da linha de controle sem linha e a tabela publicada
   que outra primeira publicação criou (`42P07`)** saem como `ExecutionConflict` depois do
   `ROLLBACK`; outro erro do servidor sobe como veio, com o comando mascarado numa nota.
+- **A cláusula de credenciais é montada uma vez por tabela**, antes dos comandos da transação, e
+  todo `COPY` dela a repete, enquanto o motor da [etapa 5](PLAN-STAGE-5.md) a monta por comando
+  (decisão do usuário de 2026-09-25): a credencial que vence no meio da transação derruba o
+  `COPY` que a leva, o `ROLLBACK` deixa a tabela publicada e a linha de controle como estavam, e o
+  operador repete a publicação. Nenhuma rodada mediu esse caso, e a decisão é reavaliada com a
+  leitura de `probes/credentials.py` no alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **A suíte no ambiente alvo publica num ambiente `poc<id>` próprio**, cujas tabelas e linhas de
   controle saem no fim; ela cria a tabela de controle quando não existe e a apaga só nesse caso.
 

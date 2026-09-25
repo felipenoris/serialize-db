@@ -17,10 +17,11 @@ de controle numa transação, e ``publication_status`` compara a versão publica
 versões vêm de um snapshot do arquivo de controle, por ``serialize-db publish --snapshot`` ou
 ``--channel``, ou são as atuais.
 
-O ``COPY`` leva a cláusula de credenciais do motor Redshift, montada por comando; nenhum texto
-que a carregue vai a log. Todo comando cita a tabela publicada e a de controle por nome em duas
-partes, depois do ``USE`` que a conexão roda, e a staging temporária pelo nome só, sem
-``COMPUPDATE`` e sem ``TRUNCATE``, o que um datashare aceita.
+O ``COPY`` leva a cláusula de credenciais do motor Redshift, montada uma vez por tabela, antes
+dos comandos da transação; nenhum texto que a carregue vai a log. Todo comando cita a tabela
+publicada e a de controle por nome em duas partes, depois do ``USE`` que a conexão roda, e a
+staging temporária pelo nome só, sem ``COMPUPDATE`` e sem ``TRUNCATE``, o que um datashare
+aceita.
 
 Exemplo:
 

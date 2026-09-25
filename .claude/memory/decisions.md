@@ -1107,13 +1107,18 @@ After merging PR #84, the user asked for the items of `plan/OPEN_QUESTIONS.md` a
 corrections applied where no decision of theirs was needed. The assistant corrected the review
 findings the stage files already fixed (the CLI exit codes, the `nullCount` of `file_from_footer`,
 the API edges, the names and annotations, the docstrings and pages) and asked two questions on
-decision cards. The user chose to implement in the same PR only the two Redshift decisions of PR
-#81 (`read_back` after the swap and the staging named by the version), leaving the compaction for
-issue #85. The second card asked whether to keep as they are the publication's credentials clause
-built once per table, the local `unload_to` the Redshift reader accepts and `deep_copy` reopening
-the destination per partition. The user asked for context on the first, and the answer corrected
-the card: the fix needs no change to the signature of `publication_statements`, because the
-statements can carry a marker that each `COPY` swaps for a fresh clause, so the assistant's
-recommendation for that item became the fix. The items that wait on a target run,
-the delta-rs dataset filter (issue #85), the `deltalake` upgrade (another thread) and the bucket
-rule stayed out. `plan/OPEN_QUESTIONS.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+decision cards. The user chose to implement in the same PR only the two Redshift decisions of PR #81
+(`read_back` after the swap and the staging named by the version), leaving the compaction for issue
+#85. The second card asked whether to keep as they are the publication's credentials clause built
+once per table, the local `unload_to` the Redshift reader accepts and `deep_copy` reopening the
+destination per partition. The user asked for context on the first, and the answer corrected the
+card: the fix needs no change to the signature of `publication_statements`, because the statements
+can carry a marker that each `COPY` swaps for a fresh clause, so the assistant's recommendation for
+that item became the fix, implemented while the answer was pending. The user then decided to accept
+the clause built once per table for now, because a credential that expires in the middle of the
+transaction corrupts no data and at most the operator repeats the publication, and to re-evaluate it
+when `probes/credentials.py` runs in the target; the fix left the PR, and `plan/PLAN-STAGE-8.md`
+records the behavior. The local `unload_to` and `deep_copy` reopening the destination stay in
+`plan/OPEN_QUESTIONS.md` until the answer. The items that wait on a target run, the delta-rs dataset
+filter (issue #85), the `deltalake` upgrade (another thread) and the bucket rule stayed out.
+`plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-8.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
