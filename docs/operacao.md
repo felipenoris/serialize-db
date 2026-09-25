@@ -130,14 +130,13 @@ serialize-db archive --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --name 2026T3
 ```
 
-Antes: o snapshot registrado em `snapshots` e apontado por nenhum canal, que `serialize-db
-channel` move antes; a pasta `arquivo/<nome>/` recebe a regra de ciclo de vida do bucket. Depois: uma tabela nova por tabela do snapshot, com uma versão por partição, os
-mesmos arquivos e as mesmas somas, cada tabela impressa com o tempo da cópia e o pico de RSS do
-processo, e o tempo de cada partição no log; a entrada em `archived`, que `vacuum` não prende
-mais, e `snapshot` recusando o nome, porque ele dá a pasta. O comando se repete depois de uma
-interrupção
-e continua de onde parou: a tabela já inteira no arquivo e a partição já registrada nele são
-puladas, e só o que falta é copiado.
+Antes: o snapshot registrado em `snapshots` e apontado por nenhum canal, que `serialize-db channel`
+move antes; a pasta `arquivo/<nome>/` recebe a regra de ciclo de vida do bucket. Depois: uma tabela
+nova por tabela do snapshot, com uma versão por partição, os mesmos arquivos e as mesmas somas, cada
+tabela impressa com o tempo da cópia e o pico de RSS do processo, e o tempo de cada partição no log;
+a entrada em `archived`, que `vacuum` não prende mais, e `snapshot` recusando o nome, porque ele dá
+a pasta. O comando se repete depois de uma interrupção e continua de onde parou: a tabela já inteira
+no arquivo e a partição já registrada nele são puladas, e só o que falta é copiado.
 
 ### Exportação
 

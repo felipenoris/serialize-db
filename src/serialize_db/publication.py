@@ -406,7 +406,8 @@ def reconcile_published(schema: str, environment: str, table: sa.Table,
     :param columns: as colunas da tabela publicada como ``svv_all_columns`` as lista, com nome,
         tipo, largura, precisão e escala, em ``PublishedColumn``.
     :return: os ``ALTER TABLE ... ADD COLUMN`` do diff aditivo, no fim da tabela, e uma frase por
-        diferença destrutiva, que despublica a tabela para a publicação seguinte recriá-la.
+        diferença destrutiva, que despublica a tabela para a transação da mesma publicação
+        recriá-la.
     :raises ContractError: a tabela com um tipo de coluna fora do contrato.
     """
     published = _qualified(schema, published_name(environment, table))
@@ -559,7 +560,8 @@ def _unpublish_table(connection: _Connection, config: RedshiftConfig, environmen
 def _reconcile(connection: _Connection, config: RedshiftConfig, environment: str,
                table: sa.Table) -> None:
     """A tabela publicada reconciliada com o contrato: as colunas novas acrescentadas, fora de
-    transação; um diff destrutivo despublica a tabela, e a publicação seguinte a recria."""
+    transação; um diff destrutivo despublica a tabela, e a transação da mesma publicação a
+    recria."""
     columns = _published_columns(connection, config, environment, table)
     if not columns:
         return

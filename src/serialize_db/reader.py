@@ -203,15 +203,15 @@ class DeltaReader:
         """As tabelas copiadas para o banco local por ``materialize``, com as partições de cada
         uma; ``None`` na tabela inteira."""
         self.reader_id = _new_reader_id()
-        """O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, que nomeia o banco e a
-        pasta de transbordo do motor."""
+        """O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, que nomeia o banco
+        temporário e a pasta de transbordo do motor."""
         self._db = db
         self._uris = source.uris
         self._source = source.description
         self._lock = threading.Lock()
         self._engine = DuckDBEngine(config or DuckDBConfig(), self.reader_id, db.storage)
         # O finalizador guarda o motor, não o leitor: a coleta de um leitor sem close, ou o fim
-        # normal do interpretador, apaga o banco e a pasta de transbordo dele.
+        # normal do interpretador, apaga o banco temporário e a pasta de transbordo dele.
         self._finalizer = weakref.finalize(self, self._engine.cleanup)
         try:
             self._open_views()
@@ -274,9 +274,8 @@ class DeltaReader:
         com os dados da versão lida, ou só das partições pedidas.
 
         Cada tabela troca numa transação, e as tabelas correm em paralelo, cada uma numa sessão a
-        mais; uma falha devolve o objeto anterior da tabela, view ou tabela, e as outras terminam.
-        Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do ``ingest`` do
-        motor, o intervalo ao lado do ``IN``.
+        mais. Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do
+        ``ingest`` do motor, o intervalo ao lado do ``IN``.
 
         Exemplo:
 
@@ -291,7 +290,8 @@ class DeltaReader:
             copia a tabela inteira.
         :raises ContractError: uma tabela sem view no leitor, ``partitions`` numa tabela sem
             partição ou um valor fora da regra da partição, antes de qualquer troca.
-        :raises duckdb.Error: a falha da cópia de uma tabela, que fica com o objeto anterior.
+        :raises duckdb.Error: a falha da cópia de uma tabela, que fica com o objeto anterior,
+            view ou tabela, enquanto as outras terminam.
         """
         filters = {}
         for table in tables:
@@ -395,10 +395,10 @@ class DeltaReader:
     # ------------------------------------------------------------ o encerramento
 
     def close(self) -> None:
-        """Fecha o motor: cancela o comando em curso, fecha a conexão e apaga o banco e a pasta
-        de transbordo, com as tabelas materializadas. O DuckDB só devolve a memória aqui: num
-        caderno, o leitor sem ``with`` segura a memória até esta chamada. A segunda chamada não
-        faz nada.
+        """Fecha o motor: cancela o comando em curso, fecha a conexão e apaga o banco temporário,
+        com as tabelas materializadas, e a pasta de transbordo. O DuckDB só devolve a memória
+        aqui: num caderno, o leitor sem ``with`` segura a memória até esta chamada. A segunda
+        chamada não faz nada.
 
         Exemplo:
 
@@ -554,7 +554,7 @@ class RedshiftReader:
         return self._engine.session()
 
     def close(self) -> None:
-        """Fecha a sessão e apaga ``<unload_to>/<id do leitor>/``, nada fora dela; sem
+        """Fecha a sessão e esvazia a pasta ``<unload_to>/<id do leitor>/``, nada fora dela; sem
         ``unload_to``, só fecha a sessão. A segunda chamada não faz nada.
 
         Exemplo:

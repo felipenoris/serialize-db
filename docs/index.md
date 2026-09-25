@@ -9,8 +9,8 @@ argumentos, o retorno e as exceções de cada função, está no menu: `serializ
 `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
 `serialize_db.engine` (com os motores `serialize_db.engine.duckdb` e
 `serialize_db.engine.redshift`), `serialize_db.resources`, `serialize_db.execution`,
-`serialize_db.load`, `serialize_db.publication`, `serialize_db.errors` e `serialize_db.cli`, com o
-runbook da operação e as opções de cada subcomando da linha de comando.
+`serialize_db.load`, `serialize_db.publication`, `serialize_db.reader`, `serialize_db.errors` e
+`serialize_db.cli`, com o runbook da operação e as opções de cada subcomando da linha de comando.
 
 ## Como o pacote funciona
 
@@ -33,7 +33,7 @@ runbook da operação e as opções de cada subcomando da linha de comando.
 - **Todo identificador que a biblioteca emite vai entre aspas duplas**: nomes de coluna como `to` e
   `timestamp` são palavras reservadas do DuckDB e do Redshift.
 
-O que já existe são o módulo de esquema, `serialize_db.schema`, o de texto SQL,
+O pacote tem o módulo de esquema, `serialize_db.schema`, o de texto SQL,
 `serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`, a camada
 de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3, a auditoria,
 `serialize_db.audit`, os dois motores, `serialize_db.engine.duckdb` e
@@ -346,7 +346,7 @@ a tabela, a partição e a coluna, e a chamada seguinte recomeça dela; um valor
 o tipo do contrato, ou uma coluna do contrato ausente dos arquivos, falha no `COPY` com o erro do
 DuckDB, também sem commit. Na linha de comando:
 
-```
+```shell
 serialize-db load --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --source s3://bucket/projeto/db_projetado
 ```
@@ -525,9 +525,9 @@ Redshift, e `--tables` deixa a tabela de fora.
 Sem a tabela de controle, a publicação para com `serialize_db.errors.PublicationError` antes de
 qualquer escrita; duas publicações da mesma tabela ao mesmo tempo terminam com a segunda em
 `serialize_db.errors.ExecutionConflict`, sem repetição; uma coluna anulável nova no modelo entra
-na tabela publicada por `ALTER TABLE ... ADD COLUMN`, e um diff destrutivo (coluna removida, tipo
-ou largura de `VARCHAR(n)` que mudou) despublica a tabela e a recria inteira na publicação
-seguinte.
+na tabela publicada por `ALTER TABLE ... ADD COLUMN`, e um diff destrutivo (coluna removida,
+coluna `NOT NULL` nova, tipo ou largura de `VARCHAR(n)` que mudou) despublica a tabela e a recria
+inteira na mesma publicação.
 
 ### Ler a base com o modelo
 
