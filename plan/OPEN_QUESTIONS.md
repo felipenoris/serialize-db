@@ -86,7 +86,8 @@ foi medido em [`POC.md`](POC.md).
   usuário: pôr a propriedade nas tabelas, com as colunas inteiras e de data, que todo caminho de
   escrita grava com mínimo e máximo; gravar no log mínimo e máximo largos, que o protocolo aceita
   com `tightBounds` falso, nos tipos que o registro omite e nas `Double` da issue #59; ou deixar o
-  pacote como está. O defeito vai ao delta-rs numa issue com o exemplo mínimo, que o usuário abre.
+  pacote como está. A issue #85 acompanha o item, com um exemplo autocontido que reproduz a perda.
+  O defeito vai ao delta-rs numa issue com o exemplo mínimo, que o usuário abre.
 
 - **A operação no ambiente alvo.** Em 2026-09-24, nas baterias das 16:51 e das 23:25, a carga, a
   auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`
