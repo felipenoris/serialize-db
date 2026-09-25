@@ -1,10 +1,10 @@
 """A camada de tabela: as tabelas Delta do banco, gravadas e lidas pelo delta-rs.
 
-Cada primitiva recebe ``uri``, a pasta da tabela sob a raiz do banco, e o ``Storage`` da raiz,
-que dá as opções do delta-rs a cada chamada e o sistema de arquivos que lê os rodapés e o log. A
-coluna de partição sai de ``table_options(table)``, e ``value`` é o valor de uma partição, ``None``
-numa tabela sem partição; o valor segue ``schema.PARTITION_VALUE``, porque entra no predicado como
-literal e vira nome de pasta.
+As primitivas que abrem uma tabela recebem ``uri``, a pasta da tabela sob a raiz do banco, e o
+``Storage`` da raiz, que dá as opções do delta-rs a cada chamada e o sistema de arquivos que lê os
+rodapés e o log. A coluna de partição sai de ``table_options(table)``, e ``value`` é o valor de uma
+partição, ``None`` numa tabela sem partição; o valor segue ``schema.PARTITION_VALUE``, porque entra
+no predicado como literal e vira nome de pasta.
 
 O ciclo de uma tabela: ``create_table`` a cria do modelo, ``reconcile`` aplica o diff aditivo do
 modelo e recusa o destrutivo, que só ``rewrite`` resolve, num commit. Uma partição entra por um de
@@ -442,9 +442,10 @@ def _stat_converter(field_type: pa.DataType) -> Callable[[str], object] | None:
     """A conversão do texto do ``RETURN_STATS`` para o valor que o log guarda, ou ``None`` quando o
     tipo fica sem mínimo e máximo.
 
-    Inteiro, data, ``Double`` e texto transcrevem exato. ``decimal`` e ``timestamp`` ficam de fora:
-    o log guarda o mínimo e o máximo como número JSON, e um máximo abaixo do valor real poda o
-    arquivo que tem a linha, sem erro, nos dois leitores.
+    Inteiro, data, ``Double`` e texto transcrevem exato. ``decimal`` fica de fora porque o log
+    guarda o mínimo e o máximo como número JSON, e um máximo abaixo do valor real poda o arquivo que
+    tem a linha, sem erro, nos dois leitores; ``timestamp``, porque o log o guarda truncado em
+    milissegundos.
     """
     if pa.types.is_integer(field_type):
         return int
@@ -1259,8 +1260,8 @@ def rewrite(uri: str, table: sa.Table, storage: Storage,
     :param storage: o armazenamento da raiz do banco.
     :param expressions: por coluna do contrato, a expressão SQL do DuckDB sobre a versão atual que
         a preenche: o nome antigo numa renomeação, o valor de uma coluna ``NOT NULL`` nova. Uma
-        coluna do contrato ausente da versão atual e fora de ``expressions`` falha no ``COPY``,
-        antes de qualquer commit. ``None`` preenche cada coluna pelo próprio nome.
+        coluna do contrato ausente da versão atual e fora de ``expressions`` é ``BinderException``
+        do DuckDB, antes de qualquer commit. ``None`` preenche cada coluna pelo próprio nome.
     :return: a versão do commit.
     :raises ContractError: uma chave de ``expressions`` fora das colunas do modelo, que seria
         ignorada.
@@ -1328,8 +1329,8 @@ def version_diff(uri: str, published: int, current: int, table: sa.Table,
         version_diff(uri, 57, 58, Operacao.__table__, storage)   # {"2026-08-31"}
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
-    :param published: a versão publicada.
-    :param current: a versão atual.
+    :param published: a versão de partida, como a publicada.
+    :param current: a versão de chegada, como a atual.
     :param table: a tabela do modelo.
     :param storage: o armazenamento da raiz do banco.
     :return: os valores das partições alteradas, vazio com ``published`` igual a ``current``;
@@ -1358,8 +1359,8 @@ def version_diff(uri: str, published: int, current: int, table: sa.Table,
 
 def partition_values(dt: DeltaTable, partition_by: str | None) -> list[str | None]:
     """Os valores de partição com algum arquivo na versão carregada, em ordem de texto; numa tabela
-    sem partição, ``[None]`` quando ela tem arquivo e ``[]`` quando não tem. Protegida, para os
-    motores e a publicação, que carregam uma partição por vez."""
+    sem partição, ``[None]`` quando ela tem arquivo e ``[]`` quando não tem. Protegida, para o
+    motor Redshift, a publicação e a carga inicial, que carregam uma partição por vez."""
     actions = pa.table(dt.get_add_actions(flatten=True))
     if actions.num_rows == 0:
         return []
@@ -1470,7 +1471,6 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
         pasta ``arquivo/<nome>/``.
     :raises ConflictError: outro escritor entre a leitura e a escrita.
     """
-    # O nome vira chave do arquivo de controle e pasta do archive; a recusa vem antes da leitura.
     check_partition_value(name)
     control, fingerprint = read_snapshots(storage, environment)
     if name in control["snapshots"] or name in control.get("archived", {}):
@@ -1850,6 +1850,7 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
     target_path = storage.relative(destination)
     total = 0
     for value, group in _actions_by_partition(source, partition_by).items():
+        # A soma conta toda partição, a pulada inclusive: a contagem final lê a cópia inteira.
         total += sum(int(action["num_records"]) for action in group)
         label = "tabela inteira" if value is None else f"partição {value}"
         if all(action["path"] in registered for action in group):
@@ -1861,7 +1862,6 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
             storage.copy(storage.join(source_path, action["path"]),
                          storage.join(target_path, action["path"]))
             actions.append(_add_action(_copied_file(action), contract, partition_by, value, ()))
-        # Cada commit resolve a versão no log do armazenamento: a tabela é reaberta por partição.
         destination_table = open_table(destination, storage)
         _commit_actions(destination_table, str(metadata.name), partition_by, actions, value=value,
                         metadata={})
@@ -1930,7 +1930,8 @@ def export_snapshot(uri: str, table: sa.Table, destination: str, storage: Storag
         da sua escrita. ``rewrite`` reescreve pelo ``COPY`` particionado do DuckDB, com o esquema
         da versão em todos.
     :return: as URIs dos arquivos gravados, em ordem.
-    :raises ValueError: no modo ``copy``, ``uri`` ou ``destination`` fora da raiz de ``storage``.
+    :raises ValueError: no modo ``copy``, ``uri`` ou ``destination`` fora da raiz de ``storage``;
+        no ``rewrite`` de uma tabela sem partição, ``destination`` fora da raiz.
     """
     dt = open_table(uri, storage, version)
     if mode == "copy":
