@@ -84,6 +84,15 @@ do `pdoc`. O que a implementação mudou do plano:
   arquivo não commita. A compactação roda no escritor do delta-rs, fora do
   `memory_limit` do DuckDB, com as tarefas paralelas do padrão do delta-rs; a memória dela numa
   partição de `cad_lancamentos` não foi medida ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  O `optimize.compact` grava mínimo e máximo em toda coluna, e por isso `delta.compact` lê as ações
+  `add` da versão atual e junta, por partição, as colunas `Double` que algum arquivo traz sem
+  mínimo e máximo no log; cada grupo de partições com o mesmo conjunto é compactado numa chamada,
+  com as propriedades de escrita de `_writer_properties`, as de `publish_partition`, e a partição
+  compactada fica sem a estatística que a issue #59 tira (decisão do usuário de 2026-09-25). Uma
+  coluna `Double` só de nulos num arquivo também sai do log sem mínimo e máximo, e perde a
+  estatística na partição compactada. O caso chega ao `compact` depois de um `rewrite` de uma
+  tabela com mais de 100 partições e partições de vários arquivos ([`POC.md`](POC.md)); o código
+  ainda não segue a decisão ([`CURRENT_STATE.md`](CURRENT_STATE.md)).
 - **`archive`** lê a entrada do snapshot, roda `deep_copy(<ambiente>/<tabela>, versão,
   <ambiente>/arquivo/<nome>/<tabela>, storage)` de cada tabela na versão registrada, imprime
   por tabela o tempo e o pico de RSS do processo, com o tempo de cada partição no log de
@@ -121,7 +130,7 @@ do `pdoc`. O que a implementação mudou do plano:
 | --- | --- | --- |
 | `snapshot` | Nome inédito em `snapshots` e em `archived`; nenhuma execução aberta no ambiente. | A entrada com todas as tabelas existentes; 2 se outro escritor mudou o controle. |
 | `vacuum` | Controle legível. | Sem `--apply`, nenhuma exclusão; com ele, a versão de cada snapshot continua legível e as intermediárias fora da retenção somem. |
-| `compact` | Nenhum snapshot na versão atual da tabela; `--partitions` numa tabela particionada. | Menos arquivos na partição; o mesmo conteúdo; um commit `OPTIMIZE` com `dataChange` falso. |
+| `compact` | Nenhum snapshot na versão atual da tabela; `--partitions` numa tabela particionada. | Menos arquivos na partição; o mesmo conteúdo; um commit `OPTIMIZE` com `dataChange` falso; as colunas `Double` que o log da partição trazia sem mínimo e máximo continuam sem eles. |
 | `archive` | Snapshot registrado em `snapshots`. | Uma tabela nova por tabela do snapshot, uma versão por partição, com os mesmos arquivos e as mesmas somas; a entrada movida de `snapshots` para `archived`. |
 | `export` | Destino vazio sob a raiz. | Pastas `<coluna>=<valor>/` sem `_delta_log`; em `copy`, os mesmos bytes; em `rewrite`, o esquema atual em todos os arquivos. |
 | `history` | Tabela existente. | Uma linha por commit, sem credencial. |
@@ -135,6 +144,7 @@ do `pdoc`. O que a implementação mudou do plano:
 | Snapshot e histórico | `test_snapshot_records_every_table_and_history_shows_the_metadata` | A entrada com a versão atual de cada tabela existente; o nome repetido recusado; o `history` do mais recente ao mais antigo, com os três metadados nos commits da biblioteca e nenhum no `CREATE TABLE`. |
 | Snapshot preso | `test_vacuum_keeps_the_snapshot_version` | Dentro da retenção nada é listado; com retenção zero, o arquivo da versão anterior ao snapshot é listado e, com `--apply`, apagado; a versão do snapshot lê e a anterior falha. |
 | Compactação antes | `test_compact_refuses_after_a_snapshot_on_the_current_version` | Recusa quando o snapshot é a versão atual, também na tabela sem partição; compacta depois de uma versão nova, num commit `OPTIMIZE` que `version_diff` não conta; `--partitions` exigido na tabela particionada; a tabela fora do modelo é erro de uso; a linha impressa com o tempo e o pico de RSS. |
+| Compactação sem estatística | `tests/test_delta.py::test_compact_keeps_the_columns_without_min_max` | Numa partição de dois arquivos, um sem mínimo e máximo de `valor` no log, o arquivo compactado sem eles no log e no rodapé e com os das outras colunas, com as mesmas linhas, o `NaN` incluído; outra partição, compactada na mesma chamada sem essa marca, com a estatística de `valor`. |
 | Arquivo | `test_archive_copies_each_table_with_the_same_sums` | Uma versão por partição no arquivo, os mesmos arquivos e as mesmas somas da versão registrada, a entrada em `archived` e fora de `snapshots`, o `vacuum` sem a versão arquivada em `keep_versions`, `snapshot` recusando o mesmo nome, `archive` recusando o nome ausente e pulando a tabela já arquivada, com o tempo e o pico de RSS na linha de cada tabela. |
 | Exportação | `test_export_by_copy_and_by_rewrite` | Os dois modos e uma versão antiga; o destino não vazio e o destino fora da raiz recusados; a linha impressa com o tempo e o pico de RSS. |
 | Erros de uso | `test_cli_operation_usage_errors` | O nome ausente, o modo desconhecido, a tabela fora do modelo e a tabela sem Delta, sem traceback. |
@@ -145,5 +155,6 @@ do `pdoc`. O que a implementação mudou do plano:
 
 Nenhuma. As decisões do usuário de 2026-09-23 sobre o lugar do runbook, `docs/operacao.md`, a
 retenção de 400 dias do `vacuum` mensal e a entrada do snapshot arquivado, movida para a chave
-irmã `archived`, e a de 2026-09-24 sobre o `archive` pela cópia dos arquivos de cada partição e o
-registro deles, estão escritas nas seções que as descrevem.
+irmã `archived`, a de 2026-09-24 sobre o `archive` pela cópia dos arquivos de cada partição e o
+registro deles, e a de 2026-09-25 sobre as colunas `Double` sem mínimo e máximo na compactação,
+estão escritas nas seções que as descrevem.

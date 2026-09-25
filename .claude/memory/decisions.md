@@ -1055,3 +1055,45 @@ The reader's tests import the publication suite's `Target`, `target` and `export
 the publication suite does. The pdoc build read four fields wrong (`:param channel:`, `:param db:`
 and one `:raises ContractError:` with a second colon on the first line), corrected before the
 commit. `plan/PLAN-STAGE-10.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+
+## The compaction of partitions with non-finite `Double` values (2026-09-25)
+
+The user decided the open item on `delta.compact`, which wrote min and max for every column and
+undid the issue #59 decision in a compacted partition: `delta.compact` reads the current version's
+`add` actions, collects per partition the `Double` columns some file carries without min and max in
+the log, and compacts each group of partitions with the same set in one `optimize.compact` call
+with the writer properties of `_writer_properties`, those of `publish_partition`. The alternatives
+were a DuckDB count of the non-finite values per partition, as `rewrite` does
+(`_nonfinite_by_partition`), which reads the partition again, and every `Double` column, which drops
+the statistics of clean partitions too. Before deciding, the user asked where the compaction runs,
+why the log already marks the columns, and whether the library's own writers reach the case; the
+probes of the same day found it only after a `rewrite` of a table with more than 100 partitions
+whose partitions have several files, which today only the Redshift engine writes. The code does not
+follow the decision yet. `plan/PLAN-STAGE-9.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+
+## The count check of the Redshift engine's swap (2026-09-25)
+
+The user decided the open item on `RedshiftEngine.export_partition`: the swap to
+`publish_partition`, taken by a partition with a non-finite `Double` and, under
+`Execution.publish(audit=False)`, by every table with a `Double` column, committed without the
+count check the registration does (`register_files` compares `expected_rows` before the commit and
+runs `read_back` after it). After `publish_partition`, `_swap` runs `delta.read_back` with
+`expected_rows` or, without it, the sandbox's `count(*)`, as the registration does; a difference
+restores the previous version and raises `RegistrationRefused`. The alternatives were comparing
+the `UNLOAD` files' rows before the commit, which misses a loss in the delta-rs write, and
+documenting the gap. The code does not follow the decision yet. `plan/PLAN-STAGE-5.md`,
+`plan/CURRENT_STATE.md`
+
+## The version of the Redshift engine's `_publicado` staging (2026-09-25)
+
+The user decided the open item on `RedshiftEngine.published`, which loads the staging
+`exec_<id>_<tabela>_publicado` once per execution, keyed by the name alone: called again with
+another version, after `run.publish` advances `versions`, it returned the first version's staging,
+while the DuckDB engine reads the new version through `delta_scan(uri, version := v)`. The staging
+name carries the version, `exec_<id>_<tabela>_publicado_<versão>`, so each requested version gets
+its own staging, loaded whole, and every copy stays in the schema until `cleanup`; the audit's
+staging is the same one when the versions match. The alternatives were refusing another version
+with `SandboxError`, which refuses on Redshift what DuckDB accepts, and reloading the same
+staging, which changes what an earlier `FromClause` reads. Before deciding, the user asked what a
+staging is. The code does not follow the decision yet. `plan/PLAN-STAGE-5.md`,
+`plan/PLAN-STAGE-6.md`, `plan/CURRENT_STATE.md`

@@ -48,6 +48,13 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   deltalake 1.6.4, a four-partition table written by `write_deltalake`, local folder,
   2026-09-24). `plan/POC.md`
 
+- `COPY ... PARTITION_BY` keeps at most `partitioned_write_max_open_files` files open (100 in
+  DuckDB 1.5.5) and opens a new file for a partition whose file it closed: with the partitions'
+  rows interleaved, 150 partitions of 20,000 rows gave up to 8, 16 and 25 files per partition with
+  4, 16 and 32 threads, while 3 partitions of 5,000,000 rows and 40 of 1,000,000 gave one file each;
+  `delta.rewrite` over 150 partitions of three files each wrote 254 files with 4 threads and 222
+  with 16, one partition in three files (2026-09-25). `plan/POC.md`, `plan/PLAN-STAGE-9.md`
+
 ## Proxy
 
 - DuckDB has `http_proxy`, `http_proxy_username` and `http_proxy_password` and nothing like

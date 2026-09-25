@@ -131,6 +131,17 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   the column (`date32`, `decimal128`, `timestamp[us]`) and `partition.<col>` as `string not null`.
   `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 
+- `write_deltalake` splits a partition at the default target file size, 104,857,600 bytes:
+  20,000,000 rows of a `BigInteger` and a `Double` from a reader of 100,000-row batches gave files
+  of 104,884,565, 104,890,931 and 104,884,007 bytes and one of 16,285,616, and `optimize.compact`
+  of that partition committed nothing, since no two files fit the target. `optimize.compact(
+  writer_properties=WriterProperties(column_properties={"valor": ColumnProperties(
+  statistics_enabled="NONE")}))` writes the merged file without the min, max and `nullCount` of
+  `valor` in the log and without its footer statistics, keeping the other columns'. `deltalake`
+  1.6.4 is yanked on PyPI with the reason "Issue: #4784": `uv` warns and still installs the
+  pinned version, and the reason was not read (2026-09-25). `plan/POC.md`, `plan/PLAN-STAGE-9.md`,
+  `plan/OPEN_QUESTIONS.md`
+
 ## Performance measured
 
 - On local disk, 3,000,000 rows in 12 files: `delta_scan` aggregates in 0.010 s against 0.006 s for

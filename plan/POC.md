@@ -3537,3 +3537,49 @@ raiz local e `SERIALIZE_DB_TEST_EMULATOR`, as seis suítes do alvo em 91 aprovad
 **Consequências**: o [arquivo da etapa 10](PLAN-STAGE-10.md) trocou a `Interface` pela descrição
 da implementação, como as etapas anteriores; nenhuma leitura contradisse o plano, e as leituras que
 só o ambiente alvo dá estão em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que as sondas da compactação mostraram
+
+Em 2026-09-25, numa pasta local do contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB),
+com deltalake 1.6.4, DuckDB 1.5.5 e PyArrow 25.0.1, as sondas procuraram, pelos escritores da
+biblioteca, uma partição com `NaN` em mais de um arquivo, o caso em que `delta.compact` devolve a
+estatística que a issue #59 tira; a sonda de 2026-09-24 montou os dois arquivos por fora. As
+tabelas tinham `id_lancamento` (`BigInteger`), `valor` (`Double`) e a partição `data_base_str`.
+
+- **As propriedades de escrita tiram a estatística da coluna no `optimize.compact`**: sobre dois
+  arquivos de uma partição, um com `NaN` em `valor`, `writer_properties=WriterProperties(
+  column_properties={"valor": ColumnProperties(statistics_enabled="NONE")})` deu o arquivo
+  compactado sem mínimo, máximo e `nullCount` de `valor` no log e sem estatística dela no rodapé,
+  com as de `id_lancamento`, e as três linhas, o `NaN` incluído; sem as propriedades, `min.valor`
+  1.0 e `max.valor` 3.0, como em 2026-09-24.
+- **O `publish_partition` divide a partição no tamanho alvo do delta-rs, 104.857.600 bytes**:
+  20.000.000 linhas por um leitor de lotes de 100 mil, como o da troca do motor Redshift, o único
+  chamador dele no pacote, deram três arquivos de 104.884.565, 104.890.931 e 104.884.007 bytes e
+  um de 16.285.616, todos sem mínimo e máximo de `valor`. O `compact` da partição não commitou (0
+  gravados, 0 removidos): nenhum par de arquivos cabe no tamanho alvo.
+- **O motor DuckDB e a carga inicial gravam um arquivo por partição**: um `COPY ... TO` sem
+  `PARTITION_BY` por partição (`DuckDBEngine.export_partition`, `load._copy_partition`), num
+  commit que substitui a partição; lido no código.
+- **O `COPY ... PARTITION_BY` do DuckDB abre outro arquivo para a mesma partição acima de
+  `partitioned_write_max_open_files`**, 100 no DuckDB 1.5.5: direto no DuckDB, com as linhas das
+  partições intercaladas, 3 partições de 5.000.000 linhas e 40 de 1.000.000 deram um arquivo por
+  partição com 4, 16 e 32 threads, e 150 de 20.000 deram até 8, 16 e 25 arquivos por partição.
+- **O `rewrite` leva esse limite à tabela Delta**: com as threads fixadas na sonda, 150 partições
+  de um arquivo cada deram um arquivo por partição com 4, 16 e 32 threads; 150 partições de três
+  arquivos cada (o primeiro por `publish_partition` e os outros por `write_deltalake(mode=
+  "append")`, no lugar dos arquivos de um `UNLOAD` sem `PARALLEL OFF`) deram 254 arquivos com 4
+  threads e 222 com 16, e 40 partições de três arquivos, um por partição com 16 threads. Com 4
+  threads, a partição do `NaN` saiu em três arquivos sem mínimo e máximo de `valor`, e o `compact`
+  dela juntou os três num arquivo com `min.valor` 4,5e-06 e `max.valor` 0,99998.
+- **`deltalake==1.6.4` está retirado (yanked) do PyPI**, com o motivo "Issue: #4784", pelo aviso
+  do `uv` ao instalar a versão para a sonda.
+
+**Consequências**: uma partição com coluna `Double` sem mínimo e máximo chega ao `compact` em
+vários arquivos abaixo do tamanho alvo só depois de um `rewrite` de uma tabela com mais de 100
+partições e partições de vários arquivos, que hoje só o motor Redshift grava (o `UNLOAD` acima de
+5.000.000 linhas e a troca acima do tamanho alvo); a carga no ambiente alvo tem 21 arquivos nas 12
+tabelas, um por partição. O usuário decidiu em 2026-09-25 que `delta.compact` passa ao
+`optimize.compact` as propriedades de escrita sem estatística nas colunas `Double` que o log da
+partição já traz sem mínimo e máximo, e a regra entrou no [arquivo da etapa 9](PLAN-STAGE-9.md);
+o item saiu de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), onde entrou a versão retirada do
+`deltalake`.
