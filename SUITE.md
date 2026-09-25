@@ -94,7 +94,7 @@ export AWS_DEFAULT_REGION=sa-east-1
     --partitions 2026-01-31 \
     --foreign-keys
 
-.venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH
+.venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH/prd
 
 .venv/bin/serialize-db history --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos
 .venv/bin/serialize-db snapshot --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --name carga-2026-09-24
@@ -184,7 +184,8 @@ PY
 # export por reescrita: um arquivo por partição pelo COPY do DuckDB, com os limites do ambiente
 .venv/bin/serialize-db export --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos --destination $TARGET_ROOT_PATH/prd/exportacao/carga-2026-09-24-reescrita/cad_lancamentos --mode rewrite
 
-# compact: exige --partitions numa tabela particionada
+# compact: exige --partitions numa tabela particionada e recusa a tabela com um snapshot na
+# versão atual; numa partição de um arquivo só, não grava nada
 .venv/bin/serialize-db compact --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos --partitions 2026-03-31
 ```
 

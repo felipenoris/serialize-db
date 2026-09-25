@@ -3485,6 +3485,103 @@ já conhecidas dos probes.
 partição de vários arquivos; o item das versões não correntes ganhou a leitura de `BK-14`.
 Nenhum arquivo do plano muda.
 
+## O que a bateria de 2026-09-25 às 17:25 mostrou no ambiente alvo
+
+Em 2026-09-25, de 17:25 a 19:37 UTC, o usuário rodou no ambiente alvo os probes, as suítes e os
+comandos de `SUITE.md`, a partir da `main` do dia, numa máquina de 8 vCPUs e 15.505 MB (Python
+3.13.15, DuckDB 1.5.5, pyarrow 25.0.1, `sa-east-1`), com a pasta preparada de novo por
+`prepare_offline.sh`: `SP-9` leu na `.venv` o deltalake 1.6.6, o boto3 1.43.102, o
+`redshift_connector` 2.1.17 e o sqlglot 30.19.0. É a primeira bateria com o deltalake 1.6.6 e com
+a etapa 10, e a primeira rodada de `probes/credentials.py` no alvo. O relatório dela está em
+[`readings/`](readings/README.md); os outros ficam fora de `plan/`, com os achados aqui, e a saída
+do leitor, do `export` e do `compact` veio colada na conversa, sem a hora. Nenhum caso das suítes
+falhou.
+
+- **Os probes** (17:25 a 17:27): `redshift.py` sem falha nova, com a credencial de quem chama
+  expirando em 52 minutos (`RS-18`) e 45 erros de carga em 30 dias em `sys_load_error_detail`
+  (`RS-12`), contra 25 em 2026-09-24 às 01:41; `space.py` com 8 CPUs, 15,1 GiB, o DuckDB em 8
+  threads e `memory_limit` de 12,1 GiB pelo padrão do DuckDB, e a mesma falha de `SP-4`;
+  `bucket.py` com as mesmas 6 chamadas negadas e `BK-14` com 2.980 versões não correntes
+  (86.695.363 bytes) e 2.788 marcadores de exclusão sob a raiz das suítes; `diagnose_aws.py` com o
+  boto3, o delta-rs 1.6.6 e o DuckDB listando o prefixo; `catalog.py` com o Athena negado e o Lake
+  Formation e o S3 Tables sem resposta (60,7 s e 30,3 s), como em 2026-09-23.
+- **As suítes** (17:27 a 18:00): `-m "not redshift"` com 512 aprovados em 225,5 s, com
+  `delta.client_version` `delta-rs.py-1.6.6` e as leituras de 2026-09-24 às 01:43 salvo os tempos
+  e as 8 threads; `-m redshift` com 45 aprovados duas vezes (620,2 s e 566,1 s), os 44 de
+  2026-09-24 mais `test_redshift_reader_matches_the_delta_reader`, em que o leitor Redshift, com o
+  `stream` pelo `UNLOAD` no bucket da suíte, leu as mesmas 40 linhas do leitor Delta;
+  `tests/test_engine_redshift.py -m redshift` com 6 aprovados duas vezes (71,7 s e 77,9 s) e
+  `tests/test_publication.py -m redshift` com 8 aprovados duas vezes (191,7 s e 174,2 s). Entre os
+  8 está `test_cli_publishes_by_channel_and_snapshot_and_reverts`: `serialize-db publish` por
+  `--channel default`, por `--snapshot`, de volta ao snapshot anterior, com a partição trocada de
+  volta às 40 linhas e o mês novo retirado, por `--channel current`, `--status` e `--unpublish`,
+  num ambiente `poc<id>`.
+- **A carga** (`scripts/migrate_parquet_to_delta.py --environment prd`, `started_at` 18:16:38), na
+  raiz de `SUITE.md` carregada de novo: as 12 tabelas, 187.340.509 linhas em 21 partições, com
+  contagens e somas iguais em toda partição e `alembic_version`, `meta_update_status` e
+  `schema.json` fora do modelo; `environment_limits` deu 8 threads e `memory_limit` de 6.227 MiB,
+  a metade dos 12.454 MB disponíveis. As partições de `cad_lancamentos` entraram em 28,2 s,
+  22,0 s, 52,3 s e 28,7 s, e o pico do processo foi 7.824 MB depois das duas primeiras e
+  8.677 MB depois da 2026-03-31, acima do limite do DuckDB como nas baterias de 2026-09-24. As 21
+  partições somam 219,4 s, contra 164,3 s na máquina de 16 vCPUs às 23:25 de 2026-09-24. É a
+  primeira carga inteira numa máquina de cerca de 16 GB: em 2026-09-23 às 23:05, numa de
+  15.786 MB, o kernel matou o processo na partição 2026-03-31, sob o `memory_limit` padrão do
+  DuckDB, 12,3 GiB.
+- **`duckdb_threads.py`** (18:21) parou em `DT-1` com `TableNotFoundError`: `SUITE.md` passava a
+  raiz, o probe lê as tabelas direto na pasta recebida, em `<raiz>/cad_lancamentos`, e a carga as
+  grava em `<raiz>/prd/`. O comando passa `$TARGET_ROOT_PATH/prd` desde então.
+- **O leitor Delta e o leitor Redshift** (bloco "Acesso de leitura" de `SUITE.md`):
+  `db.open_delta()` abriu as 12 views do snapshot `carga-2026-09-25`, apontado pelo canal
+  `default`, em 0,645 s, com `cad_lancamentos` na versão 4 e `cad_contas` na 1; a contagem de
+  `cad_contas` deu 97 pelo leitor Delta e 97 por `db.open_redshift()`, só por `query`.
+- **`export` de `cad_lancamentos`**: pelo registro, 4 arquivos em 10,6 s com pico de 262 MB; por
+  `--mode rewrite`, 4 arquivos em 34,0 s com pico de 4.343 MB, contra 8,8 s e 17,3 s com 5.425 MB
+  na máquina de 16 vCPUs.
+- **`compact --table cad_lancamentos --partitions 2026-03-31`** saiu com 2 e `o snapshot
+  carga-2026-09-25 está na versão atual 4 de cad_lancamentos; compacte antes de um snapshot`, a
+  recusa que a [etapa 9](PLAN-STAGE-9.md) prevê: `SUITE.md` roda o `compact` depois do snapshot
+  da publicação.
+- **As credenciais de uma hora** (`probes/credentials.py` sobre `<raiz>/prd/cad_contas`, de
+  18:33:51 a 19:36:53, 14 rodadas,
+  [`readings/credentials-2026-09-25-1833.txt`](readings/credentials-2026-09-25-1833.txt)):
+  - **O contêiner trocou a chave a cada cerca de 30,6 minutos.** A chave do início expirava às
+    19:19:10, 45 minutos adiante; a cadeia do `boto3` passou a entregar outra, que expira às
+    19:49:57, entre 18:48:54 e 18:53:55, e outra, que expira às 20:20:31, entre 19:18:59 e
+    19:24:00. Com a expiração de 18:17:54 que `space.py` leu às 17:25, as quatro ficam a cerca de
+    30,6 minutos uma da outra: se cada chave vale uma hora, a que a cadeia entrega tem de 29 a 60
+    minutos pela frente.
+  - **O delta-rs, o `S3FileSystem`, o `boto3` e a conexão Redshift seguiram lendo.** O
+    `DeltaTable` aberto no início leu nas quatro rodadas depois da expiração das 19:19:10
+    (`CR-3`), como o rodapé pelo `S3FileSystem` (`CR-6`) e `Storage.read_text` (`CR-7`); a conexão
+    Redshift respondeu ao `select 1` duas vezes depois da expiração da senha, às 19:33:52
+    (`CR-8`).
+  - **O `delta_scan` falhou uma vez depois que a chave do secret expirou.** O secret do DuckDB
+    guardou a chave do início até ela expirar, sem seguir a troca do contêiner das 18:53; às
+    19:24:00, 5 minutos depois da expiração, o `delta_scan` da conexão aberta no início falhou
+    com `IO Error: DeltaKernel ObjectStoreError (8): ... Generic S3 error: Error performing GET
+    .../_delta_log/_last_checkpoint`, o `read_parquet` da mesma rodada leu, e o secret passou à
+    chave nova (`CR-9`). O `delta_scan` leu nas três rodadas seguintes (`CR-4` reprovada, 1 de 4).
+    É o que o substituto mostrou: só o `httpfs` renova o secret de `REFRESH auto`, e a sonda lê
+    cada resultado até o fim.
+  - **A cláusula do `COPY` e do `UNLOAD` seguiu a chave do contêiner** desde a troca das 18:53:55
+    (`CR-10`): `credentials_clause` resolve a cadeia numa sessão nova do `boto3` a cada chamada.
+  - **O controle**: os cinco clientes novos leram depois da espera (`CR-11`).
+
+**Consequências**: a primeira execução longa confirma que o delta-rs, o `S3FileSystem` e o `boto3`
+renovam a credencial do contêiner e que a conexão Redshift aberta sobrevive à expiração da senha.
+O motor DuckDB de uma execução e o leitor Delta leem por `delta_scan` numa conexão cujo secret
+guarda a chave da abertura, com menos de uma hora pela frente: o primeiro `delta_scan` depois da
+expiração falha, a menos que uma leitura pelo `httpfs` tenha renovado o secret antes, e a
+biblioteca precisa renovar o secret por conta própria, na forma que espera o usuário em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). A cláusula montada uma vez por tabela leva, pela leitura
+deste dia, uma chave com cerca de 29 minutos ou mais pela frente, contra os 153,9 s da publicação
+de `cad_lancamentos` em 2026-09-24, e a decisão de 2026-09-25 da [etapa 8](PLAN-STAGE-8.md) fica.
+O item do deltalake 1.6.6 saiu de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md); o do acesso de leitura
+ficou com a publicação da base inteira por canal, com o tempo e o pico de RSS por tabela, e com o
+`UNLOAD` do cliente só de leitura; o da operação, com o `compact` de uma partição de vários
+arquivos, que roda antes do snapshot. Os arquivos das [etapas 3](PLAN-STAGE-3.md) e
+[8](PLAN-STAGE-8.md) e [`PLAN.md`](PLAN.md) citam esta leitura.
+
 ## O que a implementação da etapa 10 mostrou
 
 `serialize_db.reader`, os canais do arquivo de controle (`delta.set_channel`, `channel_snapshot`,

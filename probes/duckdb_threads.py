@@ -13,10 +13,10 @@ Uso:
     PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py <raiz> [--metadata MÓDULO:ATRIBUTO]
         [--tables TABELA ...] [--partition AAAA-MM-DD] [--threads N ...] [--repetitions N]
 
-``<raiz>`` é a pasta com uma tabela Delta por subpasta, local ou ``s3://bucket/prefixo``: o
-``--root`` da migração. ``--metadata`` é o modelo, ``client_model:Base.metadata`` por padrão, com
-``tests`` no ``PYTHONPATH``. ``--tables`` são as tabelas medidas, a primeira a grande; por padrão
-``cad_lancamentos``, ``cad_contratos``, ``cad_operacoes`` e ``rel_contrato_operacao``.
+``<raiz>`` é a pasta ``<root>/<ambiente>`` que a migração grava, uma tabela Delta por subpasta,
+local ou ``s3://bucket/prefixo``. ``--metadata`` é o modelo, ``client_model:Base.metadata`` por
+padrão, com ``tests`` no ``PYTHONPATH``. ``--tables`` são as tabelas medidas, a primeira a grande;
+por padrão ``cad_lancamentos``, ``cad_contratos``, ``cad_operacoes`` e ``rel_contrato_operacao``.
 ``--partition`` é a partição lida em cada tabela particionada, por padrão a mais recente comum a
 elas; uma tabela sem partição é lida inteira. ``--threads`` são os valores medidos, por padrão o
 padrão do motor vezes 0,5 e 1 a 5: nas instâncias x86 da AWS com SMT, cada núcleo físico tem duas
@@ -645,7 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Mede a ingestão das tabelas Delta pelo motor DuckDB com cada valor de threads, "
         "numa tabela e em várias, em série e em sessões a mais.")
-    parser.add_argument("root", help="a pasta das tabelas Delta, local ou s3://bucket/prefixo: o --root da migração")
+    parser.add_argument("root", help="a pasta das tabelas Delta, local ou s3://bucket/prefixo: <root>/<ambiente> da migração")
     parser.add_argument("--metadata", default=DEFAULT_METADATA, help=f"o MetaData do modelo, {DEFAULT_METADATA} por padrão")
     parser.add_argument("--tables", nargs="+", default=list(DEFAULT_TABLES), metavar="TABELA", help="as tabelas medidas, a primeira a grande")
     parser.add_argument("--partition", metavar="AAAA-MM-DD", help="a partição lida; por padrão a mais recente comum às tabelas")

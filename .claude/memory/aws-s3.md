@@ -63,7 +63,8 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `REFRESH auto` requests and `CHAIN 'sts'` and `'web_identity'` switch on by themselves (probe of
   2026-09-24; when the refresh runs, the page does not say). `storage.duckdb_setup` and the
   migration script create the secret with `REFRESH auto` (user decision of 2026-09-24); a
-  connection crossing the container credential's rotation is still unmeasured. `plan/POC.md`,
+  connection crossing the container credential's rotation was read in the target on 2026-09-25
+  (below). `plan/POC.md`,
   `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-3.md`
 - In the stand-in of 2026-09-25 (moto behind a proxy answering `400 ExpiredToken` to a key past
   its 70 s lifetime, a local IMDS issuing a new key every 40 s, because delta-rs ignored
@@ -76,8 +77,21 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   (object_store 0.13.2) refreshed by itself. `S3FileSystem` and boto3 failed for IMDS reasons
   the target does not share: botocore's IMDS fetcher pushes a near expiry 12 to 20 minutes
   ahead (`ec2_credential_refresh_window` 10 min plus 2 to 10 random), and the AWS C++ SDK
-  1.11.800 of PyArrow reloaded about every five minutes. `probes/credentials.py` reads the
-  target, about one hour per run. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  1.11.800 of PyArrow reloaded about every five minutes. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+- In the target on 2026-09-25 (`probes/credentials.py`, 18:33 to 19:36 UTC, 14 rounds 5 minutes
+  apart over `<root>/prd/cad_contas`, `plan/readings/credentials-2026-09-25-1833.txt`), the
+  `boto3` chain served a new container key about every 30.6 minutes (the first expiring at
+  19:19:10, the next ones at 19:49:57 and 20:20:31, switched between 18:48:54 and 18:53:55 and
+  between 19:18:59 and 19:24:00): if each key lasts an hour, the key a client gets has 29 to 60
+  minutes left [inferred]. The open `DeltaTable`, `S3FileSystem`, `Storage.read_text` and the
+  open Redshift connection, past its `GetCredentials` password expiry at 19:33:52, kept reading.
+  The DuckDB secret kept the opening key until it expired: at 19:24:00, 5 minutes after,
+  `delta_scan` failed once (`DeltaKernel ObjectStoreError (8)`, `Generic S3 error` on
+  `_delta_log/_last_checkpoint`), the same round's `read_parquet` read, the secret moved to the
+  new key, and `delta_scan` read in the three later rounds. `credentials_clause` followed the
+  container key from 18:53:55 on (a new `boto3` session per call). botocore refreshes a held
+  container credential 15 minutes (advisory) to 10 minutes (mandatory) before its expiry. How
+  the library renews the DuckDB secret awaits the user. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 
 ## The target's network, read on 2026-09-21
 

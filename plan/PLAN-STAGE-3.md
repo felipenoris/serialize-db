@@ -192,10 +192,11 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
   proxy, e o bloco é vazio ([`POC.md`](POC.md), leitura de 2026-09-21). O secret guarda a chave e
   o token resolvidos no `CREATE SECRET`, e a documentação da extensão `aws` pede `REFRESH auto`
   para a credencial que expira: o secret leva `REFRESH auto` (decisão do usuário de 2026-09-24,
-  sonda do mesmo dia em [`POC.md`](POC.md)). No substituto de 2026-09-25, só o `httpfs` renovou
-  o secret, e o `delta_scan` falhou com a chave vencida ([`POC.md`](POC.md));
-  `probes/credentials.py` lê no alvo a renovação numa conexão que atravessa a rotação da
-  credencial do contêiner ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  sonda do mesmo dia em [`POC.md`](POC.md)). Só o `httpfs` renova esse secret: no substituto e no
+  alvo, em 2026-09-25, o `delta_scan` de uma conexão aberta falhou uma vez depois que a chave
+  guardada no secret expirou, e voltou a ler depois que um `read_parquet` o renovou. No alvo, a
+  chave que o contêiner entrega expira de 29 a 60 minutos depois ([`POC.md`](POC.md)), e a forma
+  de a biblioteca renovar o secret antes do `delta_scan` espera o usuário (abaixo).
 - **`prepare_environment`** exporta `NO_PROXY` de `no_proxy` quando a maiúscula está ausente ou
   vazia, copia a região nos dois sentidos e devolve o dicionário do que mudou, para o log.
 - **`create_table`** é `DeltaTable.create(mode="ignore")` com `delta_schema(table)`,
@@ -365,7 +366,12 @@ mostraram" e "O que a implementação da etapa 3 mostrou".
 
 ## Decisões pendentes
 
-Nenhuma.
+- **A renovação do secret do DuckDB antes do `delta_scan`.** O motor DuckDB de uma execução e o
+  leitor Delta aberto há mais tempo que a chave guardada no secret falham no primeiro
+  `delta_scan` depois da expiração, a menos que uma leitura pelo `httpfs` tenha renovado o secret
+  antes (leitura de 2026-09-25 no alvo, [`POC.md`](POC.md)). As formas em
+  [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md): recriar o secret com a chave que o `boto3` segura
+  quando ela troca, recriar o secret `credential_chain` pela idade, ou documentar o limite.
 
 As seis decisões da etapa tomadas pelo usuário em 2026-09-22 estão escritas na seção que
 descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a
