@@ -3873,6 +3873,11 @@ asserção nova dos testes reprovou no código de antes.
 - **As decisões de 2026-09-25 no motor Redshift, no código de antes**: `published` devolveu a
   staging `_publicado` sem a versão, e a troca com `expected_rows=999` commitou 1.000 linhas sem
   reprovar.
+- **O `unload_to` local do leitor Redshift** serve só à conexão de mentira de
+  `tests/test_engine_redshift.py`, que grava o arquivo do `UNLOAD` pelo armazenamento do
+  leitor. O substituto de `tests/emulator.py` grava o `UNLOAD` pelo boto3 no moto, e
+  `object_uris`, a conferência do destino vazio, levantou com um caminho local
+  `ParamValidationError` (`Invalid bucket name ""`) antes de gravar.
 - **O caso de estudo do GIL**, `test_gil_reacquisition_waits_the_switch_interval`, reprovou em
   duas sessões da suíte inteira, uma no substituto e outra com a raiz local, e passou nas demais
   do mesmo dia: os 200 `os.stat` levaram 0,011 s e 0,026 s ao lado do laço, e 0,018 s e 0,029 s

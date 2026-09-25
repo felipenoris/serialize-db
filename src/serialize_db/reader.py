@@ -444,10 +444,14 @@ class RedshiftReader:
             tabelas publicadas.
         :param config: a configuração do Redshift; ``None`` lê as variáveis
             ``SERIALIZE_DB_REDSHIFT_*`` (``RedshiftConfig.from_environment``).
-        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``,
-            ``s3://bucket/prefixo`` ou uma pasta local, sob a qual o leitor grava em
-            ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa ``stream`` fora, e o
-            leitor não toca arquivo algum.
+        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
+            leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa ``stream``
+            fora, e o leitor não toca arquivo algum. Na conexão com o Redshift, pelo ``workgroup``
+            ou pelo ``host``, e na do substituto local das suítes, só uma pasta
+            ``s3://bucket/prefixo`` serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam
+            nela até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro
+            ``stream`` falhar, sem arquivo gravado. Uma pasta local só serve à conexão de mentira
+            dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
         :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem
             conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``.
         :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
@@ -590,8 +594,14 @@ def open_redshift(metadata: sa.MetaData, environment: str, config: RedshiftConfi
     :param environment: o ambiente publicado, ``prd`` ou ``dsv``.
     :param config: a configuração do Redshift; ``None`` lê as variáveis
         ``SERIALIZE_DB_REDSHIFT_*``.
-    :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, num bucket ou
-        numa pasta do cliente; ``None`` deixa ``stream`` fora.
+    :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
+        leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa
+        ``stream`` fora, e o leitor não toca arquivo algum. Na conexão com o Redshift, pelo
+        ``workgroup`` ou pelo ``host``, e na do substituto local das suítes, só uma pasta
+        ``s3://bucket/prefixo`` serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam nela
+        até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro ``stream``
+        falhar, sem arquivo gravado. Uma pasta local só serve à conexão de mentira dos testes do
+        pacote, que grava o arquivo pelo armazenamento do leitor.
     :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia
         ``<unload_to>/<id do leitor>/``.
     :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem

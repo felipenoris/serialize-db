@@ -249,8 +249,14 @@ class Database:
 
         :param config: a configuração do Redshift; ``None`` lê as variáveis
             ``SERIALIZE_DB_REDSHIFT_*``.
-        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``; ``None`` é
-            ``<raiz>/<ambiente>/staging``, sob a qual o leitor grava em ``<id do leitor>/``.
+        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
+            leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` é
+            ``<raiz>/<ambiente>/staging``. Na conexão com o Redshift, pelo ``workgroup`` ou pelo
+            ``host``, e na do substituto local das suítes, só uma pasta ``s3://bucket/prefixo``
+            serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam nela até o ``close`` do
+            stream e o do leitor, e uma pasta local, como o padrão de uma raiz local, faz o
+            primeiro ``stream`` falhar, sem arquivo gravado. Uma pasta local só serve à conexão
+            de mentira dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
         :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia a
             pasta do leitor.
         :raises ContractError: a configuração sem conexão, sem ``workgroup`` e sem ``host``,
