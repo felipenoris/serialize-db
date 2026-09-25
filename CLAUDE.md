@@ -700,10 +700,14 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   partition, peak 16,355 MB), ran the whole flow: `archive` copied the 21 files of the 12 tables
   through the managed transfer and moved the entry, and `serialize-db publish` (`--init`,
   `--tables cad_contas`, `--max-workers 4`, `--status`) put the 12 tables in Redshift as
-  `prod_<table>`, `cad_lancamentos` at version 4 with 141,901,795 rows; `export` and `compact`
-  stay unrun there. Since the user's decision of 2026-09-24, `compact`, `archive` and `export`
-  print the duration and the peak RSS per table, the publication logs them per table and
-  `deep_copy` logs each partition's copy time, none read in the target yet. The
+  `prod_<table>`, `cad_lancamentos` at version 4 with 141,901,795 rows. Since the user's decision
+  of 2026-09-24, `compact`, `archive` and `export` print the duration and the peak RSS per table,
+  the publication logs them per table and `deep_copy` logs each partition's copy time. The battery
+  of 2026-09-24 at 23:25, on a new root in `prd`, passed every suite case (S3 481, Redshift 44
+  twice, engine 6 and publication 8 twice each) and read them: `archive` of `cad_lancamentos`
+  11.1 s, its publication 153.9 s at a 273 MB peak, the first `export` 8.8 s by registration and
+  17.3 s at 5,425 MB by `--mode rewrite`; `compact` ran only on a one-file partition, which does
+  not commit, so a real compaction stays unread there (`plan/POC.md`). The
   DuckDB engine and the migration script take `threads` and `memory_limit` from the environment at
   each opening (user instruction of 2026-09-24, replacing the 2026-09-22 DuckDB default). The review of stages 3 and 4 of 2026-09-23 corrected both stage files
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as

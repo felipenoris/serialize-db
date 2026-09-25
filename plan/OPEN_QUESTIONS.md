@@ -11,7 +11,8 @@ foi medido em [`POC.md`](POC.md).
   conta o acumulado (219 versões não correntes, 1.388.530 bytes, e 219 marcadores de exclusão
   sob a raiz dos probes em 2026-09-23; 366 versões, 16.345.479 bytes, com 358 marcadores sob a
   raiz nova em 2026-09-24 às 01:42, depois das três sessões de 2026-09-23; e 907 versões,
-  32.966.477 bytes, com 859 marcadores às 12:39 do mesmo dia, [`POC.md`](POC.md)), e a regra
+  32.966.477 bytes, com 859 marcadores às 12:39 do mesmo dia; e 1.943 versões, 50.394.018 bytes,
+  com 1.823 marcadores às 23:26, [`POC.md`](POC.md)), e a regra
   `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
   para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
   `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
@@ -63,15 +64,13 @@ foi medido em [`POC.md`](POC.md).
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
   cópia dos arquivos de cada partição e o registro deles (decisão do usuário de 2026-09-24).
 
-- **A operação no ambiente alvo.** Em 2026-09-24 às 16:51, sobre a raiz recarregada, a carga, a
-  auditoria, `history`, `snapshot`, `vacuum`, `archive` (os 21 arquivos das 12 tabelas pela
-  transferência gerenciada do `boto3`) e a publicação da base inteira no Redshift rodaram sem erro
-  ([`POC.md`](POC.md)). `export` e `compact` (a memória da compactação, o item acima) ainda não
-  rodaram lá, e a duração do `archive` e a da publicação de `cad_lancamentos` ficaram sem
-  leitura, porque a linha de comando não imprimia tempo: desde a decisão do usuário do mesmo dia,
-  `compact`, `archive` e `export` imprimem por tabela o tempo e o pico de RSS do processo, a
-  publicação os põe no log de cada tabela e `deep_copy` registra o tempo de cada partição, e a
-  próxima execução lá os lê; a continuação de uma cópia interrompida só o substituto exercitou.
+- **A operação no ambiente alvo.** Em 2026-09-24, nas baterias das 16:51 e das 23:25, a carga, a
+  auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`
+  rodaram sem erro, com o tempo e o pico de RSS de `archive`, `export` e da publicação lidos às
+  23:25 ([`POC.md`](POC.md)). O `compact` rodou só sobre a partição 2026-03-31 de
+  `cad_lancamentos`, que tem um arquivo só e não commita: a compactação de uma partição de vários
+  arquivos e a memória dela (o item acima) esperam uma partição com mais de um arquivo; a
+  continuação de uma cópia interrompida do `archive` só o substituto exercitou.
 
 - **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) depende de leituras
   que a pasta local não dá: o tempo de abertura do leitor Delta sobre as 12 tabelas da raiz

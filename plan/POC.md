@@ -3424,3 +3424,63 @@ intervalo.
 **Consequência**: nenhuma no plano. A sonda sustentava o recorte de partições na abertura do
 leitor, que o usuário não adotou: a materialização parcial continua em
 `materialize(..., partitions=...)`.
+
+## O que a bateria de 2026-09-24 às 23:25 mostrou no ambiente alvo
+
+Em 2026-09-24, de 23:25 a 00:02 UTC (já 2026-09-25), o usuário rodou no ambiente alvo os probes, as
+suítes e os comandos de `SUITE.md`, a partir da `main`, na mesma máquina de 16 vCPUs e
+31.383 MB, com 28.043 MB disponíveis (Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.4, pyarrow
+25.0.1, `sa-east-1`), sobre uma raiz nova no layout `<raiz>/prd/<tabela>`. É a primeira bateria com
+o ambiente `prd` e com o tempo e o pico de RSS impressos pelo `archive`, pelo `export`, pelo
+`compact` e pela publicação. Os relatórios e a saída do terminal ficam fora de `plan/`, com os
+achados aqui. Nenhum caso das suítes falhou, e as únicas chamadas que falharam foram as permissões
+já conhecidas dos probes.
+
+- **Os probes** (23:25 a 23:27): `redshift.py` sem falha, com a credencial de quem chama expirando
+  em 45 minutos (`RS-18`) e a contagem de `sys_load_error_detail` sem linha (`RS-12`); `space.py`
+  com o DuckDB em 16 threads e `memory_limit` de 24,5 GiB pelo padrão do DuckDB, e a mesma falha de
+  `SP-4` (sem `sagemaker_studio` na `.venv`, sem o perfil `DomainExecutionRoleCreds`);
+  `bucket.py` com as mesmas 6 chamadas negadas (versionamento, Object Lock, propriedade, ciclo de
+  vida, política e uploads multipart) e `BK-14` com 1.943 versões não correntes (50.394.018 bytes)
+  e 1.823 marcadores de exclusão sob a raiz das suítes; `catalog.py` com o Athena negado e o Lake
+  Formation e o S3 Tables sem resposta (61,0 s e 30,1 s), como em 2026-09-23.
+- **As suítes**: `-m "not redshift"` com 481 aprovados em 185,0 s; `-m redshift` com 44 aprovados
+  duas vezes (531,8 s e 569,5 s), as duas leituras iguais salvo nomes e tempos, `naofinito_valor`
+  2 igual ao esperado e `nan_na_tabela_detalhe` com as quatro comparações falsas e o texto `NaN`;
+  `tests/test_engine_redshift.py -m redshift` com 6 aprovados duas vezes (94,7 s e 83,2 s) e
+  `tests/test_publication.py -m redshift` com 8 aprovados duas vezes (187,5 s e 178,0 s), com a
+  publicação simultânea como `ExecutionConflict` e a junção em `DS_DIST_ALL_NONE`.
+- **A carga pelo pacote** (`scripts/migrate_parquet_to_delta.py --environment prd`, `started_at`
+  23:59:36): as 12 tabelas, 187.340.509 linhas, com contagens e somas iguais em toda partição e
+  `alembic_version`, `meta_update_status` e `schema.json` fora do modelo; `environment_limits` deu
+  16 threads e `memory_limit` de 14.021 MiB. As partições de `cad_lancamentos` entraram em 20,8 s,
+  16,1 s, 34,2 s e 19,9 s, e o pico do processo foi 11.011 MB depois das duas primeiras e
+  16.248 MB depois da 2026-03-31, acima do limite do DuckDB como às 14:16 (16.198 MB) e às 16:51
+  (16.355 MB). As 21 partições somam 164,3 s. As tabelas sem partição aparecem na saída como
+  `None:`.
+- **A auditoria** (`--table cad_lancamentos --partitions 2026-01-31 --foreign-keys`, `memory_limit`
+  de 13,5 GiB): o mesmo resultado das 14:16 e das 16:51, com os 989.852 órfãos de
+  `orfao_data_base_sistema_contrato`, 33.239.719 linhas, `total_valor` 117.667.407.519,194421 e
+  nenhum `Double` não finito.
+- **`history`, `snapshot` e `vacuum`**: os cinco commits de `cad_lancamentos`, de 00:01:01 a
+  00:02:19; o snapshot `carga-2026-09-24` com as 12 tabelas; 0 arquivos a apagar em todas.
+- **`archive --name carga-2026-09-24`**: os 21 arquivos das 12 tabelas copiados e a entrada movida
+  para `archived`. As tabelas sem partição levaram de 1,5 s a 1,6 s cada (0,4 s de cópia);
+  `cad_contratos` 3,8 s, `cad_operacoes` 3,9 s, `rel_contrato_operacao` 4,8 s e `cad_lancamentos`
+  11,1 s, com as partições dela copiadas em 1,9 s a 3,3 s. O pico do processo ficou em 349 MB.
+- **A publicação da base inteira** (`serialize-db publish`): `--init` criou a tabela de controle;
+  `--tables cad_contas` publicou a versão 1 em 4,3 s; `--max-workers 4` pulou `cad_contas` e
+  publicou as outras 11, as sem partição de 3,8 s a 5,7 s, `cad_contratos` em 21,5 s,
+  `cad_operacoes` em 32,5 s, `rel_contrato_operacao` em 40,3 s e `cad_lancamentos` em 153,9 s,
+  com o pico do processo em 273 MB; `--status` leu as 12 como `prd_<tabela>`, sem partição
+  pendente.
+- **`export` de `cad_lancamentos`**, a primeira execução no alvo: pelo registro, 4 arquivos em
+  8,8 s com pico de 264 MB; por `--mode rewrite`, 4 arquivos em 17,3 s com pico de 5.425 MB.
+- **`compact --table cad_lancamentos --partitions 2026-03-31`**: 0 arquivos gravados e 0
+  removidos em 0,2 s. A partição tem um arquivo só, e `delta.compact` não commita nesse caso: a
+  compactação real e a memória dela continuam sem leitura no alvo.
+
+**Consequências**: [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perdeu o `export` e a duração do
+`archive` e da publicação no item da operação no ambiente alvo, que fica com o `compact` de uma
+partição de vários arquivos; o item das versões não correntes ganhou a leitura de `BK-14`.
+Nenhum arquivo do plano muda.
