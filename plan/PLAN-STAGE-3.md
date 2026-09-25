@@ -188,9 +188,10 @@ estatísticas com a varredura de reserva são os casos de `tests/test_delta.py`.
   proxy, e o bloco é vazio ([`POC.md`](POC.md), leitura de 2026-09-21). O secret guarda a chave e
   o token resolvidos no `CREATE SECRET`, e a documentação da extensão `aws` pede `REFRESH auto`
   para a credencial que expira: o secret leva `REFRESH auto` (decisão do usuário de 2026-09-24,
-  sonda do mesmo dia em [`POC.md`](POC.md)); a renovação numa conexão que atravessa a rotação da
-  credencial do contêiner só uma execução longa no alvo mostra
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  sonda do mesmo dia em [`POC.md`](POC.md)). No substituto de 2026-09-25, só o `httpfs` renovou
+  o secret, e o `delta_scan` falhou com a chave vencida ([`POC.md`](POC.md));
+  `probes/credentials.py` lê no alvo a renovação numa conexão que atravessa a rotação da
+  credencial do contêiner ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **`prepare_environment`** exporta `NO_PROXY` de `no_proxy` quando a maiúscula está ausente ou
   vazia, copia a região nos dois sentidos e devolve o dicionário do que mudou, para o log.
 - **`create_table`** é `DeltaTable.create(mode="ignore")` com `delta_schema(table)`,

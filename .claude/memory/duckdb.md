@@ -114,6 +114,11 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `to_arrow_table()` of a `CREATE` or `INSERT` gives a `Count` table, of `SET` or `DROP` a `Success`
   table; `cursor()` of a cursor opens another connection to the database; a file database keeps a
   `.wal` beside it while open. `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- A secret the `httpfs` refreshes on an expired key lives in the transaction of the query that
+  refreshed it: `fetchall()` ends the query and keeps the new key; after `fetchone()` the query
+  stays open, the next statement on the connection rolls it back with the refresh, and
+  `duckdb_secrets()` shows the old key again (DuckDB 1.5.5, four rounds per variant, with and
+  without a parameter in the secrets query, 2026-09-25). `plan/POC.md`
 
 ## Catalog names and limits
 

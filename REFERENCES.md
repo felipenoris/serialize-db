@@ -1018,6 +1018,10 @@ Statistics"):
 - <https://github.com/delta-io/delta/pull/7101>
 - A busca de issues e PRs por `NaN` em `delta-io/delta-rs` e `delta-io/delta-kernel-rs`
 
+O motivo da retirada do `deltalake` 1.6.4 do PyPI, lido em 2026-09-25:
+
+- <https://github.com/delta-io/delta-rs/issues/4784>
+
 ## DuckLake
 
 - <https://ducklake.select/docs/stable/>

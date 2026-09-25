@@ -3583,3 +3583,48 @@ tabelas, um por partição. O usuário decidiu em 2026-09-25 que `delta.compact`
 partição já traz sem mínimo e máximo, e a regra entrou no [arquivo da etapa 9](PLAN-STAGE-9.md);
 o item saiu de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), onde entrou a versão retirada do
 `deltalake`.
+
+## O que o substituto das credenciais que expiram mostrou
+
+Em 2026-09-25, no contêiner de desenvolvimento (Linux x86_64), com deltalake 1.6.4, DuckDB 1.5.5
+(`httpfs`, `aws` e `delta` de uma pasta de extensões), PyArrow 25.0.1 e boto3 1.43.98, a sonda
+`probes/credentials.py` e scripts de apoio leram os clientes da biblioteca contra um substituto: o
+moto com uma tabela `cad_contas` de duas partições, um IMDS local que troca a chave a cada 40 s,
+cada uma válida por 70 s, e um proxy S3 que responde `400 ExpiredToken` à requisição assinada com a
+chave vencida, como o S3. O IMDS ficou no lugar do endpoint de credenciais do contêiner, o caminho
+do alvo: o delta-rs não leu `AWS_CONTAINER_CREDENTIALS_FULL_URI` e foi ao IMDS de 169.254.169.254,
+que o contêiner nega, e o endereço de `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, 169.254.170.2, não
+existe no contêiner.
+
+- **O `delta_scan` não renova o secret.** Depois que a chave guardada no secret expirou, o
+  `delta_scan` da conexão aberta no início falhou com `IO Error: DeltaKernel ObjectStoreError (8):
+  ... Generic S3 error: Error performing GET .../_delta_log/_last_checkpoint ... 400 Bad Request`:
+  a extensão `delta` lê o log pelo object_store do delta-kernel, com a chave do secret. O `glob`,
+  a listagem, falhou com `HTTPException ... (HTTP 400 Bad Request)`, também sem renovar.
+- **O `read_parquet` renova o secret e repete a requisição.** O `HEAD` e os `GET` com a chave
+  vencida receberam 400; o `httpfs` pediu uma credencial nova pela cadeia do SDK da AWS da
+  extensão `aws` (1.11.702), repetiu o `HEAD` e o `GET` com ela e leu o arquivo. Depois dele, o
+  `delta_scan`, o `glob` e um `COPY ... TO` leram e gravaram com a chave nova.
+- **A renovação só fica quando a consulta que a fez termina.** Lido o resultado do `read_parquet`
+  com `fetchall()`, `duckdb_secrets()` mostrou a chave nova e o `delta_scan` seguinte leu; com
+  `fetchone()`, a consulta ficou aberta, a seguinte a desfez com a renovação, o secret manteve a
+  chave vencida e o `delta_scan` falhou nas quatro rodadas depois da expiração, com e sem
+  parâmetro na consulta a `duckdb_secrets()`; com `fetchall()`, só na primeira. A sonda lê cada
+  contagem com `fetchall()` e, assim, leu o `delta_scan` falhando uma vez a cada chave vencida
+  do secret, que o `read_parquet` da mesma rodada renovava.
+- **O delta-rs renovou sozinho**: o `DeltaTable` aberto no início pediu credencial nova ao IMDS
+  antes da expiração e leu em todas as rodadas.
+- **O `S3FileSystem` e o `boto3` falharam com a chave vencida**, pelas regras do IMDS, que o alvo
+  não usa: o botocore estende a expiração da credencial do IMDS para 12 a 20 minutos adiante
+  quando ela está perto (`ec2_credential_refresh_window` de 10 minutos mais 2 a 10 aleatórios), e
+  o SDK da AWS do PyArrow (1.11.800) renovou a cada cerca de cinco minutos, mais que os 70 s da
+  chave. A mesma extensão pôs a expiração que a sonda lê pelo `boto3` cerca de 20 minutos
+  adiante, e a espera de 2,5 minutos terminou antes dela, com `CR-3` a `CR-7` em `note`.
+
+**Consequências**: a biblioteca lê as tabelas por `delta_scan` e lê várias contagens com
+`fetchone()` (`delta.py`, `load.py`, `engine/duckdb.py`); se o alvo repetir o substituto, uma
+conexão do DuckDB que atravessa a expiração da chave guardada no secret falha no primeiro
+`delta_scan` depois dela, a menos que uma leitura pelo `httpfs` encerrada antes a tenha renovado.
+A sonda lê no alvo, em cerca de uma hora, a renovação de cada cliente segurado, com o controle dos
+clientes novos, e a pergunta continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md); o
+[arquivo da etapa 3](PLAN-STAGE-3.md) cita esta leitura.

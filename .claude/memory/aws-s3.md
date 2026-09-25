@@ -65,6 +65,19 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   migration script create the secret with `REFRESH auto` (user decision of 2026-09-24); a
   connection crossing the container credential's rotation is still unmeasured. `plan/POC.md`,
   `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-3.md`
+- In the stand-in of 2026-09-25 (moto behind a proxy answering `400 ExpiredToken` to a key past
+  its 70 s lifetime, a local IMDS issuing a new key every 40 s, because delta-rs ignored
+  `AWS_CONTAINER_CREDENTIALS_FULL_URI` and 169.254.170.2 does not exist in the container):
+  DuckDB 1.5.5's `delta_scan` fails once the key stored in the secret expires (`DeltaKernel
+  ObjectStoreError (8)`, the delta-kernel object_store reading the log with the secret's key)
+  and so does `glob` (`HTTPException`, HTTP 400), neither refreshing; `read_parquet` gets the 400
+  on `HEAD`, refreshes the secret through the aws extension's chain (AWS C++ SDK 1.11.702) and
+  retries, and `delta_scan`, `glob` and `COPY ... TO` then work with the new key. delta-rs
+  (object_store 0.13.2) refreshed by itself. `S3FileSystem` and boto3 failed for IMDS reasons
+  the target does not share: botocore's IMDS fetcher pushes a near expiry 12 to 20 minutes
+  ahead (`ec2_credential_refresh_window` 10 min plus 2 to 10 random), and the AWS C++ SDK
+  1.11.800 of PyArrow reloaded about every five minutes. `probes/credentials.py` reads the
+  target, about one hour per run. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 
 ## The target's network, read on 2026-09-21
 

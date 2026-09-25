@@ -2,17 +2,17 @@
 
 Scripts só de leitura que fotografam o que o ambiente oferece à biblioteca: credenciais, região,
 rede, o projeto do SageMaker Unified Studio, o bucket, o Redshift, os serviços de catálogo, a
-estrutura da base Parquet de origem e o `threads` do DuckDB na ingestão das tabelas Delta. Nenhum
-deles cria, altera ou apaga um recurso. Cada um roda com o interpretador da pasta preparada, imprime
-o relatório no terminal e o grava em `output/<script>_<data-hora>.txt`, pasta fora do git, para ser
-colado na conversa com o assistente. O formato segue os scripts de leitura de
-[felipenoris/AWS-DataScience](https://github.com/felipenoris/AWS-DataScience), pasta `aws/`:
-seções numeradas, cada chamada ecoada acima do seu resultado ou do seu erro, identificadores
-reaproveitados como `NOME=valor`, a tabela de checagens (`fail` primeiro, depois `note`, depois
-`pass`) e a seção final "Chamadas que falharam", para um bloco vazio nunca significar "negado".
-Uma chamada marcada `expected` sai como `-- SEM RESULTADO` e fica fora dessa seção e do código de
-saída: a visão de sistema negada a um usuário comum e o pacote ausente fora de um espaço são
-leituras do ambiente.
+estrutura da base Parquet de origem, o `threads` do DuckDB na ingestão das tabelas Delta e os
+clientes da biblioteca depois que a credencial expira. Nenhum deles cria, altera ou apaga um
+recurso. Cada um roda com o interpretador da pasta preparada, imprime o relatório no terminal e o
+grava em `output/<script>_<data-hora>.txt`, pasta fora do git, para ser colado na conversa com o
+assistente. O formato segue os scripts de leitura de
+[felipenoris/AWS-DataScience](https://github.com/felipenoris/AWS-DataScience), pasta `aws/`: seções
+numeradas, cada chamada ecoada acima do seu resultado ou do seu erro, identificadores reaproveitados
+como `NOME=valor`, a tabela de checagens (`fail` primeiro, depois `note`, depois `pass`) e a seção
+final "Chamadas que falharam", para um bloco vazio nunca significar "negado". Uma chamada marcada
+`expected` sai como `-- SEM RESULTADO` e fica fora dessa seção e do código de saída: a visão de
+sistema negada a um usuário comum e o pacote ausente fora de um espaço são leituras do ambiente.
 Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma checagem reprovou.
 
 Um relatório que uma etapa pendente ainda consulta é guardado em `plan/readings/`, indexado por
@@ -27,6 +27,7 @@ Um relatório que uma etapa pendente ainda consulta é guardado em `plan/reading
 .venv/bin/python probes/parquet_source.py /caminho/da/base
 .venv/bin/python probes/parquet_source.py /caminho/da/base --text-bytes
 PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/delta/db_projetado
+.venv/bin/python probes/credentials.py s3://bucket/prefixo/prd/cad_contas
 ```
 
 ## Os scripts
@@ -39,6 +40,7 @@ PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/d
 | `redshift.py` | O Redshift visto de dentro: as variáveis `SERIALIZE_DB_REDSHIFT_*` e a conexão Redshift do projeto, com os dados dela como dicionário (banco, workgroup, URL JDBC e o secret de usuário e senha, lido sem imprimir a senha); o workgroup configurado lido por `GetWorkgroup`, que dá o endereço da conexão, o namespace com o papel IAM padrão e os associados, a lista de workgroups e os clusters provisionados como fotografia (o ambiente alvo não tem nenhum); a Data API pelo ciclo completo de `examples/redshift_data_api.py` com `select 1`, o caminho alternativo à porta 5439; DNS e TCP, e se as APIs têm endpoint VPC de interface, sem o qual a credencial temporária e a Data API dependem da internet; a sessão aberta como `examples/redshift_native.py` (`GetWorkgroup`, `GetCredentials`, `redshift_connector.connect`) ou pelo par informado em `_USER` e `_PASSWORD` na mesma chamada, e nela, antes do `USE`, a versão (o patch), usuário, banco, `search_path`, esquemas, `SUPER`, as configurações da sessão, os privilégios no banco da conexão (`CREATE`, `TEMP`), `sys_load_error_detail` e os esquemas externos; os bancos visíveis e em qual deles está o esquema do projeto, os três requisitos da escrita num datashare, o `USE` no banco do datashare conferido pela resolução de um nome em duas partes, porque `current_database()` não reflete a troca, (`examples/redshift_copy_unload.py`) e, depois dele, os privilégios no esquema e as tabelas com o prefixo da biblioteca; as credenciais de quem chama com a expiração, e o alcance sobre a raiz S3 informada, pela simulação de política do IAM da identidade que a biblioteca manda ao S3: quem chama, ou o papel de `_IAM_ROLE`. Só consulta visões de sistema e troca o banco da sessão com `USE`; a credencial derivada da identidade IAM pode criar o usuário do banco, e a checagem `RS-4` o diz. | `redshift-serverless:GetWorkgroup`, `GetCredentials`, `GetNamespace`, `ListWorkgroups`; `redshift:DescribeClusters`; `redshift-data:ExecuteStatement`, `DescribeStatement`, `GetStatementResult`; `secretsmanager:GetSecretValue` para o secret da conexão do projeto; `sts:GetCallerIdentity`; `iam:SimulatePrincipalPolicy`; consultas `select` e `USE` no banco. | `output/redshift_*.txt` |
 | `catalog.py` | O gatilho de reavaliação de `plan/estrategia.md`: se o Glue (bancos, tabelas por formato, catálogos federados), o Athena (workgroups), o Lake Formation (locais registrados) e o S3 Tables respondem ao papel do projeto. | `glue:GetDatabases`, `GetTables`, `GetCatalogs`; `athena:ListWorkGroups`, `GetWorkGroup`; `lakeformation:ListResources`; `s3tables:ListTableBuckets`. | `output/catalog_*.txt` |
 | `duckdb_threads.py` | O `threads` do DuckDB na ingestão das tabelas Delta que a migração gravou (o `--root` dela): por valor de `threads`, o padrão do motor, as CPUs que o processo pode usar, vezes 0,5 e 1 a 5 (a metade é uma thread por núcleo físico nas instâncias x86 da AWS com SMT), cada configuração num processo novo com o motor `DuckDBEngine` do pacote e o `memory_limit` que ele lê do ambiente, a partição da primeira tabela `materializada` (`ingest(..., materialize=True)`) e `agregada` pela view (`SELECT count(*), max(COLUMNS(*))`), e as tabelas `em série` na sessão principal e em `sessões a mais`, uma por tabela, como `run.ingest`; o melhor de três de cada medida, com o cache de arquivos externos do DuckDB desligado para cada repetição ler do armazenamento, o pico de memória do processo sobre a base e as linhas lidas contra as do log; a razão compara com o padrão do motor, e a seção da máquina dá as threads por núcleo físico, a memória disponível e os limites do motor e do DuckDB. O banco de cada configuração fica na pasta temporária do motor e sai no `cleanup`. | As leituras do delta-rs e do DuckDB sob a raiz (`ListBucket`, `GetObject`). | `output/duckdb_threads_*.txt` |
+| `credentials.py` | Os clientes que uma execução segura, abertos no início e lidos de novo a cada `--interval-minutes` (5) até passar a expiração da credencial do contêiner e a da senha do Redshift (3.600 s), mais `--margin-minutes` (3), com o teto de `--max-wait-minutes` (90): o `DeltaTable` de `delta.open_table` (`update_incremental` e a primeira linha do dataset), a conexão de `Storage.duckdb_connect` com o secret `credential_chain` e `REFRESH auto` (`delta_scan` sobre a tabela e `read_parquet` sobre o menor arquivo, com o cache de arquivos externos desligado), o `S3FileSystem` do `Storage` (o rodapé do menor arquivo), `Storage.read_text` pelo `boto3` (o último commit do log) e a conexão de `engine.redshift.connect` (`select 1`); a cada rodada, a impressão digital (os oito primeiros caracteres hexadecimais do `sha256`) da chave que a cadeia do `boto3` resolve, da que o secret do DuckDB guarda e da que a cláusula do `COPY` e do `UNLOAD` levaria; depois da espera, os mesmos clientes abertos de novo, o controle que separa o cliente que não renovou do ambiente que perdeu o acesso. A tabela deve ser pequena: cada rodada conta as linhas dela. | As leituras do delta-rs, do DuckDB, do `pyarrow` e do `boto3` sob a tabela (`ListBucket`, `GetObject`); `redshift-serverless:GetWorkgroup` e `GetCredentials` e `select 1` no Redshift. | `output/credentials_*.txt` |
 | `parquet_source.py` | A estrutura da base Parquet de origem da carga inicial, uma pasta por tabela: as pastas de tabela e o que não é Parquet; por tabela, arquivos, bytes, linhas, partições e quantos esquemas distintos; o esquema do grupo majoritário com tipo Arrow, nulidade, tipo físico, tipo lógico e `field_id`; as divergências de esquema entre arquivos, coluna a coluna e com todos os arquivos divergentes nomeados; as colunas de partição, os seus valores e se também estão dentro dos arquivos; por coluna, linhas, nulos, mínimo, máximo e distintos somados do rodapé; row groups, compressão, codificação, escritor e metadados do rodapé; com `--sample N`, a cardinalidade e o comprimento de texto que o rodapé não guarda, em caracteres e o máximo em bytes, a medida do `VARCHAR(n)` do Redshift e do `cast`; com `--text-bytes`, o maior texto de cada coluna em todas as linhas de todos os arquivos, em bytes e em caracteres, a varredura que dá o maior texto de cada coluna da base, a medida do `String(n)` do contrato. Lê o rodapé de todo arquivo de toda partição. | Nenhuma chamada AWS num caminho local; numa URI `s3://`, as leituras do `pyarrow.fs` (`ListBucket`, `GetObject`). | `output/parquet_source_*.txt` |
 
 `probelib.py` é a biblioteca comum: o relatório (`Report`), as esperas curtas do `boto3`
@@ -138,6 +140,9 @@ acompanha os relatórios dos probes na conversa.
 | Quantas `threads` do DuckDB a ingestão do S3 pede, e o padrão, as CPUs do processo, basta, ou a metade delas é mais rápida? | `duckdb_threads.py`, seção 3 e `DT-5` |
 | O que a sessão a mais por tabela de `run.ingest` ganha sobre a ingestão em série? | `duckdb_threads.py`, seção 4 e `DT-6` |
 | A ingestão leu as linhas que o log diz ter, com as `threads` pedidas? | `duckdb_threads.py`, `DT-2` e `DT-3` |
+| Quando a credencial do contêiner expira, e quando o contêiner a renova? | `credentials.py`, `CR-1` e seção 5 |
+| O delta-rs, o DuckDB, o `S3FileSystem`, o `boto3` e a conexão Redshift que a execução segura continuam lendo depois que a credencial expira? | `credentials.py`, `CR-3` a `CR-8`, com o controle em `CR-11` |
+| O secret do DuckDB e a cláusula do `COPY` e do `UNLOAD` passam a levar a chave renovada? | `credentials.py`, `CR-9` e `CR-10` |
 
 ## Acrescentar um probe
 
@@ -151,8 +156,8 @@ acompanha os relatórios dos probes na conversa.
   feita; com proxy configurado o teste direto não decide, e a chamada é feita.
 - Uma seção por assunto, numerada pelo `Report`; identificadores reaproveitados como `NOME=valor`;
   toda chamada por `report.call`, para a falha ir para a seção final.
-- Checagens com prefixo próprio de duas letras (`SP`, `BK`, `RS`, `CT`, `PQ`, `DT`), `note` para o
-  ausente e `fail` para o que impede a biblioteca.
+- Checagens com prefixo próprio de duas letras (`SP`, `BK`, `RS`, `CT`, `PQ`, `DT`, `CR`), `note`
+  para o ausente e `fail` para o que impede a biblioteca.
 - Uma seção que quebra não cala as outras: `main` captura a exceção e a registra como falha.
 - Uma função por seção, na ordem do relatório, com docstring que nomeia a seção e as checagens que
   ela emite; dentro dela, um bloco por checagem, precedido do comentário que diz a regra aplicada e

@@ -36,15 +36,25 @@ foi medido em [`POC.md`](POC.md).
   motor da [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela temporária
   que o pipeline tenha criado na sessão. As credenciais que o `COPY`
   e o `UNLOAD` levam no texto do comando expiram com as do espaço, e `RS-18` imprime quando; um
-  `COPY` mais longo que isso também não foi medido.
+  `COPY` mais longo que isso também não foi medido. `probes/credentials.py` segura esses
+  clientes, menos o `COPY`, até passar a expiração da credencial do contêiner e a da senha do
+  Redshift, em cerca de uma hora, e lê cada um a cada cinco minutos. No substituto de
+  2026-09-25, com chaves de 70 s, o `delta_scan` falhou com a chave vencida do secret, e só o
+  `read_parquet` a renovou, numa renovação que a consulta seguinte desfaz quando o resultado
+  fica aberto ([`POC.md`](POC.md)); se o alvo repetir isso, a biblioteca precisa renovar o
+  secret do DuckDB por conta própria, e a forma de renovar espera o usuário.
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
 - **A versão retirada do `deltalake`.** O `uv` avisou em 2026-09-25, ao instalar numa sonda a
   versão fixada em `pyproject.toml`, que `deltalake==1.6.4` está retirada (yanked) do PyPI, com o
-  motivo "Issue: #4784", e a instalou assim mesmo ([`POC.md`](POC.md)). O motivo e a versão que a
-  substitui não foram lidos.
+  motivo "Issue: #4784", e a instalou assim mesmo ([`POC.md`](POC.md)). A issue #4784 do delta-rs,
+  lida em 2026-09-25, é um `MERGE` numa tabela com o change data feed ligado que insere uma linha
+  toda nula para cada linha que o predicado de `when_not_matched_insert` recusa, e afeta a 1.6.4
+  e a 1.6.5; o pacote não usa `MERGE` nem o change data feed (busca por `.merge(`,
+  `enableChangeDataFeed`, `change_data_feed` e `load_cdf` em `src/`, `scripts/`, `tests/` e
+  `probes/`). A versão que corrige não foi lida, e a troca da versão fixada espera o usuário.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
