@@ -189,6 +189,42 @@ PY
 .venv/bin/serialize-db compact --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos --partitions 2026-03-31
 ```
 
+# Sondas de consistência
+
+```
+cd ~/work/projects/serialize-db
+mkdir -p $HOME/serialize-db-local probes/output
+
+export AWS_DEFAULT_REGION=sa-east-1
+export SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local
+export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/serialize-db-tests
+export SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=sbx_aco_decon
+export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
+export SERIALIZE_DB_REDSHIFT_DATABASE=dev
+export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
+export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
+export PYTHONPATH=tests
+
+# As sete sondas da pasta local gravam sob $SERIALIZE_DB_TEST_LOCAL_ROOT/consistencia/<sonda>/,
+# que cada uma apaga no fim, e imprimem o relatório no terminal e em
+# probes/output/consistencia_<sonda>_<data-hora>.txt; código de saída 1 quando alguma checagem
+# reprova. O sinal do zero, as estatísticas que deep_copy não registra e as atualizações perdidas
+# do arquivo de controle (plan/OPEN_QUESTIONS.md) saem como leituras conhecidas, não como reprovação.
+.venv/bin/python probes/consistencia/probe_types.py
+.venv/bin/python probes/consistencia/probe_stream.py
+.venv/bin/python probes/consistencia/probe_execution.py
+.venv/bin/python probes/consistencia/probe_delta_ops.py
+.venv/bin/python probes/consistencia/probe_reader.py
+.venv/bin/python probes/consistencia/probe_load.py
+.venv/bin/python probes/consistencia/probe_pandas.py
+
+# A sonda do motor Redshift roda pelo pytest com as fixtures das suítes: grava sob
+# $SERIALIZE_DB_TEST_S3_ROOT/serialize-db-poc/<id>/ e publica no esquema da suíte num ambiente
+# poc<id> próprio, cujas tabelas poc<id>_* e linhas de controle saem no fim; -s imprime as
+# leituras e os problemas.
+SERIALIZE_DB_TEST_REPORT=probes/output/consistencia_redshift.json .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_redshift_test.py 2>&1 | tee probes/output/consistencia_redshift.txt
+```
+
 # Resultados
 
 ```

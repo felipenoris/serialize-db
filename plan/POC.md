@@ -4174,14 +4174,18 @@ cliente, e a esteira de testes importa cada módulo depois de `uv sync --no-dev`
 
 ## O que as sondas de consistência de leitura e escrita mostraram
 
-Em 2026-09-25, a pedido do usuário, oito sondas fora do repositório atravessaram cada fronteira de
-leitura e escrita do pacote com valores de borda (o texto vazio, o `NUL`, o emoji, os 50 bytes
-exatos, `±0.0`, `5e-324`, `±1.7976931348623157e308`, `NaN`, os infinitos, o `Decimal` extremo de
-cada escala, as datas `0001-01-01` e `9999-12-31`, o `Numeric(38, 10)`, `Uuid`, JSON e nulos) e
-com trabalho paralelo, e compararam valor a valor o que saiu com o que entrou, no contêiner de
-4 CPUs e 16 GB (Linux x86_64, Python 3.13.12, deltalake 1.6.6, duckdb 1.5.5, pyarrow 25.0.1,
+Em 2026-09-25, a pedido do usuário, oito sondas, hoje em `probes/consistencia/`, atravessaram cada
+fronteira de leitura e escrita do pacote com valores de borda (o texto vazio, o `NUL`, o emoji, os
+50 bytes exatos, `±0.0`, `5e-324`, `±1.7976931348623157e308`, `NaN`, os infinitos, o `Decimal`
+extremo de cada escala, as datas `0001-01-01` e `9999-12-31`, o `Numeric(38, 10)`, `Uuid`, JSON e
+nulos) e com trabalho paralelo, e compararam valor a valor o que saiu com o que entrou, no contêiner
+de 4 CPUs e 16 GB (Linux x86_64, Python 3.13.12, deltalake 1.6.6, duckdb 1.5.5, pyarrow 25.0.1,
 pandas 3.0.6), na pasta local e no substituto de `tests/emulator.py`; `src/` não mudou. As sondas
-e as saídas ficam fora do git, na pasta compartilhada do projeto, em `consistencia/sondas/`.
+entraram em `probes/consistencia/` no mesmo dia, a pedido do usuário, com os comandos e as variáveis
+do ambiente alvo em `SUITE.md` (`probes/README.md` as descreve), e a versão do repositório repetiu
+as mesmas leituras na pasta local e no substituto, com o sinal do zero, as estatísticas que
+`deep_copy` não registra e as atualizações perdidas do arquivo de controle impressos como leituras
+conhecidas, sem reprovar a checagem; nenhuma rodou no ambiente alvo.
 
 - **Os tipos pela fronteira do motor DuckDB** (`probe_types.py`): 2.000 linhas de uma tabela com
   toda coluna do contrato por `load`, `query`, `export_partition` e `publish_partition`, lidas
@@ -4257,7 +4261,7 @@ e as saídas ficam fora do git, na pasta compartilhada do projeto, em `consisten
   três vezes (de 0,32 s a 1,78 s cada): 396 leituras, todas de 100.000 ou de 50.000 linhas com a
   soma dos ids certa, nenhum erro; a materialização parcial igual às sementes; um valor fora da
   regra recusado antes da troca, com a tabela intacta.
-- **O motor Redshift no substituto** (`probe_redshift_standin_test.py`, pelo pytest com
+- **O motor Redshift no substituto** (`probe_redshift_test.py`, pelo pytest com
   `SERIALIZE_DB_TEST_EMULATOR`): `ingest` e `query`, quatro `stream` ao mesmo tempo com `query`
   ao lado, dois `loader` em threads, `audit` e `export_partition` lidos pelo delta-rs e pelo
   `delta_scan`, duas sessões a mais em threads (uma ingerindo `cad_contas`, outra consultando),

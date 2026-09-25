@@ -4,7 +4,8 @@ Scripts só de leitura que fotografam o que o ambiente oferece à biblioteca: cr
 rede, o projeto do SageMaker Unified Studio, o bucket, o Redshift, os serviços de catálogo, a
 estrutura da base Parquet de origem, o `threads` do DuckDB na ingestão das tabelas Delta e os
 clientes da biblioteca depois que a credencial expira. Nenhum deles cria, altera ou apaga um
-recurso. Cada um roda com o interpretador da pasta preparada, imprime o relatório no terminal e o
+recurso; as sondas de consistência de `consistencia/` são a exceção, e gravam só sob as raízes
+das suítes (a seção delas abaixo). Cada um roda com o interpretador da pasta preparada, imprime o relatório no terminal e o
 grava em `output/<script>_<data-hora>.txt`, pasta fora do git, para ser colado na conversa com o
 assistente. O formato segue os scripts de leitura de
 [felipenoris/AWS-DataScience](https://github.com/felipenoris/AWS-DataScience), pasta `aws/`: seções
@@ -28,6 +29,8 @@ Um relatório que uma etapa pendente ainda consulta é guardado em `plan/reading
 .venv/bin/python probes/parquet_source.py /caminho/da/base --text-bytes
 PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/delta/db_projetado
 .venv/bin/python probes/credentials.py s3://bucket/prefixo/prd/cad_contas
+SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local .venv/bin/python probes/consistencia/probe_types.py
+PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_redshift_test.py
 ```
 
 ## Os scripts
@@ -144,9 +147,49 @@ acompanha os relatórios dos probes na conversa.
 | O delta-rs, o DuckDB, o `S3FileSystem`, o `boto3` e a conexão Redshift que a execução segura continuam lendo depois que a credencial expira? | `credentials.py`, `CR-3` a `CR-8`, com o controle em `CR-11` |
 | O secret do DuckDB e a cláusula do `COPY` e do `UNLOAD` passam a levar a chave renovada? | `credentials.py`, `CR-9` e `CR-10` |
 
+## As sondas de consistência (`consistencia/`)
+
+As sondas de `consistencia/` atravessam uma fronteira de leitura e escrita do pacote com valores
+de borda (o texto vazio, o `NUL`, o emoji, os 50 bytes exatos, `±0.0`, `5e-324`, os extremos do
+`Double`, `NaN`, os infinitos, o `Decimal` extremo de cada escala, as datas `0001-01-01` e
+`9999-12-31`, `Uuid`, JSON e nulos) e trabalho paralelo, e comparam valor a valor o que saiu com o
+que entrou. Elas gravam, por isso ficam na sua pasta: as sete sondas de script escrevem sob
+`<SERIALIZE_DB_TEST_LOCAL_ROOT>/consistencia/<sonda>/`, pasta que cada uma recria no início e
+apaga no fim (`SERIALIZE_DB_TEST_KEEP` a mantém), e param com o código 2 sem a variável; a do
+motor Redshift roda pelo pytest com as fixtures das suítes (`-p conftest`, com `PYTHONPATH=tests`),
+sob `<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-poc/<id>/` e num ambiente `poc<id>` próprio do
+esquema da suíte, cujas tabelas `poc<id>_*` e linhas de controle saem no fim, como
+`tests/test_publication.py`. Cada leitura sai no terminal e em
+`output/consistencia_<sonda>_<data-hora>.txt`; cada checagem imprime `OK` ou `PROBLEMAS` com a
+lista, e o código de saída é 1 quando alguma reprovou. Os achados que esperam a decisão do usuário
+em [`plan/OPEN_QUESTIONS.md`](../plan/OPEN_QUESTIONS.md) (o sinal do zero pelo `COPY` do DuckDB,
+as atualizações perdidas do arquivo de controle na pasta local) e a regra dos tipos exatos de
+`register_files` (a cópia sem o mínimo e o máximo de `Boolean` e `DateTime`) saem como leituras
+conhecidas, não como reprovação; a soma de controle da auditoria acima de 1e32 fica fora dos dados
+da sonda da execução. O que a primeira rodada mostrou está em [`plan/POC.md`](../plan/POC.md),
+seção "O que as sondas de consistência de leitura e escrita mostraram", e os comandos com as
+variáveis do ambiente alvo em `SUITE.md`.
+
+| Sonda | O que atravessa |
+| --- | --- |
+| `probe_types.py` | Toda coluna do contrato com os seus valores de borda pelo motor DuckDB: `load`, `query` por statement e por texto, `export_partition` lido pelo dataset do delta-rs, pelo `delta_scan` e pelo arquivo Parquet registrado, as estatísticas do log contra os dados, `publish_partition`, um `stream` com o transbordo forçado num `loader` de outra sessão, e o mínimo e o máximo exatos do log em `cad_simples` com a poda dos dois leitores nos extremos. |
+| `probe_stream.py` | 1.500.000 linhas de nove tipos: um stream lento com transbordo, oito streams ao mesmo tempo na mesma conexão, quatro pipelines `stream` para `loader` em threads, um `loader` com quatro threads escrevendo, um stream depois de outro fechado no meio, um stream ao lado de um que falha e a pasta de transbordo vazia no fim. |
+| `probe_execution.py` | O ciclo da `Execution`: o pipeline em threads com `next_ids` em dois `loader`, a auditoria, dois `publish` ao mesmo tempo, os metadados dos commits e o snapshot; um leitor `current` consultado a cada 50 ms enquanto outra execução ingere com `materialize=True`, lê `published` e publica; os canais `default` e `current`; e duas execuções na mesma versão disputando uma partição (`ExecutionConflict` na perdedora, o arquivo do `COPY` dela como órfão). |
+| `probe_delta_ops.py` | Três escritores numa tabela (`publish_partition`, `export_partition`, dois `write_deltalake(mode="append")`), `compact`, `deep_copy` e a sua retomada, `export_snapshot` por cópia e por reescrita, `rewrite` com uma coluna renomeada, `vacuum_keeping_snapshots` prendendo um snapshot, a restauração de `read_back` e a escrita condicional do arquivo de controle por oito threads. |
+| `probe_reader.py` | O leitor Delta com duas threads de `query`, uma de `stream` e uma de texto com parâmetro lendo enquanto `materialize` troca a view pela tabela inteira e pela parcial, três vezes; um valor fora da regra de partição recusado com a tabela intacta. |
+| `probe_load.py` | A carga inicial da base fictícia de `tests/source_db_projetado.py` por `initial_load`, cada tabela comparada valor a valor com a origem pelos dois leitores, a segunda passagem sem commit e `load_report`. |
+| `probe_pandas.py` | Um `DataFrame` do pandas 3 por `from_pandas`, `cast`, `load`, `query` e `to_pandas`; o `NaN` que vira nulo em `from_pandas` e as recusas de `cast` como leituras. |
+| `probe_redshift_test.py` | O motor Redshift: `ingest` e `query`, quatro `stream` ao mesmo tempo, dois `loader` em threads, a auditoria e `export_partition` pelos dois leitores, duas sessões a mais em threads, `publish_redshift` com dois workers e o leitor publicado por duas threads; no substituto com `SERIALIZE_DB_TEST_EMULATOR=1`, no ambiente alvo contra o Redshift e o S3 reais. |
+
+`consistency_lib.py` é a biblioteca comum: o modelo `cad_tudo` com toda coluna do contrato e
+`cad_simples`, os valores de borda e `edge_rows`, a pasta de trabalho (`probe_folder`), a
+comparação valor a valor (`compare`, com `NaN` igual a `NaN` e o zero com o seu sinal;
+`to_contract`, que anota os tipos crus dos leitores), `known_zero_sign`, `report` e `finish`.
+
 ## Acrescentar um probe
 
-- O probe só lê: um script que altera algo não pertence a esta pasta.
+- O probe só lê: um script que altera algo pertence a `consistencia/`, e grava só sob as raízes
+  das suítes.
 - Construa sobre `probelib.py`: `Report` para o arquivo, as seções, as chamadas ecoadas, as
   checagens e o código de saída; `short_config` em todo cliente `boto3`, porque sem rede o padrão
   espera 60 s por tentativa; `run_python` para o que precisa de espera limitada (delta-rs, DuckDB).
