@@ -118,6 +118,18 @@ foi medido em [`POC.md`](POC.md).
   pacote. Espera o usuário: adaptar o pacote à 2.1 (`bound_statement`, de `serialize_db.sql`, que
   passa os valores por `params()`, e as colunas que o `load_report` soma) ou manter a 2.0.54.
 
+- **Os tipos que o contrato aceita sem conferir.** A revisão da tabela de tipos de 2026-09-25
+  ([`POC.md`](POC.md)) achou três casos no código de `serialize_db.schema`, que
+  `docs/index.md` descreve como estão. O `cast` converte pelos 16 bytes o `arrow.uuid` que o
+  PyArrow e o pandas inferem de um `uuid.UUID`, e quase todo UUID sai recusado com
+  `Invalid UTF8 payload`, sem a instrução ao cliente; nem `cast` nem a auditoria medem os 36 bytes
+  do `VARCHAR(36)`. O `Enum` entra como `String(n)`, com `n` do maior valor, e nada confere se o
+  valor está na lista. O `Numeric` de precisão acima de 38 levanta o `ValueError` do PyArrow em
+  `arrow_type`, e `check_models` o levanta em vez de listar a violação. Espera o usuário: levar o
+  `arrow.uuid` ao texto canônico ou recusá-lo com a instrução, e medir o `Uuid` no `cast` e na
+  auditoria; recusar o `Enum` em `check_models` ou conferir a lista; e listar o `Numeric` acima de
+  38 como violação.
+
 ## Achados da revisão dos comentários e da documentação
 
 A revisão de 2026-09-25 (PR #82) mudou só comentários, docstrings e prosa de `src/`, `scripts/`,

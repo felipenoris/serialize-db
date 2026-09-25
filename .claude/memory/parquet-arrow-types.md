@@ -93,3 +93,18 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   `RecordBatch.cast` to a `string` field converts it directly; DuckDB's `to_arrow_table()` of a
   `JSON` column gives a plain `string`, and pyarrow writes it as a plain `String`, so the stand-in's
   `UNLOAD` file of a `SUPER` column lacks the logical type the target writes. `plan/POC.md`
+
+## The type table read against the code (2026-09-25)
+
+- `arrow_type` and `sql_type` match by `isinstance`: `Unicode`, `CHAR(n)` (emitted as
+  `VARCHAR(n)`) and `Enum` take the `String(n)` row, `Enum`'s `n` being its longest value and its
+  list never checked; `Numeric()` is `decimal128(18, 0)`; `Numeric(39, s)` raises pyarrow's
+  `ValueError` out of `check_models`. `Time` and `REAL` are refused. `plan/POC.md`
+- `cast` turns the `arrow.uuid` that `pa.array` and `from_pandas` infer from `uuid.UUID` into a
+  `string` of the 16 raw bytes: random UUIDs fail with `Invalid UTF8 payload`; `Uuid` text is not
+  measured against `VARCHAR(36)` by `cast` or the audit. Pending user decision in
+  `plan/OPEN_QUESTIONS.md`. `plan/POC.md`
+- A `DateTime` column makes delta-rs create the table at reader 3 / writer 7 with `timestampNtz`;
+  without it, 1 / 2. `delta_scan` gives `VARCHAR` for `JSON` (the DDL tables say `JSON`), and
+  DuckDB's Arrow output labels `TIMESTAMPTZ` with the session `TimeZone`. DuckDB and delta-rs write
+  decimals as `INT32` up to 9 digits, `INT64` up to 18, `FIXED_LEN_BYTE_ARRAY` above. `plan/POC.md`

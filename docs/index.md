@@ -654,7 +654,11 @@ uma versão intermediária continua legível.
 ## Tabela de mapeamento de tipos
 
 O tipo SQLAlchemy de cada coluna determina o tipo Arrow do contrato, o tipo Delta e o nome do tipo
-em cada motor. Um tipo fora desta tabela é recusado por `check_models` e por `arrow_schema`.
+no DDL que `serialize_db.schema.ddl` gera para cada motor. A busca é por `isinstance`, e uma
+subclasse segue a linha do tipo de que deriva: `Unicode(n)`, `CHAR(n)` e `Enum` a de `String(n)`,
+`UnicodeText` a de `Text`, `TIMESTAMP` a de `DateTime`, `UUID` a de `Uuid` e `DOUBLE_PRECISION` a
+de `Double`. Um tipo que não deriva de nenhum da tabela é listado por `check_models` e recusado por
+`arrow_schema`.
 
 | SQLAlchemy | Arrow | Delta | DuckDB | Redshift | Observação |
 | --- | --- | --- | --- | --- | --- |
@@ -662,18 +666,24 @@ em cada motor. Um tipo fora desta tabela é recusado por `check_models` e por `a
 | `Integer` | `int32` | `integer` | `INTEGER` | `INTEGER` | |
 | `BigInteger` | `int64` | `long` | `BIGINT` | `BIGINT` | O tipo das chaves. Tipos sem sinal do Arrow e do DuckDB ficam fora do contrato. |
 | `Boolean` | `bool` | `boolean` | `BOOLEAN` | `BOOLEAN` | |
-| `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Entra como chega, sem arredondamento. Descarregar e recarregar pelo Redshift pode perder precisão. |
-| `Numeric(p, s)` | `decimal128(p, s)` | `decimal(p, s)` | `DECIMAL(p, s)` | `DECIMAL(p, s)` | `p` até 38. O delta-rs e o DuckDB gravam `DECIMAL(18, 2)` no tipo físico `INT64`; o PyArrow, em `FIXED_LEN_BYTE_ARRAY`. |
-| `String(n)` | `string` | `string` | `VARCHAR(n)` | `VARCHAR(n)` | `n` em bytes no Redshift, e é assim que `cast` mede o texto; o DuckDB aceita o comprimento e o ignora. `String` sem `n` é violação. |
-| `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | O texto sem `n`; o teto é o do `VARCHAR` do Redshift, que o `cast` mede; `TEXT` no Redshift seria `VARCHAR(256)`. |
+| `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Entra como chega, sem arredondamento, com `NaN` e infinito; numa partição com valor não finito, a coluna fica sem mínimo e máximo no log Delta. A documentação do `UNLOAD` avisa que descarregar e recarregar pode perder precisão; o pacote faz os dois em Parquet, que guarda o valor binário, e a perda não foi medida. |
+| `Numeric(p, s)` | `decimal128(p, s)` | `decimal(p,s)` | `DECIMAL(p, s)` | `DECIMAL(p, s)` | `p` até 38; sem `p` a precisão é 18, e sem `s` a escala é 0, os padrões do `DECIMAL` do Redshift. O tipo físico no Parquet varia com o escritor, e os leitores leem todos: o DuckDB e o delta-rs gravam `INT32` até 9 dígitos, `INT64` até 18 e `FIXED_LEN_BYTE_ARRAY` acima, e o `UNLOAD` do Redshift e o PyArrow gravaram `DECIMAL(18, 2)` em `FIXED_LEN_BYTE_ARRAY`. |
+| `String(n)` | `string` | `string` | `VARCHAR(n)` | `VARCHAR(n)` | `n` em bytes no Redshift, e é assim que `cast` e a auditoria medem o texto; o DuckDB aceita o comprimento e o ignora. `String` sem `n` é violação. O `Enum` entra com `n` do maior valor, e nada confere se o valor está na lista. |
+| `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | O texto sem `n`, e o `n` de `Text(n)` é ignorado; o teto é o do `VARCHAR` do Redshift, que `cast` e a auditoria medem; `TEXT` no Redshift seria `VARCHAR(256)`. |
 | `Date` | `date32` | `date` | `DATE` | `DATE` | |
-| `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | Microssegundos; um nanossegundo não nulo e um `timestamp` com fuso são recusados por `cast`. |
+| `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | Microssegundos; um nanossegundo não nulo e um `timestamp` com fuso são recusados por `cast`. O `timestamp_ntz` põe a tabela no protocolo com o recurso `timestampNtz` (leitor 3, escritor 7), que o leitor Delta precisa ter. O `UNLOAD` do Redshift grava `INT96`, que o delta-rs e o `delta_scan` leem em microssegundos. |
 | `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Sempre em UTC; outro fuso entra no mesmo instante, e um `timestamp` sem fuso é recusado por `cast`. |
-| `Uuid` | `string` | `string` | `VARCHAR(36)` | `VARCHAR(36)` | O contrato guarda o UUID como texto; o Redshift não tem o tipo. |
-| `JSON` | `string` | `string` | `JSON` | `SUPER` | O documento entra serializado (`json.dumps`); `cast` recusa `struct`, `list` e `map`, e o documento acima de 65.535 bytes, o maior que o `COPY` de Parquet leva a `SUPER`. O `with_variant(SUPER(), "redshift")` do `sqlalchemy-redshift` no modelo é opcional. |
-| `Float`, `LargeBinary`, `ARRAY`, `Interval` | | | | | Fora do contrato. |
+| `Uuid` | `string` | `string` | `VARCHAR(36)` | `VARCHAR(36)` | O contrato guarda o UUID como texto; o Redshift não tem o tipo. O cliente passa o texto (`str(valor)`), porque `cast` converte pelos 16 bytes o `arrow.uuid` que o PyArrow e o pandas inferem de um `uuid.UUID`. Nem `cast` nem a auditoria medem os 36 bytes. |
+| `JSON` | `string` | `string` | `JSON` | `SUPER` | O documento entra serializado (`json.dumps`); `cast` recusa `struct`, `list` e `map`, e o documento acima de 65.535 bytes, o teto do `VARCHAR(65535)` em que o Redshift o carrega antes do `JSON_PARSE` para `SUPER`. O `ingest` do DuckDB e o leitor Delta trazem a coluna do `delta_scan` em `VARCHAR`, e as funções JSON do DuckDB leem os dois tipos. O `with_variant(SUPER(), "redshift")` do `sqlalchemy-redshift` no modelo é opcional. |
+| `Float`, `Time`, `Interval`, `LargeBinary`, `ARRAY` | | | | | Fora do contrato. |
 
 Cada campo Arrow leva a nulidade da coluna, o comentário em `metadata` e `PARQUET:field_id` pela
 posição; o esquema leva o nome da tabela em `serialize_db_table`. O esquema Delta é derivado do
 Arrow pelo delta-rs, com os comentários preservados e sem o `PARQUET:field_id`: com ele no esquema
 Delta, o `delta_scan` do DuckDB lê toda coluna como nula.
+
+Uma coluna do contrato volta de `query` e de `stream` no tipo Arrow da tabela. No motor Redshift,
+`serialize_db.engine.redshift.schema_from_row_description` dá o tipo de cada coluna do resultado
+pelo driver, com o `SUPER` em `string` e o `NUMERIC` com a precisão e a escala do `type_modifier`,
+e recusa com `serialize_db.errors.SandboxError` o tipo que não lista, como `TIME`; o motor DuckDB
+devolve o `TIMESTAMPTZ` com o fuso da sessão (`TimeZone`), que `cast` leva a UTC no mesmo instante.
