@@ -123,6 +123,7 @@ def load_table(
     for value in wanted:
         started = time.perf_counter()
         selected = None if value is None else [value]
+        # initial_load devolve a lista vazia quando o log já tem a partição.
         if not load.initial_load(db, table, source, selected):
             continue
         rows = partition_rows(db, table, value)
@@ -220,6 +221,7 @@ def resolve_metadata(spec: str) -> sa.MetaData:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Os argumentos da linha de comando do script."""
     parser = argparse.ArgumentParser(
         description="Migra a base Parquet particionada de origem para tabelas Delta, uma "
         "partição por commit, e confere contagens e somas."
@@ -245,9 +247,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Roda a migração com os argumentos de ``argv``, ou os do processo, e devolve o código de
+    saída."""
     parser = build_parser()
     arguments = parser.parse_args(argv)
     metadata: sa.MetaData = arguments.metadata
+    # O modelo fora do contrato e a tabela fora do modelo param a execução antes da carga.
     problems = schema.check_models(metadata)
     if problems:
         print("modelo fora do contrato:", *problems, sep="\n  ", file=sys.stderr)
@@ -256,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         parser.error(f"tabelas fora do modelo: {', '.join(sorted(unknown))}")
     db = Database(arguments.root, arguments.environment, metadata)
+    # A máquina e os limites do DuckDB, impressos antes da carga e levados no relatório.
     environment = describe_environment(arguments)
     limits = environment["duckdb_limits"]
     print(f"{environment['cpus']} CPUs, {environment['memory_total_mb']} MB de memória, "
@@ -264,6 +270,8 @@ def main(argv: list[str] | None = None) -> int:
     tables = list(metadata.tables.values())
     if arguments.tables:
         tables = [table for table in tables if table.name in arguments.tables]
+    # Cada tabela na ordem da carga, gravada e conferida; com --report, o JSON parcial é regravado
+    # no começo da tabela e depois de cada partição.
     reports: list[TableReport] = []
     try:
         for table in load.load_order(tables):
@@ -283,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as error:
         print(f"FileNotFoundError: {error}", file=sys.stderr)
         return 2
+    # O relatório final leva o que a origem tem fora do modelo; o veredito dá o código de saída.
     outside = load.entries_outside_the_model(arguments.source, metadata)
     if outside:
         print(f"fora do modelo: {', '.join(outside)}")

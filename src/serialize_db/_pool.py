@@ -86,6 +86,7 @@ def run_in_pool(tasks: list[Task], max_workers: int) -> dict[str, object]:
             state.collect()
             state.start(waiting)
     outcomes = _outcomes_of(state.finished)
+    # As tarefas que sobraram em waiting nunca começaram e entram na nota como canceladas.
     for name, _ in waiting:
         outcomes[name] = "cancelada"
     if state.failure is not None:

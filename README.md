@@ -30,7 +30,7 @@ Ctrl+Shift+P → Python: Select Interpreter → Enter interpreter path...
 
 - Selecionar Kernel -> selecionar caminho para interpretador criado no passo anterior.
 
-Obs.: project.toml foi inicializado com `uv add ipykernel --group interactive`
+Obs.: pyproject.toml foi inicializado com `uv add ipykernel --group interactive`
 
 # Dependências
 
