@@ -3374,6 +3374,12 @@ contêiner:
   cada arquivo pela função do probe.
 - As contagens: sem variável, 209 passam e 316 são pulados; com a raiz local, 431 e 94; com o
   substituto local, 524 e 1 ([`CURRENT_STATE.md`](CURRENT_STATE.md)).
+- `scripts/migrate_parquet_to_delta.py`, com `SERIALIZE_DB_ENVIRONMENT` vazia e sem
+  `--environment`, saiu com 1 e o traceback de `ContractError: valor '' fora da regra da partição`,
+  enquanto `serialize-db load` usava `dsv`; o script lê a variável vazia como ausente, e
+  `tests/test_migrate_parquet_to_delta.py` confere o ambiente `dsv`. Com o caso novo, sem
+  variável, 209 passam e 317 são pulados; com a raiz local, 432 e 94; com o substituto local, 525
+  e 1.
 
 ## O que as sondas do acesso de leitura mostraram
 
