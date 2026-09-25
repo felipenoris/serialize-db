@@ -1043,3 +1043,16 @@ why the log already marks the columns, and whether the library's own writers rea
 probes of the same day found it only after a `rewrite` of a table with more than 100 partitions
 whose partitions have several files, which today only the Redshift engine writes. The code does not
 follow the decision yet. `plan/PLAN-STAGE-9.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+
+## The count check of the Redshift engine's swap (2026-09-25)
+
+The user decided the open item on `RedshiftEngine.export_partition`: the swap to
+`publish_partition`, taken by a partition with a non-finite `Double` and, under
+`Execution.publish(audit=False)`, by every table with a `Double` column, committed without the
+count check the registration does (`register_files` compares `expected_rows` before the commit and
+runs `read_back` after it). After `publish_partition`, `_swap` runs `delta.read_back` with
+`expected_rows` or, without it, the sandbox's `count(*)`, as the registration does; a difference
+restores the previous version and raises `RegistrationRefused`. The alternatives were comparing
+the `UNLOAD` files' rows before the commit, which misses a loss in the delta-rs write, and
+documenting the gap. The code does not follow the decision yet. `plan/PLAN-STAGE-5.md`,
+`plan/CURRENT_STATE.md`

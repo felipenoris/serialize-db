@@ -45,12 +45,6 @@ foi medido em [`POC.md`](POC.md).
   versão fixada em `pyproject.toml`, que `deltalake==1.6.4` está retirada (yanked) do PyPI, com o
   motivo "Issue: #4784", e a instalou assim mesmo ([`POC.md`](POC.md)). O motivo e a versão que a
   substitui não foram lidos.
-- **A contagem na troca do motor Redshift.** Com `columns_without_min_max`,
-  `RedshiftEngine.export_partition` leva a partição de volta por `publish_partition`, que não
-  confere `expected_rows`, e a partição sai sem a conferência de contagem que o registro faz; com
-  `Execution.publish(audit=False)` toda coluna `Double` entra na lista, e a tabela com `Double`
-  segue esse caminho ([etapa 5](PLAN-STAGE-5.md)). Lido no código em 2026-09-24; espera o
-  usuário.
 - **A versão da staging `_publicado` do motor Redshift.** `RedshiftEngine.published` carrega a
   staging uma vez por execução pelo nome, sem a versão: chamada de novo com outra versão, depois de
   `Execution.publish` avançar `versions`, devolve a staging da primeira, enquanto o motor DuckDB lê

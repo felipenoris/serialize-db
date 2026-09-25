@@ -239,6 +239,10 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
   `environment_limits` e fechada depois da partição, para `publish_partition`, cuja memória cresce
   com a partição fora do `memory_limit` (12.357 MB para 52.654.607 linhas, [`POC.md`](POC.md)), e
   o motor registra no log, em nível `WARNING`, a tabela, a partição, as colunas e a troca.
+  Depois do commit, a troca relê a partição por `read_back`, com `expected_rows` ou, sem ele, o
+  `count(*)` do sandbox, como o registro: o log e os dois leitores contam as linhas, e uma
+  diferença restaura a versão anterior e sobe `RegistrationRefused` (decisão do usuário de
+  2026-09-25); o código ainda não segue a decisão ([`CURRENT_STATE.md`](CURRENT_STATE.md)).
 - **`cleanup`** roda `DROP TABLE IF EXISTS` de cada `exec_<id>_*`, um comando por chamada, apaga
   `staging/<execution_id>/` pelo `Storage` e fecha a sessão.
 
@@ -252,7 +256,7 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
 | `stream` | Texto ou statement válido, sem `LIMIT` no `select` externo e com valor em todo `bindparam`; `s3:PutObject` e `s3:GetObject` sob `staging/`. | Lotes com os tipos do contrato; o lock solto no fim do `UNLOAD`, e a thread do cliente livre para o lote atual; o prefixo do `stream` apagado no `close`. |
 | `query` | Texto ou statement válido. | A `pa.Table` com os tipos do contrato; o lock solto no fim do `fetchall`. |
 | `loader`, `load` | O nome da tabela livre no sandbox; lotes que passam por `cast`; `s3:PutObject` sob `staging/`. | Nada existe antes do `close`, que cria a tabela e carrega numa transação; nenhuma tabela no erro; `SandboxError` com o nome ocupado; o arquivo do staging apagado no erro. |
-| `export_partition` | Auditoria aprovada; o destino novo, vazio por construção. | Uma versão nova no Delta; os arquivos como o Redshift os gravou (`INT96`, `FIXED_LEN_BYTE_ARRAY`, `optional`) no registro, normalizados na troca. |
+| `export_partition` | Auditoria aprovada; o destino novo, vazio por construção. | Uma versão nova no Delta; os arquivos como o Redshift os gravou (`INT96`, `FIXED_LEN_BYTE_ARRAY`, `optional`) no registro, normalizados na troca; nos dois caminhos, as linhas contadas pelo log e pelos dois leitores. |
 | `cleanup` | Nenhum. | Nenhuma tabela `exec_<id>_*` no esquema; `staging/<execution_id>/` vazio; a sessão fechada. |
 
 ## Testes por caso
@@ -266,7 +270,7 @@ testes marcados `redshift` repetem a sequência com uma amostra no esquema autor
 | Prefixo | `test_sandbox_prefix_normalizes_and_limits` | `[a-z0-9_]`, 127 bytes. |
 | Cláusula de credenciais | `test_credentials_clause_and_mask` | `IAM_ROLE` com ARN e `default`; as três chaves da sessão sem `iam_role`; `mask` tira os valores; nenhuma exceção carrega o texto sem máscara. |
 | Comandos | `test_copy_insert_unload_text` | `COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD` sem `COMPUPDATE` ([etapa 8](PLAN-STAGE-8.md)); `INSERT ... SELECT *, '<valor>'`; `UNLOAD ... MANIFEST VERBOSE` sem `PARTITION BY`, o `select` da exportação sem a coluna de partição, `PARALLEL OFF` opcional na exportação e fixo no `stream`, a contrabarra e as aspas do `select` dobradas; nomes em duas partes. |
-| Exportação, troca e destino por tentativa | `test_export_registers_the_unloaded_files_and_swaps_on_nonfinite` (`local`) | Uma conexão de mentira que grava o arquivo do `UNLOAD` na pasta local: o registro em `<coluna>=<valor>/<execution_id>_<uuid>/` com o `select` sem a coluna de partição e o JSON serializado, o arquivo `INT96` no log com as linhas conferidas e sem o mínimo e o máximo do texto, `expected_rows` diferente recusado, dois destinos distintos para a mesma partição; com `columns_without_min_max` não vazio, o destino no `staging/`, `publish_partition` e o `WARNING` com a tabela, a partição e as colunas; a partição vazia registrada por um arquivo sem linha. |
+| Exportação, troca e destino por tentativa | `test_export_registers_the_unloaded_files_and_swaps_on_nonfinite` (`local`) | Uma conexão de mentira que grava o arquivo do `UNLOAD` na pasta local: o registro em `<coluna>=<valor>/<execution_id>_<uuid>/` com o `select` sem a coluna de partição e o JSON serializado, o arquivo `INT96` no log com as linhas conferidas e sem o mínimo e o máximo do texto, `expected_rows` diferente recusado, dois destinos distintos para a mesma partição; com `columns_without_min_max` não vazio, o destino no `staging/`, `publish_partition` e o `WARNING` com a tabela, a partição e as colunas, e `expected_rows` diferente desfazendo o commit com `RegistrationRefused`; a partição vazia registrada por um arquivo sem linha. |
 | Ingestão e `published` | `test_ingest_loads_each_partition_through_the_staging` (`local`) | Por partição, o manifesto no `staging/`, o `DELETE` da staging, o `COPY ... MANIFEST FILLRECORD` e o `INSERT` com a lista de colunas; a partição sem arquivo não roda; o nome ocupado e a tabela sem versão são `SandboxError`; `published` carrega a versão inteira em `_publicado` uma vez; `cleanup` apaga as tabelas e o `staging/`. |
 | Loader sem conexão | `test_loader_writes_the_file_and_creates_the_table_in_a_transaction` (`local`) | O nome ocupado recusado; o arquivo no `staging/` pela thread auxiliar; `BEGIN`, o `CREATE TABLE`, a staging temporária com o `COPY` e o `INSERT ... JSON_PARSE`, `COMMIT`, e o arquivo apagado; a tabela sem JSON pelo `COPY` direto; a exceção no `with` e o lote recusado sem tabela; o DataFrame recusado. |
 | Reconexão | `test_connection_dropped_by_the_server_is_reopened_once` | O `InterfaceError` do driver reabre a conexão uma vez, com o `USE` e o `search_path`, e repete o comando; dentro de uma transação o erro sobe, com o `ROLLBACK` tentado. |
@@ -341,7 +345,8 @@ esquema do `stream` vazio de um texto pelo `limit 0`; `load` sempre pelo `loader
 leitura do custo do `COPY`; a precisão e a escala do `NUMERIC` pelo `type_modifier` do driver; a
 exportação sem `PARTITION BY`, num prefixo novo por partição e por tentativa; e a partição com
 `Double` não finito exportada pela troca para `publish_partition`, com o aviso no log; a decisão de
-2026-09-24 tirou o `mode` de `export_partition`.
+2026-09-24 tirou o `mode` de `export_partition`, e a de 2026-09-25 manda a troca conferir as linhas
+por `read_back`, como o registro.
 As execuções de 2026-09-23 às 22:56 e às 23:01 leram o que elas pediam ao ambiente alvo, salvo o
 arquivo do `UNLOAD` com coluna `SUPER` registrado numa tabela Delta, que a suíte do motor leu em
 2026-09-24: o delta-rs e o `delta_scan` dão a coluna como texto, `VARCHAR` com o JSON serializado
