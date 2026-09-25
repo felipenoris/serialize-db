@@ -49,8 +49,12 @@ foi medido em [`POC.md`](POC.md).
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
 - **A versão retirada do `deltalake`.** O `uv` avisou em 2026-09-25, ao instalar numa sonda a
   versão fixada em `pyproject.toml`, que `deltalake==1.6.4` está retirada (yanked) do PyPI, com o
-  motivo "Issue: #4784", e a instalou assim mesmo ([`POC.md`](POC.md)). O motivo e a versão que a
-  substitui não foram lidos.
+  motivo "Issue: #4784", e a instalou assim mesmo ([`POC.md`](POC.md)). A issue #4784 do delta-rs,
+  lida em 2026-09-25, é um `MERGE` numa tabela com o change data feed ligado que insere uma linha
+  toda nula para cada linha que o predicado de `when_not_matched_insert` recusa, e afeta a 1.6.4
+  e a 1.6.5; o pacote não usa `MERGE` nem o change data feed (busca por `.merge(`,
+  `enableChangeDataFeed`, `change_data_feed` e `load_cdf` em `src/`, `scripts/`, `tests/` e
+  `probes/`). A versão que corrige não foi lida, e a troca da versão fixada espera o usuário.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela

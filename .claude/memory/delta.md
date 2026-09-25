@@ -139,7 +139,10 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   statistics_enabled="NONE")}))` writes the merged file without the min, max and `nullCount` of
   `valor` in the log and without its footer statistics, keeping the other columns'. `deltalake`
   1.6.4 is yanked on PyPI with the reason "Issue: #4784": `uv` warns and still installs the
-  pinned version, and the reason was not read (2026-09-25). `plan/POC.md`, `plan/PLAN-STAGE-9.md`,
+  pinned version (2026-09-25). delta-rs #4784 is a `MERGE` on a table with the change data feed
+  on inserting an all-null row for each row a `when_not_matched_insert` predicate rejects,
+  affecting 1.6.4 and 1.6.5 (read by the documentation review on 2026-09-25); the package uses
+  neither `MERGE` nor the change data feed. `plan/POC.md`, `plan/PLAN-STAGE-9.md`,
   `plan/OPEN_QUESTIONS.md`
 
 ## Performance measured
