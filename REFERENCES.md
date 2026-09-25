@@ -969,6 +969,14 @@ API JSON do PyPI, consultada em 2026-09-19 para a estratégia de implementação
 API JSON do PyPI, consultada em 2026-09-25 para as versões retiradas do deltalake:
 <https://pypi.org/pypi/deltalake/json>.
 
+API JSON do PyPI e os pacotes-fonte, consultados em 2026-09-25 para a troca do deltalake pela
+1.6.6:
+
+- <https://pypi.org/pypi/deltalake/json>, <https://pypi.org/pypi/deltalake/1.6.4/json>,
+  <https://pypi.org/pypi/deltalake/1.6.5/json> e <https://pypi.org/pypi/deltalake/1.6.6/json>
+- <https://files.pythonhosted.org/packages/b0/68/29c9e7c9fcf8b5f03ec300566e974fca7065fd84709f34ef1b85ec74e385/deltalake-1.6.4.tar.gz>
+- <https://files.pythonhosted.org/packages/24/7e/817984d82cec757f6f3a3dbb84afcd85027e7ae02e0a354702c2127f6777/deltalake-1.6.6.tar.gz>
+
 API do crates.io (`https://crates.io/api/v1/crates/<crate>`), consultada em 2026-09-19 para
 `object_store`, `parquet`, `arrow`, `pyo3`, `pyo3-arrow`, `deltalake`, `delta_kernel`, `duckdb`,
 `datafusion`, `hudi`, `iceberg`, `lance`, `maturin`, `sqlparser` e `polars`.
@@ -1036,6 +1044,16 @@ Statistics"):
 O motivo da retirada do `deltalake` 1.6.4 do PyPI, lido em 2026-09-25:
 
 - <https://github.com/delta-io/delta-rs/issues/4784>
+
+As versões do delta-rs entre a 1.6.4 e a 1.6.6, lidas em 2026-09-25 para a troca da versão fixada:
+
+- <https://github.com/delta-io/delta-rs/releases/tag/python-v1.6.5> e
+  <https://github.com/delta-io/delta-rs/releases/tag/python-v1.6.6>
+- <https://github.com/delta-io/delta-rs/pull/4747>
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/CHANGELOG.md>, cuja entrada mais nova é
+  a `rust-v0.32.3`, de 2026-05-19
+- <https://api.github.com/repos/delta-io/delta-rs/releases/tags/python-v1.6.5> e a mesma rota com
+  `python-v1.6.6`, que o proxy do contêiner recusou
 
 O filtro do dataset do delta-rs sobre as colunas sem mínimo e máximo no log, consultado em
 2026-09-25:

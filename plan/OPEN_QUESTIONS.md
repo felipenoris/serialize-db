@@ -47,16 +47,12 @@ foi medido em [`POC.md`](POC.md).
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
-- **A versão retirada do `deltalake`.** O `uv` avisou em 2026-09-25, ao instalar numa sonda a
-  versão fixada em `pyproject.toml`, que `deltalake==1.6.4` está retirada (yanked) do PyPI, com o
-  motivo "Issue: #4784", e a instalou assim mesmo ([`POC.md`](POC.md)). A issue #4784 do delta-rs,
-  lida em 2026-09-25, é um `MERGE` numa tabela com o change data feed ligado que insere uma linha
-  toda nula para cada linha que o predicado de `when_not_matched_insert` recusa, e afeta a 1.6.4 e a
-  1.6.5; o pacote não usa `MERGE` nem o change data feed (busca por `.merge(`,
-  `enableChangeDataFeed`, `change_data_feed` e `load_cdf` em `src/`, `scripts/`, `tests/` e
-  `probes/`). A 1.6.5 também está retirada, e a 1.6.6, de 2026-09-24, traz a correção (PR #4785) e
-  não está retirada ([`POC.md`](POC.md)). Espera o usuário: trocar a versão fixada pela 1.6.6, com
-  as suítes rodadas nela.
+- **O `deltalake` 1.6.6 no ambiente alvo.** `pyproject.toml` fixa `deltalake==1.6.6` desde
+  2026-09-25, e as sessões locais e o substituto leram nela os mesmos números da 1.6.4
+  ([`POC.md`](POC.md)). A pasta do ambiente alvo rodou as baterias de 2026-09-24 com a 1.6.4 e só
+  recebe a 1.6.6 quando `prepare_offline.sh` roda de novo. O substituto dá chaves estáticas ao
+  delta-rs, e a cadeia de credenciais do contêiner, cujas crates da AWS mudaram na 1.6.6, só a
+  suíte S3 no alvo exercita. Espera o usuário: preparar a pasta de novo e rodar a suíte S3 no alvo.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela

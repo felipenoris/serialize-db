@@ -138,12 +138,27 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   writer_properties=WriterProperties(column_properties={"valor": ColumnProperties(
   statistics_enabled="NONE")}))` writes the merged file without the min, max and `nullCount` of
   `valor` in the log and without its footer statistics, keeping the other columns'. `deltalake`
-  1.6.4 is yanked on PyPI with the reason "Issue: #4784": `uv` warns and still installs the
-  pinned version (2026-09-25). delta-rs #4784 is a `MERGE` on a table with the change data feed on
-  inserting an all-null row for each row a `when_not_matched_insert` predicate rejects, affecting
-  1.6.4 and 1.6.5 (read by the documentation review on 2026-09-25); 1.6.5 is also yanked, and 1.6.6
-  (2026-09-24, not yanked) fixes it with PR #4785; the package uses neither `MERGE` nor the change
-  data feed. `plan/POC.md`, `plan/PLAN-STAGE-9.md`, `plan/OPEN_QUESTIONS.md`
+  1.6.4 is yanked on PyPI with the reason "Issue: #4784": `uv` warned and still installed it
+  while it was the pinned version (2026-09-25). delta-rs #4784 is a `MERGE` on a table with the
+  change data feed on inserting an all-null row for each row a `when_not_matched_insert`
+  predicate rejects, affecting 1.6.4 and 1.6.5 (read by the documentation review on 2026-09-25);
+  1.6.5 is also yanked, and 1.6.6 (2026-09-24, not yanked) fixes it with PR #4785; the package
+  uses neither `MERGE` nor the change data feed. `plan/POC.md`, `plan/PLAN-STAGE-9.md`,
+  `plan/OPEN_QUESTIONS.md`
+
+- The pin is `deltalake==1.6.6` since 2026-09-25 (user request): the three local sessions (no
+  variable, the local root, the local root with the stand-in) read the same counts on 1.6.4 and
+  1.6.6 (217 passed and 337 skipped, 458 and 96, 553 and 1), with no warning. Between the two
+  sdists, `DeltaTable` ignores `without_files`, `log_buffer_size` and `skip_stats` with a
+  `DeprecationWarning`, `load_as_version` reads a naive `datetime` as UTC where 1.6.4 read it as
+  local time, the `INT64` statistic of a `decimal(p, 0)` is exact instead of passing through
+  `f64` (PR #4757), and `vacuum` spares a hidden folder whose name merely starts with a partition
+  column's (PR #4747); nothing in the repository uses the changed arguments, and no model has a
+  `Numeric(p, 0)`. `crates/aws` is unchanged, `object_store` 0.13.2, `arrow` and `parquet` 59.3.0
+  and `datafusion` 55.1.0 stayed, and the AWS SDK crates moved up (`aws-runtime` 1.10.0,
+  `aws-sigv4` 1.6.0, `aws-smithy-runtime` 1.15.0), so the container credential chain is read only
+  by the S3 suite in the target, whose prepared folder gets 1.6.6 when `prepare_offline.sh` runs
+  again. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 
 - `to_pyarrow_dataset()` gives each fragment a `partition_expression` built from the file's log
   statistics, and a null min or max becomes `column >= null` or `column <= null`, so PyArrow skips

@@ -3752,5 +3752,48 @@ listar os leitores que leem certo com filtro e os que perdem linhas. A proprieda
 estatísticas já gravadas, mas o `write_deltalake` deixa de gravar as das colunas de fora (o
 `compact`, que escreve pelo delta-rs, não foi medido), e o `get_add_actions` as esconde; pelo código
 de `delta.py`, isso tira da releitura (`read_back`) a conferência do log numa chave de fora da
-propriedade e da cópia do `archive` (`deep_copy`) as estatísticas das colunas de fora. A escolha e
-a troca da versão fixada pela 1.6.6 esperam o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+propriedade e da cópia do `archive` (`deep_copy`) as estatísticas das colunas de fora. A escolha
+espera o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), e a troca da versão fixada pela 1.6.6
+está na seção seguinte.
+
+## O que a troca do deltalake para a 1.6.6 mostrou
+
+Em 2026-09-25, no contêiner de desenvolvimento (Linux x86_64, 4 vCPUs, Python 3.13.12), com DuckDB
+1.5.5 (`httpfs`, `delta` e `aws` em `.duckdb/`), PyArrow 25.0.1 e boto3 1.43.98, sem as variáveis
+`AWS_*`, as três sessões do `pytest` sobre `tests/` inteiro rodaram com o deltalake 1.6.4 e depois
+com o 1.6.6, a pedido do usuário.
+
+- **As contagens.** Sem variável, 217 passaram e 337 foram pulados; com
+  `SERIALIZE_DB_TEST_LOCAL_ROOT`, 458 e 96; com a raiz local e `SERIALIZE_DB_TEST_EMULATOR`, 553 e
+  só o teste da Data API pulado. As duas versões deram os mesmos números, sem aviso do pytest, e o
+  relatório da terceira sessão leu `delta.client_version` `delta-rs.py-1.6.6`. As suítes de estudo
+  de `tests/proof_of_concept/`, `test_deltalake.py` entre elas, rodaram nas três sessões.
+- **A interface Python.** Entre os pacotes-fonte das duas versões no PyPI, `deltalake/` muda assim:
+  `DeltaTable` ignora `without_files`, `log_buffer_size` e `skip_stats` com `DeprecationWarning`, e
+  `table_config` avisa o mesmo; `load_as_version` lê o `datetime` sem fuso como UTC, onde a 1.6.4 o
+  lia no fuso local; `is_deltatable` aceita `Path`; `convert_to_deltalake` ganha a estratégia
+  `directory` e `collect_stats`; o `encoding` de `default_column_properties` passa a valer no
+  `WriterProperties` e desliga o dicionário. Nenhum arquivo de `src/`, `scripts/`, `tests/` e
+  `probes/` usa esses argumentos, `load_as_version` com `datetime`, `convert_to_deltalake` ou
+  `default_column_properties`.
+- **O núcleo em Rust.** A estatística de um `decimal(p, 0)` gravado como `INT64` sai exata no log,
+  onde a 1.6.4 passava por `f64` e arredondava acima de 2^53 (PR #4757); nenhum modelo do
+  repositório tem coluna `Numeric(p, 0)`. O `vacuum` deixa de apagar arquivos de uma pasta oculta,
+  começada por `_` ou `.`, cujo nome só começa pelo de uma coluna de partição: a exceção passa a
+  exigir a coluna seguida de `=` (PR #4747), e as colunas de partição do pacote começam por letra. O
+  `MERGE` com o change data feed deixa de inserir as linhas nulas da issue #4784 (PR #4785), e o
+  pacote não usa nenhum dos dois: a busca por `.merge(`, `enableChangeDataFeed`, `change_data_feed`
+  e `load_cdf` em `src/`, `scripts/`, `tests/` e `probes/` não acha nada. O resto reorganiza o
+  código (`DeltaTableConfig` removida, o histórico lido em fluxo). `crates/aws` é o mesmo, e
+  `object_store` 0.13.2, `arrow` e `parquet` 59.3.0 e `datafusion` 55.1.0 ficaram nas mesmas
+  versões, enquanto as crates do SDK da AWS subiram (`aws-runtime` 1.9.4 para 1.10.0, `aws-sigv4`
+  1.5.3 para 1.6.0, `aws-smithy-runtime` 1.14.2 para 1.15.0).
+- **O PyPI.** A 1.6.6, de 2026-09-24, é a mais nova e não está retirada; traz as mesmas rodas da
+  1.6.4, `manylinux_2_17_x86_64` entre elas, e as mesmas dependências (`arro3-core>=0.5.0`,
+  `deprecated>=1.2.18` e o extra `pyarrow>=21`).
+
+**Consequências**: `pyproject.toml` fixa `deltalake==1.6.6` nas dependências de execução e no grupo
+`dev`, e o item da versão retirada saiu de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). O substituto
+dá chaves estáticas ao delta-rs e não passa pela cadeia de credenciais do contêiner, onde as crates
+da AWS mudaram: a suíte S3 no ambiente alvo, com a pasta preparada de novo, espera o usuário no
+mesmo documento.
