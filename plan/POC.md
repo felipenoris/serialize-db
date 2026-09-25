@@ -4171,3 +4171,126 @@ o cliente precisa do grupo `dev` que as instruções de instalação citavam.
 usuário de 2026-09-25), o que [`PLAN.md`](PLAN.md) e a [etapa 5](PLAN-STAGE-5.md) registram. As
 instruções de `docs/index.md` e do `README.md` passam ao `uv sync`, com a instalação no projeto
 cliente, e a esteira de testes importa cada módulo depois de `uv sync --no-dev`.
+
+## O que as sondas de consistência de leitura e escrita mostraram
+
+Em 2026-09-25, a pedido do usuário, oito sondas fora do repositório atravessaram cada fronteira de
+leitura e escrita do pacote com valores de borda (o texto vazio, o `NUL`, o emoji, os 50 bytes
+exatos, `±0.0`, `5e-324`, `±1.7976931348623157e308`, `NaN`, os infinitos, o `Decimal` extremo de
+cada escala, as datas `0001-01-01` e `9999-12-31`, o `Numeric(38, 10)`, `Uuid`, JSON e nulos) e
+com trabalho paralelo, e compararam valor a valor o que saiu com o que entrou, no contêiner de
+4 CPUs e 16 GB (Linux x86_64, Python 3.13.12, deltalake 1.6.6, duckdb 1.5.5, pyarrow 25.0.1,
+pandas 3.0.6), na pasta local e no substituto de `tests/emulator.py`; `src/` não mudou. As sondas
+e as saídas ficam fora do git, na pasta compartilhada do projeto, em `consistencia/sondas/`.
+
+- **Os tipos pela fronteira do motor DuckDB** (`probe_types.py`): 2.000 linhas de uma tabela com
+  toda coluna do contrato por `load`, `query`, `export_partition` e `publish_partition`, lidas
+  pelo dataset do delta-rs, pelo `delta_scan` e pelo `pq.read_table` do arquivo registrado; um
+  `stream` de 300 linhas por lote com 10.000 bytes de orçamento (7 lotes no transbordo) num
+  `loader` de outra sessão; e o mínimo e o máximo do log iguais aos dados nas colunas de tipo
+  exato, com a poda do `delta_scan` e do dataset nos extremos (`valor = hi`, `nome = ''`,
+  `nome = 'ÿÿ'`). Tudo igual, fora o sinal do zero: o `COPY ... (FORMAT parquet)` do DuckDB, o
+  escritor de `export_partition`, `initial_load`, `rewrite` e `export_snapshot(mode="rewrite")`,
+  codifica a coluna `DOUBLE` por dicionário (`PLAIN_DICTIONARY` no rodapé) e trata `-0.0` e
+  `0.0` como o mesmo valor: os dois saem com o sinal do primeiro que apareceu (2.000 linhas
+  alternadas em ordem de `id` vieram todas `0.0`; em ordem inversa, todas `-0.0`; 100 de 2.000
+  na sonda dos tipos e 1.428 por partição na sonda da execução). Com 4 linhas o arquivo sai
+  `PLAIN` e guarda o sinal; `COPY ... (DICTIONARY_SIZE_LIMIT 0)` guarda o sinal; o
+  `write_deltalake` de `publish_partition` e de `compact`, o `pq.write_table` e o IPC do
+  transbordo guardam o sinal. O instante de `DateTime(timezone=True)` volta certo de `query`, de
+  `stream`, do `ingest` por `delta_scan` e do leitor Delta, no tipo `timestamp[us, tz=Etc/UTC]`,
+  o `TimeZone` da sessão do DuckDB, que `docs/index.md` documenta; numa sessão com
+  `SET TimeZone = 'America/Sao_Paulo'` o tipo vem `tz=America/Sao_Paulo` e o valor `09:00-03:00`
+  para o instante `12:00+00`, e o arquivo Parquet que o `COPY` grava leva `tz=UTC` nos dois casos.
+- **Os streams e loaders em paralelo** (`probe_stream.py`): 1.500.000 linhas de nove colunas; um
+  stream lento e ordenado com 30 lotes no transbordo, oito streams ao mesmo tempo na mesma
+  conexão (de 0 a 1.500 lotes no transbordo cada), quatro pipelines `stream` para `loader` em
+  threads (o conteúdo igual pelo `EXCEPT` nos dois sentidos), um `loader` alimentado por quatro
+  threads, um stream depois de outro fechado no meio, um stream ao lado de um que falha
+  (`OSError` no que falha, o outro inteiro) e a pasta de transbordo vazia no fim: contagens,
+  somas, ordem e esquema dos lotes iguais em todos. A soma de uma coluna `DOUBLE` difere nos
+  últimos dígitos entre duas consultas (160714178571.42856 e 160714178571.4286), a ordem da soma
+  em ponto flutuante, sem diferença de conteúdo.
+- **O ciclo da execução** (`probe_execution.py`): quatro partições de 20.000 linhas com valores
+  de borda; na execução `exec-a`, quatro threads, uma por partição, cada uma com o seu `stream`
+  da entrada escrevendo em dois `loader` com ids de `next_ids`, `audit` das três tabelas e dois
+  `publish` ao mesmo tempo, um das duas tabelas particionadas com `max_workers=2` e outro da
+  tabela sem partição, numa thread cada: os ids das duas tabelas saíram exatamente de 1 a
+  80.000, sem repetição, e as linhas iguais às sementes pelo delta-rs e pelo leitor Delta (fora o
+  sinal do zero), com `serialize_db_execution_id`, `serialize_db_snapshot` e
+  `serialize_db_input_versions` (`{"cad_entradas": 4}`, texto JSON) nos quatro commits e a
+  entrada do snapshot `t1` com as quatro versões. Um leitor `channel="current"` aberto antes de
+  `exec-b`, consultado a cada 50 ms enquanto ela ingeria com `materialize=True`, lia `published`
+  (`max` 80.000, `next_ids` a partir de 80.001) e publicava agosto de novo e setembro, leu 80.000
+  linhas em toda leitura, antes e depois do commit; `version_diff(4, 6)` deu as duas partições; o
+  canal `default` em `t1` seguiu lendo agosto com os ids antigos enquanto `current` lia os
+  novos. Duas execuções abertas na mesma versão, `exec-c` e `exec-d`, publicando a mesma
+  partição em threads: uma commitou (versão 7) e a outra recebeu `ExecutionConflict` com a
+  mensagem do delta-rs (`a concurrent transaction deleted data this operation read`); a
+  partição ficou com um arquivo só, o da vencedora, os ids sem repetição, e o arquivo do `COPY`
+  da perdedora ficou na pasta da partição fora do log, o órfão que `register_files` documenta e
+  `vacuum(full=True)` lista.
+- **As rotinas Delta** (`probe_delta_ops.py`): três escritores numa tabela (`publish_partition`,
+  o `export_partition` do motor DuckDB e dois `write_deltalake(mode="append")` numa partição de
+  dois arquivos), lidos iguais pelo dataset e pelo `delta_scan`; `compact` juntou os dois
+  arquivos (`numFilesRemoved` 2, `numFilesAdded` 1), `version_diff` não o contou, o log do
+  arquivo novo limita os dados e a coluna `Double` com `NaN` e infinitos saiu sem mínimo e
+  máximo pelo escritor do delta-rs (`null_count` 150); `deep_copy` igual à origem pelos dois
+  leitores, com o mesmo tamanho, as mesmas linhas e o mesmo `nullCount`, mínimo e máximo por
+  arquivo nas colunas de tipo exato, e a repetição sem commit, mas sem o mínimo e o máximo de
+  `Boolean` e `DateTime` que o escritor do delta-rs tinha gravado (`flag`, `carimbo`,
+  `carimbo_tz`), a regra dos tipos exatos de `register_files`; `export_snapshot` por cópia (cada
+  arquivo com o esquema do seu escritor: `doc` em `string` nos do delta-rs e na extensão
+  `arrow.json` nos do DuckDB) e por reescrita, iguais; `rewrite` com `texto` renomeada para
+  `texto2` igual pelos dois leitores, e a versão anterior legível com o esquema antigo;
+  `vacuum_keeping_snapshots` com retenção zero apagou os dois arquivos da compactação e nenhum
+  da versão presa pelo snapshot, que seguiu legível; `read_back` devolveu `None` na contagem
+  certa e, com 2.999 por 3.000, `RegistrationRefused` com a tabela de volta à versão anterior.
+  A escrita condicional do arquivo de controle na pasta local perdeu atualizações entre threads:
+  oito threads somando 50 cada por `read_text` e `write_text(if_match=...)`, com nova tentativa
+  no `ConflictError`, deixaram 107 de 400 (204 conflitos vistos), porque `_replace_local`
+  confere a impressão digital e faz o `os.replace` fora de um lock; a docstring diz que a
+  escrita não é atômica entre processos.
+- **O leitor Delta sob concorrência** (`probe_reader.py`): 100.000 linhas em quatro partições;
+  duas threads de `query`, uma de `stream` e uma de texto com parâmetro leram sem parar enquanto
+  `materialize` trocou a view pela tabela inteira, pela parcial de duas partições e de novo,
+  três vezes (de 0,32 s a 1,78 s cada): 396 leituras, todas de 100.000 ou de 50.000 linhas com a
+  soma dos ids certa, nenhum erro; a materialização parcial igual às sementes; um valor fora da
+  regra recusado antes da troca, com a tabela intacta.
+- **O motor Redshift no substituto** (`probe_redshift_standin_test.py`, pelo pytest com
+  `SERIALIZE_DB_TEST_EMULATOR`): `ingest` e `query`, quatro `stream` ao mesmo tempo com `query`
+  ao lado, dois `loader` em threads, `audit` e `export_partition` lidos pelo delta-rs e pelo
+  `delta_scan`, duas sessões a mais em threads (uma ingerindo `cad_contas`, outra consultando),
+  `publish_redshift` com `max_workers=2` e o leitor publicado consultado e transmitido por duas
+  threads: tudo igual, com o documento JSON de volta reserializado (`{"k": 1}` vira `{"k":1}`),
+  o `SUPER` do substituto; o alvo também reserializa, por `JSON_SERIALIZE` (a seção "O que a
+  segunda execução da suíte Redshift mostrou"), e o espaço em branco lá não foi lido. Pelo motor
+  DuckDB o texto do documento volta igual.
+- **A carga inicial** (`probe_load.py`): as 12 tabelas da base fictícia de
+  `tests/source_db_projetado.py` por `initial_load`, cada uma comparada valor a valor com a
+  origem lida por `read_parquet` e levada ao contrato, pelos dois leitores: iguais; a segunda
+  passagem sem commit e `load_report` fechando.
+- **A fronteira do pandas** (`probe_pandas.py`): um `DataFrame` do pandas 3 (`Int16`, `Int32`,
+  `boolean`, `float64`, `Decimal` em `object`, `datetime64[us]`, `datetime64[us, UTC]`, `str`)
+  por `pa.Table.from_pandas`, `cast`, `load`, `query` e `to_pandas`: igual, com o `str` em
+  `large_string` levado a `string`. O `NaN` de uma coluna `float64` vira nulo em `from_pandas`
+  (o `from_pandas=True` do PyArrow), enquanto `pa.array([..., nan], pa.float64())` o guarda;
+  `-0.0`, os infinitos e `2.675` voltam iguais. O `to_pandas()` sem `types_mapper` devolve o
+  nulo do `Double` como `NaN`, o `Int16` com nulo como `float64` e o `boolean` como `object`;
+  com `types_mapper=pd.ArrowDtype`, como a documentação pede, cada nulo é `<NA>` no tipo da
+  coluna. As recusas de `cast` responderam como documentadas: nanossegundo não nulo, `Decimal`
+  de escala 3 em `Numeric(18, 2)`, `timestamp` sem fuso em coluna com fuso, `1.125` em
+  `Numeric(18, 2)` e 51 bytes em `String(50)`; `1.10` em `float` entrou como `1.10`.
+- **A soma de controle da auditoria** derruba `audit`, e com ela `publish`, quando uma coluna
+  `Double` tem valor finito de magnitude 1e32 ou mais: `CAST(valor AS NUMERIC(38, 6))` deu
+  `ConversionException` em `1e32` e em `1.7976931348623157e308` (`9.9999999999999999e31` já
+  falha, `1e31` passa), e a soma estourou o `DECIMAL(38, 6)` com `OutOfRangeException` em 20
+  linhas de `1e31` e em 20.000 de `1e28` (20.000 de `1e27` passam). A sonda da execução tirou
+  esses valores dos dados para seguir. Na base de produção `valor` chega a `±1,18e10`, e a soma
+  de 141.901.795 linhas fica em 1e18, longe do teto.
+
+**Consequências**: quatro itens em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), que esperam a
+decisão do usuário: o sinal do zero pelo `COPY` do DuckDB, a soma de controle acima de 1e32, a
+escrita condicional local entre threads e a nota do `NaN` pelo pandas em `docs/index.md`. O fuso
+da sessão, o órfão da publicação perdedora e as estatísticas da cópia arquivada já estão
+documentados; a reserialização do JSON pelo `SUPER` é uma leitura do substituto.

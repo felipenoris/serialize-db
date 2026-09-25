@@ -55,6 +55,21 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `delta.rewrite` over 150 partitions of three files each wrote 254 files with 4 threads and 222
   with 16, one partition in three files (2026-09-25). `plan/POC.md`, `plan/PLAN-STAGE-9.md`
 
+- `COPY ... (FORMAT parquet)` writes a `DOUBLE` column with a dictionary (`PLAIN_DICTIONARY` in
+  the footer) whose key treats `-0.0` and `0.0` as equal: every zero of the row group comes out
+  with the sign of the first one written (2,000 alternating rows by `id` all `0.0`, by `id DESC`
+  all `-0.0`); 4 rows go `PLAIN` and keep the sign, as does `DICTIONARY_SIZE_LIMIT 0`;
+  `write_deltalake`, `pq.write_table` and Arrow IPC keep it (DuckDB 1.5.5, 2026-09-25).
+  `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+- `CAST(x AS NUMERIC(38, 6))` fails with `ConversionException` from `1e32` up (`1e31` passes),
+  and `sum` of that decimal overflows with `OutOfRangeException` past about 1e32 (20 rows of
+  `1e31`, 20,000 of `1e28`): the audit's control total of a `Double` dies on such values
+  (2026-09-25). `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+- A `TIMESTAMPTZ` result reaches Arrow as `timestamp[us, tz=<session TimeZone>]`: `Etc/UTC` in
+  this container (no `TZ`), `America/Sao_Paulo` after `SET TimeZone`, the same instant shown in
+  that zone; the Parquet file `COPY` writes carries `tz=UTC` either way (2026-09-25).
+  `docs/index.md`, `plan/POC.md`
+
 ## Proxy
 
 - DuckDB has `http_proxy`, `http_proxy_username` and `http_proxy_password` and nothing like
