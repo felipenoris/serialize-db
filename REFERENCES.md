@@ -1022,6 +1022,15 @@ O motivo da retirada do `deltalake` 1.6.4 do PyPI, lido em 2026-09-25:
 
 - <https://github.com/delta-io/delta-rs/issues/4784>
 
+O filtro do dataset do delta-rs sobre as colunas sem mínimo e máximo no log, consultado em
+2026-09-25:
+
+- <https://github.com/delta-io/delta-rs/blob/main/python/src/lib.rs>
+- <https://raw.githubusercontent.com/delta-io/delta-rs/main/python/src/lib.rs>
+  (`filestats_to_expression_next`)
+- <https://github.com/delta-io/delta-rs/issues/3032>
+- A busca na web por `filestats_to_expression` e pelo filtro do `to_pyarrow_dataset` sem linhas
+
 ## DuckLake
 
 - <https://ducklake.select/docs/stable/>

@@ -59,6 +59,24 @@ foi medido em [`POC.md`](POC.md).
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
   cópia dos arquivos de cada partição e o registro deles (decisão do usuário de 2026-09-24).
+- **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
+  `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
+  com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
+  o `filestats_to_expression_next` do delta-rs põe `coluna >= null` e `coluna <= null` na garantia
+  de cada arquivo, e o PyArrow pula o arquivo. Na sonda de 2026-09-25 ([`POC.md`](POC.md)), um
+  arquivo registrado pelo motor DuckDB leu 0 linhas em `valor > 1` (`Numeric(18, 2)`),
+  `quando > '2025-12-31'` (`DateTime`) e `legado = true` (`Boolean`), contra 2, 2 e 1 pelo
+  `delta_scan`. Ficam sem os dois no log os tipos que o registro omite ([etapa 3](PLAN-STAGE-3.md)),
+  entre eles as colunas `DateTime` e `Boolean` do modelo cliente; o texto dos arquivos do
+  `UNLOAD`; e as `Double` com valor não finito da issue #59, na troca do motor Redshift e no
+  `compact` da [etapa 9](PLAN-STAGE-9.md). O `delta_scan` dos motores e do leitor Delta e o `COPY`
+  do Redshift leem certo, e o pacote filtra o dataset do delta-rs só pela coluna da partição
+  (`read_back`), fora da perda. Com `delta.dataSkippingStatsColumns` sem as três colunas, a mesma
+  sonda leu 2, 2 e 1; a propriedade também limita as estatísticas que o `write_deltalake` grava.
+  A issue #3032 do delta-rs, aberta em 2024-11-25 e fechada com o rótulo `mre-needed`, relata o
+  mesmo sintoma num filtro fora da partição, sem a causa. Espera o usuário: pôr essa propriedade
+  nas tabelas, gravar no log mínimo e máximo que não percam linha nesses tipos, documentar o
+  `delta_scan` como o leitor das tabelas, ou levar o defeito ao delta-rs.
 
 - **A operação no ambiente alvo.** Em 2026-09-24, nas baterias das 16:51 e das 23:25, a carga, a
   auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`

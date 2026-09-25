@@ -86,13 +86,16 @@ o rodapé de cada arquivo, um GET por arquivo:
 4. A soma de `num_records` dos rodapés igual à que `files` declara e a `expected_rows`, quando o
    chamador tem a contagem da fonte.
 5. `numRecords` do rodapé; `minValues` e `maxValues` das colunas inteiras, de data, `Double` e
-   `String`, omitidos nas demais e nas que o rodapé não traz: uma estatística ausente só deixa de
-   podar, uma errada poda o arquivo certo. Os quatro tipos são os que a sondagem de 2026-09-22
-   mediu transcrevendo exato ([`POC.md`](POC.md), decisão do usuário do mesmo dia); `decimal` fica
-   de fora porque o próprio delta-rs grava o mínimo e o máximo como número JSON e perde a linha na
-   poda, e `timestamp` porque o valor sai truncado em milissegundos. O `Double` transcreve exato só
-   os valores finitos, e as colunas de `columns_without_min_max`, as `Double` com valor não finito
-   na partição, ficam sem mínimo e máximo (decisão do usuário de 2026-09-23,
+   `String`, omitidos nas demais e nas que o rodapé não traz: no `delta_scan`, uma estatística
+   ausente só deixa de podar, e uma errada poda o arquivo certo. O dataset do delta-rs
+   (`to_pyarrow_dataset`) perde as linhas de todo filtro sobre a coluna sem mínimo e máximo
+   (sonda de 2026-09-25, [`POC.md`](POC.md), [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). Os quatro
+   tipos são os que a sondagem de 2026-09-22 mediu transcrevendo exato ([`POC.md`](POC.md),
+   decisão do usuário do mesmo dia); `decimal` fica de fora porque o próprio delta-rs grava o
+   mínimo e o máximo como número JSON e perde a linha na poda, e `timestamp` porque o valor sai
+   truncado em milissegundos. O `Double` transcreve exato só os valores finitos, e as colunas de
+   `columns_without_min_max`, as `Double` com valor não finito na partição, ficam sem mínimo e
+   máximo (decisão do usuário de 2026-09-23,
    [issue #59](https://github.com/felipenoris/serialize-db/issues/59)). Com `NaN` na coluna, o máximo do
    `RETURN_STATS` fica sem ele, e o `delta_scan ... WHERE valor > 3` perdeu a linha que o DuckDB
    ordena acima de todo número; o infinito entraria no JSON do log como

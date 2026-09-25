@@ -511,6 +511,9 @@ A new lesson adds its story there and its rule here, in the same commit.
   files, and missed DuckDB's Parquet reader pruning by the delta-rs and pyarrow footers and a
   `has_nan` that sees only the last row group; the question came from a 2018 Java ticket, while the
   spec changed in May 2026 (2026-09-23).
+- **A statistic left out for safety is read through every reader of the format**: stage 3's
+  absent min and max only stop pruning in `delta_scan`, and the delta-rs dataset turns them into a
+  guarantee that skips the file for any filter on the column (2026-09-25).
 - **A path chosen by a quantity needs the quantity before the path runs**: the stage 5 `stream`
   threshold between `fetchmany` and `UNLOAD` waited on a measurement, while the row count only
   existed after the `execute` that had already materialized the result; write down where the
