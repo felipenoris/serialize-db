@@ -205,7 +205,9 @@ arquivo de etapa depois que a segunda a repete.
 # Probes
 
 Scripts só de leitura, em [`probes/`](probes/README.md), que fotografam o que o ambiente oferece à
-biblioteca; o que cada um lê está no cabeçalho do próprio script e em `probes/README.md`. Cada um
+biblioteca, e as sondas de consistência de `probes/consistencia/`, que gravam sob as raízes das
+suítes (`SERIALIZE_DB_TEST_LOCAL_ROOT` e, a do Redshift, um ambiente `poc<id>` da suíte S3 e do
+esquema); o que cada um lê está no cabeçalho do próprio script e em `probes/README.md`. Cada um
 imprime o relatório e o grava em `probes/output/`, pasta fora do git, para ser colado na conversa
 com o assistente.
 
@@ -218,6 +220,8 @@ com o assistente.
 .venv/bin/python probes/parquet_source.py /caminho/da/base
 .venv/bin/python probes/parquet_source.py /caminho/da/base --text-bytes
 PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/delta/db_projetado
+SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente .venv/bin/python probes/consistencia/probe_types.py
+PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_redshift_test.py
 ```
 
 `duckdb_threads.py` lê as tabelas Delta que a migração gravou, no `--root` dela, e mede a ingestão

@@ -125,6 +125,59 @@ e os arquivos das etapas; o item abaixo espera uma rodada no alvo.
   guardas de seção, e um `--metadata` que não importa sai com traceback e código 1. As
   justificativas dos `noqa` não terminam em ponto.
 
+## Achados das sondas de consistência de leitura e escrita
+
+As sondas de 2026-09-25 ([`POC.md`](POC.md), seção "O que as sondas de consistência de leitura e
+escrita mostraram") atravessaram cada fronteira de leitura e escrita com valores de borda e
+trabalho paralelo, e acharam o que segue, reproduzido sem mudar `src/`; cada item espera o
+usuário: corrigir, ou aceitar como está.
+
+- **O sinal do zero pelo `COPY` do DuckDB.** O escritor Parquet do DuckDB codifica a coluna
+  `DOUBLE` por dicionário e trata `-0.0` e `0.0` como o mesmo valor: numa partição com os dois,
+  todos saem com o sinal do primeiro que apareceu. Atinge o `export_partition` do motor DuckDB,
+  `initial_load`, `rewrite` e `export_snapshot(mode="rewrite")`; `publish_partition` e `compact`,
+  pelo escritor do delta-rs, guardam o sinal, e o `UNLOAD` do Redshift não foi lido. A diferença
+  aparece em `1 / x`, em `math.copysign` e no texto do valor, nunca numa comparação ou numa soma.
+  Opções: `DICTIONARY_SIZE_LIMIT 0` no `COPY` (sem dicionário em coluna alguma, arquivo maior), ou
+  registrar a perda na linha do `Double` da tabela de tipos de `docs/index.md`.
+- **A soma de controle da auditoria acima de 1e32.** `audit` soma cada `Double` e `Numeric` como
+  `DECIMAL(38, 6)` (`_totals` de `serialize_db.audit`): um valor finito de magnitude 1e32 ou mais
+  falha no `CAST` (`ConversionException`), e uma soma acima disso estoura (`OutOfRangeException`),
+  o que derruba `audit` e impede `publish` (`audit=False` dispensa, com aviso). A base de produção
+  fica em 1e18. Opções: somar o `Double` como `DOUBLE` (a soma de controle deixa de ser exata,
+  como já é a coluna), ou capturar o estouro e registrar a soma como não lida.
+- **A escrita condicional do arquivo de controle entre threads.** Na pasta local,
+  `Storage.write_text(if_match=...)` confere a impressão digital e faz o `os.replace` fora de um
+  lock: oito threads somando 50 cada perderam 293 de 400 atualizações. A docstring diz que a
+  escrita não é atômica entre processos; entre threads do mesmo processo ela também não é, e
+  `snapshot`, `archive_snapshot` e `set_channel` chamados em paralelo numa raiz local (duas
+  `Execution` com `snapshot` encerrando ao mesmo tempo, por exemplo) podem perder uma entrada. No
+  S3 o `IfMatch` é do servidor. Opções: um `threading.Lock` de `Storage` em volta de
+  `_replace_local` e `_create_local`, ou só a nota na docstring.
+- **O `NaN` que o pandas entrega como nulo.** `pa.Table.from_pandas`, o caminho que a documentação
+  dá ao `DataFrame`, transforma o `NaN` de uma coluna `float64` em nulo, e a linha do `Double` na
+  tabela de tipos de `docs/index.md` diz que ele entra como chega, com `NaN`; isso vale para o
+  Arrow, e pelo pandas o `NaN` vira nulo antes de `cast`, que numa coluna `NOT NULL` o recusa.
+  Opção: uma frase na seção do `DataFrame` de `docs/index.md`.
+- **A janela entre a conferência da versão fixada e o commit de `publish`.**
+  `_check_no_data_change` confere por `version_diff` que nenhuma alteração de dados entrou na
+  tabela desde a versão fixada, e `register_files` abre a tabela de novo, na versão atual, logo
+  antes do `create_write_transaction` (`publish_partition` abre do mesmo jeito): um commit de dados
+  de outra execução na mesma partição entre a conferência e essa abertura, durante o `reconcile` e
+  o `COPY` de `export_partition`, passa sem `ExecutionConflict`, e o commit seguinte substitui a
+  partição da outra execução sem aviso, quando a docstring de `publish` e a
+  [etapa 6](PLAN-STAGE-6.md) prometem `ExecutionConflict`. A sonda da execução reproduz a janela na
+  seção D (`exec-e` parada em `export_partition` enquanto `exec-f` publica) e a viu na disputa da
+  seção C sob carga. No delta-rs 1.6.6, `create_write_transaction(mode="overwrite",
+  partition_filters=...)` sobre um `DeltaTable` aberto na versão fixada falha com
+  `CommitFailedError` quando um `overwrite` da mesma partição entrou depois dela (`a concurrent
+  transaction deleted data this operation read`) e quando o esquema mudou (`Metadata changed since
+  last commit`), e passa com uma gravação em outra partição, uma compactação da mesma partição e um
+  commit só de metadados no meio. Opções: `register_files` e `publish_partition` abrirem a tabela
+  na versão fixada pela execução, atualizada depois do `reconcile`, que commita a mudança de
+  esquema, o que entrega o `ExecutionConflict` prometido pelo próprio delta-rs; ou a docstring de
+  `publish` dizer que a conferência não cobre a janela, com uma execução por ambiente de cada vez.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
