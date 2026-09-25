@@ -3812,9 +3812,11 @@ SQLAlchemy 2.1.0 (2.0.54), publicada em 2026-09-24. As outras estavam na última
 testes, com `SERIALIZE_DB_TEST_EMULATOR` e `SERIALIZE_DB_TEST_LOCAL_ROOT` e sem as variáveis
 `AWS_*`, rodou numa cópia do repositório para cada troca, com o deltalake 1.6.4.
 
-- **boto3 e sqlglot.** Com boto3 1.43.102 e sqlglot 30.19.0, 553 casos passaram e 1 foi pulado, o
-  da Data API sem `SERIALIZE_DB_REDSHIFT_WORKGROUP`. O botocore, que o boto3 traz sem pino, veio
-  1.43.102 também com o pino antigo, porque o `uv.lock` fica fora do git.
+- **boto3 e sqlglot.** Com boto3 1.43.102 e sqlglot 30.19.0, 553 casos passaram e 1 foi pulado, o da
+  Data API sem `SERIALIZE_DB_REDSHIFT_WORKGROUP`. O botocore, que o boto3 traz sem pino, veio
+  1.43.102 também com o pino antigo, porque o `uv.lock` fica fora do git. Com o deltalake 1.6.6 do
+  #86 junto, as três sessões no repositório deram os mesmos números: 217 aprovados e 337 pulados sem
+  variável, 458 e 96 com a raiz local, e 553 e 1 com o substituto.
 - **O `params()` da SQLAlchemy 2.1.** Com a 2.1.0 no lugar da 2.0.54, 8 casos falharam e 545
   passaram. O `params()` dos statements executáveis passou a guardar os valores no statement, em vez
   de copiar cada `bindparam` com o valor: o `required` do `bindparam` segue verdadeiro, e a
