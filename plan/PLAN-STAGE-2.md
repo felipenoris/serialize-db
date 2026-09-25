@@ -26,9 +26,9 @@ como erro; o diff de `tests/client_model/sql/`, gerado dos statements do
 pipeline fictício em `tests/client_model/statements.py` (`STATEMENTS`, o dicionário `{nome: statement}`
 que `serialize-db sql` recebe por `--statements`). `sqlglot.parse_one(texto, dialect="redshift")` sobre o texto do Redshift de cada statement, o
 arquivo versionado com o sentinela inclusive, como teste de que o texto gerado para o Redshift
-analisa (decisão do usuário de 2026-09-22; `sqlglot==30.18.0` no grupo `dev`, a versão do ensaio
-de 2026-09-21; o sentinela dentro das aspas de um identificador analisa, leitura de 2026-09-22 em
-[`POC.md`](POC.md)). Provas de conceito:
+analisa (decisão do usuário de 2026-09-22; `sqlglot` fixado no grupo `dev`, e o ensaio de
+2026-09-21 com a 30.18.0; o sentinela dentro das aspas de um identificador analisa, leitura de
+2026-09-22 em [`POC.md`](POC.md)). Provas de conceito:
 `test_sqlalchemy.py` (os comportamentos do compilador que dão forma a `render`:
 `test_literal_binds_renders_a_bindparam_without_value_as_null`,
 `test_compiled_binds_marks_the_bindparam_without_value_as_required`,
