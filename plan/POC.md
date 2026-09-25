@@ -4132,3 +4132,42 @@ entrada de cada sessão quando ela troca, sob um lock comum às sessões do banc
 de 2026-09-25). As etapas [3](PLAN-STAGE-3.md), [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md),
 [`PLAN.md`](PLAN.md), [`delta.md`](delta.md) e `docs/index.md` foram revistos; a rodada de
 `probes/credentials.py` no alvo fecha o item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a instalação do pacote num projeto cliente mostrou
+
+Em 2026-09-25, no contêiner de desenvolvimento (Linux x86_64, Python 3.13.12, uv 0.8.17), sem as
+variáveis `AWS_*`, um projeto cliente criado por `uv init --python 3.13` recebeu o pacote de `main`,
+com o driver ainda no extra `redshift`, por `uv add <pasta do repositório>`: o usuário perguntou se
+o cliente precisa do grupo `dev` que as instruções de instalação citavam.
+
+- **O que o cliente recebe.** O `uv add` instalou 20 pacotes, o próprio incluído: as dependências
+  de execução e as transitivas delas, sem `pandas`, `pytest`, `sqlglot` nem `redshift-connector`.
+  Os grupos de dependência (PEP 735) ficam fora dos metadados do pacote, e o `uv` não os instala
+  para quem depende dele. `uv add git+https://github.com/felipenoris/serialize-db` instalou os
+  mesmos pacotes nas mesmas versões, e um cliente com `requires-python = ">=3.12"` teve a
+  resolução recusada, porque o pacote pede `>=3.13`.
+- **A interface pública sem o grupo `dev`.** Com o `pytest` acrescentado só ao cliente, os módulos
+  de teste que não importam pandas, sqlglot nem o driver rodaram sobre o pacote instalado, com
+  `SERIALIZE_DB_TEST_LOCAL_ROOT`: 160 passaram e 40 foram pulados. Os 36 erros vieram do pandas de
+  `tests/source_db_projetado.py`, que imita o escritor da base de origem, e as 2 falhas, dos testes
+  da linha de comando com `--engine redshift` e `publish --init`, sem o `redshift_connector`. Com
+  `serialize-db[redshift]`, 182 passaram e 54 foram pulados, com os mesmos 36 erros e nenhuma
+  falha. Em `src/`, `import pandas` e `to_pandas` só aparecem nos exemplos das docstrings.
+- **O `uv sync` no repositório.** Numa cópia de `pyproject.toml`, `README.md` e `src/`, `uv sync` e
+  `uv sync --group dev` instalaram os mesmos 39 pacotes, porque o `uv` inclui o grupo `dev` por
+  padrão, e `uv sync --no-dev` instalou 20.
+- **O custo do driver.** Importar `redshift_connector` depois de `serialize_db` levou de 0,034 s a
+  0,045 s em três medidas, sem aviso com `-W error`; sozinho, de 0,26 s a 0,31 s, porque o pacote
+  já importa o boto3.
+- **O driver nas dependências de execução.** Com o `pyproject.toml` alterado, o cliente que
+  declara `serialize-db` sem extra recebeu o `redshift-connector` 2.1.17, sem `pandas` e sem
+  `sqlglot`, e os mesmos módulos de teste deram 182 aprovados, 54 pulados e os 36 erros do pandas.
+  Os passos novos da esteira de testes, `uv sync --no-dev`, a importação de cada módulo e
+  `serialize-db --help`, passaram sobre ele e reprovaram sobre o `pyproject.toml` de `main`, com
+  `ModuleNotFoundError: No module named 'redshift_connector'`.
+
+**Consequências**: `redshift-connector==2.1.17` passa às dependências de execução e o extra
+`redshift` sai, para que o `uv sync` do projeto cliente instale toda a interface pública (decisão do
+usuário de 2026-09-25), o que [`PLAN.md`](PLAN.md) e a [etapa 5](PLAN-STAGE-5.md) registram. As
+instruções de `docs/index.md` e do `README.md` passam ao `uv sync`, com a instalação no projeto
+cliente, e a esteira de testes importa cada módulo depois de `uv sync --no-dev`.

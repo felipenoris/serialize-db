@@ -35,18 +35,19 @@ Obs.: pyproject.toml foi inicializado com `uv add ipykernel --group interactive`
 # Dependências
 
 ```
-UV_PYTHON_DOWNLOADS=automatic uv sync --group dev
+UV_PYTHON_DOWNLOADS=automatic uv sync
 ```
 
 O `uv sync` instala em `.venv/` o Python 3.13, o pacote com as dependências de execução fixadas em
-`pyproject.toml` (`sqlalchemy`, `pyarrow`, `deltalake`, `duckdb` e os dialetos `duckdb-engine` e
-`sqlalchemy-redshift`, que compilam o texto SQL de cada motor) e o grupo `dev`: o `pytest` e as
-bibliotecas dos testes (`boto3`, `pandas`, `redshift-connector`, `sqlglot`), fixadas nas versões
-usadas pelos documentos em `plan/`. O extra `redshift` fixa o driver do motor Redshift e da
-publicação, `redshift-connector==2.1.17` (`uv sync --extra redshift`; o grupo `dev` já o traz
-para os testes). O grupo `docs` traz o
-`pdoc`, e o grupo `emulator` traz o `moto` e o `flask` do substituto local das suítes do ambiente
-alvo (seção "Testes no substituto local"), fora do `dev` para que os testes padrão não os instalem.
+`pyproject.toml` (`sqlalchemy`, `pyarrow`, `deltalake`, `duckdb`, `boto3`, os dialetos
+`duckdb-engine` e `sqlalchemy-redshift`, que compilam o texto SQL de cada motor, e o driver
+`redshift-connector`), tudo o que a interface pública usa, e o grupo `dev`, que o `uv` inclui por
+padrão: o `pytest` e as bibliotecas só dos testes (`pandas`, `sqlglot`), fixadas nas versões
+usadas pelos documentos em `plan/`. `uv sync --no-dev` instala só o pacote e as dependências de
+execução, o que um projeto cliente recebe ([`docs/index.md`](docs/index.md), seção "Instalação").
+O grupo `docs` traz o `pdoc`, e o grupo `emulator` traz o `moto` e o `flask` do substituto local
+das suítes do ambiente alvo (seção "Testes no substituto local"), fora do `dev` para que os testes
+padrão não os instalem.
 `UV_PYTHON_DOWNLOADS=automatic` só é necessário onde o `uv` está configurado para não baixar o
 Python, como no SageMaker Unified Studio.
 
@@ -140,8 +141,7 @@ pacote passam pelo moto:
 SERIALIZE_DB_TEST_EMULATOR=1 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run --group emulator pytest
 ```
 
-`uv sync --group dev` tira do `.venv/` os pacotes dos outros grupos; `uv sync --all-groups` instala
-todos.
+`uv sync` tira do `.venv/` os pacotes dos outros grupos; `uv sync --all-groups` instala todos.
 
 ## Testes no ambiente AWS
 

@@ -1,8 +1,9 @@
 # Os testes do pacote serialize_db: tests/ sem tests/proof_of_concept/ e sem tests/test_probes.py,
 # sobre o DuckDB em memória e arquivos locais, sem S3 nem Redshift. As provas de conceito, os
-# exemplos e os probes ficam fora. As extensões delta e httpfs do DuckDB, que os testes da migração
-# leem pelo delta_scan e os do secret do S3 carregam, são instaladas em .duckdb/ na raiz do
-# repositório, a pasta que os testes procuram.
+# exemplos e os probes ficam fora. Antes dos testes, o pacote é instalado sem o grupo dev e cada
+# módulo dele é importado, porque um projeto cliente recebe só as dependências de execução. As
+# extensões delta e httpfs do DuckDB, que os testes da migração leem pelo delta_scan e os do secret
+# do S3 carregam, são instaladas em .duckdb/ na raiz do repositório, a pasta que os testes procuram.
 name: Testes do pacote
 
 on:
@@ -27,8 +28,24 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Instalar o pacote só com as dependências de execução
+        run: uv sync --no-dev
+
+      - name: Importar cada módulo do pacote sem o grupo dev
+        run: |
+          uv run --no-dev python - <<'EOF'
+          import importlib
+          import pkgutil
+
+          import serialize_db
+
+          for module in pkgutil.walk_packages(serialize_db.__path__, "serialize_db."):
+              importlib.import_module(module.name)
+          EOF
+          uv run --no-dev serialize-db --help > /dev/null
+
       - name: Instalar o pacote e as dependências de teste
-        run: uv sync --group dev
+        run: uv sync
 
       - name: Instalar as extensões delta e httpfs do DuckDB em .duckdb/
         run: >-

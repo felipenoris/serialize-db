@@ -1169,3 +1169,19 @@ precision below 1, which made `check_models` raise PyArrow's `ValueError`, and t
 37, the Redshift documentation's maximum, unread in the target.
 `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/schema.md`, `plan/redshift.md`,
 `docs/index.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## The Redshift driver in the runtime dependencies (2026-09-25)
+
+The user asked on 2026-09-25 whether a client of the package needs the `dev` group, which the
+installation instructions named (`uv sync --group dev`), and stated the ideal: every use of the
+public API installs with `uv sync` alone. A client project read the answer: the groups never reach
+a dependent, the public API imports nothing from `dev`, and only the Redshift engine, the
+publication and the Redshift reader needed the `redshift` extra. On a decision card the assistant
+recommended moving `redshift-connector==2.1.17` to the runtime dependencies (the driver adds 12
+packages and 18.8 MB, imported only when a Redshift path enters) over keeping the extra with the
+documentation naming `serialize-db[redshift]`; the user chose "Mover" on 2026-09-25, and the extra
+left. The assistant's choices, named in the report: the client's installation in `docs/index.md`
+by `uv add` and then `uv sync`, `uv sync` in place of `uv sync --group dev` in `README.md`, and
+the GitHub workflow importing every module of the package and running `serialize-db --help` after
+`uv sync --no-dev`, before the tests. `plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/POC.md`,
+`plan/CURRENT_STATE.md`

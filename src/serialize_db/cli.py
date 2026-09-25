@@ -399,7 +399,7 @@ def _run(args: argparse.Namespace) -> int:
     prefixo do sandbox."""
     redshift = None
     if args.engine == "redshift":
-        # O driver do Redshift é o extra "redshift": o módulo entra só quando o motor entra.
+        # O módulo do Redshift entra só com o motor: importar o pacote não carrega o driver.
         from serialize_db.engine.redshift import RedshiftConfig
 
         redshift = RedshiftConfig.from_environment()
@@ -439,7 +439,7 @@ def _print_report(report: AuditReport) -> None:
 def _audit_engine(args: argparse.Namespace, db: Database, execution_id: str) -> Engine:
     """O sandbox próprio da auditoria: o motor de ``--engine``."""
     if args.engine == "redshift":
-        # O driver do Redshift é o extra "redshift": o módulo entra só quando o motor entra.
+        # O módulo do Redshift entra só com o motor: importar o pacote não carrega o driver.
         from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 
         return RedshiftEngine(RedshiftConfig.from_environment(), execution_id, db.storage,
@@ -515,7 +515,7 @@ def _publish(args: argparse.Namespace) -> int:
     ``--channel``, um dos dois obrigatório. 2 no erro de uso, na configuração do Redshift sem
     conexão, sem a tabela de controle, no snapshot ou no canal ausente, no snapshot arquivado, na
     tabela fora do snapshot e no conflito."""
-    # O driver do Redshift é o extra "redshift": os módulos entram só no subcomando publish.
+    # Os módulos do Redshift entram só no publish: importar o pacote não carrega o driver.
     from serialize_db import publication
     from serialize_db.engine.redshift import RedshiftConfig
 
