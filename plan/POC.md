@@ -3870,6 +3870,9 @@ asserção nova dos testes reprovou no código de antes.
   sugeriu `serialize-db channel --name current`; `export_snapshot(mode="rewrite")` gravou fora da
   raiz sem erro; e `publish_redshift` com a tabela fora de `versions` disse que ela não existe
   no ambiente.
+- **As decisões de 2026-09-25 no motor Redshift, no código de antes**: `published` devolveu a
+  staging `_publicado` sem a versão, e a troca com `expected_rows=999` commitou 1.000 linhas sem
+  reprovar.
 - **O caso de estudo do GIL**, `test_gil_reacquisition_waits_the_switch_interval`, reprovou
   numa das duas rodadas da suíte inteira no substituto: os 200 `os.stat` levaram 0,011 s ao lado
   do laço e 0,018 s com o intervalo de troca dez vezes menor, e a asserção pede menos da metade
@@ -3881,4 +3884,5 @@ algum grupo de linhas, e as etapas [3](PLAN-STAGE-3.md) e [5](PLAN-STAGE-5.md) d
 `scan` e o `QueryBuilder` do delta-rs, que leem certo sem mínimo e máximo, liam errado o `IS NULL`
 com o zero. As outras correções estão nas etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md),
 [6](PLAN-STAGE-6.md), [7](PLAN-STAGE-7.md), [8](PLAN-STAGE-8.md), [9](PLAN-STAGE-9.md) e
-[10](PLAN-STAGE-10.md).
+[10](PLAN-STAGE-10.md); a troca relê a partição, e `published` carrega cada versão numa staging
+própria ([etapa 5](PLAN-STAGE-5.md)).

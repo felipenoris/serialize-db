@@ -14,8 +14,8 @@ As primitivas:
 
 - ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, por
   ``COPY ... MANIFEST`` numa staging sem a coluna de partição e um ``INSERT`` com o valor dela;
-  ``published`` carrega a versão fixada em ``exec_<id>_<tabela>_publicado`` e a devolve como
-  origem de consulta;
+  ``published`` carrega a versão fixada em ``exec_<id>_<tabela>_publicado_<versão>`` e a devolve
+  como origem de consulta;
 - ``stream`` roda ``UNLOAD ... PARALLEL OFF`` para ``stream/<uuid>/`` sob o ``staging_prefix``
   (``<ambiente>/staging/<execution_id>/`` no sandbox, ``<id do leitor>/`` sob o ``unload_to`` do
   leitor Redshift) na thread de quem chama e lê os arquivos numa thread auxiliar, dois lotes à
@@ -876,8 +876,8 @@ class RedshiftLoader:
 
 @dataclasses.dataclass(frozen=True)
 class _PublishedStaging:
-    """A staging ``_publicado`` da versão fixada de uma tabela: ``published`` a carrega na hora, e
-    a auditoria só quando uma verificação que a cita roda."""
+    """A staging ``_publicado_<versão>`` da versão fixada de uma tabela: ``published`` a carrega
+    na hora, e a auditoria só quando uma verificação que a cita roda."""
 
     table: sa.Table
     name: str
@@ -1249,7 +1249,7 @@ class RedshiftEngine:
         return sa.table(quoted_name(name, quote=True), *columns)
 
     def _ensure_loaded(self, staging: _PublishedStaging) -> None:
-        """A staging ``_publicado`` carregada uma vez por execução, entre as sessões."""
+        """A staging ``_publicado_<versão>`` carregada uma vez por execução, entre as sessões."""
         with self._loaded_lock:
             if staging.name in self._loaded:
                 return
@@ -1261,8 +1261,10 @@ class RedshiftEngine:
 
     def published(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
-        sandbox: a staging ``exec_<id>_<tabela>_publicado``, carregada uma vez por execução com
-        todas as partições da versão.
+        sandbox: a staging ``exec_<id>_<tabela>_publicado_<versão>``, carregada uma vez por
+        execução e por versão com todas as partições dela. Outra versão, depois de
+        ``run.publish`` avançar ``versions``, entra numa staging nova, e as duas ficam no esquema
+        até o ``cleanup``.
 
         Exemplo:
 
@@ -1281,9 +1283,14 @@ class RedshiftEngine:
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão publicada, a tabela ainda não existe")
-        staging = _PublishedStaging(table, f"{self.prefix}{table.name}_publicado", uri, version)
+        staging = self._published_staging(table, uri, version)
         self._ensure_loaded(staging)
         return self._source(table, staging.name)
+
+    def _published_staging(self, table: sa.Table, uri: str, version: int) -> _PublishedStaging:
+        """A staging da versão, com a versão no nome: cada versão pedida tem a sua."""
+        name = f"{self.prefix}{table.name}_publicado_{version}"
+        return _PublishedStaging(table, name, uri, version)
 
     # ------------------------------------------------------------ consulta, stream e carga
 
@@ -1453,7 +1460,7 @@ class RedshiftEngine:
 
     def _pending_source(self, table: sa.Table, uri: str, version: int) -> sa.FromClause:
         """A versão fixada como origem de consulta, carregada só quando uma verificação a cita."""
-        staging = _PublishedStaging(table, f"{self.prefix}{table.name}_publicado", uri, version)
+        staging = self._published_staging(table, uri, version)
         self._pending[staging.name] = staging
         return self._source(table, staging.name)
 
@@ -1680,9 +1687,11 @@ class RedshiftEngine:
         return cast(connection.execute(text).to_arrow_reader(100_000), table)
 
     def _swap(self, table: sa.Table, uri: str, value: str | None, metadata: Mapping[str, str],
-              columns_without_min_max: Collection[str], count: int) -> int:
-        """A troca: o ``UNLOAD`` para o ``staging/`` e a partição de volta por
-        ``publish_partition``, que grava sem mínimo e máximo as colunas com valor não finito."""
+              expected_rows: int | None, columns_without_min_max: Collection[str],
+              count: int) -> int:
+        """A troca: o ``UNLOAD`` para o ``staging/``, a partição de volta por
+        ``publish_partition``, que grava sem mínimo e máximo as colunas com valor não finito, e a
+        releitura por ``read_back``, como no registro."""
         partition_by = table_options(table).partition_by
         folder = f"{partition_by}={value}" if partition_by is not None else ""
         prefix = self.storage.join(self.staging_prefix, table.name, folder, uuid.uuid4().hex)
@@ -1694,10 +1703,14 @@ class RedshiftEngine:
         connection = self.storage.duckdb_connect(config=environment_limits())
         try:
             reader = self._swap_reader(connection, table, value, paths)
-            return delta.publish_partition(uri, table, value, reader, metadata, self.storage,
-                                           columns_without_min_max=columns_without_min_max)
+            version = delta.publish_partition(uri, table, value, reader, metadata, self.storage,
+                                              columns_without_min_max=columns_without_min_max)
         finally:
             connection.close()
+        # O log e os dois leitores contam as linhas da partição; a diferença desfaz o commit.
+        expected = expected_rows if expected_rows is not None else count
+        delta.read_back(uri, table, value, expected, self.storage)
+        return version
 
     def export_partition(self, table: sa.Table, uri: str, value: str | None,
                          metadata: Mapping[str, str], expected_rows: int | None = None,
@@ -1722,9 +1735,9 @@ class RedshiftEngine:
         :param uri: a URI da tabela Delta, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
         :param metadata: os metadados do commit, de ``delta.commit_metadata``.
-        :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
-            registrados; sem ela, a contagem do sandbox. A volta por ``publish_partition`` não
-            a usa e não confere contagem.
+        :param expected_rows: a contagem da auditoria, que o registro confere nos arquivos antes
+            do commit e os dois caminhos conferem na releitura depois dele; sem ela, a contagem do
+            sandbox.
         :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
             que saem sem mínimo e máximo.
         :return: a versão do commit.
@@ -1743,7 +1756,8 @@ class RedshiftEngine:
         value = delta.checked_value(table, value)
         count = self._count(table, value)
         if columns_without_min_max:
-            return self._swap(table, uri, value, metadata, columns_without_min_max, count)
+            return self._swap(table, uri, value, metadata, expected_rows, columns_without_min_max,
+                              count)
         return self._register(table, uri, value, metadata, expected_rows, columns_without_min_max,
                               count)
 

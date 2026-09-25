@@ -94,7 +94,9 @@ do `pdoc`. O que a implementação mudou do plano:
   coluna `Double` só de nulos num arquivo também sai do log sem mínimo e máximo, e perde a
   estatística na partição compactada. O caso chega ao `compact` depois de um `rewrite` de uma
   tabela com mais de 100 partições e partições de vários arquivos ([`POC.md`](POC.md)); o código
-  ainda não segue a decisão ([`CURRENT_STATE.md`](CURRENT_STATE.md)).
+  ainda não segue a decisão, que espera a escolha da issue #85 sobre as colunas sem mínimo e
+  máximo (decisão do usuário de 2026-09-25, [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md),
+  [`CURRENT_STATE.md`](CURRENT_STATE.md)).
 - **`archive`** lê a entrada do snapshot, roda `deep_copy(<ambiente>/<tabela>, versão,
   <ambiente>/arquivo/<nome>/<tabela>, storage)` de cada tabela na versão registrada, imprime
   por tabela o tempo e o pico de RSS do processo, com o tempo de cada partição no log de
