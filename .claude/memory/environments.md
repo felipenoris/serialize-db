@@ -112,7 +112,10 @@ threads and a 12.2 GiB `memory_limit`; the caller's credential expiring in 45 mi
 the `RS-12` count returning no row in 15.1 s, 5,269 non-current versions (159,538,248 bytes) and
 4,883 delete markers under the test root (`BK-14`), Lake Formation and S3 Tables timing out in
 60.1 s and 30.6 s. Every suite case passed: S3 531 in 219.7 s, the DuckDB secret's stale-key case
-among them, Redshift 45, engine 6 and publication 8 twice each. `plan/POC.md`
+among them, Redshift 45, engine 6 and publication 8 twice each. The migration block followed from
+15:55 on the same machine, read as 15,617 MB with 12,768 MB available, `environment_limits` giving
+8 threads and 6,384 MiB; the process peaked at 9,161 MB loading the new 141,933,948-row partition
+of `cad_lancamentos` (`source-base.md`). `plan/POC.md`
 
 ## The prepared folder and the venv
 

@@ -168,3 +168,16 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   as at 14:16. `history`, `snapshot`, `vacuum`, the whole `archive` (21 files, `aws-s3.md`) and
   the publication of the 12 tables (`redshift.md`) followed. The raw report stays out of git.
   `plan/POC.md`
+- The load of the grown production base (2026-09-26, `started_at` 15:55:29 UTC, from `main` of
+  2026-09-25 at 22:35 or later, on 8 vCPUs and 15,617 MB with 12,768 MB available, 8 threads and
+  a 6,384 MiB `memory_limit`, the root of 2026-09-25 loaded anew): the source gained the month
+  2026-07-31 in the four partitioned tables, `cad_lancamentos` 141,933,948 rows (the four earlier
+  partitions hold 141,901,795), `rel_contrato_operacao` 15,209,141, `cad_operacoes` 5,579,536 and
+  `cad_contratos` 3,985,447, and `cad_contas` went from 97 to 101 rows, `rel_contas_hierarquias`
+  from 89 to 93 and `cad_aliquotas` from 15 to 22 (`fator` summing 3.454950 against 3.873450);
+  the earlier partitions kept their counts and sums. Every table matched, 354,048,596 rows in 25
+  partitions, 521.1 s summed; `cad_lancamentos` 2026-07-31 took 268.2 s (0.53 million rows per
+  second against about 1 million for the others) with the process peak at 9,161 MB. The audit
+  read the same 989,852 orphans of 2026-01-31; `snapshot carga-2026-09-24`, `vacuum` (0 files)
+  and `archive` (25 files, `cad_lancamentos` 19.1 s at 348 MB) ran. The raw report stays out of
+  git. `plan/POC.md`
