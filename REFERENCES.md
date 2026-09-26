@@ -526,6 +526,11 @@ A memória, as threads e o cgroup, consultados em 2026-09-24 (os limites lidos d
 - <https://github.com/duckdb/duckdb/discussions/16781>
 - <https://github.com/milaboratory/platforma/pull/1848> (o limite do DuckDB tirado da memória livre)
 
+Os guias que nomeiam o driver SQLAlchemy do DuckDB, lidos em 2026-09-26:
+
+- <https://duckdb.org/docs/current/guides/python/jupyter.html>
+- <https://motherduck.com/docs/integrations/language-apis-and-drivers/python/sqlalchemy/>
+
 ## PyArrow
 
 - <https://arrow.apache.org/docs/python/parquet.html>
@@ -610,6 +615,25 @@ Dialeto do DuckDB, no repositório `Mause/duckdb_engine`:
 - <https://github.com/Mause/duckdb_engine/blob/main/duckdb_engine/__init__.py>
 - <https://github.com/Mause/duckdb_engine/blob/main/duckdb_engine/datatypes.py>
 - <https://github.com/Mause/duckdb_engine/blob/main/duckdb_engine/config.py>
+
+O `duckdb-sqlalchemy`, a bifurcação do `duckdb_engine`, e o estado do `duckdb_engine`, lidos em
+2026-09-26 para a comparação entre os dois dialetos:
+
+- <https://pypi.org/project/duckdb-sqlalchemy/>
+- <https://pypi.org/pypi/duckdb-sqlalchemy/json>
+- <https://pypi.org/project/duckdb-engine/>
+- <https://github.com/leonardovida/duckdb-sqlalchemy>
+- <https://github.com/leonardovida/duckdb-sqlalchemy/blob/main/CHANGELOG.md>
+- <https://github.com/leonardovida/duckdb-sqlalchemy/releases>
+- <https://leonardovida.github.io/duckdb-sqlalchemy/>
+- <https://leonardovida.github.io/duckdb-sqlalchemy/migration-from-duckdb-engine.html>
+- <https://leonardovida.github.io/duckdb-sqlalchemy/types-and-caveats.html>
+- <https://github.com/Mause/duckdb_engine/commits/main>
+- <https://github.com/Mause/duckdb_engine/issues>
+- <https://github.com/Mause/duckdb_engine/pulls>
+- <https://github.com/Mause/duckdb_engine/issues/1344> (o `DuckDBPyType` sem hash no DuckDB 1.4.0)
+- <https://pypistats.org/packages/duckdb-engine>
+- <https://pypistats.org/packages/duckdb-sqlalchemy>
 
 Documentação da versão 2.1, lida em 2026-09-25 para a troca da versão fixada:
 
@@ -939,6 +963,7 @@ As CPUs e a memória de um processo, consultadas em 2026-09-24:
 ## Pacotes Python
 
 - <https://github.com/Mause/duckdb_engine>
+- <https://github.com/leonardovida/duckdb-sqlalchemy>
 - <https://pypi.org/project/sqlalchemy-redshift/>
 - <https://github.com/aws/amazon-redshift-python-driver>
 - <https://aws-sdk-pandas.readthedocs.io/en/stable/stubs/awswrangler.redshift.copy.html>
@@ -1350,6 +1375,7 @@ SageMaker Unified Studio:
 Python:
 
 - [duckdb_engine](https://github.com/Mause/duckdb_engine)
+- [duckdb-sqlalchemy](https://github.com/leonardovida/duckdb-sqlalchemy)
 - [sqlalchemy-redshift](https://pypi.org/project/sqlalchemy-redshift/)
 - [Amazon Redshift Python connector](https://github.com/aws/amazon-redshift-python-driver)
 - [awswrangler.redshift.copy](https://aws-sdk-pandas.readthedocs.io/en/stable/stubs/awswrangler.redshift.copy.html)

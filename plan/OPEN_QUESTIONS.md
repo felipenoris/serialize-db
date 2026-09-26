@@ -103,6 +103,17 @@ foi medido em [`POC.md`](POC.md).
   de somar as colunas `Double`. A reflexão do duckdb-engine 0.17.0 também falha na 2.1, fora do
   pacote. Espera o usuário: adaptar o pacote à 2.1 (`bound_statement`, de `serialize_db.sql`, que
   passa os valores por `params()`, e as colunas que o `load_report` soma) ou manter a 2.0.54.
+- **O dialeto do DuckDB.** O `duckdb-engine` 0.17.0, o compilador do `render` e do motor DuckDB
+  fixado em `pyproject.toml`, é de 2025-03-29, sem lançamento desde então, com 55 issues e 43 PRs
+  abertos e a correção da reflexão da `pg_collation` parada num PR de 2026-03-28; o
+  `duckdb-sqlalchemy` 1.5.5.9, a bifurcação de 2025-12-24 mantida por um autor, com 17 estrelas e
+  8.973 downloads no mês contra 1.841.220, compila os mesmos statements byte a byte, passa todos
+  os testes do pacote no lugar dele com a SQLAlchemy 2.0.54 e livra a reflexão da `pg_collation`
+  na 2.1.0 ([`POC.md`](POC.md)). Espera o usuário: trocar a dependência (a fixação em
+  `pyproject.toml`, `import duckdb_sqlalchemy` em `serialize_db.sql`, `serialize_db.engine.duckdb`
+  e `tests/proof_of_concept/test_sqlalchemy.py`, cuja asserção da chave primária não refletida
+  passa a refleti-la, a lista de `probes/space.py` e a prosa que nomeia o dialeto em `README.md`,
+  `docs/index.md`, `plan/` e `CLAUDE.md`) ou manter o `duckdb-engine` enquanto a 2.0.54 o serve.
 
 ## Achados da revisão dos comentários e da documentação
 
