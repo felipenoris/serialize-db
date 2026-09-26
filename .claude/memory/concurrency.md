@@ -157,13 +157,15 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
 - `Storage.write_text(if_match=...)` on a local folder is not atomic between threads either:
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,
-  2026-09-25); S3's `IfMatch` is server-side. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  2026-09-25), and 79 of 400 (175 conflicts) in the target machine's local folder on 2026-09-26;
+  S3's `IfMatch` is server-side. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 - `Execution.publish` checks `version_diff` from the pinned version before `reconcile` and
   `export_partition`, and `register_files` (`publish_partition` too) opens the table anew right
   before the commit, so a data commit by another execution on the same partition between the check
   and that open passes without `ExecutionConflict` and the later commit replaces the partition
   silently (2026-09-25: the race of `probes/consistencia/probe_execution.py` under load, then its
-  section D deterministically). delta-rs 1.6.6 opened at the pinned version refuses the commit
-  after an overwrite of the same partition or a schema change, and passes after another partition,
-  a compaction of the same partition or a metadata-only commit. `plan/POC.md`,
+  section D deterministically; section D again in the target on 2026-09-26, where section C's race
+  took the `ExecutionConflict` path). delta-rs 1.6.6 opened at the pinned version refuses the commit
+  after an overwrite of the same partition or a schema change, and passes after another partition, a
+  compaction of the same partition or a metadata-only commit. `plan/POC.md`,
   `plan/OPEN_QUESTIONS.md`

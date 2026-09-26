@@ -234,9 +234,10 @@ O que a implementação fixou além do texto das seções acima:
   todo `COPY` dela a repete, enquanto o motor da [etapa 5](PLAN-STAGE-5.md) a monta por comando
   (decisão do usuário de 2026-09-25): a credencial que vence no meio da transação derruba o
   `COPY` que a leva, o `ROLLBACK` deixa a tabela publicada e a linha de controle como estavam, e o
-  operador repete a publicação. A leitura de `probes/credentials.py` no alvo, em 2026-09-25,
-  manteve a decisão: a cadeia do `boto3` entrega uma chave com cerca de 29 minutos ou mais pela
-  frente, contra os 153,9 s da publicação de `cad_lancamentos` em 2026-09-24 ([`POC.md`](POC.md)).
+  operador repete a publicação. As leituras de `probes/credentials.py` no alvo, em 2026-09-25 e
+  em 2026-09-26, mantiveram a decisão: a cadeia do `boto3` entrega uma chave com cerca de 29
+  minutos ou mais pela frente, contra os 153,9 s da publicação de `cad_lancamentos` em 2026-09-24
+  e os 295,1 s dela com cinco partições em 2026-09-26 ([`POC.md`](POC.md)).
   O `COPY` mais longo que a credencial que ele leva segue sem medida
   ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **A suíte no ambiente alvo publica num ambiente `poc<id>` próprio**, cujas tabelas e linhas de

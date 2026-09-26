@@ -713,7 +713,7 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   the publication logs them per table and `deep_copy` logs each partition's copy time. The battery
   of 2026-09-24 at 23:25, on a new root in `prd`, passed every suite case (S3 481, Redshift 44
   twice, engine 6 and publication 8 twice each) and read them: `archive` of `cad_lancamentos`
-  11.1 s, its publication 153.9 s at a 273 MB peak, the first `export` 8.8 s by registration and
+  11.1 s, its publication 153.9 s at a 273 MB peak, the first `export` 8.8 s by copy and
   17.3 s at 5,425 MB by `--mode rewrite`; `compact` ran only on a one-file partition, which does
   not commit, so a real compaction stays unread there (`plan/POC.md`). The
   DuckDB engine and the migration script take `threads` and `memory_limit` from the environment at
@@ -798,9 +798,9 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   its secret holds expired, since only `httpfs` triggers `REFRESH auto`. The user chose the same
   day the secret with `boto3`'s key, which the DuckDB engine recreates at each session entry when
   it changes; the battery of 2026-09-26 passed every suite case again (S3 531, the stale-key case
-  among them) and loaded the source's new month 2026-07-31 (`.claude/memory/source-base.md`), and
-  the probe, which reads the secret through the engine, has its target run pending
-  (`plan/OPEN_QUESTIONS.md`). The target runs of 2026-09-23 are in
+  among them), loaded the source's new month 2026-07-31 (`.claude/memory/source-base.md`),
+  published the whole base by channel and read, in the probe, the engine's secret renewed before
+  each expiry (`plan/POC.md`). The target runs of 2026-09-23 are in
   `.claude/memory/environments.md`.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,

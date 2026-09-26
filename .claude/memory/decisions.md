@@ -1148,7 +1148,8 @@ one secret lock shared by the `new_session()` cursors; the comparison by the `ke
 the text a DuckDB syntax error repeats; the `aws` extension out of `duckdb_setup`; the connections
 of `rewrite`, `read_back`, `export_snapshot` and the stage 5 swap keeping the opening key, since
 each lasts a table or a partition; the `stream` helper thread ending the stream with the entry's
-error; and `probes/credentials.py` reading DuckDB through the engine, whose target run is pending.
+error; and `probes/credentials.py` reading DuckDB through the engine, which read the renewal
+in the target on 2026-09-26.
 `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
 
 ## The types the contract accepted without checking (2026-09-25)

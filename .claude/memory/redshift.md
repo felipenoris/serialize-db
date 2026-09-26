@@ -335,6 +335,20 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   partition; the CLI printed no duration then, so nothing of the publication's time was read;
   since the user's decision of the same day each published table's log line carries the
   partitions, the time and the process's peak RSS. `plan/POC.md`
+- The publication of the whole base by channel (2026-09-26, 8 vCPUs, the root loaded that day):
+  `publish --init` created the control table; `snapshot --name carga-2026-09-25` (12 tables,
+  `cad_lancamentos` at version 5) and `channel --name default --snapshot carga-2026-09-25`;
+  `--tables cad_contas --channel default` published version 1 in 3.5 s (peak 247 MB) and
+  `--max-workers 4 --channel default` the other 11: the unpartitioned tables 3.5 s to 4.8 s,
+  `cad_contratos` 31.2 s, `cad_operacoes` 53.1 s, `rel_contrato_operacao` 56.5 s and
+  `cad_lancamentos` (5 partitions, 283,835,743 rows) 295.1 s, the process peaking at 266 MB. On
+  2026-09-24 at 23:25 (16 vCPUs) the same tables took 21.5 s, 32.5 s, 40.3 s and 153.9 s
+  (141,901,795 rows) at 273 MB: the time follows the rows, about 0.96 and 0.92 million rows per
+  second, and the peak does not. `--status` read the 12 `prd_<table>` with published equal to
+  current. `--channel current` and `--snapshot carga-2026-09-25 --tables cad_contas` answered
+  `a versão <n> já está publicada` for every table, because the snapshot is the current version:
+  a revert over the base needs a commit after the snapshot. `plan/POC.md`,
+  `plan/PLAN-STAGE-10.md`
 - A positional `COPY` cannot load a subset of a file's columns (the column list must match the
   file's count, reading of 2026-09-21), so the audit's published staging carries every contract
   column and is the same `exec_<id>_<tabela>_publicado` as `published()`, loaded once per
