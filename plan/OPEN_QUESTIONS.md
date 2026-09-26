@@ -13,7 +13,8 @@ foi medido em [`POC.md`](POC.md).
   raiz nova em 2026-09-24 às 01:42, depois das três sessões de 2026-09-23; e 907 versões,
   32.966.477 bytes, com 859 marcadores às 12:39 do mesmo dia; e 1.943 versões, 50.394.018 bytes,
   com 1.823 marcadores às 23:26; e 2.980 versões, 86.695.363 bytes, com 2.788 marcadores em
-  2026-09-25 às 17:26, [`POC.md`](POC.md)), e a regra
+  2026-09-25 às 17:26; e 5.269 versões, 159.538.248 bytes, com 4.883 marcadores em 2026-09-26 às
+  15:14, [`POC.md`](POC.md)), e a regra
   `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
   para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
   `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
@@ -25,13 +26,15 @@ foi medido em [`POC.md`](POC.md).
   falhando uma vez depois que a chave do secret `credential_chain` expirou. Por decisão do usuário
   de 2026-09-25, o secret leva desde então a chave da credencial do `boto3`, e o motor DuckDB o
   recria na entrada de cada sessão quando ela troca ([etapa 3](PLAN-STAGE-3.md),
-  [etapa 4](PLAN-STAGE-4.md)); no substituto de chaves de 70 s, o motor leu em todas as rodadas
-  ([`POC.md`](POC.md)). Espera uma rodada no alvo: `probes/credentials.py`, que lê o DuckDB pelo
-  motor desde então, com o comando em `SUITE.md`. Seguem sem medida um comando do DuckDB mais longo
-  que os 15 minutos que a chave tem pela frente, no mínimo, na entrada da sessão (o botocore a
-  renova entre 15 e 10 minutos antes da expiração), o `COPY` mais longo que a credencial que ele
-  leva, a queda de uma conexão Redshift no meio de um `COPY` e a sessão ociosa e a transação
-  inativa do serverless, encerradas depois de 3.600 s e 21.600 s ([`redshift.md`](redshift.md)).
+  [etapa 4](PLAN-STAGE-4.md)); no substituto de chaves de 70 s, o motor leu em todas as rodadas,
+  e no alvo, em 2026-09-26, a suíte S3 passou o caso em que o motor recria um secret de chave
+  desconhecida e lê pelo `delta_scan` ([`POC.md`](POC.md)). Espera uma rodada no alvo:
+  `probes/credentials.py`, que lê o DuckDB pelo motor desde então, com o comando em `SUITE.md`.
+  Seguem sem medida um comando do DuckDB mais longo que os 15 minutos que a chave tem pela frente,
+  no mínimo, na entrada da sessão (o botocore a renova entre 15 e 10 minutos antes da expiração), o
+  `COPY` mais longo que a credencial que ele leva, a queda de uma conexão Redshift no meio de um
+  `COPY` e a sessão ociosa e a transação inativa do serverless, encerradas depois de 3.600 s e
+  21.600 s ([`redshift.md`](redshift.md)).
   A cláusula do `COPY` e do `UNLOAD`, montada uma vez por tabela na publicação, leva uma chave com
   cerca de 29 minutos ou mais pela frente, contra os 153,9 s da publicação de `cad_lancamentos` em
   2026-09-24, e a decisão de 2026-09-25 da [etapa 8](PLAN-STAGE-8.md) fica; o motor da
