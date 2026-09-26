@@ -4490,10 +4490,12 @@ relatório do probe fica fora de `plan/`:
     rodadas, a chave da cadeia teve de 34 a 60 minutos pela frente, dentro dos 29 a 60 minutos da
     leitura anterior.
   - **Os outros clientes seguiram lendo**: a cláusula do `COPY` e do `UNLOAD` seguiu a chave do
-    contêiner desde a troca das 16:31:02 (`CR-10`); o delta-rs, o `read_parquet`, o
-    `S3FileSystem` e o `boto3` leram nas 5 rodadas depois da expiração (`CR-3`, `CR-5` a `CR-7`);
-    a conexão Redshift respondeu ao `select 1` duas vezes depois da expiração da senha, às
-    17:16:00 (`CR-8`); e os cinco clientes novos leram (`CR-11`).
+    contêiner desde a troca das 16:31:02 (`CR-10`), e a leitura da credencial numa sessão nova do
+    `boto3`, o que `credentials_clause` faz a cada chamada, levou menos de 0,05 s (o relatório
+    imprime 0,0 s); o delta-rs, o `read_parquet`, o `S3FileSystem` e o `boto3` leram nas 5 rodadas
+    depois da expiração (`CR-3`, `CR-5` a `CR-7`); a conexão Redshift respondeu ao `select 1` duas
+    vezes depois da expiração da senha, às 17:16:00 (`CR-8`); e os cinco clientes novos leram
+    (`CR-11`).
 
 Às 18:30, o usuário rodou o bloco "Sondas de consistência" de `SUITE.md`, a primeira rodada delas
 no ambiente alvo: as sete da pasta local, sob `SERIALIZE_DB_TEST_LOCAL_ROOT` na máquina, de
@@ -4522,16 +4524,17 @@ consistência de leitura e escrita mostraram"), salvo:
   `cad_lancamentos_projetados` ficaram publicadas na versão 1 do ambiente `poc<id>`, e a limpeza
   apagou os 26 objetos da sessão no bucket.
 
-**Consequências**: nenhuma leitura contradiz o plano. A máquina de 8 vCPUs e cerca de 16 GB
-carregou a partição de 142 milhões de linhas com o pico do processo em 9,2 GB, e o tempo dela, que
-cresceu mais que as linhas, entra no dimensionamento da máquina pelas medições que
-[`PLAN.md`](PLAN.md) pede. `probes/credentials.py` leu no alvo a renovação do secret do DuckDB,
-e o item das credenciais de uma hora em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) fica com o que
-segue sem medida; a cláusula montada uma vez por tabela leva uma chave com cerca de 29 minutos ou
-mais pela frente, contra os 295,1 s da publicação de `cad_lancamentos`, e a decisão de 2026-09-25
-da [etapa 8](PLAN-STAGE-8.md) fica. O item do acesso de leitura fica com a volta a um snapshot
-anterior sobre a base, que pede um commit depois do snapshot, e com o `UNLOAD` do cliente só de
-leitura; o da operação segue esperando uma partição de vários arquivos e um `compact` antes do
-snapshot; o das versões não correntes ganha a contagem deste dia. Os cinco achados das sondas de
-consistência seguem esperando o usuário, agora lidos também no alvo. Os arquivos das
-[etapas 8](PLAN-STAGE-8.md) e [10](PLAN-STAGE-10.md) citam estas leituras.
+**Consequências**: nenhuma leitura contradiz o plano. A máquina de 8 vCPUs e cerca de 16 GB carregou
+a partição de 142 milhões de linhas com o pico do processo em 9,2 GB, e o tempo dela, que cresceu
+mais que as linhas, entra no dimensionamento da máquina pelas medições que [`PLAN.md`](PLAN.md)
+pede. `probes/credentials.py` leu no alvo a renovação do secret do DuckDB, e o item das credenciais
+de uma hora em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) fica com o que segue sem medida; a cláusula
+montada uma vez por tabela leva uma chave com cerca de 29 minutos ou mais pela frente, contra os
+295,1 s da publicação de `cad_lancamentos`, e a leitura da credencial levou menos de 0,05 s. O
+usuário, que estima `cad_lancamentos` três vezes maior em poucos meses, decidiu no mesmo dia montar
+a cláusula a cada `COPY`, como a [etapa 8](PLAN-STAGE-8.md) passou a fazer. O item do acesso de
+leitura fica com a volta a um snapshot anterior sobre a base, que pede um commit depois do snapshot,
+e com o `UNLOAD` do cliente só de leitura; o da operação segue esperando uma partição de vários
+arquivos e um `compact` antes do snapshot; o das versões não correntes ganha a contagem deste dia.
+Os cinco achados das sondas de consistência seguem esperando o usuário, agora lidos também no alvo.
+Os arquivos das [etapas 8](PLAN-STAGE-8.md) e [10](PLAN-STAGE-10.md) citam estas leituras.

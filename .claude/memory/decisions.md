@@ -1118,11 +1118,12 @@ that item became the fix, implemented while the answer was pending. The user the
 the clause built once per table for now, because a credential that expires in the middle of the
 transaction corrupts no data and at most the operator repeats the publication, and to re-evaluate it
 when `probes/credentials.py` runs in the target; the fix left the PR, and `plan/PLAN-STAGE-8.md`
-records the behavior. After asking for their context and side effects, the user also kept the local
-`unload_to` of the Redshift reader and `deep_copy` reopening the destination per partition as they
-are, which `plan/PLAN-STAGE-10.md` and `plan/PLAN-STAGE-9.md` record. The items that wait on a
-target run, the delta-rs dataset filter (issue #85), the `deltalake` upgrade (another thread) and
-the bucket rule stayed out. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-8.md`,
+records the behavior. The user asked for the fix on 2026-09-26 ("The publication's credentials
+clause built for each `COPY`", below). After asking for their context and side effects, the user
+also kept the local `unload_to` of the Redshift reader and `deep_copy` reopening the destination per
+partition as they are, which `plan/PLAN-STAGE-10.md` and `plan/PLAN-STAGE-9.md` record. The items
+that wait on a target run, the delta-rs dataset filter (issue #85), the `deltalake` upgrade (another
+thread) and the bucket rule stayed out. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-8.md`,
 `plan/PLAN-STAGE-9.md`, `plan/PLAN-STAGE-10.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
 
 ## The traceback of `serialize-db load` (2026-09-25)
@@ -1186,3 +1187,20 @@ by `uv add` and then `uv sync`, `uv sync` in place of `uv sync --group dev` in `
 the GitHub workflow importing every module of the package and running `serialize-db --help` after
 `uv sync --no-dev`, before the tests. `plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/POC.md`,
 `plan/CURRENT_STATE.md`
+
+## The publication's credentials clause built for each `COPY` (2026-09-26)
+
+After the target battery of 2026-09-26 read the key the `boto3` chain serves with about 29 minutes
+or more ahead, against 295.1 s for the publication of `cad_lancamentos` with five partitions, the
+user asked for the context of the decision of 2026-09-25 and a recommendation. The assistant
+recommended keeping the clause built once per table, for the sixfold margin, and re-evaluating when
+a table's time in the publication log passed about 15 minutes. Asked what the fix involved and
+whether it cost performance, the assistant answered that `credentials_clause` took 11 to 16 ms per
+call in the development container and under 0.05 s in the target, under 0.1% of the publication of
+`cad_lancamentos`, and that no design saves a single `COPY` longer than its key. The user estimated
+that `cad_lancamentos` triples in size within a few months and asked for the fix on 2026-09-26: the
+transaction passes a marker to `publication_statements`, whose signature stays, and
+`_run_publication` swaps it for a fresh `credentials_clause` right before each `COPY`'s `execute`.
+`test_publish_builds_the_credentials_for_each_copy` failed on the old code (one call for two
+`COPY`s) and passes on the new. The `COPY` longer than its key stays in `plan/OPEN_QUESTIONS.md`.
+`plan/PLAN-STAGE-8.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`

@@ -17,11 +17,11 @@ de controle numa transação, e ``publication_status`` compara a versão publica
 versões vêm de um snapshot do arquivo de controle, por ``serialize-db publish --snapshot`` ou
 ``--channel``, ou são as atuais.
 
-O ``COPY`` leva a cláusula de credenciais do motor Redshift, montada uma vez por tabela, antes
-dos comandos da transação; nenhum texto que a carregue vai a log. Todo comando cita a tabela
-publicada e a de controle por nome em duas partes, depois do ``USE`` que a conexão roda, e a
-staging temporária pelo nome só, sem ``COMPUPDATE`` e sem ``TRUNCATE``, o que um datashare
-aceita.
+Cada ``COPY`` leva a cláusula de credenciais do motor Redshift montada logo antes do seu
+``execute``, com a chave que a cadeia de credenciais serve naquele momento; nenhum texto que a
+carregue vai a log. Todo comando cita a tabela publicada e a de controle por nome em duas partes,
+depois do ``USE`` que a conexão roda, e a staging temporária pelo nome só, sem ``COMPUPDATE`` e
+sem ``TRUNCATE``, o que um datashare aceita.
 
 Exemplo:
 
@@ -102,6 +102,10 @@ CONTROL_TABLE = "serialize_db_publications"
 
 # A instrução de inicialização, na mensagem de PublicationError.
 _INIT = "crie-a uma vez com serialize-db publish --init (create_publications_table)"
+
+# O lugar da cláusula de credenciais nos textos do COPY, que _run_publication preenche logo
+# antes do execute de cada um.
+_CREDENTIALS_MARKER = "<credenciais>"
 
 # O tipo de svv_all_columns e o do DDL do contrato, cada um numa família, para o diff das
 # tabelas publicadas; o texto, o CHAR e o NUMERIC levam a largura, ou a precisão e a escala.
@@ -620,12 +624,18 @@ def _write_manifests(db: Database, table: sa.Table, values: Sequence[str | None]
     return manifests
 
 
-def _run_publication(connection: _Connection, table: sa.Table, statements: Sequence[str],
-                     published: int | None) -> None:
-    """Os comandos da transação, um por ``execute``; o último grava a linha de controle, e o
-    ``UPDATE`` dela que não afeta linha é ``ExecutionConflict``."""
+def _run_publication(connection: _Connection, config: RedshiftConfig, table: sa.Table,
+                     statements: Sequence[str], published: int | None) -> None:
+    """Os comandos da transação, um por ``execute``, cada ``COPY`` com a cláusula de credenciais
+    montada logo antes; o último grava a linha de controle, e o ``UPDATE`` dela que não afeta
+    linha é ``ExecutionConflict``."""
     *changes, control_statement = statements
     for statement in changes:
+        # Uma cláusula nova por COPY: a credencial temporária da cadeia vence em até uma hora, e
+        # a transação de uma tabela grande pode durar mais que isso.
+        if _CREDENTIALS_MARKER in statement:
+            credentials = credentials_clause(config)
+            statement = statement.replace(_CREDENTIALS_MARKER, credentials)
         connection.execute(statement)
     control = connection.execute(control_statement)
     if published is not None and control.rowcount == 0:
@@ -651,8 +661,8 @@ def _publication_transaction(connection: _Connection, db: Database, config: Reds
         manifests = _write_manifests(db, table, with_files, execution_id, version)
         statements = publication_statements(config.schema, environment, table, changed,
                                             manifests, version, published, execution_id,
-                                            credentials_clause(config))
-        _run_publication(connection, table, statements, published)
+                                            _CREDENTIALS_MARKER)
+        _run_publication(connection, config, table, statements, published)
         connection.execute("COMMIT")
     except redshift_connector.Error as error:
         connection.rollback()

@@ -177,6 +177,7 @@ duas stagings temporárias, lidas no ambiente alvo em 2026-09-23).
 | Tabela de controle | `test_publish_requires_the_control_table` (sem conexão) | Uma conexão de mentira em que o `select ... limit 0` falha com relação inexistente: `publish_redshift` e `publication_status` levantam `PublicationError` com o comando de inicialização e não rodam outro comando; `control_ddl` sem `IF NOT EXISTS`; a tabela fora do Delta e a tabela fora de `versions` são `PublicationError`, cada uma com a sua mensagem. |
 | Texto da transação | `test_publication_statements_text` (sem conexão) | Os comandos da primeira publicação (`CREATE TABLE` da tabela publicada e `INSERT` da linha de controle) e de uma seguinte (`UPDATE ... AND delta_version = <lida>`), um por item, com a linha de controle por último, sem `BEGIN`, `COMMIT`, `TRUNCATE` nem `COMPUPDATE`, nomes em duas partes, credenciais mascaradas no que vai a log; `control_read` e `unpublication_statements` com o nome em duas partes. |
 | Conferência da versão | `test_publish_checks_the_version_read` (sem conexão) | Uma conexão de mentira: a versão lida igual à pedida encerra a transação por `ROLLBACK` sem outro comando; a lida abaixo publica só as partições de `version_diff`; a lida acima da pedida, com as versões de um snapshot, troca as partições alteradas entre as duas pelos arquivos da pedida e volta a linha de controle; o `rowcount` 0 do `UPDATE`, o `1023` e a tabela publicada que outra primeira publicação criou são `ExecutionConflict`, e nenhum comando se repete. |
+| Cláusula por `COPY` | `test_publish_builds_the_credentials_for_each_copy` (sem conexão) | Uma conexão de mentira e uma `credentials_clause` que devolve uma cláusula diferente a cada chamada: a primeira publicação de dois meses a chama uma vez por `COPY`, logo antes do `execute` dele, cada `COPY` leva a cláusula da sua chamada, e nenhum outro comando leva uma. |
 | Reconciliação | `test_reconcile_published_add_column_and_recreate` (sem conexão) e `test_reconcile_published_on_the_target` (`redshift`) | `ADD COLUMN` no aditivo; no destrutivo e na largura de `VARCHAR(n)` que muda no modelo, a despublicação, e a publicação seguinte com o DDL com chave e todas as partições; no alvo, a tabela igual ao modelo sem diff na leitura de `svv_all_columns`, a coluna nova preenchida pela partição alterada e a largura que muda recriando a tabela. |
 | Diferença | `test_publish_only_changed_partitions` (`redshift`) | Duas publicações: a segunda, depois de uma partição alterada, emite um `DELETE` e um `COPY` só dela. |
 | Primeira publicação | `test_first_publication_loads_every_partition` (`redshift`) | Sem linha de controle, a tabela publicada criada, todas as partições e o `INSERT` da linha de controle, numa transação. Os arquivos das partições são os que o motor DuckDB exportou pelo registro, com uma coluna `Numeric(18, 2)`, uma `DateTime` e uma coluna JSON: a leitura do `COPY` do Redshift sobre o arquivo do `COPY` do DuckDB, com o tipo lógico `JSON` numa staging `VARCHAR(65535)`. A linha de log da tabela com as partições, o tempo e o pico de RSS. |
@@ -230,16 +231,17 @@ O que a implementação fixou além do texto das seções acima:
 - **O `1023`, o `UPDATE` sem linha, o `DELETE` da linha de controle sem linha e a tabela publicada
   que outra primeira publicação criou (`42P07`)** saem como `ExecutionConflict` depois do
   `ROLLBACK`; outro erro do servidor sobe como veio, com o comando mascarado numa nota.
-- **A cláusula de credenciais é montada uma vez por tabela**, antes dos comandos da transação, e
-  todo `COPY` dela a repete, enquanto o motor da [etapa 5](PLAN-STAGE-5.md) a monta por comando
-  (decisão do usuário de 2026-09-25): a credencial que vence no meio da transação derruba o
-  `COPY` que a leva, o `ROLLBACK` deixa a tabela publicada e a linha de controle como estavam, e o
-  operador repete a publicação. As leituras de `probes/credentials.py` no alvo, em 2026-09-25 e
-  em 2026-09-26, mantiveram a decisão: a cadeia do `boto3` entrega uma chave com cerca de 29
-  minutos ou mais pela frente, contra os 153,9 s da publicação de `cad_lancamentos` em 2026-09-24
-  e os 295,1 s dela com cinco partições em 2026-09-26 ([`POC.md`](POC.md)).
-  O `COPY` mais longo que a credencial que ele leva segue sem medida
-  ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- **A cláusula de credenciais é montada a cada `COPY`**, logo antes do `execute` dele, como no
+  motor da [etapa 5](PLAN-STAGE-5.md) (decisão do usuário de 2026-09-26): a transação passa um
+  marcador a `publication_statements` no lugar da cláusula e o troca, em cada `COPY`, pela de
+  `credentials_clause`, que resolve a cadeia do `boto3` numa sessão nova. Cada `COPY` leva a
+  chave que o contêiner serve quando ele começa, com cerca de 29 minutos ou mais pela frente pelas
+  leituras de `probes/credentials.py` no alvo em 2026-09-25 e em 2026-09-26, e a transação de uma
+  tabela pode durar mais que uma chave, desde que cada `COPY` caiba na sua. A publicação de
+  `cad_lancamentos` levou 153,9 s em 2026-09-24 e 295,1 s com cinco partições em 2026-09-26, e o
+  usuário estima que a tabela triplica em poucos meses; a leitura da credencial levou menos de
+  0,05 s no alvo ([`POC.md`](POC.md)). O `COPY` mais longo que a credencial que ele leva segue sem
+  medida ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **A suíte no ambiente alvo publica num ambiente `poc<id>` próprio**, cujas tabelas e linhas de
   controle saem no fim; ela cria a tabela de controle quando não existe e a apaga só nesse caso.
 

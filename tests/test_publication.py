@@ -374,6 +374,38 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     assert connection.texts()[-1] == "ROLLBACK"
 
 
+@pytest.mark.local
+def test_publish_builds_the_credentials_for_each_copy(monkeypatch: pytest.MonkeyPatch,
+                                                      local_location: LocalLocation) -> None:
+    """Cada ``COPY`` da transação leva a cláusula de credenciais montada logo antes do seu
+    ``execute``, e nenhum outro comando a leva: a chave que vence no meio da transação de uma
+    tabela não chega ao ``COPY`` seguinte."""
+    db = local_db(local_location)
+    published_entries(db, MONTHS)
+    connection = FakeConnection()
+    use_fake(monkeypatch, connection)
+
+    # Uma cláusula diferente a cada chamada, com um papel que a máscara deixa ver no comando
+    # registrado, e a posição do comando que a conexão roda em seguida.
+    positions = []
+
+    def fresh_clause(config: RedshiftConfig) -> str:
+        positions.append(len(connection.commands))
+        return f"IAM_ROLE 'arn:aws:iam::123456789012:role/papel-{len(positions)}'"
+
+    monkeypatch.setattr(publication, "credentials_clause", fresh_clause)
+    publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1")
+
+    # A primeira publicação tem um COPY por mês, cada um com a cláusula da sua chamada.
+    assert len(positions) == len(MONTHS)
+    for number, position in enumerate(positions, start=1):
+        command = connection.commands[position]
+        assert command.startswith("COPY")
+        assert f"role/papel-{number}'" in command
+    with_clause = [text for text in connection.texts() if "IAM_ROLE" in text]
+    assert with_clause == connection.texts("COPY")
+
+
 def test_reconcile_published_add_column_and_recreate() -> None:
     """A tabela igual ao modelo não tem diff; a coluna anulável nova sai por ``ADD COLUMN`` no
     fim; a coluna removida, a ``NOT NULL`` nova, o tipo, a largura de ``VARCHAR(n)`` e a escala
