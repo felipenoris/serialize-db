@@ -4319,3 +4319,61 @@ condicional local entre threads, a nota do `NaN` pelo pandas em `docs/index.md` 
 `publish` entre a conferência da versão fixada e o commit. O fuso da sessão, o órfão da publicação
 perdedora e as estatísticas da cópia arquivada já estão documentados; a reserialização do JSON pelo
 `SUPER` é uma leitura do substituto.
+
+## O que a comparação do duckdb-sqlalchemy com o duckdb-engine mostrou
+
+Em 2026-09-26, à pergunta do usuário se o `duckdb-sqlalchemy` seria preferível ao `duckdb-engine`,
+a leitura do PyPI, dos repositórios e da documentação dos dois pacotes, uma sonda de compilação e
+três sessões de teste no contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB, Python
+3.13.12, DuckDB 1.5.5, deltalake 1.6.6) responderam; `src/` não mudou.
+
+- **Os pacotes.** O `duckdb-sqlalchemy` 1.5.5.9 (2026-09-24) é a bifurcação do `duckdb_engine`
+  0.17.0 feita por Leonardo Vida, publicada desde a 0.18.0 de 2025-12-24, com 37 lançamentos, 12
+  deles entre 2026-07-30 e 2026-09-24, e a versão acompanha a do DuckDB (a 1.5.5 "Support DuckDB
+  and MotherDuck 1.5.5"). O módulo é `duckdb_sqlalchemy`, o dialeto segue registrado como `duckdb`
+  (`create_engine("duckdb:///...")`), e a documentação pede para não instalar os dois no mesmo
+  ambiente, porque ambos registram esse nome. Exige `sqlalchemy>=2.0.0` e declara `pytz>=2024.2`,
+  que nenhum módulo do pacote importa. O repositório tem 17 estrelas, nenhuma bifurcação e 1 issue
+  aberta; as notas de lançamento são correções escritas à mão (a reflexão, o `executemany`, as
+  tentativas repetidas), a 1.5.4.5 de 2026-07-24 adaptou "SQLAlchemy 2.1 execution-context and
+  PostgreSQL reflection API changes", e a matriz de CI declara SQLAlchemy 2.0.0, 2.0.52 e 2.1.0rc2
+  e DuckDB 1.3.0 a 1.5.5. O `duckdb-engine` 0.17.0 é de 2025-03-29, o último lançamento; os
+  commits seguem até 2025-10-21 e são atualizações de dependência dos bots; o repositório tem 497
+  estrelas, 55 issues abertas (a `pg_collation` da reflexão, de 2026-02-23; o `Double`, de
+  2026-01-07; o `DuckDBPyType` sem hash com o DuckDB 1.4.0, #1344 de 2025-09-23) e 43 PRs abertos,
+  entre eles a correção da `pg_collation` de 2026-03-28, sem resposta do mantenedor. Os downloads
+  do mês no pypistats: 1.841.220 do `duckdb-engine` e 8.973 do `duckdb-sqlalchemy`; o guia do
+  Jupyter da documentação do DuckDB e a documentação do MotherDuck instalam `duckdb-engine`.
+- **A compilação.** Os mesmos statements por `duckdb_engine.Dialect(paramstyle="named")` (no
+  `.venv` do projeto) e por `duckdb_sqlalchemy.Dialect(paramstyle="named")` (num venv de rascunho
+  com SQLAlchemy 2.0.54): o `CreateTable` com `String`, `DateTime(timezone=True)`,
+  `Numeric(18, 2)`, `Double`, `Text`, `Uuid`, `JSON`, `Boolean`, `Date`, `DateTime` e
+  `BigInteger`; o `select` com `bindparam`, `LIKE`, `>=` e `IN` expansível, sem `literal_binds`,
+  com `literal_binds` e com `render_postcompile` mais `construct_params()`; e o
+  `INSERT ... SELECT DISTINCT ... WHERE NOT EXISTS` com `CAST(... AS NUMERIC(18, 2))` saíram
+  byte a byte iguais, com `"to"` citado e `timestamp` sem aspas nos dois. O que difere no
+  dialeto: `driver` `duckdb_sqlalchemy`, `supports_statement_cache` verdadeiro (falso no
+  `duckdb-engine`, que registra "does not support caching" no log do engine) e o
+  `DuckDBDDLCompiler`, que escreve `DEFAULT nextval('<tabela>_<coluna>_seq')` na coluna inteira
+  de chave primária com `autoincrement` e cria e derruba a sequência por
+  `event.listen(sa.Table, "before_create")` e `"after_drop"`, registrados na importação do módulo
+  e ativos só numa conexão `duckdb`. O paramstyle padrão segue `pyformat`,
+  `supports_native_decimal` falso e o compilador `PGCompiler`.
+- **As sessões de teste.** A sessão inteira (`SERIALIZE_DB_TEST_EMULATOR` e
+  `SERIALIZE_DB_TEST_LOCAL_ROOT`, sem as variáveis `AWS_*`) rodou na pasta do projeto e em duas
+  cópias dele com `duckdb-sqlalchemy==1.5.5.9` no lugar de `duckdb-engine==0.17.0` em
+  `pyproject.toml` e `import duckdb_sqlalchemy as duckdb_engine` em `serialize_db.sql`,
+  `serialize_db.engine.duckdb` e `tests/proof_of_concept/test_sqlalchemy.py`. Com o
+  `duckdb-engine`, 575 aprovados e 1 pulado (sem variáveis, 233 e 343). Com o `duckdb-sqlalchemy`
+  e a SQLAlchemy 2.0.54, 574 aprovados, 1 pulado e 1 reprovado, `test_create_all_and_reflection`
+  da suíte de estudo, na asserção de que o dialeto não reflete a chave primária: o
+  `duckdb-sqlalchemy` devolve `['id_operacao']`; os testes do pacote passaram todos, o `render`,
+  o motor DuckDB e os arquivos SQL versionados incluídos. Com o `duckdb-sqlalchemy` e a SQLAlchemy
+  2.1.0, 567 aprovados, 1 pulado e 8 reprovados, os mesmos 8 casos de 2026-09-25: 7 pela 2.1 (o
+  `params()` que guarda os valores no statement, o `IN` expansível com `render_postcompile` e o
+  `Double` fora de `Numeric`) e `test_create_all_and_reflection` na asserção da chave primária, a
+  que a reflexão chegou, e não mais na `pg_collation` do `get_columns` do `duckdb-engine` 0.17.0.
+  A asserção seguinte desse caso, o `SERIAL` que o DuckDB recusa, não rodou nas duas cópias.
+
+**Consequências**: um item em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), que espera a decisão do
+usuário; nada muda em `src/` nem em `pyproject.toml` antes dela.

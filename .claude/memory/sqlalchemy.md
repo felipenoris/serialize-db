@@ -139,3 +139,24 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   `Float` and `Double` no longer derive from `Numeric`, so `load_report` drops the `Double`
   columns from its sums; and the duckdb-engine 0.17.0 reflection fails on
   `pg_catalog.pg_collation`. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+## duckdb-sqlalchemy
+
+- `duckdb-sqlalchemy` (module `duckdb_sqlalchemy`, 1.5.5.9 of 2026-09-24) is Leonardo Vida's fork
+  of `duckdb_engine` 0.17.0, published since 0.18.0 of 2025-12-24 and versioned after the DuckDB
+  release; it registers the same `duckdb` dialect name, so the two packages never share an
+  environment; it needs `sqlalchemy>=2.0.0` and declares `pytz`, which it never imports.
+  `duckdb-engine` 0.17.0 (2025-03-29) is the last release, its commits stop in 2025-10 with bot
+  bumps, and the `pg_collation` reflection fix sits in an open PR of 2026-03-28; the DuckDB
+  Jupyter guide and the MotherDuck docs still install `duckdb-engine`, at 1,841,220 monthly
+  downloads against 8,973 (2026-09-26). `plan/POC.md`
+- `Dialect(paramstyle="named")` of both compiles the stage 1 DDL types, the `select` with
+  `bindparam`, `LIKE`, `>=` and an expanding `IN` (plain, `literal_binds`, `render_postcompile`)
+  and the `INSERT ... SELECT` byte-identical; the fork differs in `driver`,
+  `supports_statement_cache=True`, a `DuckDBDDLCompiler` that renders `DEFAULT nextval(...)` on
+  the autoincrement integer key and creates the sequence through `event.listen(sa.Table,
+  "before_create")` registered at import (duckdb connections only), and it reflects the primary
+  key (`['id_operacao']`), which `test_create_all_and_reflection` asserts absent. Swapped in a
+  copy of the repository, every package test passed on 2.0.54, and on 2.1.0 the same 8 cases of
+  2026-09-25 failed, the reflection one at the key assertion instead of `pg_collation`
+  (2026-09-26). `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
