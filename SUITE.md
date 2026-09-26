@@ -94,12 +94,16 @@ export AWS_DEFAULT_REGION=sa-east-1
     --partitions 2026-01-31 \
     --foreign-keys
 
-.venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH/prd
-
 .venv/bin/serialize-db history --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos
 .venv/bin/serialize-db snapshot --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --name carga-2026-09-24
 .venv/bin/serialize-db vacuum --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata
 .venv/bin/serialize-db archive --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --name carga-2026-09-24
+```
+
+Benchmark threads do duckdb:
+
+```
+.venv/bin/python probes/duckdb_threads.py $TARGET_ROOT_PATH/prd
 ```
 
 # Publicação Delta -> Redshift
