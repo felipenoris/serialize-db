@@ -100,8 +100,19 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   a key every 40 s, each valid 70 s) and a local IMDS for delta-rs (`AWS_METADATA_ENDPOINT`), the
   old engine failed from 72 s and the new one read every round; `probes/credentials.py`, which
   reads DuckDB through the engine since, failed `CR-4` on the old code and passed on the new.
-  With `FULL_URI`, `S3FileSystem` and `boto3` renewed, unlike the IMDS stand-in. The target run
-  of the probe is pending. `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `plan/OPEN_QUESTIONS.md`
+  With `FULL_URI`, `S3FileSystem` and `boto3` renewed, unlike the IMDS stand-in.
+  `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `plan/OPEN_QUESTIONS.md`
+- In the target on 2026-09-26 (`probes/credentials.py` on the new code, 16:15:59 to 17:19:00 UTC,
+  14 rounds over `<root>/prd/cad_contas`), no read failed and the exit code was 0: the engine's
+  `delta_scan` read in the 5 rounds past the opening key's expiry at 17:00:22 (`CR-4`, which
+  failed once on 2026-09-25), and the secret moved to the new key at 16:46:04 and 17:16:09, 14.3
+  and 14.6 minutes before the expiry of the key it held (`CR-9`), the first round under 15
+  minutes, botocore's advisory refresh window. The container served a new key about every 30
+  minutes (expiries 17:00:22, 17:30:45 and 18:00:54, switched between 16:26:01 and 16:31:02 and
+  between 16:56:06 and 17:01:06; 34 to 60 minutes left at the rounds), `credentials_clause`
+  followed it from 16:31:02 (`CR-10`), delta-rs, `read_parquet`, `S3FileSystem` and `boto3` read
+  past the expiry, and the Redshift connection answered twice past its 17:16:00 password expiry
+  (`CR-8`). `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 
 ## The target's network, read on 2026-09-21
 

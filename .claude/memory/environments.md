@@ -115,7 +115,13 @@ the `RS-12` count returning no row in 15.1 s, 5,269 non-current versions (159,53
 among them, Redshift 45, engine 6 and publication 8 twice each. The migration block followed from
 15:55 on the same machine, read as 15,617 MB with 12,768 MB available, `environment_limits` giving
 8 threads and 6,384 MiB; the process peaked at 9,161 MB loading the new 141,933,948-row partition
-of `cad_lancamentos` (`source-base.md`). `plan/POC.md`
+of `cad_lancamentos` (`source-base.md`). The publication block followed on the same machine, the
+whole base by `--channel default` (`cad_lancamentos` 295.1 s at a 266 MB peak), then
+`probes/credentials.py` from 16:15:59 to 17:19:00 with no read failing, the reader block (the
+Delta reader's 12 views in 0.582 s) and the export block (`cad_lancamentos` by copy 15.6 s at
+258 MB, by `--mode rewrite` 55.0 s at 6,989 MB; `compact` refused by the snapshot at the current
+version); the consistency probes ran from 18:30:31 with every check passing, the Redshift one in
+53.6 s, and `duckdb_threads.py` had not been sent by 18:35 UTC. `plan/POC.md`
 
 ## The prepared folder and the venv
 

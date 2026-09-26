@@ -19,27 +19,24 @@ foi medido em [`POC.md`](POC.md).
   para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
   `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
   retenção.
-- **Credenciais de uma hora.** A primeira execução mais longa que uma emissão,
-  `probes/credentials.py` no alvo em 2026-09-25 ([`POC.md`](POC.md)), leu o delta-rs, o
-  `S3FileSystem` e o `boto3` renovando a credencial do contêiner, a conexão Redshift aberta
-  seguindo depois da expiração da senha de `GetCredentials` (3.600 s) e o `delta_scan` do DuckDB
-  falhando uma vez depois que a chave do secret `credential_chain` expirou. Por decisão do usuário
-  de 2026-09-25, o secret leva desde então a chave da credencial do `boto3`, e o motor DuckDB o
-  recria na entrada de cada sessão quando ela troca ([etapa 3](PLAN-STAGE-3.md),
-  [etapa 4](PLAN-STAGE-4.md)); no substituto de chaves de 70 s, o motor leu em todas as rodadas,
-  e no alvo, em 2026-09-26, a suíte S3 passou o caso em que o motor recria um secret de chave
-  desconhecida e lê pelo `delta_scan` ([`POC.md`](POC.md)). Espera uma rodada no alvo:
-  `probes/credentials.py`, que lê o DuckDB pelo motor desde então, com o comando em `SUITE.md`.
-  Seguem sem medida um comando do DuckDB mais longo que os 15 minutos que a chave tem pela frente,
-  no mínimo, na entrada da sessão (o botocore a renova entre 15 e 10 minutos antes da expiração), o
-  `COPY` mais longo que a credencial que ele leva, a queda de uma conexão Redshift no meio de um
-  `COPY` e a sessão ociosa e a transação inativa do serverless, encerradas depois de 3.600 s e
-  21.600 s ([`redshift.md`](redshift.md)).
+- **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25 e em 2026-09-26
+  ([`POC.md`](POC.md)), o delta-rs, o `S3FileSystem` e o `boto3` renovando a credencial do
+  contêiner, que troca de chave a cada cerca de 30 minutos, e a conexão Redshift aberta seguindo
+  depois da expiração da senha de `GetCredentials` (3.600 s). O `delta_scan` do DuckDB, que falhou
+  uma vez em 2026-09-25 com a chave vencida do secret `credential_chain`, leu em todas as rodadas
+  de 2026-09-26 pelo secret que leva a chave da credencial do `boto3` e que o motor recria na
+  entrada de cada sessão quando ela troca (decisão do usuário de 2026-09-25,
+  [etapa 3](PLAN-STAGE-3.md), [etapa 4](PLAN-STAGE-4.md)). Seguem sem medida um comando do DuckDB
+  mais longo que os 15 minutos que a chave tem pela frente, no mínimo, na entrada da sessão (o
+  botocore a renova entre 15 e 10 minutos antes da expiração), o `COPY` mais longo que a
+  credencial que ele leva, a queda de uma conexão Redshift no meio de um `COPY` e a sessão ociosa
+  e a transação inativa do serverless, encerradas depois de 3.600 s e 21.600 s
+  ([`redshift.md`](redshift.md)).
   A cláusula do `COPY` e do `UNLOAD`, montada uma vez por tabela na publicação, leva uma chave com
-  cerca de 29 minutos ou mais pela frente, contra os 153,9 s da publicação de `cad_lancamentos` em
-  2026-09-24, e a decisão de 2026-09-25 da [etapa 8](PLAN-STAGE-8.md) fica; o motor da
-  [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela temporária que o
-  pipeline tenha criado na sessão.
+  cerca de 29 minutos ou mais pela frente, contra os 295,1 s da publicação de `cad_lancamentos`
+  com cinco partições em 2026-09-26, e a decisão de 2026-09-25 da [etapa 8](PLAN-STAGE-8.md)
+  fica; o motor da [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela
+  temporária que o pipeline tenha criado na sessão.
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
@@ -82,20 +79,23 @@ foi medido em [`POC.md`](POC.md).
   auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`
   rodaram sem erro, com o tempo e o pico de RSS de `archive`, `export` e da publicação lidos às
   23:25 ([`POC.md`](POC.md)). O `compact` rodou só sobre a partição 2026-03-31 de
-  `cad_lancamentos`, que tem um arquivo só e não commita, e em 2026-09-25 saiu com a recusa
-  prevista, porque `SUITE.md` o roda depois de um snapshot na versão atual: a compactação de uma
+  `cad_lancamentos`, que tem um arquivo só e não commita, e em 2026-09-25 e em 2026-09-26 saiu
+  com a recusa prevista, porque `SUITE.md` o roda depois de um snapshot na versão atual: a
+  compactação de uma
   partição de vários arquivos e a memória dela (o item acima) esperam uma partição com mais de um
   arquivo, que a carga não grava, e um `compact` antes do snapshot; a continuação de uma cópia
   interrompida do `archive` só o substituto exercitou.
 
-- **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo na
-  bateria de 2026-09-25 ([`POC.md`](POC.md)): o leitor Delta abriu as 12 views da raiz carregada
-  em 0,645 s, e as suítes passaram a publicação por canal e por snapshot, com a volta a um
-  snapshot anterior, e a comparação dos dois leitores, com o `stream` do leitor Redshift pelo
-  `UNLOAD`. Esperam: a publicação da base inteira por `--channel default` e a volta a um snapshot
-  anterior ao publicado, com o tempo e o pico de RSS por tabela, com os comandos em `SUITE.md`; e
-  o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o caminho de
-  credencial que serve a ele, que precisa de um papel de cliente no alvo.
+- **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo nas
+  baterias de 2026-09-25 e de 2026-09-26 ([`POC.md`](POC.md)): o leitor Delta abriu as 12 views
+  da raiz carregada em 0,645 s e em 0,582 s; as suítes passaram a publicação por canal e por
+  snapshot, com a volta a um snapshot anterior, e a comparação dos dois leitores, com o `stream`
+  do leitor Redshift pelo `UNLOAD`; e em 2026-09-26 a base inteira foi publicada por
+  `--channel default`, `cad_lancamentos` em 295,1 s com o pico do processo em 266 MB. Esperam: a
+  volta a um snapshot anterior ao publicado sobre a base, com o tempo e o pico de RSS por tabela,
+  que pede um commit depois do snapshot, fora do fluxo de `SUITE.md`, cujo passo 6 leu que cada
+  versão já estava publicada; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket
+  próprio, com o caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25 ([`POC.md`](POC.md)), e o pino fica em 2.0.54. O `params()` novo guarda os
@@ -143,8 +143,9 @@ e os arquivos das etapas; o item abaixo espera uma rodada no alvo.
 
 As sondas de 2026-09-25 ([`POC.md`](POC.md), seção "O que as sondas de consistência de leitura e
 escrita mostraram") atravessaram cada fronteira de leitura e escrita com valores de borda e
-trabalho paralelo, e acharam o que segue, reproduzido sem mudar `src/`; cada item espera o
-usuário: corrigir, ou aceitar como está.
+trabalho paralelo, e acharam o que segue, reproduzido sem mudar `src/`; a rodada delas no
+ambiente alvo, em 2026-09-26, repetiu os achados sem reprovar checagem ([`POC.md`](POC.md)). Cada
+item espera o usuário: corrigir, ou aceitar como está.
 
 - **O sinal do zero pelo `COPY` do DuckDB.** O escritor Parquet do DuckDB codifica a coluna
   `DOUBLE` por dicionário e trata `-0.0` e `0.0` como o mesmo valor: numa partição com os dois,
@@ -162,11 +163,11 @@ usuário: corrigir, ou aceitar como está.
   como já é a coluna), ou capturar o estouro e registrar a soma como não lida.
 - **A escrita condicional do arquivo de controle entre threads.** Na pasta local,
   `Storage.write_text(if_match=...)` confere a impressão digital e faz o `os.replace` fora de um
-  lock: oito threads somando 50 cada perderam 293 de 400 atualizações. A docstring diz que a
-  escrita não é atômica entre processos; entre threads do mesmo processo ela também não é, e
-  `snapshot`, `archive_snapshot` e `set_channel` chamados em paralelo numa raiz local (duas
-  `Execution` com `snapshot` encerrando ao mesmo tempo, por exemplo) podem perder uma entrada. No
-  S3 o `IfMatch` é do servidor. Opções: um `threading.Lock` de `Storage` em volta de
+  lock: oito threads somando 50 cada perderam 293 de 400 atualizações, e 321 na máquina do alvo. A
+  docstring diz que a escrita não é atômica entre processos; entre threads do mesmo processo ela
+  também não é, e `snapshot`, `archive_snapshot` e `set_channel` chamados em paralelo numa raiz
+  local (duas `Execution` com `snapshot` encerrando ao mesmo tempo, por exemplo) podem perder uma
+  entrada. No S3 o `IfMatch` é do servidor. Opções: um `threading.Lock` de `Storage` em volta de
   `_replace_local` e `_create_local`, ou só a nota na docstring.
 - **O `NaN` que o pandas entrega como nulo.** `pa.Table.from_pandas`, o caminho que a documentação
   dá ao `DataFrame`, transforma o `NaN` de uma coluna `float64` em nulo, e a linha do `Double` na
