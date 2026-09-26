@@ -32,11 +32,11 @@ foi medido em [`POC.md`](POC.md).
   credencial que ele leva, a queda de uma conexão Redshift no meio de um `COPY` e a sessão ociosa
   e a transação inativa do serverless, encerradas depois de 3.600 s e 21.600 s
   ([`redshift.md`](redshift.md)).
-  A cláusula do `COPY` e do `UNLOAD`, montada uma vez por tabela na publicação, leva uma chave com
-  cerca de 29 minutos ou mais pela frente, contra os 295,1 s da publicação de `cad_lancamentos`
-  com cinco partições em 2026-09-26, e a decisão de 2026-09-25 da [etapa 8](PLAN-STAGE-8.md)
-  fica; o motor da [etapa 5](PLAN-STAGE-5.md) reconecta uma vez por comando e perde só a tabela
-  temporária que o pipeline tenha criado na sessão.
+  A cláusula do `COPY` e do `UNLOAD` é montada a cada comando, no motor da
+  [etapa 5](PLAN-STAGE-5.md) e, desde a decisão do usuário de 2026-09-26, na publicação da
+  [etapa 8](PLAN-STAGE-8.md), e leva uma chave com cerca de 29 minutos ou mais pela frente; o motor
+  reconecta uma vez por comando e perde só a tabela temporária que o pipeline tenha criado na
+  sessão.
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
