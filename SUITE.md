@@ -150,7 +150,11 @@ export PYTHONPATH=tests
     --metadata client_model:Base.metadata --channel current
 .venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --snapshot carga-2026-09-25 --tables cad_contas
+```
 
+Teste credencial expirando (leva 1h):
+
+```
 # probe credentials: 1h de leitura
 .venv/bin/python probes/credentials.py $TARGET_ROOT_PATH/prd/cad_contas
 ```
