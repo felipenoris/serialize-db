@@ -4411,6 +4411,41 @@ de `plan/`, com os achados aqui. Nenhum caso falhou, e as leituras repetem as de
   sob a raiz das suítes, contra 2.980 (86.695.363 bytes) e 2.788 em 2026-09-25 às 17:26: 2.289
   versões e 72.842.885 bytes entre as duas leituras.
 
-**Consequências**: nenhuma leitura contradiz o plano. O item das credenciais de uma hora em
+A partir das 15:55 UTC, o usuário rodou o bloco "Migração Parquet -> Delta" de `SUITE.md`, salvo
+`probes/duckdb_threads.py`, na raiz de 2026-09-25, carregada de novo: o `history` de
+`cad_lancamentos` começa no `CREATE TABLE` das 15:57:46. O relatório JSON da carga veio junto:
+
+- **A base de origem ganhou o mês 2026-07-31.** Desde a carga de 2026-09-25 às 18:16, as quatro
+  tabelas particionadas ganharam a partição 2026-07-31: `cad_lancamentos` com 141.933.948 linhas,
+  quase as 141.901.795 das quatro partições anteriores juntas, `rel_contrato_operacao` com
+  15.209.141, `cad_operacoes` com 5.579.536 e `cad_contratos` com 3.985.447. Das tabelas sem
+  partição, `cad_contas` passou de 97 a 101 linhas, `rel_contas_hierarquias` de 89 a 93 e
+  `cad_aliquotas` de 15 a 22, com a soma de `fator` de 3,873450 a 3,454950; as outras partições
+  repetiram as contagens e as somas de 2026-09-25.
+- **A carga** (`started_at` 15:55:29; 8 CPUs, 15.617 MB, e `environment_limits` com 8 threads e
+  `memory_limit` de 6.384 MiB, a metade dos 12.768 MB disponíveis) conferiu as 12 tabelas, com
+  354.048.596 linhas em 25 partições, contagens e somas iguais em toda partição e os mesmos três
+  itens fora do modelo, em 521,1 s somados, contra 219,4 s para 187.340.509 linhas em 21
+  partições em 2026-09-25. As partições de antes repetiram os tempos daquele dia (as de
+  `cad_lancamentos` em 31,5 s, 20,8 s, 54,9 s e 32,0 s). A 2026-07-31 de `cad_lancamentos` entrou
+  em 268,2 s, a 0,53 milhão de linhas por segundo, contra cerca de 1 milhão nas outras quatro:
+  com 2,7 vezes as linhas da 2026-03-31, levou 4,9 vezes o tempo. O pico do processo foi a
+  9.161 MB, contra 8.647 MB depois da 2026-03-31, acima do limite do DuckDB como nas cargas
+  anteriores, e o processo terminou. O `history` mostra o commit dela às 16:03:30, 217 s depois do
+  commit da 2026-06-30: o tempo da partição conta também, depois do commit, a releitura de
+  `read_back` e a contagem do script [inferido].
+- **A auditoria** de `cad_lancamentos` 2026-01-31 com `--foreign-keys`, na versão 5, repetiu os
+  989.852 órfãos de `data_base`, `sistema` e `contrato` e deu o total de `valor`
+  117.667.407.519,194421, a soma da carga; as outras chaves passaram.
+- **`snapshot`, `vacuum` e `archive`**: o snapshot `carga-2026-09-24` gravou as 12 tabelas, com
+  `cad_lancamentos` na versão 5; o `vacuum` achou 0 arquivo a apagar em cada tabela; o `archive`
+  copiou os 25 arquivos, um por partição, e moveu o snapshot para `archived`, com
+  `cad_lancamentos` em 19,1 s e pico de 348 MB, o arquivo da 2026-07-31 em 7,4 s, contra 11,1 s
+  para as quatro partições em 2026-09-24 às 23:25.
+
+**Consequências**: nenhuma leitura contradiz o plano. A máquina de 8 vCPUs e cerca de 16 GB
+carregou a partição de 142 milhões de linhas com o pico do processo em 9,2 GB, e o tempo dela, que
+cresceu mais que as linhas, entra no dimensionamento da máquina pelas medições que
+[`PLAN.md`](PLAN.md) pede. O item das credenciais de uma hora em
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) segue esperando `probes/credentials.py` sobre o código
 novo, e o das versões não correntes ganha a contagem deste dia.

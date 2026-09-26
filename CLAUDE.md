@@ -797,9 +797,10 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   Redshift connection outliving its password, and DuckDB's `delta_scan` failing once after the key
   its secret holds expired, since only `httpfs` triggers `REFRESH auto`. The user chose the same
   day the secret with `boto3`'s key, which the DuckDB engine recreates at each session entry when
-  it changes; the battery of 2026-09-26 passed every suite case again (S3 531, the stale-key
-  case among them), and the probe, which reads the secret through the engine, has its target run
-  pending (`plan/OPEN_QUESTIONS.md`). The target runs of 2026-09-23 are in
+  it changes; the battery of 2026-09-26 passed every suite case again (S3 531, the stale-key case
+  among them) and loaded the source's new month 2026-07-31 (`.claude/memory/source-base.md`), and
+  the probe, which reads the secret through the engine, has its target run pending
+  (`plan/OPEN_QUESTIONS.md`). The target runs of 2026-09-23 are in
   `.claude/memory/environments.md`.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
