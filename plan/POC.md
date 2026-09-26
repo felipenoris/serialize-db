@@ -4377,3 +4377,40 @@ três sessões de teste no contêiner de desenvolvimento (Linux x86_64, 4 vCPUs 
 
 **Consequências**: um item em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), que espera a decisão do
 usuário; nada muda em `src/` nem em `pyproject.toml` antes dela.
+
+## O que a bateria de 2026-09-26 às 15:14 mostrou no ambiente alvo
+
+Em 2026-09-26, de 15:14 a 15:47 UTC, o usuário rodou no ambiente alvo o bloco "Probes e Testes -
+BN" de `SUITE.md`, os cinco probes e as sete sessões do pytest, numa máquina de 8 vCPUs e
+15,3 GiB (Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.6, pyarrow 25.0.1, boto3 1.43.102,
+`redshift_connector` 2.1.17, `sa-east-1`). A `main` era a de 2026-09-25 às 22:35 UTC ou
+posterior, com a renovação do secret do DuckDB [inferido: as 576 coletas e o `SP-9`, que lista o
+`redshift_connector` entre as dependências de execução, só batem com ela]. Os relatórios ficam fora
+de `plan/`, com os achados aqui. Nenhum caso falhou, e as leituras repetem as de 2026-09-25 às
+17:25, salvo:
+
+- **O secret pela chave do `boto3` passou no alvo.** A sessão `-m "not redshift"` aprovou os 531
+  casos em 219,7 s, contra 512 em 225,5 s. Entre os novos está
+  `test_delta_scan_reads_after_the_secret_holds_a_stale_key`: com um secret de chave desconhecida
+  plantado no motor sobre o bucket da suíte, que tem SSE-KMS, a entrada da sessão seguinte o
+  recriou com a chave, o segredo e o token do contêiner como parâmetros do `CREATE SECRET`, e o
+  `delta_scan` leu as 3 linhas. Os casos S3 das sessões criaram o secret pela chave do `boto3`,
+  sem a extensão `aws`. A troca da chave pelo contêiner durante uma execução fica para
+  `probes/credentials.py`.
+- **As suítes Redshift, do motor e da publicação** aprovaram 45 casos duas vezes (570,5 s e
+  535,5 s), 6 duas vezes (85,3 s e 89,5 s) e 8 duas vezes (183,4 s cada), com as leituras de
+  2026-09-25 salvo os tempos, os ids e a slice no nome do arquivo do `UNLOAD`, que muda entre
+  execuções ([`redshift.md`](redshift.md)).
+- **`RS-12` voltou sem linha.** O `count(*)` de `sys_load_error_detail` dos últimos 30 dias não
+  devolveu linha, em 15,1 s, como em 2026-09-23 às 22:49 (12,8 s) e em 2026-09-24 às 23:25; às
+  01:41 de 2026-09-24 e em 2026-09-25 contou 25 e 45 erros, o último em 3,3 s. A contagem sem
+  linha não quer dizer zero erros: as suítes de 2026-09-25 gravaram outros depois da leitura de 45,
+  e a suíte Redshift deste dia leu na visão, por `select ... limit 1`, o erro que o seu caso do
+  `VARCHAR` acabara de provocar.
+- **`BK-14`** contou 5.269 versões não correntes (159.538.248 bytes) e 4.883 marcadores de exclusão
+  sob a raiz das suítes, contra 2.980 (86.695.363 bytes) e 2.788 em 2026-09-25 às 17:26: 2.289
+  versões e 72.842.885 bytes entre as duas leituras.
+
+**Consequências**: nenhuma leitura contradiz o plano. O item das credenciais de uma hora em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) segue esperando `probes/credentials.py` sobre o código
+novo, e o das versões não correntes ganha a contagem deste dia.

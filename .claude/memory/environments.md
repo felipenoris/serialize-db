@@ -104,6 +104,16 @@ timing out in 60.7 s and 30.3 s. Every suite case passed; `duckdb_threads.py` st
 because `SUITE.md` passed the root without `prd`, and `compact` refused the partition because a
 snapshot pointed at the current version. `plan/POC.md`
 
+The first part of the battery of 2026-09-26, the five probes and the seven pytest sessions from
+15:14 to 15:47 UTC (from `main` of 2026-09-25 at 22:35 or later, inferred from the 576 cases
+collected and `SP-9`), ran on 8 vCPUs and 15.3 GiB (Python 3.13.15, DuckDB 1.5.5, deltalake
+1.6.6, pyarrow 25.0.1, boto3 1.43.102, `redshift_connector` 2.1.17), DuckDB defaulting to 8
+threads and a 12.2 GiB `memory_limit`; the caller's credential expiring in 45 minutes (`RS-18`),
+the `RS-12` count returning no row in 15.1 s, 5,269 non-current versions (159,538,248 bytes) and
+4,883 delete markers under the test root (`BK-14`), Lake Formation and S3 Tables timing out in
+60.1 s and 30.6 s. Every suite case passed: S3 531 in 219.7 s, the DuckDB secret's stale-key case
+among them, Redshift 45, engine 6 and publication 8 twice each. `plan/POC.md`
+
 ## The prepared folder and the venv
 
 `pyproject.toml` declares no runtime dependencies and pins the `dev` group (SQLAlchemy, duckdb-engine,
