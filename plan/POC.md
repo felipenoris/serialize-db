@@ -4572,9 +4572,11 @@ máquina e com uma `HOME` vazia: `diagnose_aws.py` contra o moto, também com um
 `duckdb_threads.py` sobre a base fictícia de `tests/source_db_projetado.py` carregada em Delta, com
 `--threads 1 2 --repetitions 1` e com `--metadata nao_existe:Base.metadata`.
 
-- **Os relatórios diferiram só nas linhas corrigidas**, fora os tempos, os IPs que o DNS devolveu,
-  a memória disponível e o caminho do relatório. No `diagnose_aws.py`, a linha do endpoint do
-  resumo passou de `a suíte não o passa ao DuckDB (manutenção necessária)` a
+- **Os relatórios diferiram só nas linhas corrigidas**, fora o que muda a cada rodada: os tempos,
+  com o `threads` mais rápido de `DT-5` e as razões de `DT-6`, os IPs que o DNS devolveu, a
+  memória disponível, com o `memory_limit` que o motor tira dela, e o caminho do relatório. No
+  `diagnose_aws.py`, a linha do endpoint do resumo passou de
+  `a suíte não o passa ao DuckDB (manutenção necessária)` a
   `a suíte o passa ao boto3, ao PyArrow, ao delta-rs e ao secret do DuckDB (sem manutenção)`. Com o
   `AWS_ENDPOINT_URL_STS` inválido, o botocore levanta `ValueError: Invalid IPv6 URL` antes de a
   chamada sair, e o resumo, que dava o STS como `sem resposta` e pedia manutenção, diz
@@ -4582,9 +4584,9 @@ máquina e com uma `HOME` vazia: `diagnose_aws.py` contra o moto, também com um
   host do Redshift como endpoint de API (`sem endpoint VPC: redshift.example.invalid`), diz
   `sem região, os endpoints das APIs não foram resolvidos: defina AWS_DEFAULT_REGION`. No
   `duckdb_threads.py`, o `--metadata` que não importa saía com traceback e código 1 e sai com o
-  erro de uso do argparse e código 2 (`argument --metadata: nao_existe:Base.metadata: No module
-  named 'nao_existe'`), como o mesmo argumento de `scripts/migrate_parquet_to_delta.py`, que também
-  saía com traceback.
+  erro de uso do argparse e código 2
+  (`argument --metadata: nao_existe:Base.metadata: No module named 'nao_existe'`), como o mesmo
+  argumento de `scripts/migrate_parquet_to_delta.py`, que também saía com traceback.
 - **Os helpers do `probelib.py` no `diagnose_aws.py`** mudaram uma leitura: uma credencial em
   `PRESENCE_VARIABLES` definida como texto vazio saía `(ausente)` e sai `(vazia)`.
 - **As leituras que pedem conexão ou o alvo não rodaram aqui**: o rótulo de `pg_settings` com
