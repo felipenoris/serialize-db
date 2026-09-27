@@ -85,7 +85,7 @@ class ExecutionConflict(Exception):
     .. code-block:: python
 
         try:
-            run.publish(Projetado.__table__, partitions=["2026-08-31"])
+            run.publish_delta(Projetado.__table__, partitions=["2026-08-31"])
         except ExecutionConflict:
             raise   # nada desta chamada foi gravado; uma execução nova parte da versão atual
     """
@@ -140,8 +140,8 @@ class SandboxError(ValueError):
     """Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido, ou o
     motor Redshift sem as credenciais que o ``COPY`` e o ``UNLOAD`` pedem.
 
-    A mensagem nomeia o objeto; o cliente lê a versão publicada por ``run.published(table)`` em
-    vez de gravar no nome que o ``ingest`` ocupou, como a mensagem do ``loader`` indica, ou abre
+    A mensagem nomeia o objeto; o cliente lê a versão fixada por ``run.pinned(table)`` em vez
+    de gravar no nome que o ``ingest`` ocupou, como a mensagem do ``loader`` indica, ou abre
     um ``loader`` só por tabela. Sem ``iam_role`` na configuração, as credenciais vêm da sessão
     ``boto3``, e a mensagem diz onde ela procurou.
 
@@ -156,7 +156,8 @@ class SandboxError(ValueError):
 
 
 class AuditFailed(Exception):
-    """A auditoria reprovou, ou ``publish`` foi chamado sem a auditoria aprovada das partições.
+    """A auditoria reprovou, ou ``publish_delta`` foi chamado sem a auditoria aprovada das
+    partições.
 
     A execução encerra sem tocar o Delta; a mensagem nomeia a tabela, as partições e as
     verificações reprovadas, e o relatório, com o SQL e a amostra, vai para o log.
@@ -175,8 +176,9 @@ class PublicationError(Exception):
     não existe no esquema, ou uma tabela do modelo não tem versão a publicar, porque não está no
     snapshot pedido ou não existe no ambiente.
 
-    A mensagem diz o que o operador faz: ``serialize-db publish --init`` cria a tabela de controle
-    uma vez, e, no ``serialize-db publish``, ``--tables`` deixa de fora a tabela sem versão.
+    A mensagem diz o que o operador faz: ``serialize-db publish_redshift --init`` cria a tabela
+    de controle uma vez, e, no ``serialize-db publish_redshift``, ``--tables`` deixa de fora a
+    tabela sem versão.
 
     Exemplo:
 
@@ -184,5 +186,5 @@ class PublicationError(Exception):
 
         publication.publish_redshift(db, config, [Lancamento.__table__], "exec-42")
         # PublicationError: a tabela de controle ... não existe; crie-a uma vez com
-        # serialize-db publish --init (create_publications_table)
+        # serialize-db publish_redshift --init (create_publications_table)
     """

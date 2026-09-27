@@ -22,7 +22,8 @@ argumentos, o retorno e as exceções de cada função, está no menu: `serializ
   tabela sai do modelo.
 - **O DuckDB e o Redshift são sandboxes**: cada execução leva ao sandbox as tabelas de entrada,
   como view ou cópia do `delta_scan` no DuckDB e por `COPY` numa tabela do DDL do modelo no
-  Redshift, roda o pipeline, que grava as de saída em tabelas do DDL do modelo, audita e publica.
+  Redshift, roda o pipeline, que grava as de saída em tabelas do DDL do modelo, audita e publica
+  no Delta.
   O DDL de cada motor sai do modelo pela tabela de tipos abaixo, sem os dialetos do SQLAlchemy.
 - **Os dados atravessam a fronteira em lotes Arrow** (`pyarrow.RecordBatch`, `pyarrow.Table` ou
   `pyarrow.RecordBatchReader`), e `serialize_db.schema.cast` leva cada lote ao esquema do contrato
@@ -42,7 +43,7 @@ de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3
 `serialize_db.audit`, os dois motores, `serialize_db.engine.duckdb` e
 `serialize_db.engine.redshift`, a execução, `serialize_db.execution`, com `serialize-db run` e
 `serialize-db audit`, a publicação para os clientes no Redshift, `serialize_db.publication`,
-com `serialize-db publish`, a carga inicial da base Parquet atual, `serialize_db.load`, com
+com `serialize-db publish_redshift`, a carga inicial da base Parquet atual, `serialize_db.load`, com
 `serialize-db load`, a operação, `serialize-db snapshot`, `vacuum`, `compact`, `archive`,
 `export`, `history` e `channel`, com o runbook na página de `serialize_db.cli`, e o acesso de
 leitura à base com o modelo, `serialize_db.reader`, por `db.open_delta()` e `db.open_redshift()`.
@@ -375,7 +376,7 @@ serialize-db load --root s3://bucket/projeto/delta --environment prd \
 `serialize_db.Database` junta a raiz, o ambiente e os modelos, e `serialize_db.Execution` é o ciclo
 de uma execução: a entrada do `with` abre as tabelas do ambiente, fixa a versão de cada uma e cria
 o sandbox, e o fim do bloco o descarta. Entre os dois, o pipeline traz as tabelas, roda a lógica,
-audita e publica:
+audita e publica no Delta:
 
 ```python
 import sqlalchemy as sa
@@ -389,38 +390,38 @@ with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as ru
     with run.sandbox.stream(sa.select(Lancamento)) as stream, \
             run.sandbox.loader(Projetado.__table__) as loader:
         for batch in stream:
-            ids = run.next_ids(Projetado.__table__, batch.num_rows)   # faixa contígua, sob lock
+            ids = run.next_ids(Projetado.__table__, batch.num_rows)      # faixa contígua, sob lock
             loader.write(project(batch, ids))
-    run.audit(Projetado.__table__, ["2026-08-31"])                   # AuditFailed na reprovação
-    run.publish(Projetado.__table__, partitions=["2026-08-31"])      # overwrite por partição
+    run.audit(Projetado.__table__, ["2026-08-31"])                      # AuditFailed na reprovação
+    run.publish_delta(Projetado.__table__, partitions=["2026-08-31"])   # overwrite por partição
 ```
 
 `run.sandbox` é o motor da execução, que o `Execution` constrói pelo segundo argumento: `"duckdb"`
 dá um `serialize_db.engine.duckdb.DuckDBEngine`, e `"redshift"` um
 `serialize_db.engine.redshift.RedshiftEngine`. O pipeline chama nele `stream`, `loader`, `query`,
 `load`, `session` e `new_session`, e pelo `run` as primitivas que precisam da pasta e da versão
-fixada de cada tabela: `run.ingest`, `run.published`, `run.audit` e `run.publish`. Os dois motores
-seguem a interface `serialize_db.engine.Engine`, e o pipeline escrito em statements Core roda em
-qualquer um deles; as seções seguintes descrevem cada motor. Fora de uma execução, como nos
+fixada de cada tabela: `run.ingest`, `run.pinned`, `run.audit` e `run.publish_delta`. Os dois
+motores seguem a interface `serialize_db.engine.Engine`, e o pipeline escrito em statements Core
+roda em qualquer um deles; as seções seguintes descrevem cada motor. Fora de uma execução, como nos
 testes, o motor se constrói à mão, com a pasta e a versão de cada tabela em cada chamada, e a
 página de cada motor traz o exemplo.
 
 O terceiro argumento do `Execution`, opcional, é a partição da execução, `run.partition`:
 `run.previous_partitions` devolve as partições até ela, e o log a registra. `run.audit` e
-`run.publish` recebem as partições por argumento.
+`run.publish_delta` recebem as partições por argumento.
 
-`run.publish` exige a auditoria aprovada das partições na própria execução e recusa com
+`run.publish_delta` exige a auditoria aprovada das partições na própria execução e recusa com
 `serialize_db.errors.ExecutionConflict` a tabela em que outra execução gravou dados depois da
 abertura. Cada partição sai do sandbox num arquivo que o motor grava e entra no log por
 `serialize_db.delta.register_files`, depois das conferências. `run.snapshot("2026T3")` marca a
 execução: os commits levam o nome, e o encerramento sem erro grava as versões de todas as tabelas
 no arquivo de controle do ambiente; `serialize-db channel --name default --snapshot 2026T3` aponta
 depois o canal `default`, o snapshot que o leitor Delta lê sem argumento e que
-`serialize-db publish --channel default` publica.
+`serialize-db publish_redshift --channel default` publica.
 
 A linha de comando abre a mesma execução para uma função `modulo:funcao` que recebe `run`, e
 `serialize-db audit` imprime o texto das verificações de uma tabela ou roda a auditoria sobre a
-versão publicada:
+versão atual do Delta:
 
 ```shell
 serialize-db run --root s3://bucket/projeto/delta --environment prd --partition 2026-08-31 \
@@ -460,30 +461,30 @@ with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as ru
 lote, um leitor ou um iterável de lotes; um DataFrame é recusado com a conversão sem cópia na
 mensagem (`pa.Table.from_pandas(frame, preserve_index=False)`). O nome de cada tabela no sandbox
 tem um só dono: o `loader` recusa com `serialize_db.errors.SandboxError` o nome que o `ingest`
-ocupou, e `run.published(table)` lê a versão fixada sem ocupar nome.
+ocupou, e `run.pinned(table)` lê a versão fixada sem ocupar nome.
 `with run.sandbox.session() as connection:` dá a conexão crua ao que as primitivas não cobrem, e
 `with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo. A
 execução usa sempre os limites da máquina; `DuckDBConfig(threads=..., memory_limit=...)` os troca
 só no motor construído à mão.
 
-### Auditar antes de publicar
+### Auditar antes de publicar no Delta
 
 `run.audit(table, partitions)` roda no motor as verificações que `serialize_db.audit.checks`
 deriva do modelo: nulo em coluna `NOT NULL`, texto acima de `String(n)` em bytes, texto numa coluna
 `Text` ou documento JSON acima de 65.535 bytes, JSON inválido, a partição fora da coluna de origem
 e do padrão de nome de pasta, a chave repetida na partição e, quando a chave não inclui a
-partição, contra as demais partições da versão publicada, e o órfão de chave estrangeira com
+partição, contra as demais partições da versão fixada, e o órfão de chave estrangeira com
 `foreign_keys=True`. Ele devolve o `AuditReport` aprovado e levanta
 `serialize_db.errors.AuditFailed` na reprovação. O relatório traz o SQL de cada verificação, até 20
 linhas de amostra das reprovadas, as somas de controle e as colunas `Double` com `NaN` ou infinito,
-que a publicação grava sem mínimo e máximo. `serialize_db.audit.audit_sql(table, "redshift")`
+que `run.publish_delta` grava sem mínimo e máximo. `serialize_db.audit.audit_sql(table, "redshift")`
 imprime o texto de cada verificação, para depuração.
 
-`run.publish` leva cada partição auditada ao Delta pelo `export_partition` do motor: o motor DuckDB
-registra o arquivo que o seu `COPY` gravou, e o motor Redshift os arquivos do seu `UNLOAD`, depois
-das conferências do rodapé; a partição com uma coluna `Double` de valor não finito sai do Redshift
-por `serialize_db.delta.publish_partition`, com um aviso no log, porque o rodapé do `UNLOAD` deixa o
-`NaN` fora do máximo.
+`run.publish_delta` leva cada partição auditada ao Delta pelo `export_partition` do motor: o motor
+DuckDB registra o arquivo que o seu `COPY` gravou, e o motor Redshift os arquivos do seu `UNLOAD`,
+depois das conferências do rodapé; a partição com uma coluna `Double` de valor não finito sai do
+Redshift por `serialize_db.delta.publish_partition`, com um aviso no log, porque o rodapé do
+`UNLOAD` deixa o `NaN` fora do máximo.
 
 ### Rodar o pipeline no sandbox Redshift
 
@@ -494,8 +495,8 @@ par informado, com o `USE` no banco do datashare e o `search_path` no esquema; s
 `Execution` a lê das variáveis `SERIALIZE_DB_REDSHIFT_*` por `RedshiftConfig.from_environment()`.
 `run.ingest` carrega as partições por `COPY ... MANIFEST`, `stream` lê os arquivos de um `UNLOAD`
 em `<raiz>/<ambiente>/staging/<execution_id>/`, `loader` grava ali um Parquet e o carrega por
-`COPY` no `close`, e `run.publish` registra os arquivos do `UNLOAD` na pasta da partição. O fim da
-execução apaga as tabelas `exec_<id>_*` que ela criou e os arquivos do `staging/` e fecha a
+`COPY` no `close`, e `run.publish_delta` registra os arquivos do `UNLOAD` na pasta da partição. O
+fim da execução apaga as tabelas `exec_<id>_*` que ela criou e os arquivos do `staging/` e fecha a
 conexão:
 
 ```python
@@ -522,8 +523,8 @@ nunca vai a log, e `serialize_db.engine.redshift.mask` o mascara.
 
 ### Atualizar uma tabela de domínio sem partição
 
-Uma tabela de domínio, como a de moedas, não declara `partition_by`, e cada publicação a substitui
-inteira:
+Uma tabela de domínio, como a de moedas, não declara `partition_by`, e cada publicação no Delta a
+substitui inteira:
 
 ```python
 class Moeda(Base):
@@ -553,25 +554,25 @@ with Execution(db, "duckdb") as run:
     run.sandbox.query(sa.insert(Moeda.__table__).values(
         id_moeda=run.next_ids(Moeda.__table__, 1)[0], sigla="EUR", nome="Euro"))
     run.audit(Moeda.__table__, None)
-    run.publish(Moeda.__table__)
+    run.publish_delta(Moeda.__table__)
 ```
 
-`run.audit(table, None)` confere a tabela inteira do sandbox, e `run.publish(table)`, sem
+`run.audit(table, None)` confere a tabela inteira do sandbox, e `run.publish_delta(table)`, sem
 `partitions`, grava a tabela num commit que substitui a versão anterior. `run.next_ids` dá os ids
 acima do maior da versão fixada, a partir de 1 na tabela nova.
 
-Na primeira carga a tabela ainda não existe: `run.ingest` e `run.published` a recusam com
+Na primeira carga a tabela ainda não existe: `run.ingest` e `run.pinned` a recusam com
 `serialize_db.errors.SandboxError`, os dados entram por `run.sandbox.load` ou pelo `loader`, e
-`run.publish` cria a tabela antes do commit. Para gravar a tabela a partir da versão publicada sem
-ocupar o nome dela no sandbox, `run.published` a lê e `run.sandbox.load` grava o resultado:
+`run.publish_delta` cria a tabela antes do commit. Para gravar a tabela a partir da versão fixada
+sem ocupar o nome dela no sandbox, `run.pinned` a lê e `run.sandbox.load` grava o resultado:
 
 ```python
 with Execution(db, "duckdb") as run:
-    current = run.published(Moeda.__table__)
+    current = run.pinned(Moeda.__table__)
     kept = run.sandbox.query(sa.select(current).where(current.c.sigla != "EUR"))
     run.sandbox.load(Moeda.__table__, kept)
     run.audit(Moeda.__table__, None)
-    run.publish(Moeda.__table__)
+    run.publish_delta(Moeda.__table__)
 ```
 
 A auditoria da tabela de domínio não olha as tabelas que a referenciam: a moeda removida que outra
@@ -585,7 +586,7 @@ serialize-db run --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata pipeline.dominios:main
 ```
 
-`serialize-db publish` também substitui inteira, no Redshift, a tabela sem partição.
+`serialize-db publish_redshift` também substitui inteira, no Redshift, a tabela sem partição.
 
 ### Publicar para os clientes no Redshift
 
@@ -597,7 +598,7 @@ controle é gravada por último; cada tabela publicada vai ao log com as partiç
 de memória residente do processo. A tabela de controle é criada uma vez, pelo usuário:
 
 ```shell
-serialize-db publish --init
+serialize-db publish_redshift --init
 ```
 
 A publicação vem depois da execução, pela linha de comando, que escolhe as versões por
@@ -608,15 +609,15 @@ apontou, e `current` a versão atual de cada tabela, sem snapshot; `--status` mo
 ```shell
 serialize-db channel --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --name default --snapshot 2026T3
-serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --channel default
-serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --snapshot 2026T2 --tables cad_lancamentos_projetados
-serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --channel current
-serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --status
-serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --unpublish --tables cad_lancamentos_projetados
 ```
 

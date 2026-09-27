@@ -293,7 +293,7 @@ def test_execution_without_partition_publishes_a_table_without_partition(
             assert run.partition is None
             run.sandbox.load(composite, first_rows)
             run.audit(composite, None)
-            assert run.publish(composite) == {composite.name: 1}
+            assert run.publish_delta(composite) == {composite.name: 1}
     assert "execução dom-1 aberta: sem partição" in caplog.text
     assert "execução dom-1 concluída: sem partição" in caplog.text
 
@@ -302,7 +302,7 @@ def test_execution_without_partition_publishes_a_table_without_partition(
         run.ingest(composite, materialize=True)
         run.sandbox.query(sa.insert(composite).values(id_a=3, id_b=1))
         run.audit(composite, None)
-        assert run.publish(composite) == {composite.name: 2}
+        assert run.publish_delta(composite) == {composite.name: 2}
     published = delta.open_table(db.uri(composite), db.storage).to_pyarrow_dataset().to_table()
     assert sorted(published.column("id_a").to_pylist()) == [1, 2, 3]
 
@@ -365,18 +365,18 @@ def test_ingest_of_several_tables_uses_extra_sessions(db: Database, folder: Path
 # ---------------------------------------------------------------- a auditoria e a publicação
 
 
-def test_publish_requires_the_audit(db: Database, caplog: pytest.LogCaptureFixture) -> None:
-    """``publish`` sem a auditoria aprovada é ``AuditFailed``; com ``audit=False`` passa e o log
-    registra."""
+def test_publish_delta_requires_the_audit(db: Database, caplog: pytest.LogCaptureFixture) -> None:
+    """``publish_delta`` sem a auditoria aprovada é ``AuditFailed``; com ``audit=False`` passa e
+    o log registra."""
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         with pytest.raises(AuditFailed, match="exige a auditoria"):
-            run.publish(PROJECTED, partitions=["2026-08-31"])
+            run.publish_delta(PROJECTED, partitions=["2026-08-31"])
         with caplog.at_level(logging.WARNING, logger="serialize_db.execution"):
-            versions = run.publish(PROJECTED, partitions=["2026-08-31"], audit=False)
+            versions = run.publish_delta(PROJECTED, partitions=["2026-08-31"], audit=False)
         assert versions == {PROJECTED.name: 1}
         assert "sem auditoria" in caplog.text
         with pytest.raises(ContractError, match="exige partitions"):
-            run.publish(PROJECTED, audit=False)
+            run.publish_delta(PROJECTED, audit=False)
 
 
 def test_failed_audit_leaves_the_delta_untouched(db: Database, folder: Path) -> None:
@@ -390,7 +390,7 @@ def test_failed_audit_leaves_the_delta_untouched(db: Database, folder: Path) -> 
             repeated = pa.concat_tables([once, once])
             run.sandbox.load(PROJECTED, repeated)
             run.audit(PROJECTED, ["2026-08-31"])
-            run.publish(PROJECTED, partitions=["2026-08-31"])
+            run.publish_delta(PROJECTED, partitions=["2026-08-31"])
     assert not delta.table_exists(db.uri(PROJECTED), db.storage)
     assert not (folder / "sandbox_exec-1" / "exec-1.duckdb").exists()
 
@@ -407,7 +407,7 @@ def test_rerun_with_the_same_execution_id_produces_the_same_rows(
             run.ingest(ENTRIES, partitions=["2026-08-31"])
             project(run, "2026-08-31")
             run.audit(PROJECTED, ["2026-08-31"])
-            versions = run.publish(PROJECTED, partitions=["2026-08-31"])
+            versions = run.publish_delta(PROJECTED, partitions=["2026-08-31"])
         published = delta.open_table(db.uri(PROJECTED), db.storage).to_pyarrow_dataset().to_table()
         attempts.append({"version": versions[PROJECTED.name], "rows": published.num_rows,
                          "valor": sorted(published.column("valor").to_pylist())})
@@ -417,7 +417,7 @@ def test_rerun_with_the_same_execution_id_produces_the_same_rows(
     assert second["version"] == first["version"] + 1
 
 
-def test_publish_aborts_when_data_changed_since_open(db: Database) -> None:
+def test_publish_delta_aborts_when_data_changed_since_open(db: Database) -> None:
     """Um ``append`` de outra execução depois da abertura é ``ExecutionConflict`` sem commit; uma
     compactação não é, e a versão fixada avança."""
     uri = db.uri(ENTRIES)
@@ -428,7 +428,7 @@ def test_publish_aborts_when_data_changed_since_open(db: Database) -> None:
         before = delta.open_table(uri, db.storage).version()
         run.audit(ENTRIES, ["2026-08-31"])
         with pytest.raises(ExecutionConflict, match="2026-08-31"):
-            run.publish(ENTRIES, partitions=["2026-08-31"])
+            run.publish_delta(ENTRIES, partitions=["2026-08-31"])
         assert delta.open_table(uri, db.storage).version() == before
 
     # A compactação depois da abertura.
@@ -436,7 +436,8 @@ def test_publish_aborts_when_data_changed_since_open(db: Database) -> None:
         delta.compact(uri, ENTRIES, ["2026-08-31"], db.storage)
         run.audit(ENTRIES, ["2026-08-31"])
         compacted = delta.open_table(uri, db.storage).version()
-        assert run.publish(ENTRIES, partitions=["2026-08-31"]) == {ENTRIES.name: compacted + 1}
+        versions = run.publish_delta(ENTRIES, partitions=["2026-08-31"])
+        assert versions == {ENTRIES.name: compacted + 1}
 
 
 def test_two_executions_on_the_same_partition_conflict(db: Database) -> None:
@@ -446,19 +447,19 @@ def test_two_executions_on_the_same_partition_conflict(db: Database) -> None:
     with first, second:
         for run in (first, second):
             run.audit(ENTRIES, ["2026-08-31"])
-        first.publish(ENTRIES, partitions=["2026-08-31"])
+        first.publish_delta(ENTRIES, partitions=["2026-08-31"])
         with pytest.raises(ExecutionConflict):
-            second.publish(ENTRIES, partitions=["2026-08-31"])
+            second.publish_delta(ENTRIES, partitions=["2026-08-31"])
 
 
-def test_publish_with_two_workers_matches_one(db: Database, folder: Path) -> None:
+def test_publish_delta_with_two_workers_matches_one(db: Database, folder: Path) -> None:
     """O mesmo resultado com ``max_workers=1`` e ``2``; a falha de uma tabela deixa as outras
     terminarem e leva o resultado de cada uma numa nota."""
     results = {}
     for workers in (1, 2):
         database = Database(str(folder / f"delta_{workers}"), "prd", Base.metadata)
         with Execution(database, FakeEngine(database.storage), "2026-08-31") as run:
-            results[workers] = run.publish(ENTRIES, PROJECTED, partitions=["2026-08-31"],
+            results[workers] = run.publish_delta(ENTRIES, PROJECTED, partitions=["2026-08-31"],
                                            audit=False, max_workers=workers)
     assert results[1] == results[2] == {ENTRIES.name: 1, PROJECTED.name: 1}
 
@@ -472,7 +473,7 @@ def test_publish_with_two_workers_matches_one(db: Database, folder: Path) -> Non
     engine = FailingEngine(database.storage)
     with Execution(database, engine, "2026-08-31") as run:
         with pytest.raises(ExecutionConflict, match="conflito plantado") as failure:
-            run.publish(entries_copy, projected_copy, extra, partitions=["2026-08-31"],
+            run.publish_delta(entries_copy, projected_copy, extra, partitions=["2026-08-31"],
                         audit=False, max_workers=1)
     note = failure.value.__notes__[0]
     assert "cad_lancamentos: concluída" in note
@@ -483,11 +484,13 @@ def test_publish_with_two_workers_matches_one(db: Database, folder: Path) -> Non
     # A tabela sem partição com partitions é ContractError.
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         with pytest.raises(ContractError, match="tabela sem partição"):
-            run.publish(ENTRIES, Composta.__table__, partitions=["2026-08-31"], audit=False,
+            run.publish_delta(ENTRIES, Composta.__table__, partitions=["2026-08-31"], audit=False,
                         max_workers=2)
 
 
-def test_publish_passes_the_nonfinite_columns_to_the_export(db: Database, folder: Path) -> None:
+def test_publish_delta_passes_the_nonfinite_columns_to_the_export(
+    db: Database, folder: Path
+) -> None:
     """O motor recebe, por partição, as colunas ``Double`` não finitas da auditoria e a contagem
     dela; a partição sem elas recebe a lista vazia; com ``audit=False``, todas as ``Double`` e
     nenhuma contagem; no motor DuckDB, a partição com ``NaN`` sai sem o mínimo e o máximo da
@@ -495,8 +498,8 @@ def test_publish_passes_the_nonfinite_columns_to_the_export(db: Database, folder
     engine = FakeEngine(db.storage, nonfinite={"2026-07-31": ("valor",)})
     with Execution(db, engine, "2026-08-31") as run:
         run.audit(PROJECTED, ["2026-07-31", "2026-08-31"])
-        run.publish(PROJECTED, partitions=["2026-07-31", "2026-08-31"])
-        run.publish(PROJECTED, partitions=["2026-09-30"], audit=False)
+        run.publish_delta(PROJECTED, partitions=["2026-07-31", "2026-08-31"])
+        run.publish_delta(PROJECTED, partitions=["2026-09-30"], audit=False)
     exports = engine.exports
     assert [export["value"] for export in exports] == ["2026-07-31", "2026-08-31", "2026-09-30"]
     assert [export["expected_rows"] for export in exports] == [3, 3, None]
@@ -510,7 +513,7 @@ def test_publish_passes_the_nonfinite_columns_to_the_export(db: Database, folder
         run.sandbox.load(PROJECTED, with_nan)
         report = run.audit(PROJECTED, ["2026-06-30"])
         assert report.nonfinite_columns == {"2026-06-30": ("valor",)}
-        run.publish(PROJECTED, partitions=["2026-06-30"])
+        run.publish_delta(PROJECTED, partitions=["2026-06-30"])
     published = delta.open_table(db.uri(PROJECTED), db.storage)
     actions = pa.table(published.get_add_actions(flatten=True))
     june = actions.filter(pc.equal(actions.column("partition.data_base_str"), "2026-06-30"))
@@ -522,7 +525,7 @@ def test_commit_metadata_in_history(db: Database) -> None:
     """``serialize_db_execution_id`` e ``serialize_db_input_versions`` no ``history``;
     ``serialize_db_snapshot`` só na execução marcada."""
     with Execution(db, FakeEngine(db.storage), "2026-08-31", "exec-comum") as run:
-        run.publish(PROJECTED, partitions=["2026-08-31"], audit=False)
+        run.publish_delta(PROJECTED, partitions=["2026-08-31"], audit=False)
     history = delta.open_table(db.uri(PROJECTED), db.storage).history(limit=1)[0]
     assert history["serialize_db_execution_id"] == "exec-comum"
     assert "serialize_db_snapshot" not in history
@@ -531,7 +534,7 @@ def test_commit_metadata_in_history(db: Database) -> None:
     # A execução marcada.
     with Execution(db, FakeEngine(db.storage), "2026-08-31", "exec-marcada") as run:
         run.snapshot("2026T3")
-        run.publish(PROJECTED, partitions=["2026-08-31"], audit=False)
+        run.publish_delta(PROJECTED, partitions=["2026-08-31"], audit=False)
     marked = delta.open_table(db.uri(PROJECTED), db.storage).history(limit=1)[0]
     assert marked["serialize_db_snapshot"] == "2026T3"
 
@@ -541,7 +544,7 @@ def test_snapshot_writes_the_control_file_at_exit(db: Database) -> None:
     execução que falha não o grava."""
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         run.snapshot("2026T3")
-        run.publish(PROJECTED, partitions=["2026-08-31"], audit=False)
+        run.publish_delta(PROJECTED, partitions=["2026-08-31"], audit=False)
         _, fingerprint = delta.read_snapshots(db.storage, "prd")
         assert fingerprint is None  # só no encerramento
     control, _ = delta.read_snapshots(db.storage, "prd")
@@ -566,7 +569,7 @@ def projected_pipeline(run: Execution) -> None:
     run.ingest(ENTRIES, partitions=[run.partition])
     project(run, run.partition)
     run.audit(PROJECTED, [run.partition])
-    run.publish(PROJECTED, partitions=[run.partition])
+    run.publish_delta(PROJECTED, partitions=[run.partition])
 
 
 def repeated_key_pipeline(run: Execution) -> None:
@@ -582,7 +585,7 @@ def conflicting_pipeline(run: Execution) -> None:
     uri = run.db.uri(ENTRIES)
     written = rows(ENTRIES, run.partition, range(900, 902))
     delta.publish_partition(uri, ENTRIES, run.partition, written, {}, run.db.storage)
-    run.publish(ENTRIES, partitions=[run.partition], audit=False)
+    run.publish_delta(ENTRIES, partitions=[run.partition], audit=False)
 
 
 def composite_pipeline(run: Execution) -> None:
@@ -590,7 +593,7 @@ def composite_pipeline(run: Execution) -> None:
     data = pa.table({"id_a": pa.array([1, 2], pa.int64()), "id_b": pa.array([1, 1], pa.int64())})
     run.sandbox.load(Composta.__table__, data)
     run.audit(Composta.__table__, None)
-    run.publish(Composta.__table__)
+    run.publish_delta(Composta.__table__)
 
 
 def previous_partitions_pipeline(run: Execution) -> None:
@@ -708,8 +711,8 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
 def test_cli_exits_with_2_on_the_redshift_config_without_connection(
     db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
-    """``run`` e ``audit`` com ``--engine redshift`` e ``publish --init`` saem com 2, sem
-    traceback, na configuração do Redshift sem conexão; com ela, ``run`` sai com 2 no
+    """``run`` e ``audit`` com ``--engine redshift`` e ``publish_redshift --init`` saem com 2,
+    sem traceback, na configuração do Redshift sem conexão; com ela, ``run`` sai com 2 no
     ``--execution-id`` que não deixa 63 bytes ao nome no prefixo do sandbox."""
     from serialize_db.engine import redshift
 
@@ -723,7 +726,7 @@ def test_cli_exits_with_2_on_the_redshift_config_without_connection(
     assert cli.main([*run, "test_execution:redshift_engine_pipeline"]) == 2
     audit = ["audit", *common, "--table", "cad_lancamentos", "--engine", "redshift"]
     assert cli.main(audit) == 2
-    assert cli.main(["publish", "--init"]) == 2
+    assert cli.main(["publish_redshift", "--init"]) == 2
     printed_errors = capsys.readouterr().err
     assert printed_errors.count("RedshiftConfig sem conexão") == 3
 
@@ -737,11 +740,11 @@ def test_cli_exits_with_2_on_the_redshift_config_without_connection(
     assert "Traceback" not in printed_errors
 
 
-def test_cli_audit_prints_the_sql_and_audits_the_published_version(
+def test_cli_audit_prints_the_sql_and_audits_the_current_version(
     db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
     """``serialize-db audit --sql`` imprime o texto das verificações no dialeto, sem armazenamento;
-    sem ``--sql``, audita a versão publicada e sai com 0 na aprovação."""
+    sem ``--sql``, audita a versão atual do Delta e sai com 0 na aprovação."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     audit_command = ["audit", "--metadata", "test_execution:Base.metadata"]
     entries_audit = [*audit_command, "--table", "cad_lancamentos", "--partitions", "2026-08-31"]
@@ -751,11 +754,11 @@ def test_cli_audit_prints_the_sql_and_audits_the_published_version(
     assert "to_char(" in printed
     assert '"{prefix}cad_lancamentos"' in printed
 
-    # A auditoria da versão publicada.
+    # A auditoria da versão atual do Delta.
     assert cli.main([*entries_audit, "--root", db.root, "--environment", "prd"]) == 0
     printed = capsys.readouterr().out
     assert "cad_lancamentos na versão 4:" in printed
-    assert "chave_id_lancamento_publicada: aprovada" in printed
+    assert "chave_id_lancamento_tabela: aprovada" in printed
 
     # A tabela fora do modelo.
     assert cli.main([*audit_command, "--table", "nao_existe", "--sql"]) == 2

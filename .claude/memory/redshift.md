@@ -357,11 +357,11 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   0.05 s and `cad_lancamentos` runs five `COPY`). The publication suite passed its 8 cases twice on
   the same code. `plan/POC.md`, `plan/PLAN-STAGE-8.md`
 - A positional `COPY` cannot load a subset of a file's columns (the column list must match the
-  file's count, reading of 2026-09-21), so the audit's published staging carries every contract
-  column and is the same `exec_<id>_<tabela>_publicado` as `published()`, loaded once per
-  execution and only when a check that cites it runs. The stream's schema comes from the
-  `row_desc` of `select * from (<texto>) as t limit 0`, and each batch of the `UNLOAD` file is
-  cast to it (`INT96` coerced to microseconds, `SUPER` as text). `plan/PLAN-STAGE-5.md`
+  file's count, reading of 2026-09-21), so the audit's staging of the pinned version carries every
+  contract column and is the same `exec_<id>_<tabela>_versao_<versão>` as `pinned()`, loaded once
+  per execution and version, and only when a check that cites it runs. The stream's schema comes
+  from the `row_desc` of `select * from (<texto>) as t limit 0`, and each batch of the `UNLOAD` file
+  is cast to it (`INT96` coerced to microseconds, `SUPER` as text). `plan/PLAN-STAGE-5.md`
 - The loader of a table with a JSON column loads through a `CREATE TEMP TABLE` staging with the
   JSON in `VARCHAR(65535)` and `INSERT ... JSON_PARSE`, because the Parquet `COPY` into `SUPER`
   needs `SERIALIZETOJSON`, never read on a small string; the export serializes the column with

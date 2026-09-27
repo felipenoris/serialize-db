@@ -14,8 +14,8 @@ As primitivas:
 
 - ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, por
   ``COPY ... MANIFEST`` numa staging sem a coluna de partição e um ``INSERT`` com o valor dela;
-  ``published`` carrega a versão fixada em ``exec_<id>_<tabela>_publicado_<versão>`` e a devolve
-  como origem de consulta;
+  ``pinned`` carrega a versão fixada em ``exec_<id>_<tabela>_versao_<versão>`` e a devolve como
+  origem de consulta;
 - ``stream`` roda ``UNLOAD ... PARALLEL OFF`` para ``stream/<uuid>/`` sob o ``staging_prefix``
   (``<ambiente>/staging/<execution_id>/`` no sandbox, ``<id do leitor>/`` sob o ``unload_to`` do
   leitor Redshift) na thread de quem chama e lê os arquivos numa thread auxiliar, dois lotes à
@@ -96,7 +96,7 @@ log = logging.getLogger("serialize_db.engine.redshift")
 _NAMED = RedshiftDialect_redshift_connector(paramstyle="named")
 
 # O teto de um identificador do Redshift, em bytes, e o espaço que o prefixo deixa ao nome da
-# tabela e aos sufixos _staging, _publicado e _carga.
+# tabela e aos sufixos _staging, _versao e _carga.
 _IDENTIFIER_BYTES = 127
 _TABLE_NAME_BYTES = 63
 
@@ -764,7 +764,7 @@ class RedshiftLoader:
         if engine.name_in_use(self._name):
             raise SandboxError(
                 f"{table.name}: o nome já está ocupado no sandbox, pelo ingest ou por outro "
-                f"loader; leia a versão publicada por run.published({table.name})")
+                f"loader; leia a versão fixada por run.pinned({table.name})")
         self._engine = engine
         self._table = table
         self._schema: pa.Schema | None = None
@@ -875,8 +875,8 @@ class RedshiftLoader:
 
 
 @dataclasses.dataclass(frozen=True)
-class _PublishedStaging:
-    """A staging ``_publicado_<versão>`` da versão fixada de uma tabela: ``published`` a carrega
+class _PinnedStaging:
+    """A staging ``_versao_<versão>`` da versão fixada de uma tabela: ``pinned`` a carrega
     na hora, e a auditoria só quando uma verificação que a cita roda."""
 
     table: sa.Table
@@ -944,7 +944,7 @@ class RedshiftEngine:
         self._closed = False
         self._in_transaction = False
         self._parent = parent
-        self._pending: dict[str, _PublishedStaging] = {}
+        self._pending: dict[str, _PinnedStaging] = {}
         # A sessão a mais divide com a principal as tabelas a apagar e as stagings já carregadas.
         if parent is not None:
             self._created = parent._created
@@ -1248,8 +1248,8 @@ class RedshiftEngine:
             columns.append(sa.column(quoted_name(column.name, quote=True), column.type))
         return sa.table(quoted_name(name, quote=True), *columns)
 
-    def _ensure_loaded(self, staging: _PublishedStaging) -> None:
-        """A staging ``_publicado_<versão>`` carregada uma vez por execução, entre as sessões."""
+    def _ensure_loaded(self, staging: _PinnedStaging) -> None:
+        """A staging ``_versao_<versão>`` carregada uma vez por execução, entre as sessões."""
         with self._loaded_lock:
             if staging.name in self._loaded:
                 return
@@ -1259,18 +1259,18 @@ class RedshiftEngine:
             self._load_from_delta(staging.table, staging.name, staging.uri, staging.version, values)
             self._loaded.add(staging.name)
 
-    def published(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
+    def pinned(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
-        sandbox: a staging ``exec_<id>_<tabela>_publicado_<versão>``, carregada uma vez por
+        sandbox: a staging ``exec_<id>_<tabela>_versao_<versão>``, carregada uma vez por
         execução e por versão com todas as partições dela. Outra versão, depois de
-        ``run.publish`` avançar ``versions``, entra numa staging nova, e as duas ficam no esquema
-        até o ``cleanup``.
+        ``run.publish_delta`` avançar ``versions``, entra numa staging nova, e as duas ficam no
+        esquema até o ``cleanup``.
 
         Exemplo:
 
         .. code-block:: python
 
-            previous = engine.published(Projetado.__table__, uri, 57)
+            previous = engine.pinned(Projetado.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
@@ -1282,15 +1282,15 @@ class RedshiftEngine:
             e, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         """
         if version is None:
-            raise SandboxError(f"{table.name}: sem versão publicada, a tabela ainda não existe")
-        staging = self._published_staging(table, uri, version)
+            raise SandboxError(f"{table.name}: sem versão fixada, a tabela ainda não existe")
+        staging = self._pinned_staging(table, uri, version)
         self._ensure_loaded(staging)
         return self._source(table, staging.name)
 
-    def _published_staging(self, table: sa.Table, uri: str, version: int) -> _PublishedStaging:
+    def _pinned_staging(self, table: sa.Table, uri: str, version: int) -> _PinnedStaging:
         """A staging da versão, com a versão no nome: cada versão pedida tem a sua."""
-        name = f"{self.prefix}{table.name}_publicado_{version}"
-        return _PublishedStaging(table, name, uri, version)
+        name = f"{self.prefix}{table.name}_versao_{version}"
+        return _PinnedStaging(table, name, uri, version)
 
     # ------------------------------------------------------------ consulta, stream e carga
 
@@ -1450,8 +1450,8 @@ class RedshiftEngine:
 
     # ------------------------------------------------------------ a auditoria
 
-    def _published_max_key(self, table: sa.Table, uri: str, version: int) -> int | None:
-        """O ``max_key`` da versão publicada na chave sequencial, sem ler dados; ``None`` numa
+    def _pinned_max_key(self, table: sa.Table, uri: str, version: int) -> int | None:
+        """O ``max_key`` da versão fixada na chave sequencial, sem ler dados; ``None`` numa
         tabela sem ela."""
         key = sequential_key(table)
         if key is None:
@@ -1460,7 +1460,7 @@ class RedshiftEngine:
 
     def _pending_source(self, table: sa.Table, uri: str, version: int) -> sa.FromClause:
         """A versão fixada como origem de consulta, carregada só quando uma verificação a cita."""
-        staging = self._published_staging(table, uri, version)
+        staging = self._pinned_staging(table, uri, version)
         self._pending[staging.name] = staging
         return self._source(table, staging.name)
 
@@ -1487,7 +1487,7 @@ class RedshiftEngine:
         return sql.render(statement, "redshift", table.metadata, prefix=self.prefix)
 
     def _load_cited(self, text: str) -> None:
-        """Carrega a staging ``_publicado`` que o texto cita e ainda não foi carregada."""
+        """Carrega a staging ``_versao`` que o texto cita e ainda não foi carregada."""
         for name, staging in list(self._pending.items()):
             if quoted(name) in text:
                 self._ensure_loaded(staging)
@@ -1515,13 +1515,13 @@ class RedshiftEngine:
 
     def _check_result(self, table: sa.Table, check: audit.Check) -> CheckResult:
         """Uma verificação de chave ou de órfão; o ``skip_when`` verdadeiro a aprova sem rodá-la, e
-        a staging ``_publicado`` que ela cita é carregada só quando ela roda."""
+        a staging ``_versao`` que ela cita é carregada só quando ela roda."""
         text = self._text(check.statement, table)
         if check.skip_when is not None:
             skipped = self.query(self._text(check.skip_when, table)).column(0)[0].as_py()
             if skipped is True:
                 reason = ("dispensada: o menor valor da execução passa do maior da versão "
-                          "publicada")
+                          "fixada")
                 return CheckResult(check.name, text, 0, pa.table({}), True, reason)
         self._load_cited(text)
         found = self.query(text)
@@ -1545,31 +1545,32 @@ class RedshiftEngine:
         :param partitions: as partições da execução; ``None`` audita a tabela inteira do
             sandbox.
         :param uri: a URI da tabela fixada pela execução; com ``version``, dá a versão
-            publicada, que as chaves fora da partição comparam, carregada na staging
-            ``_publicado`` só quando a junção roda, e o ``max_key`` do ``skip_when``.
-        :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a chave publicada
-            não roda.
+            fixada, que as chaves fora da partição comparam, carregada na staging
+            ``_versao`` só quando a junção roda, e o ``max_key`` do ``skip_when``.
+        :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a verificação
+            ``chave_<colunas>_tabela`` não roda.
         :param foreign_keys: ``True`` confere as chaves estrangeiras, contra a tabela
             referenciada do sandbox ou contra a versão de ``referenced``.
-        :param key_scope: o escopo da unicidade; ``"partition"`` suprime a chave publicada, e
-            ``"table"`` a confere também na chave com a coluna de ``partition_source``.
+        :param key_scope: o escopo da unicidade; ``"partition"`` suprime a verificação
+            ``chave_<colunas>_tabela``, e ``"table"`` a confere também na chave com a coluna
+            de ``partition_source``.
         :param referenced: por tabela, a URI e a versão fixada da tabela referenciada que o
             sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``, carregada
-            na staging ``_publicado`` só quando a junção roda.
+            na staging ``_versao`` só quando a junção roda.
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
             ``Execution.audit`` levanta ``AuditFailed``.
         :raises ContractError: um valor de ``partitions`` fora da regra da partição.
         :raises SandboxError: sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
-            ``COPY`` da staging ``_publicado``.
+            ``COPY`` da staging ``_versao``.
         """
-        published = None
-        published_max_key = None
+        pinned = None
+        pinned_max_key = None
         if uri is not None and version is not None:
-            published = self._pending_source(table, uri, version)
-            published_max_key = self._published_max_key(table, uri, version)
+            pinned = self._pending_source(table, uri, version)
+            pinned_max_key = self._pinned_max_key(table, uri, version)
         sources = self._referenced_sources(table, foreign_keys, referenced)
         found, not_run = audit.checks_and_not_run(table, partitions, foreign_keys, key_scope,
-                                                  published, sources, published_max_key)
+                                                  pinned, sources, pinned_max_key)
         results = []
         totals: dict = {}
         nonfinite: dict = {}

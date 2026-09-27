@@ -6,7 +6,7 @@ particionado por ``data_base_str`` com a origem ``data_base``, com uma chave est
 ``Conta``, e ``Projetado``, a tabela que o pipeline grava, com as mesmas colunas.
 
 Eles conferem a configuração com os limites lidos do ambiente e a sessão única, a sessão a mais, a
-ingestão presa à versão e a poda por intervalo, os parâmetros do statement, a versão publicada, o
+ingestão presa à versão e a poda por intervalo, os parâmetros do statement, a versão fixada, o
 stream (o primeiro lote com a consulta rodando, o orçamento, o cancelamento, os erros), o loader (a
 transação no ``close``, o loader abandonado, o nome ocupado, a ordem do exemplo mensal, o pipeline
 de três estágios, a leitura durante uma carga esquecida), as formas por tabela, o ciclo com o
@@ -501,13 +501,13 @@ def test_ingest_opens_only_the_range_of_partitions(setup: Setup, name: str, want
     assert opened == {f"data_base_str={month}" for month in opened_months}
 
 
-def test_published_reads_the_pinned_version(setup: Setup) -> None:
-    """``published`` lê a versão fixada sem criar objeto no sandbox, e o ``loader`` da mesma tabela
+def test_pinned_reads_the_version_without_a_sandbox_name(setup: Setup) -> None:
+    """``pinned`` lê a versão fixada sem criar objeto no sandbox, e o ``loader`` da mesma tabela
     fica com o nome do modelo; sem versão, ``SandboxError``."""
     version = published_table(setup, PROJECTED, MONTHS[:2])
     engine = setup.engine
     uri = setup.uri(PROJECTED)
-    source = engine.published(PROJECTED, uri, version)
+    source = engine.pinned(PROJECTED, uri, version)
     later = entry_rows(MONTHS[2], 900, 5, PROJECTED)
     delta.publish_partition(uri, PROJECTED, MONTHS[2], later, METADATA, setup.storage)
     top = sa.func.max(source.c.id_lancamento).label("topo")
@@ -517,7 +517,7 @@ def test_published_reads_the_pinned_version(setup: Setup) -> None:
     engine.load(PROJECTED, entry_rows(MONTHS[5], 1000, 3, PROJECTED))
     assert count_of(engine, PROJECTED.name) == 3
     with pytest.raises(SandboxError, match="ainda não existe"):
-        engine.published(PROJECTED, uri, None)
+        engine.pinned(PROJECTED, uri, None)
 
 
 # ---------------------------------------------------------------- consulta e parâmetros
@@ -891,7 +891,7 @@ def test_loader_refuses_a_name_in_use(setup: Setup) -> None:
     engine.ingest(materialized, setup.uri(ENTRIES), version, materialize=True)
     engine.load(PROJECTED, entry_rows(MONTHS[0], 1, 5, PROJECTED))
     for table in (ENTRIES, materialized, PROJECTED):
-        with pytest.raises(SandboxError, match="run.published"):
+        with pytest.raises(SandboxError, match="run.pinned"):
             engine.loader(table)
     names = ("cad_lancamentos", "cad_materializada", PROJECTED.name)
     assert [count_of(engine, name) for name in names] == [10, 10, 5]
@@ -994,13 +994,13 @@ def test_pandas_round_trip_keeps_contract_types(setup: Setup) -> None:
 def test_audit_finds_each_defect(setup: Setup) -> None:
     """Nulo, texto acima do ``String(n)`` em bytes e dentro dele em caracteres, partição fora da
     origem, valor de partição fora da regra, JSON inválido, documento JSON acima de 65.535 bytes,
-    chave repetida na partição e contra a publicada, e chave única repetida contra a publicada."""
+    chave repetida na partição e contra a versão fixada, e chave única repetida contra ela."""
     version = published_table(setup, PROJECTED, MONTHS[:2], rows=10)
     engine = setup.engine
     good = entry_rows(MONTHS[2], 100, 7, PROJECTED)
     batch = good.to_pylist()
     batch[0]["id_lancamento"] = batch[1]["id_lancamento"]  # repetida na partição
-    batch[2]["id_lancamento"] = 3  # repetida contra a publicada
+    batch[2]["id_lancamento"] = 3  # repetida contra a versão fixada
     batch[3]["area"] = "ação ação"  # 9 caracteres, 13 bytes
     batch[4]["data_base"] = datetime.date(2026, 7, 31)  # fora da origem da partição
     batch[5]["meta"] = "{nao json"  # JSON inválido
@@ -1024,9 +1024,9 @@ def test_audit_finds_each_defect(setup: Setup) -> None:
     assert counters["json_meta"] == 1
     assert counters["texto_meta"] == 1
     assert result_of(report, "chave_id_lancamento").defects == 1
-    repeated = result_of(report, "chave_id_lancamento_publicada")
+    repeated = result_of(report, "chave_id_lancamento_tabela")
     assert repeated.sample.column(0).to_pylist() == [3]
-    assert result_of(report, "chave_codigo_publicada").defects == 0
+    assert result_of(report, "chave_codigo_tabela").defects == 0
     assert not report.passed
     assert not result_of(report, "linhas").passed
 
@@ -1040,9 +1040,9 @@ def test_audit_finds_each_defect(setup: Setup) -> None:
     assert engine.audit(PROJECTED, None).totals[None]["nulo_data_base_str"] == 1
 
 
-def test_audit_unique_key_against_the_published_version(setup: Setup) -> None:
-    """A chave única sem a coluna de partição, repetida entre a execução e a versão publicada,
-    reprova pela consulta contra ``published``."""
+def test_audit_unique_key_against_the_pinned_version(setup: Setup) -> None:
+    """A chave única sem a coluna de partição, repetida entre a execução e a versão fixada,
+    reprova pela consulta contra ``pinned``."""
     uri = setup.uri(PROJECTED)
     delta.create_table(uri, PROJECTED, setup.storage)
     published = entry_rows(MONTHS[0], 1, 3, PROJECTED)
@@ -1051,13 +1051,13 @@ def test_audit_unique_key_against_the_published_version(setup: Setup) -> None:
     repeated["codigo"] = published.column("codigo")[0].as_py()
     setup.engine.load(PROJECTED, pa.Table.from_pylist([repeated], schema=published.schema))
     report = setup.engine.audit(PROJECTED, [MONTHS[1]], uri, version)
-    sample = result_of(report, "chave_codigo_publicada").sample
+    sample = result_of(report, "chave_codigo_tabela").sample
     assert sample.column("codigo").to_pylist() == ["L000001"]
     assert result_of(report, "linhas").passed
     assert not report.passed
 
 
-def test_audit_skips_the_published_join_above_max_key(setup: Setup) -> None:
+def test_audit_skips_the_pinned_join_above_max_key(setup: Setup) -> None:
     """Com as chaves da execução acima do ``max_key`` da versão fixada, a junção não roda e o
     relatório diz por quê; com uma chave abaixo dele, a junção roda e acha a repetição."""
     version = published_table(setup, PROJECTED, MONTHS[:2], rows=10)
@@ -1065,7 +1065,7 @@ def test_audit_skips_the_published_join_above_max_key(setup: Setup) -> None:
     uri = setup.uri(PROJECTED)
     engine.load(PROJECTED, entry_rows(MONTHS[2], 1000, 5, PROJECTED))
     report = engine.audit(PROJECTED, [MONTHS[2]], uri, version)
-    skipped = result_of(report, "chave_id_lancamento_publicada")
+    skipped = result_of(report, "chave_id_lancamento_tabela")
     assert skipped.passed
     assert skipped.reason.startswith("dispensada")
     assert report.passed
@@ -1074,7 +1074,7 @@ def test_audit_skips_the_published_join_above_max_key(setup: Setup) -> None:
     engine.query('DROP TABLE "cad_lancamentos_projetados"')
     engine.load(PROJECTED, entry_rows(MONTHS[2], 15, 5, PROJECTED))
     joined_report = engine.audit(PROJECTED, [MONTHS[2]], uri, version)
-    joined = result_of(joined_report, "chave_id_lancamento_publicada")
+    joined = result_of(joined_report, "chave_id_lancamento_tabela")
     assert joined.reason == ""
     assert joined.defects == 5
 
@@ -1179,7 +1179,7 @@ def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
 
 def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:
     """O pipeline de exemplo: seis partições materializadas e a dimensão em view, um ``select`` com
-    ``join`` em lotes para o ``loader``, auditoria com a versão publicada, exportação; ``cleanup``
+    ``join`` em lotes para o ``loader``, auditoria com a versão fixada, exportação; ``cleanup``
     apaga o arquivo do banco."""
     engine = setup.engine
     entries_version = published_table(setup, ENTRIES, MONTHS, rows=200)

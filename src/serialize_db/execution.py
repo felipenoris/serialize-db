@@ -7,9 +7,9 @@ gerenciador de contexto de uma execução: na entrada abre toda tabela do ambien
 de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava o snapshot marcado e o
 resumo no log. Entre os dois, o pipeline chama as primitivas: ``ingest`` traz as tabelas presas à
 versão fixada, ``sandbox`` é o motor onde ele roda ``stream``, ``loader``, ``query`` e ``load``,
-``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o contrato e ``publish`` leva as
-partições auditadas ao Delta; a publicação aos clientes no Redshift é ``serialize-db publish``,
-depois da execução.
+``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o contrato e ``publish_delta``
+leva as partições auditadas ao Delta; a publicação aos clientes no Redshift é
+``serialize-db publish_redshift``, depois da execução.
 
 As primitivas podem ser chamadas de qualquer thread: cada comando do motor corre na sessão única,
 sob o lock dela, ou numa sessão a mais do ``ingest`` de várias tabelas, e o estado mutável da
@@ -34,7 +34,7 @@ Exemplo:
             for batch in stream:
                 loader.write(project(batch, run.next_ids(Projetado.__table__, batch.num_rows)))
         run.audit(Projetado.__table__, ["2026-08-31"])
-        run.publish(Projetado.__table__, partitions=["2026-08-31"])
+        run.publish_delta(Projetado.__table__, partitions=["2026-08-31"])
 """
 
 from __future__ import annotations
@@ -325,7 +325,7 @@ def _sequential_key(table: sa.Table) -> sa.Column:
 
 
 class Execution:
-    """O ciclo de uma execução: as versões fixadas, o sandbox, a auditoria e a publicação.
+    """O ciclo de uma execução: as versões fixadas, o sandbox, a auditoria e a publicação no Delta.
 
     Exemplo:
 
@@ -372,7 +372,7 @@ class Execution:
         sem ela."""
         self.versions: dict[str, int | None] = {}
         """A versão fixada de cada tabela do ambiente, pelo nome, ``None`` na que não existe: a
-        entrada do ``with`` as lê, e ``publish`` avança a de cada tabela que grava."""
+        entrada do ``with`` as lê, e ``publish_delta`` avança a de cada tabela que grava."""
         self.sandbox: Engine | None = None
         """O motor da execução, onde o pipeline roda ``stream``, ``loader``, ``query`` e
         ``load``; ``None`` até a entrada do ``with``, e fechado na saída."""
@@ -551,22 +551,22 @@ class Execution:
                 tasks.append((table.name, task))
             run_in_pool(tasks, max_workers=max(len(tables), 1))
 
-    def published(self, table: sa.Table) -> sa.FromClause:
+    def pinned(self, table: sa.Table) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: é por ela
-        que o pipeline lê as partições publicadas da tabela que ele mesmo grava.
+        que o pipeline lê as partições já gravadas no Delta da tabela que ele mesmo grava.
 
         Exemplo:
 
         .. code-block:: python
 
-            previous = run.published(Projetado.__table__)
+            previous = run.pinned(Projetado.__table__)
             run.sandbox.query(sa.select(sa.func.max(previous.c.id_projetado)))
 
         :param table: a tabela do modelo.
         :return: o ``FromClause`` com as colunas do contrato.
         :raises SandboxError: a tabela sem versão fixada, que ainda não existe.
         """
-        return self.sandbox.published(table, self._uri(table), self._version(table))
+        return self.sandbox.pinned(table, self._uri(table), self._version(table))
 
     def _first_id(self, table: sa.Table, key: sa.Column) -> int:
         """O primeiro id de ``next_ids``: o maior da versão fixada mais um, ou 1 na tabela nova."""
@@ -621,7 +621,7 @@ class Execution:
 
         O relatório, com o SQL de cada verificação e as amostras, vai para o log. A contagem por
         partição e as colunas ``Double`` com valor não finito do relatório aprovado são as que
-        ``publish`` passa à exportação.
+        ``publish_delta`` passa à exportação.
 
         Exemplo:
 
@@ -635,8 +635,8 @@ class Execution:
         :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
             chave estrangeira, a chave sem a linha referenciada, procurada na tabela do sandbox ou
             na versão fixada da referenciada.
-        :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_publicada``, a da
-            chave contra as demais partições da versão publicada: o padrão a faz na chave sem a
+        :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_tabela``, a da
+            chave contra as demais partições da versão fixada: o padrão a faz na chave sem a
             coluna de partição e sem a de ``partition_source``, ``key_scope="partition"`` a
             suprime, e ``key_scope="table"`` a faz também na chave com a coluna de
             ``partition_source``.
@@ -666,7 +666,7 @@ class Execution:
             self._audits[key] = report
         return report
 
-    # ------------------------------------------------------------ a publicação
+    # ------------------------------------------------------------ a publicação no Delta
 
     def _values(self, table: sa.Table, partitions: list[str] | None) -> list[str | None]:
         """As partições a publicar: as pedidas, ou ``[None]`` numa tabela sem partição."""
@@ -678,21 +678,22 @@ class Execution:
             return [None]
         if partitions is None:
             raise ContractError(
-                f"{table.name}: publish de uma tabela particionada exige partitions")
+                f"{table.name}: publish_delta de uma tabela particionada exige partitions")
         return list(partitions)
 
     def _approved(self, table: sa.Table, partitions: list[str] | None,
                   audit: bool) -> AuditReport | None:
         """O relatório aprovado das partições, exigido quando ``audit`` é verdadeiro."""
         if not audit:
-            log.warning("publish de %s em %s sem auditoria (audit=False)", table.name, partitions)
+            log.warning("publish_delta de %s em %s sem auditoria (audit=False)", table.name,
+                        partitions)
             return None
         key = (table.name, tuple(partitions) if partitions is not None else None)
         with self._lock:
             report = self._audits.get(key)
         if report is None:
-            raise AuditFailed(f"{table.name}: publish exige a auditoria aprovada de {partitions} "
-                              "na própria execução, ou audit=False")
+            raise AuditFailed(f"{table.name}: publish_delta exige a auditoria aprovada de "
+                              f"{partitions} na própria execução, ou audit=False")
         return report
 
     def _check_no_data_change(self, table: sa.Table, uri: str) -> None:
@@ -741,8 +742,8 @@ class Execution:
                 self._written[table.name] = version
         return version
 
-    def publish(self, *tables: sa.Table, partitions: list[str] | None = None, audit: bool = True,
-                max_workers: int = 1) -> dict[str, int]:
+    def publish_delta(self, *tables: sa.Table, partitions: list[str] | None = None,
+                      audit: bool = True, max_workers: int = 1) -> dict[str, int]:
         """Leva as partições auditadas de cada tabela ao Delta.
 
         As partições e a auditoria de toda tabela são conferidas antes do primeiro commit. Depois,
@@ -758,7 +759,7 @@ class Execution:
 
         .. code-block:: python
 
-            run.publish(Projetado.__table__, partitions=["2026-08-31"])   # {"cad_...": 58}
+            run.publish_delta(Projetado.__table__, partitions=["2026-08-31"])   # {"cad_...": 58}
 
         :param tables: as tabelas do modelo, com as partições no sandbox.
         :param partitions: os valores de partição a publicar; ``None`` numa tabela sem partição,
@@ -787,7 +788,7 @@ class Execution:
             report = self._approved(table, checked, audit)
             task = functools.partial(self._publish_table, table, values, report)
             tasks.append((table.name, task))
-        with self._step("publish"):
+        with self._step("publish_delta"):
             return run_in_pool(tasks, max_workers)
 
     def snapshot(self, name: str) -> None:

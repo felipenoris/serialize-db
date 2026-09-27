@@ -118,9 +118,9 @@ export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3h
 export PYTHONPATH=tests
 
 # 1. Uma vez por esquema: a tabela de controle serialize_db_publications.
-#    Sem ela, publish recusa com PublicationError; a segunda chamada falha
+#    Sem ela, publish_redshift recusa com PublicationError; a segunda chamada falha
 #    porque a tabela já existe (sem IF NOT EXISTS, por decisão sua).
-.venv/bin/serialize-db publish --init
+.venv/bin/serialize-db publish_redshift --init
 
 # 2. O snapshot da carga e o canal default apontado para ele: a publicação e o leitor
 #    Delta sem argumento leem esse snapshot. "serialize-db channel" sem opções lista os canais.
@@ -131,24 +131,24 @@ export PYTHONPATH=tests
 .venv/bin/serialize-db channel --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata
 
-# 3. Primeiro uma tabela pequena, para validar o caminho no alvo; publish exige
+# 3. Primeiro uma tabela pequena, para validar o caminho no alvo; publish_redshift exige
 #    --snapshot <nome> ou --channel <nome> (default, current).
-.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
+.venv/bin/serialize-db publish_redshift --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --tables cad_contas --channel default
 
 # 4. A base inteira, uma conexão por tabela em paralelo.
-.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
+.venv/bin/serialize-db publish_redshift --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --max-workers 4 --channel default
 
 # 5. O estado: versão publicada, versão atual e partições pendentes por tabela.
-.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
+.venv/bin/serialize-db publish_redshift --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --status
 
 # 6. A versão atual sem snapshot (--channel current) e a volta a um snapshot pelo nome, que
 #    troca só as partições alteradas entre as duas versões.
-.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
+.venv/bin/serialize-db publish_redshift --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --channel current
-.venv/bin/serialize-db publish --root $TARGET_ROOT_PATH --environment prd \
+.venv/bin/serialize-db publish_redshift --root $TARGET_ROOT_PATH --environment prd \
     --metadata client_model:Base.metadata --snapshot carga-2026-09-25 --tables cad_contas
 ```
 

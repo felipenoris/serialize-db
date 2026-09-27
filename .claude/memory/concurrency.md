@@ -132,10 +132,11 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
 - A pool that receives every task at once cannot promise that nothing new starts after the first
   failure: with one worker, the worker took the third table before the main loop saw the second
   one fail, and `shutdown(cancel_futures=True)` came too late; the sketch that was in
-  `test_parallel.py` passed only because each task slept 0.5 s. `Execution.publish` submits a table
-  only when a worker is free and no failure arrived, and the failure goes up with its own type and
-  each table's outcome in a note (`add_note`) (2026-09-23); `run.ingest` uses the same pool function
-  (`_run_in_pool`) with one worker per table, so every table starts at once and all finish. Under load, DuckDB can hand a stream's first batch only at the
+  `test_parallel.py` passed only because each task slept 0.5 s. `Execution.publish_delta` submits a
+  table only when a worker is free and no failure arrived, and the failure goes up with its own type
+  and each table's outcome in a note (`add_note`) (2026-09-23); `run.ingest` uses the same pool
+  function (`_run_in_pool`) with one worker per table, so every table starts at once and all finish.
+  Under load, DuckDB can hand a stream's first batch only at the
   end of the query (4.531 s in a three-process reproducer, with the second batch already in memory),
   so a test that closes a stream "mid-query" asserts the thread ended and the session is free, with
   the error null or the interrupt's. `plan/POC.md`, `plan/PLAN-STAGE-6.md`
@@ -159,7 +160,7 @@ Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,
   2026-09-25), and 79 of 400 (175 conflicts) in the target machine's local folder on 2026-09-26;
   S3's `IfMatch` is server-side. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
-- `Execution.publish` checks `version_diff` from the pinned version before `reconcile` and
+- `Execution.publish_delta` checks `version_diff` from the pinned version before `reconcile` and
   `export_partition`, and `register_files` (`publish_partition` too) opens the table anew right
   before the commit, so a data commit by another execution on the same partition between the check
   and that open passes without `ExecutionConflict` and the later commit replaces the partition

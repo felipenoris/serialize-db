@@ -1,4 +1,4 @@
-"""As verificações que a auditoria roda antes de publicar, derivadas do contrato.
+"""As verificações que a auditoria roda antes de publicar no Delta, derivadas do contrato.
 
 Chave primária, unicidade e chave estrangeira ficam fora do DDL dos dois sandboxes; a auditoria é
 onde elas são aplicadas, com consultas montadas a partir do ``Table`` do modelo, sem declaração
@@ -16,8 +16,8 @@ As verificações:
   coluna ``Numeric`` e ``Double`` como ``DECIMAL(38, 6)`` (a ``Double`` só nos valores finitos) e
   conta à parte os não finitos, uma leitura que não reprova;
 - **chave_<colunas>**: a chave repetida nas partições da execução, uma consulta por chave;
-- **chave_<colunas>_publicada**: a chave repetida entre as partições da execução e as demais da
-  versão publicada, quando a chave não inclui a coluna de partição nem a de ``partition_source``;
+- **chave_<colunas>_tabela**: a chave repetida entre as partições da execução e as demais da
+  versão fixada, quando a chave não inclui a coluna de partição nem a de ``partition_source``;
 - **orfao_<colunas>**: a chave estrangeira sem a linha referenciada, só com ``foreign_keys=True``.
 
 As funções que mudam de nome entre os motores são subclasses de ``FunctionElement`` com uma regra
@@ -226,7 +226,7 @@ class Check:
     """
 
     name: str
-    """``linhas``, ``chave_<colunas>``, ``chave_<colunas>_publicada`` ou ``orfao_<colunas>``."""
+    """``linhas``, ``chave_<colunas>``, ``chave_<colunas>_tabela`` ou ``orfao_<colunas>``."""
     statement: sa.Select
     """A consulta; na de linhas, uma linha por partição, e nas demais uma linha por defeito."""
     fails_when: str
@@ -285,11 +285,11 @@ class AuditReport:
     results: tuple[CheckResult, ...]
     """O resultado de cada verificação da lista de ``checks``, na ordem dela."""
     not_run: tuple[str, ...]
-    """As verificações que não rodaram, com o motivo: ``orfao_*`` sem ``foreign_keys=True``, a chave
-    publicada com ``key_scope="partition"`` ou sem versão publicada."""
+    """As verificações que não rodaram, com o motivo: ``orfao_*`` sem ``foreign_keys=True``, e
+    ``chave_<colunas>_tabela`` com ``key_scope="partition"`` ou sem versão fixada."""
     nonfinite_columns: Mapping[str | None, tuple[str, ...]]
-    """Por valor de partição, as colunas ``Double`` com ``NaN`` ou infinito: a lista que a
-    publicação passa a ``export_partition`` como ``columns_without_min_max``."""
+    """Por valor de partição, as colunas ``Double`` com ``NaN`` ou infinito: a lista que
+    ``publish_delta`` passa a ``export_partition`` como ``columns_without_min_max``."""
     totals: Mapping[str | None, Mapping[str, object]]
     """Por valor de partição, a linha da verificação de linhas: a contagem, os contadores, as somas
     de controle e os não finitos."""
@@ -454,29 +454,29 @@ def _single_integer_key(table: sa.Table, key: Sequence[str]) -> sa.Column | None
     return column
 
 
-def _key_against_published(table: sa.Table, key: Sequence[str], partitions: Sequence[str],
-                           published: sa.FromClause, published_max_key: int | None) -> Check:
-    """A chave das partições da execução repetida nas demais partições da versão publicada.
+def _key_against_pinned(table: sa.Table, key: Sequence[str], partitions: Sequence[str],
+                        pinned: sa.FromClause, pinned_max_key: int | None) -> Check:
+    """A chave das partições da execução repetida nas demais partições da versão fixada.
 
-    Na chave primária inteira de uma coluna, com ``published_max_key``, o ``skip_when`` aprova a
-    verificação sem a junção quando o menor valor da execução passa do maior publicado.
+    Na chave primária inteira de uma coluna, com ``pinned_max_key``, o ``skip_when`` aprova a
+    verificação sem a junção quando o menor valor da execução passa do maior da versão fixada.
     """
     partition_by = table_options(table).partition_by
     columns = [table.c[name] for name in key]
-    joined = sa.and_(*[table.c[name] == published.c[name] for name in key])
-    outside = published.c[partition_by].notin_(list(partitions))
+    joined = sa.and_(*[table.c[name] == pinned.c[name] for name in key])
+    outside = pinned.c[partition_by].notin_(list(partitions))
     statement = (
         sa.select(*columns)
-        .select_from(table.join(published, joined))
+        .select_from(table.join(pinned, joined))
         .where(_scope(table, partitions), outside)
         .distinct()
     )
     skip_when = None
     integer_key = _single_integer_key(table, key)
-    if integer_key is not None and published_max_key is not None:
-        above = sa.func.min(integer_key) > published_max_key
+    if integer_key is not None and pinned_max_key is not None:
+        above = sa.func.min(integer_key) > pinned_max_key
         skip_when = sa.select(above.label("dispensa")).where(_scope(table, partitions))
-    return Check(f"chave_{_key_label(key)}_publicada", statement, "alguma linha", skip_when)
+    return Check(f"chave_{_key_label(key)}_tabela", statement, "alguma linha", skip_when)
 
 
 def _orphans(table: sa.Table, constraint: sa.ForeignKeyConstraint, referenced: sa.FromClause,
@@ -494,9 +494,9 @@ def _orphans(table: sa.Table, constraint: sa.ForeignKeyConstraint, referenced: s
     return Check(f"orfao_{label}", statement, "alguma linha")
 
 
-def _needs_published_check(options: TableOptions, key: Sequence[str],
-                           partitions: Sequence[str] | None, key_scope: KeyScope | None) -> bool:
-    """Se a chave pede a verificação contra as demais partições da versão publicada: só numa
+def _needs_pinned_check(options: TableOptions, key: Sequence[str],
+                        partitions: Sequence[str] | None, key_scope: KeyScope | None) -> bool:
+    """Se a chave pede a verificação contra as demais partições da versão fixada: só numa
     tabela particionada, com as partições da execução, e numa chave sem a coluna de partição; a
     chave com a coluna de ``partition_source`` só com ``key_scope="table"``."""
     if options.partition_by is None or partitions is None:
@@ -509,24 +509,23 @@ def _needs_published_check(options: TableOptions, key: Sequence[str],
 
 
 def _key_checks(table: sa.Table, partitions: Sequence[str] | None, key_scope: KeyScope | None,
-                published: sa.FromClause | None,
-                published_max_key: int | None) -> tuple[list[Check], list[str]]:
+                pinned: sa.FromClause | None,
+                pinned_max_key: int | None) -> tuple[list[Check], list[str]]:
     """As verificações de chave e as que não rodam, com o motivo."""
     options = table_options(table)
     found = []
     not_run = []
     for key in options.keys:
         found.append(_key_within(table, key, partitions))
-        if not _needs_published_check(options, key, partitions, key_scope):
+        if not _needs_pinned_check(options, key, partitions, key_scope):
             continue
-        name = f"chave_{_key_label(key)}_publicada"
+        name = f"chave_{_key_label(key)}_tabela"
         if key_scope == "partition":
             not_run.append(f"{name} (key_scope=partition)")
-        elif published is None:
-            not_run.append(f"{name} (sem versão publicada)")
+        elif pinned is None:
+            not_run.append(f"{name} (sem versão fixada)")
         else:
-            found.append(_key_against_published(table, key, partitions, published,
-                                                published_max_key))
+            found.append(_key_against_pinned(table, key, partitions, pinned, pinned_max_key))
     return found, not_run
 
 
@@ -550,9 +549,9 @@ def _foreign_key_checks(
 
 
 def checks(table: sa.Table, partitions: Sequence[str] | None = None, foreign_keys: bool = False,
-           key_scope: KeyScope | None = None, published: sa.FromClause | None = None,
+           key_scope: KeyScope | None = None, pinned: sa.FromClause | None = None,
            referenced: Mapping[str, sa.FromClause] | None = None,
-           published_max_key: int | None = None) -> list[Check]:
+           pinned_max_key: int | None = None) -> list[Check]:
     """As verificações do contrato para as partições da execução, sobre a tabela do modelo.
 
     Exemplo:
@@ -560,44 +559,44 @@ def checks(table: sa.Table, partitions: Sequence[str] | None = None, foreign_key
     .. code-block:: python
 
         names = [check.name for check in checks(Operacao.__table__, ["2026-08-31"],
-                                                published=published)]
-        # ["linhas", "chave_id_operacao", "chave_id_operacao_publicada"]
+                                                pinned=pinned)]
+        # ["linhas", "chave_id_operacao", "chave_id_operacao_tabela"]
 
     :param table: a tabela do modelo.
     :param partitions: as partições da execução, pela regra da partição; ``partitions=None``
         audita a tabela inteira do sandbox.
     :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
         chave estrangeira, a chave sem a linha referenciada.
-    :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_publicada``, a da
-        chave contra as demais partições da versão publicada: o padrão a faz na chave sem a coluna
+    :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_tabela``, a da
+        chave contra as demais partições da versão fixada: o padrão a faz na chave sem a coluna
         de partição e sem a de ``partition_source``, ``key_scope="partition"`` a suprime, e
         ``key_scope="table"`` a faz também na chave com a coluna de ``partition_source``.
-    :param published: a versão publicada da tabela, a origem das demais partições na verificação
-        ``chave_<colunas>_publicada``, que sem ela não roda.
+    :param pinned: a versão fixada da tabela, a origem das demais partições na verificação
+        ``chave_<colunas>_tabela``, que sem ela não roda.
     :param referenced: por nome de tabela, a origem da linha referenciada de cada chave
         estrangeira, que só é conferida com ``foreign_keys=True``.
-    :param published_max_key: o ``max_key`` da versão publicada, que dá à chave primária inteira
+    :param pinned_max_key: o ``max_key`` da versão fixada, que dá à chave primária inteira
         de uma coluna o ``skip_when``.
     :return: a verificação de linhas, as de chave e as de órfão, nessa ordem; as verificações que
         não rodam ficam fora da lista, e o relatório do motor as registra.
     :raises ContractError: um valor de ``partitions`` fora da regra da partição.
     """
-    found, _ = checks_and_not_run(table, partitions, foreign_keys, key_scope, published,
-                                  referenced, published_max_key)
+    found, _ = checks_and_not_run(table, partitions, foreign_keys, key_scope, pinned,
+                                  referenced, pinned_max_key)
     return found
 
 
 def checks_and_not_run(table: sa.Table, partitions: Sequence[str] | None, foreign_keys: bool,
-                       key_scope: KeyScope | None, published: sa.FromClause | None,
+                       key_scope: KeyScope | None, pinned: sa.FromClause | None,
                        referenced: Mapping[str, sa.FromClause] | None,
-                       published_max_key: int | None) -> tuple[list[Check], list[str]]:
+                       pinned_max_key: int | None) -> tuple[list[Check], list[str]]:
     """As verificações de ``checks`` e as que ela deixa de fora, com o motivo; protegida, para o
     relatório dos motores."""
     if partitions is not None:
         for value in partitions:
             check_partition_value(value)
     found = [_rows_check(table, partitions)]
-    keys, keys_not_run = _key_checks(table, partitions, key_scope, published, published_max_key)
+    keys, keys_not_run = _key_checks(table, partitions, key_scope, pinned, pinned_max_key)
     orphans, orphans_not_run = _foreign_key_checks(table, partitions, foreign_keys, referenced)
     return found + keys + orphans, keys_not_run + orphans_not_run
 
@@ -649,7 +648,7 @@ def sample_statement(table: sa.Table, partitions: Sequence[str] | None,
 
 def audit_sql(table: sa.Table, dialect: Dialect, partitions: Sequence[str] | None = None,
               foreign_keys: bool = False, key_scope: KeyScope | None = None,
-              published: sa.FromClause | None = None,
+              pinned: sa.FromClause | None = None,
               referenced: Mapping[str, sa.FromClause] | None = None,
               prefix: str = sql.SENTINEL) -> dict[str, str]:
     """O texto de cada verificação no dialeto, por ``sql.render`` com o prefixo pedido, sem conexão
@@ -668,12 +667,12 @@ def audit_sql(table: sa.Table, dialect: Dialect, partitions: Sequence[str] | Non
         audita a tabela inteira do sandbox.
     :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
         chave estrangeira, a chave sem a linha referenciada.
-    :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_publicada``, a da
-        chave contra as demais partições da versão publicada: o padrão a faz na chave sem a coluna
+    :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_tabela``, a da
+        chave contra as demais partições da versão fixada: o padrão a faz na chave sem a coluna
         de partição e sem a de ``partition_source``, ``key_scope="partition"`` a suprime, e
         ``key_scope="table"`` a faz também na chave com a coluna de ``partition_source``.
-    :param published: a versão publicada da tabela, a origem das demais partições na verificação
-        ``chave_<colunas>_publicada``, que sem ela não roda.
+    :param pinned: a versão fixada da tabela, a origem das demais partições na verificação
+        ``chave_<colunas>_tabela``, que sem ela não roda.
     :param referenced: por nome de tabela, a origem da linha referenciada de cada chave
         estrangeira, que só é conferida com ``foreign_keys=True``.
     :param prefix: o prefixo das tabelas no texto; o padrão deixa nele o sentinela ``{prefix}``,
@@ -682,6 +681,6 @@ def audit_sql(table: sa.Table, dialect: Dialect, partitions: Sequence[str] | Non
     :raises ContractError: um valor de ``partitions`` fora da regra da partição.
     """
     texts = {}
-    for check in checks(table, partitions, foreign_keys, key_scope, published, referenced):
+    for check in checks(table, partitions, foreign_keys, key_scope, pinned, referenced):
         texts[check.name] = sql.render(check.statement, dialect, table.metadata, prefix)
     return texts

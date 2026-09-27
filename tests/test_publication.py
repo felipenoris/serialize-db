@@ -11,7 +11,7 @@ que gravam um Delta na pasta local são ``local``). Os casos marcados ``redshift
 ``SERIALIZE_DB_TEST_S3_ROOT``, exportado pelo motor DuckDB com o ``temp_directory`` sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT``, num ambiente ``poc<id>`` próprio, cujas tabelas publicadas e
 linhas de controle saem no fim; a tabela de controle é criada quando não existe e apagada só
-nesse caso; o último deles roda ``serialize-db publish`` pelo canal ``default``, por
+nesse caso; o último deles roda ``serialize-db publish_redshift`` pelo canal ``default``, por
 ``--snapshot``, de volta a um snapshot anterior e pelo canal ``current``. No substituto local
 (``SERIALIZE_DB_TEST_EMULATOR``), a conexão é a de ``tests/emulator.py``, e o ``1023`` da
 publicação simultânea vem do conflito entre duas transações do DuckDB. O modelo é o de
@@ -206,7 +206,7 @@ def test_publish_requires_the_control_table(monkeypatch: pytest.MonkeyPatch,
         functools.partial(publication.publication_status, db, CONFIG),
     ]
     for action in actions:
-        with pytest.raises(PublicationError, match="publish --init"):
+        with pytest.raises(PublicationError, match="publish_redshift --init"):
             action()
     commands = [text for text in connection.texts()
                 if not text.startswith(("USE ", "SET search_path"))]
@@ -911,8 +911,8 @@ def test_published_join_redistribution_is_read(target: Target) -> None:
 def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
                                                            monkeypatch: pytest.MonkeyPatch,
                                                            capsys: pytest.CaptureFixture) -> None:
-    """``serialize-db publish`` publica as versões do snapshot do canal ``default``, as de um
-    snapshot pelo nome, de volta a um anterior, e a versão atual pelo canal ``current``;
+    """``serialize-db publish_redshift`` publica as versões do snapshot do canal ``default``, as
+    de um snapshot pelo nome, de volta a um anterior, e a versão atual pelo canal ``current``;
     ``--status`` e ``--unpublish`` seguem pela linha de comando; saem com 2 o snapshot arquivado,
     a tabela fora do snapshot, a chamada sem ``--snapshot`` nem ``--channel`` ou com os dois,
     ``--status`` com um deles, o canal sem snapshot e a tabela fora do modelo."""
@@ -929,7 +929,7 @@ def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
         else:
             monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", str(value))
     monkeypatch.setattr(tempfile, "tempdir", str(target.folder))
-    common = ["publish", "--root", db.root, "--environment", environment,
+    common = ["publish_redshift", "--root", db.root, "--environment", environment,
               "--metadata", "lancamentos_model:Base.metadata", "--tables", PROJECTED.name]
     published = f"{environment}_{PROJECTED.name}"
 

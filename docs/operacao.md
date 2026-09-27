@@ -3,7 +3,7 @@
 O runbook das rotinas de operação do banco Delta, cada uma um subcomando de `serialize-db` sobre as
 primitivas de `serialize_db.delta`, com o que conferir antes e o que esperar depois. Os subcomandos
 recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--environment`
-(`SERIALIZE_DB_ENVIRONMENT`, `dsv`), menos `publish --init`, que lê só as variáveis
+(`SERIALIZE_DB_ENVIRONMENT`, `dsv`), menos `publish_redshift --init`, que lê só as variáveis
 `SERIALIZE_DB_REDSHIFT_*`. Saem com 0 quando terminam; com 1 na auditoria reprovada, na carga com
 diferença de contagem ou soma ou com partição fora do contrato, e no erro sem tratamento, que
 imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem conexão, no nome
@@ -17,11 +17,11 @@ põe na linha de log de cada tabela.
 Uma vez no esquema do Redshift, antes da primeira publicação de qualquer ambiente:
 
 ```shell
-serialize-db publish --init
+serialize-db publish_redshift --init
 ```
 
 Antes: as variáveis `SERIALIZE_DB_REDSHIFT_*` da conexão. Depois: a tabela
-`serialize_db_publications` no esquema; sem ela, `serialize-db publish` recusa publicar com
+`serialize_db_publications` no esquema; sem ela, `serialize-db publish_redshift` recusa publicar com
 `serialize_db.errors.PublicationError`.
 
 ### Snapshot do banco
@@ -45,8 +45,8 @@ qualquer que seja a retenção do `vacuum`.
 ### Canal do snapshot
 
 Depois do snapshot que os clientes vão ler, o canal `default` do ambiente aponta para ele: é o
-snapshot que o leitor Delta abre sem argumento e que `serialize-db publish --channel default`
-publica. Só este comando o move:
+snapshot que o leitor Delta abre sem argumento e que
+`serialize-db publish_redshift --channel default` publica. Só este comando o move:
 
 ```shell
 serialize-db channel --root s3://bucket/projeto/delta --environment prd \
@@ -66,9 +66,9 @@ snapshot de um canal até o canal ser movido.
 Depois da execução, com o snapshot escolhido pelo canal ou pelo nome:
 
 ```shell
-serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --channel default --max-workers 4
-serialize-db publish --root s3://bucket/projeto/delta --environment prd \
+serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --status
 ```
 
@@ -196,9 +196,9 @@ vêm sem eles.
 
 As opções de cada subcomando de `serialize-db`. Um valor de partição, um `--execution-id`, um
 `--name`, um `--snapshot`, um `--channel` e o ambiente seguem a regra da partição,
-`[0-9A-Za-z][0-9A-Za-z_.-]*`, e o valor fora dela é erro de uso. A conexão do Redshift, em `publish`
-e nos subcomandos com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDSHIFT_*`
-(`serialize_db.engine.redshift.RedshiftConfig.from_environment`).
+`[0-9A-Za-z][0-9A-Za-z_.-]*`, e o valor fora dela é erro de uso. A conexão do Redshift, em
+`publish_redshift` e nos subcomandos com `--engine redshift`, vem das variáveis
+`SERIALIZE_DB_REDSHIFT_*` (`serialize_db.engine.redshift.RedshiftConfig.from_environment`).
 
 ### Opções comuns
 
@@ -209,9 +209,9 @@ e nos subcomandos com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDS
 | `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dsv`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
 
 `run`, `load` e as rotinas de operação (`snapshot`, `channel`, `vacuum`, `compact`, `archive`,
-`export` e `history`) recebem as três; `audit` e `publish` também, com `--root` e, em `publish`,
-`--metadata` dispensáveis nos casos descritos nas seções deles; `schema` e `sql` recebem só
-`--metadata`.
+`export` e `history`) recebem as três; `audit` e `publish_redshift` também, com `--root` e, em
+`publish_redshift`, `--metadata` dispensáveis nos casos descritos nas seções deles; `schema` e `sql`
+recebem só `--metadata`.
 
 ### `schema write` e `schema check`
 
@@ -242,7 +242,7 @@ e nos subcomandos com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDS
 | `--table` | obrigatória | A tabela do modelo auditada. |
 | `--partitions` | todas | As partições auditadas; sem ela, a tabela inteira. |
 | `--foreign-keys` | desligada | Confere as chaves estrangeiras contra a versão atual de cada tabela referenciada. |
-| `--key-scope` | nenhum | `partition` suprime a verificação da chave contra a versão publicada; `table` a faz também na chave com a coluna de `partition_source`. |
+| `--key-scope` | nenhum | `partition` suprime a verificação da chave contra a versão atual do Delta; `table` a faz também na chave com a coluna de `partition_source`. |
 | `--engine` | `SERIALIZE_DB_ENGINE`, senão `duckdb` | O dialeto do texto e o motor da auditoria: `duckdb` ou `redshift`. |
 | `--sql` | desligada | Imprime o texto das verificações, sem conexão nem armazenamento. |
 | `--root` | `SERIALIZE_DB_ROOT` | Obrigatória sem `--sql`. |
@@ -255,7 +255,7 @@ e nos subcomandos com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDS
 | `--tables` | todas do modelo | As tabelas carregadas, na ordem da carga: as sem partição antes das particionadas. |
 | `--partitions` | todas | As partições carregadas; com ela, as tabelas sem partição ficam de fora. |
 
-### `publish`
+### `publish_redshift`
 
 | Opção | Padrão | Descrição |
 | --- | --- | --- |

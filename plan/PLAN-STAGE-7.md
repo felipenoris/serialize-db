@@ -162,7 +162,7 @@ na documentação do `pdoc`. O que a implementação mudou do plano:
   testes escrevem o banco e o transbordo do DuckDB sob a raiz autorizada; sem ela, a pasta
   temporária do sistema e os limites lidos do ambiente.
 - `serialize-db load` recebe `--tables` (várias; todas sem ele, na ordem de `load_order`) no lugar
-  de `--table`, como `serialize-db publish`, e `--root` e `--environment` da
+  de `--table`, como `serialize-db publish_redshift`, e `--root` e `--environment` da
   [etapa 6](PLAN-STAGE-6.md): a raiz Delta é `<raiz>/<ambiente>/<tabela>`, e não `<raiz>/<tabela>`
   como o script gravava antes.
 - Uma pasta `<coluna>=<valor>` cujo valor não segue a regra da partição vai para `skipped`, porque
@@ -208,15 +208,15 @@ na documentação do `pdoc`. O que a implementação mudou do plano:
   `delta_scan` no destino, só quando a tabela existe), e monta `LoadReport`; `matches` exige
   contagens e somas iguais em toda partição.
 - **`serialize-db load`** confere o modelo por `check_models`, seleciona as tabelas como
-  `serialize-db publish` e as ordena por `load_order`, chama `initial_load` e depois `load_report`
-  de cada uma, imprime o relatório e sai com 1 quando `matches` é falso ou uma partição está fora
-  do contrato. O `duckdb.Error` e o `RegistrationRefused` que `initial_load` documenta saem com o
-  traceback, que mostra em que passo a carga parou, e com o código 1, como todo erro sem tratamento
-  dos subcomandos ([`operacao.md`](../docs/operacao.md), decisão do usuário de 2026-09-25). O
-  subcomando reaproveita o que a [etapa 6](PLAN-STAGE-6.md) pôs em `serialize_db.cli`:
-  `--metadata`, `--root` e `--environment` com os padrões `SERIALIZE_DB_*`, o `_name_argument` da
-  regra da partição em `--partitions`, o `modulo:atributo` que não importa como erro de uso, e o
-  `logging` em `INFO`; `db` é o `Database` da etapa 6.
+  `serialize-db publish_redshift` e as ordena por `load_order`, chama `initial_load` e depois
+  `load_report` de cada uma, imprime o relatório e sai com 1 quando `matches` é falso ou uma
+  partição está fora do contrato. O `duckdb.Error` e o `RegistrationRefused` que `initial_load`
+  documenta saem com o traceback, que mostra em que passo a carga parou, e com o código 1, como todo
+  erro sem tratamento dos subcomandos ([`operacao.md`](../docs/operacao.md), decisão do usuário de
+  2026-09-25). O subcomando reaproveita o que a [etapa 6](PLAN-STAGE-6.md) pôs em
+  `serialize_db.cli`: `--metadata`, `--root` e `--environment` com os padrões `SERIALIZE_DB_*`, o
+  `_name_argument` da regra da partição em `--partitions`, o `modulo:atributo` que não importa como
+  erro de uso, e o `logging` em `INFO`; `db` é o `Database` da etapa 6.
 
 ## Pré-requisitos e pós-condições
 

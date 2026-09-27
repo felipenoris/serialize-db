@@ -1548,8 +1548,9 @@ def set_channel(storage: Storage, environment: str, name: str, snapshot: str) ->
     """Aponta o canal ``name`` do ambiente para o snapshot, na escrita condicional do arquivo de
     controle, sob a chave irmã ``channels``.
 
-    O canal ``default`` é o snapshot que o leitor Delta lê sem argumento e que ``serialize-db
-    publish --channel default`` publica; só esta função, por ``serialize-db channel``, o move.
+    O canal ``default`` é o snapshot que o leitor Delta lê sem argumento e que
+    ``serialize-db publish_redshift --channel default`` publica; só esta função, por
+    ``serialize-db channel``, o move.
 
     Exemplo:
 

@@ -18,7 +18,7 @@ isso depois da entrada ainda pode falhar com a chave vencida.
 As primitivas:
 
 - ``ingest`` cria uma view (ou tabela, com ``materialize=True``) com o nome do modelo sobre
-  ``delta_scan(uri, version := v)``, e ``published`` devolve a versão fixada como origem de
+  ``delta_scan(uri, version := v)``, e ``pinned`` devolve a versão fixada como origem de
   consulta, sem ocupar nome no sandbox;
 - ``stream`` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à memória
   enquanto os lotes guardados cabem em 64 MiB, e a um arquivo Arrow IPC com LZ4 na pasta de
@@ -446,7 +446,7 @@ class DuckDBLoader:
         if engine.name_in_use(table.name):
             raise SandboxError(
                 f"{table.name}: o nome já está ocupado no sandbox, pelo ingest ou por outro "
-                f"loader; leia a versão publicada por run.published({table.name})")
+                f"loader; leia a versão fixada por run.pinned({table.name})")
         self._engine = engine
         self._table = table
         self._schema: pa.Schema | None = None
@@ -887,14 +887,14 @@ class DuckDBEngine:
         with self.session() as connection:
             connection.execute(text)
 
-    def published(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
+    def pinned(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox.
 
         Exemplo:
 
         .. code-block:: python
 
-            previous = engine.published(Projetado.__table__, uri, 57)
+            previous = engine.pinned(Projetado.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
@@ -905,12 +905,12 @@ class DuckDBEngine:
         :raises SandboxError: numa tabela que ainda não existe, sem versão (``version=None``).
         """
         if version is None:
-            raise SandboxError(f"{table.name}: sem versão publicada, a tabela ainda não existe")
+            raise SandboxError(f"{table.name}: sem versão fixada, a tabela ainda não existe")
         columns = []
         for column in table.columns:
             columns.append(sa.column(quoted_name(column.name, quote=True), column.type))
         source = sa.table(quoted_name(delta_scan(uri, version), quote=False), *columns)
-        return source.alias(quoted_name(f"{table.name}_publicado", quote=True))
+        return source.alias(quoted_name(f"{table.name}_versao", quote=True))
 
     # ------------------------------------------------------------ consulta, stream e carga
 
@@ -1025,8 +1025,8 @@ class DuckDBEngine:
 
     # ------------------------------------------------------------ a auditoria
 
-    def _published_max_key(self, table: sa.Table, uri: str, version: int) -> int | None:
-        """O ``max_key`` da versão publicada na chave sequencial, sem ler dados; ``None`` numa
+    def _pinned_max_key(self, table: sa.Table, uri: str, version: int) -> int | None:
+        """O ``max_key`` da versão fixada na chave sequencial, sem ler dados; ``None`` numa
         tabela sem ela."""
         key = sequential_key(table)
         if key is None:
@@ -1048,7 +1048,7 @@ class DuckDBEngine:
                 sources[target.name] = target
             elif referenced is not None and target.name in referenced:
                 uri, version = referenced[target.name]
-                sources[target.name] = self.published(target, uri, version)
+                sources[target.name] = self.pinned(target, uri, version)
         return sources
 
     def _text(self, statement: sa.sql.ClauseElement, table: sa.Table) -> str:
@@ -1084,7 +1084,7 @@ class DuckDBEngine:
             skipped = self.query(self._text(check.skip_when, table)).column(0)[0].as_py()
             if skipped is True:
                 reason = ("dispensada: o menor valor da execução passa do maior da versão "
-                          "publicada")
+                          "fixada")
                 return CheckResult(check.name, text, 0, pa.table({}), True, reason)
         found = self.query(text)
         return CheckResult(check.name, text, found.num_rows, found.slice(0, audit.SAMPLE_ROWS),
@@ -1107,28 +1107,29 @@ class DuckDBEngine:
         :param partitions: as partições da execução; ``None`` audita a tabela inteira do
             sandbox.
         :param uri: a URI da tabela fixada pela execução; com ``version``, dá a versão
-            publicada, que as chaves fora da partição comparam, e o ``max_key`` do
+            fixada, que as chaves fora da partição comparam, e o ``max_key`` do
             ``skip_when``.
-        :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a chave publicada
-            não roda.
+        :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a verificação
+            ``chave_<colunas>_tabela`` não roda.
         :param foreign_keys: ``True`` confere as chaves estrangeiras, contra a tabela
             referenciada do sandbox ou contra a versão de ``referenced``.
-        :param key_scope: o escopo da unicidade; ``"partition"`` suprime a chave publicada, e
-            ``"table"`` a confere também na chave com a coluna de ``partition_source``.
+        :param key_scope: o escopo da unicidade; ``"partition"`` suprime a verificação
+            ``chave_<colunas>_tabela``, e ``"table"`` a confere também na chave com a coluna
+            de ``partition_source``.
         :param referenced: por tabela, a URI e a versão fixada da tabela referenciada que o
             sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``.
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
             ``Execution.audit`` levanta ``AuditFailed``.
         :raises ContractError: um valor de ``partitions`` fora da regra da partição.
         """
-        published = None
-        published_max_key = None
+        pinned = None
+        pinned_max_key = None
         if uri is not None and version is not None:
-            published = self.published(table, uri, version)
-            published_max_key = self._published_max_key(table, uri, version)
+            pinned = self.pinned(table, uri, version)
+            pinned_max_key = self._pinned_max_key(table, uri, version)
         sources = self._referenced_sources(table, foreign_keys, referenced)
         found, not_run = audit.checks_and_not_run(table, partitions, foreign_keys, key_scope,
-                                                  published, sources, published_max_key)
+                                                  pinned, sources, pinned_max_key)
         results = []
         totals: dict = {}
         nonfinite: dict = {}

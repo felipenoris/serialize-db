@@ -1,10 +1,10 @@
 """O ciclo da ``Execution`` sobre o motor DuckDB: quatro partições de 20.000 linhas com valores
 de borda; numa execução, o pipeline em threads, uma por partição, cada uma com o seu ``stream``
-da entrada escrevendo em dois ``loader`` com ids de ``next_ids``, a auditoria e dois ``publish``
-ao mesmo tempo; um leitor ``current`` aberto e consultado enquanto outra execução ingere,
-lê ``published`` e publica de novo, com os canais ``default`` e ``current``; duas execuções
-abertas na mesma versão publicando a mesma partição em threads; e uma execução parada entre a
-conferência da versão fixada e o commit enquanto outra publica a mesma partição.
+da entrada escrevendo em dois ``loader`` com ids de ``next_ids``, a auditoria e dois
+``publish_delta`` ao mesmo tempo; um leitor ``current`` aberto e consultado enquanto outra
+execução ingere, lê ``pinned`` e publica de novo, com os canais ``default`` e ``current``; duas
+execuções abertas na mesma versão publicando a mesma partição em threads; e uma execução parada
+entre a conferência da versão fixada e o commit enquanto outra publica a mesma partição.
 
 .. code-block:: shell
 
@@ -230,10 +230,10 @@ def check_execution_a(db: Database, folder: Path, cadastro: pa.Table) -> None:
         results = {}
 
         def publish_partitioned() -> None:
-            results["p"] = run.publish(PROJ, PROJ2, partitions=MONTHS, max_workers=2)
+            results["p"] = run.publish_delta(PROJ, PROJ2, partitions=MONTHS, max_workers=2)
 
         def publish_cadastro() -> None:
-            results["c"] = run.publish(CADASTRO)
+            results["c"] = run.publish_delta(CADASTRO)
 
         threads = [threading.Thread(target=publish_partitioned),
                    threading.Thread(target=publish_cadastro)]
@@ -242,13 +242,13 @@ def check_execution_a(db: Database, folder: Path, cadastro: pa.Table) -> None:
         for thread in threads:
             thread.join()
         if results.get("p") != {PROJ.name: 4, PROJ2.name: 4}:
-            problems.append(f"A: publish das particionadas {results.get('p')}")
+            problems.append(f"A: publish_delta das particionadas {results.get('p')}")
         if results.get("c") != {CADASTRO.name: 1}:
-            problems.append(f"A: publish do cadastro {results.get('c')}")
+            problems.append(f"A: publish_delta do cadastro {results.get('c')}")
         expected_versions = {"cad_entradas": 4, "cad_projetados": 4, "cad_projetados_2": 4,
                              "cad_cadastro": 1}
         if run.versions != expected_versions:
-            problems.append(f"A: versões depois do publish {run.versions}")
+            problems.append(f"A: versões depois do publish_delta {run.versions}")
     report("A a execução exec-a rodou", problems)
 
 
@@ -300,7 +300,7 @@ def count_projected(reader: object) -> int:
 def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table],
                           expected_a: dict[tuple[str, str], pa.Table]) -> None:
     """Seção B: um leitor ``current`` aberto antes de ``exec-b`` e consultado a cada 50 ms
-    enquanto ela ingere com ``materialize=True``, lê ``published``, projeta agosto de novo e
+    enquanto ela ingere com ``materialize=True``, lê ``pinned``, projeta agosto de novo e
     setembro e publica; depois os canais ``current`` e ``default`` (em ``t1``)."""
     problems = []
     seeds[NEW_MONTH] = entrada_rows(NEW_MONTH, 1 + 4 * ROWS, ROWS)
@@ -324,9 +324,9 @@ def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table]
     months_b = [AUGUST, NEW_MONTH]
     try:
         with Execution(db, engine_for(db, folder, "exec-b"), NEW_MONTH, "exec-b") as run:
-            # A tabela que o pipeline escreve é lida por published, nunca ingerida.
+            # A tabela que o pipeline escreve é lida por pinned, nunca ingerida.
             run.ingest(ENTRADA, CADASTRO, materialize=True)
-            previous = run.published(PROJ)
+            previous = run.pinned(PROJ)
             max_id = run.sandbox.query(sa.select(sa.func.max(previous.c.id))).column(0)[0].as_py()
             first = run.next_ids(PROJ, 0).start
             if max_id != 4 * ROWS or first != 4 * ROWS + 1:
@@ -334,9 +334,9 @@ def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table]
             with run.sandbox.loader(PROJ) as loader:
                 pipeline(run, months_b, [PROJ], {PROJ.name: loader})
             run.audit(PROJ, months_b)
-            versions = run.publish(PROJ, partitions=months_b)
+            versions = run.publish_delta(PROJ, partitions=months_b)
             if versions != {PROJ.name: 6}:
-                problems.append(f"B: publish {versions}")
+                problems.append(f"B: publish_delta {versions}")
     finally:
         stop.set()
         poller.join()
@@ -344,7 +344,7 @@ def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table]
         problems.append(f"B: o leitor preso viu as contagens {counts_seen}")
     after = count_projected(pinned)
     if after != 4 * ROWS:
-        problems.append(f"B: o leitor preso depois do publish leu {after}")
+        problems.append(f"B: o leitor preso depois do publish_delta leu {after}")
     pinned.close()
     changed = delta.version_diff(db.uri(PROJ), 4, 6, PROJ, db.storage)
     if changed != set(months_b):
@@ -376,10 +376,10 @@ def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table]
 
 
 def publish_outcome(run: Execution, name: str, outcomes: dict[str, object]) -> None:
-    """O resultado de ``publish`` de setembro em ``outcomes[name]``: o dicionário de versões, ou o
-    ``ExecutionConflict``."""
+    """O resultado de ``publish_delta`` de setembro em ``outcomes[name]``: o dicionário de
+    versões, ou o ``ExecutionConflict``."""
     try:
-        outcomes[name] = run.publish(PROJ, partitions=[NEW_MONTH])
+        outcomes[name] = run.publish_delta(PROJ, partitions=[NEW_MONTH])
     except ExecutionConflict as error:
         outcomes[name] = error
 
@@ -474,8 +474,8 @@ def check_race_c(db: Database, folder: Path, seeds: dict[str, pa.Table]) -> None
 
 class PausingEngine(DuckDBEngine):
     """O motor DuckDB de ``exec-e``: ``export_partition`` avisa que chegou e espera o sinal, o
-    que põe o commit de outra execução entre a conferência da versão fixada de ``publish`` e a
-    abertura da tabela em ``register_files``."""
+    que põe o commit de outra execução entre a conferência da versão fixada de
+    ``publish_delta`` e a abertura da tabela em ``register_files``."""
 
     def __init__(self, config: DuckDBConfig, execution_id: str, storage: Storage,
                  reached: threading.Event, gate: threading.Event) -> None:
@@ -492,9 +492,9 @@ class PausingEngine(DuckDBEngine):
 def check_window_d(db: Database, folder: Path, seeds: dict[str, pa.Table]) -> None:
     """Seção D: ``exec-e`` e ``exec-f`` abertas na mesma versão; ``exec-e`` para entre a
     conferência da versão fixada e o commit, ``exec-f`` publica setembro inteira nesse intervalo
-    e ``exec-e`` segue. A docstring de ``publish`` promete ``ExecutionConflict`` a ``exec-e``; a
-    leitura conhecida é o commit dela, que substitui a partição de ``exec-f`` sem aviso
-    (``plan/OPEN_QUESTIONS.md``)."""
+    e ``exec-e`` segue. A docstring de ``publish_delta`` promete ``ExecutionConflict`` a
+    ``exec-e``; a leitura conhecida é o commit dela, que substitui a partição de ``exec-f`` sem
+    aviso (``plan/OPEN_QUESTIONS.md``)."""
     problems = []
     outcomes: dict[str, object] = {}
     reached, gate = threading.Event(), threading.Event()
@@ -518,7 +518,7 @@ def check_window_d(db: Database, folder: Path, seeds: dict[str, pa.Table]) -> No
     paused_outcome = outcomes.get("exec-e")
     other_outcome = outcomes.get("exec-f")
     if isinstance(paused_outcome, ExecutionConflict) and isinstance(other_outcome, dict):
-        print("   exec-e recebeu ExecutionConflict, como a docstring de publish promete")
+        print("   exec-e recebeu ExecutionConflict, como a docstring de publish_delta promete")
         committers = ["exec-f"]
     elif isinstance(paused_outcome, dict) and isinstance(other_outcome, dict):
         print("   achado conhecido: exec-e commitou depois de exec-f sem ExecutionConflict, e o "
