@@ -226,3 +226,14 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   faster than the unsorted one (10.6 s against 12.5 s for 52,654,607 rows) at the cost of memory
   (15,126 MB against 7,540 MB), with files of the same size, unlike the other tables; with 4 vCPUs
   the sorted synthetic partition took 3.6 times the unsorted. `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- Threads against the machine (target, 2026-09-27, 8 vCPUs with two threads per physical core,
+  external file cache off, partition 2026-07-31 of `cad_lancamentos`, 2,331 MB, 141,933,948 rows,
+  run beside `probes/credentials.py`): materializing took 52.7 s with 4 threads, 37.2 s with 8,
+  34.2 s with 16, 35.4 s with 24 and 36.4 s to 37.8 s with 32 and 40, the process peak from 3,341 MB
+  to 6,362 MB (3,879 MB with 8, 4,937 MB with 16); every 16-thread repetition beat every 8-thread
+  one, the best by 9% and the median by 5%. The aggregated S3 read took 7.7 s with 8 and 4.0 s with
+  24 (1.91x). The four tables (166,708,072 rows) were fastest in series with 8 threads (49.0 s, 5%
+  slower with 16) and in extra sessions with 16 (39.1 s, 1.08x over 8, peak 5,326 MB against
+  4,584 MB); extra sessions beat the series by 1.09x to 1.44x, against 1.89x on 2026-09-24, when
+  `cad_lancamentos` held a smaller share of the rows. `threads` stays at the process's CPUs (user
+  instruction of 2026-09-24). `plan/POC.md`, `plan/PLAN-STAGE-4.md`

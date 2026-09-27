@@ -4606,6 +4606,149 @@ máquina e com uma `HOME` vazia: `diagnose_aws.py` contra o moto, também com um
 
 **Consequências**: a leitura do atributo privado ficou num só lugar, `credential_expiry` de
 `probes/probelib.py`, que `space.py`, `redshift.py` e `credentials.py` chamam. O cabeçalho do
-`diagnose_aws.py` diz quais clientes leem `AWS_ENDPOINT_URL_S3`. A comparação no alvo, com os
-relatórios da bateria de 2026-09-26, espera a próxima bateria
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+`diagnose_aws.py` diz quais clientes leem `AWS_ENDPOINT_URL_S3`. A bateria de 2026-09-27 comparou
+no alvo os relatórios com os da bateria de 2026-09-26 (seção seguinte).
+
+## O que a bateria de 2026-09-27 às 15:58 mostrou no ambiente alvo
+
+Em 2026-09-27, de 15:58 a 16:29 UTC, o usuário rodou no ambiente alvo o bloco "Probes e Testes - BN"
+de `SUITE.md`, os cinco probes e as sete sessões do pytest, numa máquina de 8 vCPUs e 15.617 MB,
+como a de 2026-09-26 (Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.6, pyarrow 25.0.1, boto3 1.43.102,
+`redshift_connector` 2.1.17, `sa-east-1`). A `main` era a de 2026-09-27 às 15:47 UTC, com os probes
+corrigidos [inferido: as 541 coletas da sessão S3 são as dela]. Na mesma máquina vieram depois os
+blocos da migração, da publicação, do acesso de leitura e da exportação, as sondas de consistência,
+`probes/credentials.py` e `probes/duckdb_threads.py`. Os relatórios ficam fora de `plan/`, com os
+achados aqui. Nenhum caso e nenhuma checagem falharam, e as leituras repetem as de 2026-09-26 ("O
+que a bateria de 2026-09-26 às 15:14 mostrou no ambiente alvo"), salvo:
+
+- **Os probes corrigidos leram no alvo o que leram na pasta local.** Cada relatório dos cinco
+  diferiu do de 2026-09-26 só no que muda a cada rodada (a hora, os tempos, os IPs e a quantidade de
+  endereços que o DNS devolveu, a expiração da credencial, as contagens do bucket) e nas linhas
+  corrigidas ("O que a comparação dos probes corrigidos mostrou"); as chamadas que falharam, que dão
+  o código de saída 1, são as de 2026-09-26: o módulo `sagemaker_studio` fora do ambiente virtual no
+  `space.py`, as 6 negadas no `bucket.py` e, no `catalog.py`, a do Athena, negada, e as do Lake
+  Formation e do S3 Tables, sem resposta. No `redshift.py`, o rótulo de `pg_settings` nomeia
+  `wlm_query_slot_count`, lido com o valor 1 como antes, e o `RS-14`, com a região que o bloco
+  define, repetiu os endpoints VPC de interface. `credential_expiry` leu a expiração da credencial
+  do contêiner no `CREDENTIAL_EXPIRY` do `space.py` (16:29:21, 30 minutos à frente), no `RS-18` do
+  `redshift.py` e no `CR-1` do `credentials.py`, no formato de antes. O resumo do `diagnose_aws.py`
+  repetiu `STS: respondeu (sem manutenção)` e a linha do endpoint sem `AWS_ENDPOINT_URL`, os ramos
+  que o alvo exercita; o erro local do STS e o endpoint definido ficam com os casos de
+  `tests/test_probes.py`. O `catalog.py` esperou 30,1 s pelo Lake Formation, contra 60,1 s: o DNS
+  devolveu 3 endereços, contra mais de 4, e cada um custa os 5 s do `connect_timeout` de
+  `short_config()` nas duas tentativas, como os 30,5 s do S3 Tables sobre 3 endereços [inferido].
+- **As suítes.** A sessão `-m "not redshift"` aprovou 541 casos em 226,7 s, contra 531 em 219,7 s:
+  os casos a mais são os dos PRs #97 e #98, a cláusula de credenciais a cada `COPY`, a
+  `tabela inteira` na saída da carga, o tamanho alvo do `compact` e os probes. As suítes Redshift,
+  do motor e da publicação aprovaram 45 casos duas vezes (516,9 s e 480,8 s), 6 duas vezes (83,1 s e
+  78,6 s) e 8 duas vezes (174,5 s e 177,3 s), com as leituras de 2026-09-26 salvo os tempos, os ids
+  e os nomes dos arquivos nos manifestos. A publicação com a cláusula montada a cada `COPY`
+  ([etapa 8](PLAN-STAGE-8.md)) passou assim no Redshift do alvo, nas duas rodadas da suíte e na
+  publicação da base inteira abaixo.
+- **`BK-14`** contou 7.619 versões não correntes (233.165.927 bytes) e 7.030 marcadores de exclusão
+  sob a raiz das suítes, contra 5.269 (159.538.248 bytes) e 4.883 em 2026-09-26: 2.350 versões e
+  73.627.679 bytes entre as duas leituras.
+
+A partir das 16:34 UTC, o usuário rodou a carga, a auditoria, `history`, `snapshot`, `vacuum` e
+`archive` do bloco "Migração Parquet -> Delta" de `SUITE.md`, na raiz de 2026-09-25, carregada de
+novo: o `history` de `cad_lancamentos` começa no `CREATE TABLE` das 16:36:35.
+
+- **A base de origem não mudou desde 2026-09-26.** A carga (`started_at` 16:34:17; 8 CPUs,
+  15.617 MB, e `environment_limits` com 8 threads e `memory_limit` de 6.273 MiB, a metade dos
+  12.547 MB disponíveis) conferiu as 12 tabelas com as mesmas 354.048.596 linhas em 25 partições, as
+  mesmas contagens e somas em cada partição e os mesmos três itens fora do modelo, em 496,8 s
+  somados, contra 521,1 s. As partições de `cad_lancamentos` levaram 30,6 s, 21,2 s, 54,7 s, 30,7 s
+  e 245,0 s, a 2026-07-31 a 0,58 milhão de linhas por segundo, contra 268,2 s; o pico do processo
+  chegou a 8.625 MB na 2026-03-31 e não subiu na 2026-07-31, que em 2026-09-26 o levou a 9.161 MB. A
+  saída chama as tabelas sem partição de `tabela inteira`, a correção de 2026-09-27.
+- **A auditoria** de `cad_lancamentos` 2026-01-31 com `--foreign-keys`, na versão 5, repetiu os
+  989.852 órfãos de `data_base`, `sistema` e `contrato` e o total de `valor` 117.667.407.519,194421.
+- **`snapshot`, `vacuum` e `archive`** repetiram 2026-09-26: o snapshot `carga-2026-09-24` com as 12
+  tabelas, 0 arquivo a apagar em cada uma e os 25 arquivos copiados, com `cad_lancamentos` em 16,8 s
+  e pico de 350 MB, o arquivo da 2026-07-31 em 5,9 s, contra 19,1 s e 7,4 s.
+
+Em seguida, o usuário rodou os blocos "Publicação Delta -> Redshift", "Acesso de leitura" e
+"Exportação e Compact" de `SUITE.md`, na mesma raiz, com a saída colada na conversa, sem a hora:
+
+- **A publicação da base inteira por canal** repetiu o fluxo de 2026-09-26: `--init` criou a tabela
+  de controle; `--tables cad_contas --channel default` publicou a versão 1 em 3,4 s, com o pico do
+  processo em 249 MB; `--max-workers 4 --channel default` publicou as outras 11, as sem partição de
+  3,4 s a 4,0 s, `cad_contratos` em 37,9 s, `cad_operacoes` em 60,5 s, `rel_contrato_operacao` em
+  66,1 s e `cad_lancamentos` em 328,5 s, com o pico em 270 MB, contra 31,2 s, 53,1 s, 56,5 s e
+  295,1 s: de 11% a 21% mais por tabela particionada, com a causa não medida. A cláusula a cada
+  `COPY` não a explica sozinha: `cad_lancamentos` faz cinco `COPY`, e a leitura da credencial levou
+  menos de 0,05 s em 2026-09-26 [inferido]. `--status` leu as 12 `prd_<tabela>` com a versão
+  publicada igual à atual e nenhuma partição pendente, e `--channel current` e
+  `--snapshot carga-2026-09-25 --tables cad_contas` responderam que cada versão já estava publicada.
+- **O leitor Delta** abriu as 12 views do snapshot `carga-2026-09-25` em 0,571 s, e a contagem de
+  `cad_contas` deu 101 pelos dois leitores.
+- **`export` de `cad_lancamentos`**: por cópia, 5 arquivos em 14,7 s com pico de 261 MB; por
+  `--mode rewrite`, 5 arquivos em 56,7 s com pico de 6.938 MB, contra 15,6 s e 55,0 s com 6.989 MB.
+  O `compact` da 2026-03-31 recusou de novo pelo snapshot na versão atual 5.
+
+Das 17:33:03 às 17:34:59, o usuário rodou o bloco "Sondas de consistência" de `SUITE.md`. Nenhuma
+checagem reprovou, e os achados conhecidos se repetiram, com a variação de uma disputa:
+
+- **O sinal do zero** pelo `COPY` do DuckDB deu 100 de 2.000 linhas na sonda dos tipos e 1.538 e
+  1.539 por partição na da execução; **a janela de `publish`** da seção D da sonda da execução
+  repetiu `exec-e` commitando a versão 9 sobre a 8 de `exec-f`, sem `ExecutionConflict`; `deep_copy`
+  seguiu sem as estatísticas de `Boolean` e `DateTime`; e a escrita condicional na pasta local
+  perdeu 312 de 400 atualizações, com 204 conflitos vistos, contra 321 e 175.
+- **A disputa da seção C** deu o mesmo caminho com o vencedor trocado: `exec-d` commitou, `exec-c`
+  recebeu `ExecutionConflict` com a mensagem do delta-rs, e o arquivo dela ficou na pasta da
+  partição, fora do log.
+- **O leitor Delta sob `materialize`** fez 352 leituras sem erro, com a troca pela tabela inteira em
+  0,40 s a 0,46 s e pela parcial em 0,23 s a 0,25 s; **o motor Redshift** da sonda
+  (`probe_redshift_test.py`) passou em 49,9 s, e a limpeza apagou os 26 objetos da sessão.
+
+Das 17:35:23 às 18:38:25, `probes/credentials.py` leu `<raiz>/prd/cad_contas` em 14 rodadas, e
+nenhuma leitura falhou:
+
+- **O motor DuckDB leu pelo `delta_scan` depois da expiração.** O secret passou à chave nova às
+  18:20:31, 10,2 minutos antes da expiração das 18:30:43 da chave que guardava (`CR-9`), na primeira
+  rodada dentro dos 15 minutos em que o botocore renova a credencial (a das 18:15:30 estava a
+  15,2 minutos), e o `delta_scan` leu nas 2 rodadas depois da expiração (`CR-4`).
+- **O contêiner trocou a chave a cada cerca de 30 minutos**: a cadeia do `boto3` passou a entregar a
+  chave que expira às 19:01:13 entre 18:00:28 e 18:05:29, e a que expira às 19:31:50 entre 18:30:33
+  e 18:35:34, e nas rodadas a chave da cadeia teve de 30 a 56 minutos pela frente. As quatro trocas
+  lidas em 2026-09-26 e neste dia cabem todas numa troca a cerca de 30 minutos da expiração da chave
+  anterior [inferido].
+- **Os outros clientes seguiram lendo**: a cláusula do `COPY` e do `UNLOAD` seguiu a chave do
+  contêiner desde as 18:05:29 (`CR-10`); o delta-rs, o `read_parquet`, o `S3FileSystem` e o `boto3`
+  leram depois da expiração (`CR-3`, `CR-5` a `CR-7`); a conexão Redshift respondeu ao `select 1`
+  duas vezes depois da expiração da senha, às 18:35:24 (`CR-8`); e os cinco clientes novos leram
+  (`CR-11`).
+
+A partir das 17:35:54, ao lado de `probes/credentials.py`, cujas leituras de `cad_contas` a cada
+5 minutos são pequenas diante da partição medida [inferido], `probes/duckdb_threads.py` rodou
+inteiro pela primeira vez no alvo desde 2026-09-24, sobre a partição 2026-07-31 (`cad_lancamentos`
+com 141.933.948 linhas e 2.331 MB num arquivo; as quatro tabelas com 166.708.072 linhas), com 4, 8,
+16, 24, 32 e 40 threads, a razão sobre as 8 do padrão do motor, o cache de arquivos externos
+desligado e a melhor de três repetições, numa máquina de 8 vCPUs com duas threads por núcleo físico:
+
+- **A materialização** levou 52,660 s com 4 threads, 37,215 s com 8, 34,192 s com 16, 35,446 s com
+  24, 37,838 s com 32 e 36,448 s com 40, com o pico do processo de 3.341 MB a 6.362 MB (3.879 MB com
+  8 e 4.937 MB com 16). As três repetições com 16 threads foram mais rápidas que as três com 8, a
+  mais lenta delas por 0,007 s: a melhor ganhou 9%, e a mediana 5% (35,781 s contra 37,678 s).
+- **A leitura agregada do S3** levou 15,271 s com 4 threads, 7,666 s com 8, 4,628 s com 16, 4,020 s
+  com 24 (1,91 vez mais rápida que com 8), 4,036 s com 32 e 4,076 s com 40.
+- **As quatro tabelas** foram mais rápidas em série com 8 threads (48,998 s, contra 51,417 s com 16
+  e até 62,209 s com 40) e em sessões a mais, como `run.ingest`, com 16 (39,143 s, 1,08 vez mais
+  rápido que os 42,119 s com 8, com o pico de 5.326 MB contra 4.584 MB; pela repetição mediana,
+  40,853 s contra 42,188 s). As sessões a mais ganharam da série de 1,09 vez com 4 threads a
+  1,44 vez com 40 (1,16 vez com 8), contra 1,89 vez com 16 em 2026-09-24, quando as quatro tabelas
+  da partição 2026-06-30 somavam 51.238.647 linhas; aqui `cad_lancamentos` tem 85% das linhas
+  [inferido: a tabela maior limita o ganho das sessões a mais].
+
+**Consequências**: as correções dos probes de 2026-09-27 leram no alvo o que leram na pasta local, e
+o item dos probes sai de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), com a resposta nesta seção. A
+cláusula de credenciais a cada `COPY` da [etapa 8](PLAN-STAGE-8.md) passou no Redshift do alvo. O
+padrão de `threads` segue nas CPUs do processo (instrução do usuário de 2026-09-24): com 16 vCPUs a
+metade e o dobro perderam na materialização, e com 8 vCPUs, numa partição quatro vezes maior, o
+dobro ganhou de 5% a 9% numa tabela e de 3% a 8% nas sessões a mais, com o pico de 0,7 GB a 1,1 GB
+maior, e perdeu 5% com as quatro tabelas em série; [`PLAN.md`](PLAN.md) e a
+[etapa 4](PLAN-STAGE-4.md) guardam as duas leituras. O item das versões não correntes ganha a
+contagem deste dia; o do acesso de leitura segue com a volta a um snapshot anterior sobre a base e o
+`UNLOAD` do cliente só de leitura; o da operação segue esperando uma partição de vários arquivos e
+um `compact` antes do snapshot. Os cinco achados das sondas de consistência seguem esperando o
+usuário.
