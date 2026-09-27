@@ -181,3 +181,10 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   read the same 989,852 orphans of 2026-01-31; `snapshot carga-2026-09-24`, `vacuum` (0 files)
   and `archive` (25 files, `cad_lancamentos` 19.1 s at 348 MB) ran. The raw report stays out of
   git. `plan/POC.md`
+- The load of 2026-09-27 (`started_at` 16:34:17 UTC, 8 vCPUs, 12,547 MB available, 8 threads,
+  6,273 MiB): the source had not changed since 2026-09-26, with the same counts and sums in every
+  partition and the same three entries outside the model; 354,048,596 rows in 25 partitions in
+  496.8 s, `cad_lancamentos` 30.6 s, 21.2 s, 54.7 s, 30.7 s and 245.0 s (2026-07-31 at 0.58 million
+  rows per second), the process peak at 8,625 MB from 2026-03-31 on. The audit of 2026-01-31 read
+  the same 989,852 orphans and the `valor` total 117,667,407,519.194421, and `archive` copied
+  `cad_lancamentos` in 16.8 s at 350 MB. `plan/POC.md`

@@ -192,11 +192,16 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   s a 2,1 s com 8 a 20, e a materializou em 12,7 s com 4 threads e em 13,2 s a 18,0 s com mais; com
   16 vCPUs de 8 núcleos físicos e o cache de arquivos externos desligado, em 2026-09-24, leu a
   partição de 542 MB em 2,03 s com 8 threads, 1,19 s com 16 e 0,84 s a 0,89 s com 48 a 80, e a
-  materializou em 7,8 s com 8, 7,0 s com 16 e 11,1 s a 17,1 s com 32 a 80, com o pico do processo
-  de 1.880 MB a 6.427 MB ([`POC.md`](POC.md)). O padrão são as CPUs que o processo pode usar,
-  decidido por essa execução: a ingestão materializa, e a metade das CPUs e o dobro delas perdem
-  nela; a leitura agregada do S3 ganha 1,4 vez com o triplo, para quem a pedir em
-  `DuckDBConfig.threads`. O cache de arquivos externos do DuckDB fica ligado, o
+  materializou em 7,8 s com 8, 7,0 s com 16 e 11,1 s a 17,1 s com 32 a 80, com o pico do processo de
+  1.880 MB a 6.427 MB; com 8 vCPUs de duas threads por núcleo físico, em 2026-09-27, leu a partição
+  de 2.331 MB em 7,7 s com 8 threads e em 4,0 s a 4,1 s com 24 a 40, e a materializou em 52,7 s com
+  4, 37,2 s com 8, 34,2 s com 16 e 35,4 s a 37,8 s com 24 a 40, com o pico do processo de 3.341 MB a
+  6.362 MB ([`POC.md`](POC.md)). O padrão são as CPUs que o processo pode usar, decidido pela
+  execução de 2026-09-24: a ingestão materializa, e com 16 vCPUs a metade das CPUs e o dobro delas
+  perderam nela; com 8 vCPUs, o dobro ganhou de 5% a 9% numa tabela, com o pico cerca de 1 GB maior,
+  e perdeu 5% com quatro tabelas em série. A leitura agregada do S3 ganha de 1,4 a 1,9 vez com o
+  triplo, para quem a pedir em `DuckDBConfig.threads`. O cache de arquivos externos do DuckDB fica
+  ligado, o
   padrão: uma segunda leitura do mesmo arquivo na execução não volta ao S3. A conexão é a sessão da
   execução, e `session()` toma o `threading.RLock` e a dá ao bloco; toda primitiva toma o mesmo lock
   pelo tempo do seu comando, e nenhuma espera pelo código do cliente com ele tomado. O motor guarda

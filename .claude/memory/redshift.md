@@ -349,6 +349,13 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `a versão <n> já está publicada` for every table, because the snapshot is the current version:
   a revert over the base needs a commit after the snapshot. `plan/POC.md`,
   `plan/PLAN-STAGE-10.md`
+- The whole base published again by channel (2026-09-27, 8 vCPUs, the same base), the first time
+  with the credentials clause built for each `COPY`: `--init` created the control table again;
+  `cad_contas` 3.4 s at 249 MB, the unpartitioned tables 3.4 s to 4.0 s, `cad_contratos` 37.9 s,
+  `cad_operacoes` 60.5 s, `rel_contrato_operacao` 66.1 s and `cad_lancamentos` 328.5 s at 270 MB,
+  11% to 21% slower than on 2026-09-26 with the cause unmeasured (the credential read takes under
+  0.05 s and `cad_lancamentos` runs five `COPY`). The publication suite passed its 8 cases twice on
+  the same code. `plan/POC.md`, `plan/PLAN-STAGE-8.md`
 - A positional `COPY` cannot load a subset of a file's columns (the column list must match the
   file's count, reading of 2026-09-21), so the audit's published staging carries every contract
   column and is the same `exec_<id>_<tabela>_publicado` as `published()`, loaded once per

@@ -123,6 +123,22 @@ Delta reader's 12 views in 0.582 s) and the export block (`cad_lancamentos` by c
 version); the consistency probes ran from 18:30:31 with every check passing, the Redshift one in
 53.6 s, and `duckdb_threads.py` had not been sent by 18:35 UTC. `plan/POC.md`
 
+The battery of 2026-09-27 from 15:58 UTC (from `main` of 15:47 UTC with the corrected probes,
+inferred from the 541 cases of the S3 session) ran on 8 vCPUs and 15,617 MB (Python 3.13.15, DuckDB
+1.5.5, deltalake 1.6.6, pyarrow 25.0.1, boto3 1.43.102, `redshift_connector` 2.1.17), DuckDB
+defaulting to 8 threads and 12.2 GiB. The five probes differed from 2026-09-26 only in what changes
+per run and in the corrected lines (the `pg_settings` label now naming `wlm_query_slot_count`, the
+expiry read by `credential_expiry`); `RS-12` again returned no row, `BK-14` counted 7,619
+non-current versions (233,165,927 bytes) and 7,030 delete markers, and Lake Formation timed out in
+30.1 s over 3 DNS addresses. Every suite case passed: S3 541 in 226.7 s, Redshift 45, engine 6 and
+publication 8 twice each. The load from 16:34 (12,547 MB available, 8 threads and 6,273 MiB) read
+the source of 2026-09-26 unchanged in 496.8 s, peak 8,625 MB; the whole base was published by
+`--channel default` (`cad_lancamentos` 328.5 s at 270 MB), the Delta reader opened in 0.571 s,
+`export` took 14.7 s by copy and 56.7 s at 6,938 MB by rewrite, and `compact` refused; the
+consistency probes ran from 17:33:03 with every check passing, `probes/credentials.py` from 17:35:23
+to 18:38:25 with no read failing, and `probes/duckdb_threads.py` from 17:35:54 beside it, complete
+(`duckdb.md`). `plan/POC.md`
+
 ## The prepared folder and the venv
 
 `pyproject.toml` declares no runtime dependencies and pins the `dev` group (SQLAlchemy, duckdb-engine,
