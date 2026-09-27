@@ -4807,3 +4807,39 @@ os exemplos da seção nova do tutorial com a partição opcional.
 **Consequências**: a partição do `Execution` e o `--partition` de `serialize-db run` ficaram
 opcionais (decisão do usuário de 2026-09-27), e o tutorial ganhou a seção "Atualizar uma tabela de
 domínio sem partição"; revisados `plan/PLAN.md` e `plan/PLAN-STAGE-6.md`.
+
+## O que o teste do pipeline completo mostrou
+
+Em 2026-09-27, na pasta local do contêiner de desenvolvimento (Linux x86_64, DuckDB 1.5.5 com
+`threads` 4 e `memory_limit` 6,4 GiB lidos do ambiente, deltalake 1.6.6, pyarrow 25.0.1, SQLAlchemy
+2.0.54, Python 3.13.12), `tests/test_pipeline.py` rodou a execução mensal completa no motor DuckDB
+sobre a base fictícia de `tests/source_db_projetado.py` carregada no Delta com o modelo cliente: a
+partição 2026-07-31 sobre a última data-base, 2026-06-30, pela API e por `serialize-db run`, e em
+seguida a de 2026-08-31 sobre a partição recém-publicada.
+
+- **A carga da base fictícia**: `initial_load` gravou as 12 tabelas, as quatro partições de cada
+  particionada, em 4,7 s, com uma conexão DuckDB por tabela.
+- **Os tempos da execução**: `abertura` 0,135 s, `ingest` 0,046 s (as 12 tabelas, as particionadas
+  só na última data-base e materializadas), `audit` 0,203 s (as quatro tabelas gravadas, com
+  `foreign_keys=True`) e `publish_delta` 0,59 s (uma versão por tabela); a mesma execução por
+  `serialize-db run` levou 0,129 s, 0,038 s, 0,195 s e 0,597 s, e a do mês seguinte 0,132 s,
+  0,039 s, 0,194 s e 0,592 s. Os dois testes levam 9,3 s.
+- **A geração no sandbox**: as tabelas de saída já existem no sandbox, materializadas pela
+  ingestão, então a partição nova entra por `INSERT ... SELECT` em Core (`insert().from_select`)
+  pela sessão da execução, com a chave `row_number() OVER (ORDER BY chave) + (faixa.start - 1)`
+  sobre a faixa de `next_ids`, e a data-base e a coluna de partição como `sa.literal`;
+  `run.sandbox.query` devolve a contagem do DuckDB.
+- **A auditoria dispensou a chave sequencial da junção**: em cada tabela, `chave_<chave>_tabela`
+  saiu aprovada com o motivo "dispensada", porque o menor id novo passa do maior da versão fixada;
+  as chaves estrangeiras compostas `orfao_data_operacao` e `orfao_data_base_sistema_contrato`
+  rodaram, e `not_run` ficou vazio nas quatro.
+- **O commit**: `version_diff` entre a versão fixada e a nova lista só a partição nova em cada
+  tabela, e o commit carrega `serialize_db_execution_id` e `serialize_db_input_versions` com as 12
+  versões lidas, sem `serialize_db_snapshot`.
+- **O leitor Delta e a execução seguinte**: as quatro partições antigas mantiveram as contagens da
+  carga; a execução de 2026-08-31 leu 2026-07-31 como a última data-base e gerou um mês projetado a
+  menos nos lançamentos.
+
+**Consequências**: `tests/test_pipeline.py` entra nos testes do pacote, com dois casos `local`;
+`plan/PLAN-STAGE-6.md` descreve o teste e `plan/CURRENT_STATE.md` as contagens. A adaptação do
+teste ao S3 e ao Redshift fica com o usuário (mensagem de 2026-09-27).
