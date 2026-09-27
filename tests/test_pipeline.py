@@ -6,13 +6,14 @@ as quatro partições de cada tabela particionada; ela é gravada uma vez por m�
 ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``), e cada teste trabalha numa cópia própria,
 para publicar a partição nova sem tocar a base dos outros. ``monthly_pipeline`` é o pipeline, no
 formato ``modulo:funcao`` que ``serialize-db run`` recebe: a execução na partição do mês seguinte
-à última data-base publicada; a ingestão de toda tabela do modelo, as sem partição inteiras e as
-particionadas só na última data-base; o ``SELECT`` com ``join`` dos saldos por conta do modelo
-cliente sobre essa data-base; a geração da partição nova de ``cad_operacoes``,
-``rel_contrato_operacao``, ``cad_contratos`` e ``cad_lancamentos`` a partir da última, por
-``INSERT ... SELECT`` no sandbox com os ids de ``next_ids``; o ``join`` de contratos, relação e
-operações que confere o rateio da partição nova; a auditoria com as chaves estrangeiras; e a
-publicação no Delta.
+à última data-base publicada; a ingestão de toda tabela do modelo menos ``cad_lancamentos``, as sem
+partição inteiras e as particionadas só na última data-base; a geração da partição nova de
+``cad_operacoes``, ``rel_contrato_operacao`` e ``cad_contratos`` a partir da última, por
+``INSERT ... SELECT`` no sandbox com os ids de ``next_ids``; a de ``cad_lancamentos`` em Python,
+com pyarrow, a partir da última partição lida da versão fixada por ``run.pinned_delta``, gravada
+por ``run.sandbox.load``, que cria a tabela dela no sandbox; o ``SELECT`` com ``join`` dos saldos
+por conta do modelo cliente sobre a partição nova; o ``join`` de contratos, relação e operações que
+confere o rateio da partição nova; a auditoria com as chaves estrangeiras; e a publicação no Delta.
 
 Os testes conferem os saldos e as contagens contra a base fictícia em memória, o rateio de cada
 contrato, as auditorias aprovadas com toda verificação rodada, a versão nova de cada tabela só com
@@ -33,6 +34,7 @@ import uuid
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 import sqlalchemy as sa
 
@@ -107,7 +109,7 @@ class MonthlyReport:
     previous: str
     """A última data-base publicada antes da partição da execução."""
     balances: pa.Table
-    """Os saldos por conta na última data-base, o resultado de ``saldos_por_conta``."""
+    """Os saldos por conta na data-base nova, o resultado de ``saldos_por_conta``."""
     produced: dict[str, int]
     """As linhas geradas na partição nova, por tabela."""
     apportionment: pa.Table
@@ -125,11 +127,15 @@ def last_base_date(run: Execution) -> str:
 
 
 def ingest_model(run: Execution, previous: str) -> None:
-    """Traz ao sandbox toda tabela do modelo: as sem partição inteiras, como view, e as
-    particionadas só na última data-base, materializadas, porque recebem as linhas da nova."""
+    """Traz ao sandbox toda tabela do modelo menos ``cad_lancamentos``: as sem partição inteiras,
+    como view, e as particionadas só na última data-base, materializadas, porque recebem as linhas
+    da nova. Os lançamentos ficam de fora porque ``run.sandbox.load`` cria a tabela deles, e um
+    nome no sandbox tem um só dono."""
     unpartitioned = []
     partitioned = []
     for table in run.db.tables():
+        if table.name == ENTRIES.name:
+            continue
         if table_options(table).partition_by is None:
             unpartitioned.append(table)
         else:
@@ -144,20 +150,16 @@ def count_rows(run: Execution, table: sa.Table, condition: sa.ColumnElement) -> 
     return run.sandbox.query(statement).column(0)[0].as_py()
 
 
-def carry_forward(run: Execution, table: sa.Table, previous: str, current: str,
-                  replaced: dict[str, sa.ColumnElement] | None = None,
-                  only: sa.ColumnElement | None = None) -> int:
+def carry_forward(run: Execution, table: sa.Table, previous: str, current: str) -> int:
     """Leva as linhas da última data-base à nova, num ``INSERT ... SELECT`` no sandbox.
 
     A chave sequencial recebe os ids de ``next_ids``, a coluna de origem da partição recebe a nova
-    data-base e a coluna de partição o valor dela; ``replaced`` troca outras colunas pela
-    expressão dada, e ``only`` restringe as linhas levadas. Devolve quantas linhas entraram.
+    data-base e a coluna de partição o valor dela; as demais colunas seguem iguais. Devolve quantas
+    linhas entraram.
     """
     options = table_options(table)
     (key,) = table.primary_key.columns
     in_previous = table.c[options.partition_by] == previous
-    if only is not None:
-        in_previous = sa.and_(in_previous, only)
     count = count_rows(run, table, in_previous)
     ids = run.next_ids(table, count)
 
@@ -167,7 +169,6 @@ def carry_forward(run: Execution, table: sa.Table, previous: str, current: str,
         key.name: new_key,
         options.partition_source: sa.literal(datetime.date.fromisoformat(current)),
         options.partition_by: sa.literal(current),
-        **(replaced or {}),
     }
     selected = []
     for column in table.columns:
@@ -178,31 +179,62 @@ def carry_forward(run: Execution, table: sa.Table, previous: str, current: str,
     return count
 
 
+def previous_entries(run: Execution, previous: str) -> pa.Table:
+    """Os lançamentos da última data-base, lidos da versão fixada sem ocupar o nome da tabela no
+    sandbox, na ordem da chave."""
+    pinned = run.pinned_delta(ENTRIES)
+    statement = (sa.select(pinned)
+                 .where(pinned.c.data_base_str == previous)
+                 .order_by(pinned.c.id_lancamento))
+    return run.sandbox.query(statement)
+
+
+def next_month_entries(entries: pa.Table, current: str, ids: range) -> pa.Table:
+    """A partição nova dos lançamentos, gerada em pyarrow: a chave recebe os ids da faixa, a
+    data-base e a coluna de partição recebem a nova, o carimbo é o desta execução, e as demais
+    colunas seguem as dos lançamentos dados."""
+    count = entries.num_rows
+    new_month = datetime.date.fromisoformat(current)
+    replaced = {
+        "id_lancamento": pa.array(ids, pa.int64()),
+        "data_base": pa.array([new_month] * count, pa.date32()),
+        "data_base_str": pa.array([current] * count, pa.string()),
+        "timestamp": pa.array([WRITTEN_AT] * count, pa.timestamp("us")),
+    }
+    columns = {}
+    for name in entries.column_names:
+        columns[name] = replaced.get(name, entries[name])
+    return pa.table(columns)
+
+
 def produce_next_month(run: Execution, previous: str, current: str) -> dict[str, int]:
     """Gera a partição nova das quatro tabelas a partir da última: operações, contratos e a
-    relação entre eles como estão, e os lançamentos só nos meses posteriores à nova data-base, com
-    o carimbo desta execução. Devolve as linhas geradas por tabela."""
+    relação entre eles como estão, por ``INSERT ... SELECT`` no sandbox; os lançamentos em
+    pyarrow, só os dos meses posteriores à nova data-base, gravados por ``run.sandbox.load``, que
+    cria a tabela deles no sandbox. Devolve as linhas geradas por tabela."""
     produced = {}
     for table in (OPERATIONS, CONTRACTS, APPORTIONMENTS):
         produced[table.name] = carry_forward(run, table, previous, current)
-    still_ahead = ENTRIES.c.data > datetime.date.fromisoformat(current)
-    produced[ENTRIES.name] = carry_forward(run, ENTRIES, previous, current,
-                                           replaced={"timestamp": sa.literal(WRITTEN_AT)},
-                                           only=still_ahead)
+    entries = previous_entries(run, previous)
+    new_month = datetime.date.fromisoformat(current)
+    still_ahead = entries.filter(pc.greater(entries["data"], pa.scalar(new_month)))
+    ids = run.next_ids(ENTRIES, still_ahead.num_rows)
+    new_entries = next_month_entries(still_ahead, current, ids)
+    produced[ENTRIES.name] = run.sandbox.load(ENTRIES, new_entries)
     return produced
 
 
 def monthly_pipeline(run: Execution) -> MonthlyReport:
-    """O pipeline mensal sobre a partição da execução: a ingestão do modelo, os saldos da última
-    data-base, a partição nova das quatro tabelas, o rateio dela, a auditoria e a publicação.
+    """O pipeline mensal sobre a partição da execução: a ingestão do modelo, a partição nova das
+    quatro tabelas, os saldos por conta e o rateio dela, a auditoria e a publicação.
 
     É a função ``modulo:funcao`` de ``serialize-db run``, que ignora o relatório devolvido.
     """
     current = run.partition
     previous = last_base_date(run)
     ingest_model(run, previous)
-    balances = run.sandbox.query(STATEMENTS["saldos_por_conta"], {"data_base_str": previous})
     produced = produce_next_month(run, previous, current)
+    balances = run.sandbox.query(STATEMENTS["saldos_por_conta"], {"data_base_str": current})
     apportionment = run.sandbox.query(APPORTIONMENT_BY_CONTRACT, {"data_str": current})
     audits = {}
     for table in PRODUCED:
@@ -254,13 +286,23 @@ def source_tables() -> dict[str, pa.Table | dict[str, pa.Table]]:
     return source.build_tables()
 
 
-def expected_balances(tables: dict, base_date: str) -> list[dict[str, object]]:
-    """Os saldos por conta de ``saldos_por_conta`` calculados sobre a base em memória: a soma de
-    ``valor`` dos lançamentos da data-base por conta que permite lançamentos, na ordem do
-    número."""
+def carried_entries(tables: dict, base_date: str, current: str) -> list[dict[str, object]]:
+    """Os lançamentos da data-base ``base_date`` que a partição ``current`` recebe: os que projetam
+    um mês posterior a ``current``."""
+    month = datetime.date.fromisoformat(current)
+    carried = []
+    for row in tables["cad_lancamentos"][base_date].to_pylist():
+        if row["data"] > month:
+            carried.append(row)
+    return carried
+
+
+def expected_balances(tables: dict, entries: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Os saldos por conta de ``saldos_por_conta`` calculados sobre esses lançamentos da base em
+    memória: a soma de ``valor`` por conta que permite lançamentos, na ordem do número."""
     accounts = {row["id_conta"]: row for row in tables["cad_contas"].to_pylist()}
     totals: dict[tuple[str, str], float] = {}
-    for row in tables["cad_lancamentos"][base_date].to_pylist():
+    for row in entries:
         account = accounts[row["id_conta"]]
         if not account["permite_lancamentos"]:
             continue
@@ -272,23 +314,13 @@ def expected_balances(tables: dict, base_date: str) -> list[dict[str, object]]:
     return balances
 
 
-def entries_still_ahead(tables: dict, base_date: str, current: str) -> int:
-    """Quantos lançamentos da data-base ``base_date`` projetam um mês posterior a ``current``."""
-    month = datetime.date.fromisoformat(current)
-    count = 0
-    for row in tables["cad_lancamentos"][base_date].to_pylist():
-        if row["data"] > month:
-            count += 1
-    return count
-
-
 def expected_produced(tables: dict, current: str) -> dict[str, int]:
     """As linhas que a partição ``current`` recebe de cada tabela: as da última data-base, e nos
     lançamentos só as dos meses posteriores a ``current``."""
     produced = {}
     for table in (OPERATIONS, CONTRACTS, APPORTIONMENTS):
         produced[table.name] = tables[table.name][LAST_BASE_DATE].num_rows
-    produced[ENTRIES.name] = entries_still_ahead(tables, LAST_BASE_DATE, current)
+    produced[ENTRIES.name] = len(carried_entries(tables, LAST_BASE_DATE, current))
     return produced
 
 
@@ -350,8 +382,8 @@ def assert_audits_ran_every_check(audits: dict[str, AuditReport], current: str) 
 
 
 def test_monthly_pipeline_publishes_the_next_base_date(db: Database) -> None:
-    """A execução de 2026-07-31 lê 2026-06-30 como a última data-base, devolve os saldos por conta
-    da base em memória, gera a partição nova com as contagens esperadas e o rateio somando 1 por
+    """A execução de 2026-07-31 lê 2026-06-30 como a última data-base, gera a partição nova com as
+    contagens esperadas, os saldos por conta da base em memória e o rateio somando 1 por
     contrato, aprova as quatro auditorias com toda verificação rodada e publica uma versão a mais
     em cada tabela, só com a partição nova alterada, com o ``execution_id`` e as versões lidas no
     commit; o leitor Delta lê as partições antigas intactas e a nova."""
@@ -362,7 +394,8 @@ def test_monthly_pipeline_publishes_the_next_base_date(db: Database) -> None:
 
     # O que a execução leu e gerou.
     assert report.previous == LAST_BASE_DATE
-    assert_balances_match(report.balances, expected_balances(tables, LAST_BASE_DATE))
+    carried = carried_entries(tables, LAST_BASE_DATE, NEXT_BASE_DATE)
+    assert_balances_match(report.balances, expected_balances(tables, carried))
     assert report.produced == expected_produced(tables, NEXT_BASE_DATE)
     assert_apportionment_sums_to_one(report.apportionment, report.produced[CONTRACTS.name])
     assert_audits_ran_every_check(report.audits, NEXT_BASE_DATE)

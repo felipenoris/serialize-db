@@ -4818,17 +4818,24 @@ partição 2026-07-31 sobre a última data-base, 2026-06-30, pela API e por `ser
 seguida a de 2026-08-31 sobre a partição recém-publicada.
 
 - **A carga da base fictícia**: `initial_load` gravou as 12 tabelas, as quatro partições de cada
-  particionada, em 4,7 s, com uma conexão DuckDB por tabela.
-- **Os tempos da execução**: `abertura` 0,135 s, `ingest` 0,046 s (as 12 tabelas, as particionadas
-  só na última data-base e materializadas), `audit` 0,203 s (as quatro tabelas gravadas, com
-  `foreign_keys=True`) e `publish_delta` 0,59 s (uma versão por tabela); a mesma execução por
-  `serialize-db run` levou 0,129 s, 0,038 s, 0,195 s e 0,597 s, e a do mês seguinte 0,132 s,
-  0,039 s, 0,194 s e 0,592 s. Os dois testes levam 9,3 s.
-- **A geração no sandbox**: as tabelas de saída já existem no sandbox, materializadas pela
-  ingestão, então a partição nova entra por `INSERT ... SELECT` em Core (`insert().from_select`)
-  pela sessão da execução, com a chave `row_number() OVER (ORDER BY chave) + (faixa.start - 1)`
-  sobre a faixa de `next_ids`, e a data-base e a coluna de partição como `sa.literal`;
-  `run.sandbox.query` devolve a contagem do DuckDB.
+  particionada, em 4,8 s, com uma conexão DuckDB por tabela.
+- **Os tempos da execução**: `abertura` 0,133 s, `ingest` 0,036 s (11 tabelas, as particionadas
+  só na última data-base e materializadas), `audit` 0,287 s (as quatro tabelas gravadas, com
+  `foreign_keys=True`) e `publish_delta` 0,684 s (uma versão por tabela); a mesma execução por
+  `serialize-db run` levou 0,16 s, 0,06 s, 0,211 s e 0,684 s, e a do mês seguinte 0,141 s,
+  0,039 s, 0,209 s e 0,697 s. Os dois testes levam 9,9 s.
+- **A geração por `INSERT ... SELECT`**: `cad_operacoes`, `cad_contratos` e `rel_contrato_operacao`
+  já existem no sandbox, materializadas pela ingestão, e a partição nova entra em Core
+  (`insert().from_select`) pela sessão da execução, com a chave `row_number() OVER (ORDER BY chave)
+  + (faixa.start - 1)` sobre a faixa de `next_ids`, e a data-base e a coluna de partição como
+  `sa.literal`; `run.sandbox.query` devolve a contagem do DuckDB.
+- **A geração em pyarrow**: um nome no sandbox tem um só dono, e `run.sandbox.load` recusa o que o
+  `ingest` ocupou; por isso `cad_lancamentos` fica fora da ingestão, a última partição vem de
+  `run.pinned_delta` como `pa.Table`, o filtro dos meses posteriores e as colunas novas (a chave
+  pela faixa de `next_ids`, a data-base, a partição e o carimbo) são pyarrow, e `run.sandbox.load`
+  cria a tabela do sandbox só com a partição nova (pedido do usuário de 2026-09-27, a geração dos
+  lançamentos em Python com pyarrow). `saldos_por_conta` roda depois da carga, sobre a partição
+  nova.
 - **A auditoria dispensou a chave sequencial da junção**: em cada tabela, `chave_<chave>_tabela`
   saiu aprovada com o motivo "dispensada", porque o menor id novo passa do maior da versão fixada;
   as chaves estrangeiras compostas `orfao_data_operacao` e `orfao_data_base_sistema_contrato`

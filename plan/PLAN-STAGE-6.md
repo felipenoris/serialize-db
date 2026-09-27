@@ -179,17 +179,18 @@ as chamadas.
 
 `tests/test_pipeline.py` roda a execução completa sobre a base de testes em Delta, a base fictícia
 de `tests/source_db_projetado.py` carregada por `initial_load` com o modelo cliente:
-`monthly_pipeline(run)`, no formato `modulo:funcao` de `serialize-db run`, ingere as 12 tabelas (as
-particionadas só na última data-base, materializadas), roda `saldos_por_conta` de
-`client_model.statements` sobre ela, gera a partição do mês seguinte de `cad_operacoes`,
-`cad_contratos`, `rel_contrato_operacao` e `cad_lancamentos` por `INSERT ... SELECT` com os ids de
-`next_ids`, confere o rateio por contrato num `join` de três tabelas, audita as quatro com
-`foreign_keys=True` e as publica por `publish_delta`.
-`test_monthly_pipeline_publishes_the_next_base_date` confere os saldos e as contagens contra a base
-em memória, as auditorias sem verificação por rodar, a versão a mais de cada tabela só com a
-partição nova alterada, os metadados do commit e a releitura pelo leitor Delta;
-`test_following_month_runs_over_the_published_partition` roda o mesmo pipeline por `serialize-db
-run` e, em seguida, a execução do mês seguinte sobre a partição publicada.
+`monthly_pipeline(run)`, no formato `modulo:funcao` de `serialize-db run`, ingere as tabelas do
+modelo menos `cad_lancamentos` (as particionadas só na última data-base, materializadas), gera a
+partição do mês seguinte de `cad_operacoes`, `cad_contratos` e `rel_contrato_operacao` por
+`INSERT ... SELECT` com os ids de `next_ids`, e a de `cad_lancamentos` em pyarrow, a partir da
+última partição lida por `run.pinned_delta`, gravada por `run.sandbox.load`, que cria a tabela no
+sandbox; roda `saldos_por_conta` de `client_model.statements` sobre a partição nova, confere o
+rateio por contrato num `join` de três tabelas, audita as quatro com `foreign_keys=True` e as
+publica por `publish_delta`. `test_monthly_pipeline_publishes_the_next_base_date` confere os saldos
+e as contagens contra a base em memória, as auditorias sem verificação por rodar, a versão a mais de
+cada tabela só com a partição nova alterada, os metadados do commit e a releitura pelo leitor Delta;
+`test_following_month_runs_over_the_published_partition` roda o mesmo pipeline por
+`serialize-db run` e, em seguida, a execução do mês seguinte sobre a partição publicada.
 
 ## A implementação
 
