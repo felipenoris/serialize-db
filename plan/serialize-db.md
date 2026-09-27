@@ -162,7 +162,7 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
 3. O pipeline roda em `run.sandbox`; o que sai para o Python sai em lotes por `stream`, ou como
    `pa.Table` por `query`, e volta por `loader` ou `load`; os intermediários ficam no
    sandbox, não no Delta. O nome de uma tabela no sandbox é do `ingest` ou do `loader`, nunca dos
-   dois: a tabela que a execução grava é lida na versão fixada por `run.pinned(table)`.
+   dois: a tabela que a execução grava é lida na versão fixada por `run.pinned_delta(table)`.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
 5. `run.publish_delta` reconcilia o esquema, substitui cada partição num commit (o registro do
    arquivo do `COPY ... (RETURN_STATS)` depois das conferências da [etapa 3](PLAN-STAGE-3.md)) com

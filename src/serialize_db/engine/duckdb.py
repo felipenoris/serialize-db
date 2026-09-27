@@ -18,7 +18,7 @@ isso depois da entrada ainda pode falhar com a chave vencida.
 As primitivas:
 
 - ``ingest`` cria uma view (ou tabela, com ``materialize=True``) com o nome do modelo sobre
-  ``delta_scan(uri, version := v)``, e ``pinned`` devolve a versão fixada como origem de
+  ``delta_scan(uri, version := v)``, e ``pinned_delta`` devolve a versão fixada como origem de
   consulta, sem ocupar nome no sandbox;
 - ``stream`` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à memória
   enquanto os lotes guardados cabem em 64 MiB, e a um arquivo Arrow IPC com LZ4 na pasta de
@@ -446,7 +446,7 @@ class DuckDBLoader:
         if engine.name_in_use(table.name):
             raise SandboxError(
                 f"{table.name}: o nome já está ocupado no sandbox, pelo ingest ou por outro "
-                f"loader; leia a versão fixada por run.pinned({table.name})")
+                f"loader; leia a versão fixada por run.pinned_delta({table.name})")
         self._engine = engine
         self._table = table
         self._schema: pa.Schema | None = None
@@ -887,14 +887,14 @@ class DuckDBEngine:
         with self.session() as connection:
             connection.execute(text)
 
-    def pinned(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
+    def pinned_delta(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox.
 
         Exemplo:
 
         .. code-block:: python
 
-            previous = engine.pinned(Projetado.__table__, uri, 57)
+            previous = engine.pinned_delta(Projetado.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
@@ -1048,7 +1048,7 @@ class DuckDBEngine:
                 sources[target.name] = target
             elif referenced is not None and target.name in referenced:
                 uri, version = referenced[target.name]
-                sources[target.name] = self.pinned(target, uri, version)
+                sources[target.name] = self.pinned_delta(target, uri, version)
         return sources
 
     def _text(self, statement: sa.sql.ClauseElement, table: sa.Table) -> str:
@@ -1125,7 +1125,7 @@ class DuckDBEngine:
         pinned = None
         pinned_max_key = None
         if uri is not None and version is not None:
-            pinned = self.pinned(table, uri, version)
+            pinned = self.pinned_delta(table, uri, version)
             pinned_max_key = self._pinned_max_key(table, uri, version)
         sources = self._referenced_sources(table, foreign_keys, referenced)
         found, not_run = audit.checks_and_not_run(table, partitions, foreign_keys, key_scope,

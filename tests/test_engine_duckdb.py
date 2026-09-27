@@ -501,13 +501,13 @@ def test_ingest_opens_only_the_range_of_partitions(setup: Setup, name: str, want
     assert opened == {f"data_base_str={month}" for month in opened_months}
 
 
-def test_pinned_reads_the_version_without_a_sandbox_name(setup: Setup) -> None:
-    """``pinned`` lê a versão fixada sem criar objeto no sandbox, e o ``loader`` da mesma tabela
-    fica com o nome do modelo; sem versão, ``SandboxError``."""
+def test_pinned_delta_reads_the_version_without_a_sandbox_name(setup: Setup) -> None:
+    """``pinned_delta`` lê a versão fixada sem criar objeto no sandbox, e o ``loader`` da mesma
+    tabela fica com o nome do modelo; sem versão, ``SandboxError``."""
     version = published_table(setup, PROJECTED, MONTHS[:2])
     engine = setup.engine
     uri = setup.uri(PROJECTED)
-    source = engine.pinned(PROJECTED, uri, version)
+    source = engine.pinned_delta(PROJECTED, uri, version)
     later = entry_rows(MONTHS[2], 900, 5, PROJECTED)
     delta.publish_partition(uri, PROJECTED, MONTHS[2], later, METADATA, setup.storage)
     top = sa.func.max(source.c.id_lancamento).label("topo")
@@ -517,7 +517,7 @@ def test_pinned_reads_the_version_without_a_sandbox_name(setup: Setup) -> None:
     engine.load(PROJECTED, entry_rows(MONTHS[5], 1000, 3, PROJECTED))
     assert count_of(engine, PROJECTED.name) == 3
     with pytest.raises(SandboxError, match="ainda não existe"):
-        engine.pinned(PROJECTED, uri, None)
+        engine.pinned_delta(PROJECTED, uri, None)
 
 
 # ---------------------------------------------------------------- consulta e parâmetros
@@ -891,7 +891,7 @@ def test_loader_refuses_a_name_in_use(setup: Setup) -> None:
     engine.ingest(materialized, setup.uri(ENTRIES), version, materialize=True)
     engine.load(PROJECTED, entry_rows(MONTHS[0], 1, 5, PROJECTED))
     for table in (ENTRIES, materialized, PROJECTED):
-        with pytest.raises(SandboxError, match="run.pinned"):
+        with pytest.raises(SandboxError, match="run.pinned_delta"):
             engine.loader(table)
     names = ("cad_lancamentos", "cad_materializada", PROJECTED.name)
     assert [count_of(engine, name) for name in names] == [10, 10, 5]

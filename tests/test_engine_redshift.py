@@ -664,7 +664,7 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
                                                          local_location: LocalLocation) -> None:
     """Por partição, o manifesto no ``staging/``, o ``DELETE`` da staging, o ``COPY ... MANIFEST
     FILLRECORD`` e o ``INSERT`` com o valor; a staging apagada no fim; a partição sem arquivo
-    não roda; o nome ocupado e a tabela sem versão são ``SandboxError``; ``pinned`` carrega a
+    não roda; o nome ocupado e a tabela sem versão são ``SandboxError``; ``pinned_delta`` carrega a
     versão inteira em ``_versao_<versão>`` uma vez, e outra versão numa staging nova;
     ``cleanup`` apaga as tabelas e o ``staging/``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
@@ -701,19 +701,19 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     with pytest.raises(SandboxError, match="ocupado"):
         engine.ingest(ENTRIES, uri, 2)
 
-    # pinned: a versão inteira, uma vez.
-    source = engine.pinned(ENTRIES, uri, 2)
+    # pinned_delta: a versão inteira, uma vez.
+    source = engine.pinned_delta(ENTRIES, uri, 2)
     assert str(sa.select(source.c.id_lancamento)).startswith(
         f'SELECT "{PREFIX}cad_lancamentos_versao_2"."id_lancamento"')
     copies = [text for text in connection.texts() if text.startswith("COPY")]
     assert len(copies) == 3
-    engine.pinned(ENTRIES, uri, 2)
+    engine.pinned_delta(ENTRIES, uri, 2)
     assert len([text for text in connection.texts() if text.startswith("COPY")]) == 3
     with pytest.raises(SandboxError):
-        engine.pinned(ENTRIES, uri, None)
+        engine.pinned_delta(ENTRIES, uri, None)
 
     # Outra versão numa staging nova, com a partição única da versão 1.
-    older = engine.pinned(ENTRIES, uri, 1)
+    older = engine.pinned_delta(ENTRIES, uri, 1)
     assert str(sa.select(older.c.id_lancamento)).startswith(
         f'SELECT "{PREFIX}cad_lancamentos_versao_1"."id_lancamento"')
     assert len([text for text in connection.texts() if text.startswith("COPY")]) == 4

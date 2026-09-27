@@ -551,7 +551,7 @@ class Execution:
                 tasks.append((table.name, task))
             run_in_pool(tasks, max_workers=max(len(tables), 1))
 
-    def pinned(self, table: sa.Table) -> sa.FromClause:
+    def pinned_delta(self, table: sa.Table) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: é por ela
         que o pipeline lê as partições já gravadas no Delta da tabela que ele mesmo grava.
 
@@ -559,14 +559,14 @@ class Execution:
 
         .. code-block:: python
 
-            previous = run.pinned(Projetado.__table__)
+            previous = run.pinned_delta(Projetado.__table__)
             run.sandbox.query(sa.select(sa.func.max(previous.c.id_projetado)))
 
         :param table: a tabela do modelo.
         :return: o ``FromClause`` com as colunas do contrato.
         :raises SandboxError: a tabela sem versão fixada, que ainda não existe.
         """
-        return self.sandbox.pinned(table, self._uri(table), self._version(table))
+        return self.sandbox.pinned_delta(table, self._uri(table), self._version(table))
 
     def _first_id(self, table: sa.Table, key: sa.Column) -> int:
         """O primeiro id de ``next_ids``: o maior da versão fixada mais um, ou 1 na tabela nova."""

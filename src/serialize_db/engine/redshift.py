@@ -14,8 +14,8 @@ As primitivas:
 
 - ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, por
   ``COPY ... MANIFEST`` numa staging sem a coluna de partição e um ``INSERT`` com o valor dela;
-  ``pinned`` carrega a versão fixada em ``exec_<id>_<tabela>_versao_<versão>`` e a devolve como
-  origem de consulta;
+  ``pinned_delta`` carrega a versão fixada em ``exec_<id>_<tabela>_versao_<versão>`` e a devolve
+  como origem de consulta;
 - ``stream`` roda ``UNLOAD ... PARALLEL OFF`` para ``stream/<uuid>/`` sob o ``staging_prefix``
   (``<ambiente>/staging/<execution_id>/`` no sandbox, ``<id do leitor>/`` sob o ``unload_to`` do
   leitor Redshift) na thread de quem chama e lê os arquivos numa thread auxiliar, dois lotes à
@@ -764,7 +764,7 @@ class RedshiftLoader:
         if engine.name_in_use(self._name):
             raise SandboxError(
                 f"{table.name}: o nome já está ocupado no sandbox, pelo ingest ou por outro "
-                f"loader; leia a versão fixada por run.pinned({table.name})")
+                f"loader; leia a versão fixada por run.pinned_delta({table.name})")
         self._engine = engine
         self._table = table
         self._schema: pa.Schema | None = None
@@ -876,7 +876,7 @@ class RedshiftLoader:
 
 @dataclasses.dataclass(frozen=True)
 class _PinnedStaging:
-    """A staging ``_versao_<versão>`` da versão fixada de uma tabela: ``pinned`` a carrega
+    """A staging ``_versao_<versão>`` da versão fixada de uma tabela: ``pinned_delta`` a carrega
     na hora, e a auditoria só quando uma verificação que a cita roda."""
 
     table: sa.Table
@@ -1259,7 +1259,7 @@ class RedshiftEngine:
             self._load_from_delta(staging.table, staging.name, staging.uri, staging.version, values)
             self._loaded.add(staging.name)
 
-    def pinned(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
+    def pinned_delta(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
         sandbox: a staging ``exec_<id>_<tabela>_versao_<versão>``, carregada uma vez por
         execução e por versão com todas as partições dela. Outra versão, depois de
@@ -1270,7 +1270,7 @@ class RedshiftEngine:
 
         .. code-block:: python
 
-            previous = engine.pinned(Projetado.__table__, uri, 57)
+            previous = engine.pinned_delta(Projetado.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.

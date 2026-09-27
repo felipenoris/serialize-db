@@ -140,7 +140,7 @@ class SandboxError(ValueError):
     """Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido, ou o
     motor Redshift sem as credenciais que o ``COPY`` e o ``UNLOAD`` pedem.
 
-    A mensagem nomeia o objeto; o cliente lê a versão fixada por ``run.pinned(table)`` em vez
+    A mensagem nomeia o objeto; o cliente lê a versão fixada por ``run.pinned_delta(table)`` em vez
     de gravar no nome que o ``ingest`` ocupou, como a mensagem do ``loader`` indica, ou abre
     um ``loader`` só por tabela. Sem ``iam_role`` na configuração, as credenciais vêm da sessão
     ``boto3``, e a mensagem diz onde ela procurou.

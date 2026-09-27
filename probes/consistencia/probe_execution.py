@@ -2,8 +2,8 @@
 de borda; numa execução, o pipeline em threads, uma por partição, cada uma com o seu ``stream``
 da entrada escrevendo em dois ``loader`` com ids de ``next_ids``, a auditoria e dois
 ``publish_delta`` ao mesmo tempo; um leitor ``current`` aberto e consultado enquanto outra
-execução ingere, lê ``pinned`` e publica de novo, com os canais ``default`` e ``current``; duas
-execuções abertas na mesma versão publicando a mesma partição em threads; e uma execução parada
+execução ingere, lê ``pinned_delta`` e publica de novo, com os canais ``default`` e ``current``;
+duas execuções abertas na mesma versão publicando a mesma partição em threads; e uma execução parada
 entre a conferência da versão fixada e o commit enquanto outra publica a mesma partição.
 
 .. code-block:: shell
@@ -300,7 +300,7 @@ def count_projected(reader: object) -> int:
 def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table],
                           expected_a: dict[tuple[str, str], pa.Table]) -> None:
     """Seção B: um leitor ``current`` aberto antes de ``exec-b`` e consultado a cada 50 ms
-    enquanto ela ingere com ``materialize=True``, lê ``pinned``, projeta agosto de novo e
+    enquanto ela ingere com ``materialize=True``, lê ``pinned_delta``, projeta agosto de novo e
     setembro e publica; depois os canais ``current`` e ``default`` (em ``t1``)."""
     problems = []
     seeds[NEW_MONTH] = entrada_rows(NEW_MONTH, 1 + 4 * ROWS, ROWS)
@@ -324,9 +324,9 @@ def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table]
     months_b = [AUGUST, NEW_MONTH]
     try:
         with Execution(db, engine_for(db, folder, "exec-b"), NEW_MONTH, "exec-b") as run:
-            # A tabela que o pipeline escreve é lida por pinned, nunca ingerida.
+            # A tabela que o pipeline escreve é lida por pinned_delta, nunca ingerida.
             run.ingest(ENTRADA, CADASTRO, materialize=True)
-            previous = run.pinned(PROJ)
+            previous = run.pinned_delta(PROJ)
             max_id = run.sandbox.query(sa.select(sa.func.max(previous.c.id))).column(0)[0].as_py()
             first = run.next_ids(PROJ, 0).start
             if max_id != 4 * ROWS or first != 4 * ROWS + 1:

@@ -240,7 +240,7 @@ class Engine(Protocol):
             da partição.
         """
 
-    def pinned(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
+    def pinned_delta(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
         sandbox.
 
@@ -248,7 +248,7 @@ class Engine(Protocol):
 
         .. code-block:: python
 
-            previous = engine.pinned(Projetado.__table__, uri, 57)
+            previous = engine.pinned_delta(Projetado.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.

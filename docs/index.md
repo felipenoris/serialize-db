@@ -400,7 +400,7 @@ with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as ru
 dá um `serialize_db.engine.duckdb.DuckDBEngine`, e `"redshift"` um
 `serialize_db.engine.redshift.RedshiftEngine`. O pipeline chama nele `stream`, `loader`, `query`,
 `load`, `session` e `new_session`, e pelo `run` as primitivas que precisam da pasta e da versão
-fixada de cada tabela: `run.ingest`, `run.pinned`, `run.audit` e `run.publish_delta`. Os dois
+fixada de cada tabela: `run.ingest`, `run.pinned_delta`, `run.audit` e `run.publish_delta`. Os dois
 motores seguem a interface `serialize_db.engine.Engine`, e o pipeline escrito em statements Core
 roda em qualquer um deles; as seções seguintes descrevem cada motor. Fora de uma execução, como nos
 testes, o motor se constrói à mão, com a pasta e a versão de cada tabela em cada chamada, e a
@@ -461,7 +461,7 @@ with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as ru
 lote, um leitor ou um iterável de lotes; um DataFrame é recusado com a conversão sem cópia na
 mensagem (`pa.Table.from_pandas(frame, preserve_index=False)`). O nome de cada tabela no sandbox
 tem um só dono: o `loader` recusa com `serialize_db.errors.SandboxError` o nome que o `ingest`
-ocupou, e `run.pinned(table)` lê a versão fixada sem ocupar nome.
+ocupou, e `run.pinned_delta(table)` lê a versão fixada sem ocupar nome.
 `with run.sandbox.session() as connection:` dá a conexão crua ao que as primitivas não cobrem, e
 `with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo. A
 execução usa sempre os limites da máquina; `DuckDBConfig(threads=..., memory_limit=...)` os troca
@@ -561,14 +561,14 @@ with Execution(db, "duckdb") as run:
 `partitions`, grava a tabela num commit que substitui a versão anterior. `run.next_ids` dá os ids
 acima do maior da versão fixada, a partir de 1 na tabela nova.
 
-Na primeira carga a tabela ainda não existe: `run.ingest` e `run.pinned` a recusam com
+Na primeira carga a tabela ainda não existe: `run.ingest` e `run.pinned_delta` a recusam com
 `serialize_db.errors.SandboxError`, os dados entram por `run.sandbox.load` ou pelo `loader`, e
 `run.publish_delta` cria a tabela antes do commit. Para gravar a tabela a partir da versão fixada
-sem ocupar o nome dela no sandbox, `run.pinned` a lê e `run.sandbox.load` grava o resultado:
+sem ocupar o nome dela no sandbox, `run.pinned_delta` a lê e `run.sandbox.load` grava o resultado:
 
 ```python
 with Execution(db, "duckdb") as run:
-    current = run.pinned(Moeda.__table__)
+    current = run.pinned_delta(Moeda.__table__)
     kept = run.sandbox.query(sa.select(current).where(current.c.sigla != "EUR"))
     run.sandbox.load(Moeda.__table__, kept)
     run.audit(Moeda.__table__, None)

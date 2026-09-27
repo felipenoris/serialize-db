@@ -159,12 +159,13 @@ até o Delta é `loader` ou `load`, `audit` e `publish_delta`. Nenhuma primitiva
 devolve um DataFrame, uma lista de linhas ou uma instância ORM; a mensagem que recusa um DataFrame
 aponta `pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. O nome de cada tabela no sandbox é de
 um só dono: `loader` recusa com `SandboxError` um nome que o `ingest` ou outro `loader` já ocupou, e
-a tabela que a execução grava é lida na versão fixada por `run.pinned(Modelo)`, que não cria objeto
-no sandbox (decisões do usuário de 2026-09-22). Dentro da biblioteca, o que não cabe na memória
-corre por `RecordBatchReader` (a troca do motor Redshift para `publish_partition` na partição com
-`Double` não finito), cada um lendo o seu arquivo intermediário; o registro da partição e a
-`rewrite` da tabela vão pelo `COPY ... (RETURN_STATS)` do DuckDB, sem passar pelo Python. O exemplo
-de uso, `stream` e `loader` dentro de uma execução, está na seção "Pipeline de atualização mensal".
+a tabela que a execução grava é lida na versão fixada por `run.pinned_delta(Modelo)`, que não cria
+objeto no sandbox (decisões do usuário de 2026-09-22). Dentro da biblioteca, o que não cabe na
+memória corre por `RecordBatchReader` (a troca do motor Redshift para `publish_partition` na
+partição com `Double` não finito), cada um lendo o seu arquivo intermediário; o registro da partição
+e a `rewrite` da tabela vão pelo `COPY ... (RETURN_STATS)` do DuckDB, sem passar pelo Python. O
+exemplo de uso, `stream` e `loader` dentro de uma execução, está na seção "Pipeline de atualização
+mensal".
 
 ### O que as sondagens fixaram em cada primitiva
 
