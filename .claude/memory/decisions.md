@@ -1239,3 +1239,19 @@ usage error in `scripts/migrate_parquet_to_delta.py`, whose `--metadata` also le
 the empty presence variable of `diagnose_aws.py` read as `(vazia)`, a side effect of the shared
 helper; and the stale count of the script's tests in `plan/CURRENT_STATE.md` (4 to 5).
 `plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/CURRENT_STATE.md`
+
+## The optional partition of `Execution` (2026-09-27)
+
+Asked on 2026-09-27 what the `partition` of `Execution` is for (only `run.previous_partitions` and
+the log, after `_checked_partition`), the user proposed making it optional for a pipeline that only
+updates domain tables: `partition=None` by default, `_checked_partition` only with a value, and
+`run.previous_partitions` raising without one. The assistant agreed and recommended the command line
+too, and the user chose "Com a CLI": `serialize-db run --partition` is optional. Without a
+partition the log says `sem partição`, and `previous_partitions` raises `ContractError`, the error
+it already used for a table without partition; `partitions=[run.partition]` stays a `ContractError`
+of the partition rule before any write. The tutorial gained "Atualizar uma tabela de domínio sem
+partição", the user's "Atualização de Tabela de Domínio (não particionada)" in the tutorial's
+verb-first style. The assistant's additions, named in the report: the paragraph of "Rodar uma
+execução" on what the third argument is for, and the sentence of `plan/PLAN.md` on the domain
+pipeline.
+`plan/PLAN.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`

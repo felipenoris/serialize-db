@@ -231,7 +231,7 @@ e nos subcomandos com `--engine redshift`, vem das variáveis `SERIALIZE_DB_REDS
 | Opção | Padrão | Descrição |
 | --- | --- | --- |
 | `pipeline` (posicional) | obrigatória | `modulo:funcao`, a função que recebe a execução aberta. |
-| `--partition` | obrigatória | O valor da partição da execução. |
+| `--partition` | nenhum | O valor da partição da execução; sem ela, a execução não tem partição e `run.partition` é `None`. |
 | `--engine` | `SERIALIZE_DB_ENGINE`, senão `duckdb` | O motor do sandbox: `duckdb` ou `redshift`. |
 | `--execution-id` | `exec-<AAAA-MM-DD>-<uuid8>`, com a data em UTC | O identificador da execução. |
 
