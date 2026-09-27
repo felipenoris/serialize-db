@@ -1040,6 +1040,10 @@ API JSON do PyPI, consultada em 2026-09-25 para as versões novas das dependênc
 <https://pypi.org/pypi/pdoc/json>, <https://pypi.org/pypi/ipykernel/json> e
 <https://pypi.org/pypi/uv-build/json>.
 
+Issue do botocore que pede a expiração da credencial na interface pública, consultada em
+2026-09-27 para `credential_expiry` de `probes/probelib.py`:
+<https://github.com/boto/botocore/issues/2694>.
+
 ## Delta Lake
 
 Documentação do delta-rs e repositórios:

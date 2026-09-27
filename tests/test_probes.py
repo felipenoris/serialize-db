@@ -1,14 +1,17 @@
 """Testes das funções puras dos probes, sem AWS e sem rede, salvo uma consulta DNS.
 
 Os probes (``probes/``) leem o ambiente; as decisões que eles tomam sobre o que leram são funções
-puras, testadas aqui com respostas fabricadas: a classificação dos erros do ``boto3``, os rótulos de
-DNS, as tabelas e os segredos mascarados, o código de saída do relatório, o inventário do bucket
-(tabelas Delta, sessões da suíte, versões não correntes), o versionamento pela amostra, o Object
-Lock, o ciclo de vida, a montagem de ``~/shared``, o formato das tabelas do Glue, os parâmetros da
-conexão Redshift, no ``duckdb_threads.py``, os valores de ``threads``, a partição comum, os totais
-do log, a tabela das medições e as checagens delas e, no ``credentials.py``, a impressão digital das
-chaves, a espera, os vereditos dos clientes segurados e das chaves, a linha do tempo, as checagens e
-a sonda inteira sobre uma tabela Delta local. Um ``Report`` grava em ``probes/output/``;
+puras, testadas aqui com respostas fabricadas: a classificação dos erros do ``boto3``, a expiração
+da credencial do botocore, os rótulos de DNS, as tabelas e os segredos mascarados, o código de saída
+do relatório, no ``diagnose_aws.py``, o veredito do STS, a linha do endpoint e a variável vazia
+separada da ausente, o inventário do bucket (tabelas Delta, sessões da suíte, versões não
+correntes), o versionamento pela amostra, o Object Lock, o ciclo de vida, a montagem de
+``~/shared``, o formato das tabelas do Glue, os parâmetros da conexão Redshift e os endpoints que o
+``RS-14`` julga, no ``duckdb_threads.py``, os valores de ``threads``, a partição comum, os totais do
+log, a tabela das medições e as checagens delas, o ``--metadata`` que não importa e a seção
+interrompida e, no ``credentials.py``, a impressão digital das chaves, a espera, os vereditos dos
+clientes segurados e das chaves, a linha do tempo, as checagens e a sonda inteira sobre uma tabela
+Delta local. Um ``Report`` grava em ``probes/output/``;
 ``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes
 que gravam, o relatório e os arquivos fabricados, são ``local``: gravam numa pasta nova sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do ``parquet_source.py`` não abre arquivo
@@ -22,6 +25,7 @@ nome inexistente sob ``example.com``, contra 0,3 ms de ``localhost``).
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import datetime
 import hashlib
@@ -34,6 +38,7 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
+import botocore.credentials
 import botocore.exceptions
 import pyarrow as pa
 import pytest
@@ -49,6 +54,7 @@ import parquet_source
 import probelib
 import redshift
 import space
+from client_model import Base
 from conftest import LocalLocation
 
 NOW = datetime.datetime(2026, 9, 20, 3, 44, tzinfo=datetime.timezone.utc)
@@ -190,6 +196,19 @@ def test_reason_distinguishes_denied_answered_unanswered_and_local() -> None:
 
     assert probelib.error_code(client_error("NoSuchBucket")) == "NoSuchBucket"
     assert probelib.error_code(ValueError("x")) is None
+
+
+def test_credential_expiry_reads_only_a_temporary_credential() -> None:
+    """A credencial temporária do botocore traz a expiração; a das variáveis sem
+    ``AWS_CREDENTIAL_EXPIRATION`` e a ausente não a têm."""
+    expiry = datetime.datetime(2026, 9, 27, 16, 0, tzinfo=datetime.timezone.utc)
+    temporary = botocore.credentials.RefreshableCredentials(
+        "AKIAEXEMPLO", "segredo", "token", expiry, dict, "container-role"
+    )
+    assert probelib.credential_expiry(temporary) == expiry
+    fixed = botocore.credentials.Credentials("AKIAEXEMPLO", "segredo", method="env")
+    assert probelib.credential_expiry(fixed) is None
+    assert probelib.credential_expiry(None) is None
 
 
 def test_public_label_marks_gateway_endpoint_only_for_s3_and_dynamodb() -> None:
@@ -900,6 +919,32 @@ def test_credential_text_shows_the_key_prefix_the_token_and_the_expiry() -> None
     assert "(há 5 min)" in expired
 
 
+def public_dns_rows(names: list[str]) -> tuple[list[list[str]], dict[str, bool | None]]:
+    """``dns_rows`` fabricado: todo nome resolve para um IP público de documentação."""
+    rows = [[name, "203.0.113.10", "público"] for name in names]
+    return rows, {name: False for name in names}
+
+
+@pytest.mark.local
+def test_network_judges_only_the_api_endpoints(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``RS-14`` julga só os endpoints regionais das APIs: o host do workgroup não é API, e sem
+    região a checagem diz que não os resolveu."""
+    monkeypatch.setattr(redshift, "dns_rows", public_dns_rows)
+    monkeypatch.setattr(redshift, "tcp_open", lambda host, port, timeout: 0.01)
+    target = redshift.Target(host="wg.exemplo.invalid", source="variáveis")
+    with make_report(folder, monkeypatch) as report:
+        monkeypatch.setattr(redshift, "region", lambda: None)
+        redshift.network(report, target)
+        monkeypatch.setattr(redshift, "region", lambda: "us-west-2")
+        redshift.network(report, target)
+        without_region, with_region = checks(report, "RS-14")
+    assert without_region.startswith("sem região")
+    assert with_region.startswith("sem endpoint VPC: redshift.us-west-2.amazonaws.com")
+    assert "wg.exemplo.invalid" not in with_region
+
+
 def test_column_value_and_matching_rows_read_by_column_name() -> None:
     """As visões ``svv_all_*`` são lidas pelo nome da coluna; uma coluna ausente vale ``None`` e não
     derruba a leitura."""
@@ -1069,13 +1114,43 @@ def test_diagnose_suite_environment_exports_no_proxy_when_absent_or_empty() -> N
     assert diagnose_aws.no_proxy_state({"NO_PROXY": "a"}) == "definida"
 
 
-def test_diagnose_describe_says_whether_the_service_answered() -> None:
-    """No diagnóstico da suíte S3, só a falta de resposta pede manutenção da rede."""
+def test_diagnose_sts_verdict_tells_a_local_error_from_no_response() -> None:
+    """No diagnóstico da suíte S3, só a falta de resposta pede manutenção da rede; o erro local,
+    como o endpoint inválido de 2026-09-27, não é falta de resposta."""
     no_response = botocore.exceptions.EndpointConnectionError(endpoint_url="x")
-    denied = diagnose_aws.describe(client_error("AccessDenied"))
-    unanswered = diagnose_aws.describe(no_response)
-    assert denied.startswith("o serviço respondeu com erro: ClientError:")
-    assert unanswered.startswith("sem resposta: EndpointConnectionError:")
+    local = ValueError("Invalid IPv6 URL")
+    assert diagnose_aws.sts_verdict(client_error("AccessDenied")) == "respondeu"
+    assert diagnose_aws.sts_verdict(no_response) == "sem resposta"
+    assert diagnose_aws.sts_verdict(local) == "erro local"
+    assert diagnose_aws.sts_verdict(botocore.exceptions.NoCredentialsError()) == "erro local"
+    assert "manutenção necessária" in diagnose_aws.STS_SUMMARY["sem resposta"]
+    assert "manutenção necessária" not in diagnose_aws.STS_SUMMARY["erro local"]
+
+
+def test_diagnose_endpoint_summary_follows_the_variable_the_suite_reads() -> None:
+    """A suíte passa ``AWS_ENDPOINT_URL`` ao boto3, ao PyArrow, ao delta-rs e ao secret do DuckDB,
+    e não lê ``AWS_ENDPOINT_URL_S3``: só a segunda, sozinha, pede manutenção."""
+    endpoint = "http://127.0.0.1:5000"
+    passed = diagnose_aws.endpoint_summary({"AWS_ENDPOINT_URL": endpoint})
+    assert passed.startswith(f"{endpoint} em AWS_ENDPOINT_URL;")
+    assert passed.endswith("(sem manutenção)")
+    s3_only = diagnose_aws.endpoint_summary({"AWS_ENDPOINT_URL_S3": endpoint})
+    assert s3_only.startswith(f"{endpoint} só em AWS_ENDPOINT_URL_S3")
+    assert s3_only.endswith("(manutenção necessária)")
+    assert diagnose_aws.endpoint_summary({}).startswith("sem AWS_ENDPOINT_URL;")
+
+
+def test_diagnose_environment_tells_an_empty_variable_from_an_absent_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """As credenciais saem só como presença, e a vazia sai como ``(vazia)``, não como ausente."""
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "")
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        diagnose_aws.show_environment()
+    assert "  AWS_SESSION_TOKEN (vazia)\n" in printed.getvalue()
+    assert "  AWS_WEB_IDENTITY_TOKEN_FILE (ausente)\n" in printed.getvalue()
 
 
 # --------------------------------------------------------------------------------------------------
@@ -1409,6 +1484,37 @@ def test_partition_totals_sum_the_partition_or_the_whole_table() -> None:
     })
     assert duckdb_threads.partition_totals(actions, "data_str", "2026-06-30") == (2, 30, 3)
     assert duckdb_threads.partition_totals(actions, None, None) == (3, 70, 7)
+
+
+def test_threads_metadata_that_does_not_import_is_a_usage_error() -> None:
+    """Um ``--metadata`` que não importa é erro de uso, com o código 2, em vez de traceback."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        duckdb_threads.resolve_metadata("nao_existe:Base.metadata")
+    with pytest.raises(SystemExit) as refusal:
+        arguments = ["/raiz", "--metadata", "nao_existe:Base.metadata"]
+        duckdb_threads.build_parser().parse_args(arguments)
+    assert refusal.value.code == 2
+    assert duckdb_threads.resolve_metadata("client_model:Base.metadata") is Base.metadata
+
+
+@pytest.mark.local
+def test_threads_interrupted_section_goes_to_the_failures(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Uma seção interrompida vai para a seção final de falhas e devolve ``None``; a seguinte
+    roda, e o código de saída é 1."""
+
+    def broken_section(report: probelib.Report, value: int) -> int:
+        raise RuntimeError("quebrou")
+
+    def next_section(report: probelib.Report, value: int) -> int:
+        return value + 1
+
+    with make_report(folder, monkeypatch) as report:
+        assert duckdb_threads.guarded(report, broken_section, 1) is None
+        assert duckdb_threads.guarded(report, next_section, 1) == 2
+        assert report.failures == [("seção broken_section", "RuntimeError: quebrou")]
+        assert report.finish() == 1
 
 
 def test_best_speedup_and_short_error() -> None:

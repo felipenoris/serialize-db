@@ -43,10 +43,10 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import functools
-import importlib
 import importlib.metadata
 import json
 import os
+import pkgutil
 import platform
 import sys
 import time
@@ -210,13 +210,19 @@ def write_report(path: str, reports: list[TableReport], outside: Sequence[str],
 
 
 def resolve_metadata(spec: str) -> sa.MetaData:
-    """O ``MetaData`` de ``modulo:atributo``, como ``client_model:Base.metadata``."""
+    """O ``MetaData`` de ``modulo:atributo``, como ``client_model:Base.metadata``, pelo
+    ``pkgutil.resolve_name`` da biblioteca padrão, como o ``--metadata`` de ``serialize-db``.
+
+    A especificação sem essa forma, que não importa ou que não é um ``MetaData`` levanta
+    ``argparse.ArgumentTypeError``, que o ``argparse`` mostra como erro de uso, com o código 2.
+    """
     module_name, _, attribute = spec.partition(":")
     if not module_name or not attribute:
         raise argparse.ArgumentTypeError(f"esperado modulo:atributo, recebido {spec!r}")
-    target = importlib.import_module(module_name)
-    for name in attribute.split("."):
-        target = getattr(target, name)
+    try:
+        target = pkgutil.resolve_name(spec)
+    except (ImportError, AttributeError) as error:
+        raise argparse.ArgumentTypeError(f"{spec}: {error}") from None
     if not isinstance(target, sa.MetaData):
         raise argparse.ArgumentTypeError(f"{spec} não é um sqlalchemy.MetaData")
     return target

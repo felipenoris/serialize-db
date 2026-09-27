@@ -126,18 +126,13 @@ ou de arquivo fora dela foram lidos no código da `main` e sondados na pasta loc
 ([`POC.md`](POC.md)). Os corrigidos e os aceitos como estão saíram daqui para o código, os testes
 e os arquivos das etapas; o item abaixo espera uma rodada no alvo.
 
-- **Os probes.** Uma correção num probe espera uma rodada no alvo que compare o relatório de antes
-  com o de depois. `Report.finish` de `probelib.py` e `redshift.py` têm ternários aninhados;
-  `redshift.py` usa `getattr` dinâmico, trabalha antes de um retorno antecipado e, com `space.py`,
-  lê o `_expiry_time` privado das credenciais do botocore; `bucket.py` e `redshift.py` usam os
-  identificadores `alcance` e `leitura`. O `RS-14` de `redshift.py` julga o host do Redshift como
-  endpoint de API quando não há região, e o rótulo de `pg_settings` omite `wlm_query_slot_count`,
-  que a consulta lê. O resumo impresso de `diagnose_aws.py` diz que a suíte não passa
-  `AWS_ENDPOINT_URL` ao DuckDB, com "manutenção necessária", e a suíte passa
-  (`create_duckdb_s3_secret` de `tests/conftest.py`); `describe` rotula um erro local como "sem
-  resposta", e o arquivo repete helpers de `probelib.py`. `main` de `duckdb_threads.py` não tem as
-  guardas de seção, e um `--metadata` que não importa sai com traceback e código 1. As
-  justificativas dos `noqa` não terminam em ponto.
+- **Os probes.** As correções de 2026-09-27 em `probelib.py`, `diagnose_aws.py`, `redshift.py`,
+  `space.py`, `credentials.py`, `bucket.py`, `catalog.py`, `parquet_source.py` e
+  `duckdb_threads.py` esperam a próxima bateria no alvo, que compara cada relatório com o da
+  bateria de 2026-09-26. Na pasta local, os relatórios de antes e de depois diferiram só nas linhas
+  corrigidas ([`POC.md`](POC.md), seção "O que a comparação dos probes corrigidos mostrou"); falta
+  ler no alvo o rótulo de `pg_settings`, o `RS-14` com a região e a expiração da credencial do
+  contêiner por `credential_expiry`.
 
 ## Achados das sondas de consistência de leitura e escrita
 

@@ -4560,3 +4560,50 @@ quando o delta-rs não grava nem remove arquivo, com o `totalConsideredFiles` (p
 2026-09-27). A regra do tamanho alvo entrou em `docs/operacao.md`, no
 [arquivo da etapa 9](PLAN-STAGE-9.md), em [`delta.md`](delta.md) e na suíte de estudo do delta-rs
 (`test_compact_packs_files_up_to_the_target_size`).
+
+## O que a comparação dos probes corrigidos mostrou
+
+Em 2026-09-27, no contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB), com boto3
+1.43.102, botocore 1.43.103, deltalake 1.6.6, PyArrow 25.0.1, DuckDB 1.5.5 e moto 5.2.3, os probes
+de antes da correção e os corrigidos rodaram nos mesmos cenários, sem as variáveis `AWS_*` da
+máquina e com uma `HOME` vazia: `diagnose_aws.py` contra o moto, também com um
+`AWS_ENDPOINT_URL_STS` inválido (`http://[bad`); `redshift.py` sem região, com
+`SERIALIZE_DB_REDSHIFT_HOST` num nome que não resolve (`redshift.example.invalid`); e
+`duckdb_threads.py` sobre a base fictícia de `tests/source_db_projetado.py` carregada em Delta, com
+`--threads 1 2 --repetitions 1` e com `--metadata nao_existe:Base.metadata`.
+
+- **Os relatórios diferiram só nas linhas corrigidas**, fora os tempos, os IPs que o DNS devolveu,
+  a memória disponível e o caminho do relatório. No `diagnose_aws.py`, a linha do endpoint do
+  resumo passou de `a suíte não o passa ao DuckDB (manutenção necessária)` a
+  `a suíte o passa ao boto3, ao PyArrow, ao delta-rs e ao secret do DuckDB (sem manutenção)`. Com o
+  `AWS_ENDPOINT_URL_STS` inválido, o botocore levanta `ValueError: Invalid IPv6 URL` antes de a
+  chamada sair, e o resumo, que dava o STS como `sem resposta` e pedia manutenção, diz
+  `erro local, antes de a chamada sair`. No `redshift.py`, o `RS-14`, que sem região julgava o
+  host do Redshift como endpoint de API (`sem endpoint VPC: redshift.example.invalid`), diz
+  `sem região, os endpoints das APIs não foram resolvidos: defina AWS_DEFAULT_REGION`. No
+  `duckdb_threads.py`, o `--metadata` que não importa saía com traceback e código 1 e sai com o
+  erro de uso do argparse e código 2 (`argument --metadata: nao_existe:Base.metadata: No module
+  named 'nao_existe'`), como o mesmo argumento de `scripts/migrate_parquet_to_delta.py`, que também
+  saía com traceback.
+- **Os helpers do `probelib.py` no `diagnose_aws.py`** mudaram uma leitura: uma credencial em
+  `PRESENCE_VARIABLES` definida como texto vazio saía `(ausente)` e sai `(vazia)`.
+- **As leituras que pedem conexão ou o alvo não rodaram aqui**: o rótulo de `pg_settings` com
+  `wlm_query_slot_count`, uma seção do `duckdb_threads.py` interrompida por erro e a expiração da
+  credencial temporária. Os 7 casos novos de `tests/test_probes.py` cobrem, com respostas
+  fabricadas, o veredito do STS, a linha do endpoint, a variável vazia, os endpoints que o `RS-14`
+  julga, a expiração, o `--metadata` e a seção interrompida, e reprovaram no código de antes.
+- **`AWS_ENDPOINT_URL_S3` sozinha**, apontada ao moto, chegou ao `boto3`, que listou o bucket, e
+  ao delta-rs, cujo `DeltaTable.is_deltatable` achou a tabela, os dois lendo a variável do
+  ambiente; o `S3FileSystem` do PyArrow foi a outro endpoint, e a `HeadObject` voltou
+  `ACCESS_DENIED`, que o moto, sem conferir a chave, não devolve. O secret do DuckDB da suíte recebe
+  o endpoint só de `AWS_ENDPOINT_URL` (`_endpoint` de `serialize_db.storage`, lido no código).
+- **A expiração da credencial do botocore** fica no atributo privado `_expiry_time` da
+  `RefreshableCredentials` (botocore 1.43.103), e a issue que pede um campo público está aberta
+  desde 2022-06-13 (<https://github.com/boto/botocore/issues/2694>). A credencial das variáveis
+  `AWS_*` só vira `RefreshableCredentials` com `AWS_CREDENTIAL_EXPIRATION` (`EnvProvider`).
+
+**Consequências**: a leitura do atributo privado ficou num só lugar, `credential_expiry` de
+`probes/probelib.py`, que `space.py`, `redshift.py` e `credentials.py` chamam. O cabeçalho do
+`diagnose_aws.py` diz quais clientes leem `AWS_ENDPOINT_URL_S3`. A comparação no alvo, com os
+relatórios da bateria de 2026-09-26, espera a próxima bateria
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

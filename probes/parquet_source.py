@@ -963,7 +963,7 @@ def main(argv: list[str]) -> int:
         # Uma seção interrompida não cala as outras.
         try:
             return section(report, *arguments)
-        except Exception as error:  # noqa: BLE001 - toda falha é diagnóstico
+        except Exception as error:  # noqa: BLE001 - toda falha é diagnóstico.
             report.line(f"!! seção {section.__name__} interrompida: {describe_error(error)}")
             report.failures.append((f"seção {section.__name__}", describe_error(error)))
             return None

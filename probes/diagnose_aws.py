@@ -21,9 +21,10 @@ interface sem DNS privado. Nada é gravado no bucket: as chamadas são listagens
 metadado.
 
 O formato é próprio, sem o ``Report`` de ``probelib.py``: uma linha ``[status] rótulo: detalhe
-(tempo)`` por verificação, agrupadas por ``== título``. O arquivo se organiza na ordem do
-relatório: as funções ``show_*`` imprimem o contexto, as ``check_*`` fazem uma verificação cada e
-devolvem se passou, o delta-rs e o DuckDB rodam em subprocessos (``DELTA_PROBE``,
+(tempo)`` por verificação, agrupadas por ``== título``. O ``Tee``, as esperas curtas do ``boto3``,
+a classificação dos erros, o DNS e as variáveis vêm de ``probelib.py``. O arquivo se organiza na
+ordem do relatório: as funções ``show_*`` imprimem o contexto, as ``check_*`` fazem uma verificação
+cada e devolvem o resultado, o delta-rs e o DuckDB rodam em subprocessos (``DELTA_PROBE``,
 ``DUCKDB_PROBE``) com espera limitada, e ``diagnose`` encadeia tudo e escreve o resumo.
 
 Os fatos que o resumo usa:
@@ -36,11 +37,13 @@ Os fatos que o resumo usa:
 - STS. ``test_boto3_credential_source`` chama ``get_caller_identity``; um ambiente só com endpoint
   VPC do S3 não alcança o STS, e o teste falharia depois dos 60 s por tentativa e 5 tentativas do
   botocore. O diagnóstico distingue "o serviço respondeu com erro" de "sem resposta": só o segundo
-  pede manutenção.
+  pede manutenção. Um erro local, levantado antes de a chamada sair, não é nenhum dos dois.
 - Proxy. Nada na suíte exige proxy; sem as variáveis, nada a fazer. Com elas, das duas linhas do
   delta-rs, a segunda, com ``NO_PROXY`` exportada de ``no_proxy``, é a que vale para a suíte.
-- Endpoint. Com ``AWS_ENDPOINT_URL``, o ``boto3``, o delta-rs e o secret do DuckDB da suíte, pelas
-  opções de ``Storage.duckdb_setup``, o usam.
+- Endpoint. Com ``AWS_ENDPOINT_URL``, o ``boto3``, o PyArrow, o delta-rs e o secret do DuckDB da
+  suíte o usam, este pelas opções de ``Storage.duckdb_setup``. A suíte não lê
+  ``AWS_ENDPOINT_URL_S3``: sozinha, ela vale para o ``boto3`` e o delta-rs, que a leem do ambiente,
+  e não chega ao PyArrow nem ao DuckDB da suíte (sonda no moto de 2026-09-27).
 
 Sem rede, o diagnóstico leva um minuto e meio: o ``boto3`` desiste em 11 s, o delta-rs em 10 s
 (``max_retries`` e ``retry_timeout`` em ``storage_options``) e o DuckDB no teto de 60 s do
@@ -49,11 +52,9 @@ subprocesso.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import platform
-import socket
 import subprocess
 import sys
 import time
@@ -66,12 +67,8 @@ import probelib
 # longas sem rede.
 PROBE_TIMEOUT = 60
 
-# As variáveis de proxy nas duas grafias: o delta-rs lê NO_PROXY e, só quando ela está ausente,
-# no_proxy.
-PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy")
-
 # As variáveis mostradas com valor, e as mostradas só como presença (credenciais).
-SHOWN_VARIABLES = ("AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3", *PROXY_VARIABLES)
+SHOWN_VARIABLES = ("AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3", *probelib.PROXY_VARIABLES)
 PRESENCE_VARIABLES = (
     "AWS_ACCESS_KEY_ID",
     "AWS_SESSION_TOKEN",
@@ -80,23 +77,12 @@ PRESENCE_VARIABLES = (
     "AWS_WEB_IDENTITY_TOKEN_FILE",
 )
 
-
-class Tee:
-    """Escreve ao mesmo tempo no terminal e no arquivo de saída, linha a linha."""
-
-    def __init__(self, path: Path) -> None:
-        self.file = path.open("w", encoding="utf-8")
-        self.terminal = sys.stdout
-
-    def write(self, text: str) -> int:
-        self.terminal.write(text)
-        self.file.write(text)
-        self.file.flush()
-        return len(text)
-
-    def flush(self) -> None:
-        self.terminal.flush()
-        self.file.flush()
+# A linha do STS no resumo, por veredito: só a falta de resposta pede manutenção da rede.
+STS_SUMMARY = {
+    "respondeu": "respondeu (sem manutenção)",
+    "sem resposta": "sem resposta; test_boto3_credential_source falharia (manutenção necessária)",
+    "erro local": "erro local, antes de a chamada sair; ver a linha do STS acima",
+}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -107,17 +93,6 @@ def report(status: str, label: str, detail: str, started: float | None = None) -
     """Imprime uma linha ``[status] rótulo: detalhe (tempo)``."""
     elapsed = f" ({time.perf_counter() - started:.1f} s)" if started is not None else ""
     print(f"[{status:^5}] {label}: {detail}{elapsed}")
-
-
-def describe(error: BaseException) -> str:
-    """Erro do ``boto3`` numa linha, dizendo se o serviço respondeu ou se não houve resposta."""
-    import botocore.exceptions
-
-    # Só a falta de resposta pede manutenção da rede; um erro de credencial ou de permissão é uma
-    # resposta.
-    answered = isinstance(error, botocore.exceptions.ClientError)
-    prefix = "o serviço respondeu com erro" if answered else "sem resposta"
-    return f"{prefix}: {type(error).__name__}: {' '.join(str(error).split())[:200]}"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -139,20 +114,12 @@ def show_versions(root: str) -> None:
 def show_environment() -> None:
     """As variáveis que o boto3 e o delta-rs leem; as credenciais só como presença."""
     print("== variáveis de ambiente")
-    for name in SHOWN_VARIABLES:
-        value = os.environ.get(name)
-        # A minúscula igual à maiúscula sai uma vez, a vazia sai como (vazia), e o endereço de
-        # proxy sai sem as credenciais embutidas.
-        if value is not None and name != name.upper() and value == os.environ.get(name.upper()):
-            value = f"(igual a {name.upper()})"
-        elif value == "":
-            value = "(vazia)"
-        elif value is not None and "proxy" in name.lower():
-            value = probelib.hide_credentials(value)
-        print(f"  {name} = {value if value is not None else '(ausente)'}")
-
-    for name in PRESENCE_VARIABLES:
-        print(f"  {name} {'definida' if os.environ.get(name) else '(ausente)'}")
+    # A regra de environment_rows: a vazia sai como (vazia), a minúscula igual à maiúscula sai uma
+    # vez, o endereço de proxy sai sem as credenciais embutidas e a credencial só como presença.
+    for name, value in probelib.environment_rows(SHOWN_VARIABLES):
+        print(f"  {name} = {value}")
+    for name, value in probelib.environment_rows(PRESENCE_VARIABLES):
+        print(f"  {name} {value}")
 
     # Os arquivos de configuração do boto3 em ~/.aws: só a existência, sem ler o conteúdo.
     aws_folder = Path.home() / ".aws"
@@ -214,21 +181,17 @@ def check_dns(bucket: str, region: str | None) -> None:
     for name in names:
         started = time.perf_counter()
         try:
-            addresses = sorted({info[4][0] for info in socket.getaddrinfo(name, 443, type=socket.SOCK_STREAM)})
+            addresses, private = probelib.resolve(name)
         except OSError as error:
             report("falha", f"DNS {name}", str(error), started)
             continue
 
         # Só o S3 e o DynamoDB têm gateway endpoint; os demais nomes públicos dependem da internet
         # ou do proxy.
-        private = all(ipaddress.ip_address(address).is_private for address in addresses)
-        gateway = name.split(".")[0] in ("s3", "dynamodb") or name.split(".")[1:2] in (["s3"], ["dynamodb"])
         if private:
             kind = "IP privado: endpoint VPC de interface com DNS privado"
-        elif gateway:
-            kind = "IP público: gateway endpoint ou internet"
         else:
-            kind = "IP público: só pela internet ou pelo proxy"
+            kind = f"IP {probelib.public_label(name)}"
         report("ok", f"DNS {name}", f"{', '.join(addresses)} ({kind})", started)
 
 
@@ -249,37 +212,47 @@ def check_boto3_credentials() -> bool:
 def check_s3_boto3(bucket: str, prefix: str, region: str | None, label: str) -> bool:
     """Lista um objeto sob ``<raiz>/serialize-db-poc/`` como a suíte faz, com a região dada."""
     import boto3
-    import botocore.config
 
     # Esperas curtas: sem rede, o padrão do boto3 é 60 s por tentativa.
-    config = botocore.config.Config(connect_timeout=5, read_timeout=15, retries={"total_max_attempts": 2, "mode": "standard"})
-    client = boto3.client("s3", region_name=region, config=config)
+    client = boto3.client("s3", region_name=region, config=probelib.short_config())
     started = time.perf_counter()
     try:
         client.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/serialize-db-poc/".lstrip("/"), MaxKeys=1)
-    except Exception as error:  # noqa: BLE001 - qualquer falha é o diagnóstico
-        report("falha", label, f"{client.meta.endpoint_url}: {describe(error)}", started)
+    except Exception as error:  # noqa: BLE001 - qualquer falha é o diagnóstico.
+        report("falha", label, f"{client.meta.endpoint_url}: {probelib.describe_error(error)}", started)
         return False
     report("ok", label, client.meta.endpoint_url, started)
     return True
 
 
-def check_sts(region: str | None) -> bool:
-    """Se o STS respondeu, com identidade ou com erro; só a falta de resposta é ``False``."""
-    import boto3
-    import botocore.config
-    import botocore.exceptions
+def sts_verdict(error: BaseException) -> str:
+    """O veredito de uma chamada ao STS que falhou.
 
-    config = botocore.config.Config(connect_timeout=5, read_timeout=10, retries={"total_max_attempts": 1, "mode": "standard"})
+    É ``respondeu`` para um erro de credencial ou de permissão, ``sem resposta`` para a rede, o
+    proxy ou o tempo esgotado, e ``erro local`` para o que falhou antes de a chamada sair, como um
+    endpoint inválido.
+    """
+    if probelib.answered(error):
+        return "respondeu"
+    if probelib.unanswered(error):
+        return "sem resposta"
+    return "erro local"
+
+
+def check_sts(region: str | None) -> str:
+    """Chama ``get_caller_identity`` e devolve o veredito: ``respondeu``, com identidade ou com
+    erro, ``sem resposta`` ou ``erro local``."""
+    import boto3
+
     started = time.perf_counter()
     try:
-        client = boto3.client("sts", region_name=region, config=config)
+        client = boto3.client("sts", region_name=region, config=probelib.short_config(5, 10, 1))
         identity = client.get_caller_identity()
-    except Exception as error:  # noqa: BLE001 - qualquer falha é o diagnóstico
-        report("falha", "STS", describe(error), started)
-        return isinstance(error, botocore.exceptions.ClientError)
+    except Exception as error:  # noqa: BLE001 - qualquer falha é o diagnóstico.
+        report("falha", "STS", probelib.describe_error(error), started)
+        return sts_verdict(error)
     report("ok", "STS", f"{client.meta.endpoint_url}: {identity['Arn']}", started)
-    return True
+    return "respondeu"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -407,12 +380,30 @@ def main(argv: list[str]) -> int:
     output = Path(__file__).resolve().parent / "output"
     output.mkdir(exist_ok=True)
     path = output / f"diagnose_aws_{time.strftime('%Y%m%d-%H%M%S')}.txt"
-    sys.stdout = Tee(path)
+    tee = probelib.Tee(path)
+    sys.stdout = tee
     try:
         return diagnose(root)
     finally:
-        sys.stdout = sys.__stdout__
+        sys.stdout = tee.terminal
+        tee.close()
         print(f"resultado gravado em {path}")
+
+
+def endpoint_summary(environ: Mapping[str, str]) -> str:
+    """A linha do endpoint no resumo, pelo que a suíte faz com cada variável.
+
+    A suíte passa ``AWS_ENDPOINT_URL`` ao ``boto3``, ao PyArrow, ao delta-rs e ao secret do DuckDB,
+    e não lê ``AWS_ENDPOINT_URL_S3``, que sozinha só chega ao ``boto3`` e ao delta-rs, que a leem
+    do ambiente.
+    """
+    endpoint = environ.get("AWS_ENDPOINT_URL")
+    if endpoint:
+        return f"{endpoint} em AWS_ENDPOINT_URL; a suíte o passa ao boto3, ao PyArrow, ao delta-rs e ao secret do DuckDB (sem manutenção)"
+    s3_endpoint = environ.get("AWS_ENDPOINT_URL_S3")
+    if s3_endpoint:
+        return f"{s3_endpoint} só em AWS_ENDPOINT_URL_S3, que o PyArrow e o DuckDB da suíte não recebem; exporte AWS_ENDPOINT_URL com ele (manutenção necessária)"
+    return "sem AWS_ENDPOINT_URL; os nomes s3.<região>.amazonaws.com precisam resolver (ver DNS acima)"
 
 
 def diagnose(root: str) -> int:
@@ -459,7 +450,8 @@ def diagnose(root: str) -> int:
     results["duckdb"] = check_duckdb(root, region, endpoint_host)
 
     print("== STS")
-    results["sts"] = check_sts(region)
+    sts = check_sts(region)
+    results["sts"] = sts == "respondeu"
 
     # O resumo: a manutenção de que a suíte precisa para rodar neste ambiente.
     print("== resumo")
@@ -469,8 +461,8 @@ def diagnose(root: str) -> int:
         print("  região: só AWS_REGION, que o boto3 ignora; a suíte precisa exportar AWS_DEFAULT_REGION a partir dela (manutenção necessária)")
     else:
         print("  região: nenhuma; defina AWS_DEFAULT_REGION antes da suíte, porque atrás de endpoint VPC o endpoint global é inalcançável")
-    print("  STS: " + ("respondeu (sem manutenção)" if results["sts"] else "sem resposta; test_boto3_credential_source falharia (manutenção necessária)"))
-    proxies = [name for name in PROXY_VARIABLES if os.environ.get(name)]
+    print(f"  STS: {STS_SUMMARY[sts]}")
+    proxies = [name for name in probelib.PROXY_VARIABLES if os.environ.get(name)]
     if not proxies:
         print("  proxy: sem variáveis; nada a fazer")
     elif changes:
@@ -478,7 +470,7 @@ def diagnose(root: str) -> int:
         print(f"  proxy: variáveis {', '.join(proxies)}; NO_PROXY {no_proxy_state(os.environ)}: a suíte a exporta de no_proxy, {outcome}")
     else:
         print(f"  proxy: variáveis {', '.join(proxies)}; NO_PROXY {no_proxy_state(os.environ)}, a suíte não a altera")
-    print("  endpoint: " + (f"{endpoint_url} em AWS_ENDPOINT_URL; a suíte não o passa ao DuckDB (manutenção necessária)" if endpoint_url else "sem AWS_ENDPOINT_URL; os nomes s3.<região>.amazonaws.com precisam resolver (ver DNS acima)"))
+    print(f"  endpoint: {endpoint_summary(os.environ)}")
     # A suíte S3 como está depende dos três clientes; o código de saída 0 exige também o STS.
     core = ("s3_boto3_suite", "delta_rs", "duckdb")
     print("  suíte S3 como está: " + ("os três clientes listaram o prefixo" if all(results[key] for key in core) else "algum cliente falhou; ver as linhas acima"))

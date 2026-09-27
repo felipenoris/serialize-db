@@ -20,8 +20,8 @@ O arquivo se organiza assim:
   (``answered``, ``unanswered``, ``error_code``, ``describe_error``, ``reason``): "o serviço
   respondeu com erro" e "sem resposta" são vereditos diferentes, e só o segundo pede manutenção da
   rede;
-- o ARN da simulação de política (``principal_arn``), a raiz S3 (``s3_root``, ``NO_ROOT``) e a
-  região (``region``);
+- o ARN da simulação de política (``principal_arn``), a expiração da credencial do botocore
+  (``credential_expiry``), a raiz S3 (``s3_root``, ``NO_ROOT``) e a região (``region``);
 - o proxy do DuckDB (``DuckDBProxy``, ``split_proxy``, ``hide_credentials``, ``duckdb_proxy``), que
   recusa o endereço com as credenciais embutidas e precisa delas em configurações à parte;
 - as leituras de rede (``resolve``, ``tcp_open``, ``tcp_probe``, ``endpoint_reachable``,
@@ -36,6 +36,7 @@ O arquivo se organiza assim:
 
 from __future__ import annotations
 
+import datetime
 import ipaddress
 import json
 import os
@@ -188,6 +189,22 @@ def principal_arn(caller_arn: str) -> str:
         role = caller_arn.split(":assumed-role/")[1].split("/")[0]
         return f"arn:aws:iam::{account}:role/{role}"
     return caller_arn
+
+
+def credential_expiry(credentials: Any) -> datetime.datetime | None:
+    """A expiração de uma credencial do botocore, ou ``None`` quando ela não expira.
+
+    O botocore não expõe a expiração: a ``RefreshableCredentials``, a credencial temporária do
+    contêiner, do papel assumido ou do IMDS, a guarda no atributo privado ``_expiry_time`` (botocore
+    1.43.103), e o pedido de um campo público está aberto desde 2022-06-13
+    (<https://github.com/boto/botocore/issues/2694>). A credencial das variáveis ``AWS_*`` sem
+    ``AWS_CREDENTIAL_EXPIRATION`` não expira.
+    """
+    import botocore.credentials
+
+    if not isinstance(credentials, botocore.credentials.RefreshableCredentials):
+        return None
+    return credentials._expiry_time
 
 
 def s3_root(argv: list[str]) -> tuple[str, str]:
@@ -552,7 +569,7 @@ class Report:
         started = time.perf_counter()
         try:
             result = action()
-        except Exception as error:  # noqa: BLE001 - toda falha é diagnóstico
+        except Exception as error:  # noqa: BLE001 - toda falha é diagnóstico.
             detail = describe_error(error)
             self.last_reason = reason(error)
             marker = "-- SEM RESULTADO" if expected else "!! FALHOU"
@@ -603,7 +620,12 @@ class Report:
         # O código de saída: 2 com alguma checagem reprovada, senão 1 com alguma chamada falhada,
         # senão 0.
         failed_checks = sum(1 for check in self.checks if check[0] == "fail")
-        code = 2 if failed_checks else 1 if self.failures else 0
+        if failed_checks:
+            code = 2
+        elif self.failures:
+            code = 1
+        else:
+            code = 0
         print(f"\ncódigo de saída {code}: {failed_checks} checagem(ns) reprovada(s), {len(self.failures)} chamada(s) falhada(s)")
 
         # O sys.stdout volta ao que o construtor desviou: no probe, o terminal; no pytest, o

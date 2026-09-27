@@ -6,9 +6,10 @@ teste, com a pasta temporária do processo apontada para a pasta do teste, onde 
 cada chamada de ``initial_load`` abre o banco. Eles conferem a linha de comando sobre a base
 inteira, duas vezes, com o ambiente, cada tabela e o que ficou fora do modelo no relatório JSON; o
 relatório parcial de uma carga interrompida numa partição fora do contrato; a recusa de um modelo
-que viola o contrato, sem ler a origem; o ambiente ``dsv`` com ``SERIALIZE_DB_ENVIRONMENT`` vazia;
-e a diferença na tabela sem partição, impressa como tabela inteira. A carga em si e o relatório
-de contagens e somas são de ``serialize_db.load``, cobertos por ``tests/test_load.py``.
+que viola o contrato, sem ler a origem, e de um ``--metadata`` que não importa; o ambiente ``dsv``
+com ``SERIALIZE_DB_ENVIRONMENT`` vazia; e a diferença na tabela sem partição, impressa como tabela
+inteira. A carga em si e o relatório de contagens e somas são de ``serialize_db.load``, cobertos por
+``tests/test_load.py``.
 """
 
 from __future__ import annotations
@@ -153,7 +154,7 @@ def test_report_keeps_the_progress_of_an_interrupted_load(base: source.SourceBas
 def test_main_refuses_a_model_with_violations(base: source.SourceBase, folder: Path,
                                               capsys: pytest.CaptureFixture) -> None:
     """O modelo de referência viola o contrato: saída 2 com a lista, sem ler a origem; uma
-    tabela fora do modelo é erro de uso."""
+    tabela fora do modelo e um ``--metadata`` que não importa são erros de uso."""
     never_written = folder / "nunca-gravada"
     arguments = ["--metadata", "reference_model.model_db_projetado:Base.metadata",
                  "--source", str(base.root), "--root", str(never_written)]
@@ -166,6 +167,14 @@ def test_main_refuses_a_model_with_violations(base: source.SourceBase, folder: P
         migrate.main(["--metadata", "client_model:Base.metadata", "--source", str(base.root),
                       "--root", str(never_written), "--tables", "nada"])
     assert refusal.value.code == 2
+    assert not never_written.exists()
+
+    # O --metadata que não importa sai como erro de uso, sem traceback.
+    with pytest.raises(SystemExit) as refusal:
+        migrate.main(["--metadata", "nao_existe:Base.metadata", "--source", str(base.root),
+                      "--root", str(never_written)])
+    assert refusal.value.code == 2
+    assert "No module named 'nao_existe'" in capsys.readouterr().err
     assert not never_written.exists()
 
 

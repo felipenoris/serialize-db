@@ -163,8 +163,8 @@ def identity(report: Report) -> None:
         # As credenciais temporárias expiram; o boto3 e o delta-rs renovam as do contêiner, e uma
         # execução longa depende disso. O mesmo instante lido em duas execuções seguidas diz quanto
         # dura cada emissão.
-        expiry = getattr(credentials, "_expiry_time", None)
-        if expiry and getattr(expiry, "tzinfo", None):
+        expiry = probelib.credential_expiry(credentials)
+        if expiry is not None and expiry.tzinfo is not None:
             minutes = (expiry - datetime.now(timezone.utc)).total_seconds() / 60
             when = f"daqui a {minutes:.0f} min" if minutes >= 0 else f"expirada há {-minutes:.0f} min"
             report.value("CREDENTIAL_EXPIRY", f"{expiry} ({when})")
@@ -287,7 +287,7 @@ def network(report: Report) -> None:
         try:
             with urllib.request.urlopen(request, timeout=5) as response:
                 return f"HTTP {response.status}"
-        except Exception as error:  # noqa: BLE001 - o erro é a leitura
+        except Exception as error:  # noqa: BLE001 - o erro é a leitura.
             return f"sem resposta: {describe_error(error)}"
 
     answer = report.call("HEAD https://pypi.org/simple/ (pelo proxy do ambiente, se houver)", internet, render=str)
@@ -491,7 +491,7 @@ def main() -> int:
     for section in (identity, project, network, machine, python_packages, duckdb_section):
         try:
             section(report)
-        except Exception as error:  # noqa: BLE001 - uma seção interrompida não cala as outras
+        except Exception as error:  # noqa: BLE001 - uma seção interrompida não cala as outras.
             report.line(f"!! seção {section.__name__} interrompida: {describe_error(error)}")
             report.failures.append((f"seção {section.__name__}", describe_error(error)))
     return report.finish()

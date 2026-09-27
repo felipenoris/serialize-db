@@ -1220,3 +1220,22 @@ found the delta-rs skips any file that fits no other in the target size (`.claud
 and the `CLAUDE.md` line on `serialize_db.engine.__all__`, which lists `duckdb` and `redshift`.
 `docs/operacao.md`, `plan/PLAN-STAGE-9.md`, `plan/delta.md`, `plan/POC.md`,
 `plan/CURRENT_STATE.md`
+
+## The probe fixes of the review of 2026-09-25 (2026-09-27)
+
+The same check listed the probe findings of the review of 2026-09-25, which waited on a target run
+that compares each report before and after. Asked on 2026-09-27 whether to fix them now, the user
+chose to fix them in PR #98 and compare the reports in the next target battery against those of
+2026-09-26. The fixes: `credential_expiry` in `probes/probelib.py` holds the only read of
+botocore's private `_expiry_time` (`space.py`, `redshift.py`, `credentials.py`); `diagnose_aws.py`
+uses the `probelib.py` helpers, tells a local error (`erro local`) from no response in the STS
+summary and says the suite passes `AWS_ENDPOINT_URL` to boto3, PyArrow, delta-rs and the DuckDB
+secret; `RS-14` without a region says the API endpoints were not resolved instead of judging the
+Redshift host; the `pg_settings` label lists `wlm_query_slot_count`; `duckdb_threads.py` guards its
+sections and refuses a `--metadata` that does not import as a usage error (exit 2); and the style
+rules (nested ternaries, dynamic `getattr`, work before an early return, `alcance`/`leitura`,
+`noqa` justifications ending in a period). The assistant's additions, named in the report: the same
+usage error in `scripts/migrate_parquet_to_delta.py`, whose `--metadata` also left with a traceback;
+the empty presence variable of `diagnose_aws.py` read as `(vazia)`, a side effect of the shared
+helper; and the stale count of the script's tests in `plan/CURRENT_STATE.md` (4 to 5).
+`plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/CURRENT_STATE.md`

@@ -209,7 +209,7 @@ def main() -> int:
     for section in (network, glue, athena, lake_formation, s3_tables):
         try:
             section(report, resolved)
-        except Exception as error:  # noqa: BLE001 - uma seção interrompida não cala as outras
+        except Exception as error:  # noqa: BLE001 - uma seção interrompida não cala as outras.
             report.line(f"!! seção {section.__name__} interrompida: {describe_error(error)}")
             report.failures.append((f"seção {section.__name__}", describe_error(error)))
     return report.finish()
