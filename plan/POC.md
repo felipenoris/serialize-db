@@ -4752,3 +4752,28 @@ contagem deste dia; o do acesso de leitura segue com a volta a um snapshot anter
 `UNLOAD` do cliente só de leitura; o da operação segue esperando uma partição de vários arquivos e
 um `compact` antes do snapshot. Os cinco achados das sondas de consistência seguem esperando o
 usuário.
+
+## O que a sonda do fim da execução mostrou
+
+Em 2026-09-27, numa pasta local do contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB),
+com DuckDB 1.5.5, deltalake 1.6.6 e o `TMPDIR` apontado para a pasta da sonda, a sonda abriu
+`Execution(db, "duckdb", ...)` sem `with`, com `__enter__` e `__exit__` chamados à mão, para
+responder ao usuário o que o fim do bloco libera.
+
+- **A entrada cria o sandbox numa pasta `serialize_db_*` de `tempfile.gettempdir()`**, com
+  `<execution_id>.duckdb`, o `.wal` e a pasta `<execution_id>_transbordo`; antes do `__enter__`,
+  `run.sandbox` é `None` e `run.versions` está vazio.
+- **`__exit__(None, None, None)` apaga a pasta e grava o snapshot marcado**; o `with` que termina
+  em erro e o `__exit__` que recebe a exceção apagam a pasta sem gravar o snapshot;
+  `run.sandbox.cleanup()` sozinho apaga a pasta sem gravar o snapshot, e o `__exit__` seguinte o
+  grava. Depois do fim, `run.versions` guarda as versões finais.
+- **Sem `__exit__`, nada libera o sandbox**: depois de `del run` e `gc.collect()`, o
+  `exec-b.duckdb` e a pasta de transbordo continuaram na pasta temporária, porque os motores não têm
+  finalizador; o leitor tem (`weakref.finalize` em `serialize_db.reader`). No Redshift, o `cleanup`
+  apaga as tabelas `exec_<id>_*` que a execução criou e os arquivos do `staging/` dela (lido no
+  código, sem rodar).
+- **O exemplo novo da seção do DuckDB do tutorial** rodou como está sobre uma raiz local, com
+  `run.sandbox` um `DuckDBEngine`, e a pasta temporária sumiu no fim do bloco.
+
+**Consequências**: o tutorial de `docs/index.md` usa os motores por `run.sandbox`, dentro de um
+`Execution`, e diz o que o fim da execução libera em cada motor (pedido do usuário de 2026-09-27).

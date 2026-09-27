@@ -373,8 +373,9 @@ serialize-db load --root s3://bucket/projeto/delta --environment prd \
 ### Rodar uma execução
 
 `serialize_db.Database` junta a raiz, o ambiente e os modelos, e `serialize_db.Execution` é o ciclo
-de uma execução: abre as tabelas do ambiente e fixa a versão de cada uma, cria o sandbox, e no fim
-o descarta. Entre os dois, o pipeline traz as tabelas, roda a lógica, audita e publica:
+de uma execução: a entrada do `with` abre as tabelas do ambiente, fixa a versão de cada uma e cria
+o sandbox, e o fim do bloco o descarta. Entre os dois, o pipeline traz as tabelas, roda a lógica,
+audita e publica:
 
 ```python
 import sqlalchemy as sa
@@ -393,6 +394,16 @@ with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as ru
     run.audit(Projetado.__table__, ["2026-08-31"])                   # AuditFailed na reprovação
     run.publish(Projetado.__table__, partitions=["2026-08-31"])      # overwrite por partição
 ```
+
+`run.sandbox` é o motor da execução, que o `Execution` constrói pelo segundo argumento: `"duckdb"`
+dá um `serialize_db.engine.duckdb.DuckDBEngine`, e `"redshift"` um
+`serialize_db.engine.redshift.RedshiftEngine`. O pipeline chama nele `stream`, `loader`, `query`,
+`load`, `session` e `new_session`, e pelo `run` as primitivas que precisam da pasta e da versão
+fixada de cada tabela: `run.ingest`, `run.published`, `run.audit` e `run.publish`. Os dois motores
+seguem a interface `serialize_db.engine.Engine`, e o pipeline escrito em statements Core roda em
+qualquer um deles; as seções seguintes descrevem cada motor. Fora de uma execução, como nos
+testes, o motor se constrói à mão, com a pasta e a versão de cada tabela em cada chamada, e a
+página de cada motor traz o exemplo.
 
 `run.publish` exige a auditoria aprovada das partições na própria execução e recusa com
 `serialize_db.errors.ExecutionConflict` a tabela em que outra execução gravou dados depois da
@@ -421,86 +432,89 @@ uso; `--root`, `--environment` e `--engine` têm por padrão `SERIALIZE_DB_ROOT`
 
 ### Rodar o pipeline no sandbox DuckDB
 
-`serialize_db.engine.duckdb.DuckDBEngine` é o sandbox de uma execução: um banco em arquivo numa
-pasta temporária, apagado no `cleanup`, com uma sessão que várias threads usam uma de cada vez. Os
+Com `"duckdb"`, `run.sandbox` é um `serialize_db.engine.duckdb.DuckDBEngine`: um banco em arquivo
+numa pasta nova de `tempfile.gettempdir()`, com uma sessão que várias threads usam uma de cada vez.
+O fim da execução fecha a conexão, que só então devolve a memória, e apaga a pasta com o banco. Os
 limites do DuckDB saem da máquina na abertura: `threads` são as CPUs que o processo pode usar e
 `memory_limit` é metade da memória que ele ainda pode usar, lidas por `serialize_db.resources` com
-o limite do cgroup de um contêiner; `DuckDBConfig(threads=..., memory_limit=...)` os troca. A
-tabela Delta entra presa a uma versão, e os dados saem e voltam em lotes Arrow:
+o limite do cgroup de um contêiner. A tabela Delta entra presa à versão fixada, e os dados saem e
+voltam em lotes Arrow:
 
 ```python
-import pyarrow as pa
 import sqlalchemy as sa
 
-from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
-
-with DuckDBEngine(DuckDBConfig(), "exec-2026-09-05", storage) as engine:
-    engine.ingest(Lancamento.__table__, uri, version, partitions=["2026-07-31", "2026-08-31"],
-                  materialize=True)
+with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as run:
+    run.ingest(Lancamento.__table__, partitions=["2026-07-31", "2026-08-31"], materialize=True)
     query = sa.select(Lancamento).where(Lancamento.data_base_str == sa.bindparam("particao"))
-    with engine.stream(query, {"particao": "2026-08-31"}) as stream, \
-            engine.loader(Projetado.__table__) as loader:
+    with run.sandbox.stream(query, {"particao": "2026-08-31"}) as stream, \
+            run.sandbox.loader(Projetado.__table__) as loader:
         for batch in stream:                 # a consulta continua enquanto o cliente trabalha
             loader.write(project(batch))     # cast aqui; a tabela nasce no close do loader
 ```
 
-`query` devolve a `pa.Table` inteira, e `load` grava uma `pa.Table`, um lote, um leitor ou um
-iterável de lotes; um DataFrame é recusado com a conversão sem cópia na mensagem
-(`pa.Table.from_pandas(frame, preserve_index=False)`). O nome de cada tabela no sandbox tem um só
-dono: o `loader` recusa com `serialize_db.errors.SandboxError` o nome que o `ingest` ocupou, e
-`engine.published(table, uri, version)` lê a versão publicada sem ocupar nome. `with
-engine.session() as connection:` dá a conexão crua ao que as primitivas não cobrem, e `with
-engine.new_session() as other:` abre uma sessão a mais para o que roda em paralelo.
+`run.sandbox.query` devolve a `pa.Table` inteira, e `run.sandbox.load` grava uma `pa.Table`, um
+lote, um leitor ou um iterável de lotes; um DataFrame é recusado com a conversão sem cópia na
+mensagem (`pa.Table.from_pandas(frame, preserve_index=False)`). O nome de cada tabela no sandbox
+tem um só dono: o `loader` recusa com `serialize_db.errors.SandboxError` o nome que o `ingest`
+ocupou, e `run.published(table)` lê a versão fixada sem ocupar nome.
+`with run.sandbox.session() as connection:` dá a conexão crua ao que as primitivas não cobrem, e
+`with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo. A
+execução usa sempre os limites da máquina; `DuckDBConfig(threads=..., memory_limit=...)` os troca
+só no motor construído à mão.
 
 ### Auditar antes de publicar
 
-`engine.audit(table, partitions, uri, version)` roda as verificações que
-`serialize_db.audit.checks` deriva do modelo e devolve o `AuditReport`: nulo em coluna `NOT NULL`,
-texto acima de `String(n)` em bytes, texto numa coluna `Text` ou documento JSON acima de 65.535
-bytes, JSON inválido, a partição fora da coluna de origem e do padrão
-de nome de pasta, a chave repetida na partição e, quando a chave não inclui a partição, contra as
-demais partições da versão publicada, e o órfão de chave estrangeira com `foreign_keys=True`. O
-relatório traz o SQL de cada verificação, até 20 linhas de amostra das reprovadas, as somas de
-controle e as colunas `Double` com `NaN` ou infinito, que a publicação grava sem mínimo e máximo.
-`serialize_db.audit.audit_sql(table, "redshift")` imprime o texto de cada verificação, para
-depuração.
+`run.audit(table, partitions)` roda no motor as verificações que `serialize_db.audit.checks`
+deriva do modelo: nulo em coluna `NOT NULL`, texto acima de `String(n)` em bytes, texto numa coluna
+`Text` ou documento JSON acima de 65.535 bytes, JSON inválido, a partição fora da coluna de origem
+e do padrão de nome de pasta, a chave repetida na partição e, quando a chave não inclui a
+partição, contra as demais partições da versão publicada, e o órfão de chave estrangeira com
+`foreign_keys=True`. Ele devolve o `AuditReport` aprovado e levanta
+`serialize_db.errors.AuditFailed` na reprovação. O relatório traz o SQL de cada verificação, até 20
+linhas de amostra das reprovadas, as somas de controle e as colunas `Double` com `NaN` ou infinito,
+que a publicação grava sem mínimo e máximo. `serialize_db.audit.audit_sql(table, "redshift")`
+imprime o texto de cada verificação, para depuração.
 
-`engine.export_partition(table, uri, value, metadata, expected_rows, columns_without_min_max)`
-leva a partição auditada ao Delta: o motor DuckDB registra o arquivo que o seu `COPY` gravou, e o
-motor Redshift os arquivos do seu `UNLOAD`, depois das conferências do rodapé; a partição com uma
-coluna `Double` de valor não finito sai do Redshift por `serialize_db.delta.publish_partition`,
-com um aviso no log, porque o rodapé do `UNLOAD` deixa o `NaN` fora do máximo.
+`run.publish` leva cada partição auditada ao Delta pelo `export_partition` do motor: o motor DuckDB
+registra o arquivo que o seu `COPY` gravou, e o motor Redshift os arquivos do seu `UNLOAD`, depois
+das conferências do rodapé; a partição com uma coluna `Double` de valor não finito sai do Redshift
+por `serialize_db.delta.publish_partition`, com um aviso no log, porque o rodapé do `UNLOAD` deixa o
+`NaN` fora do máximo.
 
 ### Rodar o pipeline no sandbox Redshift
 
-`serialize_db.engine.redshift.RedshiftEngine` é o mesmo sandbox nas tabelas `exec_<id>_*` do
-esquema do Redshift: a conexão vem de `serialize_db.engine.redshift.RedshiftConfig`, a credencial
-temporária do workgroup serverless ou o par informado, com o `USE` no banco do datashare e o
-`search_path` no esquema; `RedshiftConfig.from_environment()` a lê das variáveis
-`SERIALIZE_DB_REDSHIFT_*`. `ingest` carrega as partições por `COPY ... MANIFEST`, `stream` lê os
-arquivos de um `UNLOAD` no `staging/` da execução, `loader` grava um Parquet no `staging/` e o
-carrega por `COPY` no `close`, e `export_partition` registra os arquivos do `UNLOAD` na pasta da
-partição:
+Com `"redshift"`, `run.sandbox` é um `serialize_db.engine.redshift.RedshiftEngine`, o mesmo sandbox
+nas tabelas `exec_<id>_*` do esquema do Redshift. A conexão vem de
+`serialize_db.engine.redshift.RedshiftConfig`, a credencial temporária do workgroup serverless ou o
+par informado, com o `USE` no banco do datashare e o `search_path` no esquema; sem `redshift=`, o
+`Execution` a lê das variáveis `SERIALIZE_DB_REDSHIFT_*` por `RedshiftConfig.from_environment()`.
+`run.ingest` carrega as partições por `COPY ... MANIFEST`, `stream` lê os arquivos de um `UNLOAD`
+em `<raiz>/<ambiente>/staging/<execution_id>/`, `loader` grava ali um Parquet e o carrega por
+`COPY` no `close`, e `run.publish` registra os arquivos do `UNLOAD` na pasta da partição. O fim da
+execução apaga as tabelas `exec_<id>_*` que ela criou e os arquivos do `staging/` e fecha a
+conexão:
 
 ```python
-from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
+import sqlalchemy as sa
+
+from serialize_db.engine.redshift import RedshiftConfig
 
 config = RedshiftConfig(workgroup="controladoria-wg", database="dev",
                         share_database="datalake_rw_shared", schema="sbx_aco_decon",
                         region="sa-east-1")
-with RedshiftEngine(config, "exec-2026-09-05", storage, "prd/staging/exec-2026-09-05") as engine:
-    engine.ingest(Lancamento.__table__, uri, version, partitions=["2026-08-31"])
-    with engine.stream(sa.select(Lancamento)) as stream, \
-            engine.loader(Projetado.__table__) as loader:
+with Execution(db, "redshift", "2026-08-31", execution_id="exec-2026-09-05",
+               redshift=config) as run:
+    run.ingest(Lancamento.__table__, partitions=["2026-08-31"])
+    with run.sandbox.stream(sa.select(Lancamento)) as stream, \
+            run.sandbox.loader(Projetado.__table__) as loader:
         for batch in stream:                 # os lotes vêm dos arquivos do UNLOAD
             loader.write(project(batch))
 ```
 
-Na execução, `Execution(db, "redshift", "2026-08-31", redshift=config)` constrói esse motor; sem
-`redshift`, a configuração vem das variáveis. Um texto SQL pronto cita as tabelas do sandbox pelo
-sentinela `{prefix}` (`"{prefix}cad_lancamentos"`), que o motor troca pelo prefixo da execução. O
-`COPY` e o `UNLOAD` levam as credenciais da sessão `boto3`, ou o `IAM_ROLE` da configuração; o
-texto que as carrega nunca vai a log, e `serialize_db.engine.redshift.mask` o mascara.
+Um texto SQL pronto cita as tabelas do sandbox pelo sentinela `{prefix}`
+(`"{prefix}cad_lancamentos"`), que o motor troca pelo prefixo da execução. O `COPY` e o `UNLOAD`
+levam as credenciais da sessão `boto3`, ou o `IAM_ROLE` da configuração; o texto que as carrega
+nunca vai a log, e `serialize_db.engine.redshift.mask` o mascara.
 
 ### Publicar para os clientes no Redshift
 
