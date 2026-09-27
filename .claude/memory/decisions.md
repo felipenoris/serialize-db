@@ -1204,3 +1204,38 @@ transaction passes a marker to `publication_statements`, whose signature stays, 
 `test_publish_builds_the_credentials_for_each_copy` failed on the old code (one call for two
 `COPY`s) and passes on the new. The `COPY` longer than its key stays in `plan/OPEN_QUESTIONS.md`.
 `plan/PLAN-STAGE-8.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+
+## The messages of the load and of `compact` (2026-09-27)
+
+Asked on 2026-09-27 whether any doc-only plan revision since 2026-09-24 left code undone, the
+assistant listed, among what fell outside the plan, the two message tweaks offered on 2026-09-25
+and never answered, and the stale header of `plan/CURRENT_STATE.md`. The user asked for those fixes
+the same day: the table without partition prints `tabela inteira` in place of `None` in
+`scripts/migrate_parquet_to_delta.py`, and `serialize-db compact` prints `nada a juntar em <n>
+arquivo(s), nenhum commit` when the delta-rs writes and removes no file, with its
+`totalConsideredFiles`. The assistant's choices, named in the report: the same label in
+`serialize-db load` and in the `DIFERENÇA` line of both, which printed `None` too; the message
+naming the files read rather than "a partition with one file", because the probe of the same day
+found the delta-rs skips any file that fits no other in the target size (`.claude/memory/delta.md`);
+and the `CLAUDE.md` line on `serialize_db.engine.__all__`, which lists `duckdb` and `redshift`.
+`docs/operacao.md`, `plan/PLAN-STAGE-9.md`, `plan/delta.md`, `plan/POC.md`,
+`plan/CURRENT_STATE.md`
+
+## The probe fixes of the review of 2026-09-25 (2026-09-27)
+
+The same check listed the probe findings of the review of 2026-09-25, which waited on a target run
+that compares each report before and after. Asked on 2026-09-27 whether to fix them now, the user
+chose to fix them in PR #98 and compare the reports in the next target battery against those of
+2026-09-26. The fixes: `credential_expiry` in `probes/probelib.py` holds the only read of
+botocore's private `_expiry_time` (`space.py`, `redshift.py`, `credentials.py`); `diagnose_aws.py`
+uses the `probelib.py` helpers, tells a local error (`erro local`) from no response in the STS
+summary and says the suite passes `AWS_ENDPOINT_URL` to boto3, PyArrow, delta-rs and the DuckDB
+secret; `RS-14` without a region says the API endpoints were not resolved instead of judging the
+Redshift host; the `pg_settings` label lists `wlm_query_slot_count`; `duckdb_threads.py` guards its
+sections and refuses a `--metadata` that does not import as a usage error (exit 2); and the style
+rules (nested ternaries, dynamic `getattr`, work before an early return, `alcance`/`leitura`,
+`noqa` justifications ending in a period). The assistant's additions, named in the report: the same
+usage error in `scripts/migrate_parquet_to_delta.py`, whose `--metadata` also left with a traceback;
+the empty presence variable of `diagnose_aws.py` read as `(vazia)`, a side effect of the shared
+helper; and the stale count of the script's tests in `plan/CURRENT_STATE.md` (4 to 5).
+`plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/CURRENT_STATE.md`

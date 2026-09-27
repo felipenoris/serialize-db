@@ -82,7 +82,6 @@ from pathlib import Path
 from typing import TypeVar
 
 import boto3
-import botocore.credentials
 import pyarrow as pa
 import pyarrow.parquet as pq
 from deltalake import DeltaTable
@@ -94,7 +93,7 @@ from serialize_db.schema import literal
 from serialize_db.storage import Storage, prepare_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probelib import Report, describe_error, environment_rows  # noqa: E402
+from probelib import Report, credential_expiry, describe_error, environment_rows  # noqa: E402
 
 T = TypeVar("T")
 
@@ -367,9 +366,7 @@ def container_credential() -> tuple[str | None, str | None, bool, datetime.datet
     if found is None:
         return None, None, False, None
     frozen = found.get_frozen_credentials()
-    expiry = None
-    if isinstance(found, botocore.credentials.RefreshableCredentials):
-        expiry = found._expiry_time
+    expiry = credential_expiry(found)
     return found.method, fingerprint(frozen.access_key), bool(frozen.token), expiry
 
 
@@ -443,7 +440,7 @@ def read_once(client: str, action: Callable[[], str]) -> Reading:
     started = time.perf_counter()
     try:
         detail = action()
-    except Exception as error:  # noqa: BLE001 - a falha de um cliente é a leitura que a sonda busca
+    except Exception as error:  # noqa: BLE001 - a falha do cliente é a leitura que a sonda busca.
         return Reading(client, at, False, describe_error(error), time.perf_counter() - started)
     return Reading(client, at, True, detail, time.perf_counter() - started)
 
@@ -453,7 +450,7 @@ def optional(action: Callable[[], T]) -> T | None:
     falha do cliente que a usa aparece na leitura dele."""
     try:
         return action()
-    except Exception:  # noqa: BLE001 - a rodada segue sem a chave
+    except Exception:  # noqa: BLE001 - a rodada segue sem a chave.
         return None
 
 

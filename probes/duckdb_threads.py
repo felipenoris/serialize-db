@@ -54,27 +54,31 @@ Seções:
 
 Cada seção é uma função, na ordem acima, que documenta as checagens que emite (``DT-1``, ``DT-5`` e
 ``DT-6``), e ``measurement_checks`` emite ``DT-2`` a ``DT-4`` sobre todas as medições; ``main`` as
-chama uma a uma. Códigos de saída: 0 quando toda checagem passou, 1 quando alguma leitura falhou, 2
-quando alguma checagem reprovou.
+chama uma a uma, e uma seção interrompida vai para a seção final de falhas sem calar as seguintes.
+Códigos de saída: 0 quando toda checagem passou, 1 quando alguma leitura falhou ou alguma seção foi
+interrompida, 2 quando alguma checagem reprovou ou no erro de uso, como um ``--metadata`` que não
+importa ou uma tabela fora do modelo.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
-import importlib
 import importlib.metadata
 import multiprocessing
 import os
+import pkgutil
 import re
 import resource
 import shutil
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
+from typing import TypeVar
 
 import duckdb
 import pyarrow as pa
@@ -89,7 +93,9 @@ from serialize_db.schema import quoted, table_options
 from serialize_db.storage import Storage, prepare_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probelib import Report, tabulate  # noqa: E402
+from probelib import Report, describe_error, tabulate  # noqa: E402
+
+T = TypeVar("T")
 
 # Os padrões da linha de comando: as tabelas medidas, a grande primeiro e depois as que o pipeline
 # mensal lê com ela na mesma partição; o modelo; as repetições de cada configuração.
@@ -443,13 +449,19 @@ def run_scenarios(scenarios: tuple[str, ...], values: list[int], inputs: list[Ta
 
 
 def resolve_metadata(spec: str) -> sa.MetaData:
-    """O ``MetaData`` de ``módulo:atributo``, como ``client_model:Base.metadata``."""
+    """O ``MetaData`` de ``módulo:atributo``, como ``client_model:Base.metadata``, pelo
+    ``pkgutil.resolve_name`` da biblioteca padrão, como o ``--metadata`` de ``serialize-db``.
+
+    A especificação sem essa forma, que não importa ou que não é um ``MetaData`` levanta
+    ``argparse.ArgumentTypeError``, que o ``argparse`` mostra como erro de uso, com o código 2.
+    """
     module_name, _, attribute = spec.partition(":")
     if not module_name or not attribute:
         raise argparse.ArgumentTypeError(f"esperado módulo:atributo, recebido {spec!r}")
-    target = importlib.import_module(module_name)
-    for name in attribute.split("."):
-        target = getattr(target, name)
+    try:
+        target = pkgutil.resolve_name(spec)
+    except (ImportError, AttributeError) as error:
+        raise argparse.ArgumentTypeError(f"{spec}: {error}") from None
     if not isinstance(target, sa.MetaData):
         raise argparse.ArgumentTypeError(f"{spec} não é um sqlalchemy.MetaData")
     return target
@@ -646,7 +658,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Mede a ingestão das tabelas Delta pelo motor DuckDB com cada valor de threads, "
         "numa tabela e em várias, em série e em sessões a mais.")
     parser.add_argument("root", help="a pasta das tabelas Delta, local ou s3://bucket/prefixo: <root>/<ambiente> da migração")
-    parser.add_argument("--metadata", default=DEFAULT_METADATA, help=f"o MetaData do modelo, {DEFAULT_METADATA} por padrão")
+    parser.add_argument("--metadata", default=DEFAULT_METADATA, type=resolve_metadata,
+                        help=f"o MetaData do modelo, {DEFAULT_METADATA} por padrão")
     parser.add_argument("--tables", nargs="+", default=list(DEFAULT_TABLES), metavar="TABELA", help="as tabelas medidas, a primeira a grande")
     parser.add_argument("--partition", metavar="AAAA-MM-DD", help="a partição lida; por padrão a mais recente comum às tabelas")
     parser.add_argument("--threads", nargs="+", type=int, metavar="N",
@@ -655,11 +668,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def guarded(report: Report, section: Callable[..., T], *arguments: object) -> T | None:
+    """O resultado de ``section(report, *arguments)``, ou ``None`` quando ela é interrompida.
+
+    A exceção vai para o relatório e para a seção final de falhas, e o probe segue com o que as
+    seções anteriores devolveram.
+    """
+    try:
+        return section(report, *arguments)
+    except Exception as error:  # noqa: BLE001 - uma seção interrompida não cala as outras.
+        report.line(f"!! seção {section.__name__} interrompida: {describe_error(error)}")
+        report.failures.append((f"seção {section.__name__}", describe_error(error)))
+        return None
+
+
 def main(argv: list[str]) -> int:
-    # Os argumentos e as tabelas pedidas no modelo; uma tabela fora dele é erro de uso.
+    # Os argumentos e as tabelas pedidas no modelo; um --metadata que não importa e uma tabela fora
+    # do modelo são erros de uso.
     parser = build_parser()
     arguments = parser.parse_args(argv[1:])
-    metadata = resolve_metadata(arguments.metadata)
+    metadata = arguments.metadata
     unknown = [name for name in arguments.tables if name not in metadata.tables]
     if unknown:
         parser.error(f"tabelas fora do modelo: {', '.join(unknown)}")
@@ -673,14 +701,18 @@ def main(argv: list[str]) -> int:
     if changed:
         report.line(f"variáveis acertadas por prepare_environment: {', '.join(sorted(changed))}")
 
-    # As seções em ordem; sem as tabelas e a partição (DT-1), nada é medido.
-    inputs = tables_section(report, storage, tables, arguments.partition)
+    # As seções em ordem, cada uma guardada; sem as tabelas e a partição (DT-1) ou sem os valores de
+    # threads da máquina, nada é medido, e as checagens leem as medições que terminaram.
+    inputs = guarded(report, tables_section, storage, tables, arguments.partition)
     if inputs is None:
         return report.finish()
-    values, reference = machine_section(report, arguments.threads, arguments.repetitions)
-    measurements = single_table_section(report, values, reference, inputs, arguments.repetitions, storage.uri)
-    measurements += many_tables_section(report, values, reference, inputs, arguments.repetitions, storage.uri)
-    measurement_checks(report, measurements, inputs)
+    machine = guarded(report, machine_section, arguments.threads, arguments.repetitions)
+    if machine is None:
+        return report.finish()
+    values, reference = machine
+    measurements = guarded(report, single_table_section, values, reference, inputs, arguments.repetitions, storage.uri) or []
+    measurements += guarded(report, many_tables_section, values, reference, inputs, arguments.repetitions, storage.uri) or []
+    guarded(report, measurement_checks, measurements, inputs)
     return report.finish()
 
 

@@ -55,7 +55,8 @@ do `pdoc`. O que a implementação mudou do plano:
   resolve a versão pelo log no armazenamento (a sonda de 2026-09-21 em [`POC.md`](POC.md)); a
   reabertura custa uma leitura do log por partição e fica (decisão do usuário de 2026-09-25).
 - **`compact`** recusa também a tabela sem partição cujo snapshot está na versão atual, e exige
-  `--partitions` numa tabela particionada; a tabela sem partição com um arquivo só não commita.
+  `--partitions` numa tabela particionada; a tabela sem partição com um arquivo só não commita,
+  e a linha diz que não havia o que juntar.
 - **`archive`** chama `deep_copy` em toda tabela do snapshot, e a repetição de um arquivamento
   interrompido continua de onde parou, porque `deep_copy` pula as partições já registradas; a
   entrada se move só depois da última cópia. A primeira versão pulava a tabela presente em
@@ -85,8 +86,12 @@ do `pdoc`. O que a implementação mudou do plano:
 - **`compact`** confere o arquivo de controle e recusa a tabela cujo snapshot é a versão atual,
   porque a compactação depois do snapshot dobra os arquivos que ele referencia; depois roda
   `optimize.compact` das partições pedidas e imprime `numFilesAdded` e `numFilesRemoved` com o
-  tempo e o pico de RSS do processo (decisão do usuário de 2026-09-24); uma partição com um só
-  arquivo não commita. A compactação roda no escritor do delta-rs, fora do
+  tempo e o pico de RSS do processo (decisão do usuário de 2026-09-24). O delta-rs junta numa
+  partição só os arquivos que cabem juntos no tamanho alvo, `delta.targetFileSize` ou 100 MB sem
+  ela; sem nada a juntar, como na partição com um só arquivo, ele não grava nem commita, e o
+  comando imprime `nada a juntar em <n> arquivo(s), nenhum commit` com os arquivos que leu
+  (pedido do usuário de 2026-09-27; a sondagem do mesmo dia em [`POC.md`](POC.md)). A
+  compactação roda no escritor do delta-rs, fora do
   `memory_limit` do DuckDB, com as tarefas paralelas do padrão do delta-rs; a memória dela numa
   partição de `cad_lancamentos` não foi medida ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
   O `optimize.compact` grava mínimo e máximo em toda coluna, e por isso `delta.compact` lê as ações
@@ -150,7 +155,7 @@ do `pdoc`. O que a implementação mudou do plano:
 | --- | --- | --- |
 | Snapshot e histórico | `test_snapshot_records_every_table_and_history_shows_the_metadata` | A entrada com a versão atual de cada tabela existente; o nome repetido recusado; o `history` do mais recente ao mais antigo, com os três metadados nos commits da biblioteca e nenhum no `CREATE TABLE`. |
 | Snapshot preso | `test_vacuum_keeps_the_snapshot_version` | Dentro da retenção nada é listado; com retenção zero, o arquivo da versão anterior ao snapshot é listado e, com `--apply`, apagado; a versão do snapshot lê e a anterior falha. |
-| Compactação antes | `test_compact_refuses_after_a_snapshot_on_the_current_version` | Recusa quando o snapshot é a versão atual, também na tabela sem partição; compacta depois de uma versão nova, num commit `OPTIMIZE` que `version_diff` não conta; `--partitions` exigido na tabela particionada; a tabela fora do modelo é erro de uso; a linha impressa com o tempo e o pico de RSS. |
+| Compactação antes | `test_compact_refuses_after_a_snapshot_on_the_current_version` | Recusa quando o snapshot é a versão atual, também na tabela sem partição; compacta depois de uma versão nova, num commit `OPTIMIZE` que `version_diff` não conta; `--partitions` exigido na tabela particionada; a tabela fora do modelo é erro de uso; a linha impressa com o tempo e o pico de RSS, e a de `nada a juntar em 1 arquivo(s), nenhum commit` na tabela sem partição de um arquivo só. |
 | Compactação sem estatística | `tests/test_delta.py::test_compact_keeps_the_columns_without_min_max` | Numa partição de dois arquivos, um sem mínimo e máximo de `valor` no log, o arquivo compactado sem eles no log e no rodapé e com os das outras colunas, com as mesmas linhas, o `NaN` incluído; outra partição, compactada na mesma chamada sem essa marca, com a estatística de `valor`. |
 | Arquivo | `test_archive_copies_each_table_with_the_same_sums` | Uma versão por partição no arquivo, os mesmos arquivos e as mesmas somas da versão registrada, a entrada em `archived` e fora de `snapshots`, o `vacuum` sem a versão arquivada em `keep_versions`, `snapshot` recusando o mesmo nome, `archive` recusando o nome ausente e pulando a tabela já arquivada, com o tempo e o pico de RSS na linha de cada tabela. |
 | Exportação | `test_export_by_copy_and_by_rewrite` | Os dois modos e uma versão antiga; o destino não vazio e o destino fora da raiz recusados; a linha impressa com o tempo e o pico de RSS. |

@@ -96,6 +96,9 @@ SERVICES = ("redshift", "redshift-serverless", "redshift-data")
 # O prefixo das tabelas que a biblioteca cria no esquema do projeto.
 TABLE_PREFIX = "serialize_db"
 
+# As configurações da sessão que a seção 4 lê em pg_settings.
+SESSION_SETTINGS = ("datestyle", "timezone", "statement_timeout", "search_path", "enable_case_sensitive_identifier", "wlm_query_slot_count")
+
 # As chaves, em snake_case e em camelCase, com que a conexão do projeto guarda seus parâmetros.
 CONNECTION_KEYS = (
     "host", "port", "database_name", "databaseName", "workgroup_name", "workgroupName", "db_user", "dbUser", "username",
@@ -170,12 +173,13 @@ def target_from_connection(report: Report, target: Target, chosen: dict) -> None
 
     Nada muda quando as variáveis já preencheram o alvo (``target.source`` diferente de ``nada``).
     """
+    if target.source != "nada":
+        return
+
     # Os dados da conexão chegam como dicionário (probelib.PROJECT_PROBE); as chaves variam entre
     # snake_case e camelCase, e a URL JDBC traz host, porta e banco quando os campos diretos faltam.
     found = find_values(chosen, CONNECTION_KEYS)
     jdbc = re.match(r"jdbc:redshift\w*://([^:/]+):(\d+)/([^?;]+)", str(found.get("jdbc_url") or found.get("jdbcUrl") or ""))
-    if target.source != "nada":
-        return
 
     # Cada campo toma a primeira fonte que o traz: a variável, o endpoint, o campo direto e a URL
     # JDBC; a porta da variável, ou 5439, só vale sem as outras três.
@@ -251,8 +255,14 @@ def configuration(report: Report) -> Target:
         elif not redshift:
             report.line("nenhuma conexão Redshift no projeto")
 
-    for name in ("workgroup", "host", "port", "database", "share_database", "user", "schema", "iam_role"):
-        report.value(f"REDSHIFT_{name.upper()}", getattr(target, name))
+    report.value("REDSHIFT_WORKGROUP", target.workgroup)
+    report.value("REDSHIFT_HOST", target.host)
+    report.value("REDSHIFT_PORT", target.port)
+    report.value("REDSHIFT_DATABASE", target.database)
+    report.value("REDSHIFT_SHARE_DATABASE", target.share_database)
+    report.value("REDSHIFT_USER", target.user)
+    report.value("REDSHIFT_SCHEMA", target.schema)
+    report.value("REDSHIFT_IAM_ROLE", target.iam_role)
 
     # O nome que a biblioteca escreve no SQL depois do USE, e o nome em três partes de uma sessão
     # aberta em outro banco.
@@ -498,21 +508,21 @@ def network(report: Report, target: Target) -> None:
     """Seção 3: ``RS-14`` (as APIs têm endpoint VPC) e ``RS-3`` (TCP até o host)."""
     report.h1("Rede")
 
-    # Os endpoints regionais das APIs e o host, resolvidos pelo DNS.
+    # Os endpoints regionais das APIs, que só existem com a região, e o host, resolvidos pelo DNS.
     resolved = region()
-    names = [f"{service}.{resolved}.amazonaws.com" for service in SERVICES] if resolved else []
-    if target.host:
-        names.append(target.host)
+    api_names = [f"{service}.{resolved}.amazonaws.com" for service in SERVICES] if resolved else []
+    names = [*api_names, target.host] if target.host else api_names
     rows, private = dns_rows(names)
     report.table([["nome", "endereços", "tipo"], *rows])
 
     # RS-14: sem internet, as APIs só respondem por endpoint VPC de interface; a porta 5439 do
-    # workgroup fica dentro da VPC.
-    api_names = names[: len(SERVICES)]
+    # workgroup fica dentro da VPC. O host não entra: ele é o do workgroup, não o de uma API.
     public_names = [name for name in api_names if not private.get(name)]
-    if api_names and not public_names:
+    if not api_names:
+        report.note("RS-14", "APIs do Redshift sem internet", "sem região, os endpoints das APIs não foram resolvidos: defina AWS_DEFAULT_REGION")
+    elif not public_names:
         report.ok("RS-14", "APIs do Redshift sem internet", "endpoints VPC de interface: a credencial temporária do workgroup e a Data API funcionam sem internet")
-    elif api_names:
+    else:
         report.note("RS-14", "APIs do Redshift sem internet", f"sem endpoint VPC: {', '.join(public_names)}; sem internet ou proxy, GetWorkgroup, GetCredentials e a Data API não respondem, e resta o par informado em _USER e _PASSWORD na porta 5439")
 
     # RS-3: a porta do host abre; sem host conhecido, o endereço vem de GetWorkgroup na seção 2.
@@ -583,6 +593,15 @@ def credential_summary(credentials: dict) -> str:
     return f"dbUser={credentials.get('dbUser')} expira {credentials.get('expiration')}"
 
 
+def requirement_state(ok: bool | None) -> str:
+    """O estado de um requisito da escrita no datashare: ``atende``, ``não atende`` ou ``não lido``."""
+    if ok is None:
+        return "não lido"
+    if ok:
+        return "atende"
+    return "não atende"
+
+
 def datashare_write_verdict(version: tuple[int, ...] | None, kind: str, isolation: object | None, slices: int | None) -> tuple[str, str]:
     """O veredito da escrita no banco do datashare: patch mínimo, isolamento de snapshot e slices.
 
@@ -609,7 +628,7 @@ def datashare_write_verdict(version: tuple[int, ...] | None, kind: str, isolatio
             None if slices is None else slices >= DATASHARE_WRITE_SLICES,
         ),
     ]
-    text = "; ".join(f"{label}: {'atende' if ok else 'não atende' if ok is False else 'não lido'}" for label, ok in checks)
+    text = "; ".join(f"{label}: {requirement_state(ok)}" for label, ok in checks)
     if any(ok is False for _, ok in checks):
         return "fail", text
     if any(ok is None for _, ok in checks):
@@ -724,10 +743,13 @@ def session(report: Report, target: Target) -> None:
         report.note("RS-7", "SUPER e JSON_PARSE", "falhou; ver a seção final")
 
     # As configurações que mudam o comportamento do SQL gerado (datas, fuso, tempo limite,
-    # search_path e sensibilidade a maiúsculas) e wlm_query_slot_count.
+    # search_path e sensibilidade a maiúsculas) e wlm_query_slot_count; o rótulo e a consulta saem
+    # da mesma lista.
+    settings = ", ".join(SESSION_SETTINGS)
+    quoted_settings = ", ".join(f"'{name}'" for name in SESSION_SETTINGS)
     report.call(
-        "pg_settings (datestyle, timezone, statement_timeout, search_path, enable_case_sensitive_identifier)",
-        lambda: query("select name, setting from pg_settings where name in ('datestyle', 'timezone', 'statement_timeout', 'search_path', 'enable_case_sensitive_identifier', 'wlm_query_slot_count') order by 1"),
+        f"pg_settings ({settings})",
+        lambda: query(f"select name, setting from pg_settings where name in ({quoted_settings}) order by 1"),
         render=render_rows,
     )
     # pg_settings do serverless não trouxe timezone nem enable_case_sensitive_identifier (leitura de
@@ -830,7 +852,12 @@ def session(report: Report, target: Target) -> None:
             isolation,
             slices[1][0][0] if slices and slices[1] else None,
         )
-        getattr(report, status)("RS-17", "escrita no banco do datashare", verdict)
+        if status == "fail":
+            report.fail("RS-17", "escrita no banco do datashare", verdict)
+        elif status == "note":
+            report.note("RS-17", "escrita no banco do datashare", verdict)
+        else:
+            report.ok("RS-17", "escrita no banco do datashare", verdict)
 
     # RS-19: depois do USE, esquema.tabela resolve no banco do datashare, que é como o CREATE, o
     # COPY e o UNLOAD passaram (examples/redshift_copy_unload.py e redshift_manifest.py, este com os
@@ -956,16 +983,17 @@ class Principal(NamedTuple):
 
 
 def caller_credentials() -> tuple[object, object | None]:
-    """As credenciais congeladas da sessão ``boto3`` e a expiração que o provedor expõe.
+    """As credenciais congeladas da sessão ``boto3`` e a expiração delas.
 
-    A expiração é ``None`` quando o provedor não a expõe; sem credenciais, levanta ``RuntimeError``.
+    A expiração vem de ``probelib.credential_expiry`` e é ``None`` quando a credencial não expira;
+    sem credenciais, levanta ``RuntimeError``.
     """
     import boto3
 
     found = boto3.Session().get_credentials()
     if found is None:
         raise RuntimeError("o boto3 não encontrou credenciais")
-    return found.get_frozen_credentials(), getattr(found, "_expiry_time", None)
+    return found.get_frozen_credentials(), probelib.credential_expiry(found)
 
 
 def credential_text(access_key: str, token: str | None, expiry: object | None, now: datetime) -> str:
@@ -1069,10 +1097,10 @@ def copy_role(report: Report, target: Target) -> None:
 
     # O IAM não tem endpoint VPC em todo ambiente; sem o teste, cada simulação esperaria o tempo
     # limite em cada endereço resolvido.
-    alcance, leitura = probelib.endpoint_reachable(iam)
-    report.line(f"alcance do IAM: {leitura}\n")
-    if not alcance:
-        report.note("RS-11", "alcance do COPY sobre a raiz", f"simulação sem chamada: o IAM não respondeu ao teste TCP ({leitura}); o primeiro COPY da suíte Redshift é o teste")
+    reachable, reading = probelib.endpoint_reachable(iam)
+    report.line(f"alcance do IAM: {reading}\n")
+    if not reachable:
+        report.note("RS-11", "alcance do COPY sobre a raiz", f"simulação sem chamada: o IAM não respondeu ao teste TCP ({reading}); o primeiro COPY da suíte Redshift é o teste")
         return
 
     def render_decisions(found: dict) -> str:
@@ -1117,7 +1145,7 @@ def main() -> int:
             result = section(report) if section is configuration else section(report, target)
             if section is configuration and isinstance(result, Target):
                 target = result
-        except Exception as error:  # noqa: BLE001 - uma seção interrompida não cala as outras
+        except Exception as error:  # noqa: BLE001 - uma seção interrompida não cala as outras.
             report.line(f"!! seção {section.__name__} interrompida: {describe_error(error)}")
             report.failures.append((f"seção {section.__name__}", describe_error(error)))
     return report.finish()

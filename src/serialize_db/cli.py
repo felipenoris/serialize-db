@@ -618,11 +618,14 @@ def _print_load_report(report: LoadReport, loaded: list[str | None]) -> None:
     as conversões de tipo e o que ficou fora do padrão."""
     written = f"{report.table}: {len(loaded)} partição(ões) gravada(s)"
     if loaded:
-        written += ": " + ", ".join(str(value) for value in loaded)
+        # A tabela sem partição é gravada de uma vez, com o valor None.
+        labels = ["tabela inteira" if value is None else value for value in loaded]
+        written += ": " + ", ".join(labels)
     print(written)
     for partition in report.partitions:
         if not partition.matches:
-            print(f"  DIFERENÇA em {partition.value}: origem {partition.source_rows} linhas "
+            where = "na tabela inteira" if partition.value is None else f"em {partition.value}"
+            print(f"  DIFERENÇA {where}: origem {partition.source_rows} linhas "
                   f"{dict(partition.source_sums)} não finitos {dict(partition.source_nonfinite)}, "
                   f"Delta {partition.delta_rows} linhas {dict(partition.delta_sums)} não finitos "
                   f"{dict(partition.delta_nonfinite)}")
@@ -802,6 +805,11 @@ def _compact(args: argparse.Namespace) -> int:
             return 2
     started = time.perf_counter()
     metrics = delta.compact(uri, table, args.partitions or [], db.storage)
+    # Sem arquivos que caibam juntos no tamanho alvo, o delta-rs não grava nem commita.
+    if metrics["numFilesAdded"] == 0 and metrics["numFilesRemoved"] == 0:
+        print(f"{table.name}: nada a juntar em {metrics['totalConsideredFiles']} arquivo(s), "
+              f"nenhum commit, {_measure(started)}")
+        return 0
     print(f"{table.name}: {metrics['numFilesAdded']} arquivo(s) gravado(s), "
           f"{metrics['numFilesRemoved']} removido(s), {_measure(started)}")
     return 0

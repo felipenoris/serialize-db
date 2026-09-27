@@ -113,6 +113,12 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   followed it from 16:31:02 (`CR-10`), delta-rs, `read_parquet`, `S3FileSystem` and `boto3` read
   past the expiry, and the Redshift connection answered twice past its 17:16:00 password expiry
   (`CR-8`). `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+- botocore keeps a credential's expiry only in the private `RefreshableCredentials._expiry_time`
+  (botocore 1.43.103; <https://github.com/boto/botocore/issues/2694>, asking for a public field,
+  open since 2022-06-13), and a credential from the `AWS_*` variables is a
+  `RefreshableCredentials` only with `AWS_CREDENTIAL_EXPIRATION` (`EnvProvider`).
+  `credential_expiry` in `probes/probelib.py` is the one place the probes read it (2026-09-27).
+  `plan/POC.md`
 
 ## The target's network, read on 2026-09-21
 
@@ -144,3 +150,9 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `AWS_DEFAULT_REGION` too. With keys in
   `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, `boto3` reports the credential method `env`.
   `plan/POC.md`, `plan/PLAN-STAGE-3.md`
+- `AWS_ENDPOINT_URL_S3` alone, pointed at moto on 2026-09-27 (boto3 1.43.102, deltalake 1.6.6,
+  pyarrow 25.0.1): `boto3` listed the bucket and delta-rs found the table, both reading the
+  variable from the environment, while PyArrow's `S3FileSystem` went elsewhere (`HeadObject`
+  `ACCESS_DENIED`, which moto never returns). The package reads only `AWS_ENDPOINT_URL`
+  (`storage._endpoint`), so the DuckDB secret and PyArrow get no endpoint from the `_S3` one;
+  the endpoint line of `probes/diagnose_aws.py` says so. `plan/POC.md`

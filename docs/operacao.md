@@ -84,8 +84,9 @@ snapshot.
 ### Compactação
 
 Antes de um snapshot, nunca depois: a compactação depois do snapshot dobra os arquivos que ele
-referencia. Ela junta os arquivos pequenos das partições pedidas e normaliza os que o `UNLOAD`
-gravou (`INT64` no lugar de `INT96` e de `FIXED_LEN_BYTE_ARRAY`, estatística em toda coluna):
+referencia. Ela junta os arquivos pequenos das partições pedidas e normaliza, entre eles, os que o
+`UNLOAD` gravou (`INT64` no lugar de `INT96` e de `FIXED_LEN_BYTE_ARRAY`, estatística em toda
+coluna):
 
 ```shell
 serialize-db compact --root s3://bucket/projeto/delta --environment prd \
@@ -98,7 +99,13 @@ a memória da máquina, porque a reescrita roda no escritor do delta-rs, fora do
 DuckDB, e a memória dela numa partição de `cad_lancamentos` não foi medida. Depois: `numFilesAdded`
 e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a medida da memória da
 compactação; um commit `OPTIMIZE` com `dataChange` falso, que `serialize_db.delta.version_diff`
-não conta; uma partição com um só arquivo não commita.
+não conta.
+
+O delta-rs junta numa partição só os arquivos que cabem juntos no tamanho alvo, a propriedade
+`delta.targetFileSize` da tabela ou 100 MB sem ela, e deixa como está o arquivo que não cabe com
+outro. Sem nada a juntar, como na partição de um arquivo só que a carga inicial grava, ele não grava
+nem commita, e o comando imprime `nada a juntar em <n> arquivo(s), nenhum commit`, com os arquivos
+que leu nas partições pedidas.
 
 ### `vacuum`
 

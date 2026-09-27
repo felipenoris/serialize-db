@@ -479,9 +479,9 @@ def permissions(report: Report, bucket: str, prefix: str, resolved: str | None, 
 
     # O IAM não tem endpoint VPC em todo ambiente; sem o teste TCP, cada simulação esperaria o tempo
     # limite em cada endereço que o nome resolve.
-    alcance, leitura = probelib.endpoint_reachable(iam)
-    report.line(f"alcance do IAM: {leitura}\n")
-    if not alcance:
+    reachable, reading = probelib.endpoint_reachable(iam)
+    report.line(f"alcance do IAM: {reading}\n")
+    if not reachable:
         without_simulation("iam:SimulatePrincipalPolicy sem chamada: o IAM não respondeu ao teste TCP")
         return
 
@@ -545,10 +545,10 @@ def kms_key_section(report: Report, resolved: str | None, kms_key: str | None) -
     # O KMS resolve para vários endereços; sem endpoint VPC, cada um consome o connect_timeout da
     # chamada.
     kms = boto3.client("kms", region_name=resolved, config=short_config(2, 5, 1))
-    alcance, leitura = probelib.endpoint_reachable(kms)
-    report.line(f"alcance do KMS: {leitura}\n")
-    if not alcance:
-        report.note("BK-9", "chave KMS", f"describe_key sem chamada: o KMS não respondeu ao teste TCP ({leitura}); a escrita da suíte S3 diz se a chave serve")
+    reachable, reading = probelib.endpoint_reachable(kms)
+    report.line(f"alcance do KMS: {reading}\n")
+    if not reachable:
+        report.note("BK-9", "chave KMS", f"describe_key sem chamada: o KMS não respondeu ao teste TCP ({reading}); a escrita da suíte S3 diz se a chave serve")
         return
 
     # BK-9: a chave habilitada passa e a de outro estado reprova; a leitura negada deixa a prova
@@ -640,7 +640,7 @@ def main(argv: list[str]) -> int:
         # chamador.
         try:
             return section(report, *arguments)
-        except Exception as error:  # noqa: BLE001 - toda falha é diagnóstico
+        except Exception as error:  # noqa: BLE001 - toda falha é diagnóstico.
             report.line(f"!! seção {section.__name__} interrompida: {describe_error(error)}")
             report.failures.append((f"seção {section.__name__}", describe_error(error)))
             return None
