@@ -303,8 +303,9 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   string. `get_add_actions(flatten=True)` is an `arro3` table: convert with `pa.table(...)` before
   `pc.max`. `vacuum` within the 400-day retention lists nothing even with intermediate versions;
   `keep_versions` only matters past the retention, and `vacuum` writes two commits (`VACUUM START`,
-  `VACUUM END`) without library metadata. A `publish` that compared versions by equality would abort
-  after a `vacuum`, `compact` or `reconcile`: `Execution.publish` compares by `version_diff`.
+  `VACUUM END`) without library metadata. A `publish_delta` that compared versions by equality would
+  abort after a `vacuum`, `compact` or `reconcile`: `Execution.publish_delta` compares by
+  `version_diff`.
   `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-6.md`
 - `Schema.to_json()` serializes each field's `metadata` map in arbitrary order (two consecutive
   generations of the same model differed) and writes `PARQUET:field_id` as an integer

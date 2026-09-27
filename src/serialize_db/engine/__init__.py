@@ -240,7 +240,7 @@ class Engine(Protocol):
             da partição.
         """
 
-    def published(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
+    def pinned_delta(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
         sandbox.
 
@@ -248,7 +248,7 @@ class Engine(Protocol):
 
         .. code-block:: python
 
-            previous = engine.published(Projetado.__table__, uri, 57)
+            previous = engine.pinned_delta(Projetado.__table__, uri, 57)
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
@@ -360,14 +360,15 @@ class Engine(Protocol):
         :param partitions: as partições da execução; ``None`` audita a tabela inteira do
             sandbox.
         :param uri: a URI da tabela fixada pela execução; com ``version``, dá a versão
-            publicada, que as chaves fora da partição comparam, e o ``max_key`` do
+            fixada, que as chaves fora da partição comparam, e o ``max_key`` do
             ``skip_when``.
-        :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a chave publicada
-            não roda.
+        :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a verificação
+            ``chave_<colunas>_tabela`` não roda.
         :param foreign_keys: ``True`` confere as chaves estrangeiras, contra a tabela
             referenciada do sandbox ou contra a versão de ``referenced``.
-        :param key_scope: o escopo da unicidade; ``"partition"`` suprime a chave publicada, e
-            ``"table"`` a confere também na chave com a coluna de ``partition_source``.
+        :param key_scope: o escopo da unicidade; ``"partition"`` suprime a verificação
+            ``chave_<colunas>_tabela``, e ``"table"`` a confere também na chave com a coluna
+            de ``partition_source``.
         :param referenced: por tabela, a URI e a versão fixada da tabela referenciada que o
             sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``.
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e

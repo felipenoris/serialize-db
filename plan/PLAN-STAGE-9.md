@@ -10,7 +10,7 @@ etapa entrega os subcomandos de `serialize_db.cli` e o runbook `docs/operacao.md
 
 | Rotina | Quando | Comando |
 | --- | --- | --- |
-| Tabela de controle da publicação | Uma vez no esquema do Redshift, antes da primeira publicação de qualquer ambiente: `publish_redshift` recusa publicar sem ela ([etapa 8](PLAN-STAGE-8.md), decisão do usuário de 2026-09-23). | `serialize-db publish --init`. |
+| Tabela de controle da publicação | Uma vez no esquema do Redshift, antes da primeira publicação de qualquer ambiente: `publish_redshift` recusa publicar sem ela ([etapa 8](PLAN-STAGE-8.md), decisão do usuário de 2026-09-23). | `serialize-db publish_redshift --init`. |
 | Snapshot do banco | Na periodicidade do processo, por exemplo o fim do trimestre: dentro da execução marcada (`run.snapshot("2026T3")`, gravado no encerramento sem erro) ou fora dela, com a versão atual de cada tabela do ambiente que existe. | `serialize-db snapshot --name 2026T3`. |
 | Compactação | Antes de um snapshot, nunca depois: o comando confere o arquivo de controle e recusa a tabela cujo snapshot está na versão atual. Também normaliza os arquivos que o `UNLOAD` gravou: `INT64` no lugar de `INT96` e de `FIXED_LEN_BYTE_ARRAY`, estatística em toda coluna ([etapa 3](PLAN-STAGE-3.md)). | `serialize-db compact --table ... --partitions ...`. |
 | `vacuum` | Mensal: a lista com `keep_versions` do arquivo de controle, revisada, depois aplicada; `--full` de tempos em tempos para os órfãos. A retenção é de 400 dias (decisão do usuário de 2026-09-23), e `docs/index.md`, seção "Retenção dos arquivos removidos", diz como mudá-la. Num bucket versionado o espaço só é liberado pela regra `NoncurrentVersionExpiration`; `probes/bucket.py` (`BK-14`) mostra o acumulado. | `serialize-db vacuum [--apply] [--full] [--retention-hours 9600]`. |
@@ -160,7 +160,7 @@ do `pdoc`. O que a implementação mudou do plano:
 | Arquivo | `test_archive_copies_each_table_with_the_same_sums` | Uma versão por partição no arquivo, os mesmos arquivos e as mesmas somas da versão registrada, a entrada em `archived` e fora de `snapshots`, o `vacuum` sem a versão arquivada em `keep_versions`, `snapshot` recusando o mesmo nome, `archive` recusando o nome ausente e pulando a tabela já arquivada, com o tempo e o pico de RSS na linha de cada tabela. |
 | Exportação | `test_export_by_copy_and_by_rewrite` | Os dois modos e uma versão antiga; o destino não vazio e o destino fora da raiz recusados; a linha impressa com o tempo e o pico de RSS. |
 | Erros de uso | `test_cli_operation_usage_errors` | O nome ausente, o modo desconhecido, a tabela fora do modelo e a tabela sem Delta, sem traceback. |
-| Ambiente padrão | `test_empty_environment_variable_counts_as_absent` | `SERIALIZE_DB_ENVIRONMENT` vazia vale `dsv`, como em `run`, `audit` e `publish`, e não um erro de uso. |
+| Ambiente padrão | `test_empty_environment_variable_counts_as_absent` | `SERIALIZE_DB_ENVIRONMENT` vazia vale `dsv`, como em `run`, `audit` e `publish_redshift`, e não um erro de uso. |
 | Cópia profunda | `tests/test_delta.py::test_deep_copy_and_relocation` | O mesmo arquivo, caminho, tamanho e extremos da origem na cópia, uma versão por partição, as mesmas somas; a repetição sem commit, a cópia da versão 2 sobre a da 1 só com a partição que falta, e a versão 1 sobre a cópia da 2 recusada. |
 
 ## Decisões pendentes

@@ -76,10 +76,10 @@ FUNCTION_TEXTS = {
 }
 
 
-def published_source(table: sa.Table) -> sa.FromClause:
-    """Uma origem com as colunas da tabela, no papel da versão publicada."""
+def pinned_source(table: sa.Table) -> sa.FromClause:
+    """Uma origem com as colunas da tabela, no papel da versão fixada."""
     columns = [sa.column(column.name, column.type) for column in table.columns]
-    return sa.table("publicada", *columns).alias("publicado")
+    return sa.table("fixada", *columns).alias("versao")
 
 
 def partitions_of(table: sa.Table) -> list[str] | None:
@@ -180,62 +180,62 @@ def test_redshift_is_finite_under_the_postgresql_rule() -> None:
 
 def test_key_scope_follows_the_partition_column() -> None:
     """A chave com a coluna de ``partition_source`` fica nas partições da execução; a chave primária
-    ganha a consulta contra a versão publicada, com o ``skip_when`` do ``max_key``;
+    ganha a consulta contra a versão fixada, com o ``skip_when`` do ``max_key``;
     ``key_scope="partition"`` a suprime e registra, ``"table"`` a estende à chave da origem."""
     contracts = CLIENT_TABLES["cad_contratos"]
-    published = published_source(contracts)
+    pinned = pinned_source(contracts)
 
-    # O escopo padrão: a chave primária contra a versão publicada, com o skip_when do max_key.
+    # O escopo padrão: a chave primária contra a versão fixada, com o skip_when do max_key.
     found, not_run = audit.checks_and_not_run(
-        contracts, PARTITIONS, foreign_keys=False, key_scope=None, published=published,
-        referenced=None, published_max_key=500)
+        contracts, PARTITIONS, foreign_keys=False, key_scope=None, pinned=pinned,
+        referenced=None, pinned_max_key=500)
     assert names_of(found) == [
         "linhas",
         "chave_id_contrato",
-        "chave_id_contrato_publicada",
+        "chave_id_contrato_tabela",
         "chave_data_sistema_contrato",
     ]
     checks_by_name = {check.name: check for check in found}
-    skip_when = checks_by_name["chave_id_contrato_publicada"].skip_when
+    skip_when = checks_by_name["chave_id_contrato_tabela"].skip_when
     assert skip_when is not None
     assert "min(" in str(skip_when)
     assert not_run == []
 
-    # key_scope="partition": a consulta contra a versão publicada sai e fica registrada.
+    # key_scope="partition": a consulta contra a versão fixada sai e fica registrada.
     found, not_run = audit.checks_and_not_run(
-        contracts, PARTITIONS, foreign_keys=False, key_scope="partition", published=published,
-        referenced=None, published_max_key=500)
-    assert "chave_id_contrato_publicada" not in names_of(found)
-    assert not_run == ["chave_id_contrato_publicada (key_scope=partition)"]
+        contracts, PARTITIONS, foreign_keys=False, key_scope="partition", pinned=pinned,
+        referenced=None, pinned_max_key=500)
+    assert "chave_id_contrato_tabela" not in names_of(found)
+    assert not_run == ["chave_id_contrato_tabela (key_scope=partition)"]
 
     # key_scope="table": a consulta se estende à chave com a coluna de partition_source; sem
-    # published_max_key, nenhuma verificação tem skip_when.
+    # pinned_max_key, nenhuma verificação tem skip_when.
     found, _ = audit.checks_and_not_run(
-        contracts, PARTITIONS, foreign_keys=False, key_scope="table", published=published,
-        referenced=None, published_max_key=None)
-    against_published = [name for name in names_of(found) if name.endswith("_publicada")]
-    assert against_published == [
-        "chave_id_contrato_publicada",
-        "chave_data_sistema_contrato_publicada",
+        contracts, PARTITIONS, foreign_keys=False, key_scope="table", pinned=pinned,
+        referenced=None, pinned_max_key=None)
+    against_pinned = [name for name in names_of(found) if name.endswith("_tabela")]
+    assert against_pinned == [
+        "chave_id_contrato_tabela",
+        "chave_data_sistema_contrato_tabela",
     ]
     for check in found:
         assert check.skip_when is None, check.name
 
-    # Sem versão publicada, a tabela nova: a consulta não roda, e o relatório diz por quê.
+    # Sem versão fixada, a tabela nova: a consulta não roda, e o relatório diz por quê.
     _, not_run = audit.checks_and_not_run(
-        contracts, PARTITIONS, foreign_keys=False, key_scope=None, published=None,
-        referenced=None, published_max_key=None)
-    assert not_run == ["chave_id_contrato_publicada (sem versão publicada)"]
+        contracts, PARTITIONS, foreign_keys=False, key_scope=None, pinned=None,
+        referenced=None, pinned_max_key=None)
+    assert not_run == ["chave_id_contrato_tabela (sem versão fixada)"]
 
     # A tabela sem partição, que a execução substitui inteira, não compara com as demais partições.
     accounts = CLIENT_TABLES["cad_contas"]
     account_checks = audit.checks(accounts, partitions=None,
-                                  published=published_source(accounts))
+                                  pinned=pinned_source(accounts))
     assert names_of(account_checks) == ["linhas", "chave_id_conta", "chave_numero"]
 
     # A auditoria da tabela inteira também não compara com as demais partições.
-    whole_table_checks = audit.checks(contracts, partitions=None, published=published)
-    assert "chave_id_contrato_publicada" not in names_of(whole_table_checks)
+    whole_table_checks = audit.checks(contracts, partitions=None, pinned=pinned)
+    assert "chave_id_contrato_tabela" not in names_of(whole_table_checks)
 
 
 def test_foreign_key_check_only_on_request() -> None:
@@ -246,8 +246,8 @@ def test_foreign_key_check_only_on_request() -> None:
 
     # Sem foreign_keys=True: nenhuma verificação de órfão, e cada chave estrangeira em not_run.
     found, not_run = audit.checks_and_not_run(
-        entries, PARTITIONS, foreign_keys=False, key_scope=None, published=None,
-        referenced=None, published_max_key=None)
+        entries, PARTITIONS, foreign_keys=False, key_scope=None, pinned=None,
+        referenced=None, pinned_max_key=None)
     assert not [check for check in found if check.name.startswith("orfao_")]
     orphan_reasons = [reason for reason in not_run if reason.startswith("orfao_")]
     assert orphan_reasons == [
@@ -265,8 +265,8 @@ def test_foreign_key_check_only_on_request() -> None:
         "dom_veiculos": CLIENT_TABLES["dom_veiculos"],
     }
     found, not_run = audit.checks_and_not_run(
-        entries, PARTITIONS, foreign_keys=True, key_scope=None, published=None,
-        referenced=referenced, published_max_key=None)
+        entries, PARTITIONS, foreign_keys=True, key_scope=None, pinned=None,
+        referenced=referenced, pinned_max_key=None)
     orphans = [check.name for check in found if check.name.startswith("orfao_")]
     assert orphans == ["orfao_id_conta", "orfao_id_veiculo"]
     assert "orfao_id_mensuracao (dom_mensuracoes fora do sandbox e sem versão fixada)" in not_run

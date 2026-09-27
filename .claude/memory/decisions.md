@@ -1255,3 +1255,27 @@ verb-first style. The assistant's additions, named in the report: the paragraph 
 execução" on what the third argument is for, and the sentence of `plan/PLAN.md` on the domain
 pipeline.
 `plan/PLAN.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+
+## The names of the Delta and Redshift publications (2026-09-27)
+
+Asked on 2026-09-27 how to tell apart by name the publication to the Delta (`run.publish`) from the
+publication to clients in Redshift (`serialize-db publish`), the user proposed `run.publish_delta`.
+The assistant agreed and recommended renaming the Delta-sense `published` family to `pinned`, and
+the user agreed and added `serialize-db publish_redshift` for the subcommand. The user then asked
+about `delta_version` for the method; the assistant answered that every `version` name in the
+package is a number (the `delta_version BIGINT` column of `serialize_db_publications`,
+`published_version`, `current_version`) while the method returns a `FromClause`, and the user
+proposed `pinned_delta`, which pairs with `publish_delta`. The names since:
+`Execution.publish_delta` and `Execution.pinned_delta`, `Engine.pinned_delta` in both engines, the
+Redshift staging `exec_<id>_<tabela>_versao_<versão>` (was `_publicado_<versão>`) and the subcommand
+`serialize-db publish_redshift`; `serialize_db.publication.publish_redshift`,
+`delta.publish_partition` and the Redshift-sense names (`PublicationStatus.published_version`,
+`reconcile_published`, `version_diff(published=...)`) stay. No alias: the package has no release.
+The assistant's choices, named in the report: the parameters `pinned` and `pinned_max_key` of
+`serialize_db.audit.checks` and `audit_sql`, the key check label `chave_<colunas>_tabela` (was
+`chave_<colunas>_publicada`, the scope `key_scope="table"` names), the DuckDB alias
+`<tabela>_versao`, the not-run reason `(sem versão fixada)`, `serialize-db audit` described as
+auditing the current Delta version, the renamed tests, and the dated records (`plan/POC.md`, the
+older entries of this file, the dated lines of `CLAUDE.md`) keeping the old names, as with `prod`
+and `dev`.
+`plan/PLAN.md`, `plan/PLAN-STAGE-6.md`, `plan/CURRENT_STATE.md`

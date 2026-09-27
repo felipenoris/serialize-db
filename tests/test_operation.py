@@ -376,7 +376,7 @@ def test_channel_points_moves_and_lists(db: Database, capsys: pytest.CaptureFixt
 def test_empty_environment_variable_counts_as_absent(db: Database, capsys: pytest.CaptureFixture,
                                                      monkeypatch: pytest.MonkeyPatch) -> None:
     """``SERIALIZE_DB_ENVIRONMENT`` vazia conta como ausente, como em ``run``, ``audit`` e
-    ``publish``: o ambiente é ``dsv``, e não um erro de uso."""
+    ``publish_redshift``: o ambiente é ``dsv``, e não um erro de uso."""
     monkeypatch.setenv("SERIALIZE_DB_ENVIRONMENT", "")
     arguments = ["snapshot", "--root", db.root, "--metadata", METADATA, "--name", "2026T3"]
     assert cli.main(arguments) == 0

@@ -137,9 +137,9 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
 - **A soma de controle da auditoria acima de 1e32.** `audit` soma cada `Double` e `Numeric` como
   `DECIMAL(38, 6)` (`_totals` de `serialize_db.audit`): um valor finito de magnitude 1e32 ou mais
   falha no `CAST` (`ConversionException`), e uma soma acima disso estoura (`OutOfRangeException`),
-  o que derruba `audit` e impede `publish` (`audit=False` dispensa, com aviso). A base de produção
-  fica em 1e18. Opções: somar o `Double` como `DOUBLE` (a soma de controle deixa de ser exata,
-  como já é a coluna), ou capturar o estouro e registrar a soma como não lida.
+  o que derruba `audit` e impede `publish_delta` (`audit=False` dispensa, com aviso). A base de
+  produção fica em 1e18. Opções: somar o `Double` como `DOUBLE` (a soma de controle deixa de ser
+  exata, como já é a coluna), ou capturar o estouro e registrar a soma como não lida.
 - **A escrita condicional do arquivo de controle entre threads.** Na pasta local,
   `Storage.write_text(if_match=...)` confere a impressão digital e faz o `os.replace` fora de um
   lock: oito threads somando 50 cada perderam 293 de 400 atualizações, e 321 na máquina do alvo. A
@@ -153,24 +153,24 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
   tabela de tipos de `docs/index.md` diz que ele entra como chega, com `NaN`; isso vale para o
   Arrow, e pelo pandas o `NaN` vira nulo antes de `cast`, que numa coluna `NOT NULL` o recusa.
   Opção: uma frase na seção do `DataFrame` de `docs/index.md`.
-- **A janela entre a conferência da versão fixada e o commit de `publish`.**
-  `_check_no_data_change` confere por `version_diff` que nenhuma alteração de dados entrou na
-  tabela desde a versão fixada, e `register_files` abre a tabela de novo, na versão atual, logo
-  antes do `create_write_transaction` (`publish_partition` abre do mesmo jeito): um commit de dados
-  de outra execução na mesma partição entre a conferência e essa abertura, durante o `reconcile` e
-  o `COPY` de `export_partition`, passa sem `ExecutionConflict`, e o commit seguinte substitui a
-  partição da outra execução sem aviso, quando a docstring de `publish` e a
-  [etapa 6](PLAN-STAGE-6.md) prometem `ExecutionConflict`. A sonda da execução reproduz a janela na
-  seção D (`exec-e` parada em `export_partition` enquanto `exec-f` publica) e a viu na disputa da
-  seção C sob carga. No delta-rs 1.6.6, `create_write_transaction(mode="overwrite",
-  partition_filters=...)` sobre um `DeltaTable` aberto na versão fixada falha com
-  `CommitFailedError` quando um `overwrite` da mesma partição entrou depois dela (`a concurrent
-  transaction deleted data this operation read`) e quando o esquema mudou (`Metadata changed since
-  last commit`), e passa com uma gravação em outra partição, uma compactação da mesma partição e um
-  commit só de metadados no meio. Opções: `register_files` e `publish_partition` abrirem a tabela
-  na versão fixada pela execução, atualizada depois do `reconcile`, que commita a mudança de
-  esquema, o que entrega o `ExecutionConflict` prometido pelo próprio delta-rs; ou a docstring de
-  `publish` dizer que a conferência não cobre a janela, com uma execução por ambiente de cada vez.
+- **A janela entre a conferência da versão fixada e o commit de `publish_delta`.**
+  `_check_no_data_change` confere por `version_diff` que nenhuma alteração de dados entrou na tabela
+  desde a versão fixada, e `register_files` abre a tabela de novo, na versão atual, logo antes do
+  `create_write_transaction` (`publish_partition` abre do mesmo jeito): um commit de dados de outra
+  execução na mesma partição entre a conferência e essa abertura, durante o `reconcile` e o `COPY`
+  de `export_partition`, passa sem `ExecutionConflict`, e o commit seguinte substitui a partição da
+  outra execução sem aviso, quando a docstring de `publish_delta` e a [etapa 6](PLAN-STAGE-6.md)
+  prometem `ExecutionConflict`. A sonda da execução reproduz a janela na seção D (`exec-e` parada em
+  `export_partition` enquanto `exec-f` publica) e a viu na disputa da seção C sob carga. No delta-rs
+  1.6.6, `create_write_transaction(mode="overwrite", partition_filters=...)` sobre um `DeltaTable`
+  aberto na versão fixada falha com `CommitFailedError` quando um `overwrite` da mesma partição
+  entrou depois dela (`a concurrent transaction deleted data this operation read`) e quando o
+  esquema mudou (`Metadata changed since last commit`), e passa com uma gravação em outra partição,
+  uma compactação da mesma partição e um commit só de metadados no meio. Opções: `register_files` e
+  `publish_partition` abrirem a tabela na versão fixada pela execução, atualizada depois do
+  `reconcile`, que commita a mudança de esquema, o que entrega o `ExecutionConflict` prometido pelo
+  próprio delta-rs; ou a docstring de `publish_delta` dizer que a conferência não cobre a janela,
+  com uma execução por ambiente de cada vez.
 
 ## Decisões de API pendentes por etapa
 

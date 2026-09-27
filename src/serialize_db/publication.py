@@ -2,7 +2,7 @@
 derivadas do Delta, e a tabela de controle ``serialize_db_publications``.
 
 A tabela de controle é uma só para todos os ambientes, criada uma vez no esquema pelo usuário
-(``create_publications_table`` ou ``serialize-db publish --init``); nenhum caminho do pipeline a
+(``create_publications_table`` ou ``serialize-db publish_redshift --init``); o pipeline não a
 cria, e ``publish_redshift`` recusa publicar sem ela, antes de qualquer escrita. A publicação de
 cada tabela é uma transação, numa conexão própria: ``BEGIN``; a leitura da linha de controle, que
 identifica a versão publicada e fixa o snapshot da transação; sem linha, a primeira publicação, com
@@ -14,8 +14,8 @@ controle, ou o ``UPDATE`` dela condicionado à versão lida, cujas 0 linhas, com
 tabela publicada que outra primeira publicação criou, saem como ``ExecutionConflict``. As tabelas
 correm num pool, uma conexão por tabela. ``unpublish_redshift`` apaga a tabela publicada e a linha
 de controle numa transação, e ``publication_status`` compara a versão publicada com a atual. As
-versões vêm de um snapshot do arquivo de controle, por ``serialize-db publish --snapshot`` ou
-``--channel``, ou são as atuais.
+versões vêm de um snapshot do arquivo de controle, por ``serialize-db publish_redshift`` com
+``--snapshot`` ou ``--channel``, ou são as atuais.
 
 Cada ``COPY`` leva a cláusula de credenciais do motor Redshift montada logo antes do seu
 ``execute``, com a chave que a cadeia de credenciais serve naquele momento; nenhum texto que a
@@ -101,7 +101,7 @@ CONTROL_TABLE = "serialize_db_publications"
 """A tabela de controle: ``table_name``, ``delta_version``, ``execution_id`` e ``published_at``."""
 
 # A instrução de inicialização, na mensagem de PublicationError.
-_INIT = "crie-a uma vez com serialize-db publish --init (create_publications_table)"
+_INIT = "crie-a uma vez com serialize-db publish_redshift --init (create_publications_table)"
 
 # O lugar da cláusula de credenciais nos textos do COPY, que _run_publication preenche logo
 # antes do execute de cada um.

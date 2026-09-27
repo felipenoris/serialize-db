@@ -36,16 +36,16 @@ Tomadas no mesmo dia, nas respostas ao modelo dos snapshots:
 - O nome do snapshot continua livre dentro da regra da partição, imutável e único.
 - O snapshot padrão é o que o canal `default` do ambiente aponta. Só um comando próprio move o
   canal, sem vínculo com a publicação, e a etapa começa só com o `default`.
-- O Redshift não tem canal. `serialize-db publish` recebe `--snapshot <nome>`, que escolhe o
-  snapshot explicitamente, ou `--channel <nome>` (`--channel default`), que publica o snapshot
-  do canal.
+- O Redshift não tem canal. `serialize-db publish_redshift` recebe `--snapshot <nome>`, que escolhe
+  o snapshot explicitamente, ou `--channel <nome>` (`--channel default`), que publica o snapshot do
+  canal.
 - O exercício que diverge nos dados é um ambiente (dsv, prd), e nenhuma operação que crie um
   ambiente a partir de um snapshot entra agora.
 - A versão atual de cada tabela, sem snapshot, é o canal reservado `current`, no leitor
   (`open_delta(channel="current")`) e na publicação (`--channel current`); o comando do canal
   não o move.
 - `run.publish_redshift` e `serialize-db run --redshift` saem: a publicação no Redshift é sempre
-  `serialize-db publish`, depois da execução.
+  `serialize-db publish_redshift`, depois da execução.
 - O leitor Delta lê o snapshot arquivado pela cópia em `arquivo/<nome>/<tabela>`.
 - O comando que move o canal é `serialize-db channel --name default --snapshot <nome>`, com o
   nome do canal explícito desde já.
@@ -67,8 +67,8 @@ Tomadas no mesmo dia, na revisão da interface pela simplicidade de uso:
 O módulo `serialize_db.reader` (`DeltaReader`, `RedshiftReader` e `open_redshift`),
 `Database.open_delta` e `Database.open_redshift` em `serialize_db.execution`, `set_channel`,
 `channel_snapshot`, `snapshot_versions` e a protegida `channels_pointing` em `serialize_db.delta`,
-o subcomando `serialize-db channel`, o `serialize-db publish` por `--snapshot` ou `--channel`, e
-os casos de `tests/test_reader.py`, `tests/test_delta.py`, `tests/test_operation.py`,
+o subcomando `serialize-db channel`, o `serialize-db publish_redshift` por `--snapshot` ou
+`--channel`, e os casos de `tests/test_reader.py`, `tests/test_delta.py`, `tests/test_operation.py`,
 `tests/test_execution.py` e `tests/test_publication.py` substituem a interface planejada em
 2026-09-24: as assinaturas, o uso e as docstrings estão no código, em `docs/index.md` (seção
 "Ler a base com o modelo") e na documentação do `pdoc`. `Execution.publish_redshift` e
@@ -106,10 +106,10 @@ O que a implementação fixou além do texto das seções abaixo:
 - **A volta a um snapshot anterior** chama `version_diff(uri, min, max)` entre a versão publicada
   e a pedida, e a transação da publicação deixou de recusar a versão lida acima da pedida; o
   `UPDATE` da linha de controle continua condicionado à versão lida.
-- **`serialize-db publish`** sai com 2, sem escrita no Redshift, na chamada sem `--snapshot` nem
-  `--channel`, com `--init`, `--status` ou `--unpublish` ao lado de um deles, no canal ausente,
-  no snapshot ausente ou arquivado e na tabela pedida sem versão (`PublicationError`, que
-  `--tables` contorna); `serialize-db archive` recusa o snapshot de um canal antes de copiar.
+- **`serialize-db publish_redshift`** sai com 2, sem escrita no Redshift, na chamada sem
+  `--snapshot` nem `--channel`, com `--init`, `--status` ou `--unpublish` ao lado de um deles, no
+  canal ausente, no snapshot ausente ou arquivado e na tabela pedida sem versão (`PublicationError`,
+  que `--tables` contorna); `serialize-db archive` recusa o snapshot de um canal antes de copiar.
 - **`tests/test_reader.py`** usa a fixture `target` e `export_with_duckdb` de
   `tests/test_publication.py` no caso `redshift`, e a conexão de mentira de
   `tests/test_engine_redshift.py` nos casos sem conexão; a poda pela view é medida pelo log
@@ -131,7 +131,7 @@ O que a implementação fixou além do texto das seções abaixo:
   dele; outro escritor entre a leitura e a escrita é `ConflictError`.
 - **`channel_snapshot(control, name)`** devolve o snapshot do canal, e o canal ausente é
   `ContractError` com o comando que o cria; o canal `current` também, porque não aponta snapshot, e
-  o leitor e `serialize-db publish` o tratam antes de chamá-la.
+  o leitor e `serialize-db publish_redshift` o tratam antes de chamá-la.
   **`snapshot_versions(control, name)`** devolve as versões do snapshot, e o nome ausente de
   `snapshots` é `ContractError`. O leitor e a publicação usam as duas.
 - **`archive_snapshot`** recusa com `ValueError` o snapshot que um canal aponta: o canal precisa
@@ -144,10 +144,10 @@ O que a implementação fixou além do texto das seções abaixo:
 
 ### A publicação por snapshot
 
-- **`serialize-db publish`** publica só com `--snapshot <nome>` ou `--channel <nome>`, que o
-  `argparse` torna excludentes, e um dos dois é obrigatório; `--init`, `--status` e `--unpublish`
-  não os recebem. As versões são as de `snapshot_versions`, que `publication.publish_redshift`
-  já recebe em `versions`; `--channel current` passa as versões atuais.
+- **`serialize-db publish_redshift`** publica só com `--snapshot <nome>` ou `--channel <nome>`, que
+  o `argparse` torna excludentes, e um dos dois é obrigatório; `--init`, `--status` e `--unpublish`
+  não os recebem. As versões são as de `snapshot_versions`, que `publication.publish_redshift` já
+  recebe em `versions`; `--channel current` passa as versões atuais.
 - **O snapshot arquivado** é recusado, e a tabela do modelo ausente do snapshot é
   `PublicationError` com o nome do snapshot.
 - **A volta a um snapshot anterior ao publicado** troca as partições alteradas entre as duas
@@ -225,7 +225,7 @@ O que a implementação fixou além do texto das seções abaixo:
   `<unload_to>/<id do leitor>/stream/<uuid>/`, lido pelo `Storage`. O `close` do stream apaga os
   arquivos dele, e o `close` do leitor apaga `<unload_to>/<id do leitor>/`; nada fora dessa pasta é
   apagado.
-- **O leitor não expõe** `ingest`, `loader`, `load`, `published`, `audit` nem `export_partition`,
+- **O leitor não expõe** `ingest`, `loader`, `load`, `pinned_delta`, `audit` nem `export_partition`,
   porque eles gravariam no esquema com o prefixo das tabelas publicadas.
 - **A consistência entre tabelas** não é garantida. Cada tabela é publicada numa transação própria
   ([etapa 8](PLAN-STAGE-8.md)), e uma consulta que junta duas tabelas durante uma publicação pode
