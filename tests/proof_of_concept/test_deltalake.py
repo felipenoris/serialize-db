@@ -564,6 +564,46 @@ def test_compact_and_checkpoint(folder: Callable[[str], str], two_months: pa.Tab
     assert DeltaTable(uri, version=0).to_pyarrow_table().num_rows == 1000
 
 
+def test_compact_packs_files_up_to_the_target_size(folder: Callable[[str], str]) -> None:
+    """``optimize.compact`` junta numa partição os arquivos que cabem juntos no tamanho alvo, o
+    ``target_size`` ou, sem ele, a propriedade ``delta.targetFileSize`` da tabela; o arquivo que
+    não cabe com outro fica, e sem nada a juntar não há commit. As métricas contam os arquivos
+    lidos."""
+    uri = folder("target_size")
+    # Três commits de cinco linhas: três arquivos de uns 500 bytes na mesma partição.
+    for start in (0, 100, 200):
+        rows = pa.table({"mes": [MONTHS[0]] * 5, "valor": list(range(start, start + 5))})
+        write_deltalake(uri, rows, mode="append", partition_by=["mes"])
+    actions = pa.table(DeltaTable(uri).get_add_actions(flatten=True))
+    sizes = sorted(actions.column("size_bytes").to_pylist())
+    no_pair_fits = sizes[0] + sizes[1] - 1
+
+    # Um alvo abaixo da soma dos dois menores: nenhum arquivo gravado nem commit.
+    version = DeltaTable(uri).version()
+    metrics = DeltaTable(uri).optimize.compact(target_size=no_pair_fits)
+    assert (metrics["numFilesAdded"], metrics["numFilesRemoved"]) == (0, 0)
+    assert (metrics["totalConsideredFiles"], metrics["totalFilesSkipped"]) == (3, 3)
+    assert DeltaTable(uri).version() == version
+
+    # O mesmo alvo pela propriedade da tabela.
+    DeltaTable(uri).alter.set_table_properties({"delta.targetFileSize": str(no_pair_fits)})
+    version = DeltaTable(uri).version()
+    metrics = DeltaTable(uri).optimize.compact()
+    assert (metrics["numFilesAdded"], metrics["numFilesRemoved"]) == (0, 0)
+    assert DeltaTable(uri).version() == version
+
+    # Um alvo que cabe dois arquivos e não três: dois viram um, e o terceiro fica.
+    metrics = DeltaTable(uri).optimize.compact(target_size=sum(sizes) - 1)
+    assert (metrics["numFilesAdded"], metrics["numFilesRemoved"]) == (1, 2)
+    assert metrics["totalFilesSkipped"] == 1
+    assert DeltaTable(uri).version() == version + 1
+    assert len(DeltaTable(uri).file_uris()) == 2
+
+    # A partição sem arquivo: nenhum arquivo lido.
+    metrics = DeltaTable(uri).optimize.compact(partition_filters=[("mes", "in", [MONTHS[1]])])
+    assert metrics["totalConsideredFiles"] == 0
+
+
 def test_export_snapshot_by_copying_files(
     folder: Callable[[str], str], two_months: pa.Table, con: duckdb.DuckDBPyConnection
 ) -> None:

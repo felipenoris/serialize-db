@@ -1680,8 +1680,9 @@ def vacuum_keeping_snapshots(uri: str, control: Mapping, table_name: str, storag
 
 
 def compact(uri: str, table: sa.Table, partitions: list[str], storage: Storage) -> dict:
-    """Junta os arquivos pequenos das partições pelo ``optimize.compact`` do delta-rs; uma
-    partição com um arquivo só não commita.
+    """Junta os arquivos pequenos das partições pelo ``optimize.compact`` do delta-rs, os que
+    cabem juntos no tamanho alvo, a propriedade ``delta.targetFileSize`` da tabela ou 100 MB sem
+    ela; sem nada a juntar, como na partição com um arquivo só, não grava nem commita.
 
     A reescrita sai pelo escritor do delta-rs: os arquivos de outro escritor que ela junta perdem o
     ``INT96`` e o ``FIXED_LEN_BYTE_ARRAY`` e ganham estatística em toda coluna. O commit grava
@@ -1698,7 +1699,8 @@ def compact(uri: str, table: sa.Table, partitions: list[str], storage: Storage) 
     :param partitions: os valores das partições, na regra de ``schema.PARTITION_VALUE``; numa
         tabela sem partição, ignorados, e a tabela inteira é compactada.
     :param storage: o armazenamento da raiz do banco.
-    :return: as métricas do ``optimize.compact``, como ``numFilesAdded`` e ``numFilesRemoved``.
+    :return: as métricas do ``optimize.compact``, como ``numFilesAdded``, ``numFilesRemoved`` e
+        ``totalConsideredFiles``, os arquivos lidos nas partições.
     :raises ContractError: um valor de ``partitions`` fora da regra da partição.
     """
     partition_by = table_options(table).partition_by

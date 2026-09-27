@@ -208,6 +208,17 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   the readers that filter right and the ones that lose rows. `plan/POC.md`,
   `plan/OPEN_QUESTIONS.md`, `REFERENCES.md`
 
+- `optimize.compact` packs a partition's files into bins up to the target size, `target_size` or
+  the table property `delta.targetFileSize`, 100 MB without both, and rewrites only the bins with
+  more than one file (2026-09-27, deltalake 1.6.6): files of 514 and 512 bytes stayed with a
+  1,025-byte target, by the argument and by the property, and merged at 1,026; files of 512, 514
+  and 514 bytes at 1,026 gave 1 added, 2 removed and 1 skipped. With nothing to merge it writes
+  nothing and the version does not move; `totalConsideredFiles` counts the files read (1 for a
+  one-file partition, 0 for a partition with no file) and `totalFilesSkipped` the ones left.
+  `serialize-db compact` prints `nada a juntar em <n> arquivo(s), nenhum commit` from them.
+  `tests/proof_of_concept/test_deltalake.py::test_compact_packs_files_up_to_the_target_size`,
+  `plan/POC.md`, `plan/delta.md`
+
 ## Performance measured
 
 - On local disk, 3,000,000 rows in 12 files: `delta_scan` aggregates in 0.010 s against 0.006 s for

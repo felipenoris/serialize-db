@@ -4538,3 +4538,25 @@ e com o `UNLOAD` do cliente só de leitura; o da operação segue esperando uma 
 arquivos e um `compact` antes do snapshot; o das versões não correntes ganha a contagem deste dia.
 Os cinco achados das sondas de consistência seguem esperando o usuário, agora lidos também no alvo.
 Os arquivos das [etapas 8](PLAN-STAGE-8.md) e [10](PLAN-STAGE-10.md) citam estas leituras.
+
+## O que a sonda do tamanho alvo da compactação mostrou
+
+Em 2026-09-27, numa pasta local do contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB),
+com deltalake 1.6.6, a sonda gravou numa partição arquivos de 512 a 514 bytes e chamou o
+`optimize.compact` com tamanhos alvo em volta da soma deles, para escrever a linha que
+`serialize-db compact` imprime quando não há o que juntar.
+
+- **O `optimize.compact` junta numa partição só os arquivos que cabem juntos no tamanho alvo**:
+  dois arquivos de 514 e 512 bytes ficaram como estavam com o alvo de 1.025 bytes, dado pelo
+  `target_size` e pela propriedade `delta.targetFileSize` da tabela, e viraram um com o alvo de
+  1.026; três arquivos de 512, 514 e 514 bytes com o alvo de 1.026 deram um arquivo gravado, dois
+  removidos e um pulado (`totalFilesSkipped` 1).
+- **Sem nada a juntar, ele não grava nem commita**: a versão da tabela não mudou, e as métricas
+  trazem os arquivos lidos em `totalConsideredFiles`, todos pulados: 1 na partição de um arquivo
+  só, 2 no par acima do alvo e 0 na partição sem arquivo.
+
+**Consequências**: `serialize-db compact` imprime `nada a juntar em <n> arquivo(s), nenhum commit`
+quando o delta-rs não grava nem remove arquivo, com o `totalConsideredFiles` (pedido do usuário de
+2026-09-27). A regra do tamanho alvo entrou em `docs/operacao.md`, no
+[arquivo da etapa 9](PLAN-STAGE-9.md), em [`delta.md`](delta.md) e na suíte de estudo do delta-rs
+(`test_compact_packs_files_up_to_the_target_size`).

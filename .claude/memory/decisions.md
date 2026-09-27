@@ -1204,3 +1204,19 @@ transaction passes a marker to `publication_statements`, whose signature stays, 
 `test_publish_builds_the_credentials_for_each_copy` failed on the old code (one call for two
 `COPY`s) and passes on the new. The `COPY` longer than its key stays in `plan/OPEN_QUESTIONS.md`.
 `plan/PLAN-STAGE-8.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+
+## The messages of the load and of `compact` (2026-09-27)
+
+Asked on 2026-09-27 whether any doc-only plan revision since 2026-09-24 left code undone, the
+assistant listed, among what fell outside the plan, the two message tweaks offered on 2026-09-25
+and never answered, and the stale header of `plan/CURRENT_STATE.md`. The user asked for those fixes
+the same day: the table without partition prints `tabela inteira` in place of `None` in
+`scripts/migrate_parquet_to_delta.py`, and `serialize-db compact` prints `nada a juntar em <n>
+arquivo(s), nenhum commit` when the delta-rs writes and removes no file, with its
+`totalConsideredFiles`. The assistant's choices, named in the report: the same label in
+`serialize-db load` and in the `DIFERENÇA` line of both, which printed `None` too; the message
+naming the files read rather than "a partition with one file", because the probe of the same day
+found the delta-rs skips any file that fits no other in the target size (`.claude/memory/delta.md`);
+and the `CLAUDE.md` line on `serialize_db.engine.__all__`, which lists `duckdb` and `redshift`.
+`docs/operacao.md`, `plan/PLAN-STAGE-9.md`, `plan/delta.md`, `plan/POC.md`,
+`plan/CURRENT_STATE.md`

@@ -10,7 +10,8 @@ commit (valor da coluna de origem fora do caminho, texto acima de ``String(n)``,
 uma das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos); a coluna
 ``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, com o relatório que soma só
 os finitos; o relatório que acusa uma linha apagada; a auditoria de chave estrangeira que registra
-o órfão sem barrar a carga; e ``serialize-db load`` sobre a base inteira, duas vezes.
+o órfão sem barrar a carga; ``serialize-db load`` sobre a base inteira, duas vezes; e a tabela sem
+partição impressa como tabela inteira.
 """
 
 from __future__ import annotations
@@ -527,6 +528,12 @@ def conflicting_load(*args: object, **options: object) -> list[str | None]:
     raise ExecutionConflict("outro registro de cad_contas")
 
 
+def unpartitioned_difference(*args: object, **options: object) -> load.LoadReport:
+    """Um ``load_report`` de ``cad_contas`` com uma linha a mais na origem."""
+    partition = load.PartitionReport(None, 5, 4, {}, {}, {}, {})
+    return load.LoadReport("cad_contas", (partition,), (), ())
+
+
 def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Path,
                                              monkeypatch: pytest.MonkeyPatch,
                                              capsys: pytest.CaptureFixture) -> None:
@@ -544,7 +551,7 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     printed = capsys.readouterr().out
     assert "fora do modelo: alembic_version, meta_update_status, schema.json" in printed
     assert "12 tabela(s) conferida(s), contagens e somas iguais" in printed
-    unpartitioned_line = printed.index("cad_contas: 1 partição(ões) gravada(s): None")
+    unpartitioned_line = printed.index("cad_contas: 1 partição(ões) gravada(s): tabela inteira")
     partitioned_line = printed.index("cad_operacoes: 4 partição(ões) gravada(s): 2026-01-31")
     assert unpartitioned_line < partitioned_line
     assert "conversões: id_lancamento: int32 -> int64" in printed
@@ -599,3 +606,18 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     printed_errors += capsys.readouterr().err
     assert "serialize-db load: conflito: outro registro de cad_contas" in printed_errors
     assert "Traceback" not in printed_errors
+
+
+def test_cli_load_names_the_unpartitioned_table(base: source.SourceBase, folder: Path,
+                                                monkeypatch: pytest.MonkeyPatch,
+                                                capsys: pytest.CaptureFixture) -> None:
+    """A tabela sem partição aparece como tabela inteira na linha da carga e na diferença."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
+    monkeypatch.setattr(load, "load_report", unpartitioned_difference)
+    arguments = ["load", "--metadata", "client_model:Base.metadata", "--source", origin_of(base),
+                 "--root", str(folder / "delta"), "--environment", "prd", "--tables", "cad_contas"]
+    assert cli.main(arguments) == 1
+    printed = capsys.readouterr().out
+    assert "cad_contas: 1 partição(ões) gravada(s): tabela inteira" in printed
+    assert "DIFERENÇA na tabela inteira: origem 5 linhas" in printed

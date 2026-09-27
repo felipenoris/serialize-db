@@ -128,7 +128,8 @@ def load_table(
             continue
         rows = partition_rows(db, table, value)
         item = PartitionLoad(value, rows, time.perf_counter() - started, peak_rss_mb())
-        print(f"  {value}: {rows} linhas em {item.seconds:.1f} s; "
+        label = "tabela inteira" if value is None else value
+        print(f"  {label}: {rows} linhas em {item.seconds:.1f} s; "
               f"RSS máximo do processo {item.peak_rss_mb:.0f} MB")
         loaded.append(item)
         if progress is not None:
@@ -140,7 +141,8 @@ def print_report(report: LoadReport) -> None:
     """As linhas do relatório de uma tabela, depois das partições gravadas."""
     for partition in report.partitions:
         if not partition.matches:
-            print(f"  DIFERENÇA em {partition.value}: origem {partition.source_rows} linhas "
+            where = "na tabela inteira" if partition.value is None else f"em {partition.value}"
+            print(f"  DIFERENÇA {where}: origem {partition.source_rows} linhas "
                   f"{dict(partition.source_sums)} não finitos {dict(partition.source_nonfinite)}, "
                   f"Delta {partition.delta_rows} linhas {dict(partition.delta_sums)} não finitos "
                   f"{dict(partition.delta_nonfinite)}")

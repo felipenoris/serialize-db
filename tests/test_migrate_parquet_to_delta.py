@@ -6,15 +6,16 @@ teste, com a pasta temporária do processo apontada para a pasta do teste, onde 
 cada chamada de ``initial_load`` abre o banco. Eles conferem a linha de comando sobre a base
 inteira, duas vezes, com o ambiente, cada tabela e o que ficou fora do modelo no relatório JSON; o
 relatório parcial de uma carga interrompida numa partição fora do contrato; a recusa de um modelo
-que viola o contrato, sem ler a origem; e o ambiente ``dsv`` com ``SERIALIZE_DB_ENVIRONMENT`` vazia.
-A carga em si e o relatório de contagens e somas são de ``serialize_db.load``, cobertos por
-``tests/test_load.py``.
+que viola o contrato, sem ler a origem; o ambiente ``dsv`` com ``SERIALIZE_DB_ENVIRONMENT`` vazia;
+e a diferença na tabela sem partição, impressa como tabela inteira. A carga em si e o relatório
+de contagens e somas são de ``serialize_db.load``, cobertos por ``tests/test_load.py``.
 """
 
 from __future__ import annotations
 
 import datetime
 import json
+import re
 import shutil
 import tempfile
 import uuid
@@ -28,6 +29,7 @@ import migrate_parquet_to_delta as migrate
 import source_db_projetado as source
 from client_model import Base
 from conftest import LocalLocation
+from serialize_db.load import LoadReport, PartitionReport
 
 pytestmark = pytest.mark.local
 
@@ -68,8 +70,9 @@ def rewrite_first_chunk(folder: Path, column: str, value: object) -> None:
 def test_main_migrates_the_whole_base(base: source.SourceBase, folder: Path,
                                       capsys: pytest.CaptureFixture) -> None:
     """A linha de comando sobre a base inteira: as tabelas sem partição antes das particionadas,
-    cada partição com linhas, tempo e pico, o relatório em JSON com as 12 tabelas iguais, o
-    ambiente e o que ficou fora do modelo, saída 0; a segunda execução não grava nada."""
+    cada partição com linhas, tempo e pico, a tabela sem partição como tabela inteira, o
+    relatório em JSON com as 12 tabelas iguais, o ambiente e o que ficou fora do modelo, saída 0;
+    a segunda execução não grava nada."""
     root = str(folder / "delta")
     report_path = folder / "relatorio-migracao.json"
     arguments = ["--metadata", "client_model:Base.metadata", "--source", str(base.root),
@@ -81,6 +84,8 @@ def test_main_migrates_the_whole_base(base: source.SourceBase, folder: Path,
     assert "memory_limit" in first_line
     assert "fora do modelo: alembic_version, meta_update_status, schema.json" in printed
     assert "12 tabelas conferidas, contagens e somas iguais" in printed
+    assert re.search(r"^cad_contas:\n  tabela inteira: \d+ linhas em ", printed, re.MULTILINE)
+    assert "None" not in printed
     assert Path(root, "prd", "cad_lancamentos", "_delta_log").is_dir()
 
     # O relatório: o ambiente, a ordem, as contagens e as partições.
@@ -174,3 +179,10 @@ def test_empty_environment_variable_counts_as_absent(base: source.SourceBase, fo
                  "--root", str(root), "--tables", "cad_contas"]
     assert migrate.main(arguments) == 0
     assert (root / "dsv" / "cad_contas" / "_delta_log").is_dir()
+
+
+def test_print_report_names_the_unpartitioned_table(capsys: pytest.CaptureFixture) -> None:
+    """A diferença na tabela sem partição sai como ``DIFERENÇA na tabela inteira``."""
+    partition = PartitionReport(None, 5, 4, {}, {}, {}, {})
+    migrate.print_report(LoadReport("cad_contas", (partition,), (), ()))
+    assert "DIFERENÇA na tabela inteira: origem 5 linhas" in capsys.readouterr().out

@@ -199,13 +199,14 @@ def test_compact_refuses_after_a_snapshot_on_the_current_version(
     assert "informe --partitions" in capsys.readouterr().err
 
     # A tabela sem partição: recusada enquanto o snapshot está na versão atual dela, e sem commit
-    # depois, porque tem um arquivo só.
+    # depois, porque tem um arquivo só; a linha diz que não havia o que juntar.
     accounts_compact = ["compact", *common_arguments(db), "--table", "cad_contas"]
     assert cli.main(accounts_compact) == 2
     assert "de cad_contas" in capsys.readouterr().err
     publish(db, ACCOUNTS, None, account_rows(["A", "B", "C", "D"]), "exec-5")
     assert cli.main(accounts_compact) == 0
-    assert "cad_contas: 0 arquivo(s) gravado(s), 0 removido(s)" in capsys.readouterr().out
+    assert re.search(r"cad_contas: nada a juntar em 1 arquivo\(s\), nenhum commit, em \d+\.\d s; "
+                     r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
     assert delta.open_table(db.uri(ACCOUNTS), storage).version() == 2
 
     # A tabela ausente.

@@ -630,8 +630,8 @@ interface client code imports, which `pdoc` documents; protected, used by anothe
 library; private, used only inside its module. The module's `__all__` lists the public names and
 only those, so a module with a protected name declares `__all__` and `pdoc` leaves the protected
 one out; protected is unprefixed all the same, and private carries the `_` prefix. A package's
-`__all__` also lists its public submodules, because `pdoc` documents only the submodules it names
-(`serialize_db.engine` lists `duckdb`; `tests/test_package.py` checks every package). A key under `_serialize_db/` carries no prefix (`snapshots` in
+`__all__` also lists its public submodules, the only ones `pdoc` documents (`serialize_db.engine`
+lists `duckdb` and `redshift`; `tests/test_package.py` checks every package). A key under `_serialize_db/` carries no prefix (`snapshots` in
 `_serialize_db/snapshots.json`); everything else the library writes carries the `serialize_db_`
 prefix: the commit keys `serialize_db_execution_id`, `serialize_db_input_versions` and
 `serialize_db_snapshot`, the Parquet footer keys `serialize_db_version` and

@@ -1018,8 +1018,11 @@ O que as medições sustentam:
   tabela materializada, e materializar os 300.000 registros custou o mesmo que uma agregação.
 - Um arquivo por mês por tabela basta enquanto o mês couber em um ou dois arquivos de 100 MB a 1 GB,
   que é a faixa que o DuckDB e o Redshift preferem. `optimize.compact(partition_filters=...)` junta
-  arquivos pequenos de um mês; `optimize.z_order(["id_cliente"])` reordena dentro do mês quando os
-  filtros forem por outra coluna. Os dois criam versões e arquivos novos.
+  os arquivos pequenos de um mês que cabem juntos no tamanho alvo (`target_size`, ou a propriedade
+  `delta.targetFileSize` da tabela, 100 MB sem ela); o arquivo que não cabe com outro fica como
+  está, e sem nada a juntar não há commit (sondagem de 2026-09-27, `plan/POC.md`).
+  `optimize.z_order(["id_cliente"])` reordena dentro do mês quando os filtros forem por outra
+  coluna. Os dois criam versões e arquivos novos quando reescrevem.
 - Manter a ordenação pela chave do modelo (`ORDER BY` na consulta que gera o mês) faz as estatísticas
   por arquivo e por row group podarem melhor e comprime mais.
 - `PIN_SNAPSHOT` e uma única `DeltaTable` por tabela e execução evitam reler o log a cada consulta.
