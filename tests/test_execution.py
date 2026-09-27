@@ -9,11 +9,11 @@ tabela que o pipeline grava, com uma coluna ``Double``; ``Composta`` tem chave p
 colunas.
 
 Eles conferem a abertura com as versões fixadas, a recusa da partição e do ``execution_id`` fora da
-regra, as partições anteriores, as faixas de ``next_ids``, a ingestão de várias tabelas em sessões
-a mais, a auditoria exigida e a reprovada, a reexecução, os conflitos, o pool da publicação, as
-colunas não finitas e o modo passados à exportação, os metadados de commit, o snapshot e a linha de
-comando. O motor de mentira registra as chamadas que a execução faz. A extensão ``delta`` do DuckDB
-precisa estar na pasta de extensões.
+regra, as partições anteriores, a execução sem partição, as faixas de ``next_ids``, a ingestão de
+várias tabelas em sessões a mais, a auditoria exigida e a reprovada, a reexecução, os conflitos, o
+pool da publicação, as colunas não finitas e o modo passados à exportação, os metadados de commit,
+o snapshot e a linha de comando. O motor de mentira registra as chamadas que a execução faz. A
+extensão ``delta`` do DuckDB precisa estar na pasta de extensões.
 """
 
 from __future__ import annotations
@@ -259,7 +259,8 @@ def test_execution_refuses_an_invalid_partition(db: Database, value: str) -> Non
 
 def test_previous_partitions_up_to_the_execution_partition(db: Database) -> None:
     """Só valores até a partição da execução, os ``n`` últimos, na ordem de texto; a tabela
-    ausente e a tabela sem arquivos dão a lista vazia."""
+    ausente e a tabela sem arquivos dão a lista vazia; a tabela sem partição e a execução sem
+    partição são ``ContractError``."""
     with Execution(db, FakeEngine(db.storage), "2026-07-31") as run:
         assert run.previous_partitions(ENTRIES, 2) == ["2026-06-30", "2026-07-31"]
         assert run.previous_partitions(ENTRIES, 12) == ["2026-05-31", "2026-06-30", "2026-07-31"]
@@ -271,6 +272,39 @@ def test_previous_partitions_up_to_the_execution_partition(db: Database) -> None
     delta.create_table(db.uri(PROJECTED), PROJECTED, db.storage)
     with Execution(db, FakeEngine(db.storage), "2026-07-31") as run:
         assert run.previous_partitions(PROJECTED, 3) == []
+
+    # A execução sem partição.
+    with Execution(db, FakeEngine(db.storage), execution_id="exec-1") as run:
+        with pytest.raises(ContractError, match="a execução exec-1 não tem partição"):
+            run.previous_partitions(ENTRIES, 1)
+
+
+def test_execution_without_partition_publishes_a_table_without_partition(
+    db: Database, folder: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Sem partição, a execução abre sem a conferência da partição e o log diz ``sem partição``; a
+    tabela sem partição nasce na primeira publicação, e a execução seguinte a traz inteira ao
+    sandbox, acrescenta uma linha e a publica, substituindo a versão anterior inteira."""
+    composite = Composta.__table__
+    first_rows = pa.table({"id_a": pa.array([1, 2], pa.int64()),
+                           "id_b": pa.array([1, 1], pa.int64())})
+    with caplog.at_level(logging.INFO, logger="serialize_db.execution"):
+        with Execution(db, engine_for(db, folder, "dom-1"), execution_id="dom-1") as run:
+            assert run.partition is None
+            run.sandbox.load(composite, first_rows)
+            run.audit(composite, None)
+            assert run.publish(composite) == {composite.name: 1}
+    assert "execução dom-1 aberta: sem partição" in caplog.text
+    assert "execução dom-1 concluída: sem partição" in caplog.text
+
+    # A execução seguinte: a tabela inteira no sandbox, uma linha a mais.
+    with Execution(db, engine_for(db, folder, "dom-2"), execution_id="dom-2") as run:
+        run.ingest(composite, materialize=True)
+        run.sandbox.query(sa.insert(composite).values(id_a=3, id_b=1))
+        run.audit(composite, None)
+        assert run.publish(composite) == {composite.name: 2}
+    published = delta.open_table(db.uri(composite), db.storage).to_pyarrow_dataset().to_table()
+    assert sorted(published.column("id_a").to_pylist()) == [1, 2, 3]
 
 
 def take_ids(run: Execution, ranges: list[range]) -> None:
@@ -551,6 +585,19 @@ def conflicting_pipeline(run: Execution) -> None:
     run.publish(ENTRIES, partitions=[run.partition], audit=False)
 
 
+def composite_pipeline(run: Execution) -> None:
+    """O pipeline sem partição: grava, audita e publica ``rel_composta`` inteira."""
+    data = pa.table({"id_a": pa.array([1, 2], pa.int64()), "id_b": pa.array([1, 1], pa.int64())})
+    run.sandbox.load(Composta.__table__, data)
+    run.audit(Composta.__table__, None)
+    run.publish(Composta.__table__)
+
+
+def previous_partitions_pipeline(run: Execution) -> None:
+    """Um pipeline que pede as partições anteriores."""
+    run.previous_partitions(ENTRIES, 1)
+
+
 def redshift_engine_pipeline(run: Execution) -> None:
     """O pipeline de ``--engine redshift``: confere o motor Redshift e a configuração do ambiente
     que a execução recebeu."""
@@ -612,6 +659,25 @@ def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
     removed = [*common, "--partition", "2026-08-31", "--export-mode", "register", projected]
     assert exit_code(removed) == 2
     assert "Traceback" not in capsys.readouterr().err
+
+
+def test_cli_run_without_partition(db: Database, folder: Path,
+                                   monkeypatch: pytest.MonkeyPatch,
+                                   capsys: pytest.CaptureFixture) -> None:
+    """``serialize-db run`` sem ``--partition`` abre a execução sem partição: sai com 0 no pipeline
+    que publica a tabela sem partição e com 2 no que pede as partições anteriores, sem
+    traceback."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
+    common = ["run", "--root", db.root, "--environment", "prd",
+              "--metadata", "test_execution:Base.metadata"]
+    assert cli.main([*common, "test_execution:composite_pipeline"]) == 0
+    published = delta.open_table(db.uri(Composta.__table__), db.storage)
+    assert published.to_pyarrow_dataset().to_table().num_rows == 2
+    assert cli.main([*common, "test_execution:previous_partitions_pipeline"]) == 2
+    printed_errors = capsys.readouterr().err
+    assert "não tem partição" in printed_errors
+    assert "Traceback" not in printed_errors
 
 
 def test_cli_run_hands_the_redshift_config_to_the_execution(

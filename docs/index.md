@@ -405,6 +405,10 @@ qualquer um deles; as seções seguintes descrevem cada motor. Fora de uma execu
 testes, o motor se constrói à mão, com a pasta e a versão de cada tabela em cada chamada, e a
 página de cada motor traz o exemplo.
 
+O terceiro argumento do `Execution`, opcional, é a partição da execução, `run.partition`:
+`run.previous_partitions` devolve as partições até ela, e o log a registra. `run.audit` e
+`run.publish` recebem as partições por argumento.
+
 `run.publish` exige a auditoria aprovada das partições na própria execução e recusa com
 `serialize_db.errors.ExecutionConflict` a tabela em que outra execução gravou dados depois da
 abertura. Cada partição sai do sandbox num arquivo que o motor grava e entra no log por
@@ -515,6 +519,73 @@ Um texto SQL pronto cita as tabelas do sandbox pelo sentinela `{prefix}`
 (`"{prefix}cad_lancamentos"`), que o motor troca pelo prefixo da execução. O `COPY` e o `UNLOAD`
 levam as credenciais da sessão `boto3`, ou o `IAM_ROLE` da configuração; o texto que as carrega
 nunca vai a log, e `serialize_db.engine.redshift.mask` o mascara.
+
+### Atualizar uma tabela de domínio sem partição
+
+Uma tabela de domínio, como a de moedas, não declara `partition_by`, e cada publicação a substitui
+inteira:
+
+```python
+class Moeda(Base):
+    __tablename__ = "dom_moedas"
+    __table_args__ = {"comment": "Moedas"}
+
+    id_moeda: Mapped[int] = mapped_column(
+        sa.BigInteger, primary_key=True, autoincrement=False, comment="Identificador da moeda"
+    )
+    sigla: Mapped[str] = mapped_column(sa.String(3), comment="Sigla ISO 4217")
+    nome: Mapped[str] = mapped_column(sa.String(40), comment="Nome da moeda")
+```
+
+O pipeline que só atualiza tabelas assim abre a execução sem partição, e `run.partition` é `None`.
+`run.ingest` sem `partitions` traz a tabela inteira na versão fixada, e `materialize=True` a torna
+uma tabela do sandbox, que `UPDATE`, `INSERT` e `DELETE` alteram; sem ele, a view do DuckDB recusa
+o `UPDATE` com `Can only update base table`:
+
+```python
+import sqlalchemy as sa
+
+with Execution(db, "duckdb") as run:
+    run.ingest(Moeda.__table__, materialize=True)
+    run.sandbox.query(sa.update(Moeda.__table__)
+                      .where(Moeda.__table__.c.sigla == "USD")
+                      .values(nome="Dólar dos EUA"))
+    run.sandbox.query(sa.insert(Moeda.__table__).values(
+        id_moeda=run.next_ids(Moeda.__table__, 1)[0], sigla="EUR", nome="Euro"))
+    run.audit(Moeda.__table__, None)
+    run.publish(Moeda.__table__)
+```
+
+`run.audit(table, None)` confere a tabela inteira do sandbox, e `run.publish(table)`, sem
+`partitions`, grava a tabela num commit que substitui a versão anterior. `run.next_ids` dá os ids
+acima do maior da versão fixada, a partir de 1 na tabela nova.
+
+Na primeira carga a tabela ainda não existe: `run.ingest` e `run.published` a recusam com
+`serialize_db.errors.SandboxError`, os dados entram por `run.sandbox.load` ou pelo `loader`, e
+`run.publish` cria a tabela antes do commit. Para gravar a tabela a partir da versão publicada sem
+ocupar o nome dela no sandbox, `run.published` a lê e `run.sandbox.load` grava o resultado:
+
+```python
+with Execution(db, "duckdb") as run:
+    current = run.published(Moeda.__table__)
+    kept = run.sandbox.query(sa.select(current).where(current.c.sigla != "EUR"))
+    run.sandbox.load(Moeda.__table__, kept)
+    run.audit(Moeda.__table__, None)
+    run.publish(Moeda.__table__)
+```
+
+A auditoria da tabela de domínio não olha as tabelas que a referenciam: a moeda removida que outra
+tabela ainda aponta só reprova a auditoria dessa tabela, com `foreign_keys=True`. Na execução sem
+partição, `run.previous_partitions` é `serialize_db.errors.ContractError`, e uma tabela
+particionada continua publicável com `partitions` explícito. Na linha de comando, `serialize-db run`
+sem `--partition` abre a mesma execução:
+
+```shell
+serialize-db run --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata pipeline.dominios:main
+```
+
+`serialize-db publish` também substitui inteira, no Redshift, a tabela sem partição.
 
 ### Publicar para os clientes no Redshift
 

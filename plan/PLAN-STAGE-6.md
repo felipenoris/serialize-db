@@ -13,8 +13,8 @@ e `open_redshift`, descritos no arquivo dessa etapa.
 | Primitiva | O que faz |
 | --- | --- |
 | `Database(root, environment, metadata)` | A raiz do banco, o ambiente (`prd`, `dsv`, pela regra da partição, porque vira nome de pasta) e o `MetaData` dos modelos; `uri(table)` é `<root>/<ambiente>/<tabela>` a partir da raiz que `Storage.for_uri` normalizou, sem barra final, porque os caminhos das etapas 3 a 5 acrescentam `/<coluna>=<valor>/`, mais o arquivo de controle e os prefixos `staging/`, `publicacao/` e `arquivo/`; chama `prepare_environment`, e `storage` é o `Storage.for_uri(root)`, criado no primeiro uso. As opções do delta-rs saem de `storage.storage_options()` a cada chamada, sem credencial ([etapa 3](PLAN-STAGE-3.md)). |
-| `Execution(db, engine, partition, execution_id=None, redshift=None)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox (`"duckdb"` é o `DuckDBEngine` da [etapa 4](PLAN-STAGE-4.md); `"redshift"` é o `RedshiftEngine` da [etapa 5](PLAN-STAGE-5.md), com a configuração `redshift`, uma `RedshiftConfig`, ou a das variáveis `SERIALIZE_DB_REDSHIFT_*` sem ela); na saída descarta o sandbox, grava o snapshot marcado quando a execução termina sem erro e grava o resumo no log. As primitivas podem ser chamadas de qualquer thread, cada uma na sessão única do motor, sob o lock dele, e o estado mutável (`versions`, auditorias aprovadas, o alocador) fica sob lock. |
-| `run.previous_partitions(table, n)` | Os `n` últimos valores de partição da tabela na versão fixada até `run.partition`, inclusive, lidos das ações `add`, na ordem de texto dos valores, que nos valores `AAAA-MM-DD` é a do calendário; o calendário é do cliente, não da biblioteca. |
+| `Execution(db, engine, partition=None, execution_id=None, redshift=None)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox (`"duckdb"` é o `DuckDBEngine` da [etapa 4](PLAN-STAGE-4.md); `"redshift"` é o `RedshiftEngine` da [etapa 5](PLAN-STAGE-5.md), com a configuração `redshift`, uma `RedshiftConfig`, ou a das variáveis `SERIALIZE_DB_REDSHIFT_*` sem ela); na saída descarta o sandbox, grava o snapshot marcado quando a execução termina sem erro e grava o resumo no log. As primitivas podem ser chamadas de qualquer thread, cada uma na sessão única do motor, sob o lock dele, e o estado mutável (`versions`, auditorias aprovadas, o alocador) fica sob lock. Sem `partition`, a execução não tem partição, como a do pipeline que só atualiza tabelas sem partição (decisão do usuário de 2026-09-27). |
+| `run.previous_partitions(table, n)` | Os `n` últimos valores de partição da tabela na versão fixada até `run.partition`, inclusive, lidos das ações `add`, na ordem de texto dos valores, que nos valores `AAAA-MM-DD` é a do calendário; o calendário é do cliente, não da biblioteca. A execução sem partição é `ContractError`. |
 | `run.ingest(*tables, partitions=None, materialize=False)` | `engine.ingest` de cada tabela na versão fixada; sem `partitions`, a tabela inteira. Uma tabela entra na sessão principal; mais de uma entram todas em paralelo, cada uma numa sessão a mais do motor (`new_session`), e a chamada volta quando todas terminam. Cada comando também usa o paralelismo do motor (as `threads` do DuckDB, as slices do Redshift). Em disco local, quatro tabelas de 150.000 linhas entraram em 0,017 s em quatro sessões e em 0,066 s em série (`test_parallel.py`, 2026-09-23). |
 | `run.published(table)` | A versão fixada da tabela como origem de consulta, por `engine.published(table, db.uri(table), versions[table])`: `delta_scan('<uri>', version := <v>)` no DuckDB, a staging `exec_<id>_<tabela>_publicado_<versão>` no Redshift, uma por versão pedida (decisão do usuário de 2026-09-25) ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)). É por ela que o pipeline lê as partições já publicadas da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader` (decisão do usuário de 2026-09-22); numa tabela que ainda não existe, levanta `SandboxError`. |
 | `run.sandbox` | O motor, onde o pipeline chama `stream` e `loader`, os lotes na saída e na entrada, e `query` e `load`, as formas por `pa.Table`, de qualquer thread; nos dois motores todo comando passa pela sessão única da execução, sob o lock que as primitivas tomam e soltam ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)); `with run.sandbox.session() as connection:` dá a conexão crua para o que as primitivas não cobrem, com o lock tomado pelo bloco e reentrante na mesma thread, e `with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo, sem as tabelas temporárias da principal. |
@@ -22,11 +22,11 @@ e `open_redshift`, descritos no arquivo dessa etapa.
 | `run.audit(table, partitions, foreign_keys=False, key_scope=None)` | `engine.audit` com a URI e a versão fixada da tabela e, em `referenced`, as de cada tabela que uma chave estrangeira aponta; devolve o `AuditReport` aprovado e o guarda; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta, e o relatório, com o SQL de cada verificação e até 20 linhas de amostra por verificação reprovada, vai para o log. |
 | `run.publish(*tables, partitions=None, audit=True, max_workers=1)` | Exige a auditoria aprovada de cada tabela nessas partições na própria execução, e `audit=False` dispensa a exigência e fica no log; confere por `version_diff` que nenhuma alteração de dados entrou em cada tabela desde a versão fixada e aborta com `ExecutionConflict` quando entrou (um avanço só de metadados ou de manutenção passa e atualiza a versão fixada); depois `create_table` se não existir, `reconcile` e `export_partition` por partição com `commit_metadata`, tabela a tabela num `ThreadPoolExecutor(max_workers)`: na primeira falha as tarefas em curso terminam, as não iniciadas são canceladas, e a exceção lista o resultado de cada tabela, porque os commits feitos ficam; avança `versions[table]` sob lock. O padrão 1 vem da memória por escrita (`delta.md`). O `export_partition` dos dois motores registra por `register_files` o arquivo que o motor gravou, depois das conferências da [etapa 3](PLAN-STAGE-3.md), e o motor Redshift troca para `publish_partition` a partição com `Double` não finito ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)); a execução não escolhe o modo, porque o `rewrite` saiu das etapas 4 e 7 (decisão do usuário de 2026-09-24). A cada partição, `run.publish` passa a `export_partition`, em `columns_without_min_max`, as colunas `Double` com valor não finito que a auditoria da execução contou (`AuditReport.nonfinite_columns`), e todas as colunas `Double` da tabela com `audit=False`; a lista supõe a tabela sem mudança entre a auditoria e a publicação, como a própria aprovação (decisão do usuário de 2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59)). |
 | `run.snapshot(name)` | Marca a execução: `serialize_db_snapshot` nos commits e `delta.snapshot(storage, environment, name, versions)` no encerramento ([etapa 3](PLAN-STAGE-3.md)). |
-| `serialize-db run` | `--root`, `--environment`, `--engine`, `--partition`, `--execution-id`, `--metadata modulo:atributo` (o `MetaData` dos modelos, como em `schema` e `sql`) e `modulo:funcao` do pipeline, que recebe `run`; código de saída 0, 1 na reprovação da auditoria, 2 no conflito e no `ContractError` da abertura ou do pipeline, como o motor que não serve, a configuração do Redshift sem conexão e o `execution_id` longo demais para o prefixo do sandbox. |
+| `serialize-db run` | `--root`, `--environment`, `--engine`, `--partition` (opcional, como a partição do `Execution`), `--execution-id`, `--metadata modulo:atributo` (o `MetaData` dos modelos, como em `schema` e `sql`) e `modulo:funcao` do pipeline, que recebe `run`; código de saída 0, 1 na reprovação da auditoria, 2 no conflito e no `ContractError` da abertura ou do pipeline, como o motor que não serve, a configuração do Redshift sem conexão e o `execution_id` longo demais para o prefixo do sandbox. |
 | `serialize-db audit` | `--metadata`, `--table`, `--partitions`, `--foreign-keys`, `--key-scope` e `--engine`, que escolhe o dialeto; com `--sql` imprime, para depuração, o texto das verificações desse dialeto e não abre conexão nem armazenamento. Sem `--sql`, com `--root` e `--environment`, roda a auditoria sobre a versão publicada, no motor de `--engine`, e imprime o relatório; sai com 1 na reprovação e com 2 na tabela fora dos modelos ou sem Delta e na configuração do Redshift sem conexão. Os padrões vêm das variáveis `SERIALIZE_DB_*`, como no `run`. |
 
-O log é o `logging` padrão com um resumo por execução: identificador, partição, versões lidas, versões
-gravadas e tempo por passo. Testes: `tests/test_execution.py` sob a raiz local com o motor DuckDB:
+O log é o `logging` padrão com um resumo por execução: identificador, partição (ou `sem partição`),
+versões lidas, versões gravadas e tempo por passo. Testes: `tests/test_execution.py` sob a raiz local com o motor DuckDB:
 a reexecução com o mesmo `execution_id` produz as mesmas linhas, com ids que podem diferir;
 `next_ids` de duas threads devolve faixas disjuntas; `ingest` de três tabelas as carrega em três
 sessões a mais, a sessão principal lê as três, e a falha de uma lista o resultado das outras; a auditoria reprovada deixa a versão da tabela
@@ -58,26 +58,29 @@ motor (`"duckdb"`, `"redshift"`), ou um motor já construído, para os testes.
   `__post_init__` (`FrozenInstanceError`, leitura de 2026-09-23), e o `object.__setattr__` que a
   contornaria é a atribuição dinâmica que o estilo do projeto evita.
 - **`Execution.__enter__`** abre toda tabela do `metadata` que existe no ambiente
-  (`delta.table_exists`, e depois `delta.open_table`) e guarda a `DeltaTable` e a versão; a tabela ausente fica com `None`
-  e nasce em `publish`. Toda leitura da execução usa esses objetos: `previous_partitions`, `ingest`,
-  `next_ids`, `audit`. O `execution_id` ausente vira `exec-<AAAA-MM-DD>-<uuid8>`. A partição e o
-  `execution_id` passam pela regra da partição, `re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z_.-]*",
-  valor)`: letra ou dígito no início, depois letras, dígitos, `_`, `.` e `-` (decisão do usuário de
-  2026-09-23). Os dois viram nome de pasta e literal SQL: a aspa simples fecha o literal
-  `'<valor>'` das etapas 3, 4, 5 e 8, e o delta-rs grava `:`, `%` ou um acento codificados no nome
-  da pasta, que o `COPY` do `register` gravaria sem codificar ([`POC.md`](POC.md)); com a regra, o
-  valor codificado é o próprio valor. A partição também cabe no `String(n)` da coluna de partição
-  de cada tabela particionada do modelo, e cada valor de `partitions` que `ingest`, `audit` e
-  `publish` recebem passa pela mesma regra. A data `AAAA-MM-DD`, o caso da base atual, e `2026-Q1`
-  passam. O motor é construído aqui, com o `execution_id` e o `Storage`: `"duckdb"` é
+  (`delta.table_exists`, e depois `delta.open_table`) e guarda a `DeltaTable` e a versão; a tabela
+  ausente fica com `None` e nasce em `publish`. Toda leitura da execução usa esses objetos:
+  `previous_partitions`, `ingest`, `next_ids`, `audit`. O `execution_id` ausente vira
+  `exec-<AAAA-MM-DD>-<uuid8>`. A partição e o `execution_id` passam pela regra da partição,
+  `re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z_.-]*", valor)`: letra ou dígito no início, depois letras,
+  dígitos, `_`, `.` e `-` (decisão do usuário de 2026-09-23). Os dois viram nome de pasta e literal
+  SQL: a aspa simples fecha o literal `'<valor>'` das etapas 3, 4, 5 e 8, e o delta-rs grava `:`,
+  `%` ou um acento codificados no nome da pasta, que o `COPY` do `register` gravaria sem codificar
+  ([`POC.md`](POC.md)); com a regra, o valor codificado é o próprio valor. A partição também cabe no
+  `String(n)` da coluna de partição de cada tabela particionada do modelo, e cada valor de
+  `partitions` que `ingest`, `audit` e `publish` recebem passa pela mesma regra. A data
+  `AAAA-MM-DD`, o caso da base atual, e `2026-Q1` passam. A partição é opcional (decisão do usuário
+  de 2026-09-27): sem ela, `run.partition` é `None` e as duas conferências da partição não rodam. O
+  motor é construído aqui, com o `execution_id` e o `Storage`: `"duckdb"` é
   `DuckDBEngine(DuckDBConfig(), execution_id, db.storage)` da [etapa 4](PLAN-STAGE-4.md), que também
   confere o `execution_id` pela regra da partição e nasce numa pasta de `tempfile.mkdtemp`.
 - **`__exit__`** chama `sandbox.cleanup()` aconteça o que acontecer e grava o resumo no log
-  (`serialize_db.execution`): identificador, partição, versões lidas, versões gravadas, tempo por
-  passo.
+  (`serialize_db.execution`): identificador, partição (ou `sem partição`), versões lidas, versões
+  gravadas, tempo por passo.
 - **`previous_partitions`** lê `partition.<coluna>` de `get_add_actions(flatten=True)` da versão
   fixada, convertido para PyArrow por `pa.table(...)` (o delta-rs devolve uma tabela `arro3`),
-  filtra `<= run.partition` e devolve os `n` maiores; o calendário é do cliente.
+  filtra `<= run.partition` e devolve os `n` maiores; o calendário é do cliente. Na execução sem
+  partição, levanta `ContractError`.
 - **`ingest`** chama `sandbox.ingest(table, uri, versions[table], partitions, materialize)` por
   tabela. Com uma tabela, na sessão principal; com mais, um `ThreadPoolExecutor` com uma thread por
   tabela, e cada thread roda `with sandbox.new_session() as session: session.ingest(...)`. As
@@ -121,26 +124,26 @@ motor (`"duckdb"`, `"redshift"`), ou um motor já construído, para os testes.
   seguintes e, no `__exit__` de uma execução sem erro, grava `delta.snapshot(storage, environment,
   name, versions)` com todas as tabelas do ambiente; a execução que falha não grava o snapshot.
 - **`cli.main`** usa `argparse` com um subcomando por primitiva; `run` recebe `--root`,
-  `--environment`, `--engine`, `--partition`, `--execution-id`, `--metadata modulo:atributo` (o
-  `MetaData` dos modelos do pipeline) e o `modulo:funcao` do pipeline, com as variáveis
-  `SERIALIZE_DB_*` como padrão; `--partition` e `--execution-id` passam pela regra da partição como `type` do `argparse`, e o
-  `String(n)` fica para `Execution`, que tem o modelo. O código de saída é 0, 1 em `AuditFailed`,
-  2 em `ExecutionConflict`, no `ContractError` da abertura (o motor que não serve, o `String(n)`) e
-  no erro de uso do `argparse`, que também cobre o `modulo:atributo` que não importa. `audit` com
-  `--sql` imprime o texto de `audit_sql` no dialeto de `--engine`, com o sentinela `{prefix}`; sem
-  `--sql`, abre um `DuckDBEngine` próprio, ingere a versão atual da tabela nas partições pedidas e
-  roda a auditoria contra ela, com código 0 na aprovação e 1 na reprovação. `run` e `audit`
-  configuram o `logging` em `INFO`.
-  O `run` importa os módulos antes de abrir a execução, para a importação preguiçosa não correr ao
-  lado das threads da biblioteca.
+  `--environment`, `--engine`, `--partition` (opcional), `--execution-id`,
+  `--metadata modulo:atributo` (o `MetaData` dos modelos do pipeline) e o `modulo:funcao` do
+  pipeline, com as variáveis `SERIALIZE_DB_*` como padrão; `--partition` e `--execution-id` passam
+  pela regra da partição como `type` do `argparse`, e o `String(n)` fica para `Execution`, que tem o
+  modelo. O código de saída é 0, 1 em `AuditFailed`, 2 em `ExecutionConflict`, no `ContractError` da
+  abertura (o motor que não serve, o `String(n)`) e no erro de uso do `argparse`, que também cobre o
+  `modulo:atributo` que não importa. `audit` com `--sql` imprime o texto de `audit_sql` no dialeto
+  de `--engine`, com o sentinela `{prefix}`; sem `--sql`, abre um `DuckDBEngine` próprio, ingere a
+  versão atual da tabela nas partições pedidas e roda a auditoria contra ela, com código 0 na
+  aprovação e 1 na reprovação. `run` e `audit` configuram o `logging` em `INFO`. O `run` importa os
+  módulos antes de abrir a execução, para a importação preguiçosa não correr ao lado das threads da
+  biblioteca.
 
 ## Pré-requisitos e pós-condições
 
 | Primitiva | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
 | `Database` | Raiz alcançável; `metadata` aprovado por `check_models`. | Caminhos montados; ambiente normalizado. |
-| `Execution.__enter__` | Partição e `execution_id` pela regra da partição, a partição dentro do `String(n)`; motor configurável. | `versions` com toda tabela do ambiente; o sandbox aberto; o log com as versões lidas. |
-| `previous_partitions` | Tabela existente e particionada. | Os `n` últimos valores até a partição da execução, inclusive, em ordem crescente. |
+| `Execution.__enter__` | `execution_id` pela regra da partição; a partição, quando há, pela regra e dentro do `String(n)`; motor configurável. | `versions` com toda tabela do ambiente; o sandbox aberto; o log com as versões lidas. |
+| `previous_partitions` | Tabela existente e particionada; execução com partição. | Os `n` últimos valores até a partição da execução, inclusive, em ordem crescente. |
 | `next_ids` | Tabela com chave primária inteira de uma coluna; outra chave é `ContractError`. | Faixas contíguas e disjuntas entre threads, a primeira acima do máximo da versão fixada. |
 | `audit` | Sandbox com a tabela. | O par aprovado registrado, ou `AuditFailed` com o relatório no log; o Delta intocado. |
 | `publish` | Auditoria aprovada; nenhuma alteração de dados na tabela desde a versão fixada. | Uma versão por partição com os metadados, sem mínimo e máximo nas colunas `Double` com valor não finito; `versions` avançado; `ExecutionConflict` sem commit no conflito; na falha de uma tabela, as demais terminam ou são canceladas e a exceção lista cada resultado. |
@@ -156,7 +159,8 @@ as chamadas.
 | --- | --- | --- |
 | Abertura | `test_execution_opens_every_table_and_fixes_versions` | `versions` com as tabelas existentes e `None` nas ausentes; o log com as versões. |
 | Partição | `test_execution_refuses_an_invalid_partition` | O valor vazio, com `/`, `=`, espaço, `'`, `:`, `%` ou acento, começado por `.`, `_` ou `-`, ou acima do `String(n)` da coluna de partição é recusado antes de o sandbox abrir, e o `execution_id` fora da regra também; `2026-08-31` e `2026-Q1` passam. |
-| Partições anteriores | `test_previous_partitions_up_to_the_execution_partition` | Só valores até a partição da execução, os `n` últimos, em ordem; a tabela ausente e a tabela sem arquivos dão a lista vazia. |
+| Partições anteriores | `test_previous_partitions_up_to_the_execution_partition` | Só valores até a partição da execução, os `n` últimos, em ordem; a tabela ausente e a tabela sem arquivos dão a lista vazia; a tabela sem partição e a execução sem partição são `ContractError`. |
+| Execução sem partição | `test_execution_without_partition_publishes_a_table_without_partition` | A execução abre sem a conferência da partição e o log diz `sem partição`; a tabela sem partição nasce na primeira publicação, e a execução seguinte a traz inteira ao sandbox, acrescenta uma linha e a publica inteira. |
 | Identificadores | `test_next_ids_are_disjoint_across_threads` | Duas threads, faixas disjuntas, o início acima do máximo lido das estatísticas; a tabela nova começa em 1; a chave composta é `ContractError`. |
 | Auditoria exigida | `test_publish_requires_the_audit` | `publish` sem `audit` é `AuditFailed`; com `audit=False` passa e o log registra. |
 | Reprovação | `test_failed_audit_leaves_the_delta_untouched` | A versão da tabela não muda; `__exit__` descarta o sandbox. |
@@ -168,6 +172,7 @@ as chamadas.
 | Metadados | `test_commit_metadata_in_history` | `serialize_db_execution_id` e `serialize_db_input_versions` no `history`; `serialize_db_snapshot` só na execução marcada. |
 | Snapshot | `test_snapshot_writes_the_control_file_at_exit` | Todas as tabelas do ambiente na entrada, gravada uma vez. |
 | Linha de comando | `test_cli_run_parses_and_exits_by_result` | `--partition` e `--execution-id` fora da regra saem com 2; `--metadata` obrigatório; o pipeline que não importa sai com 2; `AuditFailed` sai com 1; `ExecutionConflict` com 2; o `--export-mode` é recusado com 2; nenhum traceback. |
+| Linha de comando sem partição | `test_cli_run_without_partition` | Sem `--partition`, o pipeline que publica a tabela sem partição sai com 0, e o que pede as partições anteriores com 2, sem traceback. |
 | Configuração do Redshift | `test_cli_exits_with_2_on_the_redshift_config_without_connection` | `run` e `audit` com `--engine redshift` e `publish --init` saem com 2 na configuração sem conexão; com ela, `run` sai com 2 no `--execution-id` que não deixa 63 bytes ao nome; nenhum traceback. |
 | Auditoria avulsa | `test_cli_audit_prints_the_sql_and_audits_the_published_version` | `--sql` imprime o texto no dialeto pedido, sem armazenamento; sem ele, a auditoria da versão publicada sai com 0; a tabela fora dos modelos sai com 2. |
 | Ingestão paralela | `test_ingest_of_several_tables_uses_extra_sessions` | Várias tabelas em sessões a mais, lidas pela sessão principal; a falha de uma leva o resultado das outras na nota. |

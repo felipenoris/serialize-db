@@ -13,8 +13,9 @@ depois da execução.
 
 As primitivas podem ser chamadas de qualquer thread: cada comando do motor corre na sessão única,
 sob o lock dela, ou numa sessão a mais do ``ingest`` de várias tabelas, e o estado mutável da
-execução (as versões, as auditorias aprovadas, o alocador) fica sob um lock próprio. A partição e o
-``execution_id`` seguem ``schema.PARTITION_VALUE``, porque viram nome de pasta e literal SQL.
+execução (as versões, as auditorias aprovadas, o alocador) fica sob um lock próprio. A partição,
+opcional, e o ``execution_id`` seguem ``schema.PARTITION_VALUE``, porque viram nome de pasta e
+literal SQL.
 
 Exemplo:
 
@@ -286,6 +287,13 @@ def _checked_partition(value: str, db: Database) -> str:
     return value
 
 
+def _partition_text(partition: str | None) -> str:
+    """A partição da execução no log: ``partição <valor>``, ou ``sem partição``."""
+    if partition is None:
+        return "sem partição"
+    return f"partição {partition}"
+
+
 def _new_execution_id() -> str:
     """``exec-<AAAA-MM-DD>-<uuid8>``, com a data em UTC."""
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
@@ -327,7 +335,7 @@ class Execution:
             run.versions   # {"cad_lancamentos": 143, "cad_lancamentos_projetados": None}
     """
 
-    def __init__(self, db: Database, engine: str | Engine, partition: str,
+    def __init__(self, db: Database, engine: str | Engine, partition: str | None = None,
                  execution_id: str | None = None,
                  redshift: RedshiftConfig | None = None) -> None:
         """Guarda os parâmetros da execução, com a partição e o ``execution_id`` conferidos; nada
@@ -338,7 +346,8 @@ class Execution:
             construído, para os testes; um nome desconhecido é ``ContractError`` na entrada do
             ``with``.
         :param partition: a partição da execução, que segue ``schema.PARTITION_VALUE`` e cabe, em
-            bytes, no ``String(n)`` de cada coluna de partição do modelo.
+            bytes, no ``String(n)`` de cada coluna de partição do modelo; ``None``, o padrão, é a
+            execução sem partição, como a do pipeline que só atualiza tabelas sem partição.
         :param execution_id: o identificador da execução, que segue ``schema.PARTITION_VALUE``;
             ausente, vira ``exec-<AAAA-MM-DD>-<uuid8>``, com a data em UTC.
         :param redshift: a configuração do Redshift
@@ -349,8 +358,10 @@ class Execution:
         """
         self.db = db
         """O banco: a raiz, o ambiente e os modelos do cliente."""
-        self.partition = _checked_partition(partition, db)
-        """A partição da execução."""
+        if partition is not None:
+            _checked_partition(partition, db)
+        self.partition = partition
+        """A partição da execução, ou ``None`` na execução sem partição."""
         self.execution_id = check_partition_value(execution_id or _new_execution_id())
         """O identificador da execução, que vai aos metadados de cada commit e aos nomes do
         sandbox."""
@@ -419,8 +430,8 @@ class Execution:
         with self._step("abertura"):
             self._open_tables()
             self.sandbox = self._build_engine()
-        log.info("execução %s aberta: partição %s, versões %s", self.execution_id, self.partition,
-                 self.versions)
+        log.info("execução %s aberta: %s, versões %s", self.execution_id,
+                 _partition_text(self.partition), self.versions)
         return self
 
     def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> None:
@@ -432,8 +443,8 @@ class Execution:
         finally:
             timings = {name: round(seconds, 3) for name, seconds in self._timings.items()}
             outcome = "com erro" if exc is not None else "concluída"
-            log.info("execução %s %s: partição %s, versões lidas %s, versões gravadas %s, "
-                     "tempos %s", self.execution_id, outcome, self.partition, self._read,
+            log.info("execução %s %s: %s, versões lidas %s, versões gravadas %s, tempos %s",
+                     self.execution_id, outcome, _partition_text(self.partition), self._read,
                      self._written, timings)
 
     def _write_snapshot(self) -> None:
@@ -467,11 +478,14 @@ class Execution:
         :param n: quantos valores, no máximo; zero ou negativo dá a lista vazia.
         :return: os valores na ordem de texto, lidos das ações ``add`` da versão fixada, ou a lista
             vazia numa tabela que não existe.
-        :raises ContractError: a tabela sem partição.
+        :raises ContractError: a tabela sem partição, ou a execução sem partição.
         """
         partition_by = table_options(table).partition_by
         if partition_by is None:
             raise ContractError(f"{table.name}: tabela sem partição")
+        if self.partition is None:
+            raise ContractError(f"previous_partitions de {table.name}: a execução "
+                                f"{self.execution_id} não tem partição")
         if table.name not in self._tables:
             return []
         # get_add_actions devolve uma tabela arro3; pa.table a converte. Sem arquivos, a coluna da

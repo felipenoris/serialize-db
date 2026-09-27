@@ -4777,3 +4777,33 @@ responder ao usuário o que o fim do bloco libera.
 
 **Consequências**: o tutorial de `docs/index.md` usa os motores por `run.sandbox`, dentro de um
 `Execution`, e diz o que o fim da execução libera em cada motor (pedido do usuário de 2026-09-27).
+
+## O que a sonda da tabela de domínio mostrou
+
+Em 2026-09-27, na mesma pasta local do contêiner de desenvolvimento, com DuckDB 1.5.5 e deltalake
+1.6.6, a sonda rodou o pipeline que só atualiza uma tabela sem partição, `dom_moedas` (chave
+`id_moeda`, `sigla`, `nome`), para responder ao usuário como usar a biblioteca nesse caso, e repetiu
+os exemplos da seção nova do tutorial com a partição opcional.
+
+- **Na primeira carga a tabela não existe**: `run.ingest` a recusa com `SandboxError` (`a tabela
+  não existe no ambiente prd`), e `run.published` também (`sem versão publicada, a tabela ainda não
+  existe`); `run.next_ids` começa em 1, `run.sandbox.load`, `run.audit(table, None)` e
+  `run.publish(table)` gravaram a versão 1, depois da criação na versão 0.
+- **A atualização pelo sandbox substitui a tabela inteira**: `run.ingest(table, materialize=True)`,
+  `sa.update`, `sa.insert` e `sa.delete` por `run.sandbox.query` (o `sa.update` devolveu a
+  contagem de linhas numa coluna `Count`) e `run.publish(table)` gravaram a tabela inteira numa
+  versão nova; a reescrita por `run.published`, `query` e `load` também. Sem `materialize`, o `UPDATE` na view
+  falhou com `BinderException: Binder Error: Can only update base table`.
+- **A auditoria da tabela de domínio não vê quem a referencia**: com a moeda 2 apagada no sandbox e
+  uma operação que a aponta, `run.audit(dom_moedas, None, foreign_keys=True)` aprovou (`linhas`,
+  `chave_id_moeda`), e a auditoria da tabela das operações com `foreign_keys=True` reprovou em
+  `orfao_id_moeda`, procurando a moeda na tabela do sandbox.
+- **A execução sem partição**: `Execution(db, "duckdb")` abriu com `run.partition` `None`,
+  `run.previous_partitions` levantou `ContractError`, uma tabela particionada foi publicada com
+  `partitions` explícito, e `partitions=[run.partition]` levantou `ContractError` (`valor None fora
+  da regra da partição`) antes de qualquer escrita. A chave repetida reprovou a auditoria em
+  `chave_id_moeda`, sem tocar o Delta.
+
+**Consequências**: a partição do `Execution` e o `--partition` de `serialize-db run` ficaram
+opcionais (decisão do usuário de 2026-09-27), e o tutorial ganhou a seção "Atualizar uma tabela de
+domínio sem partição"; revisados `plan/PLAN.md` e `plan/PLAN-STAGE-6.md`.

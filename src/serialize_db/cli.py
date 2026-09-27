@@ -7,7 +7,8 @@ etapa 8, ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e ``hist
 ``schema write`` grava os arquivos
 de esquema dos modelos e ``schema check`` compara os versionados com a geração nova, sem gravar;
 ``sql write`` grava o texto SQL de cada statement do pipeline em cada motor e ``sql check`` o
-compara com a geração nova. ``run`` abre uma execução e entrega a ``modulo:funcao`` do pipeline;
+compara com a geração nova. ``run`` abre uma execução, com a partição de ``--partition`` ou sem
+partição, e entrega a ``modulo:funcao`` do pipeline;
 ``audit`` imprime o texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a
 versão publicada, no motor de ``--engine``;
 ``load`` faz a carga inicial da base Parquet de origem (``--source``) nas tabelas Delta do
@@ -40,6 +41,8 @@ Exemplo:
         --statements pipeline.queries:STATEMENTS sql/
     serialize-db run --root s3://bucket/delta --environment prd --partition 2026-08-31 \\
         --metadata pipeline.models:Base.metadata pipeline.mensal:main
+    serialize-db run --root s3://bucket/delta --environment prd \\
+        --metadata pipeline.models:Base.metadata pipeline.dominios:main
     serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
     serialize-db load --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --source s3://bucket/db_projetado
@@ -187,11 +190,12 @@ def _add_database_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _add_run_parser(commands: argparse._SubParsersAction) -> None:
     """``serialize-db run``, com as variáveis ``SERIALIZE_DB_*`` como padrão."""
-    run = commands.add_parser("run", help="executa o pipeline de uma partição")
+    run = commands.add_parser("run", help="executa o pipeline, de uma partição ou sem partição")
     _add_database_arguments(run)
     run.add_argument("--engine", choices=["duckdb", "redshift"],
                      default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb")
-    run.add_argument("--partition", type=_name_argument, required=True)
+    run.add_argument("--partition", type=_name_argument, default=None,
+                     help="a partição da execução; sem ela, a execução não tem partição")
     run.add_argument("--execution-id", type=_name_argument, default=None)
     run.add_argument("pipeline", type=_resolve_function,
                      help="modulo:funcao que recebe a execução aberta")

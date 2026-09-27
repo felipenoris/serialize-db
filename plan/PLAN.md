@@ -671,7 +671,10 @@ saem no `vacuum` mensal. A execução no Redshift é o mesmo ciclo com `engine="
 são as tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a publicação sai por `UNLOAD` mais
 `register_files`, sem passar pela máquina local, ou, na partição com `Double` não finito, mais
 `publish_partition`, que grava pelo `write_deltalake`, confere tudo e paga a memória (decisões do
-usuário de 2026-09-23 e 2026-09-24, [etapa 5](PLAN-STAGE-5.md)).
+usuário de 2026-09-23 e 2026-09-24, [etapa 5](PLAN-STAGE-5.md)). O pipeline que só atualiza tabelas
+sem partição, como as de domínio, abre a execução sem `partition` (decisão do usuário de
+2026-09-27): `run.publish(tabela)` substitui a tabela inteira, e `run.previous_partitions` é
+`ContractError` ([etapa 6](PLAN-STAGE-6.md)).
 
 ## Ordem do trabalho
 
