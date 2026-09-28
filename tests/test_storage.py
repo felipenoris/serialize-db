@@ -6,13 +6,15 @@ proxy, o secret do DuckDB e a recriação dele quando a chave troca, esta com a 
 na pasta de extensões. Os que gravam rodam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador
 ``local``) e, com ``SERIALIZE_DB_TEST_S3_ROOT``, os mesmos no bucket (marcador ``s3``): a escrita
 condicional do arquivo de controle, a listagem, a cópia e a exclusão, e a conexão do DuckDB com a
-extensão ``delta`` da pasta configurada.
+extensão ``delta`` da pasta configurada; e, só na pasta local, o modo dos arquivos gravados.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import os
+import stat
 import uuid
 
 import botocore.credentials
@@ -20,7 +22,7 @@ import duckdb
 import pyarrow.fs as pafs
 import pytest
 
-from conftest import duckdb_test_config, require_duckdb_extension
+from conftest import LocalLocation, duckdb_test_config, require_duckdb_extension
 from serialize_db.errors import ConflictError
 from serialize_db.storage import (
     Storage,
@@ -59,8 +61,8 @@ def storage(request: pytest.FixtureRequest) -> Storage:
 
 
 def test_storage_for_uri(clean_aws: pytest.MonkeyPatch) -> None:
-    """``s3://``, ``file://`` e caminho dão o sistema de arquivos certo e o caminho nele, sem rede;
-    o S3 sem região e outro esquema são erro."""
+    """``s3://``, ``file://`` e caminho dão o sistema de arquivos certo e o caminho nele, sem rede,
+    com o ``%20`` do ``file://`` como espaço; o S3 sem região e outro esquema são erro."""
     # O S3, com a região da variável.
     clean_aws.setenv("AWS_REGION", "sa-east-1")
     s3 = Storage.for_uri("s3://bucket/projeto/delta/")
@@ -70,12 +72,15 @@ def test_storage_for_uri(clean_aws: pytest.MonkeyPatch) -> None:
     assert s3.path == "bucket/projeto/delta"
     assert s3.is_s3
 
-    # O file:// e o caminho relativo, resolvidos para caminhos absolutos.
+    # O file:// e o caminho relativo, resolvidos para caminhos absolutos; o %XX do file://
+    # decodificado.
     local = Storage.for_uri("file:///tmp/serialize-db/delta")
     assert isinstance(local.filesystem, pafs.LocalFileSystem)
     assert not local.is_s3
     assert local.uri == local.path == os.path.realpath("/tmp/serialize-db/delta")
     assert Storage.for_uri("relativa/delta").uri == os.path.realpath("relativa/delta")
+    spaced = Storage.for_uri("file:///tmp/meu%20banco/delta")
+    assert spaced.uri == spaced.path == os.path.realpath("/tmp/meu banco/delta")
 
     # Outro esquema e o S3 sem região são erro.
     with pytest.raises(ValueError, match="esquema"):
@@ -243,6 +248,37 @@ def test_create_text_and_write_text_if_match(storage: Storage) -> None:
     assert storage.read_text(path) == ('{"snapshots": {"2026T3": {}}}', second)
 
 
+def file_mode(storage: Storage, path: str) -> int:
+    """As permissões do arquivo na pasta local, sem o tipo, como ``0o644``."""
+    return stat.S_IMODE(os.stat(f"{storage.path}/{path}").st_mode)
+
+
+@pytest.mark.local
+def test_local_files_get_the_mode_of_a_new_file(local_location: LocalLocation) -> None:
+    """Na pasta local, sob a umask 0o022, ``create_text`` e ``write_text`` de um arquivo novo dão
+    o modo de um arquivo novo, ``rw-r--r--``, sem execução, e ``write_text`` sobre um arquivo
+    existente mantém o modo dele: outro usuário da pasta continua a ler o arquivo de controle."""
+    storage = Storage.for_uri(local_location.child(f"storage/{uuid.uuid4().hex[:8]}"))
+    path = storage.join("prd", "_serialize_db", "snapshots.json")
+    previous = os.umask(0o022)
+    try:
+        storage.create_text(path, '{"snapshots": {}}')
+        created = file_mode(storage, path)
+        storage.write_text(path, '{"snapshots": {"2026T2": {}}}')
+        replaced = file_mode(storage, path)
+        storage.write_text("prd/manifesto.json", "{}")
+        new = file_mode(storage, "prd/manifesto.json")
+        os.chmod(f"{storage.path}/{path}", 0o640)
+        storage.write_text(path, '{"snapshots": {"2026T3": {}}}')
+        kept = file_mode(storage, path)
+    finally:
+        os.umask(previous)
+    assert created == 0o644
+    assert replaced == 0o644
+    assert new == 0o644
+    assert kept == 0o640
+
+
 def test_list_copy_delete(storage: Storage) -> None:
     """``list_files`` desce as pastas, filtra pelo sufixo e exclui ``_delta_log/``; ``copy``
     preserva os bytes, também acima do limiar multipart do ``boto3``; ``delete`` de um caminho
@@ -260,11 +296,15 @@ def test_list_copy_delete(storage: Storage) -> None:
     assert storage.exists("copia/p=a/1.parquet")
     assert storage.size("ausente.parquet") is None
 
-    # Acima do limiar multipart do boto3, 8 MiB, a cópia no S3 é um UploadPartCopy em duas partes.
-    large = 9 * 1024 * 1024
-    storage.write_text("t/p=c/grande.parquet", "x" * large)
+    # Acima do limiar multipart do boto3, 8 MiB, a cópia no S3 é um UploadPartCopy em duas partes;
+    # os bytes aleatórios mostram uma parte trocada, repetida ou fora do lugar.
+    content = os.urandom(9 * 1024 * 1024)
+    with storage.open_output_stream("t/p=c/grande.parquet") as sink:
+        sink.write(content)
     storage.copy("t/p=c/grande.parquet", "copia/p=c/grande.parquet")
-    assert storage.size("copia/p=c/grande.parquet") == large
+    with storage.open_input_file("copia/p=c/grande.parquet") as source:
+        copied = source.read()
+    assert hashlib.sha256(copied).hexdigest() == hashlib.sha256(content).hexdigest()
 
     # A exclusão, com um caminho ausente.
     storage.delete(["copia/p=a/1.parquet", "copia/ausente.parquet"])

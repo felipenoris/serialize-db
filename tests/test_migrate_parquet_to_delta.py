@@ -7,9 +7,9 @@ cada chamada de ``initial_load`` abre o banco. Eles conferem a linha de comando 
 inteira, duas vezes, com o ambiente, cada tabela e o que ficou fora do modelo no relatório JSON; o
 relatório parcial de uma carga interrompida numa partição fora do contrato; a recusa de um modelo
 que viola o contrato, sem ler a origem, e de um ``--metadata`` que não importa; o ambiente ``dsv``
-com ``SERIALIZE_DB_ENVIRONMENT`` vazia; e a diferença na tabela sem partição, impressa como tabela
-inteira. A carga em si e o relatório de contagens e somas são de ``serialize_db.load``, cobertos por
-``tests/test_load.py``.
+com ``SERIALIZE_DB_ENVIRONMENT`` vazia; a diferença na tabela sem partição, impressa como tabela
+inteira; e o lado em que a partição falta, impresso como ausente. A carga em si e o relatório de
+contagens e somas são de ``serialize_db.load``, cobertos por ``tests/test_load.py``.
 """
 
 from __future__ import annotations
@@ -195,3 +195,14 @@ def test_print_report_names_the_unpartitioned_table(capsys: pytest.CaptureFixtur
     partition = PartitionReport(None, 5, 4, {}, {}, {}, {})
     migrate.print_report(LoadReport("cad_contas", (partition,), (), ()))
     assert "DIFERENÇA na tabela inteira: origem 5 linhas" in capsys.readouterr().out
+
+
+def test_print_report_names_the_missing_side(capsys: pytest.CaptureFixture) -> None:
+    """A partição que falta num dos lados sai como ``ausente``, e não como ``None linhas``."""
+    only_in_delta = PartitionReport("2026-01-31", None, 3, {}, {}, {}, {})
+    only_in_source = PartitionReport("2026-02-28", 4, None, {}, {}, {}, {})
+    migrate.print_report(LoadReport("cad_lancamentos", (only_in_delta, only_in_source), (), ()))
+    printed = capsys.readouterr().out
+    assert "DIFERENÇA em 2026-01-31: origem ausente, Delta 3 linhas" in printed
+    assert "DIFERENÇA em 2026-02-28: origem 4 linhas {} não finitos {}, Delta ausente" in printed
+    assert "None" not in printed

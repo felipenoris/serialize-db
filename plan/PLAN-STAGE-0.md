@@ -45,9 +45,10 @@ de conexão já está fixado: a credencial temporária do workgroup serverless, 
   ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py)); o `SELECT` em três
   partes passou de `dev`. Em 2026-09-21 passaram também o `COPY ... MANIFEST`, o `INSERT ... SELECT`
   e o `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE`
-  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)). O `DELETE` e o `MERGE`
-  da publicação, que a documentação lista entre os comandos aceitos no datashare, ficam para os
-  testes `redshift` da [etapa 8](PLAN-STAGE-8.md); a suíte exercitou o `TRUNCATE`, o
+  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)). A publicação da
+  [etapa 8](PLAN-STAGE-8.md) troca as partições por `DELETE`, sem `MERGE`, os dois na lista de
+  comandos que a documentação aceita no datashare, e os testes `redshift` dela passaram no ambiente
+  alvo em 2026-09-24 às 13:05 e às 13:08; a suíte exercitou o `TRUNCATE`, o
   `INSERT ... SELECT`, o `ALTER TABLE ADD COLUMN` e a tabela temporária depois do `USE`. Os
   requisitos da escrita num datashare que a sessão não lê (isolamento do produtor, slices) não
   impediram a escrita.
@@ -76,7 +77,7 @@ parâmetros do ambiente alvo (`RedshiftConfig` da [etapa 5](PLAN-STAGE-5.md), li
 | Item | Pré-requisitos | Pós-condições |
 | --- | --- | --- |
 | Probes no ambiente alvo | `space.py`, `diagnose_aws.py`, `bucket.py` sobre a raiz escolhida, `redshift.py` e `parquet_source.py` executados no ambiente, cada relatório colado na conversa. | Cada leitura que contraria um documento dispara a revisão dele na mesma unidade de trabalho; as leituras `RS-5`, `RS-8` e `RS-19` fecham o item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) sobre o `USE`. |
-| Suíte `-m redshift` | As variáveis de `README.md` (`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, `SERIALIZE_DB_TEST_S3_ROOT`, `SERIALIZE_DB_REDSHIFT_WORKGROUP`, `_DATABASE`, `_SHARE_DATABASE`), a identidade da sessão com `s3:GetObject`, `PutObject` e `DeleteObject` sob a raiz, e `SERIALIZE_DB_TEST_REPORT` apontando para um arquivo, porque o relatório é a resposta. | Cada `redshift.*` do relatório responde uma linha da tabela de testes desta etapa e entra em [`redshift.md`](redshift.md), e [`POC.md`](POC.md) ganha a seção da execução com a data; a suíte é reexecutada uma segunda vez antes de qualquer consequência entrar num arquivo de etapa; cumprido em 2026-09-21, às 13:35 e às 13:39. |
+| Suíte `-m redshift` | As variáveis de `README.md` (`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, `SERIALIZE_DB_TEST_S3_ROOT`, `SERIALIZE_DB_TEST_LOCAL_ROOT`, sem a qual os casos `redshift` que também são `local`, os da publicação e o do leitor, são pulados, `SERIALIZE_DB_REDSHIFT_WORKGROUP`, `_DATABASE`, `_SHARE_DATABASE`), a identidade da sessão com `s3:GetObject`, `PutObject` e `DeleteObject` sob a raiz, e `SERIALIZE_DB_TEST_REPORT` apontando para um arquivo, porque o relatório é a resposta. | Cada `redshift.*` do relatório responde uma linha da tabela de testes desta etapa e entra em [`redshift.md`](redshift.md), e [`POC.md`](POC.md) ganha a seção da execução com a data; a suíte é reexecutada uma segunda vez antes de qualquer consequência entrar num arquivo de etapa; cumprido em 2026-09-21, às 13:35 e às 13:39. |
 | Exemplos | Um script novo só entra em `examples/` depois de rodar; até lá ele é o próximo experimento, dito no docstring. | O script fica como rodou, o probe e a suíte repetem as suas chamadas. |
 
 ## Testes por caso

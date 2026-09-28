@@ -2,18 +2,21 @@
 
 Os casos sem conexão conferem o texto de cada comando, a configuração, o prefixo, a cláusula de
 credenciais e a máscara, o esquema de um resultado pelo ``row_desc``, a tabela montada por colunas,
-os valores do cliente como literais e o guarda do ``bindparam`` sem valor, o ``stream`` vazio, a
-sessão única, a reconexão e a troca da partição com ``Double`` não finito, sobre uma conexão de
-mentira que registra os comandos, responde ao que o motor pergunta e grava o arquivo de um
-``UNLOAD`` numa pasta local (os que gravam são ``local``, sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``). Os
-casos marcados ``redshift`` repetem a sequência com uma amostra no esquema de
-``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente alvo
-pela conexão de ``examples/redshift_native.py``, e no substituto local
-(``SERIALIZE_DB_TEST_EMULATOR``) pela conexão de ``tests/emulator.py``, que os testes dão ao motor
-no lugar do ``redshift_connector``. O modelo é o de ``Lancamento``, particionado por
-``data_base_str``, com uma chave estrangeira para ``Conta``, uma coluna JSON, uma ``DateTime`` e a
-coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
-(``tests/lancamentos_model.py``).
+os valores do cliente como literais, o ``:`` dentro das aspas e o guarda do ``bindparam`` sem
+valor, o ``stream`` vazio, a sessão única, a reconexão e o ``COMMIT`` que não reconecta, a lista de
+colunas do ``COPY`` do appender e o segundo ``close``, e a troca da partição com ``Double`` não
+finito, sobre uma conexão de mentira que registra os comandos, responde ao que o motor pergunta e
+grava o arquivo de um ``UNLOAD`` numa pasta local (os que gravam são ``local``, sob
+``SERIALIZE_DB_TEST_LOCAL_ROOT``). Os casos marcados ``redshift`` repetem a sequência com uma
+amostra no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e arquivos sob
+``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente alvo pela conexão de ``examples/redshift_native.py``, e
+no substituto local (``SERIALIZE_DB_TEST_EMULATOR``) pela conexão de ``tests/emulator.py``, que os
+testes dão ao motor no lugar do ``redshift_connector``. O modelo é o de ``Lancamento``,
+particionado por ``data_base_str``, com uma chave estrangeira para ``Conta``, uma coluna JSON, uma
+``DateTime`` e a coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
+(``tests/lancamentos_model.py``), e ``cad_medidas``, sem JSON, com uma coluna anulável no meio;
+``cad_colunas``, só de texto, recebe uma coluna nova no meio ou troca duas de lugar depois de uma
+partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo nome.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ import pyarrow.parquet as pq
 import pytest
 import redshift_connector
 import sqlalchemy as sa
+from deltalake import write_deltalake
 
 from conftest import LocalLocation, S3Location, record, redshift_config
 from lancamentos_model import ACCOUNTS, ENTRIES, MONTHS, PROJECTED, account_rows, entry_rows
@@ -61,6 +65,36 @@ METADATA = delta.commit_metadata(EXECUTION_ID, {"cad_contas": 1})
 CONFIG = RedshiftConfig(host="host", user="usuario", password="senha", database="dev",
                         share_database="compartilhado", schema="esquema", region="sa-east-1",
                         iam_role="default")
+
+# Uma tabela sem coluna JSON com uma coluna anulável no meio, que o lote do appender pode não
+# trazer.
+MEASURES = sa.Table("cad_medidas", sa.MetaData(),
+                    sa.Column("id_medida", sa.BigInteger, primary_key=True, autoincrement=False),
+                    sa.Column("altura", sa.BigInteger),
+                    sa.Column("largura", sa.BigInteger))
+
+
+def text_columns_table(*names: str) -> sa.Table:
+    """``cad_colunas``, particionada por ``parte``, com as colunas de texto ``names`` entre a chave
+    ``id`` e a partição, na ordem pedida."""
+    columns = [sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False)]
+    for name in names:
+        columns.append(sa.Column(name, sa.String(10)))
+    columns.append(sa.Column("parte", sa.String(10), nullable=False))
+    return sa.Table("cad_colunas", sa.MetaData(), *columns,
+                    info={"serialize_db": {"partition_by": ["parte"]}})
+
+
+def text_columns_rows(table: sa.Table, value: str, ids: list[int]) -> pa.Table:
+    """As linhas de ``cad_colunas`` na partição ``value``, no contrato: cada coluna de texto com o
+    nome dela seguido do id, como ``a1``."""
+    data = {"id": pa.array(ids, pa.int64())}
+    for column in table.columns:
+        if column.name not in ("id", "parte"):
+            data[column.name] = pa.array([f"{column.name}{row_id}" for row_id in ids])
+    data["parte"] = pa.array([value] * len(ids))
+    return schema.cast(pa.table(data), table)
+
 
 # O OID e o type_modifier de cada tipo Arrow, como o row_desc do driver os traz.
 OID_OF = {
@@ -288,10 +322,11 @@ def test_credentials_clause_and_mask(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_copy_insert_unload_text() -> None:
-    """``COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD`` sem ``COMPUPDATE``; o ``INSERT`` com a
-    lista de colunas, o valor da partição no lugar dela e ``JSON_PARSE`` no JSON; o ``UNLOAD``
-    com manifesto verboso, sem ``PARTITION BY``, ``PARALLEL OFF`` opcional e o ``select`` com a
-    aspa e a contrabarra dobradas; nomes em duas partes."""
+    """``COPY ... FORMAT AS PARQUET MANIFEST FILLRECORD`` sem ``COMPUPDATE``, e com a lista de
+    colunas entre aspas quando informada; o ``INSERT`` com a lista de colunas, o valor da partição
+    no lugar dela e ``JSON_PARSE`` no JSON; o ``UNLOAD`` com manifesto verboso, sem
+    ``PARTITION BY``, ``PARALLEL OFF`` opcional e o ``select`` com a aspa e a contrabarra
+    dobradas; nomes em duas partes."""
     credentials = "IAM_ROLE default"
     copied = redshift.copy_text('"esquema"."t_staging"', "s3://b/prd/staging/e/t/m.manifest",
                                 credentials, manifest=True)
@@ -300,6 +335,12 @@ def test_copy_insert_unload_text() -> None:
     assert redshift.copy_text("t", "s3://b/f.parquet", credentials, manifest=False).endswith(
         "FORMAT AS PARQUET FILLRECORD")
     assert "COMPUPDATE" not in copied
+
+    # A lista de colunas, na ordem do arquivo, entre a tabela e o FROM.
+    listed = redshift.copy_text('"esquema"."t"', "s3://b/f.parquet", credentials, manifest=False,
+                                columns=["id_lancamento", "to"])
+    assert listed == ('COPY "esquema"."t" ("id_lancamento", "to")\nFROM \'s3://b/f.parquet\'\n'
+                      "IAM_ROLE default\nFORMAT AS PARQUET FILLRECORD")
 
     # O INSERT da staging com a lista de colunas e o valor da partição.
     inserted = redshift.insert_from_staging('"esquema"."t"', '"esquema"."t_staging"', ENTRIES,
@@ -471,6 +512,50 @@ def test_stream_literal_values(monkeypatch: pytest.MonkeyPatch) -> None:
     assert bound_values["area"] == "x"
 
 
+def test_literal_text_keeps_the_colons_of_quoted_regions() -> None:
+    """Um ``:nome`` dentro de um literal de texto ou de um nome entre aspas, e a contrabarra antes
+    de um ``:``, ficam como estão no texto do ``UNLOAD``, como no texto do cursor; o marcador fora
+    das aspas recebe o valor."""
+    texts = [
+        "SELECT 'a :b' AS c",
+        """SELECT JSON_PARSE('{"k":1}') AS doc""",
+        'SELECT "taxa :base" FROM "t"',
+        "SELECT '12:30:00' AS t, 'a\\\\:b' AS u",
+    ]
+    for text in texts:
+        assert redshift.literal_text(text, None, PREFIX) == text
+        assert redshift.compiled_for_cursor(text, None, PREFIX) == (text, {})
+
+    # O marcador fora das aspas vira o literal, e o de dentro fica.
+    text = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos" '
+            "WHERE \"codigo\" = 'ref :x1' AND \"id_lancamento\" = :id")
+    assert redshift.literal_text(text, {"id": 5}, PREFIX) == (
+        f'SELECT "id_lancamento" FROM "{PREFIX}cad_lancamentos" '
+        "WHERE \"codigo\" = 'ref :x1' AND \"id_lancamento\" = 5")
+    bound, values = redshift.compiled_for_cursor(text, {"id": 5}, PREFIX)
+    assert "'ref :x1'" in bound
+    assert values == {"id": 5}
+
+
+def test_literal_text_keeps_the_backslash_before_a_colon_in_a_value() -> None:
+    """O valor do cliente com contrabarra antes de ``:`` chega ao literal do ``UNLOAD`` com o
+    mesmo valor: o compilador desfaz o ``\\:`` do texto também nos valores já renderizados, e a
+    contrabarra a mais que o valor leva compensa. O Redshift lê ``\\\\`` como uma contrabarra e
+    ``\\:`` como ``:``."""
+    literal_by_value = {
+        r"a\:b": r"'a\\\:b'",
+        r"a\\:b": r"'a\\\\\:b'",
+        r"a\: b": r"'a\\\: b'",
+        r"a\::b": r"'a\\::b'",
+    }
+    for value, literal in literal_by_value.items():
+        assert redshift.literal_text("SELECT :v AS x", {"v": value}, PREFIX) == (
+            f"SELECT {literal} AS x")
+    # Na lista do IN, cada item.
+    assert redshift.literal_text("SELECT 1 WHERE 'x' IN :v", {"v": [r"a\:b", "c"]}, PREFIX) == (
+        r"SELECT 1 WHERE 'x' IN ('a\\\:b', 'c')")
+
+
 @pytest.mark.local
 def test_stream_empty_result(monkeypatch: pytest.MonkeyPatch,
                              local_location: LocalLocation) -> None:
@@ -601,6 +686,31 @@ def test_connection_dropped_by_the_server_is_reopened_once(
     assert engine._connection.texts()[-3:] == ["BEGIN", "SELECT 2", "ROLLBACK"]
 
 
+def test_connection_dropped_at_commit_raises_without_reconnecting(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Uma conexão derrubada no ``COMMIT``: o ``InterfaceError`` sobe da transação, porque o
+    ``COMMIT`` roda dentro dela e o resultado dele é desconhecido, e nenhum comando vai a uma
+    segunda conexão; fechada a transação, a conexão derrubada volta a ser reaberta."""
+    connections = [FakeConnection(), FakeConnection()]
+    monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
+    engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
+    first = engine._connection
+    insert = 'INSERT INTO "esquema"."t" VALUES (1)'
+    with pytest.raises(redshift_connector.InterfaceError):
+        with engine.transaction():
+            engine.execute(insert)
+            first.drop_next = 1
+    assert engine._connection is first
+    assert len(connections) == 1
+    assert first.texts()[-3:] == ["BEGIN", insert, "COMMIT"]
+
+    # Fora da transação, o comando na conexão derrubada vai à conexão reaberta.
+    first.drop_next = 1
+    engine.execute("SELECT 1")
+    assert connections == []
+    assert engine._connection.texts()[-1] == "SELECT 1"
+
+
 @pytest.mark.local
 def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
         monkeypatch: pytest.MonkeyPatch, local_location: LocalLocation) -> None:
@@ -632,8 +742,9 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     texts = connection.texts()
     start = texts.index("BEGIN")
     carga = f"{PREFIX}cad_lancamentos_projetados_carga"
+    columns = ", ".join(f'"{name}"' for name in PROJECTED.c.keys())
     assert texts[start + 1].startswith(f'CREATE TEMP TABLE "{carga}"')
-    assert texts[start + 2].startswith(f'COPY "{PREFIX}cad_lancamentos_projetados_carga"\nFROM ')
+    assert texts[start + 2].startswith(f'COPY "{carga}" ({columns})\nFROM ')
     assert "FORMAT AS PARQUET FILLRECORD" in texts[start + 2]
     assert texts[start + 3].startswith(
         f'INSERT INTO "esquema"."{PREFIX}cad_lancamentos_projetados" (')
@@ -643,7 +754,8 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     # A tabela sem coluna JSON recebe o COPY direto.
     engine.create_table(ACCOUNTS)
     engine.append(ACCOUNTS, account_rows(["A"]))
-    assert connection.texts()[-2].startswith(f'COPY "esquema"."{PREFIX}cad_contas"\nFROM ')
+    assert connection.texts()[-2].startswith(
+        f'COPY "esquema"."{PREFIX}cad_contas" ("id_conta", "numero")\nFROM ')
 
     # O appender sem lote: só a conferência da tabela, sem BEGIN nem COPY.
     before = len(connection.commands)
@@ -674,13 +786,59 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
 
 
 @pytest.mark.local
+def test_appender_copy_lists_the_file_columns(monkeypatch: pytest.MonkeyPatch,
+                                              local_location: LocalLocation) -> None:
+    """O ``COPY`` do appender lista as colunas do arquivo, as do primeiro lote na ordem do
+    contrato, no ``COPY`` direto e no da staging ``_carga`` da tabela com JSON: o lote sem uma
+    coluna anulável do meio não desloca as seguintes."""
+    storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
+    connection = FakeConnection(storage)
+    engine = fake_engine(monkeypatch, connection, storage)
+
+    # O COPY direto, sem a coluna altura.
+    engine.create_table(MEASURES)
+    widths = pa.table({"id_medida": pa.array([1], pa.int64()),
+                       "largura": pa.array([10], pa.int64())})
+    engine.append(MEASURES, widths)
+    copied = [text for text in connection.texts() if text.startswith("COPY")][-1]
+    assert copied.startswith(
+        f'COPY "esquema"."{PREFIX}cad_medidas" ("id_medida", "largura")\nFROM ')
+    assert copied.endswith("FORMAT AS PARQUET FILLRECORD")
+
+    # A staging _carga, sem a coluna area; o INSERT dela leva todas as colunas.
+    engine.create_table(PROJECTED)
+    rows = entry_rows(MONTHS[0], 1, 3, PROJECTED).drop_columns(["area"])
+    engine.append(PROJECTED, rows)
+    copied = [text for text in connection.texts() if text.startswith("COPY")][-1]
+    listed = ", ".join(f'"{name}"' for name in rows.column_names)
+    assert copied.startswith(f'COPY "{PREFIX}cad_lancamentos_projetados_carga" ({listed})\nFROM ')
+
+
+@pytest.mark.local
+def test_appender_second_close_does_nothing(monkeypatch: pytest.MonkeyPatch,
+                                            local_location: LocalLocation) -> None:
+    """O ``close`` explícito dentro do ``with``: a saída do ``with`` chama o ``close`` de novo, e
+    ele não roda outro ``COPY``."""
+    storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
+    connection = FakeConnection(storage, existing={f"{PREFIX}cad_contas"})
+    engine = fake_engine(monkeypatch, connection, storage)
+    with engine.appender(ACCOUNTS) as appender:
+        appender.write(account_rows(["A", "B"]))
+        appender.close()
+    assert appender.rows == 2
+    assert len([text for text in connection.texts() if text.startswith("COPY")]) == 1
+    assert connection.texts().count("COMMIT") == 1
+    assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
+
+
+@pytest.mark.local
 def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.MonkeyPatch,
                                                          local_location: LocalLocation) -> None:
     """Por partição, o manifesto no ``staging/``, o ``DELETE`` da staging, o ``COPY ... MANIFEST
-    FILLRECORD`` e o ``INSERT`` com o valor; a staging apagada no fim; a partição sem arquivo
-    não roda; o nome ocupado e a tabela sem versão são ``SandboxError``; ``pinned_delta`` carrega a
-    versão inteira em ``_versao_<versão>`` uma vez, e outra versão numa staging nova;
-    ``cleanup`` apaga as tabelas e o ``staging/``."""
+    FILLRECORD`` com a lista das colunas do arquivo e o ``INSERT`` com o valor; a staging apagada
+    no fim; a partição sem arquivo não roda; o nome ocupado e a tabela sem versão são
+    ``SandboxError``; ``pinned_delta`` carrega a versão inteira em ``_versao_<versão>`` uma vez, e
+    outra versão numa staging nova; ``cleanup`` apaga as tabelas e o ``staging/``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     uri = storage.uri_of("prd/cad_lancamentos")
     delta.create_table(uri, ENTRIES, storage)
@@ -704,6 +862,10 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     manifest_uri = re.search(r"FROM '([^']+)'", copies[0]).group(1)
     staging_folder = storage.uri_of(f"prd/staging/{EXECUTION_ID}/cad_lancamentos/")
     assert manifest_uri.startswith(staging_folder)
+    assert manifest_uri.endswith("/1.manifest")
+    file_columns = ", ".join(f'"{column.name}"'
+                             for column in redshift.columns_without_partition(ENTRIES))
+    assert copies[0].startswith(f'COPY "esquema"."{staging}" ({file_columns})\n')
     assert "FORMAT AS PARQUET MANIFEST FILLRECORD" in copies[0]
     manifest = json.loads(storage.read_text(storage.relative(manifest_uri))[0])
     assert len(manifest["entries"]) == 1
@@ -1041,7 +1203,8 @@ def test_ingest_stream_appender_export(target: Target,
 def test_appender_copies_the_file_at_close(target: Target,
                                            monkeypatch: pytest.MonkeyPatch) -> None:
     """A tabela de ``create_table`` nasce vazia e fica vazia até o ``close``; um erro do ``COPY``
-    não deixa linha; o ``appender`` sem lote não muda a tabela; o segundo appender acrescenta."""
+    não deixa linha; o ``appender`` sem lote não muda a tabela; o segundo appender acrescenta; o
+    ``close`` explícito dentro do ``with`` carrega o arquivo uma vez."""
     engine = target.engine
     name = f"{engine.prefix}cad_lancamentos_projetados"
     engine.create_table(PROJECTED)
@@ -1051,9 +1214,14 @@ def test_appender_copies_the_file_at_close(target: Target,
         assert count_of(engine, name) == 0
     assert count_of(engine, name) == 10
 
-    # O COPY de um arquivo que não existe falha, e a transação não deixa linha.
-    def broken_copy(target_name: str, source: str, credentials: str, manifest: bool) -> str:
-        return redshift.copy_text(target_name, source + ".ausente", credentials, manifest)
+    # O COPY de um arquivo que não existe falha, e a transação não deixa linha. O dublê chama a
+    # função guardada antes da troca: redshift.copy_text, depois dela, é o próprio dublê.
+    original_copy_text = redshift.copy_text
+
+    def broken_copy(target_name: str, source: str, credentials: str, manifest: bool,
+                    **options: object) -> str:
+        return original_copy_text(target_name, source + ".ausente", credentials, manifest,
+                                  **options)
 
     monkeypatch.setattr(redshift, "copy_text", broken_copy)
     with pytest.raises(Exception):  # noqa: B017 - o erro do COPY: do servidor ou do S3
@@ -1067,6 +1235,99 @@ def test_appender_copies_the_file_at_close(target: Target,
     assert count_of(engine, name) == 10
     assert engine.append(PROJECTED, entry_rows(MONTHS[0], 11, 5, PROJECTED)) == 5
     assert count_of(engine, name) == 15
+
+    # O close explícito dentro do with: a saída do with não carrega o arquivo de novo.
+    with engine.appender(PROJECTED) as appender:
+        appender.write(entry_rows(MONTHS[0], 16, 5, PROJECTED))
+        appender.close()
+    assert count_of(engine, name) == 20
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_appender_loads_a_batch_without_a_middle_column(target: Target) -> None:
+    """Um lote sem uma coluna anulável do meio da tabela: cada coluna do arquivo entra na de mesmo
+    nome, e a que falta fica nula, pelo ``COPY`` direto e pela staging da tabela com JSON."""
+    engine = target.engine
+    engine.create_table(MEASURES)
+    widths = pa.table({"id_medida": pa.array([1, 2], pa.int64()),
+                       "largura": pa.array([10, 20], pa.int64())})
+    assert engine.append(MEASURES, widths) == 2
+    measured = engine.query(sa.select(MEASURES).order_by(MEASURES.c.id_medida))
+    assert measured.to_pylist() == [{"id_medida": 1, "altura": None, "largura": 10},
+                                    {"id_medida": 2, "altura": None, "largura": 20}]
+
+    # A tabela com coluna JSON, pela staging _carga: o lote sem a coluna area.
+    engine.create_table(PROJECTED)
+    rows = entry_rows(MONTHS[0], 1, 3, PROJECTED)
+    assert engine.append(PROJECTED, rows.drop_columns(["area"])) == 3
+    loaded = engine.query(sa.select(PROJECTED).order_by(PROJECTED.c.id_lancamento))
+    assert loaded.column("area").to_pylist() == [None, None, None]
+    for column in ("to", "codigo", "data_base_str"):
+        assert loaded.column(column).to_pylist() == rows.column(column).to_pylist(), column
+    documents = [json.loads(text) for text in loaded.column("meta").to_pylist()]
+    assert documents == [{"k": 1}, {"k": 2}, {"k": 3}]
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_ingest_and_pinned_delta_load_files_before_a_middle_column(target: Target) -> None:
+    """Uma coluna anulável nova no meio do modelo depois de uma partição gravada: o ``ingest`` e o
+    ``pinned_delta`` põem cada valor do arquivo anterior a ela na coluna de mesmo nome, com ela
+    nula; na versão seguinte, a partição antiga tem também um arquivo com a coluna nova, e os
+    dois grupos de colunas dela entram."""
+    storage = target.storage
+    before = text_columns_table("a", "b")
+    after = text_columns_table("novo", "a", "b")
+    uri = target.uri(before)
+    delta.create_table(uri, before, storage)
+    delta.publish_partition(uri, before, "p1", text_columns_rows(before, "p1", [1, 2]), METADATA,
+                            storage)
+    delta.reconcile(uri, after, storage)
+    version = delta.publish_partition(uri, after, "p2", text_columns_rows(after, "p2", [3]),
+                                      METADATA, storage)
+    expected = [
+        {"id": 1, "novo": None, "a": "a1", "b": "b1", "parte": "p1"},
+        {"id": 2, "novo": None, "a": "a2", "b": "b2", "parte": "p1"},
+        {"id": 3, "novo": "novo3", "a": "a3", "b": "b3", "parte": "p2"},
+    ]
+    engine = target.engine
+    engine.ingest(after, uri, version)
+    assert engine.query(sa.select(after).order_by(after.c.id)).to_pylist() == expected
+    pinned = engine.pinned_delta(after, uri, version)
+    assert engine.query(sa.select(pinned).order_by(pinned.c.id)).to_pylist() == expected
+
+    # A partição p1 com um arquivo de cada lista de colunas: um COPY por lista.
+    appended = text_columns_rows(after, "p1", [4])
+    write_deltalake(delta.open_table(uri, storage), appended, mode="append")
+    pinned = engine.pinned_delta(after, uri, version + 1)
+    loaded = engine.query(sa.select(pinned).order_by(pinned.c.id)).to_pylist()
+    assert loaded == [*expected, {"id": 4, "novo": "novo4", "a": "a4", "b": "b4", "parte": "p1"}]
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_ingest_and_pinned_delta_load_reordered_columns(target: Target) -> None:
+    """Duas colunas do modelo trocadas de lugar depois de uma partição gravada, sem diferença
+    para o esquema Delta: o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo
+    nome."""
+    storage = target.storage
+    written = text_columns_table("a", "b")
+    reordered = text_columns_table("b", "a")
+    uri = target.uri(written)
+    delta.create_table(uri, written, storage)
+    version = delta.publish_partition(uri, written, "p1",
+                                      text_columns_rows(written, "p1", [1, 2]), METADATA, storage)
+    diff = delta.schema_diff(reordered, delta.open_table(uri, storage))
+    assert not diff.changes
+    assert not diff.destructive
+    expected = [{"id": 1, "b": "b1", "a": "a1", "parte": "p1"},
+                {"id": 2, "b": "b2", "a": "a2", "parte": "p1"}]
+    engine = target.engine
+    engine.ingest(reordered, uri, version)
+    assert engine.query(sa.select(reordered).order_by(reordered.c.id)).to_pylist() == expected
+    pinned = engine.pinned_delta(reordered, uri, version)
+    assert engine.query(sa.select(pinned).order_by(pinned.c.id)).to_pylist() == expected
 
 
 @pytest.mark.redshift
@@ -1150,6 +1411,37 @@ def test_stream_literal_values_on_the_target(target: Target) -> None:
     record("redshift.engine.row_desc", types_by_column)
     assert described.column("c_count").to_pylist() == [4]
     assert pa.types.is_decimal(described.column("c_sum").type)
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_stream_and_query_agree_on_a_colon_inside_a_literal(target: Target) -> None:
+    """Um texto com ``:nome`` dentro de um literal, e um valor do cliente com contrabarra antes de
+    ``:``, dão a mesma linha pelo ``stream`` e pelo ``query``: o literal e o valor chegam intactos
+    ao ``UNLOAD``."""
+    engine = target.engine
+    rows = entry_rows(MONTHS[0], 1, 2, PROJECTED)
+    rows = rows.set_column(rows.schema.get_field_index("codigo"), "codigo",
+                           pa.array(["ref :x1", r"ref \:x2"]))
+    engine.create_table(PROJECTED)
+    engine.append(PROJECTED, rows)
+    text = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos_projetados" '
+            "WHERE \"codigo\" = 'ref :x1'")
+    by_query = engine.query(text)
+    with engine.stream(text) as stream:
+        by_stream = stream.read_all()
+    assert by_query.column("id_lancamento").to_pylist() == [1]
+    assert by_stream.equals(by_query)
+
+    # O valor do cliente passa pelo cursor no query e pelo literal no stream.
+    by_value = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos_projetados" '
+                'WHERE "codigo" = :codigo')
+    params = {"codigo": r"ref \:x2"}
+    by_query = engine.query(by_value, params)
+    with engine.stream(by_value, params) as stream:
+        by_stream = stream.read_all()
+    assert by_query.column("id_lancamento").to_pylist() == [2]
+    assert by_stream.equals(by_query)
 
 
 @pytest.mark.redshift

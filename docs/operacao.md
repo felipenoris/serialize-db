@@ -6,8 +6,9 @@ recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--enviro
 (`SERIALIZE_DB_ENVIRONMENT`, `dsv`), menos `publish_redshift --init`, que lê só as variáveis
 `SERIALIZE_DB_REDSHIFT_*`. Saem com 0 quando terminam; com 1 na auditoria reprovada, na carga com
 diferença de contagem ou soma ou com partição fora do contrato, e no erro sem tratamento, que
-imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem conexão, no nome
-repetido ou ausente e no conflito com outro escritor, no arquivo de controle ou na tabela.
+imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem conexão ou com a
+porta que não é número, no nome repetido ou ausente e no conflito com outro escritor, no arquivo de
+controle ou na tabela.
 `compact`, `archive` e `export` imprimem por tabela o tempo e o pico de memória residente do
 processo (`VmHWM`), a medida da rotina na tabela com que a máquina é dimensionada; a publicação a
 põe na linha de log de cada tabela.
@@ -27,8 +28,8 @@ Antes: as variáveis `SERIALIZE_DB_REDSHIFT_*` da conexão. Depois: a tabela
 ### Snapshot do banco
 
 Na periodicidade do processo, por exemplo o fim do trimestre, dentro da execução marcada
-(`run.snapshot("2026T3")`, gravado no encerramento sem erro) ou fora dela, com a versão atual de
-cada tabela do ambiente:
+(`run.snapshot("2026T3")`, que recusa o nome já usado antes dos commits e grava a entrada no
+encerramento sem erro) ou fora dela, com a versão atual de cada tabela do ambiente:
 
 ```shell
 serialize-db snapshot --root s3://bucket/projeto/delta --environment prd \
@@ -41,6 +42,10 @@ e um nome inédito em `snapshots` e em `archived` do arquivo de controle
 escrita condicional; outro escritor entre a leitura e a escrita dá
 `serialize_db.errors.ConflictError`, e o comando se repete. As versões marcadas ficam legíveis
 qualquer que seja a retenção do `vacuum`.
+
+O nome de um snapshot é imutável: a entrada gravada nunca muda de versões, e o nome não volta a ser
+usado, nem depois do arquivamento. O leitor, a publicação e os canais citam o snapshot pelo nome, e
+o arquivamento o usa na pasta `arquivo/<nome>/`.
 
 ### Canal do snapshot
 
@@ -80,6 +85,21 @@ controle com a versão e o `--execution-id`; a tabela do modelo fora do snapshot
 partições alteradas entre as duas versões recebem os arquivos da versão pedida, e a partição que
 só a versão publicada tinha sai. `--channel current` publica a versão atual de cada tabela, sem
 snapshot.
+
+### Refazer um snapshot
+
+Os dados de um snapshot já gravado se refazem num snapshot novo, e o canal passa a apontar para ele:
+
+1. A execução roda de novo marcada com outro nome, como `run.snapshot("2026T3.r2")`. O
+   `publish_delta` substitui as partições refeitas, e a entrada nova leva a versão atual de toda
+   tabela do ambiente, inclusive das que não mudaram.
+2. `serialize-db channel --name default --snapshot 2026T3.r2` aponta o canal para o snapshot novo,
+   que o leitor Delta passa a abrir sem argumento.
+3. `serialize-db publish_redshift --channel default` leva ao Redshift as partições alteradas desde
+   a versão publicada.
+
+O `2026T3` continua legível pelo nome e prende as versões dele no `vacuum` até o `archive`. Se a
+correção não servir, o canal volta para `2026T3`, e a publicação pelo canal volta as tabelas.
 
 ### Compactação
 
@@ -174,7 +194,9 @@ serialize-db audit --root s3://bucket/projeto/delta --environment prd \
 serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
 ```
 
-Depois: o veredito de cada verificação, com as amostras; 1 quando alguma reprova.
+Depois: o veredito de cada verificação, com as amostras; 1 quando alguma reprova. Quando o banco
+recusa a ingestão pelo DDL do modelo, como no nulo numa coluna `NOT NULL` ou no JSON malformado, o
+comando imprime `ingestão: reprovada (<erro do banco>)`, sem as outras contagens, e sai com 1.
 
 ### Monitoração
 
@@ -240,7 +262,7 @@ recebem só `--metadata`.
 | Opção | Padrão | Descrição |
 | --- | --- | --- |
 | `--table` | obrigatória | A tabela do modelo auditada. |
-| `--partitions` | todas | As partições auditadas; sem ela, a tabela inteira. |
+| `--partitions` | todas | As partições auditadas; sem ela, a tabela inteira. Numa tabela sem partição, é erro de uso. |
 | `--foreign-keys` | desligada | Confere as chaves estrangeiras contra a versão atual de cada tabela referenciada. |
 | `--key-scope` | nenhum | `partition` suprime a verificação da chave contra a versão atual do Delta; `table` a faz também na chave com a coluna de `partition_source`. |
 | `--engine` | `SERIALIZE_DB_ENGINE`, senão `duckdb` | O dialeto do texto e o motor da auditoria: `duckdb` ou `redshift`. |

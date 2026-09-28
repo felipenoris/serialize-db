@@ -8,10 +8,11 @@ para a pasta do teste. Eles conferem o snapshot com a versão atual de cada tabe
 com os metadados da biblioteca; o ``vacuum`` que preserva a versão do snapshot e nada lista dentro
 da retenção; a compactação recusada depois de um snapshot na versão atual e feita antes, com o
 commit sem alteração de dados; o arquivo que copia cada tabela do snapshot com os mesmos arquivos e
-as mesmas somas, move a entrada para ``archived``, solta a versão no ``vacuum`` e ocupa o nome; a
-exportação por cópia e por reescrita, de uma versão antiga inclusive; o canal apontado, movido
-e listado, e o ``archive`` recusado no snapshot de um canal; e os erros de uso da linha de
-comando.
+as mesmas somas, move a entrada para ``archived``, solta a versão no ``vacuum`` e ocupa o nome, e
+o que sai com 2 no conflito da cópia; a exportação por cópia e por reescrita, de uma versão antiga
+inclusive; o canal apontado, movido e listado, e o ``archive`` recusado no snapshot de um canal;
+os erros de uso da linha de comando; e as linhas do estado da publicação e da carga sem ``None``,
+na tabela nunca publicada, na tabela inteira e na partição ausente de um lado.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 import re
 import tempfile
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
 import pyarrow as pa
@@ -37,7 +39,10 @@ from lancamentos_model import (
     entry_rows,
 )
 from serialize_db import cli, delta
+from serialize_db.errors import ExecutionConflict
 from serialize_db.execution import Database
+from serialize_db.load import LoadReport, PartitionReport
+from serialize_db.publication import PublicationStatus
 from serialize_db.storage import Storage
 
 pytestmark = pytest.mark.local
@@ -109,8 +114,9 @@ def test_snapshot_records_every_table_and_history_shows_the_metadata(
     db: Database, capsys: pytest.CaptureFixture
 ) -> None:
     """``snapshot`` grava a versão atual de cada tabela existente do ambiente e recusa o nome
-    repetido; ``history`` lista os commits com os metadados da biblioteca, do mais recente ao mais
-    antigo, e o ``CREATE TABLE`` sem eles."""
+    repetido com 2, sem traceback, com o ``serialize-db channel`` na mensagem; ``history`` lista
+    os commits com os metadados da biblioteca, do mais recente ao mais antigo, e o
+    ``CREATE TABLE`` sem eles."""
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 0
     printed = capsys.readouterr().out
     assert "cad_lancamentos: versão 2" in printed
@@ -119,7 +125,11 @@ def test_snapshot_records_every_table_and_history_shows_the_metadata(
     control, _ = delta.read_snapshots(db.storage, "prd")
     assert control["snapshots"] == {"2026T3": {"cad_contas": 1, "cad_lancamentos": 2}}
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 2
-    assert "já existe" in capsys.readouterr().err
+    printed_errors = capsys.readouterr().err
+    assert "serialize-db snapshot: prd: o snapshot 2026T3 já existe" in printed_errors
+    assert "serialize-db channel" in printed_errors
+    assert "Traceback" not in printed_errors
+    assert delta.read_snapshots(db.storage, "prd")[0] == control
 
     # O histórico, do commit mais recente ao CREATE TABLE.
     assert cli.main(["history", *common_arguments(db), "--table", "cad_lancamentos"]) == 0
@@ -257,7 +267,9 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     assert cli.main(["vacuum", *common_arguments(db), "--retention-hours", "0"]) == 0
     assert "cad_lancamentos: 1 arquivo(s) a apagar" in capsys.readouterr().out
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 2
-    assert "já existe" in capsys.readouterr().err
+    printed_errors = capsys.readouterr().err
+    assert "serialize-db snapshot: prd: o snapshot 2026T3 já existe" in printed_errors
+    assert "serialize-db channel" in printed_errors
     assert cli.main(["archive", *common_arguments(db), "--name", "2026T3"]) == 2
     assert "não está em snapshots" in capsys.readouterr().err
 
@@ -305,6 +317,28 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     assert files_of_version(db, resumed_accounts_uri) == accounts_files
     control, _ = delta.read_snapshots(storage, "prd")
     assert control["archived"]["2026T4"] == {"cad_contas": 1, "cad_lancamentos": 3}
+
+
+def test_archive_exits_with_2_on_a_conflicting_copy(db: Database, capsys: pytest.CaptureFixture,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """O commit da cópia de uma tabela que perde para outro escritor da mesma partição sai com 2,
+    com a tabela na mensagem e sem traceback, e a entrada do snapshot fica em ``snapshots``."""
+    assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 0
+    capsys.readouterr()  # descarta a saída do snapshot
+    original_deep_copy = delta.deep_copy
+
+    def copy_losing_the_entries(uri: str, *args: object, **options: object) -> int:
+        if uri == db.uri(ENTRIES):
+            raise ExecutionConflict(f"cad_lancamentos partição {MONTHS[0]}: commit concorrente")
+        return original_deep_copy(uri, *args, **options)
+
+    monkeypatch.setattr(delta, "deep_copy", copy_losing_the_entries)
+    assert cli.main(["archive", *common_arguments(db), "--name", "2026T3"]) == 2
+    printed_errors = capsys.readouterr().err
+    assert "serialize-db archive: conflito na cópia de cad_lancamentos" in printed_errors
+    assert "Traceback" not in printed_errors
+    control, _ = delta.read_snapshots(db.storage, "prd")
+    assert "2026T3" in control["snapshots"]
 
 
 def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixture) -> None:
@@ -399,3 +433,30 @@ def test_cli_operation_usage_errors(db: Database, capsys: pytest.CaptureFixture)
     printed_errors = capsys.readouterr().err
     assert "não existe" in printed_errors
     assert "Traceback" not in printed_errors
+
+
+def test_status_and_load_lines_print_no_none(capsys: pytest.CaptureFixture) -> None:
+    """A linha do estado da publicação diz ``nunca publicada`` e ``tabela inteira`` na tabela sem
+    partição que nunca foi publicada; a diferença da carga diz ``ausente`` do lado sem a
+    partição."""
+    statuses = [PublicationStatus("prd_cad_contas", None, 1, (None,)),
+                PublicationStatus("prd_cad_lancamentos", 2, 3, (MONTHS[1],))]
+    cli._print_statuses(statuses)
+    assert capsys.readouterr().out.splitlines() == [
+        "prd_cad_contas: nunca publicada, atual 1, pendentes ['tabela inteira']",
+        f"prd_cad_lancamentos: publicada 2, atual 3, pendentes ['{MONTHS[1]}']",
+    ]
+
+    # A partição que falta no Delta e a que falta na origem.
+    missing_in_delta = PartitionReport(MONTHS[0], 38, None, {"valor": Decimal("1.5")}, {},
+                                       {"valor": 0}, {})
+    missing_in_source = PartitionReport(MONTHS[1], None, 5, {}, {"valor": Decimal("2.5")}, {},
+                                        {"valor": 0})
+    report = LoadReport("cad_lancamentos", (missing_in_delta, missing_in_source), (), ())
+    cli._print_load_report(report, [])
+    printed = capsys.readouterr().out
+    assert (f"DIFERENÇA em {MONTHS[0]}: origem 38 linhas {{'valor': Decimal('1.5')}} não finitos "
+            "{'valor': 0}, Delta ausente\n") in printed
+    assert (f"DIFERENÇA em {MONTHS[1]}: origem ausente, Delta 5 linhas "
+            "{'valor': Decimal('2.5')} não finitos {'valor': 0}\n") in printed
+    assert "None" not in printed

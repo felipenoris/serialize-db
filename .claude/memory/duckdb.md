@@ -70,6 +70,19 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   that zone; the Parquet file `COPY` writes carries `tz=UTC` either way (2026-09-25).
   `docs/index.md`, `plan/POC.md`
 
+- DuckDB 1.5.5 has no nested transaction: `BEGIN TRANSACTION` inside an open one is refused and
+  aborts it, and the `COMMIT` of the aborted transaction returned without error and without its
+  work; after a `ROLLBACK`, the `COMMIT` fails with `cannot commit - no transaction is active`, which
+  is what the engine's materialized `ingest` gives a client transaction since 2026-09-28. A
+  transaction's snapshot is fixed at its first command that reads or changes the database, not at
+  `BEGIN`: after a bare `BEGIN` or a `SELECT 1` it still sees a table another cursor creates, after
+  a read it does not; a `CatalogException` inside a transaction does not abort it (2026-09-28).
+  `plan/PLAN-STAGE-4.md`, `plan/POC.md`
+- `read_parquet('<tabela>/*/*.parquet', hive_partitioning = true)` fails with `Hive partition
+  mismatch` when the table folder holds a subfolder outside the Hive pattern, such as `backup/`,
+  and a folder such as `data_str=2026 Q1` enters as a partition; `load_report` reads the folders
+  `discover_partitions` returns, one by one, since 2026-09-28. `plan/PLAN-STAGE-7.md`
+
 ## Proxy
 
 - DuckDB has `http_proxy`, `http_proxy_username` and `http_proxy_password` and nothing like

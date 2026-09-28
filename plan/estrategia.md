@@ -255,7 +255,9 @@ Estas regras mantêm os arquivos legíveis pelo `COPY`:
 - O `COPY` é posicional e exige o mesmo número de colunas. Uma coluna nova entra no fim do esquema
   nos dois formatos, e os arquivos antigos ficam com uma coluna a menos. `FILLRECORD` consta das opções
   aceitas para Parquet e carregou o arquivo antigo com a coluna nova nula em 2026-09-21, como a
-  lista de colunas ([redshift.md](redshift.md)).
+  lista de colunas ([redshift.md](redshift.md)). A biblioteca passa a lista das colunas do rodapé
+  a cada `COPY`, com um manifesto por lista, porque uma coluna nova no meio do modelo deslocaria
+  as seguintes num `COPY` sem ela (decisão do usuário de 2026-09-28).
 
 No sentido inverso, o `UNLOAD ... PARTITION BY (mes)` grava diretórios Hive sem a coluna de partição,
 que é a convenção do Delta, e o `MANIFEST VERBOSE` traz `content_length` e `record_count` para a

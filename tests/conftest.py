@@ -291,13 +291,15 @@ USAGE = {
         "SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=esquema SERIALIZE_DB_REDSHIFT_WORKGROUP=workgroup "
         "SERIALIZE_DB_REDSHIFT_DATABASE=banco "
         "SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=banco_do_datashare "
-        "SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo uv run pytest -m redshift",
+        "SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo "
+        "SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest -m redshift",
         "cria só tabelas serialize_db_poc_<id>_* no esquema e as apaga no fim; com _WORKGROUP a "
         "credencial é temporária (redshift-serverless:GetWorkgroup e GetCredentials, "
         "examples/redshift_native.py), e _HOST com _USER e _PASSWORD é o par informado na mesma "
         "chamada; _SHARE_DATABASE quando o esquema vem de um datashare (USE); "
         "SERIALIZE_DB_REDSHIFT_IAM_ROLE para o COPY e o UNLOAD (sem ela, as credenciais de quem "
-        "chama)",
+        "chama); SERIALIZE_DB_TEST_LOCAL_ROOT para os casos da publicação e do leitor que também "
+        "são local, pulados sem ela",
     ),
 }
 
@@ -890,9 +892,12 @@ def redshift_session() -> Iterator[RedshiftSession]:
 
 def failure_message(report: pytest.TestReport, limit: int = 300) -> str:
     """As primeiras linhas do erro de um teste reprovado, para o relatório: a exceção e a asserção
-    que a explica."""
+    que a explica, com as credenciais mascaradas antes do corte em ``limit`` caracteres."""
     crash = getattr(report.longrepr, "reprcrash", None)
     text = crash.message if crash is not None else str(report.longrepr)
+    # A máscara vem antes do corte: um valor cortado no meio perde a aspa final que
+    # CREDENTIAL_PATTERN exige, e o começo do segredo passaria pela máscara da saída.
+    text = mask_credentials(text)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return report.outcome

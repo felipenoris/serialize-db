@@ -149,7 +149,8 @@ class Appender(Protocol):
         """
 
     def close(self) -> None:
-        """Insere na tabela os lotes gravados, numa transação: um erro não deixa linha.
+        """Insere na tabela os lotes gravados, numa transação: um erro não deixa linha. A segunda
+        chamada não faz nada.
 
         Exemplo:
 

@@ -132,8 +132,9 @@ cliente, porque o que usa a sessão termina sem esperar por ele e os lotes esper
 dela. No DuckDB, a saída é cada lote de `to_arrow_reader()` entregue por uma thread que roda a
 consulta sob o lock à memória, enquanto os lotes guardados cabem em 64 MiB, e a um arquivo Arrow IPC
 com LZ4 depois disso, e o cliente lê os lotes enquanto a consulta continua; a entrada é um arquivo
-Arrow IPC carregado no `close`, numa transação, com o `CREATE TABLE` e um único `INSERT ... BY NAME`
-(decisões do usuário de 2026-09-23). No
+Arrow IPC carregado no `close` por um único `INSERT ... BY NAME` na tabela que o `ingest` com
+`materialize=True` ou `create_table` criou antes (decisões do usuário de 2026-09-23 e de
+2026-09-28). No
 Redshift, `stream` lê os arquivos Parquet de um `UNLOAD` no `staging/`, `query` lê as tuplas que o
 driver materializa, e a entrada é Parquet no S3 mais `COPY ... MANIFEST` (decisões do usuário de
 2026-09-23). O que roda em paralelo, sem as
@@ -255,7 +256,11 @@ em `test_duckdb.py`, `test_pyarrow.py` e `tests/test_engine_duckdb.py`. O que el
   `pa.array(coluna, type=...)`, um terço do tempo de `from_pylist` por dicionários em 200.000 linhas.
   O `appender` grava um row group por lote com `ParquetWriter.write_batch` em
   `staging/<execution_id>/` e faz o `COPY` no `close`, então nada entra antes dele, e `append` passa
-  sempre por ele ([etapa 5](PLAN-STAGE-5.md)).
+  sempre por ele ([etapa 5](PLAN-STAGE-5.md)). O `COPY` de Parquet é posicional, e todo `COPY` da
+  biblioteca lista as colunas do arquivo, com `FILLRECORD`: o do `appender`, direto ou pela staging
+  `_carga` da tabela com JSON, as do primeiro lote, e o da carga do Delta, no `ingest`, no
+  `pinned_delta` e na publicação, as do rodapé, um `COPY` por lista (decisão do usuário de
+  2026-09-28); a coluna que o arquivo não tem fica nula.
 
 ### A conversão para o pandas
 
@@ -285,9 +290,11 @@ O que a sondagem fixa em `cast`:
 - `Table.cast(schema, safe=True)` recusa nulo em campo `nullable=False` (`Casting field ... with
   null values to non-nullable`), estouro de inteiro e escala perdida em decimal, e exige os mesmos
   nomes na mesma ordem: `cast` seleciona e reordena as colunas do contrato presentes e deixa as
-  ausentes para o `BY NAME`. Um inteiro numa coluna `Numeric(p, s)` passa por `decimal128(38, s)`,
-  porque o cast direto pede que `p` comporte qualquer `int64` (precisão 21 na escala 2), e o
-  segundo cast confere se cada valor cabe em `p` (leitura de 2026-09-22).
+  ausentes para o `BY NAME`. Um inteiro numa coluna `Numeric(p, s)` passa por `decimal128(38, 0)`,
+  que guarda qualquer inteiro, porque o cast direto pede que `p` comporte qualquer `int64`
+  (precisão 21 na escala 2, leitura de 2026-09-22) e nem `decimal128(38, s)` o comporta com a
+  escala acima de 19 (leitura de 2026-09-28); o segundo cast confere se cada valor cabe em `p` e
+  `s`.
 - `safe=True` não acusa duas perdas: `double` para `decimal128(18, 2)` arredonda o valor binário
   exato (`1.236` vira `1.24` e `2.675` vira `2.67`, como o `round` do Python) e `timestamp` para
   `date32` descarta a hora. `cast` aceita as duas conversões só quando nada se perde: um `double` é
@@ -306,9 +313,13 @@ O que a sondagem fixa em `cast`:
   como `{"k": 1, "x": null}`), dicts heterogêneos falham na inferência e `pa.array(dicts,
   pa.string())` falha; `json.dumps` de 300.000 documentos levou 204 ms. `cast` recusa `struct`,
   `list` e `map` numa coluna JSON.
-- `large_string`, `string_view` e dicionário viram `string`, e o comprimento do texto é medido
-  depois da conversão, porque `pa.types.is_string` não reconhece os três (leitura de 2026-09-22);
-  `timestamp[ns]` vira `[us]` quando a parte perdida é zero e é recusado quando não é.
+- `large_string` e `string_view` viram `string`, e o comprimento do texto é medido depois da
+  conversão, porque `pa.types.is_string` não reconhece os dois nem o dicionário (leitura de
+  2026-09-22); `timestamp[ns]` vira `[us]` quando a parte perdida é zero e é recusado quando não
+  é. O dicionário, a `category` do pandas, vira os seus valores antes das recusas e da conversão,
+  porque o cast do PyArrow de um dicionário de `double` para `decimal128` arredonda em silêncio, e
+  o `float16` numa coluna `Numeric` passa pelo `float64`, porque o PyArrow não tem `round` nem
+  cast de `float16` para `decimal128` (leituras de 2026-09-28).
 - Uma coluna calculada no pandas em `float64` chega como `double`: `appender.write` e `append` a
   recusam numa coluna `Numeric` enquanto houver valor fora da escala, até o pipeline arredondar; nas
   colunas `Double` do modelo de referência (decisão de 2026-09-20) ela entra como chega. O DataFrame
@@ -345,8 +356,10 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 
 - A coluna de partição (`data_str` no modelo cliente) vive na ação `add`, não no arquivo de
   dados: no modelo cliente ela deriva de uma coluna de data do arquivo por `strftime('%Y-%m-%d')`,
-  e o Redshift a recebe por uma staging sem ela e `INSERT ... SELECT *, '<valor>'`; a lista de colunas no `COPY`,
-  confirmada em 2026-09-21, não fornece o valor da coluna ausente (`delta.md`).
+  e o Redshift a recebe por uma staging sem ela e
+  `INSERT INTO <tabela> (<colunas>) SELECT ..., '<valor>', ... FROM <staging>`; a lista de
+  colunas no `COPY`, confirmada em 2026-09-21, não fornece o valor da coluna ausente
+  (`delta.md`).
 - `DECIMAL(18, 2)` sai como `INT64` do delta-rs e do DuckDB; o `COPY` desse tipo físico passou no
   ambiente alvo em 2026-09-21 (`parquet.md`, `POC.md`).
 - O delta-rs não impõe duas regras de evolução: `add_columns` aceita coluna `NOT NULL` em tabela
@@ -365,11 +378,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - A biblioteca escreve uma partição pelo registro do arquivo que o motor gravou, o
   `COPY ... (RETURN_STATS)` do DuckDB ou o `UNLOAD` do Redshift mais `create_write_transaction`: o
   `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de partição dentro do arquivo e quebraria
-  o `COPY` posicional (`delta.md`). O usuário aprovou em 2026-09-24 o registro como padrão nas
-  etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md), depois das partições
-  medidas no ambiente alvo em 2026-09-23, em que o `rewrite` levou de 1,14 a 1,52 vez o tempo do
-  registro (`POC.md`), e tirou o `rewrite` das etapas 4 e 7, com a flag `export_mode`; o
-  `write_deltalake` fica só na troca da etapa 5 para a partição com `Double` não finito.
+  o `COPY` do Redshift, que a mandaria para a staging, que não a tem (`delta.md`). O usuário aprovou
+  em 2026-09-24 o registro como padrão nas etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e
+  [7](PLAN-STAGE-7.md), depois das partições medidas no ambiente alvo em 2026-09-23, em que o
+  `rewrite` levou de 1,14 a 1,52 vez o tempo do registro (`POC.md`), e tirou o `rewrite` das etapas
+  4 e 7, com a flag `export_mode`; o `write_deltalake` fica só na troca da etapa 5 para a partição
+  com `Double` não finito.
 - As regras que mantêm o `COPY` do Redshift lendo os arquivos e a saída do Delta aberta: sem vetores
   de exclusão, sem column mapping, sem `Identity`, caminhos relativos no log e nunca um arquivo
   registrado por URI absoluta (`delta.md`, `estrategia.md`).
@@ -477,20 +491,20 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   514 MB e de 803 MB para 917 MB (2026-09-23, `POC.md`). No DuckDB, o pool `threads` é da
   instância e vale para todas as sessões, e a thread que chama cada sessão também executa a consulta
   dela: com `threads` igual às CPUs do processo, o padrão, uma varredura grande em memória já
-  ocupa a máquina, a ingestão por `CREATE TABLE AS` sobre `delta_scan` não ocupa, e a sessão a mais ganha
-  nela, nas consultas pequenas, nos operadores que não se paralelizam e na espera do S3, onde a
-  documentação do DuckDB recomenda `threads` de 2 a 5 vezes os núcleos (2026-09-23,
-  [`duckdb.md`](duckdb.md)). No ambiente alvo, com 4 vCPUs, quatro tabelas de 30.001.596 linhas
-  juntas entraram em 15,588 s em sessões a mais e em 19,547 s em série, e a materialização ficou
-  limitada pela CPU, mais lenta com `threads` acima dos núcleos (2026-09-23, `POC.md`); com 16
-  vCPUs e o cache de arquivos desligado, a materialização foi melhor com 16 threads, pior com 8 e
-  com 32 a 80, a leitura agregada do S3 1,4 vez mais rápida com 48, e as sessões a mais 1,89 vez
-  mais rápidas que a série: o padrão são as CPUs do processo (2026-09-24, `POC.md`). Com 8 vCPUs, a
-  materialização de uma partição quatro vezes maior foi de 5% a 9% mais rápida com 16 threads que
-  com 8, com o pico cerca de 1 GB maior, a leitura agregada do S3 1,9 vez mais rápida com 24, e as
-  quatro tabelas em série 5% mais lentas com 16 (2026-09-27, `POC.md`). No Redshift, cada sessão a
-  mais pede a sua credencial temporária; dois `COPY` em conexões abertas dentro da tarefa levaram
-  4,3 s e 3,8 s no ambiente alvo (2026-09-21).
+  ocupa a máquina, a ingestão sobre `delta_scan`, medida por `CREATE TABLE AS`, não ocupa, e a
+  sessão a mais ganha nela, nas consultas pequenas, nos operadores que não se paralelizam e na
+  espera do S3, onde a documentação do DuckDB recomenda `threads` de 2 a 5 vezes os núcleos
+  (2026-09-23, [`duckdb.md`](duckdb.md)). No ambiente alvo, com 4 vCPUs, quatro tabelas de
+  30.001.596 linhas juntas entraram em 15,588 s em sessões a mais e em 19,547 s em série, e a
+  materialização ficou limitada pela CPU, mais lenta com `threads` acima dos núcleos (2026-09-23,
+  `POC.md`); com 16 vCPUs e o cache de arquivos desligado, a materialização foi melhor com 16
+  threads, pior com 8 e com 32 a 80, a leitura agregada do S3 1,4 vez mais rápida com 48, e as
+  sessões a mais 1,89 vez mais rápidas que a série: o padrão são as CPUs do processo (2026-09-24,
+  `POC.md`). Com 8 vCPUs, a materialização de uma partição quatro vezes maior foi de 5% a 9% mais
+  rápida com 16 threads que com 8, com o pico cerca de 1 GB maior, a leitura agregada do S3 1,9 vez
+  mais rápida com 24, e as quatro tabelas em série 5% mais lentas com 16 (2026-09-27, `POC.md`). No
+  Redshift, cada sessão a mais pede a sua credencial temporária; dois `COPY` em conexões abertas
+  dentro da tarefa levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
 - As chaves sequenciais, a chave primária inteira de uma coluna, vêm de `run.next_ids(table, n)`:
   faixas contíguas sob lock, a partir de `max_key + 1` na versão fixada, lido de `max.<coluna>` das
   ações `add` e pela varredura da coluna quando um arquivo não tem a estatística; a tabela vazia
@@ -518,7 +532,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 | `serialize_db.storage` | 3 | Os dois armazenamentos pelo `pyarrow.fs`: URIs, listagem, leitura, cópia, a escrita condicional do arquivo de controle (`boto3` no S3), `storage_options` e o secret do DuckDB. |
 | `serialize_db.delta` | 3 | A camada Delta: criação, publicação por partição, registro de arquivos, reconciliação, reescrita, manifesto, diferença de versões, snapshots e o canal do snapshot (etapa 10), `vacuum`, compactação, cópia profunda, exportação. |
 | `serialize_db.audit` | 4 | As verificações derivadas do contrato: chaves, nulos, limites de tipo, JSON e totais; o texto SQL por dialeto e o `AuditReport`. |
-| `serialize_db.resources` | 4 | As CPUs e a memória que o processo pode usar, lidas do ambiente a cada chamada, com o cgroup v1 e v2 no Linux: a fonte dos limites do motor DuckDB (instrução do usuário de 2026-09-24). |
+| `serialize_db.resources` | 4 | As CPUs e a memória que o processo pode usar, lidas do ambiente a cada chamada, com o cgroup v1 e v2 no Linux: a fonte dos limites de toda conexão do DuckDB do pacote, a do motor e as de `serialize_db.delta`, por `environment_limits`, protegida, que `serialize_db.engine.duckdb` publica (instrução do usuário de 2026-09-24). |
 | `serialize_db.engine` | 4 e 5 | O protocolo `Engine` e os motores `duckdb` e `redshift`, com a mesma interface. |
 | `serialize_db.execution` | 6 | `Database` e `Execution`, o ciclo de uma execução; a etapa 10 acrescentou `Database.open_delta` e `Database.open_redshift` e tirou `Execution.publish_redshift`. |
 | `serialize_db.load` | 7 | A carga inicial dos Parquet atuais. |
@@ -551,7 +565,8 @@ o `__all__` para o `pdoc` não o mostrar. O privado é usado só dentro do módu
 `serialize_db.errors` as exceções que o cliente captura, e `serialize_db.delta` deixa fora do
 `__all__` a protegida `file_from_return_stats`, que o motor DuckDB usa. O `__all__` de um pacote lista
 também os seus submódulos públicos, porque o `pdoc` só documenta os que ele nomeia:
-`serialize_db.engine` lista `duckdb`, e `tests/test_package.py` confere cada pacote.
+`serialize_db.engine` lista `duckdb` e `redshift` ao lado de `Appender`, `BatchStream` e `Engine`,
+e `tests/test_package.py` confere cada pacote.
 
 Configuração: argumentos explícitos de `Database` e da linha de comando, com as variáveis
 `SERIALIZE_DB_ROOT`, `SERIALIZE_DB_ENVIRONMENT`, `SERIALIZE_DB_ENGINE`,
@@ -591,7 +606,7 @@ leitor Delta da etapa 10 roda em pasta local, e o leitor Redshift exige a conex�
 | 5. Motor Redshift | O mesmo protocolo, numa sessão única por execução sob lock, com sandbox `exec_<id>_`, `COPY ... MANIFEST` e `UNLOAD`. | SQL gerado coberto por testes sem conexão; integração com amostra, marcador `redshift`. |
 | 6. Execução e linha de comando | `Database`, `Execution`, `serialize-db run`. | Reexecução idempotente; auditoria reprovada não altera o Delta; conflito abortado com mensagem. |
 | 7. Carga inicial | Migração dos Parquet atuais por tabela e por partição, com relatório; `initial_load` absorve a migração adiantada de `scripts/migrate_parquet_to_delta.py`, que vem logo depois da etapa 1. | Contagens e somas por partição iguais entre origem e Delta. |
-| 8. Publicação para clientes | Tabelas `<ambiente>_*` no Redshift, `version_diff`, transação única, `serialize_db_publications`, despublicação. | Uma partição alterada recarrega só essa partição. |
+| 8. Publicação para clientes | Tabelas `<ambiente>_*` no Redshift, `version_diff`, uma transação por tabela, sem atomicidade entre as tabelas, `serialize_db_publications`, despublicação. | Uma partição alterada recarrega só essa partição. |
 | 9. Operação | Snapshots, `vacuum`, compactação, arquivo, exportação, `history`, runbook, `pdoc`. | Runbook escrito e testes de manutenção passando. |
 | 10. Acesso de leitura e canal do snapshot | O canal `default` no arquivo de controle, `serialize-db channel`, a publicação por `--snapshot` ou `--channel` sem `run.publish_redshift`, e `serialize_db.reader` com `Database.open_delta` e `Database.open_redshift`: o statement Core do cliente lido na base Delta, por views do DuckDB sobre o snapshot, e na base publicada no Redshift, com o resultado em Arrow. | O mesmo statement devolve o mesmo resultado no leitor Delta e no leitor Redshift depois de `serialize-db publish_redshift --channel default`; o leitor Delta lê o snapshot do `default` sem argumento e a versão atual com o canal `current`, e a materialização parcial deixa no nome só as partições pedidas. |
 
@@ -631,7 +646,7 @@ ilustrativos.
 | 5. Publicação no Delta | `reconcile`; `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD` do Redshift para `data_base_str=2026-08-31/<execution_id>_<uuid>/`), depois das conferências; no motor Redshift, a partição com `Double` não finito troca para `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
 | 6. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
 | 7. Encerramento | Sandbox descartado, staging apagado, resumo no log. | Execução idempotente: repetir o passo 5 reproduz o mesmo estado. |
-| 8. Publicação no Redshift, depois da execução | `serialize-db channel --name default --snapshot 2026T3` quando a execução marcou o snapshot, e `serialize-db publish_redshift --channel default`; sem snapshot, `serialize-db publish_redshift --channel current` ([etapa 10](PLAN-STAGE-10.md)). A publicação confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; a transação lê a linha de controle, 57, e `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT ... SELECT *, '2026-08-31'` e o `UPDATE` da linha de controle de 57 para 58. | `prd_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
+| 8. Publicação no Redshift, depois da execução | `serialize-db channel --name default --snapshot 2026T3` quando a execução marcou o snapshot, e `serialize-db publish_redshift --channel default`; sem snapshot, `serialize-db publish_redshift --channel current` ([etapa 10](PLAN-STAGE-10.md)). A publicação confere que `serialize_db_publications`, criada uma vez pelo usuário, existe; a transação lê a linha de controle, 57, e `version_diff(57, 58)` aponta a partição 2026-08-31; `DELETE` da partição, `COPY ... MANIFEST` na staging, `INSERT INTO <publicada> (<colunas>) SELECT ..., '2026-08-31', ... FROM <staging>` e o `UPDATE` da linha de controle de 57 para 58. | `prd_cad_lancamentos_projetados` com a partição nova; `serialize_db_publications` em 58. |
 
 A API da etapa 6:
 
@@ -702,8 +717,9 @@ pipeline que só atualiza tabelas sem partição, como as de domínio, abre a ex
 5. O `test_redshift.py` da etapa 0 rodou limpo duas vezes no ambiente alvo em 2026-09-21, pela
    conexão de `examples/`; as etapas 5 e 8 vêm depois das etapas 3, 4 e 6, com essa conexão.
 6. Etapa 7, implementada em 2026-09-24 sobre a base fictícia, com o script de migração fino sobre
-   o pacote e a carga pelo pacote ainda por rodar no ambiente alvo; etapa 9 por último, com o
-   runbook, implementada no mesmo dia na pasta local.
+   o pacote; a carga pelo pacote rodou no ambiente alvo no mesmo dia, às 14:16 e às 16:51
+   ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)); etapa 9 por último, com o runbook, implementada no mesmo
+   dia na pasta local.
 7. Etapa 10, pedida pelo usuário em 2026-09-24 depois das etapas 1 a 9: o leitor Delta na pasta
    local e o leitor Redshift no substituto local, depois no ambiente alvo, com o canal e a
    publicação por snapshot; o usuário fechou as decisões dela no mesmo dia.

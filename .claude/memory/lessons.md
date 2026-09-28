@@ -21,7 +21,8 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   subprocess from Python.
 - **Nothing unpinned enters the project venv** (2026-09-19). Installing `sagemaker-studio`
   downgraded duckdb to 1.5.1. Try a package in a scratch venv, read the versions after any install
-  (`probes/space.py` SP-9 does it), and restore with `uv sync --group dev`.
+  (`probes/space.py` SP-9 does it), and restore with `uv sync --group dev`, replaced by
+  `uv sync --all-groups` on 2026-09-23 ("A shared venv is restored with every group").
 - **The pytest layout has no `__init__.py`.** The root `tests/conftest.py` is imported as
   `conftest` and its folder lands on `sys.path`, so `from conftest import ...` and
   `from poc_delta import ...` work inside `tests/proof_of_concept/`; test-module basenames must stay
@@ -648,3 +649,23 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   partition column, whose guarantee is the partition value, so no suite saw it. Read an omitted
   statistic through `delta_scan`, the delta-rs dataset and `read_parquet`, with a filter on the
   column itself. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+- **A test double calls the function it replaces through a reference saved before the swap, and a
+  failure case names its failure** (2026-09-28). The repository review found the double of
+  `copy_text` in `test_appender_copies_the_file_at_close` calling `redshift.copy_text`, which after
+  the `monkeypatch` was the double itself: the `RecursionError` fell into a
+  `pytest.raises(Exception)`, and the case never tested the `COPY` of a missing file. The same
+  review removed the "partição dentro" check of `_check_footer_schema` and saw its case in
+  `tests/test_delta.py` stay green under a `pytest.raises(RegistrationRefused)` without `match`,
+  because the column-order check refused the file first. The double now calls the function saved
+  before the swap, and each refusal case matches a fragment of its own message. The column list of
+  the same day found it again in `test_failed_copy_leaves_control_row_untouched`: the double
+  rewritten for the new API raised `AttributeError` on the old code, which
+  `pytest.raises(Exception)` swallowed; the case now asserts that the double wrote the invalid
+  manifest once. `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-8.md`
+- **A double of a concurrent writer changes the bytes it writes** (2026-09-28). The check of the
+  snapshot name added a read of the control file to `run.snapshot`, and
+  `test_cli_run_parses_and_exits_by_result` exited 0 instead of 2: its double of the other writer
+  rewrote the same content after each read, and the local storage's fingerprint is the content's
+  `sha256`, so the file read before the commits matched the one the exit read, and the exit's
+  conditional write passed. The double now writes a new snapshot (`outroN`) after each read and
+  passes on the old and the new code. `plan/PLAN-STAGE-6.md`

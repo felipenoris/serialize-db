@@ -45,11 +45,12 @@ modelos neutros quando o dialeto do Redshift não está instalado.
 
 ## Política de restrições
 
-| Restrição               | Sandbox DuckDB | Sandbox Redshift |
-| ----------------------- | -------------- | ---------------- |
-| `NOT NULL`              | Declarada. | Declarada e aplicada pelo banco. |
-| `PRIMARY KEY`, `UNIQUE` | Omitida; a auditoria confere a chave do modelo. | Declarada quando auditada; informativa.|
-| `FOREIGN KEY` | Omitida; a auditoria confere com `foreign_keys=True`. | Declarada quando auditada; informativa. |
+| Restrição               | Sandbox DuckDB | Sandbox Redshift | Tabela publicada no Redshift |
+| ----------------------- | -------------- | ---------------- | ---------------------------- |
+| `NOT NULL`              | Declarada. | Declarada e aplicada pelo banco. | Declarada e aplicada pelo banco. |
+| `PRIMARY KEY` | Omitida; a auditoria confere a chave do modelo. | Omitida; a auditoria confere a chave do modelo. | Declarada por `published_ddl`; informativa. |
+| `UNIQUE` | Omitida; a auditoria confere a chave do modelo. | Omitida; a auditoria confere a chave do modelo. | Omitida. |
+| `FOREIGN KEY` | Omitida; a auditoria confere com `foreign_keys=True`. | Omitida; a auditoria confere com `foreign_keys=True`. | Omitida. |
 
 Uma chave estrangeira do modelo aponta a chave primária ou uma `UniqueConstraint` da tabela
 referenciada, na mesma ordem de colunas, e `check_models` a confere: o DuckDB recusa o índice único
@@ -69,8 +70,9 @@ A auditoria da execução é onde as chaves são aplicadas, e as consultas saem 
 Uma chave cujas colunas não incluem a coluna de partição é conferida na tabela inteira, não só nas
 partições da execução, porque unicidade dentro da partição não é unicidade. A chave estrangeira é conferida
 sob pedido, porque a tabela referenciada pode não estar no sandbox: só o que o pipeline usa é
-ingerido. O texto SQL de cada verificação é gerado por dialeto e pode ser impresso ou gravado, para
-depurar o comando e para o diff. As primitivas estão em `PLAN-STAGE-4.md`.
+ingerido. O texto SQL de cada verificação é gerado por dialeto: `audit_sql` o devolve, e
+`serialize-db audit --sql` o imprime, para depurar o comando, sem arquivo gravado nem diff (decisão
+do usuário de 2026-09-23). As primitivas estão em `PLAN-STAGE-4.md`.
 
 A medição publicada na documentação do DuckDB, com 554 milhões de linhas, justifica omitir chaves no
 DuckDB:

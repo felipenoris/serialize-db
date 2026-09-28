@@ -12,8 +12,9 @@ comando, fora de transação, e o comando é repetido.
 
 As primitivas:
 
-- ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, por
-  ``COPY ... MANIFEST`` numa staging sem a coluna de partição e um ``INSERT`` com o valor dela;
+- ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, por um
+  ``COPY ... MANIFEST`` por lista de colunas dos arquivos, com a lista, numa staging sem a coluna
+  de partição e um ``INSERT`` com o valor dela;
   ``pinned_delta`` carrega a versão fixada em ``exec_<id>_<tabela>_versao_<versão>`` e a devolve
   como origem de consulta;
 - ``stream`` roda ``UNLOAD ... PARALLEL OFF`` para ``stream/<uuid>/`` sob o ``staging_prefix``
@@ -23,7 +24,8 @@ As primitivas:
 - ``create_table`` cria a tabela vazia do modelo em ``exec_<id>_<tabela>``, pelo DDL, anotada para
   o ``DROP`` do ``cleanup``;
 - ``appender`` grava os lotes num Parquet do ``staging/`` numa thread auxiliar e, no ``close``,
-  roda o ``COPY`` na tabela numa transação; ``append`` é a forma por tabela;
+  roda o ``COPY`` na tabela, com a lista das colunas do arquivo, numa transação; ``append`` é a
+  forma por tabela;
 - ``audit`` roda as verificações de ``serialize_db.audit`` e monta o ``AuditReport``;
 - ``export_partition`` leva uma partição ao Delta pelo registro dos arquivos do ``UNLOAD``, e pela
   troca para ``publish_partition`` na partição com ``Double`` não finito.
@@ -108,6 +110,14 @@ _PARALLEL_OFF_ROWS = 5_000_000
 
 # A cláusula de credenciais que nunca vai a log: o valor de cada chave sai como ***.
 _CREDENTIAL = re.compile(r"(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)\s+'[^']*'")
+
+# Uma região citada, '...' ou "...", com a aspa dobrada como escape: a gramática com que sql.bind
+# separa o texto citado dos marcadores :nome.
+_QUOTED = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"")
+
+# A contrabarra antes de ":" que o compilador do SQLAlchemy tira de um sa.text() depois de
+# renderizar os valores, com o padrão do BIND_PARAMS_ESC dele: "\:nome" sem ":" nem letra depois.
+_UNESCAPED_BY_THE_COMPILER = re.compile(r"\\(?=:[\w$]*(?![:\w$]))")
 
 # O tipo Arrow de cada OID do resultado; o NUMERIC vem à parte, com a precisão e a escala do
 # type_modifier. O texto, o CHAR e o SUPER saem em string, o tipo do JSON no motor DuckDB.
@@ -197,7 +207,14 @@ class RedshiftConfig:
         :param environ: as variáveis lidas; o padrão é ``os.environ``. A variável vazia conta
             como ausente.
         :return: a configuração; a variável ausente deixa o padrão do campo.
+        :raises ContractError: ``SERIALIZE_DB_REDSHIFT_PORT`` que não é um número inteiro.
         """
+        port = _variable(environ, "PORT") or "5439"
+        try:
+            port_number = int(port)
+        except ValueError:
+            raise ContractError(f"SERIALIZE_DB_REDSHIFT_PORT={port!r}: a porta é um número "
+                                "inteiro, como 5439") from None
         return RedshiftConfig(
             workgroup=_variable(environ, "WORKGROUP"),
             database=_variable(environ, "DATABASE") or "dev",
@@ -205,7 +222,7 @@ class RedshiftConfig:
             schema=_variable(environ, "SCHEMA") or "public",
             iam_role=_variable(environ, "IAM_ROLE"),
             host=_variable(environ, "HOST"),
-            port=int(_variable(environ, "PORT") or 5439),
+            port=port_number,
             user=_variable(environ, "USER"),
             password=_variable(environ, "PASSWORD"),
             region=environ.get("AWS_REGION") or environ.get("AWS_DEFAULT_REGION") or None,
@@ -415,14 +432,21 @@ def insert_from_staging(target: str, staging: str, table: sa.Table, value: str |
             f"SELECT {', '.join(selected)} FROM {staging}")
 
 
-def copy_text(target: str, source: str, credentials: str, manifest: bool) -> str:
+def copy_text(target: str, source: str, credentials: str, manifest: bool,
+              columns: Sequence[str] | None = None) -> str:
     """O ``COPY ... FORMAT AS PARQUET`` de um manifesto ou de um arquivo, com ``FILLRECORD`` (o
-    arquivo anterior a uma coluna nova entra com ela nula) e sem ``COMPUPDATE``; protegida. O texto
+    arquivo anterior a uma coluna nova entra com ela nula) e sem ``COMPUPDATE``; protegida. Sem
+    ``columns``, as colunas do arquivo entram nas da tabela por posição; com elas, na ordem do
+    arquivo, cada uma entra na de mesmo nome, e a coluna da tabela fora da lista fica nula. O texto
     carrega a cláusula de credenciais."""
     options = "FORMAT AS PARQUET FILLRECORD"
     if manifest:
         options = "FORMAT AS PARQUET MANIFEST FILLRECORD"
-    return f"COPY {target}\nFROM {literal(source)}\n{credentials}\n{options}"
+    listed = ""
+    if columns is not None:
+        names = ", ".join(quoted(name) for name in columns)
+        listed = f" ({names})"
+    return f"COPY {target}{listed}\nFROM {literal(source)}\n{credentials}\n{options}"
 
 
 def unload_text(select: str, destination: str, credentials: str, parallel: bool) -> str:
@@ -522,20 +546,41 @@ def table_from_cursor(cursor: object) -> pa.Table:
 # ---------------------------------------------------------------- a compilação
 
 
+def _escaped_colons(text: str) -> str:
+    """O texto com cada ``:`` das regiões citadas escrito ``\\:``: o ``sa.text()`` lê ``:nome``
+    como parâmetro também dentro das aspas, e o ``literal_binds`` o trocaria por ``NULL``; o
+    compilador devolve o ``:`` sem a contrabarra."""
+
+    def escape(region: re.Match) -> str:
+        return region.group(0).replace(":", "\\:")
+
+    return _QUOTED.sub(escape, text)
+
+
+def _compiler_proof(value: object) -> object:
+    """O valor com a contrabarra antes de ``:`` repetida, a que o compilador tira do literal
+    depois que o dialeto dobra cada contrabarra; o valor que não é texto passa como está."""
+    if not isinstance(value, str):
+        return value
+    return _UNESCAPED_BY_THE_COMPILER.sub(r"\\\\", value)
+
+
 def _text_with_values(text: str, params: Mapping[str, object] | None,
                       prefix: str) -> sa.sql.ClauseElement:
     """Um texto pronto como statement com cada ``bindparam`` tipado pelo valor, para o caminho dos
-    literais: o sentinela vira o prefixo, e ``sql.bind`` confere os marcadores; uma lista entra
-    expansível, no ``IN``."""
+    literais: o sentinela vira o prefixo, ``sql.bind`` confere os marcadores, o ``:`` das
+    regiões citadas vai escapado e a contrabarra antes de ``:`` num valor, repetida; uma lista
+    entra expansível, no ``IN``."""
     prefixed_text = text.replace(sql.SENTINEL, prefix)
     bound_text, values = sql.bind(prefixed_text, dict(params or {}), "redshift")
     parameters = []
     for name, value in values.items():
         if isinstance(value, (list, tuple, set)):
-            parameters.append(sa.bindparam(name, value=list(value), expanding=True))
+            items = [_compiler_proof(item) for item in value]
+            parameters.append(sa.bindparam(name, value=items, expanding=True))
         else:
-            parameters.append(sa.bindparam(name, value=value))
-    return sa.text(bound_text).bindparams(*parameters)
+            parameters.append(sa.bindparam(name, value=_compiler_proof(value)))
+    return sa.text(_escaped_colons(bound_text)).bindparams(*parameters)
 
 
 def compiled_for_cursor(statement_or_sql: sa.sql.ClauseElement | str,
@@ -555,7 +600,8 @@ def compiled_for_cursor(statement_or_sql: sa.sql.ClauseElement | str,
 def literal_text(statement_or_sql: sa.sql.ClauseElement | str, params: Mapping[str, object] | None,
                  prefix: str) -> str:
     """O texto com os valores do cliente como literais, o que entra no ``UNLOAD``, que não recebe
-    parâmetro; protegida. O dialeto dobra a aspa simples e a contrabarra e mantém o ``%``."""
+    parâmetro; protegida. O dialeto dobra a aspa simples e a contrabarra e mantém o ``%``, e as
+    regiões citadas de um texto pronto passam intactas, ``:nome`` inclusive."""
     if isinstance(statement_or_sql, str):
         statement = _text_with_values(statement_or_sql, params, prefix)
     else:
@@ -755,9 +801,10 @@ class RedshiftAppender:
     auxiliar grava os lotes, um grupo de linhas cada, num Parquet de
     ``staging/<execution_id>/<tabela>/``, pelo ``Storage``. ``close`` roda, sob o lock e numa
     transação, o ``COPY`` do arquivo na tabela (por uma staging temporária e ``JSON_PARSE`` quando
-    a tabela tem coluna JSON): a tabela não muda antes dele, e um erro não deixa linha. Uma exceção
-    dentro do ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o arquivo
-    sem inserir nada.
+    a tabela tem coluna JSON), com a lista das colunas do arquivo: a coluna que o lote não trouxe
+    fica nula. A tabela não muda antes dele, e um erro não deixa linha. Uma exceção dentro do
+    ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o arquivo sem inserir
+    nada, e a segunda chamada de ``close`` não faz nada.
     """
 
     def __init__(self, engine: RedshiftEngine, table: sa.Table, queue_depth: int = 2) -> None:
@@ -832,18 +879,24 @@ class RedshiftAppender:
         source = engine.storage.uri_of(self._sink.path)
         credentials = credentials_clause(engine.config)
         target = engine.qualified(self._name)
+        # O COPY de Parquet é posicional: a lista leva cada coluna do arquivo, as do primeiro
+        # lote, à de mesmo nome, e a coluna que o lote não trouxe fica nula.
+        columns = self._schema.names
         if not _json_columns(self._table):
-            engine.execute(copy_text(target, source, credentials, manifest=False))
+            engine.execute(copy_text(target, source, credentials, manifest=False, columns=columns))
             return
         staging = quoted(f"{self._name}_carga")
         engine.execute(staging_ddl(self._table, staging, self._table.columns, temporary=True))
-        engine.execute(copy_text(staging, source, credentials, manifest=False))
+        engine.execute(copy_text(staging, source, credentials, manifest=False, columns=columns))
         engine.execute(insert_from_staging(target, staging, self._table, None))
         engine.execute(f"DROP TABLE {staging}")
 
     def close(self, error: BaseException | None = None) -> None:
         """Carrega os lotes na tabela, numa transação sob o lock; com ``error`` ou um lote
-        recusado, só apaga o arquivo."""
+        recusado, só apaga o arquivo. A segunda chamada não faz nada."""
+        # O close explícito dentro do with é seguido pelo do __exit__, que não roda outro COPY.
+        if self._closed.is_set():
+            return
         failure = error or self._refused
         self._put(failure if failure is not None else _END)
         self._closed.set()
@@ -1074,6 +1127,9 @@ class RedshiftEngine:
         """``BEGIN`` e ``COMMIT`` em volta do bloco, sob o lock; uma exceção sai por ``ROLLBACK``.
         Protegida, para o appender.
 
+        O ``COMMIT`` e o ``ROLLBACK`` rodam dentro da transação, sem a reconexão de ``execute``:
+        numa conexão nova, eles não teriam transação a fechar.
+
         Exemplo:
 
         .. code-block:: python
@@ -1083,6 +1139,9 @@ class RedshiftEngine:
                 engine.register_created(engine.prefix + "cad_lancamentos_projetados")
 
         :return: o gerenciador de contexto da transação; o ``with`` dá ``None``.
+        :raises redshift_connector.InterfaceError: a conexão derrubada no bloco, que perde a
+            transação, ou no ``COMMIT``, cujo resultado fica desconhecido; o comando seguinte,
+            fora da transação, reabre a conexão.
         """
         with self.session():
             self.execute("BEGIN")
@@ -1090,12 +1149,13 @@ class RedshiftEngine:
             try:
                 yield
             except BaseException:
-                self._in_transaction = False
                 with contextlib.suppress(redshift_connector.Error):
                     self.execute("ROLLBACK")
                 raise
-            self._in_transaction = False
-            self.execute("COMMIT")
+            else:
+                self.execute("COMMIT")
+            finally:
+                self._in_transaction = False
 
     def qualified(self, name: str) -> str:
         """O nome em duas partes que resolve depois do ``USE``.
@@ -1149,23 +1209,27 @@ class RedshiftEngine:
 
     # ------------------------------------------------------------ a carga do Delta
 
-    def _manifest_uri(self, table: sa.Table, value: str | None) -> str:
-        """Um manifesto novo do ``COPY`` no ``staging/`` da execução."""
+    def _manifest_folder(self, table: sa.Table, value: str | None) -> str:
+        """Uma pasta nova dos manifestos do ``COPY`` no ``staging/`` da execução."""
         tag = value if value is not None else "tabela"
-        path = self.storage.join(self.staging_prefix, table.name,
-                                 f"{tag}_{uuid.uuid4().hex[:8]}.manifest")
+        path = self.storage.join(self.staging_prefix, table.name, f"{tag}_{uuid.uuid4().hex[:8]}")
         return self.storage.uri_of(path)
 
     def _copy_partition(self, table: sa.Table, name: str, staging: str, uri: str, version: int,
                         value: str | None) -> None:
-        """Uma partição da versão fixada na tabela do sandbox: o manifesto, o ``COPY`` na staging
-        vazia e o ``INSERT`` com o valor da partição."""
+        """Uma partição da versão fixada na tabela do sandbox: os manifestos, um ``COPY`` de cada
+        na staging vazia, com a lista das colunas dos arquivos dele, e o ``INSERT`` com o valor da
+        partição."""
         partitions = [value] if value is not None else None
-        manifest = delta.copy_manifest(uri, version, partitions, self._manifest_uri(table, value),
-                                       self.storage)
-        credentials = credentials_clause(self.config)
+        manifests = delta.copy_manifest(uri, version, partitions,
+                                        self._manifest_folder(table, value), self.storage)
         self.execute(f"DELETE FROM {self.qualified(staging)}")
-        self.execute(copy_text(self.qualified(staging), manifest, credentials, manifest=True))
+        # O COPY de Parquet é posicional: a lista leva cada coluna do arquivo à de mesmo nome, e
+        # a coluna que o arquivo não tem fica nula.
+        for manifest in manifests:
+            credentials = credentials_clause(self.config)
+            self.execute(copy_text(self.qualified(staging), manifest.uri, credentials,
+                                   manifest=True, columns=manifest.columns))
         self.execute(insert_from_staging(self.qualified(name), self.qualified(staging), table,
                                          value))
 
@@ -1204,9 +1268,9 @@ class RedshiftEngine:
 
     def ingest(self, table: sa.Table, uri: str, version: int | None,
                partitions: list[str] | None = None, materialize: bool = False) -> None:
-        """A tabela ``exec_<id>_<tabela>`` com as partições pedidas da versão fixada:
-        ``COPY ... MANIFEST FILLRECORD`` numa staging sem a coluna de partição e um ``INSERT`` com
-        o valor dela por partição.
+        """A tabela ``exec_<id>_<tabela>`` com as partições pedidas da versão fixada: por
+        partição, um ``COPY ... MANIFEST FILLRECORD`` por lista de colunas dos arquivos, com a
+        lista, numa staging sem a coluna de partição, e um ``INSERT`` com o valor dela.
 
         Um commit na tabela depois da abertura não muda o que foi carregado.
 
@@ -1711,9 +1775,9 @@ class RedshiftEngine:
         partition_by = table_options(table).partition_by
         folder = f"{partition_by}={value}" if partition_by is not None else ""
         prefix = self.storage.join(self.staging_prefix, table.name, folder, uuid.uuid4().hex)
-        log.warning("%s partição %s: colunas Double com valor não finito %s; a partição sai por "
-                    "publish_partition, e os dados passam pela máquina local", table.name, value,
-                    sorted(columns_without_min_max))
+        log.warning("%s %s: colunas Double com valor não finito %s; a partição sai por "
+                    "publish_partition, e os dados passam pela máquina local", table.name,
+                    delta.partition_label(value), sorted(columns_without_min_max))
         paths = self._unload(table, value, prefix, count)
         # Uma conexão do DuckDB por partição, nos limites do ambiente: o close devolve a memória.
         connection = self.storage.duckdb_connect(config=environment_limits())

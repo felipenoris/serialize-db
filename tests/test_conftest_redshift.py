@@ -1,5 +1,6 @@
-"""O ``conftest`` da suíte Redshift sem conexão: a ordem entre o autocommit e o ``USE``, e o cache
-de prepared statements desligado.
+"""O ``conftest`` da suíte Redshift sem conexão: a ordem entre o autocommit e o ``USE``, o cache
+de prepared statements desligado, a cláusula de credenciais fora da mensagem de um teste reprovado
+e as variáveis da dica que autoriza a suíte.
 
 O ``USE`` corre com o autocommit já ligado: com ele desligado, o ``redshift_connector`` abre uma
 transação antes do primeiro comando, e o primeiro erro do servidor aborta a sessão inteira. A
@@ -16,7 +17,7 @@ import types
 
 import pytest
 
-from conftest import connect_redshift
+from conftest import USAGE, connect_redshift, failure_message, mask_credentials
 
 # As variáveis SERIALIZE_DB_REDSHIFT_* que connect_redshift lê.
 REDSHIFT_VARIABLES = ("DATABASE", "HOST", "PORT", "USER", "PASSWORD", "WORKGROUP", "SHARE_DATABASE")
@@ -114,3 +115,29 @@ def test_connect_redshift_without_share_database_runs_no_use(
 
     assert connection.statements == []
     assert connection.autocommit is True
+
+
+def test_failure_message_masks_the_credentials_before_the_cut() -> None:
+    """A mensagem de um teste reprovado passa pela máscara antes do corte em 300 caracteres: um
+    corte no meio do valor tiraria a aspa final que ``mask_credentials`` exige, e a impressão e o
+    JSON do relatório levariam o começo do segredo."""
+    command = ("COPY t FROM 's3://b/m' ACCESS_KEY_ID 'AKIAEXEMPLO' "
+               f"SECRET_ACCESS_KEY 'segredo{'0' * 400}' FORMAT AS PARQUET")
+    crash = types.SimpleNamespace(message=f"ProgrammingError: {command}")
+    report = types.SimpleNamespace(longrepr=types.SimpleNamespace(reprcrash=crash),
+                                   outcome="failed")
+
+    recorded = failure_message(report)
+
+    # O relatório passa o valor registrado por mask_credentials de novo na impressão e no JSON.
+    assert "segredo" not in mask_credentials(recorded)
+    assert "SECRET_ACCESS_KEY '***'" in recorded
+    assert len(recorded) <= 300
+
+
+def test_redshift_usage_names_the_local_root() -> None:
+    """A dica da suíte Redshift traz ``SERIALIZE_DB_TEST_LOCAL_ROOT``: os casos da publicação e do
+    leitor que também são ``local`` são pulados sem ela."""
+    command, note = USAGE["redshift"]
+    assert "SERIALIZE_DB_TEST_LOCAL_ROOT=" in command
+    assert "SERIALIZE_DB_TEST_LOCAL_ROOT" in note

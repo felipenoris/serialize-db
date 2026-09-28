@@ -262,7 +262,8 @@ class Database:
         :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia a
             pasta do leitor.
         :raises ContractError: a configuração sem conexão, sem ``workgroup`` e sem ``host``,
-            ``user`` e ``password``.
+            ``user`` e ``password``; ou, sem ``config``, ``SERIALIZE_DB_REDSHIFT_PORT`` que não é
+            número.
         :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
         """
         if unload_to is None:
@@ -293,6 +294,14 @@ def _partition_text(partition: str | None) -> str:
     if partition is None:
         return "sem partição"
     return f"partição {partition}"
+
+
+def _where_text(partitions: list[str] | None) -> str:
+    """As partições de ``audit`` e de ``publish_delta`` no log e nas mensagens: ``em [<valores>]``,
+    ou ``na tabela inteira`` sem a lista."""
+    if partitions is None:
+        return "na tabela inteira"
+    return f"em {partitions}"
 
 
 def _new_execution_id() -> str:
@@ -353,7 +362,8 @@ class Execution:
             ausente, vira ``exec-<AAAA-MM-DD>-<uuid8>``, com a data em UTC.
         :param redshift: a configuração do Redshift
             (``serialize_db.engine.redshift.RedshiftConfig``) do motor ``"redshift"``, que sem
-            ela lê as variáveis ``SERIALIZE_DB_REDSHIFT_*``; o motor ``"duckdb"`` não a usa.
+            ela lê as variáveis ``SERIALIZE_DB_REDSHIFT_*``, e a porta que não é número é
+            ``ContractError`` na entrada do ``with``; o motor ``"duckdb"`` não a usa.
         :raises ContractError: a partição ou o ``execution_id`` fora da regra da partição, ou a
             partição acima do ``String(n)`` de uma coluna de partição.
         """
@@ -436,14 +446,18 @@ class Execution:
         return self
 
     def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> None:
+        # A saída conclui só quando o descarte do sandbox e a gravação do snapshot terminam; a
+        # falha de um dos dois sobe ao cliente e vai ao resumo como erro.
+        closed = False
         try:
             if self.sandbox is not None:
                 self.sandbox.cleanup()
             if exc is None and self._snapshot is not None:
                 self._write_snapshot()
+            closed = True
         finally:
             timings = {name: round(seconds, 3) for name, seconds in self._timings.items()}
-            outcome = "com erro" if exc is not None else "concluída"
+            outcome = "concluída" if exc is None and closed else "com erro"
             log.info("execução %s %s: %s, versões lidas %s, versões gravadas %s, tempos %s",
                      self.execution_id, outcome, _partition_text(self.partition), self._read,
                      self._written, timings)
@@ -466,6 +480,15 @@ class Execution:
         with self._lock:
             return self.versions.get(table.name)
 
+    def _pinned_table(self, table: sa.Table, version: int) -> DeltaTable:
+        """A tabela aberta na versão fixada ``version``: a da abertura, ou reaberta quando
+        ``publish_delta`` avançou a versão fixada; quem chama segura o lock."""
+        opened = self._tables.get(table.name)
+        if opened is None or opened.version() != version:
+            opened = delta.open_table(self._uri(table), self.db.storage, version)
+            self._tables[table.name] = opened
+        return opened
+
     def previous_partitions(self, table: sa.Table, n: int) -> list[str]:
         """Os ``n`` últimos valores de partição da tabela até a partição da execução, inclusive.
 
@@ -487,11 +510,14 @@ class Execution:
         if self.partition is None:
             raise ContractError(f"previous_partitions de {table.name}: a execução "
                                 f"{self.execution_id} não tem partição")
-        if table.name not in self._tables:
-            return []
+        with self._lock:
+            version = self.versions.get(table.name)
+            if version is None:
+                return []
+            pinned = self._pinned_table(table, version)
         # get_add_actions devolve uma tabela arro3; pa.table a converte. Sem arquivos, a coluna da
         # partição vem vazia.
-        actions = pa.table(self._tables[table.name].get_add_actions(flatten=True))
+        actions = pa.table(pinned.get_add_actions(flatten=True))
         values = set(actions.column(f"partition.{partition_by}").to_pylist())
         up_to_partition = []
         for value in sorted(values):
@@ -570,10 +596,12 @@ class Execution:
         return self.sandbox.pinned_delta(table, self._uri(table), self._version(table))
 
     def _first_id(self, table: sa.Table, key: sa.Column) -> int:
-        """O primeiro id de ``next_ids``: o maior da versão fixada mais um, ou 1 na tabela nova."""
-        if table.name not in self._tables:
+        """O primeiro id de ``next_ids``: o maior da versão fixada mais um, ou 1 na tabela nova;
+        quem chama segura o lock."""
+        version = self.versions.get(table.name)
+        if version is None:
             return 1
-        return delta.max_key(self._tables[table.name], key.name) + 1
+        return delta.max_key(self._pinned_table(table, version), key.name) + 1
 
     def next_ids(self, table: sa.Table, n: int) -> range:
         """Uma faixa de ``n`` inteiros contíguos da chave sequencial, acima do maior da versão
@@ -652,7 +680,7 @@ class Execution:
             report = self.sandbox.audit(table, checked, uri, version, foreign_keys, key_scope,
                                         self._referenced(table))
         failed = [result.name for result in report.results if not result.passed]
-        log.info("auditoria de %s em %s: %s; não rodaram %s\n%s", table.name, checked,
+        log.info("auditoria de %s %s: %s; não rodaram %s\n%s", table.name, _where_text(checked),
                  "aprovada" if report.passed else f"reprovada em {failed}", list(report.not_run),
                  report.sql())
         for result in report.results:
@@ -660,8 +688,8 @@ class Execution:
                 log.warning("amostra de %s.%s: %s", table.name, result.name,
                             result.sample.to_pylist())
         if not report.passed:
-            raise AuditFailed(f"{table.name} em {checked}: reprovada em {failed}; o relatório "
-                              "está no log")
+            raise AuditFailed(f"{table.name} {_where_text(checked)}: reprovada em {failed}; o "
+                              "relatório está no log")
         key = (table.name, tuple(checked) if checked is not None else None)
         with self._lock:
             self._audits[key] = report
@@ -686,15 +714,15 @@ class Execution:
                   audit: bool) -> AuditReport | None:
         """O relatório aprovado das partições, exigido quando ``audit`` é verdadeiro."""
         if not audit:
-            log.warning("publish_delta de %s em %s sem auditoria (audit=False)", table.name,
-                        partitions)
+            log.warning("publish_delta de %s %s sem auditoria (audit=False)", table.name,
+                        _where_text(partitions))
             return None
         key = (table.name, tuple(partitions) if partitions is not None else None)
         with self._lock:
             report = self._audits.get(key)
         if report is None:
-            raise AuditFailed(f"{table.name}: publish_delta exige a auditoria aprovada de "
-                              f"{partitions} na própria execução, ou audit=False")
+            raise AuditFailed(f"{table.name}: publish_delta {_where_text(partitions)} exige a "
+                              "auditoria aprovada na própria execução, ou audit=False")
         return report
 
     def _check_no_data_change(self, table: sa.Table, uri: str) -> None:
@@ -798,16 +826,30 @@ class Execution:
 
         O snapshot não move o canal ``default``: ``serialize-db channel`` o aponta depois.
 
+        O nome é imutável: a entrada gravada não muda, e o nome não volta a ser usado, nem depois
+        do arquivamento. Refazer os dados de um snapshot é uma execução nova marcada com outro
+        nome, para o qual ``serialize-db channel`` aponta o canal.
+
         Exemplo:
 
         .. code-block:: python
 
             run.snapshot("2026T3")
 
-        :param name: o nome do snapshot, pela regra da partição; um nome já presente no arquivo de
-            controle é ``ValueError`` na saída do ``with``, depois dos commits.
-        :raises ContractError: o nome fora da regra da partição.
+        :param name: o nome do snapshot, pela regra da partição, ausente de ``snapshots`` e de
+            ``archived`` no arquivo de controle do ambiente.
+        :raises ContractError: o nome fora da regra da partição, ou já usado em ``snapshots`` ou
+            em ``archived``, na chamada e antes de qualquer commit que venha depois dela, com o
+            ``serialize-db channel`` na mensagem; o nome que outro escritor grava depois da
+            chamada é recusado na saída do ``with``, depois dos commits.
         """
         check_partition_value(name)
+        # O nome já usado é recusado agora, antes dos commits da execução; a saída o confere de
+        # novo em delta.snapshot, contra outro escritor.
+        control, _ = delta.read_snapshots(self.db.storage, self.db.environment)
+        if name in control["snapshots"] or name in control.get("archived", {}):
+            raise ContractError(f"{self.db.environment}: o snapshot {name} já existe, e o nome não "
+                                "volta a ser usado, nem arquivado; marque a execução com outro "
+                                "nome e aponte o canal para ele com serialize-db channel")
         with self._lock:
             self._snapshot = name

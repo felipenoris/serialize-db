@@ -285,8 +285,9 @@ class AuditReport:
     results: tuple[CheckResult, ...]
     """O resultado de cada verificação da lista de ``checks``, na ordem dela."""
     not_run: tuple[str, ...]
-    """As verificações que não rodaram, com o motivo: ``orfao_*`` sem ``foreign_keys=True``, e
-    ``chave_<colunas>_tabela`` com ``key_scope="partition"`` ou sem versão fixada."""
+    """As verificações que não rodaram, com o motivo: ``orfao_*`` sem ``foreign_keys=True`` ou com
+    a tabela referenciada fora do sandbox e sem versão fixada, e ``chave_<colunas>_tabela`` com
+    ``key_scope="partition"`` ou sem versão fixada."""
     nonfinite_columns: Mapping[str | None, tuple[str, ...]]
     """Por valor de partição, as colunas ``Double`` com ``NaN`` ou infinito: a lista que
     ``publish_delta`` passa a ``export_partition`` como ``columns_without_min_max``."""

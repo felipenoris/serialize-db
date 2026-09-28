@@ -4,8 +4,8 @@ Os testes correm sobre três modelos: ``TUDO``, uma tabela de teste com todos os
 contrato e as colunas ``to`` e ``timestamp``, palavras reservadas dos motores; o modelo cliente de
 ``tests/client_model/``, que obedece ao contrato e tem os arquivos de esquema versionados em
 ``tests/client_model/schema/``; e o modelo de referência de ``tests/reference_model/``, o modelo
-com defeitos que ``check_models`` lista. Nada é gravado, exceto o teste marcado ``local``, que
-grava os arquivos de esquema sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; o DDL executa num DuckDB em
+com defeitos que ``check_models`` lista. Nada é gravado, exceto os testes marcados ``local``, que
+gravam os arquivos de esquema sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; o DDL executa num DuckDB em
 memória.
 """
 
@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pytest
@@ -137,6 +138,9 @@ class Ruim(RuimBase):
     )
     mes: Mapped[str] = mapped_column(sa.Text, comment="Partição sem comprimento")
     nome: Mapped[str] = mapped_column(sa.String, comment="Nome sem comprimento")
+    apelido: Mapped[str] = mapped_column(sa.Unicode, comment="Subclasse de String sem comprimento")
+    sigla: Mapped[str] = mapped_column(sa.VARCHAR, comment="Subclasse de String sem comprimento")
+    codigo: Mapped[str] = mapped_column(sa.CHAR, comment="Subclasse de String sem comprimento")
     peso: Mapped[bytes] = mapped_column(sa.LargeBinary, comment="Fora do contrato")
     situacao: Mapped[str] = mapped_column(sa.Enum("ativa", "encerrada", name="situacao"),
                                           comment="Enum, cuja lista nada confere")
@@ -144,6 +148,8 @@ class Ruim(RuimBase):
                                                    comment="Acima dos 38 dígitos do DECIMAL")
     taxa: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(10, 12),
                                                   comment="Escala acima da precisão")
+    fracao: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(0, 0),
+                                                    comment="Precisão zero, e não o padrão 18")
 
 
 # A tabela referenciada por Ruim, no mesmo MetaData, para a chave estrangeira resolver.
@@ -189,6 +195,7 @@ def test_arrow_schema_refuses_foreign_types(
     [
         pytest.param(39, 2, "Numeric de precisão 39 fora de 1 a 38", id="Numeric(39, 2)"),
         pytest.param(-1, 0, "Numeric de precisão -1 fora de 1 a 38", id="Numeric(-1, 0)"),
+        pytest.param(0, 0, "Numeric de precisão 0 fora de 1 a 38", id="Numeric(0, 0)"),
         pytest.param(10, 12, r"Numeric\(10, 12\) com escala fora de 0 a 10", id="Numeric(10, 12)"),
         pytest.param(38, -1, r"Numeric\(38, -1\) com escala fora de 0 a 37", id="Numeric(38, -1)"),
         pytest.param(38, 38, r"Numeric\(38, 38\) com escala fora de 0 a 37", id="Numeric(38, 38)"),
@@ -199,7 +206,7 @@ def test_arrow_schema_refuses_numeric_outside_the_decimal(
 ) -> None:
     """A precisão fora de 1 a 38 e a escala fora de 0 à precisão, até 37, são ``ContractError``
     com a tabela e a coluna, no lugar do ``ValueError`` do PyArrow e da ``Exception`` genérica do
-    delta-rs (leituras de 2026-09-25)."""
+    delta-rs (leituras de 2026-09-25); a precisão 0 não vira o padrão 18."""
     table = sa.Table("larga", sa.MetaData(), sa.Column("valor", sa.Numeric(precision, scale)))
     with pytest.raises(ContractError, match=f"larga.valor: {message}"):
         schema.arrow_schema(table)
@@ -282,6 +289,34 @@ def test_table_options_defaults_and_keys() -> None:
                               info={"serialize_db": {"partition_by": ["a", "b"]}})
     with pytest.raises(ContractError, match="duas: uma coluna de partição no máximo"):
         schema.table_options(two_partitions)
+
+
+def keyed_table(unique_columns: list[str], index_columns: list[list[str]]) -> sa.Table:
+    """Uma tabela com a chave primária `id`, uma `UniqueConstraint` por coluna de
+    `unique_columns` e um índice único por lista de `index_columns`, declarados na ordem dada, e
+    um índice comum."""
+    columns = [sa.Column(name, sa.Integer) for name in sorted(unique_columns)]
+    constraints = [sa.UniqueConstraint(name) for name in unique_columns]
+    indexes = []
+    for position, names in enumerate(index_columns):
+        indexes.append(sa.Index(f"ix_chaves_{position}", *names, unique=True))
+    indexes.append(sa.Index("ix_chaves_comum", "c3"))
+    return sa.Table("chaves", sa.MetaData(),
+                    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+                    *columns, *constraints, *indexes)
+
+
+def test_keys_follow_the_column_names_in_each_group() -> None:
+    """As chaves saem na mesma ordem qualquer que seja a declarada: a chave primária, depois as
+    `UniqueConstraint` e depois os índices únicos, cada grupo em ordem dos nomes das colunas, e as
+    colunas de cada chave na ordem dela. O SQLAlchemy guarda as `UniqueConstraint` e os índices
+    em conjuntos, cuja ordem muda de um processo a outro (leitura de 2026-09-28)."""
+    names = [f"c{number}" for number in range(8)]
+    expected = (("id",), *[(name,) for name in names], ("c0", "c1"), ("c7", "c6"))
+    declared = keyed_table(names, [["c0", "c1"], ["c7", "c6"]])
+    reversed_order = keyed_table(names[::-1], [["c7", "c6"], ["c0", "c1"]])
+    assert schema.table_options(declared).keys == expected
+    assert schema.table_options(reversed_order).keys == expected
 
 
 # ---------------------------------------------------------------- o DDL por motor
@@ -496,25 +531,68 @@ def test_cast_turns_uuid_into_its_canonical_text(kind: str) -> None:
 
 
 def test_cast_integer_into_numeric_of_any_precision() -> None:
-    """Um `int64` entra em `Numeric(p, s)` de qualquer precisão quando o valor cabe em `p`, e é
-    recusado quando não cabe; o cast direto do PyArrow exige que `p` comporte todo o `int64`
-    (leitura de 2026-09-22)."""
+    """Um inteiro entra em `Numeric(p, s)` de qualquer precisão e escala quando o valor cabe em
+    `p`, e é recusado quando não cabe; o cast direto do PyArrow exige que `p` comporte todo valor
+    do tipo inteiro, 19 dígitos mais a escala num `int64` e 10 num `int32` (leituras de
+    2026-09-22 e 2026-09-28)."""
     table = sa.Table(
         "decimais", sa.MetaData(),
         sa.Column("pequeno", sa.Numeric(5, 2)),
         sa.Column("fino", sa.Numeric(10, 4)),
         sa.Column("largo", sa.Numeric(38, 2)),
+        sa.Column("miudo", sa.Numeric(38, 20)),
+        sa.Column("minimo", sa.Numeric(38, 29)),
     )
     integers = pa.array([1, 999], pa.int64())
-    batch = pa.RecordBatch.from_pydict({"pequeno": integers, "fino": integers, "largo": integers})
+    batch = pa.RecordBatch.from_pydict({"pequeno": integers, "fino": integers, "largo": integers,
+                                        "miudo": integers,
+                                        "minimo": pa.array([1, 999], pa.int32())})
     converted = schema.cast(batch, table)
     expected = [decimal.Decimal("1.00"), decimal.Decimal("999.00")]
     assert converted.column("pequeno").to_pylist() == expected
     assert converted.schema.field("fino").type == pa.decimal128(10, 4)
     assert converted.schema.field("largo").type == pa.decimal128(38, 2)
+    assert converted.column("miudo").to_pylist() == [1, 999]
+    assert converted.column("minimo").to_pylist() == [1, 999]
+    assert converted.schema.field("minimo").type == pa.decimal128(38, 29)
+
+    # O valor que não cabe: 1000 em 3 dígitos inteiros, e 10**18 em 18 (38 menos a escala 20).
     too_large = pa.RecordBatch.from_pydict({"pequeno": pa.array([1000], pa.int64())})
     with pytest.raises(ContractError, match="decimais.pequeno"):
         schema.cast(too_large, table)
+    too_long = pa.RecordBatch.from_pydict({"miudo": pa.array([10**18], pa.int64())})
+    with pytest.raises(ContractError, match="decimais.miudo"):
+        schema.cast(too_long, table)
+
+
+def test_cast_reads_a_pandas_category_by_its_values() -> None:
+    """A `category` do pandas chega como dicionário e entra pelos seus valores: o double de escala
+    exata em `Numeric(18, 2)` e o texto em `String(n)`. O double fora da escala é recusado como
+    fora do dicionário; o cast do PyArrow de um dicionário para decimal o arredonda em silêncio
+    (leitura de 2026-09-28)."""
+    categories = pd.DataFrame({"valor": pd.Categorical([1.25, 2.5, 1.25]),
+                               "nome": pd.Categorical(["a", "b", "a"])})
+    frame = pa.Table.from_pandas(categories, preserve_index=False)
+    assert pa.types.is_dictionary(frame.schema.field("valor").type)
+    converted = schema.cast(frame, TUDO)
+    amounts = [decimal.Decimal("1.25"), decimal.Decimal("2.50"), decimal.Decimal("1.25")]
+    assert converted.column("valor").to_pylist() == amounts
+    assert converted.column("nome").to_pylist() == ["a", "b", "a"]
+
+    # O double fora da escala.
+    off_scale = pd.DataFrame({"valor": pd.Categorical([1.236])})
+    with pytest.raises(ContractError, match="tudo.valor: double fora da escala 2"):
+        schema.cast(pa.Table.from_pandas(off_scale, preserve_index=False), TUDO)
+
+
+def test_cast_float16_into_numeric_through_float64() -> None:
+    """Um `float16` de escala exata entra em `Numeric` pelo `float64`, que o representa sem perda;
+    o PyArrow não tem `round` nem `cast` de `float16` para `decimal128` (leitura de 2026-09-28). O
+    fora da escala é recusado como o double, em `REFUSED_BATCHES`."""
+    halves = pa.array(np.array([1.5, 0.25], dtype=np.float16))
+    converted = schema.cast(batch_of_tudo(valor=halves), TUDO)
+    assert converted.column("valor").to_pylist() == [decimal.Decimal("1.50"),
+                                                     decimal.Decimal("0.25")]
 
 
 # O meio-dia de 2026-08-31, sem fuso e em UTC, dos timestamps recusados.
@@ -538,6 +616,17 @@ REFUSED_BATCHES = {
         batch_of_tudo(to=pa.array(["xyz"]).dictionary_encode()), "to"),
     "texto acima dos 36 bytes do Uuid": (
         batch_of_tudo(chave=pa.array([str(uuid.UUID(int=1)) + "x"])), "chave"),
+    # O dicionário, a category do pandas, é conferido pelos seus valores.
+    "dicionário de double fora da escala": (
+        batch_of_tudo(valor=pa.array([1.236]).dictionary_encode()), "valor"),
+    "dicionário de timestamp com hora numa coluna Date": (
+        batch_of_tudo(data=pa.array([NOON], pa.timestamp("us")).dictionary_encode()), "data"),
+    "dicionário de timestamp com fuso numa coluna sem fuso": (
+        batch_of_tudo(timestamp=pa.array(
+            [NOON_UTC], pa.timestamp("us", tz="America/Sao_Paulo")).dictionary_encode()),
+        "timestamp"),
+    "float16 fora da escala": (
+        batch_of_tudo(valor=pa.array(np.array([1.236], dtype=np.float16))), "valor"),
     "escala perdida": (
         batch_of_tudo(valor=pa.array([decimal.Decimal("1.234")], pa.decimal128(20, 3))), "valor"),
     "inteiro acima da precisão": (batch_of_tudo(valor=pa.array([10**17], pa.int64())), "valor"),
@@ -596,6 +685,9 @@ def test_check_models_finds_each_violation() -> None:
     assert problems == [
         "ruim.id: chave inteira com autoincrement; declare autoincrement=False",
         "ruim.nome: String sem comprimento; declare String(n) ou Text",
+        "ruim.apelido: Unicode sem comprimento; declare String(n) ou Text",
+        "ruim.sigla: VARCHAR sem comprimento; declare String(n) ou Text",
+        "ruim.codigo: CHAR sem comprimento; declare String(n) ou Text",
         "ruim.peso: tipo fora do contrato: LargeBinary()",
         "ruim.situacao: tipo fora do contrato: Enum('ativa', 'encerrada', name='situacao'); "
         "nada confere a lista do Enum, declare String(n)",
@@ -603,6 +695,8 @@ def test_check_models_finds_each_violation() -> None:
         "do Delta",
         "ruim.taxa: Numeric(10, 12) com escala fora de 0 a 10, o intervalo do DECIMAL dos motores "
         "e do Delta",
+        "ruim.fracao: Numeric de precisão 0 fora de 1 a 38, o intervalo do DECIMAL dos motores e "
+        "do Delta",
         "ruim: chave estrangeira em ['data_tudo', 'nome_tudo'] aponta tudo ['data', 'nome'], "
         "sem chave primária nem UniqueConstraint nessas colunas",
         "ruim: chave estrangeira DEFERRABLE em ['id_tudo']",
@@ -628,8 +722,8 @@ def test_check_models_lists_two_partition_columns() -> None:
 
 
 def test_partition_column_is_any_text_and_the_source_optional() -> None:
-    """Uma coluna de texto de qualquer comprimento particiona sem `partition_source`;
-    `partition_source` sem `partition_by` é violação."""
+    """Uma coluna `String(n)` de qualquer comprimento particiona sem `partition_source`; `Text`,
+    mesmo com comprimento, e `partition_source` sem `partition_by` são violações."""
     metadata = sa.MetaData()
     regions = sa.Table(
         "por_regiao",
@@ -652,6 +746,18 @@ def test_partition_column_is_any_text_and_the_source_optional() -> None:
     )
     assert schema.check_models(orphan.metadata) == [
         "sem_particao: partition_source sem partition_by"
+    ]
+
+    # Text com comprimento: a auditoria e a carga o medem até 65535 bytes, e não pelo n.
+    by_text = sa.Table(
+        "por_texto",
+        sa.MetaData(),
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("regiao", sa.Text(20), nullable=False),
+        info={"serialize_db": {"partition_by": ["regiao"]}},
+    )
+    assert schema.check_models(by_text.metadata) == [
+        "por_texto.regiao: coluna de partição fora de String(n)"
     ]
 
 
@@ -717,7 +823,7 @@ def test_check_models_lists_the_reference_model_defects() -> None:
     counts = {
         "autoincrement": sum("chave inteira com autoincrement" in text for text in problems),
         "deferrable": sum("chave estrangeira DEFERRABLE" in text for text in problems),
-        "string": sum("String sem comprimento" in text for text in problems),
+        "string": sum(" sem comprimento; declare String(n)" in text for text in problems),
         "target": sum("sem chave primária nem UniqueConstraint" in text for text in problems),
     }
     tables = list(ReferenceBase.metadata.tables.values())
@@ -726,10 +832,13 @@ def test_check_models_lists_the_reference_model_defects() -> None:
     for table in tables:
         columns.extend(table.columns)
         foreign_keys.extend(table.foreign_key_constraints)
-    # `type(...) is sa.String` deixa de fora o Text, subclasse de String.
+    # String e as subclasses dela sem comprimento; Text não declara comprimento, e o Enum sai
+    # como tipo fora do contrato.
     strings = []
     for column in columns:
-        if type(column.type) is sa.String and not column.type.length:
+        kind = column.type
+        excluded = isinstance(kind, (sa.Text, sa.Enum))
+        if isinstance(kind, sa.String) and not excluded and not kind.length:
             strings.append(column)
     deferrable = [key for key in foreign_keys if key.deferrable]
     unkeyed = [key for key in foreign_keys if not references_a_key(key)]
@@ -787,6 +896,45 @@ def test_write_schema_files(local_location: LocalLocation) -> None:
     names = sorted(Path(path).name for path in written)
     assert names == sorted(schema.schema_files(ClientBase.metadata))
     assert schema.check_schema_files(ClientBase.metadata, directory) == []
+
+
+@pytest.mark.local
+def test_check_schema_files_reports_stale_files_and_the_final_newline(
+    local_location: LocalLocation,
+) -> None:
+    """O arquivo sem o `\\n` final difere da geração, com o aviso depois da linha dele, e `write`
+    o regrava; os arquivos de uma tabela que saiu do modelo aparecem inteiros como removidos, e
+    `write` os deixa na pasta."""
+    directory = local_location.child("schema-antigos")
+    full = sa.MetaData()
+    for name in ("cad_a", "cad_b"):
+        sa.Table(name, full, sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False))
+    schema.write_schema_files(full, directory)
+
+    # O arquivo sem o \n final.
+    path = Path(directory, "cad_a.duckdb.sql")
+    path.write_text(path.read_text(encoding="utf-8").removesuffix("\n"), encoding="utf-8")
+    diff = schema.check_schema_files(full, directory)
+    assert diff[0] == f"--- {path}"
+    assert diff[-3:] == ["-)", "\\ Sem quebra de linha no fim do arquivo", "+)"]
+    schema.write_schema_files(full, directory)
+    assert schema.check_schema_files(full, directory) == []
+
+    # A tabela cad_b sai do modelo: os três arquivos dela removidos, antes e depois do write.
+    reduced = sa.MetaData()
+    full.tables["cad_a"].to_metadata(reduced)
+    stale = ["cad_b.delta.json", "cad_b.duckdb.sql", "cad_b.redshift.sql"]
+    diff = schema.check_schema_files(reduced, directory)
+    assert [line for line in diff if line.startswith("--- ")] == [
+        f"--- {directory}/{name}" for name in stale]
+    assert '-CREATE TABLE "cad_b" (' in diff
+    added = [line for line in diff if line.startswith("+") and not line.startswith("+++ ")]
+    assert added == []
+    schema.write_schema_files(reduced, directory)
+    assert schema.check_schema_files(reduced, directory) == diff
+    for name in stale:
+        Path(directory, name).unlink()
+    assert schema.check_schema_files(reduced, directory) == []
 
 
 def test_cli_schema_check_reads_the_versioned_files(capsys: pytest.CaptureFixture) -> None:

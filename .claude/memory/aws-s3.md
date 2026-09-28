@@ -35,8 +35,10 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   when `NO_PROXY` is absent: an empty `NO_PROXY`, what a shell opened by the Claude Code extension
   has, sends the credential call through the proxy, which answers 403; absent, exported from
   `no_proxy` or `169.254.170.2` alone passes (isolated 2026-09-20; the 2026-09-19 403 was this). The
-  library exports `NO_PROXY` from `no_proxy` when absent or empty and keeps `storage_options` with
-  the `boto3` credentials as the fallback. `plan/delta.md`, `plan/estrategia.md`
+  library exports `NO_PROXY` from `no_proxy` when absent or empty; its `storage_options` carries no
+  credential (decision of 2026-09-22, `.claude/memory/decisions.md`), and
+  `test_delta_rs_storage_options_fallback` keeps measuring the `boto3` fallback's shape.
+  `plan/delta.md`, `plan/estrategia.md`
 - botocore 1.43.98 reads `AWS_DEFAULT_REGION` or the profile, never `AWS_REGION`, and without a
   region uses the global endpoint `s3.amazonaws.com`, which a regional VPC endpoint does not serve;
   delta-rs reads both variables and without either queries IMDS and falls back to `us-east-1`. The S3
@@ -78,19 +80,19 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   ahead (`ec2_credential_refresh_window` 10 min plus 2 to 10 random), and the AWS C++ SDK
   1.11.800 of PyArrow reloaded about every five minutes. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 - In the target on 2026-09-25 (`probes/credentials.py`, 18:33 to 19:36 UTC, 14 rounds 5 minutes
-  apart over `<root>/prd/cad_contas`, `plan/readings/credentials-2026-09-25-1833.txt`), the
-  `boto3` chain served a new container key about every 30.6 minutes (the first expiring at
-  19:19:10, the next ones at 19:49:57 and 20:20:31, switched between 18:48:54 and 18:53:55 and
-  between 19:18:59 and 19:24:00): if each key lasts an hour, the key a client gets has 29 to 60
-  minutes left [inferred]. The open `DeltaTable`, `S3FileSystem`, `Storage.read_text` and the
-  open Redshift connection, past its `GetCredentials` password expiry at 19:33:52, kept reading.
+  apart over `<root>/prd/cad_contas`, `plan/readings/credentials-2026-09-25-1833.txt` in git
+  history), the `boto3` chain served a new container key about every 30.6 minutes (the first
+  expiring at 19:19:10, the next ones at 19:49:57 and 20:20:31, switched between 18:48:54 and
+  18:53:55 and between 19:18:59 and 19:24:00): if each key lasts an hour, the key a client gets has
+  29 to 60 minutes left [inferred]. The open `DeltaTable`, `S3FileSystem`, `Storage.read_text` and
+  the open Redshift connection, past its `GetCredentials` password expiry at 19:33:52, kept reading.
   The DuckDB secret kept the opening key until it expired: at 19:24:00, 5 minutes after,
   `delta_scan` failed once (`DeltaKernel ObjectStoreError (8)`, `Generic S3 error` on
-  `_delta_log/_last_checkpoint`), the same round's `read_parquet` read, the secret moved to the
-  new key, and `delta_scan` read in the three later rounds. `credentials_clause` followed the
-  container key from 18:53:55 on (a new `boto3` session per call). botocore refreshes a held
-  container credential 15 minutes (advisory) to 10 minutes (mandatory) before its expiry.
-  `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  `_delta_log/_last_checkpoint`), the same round's `read_parquet` read, the secret moved to the new
+  key, and `delta_scan` read in the three later rounds. `credentials_clause` followed the container
+  key from 18:53:55 on (a new `boto3` session per call). botocore refreshes a held container
+  credential 15 minutes (advisory) to 10 minutes (mandatory) before its expiry. `plan/POC.md`,
+  `plan/OPEN_QUESTIONS.md`
 - The user chose on 2026-09-25 (card "Chave boto3") the DuckDB secret built from the key of the
   `boto3` credential (`storage.aws_credentials`; `KEY_ID ?`, `SECRET ?` and `SESSION_TOKEN ?` as
   command parameters, since a DuckDB syntax error repeats the command's line; without the `aws`

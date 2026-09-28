@@ -4,9 +4,10 @@ Os testes gravam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``) as pa
 ``cgroup/`` que tomam o lugar de ``/proc`` e ``/sys/fs/cgroup``, e fixam em 8 as CPUs da afinidade.
 Eles conferem o cgroup v2 com a folga que devolve o cache de arquivos e a cota arredondada para
 cima, o ``MemAvailable`` menor que a folga, o ancestral mais apertado, o cgroup v1 com a pasta do
-processo e o contêiner que monta o próprio cgroup como raiz, e a máquina sem ``/proc``, que fica
-com a memória física e as CPUs do Python. O pico de memória residente é lido de um
-``/proc/self/status`` fabricado, sem ele, e num processo filho que toca 64 MiB.
+processo e o contêiner que monta o próprio cgroup como raiz, a memória compartilhada que a folga
+não devolve, no v2 e no v1, e a máquina sem ``/proc``, que fica com a memória física e as CPUs do
+Python. O pico de memória residente é lido de um ``/proc/self/status`` fabricado, sem ele, e num
+processo filho que toca 64 MiB.
 """
 
 from __future__ import annotations
@@ -112,6 +113,32 @@ def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(machine: 
     # O limite de 3 GiB da montagem menos o uso de 1 GiB, com 0,5 GiB de total_cache de volta.
     assert resources.available_memory() == 3 * GIB - GIB + GIB // 2
     assert resources.available_cpus() == 3
+
+
+@pytest.mark.parametrize(("cgroup", "files"), [
+    ("0::/app\n", {
+        "cgroup/app/memory.max": f"{4 * GIB}\n",
+        "cgroup/app/memory.current": f"{3 * GIB}\n",
+        "cgroup/app/memory.stat": f"anon {2 * GIB}\nfile {GIB}\nshmem {3 * GIB // 4}\n",
+    }),
+    ("4:memory:/app\n", {
+        "cgroup/memory/app/memory.limit_in_bytes": f"{4 * GIB}\n",
+        "cgroup/memory/app/memory.usage_in_bytes": f"{3 * GIB}\n",
+        "cgroup/memory/app/memory.stat": (
+            f"cache {GIB // 2}\nshmem {GIB // 2}\ntotal_cache {GIB}\ntotal_shmem {3 * GIB // 4}\n"
+        ),
+    }),
+], ids=["v2", "v1"])
+def test_shared_memory_stays_in_the_cgroup_usage(machine: Path, cgroup: str,
+                                                 files: dict[str, str]) -> None:
+    """A memória compartilhada (tmpfs, ``/dev/shm``, mmap compartilhado) entra no cache de arquivos
+    do ``memory.stat``, em ``file`` no v2 e em ``total_cache`` no v1, e o kernel sem swap não a
+    devolve: a folga devolve o cache menos ela, ``shmem`` no v2 e ``total_shmem`` no v1. No v1, as
+    chaves da pasta sozinha (``cache``, ``shmem``) trazem outros valores e ficam de fora."""
+    fabricate(machine, {"proc/meminfo": meminfo(10 * GIB), "proc/self/cgroup": cgroup, **files})
+    # O limite de 4 GiB menos o uso de 3 GiB, com o cache de 1 GiB de volta menos os 0,75 GiB de
+    # memória compartilhada contados nele.
+    assert resources.available_memory() == 4 * GIB - 3 * GIB + GIB - 3 * GIB // 4
 
 
 @pytest.mark.usefixtures("machine")

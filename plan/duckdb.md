@@ -757,9 +757,10 @@ tabela Delta ([delta.md](delta.md)).
 
 Os limites entram na abertura da conexão ou por `SET`. A máquina muda de tamanho, e o pacote os
 lê do ambiente na abertura, nunca de um valor fixo (instrução do usuário de 2026-09-24):
-`environment_limits()`, de `serialize_db.engine.duckdb`, dá `threads` igual às CPUs que o processo
-pode usar e `memory_limit` igual a metade da memória que ele ainda pode usar, pelas leituras de
-`serialize_db.resources` ([etapa 4](PLAN-STAGE-4.md)). Num contêiner Linux de 4 vCPUs com limite
+`environment_limits()`, de `serialize_db.resources`, que `serialize_db.engine.duckdb` publica, dá
+`threads` igual às CPUs que o processo pode usar e `memory_limit` igual a metade da memória que ele
+ainda pode usar, pelas leituras do mesmo módulo ([etapa 4](PLAN-STAGE-4.md)); o motor e as
+conexões do DuckDB de `serialize_db.delta` a aplicam. Num contêiner Linux de 4 vCPUs com limite
 de cgroup de 13,4 GiB (2026-09-24):
 
 ```python

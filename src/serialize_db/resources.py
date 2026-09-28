@@ -1,11 +1,12 @@
 """As CPUs e a memória que o processo pode usar, lidas do ambiente a cada chamada.
 
 O pacote roda em máquinas de tamanhos diferentes, e os limites do DuckDB saem destas leituras, não
-de um valor fixo no código (``serialize_db.engine.duckdb.environment_limits``). No Linux, as
+de um valor fixo no código: ``environment_limits``, que ``serialize_db.engine.duckdb`` publica, os
+monta para toda conexão do DuckDB do pacote, a do motor e as de ``serialize_db.delta``. No Linux, as
 leituras respeitam o cgroup do processo, v1 e v2, com que um contêiner limita as CPUs e a memória
 abaixo das da máquina, e o menor limite no caminho do cgroup até a raiz é o que vale. Fora do Linux,
-vale a memória física e as CPUs que o Python lê. ``peak_rss_mb`` lê o pico de memória residente
-do próprio processo, a medida que o script de migração, os subcomandos de operação e a publicação
+vale a memória física e as CPUs que o Python lê. ``peak_rss_mb`` lê o pico de memória residente do
+próprio processo, a medida que o script de migração, os subcomandos de operação e a publicação
 imprimem por tabela.
 
 Exemplo:
@@ -32,12 +33,20 @@ __all__ = ["available_cpus", "available_memory", "peak_rss_mb"]
 _PROC = Path("/proc")
 _CGROUP_ROOT = Path("/sys/fs/cgroup")
 
-# Por versão do cgroup: o arquivo do limite de memória, o do uso e a chave do cache de arquivos em
-# memory.stat, a parte do uso que o kernel devolve antes de matar um processo.
+# Por versão do cgroup: o arquivo do limite de memória, o do uso, e as chaves de memory.stat do
+# cache de arquivos e da memória compartilhada (tmpfs, /dev/shm, mmap compartilhado) contada dentro
+# dele. O kernel devolve o cache antes de matar um processo, menos a memória compartilhada, que ele
+# só devolve gravando-a no swap.
 _MEMORY_FILES = {
-    1: ("memory.limit_in_bytes", "memory.usage_in_bytes", "total_cache"),
-    2: ("memory.max", "memory.current", "file"),
+    1: ("memory.limit_in_bytes", "memory.usage_in_bytes", "total_cache", "total_shmem"),
+    2: ("memory.max", "memory.current", "file", "shmem"),
 }
+
+# A fração da memória disponível que vai para o memory_limit. A documentação do DuckDB pede de 50%
+# a 60% da memória quando o sistema mata o processo, porque parte das alocações foge do limite: no
+# COPY ordenado, o RSS do processo passou do limite em 13% a 21% (2026-09-24). A outra metade fica
+# para o PyArrow, o delta-rs e o código do cliente.
+_MEMORY_FRACTION = 0.5
 
 
 def available_cpus() -> int:
@@ -72,7 +81,8 @@ def available_memory() -> int:
 
     :return: em bytes, a menor entre a física, a disponível no sistema (``MemAvailable`` de
         ``/proc/meminfo``, que conta como livre o cache de arquivos que o kernel devolve) e a
-        folga do cgroup (o limite menos o uso fora do cache de arquivos).
+        folga do cgroup (o limite menos o uso, com o cache de arquivos de volta, menos a memória
+        compartilhada, ``shmem``, que o kernel conta no cache e não devolve sem swap).
     """
     readings = [os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")]
     system = _meminfo_available()
@@ -82,6 +92,25 @@ def available_memory() -> int:
     if room is not None:
         readings.append(room)
     return min(readings)
+
+
+def environment_limits() -> dict[str, object]:
+    """O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada. O motor os aplica
+    na abertura quando a configuração os omite, e ``serialize_db.delta`` em cada conexão sua.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        # Num contêiner com 4 CPUs e 13,2 GiB disponíveis:
+        environment_limits()   # {'threads': 4, 'memory_limit': '6761MiB'}
+        duckdb.connect(config=environment_limits())
+
+    :return: as opções da conexão do DuckDB: em ``threads``, as CPUs que o processo pode usar;
+        em ``memory_limit``, metade da memória que ele ainda pode usar, em MiB.
+    """
+    memory_limit = int(available_memory() * _MEMORY_FRACTION)
+    return {"threads": available_cpus(), "memory_limit": f"{memory_limit // 2**20}MiB"}
 
 
 def peak_rss_mb() -> float:
@@ -119,16 +148,18 @@ def _meminfo_available() -> int | None:
 
 def _cgroup_memory_room() -> int | None:
     """A menor folga de memória nos cgroups do processo, em bytes: o limite menos o uso, com o
-    cache de arquivos de volta; ``None`` quando nenhuma pasta dá limite e uso."""
+    cache de arquivos de volta, menos a memória compartilhada contada nele; ``None`` quando
+    nenhuma pasta dá limite e uso."""
     rooms = []
     for folder, version in _cgroup_folders("memory"):
-        limit_file, usage_file, cache_key = _MEMORY_FILES[version]
+        limit_file, usage_file, cache_key, shared_key = _MEMORY_FILES[version]
         limit = _read_number(folder / limit_file)
         usage = _read_number(folder / usage_file)
         if limit is None or usage is None:
             continue
         cache = _stat_value(folder / "memory.stat", cache_key)
-        rooms.append(limit - usage + cache)
+        shared = _stat_value(folder / "memory.stat", shared_key)
+        rooms.append(limit - usage + cache - shared)
     return min(rooms, default=None)
 
 

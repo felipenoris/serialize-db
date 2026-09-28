@@ -942,6 +942,14 @@ não é MD5 sob SSE-KMS nem no multipart):
 - <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html>
 - <https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity-upload.html>
 
+A simulação de política do IAM sobre a raiz S3, consultada em 2026-09-28 (o `RS-11` de
+`probes/redshift.py` e o `BK-8` de `probes/bucket.py`): um `EvaluationResult` por ação, qualquer que
+seja o número de recursos, com a decisão mais restritiva entre eles e a de cada recurso em
+`ResourceSpecificResults`:
+
+- <https://docs.aws.amazon.com/IAM/latest/APIReference/API_SimulatePrincipalPolicy.html>
+- <https://docs.aws.amazon.com/IAM/latest/APIReference/API_EvaluationResult.html>
+
 ## Biblioteca padrão do Python
 
 - <https://docs.python.org/3/library/warnings.html> (`catch_warnings` altera o estado global do

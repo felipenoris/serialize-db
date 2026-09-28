@@ -14,11 +14,13 @@ O delta-rs roda com o ambiente como encontrado e, quando ``NO_PROXY`` está ause
 de ``no_proxy``, de novo com ``NO_PROXY`` exportada de ``no_proxy``, que é o que a suíte faz antes
 de abrir a tabela: o cliente HTTP do delta-rs lê ``NO_PROXY`` e, só quando ela está ausente,
 ``no_proxy``, e uma ``NO_PROXY`` vazia manda a chamada ao endpoint de credenciais pelo proxy. O
-DuckDB roda com o endereço do proxy separado das credenciais, porque recusa o endereço com elas
-embutidas e não tem exceção equivalente a ``NO_PROXY``. O resumo final diz se a suíte precisa de
-manutenção para o ambiente: região que o ``boto3`` não lê, STS inalcançável, endpoint VPC de
-interface sem DNS privado. Nada é gravado no bucket: as chamadas são listagens e leituras de
-metadado.
+DuckDB abre a conexão por ``Storage.duckdb_connect``, o caminho da suíte S3 e dos motores: as
+extensões ``httpfs`` e ``delta`` da pasta configurada, o secret com a chave que a cadeia do
+``boto3`` resolve e o proxy de ``HTTP_PROXY`` com o endereço separado das credenciais, porque o
+DuckDB recusa o endereço com elas embutidas e não tem exceção equivalente a ``NO_PROXY``. O resumo
+final diz se a suíte precisa de manutenção para o ambiente: região que o ``boto3`` não lê, STS
+inalcançável, endpoint VPC de interface sem DNS privado. Nada é gravado no bucket: as chamadas são
+listagens e leituras de metadado.
 
 O formato é próprio, sem o ``Report`` de ``probelib.py``: uma linha ``[status] rótulo: detalhe
 (tempo)`` por verificação, agrupadas por ``== título``. O ``Tee``, as esperas curtas do ``boto3``,
@@ -31,9 +33,10 @@ Os fatos que o resumo usa:
 
 - Região. O botocore lê ``AWS_DEFAULT_REGION`` ou o perfil, não ``AWS_REGION``, e sem região usa o
   endpoint global ``s3.amazonaws.com``, que um endpoint VPC regional não atende. O delta-rs lê
-  ``AWS_REGION`` e ``AWS_DEFAULT_REGION``; sem nenhuma, consulta o IMDS e cai em ``us-east-1``. A
-  suíte copia a região do ``boto3`` para ``AWS_REGION``, num sentido só: um ambiente com apenas
-  ``AWS_REGION`` e sem ``~/.aws/config`` precisa de manutenção.
+  ``AWS_REGION`` e ``AWS_DEFAULT_REGION``; sem nenhuma, consulta o IMDS e cai em ``us-east-1``.
+  ``Storage.for_uri``, que dá a conexão do DuckDB, lê as duas e recusa a raiz S3 sem nenhuma. A
+  suíte copia a região do ``boto3`` para ``AWS_REGION``, num sentido só, e o subprocesso do DuckDB
+  também: um ambiente com apenas ``AWS_REGION`` e sem ``~/.aws/config`` precisa de manutenção.
 - STS. ``test_boto3_credential_source`` chama ``get_caller_identity``; um ambiente só com endpoint
   VPC do S3 não alcança o STS, e o teste falharia depois dos 60 s por tentativa e 5 tentativas do
   botocore. O diagnóstico distingue "o serviço respondeu com erro" de "sem resposta": só o segundo
@@ -41,13 +44,17 @@ Os fatos que o resumo usa:
 - Proxy. Nada na suíte exige proxy; sem as variáveis, nada a fazer. Com elas, das duas linhas do
   delta-rs, a segunda, com ``NO_PROXY`` exportada de ``no_proxy``, é a que vale para a suíte.
 - Endpoint. Com ``AWS_ENDPOINT_URL``, o ``boto3``, o PyArrow, o delta-rs e o secret do DuckDB da
-  suíte o usam, este pelas opções de ``Storage.duckdb_setup``. A suíte não lê
+  suíte o usam, este pelas opções de ``Storage.duckdb_setup``: o endereço sem o esquema,
+  ``URL_STYLE 'path'`` e, num endpoint ``http``, ``USE_SSL false``. A suíte não lê
   ``AWS_ENDPOINT_URL_S3``: sozinha, ela vale para o ``boto3`` e o delta-rs, que a leem do ambiente,
-  e não chega ao PyArrow nem ao DuckDB da suíte (sonda no moto de 2026-09-27).
+  e não chega ao PyArrow nem ao DuckDB da suíte (sonda no moto de 2026-09-27), nem à linha do DuckDB
+  deste diagnóstico, que abre a mesma conexão.
 
 Sem rede, o diagnóstico leva um minuto e meio: o ``boto3`` desiste em 11 s, o delta-rs em 10 s
 (``max_retries`` e ``retry_timeout`` em ``storage_options``) e o DuckDB no teto de 60 s do
-subprocesso.
+subprocesso, porque a conexão da biblioteca guarda as esperas padrão do ``httpfs``, 30 s por
+tentativa (``http_timeout``) e três novas tentativas (``http_retries``): contra um endpoint que
+aceita a conexão e não responde, o DuckDB sozinho desistiu em 121,8 s (2026-09-28).
 """
 
 from __future__ import annotations
@@ -310,60 +317,43 @@ def check_delta_rs(root: str, options: dict[str, str], label: str, environment: 
     return run_probe(label, DELTA_PROBE, [uri, json.dumps(options)], lambda out: f"listou o prefixo (tabela existe: {out})", environment)
 
 
-# O programa do DuckDB: carrega as extensões da pasta configurada, sem instalação automática, e
-# lista o prefixo com credential_chain. O subprocesso lê o proxy do ambiente que herdou, por
-# probelib, e a senha não passa pela linha de comando.
+# O programa do DuckDB: abre a conexão por Storage.duckdb_connect, como a suíte S3 e os motores, e
+# lista o prefixo. A biblioteca lê do ambiente herdado a pasta de extensões, o endpoint e o proxy,
+# e a senha do proxy não passa pela linha de comando. A região entra em AWS_REGION quando falta,
+# como a suíte a exporta; a saída é um JSON com a contagem e a pasta de extensões da conexão.
 DUCKDB_PROBE = r"""
-import sys, duckdb
-root, region, directory, endpoint, probes = sys.argv[1:6]
-sys.path.insert(0, probes)
-import probelib
-config = {"autoinstall_known_extensions": False, "autoload_known_extensions": False}
-if directory:
-    config["extension_directory"] = directory
+import json, os, sys
+root, region = sys.argv[1:3]
+if region and not os.environ.get("AWS_REGION"):
+    os.environ["AWS_REGION"] = region
 try:
-    connection = duckdb.connect(config=config)
-    for extension in ("httpfs", "aws", "delta"):
-        connection.execute(f"LOAD {extension}")
-    for setting, value in probelib.duckdb_proxy().settings.items():
-        connection.execute(f"SET {setting} = ?", [value])
-    connection.execute("SET http_timeout = 10000")
-    connection.execute("SET http_retries = 1")
-    secret = f"CREATE SECRET diag (TYPE s3, PROVIDER credential_chain, REGION '{region}'" + (f", ENDPOINT '{endpoint}'" if endpoint else "") + ")"
-    connection.execute(secret)
+    from serialize_db.storage import Storage
+    connection = Storage.for_uri(root).duckdb_connect()
     # ** desce às subpastas; um * só não cruza "/", e as sessões da suíte ficam em serialize-db-poc/<id>/.
-    print(connection.execute(f"SELECT count(*) FROM glob('{root}/serialize-db-poc/**')").fetchone()[0])
+    count = connection.execute(f"SELECT count(*) FROM glob('{root}/serialize-db-poc/**')").fetchone()[0]
+    directory = connection.execute("SELECT current_setting('extension_directory')").fetchone()[0]
+    print(json.dumps({"objects": count, "extension_directory": directory}))
 except Exception as error:
     print(type(error).__name__ + ": " + " ".join(str(error).split()), file=sys.stderr)
     sys.exit(1)
 """
 
 
-def duckdb_extension_directory() -> str:
-    """A pasta de extensões, com a regra da suíte.
+def check_duckdb(root: str, region: str | None) -> bool:
+    """Lista o prefixo pela conexão de ``Storage.duckdb_connect``, a da suíte S3 e dos motores.
 
-    A pasta é ``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` do repositório, senão vazia.
-    """
-    configured = os.environ.get("SERIALIZE_DB_DUCKDB_EXTENSIONS")
-    if configured:
-        return configured
-    local = Path(__file__).resolve().parent.parent / ".duckdb"
-    return str(local) if local.is_dir() else ""
-
-
-def check_duckdb(root: str, region: str | None, endpoint: str) -> bool:
-    """Carrega ``httpfs``, ``aws`` e ``delta`` da pasta de extensões e lista o prefixo.
-
-    A listagem usa um secret ``credential_chain``.
+    A conexão carrega ``httpfs`` e ``delta`` da pasta de extensões e cria o secret com a chave que o
+    ``boto3`` resolve, com ``URL_STYLE 'path'`` e ``USE_SSL false`` conforme ``AWS_ENDPOINT_URL``.
     """
     proxy = probelib.duckdb_proxy()
-    arguments = [root, region or "", duckdb_extension_directory(), endpoint, str(Path(__file__).resolve().parent)]
-    return run_probe(
-        "DuckDB",
-        DUCKDB_PROBE,
-        arguments,
-        lambda out: f"listou serialize-db-poc/ e subpastas ({out} objetos) com extensões de {duckdb_extension_directory() or '(padrão)'} e proxy {proxy.reading}",
-    )
+
+    def listed(output: str) -> str:
+        """A linha do DuckDB que listou: os objetos, a pasta de extensões da conexão e o proxy."""
+        found = json.loads(output)
+        directory = found["extension_directory"] or "(padrão)"
+        return f"listou serialize-db-poc/ e subpastas ({found['objects']} objetos) com extensões de {directory} e proxy {proxy.reading}"
+
+    return run_probe("DuckDB como a suíte (Storage.duckdb_connect)", DUCKDB_PROBE, [root, region or ""], listed)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -412,10 +402,6 @@ def diagnose(root: str) -> int:
     Devolve 0 quando os três clientes e o STS responderam, senão 1.
     """
     bucket, _, prefix = root.removeprefix("s3://").partition("/")
-    # O endpoint de AWS_ENDPOINT_URL_S3 ou de AWS_ENDPOINT_URL, e o host dele sem o esquema, que o
-    # secret do DuckDB recebe.
-    endpoint_url = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL") or ""
-    endpoint_host = endpoint_url.removeprefix("https://").removeprefix("http://").rstrip("/")
 
     show_versions(root)
     show_environment()
@@ -447,7 +433,7 @@ def diagnose(root: str) -> int:
         results["delta_rs"] = results["delta_rs_as_found"]
     if not delta_region and boto3_region:
         results["delta_rs_region"] = check_delta_rs(root, {"AWS_REGION": boto3_region}, f"delta-rs com AWS_REGION={boto3_region}", environment)
-    results["duckdb"] = check_duckdb(root, region, endpoint_host)
+    results["duckdb"] = check_duckdb(root, region)
 
     print("== STS")
     sts = check_sts(region)

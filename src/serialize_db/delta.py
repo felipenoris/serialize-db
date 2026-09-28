@@ -13,11 +13,12 @@ tabela, depois das conferências do rodapé de cada arquivo e com a releitura pe
 depois do commit, e é o caminho dos motores; ``publish_partition`` grava os dados pelo escritor do
 delta-rs, que confere tudo e paga a memória, e é o do motor Redshift para a partição com ``Double``
 não finito, cujo rodapé do ``UNLOAD`` deixa o ``NaN`` fora do máximo. ``version_diff`` lê no log as
-partições alteradas entre duas versões, ``copy_manifest`` monta o manifesto do ``COPY`` do Redshift,
-e ``snapshot`` marca no arquivo de controle do ambiente as versões de um snapshot do banco, que
-``vacuum_keeping_snapshots`` preserva; ``set_channel`` aponta um canal do ambiente para um
-snapshot, e ``channel_snapshot`` e ``snapshot_versions`` leem o canal e as versões para o leitor
-e a publicação. ``compact``, ``deep_copy`` e ``export_snapshot`` são a operação.
+partições alteradas entre duas versões, ``copy_manifest`` monta os manifestos do ``COPY`` do
+Redshift, um por lista de colunas dos arquivos, e ``snapshot`` marca no arquivo de controle do
+ambiente as versões de um snapshot do banco, que ``vacuum_keeping_snapshots`` preserva;
+``set_channel`` aponta um canal do ambiente para um snapshot, e ``channel_snapshot`` e
+``snapshot_versions`` leem o canal e as versões para o leitor e a publicação. ``compact``,
+``deep_copy`` e ``export_snapshot`` são a operação.
 
 Exemplo, numa pasta local:
 
@@ -82,6 +83,7 @@ from serialize_db.schema import (
     sql_type,
     table_options,
 )
+from serialize_db.resources import environment_limits
 from serialize_db.storage import Storage
 
 if TYPE_CHECKING:
@@ -90,6 +92,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 __all__ = [
+    "CopyManifest",
     "RegisteredFile",
     "SchemaDiff",
     "archive_snapshot",
@@ -197,6 +200,25 @@ class SchemaDiff:
         return any(additive) or self.description is not None
 
 
+@dataclasses.dataclass(frozen=True)
+class CopyManifest:
+    """Um manifesto do ``COPY ... MANIFEST`` do Redshift e as colunas que cada arquivo dele tem.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        CopyManifest(uri="s3://bucket/prd/publicacao/exec-42/cad_operacoes/2026-08-31/1.manifest",
+                     columns=("id_operacao", "data", "valor"))
+    """
+
+    uri: str
+    """A URI do manifesto."""
+    columns: tuple[str, ...]
+    """Os nomes das colunas de cada arquivo do manifesto, na ordem do rodapé: a lista do
+    ``COPY``, que leva cada coluna do arquivo à de mesmo nome da tabela."""
+
+
 # ---------------------------------------------------------------- abertura e metadados
 
 
@@ -301,7 +323,8 @@ def max_key(dt: DeltaTable, column: str) -> int:
 
     O máximo de ``max.<coluna>`` das ações ``add``, sem ler dados; a varredura da coluna quando um
     arquivo não tem a estatística, porque a estatística registrada é verdadeira ou omitida, nunca
-    falsa.
+    falsa. O arquivo com ``numRecords`` zero, como o da partição vazia que o motor registra, fica
+    de fora, porque o log o guarda sem máximo; o arquivo sem ``numRecords`` entra na varredura.
 
     Exemplo:
 
@@ -311,17 +334,24 @@ def max_key(dt: DeltaTable, column: str) -> int:
 
     :param dt: a tabela aberta por ``open_table``.
     :param column: o nome da coluna inteira, como a chave sequencial.
-    :return: o maior valor; 0 na tabela vazia.
+    :return: o maior valor; 0 na tabela sem linhas.
     """
     # get_add_actions devolve uma tabela arro3; pa.table a converte sem cópia.
     actions = pa.table(dt.get_add_actions(flatten=True))
+    # Só os arquivos que podem ter linhas: o numRecords nulo, de um arquivo sem estatística, fica.
+    with_rows = pc.fill_null(pc.not_equal(actions.column("num_records"), 0), True)
+    actions = actions.filter(with_rows)
     if actions.num_rows == 0:
         return 0
     logged = _logged_statistic(actions, f"max.{column}", pc.max)
     if logged is not None:
         return logged
     scanned = dt.to_pyarrow_dataset().to_table(columns=[column]).column(column)
-    return pc.max(scanned).as_py()
+    maximum = pc.max(scanned).as_py()
+    # A varredura sem linha alguma, a dos arquivos sem numRecords e vazios, é a tabela sem linhas.
+    if maximum is None:
+        return 0
+    return maximum
 
 
 def commit_metadata(execution_id: str, input_versions: Mapping[str, int],
@@ -385,6 +415,15 @@ def _partition_predicate(partition_by: str | None, value: str | None) -> str | N
     return f"{quoted(partition_by)} = {literal(value)}"
 
 
+def partition_label(value: str | None) -> str:
+    """A partição nas mensagens e no log: ``partição <valor>``, ou ``tabela inteira`` sem valor,
+    na tabela sem partição e na releitura da tabela inteira; protegida, a carga e o motor
+    Redshift a usam."""
+    if value is None:
+        return "tabela inteira"
+    return f"partição {value}"
+
+
 def publish_partition(uri: str, table: sa.Table, value: str | None, data: object,
                       metadata: Mapping[str, str], storage: Storage,
                       columns_without_min_max: Collection[str] = ()) -> int:
@@ -432,7 +471,7 @@ def publish_partition(uri: str, table: sa.Table, value: str | None, data: object
             commit_properties=CommitProperties(custom_metadata=dict(metadata)),
         )
     except CommitFailedError as error:
-        raise ExecutionConflict(f"{table.name} partição {value}: {error}") from None
+        raise ExecutionConflict(f"{table.name} {partition_label(value)}: {error}") from None
     return dt.version()
 
 
@@ -664,9 +703,10 @@ def _check_footer_schema(footer: pq.ParquetFile, file: RegisteredFile, contract:
 
     Nenhuma coluna do contrato ausente, porque o leitor a leria nula sem erro; o tipo físico entre
     os que os leitores leem como o lógico; a coluna de partição fora do arquivo, porque ela vive na
-    ação e o ``COPY`` posicional do Redshift a leria como a coluna seguinte; e as colunas do
-    contrato na ordem dele, pelo mesmo ``COPY``. Uma coluna fora do contrato passa, porque os
-    leitores a ignoram.
+    ação, e o ``COPY`` do Redshift, que lista as colunas do rodapé, a mandaria para a staging, que
+    não a tem; e as colunas do contrato na ordem dele, que nenhum leitor do pacote exige: os dois
+    leitores e o ``COPY`` ligam cada coluna do arquivo à de mesmo nome. Uma coluna fora do
+    contrato passa, porque os leitores a ignoram.
     """
     physical = {}
     order = []
@@ -777,7 +817,7 @@ def _commit_actions(dt: DeltaTable, table_name: str, partition_by: str | None,
             commit_properties=CommitProperties(custom_metadata=dict(metadata)),
         )
     except CommitFailedError as error:
-        raise ExecutionConflict(f"{table_name} partição {value}: {error}") from None
+        raise ExecutionConflict(f"{table_name} {partition_label(value)}: {error}") from None
 
 
 def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value: str | None,
@@ -875,7 +915,7 @@ def _duckdb_reading(uri: str, version: int, table: sa.Table, value: str | None,
     where = _partition_filter(table_options(table).partition_by, value)
     text = (f"SELECT {', '.join(measures)} FROM delta_scan({literal(uri)}, "
             f"version := {version}){where}")
-    connection = storage.duckdb_connect()
+    connection = storage.duckdb_connect(config=environment_limits())
     try:
         row = connection.execute(text).fetchone()
     finally:
@@ -1002,8 +1042,8 @@ def read_back(uri: str, table: sa.Table, value: str | None, expected_rows: int,
         return
     dt.restore(version - 1)
     raise RegistrationRefused(
-        f"{table.name} partição {value}: a releitura da versão {version} reprovou e a tabela "
-        f"voltou à versão {version - 1}: {'; '.join(problems)}")
+        f"{table.name} {partition_label(value)}: a releitura da versão {version} reprovou e a "
+        f"tabela voltou à versão {version - 1}: {'; '.join(problems)}")
 
 
 # ---------------------------------------------------------------- a evolução do esquema
@@ -1202,7 +1242,7 @@ def _copy_rewrite(connection: duckdb.DuckDBPyConnection, uri: str, table: sa.Tab
     por ``PARTITION_BY``, que tira a coluna de partição dos arquivos, ou um arquivo só."""
     partition_by = table_options(table).partition_by
     if partition_by is None:
-        target = f"{uri}/rewrite_{uuid.uuid4().hex}.parquet"
+        target = f"{uri.rstrip('/')}/rewrite_{uuid.uuid4().hex}.parquet"
         options = "FORMAT parquet, RETURN_STATS"
     else:
         target = uri
@@ -1274,17 +1314,19 @@ def rewrite(uri: str, table: sa.Table, storage: Storage,
     :return: a versão do commit.
     :raises ContractError: uma chave de ``expressions`` fora das colunas do modelo, que seria
         ignorada.
-    :raises ValueError: ``uri`` fora da raiz de ``storage``.
+    :raises ValueError: ``uri`` fora da raiz de ``storage``, antes de qualquer escrita.
     :raises RegistrationRefused: uma conferência de ``register_files`` reprovou um arquivo novo,
         sem commit; ou a releitura reprovou e desfez o commit.
     :raises ExecutionConflict: o commit falhou no delta-rs com ``CommitFailedError``.
     """
     expressions = dict(expressions or {})
     _check_expressions(table, expressions)
+    # Conferida antes de gravar: o COPY do DuckDB grava onde recebe, fora da raiz também.
+    storage.relative(uri)
     dt = open_table(uri, storage)
     source = f"delta_scan({literal(uri)}, version := {dt.version()})"
     select = _rewrite_select(table, expressions, source)
-    connection = storage.duckdb_connect()
+    connection = storage.duckdb_connect(config=environment_limits())
     try:
         nonfinite = _nonfinite_by_partition(connection, table, select)
         written = _copy_rewrite(connection, uri, table, select)
@@ -1388,46 +1430,73 @@ def _in_partitions(action: Mapping[str, object], partition_columns: list[str],
     return action[f"partition.{partition_columns[0]}"] in partitions
 
 
-def copy_manifest(uri: str, version: int, partitions: list[str] | None, destination: str,
-                  storage: Storage) -> str:
-    """Grava o manifesto do ``COPY ... MANIFEST`` do Redshift com os arquivos da versão nas
-    partições pedidas.
+def _file_columns(storage: Storage, path: str) -> tuple[str, ...]:
+    """Os nomes das colunas do arquivo, na ordem do rodapé; no S3, o rodapé vem por GET de
+    intervalo."""
+    with storage.open_input_file(path) as source:
+        return tuple(pq.read_schema(source).names)
 
-    Cada entrada é ``{"url": "<pasta da tabela>/<path>", "mandatory": true, "meta":
-    {"content_length": <size_bytes>}}``, das ações ``add`` da versão.
+
+def copy_manifest(uri: str, version: int, partitions: list[str] | None, destination: str,
+                  storage: Storage) -> list[CopyManifest]:
+    """Grava os manifestos do ``COPY ... MANIFEST`` do Redshift com os arquivos da versão nas
+    partições pedidas, um manifesto por lista de colunas dos arquivos.
+
+    O ``COPY`` de Parquet leva as colunas do arquivo às da tabela pela posição, e os arquivos de
+    uma tabela Delta nem sempre têm as mesmas colunas na mesma ordem: o arquivo anterior a uma
+    coluna nova não a tem, e o delta-rs grava a coluna nova no fim do esquema Delta. Cada arquivo
+    entra no manifesto da lista de colunas do seu rodapé, lido uma vez, e o ``COPY`` de cada
+    manifesto nomeia essa lista, que leva cada coluna do arquivo à de mesmo nome. Cada entrada é
+    ``{"url": "<pasta da tabela>/<path>", "mandatory": true, "meta": {"content_length":
+    <size_bytes>}}``, das ações ``add`` da versão, e os manifestos se chamam ``1.manifest``,
+    ``2.manifest`` e assim por diante, na ordem do caminho do primeiro arquivo de cada lista.
 
     Exemplo:
 
     .. code-block:: python
 
-        copy_manifest(uri, 58, ["2026-08-31"],
-                      storage.uri_of("prd/publicacao/exec-42/cad_operacoes/2026-08-31.manifest"),
-                      storage)
+        folder = storage.uri_of("prd/publicacao/exec-42/cad_operacoes/2026-08-31")
+        for manifest in copy_manifest(uri, 58, ["2026-08-31"], folder, storage):
+            print(manifest.uri, manifest.columns)
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
     :param version: a versão cujos arquivos entram.
     :param partitions: os valores das partições pedidas, todas com ``None``; numa tabela sem
         partição, todo arquivo entra.
-    :param destination: a URI do manifesto sob a raiz, em ``publicacao/`` ou ``staging/``; um
-        manifesto existente é substituído.
+    :param destination: a URI da pasta dos manifestos sob a raiz, em ``publicacao/`` ou
+        ``staging/``; um manifesto existente com o mesmo nome é substituído, e o ``COPY`` usa só
+        os devolvidos.
     :param storage: o armazenamento da raiz do banco.
-    :return: a URI do manifesto, ``destination``.
-    :raises ValueError: ``destination`` fora da raiz de ``storage``.
+    :return: um ``CopyManifest`` por lista de colunas, na ordem dos nomes dos manifestos; vazia,
+        sem manifesto gravado, quando nenhum arquivo entra.
+    :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``.
     """
+    table_path = storage.relative(uri)
+    folder = storage.relative(destination)
     dt = open_table(uri, storage, version)
     partition_columns = dt.metadata().partition_columns
-    entries = []
-    for action in pa.table(dt.get_add_actions(flatten=True)).to_pylist():
+
+    # As entradas agrupadas pela lista de colunas do rodapé, na ordem do caminho dos arquivos; os
+    # rodapés são lidos em série, como no register_files.
+    entries_by_columns: dict[tuple[str, ...], list[dict[str, object]]] = {}
+    actions = pa.table(dt.get_add_actions(flatten=True)).sort_by("path")
+    for action in actions.to_pylist():
         if not _in_partitions(action, partition_columns, partitions):
             continue
-        entries.append({
+        columns = _file_columns(storage, storage.join(table_path, action["path"]))
+        entries_by_columns.setdefault(columns, []).append({
             "url": f"{uri.rstrip('/')}/{action['path']}",
             "mandatory": True,
             "meta": {"content_length": action["size_bytes"]},
         })
-    manifest = json.dumps({"entries": entries}, indent=2)
-    storage.write_text(storage.relative(destination), manifest)
-    return destination
+
+    # Um manifesto por lista, numerado pela ordem em que a lista apareceu.
+    manifests = []
+    for number, (columns, entries) in enumerate(entries_by_columns.items(), start=1):
+        path = storage.join(folder, f"{number}.manifest")
+        storage.write_text(path, json.dumps({"entries": entries}, indent=2))
+        manifests.append(CopyManifest(storage.uri_of(path), columns))
+    return manifests
 
 
 # ---------------------------------------------------------------- os snapshots do banco
@@ -1461,7 +1530,8 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
     banco.
 
     A escrita é condicional: ``Storage.create_text`` no primeiro snapshot, e ``if_match`` com a
-    impressão da leitura nos seguintes.
+    impressão da leitura nos seguintes. A entrada é imutável: nenhuma função do pacote muda as
+    versões dela, e o nome continua ocupado depois de ``archive_snapshot``.
 
     Exemplo:
 
@@ -1475,15 +1545,17 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
     :param versions: a versão de cada tabela, pelo nome da tabela; as versões marcadas são as que
         ``vacuum_keeping_snapshots`` preserva.
     :return: o controle novo.
-    :raises ContractError: o nome fora da regra da partição, antes de ler o arquivo de controle.
-    :raises ValueError: um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a
-        pasta ``arquivo/<nome>/``.
+    :raises ContractError: o nome fora da regra da partição, antes de ler o arquivo de controle;
+        ou um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a pasta
+        ``arquivo/<nome>/``, com o ``serialize-db channel`` na mensagem.
     :raises ConflictError: outro escritor entre a leitura e a escrita.
     """
     check_partition_value(name)
     control, fingerprint = read_snapshots(storage, environment)
     if name in control["snapshots"] or name in control.get("archived", {}):
-        raise ValueError(f"{environment}: o snapshot {name} já existe")
+        raise ContractError(f"{environment}: o snapshot {name} já existe, e o nome não volta a ser "
+                            "usado, nem arquivado; grave o snapshot novo com outro nome e aponte "
+                            "o canal para ele com serialize-db channel")
     control["snapshots"][name] = dict(sorted(versions.items()))
     _write_control(storage, environment, control, fingerprint)
     return control
@@ -1775,7 +1847,7 @@ def _copied_file(action: Mapping[str, object]) -> RegisteredFile:
 def _count_rows(uri: str, storage: Storage) -> tuple[int, int]:
     """As linhas da tabela pelos dois leitores: o dataset do delta-rs e o ``delta_scan``."""
     by_delta = open_table(uri, storage).to_pyarrow_dataset().count_rows()
-    connection = storage.duckdb_connect()
+    connection = storage.duckdb_connect(config=environment_limits())
     try:
         row = connection.execute(f"SELECT count(*) FROM delta_scan({literal(uri)})").fetchone()
     finally:
@@ -1823,6 +1895,21 @@ def _copy_destination(destination: str, source: DeltaTable, storage: Storage) ->
     return registered
 
 
+def _schema_differences(copied: pa.Schema, expected: pa.Schema) -> list[str]:
+    """As colunas em que o esquema da cópia difere do da versão copiada: ausente de um dos dois,
+    ou com outro tipo, nulidade ou comentário."""
+    differences = []
+    for field in expected:
+        if field.name not in copied.names:
+            differences.append(f"{field.name} ausente da cópia")
+        elif not copied.field(field.name).equals(field, check_metadata=True):
+            differences.append(f"{field.name} com outro tipo, nulidade ou comentário")
+    for name in copied.names:
+        if name not in expected.names:
+            differences.append(f"{name} fora da versão")
+    return differences
+
+
 def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int:
     """Uma tabela nova em ``destination`` com os arquivos, o esquema, a partição, o nome, a
     descrição e as propriedades de uma versão, pela cópia dos arquivos de cada partição e o
@@ -1831,12 +1918,14 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
     Cada arquivo que o log da versão lista é copiado por ``Storage.copy`` para o mesmo caminho
     relativo, sem os dados passarem pela máquina no S3, e entra no log novo com o tamanho, as linhas
     e as estatísticas da ação de origem, as dos tipos exatos, num commit ``overwrite`` por partição,
-    como ``register_files``; no fim, a contagem da cópia pelos dois leitores é conferida contra a
-    soma das ações. A memória é a do log. Cada partição copiada vai ao log com o número de
-    arquivos e o tempo da cópia.
+    como ``register_files``, com o esquema da versão; no fim, o esquema da cópia é conferido contra
+    o da versão, e a contagem dela pelos dois leitores contra a soma das ações. A memória é a do
+    log. Cada partição copiada vai ao log com o número de arquivos e o tempo da cópia.
 
     A repetição continua uma cópia interrompida: com tabela em ``destination``, a partição cujos
-    arquivos ela já registra é pulada, sem commit, e as outras são copiadas.
+    arquivos ela já registra é pulada, sem commit, e as outras são copiadas. Numa tabela criada de
+    outra versão, o commit da primeira partição copiada troca o esquema dela pelo da versão, e o
+    nome, a descrição e as propriedades ficam os da criação.
 
     Exemplo:
 
@@ -1851,25 +1940,29 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
     :return: a versão da cópia, que ganha uma versão por partição copiada; a repetição sobre a
         cópia completa devolve a mesma versão.
     :raises RegistrationRefused: um destino que registra um arquivo que a versão não lista, que
-        guarda outra tabela; ou, no fim, a contagem da cópia pelos dois leitores diferente da
-        soma das ações.
-    :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``.
+        guarda outra tabela; ou, no fim, o esquema da cópia diferente do da versão, sem partição
+        copiada que o trocasse, ou a contagem da cópia pelos dois leitores diferente da soma das
+        ações.
+    :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``, antes de qualquer
+        escrita.
     :raises ExecutionConflict: o commit de uma partição falhou no delta-rs com
         ``CommitFailedError``.
     """
+    # Os dois caminhos conferidos antes de gravar: a criação do destino e as cópias gravam onde
+    # recebem, fora da raiz também.
+    source_path = storage.relative(uri)
+    target_path = storage.relative(destination)
     source = open_table(uri, storage, version)
     metadata = source.metadata()
     partition_columns = metadata.partition_columns
     partition_by = partition_columns[0] if partition_columns else None
     contract = pa.schema(source.schema())
     registered = _copy_destination(destination, source, storage)
-    source_path = storage.relative(uri)
-    target_path = storage.relative(destination)
     total = 0
     for value, group in _actions_by_partition(source, partition_by).items():
         # A soma conta toda partição, a pulada inclusive: a contagem final lê a cópia inteira.
         total += sum(int(action["num_records"]) for action in group)
-        label = "tabela inteira" if value is None else f"partição {value}"
+        label = partition_label(value)
         if all(action["path"] in registered for action in group):
             log.info("%s: %s já no destino", metadata.name, label)
             continue
@@ -1880,15 +1973,25 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
                          storage.join(target_path, action["path"]))
             actions.append(_add_action(_copied_file(action), contract, partition_by, value, ()))
         destination_table = open_table(destination, storage)
+        # O esquema da versão no commit: o delta-rs grava o metaData novo quando ele difere do
+        # destino, criado de outra versão.
         _commit_actions(destination_table, str(metadata.name), partition_by, actions, value=value,
-                        metadata={})
+                        metadata={}, schema=source.schema())
         log.info("%s: %s copiada, %d arquivo(s) em %.1f s", metadata.name, label, len(actions),
                  time.perf_counter() - started)
+    # O esquema do destino contra o da versão: sem partição copiada, nenhum commit o trocou.
+    copy = open_table(destination, storage)
+    differences = _schema_differences(pa.schema(copy.schema()), contract)
+    if differences:
+        raise RegistrationRefused(
+            f"{destination}: a cópia tem outro esquema que a versão {version} da origem, e "
+            f"nenhuma partição copiada o trocou; copie para um destino novo: "
+            f"{'; '.join(differences)}")
     by_delta, by_duckdb = _count_rows(destination, storage)
     if by_delta != total or by_duckdb != total:
         raise RegistrationRefused(f"{destination}: a cópia tem {by_delta} linhas pelo delta-rs e "
                                   f"{by_duckdb} pelo DuckDB, esperadas {total}")
-    return open_table(destination, storage).version()
+    return copy.version()
 
 
 def _export_by_copy(dt: DeltaTable, uri: str, destination: str, storage: Storage) -> list[str]:
@@ -1909,14 +2012,16 @@ def _export_by_rewrite(dt: DeltaTable, uri: str, table: sa.Table, destination: s
     coluna de partição dentro dele."""
     partition_by = table_options(table).partition_by
     select = f"SELECT * FROM delta_scan({literal(uri)}, version := {dt.version()})"
+    # Na pasta local, o COPY do DuckDB não cria as pastas acima do destino, e o COPY particionado
+    # aceita a pasta dele já criada e vazia.
+    storage.ensure_folder(storage.relative(destination))
     if partition_by is None:
-        storage.ensure_folder(storage.relative(destination))
-        target = f"{destination}/data.parquet"
+        target = f"{destination.rstrip('/')}/data.parquet"
         options = "FORMAT parquet, RETURN_STATS"
     else:
         target = destination
         options = f"FORMAT parquet, PARTITION_BY ({quoted(partition_by)}), RETURN_STATS"
-    connection = storage.duckdb_connect()
+    connection = storage.duckdb_connect(config=environment_limits())
     try:
         rows = connection.execute(f"COPY ({select}) TO {literal(target)} ({options})").fetchall()
     finally:

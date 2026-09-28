@@ -215,7 +215,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   schema-qualified, gets `RAW` encoding by default unless a column says `ENCODE`, and is absent
   from `svv_table_info`. `redshift_connector.Cursor.execute` delegates to `Connection.execute`, so
   every cursor of a connection is the same session. `plan/redshift.md`
-- The Redshift engine keeps one session per execution under a `threading.Lock` (user decision of
+- The Redshift engine keeps one session per execution under a `threading.RLock` (user decision of
   2026-09-22), the `exec_<id>_*` tables stay permanent in the datashare schema, and the user
   reverted the temporary-table proposal the same day; a temporary table the pipeline creates in
   the session is lost when the engine reconnects. `plan/PLAN-STAGE-5.md`
@@ -367,6 +367,30 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   JSON in `VARCHAR(65535)` and `INSERT ... JSON_PARSE`, because the Parquet `COPY` into `SUPER`
   needs `SERIALIZETOJSON`, never read on a small string; the export serializes the column with
   `JSON_SERIALIZE` so the `UNLOAD` file carries text. `plan/PLAN-STAGE-5.md`
+- The review of 2026-09-28 fixed on the stand-in: the appender's `COPY`, direct and through the
+  `_carga` staging, lists the file's columns, the first batch's (`COPY <alvo> ("a", "b") FROM ...
+  FORMAT AS PARQUET FILLRECORD`), because the positional Parquet `COPY` put a nullable middle column
+  the batch lacked into the next column's values (`largura` into `altura`, no error); the target
+  read the column list and `FILLRECORD` each alone on 2026-09-21, not together, and
+  `test_appender_loads_a_batch_without_a_middle_column` reads the combination in the next battery.
+  The text path (`literal_text`, the `stream` of a ready text) writes each `:` of a quoted region as
+  `\:` before `sa.text()`, which read `':b'` as a bind and rendered `'a NULL'` (`query` `[1]`,
+  `stream` `[]`), and repeats a client value's backslash before `:`, because the compiler's
+  `BIND_PARAMS_ESC` also acts on the rendered literals (`r"ref \:x2"` reached the `UNLOAD` as
+  `ref :x2`). `transaction()` runs `COMMIT` and `ROLLBACK` inside the transaction: an
+  `InterfaceError` at `COMMIT` rises with the outcome unknown, where the old code reconnected and
+  repeated `COMMIT` outside a transaction, which returned success. A second
+  `RedshiftAppender.close` does nothing (it ran another `COPY` of the deleted file).
+  `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+- The user's decision of 2026-09-28 extended the column list to every `COPY` from Delta (`ingest`,
+  `pinned_delta`, publication): `delta.copy_manifest` reads each file's footer once, in series,
+  groups the files by their column-name tuple and writes `1.manifest`, `2.manifest` in a folder,
+  one `COPY <staging> (<cols>) ... MANIFEST FILLRECORD` each, because the files written before a
+  middle column lack it, delta-rs writes a new column at the end of its files, and a reordered
+  model shifted values without error on the stand-in (`novo` got `a1`, `a` got `b1`, `b` null).
+  `get_add_actions` lists the newest commit first, so the actions are sorted by `path`. The new
+  `redshift` cases of `tests/test_engine_redshift.py` and `tests/test_publication.py` read the list
+  with `FILLRECORD` in the next battery. `plan/PLAN-STAGE-3.md`
 - The stand-in maps DuckDB's `TransactionContext Error: Conflict on tuple deletion!` to the
   `1023` message, catalog `does not exist` to `XX000` with the target's `Relation <name> does not
   exist in the database.` (since 2026-09-24; `42P01` before) and `already exists` to `42P07`, and lists

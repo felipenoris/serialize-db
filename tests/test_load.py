@@ -7,16 +7,18 @@ que fica fora do padrão e fora do modelo; a consulta que leva a partição ao c
 entre aspas; a carga de cada partição uma vez só, a retomada depois de uma interrupção e o filtro
 de partições; os tipos do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem
 commit (valor da coluna de origem fora do caminho, texto acima de ``String(n)``, um nulo em cada
-uma das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos); a coluna
+uma das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos, e o texto
+acima dos limites de ``Uuid``, JSON e ``Text``, com o ``n`` de ``Text(n)`` ignorado); a coluna
 ``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, com o relatório que soma só
-os finitos; o relatório que acusa uma linha apagada; a auditoria de chave estrangeira que registra
-o órfão sem barrar a carga; ``serialize-db load`` sobre a base inteira, duas vezes; e a tabela sem
-partição impressa como tabela inteira.
+os finitos; o relatório que acusa uma linha apagada e que lê na origem só as pastas da carga; a
+auditoria de chave estrangeira que registra o órfão sem barrar a carga; ``serialize-db load`` sobre
+a base inteira, duas vezes; e a tabela sem partição impressa como tabela inteira.
 """
 
 from __future__ import annotations
 
 import datetime
+import json
 import re
 import shutil
 import tempfile
@@ -26,6 +28,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import sqlalchemy as sa
 
 import source_db_projetado as source
 from client_model import Base
@@ -370,6 +373,54 @@ def test_null_in_not_null_column_is_refused(base: source.SourceBase, db: Databas
                                   f"1 nulos na coluna NOT NULL {column}")
 
 
+def write_chunks(origin: Path, chunks: dict[str, pa.Table]) -> None:
+    """Grava cada tabela Arrow como ``chunk_0.parquet`` na pasta de ``chunks`` sob ``origin``."""
+    for relative, rows in chunks.items():
+        (origin / relative).mkdir(parents=True)
+        pq.write_table(rows, origin / relative / "chunk_0.parquet")
+
+
+def test_text_is_measured_as_in_cast_and_the_audit(folder: Path, config: DuckDBConfig) -> None:
+    """A carga mede o texto pelos limites de ``cast`` e da auditoria: acima dos 36 bytes numa
+    coluna ``Uuid`` e acima dos 65.535 bytes numa coluna JSON ou ``Text`` a partição é recusada
+    sem commit; o ``n`` de ``Text(n)`` é ignorado, como no DDL, e 10 bytes numa coluna ``Text(5)``
+    entram."""
+    metadata = sa.MetaData()
+    documents = sa.Table(
+        "cad_documentos", metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("chave", sa.Uuid), sa.Column("documento", sa.JSON), sa.Column("nota", sa.Text),
+    )
+    notes = sa.Table(
+        "cad_notas", metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("nota", sa.Text(5)),
+    )
+    origin = folder / "origem"
+    write_chunks(origin, {
+        "cad_documentos": pa.table({"id": [1], "chave": ["x" * 40],
+                                    "documento": [json.dumps({"k": "z" * 70000})],
+                                    "nota": ["y" * 70000]}),
+        "cad_notas": pa.table({"id": [1], "nota": ["0123456789"]}),
+    })
+    db = Database(str(folder / "delta"), "prd", metadata)
+
+    # Os três textos acima do limite do contrato, recusados sem commit.
+    with pytest.raises(ContractError) as refusal:
+        load.initial_load(db, documents, str(origin), config=config)
+    message = str(refusal.value)
+    assert message.startswith("cad_documentos tabela inteira: ")
+    assert "1 textos acima dos 36 bytes de um Uuid em chave" in message
+    assert "1 documentos JSON acima de 65535 bytes em documento" in message
+    assert "1 textos acima do teto de 65535 bytes em nota" in message
+    assert delta.open_table(db.uri(documents), db.storage).version() == 0
+
+    # O Text(5) leva o teto do VARCHAR, e não o 5.
+    assert load.initial_load(db, notes, str(origin), config=config) == [None]
+    (written,) = delta.open_table(db.uri(notes), db.storage).file_uris()
+    assert pq.read_table(written).column("nota").to_pylist() == ["0123456789"]
+
+
 # ---------------------------------------------------------------- o Double não finito
 
 
@@ -478,6 +529,55 @@ def test_load_report_matches_and_detects_a_difference(base: source.SourceBase, d
     differing = [partition for partition in report.partitions if not partition.matches]
     assert [partition.value for partition in differing] == ["2026-03-31"]
     assert differing[0].delta_rows == differing[0].source_rows - 1
+
+
+def test_load_report_reads_only_what_the_load_reads(folder: Path, config: DuckDBConfig) -> None:
+    """O relatório lê na origem só as pastas que a carga lê: a pasta de partição com valor fora
+    da regra e a pasta fora do padrão ficam em ``skipped``, fora das contas e das conversões, e o
+    relatório confere; na tabela sem partição, a subpasta fica fora das conversões. O
+    ``read_parquet`` de ``<tabela>/*/*.parquet`` com ``hive_partitioning`` recusa uma pasta fora do
+    padrão como ``backup/`` com ``Hive partition mismatch`` (leitura de 2026-09-28)."""
+    metadata = sa.MetaData()
+    parts = sa.Table(
+        "cad_partes", metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("valor", sa.Double),
+        sa.Column("data_str", sa.String(10), nullable=False),
+        info={"serialize_db": {"partition_by": ["data_str"]}},
+    )
+    whole = sa.Table(
+        "cad_inteira", metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("valor", sa.Double),
+    )
+    # Os arquivos que a carga lê têm os tipos do contrato; os que ela não lê, um int32 na chave.
+    contract_rows = pa.table({"id": pa.array([1], pa.int64()), "valor": [1.5]})
+    other_rows = pa.table({"id": pa.array([2], pa.int32()), "valor": [2.5]})
+    origin = folder / "origem"
+    write_chunks(origin, {
+        "cad_partes/data_str=2026-01-31": contract_rows,
+        "cad_partes/data_str=2026 Q1": other_rows,
+        "cad_partes/backup": other_rows,
+        "cad_inteira": contract_rows,
+        "cad_inteira/backup": other_rows,
+    })
+    db = Database(str(folder / "delta"), "prd", metadata)
+
+    # A tabela particionada: só a partição da regra, carregada e conferida.
+    assert load.initial_load(db, parts, str(origin), config=config) == ["2026-01-31"]
+    report = load.load_report(db, parts, str(origin), config=config)
+    assert report.matches
+    assert [partition.value for partition in report.partitions] == ["2026-01-31"]
+    assert report.partitions[0].source_rows == 1
+    assert report.skipped == ("backup", "data_str=2026 Q1")
+    assert report.conversions == ()
+
+    # A tabela sem partição: os arquivos da pasta, sem a subpasta.
+    assert load.initial_load(db, whole, str(origin), config=config) == [None]
+    report = load.load_report(db, whole, str(origin), config=config)
+    assert report.matches
+    assert report.partitions[0].source_rows == 1
+    assert report.conversions == ()
 
 
 def test_foreign_key_orphans_are_reported_not_blocking(base: source.SourceBase, db: Database,

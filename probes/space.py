@@ -71,8 +71,9 @@ PACKAGES = (
 # chamam.
 ENDPOINT_SERVICES = ("s3", "sts", "redshift", "redshift-serverless", "redshift-data", "glue", "athena", "kms", "secretsmanager", "sagemaker", "datazone")
 
-# As extensões do DuckDB que a biblioteca carrega; as duas últimas vêm embutidas no binário.
-EXTENSIONS = ("httpfs", "delta", "aws", "parquet", "json")
+# As extensões do DuckDB que SP-10 carrega: httpfs e delta, que a biblioteca carrega, e parquet e
+# json, embutidas no binário.
+EXTENSIONS = ("httpfs", "delta", "parquet", "json")
 
 # As variáveis da cadeia de credenciais do boto3, na ordem em que a tabela as mostra.
 CREDENTIAL_VARIABLES = (
@@ -116,19 +117,25 @@ def package_version(name: str) -> str | None:
 def pinned_requirements() -> dict[str, str | None]:
     """Os pacotes das dependências de execução e do grupo ``dev`` de ``pyproject.toml``.
 
-    A chave é o nome de importação e o valor, a versão quando ela é ``==``.
+    A chave é o nome de importação e o valor, a versão quando alguma entrada a fixa por ``==``.
     """
     with open(probelib.REPO_ROOT / "pyproject.toml", "rb") as handle:
         pyproject = tomllib.load(handle)
     entries = pyproject.get("project", {}).get("dependencies", []) + pyproject.get("dependency-groups", {}).get("dev", [])
 
     # "deltalake==1.6.4" vira {"deltalake": "1.6.4"}; "boto3" vira {"boto3": None}; nomes com "-"
-    # viram "_".
+    # viram "_". Uma entrada sem == não apaga a versão que outra fixou: o boto3>=1.40 do grupo dev
+    # não desfaz o boto3==1.43.102 das dependências de execução.
     found: dict[str, str | None] = {}
     for entry in entries:
         match = re.match(r"\s*([A-Za-z0-9_.-]+)\s*(?:==\s*([^\s;,]+))?", entry) if isinstance(entry, str) else None
-        if match:
-            found[match.group(1).lower().replace("-", "_")] = match.group(2)
+        if not match:
+            continue
+        name = match.group(1).lower().replace("-", "_")
+        version = match.group(2)
+        if version is None and found.get(name):
+            continue
+        found[name] = version
     return found
 
 
@@ -406,7 +413,8 @@ def python_packages(report: Report) -> None:
         report.fail("SP-8", "Python 3.13 neste interpretador", f"{here['version']}: o projeto fixa 3.13")
 
     # SP-9: as dependências de execução e o grupo dev de pyproject.toml são a referência: cada
-    # pacote presente, e na versão fixada quando ela é ==.
+    # pacote presente, e na versão fixada quando ela é ==. A correção sincroniza todos os grupos:
+    # uv sync --group dev tiraria do venv os outros grupos.
     requirements = pinned_requirements()
     installed = {name: here[name] if name in here else package_version(name) for name in requirements}
     wrong = [
@@ -415,9 +423,18 @@ def python_packages(report: Report) -> None:
         if installed[name] is None or (version and installed[name] != version)
     ]
     if wrong:
-        report.fail("SP-9", "dependências e grupo dev do pyproject neste interpretador", "; ".join(wrong) + "; rode uv sync --group dev, ou prepare_offline.sh de novo, na pasta do projeto")
+        report.fail("SP-9", "dependências e grupo dev do pyproject neste interpretador", "; ".join(wrong) + "; rode uv sync --all-groups, ou prepare_offline.sh de novo, na pasta do projeto")
     else:
         report.ok("SP-9", "dependências e grupo dev do pyproject neste interpretador", ", ".join(f"{name} {installed[name]}" for name in requirements))
+
+
+def extensions_check(report: Report, missing: list[str], directory: str | None) -> None:
+    """``SP-10``: as extensões que não carregaram da pasta ``directory``; qualquer uma reprova."""
+    source = directory or "pasta padrão"
+    if missing:
+        report.fail("SP-10", "extensões do DuckDB", f"não carregam: {', '.join(missing)}; rode prepare_offline.sh ou informe SERIALIZE_DB_DUCKDB_EXTENSIONS")
+    else:
+        report.ok("SP-10", "extensões do DuckDB", ", ".join(EXTENSIONS) + f" de {source}")
 
 
 def duckdb_section(report: Report) -> None:
@@ -476,14 +493,11 @@ def duckdb_section(report: Report) -> None:
         "duckdb_extensions()",
         lambda: connection.execute(
             "SELECT extension_name, installed, loaded, install_path, extension_version FROM duckdb_extensions() "
-            "WHERE extension_name IN ('httpfs', 'delta', 'aws', 'parquet', 'json') ORDER BY 1"
+            "WHERE extension_name IN ('httpfs', 'delta', 'parquet', 'json') ORDER BY 1"
         ).fetchall(),
         render=render_extensions,
     )
-    if missing:
-        report.fail("SP-10", "extensões do DuckDB", f"não carregam: {', '.join(missing)}; rode prepare_offline.sh ou informe SERIALIZE_DB_DUCKDB_EXTENSIONS")
-    else:
-        report.ok("SP-10", "extensões do DuckDB", ", ".join(EXTENSIONS) + f" de {directory or 'pasta padrão'}")
+    extensions_check(report, missing, directory)
 
 
 def main() -> int:

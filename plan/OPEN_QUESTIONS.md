@@ -182,8 +182,32 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
   `create_table` e `append` dos motores, e a docstring do `appender` nada diz sobre dois escritores
   na mesma tabela até a rodada.
 
+## Achados da revisão do repositório
+
+A revisão de 2026-09-28 ([`POC.md`](POC.md), seção "O que a revisão do repositório de 2026-09-28
+reproduziu") corrigiu o que não dependia de decisão, e as decisões do usuário do mesmo dia
+fecharam os demais achados; cada item abaixo espera uma rodada no alvo.
+
+- **A lista de colunas com `FILLRECORD` nos `COPY` do Redshift.** Desde a revisão de 2026-09-28,
+  todo `COPY` da biblioteca lista as colunas do arquivo, com `FILLRECORD`: o do `appender`, direto
+  e pela staging `_carga`, as do primeiro lote, e os da carga do Delta, no `ingest`, no
+  `pinned_delta` e na publicação, as do rodapé, um por lista de colunas dos arquivos (decisão do
+  usuário de 2026-09-28, [`POC.md`](POC.md)). O alvo leu a lista e o `FILLRECORD` cada um sozinho
+  em 2026-09-21, nunca juntos. `test_appender_loads_a_batch_without_a_middle_column` e os casos da
+  coluna nova no meio e da reordenação de `tests/test_engine_redshift.py` e de
+  `tests/test_publication.py` leem a combinação na próxima bateria; se o alvo a recusar, o `COPY`
+  deixa o `FILLRECORD` quando passa a lista, que já deixa nula a coluna fora dela.
+- **A checagem do DuckDB de `probes/diagnose_aws.py` no alvo.** Desde a decisão do usuário de
+  2026-09-28, a checagem abre o DuckDB pelo `Storage.duckdb_connect` da biblioteca, com a chave do
+  `boto3` e as extensões `httpfs` e `delta`, e a `aws` saiu de `prepare_offline.sh` e do `SP-10` de
+  `probes/space.py`; no moto, a linha do DuckDB passou a listar o prefixo ([`POC.md`](POC.md)). A
+  regra do instrumento validado pede a rodada no alvo: a próxima bateria lê a linha do DuckDB do
+  `diagnose_aws.py` e o `SP-10`.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente; os itens
-que esperam o usuário estão na lista acima.
+tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
+escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; as
+outras etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista
+acima.

@@ -111,8 +111,8 @@ desde então, e `check_models` confere o alvo de cada chave estrangeira. A
 [política de restrições](schema.md) dispensa a cláusula: no sandbox as chaves
 estrangeiras ficam de fora e a auditoria verifica a integridade referencial sob pedido
 (`foreign_keys=True`), com a tabela referenciada ingerida na versão fixada, antes da publicação: é a
-verificação adiada feita pelo próprio pipeline. No Redshift a chave é declarada só quando auditada,
-sem `deferrable`.
+verificação adiada feita pelo próprio pipeline. No Redshift só a tabela publicada declara chave, a
+`PRIMARY KEY` informativa de `published_ddl`, sem `deferrable`; o sandbox não declara nenhuma.
 
 O nome do esquema vai em `Table.schema` ou em `MetaData(schema=...)`; `BLANK_SCHEMA` exclui uma tabela
 do padrão. A opção de execução `schema_translate_map` troca nomes de esquema por conexão, útil quando

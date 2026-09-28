@@ -65,16 +65,19 @@ Exemplo:
         --metadata pipeline.models:Base.metadata --table cad_lancamentos
 
 O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff
-impresso, quando a auditoria reprova e quando a carga acha uma partição fora do contrato ou uma
-diferença de contagem ou soma; 2 no erro de uso, na configuração do Redshift sem conexão, na
-tabela fora do modelo ou sem Delta, na partição acima do ``String(n)`` da coluna de partição, no
-``execution_id`` longo demais para o prefixo do sandbox do Redshift, no ``ContractError`` do
-pipeline, no conflito da execução e da carga, na publicação sem a tabela de controle, sem
-``--snapshot`` nem ``--channel``, do snapshot ou do canal ausente, do snapshot arquivado ou da
-tabela fora do snapshot, no modelo fora do contrato e na origem ausente ou fora dos armazenamentos
-da carga, no snapshot repetido ou ausente, no canal sem ``--name`` e ``--snapshot`` juntos, no
-canal ``current``, na compactação depois de um snapshot na versão atual, no arquivo do snapshot de
-um canal e no destino da exportação não vazio ou fora da raiz.
+impresso, quando a auditoria reprova, também pelo valor fora do contrato que o ``ingest`` da
+auditoria recusa, impresso com o erro do banco, e quando a carga acha uma partição fora do
+contrato ou uma diferença de contagem ou soma; 2 no erro de uso, como o motor fora de ``duckdb`` e
+``redshift`` e ``--partitions`` na auditoria de uma tabela sem partição, na configuração do
+Redshift sem conexão ou com a porta que não é número, na tabela fora do modelo ou sem Delta, na
+partição acima do ``String(n)`` da coluna de partição, no ``execution_id`` longo demais para o
+prefixo do sandbox do Redshift, no ``ContractError`` do pipeline, no conflito da execução, da
+carga e do ``archive``, na tabela ou no arquivo de controle, na publicação sem a tabela de
+controle, sem ``--snapshot`` nem ``--channel``, do snapshot ou do canal ausente, do snapshot
+arquivado ou da tabela fora do snapshot, no modelo fora do contrato e na origem ausente ou fora
+dos armazenamentos da carga, no snapshot repetido ou ausente, no canal sem ``--name`` e
+``--snapshot`` juntos, no canal ``current``, na compactação depois de um snapshot na versão
+atual, no arquivo do snapshot de um canal e no destino da exportação não vazio ou fora da raiz.
 
 .. include:: ../../docs/operacao.md
 """
@@ -89,9 +92,10 @@ import pkgutil
 import sys
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
+import duckdb
 import sqlalchemy as sa
 
 from serialize_db import audit, delta, load, schema, sql
@@ -178,6 +182,15 @@ def _environment_default() -> str:
     return os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dsv"
 
 
+def _engine_argument(text: str) -> str:
+    """O motor de ``--engine``, ``duckdb`` ou ``redshift``. O ``argparse`` confere o padrão, o de
+    ``SERIALIZE_DB_ENGINE``, só por esta função, porque o ``choices`` não vale para o padrão."""
+    if text not in ("duckdb", "redshift"):
+        raise argparse.ArgumentTypeError(
+            f"motor {text!r}: use duckdb ou redshift, em --engine ou SERIALIZE_DB_ENGINE")
+    return text
+
+
 def _add_database_arguments(parser: argparse.ArgumentParser) -> None:
     """``--metadata``, ``--root`` e ``--environment`` obrigatórios, com os padrões
     ``SERIALIZE_DB_*``: os de ``run``, de ``load`` e das rotinas de operação."""
@@ -194,7 +207,7 @@ def _add_run_parser(commands: argparse._SubParsersAction) -> None:
     """``serialize-db run``, com as variáveis ``SERIALIZE_DB_*`` como padrão."""
     run = commands.add_parser("run", help="executa o pipeline, de uma partição ou sem partição")
     _add_database_arguments(run)
-    run.add_argument("--engine", choices=["duckdb", "redshift"],
+    run.add_argument("--engine", type=_engine_argument, choices=["duckdb", "redshift"],
                      default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb")
     run.add_argument("--partition", type=_name_argument, default=None,
                      help="a partição da execução; sem ela, a execução não tem partição")
@@ -317,7 +330,7 @@ def _add_audit_parser(commands: argparse._SubParsersAction) -> None:
     audit_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None)
     audit_command.add_argument("--foreign-keys", action="store_true")
     audit_command.add_argument("--key-scope", choices=["partition", "table"], default=None)
-    audit_command.add_argument("--engine", choices=["duckdb", "redshift"],
+    audit_command.add_argument("--engine", type=_engine_argument, choices=["duckdb", "redshift"],
                                default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb",
                                help="o dialeto do texto e o motor da auditoria")
     audit_command.add_argument("--sql", action="store_true",
@@ -401,19 +414,22 @@ def _sql_check(args: argparse.Namespace) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     """Abre a execução, entrega-a ao pipeline e devolve o código pelo resultado: 1 na auditoria
-    reprovada, 2 no conflito e no ``ContractError`` da abertura ou do pipeline, como o motor que
-    não serve, a configuração do Redshift sem conexão e o ``execution_id`` longo demais para o
-    prefixo do sandbox."""
-    redshift = None
-    if args.engine == "redshift":
-        # O módulo do Redshift entra só com o motor: importar o pacote não carrega o driver.
-        from serialize_db.engine.redshift import RedshiftConfig
-
-        redshift = RedshiftConfig.from_environment()
+    reprovada, 2 no conflito na tabela e no arquivo de controle e no ``ContractError`` da
+    abertura, do pipeline ou da saída, como a configuração do Redshift sem conexão ou com a porta
+    que não é número, o ``execution_id`` longo demais para o prefixo do sandbox e o nome de
+    snapshot já usado, que ``run.snapshot`` recusa antes dos commits e a saída recusa quando
+    outro escritor o grava depois da marcação."""
     try:
+        redshift = None
+        if args.engine == "redshift":
+            # O módulo do Redshift entra só com o motor: importar o pacote não carrega o driver.
+            from serialize_db.engine.redshift import RedshiftConfig
+
+            redshift = RedshiftConfig.from_environment()
         execution = Execution(Database(args.root, args.environment, args.metadata), args.engine,
                               args.partition, args.execution_id, redshift=redshift)
-        # A entrada do with abre o motor, que confere a conexão e o prefixo do sandbox.
+        # A entrada do with abre o motor, que confere a conexão e o prefixo do sandbox; a saída
+        # grava o snapshot marcado, na escrita condicional do arquivo de controle.
         with execution as run:
             args.pipeline(run)
     except ContractError as error:
@@ -422,7 +438,7 @@ def _run(args: argparse.Namespace) -> int:
     except AuditFailed as error:
         print(f"serialize-db run: auditoria reprovada: {error}", file=sys.stderr)
         return 1
-    except ExecutionConflict as error:
+    except (ExecutionConflict, ConflictError) as error:
         print(f"serialize-db run: conflito: {error}", file=sys.stderr)
         return 2
     return 0
@@ -440,23 +456,45 @@ def _print_report(report: AuditReport) -> None:
     for reason in report.not_run:
         print(f"não rodou: {reason}")
     for value, totals in report.totals.items():
-        print(f"partição {value}: {totals}")
+        # A tabela sem partição soma numa linha só, sob None.
+        label = "tabela inteira" if value is None else f"partição {value}"
+        print(f"{label}: {totals}")
 
 
 def _audit_engine(args: argparse.Namespace, db: Database, execution_id: str) -> Engine:
-    """O sandbox próprio da auditoria: o motor de ``--engine``."""
+    """O sandbox próprio da auditoria: o motor de ``--engine``; outro nome é ``ContractError``,
+    nunca o DuckDB."""
+    if args.engine == "duckdb":
+        return DuckDBEngine(DuckDBConfig(), execution_id, db.storage)
     if args.engine == "redshift":
         # O módulo do Redshift entra só com o motor: importar o pacote não carrega o driver.
         from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 
         return RedshiftEngine(RedshiftConfig.from_environment(), execution_id, db.storage,
                               db.staging_prefix(execution_id))
-    return DuckDBEngine(DuckDBConfig(), execution_id, db.storage)
+    raise ContractError(f"motor {args.engine!r}: use 'duckdb' ou 'redshift'")
+
+
+def _contract_refusals(engine_name: str) -> tuple[type[Exception], ...]:
+    """As classes dos erros com que o ``ingest`` pelo DDL do modelo recusa um valor fora do
+    contrato, no motor de ``--engine``: no DuckDB, ``duckdb.ConstraintException``, o nulo numa
+    coluna ``NOT NULL``, e ``duckdb.ConversionException``, o JSON malformado; no Redshift,
+    ``redshift_connector.Error``. No Redshift, a classe não separa a recusa de outro erro do
+    servidor, que também sai como reprovação: o substituto dá às duas recusas o
+    ``ProgrammingError`` com ``XX000``."""
+    if engine_name == "redshift":
+        # O driver entra só com o motor: importar o pacote não o carrega.
+        import redshift_connector
+
+        return (redshift_connector.Error,)
+    return (duckdb.ConstraintException, duckdb.ConversionException)
 
 
 def _audit_current(args: argparse.Namespace, table: sa.Table) -> int:
     """A auditoria da versão atual do Delta, num sandbox próprio do motor de ``--engine``: 1 na
-    auditoria reprovada, 2 na tabela sem Delta e na configuração do Redshift sem conexão."""
+    auditoria reprovada, também quando o ``ingest`` recusa um valor fora do contrato, impresso com
+    o erro do banco e sem as outras contagens; 2 na tabela sem Delta e na configuração do Redshift
+    sem conexão ou com a porta que não é número."""
     db = Database(args.root, args.environment, args.metadata)
     uri = db.uri(table)
     if not delta.table_exists(uri, db.storage):
@@ -476,8 +514,17 @@ def _audit_current(args: argparse.Namespace, table: sa.Table) -> int:
     except ContractError as error:
         print(f"serialize-db audit: {error}", file=sys.stderr)
         return 2
+    refusals = _contract_refusals(args.engine)
     with sandbox as engine:
-        engine.ingest(table, uri, version, args.partitions, materialize=True)
+        # O nulo numa coluna NOT NULL e o JSON malformado derrubam o ingest pelo DDL do modelo
+        # antes das verificações que os contariam: a auditoria reprova com o erro do banco. Outro
+        # erro do DuckDB, como o acesso negado a um arquivo, sobe com o traceback.
+        try:
+            engine.ingest(table, uri, version, args.partitions, materialize=True)
+        except refusals as error:
+            print(f"{table.name} na versão {version}:")
+            print(f"ingestão: reprovada ({error})")
+            return 1
         report = engine.audit(table, args.partitions, uri, version, args.foreign_keys,
                               args.key_scope, referenced)
     print(f"{table.name} na versão {version}:")
@@ -487,10 +534,15 @@ def _audit_current(args: argparse.Namespace, table: sa.Table) -> int:
 
 def _audit(args: argparse.Namespace) -> int:
     """``--sql`` imprime o texto das verificações; sem ele, a auditoria da versão atual do
-    Delta."""
+    Delta. 2 na tabela fora do modelo e em ``--partitions`` numa tabela sem partição, antes de
+    abrir um motor."""
     table = args.metadata.tables.get(args.table)
     if table is None:
         print(f"serialize-db audit: a tabela {args.table} não está nos modelos", file=sys.stderr)
+        return 2
+    if args.partitions is not None and schema.table_options(table).partition_by is None:
+        print(f"serialize-db audit: {table.name} não tem partição; audite a tabela inteira, sem "
+              "--partitions", file=sys.stderr)
         return 2
     if args.sql:
         texts = audit.audit_sql(table, args.engine, args.partitions, args.foreign_keys,
@@ -521,8 +573,8 @@ def _publish_redshift(args: argparse.Namespace) -> int:
     """``--init`` cria a tabela de controle; ``--status`` mostra o estado; ``--unpublish``
     despublica; sem os três, publica as tabelas no snapshot de ``--snapshot`` ou do canal de
     ``--channel``, um dos dois obrigatório. 2 no erro de uso, na configuração do Redshift sem
-    conexão, sem a tabela de controle, no snapshot ou no canal ausente, no snapshot arquivado, na
-    tabela fora do snapshot e no conflito."""
+    conexão ou com a porta que não é número, sem a tabela de controle, no snapshot ou no canal
+    ausente, no snapshot arquivado, na tabela fora do snapshot e no conflito."""
     # Os módulos do Redshift entram só no publish_redshift: importar o pacote não carrega o
     # driver.
     from serialize_db import publication
@@ -537,7 +589,11 @@ def _publish_redshift(args: argparse.Namespace) -> int:
         print("serialize-db publish_redshift: informe --snapshot <nome> ou --channel <nome> "
               "(default, current)", file=sys.stderr)
         return 2
-    config = RedshiftConfig.from_environment()
+    try:
+        config = RedshiftConfig.from_environment()
+    except ContractError as error:
+        print(f"serialize-db publish_redshift: {error}", file=sys.stderr)
+        return 2
     if args.init:
         try:
             publication.create_publications_table(config)
@@ -601,10 +657,17 @@ def _publication_id(execution_id: str | None) -> str:
 
 
 def _print_statuses(statuses: list[PublicationStatus]) -> None:
-    """Uma linha por tabela: a versão publicada, a atual e as partições pendentes."""
+    """Uma linha por tabela: a versão publicada, ou ``nunca publicada``, a atual e as partições
+    pendentes, com a ``tabela inteira`` da tabela sem partição."""
     for status in statuses:
-        print(f"{status.table}: publicada {status.published_version}, atual "
-              f"{status.current_version}, pendentes {list(status.pending_partitions)}")
+        if status.published_version is None:
+            published = "nunca publicada"
+        else:
+            published = f"publicada {status.published_version}"
+        # A tabela sem partição fica pendente inteira, com o valor None.
+        pending = ["tabela inteira" if value is None else value
+                   for value in status.pending_partitions]
+        print(f"{status.table}: {published}, atual {status.current_version}, pendentes {pending}")
 
 
 def _print_published(versions: dict[str, int]) -> None:
@@ -622,6 +685,15 @@ def _print_unpublished(versions: dict[str, int | None]) -> None:
             print(f"{name}: {version}")
 
 
+def _side_text(side: str, rows: int | None, sums: Mapping[str, object],
+               nonfinite: Mapping[str, int]) -> str:
+    """Um lado da diferença da carga: as linhas, as somas e os não finitos, ou ``ausente`` quando
+    a partição falta nele."""
+    if rows is None:
+        return f"{side} ausente"
+    return f"{side} {rows} linhas {dict(sums)} não finitos {dict(nonfinite)}"
+
+
 def _print_load_report(report: LoadReport, loaded: list[str | None]) -> None:
     """As linhas de uma tabela da carga: as partições gravadas agora, cada diferença, o veredito,
     as conversões de tipo e o que ficou fora do padrão."""
@@ -634,10 +706,11 @@ def _print_load_report(report: LoadReport, loaded: list[str | None]) -> None:
     for partition in report.partitions:
         if not partition.matches:
             where = "na tabela inteira" if partition.value is None else f"em {partition.value}"
-            print(f"  DIFERENÇA {where}: origem {partition.source_rows} linhas "
-                  f"{dict(partition.source_sums)} não finitos {dict(partition.source_nonfinite)}, "
-                  f"Delta {partition.delta_rows} linhas {dict(partition.delta_sums)} não finitos "
-                  f"{dict(partition.delta_nonfinite)}")
+            source = _side_text("origem", partition.source_rows, partition.source_sums,
+                                partition.source_nonfinite)
+            in_delta = _side_text("Delta", partition.delta_rows, partition.delta_sums,
+                                  partition.delta_nonfinite)
+            print(f"  DIFERENÇA {where}: {source}, {in_delta}")
     verdict = "contagens e somas iguais" if report.matches else "com diferenças"
     print(f"  {len(report.partitions)} partição(ões) conferida(s), {verdict}")
     if report.conversions:
@@ -828,8 +901,9 @@ def _archive(args: argparse.Namespace) -> int:
     """A cópia de cada tabela do snapshot para ``arquivo/<nome>/``, com o tempo e o pico de RSS
     impressos por tabela, e a entrada movida para ``archived``; 2 no snapshot ausente de
     ``snapshots`` ou apontado por um canal, na tabela do snapshot que já não existe na raiz e no
-    conflito de escrita. A repetição depois de uma interrupção continua a cópia: ``deep_copy``
-    pula as partições já registradas no arquivo."""
+    conflito de escrita, no commit da cópia de uma tabela ou no arquivo de controle. A repetição
+    depois de uma interrupção continua a cópia: ``deep_copy`` pula as partições já registradas no
+    arquivo."""
     db = Database(args.root, args.environment, args.metadata)
     storage = db.storage
     control, _ = delta.read_snapshots(storage, db.environment)
@@ -856,7 +930,13 @@ def _archive(args: argparse.Namespace) -> int:
     # um arquivo pela metade.
     for name, version, source, destination in pending:
         started = time.perf_counter()
-        copied = delta.deep_copy(source, version, destination, storage)
+        # O commit de uma partição que perde para outro escritor da cópia sai com 2; a repetição
+        # continua de onde ela parou.
+        try:
+            copied = delta.deep_copy(source, version, destination, storage)
+        except ExecutionConflict as error:
+            print(f"serialize-db archive: conflito na cópia de {name}: {error}", file=sys.stderr)
+            return 2
         print(f"{name}: versão {version} copiada para {destination}, versão {copied} no arquivo, "
               f"{_measure(started)}")
     try:
