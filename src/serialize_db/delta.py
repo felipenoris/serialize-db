@@ -1481,7 +1481,8 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
     banco.
 
     A escrita é condicional: ``Storage.create_text`` no primeiro snapshot, e ``if_match`` com a
-    impressão da leitura nos seguintes.
+    impressão da leitura nos seguintes. A entrada é imutável: nenhuma função do pacote muda as
+    versões dela, e o nome continua ocupado depois de ``archive_snapshot``.
 
     Exemplo:
 

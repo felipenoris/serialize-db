@@ -826,6 +826,10 @@ class Execution:
 
         O snapshot não move o canal ``default``: ``serialize-db channel`` o aponta depois.
 
+        O nome é imutável: a entrada gravada não muda, e o nome não volta a ser usado, nem depois
+        do arquivamento. Refazer os dados de um snapshot é uma execução nova marcada com outro
+        nome, para o qual ``serialize-db channel`` aponta o canal.
+
         Exemplo:
 
         .. code-block:: python

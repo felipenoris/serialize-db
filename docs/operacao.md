@@ -43,6 +43,10 @@ escrita condicional; outro escritor entre a leitura e a escrita dá
 `serialize_db.errors.ConflictError`, e o comando se repete. As versões marcadas ficam legíveis
 qualquer que seja a retenção do `vacuum`.
 
+O nome de um snapshot é imutável: a entrada gravada nunca muda de versões, e o nome não volta a ser
+usado, nem depois do arquivamento. O leitor, a publicação e os canais citam o snapshot pelo nome, e
+o arquivamento o usa na pasta `arquivo/<nome>/`.
+
 ### Canal do snapshot
 
 Depois do snapshot que os clientes vão ler, o canal `default` do ambiente aponta para ele: é o
@@ -81,6 +85,21 @@ controle com a versão e o `--execution-id`; a tabela do modelo fora do snapshot
 partições alteradas entre as duas versões recebem os arquivos da versão pedida, e a partição que
 só a versão publicada tinha sai. `--channel current` publica a versão atual de cada tabela, sem
 snapshot.
+
+### Refazer um snapshot
+
+Os dados de um snapshot já gravado se refazem num snapshot novo, e o canal passa a apontar para ele:
+
+1. A execução roda de novo marcada com outro nome, como `run.snapshot("2026T3.r2")`. O
+   `publish_delta` substitui as partições refeitas, e a entrada nova leva a versão atual de toda
+   tabela do ambiente, inclusive das que não mudaram.
+2. `serialize-db channel --name default --snapshot 2026T3.r2` aponta o canal para o snapshot novo,
+   que o leitor Delta passa a abrir sem argumento.
+3. `serialize-db publish_redshift --channel default` leva ao Redshift as partições alteradas desde
+   a versão publicada.
+
+O `2026T3` continua legível pelo nome e prende as versões dele no `vacuum` até o `archive`. Se a
+correção não servir, o canal volta para `2026T3`, e a publicação pelo canal volta as tabelas.
 
 ### Compactação
 

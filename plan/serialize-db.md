@@ -276,7 +276,9 @@ versão lida. O Delta fica intacto, e a publicação seguinte recria a tabela co
    nova e as só lidas na versão fixada.
    `serialize-db channel --name default --snapshot 2026T3` aponta depois o canal `default`, o
    snapshot que o leitor abre sem argumento e que `serialize-db publish_redshift --channel default`
-   publica; `archive` recusa o snapshot de um canal ([etapa 10](PLAN-STAGE-10.md)).
+   publica; `archive` recusa o snapshot de um canal ([etapa 10](PLAN-STAGE-10.md)). O nome é
+   imutável e não volta a ser usado, nem arquivado: refazer os dados de um snapshot é uma execução
+   nova marcada com outro nome, e o canal passa a apontar para ela.
 2. `compact` roda antes do snapshot, nunca depois, porque a compactação reescreve arquivos que o
    snapshot continua referenciando.
 3. Mensalmente, `vacuum_keeping_snapshots` lista com `keep_versions` lido do arquivo de controle,

@@ -341,7 +341,9 @@ cada um, e relê a versão pelos dois leitores, desfazendo o commit numa diferen
 `NOT NULL` relaxado, comentários) e recusa com `serialize_db.errors.SchemaDiffRefused` o que só
 `serialize_db.delta.rewrite` resolve, num commit: renomeação, remoção e mudança de tipo.
 `serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo de controle do
-ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva.
+ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva. O nome do snapshot é
+imutável: a entrada não muda depois de gravada, e o nome não volta a ser usado, nem depois do
+arquivamento.
 
 ### Carregar a base Parquet atual
 
@@ -421,7 +423,10 @@ abertura. Cada partição sai do sandbox num arquivo que o motor grava e entra n
 execução: os commits levam o nome, e o encerramento sem erro grava as versões de todas as tabelas
 no arquivo de controle do ambiente; `serialize-db channel --name default --snapshot 2026T3` aponta
 depois o canal `default`, o snapshot que o leitor Delta lê sem argumento e que
-`serialize-db publish_redshift --channel default` publica.
+`serialize-db publish_redshift --channel default` publica. Refazer os dados de um snapshot é uma
+execução nova, marcada com outro nome (`run.snapshot("2026T3.r2")`), seguida do canal apontado
+para o nome novo; o `2026T3` continua legível pelo nome, e o runbook na página de
+`serialize_db.cli`, seção "Refazer um snapshot", traz os comandos.
 
 A linha de comando abre a mesma execução para uma função `modulo:funcao` que recebe `run`, e
 `serialize-db audit` imprime o texto das verificações de uma tabela ou roda a auditoria sobre a
