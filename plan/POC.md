@@ -3492,8 +3492,9 @@ comandos de `SUITE.md`, a partir da `main` do dia, numa máquina de 8 vCPUs e 15
 3.13.15, DuckDB 1.5.5, pyarrow 25.0.1, `sa-east-1`), com a pasta preparada de novo por
 `prepare_offline.sh`: `SP-9` leu na `.venv` o deltalake 1.6.6, o boto3 1.43.102, o
 `redshift_connector` 2.1.17 e o sqlglot 30.19.0. É a primeira bateria com o deltalake 1.6.6 e com
-a etapa 10, e a primeira rodada de `probes/credentials.py` no alvo. O relatório dela está em
-[`readings/`](readings/README.md); os outros ficam fora de `plan/`, com os achados aqui, e a saída
+a etapa 10, e a primeira rodada de `probes/credentials.py` no alvo. O relatório dela,
+`plan/readings/credentials-2026-09-25-1833.txt`, está no histórico do git; os outros ficam fora de
+`plan/`, com os achados aqui, e a saída
 do leitor, do `export` e do `compact` veio colada na conversa, sem a hora. Nenhum caso das suítes
 falhou.
 
@@ -3543,7 +3544,7 @@ falhou.
   da publicação.
 - **As credenciais de uma hora** (`probes/credentials.py` sobre `<raiz>/prd/cad_contas`, de
   18:33:51 a 19:36:53, 14 rodadas,
-  [`readings/credentials-2026-09-25-1833.txt`](readings/credentials-2026-09-25-1833.txt)):
+  `plan/readings/credentials-2026-09-25-1833.txt`, no histórico do git):
   - **O contêiner trocou a chave a cada cerca de 30,6 minutos.** A chave do início expirava às
     19:19:10, 45 minutos adiante; a cadeia do `boto3` passou a entregar outra, que expira às
     19:49:57, entre 18:48:54 e 18:53:55, e outra, que expira às 20:20:31, entre 19:18:59 e
