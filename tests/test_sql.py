@@ -4,10 +4,11 @@ arquivos.
 Os testes correm sobre o statement de ``plan/sqlalchemy.md`` (o parâmetro, um ``%`` e um ``:``
 em literais, duas tabelas do contrato), sobre os quatro statements do pipeline fictício de
 ``tests/client_model/statements.py``, com os arquivos versionados em ``tests/client_model/sql/``,
-e sobre uma tabela cujos identificadores carregam ``:`` e ``'``. Nada é gravado, exceto o teste
-marcado ``local``, que grava os arquivos de texto SQL sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; o
-texto executa num DuckDB em memória sobre o DDL da etapa 1, e o statement com ``bindparam`` num
-``sqlalchemy.Connection`` do ``duckdb-engine`` criado fora da biblioteca.
+sobre uma tabela cujos identificadores carregam ``:`` e ``'`` e sobre uma com a ``key`` de uma
+coluna diferente do nome. Nada é gravado, exceto os testes marcados ``local``, que gravam os
+arquivos de texto SQL sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; o texto executa num DuckDB em memória
+sobre o DDL da etapa 1, e o statement com ``bindparam`` num ``sqlalchemy.Connection`` do
+``duckdb-engine`` criado fora da biblioteca.
 """
 
 from __future__ import annotations
@@ -276,6 +277,42 @@ def test_prefixed_replaces_every_contract_table() -> None:
     assert sql.referenced_tables(copy) == {"exec_42_cad_lancamentos", "exec_42_dom_veiculos"}
 
 
+def test_prefixed_keeps_the_column_key() -> None:
+    """Uma coluna Core com `key` diferente do nome, `sa.Column("to", ..., key="to_")`, fica com a
+    mesma chave na cópia prefixada: o `values(to_=...)` de um `INSERT` e de um `UPDATE` compila com
+    o nome `"to"`, e o texto roda sobre o DDL da etapa 1. Sem a chave na cópia, o SQLAlchemy
+    recusa o `values(to_=...)` com `Unconsumed column names: to_` (leitura de 2026-09-28)."""
+    metadata = sa.MetaData()
+    contracts = sa.Table(
+        "cad_contratos", metadata,
+        sa.Column("id_contrato", sa.BigInteger),
+        sa.Column("to", sa.String(2), key="to_"),
+        sa.Column("data_str", sa.String(10)),
+    )
+    insert = sa.insert(contracts).values(id_contrato=1, to_="RJ", data_str="2026-08-31")
+    update = (
+        sa.update(contracts)
+        .where(contracts.c.data_str == sa.bindparam("data_str"))
+        .values(to_="SP")
+    )
+    select = sa.select(contracts.c.to_).where(contracts.c.id_contrato == 1)
+    connection = duckdb.connect()
+    connection.execute(schema.ddl(contracts, "duckdb", prefix="exec_42_"))
+
+    # O INSERT e o UPDATE com a chave, e o SELECT que lê o valor gravado.
+    insert_text = sql.render(insert, "duckdb", metadata, prefix="exec_42_")
+    assert " ".join(insert_text.split()) == (
+        'INSERT INTO "exec_42_cad_contratos" ("id_contrato", "to", "data_str") '
+        "VALUES (1, 'RJ', '2026-08-31')")
+    connection.execute(insert_text)
+    update_text = sql.render(update, "duckdb", metadata, prefix="exec_42_")
+    assert """SET "to"='SP'""" in update_text
+    bound, values = sql.bind(update_text, {"data_str": "2026-08-31"}, "duckdb")
+    connection.execute(bound, values)
+    select_text = sql.render(select, "duckdb", metadata, prefix="exec_42_")
+    assert connection.execute(select_text).fetchall() == [("SP",)]
+
+
 def test_referenced_tables_from_core_and_text() -> None:
     """`find_tables` e o sentinela dão o mesmo conjunto para o mesmo comando; o texto sem o
     sentinela não dá tabela alguma."""
@@ -340,6 +377,45 @@ def test_write_sql_files(local_location: LocalLocation) -> None:
     assert sql.check_sql_files(STATEMENTS, ClientBase.metadata, directory) == []
     text = sql.read_sql(directory, "veiculos_novos", "duckdb", prefix="exec_42_")
     assert text.startswith('INSERT INTO "exec_42_dom_veiculos" ("id_veiculo", "nome")')
+
+
+@pytest.mark.local
+def test_check_sql_files_reports_stale_files_and_the_final_newline(
+    local_location: LocalLocation,
+) -> None:
+    """O arquivo sem o `\\n` final difere da geração, com o aviso depois da linha dele, e `write`
+    o regrava; os arquivos de um statement que saiu do dicionário aparecem inteiros como
+    removidos, e `write` os deixa na pasta."""
+    directory = local_location.child("sql-antigos")
+    sql.write_sql_files(STATEMENTS, ClientBase.metadata, directory)
+
+    # O arquivo sem o \n final.
+    path = Path(directory, "saldos_por_conta.redshift.sql")
+    versioned = path.read_text(encoding="utf-8")
+    path.write_text(versioned.removesuffix("\n"), encoding="utf-8")
+    diff = sql.check_sql_files(STATEMENTS, ClientBase.metadata, directory)
+    last_line = versioned.splitlines()[-1]
+    assert diff[0] == f"--- {path}"
+    assert diff[-3:] == [f"-{last_line}", "\\ Sem quebra de linha no fim do arquivo",
+                         f"+{last_line}"]
+    sql.write_sql_files(STATEMENTS, ClientBase.metadata, directory)
+    assert sql.check_sql_files(STATEMENTS, ClientBase.metadata, directory) == []
+
+    # O statement veiculos_novos sai do dicionário: os dois arquivos dele removidos, antes e
+    # depois do write.
+    remaining = dict(STATEMENTS)
+    del remaining["veiculos_novos"]
+    stale = ["veiculos_novos.duckdb.sql", "veiculos_novos.redshift.sql"]
+    diff = sql.check_sql_files(remaining, ClientBase.metadata, directory)
+    assert [line for line in diff if line.startswith("--- ")] == [
+        f"--- {directory}/{name}" for name in stale]
+    added = [line for line in diff if line.startswith("+") and not line.startswith("+++ ")]
+    assert added == []
+    sql.write_sql_files(remaining, ClientBase.metadata, directory)
+    assert sql.check_sql_files(remaining, ClientBase.metadata, directory) == diff
+    for name in stale:
+        Path(directory, name).unlink()
+    assert sql.check_sql_files(remaining, ClientBase.metadata, directory) == []
 
 
 def test_cli_sql_check_reads_the_versioned_files(capsys: pytest.CaptureFixture) -> None:

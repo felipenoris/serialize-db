@@ -153,7 +153,8 @@ _ArrowColumn = pa.Array | pa.ChunkedArray
 def _decimal_type(column: sa.Column) -> pa.DataType:
     """O ``decimal128`` de uma coluna ``Numeric``: sem precisão, 18; sem escala, 0."""
     name = f"{column.table.name}.{column.name}"
-    precision = column.type.precision or 18
+    # A precisão 0 declarada fica 0 e é recusada abaixo; só a ausente vira o padrão 18.
+    precision = 18 if column.type.precision is None else column.type.precision
     scale = column.type.scale or 0
     # O DECIMAL do DuckDB, do Redshift e do Delta vai de 1 a 38 dígitos, e o decimal128 do PyArrow
     # levanta ValueError fora disso.
@@ -292,7 +293,8 @@ class TableOptions:
     """``diststyle`` e ``distkey`` do Redshift; vazio é ``AUTO``."""
     keys: tuple[tuple[str, ...], ...]
     """As chaves que a auditoria confere: a chave primária, as únicas e os índices únicos do
-    modelo, mais ``keys["add"]``, menos ``keys["drop"]``."""
+    modelo, nessa ordem e cada grupo em ordem dos nomes das colunas, mais ``keys["add"]``, menos
+    ``keys["drop"]``."""
 
 
 def _column_names(columns: Iterable[sa.Column]) -> tuple[str, ...]:
@@ -301,25 +303,28 @@ def _column_names(columns: Iterable[sa.Column]) -> tuple[str, ...]:
 
 
 def _keyed_targets(table: sa.Table) -> list[tuple[str, ...]]:
-    """As listas de colunas que uma chave estrangeira pode apontar na tabela: a chave primária e
-    as ``UniqueConstraint``, na ordem declarada; um índice único não serve no DuckDB nem no
-    Redshift."""
+    """As listas de colunas que uma chave estrangeira pode apontar na tabela: a chave primária
+    primeiro, depois as ``UniqueConstraint`` em ordem dos nomes das colunas, porque o SQLAlchemy
+    as guarda num conjunto, cuja ordem muda de um processo a outro; um índice único não serve no
+    DuckDB nem no Redshift."""
     targets = []
     if table.primary_key.columns:
         targets.append(_column_names(table.primary_key.columns))
+    unique = []
     for constraint in table.constraints:
         if isinstance(constraint, sa.UniqueConstraint):
-            targets.append(_column_names(constraint.columns))
-    return targets
+            unique.append(_column_names(constraint.columns))
+    return targets + sorted(unique)
 
 
 def _declared_keys(table: sa.Table) -> list[tuple[str, ...]]:
-    """A chave primária, as ``UniqueConstraint`` e os índices únicos do modelo."""
-    keys = _keyed_targets(table)
+    """A chave primária, as ``UniqueConstraint`` e os índices únicos do modelo, nessa ordem; os
+    índices também saem de um conjunto e vão em ordem dos nomes das colunas."""
+    unique_indexes = []
     for index in table.indexes:
         if index.unique:
-            keys.append(_column_names(index.columns))
-    return keys
+            unique_indexes.append(_column_names(index.columns))
+    return _keyed_targets(table) + sorted(unique_indexes)
 
 
 def _adjusted_keys(keys: list[tuple[str, ...]], info: dict) -> tuple[tuple[str, ...], ...]:
@@ -347,8 +352,9 @@ def table_options(table: sa.Table) -> TableOptions:
 
     :param table: a tabela do modelo.
     :return: as opções: sem ``partition_by`` a tabela não tem partição, e ``keys`` reúne a chave
-        primária, as ``UniqueConstraint`` e os índices únicos, ajustados por ``keys["add"]`` e
-        ``keys["drop"]``, sempre listas de colunas.
+        primária, as ``UniqueConstraint`` e os índices únicos, nessa ordem e cada grupo em ordem
+        dos nomes das colunas, ajustados por ``keys["add"]`` e ``keys["drop"]``, sempre listas de
+        colunas.
     :raises ContractError: mais de uma coluna de partição.
     """
     info = table.info.get("serialize_db", {})
@@ -682,8 +688,8 @@ def _refuse_long_text(column: _ArrowColumn, field: pa.Field, kind: sa.types.Type
     """O texto acima do limite da coluna, medido em bytes na coluna já convertida para ``string``.
 
     A medida vem depois da conversão porque o texto chega em outros tipos Arrow: ``large_string``
-    (o ``str`` do pandas 3), ``string_view`` e dicionário (a ``category`` do pandas), que
-    ``pa.types.is_string`` não reconhece e ``binary_length`` não aceita nos dois últimos.
+    (o ``str`` do pandas 3) e ``string_view``, que ``pa.types.is_string`` não reconhece e
+    ``binary_length`` não aceita no segundo.
     """
     # Text é subclasse de String e vem antes: o limite dela é o teto do VARCHAR do Redshift,
     # qualquer que seja o comprimento declarado, porque sql_type ignora o comprimento de Text.
@@ -721,22 +727,39 @@ def _converted(column: _ArrowColumn, target: pa.DataType) -> _ArrowColumn:
     canônico: o cast do PyArrow o leva a ``string`` pelos 16 bytes do valor, que quase sempre
     saem recusados como UTF-8 inválido, e o UUID de 16 bytes ASCII entra como 16 caracteres
     (leitura de 2026-09-25). Um inteiro vai a ``decimal128(p, s)`` passando por
-    ``decimal128(38, s)``: o cast direto exige que ``p`` comporte qualquer valor do tipo inteiro
-    (19 dígitos mais a escala num ``int64``), não só os valores presentes; o segundo cast confere
-    se cada valor cabe em ``p``.
+    ``decimal128(38, 0)``, que guarda qualquer valor inteiro, até os 20 dígitos de um ``uint64``:
+    o cast direto exige que ``p`` comporte qualquer valor do tipo inteiro (19 dígitos mais a
+    escala num ``int64``), não só os valores presentes, e nem ``decimal128(38, s)`` o comporta
+    com a escala acima de 19; o segundo cast confere se cada valor cabe em ``p`` e ``s``.
     """
     if isinstance(column.type, pa.UuidType) and pa.types.is_string(target):
         return _uuid_as_text(column)
     if pa.types.is_integer(column.type) and pa.types.is_decimal(target):
-        column = column.cast(pa.decimal128(38, target.scale), safe=True)
+        column = column.cast(pa.decimal128(38, 0), safe=True)
     return column.cast(target, safe=True)
+
+
+def _column_to_convert(column: _ArrowColumn, target: pa.DataType) -> _ArrowColumn:
+    """A coluna que as recusas conferem e que a conversão leva ao contrato.
+
+    O dicionário, a ``category`` do pandas, vira os seus valores: as recusas conferem o tipo dos
+    valores, e o cast do PyArrow de um dicionário de ``double`` para ``decimal128`` arredonda em
+    silêncio. O ``float16`` numa coluna ``Numeric`` vira ``float64``, que o representa sem perda:
+    o PyArrow não tem ``round`` nem cast de ``float16`` para ``decimal128`` (leituras de
+    2026-09-28).
+    """
+    if pa.types.is_dictionary(column.type):
+        column = column.cast(column.type.value_type)
+    if pa.types.is_float16(column.type) and pa.types.is_decimal(target):
+        column = column.cast(pa.float64())
+    return column
 
 
 def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field,
                      table: sa.Table) -> _ArrowColumn:
     """A coluna dos dados no tipo do contrato: as perdas que ``safe=True`` não acusa são recusadas
     antes da conversão, e o texto longo depois dela."""
-    column = data.column(field.name)
+    column = _column_to_convert(data.column(field.name), field.type)
     kind = table.c[field.name].type
     _refuse_silent_losses(column, field, kind, table.name)
     try:
@@ -799,9 +822,10 @@ def cast(
     """Os dados no esquema do contrato da tabela.
 
     Só as colunas do contrato presentes entram, na ordem do contrato; as ausentes ficam para quem
-    grava. Cada coluna é convertida com ``safe=True`` (``large_string``, ``string_view`` e
-    dicionário para ``string``, timestamps a microssegundos, inteiro em ``Numeric``), e as perdas
-    que o cast seguro não acusa são recusadas. Um ``timestamp`` com outro fuso numa coluna com
+    grava. Cada coluna é convertida com ``safe=True`` (``large_string`` e ``string_view`` para
+    ``string``, timestamps a microssegundos, inteiro e ``float16`` em ``Numeric``), e as perdas
+    que o cast seguro não acusa são recusadas; um dicionário, como a ``category`` do pandas, é
+    conferido e convertido pelos seus valores. Um ``timestamp`` com outro fuso numa coluna com
     fuso entra no mesmo instante, em UTC. Um ``uuid.UUID``, que o PyArrow e o pandas inferem como
     ``arrow.uuid``, entra numa coluna de texto como ``str(valor)``, o texto canônico de 36
     caracteres.
@@ -841,8 +865,20 @@ def cast(
 # ---------------------------------------------------------------- a conferência dos modelos
 
 
+def _string_without_length(kind: sa.types.TypeEngine) -> bool:
+    """Se o tipo é ``String`` sem comprimento, ou uma subclasse dela sem comprimento, como
+    ``Unicode()``, ``VARCHAR()`` e ``CHAR()``: o Redshift leria ``VARCHAR`` como ``VARCHAR(256)``.
+    ``Text`` não declara comprimento, e o ``Enum`` já sai como tipo fora do contrato."""
+    if not isinstance(kind, sa.String):
+        return False
+    if isinstance(kind, (sa.Text, sa.Enum)):
+        return False
+    return not kind.length
+
+
 def _column_problems(column: sa.Column) -> list[str]:
-    """As violações de uma coluna: tipo, autoincrement, Identity, String sem comprimento."""
+    """As violações de uma coluna: tipo, autoincrement, Identity, String ou subclasse dela sem
+    comprimento."""
     table = column.table.name
     problems = []
     try:
@@ -856,8 +892,9 @@ def _column_problems(column: sa.Column) -> list[str]:
                         "declare autoincrement=False")
     if column.identity is not None:
         problems.append(f"{table}.{column.name}: Identity fora do contrato")
-    if type(column.type) is sa.String and not column.type.length:
-        problems.append(f"{table}.{column.name}: String sem comprimento; "
+    if _string_without_length(column.type):
+        kind = type(column.type).__name__
+        problems.append(f"{table}.{column.name}: {kind} sem comprimento; "
                         "declare String(n) ou Text")
     return problems
 
@@ -911,7 +948,8 @@ def check_models(metadata: sa.MetaData) -> list[str]:
 
     As regras: tipo fora da tabela de tipos, inclusive o ``Enum`` e o ``Numeric`` de precisão fora
     de 1 a 38 ou de escala fora de 0 à precisão (até 37, a do Redshift); ``autoincrement`` numa
-    chave inteira (o padrão ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento; chave
+    chave inteira (o padrão ``"auto"`` inclusive); ``Identity``; ``String`` sem comprimento, e as
+    subclasses dela fora ``Text``, como ``Unicode``, ``VARCHAR`` e ``CHAR``; chave
     estrangeira ``DEFERRABLE``, ou cujas colunas apontadas não são a chave primária nem uma
     ``UniqueConstraint`` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB
     nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
@@ -956,6 +994,11 @@ def _delta_schema_json(table: sa.Table) -> str:
     return json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+# O fim do nome de cada arquivo de schema_files, pelo qual check_schema_files acha na pasta o
+# arquivo que a geração não produz mais.
+_SCHEMA_SUFFIXES = (".delta.json", ".duckdb.sql", ".redshift.sql")
+
+
 def schema_files(metadata: sa.MetaData) -> dict[str, str]:
     """Os arquivos de esquema de cada tabela, em memória.
 
@@ -987,6 +1030,9 @@ def schema_files(metadata: sa.MetaData) -> dict[str, str]:
 def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
     """Grava ``schema_files`` em ``directory``.
 
+    Nada é apagado: os arquivos de uma tabela que saiu do modelo ficam na pasta, e
+    ``check_schema_files`` os acusa até que o cliente os apague.
+
     Exemplo:
 
     .. code-block:: python
@@ -1005,7 +1051,8 @@ def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
 def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
     """O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
 
-    Nada é gravado.
+    O texto é comparado exato: o arquivo sem o ``\\n`` final difere, com o aviso
+    ``\\ Sem quebra de linha no fim do arquivo`` depois da última linha. Nada é gravado.
 
     Exemplo:
 
@@ -1014,10 +1061,13 @@ def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
         check_schema_files(Base.metadata, "schema")   # [] quando os arquivos estão atualizados
 
     :param metadata: os modelos do cliente, como ``Base.metadata``.
-    :param directory: a pasta local dos arquivos versionados.
-    :return: as linhas do diff; vazio quando nada mudou, e um arquivo ausente aparece inteiro
-        como acrescentado.
+    :param directory: a pasta local dos arquivos versionados, separada da dos arquivos de
+        ``serialize_db.sql``, que também terminam em ``.duckdb.sql`` e ``.redshift.sql``.
+    :return: as linhas do diff; vazio quando nada mudou. Um arquivo ausente aparece inteiro como
+        acrescentado, e um arquivo da pasta terminado em ``.delta.json``, ``.duckdb.sql`` ou
+        ``.redshift.sql`` que a geração não produz, como o de uma tabela que saiu do modelo,
+        aparece inteiro como removido.
     :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
         coluna de partição.
     """
-    return diff_files(schema_files(metadata), directory)
+    return diff_files(schema_files(metadata), directory, _SCHEMA_SUFFIXES)

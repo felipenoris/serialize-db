@@ -100,14 +100,17 @@ _SENTINEL_TABLE = re.compile(r"\{prefix\}(\w+)")
 
 
 def _prefixed_copy(table: sa.Table, prefix: str) -> sa.Table:
-    """A cópia da tabela com o prefixo no nome e só nomes e tipos, o que um DML compilado usa.
+    """A cópia da tabela com o prefixo no nome e, de cada coluna, só o nome, a ``key`` e o tipo, o
+    que um DML compilado usa.
 
     Todo nome vai citado, como no DDL de ``serialize_db.schema``: o texto não depende da lista de
-    palavras reservadas do dialeto, e o sentinela fica dentro das aspas.
+    palavras reservadas do dialeto, e o sentinela fica dentro das aspas. A ``key`` de cada coluna
+    é a do original, pela qual ``values(...)`` de um ``INSERT`` ou de um ``UPDATE`` a acha.
     """
     columns = []
     for column in table.columns:
-        columns.append(sa.Column(quoted_name(column.name, quote=True), column.type))
+        name = quoted_name(column.name, quote=True)
+        columns.append(sa.Column(name, column.type, key=column.key))
     name = quoted_name(f"{prefix}{table.name}", quote=True)
     return sa.Table(name, sa.MetaData(), *columns)
 
@@ -116,10 +119,10 @@ def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
              prefix: str = SENTINEL) -> sa.sql.ClauseElement:
     """O statement com cada tabela do contrato trocada pela cópia prefixada.
 
-    A cópia de cada tabela de ``metadata`` leva o prefixo no nome e cada coluna com nome e tipo,
-    tudo entre aspas; chaves e índices ficam de fora, porque um ``SELECT`` ou um
+    A cópia de cada tabela de ``metadata`` leva o prefixo no nome e cada coluna com nome, ``key``
+    e tipo, os nomes entre aspas; chaves e índices ficam de fora, porque um ``SELECT`` ou um
     ``INSERT ... SELECT`` não os compila. ``replacement_traverse`` troca cada ``Table`` do
-    contrato pela cópia e cada ``Column`` pela coluna de mesmo nome na cópia, o alvo de um
+    contrato pela cópia e cada ``Column`` pela coluna de mesma ``key`` na cópia, o alvo de um
     ``INSERT`` e as tabelas de uma subconsulta inclusive.
 
     Exemplo:
@@ -145,7 +148,7 @@ def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
         if isinstance(element, sa.Table):
             return copies.get(element)
         if isinstance(element, sa.Column) and element.table in copies:
-            return copies[element.table].c[element.name]
+            return copies[element.table].c[element.key]
         return None
 
     return replacement_traverse(statement, {}, replace)
@@ -341,6 +344,10 @@ def referenced_tables(statement_or_sql: sa.sql.ClauseElement | str) -> set[str]:
 
 # ---------------------------------------------------------------- os arquivos gerados
 
+# O fim do nome de cada arquivo de sql_files, pelo qual check_sql_files acha na pasta o arquivo que
+# a geração não produz mais.
+_SQL_SUFFIXES = (".duckdb.sql", ".redshift.sql")
+
 
 def sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData) -> dict[str, str]:
     """Os arquivos de texto SQL de cada statement, em memória.
@@ -374,6 +381,9 @@ def write_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
                     directory: str) -> list[str]:
     """Grava ``sql_files`` em ``directory``.
 
+    Nada é apagado: os arquivos de um statement que saiu do dicionário ficam na pasta, e
+    ``check_sql_files`` os acusa até que o cliente os apague.
+
     Exemplo:
 
     .. code-block:: python
@@ -395,7 +405,8 @@ def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
                     directory: str) -> list[str]:
     """O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
 
-    Nada é gravado.
+    O texto é comparado exato: o arquivo sem o ``\\n`` final difere, com o aviso
+    ``\\ Sem quebra de linha no fim do arquivo`` depois da última linha. Nada é gravado.
 
     Exemplo:
 
@@ -406,12 +417,15 @@ def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
     :param statements: os statements Core por nome, que dá nome aos arquivos.
     :param metadata: os modelos do cliente, como ``Base.metadata``; uma tabela fora deles fica
         como está.
-    :param directory: a pasta local dos arquivos versionados.
-    :return: as linhas do diff; vazio quando nada mudou, e um arquivo ausente aparece inteiro
-        como acrescentado.
+    :param directory: a pasta local dos arquivos versionados, separada da dos arquivos de
+        ``serialize_db.schema``, que também terminam em ``.duckdb.sql`` e ``.redshift.sql``.
+    :return: as linhas do diff; vazio quando nada mudou. Um arquivo ausente aparece inteiro como
+        acrescentado, e um arquivo da pasta terminado em ``.duckdb.sql`` ou ``.redshift.sql`` que
+        a geração não produz, como o de um statement que saiu do dicionário, aparece inteiro como
+        removido.
     :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
     """
-    return diff_files(sql_files(statements, metadata), directory)
+    return diff_files(sql_files(statements, metadata), directory, _SQL_SUFFIXES)
 
 
 def read_sql(directory: str, name: str, dialect: Dialect, prefix: str) -> str:
