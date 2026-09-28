@@ -1336,10 +1336,13 @@ Parquet footer keys `serialize_db_version` and `serialize_db_execution_id` leave
 `plan/serialize-db.md`: no feature reads a key of the library in a footer, the package reads only
 the format's own metadata there (schema, row count, statistics, null counts), and a file's origin
 stays in the commit's `commitInfo` and in the file or folder name `<execution_id>_<uuid>` of the
-load and the engines. Asked how a client redoes the data of a recorded snapshot, the user heard the
-stage 10 flow (a run marked with a new name, `serialize-db channel`,
-`serialize-db publish_redshift --channel default`, the old snapshot readable until `archive`) and
-kept the snapshot names immutable, never reused, asking for the characteristic in the documentation:
-`docs/operacao.md` ("Snapshot do banco" and "Refazer um snapshot"), `docs/index.md`, the docstrings
-of `Execution.snapshot` and `delta.snapshot`, and `plan/serialize-db.md`.
+load and the engines. The DuckDB check of `probes/diagnose_aws.py` opens its connection by
+`Storage.duckdb_connect`, the path of the suite and the engines, and the `aws` extension leaves
+`prepare_offline.sh` and `SP-10`; the next battery in the target validates it. Asked how a client
+redoes the data of a recorded snapshot, the user heard the stage 10 flow (a run marked with a new
+name, `serialize-db channel`, `serialize-db publish_redshift --channel default`, the old snapshot
+readable until `archive`) and kept the snapshot names immutable, never reused, asking for the
+characteristic in the documentation: `docs/operacao.md` ("Snapshot do banco" and "Refazer um
+snapshot"), `docs/index.md`, the docstrings of `Execution.snapshot` and `delta.snapshot`, and
+`plan/serialize-db.md`.
 `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-10.md`

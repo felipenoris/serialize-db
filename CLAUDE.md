@@ -641,8 +641,7 @@ one out; protected is unprefixed all the same, and private carries the `_` prefi
 lists `duckdb` and `redshift`; `tests/test_package.py` checks every package). A key under `_serialize_db/` carries no prefix (`snapshots` in
 `_serialize_db/snapshots.json`); everything else the library writes carries the `serialize_db_`
 prefix: the commit keys `serialize_db_execution_id`, `serialize_db_input_versions` and
-`serialize_db_snapshot`, the Parquet footer keys `serialize_db_version` and
-`serialize_db_execution_id`, and the Redshift control table
+`serialize_db_snapshot`, and the Redshift control table
 `serialize_db_publications(table_name, delta_version, execution_id, published_at)`, whose columns
 stay unprefixed because the table name is the namespace. `snapshot` is an accepted loanword in
 prose. The production environment is `prd` and the development one `dsv`, the names of the source

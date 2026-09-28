@@ -82,11 +82,10 @@ registra; a chave gravada é `serialize_db_snapshot`.
 Os metadados próprios têm nomes em inglês, como os identificadores do código. O que a biblioteca
 grava fora da pasta `_serialize_db/` leva o prefixo `serialize_db_`, para não colidir com as chaves
 do Delta e de outros escritores nem com as tabelas do banco: as chaves de commit
-`serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`, as chaves do
-rodapé Parquet `serialize_db_version` e `serialize_db_execution_id`, e a tabela de controle
-`serialize_db_publications` no Redshift, cujas colunas dispensam o prefixo porque o nome da tabela
-já é o espaço de nomes. O que vive em `_serialize_db/` dispensa o prefixo, como a chave `snapshots`
-de `snapshots.json`. As tabelas e colunas do banco de dados continuam em português.
+`serialize_db_execution_id`, `serialize_db_input_versions` e `serialize_db_snapshot`, e a tabela de
+controle `serialize_db_publications` no Redshift, cujas colunas dispensam o prefixo porque o nome da
+tabela já é o espaço de nomes. O que vive em `_serialize_db/` dispensa o prefixo, como a chave
+`snapshots` de `snapshots.json`. As tabelas e colunas do banco de dados continuam em português.
 
 O log de cada tabela guarda tudo o que é da tabela: os arquivos de cada versão, o nome e o
 comentário da tabela na `description` da ação `metaData`, o esquema de cada versão com os

@@ -207,17 +207,6 @@ reproduziu") corrigiu o que não dependia de decisão; cada item abaixo espera o
   cada grupo de arquivos, que o alvo aceitou em 2026-09-21 e que pede um `COPY` por lista distinta;
   ou a recusa, em `schema_diff` e em `check_models`, de uma coluna nova fora do fim do modelo e de
   uma reordenação.
-- **As conversões da carga inicial que o `cast` recusa.** A consulta de cada partição de
-  `initial_load` converte cada coluna por `CAST` do DuckDB para o tipo do modelo
-  (`partition_query`), e a conferência (`_check_partition`) conta só nulos, textos longos e a coluna
-  de origem da partição: um `double` com mais casas que a escala de um `Numeric` entra arredondado,
-  um `timestamp` com hora numa coluna `Date` perde a hora, e um `timestamptz` numa `DateTime` sem
-  fuso entra na hora do `TimeZone` da máquina. O `cast` recusa os três com `ContractError` ([etapa
-  1](PLAN-STAGE-1.md)). Na leitura de 2026-09-28, `load_report` acusou o arredondamento pela soma
-  da coluna e não viu a hora nem o fuso. A base de produção carregou sem diferença de contagem e
-  soma em 2026-09-24, e a próxima carga no alvo passa pelas mesmas conversões. Espera o usuário: as
-  conferências equivalentes às do `cast` na carga, com o `TimeZone` da conexão em UTC, que recusam
-  a partição; ou a carga como está, com as três conversões escritas em `docs/index.md`.
 - **A auditoria de `serialize-db audit` com o contrato no `ingest`.** Desde 2026-09-28,
   `ingest(materialize=True)` do motor DuckDB cria a tabela pelo DDL do modelo e a enche por `INSERT
   ... BY NAME`, e `serialize-db audit` ingere assim: um JSON malformado ou um nulo numa coluna `NOT
@@ -233,11 +222,6 @@ reproduziu") corrigiu o que não dependia de decisão; cada item abaixo espera o
   `serialize_db.cli` prometem 2 no nome repetido. Espera o usuário: `delta.snapshot` levantar
   `ContractError`, que deriva de `ValueError`, no nome repetido; conferir o nome já em
   `run.snapshot`, antes dos commits; ou a documentação dizer 1.
-- **As chaves `serialize_db_version` e `serialize_db_execution_id` do rodapé Parquet.** A convenção
-  de nomes do `CLAUDE.md` e [`serialize-db.md`](serialize-db.md) as descrevem como gravadas pela
-  biblioteca no rodapé de cada arquivo, e nenhum escritor do pacote as grava: o `COPY` do DuckDB, o
-  `UNLOAD` do Redshift e o `write_deltalake` gravam os arquivos sem metadados da biblioteca. Espera
-  o usuário: gravá-las, onde o escritor aceita metadados de rodapé; ou tirá-las dos dois documentos.
 - **O DuckDB de `probes/diagnose_aws.py`.** A checagem do DuckDB carrega a extensão `aws` e cria o
   secret com `PROVIDER credential_chain`, que a biblioteca deixou em 2026-09-25 pela chave do
   `boto3`, e sem `URL_STYLE 'path'` nem `USE_SSL false` um endpoint `http`, o do substituto, reprova

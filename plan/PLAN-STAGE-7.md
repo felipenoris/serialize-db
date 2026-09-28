@@ -191,7 +191,10 @@ na documentação do `pdoc`. O que a implementação mudou do plano:
   "<coluna>"` por coluna, o tipo por `sql_type(coluna, "duckdb")` e o nome por `quoted` da
   [etapa 1](PLAN-STAGE-1.md) (`BIGINT` nas chaves `int32`, `TIMESTAMP` no `INT96`, que o DuckDB
   trunca a microssegundos); `'<valor>' AS <coluna de partição>` numa tabela particionada. As colunas
-  `double` passam como estão, sem arredondamento (decisão de 2026-09-20).
+  `double` passam como estão, sem arredondamento (decisão de 2026-09-20). O `CAST` aceita três
+  perdas que `cast` recusa: o `double` arredondado na escala de um `Numeric`, a hora de um
+  `timestamp` numa `Date` e o `timestamp` com fuso numa `DateTime` sem fuso, na hora do `TimeZone`
+  da conexão; a carga fica assim, e `docs/index.md` as descreve (decisão do usuário de 2026-09-28).
 - **`initial_load`** cria a tabela (`create_table`), lê as partições já presentes
   (`partition_values`) e pula cada uma delas (a retomada); abre o motor DuckDB da chamada, com as
   extensões e o secret da origem quando ela está no S3 e a raiz Delta numa pasta local; para cada

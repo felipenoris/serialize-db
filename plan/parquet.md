@@ -1228,8 +1228,7 @@ arquivo quebrado no lugar de um bom), `PRESERVE_ORDER`, `RETURN_FILES` e `RETURN
 
 O esquema do arquivo é o esquema do resultado da consulta, então o contrato entra pela consulta: cada
 coluna com cast explícito para o tipo do modelo, na ordem do modelo, com `ORDER BY` pela chave de
-ordenação, `FIELD_IDS` com os identificadores do modelo e `KV_METADATA` com a identificação da
-execução. O que o DuckDB não consegue expressar: `REQUIRED` (toda coluna sai `optional`) e
+ordenação. O que o DuckDB não consegue expressar: `REQUIRED` (toda coluna sai `optional`) e
 `sorting_columns`. `DECIMAL(18, 2)` sai como `INT64` anotado.
 
 ```sql
@@ -1246,8 +1245,6 @@ COPY (
     FORMAT parquet,
     COMPRESSION zstd,
     ROW_GROUP_SIZE 100_000,
-    FIELD_IDS {id_operacao: 1, data_ref: 2, id_cliente: 3, valor: 4, descricao: 5},
-    KV_METADATA {serialize_db_version: '0.1.0', serialize_db_execution_id: 'abc123'},
     RETURN_STATS
 );
 ```
