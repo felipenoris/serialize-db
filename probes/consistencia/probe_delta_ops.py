@@ -85,7 +85,8 @@ def three_writers(storage: Storage, uri: str, folder: Path) -> dict[str, pa.Tabl
     expected[MONTHS[1]] = edge_rows(MONTHS[1], 3001, 3000)
     config = DuckDBConfig(temp_directory=str(folder / "sandbox"))
     with DuckDBEngine(config, "exec-delta", storage) as engine:
-        engine.load(TUDO, expected[MONTHS[1]])
+        engine.create_table(TUDO)
+        engine.append(TUDO, expected[MONTHS[1]])
         engine.export_partition(TUDO, uri, MONTHS[1], {}, expected_rows=3000,
                                 columns_without_min_max=["valor"])
     first = edge_rows(MONTHS[2], 6001, 1500)

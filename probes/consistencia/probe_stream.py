@@ -1,6 +1,6 @@
-"""O ``stream`` e o ``loader`` do motor DuckDB sob concorrência: 1.500.000 linhas de nove tipos
+"""O ``stream`` e o ``appender`` do motor DuckDB sob concorrência: 1.500.000 linhas de nove tipos
 por um stream lento com o transbordo forçado, oito streams ao mesmo tempo na mesma conexão,
-quatro pipelines de ``stream`` para ``loader`` em threads, um ``loader`` alimentado por quatro
+quatro pipelines de ``stream`` para ``appender`` em threads, um ``appender`` alimentado por quatro
 threads, um stream depois de outro fechado no meio, um stream ao lado de um que falha e a pasta
 de transbordo vazia no fim: as contagens, as somas, a ordem e o esquema dos lotes.
 
@@ -135,41 +135,44 @@ def totals_differences(engine: DuckDBEngine, label: str, name: str) -> list[str]
 
 
 def check_pipelines(engine: DuckDBEngine) -> None:
-    """Seção C: quatro pipelines de ``stream`` para ``loader`` em threads, cada um na sua tabela,
-    com o conteúdo conferido pelos totais e pelo ``EXCEPT``."""
+    """Seção C: quatro pipelines de ``stream`` para ``appender`` em threads, cada um na sua
+    tabela, com o conteúdo conferido pelos totais e pelo ``EXCEPT``."""
     def pipeline(index: int) -> list[str]:
         table = output_table(index)
+        engine.create_table(table)
         stream = DuckDBStream(engine, "SELECT * FROM numeros", [], batch_size=100_000,
                               budget=2_000_000)
-        with stream, engine.loader(table) as loader:
+        with stream, engine.appender(table) as appender:
             for batch in stream:
-                loader.write(batch)
-        print(f"   C{index}: linhas {loader.rows}")
+                appender.write(batch)
+        print(f"   C{index}: linhas {appender.rows}")
         return totals_differences(engine, f"C{index}", table.name)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(pipeline, range(4)))
-    report("C quatro pipelines stream para loader em threads",
+    report("C quatro pipelines stream para appender em threads",
            [p for result in results for p in result])
 
 
-def check_shared_loader(engine: DuckDBEngine) -> None:
-    """Seção D: um ``loader`` escrito por quatro threads, cada uma com o seu quarto das linhas."""
+def check_shared_appender(engine: DuckDBEngine) -> None:
+    """Seção D: um ``appender`` escrito por quatro threads, cada uma com o seu quarto das
+    linhas."""
     table = output_table(99)
-    with engine.loader(table, queue_depth=2) as loader:
+    engine.create_table(table)
+    with engine.appender(table, queue_depth=2) as appender:
         def writer(remainder: int) -> None:
             stream = DuckDBStream(engine, f"SELECT * FROM numeros WHERE id % 4 = {remainder}", [],
                                   batch_size=50_000, budget=1_000_000)
             with stream:
                 for batch in stream:
-                    loader.write(batch)
+                    appender.write(batch)
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             list(pool.map(writer, range(4)))
     found = engine.query('SELECT count(*), sum(id), count(DISTINCT id) FROM "saida_99"')
     values = list(found.to_pylist()[0].values())
     problems = [] if values == [ROWS, EXPECTED_SUM, ROWS] else [f"D: {values}"]
-    report("D um loader com quatro threads escrevendo", problems)
+    report("D um appender com quatro threads escrevendo", problems)
 
 
 def check_stream_after_close(engine: DuckDBEngine) -> None:
@@ -210,7 +213,7 @@ def check_stream_beside_failure(engine: DuckDBEngine) -> None:
 
 
 def check_spool_folder(engine: DuckDBEngine) -> None:
-    """Seção G: a pasta de transbordo do motor vazia depois de todo stream e loader fechado."""
+    """Seção G: a pasta de transbordo do motor vazia depois de todo stream e appender fechado."""
     spool_folder = Path(engine.spool_path("sonda")).parent
     left = sorted(path.name for path in spool_folder.iterdir())
     report("G a pasta de transbordo vazia", [] if not left else [f"restaram: {left}"])
@@ -226,7 +229,7 @@ def main() -> None:
         check_slow_spilled_stream(engine)
         check_concurrent_streams(engine)
         check_pipelines(engine)
-        check_shared_loader(engine)
+        check_shared_appender(engine)
         check_stream_after_close(engine)
         check_stream_beside_failure(engine)
         check_spool_folder(engine)

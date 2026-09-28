@@ -1,5 +1,5 @@
 """O motor Redshift sob concorrência, pelo pytest com as fixtures das suítes: ``ingest`` e
-``query``, quatro ``stream`` ao mesmo tempo com ``query`` ao lado, dois ``loader`` em threads, a
+``query``, quatro ``stream`` ao mesmo tempo com ``query`` ao lado, dois ``appender`` em threads, a
 auditoria e ``export_partition`` lidos pelo dataset do delta-rs e pelo ``delta_scan``, duas
 sessões a mais em threads, ``publish_redshift`` com dois workers e o leitor publicado consultado e
 transmitido por duas threads. No ambiente alvo roda contra o Redshift e o S3 reais, num ambiente
@@ -140,17 +140,19 @@ def concurrent_streams(engine: RedshiftEngine, seeds: dict[str, pa.Table]) -> li
     return problems
 
 
-def concurrent_loaders(engine: RedshiftEngine, seeds: dict[str, pa.Table],
-                       second: sa.Table) -> tuple[list[str], dict[str, pa.Table]]:
-    """Dois loaders em threads, cada um do seu stream, com os ids deslocados; devolve os
-    problemas e o que cada tabela deve conter."""
+def concurrent_appenders(engine: RedshiftEngine, seeds: dict[str, pa.Table],
+                         second: sa.Table) -> tuple[list[str], dict[str, pa.Table]]:
+    """Dois appenders em threads, cada um do seu stream, nas tabelas de ``create_table``, com os
+    ids deslocados; devolve os problemas e o que cada tabela deve conter."""
     def pipeline(table: sa.Table, month: str, offset: int) -> int:
         statement = sa.select(ENTRIES).where(ENTRIES.c.data_base_str == month)
-        with engine.stream(statement, batch_size=500) as stream, engine.loader(table) as loader:
+        engine.create_table(table)
+        with (engine.stream(statement, batch_size=500) as stream,
+              engine.appender(table) as appender):
             for batch in stream:
                 ids = pc.add(batch.column("id_lancamento"), offset)
-                loader.write(batch.set_column(0, "id_lancamento", ids))
-        return loader.rows
+                appender.write(batch.set_column(0, "id_lancamento", ids))
+        return appender.rows
 
     jobs = ((PROJECTED, MONTHS[0], 10_000), (second, MONTHS[1], 20_000))
     expected = {}
@@ -162,7 +164,7 @@ def concurrent_loaders(engine: RedshiftEngine, seeds: dict[str, pa.Table],
         rows = [future.result() for future in futures]
     problems = []
     if rows != [ROWS, ROWS]:
-        problems.append(f"linhas dos loaders {rows}")
+        problems.append(f"linhas dos appenders {rows}")
     for table, _, _ in jobs:
         found = engine.query(sa.select(table))
         problems += compare(expected[table.name], found, "id_lancamento",
@@ -270,8 +272,8 @@ def test_redshift_consistency(target: Target) -> None:
         problems += compare(expected_all, by_query, "id_lancamento", "query", JSON_COLUMNS)
         problems += concurrent_streams(engine, seeds)
         second = PROJECTED.to_metadata(sa.MetaData(), name="cad_projetados_2")
-        loader_problems, expected_loaded = concurrent_loaders(engine, seeds, second)
-        problems += loader_problems
+        appender_problems, expected_loaded = concurrent_appenders(engine, seeds, second)
+        problems += appender_problems
         export_problems, exported = export_projected(engine, db, expected_loaded[PROJECTED.name],
                                                      readings)
         problems += export_problems

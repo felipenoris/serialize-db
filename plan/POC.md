@@ -4858,10 +4858,11 @@ Em 2026-09-28, a proposta do usuário de trocar `load` e `loader` por `create_ta
 por nome dispensava: o que acontece com dois escritores na mesma tabela do sandbox, e se um
 `CREATE TABLE` pedido a uma sessão a mais espera a consulta de um `stream` aberto na principal, como
 o pedido à principal espera (leitura de 2026-09-23, acima).
-`probes/consistencia/probe_append_test.py` faz o que o `appender` proposto faria, sem ele: no
-DuckDB, o leitor Arrow registrado com nome único
-e um `INSERT ... BY NAME`; no Redshift, o Parquet no `staging/` e o `COPY`, pela staging temporária
-com `JSON_PARSE`, porque a tabela tem coluna JSON. Rodou três vezes no DuckDB deste contêiner
+`probes/consistencia/probe_append_test.py` fazia, nessa rodada, o que o `appender` proposto faria,
+sem ele: no DuckDB, o leitor Arrow registrado com nome único e um `INSERT ... BY NAME`; no
+Redshift, o Parquet no `staging/` e o `COPY`, pela staging temporária com `JSON_PARSE`, porque a
+tabela tem coluna JSON; desde a implementação do mesmo dia ela chama `create_table` e `append` dos
+motores. Rodou três vezes no DuckDB deste contêiner
 (Linux, 4 vCPUs, 16.095 MB, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1) e uma vez no substituto
 de `tests/emulator.py`, com 200.000 linhas por escritor no DuckDB e 20.000 no substituto; a rodada
 no Redshift do ambiente alvo é do usuário.
@@ -4885,5 +4886,38 @@ no Redshift do ambiente alvo é do usuário.
 entre si nem com um `UPDATE` da principal, e o `create_table` proposto pode rodar numa sessão a
 mais (um cursor da conexão) para não esperar a consulta de um `stream` aberto antes, o que
 dispensaria a ordem `create_table` antes do `stream`. A leitura do Redshift (dois `COPY` na mesma
-tabela sob isolamento serializável) e a decisão sobre a API estão em
-[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+tabela sob isolamento serializável) está em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md); a decisão
+sobre a API, tomada em 2026-09-28, está na seção seguinte.
+
+## O que a implementação de `create_table`, `append` e `appender` mostrou
+
+Em 2026-09-28, com a aprovação do usuário (a decisão está em `.claude/memory/decisions.md`),
+`create_table`, `append` e `appender` entraram nos dois motores no lugar de `load` e `loader`, e o
+`ingest` do DuckDB com `materialize=True` passou a criar a tabela por `ddl(table, "duckdb")` e a
+carregá-la por `INSERT ... BY NAME SELECT * FROM delta_scan(...)`, numa transação
+([`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)). As leituras deste
+contêiner (Linux, 4 vCPUs, 16.095 MB, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1, deltalake
+1.6.6):
+
+- **O `INSERT ... BY NAME` do `delta_scan` custa o mesmo que o `CREATE TABLE AS`**: sobre uma
+  tabela Delta de 4.000.000 de linhas de `Lancamento` (`tests/lancamentos_model.py`) numa pasta
+  local, cada variante num processo novo, o melhor de três foi 2,737 s pelo `CREATE TABLE AS` e
+  2,919 s pela DDL mais o `INSERT` com 2 threads, e 2,499 s contra 2,565 s com 4 threads; o pico de
+  RSS acima da base do processo ficou entre 339 MB e 347 MB com 2 threads e entre 497 MB e 515 MB
+  com 4, igual nos dois caminhos. A diferença é menor que a variação entre rodadas.
+- **A tabela ingerida passou a ter o contrato**: `test_materialized_ingest_applies_the_contract`
+  lê a coluna JSON como `JSON`, a `Numeric(18, 2)` como `DECIMAL(18,2)` e a `Double` não nulável
+  como `DOUBLE NOT NULL` na tabela materializada, e como `VARCHAR` e nuláveis na view; um documento
+  JSON malformado gravado no Delta, que `cast` e `publish_partition` aceitam, faz o `ingest`
+  materializado falhar com `duckdb.Error` e deixa o nome livre, enquanto a view o aceita.
+- **Uma leitura durante um `append` em curso vê a tabela sem as linhas novas**:
+  `test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows` lê 10 linhas com o
+  `appender` aberto numa thread, na sessão principal e numa sessão a mais, e 1.010 depois do
+  `close`, o efeito que o usuário aceitou em 2026-09-28 no lugar da falha com `CatalogException`
+  de 2026-09-23.
+- **As suítes**: `tests/test_engine_duckdb.py`, `tests/test_execution.py` e `tests/test_pipeline.py`
+  passaram na raiz local (63 casos, 1 pulado), com o pipeline ingerindo as 12 tabelas do modelo
+  cliente pela DDL e pelo `INSERT`; as suítes do motor Redshift, da publicação e do leitor, com as
+  três de estudo do S3 e do Redshift, passaram no substituto (92 casos, 1 pulado), e o `COPY` de 10
+  linhas por `append` levou 0,06 s ali (`redshift.engine.small_append`). As três configurações
+  completas estão em [`CURRENT_STATE.md`](CURRENT_STATE.md).

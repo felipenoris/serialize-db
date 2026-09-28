@@ -461,7 +461,7 @@ def test_read_ahead_keeps_pulling_the_generator_after_a_failed_insert(
     """A leitura antecipada do Arrow, que alimenta o ``arrow_scan``, puxa lotes além do que o
     comando consumiu e continua depois de o comando falhar.
 
-    O buffer foge da fila de quem alimenta o gerador, e é por isso que o ``loader`` do motor
+    O buffer foge da fila de quem alimenta o gerador, e é por isso que o ``appender`` do motor
     (``serialize_db.engine.duckdb``) grava os lotes num arquivo Arrow IPC e roda um único ``INSERT``
     sobre o leitor nativo do arquivo, sem entregar um gerador ao DuckDB. As contagens na falha e
     meio segundo depois vão para o relatório.

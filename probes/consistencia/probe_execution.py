@@ -1,6 +1,6 @@
 """O ciclo da ``Execution`` sobre o motor DuckDB: quatro partições de 20.000 linhas com valores
 de borda; numa execução, o pipeline em threads, uma por partição, cada uma com o seu ``stream``
-da entrada escrevendo em dois ``loader`` com ids de ``next_ids``, a auditoria e dois
+da entrada escrevendo em dois ``appender`` com ids de ``next_ids``, a auditoria e dois
 ``publish_delta`` ao mesmo tempo; um leitor ``current`` aberto e consultado enquanto outra
 execução ingere, lê ``pinned_delta`` e publica de novo, com os canais ``default`` e ``current``;
 duas execuções abertas na mesma versão publicando a mesma partição em threads; e uma execução parada
@@ -138,9 +138,9 @@ def report_known(title: str, problems: list[str]) -> None:
 
 
 def pipeline(run: Execution, months: list[str], outputs: list[sa.Table],
-             loaders: dict[str, object]) -> dict[str, int]:
+             appenders: dict[str, object]) -> dict[str, int]:
     """O pipeline do cliente: uma thread por partição lê a entrada por ``stream`` e escreve
-    cada lote em todo ``loader`` de saída com ids de ``next_ids``; devolve as linhas por mês."""
+    cada lote em todo ``appender`` de saída com ids de ``next_ids``; devolve as linhas por mês."""
     written = {}
 
     def project(month: str) -> None:
@@ -154,7 +154,7 @@ def pipeline(run: Execution, months: list[str], outputs: list[sa.Table],
                     arrays = [ids] + [batch.column(name) for name in others]
                     arrays.append(batch.column("id"))
                     names = ["id"] + others + ["id_entrada"]
-                    loaders[table.name].write(pa.RecordBatch.from_arrays(arrays, names=names))
+                    appenders[table.name].write(pa.RecordBatch.from_arrays(arrays, names=names))
                 rows += batch.num_rows
         written[month] = rows
 
@@ -218,10 +218,13 @@ def check_execution_a(db: Database, folder: Path, cadastro: pa.Table) -> None:
         previous = run.previous_partitions(ENTRADA, 3)
         if previous != MONTHS[1:]:
             problems.append(f"A: previous_partitions {previous}")
-        run.sandbox.load(CADASTRO, cadastro)
-        with run.sandbox.loader(PROJ) as loader, run.sandbox.loader(PROJ2) as loader2:
+        run.sandbox.create_table(CADASTRO)
+        run.sandbox.append(CADASTRO, cadastro)
+        run.sandbox.create_table(PROJ)
+        run.sandbox.create_table(PROJ2)
+        with run.sandbox.appender(PROJ) as appender, run.sandbox.appender(PROJ2) as appender2:
             written = pipeline(run, MONTHS, [PROJ, PROJ2],
-                               {PROJ.name: loader, PROJ2.name: loader2})
+                               {PROJ.name: appender, PROJ2.name: appender2})
         if any(rows != ROWS for rows in written.values()):
             problems.append(f"A: linhas do pipeline {written}")
         for table in (PROJ, PROJ2):
@@ -331,8 +334,9 @@ def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table]
             first = run.next_ids(PROJ, 0).start
             if max_id != 4 * ROWS or first != 4 * ROWS + 1:
                 problems.append(f"B: id máximo {max_id}, primeiro next_id {first}")
-            with run.sandbox.loader(PROJ) as loader:
-                pipeline(run, months_b, [PROJ], {PROJ.name: loader})
+            run.sandbox.create_table(PROJ)
+            with run.sandbox.appender(PROJ) as appender:
+                pipeline(run, months_b, [PROJ], {PROJ.name: appender})
             run.audit(PROJ, months_b)
             versions = run.publish_delta(PROJ, partitions=months_b)
             if versions != {PROJ.name: 6}:
@@ -385,10 +389,11 @@ def publish_outcome(run: Execution, name: str, outcomes: dict[str, object]) -> N
 
 
 def prepare_september(run: Execution) -> None:
-    """A entrada ingerida, setembro projetado no ``loader`` e auditado, sem publicar."""
+    """A entrada ingerida, setembro projetado no ``appender`` e auditado, sem publicar."""
     run.ingest(ENTRADA)
-    with run.sandbox.loader(PROJ) as loader:
-        pipeline(run, [NEW_MONTH], [PROJ], {PROJ.name: loader})
+    run.sandbox.create_table(PROJ)
+    with run.sandbox.appender(PROJ) as appender:
+        pipeline(run, [NEW_MONTH], [PROJ], {PROJ.name: appender})
     run.audit(PROJ, [NEW_MONTH])
 
 

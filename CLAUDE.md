@@ -265,7 +265,7 @@ The budget above is never a reason to drop a fact: what does not fit here goes t
 | `.claude/memory/sqlalchemy.md` | Stages 1 and 2, a DDL rule per dialect or generated SQL text: dialects, compilation, `Numeric`, SQLGlot. |
 | `.claude/memory/parquet-arrow-types.md` | `cast`, the schema mapping or a Parquet footer check: what each writer produces, the type contract, PyArrow casts and pandas conversions. |
 | `.claude/memory/aws-s3.md` | `serialize_db.storage`, the S3 suite or a probe that reaches AWS: conditional put, IAM needs, credentials, region and proxy per client. |
-| `.claude/memory/concurrency.md` | `stream`, `loader`, `max_workers` or any helper thread: the GIL, DB-API thread safety, the batch boundary measurements. |
+| `.claude/memory/concurrency.md` | `stream`, `appender`, `max_workers`, any helper thread: the GIL, DB-API thread safety, the batch boundary measurements. |
 | `.claude/memory/source-base.md` | Stage 7, `tests/source_db_projetado.py` or `tests/reference_model/`: the dsv base read on 2026-09-20, the production base read on 2026-09-21, the fixture and the reference model against them, and the early migration's reports from the target, kept only here. |
 | `.claude/memory/environments.md` | Running in the SageMaker space or the target, preparing the offline folder, dating a measurement: the lab, the target, the venv, the environments of the measurements. |
 

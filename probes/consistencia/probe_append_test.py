@@ -1,7 +1,7 @@
-"""Dois escritores na mesma tabela do sandbox, o que o ``append`` proposto em 2026-09-28 torna
-possível: dois ``INSERT ... BY NAME`` (DuckDB) ou dois ``COPY`` (Redshift) ao mesmo tempo em
+"""Dois escritores na mesma tabela do sandbox, o que ``append`` torna possível desde 2026-09-28:
+dois ``append`` (o ``INSERT ... BY NAME`` no DuckDB, o ``COPY`` no Redshift) ao mesmo tempo em
 sessões a mais, os dois na sessão principal em threads, um ``append`` ao lado de um ``UPDATE`` da
-mesma tabela, e o ``CREATE TABLE`` numa sessão a mais e na principal enquanto a principal roda um
+mesma tabela, e o ``create_table`` numa sessão a mais e na principal enquanto a principal roda um
 ``stream``. O desfecho de cada escrita (entrou, ou foi recusada com conflito) é leitura; a checagem
 é a consistência do que ficou: as linhas de cada escrita que entrou, inteiras e sem id repetido, e
 o ``UPDATE`` só nas linhas que ele alcançou. Pelo pytest com as fixtures das suítes: o motor
@@ -27,7 +27,6 @@ from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 import pytest
 import sqlalchemy as sa
 
@@ -37,7 +36,7 @@ from lancamentos_model import MONTHS, PROJECTED, entry_rows
 from serialize_db.engine import redshift
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.engine.redshift import RedshiftEngine
-from serialize_db.schema import ddl, quoted
+from serialize_db.schema import quoted
 from serialize_db.storage import Storage
 
 # As linhas de cada escritor e as rodadas dos dois escritores, por motor: o COPY do Redshift tem
@@ -53,7 +52,7 @@ Outcome = tuple[bool, str, float]
 
 
 class Writer(Protocol):
-    """O que a sonda faz em cada motor, como o ``append`` proposto faria."""
+    """O que a sonda faz em cada motor, pelo ``create_table`` e o ``append`` dele."""
 
     engine: DuckDBEngine | RedshiftEngine
 
@@ -66,25 +65,17 @@ class Writer(Protocol):
 
 
 class DuckDBWriter:
-    """As escritas do motor DuckDB: o leitor Arrow registrado com nome único e um
-    ``INSERT ... BY NAME``, o que o ``close`` do ``loader`` roda hoje depois do ``CREATE``."""
+    """As escritas do motor DuckDB: ``create_table`` e ``append``, o ``INSERT ... BY NAME`` do
+    arquivo de transbordo do appender."""
 
     def __init__(self, engine: DuckDBEngine) -> None:
         self.engine = engine
 
     def create(self, session: DuckDBEngine, table: sa.Table) -> None:
-        with session.session() as connection:
-            connection.execute(ddl(table, "duckdb"))
+        session.create_table(table)
 
     def append(self, session: DuckDBEngine, table: sa.Table, rows: pa.Table) -> None:
-        reader = f"serialize_db_lote_{uuid.uuid4().hex[:8]}"
-        with session.session() as connection:
-            connection.register(reader, rows)
-            try:
-                connection.execute(f"INSERT INTO {quoted(table.name)} BY NAME "
-                                   f"SELECT * FROM {quoted(reader)}")
-            finally:
-                connection.unregister(reader)
+        session.append(table, rows)
 
     def update(self, table: sa.Table, limit: int) -> None:
         self.engine.query(sa.update(table).where(table.c.id_lancamento <= limit)
@@ -108,39 +99,18 @@ class DuckDBWriter:
 
 
 class RedshiftWriter:
-    """As escritas do motor Redshift: o Parquet no ``staging/`` da execução e o ``COPY`` na tabela,
-    pela staging temporária com ``JSON_PARSE`` quando a tabela tem coluna JSON, o que o ``close``
-    do ``loader`` roda hoje depois do ``CREATE``."""
+    """As escritas do motor Redshift: ``create_table`` e ``append``, o ``COPY`` do Parquet do
+    appender no ``staging/`` da execução, pela staging temporária com ``JSON_PARSE`` porque a
+    tabela tem coluna JSON."""
 
     def __init__(self, engine: RedshiftEngine) -> None:
         self.engine = engine
 
     def create(self, session: RedshiftEngine, table: sa.Table) -> None:
-        session.execute(ddl(table, "redshift", prefix=session.prefix))
-        session.register_created(session.prefix + table.name)
+        session.create_table(table)
 
     def append(self, session: RedshiftEngine, table: sa.Table, rows: pa.Table) -> None:
-        storage = session.storage
-        path = storage.join(session.staging_prefix, table.name, f"{uuid.uuid4().hex}.parquet")
-        with storage.open_output_stream(path) as sink:
-            pq.write_table(rows, sink)
-        source = storage.uri_of(path)
-        target = session.qualified(session.prefix + table.name)
-        credentials = redshift.credentials_clause(session.config)
-        json_columns = [column for column in table.columns if isinstance(column.type, sa.JSON)]
-        try:
-            if not json_columns:
-                session.execute(redshift.copy_text(target, source, credentials, manifest=False))
-                return
-            staging = quoted(f"{session.prefix}{table.name}_carga_{uuid.uuid4().hex[:8]}")
-            with session.transaction():
-                session.execute(redshift.staging_ddl(table, staging, table.columns,
-                                                     temporary=True))
-                session.execute(redshift.copy_text(staging, source, credentials, manifest=False))
-                session.execute(redshift.insert_from_staging(target, staging, table, None))
-                session.execute(f"DROP TABLE {staging}")
-        finally:
-            storage.delete([path])
+        session.append(table, rows)
 
     def update(self, table: sa.Table, limit: int) -> None:
         self.engine.query(sa.update(table).where(table.c.id_lancamento <= limit)

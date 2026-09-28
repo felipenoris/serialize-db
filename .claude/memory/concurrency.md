@@ -1,6 +1,6 @@
 # Threads, the GIL and the batch boundary
 
-Read before `stream`, `loader`, `max_workers`, any helper thread, or a change in how batches cross the library's boundary. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before `stream`, `appender`, `max_workers`, any helper thread, or a change in how batches cross the library's boundary. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 - `duckdb` and `redshift_connector` declare DB-API `threadsafety` 1: threads share the module, never a
   connection. DuckDB, delta-rs and PyArrow release the GIL during native work (a Python loop in

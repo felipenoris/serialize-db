@@ -17,15 +17,17 @@ isso depois da entrada ainda pode falhar com a chave vencida.
 
 As primitivas:
 
-- ``ingest`` cria uma view (ou tabela, com ``materialize=True``) com o nome do modelo sobre
-  ``delta_scan(uri, version := v)``, e ``pinned_delta`` devolve a versão fixada como origem de
+- ``ingest`` cria uma view com o nome do modelo sobre ``delta_scan(uri, version := v)`` ou, com
+  ``materialize=True``, cria a tabela pelo DDL do modelo e a carrega do ``delta_scan`` por um
+  ``INSERT ... BY NAME``, numa transação; ``pinned_delta`` devolve a versão fixada como origem de
   consulta, sem ocupar nome no sandbox;
+- ``create_table`` cria a tabela vazia do modelo pelo DDL, num cursor à parte, sem o lock da
+  sessão;
 - ``stream`` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à memória
   enquanto os lotes guardados cabem em 64 MiB, e a um arquivo Arrow IPC com LZ4 na pasta de
   transbordo o lote que não cabe e os seguintes; ``query`` devolve a ``pa.Table``;
-- ``loader`` confere o nome na abertura, grava os lotes num arquivo numa thread auxiliar e, no
-  ``close``, cria a tabela e a carrega num único ``INSERT ... BY NAME``, numa transação; ``load`` é
-  a forma por tabela;
+- ``appender`` confere a tabela na abertura, grava os lotes num arquivo numa thread auxiliar e, no
+  ``close``, os insere num único ``INSERT ... BY NAME``; ``append`` é a forma por tabela;
 - ``audit`` roda as verificações de ``serialize_db.audit`` e monta o ``AuditReport``;
 - ``export_partition`` leva uma partição do sandbox ao Delta, por ``register_files`` do arquivo do
   ``COPY ... RETURN_STATS``.
@@ -106,7 +108,7 @@ _MEMORY_FRACTION = 0.5
 # cliente atrasado, o pico do processo ficou em 297 MB, contra 522 MB com 256 MiB (2026-09-23).
 _MEMORY_BUDGET = 64 * 2**20
 
-# O fim da fila do loader: sem falha, o close o põe depois do último lote.
+# O fim da fila do appender: sem falha, o close o põe depois do último lote.
 _END = object()
 
 
@@ -189,7 +191,7 @@ def _announce_spilled(spool: _Spool) -> None:
 
 @dataclasses.dataclass
 class _SpillFile:
-    """O arquivo de transbordo de um stream ou de um loader."""
+    """O arquivo de transbordo de um stream ou de um appender."""
 
     path: str
     sink: pa.OSFile | None = None
@@ -278,7 +280,7 @@ class DuckDBStream:
     ainda roda e apaga o arquivo. ``__arrow_c_stream__`` entrega os lotes a ``write_deltalake`` e a
     ``RecordBatchReader.from_stream``, não ao ``register`` do DuckDB, cujo ``arrow_scan`` puxaria o
     gerador Python numa thread que o motor não controla; para levar lotes ao sandbox existe
-    ``loader``.
+    ``appender``.
     """
 
     def __init__(self, engine: DuckDBEngine, text: str,
@@ -392,17 +394,17 @@ class DuckDBStream:
         Path(self._path).unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------- o loader
+# ---------------------------------------------------------------- o appender
 
 
 def _write_until_end(spill: _SpillFile, source: queue.Queue, closed: threading.Event,
                      outcome: dict[str, object]) -> None:
     """Grava cada lote tirado da fila até o fim dela; a exceção que o cliente pôs na fila, e o
-    loader abandonado, sobem daqui."""
+    appender abandonado, sobem daqui."""
     item = take(source, closed)
     while item is not _END:
         if item is None:
-            raise RuntimeError("loader encerrado sem close")
+            raise RuntimeError("appender encerrado sem close")
         if isinstance(item, BaseException):
             raise item
         spill.write(item, item.schema)
@@ -412,9 +414,9 @@ def _write_until_end(spill: _SpillFile, source: queue.Queue, closed: threading.E
 
 def _write_spool(spill: _SpillFile, source: queue.Queue, closed: threading.Event,
                  outcome: dict[str, object]) -> None:
-    """A thread do loader: grava no arquivo os lotes da fila, sem a sessão.
+    """A thread do appender: grava no arquivo os lotes da fila, sem a sessão.
 
-    Um ``closed`` sem o fim da fila é um loader abandonado. Terminada com erro, o abandono, a
+    Um ``closed`` sem o fim da fila é um appender abandonado. Terminada com erro, o abandono, a
     exceção do cliente ou um lote recusado, a thread apaga o arquivo, que nenhum ``INSERT`` vai ler.
     """
     try:
@@ -427,31 +429,37 @@ def _write_spool(spill: _SpillFile, source: queue.Queue, closed: threading.Event
         Path(spill.path).unlink(missing_ok=True)
 
 
-class DuckDBLoader:
-    """A carga em lotes de uma tabela nova do sandbox do motor DuckDB.
+class DuckDBAppender:
+    """O acréscimo em lotes a uma tabela do sandbox do motor DuckDB.
 
-    A abertura confere o nome num cursor à parte, sem o lock da sessão, e recusa com
-    ``SandboxError`` o nome que o ``ingest`` ou outro ``loader`` ocupou. ``write`` faz o ``cast`` do
-    lote na thread do cliente, para o erro aparecer com o lote em mãos, e o põe numa fila limitada,
-    que bloqueia quando está cheia; uma thread auxiliar grava os lotes num arquivo Arrow IPC com
-    LZ4, sem a sessão, enquanto o cliente prepara o lote seguinte. ``close`` roda, sob o lock e numa
-    transação, o ``CREATE TABLE`` do modelo e um único ``INSERT ... BY NAME`` sobre o leitor do
-    arquivo: nada existe antes dele, e um erro desfaz os dois. Uma exceção dentro do ``with``, um
-    lote recusado pelo ``cast`` ou um loader abandonado apagam o arquivo sem criar a tabela.
+    A abertura confere a tabela num cursor à parte, sem o lock da sessão, e recusa com
+    ``SandboxError`` o nome livre, que ``create_table`` ou o ``ingest`` com ``materialize=True``
+    ocupam, e a view do ``ingest``. ``write`` faz o ``cast`` do lote na thread do cliente, para o
+    erro aparecer com o lote em mãos, e o põe numa fila limitada, que bloqueia quando está cheia;
+    uma thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4, sem a sessão, enquanto o
+    cliente prepara o lote seguinte. ``close`` roda, sob o lock, um único ``INSERT ... BY NAME``
+    sobre o leitor do arquivo: a tabela não muda antes dele, e um erro não deixa linha. Uma
+    exceção dentro do ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o
+    arquivo sem inserir nada.
     """
 
     def __init__(self, engine: DuckDBEngine, table: sa.Table, queue_depth: int = 2) -> None:
         # O closed vem antes de tudo: o __del__ de uma abertura recusada o usa.
         self._closed = threading.Event()
-        if engine.name_in_use(table.name):
+        kind = engine.object_kind(table.name)
+        if kind == "VIEW":
             raise SandboxError(
-                f"{table.name}: o nome já está ocupado no sandbox, pelo ingest ou por outro "
-                f"loader; leia a versão fixada por run.pinned_delta({table.name})")
+                f"{table.name}: o nome é a view do ingest, que não recebe lotes; ingira a tabela "
+                f"com materialize=True")
+        if kind is None:
+            raise SandboxError(
+                f"{table.name}: a tabela não existe no sandbox; crie-a por create_table ou pelo "
+                f"ingest com materialize=True")
         self._engine = engine
         self._table = table
         self._schema: pa.Schema | None = None
         self._refused: BaseException | None = None
-        self._spill = _SpillFile(engine.spool_path("loader"))
+        self._spill = _SpillFile(engine.spool_path("appender"))
         self._queue: queue.Queue = queue.Queue(maxsize=queue_depth)
         self._outcome: dict[str, object] = {"rows": 0, "error": None}
         self._thread = threading.Thread(
@@ -492,7 +500,7 @@ class DuckDBLoader:
 
     def write(self, data: pa.RecordBatch | pa.Table) -> None:
         """Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um lote recusado
-        faz o loader não criar a tabela."""
+        faz o appender não inserir nada."""
         for batch in checked_batches(data):
             try:
                 converted = self._converted(batch)
@@ -500,26 +508,14 @@ class DuckDBLoader:
                 self._refused = error
                 raise
             if not self._put(converted):
-                raise self.error or RuntimeError("a thread do loader terminou antes do fim da fila")
+                raise self.error or RuntimeError(
+                    "a thread do appender terminou antes do fim da fila")
 
-    def _create_and_insert(self) -> None:
-        """A tabela criada e o arquivo inserido numa transação, sob o lock; o leitor registrado tem
-        nome único e sai no mesmo bloco."""
+    def _insert_file(self) -> None:
+        """O ``INSERT ... BY NAME`` do arquivo inteiro, pelo leitor nativo do Arrow IPC, sob o
+        lock; o leitor registrado tem nome único e sai no mesmo bloco."""
         name = f"serialize_db_lote_{uuid.uuid4().hex[:8]}"
-        with self._engine.session() as connection:
-            connection.execute("BEGIN TRANSACTION")
-            try:
-                connection.execute(ddl(self._table, "duckdb"))
-                if self._spill.writer is not None:
-                    self._insert_file(connection, name)
-                connection.execute("COMMIT")
-            except BaseException:
-                connection.execute("ROLLBACK")
-                raise
-
-    def _insert_file(self, connection: duckdb.DuckDBPyConnection, name: str) -> None:
-        """O ``INSERT ... BY NAME`` do arquivo inteiro, pelo leitor nativo do Arrow IPC."""
-        with pa.OSFile(self._spill.path, "rb") as source:
+        with self._engine.session() as connection, pa.OSFile(self._spill.path, "rb") as source:
             connection.register(name, pa.ipc.open_stream(source))
             try:
                 connection.execute(
@@ -528,22 +524,22 @@ class DuckDBLoader:
                 connection.unregister(name)
 
     def close(self, error: BaseException | None = None) -> None:
-        """Cria a tabela e insere os lotes; com ``error`` ou um lote recusado, só apaga o
-        arquivo."""
+        """Insere os lotes na tabela; com ``error`` ou um lote recusado, só apaga o arquivo."""
         failure = error or self._refused
         self._put(failure if failure is not None else _END)
         self._closed.set()
         self._thread.join()
         try:
-            if failure is None and self._outcome["error"] is None:
-                self._create_and_insert()
+            written = self._spill.writer is not None
+            if failure is None and self._outcome["error"] is None and written:
+                self._insert_file()
         finally:
             Path(self._spill.path).unlink(missing_ok=True)
         # A exceção do cliente sobe pelo with; sem ela, sobe o erro da thread ou do lote recusado.
         if error is None and self.error is not None:
             raise self.error
 
-    def __enter__(self) -> DuckDBLoader:
+    def __enter__(self) -> DuckDBAppender:
         return self
 
     def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> None:
@@ -597,7 +593,7 @@ class DuckDBConfig:
     """Com unidade (``"4GiB"``); ``None`` é metade da memória que o processo ainda pode usar na
     abertura (``environment_limits``). O valor aplicado vai para o log."""
     temp_directory: str | None = None
-    """A pasta do banco, do transbordo do DuckDB e dos arquivos de ``stream`` e ``loader``;
+    """A pasta do banco, do transbordo do DuckDB e dos arquivos de ``stream`` e ``appender``;
     ``None`` é uma pasta nova de ``tempfile.mkdtemp``, apagada em ``cleanup``."""
     extension_directory: str | None = None
     """A pasta das extensões; ``None`` é a que ``Storage.duckdb_connect`` resolve."""
@@ -779,7 +775,7 @@ class DuckDBEngine:
         self._connection.interrupt()
 
     def spool_path(self, kind: str) -> str:
-        """Um caminho novo na pasta de transbordo, para o arquivo de um stream ou de um loader.
+        """Um caminho novo na pasta de transbordo, para o arquivo de um stream ou de um appender.
 
         Exemplo:
 
@@ -787,14 +783,37 @@ class DuckDBEngine:
 
             engine.spool_path("stream")   # ".../exec-2026-09-05_transbordo/stream_<uuid>.arrow"
 
-        :param kind: o início do nome do arquivo, ``stream`` ou ``loader``.
+        :param kind: o início do nome do arquivo, ``stream`` ou ``appender``.
         :return: o caminho ``<kind>_<uuid>.arrow`` na pasta de transbordo.
         """
         return os.path.join(self._spool_folder, f"{kind}_{uuid.uuid4().hex}.arrow")
 
+    def object_kind(self, name: str) -> str | None:
+        """O tipo do objeto confirmado que tem o nome, ``"TABLE"`` ou ``"VIEW"``, lido num cursor
+        à parte, sem o lock da sessão: a abertura de um ``appender`` não espera a consulta de um
+        ``stream`` aberto antes.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            engine.object_kind("cad_lancamentos")   # "VIEW" depois do ingest sem materialize
+
+        :param name: o nome da tabela ou da view, sem aspas.
+        :return: ``"TABLE"``, ``"VIEW"`` ou ``None`` quando o nome está livre.
+        """
+        cursor = self._connection.cursor()
+        try:
+            row = cursor.execute(
+                "SELECT 'TABLE' FROM duckdb_tables() WHERE table_name = $name "
+                "UNION ALL SELECT 'VIEW' FROM duckdb_views() WHERE view_name = $name",
+                {"name": name}).fetchone()
+        finally:
+            cursor.close()
+        return None if row is None else row[0]
+
     def name_in_use(self, name: str) -> bool:
-        """Se uma tabela ou view confirmada tem o nome, lido num cursor à parte, sem o lock da
-        sessão: a abertura de um ``loader`` não espera a consulta de um ``stream`` aberto antes.
+        """Se uma tabela ou view confirmada tem o nome, por ``object_kind``.
 
         Exemplo:
 
@@ -805,15 +824,7 @@ class DuckDBEngine:
         :param name: o nome da tabela ou da view, sem aspas.
         :return: ``True`` quando o nome está ocupado.
         """
-        cursor = self._connection.cursor()
-        try:
-            found = cursor.execute(
-                "SELECT (SELECT count(*) FROM duckdb_tables() WHERE table_name = $name) "
-                "+ (SELECT count(*) FROM duckdb_views() WHERE view_name = $name)",
-                {"name": name}).fetchone()[0]
-        finally:
-            cursor.close()
-        return found > 0
+        return self.object_kind(name) is not None
 
     # ------------------------------------------------------------ a leitura do Delta
 
@@ -852,8 +863,10 @@ class DuckDBEngine:
 
     def ingest(self, table: sa.Table, uri: str, version: int | None,
                partitions: list[str] | None = None, materialize: bool = False) -> None:
-        """Uma view com o nome do modelo sobre a versão fixada da tabela Delta, ou uma tabela com
-        ``materialize=True``.
+        """Uma view com o nome do modelo sobre a versão fixada da tabela Delta ou, com
+        ``materialize=True``, a tabela do modelo criada pelo DDL e carregada do ``delta_scan`` por
+        um ``INSERT ... BY NAME``, numa transação: os tipos e o ``NOT NULL`` do contrato valem na
+        tabela, e um valor que eles recusam desfaz a ingestão.
 
         Um commit na tabela depois da abertura não muda o que a view lê.
 
@@ -869,8 +882,8 @@ class DuckDBEngine:
             ``delta_scan(uri, version := v)``; ``None``, a tabela sem versão no Delta.
         :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
             nenhuma.
-        :param materialize: ``True`` copia os dados para uma tabela do sandbox; com ``False``, a
-            view lê o Delta no lugar.
+        :param materialize: ``True`` copia os dados para a tabela do modelo no sandbox; com
+            ``False``, a view lê o Delta no lugar, com os tipos do ``delta_scan``.
         :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,
             sem versão (``version=None``).
         :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
@@ -880,12 +893,20 @@ class DuckDBEngine:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela não existe no Delta")
         if self.name_in_use(table.name):
             raise SandboxError(f"{table.name}: o nome já está ocupado no sandbox")
-        kind = "TABLE" if materialize else "VIEW"
         where = self.partition_filter(table, partitions)
-        text = (f"CREATE {kind} {quoted(table.name)} AS SELECT * FROM "
-                f"{delta_scan(uri, version)}{where}")
+        source = f"SELECT * FROM {delta_scan(uri, version)}{where}"
         with self.session() as connection:
-            connection.execute(text)
+            if not materialize:
+                connection.execute(f"CREATE VIEW {quoted(table.name)} AS {source}")
+                return
+            connection.execute("BEGIN TRANSACTION")
+            try:
+                connection.execute(ddl(table, "duckdb"))
+                connection.execute(f"INSERT INTO {quoted(table.name)} BY NAME {source}")
+                connection.execute("COMMIT")
+            except BaseException:
+                connection.execute("ROLLBACK")
+                raise
 
     def pinned_delta(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox.
@@ -977,51 +998,75 @@ class DuckDBEngine:
         text, arguments = self._compiled(statement_or_sql, params)
         return DuckDBStream(self, text, arguments, batch_size)
 
-    def loader(self, table: sa.Table, queue_depth: int = 2) -> DuckDBLoader:
-        """O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada no
-        ``close``.
+    def create_table(self, table: sa.Table) -> None:
+        """Cria a tabela vazia do modelo pelo DDL do DuckDB, num cursor à parte, sem o lock da
+        sessão: não espera a consulta de um ``stream`` aberto antes, e a sessão vê a tabela no
+        comando seguinte.
 
         Exemplo:
 
         .. code-block:: python
 
-            with engine.loader(Projetado.__table__) as loader:
-                loader.write(batch)
+            engine.create_table(Projetado.__table__)
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
+        :raises SandboxError: o nome que o ``ingest`` ou outro ``create_table`` ocupou.
+        """
+        if self.name_in_use(table.name):
+            raise SandboxError(f"{table.name}: o nome já está ocupado no sandbox")
+        cursor = self._connection.cursor()
+        try:
+            cursor.execute(ddl(table, "duckdb"))
+        finally:
+            cursor.close()
+
+    def appender(self, table: sa.Table, queue_depth: int = 2) -> DuckDBAppender:
+        """O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
+        ``ingest`` com ``materialize=True`` ou por ``create_table``, e os insere no ``close``.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.appender(Projetado.__table__) as appender:
+                appender.write(batch)
+
+        :param table: a tabela do modelo, já criada no sandbox.
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
-        :return: o ``Loader`` da tabela, que guarda os lotes num arquivo Arrow IPC da pasta de
+        :return: o ``Appender`` da tabela, que guarda os lotes num arquivo Arrow IPC da pasta de
             transbordo até o ``close`` e os insere num único ``INSERT ... BY NAME``.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou.
+        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
+            ``ingest`` ocupa.
         """
-        return DuckDBLoader(self, table, queue_depth)
+        return DuckDBAppender(self, table, queue_depth)
 
-    def load(
+    def append(
         self, table: sa.Table,
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
-        """Grava os lotes numa tabela nova pelo ``loader``.
+        """Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
 
         Exemplo:
 
         .. code-block:: python
 
-            engine.load(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
+            engine.append(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
 
-        :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
+        :param table: a tabela do modelo, já criada no sandbox.
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
             iterável de ``pa.RecordBatch``.
-        :return: as linhas gravadas.
+        :return: as linhas acrescentadas.
         :raises ContractError: um DataFrame, com a conversão sem cópia na mensagem, ou outro
-            tipo em ``data``; ou um lote que o ``cast`` recusa, e a tabela não é criada.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou.
+            tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é inserido.
+        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
+            ``ingest`` ocupa.
         """
         batches = batches_of(data)
-        with self.loader(table) as loader:
+        with self.appender(table) as appender:
             for batch in batches:
-                loader.write(batch)
-        return loader.rows
+                appender.write(batch)
+        return appender.rows
 
     # ------------------------------------------------------------ a auditoria
 

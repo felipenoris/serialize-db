@@ -6,14 +6,14 @@ as quatro partições de cada tabela particionada; ela é gravada uma vez por m�
 ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``), e cada teste trabalha numa cópia própria,
 para publicar a partição nova sem tocar a base dos outros. ``monthly_pipeline`` é o pipeline, no
 formato ``modulo:funcao`` que ``serialize-db run`` recebe: a execução na partição do mês seguinte
-à última data-base publicada; a ingestão de toda tabela do modelo menos ``cad_lancamentos``, as sem
-partição inteiras e as particionadas só na última data-base; a geração da partição nova de
+à última data-base publicada; a ingestão de toda tabela do modelo, as sem partição inteiras e as
+particionadas só na última data-base, materializadas; a geração da partição nova de
 ``cad_operacoes``, ``rel_contrato_operacao`` e ``cad_contratos`` a partir da última, por
 ``INSERT ... SELECT`` no sandbox com os ids de ``next_ids``; a de ``cad_lancamentos`` em Python,
-com pyarrow, a partir da última partição lida da versão fixada por ``run.pinned_delta``, gravada
-por ``run.sandbox.load``, que cria a tabela dela no sandbox; o ``SELECT`` com ``join`` dos saldos
-por conta do modelo cliente sobre a partição nova; o ``join`` de contratos, relação e operações que
-confere o rateio da partição nova; a auditoria com as chaves estrangeiras; e a publicação no Delta.
+com pyarrow, a partir da última partição lida da tabela ingerida, acrescentada a ela por
+``run.sandbox.append``; o ``SELECT`` com ``join`` dos saldos por conta do modelo cliente sobre a
+partição nova; o ``join`` de contratos, relação e operações que confere o rateio da partição nova;
+a auditoria com as chaves estrangeiras; e a publicação no Delta.
 
 Os testes conferem os saldos e as contagens contra a base fictícia em memória, o rateio de cada
 contrato, as auditorias aprovadas com toda verificação rodada, a versão nova de cada tabela só com
@@ -127,15 +127,11 @@ def last_base_date(run: Execution) -> str:
 
 
 def ingest_model(run: Execution, previous: str) -> None:
-    """Traz ao sandbox toda tabela do modelo menos ``cad_lancamentos``: as sem partição inteiras,
-    como view, e as particionadas só na última data-base, materializadas, porque recebem as linhas
-    da nova. Os lançamentos ficam de fora porque ``run.sandbox.load`` cria a tabela deles, e um
-    nome no sandbox tem um só dono."""
+    """Traz ao sandbox toda tabela do modelo: as sem partição inteiras, como view, e as
+    particionadas só na última data-base, materializadas, porque recebem as linhas da nova."""
     unpartitioned = []
     partitioned = []
     for table in run.db.tables():
-        if table.name == ENTRIES.name:
-            continue
         if table_options(table).partition_by is None:
             unpartitioned.append(table)
         else:
@@ -180,12 +176,11 @@ def carry_forward(run: Execution, table: sa.Table, previous: str, current: str) 
 
 
 def previous_entries(run: Execution, previous: str) -> pa.Table:
-    """Os lançamentos da última data-base, lidos da versão fixada sem ocupar o nome da tabela no
-    sandbox, na ordem da chave."""
-    pinned = run.pinned_delta(ENTRIES)
-    statement = (sa.select(pinned)
-                 .where(pinned.c.data_base_str == previous)
-                 .order_by(pinned.c.id_lancamento))
+    """Os lançamentos da última data-base, lidos da tabela ingerida no sandbox, na ordem da
+    chave."""
+    statement = (sa.select(ENTRIES)
+                 .where(ENTRIES.c.data_base_str == previous)
+                 .order_by(ENTRIES.c.id_lancamento))
     return run.sandbox.query(statement)
 
 
@@ -210,8 +205,8 @@ def next_month_entries(entries: pa.Table, current: str, ids: range) -> pa.Table:
 def produce_next_month(run: Execution, previous: str, current: str) -> dict[str, int]:
     """Gera a partição nova das quatro tabelas a partir da última: operações, contratos e a
     relação entre eles como estão, por ``INSERT ... SELECT`` no sandbox; os lançamentos em
-    pyarrow, só os dos meses posteriores à nova data-base, gravados por ``run.sandbox.load``, que
-    cria a tabela deles no sandbox. Devolve as linhas geradas por tabela."""
+    pyarrow, só os dos meses posteriores à nova data-base, acrescentados à tabela ingerida por
+    ``run.sandbox.append``. Devolve as linhas geradas por tabela."""
     produced = {}
     for table in (OPERATIONS, CONTRACTS, APPORTIONMENTS):
         produced[table.name] = carry_forward(run, table, previous, current)
@@ -220,7 +215,7 @@ def produce_next_month(run: Execution, previous: str, current: str) -> dict[str,
     still_ahead = entries.filter(pc.greater(entries["data"], pa.scalar(new_month)))
     ids = run.next_ids(ENTRIES, still_ahead.num_rows)
     new_entries = next_month_entries(still_ahead, current, ids)
-    produced[ENTRIES.name] = run.sandbox.load(ENTRIES, new_entries)
+    produced[ENTRIES.name] = run.sandbox.append(ENTRIES, new_entries)
     return produced
 
 

@@ -387,24 +387,25 @@ db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
 with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento.__table__, partitions=run.previous_partitions(Lancamento.__table__, 12),
                materialize=True)
+    run.sandbox.create_table(Projetado.__table__)
     with run.sandbox.stream(sa.select(Lancamento)) as stream, \
-            run.sandbox.loader(Projetado.__table__) as loader:
+            run.sandbox.appender(Projetado.__table__) as appender:
         for batch in stream:
             ids = run.next_ids(Projetado.__table__, batch.num_rows)      # faixa contígua, sob lock
-            loader.write(project(batch, ids))
+            appender.write(project(batch, ids))
     run.audit(Projetado.__table__, ["2026-08-31"])                      # AuditFailed na reprovação
     run.publish_delta(Projetado.__table__, partitions=["2026-08-31"])   # overwrite por partição
 ```
 
 `run.sandbox` é o motor da execução, que o `Execution` constrói pelo segundo argumento: `"duckdb"`
 dá um `serialize_db.engine.duckdb.DuckDBEngine`, e `"redshift"` um
-`serialize_db.engine.redshift.RedshiftEngine`. O pipeline chama nele `stream`, `loader`, `query`,
-`load`, `session` e `new_session`, e pelo `run` as primitivas que precisam da pasta e da versão
-fixada de cada tabela: `run.ingest`, `run.pinned_delta`, `run.audit` e `run.publish_delta`. Os dois
-motores seguem a interface `serialize_db.engine.Engine`, e o pipeline escrito em statements Core
-roda em qualquer um deles; as seções seguintes descrevem cada motor. Fora de uma execução, como nos
-testes, o motor se constrói à mão, com a pasta e a versão de cada tabela em cada chamada, e a
-página de cada motor traz o exemplo.
+`serialize_db.engine.redshift.RedshiftEngine`. O pipeline chama nele `stream`, `query`,
+`create_table`, `append`, `appender`, `session` e `new_session`, e pelo `run` as primitivas que
+precisam da pasta e da versão fixada de cada tabela: `run.ingest`, `run.pinned_delta`, `run.audit`
+e `run.publish_delta`. Os dois motores seguem a interface `serialize_db.engine.Engine`, e o
+pipeline escrito em statements Core roda em qualquer um deles; as seções seguintes descrevem cada
+motor. Fora de uma execução, como nos testes, o motor se constrói à mão, com a pasta e a versão de
+cada tabela em cada chamada, e a página de cada motor traz o exemplo.
 
 O terceiro argumento do `Execution`, opcional, é a partição da execução, `run.partition`:
 `run.previous_partitions` devolve as partições até ela, e o log a registra. `run.audit` e
@@ -451,17 +452,20 @@ import sqlalchemy as sa
 with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as run:
     run.ingest(Lancamento.__table__, partitions=["2026-07-31", "2026-08-31"], materialize=True)
     query = sa.select(Lancamento).where(Lancamento.data_base_str == sa.bindparam("particao"))
+    run.sandbox.create_table(Projetado.__table__)
     with run.sandbox.stream(query, {"particao": "2026-08-31"}) as stream, \
-            run.sandbox.loader(Projetado.__table__) as loader:
+            run.sandbox.appender(Projetado.__table__) as appender:
         for batch in stream:                 # a consulta continua enquanto o cliente trabalha
-            loader.write(project(batch))     # cast aqui; a tabela nasce no close do loader
+            appender.write(project(batch))   # cast aqui; as linhas entram no close do appender
 ```
 
-`run.sandbox.query` devolve a `pa.Table` inteira, e `run.sandbox.load` grava uma `pa.Table`, um
-lote, um leitor ou um iterável de lotes; um DataFrame é recusado com a conversão sem cópia na
-mensagem (`pa.Table.from_pandas(frame, preserve_index=False)`). O nome de cada tabela no sandbox
-tem um só dono: o `loader` recusa com `serialize_db.errors.SandboxError` o nome que o `ingest`
-ocupou, e `run.pinned_delta(table)` lê a versão fixada sem ocupar nome.
+`run.sandbox.query` devolve a `pa.Table` inteira, e `run.sandbox.append` acrescenta a uma tabela do
+sandbox uma `pa.Table`, um lote, um leitor ou um iterável de lotes; um DataFrame é recusado com a
+conversão sem cópia na mensagem (`pa.Table.from_pandas(frame, preserve_index=False)`). A tabela
+vem do `ingest` com `materialize=True` ou de `run.sandbox.create_table`, que cria a tabela vazia
+do modelo e recusa com `serialize_db.errors.SandboxError` o nome já ocupado; o `appender` recusa
+com o mesmo erro a tabela que não existe e a view do `ingest`, e `run.pinned_delta(table)` lê a
+versão fixada sem ocupar nome.
 `with run.sandbox.session() as connection:` dá a conexão crua ao que as primitivas não cobrem, e
 `with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo. A
 execução usa sempre os limites da máquina; `DuckDBConfig(threads=..., memory_limit=...)` os troca
@@ -494,8 +498,9 @@ nas tabelas `exec_<id>_*` do esquema do Redshift. A conexão vem de
 par informado, com o `USE` no banco do datashare e o `search_path` no esquema; sem `redshift=`, o
 `Execution` a lê das variáveis `SERIALIZE_DB_REDSHIFT_*` por `RedshiftConfig.from_environment()`.
 `run.ingest` carrega as partições por `COPY ... MANIFEST`, `stream` lê os arquivos de um `UNLOAD`
-em `<raiz>/<ambiente>/staging/<execution_id>/`, `loader` grava ali um Parquet e o carrega por
-`COPY` no `close`, e `run.publish_delta` registra os arquivos do `UNLOAD` na pasta da partição. O
+em `<raiz>/<ambiente>/staging/<execution_id>/`, `create_table` cria a tabela `exec_<id>_<tabela>`
+pela DDL, `appender` grava ali um Parquet e o acrescenta por `COPY` no `close`, e
+`run.publish_delta` registra os arquivos do `UNLOAD` na pasta da partição. O
 fim da execução apaga as tabelas `exec_<id>_*` que ela criou e os arquivos do `staging/` e fecha a
 conexão:
 
@@ -510,10 +515,11 @@ config = RedshiftConfig(workgroup="controladoria-wg", database="dev",
 with Execution(db, "redshift", "2026-08-31", execution_id="exec-2026-09-05",
                redshift=config) as run:
     run.ingest(Lancamento.__table__, partitions=["2026-08-31"])
+    run.sandbox.create_table(Projetado.__table__)
     with run.sandbox.stream(sa.select(Lancamento)) as stream, \
-            run.sandbox.loader(Projetado.__table__) as loader:
+            run.sandbox.appender(Projetado.__table__) as appender:
         for batch in stream:                 # os lotes vêm dos arquivos do UNLOAD
-            loader.write(project(batch))
+            appender.write(project(batch))
 ```
 
 Um texto SQL pronto cita as tabelas do sandbox pelo sentinela `{prefix}`
@@ -562,15 +568,17 @@ with Execution(db, "duckdb") as run:
 acima do maior da versão fixada, a partir de 1 na tabela nova.
 
 Na primeira carga a tabela ainda não existe: `run.ingest` e `run.pinned_delta` a recusam com
-`serialize_db.errors.SandboxError`, os dados entram por `run.sandbox.load` ou pelo `loader`, e
-`run.publish_delta` cria a tabela antes do commit. Para gravar a tabela a partir da versão fixada
-sem ocupar o nome dela no sandbox, `run.pinned_delta` a lê e `run.sandbox.load` grava o resultado:
+`serialize_db.errors.SandboxError`, os dados entram na tabela de `run.sandbox.create_table` por
+`run.sandbox.append` ou pelo `appender`, e `run.publish_delta` cria a tabela antes do commit. Para
+gravar a tabela a partir da versão fixada sem ocupar o nome dela no sandbox, `run.pinned_delta` a
+lê, `run.sandbox.create_table` cria a tabela vazia e `run.sandbox.append` grava o resultado:
 
 ```python
 with Execution(db, "duckdb") as run:
     current = run.pinned_delta(Moeda.__table__)
     kept = run.sandbox.query(sa.select(current).where(current.c.sigla != "EUR"))
-    run.sandbox.load(Moeda.__table__, kept)
+    run.sandbox.create_table(Moeda.__table__)
+    run.sandbox.append(Moeda.__table__, kept)
     run.audit(Moeda.__table__, None)
     run.publish_delta(Moeda.__table__)
 ```
@@ -775,7 +783,7 @@ valores. Um tipo fora do contrato é listado por `check_models` e recusado por `
 | `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | Microssegundos; um nanossegundo não nulo e um `timestamp` com fuso são recusados por `cast`. O `timestamp_ntz` põe a tabela no protocolo com o recurso `timestampNtz` (leitor 3, escritor 7), que o leitor Delta precisa ter. O `UNLOAD` do Redshift grava `INT96`, que o delta-rs e o `delta_scan` leem em microssegundos. |
 | `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Sempre em UTC; outro fuso entra no mesmo instante, e um `timestamp` sem fuso é recusado por `cast`. |
 | `Uuid` | `string` | `string` | `VARCHAR(36)` | `VARCHAR(36)` | O contrato guarda o UUID como texto; o Redshift não tem o tipo. O cliente passa o `uuid.UUID`, que o PyArrow e o pandas inferem como `arrow.uuid` e `cast` converte no texto de `str(valor)`, ou o próprio texto; `cast` recusa e a auditoria reprova o texto acima de 36 bytes. |
-| `JSON` | `string` | `string` | `JSON` | `SUPER` | O documento entra serializado (`json.dumps`); `cast` recusa `struct`, `list` e `map`, e o documento acima de 65.535 bytes, o teto do `VARCHAR(65535)` em que o Redshift o carrega antes do `JSON_PARSE` para `SUPER`. O `ingest` do DuckDB e o leitor Delta trazem a coluna do `delta_scan` em `VARCHAR`, e as funções JSON do DuckDB leem os dois tipos. O `with_variant(SUPER(), "redshift")` do `sqlalchemy-redshift` no modelo é opcional. |
+| `JSON` | `string` | `string` | `JSON` | `SUPER` | O documento entra serializado (`json.dumps`); `cast` recusa `struct`, `list` e `map`, e o documento acima de 65.535 bytes, o teto do `VARCHAR(65535)` em que o Redshift o carrega antes do `JSON_PARSE` para `SUPER`. O `ingest` do DuckDB com `materialize=True` põe a coluna em `JSON` pela DDL, e um documento malformado no Delta faz esse `ingest` falhar; a view do `ingest` e o leitor Delta trazem a coluna do `delta_scan` em `VARCHAR`, e as funções JSON do DuckDB leem os dois tipos. O `with_variant(SUPER(), "redshift")` do `sqlalchemy-redshift` no modelo é opcional. |
 | `Float`, `Time`, `Interval`, `LargeBinary`, `ARRAY`, `Enum` | | | | | Fora do contrato. |
 
 Cada campo Arrow leva a nulidade da coluna, o comentário em `metadata` e `PARQUET:field_id` pela

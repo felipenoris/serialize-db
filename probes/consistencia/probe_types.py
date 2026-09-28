@@ -1,8 +1,9 @@
 """Os tipos pela fronteira do motor DuckDB: 2.000 linhas de ``cad_tudo``, toda coluna do contrato
-com os seus valores de borda, por ``load``, ``query``, ``export_partition`` e
+com os seus valores de borda, por ``append``, ``query``, ``export_partition`` e
 ``publish_partition``, lidas pelo dataset do delta-rs, pelo ``delta_scan`` e pelo arquivo Parquet
 registrado; o mínimo e o máximo do log contra os dados; um ``stream`` com o transbordo forçado
-num ``loader`` de outra sessão; e as estatísticas exatas do log de ``cad_simples``, com a poda dos
+num ``appender`` de outra sessão; e as estatísticas exatas do log de ``cad_simples``, com a poda
+dos
 dois leitores nos extremos como leitura.
 
 .. code-block:: shell
@@ -41,15 +42,17 @@ def report_known(title: str, problems: list[str]) -> None:
         print(f"   diferenças conhecidas do sinal do zero: {len(known)}; {known[0]}")
 
 
-def check_loader_and_query(engine: DuckDBEngine, data: pa.Table) -> None:
-    """Seção 1: ``load`` e ``query`` por statement e por texto devolvem as linhas carregadas."""
-    engine.load(TUDO, data)
+def check_append_and_query(engine: DuckDBEngine, data: pa.Table) -> None:
+    """Seção 1: ``append`` na tabela de ``create_table`` e ``query`` por statement e por texto
+    devolvem as linhas acrescentadas."""
+    engine.create_table(TUDO)
+    engine.append(TUDO, data)
     by_statement = engine.query(sa.select(TUDO))
     print("   esquema Arrow do sandbox:", by_statement.schema.types)
-    report("1 load e query por statement",
+    report("1 append e query por statement",
            compare(data, to_contract(by_statement, TUDO, NOTES), label="query"))
     by_text = engine.query('SELECT * FROM "cad_tudo"')
-    report("1b load e query por texto",
+    report("1b append e query por texto",
            compare(data, to_contract(by_text, TUDO, NOTES), label="query-texto"))
 
 
@@ -140,19 +143,20 @@ def check_publish(config: DuckDBConfig, storage: Storage, uri: str, data: pa.Tab
 def check_spilled_stream(engine: DuckDBEngine, config: DuckDBConfig, storage: Storage,
                          data: pa.Table) -> None:
     """Seção 4: um ``stream`` de 300 linhas por lote com 10.000 bytes de orçamento, o transbordo
-    forçado, num ``loader`` de outra sessão."""
+    forçado, num ``appender`` de outra sessão."""
     with DuckDBEngine(config, "exec-tipos-segunda", storage) as second:
         stream = DuckDBStream(engine, 'SELECT * FROM "cad_tudo"', [], batch_size=300,
                               budget=10_000)
-        with stream, second.loader(TUDO) as loader:
+        second.create_table(TUDO)
+        with stream, second.appender(TUDO) as appender:
             batches = 0
             for batch in stream:
-                loader.write(batch)
+                appender.write(batch)
                 batches += 1
             # O contador de lotes transbordados é do transbordo do stream: uma leitura.
             print(f"   lotes {batches}, transbordados {stream._spool.spilled}")
         by_second = second.query(sa.select(TUDO))
-        report("4 stream com transbordo para o loader de outra sessão",
+        report("4 stream com transbordo para o appender de outra sessão",
                compare(data, to_contract(by_second, TUDO, NOTES), label="segunda"))
 
 
@@ -208,7 +212,8 @@ def check_exact_stats(engine: DuckDBEngine, storage: Storage) -> None:
     simple = simple_rows()
     uri = storage.uri_of("prd/cad_simples")
     delta.create_table(uri, SIMPLES, storage)
-    engine.load(SIMPLES, simple)
+    engine.create_table(SIMPLES)
+    engine.append(SIMPLES, simple)
     engine.export_partition(SIMPLES, uri, None, METADATA, expected_rows=simple.num_rows)
     action = pa.table(delta.open_table(uri, storage).get_add_actions(flatten=True)).to_pylist()[0]
     problems = []
@@ -237,7 +242,7 @@ def main() -> None:
     second_data = edge_rows(SECOND_PARTITION, 5001, ROWS)
     print(f"linhas {data.num_rows}, colunas {data.schema.names}")
     try:
-        check_loader_and_query(engine, data)
+        check_append_and_query(engine, data)
         check_export(engine, config, storage, uri, folder, data)
         check_publish(config, storage, uri, second_data)
         check_spilled_stream(engine, config, storage, data)
