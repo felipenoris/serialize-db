@@ -921,6 +921,14 @@ def _key_problems(table: sa.Table, options: TableOptions) -> list[str]:
     return problems
 
 
+def _partition_type(kind: sa.types.TypeEngine) -> bool:
+    """Se o tipo serve à coluna de partição: ``String(n)``, ou uma subclasse dela com comprimento,
+    fora ``Text``, que a auditoria e a carga medem até 65535 bytes, e não pelo ``n``."""
+    if not isinstance(kind, sa.String) or isinstance(kind, sa.Text):
+        return False
+    return bool(kind.length)
+
+
 def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
     """As violações da partição: a coluna ausente ou fora de String(n), a origem que não
     existe."""
@@ -933,7 +941,7 @@ def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
     if column is None:
         problems.append(
             f"{table.name}: partition_by aponta {options.partition_by}, que a tabela não tem")
-    elif not (isinstance(column.type, sa.String) and column.type.length):
+    elif not _partition_type(column.type):
         problems.append(
             f"{table.name}.{options.partition_by}: coluna de partição fora de String(n)")
     if options.partition_source and options.partition_source not in table.c:
@@ -952,10 +960,10 @@ def check_models(metadata: sa.MetaData) -> list[str]:
     subclasses dela fora ``Text``, como ``Unicode``, ``VARCHAR`` e ``CHAR``; chave
     estrangeira ``DEFERRABLE``, ou cujas colunas apontadas não são a chave primária nem uma
     ``UniqueConstraint`` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB
-    nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``,
-    ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave primária e
-    sem ``keys``. O comentário de tabela e de coluna é opcional; o da coluna, quando existe, vai
-    para o esquema Arrow e para o Delta.
+    nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``, como
+    ``Text``, ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave
+    primária e sem ``keys``. O comentário de tabela e de coluna é opcional; o da coluna, quando
+    existe, vai para o esquema Arrow e para o Delta.
 
     Exemplo:
 

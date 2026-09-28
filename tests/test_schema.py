@@ -722,8 +722,8 @@ def test_check_models_lists_two_partition_columns() -> None:
 
 
 def test_partition_column_is_any_text_and_the_source_optional() -> None:
-    """Uma coluna de texto de qualquer comprimento particiona sem `partition_source`;
-    `partition_source` sem `partition_by` é violação."""
+    """Uma coluna `String(n)` de qualquer comprimento particiona sem `partition_source`; `Text`,
+    mesmo com comprimento, e `partition_source` sem `partition_by` são violações."""
     metadata = sa.MetaData()
     regions = sa.Table(
         "por_regiao",
@@ -746,6 +746,18 @@ def test_partition_column_is_any_text_and_the_source_optional() -> None:
     )
     assert schema.check_models(orphan.metadata) == [
         "sem_particao: partition_source sem partition_by"
+    ]
+
+    # Text com comprimento: a auditoria e a carga o medem até 65535 bytes, e não pelo n.
+    by_text = sa.Table(
+        "por_texto",
+        sa.MetaData(),
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("regiao", sa.Text(20), nullable=False),
+        info={"serialize_db": {"partition_by": ["regiao"]}},
+    )
+    assert schema.check_models(by_text.metadata) == [
+        "por_texto.regiao: coluna de partição fora de String(n)"
     ]
 
 

@@ -50,7 +50,7 @@ import pkgutil
 import platform
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -137,15 +137,25 @@ def load_table(
     return loaded
 
 
+def side_text(side: str, rows: int | None, sums: Mapping[str, object],
+              nonfinite: Mapping[str, int]) -> str:
+    """Um lado da diferença: as linhas, as somas e os não finitos, ou ``ausente`` quando a
+    partição falta nele."""
+    if rows is None:
+        return f"{side} ausente"
+    return f"{side} {rows} linhas {dict(sums)} não finitos {dict(nonfinite)}"
+
+
 def print_report(report: LoadReport) -> None:
     """As linhas do relatório de uma tabela, depois das partições gravadas."""
     for partition in report.partitions:
         if not partition.matches:
             where = "na tabela inteira" if partition.value is None else f"em {partition.value}"
-            print(f"  DIFERENÇA {where}: origem {partition.source_rows} linhas "
-                  f"{dict(partition.source_sums)} não finitos {dict(partition.source_nonfinite)}, "
-                  f"Delta {partition.delta_rows} linhas {dict(partition.delta_sums)} não finitos "
-                  f"{dict(partition.delta_nonfinite)}")
+            source = side_text("origem", partition.source_rows, partition.source_sums,
+                               partition.source_nonfinite)
+            in_delta = side_text("Delta", partition.delta_rows, partition.delta_sums,
+                                 partition.delta_nonfinite)
+            print(f"  DIFERENÇA {where}: {source}, {in_delta}")
     verdict = "contagens e somas iguais" if report.matches else "com diferenças"
     print(f"  relatório: {len(report.partitions)} partições conferidas, {verdict}")
     if report.conversions:
