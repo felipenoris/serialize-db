@@ -35,8 +35,9 @@ módulo, em `PLAN-STAGE-<n>.md`.
 - **Paralelismo em cada comando, nas threads da biblioteca e no código cliente.** A API é síncrona
   e as primitivas podem ser chamadas de qualquer thread; cada motor tem uma sessão por execução sob
   um lock reentrante, e cada comando usa o paralelismo do motor. Os dados cruzam a fronteira em
-  lotes `RecordBatch`: `stream` lê o lote seguinte e `loader` grava o anterior enquanto o cliente
-  trabalha no atual, e `query` e `load` são as formas por `pa.Table`; `publish_delta` e a publicação
+  lotes `RecordBatch`: `stream` lê o lote seguinte e `appender` grava o anterior enquanto o cliente
+  trabalha no atual, e `query` e `append` são as formas por `pa.Table`; `publish_delta` e a
+  publicação
   no Redshift aceitam `max_workers`. A seção "Paralelismo" diz como operar em cada cenário.
 - **Restrições aplicadas por consulta.** Nem o Parquet nem o Delta têm chave primária, unicidade ou
   chave estrangeira, e o Redshift só as registra. A auditoria da execução as aplica com consultas
@@ -123,9 +124,10 @@ auditoria e o resumo da execução vão para o log do processo, não para `_seri
 As primitivas de cada módulo, com assinatura, comportamento e testes, estão em `PLAN-STAGE-<n>.md`,
 um arquivo por etapa, que [`PLAN.md`](PLAN.md) indexa; os fluxos abaixo as citam pelo nome. `table`
 é sempre um `Table` do SQLAlchemy, obtido do modelo; `uri` é a pasta da tabela Delta; `data` é o que o
-código cliente entrega a `load`, uma `pa.Table`, um `pa.RecordBatch`, um `RecordBatchReader` ou um
-iterável de lotes, ou um `RecordBatchReader` nas primitivas internas; o cliente lê lotes por `stream`
-e grava por `loader`; `run` é a `Execution` aberta, e `run.sandbox` o motor onde o pipeline roda.
+código cliente entrega a `append`, uma `pa.Table`, um `pa.RecordBatch`, um `RecordBatchReader` ou
+um iterável de lotes, ou um `RecordBatchReader` nas primitivas internas; o cliente lê lotes por
+`stream` e grava por `appender` numa tabela do `ingest` ou de `create_table`; `run` é a
+`Execution` aberta, e `run.sandbox` o motor onde o pipeline roda.
 
 ## Fluxos de uso
 
@@ -160,9 +162,10 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
 2. `run.ingest` cria as views com os nomes dos modelos sobre `delta_scan` na versão fixada, e
    materializa as tabelas consultadas muitas vezes com as partições pedidas.
 3. O pipeline roda em `run.sandbox`; o que sai para o Python sai em lotes por `stream`, ou como
-   `pa.Table` por `query`, e volta por `loader` ou `load`; os intermediários ficam no
-   sandbox, não no Delta. O nome de uma tabela no sandbox é do `ingest` ou do `loader`, nunca dos
-   dois: a tabela que a execução grava é lida na versão fixada por `run.pinned_delta(table)`.
+   `pa.Table` por `query`, e volta por `appender` ou `append` numa tabela do `ingest` ou de
+   `create_table`; os intermediários ficam no sandbox, não no Delta. O nome de uma tabela no
+   sandbox é criado uma vez, pelo `ingest` ou por `create_table`: a tabela que a execução grava é
+   lida na versão fixada por `run.pinned_delta(table)`.
 4. `run.audit` reprova e encerra sem tocar o Delta, ou aprova.
 5. `run.publish_delta` reconcilia o esquema, substitui cada partição num commit (o registro do
    arquivo do `COPY ... (RETURN_STATS)` depois das conferências da [etapa 3](PLAN-STAGE-3.md)) com
@@ -370,14 +373,14 @@ e os exemplos do Redshift em `test_redshift.py`.
 5. O DuckDB, o delta-rs e o PyArrow liberam o GIL no trabalho nativo: threads Python bastam para o
    paralelismo, e o custo de uma extensão em Rust não se justifica por ele.
 6. As threads da biblioteca são os pools de `publish_delta`, de `publish_redshift` e de `ingest`,
-   este com uma sessão a mais por tabela, e a auxiliar de cada `stream` e de cada `loader`,
+   este com uma sessão a mais por tabela, e a auxiliar de cada `stream` e de cada `appender`,
    encerrada no `close`: a de `stream` roda a consulta e entrega cada lote à memória, até um
    orçamento de 64 MiB, ou a um arquivo intermediário depois dele, enquanto o cliente lê os lotes já
-   entregues, e a de `loader` grava os lotes num arquivo fora da sessão, que o `close` carrega numa
-   tabela criada ali. O cliente trabalha no lote atual enquanto a consulta produz o seguinte ou a
-   biblioteca grava o anterior, também com o `loader` aberto depois do `stream`, porque a abertura
-   dele não usa a sessão, e o `close` de um stream cancela a consulta que ainda roda (decisões do
-   usuário de 2026-09-23).
+   entregues, e a de `appender` grava os lotes num arquivo fora da sessão, que o `close` insere na
+   tabela num comando só. O cliente trabalha no lote atual enquanto a consulta produz o seguinte ou
+   a biblioteca grava o anterior, também com o `appender` aberto depois do `stream`, porque a
+   abertura dele não usa a sessão e `create_table` roda a DDL num cursor à parte, e o `close` de um
+   stream cancela a consulta que ainda roda (decisões do usuário de 2026-09-23 e de 2026-09-28).
 
 ### Leituras em paralelo
 
@@ -417,7 +420,7 @@ e os exemplos do Redshift em `test_redshift.py`.
   espera o `Future` desse passo; a dependência é do fluxo de controle do cliente, não da biblioteca.
   Passos independentes podem ir para um pool: os comandos deles correm em série na sessão, e o ganho
   é o trabalho Python de cada passo, que corre fora dela; numa sessão a mais por passo, quando o
-  passo não usa as tabelas temporárias da principal, os comandos também correm juntos. Cada `load` e cada `query` gravam
+  passo não usa as tabelas temporárias da principal, os comandos também correm juntos. Cada `append` e cada `query` gravam
   tabelas distintas, e cada comando é confirmado ao terminar, então nada fica meio gravado para a
   leitura seguinte.
 - **Publicação no Redshift.** `serialize-db publish_redshift --max-workers n`, sobre
@@ -438,11 +441,12 @@ with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2
         limites.result()
 
     statement = select(Saldo).where(Saldo.data_base_str == run.partition)   # já vê saldos e limites
-    with run.sandbox.stream(statement) as stream, run.sandbox.loader(LancamentoProjetado) as loader:
+    run.sandbox.create_table(LancamentoProjetado)                    # a tabela vazia do modelo, pela DDL
+    with run.sandbox.stream(statement) as stream, run.sandbox.appender(LancamentoProjetado) as appender:
         for batch in stream:                                         # a consulta segue gravando os lotes seguintes
             frame = batch.to_pandas(types_mapper=pd.ArrowDtype)
             frame["id_lancamento"] = run.next_ids(LancamentoProjetado, len(frame))   # faixa contígua, sob lock
-            loader.write(pa.RecordBatch.from_pandas(frame, preserve_index=False))    # o lote anterior vai para o arquivo do loader
+            appender.write(pa.RecordBatch.from_pandas(frame, preserve_index=False))  # o lote anterior vai para o arquivo do appender
     run.audit(LancamentoProjetado, partitions=[run.partition])
     run.publish_delta(LancamentoProjetado, Saldo, partitions=[run.partition], max_workers=2)   # duas tabelas, dois logs
 ```
@@ -452,6 +456,6 @@ with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2
 As chaves inteiras são geradas pelo cliente, nunca pelo motor: o DuckDB tem sequências e o Redshift
 não, e `IDENTITY` no Redshift salta e não ordena em cargas paralelas. A regra de `run.next_ids` está
 em [`PLAN.md`](PLAN.md), seção "Regras que as etapas obedecem". O código que hoje lê a chave depois
-do `INSERT` passa a pedi-la antes do `load`, e as linhas filhas referenciam os ids do pai na mesma
+do `INSERT` passa a pedi-la antes do `append`, e as linhas filhas referenciam os ids do pai na mesma
 tabela em memória.
 

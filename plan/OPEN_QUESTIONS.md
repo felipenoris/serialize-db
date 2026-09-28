@@ -172,6 +172,16 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
   próprio delta-rs; ou a docstring de `publish_delta` dizer que a conferência não cobre a janela,
   com uma execução por ambiente de cada vez.
 
+## A API de escrita no sandbox
+
+- **Dois escritores na mesma tabela do Redshift.** `probes/consistencia/probe_append_test.py`
+  com `-m redshift` no ambiente alvo lê o que dois `COPY` na mesma tabela ao mesmo tempo, um
+  `COPY` ao lado de um `UPDATE` e o `CREATE TABLE` durante um `UNLOAD` fazem sob o isolamento
+  serializável (o `1023` lido em 2026-09-24); no substituto a sonda passou em 2026-09-28, e a
+  leitura vale só para o código dela. Desde a implementação de 2026-09-28 a sonda chama
+  `create_table` e `append` dos motores, e a docstring do `appender` nada diz sobre dois escritores
+  na mesma tabela até a rodada.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão

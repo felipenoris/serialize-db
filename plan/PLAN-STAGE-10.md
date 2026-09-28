@@ -225,8 +225,8 @@ O que a implementação fixou além do texto das seções abaixo:
   `<unload_to>/<id do leitor>/stream/<uuid>/`, lido pelo `Storage`. O `close` do stream apaga os
   arquivos dele, e o `close` do leitor apaga `<unload_to>/<id do leitor>/`; nada fora dessa pasta é
   apagado.
-- **O leitor não expõe** `ingest`, `loader`, `load`, `pinned_delta`, `audit` nem `export_partition`,
-  porque eles gravariam no esquema com o prefixo das tabelas publicadas.
+- **O leitor não expõe** `ingest`, `create_table`, `appender`, `append`, `pinned_delta`, `audit` nem
+  `export_partition`, porque eles gravariam no esquema com o prefixo das tabelas publicadas.
 - **A consistência entre tabelas** não é garantida. Cada tabela é publicada numa transação própria
   ([etapa 8](PLAN-STAGE-8.md)), e uma consulta que junta duas tabelas durante uma publicação pode
   ler versões diferentes. A leitura consistente entre tabelas é a do leitor Delta sobre um snapshot.

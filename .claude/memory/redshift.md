@@ -363,7 +363,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   comes from the `row_desc` of `select * from (<texto>) as t limit 0`, and each batch of the
   `UNLOAD` file is cast to it (`INT96` coerced to microseconds, `SUPER` as text).
   `plan/PLAN-STAGE-5.md`
-- The loader of a table with a JSON column loads through a `CREATE TEMP TABLE` staging with the
+- The appender of a table with a JSON column loads through a `CREATE TEMP TABLE` staging with the
   JSON in `VARCHAR(65535)` and `INSERT ... JSON_PARSE`, because the Parquet `COPY` into `SUPER`
   needs `SERIALIZETOJSON`, never read on a small string; the export serializes the column with
   `JSON_SERIALIZE` so the `UNLOAD` file carries text. `plan/PLAN-STAGE-5.md`

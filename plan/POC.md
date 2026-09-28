@@ -4807,3 +4807,123 @@ os exemplos da seção nova do tutorial com a partição opcional.
 **Consequências**: a partição do `Execution` e o `--partition` de `serialize-db run` ficaram
 opcionais (decisão do usuário de 2026-09-27), e o tutorial ganhou a seção "Atualizar uma tabela de
 domínio sem partição"; revisados `plan/PLAN.md` e `plan/PLAN-STAGE-6.md`.
+
+## O que o teste do pipeline completo mostrou
+
+Em 2026-09-27, na pasta local do contêiner de desenvolvimento (Linux x86_64, DuckDB 1.5.5 com
+`threads` 4 e `memory_limit` 6,4 GiB lidos do ambiente, deltalake 1.6.6, pyarrow 25.0.1, SQLAlchemy
+2.0.54, Python 3.13.12), `tests/test_pipeline.py` rodou a execução mensal completa no motor DuckDB
+sobre a base fictícia de `tests/source_db_projetado.py` carregada no Delta com o modelo cliente: a
+partição 2026-07-31 sobre a última data-base, 2026-06-30, pela API e por `serialize-db run`, e em
+seguida a de 2026-08-31 sobre a partição recém-publicada.
+
+- **A carga da base fictícia**: `initial_load` gravou as 12 tabelas, as quatro partições de cada
+  particionada, em 4,8 s, com uma conexão DuckDB por tabela.
+- **Os tempos da execução**: `abertura` 0,133 s, `ingest` 0,036 s (11 tabelas, as particionadas
+  só na última data-base e materializadas), `audit` 0,287 s (as quatro tabelas gravadas, com
+  `foreign_keys=True`) e `publish_delta` 0,684 s (uma versão por tabela); a mesma execução por
+  `serialize-db run` levou 0,16 s, 0,06 s, 0,211 s e 0,684 s, e a do mês seguinte 0,141 s,
+  0,039 s, 0,209 s e 0,697 s. Os dois testes levam 9,9 s.
+- **A geração por `INSERT ... SELECT`**: `cad_operacoes`, `cad_contratos` e `rel_contrato_operacao`
+  já existem no sandbox, materializadas pela ingestão, e a partição nova entra em Core
+  (`insert().from_select`) pela sessão da execução, com a chave `row_number() OVER (ORDER BY chave)
+  + (faixa.start - 1)` sobre a faixa de `next_ids`, e a data-base e a coluna de partição como
+  `sa.literal`; `run.sandbox.query` devolve a contagem do DuckDB.
+- **A geração em pyarrow**: um nome no sandbox tem um só dono, e `run.sandbox.load` recusa o que o
+  `ingest` ocupou; por isso `cad_lancamentos` fica fora da ingestão, a última partição vem de
+  `run.pinned_delta` como `pa.Table`, o filtro dos meses posteriores e as colunas novas (a chave
+  pela faixa de `next_ids`, a data-base, a partição e o carimbo) são pyarrow, e `run.sandbox.load`
+  cria a tabela do sandbox só com a partição nova (pedido do usuário de 2026-09-27, a geração dos
+  lançamentos em Python com pyarrow). `saldos_por_conta` roda depois da carga, sobre a partição
+  nova.
+- **A auditoria dispensou a chave sequencial da junção**: em cada tabela, `chave_<chave>_tabela`
+  saiu aprovada com o motivo "dispensada", porque o menor id novo passa do maior da versão fixada;
+  as chaves estrangeiras compostas `orfao_data_operacao` e `orfao_data_base_sistema_contrato`
+  rodaram, e `not_run` ficou vazio nas quatro.
+- **O commit**: `version_diff` entre a versão fixada e a nova lista só a partição nova em cada
+  tabela, e o commit carrega `serialize_db_execution_id` e `serialize_db_input_versions` com as 12
+  versões lidas, sem `serialize_db_snapshot`.
+- **O leitor Delta e a execução seguinte**: as quatro partições antigas mantiveram as contagens da
+  carga; a execução de 2026-08-31 leu 2026-07-31 como a última data-base e gerou um mês projetado a
+  menos nos lançamentos.
+
+**Consequências**: `tests/test_pipeline.py` entra nos testes do pacote, com dois casos `local`;
+`plan/PLAN-STAGE-6.md` descreve o teste e `plan/CURRENT_STATE.md` as contagens. A adaptação do
+teste ao S3 e ao Redshift fica com o usuário (mensagem de 2026-09-27).
+
+## O que a sonda de dois escritores na mesma tabela mostrou
+
+Em 2026-09-28, a proposta do usuário de trocar `load` e `loader` por `create_table`, `append` e
+`appender` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)) abriu duas perguntas que a regra de um só dono
+por nome dispensava: o que acontece com dois escritores na mesma tabela do sandbox, e se um
+`CREATE TABLE` pedido a uma sessão a mais espera a consulta de um `stream` aberto na principal, como
+o pedido à principal espera (leitura de 2026-09-23, acima).
+`probes/consistencia/probe_append_test.py` fazia, nessa rodada, o que o `appender` proposto faria,
+sem ele: no DuckDB, o leitor Arrow registrado com nome único e um `INSERT ... BY NAME`; no
+Redshift, o Parquet no `staging/` e o `COPY`, pela staging temporária com `JSON_PARSE`, porque a
+tabela tem coluna JSON; desde a implementação do mesmo dia ela chama `create_table` e `append` dos
+motores. Rodou três vezes no DuckDB deste contêiner
+(Linux, 4 vCPUs, 16.095 MB, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1) e uma vez no substituto
+de `tests/emulator.py`, com 200.000 linhas por escritor no DuckDB e 20.000 no substituto; a rodada
+no Redshift do ambiente alvo é do usuário.
+
+- **Dois `INSERT ... BY NAME` na mesma tabela, em duas sessões a mais, ao mesmo tempo**: nas 15
+  rodadas das três execuções os dois entraram, em 0,25 s a 0,48 s cada, e a tabela ficou com as
+  400.000 linhas, sem id repetido e com a soma de `valor` das duas escritas. Os dois na sessão
+  principal, em duas threads, também entraram (0,32 s a 0,84 s), em série sob o lock.
+- **Um `INSERT ... BY NAME` numa sessão a mais ao lado de um `UPDATE` da principal** sobre as
+  linhas já gravadas: os dois entraram (o `UPDATE` de 100.000 linhas em 0,017 s a 0,020 s, a escrita
+  em 0,26 s a 0,32 s), a soma reflete o `UPDATE` só nas linhas que ele alcançou, e o controle
+  otimista do DuckDB não recusou o par.
+- **O `CREATE TABLE` durante um `stream`** de 5.000.000 de linhas com um `md5` por linha, cujo
+  primeiro lote chegou em 0,025 s: na sessão a mais ele levou 0,002 s; na principal, 1,569 s,
+  1,896 s e 1,888 s, a consulta inteira, e o stream esgotou o resto em 0,106 s a 0,142 s depois
+  dele. A sessão principal escreveu em seguida na tabela que a sessão a mais criou.
+- **No substituto**, as seções passaram com três rodadas de dois escritores; o substituto é DuckDB
+  por trás de uma conexão de mentira, e a leitura vale para o código da sonda, não para o Redshift.
+
+**Consequências**: no DuckDB, dois `appender` na mesma tabela em sessões a mais não conflitam
+entre si nem com um `UPDATE` da principal, e o `create_table` proposto pode rodar numa sessão a
+mais (um cursor da conexão) para não esperar a consulta de um `stream` aberto antes, o que
+dispensaria a ordem `create_table` antes do `stream`. A leitura do Redshift (dois `COPY` na mesma
+tabela sob isolamento serializável) está em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md); a decisão
+sobre a API, tomada em 2026-09-28, está na seção seguinte.
+
+## O que a implementação de `create_table`, `append` e `appender` mostrou
+
+Em 2026-09-28, com a aprovação do usuário (a decisão está em `.claude/memory/decisions.md`),
+`create_table`, `append` e `appender` entraram nos dois motores no lugar de `load` e `loader`, e o
+`ingest` do DuckDB com `materialize=True` passou a criar a tabela por `ddl(table, "duckdb")` e a
+carregá-la por `INSERT ... BY NAME SELECT * FROM delta_scan(...)`, numa transação
+([`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)). As leituras deste
+contêiner (Linux, 4 vCPUs, 16.095 MB, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1, deltalake
+1.6.6):
+
+- **O `INSERT ... BY NAME` do `delta_scan` custa o mesmo que o `CREATE TABLE AS`**: sobre uma
+  tabela Delta de 4.000.000 de linhas de `Lancamento` (`tests/lancamentos_model.py`) numa pasta
+  local, cada variante num processo novo, o melhor de três foi 2,737 s pelo `CREATE TABLE AS` e
+  2,919 s pela DDL mais o `INSERT` com 2 threads, e 2,499 s contra 2,565 s com 4 threads; o pico de
+  RSS acima da base do processo ficou entre 339 MB e 347 MB com 2 threads e entre 497 MB e 515 MB
+  com 4, igual nos dois caminhos. A diferença é menor que a variação entre rodadas.
+- **A tabela ingerida passou a ter o contrato**: `test_materialized_ingest_applies_the_contract`
+  lê a coluna JSON como `JSON`, a `Numeric(18, 2)` como `DECIMAL(18,2)` e a `Double` não nulável
+  como `DOUBLE NOT NULL` na tabela materializada, e como `VARCHAR` e nuláveis na view; um documento
+  JSON malformado gravado no Delta, que `cast` e `publish_partition` aceitam, faz o `ingest`
+  materializado falhar com `duckdb.Error` e deixa o nome livre, enquanto a view o aceita.
+- **Uma leitura durante um `append` em curso vê a tabela sem as linhas novas**:
+  `test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows` lê 10 linhas com o
+  `appender` aberto numa thread, na sessão principal e numa sessão a mais, e 1.010 depois do
+  `close`, o efeito que o usuário aceitou em 2026-09-28 no lugar da falha com `CatalogException`
+  de 2026-09-23.
+- **`duckdb_views()` lista as views internas do catálogo**: 47 no DuckDB 1.5.5, todas no banco
+  `system` (`information_schema.columns`, `information_schema.tables`, `pg_catalog.pg_class`,
+  `main.sqlite_master`), e `duckdb_tables()` nenhuma tabela interna. A leitura do catálogo de
+  `name_in_use`, desde a etapa 4, e a de `object_kind`, sem filtro, davam `columns` e `tables` como
+  nomes ocupados; a revisão de 2026-09-28 pôs `NOT internal` nas duas consultas, e
+  `test_create_table_creates_the_empty_table_of_the_model` cria a tabela `columns` desde então.
+- **As suítes**: `tests/test_engine_duckdb.py`, `tests/test_execution.py` e `tests/test_pipeline.py`
+  passaram na raiz local (63 casos, 1 pulado), com o pipeline ingerindo as 12 tabelas do modelo
+  cliente pela DDL e pelo `INSERT`; as suítes do motor Redshift, da publicação e do leitor, com as
+  três de estudo do S3 e do Redshift, passaram no substituto (92 casos, 1 pulado), e o `COPY` de 10
+  linhas por `append` levou 0,06 s ali (`redshift.engine.small_append`). As três configurações
+  completas estão em [`CURRENT_STATE.md`](CURRENT_STATE.md).

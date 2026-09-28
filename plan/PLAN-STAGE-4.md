@@ -6,8 +6,8 @@ também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalh
 `serialize_db.audit` monta as verificações a partir do contrato e não sabe qual motor as roda;
 `serialize_db.engine` declara o protocolo `Engine`, que a execução também não conhece, e
 `serialize_db.engine.duckdb` o implementa. O protocolo fixa os tipos da fronteira: `stream` devolve
-um `BatchStream` de `pa.RecordBatch` e `loader` recebe lotes por `write`; `query` devolve a
-`pa.Table` que `stream` montaria, e `load` entrega ao `loader` os lotes de uma `pa.Table`, de um
+um `BatchStream` de `pa.RecordBatch` e `appender` recebe lotes por `write`; `query` devolve a
+`pa.Table` que `stream` montaria, e `append` entrega ao `appender` os lotes de uma `pa.Table`, de um
 `RecordBatch`, de um `RecordBatchReader` ou de um iterável ([`PLAN.md`](PLAN.md), seção "A troca de
 dados com o código cliente"). A implementação, `serialize_db.engine.duckdb`, é a referência; os
 esboços `SandboxEngine`, `BatchStream` e `Loader` de `test_parallel.py` que a precederam saíram
@@ -60,12 +60,13 @@ registra a verificação como não executada.
 | --- | --- |
 | `connect(config)` | Banco em arquivo `<temp_directory>/<execution_id>.duckdb`, e em memória só com `DuckDBConfig(database=":memory:")` (decisão do usuário de 2026-09-22); `temp_directory` omitido é uma pasta nova de `tempfile.mkdtemp`, apagada com o banco em `cleanup`, porque o padrão `.tmp` do DuckDB é relativo à pasta corrente; a conexão de `storage.duckdb_connect(<arquivo do banco>, config)` da [etapa 3](PLAN-STAGE-3.md), que resolve `extension_directory` (`DuckDBConfig.extension_directory`, senão `SERIALIZE_DB_DUCKDB_EXTENSIONS`, senão `.duckdb/` ao lado do ambiente virtual), desliga `autoinstall_known_extensions` e `autoload_known_extensions` e aplica `duckdb_setup`; `temp_directory`, `preserve_insertion_order = false` e os limites lidos do ambiente na abertura, quando a configuração os omite (`environment_limits`): `threads` são as CPUs que o processo pode usar e `memory_limit` é metade da memória que ele ainda pode usar, por `serialize_db.resources` (instrução do usuário de 2026-09-24); o log registra na abertura o `memory_limit` e as `threads` aplicados e o espaço livre de `temp_directory`; uma conexão só, a sessão da execução, e um `threading.RLock` que todo comando toma pelo tempo do comando (decisão do usuário de 2026-09-22, a mesma do motor Redshift); `session()` dá a conexão crua ao cliente com o lock tomado pelo bloco. |
 | `new_session()` | Uma sessão a mais sobre o mesmo banco: um motor sobre `cursor()` da conexão, com o seu `RLock`, as mesmas primitivas e a mesma pasta de transbordo, gerenciador de contexto. Ele vê o que a sessão principal confirmou e não as tabelas temporárias dela; o fim do `with` e o `cleanup` dele fecham só essa conexão. `run.ingest` abre uma por tabela, e o cliente a usa para o que roda em paralelo ([`PLAN.md`](PLAN.md), seção "Regras que as etapas obedecem"). |
-| `ingest(table, uri, version, partitions=None, materialize=False)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou `CREATE TABLE ... AS SELECT ... FROM delta_scan(...)` com `materialize=True`; com `partitions`, as duas filtram por `<coluna> BETWEEN '<menor>' AND '<maior>' AND <coluna> IN (...)`, porque o `delta_scan` poda por `=` e por intervalo e abre todos os arquivos com um `IN` de mais de um valor (leitura de 2026-09-23). |
-| `pinned_delta(table, uri, version)` | A versão fixada como origem de consulta, sem ocupar nome no sandbox: o `FromClause` com as colunas do contrato que compila para `delta_scan('<uri>', version := <v>)`. É por ele que o pipeline lê a versão fixada da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader`, e é ele que a auditoria usa como `pinned` nas chaves que não incluem a coluna de partição (decisão do usuário de 2026-09-22). Sem versão fixada, numa tabela que ainda não existe, levanta `SandboxError` nomeando a tabela. |
+| `ingest(table, uri, version, partitions=None, materialize=False)` | View com o nome do modelo sobre `delta_scan(uri, version := v)`, ou, com `materialize=True`, a tabela criada por `ddl(table, "duckdb")` e carregada por `INSERT INTO <nome> BY NAME SELECT * FROM delta_scan(...)` numa transação, com os tipos do contrato e o `NOT NULL` (decisão do usuário de 2026-09-28; um JSON malformado no Delta falha o `ingest` e deixa o nome livre; o `INSERT` custou o mesmo que o `CREATE TABLE AS`, [`POC.md`](POC.md)); com `partitions`, as duas filtram por `<coluna> BETWEEN '<menor>' AND '<maior>' AND <coluna> IN (...)`, porque o `delta_scan` poda por `=` e por intervalo e abre todos os arquivos com um `IN` de mais de um valor (leitura de 2026-09-23). |
+| `pinned_delta(table, uri, version)` | A versão fixada como origem de consulta, sem ocupar nome no sandbox: o `FromClause` com as colunas do contrato que compila para `delta_scan('<uri>', version := <v>)`. É por ele que o pipeline lê a versão fixada da tabela que ele mesmo grava, cujo nome no sandbox pertence à tabela de `create_table` que o `appender` preenche, e é ele que a auditoria usa como `pinned` nas chaves que não incluem a coluna de partição (decisão do usuário de 2026-09-22). Sem versão fixada, numa tabela que ainda não existe, levanta `SandboxError` nomeando a tabela. |
 | `stream(statement_or_sql, params=None, batch_size=100_000)` | Um statement Core com as tabelas do contrato trocadas pelas do sandbox por `sql.prefixed(prefix="")`, com os valores do cliente dados por `statement.params(**params)` e compilado por `duckdb_engine.Dialect(paramstyle="qmark")`, o estilo do driver do DuckDB, sem `literal_binds` e com `render_postcompile=True`, que expande o `IN` de lista e o `bindparam(..., expanding=True)` (sem ele o texto sai com `__[POSTCOMPILE_...]`, que o DuckDB recusa, leitura de 2026-09-23); os nomes de `params` conferidos contra os `bindparam` sem valor do statement, porque `params` ignora um nome a mais; as constantes e os valores do cliente juntados por `construct_params()` e passados como lista na ordem de `positiontup`, sem reescrever marcador (decisão do usuário de 2026-09-23, leituras de 2026-09-22 e 2026-09-23, [`POC.md`](POC.md); `param` não é exigido); ou um texto pronto, gerado por `render` ou lido por `sql.read_sql(..., prefix="")`, com `:nome` em `$nome` por `sql.bind`; roda numa thread auxiliar, na sessão, sob o lock e sem `Session` do SQLAlchemy, que entrega cada lote de `to_arrow_reader(batch_size)` à memória enquanto os lotes guardados cabem no orçamento de 64 MiB, e a um arquivo Arrow IPC com LZ4 na pasta de transbordo o lote que não cabe e os seguintes, e solta o lock quando o resultado acaba, sem esperar pelo cliente (decisão do usuário de 2026-09-23); dentro de `session()`, na mesma thread, a consulta roda na thread de quem chama. O motor devolve o `BatchStream`: iterável de `pa.RecordBatch` com os tipos do motor (`decimal128(18, 2)`, `date32`, JSON como `string`), `schema`, `read_next_batch`, `read_all`, `close`, gerenciador de contexto e `__arrow_c_stream__` (para `write_deltalake` e `RecordBatchReader.from_stream`, nunca para o `register` do DuckDB). O cliente lê a memória e depois o arquivo, na sua thread e na ordem da consulta, enquanto ela continua, com esperas com prazo; a thread não referencia o stream; `close` cancela por `interrupt()` a consulta que ainda roda e apaga o arquivo; o erro anterior ao primeiro lote chega na construção, e o posterior na leitura seguinte ao último lote entregue. |
 | `query(statement_or_sql, params=None)` | O statement Core ou o texto pronto, pelo caminho de compilação de `stream`, sob o lock, por `to_arrow_table()`: a `pa.Table` com os tipos do motor, igual a `stream(statement_or_sql, params).read_all()`, sem arquivo; um comando sem resultado devolve a tabela `Count` ou `Success` do DuckDB. `execute` saiu da interface (decisão do usuário de 2026-09-23). |
-| `loader(table, queue_depth=2)` | O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada por `ddl(table, "duckdb")` no `close`: um nome já ocupado, pela view do `ingest` ou pela tabela de um `loader` anterior, é recusado com `SandboxError` na abertura, antes do primeiro lote (decisão do usuário de 2026-09-22), por uma leitura do catálogo num cursor próprio, sem o lock da sessão (decisão do usuário de 2026-09-23), e um laço por partição mantém um `loader` só aberto; `write(data)` aceita `pa.RecordBatch` ou `pa.Table`, faz `cast(batch, table)` na thread do cliente e põe o lote numa fila limitada; uma thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4 na pasta de transbordo, sem a sessão, e o `close` roda, sob o lock e numa transação, o `CREATE TABLE` e um único `INSERT ... BY NAME SELECT * FROM <leitor do arquivo>`; uma exceção dentro do `with`, um lote recusado pelo `cast` ou um loader abandonado apagam o arquivo sem criar a tabela, e um erro do `INSERT` desfaz o `CREATE`; `close` relança o erro da thread e o do `INSERT`; `rows` conta as linhas gravadas. O arquivo nasce com o esquema do primeiro lote convertido, e um lote com outro conjunto de colunas é `ContractError`; o `loader` sem lote cria a tabela vazia. Nada existe antes do `close`, e o leitor que o `INSERT` consome é o do arquivo, nativo: nenhum gerador Python é entregue ao DuckDB. |
-| `load(table, data)` | `data` é uma `pa.Table`, um `pa.RecordBatch`, um `RecordBatchReader` ou um iterável de lotes: `with loader(table) as l: for batch in ...: l.write(batch)`; outro tipo é recusado com a mensagem que aponta `pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. |
+| `create_table(table)` | A tabela vazia do modelo, por `ddl(table, "duckdb")` num cursor à parte da conexão, sem o lock da sessão, para não esperar a consulta de um `stream` aberto antes; um nome já ocupado, pela view ou pela tabela do `ingest` ou por um `create_table` anterior, é recusado com `SandboxError` antes da DDL, por uma leitura do catálogo num cursor à parte (decisão do usuário de 2026-09-28). |
+| `appender(table, queue_depth=2)` | O gerenciador de contexto que acrescenta lotes a uma tabela do sandbox, vinda do `ingest` com `materialize=True` ou de `create_table`: na abertura, uma leitura do catálogo num cursor à parte, sem o lock, recusa com `SandboxError` a tabela que não existe e a view do `ingest`; `write(data)` aceita `pa.RecordBatch` ou `pa.Table`, faz `cast(batch, table)` na thread do cliente e põe o lote numa fila limitada; uma thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4 na pasta de transbordo, sem a sessão, e o `close` roda, sob o lock, um único `INSERT INTO <nome> BY NAME SELECT * FROM <leitor do arquivo>`, só quando algum lote foi gravado; uma exceção dentro do `with`, um lote recusado pelo `cast` ou um appender abandonado apagam o arquivo sem inserir linha, e um erro do `INSERT` não deixa linha; `close` relança o erro da thread e o do `INSERT`; `rows` conta as linhas gravadas. O arquivo nasce com o esquema do primeiro lote convertido, e um lote com outro conjunto de colunas é `ContractError`. Nenhuma linha entra antes do `close`, e o leitor que o `INSERT` consome é o do arquivo, nativo: nenhum gerador Python é entregue ao DuckDB (decisão do usuário de 2026-09-28, no lugar do `loader` que criava a tabela no `close`). |
+| `append(table, data)` | `data` é uma `pa.Table`, um `pa.RecordBatch`, um `RecordBatchReader` ou um iterável de lotes: `with appender(table) as a: for batch in ...: a.write(batch)`; devolve as linhas gravadas; outro tipo é recusado com a mensagem que aponta `pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. |
 | `audit(table, partitions, uri=None, version=None, foreign_keys=False, key_scope=None, referenced=None)` | `uri` e `version` são os da tabela fixada, e montam `pinned` e o `pinned_max_key` de `delta.max_key` sem depender de `Execution`; `referenced` dá, por nome de tabela, a URI e a versão fixada da tabela referenciada que o sandbox não tem, e a que o sandbox tem entra pelo nome do modelo. Roda o texto de `sql.render(check.statement, "duckdb", metadata, prefix="")` de cada verificação — `json_valid` e `strftime(data, '%Y-%m-%d')` são as funções do dialeto — e monta o `AuditReport`, com até 20 linhas inteiras de amostra por verificação reprovada (decisão do usuário de 2026-09-22): a verificação `linhas` conta por coluna e não tem linha para amostrar, então cada contador acima de zero ganha uma segunda consulta, `SELECT * ... WHERE <condição da coluna> LIMIT 20`, rodada só na reprovação; a comparação com as demais partições sai de `pinned` na versão fixada, e `passed` falso interrompe a execução. |
 | `export_partition(table, uri, value, metadata, expected_rows=None, columns_without_min_max=())` | `uri`, `metadata` e `expected_rows` vêm do chamador, porque o motor não conhece o `Database` e o commit precisa dos metadados. A partição entra no Delta pelo registro do arquivo que o motor gravou, o padrão que o usuário aprovou em 2026-09-24 para as etapas 4, 5 e 7; o `rewrite` saiu do motor DuckDB, com a flag `export_mode` (decisão do usuário do mesmo dia). `columns_without_min_max`, as colunas `Double` com valor não finito na partição, vem de `run.publish_delta` e vai a `register_files`. O registro: `COPY (SELECT <cada coluna do contrato em CAST para o tipo dele, sem a de partição> FROM <sandbox> WHERE <coluna de partição> = '<valor>' ORDER BY <sort_key>) TO '<uri>/<coluna de partição>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)`, com a contagem do sandbox no mesmo bloco da sessão, mais `register_files` com as estatísticas de `RETURN_STATS`, as conferências da [etapa 3](PLAN-STAGE-3.md) antes do commit e a releitura depois; a memória é constante (600 MB na reescrita medida em [`delta.md`](delta.md)). O `uuid` no nome impede uma reexecução com o mesmo `execution_id` de sobrescrever o arquivo que a versão anterior referencia. O `write_deltalake` de um leitor, o caminho que saiu, crescia com a partição (1.140 MB para 135 MB de Parquet na mesma medição). |
 | `cleanup()` | Cancela por `interrupt()` o comando em curso, fecha a conexão e apaga o arquivo do banco, o seu `.wal` e a pasta de transbordo, e a pasta de `tempfile.mkdtemp`; o banco de um caminho que a configuração informou fica. Numa sessão a mais, fecha só o cursor; a segunda chamada não faz nada. |
@@ -74,12 +75,12 @@ Testes: `tests/test_audit.py`, sem gravar: o texto de cada verificação nos doi
 lida do `primary_key` do modelo e o escopo escolhido pelas colunas da chave. `tests/test_engine_duckdb.py` sob a raiz local: o pipeline de exemplo (doze partições
 materializadas e dimensões em view, um `select` com `join`, auditoria, com `nonfinite_columns` numa partição com `NaN`, exportação da partição pelo registro do arquivo do `COPY`, sem o mínimo e o máximo dessa coluna) sobre um
 Delta local criado no teste; o ciclo `query`, `to_pandas(types_mapper=pd.ArrowDtype)`, `from_pandas` e
-`load` com `decimal128(18, 2)` e `date32` mantidos, `load` recusando um DataFrame e o `loader`
-recusando o nome que a view do `ingest` ocupa, com a leitura da versão fixada por `pinned_delta` no
-lugar; o ciclo por
+`append` com `decimal128(18, 2)` e `date32` mantidos, `append` recusando um DataFrame e o
+`appender` recusando a view do `ingest` e a tabela que não existe, com a leitura da versão fixada
+por `pinned_delta` no lugar; o ciclo por
 lotes: `stream` que entrega o primeiro lote enquanto a consulta roda e deixa outros comandos
-rodarem, `stream` sobre uma tabela temporária e dentro de `session()`, `stream` fechado no meio, `loader` que não insere nada na exceção do cliente e no lote
-recusado pelo `cast`, `load` de um iterável e de uma `pa.Table` com o mesmo resultado, e `query`
+rodarem, `stream` sobre uma tabela temporária e dentro de `session()`, `stream` fechado no meio, `appender` que não insere nada na exceção do cliente e no lote
+recusado pelo `cast`, `append` de um iterável e de uma `pa.Table` com o mesmo resultado, e `query`
 igual a `stream(...).read_all()`;
 auditoria que reprova a chave repetida dentro da partição e a repetida contra uma partição da
 versão fixada, e o órfão de chave estrangeira com a tabela referenciada fora do sandbox; `query` de um
@@ -220,10 +221,16 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   [`POC.md`](POC.md)). A entrada que falha na thread auxiliar do `stream` marca o fim com o erro,
   que a construção levanta. Um comando que dure mais que a chave do secret depois da entrada ainda
   falha com a chave vencida.
-  Os arquivos intermediários de `stream` e de `loader` ficam na pasta de transbordo e saem no
+  Os arquivos intermediários de `stream` e de `appender` ficam na pasta de transbordo e saem no
   `close`.
 - **`ingest`** cria `VIEW <nome do modelo> AS SELECT * FROM delta_scan('<uri>', version := <v>)`,
-  ou a `TABLE` com `materialize=True`, na sessão. Com `partitions`, o filtro é `<coluna> BETWEEN
+  ou, com `materialize=True`, a tabela por `ddl(table, "duckdb")` seguida de `INSERT INTO <nome> BY
+  NAME SELECT * FROM delta_scan(...)`, numa transação, na sessão: a tabela ingerida tem os tipos do
+  contrato e o `NOT NULL`, um JSON malformado no Delta falha o `ingest` e deixa o nome livre, e a
+  view fica com os tipos do `delta_scan` (JSON em `VARCHAR`); o `INSERT` custou o mesmo que o
+  `CREATE TABLE AS` que o precedeu, 2,919 s contra 2,737 s em 4.000.000 de linhas com 2 threads e
+  2,565 s contra 2,499 s com 4, com o mesmo pico de memória (decisão do usuário de 2026-09-28,
+  [`POC.md`](POC.md)). Com `partitions`, o filtro é `<coluna> BETWEEN
   '<menor>' AND '<maior>' AND <coluna> IN (...)`: numa tabela de 12 partições, o `IN` de dois
   valores e o `OR` abriram os 12 arquivos, e o intervalo abriu só os seus (log `FileSystem` do
   DuckDB, 2026-09-23, [`POC.md`](POC.md)). As `n` partições de `previous_partitions` são contíguas,
@@ -233,7 +240,8 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 - **`pinned_delta`** devolve o `FromClause` que compila para `delta_scan('<uri>', version := <v>)`,
   com as colunas do contrato, e não cria objeto no sandbox: é a origem que a auditoria já precisa
   nas chaves fora da partição, e a que o pipeline usa para ler a tabela cujo nome no sandbox é a
-  saída do `loader`. No Redshift ele é a staging da [etapa 5](PLAN-STAGE-5.md).
+  tabela de `create_table` que o `appender` preenche. No Redshift ele é a staging da
+  [etapa 5](PLAN-STAGE-5.md).
 - **`stream`** devolve um `DuckDBStream`: um statement Core vira a cópia prefixada de
   `sql.prefixed(prefix="")`, recebe os valores do cliente por `statement.params(**params)` e é
   compilado por `duckdb_engine.Dialect(paramstyle="qmark")`, o estilo do driver do DuckDB, sem
@@ -267,32 +275,35 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   livre, contra 0,908 s e 876 MB (leituras de 2026-09-23, [`POC.md`](POC.md)).
 - **`query`** roda sob o lock, pelo caminho de compilação de `stream` para um statement e por `bind`
   para um texto pronto, e devolve `to_arrow_table()`, sem arquivo.
-- **`loader`** devolve um `DuckDBLoader`, com a recusa do nome ocupado na abertura:
-  `duckdb_tables()` e `duckdb_views()` dizem o que existe, e um nome tomado levanta `SandboxError`
-  com a mensagem que aponta `run.pinned_delta(table)` para ler a versão fixada. O `CREATE TABLE IF
-  NOT EXISTS` não serve de guarda: sobre uma view ele passa em silêncio e o `INSERT ... BY NAME`
-  seguinte morre com `Catalog Error: <nome> is not an table`, e sobre uma tabela de outro formato
-  ele também passa, deixando o `INSERT ... BY NAME` preencher com nulo a coluna que sobra (leituras
-  de 2026-09-22). A guarda lê o catálogo num cursor próprio, sem o lock da sessão, e a abertura não
-  toca a sessão: um `CREATE TABLE` sob o lock, na abertura de um `loader` aberto depois de um
-  `stream`, como no exemplo mensal de [`PLAN.md`](PLAN.md), esperaria a consulta inteira do stream
-  antes do primeiro lote, 0,811 s contra 0,006 s em 20.000.000 de linhas (leitura e decisão do
-  usuário de 2026-09-23, [`POC.md`](POC.md)). O cursor não vê as tabelas temporárias da sessão
-  principal, e um nome ocupado entre a abertura e o `close` falha no `CREATE` do `close`, sem
-  inserir nada. Por isso um `load` disparado numa thread e esquecido sem `result()` não deixa a
-  leitura ver dado velho: antes do `close`, a leitura da tabela falha com `CatalogException`, na
-  sessão principal e numa sessão a mais, e a barreira por tabela que esperaria a carga ficou fora
-  das etapas (decisão do usuário de 2026-09-23,
-  `test_engine_duckdb.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`).
-  Depois da guarda, `write` faz `cast(batch, table)` na thread do cliente e enfileira,
-  e a thread auxiliar grava os lotes num arquivo Arrow IPC com LZ4, sem a sessão. O `close` registra
-  o leitor do arquivo com um nome único, que não é o de uma tabela do modelo, porque um leitor
-  registrado ocupa um nome de view (leitura de 2026-09-22), e roda, sob o lock e numa transação,
-  `CREATE TABLE <nome> (ddl)` e um único `INSERT INTO <nome> BY NAME SELECT * FROM <leitor>`: um erro
-  do `INSERT` desfaz o `CREATE` pelo `ROLLBACK`, e o nome fica livre (leitura de 2026-09-23);
-  qualquer erro apaga o arquivo e sobe em `close` ou no `write` seguinte. `load` embrulha
-  `loader` para `pa.Table`, `RecordBatch`, `RecordBatchReader` e iteráveis, e recusa o resto com a
-  mensagem que aponta `pa.Table.from_pandas`.
+- **`create_table`** roda `ddl(table, "duckdb")` num cursor à parte da conexão, sem o lock da
+  sessão, depois de recusar o nome ocupado: `duckdb_tables()` e `duckdb_views()` dizem o que
+  existe, e um nome tomado levanta `SandboxError`. O `CREATE TABLE IF NOT EXISTS` não serve de
+  guarda: sobre uma view ele passa em silêncio e o `INSERT ... BY NAME` seguinte morre com
+  `Catalog Error: <nome> is not an table`, e sobre uma tabela de outro formato ele também passa,
+  deixando o `INSERT ... BY NAME` preencher com nulo a coluna que sobra (leituras de 2026-09-22). O
+  cursor não vê as tabelas temporárias da sessão principal. A DDL fora do lock existe porque um
+  comando sob o lock, depois de um `stream` aberto, como no exemplo mensal de [`PLAN.md`](PLAN.md),
+  esperaria a consulta inteira do stream antes do primeiro lote, 0,811 s contra 0,006 s em
+  20.000.000 de linhas (leitura de 2026-09-23, [`POC.md`](POC.md)); a sonda de 2026-09-28 leu o
+  `CREATE TABLE` num cursor em 0,002 s durante um `stream` que na sessão o fazia esperar 1,6 s a
+  1,9 s ([`POC.md`](POC.md)).
+- **`appender`** devolve um `DuckDBAppender`, que na abertura lê o catálogo num cursor à parte,
+  sem o lock, e recusa com `SandboxError` a tabela que não existe, apontando `create_table` e o
+  `ingest` com `materialize=True`, e a view do `ingest`, que não recebe lotes. Depois da guarda,
+  `write` faz `cast(batch, table)` na thread do cliente e enfileira, e a thread auxiliar grava os
+  lotes num arquivo Arrow IPC com LZ4, sem a sessão. O `close` registra o leitor do arquivo com um
+  nome único, que não é o de uma tabela do modelo, porque um leitor registrado ocupa um nome de view
+  (leitura de 2026-09-22), e roda, sob o lock, um único `INSERT INTO <nome> BY NAME SELECT * FROM
+  <leitor>`, só quando algum lote foi gravado: um erro do `INSERT` não deixa linha, e qualquer erro
+  apaga o arquivo e sobe em `close` ou no `write` seguinte. A tabela existe antes do `close`, então
+  uma leitura durante um `append` em curso vê a tabela sem as linhas novas, na sessão principal e
+  numa sessão a mais (`test_engine_duckdb.py`,
+  `test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows`), o efeito que o
+  usuário aceitou em 2026-09-28 no lugar da falha com `CatalogException` que o `loader` criando a
+  tabela no `close` dava (decisão de 2026-09-23, substituída); a barreira por tabela que esperaria
+  a carga segue fora das etapas. `append` embrulha `appender` para `pa.Table`, `RecordBatch`,
+  `RecordBatchReader` e iteráveis, devolve as linhas gravadas e recusa o resto com a mensagem que
+  aponta `pa.Table.from_pandas`.
 - **`audit`** roda `audit_sql(table, "duckdb", pinned=pinned_delta(table, uri, version), ...)` e
   monta o `AuditReport`; `passed` falso não levanta aqui, levanta em `Execution.audit`. Cada
   verificação reprovada leva até 20 linhas inteiras de amostra: as verificações de chave e de
@@ -324,10 +335,11 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
 | `checks`, `audit_sql` | Modelo aprovado por `check_models`; `pinned` informado quando alguma chave não inclui a coluna de partição. | Um `Check` por consulta, com o texto renderizável nos dois dialetos; sem conexão. |
 | `DuckDBEngine` | Extensões na pasta configurada; no S3, credencial na cadeia do `boto3`. | Uma conexão sobre o arquivo do banco, a sessão, sob um `RLock`; nenhum download; o `memory_limit` e as `threads` lidos do ambiente, ou os informados, e o espaço livre de `temp_directory` no log. |
 | `ingest` | Tabela Delta legível na versão pedida. | Uma view ou tabela com o nome do modelo, presa à versão; a tabela atual pode avançar sem afetar a leitura. |
-| `pinned_delta` | Tabela Delta legível na versão fixada. | Um `FromClause` sobre essa versão; nenhum objeto no sandbox, e o nome do modelo livre para o `loader`. |
+| `pinned_delta` | Tabela Delta legível na versão fixada. | Um `FromClause` sobre essa versão; nenhum objeto no sandbox, e o nome do modelo livre para `create_table`. |
 | `new_session` | O motor aberto. | Outra conexão ao mesmo banco, com o seu lock; o que a sessão principal confirmou visível, as tabelas temporárias dela não; o fim do `with` fecha só essa conexão. |
 | `stream` | Texto ou statement válido; parâmetros que fecham com o dicionário. | Lotes na ordem da consulta, o primeiro antes do fim de uma consulta sem operador bloqueante; no máximo o orçamento de 64 MiB de lotes em memória; a sessão livre quando a consulta acaba, sem esperar o cliente; a consulta cancelada e o arquivo apagado em `close`; o erro anterior ao primeiro lote no construtor, o posterior na leitura seguinte ao último lote entregue. |
-| `loader`, `load` | O nome da tabela livre no sandbox; lotes que passam por `cast`. | Nada existe antes do `close`, que cria a tabela e insere numa transação; nenhuma tabela na exceção, no lote recusado ou no erro do `INSERT`; `rows` igual às linhas escritas; `SandboxError` com o nome ocupado, sem criar nem alterar objeto algum. |
+| `create_table` | O nome livre no sandbox. | A tabela vazia do modelo, pela DDL; `SandboxError` com o nome ocupado, sem criar nem alterar objeto algum. |
+| `appender`, `append` | A tabela no sandbox, do `ingest` materializado ou de `create_table`; lotes que passam por `cast`. | Nenhuma linha antes do `close`, que insere num comando só; nenhuma linha na exceção, no lote recusado ou no erro do `INSERT`; `rows` igual às linhas escritas; `SandboxError` na tabela que não existe e na view do `ingest`, sem alterar objeto algum. |
 | `audit` | Sandbox com a tabela; `uri` e `version` para as chaves fora da partição. | Um `AuditReport` com o SQL de cada verificação e até 20 linhas de amostra por verificação reprovada; nenhuma escrita. |
 | `export_partition` | Auditoria aprovada (conferida por `Execution.publish_delta`); a pasta da partição gravável. | Uma versão nova no Delta com a partição substituída e as estatísticas registradas. |
 | `cleanup` | Nenhum. | O comando em curso cancelado; arquivo do banco e pasta de transbordo apagados; chamadas seguintes falham. |
@@ -358,16 +370,18 @@ uma chave única.
 | Ingestão presa | `test_ingest_pins_the_version` | Um `append` na tabela depois da abertura não aparece na view nem na tabela materializada. |
 | Poda da ingestão | `test_ingest_opens_only_the_range_of_partitions` | A ingestão de partições contíguas e de uma lista salteada abre só os arquivos do intervalo, lidos pelo log `FileSystem` do DuckDB, e traz só as linhas pedidas. |
 | Parâmetros | `test_statement_parameters_expand_in_lists` | Um statement com `IN` de lista, `NOT IN` e `bindparam(..., expanding=True)` roda por `query` e por `stream`; um nome de parâmetro a mais ou a menos é `SqlError` antes de rodar. |
-| Versão fixada | `test_pinned_delta_reads_the_version_without_a_sandbox_name` | `pinned_delta` lê a versão fixada sem criar objeto no sandbox, e o `loader` da mesma tabela fica com o nome do modelo. |
+| Versão fixada | `test_pinned_delta_reads_the_version_without_a_sandbox_name` | `pinned_delta` lê a versão fixada sem criar objeto no sandbox, e `create_table` da mesma tabela fica com o nome do modelo. |
 | Stream | `test_stream_delivers_each_batch_while_the_query_runs` | O primeiro lote com a consulta ainda rodando, a ordem, nenhum lote no arquivo com o cliente acompanhando, um comando no meio da leitura que só roda depois do fim da consulta, a tabela temporária lida pelo stream, o stream dentro de `session()`, o abandono que para a consulta e apaga o arquivo, e o erro da consulta na construção ou na leitura seguinte ao último lote, da memória ou do arquivo. |
 | Orçamento | `test_stream_spills_after_the_budget_and_keeps_the_order` | Com o cliente lento e um orçamento de dois lotes, a memória nunca passa do orçamento, o resto vai para o arquivo, as linhas saem todas e na ordem, e o `close` apaga o arquivo. |
 | Cancelamento | `test_close_and_cleanup_interrupt_the_running_query` | O `close` depois do primeiro lote de uma varredura longa cancela a consulta, e a sessão continua usável; o `cleanup` cancela a ordenação de um stream que outra thread ainda constrói. |
-| Loader | `test_loader_creates_and_inserts_in_one_transaction_on_close` | Nada existe antes do `close`; exceção do cliente, lote recusado pelo `cast` e erro do `INSERT` não deixam tabela; `rows`; o loader abandonado sem `close` apaga o arquivo de transbordo e não cria a tabela. |
-| Ordem do exemplo mensal | `test_loader_opened_after_a_stream_does_not_wait_for_its_query` | Com `stream` e depois `loader` no mesmo `with`, o primeiro lote chega com a consulta rodando, e a tabela tem todas as linhas no fim. |
-| Pipeline de três estágios | `test_three_stage_pipeline_overlaps_read_work_and_write` | Leitura por `stream`, trabalho do cliente por lote e escrita por `loader` numa sessão única, sobre um banco em arquivo, dão as mesmas linhas que a versão por lote sem threads e que a versão por `pa.Table`; os tempos são leituras do relatório. |
-| Carga esquecida | `test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` | Um `load` disparado numa thread sem `result()`: antes do `close` do `loader`, a leitura da tabela falha com `CatalogException` na sessão principal e numa sessão a mais, em vez de ler dado velho. |
-| Nome ocupado | `test_loader_refuses_a_name_in_use` | O `loader` sobre a view do `ingest`, sobre a tabela do `ingest` materializado e sobre a tabela de um `loader` anterior levanta `SandboxError` antes do primeiro lote, e o objeto que estava lá não muda. |
-| Formas por tabela | `test_query_and_load_match_stream_and_loader` | `query` de um statement e de um texto igual a `stream(...).read_all()`; `load` de `pa.Table`, `RecordBatch`, leitor e iterável com o mesmo resultado; DataFrame recusado com a mensagem. |
+| Contrato na ingestão | `test_materialized_ingest_applies_the_contract` | A tabela do `ingest` materializado tem os tipos e o `NOT NULL` da DDL (`JSON`, `DECIMAL(18,2)`, `DOUBLE NOT NULL`), e a view os do `delta_scan` (`VARCHAR`, nulável); uma partição com JSON malformado não entra na tabela, com `duckdb.Error`, e o nome fica livre; `partitions=[]` cria a tabela vazia. |
+| Tabela vazia | `test_create_table_creates_the_empty_table_of_the_model` | `create_table` cria a tabela vazia com os tipos e o `NOT NULL` do contrato; o nome ocupado por ela, pela view ou pela tabela do `ingest` é `SandboxError`, e o objeto não muda. |
+| Appender | `test_appender_inserts_in_one_statement_on_close` | A tabela não muda antes do `close`; exceção do cliente, lote recusado pelo `cast`, lote sem a coluna `NOT NULL` e erro do `INSERT` não deixam linha; `rows`; o appender abandonado sem `close` apaga o arquivo de transbordo e não insere; o appender sem lote não muda a tabela, e o seguinte acrescenta ao que está nela. |
+| Ordem do exemplo mensal | `test_appender_and_create_table_after_a_stream_do_not_wait_for_its_query` | Com `stream` e depois `appender` no mesmo `with`, o primeiro lote chega com a consulta rodando, `create_table` de outra tabela dentro do `with` volta com a consulta ainda rodando, e a tabela tem todas as linhas no fim. |
+| Pipeline de três estágios | `test_three_stage_pipeline_overlaps_read_work_and_write` | Leitura por `stream`, trabalho do cliente por lote e escrita por `appender` numa sessão única, sobre um banco em arquivo, dão as mesmas linhas que a versão por lote sem threads e que a versão por `pa.Table`; os tempos são leituras do relatório. |
+| Leitura durante um append | `test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows` | Um `append` disparado numa thread sem `result()`: antes do `close` do `appender`, a leitura da tabela vê as linhas anteriores e nenhuma das novas, na sessão principal e numa sessão a mais; depois do `close`, todas. |
+| Tabela inexistente e view | `test_appender_refuses_the_view_and_the_missing_table` | O `appender` sobre a view do `ingest` e sobre uma tabela que não existe levanta `SandboxError` antes do primeiro lote, apontando `materialize=True` e `create_table`, e o objeto que estava lá não muda; a tabela do `ingest` materializado recebe `append`. |
+| Formas por tabela | `test_query_and_append_match_stream_and_appender` | `query` de um statement e de um texto igual a `stream(...).read_all()`; `append` de `pa.Table`, `RecordBatch`, leitor e iterável com o mesmo resultado; DataFrame recusado com a mensagem. |
 | Ciclo pandas | `test_pandas_round_trip_keeps_contract_types` | `to_pandas(types_mapper=pd.ArrowDtype)` e `from_pandas` mantêm `decimal128(18, 2)` e `date32`. |
 | Exportação | `test_export_partition_registers_the_copy_file` | A partição registrada tem as linhas e as somas do sandbox, sem o mínimo e o máximo da coluna com `NaN`; o Delta poda pela estatística da chave (`Scanning Files: 0/n`); o arquivo leva o `execution_id` no nome; `expected_rows` diferente recusa sem commit; o valor numa tabela sem partição recusa antes do `COPY`, sem arquivo na pasta da tabela. |
 | Pipeline de exemplo | `test_example_pipeline_in_a_file_backed_database` | Doze partições materializadas, dimensões em view, um `select` com `join`, auditoria, exportação; o arquivo `.duckdb` apagado por `cleanup`. |
@@ -378,9 +392,10 @@ uma chave única.
 ## A implementação
 
 Os módulos `serialize_db.audit`, `serialize_db.engine` (o protocolo `Engine`, `BatchStream`,
-e `Loader`) e `serialize_db.engine.duckdb` (`DuckDBConfig`, `DuckDBEngine`, `environment_limits`
-e o `DuckDBStream` e o `DuckDBLoader` dele), com `SandboxError` em `serialize_db.errors`, e os casos de
-`tests/test_audit.py` e `tests/test_engine_duckdb.py` substituem a interface e os rascunhos
+e `Appender`) e `serialize_db.engine.duckdb` (`DuckDBConfig`, `DuckDBEngine`,
+`environment_limits` e o `DuckDBStream` e o `DuckDBAppender` dele), com `SandboxError` em
+`serialize_db.errors`, e os casos de `tests/test_audit.py` e `tests/test_engine_duckdb.py`
+substituem a interface e os rascunhos
 executados em 2026-09-21: as assinaturas e as docstrings estão no código e na documentação do
 `pdoc`. A sessão a mais de `new_session` é um `DuckDBEngine(..., parent=motor)`. O que a
 implementação mostrou está em [`POC.md`](POC.md), seção
@@ -394,16 +409,19 @@ sobre as propostas da revisão estão escritas nas seções que as descrevem: o 
 caminho do statement Core; o escopo das chaves da auditoria pela coluna de `partition_source` e pelo
 `skip_when` contra o `max_key` da versão fixada; a interface do motor, com `query(statement_or_sql,
 params=None)` no lugar de `query` e `execute`, os argumentos nomeados no lugar de `**options` e
-`checks` sem `prefix`; o `loader` que confere o nome num cursor próprio e cria a tabela no `close`,
-numa transação; o `stream` híbrido, com os lotes em memória até 64 MiB e o arquivo com LZ4 depois; e
-o `interrupt()` no `close` do stream e no `cleanup`. O motor implementa as três últimas, e
+`checks` sem `prefix`; o `loader` que conferia o nome num cursor próprio e criava a tabela no
+`close`, numa transação, trocado em 2026-09-28 por `create_table` e `appender`; o `stream`
+híbrido, com os lotes em memória até 64 MiB e o arquivo com LZ4 depois; e o `interrupt()` no
+`close` do stream e no `cleanup`. O motor implementa as três últimas, e
 `tests/test_engine_duckdb.py` tem os casos de cada uma.
 
 As quatro decisões que o usuário tomou em 2026-09-22 — o `loader` recusando com `SandboxError` um
 nome já ocupado no sandbox, o `memory_limit` no padrão do DuckDB, o banco em arquivo com
 `temp_directory` em pasta nova, e a amostra de até 20 linhas inteiras por verificação reprovada —
 estão escritas, cada uma, na seção que a descreve; a instrução do usuário de 2026-09-24 trocou o
-`memory_limit` no padrão do DuckDB pelos limites lidos do ambiente. A recusa do `loader` trouxe duas
+`memory_limit` no padrão do DuckDB pelos limites lidos do ambiente, e a decisão de 2026-09-28
+trocou a recusa do `loader` pela de `create_table`, que recusa o nome ocupado, e pela do
+`appender`, que recusa a tabela inexistente e a view do `ingest`. A recusa do `loader` trouxe duas
 decisões do mesmo dia: `pinned_delta(table, uri, version)` no protocolo dos dois motores, por onde o
 pipeline lê a versão fixada da tabela que ele grava, e `SandboxError` como a exceção da
 etapa em `serialize_db.errors`.

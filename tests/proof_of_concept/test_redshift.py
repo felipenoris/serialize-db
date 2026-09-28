@@ -1511,11 +1511,12 @@ def test_row_description_oids_and_type_modifier(redshift_session: RedshiftSessio
 
 def test_small_load_copy_cost(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
     """O custo fixo de carregar 10 linhas, como leitura: o Parquet no S3 mais ``COPY``, o caminho do
-    ``load`` da etapa 5, contra o ``INSERT`` de várias linhas que saiu dele.
+    ``append`` da etapa 5, contra o ``INSERT`` de várias linhas que saiu dele.
 
-    A decisão do usuário de 2026-09-23 levou o ``load`` sempre pelo ``loader``; é esta leitura que
-    traria o ``INSERT`` de volta. O melhor de três de cada, na mesma tabela e com as mesmas linhas,
-    e o tempo do ``COPY`` inclui a gravação do arquivo no S3, como no ``loader``.
+    A decisão do usuário de 2026-09-23 levou o ``load`` sempre pelo ``loader``, hoje ``append``
+    pelo ``appender``; é esta leitura que traria o ``INSERT`` de volta. O melhor de três de cada,
+    na mesma tabela e com as mesmas linhas, e o tempo do ``COPY`` inclui a gravação do arquivo no
+    S3, como no ``appender``.
     """
     session = redshift_session
     name = session.table("carga_pequena")
@@ -1541,7 +1542,7 @@ def test_small_load_copy_cost(redshift_session: RedshiftSession, s3_location: S3
     s3 = boto3.client("s3")
 
     def copy_rows() -> None:
-        """Grava o arquivo no S3 e roda o ``COPY``, como o ``close`` do ``loader``."""
+        """Grava o arquivo no S3 e roda o ``COPY``, como o ``close`` do ``appender``."""
         buffer = io.BytesIO()
         pq.write_table(data, buffer)
         s3.put_object(Bucket=s3_location.bucket, Key=key, Body=buffer.getvalue())

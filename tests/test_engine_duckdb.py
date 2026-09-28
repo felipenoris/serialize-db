@@ -7,11 +7,13 @@ particionado por ``data_base_str`` com a origem ``data_base``, com uma chave est
 
 Eles conferem a configuração com os limites lidos do ambiente e a sessão única, a sessão a mais, a
 ingestão presa à versão e a poda por intervalo, os parâmetros do statement, a versão fixada, o
-stream (o primeiro lote com a consulta rodando, o orçamento, o cancelamento, os erros), o loader (a
-transação no ``close``, o loader abandonado, o nome ocupado, a ordem do exemplo mensal, o pipeline
-de três estágios, a leitura durante uma carga esquecida), as formas por tabela, o ciclo com o
-pandas, a auditoria (cada defeito, a dispensa da junção, a amostra, os não finitos, o órfão), a
-exportação pelo registro do arquivo do ``COPY`` e o pipeline de exemplo num banco em arquivo. A
+stream (o primeiro lote com a consulta rodando, o orçamento, o cancelamento, os erros),
+``create_table`` e o appender (o ``INSERT`` único no ``close``, o appender abandonado, a view e a
+tabela ausente recusadas, a ordem do exemplo mensal, o pipeline de três estágios, a leitura
+durante um acréscimo em voo), as formas por tabela, os tipos e o ``NOT NULL`` do ``ingest``
+materializado, o ciclo com o pandas, a auditoria (cada defeito, a dispensa da junção, a amostra,
+os não finitos, o órfão), a exportação pelo registro do arquivo do ``COPY`` e o pipeline de exemplo
+num banco em arquivo. A
 extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
@@ -191,6 +193,13 @@ def published_accounts(setup: Setup, numbers: list[str]) -> int:
 def count_of(engine: DuckDBEngine, name: str) -> int:
     """As linhas da tabela ou view ``name`` do sandbox."""
     return engine.query(f'SELECT count(*) AS n FROM "{name}"').column("n")[0].as_py()
+
+
+def create_and_append(engine: DuckDBEngine, table: sa.Table, data: object) -> int:
+    """A tabela criada vazia por ``create_table`` e os lotes acrescentados por ``append``; devolve
+    as linhas acrescentadas."""
+    engine.create_table(table)
+    return engine.append(table, data)
 
 
 def spool_files(engine: DuckDBEngine) -> list[Path]:
@@ -501,8 +510,48 @@ def test_ingest_opens_only_the_range_of_partitions(setup: Setup, name: str, want
     assert opened == {f"data_base_str={month}" for month in opened_months}
 
 
+def test_materialized_ingest_applies_the_contract(setup: Setup) -> None:
+    """A tabela do ``ingest`` materializado tem os tipos e o ``NOT NULL`` do DDL, e a view os tipos
+    do ``delta_scan``; uma partição com JSON malformado não entra na tabela, e o nome fica livre;
+    ``partitions=[]`` cria a tabela vazia."""
+    version = published_table(setup, ENTRIES, MONTHS[:1], rows=10)
+    engine = setup.engine
+    uri = setup.uri(ENTRIES)
+    engine.ingest(ENTRIES, uri, version, materialize=True)
+    materialized = engine.query(sa.select(ENTRIES))
+    view = ENTRIES.to_metadata(sa.MetaData(), name="cad_view")
+    engine.ingest(view, uri, version)
+    viewed = engine.query(sa.select(view))
+    assert materialized.num_rows == 10
+    assert viewed.num_rows == 10
+    types = engine.query(
+        "SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns "
+        "WHERE column_name IN ('meta', 'valor', 'preco') ORDER BY 1, 2").to_pylist()
+    by_table = {}
+    for row in types:
+        by_table.setdefault(row["table_name"], {})[row["column_name"]] = (row["data_type"],
+                                                                          row["is_nullable"])
+    assert by_table[ENTRIES.name] == {"meta": ("JSON", "YES"), "preco": ("DECIMAL(18,2)", "YES"),
+                                      "valor": ("DOUBLE", "NO")}
+    assert by_table["cad_view"]["meta"] == ("VARCHAR", "YES")
+    assert by_table["cad_view"]["valor"] == ("DOUBLE", "YES")
+    assert materialized.column("meta").to_pylist() == viewed.column("meta").to_pylist()
+
+    # O JSON malformado passa pelo cast e pela publicação, e o INSERT da ingestão o recusa.
+    broken = entry_rows(MONTHS[1], 100, 3)
+    meta_index = broken.schema.get_field_index("meta")
+    broken = broken.set_column(meta_index, "meta", pa.array(['{"k": 1}', "{", "[]"]))
+    version = delta.publish_partition(uri, ENTRIES, MONTHS[1], broken, METADATA, setup.storage)
+    other = ENTRIES.to_metadata(sa.MetaData(), name="cad_malformada")
+    with pytest.raises(duckdb.Error, match="JSON"):
+        engine.ingest(other, uri, version, partitions=[MONTHS[1]], materialize=True)
+    assert not engine.name_in_use("cad_malformada")
+    engine.ingest(other, uri, version, partitions=[], materialize=True)
+    assert count_of(engine, "cad_malformada") == 0
+
+
 def test_pinned_delta_reads_the_version_without_a_sandbox_name(setup: Setup) -> None:
-    """``pinned_delta`` lê a versão fixada sem criar objeto no sandbox, e o ``loader`` da mesma
+    """``pinned_delta`` lê a versão fixada sem criar objeto no sandbox, e ``create_table`` da mesma
     tabela fica com o nome do modelo; sem versão, ``SandboxError``."""
     version = published_table(setup, PROJECTED, MONTHS[:2])
     engine = setup.engine
@@ -514,7 +563,7 @@ def test_pinned_delta_reads_the_version_without_a_sandbox_name(setup: Setup) -> 
     statement = sa.select(sa.func.count().label("n"), top)
     assert engine.query(statement).to_pylist() == [{"n": 200, "topo": 200}]
     assert not engine.name_in_use(PROJECTED.name)
-    engine.load(PROJECTED, entry_rows(MONTHS[5], 1000, 3, PROJECTED))
+    create_and_append(engine, PROJECTED, entry_rows(MONTHS[5], 1000, 3, PROJECTED))
     assert count_of(engine, PROJECTED.name) == 3
     with pytest.raises(SandboxError, match="ainda não existe"):
         engine.pinned_delta(PROJECTED, uri, None)
@@ -527,7 +576,7 @@ def test_statement_parameters_expand_in_lists(setup: Setup) -> None:
     """Um statement com ``IN`` de lista, ``NOT IN`` e ``bindparam`` expansível roda por ``query`` e
     por ``stream``; um nome a mais ou a menos é ``SqlError`` antes de rodar."""
     engine = setup.engine
-    engine.load(ENTRIES, entry_rows(MONTHS[0], 1, 30))
+    create_and_append(engine, ENTRIES, entry_rows(MONTHS[0], 1, 30))
     statement = (
         sa.select(ENTRIES.c.id_lancamento)
         .where(ENTRIES.c.id_conta.in_([1, 2]), ENTRIES.c.id_lancamento.notin_([1, 4]),
@@ -556,7 +605,7 @@ def test_query_keeps_percent_literals(setup: Setup) -> None:
     engine = setup.engine
     abc = entry_rows(MONTHS[0], 1, 3, area="ABC")
     xyz = entry_rows(MONTHS[0], 10, 2, area="XYZ")
-    engine.load(ENTRIES, pa.concat_tables([abc, xyz]))
+    create_and_append(engine, ENTRIES, pa.concat_tables([abc, xyz]))
     statement = sa.select(sa.func.count().label("n")).where(ENTRIES.c.area.like("A%"))
     assert engine.query(statement).column("n")[0].as_py() == 3
     text = ('SELECT count(*) AS n FROM "cad_lancamentos" '
@@ -725,81 +774,126 @@ def test_close_and_cleanup_interrupt_the_running_query(setup: Setup) -> None:
     record("engine.cleanup_interrupts", f"{cleaned:.3f} s do cleanup com a ordenação em curso")
 
 
-# ---------------------------------------------------------------- o loader
+# ---------------------------------------------------------------- create_table e o appender
 
 
-def test_loader_creates_and_inserts_in_one_transaction_on_close(setup: Setup) -> None:
-    """Nada existe antes do ``close``; a exceção do cliente, o lote recusado pelo ``cast`` e o erro
-    do ``INSERT`` não deixam tabela; ``rows`` conta as linhas; o loader sem lote cria a tabela
-    vazia."""
+def test_create_table_creates_the_empty_table_of_the_model(setup: Setup) -> None:
+    """``create_table`` cria a tabela vazia com o DDL do modelo, os tipos e o ``NOT NULL`` do
+    contrato; o nome de uma view interna do catálogo do DuckDB está livre; o nome ocupado, por ela,
+    pela view ou pela tabela do ``ingest``, é ``SandboxError`` e o objeto não muda."""
+    version = published_table(setup, ENTRIES, MONTHS[:1], rows=10)
     engine = setup.engine
-    visible = []
-    with engine.loader(PROJECTED) as loader:
+    engine.create_table(PROJECTED)
+    assert engine.object_kind(PROJECTED.name) == "TABLE"
+    assert count_of(engine, PROJECTED.name) == 0
+    columns = engine.query(
+        "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+        f"WHERE table_name = '{PROJECTED.name}' ORDER BY ordinal_position").to_pylist()
+    by_name = {row["column_name"]: (row["data_type"], row["is_nullable"]) for row in columns}
+    assert by_name["preco"] == ("DECIMAL(18,2)", "YES")
+    assert by_name["meta"] == ("JSON", "YES")
+    assert by_name["valor"] == ("DOUBLE", "NO")
+    assert by_name["codigo"] == ("VARCHAR", "NO")
+
+    # As views internas do catálogo (information_schema.columns) não ocupam o nome.
+    assert engine.object_kind("columns") is None
+    engine.create_table(PROJECTED.to_metadata(sa.MetaData(), name="columns"))
+    assert engine.object_kind("columns") == "TABLE"
+
+    # O nome ocupado é recusado, de qualquer origem.
+    engine.ingest(ENTRIES, setup.uri(ENTRIES), version)
+    materialized = ENTRIES.to_metadata(sa.MetaData(), name="cad_materializada")
+    engine.ingest(materialized, setup.uri(ENTRIES), version, materialize=True)
+    for table in (PROJECTED, ENTRIES, materialized):
+        with pytest.raises(SandboxError, match="ocupado"):
+            engine.create_table(table)
+    names = (PROJECTED.name, ENTRIES.name, "cad_materializada")
+    assert [count_of(engine, name) for name in names] == [0, 10, 10]
+
+
+def test_appender_inserts_in_one_statement_on_close(setup: Setup) -> None:
+    """A tabela não muda antes do ``close``; a exceção do cliente, o lote recusado pelo ``cast`` e
+    o erro do ``INSERT`` não deixam linha; ``rows`` conta as linhas; o appender sem lote não muda a
+    tabela, e o segundo appender acrescenta ao que o primeiro inseriu."""
+    engine = setup.engine
+    engine.create_table(PROJECTED)
+    seen = []
+    with engine.appender(PROJECTED) as appender:
         for index in range(5):
-            loader.write(entry_rows(MONTHS[0], 1 + index * 100, 100, PROJECTED))
-            visible.append(engine.name_in_use(PROJECTED.name))
-    assert loader.rows == 500
-    assert set(visible) == {False}
+            appender.write(entry_rows(MONTHS[0], 1 + index * 100, 100, PROJECTED))
+            seen.append(count_of(engine, PROJECTED.name))
+    assert appender.rows == 500
+    assert set(seen) == {0}
     assert count_of(engine, PROJECTED.name) == 500
     assert spool_files(engine) == []
 
-    # A exceção do cliente não deixa tabela.
+    # A exceção do cliente não deixa linha.
     other = PROJECTED.to_metadata(sa.MetaData(), name="cad_segunda")
+    engine.create_table(other)
     with pytest.raises(ValueError, match="falha do cliente"):
-        with engine.loader(other) as loader:
-            loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+        with engine.appender(other) as appender:
+            appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
             raise ValueError("falha do cliente")
-    assert not engine.name_in_use("cad_segunda")
+    assert count_of(engine, "cad_segunda") == 0
 
-    # O lote recusado pelo cast não deixa tabela.
+    # O lote recusado pelo cast não deixa linha, nem as do lote aceito antes dele.
     long_area = entry_rows(MONTHS[0], 11, 1, PROJECTED)
     area_index = long_area.schema.get_field_index("area")
     long_area = long_area.set_column(area_index, "area", pa.array(["x" * 11]))
     with pytest.raises(ContractError, match="texto de"):
-        with engine.loader(other) as loader:
-            loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
-            loader.write(long_area)
-    assert not engine.name_in_use("cad_segunda")
+        with engine.appender(other) as appender:
+            appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+            appender.write(long_area)
+    assert count_of(engine, "cad_segunda") == 0
 
-    # O lote sem a coluna NOT NULL valor passa pelo cast e falha no INSERT; o ROLLBACK desfaz o
-    # CREATE.
+    # O lote sem a coluna NOT NULL valor passa pelo cast e falha no INSERT, que não deixa linha.
     with pytest.raises(duckdb.ConstraintException):
-        with engine.loader(other) as loader:
-            loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED).drop_columns(["valor"]))
-    assert not engine.name_in_use("cad_segunda")
+        with engine.appender(other) as appender:
+            appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED).drop_columns(["valor"]))
+    assert count_of(engine, "cad_segunda") == 0
 
-    # O loader abandonado sem close: a thread termina e apaga o arquivo, e nada é criado.
-    abandoned = engine.loader(other)
+    # O appender abandonado sem close: a thread termina e apaga o arquivo, e nada é inserido.
+    abandoned = engine.appender(other)
     abandoned.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
     thread = abandoned._thread
     del abandoned
     thread.join(timeout=2)
     assert not thread.is_alive()
     assert spool_files(engine) == []
-    assert not engine.name_in_use("cad_segunda")
-
-    # O loader sem lote cria a tabela vazia.
-    with engine.loader(other) as loader:
-        pass
-    assert engine.name_in_use("cad_segunda")
     assert count_of(engine, "cad_segunda") == 0
 
+    # O appender sem lote não muda a tabela; o seguinte acrescenta ao que já está nela.
+    with engine.appender(other):
+        pass
+    assert count_of(engine, "cad_segunda") == 0
+    assert engine.append(other, entry_rows(MONTHS[0], 1, 10, PROJECTED)) == 10
+    assert engine.append(other, entry_rows(MONTHS[0], 11, 5, PROJECTED)) == 5
+    assert count_of(engine, "cad_segunda") == 15
 
-def test_loader_opened_after_a_stream_does_not_wait_for_its_query(setup: Setup) -> None:
-    """Com ``stream`` e depois ``loader`` no mesmo ``with``, o primeiro lote chega com a consulta
-    rodando, e a tabela tem todas as linhas no fim."""
+
+def test_appender_and_create_table_after_a_stream_do_not_wait_for_its_query(
+        setup: Setup) -> None:
+    """Com ``stream`` e depois ``appender`` no mesmo ``with``, o primeiro lote chega com a consulta
+    rodando; ``create_table`` de outra tabela dentro do ``with`` volta com a consulta ainda
+    rodando; a tabela tem todas as linhas no fim."""
     engine = setup.engine
     engine.query(
         "CREATE TABLE fonte AS SELECT range AS id_lancamento, 1 AS id_conta, "
         "DATE '2026-08-31' AS data_base, range / 4 AS valor, 'L' || range AS codigo, "
         "'2026-08-31' AS data_base_str FROM range(3_000_000)")
-    with engine.stream("SELECT * FROM fonte") as stream, engine.loader(PROJECTED) as loader:
+    engine.create_table(PROJECTED)
+    other = PROJECTED.to_metadata(sa.MetaData(), name="cad_segunda")
+    with engine.stream("SELECT * FROM fonte") as stream, engine.appender(PROJECTED) as appender:
         first = stream.read_next_batch()
         query_running = stream._thread.is_alive()
-        loader.write(first)
+        engine.create_table(other)
+        still_running = stream._thread.is_alive()
+        appender.write(first)
         for batch in stream:
-            loader.write(batch)
+            appender.write(batch)
     assert query_running
+    assert still_running
+    assert engine.object_kind("cad_segunda") == "TABLE"
     assert count_of(engine, PROJECTED.name) == 3_000_000
 
 
@@ -815,7 +909,7 @@ def pipeline_table(name: str) -> sa.Table:
 
 
 def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None:
-    """Leitura por ``stream``, trabalho do cliente por lote e escrita por ``loader`` numa sessão
+    """Leitura por ``stream``, trabalho do cliente por lote e escrita por ``appender`` numa sessão
     única, sobre um banco em arquivo, produzem as mesmas linhas que a versão por lote sem threads e
     que a versão por ``pa.Table``; os tempos são leituras do relatório."""
     engine = setup.engine
@@ -847,7 +941,7 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None
 
     # A tabela inteira: to_arrow_table, o trabalho de uma vez, a carga de uma vez.
     started = time.perf_counter()
-    engine.load(pipeline_table("por_tabela"), work(engine.query(sql)))
+    create_and_append(engine, pipeline_table("por_tabela"), work(engine.query(sql)))
     timings["por_tabela"] = time.perf_counter() - started
 
     # Por lote, sem threads: dentro de session, o stream roda a consulta inteira na thread do
@@ -859,12 +953,13 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None
     timings["sequencial"] = time.perf_counter() - started
 
     # Encadeado, na ordem do exemplo mensal: a consulta na thread do stream, o trabalho na thread
-    # do cliente, a escrita do arquivo na thread do loader, e o CREATE e o INSERT únicos no close.
+    # do cliente, a escrita do arquivo na thread do appender, e o INSERT único no close.
     started = time.perf_counter()
+    engine.create_table(pipeline_table("encadeado"))
     with (engine.stream(sql, batch_size=200_000) as stream,
-          engine.loader(pipeline_table("encadeado")) as loader):
+          engine.appender(pipeline_table("encadeado")) as appender):
         for batch in stream:
-            loader.write(work(batch))
+            appender.write(work(batch))
     timings["encadeado"] = time.perf_counter() - started
 
     # As três versões dão as mesmas linhas e somas; os tempos vão para o relatório.
@@ -881,63 +976,59 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None
     record("engine.timing.three_stage_pipeline_3M_rows", ", ".join(readings))
 
 
-def test_loader_refuses_a_name_in_use(setup: Setup) -> None:
-    """O ``loader`` sobre a view do ``ingest``, sobre a tabela materializada e sobre a tabela de um
-    ``loader`` anterior levanta ``SandboxError`` antes do primeiro lote, e o objeto não muda."""
+def test_appender_refuses_the_view_and_the_missing_table(setup: Setup) -> None:
+    """O ``appender`` sobre a view do ``ingest`` e sobre uma tabela que não existe no sandbox
+    levanta ``SandboxError`` antes do primeiro lote, apontando ``materialize=True`` e
+    ``create_table``; a tabela do ``ingest`` materializado recebe os lotes."""
     version = published_table(setup, ENTRIES, MONTHS[:1], rows=10)
     engine = setup.engine
     engine.ingest(ENTRIES, setup.uri(ENTRIES), version)
     materialized = ENTRIES.to_metadata(sa.MetaData(), name="cad_materializada")
     engine.ingest(materialized, setup.uri(ENTRIES), version, materialize=True)
-    engine.load(PROJECTED, entry_rows(MONTHS[0], 1, 5, PROJECTED))
-    for table in (ENTRIES, materialized, PROJECTED):
-        with pytest.raises(SandboxError, match="run.pinned_delta"):
-            engine.loader(table)
-    names = ("cad_lancamentos", "cad_materializada", PROJECTED.name)
-    assert [count_of(engine, name) for name in names] == [10, 10, 5]
+    with pytest.raises(SandboxError, match="materialize=True"):
+        engine.appender(ENTRIES)
+    with pytest.raises(SandboxError, match="create_table"):
+        engine.appender(PROJECTED)
+    assert engine.append(materialized, entry_rows(MONTHS[0], 11, 5)) == 5
+    assert [count_of(engine, name) for name in ("cad_lancamentos", "cad_materializada")] == [10, 15]
+    assert not engine.name_in_use(PROJECTED.name)
 
 
-def test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows(setup: Setup) -> None:
-    """Um ``load`` disparado numa thread sem ``result()`` não deixa a leitura ver dado velho: a
-    tabela só nasce no ``close`` do ``loader``, e o nome ocupado é recusado, então a leitura antes
-    da carga falha com ``CatalogException`` na sessão principal e numa sessão a mais."""
+def test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows(
+        setup: Setup) -> None:
+    """Um ``append`` disparado numa thread sem ``result()`` deixa a leitura ver a tabela como
+    estava: as linhas novas só entram no ``close`` do ``appender``, de uma vez, na sessão
+    principal e numa sessão a mais."""
     engine = setup.engine
-    missing = f"{PROJECTED.name} does not exist"
+    engine.create_table(PROJECTED)
+    engine.append(PROJECTED, entry_rows(MONTHS[0], 1, 10, PROJECTED))
     opened = threading.Event()
     release = threading.Event()
 
-    def load() -> None:
-        with engine.loader(PROJECTED) as loader:
-            loader.write(entry_rows(MONTHS[0], 1, 1000, PROJECTED))
+    def append() -> None:
+        with engine.appender(PROJECTED) as appender:
+            appender.write(entry_rows(MONTHS[0], 11, 1000, PROJECTED))
             opened.set()
             assert release.wait(timeout=10)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(load)  # o cliente esquece o result()
+        future = pool.submit(append)  # o cliente esquece o result()
         assert opened.wait(timeout=10)
 
-        # A carga em voo: a leitura falha nas duas sessões, em vez de ver uma tabela vazia ou
-        # anterior.
-        with pytest.raises(duckdb.CatalogException, match=missing):
-            count_of(engine, PROJECTED.name)
+        # O acréscimo em voo: as duas sessões leem as dez linhas anteriores, nenhuma das novas.
+        assert count_of(engine, PROJECTED.name) == 10
         with engine.new_session() as other:
-            with pytest.raises(duckdb.CatalogException, match=missing):
-                count_of(other, PROJECTED.name)
+            assert count_of(other, PROJECTED.name) == 10
         release.set()
         future.result()
 
-    # A carga terminada.
-    assert count_of(engine, PROJECTED.name) == 1000
-
-    # Uma segunda carga no mesmo nome é recusada: nenhuma tabela do sandbox tem estado anterior a
-    # ler.
-    with pytest.raises(SandboxError, match=PROJECTED.name):
-        engine.loader(PROJECTED)
+    # O acréscimo terminado.
+    assert count_of(engine, PROJECTED.name) == 1010
 
 
-def test_query_and_load_match_stream_and_loader(setup: Setup) -> None:
-    """``query`` é ``stream(...).read_all()``; ``load`` de ``pa.Table``, lote, leitor e iterável dá
-    o mesmo resultado; o DataFrame é recusado com a mensagem que aponta ``from_pandas``."""
+def test_query_and_append_match_stream_and_appender(setup: Setup) -> None:
+    """``query`` é ``stream(...).read_all()``; ``append`` de ``pa.Table``, lote, leitor e iterável
+    dá o mesmo resultado; o DataFrame é recusado com a mensagem que aponta ``from_pandas``."""
     engine = setup.engine
     data = entry_rows(MONTHS[0], 1, 1000, PROJECTED)
     reader = pa.RecordBatchReader.from_batches(data.schema, data.to_batches(max_chunksize=100))
@@ -950,7 +1041,7 @@ def test_query_and_load_match_stream_and_loader(setup: Setup) -> None:
     totals = {}
     for name, form in forms.items():
         table = PROJECTED.to_metadata(sa.MetaData(), name=f"forma_{name}")
-        assert engine.load(table, form) == 1000
+        assert create_and_append(engine, table, form) == 1000
         sums = f'SELECT count(*) AS n, sum(preco) AS p FROM "forma_{name}"'
         totals[name] = engine.query(sums).to_pylist()
     for name, total in totals.items():
@@ -965,21 +1056,21 @@ def test_query_and_load_match_stream_and_loader(setup: Setup) -> None:
 
     # O DataFrame e o texto são recusados com a mensagem que aponta from_pandas.
     with pytest.raises(ContractError, match="from_pandas"):
-        engine.load(PROJECTED, data.to_pandas())
+        engine.append(PROJECTED, data.to_pandas())
     with pytest.raises(ContractError, match="from_pandas"):
-        engine.load(PROJECTED, "texto")
+        engine.append(PROJECTED, "texto")
 
 
 def test_pandas_round_trip_keeps_contract_types(setup: Setup) -> None:
     """``to_pandas(types_mapper=pd.ArrowDtype)`` e ``from_pandas`` mantêm ``decimal128(18, 2)`` e
-    ``date32`` no caminho ``query``, lógica em pandas e ``load``."""
+    ``date32`` no caminho ``query``, lógica em pandas e ``append``."""
     engine = setup.engine
-    engine.load(ENTRIES, entry_rows(MONTHS[0], 1, 100))
+    create_and_append(engine, ENTRIES, entry_rows(MONTHS[0], 1, 100))
     frame = engine.query(sa.select(ENTRIES)).to_pandas(types_mapper=pd.ArrowDtype)
     assert str(frame["preco"].dtype) == "decimal128(18, 2)[pyarrow]"
     assert str(frame["data_base"].dtype) == "date32[day][pyarrow]"
     frame["id_lancamento"] = frame["id_lancamento"] + 1000
-    engine.load(PROJECTED, pa.Table.from_pandas(frame, preserve_index=False))
+    create_and_append(engine, PROJECTED, pa.Table.from_pandas(frame, preserve_index=False))
     loaded = engine.query(sa.select(PROJECTED))
     assert loaded.schema.field("preco").type == pa.decimal128(18, 2)
     assert loaded.schema.field("data_base").type == pa.date32()
@@ -1049,7 +1140,8 @@ def test_audit_unique_key_against_the_pinned_version(setup: Setup) -> None:
     version = delta.publish_partition(uri, PROJECTED, MONTHS[0], published, METADATA, setup.storage)
     repeated = entry_rows(MONTHS[1], 100, 1, PROJECTED).to_pylist()[0]
     repeated["codigo"] = published.column("codigo")[0].as_py()
-    setup.engine.load(PROJECTED, pa.Table.from_pylist([repeated], schema=published.schema))
+    create_and_append(setup.engine, PROJECTED,
+                      pa.Table.from_pylist([repeated], schema=published.schema))
     report = setup.engine.audit(PROJECTED, [MONTHS[1]], uri, version)
     sample = result_of(report, "chave_codigo_tabela").sample
     assert sample.column("codigo").to_pylist() == ["L000001"]
@@ -1063,7 +1155,7 @@ def test_audit_skips_the_pinned_join_above_max_key(setup: Setup) -> None:
     version = published_table(setup, PROJECTED, MONTHS[:2], rows=10)
     engine = setup.engine
     uri = setup.uri(PROJECTED)
-    engine.load(PROJECTED, entry_rows(MONTHS[2], 1000, 5, PROJECTED))
+    create_and_append(engine, PROJECTED, entry_rows(MONTHS[2], 1000, 5, PROJECTED))
     report = engine.audit(PROJECTED, [MONTHS[2]], uri, version)
     skipped = result_of(report, "chave_id_lancamento_tabela")
     assert skipped.passed
@@ -1071,8 +1163,8 @@ def test_audit_skips_the_pinned_join_above_max_key(setup: Setup) -> None:
     assert report.passed
 
     # Com chaves abaixo do max_key, a junção roda e acha as cinco repetições.
-    engine.query('DROP TABLE "cad_lancamentos_projetados"')
-    engine.load(PROJECTED, entry_rows(MONTHS[2], 15, 5, PROJECTED))
+    engine.query('DELETE FROM "cad_lancamentos_projetados"')
+    engine.append(PROJECTED, entry_rows(MONTHS[2], 15, 5, PROJECTED))
     joined_report = engine.audit(PROJECTED, [MONTHS[2]], uri, version)
     joined = result_of(joined_report, "chave_id_lancamento_tabela")
     assert joined.reason == ""
@@ -1110,7 +1202,8 @@ def test_audit_orphan_against_a_referenced_table_outside_the_sandbox(setup: Setu
     ``referenced``, e o órfão aparece; sem o argumento, a verificação fica em ``not_run``."""
     accounts_version = published_accounts(setup, ["A", "B"])
     engine = setup.engine
-    engine.load(ENTRIES, entry_rows(MONTHS[0], 1, 6))  # id_conta 1, 2 e 3: a conta 3 não existe
+    # id_conta 1, 2 e 3: a conta 3 não existe.
+    create_and_append(engine, ENTRIES, entry_rows(MONTHS[0], 1, 6))
     referenced = {"cad_contas": (setup.uri(ACCOUNTS), accounts_version)}
     report = engine.audit(ENTRIES, [MONTHS[0]], foreign_keys=True, referenced=referenced)
     orphans = result_of(report, "orfao_id_conta")
@@ -1139,7 +1232,7 @@ def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
     commit, e o valor numa tabela sem partição recusa antes do ``COPY``, sem arquivo."""
     engine = setup.engine
     with_nan = [float("nan")] + [entry_id / 4 for entry_id in range(2, 1001)]
-    engine.load(PROJECTED, entry_rows(MONTHS[1], 1, 1000, PROJECTED, valor=with_nan))
+    create_and_append(engine, PROJECTED, entry_rows(MONTHS[1], 1, 1000, PROJECTED, valor=with_nan))
     uri = setup.uri(PROJECTED)
     delta.create_table(uri, PROJECTED, setup.storage)
     version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000,
@@ -1179,7 +1272,7 @@ def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
 
 def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:
     """O pipeline de exemplo: seis partições materializadas e a dimensão em view, um ``select`` com
-    ``join`` em lotes para o ``loader``, auditoria com a versão fixada, exportação; ``cleanup``
+    ``join`` em lotes para o ``appender``, auditoria com a versão fixada, exportação; ``cleanup``
     apaga o arquivo do banco."""
     engine = setup.engine
     entries_version = published_table(setup, ENTRIES, MONTHS, rows=200)
@@ -1187,9 +1280,10 @@ def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:
     projected_uri = setup.uri(PROJECTED)
     delta.create_table(projected_uri, PROJECTED, setup.storage)
 
-    # A ingestão, o join em lotes para o loader, a auditoria e a exportação.
+    # A ingestão, o join em lotes para o appender, a auditoria e a exportação.
     engine.ingest(ENTRIES, setup.uri(ENTRIES), entries_version, partitions=MONTHS, materialize=True)
     engine.ingest(ACCOUNTS, setup.uri(ACCOUNTS), accounts_version)
+    engine.create_table(PROJECTED)
     statement = (
         sa.select(ENTRIES)
         .join_from(ENTRIES, ACCOUNTS, ENTRIES.c.id_conta == ACCOUNTS.c.id_conta)
@@ -1197,9 +1291,9 @@ def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:
     )
     params = {"particao": MONTHS[-1]}
     with (engine.stream(statement, params, batch_size=50) as stream,
-          engine.loader(PROJECTED) as loader):
+          engine.appender(PROJECTED) as appender):
         for batch in stream:
-            loader.write(batch)
+            appender.write(batch)
     report = engine.audit(PROJECTED, [MONTHS[-1]], projected_uri, 0, foreign_keys=True)
     assert report.passed, report.results
     expected_rows = report.rows(MONTHS[-1])

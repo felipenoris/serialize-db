@@ -231,6 +231,14 @@ export PYTHONPATH=tests
 # poc<id> próprio, cujas tabelas poc<id>_* e linhas de controle saem no fim; -s imprime as
 # leituras e os problemas.
 SERIALIZE_DB_TEST_REPORT=probes/output/consistencia_redshift.json .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_redshift_test.py 2>&1 | tee probes/output/consistencia_redshift.txt
+
+# A sonda de dois escritores na mesma tabela do sandbox roda pelo pytest nos dois motores: -m local
+# no DuckDB, sob $SERIALIZE_DB_TEST_LOCAL_ROOT/serialize-db-poc/<id>/, e -m redshift no alvo, com o
+# Delta e o staging sob $SERIALIZE_DB_TEST_S3_ROOT/serialize-db-poc/<id>/ e as tabelas do sandbox da
+# execução poc-<id> no esquema da suíte, apagadas no fim. O desfecho de cada escrita (entrou, ou
+# conflito) é leitura; a checagem é a consistência do que ficou.
+.venv/bin/python -m pytest -p conftest -m local -s probes/consistencia/probe_append_test.py
+SERIALIZE_DB_TEST_REPORT=probes/output/consistencia_append_redshift.json .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_append_test.py 2>&1 | tee probes/output/consistencia_append_redshift.txt
 ```
 
 # Resultados

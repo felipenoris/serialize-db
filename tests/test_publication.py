@@ -566,7 +566,8 @@ def export_with_duckdb(target: Target, table: sa.Table, months: list[str], rows:
     delta.create_table(uri, table, db.storage)
     config = DuckDBConfig(threads=2, temp_directory=str(target.folder / execution_id))
     with DuckDBEngine(config, execution_id, db.storage) as engine:
-        engine.load(table, entry_rows(months[0], 1, rows, table))
+        engine.create_table(table)
+        engine.append(table, entry_rows(months[0], 1, rows, table))
         version = engine.export_partition(table, uri, months[0], METADATA, expected_rows=rows)
         for index, month in enumerate(months[1:], 1):
             data = entry_rows(month, 1 + index * rows, rows, table)

@@ -146,25 +146,29 @@ devolve um `BatchStream` (iterável de `RecordBatch` com `schema`, `read_next_ba
 `close`, gerenciador de contexto e `__arrow_c_stream__`), ou com
 `run.sandbox.query(statement_ou_texto, params)`, que devolve a `pa.Table` de `stream(...).read_all()`
 e roda também o comando sem resultado (decisão do usuário de 2026-09-23, que tirou `execute`); grava
-com `with run.sandbox.loader(Modelo) as loader: loader.write(lote)`, ou com
-`run.sandbox.load(Modelo, data)`, que aceita `pa.Table`, `RecordBatch`, `RecordBatchReader` ou
-iterável de lotes e os passa ao mesmo `loader`. `query` compila o statement pelo dialeto, com os `bindparam` do
+numa tabela do sandbox, vinda do `ingest` com `materialize=True` ou de
+`run.sandbox.create_table(Modelo)`, com `with run.sandbox.appender(Modelo) as appender:
+appender.write(lote)`, ou com `run.sandbox.append(Modelo, data)`, que aceita `pa.Table`,
+`RecordBatch`, `RecordBatchReader` ou iterável de lotes e os passa ao mesmo `appender` (decisão do
+usuário de 2026-09-28). `query` compila o statement pelo dialeto, com os `bindparam` do
 cliente e as constantes como parâmetros do driver, e o executa na conexão crua, sem `Session`;
 `select(Lancamento)` é aceito como statement Core, e o mesmo statement roda num
 `sqlalchemy.Connection` que o cliente crie fora da biblioteca. A forma por
 tabela serve ao que cabe na memória e à lógica que precisa de todas as linhas: `query(statement)`
 devolve a `pa.Table`, `to_pandas(types_mapper=pd.ArrowDtype)` a leva ao pandas, e
-`load(Modelo, pa.Table.from_pandas(frame, preserve_index=False))` grava. O caminho de um resultado
-até o Delta é `loader` ou `load`, `audit` e `publish_delta`. Nenhuma primitiva pública recebe ou
-devolve um DataFrame, uma lista de linhas ou uma instância ORM; a mensagem que recusa um DataFrame
-aponta `pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. O nome de cada tabela no sandbox é de
-um só dono: `loader` recusa com `SandboxError` um nome que o `ingest` ou outro `loader` já ocupou, e
-a tabela que a execução grava é lida na versão fixada por `run.pinned_delta(Modelo)`, que não cria
-objeto no sandbox (decisões do usuário de 2026-09-22). Dentro da biblioteca, o que não cabe na
+`append(Modelo, pa.Table.from_pandas(frame, preserve_index=False))` grava. O caminho de um
+resultado até o Delta é `appender` ou `append`, `audit` e `publish_delta`. Nenhuma primitiva
+pública recebe ou devolve um DataFrame, uma lista de linhas ou uma instância ORM; a mensagem que
+recusa um DataFrame aponta `pa.Table.from_pandas` e `pa.RecordBatch.from_pandas`. O nome de cada
+tabela no sandbox é criado uma vez, pelo `ingest` ou por `create_table`, que recusa com
+`SandboxError` o nome já ocupado; `appender` recusa com o mesmo erro a tabela que não existe e a
+view do `ingest`, e a tabela que a execução grava é lida na versão fixada por
+`run.pinned_delta(Modelo)`, que não cria objeto no sandbox (decisões do usuário de 2026-09-22 e de
+2026-09-28). Dentro da biblioteca, o que não cabe na
 memória corre por `RecordBatchReader` (a troca do motor Redshift para `publish_partition` na
 partição com `Double` não finito), cada um lendo o seu arquivo intermediário; o registro da partição
 e a `rewrite` da tabela vão pelo `COPY ... (RETURN_STATS)` do DuckDB, sem passar pelo Python. O
-exemplo de uso, `stream` e `loader` dentro de uma execução, está na seção "Pipeline de atualização
+exemplo de uso, `stream` e `appender` dentro de uma execução, está na seção "Pipeline de atualização
 mensal".
 
 ### O que as sondagens fixaram em cada primitiva
@@ -209,18 +213,20 @@ em `test_duckdb.py`, `test_pyarrow.py` e `tests/test_engine_duckdb.py`. O que el
   limitado pelo estágio mais lento: 1,25x com o trabalho em pandas por lote e 1,55x com um laço
   Python puro, em 6.000.000 de linhas. Ler um lote é uma chamada nativa longa, e a thread auxiliar
   paga no máximo um intervalo de troca do GIL por lote ao lado do laço Python do cliente.
-- **`loader` grava os lotes num arquivo intermediário numa thread auxiliar e, no `close`, cria a
-  tabela e os insere num único `INSERT ... BY NAME`, numa transação**, sob o lock, enquanto o
-  cliente prepara o lote seguinte: `write`
-  faz o `cast` do lote na thread do cliente, para o erro aparecer com o lote em mãos, e bloqueia
-  quando a fila está cheia; nada existe antes do `close`, e uma exceção dentro do `with`, um lote
-  recusado pelo `cast`, um erro do `INSERT` ou um loader abandonado não deixam tabela. O comando único
-  é o caminho rápido: um `INSERT` por lote custa cerca de 3,5 ms, e num banco em arquivo o pipeline
-  de três estágios sobre 3.000.000 de linhas levou 0,400 s na sessão única, contra 0,565 s com um
-  cursor por stream e por loader e um `INSERT` por lote numa transação. A abertura só confere o
-  nome, num cursor à parte e sem o lock, porque um `CREATE TABLE` sob o lock esperaria a consulta
-  inteira de um `stream` aberto antes: em 20.000.000 de linhas, o primeiro lote chegava em 0,811 s,
-  contra 0,006 s com a tabela criada no `close` (decisão do usuário de 2026-09-23).
+- **`appender` grava os lotes num arquivo intermediário numa thread auxiliar e, no `close`, os
+  insere na tabela num único `INSERT ... BY NAME`**, sob o lock, enquanto o cliente prepara o lote
+  seguinte: `write` faz o `cast` do lote na thread do cliente, para o erro aparecer com o lote em
+  mãos, e bloqueia quando a fila está cheia; nenhuma linha entra antes do `close`, e uma exceção
+  dentro do `with`, um lote recusado pelo `cast`, um erro do `INSERT` ou um appender abandonado não
+  deixam linha. O comando único é o caminho rápido: um `INSERT` por lote custa cerca de 3,5 ms, e
+  num banco em arquivo o pipeline de três estágios sobre 3.000.000 de linhas levou 0,400 s na
+  sessão única, contra 0,565 s com um cursor por stream e por loader e um `INSERT` por lote numa
+  transação (leitura de 2026-09-23). A tabela vem antes, do `ingest` com `materialize=True` ou de
+  `create_table`, que roda a DDL num cursor à parte e sem o lock; a abertura do `appender` só
+  confere, num cursor à parte, que a tabela existe, porque um comando sob o lock esperaria a
+  consulta inteira de um `stream` aberto antes: em 20.000.000 de linhas, o primeiro lote chegava em
+  0,811 s, contra 0,006 s sem comando sob o lock na abertura (decisões do usuário de 2026-09-23 e
+  de 2026-09-28).
 - **O `INSERT` único sobre um leitor alimentado por gerador Python não é o caminho**, embora seja um
   comando só e atômico: o `arrow_scan` do DuckDB puxa o fluxo por uma thread de leitura antecipada do
   Arrow, que chama o gerador em outra thread além do que o comando consumiu e depois da falha, e essa
@@ -247,9 +253,9 @@ em `test_duckdb.py`, `test_pyarrow.py` e `tests/test_engine_duckdb.py`. O que el
   o resultado inteiro no `execute` (leitura do código, 2026-09-21), e o motor não sabe o tamanho do
   resultado antes dele. `query` monta a `pa.Table` das tuplas do cursor por colunas, `zip(*linhas)` e
   `pa.array(coluna, type=...)`, um terço do tempo de `from_pylist` por dicionários em 200.000 linhas.
-  O `loader` grava um row group por lote com `ParquetWriter.write_batch` em `staging/<execution_id>/`
-  e faz o `COPY` no `close`, então nada entra antes dele, e `load` passa sempre por ele
-  ([etapa 5](PLAN-STAGE-5.md)).
+  O `appender` grava um row group por lote com `ParquetWriter.write_batch` em
+  `staging/<execution_id>/` e faz o `COPY` no `close`, então nada entra antes dele, e `append` passa
+  sempre por ele ([etapa 5](PLAN-STAGE-5.md)).
 
 ### A conversão para o pandas
 
@@ -303,11 +309,11 @@ O que a sondagem fixa em `cast`:
 - `large_string`, `string_view` e dicionário viram `string`, e o comprimento do texto é medido
   depois da conversão, porque `pa.types.is_string` não reconhece os três (leitura de 2026-09-22);
   `timestamp[ns]` vira `[us]` quando a parte perdida é zero e é recusado quando não é.
-- Uma coluna calculada no pandas em `float64` chega como `double`: `loader.write` e `load` a recusam
-  numa coluna `Numeric` enquanto houver valor fora da escala, até o pipeline arredondar; nas colunas
-  `Double` do modelo de referência (decisão de 2026-09-20) ela entra como chega. O DataFrame que a
-  lógica do cliente devolve mantém os dtypes `ArrowDtype` do lote, e `from_pandas` os devolve ao
-  Arrow sem cópia.
+- Uma coluna calculada no pandas em `float64` chega como `double`: `appender.write` e `append` a
+  recusam numa coluna `Numeric` enquanto houver valor fora da escala, até o pipeline arredondar; nas
+  colunas `Double` do modelo de referência (decisão de 2026-09-20) ela entra como chega. O DataFrame
+  que a lógica do cliente devolve mantém os dtypes `ArrowDtype` do lote, e `from_pandas` os devolve
+  ao Arrow sem cópia.
 
 ### O paralelismo do cliente e as threads da biblioteca
 
@@ -316,9 +322,9 @@ O que a sondagem fixa em `cast`:
   dos drivers (`duckdb`, `deltalake`, `redshift_connector`, `boto3`) tem API assíncrona em Python. O
   paralelismo de cada comando é o do motor (as `threads` do DuckDB, as slices do Redshift), e cresce
   com a máquina; o do código cliente vem de `concurrent.futures`, e `Future.result()` expressa a
-  dependência entre um `load` e a leitura que o segue. A biblioteca não tem scheduler nem grafo de
+  dependência entre um `append` e a leitura que o segue. A biblioteca não tem scheduler nem grafo de
   tarefas, e as suas threads são os pools de `publish_delta`, de `publish_redshift` e de `ingest`,
-  uma sessão a mais por tabela, e a auxiliar de cada `stream` e de cada `loader`, encerrada no
+  uma sessão a mais por tabela, e a auxiliar de cada `stream` e de cada `appender`, encerrada no
   `close`. O DuckDB, o delta-rs e o PyArrow liberam o GIL no trabalho nativo, então threads bastam,
   e uma extensão em Rust não entra por paralelismo (`test_concurrency.py`, `serialize-db.md`, seção
   "Paralelismo").
@@ -445,12 +451,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - Nenhum lock espera pelo código do cliente: a parte de cada primitiva que usa a sessão termina sem
   esperar por ele. `stream` roda a consulta numa thread auxiliar, sob o lock, e entrega cada lote à
   memória, até o orçamento, ou a um arquivo intermediário, e o cliente lê os lotes enquanto a
-  consulta continua; o `loader` confere o nome na abertura sem a sessão, grava os lotes num arquivo
-  fora dela e, no `close`, cria a tabela e o carrega num comando só, sob o lock. Por isso o cliente
-  trabalha no lote atual enquanto a consulta produz o
-  seguinte, ou enquanto a biblioteca grava o anterior, e nenhuma combinação de `stream`, `loader` e
-  outras primitivas, de uma thread ou de várias, trava: outro comando espera só a consulta em curso
-  (`tests/test_engine_duckdb.py`, [`POC.md`](POC.md)).
+  consulta continua; `create_table` roda a DDL num cursor à parte, e o `appender` confere na
+  abertura, sem a sessão, que a tabela existe, grava os lotes num arquivo fora dela e, no `close`,
+  os insere num comando só, sob o lock. Por isso o cliente trabalha no lote atual enquanto a
+  consulta produz o seguinte, ou enquanto a biblioteca grava o anterior, e nenhuma combinação de
+  `stream`, `appender` e outras primitivas, de uma thread ou de várias, trava: outro comando espera
+  só a consulta em curso (`tests/test_engine_duckdb.py`, [`POC.md`](POC.md)).
 - O cliente não toca o lock: as primitivas o tomam e soltam, e `with run.sandbox.session() as
   connection:` dá a conexão crua ao que elas não cobrem, com o lock tomado pelo bloco. O lock é
   reentrante, então uma primitiva chamada dentro do bloco, na mesma thread, não trava, e um `stream`
@@ -462,7 +468,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   outra conexão ao mesmo banco, com o seu lock e as mesmas primitivas (um `cursor()` no DuckDB, uma
   conexão com credencial própria e o `USE` no Redshift), fechada no fim do bloco. Ela vê o que a
   sessão principal confirmou e não as tabelas temporárias dela, e a ordem entre as duas é a dos
-  commits: o cliente que lê numa sessão o que grava na outra espera o `close` do `loader` ou o fim
+  commits: o cliente que lê numa sessão o que grava na outra espera o `close` do `appender` ou o fim
   do comando. O cursor da sessão a mais nasce sem o lock da principal, porque `cursor()` não
   espera o comando em curso nela. `run.ingest` de mais de uma tabela abre uma sessão a mais por
   tabela; quatro tabelas de 150.000 linhas entraram em 0,017 s assim e em 0,066 s em série na sessão
@@ -620,7 +626,7 @@ ilustrativos.
 | --- | --- | --- |
 | 1. Abertura | Lê `_serialize_db/snapshots.json`; abre cada tabela de entrada e registra a versão. `serialize_db_publications` é lida só na publicação no Redshift (decisão do usuário de 2026-09-23). | `versions = {cad_lancamentos: 143, cad_contratos: 88, ...}` gravado no log da execução. |
 | 2. Ingestão | DuckDB: views com os nomes dos modelos sobre `delta_scan(uri, version := 143)`; `cad_lancamentos` materializada com `WHERE data_base_str BETWEEN '2025-09-30' AND '2026-08-31'`; dimensões como views. Redshift: `COPY ... MANIFEST` dos arquivos dessas partições em `exec_2026_09_05_cad_lancamentos`, via staging. | Sandbox em `/tmp/exec-2026-09-05.duckdb` ou tabelas com prefixo no esquema único. |
-| 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query`, e volta por `loader` ou `load`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
+| 3. Execução | O pipeline roda statements Core, texto gerado e lógica Python sobre o sandbox; o que sai para o Python sai em lotes por `stream`, ou como `pa.Table` por `query`, e volta por `appender` ou `append`; intermediários ficam no sandbox. | Tabela `cad_lancamentos_projetados` no sandbox, partição 2026-08-31. |
 | 4. Auditoria | Contagem, nulos, unicidade da chave contra as demais partições da versão 57, `data_base_str = strftime(data_base, '%Y-%m-%d')`, limites de tipo, `json_valid`, totais de controle. | Relatório com o SQL de cada verificação no log da execução; reprovação encerra sem tocar o Delta. |
 | 5. Publicação no Delta | `reconcile`; `register_files` do arquivo que o motor gravou (`COPY ... (RETURN_STATS)` do DuckDB, `UNLOAD` do Redshift para `data_base_str=2026-08-31/<execution_id>_<uuid>/`), depois das conferências; no motor Redshift, a partição com `Double` não finito troca para `publish_partition(uri, table, "2026-08-31", data, commit_metadata(...), storage)` a partir do leitor. | `cad_lancamentos` projetado passa da versão 57 para 58; um arquivo em `data_base_str=2026-08-31/`. |
 | 6. Snapshot do banco | Só na execução marcada, por exemplo a do fim do trimestre: `serialize_db_snapshot = "2026T3"` nos commits e a entrada em `_serialize_db/snapshots.json`. | Versões do snapshot protegidas por `keep_versions`. |
@@ -644,12 +650,13 @@ with Execution(db, engine="duckdb", partition="2026-08-31", execution_id="exec-2
     run.ingest(Contrato, Operacao, RelContratoOperacao)              # views sobre a versão fixada
     compute_in_sandbox(run.sandbox)                                  # statements Core e texto gerado, por query
     entries = select(Lancamento).where(Lancamento.data_base_str == "2026-08-31")
-    with run.sandbox.stream(entries, batch_size=100_000) as stream, run.sandbox.loader(LancamentoProjetado) as loader:
+    run.sandbox.create_table(LancamentoProjetado)                    # a tabela vazia do modelo, pela DDL
+    with run.sandbox.stream(entries, batch_size=100_000) as stream, run.sandbox.appender(LancamentoProjetado) as appender:
         for batch in stream:                                         # a biblioteca já lê o lote seguinte
             frame = batch.to_pandas(types_mapper=pd.ArrowDtype)      # sem cópia; decimal128 e date32 mantidos
             projected = project(frame)                               # lógica Python por linha; devolve um DataFrame
             projected["id_lancamento"] = run.next_ids(LancamentoProjetado, len(projected))   # faixa contígua, sob lock
-            loader.write(pa.RecordBatch.from_pandas(projected, preserve_index=False))        # cast aqui; o lote anterior entra na thread do loader
+            appender.write(pa.RecordBatch.from_pandas(projected, preserve_index=False))      # cast aqui; o lote anterior entra na thread do appender
     run.audit(LancamentoProjetado, partitions=["2026-08-31"])          # exigida por publish_delta
     run.publish_delta(LancamentoProjetado, partitions=["2026-08-31"])  # overwrite por partição, metadados
 ```
@@ -662,7 +669,7 @@ serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd
 ```
 
 O passo 3 usa a API da seção "A troca de dados com o código cliente": o exemplo mostra `stream` e
-`loader`, e `query` e `load` são a forma por tabela.
+`appender`, e `query` e `append` são a forma por tabela.
 
 Uma reexecução com o mesmo `execution_id` repete os `overwrite` das mesmas partições e produz as
 mesmas linhas; os ids podem diferir, porque `next_ids` recomeça do máximo da versão fixada. Uma

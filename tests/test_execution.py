@@ -123,12 +123,21 @@ def engine_for(db: Database, folder: Path, execution_id: str) -> DuckDBEngine:
 
 
 def project(run: Execution, month: str) -> None:
-    """O pipeline do teste: a partição da entrada, com ids novos, na tabela projetada do sandbox."""
+    """O pipeline do teste: a partição da entrada, com ids novos, na tabela projetada do sandbox,
+    criada por ``create_table``."""
     statement = sa.select(ENTRIES).where(ENTRIES.c.data_base_str == month)
-    with run.sandbox.stream(statement) as stream, run.sandbox.loader(PROJECTED) as loader:
+    run.sandbox.create_table(PROJECTED)
+    with run.sandbox.stream(statement) as stream, run.sandbox.appender(PROJECTED) as appender:
         for batch in stream:
             ids = pa.array(list(run.next_ids(PROJECTED, batch.num_rows)), pa.int64())
-            loader.write(batch.set_column(0, "id_lancamento", ids))
+            appender.write(batch.set_column(0, "id_lancamento", ids))
+
+
+def create_and_append(run: Execution, table: sa.Table, data: pa.Table) -> int:
+    """A tabela criada vazia no sandbox por ``create_table`` e as linhas acrescentadas por
+    ``append``; devolve as linhas acrescentadas."""
+    run.sandbox.create_table(table)
+    return run.sandbox.append(table, data)
 
 
 class FakeEngine:
@@ -291,16 +300,17 @@ def test_execution_without_partition_publishes_a_table_without_partition(
     with caplog.at_level(logging.INFO, logger="serialize_db.execution"):
         with Execution(db, engine_for(db, folder, "dom-1"), execution_id="dom-1") as run:
             assert run.partition is None
-            run.sandbox.load(composite, first_rows)
+            create_and_append(run, composite, first_rows)
             run.audit(composite, None)
             assert run.publish_delta(composite) == {composite.name: 1}
     assert "execução dom-1 aberta: sem partição" in caplog.text
     assert "execução dom-1 concluída: sem partição" in caplog.text
 
-    # A execução seguinte: a tabela inteira no sandbox, uma linha a mais.
+    # A execução seguinte: a tabela inteira no sandbox, uma linha a mais por append.
     with Execution(db, engine_for(db, folder, "dom-2"), execution_id="dom-2") as run:
         run.ingest(composite, materialize=True)
-        run.sandbox.query(sa.insert(composite).values(id_a=3, id_b=1))
+        third = pa.table({"id_a": pa.array([3], pa.int64()), "id_b": pa.array([1], pa.int64())})
+        assert run.sandbox.append(composite, third) == 1
         run.audit(composite, None)
         assert run.publish_delta(composite) == {composite.name: 2}
     published = delta.open_table(db.uri(composite), db.storage).to_pyarrow_dataset().to_table()
@@ -388,7 +398,7 @@ def test_failed_audit_leaves_the_delta_untouched(db: Database, folder: Path) -> 
             # Cada id duas vezes.
             once = rows(PROJECTED, "2026-08-31", range(1, 4))
             repeated = pa.concat_tables([once, once])
-            run.sandbox.load(PROJECTED, repeated)
+            create_and_append(run, PROJECTED, repeated)
             run.audit(PROJECTED, ["2026-08-31"])
             run.publish_delta(PROJECTED, partitions=["2026-08-31"])
     assert not delta.table_exists(db.uri(PROJECTED), db.storage)
@@ -510,7 +520,7 @@ def test_publish_delta_passes_the_nonfinite_columns_to_the_export(
     duckdb_engine = engine_for(db, folder, "exec-nan")
     with Execution(db, duckdb_engine, "2026-08-31", "exec-nan") as run:
         with_nan = rows(PROJECTED, "2026-06-30", range(100, 103), valor=[1.0, float("nan"), 2.0])
-        run.sandbox.load(PROJECTED, with_nan)
+        create_and_append(run, PROJECTED, with_nan)
         report = run.audit(PROJECTED, ["2026-06-30"])
         assert report.nonfinite_columns == {"2026-06-30": ("valor",)}
         run.publish_delta(PROJECTED, partitions=["2026-06-30"])
@@ -576,7 +586,7 @@ def repeated_key_pipeline(run: Execution) -> None:
     """Um pipeline que grava uma chave repetida e reprova na auditoria."""
     once = rows(PROJECTED, run.partition, range(1, 3))
     repeated = pa.concat_tables([once, once])
-    run.sandbox.load(PROJECTED, repeated)
+    create_and_append(run, PROJECTED, repeated)
     run.audit(PROJECTED, [run.partition])
 
 
@@ -591,7 +601,7 @@ def conflicting_pipeline(run: Execution) -> None:
 def composite_pipeline(run: Execution) -> None:
     """O pipeline sem partição: grava, audita e publica ``rel_composta`` inteira."""
     data = pa.table({"id_a": pa.array([1, 2], pa.int64()), "id_b": pa.array([1, 1], pa.int64())})
-    run.sandbox.load(Composta.__table__, data)
+    create_and_append(run, Composta.__table__, data)
     run.audit(Composta.__table__, None)
     run.publish_delta(Composta.__table__)
 

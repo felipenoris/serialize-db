@@ -16,8 +16,8 @@ ganhou `open_delta` e `open_redshift`, descritos no arquivo dessa etapa.
 | `Execution(db, engine, partition=None, execution_id=None, redshift=None)` | Gerenciador de contexto: na entrada abre as tabelas de entrada, fixa `versions` e cria o sandbox (`"duckdb"` é o `DuckDBEngine` da [etapa 4](PLAN-STAGE-4.md); `"redshift"` é o `RedshiftEngine` da [etapa 5](PLAN-STAGE-5.md), com a configuração `redshift`, uma `RedshiftConfig`, ou a das variáveis `SERIALIZE_DB_REDSHIFT_*` sem ela); na saída descarta o sandbox, grava o snapshot marcado quando a execução termina sem erro e grava o resumo no log. As primitivas podem ser chamadas de qualquer thread, cada uma na sessão única do motor, sob o lock dele, e o estado mutável (`versions`, auditorias aprovadas, o alocador) fica sob lock. Sem `partition`, a execução não tem partição, como a do pipeline que só atualiza tabelas sem partição (decisão do usuário de 2026-09-27). |
 | `run.previous_partitions(table, n)` | Os `n` últimos valores de partição da tabela na versão fixada até `run.partition`, inclusive, lidos das ações `add`, na ordem de texto dos valores, que nos valores `AAAA-MM-DD` é a do calendário; o calendário é do cliente, não da biblioteca. A execução sem partição é `ContractError`. |
 | `run.ingest(*tables, partitions=None, materialize=False)` | `engine.ingest` de cada tabela na versão fixada; sem `partitions`, a tabela inteira. Uma tabela entra na sessão principal; mais de uma entram todas em paralelo, cada uma numa sessão a mais do motor (`new_session`), e a chamada volta quando todas terminam. Cada comando também usa o paralelismo do motor (as `threads` do DuckDB, as slices do Redshift). Em disco local, quatro tabelas de 150.000 linhas entraram em 0,017 s em quatro sessões e em 0,066 s em série (`test_parallel.py`, 2026-09-23). |
-| `run.pinned_delta(table)` | A versão fixada da tabela como origem de consulta, por `engine.pinned_delta(table, db.uri(table), versions[table])`: `delta_scan('<uri>', version := <v>)` no DuckDB, a staging `exec_<id>_<tabela>_versao_<versão>` no Redshift, uma por versão pedida (decisão do usuário de 2026-09-25) ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)). É por ela que o pipeline lê a versão fixada da tabela que ele mesmo grava, cujo nome no sandbox pertence ao `loader` (decisão do usuário de 2026-09-22); numa tabela que ainda não existe, levanta `SandboxError`. |
-| `run.sandbox` | O motor, onde o pipeline chama `stream` e `loader`, os lotes na saída e na entrada, e `query` e `load`, as formas por `pa.Table`, de qualquer thread; nos dois motores todo comando passa pela sessão única da execução, sob o lock que as primitivas tomam e soltam ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)); `with run.sandbox.session() as connection:` dá a conexão crua para o que as primitivas não cobrem, com o lock tomado pelo bloco e reentrante na mesma thread, e `with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo, sem as tabelas temporárias da principal. |
+| `run.pinned_delta(table)` | A versão fixada da tabela como origem de consulta, por `engine.pinned_delta(table, db.uri(table), versions[table])`: `delta_scan('<uri>', version := <v>)` no DuckDB, a staging `exec_<id>_<tabela>_versao_<versão>` no Redshift, uma por versão pedida (decisão do usuário de 2026-09-25) ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)). É por ela que o pipeline lê a versão fixada da tabela que ele mesmo grava, cujo nome no sandbox a execução cria por `create_table` e preenche pelo `appender` (decisões do usuário de 2026-09-22 e de 2026-09-28); numa tabela que ainda não existe, levanta `SandboxError`. |
+| `run.sandbox` | O motor, onde o pipeline chama `stream` e `appender`, os lotes na saída e na entrada, `query` e `append`, as formas por `pa.Table`, e `create_table`, a tabela vazia do modelo, de qualquer thread; nos dois motores todo comando passa pela sessão única da execução, sob o lock que as primitivas tomam e soltam ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)); `with run.sandbox.session() as connection:` dá a conexão crua para o que as primitivas não cobrem, com o lock tomado pelo bloco e reentrante na mesma thread, e `with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo, sem as tabelas temporárias da principal. |
 | `run.next_ids(table, n)` | Um `range` de `n` inteiros contíguos da chave sequencial, a chave primária inteira de uma coluna, sob lock, a partir de `max_key(chave) + 1` na versão fixada da tabela, lido uma vez por tabela; as faixas de threads paralelas não se sobrepõem, e os ids de uma reexecução diferem. Numa tabela de chave primária composta o cliente decide os ids e não chama `next_ids` (decisão do usuário de 2026-09-23). |
 | `run.audit(table, partitions, foreign_keys=False, key_scope=None)` | `engine.audit` com a URI e a versão fixada da tabela e, em `referenced`, as de cada tabela que uma chave estrangeira aponta; devolve o `AuditReport` aprovado e o guarda; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta, e o relatório, com o SQL de cada verificação e até 20 linhas de amostra por verificação reprovada, vai para o log. |
 | `run.publish_delta(*tables, partitions=None, audit=True, max_workers=1)` | Exige a auditoria aprovada de cada tabela nessas partições na própria execução, e `audit=False` dispensa a exigência e fica no log; confere por `version_diff` que nenhuma alteração de dados entrou em cada tabela desde a versão fixada e aborta com `ExecutionConflict` quando entrou (um avanço só de metadados ou de manutenção passa e atualiza a versão fixada); depois `create_table` se não existir, `reconcile` e `export_partition` por partição com `commit_metadata`, tabela a tabela num `ThreadPoolExecutor(max_workers)`: na primeira falha as tarefas em curso terminam, as não iniciadas são canceladas, e a exceção lista o resultado de cada tabela, porque os commits feitos ficam; avança `versions[table]` sob lock. O padrão 1 vem da memória por escrita (`delta.md`). O `export_partition` dos dois motores registra por `register_files` o arquivo que o motor gravou, depois das conferências da [etapa 3](PLAN-STAGE-3.md), e o motor Redshift troca para `publish_partition` a partição com `Double` não finito ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)); a execução não escolhe o modo, porque o `rewrite` saiu das etapas 4 e 7 (decisão do usuário de 2026-09-24). A cada partição, `run.publish_delta` passa a `export_partition`, em `columns_without_min_max`, as colunas `Double` com valor não finito que a auditoria da execução contou (`AuditReport.nonfinite_columns`), e todas as colunas `Double` da tabela com `audit=False`; a lista supõe a tabela sem mudança entre a auditoria e a publicação, como a própria aprovação (decisão do usuário de 2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59)). |
@@ -89,7 +89,7 @@ motor (`"duckdb"`, `"redshift"`), ou um motor já construído, para os testes.
   resultado de cada tabela numa nota (`add_note`), mantendo o seu tipo; o que entrou fica para o
   `cleanup`. A tabela que não existe no ambiente é `SandboxError`.
 - **`pinned_delta`** devolve `sandbox.pinned_delta(table, db.uri(table), versions[table])` e não
-  cria objeto com o nome do modelo, que fica para o `loader` da tabela que a execução grava.
+  cria objeto com o nome do modelo, que fica para `create_table` da tabela que a execução grava.
 - **`next_ids`** guarda um contador por tabela sob `threading.Lock`, iniciado em
   `delta.max_key(dt, chave) + 1` na versão fixada, ou 1 numa tabela nova, e devolve `range(inicio,
   inicio + n)`. A chave é a chave primária inteira de uma coluna, a sequencial; numa chave composta
@@ -177,6 +177,21 @@ as chamadas.
 | Auditoria avulsa | `test_cli_audit_prints_the_sql_and_audits_the_current_version` | `--sql` imprime o texto no dialeto pedido, sem armazenamento; sem ele, a auditoria da versão atual do Delta sai com 0; a tabela fora dos modelos sai com 2. |
 | Ingestão paralela | `test_ingest_of_several_tables_uses_extra_sessions` | Várias tabelas em sessões a mais, lidas pela sessão principal; a falha de uma leva o resultado das outras na nota. |
 
+`tests/test_pipeline.py` roda a execução completa sobre a base de testes em Delta, a base fictícia
+de `tests/source_db_projetado.py` carregada por `initial_load` com o modelo cliente:
+`monthly_pipeline(run)`, no formato `modulo:funcao` de `serialize-db run`, ingere as tabelas do
+modelo (as particionadas só na última data-base, materializadas pela DDL e pelo `INSERT` do
+`delta_scan`), gera a partição do mês seguinte de `cad_operacoes`, `cad_contratos` e
+`rel_contrato_operacao` por `INSERT ... SELECT` com os ids de `next_ids`, e a de `cad_lancamentos`
+em pyarrow, a partir da última partição ingerida, acrescentada por `run.sandbox.append` à tabela
+do `ingest`; roda `saldos_por_conta` de `client_model.statements` sobre a partição nova, confere o
+rateio por contrato num `join` de três tabelas, audita as quatro com `foreign_keys=True` e as
+publica por `publish_delta`. `test_monthly_pipeline_publishes_the_next_base_date` confere os saldos
+e as contagens contra a base em memória, as auditorias sem verificação por rodar, a versão a mais de
+cada tabela só com a partição nova alterada, os metadados do commit e a releitura pelo leitor Delta;
+`test_following_month_runs_over_the_published_partition` roda o mesmo pipeline por
+`serialize-db run` e, em seguida, a execução do mês seguinte sobre a partição publicada.
+
 ## A implementação
 
 O módulo `serialize_db.execution` (`Database`, `Execution`), `AuditFailed` em
@@ -192,9 +207,11 @@ Nenhuma. As decisões que o usuário tomou em 2026-09-23 estão escritas nas se�
 `--metadata modulo:atributo` no `serialize-db run`, como em `schema` e `sql`; `next_ids` só na
 chave sequencial, a chave primária inteira de uma coluna, porque numa chave composta o cliente
 decide os ids; e a regra da partição, `[0-9A-Za-z][0-9A-Za-z_.-]*`, no valor da partição e no
-`execution_id`. A barreira por tabela não entra nas etapas: um `load` esquecido numa thread faz a
-leitura concorrente falhar, porque o `loader` cria a tabela no `close` e recusa o nome ocupado nos
-dois motores ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)). A decisão do usuário de
+`execution_id`. A barreira por tabela não entra nas etapas: um `append` esquecido numa thread
+deixa a leitura concorrente ver a tabela sem as linhas novas, que entram de uma vez no `close` do
+`appender`, o efeito que o usuário aceitou em 2026-09-28 no lugar da falha com `CatalogException`
+do `loader` que criava a tabela no `close`, a decisão de 2026-09-23 substituída
+([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)). A decisão do usuário de
 2026-09-27 separa pelo nome a publicação no Delta da publicação no Redshift: `run.publish_delta` e
 `run.pinned_delta`, com o `pinned_delta` dos motores, de um lado, e `serialize-db publish_redshift`
 e `serialize_db.publication.publish_redshift` do outro.

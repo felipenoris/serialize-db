@@ -309,7 +309,7 @@ def test_copy_insert_unload_text() -> None:
         f'INSERT INTO "esquema"."t" ({columns})\n'
         'SELECT "id_lancamento", "id_conta", "data_base", "carimbo", "valor", "preco", "area", '
         'JSON_PARSE("meta"), "to", "codigo", \'2026-08-31\' FROM "esquema"."t_staging"')
-    # Sem o valor, a coluna de partição vem da staging: o loader.
+    # Sem o valor, a coluna de partição vem da staging: o appender.
     assert '"codigo", "data_base_str" FROM' in redshift.insert_from_staging(
         "t", "s", ENTRIES, None)
 
@@ -602,47 +602,61 @@ def test_connection_dropped_by_the_server_is_reopened_once(
 
 
 @pytest.mark.local
-def test_loader_writes_the_file_and_creates_the_table_in_a_transaction(
+def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
         monkeypatch: pytest.MonkeyPatch, local_location: LocalLocation) -> None:
-    """O nome ocupado é recusado na abertura; o arquivo nasce no ``staging/`` na thread auxiliar;
-    ``close`` roda ``BEGIN``, o ``CREATE TABLE``, a staging temporária com o ``COPY`` e o
-    ``INSERT`` com ``JSON_PARSE``, e ``COMMIT``, e apaga o arquivo; uma exceção no ``with`` não
-    cria a tabela; um lote recusado pelo ``cast`` também não."""
+    """``create_table`` roda o DDL do modelo e anota a tabela, e recusa o nome ocupado; o appender
+    recusa a tabela que não existe; o arquivo nasce no ``staging/`` na thread auxiliar; ``close``
+    roda ``BEGIN``, a staging temporária com o ``COPY`` e o ``INSERT`` com ``JSON_PARSE``, e
+    ``COMMIT``, e apaga o arquivo; o appender sem lote roda só a conferência da tabela; uma
+    exceção no ``with`` não roda comando algum; um lote recusado pelo ``cast`` também não."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     connection = FakeConnection(storage, existing={f"{PREFIX}cad_lancamentos"})
     engine = fake_engine(monkeypatch, connection, storage)
     with pytest.raises(SandboxError, match="ocupado"):
-        engine.loader(ENTRIES)
+        engine.create_table(ENTRIES)
+    with pytest.raises(SandboxError, match="create_table"):
+        engine.appender(PROJECTED)
 
-    # O close cria e carrega a tabela numa transação.
-    with engine.loader(PROJECTED) as loader:
-        loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
-        loader.write(entry_rows(MONTHS[0], 11, 5, PROJECTED).to_batches()[0])
-    assert loader.rows == 15
+    # create_table roda o DDL, fora de transação, e anota a tabela para o cleanup.
+    engine.create_table(PROJECTED)
+    created = connection.texts()[-1]
+    assert created.startswith(f'CREATE TABLE "{PREFIX}cad_lancamentos_projetados" (')
+    assert f"{PREFIX}cad_lancamentos_projetados" in engine._created
+
+    # O close carrega a tabela numa transação.
+    with engine.appender(PROJECTED) as appender:
+        appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+        appender.write(entry_rows(MONTHS[0], 11, 5, PROJECTED).to_batches()[0])
+    assert appender.rows == 15
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
     texts = connection.texts()
     start = texts.index("BEGIN")
-    assert texts[start + 1].startswith(f'CREATE TABLE "{PREFIX}cad_lancamentos_projetados" (')
     carga = f"{PREFIX}cad_lancamentos_projetados_carga"
-    assert texts[start + 2].startswith(f'CREATE TEMP TABLE "{carga}"')
-    assert texts[start + 3].startswith(f'COPY "{PREFIX}cad_lancamentos_projetados_carga"\nFROM ')
-    assert "FORMAT AS PARQUET FILLRECORD" in texts[start + 3]
-    assert texts[start + 4].startswith(
+    assert texts[start + 1].startswith(f'CREATE TEMP TABLE "{carga}"')
+    assert texts[start + 2].startswith(f'COPY "{PREFIX}cad_lancamentos_projetados_carga"\nFROM ')
+    assert "FORMAT AS PARQUET FILLRECORD" in texts[start + 2]
+    assert texts[start + 3].startswith(
         f'INSERT INTO "esquema"."{PREFIX}cad_lancamentos_projetados" (')
-    assert 'JSON_PARSE("meta")' in texts[start + 4]
-    assert texts[start + 5:start + 7] == [f'DROP TABLE "{carga}"', "COMMIT"]
+    assert 'JSON_PARSE("meta")' in texts[start + 3]
+    assert texts[start + 4:start + 6] == [f'DROP TABLE "{carga}"', "COMMIT"]
 
     # A tabela sem coluna JSON recebe o COPY direto.
-    connection.existing.discard(f"{PREFIX}cad_contas")
-    engine.load(ACCOUNTS, account_rows(["A"]))
+    engine.create_table(ACCOUNTS)
+    engine.append(ACCOUNTS, account_rows(["A"]))
     assert connection.texts()[-2].startswith(f'COPY "esquema"."{PREFIX}cad_contas"\nFROM ')
 
-    # Uma exceção dentro do with: o arquivo sai e nada é criado.
-    connection.existing.discard(f"{PREFIX}cad_lancamentos_projetados")
+    # O appender sem lote: só a conferência da tabela, sem BEGIN nem COPY.
+    before = len(connection.commands)
+    with engine.appender(PROJECTED):
+        pass
+    assert connection.texts()[before:] == [
+        f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0']
+
+    # Uma exceção dentro do with: o arquivo sai e nada roda além da conferência da tabela.
     before = len(connection.commands)
     with pytest.raises(RuntimeError, match="plantado"):
-        with engine.loader(PROJECTED) as loader:
-            loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+        with engine.appender(PROJECTED) as appender:
+            appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
             raise RuntimeError("erro plantado")
     assert connection.texts()[before:] == [
         f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0']
@@ -650,13 +664,13 @@ def test_loader_writes_the_file_and_creates_the_table_in_a_transaction(
 
     # O lote recusado pelo cast.
     with pytest.raises(ContractError):
-        with engine.loader(PROJECTED) as loader:
-            loader.write(pa.table({"id_lancamento": ["x"]}))
+        with engine.appender(PROJECTED) as appender:
+            appender.write(pa.table({"id_lancamento": ["x"]}))
     assert "BEGIN" not in connection.texts()[before + 1:]
 
-    # O DataFrame é recusado antes de qualquer carga.
+    # O DataFrame é recusado antes de qualquer gravação.
     with pytest.raises(ContractError, match="from_pandas"):
-        engine.load(PROJECTED, {"id_lancamento": [1]})
+        engine.append(PROJECTED, {"id_lancamento": [1]})
 
 
 @pytest.mark.local
@@ -899,10 +913,12 @@ def test_connect_uses_share_database(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFixture) -> None:
+def test_ingest_stream_appender_export(target: Target,
+                                       caplog: pytest.LogCaptureFixture) -> None:
     """``ingest`` de uma partição de um Delta no bucket, ``stream`` em lotes igual ao ``query``,
-    ``loader`` por ``COPY``, a auditoria com a versão fixada, ``export_partition`` pelo registro
-    e pela troca com as mesmas linhas, e ``cleanup`` sem tabela restante."""
+    ``create_table`` e o ``appender`` por ``COPY``, a auditoria com a versão fixada,
+    ``export_partition`` pelo registro e pela troca com as mesmas linhas, e ``cleanup`` sem tabela
+    restante."""
     engine = target.engine
     storage = target.storage
     entries_version = published_table(target, ENTRIES, MONTHS, rows=120)
@@ -926,15 +942,16 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     assert by_query.column("preco").type == pa.decimal128(18, 2)
     assert by_query.column("carimbo").type == pa.timestamp("us")
 
-    # O loader grava a projeção; o nome ocupado é recusado.
+    # O appender grava a projeção na tabela de create_table; o nome ocupado é recusado.
+    engine.create_table(PROJECTED)
     with (engine.stream(statement, params, batch_size=40) as stream,
-          engine.loader(PROJECTED) as loader):
+          engine.appender(PROJECTED) as appender):
         for batch in stream:
-            loader.write(batch)
-    assert loader.rows == 120
+            appender.write(batch)
+    assert appender.rows == 120
     assert count_of(engine, f"{engine.prefix}cad_lancamentos_projetados") == 120
     with pytest.raises(SandboxError, match="ocupado"):
-        engine.loader(PROJECTED)
+        engine.create_table(PROJECTED)
 
     # A auditoria com a versão fixada e a chave estrangeira fora do sandbox.
     projected_uri = target.uri(PROJECTED)
@@ -985,13 +1002,12 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
     assert counted[0] == 120
     record("redshift.engine.delta_scan_meta", {"tipo": meta_scan[0], "valor": str(meta_scan[1])})
 
-    # A troca: a partição com NaN pela máquina local, com as mesmas linhas e o aviso.
+    # A troca: a partição com NaN pela máquina local, com as mesmas linhas e o aviso; o append
+    # entra na tabela esvaziada.
     with_nan = entry_rows(MONTHS[0], 1, 120, PROJECTED,
                           valor=[float("nan")] + [number / 4 for number in range(2, 121)])
     engine.execute(f"DELETE FROM {target.qualified('cad_lancamentos_projetados')}")
-    engine.execute(f"DROP TABLE {target.qualified('cad_lancamentos_projetados')}")
-    engine._created.remove(f"{engine.prefix}cad_lancamentos_projetados")
-    engine.load(PROJECTED, with_nan)
+    assert engine.append(PROJECTED, with_nan) == 120
     with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
         version = engine.export_partition(PROJECTED, projected_uri, MONTHS[0], METADATA,
                                           expected_rows=120, columns_without_min_max=["valor"])
@@ -1022,35 +1038,35 @@ def test_ingest_stream_loader_export(target: Target, caplog: pytest.LogCaptureFi
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_loader_creates_the_table_at_close(target: Target,
+def test_appender_copies_the_file_at_close(target: Target,
                                            monkeypatch: pytest.MonkeyPatch) -> None:
-    """Antes do ``close`` a leitura da tabela falha com relação inexistente; um erro do ``COPY``
-    desfaz o ``CREATE TABLE``, e o nome fica livre; o ``loader`` sem lote cria a tabela vazia."""
+    """A tabela de ``create_table`` nasce vazia e fica vazia até o ``close``; um erro do ``COPY``
+    não deixa linha; o ``appender`` sem lote não muda a tabela; o segundo appender acrescenta."""
     engine = target.engine
     name = f"{engine.prefix}cad_lancamentos_projetados"
-    with engine.loader(PROJECTED) as loader:
-        loader.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
-        assert not engine.name_in_use(name)
+    engine.create_table(PROJECTED)
+    assert count_of(engine, name) == 0
+    with engine.appender(PROJECTED) as appender:
+        appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+        assert count_of(engine, name) == 0
     assert count_of(engine, name) == 10
-    engine.execute(f"DROP TABLE {engine.qualified(name)}")
-    engine._created.remove(name)
 
-    # O COPY de um arquivo que não existe falha, e a transação desfaz o CREATE TABLE.
+    # O COPY de um arquivo que não existe falha, e a transação não deixa linha.
     def broken_copy(target_name: str, source: str, credentials: str, manifest: bool) -> str:
         return redshift.copy_text(target_name, source + ".ausente", credentials, manifest)
 
     monkeypatch.setattr(redshift, "copy_text", broken_copy)
     with pytest.raises(Exception):  # noqa: B017 - o erro do COPY: do servidor ou do S3
-        engine.load(PROJECTED, entry_rows(MONTHS[0], 1, 10, PROJECTED))
+        engine.append(PROJECTED, entry_rows(MONTHS[0], 11, 10, PROJECTED))
     monkeypatch.undo()
-    assert not engine.name_in_use(name)
-    if name in engine._created:
-        engine._created.remove(name)
+    assert count_of(engine, name) == 10
 
-    # O loader sem lote cria a tabela vazia.
-    with engine.loader(PROJECTED):
+    # O appender sem lote não muda a tabela; o seguinte acrescenta.
+    with engine.appender(PROJECTED):
         pass
-    assert count_of(engine, name) == 0
+    assert count_of(engine, name) == 10
+    assert engine.append(PROJECTED, entry_rows(MONTHS[0], 11, 5, PROJECTED)) == 5
+    assert count_of(engine, name) == 15
 
 
 @pytest.mark.redshift
@@ -1098,7 +1114,8 @@ def test_stream_literal_values_on_the_target(target: Target) -> None:
     texts = ["d'agua", "barra \\ invertida", "50% certo", "comum"]
     rows = entry_rows(MONTHS[0], 1, 4, PROJECTED)
     rows = rows.set_column(rows.schema.get_field_index("codigo"), "codigo", pa.array(texts))
-    engine.load(PROJECTED, rows)
+    engine.create_table(PROJECTED)
+    engine.append(PROJECTED, rows)
     for text in texts:
         statement = sa.select(PROJECTED.c.id_lancamento, PROJECTED.c.codigo).where(
             PROJECTED.c.codigo == sa.bindparam("texto"))
@@ -1137,17 +1154,16 @@ def test_stream_literal_values_on_the_target(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_small_load_copy_cost(target: Target) -> None:
-    """O tempo de um ``load`` de 10 linhas pelo ``loader``, como leitura, nunca como reprovação."""
+def test_small_append_copy_cost(target: Target) -> None:
+    """O tempo de um ``append`` de 10 linhas pelo ``appender``, o ``COPY`` de um arquivo pequeno,
+    como leitura, nunca como reprovação."""
     engine = target.engine
-    name = f"{engine.prefix}cad_contas"
     accounts = account_rows([f"C{index}" for index in range(10)])
-    # O melhor de três cargas, cada uma numa tabela nova.
+    engine.create_table(ACCOUNTS)
+    # O melhor de três acréscimos na mesma tabela.
     elapsed = []
     for _ in range(3):
         started = time.perf_counter()
-        engine.load(ACCOUNTS, accounts)
+        engine.append(ACCOUNTS, accounts)
         elapsed.append(time.perf_counter() - started)
-        engine.execute(f"DROP TABLE {engine.qualified(name)}")
-        engine._created.remove(name)
-    record("redshift.engine.small_load", f"{min(elapsed):.2f} s")
+    record("redshift.engine.small_append", f"{min(elapsed):.2f} s")

@@ -31,6 +31,8 @@ PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/d
 .venv/bin/python probes/credentials.py s3://bucket/prefixo/prd/cad_contas
 SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local .venv/bin/python probes/consistencia/probe_types.py
 PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_redshift_test.py
+SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m local -s probes/consistencia/probe_append_test.py
+PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_append_test.py
 ```
 
 ## Os scripts
@@ -156,11 +158,14 @@ de borda (o texto vazio, o `NUL`, o emoji, os 50 bytes exatos, `±0.0`, `5e-324`
 `9999-12-31`, `Uuid`, JSON e nulos) e trabalho paralelo, e comparam valor a valor o que saiu com o
 que entrou. Elas gravam, por isso ficam na sua pasta: as sete sondas de script escrevem sob
 `<SERIALIZE_DB_TEST_LOCAL_ROOT>/consistencia/<sonda>/`, pasta que cada uma recria no início e
-apaga no fim (`SERIALIZE_DB_TEST_KEEP` a mantém), e param com o código 2 sem a variável; a do
-motor Redshift roda pelo pytest com as fixtures das suítes (`-p conftest`, com `PYTHONPATH=tests`),
-sob `<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-poc/<id>/` e num ambiente `poc<id>` próprio do
+apaga no fim (`SERIALIZE_DB_TEST_KEEP` a mantém), e param com o código 2 sem a variável; as duas
+pelo pytest (`probe_redshift_test.py` e `probe_append_test.py`) usam as fixtures das suítes
+(`-p conftest`, com `PYTHONPATH=tests`): a do motor Redshift grava sob
+`<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-poc/<id>/` e num ambiente `poc<id>` próprio do
 esquema da suíte, cujas tabelas `poc<id>_*` e linhas de controle saem no fim, como
-`tests/test_publication.py`. Cada leitura sai no terminal e em
+`tests/test_publication.py`; a dos dois escritores grava sob a raiz local com `-m local` e, com
+`-m redshift`, sob a raiz S3 e num sandbox `exec_poc-<id>_*` que o `cleanup` apaga. Cada leitura
+sai no terminal e em
 `output/consistencia_<sonda>_<data-hora>.txt`; cada checagem imprime `OK` ou `PROBLEMAS` com a
 lista, e o código de saída é 1 quando alguma reprovou. Os achados que esperam a decisão do usuário
 em [`plan/OPEN_QUESTIONS.md`](../plan/OPEN_QUESTIONS.md) (o sinal do zero pelo `COPY` do DuckDB,
@@ -173,14 +178,15 @@ variáveis do ambiente alvo em `SUITE.md`.
 
 | Sonda | O que atravessa |
 | --- | --- |
-| `probe_types.py` | Toda coluna do contrato com os seus valores de borda pelo motor DuckDB: `load`, `query` por statement e por texto, `export_partition` lido pelo dataset do delta-rs, pelo `delta_scan` e pelo arquivo Parquet registrado, as estatísticas do log contra os dados, `publish_partition`, um `stream` com o transbordo forçado num `loader` de outra sessão, e o mínimo e o máximo exatos do log em `cad_simples` com a poda dos dois leitores nos extremos. |
-| `probe_stream.py` | 1.500.000 linhas de nove tipos: um stream lento com transbordo, oito streams ao mesmo tempo na mesma conexão, quatro pipelines `stream` para `loader` em threads, um `loader` com quatro threads escrevendo, um stream depois de outro fechado no meio, um stream ao lado de um que falha e a pasta de transbordo vazia no fim. |
-| `probe_execution.py` | O ciclo da `Execution`: o pipeline em threads com `next_ids` em dois `loader`, a auditoria, dois `publish_delta` ao mesmo tempo, os metadados dos commits e o snapshot; um leitor `current` consultado a cada 50 ms enquanto outra execução ingere com `materialize=True`, lê `pinned_delta` e publica; os canais `default` e `current`; duas execuções na mesma versão disputando uma partição (`ExecutionConflict` na perdedora quando os commits se sobrepõem, as duas em sequência quando não, o arquivo do `COPY` de cada outra como órfão); e uma execução parada entre a conferência da versão e o commit enquanto outra publica a mesma partição, a janela de `publish_delta` de `plan/OPEN_QUESTIONS.md`, impressa como leitura conhecida. |
+| `probe_types.py` | Toda coluna do contrato com os seus valores de borda pelo motor DuckDB: `create_table` e `append`, `query` por statement e por texto, `export_partition` lido pelo dataset do delta-rs, pelo `delta_scan` e pelo arquivo Parquet registrado, as estatísticas do log contra os dados, `publish_partition`, um `stream` com o transbordo forçado num `appender` de outra sessão, e o mínimo e o máximo exatos do log em `cad_simples` com a poda dos dois leitores nos extremos. |
+| `probe_stream.py` | 1.500.000 linhas de nove tipos: um stream lento com transbordo, oito streams ao mesmo tempo na mesma conexão, quatro pipelines `stream` para `appender` em threads, um `appender` com quatro threads escrevendo, um stream depois de outro fechado no meio, um stream ao lado de um que falha e a pasta de transbordo vazia no fim. |
+| `probe_execution.py` | O ciclo da `Execution`: o pipeline em threads com `next_ids` em dois `appender`, a auditoria, dois `publish_delta` ao mesmo tempo, os metadados dos commits e o snapshot; um leitor `current` consultado a cada 50 ms enquanto outra execução ingere com `materialize=True`, lê `pinned_delta` e publica; os canais `default` e `current`; duas execuções na mesma versão disputando uma partição (`ExecutionConflict` na perdedora quando os commits se sobrepõem, as duas em sequência quando não, o arquivo do `COPY` de cada outra como órfão); e uma execução parada entre a conferência da versão e o commit enquanto outra publica a mesma partição, a janela de `publish_delta` de `plan/OPEN_QUESTIONS.md`, impressa como leitura conhecida. |
 | `probe_delta_ops.py` | Três escritores numa tabela (`publish_partition`, `export_partition`, dois `write_deltalake(mode="append")`), `compact`, `deep_copy` e a sua retomada, `export_snapshot` por cópia e por reescrita, `rewrite` com uma coluna renomeada, `vacuum_keeping_snapshots` prendendo um snapshot, a restauração de `read_back` e a escrita condicional do arquivo de controle por oito threads. |
 | `probe_reader.py` | O leitor Delta com duas threads de `query`, uma de `stream` e uma de texto com parâmetro lendo enquanto `materialize` troca a view pela tabela inteira e pela parcial, três vezes; um valor fora da regra de partição recusado com a tabela intacta. |
 | `probe_load.py` | A carga inicial da base fictícia de `tests/source_db_projetado.py` por `initial_load`, cada tabela comparada valor a valor com a origem pelos dois leitores, a segunda passagem sem commit e `load_report`. |
-| `probe_pandas.py` | Um `DataFrame` do pandas 3 por `from_pandas`, `cast`, `load`, `query` e `to_pandas`; o `NaN` que vira nulo em `from_pandas` e as recusas de `cast` como leituras. |
-| `probe_redshift_test.py` | O motor Redshift: `ingest` e `query`, quatro `stream` ao mesmo tempo, dois `loader` em threads, a auditoria e `export_partition` pelos dois leitores, duas sessões a mais em threads, `publish_redshift` com dois workers e o leitor publicado por duas threads; no substituto com `SERIALIZE_DB_TEST_EMULATOR=1`, no ambiente alvo contra o Redshift e o S3 reais. |
+| `probe_pandas.py` | Um `DataFrame` do pandas 3 por `from_pandas`, `cast`, `create_table`, `append`, `query` e `to_pandas`; o `NaN` que vira nulo em `from_pandas` e as recusas de `cast` como leituras. |
+| `probe_redshift_test.py` | O motor Redshift: `ingest` e `query`, quatro `stream` ao mesmo tempo, dois `appender` em threads, a auditoria e `export_partition` pelos dois leitores, duas sessões a mais em threads, `publish_redshift` com dois workers e o leitor publicado por duas threads; no substituto com `SERIALIZE_DB_TEST_EMULATOR=1`, no ambiente alvo contra o Redshift e o S3 reais. |
+| `probe_append_test.py` | Dois escritores na mesma tabela do sandbox, o que o `append` proposto em 2026-09-28 permite: dois `INSERT ... BY NAME` (DuckDB) ou dois `COPY` (Redshift) ao mesmo tempo em sessões a mais e na sessão principal em threads, um `append` ao lado de um `UPDATE` da mesma tabela, e o `CREATE TABLE` numa sessão a mais e na principal durante um `stream`; o desfecho de cada escrita é leitura, e a checagem é a consistência do que ficou. Pelo pytest: `-m local` roda o motor DuckDB na pasta local, `-m redshift` o Redshift no substituto ou no ambiente alvo. |
 
 `consistency_lib.py` é a biblioteca comum: o modelo `cad_tudo` com toda coluna do contrato e
 `cad_simples`, os valores de borda e `edge_rows`, a pasta de trabalho (`probe_folder`), a

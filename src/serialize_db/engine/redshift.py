@@ -20,8 +20,10 @@ As primitivas:
   (``<ambiente>/staging/<execution_id>/`` no sandbox, ``<id do leitor>/`` sob o ``unload_to`` do
   leitor Redshift) na thread de quem chama e lê os arquivos numa thread auxiliar, dois lotes à
   frente do cliente; ``query`` devolve a ``pa.Table`` do cursor, montada por colunas;
-- ``loader`` grava os lotes num Parquet do ``staging/`` numa thread auxiliar e, no ``close``,
-  cria a tabela e roda o ``COPY`` numa transação; ``load`` é a forma por tabela;
+- ``create_table`` cria a tabela vazia do modelo em ``exec_<id>_<tabela>``, pelo DDL, anotada para
+  o ``DROP`` do ``cleanup``;
+- ``appender`` grava os lotes num Parquet do ``staging/`` numa thread auxiliar e, no ``close``,
+  roda o ``COPY`` na tabela numa transação; ``append`` é a forma por tabela;
 - ``audit`` roda as verificações de ``serialize_db.audit`` e monta o ``AuditReport``;
 - ``export_partition`` leva uma partição ao Delta pelo registro dos arquivos do ``UNLOAD``, e pela
   troca para ``publish_partition`` na partição com ``Double`` não finito.
@@ -681,12 +683,12 @@ class RedshiftStream:
         self._stop.set()
 
 
-# ---------------------------------------------------------------- o loader
+# ---------------------------------------------------------------- o appender
 
 
 @dataclasses.dataclass
 class _ParquetSink:
-    """O arquivo Parquet de um loader no ``staging/``, aberto no primeiro lote."""
+    """O arquivo Parquet de um appender no ``staging/``, aberto no primeiro lote."""
 
     storage: Storage
     path: str
@@ -710,11 +712,11 @@ class _ParquetSink:
 def _write_until_end(sink: _ParquetSink, source: queue.Queue, closed: threading.Event,
                      outcome: dict[str, object]) -> None:
     """Grava cada lote tirado da fila até o fim dela; a exceção que o cliente pôs na fila, e o
-    loader abandonado, sobem daqui."""
+    appender abandonado, sobem daqui."""
     item = take(source, closed)
     while item is not _END:
         if item is None:
-            raise RuntimeError("loader encerrado sem close")
+            raise RuntimeError("appender encerrado sem close")
         if isinstance(item, BaseException):
             raise item
         sink.write(item)
@@ -724,9 +726,9 @@ def _write_until_end(sink: _ParquetSink, source: queue.Queue, closed: threading.
 
 def _write_parquet(sink: _ParquetSink, source: queue.Queue, closed: threading.Event,
                    outcome: dict[str, object]) -> None:
-    """A thread do loader: grava no arquivo os lotes da fila, sem a sessão.
+    """A thread do appender: grava no arquivo os lotes da fila, sem a sessão.
 
-    Um ``closed`` sem o fim da fila é um loader abandonado. Terminada com erro, a thread apaga o
+    Um ``closed`` sem o fim da fila é um appender abandonado. Terminada com erro, a thread apaga o
     arquivo, que nenhum ``COPY`` vai ler.
     """
     try:
@@ -744,27 +746,28 @@ def _json_columns(table: sa.Table) -> list[str]:
     return [column.name for column in table.columns if isinstance(column.type, sa.JSON)]
 
 
-class RedshiftLoader:
-    """A carga em lotes de uma tabela nova do sandbox do motor Redshift.
+class RedshiftAppender:
+    """O acréscimo em lotes a uma tabela do sandbox do motor Redshift.
 
-    A abertura confere o nome, sob o lock, por ``select 1 from <esquema>.<nome> limit 0``, e
-    recusa com ``SandboxError`` o nome que o ``ingest`` ou outro ``loader`` ocupou. ``write`` faz
-    o ``cast`` do lote na thread do cliente e o põe numa fila limitada; uma thread auxiliar grava os
-    lotes, um grupo de linhas cada, num Parquet de ``staging/<execution_id>/<tabela>/``, pelo
-    ``Storage``. ``close`` roda, sob o lock e numa transação, o ``CREATE TABLE`` do modelo e o
-    ``COPY`` do arquivo (por uma staging temporária e ``JSON_PARSE`` quando a tabela tem coluna
-    JSON): nada existe antes dele, e um erro desfaz os dois. Uma exceção dentro do ``with``, um lote
-    recusado pelo ``cast`` ou um loader abandonado apagam o arquivo sem criar a tabela.
+    A abertura confere a tabela, sob o lock, por ``select 1 from <esquema>.<nome> limit 0``, e
+    recusa com ``SandboxError`` o nome livre, que ``create_table`` ou o ``ingest`` ocupam.
+    ``write`` faz o ``cast`` do lote na thread do cliente e o põe numa fila limitada; uma thread
+    auxiliar grava os lotes, um grupo de linhas cada, num Parquet de
+    ``staging/<execution_id>/<tabela>/``, pelo ``Storage``. ``close`` roda, sob o lock e numa
+    transação, o ``COPY`` do arquivo na tabela (por uma staging temporária e ``JSON_PARSE`` quando
+    a tabela tem coluna JSON): a tabela não muda antes dele, e um erro não deixa linha. Uma exceção
+    dentro do ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o arquivo
+    sem inserir nada.
     """
 
     def __init__(self, engine: RedshiftEngine, table: sa.Table, queue_depth: int = 2) -> None:
         # O closed vem antes de tudo: o __del__ de uma abertura recusada o usa.
         self._closed = threading.Event()
         self._name = engine.prefix + table.name
-        if engine.name_in_use(self._name):
+        if not engine.name_in_use(self._name):
             raise SandboxError(
-                f"{table.name}: o nome já está ocupado no sandbox, pelo ingest ou por outro "
-                f"loader; leia a versão fixada por run.pinned_delta({table.name})")
+                f"{table.name}: a tabela não existe no sandbox; crie-a por create_table ou pelo "
+                f"ingest")
         self._engine = engine
         self._table = table
         self._schema: pa.Schema | None = None
@@ -811,7 +814,7 @@ class RedshiftLoader:
 
     def write(self, data: pa.RecordBatch | pa.Table) -> None:
         """Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um lote recusado
-        faz o loader não criar a tabela."""
+        faz o appender não inserir nada."""
         for batch in checked_batches(data):
             try:
                 converted = self._converted(batch)
@@ -819,7 +822,8 @@ class RedshiftLoader:
                 self._refused = error
                 raise
             if not self._put(converted):
-                raise self.error or RuntimeError("a thread do loader terminou antes do fim da fila")
+                raise self.error or RuntimeError(
+                    "a thread do appender terminou antes do fim da fila")
 
     def _copy_file(self) -> None:
         """O ``COPY`` do arquivo na tabela: direto, ou por uma staging temporária com o JSON em
@@ -837,31 +841,24 @@ class RedshiftLoader:
         engine.execute(insert_from_staging(target, staging, self._table, None))
         engine.execute(f"DROP TABLE {staging}")
 
-    def _create_and_copy(self) -> None:
-        """A tabela criada e o arquivo carregado numa transação, sob o lock."""
-        engine = self._engine
-        with engine.transaction():
-            engine.execute(ddl(self._table, "redshift", prefix=engine.prefix))
-            engine.register_created(self._name)
-            if self._sink.writer is not None:
-                self._copy_file()
-
     def close(self, error: BaseException | None = None) -> None:
-        """Cria a tabela e carrega os lotes; com ``error`` ou um lote recusado, só apaga o
-        arquivo."""
+        """Carrega os lotes na tabela, numa transação sob o lock; com ``error`` ou um lote
+        recusado, só apaga o arquivo."""
         failure = error or self._refused
         self._put(failure if failure is not None else _END)
         self._closed.set()
         self._thread.join()
         try:
-            if failure is None and self._outcome["error"] is None:
-                self._create_and_copy()
+            written = self._sink.writer is not None
+            if failure is None and self._outcome["error"] is None and written:
+                with self._engine.transaction():
+                    self._copy_file()
         finally:
             self._engine.storage.delete([self._sink.path])
         if error is None and self.error is not None:
             raise self.error
 
-    def __enter__(self) -> RedshiftLoader:
+    def __enter__(self) -> RedshiftAppender:
         return self
 
     def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> None:
@@ -1075,7 +1072,7 @@ class RedshiftEngine:
     @contextlib.contextmanager
     def transaction(self) -> Iterator[None]:
         """``BEGIN`` e ``COMMIT`` em volta do bloco, sob o lock; uma exceção sai por ``ROLLBACK``.
-        Protegida, para o loader.
+        Protegida, para o appender.
 
         Exemplo:
 
@@ -1399,54 +1396,72 @@ class RedshiftEngine:
                                 "e o motor abriu sem ele: o leitor Redshift o recebe em unload_to")
         return RedshiftStream(self, literal_text(statement_or_sql, params, self.prefix), batch_size)
 
-    def loader(self, table: sa.Table, queue_depth: int = 2) -> RedshiftLoader:
-        """O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada e
-        carregada no ``close``.
+    def create_table(self, table: sa.Table) -> None:
+        """Cria a tabela vazia do modelo em ``exec_<id>_<tabela>``, pelo DDL do Redshift, sob o
+        lock, anotada para o ``DROP`` do ``cleanup``.
 
         Exemplo:
 
         .. code-block:: python
 
-            with engine.loader(Projetado.__table__) as loader:
-                loader.write(batch)
+            engine.create_table(Projetado.__table__)
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox, com o
             prefixo ``exec_<id>_``.
+        :raises SandboxError: o nome que o ``ingest`` ou outro ``create_table`` ocupou.
+        """
+        name = self.prefix + table.name
+        if self.name_in_use(name):
+            raise SandboxError(f"{table.name}: o nome já está ocupado no sandbox")
+        self.execute(ddl(table, "redshift", prefix=self.prefix))
+        self.register_created(name)
+
+    def appender(self, table: sa.Table, queue_depth: int = 2) -> RedshiftAppender:
+        """O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
+        ``ingest`` ou por ``create_table``, e os carrega no ``close``.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.appender(Projetado.__table__) as appender:
+                appender.write(batch)
+
+        :param table: a tabela do modelo, já criada no sandbox com o prefixo ``exec_<id>_``.
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
-        :return: o ``Loader`` da tabela, que guarda os lotes num Parquet do ``staging/`` até o
+        :return: o ``Appender`` da tabela, que guarda os lotes num Parquet do ``staging/`` até o
             ``close`` e os carrega por ``COPY``.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou.
+        :raises SandboxError: a tabela que não existe no sandbox.
         """
-        return RedshiftLoader(self, table, queue_depth)
+        return RedshiftAppender(self, table, queue_depth)
 
-    def load(
+    def append(
         self, table: sa.Table,
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
-        """Grava os lotes numa tabela nova pelo ``loader``.
+        """Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
 
         Exemplo:
 
         .. code-block:: python
 
-            engine.load(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
+            engine.append(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
 
-        :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox, com o
-            prefixo ``exec_<id>_``.
+        :param table: a tabela do modelo, já criada no sandbox com o prefixo ``exec_<id>_``.
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
             iterável de ``pa.RecordBatch``.
-        :return: as linhas gravadas.
+        :return: as linhas acrescentadas.
         :raises ContractError: um DataFrame, com a conversão sem cópia na mensagem, ou outro
-            tipo em ``data``; ou um lote que o ``cast`` recusa, e a tabela não é criada.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou; ou, sem
-            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
+            tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é inserido.
+        :raises SandboxError: a tabela que não existe no sandbox; ou, sem ``iam_role``, a sessão
+            ``boto3`` sem credenciais para o ``COPY``.
         """
         batches = batches_of(data)
-        with self.loader(table) as loader:
+        with self.appender(table) as appender:
             for batch in batches:
-                loader.write(batch)
-        return loader.rows
+                appender.write(batch)
+        return appender.rows
 
     # ------------------------------------------------------------ a auditoria
 

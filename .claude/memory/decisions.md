@@ -1279,3 +1279,43 @@ auditing the current Delta version, the renamed tests, and the dated records (`p
 older entries of this file, the dated lines of `CLAUDE.md`) keeping the old names, as with `prod`
 and `dev`.
 `plan/PLAN.md`, `plan/PLAN-STAGE-6.md`, `plan/CURRENT_STATE.md`
+
+## `create_table`, `append` and `appender` in place of `load` and `loader` (2026-09-28)
+
+Asked on 2026-09-28 for the sandbox write API a pipeline needs, the assistant reported that the
+library covered reading to Arrow, `UPDATE` and `DELETE` through `query` and the SQL `INSERT`, and
+not appending Arrow batches to a table already in the sandbox: `load` and `loader` refused an
+occupied name (the one-owner rule of 2026-09-22 and 2026-09-23). The user proposed eliminating
+`load` and `loader` and adding `append`, `appender` and a primitive that creates the model's table
+by `ddl`, a table from `ingest` taking appends directly and any other being created first, and
+asked for the side effects; the assistant answered that the change eliminates both (nothing in
+`src/` but the engines called them), that create and insert stop being one transaction (a reader
+during an append in flight sees the table without the new rows, and the 2026-09-23 property of the
+forgotten load failing with `CatalogException` is lost), that `create_table` would have to run
+before a `stream` opens if it ran under the lock, that the DuckDB materialized `ingest` by
+`CREATE TABLE AS` from `delta_scan` gave `VARCHAR` for JSON and no `NOT NULL`, and that two
+writers on one table become possible. The user accepted the first effect, asked for the context of
+the second, asked whether the old code treated the third (it did not: `cast` and the audit carried
+the contract), asked for a concurrency probe (DuckDB run by the assistant, Redshift by the user),
+and proposed that `ingest(materialize=True)` create the table by the DDL and load it by
+`INSERT ... BY NAME SELECT * FROM delta_scan(...)`, so the ingested table carries the contract's
+types and `NOT NULL` as in Redshift; the assistant agreed. The user approved the implementation on
+PR #103's branch ("Pode implementar no mesmo PR em aberto") and confirmed it does not wait for the
+Redshift probe run. Since then: `Engine.create_table(table)` (DuckDB on a cursor of the
+connection, without the session lock; Redshift by `execute` under the lock and `register_created`),
+refusing the occupied name with `SandboxError`; `Engine.appender(table, queue_depth=2)`, refusing
+the missing table and the view of the `ingest`, whose `close` runs one `INSERT ... BY NAME`
+(DuckDB) or the `COPY` in a transaction (Redshift) only when a batch was written;
+`Engine.append(table, data)` over it, returning the rows; the protocol `Appender` in place of
+`Loader`; and the DuckDB `ingest` with `materialize=True` by `ddl(table, "duckdb")` and
+`INSERT ... BY NAME` in one transaction, so a malformed JSON in the Delta fails the ingest and the
+view keeps the `delta_scan` types; the `INSERT` cost the same as the `CREATE TABLE AS`
+(`plan/POC.md`). The assistant's choices, named in the report: the DuckDB `object_kind` helper,
+the appender's `INSERT` as a single statement without an explicit transaction, `create_table`
+refusing the occupied name with "ocupado", the probes of `probes/consistencia/` calling the new
+API, `tests/test_pipeline.py` ingesting the 12 tables again, and the dated records
+(`plan/POC.md`, the older entries of this file, the dated lines of `CLAUDE.md`) keeping `load`
+and `loader`. The Redshift reading of two writers on one table waits for the user's run of
+`probes/consistencia/probe_append_test.py -m redshift` (`plan/OPEN_QUESTIONS.md`).
+`plan/PLAN.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`,
+`plan/PLAN-STAGE-10.md`, `plan/serialize-db.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`

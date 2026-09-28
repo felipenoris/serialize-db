@@ -7,9 +7,11 @@ guarda uma sessão por execução sob um ``threading.RLock`` que as primitivas t
 ``new_session()`` abre uma sessão a mais sobre o mesmo banco, para o que roda em paralelo.
 
 Os dados cruzam a fronteira em lotes Arrow: ``stream`` devolve um ``BatchStream`` de
-``pa.RecordBatch``, e ``loader`` recebe lotes por ``write``; ``query`` devolve a ``pa.Table`` que
-``stream`` montaria, e ``load`` entrega ao ``loader`` os lotes de uma ``pa.Table``, de um
-``RecordBatch``, de um ``RecordBatchReader`` ou de um iterável.
+``pa.RecordBatch``, e ``appender`` recebe lotes por ``write`` e os acrescenta a uma tabela do
+sandbox; ``query`` devolve a ``pa.Table`` que ``stream`` montaria, e ``append`` entrega ao
+``appender`` os lotes de uma ``pa.Table``, de um ``RecordBatch``, de um ``RecordBatchReader`` ou de
+um iterável. A tabela que recebe os lotes vem do ``ingest`` com ``materialize=True`` ou de
+``create_table``, que cria a tabela vazia do modelo.
 
 Exemplo, com o motor DuckDB:
 
@@ -19,10 +21,11 @@ Exemplo, com o motor DuckDB:
 
     with DuckDBEngine(DuckDBConfig(), "exec-2026-09-05", storage) as engine:
         engine.ingest(Operacao.__table__, uri, version, partitions=["2026-08-31"])
+        engine.create_table(Projetado.__table__)
         with engine.stream(sa.select(Operacao)) as stream, \\
-                engine.loader(Projetado.__table__) as loader:
+                engine.appender(Projetado.__table__) as appender:
             for batch in stream:
-                loader.write(project(batch))
+                appender.write(project(batch))
 """
 
 from __future__ import annotations
@@ -40,7 +43,7 @@ import sqlalchemy as sa
 from serialize_db.audit import AuditReport, KeyScope
 from serialize_db.errors import ContractError
 
-__all__ = ["BatchStream", "Engine", "Loader", "duckdb", "redshift"]
+__all__ = ["Appender", "BatchStream", "Engine", "duckdb", "redshift"]
 
 # A mensagem que recusa o que não é Arrow e aponta a conversão sem cópia.
 ARROW_ONLY = ("recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iterável de lotes; um "
@@ -112,8 +115,8 @@ class BatchStream(Protocol):
     def __arrow_c_stream__(self, requested_schema: object = None) -> object: ...
 
 
-class Loader(Protocol):
-    """A carga em lotes de uma tabela nova do sandbox, criada no ``close``.
+class Appender(Protocol):
+    """O acréscimo em lotes a uma tabela do sandbox, inserido no ``close``.
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
@@ -122,13 +125,13 @@ class Loader(Protocol):
 
     .. code-block:: python
 
-        with engine.loader(Projetado.__table__) as loader:
-            loader.write(batch)
-        loader.rows   # as linhas da tabela criada
+        with engine.appender(Projetado.__table__) as appender:
+            appender.write(batch)
+        appender.rows   # as linhas acrescentadas
     """
 
     rows: int
-    """As linhas gravadas até agora; depois do ``close``, as da tabela."""
+    """As linhas gravadas até agora; depois do ``close``, as acrescentadas à tabela."""
 
     def write(self, data: pa.RecordBatch | pa.Table) -> None:
         """Converte os lotes pelo contrato, na thread de quem chama, e os põe na fila da
@@ -138,27 +141,26 @@ class Loader(Protocol):
 
         .. code-block:: python
 
-            loader.write(batch)
+            appender.write(batch)
 
         :param data: um ``pa.RecordBatch`` ou uma ``pa.Table``.
         :raises ContractError: ``data`` de outro tipo; ou um lote que o ``cast`` recusa, ou com
-            colunas diferentes das do primeiro lote, e então o loader não cria a tabela.
+            colunas diferentes das do primeiro lote, e então o appender não insere nada.
         """
 
     def close(self) -> None:
-        """Cria a tabela do modelo e carrega os lotes gravados numa transação: um erro desfaz
-        os dois.
+        """Insere na tabela os lotes gravados, numa transação: um erro não deixa linha.
 
         Exemplo:
 
         .. code-block:: python
 
-            loader.close()   # o with do loader chama close na saída
+            appender.close()   # o with do appender chama close na saída
 
-        :raises ContractError: o lote que o ``write`` recusou; nada é criado.
+        :raises ContractError: o lote que o ``write`` recusou; nada é inserido.
         """
 
-    def __enter__(self) -> Loader: ...
+    def __enter__(self) -> Appender: ...
     def __exit__(self, *exc: object) -> None: ...
 
 
@@ -174,11 +176,12 @@ class Engine(Protocol):
     .. code-block:: python
 
         def project_entries(engine: Engine) -> int:
+            engine.create_table(Projetado.__table__)
             with (engine.stream(sa.select(Lancamento)) as stream,
-                  engine.loader(Projetado.__table__) as loader):
+                  engine.appender(Projetado.__table__) as appender):
                 for batch in stream:
-                    loader.write(project(batch))
-            return loader.rows
+                    appender.write(project(batch))
+            return appender.rows
     """
 
     execution_id: str
@@ -304,43 +307,59 @@ class Engine(Protocol):
             texto.
         """
 
-    def loader(self, table: sa.Table, queue_depth: int = 2) -> Loader:
-        """O gerenciador de contexto que grava lotes numa tabela nova do sandbox, criada e
-        carregada no ``close``.
+    def create_table(self, table: sa.Table) -> None:
+        """Cria no sandbox a tabela vazia do modelo, pelo DDL do motor, para os dados que não vêm
+        do ``ingest``.
 
         Exemplo:
 
         .. code-block:: python
 
-            with engine.loader(Projetado.__table__) as loader:
-                loader.write(batch)
+            engine.create_table(Projetado.__table__)
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
-        :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
-            cheia, o ``write`` bloqueia.
-        :return: o ``Loader`` da tabela, que guarda os lotes num arquivo até o ``close``.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou.
+        :raises SandboxError: o nome que o ``ingest`` ou outro ``create_table`` ocupou.
         """
 
-    def load(
+    def appender(self, table: sa.Table, queue_depth: int = 2) -> Appender:
+        """O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
+        ``ingest`` com ``materialize=True`` ou por ``create_table``, e os insere no ``close``.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.appender(Projetado.__table__) as appender:
+                appender.write(batch)
+
+        :param table: a tabela do modelo, já criada no sandbox.
+        :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
+            cheia, o ``write`` bloqueia.
+        :return: o ``Appender`` da tabela, que guarda os lotes num arquivo até o ``close``.
+        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
+            ``ingest`` ocupa.
+        """
+
+    def append(
         self, table: sa.Table,
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
-        """Grava os lotes numa tabela nova pelo ``loader``.
+        """Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
 
         Exemplo:
 
         .. code-block:: python
 
-            engine.load(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
+            engine.append(Projetado.__table__, pa.Table.from_pandas(frame, preserve_index=False))
 
-        :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
+        :param table: a tabela do modelo, já criada no sandbox.
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
             iterável de ``pa.RecordBatch``.
-        :return: as linhas gravadas.
+        :return: as linhas acrescentadas.
         :raises ContractError: um DataFrame, com a conversão sem cópia na mensagem, ou outro
-            tipo em ``data``; ou um lote que o ``cast`` recusa, e a tabela não é criada.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``loader`` ocupou.
+            tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é inserido.
+        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
+            ``ingest`` ocupa.
         """
 
     def audit(self, table: sa.Table, partitions: list[str] | None, uri: str | None = None,
@@ -422,8 +441,8 @@ class Engine(Protocol):
 
 def batches_of(data: object) -> Iterator[pa.RecordBatch]:
     """Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de lotes; protegida,
-    para o ``load`` dos motores. Outro tipo, um DataFrame inclusive, é ``ContractError`` antes de
-    qualquer carga."""
+    para o ``append`` dos motores. Outro tipo, um DataFrame inclusive, é ``ContractError`` antes de
+    qualquer gravação."""
     if isinstance(data, pa.Table):
         return iter(data.to_batches())
     if isinstance(data, pa.RecordBatch):
@@ -431,25 +450,25 @@ def batches_of(data: object) -> Iterator[pa.RecordBatch]:
     if isinstance(data, pa.RecordBatchReader):
         return iter(data)
     if isinstance(data, (str, bytes)) or not isinstance(data, Iterable):
-        raise ContractError(f"load {ARROW_ONLY}; recebido {type(data).__name__}")
+        raise ContractError(f"append {ARROW_ONLY}; recebido {type(data).__name__}")
     # O primeiro item decide se o iterável é de lotes; ele volta à frente dos demais.
     iterator = iter(data)
     first = next(iterator, None)
     if first is None:
         return iter([])
     if not isinstance(first, pa.RecordBatch):
-        raise ContractError(f"load {ARROW_ONLY}; recebido {type(data).__name__}")
+        raise ContractError(f"append {ARROW_ONLY}; recebido {type(data).__name__}")
     return itertools.chain([first], iterator)
 
 
 def checked_batches(data: pa.RecordBatch | pa.Table) -> list[pa.RecordBatch]:
     """Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; protegida, para o ``write`` dos
-    loaders. Outro tipo é ``ContractError``."""
+    appenders. Outro tipo é ``ContractError``."""
     if isinstance(data, pa.Table):
         return data.to_batches()
     if isinstance(data, pa.RecordBatch):
         return [data]
-    raise ContractError(f"loader.write {ARROW_ONLY}; recebido {type(data).__name__}")
+    raise ContractError(f"appender.write {ARROW_ONLY}; recebido {type(data).__name__}")
 
 
 def take(source: queue.Queue, stop: threading.Event) -> object | None:

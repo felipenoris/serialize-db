@@ -6,9 +6,9 @@ leitores de ``serialize_db.reader`` por ``open_delta`` e ``open_redshift``. ``Ex
 gerenciador de contexto de uma execução: na entrada abre toda tabela do ambiente, fixa a versão
 de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava o snapshot marcado e o
 resumo no log. Entre os dois, o pipeline chama as primitivas: ``ingest`` traz as tabelas presas à
-versão fixada, ``sandbox`` é o motor onde ele roda ``stream``, ``loader``, ``query`` e ``load``,
-``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o contrato e ``publish_delta``
-leva as partições auditadas ao Delta; a publicação aos clientes no Redshift é
+versão fixada, ``sandbox`` é o motor onde ele roda ``stream``, ``query``, ``create_table`` e
+``append``, ``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o contrato e
+``publish_delta`` leva as partições auditadas ao Delta; a publicação aos clientes no Redshift é
 ``serialize-db publish_redshift``, depois da execução.
 
 As primitivas podem ser chamadas de qualquer thread: cada comando do motor corre na sessão única,
@@ -29,10 +29,11 @@ Exemplo:
     with Execution(db, "duckdb", "2026-08-31", execution_id="exec-2026-09-05") as run:
         previous = run.previous_partitions(Lancamento.__table__, 12)
         run.ingest(Lancamento.__table__, partitions=previous, materialize=True)
+        run.sandbox.create_table(Projetado.__table__)
         with run.sandbox.stream(sa.select(Lancamento)) as stream, \\
-                run.sandbox.loader(Projetado.__table__) as loader:
+                run.sandbox.appender(Projetado.__table__) as appender:
             for batch in stream:
-                loader.write(project(batch, run.next_ids(Projetado.__table__, batch.num_rows)))
+                appender.write(project(batch, run.next_ids(Projetado.__table__, batch.num_rows)))
         run.audit(Projetado.__table__, ["2026-08-31"])
         run.publish_delta(Projetado.__table__, partitions=["2026-08-31"])
 """
@@ -374,8 +375,8 @@ class Execution:
         """A versão fixada de cada tabela do ambiente, pelo nome, ``None`` na que não existe: a
         entrada do ``with`` as lê, e ``publish_delta`` avança a de cada tabela que grava."""
         self.sandbox: Engine | None = None
-        """O motor da execução, onde o pipeline roda ``stream``, ``loader``, ``query`` e
-        ``load``; ``None`` até a entrada do ``with``, e fechado na saída."""
+        """O motor da execução, onde o pipeline roda ``stream``, ``query``, ``create_table`` e
+        ``append``; ``None`` até a entrada do ``with``, e fechado na saída."""
         self._read: dict[str, int] = {}
         self._written: dict[str, int] = {}
         self._tables: dict[str, DeltaTable] = {}

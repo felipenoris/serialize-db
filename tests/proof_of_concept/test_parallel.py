@@ -6,7 +6,7 @@ em tabelas distintas e em meses distintos da mesma tabela, e o conflito de dois 
 mês; cargas Arrow e exportações ``COPY ... TO`` pedidas por várias threads a uma conexão DuckDB só,
 sob um lock. Os tempos são leituras do relatório.
 
-O motor DuckDB da biblioteca, com a sessão única, o stream e o loader, é testado em
+O motor DuckDB da biblioteca, com a sessão única, o stream e o appender, é testado em
 ``tests/test_engine_duckdb.py``. O Redshift está em ``test_redshift.py``
 (``test_parallel_copy_and_unload_on_two_connections``).
 """
