@@ -743,9 +743,9 @@ Consequências no plano, nesta mesma unidade de trabalho:
 
 Em 2026-09-21, no macOS arm64 com deltalake 1.6.4, DuckDB 1.5.5, PyArrow 25.0.1, SQLAlchemy 2.0.54,
 duckdb-engine 0.17.0 e sqlalchemy-redshift 1.0.0, os rascunhos das etapas 1 a 9 rodaram no
-scratchpad; os das etapas 3 a 9 estão em cada `PLAN-STAGE-<n>.md`, seção "Rascunhos executados", e
-os das etapas 1 e 2 deram lugar aos módulos `serialize_db.schema` e `serialize_db.sql`. O que eles
-mostraram além do que já estava medido:
+scratchpad; cada um deu lugar ao módulo da sua etapa, e a seção "Rascunhos executados" de cada
+`PLAN-STAGE-<n>.md` virou "A implementação", com os rascunhos das etapas 3 a 9 guardados no
+histórico do git. O que eles mostraram além do que já estava medido:
 
 - O commit de `optimize.compact` grava `dataChange` falso nas ações `add` e `remove`, com
   `partitionValues`; `version_diff` lê o log e ignora essas ações, então uma compactação não recarrega

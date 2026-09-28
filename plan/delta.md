@@ -851,7 +851,8 @@ mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends 
 2. **Ingestão seletiva no motor.** No DuckDB, `ATTACH uri AS t (TYPE delta, VERSION v)` ou uma view
    sobre `delta_scan(uri, version := v)`, com o nome que o modelo espera; os filtros de mês do
    pipeline chegam ao scan e só os arquivos necessários são lidos. As tabelas consultadas muitas
-   vezes são materializadas com `CREATE TABLE t AS SELECT * FROM delta_scan(...) WHERE mes IN (...)`.
+   vezes são materializadas pela DDL do modelo seguida de
+   `INSERT INTO t BY NAME SELECT * FROM delta_scan(...) WHERE mes IN (...)`, numa transação.
    No Redshift, `COPY ... MANIFEST` dos arquivos dessas versões e desses meses numa tabela do sandbox
    com prefixo da execução.
 3. **Execução.** O pipeline roda no sandbox, com statements Core do SQLAlchemy e lógica Python;
@@ -865,10 +866,12 @@ mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends 
    `serialize_db_input_versions` em `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e
    é idempotente; um conflito de commit no mesmo mês significa outra execução publicando a mesma
    tabela, e a execução aborta.
-6. **Publicação no Redshift para clientes.** A diferença entre a versão publicada e a atual (ações
-   `add` novas) diz quais meses recarregar: `DELETE` do mês e `COPY ... MANIFEST` dos arquivos novos,
-   para todas as tabelas da execução numa única transação, o que dá aos clientes a atomicidade entre
-   tabelas que o Delta não tem; a versão publicada de cada tabela fica numa tabela de controle.
+6. **Publicação no Redshift para clientes.** A diferença entre a versão publicada e a pedida (ações
+   `add` e `remove` de dados) diz quais meses recarregar: `DELETE` do mês e `COPY ... MANIFEST` dos
+   arquivos novos, numa transação por tabela (decisão do usuário de 2026-09-23), sem atomicidade
+   entre as tabelas, como no Delta; a versão pedida vem do snapshot de
+   `serialize-db publish_redshift --snapshot` ou `--channel`, e a versão publicada de cada tabela
+   fica numa tabela de controle.
 7. **Manutenção.** `optimize.compact` nos meses com muitos arquivos pequenos e `vacuum` com
    `keep_versions` dos snapshots do banco, como descrito em "Manutenção e retenção".
 
@@ -952,16 +955,17 @@ CREATE TEMPORARY TABLE staging_cad_operacoes (                             -- se
     valor NUMERIC(18, 2) NOT NULL, descricao VARCHAR(200));
 COPY staging_cad_operacoes FROM 's3://bucket/publicacao/exec-42/cad_operacoes/2026-08.manifest'
     IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST;
-INSERT INTO prd_cad_operacoes SELECT *, '2026-08' FROM staging_cad_operacoes;
+INSERT INTO prd_cad_operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes)
+SELECT id_operacao, data_ref, id_cliente, valor, descricao, '2026-08' FROM staging_cad_operacoes;
 COMMIT;
 ```
 
 A tabela de staging existe porque a coluna de partição não está nos arquivos e o `COPY` só lê o
 conteúdo deles; a lista de colunas no `COPY` de Parquet funciona (2026-09-21), mas não fornece o
-valor da coluna ausente, então a staging fica. A
-publicação incremental compara as ações `add` da versão publicada com as da atual e recarrega só os
-meses que mudaram, de todas as tabelas da execução numa única transação; a versão publicada de cada
-tabela fica numa tabela de controle
+valor da coluna ausente, então a staging fica, e o `INSERT` lista as colunas na ordem do contrato,
+com o valor da partição no lugar da coluna. A publicação incremental compara as ações da versão
+publicada com as da pedida e recarrega só os meses que mudaram, numa transação por tabela, sem
+atomicidade entre as tabelas; a versão publicada de cada tabela fica numa tabela de controle
 (`serialize_db_publications(table_name, delta_version, execution_id, published_at)`).
 
 Escrita de volta, quando o sandbox é o Redshift:
@@ -1053,8 +1057,10 @@ e DuckDB 1.5.5; os tempos medem a latência do S3 e o custo de reler o log, não
 
 Cada `delta_scan` no S3 relê o log antes de ler os dados, e é isso que separa os 0,3 s por consulta
 pontual dos 0,065 s do `read_parquet`; `PIN_SNAPSHOT` corta a releitura pela metade, não a elimina.
-A ingestão no motor DuckDB fica então em dois modos: `CREATE TABLE AS` com filtro de meses para toda
-tabela que o pipeline consulta mais de uma vez, view por `delta_scan` para leitura única.
+A ingestão no motor DuckDB fica então em dois modos: a tabela materializada, pela DDL do modelo e
+`INSERT ... BY NAME` com filtro de meses numa transação, para toda tabela que o pipeline consulta
+mais de uma vez, e a view por `delta_scan` para leitura única; a medição acima materializou por
+`CREATE TABLE AS`.
 
 ## Manutenção e retenção
 

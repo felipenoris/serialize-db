@@ -41,15 +41,18 @@ módulo, em `PLAN-STAGE-<n>.md`.
   no Redshift aceitam `max_workers`. A seção "Paralelismo" diz como operar em cada cenário.
 - **Restrições aplicadas por consulta.** Nem o Parquet nem o Delta têm chave primária, unicidade ou
   chave estrangeira, e o Redshift só as registra. A auditoria da execução as aplica com consultas
-  derivadas dos próprios modelos, e o texto SQL de cada verificação pode ser impresso ou gravado,
-  para depuração.
+  derivadas dos próprios modelos; o texto SQL de cada verificação sai de `audit_sql`, e
+  `serialize-db audit --sql` o imprime, para depuração, sem arquivo gravado nem diff (decisão do
+  usuário de 2026-09-23).
 - **Execução com sandbox, auditoria e publicação.** O pipeline roda num sandbox por execução. A
   auditoria reprova sem tocar o Delta, e a publicação a exige aprovada. A publicação substitui partições inteiras, um commit por partição,
   com `serialize_db_execution_id` e `serialize_db_input_versions` nos metadados. A reexecução é
   idempotente, e o conflito entre duas execuções do mesmo ambiente aborta a segunda.
-- **Publicação para clientes no Redshift.** A diferença entre a versão publicada e a atual diz quais
-  partições recarregar. Todas as tabelas da execução entram numa única transação, e a tabela de controle
-  guarda a versão publicada de cada uma.
+- **Publicação para clientes no Redshift.** A diferença entre a versão publicada e a pedida diz
+  quais partições recarregar. A publicação de cada tabela é uma transação, numa conexão própria,
+  sem atomicidade entre as tabelas; as versões vêm de um snapshot, por
+  `serialize-db publish_redshift --snapshot` ou `--channel`, ou são as atuais, em
+  `publish_redshift` sem `versions`, e a tabela de controle guarda a versão publicada de cada uma.
 - **Snapshots do banco e manutenção.** O conjunto `{tabela: versão}` marcado na periodicidade do
   processo, o `vacuum` que preserva essas versões, a compactação antes do snapshot e a cópia
   profunda para a pasta de arquivo.
@@ -59,8 +62,10 @@ módulo, em `PLAN-STAGE-<n>.md`.
   documentação da API.
 
 Os módulos são `serialize_db.errors`, `serialize_db.schema`, `serialize_db.sql`, `serialize_db.storage`,
-`serialize_db.delta`, `serialize_db.audit`, `serialize_db.engine.duckdb`, `serialize_db.engine.redshift`,
-`serialize_db.execution`, `serialize_db.load`, `serialize_db.publication` e `serialize_db.cli`; o pacote não
+`serialize_db.delta`, `serialize_db.audit`, `serialize_db.engine` (o protocolo `Engine`),
+`serialize_db.engine.duckdb`, `serialize_db.engine.redshift`, `serialize_db.resources`,
+`serialize_db.execution`, `serialize_db.reader`, `serialize_db.load`, `serialize_db.publication` e
+`serialize_db.cli`, além dos privados `serialize_db._pool` e `serialize_db._files`; o pacote não
 contém modelos, que vêm da biblioteca cliente. O modelo de referência em `tests/reference_model/`, o
 modelo SQLAlchemy da base original, fica como está; o modelo cliente, a sua cópia corrigida em
 `tests/client_model/`, é a primeira instância do contrato e o material dos testes,
@@ -137,13 +142,13 @@ Uma passagem por tabela e por partição, reexecutável, que termina com os leit
 Delta. A origem é a base de `data_str=<AAAA-MM-DD>/chunk_<n>.parquet` lida em 2026-09-20
 ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)).
 
-1. `create_table(uri, table)` para cada modelo, na pasta do ambiente.
-2. Para cada partição da origem, o DuckDB ou o PyArrow lê os Parquet da pasta, a coluna de partição
-   recebe o valor do caminho, as chaves passam de `int32` a `int64`, o `timestamp` `INT96` é
-   truncado a microssegundos, as colunas `double` entram como estão, e a partição entra pelo
-   registro, por `register_files`, do arquivo do `COPY ... (RETURN_STATS)` do DuckDB, sem a tabela
-   inteira na memória ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)). Uma
-   carga interrompida recomeça da partição seguinte à última publicada.
+1. `create_table(uri, table, storage)` para cada modelo, na pasta do ambiente.
+2. Para cada partição da origem, o `read_parquet` do DuckDB lê os Parquet da pasta, a coluna de
+   partição recebe o valor do caminho, as chaves passam de `int32` a `int64`, o `timestamp`
+   `INT96` é truncado a microssegundos, as colunas `double` entram como estão, e a partição entra
+   pelo registro, por `register_files`, do arquivo do `COPY ... (RETURN_STATS)` do DuckDB, sem a
+   tabela inteira na memória ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)). Uma carga interrompida
+   recomeça da partição seguinte à última publicada.
 3. O relatório compara contagens e somas por partição entre a origem e o Delta; a carga só termina
    quando os dois coincidem.
 4. Os leitores passam a abrir o Delta, e as pastas de origem ficam como cópia até a primeira
@@ -171,8 +176,10 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
    arquivo do `COPY ... (RETURN_STATS)` depois das conferências da [etapa 3](PLAN-STAGE-3.md)) com
    `serialize_db_execution_id` e `serialize_db_input_versions`, e avança `versions[table]`. Um
    `CommitFailedError` na mesma partição significa outra execução publicando a mesma tabela, e a
-   execução aborta; ela também aborta quando a versão da tabela avançou desde a abertura, para que
-   duas execuções abertas na mesma versão não publiquem a mesma faixa de identificadores.
+   execução aborta; ela também aborta quando `version_diff` acha uma alteração de dados na tabela
+   desde a versão fixada, para que duas execuções abertas na mesma versão não publiquem a mesma
+   faixa de identificadores. Um avanço só de metadados ou de manutenção (`reconcile`, `compact`,
+   `vacuum`) passa e atualiza a versão fixada.
 6. Depois da execução, `serialize-db publish_redshift --channel current`, ou `--channel default`
    depois de `serialize-db channel` apontar o snapshot marcado, carrega no Redshift as partições
    alteradas ([etapa 10](PLAN-STAGE-10.md)).
@@ -186,7 +193,9 @@ O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
 
 1. O sandbox são tabelas `exec_<id>_<tabela>` no esquema único, criadas pelo DDL do contrato.
 2. `run.ingest` monta o manifesto dos arquivos das partições pedidas, na versão fixada, e carrega por
-   `COPY ... MANIFEST` na staging sem a coluna de partição, seguido de `INSERT ... SELECT *, '<valor>'`. A carga de
+   `COPY ... MANIFEST` na staging sem a coluna de partição, seguido de
+   `INSERT INTO <tabela> (<colunas>) SELECT ..., '<valor>', ... FROM <staging>`, na ordem do
+   contrato, com `JSON_PARSE` nas colunas JSON. A carga de
    arquivos anteriores a uma coluna nova vai por lista de colunas, confirmada em 2026-09-21, ou por
    `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula, o caminho de todo `COPY` da
    biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md)).
@@ -221,10 +230,11 @@ atual de cada tabela ([etapa 10](PLAN-STAGE-10.md)).
 3. Numa transação por tabela (decisão do usuário de 2026-09-23): a leitura da linha de
    `serialize_db_publications`, que identifica a versão anterior; sem linha, a primeira publicação;
    com linha, a versão conferida contra a do Delta; para cada partição, `DELETE` da partição,
-   `COPY ... MANIFEST` na staging e `INSERT ... SELECT *, '<valor>'`; e no fim o `INSERT` da linha
-   de controle, ou o `UPDATE` condicionado à versão lida. A outra publicação que grava a tabela na
-   mesma janela sai com `ExecutionConflict`. A transação dá aos clientes a troca atômica das
-   partições de cada tabela junto com a sua linha de controle.
+   `COPY ... MANIFEST` na staging e
+   `INSERT INTO <publicada> (<colunas>) SELECT ..., '<valor>', ... FROM <staging>`; e no fim o
+   `INSERT` da linha de controle, ou o `UPDATE` condicionado à versão lida. A outra publicação
+   que grava a tabela na mesma janela sai com `ExecutionConflict`. A transação dá aos clientes a
+   troca atômica das partições de cada tabela junto com a sua linha de controle.
 4. Uma execução de correção publica só a partição corrigida.
 
 ### Despublicação de uma tabela
@@ -283,10 +293,12 @@ versão lida. O Delta fica intacto, e a publicação seguinte recria a tabela co
 
 Para publicar no Hive ou para sair do Delta.
 
-1. O snapshot atual usa `export_snapshot(uri, destination)`: `mode="copy"` copia os arquivos que
-   `get_add_actions()` lista, já no layout `<coluna>=<valor>/part-....parquet`, sem ler dados; no S3, a
-   transferência gerenciada do `boto3` por arquivo. Serve quando os leitores casam colunas por nome ou quando nenhum
-   `ADD COLUMN` aconteceu desde a última reescrita de todas as partições.
+1. O snapshot atual usa
+   `export_snapshot(uri, table, destination, storage, version=None, mode="copy")`: `mode="copy"`
+   copia os arquivos que `get_add_actions()` lista, já no layout `<coluna>=<valor>/`, com o nome e
+   o caminho relativo de cada arquivo, como o `carga-<id>_<uuid>.parquet` da carga, sem ler dados;
+   no S3, a transferência gerenciada do `boto3` por arquivo. Serve quando os leitores casam colunas
+   por nome ou quando nenhum `ADD COLUMN` aconteceu desde a última reescrita de todas as partições.
 2. `mode="rewrite"` normaliza: o DuckDB lê por `delta_scan` e grava um `COPY` particionado, com
    todos os arquivos no esquema atual e a coluna de partição fora deles.
 3. Um snapshot do banco antigo exporta cada tabela na versão de `snapshots.json`, com o DDL tirado
@@ -399,10 +411,14 @@ e os exemplos do Redshift em `test_redshift.py`.
   em paralelo, uma sessão a mais por tabela: em disco local, quatro tabelas de 150.000 linhas
   entraram em 0,017 s assim e em 0,066 s em série (`test_parallel.py`), e quatro de 8.000.000 de
   linhas em 1,629 s contra 3,498 s com `threads = 2` e em 1,037 s contra 1,382 s com 11, num macOS
-  de 11 núcleos em que as threads que chamam as sessões somam núcleos ao pool; com 2 vCPUs, o ganho
-  fica na espera do S3, ainda não medida (2026-09-23, [`POC.md`](POC.md)). O cliente abre
-  as suas sessões a mais para as consultas independentes, que não veem as tabelas temporárias da
-  sessão principal.
+  de 11 núcleos em que as threads que chamam as sessões somam núcleos ao pool (2026-09-23). No
+  ambiente alvo, as quatro tabelas da partição do probe das threads entraram em sessões a mais 1,25
+  vez mais rápido que em série com 4 vCPUs e 4 threads (2026-09-23, com o cache de arquivos
+  externos ligado), 1,89 vez com 16 vCPUs e 16 threads (2026-09-24) e, com 8 vCPUs, de 1,09 vez
+  com 4 threads a 1,44 vez com 40, 1,16 vez com as 8 do padrão (2026-09-27, [`POC.md`](POC.md));
+  com 2 vCPUs, onde o ganho ficaria na espera do S3, nada foi medido. O cliente abre as suas
+  sessões a mais para as consultas independentes, que não veem as tabelas temporárias da sessão
+  principal.
 
 ### Escritas em paralelo
 

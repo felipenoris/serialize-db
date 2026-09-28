@@ -195,7 +195,8 @@ O que a implementação fixou além do texto das seções abaixo:
   motor recusa o nome ocupado e confere o nome num cursor à parte, que não vê o `DROP` ainda não
   confirmado. Por isso o leitor monta o `CREATE TABLE` com o texto do `delta_scan` e o filtro das
   partições do motor, que passam de privados a protegidos.
-- **`query`, `stream` e `session()`** são os do motor, depois da regra de leitura comum.
+- **`query`, `stream` e `session()`** são os do motor, depois da regra de leitura comum; o
+  `stream` e a `session()` seguram o leitor até o `close` do stream e o fim do bloco.
 - **`close()`** chama o `cleanup` do motor, que apaga o banco e a pasta de transbordo; a segunda
   chamada não faz nada. O DuckDB só devolve a memória no `close` (instrução do usuário de
   2026-09-24), e a docstring avisa o usuário de caderno.
@@ -203,7 +204,10 @@ O que a implementação fixou além do texto das seções abaixo:
   coletado ou quando o interpretador termina normalmente; sem ele, a pasta `serialize_db_*` do
   motor, com o `.duckdb` e as tabelas materializadas, ficaria no disco depois do processo. O
   finalizador guarda o motor, não o leitor, para não impedir a coleta, e o `close` o chama, então o
-  `cleanup` roda uma vez só. O processo encerrado por sinal não o roda.
+  `cleanup` roda uma vez só. O processo encerrado por sinal não o roda. O leitor fora de uma
+  variável, como em `db.open_delta().stream(...)` e `db.open_delta().session()`, vive enquanto o
+  stream está aberto e o bloco roda, porque os dois o seguram: a coleta no meio da consulta não
+  roda o finalizador, que fecharia o motor debaixo dela.
 
 ### O leitor Redshift
 
@@ -278,6 +282,9 @@ O que a implementação fixou além do texto das seções abaixo:
 - O `close` apaga o banco, e a segunda chamada não faz nada.
 - O leitor sem `close`: `del` e `gc.collect()` apagam a pasta temporária do motor; depois do
   `close`, o finalizador não roda de novo.
+- O leitor fora de uma variável vive até o `close` do stream e o fim do bloco de `session()` que
+  ele deu, também no laço direto sobre o stream: o `gc.collect()` no meio não fecha o motor, e a
+  pasta do motor sai depois deles (`test_stream_and_session_keep_an_unnamed_reader_alive`).
 
 `tests/test_delta.py`, nas duas raízes: `set_channel` aponta e move o canal e recusa o nome fora
 da regra, o nome `current`, o snapshot ausente e o arquivado; a escrita concorrente é
@@ -312,16 +319,21 @@ Os comandos estão em `SUITE.md`, seções "Publicação Delta -> Redshift" e "A
 as leituras em [`POC.md`](POC.md):
 
 - **O tempo de abertura do leitor Delta** sobre as 12 tabelas da raiz carregada, com as views em
-  paralelo: 0,645 s em 2026-09-25 e 0,582 s em 2026-09-26, com `cad_lancamentos` na versão 4 e na
-  5, contra 8,7 ms por view na pasta local (sonda de 2026-09-24). A contagem de `cad_contas` deu o
-  mesmo pelos dois leitores nos dois dias.
+  paralelo: 0,645 s em 2026-09-25, 0,582 s em 2026-09-26 e 0,571 s em 2026-09-27, com
+  `cad_lancamentos` na versão 4 e na 5 nos dois primeiros dias, contra 8,7 ms por view na pasta
+  local (sonda de 2026-09-24). A contagem de `cad_contas` deu o mesmo pelos dois leitores nos três
+  dias.
 - **A publicação por `--channel default`** da raiz de `SUITE.md` rodou em 2026-09-26, com
   `--max-workers 4`: as tabelas sem partição de 3,5 s a 4,8 s, `cad_contratos` em 31,2 s,
   `cad_operacoes` em 53,1 s, `rel_contrato_operacao` em 56,5 s e `cad_lancamentos`, com cinco
-  partições, em 295,1 s, com o pico do processo em 266 MB. A volta a um snapshot anterior segue
-  sem leitura sobre a raiz: o snapshot de `SUITE.md` está na versão atual, e a volta não tem
-  partição para trocar. No substituto, em 2026-09-25, e na suíte da publicação no alvo, num
-  ambiente `poc<id>`, a volta trocou só as partições alteradas entre as duas versões.
+  partições, em 295,1 s, com o pico do processo em 266 MB; e de novo em 2026-09-27, com a cláusula
+  de credenciais montada a cada `COPY`: as tabelas sem partição de 3,4 s a 4,0 s, `cad_contratos`
+  em 37,9 s, `cad_operacoes` em 60,5 s, `rel_contrato_operacao` em 66,1 s e `cad_lancamentos` em
+  328,5 s, com o pico do processo em 270 MB, de 11% a 21% mais por tabela particionada, com a
+  causa não medida. A volta a um snapshot anterior segue sem leitura sobre a raiz: o snapshot de
+  `SUITE.md` está na versão atual, e a volta não tem partição para trocar. No substituto, em
+  2026-09-25, e na suíte da publicação no alvo, num ambiente `poc<id>`, a volta trocou só as
+  partições alteradas entre as duas versões.
 - **O `UNLOAD` do cliente** para um bucket próprio com um usuário do Redshift só de leitura,
   pendente. A execução mostra se o `UNLOAD` é aceito para quem só tem `SELECT` e qual caminho de
   credencial serve, o `iam_role` do cliente ou as credenciais da sessão. Ela precisa de um papel de
