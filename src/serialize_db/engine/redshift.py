@@ -202,7 +202,14 @@ class RedshiftConfig:
         :param environ: as variáveis lidas; o padrão é ``os.environ``. A variável vazia conta
             como ausente.
         :return: a configuração; a variável ausente deixa o padrão do campo.
+        :raises ContractError: ``SERIALIZE_DB_REDSHIFT_PORT`` que não é um número inteiro.
         """
+        port = _variable(environ, "PORT") or "5439"
+        try:
+            port_number = int(port)
+        except ValueError:
+            raise ContractError(f"SERIALIZE_DB_REDSHIFT_PORT={port!r}: a porta é um número "
+                                "inteiro, como 5439") from None
         return RedshiftConfig(
             workgroup=_variable(environ, "WORKGROUP"),
             database=_variable(environ, "DATABASE") or "dev",
@@ -210,7 +217,7 @@ class RedshiftConfig:
             schema=_variable(environ, "SCHEMA") or "public",
             iam_role=_variable(environ, "IAM_ROLE"),
             host=_variable(environ, "HOST"),
-            port=int(_variable(environ, "PORT") or 5439),
+            port=port_number,
             user=_variable(environ, "USER"),
             password=_variable(environ, "PASSWORD"),
             region=environ.get("AWS_REGION") or environ.get("AWS_DEFAULT_REGION") or None,

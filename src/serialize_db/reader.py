@@ -46,7 +46,7 @@ import logging
 import threading
 import uuid
 import weakref
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
@@ -156,6 +156,49 @@ def _resolve_source(db: Database, snapshot: str | None, channel: str | None) -> 
     if snapshot in archived:
         return _archived_source(db, snapshot, archived[snapshot])
     return _snapshot_source(db, snapshot, delta.snapshot_versions(control, snapshot))
+
+
+# ---------------------------------------------------------------- o stream do leitor Delta
+
+
+class _ReaderStream:
+    """O ``BatchStream`` do motor com o leitor Delta preso até o ``close``: o leitor fora de uma
+    variável, como em ``db.open_delta().stream(...)``, não é coletado enquanto o stream está
+    aberto, e o finalizador dele não fecha o motor debaixo da consulta."""
+
+    def __init__(self, reader: DeltaReader, stream: BatchStream) -> None:
+        self._reader: DeltaReader | None = reader
+        self._stream = stream
+        self.schema = stream.schema
+
+    def read_next_batch(self) -> pa.RecordBatch:
+        """O próximo lote; ``StopIteration`` no fim, e o erro da consulta depois do último lote."""
+        return self._stream.read_next_batch()
+
+    def __iter__(self) -> Iterator[pa.RecordBatch]:
+        # O gerador segura este stream, e com ele o leitor, enquanto o laço o percorre.
+        yield from self._stream
+
+    def read_all(self) -> pa.Table:
+        """Os lotes que faltam numa ``pa.Table``."""
+        return self._stream.read_all()
+
+    def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+        # O leitor Arrow puxa o gerador deste stream, que segura o leitor até o último lote.
+        batches = pa.RecordBatchReader.from_batches(self.schema, iter(self))
+        return batches.__arrow_c_stream__(requested_schema)
+
+    def close(self) -> None:
+        """Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
+        segura."""
+        self._stream.close()
+        self._reader = None
+
+    def __enter__(self) -> _ReaderStream:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
 
 # ---------------------------------------------------------------- o leitor Delta
@@ -364,8 +407,9 @@ class DeltaReader:
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :param batch_size: o máximo de linhas de cada lote.
-        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``BatchStream.close``
-            cancela a consulta que ainda roda e apaga o arquivo de transbordo.
+        :return: o ``BatchStream`` dos lotes, gerenciador de contexto, que segura o leitor até o
+            ``close``; o ``BatchStream.close`` cancela a consulta que ainda roda e apaga o arquivo
+            de transbordo.
         :raises ContractError: um statement Core que não é consulta, ou que cita uma tabela do
             modelo sem view no leitor, sem chamar o motor.
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
@@ -373,9 +417,10 @@ class DeltaReader:
         :raises duckdb.Error: a consulta que falha antes do primeiro lote.
         """
         self._check_readable(statement_or_sql)
-        return self._engine.stream(statement_or_sql, params, batch_size)
+        return _ReaderStream(self, self._engine.stream(statement_or_sql, params, batch_size))
 
-    def session(self) -> contextlib.AbstractContextManager[duckdb.DuckDBPyConnection]:
+    @contextlib.contextmanager
+    def session(self) -> Iterator[duckdb.DuckDBPyConnection]:
         """A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando que não
         é consulta, como uma tabela temporária ao lado das views.
 
@@ -388,9 +433,12 @@ class DeltaReader:
             reader.query("SELECT count(*) FROM ids")
 
         :return: o gerenciador de contexto cujo ``with`` dá a ``duckdb.DuckDBPyConnection`` da
-            sessão.
+            sessão; ele segura o leitor até o fim do bloco.
         """
-        return self._engine.session()
+        # O gerador segura o leitor, também o que não está numa variável, como em
+        # db.open_delta().session(), até o fim do bloco.
+        with self._engine.session() as connection:
+            yield connection
 
     # ------------------------------------------------------------ o encerramento
 
@@ -453,7 +501,8 @@ class RedshiftReader:
             ``stream`` falhar, sem arquivo gravado. Uma pasta local só serve à conexão de mentira
             dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
         :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem
-            conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``.
+            conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``; ou, sem
+            ``config``, ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
         :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
         """
         # O módulo do Redshift entra só com o leitor: importar o pacote não carrega o driver.
@@ -605,7 +654,8 @@ def open_redshift(metadata: sa.MetaData, environment: str, config: RedshiftConfi
     :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia
         ``<unload_to>/<id do leitor>/``.
     :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem
-        conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``.
+        conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``; ou, sem ``config``,
+        ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
     :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
     """
     return RedshiftReader(metadata, environment, config, unload_to)

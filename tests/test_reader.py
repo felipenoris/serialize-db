@@ -8,7 +8,8 @@ o canal ``default`` sem argumento e o erro sem o canal; o snapshot pelo nome, vi
 canal ``current`` e a view presa à versão da abertura; a tabela criada depois do snapshot, sem
 view; a materialização inteira e parcial, em paralelo, e a que falha e devolve a view; os tipos
 do contrato em ``query``, em ``stream`` e no pandas; a recusa dos comandos; a poda das partições
-pelo log ``FileSystem`` do DuckDB; e o ``close`` e o finalizador que apagam a pasta do motor. Os
+pelo log ``FileSystem`` do DuckDB; o ``close`` e o finalizador que apagam a pasta do motor; e o
+leitor fora de uma variável, que o stream e a sessão que ele deu mantêm vivo até o fim deles. Os
 casos do leitor Redshift sem conexão rodam sobre a conexão de mentira de
 ``tests/test_engine_redshift.py``: o prefixo ``<ambiente>_`` no texto compilado, o sentinela, a
 recusa dos comandos e do ``stream`` sem ``unload_to`` antes de qualquer comando, a configuração
@@ -380,6 +381,33 @@ def test_close_and_the_finalizer_remove_the_engine_folder(db: Database, folder: 
     assert len(list(folder.glob("serialize_db_*"))) == 1
     del reader
     gc.collect()
+    assert list(folder.glob("serialize_db_*")) == []
+
+
+@pytest.mark.local
+def test_stream_and_session_keep_an_unnamed_reader_alive(db: Database, folder: Path) -> None:
+    """O leitor fora de uma variável vive até o ``close`` do stream e o fim do bloco de
+    ``session()`` que ele deu, também no laço direto sobre o stream: a coleta no meio não fecha o
+    motor debaixo da consulta nem da conexão, e a pasta do motor sai depois deles."""
+    statement = sa.select(ENTRIES).order_by(ENTRIES.c.id_lancamento)
+    with db.open_delta(channel=delta.CURRENT_CHANNEL).stream(statement, batch_size=7) as batches:
+        gc.collect()
+        assert len(list(folder.glob("serialize_db_*"))) == 1
+        assert sum(batch.num_rows for batch in batches) == 30
+    assert list(folder.glob("serialize_db_*")) == []
+
+    with db.open_delta(channel=delta.CURRENT_CHANNEL).session() as connection:
+        gc.collect()
+        assert connection.execute("SELECT count(*) FROM cad_lancamentos").fetchone() == (30,)
+    assert list(folder.glob("serialize_db_*")) == []
+
+    # O laço direto, sem with.
+    rows = 0
+    for batch in db.open_delta(channel=delta.CURRENT_CHANNEL).stream(statement, batch_size=7):
+        gc.collect()
+        assert len(list(folder.glob("serialize_db_*"))) == 1
+        rows += batch.num_rows
+    assert rows == 30
     assert list(folder.glob("serialize_db_*")) == []
 
 
