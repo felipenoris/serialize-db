@@ -73,7 +73,7 @@ from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
 from serialize_db.engine import batches_of, checked_batches, take
 from serialize_db.errors import ContractError, SandboxError
-from serialize_db.resources import available_cpus, available_memory
+from serialize_db.resources import environment_limits
 from serialize_db.schema import (
     cast,
     check_partition_value,
@@ -97,12 +97,6 @@ _QMARK = duckdb_engine.Dialect(paramstyle="qmark")
 # O arquivo de transbordo: Arrow IPC em formato de fluxo, com LZ4, um terço do tamanho sem
 # compressão (2026-09-22).
 _SPOOL_OPTIONS = pa.ipc.IpcWriteOptions(compression="lz4")
-
-# A fração da memória disponível que vai para o memory_limit. A documentação do DuckDB pede de 50%
-# a 60% da memória quando o sistema mata o processo, porque parte das alocações foge do limite: no
-# COPY ordenado, o RSS do processo passou do limite em 13% a 21% (2026-09-24). A outra metade fica
-# para o PyArrow, o delta-rs e o código do cliente.
-_MEMORY_FRACTION = 0.5
 
 # O orçamento de memória de cada stream: 64 MiB de lotes guardados à espera do cliente; com o
 # cliente atrasado, o pico do processo ficou em 297 MB, contra 522 MB com 256 MiB (2026-09-23).
@@ -555,25 +549,6 @@ class DuckDBAppender:
 
 
 # ---------------------------------------------------------------- o motor
-
-
-def environment_limits() -> dict[str, object]:
-    """O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada, por
-    ``serialize_db.resources``. O motor os aplica na abertura quando a configuração os omite.
-
-    Exemplo:
-
-    .. code-block:: python
-
-        # Num contêiner com 4 CPUs e 13,2 GiB disponíveis:
-        environment_limits()   # {'threads': 4, 'memory_limit': '6761MiB'}
-        duckdb.connect(config=environment_limits())
-
-    :return: as opções da conexão do DuckDB: em ``threads``, as CPUs que o processo pode usar;
-        em ``memory_limit``, metade da memória que ele ainda pode usar, em MiB.
-    """
-    memory_limit = int(available_memory() * _MEMORY_FRACTION)
-    return {"threads": available_cpus(), "memory_limit": f"{memory_limit // 2**20}MiB"}
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)

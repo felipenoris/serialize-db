@@ -82,6 +82,7 @@ from serialize_db.schema import (
     sql_type,
     table_options,
 )
+from serialize_db.resources import environment_limits
 from serialize_db.storage import Storage
 
 if TYPE_CHECKING:
@@ -891,7 +892,7 @@ def _duckdb_reading(uri: str, version: int, table: sa.Table, value: str | None,
     where = _partition_filter(table_options(table).partition_by, value)
     text = (f"SELECT {', '.join(measures)} FROM delta_scan({literal(uri)}, "
             f"version := {version}){where}")
-    connection = storage.duckdb_connect()
+    connection = storage.duckdb_connect(config=environment_limits())
     try:
         row = connection.execute(text).fetchone()
     finally:
@@ -1302,7 +1303,7 @@ def rewrite(uri: str, table: sa.Table, storage: Storage,
     dt = open_table(uri, storage)
     source = f"delta_scan({literal(uri)}, version := {dt.version()})"
     select = _rewrite_select(table, expressions, source)
-    connection = storage.duckdb_connect()
+    connection = storage.duckdb_connect(config=environment_limits())
     try:
         nonfinite = _nonfinite_by_partition(connection, table, select)
         written = _copy_rewrite(connection, uri, table, select)
@@ -1793,7 +1794,7 @@ def _copied_file(action: Mapping[str, object]) -> RegisteredFile:
 def _count_rows(uri: str, storage: Storage) -> tuple[int, int]:
     """As linhas da tabela pelos dois leitores: o dataset do delta-rs e o ``delta_scan``."""
     by_delta = open_table(uri, storage).to_pyarrow_dataset().count_rows()
-    connection = storage.duckdb_connect()
+    connection = storage.duckdb_connect(config=environment_limits())
     try:
         row = connection.execute(f"SELECT count(*) FROM delta_scan({literal(uri)})").fetchone()
     finally:
@@ -1967,7 +1968,7 @@ def _export_by_rewrite(dt: DeltaTable, uri: str, table: sa.Table, destination: s
     else:
         target = destination
         options = f"FORMAT parquet, PARTITION_BY ({quoted(partition_by)}), RETURN_STATS"
-    connection = storage.duckdb_connect()
+    connection = storage.duckdb_connect(config=environment_limits())
     try:
         rows = connection.execute(f"COPY ({select}) TO {literal(target)} ({options})").fetchall()
     finally:

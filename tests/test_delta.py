@@ -15,8 +15,9 @@ da destrutiva; a reescrita num commit; a diferença de versões pelo log e a rec
 arquivo de controle dos snapshots e os canais dele; o ``vacuum`` que preserva os snapshots; a
 compactação; a exportação nos dois modos, com pastas novas acima do destino e com a barra final; a
 cópia profunda com o esquema da versão copiada; os caminhos fora da raiz recusados antes de gravar;
-e a pasta copiada que abre na mesma versão. A extensão ``delta`` do DuckDB precisa estar na pasta
-de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
+a pasta copiada que abre na mesma versão; e os limites do ambiente em cada conexão do DuckDB. A
+extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+(``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ from serialize_db.errors import (
     RegistrationRefused,
     SchemaDiffRefused,
 )
+from serialize_db.resources import available_cpus
 from serialize_db.storage import Storage
 
 
@@ -1152,3 +1154,30 @@ def test_deep_copy_and_rewrite_refuse_paths_outside_the_root(storage: Storage, u
     with pytest.raises(ValueError, match="fora da raiz"):
         delta.rewrite(outside_uri, OPERACOES, storage)
     assert every_file(outside, "prd") == written
+
+
+def test_duckdb_connections_take_the_environment_limits(storage: Storage, uri: str,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cada conexão do DuckDB que a camada abre, na releitura, na reescrita, na exportação por
+    reescrita e na contagem da cópia profunda, recebe o ``threads`` e o ``memory_limit`` lidos do
+    ambiente, como a do motor: sem eles, o DuckDB toma 80% da memória da máquina."""
+    publish(storage, uri, "2026-07-31", 1, 10)
+    configs = []
+    original = Storage.duckdb_connect
+
+    def recording(self: Storage, *args: object, **options: object) -> duckdb.DuckDBPyConnection:
+        configs.append(options.get("config"))
+        return original(self, *args, **options)
+
+    monkeypatch.setattr(Storage, "duckdb_connect", recording)
+    delta.read_back(uri, OPERACOES, "2026-07-31", 10, storage)
+    delta.rewrite(uri, OPERACOES, storage)
+    exported = storage.uri_of("prd/exportacao/cad_operacoes")
+    delta.export_snapshot(uri, OPERACOES, exported, storage, mode="rewrite")
+    delta.deep_copy(uri, 1, storage.uri_of("prd/arquivo/2026T3/cad_operacoes"), storage)
+    # A releitura, a reescrita com a releitura dela, a exportação e a contagem da cópia.
+    assert len(configs) == 5
+    for config in configs:
+        assert config is not None
+        assert sorted(config) == ["memory_limit", "threads"]
+        assert config["threads"] == available_cpus()
