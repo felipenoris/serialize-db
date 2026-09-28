@@ -438,18 +438,19 @@ def _load_partition(engine: DuckDBEngine, storage: Storage, table: sa.Table, uri
     o registro dele, com o tempo no log. Uma partição fora do contrato é ``ContractError`` antes
     de qualquer gravação."""
     started = time.perf_counter()
+    label = delta.partition_label(value)
     query = partition_query(folder, table, value)
     with engine.session() as connection:
         check = _check_partition(connection, query, table, value)
         if check.problems:
-            raise ContractError(f"{table.name} partição {value}: {'; '.join(check.problems)}")
+            raise ContractError(f"{table.name} {label}: {'; '.join(check.problems)}")
         file = _copy_partition(connection, storage, table, uri, value, query, engine.execution_id)
     delta.register_files(uri, table, [file], value, metadata, storage, expected_rows=check.rows,
                          columns_without_min_max=check.nonfinite_columns)
-    log.info("%s %s: %d linhas em %.1f s", table.name, value, check.rows,
+    log.info("%s %s: %d linhas em %.1f s", table.name, label, check.rows,
              time.perf_counter() - started)
     if check.nonfinite_columns:
-        log.info("%s %s: sem mínimo e máximo em %s", table.name, value,
+        log.info("%s %s: sem mínimo e máximo em %s", table.name, label,
                  ", ".join(check.nonfinite_columns))
 
 

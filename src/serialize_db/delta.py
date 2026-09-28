@@ -394,9 +394,10 @@ def _partition_predicate(partition_by: str | None, value: str | None) -> str | N
     return f"{quoted(partition_by)} = {literal(value)}"
 
 
-def _partition_label(value: str | None) -> str:
+def partition_label(value: str | None) -> str:
     """A partição nas mensagens e no log: ``partição <valor>``, ou ``tabela inteira`` sem valor,
-    na tabela sem partição e na releitura da tabela inteira."""
+    na tabela sem partição e na releitura da tabela inteira; protegida, a carga e o motor
+    Redshift a usam."""
     if value is None:
         return "tabela inteira"
     return f"partição {value}"
@@ -449,7 +450,7 @@ def publish_partition(uri: str, table: sa.Table, value: str | None, data: object
             commit_properties=CommitProperties(custom_metadata=dict(metadata)),
         )
     except CommitFailedError as error:
-        raise ExecutionConflict(f"{table.name} {_partition_label(value)}: {error}") from None
+        raise ExecutionConflict(f"{table.name} {partition_label(value)}: {error}") from None
     return dt.version()
 
 
@@ -794,7 +795,7 @@ def _commit_actions(dt: DeltaTable, table_name: str, partition_by: str | None,
             commit_properties=CommitProperties(custom_metadata=dict(metadata)),
         )
     except CommitFailedError as error:
-        raise ExecutionConflict(f"{table_name} {_partition_label(value)}: {error}") from None
+        raise ExecutionConflict(f"{table_name} {partition_label(value)}: {error}") from None
 
 
 def register_files(uri: str, table: sa.Table, files: list[RegisteredFile], value: str | None,
@@ -1019,7 +1020,7 @@ def read_back(uri: str, table: sa.Table, value: str | None, expected_rows: int,
         return
     dt.restore(version - 1)
     raise RegistrationRefused(
-        f"{table.name} {_partition_label(value)}: a releitura da versão {version} reprovou e a "
+        f"{table.name} {partition_label(value)}: a releitura da versão {version} reprovou e a "
         f"tabela voltou à versão {version - 1}: {'; '.join(problems)}")
 
 
@@ -1909,7 +1910,7 @@ def deep_copy(uri: str, version: int, destination: str, storage: Storage) -> int
     for value, group in _actions_by_partition(source, partition_by).items():
         # A soma conta toda partição, a pulada inclusive: a contagem final lê a cópia inteira.
         total += sum(int(action["num_records"]) for action in group)
-        label = _partition_label(value)
+        label = partition_label(value)
         if all(action["path"] in registered for action in group):
             log.info("%s: %s já no destino", metadata.name, label)
             continue

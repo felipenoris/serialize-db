@@ -1770,9 +1770,9 @@ class RedshiftEngine:
         partition_by = table_options(table).partition_by
         folder = f"{partition_by}={value}" if partition_by is not None else ""
         prefix = self.storage.join(self.staging_prefix, table.name, folder, uuid.uuid4().hex)
-        log.warning("%s partição %s: colunas Double com valor não finito %s; a partição sai por "
-                    "publish_partition, e os dados passam pela máquina local", table.name, value,
-                    sorted(columns_without_min_max))
+        log.warning("%s %s: colunas Double com valor não finito %s; a partição sai por "
+                    "publish_partition, e os dados passam pela máquina local", table.name,
+                    delta.partition_label(value), sorted(columns_without_min_max))
         paths = self._unload(table, value, prefix, count)
         # Uma conexão do DuckDB por partição, nos limites do ambiente: o close devolve a memória.
         connection = self.storage.duckdb_connect(config=environment_limits())

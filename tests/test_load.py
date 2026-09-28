@@ -409,7 +409,7 @@ def test_text_is_measured_as_in_cast_and_the_audit(folder: Path, config: DuckDBC
     with pytest.raises(ContractError) as refusal:
         load.initial_load(db, documents, str(origin), config=config)
     message = str(refusal.value)
-    assert message.startswith("cad_documentos partição None: ")
+    assert message.startswith("cad_documentos tabela inteira: ")
     assert "1 textos acima dos 36 bytes de um Uuid em chave" in message
     assert "1 documentos JSON acima de 65535 bytes em documento" in message
     assert "1 textos acima do teto de 65535 bytes em nota" in message
