@@ -780,8 +780,8 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still
-  running; `loader` checks the name without the lock and creates and loads its table in one
-  transaction at `close`; `session()` hands the raw connection, and `new_session()` opens an extra
+  running; `appender` checks the table without the lock and inserts its batches in one
+  statement at `close`; `session()` hands the raw connection, and `new_session()` opens an extra
   session for parallel work, which `run.ingest` uses per table (2026-09-23). The engine is the
   reference: the review of 2026-09-23 retired the sketches `SandboxEngine`, `BatchStream` and
   `Loader` of `tests/proof_of_concept/test_parallel.py` and the other drafts of package code in the

@@ -607,8 +607,8 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     """``create_table`` roda o DDL do modelo e anota a tabela, e recusa o nome ocupado; o appender
     recusa a tabela que não existe; o arquivo nasce no ``staging/`` na thread auxiliar; ``close``
     roda ``BEGIN``, a staging temporária com o ``COPY`` e o ``INSERT`` com ``JSON_PARSE``, e
-    ``COMMIT``, e apaga o arquivo; uma exceção no ``with`` não roda comando algum; um lote
-    recusado pelo ``cast`` também não."""
+    ``COMMIT``, e apaga o arquivo; o appender sem lote roda só a conferência da tabela; uma
+    exceção no ``with`` não roda comando algum; um lote recusado pelo ``cast`` também não."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     connection = FakeConnection(storage, existing={f"{PREFIX}cad_lancamentos"})
     engine = fake_engine(monkeypatch, connection, storage)
@@ -644,6 +644,13 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     engine.create_table(ACCOUNTS)
     engine.append(ACCOUNTS, account_rows(["A"]))
     assert connection.texts()[-2].startswith(f'COPY "esquema"."{PREFIX}cad_contas"\nFROM ')
+
+    # O appender sem lote: só a conferência da tabela, sem BEGIN nem COPY.
+    before = len(connection.commands)
+    with engine.appender(PROJECTED):
+        pass
+    assert connection.texts()[before:] == [
+        f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0']
 
     # Uma exceção dentro do with: o arquivo sai e nada roda além da conferência da tabela.
     before = len(connection.commands)

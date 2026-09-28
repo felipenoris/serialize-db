@@ -522,7 +522,8 @@ def test_materialized_ingest_applies_the_contract(setup: Setup) -> None:
     view = ENTRIES.to_metadata(sa.MetaData(), name="cad_view")
     engine.ingest(view, uri, version)
     viewed = engine.query(sa.select(view))
-    assert materialized.num_rows == viewed.num_rows == 10
+    assert materialized.num_rows == 10
+    assert viewed.num_rows == 10
     types = engine.query(
         "SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns "
         "WHERE column_name IN ('meta', 'valor', 'preco') ORDER BY 1, 2").to_pylist()
@@ -778,8 +779,8 @@ def test_close_and_cleanup_interrupt_the_running_query(setup: Setup) -> None:
 
 def test_create_table_creates_the_empty_table_of_the_model(setup: Setup) -> None:
     """``create_table`` cria a tabela vazia com o DDL do modelo, os tipos e o ``NOT NULL`` do
-    contrato; o nome ocupado, por ela, pela view ou pela tabela do ``ingest``, é ``SandboxError``
-    e o objeto não muda."""
+    contrato; o nome de uma view interna do catálogo do DuckDB está livre; o nome ocupado, por ela,
+    pela view ou pela tabela do ``ingest``, é ``SandboxError`` e o objeto não muda."""
     version = published_table(setup, ENTRIES, MONTHS[:1], rows=10)
     engine = setup.engine
     engine.create_table(PROJECTED)
@@ -793,6 +794,11 @@ def test_create_table_creates_the_empty_table_of_the_model(setup: Setup) -> None
     assert by_name["meta"] == ("JSON", "YES")
     assert by_name["valor"] == ("DOUBLE", "NO")
     assert by_name["codigo"] == ("VARCHAR", "NO")
+
+    # As views internas do catálogo (information_schema.columns) não ocupam o nome.
+    assert engine.object_kind("columns") is None
+    engine.create_table(PROJECTED.to_metadata(sa.MetaData(), name="columns"))
+    assert engine.object_kind("columns") == "TABLE"
 
     # O nome ocupado é recusado, de qualquer origem.
     engine.ingest(ENTRIES, setup.uri(ENTRIES), version)

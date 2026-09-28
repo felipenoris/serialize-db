@@ -150,6 +150,11 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   name, listed by `duckdb_views()` and typed `VIEW` by `information_schema.tables`, against
   `BASE TABLE` for tables. A table from `CREATE TABLE AS SELECT` carries no `NOT NULL` (2026-09-22).
   `plan/PLAN-STAGE-4.md`, `plan/POC.md`
+- `duckdb_views()` lists the catalog's internal views, 47 in DuckDB 1.5.5, all in the `system`
+  database (`information_schema.columns`, `information_schema.tables`, `pg_catalog.pg_class`,
+  `main.sqlite_master`); `duckdb_tables()` lists no internal table. A name check over the two
+  functions filters `NOT internal`, or a model table named `columns` reads as occupied
+  (2026-09-28). `plan/POC.md`
 - `memory_limit` takes only a value with a unit: `'60%'` and `'60'` are refused with
   `Parser Error: Unknown unit for memory`, `'4.5GiB'` passes. The default is 80% of the memory
   DuckDB detects (14.3 GiB where `os.sysconf` reads 18.0 GiB; 6.1 GiB of the target's 7.6 GiB), so a

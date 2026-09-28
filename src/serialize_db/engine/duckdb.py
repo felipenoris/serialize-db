@@ -791,7 +791,8 @@ class DuckDBEngine:
     def object_kind(self, name: str) -> str | None:
         """O tipo do objeto confirmado que tem o nome, ``"TABLE"`` ou ``"VIEW"``, lido num cursor
         à parte, sem o lock da sessão: a abertura de um ``appender`` não espera a consulta de um
-        ``stream`` aberto antes.
+        ``stream`` aberto antes. As views internas do catálogo do DuckDB (``information_schema``,
+        ``pg_catalog``) ficam fora: os nomes delas estão livres para o modelo.
 
         Exemplo:
 
@@ -805,8 +806,9 @@ class DuckDBEngine:
         cursor = self._connection.cursor()
         try:
             row = cursor.execute(
-                "SELECT 'TABLE' FROM duckdb_tables() WHERE table_name = $name "
-                "UNION ALL SELECT 'VIEW' FROM duckdb_views() WHERE view_name = $name",
+                "SELECT 'TABLE' FROM duckdb_tables() WHERE table_name = $name AND NOT internal "
+                "UNION ALL SELECT 'VIEW' FROM duckdb_views() WHERE view_name = $name "
+                "AND NOT internal",
                 {"name": name}).fetchone()
         finally:
             cursor.close()
@@ -866,7 +868,7 @@ class DuckDBEngine:
         """Uma view com o nome do modelo sobre a versão fixada da tabela Delta ou, com
         ``materialize=True``, a tabela do modelo criada pelo DDL e carregada do ``delta_scan`` por
         um ``INSERT ... BY NAME``, numa transação: os tipos e o ``NOT NULL`` do contrato valem na
-        tabela, e um valor que eles recusam desfaz a ingestão.
+        tabela.
 
         Um commit na tabela depois da abertura não muda o que a view lê.
 
@@ -888,6 +890,9 @@ class DuckDBEngine:
             sem versão (``version=None``).
         :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
             da partição.
+        :raises duckdb.Error: com ``materialize=True``, um valor do Delta que o tipo ou o
+            ``NOT NULL`` do contrato recusa, o JSON malformado incluído; a transação é desfeita e
+            o nome fica livre.
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela não existe no Delta")

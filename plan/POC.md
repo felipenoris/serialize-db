@@ -4915,6 +4915,12 @@ contêiner (Linux, 4 vCPUs, 16.095 MB, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.
   `appender` aberto numa thread, na sessão principal e numa sessão a mais, e 1.010 depois do
   `close`, o efeito que o usuário aceitou em 2026-09-28 no lugar da falha com `CatalogException`
   de 2026-09-23.
+- **`duckdb_views()` lista as views internas do catálogo**: 47 no DuckDB 1.5.5, todas no banco
+  `system` (`information_schema.columns`, `information_schema.tables`, `pg_catalog.pg_class`,
+  `main.sqlite_master`), e `duckdb_tables()` nenhuma tabela interna. A leitura do catálogo de
+  `name_in_use`, desde a etapa 4, e a de `object_kind`, sem filtro, davam `columns` e `tables` como
+  nomes ocupados; a revisão de 2026-09-28 pôs `NOT internal` nas duas consultas, e
+  `test_create_table_creates_the_empty_table_of_the_model` cria a tabela `columns` desde então.
 - **As suítes**: `tests/test_engine_duckdb.py`, `tests/test_execution.py` e `tests/test_pipeline.py`
   passaram na raiz local (63 casos, 1 pulado), com o pipeline ingerindo as 12 tabelas do modelo
   cliente pela DDL e pelo `INSERT`; as suítes do motor Redshift, da publicação e do leitor, com as
