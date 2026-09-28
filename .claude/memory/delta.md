@@ -280,6 +280,20 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `deep_copy` logs each partition's copy time, and `serialize-db archive` prints the time and the
   peak RSS per table. `plan/PLAN-STAGE-9.md`, `plan/POC.md`
 
+- A partition commit by `create_write_transaction(mode="overwrite")` with a changed `schema=`
+  writes a `metaData` with the new schema and keeps the destination's id, name, description,
+  configuration and partition columns (the commit's actions `commitInfo`, `add`, `metaData`); an
+  empty commit with the same schema writes only `commitInfo`, and an `append` with a new schema and
+  no actions raises nothing and keeps the old schema (deltalake 1.6.6, 2026-09-28). Since then
+  `deep_copy` commits each partition with the version's schema, refuses after the loop a copy
+  whose schema differs from the version's when no copied partition changed it, and, like
+  `rewrite`, refuses a path outside the root before writing; the module's DuckDB connections (the
+  read-back, `rewrite`, the export by rewrite, the copy's row count) open with
+  `environment_limits()`. A probe running `deep_copy`, `reconcile`, `publish_partition` and
+  `deep_copy`, then `to_pyarrow_dataset().to_table()` on the copy, hung at interpreter exit on the
+  old and the new code, and exited without that last read. `plan/PLAN-STAGE-3.md`,
+  `plan/PLAN-STAGE-9.md`, `plan/POC.md`
+
 ## Alternatives assessed
 
 - DuckLake inlines inserts of up to 10 rows into the catalog by default (`DATA_INLINING_ROW_LIMIT`),

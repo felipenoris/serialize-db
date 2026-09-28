@@ -369,18 +369,19 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `JSON_SERIALIZE` so the `UNLOAD` file carries text. `plan/PLAN-STAGE-5.md`
 - The review of 2026-09-28 fixed on the stand-in: the appender's `COPY`, direct and through the
   `_carga` staging, lists the file's columns, the first batch's (`COPY <alvo> ("a", "b") FROM ...
-  FORMAT AS PARQUET FILLRECORD`), because the positional Parquet `COPY` put a nullable middle
-  column the batch lacked into the next column's values (`largura` into `altura`, no error); the
-  target read the column list and `FILLRECORD` each alone on 2026-09-21, not together, and
+  FORMAT AS PARQUET FILLRECORD`), because the positional Parquet `COPY` put a nullable middle column
+  the batch lacked into the next column's values (`largura` into `altura`, no error); the target
+  read the column list and `FILLRECORD` each alone on 2026-09-21, not together, and
   `test_appender_loads_a_batch_without_a_middle_column` reads the combination in the next battery.
-  The text path (`literal_text`, the `stream` of a ready text) writes each `:` of a quoted region
-  as `\:` before `sa.text()`, which read `':b'` as a bind and rendered `'a NULL'` (`query` `[1]`,
-  `stream` `[]`); a client value holding `\:` still loses its backslash on that path, because the
-  compiler's `BIND_PARAMS_ESC` also acts on the rendered literals. `transaction()` runs `COMMIT`
-  and `ROLLBACK` inside the transaction: an `InterfaceError` at `COMMIT` rises with the outcome
-  unknown, where the old code reconnected and repeated `COMMIT` outside a transaction, which
-  returned success. A second `RedshiftAppender.close` does nothing (it ran another `COPY` of the
-  deleted file). `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+  The text path (`literal_text`, the `stream` of a ready text) writes each `:` of a quoted region as
+  `\:` before `sa.text()`, which read `':b'` as a bind and rendered `'a NULL'` (`query` `[1]`,
+  `stream` `[]`), and repeats a client value's backslash before `:`, because the compiler's
+  `BIND_PARAMS_ESC` also acts on the rendered literals (`r"ref \:x2"` reached the `UNLOAD` as
+  `ref :x2`). `transaction()` runs `COMMIT` and `ROLLBACK` inside the transaction: an
+  `InterfaceError` at `COMMIT` rises with the outcome unknown, where the old code reconnected and
+  repeated `COMMIT` outside a transaction, which returned success. A second
+  `RedshiftAppender.close` does nothing (it ran another `COPY` of the deleted file).
+  `plan/PLAN-STAGE-5.md`, `plan/POC.md`
 - The stand-in maps DuckDB's `TransactionContext Error: Conflict on tuple deletion!` to the
   `1023` message, catalog `does not exist` to `XX000` with the target's `Relation <name> does not
   exist in the database.` (since 2026-09-24; `42P01` before) and `already exists` to `42P07`, and lists
