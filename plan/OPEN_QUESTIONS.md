@@ -172,6 +172,31 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
   próprio delta-rs; ou a docstring de `publish_delta` dizer que a conferência não cobre a janela,
   com uma execução por ambiente de cada vez.
 
+## A API de escrita no sandbox
+
+- **`create_table`, `append` e `appender` no lugar de `load` e `loader`.** O usuário propôs em
+  2026-09-28 eliminar `load` e `loader`, acrescentar `append` e `appender` (os lotes Arrow numa
+  tabela que já existe no sandbox, venha do `ingest` materializado ou de `create_table`) e uma
+  primitiva que cria a tabela do modelo pelo `ddl`; e que `ingest(materialize=True)` comece por
+  esse `CREATE TABLE` e carregue por `INSERT ... BY NAME SELECT * FROM delta_scan(...)`, para a
+  tabela ingerida ter os tipos do contrato e o `NOT NULL`, como no Redshift. A análise de
+  2026-09-28 (fora do git, no arquivo do projeto) diz que a troca elimina os dois, com dois efeitos:
+  a criação e a carga deixam de ser uma transação (a tabela existe vazia entre `create_table` e o
+  `close` do `appender`, e a leitura durante uma carga esquecida deixa de falhar com
+  `CatalogException`, a propriedade de 2026-09-23), e o `ingest` passa a aplicar o contrato na
+  entrada (um JSON inválido ou um nulo em coluna `NOT NULL` que esteja na base falha o `ingest`).
+  A sonda de dois escritores ([`POC.md`](POC.md)) leu no DuckDB que dois `appender` na mesma tabela
+  não conflitam e que o `CREATE TABLE` numa sessão a mais não espera a consulta de um `stream`.
+  Esperam o usuário: a aprovação, o ramo dos commits (o do PR #103 aberto, ou um PR depois de
+  mesclá-lo) e a medida do `INSERT ... SELECT` do `delta_scan` contra o `CREATE TABLE AS` (0,533 s
+  em 17.000.000 de linhas, 2026-09-23).
+- **Dois escritores na mesma tabela do Redshift.** `probes/consistencia/probe_append_test.py`
+  com `-m redshift` no ambiente alvo lê o que dois `COPY` na mesma tabela ao mesmo tempo, um
+  `COPY` ao lado de um `UPDATE` e o `CREATE TABLE` durante um `UNLOAD` fazem sob o isolamento
+  serializável (o `1023` lido em 2026-09-24); no substituto a sonda passou em 2026-09-28, e a
+  leitura vale só para o código dela. Até a rodada, a docstring do `appender` promete um por tabela
+  por vez no Redshift.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão

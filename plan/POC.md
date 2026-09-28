@@ -4850,3 +4850,40 @@ seguida a de 2026-08-31 sobre a partição recém-publicada.
 **Consequências**: `tests/test_pipeline.py` entra nos testes do pacote, com dois casos `local`;
 `plan/PLAN-STAGE-6.md` descreve o teste e `plan/CURRENT_STATE.md` as contagens. A adaptação do
 teste ao S3 e ao Redshift fica com o usuário (mensagem de 2026-09-27).
+
+## O que a sonda de dois escritores na mesma tabela mostrou
+
+Em 2026-09-28, a proposta do usuário de trocar `load` e `loader` por `create_table`, `append` e
+`appender` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)) abriu duas perguntas que a regra de um só dono
+por nome dispensava: o que acontece com dois escritores na mesma tabela do sandbox, e se um
+`CREATE TABLE` pedido a uma sessão a mais espera a consulta de um `stream` aberto na principal, como
+o pedido à principal espera (leitura de 2026-09-23, acima).
+`probes/consistencia/probe_append_test.py` faz o que o `appender` proposto faria, sem ele: no
+DuckDB, o leitor Arrow registrado com nome único
+e um `INSERT ... BY NAME`; no Redshift, o Parquet no `staging/` e o `COPY`, pela staging temporária
+com `JSON_PARSE`, porque a tabela tem coluna JSON. Rodou três vezes no DuckDB deste contêiner
+(Linux, 4 vCPUs, 16.095 MB, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1) e uma vez no substituto
+de `tests/emulator.py`, com 200.000 linhas por escritor no DuckDB e 20.000 no substituto; a rodada
+no Redshift do ambiente alvo é do usuário.
+
+- **Dois `INSERT ... BY NAME` na mesma tabela, em duas sessões a mais, ao mesmo tempo**: nas 15
+  rodadas das três execuções os dois entraram, em 0,25 s a 0,48 s cada, e a tabela ficou com as
+  400.000 linhas, sem id repetido e com a soma de `valor` das duas escritas. Os dois na sessão
+  principal, em duas threads, também entraram (0,32 s a 0,84 s), em série sob o lock.
+- **Um `INSERT ... BY NAME` numa sessão a mais ao lado de um `UPDATE` da principal** sobre as
+  linhas já gravadas: os dois entraram (o `UPDATE` de 100.000 linhas em 0,017 s a 0,020 s, a escrita
+  em 0,26 s a 0,32 s), a soma reflete o `UPDATE` só nas linhas que ele alcançou, e o controle
+  otimista do DuckDB não recusou o par.
+- **O `CREATE TABLE` durante um `stream`** de 5.000.000 de linhas com um `md5` por linha, cujo
+  primeiro lote chegou em 0,025 s: na sessão a mais ele levou 0,002 s; na principal, 1,569 s,
+  1,896 s e 1,888 s, a consulta inteira, e o stream esgotou o resto em 0,106 s a 0,142 s depois
+  dele. A sessão principal escreveu em seguida na tabela que a sessão a mais criou.
+- **No substituto**, as seções passaram com três rodadas de dois escritores; o substituto é DuckDB
+  por trás de uma conexão de mentira, e a leitura vale para o código da sonda, não para o Redshift.
+
+**Consequências**: no DuckDB, dois `appender` na mesma tabela em sessões a mais não conflitam
+entre si nem com um `UPDATE` da principal, e o `create_table` proposto pode rodar numa sessão a
+mais (um cursor da conexão) para não esperar a consulta de um `stream` aberto antes, o que
+dispensaria a ordem `create_table` antes do `stream`. A leitura do Redshift (dois `COPY` na mesma
+tabela sob isolamento serializável) e a decisão sobre a API estão em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

@@ -31,6 +31,8 @@ PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/d
 .venv/bin/python probes/credentials.py s3://bucket/prefixo/prd/cad_contas
 SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local .venv/bin/python probes/consistencia/probe_types.py
 PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_redshift_test.py
+SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m local -s probes/consistencia/probe_append_test.py
+PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_append_test.py
 ```
 
 ## Os scripts
@@ -156,11 +158,14 @@ de borda (o texto vazio, o `NUL`, o emoji, os 50 bytes exatos, `±0.0`, `5e-324`
 `9999-12-31`, `Uuid`, JSON e nulos) e trabalho paralelo, e comparam valor a valor o que saiu com o
 que entrou. Elas gravam, por isso ficam na sua pasta: as sete sondas de script escrevem sob
 `<SERIALIZE_DB_TEST_LOCAL_ROOT>/consistencia/<sonda>/`, pasta que cada uma recria no início e
-apaga no fim (`SERIALIZE_DB_TEST_KEEP` a mantém), e param com o código 2 sem a variável; a do
-motor Redshift roda pelo pytest com as fixtures das suítes (`-p conftest`, com `PYTHONPATH=tests`),
-sob `<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-poc/<id>/` e num ambiente `poc<id>` próprio do
+apaga no fim (`SERIALIZE_DB_TEST_KEEP` a mantém), e param com o código 2 sem a variável; as duas
+pelo pytest (`probe_redshift_test.py` e `probe_append_test.py`) usam as fixtures das suítes
+(`-p conftest`, com `PYTHONPATH=tests`): a do motor Redshift grava sob
+`<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-poc/<id>/` e num ambiente `poc<id>` próprio do
 esquema da suíte, cujas tabelas `poc<id>_*` e linhas de controle saem no fim, como
-`tests/test_publication.py`. Cada leitura sai no terminal e em
+`tests/test_publication.py`; a dos dois escritores grava sob a raiz local com `-m local` e, com
+`-m redshift`, sob a raiz S3 e num sandbox `exec_poc-<id>_*` que o `cleanup` apaga. Cada leitura
+sai no terminal e em
 `output/consistencia_<sonda>_<data-hora>.txt`; cada checagem imprime `OK` ou `PROBLEMAS` com a
 lista, e o código de saída é 1 quando alguma reprovou. Os achados que esperam a decisão do usuário
 em [`plan/OPEN_QUESTIONS.md`](../plan/OPEN_QUESTIONS.md) (o sinal do zero pelo `COPY` do DuckDB,
@@ -181,6 +186,7 @@ variáveis do ambiente alvo em `SUITE.md`.
 | `probe_load.py` | A carga inicial da base fictícia de `tests/source_db_projetado.py` por `initial_load`, cada tabela comparada valor a valor com a origem pelos dois leitores, a segunda passagem sem commit e `load_report`. |
 | `probe_pandas.py` | Um `DataFrame` do pandas 3 por `from_pandas`, `cast`, `load`, `query` e `to_pandas`; o `NaN` que vira nulo em `from_pandas` e as recusas de `cast` como leituras. |
 | `probe_redshift_test.py` | O motor Redshift: `ingest` e `query`, quatro `stream` ao mesmo tempo, dois `loader` em threads, a auditoria e `export_partition` pelos dois leitores, duas sessões a mais em threads, `publish_redshift` com dois workers e o leitor publicado por duas threads; no substituto com `SERIALIZE_DB_TEST_EMULATOR=1`, no ambiente alvo contra o Redshift e o S3 reais. |
+| `probe_append_test.py` | Dois escritores na mesma tabela do sandbox, o que o `append` proposto em 2026-09-28 permite: dois `INSERT ... BY NAME` (DuckDB) ou dois `COPY` (Redshift) ao mesmo tempo em sessões a mais e na sessão principal em threads, um `append` ao lado de um `UPDATE` da mesma tabela, e o `CREATE TABLE` numa sessão a mais e na principal durante um `stream`; o desfecho de cada escrita é leitura, e a checagem é a consistência do que ficou. Pelo pytest: `-m local` roda o motor DuckDB na pasta local, `-m redshift` o Redshift no substituto ou no ambiente alvo. |
 
 `consistency_lib.py` é a biblioteca comum: o modelo `cad_tudo` com toda coluna do contrato e
 `cad_simples`, os valores de borda e `edge_rows`, a pasta de trabalho (`probe_folder`), a
