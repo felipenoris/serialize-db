@@ -313,6 +313,16 @@ consultada em 2026-09-23 (a busca achou também a página sobre `FILTER` do Mode
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_Aggregate_Functions.html>
 - <https://modern-sql.com/feature/filter>
 
+O `COPY` de Parquet de um caminho sem objeto, o prefixo de chave e a entrada `mandatory` do
+manifesto, consultados em 2026-09-28 depois da bateria do alvo, pela busca na web por `Redshift
+COPY FORMAT AS PARQUET prefix matches no files "0 rows" no error "does not exist"`, que não achou
+página que descreva o prefixo vazio, e pelas páginas da documentação:
+
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-source-s3.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-usage_notes-copy-from-columnar.html>
+- <https://oneuptime.com/blog/post/2026-02-12-load-data-redshift-copy-command/view>
+- <https://repost.aws/questions/QUwQYm3TWMR0ulsGD7iG2BuA/failed-to-copy-parquet-files-from-s3-to-redshift>
+
 ## DuckDB
 
 Documentação:
@@ -525,6 +535,16 @@ A memória, as threads e o cgroup, consultados em 2026-09-24 (os limites lidos d
 - <https://github.com/duckdb/duckdb/issues/7651>
 - <https://github.com/duckdb/duckdb/discussions/16781>
 - <https://github.com/milaboratory/platforma/pull/1848> (o limite do DuckDB tirado da memória livre)
+
+O erro de uma tarefa e a interrupção no resultado em stream, lidos em 2026-09-28 na revisão
+`d8cdaa33fd` da 1.5.5; `src/execution/executor.cpp`, pedido na etiqueta `v1.5.5` e na revisão,
+e `src/include/duckdb/parallel/task_error_manager.hpp` responderam 404:
+
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/parallel/executor.cpp>
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/parallel/pipeline_executor.cpp>
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/main/client_context.cpp>
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/main/stream_query_result.cpp>
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/main/buffered_data/simple_buffered_data.cpp>
 
 Os guias que nomeiam o driver SQLAlchemy do DuckDB, lidos em 2026-09-26:
 

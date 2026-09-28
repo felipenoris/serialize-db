@@ -191,10 +191,11 @@ na documentação do `pdoc`. O que a implementação mudou do plano:
   "<coluna>"` por coluna, o tipo por `sql_type(coluna, "duckdb")` e o nome por `quoted` da
   [etapa 1](PLAN-STAGE-1.md) (`BIGINT` nas chaves `int32`, `TIMESTAMP` no `INT96`, que o DuckDB
   trunca a microssegundos); `'<valor>' AS <coluna de partição>` numa tabela particionada. As colunas
-  `double` passam como estão, sem arredondamento (decisão de 2026-09-20). O `CAST` aceita três
+  `double` passam como estão, sem arredondamento (decisão de 2026-09-20). O `CAST` aceita quatro
   perdas que `cast` recusa: o `double` arredondado na escala de um `Numeric`, a hora de um
-  `timestamp` numa `Date` e o `timestamp` com fuso numa `DateTime` sem fuso, na hora do `TimeZone`
-  da conexão; a carga fica assim, e `docs/index.md` as descreve (decisão do usuário de 2026-09-28).
+  `timestamp` numa `Date`, o `timestamp` com fuso numa `DateTime` sem fuso, na hora do `TimeZone`
+  da conexão, e os nanossegundos de um `INT96`, truncados (leitura de 2026-09-28); a carga fica
+  assim, e `docs/index.md` as descreve (decisões do usuário de 2026-09-28).
 - **`initial_load`** cria a tabela (`create_table`), lê as partições já presentes
   (`partition_values`) e pula cada uma delas (a retomada); abre o motor DuckDB da chamada, com as
   extensões e o secret da origem quando ela está no S3 e a raiz Delta numa pasta local; para cada
@@ -217,7 +218,9 @@ na documentação do `pdoc`. O que a implementação mudou do plano:
   pasta a pasta, cada pasta que `discover_partitions` acha lida por `_read_folder`, como a carga a
   lê, e no destino agrupada pela coluna de partição por `delta_scan`, só quando a tabela existe; e
   monta `LoadReport`, com as conversões do rodapé do primeiro `.parquet` direto da primeira dessas
-  pastas que tem algum; `matches` exige contagens e somas iguais em toda partição.
+  pastas que tem algum; `matches` exige contagens e somas iguais em toda partição. A linha das
+  conversões lista a mudança de tipo, sem dizer se ela perde dado, e não vê outro arquivo; ela fica
+  assim, e `docs/index.md` descreve o alcance dela (decisão do usuário de 2026-09-28).
 - **`serialize-db load`** confere o modelo por `check_models`, seleciona as tabelas como
   `serialize-db publish_redshift` e as ordena por `load_order`, chama `initial_load` e depois
   `load_report` de cada uma, imprime o relatório e sai com 1 quando `matches` é falso ou uma

@@ -14,8 +14,9 @@ foi medido em [`POC.md`](POC.md).
   32.966.477 bytes, com 859 marcadores às 12:39 do mesmo dia; e 1.943 versões, 50.394.018 bytes,
   com 1.823 marcadores às 23:26; e 2.980 versões, 86.695.363 bytes, com 2.788 marcadores em
   2026-09-25 às 17:26; e 5.269 versões, 159.538.248 bytes, com 4.883 marcadores em 2026-09-26 às
-  15:14; e 7.619 versões, 233.165.927 bytes, com 7.030 marcadores em 2026-09-27 às 15:59,
-  [`POC.md`](POC.md)), e a regra
+  15:14; e 7.619 versões, 233.165.927 bytes, com 7.030 marcadores em 2026-09-27 às 15:59; e 8.822
+  versões, 270.369.639 bytes, com 8.127 marcadores em 2026-09-28 às 20:14, [`POC.md`](POC.md)), e a
+  regra
   `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
   para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
   `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
@@ -83,7 +84,10 @@ foi medido em [`POC.md`](POC.md).
   recusa prevista, porque `SUITE.md` o roda depois de um snapshot na versão atual: a compactação de
   uma partição de vários arquivos e a memória dela (o item acima) esperam uma partição com mais de
   um arquivo, que a carga não grava, e um `compact` antes do snapshot; a continuação de uma cópia
-  interrompida do `archive` só o substituto exercitou.
+  interrompida do `archive` só o substituto exercitou. Em 2026-09-28, a carga parou em
+  `cad_lancamentos` 2026-07-31 com o `RegistrationRefused` de uma origem que mudava durante a
+  leitura ([`POC.md`](POC.md)): a carga seguinte, que recomeça dessa partição, e o
+  `vacuum --full` do arquivo que ficou fora do log esperam a origem estável.
 
 - **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo nas
   baterias de 2026-09-25, de 2026-09-26 e de 2026-09-27 ([`POC.md`](POC.md)): o leitor Delta abriu
@@ -181,28 +185,26 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
   leitura vale só para o código dela. Desde a implementação de 2026-09-28 a sonda chama
   `create_table` e `append` dos motores, e a docstring do `appender` nada diz sobre dois escritores
   na mesma tabela até a rodada.
+- **O `COPY ... MANIFEST` do `appender` do Redshift.** Desde a decisão do usuário de 2026-09-28, o
+  `appender` carrega o arquivo por um manifesto com ele como a única entrada obrigatória, porque o
+  `COPY` sem manifesto de um arquivo ausente saiu sem erro no alvo ([`POC.md`](POC.md)). A próxima
+  bateria lê o `COPY` pelo manifesto nos casos do `appender` e, em
+  `test_appender_copies_the_file_at_close`, a falha do arquivo obrigatório ausente, que a
+  documentação do `COPY` descreve, com a mensagem do servidor no relatório da sessão
+  (`redshift.engine.copy_missing_mandatory_file`); o substituto a imita com uma mensagem própria.
 
 ## Achados da revisão do repositório
 
 A revisão de 2026-09-28 ([`POC.md`](POC.md), seção "O que a revisão do repositório de 2026-09-28
 reproduziu") corrigiu o que não dependia de decisão, e as decisões do usuário do mesmo dia
-fecharam os demais achados; cada item abaixo espera uma rodada no alvo.
+fecharam os demais achados; a bateria de 2026-09-28 leu no alvo a lista de colunas com
+`FILLRECORD`, a linha do DuckDB do `diagnose_aws.py` e o `SP-10`.
 
-- **A lista de colunas com `FILLRECORD` nos `COPY` do Redshift.** Desde a revisão de 2026-09-28,
-  todo `COPY` da biblioteca lista as colunas do arquivo, com `FILLRECORD`: o do `appender`, direto
-  e pela staging `_carga`, as do primeiro lote, e os da carga do Delta, no `ingest`, no
-  `pinned_delta` e na publicação, as do rodapé, um por lista de colunas dos arquivos (decisão do
-  usuário de 2026-09-28, [`POC.md`](POC.md)). O alvo leu a lista e o `FILLRECORD` cada um sozinho
-  em 2026-09-21, nunca juntos. `test_appender_loads_a_batch_without_a_middle_column` e os casos da
-  coluna nova no meio e da reordenação de `tests/test_engine_redshift.py` e de
-  `tests/test_publication.py` leem a combinação na próxima bateria; se o alvo a recusar, o `COPY`
-  deixa o `FILLRECORD` quando passa a lista, que já deixa nula a coluna fora dela.
-- **A checagem do DuckDB de `probes/diagnose_aws.py` no alvo.** Desde a decisão do usuário de
-  2026-09-28, a checagem abre o DuckDB pelo `Storage.duckdb_connect` da biblioteca, com a chave do
-  `boto3` e as extensões `httpfs` e `delta`, e a `aws` saiu de `prepare_offline.sh` e do `SP-10` de
-  `probes/space.py`; no moto, a linha do DuckDB passou a listar o prefixo ([`POC.md`](POC.md)). A
-  regra do instrumento validado pede a rodada no alvo: a próxima bateria lê a linha do DuckDB do
-  `diagnose_aws.py` e o `SP-10`.
+- **O custo dos rodapés na publicação.** Desde a revisão de 2026-09-28, `copy_manifest` lê o rodapé
+  de cada arquivo para agrupar os `COPY` por lista de colunas: no moto, 1.255,8 ms contra 91,4 ms
+  numa tabela de 200 arquivos, e o S3 do alvo não foi medido ([`POC.md`](POC.md)). A publicação da
+  base inteira pelo bloco "Publicação Delta -> Redshift" de `SUITE.md`, que a bateria de 2026-09-28
+  não rodou, dá o tempo por tabela a comparar com os 328,5 s de `cad_lancamentos` de 2026-09-27.
 
 ## Decisões de API pendentes por etapa
 

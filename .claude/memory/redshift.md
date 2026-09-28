@@ -391,6 +391,26 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `get_add_actions` lists the newest commit first, so the actions are sorted by `path`. The new
   `redshift` cases of `tests/test_engine_redshift.py` and `tests/test_publication.py` read the list
   with `FILLRECORD` in the next battery. `plan/PLAN-STAGE-3.md`
+- A Parquet `COPY` without `MANIFEST` reads its path as a key prefix, and a prefix that matches no
+  object loaded nothing without error in the target on 2026-09-28 (inferred from
+  `test_appender_copies_the_file_at_close` failing with `DID NOT RAISE` four times; until PR #104
+  its double called itself, and the `RecursionError` passed as the expected error, so that `COPY`
+  never ran in the target before). The documentation: `mandatory: true` makes the `COPY` terminate
+  when an entry's file is missing, and a missing or malformed manifest fails the `COPY`. The
+  user's decision of 2026-09-28 ("Manifesto") puts the `appender`'s `COPY` on a manifest written at
+  `close` beside the file, `<uuid>.manifest`, with the file as its only entry, `mandatory: true`
+  and `content_length` from `Storage.size`; `copy_text(manifest=False)` has no caller in `src/`
+  since. The stand-in reads a path without `MANIFEST` as a prefix (`object_uris`), returns an empty
+  result without error when nothing matches, and fails a missing manifest or a missing mandatory
+  entry with its own message; on it, the old code fails as in the target, and `mandatory: false`
+  fails both the local and the target test. The target's message for the missing mandatory file
+  lands in `redshift.engine.copy_missing_mandatory_file` on the next battery. `plan/POC.md`,
+  `plan/PLAN-STAGE-5.md`
+- The Redshift audit's refused ingest printed in the target on 2026-09-28 as `Cannot insert a NULL
+  value into column valor` (code 8007) and `Invalid input` (code 8001, `JSON_PARSE() error:
+  End-of-input inside object or array: {`), both `XX000`, with the driver's whole dict, the
+  server's source path included. `RS-12` counted 85 load errors in 30 days that day (no row on
+  2026-09-26 and 2026-09-27, 25 on 2026-09-24). `plan/POC.md`
 - The stand-in maps DuckDB's `TransactionContext Error: Conflict on tuple deletion!` to the
   `1023` message, catalog `does not exist` to `XX000` with the target's `Relation <name> does not
   exist in the database.` (since 2026-09-24; `42P01` before) and `already exists` to `42P07`, and lists

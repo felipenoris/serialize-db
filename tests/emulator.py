@@ -15,8 +15,11 @@ e nada é gravado em disco.
 
 O substituto confere o código Python dos testes. Cada recusa e cada comportamento que ele imita é
 uma leitura do ambiente alvo registrada em ``plan/POC.md``: a contrabarra como escape nos literais
-de texto, o ``UNLOAD`` de um resultado vazio sem manifesto nem arquivo, o ``is_valid_json`` que
-recusa ``SUPER`` e o ``ALTER COLUMN ... TYPE`` que o esquema do datashare recusa. A relação
+de texto, o ``UNLOAD`` de um resultado vazio sem manifesto nem arquivo, o ``COPY`` sem ``MANIFEST``
+que lê o caminho como prefixo e, sem objeto que case, não carrega nada e não dá erro, o
+``is_valid_json`` que recusa ``SUPER`` e o ``ALTER COLUMN ... TYPE`` que o esquema do datashare
+recusa. O ``COPY ... MANIFEST`` falha sem o manifesto e sem um arquivo de entrada ``mandatory``,
+como a documentação do ``COPY`` descreve, com uma mensagem do substituto. A relação
 inexistente sai como no ambiente alvo (leitura de 2026-09-24), o SQLSTATE ``XX000`` com a mensagem
 ``Relation <nome> does not exist in the database.``, a que já existe com o ``42P07`` do PostgreSQL,
 e o conflito entre duas transações do DuckDB sai com o ``1023`` do Redshift, a violação de
@@ -898,10 +901,10 @@ def copy(connection: Connection, text: str) -> Result:
         raise server_error("TRUNCATECOLUMNS argument is not supported for PARQUET based COPY",
                            "0A000")
 
-    files = [source]
-    if "MANIFEST" in options:
-        manifest = json.loads(read_object(source))
-        files = [entry["url"] for entry in manifest["entries"]]
+    # O caminho sem objeto que case não carrega nada e não dá erro (2026-09-28, plan/POC.md).
+    files = copy_sources(source, options)
+    if not files:
+        return Result(rowcount=0)
     tables = []
     for uri in files:
         tables.append(pq.read_table(io.BytesIO(read_object(uri))))
@@ -918,6 +921,30 @@ def copy(connection: Connection, text: str) -> Result:
     loaded = pa.table(data.columns[:len(names)], names=names)
     insert_arrow(connection, table, loaded)
     return Result(rowcount=loaded.num_rows)
+
+
+def copy_sources(source: str, options: str) -> list[str]:
+    """Os arquivos que o ``COPY`` lê: sem ``MANIFEST``, os objetos cuja chave começa pelo caminho,
+    que o Redshift lê como prefixo; com ele, as entradas do manifesto que existem.
+
+    O manifesto ausente e a entrada ``mandatory`` ausente são erros do servidor, como a
+    documentação do ``COPY`` descreve; a mensagem é do substituto, porque o texto do ambiente alvo
+    não foi lido.
+    """
+    if "MANIFEST" not in options:
+        return object_uris(source)
+    if source not in object_uris(source):
+        raise server_error(f"o manifesto não existe: {source}")
+    manifest = json.loads(read_object(source))
+    files = []
+    for entry in manifest["entries"]:
+        uri = entry["url"]
+        if uri in object_uris(uri):
+            files.append(uri)
+            continue
+        if entry.get("mandatory", False):
+            raise server_error(f"o arquivo obrigatório do manifesto não existe: {uri}")
+    return files
 
 
 def table_columns(connection: Connection, table: str) -> list[str]:

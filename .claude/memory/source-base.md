@@ -188,3 +188,18 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   rows per second), the process peak at 8,625 MB from 2026-03-31 on. The audit of 2026-01-31 read
   the same 989,852 orphans and the `valor` total 117,667,407,519.194421, and `archive` copied
   `cad_lancamentos` in 16.8 s at 350 MB. `plan/POC.md`
+- The load of 2026-09-28 (`started_at` 21:14:56 UTC, 8 vCPUs, 12,515 MB available, 8 threads,
+  6,257 MiB, a fresh root): the source was being rewritten [inferred]. `cad_aliquotas` had 21 rows
+  (22 before), `cad_operacoes` and `rel_contrato_operacao` had no 2026-07-31 folder (5,579,536 and
+  15,209,141 rows before), `cad_contratos` 2026-07-31 kept 3,985,447, and the earlier partitions
+  kept their counts and sums. In `cad_lancamentos` 2026-07-31 (141,933,948 rows before) the
+  partition check counted 80,000,000 rows and the `COPY` wrote 82,000,000, multiples of the
+  1,000,000-row source files, and `register_files` refused with `RegistrationRefused: 82000000
+  linhas nos arquivos, 80000000 na fonte`, no commit; the four earlier partitions stayed (versions
+  1 to 4), the script died with the traceback (the 2026-09-25 decision), and the written file is an
+  orphan until `serialize-db vacuum --full`. The next load resumes at 2026-07-31 once the source is
+  stable. The audit of 2026-01-31 (version 4) read the same 989,852 orphans and `valor` total, and
+  `archive` copied 22 files, `cad_lancamentos` in 11.9 s at 329 MB. The INT96 truncation of
+  sub-microsecond parts is the load's fourth loss, documented with the reach of the `conversões`
+  line (first file of the first partition only, no lossy marker; user decision "Só a doc" of
+  2026-09-28). `plan/POC.md`

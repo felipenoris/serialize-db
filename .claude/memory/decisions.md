@@ -1329,7 +1329,8 @@ and a card; the implementation followed once every item was answered. The answer
 list, in the publication and in the Redshift engine's `ingest` and `pinned_delta`; the initial load
 keeps its three conversions (a `double` rounded to a `Numeric` scale, the time of a `timestamp`
 dropped in a `Date`, a zoned `timestamp` written in the machine's zone in a naive `DateTime`),
-written in `docs/index.md`; `serialize-db audit` prints the database error of the ingest as a failed
+written in `docs/index.md`, joined that evening by a fourth, the `INT96` nanoseconds (the section
+below); `serialize-db audit` prints the database error of the ingest as a failed
 audit, without traceback (the implementation catches DuckDB's `ConstraintException` and
 `ConversionException` and any `redshift_connector.Error`, and another DuckDB error, such as a denied
 file, keeps its traceback); and `run.snapshot` reads the control file and refuses a name already
@@ -1352,3 +1353,32 @@ the old snapshot readable until `archive`) and kept the snapshot names immutable
 asking for the characteristic in the documentation: `docs/operacao.md` ("Snapshot do banco" and
 "Refazer um snapshot"), `docs/index.md`, the docstrings of `Execution.snapshot` and
 `delta.snapshot`, and `plan/serialize-db.md`. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-10.md`
+
+## The `appender` manifest and the initial load's conversions (2026-09-28)
+
+The battery of 2026-09-28 failed `test_appender_copies_the_file_at_close` four times in the target:
+a Parquet `COPY` without manifest reads its path as a key prefix, and a missing path loaded nothing
+without error, so a Redshift `append` would return the rows written to the file with the table
+without them. Asked on a card whether the `appender`'s `COPY` should fail when the file is missing,
+the user chose "Manifesto" over "Só o teste": the `appender` writes at `close` a manifest beside
+the file with the file as its only entry, `mandatory: true`, as the ingest and the publication do,
+so the `COPY` fails on a missing file and never reads another object of the same prefix; the test
+checks that its double ran and records the target's message, and the stand-in reads a path without
+manifest as a prefix, loading nothing without error, as the target did. Asked the same evening
+whether the migration's `conversões` line reports the lossy conversions of the initial load, the
+user heard that it lists every type change, lossy or not, read only in the first file of the first
+partition, and that the `INT96` timestamp loses its sub-microsecond part, a fourth loss the
+documentation missed; offered to mark the lossy conversions read in every footer, the user chose
+"Só a doc": the line stays as it is, and `docs/index.md` lists the fourth loss and the line's reach.
+`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-7.md`, `plan/POC.md`, `docs/index.md`
+
+The local suites of that evening failed `test_stream_delivers_each_batch_while_the_query_runs`
+in 3 of 21 runs: DuckDB 1.5.5 delivered `INTERRUPT Error: Interrupted!` in place of the
+conversion error found by a worker thread [inferred from the source], with no `interrupt()` from
+the engine. Told that clients of `stream` can get the interrupt in place of a failing query's
+error, and that every option on the card changes only the test, the user chose one thread for the
+affected case alone and a warning to the client in the `stream` docstring: the error case opens
+its own engine with `threads=1` and asserts the `OSError` of the Arrow reader, and the docstrings
+of `DuckDBEngine.stream` and `DeltaReader.stream` say the error can arrive as the interrupt with
+more than one thread. The package's behavior does not change. `plan/PLAN-STAGE-4.md`,
+`plan/POC.md`

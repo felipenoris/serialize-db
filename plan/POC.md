@@ -5134,3 +5134,153 @@ log registra, mede o custo no alvo na próxima bateria, junto com a lista e o `F
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A linha do DuckDB do `diagnose_aws.py` e o `SP-10`
 esperam a mesma bateria, e o `RS-11` segue como leitura no alvo, onde o IAM não conecta por TCP
 ([`probes/README.md`](../probes/README.md)).
+
+## O que a bateria de 2026-09-28 às 20:14 mostrou no ambiente alvo
+
+Em 2026-09-28, de 20:14 a 20:54 UTC, o usuário rodou no ambiente alvo o bloco "Probes e Testes - BN"
+de `SUITE.md`, os cinco probes e as sete sessões do pytest, numa máquina de 8 vCPUs e 15,1 GiB
+(Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.6, pyarrow 25.0.1, boto3 1.43.102, `redshift_connector`
+2.1.17, `sa-east-1`), sobre a `main` com o PR #104 [inferido: as 662 coletas são as dela]. Os
+relatórios ficam fora de `plan/`, com os achados aqui. As leituras repetem as de 2026-09-27 ("O que
+a bateria de 2026-09-27 às 15:58 mostrou no ambiente alvo"), salvo:
+
+- **O `COPY` de Parquet sem manifesto, de um caminho sem objeto, saiu sem erro.**
+  `test_appender_copies_the_file_at_close` reprovou nas quatro rodadas, duas da suíte Redshift e
+  duas da do motor, com `DID NOT RAISE Exception`: o dublê trocava o arquivo do `appender` por
+  `<arquivo>.ausente`, e o `COPY ... FORMAT AS PARQUET FILLRECORD` desse caminho não levantou erro
+  [inferido: sem objeto que case com o prefixo, não carregou nada; a contagem seguinte não rodou].
+  Até o PR #104, o dublê chamava a si mesmo, e o `RecursionError` satisfazia o
+  `pytest.raises(Exception)`: esse `COPY` nunca tinha rodado no alvo. O substituto lia o objeto pelo
+  nome e falhava com o `NoSuchKey` do S3. A documentação do `COPY` lê o caminho sem `MANIFEST` como
+  prefixo de chave e recomenda o manifesto quando o prefixo pode alcançar arquivos indesejados; com
+  `mandatory: true`, o `COPY` termina quando não acha o arquivo da entrada, e ele falha sem o
+  manifesto. O `append` do Redshift devolveria as linhas gravadas no arquivo com a tabela sem elas;
+  a ingestão e a publicação já liam manifestos de entradas obrigatórias.
+- **As leituras que a revisão de 2026-09-28 deixou para o alvo saíram como esperado.** O `COPY` com
+  a lista das colunas de cada arquivo e o `FILLRECORD` passou no `appender`
+  (`test_appender_loads_a_batch_without_a_middle_column`), no `ingest` e no `pinned_delta` (os casos
+  da coluna nova no meio e da reordenação de `tests/test_engine_redshift.py`) e na publicação (os de
+  `tests/test_publication.py`), nas duas rodadas. A linha do DuckDB do `diagnose_aws.py`, pelo
+  `Storage.duckdb_connect`, listou `serialize-db-poc/` e as subpastas (0 objetos), e o resumo
+  repetiu "os três clientes listaram o prefixo"; o `SP-10` carregou `httpfs`, `delta`, `parquet` e
+  `json` e passou, e `duckdb_extensions()` não listou a `aws`. A auditoria da linha de comando no
+  Redshift imprimiu a ingestão recusada como reprovação: `Cannot insert a NULL value into column
+  valor` (código 8007) na partição com o nulo e `Invalid input` (código 8001, `JSON_PARSE() error:
+  End-of-input inside object or array: {`) na do JSON truncado, as duas com o SQLSTATE `XX000` e o
+  dicionário inteiro do driver, que traz o caminho do fonte do servidor.
+- **As suítes.** A sessão `-m "not redshift"` aprovou 610 casos em 274,1 s, contra 541 em 226,7 s:
+  os casos a mais vêm dos PRs de 2026-09-27 e 2026-09-28 [inferido]. As suítes Redshift, do motor
+  e da publicação levaram 671,8 s e 605,9 s (52 casos), 150,9 s e 147,0 s (10) e 205,6 s e 249,9 s
+  (10), contra 45, 6 e 8 casos em 2026-09-27; o `append` de 10 linhas levou 1,23 s e 1,26 s
+  (`redshift.engine.small_append`, a leitura que se chamava `small_load`).
+- **Os probes** diferiram dos de 2026-09-27 no que muda a cada rodada e em três leituras: o `RS-12`
+  contou 85 erros de carga em 30 dias em `sys_load_error_detail`, onde a contagem de 2026-09-26 e a
+  de 2026-09-27 não devolveram linha e a de 2026-09-24 contou 25, com a causa não lida; o `BK-14`
+  contou 8.822 versões não correntes (270.369.639 bytes) e 8.127 marcadores de exclusão sob a raiz
+  das suítes, contra 7.619 (233.165.927 bytes) e 7.030: 1.203 versões e 37.203.712 bytes entre as
+  duas leituras; e a credencial do contêiner tinha 55 minutos pela frente, contra 30. As chamadas
+  que falharam são as de 2026-09-27: 1 no `space.py`, 6 no `bucket.py` e 3 no `catalog.py`.
+
+A partir das 21:14:56 UTC, o usuário rodou a carga, a auditoria, `history`, `snapshot`, `vacuum` e
+`archive` do bloco "Migração Parquet -> Delta" de `SUITE.md`, numa raiz recarregada: o `history` de
+`cad_lancamentos` começa no `CREATE TABLE` das 21:16:54.
+
+- **A origem mudou desde 2026-09-27, e o mês 2026-07-31 mudou durante a carga** [inferido: a base de
+  origem estava sendo regravada]. `cad_aliquotas` tinha 21 linhas, contra 22; `cad_operacoes` e
+  `rel_contrato_operacao` vieram sem a partição 2026-07-31, que tinha 5.579.536 e 15.209.141
+  linhas; `cad_contratos` 2026-07-31 seguiu com 3.985.447, e as outras partições repetiram as
+  contagens e as somas. Em `cad_lancamentos` 2026-07-31, que tinha 141.933.948 linhas, a
+  conferência da partição contou 80.000.000 e o `COPY` gravou 82.000.000, múltiplos dos arquivos de
+  1.000.000 linhas da origem, e `register_files` recusou com `RegistrationRefused: 82000000 linhas
+  nos arquivos, 80000000 na fonte`, sem commit, como a [etapa 3](PLAN-STAGE-3.md) prevê. As quatro
+  partições anteriores ficaram no log (versões 1 a 4), o relatório guardou `cad_lancamentos` em
+  `in_progress`, o script saiu pelo traceback, como a decisão de 2026-09-25 quer, e o arquivo
+  gravado ficou na pasta da partição, fora do log, até um `serialize-db vacuum --full`.
+- **A carga das partições conferidas** (8 CPUs, 12.515 MB disponíveis, 8 threads e
+  `memory_limit` de 6.257 MiB): as de `cad_lancamentos` levaram 36,1 s, 24,4 s, 63,5 s e 33,6 s,
+  contra 30,6 s, 21,2 s, 54,7 s e 30,7 s em 2026-09-27, com o pico do processo em 8.742 MB, contra
+  8.625 MB. A linha `conversões` de cada tabela listou só as chaves `int32 -> int64`.
+- **A auditoria** de `cad_lancamentos` 2026-01-31 com `--foreign-keys`, na versão 4, repetiu os
+  989.852 órfãos de `data_base`, `sistema` e `contrato` e o total de `valor` 117.667.407.519,194421.
+- **`snapshot`, `vacuum` e `archive`**: o snapshot `carga-2026-09-24` com as 12 tabelas; 0 arquivo a
+  apagar em cada uma, porque o `vacuum` sem `--full` não lista órfãos; e os 22 arquivos copiados,
+  com `cad_lancamentos` em 11,9 s e pico de 329 MB.
+
+**Consequências**: o `COPY` do `appender` do Redshift passa a ler um manifesto com o arquivo como a
+única entrada obrigatória (decisão do usuário de 2026-09-28, [etapa 5](PLAN-STAGE-5.md),
+[`redshift.md`](redshift.md)), e o substituto lê o caminho sem manifesto como prefixo, com o que o
+código anterior reprova como reprovou no alvo (a seção seguinte). Os itens da lista de colunas com
+`FILLRECORD` e da linha do DuckDB do `diagnose_aws.py` saem de
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), com a resposta nesta seção; o custo de ler os rodapés na
+publicação da base segue lá, porque o bloco da publicação não rodou, e o `COPY` do `appender` pelo
+manifesto espera a próxima bateria. A carga seguinte recomeça de `cad_lancamentos` 2026-07-31
+quando a origem estiver estável.
+
+## O que o manifesto do `appender` e a sonda das conversões mostraram
+
+Em 2026-09-28, neste contêiner (Linux x86_64, 4 vCPUs), com as versões da seção anterior, na pasta
+local e no substituto de `tests/emulator.py`:
+
+- **O substituto reproduziu o alvo.** Com o `COPY` sem `MANIFEST` lido como prefixo e o resultado
+  vazio sem erro, o `src/` e o teste anteriores reprovaram `test_appender_copies_the_file_at_close`
+  com `DID NOT RAISE Exception`, como no alvo, e os outros 5 casos do `appender` passaram. Com o
+  manifesto, os 6 passaram; o teste novo apaga o arquivo depois que o manifesto é gravado, e o
+  substituto recusou o `COPY` pela entrada obrigatória ausente, com a nota do comando
+  `comando: COPY ... FROM '<manifesto>'` no erro.
+- **A entrada precisa ser obrigatória.** Com `mandatory: false` no manifesto, o teste local do
+  manifesto reprovou na comparação do manifesto, e o do alvo, no substituto, com `DID NOT RAISE
+  Error`: o substituto pula a entrada opcional ausente e o `COPY` sai sem erro.
+- **Os nanossegundos do `INT96` somem na carga inicial.** Uma origem com o `timestamp`
+  `2026-01-31 15:30:00.123456789` em `INT96` numa coluna `DateTime` foi carregada com as contagens e
+  as somas iguais e a linha `conversões: carimbo: INT96 -> timestamp[us]`, e o Delta guardou
+  `15:30:00.123456`: o `CAST` do DuckDB trunca a parte abaixo do microssegundo, que o `cast` recusa.
+- **A linha `conversões` lê só o primeiro arquivo da primeira partição.** Numa tabela com os três
+  tipos com perda na primeira partição (`1.234` e `2.675` em `double` numa `Numeric(18, 2)`, a hora
+  numa `Date` e o fuso `America/Sao_Paulo` numa `DateTime`), a linha listou
+  `valor: double -> decimal128(18, 2), data: timestamp[us] -> date32[day], carimbo:
+  timestamp[us, tz=America/Sao_Paulo] -> timestamp[us]`, e o arredondamento saiu como `DIFERENÇA`
+  (3,909 contra 3,910). Com a primeira partição no tipo do contrato e os três tipos na segunda, a
+  linha não saiu, a `DIFERENÇA` da soma apontou a segunda partição, e a hora e o fuso se perderam
+  sem aviso.
+
+**Consequências**: a [etapa 5](PLAN-STAGE-5.md) e [`redshift.md`](redshift.md) descrevem o `COPY`
+do `appender` pelo manifesto, e `docs/index.md` e a [etapa 7](PLAN-STAGE-7.md) listam a quarta
+perda da carga inicial e o alcance da linha `conversões`, que fica como está (decisão do usuário de
+2026-09-28).
+
+## O erro no meio do stream do motor DuckDB trocado pela interrupção
+
+Em 2026-09-28, neste contêiner (Linux x86_64, 4 vCPUs, `duckdb` 1.5.5, revisão `d8cdaa33fd`), na
+pasta local:
+
+- **O caso reprova às vezes.** `test_stream_delivers_each_batch_while_the_query_runs`, marcado
+  `local`, reprovou em 3 de 21 execuções: uma na sessão inteira com a raiz local, uma em 12
+  repetições do caso isolado e uma em 8 repetições com um plugin do pytest que registrava as
+  chamadas de `DuckDBEngine.interrupt`. Nas três, a consulta que falha na linha 2.900.000 entregou
+  `OSError: INTERRUPT Error: Interrupted!` no lugar de `Could not convert string 'x' to INT32`; na
+  execução registrada, a falha veio no orçamento de 10.000 bytes, e o motor não chamou
+  `interrupt()` nenhuma vez.
+- **O DuckDB troca o erro pela interrupção [inferido].** No código da revisão `d8cdaa33fd`,
+  `Executor::PushError` guarda o erro de uma tarefa e liga `context.interrupted` para parar as
+  outras, e `SimpleBufferedData::ExecuteTaskInternal`, no caminho do resultado em stream que o
+  `to_arrow_reader` lê, levanta `InterruptException` quando acha essa marca, antes de pedir ao
+  executor o erro guardado. O erro que a thread de trabalho acha entre duas leituras chega ao
+  leitor como a interrupção.
+- **As sondas não reproduziram.** A mesma consulta entregou o erro de conversão em todas as 210
+  leituras no DuckDB puro (90 por `read_all` numa thread auxiliar, 60 delas com quatro processos
+  ocupando a CPU; 120 lote a lote, com pausas de 0, 1 e 5 ms com duas threads e de 1 ms com uma) e
+  em todas as 240 pelo stream do motor (120 nos dois orçamentos, com duas threads e com uma; 120 na
+  sequência do fim do teste, com e sem o stream abandonado antes).
+- **O caminho do stream pula a troca da interrupção pelo erro.**
+  `ClientContext::ExecuteTaskInternal` troca a `InterruptException` pelo erro guardado no
+  executor quando uma thread de trabalho o achou; a verificação da marca em
+  `SimpleBufferedData::ExecuteTaskInternal` roda antes dessa chamada, fora da troca. Com uma
+  thread, quem lê executa as tarefas e acha o erro dentro da chamada que o troca [inferido].
+- **O caso do erro num motor de uma thread passou em todas as execuções.** Com o caso do erro num
+  motor de `threads=1`, o teste passou em 60 de 60 execuções isoladas: 30 durante o ajuste e 30 da
+  versão final, que confere o `OSError` do leitor Arrow.
+
+**Consequência**: o caso do erro roda num motor de uma thread e confere o `OSError` do leitor
+Arrow, e as docstrings de `DuckDBEngine.stream` e `DeltaReader.stream` avisam o cliente de que,
+com mais de uma thread, o erro da consulta pode chegar como a interrupção, sem a causa (decisão
+do usuário de 2026-09-28, [etapa 4](PLAN-STAGE-4.md)); o comportamento do pacote não muda.

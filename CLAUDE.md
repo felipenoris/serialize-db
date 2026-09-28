@@ -563,7 +563,8 @@ A new lesson adds its story there and its rule here, in the same commit.
   on the stand-in**, and an output that can be empty is read with the command's own count: the
   `UNLOAD` literal escapes the backslash, a case matched no row, and the empty `UNLOAD` wrote no
   manifest, which the suite read as a failure (`pg_last_unload_count()` tells them apart,
-  2026-09-23).
+  2026-09-23); and the stand-in reads an input as that documentation does: its `COPY` raised
+  `NoSuchKey` on a missing key, the target read a key prefix and loaded nothing (2026-09-28).
 - **A SQL predicate is probed on table rows as well as constants, and a function in generated SQL
   with the type the generated DDL gives its argument**: Redshift compared `NaN` as PostgreSQL on
   constants and as IEEE in a table scan, and refused `is_valid_json` on `SUPER` (2026-09-23).
@@ -803,16 +804,16 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   same day on the other findings are implemented (`.claude/memory/decisions.md`): every Redshift
   `COPY` lists the file's columns, snapshot names are immutable and checked at `run.snapshot`,
   and `serialize-db audit` prints a refused ingest as a failed audit; what the target still reads
-  is in `plan/OPEN_QUESTIONS.md`.
-- The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
-  the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
-  400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing
-  tests are `local`), and the stage 8 distribution reading, the `EXPLAIN` of a typical join with
-  the tables at `AUTO`; the publication staging is temporary by the rule and fills inside the
-  transaction (user decision of 2026-09-24) (`plan/OPEN_QUESTIONS.md`,
-  `.claude/memory/decisions.md`). The user's instruction of 2026-09-23,
-  scalable AWS compute of the user's choosing and a plan optimized for parallel processing, enters
-  `plan/PLAN.md`: the machine is sized by the measurements.
+  is in `plan/OPEN_QUESTIONS.md`. The battery of 2026-09-28 read the column list with `FILLRECORD`,
+  the `diagnose_aws.py` DuckDB line and `SP-10`, and a Parquet `COPY` of a missing path loading
+  nothing without error; that day the user put the `appender` `COPY` on a one-entry mandatory
+  manifest and had the load's fourth loss (`INT96` nanoseconds) and the `conversões` line's reach
+  documented. That day's load stopped at `cad_lancamentos` 2026-07-31 on `RegistrationRefused`,
+  the source being rewritten [inferred] (`.claude/memory/source-base.md`).
+- The user's answers of 2026-09-23 and 2026-09-24 (time zone refusal, `FILLRECORD`, JSON ceiling,
+  `VARCHAR(n)` width, runbook, 400-day retention, `archived` key, `local` writing tests, the
+  `EXPLAIN` distribution reading, the temporary staging filled inside the transaction) are in
+  `.claude/memory/decisions.md`; `plan/PLAN.md` sizes the scalable AWS compute by the measurements.
 - The plan's unit is the partition (`publish_partition`, `partitions=`, `Execution(partition=...)`),
   a `String(n)` text column; the `AAAA-MM-DD` date is the current base's case, never the month.
 - The Redshift target is `sbx_aco_decon` in the datashare database `datalake_rw_shared`, reached by

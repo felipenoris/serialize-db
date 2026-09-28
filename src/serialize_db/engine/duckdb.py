@@ -995,7 +995,11 @@ class DuckDBEngine:
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
             texto, ou o texto ainda traz o sentinela ``{prefix}``.
         :raises duckdb.Error: a consulta que falha antes do primeiro lote; o erro depois dele
-            sobe na leitura seguinte ao último lote entregue.
+            sobe na leitura seguinte ao último lote entregue, como ``OSError`` do leitor Arrow
+            com a mensagem do DuckDB. Com mais de uma thread, o erro da consulta pode chegar como
+            ``INTERRUPT Error: Interrupted!``, sem a causa: o DuckDB 1.5.5 às vezes troca pela
+            interrupção o erro que outra thread da consulta acha. A mesma consulta num motor com
+            ``DuckDBConfig(threads=1)`` mostra a causa.
         """
         text, arguments = self._compiled(statement_or_sql, params)
         return DuckDBStream(self, text, arguments, batch_size)
