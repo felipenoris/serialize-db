@@ -36,7 +36,9 @@ Seções:
    datashare; o ``USE`` nesse banco (``examples/redshift_copy_unload.py``) e, depois dele, os
    privilégios no esquema e as tabelas com o prefixo da biblioteca.
 5. Quem alcança o S3 no ``COPY`` e no ``UNLOAD``: as credenciais de quem chama, ou o papel de
-   ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, e o alcance sobre a raiz pela simulação de política do IAM.
+   ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, e o alcance sobre a raiz pela simulação de política do IAM,
+   uma chamada por recurso: ``ListBucket`` contra o bucket, ``GetObject`` e ``PutObject`` contra os
+   objetos sob a raiz.
 
 Cada seção é uma função, na ordem acima, que documenta as checagens que emite (``RS-1`` a
 ``RS-19``). A seção 1 devolve um ``Target`` com os parâmetros de conexão reunidos; as seguintes o
@@ -107,8 +109,10 @@ CONNECTION_KEYS = (
     "password", "jdbc_url", "jdbcUrl", "secret_arn", "secretArn",
 )
 
-# As ações que o COPY e o UNLOAD exigem de quem alcança a raiz S3.
-COPY_ACTIONS = ["s3:ListBucket", "s3:GetObject", "s3:PutObject"]
+# As ações que o COPY e o UNLOAD exigem de quem alcança a raiz S3, cada grupo simulado contra o seu
+# recurso: ListBucket contra o bucket, GetObject e PutObject contra os objetos sob a raiz.
+COPY_BUCKET_ACTIONS = ["s3:ListBucket"]
+COPY_OBJECT_ACTIONS = ["s3:GetObject", "s3:PutObject"]
 
 # O patch mínimo da escrita em datashare (patch 186), por tipo de consumidor.
 DATASHARE_WRITE_VERSION = {"serverless": (1, 0, 78890), "provisionado": (1, 0, 78881)}
@@ -1039,6 +1043,56 @@ def copy_principals(iam_role: str | None, namespace_roles: tuple[list[str], list
     return [Principal("SERIALIZE_DB_REDSHIFT_IAM_ROLE", iam_role, blocker, doubt)], None
 
 
+def render_decisions(found: dict) -> str:
+    """As decisões de uma simulação de política como tabela: a ação e a decisão."""
+    return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])
+
+
+def copy_access(report: Report, iam: object, principal: Principal, root: str) -> None:
+    """``RS-11`` de uma identidade: se ela tem ``ListBucket``, ``GetObject`` e ``PutObject`` sob a
+    raiz, pela simulação de política do cliente ``iam``.
+
+    A simulação vai numa chamada por recurso, como o ``BK-8`` do ``bucket.py``: ``ListBucket``
+    contra o ARN do bucket, ``GetObject`` e ``PutObject`` contra os objetos sob a raiz. O
+    simulador devolve um resultado por ação, com a decisão mais restritiva entre os recursos da
+    chamada, e uma chamada com os dois recursos negaria a política de privilégio mínimo, que dá
+    ``ListBucket`` só no bucket e as outras duas só nos objetos.
+    """
+    bucket, _, prefix = root.removeprefix("s3://").partition("/")
+    objects = f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"
+    simulations = ((COPY_BUCKET_ACTIONS, f"arn:aws:s3:::{bucket}"), (COPY_OBJECT_ACTIONS, objects))
+
+    who = f"{principal.label} ({principal.arn})"
+    if principal.blocker:
+        report.line(f"{who}: {principal.blocker}")
+
+    # A decisão de cada ação, reunida das simulações; a simulação que falha deixa o RS-11 como
+    # leitura.
+    decisions: dict[str, str] = {}
+    for actions, resource in simulations:
+        found = report.call(
+            f"iam.simulate_principal_policy({principal.arn}: {', '.join(actions)} em {resource})",
+            lambda a=actions, r=resource: iam.simulate_principal_policy(PolicySourceArn=principal.arn, ActionNames=a, ResourceArns=[r]),
+            render=render_decisions,
+        )
+        if found is None:
+            report.note("RS-11", "alcance do COPY sobre a raiz", f"{who}: simulação {report.last_reason}; o primeiro COPY da suíte Redshift é o teste" + (f"; {principal.blocker}" if principal.blocker else ""))
+            return
+        for item in found.get("EvaluationResults", []):
+            decisions[item["EvalActionName"]] = item["EvalDecision"]
+
+    # RS-11: uma ação negada ou um bloqueio reprovam; uma dúvida fica como leitura.
+    denied = [action for action, decision in decisions.items() if decision != "allowed"]
+    if denied:
+        report.fail("RS-11", "alcance do COPY sobre a raiz", f"{who}: {', '.join(denied)} negadas sob {root}")
+    elif principal.blocker:
+        report.fail("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}, mas {principal.blocker}")
+    elif principal.doubt:
+        report.note("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}; {principal.doubt}")
+    else:
+        report.ok("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}")
+
+
 def copy_role(report: Report, target: Target) -> None:
     """Seção 5, quem alcança o S3.
 
@@ -1092,9 +1146,6 @@ def copy_role(report: Report, target: Target) -> None:
         report.note("RS-11", "alcance do COPY sobre a raiz", detail)
         return
 
-    # Uma simulação por identidade: ListBucket no bucket, GetObject e PutObject sob a raiz.
-    bucket, _, prefix = root.removeprefix("s3://").partition("/")
-    resources = [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"]
     iam = boto3.client("iam", config=short_config(2, 5, 1))
 
     # O IAM não tem endpoint VPC em todo ambiente; sem o teste, cada simulação esperaria o tempo
@@ -1105,33 +1156,8 @@ def copy_role(report: Report, target: Target) -> None:
         report.note("RS-11", "alcance do COPY sobre a raiz", f"simulação sem chamada: o IAM não respondeu ao teste TCP ({reading}); o primeiro COPY da suíte Redshift é o teste")
         return
 
-    def render_decisions(found: dict) -> str:
-        """As decisões da simulação como tabela: a ação e a decisão."""
-        return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])
-
-    # RS-11: uma ação negada ou um bloqueio reprovam; uma dúvida ou a simulação que falha ficam
-    # como leitura.
     for principal in principals:
-        who = f"{principal.label} ({principal.arn})"
-        if principal.blocker:
-            report.line(f"{who}: {principal.blocker}")
-        found = report.call(
-            f"iam.simulate_principal_policy({principal.arn}: ListBucket, GetObject, PutObject em {root})",
-            lambda arn=principal.arn: iam.simulate_principal_policy(PolicySourceArn=arn, ActionNames=COPY_ACTIONS, ResourceArns=resources),
-            render=render_decisions,
-        )
-        if found is None:
-            report.note("RS-11", "alcance do COPY sobre a raiz", f"{who}: simulação {report.last_reason}; o primeiro COPY da suíte Redshift é o teste" + (f"; {principal.blocker}" if principal.blocker else ""))
-            continue
-        denied = [item["EvalActionName"] for item in found.get("EvaluationResults", []) if item["EvalDecision"] != "allowed"]
-        if denied:
-            report.fail("RS-11", "alcance do COPY sobre a raiz", f"{who}: {', '.join(denied)} negadas sob {root}")
-        elif principal.blocker:
-            report.fail("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}, mas {principal.blocker}")
-        elif principal.doubt:
-            report.note("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}; {principal.doubt}")
-        else:
-            report.ok("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}")
+        copy_access(report, iam, principal, root)
 
 
 # --------------------------------------------------------------------------------------------------

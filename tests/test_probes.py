@@ -7,7 +7,8 @@ do relatório, no ``diagnose_aws.py``, o veredito do STS, a linha do endpoint e 
 separada da ausente, o inventário do bucket (tabelas Delta, sessões da suíte, versões não
 correntes), o versionamento pela amostra, o Object Lock, o ciclo de vida, a montagem de
 ``~/shared``, as versões fixadas e as extensões do DuckDB do ``space.py``, o formato das tabelas do
-Glue, os parâmetros da conexão Redshift e os endpoints que o ``RS-14`` julga, no
+Glue, os parâmetros da conexão Redshift, a simulação do ``RS-11`` com uma chamada por recurso,
+contra um IAM fabricado, e os endpoints que o ``RS-14`` julga, no
 ``duckdb_threads.py``, os valores de ``threads`` e o rótulo da referência, a partição comum, os
 totais do log, a tabela das medições e as checagens delas, o ``--metadata`` que não importa e a
 seção interrompida e, no ``credentials.py``, a impressão digital das chaves, a espera, os vereditos
@@ -877,34 +878,29 @@ def test_python_packages_fail_sp9_on_a_version_below_the_runtime_pin(
 
 
 @pytest.mark.local
-def test_extensions_check_fails_only_on_the_extensions_the_library_loads(
+def test_extensions_check_fails_on_any_extension_that_does_not_load(
     folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``SP-10`` reprova só pelas extensões que a biblioteca carrega; a ``aws``, que só o
-    ``diagnose_aws.py`` carrega, é leitura."""
+    """``SP-10`` reprova por qualquer extensão que não carregou e passa com as da biblioteca e as
+    embutidas, sem a ``aws``, que nenhum código do projeto carrega."""
     with make_report(folder, monkeypatch) as report:
-        space.extensions_check(report, ["delta", "aws"], "/extensoes")
-        space.extensions_check(report, ["aws"], "/extensoes")
+        space.extensions_check(report, ["delta"], "/extensoes")
         space.extensions_check(report, [], None)
 
-        assert statuses(report, "SP-10") == ["fail", "note", "pass"]
-        notes = checks(report, "SP-10")
-        assert notes[0] == (
+        assert statuses(report, "SP-10") == ["fail", "pass"]
+        details = checks(report, "SP-10")
+        assert details[0] == (
             "não carregam: delta; rode prepare_offline.sh ou informe SERIALIZE_DB_DUCKDB_EXTENSIONS"
         )
-        assert notes[1] == (
-            "httpfs, delta, parquet, json de /extensoes; a aws não carrega, e só a checagem do "
-            "DuckDB do diagnose_aws.py a usa"
-        )
-        assert notes[2] == "httpfs, delta, aws, parquet, json de pasta padrão"
+        assert details[1] == "httpfs, delta, parquet, json de pasta padrão"
 
 
 @pytest.mark.local
-def test_duckdb_section_leaves_aws_out_of_the_failure(
+def test_duckdb_section_neither_loads_nor_lists_aws(
     folder: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Numa pasta de extensões vazia, ``SP-10`` reprova pela ``httpfs`` e pela ``delta``; a
-    ``aws`` fica só na tabela das extensões, fora da reprovação."""
+    """Numa pasta de extensões vazia, ``SP-10`` reprova pela ``httpfs`` e pela ``delta``, e a
+    ``aws`` não aparece na tabela do ``LOAD`` nem na de ``duckdb_extensions()``."""
     empty = folder / "extensoes"
     empty.mkdir()
     monkeypatch.setenv("SERIALIZE_DB_DUCKDB_EXTENSIONS", str(empty))
@@ -913,6 +909,11 @@ def test_duckdb_section_leaves_aws_out_of_the_failure(
         space.duckdb_section(report)
         assert statuses(report, "SP-10") == ["fail"]
         assert checks(report, "SP-10")[0].startswith("não carregam: httpfs, delta;")
+
+        # A primeira célula de cada linha das duas tabelas é o nome da extensão.
+        first_cells = [line.split(" ")[0] for line in report.path.read_text().splitlines()]
+        assert "httpfs" in first_cells
+        assert "aws" not in first_cells
 
 
 def test_table_format_recognizes_iceberg_delta_and_parquet() -> None:
@@ -1062,6 +1063,109 @@ def test_copy_principals_follow_the_iam_role_variable() -> None:
     assert "não está associado" in principals[0].blocker
     principals, _ = redshift.copy_principals("arn:outro", None, caller)
     assert "não foi lida" in principals[0].doubt
+
+
+# Os ARNs da raiz s3://b/raiz e a política de privilégio mínimo sobre ela: ListBucket só no bucket,
+# GetObject e PutObject só nos objetos sob a raiz.
+BUCKET_ARN = "arn:aws:s3:::b"
+OBJECTS_ARN = "arn:aws:s3:::b/raiz/*"
+LEAST_PRIVILEGE = {
+    "s3:ListBucket": BUCKET_ARN,
+    "s3:GetObject": OBJECTS_ARN,
+    "s3:PutObject": OBJECTS_ARN,
+}
+
+
+class FakeIam:
+    """Um cliente IAM cuja política permite cada ação num recurso só, o de ``allowed``.
+
+    ``simulate_principal_policy`` devolve um resultado por ação com a decisão mais restritiva entre
+    os recursos da chamada, como o simulador do IAM: ``allowed`` só quando a política permite a
+    ação em todos eles. A chamada de número ``failing_call``, contado a partir de 1, levanta
+    ``Throttling`` no lugar da resposta; ``calls`` guarda as ações e os recursos de cada chamada.
+    """
+
+    def __init__(self, allowed: dict[str, str], failing_call: int | None = None) -> None:
+        self.allowed = allowed
+        self.failing_call = failing_call
+        self.calls: list[tuple[list[str], list[str]]] = []
+
+    def simulate_principal_policy(self, **kwargs: object) -> dict:
+        actions = list(kwargs["ActionNames"])
+        resources = list(kwargs["ResourceArns"])
+        self.calls.append((actions, resources))
+        if len(self.calls) == self.failing_call:
+            raise client_error("Throttling", "SimulatePrincipalPolicy")
+        results = []
+        for action in actions:
+            decision = "allowed"
+            for resource in resources:
+                if self.allowed.get(action) != resource:
+                    decision = "implicitDeny"
+            results.append({"EvalActionName": action, "EvalDecision": decision})
+        return {"EvaluationResults": results}
+
+
+@pytest.mark.local
+def test_copy_access_simulates_each_action_against_its_resource(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``RS-11`` simula ``ListBucket`` contra o bucket e ``GetObject`` e ``PutObject`` contra os
+    objetos sob a raiz, uma chamada por recurso, como o ``BK-8``: a política de privilégio mínimo
+    passa, com ou sem prefixo, e a ação que ela nega no seu recurso reprova."""
+    principal = redshift.Principal("IAM_ROLE default", "arn:aws:iam::1:role/copia")
+    who = "IAM_ROLE default (arn:aws:iam::1:role/copia)"
+    with make_report(folder, monkeypatch) as report:
+        least_privilege = FakeIam(LEAST_PRIVILEGE)
+        redshift.copy_access(report, least_privilege, principal, "s3://b/raiz")
+        assert statuses(report, "RS-11") == ["pass"]
+        assert least_privilege.calls == [
+            (["s3:ListBucket"], [BUCKET_ARN]),
+            (["s3:GetObject", "s3:PutObject"], [OBJECTS_ARN]),
+        ]
+
+        # Sem prefixo, os objetos são os do bucket inteiro.
+        whole_bucket = {
+            "s3:ListBucket": BUCKET_ARN,
+            "s3:GetObject": "arn:aws:s3:::b/*",
+            "s3:PutObject": "arn:aws:s3:::b/*",
+        }
+        redshift.copy_access(report, FakeIam(whole_bucket), principal, "s3://b")
+
+        # A política sem PutObject nos objetos.
+        without_put = {"s3:ListBucket": BUCKET_ARN, "s3:GetObject": OBJECTS_ARN}
+        redshift.copy_access(report, FakeIam(without_put), principal, "s3://b/raiz")
+
+        assert statuses(report, "RS-11") == ["pass", "pass", "fail"]
+        details = checks(report, "RS-11")
+        assert details[0] == f"{who}: ListBucket, GetObject e PutObject sob s3://b/raiz"
+        assert details[1] == f"{who}: ListBucket, GetObject e PutObject sob s3://b"
+        assert details[2] == f"{who}: s3:PutObject negadas sob s3://b/raiz"
+
+
+@pytest.mark.local
+def test_copy_access_reads_a_failed_object_simulation(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A simulação dos objetos que falha depois da do bucket deixa o ``RS-11`` como leitura, com o
+    motivo da chamada e o bloqueio da identidade, e a chamada vai para a seção final."""
+    blocker = (
+        "não está associado ao namespace (RS-6): o Redshift o recusa mesmo com permissão no S3"
+    )
+    principal = redshift.Principal(
+        "SERIALIZE_DB_REDSHIFT_IAM_ROLE", "arn:aws:iam::1:role/outro", blocker
+    )
+    with make_report(folder, monkeypatch) as report:
+        iam = FakeIam(LEAST_PRIVILEGE, failing_call=2)
+        redshift.copy_access(report, iam, principal, "s3://b/raiz")
+
+        assert statuses(report, "RS-11") == ["note"]
+        assert checks(report, "RS-11")[0] == (
+            "SERIALIZE_DB_REDSHIFT_IAM_ROLE (arn:aws:iam::1:role/outro): simulação o serviço "
+            f"respondeu Throttling; o primeiro COPY da suíte Redshift é o teste; {blocker}"
+        )
+        assert len(iam.calls) == 2
+        assert len(report.failures) == 1
 
 
 def test_credential_text_shows_the_key_prefix_the_token_and_the_expiry() -> None:

@@ -17,8 +17,7 @@ O probe só lê. O relatório sai no terminal e em ``probes/output/space_<data-h
 5. Python e pacotes: este interpretador e o do sistema, com as versões dos pacotes do projeto,
    conferidas contra as dependências de execução e o grupo ``dev`` de ``pyproject.toml``.
 6. DuckDB: versão, plataforma, threads, memória, o proxy da sessão e as extensões que carregam da
-   pasta configurada, com a instalação automática desligada: as da biblioteca e a ``aws``, que só
-   o ``diagnose_aws.py`` carrega.
+   pasta configurada, com a instalação automática desligada.
 
 Cada seção é uma função, na ordem acima (``identity``, ``project``, ``network``, ``machine``,
 ``python_packages``, ``duckdb_section``), que documenta as checagens que emite (``SP-1`` a
@@ -72,13 +71,9 @@ PACKAGES = (
 # chamam.
 ENDPOINT_SERVICES = ("s3", "sts", "redshift", "redshift-serverless", "redshift-data", "glue", "athena", "kms", "secretsmanager", "sagemaker", "datazone")
 
-# As extensões do DuckDB que SP-10 carrega: httpfs e delta, que a biblioteca carrega, parquet e
-# json, embutidas no binário, e a aws, que só a checagem do DuckDB do diagnose_aws.py carrega, para
-# o secret credential_chain; a biblioteca cria o secret com a chave do boto3.
-EXTENSIONS = ("httpfs", "delta", "aws", "parquet", "json")
-
-# A extensão cuja falta SP-10 lê sem reprovar, porque a biblioteca não a carrega.
-DIAGNOSE_EXTENSION = "aws"
+# As extensões do DuckDB que SP-10 carrega: httpfs e delta, que a biblioteca carrega, e parquet e
+# json, embutidas no binário.
+EXTENSIONS = ("httpfs", "delta", "parquet", "json")
 
 # As variáveis da cadeia de credenciais do boto3, na ordem em que a tabela as mostra.
 CREDENTIAL_VARIABLES = (
@@ -434,18 +429,10 @@ def python_packages(report: Report) -> None:
 
 
 def extensions_check(report: Report, missing: list[str], directory: str | None) -> None:
-    """``SP-10``: as extensões que não carregaram da pasta ``directory``.
-
-    Reprova só pelas extensões da biblioteca; a ``aws`` que falta é leitura, porque só o
-    ``diagnose_aws.py`` a carrega.
-    """
+    """``SP-10``: as extensões que não carregaram da pasta ``directory``; qualquer uma reprova."""
     source = directory or "pasta padrão"
-    library = [extension for extension in EXTENSIONS if extension != DIAGNOSE_EXTENSION]
-    library_missing = [extension for extension in missing if extension != DIAGNOSE_EXTENSION]
-    if library_missing:
-        report.fail("SP-10", "extensões do DuckDB", f"não carregam: {', '.join(library_missing)}; rode prepare_offline.sh ou informe SERIALIZE_DB_DUCKDB_EXTENSIONS")
-    elif missing:
-        report.note("SP-10", "extensões do DuckDB", ", ".join(library) + f" de {source}; a {DIAGNOSE_EXTENSION} não carrega, e só a checagem do DuckDB do diagnose_aws.py a usa")
+    if missing:
+        report.fail("SP-10", "extensões do DuckDB", f"não carregam: {', '.join(missing)}; rode prepare_offline.sh ou informe SERIALIZE_DB_DUCKDB_EXTENSIONS")
     else:
         report.ok("SP-10", "extensões do DuckDB", ", ".join(EXTENSIONS) + f" de {source}")
 
@@ -454,7 +441,7 @@ def duckdb_section(report: Report) -> None:
     """Seção 6, DuckDB: a configuração da conexão, o proxy e ``SP-10`` (as extensões carregam).
 
     O proxy entra com o endereço separado das credenciais, e as extensões carregam da pasta
-    configurada: as da biblioteca e a ``aws`` do ``diagnose_aws.py``.
+    configurada.
     """
     import duckdb
 
@@ -506,7 +493,7 @@ def duckdb_section(report: Report) -> None:
         "duckdb_extensions()",
         lambda: connection.execute(
             "SELECT extension_name, installed, loaded, install_path, extension_version FROM duckdb_extensions() "
-            "WHERE extension_name IN ('httpfs', 'delta', 'aws', 'parquet', 'json') ORDER BY 1"
+            "WHERE extension_name IN ('httpfs', 'delta', 'parquet', 'json') ORDER BY 1"
         ).fetchall(),
         render=render_extensions,
     )
