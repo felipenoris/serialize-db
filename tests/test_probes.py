@@ -6,12 +6,13 @@ da credencial do botocore, os rótulos de DNS, as tabelas e os segredos mascarad
 do relatório, no ``diagnose_aws.py``, o veredito do STS, a linha do endpoint e a variável vazia
 separada da ausente, o inventário do bucket (tabelas Delta, sessões da suíte, versões não
 correntes), o versionamento pela amostra, o Object Lock, o ciclo de vida, a montagem de
-``~/shared``, o formato das tabelas do Glue, os parâmetros da conexão Redshift e os endpoints que o
-``RS-14`` julga, no ``duckdb_threads.py``, os valores de ``threads``, a partição comum, os totais do
-log, a tabela das medições e as checagens delas, o ``--metadata`` que não importa e a seção
-interrompida e, no ``credentials.py``, a impressão digital das chaves, a espera, os vereditos dos
-clientes segurados e das chaves, a linha do tempo, as checagens e a sonda inteira sobre uma tabela
-Delta local. Um ``Report`` grava em ``probes/output/``;
+``~/shared``, as versões fixadas e as extensões do DuckDB do ``space.py``, o formato das tabelas do
+Glue, os parâmetros da conexão Redshift e os endpoints que o ``RS-14`` julga, no
+``duckdb_threads.py``, os valores de ``threads`` e o rótulo da referência, a partição comum, os
+totais do log, a tabela das medições e as checagens delas, o ``--metadata`` que não importa e a
+seção interrompida e, no ``credentials.py``, a impressão digital das chaves, a espera, os vereditos
+dos clientes segurados e das chaves, a linha do tempo, as checagens e a sonda inteira sobre uma
+tabela Delta local. Um ``Report`` grava em ``probes/output/``;
 ``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes
 que gravam, o relatório e os arquivos fabricados, são ``local``: gravam numa pasta nova sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do ``parquet_source.py`` não abre arquivo
@@ -61,6 +62,9 @@ NOW = datetime.datetime(2026, 9, 20, 3, 44, tzinfo=datetime.timezone.utc)
 MINUTE = datetime.timedelta(minutes=1)
 PROXY_URL_WITH_PASSWORD = "http://usuario:se%40nha@proxy01.exemplo.net:8080"
 HIDDEN_PROXY_URL = "http://***@proxy01.exemplo.net:8080"
+# O mesmo proxy sem esquema, como uma variável costuma trazê-lo.
+PROXY_ADDRESS_WITH_PASSWORD = "usuario:se%40nha@proxy01.exemplo.net:8080"
+HIDDEN_PROXY_ADDRESS = "***@proxy01.exemplo.net:8080"
 
 
 def client_error(code: str, operation: str = "Operation") -> botocore.exceptions.ClientError:
@@ -372,11 +376,13 @@ def test_duckdb_proxy_reads_only_the_variable_duckdb_reads() -> None:
     assert proxy.settings == {}
     assert proxy.reading == "sem HTTP_PROXY; o DuckDB ignora http_proxy, https_proxy"
 
-    # Um endereço sem host, ou com porta que não é número, vira leitura; a senha não aparece nela.
+    # Um endereço sem host, ou com porta que não é número, vira leitura; a senha não aparece nela,
+    # com ou sem esquema.
     urls_without_host = (
         "http://",
         "http://usuario:se%40nha@:8080",
         "http://usuario:se%40nha@proxy01.exemplo.net:porta",
+        "usuario:se%40nha@:8080",
     )
     for url in urls_without_host:
         proxy = probelib.duckdb_proxy({"HTTP_PROXY": url})
@@ -388,16 +394,24 @@ def test_duckdb_proxy_reads_only_the_variable_duckdb_reads() -> None:
 def test_hide_credentials_keeps_the_address_and_drops_the_userinfo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """O relatório é colado na conversa: o endereço fica legível e o usuário e a senha somem."""
+    """O relatório é colado na conversa: o endereço fica legível e o usuário e a senha somem, com
+    ou sem esquema."""
     assert probelib.hide_credentials(PROXY_URL_WITH_PASSWORD) == HIDDEN_PROXY_URL
     assert probelib.hide_credentials("proxy01.exemplo.net:8080") == "proxy01.exemplo.net:8080"
     assert probelib.hide_credentials("") == ""
 
+    # Sem esquema, tudo antes do "@" é usuário e senha, mesmo com "//" na senha.
+    assert probelib.hide_credentials(PROXY_ADDRESS_WITH_PASSWORD) == HIDDEN_PROXY_ADDRESS
+    slashes = "usuario:se//nha@proxy01.exemplo.net:8080"
+    assert probelib.hide_credentials(slashes) == HIDDEN_PROXY_ADDRESS
+
     # environment_rows e o relatório do diagnose_aws usam a mesma regra em toda variável de proxy.
     monkeypatch.setenv("HTTP_PROXY", PROXY_URL_WITH_PASSWORD)
+    monkeypatch.setenv("HTTPS_PROXY", PROXY_ADDRESS_WITH_PASSWORD)
     monkeypatch.setenv("AWS_REGION", "us-west-2")
-    assert dict(probelib.environment_rows(["HTTP_PROXY", "AWS_REGION"])) == {
+    assert dict(probelib.environment_rows(["HTTP_PROXY", "HTTPS_PROXY", "AWS_REGION"])) == {
         "HTTP_PROXY": HIDDEN_PROXY_URL,
+        "HTTPS_PROXY": HIDDEN_PROXY_ADDRESS,
         "AWS_REGION": "us-west-2",
     }
     printed = io.StringIO()
@@ -686,6 +700,61 @@ def test_lifecycle_flags_an_enabled_expiration_that_reaches_the_root(
         assert notes[3].startswith("regras não lidas: negado (AccessDenied)")
 
 
+@pytest.mark.local
+def test_lifecycle_reads_the_noncurrent_expiration_and_compares_the_root_as_a_folder(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``BK-3``: só um ``Expiration`` com ``Days`` ou ``Date`` reprova; a regra que
+    ``docs/index.md`` recomenda, ``NoncurrentVersionExpiration``, é leitura, porque o Delta não lê
+    versões não correntes; e ``dzd/proj-logs/`` não alcança a raiz ``dzd/proj``."""
+    recommended = {
+        "ID": "serialize-db-versoes-nao-correntes",
+        "Filter": {"Prefix": "dzd/proj/"},
+        "Status": "Enabled",
+        "NoncurrentVersionExpiration": {"NoncurrentDays": 30},
+        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7},
+    }
+    sibling = {
+        "ID": "vizinha",
+        "Status": "Enabled",
+        "Filter": {"Prefix": "dzd/proj-logs/"},
+        "Expiration": {"Days": 1},
+    }
+    markers = {
+        "ID": "marcadores",
+        "Status": "Enabled",
+        "Filter": {},
+        "Expiration": {"ExpiredObjectDeleteMarker": True},
+    }
+    dated = {
+        "ID": "datada",
+        "Status": "Enabled",
+        "Filter": {"And": {"Prefix": "dzd/pro", "ObjectSizeGreaterThan": 1024}},
+        "Expiration": {"Date": "2027-01-01T00:00:00Z"},
+    }
+    responses = [
+        {"Rules": [recommended]},
+        {"Rules": [sibling, markers]},
+        {"Rules": [dated, recommended]},
+    ]
+    with make_report(folder, monkeypatch) as report:
+        for response in responses:
+            client = FakeS3(get_bucket_lifecycle_configuration=response)
+            bucket.lifecycle(report, client, "b", "dzd/proj")
+
+        notes = checks(report, "BK-3")
+        assert statuses(report, "BK-3") == ["note", "pass", "fail"]
+        assert notes[0] == (
+            "nenhuma das 1 regras expira objetos correntes sob dzd/proj; "
+            "serialize-db-versoes-nao-correntes (prefixo 'dzd/proj/'): só versões não correntes, "
+            "que o Delta não lê"
+        )
+        assert notes[1] == "nenhuma das 2 regras expira objetos sob dzd/proj"
+        assert notes[2] == (
+            "datada (prefixo 'dzd/pro'): uma regra de expiração apagaria arquivos de tabelas Delta"
+        )
+
+
 def test_principal_arn_turns_an_assumed_role_into_the_role() -> None:
     """A simulação de política aceita o papel, não a sessão assumida."""
     assumed = "arn:aws:sts::123456789012:assumed-role/datazone_usr_role_x/SageMaker"
@@ -751,6 +820,99 @@ docs = ["pdoc==16.0.0"]
         "redshift_connector": None,
         "sqlglot": "30.18.0",
     }
+
+
+# As dependências de execução fixam o boto3 e o redshift-connector, e o grupo dev repete os dois
+# com um limite inferior, como em pyproject.toml.
+PYPROJECT_WITH_RUNTIME_PINS = """
+[project]
+dependencies = ["boto3==1.43.102", "duckdb==1.5.5", "redshift-connector==2.1.17"]
+
+[dependency-groups]
+dev = ["boto3>=1.40", "duckdb==1.5.5", "pytest>=8.4", "redshift-connector>=2.1"]
+"""
+
+
+@pytest.mark.local
+def test_pinned_requirements_keep_the_runtime_pin_over_a_lower_bound(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Uma entrada sem ``==`` não desfaz a versão que outra fixou: o ``boto3>=1.40`` do grupo
+    ``dev`` não apaga o ``boto3==1.43.102`` das dependências de execução."""
+    (folder / "pyproject.toml").write_text(PYPROJECT_WITH_RUNTIME_PINS, encoding="utf-8")
+    monkeypatch.setattr(probelib, "REPO_ROOT", folder)
+
+    assert space.pinned_requirements() == {
+        "boto3": "1.43.102",
+        "duckdb": "1.5.5",
+        "redshift_connector": "2.1.17",
+        "pytest": None,
+    }
+
+
+@pytest.mark.local
+def test_python_packages_fail_sp9_on_a_version_below_the_runtime_pin(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``SP-9`` reprova o ``boto3`` e o ``redshift-connector`` fora da versão fixada, que o limite
+    do grupo ``dev`` aceitaria, e manda rodar ``uv sync --all-groups``, que não tira os outros
+    grupos do venv."""
+    (folder / "pyproject.toml").write_text(PYPROJECT_WITH_RUNTIME_PINS, encoding="utf-8")
+    monkeypatch.setattr(probelib, "REPO_ROOT", folder)
+    # Só este interpretador, com as versões instaladas fabricadas.
+    monkeypatch.setattr(probelib, "python_candidates", lambda: [sys.executable])
+    installed = {"boto3": "1.40.0", "duckdb": "1.5.5", "redshift_connector": "2.1.0",
+                 "pytest": "9.1.1"}
+    monkeypatch.setattr(space, "package_version", installed.get)
+
+    with make_report(folder, monkeypatch) as report:
+        space.python_packages(report)
+        assert statuses(report, "SP-9") == ["fail"]
+        detail = checks(report, "SP-9")[0]
+        assert detail.startswith(
+            "boto3 1.40.0 (esperado 1.43.102); redshift_connector 2.1.0 (esperado 2.1.17);"
+        )
+        assert "uv sync --all-groups" in detail
+        assert "--group dev" not in detail
+
+
+@pytest.mark.local
+def test_extensions_check_fails_only_on_the_extensions_the_library_loads(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``SP-10`` reprova só pelas extensões que a biblioteca carrega; a ``aws``, que só o
+    ``diagnose_aws.py`` carrega, é leitura."""
+    with make_report(folder, monkeypatch) as report:
+        space.extensions_check(report, ["delta", "aws"], "/extensoes")
+        space.extensions_check(report, ["aws"], "/extensoes")
+        space.extensions_check(report, [], None)
+
+        assert statuses(report, "SP-10") == ["fail", "note", "pass"]
+        notes = checks(report, "SP-10")
+        assert notes[0] == (
+            "não carregam: delta; rode prepare_offline.sh ou informe SERIALIZE_DB_DUCKDB_EXTENSIONS"
+        )
+        assert notes[1] == (
+            "httpfs, delta, parquet, json de /extensoes; a aws não carrega, e só a checagem do "
+            "DuckDB do diagnose_aws.py a usa"
+        )
+        assert notes[2] == "httpfs, delta, aws, parquet, json de pasta padrão"
+
+
+@pytest.mark.local
+def test_duckdb_section_leaves_aws_out_of_the_failure(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Numa pasta de extensões vazia, ``SP-10`` reprova pela ``httpfs`` e pela ``delta``; a
+    ``aws`` fica só na tabela das extensões, fora da reprovação."""
+    empty = folder / "extensoes"
+    empty.mkdir()
+    monkeypatch.setenv("SERIALIZE_DB_DUCKDB_EXTENSIONS", str(empty))
+
+    with make_report(folder, monkeypatch) as report:
+        space.duckdb_section(report)
+        assert statuses(report, "SP-10") == ["fail"]
+        assert checks(report, "SP-10")[0].startswith("não carregam: httpfs, delta;")
 
 
 def test_table_format_recognizes_iceberg_delta_and_parquet() -> None:
@@ -1451,6 +1613,15 @@ def test_thread_values_multiply_the_default_or_take_the_requested() -> None:
     assert duckdb_threads.thread_values(4, [8, 2, 8]) == [2, 8]
     assert duckdb_threads.reference_threads([2, 4, 8], 4) == 4
     assert duckdb_threads.reference_threads([2, 8], 4) == 2
+
+
+def test_reference_label_names_the_engine_default_only_when_it_is_the_reference() -> None:
+    """A linha da razão diz "o padrão do motor" só quando a referência é o padrão; com
+    ``--threads`` sem ele, a referência é o primeiro valor medido."""
+    assert duckdb_threads.reference_label(4, 4) == "threads=4, o padrão do motor"
+    values = duckdb_threads.thread_values(8, [2, 4])
+    reference = duckdb_threads.reference_threads(values, 8)
+    assert duckdb_threads.reference_label(reference, 8) == "threads=2, o primeiro valor medido"
 
 
 def test_threads_per_core_counts_the_siblings_of_cpu0() -> None:

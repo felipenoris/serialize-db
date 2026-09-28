@@ -93,7 +93,9 @@ VARIABLES = ("WORKGROUP", "DATABASE", "SHARE_DATABASE", "SCHEMA", "HOST", "PORT"
 # dependem da internet.
 SERVICES = ("redshift", "redshift-serverless", "redshift-data")
 
-# O prefixo das tabelas que a biblioteca cria no esquema do projeto.
+# O prefixo da tabela de controle da biblioteca (serialize_db_publications) e das tabelas da suíte
+# Redshift (serialize_db_poc_<id>_*); as tabelas publicadas levam o ambiente (prd_<tabela>) e as
+# do sandbox, exec_<id>_.
 TABLE_PREFIX = "serialize_db"
 
 # As configurações da sessão que a seção 4 lê em pg_settings.

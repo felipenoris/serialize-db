@@ -30,8 +30,9 @@ do DuckDB (``enable_external_file_cache``, ligado por padrão) guarda na memóri
 segunda leitura do mesmo arquivo no mesmo processo não vai ao S3 (sonda no moto de 2026-09-23): cada
 configuração o desliga, e cada repetição lê do armazenamento, como a leitura única de uma execução.
 
-- ``materializada``: a partição da primeira tabela por ``ingest(..., materialize=True)``, o
-  ``CREATE TABLE AS`` sobre ``delta_scan``, apagada depois de cada repetição;
+- ``materializada``: a partição da primeira tabela por ``ingest(..., materialize=True)``, numa
+  transação o DDL do modelo, com os tipos e o ``NOT NULL`` do contrato, e o
+  ``INSERT INTO ... BY NAME`` do ``delta_scan``, apagada depois de cada repetição;
 - ``agregada``: a mesma partição pela view de ``ingest``, lida inteira por
   ``SELECT count(*), max(COLUMNS(*))``, sem gravar;
 - ``em série``: as tabelas materializadas uma depois da outra na sessão principal;
@@ -173,6 +174,14 @@ def reference_threads(values: list[int], default_threads: int) -> int:
     return values[0]
 
 
+def reference_label(reference: int, default_threads: int) -> str:
+    """O valor de referência da razão como o relatório o nomeia: ``o padrão do motor`` só quando
+    ele é o padrão, senão ``o primeiro valor medido``."""
+    if reference == default_threads:
+        return f"threads={reference}, o padrão do motor"
+    return f"threads={reference}, o primeiro valor medido"
+
+
 def threads_per_core(siblings: str | None) -> int | None:
     """As threads de um núcleo físico pela lista das CPUs irmãs da CPU 0 (``"0,2"`` e ``"0-1"``
     são duas, ``"0"`` é uma); ``None`` sem a lista, fora do Linux."""
@@ -246,7 +255,7 @@ def measurement_rows(measurements: list[Measurement], inputs: list[TableInput], 
     as linhas lidas contra as do log."""
     rows = [["CENÁRIO", "THREADS", "APLICADAS", "MELHOR S", "REPETIÇÕES S", "RAZÃO", "BASE MB", "PICO MB",
              "LINHAS LIDAS", "LINHAS DO LOG"]]
-    # A razão compara com a melhor repetição do cenário no valor de referência, o padrão do motor.
+    # A razão compara com a melhor repetição do cenário no valor de referência (reference_threads).
     reference_seconds: dict[str, float | None] = {}
     for measurement in measurements:
         if measurement.threads == reference and not measurement.error:
@@ -521,10 +530,11 @@ def tables_section(report: Report, storage: Storage, tables: list[sa.Table], req
     return inputs
 
 
-def machine_section(report: Report, requested: list[int] | None, repetitions: int) -> tuple[list[int], int]:
+def machine_section(report: Report, requested: list[int] | None,
+                    repetitions: int) -> tuple[list[int], int, int]:
     """Seção 2: as CPUs, as threads por núcleo, a memória, o disco da pasta temporária do motor, os
     limites que o motor lê do ambiente, os padrões do DuckDB e os valores medidos; nenhuma
-    checagem. Devolve os valores de ``threads`` e o de referência da razão."""
+    checagem. Devolve os valores de ``threads``, o de referência da razão e o padrão do motor."""
     report.h1("A máquina e o DuckDB")
 
     # Os padrões de uma conexão do DuckDB sem configuração, para comparar com os do motor.
@@ -563,19 +573,20 @@ def machine_section(report: Report, requested: list[int] | None, repetitions: in
         ["referência da razão", f"threads={reference}"],
         ["repetições por configuração", str(repetitions)],
     ])
-    return values, reference
+    return values, reference, default_threads
 
 
-def single_table_section(report: Report, values: list[int], reference: int, inputs: list[TableInput], repetitions: int,
-                         root: str) -> list[Measurement]:
+def single_table_section(report: Report, values: list[int], reference: int, default_threads: int,
+                         inputs: list[TableInput], repetitions: int, root: str) -> list[Measurement]:
     """Seção 3: a partição da primeira tabela ``materializada`` e ``agregada`` com cada valor de
-    ``threads``, a razão sobre o valor ``reference``; checagem ``DT-5`` e as medições para ``DT-2``
-    a ``DT-4``."""
+    ``threads``, a razão sobre o valor ``reference``, nomeado como o padrão do motor só quando é
+    ``default_threads``; checagem ``DT-5`` e as medições para ``DT-2`` a ``DT-4``."""
     report.h1(f"Uma tabela: {inputs[0].table.name}")
-    report.line("materializada: ingest(..., materialize=True), o CREATE TABLE AS sobre delta_scan, apagada a cada repetição.")
+    report.line("materializada: ingest(..., materialize=True), numa transação o DDL do modelo, com os tipos e o "
+                "NOT NULL do contrato, e o INSERT INTO ... BY NAME do delta_scan, apagada a cada repetição.")
     report.line("agregada: a view de ingest lida inteira por SELECT count(*), max(COLUMNS(*)), sem gravar.")
-    report.line(f"RAZÃO: a melhor repetição com threads={reference}, o padrão do motor, dividida pela desta linha; "
-                "acima de 1 é mais rápido.\n")
+    label = reference_label(reference, default_threads)
+    report.line(f"RAZÃO: a melhor repetição com {label}, dividida pela desta linha; acima de 1 é mais rápido.\n")
     measurements = run_scenarios(SINGLE_TABLE_SCENARIOS, values, inputs, repetitions, root)
     report.table(measurement_rows(measurements, inputs, reference))
 
@@ -709,8 +720,9 @@ def main(argv: list[str]) -> int:
     machine = guarded(report, machine_section, arguments.threads, arguments.repetitions)
     if machine is None:
         return report.finish()
-    values, reference = machine
-    measurements = guarded(report, single_table_section, values, reference, inputs, arguments.repetitions, storage.uri) or []
+    values, reference, default_threads = machine
+    measurements = guarded(report, single_table_section, values, reference, default_threads, inputs,
+                           arguments.repetitions, storage.uri) or []
     measurements += guarded(report, many_tables_section, values, reference, inputs, arguments.repetitions, storage.uri) or []
     guarded(report, measurement_checks, measurements, inputs)
     return report.finish()

@@ -17,7 +17,8 @@ O probe só lê. O relatório sai no terminal e em ``probes/output/space_<data-h
 5. Python e pacotes: este interpretador e o do sistema, com as versões dos pacotes do projeto,
    conferidas contra as dependências de execução e o grupo ``dev`` de ``pyproject.toml``.
 6. DuckDB: versão, plataforma, threads, memória, o proxy da sessão e as extensões que carregam da
-   pasta configurada, com a instalação automática desligada.
+   pasta configurada, com a instalação automática desligada: as da biblioteca e a ``aws``, que só
+   o ``diagnose_aws.py`` carrega.
 
 Cada seção é uma função, na ordem acima (``identity``, ``project``, ``network``, ``machine``,
 ``python_packages``, ``duckdb_section``), que documenta as checagens que emite (``SP-1`` a
@@ -71,8 +72,13 @@ PACKAGES = (
 # chamam.
 ENDPOINT_SERVICES = ("s3", "sts", "redshift", "redshift-serverless", "redshift-data", "glue", "athena", "kms", "secretsmanager", "sagemaker", "datazone")
 
-# As extensões do DuckDB que a biblioteca carrega; as duas últimas vêm embutidas no binário.
+# As extensões do DuckDB que SP-10 carrega: httpfs e delta, que a biblioteca carrega, parquet e
+# json, embutidas no binário, e a aws, que só a checagem do DuckDB do diagnose_aws.py carrega, para
+# o secret credential_chain; a biblioteca cria o secret com a chave do boto3.
 EXTENSIONS = ("httpfs", "delta", "aws", "parquet", "json")
+
+# A extensão cuja falta SP-10 lê sem reprovar, porque a biblioteca não a carrega.
+DIAGNOSE_EXTENSION = "aws"
 
 # As variáveis da cadeia de credenciais do boto3, na ordem em que a tabela as mostra.
 CREDENTIAL_VARIABLES = (
@@ -116,19 +122,25 @@ def package_version(name: str) -> str | None:
 def pinned_requirements() -> dict[str, str | None]:
     """Os pacotes das dependências de execução e do grupo ``dev`` de ``pyproject.toml``.
 
-    A chave é o nome de importação e o valor, a versão quando ela é ``==``.
+    A chave é o nome de importação e o valor, a versão quando alguma entrada a fixa por ``==``.
     """
     with open(probelib.REPO_ROOT / "pyproject.toml", "rb") as handle:
         pyproject = tomllib.load(handle)
     entries = pyproject.get("project", {}).get("dependencies", []) + pyproject.get("dependency-groups", {}).get("dev", [])
 
     # "deltalake==1.6.4" vira {"deltalake": "1.6.4"}; "boto3" vira {"boto3": None}; nomes com "-"
-    # viram "_".
+    # viram "_". Uma entrada sem == não apaga a versão que outra fixou: o boto3>=1.40 do grupo dev
+    # não desfaz o boto3==1.43.102 das dependências de execução.
     found: dict[str, str | None] = {}
     for entry in entries:
         match = re.match(r"\s*([A-Za-z0-9_.-]+)\s*(?:==\s*([^\s;,]+))?", entry) if isinstance(entry, str) else None
-        if match:
-            found[match.group(1).lower().replace("-", "_")] = match.group(2)
+        if not match:
+            continue
+        name = match.group(1).lower().replace("-", "_")
+        version = match.group(2)
+        if version is None and found.get(name):
+            continue
+        found[name] = version
     return found
 
 
@@ -406,7 +418,8 @@ def python_packages(report: Report) -> None:
         report.fail("SP-8", "Python 3.13 neste interpretador", f"{here['version']}: o projeto fixa 3.13")
 
     # SP-9: as dependências de execução e o grupo dev de pyproject.toml são a referência: cada
-    # pacote presente, e na versão fixada quando ela é ==.
+    # pacote presente, e na versão fixada quando ela é ==. A correção sincroniza todos os grupos:
+    # uv sync --group dev tiraria do venv os outros grupos.
     requirements = pinned_requirements()
     installed = {name: here[name] if name in here else package_version(name) for name in requirements}
     wrong = [
@@ -415,16 +428,33 @@ def python_packages(report: Report) -> None:
         if installed[name] is None or (version and installed[name] != version)
     ]
     if wrong:
-        report.fail("SP-9", "dependências e grupo dev do pyproject neste interpretador", "; ".join(wrong) + "; rode uv sync --group dev, ou prepare_offline.sh de novo, na pasta do projeto")
+        report.fail("SP-9", "dependências e grupo dev do pyproject neste interpretador", "; ".join(wrong) + "; rode uv sync --all-groups, ou prepare_offline.sh de novo, na pasta do projeto")
     else:
         report.ok("SP-9", "dependências e grupo dev do pyproject neste interpretador", ", ".join(f"{name} {installed[name]}" for name in requirements))
+
+
+def extensions_check(report: Report, missing: list[str], directory: str | None) -> None:
+    """``SP-10``: as extensões que não carregaram da pasta ``directory``.
+
+    Reprova só pelas extensões da biblioteca; a ``aws`` que falta é leitura, porque só o
+    ``diagnose_aws.py`` a carrega.
+    """
+    source = directory or "pasta padrão"
+    library = [extension for extension in EXTENSIONS if extension != DIAGNOSE_EXTENSION]
+    library_missing = [extension for extension in missing if extension != DIAGNOSE_EXTENSION]
+    if library_missing:
+        report.fail("SP-10", "extensões do DuckDB", f"não carregam: {', '.join(library_missing)}; rode prepare_offline.sh ou informe SERIALIZE_DB_DUCKDB_EXTENSIONS")
+    elif missing:
+        report.note("SP-10", "extensões do DuckDB", ", ".join(library) + f" de {source}; a {DIAGNOSE_EXTENSION} não carrega, e só a checagem do DuckDB do diagnose_aws.py a usa")
+    else:
+        report.ok("SP-10", "extensões do DuckDB", ", ".join(EXTENSIONS) + f" de {source}")
 
 
 def duckdb_section(report: Report) -> None:
     """Seção 6, DuckDB: a configuração da conexão, o proxy e ``SP-10`` (as extensões carregam).
 
     O proxy entra com o endereço separado das credenciais, e as extensões carregam da pasta
-    configurada.
+    configurada: as da biblioteca e a ``aws`` do ``diagnose_aws.py``.
     """
     import duckdb
 
@@ -480,10 +510,7 @@ def duckdb_section(report: Report) -> None:
         ).fetchall(),
         render=render_extensions,
     )
-    if missing:
-        report.fail("SP-10", "extensões do DuckDB", f"não carregam: {', '.join(missing)}; rode prepare_offline.sh ou informe SERIALIZE_DB_DUCKDB_EXTENSIONS")
-    else:
-        report.ok("SP-10", "extensões do DuckDB", ", ".join(EXTENSIONS) + f" de {directory or 'pasta padrão'}")
+    extensions_check(report, missing, directory)
 
 
 def main() -> int:

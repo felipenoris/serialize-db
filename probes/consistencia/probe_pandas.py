@@ -1,8 +1,8 @@
 """A fronteira do pandas que um cliente atravessa: um ``DataFrame`` com os tipos padrão do
 pandas 3 (``Int16``, ``Int32``, ``boolean``, ``float64``, ``Decimal`` em ``object``,
 ``datetime64[us]``, ``datetime64[us, UTC]``, ``str``) por ``pa.Table.from_pandas`` e
-``schema.cast`` no ``load``, de volta por ``query`` e ``to_pandas``; o ``NaN`` que vira nulo em
-``from_pandas`` e as recusas de ``cast`` são leituras.
+``schema.cast``, gravado por ``create_table`` e ``append``, de volta por ``query`` e
+``to_pandas``; o ``NaN`` que vira nulo em ``from_pandas`` e as recusas de ``cast`` são leituras.
 
 .. code-block:: shell
 
@@ -69,8 +69,9 @@ def dtypes_of(frame: pd.DataFrame) -> dict[str, str]:
 
 
 def check_round_trip(engine: DuckDBEngine, frame: pd.DataFrame) -> None:
-    """Seção P: o ``DataFrame`` por ``from_pandas`` e ``cast`` no ``load``, de volta por
-    ``query`` igual ao que entrou, e o ``to_pandas`` com e sem ``types_mapper`` como leitura."""
+    """Seção P: o ``DataFrame`` por ``from_pandas`` e ``cast``, gravado por ``create_table`` e
+    ``append``, de volta por ``query`` igual ao que entrou, e o ``to_pandas`` com e sem
+    ``types_mapper`` como leitura."""
     print("   dtypes do pandas:", dtypes_of(frame))
     table = pa.Table.from_pandas(frame, preserve_index=False)
     print("   tipos de from_pandas:", {f.name: str(f.type) for f in table.schema})

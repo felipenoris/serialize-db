@@ -70,6 +70,10 @@ PROXY_VARIABLES = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO
 # pedido; as demais não têm efeito sobre ele.
 DUCKDB_PROXY_VARIABLE = "HTTP_PROXY"
 
+# O esquema de um endereço de proxy (http:, https:, socks5:), o único texto antes de "//" que o
+# relatório mostra: numa senha, "//" não marca esquema.
+URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
+
 # Os serviços que têm gateway endpoint.
 GATEWAY_SERVICES = ("s3", "dynamodb")
 
@@ -270,12 +274,17 @@ def split_proxy(url: str) -> tuple[str, str, str]:
 
 
 def hide_credentials(url: str) -> str:
-    """``url`` com o usuário e a senha embutidos trocados por ``***``, para o relatório."""
+    """``url`` com o usuário e a senha embutidos trocados por ``***``, para o relatório.
+
+    O esquema, quando há, fica; sem ele, tudo antes do ``@`` é usuário e senha.
+    """
     head, separator, tail = url.rpartition("@")
     if not separator:
         return url
     scheme, mark, _ = head.partition("//")
-    return f"{scheme}{mark}***@{tail}"
+    if mark and URL_SCHEME.fullmatch(scheme):
+        return f"{scheme}{mark}***@{tail}"
+    return f"***@{tail}"
 
 
 def duckdb_proxy(environ: Mapping[str, str] | None = None) -> DuckDBProxy:

@@ -8,8 +8,9 @@ O probe só lê. O relatório sai no terminal e em ``probes/output/bucket_<data-
 
 1. Bucket: região, versionamento, criptografia padrão, Object Lock, bloqueio de acesso público e
    propriedade de objetos. Cada leitura pode ser negada ao papel do projeto; a negação é o fato.
-2. Ciclo de vida: as regras e se alguma expiração alcança a raiz, porque uma tabela Delta não
-   tolera expiração sob a sua pasta.
+2. Ciclo de vida: as regras e se alguma expiração de objetos correntes alcança a raiz, porque uma
+   tabela Delta não tolera expiração sob a sua pasta; a expiração de versões não correntes, que o
+   Delta não lê, é leitura.
 3. Inventário sob a raiz: objetos e bytes por pasta de primeiro nível, tabelas Delta (pastas com
    ``_delta_log``, com arquivos de dados, bytes, commits no log, checkpoints e último objeto),
    sessões da suíte S3 (``serialize-db-poc/<id>``), classes de armazenamento, objeto mais recente,
@@ -183,7 +184,8 @@ def versioning_check(report: Report, status: str | None, why: str, sample: dict 
 
 
 def lifecycle(report: Report, client, bucket: str, prefix: str) -> None:
-    """Seção 2: ``BK-3``, se alguma regra de expiração habilitada alcança a raiz."""
+    """Seção 2: ``BK-3``, se alguma regra habilitada expira objetos correntes sob a raiz; a que só
+    expira versões não correntes é leitura."""
     report.h1("Ciclo de vida")
     import botocore.exceptions
 
@@ -202,23 +204,36 @@ def lifecycle(report: Report, client, bucket: str, prefix: str) -> None:
         report.note("BK-3", "expiração sob a raiz", f"regras não lidas: {report.last_reason}; confirme com quem administra o bucket")
         return
 
-    # BK-3: uma regra habilitada que expira objetos reprova quando o prefixo dela contém a raiz ou
-    # está contido nela.
+    # BK-3: uma regra habilitada que expira objetos correntes (Expiration com Days ou Date) reprova
+    # quando o prefixo dela alcança a raiz. O S3 compara o prefixo com a chave como texto, e a raiz
+    # entra com a barra final: "raiz-logs/" não alcança "raiz/", e "raiz" alcança. A regra que só
+    # expira versões não correntes (NoncurrentVersionExpiration), a que docs/index.md recomenda, é
+    # leitura: o Delta não lê versões não correntes.
+    root_prefix = f"{prefix}/" if prefix else ""
     reaching = []
+    noncurrent = []
     for rule in found:
         if rule.get("Status") != "Enabled":
             continue
         filter_block = rule.get("Filter", {})
         rule_prefix = rule.get("Prefix") or filter_block.get("Prefix") or filter_block.get("And", {}).get("Prefix") or ""
-        expires = any(key in rule for key in ("Expiration", "NoncurrentVersionExpiration"))
-        overlaps = prefix.startswith(rule_prefix) or rule_prefix.startswith(prefix)
-        if expires and overlaps:
-            reaching.append(f"{rule.get('ID', '(sem id)')} (prefixo {rule_prefix!r})")
+        overlaps = root_prefix.startswith(rule_prefix) or rule_prefix.startswith(root_prefix)
+        if not overlaps:
+            continue
+        label = f"{rule.get('ID', '(sem id)')} (prefixo {rule_prefix!r})"
+        expiration = rule.get("Expiration", {})
+        if "Days" in expiration or "Date" in expiration:
+            reaching.append(label)
+        elif "NoncurrentVersionExpiration" in rule:
+            noncurrent.append(label)
 
+    where = prefix or "(raiz do bucket)"
     if reaching:
         report.fail("BK-3", "expiração sob a raiz", "; ".join(reaching) + ": uma regra de expiração apagaria arquivos de tabelas Delta")
+    elif noncurrent:
+        report.note("BK-3", "expiração sob a raiz", f"nenhuma das {len(found)} regras expira objetos correntes sob {where}; " + "; ".join(noncurrent) + ": só versões não correntes, que o Delta não lê")
     else:
-        report.ok("BK-3", "expiração sob a raiz", f"nenhuma das {len(found)} regras expira objetos sob {prefix or '(raiz do bucket)'}")
+        report.ok("BK-3", "expiração sob a raiz", f"nenhuma das {len(found)} regras expira objetos sob {where}")
 
 
 # --------------------------------------------------------------------------------------------------
