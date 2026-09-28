@@ -524,7 +524,12 @@ class DuckDBAppender:
                 connection.unregister(name)
 
     def close(self, error: BaseException | None = None) -> None:
-        """Insere os lotes na tabela; com ``error`` ou um lote recusado, só apaga o arquivo."""
+        """Insere os lotes na tabela; com ``error`` ou um lote recusado, só apaga o arquivo. A
+        segunda chamada não faz nada."""
+        # O close explícito dentro do with: a saída do with chama close de novo, depois do INSERT
+        # e do arquivo apagado.
+        if self._closed.is_set():
+            return
         failure = error or self._refused
         self._put(failure if failure is not None else _END)
         self._closed.set()
@@ -632,6 +637,9 @@ class DuckDBEngine:
                  parent: DuckDBEngine | None = None) -> None:
         """Abre o banco do sandbox e a sessão da execução.
 
+        A abertura que falha apaga, como o ``cleanup``, a pasta de transbordo, o banco temporário
+        e a pasta que o motor criou.
+
         :param config: a configuração do sandbox.
         :param execution_id: o identificador da execução, na regra da partição; nomeia o banco
             padrão e a pasta de transbordo.
@@ -674,8 +682,14 @@ class DuckDBEngine:
         self._spool_folder = os.path.join(self._folder, f"{execution_id}_transbordo")
         os.makedirs(self._spool_folder, exist_ok=True)
         self._database = config.database or os.path.join(self._folder, f"{execution_id}.duckdb")
-        self._connection = storage.duckdb_connect(self._database,
-                                                  _connection_settings(config, self._folder))
+        # Sem o motor construído, ninguém chama o cleanup: a abertura que falha apaga o que ele
+        # criou.
+        try:
+            self._connection = storage.duckdb_connect(self._database,
+                                                      _connection_settings(config, self._folder))
+        except BaseException:
+            self._remove_files()
+            raise
         self._log_opening()
 
     def _log_opening(self) -> None:
@@ -697,6 +711,11 @@ class DuckDBEngine:
         No S3, a entrada que toma o lock recria antes o secret do S3 quando a chave da credencial
         do ``boto3`` trocou; a entrada reentrante não o toca, porque o bloco pode ter uma transação
         aberta.
+
+        Uma transação que o cliente abre no bloco não se compõe com o ``ingest`` com
+        ``materialize=True``, que abre a sua: o ``BEGIN`` dele é recusado, o ``ROLLBACK`` desfaz a
+        transação do cliente, e o ``COMMIT`` do cliente falha em seguida. Ela também não vê a
+        tabela que ``create_table`` cria depois do primeiro comando dela que lê ou muda o banco.
 
         Exemplo:
 
@@ -891,8 +910,9 @@ class DuckDBEngine:
         :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
             da partição.
         :raises duckdb.Error: com ``materialize=True``, um valor do Delta que o tipo ou o
-            ``NOT NULL`` do contrato recusa, o JSON malformado incluído; a transação é desfeita e
-            o nome fica livre.
+            ``NOT NULL`` do contrato recusa, o JSON malformado incluído, e a transação é desfeita
+            com o nome livre; ou o ``BEGIN`` recusado dentro de uma transação que o cliente abriu
+            em ``session()``, e o ``ROLLBACK`` desfaz a transação do cliente.
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela não existe no Delta")
@@ -904,8 +924,10 @@ class DuckDBEngine:
             if not materialize:
                 connection.execute(f"CREATE VIEW {quoted(table.name)} AS {source}")
                 return
-            connection.execute("BEGIN TRANSACTION")
+            # O BEGIN recusado dentro de uma transação do cliente também sai pelo ROLLBACK: sem
+            # ele, o COMMIT do cliente voltaria sem erro e sem nada do que a transação fez.
             try:
+                connection.execute("BEGIN TRANSACTION")
                 connection.execute(ddl(table, "duckdb"))
                 connection.execute(f"INSERT INTO {quoted(table.name)} BY NAME {source}")
                 connection.execute("COMMIT")
@@ -1006,7 +1028,9 @@ class DuckDBEngine:
     def create_table(self, table: sa.Table) -> None:
         """Cria a tabela vazia do modelo pelo DDL do DuckDB, num cursor à parte, sem o lock da
         sessão: não espera a consulta de um ``stream`` aberto antes, e a sessão vê a tabela no
-        comando seguinte.
+        comando seguinte. Uma transação que o cliente abriu em ``session()`` e que já leu ou mudou
+        o banco antes da criação só vê a tabela depois de terminar: dentro dela, o comando sobre
+        a tabela levanta ``duckdb.CatalogException``.
 
         Exemplo:
 
@@ -1312,6 +1336,11 @@ class DuckDBEngine:
             self._connection.close()
         if self._parent is not None:
             return
+        self._remove_files()
+
+    def _remove_files(self) -> None:
+        """Apaga a pasta de transbordo, o banco temporário (``DuckDBConfig.database`` ``None``) e
+        a pasta que o motor criou."""
         shutil.rmtree(self._spool_folder, ignore_errors=True)
         if self._config.database is None:
             for path in (self._database, self._database + ".wal"):

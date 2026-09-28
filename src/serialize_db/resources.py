@@ -32,11 +32,13 @@ __all__ = ["available_cpus", "available_memory", "peak_rss_mb"]
 _PROC = Path("/proc")
 _CGROUP_ROOT = Path("/sys/fs/cgroup")
 
-# Por versão do cgroup: o arquivo do limite de memória, o do uso e a chave do cache de arquivos em
-# memory.stat, a parte do uso que o kernel devolve antes de matar um processo.
+# Por versão do cgroup: o arquivo do limite de memória, o do uso, e as chaves de memory.stat do
+# cache de arquivos e da memória compartilhada (tmpfs, /dev/shm, mmap compartilhado) contada dentro
+# dele. O kernel devolve o cache antes de matar um processo, menos a memória compartilhada, que ele
+# só devolve gravando-a no swap.
 _MEMORY_FILES = {
-    1: ("memory.limit_in_bytes", "memory.usage_in_bytes", "total_cache"),
-    2: ("memory.max", "memory.current", "file"),
+    1: ("memory.limit_in_bytes", "memory.usage_in_bytes", "total_cache", "total_shmem"),
+    2: ("memory.max", "memory.current", "file", "shmem"),
 }
 
 
@@ -72,7 +74,8 @@ def available_memory() -> int:
 
     :return: em bytes, a menor entre a física, a disponível no sistema (``MemAvailable`` de
         ``/proc/meminfo``, que conta como livre o cache de arquivos que o kernel devolve) e a
-        folga do cgroup (o limite menos o uso fora do cache de arquivos).
+        folga do cgroup (o limite menos o uso, com o cache de arquivos de volta, menos a memória
+        compartilhada, ``shmem``, que o kernel conta no cache e não devolve sem swap).
     """
     readings = [os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")]
     system = _meminfo_available()
@@ -119,16 +122,18 @@ def _meminfo_available() -> int | None:
 
 def _cgroup_memory_room() -> int | None:
     """A menor folga de memória nos cgroups do processo, em bytes: o limite menos o uso, com o
-    cache de arquivos de volta; ``None`` quando nenhuma pasta dá limite e uso."""
+    cache de arquivos de volta, menos a memória compartilhada contada nele; ``None`` quando
+    nenhuma pasta dá limite e uso."""
     rooms = []
     for folder, version in _cgroup_folders("memory"):
-        limit_file, usage_file, cache_key = _MEMORY_FILES[version]
+        limit_file, usage_file, cache_key, shared_key = _MEMORY_FILES[version]
         limit = _read_number(folder / limit_file)
         usage = _read_number(folder / usage_file)
         if limit is None or usage is None:
             continue
         cache = _stat_value(folder / "memory.stat", cache_key)
-        rooms.append(limit - usage + cache)
+        shared = _stat_value(folder / "memory.stat", shared_key)
+        rooms.append(limit - usage + cache - shared)
     return min(rooms, default=None)
 
 

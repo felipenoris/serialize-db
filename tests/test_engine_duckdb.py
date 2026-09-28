@@ -5,10 +5,12 @@ sandbox e a pasta de transbordo ficam numa pasta nova por teste. O modelo é o d
 particionado por ``data_base_str`` com a origem ``data_base``, com uma chave estrangeira para
 ``Conta``, e ``Projetado``, a tabela que o pipeline grava, com as mesmas colunas.
 
-Eles conferem a configuração com os limites lidos do ambiente e a sessão única, a sessão a mais, a
-ingestão presa à versão e a poda por intervalo, os parâmetros do statement, a versão fixada, o
-stream (o primeiro lote com a consulta rodando, o orçamento, o cancelamento, os erros),
-``create_table`` e o appender (o ``INSERT`` único no ``close``, o appender abandonado, a view e a
+Eles conferem a configuração com os limites lidos do ambiente e a sessão única, a abertura que
+falha, a sessão a mais, a ingestão presa à versão e a poda por intervalo, a transação do cliente
+em ``session()`` diante do ``ingest`` materializado e de ``create_table``, os parâmetros do
+statement, a versão fixada, o stream (o primeiro lote com a consulta rodando, o orçamento, o
+cancelamento, os erros), ``create_table`` e o appender (o ``INSERT`` único no ``close``, o
+``close`` repetido, as recusas do ``write``, o appender abandonado, a view e a
 tabela ausente recusadas, a ordem do exemplo mensal, o pipeline de três estágios, a leitura
 durante um acréscimo em voo), as formas por tabela, os tipos e o ``NOT NULL`` do ``ingest``
 materializado, o ciclo com o pandas, a auditoria (cada defeito, a dispensa da junção, a amostra,
@@ -310,6 +312,35 @@ def test_temporary_folder_is_created_and_removed(local_location: LocalLocation,
     assert not folder.exists()
 
 
+def test_failed_opening_removes_what_the_engine_created(local_location: LocalLocation,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """A abertura que falha, pela extensão ``delta`` ausente da pasta de extensões, apaga a pasta
+    nova que o motor criou; com ``temp_directory``, apaga o banco e a pasta de transbordo e deixa
+    a pasta informada."""
+    # A pasta temporária do processo aponta para a raiz local: a suíte só grava sob ela.
+    folder = Path(local_location.child(f"engine_falha/{uuid.uuid4().hex[:8]}"))
+    temporary = folder / "tmp"
+    temporary.mkdir(parents=True)
+    no_extensions = folder / "sem_extensoes"
+    no_extensions.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temporary))
+    storage = Storage.for_uri(str(folder / "delta"))
+
+    # Sem temp_directory, a pasta nova sai inteira.
+    config = DuckDBConfig(extension_directory=str(no_extensions))
+    with pytest.raises(duckdb.IOException, match=r"Extension .*delta.* not found"):
+        DuckDBEngine(config, "exec-falha", storage)
+    assert list(temporary.iterdir()) == []
+
+    # Com temp_directory, o banco e o transbordo saem, e a pasta informada fica.
+    sandbox = folder / "sandbox"
+    config = DuckDBConfig(extension_directory=str(no_extensions), temp_directory=str(sandbox))
+    with pytest.raises(duckdb.IOException, match=r"Extension .*delta.* not found"):
+        DuckDBEngine(config, "exec-falha", storage)
+    assert sandbox.is_dir()
+    assert list(sandbox.iterdir()) == []
+
+
 def test_new_session_runs_beside_the_main_one(setup: Setup) -> None:
     """A sessão a mais vê o que a principal confirmou e não a temporária dela, roda enquanto a
     principal está num bloco ``session()``, e a principal vê o que ela confirma; o ``with`` fecha só
@@ -550,6 +581,48 @@ def test_materialized_ingest_applies_the_contract(setup: Setup) -> None:
     assert count_of(engine, "cad_malformada") == 0
 
 
+def test_client_transaction_with_materialized_ingest_and_create_table(setup: Setup) -> None:
+    """Numa transação que o cliente abriu em ``session()``, o ``ingest`` com ``materialize=True``
+    levanta o ``BEGIN`` recusado e desfaz a transação do cliente, cujo ``COMMIT`` falha em vez de
+    voltar sem erro com a tabela do cliente perdida; a tabela que ``create_table`` cria depois do
+    primeiro comando da transação sobre o banco existe, e a transação só a vê depois de terminar;
+    antes desse comando, a transação a vê."""
+    version = published_table(setup, ENTRIES, MONTHS[:1], rows=10)
+    engine = setup.engine
+
+    # O ingest materializado dentro da transação do cliente: o COMMIT do cliente falha.
+    with engine.session() as connection:
+        connection.execute("BEGIN TRANSACTION")
+        connection.execute("CREATE TABLE do_cliente AS SELECT 1 AS x")
+        with pytest.raises(duckdb.TransactionException, match="within a transaction"):
+            engine.ingest(ENTRIES, setup.uri(ENTRIES), version, materialize=True)
+        with pytest.raises(duckdb.TransactionException, match="no transaction is active"):
+            connection.execute("COMMIT")
+    assert not engine.name_in_use("do_cliente")
+    assert not engine.name_in_use(ENTRIES.name)
+
+    # A tabela de create_table, criada num cursor à parte, fica fora da transação que já mudou o
+    # banco até o fim dela; o CatalogException não desfaz a transação.
+    with engine.session() as connection:
+        connection.execute("BEGIN TRANSACTION")
+        connection.execute("CREATE TABLE do_cliente AS SELECT 1 AS x")
+        engine.create_table(PROJECTED)
+        assert engine.object_kind(PROJECTED.name) == "TABLE"
+        with pytest.raises(duckdb.CatalogException, match=PROJECTED.name):
+            connection.execute(f'SELECT count(*) FROM "{PROJECTED.name}"')
+        connection.execute("COMMIT")
+    assert count_of(engine, PROJECTED.name) == 0
+    assert count_of(engine, "do_cliente") == 1
+
+    # A transação que ainda não leu nem mudou o banco vê a tabela criada depois do BEGIN.
+    with engine.session() as connection:
+        connection.execute("BEGIN TRANSACTION")
+        engine.create_table(ACCOUNTS)
+        counted = connection.execute(f'SELECT count(*) FROM "{ACCOUNTS.name}"').fetchall()
+        connection.execute("COMMIT")
+    assert counted == [(0,)]
+
+
 def test_pinned_delta_reads_the_version_without_a_sandbox_name(setup: Setup) -> None:
     """``pinned_delta`` lê a versão fixada sem criar objeto no sandbox, e ``create_table`` da mesma
     tabela fica com o nome do modelo; sem versão, ``SandboxError``."""
@@ -649,6 +722,7 @@ def test_stream_delivers_each_batch_while_the_query_runs(setup: Setup) -> None:
     assert spool_files(engine) == []
     reading = f"{first_batch:.3f} s, com a consulta rodando: {query_running}"
     record("engine.stream.first_batch", reading)
+    assert query_running
 
     # Um comando no meio da leitura roda depois da consulta.
     with DuckDBStream(engine, "SELECT id FROM numeros", [], budget=10_000) as stream:
@@ -869,6 +943,50 @@ def test_appender_inserts_in_one_statement_on_close(setup: Setup) -> None:
     assert engine.append(other, entry_rows(MONTHS[0], 1, 10, PROJECTED)) == 10
     assert engine.append(other, entry_rows(MONTHS[0], 11, 5, PROJECTED)) == 5
     assert count_of(engine, "cad_segunda") == 15
+
+
+def test_appender_second_close_does_nothing(setup: Setup) -> None:
+    """O ``close`` explícito dentro do ``with`` insere os lotes, e o ``close`` da saída do ``with``
+    não faz nada: as linhas entram uma vez, sem erro."""
+    engine = setup.engine
+    engine.create_table(PROJECTED)
+    with engine.appender(PROJECTED) as appender:
+        appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+        appender.close()
+        assert count_of(engine, PROJECTED.name) == 10
+    assert count_of(engine, PROJECTED.name) == 10
+    assert appender.rows == 10
+    assert spool_files(engine) == []
+
+
+def test_appender_write_refusals(setup: Setup) -> None:
+    """O lote que o ``cast`` recusa, com a recusa pega pelo cliente dentro do ``with``, sobe de
+    novo no ``close``, e nenhum lote entra, nem os aceitos antes e depois dele; o lote com colunas
+    diferentes das do primeiro é ``ContractError``, e nada é inserido."""
+    engine = setup.engine
+    engine.create_table(PROJECTED)
+
+    # A recusa pega pelo cliente: o close a levanta de novo, e a tabela fica vazia.
+    long_area = entry_rows(MONTHS[0], 11, 1, PROJECTED)
+    area_index = long_area.schema.get_field_index("area")
+    long_area = long_area.set_column(area_index, "area", pa.array(["x" * 11]))
+    with pytest.raises(ContractError, match="texto de") as raised:
+        with engine.appender(PROJECTED) as appender:
+            appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+            with pytest.raises(ContractError, match="texto de") as caught:
+                appender.write(long_area)
+            appender.write(entry_rows(MONTHS[0], 12, 10, PROJECTED))
+    assert raised.value is caught.value
+    assert count_of(engine, PROJECTED.name) == 0
+    assert spool_files(engine) == []
+
+    # O segundo lote sem a coluna meta, que o primeiro trouxe: nada é inserido.
+    with pytest.raises(ContractError, match="e o primeiro trouxe"):
+        with engine.appender(PROJECTED) as appender:
+            appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+            appender.write(entry_rows(MONTHS[0], 11, 10, PROJECTED).drop_columns(["meta"]))
+    assert count_of(engine, PROJECTED.name) == 0
+    assert spool_files(engine) == []
 
 
 def test_appender_and_create_table_after_a_stream_do_not_wait_for_its_query(
