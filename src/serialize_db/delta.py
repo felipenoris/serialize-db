@@ -1496,15 +1496,17 @@ def snapshot(storage: Storage, environment: str, name: str, versions: Mapping[st
     :param versions: a versão de cada tabela, pelo nome da tabela; as versões marcadas são as que
         ``vacuum_keeping_snapshots`` preserva.
     :return: o controle novo.
-    :raises ContractError: o nome fora da regra da partição, antes de ler o arquivo de controle.
-    :raises ValueError: um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a
-        pasta ``arquivo/<nome>/``.
+    :raises ContractError: o nome fora da regra da partição, antes de ler o arquivo de controle;
+        ou um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a pasta
+        ``arquivo/<nome>/``, com o ``serialize-db channel`` na mensagem.
     :raises ConflictError: outro escritor entre a leitura e a escrita.
     """
     check_partition_value(name)
     control, fingerprint = read_snapshots(storage, environment)
     if name in control["snapshots"] or name in control.get("archived", {}):
-        raise ValueError(f"{environment}: o snapshot {name} já existe")
+        raise ContractError(f"{environment}: o snapshot {name} já existe, e o nome não volta a ser "
+                            "usado, nem arquivado; grave o snapshot novo com outro nome e aponte "
+                            "o canal para ele com serialize-db channel")
     control["snapshots"][name] = dict(sorted(versions.items()))
     _write_control(storage, environment, control, fingerprint)
     return control

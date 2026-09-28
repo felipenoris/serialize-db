@@ -6,16 +6,20 @@ ficam numa pasta nova por teste, e o motor DuckDB nasce nela, porque o padrão d
 ``tempfile.mkdtemp``. Os testes da linha de comando apontam a pasta temporária do processo para a
 mesma pasta. O modelo é ``Lancamento``, particionado por ``data_base_str``, e ``Projetado``, a
 tabela que o pipeline grava, com uma coluna ``Double``; ``Composta`` tem chave primária de duas
-colunas.
+colunas. A auditoria da linha de comando que a ingestão reprova usa o modelo de
+``tests/lancamentos_model.py``, com uma coluna JSON; o caso com ``--engine redshift`` é também
+``redshift`` e ``s3``, no substituto local ou no ambiente alvo.
 
 Eles conferem a abertura com as versões fixadas, a recusa da partição e do ``execution_id`` fora da
 regra, as partições anteriores, a execução sem partição, as faixas de ``next_ids``, as duas leituras
 na versão que ``publish_delta`` avançou, a ingestão de uma tabela na sessão principal e de várias em
 sessões a mais, a auditoria exigida e a reprovada, as mensagens da tabela inteira, a reexecução, os
 conflitos, o pool da publicação, as colunas não finitas e a contagem passadas à exportação, os
-metadados de commit, o snapshot, o log da saída que falha ao gravá-lo e a linha de comando. O motor
-de mentira registra as chamadas que a execução faz. A extensão ``delta`` do DuckDB precisa estar na
-pasta de extensões.
+metadados de commit, o snapshot, o nome de snapshot já usado recusado antes de qualquer commit, o
+log da saída que falha ao gravá-lo e a linha de comando, com a ingestão recusada impressa como
+auditoria reprovada e o erro de acesso do ``ingest`` subindo com o traceback. O motor de mentira
+registra as chamadas que a execução faz. A extensão ``delta`` do DuckDB precisa estar na pasta de
+extensões.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
@@ -39,7 +44,8 @@ import sqlalchemy as sa
 from deltalake import write_deltalake
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from conftest import LocalLocation
+import lancamentos_model
+from conftest import LocalLocation, S3Location, record, redshift_config
 from serialize_db import cli, delta, schema
 from serialize_db.audit import AuditReport
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
@@ -608,8 +614,9 @@ def test_commit_metadata_in_history(db: Database) -> None:
 def test_snapshot_writes_the_control_file_at_exit(db: Database,
                                                   caplog: pytest.LogCaptureFixture) -> None:
     """O snapshot marcado grava, no encerramento, a versão de toda tabela do ambiente, uma vez; a
-    execução que falha não o grava; o nome repetido é ``ValueError`` na saída, e o resumo no log
-    diz ``com erro``."""
+    execução que falha não o grava; o nome que outro escritor grava depois da chamada é
+    ``ContractError`` na saída, depois do commit da execução, e o resumo no log diz
+    ``com erro``."""
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         run.snapshot("2026T3")
         run.publish_delta(PROJECTED, partitions=["2026-08-31"], audit=False)
@@ -627,13 +634,34 @@ def test_snapshot_writes_the_control_file_at_exit(db: Database,
     control, _ = delta.read_snapshots(db.storage, "prd")
     assert list(control["snapshots"]) == ["2026T3"]
 
-    # O nome repetido: a gravação do snapshot falha na saída, e o resumo diz com erro.
+    # Outro escritor grava o nome entre a chamada e a saída: a gravação do snapshot falha na
+    # saída, depois do commit da execução, e o resumo diz com erro.
     with caplog.at_level(logging.INFO, logger="serialize_db.execution"):
-        with pytest.raises(ValueError, match="o snapshot 2026T3 já existe"):
-            with Execution(db, FakeEngine(db.storage), "2026-08-31", "exec-repetido") as run:
-                run.snapshot("2026T3")
-    assert "execução exec-repetido com erro" in caplog.text
-    assert "execução exec-repetido concluída" not in caplog.text
+        with pytest.raises(ContractError, match="o snapshot 2026T5 já existe"):
+            with Execution(db, FakeEngine(db.storage), "2026-08-31", "exec-disputado") as run:
+                run.snapshot("2026T5")
+                run.publish_delta(PROJECTED, partitions=["2026-08-31"], audit=False)
+                delta.snapshot(db.storage, "prd", "2026T5", {"cad_lancamentos": 4})
+    assert delta.open_table(db.uri(PROJECTED), db.storage).version() == 2
+    assert "execução exec-disputado com erro" in caplog.text
+    assert "execução exec-disputado concluída" not in caplog.text
+
+
+def test_snapshot_refuses_a_used_name_before_any_commit(db: Database) -> None:
+    """O nome já presente em ``snapshots``, ou em ``archived`` depois do arquivamento, é
+    ``ContractError`` na chamada de ``snapshot``, antes de qualquer commit, com o
+    ``serialize-db channel`` na mensagem; o arquivo de controle não muda."""
+    delta.snapshot(db.storage, "prd", "2026T2", {"cad_lancamentos": 4})
+    delta.snapshot(db.storage, "prd", "2026T3", {"cad_lancamentos": 4})
+    control = delta.archive_snapshot(db.storage, "prd", "2026T2")
+    for name in ("2026T3", "2026T2"):
+        refused = f"prd: o snapshot {name} já existe.*serialize-db channel"
+        with pytest.raises(ContractError, match=refused):
+            with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
+                run.snapshot(name)
+                run.publish_delta(PROJECTED, partitions=["2026-08-31"], audit=False)
+        assert not delta.table_exists(db.uri(PROJECTED), db.storage)
+    assert delta.read_snapshots(db.storage, "prd")[0] == control
 
 
 # ---------------------------------------------------------------- a linha de comando
@@ -680,6 +708,19 @@ def previous_partitions_pipeline(run: Execution) -> None:
 def snapshot_pipeline(run: Execution) -> None:
     """Um pipeline que marca o snapshot ``2026T3``, gravado na saída da execução."""
     run.snapshot("2026T3")
+
+
+def marked_pipeline(run: Execution) -> None:
+    """Um pipeline que marca o snapshot ``2026T3`` e publica a partição da execução."""
+    run.snapshot("2026T3")
+    projected_pipeline(run)
+
+
+def raced_snapshot_pipeline(run: Execution) -> None:
+    """Um pipeline que marca o snapshot ``2026T4``, que outro escritor grava antes da saída da
+    execução."""
+    run.snapshot("2026T4")
+    delta.snapshot(run.db.storage, run.db.environment, "2026T4", {"cad_lancamentos": 4})
 
 
 def redshift_engine_pipeline(run: Execution) -> None:
@@ -733,14 +774,18 @@ def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
     conflicting = "test_execution:conflicting_pipeline"
     assert cli.main([*common, "--partition", "2026-06-30", conflicting]) == 2
 
-    # O conflito no arquivo de controle: outro escritor o grava entre a leitura e a escrita
-    # condicional do snapshot na saída da execução.
+    # O conflito no arquivo de controle: outro escritor grava um snapshot novo depois de cada
+    # leitura, a de run.snapshot e a da escrita condicional na saída da execução, e a impressão
+    # digital lida fica velha.
     delta.snapshot(db.storage, "prd", "2026T2", {"cad_lancamentos": 4})
     original_read = delta.read_snapshots
+    other_snapshots = []
 
     def read_before_another_writer(storage: Storage, environment: str) -> tuple[dict, str | None]:
         read = original_read(storage, environment)
-        storage.write_text(storage.join(environment, delta.CONTROL_FILE), '{"snapshots": {}}\n')
+        other_snapshots.append(f"outro{len(other_snapshots) + 1}")
+        text = json.dumps({"snapshots": {other_snapshots[-1]: {}}}) + "\n"
+        storage.write_text(storage.join(environment, delta.CONTROL_FILE), text)
         return read
 
     with monkeypatch.context() as patch:
@@ -780,6 +825,39 @@ def test_cli_run_without_partition(db: Database, folder: Path,
     assert cli.main([*common, "test_execution:previous_partitions_pipeline"]) == 2
     printed_errors = capsys.readouterr().err
     assert "não tem partição" in printed_errors
+    assert "Traceback" not in printed_errors
+
+
+def test_cli_run_exits_with_2_on_a_used_snapshot_name(db: Database, folder: Path,
+                                                      monkeypatch: pytest.MonkeyPatch,
+                                                      capsys: pytest.CaptureFixture) -> None:
+    """``serialize-db run`` sai com 2, sem traceback, no pipeline que marca um nome de snapshot já
+    usado, em ``snapshots`` ou em ``archived``, antes de qualquer commit e com o
+    ``serialize-db channel`` na mensagem; e também quando outro escritor grava o nome entre a
+    marcação e a saída da execução."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
+    common = ["run", "--root", db.root, "--environment", "prd",
+              "--metadata", "test_execution:Base.metadata"]
+    marked = "test_execution:marked_pipeline"
+    assert cli.main([*common, "--partition", "2026-08-31", marked]) == 0
+    projected_version = delta.open_table(db.uri(PROJECTED), db.storage).version()
+    capsys.readouterr()  # descarta a saída da primeira execução
+
+    # O nome em snapshots e, depois do arquivamento, em archived: nenhum commit na partição nova.
+    assert cli.main([*common, "--partition", "2026-07-31", marked]) == 2
+    delta.archive_snapshot(db.storage, "prd", "2026T3")
+    assert cli.main([*common, "--partition", "2026-07-31", marked]) == 2
+    assert delta.open_table(db.uri(PROJECTED), db.storage).version() == projected_version
+    printed_errors = capsys.readouterr().err
+    assert printed_errors.count("serialize-db run: prd: o snapshot 2026T3 já existe") == 2
+    assert printed_errors.count("serialize-db channel") == 2
+
+    # Outro escritor grava o nome entre a marcação e a saída.
+    raced = "test_execution:raced_snapshot_pipeline"
+    assert cli.main([*common, "--partition", "2026-07-31", raced]) == 2
+    printed_errors += capsys.readouterr().err
+    assert "serialize-db run: prd: o snapshot 2026T4 já existe" in printed_errors
     assert "Traceback" not in printed_errors
 
 
@@ -904,6 +982,116 @@ def test_cli_audit_of_a_table_without_partition(
     printed_errors = capsys.readouterr().err
     assert printed_errors.count("rel_composta não tem partição") == 2
     assert "Traceback" not in printed_errors
+
+
+def publish_defects(db: Database) -> int:
+    """``cad_lancamentos_projetados`` de ``tests/lancamentos_model.py`` gravada por uma cópia do
+    modelo com ``valor`` anulável: um nulo em ``valor``, ``NOT NULL`` no modelo, na primeira
+    partição, e um JSON malformado em ``meta`` na segunda; devolve a versão atual."""
+    loose = lancamentos_model.PROJECTED.to_metadata(sa.MetaData())
+    loose.c.valor.nullable = True
+    uri = db.uri(lancamentos_model.PROJECTED)
+    delta.create_table(uri, loose, db.storage)
+    null_month, json_month = lancamentos_model.MONTHS
+    with_null = lancamentos_model.entry_rows(null_month, 1, 3, loose, valor=[1.0, None, 3.0])
+    delta.publish_partition(uri, loose, null_month, with_null, {}, db.storage)
+    malformed = lancamentos_model.entry_rows(json_month, 10, 3, loose)
+    meta = malformed.schema.get_field_index("meta")
+    malformed = malformed.set_column(meta, "meta", pa.array(['{"k": 1}', "{", "[]"]))
+    return delta.publish_partition(uri, loose, json_month, malformed, {}, db.storage)
+
+
+def defects_audit(db: Database) -> list[str]:
+    """Os argumentos de ``serialize-db audit`` da tabela de ``publish_defects``, a completar com
+    as partições."""
+    return ["audit", "--metadata", "lancamentos_model:Base.metadata",
+            "--table", "cad_lancamentos_projetados", "--root", db.root, "--environment", "prd"]
+
+
+def test_cli_audit_prints_the_refused_ingest_as_a_failed_audit(
+    folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """A auditoria da partição com um nulo numa coluna ``NOT NULL`` e a da partição com JSON
+    malformado, que o ``ingest`` pelo DDL do modelo recusa, saem com 1 e imprimem o erro do banco
+    como a reprovação da ingestão, sem as outras contagens e sem traceback."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    db = Database(str(folder / "delta"), "prd", lancamentos_model.Base.metadata)
+    version = publish_defects(db)
+    null_month, json_month = lancamentos_model.MONTHS
+
+    # O nulo na coluna NOT NULL.
+    assert cli.main([*defects_audit(db), "--partitions", null_month]) == 1
+    printed = capsys.readouterr()
+    assert printed.out.splitlines() == [
+        f"cad_lancamentos_projetados na versão {version}:",
+        "ingestão: reprovada (Constraint Error: NOT NULL constraint failed: "
+        "cad_lancamentos_projetados.valor)",
+    ]
+    printed_errors = printed.err
+
+    # O JSON malformado.
+    assert cli.main([*defects_audit(db), "--partitions", json_month]) == 1
+    printed = capsys.readouterr()
+    lines = printed.out.splitlines()
+    assert lines[0] == f"cad_lancamentos_projetados na versão {version}:"
+    assert lines[1].startswith("ingestão: reprovada (Conversion Error: Malformed JSON")
+    assert len(lines) == 2
+    printed_errors += printed.err
+    assert "Traceback" not in printed_errors
+
+
+def test_cli_audit_lets_an_access_error_of_the_ingest_propagate(
+    folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Um erro do banco que não é a recusa de um valor, como o acesso negado a um arquivo da
+    tabela, sobe do ``ingest`` da auditoria e de ``cli.main`` sem a ingestão reprovada impressa, e
+    o script de console sai com o traceback."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    db = Database(str(folder / "delta"), "prd", lancamentos_model.Base.metadata)
+    publish_defects(db)
+
+    def ingest_without_access(engine: DuckDBEngine, *args: object, **options: object) -> None:
+        raise duckdb.IOException("HTTP 403: acesso negado ao arquivo da tabela")
+
+    monkeypatch.setattr(DuckDBEngine, "ingest", ingest_without_access)
+    null_month = lancamentos_model.MONTHS[0]
+    with pytest.raises(duckdb.IOException, match="HTTP 403: acesso negado"):
+        cli.main([*defects_audit(db), "--partitions", null_month])
+    assert "reprovada" not in capsys.readouterr().out
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_cli_audit_on_redshift_prints_the_refused_ingest(
+    s3_location: S3Location, redshift_driver: None, folder: Path,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Com ``--engine redshift``, o ``INSERT`` da staging na tabela do modelo recusa o nulo na
+    coluna ``NOT NULL`` e o JSON malformado do ``JSON_PARSE``: cada auditoria sai com 1 e imprime o
+    erro do servidor como a reprovação da ingestão, sem as outras contagens e sem traceback. O
+    relatório da sessão guarda a linha impressa, que no ambiente alvo traz a mensagem dele."""
+    config = redshift_config()
+    for name, value in (("SCHEMA", config.schema), ("HOST", config.host), ("USER", config.user),
+                        ("PASSWORD", config.password), ("WORKGROUP", config.workgroup)):
+        if value is None:
+            monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
+        else:
+            monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", str(value))
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    root = s3_location.child(f"auditoria/{uuid.uuid4().hex[:8]}")
+    db = Database(root, "prd", lancamentos_model.Base.metadata)
+    version = publish_defects(db)
+    for month in lancamentos_model.MONTHS:
+        audit = [*defects_audit(db), "--engine", "redshift", "--partitions", month]
+        exit_status = cli.main(audit)
+        printed = capsys.readouterr()
+        record(f"redshift.audit.refused_ingest.{month}", printed.out)
+        assert exit_status == 1
+        lines = printed.out.splitlines()
+        assert lines[0] == f"cad_lancamentos_projetados na versão {version}:"
+        assert lines[1].startswith("ingestão: reprovada (")
+        assert len(lines) == 2
+        assert "Traceback" not in printed.err
 
 
 def test_cli_refuses_an_unknown_engine(

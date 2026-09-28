@@ -829,8 +829,9 @@ def test_version_diff_refuses_a_cleaned_log(storage: Storage, uri: str) -> None:
 
 def test_snapshot_control_file_is_written_conditionally(storage: Storage,
                                                         monkeypatch: pytest.MonkeyPatch) -> None:
-    """O primeiro snapshot cria o arquivo, o segundo o atualiza; o nome repetido é erro, o nome
-    fora da regra da partição é ``ContractError`` sem gravar, e a escrita concorrente é
+    """O primeiro snapshot cria o arquivo, o segundo o atualiza; o nome repetido, em ``snapshots``
+    ou em ``archived``, e o nome fora da regra da partição são ``ContractError`` sem gravar, o
+    repetido com o ``serialize-db channel`` na mensagem; a escrita concorrente é
     ``ConflictError``."""
     assert delta.read_snapshots(storage, "prd") == ({"snapshots": {}}, None)
     delta.snapshot(storage, "prd", "2026T2", {"cad_operacoes": 3, "dom_canais": 1})
@@ -839,7 +840,8 @@ def test_snapshot_control_file_is_written_conditionally(storage: Storage,
                               "2026T3": {"cad_operacoes": 5}}}
     assert control == expected
     assert delta.read_snapshots(storage, "prd")[0] == control
-    with pytest.raises(ValueError, match="já existe"):
+    with pytest.raises(ContractError, match="prd: o snapshot 2026T3 já existe.*serialize-db "
+                                            "channel"):
         delta.snapshot(storage, "prd", "2026T3", {"cad_operacoes": 6})
 
     # O espaço e a barra ficam fora da regra da partição: a barra aninharia a pasta
@@ -859,6 +861,12 @@ def test_snapshot_control_file_is_written_conditionally(storage: Storage,
             delta.snapshot(storage, "prd", "2026T5", {"cad_operacoes": 8})
     current, _ = delta.read_snapshots(storage, "prd")
     assert list(current["snapshots"]) == ["2026T2", "2026T3", "2026T4"]
+
+    # O nome arquivado continua ocupado, porque dá a pasta arquivo/<nome>/.
+    archived = delta.archive_snapshot(storage, "prd", "2026T2")
+    with pytest.raises(ContractError, match="o snapshot 2026T2 já existe"):
+        delta.snapshot(storage, "prd", "2026T2", {"cad_operacoes": 9})
+    assert delta.read_snapshots(storage, "prd")[0] == archived
 
 
 def test_channel_points_to_a_snapshot_and_refuses(storage: Storage,

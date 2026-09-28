@@ -114,8 +114,9 @@ def test_snapshot_records_every_table_and_history_shows_the_metadata(
     db: Database, capsys: pytest.CaptureFixture
 ) -> None:
     """``snapshot`` grava a versão atual de cada tabela existente do ambiente e recusa o nome
-    repetido; ``history`` lista os commits com os metadados da biblioteca, do mais recente ao mais
-    antigo, e o ``CREATE TABLE`` sem eles."""
+    repetido com 2, sem traceback, com o ``serialize-db channel`` na mensagem; ``history`` lista
+    os commits com os metadados da biblioteca, do mais recente ao mais antigo, e o
+    ``CREATE TABLE`` sem eles."""
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 0
     printed = capsys.readouterr().out
     assert "cad_lancamentos: versão 2" in printed
@@ -124,7 +125,11 @@ def test_snapshot_records_every_table_and_history_shows_the_metadata(
     control, _ = delta.read_snapshots(db.storage, "prd")
     assert control["snapshots"] == {"2026T3": {"cad_contas": 1, "cad_lancamentos": 2}}
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 2
-    assert "já existe" in capsys.readouterr().err
+    printed_errors = capsys.readouterr().err
+    assert "serialize-db snapshot: prd: o snapshot 2026T3 já existe" in printed_errors
+    assert "serialize-db channel" in printed_errors
+    assert "Traceback" not in printed_errors
+    assert delta.read_snapshots(db.storage, "prd")[0] == control
 
     # O histórico, do commit mais recente ao CREATE TABLE.
     assert cli.main(["history", *common_arguments(db), "--table", "cad_lancamentos"]) == 0
@@ -262,7 +267,9 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     assert cli.main(["vacuum", *common_arguments(db), "--retention-hours", "0"]) == 0
     assert "cad_lancamentos: 1 arquivo(s) a apagar" in capsys.readouterr().out
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 2
-    assert "já existe" in capsys.readouterr().err
+    printed_errors = capsys.readouterr().err
+    assert "serialize-db snapshot: prd: o snapshot 2026T3 já existe" in printed_errors
+    assert "serialize-db channel" in printed_errors
     assert cli.main(["archive", *common_arguments(db), "--name", "2026T3"]) == 2
     assert "não está em snapshots" in capsys.readouterr().err
 

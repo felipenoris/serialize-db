@@ -836,10 +836,20 @@ class Execution:
 
             run.snapshot("2026T3")
 
-        :param name: o nome do snapshot, pela regra da partição; um nome já presente no arquivo de
-            controle é ``ValueError`` na saída do ``with``, depois dos commits.
-        :raises ContractError: o nome fora da regra da partição.
+        :param name: o nome do snapshot, pela regra da partição, ausente de ``snapshots`` e de
+            ``archived`` no arquivo de controle do ambiente.
+        :raises ContractError: o nome fora da regra da partição, ou já usado em ``snapshots`` ou
+            em ``archived``, na chamada e antes de qualquer commit que venha depois dela, com o
+            ``serialize-db channel`` na mensagem; o nome que outro escritor grava depois da
+            chamada é recusado na saída do ``with``, depois dos commits.
         """
         check_partition_value(name)
+        # O nome já usado é recusado agora, antes dos commits da execução; a saída o confere de
+        # novo em delta.snapshot, contra outro escritor.
+        control, _ = delta.read_snapshots(self.db.storage, self.db.environment)
+        if name in control["snapshots"] or name in control.get("archived", {}):
+            raise ContractError(f"{self.db.environment}: o snapshot {name} já existe, e o nome não "
+                                "volta a ser usado, nem arquivado; marque a execução com outro "
+                                "nome e aponte o canal para ele com serialize-db channel")
         with self._lock:
             self._snapshot = name

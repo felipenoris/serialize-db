@@ -65,18 +65,19 @@ Exemplo:
         --metadata pipeline.models:Base.metadata --table cad_lancamentos
 
 O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff
-impresso, quando a auditoria reprova e quando a carga acha uma partição fora do contrato ou uma
-diferença de contagem ou soma; 2 no erro de uso, como o motor fora de ``duckdb`` e ``redshift`` e
-``--partitions`` na auditoria de uma tabela sem partição, na configuração do Redshift sem conexão
-ou com a porta que não é número, na tabela fora do modelo ou sem Delta, na partição acima do
-``String(n)`` da coluna de partição, no ``execution_id`` longo demais para o prefixo do sandbox do
-Redshift, no ``ContractError`` do pipeline, no conflito da execução, da carga e do ``archive``, na
-tabela ou no arquivo de controle, na publicação sem a tabela de controle, sem ``--snapshot`` nem
-``--channel``, do snapshot ou do canal ausente, do snapshot arquivado ou da tabela fora do
-snapshot, no modelo fora do contrato e na origem ausente ou fora dos armazenamentos da carga, no
-snapshot repetido ou ausente, no canal sem ``--name`` e ``--snapshot`` juntos, no canal
-``current``, na compactação depois de um snapshot na versão atual, no arquivo do snapshot de um
-canal e no destino da exportação não vazio ou fora da raiz.
+impresso, quando a auditoria reprova, também pelo valor fora do contrato que o ``ingest`` da
+auditoria recusa, impresso com o erro do banco, e quando a carga acha uma partição fora do
+contrato ou uma diferença de contagem ou soma; 2 no erro de uso, como o motor fora de ``duckdb`` e
+``redshift`` e ``--partitions`` na auditoria de uma tabela sem partição, na configuração do
+Redshift sem conexão ou com a porta que não é número, na tabela fora do modelo ou sem Delta, na
+partição acima do ``String(n)`` da coluna de partição, no ``execution_id`` longo demais para o
+prefixo do sandbox do Redshift, no ``ContractError`` do pipeline, no conflito da execução, da
+carga e do ``archive``, na tabela ou no arquivo de controle, na publicação sem a tabela de
+controle, sem ``--snapshot`` nem ``--channel``, do snapshot ou do canal ausente, do snapshot
+arquivado ou da tabela fora do snapshot, no modelo fora do contrato e na origem ausente ou fora
+dos armazenamentos da carga, no snapshot repetido ou ausente, no canal sem ``--name`` e
+``--snapshot`` juntos, no canal ``current``, na compactação depois de um snapshot na versão
+atual, no arquivo do snapshot de um canal e no destino da exportação não vazio ou fora da raiz.
 
 .. include:: ../../docs/operacao.md
 """
@@ -94,6 +95,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
+import duckdb
 import sqlalchemy as sa
 
 from serialize_db import audit, delta, load, schema, sql
@@ -413,8 +415,10 @@ def _sql_check(args: argparse.Namespace) -> int:
 def _run(args: argparse.Namespace) -> int:
     """Abre a execução, entrega-a ao pipeline e devolve o código pelo resultado: 1 na auditoria
     reprovada, 2 no conflito na tabela e no arquivo de controle e no ``ContractError`` da
-    abertura ou do pipeline, como a configuração do Redshift sem conexão ou com a porta que não é
-    número e o ``execution_id`` longo demais para o prefixo do sandbox."""
+    abertura, do pipeline ou da saída, como a configuração do Redshift sem conexão ou com a porta
+    que não é número, o ``execution_id`` longo demais para o prefixo do sandbox e o nome de
+    snapshot já usado, que ``run.snapshot`` recusa antes dos commits e a saída recusa quando
+    outro escritor o grava depois da marcação."""
     try:
         redshift = None
         if args.engine == "redshift":
@@ -471,10 +475,26 @@ def _audit_engine(args: argparse.Namespace, db: Database, execution_id: str) -> 
     raise ContractError(f"motor {args.engine!r}: use 'duckdb' ou 'redshift'")
 
 
+def _contract_refusals(engine_name: str) -> tuple[type[Exception], ...]:
+    """As classes dos erros com que o ``ingest`` pelo DDL do modelo recusa um valor fora do
+    contrato, no motor de ``--engine``: no DuckDB, ``duckdb.ConstraintException``, o nulo numa
+    coluna ``NOT NULL``, e ``duckdb.ConversionException``, o JSON malformado; no Redshift,
+    ``redshift_connector.Error``. No Redshift, a classe não separa a recusa de outro erro do
+    servidor, que também sai como reprovação: o substituto dá às duas recusas o
+    ``ProgrammingError`` com ``XX000``."""
+    if engine_name == "redshift":
+        # O driver entra só com o motor: importar o pacote não o carrega.
+        import redshift_connector
+
+        return (redshift_connector.Error,)
+    return (duckdb.ConstraintException, duckdb.ConversionException)
+
+
 def _audit_current(args: argparse.Namespace, table: sa.Table) -> int:
     """A auditoria da versão atual do Delta, num sandbox próprio do motor de ``--engine``: 1 na
-    auditoria reprovada, 2 na tabela sem Delta e na configuração do Redshift sem conexão ou com a
-    porta que não é número."""
+    auditoria reprovada, também quando o ``ingest`` recusa um valor fora do contrato, impresso com
+    o erro do banco e sem as outras contagens; 2 na tabela sem Delta e na configuração do Redshift
+    sem conexão ou com a porta que não é número."""
     db = Database(args.root, args.environment, args.metadata)
     uri = db.uri(table)
     if not delta.table_exists(uri, db.storage):
@@ -494,8 +514,17 @@ def _audit_current(args: argparse.Namespace, table: sa.Table) -> int:
     except ContractError as error:
         print(f"serialize-db audit: {error}", file=sys.stderr)
         return 2
+    refusals = _contract_refusals(args.engine)
     with sandbox as engine:
-        engine.ingest(table, uri, version, args.partitions, materialize=True)
+        # O nulo numa coluna NOT NULL e o JSON malformado derrubam o ingest pelo DDL do modelo
+        # antes das verificações que os contariam: a auditoria reprova com o erro do banco. Outro
+        # erro do DuckDB, como o acesso negado a um arquivo, sobe com o traceback.
+        try:
+            engine.ingest(table, uri, version, args.partitions, materialize=True)
+        except refusals as error:
+            print(f"{table.name} na versão {version}:")
+            print(f"ingestão: reprovada ({error})")
+            return 1
         report = engine.audit(table, args.partitions, uri, version, args.foreign_keys,
                               args.key_scope, referenced)
     print(f"{table.name} na versão {version}:")
