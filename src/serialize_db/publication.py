@@ -8,14 +8,15 @@ cada tabela é uma transação, numa conexão própria: ``BEGIN``; a leitura da 
 identifica a versão publicada e fixa o snapshot da transação; sem linha, a primeira publicação, com
 a tabela publicada criada e todas as partições; com linha, ``version_diff`` entre a versão lida e a
 pedida, a menor e a maior delas, o que também volta a tabela a um snapshot anterior ao publicado;
-por partição, ``DELETE`` da partição e, quando a versão pedida a tem, ``COPY ... MANIFEST`` numa
-staging temporária e ``INSERT ... SELECT`` com o valor; e por último o ``INSERT`` da linha de
-controle, ou o ``UPDATE`` dela condicionado à versão lida, cujas 0 linhas, como o ``1023`` e a
-tabela publicada que outra primeira publicação criou, saem como ``ExecutionConflict``. As tabelas
-correm num pool, uma conexão por tabela. ``unpublish_redshift`` apaga a tabela publicada e a linha
-de controle numa transação, e ``publication_status`` compara a versão publicada com a atual. As
-versões vêm de um snapshot do arquivo de controle, por ``serialize-db publish_redshift`` com
-``--snapshot`` ou ``--channel``, ou são as atuais.
+por partição, ``DELETE`` da partição e, quando a versão pedida a tem, um ``COPY ... MANIFEST`` por
+lista de colunas dos arquivos, com a lista, numa staging temporária e ``INSERT ... SELECT`` com o
+valor; e por último o ``INSERT`` da linha de controle, ou o ``UPDATE`` dela condicionado à versão
+lida, cujas 0 linhas, como o ``1023`` e a tabela publicada que outra primeira publicação criou,
+saem como ``ExecutionConflict``. As tabelas correm num pool, uma conexão por tabela.
+``unpublish_redshift`` apaga a tabela publicada e a linha de controle numa transação, e
+``publication_status`` compara a versão publicada com a atual. As versões vêm de um snapshot do
+arquivo de controle, por ``serialize-db publish_redshift`` com ``--snapshot`` ou ``--channel``, ou
+são as atuais.
 
 Cada ``COPY`` leva a cláusula de credenciais do motor Redshift montada logo antes do seu
 ``execute``, com a chave que a cadeia de credenciais serve naquele momento; nenhum texto que a
@@ -277,23 +278,25 @@ def _partition_delete(published: str, table: sa.Table, value: str | None) -> str
 
 def publication_statements(schema: str, environment: str, table: sa.Table,
                            partitions: Sequence[str | None],
-                           manifests: Mapping[str | None, str], delta_version: int,
-                           published_version: int | None, execution_id: str,
+                           manifests: Mapping[str | None, Sequence[delta.CopyManifest]],
+                           delta_version: int, published_version: int | None, execution_id: str,
                            credentials: str) -> list[str]:
     """Os comandos da transação depois da leitura da linha de controle, um por ``execute``, sem
     ``BEGIN`` e ``COMMIT``: na primeira publicação o ``CREATE TABLE`` da tabela publicada; a
-    staging temporária sem a coluna de partição; por partição, o ``DELETE`` dela e, quando o
-    manifesto existe, o ``DELETE`` da staging, o ``COPY ... MANIFEST FILLRECORD`` e o
-    ``INSERT ... SELECT`` com o valor e ``JSON_PARSE``; o ``DROP`` da staging; e por último a
-    linha de controle, pelo ``INSERT`` ou pelo ``UPDATE`` condicionado à versão lida.
+    staging temporária sem a coluna de partição; por partição, o ``DELETE`` dela e, quando ela tem
+    manifestos, o ``DELETE`` da staging, um ``COPY ... MANIFEST FILLRECORD`` por manifesto, com a
+    lista das colunas dos arquivos dele, e o ``INSERT ... SELECT`` com o valor e ``JSON_PARSE``; o
+    ``DROP`` da staging; e por último a linha de controle, pelo ``INSERT`` ou pelo ``UPDATE``
+    condicionado à versão lida.
 
     Exemplo:
 
     .. code-block:: python
 
+        manifest = delta.CopyManifest("s3://bucket/prd/publicacao/exec-42/.../1.manifest",
+                                      ("id_lancamento", "id_conta", "data_base", "valor"))
         publication_statements("sbx_aco_decon", "prd", Lancamento.__table__, ["2026-08-31"],
-                               {"2026-08-31": "s3://bucket/prd/publicacao/exec-42/...manifest"},
-                               58, 57, "exec-42", "IAM_ROLE default")
+                               {"2026-08-31": [manifest]}, 58, 57, "exec-42", "IAM_ROLE default")
 
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
     :param environment: o ambiente, que prefixa o nome da tabela publicada,
@@ -301,8 +304,9 @@ def publication_statements(schema: str, environment: str, table: sa.Table,
     :param table: a tabela do modelo.
     :param partitions: as partições que a publicação troca, na ordem dos comandos; ``None`` é a
         tabela inteira, sem partição.
-    :param manifests: a URI do manifesto do ``COPY`` de cada partição com arquivo na versão, pelo
-        valor; uma partição sem manifesto foi removida no Delta e recebe só o ``DELETE``.
+    :param manifests: os manifestos do ``COPY`` de cada partição com arquivo na versão, pelo
+        valor, como ``delta.copy_manifest`` os devolve; uma partição sem manifesto foi removida no
+        Delta e recebe só o ``DELETE``.
     :param delta_version: a versão do Delta publicada, que a linha de controle grava.
     :param published_version: a versão lida na linha de controle; ``None`` na primeira
         publicação.
@@ -326,7 +330,9 @@ def publication_statements(schema: str, environment: str, table: sa.Table,
         if value not in manifests:
             continue
         statements.append(f"DELETE FROM {staging}")
-        statements.append(copy_text(staging, manifests[value], credentials, manifest=True))
+        for manifest in manifests[value]:
+            statements.append(copy_text(staging, manifest.uri, credentials, manifest=True,
+                                        columns=manifest.columns))
         statements.append(insert_from_staging(published, staging, table, value))
     statements.append(f"DROP TABLE {staging}")
     control = _qualified(schema, CONTROL_TABLE)
@@ -609,17 +615,18 @@ def _partitions_to_publish(uri: str, table: sa.Table, published: int | None, ver
 
 
 def _write_manifests(db: Database, table: sa.Table, values: Sequence[str | None],
-                     execution_id: str, version: int) -> dict[str | None, str]:
-    """Um manifesto do ``COPY`` por partição com arquivo, em
-    ``<ambiente>/publicacao/<execution_id>/<tabela>/<valor>.manifest``."""
+                     execution_id: str,
+                     version: int) -> dict[str | None, list[delta.CopyManifest]]:
+    """Os manifestos do ``COPY`` de cada partição com arquivo, um por lista de colunas dos
+    arquivos, em ``<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/``."""
     storage = db.storage
     uri = db.uri(table)
     manifests = {}
     for value in values:
         tag = value if value is not None else "tabela"
-        path = storage.join(db.publication_prefix(execution_id), table.name, f"{tag}.manifest")
+        folder = storage.join(db.publication_prefix(execution_id), table.name, tag)
         partitions = [value] if value is not None else None
-        manifests[value] = delta.copy_manifest(uri, version, partitions, storage.uri_of(path),
+        manifests[value] = delta.copy_manifest(uri, version, partitions, storage.uri_of(folder),
                                                storage)
     return manifests
 

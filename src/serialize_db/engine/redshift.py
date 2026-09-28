@@ -12,8 +12,9 @@ comando, fora de transação, e o comando é repetido.
 
 As primitivas:
 
-- ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, por
-  ``COPY ... MANIFEST`` numa staging sem a coluna de partição e um ``INSERT`` com o valor dela;
+- ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, por um
+  ``COPY ... MANIFEST`` por lista de colunas dos arquivos, com a lista, numa staging sem a coluna
+  de partição e um ``INSERT`` com o valor dela;
   ``pinned_delta`` carrega a versão fixada em ``exec_<id>_<tabela>_versao_<versão>`` e a devolve
   como origem de consulta;
 - ``stream`` roda ``UNLOAD ... PARALLEL OFF`` para ``stream/<uuid>/`` sob o ``staging_prefix``
@@ -1208,23 +1209,27 @@ class RedshiftEngine:
 
     # ------------------------------------------------------------ a carga do Delta
 
-    def _manifest_uri(self, table: sa.Table, value: str | None) -> str:
-        """Um manifesto novo do ``COPY`` no ``staging/`` da execução."""
+    def _manifest_folder(self, table: sa.Table, value: str | None) -> str:
+        """Uma pasta nova dos manifestos do ``COPY`` no ``staging/`` da execução."""
         tag = value if value is not None else "tabela"
-        path = self.storage.join(self.staging_prefix, table.name,
-                                 f"{tag}_{uuid.uuid4().hex[:8]}.manifest")
+        path = self.storage.join(self.staging_prefix, table.name, f"{tag}_{uuid.uuid4().hex[:8]}")
         return self.storage.uri_of(path)
 
     def _copy_partition(self, table: sa.Table, name: str, staging: str, uri: str, version: int,
                         value: str | None) -> None:
-        """Uma partição da versão fixada na tabela do sandbox: o manifesto, o ``COPY`` na staging
-        vazia e o ``INSERT`` com o valor da partição."""
+        """Uma partição da versão fixada na tabela do sandbox: os manifestos, um ``COPY`` de cada
+        na staging vazia, com a lista das colunas dos arquivos dele, e o ``INSERT`` com o valor da
+        partição."""
         partitions = [value] if value is not None else None
-        manifest = delta.copy_manifest(uri, version, partitions, self._manifest_uri(table, value),
-                                       self.storage)
-        credentials = credentials_clause(self.config)
+        manifests = delta.copy_manifest(uri, version, partitions,
+                                        self._manifest_folder(table, value), self.storage)
         self.execute(f"DELETE FROM {self.qualified(staging)}")
-        self.execute(copy_text(self.qualified(staging), manifest, credentials, manifest=True))
+        # O COPY de Parquet é posicional: a lista leva cada coluna do arquivo à de mesmo nome, e
+        # a coluna que o arquivo não tem fica nula.
+        for manifest in manifests:
+            credentials = credentials_clause(self.config)
+            self.execute(copy_text(self.qualified(staging), manifest.uri, credentials,
+                                   manifest=True, columns=manifest.columns))
         self.execute(insert_from_staging(self.qualified(name), self.qualified(staging), table,
                                          value))
 
@@ -1263,9 +1268,9 @@ class RedshiftEngine:
 
     def ingest(self, table: sa.Table, uri: str, version: int | None,
                partitions: list[str] | None = None, materialize: bool = False) -> None:
-        """A tabela ``exec_<id>_<tabela>`` com as partições pedidas da versão fixada:
-        ``COPY ... MANIFEST FILLRECORD`` numa staging sem a coluna de partição e um ``INSERT`` com
-        o valor dela por partição.
+        """A tabela ``exec_<id>_<tabela>`` com as partições pedidas da versão fixada: por
+        partição, um ``COPY ... MANIFEST FILLRECORD`` por lista de colunas dos arquivos, com a
+        lista, numa staging sem a coluna de partição, e um ``INSERT`` com o valor dela.
 
         Um commit na tabela depois da abertura não muda o que foi carregado.
 

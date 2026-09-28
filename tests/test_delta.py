@@ -1036,26 +1036,91 @@ def test_rewrite_and_export_accept_a_trailing_slash(storage: Storage) -> None:
     assert sorted(current_values(storage, canais, "id_canal")) == [1, 2]
 
 
+def manifest_entries(storage: Storage, manifest: delta.CopyManifest) -> list[dict]:
+    """As entradas de um manifesto do ``COPY``."""
+    text, _ = storage.read_text(storage.relative(manifest.uri))
+    return json.loads(text)["entries"]
+
+
 def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) -> None:
     """O manifesto do ``COPY`` leva a URL e o tamanho de cada arquivo da versão nas partições
-    pedidas, com ``mandatory`` verdadeiro."""
+    pedidas, com ``mandatory`` verdadeiro, e as colunas do rodapé, sem a de partição; os arquivos
+    com as mesmas colunas ficam num manifesto só, e o destino fora da raiz é recusado."""
     publish(storage, uri, "2026-07-31", 1, 10)
     publish(storage, uri, "2026-08-31", 11, 10)
-    destination = storage.uri_of("prd/publicacao/exec-42/cad_operacoes/2026-08-31.manifest")
-    assert delta.copy_manifest(uri, 2, ["2026-08-31"], destination, storage) == destination
-    text, _ = storage.read_text(storage.relative(destination))
-    manifest = json.loads(text)
-    assert len(manifest["entries"]) == 1
-    entry = manifest["entries"][0]
+    folder = storage.uri_of("prd/publicacao/exec-42/cad_operacoes/2026-08-31")
+    manifests = delta.copy_manifest(uri, 2, ["2026-08-31"], folder, storage)
+    file_columns = tuple(name for name in OPERACOES.c.keys() if name != "data_str")
+    assert manifests == [delta.CopyManifest(f"{folder}/1.manifest", file_columns)]
+    entries = manifest_entries(storage, manifests[0])
+    assert len(entries) == 1
+    entry = entries[0]
     assert entry["url"].startswith(f"{uri}/data_str=2026-08-31/")
     assert entry["mandatory"] is True
     assert entry["meta"]["content_length"] == storage.size(storage.relative(entry["url"]))
 
-    # O manifesto de todas as partições.
-    whole_table_destination = storage.uri_of("prd/publicacao/tudo.manifest")
-    whole_table_manifest = delta.copy_manifest(uri, 2, None, whole_table_destination, storage)
-    text, _ = storage.read_text(storage.relative(whole_table_manifest))
-    assert len(json.loads(text)["entries"]) == 2
+    # Todas as partições, com as mesmas colunas: um manifesto com os dois arquivos.
+    whole_table = delta.copy_manifest(uri, 2, None, storage.uri_of("prd/publicacao/tudo"),
+                                      storage)
+    assert [manifest.columns for manifest in whole_table] == [file_columns]
+    assert len(manifest_entries(storage, whole_table[0])) == 2
+    with pytest.raises(ValueError, match="fora da raiz"):
+        delta.copy_manifest(uri, 2, None, "/fora/da/raiz", storage)
+
+
+def test_copy_manifest_groups_the_files_by_their_columns(storage: Storage, uri: str,
+                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    """Depois de uma coluna anulável nova no meio do modelo, um manifesto por lista de colunas do
+    rodapé, na ordem do arquivo: o arquivo anterior a ela, o que o delta-rs grava com ela no fim
+    do esquema Delta e o registrado na ordem do modelo, com ela no meio; cada manifesto leva só
+    os arquivos da sua lista, o rodapé de cada arquivo é lido uma vez, e as partições pedidas
+    limitam os grupos."""
+    publish(storage, uri, "2026-07-31", 1, 10)   # 1
+    columns = [column._copy() for column in OPERACOES.columns]
+    columns.insert(2, sa.Column("canal", sa.String(20)))
+    middle = sa.Table("cad_operacoes", sa.MetaData(), *columns, info=OPERACOES.info)
+    delta.reconcile(uri, middle, storage)   # 2
+
+    # A partição do delta-rs e a do registro, as duas com a coluna nova.
+    with_channel = rows("2026-08-31", 11, 10).append_column("canal", pa.array(["web"] * 10))
+    delta.publish_partition(uri, middle, "2026-08-31", schema.cast(with_channel, middle),
+                            METADATA, storage)   # 3
+    registered = rows("2026-09-30", 21, 10).append_column("canal", pa.array(["app"] * 10))
+    registered = schema.cast(registered, middle).drop_columns(["data_str"])
+    file = write_external_file(storage, uri, "data_str=2026-09-30/externo.parquet", registered)
+    version = delta.register_files(uri, middle, [file], "2026-09-30", METADATA, storage)   # 4
+
+    # Um grupo por lista, na ordem dos caminhos dos arquivos, com um rodapé aberto por arquivo.
+    opened = []
+    original = Storage.open_input_file
+
+    def counting(self: Storage, path: str, **options: object) -> pa.NativeFile:
+        opened.append(path)
+        return original(self, path, **options)
+
+    monkeypatch.setattr(Storage, "open_input_file", counting)
+    before = tuple(name for name in OPERACOES.c.keys() if name != "data_str")
+    at_the_end = (*before, "canal")
+    in_the_model = tuple(name for name in middle.c.keys() if name != "data_str")
+    folder = storage.uri_of("prd/staging/exec-42/cad_operacoes/tudo")
+    manifests = delta.copy_manifest(uri, version, None, folder, storage)
+    assert len(opened) == 3
+    assert len(set(opened)) == 3
+    assert manifests == [delta.CopyManifest(f"{folder}/1.manifest", before),
+                         delta.CopyManifest(f"{folder}/2.manifest", at_the_end),
+                         delta.CopyManifest(f"{folder}/3.manifest", in_the_model)]
+    partitions = []
+    for manifest in manifests:
+        entries = manifest_entries(storage, manifest)
+        assert len(entries) == 1
+        partitions.append(entries[0]["url"].removeprefix(f"{uri}/").split("/")[0])
+    assert partitions == ["data_str=2026-07-31", "data_str=2026-08-31", "data_str=2026-09-30"]
+
+    # As partições pedidas: só os grupos dos arquivos delas.
+    requested = storage.uri_of("prd/staging/exec-42/cad_operacoes/pedidas")
+    manifests = delta.copy_manifest(uri, version, ["2026-07-31", "2026-09-30"], requested,
+                                    storage)
+    assert [manifest.columns for manifest in manifests] == [before, in_the_model]
 
 
 def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:

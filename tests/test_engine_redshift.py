@@ -14,7 +14,9 @@ no substituto local (``SERIALIZE_DB_TEST_EMULATOR``) pela conexão de ``tests/em
 testes dão ao motor no lugar do ``redshift_connector``. O modelo é o de ``Lancamento``,
 particionado por ``data_base_str``, com uma chave estrangeira para ``Conta``, uma coluna JSON, uma
 ``DateTime`` e a coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
-(``tests/lancamentos_model.py``), e ``cad_medidas``, sem JSON, com uma coluna anulável no meio.
+(``tests/lancamentos_model.py``), e ``cad_medidas``, sem JSON, com uma coluna anulável no meio;
+``cad_colunas``, só de texto, recebe uma coluna nova no meio ou troca duas de lugar depois de uma
+partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo nome.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ import pyarrow.parquet as pq
 import pytest
 import redshift_connector
 import sqlalchemy as sa
+from deltalake import write_deltalake
 
 from conftest import LocalLocation, S3Location, record, redshift_config
 from lancamentos_model import ACCOUNTS, ENTRIES, MONTHS, PROJECTED, account_rows, entry_rows
@@ -69,6 +72,29 @@ MEASURES = sa.Table("cad_medidas", sa.MetaData(),
                     sa.Column("id_medida", sa.BigInteger, primary_key=True, autoincrement=False),
                     sa.Column("altura", sa.BigInteger),
                     sa.Column("largura", sa.BigInteger))
+
+
+def text_columns_table(*names: str) -> sa.Table:
+    """``cad_colunas``, particionada por ``parte``, com as colunas de texto ``names`` entre a chave
+    ``id`` e a partição, na ordem pedida."""
+    columns = [sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False)]
+    for name in names:
+        columns.append(sa.Column(name, sa.String(10)))
+    columns.append(sa.Column("parte", sa.String(10), nullable=False))
+    return sa.Table("cad_colunas", sa.MetaData(), *columns,
+                    info={"serialize_db": {"partition_by": ["parte"]}})
+
+
+def text_columns_rows(table: sa.Table, value: str, ids: list[int]) -> pa.Table:
+    """As linhas de ``cad_colunas`` na partição ``value``, no contrato: cada coluna de texto com o
+    nome dela seguido do id, como ``a1``."""
+    data = {"id": pa.array(ids, pa.int64())}
+    for column in table.columns:
+        if column.name not in ("id", "parte"):
+            data[column.name] = pa.array([f"{column.name}{row_id}" for row_id in ids])
+    data["parte"] = pa.array([value] * len(ids))
+    return schema.cast(pa.table(data), table)
+
 
 # O OID e o type_modifier de cada tipo Arrow, como o row_desc do driver os traz.
 OID_OF = {
@@ -809,10 +835,10 @@ def test_appender_second_close_does_nothing(monkeypatch: pytest.MonkeyPatch,
 def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.MonkeyPatch,
                                                          local_location: LocalLocation) -> None:
     """Por partição, o manifesto no ``staging/``, o ``DELETE`` da staging, o ``COPY ... MANIFEST
-    FILLRECORD`` e o ``INSERT`` com o valor; a staging apagada no fim; a partição sem arquivo
-    não roda; o nome ocupado e a tabela sem versão são ``SandboxError``; ``pinned_delta`` carrega a
-    versão inteira em ``_versao_<versão>`` uma vez, e outra versão numa staging nova;
-    ``cleanup`` apaga as tabelas e o ``staging/``."""
+    FILLRECORD`` com a lista das colunas do arquivo e o ``INSERT`` com o valor; a staging apagada
+    no fim; a partição sem arquivo não roda; o nome ocupado e a tabela sem versão são
+    ``SandboxError``; ``pinned_delta`` carrega a versão inteira em ``_versao_<versão>`` uma vez, e
+    outra versão numa staging nova; ``cleanup`` apaga as tabelas e o ``staging/``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     uri = storage.uri_of("prd/cad_lancamentos")
     delta.create_table(uri, ENTRIES, storage)
@@ -836,6 +862,10 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
     manifest_uri = re.search(r"FROM '([^']+)'", copies[0]).group(1)
     staging_folder = storage.uri_of(f"prd/staging/{EXECUTION_ID}/cad_lancamentos/")
     assert manifest_uri.startswith(staging_folder)
+    assert manifest_uri.endswith("/1.manifest")
+    file_columns = ", ".join(f'"{column.name}"'
+                             for column in redshift.columns_without_partition(ENTRIES))
+    assert copies[0].startswith(f'COPY "esquema"."{staging}" ({file_columns})\n')
     assert "FORMAT AS PARQUET MANIFEST FILLRECORD" in copies[0]
     manifest = json.loads(storage.read_text(storage.relative(manifest_uri))[0])
     assert len(manifest["entries"]) == 1
@@ -1237,6 +1267,67 @@ def test_appender_loads_a_batch_without_a_middle_column(target: Target) -> None:
         assert loaded.column(column).to_pylist() == rows.column(column).to_pylist(), column
     documents = [json.loads(text) for text in loaded.column("meta").to_pylist()]
     assert documents == [{"k": 1}, {"k": 2}, {"k": 3}]
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_ingest_and_pinned_delta_load_files_before_a_middle_column(target: Target) -> None:
+    """Uma coluna anulável nova no meio do modelo depois de uma partição gravada: o ``ingest`` e o
+    ``pinned_delta`` põem cada valor do arquivo anterior a ela na coluna de mesmo nome, com ela
+    nula; na versão seguinte, a partição antiga tem também um arquivo com a coluna nova, e os
+    dois grupos de colunas dela entram."""
+    storage = target.storage
+    before = text_columns_table("a", "b")
+    after = text_columns_table("novo", "a", "b")
+    uri = target.uri(before)
+    delta.create_table(uri, before, storage)
+    delta.publish_partition(uri, before, "p1", text_columns_rows(before, "p1", [1, 2]), METADATA,
+                            storage)
+    delta.reconcile(uri, after, storage)
+    version = delta.publish_partition(uri, after, "p2", text_columns_rows(after, "p2", [3]),
+                                      METADATA, storage)
+    expected = [
+        {"id": 1, "novo": None, "a": "a1", "b": "b1", "parte": "p1"},
+        {"id": 2, "novo": None, "a": "a2", "b": "b2", "parte": "p1"},
+        {"id": 3, "novo": "novo3", "a": "a3", "b": "b3", "parte": "p2"},
+    ]
+    engine = target.engine
+    engine.ingest(after, uri, version)
+    assert engine.query(sa.select(after).order_by(after.c.id)).to_pylist() == expected
+    pinned = engine.pinned_delta(after, uri, version)
+    assert engine.query(sa.select(pinned).order_by(pinned.c.id)).to_pylist() == expected
+
+    # A partição p1 com um arquivo de cada lista de colunas: um COPY por lista.
+    appended = text_columns_rows(after, "p1", [4])
+    write_deltalake(delta.open_table(uri, storage), appended, mode="append")
+    pinned = engine.pinned_delta(after, uri, version + 1)
+    loaded = engine.query(sa.select(pinned).order_by(pinned.c.id)).to_pylist()
+    assert loaded == [*expected, {"id": 4, "novo": "novo4", "a": "a4", "b": "b4", "parte": "p1"}]
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_ingest_and_pinned_delta_load_reordered_columns(target: Target) -> None:
+    """Duas colunas do modelo trocadas de lugar depois de uma partição gravada, sem diferença
+    para o esquema Delta: o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo
+    nome."""
+    storage = target.storage
+    written = text_columns_table("a", "b")
+    reordered = text_columns_table("b", "a")
+    uri = target.uri(written)
+    delta.create_table(uri, written, storage)
+    version = delta.publish_partition(uri, written, "p1",
+                                      text_columns_rows(written, "p1", [1, 2]), METADATA, storage)
+    diff = delta.schema_diff(reordered, delta.open_table(uri, storage))
+    assert not diff.changes
+    assert not diff.destructive
+    expected = [{"id": 1, "b": "b1", "a": "a1", "parte": "p1"},
+                {"id": 2, "b": "b2", "a": "a2", "parte": "p1"}]
+    engine = target.engine
+    engine.ingest(reordered, uri, version)
+    assert engine.query(sa.select(reordered).order_by(reordered.c.id)).to_pylist() == expected
+    pinned = engine.pinned_delta(reordered, uri, version)
+    assert engine.query(sa.select(pinned).order_by(pinned.c.id)).to_pylist() == expected
 
 
 @pytest.mark.redshift

@@ -91,6 +91,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 __all__ = [
+    "CopyManifest",
     "RegisteredFile",
     "SchemaDiff",
     "archive_snapshot",
@@ -196,6 +197,25 @@ class SchemaDiff:
         """Se o diff aditivo tem alguma coisa a aplicar."""
         additive = (self.add, self.relax, self.checks, self.comments)
         return any(additive) or self.description is not None
+
+
+@dataclasses.dataclass(frozen=True)
+class CopyManifest:
+    """Um manifesto do ``COPY ... MANIFEST`` do Redshift e as colunas que cada arquivo dele tem.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        CopyManifest(uri="s3://bucket/prd/publicacao/exec-42/cad_operacoes/2026-08-31/1.manifest",
+                     columns=("id_operacao", "data", "valor"))
+    """
+
+    uri: str
+    """A URI do manifesto."""
+    columns: tuple[str, ...]
+    """Os nomes das colunas de cada arquivo do manifesto, na ordem do rodapé: a lista do
+    ``COPY``, que leva cada coluna do arquivo à de mesmo nome da tabela."""
 
 
 # ---------------------------------------------------------------- abertura e metadados
@@ -682,9 +702,10 @@ def _check_footer_schema(footer: pq.ParquetFile, file: RegisteredFile, contract:
 
     Nenhuma coluna do contrato ausente, porque o leitor a leria nula sem erro; o tipo físico entre
     os que os leitores leem como o lógico; a coluna de partição fora do arquivo, porque ela vive na
-    ação e o ``COPY`` posicional do Redshift a leria como a coluna seguinte; e as colunas do
-    contrato na ordem dele, pelo mesmo ``COPY``. Uma coluna fora do contrato passa, porque os
-    leitores a ignoram.
+    ação, e o ``COPY`` do Redshift, que lista as colunas do rodapé, a mandaria para a staging, que
+    não a tem; e as colunas do contrato na ordem dele, que nenhum leitor do pacote exige: os dois
+    leitores e o ``COPY`` ligam cada coluna do arquivo à de mesmo nome. Uma coluna fora do
+    contrato passa, porque os leitores a ignoram.
     """
     physical = {}
     order = []
@@ -1408,46 +1429,73 @@ def _in_partitions(action: Mapping[str, object], partition_columns: list[str],
     return action[f"partition.{partition_columns[0]}"] in partitions
 
 
-def copy_manifest(uri: str, version: int, partitions: list[str] | None, destination: str,
-                  storage: Storage) -> str:
-    """Grava o manifesto do ``COPY ... MANIFEST`` do Redshift com os arquivos da versão nas
-    partições pedidas.
+def _file_columns(storage: Storage, path: str) -> tuple[str, ...]:
+    """Os nomes das colunas do arquivo, na ordem do rodapé; no S3, o rodapé vem por GET de
+    intervalo."""
+    with storage.open_input_file(path) as source:
+        return tuple(pq.read_schema(source).names)
 
-    Cada entrada é ``{"url": "<pasta da tabela>/<path>", "mandatory": true, "meta":
-    {"content_length": <size_bytes>}}``, das ações ``add`` da versão.
+
+def copy_manifest(uri: str, version: int, partitions: list[str] | None, destination: str,
+                  storage: Storage) -> list[CopyManifest]:
+    """Grava os manifestos do ``COPY ... MANIFEST`` do Redshift com os arquivos da versão nas
+    partições pedidas, um manifesto por lista de colunas dos arquivos.
+
+    O ``COPY`` de Parquet leva as colunas do arquivo às da tabela pela posição, e os arquivos de
+    uma tabela Delta nem sempre têm as mesmas colunas na mesma ordem: o arquivo anterior a uma
+    coluna nova não a tem, e o delta-rs grava a coluna nova no fim do esquema Delta. Cada arquivo
+    entra no manifesto da lista de colunas do seu rodapé, lido uma vez, e o ``COPY`` de cada
+    manifesto nomeia essa lista, que leva cada coluna do arquivo à de mesmo nome. Cada entrada é
+    ``{"url": "<pasta da tabela>/<path>", "mandatory": true, "meta": {"content_length":
+    <size_bytes>}}``, das ações ``add`` da versão, e os manifestos se chamam ``1.manifest``,
+    ``2.manifest`` e assim por diante, na ordem do caminho do primeiro arquivo de cada lista.
 
     Exemplo:
 
     .. code-block:: python
 
-        copy_manifest(uri, 58, ["2026-08-31"],
-                      storage.uri_of("prd/publicacao/exec-42/cad_operacoes/2026-08-31.manifest"),
-                      storage)
+        folder = storage.uri_of("prd/publicacao/exec-42/cad_operacoes/2026-08-31")
+        for manifest in copy_manifest(uri, 58, ["2026-08-31"], folder, storage):
+            print(manifest.uri, manifest.columns)
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
     :param version: a versão cujos arquivos entram.
     :param partitions: os valores das partições pedidas, todas com ``None``; numa tabela sem
         partição, todo arquivo entra.
-    :param destination: a URI do manifesto sob a raiz, em ``publicacao/`` ou ``staging/``; um
-        manifesto existente é substituído.
+    :param destination: a URI da pasta dos manifestos sob a raiz, em ``publicacao/`` ou
+        ``staging/``; um manifesto existente com o mesmo nome é substituído, e o ``COPY`` usa só
+        os devolvidos.
     :param storage: o armazenamento da raiz do banco.
-    :return: a URI do manifesto, ``destination``.
-    :raises ValueError: ``destination`` fora da raiz de ``storage``.
+    :return: um ``CopyManifest`` por lista de colunas, na ordem dos nomes dos manifestos; vazia,
+        sem manifesto gravado, quando nenhum arquivo entra.
+    :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``.
     """
+    table_path = storage.relative(uri)
+    folder = storage.relative(destination)
     dt = open_table(uri, storage, version)
     partition_columns = dt.metadata().partition_columns
-    entries = []
-    for action in pa.table(dt.get_add_actions(flatten=True)).to_pylist():
+
+    # As entradas agrupadas pela lista de colunas do rodapé, na ordem do caminho dos arquivos; os
+    # rodapés são lidos em série, como no register_files.
+    entries_by_columns: dict[tuple[str, ...], list[dict[str, object]]] = {}
+    actions = pa.table(dt.get_add_actions(flatten=True)).sort_by("path")
+    for action in actions.to_pylist():
         if not _in_partitions(action, partition_columns, partitions):
             continue
-        entries.append({
+        columns = _file_columns(storage, storage.join(table_path, action["path"]))
+        entries_by_columns.setdefault(columns, []).append({
             "url": f"{uri.rstrip('/')}/{action['path']}",
             "mandatory": True,
             "meta": {"content_length": action["size_bytes"]},
         })
-    manifest = json.dumps({"entries": entries}, indent=2)
-    storage.write_text(storage.relative(destination), manifest)
-    return destination
+
+    # Um manifesto por lista, numerado pela ordem em que a lista apareceu.
+    manifests = []
+    for number, (columns, entries) in enumerate(entries_by_columns.items(), start=1):
+        path = storage.join(folder, f"{number}.manifest")
+        storage.write_text(path, json.dumps({"entries": entries}, indent=2))
+        manifests.append(CopyManifest(storage.uri_of(path), columns))
+    return manifests
 
 
 # ---------------------------------------------------------------- os snapshots do banco
