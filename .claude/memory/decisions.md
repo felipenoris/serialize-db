@@ -1324,15 +1324,17 @@ and `loader`. The Redshift reading of two writers on one table waits for the use
 
 The repository review of 2026-09-28 left its decision items in `plan/OPEN_QUESTIONS.md` ("Achados da
 revisão do repositório"), and the user took them one at a time, each with its context in the thread
-and a card; the implementation waits until every item is answered. The answers: the Redshift `COPY`
-lists the columns read from each file's footer, one `COPY` per group of files with the same list, in
-the publication and in the Redshift engine's `ingest` and `pinned_delta`; the initial load keeps its
-three conversions (a `double` rounded to a `Numeric` scale, the time of a `timestamp` dropped in a
-`Date`, a zoned `timestamp` written in the machine's zone in a naive `DateTime`), written in
-`docs/index.md`; `serialize-db audit` prints the database error of the ingest as a failed audit,
-without traceback; and `run.snapshot` reads the control file and refuses a name already used with
-`ContractError` before any commit, with `delta.snapshot` raising `ContractError` too. The Parquet
-footer keys `serialize_db_version` and `serialize_db_execution_id` leave `CLAUDE.md` and
+and a card; the implementation followed once every item was answered. The answers: the Redshift
+`COPY` lists the columns read from each file's footer, one `COPY` per group of files with the same
+list, in the publication and in the Redshift engine's `ingest` and `pinned_delta`; the initial load
+keeps its three conversions (a `double` rounded to a `Numeric` scale, the time of a `timestamp`
+dropped in a `Date`, a zoned `timestamp` written in the machine's zone in a naive `DateTime`),
+written in `docs/index.md`; `serialize-db audit` prints the database error of the ingest as a failed
+audit, without traceback (the implementation catches DuckDB's `ConstraintException` and
+`ConversionException` and any `redshift_connector.Error`, and another DuckDB error, such as a denied
+file, keeps its traceback); and `run.snapshot` reads the control file and refuses a name already
+used with `ContractError` before any commit, with `delta.snapshot` raising `ContractError` too. The
+Parquet footer keys `serialize_db_version` and `serialize_db_execution_id` leave `CLAUDE.md` and
 `plan/serialize-db.md`: no feature reads a key of the library in a footer, the package reads only
 the format's own metadata there (schema, row count, statistics, null counts), and a file's origin
 stays in the commit's `commitInfo` and in the file or folder name `<execution_id>_<uuid>` of the
@@ -1349,5 +1351,4 @@ marked with a new name, `serialize-db channel`, `serialize-db publish_redshift -
 the old snapshot readable until `archive`) and kept the snapshot names immutable, never reused,
 asking for the characteristic in the documentation: `docs/operacao.md` ("Snapshot do banco" and
 "Refazer um snapshot"), `docs/index.md`, the docstrings of `Execution.snapshot` and
-`delta.snapshot`, and `plan/serialize-db.md`.
-`plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-10.md`
+`delta.snapshot`, and `plan/serialize-db.md`. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-10.md`

@@ -5084,6 +5084,24 @@ novo.
   moto; com 4 a 32 threads, de 34,6 ms a 53,2 ms e de 1.057,9 ms a 1.103,3 ms. O moto é limitado
   pelo próprio servidor, e a latência do S3 real, um `HEAD` e um `GET` de intervalo por arquivo, não
   foi medida.
+- **A auditoria da linha de comando com a ingestão recusada**: no DuckDB 1.5.5,
+  `ConstraintException` deriva de `IntegrityError` e `ConversionException` de `DataError`, as duas
+  de `DatabaseError`, e `IOException`, de que `HTTPException` deriva, de `OperationalError`.
+  `serialize-db audit` imprimiu `ingestão: reprovada (Constraint Error: NOT NULL constraint failed:
+  cad_lancamentos_projetados.valor)` e a linha de `Conversion Error: Malformed JSON` e saiu com 1,
+  onde o código anterior saía com `ConstraintException` e o traceback. A primeira versão capturava
+  `duckdb.Error` e imprimia como reprovação um `IOException` de acesso negado; a captura ficou nas
+  duas classes. No substituto, as duas recusas do Redshift chegam como `ProgrammingError` com o
+  SQLSTATE `XX000`, que a classe não separa de outro erro do servidor, e a linha impressa traz o
+  erro do driver; o texto do alvo, que `test_cli_audit_on_redshift_prints_the_refused_ingest` guarda
+  no relatório da sessão (`redshift.audit.refused_ingest.<mês>`), espera a próxima bateria.
+- **O nome de snapshot já usado**: com o nome em `snapshots` ou em `archived`, `run.snapshot`
+  levantou `ContractError` antes de qualquer commit, e `serialize-db run` saiu com 2, com a versão
+  do Delta igual e `serialize-db channel` na mensagem; o código anterior commitava e saía com 1 e o
+  traceback. O dublê do outro escritor em `test_cli_run_parses_and_exits_by_result`, que regravava o
+  mesmo conteúdo, passou a sair com 0, porque a impressão digital da pasta local é o `sha256` do
+  conteúdo e a leitura nova de `run.snapshot` via o mesmo arquivo que a saída; o dublê grava agora
+  um snapshot novo depois de cada leitura.
 
 **Consequências**: `copy_manifest` lê os rodapés em série, como `register_files`, e a publicação e o
 motor Redshift rodam um `COPY` por lista de colunas ([etapa 3](PLAN-STAGE-3.md),

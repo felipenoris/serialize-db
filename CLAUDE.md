@@ -621,9 +621,13 @@ A new lesson adds its story there and its rule here, in the same commit.
   rolled back the secret it had refreshed; consume every result, and when two instruments
   disagree, run variants that differ in one step (2026-09-25).
 - **A test double calls the original through a reference saved before the swap, and a failure
-  case matches its own message**: `pytest.raises(Exception)` swallowed the `RecursionError` of
-  a double that called itself, and a refusal case without `match` stayed green with its check
+  case matches its own message and asserts that its double ran**: `pytest.raises(Exception)`
+  swallowed the `RecursionError` of a double that called itself and the `AttributeError` of one
+  that never wrote its manifest, and a refusal case without `match` stayed green with its check
   removed (2026-09-28).
+- **A double of a concurrent writer changes the bytes it writes**: the local fingerprint is the
+  content's `sha256`, and a double that rewrote the same control file read as no change once
+  `run.snapshot` read the file before the commits (2026-09-28).
 
 ## Naming conventions
 
@@ -795,8 +799,11 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `INSERT ... BY NAME` from `delta_scan`, and a read during an `append` in flight seeing the
   table without the new rows. `tests/test_pipeline.py` runs the monthly pipeline end to end on
   DuckDB over the fixture base, and the tutorial in `docs/index.md` uses `run.sandbox`. The
-  repository review of 2026-09-28 fixed what needed no decision, and the rest waits in
-  `plan/OPEN_QUESTIONS.md`.
+  repository review of 2026-09-28 fixed what needed no decision, and the user's decisions of the
+  same day on the other findings are implemented (`.claude/memory/decisions.md`): every Redshift
+  `COPY` lists the file's columns, snapshot names are immutable and checked at `run.snapshot`,
+  and `serialize-db audit` prints a refused ingest as a failed audit; what the target still reads
+  is in `plan/OPEN_QUESTIONS.md`.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing

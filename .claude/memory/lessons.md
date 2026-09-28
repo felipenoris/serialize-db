@@ -657,5 +657,15 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   review removed the "partição dentro" check of `_check_footer_schema` and saw its case in
   `tests/test_delta.py` stay green under a `pytest.raises(RegistrationRefused)` without `match`,
   because the column-order check refused the file first. The double now calls the function saved
-  before the swap, and each refusal case matches a fragment of its own message.
-  `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-3.md`
+  before the swap, and each refusal case matches a fragment of its own message. The column list of
+  the same day found it again in `test_failed_copy_leaves_control_row_untouched`: the double
+  rewritten for the new API raised `AttributeError` on the old code, which
+  `pytest.raises(Exception)` swallowed; the case now asserts that the double wrote the invalid
+  manifest once. `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-8.md`
+- **A double of a concurrent writer changes the bytes it writes** (2026-09-28). The check of the
+  snapshot name added a read of the control file to `run.snapshot`, and
+  `test_cli_run_parses_and_exits_by_result` exited 0 instead of 2: its double of the other writer
+  rewrote the same content after each read, and the local storage's fingerprint is the content's
+  `sha256`, so the file read before the commits matched the one the exit read, and the exit's
+  conditional write passed. The double now writes a new snapshot (`outroN`) after each read and
+  passes on the old and the new code. `plan/PLAN-STAGE-6.md`
