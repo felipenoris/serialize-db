@@ -182,6 +182,68 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
   `create_table` e `append` dos motores, e a docstring do `appender` nada diz sobre dois escritores
   na mesma tabela até a rodada.
 
+## Achados da revisão do repositório
+
+A revisão de 2026-09-28 ([`POC.md`](POC.md), seção "O que a revisão do repositório de 2026-09-28
+reproduziu") corrigiu o que não dependia de decisão; cada item abaixo espera o usuário.
+
+- **O `COPY` posicional do Redshift depois de uma coluna nova no meio do modelo.** O `COPY ...
+  FORMAT AS PARQUET` liga as colunas do arquivo às da tabela pela posição, e as stagings do `ingest`
+  e do `pinned_delta` do motor Redshift e da publicação nascem na ordem do modelo (`staging_ddl`,
+  chamado por `_load_from_delta` e por `publication_statements`). O `reconcile` põe a coluna nova no
+  fim do esquema Delta, os arquivos gravados antes dela não a têm, e o `FILLRECORD` completa com
+  nulo a última coluna da staging: com a coluna nova no meio do modelo, ou com colunas reordenadas,
+  cada valor dos arquivos antigos cai na coluna vizinha, sem erro. No substituto, a coluna `novo`
+  entre `id` e `a` recebeu os valores de `a`, `a` os de `b`, e `b` ficou nula, no `ingest` e na
+  publicação. A tabela "Regras do COPY para Parquet" de [`redshift.md`](redshift.md) supõe a ordem
+  do arquivo igual à do modelo. Espera o usuário: o `COPY` com a lista de colunas lida do rodapé de
+  cada grupo de arquivos, que o alvo aceitou em 2026-09-21 e que pede um `COPY` por lista distinta;
+  ou a recusa, em `schema_diff` e em `check_models`, de uma coluna nova fora do fim do modelo e de
+  uma reordenação.
+- **As conversões da carga inicial que o `cast` recusa.** A consulta de cada partição de
+  `initial_load` converte cada coluna por `CAST` do DuckDB para o tipo do modelo
+  (`partition_query`), e a conferência (`_check_partition`) conta só nulos, textos longos e a coluna
+  de origem da partição: um `double` com mais casas que a escala de um `Numeric` entra arredondado,
+  um `timestamp` com hora numa coluna `Date` perde a hora, e um `timestamptz` numa `DateTime` sem
+  fuso entra na hora do `TimeZone` da máquina. O `cast` recusa os três com `ContractError` ([etapa
+  1](PLAN-STAGE-1.md)). A base de produção carregou sem diferença de contagem e soma em 2026-09-24,
+  e a próxima carga no alvo passa pelas mesmas conversões. Espera o usuário: as conferências
+  equivalentes às do `cast` na carga, com o `TimeZone` da conexão em UTC, que recusam a partição; ou
+  a carga como está, com as três conversões escritas em `docs/index.md`.
+- **A auditoria de `serialize-db audit` com o contrato no `ingest`.** Desde 2026-09-28,
+  `ingest(materialize=True)` do motor DuckDB cria a tabela pelo DDL do modelo e a enche por `INSERT
+  ... BY NAME`, e `serialize-db audit` ingere assim: um JSON malformado ou um nulo numa coluna `NOT
+  NULL`, os defeitos que as verificações `json_` e `nulo_` contam, derrubam o `ingest` com
+  `ConversionException` ou `ConstraintException` e saem com 1 e o traceback, sem relatório. O teste
+  da linha de comando só cobre a auditoria aprovada. Espera o usuário: a auditoria da linha de
+  comando sobre a view (`materialize=False`), que relê o Delta em cada verificação; uma
+  materialização sem o contrato só para ela; ou a recusa do `ingest` impressa como reprovação.
+- **O nome de snapshot repetido em `serialize-db run`.** `run.snapshot(nome)` só confere a regra do
+  nome, e o nome já presente no arquivo de controle é `ValueError` na saída do `with`, depois dos
+  commits; `serialize-db run` captura só `ContractError`, `AuditFailed`, `ExecutionConflict` e
+  `ConflictError`, e sai com 1 e o traceback, enquanto `docs/operacao.md` e a docstring de
+  `serialize_db.cli` prometem 2 no nome repetido. Espera o usuário: `delta.snapshot` levantar
+  `ContractError`, que deriva de `ValueError`, no nome repetido; conferir o nome já em
+  `run.snapshot`, antes dos commits; ou a documentação dizer 1.
+- **As chaves `serialize_db_version` e `serialize_db_execution_id` do rodapé Parquet.** A convenção
+  de nomes do `CLAUDE.md` e [`serialize-db.md`](serialize-db.md) as descrevem como gravadas pela
+  biblioteca no rodapé de cada arquivo, e nenhum escritor do pacote as grava: o `COPY` do DuckDB, o
+  `UNLOAD` do Redshift e o `write_deltalake` gravam os arquivos sem metadados da biblioteca. Espera
+  o usuário: gravá-las, onde o escritor aceita metadados de rodapé; ou tirá-las dos dois documentos.
+- **O DuckDB de `probes/diagnose_aws.py`.** A checagem do DuckDB carrega a extensão `aws` e cria o
+  secret com `PROVIDER credential_chain`, que a biblioteca deixou em 2026-09-25 pela chave do
+  `boto3`, e sem `URL_STYLE 'path'` nem `USE_SSL false` um endpoint `http`, o do substituto, reprova
+  a checagem sem que o acesso da biblioteca falhe. O probe só roda no alvo, e a regra do instrumento
+  validado pede o relatório dele antes e depois da mudança. Espera o usuário: a checagem pelo
+  `Storage.duckdb_connect` da biblioteca, validada numa rodada no alvo; ou a checagem como está, uma
+  leitura do caminho do `credential_chain`.
+- **A simulação do `RS-11` em `probes/redshift.py`.** O `RS-11` simula `ListBucket`, `GetObject` e
+  `PutObject` contra o bucket e o prefixo numa chamada só de `simulate_principal_policy`, e uma
+  política de privilégio mínimo, com `ListBucket` só no bucket e as outras duas só nos objetos, pode
+  ler negada (inferido da documentação do IAM, sem rodada); o `BK-8` de `probes/bucket.py` simula
+  cada ação contra o recurso dela. Espera o usuário: uma simulação por ação e recurso, validada numa
+  rodada no alvo; ou o `RS-11` como está.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
