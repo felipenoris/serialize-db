@@ -753,17 +753,25 @@ def test_stream_delivers_each_batch_while_the_query_runs(setup: Setup) -> None:
     # O erro chega na construção, quando a consulta não entrega lote algum, ou na leitura seguinte
     # ao último lote, com os lotes na memória ou no arquivo. A falha na linha 2.900.000 chegou como
     # OSError do leitor Arrow, depois de 25 ou 26 lotes, nos dois orçamentos (seis leituras de
-    # 2026-09-23); o teste aceita também ConversionException, a classe do DuckDB para o mesmo erro.
+    # 2026-09-23, com duas threads), a classe que a docstring do stream promete.
     with pytest.raises(duckdb.CatalogException, match="nao_existe"):
         engine.stream("SELECT * FROM nao_existe")
+    # A consulta que falha no meio roda num motor de uma thread: com duas, o DuckDB 1.5.5 entregou
+    # INTERRUPT Error: Interrupted! no lugar do erro de conversão em 3 de 21 execuções de
+    # 2026-09-28 (plan/POC.md).
     failing = ("SELECT CAST(CASE WHEN id = 2_900_000 THEN 'x' ELSE CAST(id AS VARCHAR) END "
                "AS INTEGER) AS n FROM numeros")
-    for budget in (64 * 2**20, 10_000):
-        with (pytest.raises((duckdb.ConversionException, OSError),
-                            match="Could not convert string 'x' to INT32"),
-              DuckDBStream(engine, failing, [], batch_size=100_000, budget=budget) as stream):
-            stream.read_all()
-        assert spool_files(engine) == []
+    one_thread_config = DuckDBConfig(threads=1, temp_directory=str(setup.folder / "uma_thread"))
+    with DuckDBEngine(one_thread_config, EXECUTION_ID, setup.storage) as one_thread:
+        threads = one_thread.query("SELECT current_setting('threads') AS t").to_pylist()
+        assert threads == [{"t": 1}]
+        create_numbers(one_thread)
+        for budget in (64 * 2**20, 10_000):
+            with (pytest.raises(OSError, match="Could not convert string 'x' to INT32"),
+                  DuckDBStream(one_thread, failing, [], batch_size=100_000,
+                               budget=budget) as stream):
+                stream.read_all()
+            assert spool_files(one_thread) == []
 
 
 def test_stream_spills_after_the_budget_and_keeps_the_order(setup: Setup) -> None:

@@ -1371,3 +1371,14 @@ partition, and that the `INT96` timestamp loses its sub-microsecond part, a four
 documentation missed; offered to mark the lossy conversions read in every footer, the user chose
 "Só a doc": the line stays as it is, and `docs/index.md` lists the fourth loss and the line's reach.
 `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-7.md`, `plan/POC.md`, `docs/index.md`
+
+The local suites of that evening failed `test_stream_delivers_each_batch_while_the_query_runs`
+in 3 of 21 runs: DuckDB 1.5.5 delivered `INTERRUPT Error: Interrupted!` in place of the
+conversion error found by a worker thread [inferred from the source], with no `interrupt()` from
+the engine. Told that clients of `stream` can get the interrupt in place of a failing query's
+error, and that every option on the card changes only the test, the user chose one thread for the
+affected case alone and a warning to the client in the `stream` docstring: the error case opens
+its own engine with `threads=1` and asserts the `OSError` of the Arrow reader, and the docstrings
+of `DuckDBEngine.stream` and `DeltaReader.stream` say the error can arrive as the interrupt with
+more than one thread. The package's behavior does not change. `plan/PLAN-STAGE-4.md`,
+`plan/POC.md`

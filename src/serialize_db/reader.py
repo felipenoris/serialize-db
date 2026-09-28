@@ -414,7 +414,10 @@ class DeltaReader:
             modelo sem view no leitor, sem chamar o motor.
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
             texto, ou o texto ainda traz o sentinela ``{prefix}``.
-        :raises duckdb.Error: a consulta que falha antes do primeiro lote.
+        :raises duckdb.Error: a consulta que falha antes do primeiro lote; o erro depois dele
+            sobe na leitura seguinte ao último lote entregue. Com mais de uma thread, o erro da
+            consulta pode chegar como ``INTERRUPT Error: Interrupted!``, sem a causa, como
+            descreve o ``DuckDBEngine.stream``.
         """
         self._check_readable(statement_or_sql)
         return _ReaderStream(self, self._engine.stream(statement_or_sql, params, batch_size))

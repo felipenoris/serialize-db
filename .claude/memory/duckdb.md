@@ -125,7 +125,10 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `d8cdaa33fd`, `Executor::PushError` sets `context.interrupted` to stop the other tasks, and
   `SimpleBufferedData::ExecuteTaskInternal` throws `InterruptException` on that flag before asking
   the executor for the stored error [inferred]; 210 plain-DuckDB reads and 240 engine reads of the
-  same query never reproduced it. The fix awaits the user. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  same query never reproduced it. `ClientContext::ExecuteTaskInternal` swaps a worker's interrupt
+  for the stored error, and the buffered-data check runs before that call, outside the swap. The
+  user chose (2026-09-28) one thread for the test's error case and a warning in the `stream`
+  docstrings. `plan/POC.md`, `plan/PLAN-STAGE-4.md`
 - `COPY ... (RETURN_STATS)` on a `DOUBLE` with `NaN` gives the largest number as the maximum and a
   `has_nan` that sees only the last row group: 4,096 rows in two groups of 2,048 gave `false` with
   the `NaN` only in the first group (2026-09-23), while the footer omits min and max of every group

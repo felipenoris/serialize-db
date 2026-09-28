@@ -5271,7 +5271,16 @@ pasta local:
   ocupando a CPU; 120 lote a lote, com pausas de 0, 1 e 5 ms com duas threads e de 1 ms com uma) e
   em todas as 240 pelo stream do motor (120 nos dois orçamentos, com duas threads e com uma; 120 na
   sequência do fim do teste, com e sem o stream abandonado antes).
+- **O caminho do stream pula a troca da interrupção pelo erro.**
+  `ClientContext::ExecuteTaskInternal` troca a `InterruptException` pelo erro guardado no
+  executor quando uma thread de trabalho o achou; a verificação da marca em
+  `SimpleBufferedData::ExecuteTaskInternal` roda antes dessa chamada, fora da troca. Com uma
+  thread, quem lê executa as tarefas e acha o erro dentro da chamada que o troca [inferido].
+- **O caso do erro num motor de uma thread passou em todas as execuções.** Com o caso do erro num
+  motor de `threads=1`, o teste passou em 60 de 60 execuções isoladas: 30 durante o ajuste e 30 da
+  versão final, que confere o `OSError` do leitor Arrow.
 
-**Consequência**: o teste fica como está, e a escolha entre rodar o caso do erro com uma thread,
-aceitar as duas mensagens ou levar o caso ao DuckDB espera o usuário em
-[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+**Consequência**: o caso do erro roda num motor de uma thread e confere o `OSError` do leitor
+Arrow, e as docstrings de `DuckDBEngine.stream` e `DeltaReader.stream` avisam o cliente de que,
+com mais de uma thread, o erro da consulta pode chegar como a interrupção, sem a causa (decisão
+do usuário de 2026-09-28, [etapa 4](PLAN-STAGE-4.md)); o comportamento do pacote não muda.
