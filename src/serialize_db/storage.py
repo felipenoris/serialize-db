@@ -37,9 +37,10 @@ import dataclasses
 import hashlib
 import os
 import re
+import stat
 import sys
-import tempfile
 import urllib.parse
+import uuid
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 
@@ -217,6 +218,15 @@ def _fingerprint(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _write_new_file(full: Path, content: bytes) -> None:
+    """Grava ``content`` num arquivo local que ainda não existe, pela abertura exclusiva
+    ``O_EXCL``, no modo de um arquivo novo: 0o666 menos a umask do processo, sem execução. O
+    arquivo existente é ``FileExistsError``, sem gravar."""
+    descriptor = os.open(full, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(content)
+
+
 @dataclasses.dataclass(frozen=True)
 class Storage:
     """A raiz do banco num dos dois armazenamentos, com o sistema de arquivos que a percorre.
@@ -253,7 +263,8 @@ class Storage:
 
             Storage.for_uri("file:///dados/delta").uri   # "/dados/delta"
 
-        :param uri: a raiz do banco; o caminho local é resolvido para absoluto.
+        :param uri: a raiz do banco; o caminho local é resolvido para absoluto, e o de uma URI
+            ``file://`` tem o ``%XX`` decodificado, como em ``Path.from_uri``.
         :return: o armazenamento da raiz.
         :raises ValueError: no S3 sem região, porque o PyArrow a buscaria na rede e o delta-rs
             cairia em ``us-east-1``; e em outro esquema.
@@ -518,7 +529,7 @@ class Storage:
         """Grava o texto num arquivo que ainda não existe.
 
         No S3, ``put_object`` com ``IfNoneMatch="*"``, atômico no servidor; na pasta local, a
-        abertura com ``O_EXCL``.
+        abertura com ``O_EXCL``, no modo de um arquivo novo, 0o666 menos a umask.
 
         Exemplo:
 
@@ -544,7 +555,8 @@ class Storage:
         No S3, ``put_object``, com ``IfMatch=<etag>`` quando a condição vem, atômico no servidor.
         Na pasta local, a comparação da impressão digital seguida de ``os.replace`` de um arquivo
         temporário, que não é atômica entre processos e basta à pasta local, o ambiente dos testes
-        e do desenvolvimento.
+        e do desenvolvimento; o arquivo substituído mantém o modo, e o novo nasce como em
+        ``create_text``.
 
         Exemplo:
 
@@ -573,11 +585,9 @@ class Storage:
         full.parent.mkdir(parents=True, exist_ok=True)
         content = text.encode("utf-8")
         try:
-            descriptor = os.open(full, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            _write_new_file(full, content)
         except FileExistsError:
             raise ConflictError(f"{path} já existe") from None
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
         return _fingerprint(content)
 
     def _replace_local(self, path: str, text: str, if_match: str | None) -> str:
@@ -590,10 +600,12 @@ class Storage:
             if current != if_match:
                 raise ConflictError(f"{path} mudou desde a leitura")
         content = text.encode("utf-8")
-        # O arquivo temporário na mesma pasta: os.replace troca de uma vez.
-        with tempfile.NamedTemporaryFile("wb", dir=full.parent, delete=False) as handle:
-            handle.write(content)
-            temporary = handle.name
+        # O arquivo temporário na mesma pasta, que os.replace troca de uma vez, nasce como um
+        # arquivo novo e recebe o modo do arquivo que substitui, quando ele existe.
+        temporary = full.with_name(f"{full.name}.{uuid.uuid4().hex}.tmp")
+        _write_new_file(temporary, content)
+        if full.exists():
+            os.chmod(temporary, stat.S_IMODE(full.stat().st_mode))
         os.replace(temporary, full)
         return _fingerprint(content)
 
@@ -752,9 +764,10 @@ def _s3_storage(uri: str) -> Storage:
 
 
 def _local_storage(uri: str) -> Storage:
-    """O armazenamento numa pasta local, com o caminho absoluto resolvido."""
-    local_path = urllib.parse.urlsplit(uri).path if uri.startswith("file://") else uri
-    resolved = str(Path(local_path).expanduser().resolve())
+    """O armazenamento numa pasta local, com o caminho absoluto resolvido; o de uma URI
+    ``file://`` sai de ``Path.from_uri``, que decodifica o ``%XX``."""
+    local_path = Path.from_uri(uri) if uri.startswith("file://") else Path(uri)
+    resolved = str(local_path.expanduser().resolve())
     return Storage(resolved, pafs.LocalFileSystem(), resolved)
 
 

@@ -7,15 +7,16 @@ raiz nova. O modelo é o de ``Operacao``, com uma coluna de cada tipo que a cama
 ``DateTime``, ``to`` (palavra reservada) e a partição ``data_str``; e ``Canal``, sem partição.
 
 Eles conferem a criação idempotente; a substituição da partição, a versão do próprio commit, a
-tabela sem partição e o conflito de dois escritores; o registro de um arquivo como o ``UNLOAD``
-grava, as recusas das conferências, a releitura que desfaz o commit e as estatísticas que podam; a
-coluna ``Double`` com valor não finito sem mínimo e máximo; a reconciliação aditiva, a dos
-comentários e a recusa da destrutiva; a reescrita num commit; a diferença de versões pelo log e a
-recusa do log limpo; o arquivo de controle dos snapshots e os canais dele; o ``vacuum`` que
-preserva os snapshots; a compactação; a exportação nos dois modos; e a pasta copiada que abre na
-mesma versão. A extensão
-``delta`` do DuckDB precisa estar na pasta de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão
-``.duckdb/`` na raiz do repositório).
+tabela sem partição, que as mensagens chamam de tabela inteira, e o conflito de dois escritores; o
+registro de um arquivo como o ``UNLOAD`` grava, as recusas das conferências, a releitura que desfaz
+o commit e as estatísticas que podam; a coluna ``Double`` com valor não finito sem mínimo e máximo;
+o ``max_key`` sem os arquivos de zero linhas; a reconciliação aditiva, a dos comentários e a recusa
+da destrutiva; a reescrita num commit; a diferença de versões pelo log e a recusa do log limpo; o
+arquivo de controle dos snapshots e os canais dele; o ``vacuum`` que preserva os snapshots; a
+compactação; a exportação nos dois modos, com pastas novas acima do destino e com a barra final; a
+cópia profunda com o esquema da versão copiada; os caminhos fora da raiz recusados antes de gravar;
+e a pasta copiada que abre na mesma versão. A extensão ``delta`` do DuckDB precisa estar na pasta
+de extensões (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ import pyarrow.parquet as pq
 import pytest
 import sqlalchemy as sa
 from deltalake import write_deltalake
+from deltalake.transaction import AddAction
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from conftest import opened_partition_folders
@@ -321,6 +323,36 @@ def test_two_writers_on_the_same_partition_conflict(storage: Storage, uri: str,
     assert sorted(ids) == list(range(11, 21)) + list(range(51, 61))
 
 
+def test_messages_of_a_table_without_partition_name_the_whole_table(
+        storage: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Numa tabela sem partição, o conflito pelo delta-rs e pelo registro e a releitura que desfaz
+    o commit nomeiam a ``tabela inteira``, e não uma ``partição None``."""
+    uri = storage.uri_of("prd/dom_canais")
+    delta.create_table(uri, CANAIS, storage)
+    delta.publish_partition(uri, CANAIS, None, channels([1], ["app"]), METADATA, storage)
+    stale = delta.open_table(uri, storage)
+    delta.publish_partition(uri, CANAIS, None, channels([2], ["web"]), METADATA, storage)
+    path = storage.join(storage.relative(uri), "externo.parquet")
+    with storage.open_output_stream(path) as sink:
+        pq.write_table(channels([4, 5], ["loja", "agência"]), sink)
+    stats = {"min": {"id_canal": 4}, "max": {"id_canal": 5}, "null_count": {}}
+    file = RegisteredFile("externo.parquet", storage.size(path), 2, stats)
+
+    # Os dois escritores a partir da mesma versão, pelo delta-rs e pelo registro.
+    with monkeypatch.context() as patch:
+        patch.setattr(delta, "open_table", lambda *args, **kwargs: stale)
+        with pytest.raises(ExecutionConflict, match="^dom_canais tabela inteira: "):
+            delta.publish_partition(uri, CANAIS, None, channels([3], ["loja"]), METADATA,
+                                    storage)
+        with pytest.raises(ExecutionConflict, match="^dom_canais tabela inteira: "):
+            delta.register_files(uri, CANAIS, [file], None, METADATA, storage)
+
+    # O máximo falso da chave faz a releitura desfazer o commit.
+    lying = dataclasses.replace(file, stats={"min": {"id_canal": 4}, "max": {"id_canal": 4}})
+    with pytest.raises(RegistrationRefused, match="^dom_canais tabela inteira: a releitura"):
+        delta.register_files(uri, CANAIS, [lying], None, METADATA, storage)
+
+
 # ---------------------------------------------------------------- o registro de arquivos
 
 
@@ -397,6 +429,21 @@ REGISTRATION_DEFECTS = ["tamanho", "linhas", "partição do caminho", "esperadas
 # Os defeitos do próprio arquivo, que só o rodapé mostra.
 FILE_DEFECTS = ["coluna ausente", "tipo físico", "partição dentro", "ordem", "nulo em not null"]
 
+# Um trecho da mensagem da conferência de cada defeito: o caso reprova quando outra conferência
+# recusa antes da dele.
+DEFECT_MESSAGES = {
+    "tamanho": "e a ação declara",
+    "linhas": "linhas no rodapé",
+    "partição do caminho": "fora da pasta da partição",
+    "esperadas": "linhas nos arquivos",
+    "caminho absoluto": "o caminho não é relativo à pasta da tabela",
+    "coluna ausente": "coluna descricao do contrato ausente",
+    "tipo físico": "valor em BYTE_ARRAY",
+    "partição dentro": "a coluna de partição data_str está dentro do arquivo",
+    "ordem": "colunas na ordem",
+    "nulo em not null": "nulos na coluna NOT NULL data",
+}
+
 
 def defective_registration(good: RegisteredFile, name: str) -> Registration:
     """O registro do arquivo bom com o defeito ``name`` na descrição."""
@@ -443,12 +490,12 @@ def defect(storage: Storage, uri: str, name: str) -> Registration:
 
 @pytest.mark.parametrize("name", REGISTRATION_DEFECTS + FILE_DEFECTS)
 def test_register_files_refuses_each_defect(storage: Storage, uri: str, name: str) -> None:
-    """Cada conferência recusa com ``RegistrationRefused``: a versão não muda e o arquivo fica
-    órfão na pasta."""
+    """Cada conferência recusa com ``RegistrationRefused`` e a mensagem dela: a versão não muda e o
+    arquivo fica órfão na pasta."""
     files, value, expected = defect(storage, uri, name)
     folder = storage.join(storage.relative(uri), "data_str=2026-09-30")
     written = storage.list_files(folder, ".parquet")
-    with pytest.raises(RegistrationRefused):
+    with pytest.raises(RegistrationRefused, match=DEFECT_MESSAGES[name]):
         delta.register_files(uri, OPERACOES, files, value, METADATA, storage,
                              expected_rows=expected)
     assert delta.open_table(uri, storage).version() == 0
@@ -569,6 +616,48 @@ def test_max_key_reads_statistics_and_scans_without_them(storage: Storage, uri: 
     actions = pa.table(delta.open_table(uri, storage).get_add_actions(flatten=True))
     assert actions.column("max.id_operacao").null_count == 1
     assert delta.max_key(delta.open_table(uri, storage), "id_operacao") == 504
+
+
+def refuse_scan(*args: object, **kwargs: object) -> None:
+    """O ``to_pyarrow_dataset`` de uma tabela que ``max_key`` não pode varrer."""
+    raise AssertionError("max_key varreu a coluna")
+
+
+def test_max_key_leaves_out_files_without_rows(storage: Storage, uri: str,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """O arquivo de zero linhas, como o da partição vazia que o motor registra, entra no log sem
+    máximo e fica fora de ``max_key``: sozinho dá 0, e ao lado de uma partição com dados deixa o
+    máximo das estatísticas, sem varredura; o arquivo sem ``numRecords`` continua varrido."""
+    empty = rows("2026-08-31", 1, 0).drop_columns(["data_str"])
+    file = write_external_file(storage, uri, "data_str=2026-08-31/vazio.parquet", empty)
+    delta.register_files(uri, OPERACOES, [file], "2026-08-31", METADATA, storage,
+                         expected_rows=0)
+    table = delta.open_table(uri, storage)
+    actions = pa.table(table.get_add_actions(flatten=True))
+    assert actions.column("num_records").to_pylist() == [0]
+    assert actions.column("max.id_operacao").null_count == 1
+    assert delta.max_key(table, "id_operacao") == 0
+
+    # Ao lado de uma partição com dados, o máximo sai das estatísticas, sem varrer a coluna.
+    publish(storage, uri, "2026-07-31", 1, 10)
+    table = delta.open_table(uri, storage)
+    with monkeypatch.context() as patch:
+        patch.setattr(table, "to_pyarrow_dataset", refuse_scan)
+        assert delta.max_key(table, "id_operacao") == 10
+
+    # Um arquivo sem estatística alguma, nem numRecords, pode ter linhas: a varredura o lê.
+    data = rows("2026-09-30", 500, 5).drop_columns(["data_str"])
+    file = write_external_file(storage, uri, "data_str=2026-09-30/sem_contagem.parquet", data)
+    action = AddAction(path=file.path, size=file.size,
+                       partition_values={"data_str": "2026-09-30"}, modification_time=0,
+                       data_change=True, stats=None)
+    table = delta.open_table(uri, storage)
+    table.create_write_transaction([action], mode="append", schema=table.schema(),
+                                   partition_by=["data_str"])
+    table = delta.open_table(uri, storage)
+    actions = pa.table(table.get_add_actions(flatten=True))
+    assert actions.column("num_records").null_count == 1
+    assert delta.max_key(table, "id_operacao") == 504
 
 
 # ---------------------------------------------------------------- a evolução do esquema
@@ -902,6 +991,41 @@ def test_export_snapshot_copy_and_rewrite(storage: Storage, uri: str) -> None:
     assert Storage.for_uri(outside).list_files("") == []
 
 
+def test_export_by_rewrite_creates_the_folders_above(storage: Storage, uri: str) -> None:
+    """A exportação particionada por reescrita num destino com duas pastas novas acima dele grava
+    um arquivo por partição: na pasta local, o ``COPY`` do DuckDB não cria essas pastas."""
+    publish(storage, uri, "2026-07-31", 1, 10)
+    publish(storage, uri, "2026-08-31", 11, 5)
+    folder = "prd/nova/exportacao/cad_operacoes"
+    exported = delta.export_snapshot(uri, OPERACOES, storage.uri_of(folder), storage,
+                                     mode="rewrite")
+    assert len(exported) == 2
+    assert exported_measures(storage, folder) == [("2026-07-31", 10, 55), ("2026-08-31", 5, 65)]
+
+
+def test_rewrite_and_export_accept_a_trailing_slash(storage: Storage) -> None:
+    """A URI da tabela sem partição e o destino com barra final: a exportação por reescrita grava
+    ``<destino>/data.parquet``, sem ``//`` na URI devolvida nem na chave, e ``rewrite`` registra
+    o arquivo novo pelo caminho relativo à pasta da tabela."""
+    canais = storage.uri_of("prd/dom_canais")
+    delta.create_table(canais, CANAIS, storage)
+    data = channels([1, 2], ["app", "web"])
+    delta.publish_partition(canais, CANAIS, None, data, METADATA, storage)
+    folder = "prd/exportacao/dom_canais"
+    exported = delta.export_snapshot(canais, CANAIS, storage.uri_of(folder) + "/", storage,
+                                     mode="rewrite")
+    assert exported == [storage.uri_of(f"{folder}/data.parquet")]
+    assert storage.list_files(folder) == [f"{folder}/data.parquet"]
+
+    # A reescrita pela URI com barra final.
+    assert delta.rewrite(canais + "/", CANAIS, storage) == 2
+    table = delta.open_table(canais, storage)
+    paths = pa.table(table.get_add_actions(flatten=True)).column("path").to_pylist()
+    assert len(paths) == 1
+    assert re.fullmatch(r"rewrite_[0-9a-f]{32}\.parquet", paths[0]), paths
+    assert sorted(current_values(storage, canais, "id_canal")) == [1, 2]
+
+
 def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) -> None:
     """O manifesto do ``COPY`` leva a URL e o tamanho de cada arquivo da versão nas partições
     pedidas, com ``mandatory`` verdadeiro."""
@@ -977,3 +1101,54 @@ def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:
     relocated = storage.uri_of(moved)
     assert delta.open_table(relocated, storage).version() == 2
     assert scan(storage, f"SELECT count(*) FROM delta_scan('{relocated}')") == [(20,)]
+
+
+def test_deep_copy_carries_the_schema_of_the_copied_version(storage: Storage, uri: str) -> None:
+    """A cópia de uma versão sobre a cópia de uma anterior com outro esquema: o commit da partição
+    copiada leva o esquema da versão, e os dois leitores leem a coluna nova; sem partição a
+    copiar, o destino com outro esquema é recusado sem commit."""
+    publish(storage, uri, "2026-07-31", 1, 10)
+    archive = storage.uri_of("prd/arquivo/2026T3/cad_operacoes")
+    assert delta.deep_copy(uri, 1, archive, storage) == 1
+
+    # A coluna nova só no metaData da versão 2: nenhuma partição a copiar a leva ao destino.
+    model = evolved(add=[sa.Column("canal", sa.String(20), comment="Canal")])
+    delta.reconcile(uri, model, storage)
+    with pytest.raises(RegistrationRefused, match="canal ausente da cópia"):
+        delta.deep_copy(uri, 2, archive, storage)
+    assert delta.open_table(archive, storage).version() == 1
+
+    # A partição de agosto com a coluna nova, na versão 3: o commit dela leva o esquema.
+    august = rows("2026-08-31", 11, 10).append_column("canal", pa.array(["web"] * 10))
+    delta.publish_partition(uri, model, "2026-08-31", schema.cast(august, model), METADATA,
+                            storage)
+    assert delta.deep_copy(uri, 3, archive, storage) == 2
+    copied = pa.schema(delta.open_table(archive, storage).schema())
+    expected = pa.schema(delta.open_table(uri, storage, version=3).schema())
+    assert copied.equals(expected, check_metadata=True)
+    channels_read = collections.Counter(current_values(storage, archive, "canal"))
+    assert channels_read == {None: 10, "web": 10}
+    assert scan(storage, f"SELECT count(canal) FROM delta_scan('{archive}')") == [(10,)]
+
+
+def test_deep_copy_and_rewrite_refuse_paths_outside_the_root(storage: Storage, uri: str) -> None:
+    """``deep_copy`` com o destino ou a origem fora da raiz e ``rewrite`` de uma tabela fora dela
+    são ``ValueError`` antes de gravar: nada aparece fora da raiz nem no destino dentro dela."""
+    publish(storage, uri, "2026-07-31", 1, 10)
+    outside = Storage.for_uri(storage.uri + "-fora")
+    with pytest.raises(ValueError, match="fora da raiz"):
+        delta.deep_copy(uri, 1, outside.uri_of("prd/cad_operacoes"), storage)
+    assert not outside.exists("")
+
+    # Uma tabela fora da raiz, como origem da cópia e como alvo da reescrita.
+    outside_uri = outside.uri_of("prd/cad_operacoes")
+    delta.create_table(outside_uri, OPERACOES, outside)
+    publish(outside, outside_uri, "2026-07-31", 1, 10)
+    written = every_file(outside, "prd")
+    archive = storage.uri_of("prd/arquivo/2026T3/cad_operacoes")
+    with pytest.raises(ValueError, match="fora da raiz"):
+        delta.deep_copy(outside_uri, 1, archive, storage)
+    assert not storage.exists("prd/arquivo")
+    with pytest.raises(ValueError, match="fora da raiz"):
+        delta.rewrite(outside_uri, OPERACOES, storage)
+    assert every_file(outside, "prd") == written
