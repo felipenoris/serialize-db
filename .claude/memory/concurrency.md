@@ -54,7 +54,11 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   through the file peaked at 106 MB against 83 MB direct and 322 MB for the whole table. What the
   single session gives up: four 150,000-row tables ingested by `delta_scan` took 0.061 s in series
   against 0.017 s in four cursors, so `ingest` lost `max_workers`; S3 is unmeasured.
-  `publish_redshift` keeps a connection per table, outside the sandbox session. `plan/PLAN.md`,
+  `publish_redshift` keeps a connection per table, outside the sandbox session. Since then the
+  Redshift `stream` goes through `UNLOAD ... PARALLEL OFF`, with the files read by a helper thread,
+  and `query` through the cursor (user decision of 2026-09-23), and the DuckDB `loader` is the
+  `appender` (user decision of 2026-09-28), with the same IPC file and `INSERT ... BY NAME` at
+  `close`. `plan/PLAN.md`,
   `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/POC.md`, `tests/proof_of_concept/test_parallel.py`
 - The DuckDB `stream` writes each batch while the query runs (2026-09-23): a helper thread takes the
   session lock, pulls `to_arrow_reader`, writes each batch to the Arrow IPC spool and counts the
@@ -109,7 +113,8 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   1.086 → 0.908 s with a lagging client (96 batches spilled, 297 MB peak; 256 MiB gave 0.839 s at
   522 MB). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
 - The stage 4 sketches (2026-09-23; `test_parallel.py` held them until the review of the same day
-  retired them, user decision, and `DuckDBStream` and `DuckDBLoader` implement them):
+  retired them, user decision, and `DuckDBStream` and `DuckDBLoader` implemented them; the loader
+  is `DuckDBAppender` since 2026-09-28, and `create_table` creates the table):
   `BatchStream.close` sets `stop` and,
   under the spool's condition while the query has not marked its end, calls the connection's
   `interrupt()`, which never reaches another command because the producer marks the end under the
@@ -126,8 +131,12 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   session, never reads old rows: the reference `Loader` creates the table only at `close` and
   refuses a taken name, so no sandbox table has a previous state (probe and
   `test_engine_duckdb.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows`, six
-  green runs, 2026-09-23, macOS). The table barrier left the plan for that reason. `plan/POC.md`,
-  `plan/PLAN-STAGE-4.md`
+  green runs, 2026-09-23, macOS). The table barrier left the plan for that reason. The property is
+  lost since 2026-09-28 (user decision, PR #103): the table exists before the `append`, from
+  `create_table` or `ingest(materialize=True)`, and a read during an `append` in flight sees the
+  table without the new rows
+  (`test_engine_duckdb.py::test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows`,
+  `.claude/memory/decisions.md`). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
 
 - A pool that receives every task at once cannot promise that nothing new starts after the first
   failure: with one worker, the worker took the third table before the main loop saw the second
@@ -135,7 +144,8 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   `test_parallel.py` passed only because each task slept 0.5 s. `Execution.publish_delta` submits a
   table only when a worker is free and no failure arrived, and the failure goes up with its own type
   and each table's outcome in a note (`add_note`) (2026-09-23); `run.ingest` uses the same pool
-  function (`_run_in_pool`) with one worker per table, so every table starts at once and all finish.
+  function (`_run_in_pool`, `serialize_db._pool.run_in_pool` since 2026-09-24) with one worker per
+  table, so every table starts at once and all finish.
   Under load, DuckDB can hand a stream's first batch only at the
   end of the query (4.531 s in a three-process reproducer, with the second batch already in memory),
   so a test that closes a stream "mid-query" asserts the thread ended and the session is free, with

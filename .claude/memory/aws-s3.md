@@ -35,8 +35,10 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   when `NO_PROXY` is absent: an empty `NO_PROXY`, what a shell opened by the Claude Code extension
   has, sends the credential call through the proxy, which answers 403; absent, exported from
   `no_proxy` or `169.254.170.2` alone passes (isolated 2026-09-20; the 2026-09-19 403 was this). The
-  library exports `NO_PROXY` from `no_proxy` when absent or empty and keeps `storage_options` with
-  the `boto3` credentials as the fallback. `plan/delta.md`, `plan/estrategia.md`
+  library exports `NO_PROXY` from `no_proxy` when absent or empty; its `storage_options` carries no
+  credential (decision of 2026-09-22, `.claude/memory/decisions.md`), and
+  `test_delta_rs_storage_options_fallback` keeps measuring the `boto3` fallback's shape.
+  `plan/delta.md`, `plan/estrategia.md`
 - botocore 1.43.98 reads `AWS_DEFAULT_REGION` or the profile, never `AWS_REGION`, and without a
   region uses the global endpoint `s3.amazonaws.com`, which a regional VPC endpoint does not serve;
   delta-rs reads both variables and without either queries IMDS and falls back to `us-east-1`. The S3

@@ -78,6 +78,33 @@ deltalake 1.6.4, pyarrow 25.0.1, `sa-east-1`), and finished the whole `SUITE.md`
 the audit, `history`, `snapshot`, `vacuum`, `archive` and the publication of the whole base;
 `export`, `compact` and the threads probe did not run. `plan/POC.md`
 
+The first target run of 2026-09-24 at 05:10 passed five of the six engine cases (`COPY ...
+MANIFEST`, `UNLOAD`, the loader, the audit, the export by registration, the `NaN` swap) and failed
+`current_database()`, described as `name` (OID 19), mapped to `string` since; the publication cases
+did not run because the target's local root folder was missing (they carry `local` now). The battery
+of 2026-09-24 at 12:38 passed the six engine cases and the eight publication cases twice each: the
+Redshift `COPY` of DuckDB-written files, the `svv_all_columns` spelling, the `1023` through the
+library as `ExecutionConflict`, the `EXPLAIN` of the join (`DS_DIST_ALL_NONE`), the missing relation
+as `XX000` with `Relation <name> does not exist in the database.` (the stand-in imitates it since)
+and the JSON column of the `UNLOAD` file as `VARCHAR` through `delta_scan`; the `PARALLEL OFF`
+threshold of 5,000,000 rows stays an unmeasured choice. The load through the package ran in the
+target on 2026-09-24 at 14:16 in the root layout `<root>/<environment>/<table>`: the 12 tables
+matched, `cad_lancamentos` peaked at 16,198 MB under a 14,030 MiB limit, and the audit with
+`--foreign-keys` read the known 989,852 orphans of 2026-01-31. In the target on 2026-09-24
+`history`, `snapshot` and `vacuum` ran, and `archive` died in pyarrow's single `CopyObject` of a
+`cad_lancamentos` file (the AWS SDK's 3-second low-speed limit): `Storage.copy` on S3 is boto3's
+managed copy since, `deep_copy` resumes an interrupted copy and `archive` no longer skips a table
+present in the archive. The battery of 2026-09-24 at 16:51, on the root loaded anew
+(`cad_lancamentos` 19.9 s to 31.8 s per partition, peak 16,355 MB), ran the whole flow: `archive`
+copied the 21 files of the 12 tables through the managed transfer and moved the entry, and
+`serialize-db publish` (`--init`, `--tables cad_contas`, `--max-workers 4`, `--status`) put the 12
+tables in Redshift as `prod_<table>`, `cad_lancamentos` at version 4 with 141,901,795 rows. The
+battery of 2026-09-24 at 23:25, on a new root in `prd`, passed every suite case (S3 481, Redshift 44
+twice, engine 6 and publication 8 twice each) and read them: `archive` of `cad_lancamentos` 11.1 s,
+its publication 153.9 s at a 273 MB peak, the first `export` 8.8 s by copy and 17.3 s at 5,425 MB by
+`--mode rewrite`; `compact` ran only on a one-file partition, which does not commit, so a real
+compaction stays unread there (`plan/POC.md`).
+
 The three target-only suites ran in the target on 2026-09-23 from `main`, at 18:48 and again at
 22:53 (S3, 445 passed with the `VmHWM` memory measurements) and 22:56 and 23:01 (Redshift, 30
 passed each): the stream with literals, the empty `UNLOAD` with `pg_last_unload_count()` 0, the
@@ -141,9 +168,11 @@ to 18:38:25 with no read failing, and `probes/duckdb_threads.py` from 17:35:54 b
 
 ## The prepared folder and the venv
 
-`pyproject.toml` declares no runtime dependencies and pins the `dev` group (SQLAlchemy, duckdb-engine,
-sqlalchemy-redshift and pandas were added on 2026-09-19 for the study suites; `prepare_offline.sh`
-must be rerun).
+On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group
+(SQLAlchemy, duckdb-engine, sqlalchemy-redshift and pandas were added that day for the study
+suites). The runtime dependencies are pinned in `[project]` since the package code, with
+`redshift-connector==2.1.17` among them since 2026-09-25 (PR #95), and `prepare_offline.sh` must be
+rerun whenever one is added.
 
 The suites exist so the same proof of concept runs in the target, without internet; the local suite
 validates the prepared folder there (verified 2026-09-19: extracted at another path with dead proxies

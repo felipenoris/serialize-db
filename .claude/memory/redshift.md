@@ -215,7 +215,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   schema-qualified, gets `RAW` encoding by default unless a column says `ENCODE`, and is absent
   from `svv_table_info`. `redshift_connector.Cursor.execute` delegates to `Connection.execute`, so
   every cursor of a connection is the same session. `plan/redshift.md`
-- The Redshift engine keeps one session per execution under a `threading.Lock` (user decision of
+- The Redshift engine keeps one session per execution under a `threading.RLock` (user decision of
   2026-09-22), the `exec_<id>_*` tables stay permanent in the datashare schema, and the user
   reverted the temporary-table proposal the same day; a temporary table the pipeline creates in
   the session is lost when the engine reconnects. `plan/PLAN-STAGE-5.md`

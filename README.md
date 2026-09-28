@@ -88,7 +88,8 @@ imprime o comando que a autoriza.
 
 Os testes de `tests/`, sem `tests/proof_of_concept/` nem `tests/test_probes.py` (as funções puras
 dos probes), sobre o DuckDB em memória e arquivos locais, sem AWS. É o que a esteira
-[`tests.yml`](.github/workflows/tests.yml) roda a cada push e pull request:
+[`tests.yml`](.github/workflows/tests.yml) roda a cada push no `main`, a cada pull request e
+quando disparada à mão:
 
 ```
 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py
@@ -128,10 +129,11 @@ for extension in httpfs delta; do
 done
 ```
 
-As três suítes do ambiente alvo no substituto:
+As suítes do ambiente alvo no substituto, com a pasta local que os casos `redshift` da publicação
+e do leitor também usam:
 
 ```
-SERIALIZE_DB_TEST_EMULATOR=1 uv run --group emulator pytest tests/proof_of_concept/test_s3.py tests/proof_of_concept/test_redshift.py tests/proof_of_concept/test_redshift_transactions.py tests/test_engine_redshift.py tests/test_publication.py tests/test_reader.py
+SERIALIZE_DB_TEST_EMULATOR=1 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run --group emulator pytest tests/proof_of_concept/test_s3.py tests/proof_of_concept/test_redshift.py tests/proof_of_concept/test_redshift_transactions.py tests/test_engine_redshift.py tests/test_publication.py tests/test_reader.py
 ```
 
 Com `SERIALIZE_DB_TEST_LOCAL_ROOT` também, a sessão roda todos os testes, e os testes `s3` do
@@ -180,6 +182,7 @@ export SERIALIZE_DB_REDSHIFT_DATABASE=dev
 export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
 export SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=sbx_aco_decon
 export SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo
+export SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente
 SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_1.json .venv/bin/python -m pytest -m redshift
 SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m pytest -m redshift
 ```

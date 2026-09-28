@@ -272,17 +272,18 @@ The budget above is never a reason to drop a fact: what does not fit here goes t
 ## Repository index
 
 Read the file listed here before researching its subject again. Each document names the pages it
-came from, and `REFERENCES.md` collects every URL consulted so far, grouped by subject: Parquet
-format, Redshift, DuckDB, PyArrow, SQLAlchemy, pandas, PyIceberg, Glue Data Catalog, Athena, Lake
-Formation, SageMaker Unified Studio, S3, the Python standard library, Linux and EC2, Python packages, Delta Lake, DuckLake, Hudi, SQL tooling
-(SQLGlot, SQLMesh, dbt, Ibis, dlt), data-contract tools, Rust/PyO3 and consulted repositories. New
-research appends to the matching group.
+came from, and `REFERENCES.md` collects every URL consulted so far, grouped by subject: reference
+projects, Parquet format, Redshift, DuckDB, PyArrow, SQLAlchemy, pandas, PostgreSQL, PyIceberg,
+Glue Data Catalog, Athena, Lake Formation, SageMaker Unified Studio, S3, the Python standard
+library, Linux and EC2, Python packages, Delta Lake, DuckLake, Hudi, Apache Hive, SQL tooling
+(SQLGlot, SQLMesh, dbt, Ibis, dlt), data-contract tools, Rust/PyO3, the sources list and consulted
+repositories. New research appends to the matching group.
 
 | File | Subject |
 | --- | --- |
 | `README.md` | `uv sync` (with the `dev` group by default), the `pdoc` build, and only the commands: the package tests (the GitHub workflow's command), the stand-in run of the target-only suites (`SERIALIZE_DB_TEST_EMULATOR`, `uv run --group emulator`, local only), the AWS tests (`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` switches the Redshift suite on, `-m "not redshift"` off), the variables table, the probe commands and the migration script's commands; the two workflow badges open it. What each test does lives in the header of its file, and the suites' writes, permissions and report in the header of `tests/conftest.py` (user decision of 2026-09-21). |
 | `docs/` | The package documentation for `pdoc` (user decision of 2026-09-21): `docs/index.md` is the main page, included by the docstring of `src/serialize_db/__init__.py`, with the client's installation, how the package works, the tutorial, the retention of removed files (the 400 days, the versioned bucket's `NoncurrentVersionExpiration`, how to change them) and the type mapping table; `docs/operacao.md` is the stage 9 runbook followed by the options of each `serialize-db` subcommand, included by the docstring of `src/serialize_db/cli.py`; `uv run pdoc serialize_db --docformat restructuredtext -o site` builds it. Docstring examples open with `.. code-block:: python` (or `shell`), the only form pdoc highlights, and the docstring standard is "Python Code Style", section "Docstrings". |
-| `.github/` | `tests.yml` imports every module after `uv sync --no-dev`, then installs the DuckDB `delta` and `httpfs` extensions into `.duckdb/` and runs `tests/` without `tests/proof_of_concept/` and `tests/test_probes.py` on push and pull request; `docs.yml` publishes the `pdoc` site to <https://felipenoris.github.io/serialize-db/> on push to `main` (the repository's Pages source must be "GitHub Actions"). |
+| `.github/` | `tests.yml` imports every module after `uv sync --no-dev`, then installs the DuckDB `delta` and `httpfs` extensions into `.duckdb/` and runs `tests/` without `tests/proof_of_concept/` and `tests/test_probes.py` on push to `main`, on pull request and by hand; `docs.yml` publishes the `pdoc` site to <https://felipenoris.github.io/serialize-db/> on push to `main` (the repository's Pages source must be "GitHub Actions"). |
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, every `pyproject.toml` group and extra in `.venv/` (`uv sync --all-groups --all-extras`), DuckDB extensions in `.duckdb/`, all links relative. **Rerun it whenever a dependency is added**; a new DuckDB extension, a Python version change or another runtime asset is added by hand. Only a folder prepared on Linux x86_64 serves the SageMaker space; the header is the operating procedure, and the extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`. |
 | `examples/` | The scripts the user ran in the target, kept as run but for the masked identifiers in the bucket path: `redshift_native.py`, `redshift_data_api.py`, `redshift_copy_unload.py` (2026-09-20) and `redshift_manifest.py` (2026-09-21, the prerequisites of `export_partition`); `examples/README.md` says what each one fixes. The probe, the suite and stage 5 repeat their calls, and the target they fix is in `.claude/memory/redshift.md`. |
 | `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `examples/redshift_native.py`), `catalog.py`, `parquet_source.py` (`--sample N`), `duckdb_threads.py` (the `threads` of the DuckDB engine ingesting the migrated Delta tables, each configuration in a new process with the external file cache off) and `credentials.py` (the library's clients held past the credential's expiry, about an hour), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, with no network but one DNS lookup; its cases that write a report or fabricated files are `local`. `consistencia/` holds consistency probes of 2026-09-25 and `probe_append_test.py` (2026-09-28), under `SERIALIZE_DB_TEST_LOCAL_ROOT` (pytest ones in `poc<id>`); commands in `SUITE.md`. |
@@ -338,10 +339,12 @@ A new lesson adds its story there and its rule here, in the same commit.
   to the scratchpad, both green and both with the `AWS_*` variables removed (`env -u AWS_ACCESS_KEY_ID
   -u AWS_SECRET_ACCESS_KEY AWS_EC2_METADATA_DISABLED=true`), because this container exports a
   credential and the GitHub runner has none (2026-09-24); before a push that touches what the target-only suites cover
-  (`storage` and `delta` on S3, `audit` on Redshift, `tests/conftest.py`, `tests/emulator.py`, the
-  suites themselves), the three suites on the stand-in, `SERIALIZE_DB_TEST_EMULATOR=1 uv run --group
-  emulator pytest ...` as in `README.md`, which the GitHub workflow does not run (user decision of
-  2026-09-23); `py_compile` on an edited probe; every `](...md)` link target checked;
+  (`storage` and `delta` on S3, `audit`, `engine.redshift`, `publication` and `reader` on Redshift,
+  `tests/conftest.py`, `tests/emulator.py`, the suites themselves), the target-only suites on the
+  stand-in with the local root,
+  `SERIALIZE_DB_TEST_EMULATOR=1 SERIALIZE_DB_TEST_LOCAL_ROOT=... uv run --group emulator pytest ...`
+  as in `README.md`, which the GitHub workflow does not run (user decision of 2026-09-23);
+  `py_compile` on an edited probe; every `](...md)` link target checked;
   `git status` clean of stray files; this file under budget; `git branch --show-current` a `claude/`
   branch whose PR is still open (`gh pr view --json state`), because the user merges and syncs `main`
   between turns, and a merged PR means a new branch (2026-09-21).
@@ -646,8 +649,9 @@ dependency group. Every variable the project requires starts with `SERIALIZE_DB_
 library's own, `SERIALIZE_DB_REDSHIFT_*`, `SERIALIZE_DB_TEST_*`, `SERIALIZE_DB_DUCKDB_EXTENSIONS`);
 the unprefixed ones the probes and the suites read are third-party standards (`AWS_REGION`,
 `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL*`, `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, the proxy
-variables in both spellings), read by the libraries that define them, and renaming them would break
-those libraries. The S3 root a probe photographs comes from `probelib.s3_root`: the argument, then
+variables in both spellings, and the proxy's `username` and `password`), read by the libraries
+that define them, and renaming them would break those libraries. The S3 root a probe photographs
+comes from `probelib.s3_root`: the argument, then
 `SERIALIZE_DB_ROOT`, then `SERIALIZE_DB_TEST_S3_ROOT` (user question of 2026-09-20; `S3_TMP_PATH` is
 the space's, not the project's, and nothing in the repository reads it). Data tables and columns stay Portuguese, including the `id_execucao` column of the `Rastreio`
 mixin in `plan/sqlalchemy.md`. SQL placeholders in prose (`COPY (consulta) TO ...`) and staging
@@ -676,46 +680,22 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   `Execution(..., redshift=RedshiftConfig(...))` with `publish_redshift`, `serialize-db publish`,
   `serialize-db run --redshift` and `--engine redshift`, `serialize-db audit --engine redshift`);
   their `redshift`-marked cases (6 in `tests/test_engine_redshift.py`, 8 in
-  `tests/test_publication.py`) passed on the stand-in. The first target run of 2026-09-24 at
-  05:10 passed five of the six engine cases (`COPY ... MANIFEST`, `UNLOAD`, the loader, the
-  audit, the export by registration, the `NaN` swap) and failed `current_database()`, described
-  as `name` (OID 19), mapped to `string` since; the publication cases did not run because the
-  target's local root folder was missing (they carry `local` now). The battery of 2026-09-24 at
-  12:38 passed the six engine cases and the eight publication cases twice each: the Redshift
-  `COPY` of DuckDB-written files, the `svv_all_columns` spelling, the `1023` through the library
-  as `ExecutionConflict`, the `EXPLAIN` of the join (`DS_DIST_ALL_NONE`), the missing relation as
-  `XX000` with `Relation <name> does not exist in the database.` (the stand-in imitates it since)
-  and the JSON column of the `UNLOAD` file as `VARCHAR` through `delta_scan`; the `PARALLEL OFF`
-  threshold of 5,000,000 rows stays an unmeasured choice. The user decided
+  `tests/test_publication.py`) passed on the stand-in. The user decided
   on 2026-09-24 the explicit `RedshiftConfig` for the publication (`Execution(...,
   redshift=...)`; without it `publish_redshift` refuses), the new suites' commands listed in the
   report rather than added to `SUITE.md`, and `redshift-connector==2.1.17` in the `redshift`
   extra, moved to the runtime dependencies by the user's decision of 2026-09-25. Stage 7 was
   implemented on 2026-09-24 over the fixture base (`serialize_db.load`,
   `serialize-db load`, the migration script thin over the package without the variant
-  measurement, both user decisions of that day); the load through the package ran in the target on
-  2026-09-24 at 14:16 in the root layout `<root>/<environment>/<table>`: the 12 tables matched,
-  `cad_lancamentos` peaked at 16,198 MB under a 14,030 MiB limit, and the audit with
-  `--foreign-keys` read the known 989,852 orphans of 2026-01-31. Stage 9 was
+  measurement, both user decisions of that day). Stage 9 was
   implemented the same day in the local folder: `serialize-db snapshot|vacuum|compact|archive|
   export|history`, `delta.history`, `delta.archive_snapshot`, `deep_copy` by copying each
   partition's files and registering them with the version's own statistics, and the runbook
-  `docs/operacao.md`. In the target on 2026-09-24 `history`, `snapshot` and `vacuum` ran, and
-  `archive` died in pyarrow's single `CopyObject` of a `cad_lancamentos` file (the AWS SDK's
-  3-second low-speed limit): `Storage.copy` on S3 is boto3's managed copy since, `deep_copy`
-  resumes an interrupted copy and `archive` no longer skips a table present in the archive. The
-  battery of 16:51 the same day, on the root loaded anew (`cad_lancamentos` 19.9 s to 31.8 s per
-  partition, peak 16,355 MB), ran the whole flow: `archive` copied the 21 files of the 12 tables
-  through the managed transfer and moved the entry, and `serialize-db publish` (`--init`,
-  `--tables cad_contas`, `--max-workers 4`, `--status`) put the 12 tables in Redshift as
-  `prod_<table>`, `cad_lancamentos` at version 4 with 141,901,795 rows. Since the user's decision
-  of 2026-09-24, `compact`, `archive` and `export` print the duration and the peak RSS per table,
-  the publication logs them per table and `deep_copy` logs each partition's copy time. The battery
-  of 2026-09-24 at 23:25, on a new root in `prd`, passed every suite case (S3 481, Redshift 44
-  twice, engine 6 and publication 8 twice each) and read them: `archive` of `cad_lancamentos`
-  11.1 s, its publication 153.9 s at a 273 MB peak, the first `export` 8.8 s by copy and
-  17.3 s at 5,425 MB by `--mode rewrite`; `compact` ran only on a one-file partition, which does
-  not commit, so a real compaction stays unread there (`plan/POC.md`). The
+  `docs/operacao.md`. `Storage.copy` on S3 is boto3's managed copy, `deep_copy` resumes an
+  interrupted copy and `archive` no longer skips a table present in the archive. Since the user's
+  decision of 2026-09-24, `compact`, `archive` and `export` print the duration and the peak RSS
+  per table, the publication logs them per table and `deep_copy` logs each partition's copy
+  time. The
   DuckDB engine and the migration script take `threads` and `memory_limit` from the environment at
   each opening (user instruction of 2026-09-24, replacing the 2026-09-22 DuckDB default). The review of stages 3 and 4 of 2026-09-23 corrected both stage files
   (compile path, `ingest` pruning, `S3FileSystem` region, conflict mapping, audit functions as
@@ -800,8 +780,20 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   it changes; the battery of 2026-09-26 passed every suite case again (S3 531, the stale-key case
   among them), loaded the source's new month 2026-07-31 (`.claude/memory/source-base.md`),
   published the whole base by channel and read, in the probe, the engine's secret renewed before
-  each expiry (`plan/POC.md`). The target runs of 2026-09-23 are in
+  each expiry (`plan/POC.md`). The target runs of 2026-09-23 and 2026-09-24 are in
   `.claude/memory/environments.md`.
+- The battery of 2026-09-27 repeated the probes of 2026-09-26 but the corrected lines
+  (`.claude/memory/environments.md`). The user's decisions of 2026-09-27 and 2026-09-28
+  (`.claude/memory/decisions.md`): `Execution(partition=None)` for the domain tables, with
+  `--partition` optional in `serialize-db run`; `run.publish_delta`, `run.pinned_delta` and
+  `serialize-db publish_redshift` in place of `run.publish`, `run.published` and
+  `serialize-db publish`, with no alias; `create_table`, `append` and `appender` in place of
+  `load` and `loader` in both engines, the DuckDB `ingest(materialize=True)` running the DDL and
+  `INSERT ... BY NAME` from `delta_scan`, and a read during an `append` in flight seeing the
+  table without the new rows. `tests/test_pipeline.py` runs the monthly pipeline end to end on
+  DuckDB over the fixture base, and the tutorial in `docs/index.md` uses `run.sandbox`. The
+  repository review of 2026-09-28 fixed what needed no decision, and the rest waits in
+  `plan/OPEN_QUESTIONS.md`.
 - The user's answers of 2026-09-23 to the pending decisions closed the stage 1 time zone refusal,
   the stage 8 `FILLRECORD`, JSON ceiling and `VARCHAR(n)` width, the stage 9 runbook place,
   400-day retention and the sibling `archived` key, and the pytest temporary folder (the writing

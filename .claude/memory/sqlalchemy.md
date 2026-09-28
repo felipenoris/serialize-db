@@ -108,8 +108,10 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   `RedshiftDialect_redshift_connector()` are `format`. A statement compiled with the named dialect
   and no `literal_binds` renders constants and `bindparam` as `:name`,
   `compiled.construct_params(params)` merges both, and the text with `$name` runs on the raw
-  DuckDB connection: the engines' default path since 2026-09-22 (user decision), the versioned
-  SQL text being the optional migration path. On a `sqlalchemy.Connection` built outside the
+  DuckDB connection: the engines' default path on 2026-09-22 (user decision), replaced on
+  2026-09-23 by the `qmark` style (`duckdb_engine.Dialect(paramstyle="qmark")` and the
+  positional list of `positiontup`, `decisions.md`); `$name` stays only for the SQL text through
+  `sql.bind`, the optional migration path. On a `sqlalchemy.Connection` built outside the
   library (`duckdb_engine`), a client-model statement with `bindparam` runs and `"to"` is quoted
   by the dialect; one with `sql.param` fails (`Parser Error: syntax error at or near ":"`), so
   `render` maps a valueless `bindparam` to `:name` by `replacement_traverse` (original intact)

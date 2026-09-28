@@ -482,7 +482,8 @@ partição, contra as demais partições da versão fixada, e o órfão de chave
 `serialize_db.errors.AuditFailed` na reprovação. O relatório traz o SQL de cada verificação, até 20
 linhas de amostra das reprovadas, as somas de controle e as colunas `Double` com `NaN` ou infinito,
 que `run.publish_delta` grava sem mínimo e máximo. `serialize_db.audit.audit_sql(table, "redshift")`
-imprime o texto de cada verificação, para depuração.
+devolve o texto de cada verificação pelo nome dela, para depuração, e `serialize-db audit --sql`
+o imprime.
 
 `run.publish_delta` leva cada partição auditada ao Delta pelo `export_partition` do motor: o motor
 DuckDB registra o arquivo que o seu `COPY` gravou, e o motor Redshift os arquivos do seu `UNLOAD`,

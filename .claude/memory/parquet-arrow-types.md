@@ -8,7 +8,9 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   as `INT64` and writes no page index; PyArrow writes `required` and `FIXED_LEN_BYTE_ARRAY(8)`.
   `plan/parquet.md`
 - delta-rs, DuckLake and DuckDB all write `DECIMAL(18, 2)` as `INT64`; PyArrow writes
-  `FIXED_LEN_BYTE_ARRAY`. The pending Redshift `COPY` test covers all three. `plan/estrategia.md`
+  `FIXED_LEN_BYTE_ARRAY`. The Redshift `COPY ... MANIFEST` loaded the delta-rs files on 2026-09-21
+  and the DuckDB files in the battery of 2026-09-24 at 12:38 (`redshift.md`).
+  `plan/estrategia.md`, `plan/POC.md`
 - delta-rs maps the contract types from Arrow as `short`, `integer`, `long`, `boolean`, `double`,
   `decimal(p,s)`, `string`, `date`, `timestamp_ntz` (naive) and `timestamp` (UTC); a naive timestamp
   column raises the protocol to reader 3 / writer 7 with the `timestampNtz` feature, which DuckDB
@@ -26,8 +28,8 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   with the `JSON` logical type, which pyarrow reads as `extension<arrow.json>`; the engine's
   `export_partition` casts a `sa.JSON` column to DuckDB `JSON`, `register_files` accepts the file
   (physical type only), and `delta_scan` reads it as `VARCHAR` text, delta-rs as `string` (probe
-  of 2026-09-24). The Redshift `COPY` of a DuckDB-written file has not run in the target.
-  `plan/POC.md`, `plan/PLAN-STAGE-8.md`, `plan/OPEN_QUESTIONS.md`
+  of 2026-09-24). The Redshift `COPY` of a DuckDB-written file ran in the battery of 2026-09-24 at
+  12:38 (`tests/test_publication.py`, `redshift.md`). `plan/POC.md`, `plan/PLAN-STAGE-8.md`
 
 ## The type contract
 
@@ -57,7 +59,8 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
 - A `RecordBatch` built by columns from `fetchmany` tuples (`zip(*rows)`, `pa.array(column,
   type=field.type)`) took 0.03 s for 200,000 rows in four columns against 0.10 s for
   `RecordBatch.from_pylist` of dicts, after the first call paid the lazy import (0.16 s and 0.24 s);
-  the Redshift `stream` builds by columns. `RecordBatch.from_arrays(columns, schema=...)` casts each
+  the Redshift `query` builds by columns (`table_from_cursor`), while its `stream` goes through
+  `UNLOAD` since 2026-09-23. `RecordBatch.from_arrays(columns, schema=...)` casts each
   column to the schema type and raises `ArrowInvalid` on a lossy decimal rescale, so `cast` wraps it.
   `duckdb_engine` DDL spells `NUMERIC(18, 2)`, `DOUBLE PRECISION` and `TEXT`, which DuckDB records as
   `DECIMAL(18,2)`, `DOUBLE` and `VARCHAR`. A column's default `autoincrement` is the string `"auto"`.
@@ -81,8 +84,9 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   and the second cast checks each value against `p` (`1000` into `(5, 2)`: `Decimal value does not
   fit in precision 5`).
 - `timestamp[us, tz=...]` to naive `timestamp[us]` passes with `safe=True` and keeps the UTC
-  instant as wall time; naive to tz-aware assumes UTC. `cast` accepts both today (pending decision
-  in `plan/OPEN_QUESTIONS.md`). `plan/POC.md`
+  instant as wall time; naive to tz-aware assumes UTC. `cast` refuses both with `ContractError`
+  since the user's decision of 2026-09-23 (`_refuse_time_zone_change`). `plan/POC.md`,
+  `plan/PLAN-STAGE-1.md`
 
 ## Footer statistics and the JSON logical type read by pyarrow 25 (2026-09-24)
 
