@@ -218,6 +218,11 @@ folder of its own (`/process_api/<id>/claude-code-bash`) with `memory.limit_in_b
 16,481,980 kB, no CPU quota, one thread per core (`lscpu`, `smt/control` `notsupported`).
 `available_memory()` reads 14,197,641,216 bytes there (the cgroup room) and `environment_limits()`
 gives 4 threads and 6,761 MiB. `plan/POC.md`
+Shared memory counts in the cgroup's file cache and cannot be reclaimed: 256 MiB of shared `mmap`
+in that container (no swap) raised `total_cache` and `total_shmem` by 256 MiB each, the old room
+(limit − usage + cache) fell 2 MiB and the room since 2026-09-28 (minus `total_shmem` in v1,
+`shmem` in v2) fell 274 MiB, as the usage rose 274 MiB; the kernel's cgroup-v2 text says `file`
+includes tmpfs and shared memory. `plan/PLAN-STAGE-4.md`, `plan/POC.md`
 
 The battery of 2026-09-24 at 01:41 to 02:19 UTC ran on a 16 vCPU (two per physical core) and
 31,159 MB instance, DuckDB defaulting to 16 threads and a 24.3 GiB `memory_limit`,

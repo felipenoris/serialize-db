@@ -292,7 +292,7 @@ def build_parser(environ: Mapping[str, str]) -> argparse.ArgumentParser:
 
 def test_command_line_parsing() -> None:
     """``argparse`` com subcomandos aninhados, escolhas, validação de tipo e padrões vindos do
-    ambiente."""
+    ambiente, que o ``type=`` confere e o ``choices`` não."""
     parser = build_parser({"SERIALIZE_DB_ROOT": "s3://bucket/projeto/delta"})
     metadata = "pipeline.models:Base.metadata"
 
@@ -333,6 +333,16 @@ def test_command_line_parsing() -> None:
         build_parser({}).parse_args(["run", *valid_run])
     with pytest.raises(SystemExit):
         build_parser({"SERIALIZE_DB_ROOT": ""}).parse_args(["run", *valid_run])
+
+    # O choices não confere o padrão: o motor da variável fora das escolhas passa calado. O type=
+    # confere o padrão em texto como um argumento da linha de comando, com o erro de uso.
+    from_variable = build_parser({"SERIALIZE_DB_ROOT": "raiz", "SERIALIZE_DB_ENGINE": "spark"})
+    assert from_variable.parse_args(["run", *valid_run]).engine == "spark"
+    typed_default = argparse.ArgumentParser()
+    typed_default.add_argument("--partition", type=partition_argument, default="2026/08/31")
+    with pytest.raises(SystemExit) as exit_info:
+        typed_default.parse_args([])
+    assert exit_info.value.code == 2
 
 
 def test_execution_log(caplog: pytest.LogCaptureFixture) -> None:

@@ -136,8 +136,8 @@ e do leitor também usam:
 SERIALIZE_DB_TEST_EMULATOR=1 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run --group emulator pytest tests/proof_of_concept/test_s3.py tests/proof_of_concept/test_redshift.py tests/proof_of_concept/test_redshift_transactions.py tests/test_engine_redshift.py tests/test_publication.py tests/test_reader.py
 ```
 
-Com `SERIALIZE_DB_TEST_LOCAL_ROOT` também, a sessão roda todos os testes, e os testes `s3` do
-pacote passam pelo moto:
+Sem a lista de arquivos, a sessão roda todos os testes, e os testes `s3` do pacote passam pelo
+moto:
 
 ```
 SERIALIZE_DB_TEST_EMULATOR=1 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run --group emulator pytest

@@ -620,6 +620,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   the credentials probe's `fetchone()` left each `read_parquet` open, and the next statement
   rolled back the secret it had refreshed; consume every result, and when two instruments
   disagree, run variants that differ in one step (2026-09-25).
+- **A test double calls the original through a reference saved before the swap, and a failure
+  case matches its own message**: `pytest.raises(Exception)` swallowed the `RecursionError` of
+  a double that called itself, and a refusal case without `match` stayed green with its check
+  removed (2026-09-28).
 
 ## Naming conventions
 

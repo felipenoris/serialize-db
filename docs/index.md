@@ -145,11 +145,12 @@ assert problems == [], "\n".join(problems)
 ```
 
 As regras: tipo fora da tabela de tipos; `autoincrement` numa chave inteira (o padrão `"auto"`
-inclusive); `Identity`; `String` sem comprimento (declare `String(n)` ou `Text`); chave
+inclusive); `Identity`; `String` sem comprimento, e as subclasses dela fora `Text`, como
+`Unicode`, `VARCHAR` e `CHAR` (declare `String(n)` ou `Text`); chave
 estrangeira `DEFERRABLE`, ou cujas colunas apontadas não são a chave primária nem uma
 `UniqueConstraint` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB nem no
 Redshift, e `create_all` num `sqlalchemy.Connection` do DuckDB falha); `partition_by` sem a coluna
-ou com a coluna fora de `String(n)`, `partition_source` que a tabela não tem ou sem
+ou com a coluna fora de `String(n)`, como `Text`, `partition_source` que a tabela não tem ou sem
 `partition_by`; tabela sem chave primária e sem `keys`.
 
 ### Derivar o esquema e o DDL
@@ -248,8 +249,10 @@ serialize-db schema check --metadata pipeline.models:Base.metadata schema/
 
 `--metadata` recebe `modulo:atributo`, o caminho importável do `MetaData`. O `check` sai com 0
 quando os arquivos estão atualizados, 1 com o diff impresso quando há diferença, e 2 no erro de uso.
-Em Python, `serialize_db.schema.write_schema_files` e `serialize_db.schema.check_schema_files` fazem
-o mesmo.
+O `check` compara o texto exato, a quebra de linha final inclusive, e acusa como removido o arquivo
+de sufixo gerado que a geração não produz mais; o `write` não apaga arquivo, e por isso `schema/` e
+`sql/` são pastas separadas. Em Python, `serialize_db.schema.write_schema_files` e
+`serialize_db.schema.check_schema_files` fazem o mesmo.
 
 ### Gerar o texto SQL de cada motor
 
@@ -343,10 +346,10 @@ ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva.
 ### Carregar a base Parquet atual
 
 `serialize_db.load` leva a base Parquet de hoje, uma pasta por tabela com as partições Hive
-`<coluna>=<valor>/`, para as tabelas Delta do ambiente, uma partição por commit, sem tocar a
-origem. `serialize_db.load.initial_load` cria a tabela do contrato, pula as partições já no log,
-confere cada uma das outras (o valor do caminho na coluna de origem, os nulos das colunas
-`NOT NULL`, os textos acima de `String(n)`) e a grava pelo `COPY` do DuckDB, na ordem da
+`<coluna>=<valor>/`, para as tabelas Delta do ambiente, uma partição por commit, sem tocar a origem.
+`serialize_db.load.initial_load` cria a tabela do contrato, pula as partições já no log, confere
+cada uma das outras (o valor do caminho na coluna de origem, os nulos das colunas `NOT NULL`, os
+textos acima do limite que `cast` e a auditoria medem) e a grava pelo `COPY` do DuckDB, na ordem da
 `sort_key`, registrando o arquivo no log; `serialize_db.load.load_report` confere contagem e somas
 por partição entre a origem e o Delta:
 
@@ -434,7 +437,8 @@ serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamen
 
 O `run` sai com 0 quando o pipeline termina, 1 na auditoria reprovada e 2 no conflito e no erro de
 uso; `--root`, `--environment` e `--engine` têm por padrão `SERIALIZE_DB_ROOT`,
-`SERIALIZE_DB_ENVIRONMENT` (`dsv`) e `SERIALIZE_DB_ENGINE` (`duckdb`).
+`SERIALIZE_DB_ENVIRONMENT` (`dsv`) e `SERIALIZE_DB_ENGINE` (`duckdb`), e um motor fora de `duckdb` e
+`redshift`, na opção ou na variável, é erro de uso.
 
 ### Rodar o pipeline no sandbox DuckDB
 
@@ -498,12 +502,11 @@ nas tabelas `exec_<id>_*` do esquema do Redshift. A conexão vem de
 `serialize_db.engine.redshift.RedshiftConfig`, a credencial temporária do workgroup serverless ou o
 par informado, com o `USE` no banco do datashare e o `search_path` no esquema; sem `redshift=`, o
 `Execution` a lê das variáveis `SERIALIZE_DB_REDSHIFT_*` por `RedshiftConfig.from_environment()`.
-`run.ingest` carrega as partições por `COPY ... MANIFEST`, `stream` lê os arquivos de um `UNLOAD`
-em `<raiz>/<ambiente>/staging/<execution_id>/`, `create_table` cria a tabela `exec_<id>_<tabela>`
-pela DDL, `appender` grava ali um Parquet e o acrescenta por `COPY` no `close`, e
-`run.publish_delta` registra os arquivos do `UNLOAD` na pasta da partição. O
-fim da execução apaga as tabelas `exec_<id>_*` que ela criou e os arquivos do `staging/` e fecha a
-conexão:
+`run.ingest` carrega as partições por `COPY ... MANIFEST`, `stream` lê os arquivos de um `UNLOAD` em
+`<raiz>/<ambiente>/staging/<execution_id>/`, `create_table` cria a tabela `exec_<id>_<tabela>` pela
+DDL, `appender` grava ali um Parquet e o acrescenta no `close` por um `COPY` com a lista das colunas
+do lote, e `run.publish_delta` registra os arquivos do `UNLOAD` na pasta da partição. O fim da
+execução apaga as tabelas `exec_<id>_*` que ela criou e os arquivos do `staging/` e fecha a conexão:
 
 ```python
 import sqlalchemy as sa
@@ -566,7 +569,8 @@ with Execution(db, "duckdb") as run:
 
 `run.audit(table, None)` confere a tabela inteira do sandbox, e `run.publish_delta(table)`, sem
 `partitions`, grava a tabela num commit que substitui a versão anterior. `run.next_ids` dá os ids
-acima do maior da versão fixada, a partir de 1 na tabela nova.
+acima do maior da versão fixada, que avança a cada `run.publish_delta` da tabela, a partir de 1 na
+tabela nova.
 
 Na primeira carga a tabela ainda não existe: `run.ingest` e `run.pinned_delta` a recusam com
 `serialize_db.errors.SandboxError`, os dados entram na tabela de `run.sandbox.create_table` por
@@ -683,7 +687,9 @@ tabelas durante uma publicação pode ler versões diferentes. O leitor roda só
 `CompoundSelect`; um comando, como uma tabela temporária, vai pela conexão de `session()`. O
 `delta_scan` poda as partições por `=`, por `BETWEEN` e pelo `IN` ao lado de um intervalo, e abre
 todos os arquivos com um `IN` de mais de um valor sozinho. O DuckDB só devolve a memória no
-`close`; o leitor sem `close` apaga a pasta temporária quando é coletado.
+`close`; o leitor sem `close` apaga a pasta temporária quando é coletado, e o `stream` e a `session`
+o seguram até o `close` e o fim do bloco, também o leitor fora de uma variável, como em
+`db.open_delta().stream(...)`.
 
 Fora do pacote, o `delta_scan` do DuckDB, o `DeltaTable.scan(predicate=...)` e o `QueryBuilder` do
 deltalake e o `scan_delta` do Polars leem as tabelas com filtro certo. O dataset Arrow do delta-rs
@@ -778,12 +784,12 @@ valores. Um tipo fora do contrato é listado por `check_models` e recusado por `
 | `Boolean` | `bool` | `boolean` | `BOOLEAN` | `BOOLEAN` | |
 | `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Entra como chega, sem arredondamento, com `NaN` e infinito; numa partição com valor não finito, a coluna fica sem mínimo e máximo no log Delta. A documentação do `UNLOAD` avisa que descarregar e recarregar pode perder precisão; o pacote faz os dois em Parquet, que guarda o valor binário, e a perda não foi medida. |
 | `Numeric(p, s)` | `decimal128(p, s)` | `decimal(p,s)` | `DECIMAL(p, s)` | `DECIMAL(p, s)` | `p` de 1 a 38 e `s` de 0 a `p`, até 37, o maior `s` do Redshift; fora disso `check_models` lista a violação. Sem `p` a precisão é 18, e sem `s` a escala é 0, os padrões do `DECIMAL` do Redshift. O tipo físico no Parquet varia com o escritor, e os leitores leem todos: o DuckDB e o delta-rs gravam `INT32` até 9 dígitos, `INT64` até 18 e `FIXED_LEN_BYTE_ARRAY` acima, e o `UNLOAD` do Redshift e o PyArrow gravaram `DECIMAL(18, 2)` em `FIXED_LEN_BYTE_ARRAY`. |
-| `String(n)` | `string` | `string` | `VARCHAR(n)` | `VARCHAR(n)` | `n` em bytes no Redshift, e é assim que `cast` e a auditoria medem o texto; o DuckDB aceita o comprimento e o ignora. `String` sem `n` é violação. |
-| `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | O texto sem `n`, e o `n` de `Text(n)` é ignorado; o teto é o do `VARCHAR` do Redshift, que `cast` e a auditoria medem; `TEXT` no Redshift seria `VARCHAR(256)`. |
+| `String(n)` | `string` | `string` | `VARCHAR(n)` | `VARCHAR(n)` | `n` em bytes no Redshift, e é assim que `cast`, a auditoria e a carga inicial medem o texto; o DuckDB aceita o comprimento e o ignora. `String` sem `n` é violação, e também `Unicode`, `VARCHAR` e `CHAR` sem `n`. |
+| `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | O texto sem `n`, e o `n` de `Text(n)` é ignorado; o teto é o do `VARCHAR` do Redshift, que `cast`, a auditoria e a carga inicial medem; `TEXT` no Redshift seria `VARCHAR(256)`. |
 | `Date` | `date32` | `date` | `DATE` | `DATE` | |
 | `DateTime` | `timestamp[us]` | `timestamp_ntz` | `TIMESTAMP` | `TIMESTAMP` | Microssegundos; um nanossegundo não nulo e um `timestamp` com fuso são recusados por `cast`. O `timestamp_ntz` põe a tabela no protocolo com o recurso `timestampNtz` (leitor 3, escritor 7), que o leitor Delta precisa ter. O `UNLOAD` do Redshift grava `INT96`, que o delta-rs e o `delta_scan` leem em microssegundos. |
 | `DateTime(timezone=True)` | `timestamp[us, tz=UTC]` | `timestamp` | `TIMESTAMPTZ` | `TIMESTAMPTZ` | Sempre em UTC; outro fuso entra no mesmo instante, e um `timestamp` sem fuso é recusado por `cast`. |
-| `Uuid` | `string` | `string` | `VARCHAR(36)` | `VARCHAR(36)` | O contrato guarda o UUID como texto; o Redshift não tem o tipo. O cliente passa o `uuid.UUID`, que o PyArrow e o pandas inferem como `arrow.uuid` e `cast` converte no texto de `str(valor)`, ou o próprio texto; `cast` recusa e a auditoria reprova o texto acima de 36 bytes. |
+| `Uuid` | `string` | `string` | `VARCHAR(36)` | `VARCHAR(36)` | O contrato guarda o UUID como texto; o Redshift não tem o tipo. O cliente passa o `uuid.UUID`, que o PyArrow e o pandas inferem como `arrow.uuid` e `cast` converte no texto de `str(valor)`, ou o próprio texto; `cast` e a carga inicial recusam e a auditoria reprova o texto acima de 36 bytes. |
 | `JSON` | `string` | `string` | `JSON` | `SUPER` | O documento entra serializado (`json.dumps`); `cast` recusa `struct`, `list` e `map`, e o documento acima de 65.535 bytes, o teto do `VARCHAR(65535)` em que o Redshift o carrega antes do `JSON_PARSE` para `SUPER`. O `ingest` do DuckDB com `materialize=True` põe a coluna em `JSON` pela DDL, e um documento malformado no Delta faz esse `ingest` falhar; a view do `ingest` e o leitor Delta trazem a coluna do `delta_scan` em `VARCHAR`, e as funções JSON do DuckDB leem os dois tipos. O `with_variant(SUPER(), "redshift")` do `sqlalchemy-redshift` no modelo é opcional. |
 | `Float`, `Time`, `Interval`, `LargeBinary`, `ARRAY`, `Enum` | | | | | Fora do contrato. |
 

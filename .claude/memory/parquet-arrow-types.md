@@ -74,15 +74,23 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
 
 - `pa.types.is_string` is false for `large_string` (the type of the pandas 3 `str` after
   `from_pandas`), `string_view` and dictionary; `pc.binary_length` has no kernel for `string_view`
-  or dictionary. `cast` measures text on the column already converted to `string`.
+  or dictionary. `cast` measures text on the column already converted to `string`, and since
+  2026-09-28 decodes a dictionary column to its values before its refusals and conversion: a
+  pandas `category` is read by its values, where a `dictionary<double>` into `decimal128(18,2)`
+  had rounded silently (1.236 to 1.24) and a `dictionary<timestamp>` into `date32` had dropped the
+  time (PyArrow 25.0.1).
 - A cast with no kernel (`struct` to `int32`, `list` or `bool` to `date32`, `date32` to `int64`)
   raises `ArrowNotImplementedError`, a `NotImplementedError`, not a `ValueError`; `ArrowInvalid`
   is a `ValueError`, and a null in a `nullable=False` field raises a plain `ValueError` from
   `RecordBatch.cast`.
 - Integer to `decimal128(p, s)` needs `p` to hold the whole integer type (19 digits plus the scale
-  for `int64`, 10 for `int32`) regardless of the values; `cast` goes through `decimal128(38, s)`
-  and the second cast checks each value against `p` (`1000` into `(5, 2)`: `Decimal value does not
-  fit in precision 5`).
+  for `int64`, 10 for `int32`) regardless of the values, so the direct cast to `decimal128(38, s)`
+  fails for `int64` with `s` above 19 and for `int32` with `s` above 28 (`at least 39`,
+  2026-09-28); `cast` goes through `decimal128(38, 0)`, which holds up to the `uint64` maximum, and
+  then to `(p, s)`, the second cast checking each value against `p` (`1000` into `(5, 2)`:
+  `Decimal value does not fit in precision 5`). PyArrow has no `round` and no cast from `float16`
+  to `decimal128` (`ArrowNotImplementedError`); `float16` to `float64` is exact, and `cast` takes a
+  `float16` into `Numeric` through it (2026-09-28).
 - `timestamp[us, tz=...]` to naive `timestamp[us]` passes with `safe=True` and keeps the UTC
   instant as wall time; naive to tz-aware assumes UTC. `cast` refuses both with `ContractError`
   since the user's decision of 2026-09-23 (`_refuse_time_zone_change`). `plan/POC.md`,

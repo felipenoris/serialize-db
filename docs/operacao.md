@@ -6,8 +6,9 @@ recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--enviro
 (`SERIALIZE_DB_ENVIRONMENT`, `dsv`), menos `publish_redshift --init`, que lê só as variáveis
 `SERIALIZE_DB_REDSHIFT_*`. Saem com 0 quando terminam; com 1 na auditoria reprovada, na carga com
 diferença de contagem ou soma ou com partição fora do contrato, e no erro sem tratamento, que
-imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem conexão, no nome
-repetido ou ausente e no conflito com outro escritor, no arquivo de controle ou na tabela.
+imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem conexão ou com a
+porta que não é número, no nome repetido ou ausente e no conflito com outro escritor, no arquivo de
+controle ou na tabela.
 `compact`, `archive` e `export` imprimem por tabela o tempo e o pico de memória residente do
 processo (`VmHWM`), a medida da rotina na tabela com que a máquina é dimensionada; a publicação a
 põe na linha de log de cada tabela.
@@ -240,7 +241,7 @@ recebem só `--metadata`.
 | Opção | Padrão | Descrição |
 | --- | --- | --- |
 | `--table` | obrigatória | A tabela do modelo auditada. |
-| `--partitions` | todas | As partições auditadas; sem ela, a tabela inteira. |
+| `--partitions` | todas | As partições auditadas; sem ela, a tabela inteira. Numa tabela sem partição, é erro de uso. |
 | `--foreign-keys` | desligada | Confere as chaves estrangeiras contra a versão atual de cada tabela referenciada. |
 | `--key-scope` | nenhum | `partition` suprime a verificação da chave contra a versão atual do Delta; `table` a faz também na chave com a coluna de `partition_source`. |
 | `--engine` | `SERIALIZE_DB_ENGINE`, senão `duckdb` | O dialeto do texto e o motor da auditoria: `duckdb` ou `redshift`. |

@@ -92,6 +92,11 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   the audit's Redshift rule); a `FunctionElement` subclass with `name` and `@compiles` per dialect
   does not (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_sqlalchemy.py`
 
+- `Table.constraints` and `Table.indexes` are sets, and their iteration order changed between
+  processes (SQLAlchemy 2.0.54, 2026-09-28): `table_options` orders the keys as the primary key,
+  then the `UniqueConstraint`s by their column names, then the unique indexes the same way.
+  `plan/PLAN-STAGE-1.md`
+
 ## SQL tooling
 
 - SQLGlot transpiles function names and syntax between DuckDB and Redshift but passes through
