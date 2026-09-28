@@ -4927,3 +4927,134 @@ contêiner (Linux, 4 vCPUs, 16.095 MB, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.
   três de estudo do S3 e do Redshift, passaram no substituto (92 casos, 1 pulado), e o `COPY` de 10
   linhas por `append` levou 0,06 s ali (`redshift.engine.small_append`). As três configurações
   completas estão em [`CURRENT_STATE.md`](CURRENT_STATE.md).
+
+## O que a revisão do repositório de 2026-09-28 reproduziu
+
+Em 2026-09-28, a revisão do repositório pedida pelo usuário, atrás de defeitos no código e de
+documentação e dados desatualizados, reproduziu cada defeito antes de corrigi-lo, neste contêiner
+(Linux, 4 vCPUs, 16.095 MB, cgroup v1 sem swap, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1,
+deltalake 1.6.6, SQLAlchemy 2.0.54, pandas 3.0.6), na pasta local e no substituto de
+`tests/emulator.py`. Cada correção tem um teste que reprovou no código anterior e passa no novo. Os
+achados que esperam o usuário estão em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), seção "Achados da
+revisão do repositório", e as leituras deles vêm primeiro.
+
+- **O `COPY` posicional do Redshift depois de uma coluna nova no meio do modelo**: no substituto, as
+  linhas de `t_meio` gravadas antes de a coluna `novo` entrar entre `id` e `a` saíram do `ingest` e
+  da publicação com `novo` igual a `a1`, `a` igual a `b1` e `b` nulo; com `a` e `b` trocados de
+  ordem no modelo, `schema_diff` não achou mudança, e o `ingest` e a publicação trocaram os valores
+  das duas colunas.
+- **As conversões da carga inicial**: `initial_load` de uma tabela com `1.236` numa
+  `Numeric(18, 2)`, `2026-08-31 12:00` numa `Date` e `15:00` UTC com o fuso `America/Sao_Paulo` numa
+  `DateTime` sem fuso, que o `cast` recusa um a um, gravou `1.24`, `2026-08-31` e `15:00`, a hora em
+  UTC, o fuso deste contêiner, sem recusa. `load_report` deu `matches` falso pela soma de `valor`
+  (1,236 contra 1,24) e não vê a hora nem o fuso.
+- **A auditoria da linha de comando com o contrato no `ingest`**: `serialize-db audit` sobre
+  `cad_lancamentos` com o documento `{` numa coluna JSON saiu do `ingest` com `ConversionException`
+  (`Malformed JSON at byte 1 of input`), e com um nulo em `preco`, `NOT NULL`, com
+  `ConstraintException`; o `ingest` por `CREATE TABLE AS`, o de antes de 2026-09-28, imprimiu o
+  relatório reprovado com `json_meta` 1 e saiu com 1.
+- **O nome de snapshot repetido em `serialize-db run`**: com `2026T3` já no arquivo de controle, o
+  `cli.main` de um pipeline que marca `2026T3` levantou
+  `ValueError: prd: o snapshot 2026T3 já existe` na saída da execução, que o script de console
+  transforma em saída 1 com traceback.
+- **O `ingest` materializado dentro da transação do cliente**: no DuckDB 1.5.5, o
+  `BEGIN TRANSACTION` recusado dentro de uma transação a aborta, e o `COMMIT` da transação abortada
+  voltou sem erro e sem nada do que ela fez. A transação fixa o seu snapshot no primeiro comando que
+  lê ou muda o banco, não no `BEGIN`: a tabela que outro cursor cria depois do `BEGIN` ou de um
+  `SELECT 1` é vista. Um `CatalogException` dentro da transação não a aborta.
+- **A abertura do motor DuckDB que falha**, por uma extensão ausente ou pelo secret recusado,
+  deixava a pasta `serialize_db_*` do `mkdtemp` e o banco; o segundo `close` do `appender` levantava
+  `FileNotFoundError`.
+- **A memória compartilhada no cgroup**: com 256 MiB de `mmap` compartilhado, `total_cache` e
+  `total_shmem` subiram 256 MiB cada; a folga antiga caiu 2 MiB, e a nova, 274 MiB, com o uso
+  subindo 274 MiB. O kernel sem swap não devolve essa memória, que o `file` do cgroup v2 também
+  conta.
+- **O primeiro lote do `stream` do DuckDB**: dez rodadas de
+  `test_stream_delivers_each_batch_while_the_query_runs`, cada uma num processo novo, receberam o
+  primeiro lote em 0,012 s a 0,024 s com a consulta ainda rodando.
+- **O `appender` do Redshift com um lote sem uma coluna anulável do meio**: no substituto, o lote de
+  `id_medida` e `largura` igual a 10 entrou como `altura` 10 e `largura` nula, sem erro, porque o
+  `COPY` de Parquet é posicional; com a lista das colunas do arquivo, `altura` fica nula e `largura`
+  10. A lista com `FILLRECORD` nunca rodou no alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+- **O `:` dentro de um literal no caminho de texto do Redshift**: `'a :b'` saía `'a NULL'`, e no
+  substituto o `query` devolvia `[1]` e o `stream`, `[]`. O valor `r"ref \:x2"` chegava ao `UNLOAD`
+  como `ref :x2`, porque o `BIND_PARAMS_ESC` do compilador também age sobre os literais
+  renderizados, e o `stream` não achava a linha que o `query` achava.
+- **A conexão do Redshift derrubada no `COMMIT`**: o código anterior reconectava e repetia o
+  `COMMIT` numa sessão sem transação, que voltava sem erro. O segundo `close` do `appender` rodava
+  outro `COPY` e outro `COMMIT` na conexão de mentira e dava `NoSuchKey` no substituto.
+- **A pasta local no comando das suítes**: no substituto, `tests/test_publication.py` e
+  `tests/test_reader.py` com as variáveis do comando do `README.md` passaram 4 casos e pularam 26,
+  os 9 `redshift` que também são `local` entre eles, e saíram com 0; com a pasta local, passaram os
+  30.
+- **A versão fixada depois de `publish_delta`**: `next_ids` devolvia, depois de um `publish_delta`
+  na mesma execução, ids já publicados, e `previous_partitions` devolvia `[]`, porque os dois liam a
+  versão da abertura.
+- **O motor fora de `duckdb` e `redshift`**: `SERIALIZE_DB_ENGINE=Redshift` passava pelo `argparse`,
+  que aplica o `type=` ao padrão em texto mas não o `choices`, e `serialize-db audit` abria o DuckDB
+  calado; com `--sql`, `KeyError`. A `SERIALIZE_DB_REDSHIFT_PORT` que não é número saía de
+  `serialize-db run` com `ValueError`, e `--partitions` numa tabela sem partição saía de
+  `serialize-db audit` com `ContractError`, os dois com 1 e o traceback.
+- **O leitor Delta fora de uma variável**: o finalizador do leitor que nenhuma variável segurava
+  fechava o motor debaixo do `stream` e da `session()` que ele tinha devolvido, e o stream terminava
+  em `INTERRUPT` e a sessão em `Connection already closed`.
+- **As mensagens da tabela sem partição**: a auditoria, `publish_delta`, a carga, o conflito e a
+  releitura do Delta e o aviso da troca do motor Redshift imprimiam `partição None`; o estado da
+  publicação, `publicada None` e `pendentes [None]`; a diferença da carga, `None linhas`.
+- **O `cast` de um dicionário**: a `category` do pandas chega como dicionário, e o cast de
+  `dictionary<double>` para `decimal128(18, 2)` arredonda calado (1.236 vira 1.24), e o de
+  `dictionary<timestamp>` para `date32` descarta a hora, passando ao largo das recusas que o `cast`
+  aplica aos valores.
+- **Os casts numéricos do PyArrow 25.0.1**: não há cast de `float16` para `decimal128`
+  (`ArrowNotImplementedError`), e o de `float16` para `float64` é exato; o de `int64` para
+  `decimal128(38, s)` falha com `s` acima de 19, e o de `int32` com `s` acima de 28
+  (`Precision is not great enough ... at least 39`), enquanto `decimal128(38, 0)` guarda até o
+  máximo de um `uint64`. `Numeric(0, s)` virava a precisão 18.
+- **A ordem das chaves**: `Table.constraints` e `Table.indexes` do SQLAlchemy 2.0.54 são conjuntos,
+  cuja ordem de iteração mudou entre processos, e `table_options(...).keys` herdava essa ordem.
+- **O `prefixed` sem a `key`**: um `INSERT` com `values(to_=...)` sobre a cópia prefixada de uma
+  coluna de `key` diferente do nome falhava com `CompileError: Unconsumed column names: to_`.
+- **Os arquivos gerados**: o `check` não acusava a falta da quebra de linha final, que o
+  `unified_diff` sobre `splitlines()` escondia, nem o arquivo gerado que a geração não produz mais.
+- **O glob Hive do `load_report`**: `read_parquet('<tabela>/*/*.parquet', hive_partitioning = true)`
+  falha com `Hive partition mismatch` quando a tabela tem uma subpasta fora do padrão Hive, como
+  `backup/`, que `discover_partitions` pula, e uma pasta como `data_str=2026 Q1` entra como
+  partição; `load_report` saía com `BinderException` onde a carga passava. A carga media `Uuid`,
+  JSON e `Text` sem limite e `Text(n)` pelo `n`.
+- **`max_key`**: o arquivo sem linhas de uma partição vazia não tem máximo no log, o que forçava uma
+  varredura que devolvia `None` e, ao lado de dados, a varredura da tabela inteira.
+- **A barra final e as pastas da exportação por reescrita**: a URI com barra final punha `//` na
+  chave do `rewrite` e da exportação; o `COPY ... PARTITION_BY` local do DuckDB falha sem as pastas
+  acima do destino (`IOException: Failed to create directory`) e aceita um destino vazio que já
+  existe.
+- **O esquema do `deep_copy`**: um commit de partição por
+  `create_write_transaction(mode="overwrite")` com `schema=` diferente grava um `metaData` com o
+  esquema novo e guarda o id, o nome, a descrição, a configuração e as colunas de partição do
+  destino (as ações `commitInfo`, `add` e `metaData`); um commit vazio com o mesmo esquema grava só
+  `commitInfo`, e um `append` com esquema novo e sem ações não levanta erro e guarda o esquema
+  antigo. A cópia de uma versão posterior a um `reconcile` saía sem a coluna nova.
+- **Os arquivos locais**: o arquivo novo de `write_text` nascia com o modo 0o600 do
+  `NamedTemporaryFile`, e `file:///tmp/meu%20banco/delta` não era decodificado.
+- **As conexões do DuckDB de `serialize_db.delta`**: a releitura, o `rewrite`, a exportação por
+  reescrita e a contagem da cópia abriam o DuckDB sem `threads` nem `memory_limit`, com o padrão de
+  80% da memória da máquina.
+- **A saída do interpretador**: uma sonda que roda `deep_copy`, `reconcile`, `publish_partition` e
+  `deep_copy` e lê a cópia por `to_pyarrow_dataset().to_table()` ficou presa na saída do
+  interpretador (código 124 sob `timeout 60`), no código anterior e no novo; sem a última leitura, e
+  com a mesma leitura sem aquelas chamadas, saiu normalmente. A causa não foi procurada.
+- **Os probes**: `hide_credentials` deixava o usuário e a senha de um proxy sem esquema
+  (`usuario:s3nh4@host:porta`) em `environment_rows` e na leitura "sem host" de `duckdb_proxy`; o
+  `BK-3` reprovava a regra `NoncurrentVersionExpiration` que `docs/index.md` recomenda e comparava a
+  raiz como texto, com `raiz-logs/` alcançando `raiz/`; o limite inferior do grupo `dev`
+  (`boto3>=1.40`, `redshift-connector>=2.1`) apagava a versão fixada nas dependências de execução, e
+  o `SP-9` aceitava o boto3 1.40 contra o pin 1.43.102; o `SP-10` reprovava pela falta da extensão
+  `aws`, que só `diagnose_aws.py` carrega; e o `failure_message` do `conftest` cortava a mensagem em
+  300 caracteres antes de mascarar as credenciais. Os relatórios de antes e de depois diferiram só
+  nas linhas corrigidas: no `space.py`, o `SP-10` passou de reprovação a leitura e o resumo de 3
+  para 2 checagens reprovadas, com a saída ainda 2 por `SP-1` e `SP-2`, sem credenciais nem região
+  neste contêiner; no `parquet_source.py`, sobre a base fictícia, só o horário; no
+  `duckdb_threads.py`, sobre um Delta local, a linha da materialização e o rótulo da referência.
+
+**Consequências**: as correções entraram no pacote, nos probes e nos testes, e os arquivos de etapa
+descrevem o comportamento novo; os achados que mudam uma interface ou pedem uma rodada no alvo
+esperam o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

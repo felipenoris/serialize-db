@@ -181,6 +181,13 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
   leitura vale só para o código dela. Desde a implementação de 2026-09-28 a sonda chama
   `create_table` e `append` dos motores, e a docstring do `appender` nada diz sobre dois escritores
   na mesma tabela até a rodada.
+- **A lista de colunas com `FILLRECORD` no `COPY` do `appender` do Redshift.** Desde a revisão de
+  2026-09-28, o `COPY` do `appender`, direto e pela staging `_carga`, lista as colunas do arquivo,
+  as do primeiro lote, com `FILLRECORD` ([`POC.md`](POC.md)). O alvo leu a lista e o `FILLRECORD`
+  cada um sozinho em 2026-09-21, nunca juntos. O caso
+  `test_appender_loads_a_batch_without_a_middle_column` de `tests/test_engine_redshift.py` lê a
+  combinação na próxima bateria; se o alvo a recusar, o `appender` deixa o `FILLRECORD` quando
+  passa a lista.
 
 ## Achados da revisão do repositório
 
@@ -206,10 +213,11 @@ reproduziu") corrigiu o que não dependia de decisão; cada item abaixo espera o
   de origem da partição: um `double` com mais casas que a escala de um `Numeric` entra arredondado,
   um `timestamp` com hora numa coluna `Date` perde a hora, e um `timestamptz` numa `DateTime` sem
   fuso entra na hora do `TimeZone` da máquina. O `cast` recusa os três com `ContractError` ([etapa
-  1](PLAN-STAGE-1.md)). A base de produção carregou sem diferença de contagem e soma em 2026-09-24,
-  e a próxima carga no alvo passa pelas mesmas conversões. Espera o usuário: as conferências
-  equivalentes às do `cast` na carga, com o `TimeZone` da conexão em UTC, que recusam a partição; ou
-  a carga como está, com as três conversões escritas em `docs/index.md`.
+  1](PLAN-STAGE-1.md)). Na leitura de 2026-09-28, `load_report` acusou o arredondamento pela soma
+  da coluna e não viu a hora nem o fuso. A base de produção carregou sem diferença de contagem e
+  soma em 2026-09-24, e a próxima carga no alvo passa pelas mesmas conversões. Espera o usuário: as
+  conferências equivalentes às do `cast` na carga, com o `TimeZone` da conexão em UTC, que recusam
+  a partição; ou a carga como está, com as três conversões escritas em `docs/index.md`.
 - **A auditoria de `serialize-db audit` com o contrato no `ingest`.** Desde 2026-09-28,
   `ingest(materialize=True)` do motor DuckDB cria a tabela pelo DDL do modelo e a enche por `INSERT
   ... BY NAME`, e `serialize-db audit` ingere assim: um JSON malformado ou um nulo numa coluna `NOT
@@ -247,5 +255,7 @@ reproduziu") corrigiu o que não dependia de decisão; cada item abaixo espera o
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit. Nenhuma etapa tem decisão pendente; os itens
-que esperam o usuário estão na lista acima.
+tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
+escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; as
+outras etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista
+acima.
