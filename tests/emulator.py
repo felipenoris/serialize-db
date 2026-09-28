@@ -1,5 +1,9 @@
-"""O substituto local do S3 e do Redshift, que roda fora do ambiente alvo as suítes que só rodam
-nele: ``proof_of_concept/test_s3.py``, ``test_redshift.py`` e ``test_redshift_transactions.py``.
+"""O substituto local do S3 e do Redshift, que roda fora do ambiente alvo os casos que só rodam
+nele: as suítes ``proof_of_concept/test_s3.py``, ``test_redshift.py`` e
+``test_redshift_transactions.py``, os casos ``s3`` e ``redshift`` de ``test_storage.py``,
+``test_delta.py``, ``test_engine_duckdb.py``, ``test_engine_redshift.py``, ``test_publication.py``
+e ``test_reader.py``, e as sondas do pytest ``probe_append_test.py`` e ``probe_redshift_test.py``
+de ``probes/consistencia/``.
 
 ``SERIALIZE_DB_TEST_EMULATOR`` o liga em ``conftest.py``. No início da sessão, ``start`` sobe o
 servidor do moto numa porta livre de ``127.0.0.1``, tira do processo as variáveis que levariam
