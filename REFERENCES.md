@@ -536,6 +536,16 @@ A memória, as threads e o cgroup, consultados em 2026-09-24 (os limites lidos d
 - <https://github.com/duckdb/duckdb/discussions/16781>
 - <https://github.com/milaboratory/platforma/pull/1848> (o limite do DuckDB tirado da memória livre)
 
+O erro de uma tarefa e a interrupção no resultado em stream, lidos em 2026-09-28 na revisão
+`d8cdaa33fd` da 1.5.5; `src/execution/executor.cpp`, pedido na etiqueta `v1.5.5` e na revisão,
+e `src/include/duckdb/parallel/task_error_manager.hpp` responderam 404:
+
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/parallel/executor.cpp>
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/parallel/pipeline_executor.cpp>
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/main/client_context.cpp>
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/main/stream_query_result.cpp>
+- <https://raw.githubusercontent.com/duckdb/duckdb/d8cdaa33fd/src/main/buffered_data/simple_buffered_data.cpp>
+
 Os guias que nomeiam o driver SQLAlchemy do DuckDB, lidos em 2026-09-26:
 
 - <https://duckdb.org/docs/current/guides/python/jupyter.html>

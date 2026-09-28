@@ -118,6 +118,14 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   (2026-09-23). An `interrupt()` that reaches a read of the Arrow reader surfaces as `OSError:
   INTERRUPT Error: Interrupted!`, one that reaches `execute` as `duckdb.InterruptException`.
   `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`, `test_sqlalchemy.py`, `test_parallel.py`
+- A query error in the middle of a stream can reach the Arrow reader as `OSError: INTERRUPT Error:
+  Interrupted!` with no `interrupt()` call: `test_stream_delivers_each_batch_while_the_query_runs`
+  failed so in 3 of 21 runs on 2026-09-28 (4 vCPUs, `duckdb` 1.5.5), once in the budget of 10,000
+  bytes with a pytest plugin reading no engine `interrupt()`. In the source of revision
+  `d8cdaa33fd`, `Executor::PushError` sets `context.interrupted` to stop the other tasks, and
+  `SimpleBufferedData::ExecuteTaskInternal` throws `InterruptException` on that flag before asking
+  the executor for the stored error [inferred]; 210 plain-DuckDB reads and 240 engine reads of the
+  same query never reproduced it. The fix awaits the user. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 - `COPY ... (RETURN_STATS)` on a `DOUBLE` with `NaN` gives the largest number as the maximum and a
   `has_nan` that sees only the last row group: 4,096 rows in two groups of 2,048 gave `false` with
   the `NaN` only in the first group (2026-09-23), while the footer omits min and max of every group

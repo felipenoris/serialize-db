@@ -121,6 +121,15 @@ foi medido em [`POC.md`](POC.md).
   e `tests/proof_of_concept/test_sqlalchemy.py`, cuja asserção da chave primária não refletida
   passa a refleti-la, a lista de `probes/space.py` e a prosa que nomeia o dialeto em `README.md`,
   `docs/index.md`, `plan/` e `CLAUDE.md`) ou manter o `duckdb-engine` enquanto a 2.0.54 o serve.
+- **O erro no meio do stream do motor DuckDB.**
+  `test_stream_delivers_each_batch_while_the_query_runs` reprovou em 3 de 21 execuções de
+  2026-09-28 com `INTERRUPT Error: Interrupted!` no lugar do erro de conversão, sem chamada de
+  `interrupt()` pelo motor; o código do DuckDB 1.5.5 troca o erro que uma thread de trabalho acha
+  pela interrupção no resultado em stream [inferido], e as sondas não reproduziram
+  ([`POC.md`](POC.md)). O cliente do `stream` pode receber a interrupção no lugar do erro da
+  consulta. Espera o usuário: rodar o caso do erro num motor de uma thread, em que a thread que lê
+  acha o erro ela mesma [inferido]; aceitar as duas mensagens no teste; ou manter o teste e levar o
+  caso ao DuckDB.
 
 ## Achados das sondas de consistência de leitura e escrita
 

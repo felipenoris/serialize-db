@@ -5247,3 +5247,31 @@ local e no substituto de `tests/emulator.py`:
 do `appender` pelo manifesto, e `docs/index.md` e a [etapa 7](PLAN-STAGE-7.md) listam a quarta
 perda da carga inicial e o alcance da linha `conversões`, que fica como está (decisão do usuário de
 2026-09-28).
+
+## O erro no meio do stream do motor DuckDB trocado pela interrupção
+
+Em 2026-09-28, neste contêiner (Linux x86_64, 4 vCPUs, `duckdb` 1.5.5, revisão `d8cdaa33fd`), na
+pasta local:
+
+- **O caso reprova às vezes.** `test_stream_delivers_each_batch_while_the_query_runs`, marcado
+  `local`, reprovou em 3 de 21 execuções: uma na sessão inteira com a raiz local, uma em 12
+  repetições do caso isolado e uma em 8 repetições com um plugin do pytest que registrava as
+  chamadas de `DuckDBEngine.interrupt`. Nas três, a consulta que falha na linha 2.900.000 entregou
+  `OSError: INTERRUPT Error: Interrupted!` no lugar de `Could not convert string 'x' to INT32`; na
+  execução registrada, a falha veio no orçamento de 10.000 bytes, e o motor não chamou
+  `interrupt()` nenhuma vez.
+- **O DuckDB troca o erro pela interrupção [inferido].** No código da revisão `d8cdaa33fd`,
+  `Executor::PushError` guarda o erro de uma tarefa e liga `context.interrupted` para parar as
+  outras, e `SimpleBufferedData::ExecuteTaskInternal`, no caminho do resultado em stream que o
+  `to_arrow_reader` lê, levanta `InterruptException` quando acha essa marca, antes de pedir ao
+  executor o erro guardado. O erro que a thread de trabalho acha entre duas leituras chega ao
+  leitor como a interrupção.
+- **As sondas não reproduziram.** A mesma consulta entregou o erro de conversão em todas as 210
+  leituras no DuckDB puro (90 por `read_all` numa thread auxiliar, 60 delas com quatro processos
+  ocupando a CPU; 120 lote a lote, com pausas de 0, 1 e 5 ms com duas threads e de 1 ms com uma) e
+  em todas as 240 pelo stream do motor (120 nos dois orçamentos, com duas threads e com uma; 120 na
+  sequência do fim do teste, com e sem o stream abandonado antes).
+
+**Consequência**: o teste fica como está, e a escolha entre rodar o caso do erro com uma thread,
+aceitar as duas mensagens ou levar o caso ao DuckDB espera o usuário em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
