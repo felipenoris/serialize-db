@@ -373,11 +373,16 @@ a tabela, a partição e a coluna, e a chamada seguinte recomeça dela; um valor
 o tipo do contrato, ou uma coluna do contrato ausente dos arquivos, falha no `COPY` com o erro do
 DuckDB, também sem commit.
 
-A carga converte cada coluna para o tipo do contrato pelo `CAST` do DuckDB, que aceita três perdas
-que `cast` recusa: um `double` com mais casas que a escala de um `Numeric` entra arredondado, um
-`timestamp` com hora numa coluna `Date` perde a hora, e um `timestamp` com fuso numa coluna
-`DateTime` sem fuso entra na hora do `TimeZone` da conexão, o fuso da máquina. `load_report` mostra
-o arredondamento quando ele muda a soma da coluna, e não vê a hora nem o fuso. Na linha de comando:
+A carga converte cada coluna para o tipo do contrato pelo `CAST` do DuckDB, que aceita quatro
+perdas que `cast` recusa: um `double` com mais casas que a escala de um `Numeric` entra
+arredondado, um `timestamp` com hora numa coluna `Date` perde a hora, um `timestamp` com fuso numa
+coluna `DateTime` sem fuso entra na hora do `TimeZone` da conexão, o fuso da máquina, e um
+`timestamp` `INT96` com nanossegundos numa coluna `DateTime` entra truncado a microssegundos.
+`load_report` mostra o arredondamento quando ele muda a soma da coluna, e não vê a hora, o fuso nem
+os nanossegundos. A linha `conversões` do relatório lista cada coluna cujo tipo no arquivo difere do
+contrato, como `carimbo: INT96 -> timestamp[us]`, lida no rodapé do primeiro arquivo da primeira
+partição: ela não diz quais conversões perdem dado nem se algum valor perdeu, e não vê o tipo de
+outro arquivo. Na linha de comando:
 
 ```shell
 serialize-db load --root s3://bucket/projeto/delta --environment prd \
@@ -519,8 +524,9 @@ par informado, com o `USE` no banco do datashare e o `search_path` no esquema; s
 `Execution` a lê das variáveis `SERIALIZE_DB_REDSHIFT_*` por `RedshiftConfig.from_environment()`.
 `run.ingest` carrega as partições por `COPY ... MANIFEST`, `stream` lê os arquivos de um `UNLOAD` em
 `<raiz>/<ambiente>/staging/<execution_id>/`, `create_table` cria a tabela `exec_<id>_<tabela>` pela
-DDL, `appender` grava ali um Parquet e o acrescenta no `close` por um `COPY` com a lista das colunas
-do lote, e `run.publish_delta` registra os arquivos do `UNLOAD` na pasta da partição. O fim da
+DDL, `appender` grava ali um Parquet e o acrescenta no `close` por um `COPY ... MANIFEST` com a
+lista das colunas do lote, que falha se o arquivo faltar, e `run.publish_delta` registra os
+arquivos do `UNLOAD` na pasta da partição. O fim da
 execução apaga as tabelas `exec_<id>_*` que ela criou e os arquivos do `staging/` e fecha a conexão:
 
 ```python

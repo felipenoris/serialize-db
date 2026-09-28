@@ -787,6 +787,23 @@ def _write_parquet(sink: _ParquetSink, source: queue.Queue, closed: threading.Ev
         sink.storage.delete([sink.path])
 
 
+def _write_file_manifest(sink: _ParquetSink, manifest_path: str) -> str:
+    """Grava o manifesto do ``COPY`` com o arquivo do appender como a única entrada, obrigatória,
+    e devolve a URI dele.
+
+    Sem manifesto, o ``COPY`` de Parquet lê o caminho como prefixo e, sem objeto que case, não
+    carrega nada e não dá erro (leitura de 2026-09-28). Com a entrada ``mandatory``, o ``COPY``
+    falha quando o arquivo falta, e a URL exata não alcança outro objeto do mesmo prefixo.
+    """
+    entry = {
+        "url": sink.storage.uri_of(sink.path),
+        "mandatory": True,
+        "meta": {"content_length": sink.storage.size(sink.path)},
+    }
+    sink.storage.write_text(manifest_path, json.dumps({"entries": [entry]}))
+    return sink.storage.uri_of(manifest_path)
+
+
 def _json_columns(table: sa.Table) -> list[str]:
     """Os nomes das colunas JSON, ``SUPER`` no Redshift."""
     return [column.name for column in table.columns if isinstance(column.type, sa.JSON)]
@@ -799,12 +816,13 @@ class RedshiftAppender:
     recusa com ``SandboxError`` o nome livre, que ``create_table`` ou o ``ingest`` ocupam.
     ``write`` faz o ``cast`` do lote na thread do cliente e o põe numa fila limitada; uma thread
     auxiliar grava os lotes, um grupo de linhas cada, num Parquet de
-    ``staging/<execution_id>/<tabela>/``, pelo ``Storage``. ``close`` roda, sob o lock e numa
-    transação, o ``COPY`` do arquivo na tabela (por uma staging temporária e ``JSON_PARSE`` quando
-    a tabela tem coluna JSON), com a lista das colunas do arquivo: a coluna que o lote não trouxe
-    fica nula. A tabela não muda antes dele, e um erro não deixa linha. Uma exceção dentro do
-    ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o arquivo sem inserir
-    nada, e a segunda chamada de ``close`` não faz nada.
+    ``staging/<execution_id>/<tabela>/``, pelo ``Storage``. ``close`` grava ao lado do arquivo um
+    manifesto com ele como a única entrada, obrigatória, e roda, sob o lock e numa transação, o
+    ``COPY ... MANIFEST`` na tabela (por uma staging temporária e ``JSON_PARSE`` quando a tabela
+    tem coluna JSON), com a lista das colunas do arquivo: a coluna que o lote não trouxe fica nula,
+    e o arquivo ausente faz o ``COPY`` falhar. A tabela não muda antes dele, e um erro não deixa
+    linha. Uma exceção dentro do ``with``, um lote recusado pelo ``cast`` ou um appender abandonado
+    apagam o arquivo sem inserir nada, e a segunda chamada de ``close`` não faz nada.
     """
 
     def __init__(self, engine: RedshiftEngine, table: sa.Table, queue_depth: int = 2) -> None:
@@ -819,8 +837,11 @@ class RedshiftAppender:
         self._table = table
         self._schema: pa.Schema | None = None
         self._refused: BaseException | None = None
-        path = engine.storage.join(engine.staging_prefix, table.name, f"{uuid.uuid4().hex}.parquet")
-        self._sink = _ParquetSink(engine.storage, path)
+        name = uuid.uuid4().hex
+        folder = engine.storage.join(engine.staging_prefix, table.name)
+        self._sink = _ParquetSink(engine.storage, engine.storage.join(folder, f"{name}.parquet"))
+        # O manifesto fica ao lado do arquivo, num nome que não começa pelo caminho dele.
+        self._manifest_path = engine.storage.join(folder, f"{name}.manifest")
         self._queue: queue.Queue = queue.Queue(maxsize=queue_depth)
         self._outcome: dict[str, object] = {"rows": 0, "error": None}
         self._thread = threading.Thread(
@@ -872,22 +893,21 @@ class RedshiftAppender:
                 raise self.error or RuntimeError(
                     "a thread do appender terminou antes do fim da fila")
 
-    def _copy_file(self) -> None:
-        """O ``COPY`` do arquivo na tabela: direto, ou por uma staging temporária com o JSON em
-        texto e o ``INSERT`` com ``JSON_PARSE`` quando a tabela tem coluna JSON."""
+    def _copy_file(self, manifest: str) -> None:
+        """O ``COPY`` do arquivo na tabela pelo manifesto: direto, ou por uma staging temporária
+        com o JSON em texto e o ``INSERT`` com ``JSON_PARSE`` quando a tabela tem coluna JSON."""
         engine = self._engine
-        source = engine.storage.uri_of(self._sink.path)
         credentials = credentials_clause(engine.config)
         target = engine.qualified(self._name)
         # O COPY de Parquet é posicional: a lista leva cada coluna do arquivo, as do primeiro
         # lote, à de mesmo nome, e a coluna que o lote não trouxe fica nula.
         columns = self._schema.names
         if not _json_columns(self._table):
-            engine.execute(copy_text(target, source, credentials, manifest=False, columns=columns))
+            engine.execute(copy_text(target, manifest, credentials, manifest=True, columns=columns))
             return
         staging = quoted(f"{self._name}_carga")
         engine.execute(staging_ddl(self._table, staging, self._table.columns, temporary=True))
-        engine.execute(copy_text(staging, source, credentials, manifest=False, columns=columns))
+        engine.execute(copy_text(staging, manifest, credentials, manifest=True, columns=columns))
         engine.execute(insert_from_staging(target, staging, self._table, None))
         engine.execute(f"DROP TABLE {staging}")
 
@@ -904,10 +924,12 @@ class RedshiftAppender:
         try:
             written = self._sink.writer is not None
             if failure is None and self._outcome["error"] is None and written:
+                # O manifesto sai antes da transação, que segura o lock só no COPY.
+                manifest = _write_file_manifest(self._sink, self._manifest_path)
                 with self._engine.transaction():
-                    self._copy_file()
+                    self._copy_file(manifest)
         finally:
-            self._engine.storage.delete([self._sink.path])
+            self._engine.storage.delete([self._sink.path, self._manifest_path])
         if error is None and self.error is not None:
             raise self.error
 
@@ -1495,7 +1517,7 @@ class RedshiftEngine:
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
         :return: o ``Appender`` da tabela, que guarda os lotes num Parquet do ``staging/`` até o
-            ``close`` e os carrega por ``COPY``.
+            ``close`` e os carrega por ``COPY ... MANIFEST``.
         :raises SandboxError: a tabela que não existe no sandbox.
         """
         return RedshiftAppender(self, table, queue_depth)

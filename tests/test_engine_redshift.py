@@ -716,9 +716,11 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
         monkeypatch: pytest.MonkeyPatch, local_location: LocalLocation) -> None:
     """``create_table`` roda o DDL do modelo e anota a tabela, e recusa o nome ocupado; o appender
     recusa a tabela que não existe; o arquivo nasce no ``staging/`` na thread auxiliar; ``close``
-    roda ``BEGIN``, a staging temporária com o ``COPY`` e o ``INSERT`` com ``JSON_PARSE``, e
-    ``COMMIT``, e apaga o arquivo; o appender sem lote roda só a conferência da tabela; uma
-    exceção no ``with`` não roda comando algum; um lote recusado pelo ``cast`` também não."""
+    grava ao lado dele o manifesto com o arquivo como a única entrada, obrigatória e com o
+    tamanho gravado, roda ``BEGIN``, a staging temporária com o ``COPY ... MANIFEST`` e o
+    ``INSERT`` com ``JSON_PARSE``, e ``COMMIT``, e apaga o arquivo e o manifesto; o appender sem
+    lote roda só a conferência da tabela; uma exceção no ``with`` não roda comando algum; um lote
+    recusado pelo ``cast`` também não."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     connection = FakeConnection(storage, existing={f"{PREFIX}cad_lancamentos"})
     engine = fake_engine(monkeypatch, connection, storage)
@@ -733,19 +735,40 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     assert created.startswith(f'CREATE TABLE "{PREFIX}cad_lancamentos_projetados" (')
     assert f"{PREFIX}cad_lancamentos_projetados" in engine._created
 
-    # O close carrega a tabela numa transação.
+    # O close carrega a tabela numa transação, pelo manifesto. O dublê lê o manifesto e o tamanho
+    # do arquivo antes do COPY, e chama a função guardada antes da troca.
+    original_write_file_manifest = redshift._write_file_manifest
+    manifests = []
+
+    def reading_manifest(sink: object, manifest_path: str) -> str:
+        uri = original_write_file_manifest(sink, manifest_path)
+        manifest_text, _ = storage.read_text(manifest_path)
+        manifests.append({"manifest": json.loads(manifest_text), "uri": uri,
+                          "manifest_path": manifest_path, "file_path": sink.path,
+                          "file_size": storage.size(sink.path)})
+        return uri
+
+    monkeypatch.setattr(redshift, "_write_file_manifest", reading_manifest)
     with engine.appender(PROJECTED) as appender:
         appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
         appender.write(entry_rows(MONTHS[0], 11, 5, PROJECTED).to_batches()[0])
     assert appender.rows == 15
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
+    [written] = manifests
+    entry = {"url": storage.uri_of(written["file_path"]), "mandatory": True,
+             "meta": {"content_length": written["file_size"]}}
+    assert written["manifest"] == {"entries": [entry]}
+    assert written["file_size"] > 0
+    assert written["uri"] == storage.uri_of(written["manifest_path"])
+    stem = written["file_path"].removesuffix(".parquet")
+    assert written["manifest_path"] == f"{stem}.manifest"
     texts = connection.texts()
     start = texts.index("BEGIN")
     carga = f"{PREFIX}cad_lancamentos_projetados_carga"
     columns = ", ".join(f'"{name}"' for name in PROJECTED.c.keys())
     assert texts[start + 1].startswith(f'CREATE TEMP TABLE "{carga}"')
-    assert texts[start + 2].startswith(f'COPY "{carga}" ({columns})\nFROM ')
-    assert "FORMAT AS PARQUET FILLRECORD" in texts[start + 2]
+    assert texts[start + 2].startswith(f'COPY "{carga}" ({columns})\nFROM \'{written["uri"]}\'\n')
+    assert "FORMAT AS PARQUET MANIFEST FILLRECORD" in texts[start + 2]
     assert texts[start + 3].startswith(
         f'INSERT INTO "esquema"."{PREFIX}cad_lancamentos_projetados" (')
     assert 'JSON_PARSE("meta")' in texts[start + 3]
@@ -803,7 +826,7 @@ def test_appender_copy_lists_the_file_columns(monkeypatch: pytest.MonkeyPatch,
     copied = [text for text in connection.texts() if text.startswith("COPY")][-1]
     assert copied.startswith(
         f'COPY "esquema"."{PREFIX}cad_medidas" ("id_medida", "largura")\nFROM ')
-    assert copied.endswith("FORMAT AS PARQUET FILLRECORD")
+    assert copied.endswith("FORMAT AS PARQUET MANIFEST FILLRECORD")
 
     # A staging _carga, sem a coluna area; o INSERT dela leva todas as colunas.
     engine.create_table(PROJECTED)
@@ -1202,9 +1225,10 @@ def test_ingest_stream_appender_export(target: Target,
 @pytest.mark.s3
 def test_appender_copies_the_file_at_close(target: Target,
                                            monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tabela de ``create_table`` nasce vazia e fica vazia até o ``close``; um erro do ``COPY``
-    não deixa linha; o ``appender`` sem lote não muda a tabela; o segundo appender acrescenta; o
-    ``close`` explícito dentro do ``with`` carrega o arquivo uma vez."""
+    """A tabela de ``create_table`` nasce vazia e fica vazia até o ``close``; o arquivo que some
+    antes do ``COPY`` o faz falhar pela entrada obrigatória do manifesto, sem deixar linha, e a
+    mensagem do servidor é uma leitura; o ``appender`` sem lote não muda a tabela; o segundo
+    appender acrescenta; o ``close`` explícito dentro do ``with`` carrega o arquivo uma vez."""
     engine = target.engine
     name = f"{engine.prefix}cad_lancamentos_projetados"
     engine.create_table(PROJECTED)
@@ -1214,19 +1238,29 @@ def test_appender_copies_the_file_at_close(target: Target,
         assert count_of(engine, name) == 0
     assert count_of(engine, name) == 10
 
-    # O COPY de um arquivo que não existe falha, e a transação não deixa linha. O dublê chama a
-    # função guardada antes da troca: redshift.copy_text, depois dela, é o próprio dublê.
-    original_copy_text = redshift.copy_text
+    # O arquivo apagado depois do manifesto: o COPY falha pela entrada obrigatória, e a transação
+    # não deixa linha. O dublê chama a função guardada antes da troca, porque
+    # redshift._write_file_manifest, depois dela, é o próprio dublê.
+    original_write_file_manifest = redshift._write_file_manifest
+    manifests = []
 
-    def broken_copy(target_name: str, source: str, credentials: str, manifest: bool,
-                    **options: object) -> str:
-        return original_copy_text(target_name, source + ".ausente", credentials, manifest,
-                                  **options)
+    def manifest_without_file(sink: object, manifest_path: str) -> str:
+        manifests.append(manifest_path)
+        uri = original_write_file_manifest(sink, manifest_path)
+        sink.storage.delete([sink.path])
+        return uri
 
-    monkeypatch.setattr(redshift, "copy_text", broken_copy)
-    with pytest.raises(Exception):  # noqa: B017 - o erro do COPY: do servidor ou do S3
+    monkeypatch.setattr(redshift, "_write_file_manifest", manifest_without_file)
+    with pytest.raises(redshift_connector.Error) as missing:
         engine.append(PROJECTED, entry_rows(MONTHS[0], 11, 10, PROJECTED))
     monkeypatch.undo()
+    assert len(manifests) == 1
+    note = missing.value.__notes__[0]
+    assert note.startswith("comando: COPY")
+    assert f"FROM '{engine.storage.uri_of(manifests[0])}'" in note
+    fields = missing.value.args[0]
+    record("redshift.engine.copy_missing_mandatory_file",
+           {"sqlstate": fields.get("C"), "message": str(fields.get("M"))})
     assert count_of(engine, name) == 10
 
     # O appender sem lote não muda a tabela; o seguinte acrescenta.

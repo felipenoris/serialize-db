@@ -166,6 +166,17 @@ consistency probes ran from 17:33:03 with every check passing, `probes/credentia
 to 18:38:25 with no read failing, and `probes/duckdb_threads.py` from 17:35:54 beside it, complete
 (`duckdb.md`). `plan/POC.md`
 
+The battery of 2026-09-28 from 20:14 UTC (from `main` with PR #104, inferred from the 662 cases
+collected) ran only the "Probes e Testes - BN" block and the migration block, on 8 vCPUs and
+15.1 GiB (the same versions as 2026-09-27), DuckDB defaulting to 8 threads and 12.1 GiB. The probes
+differed from 2026-09-27 in what changes per run and in `RS-12` (85 load errors in 30 days),
+`BK-14` (8,822 non-current versions, 270,369,639 bytes, and 8,127 delete markers) and `SP-10`
+(passing with `httpfs`, `delta`, `parquet` and `json`, no `aws` listed). S3 passed 610 in 274.1 s;
+Redshift 51 of 52 and engine 9 of 10 twice each, `test_appender_copies_the_file_at_close` failing
+every time (`redshift.md`); publication 10 twice. The load from 21:14:56 (12,515 MB available,
+6,257 MiB) stopped at `cad_lancamentos` 2026-07-31 on `RegistrationRefused` (`source-base.md`).
+`plan/POC.md`
+
 ## The prepared folder and the venv
 
 On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group

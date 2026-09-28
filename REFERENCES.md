@@ -313,6 +313,16 @@ consultada em 2026-09-23 (a busca achou também a página sobre `FILTER` do Mode
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_Aggregate_Functions.html>
 - <https://modern-sql.com/feature/filter>
 
+O `COPY` de Parquet de um caminho sem objeto, o prefixo de chave e a entrada `mandatory` do
+manifesto, consultados em 2026-09-28 depois da bateria do alvo, pela busca na web por `Redshift
+COPY FORMAT AS PARQUET prefix matches no files "0 rows" no error "does not exist"`, que não achou
+página que descreva o prefixo vazio, e pelas páginas da documentação:
+
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-parameters-data-source-s3.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/copy-usage_notes-copy-from-columnar.html>
+- <https://oneuptime.com/blog/post/2026-02-12-load-data-redshift-copy-command/view>
+- <https://repost.aws/questions/QUwQYm3TWMR0ulsGD7iG2BuA/failed-to-copy-parquet-files-from-s3-to-redshift>
+
 ## DuckDB
 
 Documentação:

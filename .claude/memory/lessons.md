@@ -669,3 +669,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `sha256`, so the file read before the commits matched the one the exit read, and the exit's
   conditional write passed. The double now writes a new snapshot (`outroN`) after each read and
   passes on the old and the new code. `plan/PLAN-STAGE-6.md`
+- **A stand-in reads an input the way the target's documentation does** (2026-09-28). With its
+  double fixed by the review, `test_appender_copies_the_file_at_close` passed on the stand-in and
+  failed four times in the target with `DID NOT RAISE`: the stand-in's `COPY` read the exact key and
+  raised the S3 `NoSuchKey`, while the `COPY` documentation reads a path without `MANIFEST` as a
+  key prefix, and the target loaded nothing without error. The stand-in imitated only the readings
+  of the target, and the prefix rule was documented, not read. It now lists the prefix, and the old
+  code fails on it as in the target. Before a failure case is trusted on the stand-in, read the
+  target's documentation for the input the case breaks. `plan/POC.md`, `tests/emulator.py`

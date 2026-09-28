@@ -28,8 +28,9 @@ e os itens marcados como pendentes dependem da prova de conceito.
 | `SELECT * FROM sys_load_error_detail ORDER BY start_time DESC LIMIT 20;` | Erros de carga, inclusive em workgroups serverless; `stl_load_errors` cobre só clusters provisionados e é negada a um usuário comum no ambiente alvo (SQLSTATE 42501, leitura de 2026-09-20), assim como `stv_slices`. |
 | `EXPLAIN <consulta>;` | Plano de execução, com os rótulos de redistribuição `DS_DIST_*`. |
 
-A biblioteca consulta `pg_last_copy_count()` e `sys_load_error_detail` depois de cada `COPY`, na
-mesma conexão. A função não rodou nesta sessão:
+A biblioteca não lê `pg_last_copy_count()` nem `sys_load_error_detail`: cada `COPY` dela lê um
+manifesto de entradas `mandatory`, e o arquivo ausente ou o erro de carga sobem do próprio `COPY`.
+A função abaixo lê os dois na mesma conexão, depois de um `COPY`, e não rodou nesta sessão:
 
 ```python
 import sqlalchemy as sa
@@ -999,11 +1000,12 @@ Arrow e merece um benchmark contra o fluxo acima.
 | Regra da documentação | Consequência para a biblioteca |
 | --- | --- |
 | Colunas são associadas por posição, e a quantidade precisa coincidir com a tabela. | Os arquivos de uma tabela Delta nem sempre têm as colunas do modelo na ordem dele: o anterior a uma coluna nova não a tem, e o delta-rs grava a coluna nova no fim. Todo `COPY` da biblioteca passa a lista das colunas do arquivo, a regra seguinte. Lido no ambiente alvo em 2026-09-21: um arquivo de cinco colunas numa tabela de seis reprova com `Spectrum Scan Error` 15007, `Unmatched number of columns`. |
-| A lista de colunas, `COPY tabela (colunas) FROM ... FORMAT AS PARQUET MANIFEST`, é aceita (2026-09-21): as colunas do arquivo entram nas listadas, por posição, e a coluna fora da lista fica nula. `FILLRECORD` carregou o mesmo arquivo com o mesmo resultado, 100 linhas e a coluna nova nula (13:35 e 13:39). | Um arquivo anterior a uma coluna nova entra por `FILLRECORD`, que só completa as colunas do fim, ou pela lista de colunas, que exige um `COPY` por lista; nenhum dos dois fornece o valor de uma coluna ausente. `FILLRECORD` entra em todo `COPY` da biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md)), e todo `COPY` passa também a lista das colunas do arquivo, para que uma coluna nova no meio do modelo ou uma reordenação não desloque as seguintes: o do `appender` da [etapa 5](PLAN-STAGE-5.md), com as colunas do primeiro lote, e o da carga do Delta, no `ingest`, no `pinned_delta` e na publicação, um por manifesto de `copy_manifest`, com as colunas do rodapé (decisão do usuário de 2026-09-28). O ambiente alvo leu cada um sozinho, e a combinação espera a próxima bateria (`test_appender_loads_a_batch_without_a_middle_column` e os casos da coluna nova no meio e da reordenação de `tests/test_engine_redshift.py` e `tests/test_publication.py`). |
+| A lista de colunas, `COPY tabela (colunas) FROM ... FORMAT AS PARQUET MANIFEST`, é aceita (2026-09-21): as colunas do arquivo entram nas listadas, por posição, e a coluna fora da lista fica nula. `FILLRECORD` carregou o mesmo arquivo com o mesmo resultado, 100 linhas e a coluna nova nula (13:35 e 13:39). | Um arquivo anterior a uma coluna nova entra por `FILLRECORD`, que só completa as colunas do fim, ou pela lista de colunas, que exige um `COPY` por lista; nenhum dos dois fornece o valor de uma coluna ausente. `FILLRECORD` entra em todo `COPY` da biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md)), e todo `COPY` passa também a lista das colunas do arquivo, para que uma coluna nova no meio do modelo ou uma reordenação não desloque as seguintes: o do `appender` da [etapa 5](PLAN-STAGE-5.md), com as colunas do primeiro lote, e o da carga do Delta, no `ingest`, no `pinned_delta` e na publicação, um por manifesto de `copy_manifest`, com as colunas do rodapé (decisão do usuário de 2026-09-28). O ambiente alvo leu cada um sozinho em 2026-09-21 e os dois juntos em 2026-09-28 (`test_appender_loads_a_batch_without_a_middle_column` e os casos da coluna nova no meio e da reordenação de `tests/test_engine_redshift.py` e `tests/test_publication.py`). |
 | Só existem as colunas gravadas no arquivo. | A coluna de partição `mes` não está nos arquivos do Delta: a carga passa por uma staging sem `mes` e por `INSERT ... SELECT ..., '<mes>'` ([delta.md](delta.md)). |
 | Uma string maior que o `VARCHAR` de destino aborta o `COPY` (2026-09-21): `Spectrum Scan Error` 15007, e `sys_load_error_detail` diz `The length of the data column descricao is longer than the length defined in the table. Table: 200, Data: 300`. | A auditoria de tamanho da [etapa 4](PLAN-STAGE-4.md) é a barreira; `TRUNCATECOLUMNS` não é aceito com Parquet (`0A000`, `TRUNCATECOLUMNS argument is not supported for PARQUET based COPY`, 2026-09-21). |
 | Parâmetros aceitos: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `STATUPDATE`, `MANIFEST`, `EXPLICIT_IDS`. `MAXERROR`, `NOLOAD` e `COMPUPDATE` não são aceitos, e não há compressão automática. | O primeiro erro aborta o `COPY`. A validação acontece antes, no Arrow. |
 | `MANIFEST` é aceito. | O `COPY` carrega exatamente os arquivos gravados pela biblioteca, e não o que mais estiver na pasta: o Delta guarda as versões anteriores até o `vacuum`. Exercitado no datashare em 2026-09-21. |
+| Sem `MANIFEST`, o caminho é um prefixo de chave: `custdata.txt` alcança `custdata.txt.1` e `custdata.txt.bak`, e a documentação recomenda o manifesto quando o prefixo pode alcançar arquivos indesejados. | No ambiente alvo, o `COPY` de Parquet de um caminho sem objeto saiu sem erro em 2026-09-28 [inferido: sem carregar nada]. Todo `COPY` da biblioteca lê um manifesto de entradas `mandatory`, o do `appender` da [etapa 5](PLAN-STAGE-5.md) com a única entrada do arquivo dele (decisão do usuário de 2026-09-28). |
 | O bucket precisa estar na mesma região do Redshift. | Configuração da infraestrutura. |
 | O `COPY` de Parquet usa URLs pré-assinadas válidas por 1 hora. | Políticas IAM do bucket não podem bloquear URLs pré-assinadas. |
 | O `COPY` grava `NULL` em coluna `NOT NULL` só se o arquivo trouxer `NULL`; a falha aborta a carga. | `NOT NULL` do modelo é a última barreira; a auditoria no Arrow vem antes. |
@@ -1248,9 +1250,11 @@ O manifesto é um objeto com `entries`, uma entrada por arquivo:
 | Campo | Quando é exigido |
 | --- | --- |
 | `url` | Sempre; a URL `s3://` completa do arquivo. |
-| `mandatory` | Opcional, falso por omissão, e um arquivo ausente é pulado em silêncio. |
+| `mandatory` | Opcional, falso por omissão, e um arquivo ausente é pulado em silêncio; com `true`, o `COPY` termina quando não acha o arquivo da entrada. A biblioteca grava `true` em toda entrada. |
 | `meta.content_length` | Nos formatos colunares, Parquet e ORC. |
 | `meta.record_count` | Só no manifesto que o `UNLOAD ... MANIFEST VERBOSE` grava. |
+
+O manifesto ausente ou malformado faz o `COPY` falhar.
 
 ### Do log do Delta para o manifesto do COPY
 
