@@ -256,9 +256,11 @@ em `test_duckdb.py`, `test_pyarrow.py` e `tests/test_engine_duckdb.py`. O que el
   `pa.array(coluna, type=...)`, um terço do tempo de `from_pylist` por dicionários em 200.000 linhas.
   O `appender` grava um row group por lote com `ParquetWriter.write_batch` em
   `staging/<execution_id>/` e faz o `COPY` no `close`, então nada entra antes dele, e `append` passa
-  sempre por ele ([etapa 5](PLAN-STAGE-5.md)). O `COPY` de Parquet é posicional, e o do `appender`,
-  direto ou pela staging `_carga` da tabela com JSON, lista as colunas do arquivo, as do primeiro
-  lote, com `FILLRECORD`: a coluna que o lote não trouxe fica nula.
+  sempre por ele ([etapa 5](PLAN-STAGE-5.md)). O `COPY` de Parquet é posicional, e todo `COPY` da
+  biblioteca lista as colunas do arquivo, com `FILLRECORD`: o do `appender`, direto ou pela staging
+  `_carga` da tabela com JSON, as do primeiro lote, e o da carga do Delta, no `ingest`, no
+  `pinned_delta` e na publicação, as do rodapé, um `COPY` por lista (decisão do usuário de
+  2026-09-28); a coluna que o arquivo não tem fica nula.
 
 ### A conversão para o pandas
 
@@ -376,11 +378,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
 - A biblioteca escreve uma partição pelo registro do arquivo que o motor gravou, o
   `COPY ... (RETURN_STATS)` do DuckDB ou o `UNLOAD` do Redshift mais `create_write_transaction`: o
   `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de partição dentro do arquivo e quebraria
-  o `COPY` posicional (`delta.md`). O usuário aprovou em 2026-09-24 o registro como padrão nas
-  etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e [7](PLAN-STAGE-7.md), depois das partições
-  medidas no ambiente alvo em 2026-09-23, em que o `rewrite` levou de 1,14 a 1,52 vez o tempo do
-  registro (`POC.md`), e tirou o `rewrite` das etapas 4 e 7, com a flag `export_mode`; o
-  `write_deltalake` fica só na troca da etapa 5 para a partição com `Double` não finito.
+  o `COPY` do Redshift, que a mandaria para a staging, que não a tem (`delta.md`). O usuário aprovou
+  em 2026-09-24 o registro como padrão nas etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e
+  [7](PLAN-STAGE-7.md), depois das partições medidas no ambiente alvo em 2026-09-23, em que o
+  `rewrite` levou de 1,14 a 1,52 vez o tempo do registro (`POC.md`), e tirou o `rewrite` das etapas
+  4 e 7, com a flag `export_mode`; o `write_deltalake` fica só na troca da etapa 5 para a partição
+  com `Double` não finito.
 - As regras que mantêm o `COPY` do Redshift lendo os arquivos e a saída do Delta aberta: sem vetores
   de exclusão, sem column mapping, sem `Identity`, caminhos relativos no log e nunca um arquivo
   registrado por URI absoluta (`delta.md`, `estrategia.md`).

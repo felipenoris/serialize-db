@@ -508,11 +508,12 @@ com o modelo pela reconciliação.
 A reconciliação é o comando da biblioteca que substitui a migração: compara `arrow_schema(Table)`
 com `dt.schema()`, aplica o diff aditivo, recusa o destrutivo com a instrução de reescrita, e repete
 o mesmo diff nas tabelas publicadas no Redshift (`ALTER TABLE ADD COLUMN`, que acrescenta no fim, ou
-recriação e recarga). A ordem das colunas no Redshift segue a ordem do esquema Delta, porque o `COPY`
-é posicional; a carga de arquivos anteriores a uma coluna nova vai por `FILLRECORD`, que carregou o
-mesmo arquivo com a coluna nova nula no ambiente alvo em 2026-09-21, como a lista de colunas, e é o
-caminho de todo `COPY` da biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md);
-[redshift.md](redshift.md)).
+recriação e recarga). O `COPY` de Parquet liga as colunas por posição, e a biblioteca passa a cada
+`COPY` a lista das colunas do rodapé, com um manifesto por lista, que leva cada coluna do arquivo à
+de mesmo nome e deixa nula a que um arquivo anterior a uma coluna nova não tem (decisão do usuário
+de 2026-09-28); o `FILLRECORD`, que carregou no ambiente alvo em 2026-09-21 um arquivo anterior a
+uma coluna nova com ela nula, como a lista, segue em todo `COPY` da biblioteca (decisão do usuário
+de 2026-09-23, [etapa 8](PLAN-STAGE-8.md); [redshift.md](redshift.md)).
 
 ## O que substitui o Alembic
 
@@ -953,19 +954,22 @@ DELETE FROM prd_cad_operacoes WHERE mes = '2026-08';
 CREATE TEMPORARY TABLE staging_cad_operacoes (                             -- sem a coluna mes
     id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL, id_cliente BIGINT NOT NULL,
     valor NUMERIC(18, 2) NOT NULL, descricao VARCHAR(200));
-COPY staging_cad_operacoes FROM 's3://bucket/publicacao/exec-42/cad_operacoes/2026-08.manifest'
-    IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST;
+COPY staging_cad_operacoes (id_operacao, data_ref, id_cliente, valor, descricao)  -- do rodapé
+    FROM 's3://bucket/publicacao/exec-42/cad_operacoes/2026-08/1.manifest'
+    IAM_ROLE 'arn:aws:iam::123456789012:role/papel' FORMAT AS PARQUET MANIFEST FILLRECORD;
 INSERT INTO prd_cad_operacoes (id_operacao, data_ref, id_cliente, valor, descricao, mes)
 SELECT id_operacao, data_ref, id_cliente, valor, descricao, '2026-08' FROM staging_cad_operacoes;
 COMMIT;
 ```
 
 A tabela de staging existe porque a coluna de partição não está nos arquivos e o `COPY` só lê o
-conteúdo deles; a lista de colunas no `COPY` de Parquet funciona (2026-09-21), mas não fornece o
-valor da coluna ausente, então a staging fica, e o `INSERT` lista as colunas na ordem do contrato,
-com o valor da partição no lugar da coluna. A publicação incremental compara as ações da versão
-publicada com as da pedida e recarrega só os meses que mudaram, numa transação por tabela, sem
-atomicidade entre as tabelas; a versão publicada de cada tabela fica numa tabela de controle
+conteúdo deles; a lista de colunas no `COPY` de Parquet funciona (2026-09-21), e a biblioteca a
+passa com as colunas do rodapé de cada grupo de arquivos, um manifesto por lista (decisão do
+usuário de 2026-09-28), mas ela não fornece o valor da coluna ausente, então a staging fica, e o
+`INSERT` lista as colunas na ordem do contrato, com o valor da partição no lugar da coluna. A
+publicação incremental compara as ações da versão publicada com as da pedida e recarrega só os meses
+que mudaram, numa transação por tabela, sem atomicidade entre as tabelas; a versão publicada de cada
+tabela fica numa tabela de controle
 (`serialize_db_publications(table_name, delta_version, execution_id, published_at)`).
 
 Escrita de volta, quando o sandbox é o Redshift:

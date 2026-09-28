@@ -4936,8 +4936,8 @@ documentação e dados desatualizados, reproduziu cada defeito antes de corrigi-
 (Linux, 4 vCPUs, 16.095 MB, cgroup v1 sem swap, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1,
 deltalake 1.6.6, SQLAlchemy 2.0.54, pandas 3.0.6), na pasta local e no substituto de
 `tests/emulator.py`. Cada correção tem um teste que reprovou no código anterior e passa no novo. Os
-achados que esperam o usuário estão em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), seção "Achados da
-revisão do repositório", e as leituras deles vêm primeiro.
+achados que pediam uma decisão vêm primeiro; o usuário os decidiu no mesmo dia, e a seção seguinte
+diz o que a implementação das decisões mostrou.
 
 - **O `COPY` posicional do Redshift depois de uma coluna nova no meio do modelo**: no substituto, as
   linhas de `t_meio` gravadas antes de a coluna `novo` entrar entre `id` e `a` saíram do `ingest` e
@@ -5057,5 +5057,36 @@ revisão do repositório", e as leituras deles vêm primeiro.
   `duckdb_threads.py`, sobre um Delta local, a linha da materialização e o rótulo da referência.
 
 **Consequências**: as correções entraram no pacote, nos probes e nos testes, e os arquivos de etapa
-descrevem o comportamento novo; os achados que mudam uma interface ou pedem uma rodada no alvo
-esperam o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+descrevem o comportamento novo; os achados que mudavam uma interface ou pediam uma rodada no alvo
+foram ao usuário, que os decidiu em 2026-09-28.
+
+## O que a implementação das decisões da revisão de 2026-09-28 mostrou
+
+Em 2026-09-28, neste contêiner, com as versões da seção anterior, na pasta local e no substituto de
+`tests/emulator.py`, cada decisão entrou com testes que reprovaram no código anterior e passam no
+novo.
+
+- **O `COPY` com a lista das colunas de cada arquivo**: os testes novos da coluna anulável `novo`
+  entre `id` e `a` e de `a` e `b` trocados de ordem, rodados sobre o `src/` anterior no substituto,
+  reprovaram 11 dos 15 selecionados: o `ingest` deu `{'novo': 'a1', 'a': 'b1', 'b': None}` e
+  `{'b': 'a1', 'a': 'b1'}`, a publicação deslocou os valores do mesmo jeito, e o agrupamento de
+  `copy_manifest` falhou sem `CopyManifest`; no código novo, os 15 passaram.
+  `get_add_actions()` do deltalake 1.6.6 lista o commit mais novo primeiro (os commits de `p3`,
+  `p1`, `p2` e `p0` voltaram como `p0`, `p2`, `p1` e `p3`), e sem a ordenação pelo caminho o teste
+  do agrupamento reprova. O dublê do `COPY` que falha em
+  `test_failed_copy_leaves_control_row_untouched` levantava `AttributeError` no código anterior, e
+  `pytest.raises(Exception)` o engolia; o teste confere agora que o dublê gravou o manifesto
+  inválido.
+- **O custo de ler os rodapés**: `copy_manifest` sobre uma tabela de 200 arquivos (20 partições de
+  10 arquivos), melhor de três, levou 31,3 ms na pasta local contra 9,6 ms do código anterior, e
+  1.255,8 ms no moto contra 91,4 ms; numa partição de 10 arquivos, 12,0 ms contra 10,8 ms e 163,5 ms
+  contra 85,7 ms. A leitura dos 200 rodapés, em série, levou 12,4 ms na pasta local e 1.145,3 ms no
+  moto; com 4 a 32 threads, de 34,6 ms a 53,2 ms e de 1.057,9 ms a 1.103,3 ms. O moto é limitado
+  pelo próprio servidor, e a latência do S3 real, um `HEAD` e um `GET` de intervalo por arquivo, não
+  foi medida.
+
+**Consequências**: `copy_manifest` lê os rodapés em série, como `register_files`, e a publicação e o
+motor Redshift rodam um `COPY` por lista de colunas ([etapa 3](PLAN-STAGE-3.md),
+[etapa 5](PLAN-STAGE-5.md), [etapa 8](PLAN-STAGE-8.md)); o tempo por tabela da publicação, que o
+log registra, mede o custo no alvo na próxima bateria, junto com a lista e o `FILLRECORD`
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

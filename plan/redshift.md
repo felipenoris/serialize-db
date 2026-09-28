@@ -998,8 +998,8 @@ Arrow e merece um benchmark contra o fluxo acima.
 
 | Regra da documentação | Consequência para a biblioteca |
 | --- | --- |
-| Colunas são associadas por posição, e a quantidade precisa coincidir com a tabela. | A ordem das colunas no Parquet é a ordem do modelo. Os dois derivam do mesmo `Table`. Lido no ambiente alvo em 2026-09-21: um arquivo de cinco colunas numa tabela de seis reprova com `Spectrum Scan Error` 15007, `Unmatched number of columns`. |
-| A lista de colunas, `COPY tabela (colunas) FROM ... FORMAT AS PARQUET MANIFEST`, é aceita (2026-09-21): as colunas do arquivo entram nas listadas, por posição, e a coluna fora da lista fica nula. `FILLRECORD` carregou o mesmo arquivo com o mesmo resultado, 100 linhas e a coluna nova nula (13:35 e 13:39). | Um arquivo anterior a uma coluna nova entra por `FILLRECORD`, que aceita num manifesto só arquivos anteriores e posteriores à coluna, ou pela lista de colunas, que exige um `COPY` por contagem de colunas; nenhum dos dois fornece o valor de uma coluna ausente. `FILLRECORD` entra em todo `COPY` da biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md)), e o `appender` da [etapa 5](PLAN-STAGE-5.md) usa também a lista das colunas do arquivo, para que o lote sem uma coluna do meio não desloque as seguintes; o ambiente alvo leu cada um sozinho, e a combinação espera a próxima bateria (`test_appender_loads_a_batch_without_a_middle_column`). |
+| Colunas são associadas por posição, e a quantidade precisa coincidir com a tabela. | Os arquivos de uma tabela Delta nem sempre têm as colunas do modelo na ordem dele: o anterior a uma coluna nova não a tem, e o delta-rs grava a coluna nova no fim. Todo `COPY` da biblioteca passa a lista das colunas do arquivo, a regra seguinte. Lido no ambiente alvo em 2026-09-21: um arquivo de cinco colunas numa tabela de seis reprova com `Spectrum Scan Error` 15007, `Unmatched number of columns`. |
+| A lista de colunas, `COPY tabela (colunas) FROM ... FORMAT AS PARQUET MANIFEST`, é aceita (2026-09-21): as colunas do arquivo entram nas listadas, por posição, e a coluna fora da lista fica nula. `FILLRECORD` carregou o mesmo arquivo com o mesmo resultado, 100 linhas e a coluna nova nula (13:35 e 13:39). | Um arquivo anterior a uma coluna nova entra por `FILLRECORD`, que só completa as colunas do fim, ou pela lista de colunas, que exige um `COPY` por lista; nenhum dos dois fornece o valor de uma coluna ausente. `FILLRECORD` entra em todo `COPY` da biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md)), e todo `COPY` passa também a lista das colunas do arquivo, para que uma coluna nova no meio do modelo ou uma reordenação não desloque as seguintes: o do `appender` da [etapa 5](PLAN-STAGE-5.md), com as colunas do primeiro lote, e o da carga do Delta, no `ingest`, no `pinned_delta` e na publicação, um por manifesto de `copy_manifest`, com as colunas do rodapé (decisão do usuário de 2026-09-28). O ambiente alvo leu cada um sozinho, e a combinação espera a próxima bateria (`test_appender_loads_a_batch_without_a_middle_column` e os casos da coluna nova no meio e da reordenação de `tests/test_engine_redshift.py` e `tests/test_publication.py`). |
 | Só existem as colunas gravadas no arquivo. | A coluna de partição `mes` não está nos arquivos do Delta: a carga passa por uma staging sem `mes` e por `INSERT ... SELECT ..., '<mes>'` ([delta.md](delta.md)). |
 | Uma string maior que o `VARCHAR` de destino aborta o `COPY` (2026-09-21): `Spectrum Scan Error` 15007, e `sys_load_error_detail` diz `The length of the data column descricao is longer than the length defined in the table. Table: 200, Data: 300`. | A auditoria de tamanho da [etapa 4](PLAN-STAGE-4.md) é a barreira; `TRUNCATECOLUMNS` não é aceito com Parquet (`0A000`, `TRUNCATECOLUMNS argument is not supported for PARQUET based COPY`, 2026-09-21). |
 | Parâmetros aceitos: `ACCEPTINVCHARS`, `FILLRECORD`, `FROM`, `IAM_ROLE`, `STATUPDATE`, `MANIFEST`, `EXPLICIT_IDS`. `MAXERROR`, `NOLOAD` e `COMPUPDATE` não são aceitos, e não há compressão automática. | O primeiro erro aborta o `COPY`. A validação acontece antes, no Arrow. |
@@ -1254,17 +1254,20 @@ O manifesto é um objeto com `entries`, uma entrada por arquivo:
 
 ### Do log do Delta para o manifesto do COPY
 
-A biblioteca lê as ações `add` da versão (`get_add_actions()`, uma linha por arquivo vivo) e grava o
-manifesto. É o `copy_manifest` da [etapa 3](PLAN-STAGE-3.md), usado pela ingestão da
-[etapa 5](PLAN-STAGE-5.md) e pela publicação da [etapa 8](PLAN-STAGE-8.md).
+A biblioteca lê as ações `add` da versão (`get_add_actions()`, uma linha por arquivo vivo) e o
+rodapé de cada arquivo, e grava um manifesto por lista de colunas dos rodapés, que o `COPY` do
+manifesto nomeia (decisão do usuário de 2026-09-28). É o `copy_manifest` da
+[etapa 3](PLAN-STAGE-3.md), usado pela ingestão da [etapa 5](PLAN-STAGE-5.md) e pela publicação
+da [etapa 8](PLAN-STAGE-8.md).
 
 | Ação `add` | Entrada do manifesto |
 | --- | --- |
 | `path`, relativo à pasta da tabela | `url`, a URI da tabela mais o caminho |
 | `size_bytes` | `meta.content_length` |
 | nenhuma | `mandatory: true`, porque o log afirma que o arquivo existe: sumiu um, o `COPY` falha em vez de carregar de menos |
-| `num_records` | fica fora; a soma é o valor a comparar com `pg_last_copy_count()` antes do `commit` |
-| `partition.<coluna>` | fica fora, e é a razão da staging: o valor da partição não está no arquivo, o `COPY` é posicional, e o `INSERT INTO <tabela> (<colunas>) SELECT ..., '<valor>', ... FROM <staging>` põe o valor no lugar da coluna |
+| `num_records` | fica fora; a soma é o valor a comparar com a soma dos `pg_last_copy_count()` dos `COPY` da partição, um por manifesto, antes do `commit`, conta que a biblioteca não faz |
+| nenhuma; o rodapé do arquivo | o manifesto em que a entrada fica, o da lista das colunas do rodapé, que o `COPY` desse manifesto nomeia |
+| `partition.<coluna>` | fica fora, e é a razão da staging: o valor da partição não está no arquivo, o `COPY` só carrega as colunas dele, e o `INSERT INTO <tabela> (<colunas>) SELECT ..., '<valor>', ... FROM <staging>` põe o valor no lugar da coluna |
 | `min`, `max`, `null_count` | ficam fora; o `COPY` não lê estatística |
 
 Escolher os arquivos é filtrar as ações `add` por `partition.<coluna>` antes de montar as entradas,

@@ -13,11 +13,12 @@ tabela, depois das conferências do rodapé de cada arquivo e com a releitura pe
 depois do commit, e é o caminho dos motores; ``publish_partition`` grava os dados pelo escritor do
 delta-rs, que confere tudo e paga a memória, e é o do motor Redshift para a partição com ``Double``
 não finito, cujo rodapé do ``UNLOAD`` deixa o ``NaN`` fora do máximo. ``version_diff`` lê no log as
-partições alteradas entre duas versões, ``copy_manifest`` monta o manifesto do ``COPY`` do Redshift,
-e ``snapshot`` marca no arquivo de controle do ambiente as versões de um snapshot do banco, que
-``vacuum_keeping_snapshots`` preserva; ``set_channel`` aponta um canal do ambiente para um
-snapshot, e ``channel_snapshot`` e ``snapshot_versions`` leem o canal e as versões para o leitor
-e a publicação. ``compact``, ``deep_copy`` e ``export_snapshot`` são a operação.
+partições alteradas entre duas versões, ``copy_manifest`` monta os manifestos do ``COPY`` do
+Redshift, um por lista de colunas dos arquivos, e ``snapshot`` marca no arquivo de controle do
+ambiente as versões de um snapshot do banco, que ``vacuum_keeping_snapshots`` preserva;
+``set_channel`` aponta um canal do ambiente para um snapshot, e ``channel_snapshot`` e
+``snapshot_versions`` leem o canal e as versões para o leitor e a publicação. ``compact``,
+``deep_copy`` e ``export_snapshot`` são a operação.
 
 Exemplo, numa pasta local:
 

@@ -339,9 +339,10 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   não cria a pasta; a linha do `RETURN_STATS` vira um `RegisteredFile` por
   `delta.file_from_return_stats` (contagem, tamanho, `null_count` de todas as colunas, `min` e
   `max` dos tipos que transcrevem exato), e `delta.register_files` faz as conferências, o commit e a
-  releitura, com `expected_rows` do `count(*)` do sandbox. A ordem das colunas e a coluna de
-  partição fora do arquivo são conferências de `register_files` ([etapa 3](PLAN-STAGE-3.md)): o
-  `COPY` posicional do Redshift leria o arquivo fora delas.
+  releitura, com `expected_rows` do `count(*)` do sandbox. A coluna de partição fora do
+  arquivo e a ordem das colunas são conferências de `register_files` ([etapa 3](PLAN-STAGE-3.md)):
+  o `COPY` do Redshift, que lista as colunas do rodapé, mandaria a coluna de partição para a
+  staging, que não a tem, e a ordem, que nenhum leitor exige desde essa lista, segue conferida.
 - **`cleanup`** chama `interrupt()` na conexão antes de tomar o lock, porque a execução acabou e o
   comando em curso, de um stream que ninguém lê, é cancelado em vez de esperado (2 ms com uma
   ordenação em curso, decisão do usuário de 2026-09-23); depois fecha a conexão e apaga o arquivo do

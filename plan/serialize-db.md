@@ -191,13 +191,15 @@ O exemplo ilustrado, com versões e artefatos de cada passo, está em [`PLAN.md`
 O mesmo ciclo, com o motor Redshift; o que muda é onde os dados ficam.
 
 1. O sandbox são tabelas `exec_<id>_<tabela>` no esquema único, criadas pelo DDL do contrato.
-2. `run.ingest` monta o manifesto dos arquivos das partições pedidas, na versão fixada, e carrega por
-   `COPY ... MANIFEST` na staging sem a coluna de partição, seguido de
+2. `run.ingest` monta os manifestos dos arquivos das partições pedidas, na versão fixada, um por
+   lista de colunas dos rodapés, e carrega por um `COPY ... MANIFEST` por manifesto, com a lista, na
+   staging sem a coluna de partição, seguido de
    `INSERT INTO <tabela> (<colunas>) SELECT ..., '<valor>', ... FROM <staging>`, na ordem do
-   contrato, com `JSON_PARSE` nas colunas JSON. A carga de
-   arquivos anteriores a uma coluna nova vai por lista de colunas, confirmada em 2026-09-21, ou por
-   `FILLRECORD`, que carregou o mesmo arquivo com a coluna nova nula, o caminho de todo `COPY` da
-   biblioteca (decisão do usuário de 2026-09-23, [etapa 8](PLAN-STAGE-8.md)).
+   contrato, com `JSON_PARSE` nas colunas JSON. A lista leva
+   cada coluna do arquivo à de mesmo nome, e a coluna que um arquivo anterior a ela não tem fica
+   nula (decisão do usuário de 2026-09-28); o `FILLRECORD`, que carregou o mesmo arquivo com a
+   coluna nova nula, entra em todo `COPY` da biblioteca (decisão do usuário de 2026-09-23,
+   [etapa 8](PLAN-STAGE-8.md)).
 3. O pipeline roda os mesmos statements Core, compilados para o Redshift, numa sessão só; os lotes
    entram por Parquet em `staging/` mais `COPY`, um row group por lote, e saem por `UNLOAD` em
    `stream` e das tuplas do cursor em `query`.
@@ -224,12 +226,12 @@ atual de cada tabela ([etapa 10](PLAN-STAGE-10.md)).
 1. `version_diff` compara, para cada tabela, a versão em `serialize_db_publications` com a versão
    escolhida e devolve as partições com arquivos alterados, nos dois sentidos: a volta a um
    snapshot anterior troca as mesmas partições. Na primeira publicação, todas as partições.
-2. A reconciliação repete no Redshift o diff aditivo do Delta, `ALTER TABLE ADD COLUMN` no fim da
-   tabela, porque o `COPY` é posicional; um diff destrutivo recria a tabela e recarrega tudo.
+2. A reconciliação repete no Redshift o diff aditivo do Delta, `ALTER TABLE ADD COLUMN`, que o
+   Redshift põe no fim da tabela; um diff destrutivo recria a tabela e recarrega tudo.
 3. Numa transação por tabela (decisão do usuário de 2026-09-23): a leitura da linha de
    `serialize_db_publications`, que identifica a versão anterior; sem linha, a primeira publicação;
    com linha, a versão conferida contra a do Delta; para cada partição, `DELETE` da partição,
-   `COPY ... MANIFEST` na staging e
+   um `COPY ... MANIFEST` por lista de colunas dos arquivos na staging e
    `INSERT INTO <publicada> (<colunas>) SELECT ..., '<valor>', ... FROM <staging>`; e no fim o
    `INSERT` da linha de controle, ou o `UPDATE` condicionado à versão lida. A outra publicação
    que grava a tabela na mesma janela sai com `ExecutionConflict`. A transação dá aos clientes a

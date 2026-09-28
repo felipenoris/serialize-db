@@ -382,6 +382,15 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   repeated `COMMIT` outside a transaction, which returned success. A second
   `RedshiftAppender.close` does nothing (it ran another `COPY` of the deleted file).
   `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+- The user's decision of 2026-09-28 extended the column list to every `COPY` from Delta (`ingest`,
+  `pinned_delta`, publication): `delta.copy_manifest` reads each file's footer once, in series,
+  groups the files by their column-name tuple and writes `1.manifest`, `2.manifest` in a folder,
+  one `COPY <staging> (<cols>) ... MANIFEST FILLRECORD` each, because the files written before a
+  middle column lack it, delta-rs writes a new column at the end of its files, and a reordered
+  model shifted values without error on the stand-in (`novo` got `a1`, `a` got `b1`, `b` null).
+  `get_add_actions` lists the newest commit first, so the actions are sorted by `path`. The new
+  `redshift` cases of `tests/test_engine_redshift.py` and `tests/test_publication.py` read the list
+  with `FILLRECORD` in the next battery. `plan/PLAN-STAGE-3.md`
 - The stand-in maps DuckDB's `TransactionContext Error: Conflict on tuple deletion!` to the
   `1023` message, catalog `does not exist` to `XX000` with the target's `Relation <name> does not
   exist in the database.` (since 2026-09-24; `42P01` before) and `already exists` to `42P07`, and lists

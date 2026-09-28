@@ -339,7 +339,9 @@ cada um, e relê a versão pelos dois leitores, desfazendo o commit numa diferen
 
 `serialize_db.delta.reconcile` aplica ao log o que o modelo acrescentou (coluna anulável,
 `NOT NULL` relaxado, comentários) e recusa com `serialize_db.errors.SchemaDiffRefused` o que só
-`serialize_db.delta.rewrite` resolve, num commit: renomeação, remoção e mudança de tipo.
+`serialize_db.delta.rewrite` resolve, num commit: renomeação, remoção e mudança de tipo. A coluna
+nova entra em qualquer posição do modelo: os arquivos gravados antes dela não a têm, e todo leitor,
+o `COPY` do Redshift inclusive, liga cada coluna do arquivo à de mesmo nome e lê a nova nula neles.
 `serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo de controle do
 ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva. O nome do snapshot é
 imutável: a entrada não muda depois de gravada, e o nome não volta a ser usado, nem depois do
@@ -619,9 +621,10 @@ serialize-db run --root s3://bucket/projeto/delta --environment prd \
 `serialize_db.publication` publica as tabelas `<ambiente>_<tabela>` no esquema do Redshift a
 partir do Delta, uma transação por tabela: a linha de `serialize_db_publications` lida no início
 diz a versão publicada, `serialize_db.delta.version_diff` diz as partições alteradas desde ela,
-cada uma entra por `COPY ... MANIFEST` numa staging temporária e `INSERT ... SELECT`, e a linha de
-controle é gravada por último; cada tabela publicada vai ao log com as partições, o tempo e o pico
-de memória residente do processo. A tabela de controle é criada uma vez, pelo usuário:
+cada uma entra por `COPY ... MANIFEST`, um por lista de colunas dos arquivos, numa staging
+temporária e `INSERT ... SELECT`, e a linha de controle é gravada por último; cada tabela publicada
+vai ao log com as partições, o tempo e o pico de memória residente do processo. A tabela de controle
+é criada uma vez, pelo usuário:
 
 ```shell
 serialize-db publish_redshift --init

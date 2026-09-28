@@ -181,32 +181,22 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
   leitura vale só para o código dela. Desde a implementação de 2026-09-28 a sonda chama
   `create_table` e `append` dos motores, e a docstring do `appender` nada diz sobre dois escritores
   na mesma tabela até a rodada.
-- **A lista de colunas com `FILLRECORD` no `COPY` do `appender` do Redshift.** Desde a revisão de
-  2026-09-28, o `COPY` do `appender`, direto e pela staging `_carga`, lista as colunas do arquivo,
-  as do primeiro lote, com `FILLRECORD` ([`POC.md`](POC.md)). O alvo leu a lista e o `FILLRECORD`
-  cada um sozinho em 2026-09-21, nunca juntos. O caso
-  `test_appender_loads_a_batch_without_a_middle_column` de `tests/test_engine_redshift.py` lê a
-  combinação na próxima bateria; se o alvo a recusar, o `appender` deixa o `FILLRECORD` quando
-  passa a lista.
 
 ## Achados da revisão do repositório
 
 A revisão de 2026-09-28 ([`POC.md`](POC.md), seção "O que a revisão do repositório de 2026-09-28
-reproduziu") corrigiu o que não dependia de decisão; cada item abaixo espera o usuário.
+reproduziu") corrigiu o que não dependia de decisão, e as decisões do usuário do mesmo dia
+fecharam os demais achados; cada item abaixo espera uma rodada no alvo.
 
-- **O `COPY` posicional do Redshift depois de uma coluna nova no meio do modelo.** O `COPY ...
-  FORMAT AS PARQUET` liga as colunas do arquivo às da tabela pela posição, e as stagings do `ingest`
-  e do `pinned_delta` do motor Redshift e da publicação nascem na ordem do modelo (`staging_ddl`,
-  chamado por `_load_from_delta` e por `publication_statements`). O `reconcile` põe a coluna nova no
-  fim do esquema Delta, os arquivos gravados antes dela não a têm, e o `FILLRECORD` completa com
-  nulo a última coluna da staging: com a coluna nova no meio do modelo, ou com colunas reordenadas,
-  cada valor dos arquivos antigos cai na coluna vizinha, sem erro. No substituto, a coluna `novo`
-  entre `id` e `a` recebeu os valores de `a`, `a` os de `b`, e `b` ficou nula, no `ingest` e na
-  publicação. A tabela "Regras do COPY para Parquet" de [`redshift.md`](redshift.md) supõe a ordem
-  do arquivo igual à do modelo. Espera o usuário: o `COPY` com a lista de colunas lida do rodapé de
-  cada grupo de arquivos, que o alvo aceitou em 2026-09-21 e que pede um `COPY` por lista distinta;
-  ou a recusa, em `schema_diff` e em `check_models`, de uma coluna nova fora do fim do modelo e de
-  uma reordenação.
+- **A lista de colunas com `FILLRECORD` nos `COPY` do Redshift.** Desde a revisão de 2026-09-28,
+  todo `COPY` da biblioteca lista as colunas do arquivo, com `FILLRECORD`: o do `appender`, direto
+  e pela staging `_carga`, as do primeiro lote, e os da carga do Delta, no `ingest`, no
+  `pinned_delta` e na publicação, as do rodapé, um por lista de colunas dos arquivos (decisão do
+  usuário de 2026-09-28, [`POC.md`](POC.md)). O alvo leu a lista e o `FILLRECORD` cada um sozinho
+  em 2026-09-21, nunca juntos. `test_appender_loads_a_batch_without_a_middle_column` e os casos da
+  coluna nova no meio e da reordenação de `tests/test_engine_redshift.py` e de
+  `tests/test_publication.py` leem a combinação na próxima bateria; se o alvo a recusar, o `COPY`
+  deixa o `FILLRECORD` quando passa a lista, que já deixa nula a coluna fora dela.
 - **O DuckDB de `probes/diagnose_aws.py`.** A checagem do DuckDB carrega a extensão `aws` e cria o
   secret com `PROVIDER credential_chain`, que a biblioteca deixou em 2026-09-25 pela chave do
   `boto3`, e sem `URL_STYLE 'path'` nem `USE_SSL false` um endpoint `http`, o do substituto, reprova
