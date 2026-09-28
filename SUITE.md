@@ -2,7 +2,7 @@
 # Probes e Testes - Lab
 
 ```
-export UV_PYTHON_DOWNLOADS=automatic uv sync --group dev
+export UV_PYTHON_DOWNLOADS=automatic uv sync
 export S3_TMP_PATH=s3://awsds-sandbox-smus-projects/dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/shared/serialize-db-tests
 .venv/bin/python probes/space.py
 .venv/bin/python probes/bucket.py $S3_TMP_PATH
