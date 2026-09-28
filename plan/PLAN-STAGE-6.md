@@ -21,9 +21,9 @@ ganhou `open_delta` e `open_redshift`, descritos no arquivo dessa etapa.
 | `run.next_ids(table, n)` | Um `range` de `n` inteiros contíguos da chave sequencial, a chave primária inteira de uma coluna, sob lock, a partir de `max_key(chave) + 1` na versão fixada da tabela, lido uma vez por tabela, no primeiro pedido, na versão fixada desse momento, a da abertura ou a que `publish_delta` avançou; as faixas de threads paralelas não se sobrepõem, e os ids de uma reexecução diferem. Numa tabela de chave primária composta o cliente decide os ids e não chama `next_ids` (decisão do usuário de 2026-09-23). |
 | `run.audit(table, partitions, foreign_keys=False, key_scope=None)` | `engine.audit` com a URI e a versão fixada da tabela e, em `referenced`, as de cada tabela que uma chave estrangeira aponta; devolve o `AuditReport` aprovado e o guarda; a reprovação levanta `AuditFailed` e encerra sem tocar o Delta, e o relatório, com o SQL de cada verificação e até 20 linhas de amostra por verificação reprovada, vai para o log. |
 | `run.publish_delta(*tables, partitions=None, audit=True, max_workers=1)` | Exige a auditoria aprovada de cada tabela nessas partições na própria execução, e `audit=False` dispensa a exigência e fica no log; confere por `version_diff` que nenhuma alteração de dados entrou em cada tabela desde a versão fixada e aborta com `ExecutionConflict` quando entrou (um avanço só de metadados ou de manutenção passa e atualiza a versão fixada); depois `create_table` se não existir, `reconcile` e `export_partition` por partição com `commit_metadata`, tabela a tabela num `ThreadPoolExecutor(max_workers)`: na primeira falha as tarefas em curso terminam, as não iniciadas são canceladas, e a exceção lista o resultado de cada tabela, porque os commits feitos ficam; avança `versions[table]` sob lock. O padrão 1 vem da memória por escrita (`delta.md`). O `export_partition` dos dois motores registra por `register_files` o arquivo que o motor gravou, depois das conferências da [etapa 3](PLAN-STAGE-3.md), e o motor Redshift troca para `publish_partition` a partição com `Double` não finito ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)); a execução não escolhe o modo, porque o `rewrite` saiu das etapas 4 e 7 (decisão do usuário de 2026-09-24). A cada partição, `run.publish_delta` passa a `export_partition`, em `columns_without_min_max`, as colunas `Double` com valor não finito que a auditoria da execução contou (`AuditReport.nonfinite_columns`), e todas as colunas `Double` da tabela com `audit=False`; a lista supõe a tabela sem mudança entre a auditoria e a publicação, como a própria aprovação (decisão do usuário de 2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59)). |
-| `run.snapshot(name)` | Marca a execução: `serialize_db_snapshot` nos commits e `delta.snapshot(storage, environment, name, versions)` no encerramento ([etapa 3](PLAN-STAGE-3.md)). |
-| `serialize-db run` | `--root`, `--environment`, `--engine`, `--partition` (opcional, como a partição do `Execution`), `--execution-id`, `--metadata modulo:atributo` (o `MetaData` dos modelos, como em `schema` e `sql`) e `modulo:funcao` do pipeline, que recebe `run`; código de saída 0, 1 na reprovação da auditoria, 2 no conflito na tabela e no arquivo de controle, no `ContractError` da abertura ou do pipeline, como a configuração do Redshift sem conexão ou com a `SERIALIZE_DB_REDSHIFT_PORT` que não é número e o `execution_id` longo demais para o prefixo do sandbox, e no erro de uso, como o motor fora de `duckdb` e `redshift`, em `--engine` ou em `SERIALIZE_DB_ENGINE`. |
-| `serialize-db audit` | `--metadata`, `--table`, `--partitions`, `--foreign-keys`, `--key-scope` e `--engine`, que escolhe o dialeto; com `--sql` imprime, para depuração, o texto das verificações desse dialeto e não abre conexão nem armazenamento. Sem `--sql`, com `--root` e `--environment`, roda a auditoria sobre a versão atual do Delta, no motor de `--engine`, e imprime o relatório; sai com 1 na reprovação e com 2 na tabela fora dos modelos ou sem Delta, em `--partitions` numa tabela sem partição, antes de abrir um motor e também com `--sql`, no motor fora de `duckdb` e `redshift` e na configuração do Redshift sem conexão ou com a porta que não é número. Os padrões vêm das variáveis `SERIALIZE_DB_*`, como no `run`. |
+| `run.snapshot(name)` | Marca a execução: `serialize_db_snapshot` nos commits e `delta.snapshot(storage, environment, name, versions)` no encerramento ([etapa 3](PLAN-STAGE-3.md)); o nome já presente em `snapshots` ou em `archived` do arquivo de controle é `ContractError` na chamada, antes de qualquer commit, com a mensagem que manda marcar outro nome e apontar o canal para ele com `serialize-db channel` (decisão do usuário de 2026-09-28). |
+| `serialize-db run` | `--root`, `--environment`, `--engine`, `--partition` (opcional, como a partição do `Execution`), `--execution-id`, `--metadata modulo:atributo` (o `MetaData` dos modelos, como em `schema` e `sql`) e `modulo:funcao` do pipeline, que recebe `run`; código de saída 0, 1 na reprovação da auditoria, 2 no conflito na tabela e no arquivo de controle, no `ContractError` da abertura, do pipeline ou da saída, como a configuração do Redshift sem conexão ou com a `SERIALIZE_DB_REDSHIFT_PORT` que não é número, o `execution_id` longo demais para o prefixo do sandbox e o nome de snapshot já usado, e no erro de uso, como o motor fora de `duckdb` e `redshift`, em `--engine` ou em `SERIALIZE_DB_ENGINE`. |
+| `serialize-db audit` | `--metadata`, `--table`, `--partitions`, `--foreign-keys`, `--key-scope` e `--engine`, que escolhe o dialeto; com `--sql` imprime, para depuração, o texto das verificações desse dialeto e não abre conexão nem armazenamento. Sem `--sql`, com `--root` e `--environment`, roda a auditoria sobre a versão atual do Delta, no motor de `--engine`, e imprime o relatório; sai com 1 na reprovação, também quando o `ingest` recusa um valor fora do contrato (no DuckDB, o nulo numa coluna `NOT NULL` e o JSON malformado; no Redshift, qualquer erro do driver), impresso como `ingestão: reprovada (<erro do banco>)` sem as outras contagens, e com 2 na tabela fora dos modelos ou sem Delta, em `--partitions` numa tabela sem partição, antes de abrir um motor e também com `--sql`, no motor fora de `duckdb` e `redshift` e na configuração do Redshift sem conexão ou com a porta que não é número. Os padrões vêm das variáveis `SERIALIZE_DB_*`, como no `run`. |
 
 O log é o `logging` padrão com um resumo por execução: identificador, partição (ou `sem partição`),
 versões lidas, versões gravadas e tempo por passo. Testes: `tests/test_execution.py` sob a raiz local com o motor DuckDB:
@@ -128,9 +128,13 @@ motor (`"duckdb"`, `"redshift"`), ou um motor já construído, para os testes.
   vez, o worker único pegou a terceira tabela antes de o laço principal ver a falha da segunda
   (leitura de 2026-09-23, [`POC.md`](POC.md)). `versions[table]` avança sob lock a cada commit, e o
   dicionário devolvido é `{tabela: versão}`.
-- **`snapshot`** marca o nome, pela regra da partição, para `commit_metadata` dos commits
+- **`snapshot`** confere o nome pela regra da partição, lê o arquivo de controle
+  (`delta.read_snapshots`) e recusa com `ContractError` o nome já presente em `snapshots` ou em
+  `archived`, antes de qualquer commit; depois marca o nome para `commit_metadata` dos commits
   seguintes e, no `__exit__` de uma execução sem erro, grava `delta.snapshot(storage, environment,
-  name, versions)` com todas as tabelas do ambiente; a execução que falha não grava o snapshot.
+  name, versions)` com todas as tabelas do ambiente; a execução que falha não grava o snapshot, e o
+  nome que outro escritor grava depois da marcação é o `ContractError` de `delta.snapshot` na
+  saída, depois dos commits.
 - **`cli.main`** usa `argparse` com um subcomando por primitiva; `run` recebe `--root`,
   `--environment`, `--engine`, `--partition` (opcional), `--execution-id`,
   `--metadata modulo:atributo` (o `MetaData` dos modelos do pipeline) e o `modulo:funcao` do
@@ -139,19 +143,24 @@ motor (`"duckdb"`, `"redshift"`), ou um motor já construído, para os testes.
   modelo. O código de saída é 0, 1 em `AuditFailed`, 2 em `ExecutionConflict`, no `ConflictError`
   do arquivo de controle, que outro escritor mudou antes da gravação do snapshot na saída, no
   `ContractError` da abertura (o `String(n)`, a configuração do Redshift sem conexão, a
-  `SERIALIZE_DB_REDSHIFT_PORT` que não é número, recusada por `RedshiftConfig.from_environment`) e
-  no erro de uso do `argparse`, que também cobre o `modulo:atributo` que não importa e o motor fora
-  de `duckdb` e `redshift`: o `type` de `--engine` confere também o padrão de
-  `SERIALIZE_DB_ENGINE`, que o `choices` não confere. `audit` recusa com 2 `--partitions` numa
-  tabela sem partição antes de abrir um motor, com e sem `--sql`; com `--sql` imprime o texto de
-  `audit_sql` no dialeto de `--engine`, com o sentinela `{prefix}`; sem `--sql`, abre um sandbox
-  próprio do motor de `--engine`, e outro nome é `ContractError`, nunca o DuckDB; ingere
-  materializada a versão atual da tabela nas partições pedidas e roda a auditoria contra ela, com a
-  versão atual de cada tabela referenciada, com código 0 na aprovação e 1 na reprovação; o
-  relatório impresso diz `tabela inteira` nos totais da tabela sem partição. `run` e `audit`
-  configuram o `logging` em `INFO`. O `run` importa os
-  módulos antes de abrir a execução, para a importação preguiçosa não correr ao lado das threads da
-  biblioteca.
+  `SERIALIZE_DB_REDSHIFT_PORT` que não é número, recusada por `RedshiftConfig.from_environment`), do
+  pipeline e da saída (o nome de snapshot já usado, na chamada ou na saída) e no erro de uso do
+  `argparse`, que também cobre o `modulo:atributo` que não importa e o motor fora de `duckdb` e
+  `redshift`: o `type` de `--engine` confere também o padrão de `SERIALIZE_DB_ENGINE`, que o
+  `choices` não confere. `audit` recusa com 2 `--partitions` numa tabela sem partição antes de abrir
+  um motor, com e sem `--sql`; com `--sql` imprime o texto de `audit_sql` no dialeto de `--engine`,
+  com o sentinela `{prefix}`; sem `--sql`, abre um sandbox próprio do motor de `--engine`, e outro
+  nome é `ContractError`, nunca o DuckDB; ingere materializada a versão atual da tabela nas
+  partições pedidas e roda a auditoria contra ela, com a versão atual de cada tabela referenciada,
+  com código 0 na aprovação e 1 na reprovação; o relatório impresso diz `tabela inteira` nos totais
+  da tabela sem partição. O `ingest` pelo DDL do modelo recusa o nulo numa coluna `NOT NULL` e o
+  JSON malformado antes das verificações que os contariam: `ConstraintException` e
+  `ConversionException` no DuckDB, e no Redshift um erro do driver que a classe não separa dos
+  outros; a linha de comando imprime a recusa como `ingestão: reprovada (<erro do banco>)`, sem as
+  outras contagens, e sai com 1, e qualquer outro erro do DuckDB, como o acesso negado a um arquivo,
+  sobe com o traceback (decisão do usuário de 2026-09-28). `run` e `audit` configuram o `logging` em
+  `INFO`. O `run` importa os módulos antes de abrir a execução, para a importação preguiçosa não
+  correr ao lado das threads da biblioteca.
 
 ## Pré-requisitos e pós-condições
 
@@ -188,7 +197,12 @@ as chamadas.
 | Paralelismo | `test_publish_delta_with_two_workers_matches_one` | O mesmo resultado com `max_workers=1` e `2`; com um worker, a falha da segunda tabela deixa a primeira concluída e a terceira cancelada, e a nota lista cada resultado. |
 | `Double` não finito | `test_publish_delta_passes_the_nonfinite_columns_to_the_export` | O motor de mentira recebe, por partição, as colunas `Double` com valor não finito que a auditoria contou, a partição sem elas recebe a lista vazia, e com `audit=False` recebe todas as colunas `Double`; no motor DuckDB, a partição com `NaN` sai sem o mínimo e o máximo da coluna. |
 | Metadados | `test_commit_metadata_in_history` | `serialize_db_execution_id` e `serialize_db_input_versions` no `history`; `serialize_db_snapshot` só na execução marcada. |
-| Snapshot | `test_snapshot_writes_the_control_file_at_exit` | Todas as tabelas do ambiente na entrada, gravada uma vez; a execução que falha não a grava; o nome repetido é `ValueError` na saída, e o resumo no log diz `com erro`. |
+| Snapshot | `test_snapshot_writes_the_control_file_at_exit` | Todas as tabelas do ambiente na entrada, gravada uma vez; a execução que falha não a grava; o nome que outro escritor grava depois da marcação é `ContractError` na saída, depois do commit, e o resumo no log diz `com erro`. |
+| Nome de snapshot usado | `test_snapshot_refuses_a_used_name_before_any_commit` | O nome em `snapshots` e o nome em `archived` são `ContractError` na chamada de `run.snapshot`, com `serialize-db channel` na mensagem; a tabela não é criada e o arquivo de controle não muda. |
+| Nome de snapshot na linha de comando | `test_cli_run_exits_with_2_on_a_used_snapshot_name` | `serialize-db run` sai com 2 no nome em `snapshots` e em `archived`, com a versão do Delta igual, e também quando outro escritor grava o nome depois da marcação; nenhum traceback. |
+| Ingestão recusada na auditoria | `test_cli_audit_prints_the_refused_ingest_as_a_failed_audit` | No DuckDB, o nulo numa coluna `NOT NULL` e o JSON malformado saem com 1 e a linha `ingestão: reprovada (...)`, sem traceback. |
+| Ingestão recusada no Redshift | `test_cli_audit_on_redshift_prints_the_refused_ingest` | No substituto, com `--engine redshift`, as duas recusas saem com 1 e a mesma linha, que o relatório da sessão guarda para a bateria no alvo (`redshift.audit.refused_ingest.<mês>`). |
+| Erro de acesso na auditoria | `test_cli_audit_lets_an_access_error_of_the_ingest_propagate` | Um `duckdb.IOException` do `ingest` sobe de `cli.main`, sem a linha de reprovação. |
 | Linha de comando | `test_cli_run_parses_and_exits_by_result` | `--partition` e `--execution-id` fora da regra saem com 2; `--metadata` obrigatório; o pipeline que não importa sai com 2; `AuditFailed` sai com 1; `ExecutionConflict` com 2, e o `ConflictError` do arquivo de controle, que outro escritor grava entre a leitura e a escrita condicional do snapshot na saída, também; o `--export-mode` é recusado com 2; nenhum traceback. |
 | Linha de comando sem partição | `test_cli_run_without_partition` | Sem `--partition`, o pipeline que publica a tabela sem partição sai com 0, e o que pede as partições anteriores com 2, sem traceback. |
 | Configuração da execução | `test_cli_run_hands_the_redshift_config_to_the_execution` | `--engine redshift` constrói o motor Redshift com as variáveis `SERIALIZE_DB_REDSHIFT_*` e dá a configuração à execução; `--redshift` é erro de uso, com 2; no motor DuckDB a execução não tem a configuração nem `publish_redshift`. |

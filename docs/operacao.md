@@ -28,8 +28,8 @@ Antes: as variáveis `SERIALIZE_DB_REDSHIFT_*` da conexão. Depois: a tabela
 ### Snapshot do banco
 
 Na periodicidade do processo, por exemplo o fim do trimestre, dentro da execução marcada
-(`run.snapshot("2026T3")`, gravado no encerramento sem erro) ou fora dela, com a versão atual de
-cada tabela do ambiente:
+(`run.snapshot("2026T3")`, que recusa o nome já usado antes dos commits e grava a entrada no
+encerramento sem erro) ou fora dela, com a versão atual de cada tabela do ambiente:
 
 ```shell
 serialize-db snapshot --root s3://bucket/projeto/delta --environment prd \
@@ -194,7 +194,9 @@ serialize-db audit --root s3://bucket/projeto/delta --environment prd \
 serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
 ```
 
-Depois: o veredito de cada verificação, com as amostras; 1 quando alguma reprova.
+Depois: o veredito de cada verificação, com as amostras; 1 quando alguma reprova. Quando o banco
+recusa a ingestão pelo DDL do modelo, como no nulo numa coluna `NOT NULL` ou no JSON malformado, o
+comando imprime `ingestão: reprovada (<erro do banco>)`, sem as outras contagens, e sai com 1.
 
 ### Monitoração
 

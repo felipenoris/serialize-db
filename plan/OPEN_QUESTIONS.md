@@ -207,21 +207,6 @@ reproduziu") corrigiu o que não dependia de decisão; cada item abaixo espera o
   cada grupo de arquivos, que o alvo aceitou em 2026-09-21 e que pede um `COPY` por lista distinta;
   ou a recusa, em `schema_diff` e em `check_models`, de uma coluna nova fora do fim do modelo e de
   uma reordenação.
-- **A auditoria de `serialize-db audit` com o contrato no `ingest`.** Desde 2026-09-28,
-  `ingest(materialize=True)` do motor DuckDB cria a tabela pelo DDL do modelo e a enche por `INSERT
-  ... BY NAME`, e `serialize-db audit` ingere assim: um JSON malformado ou um nulo numa coluna `NOT
-  NULL`, os defeitos que as verificações `json_` e `nulo_` contam, derrubam o `ingest` com
-  `ConversionException` ou `ConstraintException` e saem com 1 e o traceback, sem relatório. O teste
-  da linha de comando só cobre a auditoria aprovada. Espera o usuário: a auditoria da linha de
-  comando sobre a view (`materialize=False`), que relê o Delta em cada verificação; uma
-  materialização sem o contrato só para ela; ou a recusa do `ingest` impressa como reprovação.
-- **O nome de snapshot repetido em `serialize-db run`.** `run.snapshot(nome)` só confere a regra do
-  nome, e o nome já presente no arquivo de controle é `ValueError` na saída do `with`, depois dos
-  commits; `serialize-db run` captura só `ContractError`, `AuditFailed`, `ExecutionConflict` e
-  `ConflictError`, e sai com 1 e o traceback, enquanto `docs/operacao.md` e a docstring de
-  `serialize_db.cli` prometem 2 no nome repetido. Espera o usuário: `delta.snapshot` levantar
-  `ContractError`, que deriva de `ValueError`, no nome repetido; conferir o nome já em
-  `run.snapshot`, antes dos commits; ou a documentação dizer 1.
 - **O DuckDB de `probes/diagnose_aws.py`.** A checagem do DuckDB carrega a extensão `aws` e cria o
   secret com `PROVIDER credential_chain`, que a biblioteca deixou em 2026-09-25 pela chave do
   `boto3`, e sem `URL_STYLE 'path'` nem `USE_SSL false` um endpoint `http`, o do substituto, reprova

@@ -426,13 +426,15 @@ O terceiro argumento do `Execution`, opcional, é a partição da execução, `r
 `serialize_db.errors.ExecutionConflict` a tabela em que outra execução gravou dados depois da
 abertura. Cada partição sai do sandbox num arquivo que o motor grava e entra no log por
 `serialize_db.delta.register_files`, depois das conferências. `run.snapshot("2026T3")` marca a
-execução: os commits levam o nome, e o encerramento sem erro grava as versões de todas as tabelas
-no arquivo de controle do ambiente; `serialize-db channel --name default --snapshot 2026T3` aponta
-depois o canal `default`, o snapshot que o leitor Delta lê sem argumento e que
-`serialize-db publish_redshift --channel default` publica. Refazer os dados de um snapshot é uma
-execução nova, marcada com outro nome (`run.snapshot("2026T3.r2")`), seguida do canal apontado
-para o nome novo; o `2026T3` continua legível pelo nome, e o runbook na página de
-`serialize_db.cli`, seção "Refazer um snapshot", traz os comandos.
+execução: os commits levam o nome, e o encerramento sem erro grava as versões de todas as tabelas no
+arquivo de controle do ambiente; um nome já usado, mesmo arquivado, é
+`serialize_db.errors.ContractError` na chamada, antes de qualquer commit;
+`serialize-db channel --name default --snapshot 2026T3` aponta depois o canal `default`, o snapshot
+que o leitor Delta lê sem argumento e que `serialize-db publish_redshift --channel default` publica.
+Refazer os dados de um snapshot é uma execução nova, marcada com outro nome
+(`run.snapshot("2026T3.r2")`), seguida do canal apontado para o nome novo; o `2026T3` continua
+legível pelo nome, e o runbook na página de `serialize_db.cli`, seção "Refazer um snapshot", traz os
+comandos.
 
 A linha de comando abre a mesma execução para uma função `modulo:funcao` que recebe `run`, e
 `serialize-db audit` imprime o texto das verificações de uma tabela ou roda a auditoria sobre a

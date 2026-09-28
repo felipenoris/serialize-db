@@ -78,14 +78,15 @@ do `pdoc`. O que a implementação mudou do plano:
   em ISO 8601; `get_add_actions(flatten=False)` traz `path`, `size_bytes`, `modification_time`,
   `num_records` e os structs `null_count`, `min`, `max` e `partition`, e `history()` do delta-rs
   traz os metadados do commit como chaves de primeiro nível ([`POC.md`](POC.md)).
-- `snapshot` recusa o nome presente em `archived`, e `Execution.snapshot` herda a recusa no
-  encerramento da execução marcada.
+- `snapshot` recusa o nome presente em `archived`, e `Execution.snapshot` confere o nome na
+  chamada, antes de qualquer commit da execução marcada (decisão do usuário de 2026-09-28).
 
 ## Estratégia de implementação
 
 - **`snapshot`** fora de uma execução lê a versão atual de cada tabela do ambiente que existe e
   grava a entrada; dentro da execução, `run.snapshot(name)` a grava no encerramento. O nome presente
-  em `snapshots` ou em `archived` é recusado.
+  em `snapshots` ou em `archived` é recusado com `ContractError`, e a mensagem manda usar outro
+  nome e `serialize-db channel`; `run.snapshot` o recusa já na chamada.
 - **`vacuum`** roda `vacuum_keeping_snapshots(uri, control, table.name, storage, retention_hours,
   apply, full)` da [etapa 3](PLAN-STAGE-3.md) para cada tabela, com `keep_versions` do arquivo de
   controle; sem `--apply` imprime a lista por tabela; `--full` inclui os órfãos das escritas
