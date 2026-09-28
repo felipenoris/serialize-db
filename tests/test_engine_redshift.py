@@ -511,6 +511,25 @@ def test_literal_text_keeps_the_colons_of_quoted_regions() -> None:
     assert values == {"id": 5}
 
 
+def test_literal_text_keeps_the_backslash_before_a_colon_in_a_value() -> None:
+    """O valor do cliente com contrabarra antes de ``:`` chega ao literal do ``UNLOAD`` com o
+    mesmo valor: o compilador desfaz o ``\\:`` do texto também nos valores já renderizados, e a
+    contrabarra a mais que o valor leva compensa. O Redshift lê ``\\\\`` como uma contrabarra e
+    ``\\:`` como ``:``."""
+    literal_by_value = {
+        r"a\:b": r"'a\\\:b'",
+        r"a\\:b": r"'a\\\\\:b'",
+        r"a\: b": r"'a\\\: b'",
+        r"a\::b": r"'a\\::b'",
+    }
+    for value, literal in literal_by_value.items():
+        assert redshift.literal_text("SELECT :v AS x", {"v": value}, PREFIX) == (
+            f"SELECT {literal} AS x")
+    # Na lista do IN, cada item.
+    assert redshift.literal_text("SELECT 1 WHERE 'x' IN :v", {"v": [r"a\:b", "c"]}, PREFIX) == (
+        r"SELECT 1 WHERE 'x' IN ('a\\\:b', 'c')")
+
+
 @pytest.mark.local
 def test_stream_empty_result(monkeypatch: pytest.MonkeyPatch,
                              local_location: LocalLocation) -> None:
@@ -1306,12 +1325,13 @@ def test_stream_literal_values_on_the_target(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 def test_stream_and_query_agree_on_a_colon_inside_a_literal(target: Target) -> None:
-    """Um texto com ``:nome`` dentro de um literal dá a mesma linha pelo ``stream`` e pelo
-    ``query``: o literal chega intacto ao ``UNLOAD``."""
+    """Um texto com ``:nome`` dentro de um literal, e um valor do cliente com contrabarra antes de
+    ``:``, dão a mesma linha pelo ``stream`` e pelo ``query``: o literal e o valor chegam intactos
+    ao ``UNLOAD``."""
     engine = target.engine
     rows = entry_rows(MONTHS[0], 1, 2, PROJECTED)
     rows = rows.set_column(rows.schema.get_field_index("codigo"), "codigo",
-                           pa.array(["ref :x1", "outra"]))
+                           pa.array(["ref :x1", r"ref \:x2"]))
     engine.create_table(PROJECTED)
     engine.append(PROJECTED, rows)
     text = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos_projetados" '
@@ -1320,6 +1340,16 @@ def test_stream_and_query_agree_on_a_colon_inside_a_literal(target: Target) -> N
     with engine.stream(text) as stream:
         by_stream = stream.read_all()
     assert by_query.column("id_lancamento").to_pylist() == [1]
+    assert by_stream.equals(by_query)
+
+    # O valor do cliente passa pelo cursor no query e pelo literal no stream.
+    by_value = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos_projetados" '
+                'WHERE "codigo" = :codigo')
+    params = {"codigo": r"ref \:x2"}
+    by_query = engine.query(by_value, params)
+    with engine.stream(by_value, params) as stream:
+        by_stream = stream.read_all()
+    assert by_query.column("id_lancamento").to_pylist() == [2]
     assert by_stream.equals(by_query)
 
 

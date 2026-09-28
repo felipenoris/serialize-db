@@ -114,6 +114,10 @@ _CREDENTIAL = re.compile(r"(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)\s+'[^
 # separa o texto citado dos marcadores :nome.
 _QUOTED = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"")
 
+# A contrabarra antes de ":" que o compilador do SQLAlchemy tira de um sa.text() depois de
+# renderizar os valores, com o padrão do BIND_PARAMS_ESC dele: "\:nome" sem ":" nem letra depois.
+_UNESCAPED_BY_THE_COMPILER = re.compile(r"\\(?=:[\w$]*(?![:\w$]))")
+
 # O tipo Arrow de cada OID do resultado; o NUMERIC vem à parte, com a precisão e a escala do
 # type_modifier. O texto, o CHAR e o SUPER saem em string, o tipo do JSON no motor DuckDB.
 _ARROW_BY_OID = {
@@ -552,19 +556,29 @@ def _escaped_colons(text: str) -> str:
     return _QUOTED.sub(escape, text)
 
 
+def _compiler_proof(value: object) -> object:
+    """O valor com a contrabarra antes de ``:`` repetida, a que o compilador tira do literal
+    depois que o dialeto dobra cada contrabarra; o valor que não é texto passa como está."""
+    if not isinstance(value, str):
+        return value
+    return _UNESCAPED_BY_THE_COMPILER.sub(r"\\\\", value)
+
+
 def _text_with_values(text: str, params: Mapping[str, object] | None,
                       prefix: str) -> sa.sql.ClauseElement:
     """Um texto pronto como statement com cada ``bindparam`` tipado pelo valor, para o caminho dos
-    literais: o sentinela vira o prefixo, ``sql.bind`` confere os marcadores, e o ``:`` das
-    regiões citadas vai escapado; uma lista entra expansível, no ``IN``."""
+    literais: o sentinela vira o prefixo, ``sql.bind`` confere os marcadores, o ``:`` das
+    regiões citadas vai escapado e a contrabarra antes de ``:`` num valor, repetida; uma lista
+    entra expansível, no ``IN``."""
     prefixed_text = text.replace(sql.SENTINEL, prefix)
     bound_text, values = sql.bind(prefixed_text, dict(params or {}), "redshift")
     parameters = []
     for name, value in values.items():
         if isinstance(value, (list, tuple, set)):
-            parameters.append(sa.bindparam(name, value=list(value), expanding=True))
+            items = [_compiler_proof(item) for item in value]
+            parameters.append(sa.bindparam(name, value=items, expanding=True))
         else:
-            parameters.append(sa.bindparam(name, value=value))
+            parameters.append(sa.bindparam(name, value=_compiler_proof(value)))
     return sa.text(_escaped_colons(bound_text)).bindparams(*parameters)
 
 
