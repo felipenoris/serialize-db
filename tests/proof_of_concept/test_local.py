@@ -70,8 +70,7 @@ def table_uri(storage: LocalLocation) -> str:
 
 @pytest.fixture(scope="session")
 def duckdb_connection() -> duckdb.DuckDBPyConnection:
-    """Conexão com a extensão ``delta`` carregada; uma pasta local dispensa ``httpfs``, ``aws`` e
-    secrets."""
+    """Conexão com a extensão ``delta`` carregada; uma pasta local dispensa ``httpfs`` e secrets."""
     return connect_duckdb(("delta",))
 
 

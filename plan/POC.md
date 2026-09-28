@@ -5063,8 +5063,9 @@ foram ao usuário, que os decidiu em 2026-09-28.
 ## O que a implementação das decisões da revisão de 2026-09-28 mostrou
 
 Em 2026-09-28, neste contêiner, com as versões da seção anterior, na pasta local e no substituto de
-`tests/emulator.py`, cada decisão entrou com testes que reprovaram no código anterior e passam no
-novo.
+`tests/emulator.py`, cada decisão que muda código entrou com testes que reprovaram no código
+anterior e passam no novo; a checagem do DuckDB de `probes/diagnose_aws.py`, sem caso no pytest, foi
+lida no moto antes e depois.
 
 - **O `COPY` com a lista das colunas de cada arquivo**: os testes novos da coluna anulável `novo`
   entre `id` e `a` e de `a` e `b` trocados de ordem, rodados sobre o `src/` anterior no substituto,
@@ -5102,9 +5103,34 @@ novo.
   mesmo conteúdo, passou a sair com 0, porque a impressão digital da pasta local é o `sha256` do
   conteúdo e a leitura nova de `run.snapshot` via o mesmo arquivo que a saída; o dublê grava agora
   um snapshot novo depois de cada leitura.
+- **A checagem do DuckDB de `probes/diagnose_aws.py`**: contra o moto, com a mesma pasta de
+  extensões e duas rodadas de cada versão, os relatórios diferiram, fora a data, a porta, os
+  endereços do DNS e o caminho do relatório, só na linha do DuckDB e no resumo. A checagem anterior,
+  com o secret `credential_chain` sem `URL_STYLE 'path'` nem `USE_SSL false`, reprovou com
+  `IOException: IO Error: Could not resolve hostname error for HTTP GET to
+  'https://emulador.127.0.0.1:<porta>/...'`; a nova, pelo `Storage.duckdb_connect`, listou
+  `serialize-db-poc/` e as subpastas (2 objetos) em 1,5 s, e o resumo passou a "os três clientes
+  listaram o prefixo", com saída 0 no lugar de 1. Numa pasta de extensões sem a `aws`, a anterior
+  reprovou com `Extension ".../aws.duckdb_extension" not found` e a nova listou. Contra um endpoint
+  que aceita a conexão e não responde, a nova parou no teto de 60 s do subprocesso (60,1 s), e o
+  DuckDB sozinho, com as esperas padrão do `httpfs`, desistiu em 121,8 s, depois de 4 conexões; o
+  `http_timeout` do DuckDB 1.5.5 é medido em segundos, e o `SET http_timeout = 10000` da checagem
+  anterior eram 10.000 s. `probes/space.py` neste contêiner deixou as duas linhas da `aws` e passou
+  o `SP-10` de `note` a `pass`; `test_extensions_check_fails_on_any_extension_that_does_not_load` e
+  `test_duckdb_section_neither_loads_nor_lists_aws` reprovaram no `space.py` anterior.
+- **A simulação do `RS-11`**: com um IAM fabricado que devolve, por ação, a decisão mais restritiva
+  entre os recursos da chamada, como a documentação de `EvaluationResult` descreve, a chamada única
+  anterior reprovou uma política de privilégio mínimo
+  (`s3:ListBucket, s3:GetObject, s3:PutObject negadas`), e a simulação por recurso, `ListBucket`
+  contra o bucket e `GetObject` e `PutObject` contra os objetos sob a raiz, passou em duas chamadas,
+  com e sem prefixo; a política sem `PutObject` reprova, e a falha da segunda chamada deixa o
+  `RS-11` como nota. `test_copy_access_simulates_each_action_against_its_resource` e
+  `test_copy_access_reads_a_failed_object_simulation` reprovaram na chamada única.
 
 **Consequências**: `copy_manifest` lê os rodapés em série, como `register_files`, e a publicação e o
 motor Redshift rodam um `COPY` por lista de colunas ([etapa 3](PLAN-STAGE-3.md),
 [etapa 5](PLAN-STAGE-5.md), [etapa 8](PLAN-STAGE-8.md)); o tempo por tabela da publicação, que o
 log registra, mede o custo no alvo na próxima bateria, junto com a lista e o `FILLRECORD`
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A linha do DuckDB do `diagnose_aws.py` e o `SP-10`
+esperam a mesma bateria, e o `RS-11` segue como leitura no alvo, onde o IAM não conecta por TCP
+([`probes/README.md`](../probes/README.md)).

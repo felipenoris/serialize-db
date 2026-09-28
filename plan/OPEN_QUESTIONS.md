@@ -197,19 +197,12 @@ fecharam os demais achados; cada item abaixo espera uma rodada no alvo.
   coluna nova no meio e da reordenação de `tests/test_engine_redshift.py` e de
   `tests/test_publication.py` leem a combinação na próxima bateria; se o alvo a recusar, o `COPY`
   deixa o `FILLRECORD` quando passa a lista, que já deixa nula a coluna fora dela.
-- **O DuckDB de `probes/diagnose_aws.py`.** A checagem do DuckDB carrega a extensão `aws` e cria o
-  secret com `PROVIDER credential_chain`, que a biblioteca deixou em 2026-09-25 pela chave do
-  `boto3`, e sem `URL_STYLE 'path'` nem `USE_SSL false` um endpoint `http`, o do substituto, reprova
-  a checagem sem que o acesso da biblioteca falhe. O probe só roda no alvo, e a regra do instrumento
-  validado pede o relatório dele antes e depois da mudança. Espera o usuário: a checagem pelo
-  `Storage.duckdb_connect` da biblioteca, validada numa rodada no alvo; ou a checagem como está, uma
-  leitura do caminho do `credential_chain`.
-- **A simulação do `RS-11` em `probes/redshift.py`.** O `RS-11` simula `ListBucket`, `GetObject` e
-  `PutObject` contra o bucket e o prefixo numa chamada só de `simulate_principal_policy`, e uma
-  política de privilégio mínimo, com `ListBucket` só no bucket e as outras duas só nos objetos, pode
-  ler negada (inferido da documentação do IAM, sem rodada); o `BK-8` de `probes/bucket.py` simula
-  cada ação contra o recurso dela. Espera o usuário: uma simulação por ação e recurso, validada numa
-  rodada no alvo; ou o `RS-11` como está.
+- **A checagem do DuckDB de `probes/diagnose_aws.py` no alvo.** Desde a decisão do usuário de
+  2026-09-28, a checagem abre o DuckDB pelo `Storage.duckdb_connect` da biblioteca, com a chave do
+  `boto3` e as extensões `httpfs` e `delta`, e a `aws` saiu de `prepare_offline.sh` e do `SP-10` de
+  `probes/space.py`; no moto, a linha do DuckDB passou a listar o prefixo ([`POC.md`](POC.md)). A
+  regra do instrumento validado pede a rodada no alvo: a próxima bateria lê a linha do DuckDB do
+  `diagnose_aws.py` e o `SP-10`.
 
 ## Decisões de API pendentes por etapa
 

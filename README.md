@@ -329,12 +329,12 @@ ambiente do proxy e os comandos de empacotar com `tar` e extrair no destino.
 
 O script cria na raiz do projeto tudo o que o pacote e os testes precisam em execução: o Python
 3.13 em `.python/`, o pacote com as dependências de execução e as de todos os grupos do
-`pyproject.toml` em `.venv/`, e as extensões do DuckDB (`httpfs`, `delta`, `aws`) em `.duckdb/`. Ele
+`pyproject.toml` em `.venv/`, e as extensões do DuckDB (`httpfs` e `delta`) em `.duckdb/`. Ele
 recria a `.venv/` a cada execução, resolve as dependências na hora (o `uv.lock` não é versionado) e
 troca os links absolutos que o `uv` cria por links relativos, para a pasta funcionar em qualquer
 caminho. As três pastas estão no `.gitignore`. Rode o script de novo sempre que uma dependência
-mudar; se a dependência nova estiver fora do `pyproject.toml` (extensão do DuckDB, versão do Python),
-acrescente-a ao script antes.
+mudar; se a dependência nova estiver fora do `pyproject.toml` (extensão do DuckDB, versão do
+Python), acrescente-a ao script antes.
 
 Atrás de um proxy com autenticação, o `uv` lê `HTTP_PROXY` com as credenciais embutidas, mas o
 DuckDB recusa esse endereço (`Failed to parse http_proxy ... into a host and port`) e precisa do
