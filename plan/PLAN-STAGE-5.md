@@ -304,7 +304,7 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
 | `create_table` | O nome livre no sandbox. | A tabela `exec_<id>_<tabela>` vazia, pela DDL, registrada para o `cleanup`; `SandboxError` com o nome ocupado, sem criar objeto. |
 | `appender`, `append` | A tabela no sandbox, do `ingest` ou de `create_table`; lotes que passam por `cast`; `s3:PutObject` sob `staging/`. | Nenhuma linha antes do `close`, que carrega numa transação pelo manifesto de uma entrada obrigatória; a coluna que o lote não trouxe, nula; nenhuma linha no erro nem no arquivo ausente; `SandboxError` na tabela que não existe; o arquivo do staging apagado no erro. |
 | `export_partition` | Auditoria aprovada; o destino novo, vazio por construção. | Uma versão nova no Delta; os arquivos como o Redshift os gravou (`INT96`, `FIXED_LEN_BYTE_ARRAY`, `optional`) no registro, normalizados na troca; nos dois caminhos, as linhas contadas pelo log e pelos dois leitores. |
-| `cleanup` | Nenhum. | Nenhuma tabela `exec_<id>_*` no esquema; `staging/<execution_id>/` vazio; a sessão fechada. |
+| `cleanup` | Nenhum. | Nenhuma tabela `exec_<id>_*` no esquema, salvo depois de um comando interrompido (seção "A implementação"); `staging/<execution_id>/` vazio; a sessão fechada. |
 
 ## Testes por caso
 
@@ -398,6 +398,14 @@ O que a implementação mudou em relação ao texto das seções acima, com o mo
   sem objeto saiu sem erro, e o `append` devolveria as linhas gravadas no arquivo com a tabela sem
   elas (leitura e decisão do usuário de 2026-09-28, [`POC.md`](POC.md)). Com isso, o `copy_text`
   sem `manifest` ficou sem chamador no pacote.
+- **Um comando interrompido deixa a conexão um comando atrasada.** Depois de uma exceção que não é
+  do driver no meio de um comando (o `KeyboardInterrupt` de um Ctrl+C), o `redshift_connector`
+  2.1.17 não marca a conexão, e cada comando seguinte nela lê a resposta do anterior, sem erro: um
+  `SELECT` volta sem linhas, e o `DROP` do `cleanup` volta sem ler a resposta da execução dele
+  (leitura local de 2026-09-29, [`POC.md`](POC.md)). O motor segue usando a conexão, por decisão do
+  usuário de 2026-09-29: depois de um Ctrl+C no meio de um comando, o motor é recriado à mão, e uma
+  rodada interrompida pode deixar tabela `exec_<id>_*` no esquema, como a execução `poc-faa78dd7` de
+  2026-09-29 às 00:29.
 
 ## Decisões pendentes
 

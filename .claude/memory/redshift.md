@@ -449,4 +449,13 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   the stand-in, the probe run with `-o log_cli=true --log-cli-level=WARNING` dropped every table
   without a warning. The schema also keeps the base publication of 2026-09-29 (the 12 `prd_*` tables
   and `serialize_db_publications`), so `redshift.engine.control_table_present` read `True` at 13:31.
-  `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  `plan/POC.md`, `plan/PLAN-STAGE-5.md`
+- `redshift_connector` 2.1.17 does not mark a connection when an exception leaves
+  `Connection.handle_messages` in the middle of a response, and each later command on it reads the
+  previous command's response, without error (2026-09-29, a fake PostgreSQL wire server in the
+  scratchpad, the driver connected as the engine connects it: `max_prepared_statements=0`,
+  autocommit on). A SIGINT 0.5 s into a 2 s `SELECT 'lento'` raised `KeyboardInterrupt`; the next
+  `SELECT` waited for the slow one and returned `()`, a `DROP TABLE IF EXISTS` returned on its own
+  `Parse` response with its execution response unread, and the server ran every command in order and
+  got the `close`'s `Terminate` after the last. The engine reuses the connection in `_run`, and the
+  user decided on 2026-09-29 to leave it so (`decisions.md`). `plan/POC.md`

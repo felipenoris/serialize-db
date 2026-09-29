@@ -43,17 +43,6 @@ foi medido em [`POC.md`](POC.md).
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
-- **A tabela do sandbox que ficou no esquema.** A listagem de `svv_all_tables` do `RS-8` trouxe em
-  2026-09-29 às 13:31 a tabela `exec_poc_faa78dd7_cad_append_0`, de uma rodada `-m redshift` de
-  `probes/consistencia/probe_append_test.py` que parou às 00:29 depois dos dois `append` da primeira
-  rodada; o `sys_query_history` mostra o `DROP TABLE IF EXISTS` do `cleanup` dela às 00:29:06 com
-  status `success` ([`POC.md`](POC.md)). O usuário atribuiu a sobra a uma rodada que interrompeu e
-  apagou a tabela à mão, e a listagem das 17:04 não a trouxe mais. O mecanismo fica sem leitura,
-  porque o `sys_transaction_history` é negado à identidade da biblioteca e o segundo script de
-  diagnóstico não rodou. A hipótese [inferido] é um Ctrl+C no meio de uma consulta da sessão
-  principal, que deixou a resposta dela pendente na conexão: o `DROP` do `cleanup` tomou essa
-  resposta pela sua, e a conexão fechou antes de o Redshift confirmar o `DROP`. Proteger o
-  `cleanup` da rodada interrompida espera a decisão do usuário.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela

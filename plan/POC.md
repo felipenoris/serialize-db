@@ -5521,9 +5521,10 @@ bateria anterior ("O que a bateria de 2026-09-28 às 23:09 mostrou no ambiente a
 
 **Consequências**: a frase das docstrings de `append` e de `appender` sobre dois escritores na mesma
 tabela vale no alvo pelo teste do pacote, nos dois motores. O `DROP` da tabela que ficou no esquema
-rodou com status `success` e não a apagou ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); a listagem do
-próximo `RS-8` diz se as sessões desta bateria deixaram alguma tabela. O item das versões não
-correntes de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) ganha a leitura, como piso.
+rodou com status `success` e não a apagou ("O `redshift_connector` depois de um comando
+interrompido"); a listagem do próximo `RS-8` diz se as sessões desta bateria deixaram alguma tabela.
+O item das versões não correntes de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) ganha a leitura, como
+piso.
 
 ## O que a bateria de 2026-09-29 às 17:04 mostrou no ambiente alvo
 
@@ -5550,6 +5551,34 @@ nenhuma checagem falharam, e as leituras repetem as das 13:31 ("O que a bateria 
   exclusão.
 
 **Consequências**: a sobra de tabela do sandbox não se repetiu nas sessões das 13:31 às 14:13, e a
-das 00:29 fica atribuída pelo usuário à interrupção, com o mecanismo sem leitura
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A contagem do `RS-8` não enxerga as tabelas `exec_` do
-sandbox, que só a listagem mostra, e fica assim por decisão do usuário de 2026-09-29.
+das 00:29 fica atribuída pelo usuário à interrupção ("O `redshift_connector` depois de um comando
+interrompido"). A contagem do `RS-8` não enxerga as tabelas `exec_` do sandbox, que só a listagem
+mostra, e fica assim por decisão do usuário de 2026-09-29.
+
+## O `redshift_connector` depois de um comando interrompido
+
+Em 2026-09-29, neste contêiner, um servidor falso do protocolo de linha do PostgreSQL, num script do
+scratchpad que não foi guardado, atendeu o `redshift_connector` 2.1.17 conectado como o motor o
+conecta (`max_prepared_statements=0`, autocommit ligado, sem SSL). O servidor respondia a cada
+`SELECT` com uma linha que repete o texto do comando e demorava 2 s no `SELECT 'lento'`. Um SIGINT
+enviado ao processo 0,5 s depois do início desse comando interrompeu o `execute` dele com
+`KeyboardInterrupt`, e os comandos seguintes na mesma conexão voltaram sem erro e um passo
+atrasados:
+
+- **Um `SELECT` volta sem linhas.** `SELECT 'depois'` esperou os 2 s do lento e voltou `()`, e
+  `SELECT 'fim'`, depois do `DROP`, também.
+- **Um `DROP` volta sem ler a resposta da execução dele.** `DROP TABLE IF EXISTS t` voltou ao ler a
+  resposta do `Parse` dele, com a da execução ainda por ler.
+- **O servidor executou todos os comandos, na ordem**, e recebeu o `Terminate` do `close` depois do
+  último.
+
+O driver lê cada fase até o primeiro `ReadyForQuery` (`Connection.handle_messages`) e não marca a
+conexão quando uma exceção sai no meio da leitura, e o motor reusa a conexão no comando seguinte
+(`RedshiftEngine._run`).
+
+**Consequências**: a hipótese do `DROP` das 00:29 ganha o lado do cliente, reproduzido: depois de um
+comando interrompido, o `cleanup` roda o `DROP` numa conexão cujas respostas chegam um comando
+atrasadas, e a fecha sem ler a resposta da execução do último. Por que o Redshift não confirmou esse
+`DROP` fica sem leitura. O usuário decidiu em 2026-09-29 deixar o motor como está: depois de um
+Ctrl+C no meio de um comando, o motor Redshift é recriado à mão, e uma rodada interrompida pode
+deixar tabela `exec_` no esquema ([etapa 5](PLAN-STAGE-5.md)).
