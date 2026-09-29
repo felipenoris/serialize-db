@@ -44,12 +44,15 @@ foi medido em [`POC.md`](POC.md).
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
 - **A tabela do sandbox que ficou no esquema.** Em 2026-09-29 às 13:31, o `RS-8` leu no esquema do
-  alvo a tabela `exec_poc_faa78dd7_cad_append_0`, da rodada `-m redshift` de
-  `probes/consistencia/probe_append_test.py` das 00:32 [inferido], cujo `cleanup` apagou as outras
-  seis tabelas ([`POC.md`](POC.md)). O `cleanup` do motor nomeia no log a tabela que o `DROP` não
-  alcança, e o log de um caso aprovado não aparece. A leitura de `sys_query_history` sobre os
-  `CREATE` e os `DROP` da execução `poc-faa78dd7` diz se o `DROP` falhou, e com que erro, se não
-  rodou ou se a transação dele foi desfeita; a correção e o `DROP` da tabela à mão esperam essa
+  alvo a tabela `exec_poc_faa78dd7_cad_append_0`, de uma rodada `-m redshift` de
+  `probes/consistencia/probe_append_test.py` que parou às 00:29 depois dos dois `append` da primeira
+  rodada; o `sys_query_history` mostra o `DROP TABLE IF EXISTS` do `cleanup` dela às 00:29:06 com
+  status `success` ([`POC.md`](POC.md)). O `sys_transaction_history`, que diria se a transação do
+  `DROP` foi confirmada, é negado à identidade da biblioteca. A hipótese [inferido]: um Ctrl+C no
+  meio de uma consulta da sessão principal deixou a resposta dela pendente na conexão, o `DROP` do
+  `cleanup` tomou essa resposta pela sua, e a conexão fechou antes de o Redshift confirmar o `DROP`.
+  Os comandos das três sessões da execução e o fechamento delas em `sys_session_history`, pedidos ao
+  usuário, confirmam ou descartam a hipótese; a correção e o `DROP` da tabela à mão esperam essa
   leitura.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de

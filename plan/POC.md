@@ -5496,13 +5496,17 @@ bateria anterior ("O que a bateria de 2026-09-28 às 23:09 mostrou no ambiente a
   na suíte Redshift e 1,79 s e 1,39 s na do motor (`redshift.engine.small_append`).
 - **Uma tabela do sandbox ficou no esquema.** O `RS-8` de `probes/redshift.py` leu 1 de 17 tabelas
   com o prefixo da biblioteca, `exec_poc_faa78dd7_cad_append_0`, onde as leituras de 2026-09-27 e de
-  2026-09-28 liam 0 de 2. O nome é o da primeira tabela de
-  `probes/consistencia/probe_append_test.py`, cuja rodada `-m redshift` de 2026-09-29 às 00:32 foi a
-  única, entre as leituras das 23:09 e das 13:31, a criar tabelas `cad_append_*` [inferido], e as
-  outras seis tabelas dessa rodada saíram. O `cleanup` do motor nomeia só no log a tabela que o
-  `DROP` não alcança, e o pytest não imprime o log de um caso aprovado, então a causa não foi lida.
-  Neste contêiner, a sonda no substituto, com os avisos impressos
-  (`-o log_cli=true --log-cli-level=WARNING`), apagou todas as tabelas sem aviso.
+  2026-09-28 liam 0 de 2, e o `RS-19` a resolveu por nome depois do `USE`. O nome é o da primeira
+  tabela de `probes/consistencia/probe_append_test.py`. Lido em 2026-09-29 às 16:43 pela identidade
+  da biblioteca, o `sys_query_history` mostra a execução `poc-faa78dd7` de 00:29:01 a 00:29:06 UTC:
+  a sessão principal criou só essa tabela, duas sessões a mais criaram e apagaram cada uma a sua
+  staging temporária (os dois `append` da primeira rodada da seção A), e às 00:29:06 a sessão
+  principal rodou `DROP TABLE IF EXISTS` na tabela, com status `success`. A execução parou antes da
+  segunda rodada, e a saída dela não está nos relatórios; a rodada `-m redshift` das 00:32, que
+  passou, é outra execução e não deixou tabela. O `sys_transaction_history`, que diz se a transação
+  do `DROP` foi confirmada, recusou a identidade da biblioteca com `42501`. Neste contêiner, a sonda
+  no substituto, com os avisos impressos (`-o log_cli=true --log-cli-level=WARNING`), apagou todas
+  as tabelas sem aviso.
 - **O esquema guarda a publicação da bateria anterior.** As outras 16 tabelas são `teste`,
   `teste3`, `teste_query_editor`, `serialize_db_publications` e as 12 `prd_*` da publicação da base
   por `--channel default` de 2026-09-29, e `redshift.engine.control_table_present` leu `True` nas
@@ -5514,9 +5518,8 @@ bateria anterior ("O que a bateria de 2026-09-28 às 23:09 mostrou no ambiente a
   `RS-12` contou 88 erros de carga em 30 dias, contra 93 às 23:09.
 
 **Consequências**: a frase das docstrings de `append` e de `appender` sobre dois escritores na mesma
-tabela vale no alvo pelo teste do pacote, nos dois motores. A tabela que ficou no esquema espera a
-leitura de `sys_query_history` sobre os `CREATE` e os `DROP` da execução `poc-faa78dd7`, que diz se
-o `DROP` falhou, e com que erro, se não rodou ou se a transação dele foi desfeita
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o próximo `RS-8` diz se as sessões desta bateria
-deixaram alguma tabela. O item das versões não correntes de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
-ganha a leitura, como piso.
+tabela vale no alvo pelo teste do pacote, nos dois motores. O `DROP` da tabela que ficou no esquema
+rodou com status `success` e não a apagou, e a causa espera a leitura dos comandos e do fechamento
+das três sessões da execução `poc-faa78dd7` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o próximo
+`RS-8` diz se as sessões desta bateria deixaram alguma tabela. O item das versões não correntes de
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) ganha a leitura, como piso.
