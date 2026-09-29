@@ -15,29 +15,29 @@ foi medido em [`POC.md`](POC.md).
   com 1.823 marcadores às 23:26; e 2.980 versões, 86.695.363 bytes, com 2.788 marcadores em
   2026-09-25 às 17:26; e 5.269 versões, 159.538.248 bytes, com 4.883 marcadores em 2026-09-26 às
   15:14; e 7.619 versões, 233.165.927 bytes, com 7.030 marcadores em 2026-09-27 às 15:59; e 8.822
-  versões, 270.369.639 bytes, com 8.127 marcadores em 2026-09-28 às 20:14, [`POC.md`](POC.md)), e a
-  regra
+  versões, 270.369.639 bytes, com 8.127 marcadores em 2026-09-28 às 20:14; e 10.301 versões,
+  307.133.320 bytes, com 9.504 marcadores às 23:10, [`POC.md`](POC.md)), e a regra
   `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
   para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
   `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
   retenção.
-- **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26 e
-  em 2026-09-27 ([`POC.md`](POC.md)), o delta-rs, o `S3FileSystem` e o `boto3` renovando a
-  credencial do contêiner, que troca de chave a cada cerca de 30 minutos, e a conexão Redshift
-  aberta seguindo depois da expiração da senha de `GetCredentials` (3.600 s). O `delta_scan` do
-  DuckDB, que falhou uma vez em 2026-09-25 com a chave vencida do secret `credential_chain`, leu em
-  todas as rodadas de 2026-09-26 e de 2026-09-27 pelo secret que leva a chave da credencial do
-  `boto3` e que o motor recria na entrada de cada sessão quando ela troca (decisão do usuário de
-  2026-09-25, [etapa 3](PLAN-STAGE-3.md), [etapa 4](PLAN-STAGE-4.md)). Seguem sem medida um comando
-  do DuckDB mais longo que os 15 minutos que a chave tem pela frente, no mínimo, na entrada da
-  sessão (o botocore a renova entre 15 e 10 minutos antes da expiração), o `COPY` mais longo que a
-  credencial que ele leva, a queda de uma conexão Redshift no meio de um `COPY` e a sessão ociosa e
-  a transação inativa do serverless, encerradas depois de 3.600 s e 21.600 s
-  ([`redshift.md`](redshift.md)). A cláusula do `COPY` e do `UNLOAD` é montada a cada comando, no
-  motor da [etapa 5](PLAN-STAGE-5.md) e, desde a decisão do usuário de 2026-09-26, na publicação da
-  [etapa 8](PLAN-STAGE-8.md), que passou assim no alvo em 2026-09-27, e leva uma chave com cerca de
-  29 minutos ou mais pela frente; o motor reconecta uma vez por comando e perde só a tabela
-  temporária que o pipeline tenha criado na sessão.
+- **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26, em
+  2026-09-27 e em 2026-09-29 ([`POC.md`](POC.md)), o delta-rs, o `S3FileSystem` e o `boto3`
+  renovando a credencial do contêiner, que troca de chave a cada cerca de 30 minutos, e a conexão
+  Redshift aberta seguindo depois da expiração da senha de `GetCredentials` (3.600 s). O
+  `delta_scan` do DuckDB, que falhou uma vez em 2026-09-25 com a chave vencida do secret
+  `credential_chain`, leu em todas as rodadas de 2026-09-26, de 2026-09-27 e de 2026-09-29 pelo
+  secret que leva a chave da credencial do `boto3` e que o motor recria na entrada de cada sessão
+  quando ela troca (decisão do usuário de 2026-09-25, [etapa 3](PLAN-STAGE-3.md),
+  [etapa 4](PLAN-STAGE-4.md)). Seguem sem medida um comando do DuckDB mais longo que os 15 minutos
+  que a chave tem pela frente, no mínimo, na entrada da sessão (o botocore a renova entre 15 e 10
+  minutos antes da expiração), o `COPY` mais longo que a credencial que ele leva, a queda de uma
+  conexão Redshift no meio de um `COPY` e a sessão ociosa e a transação inativa do serverless,
+  encerradas depois de 3.600 s e 21.600 s ([`redshift.md`](redshift.md)). A cláusula do `COPY` e do
+  `UNLOAD` é montada a cada comando, no motor da [etapa 5](PLAN-STAGE-5.md) e, desde a decisão do
+  usuário de 2026-09-26, na publicação da [etapa 8](PLAN-STAGE-8.md), que passou assim no alvo em
+  2026-09-27, e leva uma chave com cerca de 29 minutos ou mais pela frente; o motor reconecta uma
+  vez por comando e perde só a tabela temporária que o pipeline tenha criado na sessão.
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
@@ -80,26 +80,28 @@ foi medido em [`POC.md`](POC.md).
   auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`
   rodaram sem erro, com o tempo e o pico de RSS de `archive`, `export` e da publicação lidos às
   23:25 ([`POC.md`](POC.md)). O `compact` rodou só sobre a partição 2026-03-31 de `cad_lancamentos`,
-  que tem um arquivo só e não commita, e em 2026-09-25, em 2026-09-26 e em 2026-09-27 saiu com a
-  recusa prevista, porque `SUITE.md` o roda depois de um snapshot na versão atual: a compactação de
-  uma partição de vários arquivos e a memória dela (o item acima) esperam uma partição com mais de
-  um arquivo, que a carga não grava, e um `compact` antes do snapshot; a continuação de uma cópia
-  interrompida do `archive` só o substituto exercitou. Em 2026-09-28, a carga parou em
-  `cad_lancamentos` 2026-07-31 com o `RegistrationRefused` de uma origem que mudava durante a
-  leitura ([`POC.md`](POC.md)): a carga seguinte, que recomeça dessa partição, e o
-  `vacuum --full` do arquivo que ficou fora do log esperam a origem estável.
+  que tem um arquivo só e não commita, e em 2026-09-25, em 2026-09-26, em 2026-09-27 e em 2026-09-29
+  saiu com a recusa prevista, porque `SUITE.md` o roda depois de um snapshot na versão atual: a
+  compactação de uma partição de vários arquivos e a memória dela (o item acima) esperam uma
+  partição com mais de um arquivo, que a carga não grava, e um `compact` antes do snapshot; a
+  continuação de uma cópia interrompida do `archive` só o substituto exercitou. Em 2026-09-28, a
+  carga parou em `cad_lancamentos` 2026-07-31 com o `RegistrationRefused` de uma origem que mudava
+  durante a leitura, e em 2026-09-29, com a origem estável, passou inteira numa raiz recarregada
+  ([`POC.md`](POC.md)): a continuação de uma carga parada, que `tests/test_load.py` cobre na pasta
+  local, e o `vacuum --full` de um arquivo fora do log seguem sem leitura no alvo.
 
 - **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo nas
-  baterias de 2026-09-25, de 2026-09-26 e de 2026-09-27 ([`POC.md`](POC.md)): o leitor Delta abriu
-  as 12 views da raiz carregada em 0,645 s, em 0,582 s e em 0,571 s; as suítes passaram a publicação
-  por canal e por snapshot, com a volta a um snapshot anterior, e a comparação dos dois leitores,
-  com o `stream` do leitor Redshift pelo `UNLOAD`; e em 2026-09-26 a base inteira foi publicada por
-  `--channel default`, `cad_lancamentos` em 295,1 s com o pico do processo em 266 MB, e de novo em
-  2026-09-27, em 328,5 s com 270 MB. Esperam: a volta a um snapshot anterior ao publicado sobre a
+  baterias de 2026-09-25, de 2026-09-26, de 2026-09-27 e de 2026-09-28 às 23:09
+  ([`POC.md`](POC.md)): o leitor Delta abriu as 12 views da raiz carregada em 0,645 s, em 0,582 s,
+  em 0,571 s e em 0,556 s; as suítes passaram a publicação por canal e por snapshot, com a volta a
+  um snapshot anterior, e a comparação dos dois leitores, com o `stream` do leitor Redshift pelo
+  `UNLOAD`; e em 2026-09-26 a base inteira foi publicada por `--channel default`, `cad_lancamentos`
+  em 295,1 s com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s com 270 MB, e em
+  2026-09-29, em 335,2 s com 286 MB. Esperam: a volta a um snapshot anterior ao publicado sobre a
   base, com o tempo e o pico de RSS por tabela, que pede um commit depois do snapshot, fora do fluxo
-  de `SUITE.md`, cujo passo 6 leu nas duas baterias que cada versão já estava publicada; e o
-  `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o caminho de
-  credencial que serve a ele, que precisa de um papel de cliente no alvo.
+  de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão já estava publicada; e o `UNLOAD`
+  de um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que
+  serve a ele, que precisa de um papel de cliente no alvo.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25 ([`POC.md`](POC.md)), e o pino fica em 2.0.54. O `params()` novo guarda os
@@ -126,8 +128,8 @@ foi medido em [`POC.md`](POC.md).
 
 As sondas de 2026-09-25 ([`POC.md`](POC.md), seção "O que as sondas de consistência de leitura e
 escrita mostraram") atravessaram cada fronteira de leitura e escrita com valores de borda e
-trabalho paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas no
-ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar checagem
+trabalho paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas no ambiente
+alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem reprovar checagem
 ([`POC.md`](POC.md)). Cada item espera o usuário: corrigir, ou aceitar como está.
 
 - **O sinal do zero pelo `COPY` do DuckDB.** O escritor Parquet do DuckDB codifica a coluna
@@ -175,36 +177,6 @@ ambiente alvo, em 2026-09-26 e em 2026-09-27, repetiram os achados sem reprovar 
   `reconcile`, que commita a mudança de esquema, o que entrega o `ExecutionConflict` prometido pelo
   próprio delta-rs; ou a docstring de `publish_delta` dizer que a conferência não cobre a janela,
   com uma execução por ambiente de cada vez.
-
-## A API de escrita no sandbox
-
-- **Dois escritores na mesma tabela do Redshift.** `probes/consistencia/probe_append_test.py`
-  com `-m redshift` no ambiente alvo lê o que dois `COPY` na mesma tabela ao mesmo tempo, um
-  `COPY` ao lado de um `UPDATE` e o `CREATE TABLE` durante um `UNLOAD` fazem sob o isolamento
-  serializável (o `1023` lido em 2026-09-24); no substituto a sonda passou em 2026-09-28, e a
-  leitura vale só para o código dela. Desde a implementação de 2026-09-28 a sonda chama
-  `create_table` e `append` dos motores, e a docstring do `appender` nada diz sobre dois escritores
-  na mesma tabela até a rodada.
-- **O `COPY ... MANIFEST` do `appender` do Redshift.** Desde a decisão do usuário de 2026-09-28, o
-  `appender` carrega o arquivo por um manifesto com ele como a única entrada obrigatória, porque o
-  `COPY` sem manifesto de um arquivo ausente saiu sem erro no alvo ([`POC.md`](POC.md)). A próxima
-  bateria lê o `COPY` pelo manifesto nos casos do `appender` e, em
-  `test_appender_copies_the_file_at_close`, a falha do arquivo obrigatório ausente, que a
-  documentação do `COPY` descreve, com a mensagem do servidor no relatório da sessão
-  (`redshift.engine.copy_missing_mandatory_file`); o substituto a imita com uma mensagem própria.
-
-## Achados da revisão do repositório
-
-A revisão de 2026-09-28 ([`POC.md`](POC.md), seção "O que a revisão do repositório de 2026-09-28
-reproduziu") corrigiu o que não dependia de decisão, e as decisões do usuário do mesmo dia
-fecharam os demais achados; a bateria de 2026-09-28 leu no alvo a lista de colunas com
-`FILLRECORD`, a linha do DuckDB do `diagnose_aws.py` e o `SP-10`.
-
-- **O custo dos rodapés na publicação.** Desde a revisão de 2026-09-28, `copy_manifest` lê o rodapé
-  de cada arquivo para agrupar os `COPY` por lista de colunas: no moto, 1.255,8 ms contra 91,4 ms
-  numa tabela de 200 arquivos, e o S3 do alvo não foi medido ([`POC.md`](POC.md)). A publicação da
-  base inteira pelo bloco "Publicação Delta -> Redshift" de `SUITE.md`, que a bateria de 2026-09-28
-  não rodou, dá o tempo por tabela a comparar com os 328,5 s de `cad_lancamentos` de 2026-09-27.
 
 ## Decisões de API pendentes por etapa
 

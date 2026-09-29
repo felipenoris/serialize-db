@@ -1315,8 +1315,9 @@ the appender's `INSERT` as a single statement without an explicit transaction, `
 refusing the occupied name with "ocupado", the probes of `probes/consistencia/` calling the new
 API, `tests/test_pipeline.py` ingesting the 12 tables again, and the dated records
 (`plan/POC.md`, the older entries of this file, the dated lines of `CLAUDE.md`) keeping `load`
-and `loader`. The Redshift reading of two writers on one table waits for the user's run of
-`probes/consistencia/probe_append_test.py -m redshift` (`plan/OPEN_QUESTIONS.md`).
+and `loader`. The user's run of `probes/consistencia/probe_append_test.py` with `-m redshift` and
+`-m local` in the target on 2026-09-29 read two writers on one table entering in both engines;
+the user's decision of 2026-09-29 puts it in the docstrings (the section on two writers below).
 `plan/PLAN.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`,
 `plan/PLAN-STAGE-10.md`, `plan/serialize-db.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
 
@@ -1341,18 +1342,19 @@ the format's own metadata there (schema, row count, statistics, null counts), an
 stays in the commit's `commitInfo` and in the file or folder name `<execution_id>_<uuid>` of the
 load and the engines. The DuckDB check of `probes/diagnose_aws.py` opens its connection by
 `Storage.duckdb_connect`, the path of the suite and the engines, and the `aws` extension leaves
-`prepare_offline.sh` and `SP-10`; the next battery in the target validates it. `RS-11` of
-`probes/redshift.py` simulates `ListBucket` against the bucket and `GetObject` and `PutObject`
-against the objects under the root, one call per resource as `BK-8` does, because the IAM simulator
-returns one result per action with the most restrictive decision across the resources it receives
-(the IAM API reference read on 2026-09-28); asked whether the change touched the library, the user
-heard it changes only the probe, and the target, where IAM does not answer, reads the same line.
-Asked how a client redoes the data of a recorded snapshot, the user heard the stage 10 flow (a run
-marked with a new name, `serialize-db channel`, `serialize-db publish_redshift --channel default`,
-the old snapshot readable until `archive`) and kept the snapshot names immutable, never reused,
-asking for the characteristic in the documentation: `docs/operacao.md` ("Snapshot do banco" and
-"Refazer um snapshot"), `docs/index.md`, the docstrings of `Execution.snapshot` and
-`delta.snapshot`, and `plan/serialize-db.md`. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-10.md`
+`prepare_offline.sh` and `SP-10`; the battery of 2026-09-28 at 20:14 in the target read the check
+listing the prefix and `SP-10` passing without `aws`. `RS-11` of `probes/redshift.py` simulates
+`ListBucket` against the bucket and `GetObject` and `PutObject` against the objects under the root,
+one call per resource as `BK-8` does, because the IAM simulator returns one result per action with
+the most restrictive decision across the resources it receives (the IAM API reference read on
+2026-09-28); asked whether the change touched the library, the user heard it changes only the probe,
+and the target, where IAM does not answer, reads the same line. Asked how a client redoes the data
+of a recorded snapshot, the user heard the stage 10 flow (a run marked with a new name,
+`serialize-db channel`, `serialize-db publish_redshift --channel default`, the old snapshot readable
+until `archive`) and kept the snapshot names immutable, never reused, asking for the characteristic
+in the documentation: `docs/operacao.md` ("Snapshot do banco" and "Refazer um snapshot"),
+`docs/index.md`, the docstrings of `Execution.snapshot` and `delta.snapshot`, and
+`plan/serialize-db.md`. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-10.md`
 
 ## The `appender` manifest and the initial load's conversions (2026-09-28)
 
@@ -1382,3 +1384,35 @@ its own engine with `threads=1` and asserts the `OSError` of the Arrow reader, a
 of `DuckDBEngine.stream` and `DeltaReader.stream` say the error can arrive as the interrupt with
 more than one thread. The package's behavior does not change. `plan/PLAN-STAGE-4.md`,
 `plan/POC.md`
+
+## Two writers on one table in the docstrings (2026-09-29)
+
+The battery of 2026-09-28 at 23:09 read two writers on one sandbox table entering in both engines
+(`probes/consistencia/probe_append_test.py`). Asked on a card whether the docstrings of `append` and
+`appender` should say so, with a test per engine that fails if it changes, or stay as they are, the
+user chose "Documentar": the docstrings of `appender` and `append`, in the `Engine` protocol,
+`DuckDBEngine` and `RedshiftEngine`, say that two appenders on one table at once both enter with all
+their rows, each in a `new_session()` session or both on the main one, where one `close` waits for
+the other under the lock, and that an appender beside an `UPDATE` of the rows already there enters
+with it, on Redshift under snapshot isolation, which datashare writes require (the assistant's
+scoping, because the AWS docs give `1023` to the second of two `UPDATE`s of distinct rows of one
+table under `SERIALIZABLE`); `test_two_writers_on_the_same_table_both_enter` checks the three cases
+in `tests/test_engine_duckdb.py` and, `redshift`-marked, in `tests/test_engine_redshift.py`. The
+assistant's choices, named in the report: `plan/serialize-db.md` no longer says each `append` writes
+a distinct table, and `plan/POC.md` reads the target's pair as refused by no `1023` instead of by
+serializable isolation. The package's behavior does not change. `plan/PLAN-STAGE-4.md`,
+`plan/PLAN-STAGE-5.md`, `plan/serialize-db.md`, `plan/POC.md`
+
+## The stand-in's message for a missing mandatory file (2026-09-29)
+
+The battery of 2026-09-28 at 23:09 read the `appender`'s `COPY ... MANIFEST` with the mandatory file
+deleted failing in the target with `Spectrum Scan Error: File not found` and SQLSTATE `XX000`, while
+the stand-in failed with the same SQLSTATE and its own message, `o arquivo obrigatório do manifesto
+não existe: <uri>`. Asked on a card whether the stand-in should give the target's message, give it
+with the test checking the text, or stay as it was, the user chose "Imitar o alvo": `copy_sources`
+in `tests/emulator.py` raises `Spectrum Scan Error: File not found`, the target's message field,
+without the URI the old message carried; the test records only the message field and the SQLSTATE,
+so the target's other fields stay unread. `test_appender_copies_the_file_at_close` keeps recording
+the message as a reading, without asserting it, because the engine never reads that text; a missing
+manifest keeps the stand-in's own message, since the target's was never read. `tests/emulator.py`,
+`plan/PLAN-STAGE-5.md`, `plan/POC.md`

@@ -7,16 +7,17 @@ valor, o ``stream`` vazio, a sessão única, a reconexão e o ``COMMIT`` que nã
 colunas do ``COPY`` do appender e o segundo ``close``, e a troca da partição com ``Double`` não
 finito, sobre uma conexão de mentira que registra os comandos, responde ao que o motor pergunta e
 grava o arquivo de um ``UNLOAD`` numa pasta local (os que gravam são ``local``, sob
-``SERIALIZE_DB_TEST_LOCAL_ROOT``). Os casos marcados ``redshift`` repetem a sequência com uma
-amostra no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e arquivos sob
-``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente alvo pela conexão de ``examples/redshift_native.py``, e
-no substituto local (``SERIALIZE_DB_TEST_EMULATOR``) pela conexão de ``tests/emulator.py``, que os
-testes dão ao motor no lugar do ``redshift_connector``. O modelo é o de ``Lancamento``,
-particionado por ``data_base_str``, com uma chave estrangeira para ``Conta``, uma coluna JSON, uma
-``DateTime`` e a coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
-(``tests/lancamentos_model.py``), e ``cad_medidas``, sem JSON, com uma coluna anulável no meio;
-``cad_colunas``, só de texto, recebe uma coluna nova no meio ou troca duas de lugar depois de uma
-partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo nome.
+``SERIALIZE_DB_TEST_LOCAL_ROOT``). Os casos marcados ``redshift`` repetem a sequência, e leem dois
+escritores na mesma tabela, com uma amostra no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e
+arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente alvo pela conexão de
+``examples/redshift_native.py``, e no substituto local (``SERIALIZE_DB_TEST_EMULATOR``) pela conexão
+de ``tests/emulator.py``, que os testes dão ao motor no lugar do ``redshift_connector``. O modelo é
+o de ``Lancamento``, particionado por ``data_base_str``, com uma chave estrangeira para ``Conta``,
+uma coluna JSON, uma ``DateTime`` e a coluna ``to``, palavra reservada, e ``Projetado``, a tabela
+que o pipeline grava (``tests/lancamentos_model.py``), e ``cad_medidas``, sem JSON, com uma coluna
+anulável no meio; ``cad_colunas``, só de texto, recebe uma coluna nova no meio ou troca duas de
+lugar depois de uma partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna
+de mesmo nome.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -1070,6 +1072,13 @@ def count_of(engine: RedshiftEngine, name: str) -> int:
     return counted.column("n")[0].as_py()
 
 
+def totals_of(engine: RedshiftEngine, name: str) -> dict:
+    """As linhas, os ids distintos e a soma de ``valor`` da tabela ``name`` do esquema."""
+    totals = engine.query(f'SELECT count(*) AS linhas, count(DISTINCT "id_lancamento") AS ids, '
+                          f'sum("valor") AS soma FROM {engine.qualified(name)}')
+    return totals.to_pylist()[0]
+
+
 @pytest.mark.redshift
 @pytest.mark.s3
 def test_connect_uses_share_database(target: Target) -> None:
@@ -1396,6 +1405,65 @@ def test_new_session_sees_committed_tables(target: Target) -> None:
         with pytest.raises(redshift_connector.Error):
             session.query(f"SELECT * FROM {temporary}")
     assert engine.query(f"SELECT x FROM {temporary}").column("x").to_pylist() == [1]
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_two_writers_on_the_same_table_both_enter(target: Target) -> None:
+    """Dois appenders na mesma tabela, com os ``close`` ao mesmo tempo, entram os dois com todas
+    as suas linhas: em duas sessões de ``new_session()``, cada ``COPY`` na sua conexão, e na
+    sessão principal, um depois do outro sob o lock. Um appender numa sessão a mais e um
+    ``UPDATE`` da principal sobre as linhas que a tabela já tinha, ao mesmo tempo, também entram
+    os dois. A tabela tem coluna JSON, e cada ``COPY`` passa pela staging temporária da sua
+    sessão."""
+    engine = target.engine
+    first = entry_rows(MONTHS[0], 1, 1_000, PROJECTED)
+    second = entry_rows(MONTHS[0], 1_001, 1_000, PROJECTED)
+    both_sum = pc.sum(first["valor"]).as_py() + pc.sum(second["valor"]).as_py()
+    both = {"linhas": 2_000, "ids": 2_000, "soma": both_sum}
+    barrier = threading.Barrier(2)
+
+    def write(session: RedshiftEngine, table: sa.Table, rows: pa.Table) -> None:
+        # A saída do with roda o close logo depois da barreira, junto com o outro escritor.
+        with session.appender(table) as appender:
+            appender.write(rows)
+            barrier.wait(timeout=60)
+
+    def write_in_a_new_session(table: sa.Table, rows: pa.Table) -> None:
+        with engine.new_session() as session:
+            write(session, table, rows)
+
+    def update_first_half(table: sa.Table) -> None:
+        barrier.wait(timeout=60)
+        engine.query(sa.update(table).where(table.c.id_lancamento <= 500)
+                     .values(valor=table.c.valor + 1))
+
+    def run_together(*tasks: tuple) -> None:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(*task) for task in tasks]
+            for future in futures:
+                future.result()
+
+    # Dois appenders, cada um numa sessão a mais.
+    sessions = PROJECTED.to_metadata(sa.MetaData(), name="cad_escritores_sessoes")
+    engine.create_table(sessions)
+    run_together((write_in_a_new_session, sessions, first),
+                 (write_in_a_new_session, sessions, second))
+    assert totals_of(engine, engine.prefix + sessions.name) == both
+
+    # Dois appenders na sessão principal.
+    main = PROJECTED.to_metadata(sa.MetaData(), name="cad_escritores_principal")
+    engine.create_table(main)
+    run_together((write, engine, main, first), (write, engine, main, second))
+    assert totals_of(engine, engine.prefix + main.name) == both
+
+    # Um appender numa sessão a mais e o UPDATE da principal, que soma 1 a 500 linhas de first.
+    updated = PROJECTED.to_metadata(sa.MetaData(), name="cad_escritores_update")
+    engine.create_table(updated)
+    engine.append(updated, first)
+    run_together((write_in_a_new_session, updated, second), (update_first_half, updated))
+    assert totals_of(engine, engine.prefix + updated.name) == {"linhas": 2_000, "ids": 2_000,
+                                                               "soma": both_sum + 500}
 
 
 @pytest.mark.redshift

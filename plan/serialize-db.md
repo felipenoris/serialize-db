@@ -439,9 +439,11 @@ e os exemplos do Redshift em `test_redshift.py`.
   espera o `Future` desse passo; a dependência é do fluxo de controle do cliente, não da biblioteca.
   Passos independentes podem ir para um pool: os comandos deles correm em série na sessão, e o ganho
   é o trabalho Python de cada passo, que corre fora dela; numa sessão a mais por passo, quando o
-  passo não usa as tabelas temporárias da principal, os comandos também correm juntos. Cada `append` e cada `query` gravam
-  tabelas distintas, e cada comando é confirmado ao terminar, então nada fica meio gravado para a
-  leitura seguinte.
+  passo não usa as tabelas temporárias da principal, os comandos também correm juntos. Cada comando
+  é confirmado ao terminar, então nada fica meio gravado para a leitura seguinte. Dois `append` na
+  mesma tabela, ao mesmo tempo, entram os dois, numa sessão a mais cada um ou os dois na principal,
+  e um `append` e um `UPDATE` da mesma tabela também, no Redshift sob o isolamento de snapshot
+  ([etapa 4](PLAN-STAGE-4.md), [etapa 5](PLAN-STAGE-5.md)).
 - **Publicação no Redshift.** `serialize-db publish_redshift --max-workers n`, sobre
   `publication.publish_redshift`: um `COPY` por tabela,
   uma conexão por tabela, fora da sessão do sandbox, limitados pelas slots do WLM. Dois `COPY` na

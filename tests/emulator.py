@@ -19,7 +19,9 @@ de texto, o ``UNLOAD`` de um resultado vazio sem manifesto nem arquivo, o ``COPY
 que lê o caminho como prefixo e, sem objeto que case, não carrega nada e não dá erro, o
 ``is_valid_json`` que recusa ``SUPER`` e o ``ALTER COLUMN ... TYPE`` que o esquema do datashare
 recusa. O ``COPY ... MANIFEST`` falha sem o manifesto e sem um arquivo de entrada ``mandatory``,
-como a documentação do ``COPY`` descreve, com uma mensagem do substituto. A relação
+como a documentação do ``COPY`` descreve: o arquivo ausente com a mensagem do ambiente alvo,
+``Spectrum Scan Error: File not found`` e o SQLSTATE ``XX000`` (leitura de 2026-09-28), e o
+manifesto ausente com uma mensagem do substituto. A relação
 inexistente sai como no ambiente alvo (leitura de 2026-09-24), o SQLSTATE ``XX000`` com a mensagem
 ``Relation <nome> does not exist in the database.``, a que já existe com o ``42P07`` do PostgreSQL,
 e o conflito entre duas transações do DuckDB sai com o ``1023`` do Redshift, a violação de
@@ -928,8 +930,9 @@ def copy_sources(source: str, options: str) -> list[str]:
     que o Redshift lê como prefixo; com ele, as entradas do manifesto que existem.
 
     O manifesto ausente e a entrada ``mandatory`` ausente são erros do servidor, como a
-    documentação do ``COPY`` descreve; a mensagem é do substituto, porque o texto do ambiente alvo
-    não foi lido.
+    documentação do ``COPY`` descreve. A entrada ausente tem a mensagem que o ambiente alvo deu,
+    ``Spectrum Scan Error: File not found`` (2026-09-28, ``plan/POC.md``); a do manifesto ausente é
+    do substituto, porque o texto do alvo não foi lido.
     """
     if "MANIFEST" not in options:
         return object_uris(source)
@@ -943,7 +946,7 @@ def copy_sources(source: str, options: str) -> list[str]:
             files.append(uri)
             continue
         if entry.get("mandatory", False):
-            raise server_error(f"o arquivo obrigatório do manifesto não existe: {uri}")
+            raise server_error("Spectrum Scan Error: File not found")
     return files
 
 

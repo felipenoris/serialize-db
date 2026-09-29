@@ -501,8 +501,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   threads, pior com 8 e com 32 a 80, a leitura agregada do S3 1,4 vez mais rápida com 48, e as
   sessões a mais 1,89 vez mais rápidas que a série: o padrão são as CPUs do processo (2026-09-24,
   `POC.md`). Com 8 vCPUs, a materialização de uma partição quatro vezes maior foi de 5% a 9% mais
-  rápida com 16 threads que com 8, com o pico cerca de 1 GB maior, a leitura agregada do S3 1,9 vez
-  mais rápida com 24, e as quatro tabelas em série 5% mais lentas com 16 (2026-09-27, `POC.md`). No
+  rápida com 16 threads que com 8, e 12% pela DDL e o `INSERT` em 2026-09-29, com o pico cerca de
+  1 GB maior, a leitura agregada do S3 1,9 vez mais rápida com 24, e as quatro tabelas em série de
+  5% a 8% mais lentas com 16 (2026-09-27 e 2026-09-29, `POC.md`). No
   Redshift, cada sessão a mais pede a sua credencial temporária; dois `COPY` em conexões abertas
   dentro da tarefa levaram 4,3 s e 3,8 s no ambiente alvo (2026-09-21).
 - As chaves sequenciais, a chave primária inteira de uma coluna, vêm de `run.next_ids(table, n)`:

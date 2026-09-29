@@ -1032,6 +1032,12 @@ class DuckDBEngine:
         """O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
         ``ingest`` com ``materialize=True`` ou por ``create_table``, e os insere no ``close``.
 
+        Dois appenders na mesma tabela, ao mesmo tempo, entram os dois com todas as suas linhas:
+        em sessões de ``new_session()``, os dois ``INSERT ... BY NAME`` rodam juntos, porque um
+        acréscimo do DuckDB não conflita com outro; na sessão principal, um ``close`` espera o
+        outro sob o lock. Um appender e um ``UPDATE`` das linhas que a tabela já tinha, ao mesmo
+        tempo, também entram os dois.
+
         Exemplo:
 
         .. code-block:: python
@@ -1054,6 +1060,9 @@ class DuckDBEngine:
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
         """Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
+
+        Dois ``append`` na mesma tabela ao mesmo tempo, ou um ``append`` e um ``UPDATE`` dela,
+        entram os dois, como no ``appender``.
 
         Exemplo:
 

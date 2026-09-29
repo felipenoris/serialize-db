@@ -804,12 +804,12 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   same day on the other findings are implemented (`.claude/memory/decisions.md`): every Redshift
   `COPY` lists the file's columns, snapshot names are immutable and checked at `run.snapshot`,
   and `serialize-db audit` prints a refused ingest as a failed audit; what the target still reads
-  is in `plan/OPEN_QUESTIONS.md`. The battery of 2026-09-28 read the column list with `FILLRECORD`,
-  the `diagnose_aws.py` DuckDB line and `SP-10`, and a Parquet `COPY` of a missing path loading
-  nothing without error; that day the user put the `appender` `COPY` on a one-entry mandatory
-  manifest and had the load's fourth loss (`INT96` nanoseconds) and the `conversões` line's reach
-  documented. That day's load stopped at `cad_lancamentos` 2026-07-31 on `RegistrationRefused`,
-  the source being rewritten [inferred] (`.claude/memory/source-base.md`).
+  is in `plan/OPEN_QUESTIONS.md`. The battery of 2026-09-28 at 20:14 read the column list with
+  `FILLRECORD`, the `diagnose_aws.py` DuckDB line and `SP-10`, and a Parquet `COPY` of a missing
+  path loading nothing without error; that day the user put the `appender` `COPY` on a one-entry
+  mandatory manifest and had the load's fourth loss (`INT96` nanoseconds) and the `conversões`
+  line's reach documented. The battery of 23:09 passed every case, loaded the stable source whole
+  and read two writers on one table entering in both engines (`.claude/memory/environments.md`).
 - The user's answers of 2026-09-23 and 2026-09-24 (time zone refusal, `FILLRECORD`, JSON ceiling,
   `VARCHAR(n)` width, runbook, 400-day retention, `archived` key, `local` writing tests, the
   `EXPLAIN` distribution reading, the temporary staging filled inside the transaction) are in

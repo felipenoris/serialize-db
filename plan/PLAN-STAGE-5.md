@@ -229,8 +229,11 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
   sem carregar. Sem manifesto, o `COPY` de Parquet lê o caminho como prefixo e, sem objeto que
   case, não carrega nada e não dá erro (leitura de 2026-09-28, [`POC.md`](POC.md)); com a entrada
   obrigatória, o arquivo ausente faz o `COPY` falhar, e a URL exata não alcança outro objeto do
-  mesmo prefixo (decisão do usuário de 2026-09-28). O `COPY` do appender, direto e na staging
-  `_carga`, lista as colunas do arquivo, as do primeiro lote:
+  mesmo prefixo (decisão do usuário de 2026-09-28). No alvo, o arquivo apagado depois do manifesto
+  fez o `COPY` falhar com `Spectrum Scan Error: File not found` e o SQLSTATE `XX000`, sem deixar
+  linha, nas quatro rodadas de 2026-09-28 às 23:09 ([`POC.md`](POC.md)), e o substituto de
+  `tests/emulator.py` dá a mesma mensagem (decisão do usuário de 2026-09-29). O `COPY` do appender,
+  direto e na staging `_carga`, lista as colunas do arquivo, as do primeiro lote:
   `COPY <alvo> ("a", "b") FROM ... FORMAT AS PARQUET MANIFEST FILLRECORD`. O `COPY` de Parquet é
   posicional: sem a lista, a coluna anulável do meio que o lote não trouxe receberia o valor da
   coluna seguinte (no substituto local, `largura` entrou em `altura`); com ela, cada coluna do
@@ -242,7 +245,14 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
   `close`, a da saída do `with` depois de um `close` explícito, não faz nada. É a regra do
   `appender` da [etapa 4](PLAN-STAGE-4.md) (decisão do usuário de 2026-09-28, no lugar do `loader`
   que criava a tabela no `close`, decisão de 2026-09-23): uma leitura durante um `append` em curso
-  vê a tabela sem as linhas novas. `append` passa sempre pelo `appender` (decisão do usuário de
+  vê a tabela sem as linhas novas. Dois appenders na mesma tabela, ao mesmo tempo, entram os dois
+  com todas as suas linhas: em sessões a mais, cada `COPY` na sua conexão, e o Redshift grava um
+  depois do outro na tabela; na sessão principal, um `close` espera o outro sob o lock. Sob o
+  isolamento de snapshot, o que a escrita por datashare exige, um appender numa sessão a mais e um
+  `UPDATE` da principal sobre as linhas já gravadas também entram os dois. As docstrings de
+  `appender` e de `append` dizem isso, e `test_two_writers_on_the_same_table_both_enter`
+  (`redshift`) o confere (decisão do usuário de 2026-09-29, depois da bateria de 2026-09-28 às 23:09
+  no alvo, [`POC.md`](POC.md)). `append` passa sempre pelo `appender` (decisão do usuário de
   2026-09-23, mantida).
 - **`audit`** roda `audit_sql(table, "redshift", prefix=exec_<id>_, pinned=<staging>)`; as
   demais partições e a tabela referenciada entram na staging `_versao` de `pinned_delta`, com
@@ -322,6 +332,7 @@ testes marcados `redshift` repetem a sequência com uma amostra no esquema autor
 | Resultado vazio | `test_stream_empty_result` (`local`) | Uma conexão de mentira em que o `UNLOAD` não grava manifesto: com `pg_last_unload_count()` em 0, o `stream` sai sem lote e com o esquema do statement, e o texto com o do `row_desc`; com 2, a falta do manifesto sobe; no alvo (`redshift`), um `select` sem linha. |
 | Sessão única | `test_statements_serialize_on_the_single_session` (`local`) | Uma conexão de mentira que registra o início e o fim de cada comando: dois comandos de duas threads não se sobrepõem; um comando roda enquanto um `stream` ainda lê os arquivos, porque o lock solta no fim do `UNLOAD`; um `stream` aberto dentro de `session()`, na mesma thread, não trava; no alvo (`redshift`), a tabela temporária criada por `query` é lida pelo `UNLOAD` do `stream` seguinte. |
 | Sessão a mais | `test_new_session_sees_committed_tables` (`redshift`) | A sessão de `new_session` vê a tabela `exec_<id>_*` confirmada pela principal e recusa a temporária dela; duas ingestões em duas sessões terminam, e a principal lê as duas tabelas. |
+| Dois escritores | `test_two_writers_on_the_same_table_both_enter` (`redshift`) | Dois appenders na tabela com coluna JSON, com os `close` ao mesmo tempo por uma barreira, em duas sessões a mais, cada `COPY` pela staging temporária da sua sessão, e na sessão principal, deixam as linhas das duas escritas, sem id repetido e com a soma de `valor` delas; um appender numa sessão a mais e um `UPDATE` da principal sobre as linhas já gravadas entram os dois. |
 | Esquema de um texto | `test_schema_from_row_description` | Um `row_desc` de mentira: cada OID da tabela para o tipo Arrow; `NUMERIC` com a precisão e a escala do `type_modifier`; outro OID recusado com o nome da coluna; no alvo (`redshift`), o `row_desc` de um `select` com uma coluna de cada tipo do contrato, `SUPER`, `count(*)`, `sum` de `NUMERIC(18, 2)`, `sum` de `DOUBLE PRECISION` e um literal de texto. |
 | Conexão real | `test_connect_uses_share_database` (`redshift`) | Depois do `USE`, o `CREATE TABLE` de uma tabela `exec_<id>_*` por nome em duas partes passa, nenhum comando da conexão cria `serialize_db_publications`, e `current_database()` é registrado como leitura. |
 | Ciclo com amostra | `test_ingest_stream_appender_export` (`redshift`) | `ingest` de uma partição de um Delta no bucket, `stream` em lotes, `create_table` e o `appender` por `COPY`, o segundo `create_table` recusado com o nome ocupado, a troca do `NaN` por `DELETE` e `append`, `export_partition` nos dois modos com as mesmas linhas, `cleanup` sem tabela restante. |

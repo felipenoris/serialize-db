@@ -137,6 +137,22 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   table without the new rows
   (`test_engine_duckdb.py::test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows`,
   `.claude/memory/decisions.md`). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- Two writers on one sandbox table entered in both engines in the target on 2026-09-29
+  (`probes/consistencia/probe_append_test.py`, `-m redshift` in 41.4 s with 20,000 rows per writer,
+  `-m local` in 11.6 s with 200,000): two `append` at once in extra sessions, two on the main
+  session in threads (in series under the lock) and an `append` beside an `UPDATE` of the rows
+  already written left every row, no repeated id and the sum of `valor`; Redshift refused no pair
+  with `1023`, under the snapshot isolation datashare writes require. In the probe's section D,
+  DuckDB's `create_table` entered during a 5,000,000-row `stream` in 0.010 s on an extra session and
+  0.006 s on the main one, where the main session's `CREATE TABLE` waited for the whole query
+  (1.569 s to 1.896 s) locally before PR #103. Since the user's decision of 2026-09-29
+  (`decisions.md`), the docstrings of `appender` and `append`, in the protocol and both engines, say
+  both writers enter, and `test_two_writers_on_the_same_table_both_enter` checks it in both engines,
+  the `close` calls released together by a barrier after the `write`. A scratch pytest plugin that
+  refused a `close` with another in flight, dropped its rows, or deleted the table's rows before
+  inserting failed it, but the delete passed the extra-sessions section, where both `DELETE`s ran
+  together and saw the empty table; on Redshift the refusal and the drop wrap the whole `close`,
+  because `_copy_file` already runs under the transaction's lock. `plan/POC.md`
 
 - A pool that receives every task at once cannot promise that nothing new starts after the first
   failure: with one worker, the worker took the third table before the main loop saw the second
