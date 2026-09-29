@@ -677,3 +677,13 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   of the target, and the prefix rule was documented, not read. It now lists the prefix, and the old
   code fails on it as in the target. Before a failure case is trusted on the stand-in, read the
   target's documentation for the input the case breaks. `plan/POC.md`, `tests/emulator.py`
+- **A probe's count is read against its filter before a finding is attributed to it** (2026-09-29).
+  The battery of 13:31 showed `exec_poc_faa78dd7_cad_append_0` in the `svv_all_tables` listing that
+  `RS-8` prints, and the report of that day attributed to it the count `RS-8` moved from 0 of 2 to 1
+  of 17; the count reads only names starting with `serialize_db`, and its 1 was
+  `serialize_db_publications`, which the publication of the same night created. The same report
+  inferred the table came from the append probe's passing run of 00:32, which `sys_query_history`
+  disproved: the table's execution ran at 00:29 and stopped after its first round. Both claims
+  reached `plan/POC.md`, `plan/OPEN_QUESTIONS.md` and the thread before the probe's `TABLE_PREFIX`
+  and the server's history were read. This is the rule of 2026-09-20 that reads a label against each
+  item it covers. `plan/POC.md`

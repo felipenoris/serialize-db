@@ -16,11 +16,12 @@ foi medido em [`POC.md`](POC.md).
   2026-09-25 às 17:26; e 5.269 versões, 159.538.248 bytes, com 4.883 marcadores em 2026-09-26 às
   15:14; e 7.619 versões, 233.165.927 bytes, com 7.030 marcadores em 2026-09-27 às 15:59; e 8.822
   versões, 270.369.639 bytes, com 8.127 marcadores em 2026-09-28 às 20:14; e 10.301 versões,
-  307.133.320 bytes, com 9.504 marcadores às 23:10, [`POC.md`](POC.md)), e a regra
-  `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
-  para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
-  `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
-  retenção.
+  307.133.320 bytes, com 9.504 marcadores às 23:10; e ao menos 10.434 versões, 283.570.979 bytes,
+  com 9.565 marcadores em 2026-09-29 às 13:32, quando a listagem de `BK-14` parou no limite de
+  20.000 entradas, [`POC.md`](POC.md)), e a regra `NoncurrentVersionExpiration` sob a raiz, junto
+  com `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket. Sem ela, o
+  `vacuum` da retenção de 400 dias não libera espaço; `docs/index.md`, seção "Retenção dos arquivos
+  removidos", traz a regra de exemplo e como mudar a retenção.
 - **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26, em
   2026-09-27 e em 2026-09-29 ([`POC.md`](POC.md)), o delta-rs, o `S3FileSystem` e o `boto3`
   renovando a credencial do contêiner, que troca de chave a cada cerca de 30 minutos, e a conexão

@@ -98,6 +98,8 @@ Documentação:
 - <https://docs.aws.amazon.com/redshift/latest/dg/c-using-spectrum.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_STL_LOAD_ERRORS.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/SYS_LOAD_ERROR_DETAIL.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/SYS_QUERY_HISTORY.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/SYS_SESSION_HISTORY.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/ingest-super.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/cm_chap_ConfigurationRef.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/querying-iceberg.html>

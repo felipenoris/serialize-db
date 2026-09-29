@@ -5473,3 +5473,112 @@ inteiro, porque o `_copy_file` já roda sob o lock da transação.
 
 **Consequências**: os dois testes rodam no alvo na próxima bateria pelos comandos de `SUITE.md`, sem
 comando novo: o do DuckDB na sessão `-m "not redshift"`, e o do Redshift nas sessões `-m redshift`.
+
+## O que a bateria de 2026-09-29 às 13:31 mostrou no ambiente alvo
+
+Em 2026-09-29, das 13:31 às 14:13 UTC, o usuário rodou no ambiente alvo o bloco "Probes e Testes -
+BN" de `SUITE.md`, os cinco probes e as sete sessões do pytest, numa máquina de 8 vCPUs e 15,1 GiB
+(Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.6, pyarrow 25.0.1, boto3 1.43.102, `redshift_connector`
+2.1.17, `sa-east-1`), sobre a `main` com o PR #106 [inferido: as sessões coletaram
+`test_two_writers_on_the_same_table_both_enter`, que só o PR #106 tem]. Os relatórios ficam fora de
+`plan/`, com os achados aqui. Nenhum caso e nenhuma checagem falharam, e as leituras repetem as da
+bateria anterior ("O que a bateria de 2026-09-28 às 23:09 mostrou no ambiente alvo"), salvo:
+
+- **Os testes de dois escritores passaram no alvo.**
+  `test_two_writers_on_the_same_table_both_enter` passou no DuckDB da máquina, na sessão
+  `-m "not redshift"` com a raiz local, e no Redshift nas quatro sessões que o coletam, duas da
+  suíte Redshift e duas da do motor. Cada sessão aprovou um caso a mais que às 23:09, fora a da
+  publicação: `-m "not redshift"` 611 casos em 281,8 s, a suíte Redshift 53 em 687,1 s e em 613,5 s,
+  a do motor 11 em 188,0 s e em 167,7 s, e a da publicação 10 em 214,5 s e em 209,4 s. O
+  `COPY ... MANIFEST` do arquivo obrigatório ausente falhou de novo com
+  `Spectrum Scan Error: File not found` e o SQLSTATE `XX000` nas quatro sessões Redshift
+  (`redshift.engine.copy_missing_mandatory_file`), e o `append` de 10 linhas levou 1,52 s e 1,45 s
+  na suíte Redshift e 1,79 s e 1,39 s na do motor (`redshift.engine.small_append`).
+- **Uma tabela do sandbox ficou no esquema.** A listagem de `svv_all_tables` que o `RS-8` de
+  `probes/redshift.py` imprime trouxe 17 tabelas, entre elas `exec_poc_faa78dd7_cad_append_0`, onde
+  as de 2026-09-27 e de 2026-09-28 traziam só `teste` e `teste3`, e o `RS-19` a resolveu por nome
+  depois do `USE`. A contagem do `RS-8` fica nos nomes que começam por `serialize_db`
+  (`TABLE_PREFIX`) e leu 1 de 17, `serialize_db_publications`; as tabelas `exec_` do sandbox ficam
+  fora dela. O nome é o da primeira tabela de `probes/consistencia/probe_append_test.py`. Lido em
+  2026-09-29 às 16:43 pela identidade da biblioteca, o `sys_query_history` mostra a execução
+  `poc-faa78dd7` de 00:29:01 a 00:29:06 UTC: a sessão principal criou só essa tabela, duas sessões a
+  mais criaram e apagaram cada uma a sua staging temporária (os dois `append` da primeira rodada da
+  seção A), e às 00:29:06 a sessão principal rodou `DROP TABLE IF EXISTS` na tabela, com status
+  `success`. A execução parou antes da segunda rodada, e a saída dela não está nos relatórios; a
+  rodada `-m redshift` das 00:32, que passou, é outra execução e não deixou tabela. O
+  `sys_transaction_history`, que diz se a transação do `DROP` foi confirmada, recusou a identidade
+  da biblioteca com `42501`. Neste contêiner, a sonda no substituto, com os avisos impressos
+  (`-o log_cli=true --log-cli-level=WARNING`), apagou todas as tabelas sem aviso.
+- **O esquema guarda a publicação da bateria anterior.** As outras 16 tabelas são `teste`,
+  `teste3`, `teste_query_editor`, `serialize_db_publications` e as 12 `prd_*` da publicação da base
+  por `--channel default` de 2026-09-29, e `redshift.engine.control_table_present` leu `True` nas
+  quatro sessões Redshift, onde as das 23:09, antes da publicação, liam `False`.
+- **O `BK-14` parou no limite da listagem.** `probes/bucket.py` lista as versões sob a raiz em até
+  20 páginas de 1.000 entradas, e parou nas 20.000: 1 versão corrente, 10.434 não correntes
+  (283.570.979 bytes) e 9.565 marcadores de exclusão, contra 10.301 não correntes (307.133.320
+  bytes) e 9.504 marcadores às 23:10. A contagem de `BK-14` passa a ser um piso do acumulado. O
+  `RS-12` contou 88 erros de carga em 30 dias, contra 93 às 23:09.
+
+**Consequências**: a frase das docstrings de `append` e de `appender` sobre dois escritores na mesma
+tabela vale no alvo pelo teste do pacote, nos dois motores. O `DROP` da tabela que ficou no esquema
+rodou com status `success` e não a apagou ("O `redshift_connector` depois de um comando
+interrompido"); a listagem do próximo `RS-8` diz se as sessões desta bateria deixaram alguma tabela.
+O item das versões não correntes de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) ganha a leitura, como
+piso.
+
+## O que a bateria de 2026-09-29 às 17:04 mostrou no ambiente alvo
+
+Em 2026-09-29, das 17:04 às 17:45 UTC, o usuário rodou de novo no ambiente alvo o bloco "Probes e
+Testes - BN" de `SUITE.md`, com as mesmas versões das 13:31 e sobre a `main` com o PR #106
+[inferido: as sessões aprovaram os mesmos casos]. Às 17:00, o usuário atribuiu a tabela
+`exec_poc_faa78dd7_cad_append_0` a uma rodada da sonda de dois escritores que interrompeu, e a
+apagou à mão antes do bloco. Os relatórios ficam fora de `plan/`, com os achados aqui. Nenhum caso e
+nenhuma checagem falharam, e as leituras repetem as das 13:31 ("O que a bateria de 2026-09-29 às
+13:31 mostrou no ambiente alvo"), salvo:
+
+- **A listagem não traz mais a tabela do sandbox.** O `svv_all_tables` das 17:04 listou 16 tabelas,
+  as das 13:31 sem `exec_poc_faa78dd7_cad_append_0`: o `DROP` à mão a apagou, e as sessões das 13:31
+  às 14:13 não deixaram tabela `exec_`. O `RS-8` leu de novo 1 de 16, `serialize_db_publications`.
+  As sessões das 17:07 às 17:45 rodaram depois do probe, e só a listagem da próxima bateria diz se
+  deixaram alguma tabela.
+- **Os casos repetiram as contagens das 13:31.** A sessão `-m "not redshift"` aprovou 611 casos em
+  275,7 s, a suíte Redshift 53 em 631,5 s e em 625,4 s, a do motor 11 em 165,6 s e em 180,0 s, e a
+  da publicação 10 em 210,4 s e em 204,9 s. O `COPY ... MANIFEST` do arquivo obrigatório ausente
+  falhou de novo com `Spectrum Scan Error: File not found`, e o `append` de 10 linhas levou 1,46 s e
+  1,54 s na suíte Redshift e 1,76 s e 1,47 s na do motor.
+- **O `RS-12` contou 100 erros de carga em 30 dias**, contra 88 às 13:31, e o `BK-14` parou de novo
+  no limite da listagem, com 10.481 versões não correntes (283.880.162 bytes) e 9.518 marcadores de
+  exclusão.
+
+**Consequências**: a sobra de tabela do sandbox não se repetiu nas sessões das 13:31 às 14:13, e a
+das 00:29 fica atribuída pelo usuário à interrupção ("O `redshift_connector` depois de um comando
+interrompido"). A contagem do `RS-8` não enxerga as tabelas `exec_` do sandbox, que só a listagem
+mostra, e fica assim por decisão do usuário de 2026-09-29.
+
+## O `redshift_connector` depois de um comando interrompido
+
+Em 2026-09-29, neste contêiner, um servidor falso do protocolo de linha do PostgreSQL, num script do
+scratchpad que não foi guardado, atendeu o `redshift_connector` 2.1.17 conectado como o motor o
+conecta (`max_prepared_statements=0`, autocommit ligado, sem SSL). O servidor respondia a cada
+`SELECT` com uma linha que repete o texto do comando e demorava 2 s no `SELECT 'lento'`. Um SIGINT
+enviado ao processo 0,5 s depois do início desse comando interrompeu o `execute` dele com
+`KeyboardInterrupt`, e os comandos seguintes na mesma conexão voltaram sem erro e um passo
+atrasados:
+
+- **Um `SELECT` volta sem linhas.** `SELECT 'depois'` esperou os 2 s do lento e voltou `()`, e
+  `SELECT 'fim'`, depois do `DROP`, também.
+- **Um `DROP` volta sem ler a resposta da execução dele.** `DROP TABLE IF EXISTS t` voltou ao ler a
+  resposta do `Parse` dele, com a da execução ainda por ler.
+- **O servidor executou todos os comandos, na ordem**, e recebeu o `Terminate` do `close` depois do
+  último.
+
+O driver lê cada fase até o primeiro `ReadyForQuery` (`Connection.handle_messages`) e não marca a
+conexão quando uma exceção sai no meio da leitura, e o motor reusa a conexão no comando seguinte
+(`RedshiftEngine._run`).
+
+**Consequências**: a hipótese do `DROP` das 00:29 ganha o lado do cliente, reproduzido: depois de um
+comando interrompido, o `cleanup` roda o `DROP` numa conexão cujas respostas chegam um comando
+atrasadas, e a fecha sem ler a resposta da execução do último. Por que o Redshift não confirmou esse
+`DROP` fica sem leitura. O usuário decidiu em 2026-09-29 deixar o motor como está: depois de um
+Ctrl+C no meio de um comando, o motor Redshift é recriado à mão, e uma rodada interrompida pode
+deixar tabela `exec_` no esquema ([etapa 5](PLAN-STAGE-5.md)).
