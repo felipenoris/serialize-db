@@ -1455,4 +1455,11 @@ Delta reader on the old snapshot, and the next `--channel default` returns the p
 snapshot's version without error. The user answered (22:29 UTC) that the runbook holds the correct
 information and asked for the adjustments: the plan's section and the correction sentence of the
 monthly pipeline in `plan/PLAN.md` follow the runbook, and `--channel current` stays for the
-environment that publishes without a snapshot. `plan/serialize-db.md`, `plan/PLAN.md`
+environment that publishes without a snapshot. The runbook gave the revert in one sentence,
+without commands and without saying that the current Delta version keeps the correction, which
+the next execution reads and the next snapshot carries back to Redshift; the user chose
+(22:41 UTC) to add both: "Refazer um snapshot" carries the `serialize-db channel` and
+`serialize-db publish_redshift --channel default` of the revert, possible until the `archive` of
+the old snapshot, and the warning that a correction that fails is undone in Delta by another
+execution writing the partitions again, before the next execution. `docs/operacao.md`,
+`plan/serialize-db.md`, `plan/PLAN.md`

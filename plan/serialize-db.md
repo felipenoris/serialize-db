@@ -260,8 +260,9 @@ passa a apontar para ele.
    que o leitor Delta passa a abrir sem argumento.
 4. `serialize-db publish_redshift --channel default` recarrega no Redshift só as partições
    alteradas desde a versão publicada.
-5. Se a correção não servir, o canal volta para `2026T3`, e a publicação pelo canal volta as
-   tabelas.
+5. Se a correção não servir, até o `archive` do `2026T3`, o canal volta para ele, e a publicação
+   pelo canal devolve as tabelas do Redshift às versões dele. A versão atual do Delta continua com
+   as partições refeitas, que a próxima execução lê, até outra execução gravá-las de novo.
 6. As versões intermediárias entre snapshots do banco continuam legíveis nos 400 dias de retenção e
    saem no `vacuum` mensal depois deles.
 

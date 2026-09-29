@@ -98,8 +98,23 @@ Os dados de um snapshot já gravado se refazem num snapshot novo, e o canal pass
 3. `serialize-db publish_redshift --channel default` leva ao Redshift as partições alteradas desde
    a versão publicada.
 
-O `2026T3` continua legível pelo nome e prende as versões dele no `vacuum` até o `archive`. Se a
-correção não servir, o canal volta para `2026T3`, e a publicação pelo canal volta as tabelas.
+O `2026T3` continua legível pelo nome e prende as versões dele no `vacuum` até o `archive`.
+
+Se a correção não servir, até o `archive` do `2026T3`, o canal volta para ele, e a publicação pelo
+canal devolve as tabelas do Redshift às versões dele:
+
+```shell
+serialize-db channel --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --name default --snapshot 2026T3
+serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --channel default
+```
+
+A volta troca o snapshot que o leitor Delta abre sem argumento e as tabelas do Redshift, e a
+versão atual de cada tabela no Delta continua com as partições refeitas: a próxima execução as lê
+na versão fixada, o snapshot seguinte as leva, e a publicação dele as devolve ao Redshift. A
+correção que não serve se desfaz no Delta, antes da próxima execução, por outra execução que grava
+as partições de novo, marcada com outro nome, como `2026T3.r3`.
 
 ### Compactação
 
