@@ -54,10 +54,6 @@ foi medido em [`POC.md`](POC.md).
   principal, que deixou a resposta dela pendente na conexão: o `DROP` do `cleanup` tomou essa
   resposta pela sua, e a conexão fechou antes de o Redshift confirmar o `DROP`. Proteger o
   `cleanup` da rodada interrompida espera a decisão do usuário.
-- **As tabelas do sandbox fora da contagem do `RS-8`.** O `RS-8` de `probes/redshift.py` conta só as
-  tabelas cujo nome começa por `serialize_db` (`TABLE_PREFIX`: a de controle e as da suíte
-  Redshift), e as `exec_<id>_` do sandbox aparecem só na listagem de `svv_all_tables` que ele
-  imprime ([`POC.md`](POC.md)). Contar também as `exec_` espera a decisão do usuário.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela

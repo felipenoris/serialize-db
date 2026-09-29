@@ -1416,3 +1416,14 @@ so the target's other fields stay unread. `test_appender_copies_the_file_at_clos
 the message as a reading, without asserting it, because the engine never reads that text; a missing
 manifest keeps the stand-in's own message, since the target's was never read. `tests/emulator.py`,
 `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+
+## The `RS-8` count without the sandbox tables (2026-09-29)
+
+The battery of 2026-09-29 at 13:31 listed a sandbox table, `exec_poc_faa78dd7_cad_append_0`, that a
+run of `probes/consistencia/probe_append_test.py` interrupted at 00:29 left in the schema. `RS-8` of
+`probes/redshift.py` counts only the names starting with `serialize_db` (`TABLE_PREFIX`: the control
+table and the Redshift suite's tables), so the sandbox's `exec_<id>_` tables appear only in the
+`svv_all_tables` listing it prints. The user had said at 17:00 UTC that a table left after a run
+would be a sign of a real problem. Asked on a card whether `RS-8` should also count and name the
+`exec_` tables or stay as it was, the user chose "Deixar" (20:26 UTC): `RS-8` keeps counting the
+library prefix only, and a sandbox leftover is read in the listing. `plan/POC.md`

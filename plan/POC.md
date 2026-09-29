@@ -5552,5 +5552,4 @@ nenhuma checagem falharam, e as leituras repetem as das 13:31 ("O que a bateria 
 **Consequências**: a sobra de tabela do sandbox não se repetiu nas sessões das 13:31 às 14:13, e a
 das 00:29 fica atribuída pelo usuário à interrupção, com o mecanismo sem leitura
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A contagem do `RS-8` não enxerga as tabelas `exec_` do
-sandbox, que só a listagem mostra, e contá-las espera a decisão do usuário
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+sandbox, que só a listagem mostra, e fica assim por decisão do usuário de 2026-09-29.
