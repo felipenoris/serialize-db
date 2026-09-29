@@ -152,7 +152,9 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   refused a `close` with another in flight, dropped its rows, or deleted the table's rows before
   inserting failed it, but the delete passed the extra-sessions section, where both `DELETE`s ran
   together and saw the empty table; on Redshift the refusal and the drop wrap the whole `close`,
-  because `_copy_file` already runs under the transaction's lock. `plan/POC.md`
+  because `_copy_file` already runs under the transaction's lock. The test passed in the target on
+  2026-09-29 at 13:31, on DuckDB in the `-m "not redshift"` session with the local root and on
+  Redshift in the four sessions that collect it. `plan/POC.md`
 
 - A pool that receives every task at once cannot promise that nothing new starts after the first
   failure: with one worker, the worker took the third table before the main loop saw the second

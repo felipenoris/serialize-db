@@ -16,11 +16,12 @@ foi medido em [`POC.md`](POC.md).
   2026-09-25 às 17:26; e 5.269 versões, 159.538.248 bytes, com 4.883 marcadores em 2026-09-26 às
   15:14; e 7.619 versões, 233.165.927 bytes, com 7.030 marcadores em 2026-09-27 às 15:59; e 8.822
   versões, 270.369.639 bytes, com 8.127 marcadores em 2026-09-28 às 20:14; e 10.301 versões,
-  307.133.320 bytes, com 9.504 marcadores às 23:10, [`POC.md`](POC.md)), e a regra
-  `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
-  para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
-  `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
-  retenção.
+  307.133.320 bytes, com 9.504 marcadores às 23:10; e ao menos 10.434 versões, 283.570.979 bytes,
+  com 9.565 marcadores em 2026-09-29 às 13:32, quando a listagem de `BK-14` parou no limite de
+  20.000 entradas, [`POC.md`](POC.md)), e a regra `NoncurrentVersionExpiration` sob a raiz, junto
+  com `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket. Sem ela, o
+  `vacuum` da retenção de 400 dias não libera espaço; `docs/index.md`, seção "Retenção dos arquivos
+  removidos", traz a regra de exemplo e como mudar a retenção.
 - **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26, em
   2026-09-27 e em 2026-09-29 ([`POC.md`](POC.md)), o delta-rs, o `S3FileSystem` e o `boto3`
   renovando a credencial do contêiner, que troca de chave a cada cerca de 30 minutos, e a conexão
@@ -42,6 +43,14 @@ foi medido em [`POC.md`](POC.md).
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
+- **A tabela do sandbox que ficou no esquema.** Em 2026-09-29 às 13:31, o `RS-8` leu no esquema do
+  alvo a tabela `exec_poc_faa78dd7_cad_append_0`, da rodada `-m redshift` de
+  `probes/consistencia/probe_append_test.py` das 00:32 [inferido], cujo `cleanup` apagou as outras
+  seis tabelas ([`POC.md`](POC.md)). O `cleanup` do motor nomeia no log a tabela que o `DROP` não
+  alcança, e o log de um caso aprovado não aparece. A leitura de `sys_query_history` sobre os
+  `CREATE` e os `DROP` da execução `poc-faa78dd7` diz se o `DROP` falhou, e com que erro, se não
+  rodou ou se a transação dele foi desfeita; a correção e o `DROP` da tabela à mão esperam essa
+  leitura.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela

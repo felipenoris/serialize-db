@@ -421,3 +421,18 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `svv_all_columns` from the DDL it remembers, in Redshift's spelling; the concurrent publication
   test pauses every connection of the second publication after its control-row read through the
   `driver_connect` seam. `plan/POC.md`, `tests/emulator.py`
+- A sandbox table outlived its run in the target: `RS-8` read on 2026-09-29 at 13:31
+  `exec_poc_faa78dd7_cad_append_0` in the schema, 1 of 17 tables with the library prefix, where the
+  readings of 2026-09-27 and 2026-09-28 read 0 of 2. It is the first table of
+  `probes/consistencia/probe_append_test.py`'s `-m redshift` run of 00:32 (inferred: the only run
+  between the listings of 23:09 and 13:31 that creates `cad_append_*`), whose `cleanup` dropped the
+  other six. `cleanup` names a table its `DROP` misses only in `log.warning`, which pytest never
+  prints for a passing case; on the stand-in, the probe run with
+  `-o log_cli=true --log-cli-level=WARNING` dropped every table without a warning. The cause waits
+  on `sys_query_history`, which lists a user's DDL with `status` (`failed`, `success`),
+  `error_message` and `query_text` (up to 4,000 characters), a regular user seeing only their own
+  rows, joined to `sys_transaction_history` for the transaction's status; a read-only script over
+  the `CREATE` and `DROP` of `poc-faa78dd7` went to the user on 2026-09-29. The schema also keeps
+  the base publication of 2026-09-29 (the 12 `prd_*` tables and `serialize_db_publications`), so
+  `redshift.engine.control_table_present` read `True` at 13:31. `plan/POC.md`,
+  `plan/OPEN_QUESTIONS.md`

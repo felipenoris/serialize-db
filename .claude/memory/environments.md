@@ -194,6 +194,16 @@ copy and 58.4 s at 6,902 MB by rewrite, and `compact` refused; `probe_append_tes
 engines (`concurrency.md`), `credentials.py` ran from 00:31:00 to 01:34:02 with no read failing, and
 `duckdb_threads.py` from 00:27:53 (`duckdb.md`). `plan/POC.md`
 
+The battery of 2026-09-29 from 13:31 UTC (from `main` with PR #106, inferred from the sessions
+collecting `test_two_writers_on_the_same_table_both_enter`) ran only the "Probes e Testes - BN"
+block on 8 vCPUs and 15.1 GiB (the same versions). Every case and check passed: S3 611 in 281.8 s,
+Redshift 53 twice (687.1 s, 613.5 s), engine 11 twice (188.0 s, 167.7 s) and publication 10 twice
+(214.5 s, 209.4 s), each session but the publication's with one case more than at 23:09, the
+two-writers test (`concurrency.md`). The probes differed from 23:09 in `RS-8` (1 of 17 tables with
+the library prefix, a sandbox table the append probe's run of 00:32 left, `redshift.md`), `RS-12`
+(88 load errors in 30 days) and `BK-14`, whose listing stopped at its 20,000-entry limit (10,434
+non-current versions, 283,570,979 bytes, and 9,565 delete markers, now a floor). `plan/POC.md`
+
 ## The prepared folder and the venv
 
 On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group

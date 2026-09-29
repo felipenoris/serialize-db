@@ -5473,3 +5473,50 @@ inteiro, porque o `_copy_file` já roda sob o lock da transação.
 
 **Consequências**: os dois testes rodam no alvo na próxima bateria pelos comandos de `SUITE.md`, sem
 comando novo: o do DuckDB na sessão `-m "not redshift"`, e o do Redshift nas sessões `-m redshift`.
+
+## O que a bateria de 2026-09-29 às 13:31 mostrou no ambiente alvo
+
+Em 2026-09-29, das 13:31 às 14:13 UTC, o usuário rodou no ambiente alvo o bloco "Probes e Testes -
+BN" de `SUITE.md`, os cinco probes e as sete sessões do pytest, numa máquina de 8 vCPUs e 15,1 GiB
+(Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.6, pyarrow 25.0.1, boto3 1.43.102, `redshift_connector`
+2.1.17, `sa-east-1`), sobre a `main` com o PR #106 [inferido: as sessões coletaram
+`test_two_writers_on_the_same_table_both_enter`, que só o PR #106 tem]. Os relatórios ficam fora de
+`plan/`, com os achados aqui. Nenhum caso e nenhuma checagem falharam, e as leituras repetem as da
+bateria anterior ("O que a bateria de 2026-09-28 às 23:09 mostrou no ambiente alvo"), salvo:
+
+- **Os testes de dois escritores passaram no alvo.**
+  `test_two_writers_on_the_same_table_both_enter` passou no DuckDB da máquina, na sessão
+  `-m "not redshift"` com a raiz local, e no Redshift nas quatro sessões que o coletam, duas da
+  suíte Redshift e duas da do motor. Cada sessão aprovou um caso a mais que às 23:09, fora a da
+  publicação: `-m "not redshift"` 611 casos em 281,8 s, a suíte Redshift 53 em 687,1 s e em 613,5 s,
+  a do motor 11 em 188,0 s e em 167,7 s, e a da publicação 10 em 214,5 s e em 209,4 s. O
+  `COPY ... MANIFEST` do arquivo obrigatório ausente falhou de novo com
+  `Spectrum Scan Error: File not found` e o SQLSTATE `XX000` nas quatro sessões Redshift
+  (`redshift.engine.copy_missing_mandatory_file`), e o `append` de 10 linhas levou 1,52 s e 1,45 s
+  na suíte Redshift e 1,79 s e 1,39 s na do motor (`redshift.engine.small_append`).
+- **Uma tabela do sandbox ficou no esquema.** O `RS-8` de `probes/redshift.py` leu 1 de 17 tabelas
+  com o prefixo da biblioteca, `exec_poc_faa78dd7_cad_append_0`, onde as leituras de 2026-09-27 e de
+  2026-09-28 liam 0 de 2. O nome é o da primeira tabela de
+  `probes/consistencia/probe_append_test.py`, cuja rodada `-m redshift` de 2026-09-29 às 00:32 foi a
+  única, entre as leituras das 23:09 e das 13:31, a criar tabelas `cad_append_*` [inferido], e as
+  outras seis tabelas dessa rodada saíram. O `cleanup` do motor nomeia só no log a tabela que o
+  `DROP` não alcança, e o pytest não imprime o log de um caso aprovado, então a causa não foi lida.
+  Neste contêiner, a sonda no substituto, com os avisos impressos
+  (`-o log_cli=true --log-cli-level=WARNING`), apagou todas as tabelas sem aviso.
+- **O esquema guarda a publicação da bateria anterior.** As outras 16 tabelas são `teste`,
+  `teste3`, `teste_query_editor`, `serialize_db_publications` e as 12 `prd_*` da publicação da base
+  por `--channel default` de 2026-09-29, e `redshift.engine.control_table_present` leu `True` nas
+  quatro sessões Redshift, onde as das 23:09, antes da publicação, liam `False`.
+- **O `BK-14` parou no limite da listagem.** `probes/bucket.py` lista as versões sob a raiz em até
+  20 páginas de 1.000 entradas, e parou nas 20.000: 1 versão corrente, 10.434 não correntes
+  (283.570.979 bytes) e 9.565 marcadores de exclusão, contra 10.301 não correntes (307.133.320
+  bytes) e 9.504 marcadores às 23:10. A contagem de `BK-14` passa a ser um piso do acumulado. O
+  `RS-12` contou 88 erros de carga em 30 dias, contra 93 às 23:09.
+
+**Consequências**: a frase das docstrings de `append` e de `appender` sobre dois escritores na mesma
+tabela vale no alvo pelo teste do pacote, nos dois motores. A tabela que ficou no esquema espera a
+leitura de `sys_query_history` sobre os `CREATE` e os `DROP` da execução `poc-faa78dd7`, que diz se
+o `DROP` falhou, e com que erro, se não rodou ou se a transação dele foi desfeita
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o próximo `RS-8` diz se as sessões desta bateria
+deixaram alguma tabela. O item das versões não correntes de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
+ganha a leitura, como piso.
