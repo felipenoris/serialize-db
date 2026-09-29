@@ -200,9 +200,17 @@ block on 8 vCPUs and 15.1 GiB (the same versions). Every case and check passed: 
 Redshift 53 twice (687.1 s, 613.5 s), engine 11 twice (188.0 s, 167.7 s) and publication 10 twice
 (214.5 s, 209.4 s), each session but the publication's with one case more than at 23:09, the
 two-writers test (`concurrency.md`). The probes differed from 23:09 in `RS-8` (1 of 17 tables with
-the library prefix, a sandbox table of an append probe run that stopped at 00:29, `redshift.md`),
-`RS-12` (88 load errors in 30 days) and `BK-14`, whose listing stopped at its 20,000-entry limit
-(10,434 non-current versions, 283,570,979 bytes, and 9,565 delete markers, now a floor).
+the `serialize_db` prefix, `serialize_db_publications`, and in its listing a sandbox table of an
+append probe run that stopped at 00:29, `redshift.md`), `RS-12` (88 load errors in 30 days) and
+`BK-14`, whose listing stopped at its 20,000-entry limit (10,434 non-current versions, 283,570,979
+bytes, and 9,565 delete markers, now a floor). `plan/POC.md`
+
+The battery of 2026-09-29 from 17:04 UTC repeated the "Probes e Testes - BN" block with the same
+versions, after the user dropped the leftover sandbox table by hand. Every case and check passed: S3
+611 in 275.7 s, Redshift 53 twice (631.5 s, 625.4 s), engine 11 twice (165.6 s, 180.0 s) and
+publication 10 twice (210.4 s, 204.9 s). The probes differed from 13:31 in the `RS-8` listing (16
+tables, no `exec_` table), `RS-12` (100 load errors in 30 days) and `BK-14` (10,481 non-current
+versions, 283,880,162 bytes, and 9,518 delete markers, the listing again at its limit).
 `plan/POC.md`
 
 ## The prepared folder and the venv

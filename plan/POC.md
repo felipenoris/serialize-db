@@ -5494,19 +5494,21 @@ bateria anterior ("O que a bateria de 2026-09-28 às 23:09 mostrou no ambiente a
   `Spectrum Scan Error: File not found` e o SQLSTATE `XX000` nas quatro sessões Redshift
   (`redshift.engine.copy_missing_mandatory_file`), e o `append` de 10 linhas levou 1,52 s e 1,45 s
   na suíte Redshift e 1,79 s e 1,39 s na do motor (`redshift.engine.small_append`).
-- **Uma tabela do sandbox ficou no esquema.** O `RS-8` de `probes/redshift.py` leu 1 de 17 tabelas
-  com o prefixo da biblioteca, `exec_poc_faa78dd7_cad_append_0`, onde as leituras de 2026-09-27 e de
-  2026-09-28 liam 0 de 2, e o `RS-19` a resolveu por nome depois do `USE`. O nome é o da primeira
-  tabela de `probes/consistencia/probe_append_test.py`. Lido em 2026-09-29 às 16:43 pela identidade
-  da biblioteca, o `sys_query_history` mostra a execução `poc-faa78dd7` de 00:29:01 a 00:29:06 UTC:
-  a sessão principal criou só essa tabela, duas sessões a mais criaram e apagaram cada uma a sua
-  staging temporária (os dois `append` da primeira rodada da seção A), e às 00:29:06 a sessão
-  principal rodou `DROP TABLE IF EXISTS` na tabela, com status `success`. A execução parou antes da
-  segunda rodada, e a saída dela não está nos relatórios; a rodada `-m redshift` das 00:32, que
-  passou, é outra execução e não deixou tabela. O `sys_transaction_history`, que diz se a transação
-  do `DROP` foi confirmada, recusou a identidade da biblioteca com `42501`. Neste contêiner, a sonda
-  no substituto, com os avisos impressos (`-o log_cli=true --log-cli-level=WARNING`), apagou todas
-  as tabelas sem aviso.
+- **Uma tabela do sandbox ficou no esquema.** A listagem de `svv_all_tables` que o `RS-8` de
+  `probes/redshift.py` imprime trouxe 17 tabelas, entre elas `exec_poc_faa78dd7_cad_append_0`, onde
+  as de 2026-09-27 e de 2026-09-28 traziam só `teste` e `teste3`, e o `RS-19` a resolveu por nome
+  depois do `USE`. A contagem do `RS-8` fica nos nomes que começam por `serialize_db`
+  (`TABLE_PREFIX`) e leu 1 de 17, `serialize_db_publications`; as tabelas `exec_` do sandbox ficam
+  fora dela. O nome é o da primeira tabela de `probes/consistencia/probe_append_test.py`. Lido em
+  2026-09-29 às 16:43 pela identidade da biblioteca, o `sys_query_history` mostra a execução
+  `poc-faa78dd7` de 00:29:01 a 00:29:06 UTC: a sessão principal criou só essa tabela, duas sessões a
+  mais criaram e apagaram cada uma a sua staging temporária (os dois `append` da primeira rodada da
+  seção A), e às 00:29:06 a sessão principal rodou `DROP TABLE IF EXISTS` na tabela, com status
+  `success`. A execução parou antes da segunda rodada, e a saída dela não está nos relatórios; a
+  rodada `-m redshift` das 00:32, que passou, é outra execução e não deixou tabela. O
+  `sys_transaction_history`, que diz se a transação do `DROP` foi confirmada, recusou a identidade
+  da biblioteca com `42501`. Neste contêiner, a sonda no substituto, com os avisos impressos
+  (`-o log_cli=true --log-cli-level=WARNING`), apagou todas as tabelas sem aviso.
 - **O esquema guarda a publicação da bateria anterior.** As outras 16 tabelas são `teste`,
   `teste3`, `teste_query_editor`, `serialize_db_publications` e as 12 `prd_*` da publicação da base
   por `--channel default` de 2026-09-29, e `redshift.engine.control_table_present` leu `True` nas
@@ -5519,7 +5521,36 @@ bateria anterior ("O que a bateria de 2026-09-28 às 23:09 mostrou no ambiente a
 
 **Consequências**: a frase das docstrings de `append` e de `appender` sobre dois escritores na mesma
 tabela vale no alvo pelo teste do pacote, nos dois motores. O `DROP` da tabela que ficou no esquema
-rodou com status `success` e não a apagou, e a causa espera a leitura dos comandos e do fechamento
-das três sessões da execução `poc-faa78dd7` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); o próximo
-`RS-8` diz se as sessões desta bateria deixaram alguma tabela. O item das versões não correntes de
-[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) ganha a leitura, como piso.
+rodou com status `success` e não a apagou ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)); a listagem do
+próximo `RS-8` diz se as sessões desta bateria deixaram alguma tabela. O item das versões não
+correntes de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) ganha a leitura, como piso.
+
+## O que a bateria de 2026-09-29 às 17:04 mostrou no ambiente alvo
+
+Em 2026-09-29, das 17:04 às 17:45 UTC, o usuário rodou de novo no ambiente alvo o bloco "Probes e
+Testes - BN" de `SUITE.md`, com as mesmas versões das 13:31 e sobre a `main` com o PR #106
+[inferido: as sessões aprovaram os mesmos casos]. Às 17:00, o usuário atribuiu a tabela
+`exec_poc_faa78dd7_cad_append_0` a uma rodada da sonda de dois escritores que interrompeu, e a
+apagou à mão antes do bloco. Os relatórios ficam fora de `plan/`, com os achados aqui. Nenhum caso e
+nenhuma checagem falharam, e as leituras repetem as das 13:31 ("O que a bateria de 2026-09-29 às
+13:31 mostrou no ambiente alvo"), salvo:
+
+- **A listagem não traz mais a tabela do sandbox.** O `svv_all_tables` das 17:04 listou 16 tabelas,
+  as das 13:31 sem `exec_poc_faa78dd7_cad_append_0`: o `DROP` à mão a apagou, e as sessões das 13:31
+  às 14:13 não deixaram tabela `exec_`. O `RS-8` leu de novo 1 de 16, `serialize_db_publications`.
+  As sessões das 17:07 às 17:45 rodaram depois do probe, e só a listagem da próxima bateria diz se
+  deixaram alguma tabela.
+- **Os casos repetiram as contagens das 13:31.** A sessão `-m "not redshift"` aprovou 611 casos em
+  275,7 s, a suíte Redshift 53 em 631,5 s e em 625,4 s, a do motor 11 em 165,6 s e em 180,0 s, e a
+  da publicação 10 em 210,4 s e em 204,9 s. O `COPY ... MANIFEST` do arquivo obrigatório ausente
+  falhou de novo com `Spectrum Scan Error: File not found`, e o `append` de 10 linhas levou 1,46 s e
+  1,54 s na suíte Redshift e 1,76 s e 1,47 s na do motor.
+- **O `RS-12` contou 100 erros de carga em 30 dias**, contra 88 às 13:31, e o `BK-14` parou de novo
+  no limite da listagem, com 10.481 versões não correntes (283.880.162 bytes) e 9.518 marcadores de
+  exclusão.
+
+**Consequências**: a sobra de tabela do sandbox não se repetiu nas sessões das 13:31 às 14:13, e a
+das 00:29 fica atribuída pelo usuário à interrupção, com o mecanismo sem leitura
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A contagem do `RS-8` não enxerga as tabelas `exec_` do
+sandbox, que só a listagem mostra, e contá-las espera a decisão do usuário
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).

@@ -421,26 +421,30 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `svv_all_columns` from the DDL it remembers, in Redshift's spelling; the concurrent publication
   test pauses every connection of the second publication after its control-row read through the
   `driver_connect` seam. `plan/POC.md`, `tests/emulator.py`
-- A sandbox table outlived its run in the target: `RS-8` read on 2026-09-29 at 13:31
-  `exec_poc_faa78dd7_cad_append_0` in the schema, 1 of 17 tables with the library prefix, where the
-  readings of 2026-09-27 and 2026-09-28 read 0 of 2, and `RS-19` resolved it by name after the
-  `USE`. `sys_query_history`, read by the library's identity at 16:43, shows execution
-  `poc-faa78dd7` from 00:29:01 to 00:29:06 UTC: the main session created only that table, two extra
-  sessions each created and dropped a temporary `exec_poc_faa78dd7_cad_append_0_carga` (the first
-  round's two appends), and at 00:29:06 the main session ran
-  `DROP TABLE IF EXISTS "sbx_aco_decon"."exec_poc_faa78dd7_cad_append_0"` with `status` `success`.
-  No other table of the execution was created, so the run stopped before round 1, and its output is
-  in no report; the passing `-m redshift` run of 00:32 is another execution and left nothing.
-  `sys_transaction_history`, which says whether a transaction committed, is denied to the library's
-  identity (`42501`). The hypothesis (inferred, put to the user): a Ctrl+C mid-query left that
-  query's response pending on the main connection; `redshift_connector` reads until the first
+- A sandbox table outlived its run in the target: the `svv_all_tables` listing `RS-8` prints showed
+  on 2026-09-29 at 13:31 `exec_poc_faa78dd7_cad_append_0` among 17 tables, where the listings of
+  2026-09-27 and 2026-09-28 held only `teste` and `teste3`, and `RS-19` resolved it by name after
+  the `USE`. `RS-8` itself counts only names starting with `serialize_db` (`TABLE_PREFIX`: the
+  control table and the Redshift suite's tables), so its 1 of 17 was `serialize_db_publications`,
+  and the sandbox's `exec_` tables never enter its count. `sys_query_history`, read by the library's
+  identity at 16:43, shows execution `poc-faa78dd7` from 00:29:01 to 00:29:06 UTC: the main session
+  created only that table, two extra sessions each created and dropped a temporary
+  `exec_poc_faa78dd7_cad_append_0_carga` (the first round's two appends), and at 00:29:06 the main
+  session ran `DROP TABLE IF EXISTS "sbx_aco_decon"."exec_poc_faa78dd7_cad_append_0"` with `status`
+  `success`. No other table of the execution was created, so the run stopped before round 1, and its
+  output is in no report; the passing `-m redshift` run of 00:32 is another execution and left
+  nothing. `sys_transaction_history`, which says whether a transaction committed, is denied to the
+  library's identity (`42501`). The hypothesis (inferred, put to the user): a Ctrl+C mid-query left
+  that query's response pending on the main connection; `redshift_connector` reads until the first
   `ReadyForQuery` of each phase (Parse, Describe and Sync, then Bind, Execute and Sync), so the
   cleanup's `DROP` took the old response as its own, and the connection closed before Redshift
   committed the `DROP`. A second read-only script (the three sessions' statements from 00:28:30 to
-  00:29:30 without the `COPY` text, `sys_session_history` and the table's count) went to the user.
-  `sys_query_history` lists DDL and `UTILITY` rows with `status` (`failed`, `success`, ...),
-  `error_message`, `lock_wait_time`, `elapsed_time` and `query_text` (up to 4,000 characters), a
-  regular user seeing only their own rows; `sys_session_history` gives each session's `status`,
+  00:29:30 without the `COPY` text, `sys_session_history` and the table's count) went to the user
+  and never ran: at 17:00 the user attributed the table to a run they had interrupted and dropped it
+  by hand, and the listing of 17:04 no longer held it nor any `exec_` table of the sessions of 13:31
+  to 14:13. `sys_query_history` lists DDL and `UTILITY` rows with `status` (`failed`, `success`,
+  ...), `error_message`, `lock_wait_time`, `elapsed_time` and `query_text` (up to 4,000 characters),
+  a regular user seeing only their own rows; `sys_session_history` gives each session's `status`,
   `start_time` and `end_time`. `cleanup` names a table its `DROP` misses only in `log.warning`; on
   the stand-in, the probe run with `-o log_cli=true --log-cli-level=WARNING` dropped every table
   without a warning. The schema also keeps the base publication of 2026-09-29 (the 12 `prd_*` tables
