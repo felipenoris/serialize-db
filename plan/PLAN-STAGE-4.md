@@ -209,10 +209,12 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   1.880 MB a 6.427 MB; com 8 vCPUs de duas threads por núcleo físico, em 2026-09-27, leu a partição
   de 2.331 MB em 7,7 s com 8 threads e em 4,0 s a 4,1 s com 24 a 40, e a materializou em 52,7 s com
   4, 37,2 s com 8, 34,2 s com 16 e 35,4 s a 37,8 s com 24 a 40, com o pico do processo de 3.341 MB a
-  6.362 MB ([`POC.md`](POC.md)). O padrão são as CPUs que o processo pode usar, decidido pela
-  execução de 2026-09-24: a ingestão materializa, e com 16 vCPUs a metade das CPUs e o dobro delas
-  perderam nela; com 8 vCPUs, o dobro ganhou de 5% a 9% numa tabela, com o pico cerca de 1 GB maior,
-  e perdeu 5% com quatro tabelas em série. A leitura agregada do S3 ganha de 1,4 a 1,9 vez com o
+  6.362 MB, e em 2026-09-29, pela DDL e o `INSERT ... BY NAME`, em 55,3 s com 4, 39,6 s com 8,
+  35,3 s com 16 e 34,9 s a 36,3 s com 24 a 40 ([`POC.md`](POC.md)). O padrão são as CPUs que o
+  processo pode usar, decidido pela execução de 2026-09-24: a ingestão materializa, e com 16 vCPUs
+  a metade das CPUs e o dobro delas perderam nela; com 8 vCPUs, o dobro ganhou de 5% a 12% numa
+  tabela, com o pico cerca de 1 GB maior, e perdeu de 5% a 8% com quatro tabelas em série. A
+  leitura agregada do S3 ganha de 1,4 a 1,9 vez com o
   triplo, para quem a pedir em `DuckDBConfig.threads`. O cache de arquivos externos do DuckDB fica
   ligado, o
   padrão: uma segunda leitura do mesmo arquivo na execução não volta ao S3. A conexão é a sessão da

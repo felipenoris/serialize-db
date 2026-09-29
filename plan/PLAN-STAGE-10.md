@@ -319,21 +319,24 @@ Os comandos estão em `SUITE.md`, seções "Publicação Delta -> Redshift" e "A
 as leituras em [`POC.md`](POC.md):
 
 - **O tempo de abertura do leitor Delta** sobre as 12 tabelas da raiz carregada, com as views em
-  paralelo: 0,645 s em 2026-09-25, 0,582 s em 2026-09-26 e 0,571 s em 2026-09-27, com
-  `cad_lancamentos` na versão 4 e na 5 nos dois primeiros dias, contra 8,7 ms por view na pasta
-  local (sonda de 2026-09-24). A contagem de `cad_contas` deu o mesmo pelos dois leitores nos três
-  dias.
+  paralelo: 0,645 s em 2026-09-25, 0,582 s em 2026-09-26, 0,571 s em 2026-09-27 e 0,556 s em
+  2026-09-29, com `cad_lancamentos` na versão 4 e na 5 nos dois primeiros dias, contra 8,7 ms por
+  view na pasta local (sonda de 2026-09-24). A contagem de `cad_contas` deu o mesmo pelos dois
+  leitores em cada dia.
 - **A publicação por `--channel default`** da raiz de `SUITE.md` rodou em 2026-09-26, com
   `--max-workers 4`: as tabelas sem partição de 3,5 s a 4,8 s, `cad_contratos` em 31,2 s,
   `cad_operacoes` em 53,1 s, `rel_contrato_operacao` em 56,5 s e `cad_lancamentos`, com cinco
   partições, em 295,1 s, com o pico do processo em 266 MB; e de novo em 2026-09-27, com a cláusula
   de credenciais montada a cada `COPY`: as tabelas sem partição de 3,4 s a 4,0 s, `cad_contratos`
   em 37,9 s, `cad_operacoes` em 60,5 s, `rel_contrato_operacao` em 66,1 s e `cad_lancamentos` em
-  328,5 s, com o pico do processo em 270 MB, de 11% a 21% mais por tabela particionada, com a
-  causa não medida. A volta a um snapshot anterior segue sem leitura sobre a raiz: o snapshot de
-  `SUITE.md` está na versão atual, e a volta não tem partição para trocar. No substituto, em
-  2026-09-25, e na suíte da publicação no alvo, num ambiente `poc<id>`, a volta trocou só as
-  partições alteradas entre as duas versões.
+  328,5 s, com o pico do processo em 270 MB, de 11% a 21% mais por tabela particionada, com a causa
+  não medida; e em 2026-09-29, com a leitura do rodapé de cada arquivo desde a revisão de
+  2026-09-28: as tabelas sem partição de 3,4 s a 4,5 s, `cad_contratos` em 38,6 s, `cad_operacoes`
+  em 60,8 s, `rel_contrato_operacao` em 66,8 s e `cad_lancamentos` em 335,2 s, com o pico do
+  processo em 286 MB, de 0,5% a 2,0% mais por tabela particionada que em 2026-09-27. A volta a um
+  snapshot anterior segue sem leitura sobre a raiz: o snapshot de `SUITE.md` está na versão atual, e
+  a volta não tem partição para trocar. No substituto, em 2026-09-25, e na suíte da publicação no
+  alvo, num ambiente `poc<id>`, a volta trocou só as partições alteradas entre as duas versões.
 - **O `UNLOAD` do cliente** para um bucket próprio com um usuário do Redshift só de leitura,
   pendente. A execução mostra se o `UNLOAD` é aceito para quem só tem `SELECT` e qual caminho de
   credencial serve, o `iam_role` do cliente ou as credenciais da sessão. Ela precisa de um papel de

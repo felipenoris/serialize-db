@@ -372,14 +372,14 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   FORMAT AS PARQUET FILLRECORD`), because the positional Parquet `COPY` put a nullable middle column
   the batch lacked into the next column's values (`largura` into `altura`, no error); the target
   read the column list and `FILLRECORD` each alone on 2026-09-21, not together, and
-  `test_appender_loads_a_batch_without_a_middle_column` reads the combination in the next battery.
-  The text path (`literal_text`, the `stream` of a ready text) writes each `:` of a quoted region as
-  `\:` before `sa.text()`, which read `':b'` as a bind and rendered `'a NULL'` (`query` `[1]`,
-  `stream` `[]`), and repeats a client value's backslash before `:`, because the compiler's
-  `BIND_PARAMS_ESC` also acts on the rendered literals (`r"ref \:x2"` reached the `UNLOAD` as
-  `ref :x2`). `transaction()` runs `COMMIT` and `ROLLBACK` inside the transaction: an
-  `InterfaceError` at `COMMIT` rises with the outcome unknown, where the old code reconnected and
-  repeated `COMMIT` outside a transaction, which returned success. A second
+  `test_appender_loads_a_batch_without_a_middle_column` read the combination passing in the target
+  on 2026-09-28 at 20:14 and at 23:09. The text path (`literal_text`, the `stream` of a ready text)
+  writes each `:` of a quoted region as `\:` before `sa.text()`, which read `':b'` as a bind and
+  rendered `'a NULL'` (`query` `[1]`, `stream` `[]`), and repeats a client value's backslash before
+  `:`, because the compiler's `BIND_PARAMS_ESC` also acts on the rendered literals (`r"ref \:x2"`
+  reached the `UNLOAD` as `ref :x2`). `transaction()` runs `COMMIT` and `ROLLBACK` inside the
+  transaction: an `InterfaceError` at `COMMIT` rises with the outcome unknown, where the old code
+  reconnected and repeated `COMMIT` outside a transaction, which returned success. A second
   `RedshiftAppender.close` does nothing (it ran another `COPY` of the deleted file).
   `plan/PLAN-STAGE-5.md`, `plan/POC.md`
 - The user's decision of 2026-09-28 extended the column list to every `COPY` from Delta (`ingest`,
@@ -390,7 +390,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   model shifted values without error on the stand-in (`novo` got `a1`, `a` got `b1`, `b` null).
   `get_add_actions` lists the newest commit first, so the actions are sorted by `path`. The new
   `redshift` cases of `tests/test_engine_redshift.py` and `tests/test_publication.py` read the list
-  with `FILLRECORD` in the next battery. `plan/PLAN-STAGE-3.md`
+  with `FILLRECORD` passing in the target on 2026-09-28 at 20:14 and at 23:09, and reading the
+  footers cost the base's publication 0.5% to 2.0% per partitioned table on 2026-09-29, with one
+  file per partition. `plan/PLAN-STAGE-3.md`
 - A Parquet `COPY` without `MANIFEST` reads its path as a key prefix, and a prefix that matches no
   object loaded nothing without error in the target on 2026-09-28 (inferred from
   `test_appender_copies_the_file_at_close` failing with `DID NOT RAISE` four times; until PR #104
@@ -403,9 +405,11 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   since. The stand-in reads a path without `MANIFEST` as a prefix (`object_uris`), returns an empty
   result without error when nothing matches, and fails a missing manifest or a missing mandatory
   entry with its own message; on it, the old code fails as in the target, and `mandatory: false`
-  fails both the local and the target test. The target's message for the missing mandatory file
-  lands in `redshift.engine.copy_missing_mandatory_file` on the next battery. `plan/POC.md`,
-  `plan/PLAN-STAGE-5.md`
+  fails both the local and the target test. In the target, on 2026-09-28 at 23:09, the missing
+  mandatory file failed the `COPY` with `Spectrum Scan Error: File not found` and SQLSTATE `XX000`
+  in the four runs, loading no row (`redshift.engine.copy_missing_mandatory_file`); whether the
+  stand-in gives that message, as it gives the missing relation's, awaits the user
+  (`plan/OPEN_QUESTIONS.md`). `plan/POC.md`, `plan/PLAN-STAGE-5.md`
 - The Redshift audit's refused ingest printed in the target on 2026-09-28 as `Cannot insert a NULL
   value into column valor` (code 8007) and `Invalid input` (code 8001, `JSON_PARSE() error:
   End-of-input inside object or array: {`), both `XX000`, with the driver's whole dict, the

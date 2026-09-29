@@ -5284,3 +5284,166 @@ pasta local:
 Arrow, e as docstrings de `DuckDBEngine.stream` e `DeltaReader.stream` avisam o cliente de que,
 com mais de uma thread, o erro da consulta pode chegar como a interrupção, sem a causa (decisão
 do usuário de 2026-09-28, [etapa 4](PLAN-STAGE-4.md)); o comportamento do pacote não muda.
+
+## O que a bateria de 2026-09-28 às 23:09 mostrou no ambiente alvo
+
+Em 2026-09-28, das 23:09 às 23:55 UTC, o usuário rodou no ambiente alvo o bloco "Probes e Testes -
+BN" de `SUITE.md`, os cinco probes e as sete sessões do pytest, numa máquina de 8 vCPUs e 15.505 MB
+(Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.6, pyarrow 25.0.1, boto3 1.43.102, `redshift_connector`
+2.1.17, `sa-east-1`), sobre a `main` com o PR #105 [inferido: as suítes Redshift gravaram a leitura
+`redshift.engine.copy_missing_mandatory_file`, que só o teste do PR #105 grava]. Em 2026-09-29, a
+partir das 00:01 UTC, vieram na mesma máquina os blocos da migração, da publicação, do acesso de
+leitura e da exportação, as sondas de consistência com a de dois escritores,
+`probes/duckdb_threads.py` e `probes/credentials.py`. Os relatórios ficam fora de `plan/`, com os
+achados aqui. Nenhum caso e nenhuma checagem falharam, e as leituras repetem as de 2026-09-27 ("O
+que a bateria de 2026-09-27 às 15:58 mostrou no ambiente alvo") e as das 20:14 ("O que a bateria de
+2026-09-28 às 20:14 mostrou no ambiente alvo"), salvo:
+
+- **O `COPY` pelo manifesto falha quando o arquivo obrigatório não existe.**
+  `test_appender_copies_the_file_at_close` passou nas quatro rodadas, duas da suíte Redshift e duas
+  da do motor: o arquivo apagado depois do manifesto fez o `COPY ... MANIFEST` do `appender` falhar
+  com `Spectrum Scan Error: File not found` e o SQLSTATE `XX000`
+  (`redshift.engine.copy_missing_mandatory_file`), sem deixar linha, e os outros casos do `appender`
+  carregaram pelo manifesto. O substituto recusa o mesmo `COPY` com uma mensagem própria. O `append`
+  de 10 linhas levou 1,49 s e 1,55 s na suíte Redshift e 1,47 s e 2,41 s na do motor, contra 1,23 s,
+  1,26 s, 1,63 s e 1,22 s às 20:14, sem o manifesto (`redshift.engine.small_append`).
+- **Dois escritores na mesma tabela entraram nos dois motores.**
+  `probes/consistencia/probe_append_test.py` passou com `-m redshift` em 41,4 s, com 20.000 linhas
+  por escritor, e com `-m local` no DuckDB da máquina em 11,6 s, com 200.000, e cada seção deixou a
+  tabela com as linhas das escritas, sem id repetido e com a soma de `valor` delas. No Redshift, os
+  dois `append` em duas sessões a mais, ao mesmo tempo, entraram nas três rodadas, cada um em
+  3,060 s a 4,353 s; os dois na sessão principal, em duas threads, em 2,946 s e 4,891 s, em série
+  sob o lock; e o `append` ao lado de um `UPDATE` das linhas já gravadas, em 3,345 s, com o `UPDATE`
+  em 2,372 s: o isolamento serializável não recusou nenhum par. No DuckDB, os mesmos pares entraram
+  em 0,526 s a 0,681 s nas cinco rodadas, em 0,573 s e 1,094 s na sessão principal e em 0,493 s ao
+  lado do `UPDATE`, que levou 0,031 s.
+- **O `create_table` do DuckDB não esperou a consulta de um `stream`.** Na seção D da mesma sonda,
+  com o `stream` de 5.000.000 de linhas rodando, cujo primeiro lote chegou em 0,040 s, o
+  `create_table` entrou em 0,010 s numa sessão a mais e em 0,006 s na principal, e o stream esgotou
+  o resto 1,414 s depois deles; na rodada local de 2026-09-28, antes da implementação, o
+  `CREATE TABLE` na principal esperou a consulta inteira (1,569 s a 1,896 s). No Redshift, o da
+  sessão a mais entrou em 1,072 s, começando durante o `UNLOAD` do `stream`, que voltou em 1,009 s,
+  e o da principal, que roda sob o lock, entrou em 0,693 s depois do `UNLOAD` [inferido pelos
+  tempos: a sonda espera 0,2 s antes do primeiro], sem leitura da espera. Nos dois motores, o
+  `append` da principal na tabela criada pela sessão a mais entrou (0,318 s e 2,413 s).
+- **As suítes.** A sessão `-m "not redshift"` aprovou 610 casos em 271,4 s, contra 274,1 s às 20:14.
+  As suítes Redshift, do motor e da publicação aprovaram 52 casos duas vezes (617,4 s e 690,6 s), 10
+  duas vezes (214,0 s e 239,0 s) e 10 duas vezes (305,7 s e 286,9 s), contra 671,8 s e 605,9 s,
+  150,9 s e 147,0 s e 205,6 s e 249,9 s às 20:14, com a causa da diferença das duas últimas não
+  medida.
+- **Os probes** diferiram dos das 20:14 só no que muda a cada rodada: o `RS-12` contou 93 erros de
+  carga em 30 dias, contra 85; o `BK-14` contou 10.301 versões não correntes (307.133.320 bytes) e
+  9.504 marcadores de exclusão sob a raiz das suítes, contra 8.822 (270.369.639 bytes) e 8.127:
+  1.479 versões e 36.763.681 bytes entre as duas leituras; e a credencial do contêiner tinha 32
+  minutos pela frente, contra 55. As chamadas que falharam são as de 2026-09-27: 1 no `space.py`, 6
+  no `bucket.py` e 3 no `catalog.py`, com o Lake Formation e o S3 Tables sem resposta em 60,9 s e
+  30,4 s.
+
+Em 2026-09-29, a partir das 00:01:30 UTC, o usuário rodou a carga, a auditoria, `history`,
+`snapshot`, `vacuum` e `archive` do bloco "Migração Parquet -> Delta" de `SUITE.md`, numa raiz
+recarregada: o `history` de `cad_lancamentos` começa no `CREATE TABLE` das 00:03:54.
+
+- **A origem voltou à de 2026-09-27, e a carga passou inteira.** A carga (8 CPUs, 12.042 MB
+  disponíveis, 8 threads e `memory_limit` de 6.021 MiB) conferiu as 12 tabelas com as mesmas
+  354.048.596 linhas em 25 partições de 2026-09-27, as mesmas contagens, somas e contagens de não
+  finitos em cada partição, as mesmas conversões e os mesmos três itens fora do modelo, em 514,3 s
+  somados, contra 496,8 s: `cad_aliquotas` com 22 linhas, e `cad_operacoes`, `rel_contrato_operacao`
+  e `cad_lancamentos` com a partição 2026-07-31 inteira (5.579.536, 15.209.141 e 141.933.948
+  linhas). As partições de `cad_lancamentos` levaram 33,3 s, 22,8 s, 56,8 s, 33,7 s e 249,9 s,
+  contra 30,6 s, 21,2 s, 54,7 s, 30,7 s e 245,0 s, com o pico do processo em 8.734 MB, contra
+  8.625 MB. Com a raiz recarregada, a continuação da carga parada em 2026-09-28 e o `vacuum --full`
+  do arquivo que ela deixou fora do log não rodaram.
+- **A auditoria** de `cad_lancamentos` 2026-01-31 com `--foreign-keys`, na versão 5, repetiu os
+  989.852 órfãos de `data_base`, `sistema` e `contrato` e o total de `valor` 117.667.407.519,194421.
+- **`snapshot`, `vacuum` e `archive`** repetiram 2026-09-27: o snapshot `carga-2026-09-24` com as 12
+  tabelas, 0 arquivo a apagar em cada uma e os 25 arquivos copiados, com `cad_lancamentos` em 17,7 s
+  e pico de 349 MB, o arquivo da 2026-07-31 em 6,8 s, contra 16,8 s, 350 MB e 5,9 s.
+
+Em seguida, o usuário rodou os blocos "Publicação Delta -> Redshift", "Acesso de leitura" e
+"Exportação e Compact" de `SUITE.md`, na mesma raiz, com a saída colada na conversa, sem a hora:
+
+- **A publicação da base inteira por canal** repetiu o fluxo de 2026-09-27: `--init` criou a tabela
+  de controle; `--tables cad_contas --channel default` publicou a versão 1 em 3,3 s, com o pico do
+  processo em 251 MB; `--max-workers 4 --channel default` publicou as outras 11, as sem partição de
+  3,4 s a 4,5 s, `cad_contratos` em 38,6 s, `cad_operacoes` em 60,8 s, `rel_contrato_operacao` em
+  66,8 s e `cad_lancamentos` em 335,2 s, com o pico em 286 MB, contra 37,9 s, 60,5 s, 66,1 s e
+  328,5 s com 270 MB em 2026-09-27, antes da leitura dos rodapés da revisão de 2026-09-28: de 0,5% a
+  2,0% a mais por tabela particionada, menos que os 11% a 21% entre 2026-09-26 e 2026-09-27, com um
+  arquivo por partição. `--status` leu as 12 `prd_<tabela>` com a versão publicada igual à atual e
+  nenhuma partição pendente, e `--channel current` e `--snapshot carga-2026-09-25 --tables
+  cad_contas` responderam que cada versão já estava publicada.
+- **O leitor Delta** abriu as 12 views do snapshot `carga-2026-09-25` em 0,556 s, e a contagem de
+  `cad_contas` deu 101 pelos dois leitores.
+- **`export` de `cad_lancamentos`**: por cópia, 5 arquivos em 15,6 s com pico de 259 MB; por
+  `--mode rewrite`, 5 arquivos em 58,4 s com pico de 6.902 MB, contra 14,7 s e 56,7 s com 6.938 MB.
+  O `compact` da 2026-03-31 recusou de novo pelo snapshot na versão atual 5.
+
+Das 00:29:48 às 00:33:03, o usuário rodou o bloco "Sondas de consistência" de `SUITE.md`, com a
+sonda de dois escritores acima. Nenhuma checagem reprovou, e os achados conhecidos se repetiram:
+
+- **O sinal do zero** pelo `COPY` do DuckDB deu 100 de 2.000 linhas na sonda dos tipos e 1.538 e
+  1.539 por partição na da execução; **a janela de `publish`** da seção D da sonda da execução
+  repetiu `exec-e` commitando a versão 9 sobre a 8 de `exec-f`, sem `ExecutionConflict`; a disputa
+  da seção C deu o caminho de 2026-09-27, `exec-d` commitando e `exec-c` recebendo
+  `ExecutionConflict`; `deep_copy` seguiu sem as estatísticas de `Boolean` e `DateTime`; e a escrita
+  condicional na pasta local perdeu 335 de 400 atualizações, com 84 conflitos vistos, contra 312 e
+  204.
+- **O leitor Delta sob `materialize`** fez 330 leituras sem erro, com a troca pela tabela inteira em
+  0,53 s a 0,65 s e pela parcial em 0,35 s a 0,40 s, contra 0,40 s a 0,46 s e 0,23 s a 0,25 s, ao
+  lado de `probes/duckdb_threads.py` [inferido pelos horários]; **o motor Redshift** da sonda
+  (`probe_redshift_test.py`) passou em 59,6 s, e a limpeza apagou os 27 objetos da sessão.
+
+Das 00:31:00 às 01:34:02, `probes/credentials.py` leu `<raiz>/prd/cad_contas` em 14 rodadas, e
+nenhuma leitura falhou:
+
+- **O secret do motor DuckDB trocou de chave antes de cada expiração.** Ele passou à chave nova às
+  01:01:07, 12,1 minutos antes da expiração das 01:13:11 da chave que guardava (`CR-9`), e às
+  01:31:12, 13,0 minutos antes da das 01:44:11, a cada vez na primeira rodada dentro dos 15 minutos
+  em que o botocore renova a credencial (as das 00:56:05 e das 01:26:11 estavam a 17,1 e a 18,0
+  minutos), e o `delta_scan` leu nas 5 rodadas depois da primeira expiração (`CR-4`).
+- **O contêiner trocou a chave de 27 a 33 minutos antes da expiração da anterior**: a cadeia do
+  `boto3` passou a entregar a chave que expira às 01:44:11 entre 00:41:03 e 00:46:04, e a que expira
+  às 02:14:49 entre 01:11:08 e 01:16:09, como as trocas a cerca de 30 minutos de 2026-09-26 e de
+  2026-09-27.
+- **Os outros clientes seguiram lendo**: a cláusula do `COPY` e do `UNLOAD` seguiu a chave do
+  contêiner desde as 00:46:04 (`CR-10`); o delta-rs, o `read_parquet`, o `S3FileSystem` e o `boto3`
+  leram depois da expiração (`CR-3`, `CR-5` a `CR-7`); a conexão Redshift respondeu ao `select 1`
+  duas vezes depois da expiração da senha, às 01:31:01 (`CR-8`); e os cinco clientes novos leram
+  (`CR-11`).
+
+A partir das 00:27:53, `probes/duckdb_threads.py` rodou inteiro sobre a partição 2026-07-31, como em
+2026-09-27 (`cad_lancamentos` com 141.933.948 linhas e 2.331 MB num arquivo; as quatro tabelas com
+166.708.072 linhas), com 4, 8, 16, 24, 32 e 40 threads, a razão sobre as 8 do padrão do motor, o
+cache de arquivos externos desligado e a melhor de três repetições. A materialização é, desde a
+implementação de 2026-09-28, a DDL do modelo e o `INSERT ... BY NAME` do `delta_scan`, no lugar do
+`CREATE TABLE AS`, e as sondas de consistência rodaram na mesma máquina durante as repetições com 4
+e com 8 threads [inferido pelos horários: a terceira com 4 threads levou 71,541 s, contra 55,308 s
+e 57,061 s]:
+
+- **A materialização** levou 55,308 s com 4 threads, 39,558 s com 8, 35,251 s com 16, 34,934 s com
+  24, 36,316 s com 32 e 36,310 s com 40, com o pico do processo de 3.401 MB a 6.338 MB (3.955 MB com
+  8 e 4.950 MB com 16), contra 52,660 s, 37,215 s, 34,192 s, 35,446 s, 37,838 s e 36,448 s pelo
+  `CREATE TABLE AS` em 2026-09-27: 6% a mais com 8 threads e 3% com 16. Com 16 threads, ela foi
+  1,12 vez mais rápida que com 8, e com 24, 1,13 vez.
+- **A leitura agregada do S3** levou 14,343 s com 4 threads, 7,690 s com 8, 4,535 s com 16, 4,081 s
+  com 24, 4,015 s com 32 (1,92 vez mais rápida que com 8) e 4,042 s com 40, como em 2026-09-27.
+- **As quatro tabelas** foram mais rápidas em série com 8 threads (48,796 s, contra 52,709 s com 16
+  e até 61,494 s com 40); em sessões a mais, como `run.ingest`, levaram 40,367 s com 8 threads,
+  40,446 s com 16 e de 40,014 s a 42,554 s com 24 a 40, contra 42,119 s e 39,143 s com 8 e 16 em
+  2026-09-27. As sessões a mais ganharam da série de 1,11 vez com 4 threads a 1,52 vez com 40
+  (1,21 vez com 8).
+
+**Consequências**: o `COPY` do `appender` pelo manifesto passou no Redshift do alvo, e a mensagem do
+arquivo obrigatório ausente entra na [etapa 5](PLAN-STAGE-5.md) e em [`redshift.md`](redshift.md);
+o substituto responde com uma mensagem própria, e a troca pela do alvo espera o usuário. Dois
+escritores na mesma tabela entram nos dois motores, e o que as docstrings de `append` e de
+`appender` dizem sobre eles espera o usuário; os dois itens estão em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). O custo de ler os rodapés na publicação da base ficou de
+0,5% a 2,0% com um arquivo por partição, e o item sai de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md),
+com a resposta nesta seção. O padrão de `threads` segue nas CPUs do processo (instrução do usuário
+de 2026-09-24): com a materialização pelo `INSERT`, o dobro ganhou 12% numa tabela, empatou nas
+sessões a mais e perdeu 8% com as quatro tabelas em série; [`PLAN.md`](PLAN.md) e a
+[etapa 4](PLAN-STAGE-4.md) guardam a leitura. Os itens das versões não correntes, das credenciais,
+do acesso de leitura e da operação ganham as leituras deste dia; a carga de uma origem estável
+passou inteira, e a continuação de uma carga parada e o `vacuum --full` de um arquivo fora do log
+seguem sem leitura no alvo.

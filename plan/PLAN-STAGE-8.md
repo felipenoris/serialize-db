@@ -242,13 +242,14 @@ O que a implementação fixou além do texto das seções acima:
   `publication_statements` no lugar da cláusula e o troca, em cada `COPY`, pela de
   `credentials_clause`, que resolve a cadeia do `boto3` numa sessão nova. Cada `COPY` leva a chave
   que o contêiner serve quando ele começa, com cerca de 29 minutos ou mais pela frente pelas
-  leituras de `probes/credentials.py` no alvo em 2026-09-25, em 2026-09-26 e em 2026-09-27, e a
-  transação de uma tabela pode durar mais que uma chave, desde que cada `COPY` caiba na sua. A
-  publicação de `cad_lancamentos` levou 153,9 s em 2026-09-24, 295,1 s com cinco partições em
-  2026-09-26 e 328,5 s em 2026-09-27, a primeira com a cláusula a cada `COPY`, que passou no alvo
-  nela e nas duas rodadas da suíte da publicação; o usuário estima que a tabela triplica em poucos
-  meses, e a leitura da credencial levou menos de 0,05 s no alvo ([`POC.md`](POC.md)). O `COPY` mais
-  longo que a credencial que ele leva segue sem medida ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+  leituras de `probes/credentials.py` no alvo em 2026-09-25, em 2026-09-26, em 2026-09-27 e em
+  2026-09-29, e a transação de uma tabela pode durar mais que uma chave, desde que cada `COPY` caiba
+  na sua. A publicação de `cad_lancamentos` levou 153,9 s em 2026-09-24, 295,1 s com cinco partições
+  em 2026-09-26, 328,5 s em 2026-09-27, a primeira com a cláusula a cada `COPY`, que passou no alvo
+  nela e nas duas rodadas da suíte da publicação, e 335,2 s em 2026-09-29, com a leitura do rodapé
+  de cada arquivo; o usuário estima que a tabela triplica em poucos meses, e a leitura da credencial
+  levou menos de 0,05 s no alvo ([`POC.md`](POC.md)). O `COPY` mais longo que a credencial que ele
+  leva segue sem medida ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 - **A suíte no ambiente alvo publica num ambiente `poc<id>` próprio**, cujas tabelas e linhas de
   controle saem no fim; ela cria a tabela de controle quando não existe e a apaga só nesse caso.
 

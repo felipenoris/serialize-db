@@ -1315,8 +1315,9 @@ the appender's `INSERT` as a single statement without an explicit transaction, `
 refusing the occupied name with "ocupado", the probes of `probes/consistencia/` calling the new
 API, `tests/test_pipeline.py` ingesting the 12 tables again, and the dated records
 (`plan/POC.md`, the older entries of this file, the dated lines of `CLAUDE.md`) keeping `load`
-and `loader`. The Redshift reading of two writers on one table waits for the user's run of
-`probes/consistencia/probe_append_test.py -m redshift` (`plan/OPEN_QUESTIONS.md`).
+and `loader`. The user's run of `probes/consistencia/probe_append_test.py` with `-m redshift` and
+`-m local` in the target on 2026-09-29 read two writers on one table entering in both engines;
+whether the docstrings of `append` and `appender` say so awaits the user (`plan/OPEN_QUESTIONS.md`).
 `plan/PLAN.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`,
 `plan/PLAN-STAGE-10.md`, `plan/serialize-db.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
 
@@ -1341,18 +1342,19 @@ the format's own metadata there (schema, row count, statistics, null counts), an
 stays in the commit's `commitInfo` and in the file or folder name `<execution_id>_<uuid>` of the
 load and the engines. The DuckDB check of `probes/diagnose_aws.py` opens its connection by
 `Storage.duckdb_connect`, the path of the suite and the engines, and the `aws` extension leaves
-`prepare_offline.sh` and `SP-10`; the next battery in the target validates it. `RS-11` of
-`probes/redshift.py` simulates `ListBucket` against the bucket and `GetObject` and `PutObject`
-against the objects under the root, one call per resource as `BK-8` does, because the IAM simulator
-returns one result per action with the most restrictive decision across the resources it receives
-(the IAM API reference read on 2026-09-28); asked whether the change touched the library, the user
-heard it changes only the probe, and the target, where IAM does not answer, reads the same line.
-Asked how a client redoes the data of a recorded snapshot, the user heard the stage 10 flow (a run
-marked with a new name, `serialize-db channel`, `serialize-db publish_redshift --channel default`,
-the old snapshot readable until `archive`) and kept the snapshot names immutable, never reused,
-asking for the characteristic in the documentation: `docs/operacao.md` ("Snapshot do banco" and
-"Refazer um snapshot"), `docs/index.md`, the docstrings of `Execution.snapshot` and
-`delta.snapshot`, and `plan/serialize-db.md`. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-10.md`
+`prepare_offline.sh` and `SP-10`; the battery of 2026-09-28 at 20:14 in the target read the check
+listing the prefix and `SP-10` passing without `aws`. `RS-11` of `probes/redshift.py` simulates
+`ListBucket` against the bucket and `GetObject` and `PutObject` against the objects under the root,
+one call per resource as `BK-8` does, because the IAM simulator returns one result per action with
+the most restrictive decision across the resources it receives (the IAM API reference read on
+2026-09-28); asked whether the change touched the library, the user heard it changes only the probe,
+and the target, where IAM does not answer, reads the same line. Asked how a client redoes the data
+of a recorded snapshot, the user heard the stage 10 flow (a run marked with a new name,
+`serialize-db channel`, `serialize-db publish_redshift --channel default`, the old snapshot readable
+until `archive`) and kept the snapshot names immutable, never reused, asking for the characteristic
+in the documentation: `docs/operacao.md` ("Snapshot do banco" and "Refazer um snapshot"),
+`docs/index.md`, the docstrings of `Execution.snapshot` and `delta.snapshot`, and
+`plan/serialize-db.md`. `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-10.md`
 
 ## The `appender` manifest and the initial load's conversions (2026-09-28)
 

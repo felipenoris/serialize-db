@@ -137,6 +137,16 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   table without the new rows
   (`test_engine_duckdb.py::test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows`,
   `.claude/memory/decisions.md`). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- Two writers on one sandbox table entered in both engines in the target on 2026-09-29
+  (`probes/consistencia/probe_append_test.py`, `-m redshift` in 41.4 s with 20,000 rows per writer,
+  `-m local` in 11.6 s with 200,000): two `append` at once in extra sessions, two on the main
+  session in threads (in series under the lock) and an `append` beside an `UPDATE` of the rows
+  already written left every row, no repeated id and the sum of `valor`; Redshift's serializable
+  isolation refused no pair (no `1023`). In the probe's section D, DuckDB's `create_table` entered
+  during a 5,000,000-row `stream` in 0.010 s on an extra session and 0.006 s on the main one, where
+  the main session's `CREATE TABLE` waited for the whole query (1.569 s to 1.896 s) locally before
+  PR #103. The docstrings of `append` and `appender` say nothing about two writers, and saying it
+  awaits the user (`plan/OPEN_QUESTIONS.md`). `plan/POC.md`
 
 - A pool that receives every task at once cannot promise that nothing new starts after the first
   failure: with one worker, the worker took the third table before the main loop saw the second

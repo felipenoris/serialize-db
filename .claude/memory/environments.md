@@ -177,6 +177,23 @@ every time (`redshift.md`); publication 10 twice. The load from 21:14:56 (12,515
 6,257 MiB) stopped at `cad_lancamentos` 2026-07-31 on `RegistrationRefused` (`source-base.md`).
 `plan/POC.md`
 
+The battery of 2026-09-28 from 23:09 UTC (from `main` with PR #105, inferred from the report key
+`redshift.engine.copy_missing_mandatory_file`, which only its test writes) ran the
+"Probes e Testes - BN" block on 8 vCPUs and 15,505 MB (the same versions), DuckDB defaulting to 8
+threads and 12.1 GiB, and on 2026-09-29 from 00:01 the migration, publication, read access and
+export blocks, the consistency probes with the two-writer probe, `duckdb_threads.py` and
+`credentials.py`. Every case and check passed: S3 610 in 271.4 s, Redshift 52, engine 10 and
+publication 10 twice each, the `appender`'s missing mandatory file failing its `COPY`
+(`redshift.md`). The probes differed from 20:14 only in `RS-12` (93 load errors in 30 days), `BK-14`
+(10,301 non-current versions, 307,133,320 bytes, and 9,504 delete markers) and the container
+credential's 32 minutes left. The load (12,042 MB available, 6,021 MiB) passed whole on the source
+of 2026-09-27 in 514.3 s, peak 8,734 MB (`source-base.md`); the whole base was published by
+`--channel default` (`cad_lancamentos` 335.2 s at 286 MB, 0.5% to 2.0% more per partitioned table
+than on 2026-09-27, the footer reading), the Delta reader opened in 0.556 s, `export` took 15.6 s by
+copy and 58.4 s at 6,902 MB by rewrite, and `compact` refused; `probe_append_test.py` passed in both
+engines (`concurrency.md`), `credentials.py` ran from 00:31:00 to 01:34:02 with no read failing, and
+`duckdb_threads.py` from 00:27:53 (`duckdb.md`). `plan/POC.md`
+
 ## The prepared folder and the venv
 
 On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group

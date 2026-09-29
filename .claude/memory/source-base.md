@@ -203,3 +203,12 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   sub-microsecond parts is the load's fourth loss, documented with the reach of the `conversões`
   line (first file of the first partition only, no lossy marker; user decision "Só a doc" of
   2026-09-28). `plan/POC.md`
+- The load of 2026-09-29 (`started_at` 00:01:30 UTC, 8 vCPUs, 12,042 MB available, 8 threads,
+  6,021 MiB, a reloaded root whose `cad_lancamentos` history begins at the `CREATE TABLE` of
+  00:03:54): the source was back to 2026-09-27, with the same 354,048,596 rows in 25 partitions, the
+  same counts, sums and non-finite counts in every partition, the same conversions and the same
+  three entries outside the model; 514.3 s, `cad_lancamentos` 33.3 s, 22.8 s, 56.8 s, 33.7 s and
+  249.9 s, the process peak at 8,734 MB. The resume of the stopped load and the `vacuum --full` of
+  its orphan did not run, because the root was reloaded. The audit of 2026-01-31 (version 5) read
+  the same 989,852 orphans and `valor` total, and `archive` copied the 25 files, `cad_lancamentos`
+  in 17.7 s at 349 MB. `plan/POC.md`

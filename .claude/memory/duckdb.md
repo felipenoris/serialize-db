@@ -266,3 +266,13 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   4,584 MB); extra sessions beat the series by 1.09x to 1.44x, against 1.89x on 2026-09-24, when
   `cad_lancamentos` held a smaller share of the rows. `threads` stays at the process's CPUs (user
   instruction of 2026-09-24). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+- Threads against the machine (target, 2026-09-29, the same machine and partition, the
+  materialization by the model's DDL and `INSERT ... BY NAME` from `delta_scan` since 2026-09-28,
+  the consistency probes running beside the 4- and 8-thread repetitions [inferred from the clock]):
+  materializing took 55.3 s with 4 threads, 39.6 s with 8, 35.3 s with 16, 34.9 s with 24 and 36.3 s
+  with 32 and 40, the process peak from 3,401 MB to 6,338 MB (3,955 MB with 8, 4,950 MB with 16), 6%
+  more than the `CREATE TABLE AS` with 8 threads and 3% with 16; 16 threads beat 8 by 1.12x. The
+  aggregated S3 read took 7.7 s with 8 and 4.0 s with 32 (1.92x). The four tables were fastest in
+  series with 8 threads (48.8 s, 8% slower with 16) and tied in extra sessions (40.4 s with 8 and
+  16, 40.0 s to 42.6 s with 24 to 40); extra sessions beat the series by 1.11x to 1.52x. `threads`
+  stays at the process's CPUs. `plan/POC.md`, `plan/PLAN-STAGE-4.md`
