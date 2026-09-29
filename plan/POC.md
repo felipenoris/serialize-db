@@ -5304,9 +5304,10 @@ que a bateria de 2026-09-27 às 15:58 mostrou no ambiente alvo") e as das 20:14 
   da do motor: o arquivo apagado depois do manifesto fez o `COPY ... MANIFEST` do `appender` falhar
   com `Spectrum Scan Error: File not found` e o SQLSTATE `XX000`
   (`redshift.engine.copy_missing_mandatory_file`), sem deixar linha, e os outros casos do `appender`
-  carregaram pelo manifesto. O substituto recusa o mesmo `COPY` com uma mensagem própria. O `append`
-  de 10 linhas levou 1,49 s e 1,55 s na suíte Redshift e 1,47 s e 2,41 s na do motor, contra 1,23 s,
-  1,26 s, 1,63 s e 1,22 s às 20:14, sem o manifesto (`redshift.engine.small_append`).
+  carregaram pelo manifesto. O substituto recusava o mesmo `COPY` com uma mensagem própria, e dá a
+  do alvo desde a decisão do usuário de 2026-09-29. O `append` de 10 linhas levou 1,49 s e 1,55 s na
+  suíte Redshift e 1,47 s e 2,41 s na do motor, contra 1,23 s, 1,26 s, 1,63 s e 1,22 s às 20:14, sem
+  o manifesto (`redshift.engine.small_append`).
 - **Dois escritores na mesma tabela entraram nos dois motores.**
   `probes/consistencia/probe_append_test.py` passou com `-m redshift` em 41,4 s, com 20.000 linhas
   por escritor, e com `-m local` no DuckDB da máquina em 11,6 s, com 200.000, e cada seção deixou a
@@ -5435,18 +5436,18 @@ e 57,061 s]:
 
 **Consequências**: o `COPY` do `appender` pelo manifesto passou no Redshift do alvo, e a mensagem do
 arquivo obrigatório ausente entra na [etapa 5](PLAN-STAGE-5.md) e em [`redshift.md`](redshift.md);
-o substituto responde com uma mensagem própria, e a troca pela do alvo espera o usuário
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). Dois escritores na mesma tabela entram nos dois motores,
-e as docstrings de `append` e de `appender` dizem isso, com um teste por motor (decisão do usuário
-de 2026-09-29, seção seguinte). O custo de ler os rodapés na publicação da base ficou de 0,5% a 2,0%
-com um arquivo por partição, e o item sai de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), com a
-resposta nesta seção. O padrão de `threads` segue nas CPUs do processo (instrução do usuário de
-2026-09-24): com a materialização pelo `INSERT`, o dobro ganhou 12% numa tabela, empatou nas sessões
-a mais e perdeu 8% com as quatro tabelas em série; [`PLAN.md`](PLAN.md) e a
-[etapa 4](PLAN-STAGE-4.md) guardam a leitura. Os itens das versões não correntes, das credenciais,
-do acesso de leitura e da operação ganham as leituras deste dia; a carga de uma origem estável
-passou inteira, e a continuação de uma carga parada e o `vacuum --full` de um arquivo fora do log
-seguem sem leitura no alvo.
+o substituto dá a mesma mensagem, com o mesmo SQLSTATE, e `test_appender_copies_the_file_at_close`
+segue registrando a mensagem como leitura, sem conferi-la (decisão do usuário de 2026-09-29). Dois
+escritores na mesma tabela entram nos dois motores, e as docstrings de `append` e de `appender`
+dizem isso, com um teste por motor (decisão do usuário de 2026-09-29, seção seguinte). O custo de
+ler os rodapés na publicação da base ficou de 0,5% a 2,0% com um arquivo por partição, e o item sai
+de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), com a resposta nesta seção. O padrão de `threads` segue
+nas CPUs do processo (instrução do usuário de 2026-09-24): com a materialização pelo `INSERT`, o
+dobro ganhou 12% numa tabela, empatou nas sessões a mais e perdeu 8% com as quatro tabelas em série;
+[`PLAN.md`](PLAN.md) e a [etapa 4](PLAN-STAGE-4.md) guardam a leitura. Os itens das versões não
+correntes, das credenciais, do acesso de leitura e da operação ganham as leituras deste dia; a carga
+de uma origem estável passou inteira, e a continuação de uma carga parada e o `vacuum --full` de um
+arquivo fora do log seguem sem leitura no alvo.
 
 ## O que os testes de dois escritores na mesma tabela mostraram
 

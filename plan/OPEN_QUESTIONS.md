@@ -178,17 +178,6 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
   próprio delta-rs; ou a docstring de `publish_delta` dizer que a conferência não cobre a janela,
   com uma execução por ambiente de cada vez.
 
-## A API de escrita no sandbox
-
-- **A mensagem do substituto para o arquivo obrigatório ausente.** O `COPY ... MANIFEST` do
-  `appender`, com o arquivo apagado depois do manifesto, falhou no alvo com
-  `Spectrum Scan Error: File not found` e o SQLSTATE `XX000` nas quatro rodadas de 2026-09-28 às
-  23:09 ([`POC.md`](POC.md)). O substituto de `tests/emulator.py` falha com o mesmo SQLSTATE e a
-  mensagem própria `o arquivo obrigatório do manifesto não existe: <uri>`, que
-  `test_appender_copies_the_file_at_close` não confere, e a docstring de `copy_sources` diz que o
-  texto do alvo não foi lido. Espera o usuário: o substituto dar a mensagem do alvo, como dá a da
-  relação inexistente, ou ficar como está.
-
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão

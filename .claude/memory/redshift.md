@@ -403,13 +403,13 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `close` beside the file, `<uuid>.manifest`, with the file as its only entry, `mandatory: true`
   and `content_length` from `Storage.size`; `copy_text(manifest=False)` has no caller in `src/`
   since. The stand-in reads a path without `MANIFEST` as a prefix (`object_uris`), returns an empty
-  result without error when nothing matches, and fails a missing manifest or a missing mandatory
-  entry with its own message; on it, the old code fails as in the target, and `mandatory: false`
-  fails both the local and the target test. In the target, on 2026-09-28 at 23:09, the missing
-  mandatory file failed the `COPY` with `Spectrum Scan Error: File not found` and SQLSTATE `XX000`
-  in the four runs, loading no row (`redshift.engine.copy_missing_mandatory_file`); whether the
-  stand-in gives that message, as it gives the missing relation's, awaits the user
-  (`plan/OPEN_QUESTIONS.md`). `plan/POC.md`, `plan/PLAN-STAGE-5.md`
+  result without error when nothing matches, and fails a missing manifest with its own message and a
+  missing mandatory entry with the target's (below); on it, the old code fails as in the target, and
+  `mandatory: false` fails both the local and the target test. In the target, on 2026-09-28 at
+  23:09, the missing mandatory file failed the `COPY` with `Spectrum Scan Error: File not found` and
+  SQLSTATE `XX000` in the four runs, loading no row (`redshift.engine.copy_missing_mandatory_file`);
+  the stand-in gives the same message and SQLSTATE since the user's decision of 2026-09-29
+  (`decisions.md`), and the test still only records it. `plan/POC.md`, `plan/PLAN-STAGE-5.md`
 - The Redshift audit's refused ingest printed in the target on 2026-09-28 as `Cannot insert a NULL
   value into column valor` (code 8007) and `Invalid input` (code 8001, `JSON_PARSE() error:
   End-of-input inside object or array: {`), both `XX000`, with the driver's whole dict, the

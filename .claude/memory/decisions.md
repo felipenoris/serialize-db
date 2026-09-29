@@ -1402,3 +1402,17 @@ assistant's choices, named in the report: `plan/serialize-db.md` no longer says 
 a distinct table, and `plan/POC.md` reads the target's pair as refused by no `1023` instead of by
 serializable isolation. The package's behavior does not change. `plan/PLAN-STAGE-4.md`,
 `plan/PLAN-STAGE-5.md`, `plan/serialize-db.md`, `plan/POC.md`
+
+## The stand-in's message for a missing mandatory file (2026-09-29)
+
+The battery of 2026-09-28 at 23:09 read the `appender`'s `COPY ... MANIFEST` with the mandatory file
+deleted failing in the target with `Spectrum Scan Error: File not found` and SQLSTATE `XX000`, while
+the stand-in failed with the same SQLSTATE and its own message, `o arquivo obrigatório do manifesto
+não existe: <uri>`. Asked on a card whether the stand-in should give the target's message, give it
+with the test checking the text, or stay as it was, the user chose "Imitar o alvo": `copy_sources`
+in `tests/emulator.py` raises `Spectrum Scan Error: File not found`, the target's message field,
+without the URI the old message carried; the test records only the message field and the SQLSTATE,
+so the target's other fields stay unread. `test_appender_copies_the_file_at_close` keeps recording
+the message as a reading, without asserting it, because the engine never reads that text; a missing
+manifest keeps the stand-in's own message, since the target's was never read. `tests/emulator.py`,
+`plan/PLAN-STAGE-5.md`, `plan/POC.md`

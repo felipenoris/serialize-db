@@ -231,7 +231,8 @@ esquema do datashare está em `test_redshift_transactions.py` ([etapa 8](PLAN-ST
   obrigatória, o arquivo ausente faz o `COPY` falhar, e a URL exata não alcança outro objeto do
   mesmo prefixo (decisão do usuário de 2026-09-28). No alvo, o arquivo apagado depois do manifesto
   fez o `COPY` falhar com `Spectrum Scan Error: File not found` e o SQLSTATE `XX000`, sem deixar
-  linha, nas quatro rodadas de 2026-09-28 às 23:09 ([`POC.md`](POC.md)). O `COPY` do appender,
+  linha, nas quatro rodadas de 2026-09-28 às 23:09 ([`POC.md`](POC.md)), e o substituto de
+  `tests/emulator.py` dá a mesma mensagem (decisão do usuário de 2026-09-29). O `COPY` do appender,
   direto e na staging `_carga`, lista as colunas do arquivo, as do primeiro lote:
   `COPY <alvo> ("a", "b") FROM ... FORMAT AS PARQUET MANIFEST FILLRECORD`. O `COPY` de Parquet é
   posicional: sem a lista, a coluna anulável do meio que o lote não trouxe receberia o valor da
