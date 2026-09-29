@@ -271,6 +271,26 @@ def connect(config: RedshiftConfig) -> object:
     e o primeiro erro do servidor abortaria tudo o que vem depois (25P02). O cache de prepared
     statements fica desligado, porque o datashare recusa com ``34510`` um statement preparado antes
     de um ``TRUNCATE``.
+
+    Ver também ``serialize_db.reader.open_redshift``, a entrada pública das consultas ao Redshift
+    fora de uma execução: ``serialize_db.reader.RedshiftReader.query`` devolve o resultado em
+    Arrow, e ``serialize_db.reader.RedshiftReader.session`` dá a conexão crua que esta função abre,
+    com o lock tomado pelo bloco. Numa execução, a consulta no sandbox é ``RedshiftEngine.query``,
+    o ``run.sandbox.query`` do pipeline.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        from serialize_db.engine.redshift import RedshiftConfig, connect
+
+        connection = connect(RedshiftConfig.from_environment())   # SERIALIZE_DB_REDSHIFT_*
+        cursor = connection.cursor()
+        cursor.execute("SELECT start_time, trim(status), left(trim(query_text), 80) "
+                       "FROM sys_query_history ORDER BY start_time DESC LIMIT 5")
+        for row in cursor.fetchall():
+            print(*row, sep=" | ")
+        connection.close()
     """
     login = dict(login_of(config))
     login["database"] = config.database
