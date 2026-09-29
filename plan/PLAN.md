@@ -689,16 +689,20 @@ O passo 3 usa a API da seção "A troca de dados com o código cliente": o exemp
 
 Uma reexecução com o mesmo `execution_id` repete os `overwrite` das mesmas partições e produz as
 mesmas linhas; os ids podem diferir, porque `next_ids` recomeça do máximo da versão fixada. Uma
-correção de uma partição antiga é a mesma chamada com outra `partition` e um `execution_id` novo:
-`serialize-db publish_redshift` recarrega só essa partição, e as versões intermediárias entre
-snapshots do banco saem no `vacuum` mensal. A execução no Redshift é o mesmo ciclo com
-`engine="redshift"`: o sandbox são as tabelas `exec_<id>_*`, a ingestão é `COPY ... MANIFEST`, e a
-publicação sai por `UNLOAD` mais `register_files`, sem passar pela máquina local, ou, na partição
-com `Double` não finito, mais `publish_partition`, que grava pelo `write_deltalake`, confere tudo e
-paga a memória (decisões do usuário de 2026-09-23 e 2026-09-24, [etapa 5](PLAN-STAGE-5.md)). O
-pipeline que só atualiza tabelas sem partição, como as de domínio, abre a execução sem `partition`
-(decisão do usuário de 2026-09-27): `run.publish_delta(tabela)` substitui a tabela inteira, e
-`run.previous_partitions` é `ContractError` ([etapa 6](PLAN-STAGE-6.md)).
+correção de uma partição antiga é a mesma chamada com outra `partition` e um `execution_id` novo,
+marcada com um nome de snapshot novo; `serialize-db channel` aponta o canal `default` para ele, e
+`serialize-db publish_redshift --channel default` recarrega só essa partição, como no runbook
+"Refazer um snapshot" de [`docs/operacao.md`](../docs/operacao.md)
+([`serialize-db.md`](serialize-db.md), seção "Correção de uma partição"). As versões
+intermediárias entre snapshots do banco saem no `vacuum` mensal. A execução no Redshift é o mesmo
+ciclo com `engine="redshift"`: o sandbox são as tabelas `exec_<id>_*`, a ingestão é
+`COPY ... MANIFEST`, e a publicação sai por `UNLOAD` mais `register_files`, sem passar pela máquina
+local, ou, na partição com `Double` não finito, mais `publish_partition`, que grava pelo
+`write_deltalake`, confere tudo e paga a memória (decisões do usuário de 2026-09-23 e 2026-09-24,
+[etapa 5](PLAN-STAGE-5.md)). O pipeline que só atualiza tabelas sem partição, como as de domínio,
+abre a execução sem `partition` (decisão do usuário de 2026-09-27): `run.publish_delta(tabela)`
+substitui a tabela inteira, e `run.previous_partitions` é `ContractError`
+([etapa 6](PLAN-STAGE-6.md)).
 
 ## Ordem do trabalho
 

@@ -247,11 +247,31 @@ versão lida. O Delta fica intacto, e a publicação seguinte recria a tabela co
 
 ### Correção de uma partição
 
-1. A mesma `Execution`, com a partição a corrigir e um `execution_id` novo.
-2. `run.publish_delta` substitui a partição nas tabelas afetadas; a versão anterior continua legível
-   até o `vacuum`, dentro dos 400 dias de retenção.
-3. `serialize-db publish_redshift --channel current` recarrega só essa partição.
-4. As versões intermediárias entre snapshots do banco saem no `vacuum` mensal.
+A correção segue o runbook "Refazer um snapshot" de [`docs/operacao.md`](../docs/operacao.md): os
+dados do snapshot publicado, como o `2026T3`, se refazem num snapshot novo, e o canal `default`
+passa a apontar para ele.
+
+1. A mesma `Execution`, com a partição a corrigir e um `execution_id` novo, marcada com outro nome
+   de snapshot, como `run.snapshot("2026T3.r2")`, porque o nome é imutável.
+2. `run.publish_delta` substitui a partição nas tabelas afetadas, e a entrada do snapshot novo
+   leva a versão atual de toda tabela do ambiente, inclusive das que não mudaram. O `2026T3`
+   continua legível pelo nome e prende as versões dele no `vacuum` até o `archive`.
+3. `serialize-db channel --name default --snapshot 2026T3.r2` aponta o canal para o snapshot novo,
+   que o leitor Delta passa a abrir sem argumento.
+4. `serialize-db publish_redshift --channel default` recarrega no Redshift só as partições
+   alteradas desde a versão publicada.
+5. Se a correção não servir, até o `archive` do `2026T3`, o canal volta para ele, e a publicação
+   pelo canal devolve as tabelas do Redshift às versões dele. A versão atual do Delta continua com
+   as partições refeitas, que a próxima execução lê, até outra execução gravá-las de novo.
+6. As versões intermediárias entre snapshots do banco continuam legíveis nos 400 dias de retenção e
+   saem no `vacuum` mensal depois deles.
+
+O ambiente que publica sem snapshot, pelo `--channel current` (passo 8 do pipeline mensal em
+[`PLAN.md`](PLAN.md)), corrige pela execução do passo 1 sem `run.snapshot` e republica pelo
+mesmo `--channel current`. As duas rotas não se misturam: com o canal `default` ainda no snapshot
+antigo, o leitor Delta sem argumento não vê a correção, e a próxima
+`serialize-db publish_redshift --channel default` devolve a partição à versão desse snapshot, sem
+erro.
 
 ### Evolução do esquema
 

@@ -1441,3 +1441,25 @@ or stay as it was, the user chose "Deixar" (20:36 UTC): the engine keeps its con
 Ctrl+C in the middle of a command the engine is recreated by hand, and an interrupted run may leave
 an `exec_` table in the schema. Why Redshift did not commit that `DROP` stays unread.
 `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+
+## The correction of a partition follows the runbook (2026-09-29)
+
+Asked which flow the library provides to redo the partitions of a base date already in Delta and
+published in Redshift, the assistant found two descriptions of it: the runbook "Refazer um
+snapshot" of `docs/operacao.md`, where the execution is marked with a new snapshot name,
+`serialize-db channel` points `default` to it, `serialize-db publish_redshift --channel default`
+reloads the changed partitions and the channel moves back when the correction fails; and the
+section "Correção de uma partição" of `plan/serialize-db.md`, which republished by
+`--channel current`. In an environment published by the `default` channel, the second leaves the
+Delta reader on the old snapshot, and the next `--channel default` returns the partition to that
+snapshot's version without error. The user answered (22:29 UTC) that the runbook holds the correct
+information and asked for the adjustments: the plan's section and the correction sentence of the
+monthly pipeline in `plan/PLAN.md` follow the runbook, and `--channel current` stays for the
+environment that publishes without a snapshot. The runbook gave the revert in one sentence,
+without commands and without saying that the current Delta version keeps the correction, which
+the next execution reads and the next snapshot carries back to Redshift; the user chose
+(22:41 UTC) to add both: "Refazer um snapshot" carries the `serialize-db channel` and
+`serialize-db publish_redshift --channel default` of the revert, possible until the `archive` of
+the old snapshot, and the warning that a correction that fails is undone in Delta by another
+execution writing the partitions again, before the next execution. `docs/operacao.md`,
+`plan/serialize-db.md`, `plan/PLAN.md`
