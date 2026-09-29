@@ -180,14 +180,6 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
 
 ## A API de escrita no sandbox
 
-- **Dois escritores na mesma tabela.** `probes/consistencia/probe_append_test.py` passou no ambiente
-  alvo em 2026-09-29, com `-m redshift` e com `-m local` no DuckDB da máquina ([`POC.md`](POC.md)):
-  dois `append` na mesma tabela ao mesmo tempo, em sessões a mais e na sessão principal, e um
-  `append` ao lado de um `UPDATE` das linhas já gravadas entraram nos dois motores, com as linhas
-  das duas escritas e sem id repetido, e o isolamento serializável do Redshift não recusou nenhum
-  par. As docstrings de `append` e de `appender`, no protocolo `Engine` e nos dois motores, nada
-  dizem sobre dois escritores na mesma tabela. Espera o usuário: as docstrings dizerem que os dois
-  entram, com um teste por motor que falhe sem isso, ou ficarem como estão.
 - **A mensagem do substituto para o arquivo obrigatório ausente.** O `COPY ... MANIFEST` do
   `appender`, com o arquivo apagado depois do manifesto, falhou no alvo com
   `Spectrum Scan Error: File not found` e o SQLSTATE `XX000` nas quatro rodadas de 2026-09-28 às

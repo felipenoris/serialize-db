@@ -1506,6 +1506,12 @@ class RedshiftEngine:
         """O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
         ``ingest`` ou por ``create_table``, e os carrega no ``close``.
 
+        Dois appenders na mesma tabela, ao mesmo tempo, entram os dois com todas as suas linhas:
+        em sessões de ``new_session()``, cada ``COPY`` roda na sua conexão, e o Redshift grava um
+        depois do outro na tabela; na sessão principal, um ``close`` espera o outro sob o lock.
+        Sob o isolamento de snapshot, o que a escrita por datashare exige, um appender e um
+        ``UPDATE`` das linhas que a tabela já tinha, ao mesmo tempo, também entram os dois.
+
         Exemplo:
 
         .. code-block:: python
@@ -1527,6 +1533,9 @@ class RedshiftEngine:
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
         """Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
+
+        Dois ``append`` na mesma tabela ao mesmo tempo, ou um ``append`` e um ``UPDATE`` dela,
+        entram os dois, como no ``appender``.
 
         Exemplo:
 

@@ -1317,7 +1317,7 @@ API, `tests/test_pipeline.py` ingesting the 12 tables again, and the dated recor
 (`plan/POC.md`, the older entries of this file, the dated lines of `CLAUDE.md`) keeping `load`
 and `loader`. The user's run of `probes/consistencia/probe_append_test.py` with `-m redshift` and
 `-m local` in the target on 2026-09-29 read two writers on one table entering in both engines;
-whether the docstrings of `append` and `appender` say so awaits the user (`plan/OPEN_QUESTIONS.md`).
+the user's decision of 2026-09-29 puts it in the docstrings (the section on two writers below).
 `plan/PLAN.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`,
 `plan/PLAN-STAGE-10.md`, `plan/serialize-db.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
 
@@ -1384,3 +1384,21 @@ its own engine with `threads=1` and asserts the `OSError` of the Arrow reader, a
 of `DuckDBEngine.stream` and `DeltaReader.stream` say the error can arrive as the interrupt with
 more than one thread. The package's behavior does not change. `plan/PLAN-STAGE-4.md`,
 `plan/POC.md`
+
+## Two writers on one table in the docstrings (2026-09-29)
+
+The battery of 2026-09-28 at 23:09 read two writers on one sandbox table entering in both engines
+(`probes/consistencia/probe_append_test.py`). Asked on a card whether the docstrings of `append` and
+`appender` should say so, with a test per engine that fails if it changes, or stay as they are, the
+user chose "Documentar": the docstrings of `appender` and `append`, in the `Engine` protocol,
+`DuckDBEngine` and `RedshiftEngine`, say that two appenders on one table at once both enter with all
+their rows, each in a `new_session()` session or both on the main one, where one `close` waits for
+the other under the lock, and that an appender beside an `UPDATE` of the rows already there enters
+with it, on Redshift under snapshot isolation, which datashare writes require (the assistant's
+scoping, because the AWS docs give `1023` to the second of two `UPDATE`s of distinct rows of one
+table under `SERIALIZABLE`); `test_two_writers_on_the_same_table_both_enter` checks the three cases
+in `tests/test_engine_duckdb.py` and, `redshift`-marked, in `tests/test_engine_redshift.py`. The
+assistant's choices, named in the report: `plan/serialize-db.md` no longer says each `append` writes
+a distinct table, and `plan/POC.md` reads the target's pair as refused by no `1023` instead of by
+serializable isolation. The package's behavior does not change. `plan/PLAN-STAGE-4.md`,
+`plan/PLAN-STAGE-5.md`, `plan/serialize-db.md`, `plan/POC.md`

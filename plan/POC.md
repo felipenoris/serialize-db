@@ -4886,9 +4886,9 @@ no Redshift do ambiente alvo é do usuário.
 **Consequências**: no DuckDB, dois `appender` na mesma tabela em sessões a mais não conflitam
 entre si nem com um `UPDATE` da principal, e o `create_table` proposto pode rodar numa sessão a
 mais (um cursor da conexão) para não esperar a consulta de um `stream` aberto antes, o que
-dispensaria a ordem `create_table` antes do `stream`. A leitura do Redshift (dois `COPY` na mesma
-tabela sob isolamento serializável) está em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md); a decisão
-sobre a API, tomada em 2026-09-28, está na seção seguinte.
+dispensaria a ordem `create_table` antes do `stream`. A leitura do Redshift, dois `COPY` na mesma
+tabela, está na seção da bateria de 2026-09-28 às 23:09; a decisão sobre a API, tomada em
+2026-09-28, está na seção seguinte.
 
 ## O que a implementação de `create_table`, `append` e `appender` mostrou
 
@@ -5314,9 +5314,9 @@ que a bateria de 2026-09-27 às 15:58 mostrou no ambiente alvo") e as das 20:14 
   dois `append` em duas sessões a mais, ao mesmo tempo, entraram nas três rodadas, cada um em
   3,060 s a 4,353 s; os dois na sessão principal, em duas threads, em 2,946 s e 4,891 s, em série
   sob o lock; e o `append` ao lado de um `UPDATE` das linhas já gravadas, em 3,345 s, com o `UPDATE`
-  em 2,372 s: o isolamento serializável não recusou nenhum par. No DuckDB, os mesmos pares entraram
-  em 0,526 s a 0,681 s nas cinco rodadas, em 0,573 s e 1,094 s na sessão principal e em 0,493 s ao
-  lado do `UPDATE`, que levou 0,031 s.
+  em 2,372 s: o Redshift não recusou nenhum par com o `1023`. No DuckDB, os mesmos pares entraram em
+  0,526 s a 0,681 s nas cinco rodadas, em 0,573 s e 1,094 s na sessão principal e em 0,493 s ao lado
+  do `UPDATE`, que levou 0,031 s.
 - **O `create_table` do DuckDB não esperou a consulta de um `stream`.** Na seção D da mesma sonda,
   com o `stream` de 5.000.000 de linhas rodando, cujo primeiro lote chegou em 0,040 s, o
   `create_table` entrou em 0,010 s numa sessão a mais e em 0,006 s na principal, e o stream esgotou
@@ -5435,15 +5435,40 @@ e 57,061 s]:
 
 **Consequências**: o `COPY` do `appender` pelo manifesto passou no Redshift do alvo, e a mensagem do
 arquivo obrigatório ausente entra na [etapa 5](PLAN-STAGE-5.md) e em [`redshift.md`](redshift.md);
-o substituto responde com uma mensagem própria, e a troca pela do alvo espera o usuário. Dois
-escritores na mesma tabela entram nos dois motores, e o que as docstrings de `append` e de
-`appender` dizem sobre eles espera o usuário; os dois itens estão em
-[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). O custo de ler os rodapés na publicação da base ficou de
-0,5% a 2,0% com um arquivo por partição, e o item sai de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md),
-com a resposta nesta seção. O padrão de `threads` segue nas CPUs do processo (instrução do usuário
-de 2026-09-24): com a materialização pelo `INSERT`, o dobro ganhou 12% numa tabela, empatou nas
-sessões a mais e perdeu 8% com as quatro tabelas em série; [`PLAN.md`](PLAN.md) e a
+o substituto responde com uma mensagem própria, e a troca pela do alvo espera o usuário
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). Dois escritores na mesma tabela entram nos dois motores,
+e as docstrings de `append` e de `appender` dizem isso, com um teste por motor (decisão do usuário
+de 2026-09-29, seção seguinte). O custo de ler os rodapés na publicação da base ficou de 0,5% a 2,0%
+com um arquivo por partição, e o item sai de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), com a
+resposta nesta seção. O padrão de `threads` segue nas CPUs do processo (instrução do usuário de
+2026-09-24): com a materialização pelo `INSERT`, o dobro ganhou 12% numa tabela, empatou nas sessões
+a mais e perdeu 8% com as quatro tabelas em série; [`PLAN.md`](PLAN.md) e a
 [etapa 4](PLAN-STAGE-4.md) guardam a leitura. Os itens das versões não correntes, das credenciais,
 do acesso de leitura e da operação ganham as leituras deste dia; a carga de uma origem estável
 passou inteira, e a continuação de uma carga parada e o `vacuum --full` de um arquivo fora do log
 seguem sem leitura no alvo.
+
+## O que os testes de dois escritores na mesma tabela mostraram
+
+Pela decisão do usuário de 2026-09-29, as docstrings de `appender` e de `append`, no protocolo
+`Engine` e nos dois motores, dizem que dois escritores na mesma tabela entram, e
+`test_two_writers_on_the_same_table_both_enter` o confere em `tests/test_engine_duckdb.py` e em
+`tests/test_engine_redshift.py` (`redshift`): dois appenders com os `close` ao mesmo tempo, por
+uma barreira depois do `write`, em duas sessões a mais e na sessão principal, e um appender numa
+sessão a mais ao lado de um `UPDATE` da principal que soma 1 à metade das linhas já gravadas; cada
+seção confere as linhas, os ids distintos e a soma de `valor`. Neste contêiner (Linux, 4 vCPUs,
+16.094 MB, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1), em 2026-09-29, o do DuckDB passou dez
+vezes, com 20.000 linhas por escritor, e o do Redshift seis vezes no substituto, com 1.000, sem
+aviso.
+
+Um plugin do pytest fora do repositório trocou o `close` dos appenders por três mutações, uma
+seção de cada vez: recusar com `SandboxError` o `close` de uma tabela com outro `close` em voo,
+descartar sem erro as linhas desse `close`, e apagar as linhas da tabela antes de inserir as suas.
+Nos dois motores, a recusa e o descarte reprovaram as duas seções de dois appenders, e a troca
+reprovou a da sessão principal e a do `UPDATE`; na das sessões a mais, a troca passou, porque os
+dois `DELETE` rodaram juntos e cada um viu a tabela vazia. A seção do `UPDATE` tem um appender
+só, e a recusa e o descarte não a alcançam. No Redshift, a recusa e o descarte envolvem o `close`
+inteiro, porque o `_copy_file` já roda sob o lock da transação.
+
+**Consequências**: os dois testes rodam no alvo na próxima bateria pelos comandos de `SUITE.md`, sem
+comando novo: o do DuckDB na sessão `-m "not redshift"`, e o do Redshift nas sessões `-m redshift`.

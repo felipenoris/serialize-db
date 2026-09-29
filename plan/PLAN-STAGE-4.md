@@ -321,10 +321,16 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   numa sessão a mais (`test_engine_duckdb.py`,
   `test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows`), o efeito que o
   usuário aceitou em 2026-09-28 no lugar da falha com `CatalogException` que o `loader` criando a
-  tabela no `close` dava (decisão de 2026-09-23, substituída); a barreira por tabela que esperaria
-  a carga segue fora das etapas. `append` embrulha `appender` para `pa.Table`, `RecordBatch`,
-  `RecordBatchReader` e iteráveis, devolve as linhas gravadas e recusa o resto com a mensagem que
-  aponta `pa.Table.from_pandas`.
+  tabela no `close` dava (decisão de 2026-09-23, substituída); a barreira por tabela que esperaria a
+  carga segue fora das etapas. Dois appenders na mesma tabela, ao mesmo tempo, entram os dois com
+  todas as suas linhas: em sessões a mais, os dois `INSERT ... BY NAME` rodam juntos, porque um
+  acréscimo do DuckDB não conflita com outro, e na sessão principal um `close` espera o outro sob o
+  lock; um appender numa sessão a mais e um `UPDATE` da principal sobre as linhas já gravadas também
+  entram os dois. As docstrings de `appender` e de `append` dizem isso, e
+  `test_two_writers_on_the_same_table_both_enter` o confere (decisão do usuário de 2026-09-29,
+  depois da bateria de 2026-09-28 às 23:09 no alvo, [`POC.md`](POC.md)). `append` embrulha
+  `appender` para `pa.Table`, `RecordBatch`, `RecordBatchReader` e iteráveis, devolve as linhas
+  gravadas e recusa o resto com a mensagem que aponta `pa.Table.from_pandas`.
 - **`audit`** roda `audit_sql(table, "duckdb", pinned=pinned_delta(table, uri, version), ...)` e
   monta o `AuditReport`; `passed` falso não levanta aqui, levanta em `Execution.audit`. Cada
   verificação reprovada leva até 20 linhas inteiras de amostra: as verificações de chave e de
@@ -407,6 +413,7 @@ uma chave única; `tests/test_resources.py` sobre um `/proc` e um cgroup fabrica
 | Ordem do exemplo mensal | `test_appender_and_create_table_after_a_stream_do_not_wait_for_its_query` | Com `stream` e depois `appender` no mesmo `with`, o primeiro lote chega com a consulta rodando, `create_table` de outra tabela dentro do `with` volta com a consulta ainda rodando, e a tabela tem todas as linhas no fim. |
 | Pipeline de três estágios | `test_three_stage_pipeline_overlaps_read_work_and_write` | Leitura por `stream`, trabalho do cliente por lote e escrita por `appender` numa sessão única, sobre um banco em arquivo, dão as mesmas linhas que a versão por lote sem threads e que a versão por `pa.Table`; os tempos são leituras do relatório. |
 | Leitura durante um append | `test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows` | Um `append` disparado numa thread sem `result()`: antes do `close` do `appender`, a leitura da tabela vê as linhas anteriores e nenhuma das novas, na sessão principal e numa sessão a mais; depois do `close`, todas. |
+| Dois escritores | `test_two_writers_on_the_same_table_both_enter` | Dois appenders na mesma tabela, com os `close` ao mesmo tempo por uma barreira, em duas sessões a mais e na sessão principal, deixam as linhas das duas escritas, sem id repetido e com a soma de `valor` delas; um appender numa sessão a mais e um `UPDATE` da principal sobre as linhas já gravadas entram os dois. |
 | Tabela inexistente e view | `test_appender_refuses_the_view_and_the_missing_table` | O `appender` sobre a view do `ingest` e sobre uma tabela que não existe levanta `SandboxError` antes do primeiro lote, apontando `materialize=True` e `create_table`, e o objeto que estava lá não muda; a tabela do `ingest` materializado recebe `append`. |
 | Formas por tabela | `test_query_and_append_match_stream_and_appender` | `query` de um statement e de um texto igual a `stream(...).read_all()`; `append` de `pa.Table`, `RecordBatch`, leitor e iterável com o mesmo resultado; DataFrame recusado com a mensagem. |
 | Ciclo pandas | `test_pandas_round_trip_keeps_contract_types` | `to_pandas(types_mapper=pd.ArrowDtype)` e `from_pandas` mantêm `decimal128(18, 2)` e `date32`. |

@@ -6,16 +6,15 @@ particionado por ``data_base_str`` com a origem ``data_base``, com uma chave est
 ``Conta``, e ``Projetado``, a tabela que o pipeline grava, com as mesmas colunas.
 
 Eles conferem a configuração com os limites lidos do ambiente e a sessão única, a abertura que
-falha, a sessão a mais, a ingestão presa à versão e a poda por intervalo, a transação do cliente
-em ``session()`` diante do ``ingest`` materializado e de ``create_table``, os parâmetros do
-statement, a versão fixada, o stream (o primeiro lote com a consulta rodando, o orçamento, o
-cancelamento, os erros), ``create_table`` e o appender (o ``INSERT`` único no ``close``, o
-``close`` repetido, as recusas do ``write``, o appender abandonado, a view e a
-tabela ausente recusadas, a ordem do exemplo mensal, o pipeline de três estágios, a leitura
-durante um acréscimo em voo), as formas por tabela, os tipos e o ``NOT NULL`` do ``ingest``
-materializado, o ciclo com o pandas, a auditoria (cada defeito, a dispensa da junção, a amostra,
-os não finitos, o órfão), a exportação pelo registro do arquivo do ``COPY`` e o pipeline de exemplo
-num banco em arquivo. A
+falha, a sessão a mais, a ingestão presa à versão e a poda por intervalo, a transação do cliente em
+``session()`` diante do ``ingest`` materializado e de ``create_table``, os parâmetros do statement,
+a versão fixada, o stream (o primeiro lote com a consulta rodando, o orçamento, o cancelamento, os
+erros), ``create_table`` e o appender (o ``INSERT`` único no ``close``, o ``close`` repetido, as
+recusas do ``write``, o appender abandonado, a view e a tabela ausente recusadas, a ordem do exemplo
+mensal, o pipeline de três estágios, a leitura durante um acréscimo em voo, dois escritores na mesma
+tabela), as formas por tabela, os tipos e o ``NOT NULL`` do ``ingest`` materializado, o ciclo com o
+pandas, a auditoria (cada defeito, a dispensa da junção, a amostra, os não finitos, o órfão), a
+exportação pelo registro do arquivo do ``COPY`` e o pipeline de exemplo num banco em arquivo. A
 extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
@@ -195,6 +194,13 @@ def published_accounts(setup: Setup, numbers: list[str]) -> int:
 def count_of(engine: DuckDBEngine, name: str) -> int:
     """As linhas da tabela ou view ``name`` do sandbox."""
     return engine.query(f'SELECT count(*) AS n FROM "{name}"').column("n")[0].as_py()
+
+
+def totals_of(engine: DuckDBEngine, name: str) -> dict:
+    """As linhas, os ids distintos e a soma de ``valor`` da tabela ``name`` do sandbox."""
+    totals = engine.query(f'SELECT count(*) AS linhas, count(DISTINCT id_lancamento) AS ids, '
+                          f'sum(valor) AS soma FROM "{name}"')
+    return totals.to_pylist()[0]
 
 
 def create_and_append(engine: DuckDBEngine, table: sa.Table, data: object) -> int:
@@ -1150,6 +1156,61 @@ def test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows(
 
     # O acréscimo terminado.
     assert count_of(engine, PROJECTED.name) == 1010
+
+
+def test_two_writers_on_the_same_table_both_enter(setup: Setup) -> None:
+    """Dois appenders na mesma tabela, com os ``close`` ao mesmo tempo, entram os dois com todas
+    as suas linhas: em duas sessões de ``new_session()``, com os dois ``INSERT ... BY NAME``
+    juntos, e na sessão principal, um depois do outro sob o lock. Um appender numa sessão a mais e
+    um ``UPDATE`` da principal sobre as linhas que a tabela já tinha, ao mesmo tempo, também
+    entram os dois."""
+    engine = setup.engine
+    first = entry_rows(MONTHS[0], 1, 20_000, PROJECTED)
+    second = entry_rows(MONTHS[0], 20_001, 20_000, PROJECTED)
+    both_sum = pc.sum(first["valor"]).as_py() + pc.sum(second["valor"]).as_py()
+    both = {"linhas": 40_000, "ids": 40_000, "soma": both_sum}
+    barrier = threading.Barrier(2)
+
+    def write(session: DuckDBEngine, table: sa.Table, rows: pa.Table) -> None:
+        # A saída do with roda o close logo depois da barreira, junto com o outro escritor.
+        with session.appender(table) as appender:
+            appender.write(rows)
+            barrier.wait(timeout=10)
+
+    def write_in_a_new_session(table: sa.Table, rows: pa.Table) -> None:
+        with engine.new_session() as session:
+            write(session, table, rows)
+
+    def update_first_half(table: sa.Table) -> None:
+        barrier.wait(timeout=10)
+        engine.query(sa.update(table).where(table.c.id_lancamento <= 10_000)
+                     .values(valor=table.c.valor + 1))
+
+    def run_together(*tasks: tuple) -> None:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(*task) for task in tasks]
+            for future in futures:
+                future.result()
+
+    # Dois appenders, cada um numa sessão a mais.
+    sessions = PROJECTED.to_metadata(sa.MetaData(), name="escritores_sessoes")
+    engine.create_table(sessions)
+    run_together((write_in_a_new_session, sessions, first),
+                 (write_in_a_new_session, sessions, second))
+    assert totals_of(engine, sessions.name) == both
+
+    # Dois appenders na sessão principal.
+    main = PROJECTED.to_metadata(sa.MetaData(), name="escritores_principal")
+    engine.create_table(main)
+    run_together((write, engine, main, first), (write, engine, main, second))
+    assert totals_of(engine, main.name) == both
+
+    # Um appender numa sessão a mais e o UPDATE da principal, que soma 1 a 10.000 linhas de first.
+    updated = PROJECTED.to_metadata(sa.MetaData(), name="escritores_update")
+    create_and_append(engine, updated, first)
+    run_together((write_in_a_new_session, updated, second), (update_first_half, updated))
+    assert totals_of(engine, updated.name) == {"linhas": 40_000, "ids": 40_000,
+                                               "soma": both_sum + 10_000}
 
 
 def test_query_and_append_match_stream_and_appender(setup: Setup) -> None:
