@@ -58,10 +58,11 @@ class SqlError(ValueError):
 
 
 class ConflictError(Exception):
-    """A escrita condicional perdeu: outro escritor mudou o objeto entre a leitura e a escrita.
+    """A escrita condicional foi recusada: outro escritor criou ou mudou o arquivo desde a leitura.
 
-    É o 412 do S3 no ``IfMatch`` ou no ``IfNoneMatch``, e a impressão digital diferente, ou o
-    arquivo já existente, na pasta local. Nada foi gravado; quem chama lê de novo e decide.
+    Vem de ``Storage.create_text`` e de ``Storage.write_text`` com ``if_match``, nos dois
+    armazenamentos: no S3, o 412 do ``IfNoneMatch`` ou do ``IfMatch``; na pasta local, o arquivo já
+    existente ou a impressão digital diferente. Nada foi gravado; quem chama lê de novo e decide.
 
     Exemplo:
 
