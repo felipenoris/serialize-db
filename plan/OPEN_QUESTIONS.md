@@ -126,6 +126,15 @@ foi medido em [`POC.md`](POC.md).
   e `tests/proof_of_concept/test_sqlalchemy.py`, cuja asserção da chave primária não refletida
   passa a refleti-la, a lista de `probes/space.py` e a prosa que nomeia o dialeto em `README.md`,
   `docs/index.md`, `plan/` e `CLAUDE.md`) ou manter o `duckdb-engine` enquanto a 2.0.54 o serve.
+- **O 409 do S3 na escrita condicional.** Um `PutObject` com `If-Match` pode receber
+  `409 Conflict` quando há requisições concorrentes, e um com `If-None-Match` quando uma exclusão
+  do objeto termina antes dele, pela
+  [documentação](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html);
+  [`estrategia.md`](estrategia.md) cita o `409 ConditionalRequestConflict`. `Storage._put_s3`
+  converte em `ConflictError` só o 412 (`PreconditionFailed`): o 409 sai como
+  `botocore.exceptions.ClientError`, que `serialize-db run`, `snapshot`, `channel` e `archive` não
+  capturam. Nenhuma leitura produziu o 409, nem no alvo nem no moto. Espera o usuário: converter
+  também o 409 em `ConflictError`, ou deixar como está.
 
 ## Achados das sondas de consistência de leitura e escrita
 
