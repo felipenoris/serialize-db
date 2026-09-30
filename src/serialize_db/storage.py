@@ -542,7 +542,8 @@ class Storage:
         :param path: o arquivo, relativo à raiz; na pasta local, a pasta dele é criada.
         :param text: o conteúdo, gravado em UTF-8.
         :return: a impressão digital do arquivo gravado.
-        :raises ConflictError: o arquivo já existe; nada foi gravado.
+        :raises ConflictError: o arquivo já existe, ou, no S3, o 409 de outra operação no objeto
+            durante a gravação; nada foi gravado.
         """
         if self.is_s3:
             return self._put_s3(path, text, {"IfNoneMatch": "*"})
@@ -570,7 +571,8 @@ class Storage:
         :param if_match: grava só se a impressão digital atual é a informada, a que
             ``read_text`` devolveu; ``None`` grava sem condição.
         :return: a impressão digital nova.
-        :raises ConflictError: a condição falhou; nada foi gravado.
+        :raises ConflictError: a condição falhou, ou, no S3, o 409 de outra operação no objeto
+            durante a gravação; nada foi gravado.
         """
         if not self.is_s3:
             return self._replace_local(path, text, if_match)
@@ -631,14 +633,17 @@ class Storage:
         return response["Body"].read().decode("utf-8"), response["ETag"]
 
     def _put_s3(self, path: str, text: str, condition: Mapping[str, str]) -> str:
-        """O ``put_object`` com a condição, ``IfNoneMatch`` ou ``IfMatch``; o 412 vira
+        """O ``put_object`` com a condição, ``IfNoneMatch`` ou ``IfMatch``; o 412 e o 409 viram
         ``ConflictError``."""
         bucket, key = self._bucket_and_key(path)
         try:
             response = self._s3_client().put_object(
                 Bucket=bucket, Key=key, Body=text.encode("utf-8"), **condition)
         except botocore.exceptions.ClientError as error:
-            if error.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+            # O 412 é a condição que falhou; o 409, outra operação no objeto durante a gravação,
+            # depois da qual o modelo do S3 no botocore manda reler a etag e repetir.
+            refusals = ("PreconditionFailed", "412", "ConditionalRequestConflict", "409")
+            if error.response["Error"]["Code"] in refusals:
                 raise ConflictError(f"{self.uri_of(path)}: {error}") from None
             raise
         return response["ETag"]
