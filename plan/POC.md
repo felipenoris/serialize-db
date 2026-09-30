@@ -5608,3 +5608,37 @@ saiu com 0 no lugar de 2, porque ele volta por `--snapshot`.
 **Consequências**: a volta pelo canal e a correção que continua na versão atual do Delta têm um
 caso, que entra no alvo na próxima bateria pelo comando da suíte da publicação de `SUITE.md`, sem
 comando novo.
+
+## O que a bateria de 2026-09-30 às 14:58 mostrou no ambiente alvo
+
+Em 2026-09-30, das 14:58 às 15:42 UTC, o usuário rodou no ambiente alvo o bloco "Probes e Testes -
+BN" de `SUITE.md`, os cinco probes e as sete sessões do pytest, sobre a `main` com os PRs #109, #110
+e #111 [inferido: cada sessão coletou os casos que essa `main` coleta, 614, 54, 11 e 11], numa
+máquina de 8 vCPUs e 15,3 GiB, com as versões das baterias de 2026-09-29. Os relatórios ficam fora
+de `plan/`, com os achados aqui. Nenhum caso e nenhuma checagem falharam, e as leituras repetem as
+da bateria de 2026-09-29 às 17:04 ("O que a bateria de 2026-09-29 às 17:04 mostrou no ambiente
+alvo"), salvo:
+
+- **O runbook de refazer um snapshot passou no alvo.**
+  `test_redo_a_snapshot_and_revert_by_the_channel` passou nas quatro sessões que o coletam, as duas
+  da suíte Redshift e as duas da publicação, com o banco Delta sob a raiz S3 da suíte e as tabelas
+  publicadas no esquema do alvo ("O que o caso do runbook de refazer um snapshot mostrou"). A suíte
+  Redshift aprovou 54 casos em 748,9 s e em 674,3 s, e a da publicação 11 em 248,1 s e em 236,7 s,
+  um a mais que em 2026-09-29 em cada.
+- **Os casos novos da sessão `-m "not redshift"` rodam sem rede.** A sessão aprovou 614 casos em
+  274,9 s, três a mais que em 2026-09-29: os de `tests/test_storage.py` que dão a `ConflictError` ao
+  412 e ao 409 da escrita condicional e deixam subir os outros erros, pelo cliente dublê, sem ler o
+  S3 do alvo. A suíte do motor aprovou 11 casos em 168,4 s e em 169,1 s; o `COPY ... MANIFEST` do
+  arquivo obrigatório ausente falhou de novo com `Spectrum Scan Error: File not found`, e o `append`
+  de 10 linhas levou 1,66 s e 1,50 s na suíte Redshift e 1,67 s e 1,39 s na do motor.
+- **A listagem repete a de 2026-09-29 às 17:04.** O `svv_all_tables` das 14:58 listou as mesmas 16
+  tabelas, sem `exec_`, e o `RS-8` leu 1 de 16: nenhuma sessão entre as duas listagens, as de
+  2026-09-29 das 17:07 às 17:45 entre elas, deixou tabela do sandbox. As sessões desta bateria
+  rodaram depois do probe, e só a listagem da próxima diz se deixaram alguma.
+- **O `RS-12` contou 112 erros de carga em 30 dias**, contra 100 às 17:04, e o `BK-14` parou de novo
+  no limite da listagem, com 10.460 versões não correntes (283.526.691 bytes) e 9.539 marcadores de
+  exclusão.
+
+**Consequências**: o caso do runbook de refazer um snapshot, com a volta pelo canal, sai dos que
+esperam o alvo em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). A sobra de tabela do sandbox não se
+repetiu desde a rodada interrompida de 2026-09-29 às 00:29.
