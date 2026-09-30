@@ -5582,3 +5582,29 @@ atrasadas, e a fecha sem ler a resposta da execução do último. Por que o Reds
 `DROP` fica sem leitura. O usuário decidiu em 2026-09-29 deixar o motor como está: depois de um
 Ctrl+C no meio de um comando, o motor Redshift é recriado à mão, e uma rodada interrompida pode
 deixar tabela `exec_` no esquema ([etapa 5](PLAN-STAGE-5.md)).
+
+## O que o caso do runbook de refazer um snapshot mostrou
+
+A pedido do usuário, em 2026-09-30, `test_redo_a_snapshot_and_revert_by_the_channel`, em
+`tests/test_publication.py` (`redshift`, `s3` e `local`), roda o runbook "Refazer um snapshot" de
+[`docs/operacao.md`](../docs/operacao.md) de ponta a ponta: o snapshot `2026T3` publicado pelo canal
+`default`; a `Execution` que refaz a partição `2026-08-31`, marcada com o snapshot `2026T3.r2`; o
+canal movido para ele e a publicação pelo canal; a volta do canal ao `2026T3` e a publicação de
+novo, com as linhas conferidas no Redshift e no leitor Delta sem argumento a cada passo; e, depois
+da volta, a partição refeita no leitor do canal `current` e no snapshot seguinte. Neste contêiner
+(Linux, 4 vCPUs, 16.094 MB, Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1, deltalake 1.6.6), no
+substituto, a sessão só com ele passou em 5,0 s.
+
+As publicações do caso citam `cad_lancamentos_projetados` em `--tables`, porque o ambiente do teste
+não tem as outras tabelas do modelo, e `serialize-db publish_redshift --channel default` sem ele
+saiu com 2: `cad_contas, cad_lancamentos: fora do snapshot 2026T3; --tables deixa de fora a tabela
+sem versão`.
+
+Uma mutação de `_versions_to_publish`, em `serialize_db.cli`, que lê qualquer canal como o
+`current`, reprovou o caso novo na volta, com a partição publicada nos ids a partir de 1000 no lugar
+de 41. `test_cli_publishes_by_channel_and_snapshot_and_reverts` reprovou só no `--channel nada`, que
+saiu com 0 no lugar de 2, porque ele volta por `--snapshot`.
+
+**Consequências**: a volta pelo canal e a correção que continua na versão atual do Delta têm um
+caso, que entra no alvo na próxima bateria pelo comando da suíte da publicação de `SUITE.md`, sem
+comando novo.
