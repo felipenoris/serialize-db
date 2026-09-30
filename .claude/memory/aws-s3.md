@@ -7,6 +7,12 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
 - S3 `PutObject` accepts `IfNoneMatch='*'` (since 2024-08-20) and `IfMatch=<etag>` (since
   2024-11-25); failures return 412, conflicts 409. This is the primitive a table format needs for
   atomic commits, and it answers the open question in `plan/guia.md`. `plan/estrategia.md`
+- The botocore 1.43.105 S3 model documents `409 ConditionalRequestConflict` on a conditional
+  `PutObject` when a conflicting operation runs during the upload: with `IfMatch`, re-read the
+  ETag and retry; with `IfNoneMatch`, retry. botocore's retry rules (`data/_retry.json`,
+  `retries/standard.py`) name no `ConditionalRequestConflict`, so the 409 reaches the caller.
+  `Storage._put_s3` turns it into `ConflictError` like the 412 (user decision of 2026-09-30);
+  no reading produced a 409, in the target or in moto. `plan/PLAN-STAGE-3.md`
 - S3 needs for Delta: `ListBucket` (prefix), `GetObject`, `PutObject` (commits use
   `If-None-Match: *`, no extra IAM action; `object_store` defaults `aws_conditional_put` to
   `etag`), `DeleteObject` for vacuum, KMS actions only with SSE-KMS; no lifecycle expiration under

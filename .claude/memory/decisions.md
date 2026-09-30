@@ -1470,3 +1470,17 @@ new snapshot; the user answered "sim" (02:25 UTC) to one test of the whole runbo
 `test_redo_a_snapshot_and_revert_by_the_channel`, with the `redshift`, `s3` and `local` markers,
 from the `Execution` marked `2026T3.r2` to the revert by the channel, reading the rows in Redshift
 and in the Delta reader at each step. `tests/test_publication.py`, `plan/PLAN-STAGE-8.md`
+
+## The S3 409 of the conditional write as `ConflictError` (2026-09-30)
+
+Asked what "A escrita condicional perdeu" in the `ConflictError` docstring meant and whether
+the error was S3-only, the assistant answered from the code: the conditional write lost the race
+to another writer and nothing was written; `Storage` raises it in both storages, while the Delta
+and Redshift conflicts raise `ExecutionConflict`. The user approved ("Sim, pfv", 03:50 UTC) the
+first line "A escrita condicional foi recusada: outro escritor criou ou mudou o arquivo desde a
+leitura." The answer also found that the S3 documentation and the botocore 1.43.105 S3 model
+give a conditional `PutObject` a `409 ConditionalRequestConflict` when another operation on the
+object runs during the upload, with the instruction to re-read the ETag and retry, while
+`_put_s3` converted only the 412; the user chose "Converter" (04:08 UTC): `_put_s3` turns
+`ConditionalRequestConflict` and `409` into `ConflictError`, tested by a `boto3` client double.
+`src/serialize_db/storage.py`, `src/serialize_db/errors.py`, `plan/PLAN-STAGE-3.md`

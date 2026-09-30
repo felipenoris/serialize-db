@@ -61,8 +61,9 @@ class ConflictError(Exception):
     """A escrita condicional foi recusada: outro escritor criou ou mudou o arquivo desde a leitura.
 
     Vem de ``Storage.create_text`` e de ``Storage.write_text`` com ``if_match``, nos dois
-    armazenamentos: no S3, o 412 do ``IfNoneMatch`` ou do ``IfMatch``; na pasta local, o arquivo já
-    existente ou a impressão digital diferente. Nada foi gravado; quem chama lê de novo e decide.
+    armazenamentos: no S3, o 412 do ``IfNoneMatch`` ou do ``IfMatch``, ou o 409 de outra operação
+    no objeto durante a gravação; na pasta local, o arquivo já existente ou a impressão digital
+    diferente. Nada foi gravado; quem chama lê de novo e decide.
 
     Exemplo:
 

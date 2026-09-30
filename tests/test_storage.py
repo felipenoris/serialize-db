@@ -1,12 +1,14 @@
 """``serialize_db.storage``: os dois armazenamentos pelo ``pyarrow.fs``.
 
 Os testes sem gravar rodam sem variável: a construção por URI sem rede, os caminhos relativos, as
-opções do delta-rs resolvidas a cada chamada e sem credencial, o ambiente que o delta-rs lê, e o
-proxy, o secret do DuckDB e a recriação dele quando a chave troca, esta com a extensão ``httpfs``
-na pasta de extensões. Os que gravam rodam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador
-``local``) e, com ``SERIALIZE_DB_TEST_S3_ROOT``, os mesmos no bucket (marcador ``s3``): a escrita
-condicional do arquivo de controle, a listagem, a cópia e a exclusão, e a conexão do DuckDB com a
-extensão ``delta`` da pasta configurada; e, só na pasta local, o modo dos arquivos gravados.
+opções do delta-rs resolvidas a cada chamada e sem credencial, o ambiente que o delta-rs lê, o
+proxy, o secret do DuckDB e a recriação dele quando a chave troca, esta com a extensão ``httpfs`` na
+pasta de extensões, e as recusas do S3 na escrita condicional, por um cliente ``boto3`` dublê: o 412
+e o 409 como ``ConflictError``, e outro erro do serviço como veio. Os que gravam rodam sob
+``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``) e, com ``SERIALIZE_DB_TEST_S3_ROOT``, os
+mesmos no bucket (marcador ``s3``): a escrita condicional do arquivo de controle, a listagem, a
+cópia e a exclusão, e a conexão do DuckDB com a extensão ``delta`` da pasta configurada; e, só na
+pasta local, o modo dos arquivos gravados.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import stat
 import uuid
 
 import botocore.credentials
+import botocore.exceptions
 import duckdb
 import pyarrow.fs as pafs
 import pytest
@@ -246,6 +249,62 @@ def test_create_text_and_write_text_if_match(storage: Storage) -> None:
     with pytest.raises(ConflictError):
         storage.write_text(path, "{}", if_match=fingerprint)
     assert storage.read_text(path) == ('{"snapshots": {"2026T3": {}}}', second)
+
+
+class RefusingS3Client:
+    """O cliente S3 dublê de ``Storage._s3_client``: registra cada ``put_object`` e o recusa com o
+    código e o status HTTP dados, como o serviço responderia."""
+
+    def __init__(self, code: str, status: int) -> None:
+        self.code = code
+        self.status = status
+        self.requests: list[dict] = []
+
+    def put_object(self, **request: object) -> dict:
+        """Registra o pedido e levanta a ``ClientError`` do botocore com o código dado."""
+        self.requests.append(request)
+        response = {"Error": {"Code": self.code, "Message": f"recusado com {self.status}"},
+                    "ResponseMetadata": {"HTTPStatusCode": self.status}}
+        raise botocore.exceptions.ClientError(response, "PutObject")
+
+
+def refusing_s3_storage(monkeypatch: pytest.MonkeyPatch, client: RefusingS3Client) -> Storage:
+    """Um armazenamento no S3, sem rede, cujo cliente do ``boto3`` é o dublê."""
+    monkeypatch.setenv("AWS_REGION", "sa-east-1")
+    monkeypatch.setattr(Storage, "_s3_client", lambda self: client)
+    return Storage.for_uri("s3://bucket/delta")
+
+
+@pytest.mark.parametrize(("code", "status"), [("PreconditionFailed", 412),
+                                              ("ConditionalRequestConflict", 409)])
+def test_s3_refusals_of_the_conditional_write_are_conflict_error(
+        clean_aws: pytest.MonkeyPatch, code: str, status: int) -> None:
+    """No S3, o 412 da condição e o 409 de outra operação no objeto durante a gravação são
+    ``ConflictError`` em ``create_text`` e em ``write_text``, cada pedido com a sua condição; sem
+    rede, pelo cliente dublê."""
+    client = RefusingS3Client(code, status)
+    storage = refusing_s3_storage(clean_aws, client)
+    path = "prd/_serialize_db/snapshots.json"
+    with pytest.raises(ConflictError, match=code):
+        storage.create_text(path, "{}")
+    with pytest.raises(ConflictError, match=code):
+        storage.write_text(path, "{}", if_match='"etag-lida"')
+
+    # O dublê recebeu os dois pedidos, cada um com a sua condição.
+    assert len(client.requests) == 2
+    assert client.requests[0]["IfNoneMatch"] == "*"
+    assert client.requests[1]["IfMatch"] == '"etag-lida"'
+
+
+def test_s3_other_errors_of_the_conditional_write_propagate(
+        clean_aws: pytest.MonkeyPatch) -> None:
+    """No S3, um erro do serviço fora das recusas da condição, como o 403, sobe como a
+    ``ClientError`` do botocore, sem virar ``ConflictError``."""
+    client = RefusingS3Client("AccessDenied", 403)
+    storage = refusing_s3_storage(clean_aws, client)
+    with pytest.raises(botocore.exceptions.ClientError, match="AccessDenied"):
+        storage.create_text("prd/_serialize_db/snapshots.json", "{}")
+    assert len(client.requests) == 1
 
 
 def file_mode(storage: Storage, path: str) -> int:

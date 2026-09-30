@@ -17,7 +17,7 @@ da tabela, que `relative` leva ao caminho relativo à raiz.
 | `Storage.for_uri(uri)` | `pafs.S3FileSystem` com a região de `AWS_REGION` ou `AWS_DEFAULT_REGION` e o `endpoint_override` de `AWS_ENDPOINT_URL` para `s3://bucket/prefixo`, sem rede na construção; `pafs.LocalFileSystem` com o caminho resolvido para um caminho ou `file://`, cujo `%XX` sai decodificado por `Path.from_uri` (`file:///tmp/meu%20banco/delta` é `/tmp/meu banco/delta`). |
 | `join(*parts)`, `relative(uri)`, `uri_of(path)` | `join` monta com `/` um caminho relativo à raiz, sem barras nas pontas; `relative` leva uma URI sob a raiz ao caminho relativo e recusa a de fora com `ValueError`; `uri_of` faz a volta. |
 | `exists(path)`, `size(path)`, `list_files(prefix, suffix)`, `delete(paths)`, `ensure_folder(path)`, `open_input_file(path)` | Caminhos relativos à raiz, pelo `get_file_info`, pelo `delete_file` e pelo `open_input_file` do sistema de arquivos; a listagem desce as pastas e exclui `_delta_log/`; `delete` de um caminho ausente não é erro; `ensure_folder` cria a pasta local que o `COPY` do DuckDB para um arquivo não cria, e no S3 não faz nada. |
-| `read_text(path)`, `create_text(path, text)`, `write_text(path, text, if_match=None)` | Escrita condicional, com um ramo por armazenamento, como `copy`: `put_object` do `boto3` com `IfNoneMatch` (`create_text`) ou `IfMatch` (`write_text`) no S3 (412 vira `ConflictError`), porque o `pyarrow.fs` não tem a condição nem devolve a etag; `O_EXCL` e `os.replace` na pasta local, o arquivo novo no modo 0o666 menos a umask e o substituído com o modo que tinha. É a escrita de `_serialize_db/snapshots.json` e do manifesto, e a leitura do log por `version_diff`; o arquivo ausente é `FileNotFoundError` nos dois armazenamentos. |
+| `read_text(path)`, `create_text(path, text)`, `write_text(path, text, if_match=None)` | Escrita condicional, com um ramo por armazenamento, como `copy`: `put_object` do `boto3` com `IfNoneMatch` (`create_text`) ou `IfMatch` (`write_text`) no S3 (o 412 e o 409 viram `ConflictError`), porque o `pyarrow.fs` não tem a condição nem devolve a etag; `O_EXCL` e `os.replace` na pasta local, o arquivo novo no modo 0o666 menos a umask e o substituído com o modo que tinha. É a escrita de `_serialize_db/snapshots.json` e do manifesto, e a leitura do log por `version_diff`; o arquivo ausente é `FileNotFoundError` nos dois armazenamentos. |
 | `copy(source, destination)` | Na pasta local, `copy_file`; no S3, a transferência gerenciada do `boto3`, `CopyObject` até 8 MiB e `UploadPartCopy` em partes de 8 MiB acima, com a repetição por parte, porque o `CopyObject` único do `copy_file` é abandonado pelo SDK da AWS depois de 3 s sem resposta (leitura de 2026-09-24, [`POC.md`](POC.md)); a exportação e o arquivo sem ler dados. |
 | `storage_options()` | As opções do delta-rs: região, `AWS_ENDPOINT_URL`, `max_retries` 3 e `retry_timeout` 10 s, e as chaves de SSE das variáveis do object_store (`AWS_SERVER_SIDE_ENCRYPTION`, `AWS_SSE_KMS_KEY_ID`, `AWS_SSE_BUCKET_KEY_ENABLED`) quando configuradas; vazias na pasta local; nunca credenciais (decisão do usuário de 2026-09-22). A cadeia padrão do delta-rs as resolve e as renova sozinha no `DeltaTable` que a execução guarda, enquanto um trio congelado expiraria em cerca de uma hora e circularia num dicionário que um log ou uma exceção imprime. Resolvidas a cada chamada, nunca guardadas. |
 | `duckdb_connect(database=":memory:", config=None)` | A conexão do DuckDB com `extension_directory` de `SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao lado do ambiente virtual (a pasta que `prepare_offline.sh` cria), `autoinstall_known_extensions` e `autoload_known_extensions` desligados, as opções de `config` e `duckdb_setup` aplicado; é a conexão de `rewrite`, `read_back`, `export_snapshot` e da contagem de `deep_copy`, com `config=environment_limits()`, o `threads` e o `memory_limit` lidos do ambiente como no motor, e a do motor da [etapa 4](PLAN-STAGE-4.md). |
@@ -175,7 +175,10 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
   que basta à pasta local, o ambiente dos testes e do desenvolvimento. O `NamedTemporaryFile` daria
   0o600 ao arquivo novo e ao substituído.
   No S3, `put_object` do `boto3` com `IfNoneMatch="*"` (`create_text`) ou `IfMatch=<etag>`, atômico no servidor, e
-  o 412 vira `ConflictError`; `read_text` lê pelo `get_object`, que devolve a etag. `read_text`
+  o 412 da condição e o 409 de outra operação no objeto durante a gravação
+  (`ConditionalRequestConflict`) viram `ConflictError` (decisão do usuário de 2026-09-30): no
+  409, o modelo do S3 no botocore 1.43.105 manda reler a etag e repetir, o que quem recebe o
+  `ConflictError` faz; `read_text` lê pelo `get_object`, que devolve a etag. `read_text`
   devolve o texto e a impressão para a escrita seguinte. O `boto3` serve também a `copy` no S3 e
   à credencial de `duckdb_setup`; a etapa o leva às dependências de execução, fixado em
   `pyproject.toml`, e roda `prepare_offline.sh` de novo.
@@ -354,6 +357,7 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
 | Armazenamento por URI | `test_storage_for_uri` (sem gravar e sem rede) | `s3://`, `file://` e caminho dão o sistema de arquivos certo (`S3FileSystem` com a região da variável, `LocalFileSystem`) e o caminho nele, e o `file:///tmp/meu%20banco/delta` dá `/tmp/meu banco/delta`; outra URI e o S3 sem região são erro. |
 | Caminhos | `test_paths_relative_to_the_root` (sem gravar) | `join` sem barras nas pontas, `relative` da URI sob a raiz e a recusa da de fora, `uri_of`. |
 | Escrita condicional | `test_create_text_and_write_text_if_match` | A segunda `create_text` e o `if_match` velho são `ConflictError`; o conteúdo final é o da escrita que venceu; o arquivo ausente é `FileNotFoundError`. |
+| Recusas do S3 na escrita condicional | `test_s3_refusals_of_the_conditional_write_are_conflict_error` e `test_s3_other_errors_of_the_conditional_write_propagate` (sem gravar e sem rede) | Com o cliente `boto3` dublê, o 412 (`PreconditionFailed`) e o 409 (`ConditionalRequestConflict`) são `ConflictError` em `create_text` e em `write_text`, cada pedido com a sua condição; o 403 sobe como a `ClientError` do botocore. |
 | Modo dos arquivos locais | `test_local_files_get_the_mode_of_a_new_file` (`local`) | Sob a umask 0o022, `create_text` e `write_text` de um arquivo novo dão 0o644, e `write_text` sobre um arquivo em 0o640 o mantém em 0o640. |
 | Listagem, cópia e exclusão | `test_list_copy_delete` | `list_files` desce as pastas e exclui `_delta_log/`; `copy` preserva os bytes, e a cópia de 9 MiB de bytes aleatórios, acima do limiar multipart do `boto3`, tem o mesmo `sha256`; `delete` de caminho ausente não falha. |
 | Opções do delta-rs | `test_storage_options_resolved_per_call` (sem gravar) | Duas chamadas devolvem dicionários novos; a região vem da variável; `max_retries` presente; as chaves de SSE configuradas; nenhuma chave de credencial no dicionário. |
@@ -409,7 +413,8 @@ mostraram" e "O que a implementação da etapa 3 mostrou".
 ## Decisões pendentes
 
 Nenhuma. A renovação do secret do DuckDB, decidida pelo usuário em 2026-09-25, está na descrição
-de `duckdb_setup`.
+de `duckdb_setup`, e o 409 do S3 como `ConflictError`, decidido pelo usuário em 2026-09-30, na
+de `create_text` e `write_text`.
 
 As seis decisões da etapa tomadas pelo usuário em 2026-09-22 estão escritas na seção que
 descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a
