@@ -100,9 +100,11 @@ foi medido em [`POC.md`](POC.md).
   em 295,1 s com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s com 270 MB, e em
   2026-09-29, em 335,2 s com 286 MB. Esperam: a volta a um snapshot anterior ao publicado sobre a
   base, com o tempo e o pico de RSS por tabela, que pede um commit depois do snapshot, fora do fluxo
-  de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão já estava publicada; e o `UNLOAD`
-  de um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que
-  serve a ele, que precisa de um papel de cliente no alvo.
+  de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão já estava publicada; o caso do
+  runbook de refazer um snapshot em `tests/test_publication.py`, com a volta pelo canal, que rodou
+  só no substituto, em 2026-09-30, e entra na próxima bateria pelo comando da suíte da publicação
+  em `SUITE.md`; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o
+  caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25 ([`POC.md`](POC.md)), e o pino fica em 2.0.54. O `params()` novo guarda os

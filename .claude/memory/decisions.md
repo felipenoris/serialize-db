@@ -1463,3 +1463,10 @@ the next execution reads and the next snapshot carries back to Redshift; the use
 the old snapshot, and the warning that a correction that fails is undone in Delta by another
 execution writing the partitions again, before the next execution. `docs/operacao.md`,
 `plan/serialize-db.md`, `plan/PLAN.md`
+
+Asked on 2026-09-30 whether the pytest tests cover the redo and the revert, the assistant found
+them covered in parts, the revert only by `--snapshot` and never over an `Execution` marked with a
+new snapshot; the user answered "sim" (02:25 UTC) to one test of the whole runbook:
+`test_redo_a_snapshot_and_revert_by_the_channel`, with the `redshift`, `s3` and `local` markers,
+from the `Execution` marked `2026T3.r2` to the revert by the channel, reading the rows in Redshift
+and in the Delta reader at each step. `tests/test_publication.py`, `plan/PLAN-STAGE-8.md`

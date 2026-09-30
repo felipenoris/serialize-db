@@ -300,7 +300,11 @@ move o canal, imprime o anterior e o novo e mostra os canais; o snapshot ausente
 por `--snapshot` e por `--channel current`; a volta a um snapshot anterior troca só as partições
 alteradas entre as duas versões, com a partição que só a versão publicada tinha apagada; o
 snapshot arquivado é recusado sem escrita no Redshift; e a publicação sem nenhum dos dois, ou com
-os dois, é erro de uso.
+os dois, é erro de uso. O caso do runbook "Refazer um snapshot" de
+[`docs/operacao.md`](../docs/operacao.md) refaz uma partição por uma `Execution` marcada com um
+snapshot novo, move o canal `default` para ele e de volta, publica pelo canal a cada passo e
+confere as linhas no Redshift e no leitor Delta sem argumento; depois da volta, o leitor do canal
+`current` e o snapshot seguinte ainda têm a partição refeita.
 
 `tests/test_reader.py`, sem conexão: o texto compilado com o prefixo `<ambiente>_` e a regra de
 leitura comum no leitor Redshift, sobre a conexão de mentira de `tests/test_engine_redshift.py`;

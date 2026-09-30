@@ -11,8 +11,11 @@ que gravam um Delta na pasta local são ``local``). Os casos marcados ``redshift
 ``SERIALIZE_DB_TEST_S3_ROOT``, exportado pelo motor DuckDB com o ``temp_directory`` sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT``, num ambiente ``poc<id>`` próprio, cujas tabelas publicadas e
 linhas de controle saem no fim; a tabela de controle é criada quando não existe e apagada só
-nesse caso; o último deles roda ``serialize-db publish_redshift`` pelo canal ``default``, por
-``--snapshot``, de volta a um snapshot anterior e pelo canal ``current``. No substituto local
+nesse caso; um deles roda ``serialize-db publish_redshift`` pelo canal ``default``, por
+``--snapshot``, de volta a um snapshot anterior e pelo canal ``current``, e o último segue o
+runbook "Refazer um snapshot" de ``docs/operacao.md``: a ``Execution`` refaz uma partição marcada
+com um snapshot novo, o canal passa a ele e volta, e cada publicação pelo canal é conferida no
+Redshift e no leitor Delta. No substituto local
 (``SERIALIZE_DB_TEST_EMULATOR``), a conexão é a de ``tests/emulator.py``, e o ``1023`` da
 publicação simultânea vem do conflito entre duas transações do DuckDB. O modelo é o de
 ``tests/lancamentos_model.py``, e ``cad_colunas``, só de texto, recebe uma coluna nova no meio ou
@@ -54,7 +57,7 @@ from serialize_db.engine import redshift
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.engine.redshift import RedshiftConfig, mask
 from serialize_db.errors import ExecutionConflict, PublicationError
-from serialize_db.execution import Database
+from serialize_db.execution import Database, Execution
 from serialize_db.publication import PublishedColumn
 from serialize_db.storage import Storage
 
@@ -632,6 +635,31 @@ def control_rows(target: Target) -> dict[str, tuple[int, str]]:
     return {name: (int(version), execution_id) for name, version, execution_id in rows}
 
 
+def use_cli_environment(target: Target, monkeypatch: pytest.MonkeyPatch) -> None:
+    """As variáveis ``SERIALIZE_DB_REDSHIFT_*`` da configuração do teste, que a linha de comando
+    lê, e a pasta temporária do processo na pasta do teste."""
+    for name, value in (("SCHEMA", target.config.schema), ("HOST", target.config.host),
+                        ("USER", target.config.user), ("PASSWORD", target.config.password),
+                        ("WORKGROUP", target.config.workgroup)):
+        if value is None:
+            monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
+        else:
+            monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", str(value))
+    monkeypatch.setattr(tempfile, "tempdir", str(target.folder))
+
+
+def delta_ids(db: Database, value: str, channel: str | None = None) -> list[int]:
+    """Os ids da partição ``value`` de ``Projetado`` pelo leitor Delta do canal; sem canal, o
+    leitor que abre sem argumento, o do canal ``default``."""
+    statement = (
+        sa.select(PROJECTED.c.id_lancamento)
+        .where(PROJECTED.c.data_base_str == value)
+        .order_by(PROJECTED.c.id_lancamento)
+    )
+    with db.open_delta(channel=channel) as reader:
+        return reader.query(statement).column("id_lancamento").to_pylist()
+
+
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
@@ -1015,14 +1043,7 @@ def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
     export_with_duckdb(target, PROJECTED, MONTHS)   # a versão 2
     delta.snapshot(db.storage, environment, "A", {PROJECTED.name: 2})
     delta.set_channel(db.storage, environment, delta.DEFAULT_CHANNEL, "A")
-    for name, value in (("SCHEMA", target.config.schema), ("HOST", target.config.host),
-                        ("USER", target.config.user), ("PASSWORD", target.config.password),
-                        ("WORKGROUP", target.config.workgroup)):
-        if value is None:
-            monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
-        else:
-            monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", str(value))
-    monkeypatch.setattr(tempfile, "tempdir", str(target.folder))
+    use_cli_environment(target, monkeypatch)
     common = ["publish_redshift", "--root", db.root, "--environment", environment,
               "--metadata", "lancamentos_model:Base.metadata", "--tables", PROJECTED.name]
     published = f"{environment}_{PROJECTED.name}"
@@ -1084,3 +1105,70 @@ def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
     assert cli.main([*common, "--unpublish"]) == 0
     assert f"{PROJECTED.name}: 4" in capsys.readouterr().out
     assert control_rows(target) == {}
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+@pytest.mark.local
+def test_redo_a_snapshot_and_revert_by_the_channel(target: Target,
+                                                   monkeypatch: pytest.MonkeyPatch,
+                                                   capsys: pytest.CaptureFixture) -> None:
+    """O runbook "Refazer um snapshot" de ``docs/operacao.md``, sobre o snapshot ``2026T3``
+    publicado pelo canal ``default``: uma ``Execution`` com ``execution_id`` novo refaz uma
+    partição, marcada com o snapshot ``2026T3.r2``; ``serialize-db channel`` aponta o canal para
+    ele, e ``serialize-db publish_redshift --channel default`` troca só a partição refeita, que o
+    leitor Delta sem argumento passa a ler. A volta aponta o canal de novo para o ``2026T3`` e
+    publica pelo canal: o Redshift e o leitor Delta sem argumento voltam à partição antiga, e a
+    versão atual do Delta, que o canal ``current`` lê e o snapshot seguinte leva, continua com a
+    partição refeita."""
+    db = target.db
+    use_cli_environment(target, monkeypatch)
+    database = ["--root", db.root, "--environment", target.environment,
+                "--metadata", "lancamentos_model:Base.metadata"]
+    # O ambiente do teste só tem Projetado, e --tables deixa de fora as tabelas do modelo sem
+    # versão no snapshot.
+    publish = ["publish_redshift", *database, "--tables", PROJECTED.name, "--channel", "default"]
+    published = f"{target.environment}_{PROJECTED.name}"
+
+    # O estado inicial: o snapshot 2026T3, na versão 2, publicado pelo canal default.
+    export_with_duckdb(target, PROJECTED, MONTHS)   # a versão 2
+    assert cli.main(["snapshot", *database, "--name", "2026T3"]) == 0
+    assert cli.main(["channel", *database, "--name", "default", "--snapshot", "2026T3"]) == 0
+    assert cli.main([*publish, "--execution-id", "exec-p1"]) == 0
+    assert control_rows(target) == {published: (2, "exec-p1")}
+
+    # O passo 1: a execução nova refaz a segunda partição, marcada com o snapshot 2026T3.r2.
+    with Execution(db, "duckdb", MONTHS[1], "exec-r2") as run:
+        run.snapshot("2026T3.r2")
+        run.sandbox.create_table(PROJECTED)
+        run.sandbox.append(PROJECTED, entry_rows(MONTHS[1], 1000, 7, PROJECTED))
+        run.audit(PROJECTED, [MONTHS[1]])
+        run.publish_delta(PROJECTED, partitions=[MONTHS[1]])   # a versão 3
+    control, _ = delta.read_snapshots(db.storage, target.environment)
+    assert control["snapshots"]["2026T3.r2"] == {PROJECTED.name: 3}
+
+    # Os passos 2 e 3: o canal aponta para o 2026T3.r2, e a publicação troca só a partição refeita.
+    assert cli.main(["channel", *database, "--name", "default", "--snapshot", "2026T3.r2"]) == 0
+    assert capsys.readouterr().out.endswith("default: 2026T3 -> 2026T3.r2\n")
+    assert cli.main([*publish, "--execution-id", "exec-p2"]) == 0
+    rows = published_rows(target, PROJECTED)
+    assert [row[0] for row in rows[MONTHS[0]]] == list(range(1, 41))
+    assert [row[0] for row in rows[MONTHS[1]]] == list(range(1000, 1007))
+    assert control_rows(target) == {published: (3, "exec-p2")}
+    assert delta_ids(db, MONTHS[1]) == list(range(1000, 1007))
+
+    # A volta: o canal aponta de novo para o 2026T3, e a publicação pelo canal devolve a partição.
+    assert cli.main(["channel", *database, "--name", "default", "--snapshot", "2026T3"]) == 0
+    assert capsys.readouterr().out.endswith("default: 2026T3.r2 -> 2026T3\n")
+    assert cli.main([*publish, "--execution-id", "exec-v"]) == 0
+    rows = published_rows(target, PROJECTED)
+    assert [row[0] for row in rows[MONTHS[0]]] == list(range(1, 41))
+    assert [row[0] for row in rows[MONTHS[1]]] == list(range(41, 81))
+    assert control_rows(target) == {published: (2, "exec-v")}
+    assert delta_ids(db, MONTHS[1]) == list(range(41, 81))
+
+    # A versão atual do Delta continua com a partição refeita, e o snapshot seguinte a leva.
+    assert delta_ids(db, MONTHS[1], delta.CURRENT_CHANNEL) == list(range(1000, 1007))
+    assert cli.main(["snapshot", *database, "--name", "2026T4"]) == 0
+    control, _ = delta.read_snapshots(db.storage, target.environment)
+    assert control["snapshots"]["2026T4"] == {PROJECTED.name: 3}
